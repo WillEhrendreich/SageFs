@@ -268,7 +268,7 @@ let elmIntegrationTests = testList "ElmLoop integration" [
         lastModel <- Some model
         lastRegions <- regions
     }
-    let dispatch = ElmLoop.start program SageFsModel.initial
+    let dispatch = (ElmLoop.start program SageFsModel.initial).Dispatch
     lastRegions |> Expect.hasLength "initial render should have 4 regions" 4
 
     dispatch (SageFsMsg.Editor (EditorAction.InsertChar 'h'))
@@ -303,7 +303,7 @@ let elmIntegrationTests = testList "ElmLoop integration" [
       OnModelChanged = fun model _ ->
         if model.RecentOutput.Length > 0 then resultReceived <- true
     }
-    let dispatch = ElmLoop.start program SageFsModel.initial
+    let dispatch = (ElmLoop.start program SageFsModel.initial).Dispatch
     dispatch (SageFsMsg.Editor (EditorAction.InsertChar '1'))
     dispatch (SageFsMsg.Editor EditorAction.Submit)
     System.Threading.Thread.Sleep 200

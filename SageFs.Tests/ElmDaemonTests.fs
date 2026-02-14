@@ -120,16 +120,16 @@ let elmDaemonTests =
     ]
 
     testList "start" [
-      test "returns a dispatch function that can be called" {
+      test "returns a runtime with dispatch that can be called" {
         let deps =
           ElmDaemonTestHelpers.mockDeps (fun _ ->
             WorkerResponse.EvalResult ("r", Ok "done", []))
         let tracker = ElmDaemonTestHelpers.ModelTracker()
-        let dispatch =
+        let runtime =
           ElmDaemon.start deps tracker.OnModelChanged
 
         // dispatch is a function — calling it should not throw
-        dispatch (
+        runtime.Dispatch (
           SageFsMsg.Event (SageFsEvent.EvalStarted ("s", "code")))
         Threading.Thread.Sleep(50)
         true |> Expect.isTrue "dispatch should work without error"
@@ -140,7 +140,7 @@ let elmDaemonTests =
           ElmDaemonTestHelpers.mockDeps (fun _ ->
             WorkerResponse.EvalResult ("r", Ok "done", []))
         let tracker = ElmDaemonTestHelpers.ModelTracker()
-        let _dispatch =
+        let _runtime =
           ElmDaemon.start deps tracker.OnModelChanged
 
         tracker.Models
@@ -153,10 +153,10 @@ let elmDaemonTests =
           ElmDaemonTestHelpers.mockDeps (fun _ ->
             WorkerResponse.EvalResult ("r", Ok "done", []))
         let tracker = ElmDaemonTestHelpers.ModelTracker()
-        let dispatch =
+        let runtime =
           ElmDaemon.start deps tracker.OnModelChanged
 
-        dispatch (
+        runtime.Dispatch (
           SageFsMsg.Event (
             SageFsEvent.EvalCompleted ("s", "result-42", [])))
 
@@ -181,11 +181,11 @@ let elmDaemonTests =
             | _ ->
               WorkerResponse.WorkerError SageFsError.NoActiveSessions)
         let tracker = ElmDaemonTestHelpers.ModelTracker()
-        let dispatch =
+        let runtime =
           ElmDaemon.start deps tracker.OnModelChanged
 
         // Editor.SubmitLine produces an EditorEffect.RequestEval
-        dispatch (
+        runtime.Dispatch (
           SageFsMsg.Editor (
             EditorAction.Submit))
 
@@ -197,6 +197,34 @@ let elmDaemonTests =
         // (the eval will fail because buffer is empty, but the flow works)
         true |> Expect.isTrue "effect pipeline should execute"
       }
+
+      test "GetModel returns current model state" {
+        let deps =
+          ElmDaemonTestHelpers.mockDeps (fun _ ->
+            WorkerResponse.EvalResult ("r", Ok "done", []))
+        let tracker = ElmDaemonTestHelpers.ModelTracker()
+        let runtime =
+          ElmDaemon.start deps tracker.OnModelChanged
+
+        let model = runtime.GetModel()
+        model.RecentOutput
+        |> List.length
+        |> Expect.equal "initial model has no output" 0
+      }
+
+      test "GetRegions returns current render regions" {
+        let deps =
+          ElmDaemonTestHelpers.mockDeps (fun _ ->
+            WorkerResponse.EvalResult ("r", Ok "done", []))
+        let tracker = ElmDaemonTestHelpers.ModelTracker()
+        let runtime =
+          ElmDaemon.start deps tracker.OnModelChanged
+
+        let regions = runtime.GetRegions()
+        regions
+        |> List.map (fun r -> r.Id)
+        |> Expect.contains "should have editor region" "editor"
+      }
     ]
 
     testList "dispatchAndWait" [
@@ -205,12 +233,12 @@ let elmDaemonTests =
           ElmDaemonTestHelpers.mockDeps (fun _ ->
             WorkerResponse.EvalResult ("r", Ok "done", []))
         let tracker = ElmDaemonTestHelpers.ModelTracker()
-        let dispatch =
+        let runtime =
           ElmDaemon.start deps tracker.OnModelChanged
 
         let result =
           ElmDaemon.dispatchAndWait
-            dispatch
+            runtime.Dispatch
             (fun () -> tracker.LatestModel)
             tracker.WaitForUpdate
             (SageFsMsg.Event (

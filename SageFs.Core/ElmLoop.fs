@@ -18,12 +18,20 @@ type ElmProgram<'Model, 'Msg, 'Effect, 'Region> = {
   OnModelChanged: 'Model -> 'Region list -> unit
 }
 
+/// The running Elm loop — dispatch messages and read current state.
+type ElmRuntime<'Model, 'Msg, 'Region> = {
+  Dispatch: 'Msg -> unit
+  GetModel: unit -> 'Model
+  GetRegions: unit -> 'Region list
+}
+
 module ElmLoop =
   /// Start the Elm loop with an initial model.
-  /// Returns a dispatch function to send messages.
+  /// Returns an ElmRuntime with dispatch, model reader, and region reader.
   let start (program: ElmProgram<'Model, 'Msg, 'Effect, 'Region>)
-            (initialModel: 'Model) : 'Msg -> unit =
+            (initialModel: 'Model) : ElmRuntime<'Model, 'Msg, 'Region> =
     let mutable model = initialModel
+    let mutable latestRegions = []
     let lockObj = obj ()
 
     let rec dispatch (msg: 'Msg) =
@@ -34,11 +42,16 @@ module ElmLoop =
           m, effs)
 
       let regions = program.Render newModel
+      lock lockObj (fun () -> latestRegions <- regions)
       program.OnModelChanged newModel regions
 
       for effect in effects do
         Async.Start (program.ExecuteEffect dispatch effect)
 
     let regions = program.Render initialModel
+    latestRegions <- regions
     program.OnModelChanged initialModel regions
-    dispatch
+
+    { Dispatch = dispatch
+      GetModel = fun () -> lock lockObj (fun () -> model)
+      GetRegions = fun () -> lock lockObj (fun () -> latestRegions) }
