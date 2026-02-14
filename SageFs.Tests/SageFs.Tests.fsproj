@@ -38,6 +38,7 @@
         <Compile Include="EditorTests.fs" />
         <Compile Include="SessionDisplayTests.fs" />
         <Compile Include="SageFsEventTests.fs" />
+        <Compile Include="SageFsAppTests.fs" />
         <Compile Include="ExplorationTests.fs" />
         <Compile Include="Program.fs" />
     </ItemGroup>
