@@ -11,12 +11,12 @@
         <!-- NuGet config -->
         <PackageId>SageFs</PackageId>
         <PackageTags>fsharp;functional;repl;interactive;shell;asp.net core;asp.net;.net core;SageFs;sagefs-web;mcp</PackageTags>
-        <PackageProjectUrl>https://github.com/soweli-p/SageFs</PackageProjectUrl>
+        <PackageProjectUrl>https://github.com/WillEhrendreich/SageFs</PackageProjectUrl>
         <PackageLicenseExpression>MIT</PackageLicenseExpression>
         <PackageReadmeFile>Readme.md</PackageReadmeFile>
         <PackageRequireLicenseAcceptance>true</PackageRequireLicenseAcceptance>
         <RepositoryType>git</RepositoryType>
-        <RepositoryUrl>https://github.com/soweli-p/SageFs</RepositoryUrl>
+        <RepositoryUrl>https://github.com/WillEhrendreich/SageFs</RepositoryUrl>
     </PropertyGroup>
 
     <ItemGroup>
