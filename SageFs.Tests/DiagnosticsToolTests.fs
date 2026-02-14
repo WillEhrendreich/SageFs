@@ -25,7 +25,7 @@ let formatDiagnosticsTests =
           Message = "The value 'x' is not defined"
           Subcategory = "typecheck"
           Range = { StartLine = 1; StartColumn = 0; EndLine = 1; EndColumn = 5 }
-          Severity = Error
+          Severity = DiagnosticSeverity.Error
         }
       |]
       let result = McpAdapter.formatDiagnosticsResult diags
@@ -41,7 +41,7 @@ let formatDiagnosticsTests =
           Message = "This expression should have type 'unit'"
           Subcategory = "typecheck"
           Range = { StartLine = 3; StartColumn = 0; EndLine = 3; EndColumn = 10 }
-          Severity = Warning
+          Severity = DiagnosticSeverity.Warning
         }
       |]
       McpAdapter.formatDiagnosticsResult diags
@@ -54,7 +54,7 @@ let formatDiagnosticsTests =
           Message = "Incomplete value"
           Subcategory = "parse"
           Range = { StartLine = 5; StartColumn = 3; EndLine = 5; EndColumn = 8 }
-          Severity = Error
+          Severity = DiagnosticSeverity.Error
         }
       |]
       McpAdapter.formatDiagnosticsResult diags
@@ -67,13 +67,13 @@ let formatDiagnosticsTests =
           Message = "first error"
           Subcategory = "typecheck"
           Range = { StartLine = 1; StartColumn = 0; EndLine = 1; EndColumn = 5 }
-          Severity = Error
+          Severity = DiagnosticSeverity.Error
         }
         {
           Message = "second warning"
           Subcategory = "typecheck"
           Range = { StartLine = 2; StartColumn = 0; EndLine = 2; EndColumn = 5 }
-          Severity = Warning
+          Severity = DiagnosticSeverity.Warning
         }
       |]
       let result = McpAdapter.formatDiagnosticsResult diags
@@ -201,7 +201,7 @@ let diagnosticsSseFormatTests =
         |> DiagnosticsStore.add "let x = 1" [|
           { Message = "test warning"; Subcategory = "typecheck"
             Range = { StartLine = 1; StartColumn = 0; EndLine = 1; EndColumn = 5 }
-            Severity = Warning }
+            Severity = DiagnosticSeverity.Warning }
         |]
       let result = McpAdapter.formatDiagnosticsStoreAsJson store
       result |> Expect.stringContains "should contain message" "test warning"

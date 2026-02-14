@@ -118,7 +118,7 @@ let eventStoreTests =
         let diagEvt = DiagnosticsChecked {|
           Code = "let x: int = \"oops\""
           Diagnostics = [
-            { Message = "Type mismatch"; Severity = SageFs.Features.Diagnostics.Error
+            { Message = "Type mismatch"; Severity = SageFs.Features.Diagnostics.DiagnosticSeverity.Error
               StartLine = 1; StartColumn = 14; EndLine = 1; EndColumn = 20 }
           ]
           Source = McpAgent "copilot"

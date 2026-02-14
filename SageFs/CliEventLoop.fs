@@ -127,10 +127,10 @@ let runCliEventLoop useAsp mcpPort args () =
 
           for d in response.Diagnostics do
             match d.Severity with
-            | Diagnostics.Info -> cliLogger.LogInfo d.Message
-            | Diagnostics.Hidden -> cliLogger.LogDebug d.Message
-            | Diagnostics.Warning -> cliLogger.LogWarning d.Message
-            | Diagnostics.Error -> cliLogger.LogError d.Message
+            | Diagnostics.DiagnosticSeverity.Info -> cliLogger.LogInfo d.Message
+            | Diagnostics.DiagnosticSeverity.Hidden -> cliLogger.LogDebug d.Message
+            | Diagnostics.DiagnosticSeverity.Warning -> cliLogger.LogWarning d.Message
+            | Diagnostics.DiagnosticSeverity.Error -> cliLogger.LogError d.Message
 
           match response.EvaluationResult with
           | Ok output -> 
