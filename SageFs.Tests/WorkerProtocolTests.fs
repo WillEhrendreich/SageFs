@@ -81,7 +81,7 @@ let workerProtocolTests =
       testCase "EvalResult with diagnostics round-trips"
       <| fun _ ->
         let diag = {
-          Severity = SageFs.Features.Diagnostics.Warning
+          Severity = SageFs.Features.Diagnostics.DiagnosticSeverity.Warning
           Message = "unused variable"
           StartLine = 1
           StartColumn = 0
@@ -101,7 +101,7 @@ let workerProtocolTests =
       testCase "CheckResult round-trips"
       <| fun _ ->
         let diag = {
-          Severity = SageFs.Features.Diagnostics.Error
+          Severity = SageFs.Features.Diagnostics.DiagnosticSeverity.Error
           Message = "undefined value"
           StartLine = 3
           StartColumn = 4

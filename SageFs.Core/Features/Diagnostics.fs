@@ -12,6 +12,7 @@ type Range = {
   EndColumn: int
 }
 
+[<RequireQualifiedAccess>]
 type DiagnosticSeverity =
   | Error
   | Hidden
@@ -20,10 +21,10 @@ type DiagnosticSeverity =
 
 module DiagnosticSeverity =
   let label = function
-    | Error -> "error"
-    | Hidden -> "hidden"
-    | Info -> "info"
-    | Warning -> "warning"
+    | DiagnosticSeverity.Error -> "error"
+    | DiagnosticSeverity.Hidden -> "hidden"
+    | DiagnosticSeverity.Info -> "info"
+    | DiagnosticSeverity.Warning -> "warning"
 
 type Diagnostic = {
   Message: string
@@ -35,10 +36,10 @@ type Diagnostic = {
   static member mkDiagnostic(fsDiagnostic: FSharpDiagnostic) =
     let mapSeverity =
       function
-      | FSharpDiagnosticSeverity.Error -> Error
-      | FSharpDiagnosticSeverity.Hidden -> Hidden
-      | FSharpDiagnosticSeverity.Info -> Info
-      | FSharpDiagnosticSeverity.Warning -> Warning
+      | FSharpDiagnosticSeverity.Error -> DiagnosticSeverity.Error
+      | FSharpDiagnosticSeverity.Hidden -> DiagnosticSeverity.Hidden
+      | FSharpDiagnosticSeverity.Info -> DiagnosticSeverity.Info
+      | FSharpDiagnosticSeverity.Warning -> DiagnosticSeverity.Warning
 
     let range = fsDiagnostic.Range
 

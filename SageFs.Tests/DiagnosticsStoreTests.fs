@@ -28,7 +28,7 @@ let diagnosticsStoreTests =
 
     testCase "add diagnostics for a code snippet stores them keyed by hash"
     <| fun _ ->
-      let diags = [| mkDiag "type error" Error 1 |]
+      let diags = [| mkDiag "type error" DiagnosticSeverity.Error 1 |]
       DiagnosticsStore.empty
       |> DiagnosticsStore.add "let x: int = \"hello\"" diags
       |> DiagnosticsStore.all
@@ -36,8 +36,8 @@ let diagnosticsStoreTests =
 
     testCase "add diagnostics for same code replaces previous"
     <| fun _ ->
-      let diags1 = [| mkDiag "first error" Error 1 |]
-      let diags2 = [| mkDiag "second error" Error 2 |]
+      let diags1 = [| mkDiag "first error" DiagnosticSeverity.Error 1 |]
+      let diags2 = [| mkDiag "second error" DiagnosticSeverity.Error 2 |]
       DiagnosticsStore.empty
       |> DiagnosticsStore.add "let x = 1" diags1
       |> DiagnosticsStore.add "let x = 1" diags2
@@ -46,8 +46,8 @@ let diagnosticsStoreTests =
 
     testCase "add diagnostics for different code accumulates"
     <| fun _ ->
-      let diags1 = [| mkDiag "error one" Error 1 |]
-      let diags2 = [| mkDiag "error two" Error 2 |]
+      let diags1 = [| mkDiag "error one" DiagnosticSeverity.Error 1 |]
+      let diags2 = [| mkDiag "error two" DiagnosticSeverity.Error 2 |]
       DiagnosticsStore.empty
       |> DiagnosticsStore.add "let x = 1" diags1
       |> DiagnosticsStore.add "let y = 2" diags2
@@ -56,7 +56,7 @@ let diagnosticsStoreTests =
 
     testCase "forCode returns diagnostics for specific code"
     <| fun _ ->
-      let diags = [| mkDiag "specific error" Error 3 |]
+      let diags = [| mkDiag "specific error" DiagnosticSeverity.Error 3 |]
       DiagnosticsStore.empty
       |> DiagnosticsStore.add "let z = true" diags
       |> DiagnosticsStore.forCode "let z = true"
@@ -72,7 +72,7 @@ let diagnosticsStoreTests =
 
     testCase "clear removes all diagnostics"
     <| fun _ ->
-      let diags = [| mkDiag "will be cleared" Error 1 |]
+      let diags = [| mkDiag "will be cleared" DiagnosticSeverity.Error 1 |]
       DiagnosticsStore.empty
       |> DiagnosticsStore.add "let x = 1" diags
       |> DiagnosticsStore.clear
@@ -81,7 +81,7 @@ let diagnosticsStoreTests =
 
     testCase "add with empty diagnostics array removes entry"
     <| fun _ ->
-      let diags = [| mkDiag "will be removed" Error 1 |]
+      let diags = [| mkDiag "will be removed" DiagnosticSeverity.Error 1 |]
       DiagnosticsStore.empty
       |> DiagnosticsStore.add "let x = 1" diags
       |> DiagnosticsStore.add "let x = 1" [||]
@@ -90,8 +90,8 @@ let diagnosticsStoreTests =
 
     testCase "allFlat returns all diagnostics in a flat list"
     <| fun _ ->
-      let diags1 = [| mkDiag "err1" Error 1; mkDiag "err2" Error 2 |]
-      let diags2 = [| mkDiag "err3" Warning 3 |]
+      let diags1 = [| mkDiag "err1" DiagnosticSeverity.Error 1; mkDiag "err2" DiagnosticSeverity.Error 2 |]
+      let diags2 = [| mkDiag "err3" DiagnosticSeverity.Warning 3 |]
       DiagnosticsStore.empty
       |> DiagnosticsStore.add "code1" diags1
       |> DiagnosticsStore.add "code2" diags2
