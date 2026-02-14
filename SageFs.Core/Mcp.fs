@@ -405,6 +405,10 @@ module McpTools =
     /// Elm loop dispatch function (daemon mode).
     /// When present, MCP tools can drive the Elm loop.
     Dispatch: (SageFsMsg -> unit) option
+    /// Read the current Elm model (daemon mode).
+    GetElmModel: (unit -> SageFsModel) option
+    /// Read the current render regions (daemon mode).
+    GetElmRegions: (unit -> RenderRegion list) option
   }
 
   /// Check tool availability and return error message if not allowed
