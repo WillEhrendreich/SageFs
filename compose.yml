@@ -1,0 +1,13 @@
+services:
+  sagefs-db:
+    image: postgres:18
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: SageFs
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: SageFs
+    volumes:
+      - sagefs-pgdata:/var/lib/postgresql/data
+volumes:
+  sagefs-pgdata:

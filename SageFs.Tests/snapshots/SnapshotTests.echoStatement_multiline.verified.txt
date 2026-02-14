@@ -1,0 +1,6 @@
+﻿
+>
+type Dog = {
+  Name: string
+  Breed: string
+}

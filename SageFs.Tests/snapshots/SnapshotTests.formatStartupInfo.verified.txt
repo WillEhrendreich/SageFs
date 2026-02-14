@@ -1,0 +1,11 @@
+﻿SageFs Startup Information:
+
+Args: --proj Test.fsproj
+Working Directory: /code/test
+Loaded Projects: Test.fsproj
+Assemblies Loaded: 0
+Hot Reload: Enabled ✓
+MCP Port: 8080
+Aspire Detected: No
+Startup Profile: None
+Started: 2025-01-01 00:00:00 UTC

@@ -1,0 +1,47 @@
+<Project>
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+    <CentralPackageTransitivePinningEnabled>false</CentralPackageTransitivePinningEnabled>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageVersion Include="Argu" Version="6.2.5" />
+    <PackageVersion Include="Expecto" Version="11.0.0-alpha8" />
+    <PackageVersion Include="Expecto.FsCheck" Version="11.0.0-alpha8" />
+    <PackageVersion Include="Expecto.Hopac" Version="11.0.0-alpha8" />
+    <PackageVersion Include="Fabulous.AST" Version="2.0.0-pre06" />
+    <PackageVersion Include="Falco" Version="5.2.0" />
+    <PackageVersion Include="Falco.Markup" Version="1.4.0" />
+    <PackageVersion Include="Fantomas.Core" Version="8.0.0-alpha-002" />
+    <PackageVersion Include="FsCheck" Version="3.3.2" />
+    <PackageVersion Include="FSharp.Compiler.Service" Version="43.10.101" />
+    <PackageVersion Include="FSharp.SystemTextJson" Version="1.4.36" />
+    <PackageVersion Include="FSharpPlus" Version="1.8.0" />
+    <PackageVersion Include="FuzzySharp" Version="2.0.2" />
+    <PackageVersion Include="Ionide.ProjInfo" Version="0.74.1" />
+    <PackageVersion Include="Ionide.ProjInfo.FCS" Version="0.74.1" />
+    <PackageVersion Include="Lib.Harmony" Version="2.4.2" />
+    <PackageVersion Include="Marten" Version="8.21.0" />
+    <PackageVersion Include="Microsoft.Extensions.Hosting" Version="9.0.1" />
+    <PackageVersion Include="Microsoft.NET.StringTools" Version="18.0.2" />
+    <PackageVersion Include="ModelContextProtocol" Version="0.5.0-preview.1" />
+    <PackageVersion Include="ModelContextProtocol.AspNetCore" Version="0.5.0-preview.1" />
+    <PackageVersion Include="OpenTelemetry" Version="1.11.1" />
+    <PackageVersion Include="OpenTelemetry.Exporter.Console" Version="1.14.0" />
+    <PackageVersion Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.14.0" />
+    <PackageVersion Include="OpenTelemetry.Extensions.Hosting" Version="1.14.0" />
+    <PackageVersion Include="OpenTelemetry.Instrumentation.AspNetCore" Version="1.14.0" />
+    <PackageVersion Include="OpenTelemetry.Instrumentation.Http" Version="1.14.0" />
+    <PackageVersion Include="OpenTelemetry.Instrumentation.Runtime" Version="1.14.0" />
+    <PackageVersion Include="PrettyPrompt" Version="4.1.1" />
+    <PackageVersion Include="Serilog" Version="4.1.0" />
+    <PackageVersion Include="Serilog.Extensions.Hosting" Version="8.0.0" />
+    <PackageVersion Include="Serilog.Extensions.Logging.File" Version="9.0.0-dev-02303" />
+    <PackageVersion Include="Serilog.Sinks.Console" Version="6.0.0" />
+    <PackageVersion Include="StreamJsonRpc" Version="2.23.32-alpha" />
+    <PackageVersion Include="System.Configuration.ConfigurationManager" Version="10.0.3" />
+    <PackageVersion Include="Testcontainers.PostgreSql" Version="4.8.0" />
+    <PackageVersion Include="Verify.Expecto" Version="28.6.1" />
+    <PackageVersion Include="YoloDev.Expecto.TestSdk" Version="0.15.5" />
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.0.1" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,2 @@
+﻿Session: test-session | Events: 42 | State: Ready
+Available: send_fsharp_code, load_fsharp_script, get_fsi_status, get_startup_info, get_recent_fsi_events, get_completions, check_fsharp_code, reset_fsi_session, hard_reset_fsi_session, cancel_eval

@@ -1,0 +1,792 @@
+namespace SageFs
+
+open System
+open System.IO
+open System.Text.Json
+open System.Text.Json.Serialization
+open System.Threading.Tasks
+open SageFs.AppState
+
+/// Pure functions for MCP adapter (formatting responses)
+module McpAdapter =
+
+  let isSolutionFile (path: string) =
+    path.EndsWith ".sln" || path.EndsWith ".slnx"
+
+  let isProjectFile (path: string) =
+    path.EndsWith ".fsproj"
+
+  let formatAvailableProjects (workingDir: string) (projects: string array) (solutions: string array) =
+    let projectList =
+      if Array.isEmpty projects then "  (none found)"
+      else projects |> Array.map (sprintf "  - %s") |> String.concat "\n"
+    let solutionList =
+      if Array.isEmpty solutions then "  (none found)"
+      else solutions |> Array.map (sprintf "  - %s") |> String.concat "\n"
+    sprintf "Available Projects/Solutions in %s:\n\n📦 F# Projects (.fsproj):\n%s\n\n📂 Solutions (.sln/.slnx):\n%s\n\n💡 To load a project: SageFs --proj ProjectName.fsproj\n💡 To load a solution: SageFs --sln SolutionName.sln\n💡 To auto-detect: SageFs (in directory with project/solution)" workingDir projectList solutionList
+
+  let formatStartupBanner (version: string) (mcpPort: int option) =
+    match mcpPort with
+    | Some port -> sprintf "SageFs v%s | MCP on port %d" version port
+    | None -> sprintf "SageFs v%s" version
+
+  let formatEvalResult (result: EvalResponse) : string =
+    let stdout = 
+      match result.Metadata.TryFind "stdout" with
+      | Some (s: obj) -> s.ToString()
+      | None -> ""
+    
+    let diagnosticsSection =
+      if Array.isEmpty result.Diagnostics then ""
+      else
+        let items =
+          result.Diagnostics
+          |> Array.map (fun d ->
+            sprintf "  [%s] %s" (Features.Diagnostics.DiagnosticSeverity.label d.Severity) d.Message)
+          |> String.concat "\n"
+        sprintf "\nDiagnostics:\n%s" items
+
+    let output =
+      match result.EvaluationResult with
+      | Ok output -> sprintf "Result: %s" output
+      | Error ex ->
+          let parsed = ErrorMessages.parseError ex.Message
+          let suggestion = ErrorMessages.getSuggestion parsed
+          sprintf "Error: %s\n%s%s" ex.Message suggestion diagnosticsSection
+    
+    if String.IsNullOrEmpty(stdout) then
+      output
+    else
+      sprintf "%s\n%s" stdout output
+
+  type StructuredDiagnostic = {
+    [<JsonPropertyName("severity")>] Severity: string
+    [<JsonPropertyName("message")>] Message: string
+    [<JsonPropertyName("startLine")>] StartLine: int
+    [<JsonPropertyName("startColumn")>] StartColumn: int
+    [<JsonPropertyName("endLine")>] EndLine: int
+    [<JsonPropertyName("endColumn")>] EndColumn: int
+  }
+
+  type StructuredEvalResult = {
+    [<JsonPropertyName("success")>] Success: bool
+    [<JsonPropertyName("result")>]
+    [<JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)>]
+    Result: string
+    [<JsonPropertyName("error")>]
+    [<JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)>]
+    Error: string
+    [<JsonPropertyName("stdout")>]
+    [<JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)>]
+    Stdout: string
+    [<JsonPropertyName("diagnostics")>] Diagnostics: StructuredDiagnostic array
+    [<JsonPropertyName("code")>] Code: string
+  }
+
+  let formatEvalResultJson (response: EvalResponse) : string =
+    let stdout =
+      match response.Metadata.TryFind "stdout" with
+      | Some (s: obj) ->
+        let v = s.ToString()
+        if String.IsNullOrEmpty v then null else v
+      | None -> null
+
+    let diagnostics =
+      response.Diagnostics
+      |> Array.map (fun d -> {
+        Severity = Features.Diagnostics.DiagnosticSeverity.label d.Severity
+        Message = d.Message
+        StartLine = d.Range.StartLine
+        StartColumn = d.Range.StartColumn
+        EndLine = d.Range.EndLine
+        EndColumn = d.Range.EndColumn
+      })
+
+    let result =
+      match response.EvaluationResult with
+      | Ok output ->
+        { Success = true
+          Result = output
+          Error = null
+          Stdout = stdout
+          Diagnostics = diagnostics
+          Code = response.EvaluatedCode }
+      | Error ex ->
+        { Success = false
+          Result = null
+          Error = ex.Message
+          Stdout = stdout
+          Diagnostics = diagnostics
+          Code = response.EvaluatedCode }
+
+    JsonSerializer.Serialize(result)
+
+  let splitStatements (code: string) : string list =
+    code.Split([| ";;" |], StringSplitOptions.RemoveEmptyEntries)
+    |> Array.map (fun s -> s.Trim())
+    |> Array.filter (fun s -> not (String.IsNullOrWhiteSpace s))
+    |> Array.map (fun s -> s + ";;")
+    |> Array.toList
+
+  let echoStatement (writer: TextWriter) (statement: string) =
+    let code =
+      if statement.EndsWith(";;" ) then statement.[.. statement.Length - 3]
+      else statement
+    writer.WriteLine()
+    writer.WriteLine(">")
+    let lines = code.TrimEnd().Split([| '\n' |])
+    for line in lines do
+      writer.WriteLine(line.TrimEnd('\r'))
+
+  let formatEvents (events: list<DateTime * string * string>) : string =
+    events
+    |> List.map (fun (timestamp, source, text) -> $"[{timestamp:O}] {source}: {text}")
+    |> String.concat "\n"
+
+  let parseScriptFile (filePath: string) : Result<list<string>, exn> =
+    try
+      let content = File.ReadAllText(filePath)
+      let lines = content.Split([| '\n'; '\r' |], StringSplitOptions.RemoveEmptyEntries)
+
+      let rec parseStatements (lines: string list) (currentStmt: string list) (statements: string list) =
+        match lines with
+        | [] ->
+          if currentStmt.IsEmpty then
+            statements
+          else
+            (String.concat "\n" (List.rev currentStmt)) :: statements
+        | line :: rest ->
+          let trimmed = line.TrimStart()
+
+          if trimmed.StartsWith("//") then
+            parseStatements rest currentStmt statements
+          elif line.Contains(";;") then
+            let stmt = String.concat "\n" (List.rev (line :: currentStmt))
+            parseStatements rest [] (stmt :: statements)
+          else
+            parseStatements rest (line :: currentStmt) statements
+
+      let statements = parseStatements (Array.toList lines) [] []
+      Ok(List.rev statements)
+    with ex ->
+      Error ex
+
+  let formatStatus (sessionId: string) (eventCount: int) (state: SessionState) (evalStats: Affordances.EvalStats option) : string =
+    let tools = Affordances.availableTools state |> String.concat ", "
+    let base' = sprintf "Session: %s | Events: %d | State: %s" sessionId eventCount (SessionState.label state)
+    let statsLine =
+      match evalStats with
+      | Some s when s.EvalCount > 0 ->
+        let avg = Affordances.EvalStats.averageDuration s
+        sprintf "\nEvals: %d | Avg: %dms | Min: %dms | Max: %dms"
+          s.EvalCount (int avg.TotalMilliseconds) (int s.MinDuration.TotalMilliseconds) (int s.MaxDuration.TotalMilliseconds)
+      | _ -> ""
+    sprintf "%s%s\nAvailable: %s" base' statsLine tools
+
+  let formatCompletions (items: Features.AutoCompletion.CompletionItem list) : string =
+    match items with
+    | [] -> "No completions found."
+    | items ->
+      items
+      |> List.map (fun item -> sprintf "%s (%s)" item.DisplayText (Features.AutoCompletion.CompletionKind.label item.Kind))
+      |> String.concat "\n"
+
+  let formatExplorationResult (qualifiedName: string) (items: Features.AutoCompletion.CompletionItem list) : string =
+    match items with
+    | [] -> sprintf "No items found in '%s'." qualifiedName
+    | items ->
+      let grouped =
+        items
+        |> List.groupBy (fun item -> Features.AutoCompletion.CompletionKind.label item.Kind)
+        |> List.sortBy fst
+      let sections =
+        grouped
+        |> List.map (fun (kind, members) ->
+          let memberLines =
+            members
+            |> List.map (fun m -> sprintf "  %s" m.DisplayText)
+            |> String.concat "\n"
+          sprintf "### %s\n%s" kind memberLines)
+        |> String.concat "\n\n"
+      sprintf "## %s\n\n%s" qualifiedName sections
+
+  let formatStartupInfo (config: AppState.StartupConfig) : string =
+    // Filter out verbose -r: assembly references from args display
+    let importantArgs = 
+      config.CommandLineArgs 
+      |> Array.filter (fun arg -> not (arg.StartsWith("-r:") || arg.StartsWith("--reference:")))
+    let argsStr = 
+      if importantArgs.Length = 0 then "(none)"
+      else String.concat " " importantArgs
+    
+    let projectsStr = 
+      if config.LoadedProjects.IsEmpty then "None"
+      else String.concat ", " config.LoadedProjects
+    let hotReloadStr = if config.HotReloadEnabled then "Enabled ✓" else "Disabled"
+    let aspireStr = if config.AspireDetected then "Yes ✓" else "No"
+    let timestamp = config.StartupTimestamp.ToString("yyyy-MM-dd HH:mm:ss")
+    
+    // Count assembly references for info
+    let assemblyCount = 
+      config.CommandLineArgs 
+      |> Array.filter (fun arg -> arg.StartsWith("-r:") || arg.StartsWith("--reference:"))
+      |> Array.length
+    
+    let profileStr =
+      match config.StartupProfileLoaded with
+      | Some path -> sprintf "Loaded (%s)" path
+      | None -> "None"
+
+    $"""SageFs Startup Information:
+
+Args: {argsStr}
+Working Directory: {config.WorkingDirectory}
+Loaded Projects: {projectsStr}
+Assemblies Loaded: {assemblyCount}
+Hot Reload: {hotReloadStr}
+MCP Port: {config.McpPort}
+Aspire Detected: {aspireStr}
+Startup Profile: {profileStr}
+Started: {timestamp} UTC"""
+
+  let formatStartupInfoJson (config: AppState.StartupConfig) : string =
+    let data = {|
+      commandLineArgs = config.CommandLineArgs
+      loadedProjects = config.LoadedProjects |> List.toArray
+      workingDirectory = config.WorkingDirectory
+      mcpPort = config.McpPort
+      hotReloadEnabled = config.HotReloadEnabled
+      aspireDetected = config.AspireDetected
+      startupProfileLoaded = config.StartupProfileLoaded |> Option.toObj
+      startupTimestamp = config.StartupTimestamp.ToString("O")
+    |}
+    let opts = JsonSerializerOptions(WriteIndented = true)
+    JsonSerializer.Serialize(data, opts)
+
+  let formatDiagnosticsResult (diagnostics: Features.Diagnostics.Diagnostic array) : string =
+    if Array.isEmpty diagnostics then
+      "No issues found."
+    else
+      diagnostics
+      |> Array.map (fun d ->
+        let sev = Features.Diagnostics.DiagnosticSeverity.label d.Severity
+        sprintf "(%d,%d): [%s] %s" d.Range.StartLine d.Range.StartColumn sev d.Message)
+      |> String.concat "\n"
+
+  let formatDiagnosticsStoreAsJson (store: Features.DiagnosticsStore.T) : string =
+    let entries =
+      store
+      |> Features.DiagnosticsStore.all
+      |> List.map (fun (codeHash, diags) ->
+        {| codeHash = codeHash
+           diagnostics =
+             diags
+             |> List.map (fun (d: Features.Diagnostics.Diagnostic) ->
+               {| message = d.Message
+                  severity = Features.Diagnostics.DiagnosticSeverity.label d.Severity
+                  range =
+                    {| startLine = d.Range.StartLine
+                       startColumn = d.Range.StartColumn
+                       endLine = d.Range.EndLine
+                       endColumn = d.Range.EndColumn |} |}) |})
+      |> List.toArray
+    System.Text.Json.JsonSerializer.Serialize(entries)
+
+  let formatEnhancedStatus(sessionId: string) (eventCount: int) (state: SessionState) (evalStats: Affordances.EvalStats option) (startupConfig: AppState.StartupConfig option) : string =
+    let projectsStr = 
+      match startupConfig with
+      | None -> "Unknown"
+      | Some config -> 
+          if config.LoadedProjects.IsEmpty then "None"
+          else String.concat ", " (config.LoadedProjects |> List.map Path.GetFileName)
+    
+    let startupSection =
+      match startupConfig with
+      | None -> ""
+      | Some config ->
+          let hotReload = if config.HotReloadEnabled then "✅" else "❌"
+          let aspire = if config.AspireDetected then "✅" else "❌"
+          let fileWatch = if config.HotReloadEnabled then "✅ (auto-reload .fs/.fsx via #load)" else "❌"
+          sprintf """
+
+📋 Startup Information:
+- Working Directory: %s
+- MCP Port: %d
+- Hot Reload: %s
+- Aspire: %s
+- File Watcher: %s""" config.WorkingDirectory config.McpPort hotReload aspire fileWatch
+
+    let statsSection =
+      match evalStats with
+      | Some s when s.EvalCount > 0 ->
+        let avg = Affordances.EvalStats.averageDuration s
+        sprintf "\nEvals: %d | Avg: %dms | Min: %dms | Max: %dms"
+          s.EvalCount (int avg.TotalMilliseconds) (int s.MinDuration.TotalMilliseconds) (int s.MaxDuration.TotalMilliseconds)
+      | _ -> ""
+
+    let tools = Affordances.availableTools state |> String.concat ", "
+    sprintf """Session: %s | Events: %d | State: %s | Projects: %s
+Available: %s%s%s""" sessionId eventCount (SessionState.label state) projectsStr tools statsSection startupSection
+
+/// Event tracking for collaborative MCP mode — backed by Marten event store
+module EventTracking =
+
+  open SageFs.Features.Events
+
+  /// Track an input event (code submitted by user/agent/file)
+  let trackInput (store: Marten.IDocumentStore) (streamId: string) (source: EventSource) (content: string) =
+    let evt = McpInputReceived {| Source = source; Content = content |}
+    EventStore.appendEvents store streamId [evt]
+    |> fun t -> t.ConfigureAwait(false).GetAwaiter().GetResult()
+
+  /// Track an output event (result sent back to user/agent)
+  let trackOutput (store: Marten.IDocumentStore) (streamId: string) (source: EventSource) (content: string) =
+    let evt = McpOutputSent {| Source = source; Content = content |}
+    EventStore.appendEvents store streamId [evt]
+    |> fun t -> t.ConfigureAwait(false).GetAwaiter().GetResult()
+
+  /// Format an event for display
+  let private formatEvent (ts: DateTimeOffset, evt: SageFsEvent) =
+    let source, content =
+      match evt with
+      | McpInputReceived e -> e.Source.ToString(), e.Content
+      | McpOutputSent e -> e.Source.ToString(), e.Content
+      | EvalRequested e -> e.Source.ToString(), e.Code
+      | EvalCompleted e -> "eval", e.Result
+      | EvalFailed e -> "eval", e.Error
+      | DiagnosticsChecked e -> e.Source.ToString(), sprintf "%d diagnostics" e.Diagnostics.Length
+      | ScriptLoaded e -> e.Source.ToString(), sprintf "loaded %s (%d statements)" e.FilePath e.StatementCount
+      | ScriptLoadFailed e -> "system", sprintf "failed to load %s: %s" e.FilePath e.Error
+      | SessionStarted _ -> "system", "session started"
+      | SessionWarmUpCompleted _ -> "system", "warm-up completed"
+      | SessionReady -> "system", "session ready"
+      | SessionFaulted e -> "system", e.Error
+      | SessionReset -> "system", "session reset"
+      | SessionHardReset e -> "system", sprintf "hard reset (rebuild=%b)" e.Rebuild
+      | DiagnosticsCleared -> "system", "diagnostics cleared"
+    (ts.UtcDateTime, source, content)
+
+  /// Get recent events from the session stream
+  let getRecentEvents (store: Marten.IDocumentStore) (streamId: string) (count: int) =
+    EventStore.fetchStream store streamId
+    |> fun t -> t.ConfigureAwait(false).GetAwaiter().GetResult()
+    |> List.map formatEvent
+    |> List.rev
+    |> List.truncate count
+    |> List.rev
+
+  /// Get all events from the session stream
+  let getAllEvents (store: Marten.IDocumentStore) (streamId: string) =
+    EventStore.fetchStream store streamId
+    |> fun t -> t.ConfigureAwait(false).GetAwaiter().GetResult()
+    |> List.map formatEvent
+
+  /// Count events in the session stream
+  let getEventCount (store: Marten.IDocumentStore) (streamId: string) =
+    EventStore.countEvents store streamId
+    |> fun t -> t.ConfigureAwait(false).GetAwaiter().GetResult()
+
+/// MCP tool implementations
+module McpTools =
+
+  open System.Threading
+
+  type McpContext = {
+    Actor: AppActor
+    Store: Marten.IDocumentStore
+    SessionId: string
+    DiagnosticsChanged: IEvent<Features.DiagnosticsStore.T>
+    CancelEval: unit -> bool
+    GetSessionState: unit -> SessionState
+    GetEvalStats: unit -> Affordances.EvalStats
+    GetWarmupFailures: unit -> WarmupFailure list
+    GetStartupConfig: unit -> StartupConfig option
+    Mode: SessionMode
+  }
+
+  /// Check tool availability and return error message if not allowed
+  let private requireTool (ctx: McpContext) (toolName: string) : Result<unit, string> =
+    let state = ctx.GetSessionState()
+    Affordances.checkToolAvailability state toolName
+    |> Result.mapError SageFsError.describe
+
+  /// Route a WorkerMessage to a specific worker session via proxy.
+  /// Returns the raw WorkerResponse, or error if session not found.
+  let private routeToSession
+    (ctx: McpContext)
+    (sessionId: string)
+    (msg: WorkerProtocol.SessionId -> WorkerProtocol.WorkerMessage)
+    : Task<Result<WorkerProtocol.WorkerResponse, string>> =
+    task {
+      match ctx.Mode with
+      | SessionMode.Embedded ->
+        return Result.Error "Session routing requires daemon mode (SageFs -d)"
+      | SessionMode.Daemon ops ->
+        let! proxy = ops.GetProxy sessionId
+        match proxy with
+        | None ->
+          return Result.Error (sprintf "Session '%s' not found" sessionId)
+        | Some send ->
+          let replyId = Guid.NewGuid().ToString("N").[..7]
+          let! response = send (msg replyId) |> Async.StartAsTask
+          return Result.Ok response
+    }
+
+  /// Format a WorkerResponse.EvalResult for display.
+  let private formatWorkerEvalResult (response: WorkerProtocol.WorkerResponse) : string =
+    match response with
+    | WorkerProtocol.WorkerResponse.EvalResult(_, result, diags) ->
+      let diagStr =
+        if List.isEmpty diags then ""
+        else
+          diags
+          |> List.map (fun d ->
+            sprintf "  [%s] %s"
+              (Features.Diagnostics.DiagnosticSeverity.label d.Severity) d.Message)
+          |> String.concat "\n"
+          |> sprintf "\nDiagnostics:\n%s"
+      match result with
+      | Ok output -> sprintf "Result: %s%s" output diagStr
+      | Error err -> sprintf "Error: %s%s" (SageFsError.describe err) diagStr
+    | WorkerProtocol.WorkerResponse.WorkerError err ->
+      sprintf "Error: %s" (SageFsError.describe err)
+    | other ->
+      sprintf "Unexpected response: %A" other
+
+  type OutputFormat = Text | Json
+
+  let sendFSharpCode (ctx: McpContext) (agentName: string) (code: string) (format: OutputFormat) (sessionId: string option) : Task<string> =
+    task {
+      // Route to a specific worker session if sessionId is provided
+      match sessionId with
+      | Some sid ->
+        let statements = McpAdapter.splitStatements code
+        let mutable allOutputs = []
+        for statement in statements do
+          let! routeResult =
+            routeToSession ctx sid
+              (fun replyId -> WorkerProtocol.WorkerMessage.EvalCode(statement, replyId))
+          let output =
+            match routeResult with
+            | Ok response -> formatWorkerEvalResult response
+            | Error msg -> sprintf "Error: %s" msg
+          allOutputs <- output :: allOutputs
+        return
+          if statements.Length > 1 then
+            String.concat "\n\n" (List.rev allOutputs)
+          else
+            allOutputs |> List.tryHead |> Option.defaultValue ""
+      | None ->
+      // Local embedded session
+      match requireTool ctx "send_fsharp_code" with
+      | Error msg -> return msg
+      | Ok () ->
+      EventTracking.trackInput ctx.Store ctx.SessionId (Features.Events.McpAgent agentName) code
+
+      let statements = McpAdapter.splitStatements code
+
+      let formatResult =
+        match format with
+        | Text -> McpAdapter.formatEvalResult
+        | Json -> McpAdapter.formatEvalResultJson
+
+      let mutable lastOutput = ""
+      let mutable allOutputs = []
+
+      for statement in statements do
+        McpAdapter.echoStatement Console.Out statement
+
+        let request = { Code = statement; Args = Map.empty }
+
+        let! result =
+          ctx.Actor.PostAndAsyncReply(fun reply -> Eval(request, CancellationToken.None, reply))
+          |> Async.StartAsTask
+
+        let output = formatResult result
+        allOutputs <- output :: allOutputs
+        lastOutput <- output
+
+      let finalOutput =
+        match format with
+        | Json when statements.Length > 1 ->
+          let items = List.rev allOutputs |> List.map (fun s -> s) |> String.concat ","
+          sprintf "[%s]" items
+        | _ when statements.Length > 1 ->
+          String.concat "\n\n" (List.rev allOutputs)
+        | _ -> lastOutput
+
+      EventTracking.trackOutput ctx.Store ctx.SessionId (Features.Events.McpAgent agentName) finalOutput
+
+      return finalOutput
+    }
+
+  let getRecentEvents (ctx: McpContext) (count: int) : Task<string> =
+    task {
+      let events = EventTracking.getRecentEvents ctx.Store ctx.SessionId count
+      return McpAdapter.formatEvents events
+    }
+
+  let getStatus (ctx: McpContext) : Task<string> =
+    task {
+      let startupConfig = ctx.GetStartupConfig()
+      let eventCount = EventTracking.getEventCount ctx.Store ctx.SessionId
+      let sessionId = ctx.SessionId
+      let state = ctx.GetSessionState()
+      let stats = ctx.GetEvalStats()
+      return McpAdapter.formatEnhancedStatus sessionId eventCount state (Some stats) startupConfig
+    }
+
+  let getStartupInfo (ctx: McpContext) : Task<string> =
+    task {
+      match ctx.GetStartupConfig() with
+      | None -> return "SageFs startup information not available yet — session is still initializing"
+      | Some config -> return McpAdapter.formatStartupInfo config
+    }
+
+  let getStartupInfoJson (ctx: McpContext) : Task<string> =
+    task {
+      match ctx.GetStartupConfig() with
+      | None -> return """{"status": "initializing", "message": "Session is still warming up"}"""
+      | Some config -> return McpAdapter.formatStartupInfoJson config
+    }
+
+  let getAvailableProjects (ctx: McpContext) : Task<string> =
+    task {
+      let workingDir =
+        match ctx.GetStartupConfig() with
+        | Some config -> config.WorkingDirectory
+        | None -> Environment.CurrentDirectory
+
+      let projects =
+        try
+          Directory.EnumerateFiles(workingDir, "*.fsproj", SearchOption.AllDirectories)
+          |> Seq.filter McpAdapter.isProjectFile
+          |> Seq.map (fun p -> Path.GetRelativePath(workingDir, p))
+          |> Seq.toArray
+        with _ -> [||]
+
+      let solutions =
+        try
+          Directory.EnumerateFiles workingDir
+          |> Seq.filter McpAdapter.isSolutionFile
+          |> Seq.map Path.GetFileName
+          |> Seq.toArray
+        with _ -> [||]
+
+      return McpAdapter.formatAvailableProjects workingDir projects solutions
+    }
+
+  let loadFSharpScript (ctx: McpContext) (agentName: string) (filePath: string) (sessionId: string option) : Task<string> =
+    task {
+      match sessionId with
+      | Some sid ->
+        let! routeResult =
+          routeToSession ctx sid
+            (fun replyId -> WorkerProtocol.WorkerMessage.LoadScript(filePath, replyId))
+        return
+          match routeResult with
+          | Ok (WorkerProtocol.WorkerResponse.ScriptLoaded(_, Ok msg)) -> msg
+          | Ok (WorkerProtocol.WorkerResponse.ScriptLoaded(_, Error err)) ->
+            sprintf "Error: %s" (SageFsError.describe err)
+          | Ok (WorkerProtocol.WorkerResponse.WorkerError err) ->
+            sprintf "Error: %s" (SageFsError.describe err)
+          | Ok other -> sprintf "Unexpected response: %A" other
+          | Error msg -> sprintf "Error: %s" msg
+      | None ->
+      match McpAdapter.parseScriptFile filePath with
+      | Error ex -> return $"Error reading {filePath}: {ex.Message}"
+      | Ok statements ->
+        let fileName = Path.GetFileName(filePath)
+        EventTracking.trackInput ctx.Store ctx.SessionId (Features.Events.FileSync fileName) (sprintf "Loading %d statements" statements.Length)
+
+        let mutable successCount = 0
+        let mutable errorMessages = []
+
+        for statement in statements do
+          let request = { Code = statement; Args = Map.empty }
+
+          let! result =
+            ctx.Actor.PostAndAsyncReply(fun reply -> Eval(request, CancellationToken.None, reply))
+            |> Async.StartAsTask
+
+          match result.EvaluationResult with
+          | Ok _ -> successCount <- successCount + 1
+          | Error ex -> errorMessages <- ex.Message :: errorMessages
+
+        if errorMessages.IsEmpty then
+          return $"Success: Loaded {successCount} statements from {fileName}"
+        else
+          let errorText = String.concat "\n" (List.rev errorMessages)
+          return $"Partial: {successCount} succeeded, {errorMessages.Length} failed\nErrors:\n{errorText}"
+    }
+
+  let private resetPushbackWarning (ctx: McpContext) =
+    let state = ctx.GetSessionState()
+    let warmupFailures = ctx.GetWarmupFailures()
+    match state, warmupFailures with
+    | SessionState.Ready, [] ->
+      Some "⚠️ NOTE: The session was healthy (Ready, no warm-up failures). This reset was likely unnecessary. If you encountered eval errors, the problem is almost certainly in your submitted code — fix and resubmit instead of resetting.\n\n"
+    | SessionState.Evaluating, [] ->
+      Some "⚠️ NOTE: The session was actively evaluating with no warm-up issues. If you're resetting due to eval errors, those are in your code, not the session.\n\n"
+    | _ -> None
+
+  let resetSession (ctx: McpContext) (sessionId: string option) : Task<string> =
+    task {
+      match sessionId with
+      | Some sid ->
+        let! routeResult =
+          routeToSession ctx sid
+            (fun replyId -> WorkerProtocol.WorkerMessage.ResetSession replyId)
+        return
+          match routeResult with
+          | Ok (WorkerProtocol.WorkerResponse.ResetResult(_, Ok ())) ->
+            "Session reset successfully."
+          | Ok (WorkerProtocol.WorkerResponse.ResetResult(_, Error err)) ->
+            sprintf "Error: %s" (SageFsError.describe err)
+          | Ok other -> sprintf "Unexpected response: %A" other
+          | Error msg -> sprintf "Error: %s" msg
+      | None ->
+      let warning = resetPushbackWarning ctx
+      let! result =
+        ctx.Actor.PostAndAsyncReply(fun reply -> ResetSession reply)
+        |> Async.StartAsTask
+      match result with
+      | Ok () ->
+        let msg = "Session reset successfully. All previous definitions have been cleared."
+        return (warning |> Option.map (fun w -> w + msg) |> Option.defaultValue msg)
+      | Error err -> return sprintf "Error: Session reset failed — %s" (SageFsError.describe err)
+    }
+
+  let checkFSharpCode (ctx: McpContext) (code: string) (sessionId: string option) : Task<string> =
+    task {
+      match sessionId with
+      | Some sid ->
+        let! routeResult =
+          routeToSession ctx sid
+            (fun replyId -> WorkerProtocol.WorkerMessage.CheckCode(code, replyId))
+        return
+          match routeResult with
+          | Ok (WorkerProtocol.WorkerResponse.CheckResult(_, diags)) ->
+            if List.isEmpty diags then "No errors found."
+            else
+              diags
+              |> List.map (fun d ->
+                sprintf "[%s] %s"
+                  (Features.Diagnostics.DiagnosticSeverity.label d.Severity) d.Message)
+              |> String.concat "\n"
+          | Ok other -> sprintf "Unexpected response: %A" other
+          | Error msg -> sprintf "Error: %s" msg
+      | None ->
+      let! diagnostics =
+        ctx.Actor.PostAndAsyncReply(fun reply -> GetDiagnostics(code, reply))
+        |> Async.StartAsTask
+      return McpAdapter.formatDiagnosticsResult diagnostics
+    }
+
+  let hardResetSession (ctx: McpContext) (rebuild: bool) (sessionId: string option) : Task<string> =
+    task {
+      match sessionId with
+      | Some sid ->
+        let! routeResult =
+          routeToSession ctx sid
+            (fun replyId -> WorkerProtocol.WorkerMessage.HardResetSession(rebuild, replyId))
+        return
+          match routeResult with
+          | Ok (WorkerProtocol.WorkerResponse.HardResetResult(_, Ok msg)) -> msg
+          | Ok (WorkerProtocol.WorkerResponse.HardResetResult(_, Error err)) ->
+            sprintf "Error: %s" (SageFsError.describe err)
+          | Ok other -> sprintf "Unexpected response: %A" other
+          | Error msg -> sprintf "Error: %s" msg
+      | None ->
+      let warning = resetPushbackWarning ctx
+      let! result =
+        ctx.Actor.PostAndAsyncReply(fun reply -> HardResetSession(rebuild, reply))
+        |> Async.StartAsTask
+      match result with
+      | Ok msg ->
+        return (warning |> Option.map (fun w -> w + msg) |> Option.defaultValue msg)
+      | Error err -> return sprintf "Error: Hard reset failed — %s" (SageFsError.describe err)
+    }
+
+  let cancelEval (ctx: McpContext) : Task<string> =
+    task {
+      let cancelled = ctx.CancelEval()
+      if cancelled then
+        return "Evaluation cancelled."
+      else
+        return "No evaluation in progress."
+    }
+
+  let getCompletions (ctx: McpContext) (code: string) (cursorPosition: int) : Task<string> =
+    task {
+      let word =
+        if cursorPosition > 0 && cursorPosition <= code.Length then
+          let before = code.[..cursorPosition - 1]
+          let wordChars =
+            before
+            |> Seq.rev
+            |> Seq.takeWhile (fun c -> Char.IsLetterOrDigit c || c = '.' || c = '_')
+            |> Seq.rev
+            |> Seq.toArray
+          System.String(wordChars)
+        else ""
+      let! items =
+        ctx.Actor.PostAndAsyncReply(fun reply -> Autocomplete(code, cursorPosition, word, reply))
+        |> Async.StartAsTask
+      return McpAdapter.formatCompletions items
+    }
+
+  let private exploreQualifiedName (ctx: McpContext) (qualifiedName: string) : Task<string> =
+    task {
+      match requireTool ctx "get_completions" with
+      | Error msg -> return msg
+      | Ok () ->
+      let code = sprintf "%s." qualifiedName
+      let cursor = code.Length
+      let! items =
+        ctx.Actor.PostAndAsyncReply(fun reply -> Autocomplete(code, cursor, qualifiedName + ".", reply))
+        |> Async.StartAsTask
+      return McpAdapter.formatExplorationResult qualifiedName items
+    }
+
+  let exploreNamespace (ctx: McpContext) (namespaceName: string) : Task<string> =
+    exploreQualifiedName ctx namespaceName
+
+  let exploreType (ctx: McpContext) (typeName: string) : Task<string> =
+    exploreQualifiedName ctx typeName
+
+  // ── Session Management Operations ──────────────────────────────
+  // These dispatch through ctx.Mode (SessionMode DU).
+  // Embedded mode → error message. Daemon mode → delegates to ops.
+
+  /// Create a new session (daemon mode only).
+  let createSession (ctx: McpContext) (projects: string list) (workingDir: string) : Task<string> =
+    task {
+      match SessionMode.requireDaemon ctx.Mode with
+      | Result.Error err -> return SageFsError.describe err
+      | Result.Ok mgmt ->
+        let! result = mgmt.CreateSession projects workingDir
+        match result with
+        | Result.Ok info -> return info
+        | Result.Error err -> return SageFsError.describe err
+    }
+
+  /// List all active sessions (daemon mode only).
+  let listSessions (ctx: McpContext) : Task<string> =
+    task {
+      match SessionMode.requireDaemon ctx.Mode with
+      | Result.Error err -> return SageFsError.describe err
+      | Result.Ok mgmt -> return! mgmt.ListSessions()
+    }
+
+  /// Stop a session by ID (daemon mode only).
+  let stopSession (ctx: McpContext) (sessionId: string) : Task<string> =
+    task {
+      match SessionMode.requireDaemon ctx.Mode with
+      | Result.Error err -> return SageFsError.describe err
+      | Result.Ok mgmt ->
+        let! result = mgmt.StopSession sessionId
+        match result with
+        | Result.Ok msg -> return msg
+        | Result.Error err -> return SageFsError.describe err
+    }

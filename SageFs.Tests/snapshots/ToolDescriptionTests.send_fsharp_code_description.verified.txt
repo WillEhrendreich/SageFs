@@ -1,0 +1,22 @@
+﻿Send F# code to the FSI REPL session. Each ';;' marks a transaction boundary.
+
+RULES:
+- End every statement with ';;'
+- Submit small, incremental blocks (one definition at a time)
+- For '#r nuget:' directives, submit alone in their own call
+- Errors are non-destructive: previous definitions survive a failed submission
+- Use get_fsi_status to check session health if something seems wrong
+
+TRANSACTION SEMANTICS:
+- Each ';;' boundary is a separate transaction. Statements are evaluated sequentially.
+- If a statement fails, that ENTIRE statement is discarded — nothing from it is kept in session state.
+- Previously evaluated statements (from earlier calls or earlier ';;' boundaries that succeeded) remain valid.
+- When a statement fails, subsequent statements in the SAME call are still attempted, but they may fail too if they depended on the failed one.
+
+ERROR HANDLING (CRITICAL):
+- If you get an error, it is almost certainly YOUR code that has the bug. Read the diagnostics carefully and fix your code.
+- 'Operation could not be completed due to earlier error' means a PREVIOUS statement had a compile error, so definitions from it were never created. Fix the original error and resubmit that code first.
+- The session is NOT corrupted by errors. Do NOT call reset_fsi_session or hard_reset_fsi_session because of eval errors. Fix your code instead.
+- Submit smaller pieces (one definition per call) to isolate which part has the error.
+
+WORKFLOW: Use this tool instead of dotnet build or dotnet run. SageFs IS your compiler and runtime.

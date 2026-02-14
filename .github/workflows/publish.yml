@@ -1,0 +1,77 @@
+name: Publish
+
+on:
+  push:
+    tags:
+    - "v[0-9]+.*"
+
+jobs:
+  build-and-publish:
+    permissions:
+      id-token: write
+      contents: write
+      packages: write
+
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v5
+    
+    - name: Install Dotnet
+      uses: actions/setup-dotnet@v5
+      with:
+        dotnet-version: |
+          10.0.x
+      
+    - name: Dotnet Installation Info
+      run: dotnet --info
+      
+      # Get a short-lived NuGet API key
+    - name: NuGet login (OIDC → temp API key)
+      uses: NuGet/login@v1
+      id: login
+      with:
+        user: Soweli
+
+    - name: Pack
+      run: dotnet pack -c Release /p:ContinuousIntegrationBuild=true
+
+    - name: Collect artifacts
+      run: |
+        mkdir release
+        cp SageFs.Cli/nupkg/*.nupkg release/
+        cp SageFs.Cli.Web/nupkg/*.nupkg release/
+        cp SageFs.Daemon/nupkg/*.nupkg release/
+      
+        
+    - name: Get version from tag
+      id: tag_name
+      run: |
+        unpatched_version=${GITHUB_REF#refs/tags/} # gives v*.*.*-*
+        patched_version=${raw_version%%-*} # gives v*.*.*
+        echo "current_version=$patched_version" >> $GITHUB_OUTPUT
+    - name: Get Changelog Entry
+      id: changelog_reader
+      uses: mindsers/changelog-reader-action@v2
+      with:
+        validation_level: warn
+        version: ${{ steps.tag_name.outputs.current_version }}
+        path: ./CHANGELOG.md
+
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: ${{ github.ref_name }}
+        files: release/*.nupkg
+        body: ${{ steps.changelog_reader.outputs.changes }}
+
+
+    - name: Publish to GitHub Packages
+      run: |
+        dotnet nuget push release/*.nupkg \
+          --api-key ${{ github.token }} \
+          --source "https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json"
+    - name: Publish to NuGet
+      run: |
+        dotnet nuget push release/*.nupkg --api-key ${{steps.login.outputs.NUGET_API_KEY}} --source https://api.nuget.org/v3/index.json
+      shell: bash

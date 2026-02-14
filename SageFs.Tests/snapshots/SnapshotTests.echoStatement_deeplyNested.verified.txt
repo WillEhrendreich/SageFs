@@ -1,0 +1,29 @@
+﻿
+>
+let processResults (items: Item list) =
+  items
+  |> List.groupBy (fun i -> i.Category)
+  |> List.map (fun (cat, grouped) ->
+    let summary =
+      grouped
+      |> List.fold (fun acc item ->
+        match item.Status with
+        | Active ->
+          { acc with
+              Count = acc.Count + 1
+              Total = acc.Total + item.Value }
+        | Inactive reason ->
+          { acc with
+              Skipped =
+                acc.Skipped
+                |> Map.add item.Id reason }
+        | Pending approval ->
+          let nested =
+            approval
+            |> List.filter (fun a ->
+              a.Level > 2
+              && a.Department = cat)
+          { acc with
+              Waiting = acc.Waiting @ nested }
+      ) emptySummary
+    cat, summary)
