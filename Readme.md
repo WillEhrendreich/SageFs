@@ -380,7 +380,7 @@ Core components:
 ## 📊 Project Status
 
 **Target Framework**: .NET 10.0
-**Stability**: Active development — 400 tests passing
+**Stability**: Active development — 408 tests passing
 **Test Framework**: Expecto + Verify snapshots + FsCheck property tests
 
 ### What's Done
@@ -404,13 +404,16 @@ Core components:
 - ✅ Aspire project detection and configuration
 - ✅ Core domain types: Editor, ElmLoop, RenderPipeline, SageFsEvent, SageFsView
 - ✅ SessionDisplay types for UI rendering
+- ✅ ElmDaemon wiring — Elm loop running in daemon, dispatch available to MCP tools
+- ✅ MCP ↔ Elm notifications — eval/reset/cancel/load events flow to Elm model
 
 ### What's Next
-- 🔲 Wiring ElmLoop to daemon — connect SageFsEffectHandler dispatch to live SessionManager
 - 🔲 Watchdog process for daemon auto-restart
 - 🔲 Remove embedded mode — daemon-only architecture
 - 🔲 REPL as a client connecting to daemon
 - 🔲 Replace PrettyPrompt with custom rendering — PrettyPrompt assumes it owns the terminal and can't render into a grid region, making it incompatible with the multi-frontend architecture
+- 🔲 Frontend subscription — OnModelChanged pushes RenderRegion list to connected clients
+- 🔲 MCP state query — expose Elm model state through MCP tools
 
 ### Where It's Going
 
