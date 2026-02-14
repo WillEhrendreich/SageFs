@@ -35,6 +35,7 @@
         <Compile Include="SessionDisplay.fs" />
         <Compile Include="SageFsEvent.fs" />
         <Compile Include="SageFsApp.fs" />
+    <Compile Include="ElmDaemon.fs" />
         <Compile Include="StartupProfile.fs" />
         <Compile Include="FileWatcher.fs" />
         <Compile Include="AppState.fs" />
