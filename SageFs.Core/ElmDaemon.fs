@@ -57,11 +57,11 @@ let createProgram
     OnModelChanged = onModelChanged
   }
 
-/// Start the Elm loop with initial model and return dispatch function.
+/// Start the Elm loop with initial model and return the runtime.
 let start
   (deps: EffectDeps)
   (onModelChanged: SageFsModel -> RenderRegion list -> unit)
-  : SageFsMsg -> unit =
+  : ElmRuntime<SageFsModel, SageFsMsg, RenderRegion> =
   let program = createProgram deps onModelChanged
   ElmLoop.start program SageFsModel.initial
 
