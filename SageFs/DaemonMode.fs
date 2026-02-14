@@ -94,6 +94,13 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
   }
   DaemonState.write daemonInfo
 
+  // Create EffectDeps from SessionManager + start Elm loop
+  let effectDeps = ElmDaemon.createEffectDeps sessionManager
+  let elmDispatch =
+    ElmDaemon.start effectDeps (fun _model _regions ->
+      // Phase C: this callback will push to connected frontends
+      ())
+
   // Start MCP server BEFORE warm-up completes
   appActor.Post(AppState.UpdateMcpPort mcpPort)
   let mcpTask =
@@ -109,6 +116,7 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
       sessionId
       mcpPort
       (SageFs.SessionMode.Daemon sessionOps)
+      (Some elmDispatch)
 
   // Phase 2: Add middleware — blocks until warm-up completes
   do! ActorCreation.addMiddleware result actorArgs.Middleware

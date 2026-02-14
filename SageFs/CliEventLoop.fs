@@ -72,7 +72,7 @@ let runCliEventLoop useAsp mcpPort args () =
     match mcpPort with
     | Some port ->
         appActor.Post(AppState.UpdateMcpPort port)
-        let mcpTask = McpServer.startMcpServer appActor result.DiagnosticsChanged result.CancelEval result.GetSessionState result.GetEvalStats result.GetWarmupFailures result.GetStartupConfig eventStore sessionId port SageFs.SessionMode.Embedded
+        let mcpTask = McpServer.startMcpServer appActor result.DiagnosticsChanged result.CancelEval result.GetSessionState result.GetEvalStats result.GetWarmupFailures result.GetStartupConfig eventStore sessionId port SageFs.SessionMode.Embedded None
         System.Threading.Tasks.Task.Run(System.Func<Task>(fun () -> mcpTask)) |> ignore
     | None -> ()
 
