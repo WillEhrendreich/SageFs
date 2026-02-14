@@ -3,5 +3,11 @@
     <TargetFramework>net10.0</TargetFramework>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <NoWarn>$(NoWarn);NU1608</NoWarn>
+    <!-- Timestamp-based assembly version ensures each build produces a unique identity.
+         Without this, Assembly.LoadFrom caches by identity (name+version) and returns
+         stale DLLs after hard_reset_fsi_session rebuild, because the CLR thinks
+         "SageFs.Core 1.0.0.0" is already loaded even though the file on disk changed.
+         Components: 1.0.<day-of-year>.<HHmm>, all within ushort range (0-65535). -->
+    <AssemblyVersion>1.0.$([System.DateTime]::UtcNow.DayOfYear).$([System.DateTime]::UtcNow.ToString('HHmm'))</AssemblyVersion>
   </PropertyGroup>
 </Project>
