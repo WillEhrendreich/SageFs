@@ -413,6 +413,12 @@ module McpTools =
     Affordances.checkToolAvailability state toolName
     |> Result.mapError SageFsError.describe
 
+  /// Notify the Elm loop of an event (fire-and-forget, no-op if no dispatch).
+  let private notifyElm (ctx: McpContext) (event: SageFsEvent) =
+    ctx.Dispatch
+    |> Option.iter (fun dispatch ->
+      dispatch (SageFsMsg.Event event))
+
   /// Route a WorkerMessage to a specific worker session via proxy.
   /// Returns the raw WorkerResponse, or error if session not found.
   let private routeToSession
@@ -498,12 +504,26 @@ module McpTools =
 
       for statement in statements do
         McpAdapter.echoStatement Console.Out statement
+        notifyElm ctx (SageFsEvent.EvalStarted (ctx.SessionId, statement))
 
         let request = { Code = statement; Args = Map.empty }
 
         let! result =
           ctx.Actor.PostAndAsyncReply(fun reply -> Eval(request, CancellationToken.None, reply))
           |> Async.StartAsTask
+
+        // Notify Elm loop of result
+        match result.EvaluationResult with
+        | Ok _ ->
+          let diags =
+            result.Diagnostics
+            |> Array.toList
+            |> List.map (fun d -> d)
+          notifyElm ctx (
+            SageFsEvent.EvalCompleted (ctx.SessionId, (formatResult result), diags))
+        | Error ex ->
+          notifyElm ctx (
+            SageFsEvent.EvalFailed (ctx.SessionId, ex.Message))
 
         let output = formatResult result
         allOutputs <- output :: allOutputs
@@ -655,6 +675,8 @@ module McpTools =
         |> Async.StartAsTask
       match result with
       | Ok () ->
+        notifyElm ctx (
+          SageFsEvent.SessionStatusChanged (ctx.SessionId, SessionDisplayStatus.Running))
         let msg = "Session reset successfully. All previous definitions have been cleared."
         return (warning |> Option.map (fun w -> w + msg) |> Option.defaultValue msg)
       | Error err -> return sprintf "Error: Session reset failed — %s" (SageFsError.describe err)
