@@ -1,0 +1,1 @@
+﻿Load and execute an F# script file (.fsx). The file is parsed into individual statements and each is sent to FSI separately, so partial progress is preserved if a statement fails.

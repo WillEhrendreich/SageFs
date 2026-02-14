@@ -1,0 +1,30 @@
+open System
+open System.Threading.Tasks
+
+
+/// Extensions for computation expressions to enable direct execution in the REPL.
+/// These extensions allow users to write `let! someCode = someCompExpr` in the REPL,
+/// where `someCompExpr` is a computation expression (e.g., `Async<'T>`, `Task<'T>`, or `Task`),
+/// and have it executed synchronously without wrapping it in a computation expression block.
+/// The REPL rewrites expressions like `let! x = someCompExpr` to `let x = someCompExpr.Run()`,
+/// leveraging these extension methods to run the computation and extract its result.
+///
+/// To support additional computation expression types, define similar extension methods with a `Run`
+/// member that executes the computation synchronously and returns the result.
+/// For example, to support a custom computation expression `MyComp<'T>`, add:
+/// ```fsharp
+/// type MyComp<'T> with
+///     member x.Run() = // Implementation to run synchronously
+/// ```
+type Async<'t> with
+  member x.Run() = Async.RunSynchronously x
+
+type Task<'t> with
+  member x.Run() = x.GetAwaiter().GetResult()
+
+type Task with
+  member x.Run() = x.GetAwaiter().GetResult()
+
+let mutable _SageFsHotReload = true
+let mutable _SageFsCompExpr = true
+

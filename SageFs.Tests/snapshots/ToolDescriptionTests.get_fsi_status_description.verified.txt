@@ -1,0 +1,1 @@
+﻿Get the current FSI session status: startup configuration, loaded projects, session statistics, and available capabilities. Use to verify session health or discover what is loaded.

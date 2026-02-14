@@ -1,0 +1,4 @@
+﻿Error: Operation could not be completed due to earlier error
+⚠️ This 'earlier error' means a PREVIOUS statement had a compile error, so its definitions were never created. The session is NOT corrupted — all successfully evaluated statements are still valid. Fix the original error and re-submit that code, then retry. Do NOT reset the session.
+Diagnostics:
+  [error] The value or constructor 'nonExistent' is not defined.

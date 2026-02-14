@@ -1,0 +1,68 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <OutputType>Exe</OutputType>
+        <PackAsTool>true</PackAsTool>
+        <IsPackable>true</IsPackable>
+        <ToolCommandName>sagefs</ToolCommandName>
+        <PackageOutputPath>./nupkg</PackageOutputPath>
+        <Version>0.2.44</Version>
+
+        <!-- NuGet config -->
+        <PackageId>SageFs</PackageId>
+        <PackageTags>fsharp;functional;repl;interactive;shell;asp.net core;asp.net;.net core;SageFs;sagefs-web;mcp</PackageTags>
+        <PackageProjectUrl>https://github.com/soweli-p/SageFs</PackageProjectUrl>
+        <PackageLicenseExpression>MIT</PackageLicenseExpression>
+        <PackageReadmeFile>Readme.md</PackageReadmeFile>
+        <PackageRequireLicenseAcceptance>true</PackageRequireLicenseAcceptance>
+        <RepositoryType>git</RepositoryType>
+        <RepositoryUrl>https://github.com/soweli-p/SageFs</RepositoryUrl>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <Compile Include="DaemonState.fs" />
+        <Compile Include="PostgresInfra.fs" />
+        <Compile Include="Logging.fs" />
+        <Compile Include="PrettyPromptCallbacks.fs" />
+        <Compile Include="Configuration.fs" />
+        <Compile Include="McpTools.fs" />
+        <Compile Include="McpServer.fs" />
+        <Compile Include="WorkerMain.fs" />
+        <Compile Include="DaemonMode.fs" />
+        <Compile Include="ClientMode.fs" />
+        <Compile Include="CliEventLoop.fs" />
+        <Compile Include="Program.fs" />
+        <None Include="..\Readme.md">
+          <Pack>true</Pack>
+          <PackagePath>/</PackagePath>
+          <Link>Readme.md</Link>
+        </None>
+    </ItemGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="..\SageFs.Core\SageFs.Core.fsproj" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <EmbeddedResource Include="prompt.fsx" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <PackageReference Include="FSharpPlus" />
+        <PackageReference Include="PrettyPrompt" />
+        <PackageReference Include="OpenTelemetry.Exporter.Console" />
+        <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" />    
+        <PackageReference Include="OpenTelemetry.Extensions.Hosting" />
+        <PackageReference Include="OpenTelemetry.Instrumentation.AspNetCore" />        
+        <PackageReference Include="OpenTelemetry.Instrumentation.Http" />
+        <PackageReference Include="OpenTelemetry.Instrumentation.Runtime" />
+        <PackageReference Include="Serilog.Extensions.Logging.File" />
+        <PackageReference Include="Marten" />
+        <PackageReference Include="Testcontainers.PostgreSql" />
+        <PackageReference Include="FSharp.SystemTextJson" />
+        <PackageReference Include="ModelContextProtocol" />
+        <PackageReference Include="ModelContextProtocol.AspNetCore" />
+        <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    </ItemGroup>
+
+</Project>

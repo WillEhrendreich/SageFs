@@ -1,0 +1,73 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <OutputType>Exe</OutputType>
+        <GenerateProgramFile>false</GenerateProgramFile>
+        <LangVersion>preview</LangVersion>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <Compile Include="EventStoreTests.fs" />
+        <Compile Include="TestInfrastructure.fs" />
+        <Compile Include="FalcoTests.fs" />
+        <Compile Include="McpAdapterTests.fs" />
+        <Compile Include="McpCollaborationTests.fs" />
+        <Compile Include="McpServerE2ETests.fs" />
+        <Compile Include="McpServerIntegrationTests.fs" />
+        <Compile Include="McpLlmInteropTests.fs" />
+        <Compile Include="SharedSageFsFixture.fs" />
+        <Compile Include="CompExprSimplifierTests.fs" />
+        <Compile Include="MethodPatcherTests.fs" />
+        <Compile Include="SnapshotTests.fs" />
+        <Compile Include="ToolDescriptionTests.fs" />
+        <Compile Include="SessionResetTests.fs" />
+        <Compile Include="DiagnosticsToolTests.fs" />
+        <Compile Include="DiagnosticsStoreTests.fs" />
+        <Compile Include="EventStoreModuleTests.fs" />
+        <Compile Include="ActorEventEmissionTests.fs" />
+        <Compile Include="EvalCancellationTests.fs" />
+        <Compile Include="ActorSplitTests.fs" />
+        <Compile Include="AffordanceTests.fs" />
+        <Compile Include="WorkerProtocolTests.fs" />
+        <Compile Include="DaemonStateTests.fs" />
+        <Compile Include="NamedPipeTransportTests.fs" />
+        <Compile Include="DaemonIntegrationTests.fs" />
+        <Compile Include="SessionOperationsTests.fs" />
+        <Compile Include="RestartPolicyTests.fs" />
+        <Compile Include="FileWatcherTests.fs" />
+        <Compile Include="EditorTests.fs" />
+        <Compile Include="SessionDisplayTests.fs" />
+        <Compile Include="SageFsEventTests.fs" />
+        <Compile Include="ExplorationTests.fs" />
+        <Compile Include="Program.fs" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <PackageReference Include="Expecto" />
+        <PackageReference Include="Expecto.FsCheck" />
+        <PackageReference Include="Expecto.Hopac" />
+        <PackageReference Include="Fabulous.AST" />
+        <PackageReference Include="FsCheck" />
+        <PackageReference Include="YoloDev.Expecto.TestSdk" />
+        <PackageReference Include="Microsoft.NET.Test.Sdk" />
+        <PackageReference Include="Lib.Harmony" />
+        <PackageReference Include="Fantomas.Core" />
+        <PackageReference Include="Falco" />
+        <PackageReference Include="Falco.Markup" />
+        <PackageReference Include="FSharp.SystemTextJson" />
+        <PackageReference Include="Verify.Expecto" />
+        <PackageReference Include="Testcontainers.PostgreSql" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <Content Include="snapshots\**\*.verified.txt">
+            <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        </Content>
+    </ItemGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="..\SageFs.Core\SageFs.Core.fsproj" />
+        <ProjectReference Include="..\SageFs\SageFs.fsproj" />
+    </ItemGroup>
+
+</Project>

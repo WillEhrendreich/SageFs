@@ -1,0 +1,33 @@
+module SageFs.Utils
+
+//todo make instances
+type ILogger =
+  abstract member LogInfo: string -> unit
+  abstract member LogDebug: string -> unit
+  abstract member LogWarning: string -> unit
+  abstract member LogError: string -> unit
+
+module Configuration =
+  open System
+  open System.IO
+  open System.Reflection
+
+  let getEmbeddedFileAsString fileName (asm: Assembly) =
+    task {
+      use stream = asm.GetManifestResourceStream fileName
+      use reader = new StreamReader(stream)
+      return! reader.ReadToEndAsync()
+    }
+
+  let getBaseConfigString () =
+    getEmbeddedFileAsString "SageFs.base.fsx" (Assembly.GetExecutingAssembly())
+
+  let getConfigDir () =
+    let configDir =
+      Environment.GetFolderPath Environment.SpecialFolder.ApplicationData
+      |> fun s -> Path.Combine [| s; "SageFs" |]
+
+    if not <| Directory.Exists configDir then
+      do Directory.CreateDirectory configDir |> ignore
+
+    configDir

@@ -1,0 +1,13 @@
+.vscode/
+bin/
+obj/
+.sagefs_history
+.idea/
+*.DotSettings.user
+/packages/
+nupkg/
+*/nupkg/*
+riderModule.iml
+/_ReSharper.Caches/
+.vs/
+docs/

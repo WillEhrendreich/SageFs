@@ -1,0 +1,68 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <OutputType>Library</OutputType>
+        <IsPackable>false</IsPackable>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <Compile Include="Args.fs" />
+        <Compile Include="Utils.fs" />
+        <Compile Include="ProjectLoading.fs" />
+        <Compile Include="ShadowCopy.fs" />
+        <Compile Include="WarmUp.fs" />
+        <Compile Include="AspireSetup.fs" />
+        <Compile Include="ErrorMessages.fs" />
+        <Compile Include="Features\AutoCompletion.fs" />
+        <Compile Include="Features\Diagnostics.fs" />
+        <Compile Include="Features\DiagnosticsStore.fs" />
+        <Compile Include="Features\Events.fs" />
+        <Compile Include="EventStore.fs" />
+        <Compile Include="FsiRewrite.fs" />
+        <Compile Include="SessionState.fs" />
+        <Compile Include="SageFsError.fs" />
+        <Compile Include="Affordances.fs" />
+        <Compile Include="WorkerProtocol.fs" />
+        <Compile Include="SessionMode.fs" />
+        <Compile Include="NamedPipeTransport.fs" />
+        <Compile Include="RestartPolicy.fs" />
+        <Compile Include="SessionLifecycle.fs" />
+        <Compile Include="SessionManager.fs" />
+        <Compile Include="SessionOperations.fs" />
+        <Compile Include="RenderPipeline.fs" />
+        <Compile Include="Editor.fs" />
+        <Compile Include="ElmLoop.fs" />
+        <Compile Include="SessionDisplay.fs" />
+        <Compile Include="SageFsEvent.fs" />
+        <Compile Include="StartupProfile.fs" />
+        <Compile Include="FileWatcher.fs" />
+        <Compile Include="AppState.fs" />
+        <Compile Include="Middleware\FsiCompatibility.fs" />
+        <Compile Include="Middleware\ComputationExpression.fs" />
+        <Compile Include="Middleware\Directives.fs" />
+        <Compile Include="Middleware\NonBlockingRun.fs" />
+        <Compile Include="Middleware\HotReloading.fs" />
+        <Compile Include="ActorCreation.fs" />
+        <Compile Include="Mcp.fs" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <EmbeddedResource Include="base.fsx" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <PackageReference Include="FSharp.Compiler.Service" />
+
+        <PackageReference Include="FSharpPlus" />
+        <PackageReference Include="FuzzySharp" />
+        <PackageReference Include="Lib.Harmony" />
+        <PackageReference Include="Ionide.ProjInfo" />
+        <PackageReference Include="Ionide.ProjInfo.FCS" />
+        <PackageReference Include="System.Configuration.ConfigurationManager" />
+        <PackageReference Include="Fantomas.Core" />
+        <PackageReference Include="Argu" />
+        <PackageReference Include="Marten" />
+        <PackageReference Include="FSharp.SystemTextJson" />
+    </ItemGroup>
+
+</Project>
