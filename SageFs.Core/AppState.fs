@@ -252,9 +252,15 @@ let createFsiSession (logger: ILogger) (outStream: TextWriter) (useAsp: bool) (s
         logger.LogDebug (sprintf "Could not parse opens from %s: %s" fsFile ex.Message)
 
     // Phase 2: Collect namespaces/modules via reflection
+    // Use a collectible AssemblyLoadContext to avoid the default context's identity cache.
+    // Assembly.LoadFrom caches by identity — after hard reset + rebuild, it returns the
+    // OLD assembly even though the shadow-copied DLL on disk has new types.
+    let reflectionAlc =
+      new System.Runtime.Loader.AssemblyLoadContext(
+        "sagefs-reflection", isCollectible = true)
     for project in sln.Projects do
       try
-        let asm = System.Reflection.Assembly.LoadFrom(project.TargetPath)
+        let asm = reflectionAlc.LoadFromAssemblyPath(project.TargetPath)
         let types =
           try
             asm.GetTypes()
@@ -302,7 +308,7 @@ let createFsiSession (logger: ILogger) (outStream: TextWriter) (useAsp: bool) (s
             moduleNames.Add(m) |> ignore
       with ex ->
         logger.LogDebug (sprintf "Could not analyze %s: %s" project.TargetPath ex.Message)
-
+    reflectionAlc.Unload()
     // Phase 3: Open all collected names with iterative retry
     let opener name =
       let label = if moduleNames.Contains(name) then "module" else "namespace"
@@ -572,8 +578,13 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
                   // Read both streams async to avoid deadlock when pipe buffers fill
                   let stdoutTask = proc.StandardOutput.ReadToEndAsync()
                   let stderrTask = proc.StandardError.ReadToEndAsync()
-                  proc.WaitForExit()
-                  proc.ExitCode, stderrTask.Result
+                  // Timeout after 120s — a hanging build shouldn't block the session forever
+                  let buildTimeoutMs = 120_000
+                  if not (proc.WaitForExit(buildTimeoutMs)) then
+                    try proc.Kill(entireProcessTree = true) with _ -> ()
+                    -1, "Build timed out after 120 seconds"
+                  else
+                    proc.ExitCode, stderrTask.Result
                 let exitCode, stderr = runBuild ()
                 if exitCode <> 0 then
                   if stderr.Contains("denied") || stderr.Contains("locked") then
