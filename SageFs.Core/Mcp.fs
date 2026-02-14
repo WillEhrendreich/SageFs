@@ -627,6 +627,7 @@ module McpTools =
 
         for statement in statements do
           let request = { Code = statement; Args = Map.empty }
+          notifyElm ctx (SageFsEvent.EvalStarted (ctx.SessionId, statement))
 
           let! result =
             ctx.Actor.PostAndAsyncReply(fun reply -> Eval(request, CancellationToken.None, reply))
@@ -729,6 +730,8 @@ module McpTools =
         |> Async.StartAsTask
       match result with
       | Ok msg ->
+        notifyElm ctx (
+          SageFsEvent.SessionStatusChanged (ctx.SessionId, SessionDisplayStatus.Restarting))
         return (warning |> Option.map (fun w -> w + msg) |> Option.defaultValue msg)
       | Error err -> return sprintf "Error: Hard reset failed — %s" (SageFsError.describe err)
     }
@@ -737,6 +740,7 @@ module McpTools =
     task {
       let cancelled = ctx.CancelEval()
       if cancelled then
+        notifyElm ctx (SageFsEvent.EvalCancelled ctx.SessionId)
         return "Evaluation cancelled."
       else
         return "No evaluation in progress."
