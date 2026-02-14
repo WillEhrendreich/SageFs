@@ -116,7 +116,7 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
       sessionId
       mcpPort
       (SageFs.SessionMode.Daemon sessionOps)
-      (Some elmRuntime.Dispatch)
+      (Some elmRuntime)
 
   // Phase 2: Add middleware — blocks until warm-up completes
   do! ActorCreation.addMiddleware result actorArgs.Middleware
