@@ -25,7 +25,7 @@ module Configuration =
     }
 
   let getBaseConfigString () =
-    getEmbeddedFileAsString "SageFs.base.fsx" (Assembly.GetExecutingAssembly())
+    getEmbeddedFileAsString "SageFs.Core.base.fsx" (Assembly.GetExecutingAssembly())
 
   let getConfigDir () =
     let configDir =
