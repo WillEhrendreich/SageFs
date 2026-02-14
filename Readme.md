@@ -188,11 +188,10 @@ sagefs                          # Auto-detect in current directory
 - Shadow-copied assemblies prevent DLL locks on project files
 - Progress displayed in real-time during namespace/module loading
 
-### ⚡ **Modern REPL Experience**
+### ⚡ **REPL Experience**
 
-- Autocompletion via [PrettyPrompt](https://github.com/waf/PrettyPrompt)
+- Autocompletion and syntax highlighting (currently via PrettyPrompt — being replaced with custom rendering for multi-frontend support)
 - Command history
-- Syntax highlighting
 - Multi-line editing
 
 ### 🎯 **Computation Expression Simplification**
@@ -406,6 +405,7 @@ Core components:
 - 🔲 Watchdog process for daemon auto-restart
 - 🔲 Remove embedded mode — daemon-only architecture
 - 🔲 REPL as a client connecting to daemon
+- 🔲 Replace PrettyPrompt with custom rendering — PrettyPrompt assumes it owns the terminal and can't render into a grid region, making it incompatible with the multi-frontend architecture
 
 ### Where It's Going
 
