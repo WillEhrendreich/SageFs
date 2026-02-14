@@ -1,14 +1,38 @@
-### 🔥 SageFs 🔥
+```
+                        ╔═══════════════════════════════════╗
+                        ║           S A G E F S             ║
+                        ╚═══════════════════════════════════╝
 
-**The definitive F# Interactive experience.**
+              ┌─────────────────────────────────────────────────────┐
+              │                                                     │
+              │      ████████████                ████████████        │
+              │    ██▓▓▓▓▓▓▓▓▓▓▓▓██            ██▓▓▓▓▓▓▓▓▓▓▓▓██    │
+              │   █▓▓░░░░░░░░░░░░▓▓█          █▓▓░░░░░░░░░░░░▓▓█   │
+              │  █▓░░░━━━━━━━━━░░░▓█        █▓░░░━━━━━━━━━░░░▓█    │
+              │  █▓░░━█████████━░░▓█        █▓░░━█████████━░░▓█     │
+              │  █▓░━██─────▄▄██━░▓█        █▓░━██▄▄─────██━░▓█    │
+              │  █▓░━█───▄█████─━░▓█        █▓░━─█████▄───█━░▓█    │
+              │  █▓░━██▄▄─────██━░▓█        █▓░━██─────▄▄██━░▓█    │
+              │  █▓░░━█████████━░░▓█        █▓░░━█████████━░░▓█     │
+              │  █▓░░░━━━━━━━━━░░░▓█        █▓░░░━━━━━━━━━░░░▓█    │
+              │   █▓▓░░░░░░░░░░░░▓▓█          █▓▓░░░░░░░░░░░░▓▓█   │
+              │    ██▓▓▓▓▓▓▓▓▓▓▓▓██            ██▓▓▓▓▓▓▓▓▓▓▓▓██    │
+              │      ████████████                ████████████        │
+              │                                                     │
+              │            ░░░░░░░░░░░░░░░░░░░░░░░░░░░              │
+              └─────────────────────────────────────────────────────┘
 
-Enhanced F# REPL with hot reloading, project support, and built-in AI integration.
-One tool. One command. Everything you need.
+                     ⚡ Sage Mode activated. See everything. ⚡
+```
+
+# SageFs
+
+**Sage Mode for F# development.** Enter a heightened state of awareness over your entire codebase.
+
+SageFs is a live F# development server — a daemon that sees your code, understands your types, watches your files, streams to AI agents, and renders to any frontend. It's not just a REPL. It's the nervous system of your F# workflow.
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![.NET](https://img.shields.io/badge/.NET-10.0-purple.svg)](https://dotnet.microsoft.com)
-
-> **Note:** This is a fork. There is no NuGet package available yet. Build from source to use.
 
 ---
 
@@ -17,47 +41,40 @@ One tool. One command. Everything you need.
 ```bash
 # Build from source
 dotnet build -c Release
-dotnet pack SageFs.Server -c Release -o SageFs.Server/nupkg
+dotnet pack SageFs -c Release -o SageFs/nupkg
 
 # Install globally
-dotnet tool install -g --add-source ./SageFs.Server/nupkg SageFs.cli
+dotnet tool install -g --add-source ./SageFs/nupkg SageFs
 
 # Run with a project or solution
-SageFs --proj YourProject.fsproj
-SageFs --sln YourSolution.sln
+sagefs --proj YourProject.fsproj
+sagefs --sln YourSolution.sln
 
 # Or just run (auto-detects .sln/.slnx/.fsproj in current dir)
-SageFs
+sagefs
 ```
 
 SageFs starts with:
-- ✅ MCP server on port 37749 (for AI agents)
+- ✅ MCP server for AI agents (SSE push, not polling)
 - ✅ File watcher with incremental `#load` reload (~100ms per change)
-- ✅ Hot reloading (redefine functions, refresh browser)
+- ✅ Hot reloading — redefine functions, refresh browser
 - ✅ Project dependencies loaded with iterative dependency resolution
 - ✅ Modern REPL with autocomplete
 - ✅ Shadow-copied assemblies (no DLL locks)
 - ✅ Daemon mode with sub-process session management
-- ✅ Code diagnostics and autocomplete via MCP
+- ✅ Code diagnostics and completions via MCP
 
 ---
 
 ## ✨ Key Features
 
-### 🤖 **Built-in AI Integration (MCP)**
+### 🤖 **AI-Native Development (MCP)**
 
-MCP (Model Context Protocol) server runs automatically on port 37749. AI agents receive server instructions on connect explaining available capabilities. Tools are affordance-gated — only tools valid for the current session state are available.
-
-**IMPORTANT:** SageFs must always run in a **visible terminal window** so the user can see all code and results. Never run it as a background process.
+SageFs is built for AI-assisted development from the ground up. The MCP (Model Context Protocol) server runs automatically — AI agents receive live instructions explaining available capabilities, gated by session state. Tools appear and disappear based on what's actually possible right now.
 
 ```bash
 # MCP SSE endpoint (for AI agents):
 http://localhost:37749/sse
-
-# Direct exec endpoint (no session ID required):
-curl -X POST http://localhost:37749/exec \
-  -H "Content-Type: application/json" \
-  -d '{"code": "let x = 42;;"}'
 ```
 
 **MCP Tools:**
@@ -161,7 +178,7 @@ flowchart TD
 
 ```bash
 # Disable file watching entirely
-SageFs --no-watch
+sagefs --no-watch
 
 # Exclude patterns (glob syntax, planned)
 # Uses same conventions as dotnet watch:
@@ -173,9 +190,9 @@ SageFs --no-watch
 SageFs automatically loads your project dependencies with smart warm-up:
 
 ```bash
-SageFs --proj MyProject.fsproj  # Load one project
-SageFs --sln MySolution.sln     # Load entire solution (.sln and .slnx supported)
-SageFs                          # Auto-detect in current directory
+sagefs --proj MyProject.fsproj  # Load one project
+sagefs --sln MySolution.sln     # Load entire solution (.sln and .slnx supported)
+sagefs                          # Auto-detect in current directory
 ```
 
 **Warm-up features:**
@@ -201,10 +218,10 @@ SageFs detects .NET Aspire AppHost projects and auto-configures DCP/Dashboard pa
 
 ```bash
 # ✅ For hot reload:
-SageFs --proj MyWebProject.fsproj
+sagefs --proj MyWebProject.fsproj
 
 # ⚠️ Limited (no hot reload for services):
-SageFs --proj AppHost.fsproj
+sagefs --proj AppHost.fsproj
 ```
 
 ### 📝 **Enhanced Directives**
@@ -225,34 +242,34 @@ SageFs --proj AppHost.fsproj
 ### Basic Commands
 
 ```bash
-SageFs                          # Start with auto-detection
-SageFs --proj MyApp.fsproj      # Load specific project
-SageFs --sln MySolution.sln     # Load entire solution
-SageFs --use script.fsx         # Load and run script on startup
-SageFs --help                   # Show all options
+sagefs                          # Start with auto-detection
+sagefs --proj MyApp.fsproj      # Load specific project
+sagefs --sln MySolution.sln     # Load entire solution
+sagefs --use script.fsx         # Load and run script on startup
+sagefs --help                   # Show all options
 ```
 
 ### MCP Configuration
 
 ```bash
-SageFs                          # MCP on default port 37749
-SageFs --mcp-port 8080          # Custom port
-SageFs --no-mcp                 # Disable MCP server
+sagefs                          # MCP on default port 37749
+sagefs --mcp-port 8080          # Custom port
+sagefs --no-mcp                 # Disable MCP server
 ```
 
 ### File Watching
 
 ```bash
-SageFs                          # File watcher enabled by default
-SageFs --no-watch               # Disable file watching
+sagefs                          # File watcher enabled by default
+sagefs --no-watch               # Disable file watching
 ```
 
 ### Daemon Mode
 
 ```bash
-SageFs -d                       # Start headless daemon (no REPL)
-SageFs -d --proj MyApp.fsproj   # Daemon with project loaded
-SageFs --bare                   # Bare session — no project/solution loading, quick startup
+sagefs -d                       # Start headless daemon (no REPL)
+sagefs -d --proj MyApp.fsproj   # Daemon with project loaded
+sagefs --bare                   # Bare session — no project/solution loading, quick startup
 ```
 
 Daemon mode runs SageFs as a headless server with MCP + HTTP endpoints. Sub-process worker sessions can be created via MCP tools (`create_session`, `list_sessions`, `stop_session`). A `~/.SageFs/daemon.json` discovery file is written for client connections.
@@ -260,8 +277,8 @@ Daemon mode runs SageFs as a headless server with MCP + HTTP endpoints. Sub-proc
 ### ASP.NET Features
 
 ```bash
-SageFs                          # Auto-detect web frameworks
-SageFs --no-web                 # Disable ASP.NET features
+sagefs                          # Auto-detect web frameworks
+sagefs --no-web                 # Disable ASP.NET features
 ```
 
 ---
@@ -330,7 +347,7 @@ SageFs supports two modes:
 ### Embedded Mode (default)
 Single process with REPL + MCP server + hot reload. Everything runs in one process.
 
-### Daemon Mode (`SageFs -d`)
+### Daemon Mode (`sagefs -d`)
 Headless server with sub-process session management:
 1. **Daemon Process** — HTTP/SSE/MCP server, SessionManager supervisor
 2. **Worker Processes** — Isolated FSI sessions communicating via named pipes
@@ -350,10 +367,9 @@ Core components:
 
 ## 📊 Project Status
 
-**Current Version**: 0.2.44
 **Target Framework**: .NET 10.0
-**Stability**: Beta — 293 tests passing
-**1.0 Scope**: ✅ Complete
+**Stability**: Active development — 363 tests passing
+**Test Framework**: Expecto + Verify snapshots + FsCheck property tests
 
 ### What's Done
 - ✅ Daemon mode with sub-process worker sessions
@@ -362,31 +378,31 @@ Core components:
 - ✅ Affordance-driven state machine (tools gated by session lifecycle)
 - ✅ DDD type safety (SageFsError, SessionMode, CompletionKind, SessionStatus DUs)
 - ✅ File watcher with incremental `#load` reload (~100ms, not hard reset)
-- ✅ Exclude patterns (glob syntax) and `--no-watch` flag
 - ✅ Hot reload (redefine functions, refresh to see changes)
 - ✅ Project/solution loading (`.fsproj`, `.sln`, `.slnx`)
-- ✅ Iterative dependency resolution with retry
 - ✅ Shadow-copy DLL lock prevention
-- ✅ Event sourcing with Marten (when `SageFs_CONNECTION_STRING` set)
-- ✅ Code diagnostics (`check_fsharp_code`) and autocomplete (`get_completions`)
-- ✅ Eval cancellation (`cancel_eval`)
+- ✅ Event sourcing with Marten (when `SAGEFS_CONNECTION_STRING` set)
+- ✅ Code diagnostics and autocomplete via MCP
+- ✅ Eval cancellation
 - ✅ Console echo for all MCP/exec submissions
-- ✅ Bare mode (`--bare`) for quick sessions without project loading
 - ✅ Aspire project detection and configuration
-- ✅ Computation expression simplification
 - ✅ Modern REPL via PrettyPrompt
+- ✅ Core domain types: Editor, ElmLoop, RenderPipeline, SageFsEvent, SageFsView
+- ✅ SessionDisplay types for UI rendering
 
-### Architecture Direction
+### Where It's Going
 
-SageFs is evolving toward a **multi-frontend immediate-mode architecture** — a single core rendering pipeline that serves terminal, web (Datastar SSE), Neovim, VSCode, and GPU (Raylib/ImGui) frontends.
+SageFs is evolving into a **multi-frontend immediate-mode architecture** — a single core engine that serves terminal, web (Datastar SSE), Neovim, VSCode, and GPU (Raylib/ImGui) frontends through one unified event bus.
 
-**Key architectural decisions:**
-- **Custom Elm loop** — `update : Msg -> Model -> Model * Cmd list`, ~40 lines of F#, no framework dependency
-- **Immediate-mode rendering** — `UI = render(state)`, no retained widget trees, no diffing
-- **Fleury-style `RegionFlags`** — widget features as composable flags (Scrollable, Editable, Focusable), not discriminated union widget kinds
-- **Affordance-driven HATEOAS** — every UI element carries its possible actions; domain decides what's *possible*, adapters decide how to *render*
-- **Tree-sitter foundation** — `ionide/tree-sitter-fsharp` for syntax highlighting, structural navigation, and incremental parsing
+**Architectural pillars:**
+- **Custom Elm loop** — `update : Msg -> Model -> Model * Cmd list`, pure F#, no framework dependency
+- **Immediate-mode rendering** — `UI = render(state)`, no retained widget trees
+- **Affordance-driven HATEOAS** — every element carries its possible actions; domain decides what's *possible*, adapters decide how to *render*
+- **Tree-sitter foundation** — `ionide/tree-sitter-fsharp` for syntax highlighting and structural navigation
 - **Push-based reactive streaming** — single `SageFsEvent` bus, all frontends subscribe via `IObservable<SageFsEvent>`
+- **Neovim-inspired UI protocol** — draw primitives + grid regions, frontend-agnostic rendering
+
+The goal: you write F# domain logic once, and SageFs renders it everywhere — terminal, browser, editor, GPU window. Sage Mode sees all.
 
 See [docs/repl-tui-research.md](docs/repl-tui-research.md) for the full research document.
 
@@ -400,10 +416,11 @@ MIT License — see [LICENSE](LICENSE) for details
 
 ## 🙏 Acknowledgments
 
+- [FsiX](https://github.com/soweli-p/FsiX) — The original F# Interactive experience that inspired SageFs
 - [PrettyPrompt](https://github.com/waf/PrettyPrompt) — Modern REPL experience
 - [Ionide.ProjInfo](https://github.com/ionide/proj-info/) — Project file parsing
 - [ModelContextProtocol](https://modelcontextprotocol.io/) — AI integration standard
 
 ---
 
-**Made with ❤️ for the F# community**
+**Enter Sage Mode. See everything. 🐸**
