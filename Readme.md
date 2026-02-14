@@ -380,7 +380,7 @@ Core components:
 ## 📊 Project Status
 
 **Target Framework**: .NET 10.0
-**Stability**: Active development — 363 tests passing
+**Stability**: Active development — 400 tests passing
 **Test Framework**: Expecto + Verify snapshots + FsCheck property tests
 
 ### What's Done
@@ -389,6 +389,10 @@ Core components:
 - ✅ MCP server with 14 tools (eval, diagnostics, completions, session management)
 - ✅ Affordance-driven state machine (tools gated by session lifecycle)
 - ✅ DDD type safety (SageFsError, SessionMode, CompletionKind, SessionStatus DUs)
+- ✅ Elm Architecture core — SageFsMsg, SageFsModel, SageFsUpdate, SageFsRender, SageFsEffectHandler
+- ✅ SageFsEffectHandler — bridges pure Elm loop to SessionManager/worker infrastructure
+- ✅ Collectible AssemblyLoadContext for namespace discovery (prevents stale DLLs after rebuild)
+- ✅ Build timeout (120s) prevents hard reset from hanging forever
 - ✅ File watcher with incremental `#load` reload (~100ms, not hard reset)
 - ✅ Hot reload (redefine functions, refresh to see changes)
 - ✅ Project/solution loading (`.fsproj`, `.sln`, `.slnx`)
@@ -402,6 +406,7 @@ Core components:
 - ✅ SessionDisplay types for UI rendering
 
 ### What's Next
+- 🔲 Wiring ElmLoop to daemon — connect SageFsEffectHandler dispatch to live SessionManager
 - 🔲 Watchdog process for daemon auto-restart
 - 🔲 Remove embedded mode — daemon-only architecture
 - 🔲 REPL as a client connecting to daemon
@@ -412,7 +417,7 @@ Core components:
 SageFs is evolving into a **multi-frontend immediate-mode architecture** — a single core engine that serves terminal, web (Datastar SSE), Neovim, VSCode, and GPU (Raylib/ImGui) frontends through one unified event bus.
 
 **Architectural pillars:**
-- **Custom Elm loop** — `update : Msg -> Model -> Model * Cmd list`, pure F#, no framework dependency
+- **Custom Elm loop** — `update : Msg -> Model -> Model * Effect list`, pure F#, no framework dependency. `SageFsEffectHandler` bridges pure state updates to real infrastructure (SessionManager, worker proxies)
 - **Immediate-mode rendering** — `UI = render(state)`, no retained widget trees
 - **Affordance-driven HATEOAS** — every element carries its possible actions; domain decides what's *possible*, adapters decide how to *render*
 - **Tree-sitter foundation** — `ionide/tree-sitter-fsharp` for syntax highlighting and structural navigation

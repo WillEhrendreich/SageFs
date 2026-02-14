@@ -1960,7 +1960,7 @@ let daemonStateTests = testList "DaemonState" [
 
 ## Appendix: Expert Review
 
-*The following reviews simulate the perspectives of Mark Seemann (blog.ploeh.dk) and Scott Wlaschin (fsharpforfunandprofit.com), based on their published writings, talks, and known values. These are stylistic approximations, not endorsements.*
+*The following reviews are **fictional** — an AI using the public personas of Mark Seemann and Scott Wlaschin as a lens for architectural critique, based on their published writings, talks, and known values. These are not written by, endorsed by, or affiliated with either author in any way.*
 
 ### Review by Mark Seemann (blog.ploeh.dk)
 
