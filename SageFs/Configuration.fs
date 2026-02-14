@@ -15,7 +15,7 @@ open System.Reflection
 let getDefaultConfig () =
   task {
     let! baseCfg = getBaseConfigString ()
-    and! promptCfg = getEmbeddedFileAsString "SageFs.Server.prompt.fsx" (Assembly.GetExecutingAssembly())
+    and! promptCfg = getEmbeddedFileAsString "SageFs.prompt.fsx" (Assembly.GetExecutingAssembly())
 
     return String.concat Environment.NewLine [ loadDllString; baseCfg; promptCfg ]
   }
