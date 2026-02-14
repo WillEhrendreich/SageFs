@@ -14,9 +14,14 @@ module Configuration =
 
   let getEmbeddedFileAsString fileName (asm: Assembly) =
     task {
-      use stream = asm.GetManifestResourceStream fileName
-      use reader = new StreamReader(stream)
-      return! reader.ReadToEndAsync()
+      let stream = asm.GetManifestResourceStream fileName
+      if isNull stream then
+        let available = asm.GetManifestResourceNames() |> String.concat ", "
+        return failwithf "Embedded resource '%s' not found in %s. Available: %s" fileName asm.FullName available
+      else
+        use s = stream
+        use reader = new StreamReader(s)
+        return! reader.ReadToEndAsync()
     }
 
   let getBaseConfigString () =
