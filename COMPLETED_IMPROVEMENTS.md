@@ -365,7 +365,7 @@ Per IMPROVEMENT_PLAN.md priority matrix:
 - Elm Architecture decision (custom ~40-line loop over Fable.Elmish)
 - Five recommended build phases with Datastar as architecture validation
 - REPL killer features taxonomy (4 priority tiers from 7+ research sources)
-- Expert reviews (Seemann + Wlaschin perspectives) with author corrections
+- AI-simulated expert reviews (in the style of Seemann + Wlaschin, not the actual authors) with corrections
 
 **Architecture decision:** Option D — Immediate-Mode Elm Architecture in F#. Custom Elm loop, `RenderRegion list` as universal render output, Fleury-style `RegionFlags` over discriminated union widget kinds, affordance-driven HATEOAS for all UIs.
 
