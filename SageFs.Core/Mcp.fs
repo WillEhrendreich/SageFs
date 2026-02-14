@@ -402,6 +402,9 @@ module McpTools =
     GetWarmupFailures: unit -> WarmupFailure list
     GetStartupConfig: unit -> StartupConfig option
     Mode: SessionMode
+    /// Elm loop dispatch function (daemon mode).
+    /// When present, MCP tools can drive the Elm loop.
+    Dispatch: (SageFsMsg -> unit) option
   }
 
   /// Check tool availability and return error message if not allowed
