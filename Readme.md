@@ -40,15 +40,16 @@ sagefs --sln YourSolution.sln
 sagefs
 ```
 
-SageFs starts with:
+SageFs runs as a **daemon with a watchdog** — always alive, always watching. Everything else is a window into it:
+
 - ✅ MCP server for AI agents (SSE push, not polling)
 - ✅ File watcher with incremental `#load` reload (~100ms per change)
 - ✅ Hot reloading — redefine functions, refresh browser
 - ✅ Project dependencies loaded with iterative dependency resolution
-- ✅ Modern REPL with autocomplete
 - ✅ Shadow-copied assemblies (no DLL locks)
-- ✅ Daemon mode with sub-process session management
+- ✅ Sub-process session management (Erlang-style supervisor)
 - ✅ Code diagnostics and completions via MCP
+- ✅ Watchdog keeps the daemon alive — crashes restart automatically
 
 ---
 
@@ -258,7 +259,11 @@ sagefs -d --proj MyApp.fsproj   # Daemon with project loaded
 sagefs --bare                   # Bare session — no project/solution loading, quick startup
 ```
 
-Daemon mode runs SageFs as a headless server with MCP + HTTP endpoints. Sub-process worker sessions can be created via MCP tools (`create_session`, `list_sessions`, `stop_session`). A `~/.SageFs/daemon.json` discovery file is written for client connections.
+SageFs runs as a daemon by default — a headless server with MCP + HTTP endpoints and a **watchdog** that keeps it alive. If the process crashes, the watchdog restarts it automatically with exponential backoff.
+
+Sub-process worker sessions can be created via MCP tools (`create_session`, `list_sessions`, `stop_session`). A `~/.SageFs/daemon.json` discovery file is written for client connections.
+
+The REPL, terminal UI, web frontend, Neovim integration, and AI agents are all **clients** that connect to the running daemon — they don't embed SageFs, they talk to it.
 
 ### ASP.NET Features
 
@@ -328,20 +333,42 @@ Tests include:
 
 ## 🏗️ Architecture
 
-SageFs supports two modes:
+SageFs is a **daemon-first architecture**. The server is always the center — every frontend is a client.
 
-### Embedded Mode (default)
-Single process with REPL + MCP server + hot reload. Everything runs in one process.
+```
+                          ┌─────────────┐
+                          │  Watchdog   │
+                          │  (restart)  │
+                          └──────┬──────┘
+                                 │ monitors
+                          ┌──────▼──────┐
+              ┌───────────┤ SageFs      ├───────────┐
+              │           │ Daemon      │           │
+              │           └──┬───┬───┬──┘           │
+              │              │   │   │              │
+         ┌────▼───┐   ┌─────▼─┐ │ ┌─▼─────┐   ┌───▼────┐
+         │Terminal │   │ Web   │ │ │Neovim │   │ VSCode │
+         │ REPL   │   │(SSE)  │ │ │Client │   │ Client │
+         └────────┘   └───────┘ │ └───────┘   └────────┘
+                          ┌─────▼─────┐
+                          │ AI Agents │
+                          │  (MCP)    │
+                          └───────────┘
+```
 
-### Daemon Mode (`sagefs -d`)
-Headless server with sub-process session management:
-1. **Daemon Process** — HTTP/SSE/MCP server, SessionManager supervisor
-2. **Worker Processes** — Isolated FSI sessions communicating via named pipes
-3. **SessionManager** — Erlang-style supervisor with spawn/monitor/restart and exponential backoff
+### How It Works
+
+1. **Daemon Process** — The core. Runs FSI engine, MCP server, file watcher, hot reload. Managed by a watchdog that auto-restarts on crash with exponential backoff.
+2. **Worker Sessions** — Isolated FSI sessions spawned as sub-processes, supervised Erlang-style by the SessionManager.
+3. **Clients** — REPL, web UI, Neovim, VSCode, AI agents all connect to the daemon via MCP/HTTP/SSE. They don't embed SageFs — they're windows into it.
+
+There is no "embedded mode". The daemon IS SageFs.
 
 Core components:
 - **F# Interactive Engine** — FCS-based eval with middleware pipeline
-- **MCP Server** — HTTP/SSE endpoints for AI agents
+- **MCP Server** — HTTP/SSE endpoints for AI agents and clients
+- **Watchdog** — Monitors daemon health, restarts on crash with backoff
+- **SessionManager** — Erlang-style supervisor: spawn/monitor/restart worker sessions
 - **Affordance State Machine** — `SessionState` DU controls tool availability per lifecycle phase
 - **File Watcher** — Incremental `#load` reload on `.fs`/`.fsx` changes (~100ms)
 - **Hot Reload Engine** — Runtime function redefinition
@@ -358,7 +385,7 @@ Core components:
 **Test Framework**: Expecto + Verify snapshots + FsCheck property tests
 
 ### What's Done
-- ✅ Daemon mode with sub-process worker sessions
+- ✅ Daemon with sub-process worker sessions
 - ✅ SessionManager (Erlang-style supervisor with exponential backoff restart)
 - ✅ MCP server with 14 tools (eval, diagnostics, completions, session management)
 - ✅ Affordance-driven state machine (tools gated by session lifecycle)
@@ -372,9 +399,13 @@ Core components:
 - ✅ Eval cancellation
 - ✅ Console echo for all MCP/exec submissions
 - ✅ Aspire project detection and configuration
-- ✅ Modern REPL via PrettyPrompt
 - ✅ Core domain types: Editor, ElmLoop, RenderPipeline, SageFsEvent, SageFsView
 - ✅ SessionDisplay types for UI rendering
+
+### What's Next
+- 🔲 Watchdog process for daemon auto-restart
+- 🔲 Remove embedded mode — daemon-only architecture
+- 🔲 REPL as a client connecting to daemon
 
 ### Where It's Going
 
