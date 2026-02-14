@@ -1,6 +1,8 @@
 namespace SageFs
 
 open System
+open SageFs.WorkerProtocol
+open SageFs.Features.Diagnostics
 
 /// The unified message type for the SageFs Elm loop.
 /// All state changes flow through here — user actions and system events.
@@ -226,3 +228,172 @@ module SageFsRender =
     }
 
     [ editorRegion; outputRegion; diagnosticsRegion; sessionsRegion ]
+
+/// Dependencies the effect handler needs — injected, not hard-coded.
+/// This is the seam between pure Elm and impure infrastructure.
+type EffectDeps = {
+  /// Resolve which session to target
+  ResolveSession: SessionId option -> Result<SessionOperations.SessionResolution, SageFsError>
+  /// Get the proxy for a session
+  GetProxy: SessionId -> SessionProxy option
+  /// Create a new session
+  CreateSession: string list -> string -> Async<Result<SessionInfo, SageFsError>>
+  /// Stop a session
+  StopSession: SessionId -> Async<Result<unit, SageFsError>>
+  /// List all sessions
+  ListSessions: unit -> Async<SessionInfo list>
+}
+
+/// Routes SageFsEffect to real infrastructure via injected deps.
+/// Converts WorkerResponses back into SageFsMsg for the Elm loop.
+module SageFsEffectHandler =
+
+  let private newReplyId () =
+    Guid.NewGuid().ToString("N").[..7]
+
+  let private evalResponseToMsg
+    (sessionId: SessionId)
+    (response: WorkerResponse) : SageFsMsg =
+    match response with
+    | WorkerResponse.EvalResult (_, Ok output, diags) ->
+      let diagnostics =
+        diags |> List.map (fun d -> {
+          Message = d.Message
+          Subcategory = "typecheck"
+          Range = {
+            StartLine = d.StartLine
+            StartColumn = d.StartColumn
+            EndLine = d.EndLine
+            EndColumn = d.EndColumn
+          }
+          Severity = d.Severity
+        })
+      SageFsMsg.Event (
+        SageFsEvent.EvalCompleted (sessionId, output, diagnostics))
+    | WorkerResponse.EvalResult (_, Error err, _) ->
+      SageFsMsg.Event (
+        SageFsEvent.EvalFailed (sessionId, SageFsError.describe err))
+    | WorkerResponse.EvalCancelled _ ->
+      SageFsMsg.Event (SageFsEvent.EvalCancelled sessionId)
+    | other ->
+      SageFsMsg.Event (
+        SageFsEvent.EvalFailed (
+          sessionId, sprintf "Unexpected response: %A" other))
+
+  let private completionResponseToMsg
+    (response: WorkerResponse) : SageFsMsg =
+    match response with
+    | WorkerResponse.CompletionResult (_, items) ->
+      let completionItems =
+        items |> List.map (fun label ->
+          { Label = label; Kind = "member"; Detail = None })
+      SageFsMsg.Event (SageFsEvent.CompletionReady completionItems)
+    | _ ->
+      SageFsMsg.Event (SageFsEvent.CompletionReady [])
+
+  let private withSession
+    (deps: EffectDeps)
+    (dispatch: SageFsMsg -> unit)
+    (sessionId: SessionId option)
+    (action: SessionId -> SessionProxy -> Async<unit>) =
+    async {
+      match deps.ResolveSession sessionId with
+      | Ok resolution ->
+        let id = SessionOperations.sessionId resolution
+        match deps.GetProxy id with
+        | Some proxy -> do! action id proxy
+        | None ->
+          dispatch (SageFsMsg.Event (
+            SageFsEvent.EvalFailed (
+              id, sprintf "No proxy for session %s" id)))
+      | Error err ->
+        dispatch (SageFsMsg.Event (
+          SageFsEvent.EvalFailed ("", SageFsError.describe err)))
+    }
+
+  let private sessionInfoToSnapshot (info: SessionInfo) : SessionSnapshot =
+    { Id = info.Id
+      Projects = info.Projects
+      Status =
+        match info.Status with
+        | SessionStatus.Ready -> SessionDisplayStatus.Running
+        | SessionStatus.Starting -> SessionDisplayStatus.Starting
+        | SessionStatus.Evaluating -> SessionDisplayStatus.Running
+        | SessionStatus.Faulted -> SessionDisplayStatus.Errored "faulted"
+        | SessionStatus.Restarting -> SessionDisplayStatus.Restarting
+        | SessionStatus.Stopped -> SessionDisplayStatus.Suspended
+      LastActivity = info.LastActivity
+      EvalCount = 0
+      UpSince = info.CreatedAt
+      IsActive = false }
+
+  /// The main effect handler — plug into ElmProgram.ExecuteEffect
+  let execute
+    (deps: EffectDeps)
+    (dispatch: SageFsMsg -> unit)
+    (effect: SageFsEffect) : Async<unit> =
+    match effect with
+    | SageFsEffect.Editor editorEffect ->
+      match editorEffect with
+      | EditorEffect.RequestEval code ->
+        withSession deps dispatch None (fun sid proxy ->
+          async {
+            let replyId = newReplyId ()
+            let! response =
+              proxy (WorkerMessage.EvalCode (code, replyId))
+            dispatch (evalResponseToMsg sid response)
+          })
+
+      | EditorEffect.RequestCompletion (text, cursor) ->
+        withSession deps dispatch None (fun _ proxy ->
+          async {
+            let replyId = newReplyId ()
+            let! response =
+              proxy (
+                WorkerMessage.GetCompletions (text, cursor, replyId))
+            dispatch (completionResponseToMsg response)
+          })
+
+      | EditorEffect.RequestHistory _ ->
+        async { () }
+
+      | EditorEffect.RequestSessionList ->
+        async {
+          let! sessions = deps.ListSessions ()
+          for info in sessions do
+            dispatch (SageFsMsg.Event (
+              SageFsEvent.SessionCreated (sessionInfoToSnapshot info)))
+        }
+
+      | EditorEffect.RequestSessionSwitch sessionId ->
+        async {
+          dispatch (SageFsMsg.Event (
+            SageFsEvent.SessionSwitched (None, sessionId)))
+        }
+
+      | EditorEffect.RequestSessionCreate projects ->
+        async {
+          let! result = deps.CreateSession projects "."
+          match result with
+          | Ok info ->
+            dispatch (SageFsMsg.Event (
+              SageFsEvent.SessionCreated (sessionInfoToSnapshot info)))
+          | Error err ->
+            dispatch (SageFsMsg.Event (
+              SageFsEvent.EvalFailed (
+                "", sprintf "Create failed: %s" (SageFsError.describe err))))
+        }
+
+      | EditorEffect.RequestSessionStop sessionId ->
+        async {
+          let! result = deps.StopSession sessionId
+          match result with
+          | Ok () ->
+            dispatch (SageFsMsg.Event (
+              SageFsEvent.SessionStopped sessionId))
+          | Error err ->
+            dispatch (SageFsMsg.Event (
+              SageFsEvent.EvalFailed (
+                sessionId,
+                sprintf "Stop failed: %s" (SageFsError.describe err))))
+        }
