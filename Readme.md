@@ -441,9 +441,11 @@ Core components:
 - ✅ Persistent REPL history in `~/.SageFs/connect_history`
 - ✅ Removed PrettyPrompt dependency — daemon-only architecture, no embedded REPL
 - ✅ `GET /events` SSE endpoint — push-based Elm state changes to any subscriber
+- ✅ Dashboard event-driven SSE — instant push updates instead of polling
+- ✅ Dashboard sessions panel — live view of all FSI sessions with status
+- ✅ Dashboard inline eval results — immediate feedback below code input
 
 ### What's Next
-- 🔲 Dashboard improvements — wire Elm model data directly into Datastar fragments
 - 🔲 Multi-session management — create/switch/stop sessions from any frontend
 
 ### Where It's Going
