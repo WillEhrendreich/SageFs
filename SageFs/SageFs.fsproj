@@ -21,6 +21,7 @@
 
     <ItemGroup>
         <Compile Include="DaemonState.fs" />
+        <Compile Include="Dashboard.fs" />
         <Compile Include="PostgresInfra.fs" />
         <Compile Include="Logging.fs" />
         <Compile Include="PrettyPromptCallbacks.fs" />
@@ -29,6 +30,7 @@
         <Compile Include="McpServer.fs" />
         <Compile Include="WorkerMain.fs" />
         <Compile Include="DaemonMode.fs" />
+        <Compile Include="WatchdogRunner.fs" />
         <Compile Include="ClientMode.fs" />
         <Compile Include="CliEventLoop.fs" />
         <Compile Include="Program.fs" />
@@ -49,6 +51,9 @@
 
     <ItemGroup>
         <PackageReference Include="FSharpPlus" />
+        <PackageReference Include="Falco" />
+        <PackageReference Include="Falco.Datastar" />
+        <PackageReference Include="Falco.Markup" />
         <PackageReference Include="PrettyPrompt" />
         <PackageReference Include="OpenTelemetry.Exporter.Console" />
         <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" />    

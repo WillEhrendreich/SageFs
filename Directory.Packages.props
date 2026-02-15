@@ -10,6 +10,7 @@
     <PackageVersion Include="Expecto.Hopac" Version="11.0.0-alpha8" />
     <PackageVersion Include="Fabulous.AST" Version="2.0.0-pre06" />
     <PackageVersion Include="Falco" Version="5.2.0" />
+    <PackageVersion Include="Falco.Datastar" Version="1.3.0" />
     <PackageVersion Include="Falco.Markup" Version="1.4.0" />
     <PackageVersion Include="Fantomas.Core" Version="8.0.0-alpha-002" />
     <PackageVersion Include="FsCheck" Version="3.3.2" />
