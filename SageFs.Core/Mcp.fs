@@ -396,6 +396,8 @@ module McpTools =
     Store: Marten.IDocumentStore
     SessionId: string
     DiagnosticsChanged: IEvent<Features.DiagnosticsStore.T>
+    /// Fires serialized JSON whenever the Elm model changes.
+    StateChanged: IEvent<string> option
     CancelEval: unit -> bool
     GetSessionState: unit -> SessionState
     GetEvalStats: unit -> Affordances.EvalStats

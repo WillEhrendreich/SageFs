@@ -95,6 +95,9 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
   }
   DaemonState.write daemonInfo
 
+  // Create state-changed event for SSE subscribers
+  let stateChangedEvent = Event<string>()
+
   // Create EffectDeps from SessionManager + start Elm loop
   let effectDeps = ElmDaemon.createEffectDeps sessionManager
   let elmRuntime =
@@ -108,7 +111,17 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
           |> Option.map (fun o -> o.Text)
           |> Option.defaultValue ""
         eprintfn "\x1b[36m[elm]\x1b[0m output=%d diags=%d | %s"
-          outputCount diagCount latest)
+          outputCount diagCount latest
+      // Fire SSE event with summary JSON
+      try
+        let json = System.Text.Json.JsonSerializer.Serialize(
+          {| outputCount = outputCount
+             diagCount = diagCount
+             sessionCount = model.Sessions.Sessions.Length
+             activeSession = model.Sessions.ActiveSessionId |> Option.defaultValue ""
+             timestamp = DateTime.UtcNow.ToString("o") |})
+        stateChangedEvent.Trigger json
+      with _ -> ())
 
   // Start MCP server BEFORE warm-up completes
   appActor.Post(AppState.UpdateMcpPort mcpPort)
@@ -116,6 +129,7 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
     McpServer.startMcpServer
       appActor
       result.DiagnosticsChanged
+      (Some stateChangedEvent.Publish)
       result.CancelEval
       result.GetSessionState
       result.GetEvalStats
