@@ -575,16 +575,50 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
                       RedirectStandardError = true,
                       UseShellExecute = false)
                   use proc = System.Diagnostics.Process.Start(psi)
-                  // Read both streams async to avoid deadlock when pipe buffers fill
-                  let stdoutTask = proc.StandardOutput.ReadToEndAsync()
-                  let stderrTask = proc.StandardError.ReadToEndAsync()
-                  // Timeout after 120s — a hanging build shouldn't block the session forever
-                  let buildTimeoutMs = 120_000
-                  if not (proc.WaitForExit(buildTimeoutMs)) then
+                  // Activity-based timeout: restart clock on each output line.
+                  // Only kills truly hanging builds, not long-but-active ones.
+                  let inactivityLimitMs = 30_000  // 30s with no output = stuck
+                  let maxTotalMs = 600_000        // 10 min absolute max
+                  let mutable lastActivity = DateTime.UtcNow
+                  let startedAt = lastActivity
+                  let stderrLines = System.Collections.Generic.List<string>()
+                  // Stream stderr line-by-line, updating activity clock
+                  let stderrTask = System.Threading.Tasks.Task.Run(fun () ->
+                    let mutable line = proc.StandardError.ReadLine()
+                    while not (isNull line) do
+                      stderrLines.Add(line)
+                      lastActivity <- DateTime.UtcNow
+                      line <- proc.StandardError.ReadLine())
+                  // Drain stdout, updating activity clock
+                  let _stdoutTask = System.Threading.Tasks.Task.Run(fun () ->
+                    let mutable line = proc.StandardOutput.ReadLine()
+                    while not (isNull line) do
+                      lastActivity <- DateTime.UtcNow
+                      line <- proc.StandardOutput.ReadLine())
+                  // Poll for completion or inactivity timeout
+                  let mutable finished = false
+                  let mutable timedOut = false
+                  while not finished do
+                    if proc.WaitForExit(1000) then
+                      finished <- true
+                    else
+                      let now = DateTime.UtcNow
+                      let totalMs = (now - startedAt).TotalMilliseconds
+                      let inactiveMs = (now - lastActivity).TotalMilliseconds
+                      if totalMs > float maxTotalMs then
+                        logger.LogWarning (sprintf "  ⚠️ Build exceeded %d min limit" (maxTotalMs / 60_000))
+                        timedOut <- true
+                        finished <- true
+                      elif inactiveMs > float inactivityLimitMs then
+                        logger.LogWarning (sprintf "  ⚠️ Build inactive for %ds (no output)" (inactivityLimitMs / 1000))
+                        timedOut <- true
+                        finished <- true
+                  if timedOut then
                     try proc.Kill(entireProcessTree = true) with _ -> ()
-                    -1, "Build timed out after 120 seconds"
+                    -1, sprintf "Build timed out (inactive for %ds or exceeded %d min limit)" (inactivityLimitMs / 1000) (maxTotalMs / 60_000)
                   else
-                    proc.ExitCode, stderrTask.Result
+                    try stderrTask.Wait(5000) |> ignore with _ -> ()
+                    proc.ExitCode, String.concat "\n" stderrLines
                 let exitCode, stderr = runBuild ()
                 if exitCode <> 0 then
                   if stderr.Contains("denied") || stderr.Contains("locked") then
