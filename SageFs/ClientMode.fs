@@ -191,7 +191,24 @@ let run (info: DaemonInfo) = task {
         | Error msg -> eprintfn "\x1b[31m%s\x1b[0m" msg
       | "#status" ->
         match! checkHealth client baseUrl with
-        | Ok msg -> printfn "%s" msg
+        | Ok _ ->
+          try
+            let! resp = client.GetAsync(sprintf "%s/api/status" baseUrl)
+            let! body = resp.Content.ReadAsStringAsync()
+            let doc = System.Text.Json.JsonDocument.Parse(body)
+            let r = doc.RootElement
+            let get (name: string) =
+              if r.TryGetProperty(name) |> fst then r.GetProperty(name).ToString() else "?"
+            printfn "\x1b[36mSageFs Status\x1b[0m"
+            printfn "  Session:    %s (%s)" (get "sessionId") (get "sessionState")
+            printfn "  Version:    %s" (get "version")
+            printfn "  PID:        %s" (get "pid")
+            printfn "  Uptime:     %ss" (get "uptime")
+            printfn "  Evals:      %s (avg %sms)" (get "evalCount") (get "avgDurationMs")
+            printfn "  Projects:   %s" (get "projectCount")
+            printfn "  Directory:  %s" (get "workingDirectory")
+          with ex ->
+            printfn "Status: connected (details unavailable: %s)" ex.Message
         | Error msg -> eprintfn "\x1b[31m%s\x1b[0m" msg
       | code ->
         appendHistory code
