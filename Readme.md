@@ -76,6 +76,9 @@ http://localhost:37749/sse
 | `get_fsi_status` | Get session health, loaded projects, and statistics. |
 | `get_startup_info` | Loaded projects, enabled features, and CLI arguments. |
 | `get_available_projects` | Discover `.fsproj` and `.sln`/`.slnx` files in the working directory. |
+| `explore_namespace` | Browse types, functions, and sub-namespaces in a .NET namespace. |
+| `explore_type` | Browse members, constructors, and properties of a .NET type. |
+| `get_elm_state` | Query the Elm model's render regions (editor, output, diagnostics, sessions). |
 | `reset_fsi_session` | Soft reset — fresh session, DLL locks retained. |
 | `hard_reset_fsi_session` | Full reset — release DLL locks, optionally rebuild, fresh session. |
 | `create_session` | Create a new isolated worker session (daemon mode). |
@@ -380,7 +383,7 @@ Core components:
 ## 📊 Project Status
 
 **Target Framework**: .NET 10.0
-**Stability**: Active development — 408 tests passing
+**Stability**: Active development — 410 tests passing
 **Test Framework**: Expecto + Verify snapshots + FsCheck property tests
 
 ### What's Done
@@ -406,14 +409,17 @@ Core components:
 - ✅ SessionDisplay types for UI rendering
 - ✅ ElmDaemon wiring — Elm loop running in daemon, dispatch available to MCP tools
 - ✅ MCP ↔ Elm notifications — eval/reset/cancel/load events flow to Elm model
+- ✅ `get_elm_state` MCP tool — query render regions (editor, output, diagnostics, sessions)
+- ✅ OnModelChanged terminal logging — daemon console shows Elm state changes
+- ✅ File watcher → Elm loop — FileChanged/FileReloaded events with timing and status
+- ✅ Warmup → Elm loop — WarmupCompleted and SessionStatusChanged events
 
 ### What's Next
 - 🔲 Watchdog process for daemon auto-restart
 - 🔲 Remove embedded mode — daemon-only architecture
 - 🔲 REPL as a client connecting to daemon
 - 🔲 Replace PrettyPrompt with custom rendering — PrettyPrompt assumes it owns the terminal and can't render into a grid region, making it incompatible with the multi-frontend architecture
-- 🔲 Frontend subscription — OnModelChanged pushes RenderRegion list to connected clients
-- 🔲 MCP state query — expose Elm model state through MCP tools
+- 🔲 Frontend subscription — MCP SSE adapter pushes state changes to connected AI agents
 
 ### Where It's Going
 
