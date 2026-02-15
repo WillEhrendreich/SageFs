@@ -270,10 +270,10 @@ let sageFsRenderTests = testList "SageFsRender" [
       |> List.find (fun r -> r.Id = "output")
     let lines = output.Content.Split('\n')
     lines |> Array.length |> Expect.equal "4 output lines" 4
-    lines.[0] |> Expect.stringStarts "first tagged result" "[result]"
-    lines.[1] |> Expect.stringStarts "second tagged error" "[error]"
-    lines.[2] |> Expect.stringStarts "third tagged info" "[info]"
-    lines.[3] |> Expect.stringStarts "fourth tagged system" "[system]"
+    lines.[0] |> Expect.stringContains "first tagged result" "[result]"
+    lines.[1] |> Expect.stringContains "second tagged error" "[error]"
+    lines.[2] |> Expect.stringContains "third tagged info" "[info]"
+    lines.[3] |> Expect.stringContains "fourth tagged system" "[system]"
 
   testCase "inactive session has no * marker" <| fun _ ->
     let now = DateTime.UtcNow

@@ -411,7 +411,7 @@ Core components:
 ## 📊 Project Status
 
 **Target Framework**: .NET 10.0
-**Stability**: Active development — 440+ tests passing
+**Stability**: Active development — 442+ tests passing
 **Test Framework**: Expecto + Verify snapshots + FsCheck property tests
 
 ### What's Done
@@ -452,6 +452,8 @@ Core components:
 - ✅ Dashboard event-driven SSE — instant push updates instead of polling
 - ✅ Dashboard sessions panel — live view of all FSI sessions with status
 - ✅ Dashboard inline eval results — immediate feedback below code input
+- ✅ Dashboard Ctrl+Enter eval, Reset/Hard Reset buttons, timestamped output
+- ✅ Dashboard parsers — regex-based extraction of timestamps, diagnostic line/col
 - ✅ ElmLoop resilience — try/catch guards prevent dispatch loop crashes from callback exceptions
 - ✅ Hard reset warmup timeout (5 min) — prevents stuck WarmingUp state, transitions to Faulted on timeout
 - ✅ Hard reset progress logging — phase-by-phase status (build, shadow copy, FSI creation, namespace scanning)
