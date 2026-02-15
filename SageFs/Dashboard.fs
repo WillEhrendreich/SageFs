@@ -93,6 +93,7 @@ let private renderShell (version: string) =
         .full-width { grid-column: 1 / -1; }
         .panel-header-btn { background: none; border: 1px solid var(--border); color: var(--fg); border-radius: 4px; padding: 1px 8px; cursor: pointer; font-size: 0.75rem; font-family: inherit; }
         .panel-header-btn:hover { background: var(--border); }
+        .output-icon { font-weight: bold; margin-right: 0.25rem; }
         .auto-scroll { scroll-behavior: smooth; }
         .conn-banner { padding: 6px 1rem; text-align: center; font-size: 0.85rem; font-weight: bold; border-radius: 4px; margin-bottom: 1rem; transition: all 0.3s; }
         .conn-connected { background: var(--green); color: var(--bg); }
@@ -148,6 +149,7 @@ let private renderShell (version: string) =
               Attr.create "placeholder" "Enter F# code... (Ctrl+Enter to eval)"
               Attr.create "data-on-keydown" """
                 if(event.ctrlKey && event.key === 'Enter') { event.preventDefault(); $$post('/dashboard/eval') }
+                if(event.ctrlKey && event.key === 'l') { event.preventDefault(); $$post('/dashboard/clear-output') }
                 if(event.key === 'Tab') { event.preventDefault(); var s=this.selectionStart; var e=this.selectionEnd; this.value=this.value.substring(0,s)+'  '+this.value.substring(e); this.selectionStart=this.selectionEnd=s+2; this.dispatchEvent(new Event('input')) }
               """
               Attr.create "spellcheck" "false" ]
@@ -319,12 +321,21 @@ let renderOutput (lines: (string option * string * string) list) =
     | "Error" -> "output-error"
     | "Info" -> "output-info"
     | _ -> "output-system"
+  let lineIcon kind =
+    match kind with
+    | "Result" -> "✓ "
+    | "Error" -> "✗ "
+    | "Info" -> "ℹ "
+    | _ -> "· "
   Elem.div [ Attr.id "output-panel" ] [
     if lines.IsEmpty then
       Text.raw "No output yet"
     else
       yield! lines |> List.map (fun (ts, kind, text) ->
         Elem.div [ Attr.class' (sprintf "output-line %s" (lineClass kind)) ] [
+          Elem.span [ Attr.class' (sprintf "output-icon %s" (lineClass kind)) ] [
+            Text.raw (lineIcon kind)
+          ]
           match ts with
           | Some t ->
             Elem.span [ Attr.class' "meta"; Attr.style "margin-right: 0.5rem;" ] [
