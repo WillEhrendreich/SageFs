@@ -64,13 +64,15 @@ module TerminalState =
 let setupRawMode () =
   Console.TreatControlCAsInput <- true
   Console.CursorVisible <- false
-  // Enable VT100 processing (Windows 10+)
+  AnsiCodes.enableVT100 () |> ignore
   try
     Console.OutputEncoding <- Text.Encoding.UTF8
   with _ -> ()
+  TerminalUIState.IsActive <- true
 
 /// Restore console to normal mode
 let restoreConsole () =
+  TerminalUIState.IsActive <- false
   Console.TreatControlCAsInput <- false
   Console.CursorVisible <- true
   Console.Write(AnsiCodes.reset)
@@ -93,22 +95,23 @@ let run
   setupRawMode ()
 
   let render () =
-    try
-      let regions = elmRuntime.GetRegions()
-      let model = elmRuntime.GetModel()
-      let sessionState =
-        match model.Sessions.ActiveSessionId with
-        | Some _ -> "Running"
-        | None -> "No session"
-      let evalCount =
-        model.RecentOutput |> List.length
-      let frame =
-        TerminalRender.renderFrame state.Layout regions sessionState evalCount
-      Console.Write(frame)
-    with ex ->
-      eprintfn "[terminal] render error: %s" ex.Message
+    lock TerminalUIState.consoleLock (fun () ->
+      try
+        let regions = elmRuntime.GetRegions()
+        let model = elmRuntime.GetModel()
+        let sessionState =
+          match model.Sessions.ActiveSessionId with
+          | Some _ -> "Running"
+          | None -> "No session"
+        let evalCount =
+          model.RecentOutput |> List.length
+        let frame =
+          TerminalRender.renderFrame state.Layout regions sessionState evalCount
+        Console.Write(frame)
+      with _ -> ())
 
-  // Initial render
+  // Clear screen and initial render
+  Console.Write(AnsiCodes.clearScreen)
   render ()
 
   // Subscribe to Elm state changes for re-rendering
@@ -123,7 +126,8 @@ let run
       let newCols = Console.WindowWidth
       if newRows <> state.Layout.Rows || newCols <> state.Layout.Cols then
         TerminalState.resize state newRows newCols
-        Console.Write(AnsiCodes.clearScreen)
+        lock TerminalUIState.consoleLock (fun () ->
+          Console.Write(AnsiCodes.clearScreen))
         render ()
 
       if Console.KeyAvailable then
@@ -132,7 +136,8 @@ let run
         | Some TerminalCommand.Quit ->
           return ()
         | Some TerminalCommand.Redraw ->
-          Console.Write(AnsiCodes.clearScreen)
+          lock TerminalUIState.consoleLock (fun () ->
+            Console.Write(AnsiCodes.clearScreen))
           render ()
         | Some TerminalCommand.CycleFocus ->
           TerminalState.cycleFocus state

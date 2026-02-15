@@ -28,10 +28,14 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
 
   let logger =
     { new Utils.ILogger with
-        member _.LogInfo msg = eprintfn "[INFO] %s" msg
-        member _.LogDebug msg = eprintfn "[DEBUG] %s" msg
-        member _.LogWarning msg = eprintfn "[WARN] %s" msg
-        member _.LogError msg = eprintfn "[ERROR] %s" msg }
+        member _.LogInfo msg =
+          if not TerminalUIState.IsActive then eprintfn "[INFO] %s" msg
+        member _.LogDebug msg =
+          if not TerminalUIState.IsActive then eprintfn "[DEBUG] %s" msg
+        member _.LogWarning msg =
+          if not TerminalUIState.IsActive then eprintfn "[WARN] %s" msg
+        member _.LogError msg =
+          if not TerminalUIState.IsActive then eprintfn "[ERROR] %s" msg }
 
   let actorArgs =
     ActorCreation.mkCommonActorArgs logger false onEvent (args |> List.map id)
@@ -105,7 +109,7 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
     ElmDaemon.start effectDeps (fun model _regions ->
       let outputCount = model.RecentOutput.Length
       let diagCount = model.Diagnostics.Length
-      if outputCount > 0 || diagCount > 0 then
+      if not TerminalUIState.IsActive && (outputCount > 0 || diagCount > 0) then
         let latest =
           model.RecentOutput
           |> List.tryHead
@@ -246,7 +250,8 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
         match SageFs.FileWatcher.fileChangeAction change with
         | SageFs.FileWatcher.FileChangeAction.Reload filePath ->
           let fileName = IO.Path.GetFileName filePath
-          eprintfn "[INFO] File changed: %s -- reloading via #load" fileName
+          if not TerminalUIState.IsActive then
+            eprintfn "[INFO] File changed: %s -- reloading via #load" fileName
           elmRuntime.Dispatch (SageFsMsg.Event (
             SageFsEvent.FileChanged (filePath, FileWatchAction.Changed)))
           let code = sprintf "#load @\"%s\"" filePath
@@ -258,15 +263,18 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
             sw.Stop()
             match resp.EvaluationResult with
             | Ok _ ->
-              eprintfn "[INFO] Reloaded %s" fileName
+              if not TerminalUIState.IsActive then
+                eprintfn "[INFO] Reloaded %s" fileName
               elmRuntime.Dispatch (SageFsMsg.Event (
                 SageFsEvent.FileReloaded (fileName, sw.Elapsed, Ok "reloaded")))
             | Error ex ->
-              eprintfn "[WARN] Reload error in %s: %s" fileName ex.Message
+              if not TerminalUIState.IsActive then
+                eprintfn "[WARN] Reload error in %s: %s" fileName ex.Message
               elmRuntime.Dispatch (SageFsMsg.Event (
                 SageFsEvent.FileReloaded (fileName, sw.Elapsed, Error ex.Message)))
         | SageFs.FileWatcher.FileChangeAction.SoftReset ->
-          eprintfn "[INFO] Project file changed -- resetting session"
+          if not TerminalUIState.IsActive then
+            eprintfn "[INFO] Project file changed -- resetting session"
           elmRuntime.Dispatch (SageFsMsg.Event (
             SageFsEvent.SessionStatusChanged (sessionId, SessionDisplayStatus.Restarting)))
           appActor.PostAndAsyncReply(fun reply -> AppState.ResetSession(reply))

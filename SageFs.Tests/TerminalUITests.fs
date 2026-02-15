@@ -34,6 +34,19 @@ let terminalRenderTests = testList "TerminalRender" [
     Expect.equal result "12345" "exact length stays same"
   }
 
+  test "fitToWidth preserves ANSI escapes when truncating" {
+    let colored = sprintf "%shello world%s" AnsiCodes.green AnsiCodes.reset
+    let result = TerminalRender.fitToWidth 5 colored
+    Expect.stringContains result AnsiCodes.green "should preserve ANSI"
+    Expect.equal (TerminalRender.visibleLength result) 5 "visible length should be 5"
+  }
+
+  test "visibleLength ignores ANSI escapes" {
+    let colored = sprintf "%shello%s" AnsiCodes.cyan AnsiCodes.reset
+    let result = TerminalRender.visibleLength colored
+    Expect.equal result 5 "should only count visible chars"
+  }
+
   test "visibleLines returns correct slice" {
     let content = "line1\nline2\nline3\nline4\nline5"
     let result = TerminalRender.visibleLines content 1 3
@@ -81,7 +94,18 @@ let terminalLayoutTests = testList "TerminalLayout" [
     Expect.isTrue editor.Focused "editor should be focused"
   }
 
-  test "compute panes don't overlap vertically on left side" {
+  test "compute output and right panes share same row range" {
+    let layout = TerminalLayout.compute 40 120
+    let output = layout.Panes |> List.find (fun p -> p.RegionId = "output")
+    let sessions = layout.Panes |> List.find (fun p -> p.RegionId = "sessions")
+    let diags = layout.Panes |> List.find (fun p -> p.RegionId = "diagnostics")
+    Expect.equal output.Row sessions.Row "output and sessions start at same row"
+    let rightBottom = diags.Row + diags.Height
+    let leftBottom = output.Row + output.Height
+    Expect.equal rightBottom leftBottom "right panes end at same row as output"
+  }
+
+  test "compute editor starts after content area" {
     let layout = TerminalLayout.compute 40 120
     let output = layout.Panes |> List.find (fun p -> p.RegionId = "output")
     let editor = layout.Panes |> List.find (fun p -> p.RegionId = "editor")
