@@ -6,7 +6,7 @@
         <IsPackable>true</IsPackable>
         <ToolCommandName>sagefs</ToolCommandName>
         <PackageOutputPath>./nupkg</PackageOutputPath>
-        <Version>0.3.4</Version>
+        <Version>0.3.5</Version>
 
         <!-- NuGet config -->
         <PackageId>SageFs</PackageId>
@@ -43,7 +43,6 @@
     </ItemGroup>
 
     <ItemGroup>
-        <PackageReference Include="FSharpPlus" />
         <PackageReference Include="Falco" />
         <PackageReference Include="Falco.Datastar" />
         <PackageReference Include="Falco.Markup" />

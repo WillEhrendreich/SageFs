@@ -4,7 +4,6 @@ open System
 open Fantomas.Core.SyntaxOak
 open Fantomas.Core
 
-open FSharpPlus
 open SageFs
 open SageFs.Utils
 
@@ -21,7 +20,7 @@ let parse code =
     with _ ->
       try
         let! res =
-          String.trim [ ' ' ] code
+          code.Trim(' ')
           |> fun code -> code + Environment.NewLine + "()"
           |> fun code -> CodeFormatter.ParseOakAsync(false, code)
 
@@ -221,7 +220,7 @@ let rewriteCompExpr (logger: ILogger) code =
 
         let! code =
           CodeFormatter.FormatOakAsync rewrittenAst
-          |>> String.trimEnd (" " + Environment.NewLine)
+        let code = code.TrimEnd([| ' '; '\r'; '\n' |])
 
         let logCode code =
           logger.LogDebug $"Rewriting user computation expression input to: \n {code}"
