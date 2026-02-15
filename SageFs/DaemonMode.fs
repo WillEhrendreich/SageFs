@@ -163,6 +163,26 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
           | Ok msg -> msg
           | Error ex -> sprintf "Error: %s" ex.Message
       })
+      (fun () -> task {
+        let! resp =
+          appActor.PostAndAsyncReply(fun reply ->
+            AppState.ResetSession reply)
+          |> Async.StartAsTask
+        return
+          match resp with
+          | Ok () -> "Session reset successfully"
+          | Error e -> sprintf "Reset failed: %A" e
+      })
+      (fun () -> task {
+        let! resp =
+          appActor.PostAndAsyncReply(fun reply ->
+            AppState.HardResetSession(true, reply))
+          |> Async.StartAsTask
+        return
+          match resp with
+          | Ok msg -> sprintf "Hard reset: %s" msg
+          | Error e -> sprintf "Hard reset failed: %A" e
+      })
   let dashboardTask = task {
     try
       let builder = Microsoft.AspNetCore.Builder.WebApplication.CreateBuilder()

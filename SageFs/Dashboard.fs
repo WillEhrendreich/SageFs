@@ -7,6 +7,7 @@ open Falco.Routing
 open Falco.Datastar
 open StarFederation.Datastar.FSharp
 open Microsoft.AspNetCore.Http
+open System.Text.RegularExpressions
 open SageFs
 open SageFs.Affordances
 
@@ -84,12 +85,25 @@ let private renderShell (version: string) =
           Elem.textarea
             [ Attr.class' "eval-input"
               Ds.bind "code"
-              Attr.create "placeholder" "Enter F# code..." ]
+              Attr.create "placeholder" "Enter F# code... (Ctrl+Enter to eval)"
+              Attr.create "data-on-keydown" "if(event.ctrlKey && event.key === 'Enter') { event.preventDefault(); $$post('/dashboard/eval') }" ]
             []
-          Elem.button
-            [ Attr.class' "eval-btn"
-              Ds.onClick (Ds.post "/dashboard/eval") ]
-            [ Text.raw "▶ Eval" ]
+          Elem.div [ Attr.style "display: flex; gap: 0.5rem; margin-top: 0.5rem;" ] [
+            Elem.button
+              [ Attr.class' "eval-btn"
+                Ds.onClick (Ds.post "/dashboard/eval") ]
+              [ Text.raw "▶ Eval" ]
+            Elem.button
+              [ Attr.class' "eval-btn"
+                Attr.style "background: var(--green);"
+                Ds.onClick (Ds.post "/dashboard/reset") ]
+              [ Text.raw "↻ Reset" ]
+            Elem.button
+              [ Attr.class' "eval-btn"
+                Attr.style "background: var(--red);"
+                Ds.onClick (Ds.post "/dashboard/hard-reset") ]
+              [ Text.raw "⟳ Hard Reset" ]
+          ]
           Elem.div [ Attr.id "eval-result" ] []
         ]
       ]
@@ -166,21 +180,38 @@ let renderSessions (sessions: (string * string * bool) list) =
   ]
 
 let private parseOutputLines (content: string) =
+  let outputRegex = Regex(@"^\[(\w+)\]\s*(.*)", RegexOptions.Singleline)
   content.Split('\n')
   |> Array.filter (fun (l: string) -> l.Length > 0)
   |> Array.map (fun (l: string) ->
-    if l.StartsWith("❌") || l.Contains("error") then "Error", l
-    elif l.StartsWith("ℹ") then "Info", l
-    elif l.StartsWith("[system]") then "System", l
-    else "Result", l)
+    let m = outputRegex.Match(l)
+    if m.Success then
+      let kind =
+        match m.Groups.[1].Value.ToLowerInvariant() with
+        | "result" -> "Result"
+        | "error" -> "Error"
+        | "info" -> "Info"
+        | _ -> "System"
+      kind, m.Groups.[2].Value
+    else
+      "Result", l)
   |> Array.toList
 
 let private parseDiagLines (content: string) =
+  let diagRegex = Regex(@"^\[(\w+)\]\s*\((\d+),(\d+)\)\s*(.*)")
   content.Split('\n')
   |> Array.filter (fun (l: string) -> l.Length > 0)
   |> Array.map (fun (l: string) ->
-    let severity = if l.Contains("[error]") then "Error" else "Warning"
-    severity, l, 0, 0)
+    let m = diagRegex.Match(l)
+    if m.Success then
+      let severity = if m.Groups.[1].Value = "error" then "Error" else "Warning"
+      let line = int m.Groups.[2].Value
+      let col = int m.Groups.[3].Value
+      let message = m.Groups.[4].Value
+      severity, message, line, col
+    else
+      let severity = if l.Contains("[error]") then "Error" else "Warning"
+      severity, l, 0, 0)
   |> Array.toList
 
 let private parseSessionLines (content: string) =
@@ -297,6 +328,22 @@ let createEvalHandler
       do! Response.sseHtmlElements ctx resultHtml
   }
 
+/// Create the reset POST handler.
+let createResetHandler
+  (resetSession: unit -> Threading.Tasks.Task<string>)
+  : HttpHandler =
+  fun ctx -> task {
+    let! result = resetSession ()
+    do! Response.sseStartResponse ctx
+    let resultHtml =
+      Elem.div [ Attr.id "eval-result" ] [
+        Elem.pre [ Attr.class' "output-line output-info"; Attr.style "margin-top: 0.5rem; white-space: pre-wrap;" ] [
+          Text.raw (sprintf "Reset: %s" result)
+        ]
+      ]
+    do! Response.sseHtmlElements ctx resultHtml
+  }
+
 /// Create all dashboard routes.
 let createEndpoints
   (version: string)
@@ -307,9 +354,13 @@ let createEndpoints
   (getElmRegions: unit -> RenderRegion list option)
   (stateChanged: IEvent<string> option)
   (evalCode: string -> Threading.Tasks.Task<string>)
+  (resetSession: unit -> Threading.Tasks.Task<string>)
+  (hardResetSession: unit -> Threading.Tasks.Task<string>)
   : HttpEndpoint list =
   [
     get "/dashboard" (FalcoResponse.ofHtml (renderShell version))
     get "/dashboard/stream" (createStreamHandler getSessionState getEvalStats sessionId projectCount getElmRegions stateChanged)
     post "/dashboard/eval" (createEvalHandler evalCode)
+    post "/dashboard/reset" (createResetHandler resetSession)
+    post "/dashboard/hard-reset" (createResetHandler hardResetSession)
   ]

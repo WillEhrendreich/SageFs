@@ -411,7 +411,7 @@ Core components:
 ## 📊 Project Status
 
 **Target Framework**: .NET 10.0
-**Stability**: Active development — 350+ tests passing
+**Stability**: Active development — 440+ tests passing
 **Test Framework**: Expecto + Verify snapshots + FsCheck property tests
 
 ### What's Done

@@ -7,6 +7,7 @@ open SageFs
 let wait () =
   System.Threading.Thread.Sleep 200
 
+[<Tests>]
 let elmLoopResilienceTests =
   testList "ElmLoop resilience" [
 
