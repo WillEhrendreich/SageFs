@@ -183,37 +183,52 @@ let createStreamHandler
   (sessionId: string)
   (projectCount: int)
   (getElmRegions: unit -> RenderRegion list option)
+  (stateChanged: IEvent<string> option)
   : HttpHandler =
   fun ctx -> task {
     do! Response.sseStartResponse ctx
-    let mutable lastHash = 0
-    while not ctx.RequestAborted.IsCancellationRequested do
-      try
-        let state = getSessionState ()
-        let stats = getEvalStats ()
-        let stateStr = SessionState.label state
-        let avgMs =
-          if stats.EvalCount > 0
-          then stats.TotalDuration.TotalMilliseconds / float stats.EvalCount
-          else 0.0
-        let currentHash = hash (stateStr, stats.EvalCount)
-        if currentHash <> lastHash then
-          lastHash <- currentHash
-          do! Response.sseHtmlElements ctx (
-            renderSessionStatus stateStr sessionId projectCount)
-          do! Response.sseHtmlElements ctx (
-            renderEvalStats
-              stats.EvalCount
-              avgMs
-              stats.MinDuration.TotalMilliseconds
-              stats.MaxDuration.TotalMilliseconds)
-          match getElmRegions () with
-          | Some regions -> do! pushRegions ctx regions
-          | None -> ()
 
-        do! Threading.Tasks.Task.Delay(TimeSpan.FromSeconds 1.0, ctx.RequestAborted)
-      with
-      | :? OperationCanceledException -> ()
+    let pushState () = task {
+      let state = getSessionState ()
+      let stats = getEvalStats ()
+      let stateStr = SessionState.label state
+      let avgMs =
+        if stats.EvalCount > 0
+        then stats.TotalDuration.TotalMilliseconds / float stats.EvalCount
+        else 0.0
+      do! Response.sseHtmlElements ctx (
+        renderSessionStatus stateStr sessionId projectCount)
+      do! Response.sseHtmlElements ctx (
+        renderEvalStats
+          stats.EvalCount
+          avgMs
+          stats.MinDuration.TotalMilliseconds
+          stats.MaxDuration.TotalMilliseconds)
+      match getElmRegions () with
+      | Some regions -> do! pushRegions ctx regions
+      | None -> ()
+    }
+
+    // Push initial state
+    do! pushState ()
+
+    match stateChanged with
+    | Some evt ->
+      // Event-driven: push on every state change
+      let tcs = Threading.Tasks.TaskCompletionSource()
+      use _ct = ctx.RequestAborted.Register(fun () -> tcs.TrySetResult() |> ignore)
+      use _sub = evt.Subscribe(fun _ ->
+        try pushState().Wait()
+        with _ -> ())
+      do! tcs.Task
+    | None ->
+      // Fallback: poll every second
+      while not ctx.RequestAborted.IsCancellationRequested do
+        try
+          do! Threading.Tasks.Task.Delay(TimeSpan.FromSeconds 1.0, ctx.RequestAborted)
+          do! pushState ()
+        with
+        | :? OperationCanceledException -> ()
   }
 
 /// Create the eval POST handler.
@@ -243,10 +258,11 @@ let createEndpoints
   (sessionId: string)
   (projectCount: int)
   (getElmRegions: unit -> RenderRegion list option)
+  (stateChanged: IEvent<string> option)
   (evalCode: string -> Threading.Tasks.Task<string>)
   : HttpEndpoint list =
   [
     get "/dashboard" (FalcoResponse.ofHtml (renderShell version))
-    get "/dashboard/stream" (createStreamHandler getSessionState getEvalStats sessionId projectCount getElmRegions)
+    get "/dashboard/stream" (createStreamHandler getSessionState getEvalStats sessionId projectCount getElmRegions stateChanged)
     post "/dashboard/eval" (createEvalHandler evalCode)
   ]

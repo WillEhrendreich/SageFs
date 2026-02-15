@@ -151,6 +151,7 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
       sessionId
       (result.ProjectDirectories.Length)
       (fun () -> elmRuntime.GetRegions() |> Some)
+      (Some stateChangedEvent.Publish)
       (fun code -> task {
         let request : AppState.EvalRequest = { Code = code; Args = Map.empty }
         let! resp =
