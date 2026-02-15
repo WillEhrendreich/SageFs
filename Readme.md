@@ -440,9 +440,11 @@ Core components:
 - ✅ `SageFs connect` — REPL client over HTTP to running daemon (auto-starts daemon if needed)
 - ✅ Persistent REPL history in `~/.SageFs/connect_history`
 - ✅ Removed PrettyPrompt dependency — daemon-only architecture, no embedded REPL
+- ✅ `GET /events` SSE endpoint — push-based Elm state changes to any subscriber
 
 ### What's Next
-- 🔲 Frontend subscription — MCP SSE adapter pushes state changes to connected AI agents
+- 🔲 Dashboard improvements — wire Elm model data directly into Datastar fragments
+- 🔲 Multi-session management — create/switch/stop sessions from any frontend
 
 ### Where It's Going
 
