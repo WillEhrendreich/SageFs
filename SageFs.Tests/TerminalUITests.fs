@@ -12,7 +12,7 @@ let mkRegion id content : RenderRegion =
   { Id = id; Flags = RegionFlags.None; Content = content; Affordances = [] }
 
 let mkPane id title row col w h focused : TerminalPane =
-  { RegionId = id; Title = title; Row = row; Col = col
+  { PaneId = id; Title = title; Row = row; Col = col
     Width = w; Height = h; ScrollOffset = 0; Focused = focused }
 
 let key c k mods =
@@ -72,6 +72,20 @@ let terminalRenderTests = testList "TerminalRender" [
     let result = TerminalRender.visibleLines "" 0 5
     Expect.equal result [""] "empty content gives one empty line"
   }
+
+  test "boxTop visible width equals pane width" {
+    for w in [20; 40; 78; 120] do
+      let result = AnsiCodes.boxTop "Title" w AnsiCodes.dimWhite
+      let vLen = TerminalRender.visibleLength result
+      Expect.equal vLen w (sprintf "boxTop width=%d should have visible length %d" w w)
+  }
+
+  test "boxBottom visible width equals pane width" {
+    for w in [20; 40; 78; 120] do
+      let result = AnsiCodes.boxBottom w AnsiCodes.dimWhite
+      let vLen = TerminalRender.visibleLength result
+      Expect.equal vLen w (sprintf "boxBottom width=%d should have visible length %d" w w)
+  }
 ]
 
 let terminalLayoutTests = testList "TerminalLayout" [
@@ -87,21 +101,21 @@ let terminalLayoutTests = testList "TerminalLayout" [
 
   test "compute editor pane spans full width" {
     let layout = TerminalLayout.compute 40 120
-    let editor = layout.Panes |> List.find (fun p -> p.RegionId = "editor")
+    let editor = layout.Panes |> List.find (fun p -> p.PaneId = PaneId.Editor)
     Expect.equal editor.Width 120 "editor spans full width"
   }
 
   test "compute editor is focused by default" {
     let layout = TerminalLayout.compute 40 120
-    let editor = layout.Panes |> List.find (fun p -> p.RegionId = "editor")
+    let editor = layout.Panes |> List.find (fun p -> p.PaneId = PaneId.Editor)
     Expect.isTrue editor.Focused "editor should be focused"
   }
 
   test "compute output and right panes share same row range" {
     let layout = TerminalLayout.compute 40 120
-    let output = layout.Panes |> List.find (fun p -> p.RegionId = "output")
-    let sessions = layout.Panes |> List.find (fun p -> p.RegionId = "sessions")
-    let diags = layout.Panes |> List.find (fun p -> p.RegionId = "diagnostics")
+    let output = layout.Panes |> List.find (fun p -> p.PaneId = PaneId.Output)
+    let sessions = layout.Panes |> List.find (fun p -> p.PaneId = PaneId.Sessions)
+    let diags = layout.Panes |> List.find (fun p -> p.PaneId = PaneId.Diagnostics)
     Expect.equal output.Row sessions.Row "output and sessions start at same row"
     let rightBottom = diags.Row + diags.Height
     let leftBottom = output.Row + output.Height
@@ -110,22 +124,22 @@ let terminalLayoutTests = testList "TerminalLayout" [
 
   test "compute editor starts after content area" {
     let layout = TerminalLayout.compute 40 120
-    let output = layout.Panes |> List.find (fun p -> p.RegionId = "output")
-    let editor = layout.Panes |> List.find (fun p -> p.RegionId = "editor")
+    let output = layout.Panes |> List.find (fun p -> p.PaneId = PaneId.Output)
+    let editor = layout.Panes |> List.find (fun p -> p.PaneId = PaneId.Editor)
     Expect.equal editor.Row (output.Row + output.Height) "editor starts after output"
   }
 
   test "compute right-side panes are adjacent" {
     let layout = TerminalLayout.compute 40 120
-    let sessions = layout.Panes |> List.find (fun p -> p.RegionId = "sessions")
-    let diags = layout.Panes |> List.find (fun p -> p.RegionId = "diagnostics")
+    let sessions = layout.Panes |> List.find (fun p -> p.PaneId = PaneId.Sessions)
+    let diags = layout.Panes |> List.find (fun p -> p.PaneId = PaneId.Diagnostics)
     Expect.equal diags.Row (sessions.Row + sessions.Height) "diagnostics starts after sessions"
   }
 ]
 
 let renderPaneTests = testList "renderPane" [
   test "renderPane produces ANSI with border chars" {
-    let pane = mkPane "output" "Output" 1 1 30 5 false
+    let pane = mkPane PaneId.Output "Output" 1 1 30 5 false
     let region = mkRegion "output" "hello"
     let result = TerminalRender.renderPane pane (Some region)
     Expect.stringContains result AnsiCodes.boxTL "should have top-left corner"
@@ -135,19 +149,19 @@ let renderPaneTests = testList "renderPane" [
   }
 
   test "renderPane focused pane uses cyan border" {
-    let pane = mkPane "editor" "Editor" 1 1 20 4 true
+    let pane = mkPane PaneId.Editor "Editor" 1 1 20 4 true
     let result = TerminalRender.renderPane pane None
     Expect.stringContains result AnsiCodes.cyan "focused pane should use cyan"
   }
 
   test "renderPane unfocused pane uses dim border" {
-    let pane = mkPane "output" "Output" 1 1 20 4 false
+    let pane = mkPane PaneId.Output "Output" 1 1 20 4 false
     let result = TerminalRender.renderPane pane None
     Expect.stringContains result AnsiCodes.dimWhite "unfocused pane should use dimWhite"
   }
 
   test "renderPane with None region shows empty lines" {
-    let pane = mkPane "output" "Out" 1 1 20 4 false
+    let pane = mkPane PaneId.Output "Out" 1 1 20 4 false
     let result = TerminalRender.renderPane pane None
     Expect.stringContains result AnsiCodes.boxV "should have side borders"
   }
@@ -335,27 +349,27 @@ let diagnosticsColorizerTests = testList "DiagnosticsColorizer" [
 
 let contentColorizerTests = testList "ContentColorizer" [
   test "output region uses output colorizer" {
-    let result = ContentColorizer.colorizeLine "output" "[12:00:00] [error] fail"
+    let result = ContentColorizer.colorizeLine PaneId.Output "[12:00:00] [error] fail"
     Expect.stringContains result AnsiCodes.red "output error should be red"
   }
 
   test "diagnostics region uses diagnostics colorizer" {
-    let result = ContentColorizer.colorizeLine "diagnostics" "[warning] (1,1) msg"
+    let result = ContentColorizer.colorizeLine PaneId.Diagnostics "[warning] (1,1) msg"
     Expect.stringContains result AnsiCodes.yellow "diagnostics warning should be yellow"
   }
 
   test "sessions with active marker get green" {
-    let result = ContentColorizer.colorizeLine "sessions" "session-abc [Ready] *"
+    let result = ContentColorizer.colorizeLine PaneId.Sessions "session-abc [Ready] *"
     Expect.stringContains result AnsiCodes.green "active session should be green"
   }
 
   test "sessions without active marker are dimmed" {
-    let result = ContentColorizer.colorizeLine "sessions" "session-abc [Ready]"
+    let result = ContentColorizer.colorizeLine PaneId.Sessions "session-abc [Ready]"
     Expect.stringContains result AnsiCodes.dimWhite "inactive session should be dimmed"
   }
 
   test "editor region passes through" {
-    let result = ContentColorizer.colorizeLine "editor" "let x = 42"
+    let result = ContentColorizer.colorizeLine PaneId.Editor "let x = 42"
     Expect.equal result "let x = 42" "editor content unchanged"
   }
 ]
@@ -425,7 +439,7 @@ let formatForSnapshot (scrubbed: string) =
 
 let renderPaneSnapshotTests = testList "renderPane snapshots" [
   testTask "output pane with colorized content" {
-    let pane = mkPane "output" "Output" 1 1 50 6 false
+    let pane = mkPane PaneId.Output "Output" 1 1 50 6 false
     let content = "[12:30:45] [result] val x: int = 42\n[12:30:46] [error] Type mismatch"
     let region = mkRegion "output" content
     let rendered = TerminalRender.renderPane pane (Some region) |> scrubAnsi |> formatForSnapshot
@@ -433,14 +447,14 @@ let renderPaneSnapshotTests = testList "renderPane snapshots" [
   }
 
   testTask "focused editor pane" {
-    let pane = mkPane "editor" "Editor" 1 1 50 4 true
+    let pane = mkPane PaneId.Editor "Editor" 1 1 50 4 true
     let region = mkRegion "editor" "let x = 42\nprintfn \"%d\" x"
     let rendered = TerminalRender.renderPane pane (Some region) |> scrubAnsi |> formatForSnapshot
     do! verifyTerminal "renderPane_editor_focused" rendered
   }
 
   testTask "sessions pane with active session" {
-    let pane = mkPane "sessions" "Sessions" 1 1 40 5 false
+    let pane = mkPane PaneId.Sessions "Sessions" 1 1 40 5 false
     let content = "session-abc [Ready] *\nsession-def [WarmingUp]"
     let region = mkRegion "sessions" content
     let rendered = TerminalRender.renderPane pane (Some region) |> scrubAnsi |> formatForSnapshot
@@ -448,7 +462,7 @@ let renderPaneSnapshotTests = testList "renderPane snapshots" [
   }
 
   testTask "diagnostics pane with errors" {
-    let pane = mkPane "diagnostics" "Diagnostics" 1 1 50 5 false
+    let pane = mkPane PaneId.Diagnostics "Diagnostics" 1 1 50 5 false
     let content = "[error] (5,10) Type mismatch\n[warning] (1,1) Unused binding"
     let region = mkRegion "diagnostics" content
     let rendered = TerminalRender.renderPane pane (Some region) |> scrubAnsi |> formatForSnapshot
@@ -456,7 +470,7 @@ let renderPaneSnapshotTests = testList "renderPane snapshots" [
   }
 
   testTask "empty pane" {
-    let pane = mkPane "output" "Output" 1 1 30 4 false
+    let pane = mkPane PaneId.Output "Output" 1 1 30 4 false
     let rendered = TerminalRender.renderPane pane None |> scrubAnsi |> formatForSnapshot
     do! verifyTerminal "renderPane_empty" rendered
   }
@@ -515,6 +529,43 @@ let colorizerSnapshotTests = testList "colorizer snapshots" [
 ]
 
 
+let paneIdTests = testList "PaneId" [
+  test "toRegionId roundtrips with fromRegionId" {
+    for pane in PaneId.all do
+      let regionId = PaneId.toRegionId pane
+      let back = PaneId.fromRegionId regionId
+      Expect.equal back (Some pane) (sprintf "%A should roundtrip" pane)
+  }
+
+  test "fromRegionId returns None for unknown" {
+    let result = PaneId.fromRegionId "unknown"
+    Expect.isNone result "unknown region should return None"
+  }
+
+  test "next cycles through all panes" {
+    let mutable current = PaneId.Output
+    let visited = System.Collections.Generic.HashSet<PaneId>()
+    for _ in 0 .. PaneId.all.Length - 1 do
+      visited.Add(current) |> ignore
+      current <- PaneId.next current
+    Expect.equal visited.Count PaneId.all.Length "should visit all panes"
+    Expect.equal current PaneId.Output "should cycle back to start"
+  }
+
+  test "next from Editor wraps to Output" {
+    let result = PaneId.next PaneId.Editor
+    Expect.equal result PaneId.Output "Editor -> Output"
+  }
+
+  test "displayName returns human-readable names" {
+    Expect.equal (PaneId.displayName PaneId.Output) "Output" "Output display name"
+    Expect.equal (PaneId.displayName PaneId.Editor) "Editor" "Editor display name"
+    Expect.equal (PaneId.displayName PaneId.Sessions) "Sessions" "Sessions display name"
+    Expect.equal (PaneId.displayName PaneId.Diagnostics) "Diagnostics" "Diagnostics display name"
+  }
+]
+
+
 [<Tests>]
 let allTerminalUITests = testList "Terminal UI" [
   terminalRenderTests
@@ -527,6 +578,7 @@ let allTerminalUITests = testList "Terminal UI" [
   diagnosticsColorizerTests
   contentColorizerTests
   frameDiffTests
+  paneIdTests
   renderPaneSnapshotTests
   renderFrameSnapshotTests
   statusBarSnapshotTests

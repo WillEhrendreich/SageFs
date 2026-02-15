@@ -46,6 +46,7 @@
         <Compile Include="DirectoryConfigTests.fs" />
         <Compile Include="ConnectionTrackerTests.fs" />
         <Compile Include="TerminalUITests.fs" />
+        <Compile Include="DashboardSnapshotTests.fs" />
         <Compile Include="ElmDaemonTests.fs" />
         <Compile Include="ExplorationTests.fs" />
         <Compile Include="Program.fs" />

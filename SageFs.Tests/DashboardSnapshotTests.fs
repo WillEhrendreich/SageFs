@@ -1,0 +1,118 @@
+module SageFs.Tests.DashboardSnapshotTests
+
+open Expecto
+open VerifyExpecto
+open VerifyTests
+open Falco.Markup
+open SageFs.Server.Dashboard
+
+let snapshotsDir =
+  System.IO.Path.Combine(__SOURCE_DIRECTORY__, "snapshots")
+
+let verifyDashboard (name: string) (html: string) =
+  let settings = VerifySettings()
+  settings.UseDirectory(snapshotsDir)
+  settings.DisableDiff()
+  Verifier.Verify(name, html, "html", settings).ToTask()
+
+
+let dashboardRenderSnapshotTests = testList "Dashboard render snapshots" [
+  testTask "renderSessionStatus ready" {
+    let html = renderSessionStatus "Ready" "session-abc" 3 |> renderNode
+    do! verifyDashboard "dashboard_sessionStatus_ready" html
+  }
+
+  testTask "renderSessionStatus warming" {
+    let html = renderSessionStatus "WarmingUp" "session-def" 5 |> renderNode
+    do! verifyDashboard "dashboard_sessionStatus_warming" html
+  }
+
+  testTask "renderEvalStats" {
+    let html = renderEvalStats 42 123.4 5.0 1045.0 |> renderNode
+    do! verifyDashboard "dashboard_evalStats" html
+  }
+
+  testTask "renderOutput with mixed lines" {
+    let lines = [
+      Some "12:30:45", "Result", "val x: int = 42"
+      Some "12:30:46", "Error", "Type mismatch"
+      None, "Info", "Loading..."
+      Some "12:30:47", "System", "Hot reload"
+    ]
+    let html = renderOutput lines |> renderNode
+    do! verifyDashboard "dashboard_output_mixed" html
+  }
+
+  testTask "renderOutput empty" {
+    let html = renderOutput [] |> renderNode
+    do! verifyDashboard "dashboard_output_empty" html
+  }
+
+  testTask "renderDiagnostics with errors and warnings" {
+    let diags = [
+      "Error", "Type mismatch", 5, 10
+      "Warning", "Unused binding", 1, 1
+    ]
+    let html = renderDiagnostics diags |> renderNode
+    do! verifyDashboard "dashboard_diagnostics" html
+  }
+
+  testTask "renderDiagnostics empty" {
+    let html = renderDiagnostics [] |> renderNode
+    do! verifyDashboard "dashboard_diagnostics_empty" html
+  }
+
+  testTask "renderSessions with active and inactive" {
+    let sessions : ParsedSession list = [
+      { Id = "session-abc"
+        Status = "running"
+        IsActive = true
+        ProjectsText = "(MyProj.fsproj, Tests.fsproj)"
+        EvalCount = 15
+        Uptime = "3m"
+        WorkingDir = @"C:\Code\MyProj"
+        LastActivity = "eval" }
+      { Id = "session-def"
+        Status = "stopped"
+        IsActive = false
+        ProjectsText = ""
+        EvalCount = 0
+        Uptime = ""
+        WorkingDir = ""
+        LastActivity = "" }
+    ]
+    let html = renderSessions sessions |> renderNode
+    do! verifyDashboard "dashboard_sessions" html
+  }
+
+  testTask "renderSessions empty" {
+    let html = renderSessions [] |> renderNode
+    do! verifyDashboard "dashboard_sessions_empty" html
+  }
+
+  testTask "renderDiscoveredProjects with results" {
+    let discovered : DiscoveredProjects = {
+      WorkingDir = @"C:\Code\MyProj"
+      Solutions = [ "MyProj.sln" ]
+      Projects = [ "MyProj.fsproj"; "Tests.fsproj" ]
+    }
+    let html = renderDiscoveredProjects discovered |> renderNode
+    do! verifyDashboard "dashboard_discoveredProjects" html
+  }
+
+  testTask "renderDiscoveredProjects empty" {
+    let discovered : DiscoveredProjects = {
+      WorkingDir = @"C:\Code\Empty"
+      Solutions = []
+      Projects = []
+    }
+    let html = renderDiscoveredProjects discovered |> renderNode
+    do! verifyDashboard "dashboard_discoveredProjects_empty" html
+  }
+]
+
+
+[<Tests>]
+let allDashboardSnapshotTests = testList "Dashboard Snapshots" [
+  dashboardRenderSnapshotTests
+]

@@ -4,60 +4,61 @@ open System
 open System.Threading
 open SageFs
 
-/// Mutable focus state for terminal panes
+/// Immutable focus state for terminal panes
 type TerminalState = {
-  mutable Layout: TerminalLayout
-  mutable FocusIndex: int
-  mutable ScrollOffsets: Map<string, int>
+  Layout: TerminalLayout
+  Focus: PaneId
+  ScrollOffsets: Map<PaneId, int>
 }
 
 module TerminalState =
-  let paneIds = [| "output"; "sessions"; "diagnostics"; "editor" |]
-
   let create (rows: int) (cols: int) : TerminalState =
     { Layout = TerminalLayout.compute rows cols
-      FocusIndex = 3 // editor focused by default
+      Focus = PaneId.Editor
       ScrollOffsets = Map.empty }
 
-  let focusedId (state: TerminalState) =
-    paneIds.[state.FocusIndex % paneIds.Length]
+  let applyFocus (state: TerminalState) : TerminalState =
+    let focusId = state.Focus
+    { state with
+        Layout =
+          { state.Layout with
+              Panes =
+                state.Layout.Panes
+                |> List.map (fun p ->
+                  { p with Focused = p.PaneId = focusId }) } }
 
-  let cycleFocus (state: TerminalState) =
-    state.FocusIndex <- (state.FocusIndex + 1) % paneIds.Length
-    let focusId = focusedId state
-    state.Layout <-
-      { state.Layout with
-          Panes =
-            state.Layout.Panes
-            |> List.map (fun p ->
-              { p with Focused = p.RegionId = focusId }) }
+  let cycleFocus (state: TerminalState) : TerminalState =
+    { state with Focus = PaneId.next state.Focus }
+    |> applyFocus
 
-  let scroll (state: TerminalState) (delta: int) =
-    let id = focusedId state
+  let scroll (state: TerminalState) (delta: int) : TerminalState =
+    let id = state.Focus
     let current = state.ScrollOffsets |> Map.tryFind id |> Option.defaultValue 0
     let next = max 0 (current + delta)
-    state.ScrollOffsets <- state.ScrollOffsets |> Map.add id next
-    state.Layout <-
-      { state.Layout with
-          Panes =
-            state.Layout.Panes
-            |> List.map (fun p ->
-              if p.RegionId = id then
-                { p with ScrollOffset = next }
-              else p) }
+    let scrolls = state.ScrollOffsets |> Map.add id next
+    { state with
+        ScrollOffsets = scrolls
+        Layout =
+          { state.Layout with
+              Panes =
+                state.Layout.Panes
+                |> List.map (fun p ->
+                  if p.PaneId = id then
+                    { p with ScrollOffset = next }
+                  else p) } }
 
-  let resize (state: TerminalState) (rows: int) (cols: int) =
-    let focusId = focusedId state
-    state.Layout <- TerminalLayout.compute rows cols
-    state.Layout <-
-      { state.Layout with
-          Panes =
-            state.Layout.Panes
-            |> List.map (fun p ->
-              let scroll = state.ScrollOffsets |> Map.tryFind p.RegionId |> Option.defaultValue 0
-              { p with
-                  ScrollOffset = scroll
-                  Focused = p.RegionId = focusId }) }
+  let resize (state: TerminalState) (rows: int) (cols: int) : TerminalState =
+    let fresh = TerminalLayout.compute rows cols
+    { state with
+        Layout =
+          { fresh with
+              Panes =
+                fresh.Panes
+                |> List.map (fun p ->
+                  let scroll = state.ScrollOffsets |> Map.tryFind p.PaneId |> Option.defaultValue 0
+                  { p with
+                      ScrollOffset = scroll
+                      Focused = p.PaneId = state.Focus }) } }
 
 
 /// Set up the console for raw terminal input
@@ -89,7 +90,7 @@ let run
 
   let rows = Console.WindowHeight
   let cols = Console.WindowWidth
-  let state = TerminalState.create rows cols
+  let mutable state = TerminalState.create rows cols
 
   setupRawMode ()
 
@@ -143,7 +144,7 @@ let run
       let newRows = Console.WindowHeight
       let newCols = Console.WindowWidth
       if newRows <> state.Layout.Rows || newCols <> state.Layout.Cols then
-        TerminalState.resize state newRows newCols
+        state <- TerminalState.resize state newRows newCols
         prevFrame <- "" // force full redraw
         lock TerminalUIState.consoleLock (fun () ->
           Console.Write(AnsiCodes.clearScreen))
@@ -160,13 +161,13 @@ let run
             Console.Write(AnsiCodes.clearScreen))
           render ()
         | Some TerminalCommand.CycleFocus ->
-          TerminalState.cycleFocus state
+          state <- TerminalState.cycleFocus state
           render ()
         | Some TerminalCommand.ScrollUp ->
-          TerminalState.scroll state -3
+          state <- TerminalState.scroll state -3
           render ()
         | Some TerminalCommand.ScrollDown ->
-          TerminalState.scroll state 3
+          state <- TerminalState.scroll state 3
           render ()
         | Some (TerminalCommand.Action action) ->
           elmRuntime.Dispatch (SageFsMsg.Editor action)

@@ -53,7 +53,7 @@ module AnsiCodes =
   let boxTop title width borderColor =
     let titleLen = min (String.length title) (width - 4)
     let t = if titleLen > 0 then title.Substring(0, titleLen) else ""
-    let lineLen = max 0 (width - titleLen - 4)
+    let lineLen = max 0 (width - titleLen - 5)
     sprintf "%s%s%s %s%s%s %s%s"
       borderColor boxTL boxH
       (fg256 255) t
@@ -110,9 +110,43 @@ module AnsiCodes =
       true
 
 
+/// Strongly-typed pane identifier — eliminates stringly-typed region matching
+[<RequireQualifiedAccess>]
+type PaneId =
+  | Output
+  | Sessions
+  | Diagnostics
+  | Editor
+
+module PaneId =
+  let all = [| PaneId.Output; PaneId.Sessions; PaneId.Diagnostics; PaneId.Editor |]
+
+  let toRegionId = function
+    | PaneId.Output -> "output"
+    | PaneId.Sessions -> "sessions"
+    | PaneId.Diagnostics -> "diagnostics"
+    | PaneId.Editor -> "editor"
+
+  let fromRegionId = function
+    | "output" -> Some PaneId.Output
+    | "sessions" -> Some PaneId.Sessions
+    | "diagnostics" -> Some PaneId.Diagnostics
+    | "editor" -> Some PaneId.Editor
+    | _ -> None
+
+  let next (current: PaneId) : PaneId =
+    let idx = all |> Array.findIndex ((=) current)
+    all.[(idx + 1) % all.Length]
+
+  let displayName = function
+    | PaneId.Output -> "Output"
+    | PaneId.Sessions -> "Sessions"
+    | PaneId.Diagnostics -> "Diagnostics"
+    | PaneId.Editor -> "Editor"
+
 /// A positioned region in the terminal
 type TerminalPane = {
-  RegionId: string
+  PaneId: PaneId
   Title: string
   Row: int
   Col: int
@@ -142,19 +176,19 @@ module TerminalLayout =
     let diagH = contentH - sessH |> max 2
 
     let output =
-      { RegionId = "output"; Title = "Output"
+      { PaneId = PaneId.Output; Title = "Output"
         Row = 1; Col = 1; Width = leftW; Height = contentH
         ScrollOffset = 0; Focused = false }
     let sessions =
-      { RegionId = "sessions"; Title = "Sessions"
+      { PaneId = PaneId.Sessions; Title = "Sessions"
         Row = 1; Col = leftW + 1; Width = rightW; Height = sessH
         ScrollOffset = 0; Focused = false }
     let diagnostics =
-      { RegionId = "diagnostics"; Title = "Diagnostics"
+      { PaneId = PaneId.Diagnostics; Title = "Diagnostics"
         Row = 1 + sessH; Col = leftW + 1; Width = rightW; Height = diagH
         ScrollOffset = 0; Focused = false }
     let editor =
-      { RegionId = "editor"; Title = "Editor"
+      { PaneId = PaneId.Editor; Title = "Editor"
         Row = 1 + contentH; Col = 1; Width = cols; Height = editorH
         ScrollOffset = 0; Focused = true }
 
@@ -220,16 +254,16 @@ module DiagnosticsColorizer =
 
 /// Content colorization dispatcher — applies per-region coloring
 module ContentColorizer =
-  let colorizeLine (regionId: string) (line: string) : string =
-    match regionId with
-    | "output" -> OutputColorizer.colorize line
-    | "diagnostics" -> DiagnosticsColorizer.colorize line
-    | "sessions" ->
+  let colorizeLine (paneId: PaneId) (line: string) : string =
+    match paneId with
+    | PaneId.Output -> OutputColorizer.colorize line
+    | PaneId.Diagnostics -> DiagnosticsColorizer.colorize line
+    | PaneId.Sessions ->
       if line.Contains("*") then
         sprintf "%s%s%s" AnsiCodes.green line AnsiCodes.reset
       else
         sprintf "%s%s%s" AnsiCodes.dimWhite line AnsiCodes.reset
-    | _ -> line
+    | PaneId.Editor -> line
 
 
 /// Pure terminal rendering functions
@@ -295,7 +329,7 @@ module TerminalRender =
     for i in 0 .. contentHeight - 1 do
       sb.Append(AnsiCodes.moveTo (pane.Row + 1 + i) pane.Col) |> ignore
       let rawLine = if i < lines.Length then lines.[i] else ""
-      let line = ContentColorizer.colorizeLine pane.RegionId rawLine
+      let line = ContentColorizer.colorizeLine pane.PaneId rawLine
       let inner = fitToWidth (pane.Width - 2) line
       sb.Append(sprintf "%s%s%s%s%s%s"
         borderColor AnsiCodes.boxV AnsiCodes.reset
@@ -323,7 +357,7 @@ module TerminalRender =
     sb.Append(AnsiCodes.hideCursor) |> ignore
 
     for pane in layout.Panes do
-      let region = regions |> List.tryFind (fun r -> r.Id = pane.RegionId)
+      let region = regions |> List.tryFind (fun r -> r.Id = PaneId.toRegionId pane.PaneId)
       sb.Append(renderPane pane region) |> ignore
 
     // Find focused pane for status bar
@@ -335,7 +369,7 @@ module TerminalRender =
     sb.Append(renderStatusBar layout.StatusBarRow layout.Cols sessionState evalCount focusedName) |> ignore
 
     // Position cursor in editor if focused
-    let editorPane = layout.Panes |> List.tryFind (fun p -> p.RegionId = "editor" && p.Focused)
+    let editorPane = layout.Panes |> List.tryFind (fun p -> p.PaneId = PaneId.Editor && p.Focused)
     match editorPane with
     | Some ep ->
       sb.Append(AnsiCodes.moveTo (ep.Row + 1) (ep.Col + 1)) |> ignore
