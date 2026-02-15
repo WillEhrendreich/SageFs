@@ -81,7 +81,7 @@ http://localhost:37749/sse
 | `explore_type` | Browse members, constructors, and properties of a .NET type. |
 | `get_elm_state` | Query the Elm model's render regions (editor, output, diagnostics, sessions). |
 | `reset_fsi_session` | Soft reset — fresh session, DLL locks retained. |
-| `hard_reset_fsi_session` | Full reset — release DLL locks, optionally rebuild, fresh session. |
+| `hard_reset_fsi_session` | Full reset — release DLL locks, optionally rebuild, fresh session. Warmup timeout prevents stuck state. |
 | `create_session` | Create a new isolated worker session (daemon mode). |
 | `list_sessions` | List all active worker sessions with metadata. |
 | `stop_session` | Stop a specific worker session by ID. |
@@ -194,9 +194,10 @@ sagefs                          # Auto-detect in current directory
 
 ### ⚡ **REPL Experience**
 
-- Autocompletion and syntax highlighting
-- Command history
-- Multi-line editing
+`sagefs connect` provides a REPL client that connects to the running daemon over HTTP:
+- Command history (persisted in `~/.SageFs/connect_history`)
+- `#reset`, `#hard-reset`, `#status` meta-commands
+- Auto-starts the daemon if not running
 
 ### 🎯 **Computation Expression Simplification**
 
@@ -257,9 +258,13 @@ sagefs --no-watch               # Disable file watching
 ### Daemon Mode
 
 ```bash
-sagefs -d                       # Start headless daemon (no REPL)
-sagefs -d --proj MyApp.fsproj   # Daemon with project loaded
+sagefs --proj MyApp.fsproj      # Daemon by default
+sagefs -d --proj MyApp.fsproj   # Explicit daemon flag (backward compat alias)
+sagefs --supervised             # Run under watchdog supervisor (auto-restart on crash)
 sagefs --bare                   # Bare session — no project/solution loading, quick startup
+sagefs connect                  # Connect REPL client to running daemon
+sagefs stop                     # Stop running daemon
+sagefs status                   # Show daemon info
 ```
 
 SageFs runs as a daemon by default — a headless server with MCP + HTTP endpoints and a **watchdog** that keeps it alive. If the process crashes, the watchdog restarts it automatically with exponential backoff.
@@ -345,10 +350,13 @@ dotnet run --project SageFs.Tests -- --filter "WarmUp"
 
 Tests include:
 - **Snapshot tests** (Verify) — locked-in output formats for echo, eval results, status
-- **Property-based tests** (FsCheck via Expecto) — warm-up retry, statement splitting
+- **Property-based tests** (FsCheck via Expecto) — warm-up retry, statement splitting, render contracts
 - **Unit tests** — MCP adapter formatting, benign error detection, diagnostics
+- **ElmLoop resilience tests** — Update/Render/OnModelChanged/Effect throw survival, multi-failure sequences
 - **Watchdog tests** — restart decisions, grace periods, exponential backoff, give-up
 - **File watcher tests** — glob pattern matching, trigger/exclude logic, change action routing
+- **Editor tests** — cursor movement, text editing, selection operations
+- **Session tests** — session operations, display, reset behavior
 
 ---
 
@@ -403,13 +411,13 @@ Core components:
 ## 📊 Project Status
 
 **Target Framework**: .NET 10.0
-**Stability**: Active development — 418 tests passing
+**Stability**: Active development — 350+ tests passing
 **Test Framework**: Expecto + Verify snapshots + FsCheck property tests
 
 ### What's Done
 - ✅ Daemon with sub-process worker sessions
 - ✅ SessionManager (Erlang-style supervisor with exponential backoff restart)
-- ✅ MCP server with 14 tools (eval, diagnostics, completions, session management)
+- ✅ MCP server with 17 tools (eval, diagnostics, completions, session management, namespace/type exploration, Elm state)
 - ✅ Affordance-driven state machine (tools gated by session lifecycle)
 - ✅ DDD type safety (SageFsError, SessionMode, CompletionKind, SessionStatus DUs)
 - ✅ Elm Architecture core — SageFsMsg, SageFsModel, SageFsUpdate, SageFsRender, SageFsEffectHandler
@@ -444,6 +452,10 @@ Core components:
 - ✅ Dashboard event-driven SSE — instant push updates instead of polling
 - ✅ Dashboard sessions panel — live view of all FSI sessions with status
 - ✅ Dashboard inline eval results — immediate feedback below code input
+- ✅ ElmLoop resilience — try/catch guards prevent dispatch loop crashes from callback exceptions
+- ✅ Hard reset warmup timeout (5 min) — prevents stuck WarmingUp state, transitions to Faulted on timeout
+- ✅ Hard reset progress logging — phase-by-phase status (build, shadow copy, FSI creation, namespace scanning)
+- ✅ Stale shadow directory cleanup — auto-removes old `sagefs-shadow-*` temp dirs during hard reset
 
 ### What's Next
 - 🔲 Multi-session management — create/switch/stop sessions from any frontend
