@@ -489,22 +489,21 @@ let private parseDiagLines (content: string) =
 
 
 
+let private renderRegionForSse (region: RenderRegion) =
+  match region.Id with
+  | "output" -> Some (renderOutput (parseOutputLines region.Content))
+  | "diagnostics" -> Some (renderDiagnostics (parseDiagLines region.Content))
+  | "sessions" -> Some (renderSessions (parseSessionLines region.Content))
+  | _ -> None
+
 let private pushRegions
   (ctx: HttpContext)
   (regions: RenderRegion list)
   = task {
-    match regions |> List.tryFind (fun r -> r.Id = "output") with
-    | Some r ->
-      do! Response.sseHtmlElements ctx (renderOutput (parseOutputLines r.Content))
-    | None -> ()
-    match regions |> List.tryFind (fun r -> r.Id = "diagnostics") with
-    | Some r ->
-      do! Response.sseHtmlElements ctx (renderDiagnostics (parseDiagLines r.Content))
-    | None -> ()
-    match regions |> List.tryFind (fun r -> r.Id = "sessions") with
-    | Some r ->
-      do! Response.sseHtmlElements ctx (renderSessions (parseSessionLines r.Content))
-    | None -> ()
+    for region in regions do
+      match renderRegionForSse region with
+      | Some html -> do! Response.sseHtmlElements ctx html
+      | None -> ()
   }
 
 /// Create the SSE stream handler that pushes Elm state to the browser.
