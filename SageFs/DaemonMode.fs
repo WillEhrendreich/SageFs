@@ -129,6 +129,14 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
   // Phase 2: Add middleware — blocks until warm-up completes
   do! ActorCreation.addMiddleware result actorArgs.Middleware
 
+  // Notify Elm loop that warmup is done
+  let warmupFailures = result.GetWarmupFailures()
+  elmRuntime.Dispatch (SageFsMsg.Event (
+    SageFsEvent.WarmupCompleted (
+      TimeSpan.Zero, warmupFailures |> List.map (fun f -> sprintf "%s: %s" f.Name f.Error))))
+  elmRuntime.Dispatch (SageFsMsg.Event (
+    SageFsEvent.SessionStatusChanged (sessionId, SessionDisplayStatus.Running)))
+
   // Start file watcher for incremental reload on source changes
   let noWatch = args |> List.exists (function Args.Arguments.No_Watch -> true | _ -> false)
   let _fileWatcher =
@@ -138,17 +146,30 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
       let onFileChanged (change: SageFs.FileWatcher.FileChange) =
         match SageFs.FileWatcher.fileChangeAction change with
         | SageFs.FileWatcher.FileChangeAction.Reload filePath ->
-          eprintfn "[INFO] File changed: %s -- reloading via #load" (IO.Path.GetFileName filePath)
+          let fileName = IO.Path.GetFileName filePath
+          eprintfn "[INFO] File changed: %s -- reloading via #load" fileName
+          elmRuntime.Dispatch (SageFsMsg.Event (
+            SageFsEvent.FileChanged (filePath, FileWatchAction.Changed)))
           let code = sprintf "#load @\"%s\"" filePath
           let request : AppState.EvalRequest = { Code = code; Args = Map.empty }
+          let sw = System.Diagnostics.Stopwatch.StartNew()
           appActor.PostAndAsyncReply(fun reply -> AppState.Eval(request, System.Threading.CancellationToken.None, reply))
           |> Async.RunSynchronously
           |> fun resp ->
+            sw.Stop()
             match resp.EvaluationResult with
-            | Ok _ -> eprintfn "[INFO] Reloaded %s" (IO.Path.GetFileName filePath)
-            | Error ex -> eprintfn "[WARN] Reload error in %s: %s" (IO.Path.GetFileName filePath) ex.Message
+            | Ok _ ->
+              eprintfn "[INFO] Reloaded %s" fileName
+              elmRuntime.Dispatch (SageFsMsg.Event (
+                SageFsEvent.FileReloaded (fileName, sw.Elapsed, Ok "reloaded")))
+            | Error ex ->
+              eprintfn "[WARN] Reload error in %s: %s" fileName ex.Message
+              elmRuntime.Dispatch (SageFsMsg.Event (
+                SageFsEvent.FileReloaded (fileName, sw.Elapsed, Error ex.Message)))
         | SageFs.FileWatcher.FileChangeAction.SoftReset ->
           eprintfn "[INFO] Project file changed -- resetting session"
+          elmRuntime.Dispatch (SageFsMsg.Event (
+            SageFsEvent.SessionStatusChanged (sessionId, SessionDisplayStatus.Restarting)))
           appActor.PostAndAsyncReply(fun reply -> AppState.ResetSession(reply))
           |> Async.RunSynchronously
           |> ignore
