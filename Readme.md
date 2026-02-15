@@ -50,6 +50,7 @@ SageFs runs as a **daemon with a watchdog** — always alive, always watching. E
 - ✅ Sub-process session management (Erlang-style supervisor)
 - ✅ Code diagnostics and completions via MCP
 - ✅ Watchdog keeps the daemon alive — crashes restart automatically
+- ✅ Live dashboard at `http://localhost:{port+1}/dashboard` (Falco + Datastar SSE)
 
 ---
 
@@ -267,6 +268,23 @@ Sub-process worker sessions can be created via MCP tools (`create_session`, `lis
 
 The REPL, terminal UI, web frontend, Neovim integration, and AI agents are all **clients** that connect to the running daemon — they don't embed SageFs, they talk to it.
 
+### 🖥️ Live Dashboard
+
+SageFs includes a **Falco + Datastar** live dashboard that runs alongside the MCP server:
+
+```bash
+# Dashboard is auto-started on MCP port + 1
+# If MCP runs on 37749, dashboard is at:
+http://localhost:37750/dashboard
+```
+
+The dashboard uses **Server-Sent Events (SSE)** with **Datastar** for real-time DOM morphing:
+- **Session status** — current state (Ready/WarmingUp/Evaluating/Faulted)
+- **Eval stats** — count, avg/min/max duration
+- **Output panel** — live streaming of eval results and errors
+- **Diagnostics panel** — compiler warnings and errors
+- **Eval input** — submit F# code directly from the browser
+
 ### ASP.NET Features
 
 ```bash
@@ -329,6 +347,7 @@ Tests include:
 - **Snapshot tests** (Verify) — locked-in output formats for echo, eval results, status
 - **Property-based tests** (FsCheck via Expecto) — warm-up retry, statement splitting
 - **Unit tests** — MCP adapter formatting, benign error detection, diagnostics
+- **Watchdog tests** — restart decisions, grace periods, exponential backoff, give-up
 - **File watcher tests** — glob pattern matching, trigger/exclude logic, change action routing
 
 ---
@@ -369,6 +388,7 @@ There is no "embedded mode". The daemon IS SageFs.
 Core components:
 - **F# Interactive Engine** — FCS-based eval with middleware pipeline
 - **MCP Server** — HTTP/SSE endpoints for AI agents and clients
+- **Live Dashboard** — Falco + Datastar SSE dashboard at `/dashboard`
 - **Watchdog** — Monitors daemon health, restarts on crash with backoff
 - **SessionManager** — Erlang-style supervisor: spawn/monitor/restart worker sessions
 - **Affordance State Machine** — `SessionState` DU controls tool availability per lifecycle phase
@@ -383,7 +403,7 @@ Core components:
 ## 📊 Project Status
 
 **Target Framework**: .NET 10.0
-**Stability**: Active development — 410 tests passing
+**Stability**: Active development — 418 tests passing
 **Test Framework**: Expecto + Verify snapshots + FsCheck property tests
 
 ### What's Done
@@ -413,9 +433,11 @@ Core components:
 - ✅ OnModelChanged terminal logging — daemon console shows Elm state changes
 - ✅ File watcher → Elm loop — FileChanged/FileReloaded events with timing and status
 - ✅ Warmup → Elm loop — WarmupCompleted and SessionStatusChanged events
+- ✅ Watchdog module (pure + impure) with TDD — restart decisions, grace periods, exponential backoff
+- ✅ `--supervised` flag for daemon mode with auto-restart
+- ✅ Live dashboard (Falco + Datastar SSE) — session status, eval stats, output, diagnostics, browser eval
 
 ### What's Next
-- 🔲 Watchdog process for daemon auto-restart
 - 🔲 Remove embedded mode — daemon-only architecture
 - 🔲 REPL as a client connecting to daemon
 - 🔲 Replace PrettyPrompt with custom rendering — PrettyPrompt assumes it owns the terminal and can't render into a grid region, making it incompatible with the multi-frontend architecture
@@ -448,7 +470,9 @@ MIT License — see [LICENSE](LICENSE) for details
 ## 🙏 Acknowledgments
 
 - [FsiX](https://github.com/soweli-p/FsiX) — The original F# Interactive experience that inspired SageFs
-- [PrettyPrompt](https://github.com/waf/PrettyPrompt) — Modern REPL experience
+- [PrettyPrompt](https://github.com/waf/PrettyPrompt) — Modern REPL experience (being phased out)
+- [Falco](https://github.com/pimbrouwers/Falco) — Functional web framework for the dashboard
+- [Falco.Datastar](https://github.com/pimbrouwers/Falco.Datastar) — Datastar SSE integration for live UI
 - [Ionide.ProjInfo](https://github.com/ionide/proj-info/) — Project file parsing
 - [ModelContextProtocol](https://modelcontextprotocol.io/) — AI integration standard
 
