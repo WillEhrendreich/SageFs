@@ -5,6 +5,7 @@ open System.Threading
 open SageFs
 open SageFs.Server
 open Falco
+open Microsoft.Extensions.Logging
 
 /// Run SageFs as a headless daemon.
 /// MCP server + SessionManager + Dashboard — all frontends are clients.
@@ -200,6 +201,11 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
   let dashboardTask = task {
     try
       let builder = Microsoft.AspNetCore.Builder.WebApplication.CreateBuilder()
+      // Suppress ASP.NET Core info logging (routing, hosting) for dashboard
+      builder.Logging
+        .AddFilter("Microsoft.AspNetCore", LogLevel.Warning)
+        .AddFilter("Microsoft.Hosting", LogLevel.Warning)
+      |> ignore
       let app = builder.Build()
       app.Urls.Add(sprintf "http://localhost:%d" dashboardPort)
       app.UseRouting().UseFalco(dashboardEndpoints) |> ignore
