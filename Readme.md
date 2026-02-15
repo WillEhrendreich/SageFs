@@ -379,9 +379,9 @@ SageFs is a **daemon-first architecture**. The server is always the center — e
 
 ### How It Works
 
-1. **Daemon Process** — The core. Runs FSI engine, MCP server, file watcher, hot reload. Managed by a watchdog that auto-restarts on crash with exponential backoff.
+1. **Daemon Process** — The core. Runs FSI engine, MCP server, file watcher, hot reload, live dashboard. Managed by a watchdog that auto-restarts on crash with exponential backoff.
 2. **Worker Sessions** — Isolated FSI sessions spawned as sub-processes, supervised Erlang-style by the SessionManager.
-3. **Clients** — REPL, web UI, Neovim, VSCode, AI agents all connect to the daemon via MCP/HTTP/SSE. They don't embed SageFs — they're windows into it.
+3. **Clients** — `SageFs connect` (REPL over HTTP), web dashboard, Neovim, VSCode, AI agents all connect to the daemon. They don't embed SageFs — they're windows into it.
 
 There is no "embedded mode". The daemon IS SageFs.
 
@@ -415,7 +415,7 @@ Core components:
 - ✅ Elm Architecture core — SageFsMsg, SageFsModel, SageFsUpdate, SageFsRender, SageFsEffectHandler
 - ✅ SageFsEffectHandler — bridges pure Elm loop to SessionManager/worker infrastructure
 - ✅ Collectible AssemblyLoadContext for namespace discovery (prevents stale DLLs after rebuild)
-- ✅ Build timeout (120s) prevents hard reset from hanging forever
+- ✅ Activity-based build timeout (30s inactivity / 10min max) — won't kill long-but-active builds
 - ✅ File watcher with incremental `#load` reload (~100ms, not hard reset)
 - ✅ Hot reload (redefine functions, refresh to see changes)
 - ✅ Project/solution loading (`.fsproj`, `.sln`, `.slnx`)
@@ -436,11 +436,13 @@ Core components:
 - ✅ Watchdog module (pure + impure) with TDD — restart decisions, grace periods, exponential backoff
 - ✅ `--supervised` flag for daemon mode with auto-restart
 - ✅ Live dashboard (Falco + Datastar SSE) — session status, eval stats, output, diagnostics, browser eval
+- ✅ Daemon-first architecture — `SageFs` starts daemon by default, `-d` is just an alias
+- ✅ `SageFs connect` — REPL client over HTTP to running daemon (auto-starts daemon if needed)
+- ✅ Persistent REPL history in `~/.SageFs/connect_history`
 
 ### What's Next
-- 🔲 Remove embedded mode — daemon-only architecture
-- 🔲 REPL as a client connecting to daemon
 - 🔲 Replace PrettyPrompt with custom rendering — PrettyPrompt assumes it owns the terminal and can't render into a grid region, making it incompatible with the multi-frontend architecture
+- 🔲 Remove `--repl` legacy mode entirely
 - 🔲 Frontend subscription — MCP SSE adapter pushes state changes to connected AI agents
 
 ### Where It's Going
