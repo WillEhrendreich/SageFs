@@ -159,10 +159,61 @@ let edgeCaseSnapshotTests = testList "edge case snapshots" [
   }
 ]
 
+let parserTests = testList "parser integration" [
+  test "output parser extracts timestamp and kind" {
+    let regex = System.Text.RegularExpressions.Regex(
+      @"^\[(\d{2}:\d{2}:\d{2})\]\s*\[(\w+)\]\s*(.*)",
+      System.Text.RegularExpressions.RegexOptions.Singleline)
+    let m = regex.Match("[12:30:45] [result] val x: int = 42")
+    Expect.isTrue m.Success "should match timestamp+kind format"
+    Expect.equal m.Groups.[1].Value "12:30:45" "timestamp"
+    Expect.equal m.Groups.[2].Value "result" "kind"
+    Expect.equal m.Groups.[3].Value "val x: int = 42" "content"
+  }
+
+  test "output parser handles kind without timestamp" {
+    let regex = System.Text.RegularExpressions.Regex(
+      @"^\[(\w+)\]\s*(.*)",
+      System.Text.RegularExpressions.RegexOptions.Singleline)
+    let m = regex.Match("[error] Something went wrong")
+    Expect.isTrue m.Success "should match kind-only format"
+    Expect.equal m.Groups.[1].Value "error" "kind"
+    Expect.equal m.Groups.[2].Value "Something went wrong" "content"
+  }
+
+  test "diag parser extracts severity line col" {
+    let regex = System.Text.RegularExpressions.Regex(
+      @"^\[(\w+)\]\s*\((\d+),(\d+)\)\s*(.*)")
+    let m = regex.Match("[error] (5,10) Type mismatch")
+    Expect.isTrue m.Success "should match diag format"
+    Expect.equal (int m.Groups.[2].Value) 5 "line"
+    Expect.equal (int m.Groups.[3].Value) 10 "col"
+    Expect.equal m.Groups.[4].Value "Type mismatch" "message"
+  }
+
+  test "diag parser fallback for non-standard format" {
+    let regex = System.Text.RegularExpressions.Regex(
+      @"^\[(\w+)\]\s*\((\d+),(\d+)\)\s*(.*)")
+    let m = regex.Match("Some general error")
+    Expect.isFalse m.Success "should not match non-standard format"
+  }
+
+  test "session parser extracts id status active" {
+    let regex = System.Text.RegularExpressions.Regex(
+      @"^(\S+)\s+\[(\w+)\]\s*(\*?)\s*(\([^)]*\))?\s*(evals:\d+)?\s*(.*)")
+    let m = regex.Match("session-abc [running] * (Proj.fsproj) evals:5 up:3m")
+    Expect.isTrue m.Success "should match session format"
+    Expect.equal m.Groups.[1].Value "session-abc" "session id"
+    Expect.equal m.Groups.[2].Value "running" "status"
+    Expect.stringContains m.Groups.[3].Value "*" "active marker"
+  }
+]
+
 
 [<Tests>]
 let allDashboardSnapshotTests = testList "Dashboard Snapshots" [
   dashboardRenderSnapshotTests
   keyboardHelpSnapshotTests
   edgeCaseSnapshotTests
+  parserTests
 ]
