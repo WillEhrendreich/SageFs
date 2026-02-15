@@ -14,6 +14,75 @@ open SageFs.Affordances
 
 module FalcoResponse = Falco.Response
 
+/// Discriminated union for output line kinds — replaces stringly-typed matching.
+type OutputLineKind =
+  | ResultLine
+  | ErrorLine
+  | InfoLine
+  | SystemLine
+
+module OutputLineKind =
+  let fromString (s: string) =
+    match s.ToLowerInvariant() with
+    | "result" -> ResultLine
+    | "error" -> ErrorLine
+    | "info" -> InfoLine
+    | _ -> SystemLine
+
+  let toCssClass = function
+    | ResultLine -> "output-result"
+    | ErrorLine -> "output-error"
+    | InfoLine -> "output-info"
+    | SystemLine -> "output-system"
+
+  let toIcon = function
+    | ResultLine -> "✓ "
+    | ErrorLine -> "✗ "
+    | InfoLine -> "ℹ "
+    | SystemLine -> "· "
+
+/// Parsed output line with typed kind.
+type OutputLine = {
+  Timestamp: string option
+  Kind: OutputLineKind
+  Text: string
+}
+
+/// Discriminated union for diagnostic severity.
+type DiagSeverity =
+  | DiagError
+  | DiagWarning
+
+module DiagSeverity =
+  let fromString (s: string) =
+    match s.ToLowerInvariant() with
+    | "error" -> DiagError
+    | _ -> DiagWarning
+
+  let toCssClass = function
+    | DiagError -> "diag-error"
+    | DiagWarning -> "diag-warning"
+
+  let toIcon = function
+    | DiagError -> "✗"
+    | DiagWarning -> "⚠"
+
+/// Parsed diagnostic with typed severity.
+type Diagnostic = {
+  Severity: DiagSeverity
+  Message: string
+  Line: int
+  Col: int
+}
+
+/// Eval statistics view model — pre-computed for rendering.
+type EvalStatsView = {
+  Count: int
+  AvgMs: float
+  MinMs: float
+  MaxMs: float
+}
+
 /// Discover .fsproj and .sln/.slnx files in a directory.
 type DiscoveredProjects = {
   WorkingDir: string
@@ -306,79 +375,67 @@ let renderSessionStatus (sessionState: string) (sessionId: string) (projectCount
   ]
 
 /// Render eval stats as an HTML fragment.
-let renderEvalStats (evalCount: int) (avgMs: float) (minMs: float) (maxMs: float) =
+let renderEvalStats (stats: EvalStatsView) =
   Elem.div [ Attr.id "eval-stats" ] [
     Elem.div [ Attr.style "display: flex; gap: 1rem; align-items: baseline;" ] [
       Elem.span [ Attr.style "font-size: 1.5rem; font-weight: bold; color: var(--accent);" ] [
-        Text.raw (sprintf "%d" evalCount)
+        Text.raw (sprintf "%d" stats.Count)
       ]
       Elem.span [ Attr.class' "meta" ] [ Text.raw "evals" ]
     ]
     Elem.div [ Attr.style "display: flex; gap: 1rem; margin-top: 0.25rem;" ] [
       Elem.span [ Attr.class' "meta" ] [
-        Text.raw (sprintf "avg %.0fms" avgMs)
+        Text.raw (sprintf "avg %.0fms" stats.AvgMs)
       ]
       Elem.span [ Attr.class' "meta" ] [
-        Text.raw (sprintf "min %.0fms" minMs)
+        Text.raw (sprintf "min %.0fms" stats.MinMs)
       ]
       Elem.span [ Attr.class' "meta" ] [
-        Text.raw (sprintf "max %.0fms" maxMs)
+        Text.raw (sprintf "max %.0fms" stats.MaxMs)
       ]
     ]
   ]
 
 /// Render output lines as an HTML fragment.
-let renderOutput (lines: (string option * string * string) list) =
-  let lineClass kind =
-    match kind with
-    | "Result" -> "output-result"
-    | "Error" -> "output-error"
-    | "Info" -> "output-info"
-    | _ -> "output-system"
-  let lineIcon kind =
-    match kind with
-    | "Result" -> "✓ "
-    | "Error" -> "✗ "
-    | "Info" -> "ℹ "
-    | _ -> "· "
+let renderOutput (lines: OutputLine list) =
   Elem.div [ Attr.id "output-panel" ] [
     if lines.IsEmpty then
       Text.raw "No output yet"
     else
-      yield! lines |> List.map (fun (ts, kind, text) ->
-        Elem.div [ Attr.class' (sprintf "output-line %s" (lineClass kind)) ] [
-          Elem.span [ Attr.class' (sprintf "output-icon %s" (lineClass kind)) ] [
-            Text.raw (lineIcon kind)
+      yield! lines |> List.map (fun line ->
+        let css = OutputLineKind.toCssClass line.Kind
+        Elem.div [ Attr.class' (sprintf "output-line %s" css) ] [
+          Elem.span [ Attr.class' (sprintf "output-icon %s" css) ] [
+            Text.raw (OutputLineKind.toIcon line.Kind)
           ]
-          match ts with
+          match line.Timestamp with
           | Some t ->
             Elem.span [ Attr.class' "meta"; Attr.style "margin-right: 0.5rem;" ] [
               Text.raw t
             ]
           | None -> ()
-          Text.raw text
+          Text.raw line.Text
         ])
   ]
 
 /// Render diagnostics as an HTML fragment.
-let renderDiagnostics (diags: (string * string * int * int) list) =
+let renderDiagnostics (diags: Diagnostic list) =
   Elem.div [ Attr.id "diagnostics-panel" ] [
     if diags.IsEmpty then
       Text.raw "No diagnostics"
     else
-      yield! diags |> List.map (fun (severity, message, line, col) ->
-        let cls = if severity = "Error" then "diag-error" else "diag-warning"
-        let icon = if severity = "Error" then "✗" else "⚠"
+      yield! diags |> List.map (fun diag ->
+        let cls = DiagSeverity.toCssClass diag.Severity
         Elem.div [ Attr.class' (sprintf "diag %s" cls) ] [
           Elem.span [ Attr.style "margin-right: 0.25rem;" ] [
-            Text.raw icon
+            Text.raw (DiagSeverity.toIcon diag.Severity)
           ]
-          if line > 0 || col > 0 then
+          if diag.Line > 0 || diag.Col > 0 then
             Elem.span [ Attr.class' "diag-location" ] [
-              Text.raw (sprintf "L%d:%d" line col)
+              Text.raw (sprintf "L%d:%d" diag.Line diag.Col)
             ]
           Elem.span [] [
-            Text.raw (sprintf " %s" message)
+            Text.raw (sprintf " %s" diag.Message)
           ]
         ])
   ]
@@ -500,7 +557,7 @@ let renderSessions (sessions: ParsedSession list) =
           ])
   ]
 
-let private parseOutputLines (content: string) =
+let private parseOutputLines (content: string) : OutputLine list =
   let tsKindRegex = Regex(@"^\[(\d{2}:\d{2}:\d{2})\]\s*\[(\w+)\]\s*(.*)", RegexOptions.Singleline)
   let kindOnlyRegex = Regex(@"^\[(\w+)\]\s*(.*)", RegexOptions.Singleline)
   content.Split('\n')
@@ -508,42 +565,35 @@ let private parseOutputLines (content: string) =
   |> Array.map (fun (l: string) ->
     let m = tsKindRegex.Match(l)
     if m.Success then
-      let kind =
-        match m.Groups.[2].Value.ToLowerInvariant() with
-        | "result" -> "Result"
-        | "error" -> "Error"
-        | "info" -> "Info"
-        | _ -> "System"
-      Some m.Groups.[1].Value, kind, m.Groups.[3].Value
+      { Timestamp = Some m.Groups.[1].Value
+        Kind = OutputLineKind.fromString m.Groups.[2].Value
+        Text = m.Groups.[3].Value }
     else
       let m2 = kindOnlyRegex.Match(l)
       if m2.Success then
-        let kind =
-          match m2.Groups.[1].Value.ToLowerInvariant() with
-          | "result" -> "Result"
-          | "error" -> "Error"
-          | "info" -> "Info"
-          | _ -> "System"
-        None, kind, m2.Groups.[2].Value
+        { Timestamp = None
+          Kind = OutputLineKind.fromString m2.Groups.[1].Value
+          Text = m2.Groups.[2].Value }
       else
-        None, "Result", l)
+        { Timestamp = None; Kind = ResultLine; Text = l })
   |> Array.toList
 
-let private parseDiagLines (content: string) =
+let private parseDiagLines (content: string) : Diagnostic list =
   let diagRegex = Regex(@"^\[(\w+)\]\s*\((\d+),(\d+)\)\s*(.*)")
   content.Split('\n')
   |> Array.filter (fun (l: string) -> l.Length > 0)
   |> Array.map (fun (l: string) ->
     let m = diagRegex.Match(l)
     if m.Success then
-      let severity = if m.Groups.[1].Value = "error" then "Error" else "Warning"
-      let line = int m.Groups.[2].Value
-      let col = int m.Groups.[3].Value
-      let message = m.Groups.[4].Value
-      severity, message, line, col
+      { Severity = DiagSeverity.fromString m.Groups.[1].Value
+        Message = m.Groups.[4].Value
+        Line = int m.Groups.[2].Value
+        Col = int m.Groups.[3].Value }
     else
-      let severity = if l.Contains("[error]") then "Error" else "Warning"
-      severity, l, 0, 0)
+      { Severity = if l.Contains("[error]") then DiagError else DiagWarning
+        Message = l
+        Line = 0
+        Col = 0 })
   |> Array.toList
 
 
@@ -568,7 +618,7 @@ let private pushRegions
 /// Create the SSE stream handler that pushes Elm state to the browser.
 let createStreamHandler
   (getSessionState: unit -> SessionState)
-  (getEvalStats: unit -> EvalStats)
+  (getEvalStats: unit -> SageFs.Affordances.EvalStats)
   (sessionId: string)
   (projectCount: int)
   (getElmRegions: unit -> RenderRegion list option)
@@ -598,10 +648,10 @@ let createStreamHandler
         renderSessionStatus stateStr sessionId projectCount)
       do! Response.sseHtmlElements ctx (
         renderEvalStats
-          stats.EvalCount
-          avgMs
-          stats.MinDuration.TotalMilliseconds
-          stats.MaxDuration.TotalMilliseconds)
+          { Count = stats.EvalCount
+            AvgMs = avgMs
+            MinMs = stats.MinDuration.TotalMilliseconds
+            MaxMs = stats.MaxDuration.TotalMilliseconds })
       // Push connection counts
       match connectionTracker with
       | Some tracker ->
@@ -873,7 +923,7 @@ let createCreateSessionHandler
 /// JSON SSE stream for TUI clients — pushes regions + model summary as JSON.
 let createApiStateHandler
   (getSessionState: unit -> SessionState)
-  (getEvalStats: unit -> EvalStats)
+  (getEvalStats: unit -> SageFs.Affordances.EvalStats)
   (sessionId: string)
   (getElmRegions: unit -> RenderRegion list option)
   (stateChanged: IEvent<string> option)
@@ -995,7 +1045,7 @@ let createApiDispatchHandler
 let createEndpoints
   (version: string)
   (getSessionState: unit -> SessionState)
-  (getEvalStats: unit -> EvalStats)
+  (getEvalStats: unit -> SageFs.Affordances.EvalStats)
   (sessionId: string)
   (projectCount: int)
   (getElmRegions: unit -> RenderRegion list option)

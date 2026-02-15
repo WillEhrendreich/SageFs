@@ -28,16 +28,16 @@ let dashboardRenderSnapshotTests = testList "Dashboard render snapshots" [
   }
 
   testTask "renderEvalStats" {
-    let html = renderEvalStats 42 123.4 5.0 1045.0 |> renderNode
+    let html = renderEvalStats { Count = 42; AvgMs = 123.4; MinMs = 5.0; MaxMs = 1045.0 } |> renderNode
     do! verifyDashboard "dashboard_evalStats" html
   }
 
   testTask "renderOutput with mixed lines" {
     let lines = [
-      Some "12:30:45", "Result", "val x: int = 42"
-      Some "12:30:46", "Error", "Type mismatch"
-      None, "Info", "Loading..."
-      Some "12:30:47", "System", "Hot reload"
+      { Timestamp = Some "12:30:45"; Kind = ResultLine; Text = "val x: int = 42" }
+      { Timestamp = Some "12:30:46"; Kind = ErrorLine; Text = "Type mismatch" }
+      { Timestamp = None; Kind = InfoLine; Text = "Loading..." }
+      { Timestamp = Some "12:30:47"; Kind = SystemLine; Text = "Hot reload" }
     ]
     let html = renderOutput lines |> renderNode
     do! verifyDashboard "dashboard_output_mixed" html
@@ -50,8 +50,8 @@ let dashboardRenderSnapshotTests = testList "Dashboard render snapshots" [
 
   testTask "renderDiagnostics with errors and warnings" {
     let diags = [
-      "Error", "Type mismatch", 5, 10
-      "Warning", "Unused binding", 1, 1
+      { Severity = DiagError; Message = "Type mismatch"; Line = 5; Col = 10 }
+      { Severity = DiagWarning; Message = "Unused binding"; Line = 1; Col = 1 }
     ]
     let html = renderDiagnostics diags |> renderNode
     do! verifyDashboard "dashboard_diagnostics" html
@@ -136,14 +136,14 @@ let edgeCaseSnapshotTests = testList "edge case snapshots" [
 
   testTask "renderDiagnostics with zero line col" {
     let diags = [
-      "Error", "General compilation error", 0, 0
+      { Severity = DiagError; Message = "General compilation error"; Line = 0; Col = 0 }
     ]
     let html = renderDiagnostics diags |> renderNode
     do! verifyDashboard "dashboard_diagnostics_zeroLineCol" html
   }
 
   testTask "renderEvalStats zero evals" {
-    let html = renderEvalStats 0 0.0 0.0 0.0 |> renderNode
+    let html = renderEvalStats { Count = 0; AvgMs = 0.0; MinMs = 0.0; MaxMs = 0.0 } |> renderNode
     do! verifyDashboard "dashboard_evalStats_zero" html
   }
 
@@ -153,7 +153,7 @@ let edgeCaseSnapshotTests = testList "edge case snapshots" [
   }
 
   testTask "renderOutput single result line" {
-    let lines = [ Some "14:00:00", "Result", "val it: int = 0" ]
+    let lines = [ { Timestamp = Some "14:00:00"; Kind = ResultLine; Text = "val it: int = 0" } ]
     let html = renderOutput lines |> renderNode
     do! verifyDashboard "dashboard_output_singleResult" html
   }
