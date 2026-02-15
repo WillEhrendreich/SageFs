@@ -823,3 +823,34 @@ module McpTools =
         | Result.Ok msg -> return msg
         | Result.Error err -> return SageFsError.describe err
     }
+
+  // ── Elm State Query ──────────────────────────────────────────────
+
+  let private formatRegionFlags (flags: RegionFlags) =
+    [ if flags.HasFlag RegionFlags.Focusable then "focusable"
+      if flags.HasFlag RegionFlags.Scrollable then "scrollable"
+      if flags.HasFlag RegionFlags.LiveUpdate then "live"
+      if flags.HasFlag RegionFlags.Clickable then "clickable"
+      if flags.HasFlag RegionFlags.Collapsible then "collapsible" ]
+    |> String.concat ", "
+
+  /// Get current Elm render regions (daemon mode only).
+  let getElmState (ctx: McpContext) : Task<string> =
+    task {
+      match ctx.GetElmRegions with
+      | None ->
+        return "Elm state not available — running in embedded mode or Elm loop not started."
+      | Some getRegions ->
+        let regions = getRegions ()
+        if regions.IsEmpty then
+          return "No render regions available."
+        else
+          return
+            regions
+            |> List.map (fun r ->
+              let header =
+                sprintf "── %s [%s] ──" r.Id (formatRegionFlags r.Flags)
+              if String.IsNullOrWhiteSpace r.Content then header
+              else sprintf "%s\n%s" header r.Content)
+            |> String.concat "\n\n"
+    }
