@@ -184,12 +184,14 @@ module SageFsRender =
       Content =
         model.RecentOutput
         |> List.map (fun line ->
-          sprintf "[%s] %s" (
+          let kindLabel =
             match line.Kind with
             | OutputKind.Result -> "result"
             | OutputKind.Error -> "error"
             | OutputKind.Info -> "info"
-            | OutputKind.System -> "system") line.Text)
+            | OutputKind.System -> "system"
+          sprintf "[%s] [%s] %s"
+            (line.Timestamp.ToString("HH:mm:ss")) kindLabel line.Text)
         |> String.concat "\n"
       Affordances = []
     }
@@ -222,7 +224,12 @@ module SageFsRender =
             | SessionDisplayStatus.Stale -> "stale"
             | SessionDisplayStatus.Restarting -> "restarting"
           let active = if s.IsActive then " *" else ""
-          sprintf "%s [%s]%s" s.Id statusLabel active)
+          let projects =
+            if s.Projects.IsEmpty then ""
+            else sprintf " (%s)" (s.Projects |> List.map System.IO.Path.GetFileNameWithoutExtension |> String.concat ", ")
+          let evals =
+            if s.EvalCount > 0 then sprintf " evals:%d" s.EvalCount else ""
+          sprintf "%s [%s]%s%s%s" s.Id statusLabel active projects evals)
         |> String.concat "\n"
       Affordances = []
     }

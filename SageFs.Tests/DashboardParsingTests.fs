@@ -7,21 +7,32 @@ open System.Text.RegularExpressions
 /// Tests validate the regex-based parsing produces correct structured data.
 module DashboardParsing =
   let parseOutputLines (content: string) =
-    let outputRegex = Regex(@"^\[(\w+)\]\s*(.*)", RegexOptions.Singleline)
+    let tsKindRegex = Regex(@"^\[(\d{2}:\d{2}:\d{2})\]\s*\[(\w+)\]\s*(.*)", RegexOptions.Singleline)
+    let kindOnlyRegex = Regex(@"^\[(\w+)\]\s*(.*)", RegexOptions.Singleline)
     content.Split('\n')
     |> Array.filter (fun (l: string) -> l.Length > 0)
     |> Array.map (fun (l: string) ->
-      let m = outputRegex.Match(l)
+      let m = tsKindRegex.Match(l)
       if m.Success then
         let kind =
-          match m.Groups.[1].Value.ToLowerInvariant() with
+          match m.Groups.[2].Value.ToLowerInvariant() with
           | "result" -> "Result"
           | "error" -> "Error"
           | "info" -> "Info"
           | _ -> "System"
-        kind, m.Groups.[2].Value
+        Some m.Groups.[1].Value, kind, m.Groups.[3].Value
       else
-        "Result", l)
+        let m2 = kindOnlyRegex.Match(l)
+        if m2.Success then
+          let kind =
+            match m2.Groups.[1].Value.ToLowerInvariant() with
+            | "result" -> "Result"
+            | "error" -> "Error"
+            | "info" -> "Info"
+            | _ -> "System"
+          None, kind, m2.Groups.[2].Value
+        else
+          None, "Result", l)
     |> Array.toList
 
   let parseDiagLines (content: string) =
@@ -43,29 +54,43 @@ module DashboardParsing =
 
 [<Tests>]
 let tests = testList "Dashboard parsing" [
-  testCase "output: parses result line" (fun () ->
-    let result = DashboardParsing.parseOutputLines "[result] val x: int = 42"
-    Expect.equal result [("Result", "val x: int = 42")] "extract result kind")
+  testCase "output: parses timestamped result line" (fun () ->
+    let result = DashboardParsing.parseOutputLines "[14:30:05] [result] val x: int = 42"
+    Expect.equal result [(Some "14:30:05", "Result", "val x: int = 42")] "extract timestamp, kind, text")
 
-  testCase "output: parses error line" (fun () ->
-    let result = DashboardParsing.parseOutputLines "[error] Something went wrong"
-    Expect.equal result [("Error", "Something went wrong")] "extract error kind")
+  testCase "output: parses result line without timestamp" (fun () ->
+    let result = DashboardParsing.parseOutputLines "[result] val x: int = 42"
+    Expect.equal result [(None, "Result", "val x: int = 42")] "fallback without timestamp")
+
+  testCase "output: parses timestamped error line" (fun () ->
+    let result = DashboardParsing.parseOutputLines "[09:15:00] [error] Something went wrong"
+    Expect.equal result [(Some "09:15:00", "Error", "Something went wrong")] "extract error kind with timestamp")
 
   testCase "output: parses info line" (fun () ->
-    let result = DashboardParsing.parseOutputLines "[info] Loading..."
-    Expect.equal result [("Info", "Loading...")] "extract info kind")
+    let result = DashboardParsing.parseOutputLines "[12:00:00] [info] Loading..."
+    Expect.equal result [(Some "12:00:00", "Info", "Loading...")] "extract info kind")
 
   testCase "output: parses system line" (fun () ->
-    let result = DashboardParsing.parseOutputLines "[system] let x = 1"
-    Expect.equal result [("System", "let x = 1")] "extract system kind")
+    let result = DashboardParsing.parseOutputLines "[08:00:00] [system] let x = 1"
+    Expect.equal result [(Some "08:00:00", "System", "let x = 1")] "extract system kind")
 
   testCase "output: non-prefixed line defaults to Result" (fun () ->
     let result = DashboardParsing.parseOutputLines "plain text"
-    Expect.equal result [("Result", "plain text")] "fallback to Result")
+    Expect.equal result [(None, "Result", "plain text")] "fallback to Result")
 
   testCase "output: skips empty lines" (fun () ->
-    let lines = DashboardParsing.parseOutputLines "[result] a\n\n[error] b"
+    let lines = DashboardParsing.parseOutputLines "[14:30:05] [result] a\n\n[14:30:06] [error] b"
     Expect.equal lines.Length 2 "should skip empty lines")
+
+  testCase "output: multiple timestamped lines" (fun () ->
+    let result = DashboardParsing.parseOutputLines "[14:30:05] [result] a\n[14:30:06] [error] b\n[14:30:07] [info] c"
+    Expect.equal result.Length 3 "should have 3 lines"
+    let (ts1, k1, _) = result.[0]
+    Expect.equal (ts1, k1) (Some "14:30:05", "Result") "first line"
+    let (ts2, k2, _) = result.[1]
+    Expect.equal (ts2, k2) (Some "14:30:06", "Error") "second line"
+    let (ts3, k3, _) = result.[2]
+    Expect.equal (ts3, k3) (Some "14:30:07", "Info") "third line")
 
   testCase "diag: extracts line and col from error" (fun () ->
     let result = DashboardParsing.parseDiagLines "[error] (5,12) Type not defined"

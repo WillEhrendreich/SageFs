@@ -135,7 +135,7 @@ let renderEvalStats (evalCount: int) (avgMs: float) (minMs: float) (maxMs: float
   ]
 
 /// Render output lines as an HTML fragment.
-let renderOutput (lines: (string * string) list) =
+let renderOutput (lines: (string option * string * string) list) =
   let lineClass kind =
     match kind with
     | "Result" -> "output-result"
@@ -146,8 +146,14 @@ let renderOutput (lines: (string * string) list) =
     if lines.IsEmpty then
       Text.raw "No output yet"
     else
-      yield! lines |> List.map (fun (kind, text) ->
+      yield! lines |> List.map (fun (ts, kind, text) ->
         Elem.div [ Attr.class' (sprintf "output-line %s" (lineClass kind)) ] [
+          match ts with
+          | Some t ->
+            Elem.span [ Attr.class' "meta"; Attr.style "margin-right: 0.5rem;" ] [
+              Text.raw t
+            ]
+          | None -> ()
           Text.raw text
         ])
   ]
@@ -180,21 +186,32 @@ let renderSessions (sessions: (string * string * bool) list) =
   ]
 
 let private parseOutputLines (content: string) =
-  let outputRegex = Regex(@"^\[(\w+)\]\s*(.*)", RegexOptions.Singleline)
+  let tsKindRegex = Regex(@"^\[(\d{2}:\d{2}:\d{2})\]\s*\[(\w+)\]\s*(.*)", RegexOptions.Singleline)
+  let kindOnlyRegex = Regex(@"^\[(\w+)\]\s*(.*)", RegexOptions.Singleline)
   content.Split('\n')
   |> Array.filter (fun (l: string) -> l.Length > 0)
   |> Array.map (fun (l: string) ->
-    let m = outputRegex.Match(l)
+    let m = tsKindRegex.Match(l)
     if m.Success then
       let kind =
-        match m.Groups.[1].Value.ToLowerInvariant() with
+        match m.Groups.[2].Value.ToLowerInvariant() with
         | "result" -> "Result"
         | "error" -> "Error"
         | "info" -> "Info"
         | _ -> "System"
-      kind, m.Groups.[2].Value
+      Some m.Groups.[1].Value, kind, m.Groups.[3].Value
     else
-      "Result", l)
+      let m2 = kindOnlyRegex.Match(l)
+      if m2.Success then
+        let kind =
+          match m2.Groups.[1].Value.ToLowerInvariant() with
+          | "result" -> "Result"
+          | "error" -> "Error"
+          | "info" -> "Info"
+          | _ -> "System"
+        None, kind, m2.Groups.[2].Value
+      else
+        None, "Result", l)
   |> Array.toList
 
 let private parseDiagLines (content: string) =
@@ -215,17 +232,21 @@ let private parseDiagLines (content: string) =
   |> Array.toList
 
 let private parseSessionLines (content: string) =
+  let sessionRegex = Regex(@"^(\S+)\s*\[([^\]]+)\](.*)")
   content.Split('\n')
   |> Array.filter (fun (l: string) -> l.Length > 0)
   |> Array.map (fun (l: string) ->
-    let isActive = l.EndsWith(" *")
-    let trimmed = if isActive then l.[..l.Length - 3] else l
-    let parts = trimmed.Split(" [")
-    let id = if parts.Length > 0 then parts.[0] else trimmed
-    let status =
-      if parts.Length > 1 then parts.[1].TrimEnd(']')
-      else "unknown"
-    id, status, isActive)
+    let m = sessionRegex.Match(l)
+    if m.Success then
+      let id = m.Groups.[1].Value
+      let status = m.Groups.[2].Value
+      let rest = m.Groups.[3].Value
+      let isActive = rest.Contains(" *")
+      id, status, isActive
+    else
+      let isActive = l.EndsWith(" *")
+      let trimmed = if isActive then l.[..l.Length - 3] else l
+      trimmed, "unknown", isActive)
   |> Array.toList
 
 let private pushRegions
