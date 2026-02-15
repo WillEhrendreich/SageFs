@@ -84,6 +84,12 @@ let private renderShell (version: string) =
         .conn-disconnected { background: var(--red); color: white; animation: pulse 1.5s infinite; }
         .conn-reconnecting { background: var(--yellow); color: var(--bg); }
         @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.6; } }
+        .eval-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        @media (max-width: 768px) {
+          .grid { grid-template-columns: 1fr; }
+          body { padding: 0.5rem; }
+          h1 { font-size: 1.1rem; }
+        }
       """ ]
     ]
     Elem.body [ Ds.safariStreamingFix ] [
@@ -119,11 +125,15 @@ let private renderShell (version: string) =
               Attr.create "data-on-keydown" "if(event.ctrlKey && event.key === 'Enter') { event.preventDefault(); $$post('/dashboard/eval') }"
               Attr.create "spellcheck" "false" ]
             []
-          Elem.div [ Attr.style "display: flex; gap: 0.5rem; margin-top: 0.5rem;" ] [
+          Elem.div [ Attr.style "display: flex; gap: 0.5rem; margin-top: 0.5rem; align-items: center;" ] [
             Elem.button
               [ Attr.class' "eval-btn"
+                Ds.indicator "evalLoading"
+                Ds.attr' ("disabled", "$evalLoading")
                 Ds.onClick (Ds.post "/dashboard/eval") ]
-              [ Text.raw "▶ Eval" ]
+              [ Elem.span [ Ds.show "$evalLoading" ] [ Text.raw "⏳ " ]
+                Elem.span [ Ds.show "!$evalLoading" ] [ Text.raw "▶ " ]
+                Text.raw "Eval" ]
             Elem.button
               [ Attr.class' "eval-btn"
                 Attr.style "background: var(--green);"
