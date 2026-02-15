@@ -76,6 +76,34 @@ let filterArgs (args: string array) (extraFlags: string list) =
   else
     regularArgs
 
+/// Run daemon mode (default behavior).
+let runDaemon (args: string array) (extraFlags: string list) =
+  let mcpPort = parseMcpPort args
+  let filteredArgs = filterArgs args extraFlags
+  let parsedArgs =
+    try SageFs.Args.parser.ParseCommandLine(filteredArgs).GetAllResults()
+    with _ -> []
+  if args |> Array.exists (fun a -> a = "--supervised") then
+    let daemonArgs =
+      args
+      |> Array.filter (fun a -> a <> "--supervised")
+      |> Array.toList
+    use cts = new System.Threading.CancellationTokenSource()
+    Console.CancelKeyPress.Add(fun e ->
+      e.Cancel <- true
+      cts.Cancel())
+    WatchdogRunner.run
+      SageFs.Watchdog.defaultConfig
+      daemonArgs
+      Environment.CurrentDirectory
+      cts.Token
+    |> _.GetAwaiter() |> _.GetResult()
+    0
+  else
+    DaemonMode.run mcpPort parsedArgs
+    |> _.GetAwaiter() |> _.GetResult()
+    0
+
 [<EntryPoint>]
 let main args =
   // Wrap Console.Out to normalize \n to \r\n.
@@ -85,42 +113,39 @@ let main args =
 
   // Check for --help or -h flag
   if args |> Array.exists (fun arg -> arg = "--help" || arg = "-h") then
-    printfn "SageFs - Enhanced F# Interactive with hot reloading and MCP support"
+    printfn "SageFs - F# Interactive daemon with MCP, hot reloading, and live dashboard"
     printfn ""
-    printfn "Usage: SageFs [options] [fsi-args]"
-    printfn "       SageFs -d|--daemon [options]    Start as background daemon"
-    printfn "       SageFs -d --supervised          Start daemon with watchdog supervisor"
-    printfn "       SageFs worker [options]          Internal: worker process"
-    printfn "       SageFs stop                      Stop running daemon"
-    printfn "       SageFs status                    Show daemon info"
+    printfn "Usage: SageFs [options]                Start daemon (default mode)"
+    printfn "       SageFs --supervised [options]   Start with watchdog auto-restart"
+    printfn "       SageFs connect                  Connect to running daemon"
+    printfn "       SageFs stop                     Stop running daemon"
+    printfn "       SageFs status                   Show daemon info"
+    printfn "       SageFs worker [options]         Internal: worker process"
+    printfn "       SageFs --repl [options]         Legacy: interactive REPL (deprecated)"
     printfn ""
     printfn "Options:"
     printfn "  --version, -v          Show version information"
     printfn "  --help, -h             Show this help message"
-    printfn "  --no-web               Disable ASP.NET features (default: enabled)"
     printfn "  --no-mcp               Disable MCP server (default: enabled on port 37749)"
     printfn "  --mcp-port PORT        Set custom MCP server port (default: 37749)"
-    printfn "  --bare                 Start a bare FSI session — no project/solution loading, fast startup"
-    printfn "  --supervised           (with -d) Run daemon under a watchdog supervisor that auto-restarts on crash"
+    printfn "  --bare                 Start a bare FSI session — no project/solution loading"
+    printfn "  --supervised           Run under watchdog supervisor (auto-restart on crash)"
+    printfn "  --repl                 Start legacy embedded REPL (deprecated, use daemon)"
     printfn ""
-    printfn "MCP Server:"
-    printfn "  When enabled, SageFs starts an MCP (Model Context Protocol) server for"
-    printfn "  AI agent integration. The server provides these endpoints:"
-    printfn "    /sse     - SSE transport endpoint (connect here with MCP clients)"
-    printfn "    /message - Internal message endpoint (used by MCP protocol)"
+    printfn "Daemon:"
+    printfn "  SageFs runs as a daemon by default. The daemon provides:"
+    printfn "    MCP server      http://localhost:37749/sse  (AI agent integration)"
+    printfn "    Dashboard       http://localhost:37750/dashboard  (live web UI)"
+    printfn "    File watcher    Auto-reload .fs/.fsx changes via #load"
+    printfn "    Hot reload      Runtime function redefinition"
     printfn ""
-    printfn "  For GitHub Copilot CLI, use: http://localhost:37749/sse"
-    printfn ""
-    printfn "  Available MCP tools:"
-    printfn "    - send_fsharp_code: Execute F# code in the REPL"
-    printfn "    - load_fsharp_script: Load and execute .fsx files"
-    printfn "    - get_recent_fsi_events: View recent REPL activity"
-    printfn "    - get_fsi_status: Get session information"
+    printfn "  All frontends (terminal, browser, MCP, Neovim) are clients of the daemon."
     printfn ""
     printfn "Examples:"
-    printfn "  SageFs                              Start interactive REPL"
-    printfn "  SageFs -d                           Start as daemon"
-    printfn "  SageFs --proj MyProject.fsproj      Load project and start REPL"
+    printfn "  SageFs                              Start daemon"
+    printfn "  SageFs --proj MyProject.fsproj      Start daemon with project"
+    printfn "  SageFs --supervised                 Start with auto-restart"
+    printfn "  SageFs connect                      Connect REPL to running daemon"
     printfn "  SageFs status                       Show daemon status"
     printfn ""
     0
@@ -193,43 +218,38 @@ let main args =
     WorkerMain.run sessionId pipeName parsedArgs
     |> Async.RunSynchronously
     0
-  // Subcommand: -d / --daemon
-  elif args |> Array.exists (fun a -> a = "-d" || a = "--daemon") then
-    let mcpPort = parseMcpPort args
-    let filteredArgs = filterArgs args ["-d"; "--daemon"; "--supervised"]
-    let parsedArgs =
-      try SageFs.Args.parser.ParseCommandLine(filteredArgs).GetAllResults()
-      with _ -> []
-    // If --supervised, run with watchdog supervisor loop
-    if args |> Array.exists (fun a -> a = "--supervised") then
-      let daemonArgs =
-        args
-        |> Array.filter (fun a -> a <> "--supervised")
-        |> Array.toList
-      use cts = new System.Threading.CancellationTokenSource()
-      Console.CancelKeyPress.Add(fun e ->
-        e.Cancel <- true
-        cts.Cancel())
-      WatchdogRunner.run
-        SageFs.Watchdog.defaultConfig
-        daemonArgs
-        Environment.CurrentDirectory
-        cts.Token
-      |> _.GetAwaiter() |> _.GetResult()
+  // Subcommand: connect (connects to running daemon)
+  elif args.Length > 0 && args.[0] = "connect" then
+    match DaemonState.read () with
+    | Some info ->
+      printfn "Connecting to SageFs daemon (PID %d, port %d)..." info.Pid info.Port
+      printfn "  Dashboard: http://localhost:%d/dashboard" (info.Port + 1)
+      printfn ""
+      printfn "SageFs connect is not yet implemented."
+      printfn "Use the dashboard or MCP tools to interact with the daemon."
       0
-    else
-      DaemonMode.run mcpPort parsedArgs
-      |> _.GetAwaiter() |> _.GetResult()
-      0
-  else
-    // Default: interactive REPL (existing behavior)
+    | None ->
+      printfn "No SageFs daemon is running. Start one with: SageFs"
+      1
+  // Legacy: --repl flag for embedded REPL (deprecated)
+  elif args |> Array.exists (fun a -> a = "--repl") then
+    eprintfn "\x1b[33m[DEPRECATED]\x1b[0m --repl mode is deprecated. Use daemon mode (default) instead."
+    eprintfn "  The embedded REPL will be removed in a future version."
+    eprintfn "  Start a daemon with 'SageFs' and connect with 'SageFs connect'."
+    eprintfn ""
     let disableWeb = args |> Array.exists (fun arg -> arg = "--no-web")
     let useAsp = not disableWeb
     let mcpPort = parseMcpPort args |> Some
     let mcpPort =
       if args |> Array.exists (fun arg -> arg = "--no-mcp") then None
       else mcpPort
-    let filteredArgs = filterArgs args []
+    let filteredArgs = filterArgs args ["--repl"]
     CliEventLoop.runCliEventLoop useAsp mcpPort filteredArgs ()
     |> _.GetAwaiter() |> _.GetResult()
     0
+  // Subcommand: -d / --daemon (kept as alias for backward compat, same as default)
+  elif args |> Array.exists (fun a -> a = "-d" || a = "--daemon") then
+    runDaemon args ["-d"; "--daemon"; "--supervised"]
+  else
+    // Default: daemon mode
+    runDaemon args ["--supervised"]
