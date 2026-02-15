@@ -1,6 +1,9 @@
 module SageFs.Server.ClientMode
 
 open System
+open System.Net.Http
+open System.Text
+open System.Text.Json
 open SageFs.Server
 open SageFs
 
@@ -12,8 +15,15 @@ let private showConnectionBanner (info: DaemonInfo) =
     elif elapsed.TotalHours < 1.0 then sprintf "%dm ago" (int elapsed.TotalMinutes)
     elif elapsed.TotalDays < 1.0 then sprintf "%dh ago" (int elapsed.TotalHours)
     else sprintf "%dd ago" (int elapsed.TotalDays)
-  printfn "Connected to SageFs daemon (PID %d, port %d)" info.Pid info.Port
-  printfn "  %s  •  Started %s  •  v%s" info.WorkingDirectory agoText info.Version
+  printfn "\x1b[36m╭─────────────────────────────────────────────╮\x1b[0m"
+  printfn "\x1b[36m│\x1b[0m  SageFs v%s — connected to daemon          \x1b[36m│\x1b[0m" info.Version
+  printfn "\x1b[36m│\x1b[0m  PID %d • port %d • started %s        \x1b[36m│\x1b[0m" info.Pid info.Port agoText
+  printfn "\x1b[36m│\x1b[0m  %s  \x1b[36m│\x1b[0m" info.WorkingDirectory
+  printfn "\x1b[36m│\x1b[0m  Dashboard: http://localhost:%d/dashboard   \x1b[36m│\x1b[0m" (info.Port + 1)
+  printfn "\x1b[36m╰─────────────────────────────────────────────╯\x1b[0m"
+  printfn ""
+  printfn "Type F# code to evaluate. End with ';;' and press Enter."
+  printfn "Commands: #quit, #reset, #status, #hard-reset"
   printfn ""
 
 /// Start daemon in background, wait for it to be ready.
@@ -45,3 +55,132 @@ let tryConnect () =
     showConnectionBanner info
     Some info
   | None -> None
+
+/// Send F# code to the daemon for evaluation.
+let private evalCode (client: HttpClient) (baseUrl: string) (code: string) = task {
+  let json = JsonSerializer.Serialize({| code = code |})
+  use content = new StringContent(json, Encoding.UTF8, "application/json")
+  try
+    let! response = client.PostAsync(sprintf "%s/exec" baseUrl, content)
+    let! body = response.Content.ReadAsStringAsync()
+    let doc = JsonDocument.Parse(body)
+    let root = doc.RootElement
+    if root.TryGetProperty("success") |> fst then
+      let success = root.GetProperty("success").GetBoolean()
+      if success then
+        let result = root.GetProperty("result").GetString()
+        return Ok result
+      else
+        let error =
+          if root.TryGetProperty("error") |> fst then
+            root.GetProperty("error").GetString()
+          else "Unknown error"
+        return Error error
+    else
+      return Ok body
+  with ex ->
+    return Error (sprintf "Connection error: %s" ex.Message)
+}
+
+/// Send a reset command to the daemon.
+let private resetSession (client: HttpClient) (baseUrl: string) = task {
+  try
+    let! response = client.PostAsync(sprintf "%s/reset" baseUrl, null)
+    let! body = response.Content.ReadAsStringAsync()
+    return Ok body
+  with ex ->
+    return Error (sprintf "Connection error: %s" ex.Message)
+}
+
+/// Send a hard-reset command to the daemon.
+let private hardResetSession (client: HttpClient) (baseUrl: string) = task {
+  let json = JsonSerializer.Serialize({| rebuild = true |})
+  use content = new StringContent(json, Encoding.UTF8, "application/json")
+  try
+    let! response = client.PostAsync(sprintf "%s/hard-reset" baseUrl, content)
+    let! body = response.Content.ReadAsStringAsync()
+    return Ok body
+  with ex ->
+    return Error (sprintf "Connection error: %s" ex.Message)
+}
+
+/// Check daemon health.
+let private checkHealth (client: HttpClient) (baseUrl: string) = task {
+  try
+    let! response = client.GetAsync(sprintf "%s/health" baseUrl)
+    let! body = response.Content.ReadAsStringAsync()
+    return Ok body
+  with ex ->
+    return Error (sprintf "Connection error: %s" ex.Message)
+}
+
+/// Read a multi-line F# input block (accumulates until ;; is found).
+let private readInputBlock () =
+  let sb = StringBuilder()
+  let mutable reading = true
+  let mutable firstLine = true
+  while reading do
+    if firstLine then
+      printf "\x1b[32m> \x1b[0m"
+    else
+      printf "\x1b[90m. \x1b[0m"
+    firstLine <- false
+    let line = Console.ReadLine()
+    if isNull line then
+      reading <- false
+    else
+      sb.AppendLine(line) |> ignore
+      let text = sb.ToString().TrimEnd()
+      if text.EndsWith(";;") then
+        reading <- false
+  let result = sb.ToString().Trim()
+  if String.IsNullOrWhiteSpace(result) then None
+  else Some result
+
+/// Run the connect REPL loop.
+let run (info: DaemonInfo) = task {
+  let baseUrl = sprintf "http://localhost:%d" info.Port
+  use client = new HttpClient()
+  client.Timeout <- TimeSpan.FromMinutes(5.0)
+
+  // Verify connection
+  match! checkHealth client baseUrl with
+  | Error msg ->
+    eprintfn "\x1b[31mCannot connect to daemon: %s\x1b[0m" msg
+    return 1
+  | Ok _ ->
+
+  let mutable running = true
+  while running do
+    match readInputBlock () with
+    | None -> running <- false
+    | Some input ->
+      let trimmed = input.Trim()
+      match trimmed with
+      | "#quit" | "#exit" | "#q" ->
+        running <- false
+      | "#reset" ->
+        match! resetSession client baseUrl with
+        | Ok msg -> printfn "\x1b[33m%s\x1b[0m" msg
+        | Error msg -> eprintfn "\x1b[31m%s\x1b[0m" msg
+      | "#hard-reset" ->
+        printfn "\x1b[33mHard resetting (with rebuild)...\x1b[0m"
+        match! hardResetSession client baseUrl with
+        | Ok msg -> printfn "\x1b[33m%s\x1b[0m" msg
+        | Error msg -> eprintfn "\x1b[31m%s\x1b[0m" msg
+      | "#status" ->
+        match! checkHealth client baseUrl with
+        | Ok msg -> printfn "%s" msg
+        | Error msg -> eprintfn "\x1b[31m%s\x1b[0m" msg
+      | code ->
+        match! evalCode client baseUrl code with
+        | Ok result ->
+          if not (String.IsNullOrWhiteSpace result) then
+            printfn "%s" result
+        | Error msg ->
+          eprintfn "\x1b[31m%s\x1b[0m" msg
+      printfn ""
+
+  printfn "Disconnected."
+  return 0
+}

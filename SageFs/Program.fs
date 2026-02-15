@@ -222,12 +222,8 @@ let main args =
   elif args.Length > 0 && args.[0] = "connect" then
     match DaemonState.read () with
     | Some info ->
-      printfn "Connecting to SageFs daemon (PID %d, port %d)..." info.Pid info.Port
-      printfn "  Dashboard: http://localhost:%d/dashboard" (info.Port + 1)
-      printfn ""
-      printfn "SageFs connect is not yet implemented."
-      printfn "Use the dashboard or MCP tools to interact with the daemon."
-      0
+      ClientMode.run info
+      |> _.GetAwaiter() |> _.GetResult()
     | None ->
       printfn "No SageFs daemon is running. Start one with: SageFs"
       1
