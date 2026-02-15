@@ -256,6 +256,61 @@ let startMcpServer (actor: AppActor) (diagnosticsChanged: IEvent<SageFs.Features
                     do! tcs.Task
                 } :> Task
             ) |> ignore
+
+            // GET /api/status — rich JSON status for clients and dashboards
+            app.MapGet("/api/status", fun (context: Microsoft.AspNetCore.Http.HttpContext) ->
+                task {
+                    try
+                        let sessionState = getSessionState ()
+                        let evalStats = getEvalStats ()
+                        let startupConfig = getStartupConfig ()
+                        let warmupFailures = getWarmupFailures ()
+                        let elmRegions =
+                          match getElmRegions with
+                          | Some getRegions -> getRegions ()
+                          | None -> []
+                        let version =
+                          System.Reflection.Assembly.GetExecutingAssembly().GetName().Version
+                          |> Option.ofObj
+                          |> Option.map (fun v -> v.ToString())
+                          |> Option.defaultValue "unknown"
+                        let regionData =
+                          elmRegions |> List.map (fun (r: SageFs.RenderRegion) ->
+                            {| id = r.Id
+                               content = r.Content |> fun s -> if s.Length > 2000 then s.[..1999] else s
+                               affordances = r.Affordances |> List.map (fun a -> a.ToString()) |})
+                        let workingDir =
+                          startupConfig |> Option.map (fun c -> c.WorkingDirectory) |> Option.defaultValue ""
+                        let projects =
+                          startupConfig |> Option.map (fun c -> c.LoadedProjects) |> Option.defaultValue []
+                        context.Response.ContentType <- "application/json"
+                        let response = System.Text.Json.JsonSerializer.Serialize(
+                          {| version = version
+                             sessionId = sessionId
+                             sessionState = SageFs.SessionState.label sessionState
+                             evalCount = evalStats.EvalCount
+                             totalDurationMs = evalStats.TotalDuration.TotalMilliseconds
+                             avgDurationMs =
+                               if evalStats.EvalCount > 0 then
+                                 evalStats.TotalDuration.TotalMilliseconds / float evalStats.EvalCount
+                               else 0.0
+                             minDurationMs = evalStats.MinDuration.TotalMilliseconds
+                             maxDurationMs = evalStats.MaxDuration.TotalMilliseconds
+                             workingDirectory = workingDir
+                             projectCount = projects.Length
+                             projects = projects
+                             warmupFailures = warmupFailures |> List.map (fun f -> {| name = f.Name; error = f.Error |})
+                             regions = regionData
+                             pid = Environment.ProcessId
+                             uptime = (DateTime.UtcNow - System.Diagnostics.Process.GetCurrentProcess().StartTime.ToUniversalTime()).TotalSeconds |})
+                        do! context.Response.Body.WriteAsync(System.Text.Encoding.UTF8.GetBytes(response))
+                    with ex ->
+                        context.Response.StatusCode <- 500
+                        context.Response.ContentType <- "application/json"
+                        let errorResponse = System.Text.Json.JsonSerializer.Serialize({| error = ex.Message |})
+                        do! context.Response.Body.WriteAsync(System.Text.Encoding.UTF8.GetBytes(errorResponse))
+                } :> Task
+            ) |> ignore
             
             // Print startup info
             printfn "MCP SSE endpoint: http://localhost:%d/sse" port
