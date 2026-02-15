@@ -47,7 +47,7 @@ let private renderShell (version: string) =
       Elem.title [] [ Text.raw "SageFs Dashboard" ]
       Ds.cdnScript
       Elem.style [] [ Text.raw """
-        :root { --bg: #0d1117; --fg: #c9d1d9; --accent: #58a6ff; --green: #3fb950; --red: #f85149; --border: #30363d; --surface: #161b22; --yellow: #d29922; }
+        :root { --bg: #0d1117; --fg: #c9d1d9; --fg-dim: #8b949e; --accent: #58a6ff; --green: #3fb950; --red: #f85149; --border: #30363d; --surface: #161b22; --bg-highlight: #21262d; --yellow: #d29922; }
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body { font-family: 'Cascadia Code', 'Fira Code', monospace; background: var(--bg); color: var(--fg); padding: 1rem; }
         h1 { color: var(--accent); margin-bottom: 1rem; font-size: 1.4rem; }
@@ -314,10 +314,17 @@ type ParsedSession = {
   IsActive: bool
   ProjectsText: string
   EvalCount: int
+  Uptime: string
+  WorkingDir: string
+  LastActivity: string
 }
 
 let private parseSessionLines (content: string) =
-  let sessionRegex = Regex(@"^(\S+)\s*\[([^\]]+)\](\s*\*)?(\s*\([^)]*\))?(\s*evals:\d+)?")
+  let sessionRegex = Regex(@"^(\S+)\s*\[([^\]]+)\](\s*\*)?(\s*\([^)]*\))?(\s*evals:\d+)?(\s*up:(?:just now|\S+))?(\s*dir:\S.*?)?(\s*last:.+)?$")
+  let extractTag (prefix: string) (value: string) =
+    let v = value.Trim()
+    if v.StartsWith(prefix) then v.Substring(prefix.Length).Trim()
+    else ""
   content.Split('\n')
   |> Array.filter (fun (l: string) -> l.Length > 0)
   |> Array.map (fun (l: string) ->
@@ -328,13 +335,19 @@ let private parseSessionLines (content: string) =
         Status = m.Groups.[2].Value
         IsActive = m.Groups.[3].Value.Contains("*")
         ProjectsText = m.Groups.[4].Value.Trim()
-        EvalCount = if evalsMatch.Success then int evalsMatch.Groups.[1].Value else 0 }
+        EvalCount = if evalsMatch.Success then int evalsMatch.Groups.[1].Value else 0
+        Uptime = extractTag "up:" m.Groups.[6].Value
+        WorkingDir = extractTag "dir:" m.Groups.[7].Value
+        LastActivity = extractTag "last:" m.Groups.[8].Value }
     else
       { Id = l.Trim()
         Status = "unknown"
         IsActive = false
         ProjectsText = ""
-        EvalCount = 0 })
+        EvalCount = 0
+        Uptime = ""
+        WorkingDir = ""
+        LastActivity = "" })
   |> Array.toList
 
 /// Render sessions as an HTML fragment with action buttons.
@@ -352,25 +365,53 @@ let renderSessions (sessions: ParsedSession list) =
         let cls = if s.IsActive then "output-result" else ""
         Elem.div
           [ Attr.class' (sprintf "session-row %s" cls)
-            Attr.style "display: flex; align-items: center; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border);" ]
+            Attr.style "display: flex; align-items: center; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid var(--border);" ]
           [
-            Elem.div [ Attr.style "flex: 1;" ] [
-              Elem.span [ Attr.style "font-weight: bold;" ] [ Text.raw s.Id ]
-              Text.raw " "
-              Elem.span [ Attr.class' (sprintf "status %s" statusClass); Attr.style "font-size: 0.75rem;" ] [
-                Text.raw s.Status
+            Elem.div [ Attr.style "flex: 1; min-width: 0;" ] [
+              // Row 1: session ID + status + active indicator
+              Elem.div [ Attr.style "display: flex; align-items: center; gap: 0.5rem;" ] [
+                Elem.span [ Attr.style "font-weight: bold;" ] [ Text.raw s.Id ]
+                Elem.span
+                  [ Attr.class' (sprintf "status %s" statusClass)
+                    Attr.style "font-size: 0.7rem; padding: 1px 6px; border-radius: 3px;" ]
+                  [ Text.raw s.Status ]
+                if s.IsActive then
+                  Elem.span [ Attr.style "color: var(--green);" ] [ Text.raw "● active" ]
+                if s.Uptime.Length > 0 then
+                  Elem.span [ Attr.class' "meta"; Attr.style "margin-left: auto;" ] [
+                    Text.raw (sprintf "⏱ %s" s.Uptime)
+                  ]
               ]
-              if s.IsActive then
-                Elem.span [ Attr.style "color: var(--green); margin-left: 0.5rem;" ] [ Text.raw "●" ]
-              if s.ProjectsText.Length > 0 then
-                Elem.br []
-                Elem.span [ Attr.class' "meta" ] [ Text.raw s.ProjectsText ]
-              if s.EvalCount > 0 then
-                Elem.span [ Attr.class' "meta"; Attr.style "margin-left: 0.5rem;" ] [
-                  Text.raw (sprintf "evals: %d" s.EvalCount)
-                ]
+              // Row 2: working directory
+              if s.WorkingDir.Length > 0 then
+                Elem.div
+                  [ Attr.style "font-size: 0.75rem; color: var(--fg-dim); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
+                    Attr.title s.WorkingDir ]
+                  [ Text.raw (sprintf "📁 %s" s.WorkingDir) ]
+              // Row 3: projects as tags + evals + last activity
+              Elem.div [ Attr.style "display: flex; align-items: center; gap: 0.5rem; margin-top: 2px; flex-wrap: wrap;" ] [
+                if s.ProjectsText.Length > 0 then
+                  // Parse project names from "(Proj1, Proj2)" format and render as tags
+                  let projNames =
+                    s.ProjectsText.Trim('(', ')')
+                      .Split(',')
+                    |> Array.map (fun p -> p.Trim())
+                    |> Array.filter (fun p -> p.Length > 0)
+                  yield! projNames |> Array.map (fun pName ->
+                    Elem.span
+                      [ Attr.style "font-size: 0.65rem; padding: 1px 5px; border-radius: 3px; background: var(--bg-highlight); color: var(--fg-dim);" ]
+                      [ Text.raw pName ])
+                if s.EvalCount > 0 then
+                  Elem.span [ Attr.class' "meta" ] [
+                    Text.raw (sprintf "evals: %d" s.EvalCount)
+                  ]
+                if s.LastActivity.Length > 0 then
+                  Elem.span [ Attr.class' "meta"; Attr.style "margin-left: auto;" ] [
+                    Text.raw (sprintf "last: %s" s.LastActivity)
+                  ]
+              ]
             ]
-            Elem.div [ Attr.style "display: flex; gap: 4px;" ] [
+            Elem.div [ Attr.style "display: flex; gap: 4px; margin-left: 8px;" ] [
               if not s.IsActive then
                 Elem.button
                   [ Attr.class' "session-btn"

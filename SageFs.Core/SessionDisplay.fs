@@ -22,6 +22,7 @@ type SessionSnapshot = {
   EvalCount: int
   UpSince: DateTime
   IsActive: bool
+  WorkingDirectory: string
 }
 
 /// File watcher status for display
@@ -69,7 +70,8 @@ module SessionDisplay =
       LastActivity = info.LastActivity
       EvalCount = 0
       UpSince = info.CreatedAt
-      IsActive = activeId = Some info.Id }
+      IsActive = activeId = Some info.Id
+      WorkingDirectory = info.WorkingDirectory }
 
   /// Build the full registry view
   let registryView

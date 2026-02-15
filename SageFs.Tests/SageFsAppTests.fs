@@ -71,8 +71,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
       Id = "s1"; Projects = ["Test.fsproj"]
       Status = SessionDisplayStatus.Running
       LastActivity = DateTime.UtcNow; EvalCount = 0
-      UpSince = DateTime.UtcNow; IsActive = true
-    }
+      UpSince = DateTime.UtcNow; IsActive = true; WorkingDirectory = "" }
     let event = SageFsEvent.SessionCreated snap
     let newModel, _ =
       SageFsUpdate.update (SageFsMsg.Event event) SageFsModel.initial
@@ -83,13 +82,11 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
     let snap1 = {
       Id = "s1"; Projects = []; Status = SessionDisplayStatus.Running
       LastActivity = DateTime.UtcNow; EvalCount = 0
-      UpSince = DateTime.UtcNow; IsActive = true
-    }
+      UpSince = DateTime.UtcNow; IsActive = true; WorkingDirectory = "" }
     let snap2 = {
       Id = "s2"; Projects = []; Status = SessionDisplayStatus.Running
       LastActivity = DateTime.UtcNow; EvalCount = 0
-      UpSince = DateTime.UtcNow; IsActive = false
-    }
+      UpSince = DateTime.UtcNow; IsActive = false; WorkingDirectory = "" }
     let model = {
       SageFsModel.initial with
         Sessions = {
@@ -110,8 +107,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
     let snap = {
       Id = "s1"; Projects = []; Status = SessionDisplayStatus.Running
       LastActivity = DateTime.UtcNow; EvalCount = 0
-      UpSince = DateTime.UtcNow; IsActive = true
-    }
+      UpSince = DateTime.UtcNow; IsActive = true; WorkingDirectory = "" }
     let model = {
       SageFsModel.initial with
         Sessions = {
@@ -179,8 +175,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
     let snap = {
       Id = "s1"; Projects = []; Status = SessionDisplayStatus.Running
       LastActivity = DateTime.UtcNow; EvalCount = 0
-      UpSince = DateTime.UtcNow; IsActive = true
-    }
+      UpSince = DateTime.UtcNow; IsActive = true; WorkingDirectory = "" }
     let model = {
       SageFsModel.initial with
         Sessions = {
@@ -240,8 +235,7 @@ let sageFsRenderTests = testList "SageFsRender" [
       Id = "s1"; Projects = ["Test.fsproj"]
       Status = SessionDisplayStatus.Running
       LastActivity = DateTime.UtcNow; EvalCount = 0
-      UpSince = DateTime.UtcNow; IsActive = true
-    }
+      UpSince = DateTime.UtcNow; IsActive = true; WorkingDirectory = "" }
     let model = {
       SageFsModel.initial with
         Sessions = {
@@ -283,9 +277,9 @@ let sageFsRenderTests = testList "SageFsRender" [
             { SageFsModel.initial.Sessions with
                 Sessions = [
                   { Id = "s1"; Projects = []; Status = SessionDisplayStatus.Running
-                    LastActivity = now; EvalCount = 0; UpSince = now; IsActive = true }
+                    LastActivity = now; EvalCount = 0; UpSince = now; IsActive = true; WorkingDirectory = "" }
                   { Id = "s2"; Projects = []; Status = SessionDisplayStatus.Starting
-                    LastActivity = now; EvalCount = 0; UpSince = now; IsActive = false }
+                    LastActivity = now; EvalCount = 0; UpSince = now; IsActive = false; WorkingDirectory = "" }
                 ] } }
     let sessions =
       SageFsRender.render model
@@ -322,7 +316,7 @@ let sageFsRenderTests = testList "SageFsRender" [
             { SessionSnapshot.Id = sprintf "session-%d" i
               Projects = []; Status = statuses.[i % statuses.Length]
               LastActivity = now; EvalCount = i; UpSince = now
-              IsActive = (i = 0) } ]
+              IsActive = (i = 0); WorkingDirectory = "" } ]
       let model =
         { SageFsModel.initial with
             Sessions = { SageFsModel.initial.Sessions with Sessions = sessions } }

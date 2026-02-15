@@ -213,6 +213,7 @@ module SageFsRender =
       Id = "sessions"
       Flags = RegionFlags.Clickable ||| RegionFlags.LiveUpdate
       Content =
+        let now = DateTime.UtcNow
         model.Sessions.Sessions
         |> List.map (fun s ->
           let statusLabel =
@@ -229,7 +230,22 @@ module SageFsRender =
             else sprintf " (%s)" (s.Projects |> List.map System.IO.Path.GetFileNameWithoutExtension |> String.concat ", ")
           let evals =
             if s.EvalCount > 0 then sprintf " evals:%d" s.EvalCount else ""
-          sprintf "%s [%s]%s%s%s" s.Id statusLabel active projects evals)
+          let uptime =
+            let ts = now - s.UpSince
+            if ts.TotalDays >= 1.0 then sprintf " up:%dd%dh" (int ts.TotalDays) ts.Hours
+            elif ts.TotalHours >= 1.0 then sprintf " up:%dh%dm" (int ts.TotalHours) ts.Minutes
+            elif ts.TotalMinutes >= 1.0 then sprintf " up:%dm" (int ts.TotalMinutes)
+            else " up:just now"
+          let dir =
+            if s.WorkingDirectory.Length > 0 then sprintf " dir:%s" s.WorkingDirectory
+            else ""
+          let lastAct =
+            let diff = now - s.LastActivity
+            if diff.TotalSeconds < 60.0 then " last:just now"
+            elif diff.TotalMinutes < 60.0 then sprintf " last:%dm ago" (int diff.TotalMinutes)
+            elif diff.TotalHours < 24.0 then sprintf " last:%dh ago" (int diff.TotalHours)
+            else sprintf " last:%dd ago" (int diff.TotalDays)
+          sprintf "%s [%s]%s%s%s%s%s%s" s.Id statusLabel active projects evals uptime dir lastAct)
         |> String.concat "\n"
       Affordances = []
     }
@@ -332,7 +348,8 @@ module SageFsEffectHandler =
       LastActivity = info.LastActivity
       EvalCount = 0
       UpSince = info.CreatedAt
-      IsActive = false }
+      IsActive = false
+      WorkingDirectory = info.WorkingDirectory }
 
   /// The main effect handler — plug into ElmProgram.ExecuteEffect
   let execute

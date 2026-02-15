@@ -96,8 +96,7 @@ let affordanceTests = testList "SessionDisplay.sessionAffordances" [
       Id = "s1"; Projects = ["Test.fsproj"]
       Status = SessionDisplayStatus.Running
       LastActivity = now; EvalCount = 5
-      UpSince = now.AddHours(-1.0); IsActive = false
-    }
+      UpSince = now.AddHours(-1.0); IsActive = false; WorkingDirectory = "" }
     let affordances = SessionDisplay.sessionAffordances Map.empty snap
     affordances
     |> List.exists (fun a -> a.Label = "Switch" && a.Enabled)
@@ -108,8 +107,7 @@ let affordanceTests = testList "SessionDisplay.sessionAffordances" [
       Id = "s1"; Projects = ["Test.fsproj"]
       Status = SessionDisplayStatus.Running
       LastActivity = now; EvalCount = 5
-      UpSince = now.AddHours(-1.0); IsActive = true
-    }
+      UpSince = now.AddHours(-1.0); IsActive = true; WorkingDirectory = "" }
     let affordances = SessionDisplay.sessionAffordances Map.empty snap
     affordances
     |> List.exists (fun a -> a.Label = "Switch" && not a.Enabled)
@@ -120,8 +118,7 @@ let affordanceTests = testList "SessionDisplay.sessionAffordances" [
       Id = "s1"; Projects = ["Test.fsproj"]
       Status = SessionDisplayStatus.Errored "crash"
       LastActivity = now; EvalCount = 0
-      UpSince = now.AddHours(-1.0); IsActive = false
-    }
+      UpSince = now.AddHours(-1.0); IsActive = false; WorkingDirectory = "" }
     let affordances = SessionDisplay.sessionAffordances Map.empty snap
     affordances
     |> List.exists (fun a -> a.Label = "Restart")
@@ -132,8 +129,7 @@ let affordanceTests = testList "SessionDisplay.sessionAffordances" [
       Id = "s1"; Projects = ["Test.fsproj"]
       Status = SessionDisplayStatus.Running
       LastActivity = now; EvalCount = 5
-      UpSince = now.AddHours(-1.0); IsActive = true
-    }
+      UpSince = now.AddHours(-1.0); IsActive = true; WorkingDirectory = "" }
     let affordances = SessionDisplay.sessionAffordances Map.empty snap
     affordances
     |> List.exists (fun a -> a.Label = "Restart")
