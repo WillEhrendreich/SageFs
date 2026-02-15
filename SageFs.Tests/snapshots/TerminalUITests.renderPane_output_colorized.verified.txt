@@ -1,0 +1,6 @@
+﻿«@1,1»«dim»┌─ «white»Output«dim» ────────────────────────────────────────┐
+«@2,1»«dim»│«reset»«dim»[12:30:45]«reset» «green»[result]«reset» «reset»val x: int = 42«reset»             «dim»│
+«@3,1»«dim»│«reset»«dim»[12:30:46]«reset» «red»[error]«reset» «red»Type mismatch«reset»                «dim»│
+«@4,1»«dim»│«reset»                                                «dim»│
+«@5,1»«dim»│«reset»                                                «dim»│
+«@6,1»«dim»└────────────────────────────────────────────────┘«reset»

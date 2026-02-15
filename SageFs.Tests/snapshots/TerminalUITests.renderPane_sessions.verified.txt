@@ -1,0 +1,5 @@
+﻿«@1,1»«dim»┌─ «white»Sessions«dim» ────────────────────────────┐
+«@2,1»«dim»│«reset»«green»session-abc [Ready] *«reset»                 «dim»│
+«@3,1»«dim»│«reset»«dim»session-def [WarmingUp]«reset»               «dim»│
+«@4,1»«dim»│«reset»«dim»«reset»                                      «dim»│
+«@5,1»«dim»└──────────────────────────────────────┘«reset»

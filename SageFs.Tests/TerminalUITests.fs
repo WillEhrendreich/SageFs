@@ -1,7 +1,10 @@
 module SageFs.Tests.TerminalUITests
 
 open System
+open System.IO
 open Expecto
+open VerifyExpecto
+open VerifyTests
 open SageFs
 
 // Helpers
@@ -274,6 +277,244 @@ let terminalInputTests = testList "TerminalInput" [
 ]
 
 
+let outputColorizerTests = testList "OutputColorizer" [
+  test "result lines get green" {
+    let result = OutputColorizer.colorize "[12:30:45] [result] val x: int = 42"
+    Expect.stringContains result AnsiCodes.green "result should be green"
+  }
+
+  test "error lines get red" {
+    let result = OutputColorizer.colorize "[12:30:46] [error] FS0001: Type mismatch"
+    Expect.stringContains result AnsiCodes.red "error should be red"
+  }
+
+  test "info lines get cyan" {
+    let result = OutputColorizer.colorize "[12:30:47] [info] Loaded module Foo"
+    Expect.stringContains result AnsiCodes.cyan "info should be cyan"
+  }
+
+  test "warning lines get yellow" {
+    let result = OutputColorizer.colorize "[12:30:49] [warning] Unused variable"
+    Expect.stringContains result AnsiCodes.yellow "warning should be yellow"
+  }
+
+  test "timestamps are dimmed" {
+    let result = OutputColorizer.colorize "[12:30:45] [result] val x: int = 42"
+    Expect.stringContains result AnsiCodes.dimWhite "timestamp should be dimmed"
+  }
+
+  test "short lines pass through" {
+    let result = OutputColorizer.colorize "hi"
+    Expect.equal result "hi" "short lines unchanged"
+  }
+
+  test "empty lines pass through" {
+    let result = OutputColorizer.colorize ""
+    Expect.equal result "" "empty lines unchanged"
+  }
+]
+
+
+let diagnosticsColorizerTests = testList "DiagnosticsColorizer" [
+  test "error diagnostics get red" {
+    let result = DiagnosticsColorizer.colorize "[error] (5,10) Type mismatch"
+    Expect.stringContains result AnsiCodes.red "error should be red"
+  }
+
+  test "warning diagnostics get yellow" {
+    let result = DiagnosticsColorizer.colorize "[warning] (1,1) Unused"
+    Expect.stringContains result AnsiCodes.yellow "warning should be yellow"
+  }
+
+  test "plain lines pass through" {
+    let result = DiagnosticsColorizer.colorize "no bracket"
+    Expect.equal result "no bracket" "plain lines unchanged"
+  }
+]
+
+
+let contentColorizerTests = testList "ContentColorizer" [
+  test "output region uses output colorizer" {
+    let result = ContentColorizer.colorizeLine "output" "[12:00:00] [error] fail"
+    Expect.stringContains result AnsiCodes.red "output error should be red"
+  }
+
+  test "diagnostics region uses diagnostics colorizer" {
+    let result = ContentColorizer.colorizeLine "diagnostics" "[warning] (1,1) msg"
+    Expect.stringContains result AnsiCodes.yellow "diagnostics warning should be yellow"
+  }
+
+  test "sessions with active marker get green" {
+    let result = ContentColorizer.colorizeLine "sessions" "session-abc [Ready] *"
+    Expect.stringContains result AnsiCodes.green "active session should be green"
+  }
+
+  test "sessions without active marker are dimmed" {
+    let result = ContentColorizer.colorizeLine "sessions" "session-abc [Ready]"
+    Expect.stringContains result AnsiCodes.dimWhite "inactive session should be dimmed"
+  }
+
+  test "editor region passes through" {
+    let result = ContentColorizer.colorizeLine "editor" "let x = 42"
+    Expect.equal result "let x = 42" "editor content unchanged"
+  }
+]
+
+
+let frameDiffTests = testList "FrameDiff" [
+  test "identical frames produce empty diff" {
+    let r1 = AnsiCodes.moveTo 1 1
+    let r2 = AnsiCodes.moveTo 2 1
+    let frame = sprintf "%sHello%sWorld" r1 r2
+    let result = FrameDiff.diff frame frame
+    Expect.equal result "" "identical frames should produce empty diff"
+  }
+
+  test "changed row included in diff" {
+    let r1 = AnsiCodes.moveTo 1 1
+    let r2 = AnsiCodes.moveTo 2 1
+    let prev = sprintf "%sHello%sWorld" r1 r2
+    let next = sprintf "%sHello%sChanged" r1 r2
+    let result = FrameDiff.diff prev next
+    Expect.stringContains result "Changed" "changed row should be in diff"
+  }
+
+  test "new row included in diff" {
+    let r1 = AnsiCodes.moveTo 1 1
+    let r2 = AnsiCodes.moveTo 2 1
+    let prev = sprintf "%sHello" r1
+    let next = sprintf "%sHello%sNew" r1 r2
+    let result = FrameDiff.diff prev next
+    Expect.stringContains result "New" "new row should be in diff"
+  }
+]
+
+
+// === Snapshot Tests ===
+
+let snapshotsDir = Path.Combine(__SOURCE_DIRECTORY__, "snapshots")
+
+let verifyTerminal name (value: string) =
+  let settings = VerifySettings()
+  settings.UseDirectory(snapshotsDir)
+  Verifier.Verify(name, value, "txt", settings).ToTask()
+
+/// Replace ANSI escape sequences with readable tokens for snapshot comparison
+let scrubAnsi (s: string) =
+  s
+    .Replace("\x1b[?25l", "«hide-cursor»")
+    .Replace("\x1b[?25h", "«show-cursor»")
+    .Replace("\x1b[0m", "«reset»")
+    .Replace("\x1b[7m", "«inverse»")
+    .Replace("\x1b[27m", "«/inverse»")
+    .Replace(AnsiCodes.green, "«green»")
+    .Replace(AnsiCodes.red, "«red»")
+    .Replace(AnsiCodes.yellow, "«yellow»")
+    .Replace(AnsiCodes.cyan, "«cyan»")
+    .Replace(AnsiCodes.dimWhite, "«dim»")
+    .Replace(AnsiCodes.white, "«white»")
+    |> fun s ->
+      Text.RegularExpressions.Regex.Replace(s, @"\x1b\[(\d+);(\d+)H", "«@$1,$2»")
+    |> fun s ->
+      Text.RegularExpressions.Regex.Replace(s, @"\x1b\[[0-9;]*[A-Za-z]", "«esc»")
+
+/// Put each positioned row on its own line for readability
+let formatForSnapshot (scrubbed: string) =
+  Text.RegularExpressions.Regex.Replace(scrubbed, @"«@(\d+),(\d+)»", "\n«@$1,$2»")
+    .TrimStart('\n')
+
+let renderPaneSnapshotTests = testList "renderPane snapshots" [
+  testTask "output pane with colorized content" {
+    let pane = mkPane "output" "Output" 1 1 50 6 false
+    let content = "[12:30:45] [result] val x: int = 42\n[12:30:46] [error] Type mismatch"
+    let region = mkRegion "output" content
+    let rendered = TerminalRender.renderPane pane (Some region) |> scrubAnsi |> formatForSnapshot
+    do! verifyTerminal "renderPane_output_colorized" rendered
+  }
+
+  testTask "focused editor pane" {
+    let pane = mkPane "editor" "Editor" 1 1 50 4 true
+    let region = mkRegion "editor" "let x = 42\nprintfn \"%d\" x"
+    let rendered = TerminalRender.renderPane pane (Some region) |> scrubAnsi |> formatForSnapshot
+    do! verifyTerminal "renderPane_editor_focused" rendered
+  }
+
+  testTask "sessions pane with active session" {
+    let pane = mkPane "sessions" "Sessions" 1 1 40 5 false
+    let content = "session-abc [Ready] *\nsession-def [WarmingUp]"
+    let region = mkRegion "sessions" content
+    let rendered = TerminalRender.renderPane pane (Some region) |> scrubAnsi |> formatForSnapshot
+    do! verifyTerminal "renderPane_sessions" rendered
+  }
+
+  testTask "diagnostics pane with errors" {
+    let pane = mkPane "diagnostics" "Diagnostics" 1 1 50 5 false
+    let content = "[error] (5,10) Type mismatch\n[warning] (1,1) Unused binding"
+    let region = mkRegion "diagnostics" content
+    let rendered = TerminalRender.renderPane pane (Some region) |> scrubAnsi |> formatForSnapshot
+    do! verifyTerminal "renderPane_diagnostics" rendered
+  }
+
+  testTask "empty pane" {
+    let pane = mkPane "output" "Output" 1 1 30 4 false
+    let rendered = TerminalRender.renderPane pane None |> scrubAnsi |> formatForSnapshot
+    do! verifyTerminal "renderPane_empty" rendered
+  }
+]
+
+let renderFrameSnapshotTests = testList "renderFrame snapshots" [
+  testTask "full frame with all regions" {
+    let layout = TerminalLayout.compute 25 80
+    let regions = [
+      mkRegion "editor" "let x = 42"
+      mkRegion "output" "[12:00:00] [result] val x = 42"
+      mkRegion "diagnostics" "[error] (1,5) Unknown"
+      mkRegion "sessions" "sess-1 [Ready] *"
+    ]
+    let rendered = TerminalRender.renderFrame layout regions "Ready" 5
+                   |> scrubAnsi |> formatForSnapshot
+    do! verifyTerminal "renderFrame_full" rendered
+  }
+]
+
+let statusBarSnapshotTests = testList "statusBar snapshots" [
+  testTask "status bar layout" {
+    let rendered = TerminalRender.renderStatusBar 25 80 "Ready" 42 "Editor"
+                   |> scrubAnsi |> formatForSnapshot
+    do! verifyTerminal "renderStatusBar" rendered
+  }
+]
+
+let colorizerSnapshotTests = testList "colorizer snapshots" [
+  testTask "output colorizer all kinds" {
+    let lines =
+      [ "[12:30:45] [result] val x: int = 42"
+        "[12:30:46] [error] FS0001: Type mismatch"
+        "[12:30:47] [info] Loaded module Foo"
+        "[12:30:48] [warning] Unused variable"
+        "[12:30:49] [system] Hot reload triggered"
+        "just plain text"
+        "" ]
+      |> List.map (fun line ->
+        sprintf "%s -> %s" line (OutputColorizer.colorize line |> scrubAnsi))
+      |> String.concat "\n"
+    do! verifyTerminal "outputColorizer_all_kinds" lines
+  }
+
+  testTask "diagnostics colorizer all severities" {
+    let lines =
+      [ "[error] (5,10) Type mismatch"
+        "[warning] (1,1) Unused binding"
+        "[info] (3,0) Some message"
+        "plain text" ]
+      |> List.map (fun line ->
+        sprintf "%s -> %s" line (DiagnosticsColorizer.colorize line |> scrubAnsi))
+      |> String.concat "\n"
+    do! verifyTerminal "diagnosticsColorizer_all" lines
+  }
+]
+
+
 [<Tests>]
 let allTerminalUITests = testList "Terminal UI" [
   terminalRenderTests
@@ -282,4 +523,12 @@ let allTerminalUITests = testList "Terminal UI" [
   renderFrameTests
   statusBarTests
   terminalInputTests
+  outputColorizerTests
+  diagnosticsColorizerTests
+  contentColorizerTests
+  frameDiffTests
+  renderPaneSnapshotTests
+  renderFrameSnapshotTests
+  statusBarSnapshotTests
+  colorizerSnapshotTests
 ]

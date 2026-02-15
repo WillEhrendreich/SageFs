@@ -82,6 +82,8 @@ let restoreConsole () =
 let run
   (elmRuntime: ElmRuntime<SageFsModel, SageFsMsg, RenderRegion>)
   (stateChanged: IEvent<string>)
+  (connectionTracker: ConnectionTracker option)
+  (sessionId: string option)
   (ct: CancellationToken)
   = task {
 
@@ -90,6 +92,16 @@ let run
   let state = TerminalState.create rows cols
 
   setupRawMode ()
+
+  // Register terminal as connected UI
+  let clientId = sprintf "terminal-%s" (Guid.NewGuid().ToString("N").[..7])
+  connectionTracker |> Option.iter (fun t ->
+    match sessionId with
+    | Some sid -> t.Register(clientId, Terminal, sid)
+    | None -> t.Register(clientId, Terminal))
+
+  // Previous frame for diff optimization
+  let mutable prevFrame = ""
 
   let render () =
     lock TerminalUIState.consoleLock (fun () ->
@@ -104,7 +116,16 @@ let run
           model.RecentOutput |> List.length
         let frame =
           TerminalRender.renderFrame state.Layout regions sessionState evalCount
-        Console.Write(frame)
+        // Use diff rendering — only emit changed rows
+        let output =
+          if prevFrame.Length = 0 then frame
+          else
+            let d = FrameDiff.diff prevFrame frame
+            if d.Length = 0 then "" // nothing changed
+            else d
+        if output.Length > 0 then
+          Console.Write(output)
+        prevFrame <- frame
       with _ -> ())
 
   // Clear screen and initial render
@@ -123,6 +144,7 @@ let run
       let newCols = Console.WindowWidth
       if newRows <> state.Layout.Rows || newCols <> state.Layout.Cols then
         TerminalState.resize state newRows newCols
+        prevFrame <- "" // force full redraw
         lock TerminalUIState.consoleLock (fun () ->
           Console.Write(AnsiCodes.clearScreen))
         render ()
@@ -133,6 +155,7 @@ let run
         | Some TerminalCommand.Quit ->
           return ()
         | Some TerminalCommand.Redraw ->
+          prevFrame <- "" // force full redraw
           lock TerminalUIState.consoleLock (fun () ->
             Console.Write(AnsiCodes.clearScreen))
           render ()
@@ -154,6 +177,7 @@ let run
           do! Threading.Tasks.Task.Delay(16, ct) // ~60fps check rate
         with :? OperationCanceledException -> ()
   finally
+    connectionTracker |> Option.iter (fun t -> t.Unregister(clientId))
     stateChanged.RemoveHandler renderHandler
     restoreConsole ()
 }

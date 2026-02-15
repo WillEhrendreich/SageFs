@@ -1,0 +1,5 @@
+﻿«@1,1»«dim»┌─ «white»Diagnostics«dim» ───────────────────────────────────┐
+«@2,1»«dim»│«reset»«red»[error]«reset» (5,10) Type mismatch                    «dim»│
+«@3,1»«dim»│«reset»«yellow»[warning]«reset» (1,1) Unused binding                  «dim»│
+«@4,1»«dim»│«reset»                                                «dim»│
+«@5,1»«dim»└────────────────────────────────────────────────┘«reset»

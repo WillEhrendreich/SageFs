@@ -1,0 +1,4 @@
+﻿[error] (5,10) Type mismatch -> «red»[error]«reset» (5,10) Type mismatch
+[warning] (1,1) Unused binding -> «yellow»[warning]«reset» (1,1) Unused binding
+[info] (3,0) Some message -> «dim»[info]«reset» (3,0) Some message
+plain text -> plain text

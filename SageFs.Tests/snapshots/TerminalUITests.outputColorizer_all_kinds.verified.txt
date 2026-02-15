@@ -1,0 +1,7 @@
+﻿[12:30:45] [result] val x: int = 42 -> «dim»[12:30:45]«reset» «green»[result]«reset» «reset»val x: int = 42«reset»
+[12:30:46] [error] FS0001: Type mismatch -> «dim»[12:30:46]«reset» «red»[error]«reset» «red»FS0001: Type mismatch«reset»
+[12:30:47] [info] Loaded module Foo -> «dim»[12:30:47]«reset» «cyan»[info]«reset» «reset»Loaded module Foo«reset»
+[12:30:48] [warning] Unused variable -> «dim»[12:30:48]«reset» «yellow»[warning]«reset» «reset»Unused variable«reset»
+[12:30:49] [system] Hot reload triggered -> «dim»[12:30:49]«reset» «cyan»[system]«reset» «reset»Hot reload triggered«reset»
+just plain text -> just plain text
+ -> 

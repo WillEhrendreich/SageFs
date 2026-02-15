@@ -163,6 +163,75 @@ module TerminalLayout =
       StatusBarRow = statusRow }
 
 
+
+/// Output line colorization — applies ANSI colors to output content
+module OutputColorizer =
+  let colorize (line: string) : string =
+    if line.Length < 14 then line
+    else
+      let tsEnd = line.IndexOf(']')
+      if tsEnd < 0 then line
+      else
+        let ts = line.Substring(0, tsEnd + 1)
+        let rest = line.Substring(tsEnd + 1).TrimStart()
+        if rest.StartsWith("[") then
+          let kindEnd = rest.IndexOf(']')
+          if kindEnd < 0 then
+            sprintf "%s%s%s %s" AnsiCodes.dimWhite ts AnsiCodes.reset rest
+          else
+            let kind = rest.Substring(1, kindEnd - 1).ToLowerInvariant()
+            let text = rest.Substring(kindEnd + 1).TrimStart()
+            let kindColor =
+              match kind with
+              | "result" -> AnsiCodes.green
+              | "error" -> AnsiCodes.red
+              | "warning" -> AnsiCodes.yellow
+              | "info" | "system" -> AnsiCodes.cyan
+              | _ -> AnsiCodes.dimWhite
+            let textColor =
+              match kind with
+              | "error" -> AnsiCodes.red
+              | _ -> AnsiCodes.reset
+            sprintf "%s%s%s %s[%s]%s %s%s%s"
+              AnsiCodes.dimWhite ts AnsiCodes.reset
+              kindColor kind AnsiCodes.reset
+              textColor text AnsiCodes.reset
+        else
+          sprintf "%s%s%s %s" AnsiCodes.dimWhite ts AnsiCodes.reset rest
+
+
+/// Diagnostics line colorization
+module DiagnosticsColorizer =
+  let colorize (line: string) : string =
+    if line.Length < 5 || not (line.StartsWith("[")) then line
+    else
+      let bracketEnd = line.IndexOf(']')
+      if bracketEnd < 0 then line
+      else
+        let severity = line.Substring(1, bracketEnd - 1).ToLowerInvariant()
+        let rest = line.Substring(bracketEnd + 1)
+        let sevColor =
+          match severity with
+          | "error" -> AnsiCodes.red
+          | "warning" -> AnsiCodes.yellow
+          | _ -> AnsiCodes.dimWhite
+        sprintf "%s[%s]%s%s" sevColor severity AnsiCodes.reset rest
+
+
+/// Content colorization dispatcher — applies per-region coloring
+module ContentColorizer =
+  let colorizeLine (regionId: string) (line: string) : string =
+    match regionId with
+    | "output" -> OutputColorizer.colorize line
+    | "diagnostics" -> DiagnosticsColorizer.colorize line
+    | "sessions" ->
+      if line.Contains("*") then
+        sprintf "%s%s%s" AnsiCodes.green line AnsiCodes.reset
+      else
+        sprintf "%s%s%s" AnsiCodes.dimWhite line AnsiCodes.reset
+    | _ -> line
+
+
 /// Pure terminal rendering functions
 module TerminalRender =
   /// Compute visible width of a string, ignoring ANSI escape sequences
@@ -225,7 +294,8 @@ module TerminalRender =
 
     for i in 0 .. contentHeight - 1 do
       sb.Append(AnsiCodes.moveTo (pane.Row + 1 + i) pane.Col) |> ignore
-      let line = if i < lines.Length then lines.[i] else ""
+      let rawLine = if i < lines.Length then lines.[i] else ""
+      let line = ContentColorizer.colorizeLine pane.RegionId rawLine
       let inner = fitToWidth (pane.Width - 2) line
       sb.Append(sprintf "%s%s%s%s%s%s"
         borderColor AnsiCodes.boxV AnsiCodes.reset
@@ -275,7 +345,59 @@ module TerminalRender =
     sb.ToString()
 
 
-/// Global terminal UI state shared across modules
+
+/// Frame diffing — only redraw rows that changed between frames
+module FrameDiff =
+  /// Split a rendered frame into (row, content) pairs based on moveTo commands
+  let private parsePositionedLines (frame: string) : Map<int, string> =
+    let mutable result = Map.empty
+    let mutable currentRow = -1
+    let sb = System.Text.StringBuilder()
+    let mutable i = 0
+
+    while i < frame.Length do
+      if i + 2 < frame.Length && frame.[i] = '\x1b' && frame.[i+1] = '[' then
+        let mutable j = i + 2
+        while j < frame.Length
+          && frame.[j] <> 'H' && frame.[j] <> 'A'
+          && frame.[j] <> 'B' && frame.[j] <> 'J'
+          && frame.[j] <> 'K' && frame.[j] <> 'm' do
+          j <- j + 1
+        if j < frame.Length && frame.[j] = 'H' then
+          let coords = frame.Substring(i + 2, j - i - 2)
+          let parts = coords.Split(';')
+          if parts.Length >= 1 then
+            if currentRow >= 0 then
+              result <- result |> Map.add currentRow (sb.ToString())
+              sb.Clear() |> ignore
+            match Int32.TryParse(parts.[0]) with
+            | true, row -> currentRow <- row
+            | _ -> ()
+          sb.Append(frame.Substring(i, j - i + 1)) |> ignore
+          i <- j + 1
+        else
+          sb.Append(frame.Substring(i, j - i + 1)) |> ignore
+          i <- j + 1
+      else
+        sb.Append(frame.[i]) |> ignore
+        i <- i + 1
+
+    if currentRow >= 0 then
+      result <- result |> Map.add currentRow (sb.ToString())
+    result
+
+  /// Create a diff frame containing only rows that changed
+  let diff (prevFrame: string) (newFrame: string) : string =
+    let prevLines = parsePositionedLines prevFrame
+    let newLines = parsePositionedLines newFrame
+    let sb = System.Text.StringBuilder()
+
+    for kv in newLines do
+      match prevLines |> Map.tryFind kv.Key with
+      | Some prev when prev = kv.Value -> ()
+      | _ -> sb.Append(kv.Value) |> ignore
+
+    sb.ToString()
 module TerminalUIState =
   /// When true, eprintfn output should be suppressed (terminal UI owns the console)
   let mutable IsActive = false

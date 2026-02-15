@@ -1,0 +1,45 @@
+﻿«hide-cursor»
+«@1,1»«dim»┌─ «white»Output«dim» ──────────────────────────────────────────┐
+«@2,1»«dim»│«reset»«dim»[12:00:00]«reset» «green»[result]«reset» «reset»val x = 42«reset»                    «dim»│
+«@3,1»«dim»│«reset»                                                  «dim»│
+«@4,1»«dim»│«reset»                                                  «dim»│
+«@5,1»«dim»│«reset»                                                  «dim»│
+«@6,1»«dim»│«reset»                                                  «dim»│
+«@7,1»«dim»│«reset»                                                  «dim»│
+«@8,1»«dim»│«reset»                                                  «dim»│
+«@9,1»«dim»│«reset»                                                  «dim»│
+«@10,1»«dim»│«reset»                                                  «dim»│
+«@11,1»«dim»│«reset»                                                  «dim»│
+«@12,1»«dim»│«reset»                                                  «dim»│
+«@13,1»«dim»│«reset»                                                  «dim»│
+«@14,1»«dim»│«reset»                                                  «dim»│
+«@15,1»«dim»│«reset»                                                  «dim»│
+«@16,1»«dim»│«reset»                                                  «dim»│
+«@17,1»«dim»│«reset»                                                  «dim»│
+«@18,1»«dim»└──────────────────────────────────────────────────┘«reset»
+«@1,53»«dim»┌─ «white»Sessions«dim» ────────────────┐
+«@2,53»«dim»│«reset»«green»sess-1 [Ready] *«reset»          «dim»│
+«@3,53»«dim»│«reset»«dim»«reset»                          «dim»│
+«@4,53»«dim»│«reset»«dim»«reset»                          «dim»│
+«@5,53»«dim»│«reset»«dim»«reset»                          «dim»│
+«@6,53»«dim»│«reset»«dim»«reset»                          «dim»│
+«@7,53»«dim»│«reset»«dim»«reset»                          «dim»│
+«@8,53»«dim»│«reset»«dim»«reset»                          «dim»│
+«@9,53»«dim»└──────────────────────────┘«reset»
+«@10,53»«dim»┌─ «white»Diagnostics«dim» ─────────────┐
+«@11,53»«dim»│«reset»«red»[error]«reset» (1,5) Unknown     «dim»│
+«@12,53»«dim»│«reset»                          «dim»│
+«@13,53»«dim»│«reset»                          «dim»│
+«@14,53»«dim»│«reset»                          «dim»│
+«@15,53»«dim»│«reset»                          «dim»│
+«@16,53»«dim»│«reset»                          «dim»│
+«@17,53»«dim»│«reset»                          «dim»│
+«@18,53»«dim»└──────────────────────────┘«reset»
+«@19,1»«cyan»┌─ «white»Editor«cyan» ──────────────────────────────────────────────────────────────────────┐
+«@20,1»«cyan»│«reset»let x = 42                                                                    «cyan»│
+«@21,1»«cyan»│«reset»                                                                              «cyan»│
+«@22,1»«cyan»│«reset»                                                                              «cyan»│
+«@23,1»«cyan»│«reset»                                                                              «cyan»│
+«@24,1»«cyan»└──────────────────────────────────────────────────────────────────────────────┘«reset»
+«@25,1»«inverse» Ready | evals: 5 | focus: Editor | Ctrl+Enter:eval Tab:focus Ctrl+Q:quit       «reset»
+«@20,2»«show-cursor»

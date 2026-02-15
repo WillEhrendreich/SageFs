@@ -148,6 +148,7 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
 
   // Start dashboard web server on MCP port + 1
   let dashboardPort = mcpPort + 1
+  let connectionTracker = ConnectionTracker()
   let dashboardEndpoints =
     Dashboard.createEndpoints
       version
@@ -211,7 +212,7 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
           | Error e -> Error (sprintf "%A" e)
       }))
       // Connection tracker
-      (Some (ConnectionTracker()))
+      (Some connectionTracker)
   let dashboardTask = task {
     try
       let builder = Microsoft.AspNetCore.Builder.WebApplication.CreateBuilder()
@@ -289,7 +290,7 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
   let terminalTask = task {
     try
       if Environment.UserInteractive && not (Console.IsInputRedirected) then
-        do! TerminalMode.run elmRuntime stateChangedEvent.Publish cts.Token
+        do! TerminalMode.run elmRuntime stateChangedEvent.Publish (Some connectionTracker) (Some sessionId) cts.Token
         // Terminal UI exited (Ctrl+D) — shut down daemon
         cts.Cancel()
     with
