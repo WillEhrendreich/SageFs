@@ -6,7 +6,7 @@ open System.IO
 open System.Threading
 open FSharp.Compiler.Diagnostics
 open FSharp.Compiler.Interactive.Shell
-open FSharpPlus
+open System
 open SageFs.Features
 open SageFs.ProjectLoading
 open SageFs.Utils
@@ -344,7 +344,7 @@ let createFsiSession (logger: ILogger) (outStream: TextWriter) (useAsp: bool) (s
             if lines.Length > 0 then lines.[0].Trim() else err
         logger.LogDebug (sprintf "  ✗ %s — %s" name shortErr)
 
-    // Restore core F# after warm-up opens. Libraries like FSharpPlus shadow
+    // Restore core F# after warm-up opens. User project libraries like FSharpPlus shadow
     // min/max with SRTP-generic versions and replace the async CE builder.
     fsiSession.EvalInteractionNonThrowing("open Microsoft.FSharp.Core.Operators;;") |> ignore
     fsiSession.EvalInteractionNonThrowing("open Microsoft.FSharp.Core.ExtraTopLevelOperators;;") |> ignore
@@ -399,8 +399,8 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
       | QueryGetBoundValue(name, reply) ->
         snapshot.AppState.Session.GetBoundValues()
         |> List.tryFind (fun x -> x.Name = name)
-        |>> (fun v -> v.Value.ReflectionValue)
-        >>= Option.ofObj
+        |> Option.map (fun v -> v.Value.ReflectionValue)
+        |> Option.bind Option.ofObj
         |> reply.Reply
         return! loop snapshot
       | QueryUpdateMcpPort port ->

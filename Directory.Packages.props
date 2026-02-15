@@ -16,7 +16,6 @@
     <PackageVersion Include="FsCheck" Version="3.3.2" />
     <PackageVersion Include="FSharp.Compiler.Service" Version="43.10.101" />
     <PackageVersion Include="FSharp.SystemTextJson" Version="1.4.36" />
-    <PackageVersion Include="FSharpPlus" Version="1.8.0" />
     <PackageVersion Include="FuzzySharp" Version="2.0.2" />
     <PackageVersion Include="Ionide.ProjInfo" Version="0.74.1" />
     <PackageVersion Include="Ionide.ProjInfo.FCS" Version="0.74.1" />

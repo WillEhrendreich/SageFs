@@ -56,7 +56,6 @@
     <ItemGroup>
         <PackageReference Include="FSharp.Compiler.Service" />
 
-        <PackageReference Include="FSharpPlus" />
         <PackageReference Include="FuzzySharp" />
         <PackageReference Include="Lib.Harmony" />
         <PackageReference Include="Ionide.ProjInfo" />

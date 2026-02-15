@@ -3,7 +3,6 @@ module SageFs.Middleware.Directives
 #nowarn "57"
 
 open System.IO
-open FSharpPlus
 open Fantomas.Core
 open Fantomas.FCS.Syntax
 open SageFs.AppState
