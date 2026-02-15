@@ -4,6 +4,7 @@ open System
 open System.Threading
 open SageFs
 open SageFs.Server
+open Falco
 
 /// Run SageFs as a headless daemon.
 /// No PrettyPrompt, no console UI — just MCP server + SessionManager.
@@ -126,6 +127,39 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
       (SageFs.SessionMode.Daemon sessionOps)
       (Some elmRuntime)
 
+  // Start dashboard web server on MCP port + 1
+  let dashboardPort = mcpPort + 1
+  let dashboardEndpoints =
+    Dashboard.createEndpoints
+      version
+      result.GetSessionState
+      result.GetEvalStats
+      sessionId
+      (result.ProjectDirectories.Length)
+      (fun () -> elmRuntime.GetRegions() |> Some)
+      (fun code -> task {
+        let request : AppState.EvalRequest = { Code = code; Args = Map.empty }
+        let! resp =
+          appActor.PostAndAsyncReply(fun reply ->
+            AppState.Eval(request, CancellationToken.None, reply))
+          |> Async.StartAsTask
+        return
+          match resp.EvaluationResult with
+          | Ok msg -> msg
+          | Error ex -> sprintf "Error: %s" ex.Message
+      })
+  let dashboardTask = task {
+    try
+      let builder = Microsoft.AspNetCore.Builder.WebApplication.CreateBuilder()
+      let app = builder.Build()
+      app.Urls.Add(sprintf "http://localhost:%d" dashboardPort)
+      app.UseRouting().UseFalco(dashboardEndpoints) |> ignore
+      eprintfn "Dashboard available at http://localhost:%d/dashboard" dashboardPort
+      do! app.RunAsync()
+    with ex ->
+      eprintfn "[WARN] Dashboard failed to start: %s" ex.Message
+  }
+
   // Phase 2: Add middleware — blocks until warm-up completes
   do! ActorCreation.addMiddleware result actorArgs.Middleware
 
@@ -176,7 +210,7 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
         | SageFs.FileWatcher.FileChangeAction.Ignore -> ()
       Some (SageFs.FileWatcher.start config onFileChanged)
 
-  eprintfn "SageFs daemon ready (PID %d, MCP port %d)" Environment.ProcessId mcpPort
+  eprintfn "SageFs daemon ready (PID %d, MCP port %d, dashboard port %d)" Environment.ProcessId mcpPort dashboardPort
 
   Console.CancelKeyPress.Add(fun e ->
     e.Cancel <- true
@@ -188,10 +222,15 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
     eprintfn "Daemon stopped.")
 
   try
-    // Run MCP server until cancelled
-    do! System.Threading.Tasks.Task.Run(
-      System.Func<System.Threading.Tasks.Task>(fun () -> mcpTask),
-      cts.Token)
+    // Run MCP server and dashboard until cancelled
+    let! _ = System.Threading.Tasks.Task.WhenAny(
+      System.Threading.Tasks.Task.Run(
+        System.Func<System.Threading.Tasks.Task>(fun () -> mcpTask),
+        cts.Token),
+      System.Threading.Tasks.Task.Run(
+        System.Func<System.Threading.Tasks.Task>(fun () -> dashboardTask),
+        cts.Token))
+    ()
   with
   | :? OperationCanceledException -> ()
 
