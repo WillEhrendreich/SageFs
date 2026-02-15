@@ -1,6 +1,7 @@
 module SageFs.Server.Dashboard
 
 open System
+open System.IO
 open Falco
 open Falco.Markup
 open Falco.Routing
@@ -12,6 +13,31 @@ open SageFs
 open SageFs.Affordances
 
 module FalcoResponse = Falco.Response
+
+/// Discover .fsproj and .sln/.slnx files in a directory.
+type DiscoveredProjects = {
+  WorkingDir: string
+  Solutions: string list
+  Projects: string list
+}
+
+let discoverProjects (workingDir: string) : DiscoveredProjects =
+  let projects =
+    try
+      Directory.EnumerateFiles(workingDir, "*.fsproj", SearchOption.AllDirectories)
+      |> Seq.map (fun p -> Path.GetRelativePath(workingDir, p))
+      |> Seq.toList
+    with _ -> []
+  let solutions =
+    try
+      Directory.EnumerateFiles(workingDir)
+      |> Seq.filter (fun f ->
+        let ext = Path.GetExtension(f).ToLowerInvariant()
+        ext = ".sln" || ext = ".slnx")
+      |> Seq.map Path.GetFileName
+      |> Seq.toList
+    with _ -> []
+  { WorkingDir = workingDir; Solutions = solutions; Projects = projects }
 
 /// Render the dashboard HTML shell.
 /// Datastar initializes and connects to the /dashboard/stream SSE endpoint.
@@ -53,11 +79,20 @@ let private renderShell (version: string) =
         .panel-header-btn { background: none; border: 1px solid var(--border); color: var(--fg); border-radius: 4px; padding: 1px 8px; cursor: pointer; font-size: 0.75rem; font-family: inherit; }
         .panel-header-btn:hover { background: var(--border); }
         .auto-scroll { scroll-behavior: smooth; }
+        .conn-banner { padding: 6px 1rem; text-align: center; font-size: 0.85rem; font-weight: bold; border-radius: 4px; margin-bottom: 1rem; transition: all 0.3s; }
+        .conn-connected { background: var(--green); color: var(--bg); }
+        .conn-disconnected { background: var(--red); color: white; animation: pulse 1.5s infinite; }
+        .conn-reconnecting { background: var(--yellow); color: var(--bg); }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.6; } }
       """ ]
     ]
     Elem.body [ Ds.safariStreamingFix ] [
       // Dedicated init element that connects to SSE stream (per Falco.Datastar pattern)
       Elem.div [ Ds.onInit (Ds.get "/dashboard/stream") ] []
+      // Connection status banner
+      Elem.div [ Attr.id "connection-status"; Attr.class' "conn-banner conn-disconnected" ] [
+        Text.raw "⏳ Connecting to server..."
+      ]
       Elem.h1 [] [ Text.raw (sprintf "🧙 SageFs Dashboard v%s" version) ]
       Elem.div [ Attr.class' "grid" ] [
         // Row 1: Session status + Eval stats
@@ -129,6 +164,43 @@ let private renderShell (version: string) =
             Text.raw "No diagnostics"
           ]
         ]
+        // Row 5: Create Session (full width)
+        Elem.div [ Attr.class' "panel full-width" ] [
+          Elem.h2 [] [ Text.raw "Create Session" ]
+          Elem.div [ Attr.style "display: flex; gap: 0.5rem; align-items: flex-end;" ] [
+            Elem.div [ Attr.style "flex: 1;" ] [
+              Elem.label [ Attr.class' "meta"; Attr.style "display: block; margin-bottom: 4px;" ] [
+                Text.raw "Working Directory"
+              ]
+              Elem.input
+                [ Attr.class' "eval-input"
+                  Attr.style "min-height: auto; height: 2rem;"
+                  Ds.bind "newSessionDir"
+                  Attr.create "placeholder" @"C:\path\to\project" ]
+            ]
+            Elem.button
+              [ Attr.class' "eval-btn"
+                Attr.style "height: 2rem; padding: 0 1rem;"
+                Ds.onClick (Ds.post "/dashboard/discover-projects") ]
+              [ Text.raw "🔍 Discover" ]
+          ]
+          Elem.div [ Attr.id "discovered-projects" ] []
+          Elem.div [ Attr.style "margin-top: 0.5rem;" ] [
+            Elem.label [ Attr.class' "meta"; Attr.style "display: block; margin-bottom: 4px;" ] [
+              Text.raw "Or enter project paths (comma-separated)"
+            ]
+            Elem.input
+              [ Attr.class' "eval-input"
+                Attr.style "min-height: auto; height: 2rem;"
+                Ds.bind "manualProjects"
+                Attr.create "placeholder" "MyProject.fsproj, OtherProject.fsproj" ]
+          ]
+          Elem.button
+            [ Attr.class' "eval-btn"
+              Attr.style "margin-top: 0.5rem;"
+              Ds.onClick (Ds.post "/dashboard/session/create") ]
+            [ Text.raw "➕ Create Session" ]
+        ]
       ]
       // Auto-scroll output panel when new content arrives
       Elem.script [] [ Text.raw """
@@ -136,6 +208,41 @@ let private renderShell (version: string) =
           var panel = document.getElementById('output-panel');
           if (panel) panel.scrollTop = panel.scrollHeight;
         }).observe(document.getElementById('output-panel') || document.body, { childList: true, subtree: true });
+      """ ]
+      // Server connection monitoring script
+      Elem.script [] [ Text.raw """
+        (function() {
+          var lastUpdate = Date.now();
+          var banner = document.getElementById('connection-status');
+          var wasConnected = false;
+          // Track SSE activity by observing session-status mutations
+          var target = document.getElementById('session-status');
+          if (target) {
+            new MutationObserver(function() {
+              lastUpdate = Date.now();
+              if (!wasConnected || banner.className.indexOf('conn-connected') === -1) {
+                wasConnected = true;
+                banner.className = 'conn-banner conn-connected';
+                banner.textContent = '\u2705 Connected';
+                setTimeout(function() { banner.style.display = 'none'; }, 2000);
+              }
+            }).observe(target, { childList: true, subtree: true, characterData: true });
+          }
+          // Check every 5s if SSE is still alive
+          setInterval(function() {
+            var elapsed = Date.now() - lastUpdate;
+            if (elapsed > 10000) {
+              banner.style.display = '';
+              banner.className = 'conn-banner conn-disconnected';
+              banner.textContent = '\u274c Server disconnected \u2014 waiting for reconnect...';
+              wasConnected = false;
+            } else if (elapsed > 5000 && wasConnected) {
+              banner.style.display = '';
+              banner.className = 'conn-banner conn-reconnecting';
+              banner.textContent = '\u23f3 Connection stale \u2014 checking...';
+            }
+          }, 3000);
+        })();
       """ ]
     ]
   ]
@@ -468,6 +575,129 @@ let createClearOutputHandler : HttpHandler =
     do! Response.sseHtmlElements ctx emptyOutput
   }
 
+/// Render discovered projects as an SSE fragment.
+let renderDiscoveredProjects (discovered: DiscoveredProjects) =
+  Elem.div [ Attr.id "discovered-projects"; Attr.style "margin-top: 0.5rem;" ] [
+    if discovered.Solutions.IsEmpty && discovered.Projects.IsEmpty then
+      Elem.div [ Attr.class' "output-line output-error" ] [
+        Text.raw (sprintf "No .sln/.fsproj found in %s" discovered.WorkingDir)
+      ]
+    else
+      Elem.div [ Attr.class' "output-line output-result" ] [
+        Text.raw (sprintf "Found in %s:" discovered.WorkingDir)
+      ]
+      if not discovered.Solutions.IsEmpty then
+        yield! discovered.Solutions |> List.map (fun s ->
+          Elem.div [ Attr.class' "output-line output-info"; Attr.style "padding-left: 1rem;" ] [
+            Text.raw (sprintf "📁 %s (solution)" s)
+          ])
+      yield! discovered.Projects |> List.map (fun p ->
+        Elem.div [ Attr.class' "output-line"; Attr.style "padding-left: 1rem;" ] [
+          Text.raw (sprintf "📄 %s" p)
+        ])
+      Elem.div [ Attr.class' "meta"; Attr.style "margin-top: 4px;" ] [
+        if not discovered.Solutions.IsEmpty then
+          Text.raw "Will use solution file. Click 'Create Session' to proceed."
+        else
+          Text.raw "Will load all projects. Click 'Create Session' to proceed."
+      ]
+  ]
+
+/// Helper: render an eval-result error fragment.
+let private evalResultError (msg: string) =
+  Elem.div [ Attr.id "eval-result" ] [
+    Elem.pre [ Attr.class' "output-line output-error"; Attr.style "margin-top: 0.5rem;" ] [
+      Text.raw msg
+    ]
+  ]
+
+/// Helper: resolve which projects to use from signal data.
+let private resolveSessionProjects (dir: string) (manualProjects: string) =
+  if not (String.IsNullOrWhiteSpace manualProjects) then
+    manualProjects.Split(',')
+    |> Array.map (fun s -> s.Trim())
+    |> Array.filter (fun s -> s.Length > 0)
+    |> Array.map (fun p ->
+      if Path.IsPathRooted p then p
+      else Path.Combine(dir, p))
+    |> Array.toList
+  else
+    let discovered = discoverProjects dir
+    if not discovered.Solutions.IsEmpty then
+      [ Path.Combine(dir, discovered.Solutions.Head) ]
+    elif not discovered.Projects.IsEmpty then
+      discovered.Projects |> List.map (fun p -> Path.Combine(dir, p))
+    else
+      []
+
+/// Helper: extract a signal by camelCase or kebab-case name.
+let private getSignalString (doc: System.Text.Json.JsonDocument) (camelCase: string) (kebab: string) =
+  match doc.RootElement.TryGetProperty(camelCase) with
+  | true, prop -> prop.GetString()
+  | _ ->
+    match doc.RootElement.TryGetProperty(kebab) with
+    | true, prop -> prop.GetString()
+    | _ -> ""
+
+/// Create the discover-projects POST handler.
+let createDiscoverHandler : HttpHandler =
+  fun ctx -> task {
+    let! doc = Request.getSignalsJson ctx
+    let dir = getSignalString doc "newSessionDir" "new-session-dir"
+    Response.sseStartResponse ctx |> ignore
+    if String.IsNullOrWhiteSpace dir then
+      let errorHtml =
+        Elem.div [ Attr.id "discovered-projects" ] [
+          Elem.span [ Attr.class' "output-line output-error" ] [
+            Text.raw "Enter a working directory first"
+          ]
+        ]
+      do! Response.sseHtmlElements ctx errorHtml
+    elif not (Directory.Exists dir) then
+      let errorHtml =
+        Elem.div [ Attr.id "discovered-projects" ] [
+          Elem.span [ Attr.class' "output-line output-error" ] [
+            Text.raw (sprintf "Directory not found: %s" dir)
+          ]
+        ]
+      do! Response.sseHtmlElements ctx errorHtml
+    else
+      let discovered = discoverProjects dir
+      do! Response.sseHtmlElements ctx (renderDiscoveredProjects discovered)
+  }
+
+/// Create the create-session POST handler.
+let createCreateSessionHandler
+  (createSession: string list -> string -> Threading.Tasks.Task<Result<string, string>>)
+  : HttpHandler =
+  fun ctx -> task {
+    let! doc = Request.getSignalsJson ctx
+    let dir = getSignalString doc "newSessionDir" "new-session-dir"
+    let manualProjects = getSignalString doc "manualProjects" "manual-projects"
+    Response.sseStartResponse ctx |> ignore
+    if String.IsNullOrWhiteSpace dir then
+      do! Response.sseHtmlElements ctx (evalResultError "Working directory is required")
+    elif not (Directory.Exists dir) then
+      do! Response.sseHtmlElements ctx (evalResultError (sprintf "Directory not found: %s" dir))
+    else
+      let projects = resolveSessionProjects dir manualProjects
+      if projects.IsEmpty then
+        do! Response.sseHtmlElements ctx (evalResultError "No projects found. Enter paths manually or check the directory.")
+      else
+        let! result = createSession projects dir
+        let resultHtml =
+          match result with
+          | Ok msg ->
+            Elem.div [ Attr.id "eval-result" ] [
+              Elem.pre [ Attr.class' "output-line output-result"; Attr.style "margin-top: 0.5rem;" ] [
+                Text.raw msg
+              ]
+            ]
+          | Error msg -> evalResultError (sprintf "Failed: %s" msg)
+        do! Response.sseHtmlElements ctx resultHtml
+        do! Response.sseHtmlElements ctx (Elem.div [ Attr.id "discovered-projects" ] [])
+  }
+
 /// Create all dashboard routes.
 let createEndpoints
   (version: string)
@@ -482,6 +712,7 @@ let createEndpoints
   (hardResetSession: unit -> Threading.Tasks.Task<string>)
   (switchSession: (string -> Threading.Tasks.Task<string>) option)
   (stopSession: (string -> Threading.Tasks.Task<string>) option)
+  (createSession: (string list -> string -> Threading.Tasks.Task<Result<string, string>>) option)
   : HttpEndpoint list =
   [
     yield get "/dashboard" (FalcoResponse.ofHtml (renderShell version))
@@ -490,6 +721,11 @@ let createEndpoints
     yield post "/dashboard/reset" (createResetHandler resetSession)
     yield post "/dashboard/hard-reset" (createResetHandler hardResetSession)
     yield post "/dashboard/clear-output" createClearOutputHandler
+    yield post "/dashboard/discover-projects" createDiscoverHandler
+    match createSession with
+    | Some handler ->
+      yield post "/dashboard/session/create" (createCreateSessionHandler handler)
+    | None -> ()
     match switchSession with
     | Some handler ->
       yield mapPost "/dashboard/session/switch/{id}"

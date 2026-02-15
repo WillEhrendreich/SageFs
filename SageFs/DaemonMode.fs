@@ -198,6 +198,14 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
           | Ok msg -> msg
           | Error e -> sprintf "Stop failed: %A" e
       }))
+      // Create session handler
+      (Some (fun (projects: string list) (workingDir: string) -> task {
+        let! result = sessionOps.CreateSession projects workingDir
+        return
+          match result with
+          | Ok msg -> Ok msg
+          | Error e -> Error (sprintf "%A" e)
+      }))
   let dashboardTask = task {
     try
       let builder = Microsoft.AspNetCore.Builder.WebApplication.CreateBuilder()
