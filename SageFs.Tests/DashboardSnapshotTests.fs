@@ -111,8 +111,16 @@ let dashboardRenderSnapshotTests = testList "Dashboard render snapshots" [
   }
 ]
 
+let keyboardHelpSnapshotTests = testList "keyboard help snapshots" [
+  testTask "renderKeyboardHelp" {
+    let html = renderKeyboardHelp () |> renderNode
+    do! verifyDashboard "dashboard_keyboardHelp" html
+  }
+]
+
 
 [<Tests>]
 let allDashboardSnapshotTests = testList "Dashboard Snapshots" [
   dashboardRenderSnapshotTests
+  keyboardHelpSnapshotTests
 ]
