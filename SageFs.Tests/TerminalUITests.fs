@@ -542,6 +542,58 @@ let renderFrameSnapshotTests = testList "renderFrame snapshots" [
                    |> scrubAnsi |> formatForSnapshot
     do! verifyTerminal "renderFrame_full" rendered
   }
+
+  testTask "cursor after single-line text" {
+    let layout = TerminalLayout.compute 25 80
+    let regions = [
+      mkRegionWithCursor "editor" "hello world" 0 11
+      mkRegion "output" ""
+      mkRegion "diagnostics" ""
+      mkRegion "sessions" ""
+    ]
+    let rendered = TerminalRender.renderFrame layout regions "Ready" 0
+                   |> scrubAnsi |> formatForSnapshot
+    do! verifyTerminal "renderFrame_cursor_single_line" rendered
+  }
+
+  testTask "cursor on second line of multiline editor" {
+    let layout = TerminalLayout.compute 25 80
+    let regions = [
+      mkRegionWithCursor "editor" "let x = 42\nprintfn \"%d\" x" 1 15
+      mkRegion "output" "[12:00:00] [result] val x = 42"
+      mkRegion "diagnostics" "[error] (1,5) Unknown"
+      mkRegion "sessions" "sess-1 [Ready] *"
+    ]
+    let rendered = TerminalRender.renderFrame layout regions "Ready" 3
+                   |> scrubAnsi |> formatForSnapshot
+    do! verifyTerminal "renderFrame_cursor_multiline" rendered
+  }
+
+  testTask "cursor at empty editor origin" {
+    let layout = TerminalLayout.compute 25 80
+    let regions = [
+      mkRegionWithCursor "editor" "" 0 0
+      mkRegion "output" ""
+      mkRegion "diagnostics" ""
+      mkRegion "sessions" ""
+    ]
+    let rendered = TerminalRender.renderFrame layout regions "No session" 0
+                   |> scrubAnsi |> formatForSnapshot
+    do! verifyTerminal "renderFrame_cursor_empty" rendered
+  }
+
+  testTask "cursor defaults when no cursor info" {
+    let layout = TerminalLayout.compute 25 80
+    let regions = [
+      mkRegion "editor" "some text"
+      mkRegion "output" ""
+      mkRegion "diagnostics" ""
+      mkRegion "sessions" ""
+    ]
+    let rendered = TerminalRender.renderFrame layout regions "Ready" 0
+                   |> scrubAnsi |> formatForSnapshot
+    do! verifyTerminal "renderFrame_cursor_default" rendered
+  }
 ]
 
 let statusBarSnapshotTests = testList "statusBar snapshots" [
