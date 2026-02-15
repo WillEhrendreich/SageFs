@@ -1,1 +1,1 @@
-﻿«@25,1»«inverse» Ready | evals: 42 | focus: Editor | Ctrl+Enter:eval Tab:focus PgUp/PgDn:scroll Ctrl+Q:quit «reset»
+﻿«@25,1»«inverse» Ready | evals: 42 | Editor | ^Enter:eval Tab:focus PgUp/Dn:scroll ^Q:quit      «reset»
