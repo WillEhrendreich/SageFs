@@ -203,3 +203,11 @@ Use list_sessions to see available session IDs. Only available in daemon mode (S
     ) : Task<string> =
         logger.LogDebug("MCP-TOOL: stop_session called: id={Id}", session_id)
         stopSession ctx session_id |> withEcho "stop_session"
+
+    // ── Elm State Tools ──────────────────────────────────────────
+
+    [<McpServerTool>]
+    [<Description("Get the current Elm model state rendered as regions. Shows editor content, recent output, diagnostics, and sessions. Useful for understanding what SageFs is currently displaying.")>]
+    member _.get_elm_state() : Task<string> =
+        logger.LogDebug("MCP-TOOL: get_elm_state called")
+        getElmState ctx |> withEcho "get_elm_state"
