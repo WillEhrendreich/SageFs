@@ -89,12 +89,10 @@ let private renderShell (version: string) =
     Elem.body [ Ds.safariStreamingFix ] [
       // Dedicated init element that connects to SSE stream (per Falco.Datastar pattern)
       Elem.div [ Ds.onInit (Ds.get "/dashboard/stream") ] []
-      // Connection status banner (server-down detection)
+      // Connection status banner — pushed by SSE as "Connected", falls back to "Disconnected" via MutationObserver timeout
       Elem.div [ Attr.id "server-status"; Attr.class' "conn-banner conn-disconnected" ] [
         Text.raw "⏳ Connecting to server..."
       ]
-      // Hidden heartbeat element updated by SSE to track liveness
-      Elem.div [ Attr.id "sse-heartbeat"; Attr.style "display:none" ] []
       Elem.h1 [] [ Text.raw (sprintf "🧙 SageFs Dashboard v%s" version) ]
       Elem.div [ Attr.class' "grid" ] [
         // Row 1: Session status + Eval stats
@@ -212,49 +210,33 @@ let private renderShell (version: string) =
           if (panel) panel.scrollTop = panel.scrollHeight;
         }).observe(document.getElementById('output-panel') || document.body, { childList: true, subtree: true });
       """ ]
-      // Server connection monitoring script
+      // Server connection monitoring: SSE pushes server-status as "Connected" on every cycle.
+      // MutationObserver detects when SSE stops updating, indicating disconnection.
       Elem.script [] [ Text.raw """
         (function() {
           var banner = document.getElementById('server-status');
-          var wasConnected = false;
+          var timeout = null;
+          var STALE_MS = 12000;
 
-          // Use a simple polling approach: check if heartbeat data-ts changes
-          var lastSeenTs = '';
-          var lastChangeTime = 0;
+          function markDisconnected() {
+            banner.className = 'conn-banner conn-disconnected';
+            banner.style.display = '';
+            banner.textContent = '\u274c Server disconnected \u2014 waiting for reconnect...';
+          }
 
-          setInterval(function() {
-            var hb = document.getElementById('sse-heartbeat');
-            if (!hb) return;
-            var currentTs = hb.textContent.trim();
+          function resetTimeout() {
+            if (timeout) clearTimeout(timeout);
+            timeout = setTimeout(markDisconnected, STALE_MS);
+          }
 
-            if (currentTs && currentTs !== lastSeenTs) {
-              // Data changed — server is alive
-              lastSeenTs = currentTs;
-              lastChangeTime = Date.now();
+          // Watch for any mutation to server-status (SSE pushes morphs here)
+          var observer = new MutationObserver(function() {
+            resetTimeout();
+          });
+          observer.observe(banner, { childList: true, characterData: true, subtree: true, attributes: true });
 
-              if (!wasConnected) {
-                wasConnected = true;
-                banner.className = 'conn-banner conn-connected';
-                banner.textContent = '\u2705 Connected';
-                setTimeout(function() { banner.style.display = 'none'; }, 2000);
-              } else {
-                banner.style.display = 'none';
-              }
-            } else if (lastChangeTime > 0) {
-              // Data hasn't changed — check staleness
-              var elapsed = Date.now() - lastChangeTime;
-              if (elapsed > 15000) {
-                banner.style.display = '';
-                banner.className = 'conn-banner conn-disconnected';
-                banner.textContent = '\u274c Server disconnected \u2014 waiting for reconnect...';
-                wasConnected = false;
-              } else if (elapsed > 8000 && wasConnected) {
-                banner.style.display = '';
-                banner.className = 'conn-banner conn-reconnecting';
-                banner.textContent = '\u23f3 Connection stale \u2014 checking...';
-              }
-            }
-          }, 2000);
+          // Initial timeout — if no SSE arrives within STALE_MS, show disconnected
+          resetTimeout();
         })();
       """ ]
     ]
@@ -521,10 +503,10 @@ let createStreamHandler
     connectionTracker |> Option.iter (fun t -> t.Register(clientId, Browser, sessionId))
 
     let pushState () = task {
-      // Push heartbeat for server-status detection
+      // Push server-status as "Connected" — proves SSE is alive
       do! Response.sseHtmlElements ctx (
-        Elem.div [ Attr.id "sse-heartbeat"; Attr.style "display:none" ] [
-          Text.raw (DateTimeOffset.UtcNow.Ticks.ToString())
+        Elem.div [ Attr.id "server-status"; Attr.class' "conn-banner conn-connected"; Attr.style "display:none" ] [
+          Text.raw "✅ Connected"
         ])
       let state = getSessionState ()
       let stats = getEvalStats ()

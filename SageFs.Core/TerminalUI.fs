@@ -16,6 +16,8 @@ module AnsiCodes =
   let clearScreen = sprintf "%s2J" esc
   let clearLine = sprintf "%s2K" esc
   let home = sprintf "%sH" esc
+  let enterAltScreen = sprintf "%s?1049h" esc
+  let leaveAltScreen = sprintf "%s?1049l" esc
 
   let moveTo row col = sprintf "%s%d;%dH" esc row col
   let moveUp n = sprintf "%s%dA" esc n
