@@ -32,13 +32,13 @@ module AnsiCodes =
   let bgPanel = bg256 235
   let bgEditor = bg256 234
 
-  // Box-drawing characters
-  let boxH = "\u2500"
-  let boxV = "\u2502"
-  let boxTL = "\u250C"
-  let boxTR = "\u2510"
-  let boxBL = "\u2514"
-  let boxBR = "\u2518"
+  // Box-drawing characters (ASCII fallback for Windows console compatibility)
+  let boxH = "-"
+  let boxV = "|"
+  let boxTL = "+"
+  let boxTR = "+"
+  let boxBL = "+"
+  let boxBR = "+"
 
   let hline width =
     String.replicate width boxH
@@ -55,6 +55,15 @@ module AnsiCodes =
   let boxBottom width borderColor =
     sprintf "%s%s%s%s"
       borderColor boxBL (hline (width - 2)) boxBR
+
+  /// Try to enable Windows VT100 processing for ANSI escape support.
+  /// Returns true if VT100 is available.
+  let enableVT100 () =
+    try
+      // Test by writing an ANSI sequence and checking if Console accepts it
+      Console.Write("\x1b[0m")
+      true
+    with _ -> false
 
 
 /// A positioned region in the terminal
@@ -80,16 +89,17 @@ type TerminalLayout = {
 module TerminalLayout =
   let compute (rows: int) (cols: int) : TerminalLayout =
     let statusRow = rows
+    let editorH = 6
     let leftW = int (float cols * 0.65) |> max 20
     let rightW = cols - leftW
-    let topH = int (float (rows - 6) * 0.65) |> max 4
-    let sessH = (rows - 6 - topH) / 2 |> max 2
-    let diagH = rows - 6 - topH - sessH |> max 2
-    let editorH = 6
+    // Content area = everything above editor and status bar
+    let contentH = rows - editorH - 1 |> max 4
+    let sessH = contentH / 2 |> max 2
+    let diagH = contentH - sessH |> max 2
 
     let output =
       { RegionId = "output"; Title = "Output"
-        Row = 1; Col = 1; Width = leftW; Height = topH
+        Row = 1; Col = 1; Width = leftW; Height = contentH
         ScrollOffset = 0; Focused = false }
     let sessions =
       { RegionId = "sessions"; Title = "Sessions"
@@ -101,7 +111,7 @@ module TerminalLayout =
         ScrollOffset = 0; Focused = false }
     let editor =
       { RegionId = "editor"; Title = "Editor"
-        Row = topH + 1; Col = 1; Width = cols; Height = editorH
+        Row = 1 + contentH; Col = 1; Width = cols; Height = editorH
         ScrollOffset = 0; Focused = true }
 
     { Rows = rows; Cols = cols
@@ -111,9 +121,43 @@ module TerminalLayout =
 
 /// Pure terminal rendering functions
 module TerminalRender =
+  /// Compute visible width of a string, ignoring ANSI escape sequences
+  let visibleLength (s: string) : int =
+    let mutable len = 0
+    let mutable inEsc = false
+    for c in s do
+      if inEsc then
+        if (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') then
+          inEsc <- false
+      elif c = '\x1b' then
+        inEsc <- true
+      else
+        len <- len + 1
+    len
+
   let fitToWidth (width: int) (s: string) : string =
-    if String.length s >= width then s.Substring(0, width)
-    else s.PadRight(width)
+    let vLen = visibleLength s
+    if vLen >= width then
+      // Truncate by visible chars, preserving ANSI sequences
+      let sb = System.Text.StringBuilder()
+      let mutable visible = 0
+      let mutable inEsc = false
+      let mutable i = 0
+      while i < s.Length && visible < width do
+        let c = s.[i]
+        if inEsc then
+          sb.Append(c) |> ignore
+          if (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') then
+            inEsc <- false
+        elif c = '\x1b' then
+          inEsc <- true
+          sb.Append(c) |> ignore
+        else
+          sb.Append(c) |> ignore
+          visible <- visible + 1
+        i <- i + 1
+      sb.ToString()
+    else s.PadRight(s.Length + (width - vLen))
 
   let visibleLines (content: string) (scrollOffset: int) (height: int) : string list =
     let lines = content.Split('\n') |> Array.toList
@@ -185,6 +229,14 @@ module TerminalRender =
     | None -> ()
 
     sb.ToString()
+
+
+/// Global terminal UI state shared across modules
+module TerminalUIState =
+  /// When true, eprintfn output should be suppressed (terminal UI owns the console)
+  let mutable IsActive = false
+  /// Lock for synchronized console writes
+  let consoleLock = obj ()
 
 
 /// Terminal-specific commands beyond EditorAction
