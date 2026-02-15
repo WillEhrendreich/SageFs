@@ -39,6 +39,21 @@ let discoverProjects (workingDir: string) : DiscoveredProjects =
     with _ -> []
   { WorkingDir = workingDir; Solutions = solutions; Projects = projects }
 
+/// Render keyboard shortcut help as an HTML fragment.
+let renderKeyboardHelp () =
+  let shortcut key desc =
+    Elem.tr [] [
+      Elem.td [ Attr.style "padding: 2px 8px; font-family: monospace; color: var(--accent);" ] [ Text.raw key ]
+      Elem.td [ Attr.style "padding: 2px 8px;" ] [ Text.raw desc ]
+    ]
+  Elem.div [ Attr.id "keyboard-help"; Attr.style "margin-top: 0.5rem;" ] [
+    Elem.table [ Attr.style "font-size: 0.85rem; border-collapse: collapse;" ] [
+      shortcut "Ctrl+Enter" "Evaluate code"
+      shortcut "Tab" "Insert 2 spaces (in editor)"
+      shortcut "Ctrl+L" "Clear output"
+    ]
+  ]
+
 /// Render the dashboard HTML shell.
 /// Datastar initializes and connects to the /dashboard/stream SSE endpoint.
 let private renderShell (version: string) =
@@ -117,7 +132,16 @@ let private renderShell (version: string) =
         ]
         // Row 2: Evaluate (full width)
         Elem.div [ Attr.class' "panel full-width" ] [
-          Elem.h2 [] [ Text.raw "Evaluate" ]
+          Elem.h2 [] [
+            Text.raw "Evaluate"
+            Elem.button
+              [ Attr.class' "panel-header-btn"
+                Attr.create "data-on-click" "var h=document.getElementById('keyboard-help-wrapper'); h.style.display = h.style.display === 'none' ? 'block' : 'none'" ]
+              [ Text.raw "⌨ Help" ]
+          ]
+          Elem.div [ Attr.id "keyboard-help-wrapper"; Attr.style "display: none;" ] [
+            renderKeyboardHelp ()
+          ]
           Elem.textarea
             [ Attr.class' "eval-input"
               Ds.bind "code"
