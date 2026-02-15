@@ -68,6 +68,12 @@ let private renderShell (version: string) =
           ]
         ]
         Elem.div [ Attr.class' "panel" ] [
+          Elem.h2 [] [ Text.raw "Sessions" ]
+          Elem.div [ Attr.id "sessions-panel"; Attr.style "max-height: 300px; overflow-y: auto;" ] [
+            Text.raw "No sessions"
+          ]
+        ]
+        Elem.div [ Attr.class' "panel" ] [
           Elem.h2 [] [ Text.raw "Diagnostics" ]
           Elem.div [ Attr.id "diagnostics-panel"; Attr.style "max-height: 300px; overflow-y: auto;" ] [
             Text.raw "No diagnostics"
@@ -144,6 +150,20 @@ let renderDiagnostics (diags: (string * string * int * int) list) =
         ])
   ]
 
+/// Render sessions as an HTML fragment.
+let renderSessions (sessions: (string * string * bool) list) =
+  Elem.div [ Attr.id "sessions-panel" ] [
+    if sessions.IsEmpty then
+      Text.raw "No sessions"
+    else
+      yield! sessions |> List.map (fun (id, status, isActive) ->
+        let cls = if isActive then "output-result" else "meta"
+        let marker = if isActive then " ●" else ""
+        Elem.div [ Attr.class' (sprintf "output-line %s" cls) ] [
+          Text.raw (sprintf "%s [%s]%s" id status marker)
+        ])
+  ]
+
 let private parseOutputLines (content: string) =
   content.Split('\n')
   |> Array.filter (fun (l: string) -> l.Length > 0)
@@ -162,6 +182,20 @@ let private parseDiagLines (content: string) =
     severity, l, 0, 0)
   |> Array.toList
 
+let private parseSessionLines (content: string) =
+  content.Split('\n')
+  |> Array.filter (fun (l: string) -> l.Length > 0)
+  |> Array.map (fun (l: string) ->
+    let isActive = l.EndsWith(" *")
+    let trimmed = if isActive then l.[..l.Length - 3] else l
+    let parts = trimmed.Split(" [")
+    let id = if parts.Length > 0 then parts.[0] else trimmed
+    let status =
+      if parts.Length > 1 then parts.[1].TrimEnd(']')
+      else "unknown"
+    id, status, isActive)
+  |> Array.toList
+
 let private pushRegions
   (ctx: HttpContext)
   (regions: RenderRegion list)
@@ -173,6 +207,10 @@ let private pushRegions
     match regions |> List.tryFind (fun r -> r.Id = "diagnostics") with
     | Some r ->
       do! Response.sseHtmlElements ctx (renderDiagnostics (parseDiagLines r.Content))
+    | None -> ()
+    match regions |> List.tryFind (fun r -> r.Id = "sessions") with
+    | Some r ->
+      do! Response.sseHtmlElements ctx (renderSessions (parseSessionLines r.Content))
     | None -> ()
   }
 
