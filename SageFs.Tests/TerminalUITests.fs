@@ -251,6 +251,55 @@ let cursorPositionTests = testList "cursor positioning" [
   }
 ]
 
+let noScrollTests = testList "no-scroll rendering" [
+  test "frame contains zero newlines" {
+    let layout = TerminalLayout.compute 25 80
+    let regions = [
+      mkRegionWithCursor "editor" "let x = 42" 0 10
+      mkRegion "output" "result"
+      mkRegion "diagnostics" ""
+      mkRegion "sessions" ""
+    ]
+    let frame = TerminalRender.renderFrame layout regions "Ready" 1
+    let newlines = frame.ToCharArray() |> Array.filter ((=) '\n') |> Array.length
+    Expect.equal newlines 0 "frame must use absolute positioning, never newlines"
+  }
+
+  test "every content row uses moveTo positioning" {
+    let layout = TerminalLayout.compute 25 80
+    let regions = [
+      mkRegionWithCursor "editor" "code" 0 4
+      mkRegion "output" ""
+      mkRegion "diagnostics" ""
+      mkRegion "sessions" ""
+    ]
+    let frame = TerminalRender.renderFrame layout regions "Ready" 0
+    let moveToCount = System.Text.RegularExpressions.Regex.Matches(frame, @"\x1b\[\d+;\d+H").Count
+    Expect.isGreaterThanOrEqual moveToCount 25
+      (sprintf "need at least 25 moveTo for 25-row terminal, got %d" moveToCount)
+  }
+
+  test "typing one char changes minimal bytes" {
+    let layout = TerminalLayout.compute 25 80
+    let r1 = [
+      mkRegionWithCursor "editor" "hello" 0 5
+      mkRegion "output" ""; mkRegion "diagnostics" ""; mkRegion "sessions" ""
+    ]
+    let r2 = [
+      mkRegionWithCursor "editor" "hello!" 0 6
+      mkRegion "output" ""; mkRegion "diagnostics" ""; mkRegion "sessions" ""
+    ]
+    let frame1 = TerminalRender.renderFrame layout r1 "Ready" 0
+    let frame2 = TerminalRender.renderFrame layout r2 "Ready" 0
+    let changed =
+      Array.zip (frame1.ToCharArray()) (frame2.ToCharArray())
+      |> Array.filter (fun (a, b) -> a <> b)
+      |> Array.length
+    Expect.isLessThan changed 20
+      (sprintf "typing one char should change < 20 bytes, changed %d of %d" changed frame1.Length)
+  }
+]
+
 let statusBarTests = testList "statusBar" [
   test "renderStatusBar contains session state" {
     let result = TerminalRender.renderStatusBar 40 80 "Running" 10 "Editor"
@@ -678,6 +727,7 @@ let allTerminalUITests = testList "Terminal UI" [
   renderPaneTests
   renderFrameTests
   cursorPositionTests
+  noScrollTests
   statusBarTests
   terminalInputTests
   outputColorizerTests
