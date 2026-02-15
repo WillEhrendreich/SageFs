@@ -101,6 +101,7 @@ let private renderShell (version: string) =
           Elem.div [ Attr.id "session-status" ] [
             Text.raw "Connecting..."
           ]
+          Elem.div [ Attr.id "connection-status"; Attr.class' "meta"; Attr.style "font-size: 0.75rem; margin-top: 4px;" ] []
         ]
         Elem.div [ Attr.class' "panel" ] [
           Elem.h2 [] [ Text.raw "Eval Stats" ]
@@ -499,9 +500,13 @@ let createStreamHandler
   (projectCount: int)
   (getElmRegions: unit -> RenderRegion list option)
   (stateChanged: IEvent<string> option)
+  (connectionTracker: ConnectionTracker option)
   : HttpHandler =
   fun ctx -> task {
     Response.sseStartResponse ctx |> ignore
+
+    let clientId = Guid.NewGuid().ToString("N").[..7]
+    connectionTracker |> Option.iter (fun t -> t.Register(clientId, Browser, sessionId))
 
     let pushState () = task {
       let state = getSessionState ()
@@ -519,34 +524,54 @@ let createStreamHandler
           avgMs
           stats.MinDuration.TotalMilliseconds
           stats.MaxDuration.TotalMilliseconds)
+      // Push connection counts
+      match connectionTracker with
+      | Some tracker ->
+        let total = tracker.TotalCount
+        let counts = tracker.GetCounts(sessionId)
+        let parts =
+          [ if counts.Browsers > 0 then sprintf "🌐 %d" counts.Browsers
+            if counts.McpAgents > 0 then sprintf "🤖 %d" counts.McpAgents
+            if counts.Terminals > 0 then sprintf "💻 %d" counts.Terminals ]
+        let label =
+          if parts.IsEmpty then sprintf "%d connected" total
+          else sprintf "%s" (String.Join(" ", parts))
+        do! Response.sseHtmlElements ctx (
+          Elem.div [ Attr.id "connection-status"; Attr.class' "meta"; Attr.style "font-size: 0.75rem; margin-top: 4px;" ] [
+            Text.raw label
+          ])
+      | None -> ()
       match getElmRegions () with
       | Some regions -> do! pushRegions ctx regions
       | None -> ()
     }
 
-    // Push initial state
-    do! pushState ()
+    try
+      // Push initial state
+      do! pushState ()
 
-    match stateChanged with
-    | Some evt ->
-      // Event-driven: push on every state change
-      let tcs = Threading.Tasks.TaskCompletionSource()
-      use _ct = ctx.RequestAborted.Register(fun () -> tcs.TrySetResult() |> ignore)
-      use _sub = evt.Subscribe(fun _ ->
-        try
-          pushState()
-          |> Async.AwaitTask
-          |> Async.RunSynchronously
-        with _ -> ())
-      do! tcs.Task
-    | None ->
-      // Fallback: poll every second
-      while not ctx.RequestAborted.IsCancellationRequested do
-        try
-          do! Threading.Tasks.Task.Delay(TimeSpan.FromSeconds 1.0, ctx.RequestAborted)
-          do! pushState ()
-        with
-        | :? OperationCanceledException -> ()
+      match stateChanged with
+      | Some evt ->
+        // Event-driven: push on every state change
+        let tcs = Threading.Tasks.TaskCompletionSource()
+        use _ct = ctx.RequestAborted.Register(fun () -> tcs.TrySetResult() |> ignore)
+        use _sub = evt.Subscribe(fun _ ->
+          try
+            pushState()
+            |> Async.AwaitTask
+            |> Async.RunSynchronously
+          with _ -> ())
+        do! tcs.Task
+      | None ->
+        // Fallback: poll every second
+        while not ctx.RequestAborted.IsCancellationRequested do
+          try
+            do! Threading.Tasks.Task.Delay(TimeSpan.FromSeconds 1.0, ctx.RequestAborted)
+            do! pushState ()
+          with
+          | :? OperationCanceledException -> ()
+    finally
+      connectionTracker |> Option.iter (fun t -> t.Unregister(clientId))
   }
 
 /// Create the eval POST handler.
@@ -687,6 +712,32 @@ let private getSignalString (doc: System.Text.Json.JsonDocument) (camelCase: str
     | true, prop -> prop.GetString()
     | _ -> ""
 
+/// Push discover results for a directory.
+let private pushDiscoverResults (ctx: HttpContext) (dir: string) = task {
+  let dirConfig = DirectoryConfig.load dir
+  let discovered = discoverProjects dir
+  let configNote =
+    match dirConfig with
+    | Some config when not config.Projects.IsEmpty ->
+      Some (Elem.div [ Attr.class' "output-line output-info"; Attr.style "margin-bottom: 4px;" ] [
+        Text.raw (sprintf "⚙️ .SageFs/config.fsx: %s" (String.Join(", ", config.Projects)))
+      ])
+    | Some _ ->
+      Some (Elem.div [ Attr.class' "output-line meta"; Attr.style "margin-bottom: 4px;" ] [
+        Text.raw "⚙️ .SageFs/config.fsx found (no projects configured)"
+      ])
+    | None -> None
+  let mainContent = renderDiscoveredProjects discovered
+  match configNote with
+  | Some note ->
+    let combined = Elem.div [ Attr.id "discovered-projects"; Attr.style "margin-top: 0.5rem;" ] [
+      note; mainContent
+    ]
+    do! Response.sseHtmlElements ctx combined
+  | None ->
+    do! Response.sseHtmlElements ctx mainContent
+}
+
 /// Create the discover-projects POST handler.
 let createDiscoverHandler : HttpHandler =
   fun ctx -> task {
@@ -694,44 +745,19 @@ let createDiscoverHandler : HttpHandler =
     let dir = getSignalString doc "newSessionDir" "new-session-dir"
     Response.sseStartResponse ctx |> ignore
     if String.IsNullOrWhiteSpace dir then
-      let errorHtml =
+      do! Response.sseHtmlElements ctx (
         Elem.div [ Attr.id "discovered-projects" ] [
           Elem.span [ Attr.class' "output-line output-error" ] [
             Text.raw "Enter a working directory first"
-          ]
-        ]
-      do! Response.sseHtmlElements ctx errorHtml
+          ]])
     elif not (Directory.Exists dir) then
-      let errorHtml =
+      do! Response.sseHtmlElements ctx (
         Elem.div [ Attr.id "discovered-projects" ] [
           Elem.span [ Attr.class' "output-line output-error" ] [
             Text.raw (sprintf "Directory not found: %s" dir)
-          ]
-        ]
-      do! Response.sseHtmlElements ctx errorHtml
+          ]])
     else
-      let dirConfig = DirectoryConfig.load dir
-      let discovered = discoverProjects dir
-      let configNote =
-        match dirConfig with
-        | Some config when not config.Projects.IsEmpty ->
-          Some (Elem.div [ Attr.class' "output-line output-info"; Attr.style "margin-bottom: 4px;" ] [
-            Text.raw (sprintf "⚙️ .SageFs/config.fsx: %s" (String.Join(", ", config.Projects)))
-          ])
-        | Some _ ->
-          Some (Elem.div [ Attr.class' "output-line meta"; Attr.style "margin-bottom: 4px;" ] [
-            Text.raw "⚙️ .SageFs/config.fsx found (no projects configured)"
-          ])
-        | None -> None
-      let mainContent = renderDiscoveredProjects discovered
-      match configNote with
-      | Some note ->
-        let combined = Elem.div [ Attr.id "discovered-projects"; Attr.style "margin-top: 0.5rem;" ] [
-          note; mainContent
-        ]
-        do! Response.sseHtmlElements ctx combined
-      | None ->
-        do! Response.sseHtmlElements ctx mainContent
+      do! pushDiscoverResults ctx dir
   }
 
 /// Create the create-session POST handler.
@@ -781,10 +807,11 @@ let createEndpoints
   (switchSession: (string -> Threading.Tasks.Task<string>) option)
   (stopSession: (string -> Threading.Tasks.Task<string>) option)
   (createSession: (string list -> string -> Threading.Tasks.Task<Result<string, string>>) option)
+  (connectionTracker: ConnectionTracker option)
   : HttpEndpoint list =
   [
     yield get "/dashboard" (FalcoResponse.ofHtml (renderShell version))
-    yield get "/dashboard/stream" (createStreamHandler getSessionState getEvalStats sessionId projectCount getElmRegions stateChanged)
+    yield get "/dashboard/stream" (createStreamHandler getSessionState getEvalStats sessionId projectCount getElmRegions stateChanged connectionTracker)
     yield post "/dashboard/eval" (createEvalHandler evalCode)
     yield post "/dashboard/reset" (createResetHandler resetSession)
     yield post "/dashboard/hard-reset" (createResetHandler hardResetSession)

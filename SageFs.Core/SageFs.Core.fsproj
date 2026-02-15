@@ -38,6 +38,7 @@
         <Compile Include="SageFsApp.fs" />
     <Compile Include="ElmDaemon.fs" />
         <Compile Include="DirectoryConfig.fs" />
+        <Compile Include="ConnectionTracker.fs" />
         <Compile Include="StartupProfile.fs" />
         <Compile Include="FileWatcher.fs" />
         <Compile Include="AppState.fs" />
