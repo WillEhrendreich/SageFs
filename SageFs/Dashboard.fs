@@ -653,6 +653,7 @@ let private evalResultError (msg: string) =
   ]
 
 /// Helper: resolve which projects to use from signal data.
+/// Priority: manual > .SageFs/config.fsx > auto-discovery
 let private resolveSessionProjects (dir: string) (manualProjects: string) =
   if not (String.IsNullOrWhiteSpace manualProjects) then
     manualProjects.Split(',')
@@ -663,13 +664,19 @@ let private resolveSessionProjects (dir: string) (manualProjects: string) =
       else Path.Combine(dir, p))
     |> Array.toList
   else
-    let discovered = discoverProjects dir
-    if not discovered.Solutions.IsEmpty then
-      [ Path.Combine(dir, discovered.Solutions.Head) ]
-    elif not discovered.Projects.IsEmpty then
-      discovered.Projects |> List.map (fun p -> Path.Combine(dir, p))
-    else
-      []
+    match DirectoryConfig.load dir with
+    | Some config when not config.Projects.IsEmpty ->
+      config.Projects |> List.map (fun p ->
+        if Path.IsPathRooted p then p
+        else Path.Combine(dir, p))
+    | _ ->
+      let discovered = discoverProjects dir
+      if not discovered.Solutions.IsEmpty then
+        [ Path.Combine(dir, discovered.Solutions.Head) ]
+      elif not discovered.Projects.IsEmpty then
+        discovered.Projects |> List.map (fun p -> Path.Combine(dir, p))
+      else
+        []
 
 /// Helper: extract a signal by camelCase or kebab-case name.
 let private getSignalString (doc: System.Text.Json.JsonDocument) (camelCase: string) (kebab: string) =
@@ -703,8 +710,28 @@ let createDiscoverHandler : HttpHandler =
         ]
       do! Response.sseHtmlElements ctx errorHtml
     else
+      let dirConfig = DirectoryConfig.load dir
       let discovered = discoverProjects dir
-      do! Response.sseHtmlElements ctx (renderDiscoveredProjects discovered)
+      let configNote =
+        match dirConfig with
+        | Some config when not config.Projects.IsEmpty ->
+          Some (Elem.div [ Attr.class' "output-line output-info"; Attr.style "margin-bottom: 4px;" ] [
+            Text.raw (sprintf "⚙️ .SageFs/config.fsx: %s" (String.Join(", ", config.Projects)))
+          ])
+        | Some _ ->
+          Some (Elem.div [ Attr.class' "output-line meta"; Attr.style "margin-bottom: 4px;" ] [
+            Text.raw "⚙️ .SageFs/config.fsx found (no projects configured)"
+          ])
+        | None -> None
+      let mainContent = renderDiscoveredProjects discovered
+      match configNote with
+      | Some note ->
+        let combined = Elem.div [ Attr.id "discovered-projects"; Attr.style "margin-top: 0.5rem;" ] [
+          note; mainContent
+        ]
+        do! Response.sseHtmlElements ctx combined
+      | None ->
+        do! Response.sseHtmlElements ctx mainContent
   }
 
 /// Create the create-session POST handler.
