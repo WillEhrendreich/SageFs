@@ -78,9 +78,10 @@ let private renderShell (version: string) =
         .output-error { color: var(--red); }
         .output-info { color: var(--accent); }
         .output-system { color: #8b949e; }
-        .diag { font-size: 0.85rem; padding: 4px 0; }
+        .diag { font-size: 0.85rem; padding: 4px 0; border-bottom: 1px solid var(--border); }
         .diag-error { color: var(--red); }
         .diag-warning { color: var(--yellow); }
+        .diag-location { font-family: monospace; background: var(--bg-highlight); padding: 1px 4px; border-radius: 3px; font-size: 0.8rem; margin-right: 0.25rem; }
         .meta { color: #8b949e; font-size: 0.8rem; }
         .eval-input { width: 100%; background: var(--bg); color: var(--fg); border: 1px solid var(--border); border-radius: 4px; padding: 0.5rem; font-family: inherit; font-size: 0.9rem; resize: vertical; min-height: 80px; tab-size: 2; }
         .eval-input:focus { outline: 1px solid var(--accent); border-color: var(--accent); }
@@ -307,9 +308,22 @@ let renderSessionStatus (sessionState: string) (sessionId: string) (projectCount
 /// Render eval stats as an HTML fragment.
 let renderEvalStats (evalCount: int) (avgMs: float) (minMs: float) (maxMs: float) =
   Elem.div [ Attr.id "eval-stats" ] [
-    Elem.div [] [ Text.raw (sprintf "Evals: %d" evalCount) ]
-    Elem.div [ Attr.class' "meta" ] [
-      Text.raw (sprintf "Avg: %.0fms | Min: %.0fms | Max: %.0fms" avgMs minMs maxMs)
+    Elem.div [ Attr.style "display: flex; gap: 1rem; align-items: baseline;" ] [
+      Elem.span [ Attr.style "font-size: 1.5rem; font-weight: bold; color: var(--accent);" ] [
+        Text.raw (sprintf "%d" evalCount)
+      ]
+      Elem.span [ Attr.class' "meta" ] [ Text.raw "evals" ]
+    ]
+    Elem.div [ Attr.style "display: flex; gap: 1rem; margin-top: 0.25rem;" ] [
+      Elem.span [ Attr.class' "meta" ] [
+        Text.raw (sprintf "avg %.0fms" avgMs)
+      ]
+      Elem.span [ Attr.class' "meta" ] [
+        Text.raw (sprintf "min %.0fms" minMs)
+      ]
+      Elem.span [ Attr.class' "meta" ] [
+        Text.raw (sprintf "max %.0fms" maxMs)
+      ]
     ]
   ]
 
@@ -354,8 +368,18 @@ let renderDiagnostics (diags: (string * string * int * int) list) =
     else
       yield! diags |> List.map (fun (severity, message, line, col) ->
         let cls = if severity = "Error" then "diag-error" else "diag-warning"
+        let icon = if severity = "Error" then "✗" else "⚠"
         Elem.div [ Attr.class' (sprintf "diag %s" cls) ] [
-          Text.raw (sprintf "[%s] L%d:%d %s" severity line col message)
+          Elem.span [ Attr.style "margin-right: 0.25rem;" ] [
+            Text.raw icon
+          ]
+          if line > 0 || col > 0 then
+            Elem.span [ Attr.class' "diag-location" ] [
+              Text.raw (sprintf "L%d:%d" line col)
+            ]
+          Elem.span [] [
+            Text.raw (sprintf " %s" message)
+          ]
         ])
   ]
 
