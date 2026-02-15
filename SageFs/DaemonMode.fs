@@ -183,6 +183,20 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
           | Ok msg -> sprintf "Hard reset: %s" msg
           | Error e -> sprintf "Hard reset failed: %A" e
       })
+      // Session switch handler
+      (Some (fun (sid: string) -> task {
+        elmRuntime.Dispatch (SageFsMsg.Event (
+          SageFsEvent.SessionSwitched (None, sid)))
+        return sprintf "Switched to session '%s'" sid
+      }))
+      // Session stop handler
+      (Some (fun (sid: string) -> task {
+        let! result = sessionOps.StopSession sid
+        return
+          match result with
+          | Ok msg -> msg
+          | Error e -> sprintf "Stop failed: %A" e
+      }))
   let dashboardTask = task {
     try
       let builder = Microsoft.AspNetCore.Builder.WebApplication.CreateBuilder()
