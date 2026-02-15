@@ -213,6 +213,7 @@ let createFsiSession (logger: ILogger) (outStream: TextWriter) (useAsp: bool) (s
 
     let fsiSession =
       FsiEvaluationSession.Create(fsiConfig, args, new StreamReader(Stream.Null), recorder, TextWriter.Null, collectible = true)
+    logger.LogInfo "  FSI session created, loading startup files..."
 
     for fileName in sln.StartupFiles do
       logger.LogInfo $"Loading {fileName}"
@@ -252,6 +253,7 @@ let createFsiSession (logger: ILogger) (outStream: TextWriter) (useAsp: bool) (s
         logger.LogDebug (sprintf "Could not parse opens from %s: %s" fsFile ex.Message)
 
     // Phase 2: Collect namespaces/modules via reflection
+    logger.LogInfo "  Scanning assemblies for namespaces..."
     // Use a collectible AssemblyLoadContext to avoid the default context's identity cache.
     // Assembly.LoadFrom caches by identity — after hard reset + rebuild, it returns the
     // OLD assembly even though the shadow-copied DLL on disk has new types.
@@ -648,8 +650,40 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
             let newShadowDir = ShadowCopy.createShadowDir ()
             logger.LogInfo "  Creating shadow copies..."
             let newSln = ShadowCopy.shadowCopySolution newShadowDir st.OriginalSolution
+            ShadowCopy.cleanupStaleDirs ()
 
-            let! newSession, newRecorder, _, warmupFailures = createFsiSession logger outStream useAsp newSln
+            logger.LogInfo "  Creating new FSI session..."
+            let warmupTimeout = TimeSpan.FromMinutes(5.0)
+            let warmupCts = new CancellationTokenSource(warmupTimeout)
+            let! warmupResult =
+              async {
+                try
+                  let! r = createFsiSession logger outStream useAsp newSln
+                  return Ok r
+                with ex ->
+                  return Error ex
+              }
+              |> fun a -> Async.StartAsTask(a, cancellationToken = warmupCts.Token) |> Async.AwaitTask
+              |> fun a ->
+                async {
+                  try return! a
+                  with
+                  | :? OperationCanceledException ->
+                    return Error (System.TimeoutException(sprintf "Warmup timed out after %.0f minutes" warmupTimeout.TotalMinutes) :> exn)
+                  | ex -> return Error ex
+                }
+            match warmupResult with
+            | Error ex ->
+              warmupCts.Dispose()
+              ShadowCopy.cleanupShadowDir newShadowDir
+              let msg = sprintf "Session warmup failed: %s" ex.Message
+              logger.LogError (sprintf "  ❌ %s" msg)
+              let failedState = SessionState.Faulted
+              publishSnapshot st failedState evalStats
+              reply.Reply(Error (SageFsError.HardResetFailed msg))
+              return! loop st middleware failedState evalStats
+            | Ok (newSession, newRecorder, _, warmupFailures) ->
+            warmupCts.Dispose()
             let newSt =
               { st with
                   Session = newSession

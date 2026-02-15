@@ -37,20 +37,39 @@ module ElmLoop =
     let rec dispatch (msg: 'Msg) =
       let newModel, effects =
         lock lockObj (fun () ->
-          let m, effs = program.Update msg model
-          model <- m
-          m, effs)
+          try
+            let m, effs = program.Update msg model
+            model <- m
+            m, effs
+          with ex ->
+            eprintfn "[ElmLoop] Update threw: %s" ex.Message
+            model, [])
 
-      let regions = program.Render newModel
+      let regions =
+        try program.Render newModel
+        with ex ->
+          eprintfn "[ElmLoop] Render threw: %s" ex.Message
+          lock lockObj (fun () -> latestRegions)
+
       lock lockObj (fun () -> latestRegions <- regions)
-      program.OnModelChanged newModel regions
+
+      try program.OnModelChanged newModel regions
+      with ex -> eprintfn "[ElmLoop] OnModelChanged threw: %s" ex.Message
 
       for effect in effects do
-        Async.Start (program.ExecuteEffect dispatch effect)
+        Async.Start (async {
+          try do! program.ExecuteEffect dispatch effect
+          with ex -> eprintfn "[ElmLoop] Effect threw: %s" ex.Message
+        })
 
-    let regions = program.Render initialModel
+    let regions =
+      try program.Render initialModel
+      with ex ->
+        eprintfn "[ElmLoop] Initial Render threw: %s" ex.Message
+        []
     latestRegions <- regions
-    program.OnModelChanged initialModel regions
+    try program.OnModelChanged initialModel regions
+    with ex -> eprintfn "[ElmLoop] Initial OnModelChanged threw: %s" ex.Message
 
     { Dispatch = dispatch
       GetModel = fun () -> lock lockObj (fun () -> model)

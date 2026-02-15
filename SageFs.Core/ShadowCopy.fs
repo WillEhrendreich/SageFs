@@ -63,3 +63,20 @@ let cleanupAllPending () : unit =
         Directory.Delete(dir, true)
     with _ -> ()
 
+/// Removes all sagefs-shadow-* directories except the most recent one.
+/// Best-effort: locked dirs are silently skipped.
+let cleanupStaleDirs () : unit =
+  try
+    let tempDir = Path.GetTempPath()
+    let shadowDirs =
+      Directory.GetDirectories(tempDir, "sagefs-shadow-*")
+      |> Array.sortByDescending (fun d ->
+        try Directory.GetLastWriteTimeUtc d
+        with _ -> DateTime.MinValue)
+    // Keep the most recent, clean the rest
+    if shadowDirs.Length > 1 then
+      for dir in shadowDirs.[1..] do
+        try Directory.Delete(dir, true)
+        with _ -> ()
+  with _ -> ()
+
