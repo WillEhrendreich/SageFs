@@ -144,6 +144,38 @@ let renderDiagnostics (diags: (string * string * int * int) list) =
         ])
   ]
 
+let private parseOutputLines (content: string) =
+  content.Split('\n')
+  |> Array.filter (fun (l: string) -> l.Length > 0)
+  |> Array.map (fun (l: string) ->
+    if l.StartsWith("❌") || l.Contains("error") then "Error", l
+    elif l.StartsWith("ℹ") then "Info", l
+    elif l.StartsWith("[system]") then "System", l
+    else "Result", l)
+  |> Array.toList
+
+let private parseDiagLines (content: string) =
+  content.Split('\n')
+  |> Array.filter (fun (l: string) -> l.Length > 0)
+  |> Array.map (fun (l: string) ->
+    let severity = if l.Contains("[error]") then "Error" else "Warning"
+    severity, l, 0, 0)
+  |> Array.toList
+
+let private pushRegions
+  (ctx: HttpContext)
+  (regions: RenderRegion list)
+  = task {
+    match regions |> List.tryFind (fun r -> r.Id = "output") with
+    | Some r ->
+      do! Response.sseHtmlElements ctx (renderOutput (parseOutputLines r.Content))
+    | None -> ()
+    match regions |> List.tryFind (fun r -> r.Id = "diagnostics") with
+    | Some r ->
+      do! Response.sseHtmlElements ctx (renderDiagnostics (parseDiagLines r.Content))
+    | None -> ()
+  }
+
 /// Create the SSE stream handler that pushes Elm state to the browser.
 let createStreamHandler
   (getSessionState: unit -> SessionState)
@@ -175,40 +207,8 @@ let createStreamHandler
               avgMs
               stats.MinDuration.TotalMilliseconds
               stats.MaxDuration.TotalMilliseconds)
-
           match getElmRegions () with
-          | Some regions ->
-            let outputRegion =
-              regions |> List.tryFind (fun (r: RenderRegion) -> r.Id = "output")
-            match outputRegion with
-            | Some r ->
-              let content: string = r.Content
-              let lines =
-                content.Split('\n')
-                |> Array.filter (fun (l: string) -> l.Length > 0)
-                |> Array.map (fun (l: string) ->
-                  if l.StartsWith("❌") || l.Contains("error") then "Error", l
-                  elif l.StartsWith("ℹ") then "Info", l
-                  elif l.StartsWith("[system]") then "System", l
-                  else "Result", l)
-                |> Array.toList
-              do! Response.sseHtmlElements ctx (renderOutput lines)
-            | None -> ()
-
-            let diagRegion =
-              regions |> List.tryFind (fun (r: RenderRegion) -> r.Id = "diagnostics")
-            match diagRegion with
-            | Some r ->
-              let content: string = r.Content
-              let diags =
-                content.Split('\n')
-                |> Array.filter (fun (l: string) -> l.Length > 0)
-                |> Array.map (fun (l: string) ->
-                  let severity = if l.Contains("[error]") then "Error" else "Warning"
-                  severity, l, 0, 0)
-                |> Array.toList
-              do! Response.sseHtmlElements ctx (renderDiagnostics diags)
-            | None -> ()
+          | Some regions -> do! pushRegions ctx regions
           | None -> ()
 
         do! Threading.Tasks.Task.Delay(TimeSpan.FromSeconds 1.0, ctx.RequestAborted)
