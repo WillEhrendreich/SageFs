@@ -171,11 +171,13 @@ module SageFsUpdate =
 /// Every frontend consumes these regions — terminal, web, Neovim, etc.
 module SageFsRender =
   let render (model: SageFsModel) : RenderRegion list =
+    let bufCursor = ValidatedBuffer.cursor model.Editor.Buffer
     let editorRegion = {
       Id = "editor"
       Flags = RegionFlags.Focusable ||| RegionFlags.LiveUpdate
       Content = ValidatedBuffer.text model.Editor.Buffer
       Affordances = []
+      Cursor = Some { Line = bufCursor.Line; Col = bufCursor.Column }
     }
 
     let outputRegion = {
@@ -194,6 +196,7 @@ module SageFsRender =
             (line.Timestamp.ToString("HH:mm:ss")) kindLabel line.Text)
         |> String.concat "\n"
       Affordances = []
+      Cursor = None
     }
 
     let diagnosticsRegion = {
@@ -207,6 +210,7 @@ module SageFsRender =
             d.Range.StartLine d.Range.StartColumn d.Message)
         |> String.concat "\n"
       Affordances = []
+      Cursor = None
     }
 
     let sessionsRegion = {
@@ -248,6 +252,7 @@ module SageFsRender =
           sprintf "%s [%s]%s%s%s%s%s%s" s.Id statusLabel active projects evals uptime dir lastAct)
         |> String.concat "\n"
       Affordances = []
+      Cursor = None
     }
 
     [ editorRegion; outputRegion; diagnosticsRegion; sessionsRegion ]

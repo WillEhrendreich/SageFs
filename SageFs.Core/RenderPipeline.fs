@@ -21,12 +21,16 @@ type KeyCombo = {
   Char: char option
 }
 
+/// Cursor position within a region (line, column)
+type RegionCursor = { Line: int; Col: int }
+
 /// A rendered region of the UI
 type RenderRegion = {
   Id: string
   Flags: RegionFlags
   Content: string
   Affordances: Affordance list
+  Cursor: RegionCursor option
 }
 
 /// A discoverable action the user can take
