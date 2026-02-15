@@ -370,12 +370,22 @@ module TerminalRender =
       |> Option.defaultValue "?"
     sb.Append(renderStatusBar layout.StatusBarRow layout.Cols sessionState evalCount focusedName) |> ignore
 
-    // Position cursor in editor if focused
-    let editorPane = layout.Panes |> List.tryFind (fun p -> p.PaneId = PaneId.Editor && p.Focused)
-    match editorPane with
-    | Some ep ->
-      sb.Append(AnsiCodes.moveTo (ep.Row + 1) (ep.Col + 1)) |> ignore
-      sb.Append(AnsiCodes.showCursor) |> ignore
+    // Position cursor in focused pane if it has cursor info
+    let focusedPane = layout.Panes |> List.tryFind (fun p -> p.Focused)
+    match focusedPane with
+    | Some fp ->
+      let region = regions |> List.tryFind (fun r -> r.Id = PaneId.toRegionId fp.PaneId)
+      let cursor = region |> Option.bind (fun r -> r.Cursor)
+      match cursor with
+      | Some c ->
+        let screenRow = fp.Row + 1 + c.Line
+        let screenCol = fp.Col + 1 + c.Col
+        sb.Append(AnsiCodes.moveTo screenRow screenCol) |> ignore
+        sb.Append(AnsiCodes.showCursor) |> ignore
+      | None ->
+        // No cursor info — place at start of content area
+        sb.Append(AnsiCodes.moveTo (fp.Row + 1) (fp.Col + 1)) |> ignore
+        sb.Append(AnsiCodes.showCursor) |> ignore
     | None -> ()
 
     sb.ToString()

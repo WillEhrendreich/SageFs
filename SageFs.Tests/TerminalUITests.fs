@@ -9,7 +9,10 @@ open SageFs
 
 // Helpers
 let mkRegion id content : RenderRegion =
-  { Id = id; Flags = RegionFlags.None; Content = content; Affordances = [] }
+  { Id = id; Flags = RegionFlags.None; Content = content; Affordances = []; Cursor = None }
+
+let mkRegionWithCursor id content line col : RenderRegion =
+  { Id = id; Flags = RegionFlags.Focusable; Content = content; Affordances = []; Cursor = Some { Line = line; Col = col } }
 
 let mkPane id title row col w h focused : TerminalPane =
   { PaneId = id; Title = title; Row = row; Col = col
@@ -195,6 +198,56 @@ let renderFrameTests = testList "renderFrame" [
     let regions = [ mkRegion "editor" "hello" ]
     let result = TerminalRender.renderFrame layout regions "Ready" 0
     Expect.stringContains result AnsiCodes.showCursor "should show cursor for focused editor"
+  }
+]
+
+let cursorPositionTests = testList "cursor positioning" [
+  test "cursor follows editor buffer cursor after text" {
+    let layout = TerminalLayout.compute 24 120
+    let ep = layout.Panes |> List.find (fun p -> p.PaneId = PaneId.Editor)
+    let regions = [
+      mkRegionWithCursor "editor" "hello" 0 5
+      mkRegion "output" ""; mkRegion "diagnostics" ""; mkRegion "sessions" ""
+    ]
+    let frame = TerminalRender.renderFrame layout regions "Ready" 0
+    let expected = AnsiCodes.moveTo (ep.Row + 1) (ep.Col + 1 + 5)
+    Expect.stringContains frame expected "cursor at col 5 after 'hello'"
+  }
+
+  test "cursor at origin when empty buffer" {
+    let layout = TerminalLayout.compute 24 120
+    let ep = layout.Panes |> List.find (fun p -> p.PaneId = PaneId.Editor)
+    let regions = [
+      mkRegionWithCursor "editor" "" 0 0
+      mkRegion "output" ""; mkRegion "diagnostics" ""; mkRegion "sessions" ""
+    ]
+    let frame = TerminalRender.renderFrame layout regions "Ready" 0
+    let expected = AnsiCodes.moveTo (ep.Row + 1) (ep.Col + 1)
+    Expect.stringContains frame expected "cursor at origin"
+  }
+
+  test "cursor on second line" {
+    let layout = TerminalLayout.compute 24 120
+    let ep = layout.Panes |> List.find (fun p -> p.PaneId = PaneId.Editor)
+    let regions = [
+      mkRegionWithCursor "editor" "line1\nline2" 1 3
+      mkRegion "output" ""; mkRegion "diagnostics" ""; mkRegion "sessions" ""
+    ]
+    let frame = TerminalRender.renderFrame layout regions "Ready" 0
+    let expected = AnsiCodes.moveTo (ep.Row + 2) (ep.Col + 1 + 3)
+    Expect.stringContains frame expected "cursor on line 2 col 3"
+  }
+
+  test "cursor defaults to pane origin when no cursor info" {
+    let layout = TerminalLayout.compute 24 120
+    let ep = layout.Panes |> List.find (fun p -> p.PaneId = PaneId.Editor)
+    let regions = [
+      mkRegion "editor" "hello"
+      mkRegion "output" ""; mkRegion "diagnostics" ""; mkRegion "sessions" ""
+    ]
+    let frame = TerminalRender.renderFrame layout regions "Ready" 0
+    let expected = AnsiCodes.moveTo (ep.Row + 1) (ep.Col + 1)
+    Expect.stringContains frame expected "cursor at default when no Cursor"
   }
 ]
 
@@ -572,6 +625,7 @@ let allTerminalUITests = testList "Terminal UI" [
   terminalLayoutTests
   renderPaneTests
   renderFrameTests
+  cursorPositionTests
   statusBarTests
   terminalInputTests
   outputColorizerTests
