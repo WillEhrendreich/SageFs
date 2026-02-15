@@ -122,7 +122,10 @@ let private renderShell (version: string) =
             [ Attr.class' "eval-input"
               Ds.bind "code"
               Attr.create "placeholder" "Enter F# code... (Ctrl+Enter to eval)"
-              Attr.create "data-on-keydown" "if(event.ctrlKey && event.key === 'Enter') { event.preventDefault(); $$post('/dashboard/eval') }"
+              Attr.create "data-on-keydown" """
+                if(event.ctrlKey && event.key === 'Enter') { event.preventDefault(); $$post('/dashboard/eval') }
+                if(event.key === 'Tab') { event.preventDefault(); var s=this.selectionStart; var e=this.selectionEnd; this.value=this.value.substring(0,s)+'  '+this.value.substring(e); this.selectionStart=this.selectionEnd=s+2; this.dispatchEvent(new Event('input')) }
+              """
               Attr.create "spellcheck" "false" ]
             []
           Elem.div [ Attr.style "display: flex; gap: 0.5rem; margin-top: 0.5rem; align-items: center;" ] [
@@ -144,6 +147,9 @@ let private renderShell (version: string) =
                 Attr.style "background: var(--red);"
                 Ds.onClick (Ds.post "/dashboard/hard-reset") ]
               [ Text.raw "⟳ Hard Reset" ]
+          ]
+          Elem.div [ Attr.class' "meta"; Attr.style "margin-top: 0.25rem; font-size: 0.75rem;" ] [
+            Elem.span [ Ds.text """$code ? ($code.split('\\n').length + ' lines, ' + $code.length + ' chars') : '0 lines'""" ] []
           ]
           Elem.div [ Attr.id "eval-result" ] []
         ]
