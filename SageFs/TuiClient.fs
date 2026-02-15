@@ -22,7 +22,7 @@ module DaemonRegionData =
       Cursor = d.Cursor }
 
 /// Parse the JSON payload from the /api/state SSE stream.
-let private parseStateEvent (json: string) : (string * int * DaemonRegionData list) option =
+let parseStateEvent (json: string) : (string * int * DaemonRegionData list) option =
   try
     use doc = JsonDocument.Parse(json)
     let root = doc.RootElement
