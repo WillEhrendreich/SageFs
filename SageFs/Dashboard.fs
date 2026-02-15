@@ -55,13 +55,15 @@ let private renderShell (version: string) =
         .auto-scroll { scroll-behavior: smooth; }
       """ ]
     ]
-    Elem.body [] [
+    Elem.body [ Ds.safariStreamingFix ] [
+      // Dedicated init element that connects to SSE stream (per Falco.Datastar pattern)
+      Elem.div [ Ds.onInit (Ds.get "/dashboard/stream") ] []
       Elem.h1 [] [ Text.raw (sprintf "🧙 SageFs Dashboard v%s" version) ]
       Elem.div [ Attr.class' "grid" ] [
         // Row 1: Session status + Eval stats
         Elem.div [ Attr.class' "panel" ] [
           Elem.h2 [] [ Text.raw "Session" ]
-          Elem.div [ Attr.id "session-status"; Ds.onInit (Ds.get "/dashboard/stream") ] [
+          Elem.div [ Attr.id "session-status" ] [
             Text.raw "Connecting..."
           ]
         ]
@@ -351,7 +353,7 @@ let createStreamHandler
   (stateChanged: IEvent<string> option)
   : HttpHandler =
   fun ctx -> task {
-    do! Response.sseStartResponse ctx
+    Response.sseStartResponse ctx |> ignore
 
     let pushState () = task {
       let state = getSessionState ()
@@ -383,7 +385,10 @@ let createStreamHandler
       let tcs = Threading.Tasks.TaskCompletionSource()
       use _ct = ctx.RequestAborted.Register(fun () -> tcs.TrySetResult() |> ignore)
       use _sub = evt.Subscribe(fun _ ->
-        try pushState().Wait()
+        try
+          pushState()
+          |> Async.AwaitTask
+          |> Async.RunSynchronously
         with _ -> ())
       do! tcs.Task
     | None ->
@@ -407,11 +412,11 @@ let createEvalHandler
       | true, prop -> prop.GetString()
       | _ -> ""
     if String.IsNullOrWhiteSpace code then
-      do! Response.sseStartResponse ctx
+      Response.sseStartResponse ctx |> ignore
       do! Response.ssePatchSignal ctx (SignalPath.sp "code") ""
     else
       let! result = evalCode code
-      do! Response.sseStartResponse ctx
+      Response.sseStartResponse ctx |> ignore
       do! Response.ssePatchSignal ctx (SignalPath.sp "code") ""
       // Show result inline below the eval button
       let resultHtml =
@@ -429,7 +434,7 @@ let createResetHandler
   : HttpHandler =
   fun ctx -> task {
     let! result = resetSession ()
-    do! Response.sseStartResponse ctx
+    Response.sseStartResponse ctx |> ignore
     let resultHtml =
       Elem.div [ Attr.id "eval-result" ] [
         Elem.pre [ Attr.class' "output-line output-info"; Attr.style "margin-top: 0.5rem; white-space: pre-wrap;" ] [
@@ -445,7 +450,7 @@ let createSessionActionHandler
   : string -> HttpHandler =
   fun sessionId ctx -> task {
     let! result = action sessionId
-    do! Response.sseStartResponse ctx
+    Response.sseStartResponse ctx |> ignore
     let resultHtml =
       Elem.div [ Attr.id "eval-result" ] [
         Elem.pre [ Attr.class' "output-line output-info"; Attr.style "margin-top: 0.5rem; white-space: pre-wrap;" ] [
@@ -458,7 +463,7 @@ let createSessionActionHandler
 /// Create clear-output handler.
 let createClearOutputHandler : HttpHandler =
   fun ctx -> task {
-    do! Response.sseStartResponse ctx
+    Response.sseStartResponse ctx |> ignore
     let emptyOutput = Elem.div [ Attr.id "output-panel" ] [ Text.raw "No output yet" ]
     do! Response.sseHtmlElements ctx emptyOutput
   }
