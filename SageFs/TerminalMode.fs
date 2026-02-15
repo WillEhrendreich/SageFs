@@ -65,9 +65,6 @@ let setupRawMode () =
   Console.TreatControlCAsInput <- true
   Console.CursorVisible <- false
   AnsiCodes.enableVT100 () |> ignore
-  try
-    Console.OutputEncoding <- Text.Encoding.UTF8
-  with _ -> ()
   TerminalUIState.IsActive <- true
 
 /// Restore console to normal mode
@@ -153,7 +150,9 @@ let run
         | None -> ()
       else
         // Small sleep to avoid busy-waiting
-        do! Threading.Tasks.Task.Delay(16, ct) // ~60fps check rate
+        try
+          do! Threading.Tasks.Task.Delay(16, ct) // ~60fps check rate
+        with :? OperationCanceledException -> ()
   finally
     stateChanged.RemoveHandler renderHandler
     restoreConsole ()

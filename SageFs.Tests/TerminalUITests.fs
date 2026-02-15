@@ -227,6 +227,11 @@ let terminalInputTests = testList "TerminalInput" [
     Expect.equal result (Some TerminalCommand.Quit) "Ctrl+D quits"
   }
 
+  test "Ctrl+Q quits" {
+    let result = TerminalInput.mapKey (key '\x11' ConsoleKey.Q 1)
+    Expect.equal result (Some TerminalCommand.Quit) "Ctrl+Q quits"
+  }
+
   test "Ctrl+C cancels" {
     let result = TerminalInput.mapKey (key '\x03' ConsoleKey.C 1)
     Expect.equal result (Some (TerminalCommand.Action EditorAction.Cancel)) "Ctrl+C cancels"

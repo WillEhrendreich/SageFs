@@ -2,6 +2,8 @@ namespace SageFs
 
 open System
 
+open System.Runtime.InteropServices
+
 /// ANSI escape codes for terminal rendering
 module AnsiCodes =
   let esc = "\x1b["
@@ -32,13 +34,18 @@ module AnsiCodes =
   let bgPanel = bg256 235
   let bgEditor = bg256 234
 
-  // Box-drawing characters (ASCII fallback for Windows console compatibility)
-  let boxH = "-"
-  let boxV = "|"
-  let boxTL = "+"
-  let boxTR = "+"
-  let boxBL = "+"
-  let boxBR = "+"
+  // Box-drawing characters (Unicode — requires VT100 terminal)
+  let boxH = "\u2500"
+  let boxV = "\u2502"
+  let boxTL = "\u250C"
+  let boxTR = "\u2510"
+  let boxBL = "\u2514"
+  let boxBR = "\u2518"
+  let boxHD = "\u252C" // horizontal + down junction
+  let boxHU = "\u2534" // horizontal + up junction
+  let boxVR = "\u251C" // vertical + right junction
+  let boxVL = "\u2524" // vertical + left junction
+  let boxCross = "\u253C" // cross junction
 
   let hline width =
     String.replicate width boxH
@@ -56,14 +63,51 @@ module AnsiCodes =
     sprintf "%s%s%s%s"
       borderColor boxBL (hline (width - 2)) boxBR
 
+  /// Delegate types for Windows console P/Invoke (byref can't be used in Func<>)
+  [<UnmanagedFunctionPointer(CallingConvention.StdCall)>]
+  type GetConsoleModeDelegate = delegate of nativeint * byref<uint32> -> bool
+  [<UnmanagedFunctionPointer(CallingConvention.StdCall)>]
+  type SetConsoleModeDelegate = delegate of nativeint * uint32 -> bool
+
   /// Try to enable Windows VT100 processing for ANSI escape support.
   /// Returns true if VT100 is available.
   let enableVT100 () =
-    try
-      // Test by writing an ANSI sequence and checking if Console accepts it
-      Console.Write("\x1b[0m")
+    if RuntimeInformation.IsOSPlatform(OSPlatform.Windows) then
+      try
+        // P/Invoke kernel32 for VT100 on Windows
+        let STD_OUTPUT_HANDLE = -11
+        let ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004u
+        let handle =
+          NativeLibrary.GetExport(
+            NativeLibrary.Load("kernel32.dll"),
+            "GetStdHandle")
+          |> fun ptr ->
+            let fn = Marshal.GetDelegateForFunctionPointer<Func<int, nativeint>>(ptr)
+            fn.Invoke(STD_OUTPUT_HANDLE)
+        if handle <> nativeint -1 then
+          let getMode =
+            NativeLibrary.GetExport(
+              NativeLibrary.Load("kernel32.dll"),
+              "GetConsoleMode")
+          let setMode =
+            NativeLibrary.GetExport(
+              NativeLibrary.Load("kernel32.dll"),
+              "SetConsoleMode")
+          let mutable mode = 0u
+          let getModeResult =
+            let fn = Marshal.GetDelegateForFunctionPointer<GetConsoleModeDelegate>(getMode)
+            fn.Invoke(handle, &mode)
+          if getModeResult then
+            let newMode = mode ||| ENABLE_VIRTUAL_TERMINAL_PROCESSING
+            let fn = Marshal.GetDelegateForFunctionPointer<SetConsoleModeDelegate>(setMode)
+            fn.Invoke(handle, newMode) |> ignore
+        Console.OutputEncoding <- Text.Encoding.UTF8
+        true
+      with _ -> false
+    else
+      // Unix terminals generally support VT100 natively
+      Console.OutputEncoding <- Text.Encoding.UTF8
       true
-    with _ -> false
 
 
 /// A positioned region in the terminal
@@ -198,7 +242,7 @@ module TerminalRender =
     sb.Append(AnsiCodes.moveTo row 1) |> ignore
     sb.Append(AnsiCodes.inverse) |> ignore
     let status =
-      sprintf " %s | evals: %d | focus: %s | Ctrl+Enter:eval Tab:focus Ctrl+D:quit "
+      sprintf " %s | evals: %d | focus: %s | Ctrl+Enter:eval Tab:focus Ctrl+Q:quit "
         sessionState evalCount focusedPane
     sb.Append(fitToWidth cols status) |> ignore
     sb.Append(AnsiCodes.reset) |> ignore
@@ -262,6 +306,7 @@ module TerminalInput =
     | ConsoleKey.Tab, false, false, false -> Some TerminalCommand.CycleFocus
     | ConsoleKey.L, true, false, false -> Some TerminalCommand.Redraw
     | ConsoleKey.D, true, false, false -> Some TerminalCommand.Quit
+    | ConsoleKey.Q, true, false, false -> Some TerminalCommand.Quit
     | ConsoleKey.C, true, false, false -> Some (TerminalCommand.Action EditorAction.Cancel)
 
     // Scroll (Alt+Up/Down or PageUp/PageDown)

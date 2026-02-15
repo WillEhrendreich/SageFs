@@ -215,37 +215,46 @@ let private renderShell (version: string) =
       // Server connection monitoring script
       Elem.script [] [ Text.raw """
         (function() {
-          var lastUpdate = 0;
           var banner = document.getElementById('server-status');
           var wasConnected = false;
-          // Track SSE activity via heartbeat element (updated on every SSE push)
-          var heartbeat = document.getElementById('sse-heartbeat');
-          if (heartbeat) {
-            new MutationObserver(function() {
-              lastUpdate = Date.now();
+
+          // Use a simple polling approach: check if heartbeat data-ts changes
+          var lastSeenTs = '';
+          var lastChangeTime = 0;
+
+          setInterval(function() {
+            var hb = document.getElementById('sse-heartbeat');
+            if (!hb) return;
+            var currentTs = hb.textContent.trim();
+
+            if (currentTs && currentTs !== lastSeenTs) {
+              // Data changed — server is alive
+              lastSeenTs = currentTs;
+              lastChangeTime = Date.now();
+
               if (!wasConnected) {
                 wasConnected = true;
                 banner.className = 'conn-banner conn-connected';
                 banner.textContent = '\u2705 Connected';
                 setTimeout(function() { banner.style.display = 'none'; }, 2000);
+              } else {
+                banner.style.display = 'none';
               }
-            }).observe(heartbeat, { childList: true, subtree: true, characterData: true });
-          }
-          // Check every 5s if SSE is still alive
-          setInterval(function() {
-            if (lastUpdate === 0) return; // haven't connected yet
-            var elapsed = Date.now() - lastUpdate;
-            if (elapsed > 15000) {
-              banner.style.display = '';
-              banner.className = 'conn-banner conn-disconnected';
-              banner.textContent = '\u274c Server disconnected \u2014 waiting for reconnect...';
-              wasConnected = false;
-            } else if (elapsed > 8000 && wasConnected) {
-              banner.style.display = '';
-              banner.className = 'conn-banner conn-reconnecting';
-              banner.textContent = '\u23f3 Connection stale \u2014 checking...';
+            } else if (lastChangeTime > 0) {
+              // Data hasn't changed — check staleness
+              var elapsed = Date.now() - lastChangeTime;
+              if (elapsed > 15000) {
+                banner.style.display = '';
+                banner.className = 'conn-banner conn-disconnected';
+                banner.textContent = '\u274c Server disconnected \u2014 waiting for reconnect...';
+                wasConnected = false;
+              } else if (elapsed > 8000 && wasConnected) {
+                banner.style.display = '';
+                banner.className = 'conn-banner conn-reconnecting';
+                banner.textContent = '\u23f3 Connection stale \u2014 checking...';
+              }
             }
-          }, 3000);
+          }, 2000);
         })();
       """ ]
     ]
