@@ -220,8 +220,12 @@ let private renderShell (version: string) =
 
           function markDisconnected() {
             banner.className = 'conn-banner conn-disconnected';
-            banner.style.display = '';
             banner.textContent = '\u274c Server disconnected \u2014 waiting for reconnect...';
+          }
+
+          function markConnected() {
+            banner.className = 'conn-banner conn-connected';
+            banner.textContent = '\u2705 Connected';
           }
 
           function resetTimeout() {
@@ -231,6 +235,7 @@ let private renderShell (version: string) =
 
           // Watch for any mutation to server-status (SSE pushes morphs here)
           var observer = new MutationObserver(function() {
+            markConnected();
             resetTimeout();
           });
           observer.observe(banner, { childList: true, characterData: true, subtree: true, attributes: true });
@@ -505,7 +510,7 @@ let createStreamHandler
     let pushState () = task {
       // Push server-status as "Connected" — proves SSE is alive
       do! Response.sseHtmlElements ctx (
-        Elem.div [ Attr.id "server-status"; Attr.class' "conn-banner conn-connected"; Attr.style "display:none" ] [
+        Elem.div [ Attr.id "server-status"; Attr.class' "conn-banner conn-connected" ] [
           Text.raw "✅ Connected"
         ])
       let state = getSessionState ()
