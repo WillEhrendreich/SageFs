@@ -29,9 +29,9 @@ let globalActorResult = lazy(
 let sharedCtx () =
   let result = globalActorResult.Value
   let sessionId = SageFs.EventStore.createSessionId ()
-  { McpContext.Actor = result.Actor; Store = testStore.Value; SessionId = sessionId; DiagnosticsChanged = result.DiagnosticsChanged; CancelEval = result.CancelEval; GetSessionState = result.GetSessionState; GetEvalStats = result.GetEvalStats; GetWarmupFailures = result.GetWarmupFailures; GetStartupConfig = result.GetStartupConfig; Mode = SageFs.SessionMode.Embedded; Dispatch = None; GetElmModel = None; GetElmRegions = None }
+  { McpContext.Actor = result.Actor; Store = testStore.Value; SessionId = sessionId; DiagnosticsChanged = result.DiagnosticsChanged; StateChanged = None; CancelEval = result.CancelEval; GetSessionState = result.GetSessionState; GetEvalStats = result.GetEvalStats; GetWarmupFailures = result.GetWarmupFailures; GetStartupConfig = result.GetStartupConfig; Mode = SageFs.SessionMode.Embedded; Dispatch = None; GetElmModel = None; GetElmRegions = None }
 
 /// Create a McpContext with a custom session ID backed by the global shared actor
 let sharedCtxWith sessionId =
   let result = globalActorResult.Value
-  { McpContext.Actor = result.Actor; Store = testStore.Value; SessionId = sessionId; DiagnosticsChanged = result.DiagnosticsChanged; CancelEval = result.CancelEval; GetSessionState = result.GetSessionState; GetEvalStats = result.GetEvalStats; GetWarmupFailures = result.GetWarmupFailures; GetStartupConfig = result.GetStartupConfig; Mode = SageFs.SessionMode.Embedded; Dispatch = None; GetElmModel = None; GetElmRegions = None }
+  { McpContext.Actor = result.Actor; Store = testStore.Value; SessionId = sessionId; DiagnosticsChanged = result.DiagnosticsChanged; StateChanged = None; CancelEval = result.CancelEval; GetSessionState = result.GetSessionState; GetEvalStats = result.GetEvalStats; GetWarmupFailures = result.GetWarmupFailures; GetStartupConfig = result.GetStartupConfig; Mode = SageFs.SessionMode.Embedded; Dispatch = None; GetElmModel = None; GetElmRegions = None }
