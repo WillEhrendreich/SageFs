@@ -26,6 +26,7 @@
         <Compile Include="SessionMode.fs" />
         <Compile Include="NamedPipeTransport.fs" />
         <Compile Include="RestartPolicy.fs" />
+        <Compile Include="Watchdog.fs" />
         <Compile Include="SessionLifecycle.fs" />
         <Compile Include="SessionManager.fs" />
         <Compile Include="SessionOperations.fs" />

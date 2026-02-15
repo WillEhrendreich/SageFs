@@ -89,6 +89,7 @@ let main args =
     printfn ""
     printfn "Usage: SageFs [options] [fsi-args]"
     printfn "       SageFs -d|--daemon [options]    Start as background daemon"
+    printfn "       SageFs -d --supervised          Start daemon with watchdog supervisor"
     printfn "       SageFs worker [options]          Internal: worker process"
     printfn "       SageFs stop                      Stop running daemon"
     printfn "       SageFs status                    Show daemon info"
@@ -100,6 +101,7 @@ let main args =
     printfn "  --no-mcp               Disable MCP server (default: enabled on port 37749)"
     printfn "  --mcp-port PORT        Set custom MCP server port (default: 37749)"
     printfn "  --bare                 Start a bare FSI session — no project/solution loading, fast startup"
+    printfn "  --supervised           (with -d) Run daemon under a watchdog supervisor that auto-restarts on crash"
     printfn ""
     printfn "MCP Server:"
     printfn "  When enabled, SageFs starts an MCP (Model Context Protocol) server for"
@@ -194,13 +196,31 @@ let main args =
   // Subcommand: -d / --daemon
   elif args |> Array.exists (fun a -> a = "-d" || a = "--daemon") then
     let mcpPort = parseMcpPort args
-    let filteredArgs = filterArgs args ["-d"; "--daemon"]
+    let filteredArgs = filterArgs args ["-d"; "--daemon"; "--supervised"]
     let parsedArgs =
       try SageFs.Args.parser.ParseCommandLine(filteredArgs).GetAllResults()
       with _ -> []
-    DaemonMode.run mcpPort parsedArgs
-    |> _.GetAwaiter() |> _.GetResult()
-    0
+    // If --supervised, run with watchdog supervisor loop
+    if args |> Array.exists (fun a -> a = "--supervised") then
+      let daemonArgs =
+        args
+        |> Array.filter (fun a -> a <> "--supervised")
+        |> Array.toList
+      use cts = new System.Threading.CancellationTokenSource()
+      Console.CancelKeyPress.Add(fun e ->
+        e.Cancel <- true
+        cts.Cancel())
+      WatchdogRunner.run
+        SageFs.Watchdog.defaultConfig
+        daemonArgs
+        Environment.CurrentDirectory
+        cts.Token
+      |> _.GetAwaiter() |> _.GetResult()
+      0
+    else
+      DaemonMode.run mcpPort parsedArgs
+      |> _.GetAwaiter() |> _.GetResult()
+      0
   else
     // Default: interactive REPL (existing behavior)
     let disableWeb = args |> Array.exists (fun arg -> arg = "--no-web")

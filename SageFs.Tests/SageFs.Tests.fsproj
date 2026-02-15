@@ -34,6 +34,7 @@
         <Compile Include="DaemonIntegrationTests.fs" />
         <Compile Include="SessionOperationsTests.fs" />
         <Compile Include="RestartPolicyTests.fs" />
+        <Compile Include="WatchdogTests.fs" />
         <Compile Include="FileWatcherTests.fs" />
         <Compile Include="EditorTests.fs" />
         <Compile Include="SessionDisplayTests.fs" />
