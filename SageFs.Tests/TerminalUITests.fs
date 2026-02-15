@@ -352,6 +352,8 @@ let statusBarTests = testList "statusBar" [
     let result = TerminalRender.renderStatusBar 40 80 "Ready" 0 "Editor"
     Expect.stringContains result "Ctrl+Enter" "should show eval hint"
     Expect.stringContains result "Tab:focus" "should show focus hint"
+    Expect.stringContains result "PgUp/PgDn" "should show scroll hint"
+    Expect.stringContains result "Ctrl+Q" "should show quit hint"
   }
 
   test "renderStatusBar uses inverse video" {
