@@ -90,6 +90,7 @@ let private renderShell (version: string) =
             [ Attr.class' "eval-btn"
               Ds.onClick (Ds.post "/dashboard/eval") ]
             [ Text.raw "▶ Eval" ]
+          Elem.div [ Attr.id "eval-result" ] []
         ]
       ]
     ]
@@ -283,9 +284,17 @@ let createEvalHandler
       do! Response.sseStartResponse ctx
       do! Response.ssePatchSignal ctx (SignalPath.sp "code") ""
     else
-      let! _result = evalCode code
+      let! result = evalCode code
       do! Response.sseStartResponse ctx
       do! Response.ssePatchSignal ctx (SignalPath.sp "code") ""
+      // Show result inline below the eval button
+      let resultHtml =
+        Elem.div [ Attr.id "eval-result" ] [
+          Elem.pre [ Attr.class' "output-line output-result"; Attr.style "margin-top: 0.5rem; white-space: pre-wrap;" ] [
+            Text.raw result
+          ]
+        ]
+      do! Response.sseHtmlElements ctx resultHtml
   }
 
 /// Create all dashboard routes.
