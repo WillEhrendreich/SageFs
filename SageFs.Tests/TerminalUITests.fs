@@ -300,6 +300,43 @@ let noScrollTests = testList "no-scroll rendering" [
   }
 ]
 
+let mkPaneWithScroll id title row col w h scroll : TerminalPane =
+  { PaneId = id; Title = title; Row = row; Col = col
+    Width = w; Height = h; ScrollOffset = scroll; Focused = false }
+
+let scrollIndicatorTests = testList "scroll indicator" [
+  test "title shows scroll position when scrolled" {
+    let pane = mkPaneWithScroll PaneId.Output "Output" 0 0 60 10 3
+    let region = mkRegion "output" "text"
+    let rendered = TerminalRender.renderPane pane (Some region)
+    Expect.stringContains rendered "Output ↑3" "should show scroll offset in title"
+  }
+
+  test "no indicator at scroll offset 0" {
+    let pane = mkPaneWithScroll PaneId.Output "Output" 0 0 60 10 0
+    let region = mkRegion "output" "text"
+    let rendered = TerminalRender.renderPane pane (Some region)
+    Expect.isFalse (rendered.Contains("↑")) "should not show scroll indicator at offset 0"
+  }
+
+  test "large scroll offset shows correctly" {
+    let pane = mkPaneWithScroll PaneId.Output "Output" 0 0 60 10 42
+    let region = mkRegion "output" "text"
+    let rendered = TerminalRender.renderPane pane (Some region)
+    Expect.stringContains rendered "Output ↑42" "should show large scroll offset"
+  }
+
+  test "scroll indicator on all pane types" {
+    for paneId in PaneId.all do
+      let title = PaneId.displayName paneId
+      let pane = mkPaneWithScroll paneId title 0 0 60 10 5
+      let region = mkRegion (PaneId.toRegionId paneId) "text"
+      let rendered = TerminalRender.renderPane pane (Some region)
+      Expect.stringContains rendered (sprintf "%s ↑5" title)
+        (sprintf "%s should show scroll indicator" title)
+  }
+]
+
 let statusBarTests = testList "statusBar" [
   test "renderStatusBar contains session state" {
     let result = TerminalRender.renderStatusBar 40 80 "Running" 10 "Editor"
@@ -728,6 +765,7 @@ let allTerminalUITests = testList "Terminal UI" [
   renderFrameTests
   cursorPositionTests
   noScrollTests
+  scrollIndicatorTests
   statusBarTests
   terminalInputTests
   outputColorizerTests

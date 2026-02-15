@@ -319,9 +319,15 @@ module TerminalRender =
     let sb = System.Text.StringBuilder()
     let borderColor = if pane.Focused then AnsiCodes.cyan else AnsiCodes.dimWhite
 
+    // Title with scroll indicator
+    let displayTitle =
+      if pane.ScrollOffset > 0 then
+        sprintf "%s ↑%d" pane.Title pane.ScrollOffset
+      else pane.Title
+
     // Top border with title
     sb.Append(AnsiCodes.moveTo pane.Row pane.Col) |> ignore
-    sb.Append(AnsiCodes.boxTop pane.Title pane.Width borderColor) |> ignore
+    sb.Append(AnsiCodes.boxTop displayTitle pane.Width borderColor) |> ignore
 
     // Content lines
     let contentHeight = pane.Height - 2
