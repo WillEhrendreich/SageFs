@@ -118,9 +118,51 @@ let keyboardHelpSnapshotTests = testList "keyboard help snapshots" [
   }
 ]
 
+let edgeCaseSnapshotTests = testList "edge case snapshots" [
+  testTask "renderSessions single active session" {
+    let sessions : ParsedSession list = [
+      { Id = "session-xyz"
+        Status = "running"
+        IsActive = true
+        ProjectsText = "(MyProj.fsproj)"
+        EvalCount = 42
+        Uptime = "15m"
+        WorkingDir = @"C:\Code\MyProj"
+        LastActivity = "eval" }
+    ]
+    let html = renderSessions sessions |> renderNode
+    do! verifyDashboard "dashboard_sessions_singleActive" html
+  }
+
+  testTask "renderDiagnostics with zero line col" {
+    let diags = [
+      "Error", "General compilation error", 0, 0
+    ]
+    let html = renderDiagnostics diags |> renderNode
+    do! verifyDashboard "dashboard_diagnostics_zeroLineCol" html
+  }
+
+  testTask "renderEvalStats zero evals" {
+    let html = renderEvalStats 0 0.0 0.0 0.0 |> renderNode
+    do! verifyDashboard "dashboard_evalStats_zero" html
+  }
+
+  testTask "renderSessionStatus faulted" {
+    let html = renderSessionStatus "Faulted" "session-err" 0 |> renderNode
+    do! verifyDashboard "dashboard_sessionStatus_faulted" html
+  }
+
+  testTask "renderOutput single result line" {
+    let lines = [ Some "14:00:00", "Result", "val it: int = 0" ]
+    let html = renderOutput lines |> renderNode
+    do! verifyDashboard "dashboard_output_singleResult" html
+  }
+]
+
 
 [<Tests>]
 let allDashboardSnapshotTests = testList "Dashboard Snapshots" [
   dashboardRenderSnapshotTests
   keyboardHelpSnapshotTests
+  edgeCaseSnapshotTests
 ]
