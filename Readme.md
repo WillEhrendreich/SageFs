@@ -284,11 +284,30 @@ http://localhost:37750/dashboard
 ```
 
 The dashboard uses **Server-Sent Events (SSE)** with **Datastar** for real-time DOM morphing:
-- **Session status** — current state (Ready/WarmingUp/Evaluating/Faulted)
+- **Session status** — current state (Ready/WarmingUp/Evaluating/Faulted) with color-coded badges
+- **Session metadata** — uptime, working directory, project tags, last activity, eval count
+- **Create sessions** — form with project discovery, manual entry, and `.SageFs/config.fsx` integration
 - **Eval stats** — count, avg/min/max duration
 - **Output panel** — live streaming of eval results and errors
 - **Diagnostics panel** — compiler warnings and errors
 - **Eval input** — submit F# code directly from the browser
+- **Server status** — auto-detects server-down and displays reconnection banner
+
+### Per-Directory Configuration
+
+Create `.SageFs/config.fsx` in any project directory to configure SageFs defaults:
+
+```fsharp
+// .SageFs/config.fsx
+let projects = ["src/MyApp.fsproj"; "tests/MyApp.Tests.fsproj"]
+let autoLoad = true
+let initScript = Some "setup.fsx"
+let defaultArgs = ["--no-warn:1182"]
+```
+
+**Precedence**: Manual CLI args > `.SageFs/config.fsx` > auto-discovery.
+
+SageFs also auto-discovers `.SageFs/init.fsx` or `.SageFsrc` as startup scripts evaluated in the FSI session.
 
 ### ASP.NET Features
 
@@ -454,13 +473,18 @@ Core components:
 - ✅ Dashboard inline eval results — immediate feedback below code input
 - ✅ Dashboard Ctrl+Enter eval, Reset/Hard Reset buttons, timestamped output
 - ✅ Dashboard parsers — regex-based extraction of timestamps, diagnostic line/col
+- ✅ Dashboard create session form — project discovery, working directory, manual entry
+- ✅ Dashboard server-down detection — auto-detects connection loss, displays reconnection banner
+- ✅ Dashboard rich session metadata — uptime, working dir, project tags, last activity
+- ✅ Per-directory config — `.SageFs/config.fsx` with projects, autoLoad, initScript, defaultArgs
+- ✅ ASP.NET Core info logging suppressed in dashboard
 - ✅ ElmLoop resilience — try/catch guards prevent dispatch loop crashes from callback exceptions
 - ✅ Hard reset warmup timeout (5 min) — prevents stuck WarmingUp state, transitions to Faulted on timeout
 - ✅ Hard reset progress logging — phase-by-phase status (build, shadow copy, FSI creation, namespace scanning)
 - ✅ Stale shadow directory cleanup — auto-removes old `sagefs-shadow-*` temp dirs during hard reset
 
 ### What's Next
-- 🔲 Multi-session management — create/switch/stop sessions from any frontend
+- 🔲 Connected UI tracking — show MCP, terminal, browser connections per session
 
 ### Where It's Going
 
