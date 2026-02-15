@@ -6,9 +6,8 @@ open System.Reflection
 open SageFs.Server
 
 /// Wraps a TextWriter to normalize lone LF to CRLF.
-/// PrettyPrompt sets DISABLE_NEWLINE_AUTO_RETURN on the console,
-/// which means \n alone won't carriage-return. This wrapper ensures
-/// all output uses \r\n.
+/// Some console modes on Windows cause \n alone to not carriage-return.
+/// This wrapper ensures all output uses \r\n.
 type NewlineNormalizingWriter(inner: TextWriter) =
   inherit TextWriter()
   let mutable lastCharWasCR = false
@@ -106,9 +105,7 @@ let runDaemon (args: string array) (extraFlags: string list) =
 
 [<EntryPoint>]
 let main args =
-  // Wrap Console.Out to normalize \n to \r\n.
-  // PrettyPrompt sets DISABLE_NEWLINE_AUTO_RETURN on Windows console,
-  // which causes staircase output when \n is written without \r.
+  // Wrap Console.Out to normalize \n to \r\n on Windows console.
   Console.SetOut(new NewlineNormalizingWriter(Console.Out))
 
   // Check for --help or -h flag
@@ -121,7 +118,6 @@ let main args =
     printfn "       SageFs stop                     Stop running daemon"
     printfn "       SageFs status                   Show daemon info"
     printfn "       SageFs worker [options]         Internal: worker process"
-    printfn "       SageFs --repl [options]         Legacy: interactive REPL (deprecated)"
     printfn ""
     printfn "Options:"
     printfn "  --version, -v          Show version information"
@@ -130,7 +126,6 @@ let main args =
     printfn "  --mcp-port PORT        Set custom MCP server port (default: 37749)"
     printfn "  --bare                 Start a bare FSI session — no project/solution loading"
     printfn "  --supervised           Run under watchdog supervisor (auto-restart on crash)"
-    printfn "  --repl                 Start legacy embedded REPL (deprecated, use daemon)"
     printfn ""
     printfn "Daemon:"
     printfn "  SageFs runs as a daemon by default. The daemon provides:"
@@ -242,22 +237,6 @@ let main args =
       | Error err ->
         printfn "Failed to start daemon: %A" err
         1
-  // Legacy: --repl flag for embedded REPL (deprecated)
-  elif args |> Array.exists (fun a -> a = "--repl") then
-    eprintfn "\x1b[33m[DEPRECATED]\x1b[0m --repl mode is deprecated. Use daemon mode (default) instead."
-    eprintfn "  The embedded REPL will be removed in a future version."
-    eprintfn "  Start a daemon with 'SageFs' and connect with 'SageFs connect'."
-    eprintfn ""
-    let disableWeb = args |> Array.exists (fun arg -> arg = "--no-web")
-    let useAsp = not disableWeb
-    let mcpPort = parseMcpPort args |> Some
-    let mcpPort =
-      if args |> Array.exists (fun arg -> arg = "--no-mcp") then None
-      else mcpPort
-    let filteredArgs = filterArgs args ["--repl"]
-    CliEventLoop.runCliEventLoop useAsp mcpPort filteredArgs ()
-    |> _.GetAwaiter() |> _.GetResult()
-    0
   // Subcommand: -d / --daemon (kept as alias for backward compat, same as default)
   elif args |> Array.exists (fun a -> a = "-d" || a = "--daemon") then
     runDaemon args ["-d"; "--daemon"; "--supervised"]

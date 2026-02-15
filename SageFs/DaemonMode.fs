@@ -7,7 +7,7 @@ open SageFs.Server
 open Falco
 
 /// Run SageFs as a headless daemon.
-/// No PrettyPrompt, no console UI — just MCP server + SessionManager.
+/// MCP server + SessionManager + Dashboard — all frontends are clients.
 let run (mcpPort: int) (args: Args.Arguments list) = task {
   let version =
     System.Reflection.Assembly.GetExecutingAssembly().GetName().Version

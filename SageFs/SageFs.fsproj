@@ -6,7 +6,7 @@
         <IsPackable>true</IsPackable>
         <ToolCommandName>sagefs</ToolCommandName>
         <PackageOutputPath>./nupkg</PackageOutputPath>
-        <Version>0.3.0</Version>
+        <Version>0.3.1</Version>
 
         <!-- NuGet config -->
         <PackageId>SageFs</PackageId>
@@ -24,15 +24,12 @@
         <Compile Include="Dashboard.fs" />
         <Compile Include="PostgresInfra.fs" />
         <Compile Include="Logging.fs" />
-        <Compile Include="PrettyPromptCallbacks.fs" />
-        <Compile Include="Configuration.fs" />
         <Compile Include="McpTools.fs" />
         <Compile Include="McpServer.fs" />
         <Compile Include="WorkerMain.fs" />
         <Compile Include="DaemonMode.fs" />
         <Compile Include="WatchdogRunner.fs" />
         <Compile Include="ClientMode.fs" />
-        <Compile Include="CliEventLoop.fs" />
         <Compile Include="Program.fs" />
         <None Include="..\Readme.md">
           <Pack>true</Pack>
@@ -46,15 +43,10 @@
     </ItemGroup>
 
     <ItemGroup>
-        <EmbeddedResource Include="prompt.fsx" />
-    </ItemGroup>
-
-    <ItemGroup>
         <PackageReference Include="FSharpPlus" />
         <PackageReference Include="Falco" />
         <PackageReference Include="Falco.Datastar" />
         <PackageReference Include="Falco.Markup" />
-        <PackageReference Include="PrettyPrompt" />
         <PackageReference Include="OpenTelemetry.Exporter.Console" />
         <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" />    
         <PackageReference Include="OpenTelemetry.Extensions.Hosting" />

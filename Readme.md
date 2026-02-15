@@ -194,7 +194,7 @@ sagefs                          # Auto-detect in current directory
 
 ### ⚡ **REPL Experience**
 
-- Autocompletion and syntax highlighting (currently via PrettyPrompt — being replaced with custom rendering for multi-frontend support)
+- Autocompletion and syntax highlighting
 - Command history
 - Multi-line editing
 
@@ -439,10 +439,9 @@ Core components:
 - ✅ Daemon-first architecture — `SageFs` starts daemon by default, `-d` is just an alias
 - ✅ `SageFs connect` — REPL client over HTTP to running daemon (auto-starts daemon if needed)
 - ✅ Persistent REPL history in `~/.SageFs/connect_history`
+- ✅ Removed PrettyPrompt dependency — daemon-only architecture, no embedded REPL
 
 ### What's Next
-- 🔲 Replace PrettyPrompt with custom rendering — PrettyPrompt assumes it owns the terminal and can't render into a grid region, making it incompatible with the multi-frontend architecture
-- 🔲 Remove `--repl` legacy mode entirely
 - 🔲 Frontend subscription — MCP SSE adapter pushes state changes to connected AI agents
 
 ### Where It's Going
@@ -472,7 +471,7 @@ MIT License — see [LICENSE](LICENSE) for details
 ## 🙏 Acknowledgments
 
 - [FsiX](https://github.com/soweli-p/FsiX) — The original F# Interactive experience that inspired SageFs
-- [PrettyPrompt](https://github.com/waf/PrettyPrompt) — Modern REPL experience (being phased out)
+- [PrettyPrompt](https://github.com/waf/PrettyPrompt) — Powered the original REPL experience (removed in v0.3.1)
 - [Falco](https://github.com/pimbrouwers/Falco) — Functional web framework for the dashboard
 - [Falco.Datastar](https://github.com/pimbrouwers/Falco.Datastar) — Datastar SSE integration for live UI
 - [Ionide.ProjInfo](https://github.com/ionide/proj-info/) — Project file parsing
