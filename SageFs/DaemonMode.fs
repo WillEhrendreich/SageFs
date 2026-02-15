@@ -97,9 +97,17 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
   // Create EffectDeps from SessionManager + start Elm loop
   let effectDeps = ElmDaemon.createEffectDeps sessionManager
   let elmRuntime =
-    ElmDaemon.start effectDeps (fun _model _regions ->
-      // Phase C: this callback will push to connected frontends
-      ())
+    ElmDaemon.start effectDeps (fun model _regions ->
+      let outputCount = model.RecentOutput.Length
+      let diagCount = model.Diagnostics.Length
+      if outputCount > 0 || diagCount > 0 then
+        let latest =
+          model.RecentOutput
+          |> List.tryHead
+          |> Option.map (fun o -> o.Text)
+          |> Option.defaultValue ""
+        eprintfn "\x1b[36m[elm]\x1b[0m output=%d diags=%d | %s"
+          outputCount diagCount latest)
 
   // Start MCP server BEFORE warm-up completes
   appActor.Post(AppState.UpdateMcpPort mcpPort)
