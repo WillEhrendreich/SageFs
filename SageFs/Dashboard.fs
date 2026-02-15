@@ -887,6 +887,22 @@ let createApiDispatchHandler
         | "dismissCompletion" -> Some EditorAction.DismissCompletion
         | "historyPrevious" -> Some EditorAction.HistoryPrevious
         | "historyNext" -> Some EditorAction.HistoryNext
+        | "acceptCompletion" -> Some EditorAction.AcceptCompletion
+        | "nextCompletion" -> Some EditorAction.NextCompletion
+        | "previousCompletion" -> Some EditorAction.PreviousCompletion
+        | "selectWord" -> Some EditorAction.SelectWord
+        | "deleteToEndOfLine" -> Some EditorAction.DeleteToEndOfLine
+        | "redo" -> Some EditorAction.Redo
+        | "toggleSessionPanel" -> Some EditorAction.ToggleSessionPanel
+        | "listSessions" -> Some EditorAction.ListSessions
+        | "switchSession" ->
+          action.value |> Option.map EditorAction.SwitchSession
+        | "createSession" ->
+          action.value |> Option.map (fun v -> EditorAction.CreateSession [v])
+        | "stopSession" ->
+          action.value |> Option.map EditorAction.StopSession
+        | "historySearch" ->
+          action.value |> Option.map EditorAction.HistorySearch
         | _ -> None
       match editorAction with
       | Some ea ->

@@ -81,7 +81,20 @@ let private actionToApi (action: EditorAction) : (string * string option) option
   | EditorAction.DismissCompletion -> Some ("dismissCompletion", None)
   | EditorAction.HistoryPrevious -> Some ("historyPrevious", None)
   | EditorAction.HistoryNext -> Some ("historyNext", None)
-  | _ -> None
+  | EditorAction.AcceptCompletion -> Some ("acceptCompletion", None)
+  | EditorAction.NextCompletion -> Some ("nextCompletion", None)
+  | EditorAction.PreviousCompletion -> Some ("previousCompletion", None)
+  | EditorAction.SelectWord -> Some ("selectWord", None)
+  | EditorAction.DeleteToEndOfLine -> Some ("deleteToEndOfLine", None)
+  | EditorAction.Redo -> Some ("redo", None)
+  | EditorAction.ToggleSessionPanel -> Some ("toggleSessionPanel", None)
+  | EditorAction.ListSessions -> Some ("listSessions", None)
+  | EditorAction.SwitchSession id -> Some ("switchSession", Some id)
+  | EditorAction.CreateSession projects ->
+    Some ("createSession", Some (String.concat "," projects))
+  | EditorAction.StopSession id -> Some ("stopSession", Some id)
+  | EditorAction.HistorySearch s -> Some ("historySearch", Some s)
+  | EditorAction.SwitchMode _ -> None
 
 /// Run the TUI client, connecting to a running daemon.
 let run (daemonInfo: DaemonInfo) = task {
@@ -136,16 +149,23 @@ let run (daemonInfo: DaemonInfo) = task {
   // Initial render
   render ()
 
-  // Start SSE listener in background
+  // Start SSE listener in background with auto-reconnect
   let sseTask = task {
-    try
-      use sseClient = new HttpClient()
-      sseClient.Timeout <- TimeSpan.FromHours(24.0)
-      let! stream = sseClient.GetStreamAsync(sprintf "%s/api/state" baseUrl)
-      use reader = new IO.StreamReader(stream)
-      while not cts.Token.IsCancellationRequested do
-        let! line = reader.ReadLineAsync()
-        if not (isNull line) then
+    let mutable retryDelay = 1000
+    let maxRetryDelay = 30000
+    while not cts.Token.IsCancellationRequested do
+      try
+        use sseClient = new HttpClient()
+        sseClient.Timeout <- TimeSpan.FromHours(24.0)
+        let! stream = sseClient.GetStreamAsync(sprintf "%s/api/state" baseUrl)
+        use reader = new IO.StreamReader(stream)
+        retryDelay <- 1000 // reset on successful connect
+        lastSessionState <- lastSessionState.Replace(" (reconnecting...)", "")
+        render ()
+        while not cts.Token.IsCancellationRequested do
+          let! line = reader.ReadLineAsync()
+          if isNull line then
+            raise (IO.IOException("SSE stream ended"))
           if line.StartsWith("data: ") then
             let json = line.Substring(6)
             match parseStateEvent json with
@@ -155,9 +175,14 @@ let run (daemonInfo: DaemonInfo) = task {
               lastRegions <- regionData |> List.map DaemonRegionData.toRenderRegion
               render ()
             | None -> ()
-    with
-    | :? OperationCanceledException -> ()
-    | ex -> eprintfn "SSE connection lost: %s" ex.Message
+      with
+      | :? OperationCanceledException -> ()
+      | _ when not cts.Token.IsCancellationRequested ->
+        lastSessionState <- sprintf "%s (reconnecting...)" lastSessionState
+        render ()
+        do! Threading.Tasks.Task.Delay(retryDelay, cts.Token) |> fun t -> task {
+          try do! t with :? OperationCanceledException -> () }
+        retryDelay <- min (retryDelay * 2) maxRetryDelay
   }
 
   let mutable exitCode = 0
