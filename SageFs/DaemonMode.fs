@@ -206,6 +206,8 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
           | Ok msg -> Ok msg
           | Error e -> Error (sprintf "%A" e)
       }))
+      // Connection tracker
+      (Some (ConnectionTracker()))
   let dashboardTask = task {
     try
       let builder = Microsoft.AspNetCore.Builder.WebApplication.CreateBuilder()
