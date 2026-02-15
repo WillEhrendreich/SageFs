@@ -173,13 +173,12 @@ Examples: 'System.String', 'System.Collections.Generic.List', 'Microsoft.FSharp.
         logger.LogDebug("MCP-TOOL: explore_type called: {Type}", typeName)
         exploreType ctx typeName |> withEcho "explore_type"
 
-    // ── Session Management Tools (daemon mode only) ──────────────
+    // ── Session Management Tools ──────────────
 
     [<McpServerTool>]
     [<Description("""Create a new FSI session with the specified project(s). Each session runs in its own worker process with full isolation.
 
-Returns session info including the session ID needed for routing commands to this session.
-Only available in daemon mode (SageFs -d). In single-session mode, the session is managed automatically.""")>]
+Returns session info including the session ID needed for routing commands to this session.""")>]
     member _.create_session(
         [<Description("Comma-separated list of .fsproj files to load")>] projects: string,
         [<Description("Working directory for the session")>] working_directory: string
@@ -189,15 +188,14 @@ Only available in daemon mode (SageFs -d). In single-session mode, the session i
         createSession ctx projectList working_directory |> withEcho "create_session"
 
     [<McpServerTool>]
-    [<Description("""List all active FSI sessions with their metadata: session ID, project names, state, working directory, and last activity.
-Only available in daemon mode (SageFs -d).""")>]
+    [<Description("""List all active FSI sessions with their metadata: session ID, project names, state, working directory, and last activity.""")>]
     member _.list_sessions() : Task<string> =
         logger.LogDebug("MCP-TOOL: list_sessions called")
         listSessions ctx |> withEcho "list_sessions"
 
     [<McpServerTool>]
     [<Description("""Stop an active FSI session by its ID. The worker process is gracefully shut down.
-Use list_sessions to see available session IDs. Only available in daemon mode (SageFs -d).""")>]
+Use list_sessions to see available session IDs.""")>]
     member _.stop_session(
         [<Description("The session ID to stop (from list_sessions)")>] session_id: string
     ) : Task<string> =

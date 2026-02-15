@@ -13,20 +13,11 @@ type SessionManagementOps = {
   GetProxy: SessionId -> Task<SessionProxy option>
 }
 
-/// How the MCP layer routes session operations.
-/// Embedded: single in-process FSI session, no session manager.
-/// Daemon: session supervisor manages additional worker sessions.
-[<RequireQualifiedAccess>]
-type SessionMode =
-  | Embedded
-  | Daemon of SessionManagementOps
-
-module SessionMode =
-  /// Extract session management ops, or error if embedded.
-  let requireDaemon (mode: SessionMode) : Result<SessionManagementOps, SageFsError> =
-    match mode with
-    | SessionMode.Daemon ops -> Result.Ok ops
-    | SessionMode.Embedded ->
-      Result.Error (
-        SageFsError.SessionCreationFailed
-          "Session management requires daemon mode (SageFs -d)")
+module SessionManagementOps =
+  /// A no-op stub for testing — all operations return sensible defaults.
+  let stub : SessionManagementOps = {
+    CreateSession = fun _ _ -> Task.FromResult(Result.Error (SageFsError.SessionCreationFailed "Not available"))
+    ListSessions = fun () -> Task.FromResult("No sessions")
+    StopSession = fun _ -> Task.FromResult(Result.Error (SageFsError.SessionCreationFailed "Not available"))
+    GetProxy = fun _ -> Task.FromResult(None)
+  }
