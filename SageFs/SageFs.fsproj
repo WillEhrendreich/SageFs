@@ -27,6 +27,7 @@
         <Compile Include="McpTools.fs" />
         <Compile Include="McpServer.fs" />
         <Compile Include="WorkerMain.fs" />
+        <Compile Include="TerminalMode.fs" />
         <Compile Include="DaemonMode.fs" />
         <Compile Include="WatchdogRunner.fs" />
         <Compile Include="ClientMode.fs" />
