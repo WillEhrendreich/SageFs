@@ -5,8 +5,6 @@ open FSharp.Compiler.Interactive
 open FSharp.Compiler.Text
 open FuzzySharp
 
-open FSharpPlus
-
 [<RequireQualifiedAccess>]
 type CompletionKind =
   | Class
@@ -121,7 +119,7 @@ module FsCompletions =
           | ToolTipElement.Group e -> e
           | _ -> [])
         |> Seq.tryHead
-        |>> _.MainDescription
+        |> Option.map _.MainDescription
         |> Option.defaultValue [||]
 
       {
@@ -146,10 +144,10 @@ module DirectiveCompletions =
     while i < maxVal && wordToReplace[i] = entry[i] do
       i <- i + 1
 
-    String.drop i entry
+    entry.Substring(i)
 
   let commandCompletions (text: string) carret (wordToReplace: string) =
-    if not <| String.contains ' ' text then
+    if not (text.Contains(' ')) then
       directives
       |> Seq.map (fun keyword -> {
         CompletionItem.DisplayText = keyword
@@ -159,7 +157,7 @@ module DirectiveCompletions =
       })
     else
       let currentWord =
-        let textList = String.toList text
+        let textList = text |> Seq.toList
 
         let firstPart =
           textList
@@ -168,10 +166,10 @@ module DirectiveCompletions =
           |> Seq.takeWhile (fun c -> c <> ' ')
 
         let lastPart = textList |> Seq.skip carret |> Seq.takeWhile (fun c -> c <> ' ')
-        Seq.append (Seq.rev firstPart) lastPart |> String.ofSeq
+        Seq.append (Seq.rev firstPart) lastPart |> Seq.toArray |> System.String
 
       let isDirectory =
-        text |> String.contains Path.DirectorySeparatorChar
+        text.Contains(Path.DirectorySeparatorChar)
         || text.StartsWith "#open"
         || text.StartsWith ":open"
 
@@ -202,7 +200,7 @@ let getCompletions session text carret word =
     >> Seq.truncate 50
     >> Seq.toList
 
-  match String.tryHead text with
+  match text |> Seq.tryHead with
   | Some ':'
   | Some '#' -> DirectiveCompletions.commandCompletions text carret word |> sortCompletions
   | Some _ -> FsCompletions.getFsCompletions session text carret word |> sortCompletions

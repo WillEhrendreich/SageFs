@@ -123,8 +123,6 @@ let getAllMethods (asm: Assembly) =
 
   publicTypes |> List.collect (getMethods [])
 
-open FSharpPlus
-
 let mkReloadingState (sln: SageFs.ProjectLoading.Solution) =
   // Setup assembly resolver once
   setupAssemblyResolver ()
@@ -205,14 +203,15 @@ let handleNewAsmFromRepl (logger: ILogger) (asm: Assembly) (st: State) =
       getAllMethods asm
       |> Seq.choose (fun newMethod ->
         Map.tryFind newMethod.MethodInfo.Name st.Methods
-        >>= (Seq.filter (fun existingMethod ->
+        |> Option.bind (
+          Seq.filter (fun existingMethod ->
                let getParams m =
                  m.MethodInfo.GetParameters() |> Array.map _.ParameterType
 
                getParams existingMethod = getParams newMethod
                && existingMethod.MethodInfo.ReturnType = newMethod.MethodInfo.ReturnType
                && existingMethod.FullName.Contains newMethod.FullName)
-             >> Seq.sortByDescending (fun existingMethod ->
+            >> Seq.sortByDescending (fun existingMethod ->
                let moduleCandidate =
                  st.LastOpenModules
                  |> Seq.map (fun o -> Fuzz.Ratio(o + newMethod.FullName, existingMethod.FullName))
@@ -221,7 +220,7 @@ let handleNewAsmFromRepl (logger: ILogger) (asm: Assembly) (st: State) =
 
                let noModuleCandidate = Fuzz.Ratio(newMethod.FullName, existingMethod.FullName)
                max moduleCandidate noModuleCandidate)
-             >> Seq.tryHead)
+            >> Seq.tryHead)
         |> Option.map (fun oldMethod -> oldMethod, newMethod))
       |> Seq.toList
 
@@ -231,9 +230,9 @@ let handleNewAsmFromRepl (logger: ILogger) (asm: Assembly) (st: State) =
 
     { st with LastAssembly = Some asm }, List.map (fst >> _.FullName) replacementPairs
 
-let getOpenModules replCode st =
+let getOpenModules (replCode: string) st =
   let modules =
-    String.split [ " "; "\n" ] replCode
+    replCode.Split([| " "; "\n" |], System.StringSplitOptions.None)
     |> Seq.filter ((<>) "")
     |> Seq.chunkBySize 2
     |> Seq.filter (fun arr -> arr.Length >= 2)
