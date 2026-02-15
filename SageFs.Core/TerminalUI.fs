@@ -354,7 +354,7 @@ module TerminalRender =
     sb.Append(AnsiCodes.moveTo row 1) |> ignore
     sb.Append(AnsiCodes.inverse) |> ignore
     let status =
-      sprintf " %s | evals: %d | focus: %s | Ctrl+Enter:eval Tab:focus Ctrl+Q:quit "
+      sprintf " %s | evals: %d | focus: %s | Ctrl+Enter:eval Tab:focus PgUp/PgDn:scroll Ctrl+Q:quit "
         sessionState evalCount focusedPane
     sb.Append(fitToWidth cols status) |> ignore
     sb.Append(AnsiCodes.reset) |> ignore

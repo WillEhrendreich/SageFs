@@ -109,7 +109,7 @@ let run (daemonInfo: DaemonInfo) = task {
     let! resp = client.GetAsync(sprintf "%s/dashboard" baseUrl)
     resp.EnsureSuccessStatusCode() |> ignore
   with ex ->
-    connError <- Some (sprintf "Cannot connect to daemon at %s: %s" baseUrl ex.Message)
+    connError <- Some (sprintf "Cannot connect to SageFs daemon at %s\n  %s\n\nIs the daemon running? Start it with:\n  sagefs --proj <project.fsproj>" baseUrl ex.Message)
 
   match connError with
   | Some msg ->
