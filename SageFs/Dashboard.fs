@@ -791,6 +791,111 @@ let createCreateSessionHandler
         do! Response.sseHtmlElements ctx (Elem.div [ Attr.id "discovered-projects" ] [])
   }
 
+/// JSON SSE stream for TUI clients — pushes regions + model summary as JSON.
+let createApiStateHandler
+  (getSessionState: unit -> SessionState)
+  (getEvalStats: unit -> EvalStats)
+  (sessionId: string)
+  (getElmRegions: unit -> RenderRegion list option)
+  (stateChanged: IEvent<string> option)
+  (connectionTracker: ConnectionTracker option)
+  : HttpHandler =
+  fun ctx -> task {
+    ctx.Response.ContentType <- "text/event-stream"
+    ctx.Response.Headers.["Cache-Control"] <- Microsoft.Extensions.Primitives.StringValues "no-cache"
+    ctx.Response.Headers.["Connection"] <- Microsoft.Extensions.Primitives.StringValues "keep-alive"
+
+    let clientId = sprintf "tui-%s" (Guid.NewGuid().ToString("N").[..7])
+    connectionTracker |> Option.iter (fun t -> t.Register(clientId, Terminal, sessionId))
+
+    let pushJson () = task {
+      let state = getSessionState ()
+      let stats = getEvalStats ()
+      let regions =
+        match getElmRegions () with
+        | Some r ->
+          r |> List.map (fun region ->
+            {| id = region.Id
+               content = region.Content
+               cursor = region.Cursor |> Option.map (fun c -> {| line = c.Line; col = c.Col |}) |})
+        | None -> []
+      let payload =
+        System.Text.Json.JsonSerializer.Serialize(
+          {| sessionState = SessionState.label state
+             evalCount = stats.EvalCount
+             avgMs = if stats.EvalCount > 0 then stats.TotalDuration.TotalMilliseconds / float stats.EvalCount else 0.0
+             regions = regions |})
+      do! ctx.Response.WriteAsync(sprintf "data: %s\n\n" payload)
+      do! ctx.Response.Body.FlushAsync()
+    }
+
+    try
+      do! pushJson ()
+      match stateChanged with
+      | Some evt ->
+        let tcs = Threading.Tasks.TaskCompletionSource()
+        use _ct = ctx.RequestAborted.Register(fun () -> tcs.TrySetResult() |> ignore)
+        use _sub = evt.Subscribe(fun _ ->
+          try pushJson () |> Async.AwaitTask |> Async.RunSynchronously
+          with _ -> ())
+        do! tcs.Task
+      | None ->
+        while not ctx.RequestAborted.IsCancellationRequested do
+          try
+            do! Threading.Tasks.Task.Delay(TimeSpan.FromSeconds 1.0, ctx.RequestAborted)
+            do! pushJson ()
+          with :? OperationCanceledException -> ()
+    finally
+      connectionTracker |> Option.iter (fun t -> t.Unregister(clientId))
+  }
+
+/// POST /api/dispatch — accept EditorAction JSON and dispatch to Elm runtime.
+let createApiDispatchHandler
+  (dispatch: SageFsMsg -> unit)
+  : HttpHandler =
+  fun ctx -> task {
+    use reader = new StreamReader(ctx.Request.Body)
+    let! body = reader.ReadToEndAsync()
+    try
+      let action = System.Text.Json.JsonSerializer.Deserialize<{| action: string; value: string option |}>(body)
+      let editorAction =
+        match action.action with
+        | "insertChar" ->
+          action.value |> Option.bind (fun s -> if s.Length > 0 then Some (EditorAction.InsertChar s.[0]) else None)
+        | "newLine" -> Some EditorAction.NewLine
+        | "submit" -> Some EditorAction.Submit
+        | "cancel" -> Some EditorAction.Cancel
+        | "deleteBackward" -> Some EditorAction.DeleteBackward
+        | "deleteForward" -> Some EditorAction.DeleteForward
+        | "deleteWord" -> Some EditorAction.DeleteWord
+        | "moveUp" -> Some (EditorAction.MoveCursor Direction.Up)
+        | "moveDown" -> Some (EditorAction.MoveCursor Direction.Down)
+        | "moveLeft" -> Some (EditorAction.MoveCursor Direction.Left)
+        | "moveRight" -> Some (EditorAction.MoveCursor Direction.Right)
+        | "moveWordForward" -> Some EditorAction.MoveWordForward
+        | "moveWordBackward" -> Some EditorAction.MoveWordBackward
+        | "moveToLineStart" -> Some EditorAction.MoveToLineStart
+        | "moveToLineEnd" -> Some EditorAction.MoveToLineEnd
+        | "undo" -> Some EditorAction.Undo
+        | "selectAll" -> Some EditorAction.SelectAll
+        | "triggerCompletion" -> Some EditorAction.TriggerCompletion
+        | "dismissCompletion" -> Some EditorAction.DismissCompletion
+        | "historyPrevious" -> Some EditorAction.HistoryPrevious
+        | "historyNext" -> Some EditorAction.HistoryNext
+        | _ -> None
+      match editorAction with
+      | Some ea ->
+        dispatch (SageFsMsg.Editor ea)
+        ctx.Response.StatusCode <- 200
+        do! ctx.Response.WriteAsJsonAsync({| ok = true |})
+      | None ->
+        ctx.Response.StatusCode <- 400
+        do! ctx.Response.WriteAsJsonAsync({| error = sprintf "Unknown action: %s" action.action |})
+    with ex ->
+      ctx.Response.StatusCode <- 400
+      do! ctx.Response.WriteAsJsonAsync({| error = ex.Message |})
+  }
+
 /// Create all dashboard routes.
 let createEndpoints
   (version: string)
@@ -807,6 +912,7 @@ let createEndpoints
   (stopSession: (string -> Threading.Tasks.Task<string>) option)
   (createSession: (string list -> string -> Threading.Tasks.Task<Result<string, string>>) option)
   (connectionTracker: ConnectionTracker option)
+  (dispatch: SageFsMsg -> unit)
   : HttpEndpoint list =
   [
     yield get "/dashboard" (FalcoResponse.ofHtml (renderShell version))
@@ -816,6 +922,9 @@ let createEndpoints
     yield post "/dashboard/hard-reset" (createResetHandler hardResetSession)
     yield post "/dashboard/clear-output" createClearOutputHandler
     yield post "/dashboard/discover-projects" createDiscoverHandler
+    // TUI client API
+    yield get "/api/state" (createApiStateHandler getSessionState getEvalStats sessionId getElmRegions stateChanged connectionTracker)
+    yield post "/api/dispatch" (createApiDispatchHandler dispatch)
     match createSession with
     | Some handler ->
       yield post "/dashboard/session/create" (createCreateSessionHandler handler)

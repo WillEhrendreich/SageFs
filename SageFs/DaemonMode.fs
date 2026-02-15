@@ -213,6 +213,8 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
       }))
       // Connection tracker
       (Some connectionTracker)
+      // Dispatch for TUI client API
+      (fun msg -> elmRuntime.Dispatch msg)
   let dashboardTask = task {
     try
       let builder = Microsoft.AspNetCore.Builder.WebApplication.CreateBuilder()
@@ -286,18 +288,6 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
 
   eprintfn "SageFs daemon ready (PID %d, MCP port %d, dashboard port %d)" Environment.ProcessId mcpPort dashboardPort
 
-  // Start terminal UI if we have a real console
-  let terminalTask = task {
-    try
-      if Environment.UserInteractive && not (Console.IsInputRedirected) then
-        do! TerminalMode.run elmRuntime stateChangedEvent.Publish (Some connectionTracker) (Some sessionId) cts.Token
-        // Terminal UI exited (Ctrl+D) — shut down daemon
-        cts.Cancel()
-    with
-    | :? OperationCanceledException -> ()
-    | ex -> eprintfn "[WARN] Terminal UI error: %s" ex.Message
-  }
-
   Console.CancelKeyPress.Add(fun e ->
     e.Cancel <- true
     eprintfn "Shutting down..."
@@ -315,9 +305,6 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
         cts.Token),
       System.Threading.Tasks.Task.Run(
         System.Func<System.Threading.Tasks.Task>(fun () -> dashboardTask),
-        cts.Token),
-      System.Threading.Tasks.Task.Run(
-        System.Func<System.Threading.Tasks.Task>(fun () -> terminalTask),
         cts.Token))
     ()
   with

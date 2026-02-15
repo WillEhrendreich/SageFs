@@ -237,6 +237,15 @@ let main args =
       | Error err ->
         printfn "Failed to start daemon: %A" err
         1
+  // Subcommand: tui (terminal UI client for running daemon)
+  elif args.Length > 0 && args.[0] = "tui" then
+    match DaemonState.read () with
+    | Some info ->
+      TuiClient.run info
+      |> _.GetAwaiter() |> _.GetResult()
+    | None ->
+      printfn "No SageFs daemon running. Start one first with: sagefs --proj <project.fsproj>"
+      1
   // Default: daemon mode
   else
     runDaemon args []
