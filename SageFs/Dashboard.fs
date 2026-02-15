@@ -89,10 +89,12 @@ let private renderShell (version: string) =
     Elem.body [ Ds.safariStreamingFix ] [
       // Dedicated init element that connects to SSE stream (per Falco.Datastar pattern)
       Elem.div [ Ds.onInit (Ds.get "/dashboard/stream") ] []
-      // Connection status banner
-      Elem.div [ Attr.id "connection-status"; Attr.class' "conn-banner conn-disconnected" ] [
+      // Connection status banner (server-down detection)
+      Elem.div [ Attr.id "server-status"; Attr.class' "conn-banner conn-disconnected" ] [
         Text.raw "⏳ Connecting to server..."
       ]
+      // Hidden heartbeat element updated by SSE to track liveness
+      Elem.div [ Attr.id "sse-heartbeat"; Attr.style "display:none" ] []
       Elem.h1 [] [ Text.raw (sprintf "🧙 SageFs Dashboard v%s" version) ]
       Elem.div [ Attr.class' "grid" ] [
         // Row 1: Session status + Eval stats
@@ -101,7 +103,7 @@ let private renderShell (version: string) =
           Elem.div [ Attr.id "session-status" ] [
             Text.raw "Connecting..."
           ]
-          Elem.div [ Attr.id "connection-status"; Attr.class' "meta"; Attr.style "font-size: 0.75rem; margin-top: 4px;" ] []
+          Elem.div [ Attr.id "connection-counts"; Attr.class' "meta"; Attr.style "font-size: 0.75rem; margin-top: 4px;" ] []
         ]
         Elem.div [ Attr.class' "panel" ] [
           Elem.h2 [] [ Text.raw "Eval Stats" ]
@@ -213,31 +215,32 @@ let private renderShell (version: string) =
       // Server connection monitoring script
       Elem.script [] [ Text.raw """
         (function() {
-          var lastUpdate = Date.now();
-          var banner = document.getElementById('connection-status');
+          var lastUpdate = 0;
+          var banner = document.getElementById('server-status');
           var wasConnected = false;
-          // Track SSE activity by observing session-status mutations
-          var target = document.getElementById('session-status');
-          if (target) {
+          // Track SSE activity via heartbeat element (updated on every SSE push)
+          var heartbeat = document.getElementById('sse-heartbeat');
+          if (heartbeat) {
             new MutationObserver(function() {
               lastUpdate = Date.now();
-              if (!wasConnected || banner.className.indexOf('conn-connected') === -1) {
+              if (!wasConnected) {
                 wasConnected = true;
                 banner.className = 'conn-banner conn-connected';
                 banner.textContent = '\u2705 Connected';
                 setTimeout(function() { banner.style.display = 'none'; }, 2000);
               }
-            }).observe(target, { childList: true, subtree: true, characterData: true });
+            }).observe(heartbeat, { childList: true, subtree: true, characterData: true });
           }
           // Check every 5s if SSE is still alive
           setInterval(function() {
+            if (lastUpdate === 0) return; // haven't connected yet
             var elapsed = Date.now() - lastUpdate;
-            if (elapsed > 10000) {
+            if (elapsed > 15000) {
               banner.style.display = '';
               banner.className = 'conn-banner conn-disconnected';
               banner.textContent = '\u274c Server disconnected \u2014 waiting for reconnect...';
               wasConnected = false;
-            } else if (elapsed > 5000 && wasConnected) {
+            } else if (elapsed > 8000 && wasConnected) {
               banner.style.display = '';
               banner.className = 'conn-banner conn-reconnecting';
               banner.textContent = '\u23f3 Connection stale \u2014 checking...';
@@ -509,6 +512,11 @@ let createStreamHandler
     connectionTracker |> Option.iter (fun t -> t.Register(clientId, Browser, sessionId))
 
     let pushState () = task {
+      // Push heartbeat for server-status detection
+      do! Response.sseHtmlElements ctx (
+        Elem.div [ Attr.id "sse-heartbeat"; Attr.style "display:none" ] [
+          Text.raw (DateTimeOffset.UtcNow.Ticks.ToString())
+        ])
       let state = getSessionState ()
       let stats = getEvalStats ()
       let stateStr = SessionState.label state
@@ -537,7 +545,7 @@ let createStreamHandler
           if parts.IsEmpty then sprintf "%d connected" total
           else sprintf "%s" (String.Join(" ", parts))
         do! Response.sseHtmlElements ctx (
-          Elem.div [ Attr.id "connection-status"; Attr.class' "meta"; Attr.style "font-size: 0.75rem; margin-top: 4px;" ] [
+          Elem.div [ Attr.id "connection-counts"; Attr.class' "meta"; Attr.style "font-size: 0.75rem; margin-top: 4px;" ] [
             Text.raw label
           ])
       | None -> ()
