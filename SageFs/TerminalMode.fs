@@ -61,22 +61,23 @@ module TerminalState =
                       Focused = p.PaneId = state.Focus }) } }
 
 
-/// Set up the console for raw terminal input
+/// Set up the console for raw terminal input (alternate screen buffer)
 let setupRawMode () =
   Console.TreatControlCAsInput <- true
-  Console.CursorVisible <- false
   AnsiCodes.enableVT100 () |> ignore
+  Console.Write(AnsiCodes.enterAltScreen)
+  Console.Write(AnsiCodes.hideCursor)
+  Console.Write(AnsiCodes.clearScreen)
+  Console.Write(AnsiCodes.home)
   TerminalUIState.IsActive <- true
 
-/// Restore console to normal mode
+/// Restore console to normal mode (return to main screen buffer)
 let restoreConsole () =
   TerminalUIState.IsActive <- false
   Console.TreatControlCAsInput <- false
-  Console.CursorVisible <- true
-  Console.Write(AnsiCodes.reset)
   Console.Write(AnsiCodes.showCursor)
-  Console.Write(AnsiCodes.clearScreen)
-  Console.Write(AnsiCodes.home)
+  Console.Write(AnsiCodes.reset)
+  Console.Write(AnsiCodes.leaveAltScreen)
 
 /// Run the interactive terminal UI.
 /// Renders RenderRegions from the Elm runtime and dispatches user input as EditorActions.
@@ -129,8 +130,7 @@ let run
         prevFrame <- frame
       with _ -> ())
 
-  // Clear screen and initial render
-  Console.Write(AnsiCodes.clearScreen)
+  // Initial render (alt screen already cleared by setupRawMode)
   render ()
 
   // Subscribe to Elm state changes for re-rendering
