@@ -43,6 +43,7 @@
         <Compile Include="SageFsEffectHandlerTests.fs" />
         <Compile Include="ElmLoopResilienceTests.fs" />
         <Compile Include="DashboardParsingTests.fs" />
+        <Compile Include="DirectoryConfigTests.fs" />
         <Compile Include="ElmDaemonTests.fs" />
         <Compile Include="ExplorationTests.fs" />
         <Compile Include="Program.fs" />
