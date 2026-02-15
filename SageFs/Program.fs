@@ -237,9 +237,6 @@ let main args =
       | Error err ->
         printfn "Failed to start daemon: %A" err
         1
-  // Subcommand: -d / --daemon (kept as alias for backward compat, same as default)
-  elif args |> Array.exists (fun a -> a = "-d" || a = "--daemon") then
-    runDaemon args ["-d"; "--daemon"; "--supervised"]
+  // Default: daemon mode
   else
-    // Default: daemon mode
-    runDaemon args ["--supervised"]
+    runDaemon args []

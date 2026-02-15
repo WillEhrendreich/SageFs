@@ -403,7 +403,7 @@ module McpTools =
     GetEvalStats: unit -> Affordances.EvalStats
     GetWarmupFailures: unit -> WarmupFailure list
     GetStartupConfig: unit -> StartupConfig option
-    Mode: SessionMode
+    SessionOps: SessionManagementOps
     /// Elm loop dispatch function (daemon mode).
     /// When present, MCP tools can drive the Elm loop.
     Dispatch: (SageFsMsg -> unit) option
@@ -433,18 +433,14 @@ module McpTools =
     (msg: WorkerProtocol.SessionId -> WorkerProtocol.WorkerMessage)
     : Task<Result<WorkerProtocol.WorkerResponse, string>> =
     task {
-      match ctx.Mode with
-      | SessionMode.Embedded ->
-        return Result.Error "Session routing requires daemon mode (SageFs -d)"
-      | SessionMode.Daemon ops ->
-        let! proxy = ops.GetProxy sessionId
-        match proxy with
-        | None ->
-          return Result.Error (sprintf "Session '%s' not found" sessionId)
-        | Some send ->
-          let replyId = Guid.NewGuid().ToString("N").[..7]
-          let! response = send (msg replyId) |> Async.StartAsTask
-          return Result.Ok response
+      let! proxy = ctx.SessionOps.GetProxy sessionId
+      match proxy with
+      | None ->
+        return Result.Error (sprintf "Session '%s' not found" sessionId)
+      | Some send ->
+        let replyId = Guid.NewGuid().ToString("N").[..7]
+        let! response = send (msg replyId) |> Async.StartAsTask
+        return Result.Ok response
     }
 
   /// Format a WorkerResponse.EvalResult for display.
@@ -791,39 +787,27 @@ module McpTools =
     exploreQualifiedName ctx typeName
 
   // ── Session Management Operations ──────────────────────────────
-  // These dispatch through ctx.Mode (SessionMode DU).
-  // Embedded mode → error message. Daemon mode → delegates to ops.
 
-  /// Create a new session (daemon mode only).
+  /// Create a new session.
   let createSession (ctx: McpContext) (projects: string list) (workingDir: string) : Task<string> =
     task {
-      match SessionMode.requireDaemon ctx.Mode with
+      let! result = ctx.SessionOps.CreateSession projects workingDir
+      match result with
+      | Result.Ok info -> return info
       | Result.Error err -> return SageFsError.describe err
-      | Result.Ok mgmt ->
-        let! result = mgmt.CreateSession projects workingDir
-        match result with
-        | Result.Ok info -> return info
-        | Result.Error err -> return SageFsError.describe err
     }
 
-  /// List all active sessions (daemon mode only).
+  /// List all active sessions.
   let listSessions (ctx: McpContext) : Task<string> =
-    task {
-      match SessionMode.requireDaemon ctx.Mode with
-      | Result.Error err -> return SageFsError.describe err
-      | Result.Ok mgmt -> return! mgmt.ListSessions()
-    }
+    ctx.SessionOps.ListSessions()
 
-  /// Stop a session by ID (daemon mode only).
+  /// Stop a session by ID.
   let stopSession (ctx: McpContext) (sessionId: string) : Task<string> =
     task {
-      match SessionMode.requireDaemon ctx.Mode with
+      let! result = ctx.SessionOps.StopSession sessionId
+      match result with
+      | Result.Ok msg -> return msg
       | Result.Error err -> return SageFsError.describe err
-      | Result.Ok mgmt ->
-        let! result = mgmt.StopSession sessionId
-        match result with
-        | Result.Ok msg -> return msg
-        | Result.Error err -> return SageFsError.describe err
     }
 
   // ── Elm State Query ──────────────────────────────────────────────

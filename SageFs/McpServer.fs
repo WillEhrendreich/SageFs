@@ -41,11 +41,11 @@ let private withErrorHandling (ctx: Microsoft.AspNetCore.Http.HttpContext) (hand
 }
 
 // Create shared MCP context
-let private mkContext (actor: AppActor) (store: Marten.IDocumentStore) (sessionId: string) (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.T>) (stateChanged: IEvent<string> option) (cancelEval: unit -> bool) (getSessionState: unit -> SageFs.SessionState) (getEvalStats: unit -> SageFs.Affordances.EvalStats) (getWarmupFailures: unit -> SageFs.AppState.WarmupFailure list) (getStartupConfig: unit -> SageFs.AppState.StartupConfig option) (mode: SageFs.SessionMode) (dispatch: (SageFs.SageFsMsg -> unit) option) (getElmModel: (unit -> SageFs.SageFsModel) option) (getElmRegions: (unit -> SageFs.RenderRegion list) option) : McpContext =
-  { Actor = actor; Store = store; SessionId = sessionId; DiagnosticsChanged = diagnosticsChanged; StateChanged = stateChanged; CancelEval = cancelEval; GetSessionState = getSessionState; GetEvalStats = getEvalStats; GetWarmupFailures = getWarmupFailures; GetStartupConfig = getStartupConfig; Mode = mode; Dispatch = dispatch; GetElmModel = getElmModel; GetElmRegions = getElmRegions }
+let private mkContext (actor: AppActor) (store: Marten.IDocumentStore) (sessionId: string) (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.T>) (stateChanged: IEvent<string> option) (cancelEval: unit -> bool) (getSessionState: unit -> SageFs.SessionState) (getEvalStats: unit -> SageFs.Affordances.EvalStats) (getWarmupFailures: unit -> SageFs.AppState.WarmupFailure list) (getStartupConfig: unit -> SageFs.AppState.StartupConfig option) (sessionOps: SageFs.SessionManagementOps) (dispatch: (SageFs.SageFsMsg -> unit) option) (getElmModel: (unit -> SageFs.SageFsModel) option) (getElmRegions: (unit -> SageFs.RenderRegion list) option) : McpContext =
+  { Actor = actor; Store = store; SessionId = sessionId; DiagnosticsChanged = diagnosticsChanged; StateChanged = stateChanged; CancelEval = cancelEval; GetSessionState = getSessionState; GetEvalStats = getEvalStats; GetWarmupFailures = getWarmupFailures; GetStartupConfig = getStartupConfig; SessionOps = sessionOps; Dispatch = dispatch; GetElmModel = getElmModel; GetElmRegions = getElmRegions }
 
 // Start MCP server in background
-let startMcpServer (actor: AppActor) (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.T>) (stateChanged: IEvent<string> option) (cancelEval: unit -> bool) (getSessionState: unit -> SageFs.SessionState) (getEvalStats: unit -> SageFs.Affordances.EvalStats) (getWarmupFailures: unit -> SageFs.AppState.WarmupFailure list) (getStartupConfig: unit -> SageFs.AppState.StartupConfig option) (store: Marten.IDocumentStore) (sessionId: string) (port: int) (mode: SageFs.SessionMode) (elmRuntime: SageFs.ElmRuntime<SageFs.SageFsModel, SageFs.SageFsMsg, SageFs.RenderRegion> option) =
+let startMcpServer (actor: AppActor) (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.T>) (stateChanged: IEvent<string> option) (cancelEval: unit -> bool) (getSessionState: unit -> SageFs.SessionState) (getEvalStats: unit -> SageFs.Affordances.EvalStats) (getWarmupFailures: unit -> SageFs.AppState.WarmupFailure list) (getStartupConfig: unit -> SageFs.AppState.StartupConfig option) (store: Marten.IDocumentStore) (sessionId: string) (port: int) (sessionOps: SageFs.SessionManagementOps) (elmRuntime: SageFs.ElmRuntime<SageFs.SageFsModel, SageFs.SageFsMsg, SageFs.RenderRegion> option) =
     task {
         try
             let dispatch = elmRuntime |> Option.map (fun r -> r.Dispatch)
@@ -94,7 +94,7 @@ let startMcpServer (actor: AppActor) (diagnosticsChanged: IEvent<SageFs.Features
             ) |> ignore
             
             // Create MCP context
-            let mcpContext = (mkContext actor store sessionId diagnosticsChanged stateChanged cancelEval getSessionState getEvalStats getWarmupFailures getStartupConfig mode dispatch getElmModel getElmRegions)
+            let mcpContext = (mkContext actor store sessionId diagnosticsChanged stateChanged cancelEval getSessionState getEvalStats getWarmupFailures getStartupConfig sessionOps dispatch getElmModel getElmRegions)
             
             // Register MCP services
             builder.Services.AddSingleton<McpContext>(mcpContext) |> ignore
@@ -132,7 +132,7 @@ let startMcpServer (actor: AppActor) (diagnosticsChanged: IEvent<SageFs.Features
             app.MapMcp() |> ignore
 
             // Shared context — constructed once
-            let mcpContext = mkContext actor store sessionId diagnosticsChanged stateChanged cancelEval getSessionState getEvalStats getWarmupFailures getStartupConfig mode dispatch getElmModel getElmRegions
+            let mcpContext = mkContext actor store sessionId diagnosticsChanged stateChanged cancelEval getSessionState getEvalStats getWarmupFailures getStartupConfig sessionOps dispatch getElmModel getElmRegions
             
             // POST /exec — send F# code to the session
             app.MapPost("/exec", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->

@@ -138,7 +138,7 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
       eventStore
       sessionId
       mcpPort
-      (SageFs.SessionMode.Daemon sessionOps)
+      sessionOps
       (Some elmRuntime)
 
   // Start dashboard web server on MCP port + 1
