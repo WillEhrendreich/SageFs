@@ -3,6 +3,7 @@ module SageFs.Tests.SageFsAppTests
 open System
 open Expecto
 open Expecto.Flip
+open FsCheck
 open SageFs
 open SageFs.Features.Diagnostics
 
@@ -253,6 +254,91 @@ let sageFsRenderTests = testList "SageFsRender" [
     |> Expect.stringContains "should show session id" "s1"
     sessionsRegion.Content
     |> Expect.stringContains "should show active marker" "*"
+
+  testCase "output region tags each line with correct [kind]" <| fun _ ->
+    let now = DateTime.UtcNow
+    let model =
+      { SageFsModel.initial with
+          RecentOutput = [
+            { Kind = OutputKind.Result; Text = "val x = 1"; Timestamp = now }
+            { Kind = OutputKind.Error; Text = "oops"; Timestamp = now }
+            { Kind = OutputKind.Info; Text = "loaded"; Timestamp = now }
+            { Kind = OutputKind.System; Text = "sys"; Timestamp = now }
+          ] }
+    let output =
+      SageFsRender.render model
+      |> List.find (fun r -> r.Id = "output")
+    let lines = output.Content.Split('\n')
+    lines |> Array.length |> Expect.equal "4 output lines" 4
+    lines.[0] |> Expect.stringStarts "first tagged result" "[result]"
+    lines.[1] |> Expect.stringStarts "second tagged error" "[error]"
+    lines.[2] |> Expect.stringStarts "third tagged info" "[info]"
+    lines.[3] |> Expect.stringStarts "fourth tagged system" "[system]"
+
+  testCase "inactive session has no * marker" <| fun _ ->
+    let now = DateTime.UtcNow
+    let model =
+      { SageFsModel.initial with
+          Sessions =
+            { SageFsModel.initial.Sessions with
+                Sessions = [
+                  { Id = "s1"; Projects = []; Status = SessionDisplayStatus.Running
+                    LastActivity = now; EvalCount = 0; UpSince = now; IsActive = true }
+                  { Id = "s2"; Projects = []; Status = SessionDisplayStatus.Starting
+                    LastActivity = now; EvalCount = 0; UpSince = now; IsActive = false }
+                ] } }
+    let sessions =
+      SageFsRender.render model
+      |> List.find (fun r -> r.Id = "sessions")
+    let lines = sessions.Content.Split('\n')
+    lines |> Array.length |> Expect.equal "2 session lines" 2
+    lines.[1].Contains("*")
+    |> Expect.isFalse "inactive session has no *"
+
+  testCase "empty model produces empty output and diagnostics" <| fun _ ->
+    let regions = SageFsRender.render SageFsModel.initial
+    let output = regions |> List.find (fun r -> r.Id = "output")
+    let diag = regions |> List.find (fun r -> r.Id = "diagnostics")
+    output.Content |> Expect.equal "empty output" ""
+    diag.Content |> Expect.equal "empty diagnostics" ""
+
+  testCase "region ids are correct" <| fun _ ->
+    SageFsRender.render SageFsModel.initial
+    |> List.map (fun r -> r.Id)
+    |> Expect.equal "region ids in order" ["editor"; "output"; "diagnostics"; "sessions"]
+
+  testProperty "sessions render contains id and status for every session"
+    <| fun (sessionCount: byte) ->
+      let count = int sessionCount % 10
+      let now = DateTime.UtcNow
+      let statuses = [|
+        SessionDisplayStatus.Running
+        SessionDisplayStatus.Starting
+        SessionDisplayStatus.Suspended
+        SessionDisplayStatus.Stale
+        SessionDisplayStatus.Restarting |]
+      let sessions =
+        [ for i in 0..count-1 do
+            { SessionSnapshot.Id = sprintf "session-%d" i
+              Projects = []; Status = statuses.[i % statuses.Length]
+              LastActivity = now; EvalCount = i; UpSince = now
+              IsActive = (i = 0) } ]
+      let model =
+        { SageFsModel.initial with
+            Sessions = { SageFsModel.initial.Sessions with Sessions = sessions } }
+      let sessRegion =
+        SageFsRender.render model
+        |> List.find (fun r -> r.Id = "sessions")
+      if count = 0 then
+        sessRegion.Content |> Expect.equal "empty" ""
+      else
+        let lines = sessRegion.Content.Split('\n')
+        lines |> Array.length |> Expect.equal "one line per session" count
+        for i in 0..count-1 do
+          lines.[i]
+          |> Expect.stringContains "contains session id" (sprintf "session-%d" i)
+          lines.[i]
+          |> Expect.stringContains "contains status brackets" "["
 ]
 
 [<Tests>]
