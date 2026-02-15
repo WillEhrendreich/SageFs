@@ -114,6 +114,27 @@ let private checkHealth (client: HttpClient) (baseUrl: string) = task {
     return Error (sprintf "Connection error: %s" ex.Message)
 }
 
+/// History file path for connect client.
+let private historyPath =
+  let dir = IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".SageFs")
+  IO.Directory.CreateDirectory(dir) |> ignore
+  IO.Path.Combine(dir, "connect_history")
+
+/// Load history from disk.
+let private loadHistory () =
+  if IO.File.Exists(historyPath) then
+    IO.File.ReadAllLines(historyPath)
+    |> Array.toList
+    |> List.rev
+    |> List.truncate 500
+    |> List.rev
+  else []
+
+/// Append an entry to history.
+let private appendHistory (entry: string) =
+  try IO.File.AppendAllLines(historyPath, [entry])
+  with _ -> ()
+
 /// Read a multi-line F# input block (accumulates until ;; is found).
 let private readInputBlock () =
   let sb = StringBuilder()
@@ -173,6 +194,7 @@ let run (info: DaemonInfo) = task {
         | Ok msg -> printfn "%s" msg
         | Error msg -> eprintfn "\x1b[31m%s\x1b[0m" msg
       | code ->
+        appendHistory code
         match! evalCode client baseUrl code with
         | Ok result ->
           if not (String.IsNullOrWhiteSpace result) then

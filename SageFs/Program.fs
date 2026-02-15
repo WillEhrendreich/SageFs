@@ -225,8 +225,23 @@ let main args =
       ClientMode.run info
       |> _.GetAwaiter() |> _.GetResult()
     | None ->
-      printfn "No SageFs daemon is running. Start one with: SageFs"
-      1
+      printfn "No SageFs daemon running. Starting one..."
+      let daemonArgs =
+        args.[1..]
+        |> Array.filter (fun a -> a <> "connect")
+        |> String.concat " "
+      match ClientMode.startDaemonInBackground daemonArgs with
+      | Ok () ->
+        match DaemonState.read () with
+        | Some info ->
+          ClientMode.run info
+          |> _.GetAwaiter() |> _.GetResult()
+        | None ->
+          printfn "Daemon started but connection failed."
+          1
+      | Error err ->
+        printfn "Failed to start daemon: %A" err
+        1
   // Legacy: --repl flag for embedded REPL (deprecated)
   elif args |> Array.exists (fun a -> a = "--repl") then
     eprintfn "\x1b[33m[DEPRECATED]\x1b[0m --repl mode is deprecated. Use daemon mode (default) instead."
