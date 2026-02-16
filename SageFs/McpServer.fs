@@ -298,6 +298,104 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                 }) :> Task
             ) |> ignore
             
+            // GET /api/sessions — list all sessions with details
+            app.MapGet("/api/sessions", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
+                withErrorHandling ctx (fun () -> task {
+                    let! listing = sessionOps.ListSessions ()
+                    let activeSid = !activeSessionId
+                    // Also get per-session snapshots for richer info
+                    let sessions = System.Collections.Generic.List<obj>()
+                    // Parse listing to extract IDs, then get snapshots
+                    // ListSessions returns formatted text; we need structured data
+                    // Get all session info from manager
+                    let! allInfo = task {
+                      let results = System.Collections.Generic.List<{| id: string; status: string; projects: string list; workingDirectory: string; isActive: bool; evalCount: int; avgDurationMs: float |}>()
+                      // Attempt to get proxy for each known session ID by parsing the listing
+                      // The listing is text-based, so we'll try each line
+                      let lines = listing.Split('\n') |> Array.filter (fun l -> l.Contains("│") || l.Contains("["))
+                      for line in lines do
+                        // Try to extract session ID from the line
+                        let parts = line.Split([|'['; ']'; '│'; ' '|], StringSplitOptions.RemoveEmptyEntries)
+                        if parts.Length > 0 then
+                          let candidateId = parts.[0].Trim()
+                          if candidateId.Length >= 6 && not (candidateId.Contains("/")) then
+                            let! info = sessionOps.GetSessionInfo candidateId
+                            match info with
+                            | Some i ->
+                              let! proxy = sessionOps.GetProxy candidateId
+                              let evalCount, avgMs, status =
+                                match proxy with
+                                | Some send ->
+                                  let resp = (send (SageFs.WorkerProtocol.WorkerMessage.GetStatus "api") |> Async.RunSynchronously)
+                                  match resp with
+                                  | SageFs.WorkerProtocol.WorkerResponse.StatusResult(_, snap) ->
+                                    snap.EvalCount, float snap.AvgDurationMs, SageFs.WorkerProtocol.SessionStatus.label snap.Status
+                                  | _ -> 0, 0.0, "Unknown"
+                                | None -> 0, 0.0, "Disconnected"
+                              results.Add({| id = candidateId; status = status; projects = i.Projects; workingDirectory = i.WorkingDirectory; isActive = (candidateId = activeSid); evalCount = evalCount; avgDurationMs = avgMs |})
+                            | None -> ()
+                      return results |> Seq.toList
+                    }
+                    do! jsonResponse ctx 200 {| sessions = allInfo; activeSessionId = activeSid |}
+                }) :> Task
+            ) |> ignore
+
+            // POST /api/sessions/switch — switch active session
+            app.MapPost("/api/sessions/switch", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
+                withErrorHandling ctx (fun () -> task {
+                    let! sid = readJsonProp ctx "sessionId"
+                    activeSessionId.Value <- sid
+                    match dispatch with
+                    | Some d ->
+                      d (SageFs.SageFsMsg.Event (SageFs.SageFsEvent.SessionSwitched (None, sid)))
+                    | None -> ()
+                    do! jsonResponse ctx 200 {| success = true; activeSessionId = sid |}
+                }) :> Task
+            ) |> ignore
+
+            // POST /api/sessions/create — create a new session
+            app.MapPost("/api/sessions/create", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
+                withErrorHandling ctx (fun () -> task {
+                    use reader = new System.IO.StreamReader(ctx.Request.Body)
+                    let! body = reader.ReadToEndAsync()
+                    let doc = System.Text.Json.JsonDocument.Parse(body)
+                    let root = doc.RootElement
+                    let workingDir =
+                      if root.TryGetProperty("workingDirectory") |> fst then
+                        root.GetProperty("workingDirectory").GetString()
+                      else Environment.CurrentDirectory
+                    let projects =
+                      if root.TryGetProperty("projects") |> fst then
+                        root.GetProperty("projects").EnumerateArray()
+                        |> Seq.map (fun e -> e.GetString())
+                        |> Seq.toList
+                      else []
+                    let! result = sessionOps.CreateSession projects workingDir
+                    match result with
+                    | Ok msg ->
+                      match dispatch with
+                      | Some d -> d (SageFs.SageFsMsg.Editor SageFs.EditorAction.ListSessions)
+                      | None -> ()
+                      do! jsonResponse ctx 200 {| success = true; message = msg |}
+                    | Error err ->
+                      do! jsonResponse ctx 400 {| success = false; error = SageFs.SageFsError.describe err |}
+                }) :> Task
+            ) |> ignore
+
+            // POST /api/sessions/stop — stop a session
+            app.MapPost("/api/sessions/stop", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
+                withErrorHandling ctx (fun () -> task {
+                    let! sid = readJsonProp ctx "sessionId"
+                    let! result = sessionOps.StopSession sid
+                    match dispatch with
+                    | Some d -> d (SageFs.SageFsMsg.Editor SageFs.EditorAction.ListSessions)
+                    | None -> ()
+                    match result with
+                    | Ok msg -> do! jsonResponse ctx 200 {| success = true; message = msg |}
+                    | Error err -> do! jsonResponse ctx 400 {| success = false; error = SageFs.SageFsError.describe err |}
+                }) :> Task
+            ) |> ignore
+
             // Print startup info
             printfn "MCP SSE endpoint: http://localhost:%d/sse" port
             printfn "MCP message endpoint: http://localhost:%d/message" port

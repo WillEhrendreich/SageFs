@@ -54,6 +54,7 @@
         <Compile Include="ElmDaemonTests.fs" />
         <Compile Include="SessionCreationTests.fs" />
         <Compile Include="ExplorationTests.fs" />
+        <Compile Include="ClientModeTests.fs" />
         <Compile Include="Program.fs" />
     </ItemGroup>
 
