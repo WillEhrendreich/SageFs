@@ -36,6 +36,7 @@ let private mkTestSessionOps (result: ActorResult) (sessionId: string) : SageFs.
   { CreateSession = fun _ _ -> System.Threading.Tasks.Task.FromResult(Ok "test-session")
     ListSessions = fun () -> System.Threading.Tasks.Task.FromResult("No sessions")
     StopSession = fun _ -> System.Threading.Tasks.Task.FromResult(Ok "stopped")
+    RestartSession = fun _ _ -> System.Threading.Tasks.Task.FromResult(Ok "restarted")
     GetProxy = fun _ -> System.Threading.Tasks.Task.FromResult(Some proxy)
     GetSessionInfo = fun _ ->
       System.Threading.Tasks.Task.FromResult(

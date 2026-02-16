@@ -594,7 +594,8 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
                 let runBuild () =
                   let psi =
                     System.Diagnostics.ProcessStartInfo(
-                      "dotnet", sprintf "build \"%s\" --no-restore" projFile,
+                      "dotnet",
+                      sprintf "build \"%s\" --no-restore" projFile,
                       RedirectStandardOutput = true,
                       RedirectStandardError = true,
                       UseShellExecute = false)
