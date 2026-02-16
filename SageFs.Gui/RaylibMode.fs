@@ -44,6 +44,8 @@ module RaylibMode =
     | FontSizeUp
     | FontSizeDown
     | Action of EditorAction
+    | TogglePane of string
+    | LayoutPreset of string
 
   /// Convert Raylib KeyboardKey to System.ConsoleKey for KeyMap lookup
   let private raylibToConsoleKey (key: KeyboardKey) : System.ConsoleKey option =
@@ -95,6 +97,8 @@ module RaylibMode =
         | Some (UiAction.Redraw) -> Some Redraw
         | Some (UiAction.FontSizeUp) -> Some FontSizeUp
         | Some (UiAction.FontSizeDown) -> Some FontSizeDown
+        | Some (UiAction.TogglePane p) -> Some (TogglePane p)
+        | Some (UiAction.LayoutPreset p) -> Some (LayoutPreset p)
         | Some (UiAction.Editor action) -> Some (Action action)
         | None -> None
 
@@ -105,9 +109,6 @@ module RaylibMode =
     else None
 
   /// Compute pane layout rects for the given grid dimensions.
-  let private computePaneRects (rows: int) (cols: int) : (PaneId * Rect) list =
-    Screen.computeLayout rows cols |> fst
-
   /// Render regions into the CellGrid using shared Screen module
   let private renderRegions
     (grid: Cell[,])
@@ -118,11 +119,12 @@ module RaylibMode =
     (scrollOffsets: Map<PaneId, int>)
     (fontSize: int)
     (currentFps: int)
-    (keyMap: KeyMap) =
+    (keyMap: KeyMap)
+    (layoutConfig: LayoutConfig) =
 
     let statusLeft = sprintf " %s | evals: %d | %s" sessionState evalCount (PaneId.displayName focusedPane)
     let statusRight = sprintf " %dpt | %d fps |%s" fontSize currentFps (StatusHints.build keyMap focusedPane)
-    Screen.draw grid regions focusedPane scrollOffsets statusLeft statusRight |> ignore
+    Screen.drawWith layoutConfig grid regions focusedPane scrollOffsets statusLeft statusRight |> ignore
 
   /// Run the Raylib GUI window connected to daemon.
   let run () =
@@ -171,6 +173,7 @@ module RaylibMode =
     let mutable lastFps = 0
     let mutable focusedPane = PaneId.Editor
     let mutable scrollOffsets = Map.empty<PaneId, int>
+    let mutable layoutConfig = LayoutConfig.defaults
     let statelock = obj ()
     let mutable running = true
 
@@ -232,7 +235,7 @@ module RaylibMode =
         | CycleFocus ->
           focusedPane <- PaneId.next focusedPane
         | FocusDir dir ->
-          let paneRects = computePaneRects gridRows gridCols
+          let paneRects = Screen.computeLayoutWith layoutConfig gridRows gridCols |> fst
           focusedPane <- PaneId.navigate dir focusedPane paneRects
         | ScrollUp ->
           let cur = scrollOffsets |> Map.tryFind focusedPane |> Option.defaultValue 0
@@ -247,6 +250,21 @@ module RaylibMode =
         | FontSizeDown ->
           fontSize <- max minFontSize (fontSize - 2)
           reloadFont ()
+        | TogglePane paneName ->
+          match PaneId.tryParse paneName with
+          | Some pid ->
+            layoutConfig <- LayoutConfig.togglePane pid layoutConfig
+            if not (layoutConfig.VisiblePanes.Contains focusedPane) then
+              focusedPane <- PaneId.Editor
+          | None -> ()
+        | LayoutPreset presetName ->
+          layoutConfig <-
+            match presetName with
+            | "focus" -> LayoutConfig.focus
+            | "minimal" -> LayoutConfig.minimal
+            | _ -> LayoutConfig.defaults
+          if not (layoutConfig.VisiblePanes.Contains focusedPane) then
+            focusedPane <- PaneId.Editor
         | Action action ->
           DaemonClient.dispatch client baseUrl action |> fun t -> t.Wait()
         keyCmd <- mapKey ()
@@ -264,7 +282,7 @@ module RaylibMode =
         let mp = mousePos ()
         let clickCol = int mp.X / cellW
         let clickRow = int mp.Y / cellH
-        let paneRects = computePaneRects gridRows gridCols
+        let paneRects = Screen.computeLayoutWith layoutConfig gridRows gridCols |> fst
         let clicked =
           paneRects
           |> List.tryFind (fun (_, r) ->
@@ -289,7 +307,7 @@ module RaylibMode =
         let regions, sessionState, evalCount =
           lock statelock (fun () -> lastRegions, lastSessionState, lastEvalCount)
 
-        renderRegions grid regions sessionState evalCount focusedPane scrollOffsets fontSize lastFps keyMap
+        renderRegions grid regions sessionState evalCount focusedPane scrollOffsets fontSize lastFps keyMap layoutConfig
         lastFps <- fps ()
 
         Raylib.BeginDrawing()

@@ -39,6 +39,7 @@ let run
   let mutable grid = CellGrid.create gridRows gridCols
   let mutable focusedPane = PaneId.Editor
   let mutable scrollOffsets = Map.empty<PaneId, int>
+  let mutable layoutConfig = LayoutConfig.defaults
 
   setupRawMode ()
 
@@ -66,7 +67,7 @@ let run
         let evalCount = model.RecentOutput |> List.length
         let statusLeft = sprintf " %s | evals: %d | %s" sessionState evalCount (PaneId.displayName focusedPane)
         let statusRight = sprintf " %.1fms |%s" lastFrameMs (StatusHints.build keyMap focusedPane)
-        let cursorPos = Screen.draw grid regions focusedPane scrollOffsets statusLeft statusRight
+        let cursorPos = Screen.drawWith layoutConfig grid regions focusedPane scrollOffsets statusLeft statusRight
         let cursorRow, cursorCol =
           match cursorPos with
           | Some (r, c) -> r, c
@@ -121,7 +122,7 @@ let run
           focusedPane <- PaneId.next focusedPane
           render ()
         | Some (TerminalCommand.FocusDirection dir) ->
-          let paneRects = Screen.computeLayout gridRows gridCols |> fst
+          let paneRects = Screen.computeLayoutWith layoutConfig gridRows gridCols |> fst
           focusedPane <- PaneId.navigate dir focusedPane paneRects
           render ()
         | Some TerminalCommand.ScrollUp ->
@@ -131,6 +132,23 @@ let run
         | Some TerminalCommand.ScrollDown ->
           let cur = scrollOffsets |> Map.tryFind focusedPane |> Option.defaultValue 0
           scrollOffsets <- scrollOffsets |> Map.add focusedPane (cur + 3)
+          render ()
+        | Some (TerminalCommand.TogglePane paneName) ->
+          match PaneId.tryParse paneName with
+          | Some pid ->
+            layoutConfig <- LayoutConfig.togglePane pid layoutConfig
+            if not (layoutConfig.VisiblePanes.Contains focusedPane) then
+              focusedPane <- PaneId.Editor
+            render ()
+          | None -> ()
+        | Some (TerminalCommand.LayoutPreset presetName) ->
+          layoutConfig <-
+            match presetName with
+            | "focus" -> LayoutConfig.focus
+            | "minimal" -> LayoutConfig.minimal
+            | _ -> LayoutConfig.defaults
+          if not (layoutConfig.VisiblePanes.Contains focusedPane) then
+            focusedPane <- PaneId.Editor
           render ()
         | Some (TerminalCommand.Action action) ->
           elmRuntime.Dispatch (SageFsMsg.Editor action)

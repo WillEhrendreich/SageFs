@@ -133,4 +133,50 @@ let screenTests = testList "Screen" [
       Expect.equal result Theme.defaults "no overrides = defaults"
     }
   ]
+
+  testList "LayoutConfig" [
+    test "defaults includes all 4 panes" {
+      let cfg = LayoutConfig.defaults
+      Expect.equal cfg.VisiblePanes.Count 4 "defaults should have 4 visible panes"
+    }
+
+    test "togglePane hides a visible pane" {
+      let cfg = LayoutConfig.togglePane PaneId.Sessions LayoutConfig.defaults
+      Expect.isFalse (cfg.VisiblePanes.Contains PaneId.Sessions) "Sessions should be hidden"
+      Expect.equal cfg.VisiblePanes.Count 3 "should have 3 visible panes"
+    }
+
+    test "togglePane shows a hidden pane" {
+      let cfg = LayoutConfig.togglePane PaneId.Sessions LayoutConfig.defaults
+      let cfg2 = LayoutConfig.togglePane PaneId.Sessions cfg
+      Expect.isTrue (cfg2.VisiblePanes.Contains PaneId.Sessions) "Sessions should be visible again"
+    }
+
+    test "togglePane cannot hide Editor" {
+      let cfg = LayoutConfig.togglePane PaneId.Editor LayoutConfig.defaults
+      Expect.isTrue (cfg.VisiblePanes.Contains PaneId.Editor) "Editor should always be visible"
+    }
+
+    test "focus preset has only Output and Editor" {
+      let cfg = LayoutConfig.focus
+      Expect.equal cfg.VisiblePanes (Set.ofList [ PaneId.Output; PaneId.Editor ]) "focus preset panes"
+    }
+
+    test "minimal preset has only Editor" {
+      let cfg = LayoutConfig.minimal
+      Expect.equal cfg.VisiblePanes (Set.singleton PaneId.Editor) "minimal preset panes"
+    }
+
+    test "computeLayoutWith focus preset returns 2 panes" {
+      let panes, _ = Screen.computeLayoutWith LayoutConfig.focus 40 120
+      let ids = panes |> List.map fst |> Set.ofList
+      Expect.equal ids (Set.ofList [ PaneId.Output; PaneId.Editor ]) "focus layout pane ids"
+    }
+
+    test "computeLayoutWith minimal preset returns 1 pane" {
+      let panes, _ = Screen.computeLayoutWith LayoutConfig.minimal 40 120
+      Expect.equal (List.length panes) 1 "minimal layout should have 1 pane"
+      Expect.equal (fst panes.[0]) PaneId.Editor "minimal should show Editor"
+    }
+  ]
 ]
