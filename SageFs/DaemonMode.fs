@@ -118,16 +118,6 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
   | Ok info -> eprintfn "Initial session created: %s" info
   | Error err -> eprintfn "[ERROR] Failed to create initial session: %A" err
 
-  // Write daemon state
-  let daemonInfo : DaemonInfo = {
-    Pid = Environment.ProcessId
-    Port = mcpPort
-    StartedAt = DateTime.UtcNow
-    WorkingDirectory = Environment.CurrentDirectory
-    Version = version
-  }
-  DaemonState.write daemonInfo
-
   // Create state-changed event for SSE subscribers
   let stateChangedEvent = Event<string>()
 
@@ -300,6 +290,8 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
       (Some connectionTracker)
       // Dispatch for TUI client API
       (fun msg -> elmRuntime.Dispatch msg)
+      // Shutdown callback for /api/shutdown
+      (Some (fun () -> cts.Cancel()))
   let dashboardTask = task {
     try
       let builder = Microsoft.AspNetCore.Builder.WebApplication.CreateBuilder()
@@ -328,7 +320,6 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
     cts.Cancel())
 
   AppDomain.CurrentDomain.ProcessExit.Add(fun _ ->
-    DaemonState.clear ()
     eprintfn "Daemon stopped.")
 
   try
@@ -348,6 +339,4 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
   sessionManager.PostAndAsyncReply(fun reply ->
     SessionManager.SessionCommand.StopAll reply)
   |> Async.RunSynchronously
-
-  DaemonState.clear ()
 }

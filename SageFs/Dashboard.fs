@@ -1110,6 +1110,7 @@ let createEndpoints
   (createSession: (string list -> string -> Threading.Tasks.Task<Result<string, string>>) option)
   (connectionTracker: ConnectionTracker option)
   (dispatch: SageFsMsg -> unit)
+  (shutdownCallback: (unit -> unit) option)
   : HttpEndpoint list =
   [
     yield get "/dashboard" (FalcoResponse.ofHtml (renderShell version))
@@ -1137,5 +1138,25 @@ let createEndpoints
       yield mapPost "/dashboard/session/stop/{id}"
         (fun (r: RequestData) -> r.GetString("id", ""))
         (fun sid -> createSessionActionHandler handler sid)
+    | None -> ()
+    // Daemon info endpoint for client discovery (replaces daemon.json)
+    yield get "/api/daemon-info" (fun ctx -> task {
+      let startedAt =
+        let proc = System.Diagnostics.Process.GetCurrentProcess()
+        proc.StartTime.ToUniversalTime()
+      do! ctx.Response.WriteAsJsonAsync({|
+        pid = Environment.ProcessId
+        version = version
+        startedAt = startedAt.ToString("o")
+        workingDirectory = Environment.CurrentDirectory
+      |})
+    })
+    // Graceful shutdown endpoint
+    match shutdownCallback with
+    | Some shutdown ->
+      yield post "/api/shutdown" (fun ctx -> task {
+        do! ctx.Response.WriteAsJsonAsync({| status = "shutting_down" |})
+        shutdown ()
+      })
     | None -> ()
   ]

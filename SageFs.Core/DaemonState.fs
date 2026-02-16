@@ -1,7 +1,6 @@
 namespace SageFs
 
 open System
-open System.Diagnostics
 open System.IO
 open System.Text.Json
 
@@ -19,7 +18,7 @@ module DaemonState =
     let home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)
     Path.Combine(home, ".SageFs")
 
-  let daemonJsonPath = Path.Combine(SageFsDir, "daemon.json")
+  let private defaultMcpPort = 37749
 
   let private jsonOptions =
     JsonSerializerOptions(
@@ -29,43 +28,59 @@ module DaemonState =
 
   let isProcessAlive (pid: int) =
     try
-      let p = Process.GetProcessById(pid)
+      let p = System.Diagnostics.Process.GetProcessById(pid)
       not p.HasExited
     with
     | :? ArgumentException -> false
     | :? InvalidOperationException -> false
 
-  let serializeInfo (info: DaemonInfo) =
-    JsonSerializer.Serialize(info, jsonOptions)
+  /// Probe the daemon's /api/daemon-info endpoint on the dashboard port.
+  let private probeDaemonHttp (mcpPort: int) : DaemonInfo option =
+    let dashboardPort = mcpPort + 1
+    try
+      use client = new System.Net.Http.HttpClient(Timeout = TimeSpan.FromSeconds(2.0))
+      let resp = client.GetAsync(sprintf "http://localhost:%d/api/daemon-info" dashboardPort).Result
+      if resp.IsSuccessStatusCode then
+        let json = resp.Content.ReadAsStringAsync().Result
+        let doc = JsonDocument.Parse(json)
+        let root = doc.RootElement
+        let pid = root.GetProperty("pid").GetInt32()
+        let version =
+          match root.TryGetProperty("version") with
+          | true, v -> v.GetString()
+          | _ -> "unknown"
+        let startedAt =
+          match root.TryGetProperty("startedAt") with
+          | true, v ->
+            match DateTime.TryParse(v.GetString()) with
+            | true, dt -> dt.ToUniversalTime()
+            | _ -> DateTime.UtcNow
+          | _ -> DateTime.UtcNow
+        let workingDir =
+          match root.TryGetProperty("workingDirectory") with
+          | true, v -> v.GetString()
+          | _ -> Environment.CurrentDirectory
+        Some {
+          Pid = pid
+          Port = mcpPort
+          StartedAt = startedAt
+          WorkingDirectory = workingDir
+          Version = version
+        }
+      else None
+    with _ -> None
 
-  let deserializeInfo (json: string) =
-    JsonSerializer.Deserialize<DaemonInfo>(json, jsonOptions)
+  /// Detect a running daemon by probing the default port via HTTP.
+  let read () = probeDaemonHttp defaultMcpPort
 
-  let writeToPath (path: string) (info: DaemonInfo) =
-    let dir = Path.GetDirectoryName path
-    Directory.CreateDirectory(dir) |> ignore
-    let json = serializeInfo info
-    let tmpPath = path + ".tmp"
-    File.WriteAllText(tmpPath, json)
-    File.Move(tmpPath, path, overwrite = true)
+  /// Detect a running daemon on a specific MCP port.
+  let readOnPort (mcpPort: int) = probeDaemonHttp mcpPort
 
-  let clearPath (path: string) =
-    try File.Delete path with _ -> ()
-
-  let readFromPath (path: string) : DaemonInfo option =
-    if not (File.Exists path) then None
-    else
-      try
-        let json = File.ReadAllText(path)
-        let info = deserializeInfo json
-        if isProcessAlive info.Pid then Some info
-        else
-          clearPath path
-          None
-      with _ ->
-        clearPath path
-        None
-
-  let write (info: DaemonInfo) = writeToPath daemonJsonPath info
-  let read () = readFromPath daemonJsonPath
-  let clear () = clearPath daemonJsonPath
+  /// Request graceful shutdown via the dashboard API.
+  let requestShutdown (mcpPort: int) =
+    let dashboardPort = mcpPort + 1
+    try
+      use client = new System.Net.Http.HttpClient(Timeout = TimeSpan.FromSeconds(5.0))
+      let resp = client.PostAsync(sprintf "http://localhost:%d/api/shutdown" dashboardPort, null).Result
+      resp.IsSuccessStatusCode
+    with _ -> false

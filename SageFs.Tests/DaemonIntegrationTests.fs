@@ -256,11 +256,9 @@ let daemonCliTests =
   testList "[Integration] Daemon CLI subcommands" [
 
     testCase "SageFs status returns 1 when no daemon running" <| fun _ ->
-      // Ensure no daemon.json
-      DaemonState.clear ()
       let psi = ProcessStartInfo()
       psi.FileName <- SageFsExe
-      psi.Arguments <- "status"
+      psi.Arguments <- "status --mcp-port 39990"
       psi.UseShellExecute <- false
       psi.RedirectStandardOutput <- true
       psi.CreateNoWindow <- true
@@ -273,10 +271,9 @@ let daemonCliTests =
       output |> Expect.stringContains "says no daemon" "No daemon running"
 
     testCase "SageFs stop returns 0 when no daemon running" <| fun _ ->
-      DaemonState.clear ()
       let psi = ProcessStartInfo()
       psi.FileName <- SageFsExe
-      psi.Arguments <- "stop"
+      psi.Arguments <- "stop --mcp-port 39990"
       psi.UseShellExecute <- false
       psi.RedirectStandardOutput <- true
       psi.CreateNoWindow <- true
@@ -313,9 +310,6 @@ let daemonLifecycleTests =
   testList "[Integration] Daemon lifecycle" [
 
     testCase "start daemon, check status, stop" <| fun _ ->
-      // Ensure clean state
-      DaemonState.clear ()
-
       // Start daemon in background with a unique port to avoid conflicts
       let port = 37800 + (Random().Next(100))
       let psi = ProcessStartInfo()
@@ -327,15 +321,15 @@ let daemonLifecycleTests =
 
       let daemonProc = Process.Start(psi)
       try
-        // Wait for daemon.json to appear
+        // Wait for daemon to respond on HTTP
         let mutable attempts = 0
         let mutable info : DaemonInfo option = None
         while attempts < 60 && info.IsNone do
           Thread.Sleep(500)
-          info <- DaemonState.read ()
+          info <- DaemonState.readOnPort port
           attempts <- attempts + 1
 
-        info |> Expect.isSome "daemon.json should appear within 30s"
+        info |> Expect.isSome "daemon should respond within 30s"
         let di = info.Value
         di.Port |> Expect.equal "port matches" port
         di.Pid |> Expect.equal "PID matches" daemonProc.Id
@@ -343,7 +337,7 @@ let daemonLifecycleTests =
         // Run SageFs status
         let statusPsi = ProcessStartInfo()
         statusPsi.FileName <- SageFsExe
-        statusPsi.Arguments <- "status"
+        statusPsi.Arguments <- sprintf "status --mcp-port %d" port
         statusPsi.UseShellExecute <- false
         statusPsi.RedirectStandardOutput <- true
         statusPsi.CreateNoWindow <- true
@@ -360,7 +354,7 @@ let daemonLifecycleTests =
         // Run SageFs stop
         let stopPsi = ProcessStartInfo()
         stopPsi.FileName <- SageFsExe
-        stopPsi.Arguments <- "stop"
+        stopPsi.Arguments <- sprintf "stop --mcp-port %d" port
         stopPsi.UseShellExecute <- false
         stopPsi.RedirectStandardOutput <- true
         stopPsi.CreateNoWindow <- true
@@ -370,17 +364,17 @@ let daemonLifecycleTests =
         stopProc.WaitForExit(5000) |> ignore
 
         stopProc.ExitCode |> Expect.equal "stop exits 0" 0
-        stopOutput |> Expect.stringContains "says stopped" "stopped"
+        stopOutput |> Expect.stringContains "says shutting down" "hutting down"
 
         // Verify daemon process actually exited
-        Thread.Sleep(1000)
+        Thread.Sleep(2000)
         let exited =
           try daemonProc.HasExited with _ -> true
         exited |> Expect.isTrue "daemon process should have exited"
 
-        // Verify daemon.json is cleaned up
-        DaemonState.read ()
-        |> Expect.isNone "daemon.json should be gone after stop"
+        // Verify daemon is no longer responding
+        DaemonState.readOnPort port
+        |> Expect.isNone "daemon should no longer respond after stop"
       finally
         // Ensure cleanup even if test fails
         try
@@ -388,7 +382,6 @@ let daemonLifecycleTests =
             daemonProc.Kill()
             daemonProc.WaitForExit(3000) |> ignore
         with _ -> ()
-        DaemonState.clear ()
   ]
 
 // ─── ClientMode unit tests ─────────────────────────────────────────
@@ -397,7 +390,6 @@ let daemonLifecycleTests =
 let clientModeTests =
   testList "ClientMode" [
     testCase "tryConnect returns None when no daemon" <| fun _ ->
-      DaemonState.clear ()
       ClientMode.tryConnect ()
       |> Expect.isNone "should be None with no daemon"
   ]

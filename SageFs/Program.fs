@@ -151,25 +151,30 @@ let main args =
     0
   // Subcommand: stop
   elif args.Length > 0 && args.[0] = "stop" then
-    match DaemonState.read () with
+    let mcpPort = parseMcpPort args
+    match DaemonState.readOnPort mcpPort with
     | Some info ->
-      try
-        let proc = System.Diagnostics.Process.GetProcessById(info.Pid)
-        proc.Kill()
-        proc.WaitForExit(3000) |> ignore
-        DaemonState.clear ()
-        printfn "Daemon stopped (PID %d)" info.Pid
+      if DaemonState.requestShutdown mcpPort then
+        printfn "Daemon shutting down (PID %d)" info.Pid
         0
-      with ex ->
-        DaemonState.clear ()
-        printfn "Daemon was not running (stale PID %d)" info.Pid
-        0
+      else
+        // Fallback: kill by PID if shutdown endpoint failed
+        try
+          let proc = System.Diagnostics.Process.GetProcessById(info.Pid)
+          proc.Kill()
+          proc.WaitForExit(3000) |> ignore
+          printfn "Daemon stopped (PID %d)" info.Pid
+          0
+        with _ ->
+          printfn "Daemon was not running (stale PID %d)" info.Pid
+          0
     | None ->
       printfn "No daemon running"
       0
   // Subcommand: status
   elif args.Length > 0 && args.[0] = "status" then
-    match DaemonState.read () with
+    let mcpPort = parseMcpPort args
+    match DaemonState.readOnPort mcpPort with
     | Some info ->
       printfn "SageFs daemon running"
       printfn "  PID:        %d" info.Pid
