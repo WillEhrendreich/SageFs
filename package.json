@@ -1,0 +1,28 @@
+{
+  "name": "sagefs",
+  "version": "1.0.0",
+  "description": "```\r    ▄████████    ▄████████    ▄██████▄     ▄████████    ▄████████    ▄████████\r   ███    ███   ███    ███   ███    ███   ███    ███   ███    ███   ███    ███\r   ███    █▀    ███    ███   ███    █▀    ███    █▀    ███    █▀    ███    █▀\r   ███          ███    ███  ▄███         ▄███▄▄▄      ▄███▄▄▄       ███\r ▀███████████ ▀███████████ ▀▀███ ████▄  ▀▀███▀▀▀     ▀▀███▀▀▀     ▀███████████\r          ███   ███    ███   ███    ███   ███    █▄    ███                 ███\r    ▄█    ███   ███    ███   ███    ███   ███    ███   ███           ▄█    ███\r  ▄████████▀    ███    █▀    ████████▀    ██████████   ███         ▄████████▀",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {
+    "test": "npx playwright test",
+    "test:dashboard": "npx playwright test tests/dashboard"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/WillEhrendreich/SageFs.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/WillEhrendreich/SageFs/issues"
+  },
+  "homepage": "https://github.com/WillEhrendreich/SageFs#readme",
+  "devDependencies": {
+    "@playwright/test": "^1.58.2"
+  }
+}

@@ -13,3 +13,6 @@ riderModule.iml
 docs/
 
 .obsidian/
+node_modules/
+test-results/
+playwright-report/
