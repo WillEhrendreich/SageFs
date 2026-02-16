@@ -56,6 +56,13 @@ module ValidatedBuffer =
   let cursor (buf: ValidatedBuffer) = buf.Cursor
   let currentLine (buf: ValidatedBuffer) = buf.Lines.[buf.Cursor.Line]
 
+  let setCursor (pos: CursorPosition) (buf: ValidatedBuffer) : ValidatedBuffer =
+    let maxLine = buf.Lines.Length - 1
+    let line = min maxLine (max 0 pos.Line)
+    let maxCol = buf.Lines.[line].Length
+    let col = min maxCol (max 0 pos.Column)
+    { buf with Cursor = { Line = line; Column = col } }
+
   let text (buf: ValidatedBuffer) =
     buf.Lines |> String.concat "\n"
 
@@ -214,6 +221,8 @@ module EditorUpdate =
       { state with Buffer = deleteForward state.Buffer }, []
     | EditorAction.MoveCursor dir ->
       { state with Buffer = ValidatedBuffer.moveCursor dir state.Buffer }, []
+    | EditorAction.SetCursorPosition (line, col) ->
+      { state with Buffer = ValidatedBuffer.setCursor { Line = line; Column = col } state.Buffer }, []
     | EditorAction.MoveToLineStart ->
       { state with Buffer = moveToLineStart state.Buffer }, []
     | EditorAction.MoveToLineEnd ->

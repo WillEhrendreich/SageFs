@@ -999,6 +999,16 @@ let createApiDispatchHandler
         | "moveDown" -> Some (EditorAction.MoveCursor Direction.Down)
         | "moveLeft" -> Some (EditorAction.MoveCursor Direction.Left)
         | "moveRight" -> Some (EditorAction.MoveCursor Direction.Right)
+        | "setCursorPosition" ->
+          match action.value with
+          | Some v ->
+            let parts = (v : string).Split(',')
+            if parts.Length = 2 then
+              match System.Int32.TryParse(parts.[0] : string), System.Int32.TryParse(parts.[1] : string) with
+              | (true, line), (true, col) -> Some (EditorAction.SetCursorPosition (line, col))
+              | _ -> None
+            else None
+          | None -> None
         | "moveWordForward" -> Some EditorAction.MoveWordForward
         | "moveWordBackward" -> Some EditorAction.MoveWordBackward
         | "moveToLineStart" -> Some EditorAction.MoveToLineStart

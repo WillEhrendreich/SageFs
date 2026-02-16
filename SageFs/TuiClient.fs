@@ -43,11 +43,14 @@ let run (daemonInfo: DaemonInfo) = task {
   // Set up raw terminal mode
   TerminalMode.setupRawMode ()
 
+  let mutable lastFrameMs = 0.0
+
   let render () =
     lock TerminalUIState.consoleLock (fun () ->
       try
+        let sw = System.Diagnostics.Stopwatch.StartNew()
         let statusLeft = sprintf " %s | evals: %d | %s" lastSessionState lastEvalCount (PaneId.displayName focusedPane)
-        let statusRight = " Ctrl+Q quit | Tab focus | Ctrl+HJKL nav "
+        let statusRight = sprintf " %.1fms | Ctrl+Q quit | Tab focus | Ctrl+HJKL nav " lastFrameMs
         let cursorPos = Screen.draw grid lastRegions focusedPane scrollOffsets statusLeft statusRight
         let cursorRow, cursorCol =
           match cursorPos with
@@ -63,6 +66,8 @@ let run (daemonInfo: DaemonInfo) = task {
         if output.Length > 0 then
           Console.Write(output)
         prevFrame <- frame
+        sw.Stop()
+        lastFrameMs <- sw.Elapsed.TotalMilliseconds
       with _ -> ())
 
   // Initial render

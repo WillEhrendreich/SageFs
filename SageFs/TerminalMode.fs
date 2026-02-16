@@ -4,71 +4,6 @@ open System
 open System.Threading
 open SageFs
 
-/// Immutable focus state for terminal panes
-type TerminalState = {
-  Layout: TerminalLayout
-  Focus: PaneId
-  ScrollOffsets: Map<PaneId, int>
-}
-
-module TerminalState =
-  let create (rows: int) (cols: int) : TerminalState =
-    { Layout = TerminalLayout.compute rows cols
-      Focus = PaneId.Editor
-      ScrollOffsets = Map.empty }
-
-  let applyFocus (state: TerminalState) : TerminalState =
-    let focusId = state.Focus
-    { state with
-        Layout =
-          { state.Layout with
-              Panes =
-                state.Layout.Panes
-                |> List.map (fun p ->
-                  { p with Focused = p.PaneId = focusId }) } }
-
-  let cycleFocus (state: TerminalState) : TerminalState =
-    { state with Focus = PaneId.next state.Focus }
-    |> applyFocus
-
-  let focusDirection (dir: Direction) (state: TerminalState) : TerminalState =
-    let paneRects =
-      state.Layout.Panes
-      |> List.map (fun p ->
-        p.PaneId, Rect.create p.Row p.Col p.Width p.Height)
-    let target = PaneId.navigate dir state.Focus paneRects
-    { state with Focus = target }
-    |> applyFocus
-
-  let scroll (state: TerminalState) (delta: int) : TerminalState =
-    let id = state.Focus
-    let current = state.ScrollOffsets |> Map.tryFind id |> Option.defaultValue 0
-    let next = max 0 (current + delta)
-    let scrolls = state.ScrollOffsets |> Map.add id next
-    { state with
-        ScrollOffsets = scrolls
-        Layout =
-          { state.Layout with
-              Panes =
-                state.Layout.Panes
-                |> List.map (fun p ->
-                  if p.PaneId = id then
-                    { p with ScrollOffset = next }
-                  else p) } }
-
-  let resize (state: TerminalState) (rows: int) (cols: int) : TerminalState =
-    let fresh = TerminalLayout.compute rows cols
-    { state with
-        Layout =
-          { fresh with
-              Panes =
-                fresh.Panes
-                |> List.map (fun p ->
-                  let scroll = state.ScrollOffsets |> Map.tryFind p.PaneId |> Option.defaultValue 0
-                  { p with
-                      ScrollOffset = scroll
-                      Focused = p.PaneId = state.Focus }) } }
-
 
 /// Set up the console for raw terminal input (alternate screen buffer)
 let setupRawMode () =
@@ -98,9 +33,11 @@ let run
   (ct: CancellationToken)
   = task {
 
-  let rows = Console.WindowHeight
-  let cols = Console.WindowWidth
-  let mutable state = TerminalState.create rows cols
+  let mutable gridRows = Console.WindowHeight
+  let mutable gridCols = Console.WindowWidth
+  let mutable grid = CellGrid.create gridRows gridCols
+  let mutable focusedPane = PaneId.Editor
+  let mutable scrollOffsets = Map.empty<PaneId, int>
 
   setupRawMode ()
 
@@ -113,30 +50,38 @@ let run
 
   // Previous frame for diff optimization
   let mutable prevFrame = ""
+  let mutable lastFrameMs = 0.0
 
   let render () =
     lock TerminalUIState.consoleLock (fun () ->
       try
+        let sw = System.Diagnostics.Stopwatch.StartNew()
         let regions = elmRuntime.GetRegions()
         let model = elmRuntime.GetModel()
         let sessionState =
           match model.Sessions.ActiveSessionId with
           | Some _ -> "Running"
           | None -> "No session"
-        let evalCount =
-          model.RecentOutput |> List.length
-        let frame =
-          TerminalRender.renderFrame state.Layout regions sessionState evalCount
-        // Use diff rendering — only emit changed rows
+        let evalCount = model.RecentOutput |> List.length
+        let statusLeft = sprintf " %s | evals: %d | %s" sessionState evalCount (PaneId.displayName focusedPane)
+        let statusRight = sprintf " %.1fms | Ctrl+Q quit | Tab focus | Ctrl+HJKL nav " lastFrameMs
+        let cursorPos = Screen.draw grid regions focusedPane scrollOffsets statusLeft statusRight
+        let cursorRow, cursorCol =
+          match cursorPos with
+          | Some (r, c) -> r, c
+          | None -> 0, 0
+        let frame = AnsiEmitter.emit grid cursorRow cursorCol
         let output =
           if prevFrame.Length = 0 then frame
           else
             let d = FrameDiff.diff prevFrame frame
-            if d.Length = 0 then "" // nothing changed
+            if d.Length = 0 then ""
             else d
         if output.Length > 0 then
           Console.Write(output)
         prevFrame <- frame
+        sw.Stop()
+        lastFrameMs <- sw.Elapsed.TotalMilliseconds
       with _ -> ())
 
   // Initial render (alt screen already cleared by setupRawMode)
@@ -152,9 +97,11 @@ let run
       // Check for terminal resize
       let newRows = Console.WindowHeight
       let newCols = Console.WindowWidth
-      if newRows <> state.Layout.Rows || newCols <> state.Layout.Cols then
-        state <- TerminalState.resize state newRows newCols
-        prevFrame <- "" // force full redraw
+      if newRows <> gridRows || newCols <> gridCols then
+        gridRows <- newRows
+        gridCols <- newCols
+        grid <- CellGrid.create gridRows gridCols
+        prevFrame <- ""
         lock TerminalUIState.consoleLock (fun () ->
           Console.Write(AnsiCodes.clearScreen))
         render ()
@@ -165,21 +112,24 @@ let run
         | Some TerminalCommand.Quit ->
           return ()
         | Some TerminalCommand.Redraw ->
-          prevFrame <- "" // force full redraw
+          prevFrame <- ""
           lock TerminalUIState.consoleLock (fun () ->
             Console.Write(AnsiCodes.clearScreen))
           render ()
         | Some TerminalCommand.CycleFocus ->
-          state <- TerminalState.cycleFocus state
+          focusedPane <- PaneId.next focusedPane
           render ()
         | Some (TerminalCommand.FocusDirection dir) ->
-          state <- TerminalState.focusDirection dir state
+          let paneRects = Screen.computeLayout gridRows gridCols |> fst
+          focusedPane <- PaneId.navigate dir focusedPane paneRects
           render ()
         | Some TerminalCommand.ScrollUp ->
-          state <- TerminalState.scroll state -3
+          let cur = scrollOffsets |> Map.tryFind focusedPane |> Option.defaultValue 0
+          scrollOffsets <- scrollOffsets |> Map.add focusedPane (max 0 (cur - 3))
           render ()
         | Some TerminalCommand.ScrollDown ->
-          state <- TerminalState.scroll state 3
+          let cur = scrollOffsets |> Map.tryFind focusedPane |> Option.defaultValue 0
+          scrollOffsets <- scrollOffsets |> Map.add focusedPane (cur + 3)
           render ()
         | Some (TerminalCommand.Action action) ->
           elmRuntime.Dispatch (SageFsMsg.Editor action)
