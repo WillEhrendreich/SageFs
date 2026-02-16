@@ -22,6 +22,11 @@ type DirectoryConfig = {
   DefaultArgs: string list
   Keybindings: KeyMap
   ThemeOverrides: Map<string, byte>
+  /// When true, treat this directory as a session root — don't walk up to git/solution root.
+  /// Use for monorepos where each subdirectory is an independent project.
+  IsRoot: bool
+  /// Optional friendly name for auto-created sessions. Defaults to the directory name.
+  SessionName: string option
 }
 
 module DirectoryConfig =
@@ -31,6 +36,8 @@ module DirectoryConfig =
     DefaultArgs = []
     Keybindings = Map.empty
     ThemeOverrides = Map.empty
+    IsRoot = false
+    SessionName = None
   }
 
   let configDir (workingDir: string) =

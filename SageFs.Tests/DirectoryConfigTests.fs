@@ -49,7 +49,17 @@ let evaluateTests = testList "DirectoryConfig.evaluate" [
 
   testCase "empty expression returns defaults" (fun () ->
     let config = evalOk "DirectoryConfig.empty"
-    Expect.equal config DirectoryConfig.empty "should return empty defaults")
+    Expect.equal config DirectoryConfig.empty "should return empty defaults"
+    Expect.equal config.IsRoot false "IsRoot defaults to false"
+    Expect.equal config.SessionName None "SessionName defaults to None")
+
+  testCase "loads isRoot override" (fun () ->
+    let config = evalOk """{ DirectoryConfig.empty with IsRoot = true }"""
+    Expect.equal config.IsRoot true "should parse IsRoot")
+
+  testCase "loads sessionName" (fun () ->
+    let config = evalOk """{ DirectoryConfig.empty with SessionName = Some "my-service" }"""
+    Expect.equal config.SessionName (Some "my-service") "should parse SessionName")
 
   testCase "invalid expression returns Error" (fun () ->
     let result = DirectoryConfig.evaluate "this is not valid F#"
