@@ -26,7 +26,7 @@ module DaemonRegionData =
 module DaemonClient =
 
   /// Parse the JSON payload from the /api/state SSE stream.
-  let parseStateEvent (json: string) : (string * int * DaemonRegionData list) option =
+  let parseStateEvent (json: string) : (string * int * float * DaemonRegionData list) option =
     try
       use doc = JsonDocument.Parse(json)
       let root = doc.RootElement
@@ -55,7 +55,11 @@ module DaemonClient =
             | _ -> None
           { Id = id; Content = content; Cursor = cursor; Completions = completions })
         |> Seq.toList
-      Some (sessionState, evalCount, regions)
+      let avgMs =
+        match root.TryGetProperty("avgMs") with
+        | true, el -> el.GetDouble()
+        | _ -> 0.0
+      Some (sessionState, evalCount, avgMs, regions)
     with _ -> None
 
   /// Map an EditorAction to a (name, value) pair for the dispatch API.
@@ -96,6 +100,8 @@ module DaemonClient =
       Some ("createSession", Some (String.concat "," projects))
     | EditorAction.StopSession id -> Some ("stopSession", Some id)
     | EditorAction.HistorySearch s -> Some ("historySearch", Some s)
+    | EditorAction.ResetSession -> Some ("resetSession", None)
+    | EditorAction.HardResetSession -> Some ("hardResetSession", None)
     | EditorAction.SwitchMode _ -> None
 
   /// Send an EditorAction to the daemon via POST /api/dispatch.
@@ -134,7 +140,7 @@ module DaemonClient =
   }
 
   /// Callback invoked when new state arrives from the SSE stream.
-  type StateCallback = string -> int -> RenderRegion list -> unit
+  type StateCallback = string -> int -> float -> RenderRegion list -> unit
 
   /// Run SSE listener with auto-reconnect. Calls onState for each update.
   /// Calls onReconnecting when connection drops. Blocks until cancelled.
@@ -159,9 +165,9 @@ module DaemonClient =
           if line.StartsWith("data: ") then
             let json = line.Substring(6)
             match parseStateEvent json with
-            | Some (sessionState, evalCount, regionData) ->
+            | Some (sessionState, evalCount, avgMs, regionData) ->
               let regions = regionData |> List.map DaemonRegionData.toRenderRegion
-              onState sessionState evalCount regions
+              onState sessionState evalCount avgMs regions
             | None -> ()
       with
       | :? OperationCanceledException -> ()

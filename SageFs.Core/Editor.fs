@@ -150,6 +150,8 @@ type EditorEffect =
   | RequestSessionSwitch of sessionId: string
   | RequestSessionCreate of projects: string list
   | RequestSessionStop of sessionId: string
+  | RequestReset
+  | RequestHardReset
 
 /// The full editor state
 type EditorState = {
@@ -323,3 +325,7 @@ module EditorUpdate =
       state, [EditorEffect.RequestSessionStop id]
     | EditorAction.ToggleSessionPanel ->
       { state with SessionPanelVisible = not state.SessionPanelVisible }, []
+    | EditorAction.ResetSession ->
+      state, [EditorEffect.RequestReset]
+    | EditorAction.HardResetSession ->
+      state, [EditorEffect.RequestHardReset]

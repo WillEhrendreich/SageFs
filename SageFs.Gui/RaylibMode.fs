@@ -204,7 +204,7 @@ module RaylibMode =
       System.Threading.Tasks.Task.Run(fun () ->
         DaemonClient.runSseListener
           baseUrl
-          (fun sessionState evalCount regions ->
+          (fun sessionState evalCount _avgMs regions ->
             lock statelock (fun () ->
               lastSessionState <- sessionState
               lastEvalCount <- evalCount

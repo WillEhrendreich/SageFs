@@ -312,6 +312,24 @@ let editorUpdateTests = testList "EditorUpdate" [
       EditorAction.MoveCursor Direction.Up
     ]
     cursorPos s |> Expect.equal "should be on line 0" { Line = 0; Column = 1 }
+
+  testCase "ResetSession emits RequestReset" <| fun _ ->
+    let _, effs = EditorUpdate.update EditorAction.ResetSession initial
+    effs |> Expect.equal "should request reset" [EditorEffect.RequestReset]
+
+  testCase "HardResetSession emits RequestHardReset" <| fun _ ->
+    let _, effs = EditorUpdate.update EditorAction.HardResetSession initial
+    effs |> Expect.equal "should request hard reset" [EditorEffect.RequestHardReset]
+
+  testCase "ResetSession does not change editor buffer" <| fun _ ->
+    let s1, _ = EditorUpdate.update (EditorAction.InsertChar 'x') initial
+    let s2, _ = EditorUpdate.update EditorAction.ResetSession s1
+    s2.Buffer |> Expect.equal "buffer unchanged after reset" s1.Buffer
+
+  testCase "HardResetSession does not change editor buffer" <| fun _ ->
+    let s1, _ = EditorUpdate.update (EditorAction.InsertChar 'x') initial
+    let s2, _ = EditorUpdate.update EditorAction.HardResetSession s1
+    s2.Buffer |> Expect.equal "buffer unchanged after hard reset" s1.Buffer
 ]
 
 [<Tests>]
@@ -360,4 +378,12 @@ let renderPipelineTests = testList "RenderPipeline" [
     let keyMap : KeyMap = Map.empty
     KeyMap.hintFor keyMap EditorAction.Submit
     |> Expect.isNone "should be None"
+
+  testCase "UiAction.tryParse ResetSession" <| fun _ ->
+    UiAction.tryParse "ResetSession"
+    |> Expect.equal "should parse ResetSession" (Some (UiAction.Editor EditorAction.ResetSession))
+
+  testCase "UiAction.tryParse HardResetSession" <| fun _ ->
+    UiAction.tryParse "HardResetSession"
+    |> Expect.equal "should parse HardResetSession" (Some (UiAction.Editor EditorAction.HardResetSession))
 ]
