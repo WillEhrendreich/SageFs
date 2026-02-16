@@ -327,8 +327,9 @@ let private renderShell (version: string) =
           if (panel) panel.scrollTop = panel.scrollHeight;
         }).observe(document.getElementById('output-panel') || document.body, { childList: true, subtree: true });
       """ ]
-      // Server connection monitoring: SSE pushes server-status as "Connected" on every cycle.
-      // MutationObserver detects when SSE stops updating, indicating disconnection.
+      // Connection monitoring: listen for Datastar fetch lifecycle events.
+      // SSE push already morphs server-status to "Connected" when data arrives.
+      // This script only handles disconnect detection via timeout.
       Elem.script [] [ Text.raw """
         (function() {
           var banner = document.getElementById('server-status');
@@ -340,24 +341,18 @@ let private renderShell (version: string) =
             banner.textContent = '\u274c Server disconnected \u2014 waiting for reconnect...';
           }
 
-          function markConnected() {
-            banner.className = 'conn-banner conn-connected';
-            banner.textContent = '\u2705 Connected';
-          }
-
           function resetTimeout() {
             if (timeout) clearTimeout(timeout);
             timeout = setTimeout(markDisconnected, STALE_MS);
           }
 
-          // Watch for any mutation to server-status (SSE pushes morphs here)
-          var observer = new MutationObserver(function() {
-            markConnected();
-            resetTimeout();
+          // Datastar dispatches 'datastar-fetch' on document for SSE lifecycle
+          document.addEventListener('datastar-fetch', function(e) {
+            var t = e.detail && e.detail.type;
+            if (t === 'error' || t === 'retries-failed') markDisconnected();
+            else resetTimeout();
           });
-          observer.observe(banner, { childList: true, characterData: true, subtree: true, attributes: true });
 
-          // Initial timeout — if no SSE arrives within STALE_MS, show disconnected
           resetTimeout();
         })();
       """ ]

@@ -566,8 +566,12 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
 
             // Dispose may be called after a faulted init where Session is null
             if not (isNull (box st.Session)) then
-              (st.Session :> System.IDisposable).Dispose()
-            // Force GC to unload the collectible AssemblyLoadContext and release DLL file locks
+              // Dispose on a background thread with timeout — FSI dispose can
+              // hang if the session is in a bad internal state.
+              let disposeTask = System.Threading.Tasks.Task.Run(fun () ->
+                (st.Session :> System.IDisposable).Dispose())
+              if not (disposeTask.Wait(TimeSpan.FromSeconds(10.0))) then
+                logger.LogWarning "⚠️ Session dispose timed out after 10s, continuing..."
             // Required before dotnet build can overwrite assemblies on Windows
             GC.Collect()
             GC.WaitForPendingFinalizers()
@@ -676,26 +680,32 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
 
             logger.LogInfo "  Creating new FSI session..."
             let warmupTimeout = TimeSpan.FromMinutes(5.0)
-            let warmupCts = new CancellationTokenSource(warmupTimeout)
+            let warmupCts = new CancellationTokenSource()
+            // Run warmup on a ThreadPool thread so the mailbox isn't blocked
+            // if EvalInteractionNonThrowing hangs during namespace opening.
+            // Task.Delay races against the warmup: if the timeout fires first,
+            // we cancel and unblock the mailbox even if FSI is stuck.
+            let warmupTask =
+              System.Threading.Tasks.Task.Run<Result<_, exn>>(fun () ->
+                try
+                  Async.RunSynchronously(
+                    createFsiSession logger outStream useAsp newSln warmupCts.Token)
+                  |> Ok
+                with
+                | :? OperationCanceledException as ex -> Error (ex :> exn)
+                | ex -> Error ex)
+            let timeoutTask = System.Threading.Tasks.Task.Delay(warmupTimeout)
+            let! winner = System.Threading.Tasks.Task.WhenAny(warmupTask, timeoutTask) |> Async.AwaitTask
             let! warmupResult =
               async {
-                try
-                  let! r = createFsiSession logger outStream useAsp newSln warmupCts.Token
-                  return Ok r
-                with ex ->
-                  return Error ex
+                if Object.ReferenceEquals(winner, warmupTask) then
+                  let! r = warmupTask |> Async.AwaitTask
+                  return r
+                else
+                  logger.LogWarning "  ⚠️ Warmup timed out, cancelling..."
+                  warmupCts.Cancel()
+                  return Error (System.TimeoutException(sprintf "Warmup timed out after %.0f minutes" warmupTimeout.TotalMinutes) :> exn)
               }
-              |> fun a -> Async.StartAsTask(a, cancellationToken = warmupCts.Token) |> Async.AwaitTask
-              |> fun a ->
-                async {
-                  try return! a
-                  with
-                  | :? OperationCanceledException ->
-                    return Error (System.TimeoutException(sprintf "Warmup timed out after %.0f minutes" warmupTimeout.TotalMinutes) :> exn)
-                  | :? AggregateException as ae when (ae.InnerException :? OperationCanceledException) ->
-                    return Error (System.TimeoutException(sprintf "Warmup timed out after %.0f minutes" warmupTimeout.TotalMinutes) :> exn)
-                  | ex -> return Error ex
-                }
             match warmupResult with
             | Error ex ->
               warmupCts.Dispose()
