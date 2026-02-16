@@ -17,6 +17,7 @@
         <Compile Include="Features\Diagnostics.fs" />
         <Compile Include="Features\DiagnosticsStore.fs" />
         <Compile Include="Features\Events.fs" />
+        <Compile Include="Features\Replay.fs" />
         <Compile Include="EventStore.fs" />
         <Compile Include="FsiRewrite.fs" />
         <Compile Include="SessionState.fs" />

@@ -40,7 +40,7 @@ module SessionManager =
     | ListSessions of
         AsyncReplyChannel<SessionInfo list>
     | TouchSession of SessionId
-    | WorkerExited of SessionId * exitCode: int
+    | WorkerExited of SessionId * workerPid: int * exitCode: int
     | ScheduleRestart of SessionId
     | StopAll of AsyncReplyChannel<unit>
 
@@ -75,7 +75,7 @@ module SessionManager =
     (projects: string list)
     (workingDir: string)
     (ct: CancellationToken)
-    (onExited: int -> unit)
+    (onExited: int -> int -> unit)
     = async {
     let pipe = NamedPipeTransport.pipeName sessionId
 
@@ -98,11 +98,15 @@ module SessionManager =
     let proc = new Process()
     proc.StartInfo <- psi
     proc.EnableRaisingEvents <- true
-    proc.Exited.Add(fun _ -> onExited proc.ExitCode)
 
     if not (proc.Start()) then
       return Error (SageFsError.WorkerSpawnFailed "Failed to start worker process")
     else
+      let workerPid = proc.Id
+      // Register exit handler AFTER Start() so we have the PID.
+      // EnableRaisingEvents=true ensures the event is queued even if the
+      // process exits before we attach — .NET fires it when we subscribe.
+      proc.Exited.Add(fun _ -> onExited workerPid proc.ExitCode)
       // Connect to the worker's named pipe
       do! Async.Sleep 500 // Brief delay for pipe to be created
       try
@@ -137,12 +141,13 @@ module SessionManager =
   let private stopWorker (session: ManagedSession) = async {
     try
       let! _ = session.Proxy WorkerMessage.Shutdown
-      // Wait briefly for clean exit
       let exited = session.Process.WaitForExit(3000)
       if not exited then
         try session.Process.Kill() with _ -> ()
+        try session.Process.WaitForExit(2000) |> ignore with _ -> ()
     with _ ->
       try session.Process.Kill() with _ -> ()
+      try session.Process.WaitForExit(2000) |> ignore with _ -> ()
     session.PipeDisposable.Dispose()
   }
 
@@ -196,8 +201,8 @@ module SessionManager =
         match cmd with
         | SessionCommand.CreateSession(projects, workingDir, reply) ->
           let sessionId = Guid.NewGuid().ToString("N").[..7]
-          let onExited exitCode =
-            inbox.Post(SessionCommand.WorkerExited(sessionId, exitCode))
+          let onExited workerPid exitCode =
+            inbox.Post(SessionCommand.WorkerExited(sessionId, workerPid, exitCode))
           let! result = spawnWorker sessionId projects workingDir ct onExited
           match result with
           | Ok managed ->
@@ -235,8 +240,8 @@ module SessionManager =
               return! loop stateAfterStop
             | Ok _buildMsg ->
             // 3. Respawn worker with same session ID — fresh process = fresh CLR cache
-            let onExited exitCode =
-              inbox.Post(SessionCommand.WorkerExited(id, exitCode))
+            let onExited workerPid exitCode =
+              inbox.Post(SessionCommand.WorkerExited(id, workerPid, exitCode))
             let! result = spawnWorker id session.Projects session.WorkingDir ct onExited
             match result with
             | Ok newManaged ->
@@ -274,9 +279,14 @@ module SessionManager =
           | None ->
             return! loop state
 
-        | SessionCommand.WorkerExited(id, exitCode) ->
+        | SessionCommand.WorkerExited(id, workerPid, exitCode) ->
           match ManagerState.tryGetSession id state with
           | Some session ->
+            // Ignore stale exit events from old workers (e.g., after RestartSession)
+            match session.Info.WorkerPid with
+            | Some currentPid when currentPid <> workerPid ->
+              return! loop state
+            | _ ->
             session.PipeDisposable.Dispose()
             let outcome =
               SessionLifecycle.onWorkerExited
@@ -309,8 +319,8 @@ module SessionManager =
         | SessionCommand.ScheduleRestart id ->
           match ManagerState.tryGetSession id state with
           | Some session when session.Info.Status = SessionStatus.Restarting ->
-            let onExited exitCode =
-              inbox.Post(SessionCommand.WorkerExited(id, exitCode))
+            let onExited workerPid exitCode =
+              inbox.Post(SessionCommand.WorkerExited(id, workerPid, exitCode))
             let! result =
               spawnWorker id session.Projects session.WorkingDir ct onExited
             match result with
