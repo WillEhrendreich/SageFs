@@ -238,7 +238,7 @@ let renderShell (version: string) =
             Text.raw "Evaluate"
             Elem.button
               [ Attr.class' "panel-header-btn"
-                Attr.create "data-on-click" "var h=document.getElementById('keyboard-help-wrapper'); h.style.display = h.style.display === 'none' ? 'block' : 'none'" ]
+                Attr.create "data-on:click" "var h=document.getElementById('keyboard-help-wrapper'); h.style.display = h.style.display === 'none' ? 'block' : 'none'" ]
               [ Text.raw "⌨ Help" ]
           ]
           Elem.div [ Attr.id "keyboard-help-wrapper"; Attr.style "display: none;" ] [
@@ -248,9 +248,9 @@ let renderShell (version: string) =
             [ Attr.class' "eval-input"
               Ds.bind "code"
               Attr.create "placeholder" "Enter F# code... (Ctrl+Enter to eval)"
-              Attr.create "data-on-keydown" """
-                if(event.ctrlKey && event.key === 'Enter') { event.preventDefault(); $$post('/dashboard/eval') }
-                if(event.ctrlKey && event.key === 'l') { event.preventDefault(); $$post('/dashboard/clear-output') }
+              Attr.create "data-on:keydown" """
+                if(event.ctrlKey && event.key === 'Enter') { event.preventDefault(); @post('/dashboard/eval') }
+                if(event.ctrlKey && event.key === 'l') { event.preventDefault(); @post('/dashboard/clear-output') }
                 if(event.key === 'Tab') { event.preventDefault(); var s=this.selectionStart; var e=this.selectionEnd; this.value=this.value.substring(0,s)+'  '+this.value.substring(e); this.selectionStart=this.selectionEnd=s+2; this.dispatchEvent(new Event('input')) }
               """
               Attr.create "spellcheck" "false" ]
