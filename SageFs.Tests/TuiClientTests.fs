@@ -9,7 +9,7 @@ let parseStateEventTests = testList "parseStateEvent" [
     let json = """{"sessionState":"Ready","evalCount":5,"regions":[{"id":"output","content":"hello"},{"id":"editor","content":"code"}]}"""
     let result = parseStateEvent json
     Expect.isSome result "should parse valid JSON"
-    let (state, count, regions) = result.Value
+    let (state, count, _avgMs, regions) = result.Value
     Expect.equal state "Ready" "session state"
     Expect.equal count 5 "eval count"
     Expect.equal regions.Length 2 "region count"
@@ -22,7 +22,7 @@ let parseStateEventTests = testList "parseStateEvent" [
     let json = """{"sessionState":"Ready","evalCount":0,"regions":[{"id":"editor","content":"abc","cursor":{"line":1,"col":3}}]}"""
     let result = parseStateEvent json
     Expect.isSome result "should parse"
-    let (_, _, regions) = result.Value
+    let (_, _, _avgMs, regions) = result.Value
     Expect.isSome regions.[0].Cursor "should have cursor"
     let cursor = regions.[0].Cursor.Value
     Expect.equal cursor.Line 1 "cursor line"
@@ -33,7 +33,7 @@ let parseStateEventTests = testList "parseStateEvent" [
     let json = """{"sessionState":"Ready","evalCount":0,"regions":[{"id":"editor","content":"abc","cursor":null}]}"""
     let result = parseStateEvent json
     Expect.isSome result "should parse"
-    let (_, _, regions) = result.Value
+    let (_, _, _avgMs, regions) = result.Value
     Expect.isNone regions.[0].Cursor "null cursor should be None"
   }
 
@@ -41,7 +41,7 @@ let parseStateEventTests = testList "parseStateEvent" [
     let json = """{"sessionState":"Ready","evalCount":0,"regions":[{"id":"editor","content":"abc"}]}"""
     let result = parseStateEvent json
     Expect.isSome result "should parse"
-    let (_, _, regions) = result.Value
+    let (_, _, _avgMs, regions) = result.Value
     Expect.isNone regions.[0].Cursor "missing cursor should be None"
   }
 
@@ -60,7 +60,7 @@ let parseStateEventTests = testList "parseStateEvent" [
     let json = """{"sessionState":"WarmingUp","evalCount":0,"regions":[]}"""
     let result = parseStateEvent json
     Expect.isSome result "should parse empty regions"
-    let (state, count, regions) = result.Value
+    let (state, count, _avgMs, regions) = result.Value
     Expect.equal state "WarmingUp" "state"
     Expect.equal count 0 "count"
     Expect.isEmpty regions "empty regions"

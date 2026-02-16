@@ -1071,6 +1071,8 @@ let createApiDispatchHandler
           action.value |> Option.map EditorAction.StopSession
         | "historySearch" ->
           action.value |> Option.map EditorAction.HistorySearch
+        | "resetSession" -> Some EditorAction.ResetSession
+        | "hardResetSession" -> Some EditorAction.HardResetSession
         | _ -> None
       match editorAction with
       | Some ea ->

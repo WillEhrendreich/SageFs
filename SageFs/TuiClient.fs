@@ -39,6 +39,7 @@ let run (daemonInfo: DaemonInfo) = task {
   let mutable lastRegions : RenderRegion list = []
   let mutable lastSessionState = "Connecting..."
   let mutable lastEvalCount = 0
+  let mutable lastAvgMs = 0.0
   let mutable layoutConfig = LayoutConfig.defaults
 
   // Load keybindings from config, merge with defaults
@@ -58,7 +59,11 @@ let run (daemonInfo: DaemonInfo) = task {
     lock TerminalUIState.consoleLock (fun () ->
       try
         let sw = System.Diagnostics.Stopwatch.StartNew()
-        let statusLeft = sprintf " %s | evals: %d | %s" lastSessionState lastEvalCount (PaneId.displayName focusedPane)
+        let statusLeft =
+          if lastEvalCount > 0 then
+            sprintf " %s | evals: %d (avg %.0fms) | %s" lastSessionState lastEvalCount lastAvgMs (PaneId.displayName focusedPane)
+          else
+            sprintf " %s | evals: %d | %s" lastSessionState lastEvalCount (PaneId.displayName focusedPane)
         let statusRight = sprintf " %.1fms |%s" lastFrameMs (StatusHints.build keyMap focusedPane)
         let cursorPos = Screen.drawWith layoutConfig grid lastRegions focusedPane scrollOffsets statusLeft statusRight
         let cursorRow, cursorCol =
@@ -86,9 +91,10 @@ let run (daemonInfo: DaemonInfo) = task {
   let sseTask =
     DaemonClient.runSseListener
       baseUrl
-      (fun sessionState evalCount regions ->
+      (fun sessionState evalCount avgMs regions ->
         lastSessionState <- sessionState
         lastEvalCount <- evalCount
+        lastAvgMs <- avgMs
         lastRegions <- regions
         render ())
       (fun _ ->

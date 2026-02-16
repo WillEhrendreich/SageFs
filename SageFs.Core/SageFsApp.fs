@@ -464,3 +464,21 @@ module SageFsEffectHandler =
                 sessionId,
                 sprintf "Stop failed: %s" (SageFsError.describe err))))
         }
+
+      | EditorEffect.RequestReset ->
+        withSession deps dispatch None (fun sid proxy ->
+          async {
+            let replyId = newReplyId ()
+            let! _ = proxy (WorkerMessage.ResetSession replyId)
+            dispatch (SageFsMsg.Event (
+              SageFsEvent.SessionStatusChanged (sid, SessionDisplayStatus.Starting)))
+          })
+
+      | EditorEffect.RequestHardReset ->
+        withSession deps dispatch None (fun sid proxy ->
+          async {
+            let replyId = newReplyId ()
+            let! _ = proxy (WorkerMessage.HardResetSession (false, replyId))
+            dispatch (SageFsMsg.Event (
+              SageFsEvent.SessionStatusChanged (sid, SessionDisplayStatus.Restarting)))
+          })

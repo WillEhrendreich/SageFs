@@ -108,6 +108,8 @@ and [<RequireQualifiedAccess>] EditorAction =
   | CreateSession of projects: string list
   | StopSession of string
   | ToggleSessionPanel
+  | ResetSession
+  | HardResetSession
 
 /// Every UI-level action (superset of EditorAction for renderers)
 and [<RequireQualifiedAccess>] UiAction =
@@ -241,6 +243,8 @@ module UiAction =
     | "ListSessions" -> Some (UiAction.Editor EditorAction.ListSessions)
     | "ToggleSessionPanel" -> Some (UiAction.Editor EditorAction.ToggleSessionPanel)
     | "CreateSession" -> Some (UiAction.Editor (EditorAction.CreateSession []))
+    | "ResetSession" -> Some (UiAction.Editor EditorAction.ResetSession)
+    | "HardResetSession" -> Some (UiAction.Editor EditorAction.HardResetSession)
     | s when s.StartsWith("TogglePane.") -> Some (UiAction.TogglePane (s.Substring(11)))
     | s when s.StartsWith("Layout.") -> Some (UiAction.LayoutPreset (s.Substring(7)))
     | _ -> None
@@ -273,6 +277,8 @@ module KeyMap =
       // Session management
       KeyCombo.ctrl ConsoleKey.N, e (EditorAction.CreateSession [])
       KeyCombo.ctrlAlt ConsoleKey.S, e EditorAction.ToggleSessionPanel
+      KeyCombo.ctrlAlt ConsoleKey.R, e EditorAction.ResetSession
+      KeyCombo.ctrlAlt ConsoleKey.H, e EditorAction.HardResetSession
       // Submit / NewLine
       KeyCombo.ctrl ConsoleKey.Enter, e EditorAction.Submit
       KeyCombo.plain ConsoleKey.Enter, e EditorAction.NewLine
