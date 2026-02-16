@@ -14,6 +14,11 @@ open SageFs.Affordances
 
 module FalcoResponse = Falco.Response
 
+/// sseHtmlElements uses renderHtml which prepends <!DOCTYPE html> to every
+/// fragment, causing Datastar to choke. Use renderNode + sseStringElements instead.
+let ssePatchNode (ctx: HttpContext) (node: XmlNode) =
+  Response.sseStringElements ctx (renderNode node)
+
 /// Discriminated union for output line kinds — replaces stringly-typed matching.
 type OutputLineKind =
   | ResultLine
@@ -611,7 +616,7 @@ let private pushRegions
   = task {
     for region in regions do
       match renderRegionForSse region with
-      | Some html -> do! Response.sseHtmlElements ctx html
+      | Some html -> do! ssePatchNode ctx html
       | None -> ()
   }
 
@@ -633,7 +638,7 @@ let createStreamHandler
 
     let pushState () = task {
       // Push server-status as "Connected" — proves SSE is alive
-      do! Response.sseHtmlElements ctx (
+      do! ssePatchNode ctx (
         Elem.div [ Attr.id "server-status"; Attr.class' "conn-banner conn-connected" ] [
           Text.raw "✅ Connected"
         ])
@@ -644,9 +649,9 @@ let createStreamHandler
         if stats.EvalCount > 0
         then stats.TotalDuration.TotalMilliseconds / float stats.EvalCount
         else 0.0
-      do! Response.sseHtmlElements ctx (
+      do! ssePatchNode ctx (
         renderSessionStatus stateStr sessionId projectCount)
-      do! Response.sseHtmlElements ctx (
+      do! ssePatchNode ctx (
         renderEvalStats
           { Count = stats.EvalCount
             AvgMs = avgMs
@@ -664,7 +669,7 @@ let createStreamHandler
         let label =
           if parts.IsEmpty then sprintf "%d connected" total
           else sprintf "%s" (String.Join(" ", parts))
-        do! Response.sseHtmlElements ctx (
+        do! ssePatchNode ctx (
           Elem.div [ Attr.id "connection-counts"; Attr.class' "meta"; Attr.style "font-size: 0.75rem; margin-top: 4px;" ] [
             Text.raw label
           ])
@@ -724,7 +729,7 @@ let createEvalHandler
             Text.raw result
           ]
         ]
-      do! Response.sseHtmlElements ctx resultHtml
+      do! ssePatchNode ctx resultHtml
   }
 
 /// Create the reset POST handler.
@@ -740,7 +745,7 @@ let createResetHandler
           Text.raw (sprintf "Reset: %s" result)
         ]
       ]
-    do! Response.sseHtmlElements ctx resultHtml
+    do! ssePatchNode ctx resultHtml
   }
 
 /// Create the session action handler (switch/stop).
@@ -756,7 +761,7 @@ let createSessionActionHandler
           Text.raw result
         ]
       ]
-    do! Response.sseHtmlElements ctx resultHtml
+    do! ssePatchNode ctx resultHtml
   }
 
 /// Create clear-output handler.
@@ -764,7 +769,7 @@ let createClearOutputHandler : HttpHandler =
   fun ctx -> task {
     Response.sseStartResponse ctx |> ignore
     let emptyOutput = Elem.div [ Attr.id "output-panel" ] [ Text.raw "No output yet" ]
-    do! Response.sseHtmlElements ctx emptyOutput
+    do! ssePatchNode ctx emptyOutput
   }
 
 /// Render discovered projects as an SSE fragment.
@@ -859,9 +864,9 @@ let private pushDiscoverResults (ctx: HttpContext) (dir: string) = task {
     let combined = Elem.div [ Attr.id "discovered-projects"; Attr.style "margin-top: 0.5rem;" ] [
       note; mainContent
     ]
-    do! Response.sseHtmlElements ctx combined
+    do! ssePatchNode ctx combined
   | None ->
-    do! Response.sseHtmlElements ctx mainContent
+    do! ssePatchNode ctx mainContent
 }
 
 /// Create the discover-projects POST handler.
@@ -871,13 +876,13 @@ let createDiscoverHandler : HttpHandler =
     let dir = getSignalString doc "newSessionDir" "new-session-dir"
     Response.sseStartResponse ctx |> ignore
     if String.IsNullOrWhiteSpace dir then
-      do! Response.sseHtmlElements ctx (
+      do! ssePatchNode ctx (
         Elem.div [ Attr.id "discovered-projects" ] [
           Elem.span [ Attr.class' "output-line output-error" ] [
             Text.raw "Enter a working directory first"
           ]])
     elif not (Directory.Exists dir) then
-      do! Response.sseHtmlElements ctx (
+      do! ssePatchNode ctx (
         Elem.div [ Attr.id "discovered-projects" ] [
           Elem.span [ Attr.class' "output-line output-error" ] [
             Text.raw (sprintf "Directory not found: %s" dir)
@@ -896,13 +901,13 @@ let createCreateSessionHandler
     let manualProjects = getSignalString doc "manualProjects" "manual-projects"
     Response.sseStartResponse ctx |> ignore
     if String.IsNullOrWhiteSpace dir then
-      do! Response.sseHtmlElements ctx (evalResultError "Working directory is required")
+      do! ssePatchNode ctx (evalResultError "Working directory is required")
     elif not (Directory.Exists dir) then
-      do! Response.sseHtmlElements ctx (evalResultError (sprintf "Directory not found: %s" dir))
+      do! ssePatchNode ctx (evalResultError (sprintf "Directory not found: %s" dir))
     else
       let projects = resolveSessionProjects dir manualProjects
       if projects.IsEmpty then
-        do! Response.sseHtmlElements ctx (evalResultError "No projects found. Enter paths manually or check the directory.")
+        do! ssePatchNode ctx (evalResultError "No projects found. Enter paths manually or check the directory.")
       else
         let! result = createSession projects dir
         let resultHtml =
@@ -914,8 +919,8 @@ let createCreateSessionHandler
               ]
             ]
           | Error msg -> evalResultError (sprintf "Failed: %s" msg)
-        do! Response.sseHtmlElements ctx resultHtml
-        do! Response.sseHtmlElements ctx (Elem.div [ Attr.id "discovered-projects" ] [])
+        do! ssePatchNode ctx resultHtml
+        do! ssePatchNode ctx (Elem.div [ Attr.id "discovered-projects" ] [])
   }
 
 /// JSON SSE stream for TUI clients — pushes regions + model summary as JSON.
