@@ -74,6 +74,33 @@ module Screen =
             cursorPos <- Some (screenRow, screenCol)
           | None ->
             cursorPos <- Some (rect.Row + 1, rect.Col + 1)
+
+        // Completion popup overlay
+        match region.Completions with
+        | Some compl when compl.Items.Length > 0 ->
+          let cursorScreenRow =
+            match region.Cursor with
+            | Some c -> rect.Row + 1 + c.Line
+            | None -> rect.Row + 1
+          let cursorScreenCol =
+            match region.Cursor with
+            | Some c -> rect.Col + 1 + c.Col
+            | None -> rect.Col + 1
+          let popupRow = cursorScreenRow + 1
+          let popupCol = cursorScreenCol
+          let maxVisible = min 8 compl.Items.Length
+          let menuWidth = (compl.Items |> List.map (fun s -> s.Length) |> List.max) + 2
+          for i in 0 .. maxVisible - 1 do
+            let r = popupRow + i
+            let c = popupCol
+            if r < rows - 1 && c + menuWidth < cols then
+              let isSelected = i = compl.SelectedIndex
+              let itemFg = if isSelected then Theme.bgEditor else Theme.fgDefault
+              let itemBg = if isSelected then Theme.borderFocus else Theme.bgStatus
+              let label = compl.Items.[i].PadRight(menuWidth)
+              let itemDt = DrawTarget.create grid (Rect.create r c menuWidth 1)
+              Draw.text itemDt 0 0 itemFg itemBg CellAttrs.None (sprintf " %s" label)
+        | _ -> ()
       | None ->
         // Default cursor at content start for focused pane
         if paneId = focusedPane then

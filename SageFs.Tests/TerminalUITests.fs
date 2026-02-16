@@ -9,10 +9,10 @@ open SageFs
 
 // Helpers
 let mkRegion id content : RenderRegion =
-  { Id = id; Flags = RegionFlags.None; Content = content; Affordances = []; Cursor = None }
+  { Id = id; Flags = RegionFlags.None; Content = content; Affordances = []; Cursor = None; Completions = None }
 
 let mkRegionWithCursor id content line col : RenderRegion =
-  { Id = id; Flags = RegionFlags.Focusable; Content = content; Affordances = []; Cursor = Some { Line = line; Col = col } }
+  { Id = id; Flags = RegionFlags.Focusable; Content = content; Affordances = []; Cursor = Some { Line = line; Col = col }; Completions = None }
 
 let mkPane id title row col w h focused : TerminalPane =
   { PaneId = id; Title = title; Row = row; Col = col

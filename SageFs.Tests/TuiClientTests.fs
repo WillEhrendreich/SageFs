@@ -69,7 +69,7 @@ let parseStateEventTests = testList "parseStateEvent" [
 
 let daemonRegionDataTests = testList "DaemonRegionData" [
   test "toRenderRegion maps all fields" {
-    let data = { Id = "output"; Content = "hello\nworld"; Cursor = Some { Line = 0; Col = 5 } }
+    let data = { Id = "output"; Content = "hello\nworld"; Cursor = Some { Line = 0; Col = 5 }; Completions = None }
     let region = DaemonRegionData.toRenderRegion data
     Expect.equal region.Id "output" "id"
     Expect.equal region.Content "hello\nworld" "content"
@@ -81,7 +81,7 @@ let daemonRegionDataTests = testList "DaemonRegionData" [
   }
 
   test "toRenderRegion with no cursor" {
-    let data = { Id = "sessions"; Content = ""; Cursor = None }
+    let data = { Id = "sessions"; Content = ""; Cursor = None; Completions = None }
     let region = DaemonRegionData.toRenderRegion data
     Expect.equal region.Id "sessions" "id"
     Expect.equal region.Content "" "empty content"
