@@ -1635,34 +1635,141 @@ This is NOT a full IDE — it's a browser-accessible REPL for quick interactions
 24. AI-native features (4.4)
 25. Debugger integration (4.2)
 
-### Phase 6: REPL/TUI Architecture (Immediate-Mode Elm)
+### Phase 6: TUI Rendering Engine (Immediate-Mode Elm)
 
 Full research: [docs/repl-tui-research.md](docs/repl-tui-research.md)
 
-**Architecture decision:** Custom Elm loop in F# (~40 lines), immediate-mode rendering (`UI = render(state)`), five known frontends consuming `RenderRegion list`.
+Expert reviews: See [Appendix: TUI Expert Reviews](#appendix-tui-expert-reviews) — reviewed by Casey Muratori, Ryan Fleury, Ramon Santamaria (raylib), Mark Seemann, John Carmack, DHH, and ThePrimeagen.
 
-**Core domain types:**
-- `RenderRegion` — uniform render output with `RegionFlags` (Fleury-style feature flags, not widget kinds)
-- `Affordance` — `{ Action; Label; KeyHint: KeyCombo option; Enabled }` — HATEOAS for all UIs
-- `EditorAction` / `EditorEffect` — Elm Architecture `Msg`/`Cmd` equivalents
-- `SageFsView` — bounded read model projection for render functions
-- `KeyMap` — `Map<KeyCombo, EditorAction>` shared config across all frontends
+#### Problem
 
-**Build order:**
-1. **Phase 0: Tree-Sitter Foundation** — `ionide/tree-sitter-fsharp` via `TreeSitter.DotNet`, syntax highlighting, incremental parsing
-2. **Phase 1: Core Domain Types** — `RenderPipeline.fs` (`RenderRegion`, `RegionFlags`, `Affordance`), `Editor.fs` (`EditorAction`, `EditorEffect`, `SageFsView`, `update` function), `ElmLoop.fs` (~40 lines)
-3. **Phase 2: Terminal Adapter** — replaces PrettyPrompt, consumes `RenderRegion list` → ANSI
-4. **Phase 3: Datastar Web Adapter** — SSE-morphed HTML, validates that `RenderRegion list` abstraction works for non-terminal UIs
-5. **Phase 4: Neovim/VSCode Adapters** — ext_linegrid-inspired protocol, progressive capability negotiation
-6. **Phase 5: Raylib/ImGui Adapter** — GPU-rendered IMGUI via Hexa.NET.ImGui
+Fixed 4-pane, brittle string-based rendering, no layout flexibility. The previous plan's answer — retained Widget DU trees with cell diffing — was wrong. Diffing adds complexity to compensate for slow rendering. The right answer: **make rendering fast enough that diffing is unnecessary**.
 
-**Key principles:**
-- Push-based reactive streaming everywhere (SageFsEvent bus → all frontends subscribe)
+#### Inspiration
+
+- **Casey Muratori — IMGUI (2005):** GUIs should work like immediate-mode graphics. No retained scene graph. `Button("OK")` returns whether clicked. UI is *code*, not *data*.
+- **Ryan Fleury — RAD Debugger (`ui_core.h`):** Universal `UI_Box` element with flags/sizes/colors. String-hashed identity for cross-frame state persistence. `UI_Signal` returned from box building. Multi-pass layout with `strictness` constraint relaxation.
+- **Clay:** Pure layout engine producing flat `RenderCommand` array. Layout is data in, commands out.
+
+#### Architecture: Elm + Immediate Render
+
+The Elm model IS the "retained" state. No second retained layer (Widget DU). Fast **immediate renderer** writes directly to a cell buffer, blasts entire buffer to terminal.
+
+```
+ElmLoop.model
+  → SageFsRender.render → RenderRegion list
+    → ImmediateRenderer.draw(regions, grid)  ← writes directly to cells
+      → AnsiEmitter.emitFull(grid)            ← full frame, no diff
+        → Console.Write                       ← one write per frame
+```
+
+**Why no diff?** 200×120 = 24,000 cells × ~10 bytes = ~240KB/frame. At 144fps = 34MB/s — trivial for modern terminals. Diffing adds two buffers, O(n²) comparison, off-by-one bugs, stale state. Full redraw: one buffer, one write, zero stale-diff bugs.
+
+#### Core Types
+
+```fsharp
+[<Struct>] type CellAttrs = None = 0uy | Bold = 1uy | Dim = 2uy | Inverse = 4uy
+[<Struct>] type Cell = { Char: char; Fg: byte; Bg: byte; Attrs: CellAttrs }
+type Rect = { Row: int; Col: int; Width: int; Height: int }  // smart ctor clamps ≥0
+type DrawTarget = { Grid: Cell[,]; Rect: Rect }               // bundles "where to draw"
+```
+
+#### Frame Loop (raylib-style: update then draw, never both)
+
+```
+1. Process input → update TerminalState (pure)
+2. CellGrid.clear grid
+3. Screen.draw grid state regions  ← no state changes, only cell writes
+4. AnsiEmitter.emitWithCursor grid cursorPos → Console.Write
+```
+
+#### Modules
+
+| Module | Purpose |
+|--------|---------|
+| `CellGrid` | Module functions over `Cell[,]`: `create`, `set` (bounds-checked), `writeString`, `clear`, `toText` |
+| `Theme` | Named color constants: `panelBg`, `focusBorder`, `errorLine`, etc. |
+| `Layout` | Pure arithmetic: `splitH`, `splitV`, `splitHProp`, `splitVProp`, `inset`, `fullScreen` |
+| `Draw` | Immediate primitives: `text`, `box` (returns inner `DrawTarget`), `hline`, `fill`, `scrolledLines`, `statusBar` |
+| `PaneRenderer` | Per-pane draw: `drawOutput`, `drawEditor`, `drawSessions`, `drawDiagnostics` |
+| `Screen` | Top-level composer: layout → draw panes → status bar (with frame time) |
+| `AnsiEmitter` | Grid → ANSI string. Pre-alloc StringBuilder. Color tracking to minimize escape codes. |
+
+#### Build Order
+
+| Phase | Scope | Tests |
+|-------|-------|-------|
+| **6.1** | `Cell`, `CellAttrs`, `Rect`, `CellGrid`, `Theme`, `Layout`, `DrawTarget`, `Draw` | Property: `splitH` preserves width. Snapshot: `Draw.box` → `toText()`. |
+| **6.2** | `AnsiEmitter.emitFull`, `emitWithCursor` | Uniform color → one code. Alternating → codes at transitions. |
+| **6.3** | `PaneRenderer.*`, `Screen.draw` | Snapshot: each renderer at 30×10. Full 80×24 screen render. |
+| **6.4** | Wire into `TerminalMode.run` + `TuiClient.run`. Delete old code. | Integration: alt-screen, no scroll, crash-safe restore. |
+| **6.5** | `LayoutConfig`, `PaneState`, pane toggle/resize/reorder | Snapshot: alternate layouts. Property: toggle removes pane, redistributes. |
+| **6.6** | Affordances, polish, perf baseline | Frame time <6.9ms (144fps) for 200×60. Real affordance values. |
+| **6.7** | Raylib GUI backend (`SageFs.Gui/`) — `Raylib-cs` 7.0.2, `RaylibEmitter`, `RaylibMode.run`, font metrics, mouse input → same `EditorAction` DU | Snapshot parity: same `RenderRegion list` → same `CellGrid.toText`. Frame time <6.9ms. |
+| **6.8** | Dual-renderer parity — keybindings, theming, layout config, menus, status bars identical across TUI and Raylib. `SageFs --tui`, `--gui`, `--both` flags. | Side-by-side visual parity. Perf comparison in status bar. |
+
+#### Design Principles
+
+1. **No retained UI tree** — Elm model is only source of truth. (Casey)
+2. **Update then draw — never both** — like raylib's `BeginDrawing/EndDrawing`. (Ramon)
+3. **Full redraw every frame** — no diffing. Add diff *on top* later if profiling demands. (Casey)
+4. **Layout is arithmetic, not a framework** — `splitH`, `splitV`, `Rect`. (Fleury)
+5. **`CellGrid` is the IO boundary** — all draw decisions pure, only cell writes are effects. (Mark)
+6. **Named colors, not magic numbers** — `Theme.errorLine` not `203uy`. (Ramon)
+7. **`DrawTarget` reduces parameter counts** — ≤3 meaningful params per function. (Mark)
+8. **Per-pane persistent state** — `Map<PaneId, PaneState>` for scroll/visibility. (Fleury)
+9. **Measure and display** — frame time in status bar. Know, don't guess. (Casey)
+10. **TDD on the framebuffer** — `toText()` snapshots + property-based layout tests. (Ramon)
+
+#### Files
+
+- **Keep**: `AnsiCodes`, `PaneId`, `TerminalInput`
+- **Add**: `Cell`, `Rect`, `CellGrid`, `Draw`, `Layout`, `AnsiEmitter`, `PaneRenderer`, `Screen`
+- **Remove**: `TerminalPane`, `TerminalLayout`, `TerminalRender`, `FrameDiff`, `OutputColorizer`, `DiagnosticsColorizer`
+
+#### Dual-Renderer Architecture (TUI + Raylib GUI)
+
+SageFs has **two UI frontends** built simultaneously, sharing one abstract rendering layer. Both consume the same `RenderRegion list` from the Elm model and write to the same `Cell[,]` grid. The only difference is how the grid reaches the screen.
+
+**Performance target: 144fps (6.9ms frame budget) on both backends. No excuses.**
+
+```
+ElmLoop.model
+  → SageFsRender.render → RenderRegion list
+    → Screen.draw(grid, state, regions)       ← shared: writes to Cell[,]
+      ├→ AnsiEmitter.emit(grid)  → Console.Write     (TUI backend)
+      └→ RaylibEmitter.emit(grid) → DrawRectangle/DrawText  (Raylib backend)
+```
+
+**Why dual-renderer?** Competitive benchmarking feedback loop. "TUI renders in 0.8ms, Raylib in 0.3ms — what's the TUI overhead?" Both UIs must have identical functionality: keybindings, theming, click semantics, menus, status bars, layout config, inline images (Kitty protocol for TUI, native texture for Raylib). When you open the TUI window, the exact same thing happens on the Raylib GUI window.
+
+**Project structure:**
+
+| Project | Purpose | Dependencies |
+|---------|---------|-------------|
+| `SageFs.Core/` | Shared: `Cell`, `CellGrid`, `Rect`, `Layout`, `Draw`, `Theme`, `Screen`, `PaneRenderer`, `Editor`, `RenderPipeline` | None (pure) |
+| `SageFs/` | CLI tool: TUI client, daemon, MCP server, `AnsiEmitter`, `TerminalMode` | `SageFs.Core` |
+| `SageFs.Gui/` | Raylib GUI client: `RaylibEmitter`, `RaylibMode`, font loading, mouse input | `SageFs.Core`, `Raylib-cs` 7.0.2 |
+| `SageFs.Tests/` | Shared tests at `CellGrid.toText()` level — parity guaranteed | `SageFs.Core` |
+
+**Shared abstractions (never import terminal or Raylib APIs):**
+- `Theme` — abstract color IDs (bytes). TUI maps to 256-color ANSI. Raylib maps to RGB.
+- `KeyMap` — rebindable keybindings, serializable, same DU values drive both backends.
+- `EditorAction` — mouse clicks normalize to same DU in both backends.
+- `LayoutConfig` — pane order, proportions, visibility — identical behavior.
+
+**Launch modes:**
+- `SageFs --tui` — TUI client (default, current behavior)
+- `SageFs --gui` — Raylib GUI client
+- `SageFs --both` — both simultaneously, same daemon SSE subscription
+
+#### Key Principles (carried forward)
+
+- Push-based reactive streaming (SageFsEvent bus → all frontends subscribe)
 - Affordance-driven: domain decides what's *possible*, adapters decide how to *render*
 - CQRS: `EditorAction` commands in, `SageFsEvent` events out
-- Animation state managed by rendering engine (not in `RenderRegion`)
-- No diffing — full `render(state)` each frame (for <50 widgets, sub-millisecond)
 - `FsToolkit.ErrorHandling` for `asyncResult { }` at effect handler edges
+- **144fps target** — 6.9ms frame budget. Full redraw every frame. If you can't hit it, profile and fix. No diffing as a crutch.
 
 ---
 
@@ -2186,3 +2293,313 @@ Based on both reviews, these concrete changes should be applied:
 12. **Evolve Session aggregate type** — start with flat `SessionInfo`, evolve to state-per-case DU when domain demands it ✅ *applied*
 13. **Express core workflows as composed pipelines** — `validateCode >> checkAffordances >> submitToFsi >> emitEvents`
 14. **Phase each release** — each phase is a version bump, independently shippable and useful
+
+---
+
+## Appendix: TUI Expert Reviews
+
+*The following reviews are **fictional** — an AI using the public personas of these developers as a lens for architectural critique, based on their published writings, talks, blog posts, and known values. These are not written by, endorsed by, or affiliated with any of these individuals.*
+
+### Casey Muratori (Immediate Mode GUI, Handmade Hero)
+
+*"Alright, let me look at this."*
+
+The architecture is correct. You have an Elm model, you read it, you draw cells, you blast the buffer. That's the right answer. The entire history of UI programming has been people building retained mode scene graphs and then spending the rest of their careers debugging the synchronization between the scene graph and the actual state. You're not doing that. Good.
+
+**What I'd change:**
+
+**No CellGrid class.** You've got a `Cell[,]`. That's your framebuffer. Write module functions over it. A class wrapping a 2D array is the kind of thing that makes you feel like you're "designing" but you're actually just adding a layer of indirection between you and your data. `CellGrid.set row col cell grid` — that's it. The array IS the abstraction.
+
+**Parameter counts.** Your `Draw.text` takes `fg`, `bg`, `row`, `col`, `string`, `target`. That's six parameters. When you're calling that 200 times per frame, that's a lot of visual noise. Bundle the "where am I drawing" into `DrawTarget` so draw functions take domain-relevant params + one target. Three params max for the common case.
+
+**Pre-allocate the StringBuilder.** `StringBuilder(w * h * 10)` — yes, do this. I've seen people allocate a fresh `StringBuilder()` with default capacity inside a render loop and then wonder why they're doing 47 allocations per frame. You know the size. Tell it the size.
+
+**Display frame time.** Put your render time in the status bar. Not because you need to optimize — you don't, 24K cells is nothing — but because you should *know*, not *think*. Every time someone says "I think it's fast enough" without measuring, they're wrong about something. Might not be speed, might be an accidental O(n²) in your string concatenation, might be GC pressure from allocations you don't know about. The number tells you. One Stopwatch, one status bar segment, one line of code.
+
+**Full contiguous write.** You're right that one `Console.Write` of the entire buffer is often faster than scattered cursor-move + partial-write sequences. The terminal emulator parses escape codes sequentially regardless. A single 240KB write goes through one syscall. Fifty small writes go through fifty. The operating system charges you per call, not per byte.
+
+**On interaction signals:** I'd normally say draw functions should return signals — `Button("OK")` returns `wasClicked`. That's the whole IMGUI insight. But you're keyboard-only. There's no hover. There's no mouse position. Your inputs are all discrete key events processed in the update phase. So the raylib-style separation is actually correct here. If you add mouse support later, revisit this.
+
+**Verdict:** ✅ Ship it. The architecture is right. The main risk is over-engineering it before you have something working. Get `Cell[,]` → `Draw.box` → `emitFull` → terminal working first. You can refactor the aesthetics later. You cannot unfuck a bad architecture later.
+
+→ **Adopted:** Module over `Cell[,]`, `DrawTarget` for param reduction, pre-alloc StringBuilder, frame time display, full contiguous write.
+→ **Noted:** Interaction signals deferred (keyboard-only TUI).
+
+---
+
+### Ryan Fleury (RAD Debugger)
+
+*"Let me look at the data model."*
+
+Your instinct to use PaneId as the key for persistent state is exactly right. This is the pattern that makes RAD Debugger's UI work at scale — every box has an identity, and that identity is how you find last frame's state. In your case, `Map<PaneId, PaneState>` is the F# equivalent of our hash-keyed box cache.
+
+**Per-pane persistent state — design it now.**
+
+Don't wait until you need smooth scrolling to add `PaneState`. The shape of this record determines how easy animation is later. You want:
+
+```fsharp
+type PaneState = {
+  ScrollOffset: int       // current position (used for drawing)
+  ScrollTarget: int       // where we're scrolling TO
+  FocusT: float           // 0.0–1.0 interpolant for focus glow
+  Visible: bool
+}
+```
+
+`ScrollTarget` and `FocusT` look unused right now. That's fine. They're zero-cost to carry, and when you want smooth scrolling, you just add `ScrollOffset ← lerp(ScrollOffset, ScrollTarget, dt * speed)` in your update phase. No architectural change. No new types. The slot is already there.
+
+**`Map<PaneId, PaneState>` for stable identity.**
+
+Your DU gives you stable identity for free. In RAD Debugger, we hash strings to identify boxes across frames. You have a closed set of `PaneId` values — `Output`, `Sessions`, `Diagnostics`, `Editor`. That's even better. No hash collisions, no string allocation, O(log n) lookup on 4 elements (which the runtime will probably inline to a jump table anyway).
+
+**splitH and splitV is exactly right for your scale.**
+
+We have a 5-pass layout engine because RAD Debugger has hundreds of nested boxes with percentage-based sizing and constraint relaxation. You have 4 panes. `splitH` and `splitV` returning `Rect` tuples is the correct level of abstraction. Don't build a layout engine you don't need. If you ever need percentage-of-parent or min/max constraints, you'll know — it'll be because `splitH`/`splitV` can't express what you want. Not before.
+
+**On draw functions returning updated PaneState:** In RAD Debugger, building a UI_Box returns a UI_Signal, and we use that signal to update state immediately. But your Elm Architecture already has a clean update phase. Doing state updates inside draw would break your update-then-draw separation. So: update PaneState in the update phase (scroll, focus transitions), read it in the draw phase. That's correct for your architecture.
+
+→ **Adopted:** `PaneState` with animation-ready fields, `Map<PaneId, PaneState>`, splitH/splitV arithmetic.
+→ **Deferred:** Draw returning updated PaneState (conflicts with update/draw separation).
+
+---
+
+### Ramon Santamaria (raylib)
+
+*"Let me see the frame lifecycle."*
+
+In raylib, every frame is: `BeginDrawing()`, clear, draw, `EndDrawing()`. There is no ambiguity about when state changes and when rendering happens. They are different phases. You mix them, you get bugs.
+
+**Strict update-then-draw.**
+
+Your frame loop should be:
+1. Process input → update `TerminalState` (pure function, new state out)
+2. `CellGrid.clear grid`
+3. `Screen.draw grid state regions` — writes cells, reads state, changes NOTHING
+4. `AnsiEmitter.emitWithCursor grid cursorPos` → `Console.Write`
+
+No state changes in step 3. No drawing in step 1. If you catch yourself wanting to update a scroll offset inside a draw function, stop. Move it to the update phase. This discipline prevents an entire category of bugs where drawing order affects state.
+
+**`CellAttrs` as flags byte, not `bool Bold`.**
+
+```fsharp
+[<Flags>] type CellAttrs = None = 0uy | Bold = 1uy | Dim = 2uy | Inverse = 4uy
+```
+
+One byte, not three bools. You can OR them: `CellAttrs.Bold ||| CellAttrs.Dim`. You can test them: `attrs &&& CellAttrs.Bold <> CellAttrs.None`. When you add Underline, Italic, Blink — you add a flag, not a field. The struct stays the same size.
+
+**Named color palette.**
+
+Raylib has `RAYWHITE`, `DARKGRAY`, `RED`, etc. Not `(245, 245, 245)` scattered through draw calls. Your `Theme` module with `panelBg`, `focusBorder`, `errorLine` is exactly this. When someone asks "what color are errors?" the answer is `Theme.errorLine`, not "grep for `203uy`". One place to change, one place to read.
+
+**Aggressive snapshot testing.**
+
+You have `CellGrid.toText`. This is a superpower that graphical UI doesn't have. Use it ruthlessly. Every draw function: create a small grid (30×10), draw into it, assert `toText()` matches expected output. When you change rendering code, the snapshots tell you exactly what changed. Graphical UI developers would kill for this.
+
+→ **Adopted:** Update-then-draw as core principle, `CellAttrs` flags, `Theme` module, snapshot testing strategy.
+
+---
+
+### Mark Seemann (blog.ploeh.dk)
+
+*"Let me examine the type design."*
+
+The combination of Elm Architecture with immediate-mode rendering is surprisingly elegant. The Elm model provides the retained state and the pure update function. The renderer provides the effectful draw. The `CellGrid` is the IO boundary — analogous to a database write. All the decisions about *what* to draw are pure functions; only the final cell mutations are effects.
+
+**Smart constructor for `Rect`.**
+
+```fsharp
+module Rect =
+  let create row col width height =
+    { Row = row; Col = col; Width = max 0 width; Height = max 0 height }
+```
+
+This is "make illegal states unrepresentable" applied to geometry. A negative-width rectangle is nonsensical. The smart constructor eliminates it at the boundary. Every `Rect` in the system is guaranteed non-negative. Downstream code never needs to check.
+
+**`DrawTarget` bundles correlated parameters.**
+
+When a function takes `grid`, `rect`, `row`, `col`, `fg`, `bg`, `text` — that's seven parameters. Some of them travel together (grid + rect = "where I'm drawing"). Bundle them: `DrawTarget = { Grid: Cell[,]; Rect: Rect }`. Now draw functions take domain data + one `DrawTarget`. This is the Parameter Object pattern, and it's appropriate here because these values have genuine affinity — you never pass a grid without a rect.
+
+**Property-based tests for Layout.**
+
+`splitH` has an invariant: `left.Width + right.Width = parent.Width`. That's a universal property, true for ALL inputs. Test it with FsCheck, not with three hand-picked examples. Similarly: `splitVProp` rects should never exceed parent bounds. `inset` with padding > dimension should produce zero-size rect. These are the tests that catch the bugs you didn't think of.
+
+**Watch `Screen.draw` for god-function growth.**
+
+Right now it's small: compute layout, draw panes, draw status bar. But it will grow. Every new feature — affordance bar, help overlay, modal dialogs — will want to add drawing code. Decompose proactively. If `Screen.draw` exceeds ~30 lines, extract a helper. The function should read like a table of contents, not like a novel chapter.
+
+**On `DrawCommand` DU for purity:** I acknowledge the theoretical appeal — a `DrawCommand` DU would make the draw phase a pure function returning data, which you then interpret to mutate the grid. But this is retained mode by another name. You'd build a command list, traverse it, apply it — that's the Widget tree you just deleted. The `Draw` module with `toText()` testing gives you the same verification ability without the indirection. The pragmatic choice is correct.
+
+→ **Adopted:** `Rect.create` smart ctor, `DrawTarget`, property-based layout tests.
+→ **Noted:** `Screen.draw` decomposition discipline.
+→ **Deferred:** `DrawCommand` DU (retained mode in disguise).
+
+---
+
+### John Carmack
+
+*"I want to talk about the data."*
+
+Your architecture makes the right fundamental decision: you have one authoritative state (Elm model), you read it, you produce pixels (cells). That's how game engines have worked since the beginning. The retained-mode UI people spent 30 years learning this the hard way. You're starting from the right place.
+
+**Data-oriented observations:**
+
+**Your `Cell` struct is good.** `{ Char: char; Fg: byte; Bg: byte; Attrs: CellAttrs }` — that's 5 bytes of meaningful data (char is 2 bytes in .NET, but still small). A 200×120 grid is 120,000 bytes. That fits in L1 cache on modern CPUs. You're going to iterate this linearly in `emitFull`. Linear iteration over a small contiguous array is the best possible access pattern. The hardware is designed for exactly this.
+
+**Don't allocate in the hot loop.** Your `emitFull` builds a string. Fine — but make sure the `StringBuilder` is pre-allocated and reused across frames, not created fresh each frame. Same for any intermediate lists, string concatenations, or closures in the draw path. F# makes it easy to accidentally create closures (lambdas that capture variables) — each one is a heap allocation. In the draw path, prefer explicit parameters over captured variables.
+
+**The `sprintf` calls concern me.** You have `sprintf "%.1fms" frameTimeMs` in the status bar, and `sprintf "%A should roundtrip" pane` in tests. The `sprintf` function in F# is notoriously slow — it uses reflection to parse format strings at runtime. For tests, it doesn't matter. For the hot path, use `String.Format` or manual string building. Measure it — if `sprintf` shows up in a profile, you'll know why.
+
+**Your ANSI emitter's color tracking is critical.** The difference between "emit a color code for every cell" and "emit a color code only when the color changes" is enormous. A 200×120 grid with per-cell color codes is ~2.4MB of output. With color tracking (only emit on change), a typical TUI frame with large same-colored regions drops to maybe 50-100KB. You mention this in the plan ("tracks fg/bg/attrs to minimize escape codes") — make sure it actually happens. It's the single biggest performance lever you have.
+
+**One `Console.Write` call.** Not `Write` per line. Not `Write` per pane. One call for the entire frame. The cost of a syscall is ~1μs. The cost of writing 240KB through one syscall is dominated by memcpy, not syscall overhead. Fifty calls of 5KB each costs 50μs in syscall overhead alone, plus the terminal emulator may flush and render between calls, causing visible tearing.
+
+**Sort your optimization concerns by impact:**
+1. Allocation in the hot path (GC pauses, gen0 collections) — **highest impact**
+2. ANSI color tracking in emitter (output size, terminal bandwidth) — **high impact**
+3. `Console.Write` call count (syscall overhead, tearing) — **medium impact**
+4. Cell grid iteration order (cache friendliness) — **low impact** (already linear, already fits in cache)
+5. Grid diffing (skip unchanged cells) — **lowest impact** (premature, don't do it)
+
+**On architecture:** Don't add abstractions to "prepare for the future." Your `PaneState.FocusT` and `ScrollTarget` — if you're not interpolating them today, they're dead fields. Dead fields aren't free; they're cognitive load. Add them when you write the interpolation code. The type change is trivial. The architectural change is zero because your update/draw separation already supports it.
+
+This contradicts Fleury's advice to "design the slots now." The difference is: Fleury is building a framework for thousands of UI elements where adding a field later requires touching hundreds of callsites. You have 4 panes. Adding a field to `PaneState` later touches 4 callsites. The cost of adding it later is near zero. The cost of carrying dead fields is nonzero (every reader wonders "why is this here? is it used? what happens if I change it?"). YAGNI is correct at your scale.
+
+**Verdict:** The plan is solid. Focus on: (1) zero allocation in draw/emit, (2) color tracking in emitter, (3) single `Console.Write`. Everything else is noise at your scale.
+
+→ **Adopted:** Reuse StringBuilder across frames, ANSI color tracking emphasis, single `Console.Write`, avoid `sprintf` in hot path.
+→ **Disagreed with Fleury:** Remove `FocusT`/`ScrollTarget` from initial `PaneState` — add when needed. Dead fields are cognitive load. At 4 panes, the cost of adding a field later is near zero. → **flagged for user decision**
+→ **Noted:** Watch for closure allocations in F# draw functions.
+
+---
+
+### David Heinemeier Hansson (DHH)
+
+*"You're building a developer tool. Let's talk about what matters."*
+
+I'm going to be blunt: I see a plan with six phases, thirty work items, four expert reviews, and code that doesn't exist yet. This is architecture astronautics. You have a TUI that "doesn't work right" and you're writing a layout engine. That's like rewriting Rails because your login page has a CSS bug.
+
+**Conceptual compression.**
+
+The whole point of good software is doing more with less. Your plan has `Cell`, `CellAttrs`, `CellGrid`, `Rect`, `DrawTarget`, `Layout`, `Draw`, `Theme`, `PaneState`, `PaneRenderer`, `Screen`, `AnsiEmitter` — that's twelve new types before you've drawn a single box on screen. Each type is a concept someone has to learn. Each module is a file someone has to navigate. Each abstraction is a decision someone has to understand.
+
+Ask yourself: what's the simplest thing that could work? A function that takes your model and returns a string of ANSI codes. One function. If it gets too long, extract helpers. If the helpers share data, make a record. Let the abstractions emerge from the code, not from a planning document.
+
+**Convention over configuration.**
+
+Your `LayoutConfig` with pane orders and proportions — who is configuring this? You. You're the user. Pick a layout that works and ship it. If users (which is you and your LLM assistant) complain about the layout, change it then. Don't build a configurable layout system for a tool with one user. That's not engineering, that's procrastination.
+
+**Majestic monolith.**
+
+Your TUI rendering should be one file with one responsibility: turn model into terminal output. Not a "rendering engine." Not a "widget library." Not a "layout framework." A render function. If it's 300 lines and does the job, that's better than 12 modules of 30 lines each where you need a treasure map to figure out how a box gets drawn.
+
+**What I'd actually do:**
+
+1. Delete the plan.
+2. Open `TerminalUI.fs`.
+3. Write `renderToString (state: TerminalState) (regions: RenderRegion list) : string`.
+4. Inside it, allocate a `Cell[,]`, draw boxes and text into it, emit ANSI, return the string.
+5. Write three tests: empty state, one pane with text, full layout with all panes.
+6. Wire it into the terminal loop.
+7. It works? Ship it. It's ugly? Refactor the ugly part. It's slow? Profile and fix.
+
+You don't need twelve types to draw four boxes. You need one afternoon and a working terminal.
+
+**The 80/20 rule:** 80% of your TUI's value comes from: (a) it renders without garbling, (b) you can scroll output, (c) you can type in the editor. Those three things. Everything else — configurable layouts, animation interpolants, theme modules, affordance bars — is the 20% that you'll build someday if you ever need it. Ship the 80% first.
+
+**That said:** The game-engine people aren't wrong about the framebuffer approach. `Cell[,]` + full redraw + one `Console.Write` is the right mechanical approach. It's simpler than your old string-concatenation approach. I'm just saying: you don't need a six-phase plan to implement it. You need a weekend.
+
+→ **Adopted:** Start simpler — reduce initial type count. `LayoutConfig` deferred to later phase (start with one hardcoded layout).
+→ **Challenge accepted:** "Twelve types" is the design; implementation can inline some until they prove needed. But the point about shipping the 80% first is valid — Phase 6.1-6.3 before any configurability.
+→ **Disagreed:** "Delete the plan" — TDD requires knowing what you're testing before you write code. The plan IS the test spec. But the plan should be shorter.
+
+---
+
+### ThePrimeagen
+
+*"WAIT. Hold on. Let me get this straight."*
+
+You wrote FOUR expert reviews. Then you wrote a PLAN. And you haven't shipped a SINGLE LINE OF CODE? Bro. BRO. You are the meme. You are the developer who spends three weeks choosing a state management library and then the startup dies.
+
+**Ship. Code. Now.**
+
+I'm going to give you one piece of advice and it's the only piece of advice you need: open a file, write a test, make it pass, repeat. That's it. That's the entire methodology. TDD? Great — then DO the TDD part. The "write a test" part. Not the "write a 400-line planning document about what tests you might write someday" part.
+
+**On the architecture:** Fine. It's fine! `Cell[,]`, full redraw, no diff — yeah, that's correct. You know what else is correct? Just doing it. You could have had the entire CellGrid module written and tested in the time it took to simulate John Carmack reviewing your plan.
+
+**The functional programming is great until it isn't.**
+
+I love F#. I love discriminated unions. I love pipeline operators. You know what I don't love? When functional programmers spend more time making their types beautiful than making their software work. `CellAttrs` as a flags byte? Smart constructor for `Rect`? Sure, those are nice. You know what's nicer? A TUI that doesn't scroll the screen like a 1995 CGI script.
+
+Your user told you the TUI was broken. They said "it's garbled and scrolling." They said "I can't interact with the Editor pane." They said "the server status lies." Those are BUGS. You fix BUGS by writing TESTS for the BUGS and then FIXING them. Not by designing a new rendering engine from scratch.
+
+**Here's what I'd do in the next hour:**
+
+1. Write a test: "rendering a frame produces valid alt-screen output that doesn't scroll."
+2. Make it pass.
+3. Write a test: "editor pane accepts keyboard input and cursor moves."
+4. Make it pass.
+5. Write a test: "server status shows Connected when receiving SSE events."
+6. Make it pass.
+7. Commit. Push. Done.
+
+"But the architecture—" THE ARCHITECTURE IS FINE. Your Elm model works. Your `RenderRegion` types work. Your `PaneId` DU works. The only thing that's broken is the RENDERING. Fix the rendering. You don't need to reinvent the rendering. You need to make `Console.Write` happen once with the right bytes in it.
+
+**On the CellGrid approach specifically:** Yes, use it. It's how every terminal UI that doesn't suck works. ncurses does it. notcurses does it. Ratatui does it. Blessed does it. You know why? Because writing to a cell buffer and then flushing it is the OBVIOUS approach and it WORKS. The only reason your current TUI sucks is because you're concatenating strings and hoping ANSI escape codes line up. Stop doing that. Use a grid.
+
+**The sprintf take is correct.** Carmack is right about `sprintf` being slow in F#. But you know what? PROFILE IT FIRST. Don't pre-optimize. Write the code, run it, if it's slow, THEN profile. If `sprintf` doesn't show up in the profile, leave it. Replacing `sprintf` with `String.Format` everywhere because John Carmack said so is cargo-cult optimization.
+
+**My actual review of the plan:**
+
+The plan is fine. Too long, but fine. Here's the version I'd ship:
+
+Phase 1: `Cell[,]` + `CellGrid` module + `Draw.box` + `Draw.text` + `AnsiEmitter.emitFull` — with tests.
+Phase 2: Pane renderers + `Screen.draw` — with snapshot tests.
+Phase 3: Wire it into the terminal loop. Delete old code.
+Done. Three phases. Everything else is Phase 4: "make it nicer when you feel like it."
+
+The `LayoutConfig`, the animation interpolants, the affordance rendering, the keyboard shortcuts for pane resizing — all of that is Phase Never Until Someone Actually Asks For It.
+
+**Verdict:** Stop planning. Start coding. The plan is good enough. Your next commit should contain F# code, not markdown.
+
+→ **Adopted:** Bias toward action. Collapse phases. Ship the grid + draw + emit first.
+→ **Challenge to Fleury:** `ScrollTarget` and `FocusT` are YAGNI. Carmack agrees. Two against one.
+→ **Challenge to DHH:** "Delete the plan" is too far — TDD needs a target. But "make the plan shorter" is correct.
+→ **Agreed with everyone:** `Cell[,]` + full redraw + single `Console.Write` is the right approach. Just do it.
+
+---
+
+### TUI Review Consensus & Open Tensions
+
+#### Universal Agreement (7/7 reviewers)
+- `Cell[,]` framebuffer with full redraw, no diffing
+- Single `Console.Write` per frame
+- Elm model is the only retained state — no Widget DU
+- `CellGrid.toText()` for snapshot testing is a superpower
+
+#### Strong Agreement (5+/7)
+- Module functions over `Cell[,]`, not a class (Casey, Carmack, DHH, Prime, Ramon)
+- `DrawTarget` to reduce parameter counts (Casey, Mark, Fleury)
+- Named color palette in `Theme` module (Ramon, Mark, Carmack)
+- Update-then-draw separation (Ramon, Casey, Fleury, Mark)
+- Property-based tests for Layout (Mark, Ramon)
+
+#### Tension: YAGNI vs Design-for-Animation
+| Position | Advocates |
+|---|---|
+| Add `FocusT`/`ScrollTarget` now — slots are cheap, architectural change later is expensive | **Ryan Fleury** |
+| Remove dead fields — at 4 panes, adding a field later touches 4 callsites. YAGNI. | **John Carmack**, **ThePrimeagen** |
+| → **Decision needed from user** |
+
+#### Tension: Plan Depth vs Shipping Speed
+| Position | Advocates |
+|---|---|
+| 6 sub-phases, 30 items, full spec before code | Current plan (Mark, Ramon) |
+| 3 phases max. Ship grid+draw+emit, iterate. | **ThePrimeagen**, **DHH** |
+| → **Recommendation:** Start with Phase 6.1-6.3 as the MVP. 6.4-6.6 only if needed. |
+
+#### Tension: Type Count
+| Position | Advocates |
+|---|---|
+| 12 new types, each with clear responsibility | Current plan (Mark, Fleury, Ramon) |
+| Start with fewer types, let abstractions emerge | **DHH**, **ThePrimeagen** |
+| → **Compromise:** Define core types in Phase 6.1, defer `LayoutConfig` and `PaneState` details to Phase 6.5. |
