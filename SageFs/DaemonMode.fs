@@ -201,6 +201,7 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
       // Session stop handler
       (Some (fun (sid: string) -> task {
         let! result = sessionOps.StopSession sid
+        elmRuntime.Dispatch(SageFsMsg.Editor EditorAction.ListSessions)
         return
           match result with
           | Ok msg -> msg
@@ -209,6 +210,8 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
       // Create session handler
       (Some (fun (projects: string list) (workingDir: string) -> task {
         let! result = sessionOps.CreateSession projects workingDir
+        // Refresh Elm model's session list so dashboard SSE pushes update
+        elmRuntime.Dispatch(SageFsMsg.Editor EditorAction.ListSessions)
         return
           match result with
           | Ok msg -> Ok msg

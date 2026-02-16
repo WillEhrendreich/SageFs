@@ -172,12 +172,12 @@ let private renderShell (version: string) =
         .status-ready { background: var(--green); color: var(--bg); }
         .status-warming { background: var(--yellow); color: var(--bg); }
         .status-faulted { background: var(--red); color: white; }
-        .output-line { font-size: 0.85rem; padding: 2px 0; border-bottom: 1px solid var(--border); white-space: pre-wrap; word-break: break-all; }
+        .output-line { font-size: 0.85rem; padding: 1px 0.5rem; white-space: pre-wrap; word-break: break-all; line-height: 1.5; }
         .output-result { color: var(--green); }
         .output-error { color: var(--red); }
         .output-info { color: var(--accent); }
         .output-system { color: #8b949e; }
-        .diag { font-size: 0.85rem; padding: 4px 0; border-bottom: 1px solid var(--border); }
+        .diag { font-size: 0.85rem; padding: 1px 0.5rem; line-height: 1.5; }
         .diag-error { color: var(--red); }
         .diag-warning { color: var(--yellow); }
         .diag-location { font-family: monospace; background: var(--bg-highlight); padding: 1px 4px; border-radius: 3px; font-size: 0.8rem; margin-right: 0.25rem; }
@@ -195,6 +195,7 @@ let private renderShell (version: string) =
         .panel-header-btn:hover { background: var(--border); }
         .output-icon { font-weight: bold; margin-right: 0.25rem; }
         .auto-scroll { scroll-behavior: smooth; }
+        .log-box { background: var(--bg); border: 1px solid var(--border); border-radius: 4px; padding: 0.5rem 0; font-family: 'Cascadia Code', 'Fira Code', monospace; font-size: 0.85rem; }
         .conn-banner { padding: 6px 1rem; text-align: center; font-size: 0.85rem; font-weight: bold; border-radius: 4px; margin-bottom: 1rem; transition: all 0.3s; }
         .conn-connected { background: var(--green); color: var(--bg); }
         .conn-disconnected { background: var(--red); color: white; animation: pulse 1.5s infinite; }
@@ -283,7 +284,7 @@ let private renderShell (version: string) =
           ]
           Elem.div
             [ Attr.id "output-panel"
-              Attr.class' "auto-scroll"
+              Attr.class' "auto-scroll log-box"
               Attr.style "max-height: 400px; overflow-y: auto;" ]
             [ Text.raw "No output yet" ]
         ]
@@ -298,7 +299,7 @@ let private renderShell (version: string) =
         ]
         Elem.div [ Attr.class' "panel" ] [
           Elem.h2 [] [ Text.raw "Diagnostics" ]
-          Elem.div [ Attr.id "diagnostics-panel"; Attr.style "max-height: 300px; overflow-y: auto;" ] [
+          Elem.div [ Attr.id "diagnostics-panel"; Attr.class' "log-box"; Attr.style "max-height: 300px; overflow-y: auto;" ] [
             Text.raw "No diagnostics"
           ]
         ]
@@ -400,9 +401,9 @@ let renderEvalStats (stats: EvalStatsView) =
 
 /// Render output lines as an HTML fragment.
 let renderOutput (lines: OutputLine list) =
-  Elem.div [ Attr.id "output-panel" ] [
+  Elem.div [ Attr.id "output-panel"; Attr.class' "auto-scroll log-box" ] [
     if lines.IsEmpty then
-      Text.raw "No output yet"
+      Elem.span [ Attr.class' "meta" ] [ Text.raw "No output yet" ]
     else
       yield! lines |> List.map (fun line ->
         let css = OutputLineKind.toCssClass line.Kind
@@ -422,9 +423,9 @@ let renderOutput (lines: OutputLine list) =
 
 /// Render diagnostics as an HTML fragment.
 let renderDiagnostics (diags: Diagnostic list) =
-  Elem.div [ Attr.id "diagnostics-panel" ] [
+  Elem.div [ Attr.id "diagnostics-panel"; Attr.class' "log-box" ] [
     if diags.IsEmpty then
-      Text.raw "No diagnostics"
+      Elem.span [ Attr.class' "meta" ] [ Text.raw "No diagnostics" ]
     else
       yield! diags |> List.map (fun diag ->
         let cls = DiagSeverity.toCssClass diag.Severity
