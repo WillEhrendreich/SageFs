@@ -65,6 +65,9 @@ module RaylibMode =
       | KeyboardKey.J when ctrl -> Some (FocusDir Direction.Down)
       | KeyboardKey.K when ctrl -> Some (FocusDir Direction.Up)
       | KeyboardKey.L when ctrl -> Some (FocusDir Direction.Right)
+      // Session management
+      | KeyboardKey.N when ctrl -> Some (Action (EditorAction.CreateSession []))
+      | KeyboardKey.S when ctrl && alt -> Some (Action EditorAction.ToggleSessionPanel)
       // Scroll
       | KeyboardKey.PageUp -> Some ScrollUp
       | KeyboardKey.PageDown -> Some ScrollDown
@@ -108,18 +111,11 @@ module RaylibMode =
     if ch > 0 then Some (EditorAction.InsertChar (char ch))
     else None
 
-  /// Compute pane layout rects for the given grid dimensions (reserves 1 row for status bar).
+  /// Compute pane layout rects for the given grid dimensions.
   let private computePaneRects (rows: int) (cols: int) : (PaneId * Rect) list =
-    let contentArea = Rect.create 0 0 cols (rows - 1)
-    let left, right = Rect.splitVProp 0.65 contentArea
-    let outputRect, editorRect = Rect.splitH (left.Height - 6) left
-    let sessRect, diagRect = Rect.splitHProp 0.5 right
-    [ PaneId.Output, outputRect
-      PaneId.Editor, editorRect
-      PaneId.Sessions, sessRect
-      PaneId.Diagnostics, diagRect ]
+    Screen.computeLayout rows cols |> fst
 
-  /// Render regions into the CellGrid using the same layout as TUI
+  /// Render regions into the CellGrid using shared Screen module
   let private renderRegions
     (grid: Cell[,])
     (regions: RenderRegion list)
@@ -129,53 +125,9 @@ module RaylibMode =
     (scrollOffsets: Map<PaneId, int>)
     (fontSize: int) =
 
-    let rows = CellGrid.rows grid
-    let cols = CellGrid.cols grid
-
-    CellGrid.clear grid
-    let dt = DrawTarget.create grid (Rect.create 0 0 cols rows)
-    Draw.fill dt Theme.bgPanel
-
-    // Reserve last row for status bar
-    let contentArea = Rect.create 0 0 cols (rows - 1)
-
-    // Same 4-pane layout as TUI
-    let left, right = Rect.splitVProp 0.65 contentArea
-    let outputRect, editorRect = Rect.splitH (left.Height - 6) left
-    let sessRect, diagRect = Rect.splitHProp 0.5 right
-
-    let borderFor paneId =
-      if paneId = focusedPane then Theme.borderFocus else Theme.borderNormal
-
-    let oInner = Draw.box (DrawTarget.create grid outputRect) "Output" (borderFor PaneId.Output) Theme.bgPanel
-    let eInner = Draw.box (DrawTarget.create grid editorRect) "Editor" (borderFor PaneId.Editor) Theme.bgEditor
-    let sInner = Draw.box (DrawTarget.create grid sessRect) "Sessions" (borderFor PaneId.Sessions) Theme.bgPanel
-    let dInner = Draw.box (DrawTarget.create grid diagRect) "Diagnostics" (borderFor PaneId.Diagnostics) Theme.bgPanel
-
-    let findRegion id = regions |> List.tryFind (fun r -> r.Id = id)
-
-    let renderContent (target: DrawTarget) (paneId: PaneId) =
-      let regionId = PaneId.toRegionId paneId
-      match findRegion regionId with
-      | Some region ->
-        let lines = region.Content.Split('\n')
-        let offset = scrollOffsets |> Map.tryFind paneId |> Option.defaultValue 0
-        let visibleLines = lines |> Array.skip (min offset (max 0 (lines.Length - 1))) |> Array.truncate target.Clip.Height
-        let fg = if paneId = PaneId.Editor then Theme.fgDefault else Theme.fgDefault
-        let bg = if paneId = PaneId.Editor then Theme.bgEditor else Theme.bgPanel
-        visibleLines |> Array.iteri (fun row line ->
-          Draw.text target row 0 fg bg CellAttrs.None line)
-      | None -> ()
-
-    renderContent oInner PaneId.Output
-    renderContent eInner PaneId.Editor
-    renderContent sInner PaneId.Sessions
-    renderContent dInner PaneId.Diagnostics
-
-    // Status bar
     let statusLeft = sprintf " %s | evals: %d | %s" sessionState evalCount (PaneId.displayName focusedPane)
     let statusRight = sprintf " %dpt | Ctrl+/- font | Ctrl+Q quit | Tab focus " fontSize
-    Draw.statusBar dt statusLeft statusRight Theme.fgDefault Theme.bgStatus
+    Screen.draw grid regions focusedPane scrollOffsets statusLeft statusRight |> ignore
 
   /// Run the Raylib GUI window connected to daemon.
   let run () =
@@ -302,6 +254,21 @@ module RaylibMode =
         | action ->
           DaemonClient.dispatch client baseUrl action |> fun t -> t.Wait()
         charAction <- getCharInput ()
+
+      // Handle mouse click → focus pane
+      if mousePressed MouseButton.Left then
+        let mp = mousePos ()
+        let clickCol = int mp.X / cellW
+        let clickRow = int mp.Y / cellH
+        let paneRects = computePaneRects gridRows gridCols
+        let clicked =
+          paneRects
+          |> List.tryFind (fun (_, r) ->
+            clickRow >= r.Row && clickRow < r.Row + r.Height &&
+            clickCol >= r.Col && clickCol < r.Col + r.Width)
+        match clicked with
+        | Some (id, _) -> focusedPane <- id
+        | None -> ()
 
       if running then
         // Render

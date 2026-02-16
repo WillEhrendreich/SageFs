@@ -28,3 +28,6 @@ module Rl =
 
   let inline windowShouldClose () : bool = Raylib.WindowShouldClose()
   let inline windowReady () : bool = Raylib.IsWindowReady()
+  let inline mousePressed (btn: MouseButton) : bool =
+    CBool.op_Implicit(Raylib.IsMouseButtonPressed(btn))
+  let inline mousePos () = Raylib.GetMousePosition()
