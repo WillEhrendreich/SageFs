@@ -7,4 +7,5 @@
   <Project Path="SageFs.Core/SageFs.Core.fsproj" />
   <Project Path="SageFs/SageFs.fsproj" />
   <Project Path="SageFs.Tests/SageFs.Tests.fsproj" />
+  <Project Path="SageFs.Gui/SageFs.Gui.fsproj" />
 </Solution>

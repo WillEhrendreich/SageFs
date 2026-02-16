@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <OutputType>Exe</OutputType>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <Compile Include="RaylibPalette.fs" />
+        <Compile Include="RaylibEmitter.fs" />
+        <Compile Include="RaylibMode.fs" />
+        <Compile Include="Program.fs" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <PackageReference Include="Raylib-cs" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="..\SageFs.Core\SageFs.Core.fsproj" />
+    </ItemGroup>
+
+</Project>
