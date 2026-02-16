@@ -161,13 +161,23 @@ let renderShell (version: string) =
       """ ]
       Ds.cdnScript
       Elem.style [] [ Text.raw """
-        :root { --bg: #0d1117; --fg: #c9d1d9; --fg-dim: #8b949e; --accent: #58a6ff; --green: #3fb950; --red: #f85149; --border: #30363d; --surface: #161b22; --bg-highlight: #21262d; --yellow: #d29922; --font-size: 14px; }
+        :root { --bg: #0d1117; --fg: #c9d1d9; --fg-dim: #8b949e; --accent: #58a6ff; --green: #3fb950; --red: #f85149; --border: #30363d; --surface: #161b22; --bg-highlight: #21262d; --yellow: #d29922; --font-size: 14px; --sidebar-width: 320px; }
         * { box-sizing: border-box; margin: 0; padding: 0; }
-        body { font-family: 'Cascadia Code', 'Fira Code', monospace; background: var(--bg); color: var(--fg); padding: 1rem; font-size: var(--font-size); }
-        h1 { color: var(--accent); margin-bottom: 1rem; font-size: 1.4rem; }
-        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
-        .panel { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1rem; }
-        .panel h2 { color: var(--accent); font-size: 1rem; margin-bottom: 0.5rem; border-bottom: 1px solid var(--border); padding-bottom: 0.5rem; display: flex; justify-content: space-between; align-items: center; }
+        body { font-family: 'Cascadia Code', 'Fira Code', monospace; background: var(--bg); color: var(--fg); font-size: var(--font-size); height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+        h1 { color: var(--accent); font-size: 1.4rem; }
+        .app-header { display: flex; align-items: center; justify-content: space-between; padding: 0.5rem 1rem; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+        .app-layout { display: flex; flex: 1; overflow: hidden; }
+        .main-area { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-width: 0; }
+        .sidebar { width: var(--sidebar-width); border-left: 1px solid var(--border); background: var(--surface); overflow-y: auto; flex-shrink: 0; transition: width 0.2s, padding 0.2s; }
+        .sidebar.collapsed { width: 0; padding: 0; overflow: hidden; border-left: none; }
+        .sidebar-inner { padding: 0.75rem; display: flex; flex-direction: column; gap: 0.75rem; min-width: var(--sidebar-width); }
+        .panel { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 0.75rem; }
+        .panel h2 { color: var(--accent); font-size: 0.9rem; margin-bottom: 0.5rem; border-bottom: 1px solid var(--border); padding-bottom: 0.5rem; display: flex; justify-content: space-between; align-items: center; }
+        .output-area { flex: 1; display: flex; flex-direction: column; overflow: hidden; border-bottom: 1px solid var(--border); }
+        .output-header { display: flex; align-items: center; justify-content: space-between; padding: 0.5rem 1rem; flex-shrink: 0; }
+        .output-header h2 { color: var(--accent); font-size: 1rem; margin: 0; }
+        #output-panel { flex: 1; overflow-y: auto; scroll-behavior: smooth; background: var(--bg); font-family: 'Cascadia Code', 'Fira Code', monospace; font-size: 0.85rem; padding: 0.25rem 0; }
+        .eval-area { flex-shrink: 0; padding: 0.75rem 1rem; }
         .status { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.8rem; font-weight: bold; }
         .status-ready { background: var(--green); color: var(--bg); }
         .status-warming { background: var(--yellow); color: var(--bg); }
@@ -190,159 +200,168 @@ let renderShell (version: string) =
         .session-btn { background: var(--border); color: var(--fg); border: none; border-radius: 4px; padding: 2px 8px; cursor: pointer; font-size: 0.8rem; transition: background 0.15s; }
         .session-btn:hover { background: var(--accent); color: var(--bg); }
         .session-btn-danger:hover { background: var(--red); color: white; }
-        .full-width { grid-column: 1 / -1; }
         .panel-header-btn { background: none; border: 1px solid var(--border); color: var(--fg); border-radius: 4px; padding: 1px 8px; cursor: pointer; font-size: 0.75rem; font-family: inherit; }
         .panel-header-btn:hover { background: var(--border); }
         .output-icon { font-weight: bold; margin-right: 0.25rem; }
-        .auto-scroll { scroll-behavior: smooth; }
         .log-box { background: var(--bg); border: 1px solid var(--border); border-radius: 4px; padding: 0.5rem 0; font-family: 'Cascadia Code', 'Fira Code', monospace; font-size: 0.85rem; }
-        .conn-banner { padding: 6px 1rem; text-align: center; font-size: 0.85rem; font-weight: bold; border-radius: 4px; margin-bottom: 1rem; transition: all 0.3s; }
+        .conn-banner { padding: 4px 1rem; text-align: center; font-size: 0.8rem; font-weight: bold; border-radius: 0; transition: all 0.3s; flex-shrink: 0; }
         .conn-connected { background: var(--green); color: var(--bg); }
         .conn-disconnected { background: var(--red); color: white; animation: pulse 1.5s infinite; }
         .conn-reconnecting { background: var(--yellow); color: var(--bg); }
         @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.6; } }
         .eval-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        .sidebar-toggle { background: none; border: 1px solid var(--border); color: var(--fg); border-radius: 4px; padding: 2px 8px; cursor: pointer; font-size: 0.85rem; font-family: inherit; }
+        .sidebar-toggle:hover { background: var(--border); }
         @media (max-width: 768px) {
-          .grid { grid-template-columns: 1fr; }
-          body { padding: 0.5rem; }
-          h1 { font-size: 1.1rem; }
+          .sidebar { position: fixed; right: 0; top: 0; bottom: 0; z-index: 10; }
+          .sidebar.collapsed { width: 0; }
         }
       """ ]
     ]
     Elem.body [ Ds.safariStreamingFix ] [
       // Dedicated init element that connects to SSE stream (per Falco.Datastar pattern)
-      Elem.div [ Ds.onInit (Ds.get "/dashboard/stream") ] []
-      // Connection status banner — managed by client-side health polling
+      Elem.div [ Ds.onInit (Ds.get "/dashboard/stream"); Ds.signal ("helpVisible", "false"); Ds.signal ("sidebarOpen", "true") ] []
+      // Connection status banner
       Elem.div [ Attr.id "server-status"; Attr.class' "conn-banner conn-disconnected" ] [
         Text.raw "⏳ Connecting to server..."
       ]
-      Elem.h1 [] [ Text.raw (sprintf "🧙 SageFs Dashboard v%s" version) ]
-      Elem.div [ Attr.class' "grid" ] [
-        // Row 3: Output (full width)
-        Elem.div [ Attr.id "output-section"; Attr.class' "panel full-width" ] [
-          Elem.h2 [] [
-            Text.raw "Output"
-            Elem.button
-              [ Attr.class' "panel-header-btn"
-                Ds.onClick (Ds.post "/dashboard/clear-output") ]
-              [ Text.raw "Clear" ]
-          ]
-          Elem.div
-            [ Attr.id "output-panel"
-              Attr.class' "auto-scroll log-box"
-              Attr.style "max-height: 400px; overflow-y: auto;" ]
-            [ Text.raw "No output yet" ]
-        ]
-        Elem.div [ Attr.id "evaluate-section"; Attr.class' "panel full-width" ] [
-          Elem.h2 [] [
-            Text.raw "Evaluate"
-            Elem.button
-              [ Attr.class' "panel-header-btn"
-                Attr.create "data-on:click" "var h=document.getElementById('keyboard-help-wrapper'); h.style.display = h.style.display === 'none' ? 'block' : 'none'" ]
-              [ Text.raw "⌨ Help" ]
-          ]
-          Elem.div [ Attr.id "keyboard-help-wrapper"; Attr.style "display: none;" ] [
-            renderKeyboardHelp ()
-          ]
-          Elem.textarea
-            [ Attr.class' "eval-input"
-              Ds.bind "code"
-              Attr.create "placeholder" "Enter F# code... (Ctrl+Enter to eval)"
-              Attr.create "data-on:keydown" """
-                if(event.ctrlKey && event.key === 'Enter') { event.preventDefault(); @post('/dashboard/eval') }
-                if(event.ctrlKey && event.key === 'l') { event.preventDefault(); @post('/dashboard/clear-output') }
-                if(event.key === 'Tab') { event.preventDefault(); var s=this.selectionStart; var e=this.selectionEnd; this.value=this.value.substring(0,s)+'  '+this.value.substring(e); this.selectionStart=this.selectionEnd=s+2; this.dispatchEvent(new Event('input')) }
-              """
-              Attr.create "spellcheck" "false" ]
-            []
-          Elem.div [ Attr.style "display: flex; gap: 0.5rem; margin-top: 0.5rem; align-items: center;" ] [
-            Elem.button
-              [ Attr.class' "eval-btn"
-                Ds.indicator "evalLoading"
-                Ds.attr' ("disabled", "$evalLoading")
-                Ds.onClick (Ds.post "/dashboard/eval") ]
-              [ Elem.span [ Ds.show "$evalLoading" ] [ Text.raw "⏳ " ]
-                Elem.span [ Ds.show "!$evalLoading" ] [ Text.raw "▶ " ]
-                Text.raw "Eval" ]
-            Elem.button
-              [ Attr.class' "eval-btn"
-                Attr.style "background: var(--green);"
-                Ds.onClick (Ds.post "/dashboard/reset") ]
-              [ Text.raw "↻ Reset" ]
-            Elem.button
-              [ Attr.class' "eval-btn"
-                Attr.style "background: var(--red);"
-                Ds.onClick (Ds.post "/dashboard/hard-reset") ]
-              [ Text.raw "⟳ Hard Reset" ]
-          ]
-          Elem.div [ Attr.class' "meta"; Attr.style "margin-top: 0.25rem; font-size: 0.75rem;" ] [
-            Elem.span [ Ds.text """$code ? ($code.split('\\n').length + ' lines, ' + $code.length + ' chars') : '0 lines'""" ] []
-          ]
-          Elem.div [ Attr.id "eval-result" ] []
-        ]
-        // Sessions + Diagnostics
-        Elem.div [ Attr.class' "panel" ] [
-          Elem.h2 [] [ Text.raw "Sessions" ]
-          Elem.div [ Attr.id "session-status"; Attr.style "margin-bottom: 0.5rem; padding-bottom: 0.5rem; border-bottom: 1px solid var(--border);" ] [
+      // App header
+      Elem.div [ Attr.class' "app-header" ] [
+        Elem.h1 [] [ Text.raw (sprintf "🧙 SageFs v%s" version) ]
+        Elem.div [ Attr.style "display: flex; align-items: center; gap: 0.75rem;" ] [
+          Elem.div [ Attr.id "session-status"; Attr.style "display: flex; align-items: center; gap: 0.5rem;" ] [
             Text.raw "Connecting..."
           ]
-          Elem.div [ Attr.id "connection-counts"; Attr.class' "meta"; Attr.style "font-size: 0.75rem; margin-bottom: 0.5rem;" ] []
-          Elem.div [ Attr.id "sessions-panel"; Attr.style "max-height: 300px; overflow-y: auto;" ] []
-        ]
-        Elem.div [ Attr.class' "panel" ] [
-          Elem.h2 [] [ Text.raw "Diagnostics" ]
-          Elem.div [ Attr.id "diagnostics-panel"; Attr.class' "log-box"; Attr.style "max-height: 300px; overflow-y: auto;" ] [
-            Text.raw "No diagnostics"
-          ]
-        ]
-        // Create Session (full width)
-        Elem.div [ Attr.class' "panel full-width" ] [
-          Elem.h2 [] [ Text.raw "Create Session" ]
-          Elem.div [ Attr.style "display: flex; gap: 0.5rem; align-items: flex-end;" ] [
-            Elem.div [ Attr.style "flex: 1;" ] [
-              Elem.label [ Attr.class' "meta"; Attr.style "display: block; margin-bottom: 4px;" ] [
-                Text.raw "Working Directory"
-              ]
-              Elem.input
-                [ Attr.class' "eval-input"
-                  Attr.style "min-height: auto; height: 2rem;"
-                  Ds.bind "newSessionDir"
-                  Attr.create "placeholder" @"C:\path\to\project" ]
-            ]
-            Elem.button
-              [ Attr.class' "eval-btn"
-                Attr.style "height: 2rem; padding: 0 1rem;"
-                Ds.onClick (Ds.post "/dashboard/discover-projects") ]
-              [ Text.raw "🔍 Discover" ]
-          ]
-          Elem.div [ Attr.id "discovered-projects" ] []
-          Elem.div [ Attr.style "margin-top: 0.5rem;" ] [
-            Elem.label [ Attr.class' "meta"; Attr.style "display: block; margin-bottom: 4px;" ] [
-              Text.raw "Or enter project paths (comma-separated)"
-            ]
-            Elem.input
-              [ Attr.class' "eval-input"
-                Attr.style "min-height: auto; height: 2rem;"
-                Ds.bind "manualProjects"
-                Attr.create "placeholder" "MyProject.fsproj, OtherProject.fsproj" ]
-          ]
+          Elem.div [ Attr.id "eval-stats"; Attr.class' "meta" ] []
           Elem.button
-            [ Attr.class' "eval-btn"
-              Attr.style "margin-top: 0.5rem;"
-              Ds.onClick (Ds.post "/dashboard/session/create") ]
-            [ Text.raw "➕ Create Session" ]
+            [ Attr.class' "sidebar-toggle"
+              Ds.onEvent ("click", "$sidebarOpen = !$sidebarOpen") ]
+            [ Text.raw "☰ Panel" ]
         ]
       ]
-
-      Elem.div [ Attr.class' "panel" ] [
-        Elem.h2 [] [ Text.raw "Eval Stats" ]
-        Elem.div [ Attr.id "eval-stats" ] [
-          Text.raw "Waiting for data..."
+      // Main app layout: output+eval on left, sidebar on right
+      Elem.div [ Attr.class' "app-layout" ] [
+        // Main content area
+        Elem.div [ Attr.class' "main-area" ] [
+          // Output area — fills available space above eval
+          Elem.div [ Attr.class' "output-area" ] [
+            Elem.div [ Attr.class' "output-header" ] [
+              Elem.h2 [] [ Text.raw "Output" ]
+              Elem.button
+                [ Attr.class' "panel-header-btn"
+                  Ds.onClick (Ds.post "/dashboard/clear-output") ]
+                [ Text.raw "Clear" ]
+            ]
+            Elem.div [ Attr.id "output-panel" ] [
+              Elem.span [ Attr.class' "meta"; Attr.style "padding: 0.5rem;" ] [ Text.raw "No output yet" ]
+            ]
+          ]
+          // Eval area — fixed at bottom
+          Elem.div [ Attr.class' "eval-area" ] [
+            Elem.div [ Attr.style "display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.25rem;" ] [
+              Elem.span [ Attr.style "color: var(--accent); font-weight: bold; font-size: 0.9rem;" ] [ Text.raw "Evaluate" ]
+              Elem.div [ Attr.style "display: flex; align-items: center; gap: 0.5rem;" ] [
+                Elem.span [ Attr.class' "meta"; Attr.style "font-size: 0.75rem;" ] [
+                  Elem.span [ Ds.text """$code ? ($code.split('\\n').length + 'L ' + $code.length + 'c') : ''""" ] []
+                ]
+                Elem.button
+                  [ Attr.class' "panel-header-btn"
+                    Ds.onEvent ("click", "$helpVisible = !$helpVisible") ]
+                  [ Text.raw "⌨" ]
+              ]
+            ]
+            Elem.div [ Attr.id "keyboard-help-wrapper"; Ds.show "$helpVisible" ] [
+              renderKeyboardHelp ()
+            ]
+            Elem.textarea
+              [ Attr.class' "eval-input"
+                Ds.bind "code"
+                Attr.create "placeholder" "Enter F# code... (Ctrl+Enter to eval)"
+                Ds.onEvent ("keydown", "if(event.ctrlKey && event.key === 'Enter') { event.preventDefault(); @post('/dashboard/eval') } if(event.ctrlKey && event.key === 'l') { event.preventDefault(); @post('/dashboard/clear-output') } if(event.key === 'Tab') { event.preventDefault(); var s=this.selectionStart; var e=this.selectionEnd; this.value=this.value.substring(0,s)+'  '+this.value.substring(e); this.selectionStart=this.selectionEnd=s+2; this.dispatchEvent(new Event('input')) }")
+                Attr.create "spellcheck" "false" ]
+              []
+            Elem.div [ Attr.style "display: flex; gap: 0.5rem; margin-top: 0.5rem; align-items: center;" ] [
+              Elem.button
+                [ Attr.class' "eval-btn"
+                  Ds.indicator "evalLoading"
+                  Ds.attr' ("disabled", "$evalLoading")
+                  Ds.onClick (Ds.post "/dashboard/eval") ]
+                [ Elem.span [ Ds.show "$evalLoading" ] [ Text.raw "⏳ " ]
+                  Elem.span [ Ds.show "!$evalLoading" ] [ Text.raw "▶ " ]
+                  Text.raw "Eval" ]
+              Elem.button
+                [ Attr.class' "eval-btn"
+                  Attr.style "background: var(--green);"
+                  Ds.onClick (Ds.post "/dashboard/reset") ]
+                [ Text.raw "↻ Reset" ]
+              Elem.button
+                [ Attr.class' "eval-btn"
+                  Attr.style "background: var(--red);"
+                  Ds.onClick (Ds.post "/dashboard/hard-reset") ]
+                [ Text.raw "⟳ Hard Reset" ]
+            ]
+            Elem.div [ Attr.id "eval-result" ] []
+          ]
+        ]
+        // Sidebar — sessions, diagnostics, create session
+        Elem.div [ Attr.id "sidebar"; Attr.class' "sidebar"; Ds.class' ("collapsed", "!$sidebarOpen") ] [
+          Elem.div [ Attr.class' "sidebar-inner" ] [
+            // Sessions
+            Elem.div [ Attr.class' "panel" ] [
+              Elem.h2 [] [ Text.raw "Sessions" ]
+              Elem.div [ Attr.id "connection-counts"; Attr.class' "meta"; Attr.style "font-size: 0.75rem; margin-bottom: 0.5rem;" ] []
+              Elem.div [ Attr.id "sessions-panel"; Attr.style "max-height: 250px; overflow-y: auto;" ] []
+            ]
+            // Diagnostics
+            Elem.div [ Attr.class' "panel" ] [
+              Elem.h2 [] [ Text.raw "Diagnostics" ]
+              Elem.div [ Attr.id "diagnostics-panel"; Attr.class' "log-box"; Attr.style "max-height: 200px; overflow-y: auto;" ] [
+                Text.raw "No diagnostics"
+              ]
+            ]
+            // Create Session
+            Elem.div [ Attr.class' "panel" ] [
+              Elem.h2 [] [ Text.raw "New Session" ]
+              Elem.div [] [
+                Elem.label [ Attr.class' "meta"; Attr.style "display: block; margin-bottom: 4px;" ] [
+                  Text.raw "Working Directory"
+                ]
+                Elem.input
+                  [ Attr.class' "eval-input"
+                    Attr.style "min-height: auto; height: 2rem;"
+                    Ds.bind "newSessionDir"
+                    Attr.create "placeholder" @"C:\path\to\project" ]
+              ]
+              Elem.div [ Attr.style "display: flex; gap: 4px; margin-top: 0.5rem;" ] [
+                Elem.button
+                  [ Attr.class' "eval-btn"
+                    Attr.style "flex: 1; height: 2rem; padding: 0 0.5rem; font-size: 0.8rem;"
+                    Ds.onClick (Ds.post "/dashboard/discover-projects") ]
+                  [ Text.raw "🔍 Discover" ]
+              ]
+              Elem.div [ Attr.id "discovered-projects" ] []
+              Elem.div [ Attr.style "margin-top: 0.5rem;" ] [
+                Elem.label [ Attr.class' "meta"; Attr.style "display: block; margin-bottom: 4px;" ] [
+                  Text.raw "Projects (comma-sep)"
+                ]
+                Elem.input
+                  [ Attr.class' "eval-input"
+                    Attr.style "min-height: auto; height: 2rem;"
+                    Ds.bind "manualProjects"
+                    Attr.create "placeholder" "MyProject.fsproj" ]
+              ]
+              Elem.button
+                [ Attr.class' "eval-btn"
+                  Attr.style "margin-top: 0.5rem; width: 100%; font-size: 0.8rem;"
+                  Ds.onClick (Ds.post "/dashboard/session/create") ]
+                [ Text.raw "➕ Create" ]
+            ]
+          ]
         ]
       ]
-      // Auto-scroll output panel when new content arrives
+      // Auto-scroll output panel to bottom when new content arrives
       Elem.script [] [ Text.raw """
-        new MutationObserver(function(mutations) {
+        new MutationObserver(function() {
           var panel = document.getElementById('output-panel');
           if (panel) panel.scrollTop = panel.scrollHeight;
         }).observe(document.getElementById('output-panel') || document.body, { childList: true, subtree: true });
@@ -378,29 +397,13 @@ let renderSessionStatus (sessionState: string) (sessionId: string) (projectCount
 
 /// Render eval stats as an HTML fragment.
 let renderEvalStats (stats: EvalStatsView) =
-  Elem.div [ Attr.id "eval-stats" ] [
-    Elem.div [ Attr.style "display: flex; gap: 1rem; align-items: baseline;" ] [
-      Elem.span [ Attr.style "font-size: 1.5rem; font-weight: bold; color: var(--accent);" ] [
-        Text.raw (sprintf "%d" stats.Count)
-      ]
-      Elem.span [ Attr.class' "meta" ] [ Text.raw "evals" ]
-    ]
-    Elem.div [ Attr.style "display: flex; gap: 1rem; margin-top: 0.25rem;" ] [
-      Elem.span [ Attr.class' "meta" ] [
-        Text.raw (sprintf "avg %.0fms" stats.AvgMs)
-      ]
-      Elem.span [ Attr.class' "meta" ] [
-        Text.raw (sprintf "min %.0fms" stats.MinMs)
-      ]
-      Elem.span [ Attr.class' "meta" ] [
-        Text.raw (sprintf "max %.0fms" stats.MaxMs)
-      ]
-    ]
+  Elem.div [ Attr.id "eval-stats"; Attr.class' "meta" ] [
+    Text.raw (sprintf "%d evals · avg %.0fms · min %.0fms · max %.0fms" stats.Count stats.AvgMs stats.MinMs stats.MaxMs)
   ]
 
 /// Render output lines as an HTML fragment.
 let renderOutput (lines: OutputLine list) =
-  Elem.div [ Attr.id "output-panel"; Attr.class' "auto-scroll log-box" ] [
+  Elem.div [ Attr.id "output-panel" ] [
     if lines.IsEmpty then
       Elem.span [ Attr.class' "meta" ] [ Text.raw "No output yet" ]
     else
@@ -768,7 +771,9 @@ let createSessionActionHandler
 let createClearOutputHandler : HttpHandler =
   fun ctx -> task {
     Response.sseStartResponse ctx |> ignore
-    let emptyOutput = Elem.div [ Attr.id "output-panel" ] [ Text.raw "No output yet" ]
+    let emptyOutput = Elem.div [ Attr.id "output-panel" ] [
+      Elem.span [ Attr.class' "meta"; Attr.style "padding: 0.5rem;" ] [ Text.raw "No output yet" ]
+    ]
     do! ssePatchNode ctx emptyOutput
   }
 
