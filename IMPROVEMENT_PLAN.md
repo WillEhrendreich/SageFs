@@ -863,14 +863,9 @@ Computing `EnvironmentFingerprint` is cheap:
 
 | Feature | Upstream | This Fork |
 |---------|----------|-----------|
-| **SageFs.Daemon** (JSON-RPC server) | TCP socket daemon via StreamJsonRpc; 3 methods: `eval`, `autocomplete`, `diagnostics` | MCP/HTTP but no JSON-RPC daemon |
 | **VSCode Extension** (sagefs-vscode) | Published on Open VSX. Notebook + REPL modes, inline diagnostics, autocomplete, hot reload toggle per cell, `.SageFsb` file format | Only a settings.json patcher script |
-| **`GetDiagnostics` Command** | Actor handles `GetDiagnostics(text, reply)` — type-checks without evaluating | Diagnostics only captured as side effect of eval |
 | **Notebook format** (`.SageFsb`) | Custom notebook serializer, cell-level execution, saveable outputs, metadata per cell | None |
-| **Cancellation via `thread.Interrupt()`** | `token.Register(fun () -> thread.Interrupt())` interrupts stuck FSI evals | We pass `CancellationToken.None` everywhere |
 | **stdout/stderr capture middleware** | `captureStdioMiddleware` redirects Console.Out/Error per eval, returns in `metadata.stdout`/`metadata.stderr` | TextWriterRecorder captures FSI output but misses arbitrary `printfn` |
-| **Separate daemon config** (`daemon.fsx`) | Separate config for daemon mode | Single config file |
-| **`--daemon port addr` flag** | Embeds daemon mode in CLI | Not available |
 | **"Send to REPL" / "Send to Notebook"** | `Ctrl+\` sends selection from any `.fs` file to SageFs REPL | Not available |
 | **Hot reload per-cell toggle** | Each notebook cell can eval with or without hot reload via cell metadata | Hot reload is global |
 
@@ -878,25 +873,29 @@ Computing `EnvironmentFingerprint` is cheap:
 
 | Feature | This Fork | Upstream |
 |---------|-----------|----------|
-| **MCP server + 8 AI tools** | SSE/HTTP MCP protocol, ServerInstructions, structured code-first responses | No AI agent integration |
+| **MCP server + 17 AI tools** | SSE/HTTP MCP protocol, ServerInstructions, affordance-driven state machine, structured responses | No AI agent integration |
+| **Daemon-first architecture** | Headless daemon with watchdog, sub-process sessions, Erlang-style supervisor | Single-process only |
+| **Dual-renderer TUI/GUI** | Shared Cell[,] grid → ANSI terminal + Raylib GPU window | No TUI/GUI |
+| **Elm Architecture core** | Custom Elm loop, SageFsMsg/SageFsModel/SageFsUpdate, immediate-mode rendering | No reactive UI |
+| **Live dashboard** | Falco + Datastar SSE dashboard with real-time session status, eval, diagnostics | No web UI |
 | **Shadow-copy assemblies** | DLL lock prevention for loaded project assemblies | Assemblies locked during use |
 | **Iterative warm-up with retry** | `openWithRetry` resolves cross-dependencies across rounds | No warm-up namespace resolution |
 | **RequireQualifiedAccess tolerance** | `isBenignOpenError` skips gracefully | Would fail on these modules |
+| **File watching & incremental reload** | `#load` reload ~100ms on .fs/.fsx changes | No file watching |
+| **DDD type safety** | SageFsError, SessionMode, CompletionKind, SessionStatus, DiagnosticSeverity DUs | String-based errors |
 | **Console echo for MCP submissions** | All agent code visible in terminal with preserved indentation | N/A (no MCP) |
-| **Code-first response format** | Always shows submitted code before result | N/A |
 | **Snapshot-tested output formats** | Verify snapshots lock in formatting | No snapshot tests |
 | **Aspire detection + DCP path config** | Auto-detects Aspire projects | Not available |
-| **`hard_reset_fsi_session`** | Full reset with optional rebuild | Not available |
-| **Event tracking** | Timestamped eval history | Not available |
-| **OpenTelemetry integration** | OTLP export, structured logging | Not available |
+| **Event sourcing (Marten)** | Persistent event stream with PostgreSQL, Testcontainers | No event persistence |
+| **442+ tests** | Property-based, snapshot, integration, ElmLoop resilience, Watchdog, FileWatcher, Editor, Session | Minimal tests |
 
 ### Key Learnings from Upstream
 
-1. **The Daemon architecture is the right foundation for IDE integration.** The JSON-RPC daemon provides typed eval/autocomplete/diagnostics methods that the VSCode extension calls directly. Our MCP protocol is better for AI agents but the VSCode extension needs typed data — we need BOTH protocols or a typed MCP layer.
+1. **The Daemon architecture is the right foundation for IDE integration.** We now run daemon-first with watchdog supervision and sub-process sessions. The MCP protocol serves AI agents; future VSCode/Neovim extensions can use the same HTTP API.
 
-2. **`GetDiagnostics` is trivially adoptable.** The function already exists in our `Features/Diagnostics.fs` (`getDiagnostics`). We just need a Command variant in the actor and an MCP tool wrapper.
+2. **`GetDiagnostics` is implemented.** The `check_fsharp_code` MCP tool type-checks code without executing it — adopted from the upstream pattern.
 
-3. **Cancellation is the exact `thread.Interrupt()` pattern.** Upstream registers a callback on the CancellationToken that interrupts the FSI eval thread. This is the P0 fix for our stuck-eval problem.
+3. **Cancellation is handled.** The `CancellationToken` is now properly threaded through eval operations.
 
 4. **The notebook format is lightweight and compelling.** `.SageFsb` is just JSON with cells, metadata, and saved outputs. Cell 0 is the init cell (CLI args for the daemon). This is far simpler than Polyglot Notebooks.
 
@@ -911,51 +910,52 @@ Computing `EnvironmentFingerprint` is cheap:
 
 ---
 
-## Current State (v0.2.44)
+## Current State (v0.4.13)
 
 ### What works well
-- ✅ MCP server with 8 tools — AI agents can evaluate F# code, load scripts, inspect status
+- ✅ MCP server with 17+ tools — eval, diagnostics, completions, session management, namespace/type exploration, Elm state
 - ✅ Shadow-copied assemblies — no DLL locks on project files
 - ✅ Iterative warm-up — smart namespace/module resolution with retry
 - ✅ RequireQualifiedAccess tolerance — benign open errors don't cascade
 - ✅ Console echo — all MCP submissions visible to user with preserved indentation
 - ✅ Code-first response format — diagnostics and code always in tool responses
 - ✅ Hot reload via Lib.Harmony method patching
-- ✅ PrettyPrompt REPL with autocomplete
 - ✅ Computation expression rewriting (`let!` at top level)
 - ✅ Snapshot-tested output formats (Verify)
 - ✅ MCP error guidance — tool descriptions teach transaction semantics, error messages discourage unnecessary resets
 - ✅ Reset pushback — healthy-session resets include ⚠️ warning, warmup-failure resets do not
-- ✅ Daemon mode — headless server (`SageFs -d`), no PrettyPrompt/TTY deps, `daemon.json` discovery
+- ✅ Daemon-first architecture — `SageFs` starts daemon by default, `-d` is backward compat alias
 - ✅ Sub-process sessions — workers spawned via SessionManager, named pipe IPC, fault isolation
 - ✅ SessionManager — Erlang-style supervisor with exponential backoff restart
 - ✅ SessionMode DU — Embedded/Daemon routing for session management tools
 - ✅ Unified SageFsError DU — all errors consolidated into single typed DU across all layers
 - ✅ DDD type safety — SessionStatus, DiagnosticSeverity, CompletionKind, ToolUnavailable DUs replace strings
 - ✅ Early MCP status — available during WarmingUp, `--bare` flag for quick sessions
-- ✅ 261 tests (unit + integration + snapshot)
+- ✅ Per-tool MCP session routing — optional `sessionId` param on eval/reset/check tools
+- ✅ Watchdog supervisor — `--supervised` flag, exponential backoff restart, pure decision module
+- ✅ Startup profile — `~/.SageFs/init.fsx` and per-project `.SageFsrc` scripts
+- ✅ File watching with incremental `#load` reload (~100ms per change)
+- ✅ Package/namespace explorer — `explore_namespace`, `explore_type` MCP tools
+- ✅ Elm Architecture core — SageFsMsg, SageFsModel, SageFsUpdate, SageFsRender, SageFsEffectHandler
+- ✅ ElmDaemon wiring — Elm loop running in daemon, dispatch available to MCP tools
+- ✅ `get_elm_state` MCP tool — query render regions (editor, output, diagnostics, sessions)
+- ✅ `SageFs connect` — REPL client over HTTP to running daemon (auto-starts daemon if needed)
+- ✅ PrettyPrompt removed — daemon-only architecture, no embedded REPL dependency
+- ✅ Live dashboard (Falco + Datastar SSE) — session status, eval stats, output, diagnostics, browser eval
+- ✅ Per-directory config — `.SageFs/config.fsx` with projects, autoLoad, initScript, defaultArgs
+- ✅ Interactive TUI client — terminal UI with pane layout, ANSI rendering, input handling
+- ✅ SageFs.Core shared rendering layer — Cell, CellGrid, Rect, Layout, Draw, Theme, Screen
+- ✅ SageFs.Gui project — Raylib GUI client (dual-renderer architecture in progress)
+- ✅ Connection tracking — monitor MCP, terminal, browser connections per session
+- ✅ 442+ tests (unit + integration + snapshot + property-based)
 
 ### What's fragile or missing
-- ✅ Eval cancellation — direct CTS bypass, cancel_eval MCP tool, 2 integration tests
-- ✅ MCP autocomplete tool — get_completions MCP tool with cursor position
-- ✅ MCP diagnostics tool — `check_fsharp_code` pre-validates code. 9 tests.
-- ✅ MCP responses stripped of echoed code and boilerplate — formatEvalResult returns only Result/Error, usage tips moved to ServerInstructions
-- ❌ No Datastar SSE streams — IDE plugins have no reactive state subscription
-- ✅ EventTracking persisted to Marten (when SageFs_CONNECTION_STRING set). In-memory still unbounded without Postgres.
-- ✅ `QualityOfLife.fs` fully migrated — ErrorMessages to own file, EvalStats in Affordances.fs, QualityOfLife.fs deleted. Eval count/timing stats surfaced in status.
-- ✅ Affordance-driven MCP — SessionState DU, availableTools, state transitions, 13 tests
-- ✅ `formatStartupInfoJson` uses `JsonSerializer.Serialize` — properly escapes Windows paths
-- ✅ `formatDiagnosticsStoreAsJson` uses `JsonSerializer.Serialize` — no more manual JSON
+- ❌ No Datastar SSE streams for IDE plugins (dashboard SSE works, but no structured plugin-oriented SSE)
 - ❌ No VSCode extension — only a settings.json patcher script
 - ❌ No CI/CD pipeline for SageFs itself
-- ✅ Middleware pipeline runs on dedicated thread — eval actor stays responsive during Fantomas parsing
 - ❌ Custom state bag uses `Map<string, obj>` — unsafe downcasts everywhere
-- ✅ `hard_reset_fsi_session` with `rebuild=true` — GC cycle after session dispose releases collectible ALC and DLL locks, retry on access denied
-- ✅ Daemon mode — headless server, sub-process sessions, named pipe IPC, SessionManager supervisor
-- ✅ DDD type safety — SageFsError, SessionMode, CompletionKind, SessionStatus, DiagnosticSeverity, ToolUnavailable DUs
-- ❌ No per-tool session routing — eval/reset/check MCP tools always use local AppActor, can't target specific worker sessions by sessionId
-- ❌ No watchdog supervisor — daemon doesn't auto-restart on crash
-- ❌ No startup profile — no `~/.SageFs/init.fsx` or per-project startup scripts
+- ❌ Dual-renderer not yet feature-complete — SageFs.Gui scaffolded but TUI/Raylib parity not achieved
+- ❌ No Neovim plugin (standalone SageFs.nvim) — existing fsi-mcp.lua in dotfiles works but no SSE, no inline results
 
 ---
 
@@ -1195,7 +1195,7 @@ The existing `fsi-mcp.lua` does some things that properly belong in SageFs itsel
 > - **Early MCP status** — MCP available during WarmingUp, `--bare` flag
 > - **Tests:** 261 tests pass (including 3 SessionManager lifecycle integration tests)
 >
-> **Remaining (Post-1.0):** per-tool sessionId routing (3.2b), watchdog supervisor (Phase 3), REPL client polish (Phase 4)
+> **Remaining (Post-1.0):** REPL client polish (Phase 4)
 
 **Problem:** SageFs dies when the terminal closes. PrettyPrompt crashes when there's no TTY (detached, piped, backgrounded) because it manipulates Windows console mode flags — and when PrettyPrompt crashes, the entire MCP server dies with it. Starting SageFs is manual. You can't have multiple independent FSI sessions sharing the same persistence layer. Connecting from different editors (Neovim, VSCode, terminal, web) requires knowing which port to hit and whether the process is even running.
 
@@ -1254,9 +1254,11 @@ SageFs status                       # Show daemon info + session list with metad
 
 **`SageFs -d` / `SageFs --daemon`** starts daemon only, no REPL, returns immediately. Useful for CI, services, or MCP-only workflows.
 
-#### In-Process Sessions (Not Sub-Processes)
+#### Sub-Process Sessions
 
-Sessions are FSI actors **within the daemon process**, not separate OS processes. Each session gets its own `ActorCreation.createActor` call → own FSI session, own actor pair (eval + query). This is simpler, faster, and shares the Marten store naturally.
+> **Design evolved:** The original plan called for in-process FSI actors. The implementation uses **sub-process sessions** — each session is a separate OS process with its own FSI instance. This provides better isolation, crash containment, and aligns with the watchdog supervisor model.
+
+Sessions are FSI worker processes managed by the daemon. Each session gets its own sub-process with an independent FSI instance. The daemon communicates with sessions via IPC.
 
 Each session is identified by a short readable ID (e.g., `session-a1b2c3`). Sessions are independent:
 - Own `FsiEvaluationSession` (own FSI session with separate state)
@@ -1454,26 +1456,13 @@ This is NOT a full IDE — it's a browser-accessible REPL for quick interactions
 
 > See [COMPLETED_IMPROVEMENTS.md](COMPLETED_IMPROVEMENTS.md).
 
-### 3.4 Package Explorer Integration
+### 3.4 Package Explorer Integration — ✅ DONE
 
-**Problem:** When agents need to discover what types/functions are available from loaded NuGet packages, they have to guess or ask the user.
+> See [COMPLETED_IMPROVEMENTS.md](COMPLETED_IMPROVEMENTS.md) for full details.
 
-**Solution:**
-- `explore_namespace` MCP tool — lists types, functions, and signatures in a namespace
-- `explore_type` MCP tool — shows members, constructors, and documentation
-- Uses existing `FSharp.Compiler.Service` APIs (`ParseAndCheckInteraction`, `GetDeclarationListInfo`)
-- Combined with autocomplete, this gives agents full API discovery
+### 3.5 REPL Startup Profile — ✅ DONE
 
-### 3.5 REPL Startup Profile
-
-
-**Problem:** Users want custom code to run on every SageFs startup (e.g., `open System`, utility functions, test helpers). Currently `~/.SageFs/repl.fsx` exists but is limited.
-
-**Solution:**
-- Support project-local `.SageFsrc` file (auto-detected alongside `.fsproj`)
-- Evaluate after warm-up but before REPL prompt
-- Can define helper functions, open namespaces, configure output formatting
-- MCP tool `get_startup_profile` shows what was loaded
+> See [COMPLETED_IMPROVEMENTS.md](COMPLETED_IMPROVEMENTS.md) for full details.
 
 ### 3.6 BARE Wire Encoding (LARP Protocol Alignment)
 
@@ -1568,16 +1557,25 @@ This is NOT a full IDE — it's a browser-accessible REPL for quick interactions
 - ✅ SessionManager with Erlang-style supervisor (spawn/monitor/restart with exponential backoff)
 
 **Post-1.0:**
-- Per-tool MCP session routing (optional `sessionId` param on eval/reset/check tools)
-- Watchdog/supervisor process
-- Neovim plugin
-- VSCode extension
-- BARE wire encoding
-- Epistemic validity / environment fingerprints
-- REPL/TUI architecture — custom Elm loop, immediate-mode rendering, multi-frontend (see Phase 6)
-- Browser-based UI (Datastar web adapter)
-- Notebook support
-- Rich rendering, debugger, AI-native features
+- ✅ Per-tool MCP session routing (optional `sessionId` param on eval/reset/check tools)
+- ✅ Watchdog/supervisor process (`--supervised` flag)
+- ✅ Startup profile (`~/.SageFs/init.fsx`, per-project `.SageFsrc`)
+- ✅ Package/namespace explorer (`explore_namespace`, `explore_type` MCP tools)
+- ✅ File watching with incremental `#load` reload
+- ✅ Elm Architecture core + ElmDaemon wiring
+- ✅ Interactive TUI client, live dashboard
+- ✅ SageFs.Core shared rendering layer (Cell, CellGrid, Draw, Theme)
+- ✅ SageFs.Gui Raylib GUI client (scaffolded)
+- ✅ `SageFs connect` REPL client, PrettyPrompt removed
+- ✅ Per-directory config (`.SageFs/config.fsx`)
+- 🔲 Dual-renderer parity (TUI + Raylib feature-complete) — in progress
+- 🔲 Neovim plugin (standalone SageFs.nvim)
+- 🔲 VSCode extension
+- 🔲 BARE wire encoding
+- 🔲 Epistemic validity / environment fingerprints
+- 🔲 Browser-based UI (Datastar web adapter)
+- 🔲 Notebook support
+- 🔲 Rich rendering, debugger, AI-native features
 
 ---
 
@@ -1591,10 +1589,8 @@ This is NOT a full IDE — it's a browser-accessible REPL for quick interactions
 
 | Priority | Item | Impact | Effort | Dependency |
 |----------|------|--------|--------|------------|
-| 🟡 P2 | **3.2b Per-tool MCP session routing** | Very High | Medium | 3.2 ✅ |
+| 🔴 P1 | **Phase 6 TUI/GUI rendering** (in progress) | Very High | High | SageFs.Core ✅ |
 | 🟡 P2 | **2.5 Neovim plugin enhancement** | Very High | High | 1.3 ✅, 1.2 ✅, 2.0 ✅ |
-| 🟡 P2 | **3.4 Package explorer** | High | Medium | 1.2 ✅ |
-| 🟡 P2 | **3.5 Startup profile** | Medium | Low | None |
 | 🟡 P2 | 0.1 Testcontainer persistence | Medium | Low | 0.0 ✅ |
 | 🟡 P2 | 3.6 BARE wire encoding | High | Medium | 2.5 (Neovim SSE working with JSON first) |
 | 🟡 P2 | 3.7 Epistemic validity (environment fingerprints) | High | Medium | 0.0 ✅, 2.2 ✅ (file watching) |
@@ -1603,7 +1599,7 @@ This is NOT a full IDE — it's a browser-accessible REPL for quick interactions
 | 🔵 P4 | 4.1 Rich rendering | High | High | 2.5 |
 | 🔵 P4 | 4.4 AI-native features | High | High | 1.2, 1.3 |
 | 🔵 P4 | 4.2 Debugger | Very High | Very High | FCS changes |
-| 🔵 P4 | 4.3 Type provider | Medium | High | 3.4 |
+| 🔵 P4 | 4.3 Type provider | Medium | High | 3.4 ✅ |
 
 ---
 
@@ -1619,9 +1615,9 @@ This is NOT a full IDE — it's a browser-accessible REPL for quick interactions
 
 ### Phase 3: Neovim Integration & Watchdog
 13. Neovim plugin — MVP (2.5) — SSE subscription driven by Marten async daemon, inline results, diagnostics
-14. **Watchdog** (3.2, Phase 3) — supervisor process, exponential backoff, graceful shutdown
-15. Package/namespace explorer (3.4)
-16. Startup profile (3.5)
+14. ✅ **Watchdog** (3.2, Phase 3) — supervisor process, exponential backoff, graceful shutdown, `--supervised` flag
+15. ✅ Package/namespace explorer (3.4) — `explore_namespace`, `explore_type` MCP tools
+16. ✅ Startup profile (3.5) — `~/.SageFs/init.fsx`, per-project `.SageFsrc`
 17. BARE wire encoding (3.6) — after SSE works with JSON
 18. Epistemic validity / environment fingerprints (3.7) — `AssembliesChanged` events, `EnvironmentFingerprint` in metadata, `assessValidity` for selective replay
 
