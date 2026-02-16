@@ -999,7 +999,11 @@ let createApiStateHandler
         let tcs = Threading.Tasks.TaskCompletionSource()
         use _ct = ctx.RequestAborted.Register(fun () -> tcs.TrySetResult() |> ignore)
         use _sub = evt.Subscribe(fun _ ->
-          Threading.Tasks.Task.Run(fun () -> pushJson () :> Threading.Tasks.Task)
+          Threading.Tasks.Task.Run(fun () ->
+            task {
+              try do! pushJson ()
+              with _ -> () // Client disconnected or pipe broken — ignore
+            } :> Threading.Tasks.Task)
           |> ignore)
         do! tcs.Task
       | None ->
@@ -1007,7 +1011,9 @@ let createApiStateHandler
           try
             do! Threading.Tasks.Task.Delay(TimeSpan.FromSeconds 1.0, ctx.RequestAborted)
             do! pushJson ()
-          with :? OperationCanceledException -> ()
+          with
+          | :? OperationCanceledException -> ()
+          | _ -> () // Pipe broken or write error — ignore
     finally
       connectionTracker |> Option.iter (fun t -> t.Unregister(clientId))
   }

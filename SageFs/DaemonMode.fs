@@ -177,41 +177,44 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
   let dashboardPort = mcpPort + 1
   let connectionTracker = ConnectionTracker()
   // Dashboard status helpers — route through active session proxy
+  // These are called from SSE handlers; pipe errors must not crash Kestrel.
+  let tryGetSessionSnapshot () =
+    let sid = !activeSessionId
+    try
+      let proxy =
+        sessionManager.PostAndAsyncReply(fun reply ->
+          SessionManager.SessionCommand.GetSession(sid, reply))
+        |> Async.RunSynchronously
+      match proxy with
+      | Some s ->
+        let resp =
+          s.Proxy (WorkerProtocol.WorkerMessage.GetStatus "dash")
+          |> Async.RunSynchronously
+        match resp with
+        | WorkerProtocol.WorkerResponse.StatusResult(_, snap) -> Some snap
+        | _ -> None
+      | None -> None
+    with
+    | :? System.IO.IOException -> None
+    | :? System.AggregateException as ae
+        when (ae.InnerException :? System.IO.IOException) -> None
+
   let getSessionState () =
-    let sid = !activeSessionId
-    let proxy =
-      sessionManager.PostAndAsyncReply(fun reply ->
-        SessionManager.SessionCommand.GetSession(sid, reply))
-      |> Async.RunSynchronously
-    match proxy with
-    | Some s ->
-      let resp =
-        s.Proxy (WorkerProtocol.WorkerMessage.GetStatus "dash")
-        |> Async.RunSynchronously
-      match resp with
-      | WorkerProtocol.WorkerResponse.StatusResult(_, snap) ->
-        WorkerProtocol.SessionStatus.toSessionState snap.Status
-      | _ -> SessionState.Faulted
-    | None -> SessionState.Uninitialized
+    match tryGetSessionSnapshot () with
+    | Some snap -> WorkerProtocol.SessionStatus.toSessionState snap.Status
+    | None ->
+      if String.IsNullOrEmpty(!activeSessionId)
+      then SessionState.Uninitialized
+      else SessionState.Faulted
+
   let getEvalStats () =
-    let sid = !activeSessionId
-    let proxy =
-      sessionManager.PostAndAsyncReply(fun reply ->
-        SessionManager.SessionCommand.GetSession(sid, reply))
-      |> Async.RunSynchronously
-    match proxy with
-    | Some s ->
-      let resp =
-        s.Proxy (WorkerProtocol.WorkerMessage.GetStatus "dash")
-        |> Async.RunSynchronously
-      match resp with
-      | WorkerProtocol.WorkerResponse.StatusResult(_, snap) ->
-        { EvalCount = snap.EvalCount
-          TotalDuration = TimeSpan.FromMilliseconds(float snap.AvgDurationMs * float snap.EvalCount)
-          MinDuration = TimeSpan.FromMilliseconds(float snap.MinDurationMs)
-          MaxDuration = TimeSpan.FromMilliseconds(float snap.MaxDurationMs) }
-        : Affordances.EvalStats
-      | _ -> Affordances.EvalStats.empty
+    match tryGetSessionSnapshot () with
+    | Some snap ->
+      { EvalCount = snap.EvalCount
+        TotalDuration = TimeSpan.FromMilliseconds(float snap.AvgDurationMs * float snap.EvalCount)
+        MinDuration = TimeSpan.FromMilliseconds(float snap.MinDurationMs)
+        MaxDuration = TimeSpan.FromMilliseconds(float snap.MaxDurationMs) }
+      : Affordances.EvalStats
     | None -> Affordances.EvalStats.empty
   let dashboardEndpoints =
     Dashboard.createEndpoints
