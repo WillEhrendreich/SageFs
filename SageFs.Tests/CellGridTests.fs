@@ -356,6 +356,7 @@ let performanceTests = testList "Performance" [
   }
 ]
 
+[<Tests>]
 let allCellGridTests = testList "CellGrid Rendering" [
   cellGridTests
   rectTests

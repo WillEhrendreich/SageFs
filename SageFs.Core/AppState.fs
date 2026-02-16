@@ -205,17 +205,21 @@ open System.Threading.Tasks
 open System.Threading
 
 /// Creates a fresh FSI session with warm-up: loads startup files and opens namespaces.
-let createFsiSession (logger: ILogger) (outStream: TextWriter) (useAsp: bool) (sln: Solution) =
+/// The CancellationToken is passed through to FSI EvalInteraction calls so that
+/// warm-up can be cancelled if it takes too long (e.g. a stuck module initializer).
+let createFsiSession (logger: ILogger) (outStream: TextWriter) (useAsp: bool) (sln: Solution) (ct: CancellationToken) =
   async {
+    let sw = System.Diagnostics.Stopwatch.StartNew()
     let fsiConfig = FsiEvaluationSession.GetDefaultConfiguration()
     let args = solutionToFsiArgs logger useAsp sln
     let recorder = new TextWriterRecorder(outStream)
 
     let fsiSession =
       FsiEvaluationSession.Create(fsiConfig, args, new StreamReader(Stream.Null), recorder, TextWriter.Null, collectible = true)
-    logger.LogInfo "  FSI session created, loading startup files..."
+    logger.LogInfo (sprintf "  FSI session created in %dms, loading startup files..." sw.ElapsedMilliseconds)
 
     for fileName in sln.StartupFiles do
+      ct.ThrowIfCancellationRequested()
       logger.LogInfo $"Loading {fileName}"
       let! fileContents = File.ReadAllTextAsync fileName |> Async.AwaitTask
       let compatibleContents = FsiRewrite.rewriteInlineUseStatements fileContents
@@ -224,7 +228,7 @@ let createFsiSession (logger: ILogger) (outStream: TextWriter) (useAsp: bool) (s
         let beforeCount = (fileContents.Split('\n') |> Array.filter (fun line -> line.TrimStart().StartsWith("use "))).Length
         let afterCount = (compatibleContents.Split('\n') |> Array.filter (fun line -> line.TrimStart().StartsWith("use "))).Length  
         logger.LogInfo $"   Rewrote {beforeCount - afterCount} 'use' statements to 'let'"
-      fsiSession.EvalInteraction(compatibleContents, CancellationToken.None)
+      fsiSession.EvalInteraction(compatibleContents, ct)
 
     let openedNamespaces = System.Collections.Generic.HashSet<string>()
     let namesToOpen = System.Collections.Generic.List<string>()
@@ -237,10 +241,13 @@ let createFsiSession (logger: ILogger) (outStream: TextWriter) (useAsp: bool) (s
       |> Seq.filter (fun f -> f.EndsWith(".fs") || f.EndsWith(".fsx"))
       |> Seq.distinct
 
+    let mutable fileCount = 0
     for fsFile in allFsFiles do
+      ct.ThrowIfCancellationRequested()
       try
         if File.Exists(fsFile) then
           let! sourceLines = File.ReadAllLinesAsync fsFile |> Async.AwaitTask
+          fileCount <- fileCount + 1
           for line in sourceLines do
             let trimmed = line.Trim()
             if trimmed.StartsWith("open ") && not (trimmed.StartsWith("//")) then
@@ -251,6 +258,7 @@ let createFsiSession (logger: ILogger) (outStream: TextWriter) (useAsp: bool) (s
                   namesToOpen.Add(nsName)
       with ex ->
         logger.LogDebug (sprintf "Could not parse opens from %s: %s" fsFile ex.Message)
+    logger.LogInfo (sprintf "  Scanned %d source files for opens in %dms" fileCount sw.ElapsedMilliseconds)
 
     // Phase 2: Collect namespaces/modules via reflection
     logger.LogInfo "  Scanning assemblies for namespaces..."
@@ -261,6 +269,7 @@ let createFsiSession (logger: ILogger) (outStream: TextWriter) (useAsp: bool) (s
       new System.Runtime.Loader.AssemblyLoadContext(
         "sagefs-reflection", isCollectible = true)
     for project in sln.Projects do
+      ct.ThrowIfCancellationRequested()
       try
         let asm = reflectionAlc.LoadFromAssemblyPath(project.TargetPath)
         let types =
@@ -311,11 +320,13 @@ let createFsiSession (logger: ILogger) (outStream: TextWriter) (useAsp: bool) (s
       with ex ->
         logger.LogDebug (sprintf "Could not analyze %s: %s" project.TargetPath ex.Message)
     reflectionAlc.Unload()
+    logger.LogInfo (sprintf "  Assembly scan complete in %dms" sw.ElapsedMilliseconds)
     // Phase 3: Open all collected names with iterative retry
     let opener name =
+      ct.ThrowIfCancellationRequested()
       let label = if moduleNames.Contains(name) then "module" else "namespace"
       logger.LogDebug (sprintf "Opening %s: %s" label name)
-      let result, diagnostics = fsiSession.EvalInteractionNonThrowing(sprintf "open %s;;" name)
+      let result, diagnostics = fsiSession.EvalInteractionNonThrowing(sprintf "open %s;;" name, ct)
       match result with
       | Choice1Of2 _ ->
         if moduleNames.Contains(name) then
@@ -332,7 +343,7 @@ let createFsiSession (logger: ILogger) (outStream: TextWriter) (useAsp: bool) (s
     let totalNames = namesToOpen.Count
     logger.LogInfo (sprintf "Opening %d namespaces/modules (with dependency retry)..." totalNames)
     let succeeded, failed = openWithRetry 5 opener (Seq.toList namesToOpen)
-    logger.LogInfo (sprintf "✅ Opened %d/%d namespaces/modules" (List.length succeeded) totalNames)
+    logger.LogInfo (sprintf "✅ Opened %d/%d namespaces/modules in %dms" (List.length succeeded) totalNames sw.ElapsedMilliseconds)
     if not (List.isEmpty failed) then
       logger.LogWarning (sprintf "⚠️  %d could not be opened (missing dependencies or type errors)" (List.length failed))
       for name, err in failed do
@@ -346,11 +357,12 @@ let createFsiSession (logger: ILogger) (outStream: TextWriter) (useAsp: bool) (s
 
     // Restore core F# after warm-up opens. User project libraries like FSharpPlus shadow
     // min/max with SRTP-generic versions and replace the async CE builder.
-    fsiSession.EvalInteractionNonThrowing("open Microsoft.FSharp.Core.Operators;;") |> ignore
-    fsiSession.EvalInteractionNonThrowing("open Microsoft.FSharp.Core.ExtraTopLevelOperators;;") |> ignore
+    fsiSession.EvalInteractionNonThrowing("open Microsoft.FSharp.Core.Operators;;", ct) |> ignore
+    fsiSession.EvalInteractionNonThrowing("open Microsoft.FSharp.Core.ExtraTopLevelOperators;;", ct) |> ignore
 
     let warmupFailures =
       failed |> List.map (fun (name, err) -> { Name = name; Error = err })
+    logger.LogInfo (sprintf "  Warm-up complete in %dms" sw.ElapsedMilliseconds)
     return fsiSession, recorder, args, warmupFailures
   }
 
@@ -520,8 +532,12 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
                 logger.LogWarning "⚠️ Eval thread did not exit in time, proceeding with reset"
               currentEvalThread.Value <- None
             | None -> ()
-            (st.Session :> System.IDisposable).Dispose()
-            let! newSession, newRecorder, _, warmupFailures = createFsiSession logger outStream useAsp st.Solution
+            // Dispose may be called after a faulted init where Session is null
+            if not (isNull (box st.Session)) then
+              (st.Session :> System.IDisposable).Dispose()
+            let softResetCts = new CancellationTokenSource(TimeSpan.FromMinutes(5.0))
+            let! newSession, newRecorder, _, warmupFailures = createFsiSession logger outStream useAsp st.Solution softResetCts.Token
+            softResetCts.Dispose()
             let newSt = { st with Session = newSession; OutStream = newRecorder; Diagnostics = Features.DiagnosticsStore.empty; WarmupFailures = warmupFailures }
             logger.LogInfo "✅ FSI session reset complete"
             let sessionState'' = SessionState.Ready
@@ -548,7 +564,9 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
               currentEvalThread.Value <- None
             | None -> ()
 
-            (st.Session :> System.IDisposable).Dispose()
+            // Dispose may be called after a faulted init where Session is null
+            if not (isNull (box st.Session)) then
+              (st.Session :> System.IDisposable).Dispose()
             // Force GC to unload the collectible AssemblyLoadContext and release DLL file locks
             // Required before dotnet build can overwrite assemblies on Windows
             GC.Collect()
@@ -637,6 +655,8 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
                       publishSnapshot st failedState evalStats
                       reply.Reply(Error (SageFsError.HardResetFailed msg))
                       return! loop st middleware failedState evalStats
+                    else
+                      logger.LogInfo "  ✅ Build succeeded on retry"
                   else
                     let msg = sprintf "Build failed (exit code %d): %s" exitCode stderr
                     logger.LogError (sprintf "  ❌ %s" msg)
@@ -644,6 +664,8 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
                     publishSnapshot st failedState evalStats
                     reply.Reply(Error (SageFsError.HardResetFailed msg))
                     return! loop st middleware failedState evalStats
+                else
+                  logger.LogInfo "  ✅ Build succeeded"
               | None ->
                 logger.LogWarning "  ⚠️ No project to build"
 
@@ -658,7 +680,7 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
             let! warmupResult =
               async {
                 try
-                  let! r = createFsiSession logger outStream useAsp newSln
+                  let! r = createFsiSession logger outStream useAsp newSln warmupCts.Token
                   return Ok r
                 with ex ->
                   return Error ex
@@ -669,6 +691,8 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
                   try return! a
                   with
                   | :? OperationCanceledException ->
+                    return Error (System.TimeoutException(sprintf "Warmup timed out after %.0f minutes" warmupTimeout.TotalMinutes) :> exn)
+                  | :? AggregateException as ae when (ae.InnerException :? OperationCanceledException) ->
                     return Error (System.TimeoutException(sprintf "Warmup timed out after %.0f minutes" warmupTimeout.TotalMinutes) :> exn)
                   | ex -> return Error ex
                 }
@@ -708,71 +732,96 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
 
     and init () =
       async {
-        logger.LogInfo "Welcome to SageFs!"
-        emit (Events.SessionStarted {|
-          Config = Map.ofList [
-            "projects", (sln.Projects |> List.map (fun p -> p.ProjectFileName) |> String.concat ";")
-          ]
-          StartedAt = DateTimeOffset.UtcNow
-        |})
+        try
+          logger.LogInfo "Welcome to SageFs!"
+          emit (Events.SessionStarted {|
+            Config = Map.ofList [
+              "projects", (sln.Projects |> List.map (fun p -> p.ProjectFileName) |> String.concat ";")
+            ]
+            StartedAt = DateTimeOffset.UtcNow
+          |})
 
-        if not (List.isEmpty sln.Projects) then
-          logger.LogInfo "Loading these projects: "
-          for project in sln.Projects do
-            logger.LogInfo project.ProjectFileName
+          if not (List.isEmpty sln.Projects) then
+            logger.LogInfo "Loading these projects: "
+            for project in sln.Projects do
+              logger.LogInfo project.ProjectFileName
 
-        match sln.Projects |> List.tryHead with
-        | Some primaryProject ->
-          let projectDir = System.IO.Path.GetDirectoryName(primaryProject.ProjectFileName)
-          logger.LogInfo $"Setting working directory to: {projectDir}"
-          System.Environment.CurrentDirectory <- projectDir
-        | None -> ()
+          match sln.Projects |> List.tryHead with
+          | Some primaryProject ->
+            let projectDir = System.IO.Path.GetDirectoryName(primaryProject.ProjectFileName)
+            logger.LogInfo $"Setting working directory to: {projectDir}"
+            System.Environment.CurrentDirectory <- projectDir
+          | None -> ()
 
-        let! fsiSession, recorder, args, warmupFailures = createFsiSession logger outStream useAsp sln
-        
-        // Evaluate startup profile if found
-        let startupProfileResult =
-          let workingDir = System.Environment.CurrentDirectory
-          match StartupProfile.discoverInitScript workingDir with
-          | None -> None
-          | Some scriptPath ->
-            let evalFn code =
-              fsiSession.EvalInteraction(code, CancellationToken.None)
-            let logFn msg = logger.LogInfo msg
-            match StartupProfile.evalInitScript evalFn logFn scriptPath with
-            | Result.Ok path -> Some path
-            | Result.Error msg ->
-              logger.LogWarning msg
-              None
-        
-        emit Events.SessionReady
-        let sessionState = SessionState.Ready
+          let initCts = new CancellationTokenSource(TimeSpan.FromMinutes(5.0))
+          let! fsiSession, recorder, args, warmupFailures = createFsiSession logger outStream useAsp sln initCts.Token
+          initCts.Dispose()
+          
+          // Evaluate startup profile if found
+          let startupProfileResult =
+            let workingDir = System.Environment.CurrentDirectory
+            match StartupProfile.discoverInitScript workingDir with
+            | None -> None
+            | Some scriptPath ->
+              let evalFn code =
+                fsiSession.EvalInteraction(code, CancellationToken.None)
+              let logFn msg = logger.LogInfo msg
+              match StartupProfile.evalInitScript evalFn logFn scriptPath with
+              | Result.Ok path -> Some path
+              | Result.Error msg ->
+                logger.LogWarning msg
+                None
+          
+          emit Events.SessionReady
+          let sessionState = SessionState.Ready
 
-        let st = {
-          Solution = sln
-          OriginalSolution = originalSln
-          ShadowDir = shadowDir
-          Session = fsiSession
-          Logger = logger
-          OutStream = recorder
-          Custom = initCustomData
-          Diagnostics = Features.DiagnosticsStore.empty
-          WarmupFailures = warmupFailures
-          StartupConfig = Some {
-            CommandLineArgs = args
-            LoadedProjects = sln.Projects |> List.map (fun p -> p.ProjectFileName)
-            WorkingDirectory = System.Environment.CurrentDirectory
-            McpPort = 0
-            HotReloadEnabled = true
-            AspireDetected = useAsp
-            StartupTimestamp = DateTime.UtcNow
-            StartupProfileLoaded = startupProfileResult
+          let st = {
+            Solution = sln
+            OriginalSolution = originalSln
+            ShadowDir = shadowDir
+            Session = fsiSession
+            Logger = logger
+            OutStream = recorder
+            Custom = initCustomData
+            Diagnostics = Features.DiagnosticsStore.empty
+            WarmupFailures = warmupFailures
+            StartupConfig = Some {
+              CommandLineArgs = args
+              LoadedProjects = sln.Projects |> List.map (fun p -> p.ProjectFileName)
+              WorkingDirectory = System.Environment.CurrentDirectory
+              McpPort = 0
+              HotReloadEnabled = true
+              AspireDetected = useAsp
+              StartupTimestamp = DateTime.UtcNow
+              StartupProfileLoaded = startupProfileResult
+            }
           }
-        }
 
-        let evalStats = Affordances.EvalStats.empty
-        publishSnapshot st sessionState evalStats
-        return! loop st [] sessionState evalStats
+          let evalStats = Affordances.EvalStats.empty
+          publishSnapshot st sessionState evalStats
+          return! loop st [] sessionState evalStats
+        with ex ->
+          let msg =
+            match ex with
+            | :? OperationCanceledException -> "Initial warm-up timed out after 5 minutes"
+            | _ -> sprintf "Initial warm-up failed: %s" ex.Message
+          logger.LogError (sprintf "❌ %s" msg)
+          // Publish Faulted so MCP clients know the session is dead, not warming up
+          let faultedSt = {
+            Solution = sln
+            OriginalSolution = originalSln
+            ShadowDir = shadowDir
+            Session = Unchecked.defaultof<_>
+            Logger = logger
+            OutStream = Unchecked.defaultof<_>
+            Custom = initCustomData
+            Diagnostics = Features.DiagnosticsStore.empty
+            WarmupFailures = []
+            StartupConfig = None
+          }
+          publishSnapshot faultedSt SessionState.Faulted Affordances.EvalStats.empty
+          // Actor stays alive to accept hard_reset_fsi_session commands
+          return! loop faultedSt [] SessionState.Faulted Affordances.EvalStats.empty
       }
 
     init ()
