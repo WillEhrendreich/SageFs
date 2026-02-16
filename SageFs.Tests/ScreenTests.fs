@@ -93,4 +93,44 @@ let screenTests = testList "Screen" [
       Expect.equal result "" "empty keymap should produce empty hints"
     }
   ]
+
+  testList "Theme config" [
+    test "parseConfigLines extracts theme values" {
+      let lines = [|
+        """let theme = [ "fgDefault", 200; "bgPanel", 100 ]"""
+      |]
+      let overrides = Theme.parseConfigLines lines
+      Expect.equal (Map.find "fgDefault" overrides) 200uy "fgDefault parsed"
+      Expect.equal (Map.find "bgPanel" overrides) 100uy "bgPanel parsed"
+    }
+
+    test "parseConfigLines ignores non-theme lines" {
+      let lines = [|
+        """let projects = [ "test.fsproj" ]"""
+        """let theme = [ "bgEditor", 50 ]"""
+      |]
+      let overrides = Theme.parseConfigLines lines
+      Expect.equal overrides.Count 1 "only theme values parsed"
+      Expect.equal (Map.find "bgEditor" overrides) 50uy "bgEditor parsed"
+    }
+
+    test "parseConfigLines returns empty for no theme section" {
+      let lines = [| """let projects = [ "test.fsproj" ]""" |]
+      let overrides = Theme.parseConfigLines lines
+      Expect.equal overrides.Count 0 "no theme values"
+    }
+
+    test "withOverrides applies partial overrides" {
+      let overrides = Map.ofList [ "fgDefault", 200uy; "bgPanel", 100uy ]
+      let result = Theme.withOverrides overrides Theme.defaults
+      Expect.equal result.FgDefault 200uy "fgDefault overridden"
+      Expect.equal result.BgPanel 100uy "bgPanel overridden"
+      Expect.equal result.FgDim Theme.defaults.FgDim "fgDim unchanged"
+    }
+
+    test "withOverrides with empty map returns base unchanged" {
+      let result = Theme.withOverrides Map.empty Theme.defaults
+      Expect.equal result Theme.defaults "no overrides = defaults"
+    }
+  ]
 ]

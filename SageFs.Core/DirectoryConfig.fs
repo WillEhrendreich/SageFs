@@ -11,6 +11,7 @@ type DirectoryConfig = {
   InitScript: string option
   DefaultArgs: string list
   Keybindings: KeyMap
+  ThemeOverrides: Map<string, byte>
 }
 
 module DirectoryConfig =
@@ -20,6 +21,7 @@ module DirectoryConfig =
     InitScript = None
     DefaultArgs = []
     Keybindings = Map.empty
+    ThemeOverrides = Map.empty
   }
 
   let configDir (workingDir: string) =
@@ -74,7 +76,8 @@ module DirectoryConfig =
       AutoLoad = autoLoad
       InitScript = initScript
       DefaultArgs = defaultArgs
-      Keybindings = KeyMap.parseConfigLines lines }
+      Keybindings = KeyMap.parseConfigLines lines
+      ThemeOverrides = Theme.parseConfigLines lines }
 
   let load (workingDir: string) : DirectoryConfig option =
     let path = configPath workingDir
