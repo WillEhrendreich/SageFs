@@ -172,12 +172,18 @@ module SageFsUpdate =
 module SageFsRender =
   let render (model: SageFsModel) : RenderRegion list =
     let bufCursor = ValidatedBuffer.cursor model.Editor.Buffer
+    let editorCompletions =
+      model.Editor.CompletionMenu
+      |> Option.map (fun menu ->
+        { Items = menu.Items |> List.map (fun i -> i.Label)
+          SelectedIndex = menu.SelectedIndex })
     let editorRegion = {
       Id = "editor"
       Flags = RegionFlags.Focusable ||| RegionFlags.LiveUpdate
       Content = ValidatedBuffer.text model.Editor.Buffer
       Affordances = []
       Cursor = Some { Line = bufCursor.Line; Col = bufCursor.Column }
+      Completions = editorCompletions
     }
 
     let outputRegion = {
@@ -197,6 +203,7 @@ module SageFsRender =
         |> String.concat "\n"
       Affordances = []
       Cursor = None
+      Completions = None
     }
 
     let diagnosticsRegion = {
@@ -211,6 +218,7 @@ module SageFsRender =
         |> String.concat "\n"
       Affordances = []
       Cursor = None
+      Completions = None
     }
 
     let sessionsRegion = {
@@ -253,6 +261,7 @@ module SageFsRender =
         |> String.concat "\n"
       Affordances = []
       Cursor = None
+      Completions = None
     }
 
     [ editorRegion; outputRegion; diagnosticsRegion; sessionsRegion ]

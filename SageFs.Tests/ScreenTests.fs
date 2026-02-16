@@ -38,8 +38,8 @@ let screenTests = testList "Screen" [
     test "draws into grid without error" {
       let grid = CellGrid.create 20 60
       let regions = [
-        { Id = "output"; Content = "hello world"; Flags = RegionFlags.None; Affordances = []; Cursor = None }
-        { Id = "editor"; Content = "let x = 1"; Flags = RegionFlags.None; Affordances = []; Cursor = Some { Line = 0; Col = 5 } }
+        { Id = "output"; Content = "hello world"; Flags = RegionFlags.None; Affordances = []; Cursor = None; Completions = None }
+        { Id = "editor"; Content = "let x = 1"; Flags = RegionFlags.None; Affordances = []; Cursor = Some { Line = 0; Col = 5 }; Completions = None }
       ]
       let cursor = Screen.draw grid regions PaneId.Editor Map.empty " status " " hints "
       Expect.isSome cursor "should return cursor position for focused pane"
@@ -54,7 +54,7 @@ let screenTests = testList "Screen" [
     test "grid is not empty after draw" {
       let grid = CellGrid.create 20 60
       let regions = [
-        { Id = "output"; Content = "test output"; Flags = RegionFlags.None; Affordances = []; Cursor = None }
+        { Id = "output"; Content = "test output"; Flags = RegionFlags.None; Affordances = []; Cursor = None; Completions = None }
       ]
       Screen.draw grid regions PaneId.Output Map.empty " s " " r " |> ignore
       // At least some cells should be non-space (borders, text)

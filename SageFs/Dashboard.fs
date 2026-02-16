@@ -944,7 +944,9 @@ let createApiStateHandler
           r |> List.map (fun region ->
             {| id = region.Id
                content = region.Content
-               cursor = region.Cursor |> Option.map (fun c -> {| line = c.Line; col = c.Col |}) |})
+               cursor = region.Cursor |> Option.map (fun c -> {| line = c.Line; col = c.Col |})
+               completions = region.Completions |> Option.map (fun co ->
+                 {| items = co.Items; selectedIndex = co.SelectedIndex |}) |})
         | None -> []
       let payload =
         System.Text.Json.JsonSerializer.Serialize(

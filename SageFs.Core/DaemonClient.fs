@@ -10,6 +10,7 @@ type DaemonRegionData = {
   Id: string
   Content: string
   Cursor: RegionCursor option
+  Completions: CompletionOverlay option
 }
 
 module DaemonRegionData =
@@ -18,7 +19,8 @@ module DaemonRegionData =
       Flags = RegionFlags.None
       Content = d.Content
       Affordances = []
-      Cursor = d.Cursor }
+      Cursor = d.Cursor
+      Completions = d.Completions }
 
 /// Shared daemon client logic for both TUI and GUI.
 module DaemonClient =
@@ -41,7 +43,17 @@ module DaemonClient =
               Some { Line = cursorEl.GetProperty("line").GetInt32()
                      Col = cursorEl.GetProperty("col").GetInt32() }
             | _ -> None
-          { Id = id; Content = content; Cursor = cursor })
+          let completions =
+            match el.TryGetProperty("completions") with
+            | true, compEl when compEl.ValueKind <> JsonValueKind.Null ->
+              let items =
+                compEl.GetProperty("items").EnumerateArray()
+                |> Seq.map (fun i -> i.GetString())
+                |> Seq.toList
+              let idx = compEl.GetProperty("selectedIndex").GetInt32()
+              Some { Items = items; SelectedIndex = idx }
+            | _ -> None
+          { Id = id; Content = content; Cursor = cursor; Completions = completions })
         |> Seq.toList
       Some (sessionState, evalCount, regions)
     with _ -> None

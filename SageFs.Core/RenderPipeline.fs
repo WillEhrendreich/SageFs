@@ -31,6 +31,13 @@ type RenderRegion = {
   Content: string
   Affordances: Affordance list
   Cursor: RegionCursor option
+  Completions: CompletionOverlay option
+}
+
+/// Completion overlay data for rendering
+and CompletionOverlay = {
+  Items: string list
+  SelectedIndex: int
 }
 
 /// A discoverable action the user can take
