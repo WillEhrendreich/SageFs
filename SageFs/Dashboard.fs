@@ -684,11 +684,9 @@ let createStreamHandler
         let tcs = Threading.Tasks.TaskCompletionSource()
         use _ct = ctx.RequestAborted.Register(fun () -> tcs.TrySetResult() |> ignore)
         use _sub = evt.Subscribe(fun _ ->
-          try
-            pushState()
-            |> Async.AwaitTask
-            |> Async.RunSynchronously
-          with _ -> ())
+          // Fire-and-forget: don't block the event dispatcher thread
+          Threading.Tasks.Task.Run(fun () -> pushState () :> Threading.Tasks.Task)
+          |> ignore)
         do! tcs.Task
       | None ->
         // Fallback: poll every second
@@ -965,8 +963,8 @@ let createApiStateHandler
         let tcs = Threading.Tasks.TaskCompletionSource()
         use _ct = ctx.RequestAborted.Register(fun () -> tcs.TrySetResult() |> ignore)
         use _sub = evt.Subscribe(fun _ ->
-          try pushJson () |> Async.AwaitTask |> Async.RunSynchronously
-          with _ -> ())
+          Threading.Tasks.Task.Run(fun () -> pushJson () :> Threading.Tasks.Task)
+          |> ignore)
         do! tcs.Task
       | None ->
         while not ctx.RequestAborted.IsCancellationRequested do
