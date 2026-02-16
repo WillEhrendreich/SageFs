@@ -65,4 +65,32 @@ let screenTests = testList "Screen" [
       Expect.isGreaterThan nonSpace 10 "grid should have drawn content"
     }
   ]
+
+  testList "StatusHints" [
+    test "build shows quit and focus with default keymap" {
+      let result = StatusHints.build KeyMap.defaults PaneId.Output
+      Expect.stringContains result "quit" "should contain quit hint"
+      Expect.stringContains result "focus" "should contain focus hint"
+    }
+
+    test "editor pane shows eval hint" {
+      let result = StatusHints.build KeyMap.defaults PaneId.Editor
+      Expect.stringContains result "eval" "should contain eval hint"
+    }
+
+    test "sessions pane shows new-session hint" {
+      let result = StatusHints.build KeyMap.defaults PaneId.Sessions
+      Expect.stringContains result "new-session" "should contain new-session hint"
+    }
+
+    test "output pane shows scroll hint" {
+      let result = StatusHints.build KeyMap.defaults PaneId.Output
+      Expect.stringContains result "scroll" "should contain scroll hint"
+    }
+
+    test "empty keymap returns empty string" {
+      let result = StatusHints.build Map.empty PaneId.Editor
+      Expect.equal result "" "empty keymap should produce empty hints"
+    }
+  ]
 ]

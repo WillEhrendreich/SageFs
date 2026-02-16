@@ -65,7 +65,7 @@ let run
           | None -> "No session"
         let evalCount = model.RecentOutput |> List.length
         let statusLeft = sprintf " %s | evals: %d | %s" sessionState evalCount (PaneId.displayName focusedPane)
-        let statusRight = sprintf " %.1fms | Ctrl+Q quit | Tab focus | Ctrl+HJKL nav " lastFrameMs
+        let statusRight = sprintf " %.1fms |%s" lastFrameMs (StatusHints.build keyMap focusedPane)
         let cursorPos = Screen.draw grid regions focusedPane scrollOffsets statusLeft statusRight
         let cursorRow, cursorCol =
           match cursorPos with

@@ -58,7 +58,7 @@ let run (daemonInfo: DaemonInfo) = task {
       try
         let sw = System.Diagnostics.Stopwatch.StartNew()
         let statusLeft = sprintf " %s | evals: %d | %s" lastSessionState lastEvalCount (PaneId.displayName focusedPane)
-        let statusRight = sprintf " %.1fms | Ctrl+Q quit | Tab focus | Ctrl+HJKL nav " lastFrameMs
+        let statusRight = sprintf " %.1fms |%s" lastFrameMs (StatusHints.build keyMap focusedPane)
         let cursorPos = Screen.draw grid lastRegions focusedPane scrollOffsets statusLeft statusRight
         let cursorRow, cursorCol =
           match cursorPos with

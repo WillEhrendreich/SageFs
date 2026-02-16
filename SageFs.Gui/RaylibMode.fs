@@ -117,10 +117,11 @@ module RaylibMode =
     (focusedPane: PaneId)
     (scrollOffsets: Map<PaneId, int>)
     (fontSize: int)
-    (currentFps: int) =
+    (currentFps: int)
+    (keyMap: KeyMap) =
 
     let statusLeft = sprintf " %s | evals: %d | %s" sessionState evalCount (PaneId.displayName focusedPane)
-    let statusRight = sprintf " %dpt | %d fps | Ctrl+/- font | Tab focus " fontSize currentFps
+    let statusRight = sprintf " %dpt | %d fps |%s" fontSize currentFps (StatusHints.build keyMap focusedPane)
     Screen.draw grid regions focusedPane scrollOffsets statusLeft statusRight |> ignore
 
   /// Run the Raylib GUI window connected to daemon.
@@ -288,7 +289,7 @@ module RaylibMode =
         let regions, sessionState, evalCount =
           lock statelock (fun () -> lastRegions, lastSessionState, lastEvalCount)
 
-        renderRegions grid regions sessionState evalCount focusedPane scrollOffsets fontSize lastFps
+        renderRegions grid regions sessionState evalCount focusedPane scrollOffsets fontSize lastFps keyMap
         lastFps <- fps ()
 
         Raylib.BeginDrawing()

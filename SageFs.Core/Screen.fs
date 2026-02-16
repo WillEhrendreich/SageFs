@@ -1,5 +1,69 @@
 namespace SageFs
 
+open System
+
+/// Generate context-sensitive status bar hints from the active KeyMap.
+module StatusHints =
+  /// Short label for a key combo (compact for status bar)
+  let private shortFormat (kc: KeyCombo) : string =
+    let parts = ResizeArray<string>()
+    if kc.Modifiers.HasFlag(ConsoleModifiers.Control) then parts.Add("^")
+    if kc.Modifiers.HasFlag(ConsoleModifiers.Alt) then parts.Add("A-")
+    if kc.Modifiers.HasFlag(ConsoleModifiers.Shift) then parts.Add("S-")
+    let keyName =
+      match kc.Key with
+      | ConsoleKey.Enter -> "Enter"
+      | ConsoleKey.Tab -> "Tab"
+      | ConsoleKey.Escape -> "Esc"
+      | ConsoleKey.PageUp -> "PgUp"
+      | ConsoleKey.PageDown -> "PgDn"
+      | ConsoleKey.UpArrow -> "Up"
+      | ConsoleKey.DownArrow -> "Down"
+      | ConsoleKey.LeftArrow -> "Left"
+      | ConsoleKey.RightArrow -> "Right"
+      | ConsoleKey.OemPlus -> "="
+      | ConsoleKey.OemMinus -> "-"
+      | ConsoleKey.Backspace -> "Bksp"
+      | ConsoleKey.Spacebar -> "Space"
+      | k -> sprintf "%A" k
+    parts.Add(keyName)
+    String.Concat(parts)
+
+  let private findShort (keyMap: KeyMap) (action: UiAction) : string option =
+    keyMap
+    |> Map.tryFindKey (fun _ a -> a = action)
+    |> Option.map shortFormat
+
+  /// Build the right-side status bar hints string.
+  /// Shows common actions with their configured keybindings.
+  let build (keyMap: KeyMap) (focusedPane: PaneId) : string =
+    let hint action label =
+      findShort keyMap action
+      |> Option.map (fun k -> sprintf "%s:%s" k label)
+    let editorHint action label =
+      hint (UiAction.Editor action) label
+    let common =
+      [ hint UiAction.Quit "quit"
+        hint UiAction.CycleFocus "focus"
+        hint UiAction.ScrollUp "scroll" ]
+      |> List.choose id
+    let paneHints =
+      match focusedPane with
+      | PaneId.Editor ->
+        [ editorHint EditorAction.Submit "eval"
+          editorHint EditorAction.TriggerCompletion "complete"
+          editorHint EditorAction.Cancel "cancel" ]
+        |> List.choose id
+      | PaneId.Output | PaneId.Diagnostics ->
+        [ hint UiAction.ScrollDown "scroll↓" ]
+        |> List.choose id
+      | PaneId.Sessions ->
+        [ editorHint (EditorAction.CreateSession []) "new-session" ]
+        |> List.choose id
+    let all = paneHints @ common
+    if all.IsEmpty then ""
+    else sprintf " %s " (String.concat " | " all)
+
 /// Shared screen composition — computes layout and renders panes into a CellGrid.
 /// Used by both TUI (via AnsiEmitter) and GUI (via RaylibEmitter).
 module Screen =
