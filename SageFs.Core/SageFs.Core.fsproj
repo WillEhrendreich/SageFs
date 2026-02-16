@@ -31,6 +31,10 @@
         <Compile Include="SessionManager.fs" />
         <Compile Include="SessionOperations.fs" />
         <Compile Include="RenderPipeline.fs" />
+        <Compile Include="CellGrid.fs" />
+        <Compile Include="Theme.fs" />
+        <Compile Include="Draw.fs" />
+        <Compile Include="AnsiEmitter.fs" />
         <Compile Include="Editor.fs" />
         <Compile Include="ElmLoop.fs" />
         <Compile Include="SessionDisplay.fs" />
