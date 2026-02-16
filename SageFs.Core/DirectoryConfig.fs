@@ -3,11 +3,21 @@ namespace SageFs
 open System
 open System.IO
 
+/// Specifies how projects/solutions should be loaded for a session.
+type LoadStrategy =
+  /// Load a specific solution file (.sln/.slnx)
+  | Solution of path: string
+  /// Load specific project files (.fsproj)
+  | Projects of paths: string list
+  /// Auto-detect projects/solutions from the directory (default)
+  | AutoDetect
+  /// Bare FSI session — no project loading
+  | NoLoad
+
 /// Per-directory configuration via .SageFs/config.fsx.
-/// Provides project lists, auto-load preferences, init scripts, default args, and keybindings.
+/// Provides load strategy, init scripts, default args, and keybindings.
 type DirectoryConfig = {
-  Projects: string list
-  AutoLoad: bool
+  Load: LoadStrategy
   InitScript: string option
   DefaultArgs: string list
   Keybindings: KeyMap
@@ -16,8 +26,7 @@ type DirectoryConfig = {
 
 module DirectoryConfig =
   let empty = {
-    Projects = []
-    AutoLoad = true
+    Load = AutoDetect
     InitScript = None
     DefaultArgs = []
     Keybindings = Map.empty
@@ -32,10 +41,12 @@ module DirectoryConfig =
 
   /// Parse a config.fsx file content into DirectoryConfig.
   /// Extracts let bindings for projects, autoLoad, initScript, defaultArgs.
+  /// Backward-compatible: maps old Projects/AutoLoad fields to LoadStrategy.
   let parse (content: string) : DirectoryConfig =
     let lines = content.Split('\n') |> Array.map (fun l -> l.Trim())
     let mutable projects = []
     let mutable autoLoad = true
+    let mutable solution = ""
     let mutable initScript = None
     let mutable defaultArgs = []
 
@@ -50,6 +61,11 @@ module DirectoryConfig =
             |> Array.map (fun s -> s.Trim().Trim('"'))
             |> Array.filter (fun s -> s.Length > 0)
             |> Array.toList
+      elif line.StartsWith("let solution") || line.StartsWith("let Solution") then
+        let eqIdx = line.IndexOf('=')
+        if eqIdx >= 0 then
+          let value = line.Substring(eqIdx + 1).Trim().Trim('"')
+          if value.Length > 0 then solution <- value
       elif line.StartsWith("let autoLoad") || line.StartsWith("let AutoLoad") then
         autoLoad <- line.Contains("true")
       elif line.StartsWith("let initScript") || line.StartsWith("let InitScript") then
@@ -72,8 +88,14 @@ module DirectoryConfig =
             |> Array.filter (fun s -> s.Length > 0)
             |> Array.toList
 
-    { Projects = projects
-      AutoLoad = autoLoad
+    // Map old fields to LoadStrategy
+    let load =
+      if solution.Length > 0 then Solution solution
+      elif not projects.IsEmpty then Projects projects
+      elif not autoLoad then NoLoad
+      else AutoDetect
+
+    { Load = load
       InitScript = initScript
       DefaultArgs = defaultArgs
       Keybindings = KeyMap.parseConfigLines lines

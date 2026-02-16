@@ -121,14 +121,14 @@ let tests = testList "Session Creation" [
 
   testList "DirectoryConfig.parse" [
 
-    testCase "reads autoLoad = false" <| fun _ ->
+    testCase "reads autoLoad = false as NoLoad" <| fun _ ->
       DirectoryConfig.parse "let autoLoad = false"
-      |> fun c -> c.AutoLoad
-      |> Expect.isFalse "should parse autoLoad = false"
+      |> fun c -> c.Load
+      |> Expect.equal "should parse autoLoad = false as NoLoad" NoLoad
 
-    testCase "defaults autoLoad = true" <| fun _ ->
+    testCase "defaults to AutoDetect" <| fun _ ->
       DirectoryConfig.parse ""
-      |> fun c -> c.AutoLoad
-      |> Expect.isTrue "should default autoLoad to true"
+      |> fun c -> c.Load
+      |> Expect.equal "should default to AutoDetect" AutoDetect
   ]
 ]
