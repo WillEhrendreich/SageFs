@@ -52,6 +52,7 @@
         <Compile Include="TuiClientTests.fs" />
         <Compile Include="DashboardBrowserTests.fs" />
         <Compile Include="ElmDaemonTests.fs" />
+        <Compile Include="SessionCreationTests.fs" />
         <Compile Include="ExplorationTests.fs" />
         <Compile Include="Program.fs" />
     </ItemGroup>

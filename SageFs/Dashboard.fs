@@ -830,6 +830,8 @@ let resolveSessionProjects (dir: string) (manualProjects: string) =
       config.Projects |> List.map (fun p ->
         if Path.IsPathRooted p then p
         else Path.Combine(dir, p))
+    | Some config when not config.AutoLoad ->
+      []
     | _ ->
       let discovered = discoverProjects dir
       if not discovered.Solutions.IsEmpty then
