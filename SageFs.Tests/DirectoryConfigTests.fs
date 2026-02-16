@@ -5,69 +5,55 @@ open System.IO
 open Expecto
 open SageFs
 
-[<Tests>]
-let parseTests = testList "DirectoryConfig.parse" [
-  testCase "extracts projects list as LoadStrategy.Projects" (fun () ->
-    let content = """let projects = ["Lib.fsproj"; "Tests.fsproj"]"""
-    let config = DirectoryConfig.parse content
-    Expect.equal config.Load (Projects ["Lib.fsproj"; "Tests.fsproj"]) "should parse projects")
+/// Helper to evaluate config and unwrap the Ok result.
+let private evalOk content =
+  match DirectoryConfig.evaluate content with
+  | Ok cfg -> cfg
+  | Error msg -> failwithf "Config evaluation failed: %s" msg
 
-  testCase "extracts solution as LoadStrategy.Solution" (fun () ->
-    let content = """let solution = "MyApp.sln" """
-    let config = DirectoryConfig.parse content
+[<Tests>]
+let evaluateTests = testList "DirectoryConfig.evaluate" [
+  testCase "loads solution strategy" (fun () ->
+    let config = evalOk """{ DirectoryConfig.empty with Load = Solution "MyApp.sln" }"""
     Expect.equal config.Load (Solution "MyApp.sln") "should parse solution")
 
-  testCase "autoLoad false produces NoLoad" (fun () ->
-    let config = DirectoryConfig.parse "let autoLoad = false"
-    Expect.equal config.Load NoLoad "should be NoLoad")
+  testCase "loads projects strategy" (fun () ->
+    let config = evalOk """{ DirectoryConfig.empty with Load = Projects ["Lib.fsproj"; "Tests.fsproj"] }"""
+    Expect.equal config.Load (Projects ["Lib.fsproj"; "Tests.fsproj"]) "should parse projects")
 
-  testCase "autoLoad true produces AutoDetect" (fun () ->
-    let config = DirectoryConfig.parse "let autoLoad = true"
-    Expect.equal config.Load AutoDetect "should be AutoDetect")
+  testCase "loads NoLoad strategy" (fun () ->
+    let config = evalOk """{ DirectoryConfig.empty with Load = NoLoad }"""
+    Expect.equal config.Load NoLoad "should parse NoLoad")
 
-  testCase "extracts initScript with Some" (fun () ->
-    let content = """let initScript = Some "setup.fsx" """
-    let config = DirectoryConfig.parse content
-    Expect.equal config.InitScript (Some "setup.fsx") "should extract init script")
+  testCase "loads AutoDetect strategy" (fun () ->
+    let config = evalOk """{ DirectoryConfig.empty with Load = AutoDetect }"""
+    Expect.equal config.Load AutoDetect "should parse AutoDetect")
 
-  testCase "extracts initScript as string" (fun () ->
-    let content = """let initScript = "init.fsx" """
-    let config = DirectoryConfig.parse content
-    Expect.equal config.InitScript (Some "init.fsx") "should extract init script")
+  testCase "loads initScript" (fun () ->
+    let config = evalOk """{ DirectoryConfig.empty with InitScript = Some "setup.fsx" }"""
+    Expect.equal config.InitScript (Some "setup.fsx") "should parse initScript")
 
-  testCase "extracts defaultArgs" (fun () ->
-    let content = """let defaultArgs = ["--no-warn:1182"; "--bare"]"""
-    let config = DirectoryConfig.parse content
-    Expect.equal config.DefaultArgs ["--no-warn:1182"; "--bare"] "should parse args")
+  testCase "loads defaultArgs" (fun () ->
+    let config = evalOk """{ DirectoryConfig.empty with DefaultArgs = ["--no-warn:1182"; "--bare"] }"""
+    Expect.equal config.DefaultArgs ["--no-warn:1182"; "--bare"] "should parse defaultArgs")
 
-  testCase "full config with projects" (fun () ->
-    let content = """let projects = ["App.fsproj"; "App.Tests.fsproj"]
-let autoLoad = false
-let initScript = Some "bootstrap.fsx"
-let defaultArgs = ["--no-watch"]"""
-    let config = DirectoryConfig.parse content
-    // projects takes precedence over autoLoad=false
-    Expect.equal config.Load (Projects ["App.fsproj"; "App.Tests.fsproj"]) "load strategy"
+  testCase "loads full config" (fun () ->
+    let config = evalOk """
+{ DirectoryConfig.empty with
+    Load = Solution "BigApp.slnx"
+    InitScript = Some "bootstrap.fsx"
+    DefaultArgs = ["--no-watch"] }"""
+    Expect.equal config.Load (Solution "BigApp.slnx") "load strategy"
     Expect.equal config.InitScript (Some "bootstrap.fsx") "initScript"
     Expect.equal config.DefaultArgs ["--no-watch"] "defaultArgs")
 
-  testCase "full config with solution" (fun () ->
-    let content = """let solution = "BigApp.slnx"
-let initScript = Some "bootstrap.fsx"
-let defaultArgs = ["--no-watch"]"""
-    let config = DirectoryConfig.parse content
-    Expect.equal config.Load (Solution "BigApp.slnx") "load strategy"
-    Expect.equal config.InitScript (Some "bootstrap.fsx") "initScript")
-
-  testCase "solution takes precedence over projects" (fun () ->
-    let content = """let solution = "MyApp.sln"
-let projects = ["Lib.fsproj"]"""
-    let config = DirectoryConfig.parse content
-    Expect.equal config.Load (Solution "MyApp.sln") "solution wins")
-
-  testCase "empty content returns defaults" (fun () ->
-    let config = DirectoryConfig.parse ""
+  testCase "empty expression returns defaults" (fun () ->
+    let config = evalOk "DirectoryConfig.empty"
     Expect.equal config DirectoryConfig.empty "should return empty defaults")
+
+  testCase "invalid expression returns Error" (fun () ->
+    let result = DirectoryConfig.evaluate "this is not valid F#"
+    Expect.isError result "should return error for invalid expression")
 ]
 
 [<Tests>]
@@ -87,11 +73,25 @@ let loadTests = testList "DirectoryConfig.load" [
     Directory.CreateDirectory(configDir) |> ignore
     File.WriteAllText(
       Path.Combine(configDir, "config.fsx"),
-      """let projects = ["Test.fsproj"]""")
+      """{ DirectoryConfig.empty with Load = Projects ["Test.fsproj"] }""")
     try
       let result = DirectoryConfig.load tempDir
       Expect.isSome result "should find config"
       Expect.equal result.Value.Load (Projects ["Test.fsproj"]) "load strategy"
+    finally
+      Directory.Delete(tempDir, true))
+
+  testCase "returns defaults on malformed config" (fun () ->
+    let tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString())
+    let configDir = Path.Combine(tempDir, ".SageFs")
+    Directory.CreateDirectory(configDir) |> ignore
+    File.WriteAllText(
+      Path.Combine(configDir, "config.fsx"),
+      "this is garbage")
+    try
+      let result = DirectoryConfig.load tempDir
+      Expect.isSome result "should still return Some"
+      Expect.equal result.Value DirectoryConfig.empty "should fall back to defaults"
     finally
       Directory.Delete(tempDir, true))
 
