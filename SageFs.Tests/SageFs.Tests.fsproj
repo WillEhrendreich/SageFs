@@ -55,6 +55,7 @@
         <Compile Include="SessionCreationTests.fs" />
         <Compile Include="ExplorationTests.fs" />
         <Compile Include="ClientModeTests.fs" />
+        <Compile Include="ReplayTests.fs" />
         <Compile Include="Program.fs" />
     </ItemGroup>
 
