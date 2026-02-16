@@ -352,7 +352,7 @@ let renderPipelineTests = testList "RenderPipeline" [
 
   testCase "KeyMap.hintFor finds matching action" <| fun _ ->
     let combo = { Key = System.ConsoleKey.Tab; Modifiers = System.ConsoleModifiers.Control; Char = None }
-    let keyMap = Map.ofList [(combo, EditorAction.TriggerCompletion)]
+    let keyMap = Map.ofList [(combo, UiAction.Editor EditorAction.TriggerCompletion)]
     KeyMap.hintFor keyMap EditorAction.TriggerCompletion
     |> Expect.equal "should find hint" (Some combo)
 

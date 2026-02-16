@@ -109,10 +109,231 @@ and [<RequireQualifiedAccess>] EditorAction =
   | StopSession of string
   | ToggleSessionPanel
 
+/// Every UI-level action (superset of EditorAction for renderers)
+and [<RequireQualifiedAccess>] UiAction =
+  | Editor of EditorAction
+  | Quit
+  | CycleFocus
+  | FocusDir of Direction
+  | ScrollUp
+  | ScrollDown
+  | Redraw
+  | FontSizeUp
+  | FontSizeDown
+
 /// Maps physical keys to semantic actions
-type KeyMap = Map<KeyCombo, EditorAction>
+type KeyMap = Map<KeyCombo, UiAction>
+
+module KeyCombo =
+  let create key mods =
+    { Key = key; Modifiers = mods; Char = None }
+
+  let ctrl key = create key ConsoleModifiers.Control
+  let alt key = create key ConsoleModifiers.Alt
+  let ctrlAlt key = create key (ConsoleModifiers.Control ||| ConsoleModifiers.Alt)
+  let ctrlShift key = create key (ConsoleModifiers.Control ||| ConsoleModifiers.Shift)
+  let plain key = create key (enum<ConsoleModifiers> 0)
+
+  /// Parse a string like "Ctrl+Q", "Alt+Up", "Ctrl+Shift+Z", "Enter", "PageUp"
+  let tryParse (s: string) : KeyCombo option =
+    let parts = s.Split('+') |> Array.map (fun p -> p.Trim())
+    let mutable mods = enum<ConsoleModifiers> 0
+    let mutable keyPart = None
+    for p in parts do
+      match p.ToLowerInvariant() with
+      | "ctrl" | "control" -> mods <- mods ||| ConsoleModifiers.Control
+      | "alt" -> mods <- mods ||| ConsoleModifiers.Alt
+      | "shift" -> mods <- mods ||| ConsoleModifiers.Shift
+      | _ -> keyPart <- Some p
+    match keyPart with
+    | None -> None
+    | Some kp ->
+      let parsed =
+        match kp.ToLowerInvariant() with
+        | "enter" | "return" -> Some ConsoleKey.Enter
+        | "tab" -> Some ConsoleKey.Tab
+        | "escape" | "esc" -> Some ConsoleKey.Escape
+        | "space" | "spacebar" -> Some ConsoleKey.Spacebar
+        | "backspace" -> Some ConsoleKey.Backspace
+        | "delete" | "del" -> Some ConsoleKey.Delete
+        | "up" | "uparrow" -> Some ConsoleKey.UpArrow
+        | "down" | "downarrow" -> Some ConsoleKey.DownArrow
+        | "left" | "leftarrow" -> Some ConsoleKey.LeftArrow
+        | "right" | "rightarrow" -> Some ConsoleKey.RightArrow
+        | "home" -> Some ConsoleKey.Home
+        | "end" -> Some ConsoleKey.End
+        | "pageup" | "pgup" -> Some ConsoleKey.PageUp
+        | "pagedown" | "pgdn" -> Some ConsoleKey.PageDown
+        | "=" | "equal" | "equals" -> Some ConsoleKey.OemPlus
+        | "-" | "minus" -> Some ConsoleKey.OemMinus
+        | s when s.Length = 1 ->
+          let c = System.Char.ToUpper(s.[0])
+          if c >= 'A' && c <= 'Z' then
+            Some (enum<ConsoleKey> (int c))
+          elif c >= '0' && c <= '9' then
+            Some (enum<ConsoleKey> (int ConsoleKey.D0 + int c - int '0'))
+          else None
+        | _ -> None
+      parsed |> Option.map (fun k -> { Key = k; Modifiers = mods; Char = None })
+
+  /// Format a KeyCombo as a human-readable string
+  let format (kc: KeyCombo) : string =
+    let parts = ResizeArray<string>()
+    if kc.Modifiers.HasFlag(ConsoleModifiers.Control) then parts.Add("Ctrl")
+    if kc.Modifiers.HasFlag(ConsoleModifiers.Alt) then parts.Add("Alt")
+    if kc.Modifiers.HasFlag(ConsoleModifiers.Shift) then parts.Add("Shift")
+    let keyName =
+      match kc.Key with
+      | ConsoleKey.OemPlus -> "="
+      | ConsoleKey.OemMinus -> "-"
+      | ConsoleKey.UpArrow -> "Up"
+      | ConsoleKey.DownArrow -> "Down"
+      | ConsoleKey.LeftArrow -> "Left"
+      | ConsoleKey.RightArrow -> "Right"
+      | ConsoleKey.Spacebar -> "Space"
+      | k -> sprintf "%A" k
+    parts.Add(keyName)
+    String.Join("+", parts)
+
+module UiAction =
+  /// Parse a string like "Quit", "Submit", "FocusLeft", "Editor.DeleteBackward"
+  let tryParse (s: string) : UiAction option =
+    match s.Trim() with
+    | "Quit" -> Some UiAction.Quit
+    | "CycleFocus" -> Some UiAction.CycleFocus
+    | "FocusLeft" -> Some (UiAction.FocusDir Direction.Left)
+    | "FocusRight" -> Some (UiAction.FocusDir Direction.Right)
+    | "FocusUp" -> Some (UiAction.FocusDir Direction.Up)
+    | "FocusDown" -> Some (UiAction.FocusDir Direction.Down)
+    | "ScrollUp" -> Some UiAction.ScrollUp
+    | "ScrollDown" -> Some UiAction.ScrollDown
+    | "Redraw" -> Some UiAction.Redraw
+    | "FontSizeUp" -> Some UiAction.FontSizeUp
+    | "FontSizeDown" -> Some UiAction.FontSizeDown
+    | "Submit" -> Some (UiAction.Editor EditorAction.Submit)
+    | "NewLine" -> Some (UiAction.Editor EditorAction.NewLine)
+    | "Cancel" -> Some (UiAction.Editor EditorAction.Cancel)
+    | "Undo" -> Some (UiAction.Editor EditorAction.Undo)
+    | "Redo" -> Some (UiAction.Editor EditorAction.Redo)
+    | "DeleteBackward" -> Some (UiAction.Editor EditorAction.DeleteBackward)
+    | "DeleteForward" -> Some (UiAction.Editor EditorAction.DeleteForward)
+    | "DeleteWord" -> Some (UiAction.Editor EditorAction.DeleteWord)
+    | "DeleteToEndOfLine" -> Some (UiAction.Editor EditorAction.DeleteToEndOfLine)
+    | "MoveWordForward" -> Some (UiAction.Editor EditorAction.MoveWordForward)
+    | "MoveWordBackward" -> Some (UiAction.Editor EditorAction.MoveWordBackward)
+    | "MoveToLineStart" -> Some (UiAction.Editor EditorAction.MoveToLineStart)
+    | "MoveToLineEnd" -> Some (UiAction.Editor EditorAction.MoveToLineEnd)
+    | "MoveUp" -> Some (UiAction.Editor (EditorAction.MoveCursor Direction.Up))
+    | "MoveDown" -> Some (UiAction.Editor (EditorAction.MoveCursor Direction.Down))
+    | "MoveLeft" -> Some (UiAction.Editor (EditorAction.MoveCursor Direction.Left))
+    | "MoveRight" -> Some (UiAction.Editor (EditorAction.MoveCursor Direction.Right))
+    | "SelectAll" -> Some (UiAction.Editor EditorAction.SelectAll)
+    | "SelectWord" -> Some (UiAction.Editor EditorAction.SelectWord)
+    | "TriggerCompletion" -> Some (UiAction.Editor EditorAction.TriggerCompletion)
+    | "AcceptCompletion" -> Some (UiAction.Editor EditorAction.AcceptCompletion)
+    | "DismissCompletion" -> Some (UiAction.Editor EditorAction.DismissCompletion)
+    | "NextCompletion" -> Some (UiAction.Editor EditorAction.NextCompletion)
+    | "PreviousCompletion" -> Some (UiAction.Editor EditorAction.PreviousCompletion)
+    | "HistoryPrevious" -> Some (UiAction.Editor EditorAction.HistoryPrevious)
+    | "HistoryNext" -> Some (UiAction.Editor EditorAction.HistoryNext)
+    | "ListSessions" -> Some (UiAction.Editor EditorAction.ListSessions)
+    | "ToggleSessionPanel" -> Some (UiAction.Editor EditorAction.ToggleSessionPanel)
+    | "CreateSession" -> Some (UiAction.Editor (EditorAction.CreateSession []))
+    | _ -> None
 
 module KeyMap =
   let hintFor (keyMap: KeyMap) (action: EditorAction) : KeyCombo option =
     keyMap
-    |> Map.tryFindKey (fun _ a -> a = action)
+    |> Map.tryFindKey (fun _ a -> a = UiAction.Editor action)
+
+  /// Default keybindings shared by all UI renderers
+  let defaults : KeyMap =
+    let e a = UiAction.Editor a
+    [ // Quit
+      KeyCombo.ctrl ConsoleKey.Q, UiAction.Quit
+      KeyCombo.ctrl ConsoleKey.D, UiAction.Quit
+      // Focus
+      KeyCombo.plain ConsoleKey.Tab, UiAction.CycleFocus
+      KeyCombo.ctrl ConsoleKey.H, UiAction.FocusDir Direction.Left
+      KeyCombo.ctrl ConsoleKey.J, UiAction.FocusDir Direction.Down
+      KeyCombo.ctrl ConsoleKey.K, UiAction.FocusDir Direction.Up
+      KeyCombo.ctrl ConsoleKey.L, UiAction.FocusDir Direction.Right
+      // Scroll
+      KeyCombo.alt ConsoleKey.UpArrow, UiAction.ScrollUp
+      KeyCombo.alt ConsoleKey.DownArrow, UiAction.ScrollDown
+      KeyCombo.plain ConsoleKey.PageUp, UiAction.ScrollUp
+      KeyCombo.plain ConsoleKey.PageDown, UiAction.ScrollDown
+      // Font size
+      KeyCombo.ctrl ConsoleKey.OemPlus, UiAction.FontSizeUp
+      KeyCombo.ctrl ConsoleKey.OemMinus, UiAction.FontSizeDown
+      // Session management
+      KeyCombo.ctrl ConsoleKey.N, e (EditorAction.CreateSession [])
+      KeyCombo.ctrlAlt ConsoleKey.S, e EditorAction.ToggleSessionPanel
+      // Submit / NewLine
+      KeyCombo.ctrl ConsoleKey.Enter, e EditorAction.Submit
+      KeyCombo.plain ConsoleKey.Enter, e EditorAction.NewLine
+      // Editing
+      KeyCombo.plain ConsoleKey.Backspace, e EditorAction.DeleteBackward
+      KeyCombo.plain ConsoleKey.Delete, e EditorAction.DeleteForward
+      KeyCombo.ctrl ConsoleKey.Backspace, e EditorAction.DeleteWord
+      // History
+      KeyCombo.ctrl ConsoleKey.UpArrow, e EditorAction.HistoryPrevious
+      KeyCombo.ctrl ConsoleKey.DownArrow, e EditorAction.HistoryNext
+      // Cursor movement
+      KeyCombo.plain ConsoleKey.UpArrow, e (EditorAction.MoveCursor Direction.Up)
+      KeyCombo.plain ConsoleKey.DownArrow, e (EditorAction.MoveCursor Direction.Down)
+      KeyCombo.plain ConsoleKey.LeftArrow, e (EditorAction.MoveCursor Direction.Left)
+      KeyCombo.plain ConsoleKey.RightArrow, e (EditorAction.MoveCursor Direction.Right)
+      KeyCombo.ctrl ConsoleKey.LeftArrow, e EditorAction.MoveWordBackward
+      KeyCombo.ctrl ConsoleKey.RightArrow, e EditorAction.MoveWordForward
+      KeyCombo.plain ConsoleKey.Home, e EditorAction.MoveToLineStart
+      KeyCombo.plain ConsoleKey.End, e EditorAction.MoveToLineEnd
+      // Selection & completion
+      KeyCombo.ctrl ConsoleKey.A, e EditorAction.SelectAll
+      KeyCombo.ctrl ConsoleKey.Spacebar, e EditorAction.TriggerCompletion
+      KeyCombo.plain ConsoleKey.Escape, e EditorAction.DismissCompletion
+      // Undo/Redo
+      KeyCombo.ctrl ConsoleKey.Z, e EditorAction.Undo
+      KeyCombo.ctrlShift ConsoleKey.Z, e EditorAction.Redo
+      KeyCombo.ctrl ConsoleKey.R, e EditorAction.Undo
+      // Cancel
+      KeyCombo.ctrl ConsoleKey.C, e EditorAction.Cancel
+    ] |> Map.ofList
+
+  /// Merge user overrides onto defaults (overrides win)
+  let merge (overrides: KeyMap) (base': KeyMap) : KeyMap =
+    overrides |> Map.fold (fun acc k v -> Map.add k v acc) base'
+
+  /// Parse keybinding lines from config.fsx format:
+  ///   let keybindings = [ "Ctrl+Q", "Quit"; "Ctrl+Enter", "Submit" ]
+  let parseConfigLines (lines: string array) : KeyMap =
+    let mutable bindings = Map.empty
+    let mutable inBindings = false
+    for line in lines do
+      let trimmed = line.Trim()
+      if trimmed.StartsWith("let keybindings") || trimmed.StartsWith("let Keybindings") then
+        inBindings <- true
+      if inBindings then
+        // Extract "Key", "Action" pairs
+        let mutable i = 0
+        while i < trimmed.Length do
+          let q1 = trimmed.IndexOf('"', i)
+          if q1 >= 0 then
+            let q2 = trimmed.IndexOf('"', q1 + 1)
+            if q2 > q1 then
+              let keyStr = trimmed.Substring(q1 + 1, q2 - q1 - 1)
+              let q3 = trimmed.IndexOf('"', q2 + 1)
+              if q3 > q2 then
+                let q4 = trimmed.IndexOf('"', q3 + 1)
+                if q4 > q3 then
+                  let actionStr = trimmed.Substring(q3 + 1, q4 - q3 - 1)
+                  match KeyCombo.tryParse keyStr, UiAction.tryParse actionStr with
+                  | Some kc, Some act -> bindings <- Map.add kc act bindings
+                  | _ -> ()
+                  i <- q4 + 1
+                else i <- trimmed.Length
+              else i <- trimmed.Length
+            else i <- trimmed.Length
+          else i <- trimmed.Length
+        if trimmed.Contains(']') then inBindings <- false
+    bindings

@@ -45,65 +45,58 @@ module RaylibMode =
     | FontSizeDown
     | Action of EditorAction
 
-  let private mapKey () : GuiCommand option =
-    // Modifier state
-    let ctrl = ctrl ()
-    let alt = alt ()
-    let shift = shift ()
+  /// Convert Raylib KeyboardKey to System.ConsoleKey for KeyMap lookup
+  let private raylibToConsoleKey (key: KeyboardKey) : System.ConsoleKey option =
+    match key with
+    | KeyboardKey.Enter -> Some System.ConsoleKey.Enter
+    | KeyboardKey.Tab -> Some System.ConsoleKey.Tab
+    | KeyboardKey.Escape -> Some System.ConsoleKey.Escape
+    | KeyboardKey.Space -> Some System.ConsoleKey.Spacebar
+    | KeyboardKey.Backspace -> Some System.ConsoleKey.Backspace
+    | KeyboardKey.Delete -> Some System.ConsoleKey.Delete
+    | KeyboardKey.Up -> Some System.ConsoleKey.UpArrow
+    | KeyboardKey.Down -> Some System.ConsoleKey.DownArrow
+    | KeyboardKey.Left -> Some System.ConsoleKey.LeftArrow
+    | KeyboardKey.Right -> Some System.ConsoleKey.RightArrow
+    | KeyboardKey.Home -> Some System.ConsoleKey.Home
+    | KeyboardKey.End -> Some System.ConsoleKey.End
+    | KeyboardKey.PageUp -> Some System.ConsoleKey.PageUp
+    | KeyboardKey.PageDown -> Some System.ConsoleKey.PageDown
+    | KeyboardKey.Equal -> Some System.ConsoleKey.OemPlus
+    | KeyboardKey.Minus -> Some System.ConsoleKey.OemMinus
+    | k when k >= KeyboardKey.A && k <= KeyboardKey.Z ->
+      Some (enum<System.ConsoleKey> (int System.ConsoleKey.A + int k - int KeyboardKey.A))
+    | k when k >= KeyboardKey.Zero && k <= KeyboardKey.Nine ->
+      Some (enum<System.ConsoleKey> (int System.ConsoleKey.D0 + int k - int KeyboardKey.Zero))
+    | _ -> None
+
+  let private mapKeyWith (keyMap: KeyMap) () : GuiCommand option =
+    let c = ctrl ()
+    let a = alt ()
+    let s = shift ()
 
     let key = keyPressed ()
     if key = KeyboardKey.Null then None
     else
-      match key with
-      // Quit
-      | KeyboardKey.Q when ctrl -> Some Quit
-      | KeyboardKey.D when ctrl -> Some Quit
-      // Focus
-      | KeyboardKey.Tab when not ctrl -> Some CycleFocus
-      // Spatial focus (Ctrl+H/J/K/L — vim-style)
-      | KeyboardKey.H when ctrl -> Some (FocusDir Direction.Left)
-      | KeyboardKey.J when ctrl -> Some (FocusDir Direction.Down)
-      | KeyboardKey.K when ctrl -> Some (FocusDir Direction.Up)
-      | KeyboardKey.L when ctrl -> Some (FocusDir Direction.Right)
-      // Session management
-      | KeyboardKey.N when ctrl -> Some (Action (EditorAction.CreateSession []))
-      | KeyboardKey.S when ctrl && alt -> Some (Action EditorAction.ToggleSessionPanel)
-      // Scroll
-      | KeyboardKey.PageUp -> Some ScrollUp
-      | KeyboardKey.PageDown -> Some ScrollDown
-      | KeyboardKey.Up when alt -> Some ScrollUp
-      | KeyboardKey.Down when alt -> Some ScrollDown
-      // Font size
-      | KeyboardKey.Equal when ctrl -> Some FontSizeUp
-      | KeyboardKey.Minus when ctrl -> Some FontSizeDown
-      // Navigation
-      | KeyboardKey.Up when ctrl -> Some (Action EditorAction.HistoryPrevious)
-      | KeyboardKey.Down when ctrl -> Some (Action EditorAction.HistoryNext)
-      | KeyboardKey.Up -> Some (Action (EditorAction.MoveCursor Direction.Up))
-      | KeyboardKey.Down -> Some (Action (EditorAction.MoveCursor Direction.Down))
-      | KeyboardKey.Left when ctrl -> Some (Action EditorAction.MoveWordBackward)
-      | KeyboardKey.Right when ctrl -> Some (Action EditorAction.MoveWordForward)
-      | KeyboardKey.Left -> Some (Action (EditorAction.MoveCursor Direction.Left))
-      | KeyboardKey.Right -> Some (Action (EditorAction.MoveCursor Direction.Right))
-      | KeyboardKey.Home -> Some (Action EditorAction.MoveToLineStart)
-      | KeyboardKey.End -> Some (Action EditorAction.MoveToLineEnd)
-      // Editing
-      | KeyboardKey.Enter when ctrl -> Some (Action EditorAction.Submit)
-      | KeyboardKey.Enter -> Some (Action EditorAction.NewLine)
-      | KeyboardKey.Backspace when ctrl -> Some (Action EditorAction.DeleteWord)
-      | KeyboardKey.Backspace -> Some (Action EditorAction.DeleteBackward)
-      | KeyboardKey.Delete -> Some (Action EditorAction.DeleteForward)
-      // Selection & completion
-      | KeyboardKey.A when ctrl -> Some (Action EditorAction.SelectAll)
-      | KeyboardKey.Space when ctrl -> Some (Action EditorAction.TriggerCompletion)
-      | KeyboardKey.Escape -> Some (Action EditorAction.DismissCompletion)
-      // Undo/Redo
-      | KeyboardKey.R when ctrl -> Some (Action EditorAction.Undo)
-      | KeyboardKey.Z when ctrl && shift -> Some (Action EditorAction.Redo)
-      | KeyboardKey.Z when ctrl -> Some (Action EditorAction.Undo)
-      // Cancel
-      | KeyboardKey.C when ctrl -> Some (Action EditorAction.Cancel)
-      | _ -> None
+      match raylibToConsoleKey key with
+      | None -> None
+      | Some ck ->
+        let mods =
+          (if c then System.ConsoleModifiers.Control else enum 0) |||
+          (if a then System.ConsoleModifiers.Alt else enum 0) |||
+          (if s then System.ConsoleModifiers.Shift else enum 0)
+        let combo : KeyCombo = { Key = ck; Modifiers = mods; Char = None }
+        match keyMap |> Map.tryFind combo with
+        | Some (UiAction.Quit) -> Some Quit
+        | Some (UiAction.CycleFocus) -> Some CycleFocus
+        | Some (UiAction.FocusDir d) -> Some (FocusDir d)
+        | Some (UiAction.ScrollUp) -> Some ScrollUp
+        | Some (UiAction.ScrollDown) -> Some ScrollDown
+        | Some (UiAction.Redraw) -> Some Redraw
+        | Some (UiAction.FontSizeUp) -> Some FontSizeUp
+        | Some (UiAction.FontSizeDown) -> Some FontSizeDown
+        | Some (UiAction.Editor action) -> Some (Action action)
+        | None -> None
 
   /// Get typed characters (for InsertChar) — separate from key presses
   let private getCharInput () : EditorAction option =
@@ -123,14 +116,24 @@ module RaylibMode =
     (evalCount: int)
     (focusedPane: PaneId)
     (scrollOffsets: Map<PaneId, int>)
-    (fontSize: int) =
+    (fontSize: int)
+    (currentFps: int) =
 
     let statusLeft = sprintf " %s | evals: %d | %s" sessionState evalCount (PaneId.displayName focusedPane)
-    let statusRight = sprintf " %dpt | Ctrl+/- font | Ctrl+Q quit | Tab focus " fontSize
+    let statusRight = sprintf " %dpt | %d fps | Ctrl+/- font | Tab focus " fontSize currentFps
     Screen.draw grid regions focusedPane scrollOffsets statusLeft statusRight |> ignore
 
   /// Run the Raylib GUI window connected to daemon.
   let run () =
+    // Load keybindings from config, merge with defaults
+    let keyMap =
+      let cwd = System.IO.Directory.GetCurrentDirectory()
+      match DirectoryConfig.load cwd with
+      | Some cfg when not cfg.Keybindings.IsEmpty ->
+        KeyMap.merge cfg.Keybindings KeyMap.defaults
+      | _ -> KeyMap.defaults
+    let mapKey = mapKeyWith keyMap
+
     // Discover daemon
     let daemonInfo =
       match DaemonState.read () with
@@ -164,6 +167,7 @@ module RaylibMode =
     let mutable lastRegions : RenderRegion list = []
     let mutable lastSessionState = "Connecting..."
     let mutable lastEvalCount = 0
+    let mutable lastFps = 0
     let mutable focusedPane = PaneId.Editor
     let mutable scrollOffsets = Map.empty<PaneId, int>
     let statelock = obj ()
@@ -208,7 +212,6 @@ module RaylibMode =
         |> fun t -> t.Wait())
 
     while running && not (windowShouldClose ()) do
-      let sw = System.Diagnostics.Stopwatch.StartNew()
 
       // Handle window resize
       let winW = screenW ()
@@ -285,15 +288,8 @@ module RaylibMode =
         let regions, sessionState, evalCount =
           lock statelock (fun () -> lastRegions, lastSessionState, lastEvalCount)
 
-        renderRegions grid regions sessionState evalCount focusedPane scrollOffsets fontSize
-
-        sw.Stop()
-        let frameMs = sw.Elapsed.TotalMilliseconds
-        // Overlay frame timing on status bar area
-        let fpsText = sprintf "%d fps | %.1f ms" (fps ()) frameMs
-        Draw.text (DrawTarget.create grid (Rect.create 0 0 gridCols gridRows))
-          (gridRows - 1) (gridCols - fpsText.Length - 1)
-          Theme.fgDim Theme.bgStatus CellAttrs.None fpsText
+        renderRegions grid regions sessionState evalCount focusedPane scrollOffsets fontSize lastFps
+        lastFps <- fps ()
 
         Raylib.BeginDrawing()
         Raylib.ClearBackground(RaylibPalette.toColor Theme.bgDefault)

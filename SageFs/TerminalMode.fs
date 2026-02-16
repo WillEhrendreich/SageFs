@@ -30,6 +30,7 @@ let run
   (stateChanged: IEvent<string>)
   (connectionTracker: ConnectionTracker option)
   (sessionId: string option)
+  (keyMap: KeyMap)
   (ct: CancellationToken)
   = task {
 
@@ -108,7 +109,7 @@ let run
 
       if Console.KeyAvailable then
         let keyInfo = Console.ReadKey(true)
-        match TerminalInput.mapKey keyInfo with
+        match TerminalInput.mapKeyWith keyMap keyInfo with
         | Some TerminalCommand.Quit ->
           return ()
         | Some TerminalCommand.Redraw ->
