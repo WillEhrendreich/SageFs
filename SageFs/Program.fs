@@ -56,7 +56,7 @@ let parseMcpPort (args: string array) =
 /// Filter out SageFs-specific flags, keep FSI-passthrough args.
 let filterArgs (args: string array) (extraFlags: string list) =
   let SageFsFlags =
-    set ([ "--no-web"; "--no-mcp"; "--mcp-port"; "--help"; "-h";
+    set ([ "--mcp-port"; "--help"; "-h";
            "--version"; "-v" ] @ extraFlags)
   let mcpPortIndex = args |> Array.tryFindIndex (fun a -> a = "--mcp-port")
   let ionideFlags =
@@ -122,7 +122,6 @@ let main args =
     printfn "Options:"
     printfn "  --version, -v          Show version information"
     printfn "  --help, -h             Show this help message"
-    printfn "  --no-mcp               Disable MCP server (default: enabled on port 37749)"
     printfn "  --mcp-port PORT        Set custom MCP server port (default: 37749)"
     printfn "  --bare                 Start a bare FSI session — no project/solution loading"
     printfn "  --supervised           Run under watchdog supervisor (auto-restart on crash)"

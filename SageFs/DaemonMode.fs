@@ -128,6 +128,9 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
         stateChangedEvent.Trigger json
       with _ -> ())
 
+  // Populate session list in Elm model from existing sessions
+  elmRuntime.Dispatch(SageFsMsg.Editor EditorAction.ListSessions)
+
   // Start MCP server BEFORE warm-up completes
   appActor.Post(AppState.UpdateMcpPort mcpPort)
   let mcpTask =

@@ -140,6 +140,40 @@ module PaneId =
     let idx = all |> Array.findIndex ((=) current)
     all.[(idx + 1) % all.Length]
 
+  /// Navigate to the nearest pane in the given direction based on layout positions.
+  /// Returns the current pane if no neighbor exists in that direction.
+  let navigate (direction: Direction) (current: PaneId) (paneRects: (PaneId * Rect) list) : PaneId =
+    let currentRect =
+      paneRects |> List.tryFind (fun (id, _) -> id = current) |> Option.map snd
+    match currentRect with
+    | None -> current
+    | Some cr ->
+      let centerRow = cr.Row + cr.Height / 2
+      let centerCol = cr.Col + cr.Width / 2
+      let candidates =
+        paneRects
+        |> List.filter (fun (id, r) ->
+          if id = current then false
+          else
+            let cRow = r.Row + r.Height / 2
+            let cCol = r.Col + r.Width / 2
+            match direction with
+            | Direction.Left  -> cCol < centerCol
+            | Direction.Right -> cCol > centerCol
+            | Direction.Up    -> cRow < centerRow
+            | Direction.Down  -> cRow > centerRow)
+      match candidates with
+      | [] -> current
+      | _ ->
+        candidates
+        |> List.minBy (fun (_, r) ->
+          let cRow = r.Row + r.Height / 2
+          let cCol = r.Col + r.Width / 2
+          let dr = cRow - centerRow
+          let dc = cCol - centerCol
+          dr * dr + dc * dc)
+        |> fst
+
   let displayName = function
     | PaneId.Output -> "Output"
     | PaneId.Sessions -> "Sessions"
@@ -462,6 +496,7 @@ module TerminalUIState =
 type TerminalCommand =
   | Action of EditorAction
   | CycleFocus
+  | FocusDirection of Direction
   | ScrollUp
   | ScrollDown
   | Redraw
@@ -478,10 +513,15 @@ module TerminalInput =
     match key.Key, ctrl, alt, shift with
     // Terminal-level commands
     | ConsoleKey.Tab, false, false, false -> Some TerminalCommand.CycleFocus
-    | ConsoleKey.L, true, false, false -> Some TerminalCommand.Redraw
     | ConsoleKey.D, true, false, false -> Some TerminalCommand.Quit
     | ConsoleKey.Q, true, false, false -> Some TerminalCommand.Quit
     | ConsoleKey.C, true, false, false -> Some (TerminalCommand.Action EditorAction.Cancel)
+
+    // Spatial focus navigation (Ctrl+H/J/K/L — vim-style)
+    | ConsoleKey.H, true, false, false -> Some (TerminalCommand.FocusDirection Direction.Left)
+    | ConsoleKey.J, true, false, false -> Some (TerminalCommand.FocusDirection Direction.Down)
+    | ConsoleKey.K, true, false, false -> Some (TerminalCommand.FocusDirection Direction.Up)
+    | ConsoleKey.L, true, false, false -> Some (TerminalCommand.FocusDirection Direction.Right)
 
     // Scroll (Alt+Up/Down or PageUp/PageDown)
     | ConsoleKey.UpArrow, false, true, false -> Some TerminalCommand.ScrollUp

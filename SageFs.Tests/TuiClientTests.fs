@@ -2,7 +2,7 @@ module SageFs.Tests.TuiClientTests
 
 open Expecto
 open SageFs
-open SageFs.Server.TuiClient
+open SageFs.DaemonClient
 
 let parseStateEventTests = testList "parseStateEvent" [
   test "parses valid JSON with regions" {

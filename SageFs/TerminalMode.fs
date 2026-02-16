@@ -31,6 +31,15 @@ module TerminalState =
     { state with Focus = PaneId.next state.Focus }
     |> applyFocus
 
+  let focusDirection (dir: Direction) (state: TerminalState) : TerminalState =
+    let paneRects =
+      state.Layout.Panes
+      |> List.map (fun p ->
+        p.PaneId, Rect.create p.Row p.Col p.Width p.Height)
+    let target = PaneId.navigate dir state.Focus paneRects
+    { state with Focus = target }
+    |> applyFocus
+
   let scroll (state: TerminalState) (delta: int) : TerminalState =
     let id = state.Focus
     let current = state.ScrollOffsets |> Map.tryFind id |> Option.defaultValue 0
@@ -162,6 +171,9 @@ let run
           render ()
         | Some TerminalCommand.CycleFocus ->
           state <- TerminalState.cycleFocus state
+          render ()
+        | Some (TerminalCommand.FocusDirection dir) ->
+          state <- TerminalState.focusDirection dir state
           render ()
         | Some TerminalCommand.ScrollUp ->
           state <- TerminalState.scroll state -3

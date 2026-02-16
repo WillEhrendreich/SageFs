@@ -6,6 +6,7 @@ open System.IO
 open Expecto
 open Expecto.Flip
 open SageFs.Server
+open SageFs
 
 [<Tests>]
 let tests =

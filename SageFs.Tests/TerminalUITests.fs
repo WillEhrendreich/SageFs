@@ -415,9 +415,9 @@ let terminalInputTests = testList "TerminalInput" [
     Expect.equal result (Some (TerminalCommand.Action (EditorAction.InsertChar 'a'))) "printable char"
   }
 
-  test "Ctrl+L redraws" {
+  test "Ctrl+L focuses right pane" {
     let result = TerminalInput.mapKey (key '\x0c' ConsoleKey.L 1)
-    Expect.equal result (Some TerminalCommand.Redraw) "Ctrl+L redraws"
+    Expect.equal result (Some (TerminalCommand.FocusDirection Direction.Right)) "Ctrl+L focuses right"
   }
 
   test "Alt+Up scrolls up" {

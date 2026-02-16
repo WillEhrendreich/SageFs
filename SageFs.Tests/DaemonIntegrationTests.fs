@@ -320,7 +320,7 @@ let daemonLifecycleTests =
       let port = 37800 + (Random().Next(100))
       let psi = ProcessStartInfo()
       psi.FileName <- SageFsExe
-      psi.Arguments <- sprintf "-d --mcp-port %d --no-web" port
+      psi.Arguments <- sprintf "--mcp-port %d" port
       psi.UseShellExecute <- false
       psi.CreateNoWindow <- true
       psi.WorkingDirectory <- testProjectDir

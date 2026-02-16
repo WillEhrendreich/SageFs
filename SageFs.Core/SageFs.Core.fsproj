@@ -35,6 +35,8 @@
         <Compile Include="Theme.fs" />
         <Compile Include="Draw.fs" />
         <Compile Include="AnsiEmitter.fs" />
+        <Compile Include="DaemonState.fs" />
+        <Compile Include="DaemonClient.fs" />
         <Compile Include="Editor.fs" />
         <Compile Include="ElmLoop.fs" />
         <Compile Include="SessionDisplay.fs" />
