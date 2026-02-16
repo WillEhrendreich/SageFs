@@ -64,28 +64,107 @@ module StatusHints =
     if all.IsEmpty then ""
     else sprintf " %s " (String.concat " | " all)
 
+/// Layout configuration — which panes are visible and how space is divided.
+type LayoutConfig = {
+  VisiblePanes: Set<PaneId>
+  LeftRightSplit: float  // proportion for left column (0.0-1.0)
+  OutputEditorSplit: int // rows reserved for editor in left column
+  SessionsDiagSplit: float // proportion for sessions in right column
+}
+
+module LayoutConfig =
+  let defaults = {
+    VisiblePanes = Set.ofList [ PaneId.Output; PaneId.Editor; PaneId.Sessions; PaneId.Diagnostics ]
+    LeftRightSplit = 0.65
+    OutputEditorSplit = 6
+    SessionsDiagSplit = 0.5
+  }
+
+  /// Focus mode: editor + output only
+  let focus = {
+    VisiblePanes = Set.ofList [ PaneId.Output; PaneId.Editor ]
+    LeftRightSplit = 1.0
+    OutputEditorSplit = 6
+    SessionsDiagSplit = 0.5
+  }
+
+  /// Minimal mode: editor only
+  let minimal = {
+    VisiblePanes = Set.singleton PaneId.Editor
+    LeftRightSplit = 1.0
+    OutputEditorSplit = 0
+    SessionsDiagSplit = 0.5
+  }
+
+  /// Toggle a pane's visibility. Editor is always visible.
+  let togglePane (paneId: PaneId) (cfg: LayoutConfig) : LayoutConfig =
+    if paneId = PaneId.Editor then cfg  // editor always visible
+    elif cfg.VisiblePanes.Contains paneId then
+      { cfg with VisiblePanes = Set.remove paneId cfg.VisiblePanes }
+    else
+      { cfg with VisiblePanes = Set.add paneId cfg.VisiblePanes }
+
 /// Shared screen composition — computes layout and renders panes into a CellGrid.
 /// Used by both TUI (via AnsiEmitter) and GUI (via RaylibEmitter).
 module Screen =
 
-  /// Compute the standard 4-pane layout for the given grid dimensions.
-  /// Returns (PaneId * Rect) list and a status bar rect.
-  let computeLayout (rows: int) (cols: int) : (PaneId * Rect) list * Rect =
+  /// Compute layout using the given LayoutConfig.
+  let computeLayoutWith (cfg: LayoutConfig) (rows: int) (cols: int) : (PaneId * Rect) list * Rect =
     let contentArea = Rect.create 0 0 cols (rows - 1)
-    let left, right = Rect.splitVProp 0.65 contentArea
-    let outputRect, editorRect = Rect.splitH (left.Height - 6) left
-    let sessRect, diagRect = Rect.splitHProp 0.5 right
-    let panes =
-      [ PaneId.Output, outputRect
-        PaneId.Editor, editorRect
-        PaneId.Sessions, sessRect
-        PaneId.Diagnostics, diagRect ]
     let statusRect = Rect.create (rows - 1) 0 cols 1
-    panes, statusRect
+    let hasLeft =
+      cfg.VisiblePanes.Contains PaneId.Output || cfg.VisiblePanes.Contains PaneId.Editor
+    let hasRight =
+      cfg.VisiblePanes.Contains PaneId.Sessions || cfg.VisiblePanes.Contains PaneId.Diagnostics
+    let panes = ResizeArray<PaneId * Rect>()
+    if hasLeft && hasRight then
+      let left, right = Rect.splitVProp cfg.LeftRightSplit contentArea
+      // Left column
+      if cfg.VisiblePanes.Contains PaneId.Output && cfg.VisiblePanes.Contains PaneId.Editor then
+        let outputRect, editorRect = Rect.splitH (left.Height - cfg.OutputEditorSplit) left
+        panes.Add(PaneId.Output, outputRect)
+        panes.Add(PaneId.Editor, editorRect)
+      elif cfg.VisiblePanes.Contains PaneId.Output then
+        panes.Add(PaneId.Output, left)
+      elif cfg.VisiblePanes.Contains PaneId.Editor then
+        panes.Add(PaneId.Editor, left)
+      // Right column
+      if cfg.VisiblePanes.Contains PaneId.Sessions && cfg.VisiblePanes.Contains PaneId.Diagnostics then
+        let sessRect, diagRect = Rect.splitHProp cfg.SessionsDiagSplit right
+        panes.Add(PaneId.Sessions, sessRect)
+        panes.Add(PaneId.Diagnostics, diagRect)
+      elif cfg.VisiblePanes.Contains PaneId.Sessions then
+        panes.Add(PaneId.Sessions, right)
+      elif cfg.VisiblePanes.Contains PaneId.Diagnostics then
+        panes.Add(PaneId.Diagnostics, right)
+    elif hasLeft then
+      if cfg.VisiblePanes.Contains PaneId.Output && cfg.VisiblePanes.Contains PaneId.Editor then
+        let outputRect, editorRect = Rect.splitH (contentArea.Height - cfg.OutputEditorSplit) contentArea
+        panes.Add(PaneId.Output, outputRect)
+        panes.Add(PaneId.Editor, editorRect)
+      elif cfg.VisiblePanes.Contains PaneId.Output then
+        panes.Add(PaneId.Output, contentArea)
+      elif cfg.VisiblePanes.Contains PaneId.Editor then
+        panes.Add(PaneId.Editor, contentArea)
+    elif hasRight then
+      if cfg.VisiblePanes.Contains PaneId.Sessions && cfg.VisiblePanes.Contains PaneId.Diagnostics then
+        let sessRect, diagRect = Rect.splitHProp cfg.SessionsDiagSplit contentArea
+        panes.Add(PaneId.Sessions, sessRect)
+        panes.Add(PaneId.Diagnostics, diagRect)
+      elif cfg.VisiblePanes.Contains PaneId.Sessions then
+        panes.Add(PaneId.Sessions, contentArea)
+      elif cfg.VisiblePanes.Contains PaneId.Diagnostics then
+        panes.Add(PaneId.Diagnostics, contentArea)
+    panes |> Seq.toList, statusRect
 
-  /// Draw all panes and status bar into the given CellGrid.
+  /// Compute the standard 4-pane layout for the given grid dimensions.
+  let computeLayout (rows: int) (cols: int) : (PaneId * Rect) list * Rect =
+    computeLayoutWith LayoutConfig.defaults rows cols
+
+  /// Draw all panes and status bar into the given CellGrid, using the given LayoutConfig.
   /// Returns the cursor position (screen row, col) if the focused pane has one.
-  let draw
+  let drawWith
+    (cfg: LayoutConfig)
     (grid: Cell[,])
     (regions: RenderRegion list)
     (focusedPane: PaneId)
@@ -100,7 +179,7 @@ module Screen =
     let dt = DrawTarget.create grid (Rect.create 0 0 cols rows)
     Draw.fill dt Theme.bgPanel
 
-    let paneRects, _statusRect = computeLayout rows cols
+    let paneRects, _statusRect = computeLayoutWith cfg rows cols
 
     let mutable cursorPos = None
 
@@ -174,3 +253,13 @@ module Screen =
     Draw.statusBar dt statusLeft statusRight Theme.fgDefault Theme.bgStatus
 
     cursorPos
+
+  /// Draw all panes and status bar using the default layout config.
+  let draw
+    (grid: Cell[,])
+    (regions: RenderRegion list)
+    (focusedPane: PaneId)
+    (scrollOffsets: Map<PaneId, int>)
+    (statusLeft: string)
+    (statusRight: string) : (int * int) option =
+    drawWith LayoutConfig.defaults grid regions focusedPane scrollOffsets statusLeft statusRight

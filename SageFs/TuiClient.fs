@@ -39,6 +39,7 @@ let run (daemonInfo: DaemonInfo) = task {
   let mutable lastRegions : RenderRegion list = []
   let mutable lastSessionState = "Connecting..."
   let mutable lastEvalCount = 0
+  let mutable layoutConfig = LayoutConfig.defaults
 
   // Load keybindings from config, merge with defaults
   let keyMap =
@@ -59,7 +60,7 @@ let run (daemonInfo: DaemonInfo) = task {
         let sw = System.Diagnostics.Stopwatch.StartNew()
         let statusLeft = sprintf " %s | evals: %d | %s" lastSessionState lastEvalCount (PaneId.displayName focusedPane)
         let statusRight = sprintf " %.1fms |%s" lastFrameMs (StatusHints.build keyMap focusedPane)
-        let cursorPos = Screen.draw grid lastRegions focusedPane scrollOffsets statusLeft statusRight
+        let cursorPos = Screen.drawWith layoutConfig grid lastRegions focusedPane scrollOffsets statusLeft statusRight
         let cursorRow, cursorCol =
           match cursorPos with
           | Some (r, c) -> r, c
@@ -125,7 +126,7 @@ let run (daemonInfo: DaemonInfo) = task {
           focusedPane <- PaneId.next focusedPane
           render ()
         | Some (TerminalCommand.FocusDirection dir) ->
-          let paneRects = Screen.computeLayout gridRows gridCols |> fst
+          let paneRects = Screen.computeLayoutWith layoutConfig gridRows gridCols |> fst
           focusedPane <- PaneId.navigate dir focusedPane paneRects
           render ()
         | Some TerminalCommand.ScrollUp ->
@@ -135,6 +136,23 @@ let run (daemonInfo: DaemonInfo) = task {
         | Some TerminalCommand.ScrollDown ->
           let cur = scrollOffsets |> Map.tryFind focusedPane |> Option.defaultValue 0
           scrollOffsets <- scrollOffsets |> Map.add focusedPane (cur + 3)
+          render ()
+        | Some (TerminalCommand.TogglePane paneName) ->
+          match PaneId.tryParse paneName with
+          | Some pid ->
+            layoutConfig <- LayoutConfig.togglePane pid layoutConfig
+            if not (layoutConfig.VisiblePanes.Contains focusedPane) then
+              focusedPane <- PaneId.Editor
+            render ()
+          | None -> ()
+        | Some (TerminalCommand.LayoutPreset presetName) ->
+          layoutConfig <-
+            match presetName with
+            | "focus" -> LayoutConfig.focus
+            | "minimal" -> LayoutConfig.minimal
+            | _ -> LayoutConfig.defaults
+          if not (layoutConfig.VisiblePanes.Contains focusedPane) then
+            focusedPane <- PaneId.Editor
           render ()
         | Some (TerminalCommand.Action action) ->
           do! DaemonClient.dispatch client baseUrl action

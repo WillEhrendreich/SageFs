@@ -120,6 +120,8 @@ and [<RequireQualifiedAccess>] UiAction =
   | Redraw
   | FontSizeUp
   | FontSizeDown
+  | TogglePane of string
+  | LayoutPreset of string
 
 /// Maps physical keys to semantic actions
 type KeyMap = Map<KeyCombo, UiAction>
@@ -239,6 +241,8 @@ module UiAction =
     | "ListSessions" -> Some (UiAction.Editor EditorAction.ListSessions)
     | "ToggleSessionPanel" -> Some (UiAction.Editor EditorAction.ToggleSessionPanel)
     | "CreateSession" -> Some (UiAction.Editor (EditorAction.CreateSession []))
+    | s when s.StartsWith("TogglePane.") -> Some (UiAction.TogglePane (s.Substring(11)))
+    | s when s.StartsWith("Layout.") -> Some (UiAction.LayoutPreset (s.Substring(7)))
     | _ -> None
 
 module KeyMap =
@@ -298,6 +302,13 @@ module KeyMap =
       KeyCombo.ctrl ConsoleKey.R, e EditorAction.Undo
       // Cancel
       KeyCombo.ctrl ConsoleKey.C, e EditorAction.Cancel
+      // Layout presets
+      KeyCombo.ctrlAlt ConsoleKey.D1, UiAction.LayoutPreset "default"
+      KeyCombo.ctrlAlt ConsoleKey.D2, UiAction.LayoutPreset "focus"
+      KeyCombo.ctrlAlt ConsoleKey.D3, UiAction.LayoutPreset "minimal"
+      // Pane toggle
+      KeyCombo.ctrlAlt ConsoleKey.O, UiAction.TogglePane "Output"
+      KeyCombo.ctrlAlt ConsoleKey.D, UiAction.TogglePane "Diagnostics"
     ] |> Map.ofList
 
   /// Merge user overrides onto defaults (overrides win)

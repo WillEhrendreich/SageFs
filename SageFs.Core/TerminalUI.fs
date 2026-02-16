@@ -180,6 +180,13 @@ module PaneId =
     | PaneId.Diagnostics -> "Diagnostics"
     | PaneId.Editor -> "Editor"
 
+  let tryParse = function
+    | "Output" | "output" -> Some PaneId.Output
+    | "Sessions" | "sessions" -> Some PaneId.Sessions
+    | "Diagnostics" | "diagnostics" -> Some PaneId.Diagnostics
+    | "Editor" | "editor" -> Some PaneId.Editor
+    | _ -> None
+
 
 /// Frame diffing — only redraw rows that changed between frames
 module FrameDiff =
@@ -250,6 +257,8 @@ type TerminalCommand =
   | ScrollDown
   | Redraw
   | Quit
+  | TogglePane of string
+  | LayoutPreset of string
 
 
 /// Map console key presses to terminal commands
@@ -270,6 +279,8 @@ module TerminalInput =
     | Some (UiAction.Redraw) -> Some TerminalCommand.Redraw
     | Some (UiAction.FontSizeUp) -> None // TUI can't change font size
     | Some (UiAction.FontSizeDown) -> None
+    | Some (UiAction.TogglePane p) -> Some (TerminalCommand.TogglePane p)
+    | Some (UiAction.LayoutPreset p) -> Some (TerminalCommand.LayoutPreset p)
     | Some (UiAction.Editor action) -> Some (TerminalCommand.Action action)
     | None ->
       // Fall through to character insertion for printable chars
