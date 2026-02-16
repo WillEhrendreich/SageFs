@@ -60,6 +60,7 @@ module DaemonClient =
     | EditorAction.MoveCursor Direction.Down -> Some ("moveDown", None)
     | EditorAction.MoveCursor Direction.Left -> Some ("moveLeft", None)
     | EditorAction.MoveCursor Direction.Right -> Some ("moveRight", None)
+    | EditorAction.SetCursorPosition (line, col) -> Some ("setCursorPosition", Some (sprintf "%d,%d" line col))
     | EditorAction.MoveWordForward -> Some ("moveWordForward", None)
     | EditorAction.MoveWordBackward -> Some ("moveWordBackward", None)
     | EditorAction.MoveToLineStart -> Some ("moveToLineStart", None)

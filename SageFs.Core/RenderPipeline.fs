@@ -69,6 +69,7 @@ and [<RequireQualifiedAccess>] EditorAction =
   | DeleteToEndOfLine
   // Cursor movement
   | MoveCursor of Direction
+  | SetCursorPosition of line: int * col: int
   | MoveWordForward
   | MoveWordBackward
   | MoveToLineStart

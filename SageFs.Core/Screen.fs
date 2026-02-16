@@ -59,6 +59,12 @@ module Screen =
         visibleLines |> Array.iteri (fun row line ->
           Draw.text inner row 0 fg bg CellAttrs.None line)
 
+        // Scroll indicators
+        if skip > 0 then
+          Draw.text inner 0 (inner.Clip.Width - 1) Theme.fgDim bg CellAttrs.None "▲"
+        if lines.Length > skip + inner.Clip.Height then
+          Draw.text inner (inner.Clip.Height - 1) (inner.Clip.Width - 1) Theme.fgDim bg CellAttrs.None "▼"
+
         // Track cursor for focused pane
         if paneId = focusedPane then
           match region.Cursor with
