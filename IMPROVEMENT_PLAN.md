@@ -956,6 +956,138 @@ Computing `EnvironmentFingerprint` is cheap:
 - ❌ Custom state bag uses `Map<string, obj>` — unsafe downcasts everywhere
 - ❌ Dual-renderer not yet feature-complete — SageFs.Gui scaffolded but TUI/Raylib parity not achieved
 - ❌ No Neovim plugin (standalone SageFs.nvim) — existing fsi-mcp.lua in dotfiles works but no SSE, no inline results
+- ❌ No session auto-resolution — when all sessions are stopped, MCP tools return `"Session '' not found"` with no recovery path
+
+---
+
+## Session Auto-Resolution (CRITICAL — Next Up)
+
+**Status:** Session unification is complete (commit e7d5304). Every session is now a worker sub-process managed by SessionManager. The "primary embedded actor" is gone. But when no sessions are running, the daemon is a dead end — `activeSessionId = ""` and every MCP tool fails with `"Session '' not found"`.
+
+**The user mandate:** *"There should NEVER be a sessionId of ''. If no active session exists, a new session needs to be automatically created."*
+
+### The Problem
+
+When the daemon is alive but no sessions are running (e.g., the last session was stopped, or the daemon just started and session creation failed):
+
+1. `activeSessionId = ""` (empty string)
+2. Every MCP tool calls `routeToSession` → `GetProxy ""` → `None` → `Error "Session '' not found"`
+3. `getSessionState` returns `Faulted` (because proxy lookup fails)
+4. Affordances show only `get_fsi_status` and `get_recent_fsi_events` — the AI has no way to recover
+5. The AI would need to know about `create_session` and call it manually — but that tool may not even be advertised in this state
+
+### The Solution: Smart Session Auto-Resolution
+
+When any MCP tool is invoked and `activeSessionId` is empty (or points to a dead session), SageFs should automatically resolve and create a session using a hierarchy of heuristics:
+
+#### Resolution Order
+
+1. **Check `.SageFs/config.fsx` at CWD** — if it exists and has `let isRoot = true`, treat CWD as the root. Load projects from the config's `let projects = [...]`. This is the "I know what I'm doing" override for complex repo structures.
+
+2. **Detect git root** — walk up from CWD looking for `.git` directory. This is the most reliable root detection for any repo.
+
+3. **Detect solution root** — walk up from CWD looking for `.sln` or `.slnx` files. Already implemented in `WorkerProtocol.SessionInfo.findSolutionRoot`.
+
+4. **Check `.SageFs/config.fsx` at detected root** — if a config file exists at the git/solution root, use its project list and settings.
+
+5. **Auto-discover projects at detected root** — if no config file exists, enumerate `*.fsproj` files recursively from the root. If a solution file exists, parse it for project references. Already partially implemented in `Dashboard.discoverProjects` and `ProjectLoading.loadSolution`.
+
+6. **Fallback to CWD** — if nothing else works, use CWD as root and discover projects there.
+
+#### Config File Additions
+
+The existing `.SageFs/config.fsx` format (parsed in `DirectoryConfig.fs`) needs two new fields:
+
+```fsharp
+// .SageFs/config.fsx
+
+// Existing fields:
+let projects = ["Tests/Tests.fsproj"; "App/App.fsproj"]
+let autoLoad = true
+let initScript = Some "setup.fsx"
+let defaultArgs = ["--no-watch"]
+
+// New fields:
+let isRoot = true          // Treat this directory as a session root — don't walk up to git/solution root
+let sessionName = "my-app" // Optional friendly name for the session (shown in dashboard, status)
+```
+
+- **`isRoot`** — When `true`, this directory is treated as a root even if it's a subdirectory of a larger repo. Use case: monorepos where each subdirectory is an independent project. When SageFs detects this, it should log a notice: `"[INFO] Using local root override from .SageFs/config.fsx (not walking up to repo root)"`
+- **`sessionName`** — Optional friendly name for the auto-created session. Defaults to the directory name.
+
+#### Implementation Plan
+
+**Step 1: Add git root detection** (new function in `WorkerProtocol.fs` or a new `RootDetection.fs` module)
+```fsharp
+/// Walk up from dir looking for .git directory
+let findGitRoot (startDir: string) : string option =
+  let rec walk (dir: string) =
+    if Directory.Exists(Path.Combine(dir, ".git")) then Some dir
+    else
+      let parent = Path.GetDirectoryName dir
+      if isNull parent || parent = dir then None
+      else walk parent
+  walk startDir
+```
+
+**Step 2: Add `isRoot` and `sessionName` to `DirectoryConfig`**
+- Parse `let isRoot = true/false` and `let sessionName = "..."` in `DirectoryConfig.parse`
+- Add fields to the `DirectoryConfig` record type
+
+**Step 3: Create `SessionResolver` module** (new file in `SageFs.Core`)
+```fsharp
+module SageFs.SessionResolver
+
+type ResolvedRoot = {
+  RootDirectory: string
+  Projects: string list
+  SessionName: string option
+  Source: RootSource  // Config | GitRoot | SolutionRoot | WorkingDirectory
+  IsLocalOverride: bool  // true when .SageFs/config.fsx has isRoot=true at a subdirectory
+}
+
+type RootSource =
+  | Config of configPath: string
+  | GitRoot
+  | SolutionRoot of solutionFile: string
+  | WorkingDirectory
+
+/// Resolve the best root and project list for a given working directory.
+let resolve (workingDir: string) : ResolvedRoot = ...
+```
+
+**Step 4: Add `ensureActiveSession` to `McpTools`**
+- Before every MCP tool execution, if `activeSessionId = ""` or the active session is dead:
+  1. Call `SessionResolver.resolve` with the daemon's working directory
+  2. Call `SessionOps.CreateSession` with the resolved projects and root directory
+  3. Set `activeSessionId` to the new session's ID
+  4. Log: `"[INFO] Auto-created session '{id}' at {root} ({source})"`
+  5. If `ResolvedRoot.IsLocalOverride`, also log: `"[NOTICE] Using local root override — not walking up to repo/solution root"`
+
+**Step 5: Fix `StopSession` handler in `DaemonMode.fs`**
+- When stopping the last session, instead of setting `activeSessionId = ""`, trigger auto-resolution to create a replacement session
+- Or: set to `""` and let the next MCP call trigger auto-creation (simpler, avoids eagerly creating sessions nobody needs)
+
+**Step 6: Handle root mismatch gracefully**
+- If detected root differs from CWD, the auto-created session uses the detected root as its working directory
+- The session status should indicate this: `"Session 'abc123' at C:\Code\Repos\MyApp (auto-detected from git root)"`
+- The AI sees the working directory in `get_fsi_status` output and can orient itself
+
+#### Edge Cases
+
+- **Multiple solution files at root** — pick the first one, log a warning listing all found solutions
+- **No projects found anywhere** — create a bare session with no projects (still useful for scripting)
+- **CWD is deeply nested** — e.g., `C:\Code\Repos\BigMonorepo\services\api\src\handlers` — git root might be 5 levels up. The session should use the git root, not CWD
+- **`isRoot` at CWD but also at parent** — CWD's `isRoot` wins (most specific config)
+- **Session creation fails** — log the error, set `activeSessionId = ""`, return a clear error to the MCP tool explaining what happened and what the user should check (project paths, disk space, etc.)
+
+#### Existing Code to Leverage
+
+- `WorkerProtocol.SessionInfo.findSolutionRoot` — already walks up looking for `.sln`/`.slnx`
+- `Dashboard.discoverProjects` — enumerates `.fsproj` files and solution files
+- `ProjectLoading.loadSolution` — auto-discovers solutions, parses project references
+- `DirectoryConfig.load` — loads `.SageFs/config.fsx` from a directory
+- `DirectoryConfig.parse` — parses config file content into `DirectoryConfig` record
 
 ---
 
