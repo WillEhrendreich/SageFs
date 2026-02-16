@@ -41,23 +41,23 @@ let tests = testList "Session Creation" [
 
   testList "resolveSessionProjects" [
 
-    testCase "respects autoLoad = false" <| fun _ ->
+    testCase "respects NoLoad strategy" <| fun _ ->
       withTempDir
         (fun dir ->
           addFakeProject dir "Fake.fsproj"
-          addConfig dir "let autoLoad = false")
+          addConfig dir """{ DirectoryConfig.empty with Load = NoLoad }""")
         (fun dir ->
           resolveSessionProjects dir ""
-          |> Expect.isEmpty "should return no projects when autoLoad = false")
+          |> Expect.isEmpty "should return no projects with NoLoad")
 
-    testCase "auto-discovers when autoLoad = true" <| fun _ ->
+    testCase "auto-discovers with AutoDetect config" <| fun _ ->
       withTempDir
         (fun dir ->
           addFakeProject dir "Fake.fsproj"
-          addConfig dir "let autoLoad = true")
+          addConfig dir """{ DirectoryConfig.empty with Load = AutoDetect }""")
         (fun dir ->
           resolveSessionProjects dir ""
-          |> Expect.isNonEmpty "should auto-discover projects when autoLoad = true")
+          |> Expect.isNonEmpty "should auto-discover with AutoDetect")
 
     testCase "auto-discovers when no config exists" <| fun _ ->
       withTempDir
@@ -71,7 +71,7 @@ let tests = testList "Session Creation" [
         (fun dir ->
           addFakeProject dir "Fake.fsproj"
           addFakeProject dir "Other.fsproj"
-          addConfig dir """let projects = ["Other.fsproj"]""")
+          addConfig dir """{ DirectoryConfig.empty with Load = Projects ["Other.fsproj"] }""")
         (fun dir ->
           let result = resolveSessionProjects dir ""
           result |> Expect.hasLength "should use config Projects" 1
@@ -90,7 +90,7 @@ let tests = testList "Session Creation" [
         (fun dir ->
           addFakeProject dir "Fake.fsproj"
           addFakeProject dir "Manual.fsproj"
-          addConfig dir """let projects = ["Fake.fsproj"]""")
+          addConfig dir """{ DirectoryConfig.empty with Load = Projects ["Fake.fsproj"] }""")
         (fun dir ->
           let result = resolveSessionProjects dir "Manual.fsproj"
           result |> Expect.hasLength "should use manual project" 1
@@ -108,27 +108,28 @@ let tests = testList "Session Creation" [
           result.[0]
           |> Expect.stringContains "should prefer solution" "Fake.sln")
 
-    testCase "config projects still used with autoLoad = false" <| fun _ ->
+    testCase "config solution strategy returns solution path" <| fun _ ->
       withTempDir
         (fun dir ->
-          addFakeProject dir "Fake.fsproj"
-          addConfig dir "let autoLoad = false\nlet projects = [\"Fake.fsproj\"]")
+          addSolution dir "MyApp.sln"
+          addConfig dir """{ DirectoryConfig.empty with Load = Solution "MyApp.sln" }""")
         (fun dir ->
-          resolveSessionProjects dir ""
-          |> Expect.isNonEmpty
-            "config-specified projects should still be used with autoLoad = false")
+          let result = resolveSessionProjects dir ""
+          result |> Expect.hasLength "should find one solution" 1
+          result.[0]
+          |> Expect.stringContains "should use config solution" "MyApp.sln")
   ]
 
-  testList "DirectoryConfig.parse" [
+  testList "DirectoryConfig.evaluate" [
 
-    testCase "reads autoLoad = false as NoLoad" <| fun _ ->
-      DirectoryConfig.parse "let autoLoad = false"
-      |> fun c -> c.Load
-      |> Expect.equal "should parse autoLoad = false as NoLoad" NoLoad
+    testCase "evaluates NoLoad" <| fun _ ->
+      DirectoryConfig.evaluate """{ DirectoryConfig.empty with Load = NoLoad }"""
+      |> Result.map (fun c -> c.Load)
+      |> Expect.equal "should evaluate NoLoad" (Ok NoLoad)
 
-    testCase "defaults to AutoDetect" <| fun _ ->
-      DirectoryConfig.parse ""
-      |> fun c -> c.Load
-      |> Expect.equal "should default to AutoDetect" AutoDetect
+    testCase "evaluates AutoDetect (default)" <| fun _ ->
+      DirectoryConfig.evaluate "DirectoryConfig.empty"
+      |> Result.map (fun c -> c.Load)
+      |> Expect.equal "should default to AutoDetect" (Ok AutoDetect)
   ]
 ]
