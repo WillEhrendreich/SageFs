@@ -3,6 +3,8 @@ namespace SageFs.Gui
 open Raylib_cs
 open SageFs
 
+#nowarn "3391" // implicit CBool -> bool conversion from Raylib-cs
+
 /// Raylib window loop — immediate-mode GUI rendering of CellGrid.
 module RaylibMode =
   let private defaultCellW = 9
