@@ -505,76 +505,31 @@ type TerminalCommand =
 
 /// Map console key presses to terminal commands
 module TerminalInput =
+  /// Convert ConsoleKeyInfo to a KeyCombo for map lookup
+  let private toKeyCombo (key: ConsoleKeyInfo) : KeyCombo =
+    { Key = key.Key; Modifiers = key.Modifiers; Char = None }
+
+  /// Look up action in the keybinding map, then fall back to char insertion
+  let mapKeyWith (keyMap: KeyMap) (key: ConsoleKeyInfo) : TerminalCommand option =
+    let combo = toKeyCombo key
+    match keyMap |> Map.tryFind combo with
+    | Some (UiAction.Quit) -> Some TerminalCommand.Quit
+    | Some (UiAction.CycleFocus) -> Some TerminalCommand.CycleFocus
+    | Some (UiAction.FocusDir d) -> Some (TerminalCommand.FocusDirection d)
+    | Some (UiAction.ScrollUp) -> Some TerminalCommand.ScrollUp
+    | Some (UiAction.ScrollDown) -> Some TerminalCommand.ScrollDown
+    | Some (UiAction.Redraw) -> Some TerminalCommand.Redraw
+    | Some (UiAction.FontSizeUp) -> None // TUI can't change font size
+    | Some (UiAction.FontSizeDown) -> None
+    | Some (UiAction.Editor action) -> Some (TerminalCommand.Action action)
+    | None ->
+      // Fall through to character insertion for printable chars
+      if key.KeyChar >= ' ' && key.KeyChar <= '~' then
+        Some (TerminalCommand.Action (EditorAction.InsertChar key.KeyChar))
+      elif key.KeyChar > '\x7f' then
+        Some (TerminalCommand.Action (EditorAction.InsertChar key.KeyChar))
+      else None
+
+  /// Map using default keybindings (backwards compatibility)
   let mapKey (key: ConsoleKeyInfo) : TerminalCommand option =
-    let ctrl = key.Modifiers.HasFlag(ConsoleModifiers.Control)
-    let alt = key.Modifiers.HasFlag(ConsoleModifiers.Alt)
-    let shift = key.Modifiers.HasFlag(ConsoleModifiers.Shift)
-
-    match key.Key, ctrl, alt, shift with
-    // Terminal-level commands
-    | ConsoleKey.Tab, false, false, false -> Some TerminalCommand.CycleFocus
-    | ConsoleKey.D, true, false, false -> Some TerminalCommand.Quit
-    | ConsoleKey.Q, true, false, false -> Some TerminalCommand.Quit
-    | ConsoleKey.C, true, false, false -> Some (TerminalCommand.Action EditorAction.Cancel)
-
-    // Spatial focus navigation (Ctrl+H/J/K/L — vim-style)
-    | ConsoleKey.H, true, false, false -> Some (TerminalCommand.FocusDirection Direction.Left)
-    | ConsoleKey.J, true, false, false -> Some (TerminalCommand.FocusDirection Direction.Down)
-    | ConsoleKey.K, true, false, false -> Some (TerminalCommand.FocusDirection Direction.Up)
-    | ConsoleKey.L, true, false, false -> Some (TerminalCommand.FocusDirection Direction.Right)
-
-    // Session management
-    | ConsoleKey.N, true, false, false -> Some (TerminalCommand.Action (EditorAction.CreateSession []))
-    | ConsoleKey.S, true, true, false -> Some (TerminalCommand.Action EditorAction.ToggleSessionPanel)
-
-    // Scroll (Alt+Up/Down or PageUp/PageDown)
-    | ConsoleKey.UpArrow, false, true, false -> Some TerminalCommand.ScrollUp
-    | ConsoleKey.DownArrow, false, true, false -> Some TerminalCommand.ScrollDown
-    | ConsoleKey.PageUp, false, false, false -> Some TerminalCommand.ScrollUp
-    | ConsoleKey.PageDown, false, false, false -> Some TerminalCommand.ScrollDown
-
-    // Submit (Ctrl+Enter)
-    | ConsoleKey.Enter, true, false, false -> Some (TerminalCommand.Action EditorAction.Submit)
-    // New line (plain Enter)
-    | ConsoleKey.Enter, false, false, false -> Some (TerminalCommand.Action EditorAction.NewLine)
-
-    // Reset (Ctrl+R)
-    | ConsoleKey.R, true, false, false -> Some (TerminalCommand.Action EditorAction.Undo)
-
-    // Cursor movement
-    | ConsoleKey.UpArrow, false, false, false -> Some (TerminalCommand.Action (EditorAction.MoveCursor Direction.Up))
-    | ConsoleKey.DownArrow, false, false, false -> Some (TerminalCommand.Action (EditorAction.MoveCursor Direction.Down))
-    | ConsoleKey.LeftArrow, false, false, false -> Some (TerminalCommand.Action (EditorAction.MoveCursor Direction.Left))
-    | ConsoleKey.RightArrow, false, false, false -> Some (TerminalCommand.Action (EditorAction.MoveCursor Direction.Right))
-
-    // Word movement (Ctrl+Left/Right)
-    | ConsoleKey.LeftArrow, true, false, false -> Some (TerminalCommand.Action EditorAction.MoveWordBackward)
-    | ConsoleKey.RightArrow, true, false, false -> Some (TerminalCommand.Action EditorAction.MoveWordForward)
-
-    // Home/End
-    | ConsoleKey.Home, false, false, false -> Some (TerminalCommand.Action EditorAction.MoveToLineStart)
-    | ConsoleKey.End, false, false, false -> Some (TerminalCommand.Action EditorAction.MoveToLineEnd)
-
-    // Backspace / Delete
-    | ConsoleKey.Backspace, false, false, false -> Some (TerminalCommand.Action EditorAction.DeleteBackward)
-    | ConsoleKey.Delete, false, false, false -> Some (TerminalCommand.Action EditorAction.DeleteForward)
-    | ConsoleKey.Backspace, true, false, false -> Some (TerminalCommand.Action EditorAction.DeleteWord)
-
-    // History
-    | ConsoleKey.UpArrow, true, false, false -> Some (TerminalCommand.Action EditorAction.HistoryPrevious)
-    | ConsoleKey.DownArrow, true, false, false -> Some (TerminalCommand.Action EditorAction.HistoryNext)
-
-    // Completion
-    | ConsoleKey.Spacebar, true, false, false -> Some (TerminalCommand.Action EditorAction.TriggerCompletion)
-    | ConsoleKey.Escape, false, false, false -> Some (TerminalCommand.Action EditorAction.DismissCompletion)
-
-    // Select all
-    | ConsoleKey.A, true, false, false -> Some (TerminalCommand.Action EditorAction.SelectAll)
-
-    // Printable characters
-    | _, false, false, _ when key.KeyChar >= ' ' && key.KeyChar <= '~' ->
-      Some (TerminalCommand.Action (EditorAction.InsertChar key.KeyChar))
-    | _, false, false, _ when key.KeyChar > '\x7f' ->
-      Some (TerminalCommand.Action (EditorAction.InsertChar key.KeyChar))
-
-    | _ -> None
+    mapKeyWith KeyMap.defaults key

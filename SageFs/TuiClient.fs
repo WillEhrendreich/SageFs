@@ -40,6 +40,14 @@ let run (daemonInfo: DaemonInfo) = task {
   let mutable lastSessionState = "Connecting..."
   let mutable lastEvalCount = 0
 
+  // Load keybindings from config, merge with defaults
+  let keyMap =
+    let cwd = IO.Directory.GetCurrentDirectory()
+    match DirectoryConfig.load cwd with
+    | Some cfg when not cfg.Keybindings.IsEmpty ->
+      KeyMap.merge cfg.Keybindings KeyMap.defaults
+    | _ -> KeyMap.defaults
+
   // Set up raw terminal mode
   TerminalMode.setupRawMode ()
 
@@ -105,7 +113,7 @@ let run (daemonInfo: DaemonInfo) = task {
 
       if Console.KeyAvailable then
         let keyInfo = Console.ReadKey(true)
-        match TerminalInput.mapKey keyInfo with
+        match TerminalInput.mapKeyWith keyMap keyInfo with
         | Some TerminalCommand.Quit ->
           cts.Cancel()
         | Some TerminalCommand.Redraw ->

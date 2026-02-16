@@ -4,12 +4,13 @@ open System
 open System.IO
 
 /// Per-directory configuration via .SageFs/config.fsx.
-/// Provides project lists, auto-load preferences, init scripts, and default args.
+/// Provides project lists, auto-load preferences, init scripts, default args, and keybindings.
 type DirectoryConfig = {
   Projects: string list
   AutoLoad: bool
   InitScript: string option
   DefaultArgs: string list
+  Keybindings: KeyMap
 }
 
 module DirectoryConfig =
@@ -18,6 +19,7 @@ module DirectoryConfig =
     AutoLoad = true
     InitScript = None
     DefaultArgs = []
+    Keybindings = Map.empty
   }
 
   let configDir (workingDir: string) =
@@ -71,7 +73,8 @@ module DirectoryConfig =
     { Projects = projects
       AutoLoad = autoLoad
       InitScript = initScript
-      DefaultArgs = defaultArgs }
+      DefaultArgs = defaultArgs
+      Keybindings = KeyMap.parseConfigLines lines }
 
   let load (workingDir: string) : DirectoryConfig option =
     let path = configPath workingDir
