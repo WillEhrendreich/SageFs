@@ -30,7 +30,11 @@ let run (daemonInfo: DaemonInfo) = task {
 
   let rows = Console.WindowHeight
   let cols = Console.WindowWidth
-  let mutable state = TerminalMode.TerminalState.create rows cols
+  let mutable gridRows = rows
+  let mutable gridCols = cols
+  let mutable grid = CellGrid.create gridRows gridCols
+  let mutable focusedPane = PaneId.Editor
+  let mutable scrollOffsets = Map.empty<PaneId, int>
   let mutable prevFrame = ""
   let mutable lastRegions : RenderRegion list = []
   let mutable lastSessionState = "Connecting..."
@@ -42,8 +46,14 @@ let run (daemonInfo: DaemonInfo) = task {
   let render () =
     lock TerminalUIState.consoleLock (fun () ->
       try
-        let frame =
-          TerminalRender.renderFrame state.Layout lastRegions lastSessionState lastEvalCount
+        let statusLeft = sprintf " %s | evals: %d | %s" lastSessionState lastEvalCount (PaneId.displayName focusedPane)
+        let statusRight = " Ctrl+Q quit | Tab focus | Ctrl+HJKL nav "
+        let cursorPos = Screen.draw grid lastRegions focusedPane scrollOffsets statusLeft statusRight
+        let cursorRow, cursorCol =
+          match cursorPos with
+          | Some (r, c) -> r, c
+          | None -> 0, 0
+        let frame = AnsiEmitter.emit grid cursorRow cursorCol
         let output =
           if prevFrame.Length = 0 then frame
           else
@@ -79,8 +89,10 @@ let run (daemonInfo: DaemonInfo) = task {
       // Check for terminal resize
       let newRows = Console.WindowHeight
       let newCols = Console.WindowWidth
-      if newRows <> state.Layout.Rows || newCols <> state.Layout.Cols then
-        state <- TerminalMode.TerminalState.resize state newRows newCols
+      if newRows <> gridRows || newCols <> gridCols then
+        gridRows <- newRows
+        gridCols <- newCols
+        grid <- CellGrid.create gridRows gridCols
         prevFrame <- ""
         lock TerminalUIState.consoleLock (fun () ->
           Console.Write(AnsiCodes.clearScreen))
@@ -97,16 +109,19 @@ let run (daemonInfo: DaemonInfo) = task {
             Console.Write(AnsiCodes.clearScreen))
           render ()
         | Some TerminalCommand.CycleFocus ->
-          state <- TerminalMode.TerminalState.cycleFocus state
+          focusedPane <- PaneId.next focusedPane
           render ()
         | Some (TerminalCommand.FocusDirection dir) ->
-          state <- TerminalMode.TerminalState.focusDirection dir state
+          let paneRects = Screen.computeLayout gridRows gridCols |> fst
+          focusedPane <- PaneId.navigate dir focusedPane paneRects
           render ()
         | Some TerminalCommand.ScrollUp ->
-          state <- TerminalMode.TerminalState.scroll state -3
+          let cur = scrollOffsets |> Map.tryFind focusedPane |> Option.defaultValue 0
+          scrollOffsets <- scrollOffsets |> Map.add focusedPane (max 0 (cur - 3))
           render ()
         | Some TerminalCommand.ScrollDown ->
-          state <- TerminalMode.TerminalState.scroll state 3
+          let cur = scrollOffsets |> Map.tryFind focusedPane |> Option.defaultValue 0
+          scrollOffsets <- scrollOffsets |> Map.add focusedPane (cur + 3)
           render ()
         | Some (TerminalCommand.Action action) ->
           do! DaemonClient.dispatch client baseUrl action

@@ -523,6 +523,10 @@ module TerminalInput =
     | ConsoleKey.K, true, false, false -> Some (TerminalCommand.FocusDirection Direction.Up)
     | ConsoleKey.L, true, false, false -> Some (TerminalCommand.FocusDirection Direction.Right)
 
+    // Session management
+    | ConsoleKey.N, true, false, false -> Some (TerminalCommand.Action (EditorAction.CreateSession []))
+    | ConsoleKey.S, true, true, false -> Some (TerminalCommand.Action EditorAction.ToggleSessionPanel)
+
     // Scroll (Alt+Up/Down or PageUp/PageDown)
     | ConsoleKey.UpArrow, false, true, false -> Some TerminalCommand.ScrollUp
     | ConsoleKey.DownArrow, false, true, false -> Some TerminalCommand.ScrollDown
@@ -566,9 +570,6 @@ module TerminalInput =
 
     // Select all
     | ConsoleKey.A, true, false, false -> Some (TerminalCommand.Action EditorAction.SelectAll)
-
-    // Session panel toggle
-    | ConsoleKey.S, true, true, false -> Some (TerminalCommand.Action EditorAction.ToggleSessionPanel)
 
     // Printable characters
     | _, false, false, _ when key.KeyChar >= ' ' && key.KeyChar <= '~' ->
