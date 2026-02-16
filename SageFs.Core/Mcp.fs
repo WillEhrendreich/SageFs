@@ -461,9 +461,94 @@ module McpTools =
         return Result.Ok response
     }
 
+  /// Discover .fsproj and .sln/.slnx files in a directory.
+  let private discoverProjectsAtSync (root: string) : string list =
+    try
+      // Prefer solution files over individual projects
+      let solutions =
+        Directory.EnumerateFiles(root)
+        |> Seq.filter (fun f ->
+          let ext = Path.GetExtension(f).ToLowerInvariant()
+          ext = ".sln" || ext = ".slnx")
+        |> Seq.map Path.GetFileName
+        |> Seq.toList
+      if not (List.isEmpty solutions) then
+        solutions
+      else
+        Directory.EnumerateFiles(root, "*.fsproj", SearchOption.AllDirectories)
+        |> Seq.map (fun p -> Path.GetRelativePath(root, p))
+        |> Seq.toList
+    with _ -> []
+
+  /// Resolve project paths from a DirectoryConfig's LoadStrategy.
+  let private resolveProjectsFromConfig (cfg: DirectoryConfig) (root: string) : string list =
+    match cfg.Load with
+    | Solution path -> [path]
+    | Projects paths -> paths
+    | AutoDetect -> discoverProjectsAtSync root
+    | NoLoad -> []
+
+  /// Auto-create a session when no active session exists.
+  /// Resolution order: config isRoot → git root → solution root → CWD.
+  let private ensureActiveSession (ctx: McpContext) : Task<string> =
+    task {
+      let workingDir = Environment.CurrentDirectory
+
+      // Step 1: Check .SageFs/config.fsx at CWD for isRoot override
+      let cwdConfig = DirectoryConfig.load workingDir
+      let useLocalRoot =
+        match cwdConfig with
+        | Some cfg when cfg.IsRoot -> true
+        | _ -> false
+
+      let root, projects =
+        if useLocalRoot then
+          eprintfn "[INFO] Using local root override from .SageFs/config.fsx (not walking up to repo root)"
+          let cfg = cwdConfig.Value
+          workingDir, resolveProjectsFromConfig cfg workingDir
+        else
+          // Step 2: Detect root (git root → solution root → CWD)
+          let detectedRoot =
+            WorkerProtocol.SessionInfo.findGitRoot workingDir
+            |> Option.orElseWith (fun () -> WorkerProtocol.SessionInfo.findSolutionRoot workingDir)
+            |> Option.defaultValue workingDir
+
+          // Step 3: Check .SageFs/config.fsx at detected root
+          let rootConfig = if detectedRoot <> workingDir then DirectoryConfig.load detectedRoot else cwdConfig
+          let projs =
+            match rootConfig with
+            | Some cfg -> resolveProjectsFromConfig cfg detectedRoot
+            | None -> discoverProjectsAtSync detectedRoot
+          detectedRoot, projs
+
+      eprintfn "[INFO] Auto-creating session at %s with %d project(s)" root projects.Length
+      let! result = ctx.SessionOps.CreateSession projects root
+      match result with
+      | Ok _ -> return activeSessionId ctx
+      | Error err ->
+        return failwithf "Auto-session creation failed at %s: %s" root (SageFsError.describe err)
+    }
+
   /// Route to the active session or the specified session.
-  let private resolveSessionId (ctx: McpContext) (sessionId: string option) =
-    sessionId |> Option.defaultValue (activeSessionId ctx)
+  /// If the active session is empty and no explicit session is given,
+  /// auto-creates a session from the working directory.
+  let private resolveSessionId (ctx: McpContext) (sessionId: string option) : Task<string> =
+    task {
+      match sessionId with
+      | Some sid -> return sid
+      | None ->
+        let current = activeSessionId ctx
+        if current <> "" then
+          // Verify the session is still alive
+          let! proxy = ctx.SessionOps.GetProxy current
+          match proxy with
+          | Some _ -> return current
+          | None ->
+            // Active session is dead — fall through to auto-create
+            return! ensureActiveSession ctx
+        else
+          return! ensureActiveSession ctx
+    }
 
   /// Get the session status via proxy, returning the SessionState.
   let private getSessionState (ctx: McpContext) (sessionId: string) : Task<SessionState> =
@@ -512,7 +597,7 @@ module McpTools =
 
   let sendFSharpCode (ctx: McpContext) (agentName: string) (code: string) (format: OutputFormat) (sessionId: string option) : Task<string> =
     task {
-      let sid = resolveSessionId ctx sessionId
+      let! sid = resolveSessionId ctx sessionId
       let statements = McpAdapter.splitStatements code
       EventTracking.trackInput ctx.Store sid (Features.Events.McpAgent agentName) code
 
@@ -647,7 +732,7 @@ module McpTools =
 
   let loadFSharpScript (ctx: McpContext) (agentName: string) (filePath: string) (sessionId: string option) : Task<string> =
     task {
-      let sid = resolveSessionId ctx sessionId
+      let! sid = resolveSessionId ctx sessionId
       let! routeResult =
         routeToSession ctx sid
           (fun replyId -> WorkerProtocol.WorkerMessage.LoadScript(filePath, replyId))
@@ -664,7 +749,7 @@ module McpTools =
 
   let resetSession (ctx: McpContext) (sessionId: string option) : Task<string> =
     task {
-      let sid = resolveSessionId ctx sessionId
+      let! sid = resolveSessionId ctx sessionId
       let! routeResult =
         routeToSession ctx sid
           (fun replyId -> WorkerProtocol.WorkerMessage.ResetSession replyId)
@@ -682,7 +767,7 @@ module McpTools =
 
   let checkFSharpCode (ctx: McpContext) (code: string) (sessionId: string option) : Task<string> =
     task {
-      let sid = resolveSessionId ctx sessionId
+      let! sid = resolveSessionId ctx sessionId
       let! routeResult =
         routeToSession ctx sid
           (fun replyId -> WorkerProtocol.WorkerMessage.CheckCode(code, replyId))
@@ -702,7 +787,7 @@ module McpTools =
 
   let hardResetSession (ctx: McpContext) (rebuild: bool) (sessionId: string option) : Task<string> =
     task {
-      let sid = resolveSessionId ctx sessionId
+      let! sid = resolveSessionId ctx sessionId
       notifyElm ctx (
         SageFsEvent.SessionStatusChanged (sid, SessionDisplayStatus.Restarting))
       let! routeResult =

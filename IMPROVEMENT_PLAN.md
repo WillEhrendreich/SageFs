@@ -957,12 +957,13 @@ Computing `EnvironmentFingerprint` is cheap:
 - ❌ Dual-renderer not yet feature-complete — SageFs.Gui scaffolded but TUI/Raylib parity not achieved
 - ❌ No Neovim plugin (standalone SageFs.nvim) — existing fsi-mcp.lua in dotfiles works but no SSE, no inline results
 - ❌ No session auto-resolution — when all sessions are stopped, MCP tools return `"Session '' not found"` with no recovery path
+- ✅ Session auto-resolution — `ensureActiveSession` auto-creates sessions from git root / solution root / config
 
 ---
 
-## Session Auto-Resolution (CRITICAL — Next Up)
+## Session Auto-Resolution (CRITICAL — Next Up) — ✅ DONE
 
-**Status:** Session unification is complete (commit e7d5304). Every session is now a worker sub-process managed by SessionManager. The "primary embedded actor" is gone. But when no sessions are running, the daemon is a dead end — `activeSessionId = ""` and every MCP tool fails with `"Session '' not found"`.
+**Status:** Implemented. `ensureActiveSession` in `Mcp.fs` auto-creates sessions when `activeSessionId` is empty or points to a dead session. Resolution order: config `IsRoot` override → git root → solution root → CWD. `DirectoryConfig` has `IsRoot` and `SessionName` fields. `findGitRoot` walks up from CWD looking for `.git`.
 
 **The user mandate:** *"There should NEVER be a sessionId of ''. If no active session exists, a new session needs to be automatically created."*
 

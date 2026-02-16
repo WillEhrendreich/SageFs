@@ -124,6 +124,16 @@ module WorkerProtocol =
   }
 
   module SessionInfo =
+    /// Walk up from dir looking for .git directory.
+    let findGitRoot (startDir: string) : string option =
+      let rec walk (dir: string) =
+        if Directory.Exists(Path.Combine(dir, ".git")) then Some dir
+        else
+          let parent = Path.GetDirectoryName dir
+          if isNull parent || parent = dir then None
+          else walk parent
+      walk startDir
+
     let findSolutionRoot (workingDir: string) =
       let rec walk (dir: string) =
         let parent = Path.GetDirectoryName dir
