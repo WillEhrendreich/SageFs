@@ -243,12 +243,26 @@ let main args =
       TuiClient.run info
       |> _.GetAwaiter() |> _.GetResult()
     | None ->
-      printfn "No SageFs daemon running. Start one first with: sagefs --proj <project.fsproj>"
-      1
+      printfn "No SageFs daemon running. Starting one..."
+      let daemonArgs =
+        args.[1..]
+        |> Array.filter (fun a -> a <> "tui")
+        |> String.concat " "
+      match ClientMode.startDaemonInBackground daemonArgs with
+      | Ok () ->
+        match DaemonState.read () with
+        | Some info ->
+          TuiClient.run info
+          |> _.GetAwaiter() |> _.GetResult()
+        | None ->
+          printfn "Daemon started but connection failed."
+          1
+      | Error err ->
+        printfn "Failed to start daemon: %A" err
+        1
   // Subcommand: gui (launch Raylib GUI client for running daemon)
   elif args.Length > 0 && args.[0] = "gui" then
-    match DaemonState.read () with
-    | Some _ ->
+    let launchGui () =
       let guiExe =
         let exeDir = System.IO.Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location)
         let candidate = System.IO.Path.Combine(exeDir, "SageFs.Gui.exe")
@@ -266,9 +280,25 @@ let main args =
         printfn "SageFs.Gui executable not found. Build it with: dotnet build SageFs.Gui"
         printfn "Then run: dotnet run --project SageFs.Gui"
         1
+    match DaemonState.read () with
+    | Some _ -> launchGui ()
     | None ->
-      printfn "No SageFs daemon running. Start one first with: sagefs --proj <project.fsproj>"
-      1
-  // Default: daemon mode
+      printfn "No SageFs daemon running. Starting one..."
+      let daemonArgs =
+        args.[1..]
+        |> Array.filter (fun a -> a <> "gui")
+        |> String.concat " "
+      match ClientMode.startDaemonInBackground daemonArgs with
+      | Ok () -> launchGui ()
+      | Error err ->
+        printfn "Failed to start daemon: %A" err
+        1
+  // Default: daemon mode (or TUI if daemon already running)
   else
-    runDaemon args []
+    match DaemonState.read () with
+    | Some info ->
+      printfn "SageFs daemon already running (PID %d, port %d). Launching TUI..." info.Pid info.Port
+      TuiClient.run info
+      |> _.GetAwaiter() |> _.GetResult()
+    | None ->
+      runDaemon args []
