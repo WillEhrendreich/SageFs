@@ -826,12 +826,24 @@ let resolveSessionProjects (dir: string) (manualProjects: string) =
     |> Array.toList
   else
     match DirectoryConfig.load dir with
-    | Some config when not config.Projects.IsEmpty ->
-      config.Projects |> List.map (fun p ->
-        if Path.IsPathRooted p then p
-        else Path.Combine(dir, p))
-    | Some config when not config.AutoLoad ->
-      []
+    | Some config ->
+      match config.Load with
+      | Solution path ->
+        let full = if Path.IsPathRooted path then path else Path.Combine(dir, path)
+        [ full ]
+      | Projects paths ->
+        paths |> List.map (fun p ->
+          if Path.IsPathRooted p then p
+          else Path.Combine(dir, p))
+      | NoLoad -> []
+      | AutoDetect ->
+        let discovered = discoverProjects dir
+        if not discovered.Solutions.IsEmpty then
+          [ Path.Combine(dir, discovered.Solutions.Head) ]
+        elif not discovered.Projects.IsEmpty then
+          discovered.Projects |> List.map (fun p -> Path.Combine(dir, p))
+        else
+          []
     | _ ->
       let discovered = discoverProjects dir
       if not discovered.Solutions.IsEmpty then
@@ -856,14 +868,24 @@ let private pushDiscoverResults (ctx: HttpContext) (dir: string) = task {
   let discovered = discoverProjects dir
   let configNote =
     match dirConfig with
-    | Some config when not config.Projects.IsEmpty ->
-      Some (Elem.div [ Attr.class' "output-line output-info"; Attr.style "margin-bottom: 4px;" ] [
-        Text.raw (sprintf "⚙️ .SageFs/config.fsx: %s" (String.Join(", ", config.Projects)))
-      ])
-    | Some _ ->
-      Some (Elem.div [ Attr.class' "output-line meta"; Attr.style "margin-bottom: 4px;" ] [
-        Text.raw "⚙️ .SageFs/config.fsx found (no projects configured)"
-      ])
+    | Some config ->
+      match config.Load with
+      | Solution path ->
+        Some (Elem.div [ Attr.class' "output-line output-info"; Attr.style "margin-bottom: 4px;" ] [
+          Text.raw (sprintf "⚙️ .SageFs/config.fsx: solution %s" path)
+        ])
+      | Projects paths ->
+        Some (Elem.div [ Attr.class' "output-line output-info"; Attr.style "margin-bottom: 4px;" ] [
+          Text.raw (sprintf "⚙️ .SageFs/config.fsx: %s" (String.Join(", ", paths)))
+        ])
+      | NoLoad ->
+        Some (Elem.div [ Attr.class' "output-line meta"; Attr.style "margin-bottom: 4px;" ] [
+          Text.raw "⚙️ .SageFs/config.fsx: no project loading (bare session)"
+        ])
+      | AutoDetect ->
+        Some (Elem.div [ Attr.class' "output-line meta"; Attr.style "margin-bottom: 4px;" ] [
+          Text.raw "⚙️ .SageFs/config.fsx found (auto-detect projects)"
+        ])
     | None -> None
   let mainContent = renderDiscoveredProjects discovered
   match configNote with

@@ -77,7 +77,10 @@ module SessionManager =
 
     let projArgs =
       projects
-      |> List.collect (fun p -> [ "--proj"; p ])
+      |> List.collect (fun p ->
+        let ext = System.IO.Path.GetExtension(p).ToLowerInvariant()
+        if ext = ".sln" || ext = ".slnx" then [ "--sln"; p ]
+        else [ "--proj"; p ])
       |> String.concat " "
 
     let psi = ProcessStartInfo()
