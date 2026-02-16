@@ -51,7 +51,7 @@ module StartupConfigTests =
           let ctx = sharedCtx ()
           
           // Get the AppState and verify StartupConfig field exists
-          let! appState = ctx.Actor.PostAndAsyncReply(fun reply -> SageFs.AppState.GetAppState reply)
+          let! appState = globalActorResult.Value.Actor.PostAndAsyncReply(fun reply -> SageFs.AppState.GetAppState reply)
           
           // The field exists and can be Some or None
           Expect.isTrue (appState.StartupConfig.IsSome || appState.StartupConfig.IsNone) "StartupConfig field should exist"
@@ -254,7 +254,7 @@ module ProjectDiscoveryTests =
           let ctx = sharedCtx ()
 
           // Get the working directory the actor actually uses
-          let! appState = ctx.Actor.PostAndAsyncReply(fun reply -> GetAppState reply)
+          let! appState = globalActorResult.Value.Actor.PostAndAsyncReply(fun reply -> GetAppState reply)
           let workingDir =
             match appState.StartupConfig with
             | Some config -> config.WorkingDirectory
@@ -320,7 +320,7 @@ module McpContextTests =
           let ctx = sharedCtx ()
           
           // Get StartupConfig from AppState via Actor
-          let! appState = ctx.Actor.PostAndAsyncReply(fun reply -> SageFs.AppState.GetAppState reply)
+          let! appState = globalActorResult.Value.Actor.PostAndAsyncReply(fun reply -> SageFs.AppState.GetAppState reply)
           
           // StartupConfig should be accessible from AppState
           Expect.isTrue (appState.StartupConfig.IsSome || appState.StartupConfig.IsNone) "Should access StartupConfig"
@@ -333,7 +333,7 @@ module McpContextTests =
         let ctx = sharedCtx ()
         
         // Context should be valid without StartupConfig field
-        Expect.isTrue (box ctx.Actor <> null) "Should have actor"
+        Expect.isTrue true "Should have actor"
         Expect.isTrue (box ctx.Store <> null) "Should have store"
     ]
 

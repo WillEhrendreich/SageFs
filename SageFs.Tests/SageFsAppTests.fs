@@ -207,7 +207,8 @@ let sageFsRenderTests = testList "SageFsRender" [
         RecentOutput = [
           { Kind = OutputKind.Result
             Text = "val x = 42"
-            Timestamp = DateTime.UtcNow }
+            Timestamp = DateTime.UtcNow
+            SessionId = "" }
         ]
     }
     let regions = SageFsRender.render model
@@ -254,20 +255,21 @@ let sageFsRenderTests = testList "SageFsRender" [
     let model =
       { SageFsModel.initial with
           RecentOutput = [
-            { Kind = OutputKind.Result; Text = "val x = 1"; Timestamp = now }
-            { Kind = OutputKind.Error; Text = "oops"; Timestamp = now }
-            { Kind = OutputKind.Info; Text = "loaded"; Timestamp = now }
-            { Kind = OutputKind.System; Text = "sys"; Timestamp = now }
+            { Kind = OutputKind.Result; Text = "val x = 1"; Timestamp = now; SessionId = "" }
+            { Kind = OutputKind.Error; Text = "oops"; Timestamp = now; SessionId = "" }
+            { Kind = OutputKind.Info; Text = "loaded"; Timestamp = now; SessionId = "" }
+            { Kind = OutputKind.System; Text = "sys"; Timestamp = now; SessionId = "" }
           ] }
     let output =
       SageFsRender.render model
       |> List.find (fun r -> r.Id = "output")
     let lines = output.Content.Split('\n')
+    // RecentOutput is newest-first; render reverses to oldest-first (FSI style)
     lines |> Array.length |> Expect.equal "4 output lines" 4
-    lines.[0] |> Expect.stringContains "first tagged result" "[result]"
-    lines.[1] |> Expect.stringContains "second tagged error" "[error]"
-    lines.[2] |> Expect.stringContains "third tagged info" "[info]"
-    lines.[3] |> Expect.stringContains "fourth tagged system" "[system]"
+    lines.[0] |> Expect.stringContains "first tagged system (oldest)" "[system]"
+    lines.[1] |> Expect.stringContains "second tagged info" "[info]"
+    lines.[2] |> Expect.stringContains "third tagged error" "[error]"
+    lines.[3] |> Expect.stringContains "fourth tagged result (newest)" "[result]"
 
   testCase "inactive session has no * marker" <| fun _ ->
     let now = DateTime.UtcNow

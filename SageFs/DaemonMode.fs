@@ -9,6 +9,7 @@ open Microsoft.Extensions.Logging
 
 /// Run SageFs as a headless daemon.
 /// MCP server + SessionManager + Dashboard — all frontends are clients.
+/// Every session is a worker sub-process managed by SessionManager.
 let run (mcpPort: int) (args: Args.Arguments list) = task {
   let version =
     System.Reflection.Assembly.GetExecutingAssembly().GetName().Version
@@ -21,34 +22,16 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
   // Set up event store
   let connectionString = PostgresInfra.getOrStartPostgres ()
   let eventStore = SageFs.EventStore.configureStore connectionString
-  let sessionId = SageFs.EventStore.createSessionId ()
-  let onEvent (evt: SageFs.Features.Events.SageFsEvent) =
-    SageFs.EventStore.appendEvents eventStore sessionId [evt]
-    |> fun t -> t.ConfigureAwait(false).GetAwaiter().GetResult()
-
-  let logger =
-    { new Utils.ILogger with
-        member _.LogInfo msg =
-          if not TerminalUIState.IsActive then eprintfn "[INFO] %s" msg
-        member _.LogDebug msg =
-          if not TerminalUIState.IsActive then eprintfn "[DEBUG] %s" msg
-        member _.LogWarning msg =
-          if not TerminalUIState.IsActive then eprintfn "[WARN] %s" msg
-        member _.LogError msg =
-          if not TerminalUIState.IsActive then eprintfn "[ERROR] %s" msg }
-
-  let actorArgs =
-    ActorCreation.mkCommonActorArgs logger false onEvent (args |> List.map id)
-
-  // Phase 1: Create actor immediately — MCP can serve status while warm-up runs
-  let result = ActorCreation.createActorImmediate actorArgs
-  let appActor = result.Actor
 
   // Handle shutdown signals
   use cts = new CancellationTokenSource()
 
-  // Create SessionManager for multi-session support
+  // Create SessionManager — the single source of truth for all sessions
   let sessionManager = SessionManager.create cts.Token
+
+  // Active session ID — mutable, shared across MCP and dashboard
+  let activeSessionId = ref ""
+
   let sessionOps : SessionManagementOps = {
     CreateSession = fun projects workingDir ->
       task {
@@ -59,6 +42,9 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
         return
           result
           |> Result.map (fun info ->
+            // Auto-activate first session if none active
+            if !activeSessionId = "" then
+              activeSessionId.Value <- info.Id
             SessionOperations.formatSessionInfo DateTime.UtcNow info)
       }
     ListSessions = fun () ->
@@ -75,6 +61,18 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
           sessionManager.PostAndAsyncReply(fun reply ->
             SessionManager.SessionCommand.StopSession(sessionId, reply))
           |> Async.StartAsTask
+        // If we stopped the active session, switch to another
+        if !activeSessionId = sessionId then
+          let! sessions =
+            sessionManager.PostAndAsyncReply(fun reply ->
+              SessionManager.SessionCommand.ListSessions reply)
+            |> Async.StartAsTask
+          let next =
+            sessions
+            |> List.tryFind (fun s -> s.Id <> sessionId)
+            |> Option.map (fun s -> s.Id)
+            |> Option.defaultValue ""
+          activeSessionId.Value <- next
         return
           result
           |> Result.map (fun () ->
@@ -88,7 +86,29 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
           |> Async.StartAsTask
         return managed |> Option.map (fun s -> s.Proxy)
       }
+    GetSessionInfo = fun sessionId ->
+      task {
+        let! managed =
+          sessionManager.PostAndAsyncReply(fun reply ->
+            SessionManager.SessionCommand.GetSession(sessionId, reply))
+          |> Async.StartAsTask
+        return managed |> Option.map (fun s -> s.Info)
+      }
   }
+
+  // Spawn the initial session as a worker sub-process
+  let initialProjects =
+    args
+    |> List.choose (function
+      | Args.Arguments.Proj p -> Some p
+      | _ -> None)
+  let workingDir = Environment.CurrentDirectory
+
+  eprintfn "Spawning initial session for %s..." workingDir
+  let! initialResult = sessionOps.CreateSession initialProjects workingDir
+  match initialResult with
+  | Ok info -> eprintfn "Initial session created: %s" info
+  | Error err -> eprintfn "[ERROR] Failed to create initial session: %A" err
 
   // Write daemon state
   let daemonInfo : DaemonInfo = {
@@ -131,66 +151,121 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
   // Populate session list in Elm model from existing sessions
   elmRuntime.Dispatch(SageFsMsg.Editor EditorAction.ListSessions)
 
-  // Start MCP server BEFORE warm-up completes
-  appActor.Post(AppState.UpdateMcpPort mcpPort)
+  // Create a diagnostics-changed event (aggregated from workers)
+  let diagnosticsChanged = Event<Features.DiagnosticsStore.T>()
+
+  // Start MCP server
   let mcpTask =
     McpServer.startMcpServer
-      appActor
-      result.DiagnosticsChanged
+      diagnosticsChanged.Publish
       (Some stateChangedEvent.Publish)
-      result.CancelEval
-      result.GetSessionState
-      result.GetEvalStats
-      result.GetWarmupFailures
-      result.GetStartupConfig
       eventStore
-      sessionId
       mcpPort
       sessionOps
+      activeSessionId
       (Some elmRuntime)
 
   // Start dashboard web server on MCP port + 1
   let dashboardPort = mcpPort + 1
   let connectionTracker = ConnectionTracker()
+  // Dashboard status helpers — route through active session proxy
+  let getSessionState () =
+    let sid = !activeSessionId
+    let proxy =
+      sessionManager.PostAndAsyncReply(fun reply ->
+        SessionManager.SessionCommand.GetSession(sid, reply))
+      |> Async.RunSynchronously
+    match proxy with
+    | Some s ->
+      let resp =
+        s.Proxy (WorkerProtocol.WorkerMessage.GetStatus "dash")
+        |> Async.RunSynchronously
+      match resp with
+      | WorkerProtocol.WorkerResponse.StatusResult(_, snap) ->
+        WorkerProtocol.SessionStatus.toSessionState snap.Status
+      | _ -> SessionState.Faulted
+    | None -> SessionState.Uninitialized
+  let getEvalStats () =
+    let sid = !activeSessionId
+    let proxy =
+      sessionManager.PostAndAsyncReply(fun reply ->
+        SessionManager.SessionCommand.GetSession(sid, reply))
+      |> Async.RunSynchronously
+    match proxy with
+    | Some s ->
+      let resp =
+        s.Proxy (WorkerProtocol.WorkerMessage.GetStatus "dash")
+        |> Async.RunSynchronously
+      match resp with
+      | WorkerProtocol.WorkerResponse.StatusResult(_, snap) ->
+        { EvalCount = snap.EvalCount
+          TotalDuration = TimeSpan.FromMilliseconds(float snap.AvgDurationMs * float snap.EvalCount)
+          MinDuration = TimeSpan.FromMilliseconds(float snap.MinDurationMs)
+          MaxDuration = TimeSpan.FromMilliseconds(float snap.MaxDurationMs) }
+        : Affordances.EvalStats
+      | _ -> Affordances.EvalStats.empty
+    | None -> Affordances.EvalStats.empty
   let dashboardEndpoints =
     Dashboard.createEndpoints
       version
-      result.GetSessionState
-      result.GetEvalStats
-      sessionId
-      (result.ProjectDirectories.Length)
+      getSessionState
+      getEvalStats
+      (!activeSessionId)
+      0
       (fun () -> elmRuntime.GetRegions() |> Some)
       (Some stateChangedEvent.Publish)
       (fun code -> task {
-        let request : AppState.EvalRequest = { Code = code; Args = Map.empty }
-        let! resp =
-          appActor.PostAndAsyncReply(fun reply ->
-            AppState.Eval(request, CancellationToken.None, reply))
-          |> Async.StartAsTask
-        return
-          match resp.EvaluationResult with
-          | Ok msg -> msg
-          | Error ex -> sprintf "Error: %s" ex.Message
+        let sid = !activeSessionId
+        let! proxy = sessionOps.GetProxy sid
+        match proxy with
+        | Some send ->
+          let! resp =
+            send (WorkerProtocol.WorkerMessage.EvalCode(code, "dash"))
+            |> Async.StartAsTask
+          let result =
+            match resp with
+            | WorkerProtocol.WorkerResponse.EvalResult(_, Ok msg, diags) ->
+              elmRuntime.Dispatch (SageFsMsg.Event (
+                SageFsEvent.EvalCompleted (sid, msg, diags |> List.map WorkerProtocol.WorkerDiagnostic.toDiagnostic)))
+              msg
+            | WorkerProtocol.WorkerResponse.EvalResult(_, Error err, _) ->
+              let msg = SageFsError.describe err
+              elmRuntime.Dispatch (SageFsMsg.Event (
+                SageFsEvent.EvalFailed (sid, msg)))
+              sprintf "Error: %s" msg
+            | other -> sprintf "Unexpected: %A" other
+          return result
+        | None -> return "Error: No active session"
       })
       (fun () -> task {
-        let! resp =
-          appActor.PostAndAsyncReply(fun reply ->
-            AppState.ResetSession reply)
-          |> Async.StartAsTask
-        return
-          match resp with
-          | Ok () -> "Session reset successfully"
-          | Error e -> sprintf "Reset failed: %A" e
+        let sid = !activeSessionId
+        let! proxy = sessionOps.GetProxy sid
+        match proxy with
+        | Some send ->
+          let! resp =
+            send (WorkerProtocol.WorkerMessage.ResetSession "dash")
+            |> Async.StartAsTask
+          return
+            match resp with
+            | WorkerProtocol.WorkerResponse.ResetResult(_, Ok ()) -> "Session reset successfully"
+            | WorkerProtocol.WorkerResponse.ResetResult(_, Error e) -> sprintf "Reset failed: %A" e
+            | other -> sprintf "Unexpected: %A" other
+        | None -> return "Error: No active session"
       })
       (fun () -> task {
-        let! resp =
-          appActor.PostAndAsyncReply(fun reply ->
-            AppState.HardResetSession(true, reply))
-          |> Async.StartAsTask
-        return
-          match resp with
-          | Ok msg -> sprintf "Hard reset: %s" msg
-          | Error e -> sprintf "Hard reset failed: %A" e
+        let sid = !activeSessionId
+        let! proxy = sessionOps.GetProxy sid
+        match proxy with
+        | Some send ->
+          let! resp =
+            send (WorkerProtocol.WorkerMessage.HardResetSession(true, "dash"))
+            |> Async.StartAsTask
+          return
+            match resp with
+            | WorkerProtocol.WorkerResponse.HardResetResult(_, Ok msg) -> sprintf "Hard reset: %s" msg
+            | WorkerProtocol.WorkerResponse.HardResetResult(_, Error e) -> sprintf "Hard reset failed: %A" e
+            | other -> sprintf "Unexpected: %A" other
+        | None -> return "Error: No active session"
       })
       // Session switch handler
       (Some (fun (sid: string) -> task {
@@ -238,59 +313,8 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
       eprintfn "[WARN] Dashboard failed to start: %s" ex.Message
   }
 
-  // Phase 2: Add middleware — blocks until warm-up completes
-  do! ActorCreation.addMiddleware result actorArgs.Middleware
-
-  // Notify Elm loop that warmup is done
-  let warmupFailures = result.GetWarmupFailures()
-  elmRuntime.Dispatch (SageFsMsg.Event (
-    SageFsEvent.WarmupCompleted (
-      TimeSpan.Zero, warmupFailures |> List.map (fun f -> sprintf "%s: %s" f.Name f.Error))))
-  elmRuntime.Dispatch (SageFsMsg.Event (
-    SageFsEvent.SessionStatusChanged (sessionId, SessionDisplayStatus.Running)))
-
-  // Start file watcher for incremental reload on source changes
-  let noWatch = args |> List.exists (function Args.Arguments.No_Watch -> true | _ -> false)
-  let _fileWatcher =
-    if noWatch || result.ProjectDirectories.IsEmpty then None
-    else
-      let config = SageFs.FileWatcher.defaultWatchConfig result.ProjectDirectories
-      let onFileChanged (change: SageFs.FileWatcher.FileChange) =
-        match SageFs.FileWatcher.fileChangeAction change with
-        | SageFs.FileWatcher.FileChangeAction.Reload filePath ->
-          let fileName = IO.Path.GetFileName filePath
-          if not TerminalUIState.IsActive then
-            eprintfn "[INFO] File changed: %s -- reloading via #load" fileName
-          elmRuntime.Dispatch (SageFsMsg.Event (
-            SageFsEvent.FileChanged (filePath, FileWatchAction.Changed)))
-          let code = sprintf "#load @\"%s\"" filePath
-          let request : AppState.EvalRequest = { Code = code; Args = Map.empty }
-          let sw = System.Diagnostics.Stopwatch.StartNew()
-          appActor.PostAndAsyncReply(fun reply -> AppState.Eval(request, System.Threading.CancellationToken.None, reply))
-          |> Async.RunSynchronously
-          |> fun resp ->
-            sw.Stop()
-            match resp.EvaluationResult with
-            | Ok _ ->
-              if not TerminalUIState.IsActive then
-                eprintfn "[INFO] Reloaded %s" fileName
-              elmRuntime.Dispatch (SageFsMsg.Event (
-                SageFsEvent.FileReloaded (fileName, sw.Elapsed, Ok "reloaded")))
-            | Error ex ->
-              if not TerminalUIState.IsActive then
-                eprintfn "[WARN] Reload error in %s: %s" fileName ex.Message
-              elmRuntime.Dispatch (SageFsMsg.Event (
-                SageFsEvent.FileReloaded (fileName, sw.Elapsed, Error ex.Message)))
-        | SageFs.FileWatcher.FileChangeAction.SoftReset ->
-          if not TerminalUIState.IsActive then
-            eprintfn "[INFO] Project file changed -- resetting session"
-          elmRuntime.Dispatch (SageFsMsg.Event (
-            SageFsEvent.SessionStatusChanged (sessionId, SessionDisplayStatus.Restarting)))
-          appActor.PostAndAsyncReply(fun reply -> AppState.ResetSession(reply))
-          |> Async.RunSynchronously
-          |> ignore
-        | SageFs.FileWatcher.FileChangeAction.Ignore -> ()
-      Some (SageFs.FileWatcher.start config onFileChanged)
+  // Workers handle their own warmup, middleware, and file watching.
+  // The daemon just needs to wait for the MCP and dashboard servers.
 
   eprintfn "SageFs daemon ready (PID %d, MCP port %d, dashboard port %d)" Environment.ProcessId mcpPort dashboardPort
 

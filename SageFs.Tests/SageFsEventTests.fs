@@ -10,12 +10,12 @@ let private now = DateTime(2026, 2, 14, 12, 0, 0)
 [<Tests>]
 let outputLineTests = testList "OutputLine" [
   testCase "can create Result output" <| fun _ ->
-    let line = { Kind = OutputKind.Result; Text = "val x: int = 42"; Timestamp = now }
+    let line = { Kind = OutputKind.Result; Text = "val x: int = 42"; Timestamp = now; SessionId = "" }
     line.Kind |> Expect.equal "kind" OutputKind.Result
     line.Text |> Expect.equal "text" "val x: int = 42"
 
   testCase "can create Error output" <| fun _ ->
-    let line = { Kind = OutputKind.Error; Text = "FS0001: type mismatch"; Timestamp = now }
+    let line = { Kind = OutputKind.Error; Text = "FS0001: type mismatch"; Timestamp = now; SessionId = "" }
     line.Kind |> Expect.equal "kind" OutputKind.Error
 
   testCase "all OutputKind cases are distinct" <| fun _ ->
@@ -102,8 +102,8 @@ let SageFsViewTests = testList "SageFsView" [
 
   testCase "view with output lines" <| fun _ ->
     let lines = [
-      { Kind = OutputKind.Result; Text = "val x = 42"; Timestamp = now }
-      { Kind = OutputKind.Error; Text = "error FS0001"; Timestamp = now }
+      { Kind = OutputKind.Result; Text = "val x = 42"; Timestamp = now; SessionId = "" }
+      { Kind = OutputKind.Error; Text = "error FS0001"; Timestamp = now; SessionId = "" }
     ]
     let view = {
       Buffer = ValidatedBuffer.empty

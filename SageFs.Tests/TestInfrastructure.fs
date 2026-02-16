@@ -25,13 +25,48 @@ let globalActorResult = lazy(
   createActor args |> Async.AwaitTask |> Async.RunSynchronously
 )
 
+/// Create a SessionProxy from a test actor result
+let private mkProxy (result: ActorResult) : SageFs.WorkerProtocol.SessionProxy =
+  fun msg ->
+    SageFs.Server.WorkerMain.handleMessage result.Actor result.GetSessionState result.GetEvalStats msg
+
+/// Create a test SessionManagementOps that routes to the global actor
+let private mkTestSessionOps (result: ActorResult) (sessionId: string) : SageFs.SessionManagementOps =
+  let proxy = mkProxy result
+  { CreateSession = fun _ _ -> System.Threading.Tasks.Task.FromResult(Ok "test-session")
+    ListSessions = fun () -> System.Threading.Tasks.Task.FromResult("No sessions")
+    StopSession = fun _ -> System.Threading.Tasks.Task.FromResult(Ok "stopped")
+    GetProxy = fun _ -> System.Threading.Tasks.Task.FromResult(Some proxy)
+    GetSessionInfo = fun _ ->
+      System.Threading.Tasks.Task.FromResult(
+        Some { SageFs.WorkerProtocol.SessionInfo.Id = sessionId
+               Projects = []; WorkingDirectory = ""; SolutionRoot = None
+               Status = SageFs.WorkerProtocol.SessionStatus.Ready
+               WorkerPid = None; CreatedAt = System.DateTime.UtcNow; LastActivity = System.DateTime.UtcNow }) }
+
 /// Create a McpContext backed by the global shared actor and Marten store
 let sharedCtx () =
   let result = globalActorResult.Value
   let sessionId = SageFs.EventStore.createSessionId ()
-  { McpContext.Actor = result.Actor; Store = testStore.Value; SessionId = sessionId; DiagnosticsChanged = result.DiagnosticsChanged; StateChanged = None; CancelEval = result.CancelEval; GetSessionState = result.GetSessionState; GetEvalStats = result.GetEvalStats; GetWarmupFailures = result.GetWarmupFailures; GetStartupConfig = result.GetStartupConfig; SessionOps = SageFs.SessionManagementOps.stub; Dispatch = None; GetElmModel = None; GetElmRegions = None }
+  { Store = testStore.Value
+    DiagnosticsChanged = result.DiagnosticsChanged
+    StateChanged = None
+    SessionOps = mkTestSessionOps result sessionId
+    ActiveSessionId = ref sessionId
+    McpPort = 0
+    Dispatch = None
+    GetElmModel = None
+    GetElmRegions = None } : McpContext
 
 /// Create a McpContext with a custom session ID backed by the global shared actor
 let sharedCtxWith sessionId =
   let result = globalActorResult.Value
-  { McpContext.Actor = result.Actor; Store = testStore.Value; SessionId = sessionId; DiagnosticsChanged = result.DiagnosticsChanged; StateChanged = None; CancelEval = result.CancelEval; GetSessionState = result.GetSessionState; GetEvalStats = result.GetEvalStats; GetWarmupFailures = result.GetWarmupFailures; GetStartupConfig = result.GetStartupConfig; SessionOps = SageFs.SessionManagementOps.stub; Dispatch = None; GetElmModel = None; GetElmRegions = None }
+  { Store = testStore.Value
+    DiagnosticsChanged = result.DiagnosticsChanged
+    StateChanged = None
+    SessionOps = mkTestSessionOps result sessionId
+    ActiveSessionId = ref sessionId
+    McpPort = 0
+    Dispatch = None
+    GetElmModel = None
+    GetElmRegions = None } : McpContext

@@ -41,11 +41,11 @@ let private withErrorHandling (ctx: Microsoft.AspNetCore.Http.HttpContext) (hand
 }
 
 // Create shared MCP context
-let private mkContext (actor: AppActor) (store: Marten.IDocumentStore) (sessionId: string) (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.T>) (stateChanged: IEvent<string> option) (cancelEval: unit -> bool) (getSessionState: unit -> SageFs.SessionState) (getEvalStats: unit -> SageFs.Affordances.EvalStats) (getWarmupFailures: unit -> SageFs.AppState.WarmupFailure list) (getStartupConfig: unit -> SageFs.AppState.StartupConfig option) (sessionOps: SageFs.SessionManagementOps) (dispatch: (SageFs.SageFsMsg -> unit) option) (getElmModel: (unit -> SageFs.SageFsModel) option) (getElmRegions: (unit -> SageFs.RenderRegion list) option) : McpContext =
-  { Actor = actor; Store = store; SessionId = sessionId; DiagnosticsChanged = diagnosticsChanged; StateChanged = stateChanged; CancelEval = cancelEval; GetSessionState = getSessionState; GetEvalStats = getEvalStats; GetWarmupFailures = getWarmupFailures; GetStartupConfig = getStartupConfig; SessionOps = sessionOps; Dispatch = dispatch; GetElmModel = getElmModel; GetElmRegions = getElmRegions }
+let private mkContext (store: Marten.IDocumentStore) (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.T>) (stateChanged: IEvent<string> option) (sessionOps: SageFs.SessionManagementOps) (activeSessionId: string ref) (mcpPort: int) (dispatch: (SageFs.SageFsMsg -> unit) option) (getElmModel: (unit -> SageFs.SageFsModel) option) (getElmRegions: (unit -> SageFs.RenderRegion list) option) : McpContext =
+  { Store = store; DiagnosticsChanged = diagnosticsChanged; StateChanged = stateChanged; SessionOps = sessionOps; ActiveSessionId = activeSessionId; McpPort = mcpPort; Dispatch = dispatch; GetElmModel = getElmModel; GetElmRegions = getElmRegions }
 
 // Start MCP server in background
-let startMcpServer (actor: AppActor) (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.T>) (stateChanged: IEvent<string> option) (cancelEval: unit -> bool) (getSessionState: unit -> SageFs.SessionState) (getEvalStats: unit -> SageFs.Affordances.EvalStats) (getWarmupFailures: unit -> SageFs.AppState.WarmupFailure list) (getStartupConfig: unit -> SageFs.AppState.StartupConfig option) (store: Marten.IDocumentStore) (sessionId: string) (port: int) (sessionOps: SageFs.SessionManagementOps) (elmRuntime: SageFs.ElmRuntime<SageFs.SageFsModel, SageFs.SageFsMsg, SageFs.RenderRegion> option) =
+let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.T>) (stateChanged: IEvent<string> option) (store: Marten.IDocumentStore) (port: int) (sessionOps: SageFs.SessionManagementOps) (activeSessionId: string ref) (elmRuntime: SageFs.ElmRuntime<SageFs.SageFsModel, SageFs.SageFsMsg, SageFs.RenderRegion> option) =
     task {
         try
             let dispatch = elmRuntime |> Option.map (fun r -> r.Dispatch)
@@ -94,7 +94,7 @@ let startMcpServer (actor: AppActor) (diagnosticsChanged: IEvent<SageFs.Features
             ) |> ignore
             
             // Create MCP context
-            let mcpContext = (mkContext actor store sessionId diagnosticsChanged stateChanged cancelEval getSessionState getEvalStats getWarmupFailures getStartupConfig sessionOps dispatch getElmModel getElmRegions)
+            let mcpContext = (mkContext store diagnosticsChanged stateChanged sessionOps activeSessionId port dispatch getElmModel getElmRegions)
             
             // Register MCP services
             builder.Services.AddSingleton<McpContext>(mcpContext) |> ignore
@@ -132,7 +132,7 @@ let startMcpServer (actor: AppActor) (diagnosticsChanged: IEvent<SageFs.Features
             app.MapMcp() |> ignore
 
             // Shared context — constructed once
-            let mcpContext = mkContext actor store sessionId diagnosticsChanged stateChanged cancelEval getSessionState getEvalStats getWarmupFailures getStartupConfig sessionOps dispatch getElmModel getElmRegions
+            let mcpContext = mkContext store diagnosticsChanged stateChanged sessionOps activeSessionId port dispatch getElmModel getElmRegions
             
             // POST /exec — send F# code to the session
             app.MapPost("/exec", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
@@ -176,14 +176,11 @@ let startMcpServer (actor: AppActor) (diagnosticsChanged: IEvent<SageFs.Features
                 }) :> Task
             ) |> ignore
 
-            // POST /diagnostics — fire-and-forget diagnostics check, results via SSE
+            // POST /diagnostics — fire-and-forget diagnostics check via proxy
             app.MapPost("/diagnostics", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
                 withErrorHandling ctx (fun () -> task {
                     let! code = readJsonProp ctx "code"
-                    Async.Start(async {
-                        let! _ = actor.PostAndAsyncReply(fun reply -> GetDiagnostics(code, reply))
-                        return ()
-                    })
+                    let! _ = SageFs.McpTools.checkFSharpCode mcpContext code None
                     do! jsonResponse ctx 202 {| accepted = true |}
                 }) :> Task
             ) |> ignore
@@ -195,9 +192,8 @@ let startMcpServer (actor: AppActor) (diagnosticsChanged: IEvent<SageFs.Features
                     ctx.Response.Headers.["Cache-Control"] <- Microsoft.Extensions.Primitives.StringValues("no-cache")
                     ctx.Response.Headers.["Connection"] <- Microsoft.Extensions.Primitives.StringValues("keep-alive")
 
-                    let! st = mcpContext.Actor.PostAndAsyncReply(GetAppState) |> Async.StartAsTask
-                    let initialJson = SageFs.McpAdapter.formatDiagnosticsStoreAsJson st.Diagnostics
-                    let initialEvent = sprintf "event: diagnostics\ndata: %s\n\n" initialJson
+                    // Send initial empty diagnostics
+                    let initialEvent = sprintf "event: diagnostics\ndata: []\n\n"
                     do! ctx.Response.Body.WriteAsync(System.Text.Encoding.UTF8.GetBytes(initialEvent))
                     do! ctx.Response.Body.FlushAsync()
 
@@ -241,13 +237,20 @@ let startMcpServer (actor: AppActor) (diagnosticsChanged: IEvent<SageFs.Features
                 } :> Task
             ) |> ignore
 
-            // GET /api/status — rich JSON status for clients and dashboards
+            // GET /api/status — rich JSON status via proxy
             app.MapGet("/api/status", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
                 withErrorHandling ctx (fun () -> task {
-                    let sessionState = getSessionState ()
-                    let evalStats = getEvalStats ()
-                    let startupConfig = getStartupConfig ()
-                    let warmupFailures = getWarmupFailures ()
+                    let sid = !activeSessionId
+                    let! info = sessionOps.GetSessionInfo sid
+                    let! statusResult =
+                      task {
+                        let! proxy = sessionOps.GetProxy sid
+                        match proxy with
+                        | Some send ->
+                          let! resp = send (SageFs.WorkerProtocol.WorkerMessage.GetStatus "api") |> Async.StartAsTask
+                          return Some resp
+                        | None -> return None
+                      }
                     let elmRegions =
                       match getElmRegions with
                       | Some getRegions -> getRegions ()
@@ -262,26 +265,32 @@ let startMcpServer (actor: AppActor) (diagnosticsChanged: IEvent<SageFs.Features
                         {| id = r.Id
                            content = r.Content |> fun s -> if s.Length > 2000 then s.[..1999] else s
                            affordances = r.Affordances |> List.map (fun a -> a.ToString()) |})
+                    let sessionState, evalCount, avgMs, minMs, maxMs =
+                      match statusResult with
+                      | Some (SageFs.WorkerProtocol.WorkerResponse.StatusResult(_, snap)) ->
+                        SageFs.WorkerProtocol.SessionStatus.label snap.Status,
+                        snap.EvalCount,
+                        (if snap.EvalCount > 0 then float snap.AvgDurationMs else 0.0),
+                        float snap.MinDurationMs,
+                        float snap.MaxDurationMs
+                      | _ -> "Unknown", 0, 0.0, 0.0, 0.0
                     let workingDir =
-                      startupConfig |> Option.map (fun c -> c.WorkingDirectory) |> Option.defaultValue ""
+                      info |> Option.map (fun i -> i.WorkingDirectory) |> Option.defaultValue ""
                     let projects =
-                      startupConfig |> Option.map (fun c -> c.LoadedProjects) |> Option.defaultValue []
+                      info |> Option.map (fun i -> i.Projects) |> Option.defaultValue []
                     let data =
                       {| version = version
-                         sessionId = sessionId
-                         sessionState = SageFs.SessionState.label sessionState
-                         evalCount = evalStats.EvalCount
-                         totalDurationMs = evalStats.TotalDuration.TotalMilliseconds
-                         avgDurationMs =
-                           if evalStats.EvalCount > 0 then
-                             evalStats.TotalDuration.TotalMilliseconds / float evalStats.EvalCount
-                           else 0.0
-                         minDurationMs = evalStats.MinDuration.TotalMilliseconds
-                         maxDurationMs = evalStats.MaxDuration.TotalMilliseconds
+                         sessionId = sid
+                         sessionState = sessionState
+                         evalCount = evalCount
+                         totalDurationMs = avgMs * float evalCount
+                         avgDurationMs = avgMs
+                         minDurationMs = minMs
+                         maxDurationMs = maxMs
                          workingDirectory = workingDir
                          projectCount = projects.Length
                          projects = projects
-                         warmupFailures = warmupFailures |> List.map (fun f -> {| name = f.Name; error = f.Error |})
+                         warmupFailures = ([] : {| name: string; error: string |} list)
                          regions = regionData
                          pid = Environment.ProcessId
                          uptime = (DateTime.UtcNow - System.Diagnostics.Process.GetCurrentProcess().StartTime.ToUniversalTime()).TotalSeconds |}

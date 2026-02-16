@@ -49,31 +49,34 @@ module SageFsUpdate =
 
     | SageFsMsg.Event event ->
       match event with
-      | SageFsEvent.EvalCompleted (_, output, diags) ->
+      | SageFsEvent.EvalCompleted (sid, output, diags) ->
         let line = {
           Kind = OutputKind.Result
           Text = output
           Timestamp = DateTime.UtcNow
+          SessionId = sid
         }
         { model with
             RecentOutput = line :: model.RecentOutput
             Diagnostics = diags }, []
 
-      | SageFsEvent.EvalFailed (_, error) ->
+      | SageFsEvent.EvalFailed (sid, error) ->
         let line = {
           Kind = OutputKind.Error
           Text = error
           Timestamp = DateTime.UtcNow
+          SessionId = sid
         }
         { model with RecentOutput = line :: model.RecentOutput }, []
 
       | SageFsEvent.EvalStarted _ -> model, []
 
-      | SageFsEvent.EvalCancelled _ ->
+      | SageFsEvent.EvalCancelled sid ->
         let line = {
           Kind = OutputKind.Info
           Text = "Eval cancelled"
           Timestamp = DateTime.UtcNow
+          SessionId = sid
         }
         { model with RecentOutput = line :: model.RecentOutput }, []
 
@@ -90,10 +93,15 @@ module SageFsUpdate =
         { model with Diagnostics = diags }, []
 
       | SageFsEvent.SessionCreated snap ->
+        let isFirst = model.Sessions.ActiveSessionId.IsNone
+        let snap = if isFirst then { snap with IsActive = true } else snap
         { model with
             Sessions = {
               model.Sessions with
-                Sessions = snap :: model.Sessions.Sessions } }, []
+                Sessions = snap :: model.Sessions.Sessions
+                ActiveSessionId =
+                  if isFirst then Some snap.Id
+                  else model.Sessions.ActiveSessionId } }, []
 
       | SageFsEvent.SessionStatusChanged (sessionId, status) ->
         { model with
@@ -116,12 +124,21 @@ module SageFsUpdate =
                     { s with IsActive = s.Id = toId }) } }, []
 
       | SageFsEvent.SessionStopped sessionId ->
+        let remaining =
+          model.Sessions.Sessions
+          |> List.filter (fun s -> s.Id <> sessionId)
+        let wasActive = model.Sessions.ActiveSessionId = Some sessionId
+        let newActiveId =
+          if wasActive then remaining |> List.tryHead |> Option.map (fun s -> s.Id)
+          else model.Sessions.ActiveSessionId
+        let remaining =
+          remaining
+          |> List.map (fun s -> { s with IsActive = Some s.Id = newActiveId })
         { model with
             Sessions = {
               model.Sessions with
-                Sessions =
-                  model.Sessions.Sessions
-                  |> List.filter (fun s -> s.Id <> sessionId) } }, []
+                Sessions = remaining
+                ActiveSessionId = newActiveId } }, []
 
       | SageFsEvent.SessionStale (sessionId, _) ->
         { model with
@@ -137,26 +154,31 @@ module SageFsUpdate =
       | SageFsEvent.FileChanged _ -> model, []
 
       | SageFsEvent.FileReloaded (path, _, result) ->
+        let activeId = model.Sessions.ActiveSessionId |> Option.defaultValue ""
         let line =
           match result with
           | Ok msg ->
             { Kind = OutputKind.Info
               Text = sprintf "Reloaded %s: %s" path msg
-              Timestamp = DateTime.UtcNow }
+              Timestamp = DateTime.UtcNow
+              SessionId = activeId }
           | Error err ->
             { Kind = OutputKind.Error
               Text = sprintf "Reload failed %s: %s" path err
-              Timestamp = DateTime.UtcNow }
+              Timestamp = DateTime.UtcNow
+              SessionId = activeId }
         { model with RecentOutput = line :: model.RecentOutput }, []
 
       | SageFsEvent.WarmupProgress _ -> model, []
 
       | SageFsEvent.WarmupCompleted (_, failures) ->
+        let activeId = model.Sessions.ActiveSessionId |> Option.defaultValue ""
         if failures.IsEmpty then
           let line = {
             Kind = OutputKind.Info
             Text = "Warmup complete"
             Timestamp = DateTime.UtcNow
+            SessionId = activeId
           }
           { model with RecentOutput = line :: model.RecentOutput }, []
         else
@@ -164,7 +186,8 @@ module SageFsUpdate =
             failures |> List.map (fun f ->
               { Kind = OutputKind.Error
                 Text = sprintf "Warmup failure: %s" f
-                Timestamp = DateTime.UtcNow })
+                Timestamp = DateTime.UtcNow
+                SessionId = activeId })
           { model with RecentOutput = lines @ model.RecentOutput }, []
 
 /// Pure render function: produces RenderRegion list from model.
@@ -186,11 +209,15 @@ module SageFsRender =
       Completions = editorCompletions
     }
 
+    let activeSessionId = model.Sessions.ActiveSessionId |> Option.defaultValue ""
     let outputRegion = {
       Id = "output"
       Flags = RegionFlags.Scrollable ||| RegionFlags.LiveUpdate
       Content =
         model.RecentOutput
+        |> List.filter (fun line ->
+          line.SessionId = "" || line.SessionId = activeSessionId)
+        |> List.rev
         |> List.map (fun line ->
           let kindLabel =
             match line.Kind with
@@ -416,6 +443,8 @@ module SageFsEffectHandler =
           | Ok info ->
             dispatch (SageFsMsg.Event (
               SageFsEvent.SessionCreated (sessionInfoToSnapshot info)))
+            dispatch (SageFsMsg.Event (
+              SageFsEvent.SessionSwitched (None, info.Id)))
           | Error err ->
             dispatch (SageFsMsg.Event (
               SageFsEvent.EvalFailed (

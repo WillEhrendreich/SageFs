@@ -141,8 +141,8 @@ let accumulatedDiagnosticsTests =
     testCase "AppState has Diagnostics field of type DiagnosticsStore"
     <| fun _ ->
       task {
-        let ctx = sharedCtx ()
-        let! st = ctx.Actor.PostAndAsyncReply(GetAppState)
+        let result = globalActorResult.Value
+        let! st = result.Actor.PostAndAsyncReply(GetAppState)
         // Just verify the field exists and is a valid store (may have accumulated entries from other tests)
         st.Diagnostics
         |> DiagnosticsStore.all
@@ -154,12 +154,12 @@ let accumulatedDiagnosticsTests =
     testCase "GetDiagnostics with errors accumulates new diagnostics in state"
     <| fun _ ->
       task {
-        let ctx = sharedCtx ()
-        let! stBefore = ctx.Actor.PostAndAsyncReply(GetAppState)
+        let result = globalActorResult.Value
+        let! stBefore = result.Actor.PostAndAsyncReply(GetAppState)
         let countBefore = stBefore.Diagnostics |> DiagnosticsStore.allFlat |> List.length
         let uniqueCode = sprintf "let accumTest_%d: int = \"oops\"" (System.Random.Shared.Next())
-        let! _diags = ctx.Actor.PostAndAsyncReply(fun rc -> GetDiagnostics(uniqueCode, rc))
-        let! stAfter = ctx.Actor.PostAndAsyncReply(GetAppState)
+        let! _diags = result.Actor.PostAndAsyncReply(fun rc -> GetDiagnostics(uniqueCode, rc))
+        let! stAfter = result.Actor.PostAndAsyncReply(GetAppState)
         let countAfter = stAfter.Diagnostics |> DiagnosticsStore.allFlat |> List.length
         (countAfter > countBefore)
         |> Expect.isTrue "diagnostics count should increase after GetDiagnostics with errors"
@@ -170,11 +170,11 @@ let accumulatedDiagnosticsTests =
     testCase "DiagnosticsChanged event fires when diagnostics are updated"
     <| fun _ ->
       task {
-        let ctx = sharedCtx ()
+        let result = globalActorResult.Value
         let mutable received = None
-        use _sub = ctx.DiagnosticsChanged.Subscribe(fun store -> received <- Some store)
+        use _sub = result.DiagnosticsChanged.Subscribe(fun store -> received <- Some store)
         let uniqueCode = sprintf "let eventTest_%d: int = \"wrong\"" (System.Random.Shared.Next())
-        let! _diags = ctx.Actor.PostAndAsyncReply(fun rc -> GetDiagnostics(uniqueCode, rc))
+        let! _diags = result.Actor.PostAndAsyncReply(fun rc -> GetDiagnostics(uniqueCode, rc))
         // Give the event a moment to fire (it's synchronous in the actor loop, but subscription is async)
         do! System.Threading.Tasks.Task.Delay(100)
         received

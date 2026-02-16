@@ -28,6 +28,15 @@ module WorkerProtocol =
       | SessionStatus.Restarting -> "Restarting"
       | SessionStatus.Stopped -> "Stopped"
 
+    /// Convert to SessionState for affordance checking.
+    let toSessionState = function
+      | SessionStatus.Starting -> SessionState.WarmingUp
+      | SessionStatus.Ready -> SessionState.Ready
+      | SessionStatus.Evaluating -> SessionState.Evaluating
+      | SessionStatus.Faulted -> SessionState.Faulted
+      | SessionStatus.Restarting -> SessionState.WarmingUp
+      | SessionStatus.Stopped -> SessionState.Faulted
+
     let parse = function
       | "Starting" -> Result.Ok SessionStatus.Starting
       | "Ready" -> Result.Ok SessionStatus.Ready
@@ -68,6 +77,14 @@ module WorkerProtocol =
     EndLine: int
     EndColumn: int
   }
+
+  module WorkerDiagnostic =
+    let toDiagnostic (wd: WorkerDiagnostic) : Features.Diagnostics.Diagnostic =
+      { Message = wd.Message
+        Subcategory = ""
+        Range = { StartLine = wd.StartLine; StartColumn = wd.StartColumn
+                  EndLine = wd.EndLine; EndColumn = wd.EndColumn }
+        Severity = wd.Severity }
 
   type WorkerStatusSnapshot = {
     Status: SessionStatus

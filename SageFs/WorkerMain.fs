@@ -115,8 +115,8 @@ let run (sessionId: string) (pipeName: string) (args: Args.Arguments list) = asy
   let onEvent _ = ()
 
   let actorArgs : ActorCreation.ActorArgs = {
-    Middleware = []
-    InitFunctions = []
+    Middleware = ActorCreation.commonMiddleware
+    InitFunctions = ActorCreation.commonInitFunctions
     Logger = logger
     OutStream = IO.TextWriter.Null
     UseAsp = false

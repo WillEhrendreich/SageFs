@@ -15,6 +15,7 @@ type OutputLine = {
   Kind: OutputKind
   Text: string
   Timestamp: DateTime
+  SessionId: string
 }
 
 /// File change actions for the event system

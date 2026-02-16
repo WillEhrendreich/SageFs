@@ -11,6 +11,8 @@ type SessionManagementOps = {
   StopSession: string -> Task<Result<string, SageFsError>>
   /// Get the session proxy for routing commands to a specific worker.
   GetProxy: SessionId -> Task<SessionProxy option>
+  /// Get the SessionInfo for a specific session.
+  GetSessionInfo: SessionId -> Task<SessionInfo option>
 }
 
 module SessionManagementOps =
@@ -20,4 +22,5 @@ module SessionManagementOps =
     ListSessions = fun () -> Task.FromResult("No sessions")
     StopSession = fun _ -> Task.FromResult(Result.Error (SageFsError.SessionCreationFailed "Not available"))
     GetProxy = fun _ -> Task.FromResult(None)
+    GetSessionInfo = fun _ -> Task.FromResult(None)
   }

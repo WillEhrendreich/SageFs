@@ -28,7 +28,7 @@ let tests =
         printfn "Result: %s" result
         Expect.stringContains result "val x" "Should execute successfully"
 
-        Expect.isGreaterThan (SageFs.EventTracking.getEventCount ctx.Store ctx.SessionId) 0 "Should track events"
+        Expect.isGreaterThan (SageFs.EventTracking.getEventCount ctx.Store ctx.ActiveSessionId.Value) 0 "Should track events"
 
         printfn "sendFSharpCode tool test passed"
       }
@@ -45,7 +45,7 @@ let tests =
         let! _ = sendFSharpCode ctx "claude" "let aiValue = 100" OutputFormat.Text None
 
         // Check events are tracked
-        let events = SageFs.EventTracking.getAllEvents ctx.Store ctx.SessionId
+        let events = SageFs.EventTracking.getAllEvents ctx.Store ctx.ActiveSessionId.Value
         Expect.isGreaterThanOrEqual events.Length 2 "Should have input and output events"
 
         let (_, src, _) =
@@ -155,7 +155,7 @@ let tests =
         Expect.stringContains result2 "6" "Agent 2 should use Agent 1's data"
 
         // Check all events are tracked
-        let events = SageFs.EventTracking.getAllEvents ctx.Store ctx.SessionId
+        let events = SageFs.EventTracking.getAllEvents ctx.Store ctx.ActiveSessionId.Value
 
         let sources =
           events |> List.map (fun (_, src, _) -> src.ToString()) |> List.distinct
@@ -176,7 +176,7 @@ let tests =
         let ctx = sharedCtxWith "mixed-session"
 
         // Simulate console user input
-        SageFs.EventTracking.trackInput ctx.Store ctx.SessionId Console "let userValue = 42"
+        SageFs.EventTracking.trackInput ctx.Store ctx.ActiveSessionId.Value Console "let userValue = 42"
 
         let request1 = {
           Code = "let userValue = 42"
@@ -190,7 +190,7 @@ let tests =
         Expect.stringContains result "84" "MCP should use console value"
 
         // Check mixed sources
-        let events = SageFs.EventTracking.getAllEvents ctx.Store ctx.SessionId
+        let events = SageFs.EventTracking.getAllEvents ctx.Store ctx.ActiveSessionId.Value
 
         let sources =
           events |> List.map (fun (_, src, _) -> src.ToString()) |> List.distinct
@@ -215,7 +215,7 @@ let tests =
         Expect.stringContains result "Error:" "Should return error message"
 
         // Should still track the failed attempt
-        Expect.isGreaterThan (SageFs.EventTracking.getEventCount ctx.Store ctx.SessionId) 0 "Should track error event"
+        Expect.isGreaterThan (SageFs.EventTracking.getEventCount ctx.Store ctx.ActiveSessionId.Value) 0 "Should track error event"
 
         printfn "Compilation error test passed"
       }
@@ -232,7 +232,7 @@ let tests =
 
         printfn "Runtime error result: %s" result
         // Division by zero might be caught at compile time or runtime, either way should track it
-        Expect.isGreaterThan (SageFs.EventTracking.getEventCount ctx.Store ctx.SessionId) 0 "Should track execution"
+        Expect.isGreaterThan (SageFs.EventTracking.getEventCount ctx.Store ctx.ActiveSessionId.Value) 0 "Should track execution"
 
         printfn "Runtime error test passed"
       }

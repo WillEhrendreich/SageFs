@@ -328,6 +328,31 @@ Started: {timestamp} UTC"""
     sprintf """Session: %s | Events: %d | State: %s | Projects: %s
 Available: %s%s%s""" sessionId eventCount (SessionState.label state) projectsStr tools statsSection startupSection
 
+  /// Format status from a worker proxy's StatusSnapshot + SessionInfo.
+  let formatProxyStatus
+    (sessionId: string)
+    (eventCount: int)
+    (snapshot: WorkerProtocol.WorkerStatusSnapshot)
+    (info: WorkerProtocol.SessionInfo)
+    (mcpPort: int)
+    : string =
+    let state = WorkerProtocol.SessionStatus.toSessionState snapshot.Status
+    let projectsStr =
+      if info.Projects.IsEmpty then "None"
+      else String.concat ", " (info.Projects |> List.map Path.GetFileName)
+    let statsSection =
+      if snapshot.EvalCount > 0 then
+        sprintf "\nEvals: %d | Avg: %dms | Min: %dms | Max: %dms"
+          snapshot.EvalCount snapshot.AvgDurationMs snapshot.MinDurationMs snapshot.MaxDurationMs
+      else ""
+    let tools = Affordances.availableTools state |> String.concat ", "
+    sprintf """Session: %s | Events: %d | State: %s | Projects: %s
+Available: %s%s
+
+📋 Startup Information:
+- Working Directory: %s
+- MCP Port: %d""" sessionId eventCount (SessionState.label state) projectsStr tools statsSection info.WorkingDirectory mcpPort
+
 /// Event tracking for collaborative MCP mode — backed by Marten event store
 module EventTracking =
 
@@ -386,26 +411,23 @@ module EventTracking =
     EventStore.countEvents store streamId
     |> fun t -> t.ConfigureAwait(false).GetAwaiter().GetResult()
 
-/// MCP tool implementations
+/// MCP tool implementations — all tools route through SessionManager.
+/// There is no "local embedded session" — every session is a worker.
 module McpTools =
 
   open System.Threading
 
   type McpContext = {
-    Actor: AppActor
     Store: Marten.IDocumentStore
-    SessionId: string
     DiagnosticsChanged: IEvent<Features.DiagnosticsStore.T>
     /// Fires serialized JSON whenever the Elm model changes.
     StateChanged: IEvent<string> option
-    CancelEval: unit -> bool
-    GetSessionState: unit -> SessionState
-    GetEvalStats: unit -> Affordances.EvalStats
-    GetWarmupFailures: unit -> WarmupFailure list
-    GetStartupConfig: unit -> StartupConfig option
     SessionOps: SessionManagementOps
+    /// Mutable — tracks which session MCP tools route to.
+    ActiveSessionId: string ref
+    /// MCP port for status display.
+    McpPort: int
     /// Elm loop dispatch function (daemon mode).
-    /// When present, MCP tools can drive the Elm loop.
     Dispatch: (SageFsMsg -> unit) option
     /// Read the current Elm model (daemon mode).
     GetElmModel: (unit -> SageFsModel) option
@@ -413,11 +435,8 @@ module McpTools =
     GetElmRegions: (unit -> RenderRegion list) option
   }
 
-  /// Check tool availability and return error message if not allowed
-  let private requireTool (ctx: McpContext) (toolName: string) : Result<unit, string> =
-    let state = ctx.GetSessionState()
-    Affordances.checkToolAvailability state toolName
-    |> Result.mapError SageFsError.describe
+  /// Get the active session ID.
+  let private activeSessionId (ctx: McpContext) = !ctx.ActiveSessionId
 
   /// Notify the Elm loop of an event (fire-and-forget, no-op if no dispatch).
   let private notifyElm (ctx: McpContext) (event: SageFsEvent) =
@@ -425,8 +444,7 @@ module McpTools =
     |> Option.iter (fun dispatch ->
       dispatch (SageFsMsg.Event event))
 
-  /// Route a WorkerMessage to a specific worker session via proxy.
-  /// Returns the raw WorkerResponse, or error if session not found.
+  /// Route a WorkerMessage to a specific session via proxy.
   let private routeToSession
     (ctx: McpContext)
     (sessionId: string)
@@ -441,6 +459,32 @@ module McpTools =
         let replyId = Guid.NewGuid().ToString("N").[..7]
         let! response = send (msg replyId) |> Async.StartAsTask
         return Result.Ok response
+    }
+
+  /// Route to the active session or the specified session.
+  let private resolveSessionId (ctx: McpContext) (sessionId: string option) =
+    sessionId |> Option.defaultValue (activeSessionId ctx)
+
+  /// Get the session status via proxy, returning the SessionState.
+  let private getSessionState (ctx: McpContext) (sessionId: string) : Task<SessionState> =
+    task {
+      let! routeResult =
+        routeToSession ctx sessionId
+          (fun replyId -> WorkerProtocol.WorkerMessage.GetStatus replyId)
+      return
+        match routeResult with
+        | Ok (WorkerProtocol.WorkerResponse.StatusResult(_, snapshot)) ->
+          WorkerProtocol.SessionStatus.toSessionState snapshot.Status
+        | _ -> SessionState.Faulted
+    }
+
+  /// Check tool availability against the active session's state.
+  let private requireTool (ctx: McpContext) (sessionId: string) (toolName: string) : Task<Result<unit, string>> =
+    task {
+      let! state = getSessionState ctx sessionId
+      return
+        Affordances.checkToolAvailability state toolName
+        |> Result.mapError SageFsError.describe
     }
 
   /// Format a WorkerResponse.EvalResult for display.
@@ -468,68 +512,33 @@ module McpTools =
 
   let sendFSharpCode (ctx: McpContext) (agentName: string) (code: string) (format: OutputFormat) (sessionId: string option) : Task<string> =
     task {
-      // Route to a specific worker session if sessionId is provided
-      match sessionId with
-      | Some sid ->
-        let statements = McpAdapter.splitStatements code
-        let mutable allOutputs = []
-        for statement in statements do
-          let! routeResult =
-            routeToSession ctx sid
-              (fun replyId -> WorkerProtocol.WorkerMessage.EvalCode(statement, replyId))
-          let output =
-            match routeResult with
-            | Ok response -> formatWorkerEvalResult response
-            | Error msg -> sprintf "Error: %s" msg
-          allOutputs <- output :: allOutputs
-        return
-          if statements.Length > 1 then
-            String.concat "\n\n" (List.rev allOutputs)
-          else
-            allOutputs |> List.tryHead |> Option.defaultValue ""
-      | None ->
-      // Local embedded session
-      match requireTool ctx "send_fsharp_code" with
-      | Error msg -> return msg
-      | Ok () ->
-      EventTracking.trackInput ctx.Store ctx.SessionId (Features.Events.McpAgent agentName) code
-
+      let sid = resolveSessionId ctx sessionId
       let statements = McpAdapter.splitStatements code
+      EventTracking.trackInput ctx.Store sid (Features.Events.McpAgent agentName) code
 
-      let formatResult =
-        match format with
-        | Text -> McpAdapter.formatEvalResult
-        | Json -> McpAdapter.formatEvalResultJson
-
-      let mutable lastOutput = ""
       let mutable allOutputs = []
-
       for statement in statements do
-        McpAdapter.echoStatement Console.Out statement
-        notifyElm ctx (SageFsEvent.EvalStarted (ctx.SessionId, statement))
-
-        let request = { Code = statement; Args = Map.empty }
-
-        let! result =
-          ctx.Actor.PostAndAsyncReply(fun reply -> Eval(request, CancellationToken.None, reply))
-          |> Async.StartAsTask
-
-        // Notify Elm loop of result
-        match result.EvaluationResult with
-        | Ok _ ->
-          let diags =
-            result.Diagnostics
-            |> Array.toList
-            |> List.map (fun d -> d)
-          notifyElm ctx (
-            SageFsEvent.EvalCompleted (ctx.SessionId, (formatResult result), diags))
-        | Error ex ->
-          notifyElm ctx (
-            SageFsEvent.EvalFailed (ctx.SessionId, ex.Message))
-
-        let output = formatResult result
+        notifyElm ctx (SageFsEvent.EvalStarted (sid, statement))
+        let! routeResult =
+          routeToSession ctx sid
+            (fun replyId -> WorkerProtocol.WorkerMessage.EvalCode(statement, replyId))
+        let output =
+          match routeResult with
+          | Ok response ->
+            let formatted = formatWorkerEvalResult response
+            match response with
+            | WorkerProtocol.WorkerResponse.EvalResult(_, Ok _, diags) ->
+              notifyElm ctx (
+                SageFsEvent.EvalCompleted (sid, formatted, diags |> List.map WorkerProtocol.WorkerDiagnostic.toDiagnostic))
+            | WorkerProtocol.WorkerResponse.EvalResult(_, Error err, _) ->
+              notifyElm ctx (
+                SageFsEvent.EvalFailed (sid, SageFsError.describe err))
+            | _ -> ()
+            formatted
+          | Error msg ->
+            notifyElm ctx (SageFsEvent.EvalFailed (sid, msg))
+            sprintf "Error: %s" msg
         allOutputs <- output :: allOutputs
-        lastOutput <- output
 
       let finalOutput =
         match format with
@@ -538,48 +547,83 @@ module McpTools =
           sprintf "[%s]" items
         | _ when statements.Length > 1 ->
           String.concat "\n\n" (List.rev allOutputs)
-        | _ -> lastOutput
+        | _ -> allOutputs |> List.tryHead |> Option.defaultValue ""
 
-      EventTracking.trackOutput ctx.Store ctx.SessionId (Features.Events.McpAgent agentName) finalOutput
-
+      EventTracking.trackOutput ctx.Store sid (Features.Events.McpAgent agentName) finalOutput
       return finalOutput
     }
 
   let getRecentEvents (ctx: McpContext) (count: int) : Task<string> =
     task {
-      let events = EventTracking.getRecentEvents ctx.Store ctx.SessionId count
+      let sid = activeSessionId ctx
+      let events = EventTracking.getRecentEvents ctx.Store sid count
       return McpAdapter.formatEvents events
     }
 
   let getStatus (ctx: McpContext) : Task<string> =
     task {
-      let startupConfig = ctx.GetStartupConfig()
-      let eventCount = EventTracking.getEventCount ctx.Store ctx.SessionId
-      let sessionId = ctx.SessionId
-      let state = ctx.GetSessionState()
-      let stats = ctx.GetEvalStats()
-      return McpAdapter.formatEnhancedStatus sessionId eventCount state (Some stats) startupConfig
+      let sid = activeSessionId ctx
+      let eventCount = EventTracking.getEventCount ctx.Store sid
+      let! routeResult =
+        routeToSession ctx sid
+          (fun replyId -> WorkerProtocol.WorkerMessage.GetStatus replyId)
+      match routeResult with
+      | Ok (WorkerProtocol.WorkerResponse.StatusResult(_, snapshot)) ->
+        let! info = ctx.SessionOps.GetSessionInfo sid
+        match info with
+        | Some sessionInfo ->
+          return McpAdapter.formatProxyStatus sid eventCount snapshot sessionInfo ctx.McpPort
+        | None ->
+          let state = WorkerProtocol.SessionStatus.toSessionState snapshot.Status
+          return McpAdapter.formatEnhancedStatus sid eventCount state None None
+      | Ok other ->
+        return sprintf "Unexpected response: %A" other
+      | Error msg ->
+        return sprintf "Error getting status: %s" msg
     }
 
   let getStartupInfo (ctx: McpContext) : Task<string> =
     task {
-      match ctx.GetStartupConfig() with
-      | None -> return "SageFs startup information not available yet — session is still initializing"
-      | Some config -> return McpAdapter.formatStartupInfo config
+      let sid = activeSessionId ctx
+      let! info = ctx.SessionOps.GetSessionInfo sid
+      match info with
+      | Some sessionInfo ->
+        return
+          sprintf "📋 Startup Information:\n- Session: %s\n- Working Directory: %s\n- Projects: %s\n- MCP Port: %d\n- Status: %s"
+            sid
+            sessionInfo.WorkingDirectory
+            (if sessionInfo.Projects.IsEmpty then "None"
+             else String.concat ", " (sessionInfo.Projects |> List.map Path.GetFileName))
+            ctx.McpPort
+            (WorkerProtocol.SessionStatus.label sessionInfo.Status)
+      | None ->
+        return "SageFs startup information not available yet — session is still initializing"
     }
 
   let getStartupInfoJson (ctx: McpContext) : Task<string> =
     task {
-      match ctx.GetStartupConfig() with
-      | None -> return """{"status": "initializing", "message": "Session is still warming up"}"""
-      | Some config -> return McpAdapter.formatStartupInfoJson config
+      let sid = activeSessionId ctx
+      let! info = ctx.SessionOps.GetSessionInfo sid
+      match info with
+      | Some sessionInfo ->
+        return
+          System.Text.Json.JsonSerializer.Serialize(
+            {| sessionId = sid
+               workingDirectory = sessionInfo.WorkingDirectory
+               projects = sessionInfo.Projects
+               mcpPort = ctx.McpPort
+               status = WorkerProtocol.SessionStatus.label sessionInfo.Status |})
+      | None ->
+        return """{"status": "initializing", "message": "Session is still warming up"}"""
     }
 
   let getAvailableProjects (ctx: McpContext) : Task<string> =
     task {
+      let sid = activeSessionId ctx
+      let! info = ctx.SessionOps.GetSessionInfo sid
       let workingDir =
-        match ctx.GetStartupConfig() with
-        | Some config -> config.WorkingDirectory
+        match info with
+        | Some sessionInfo -> sessionInfo.WorkingDirectory
         | None -> Environment.CurrentDirectory
 
       let projects =
@@ -603,181 +647,127 @@ module McpTools =
 
   let loadFSharpScript (ctx: McpContext) (agentName: string) (filePath: string) (sessionId: string option) : Task<string> =
     task {
-      match sessionId with
-      | Some sid ->
-        let! routeResult =
-          routeToSession ctx sid
-            (fun replyId -> WorkerProtocol.WorkerMessage.LoadScript(filePath, replyId))
-        return
-          match routeResult with
-          | Ok (WorkerProtocol.WorkerResponse.ScriptLoaded(_, Ok msg)) -> msg
-          | Ok (WorkerProtocol.WorkerResponse.ScriptLoaded(_, Error err)) ->
-            sprintf "Error: %s" (SageFsError.describe err)
-          | Ok (WorkerProtocol.WorkerResponse.WorkerError err) ->
-            sprintf "Error: %s" (SageFsError.describe err)
-          | Ok other -> sprintf "Unexpected response: %A" other
-          | Error msg -> sprintf "Error: %s" msg
-      | None ->
-      match McpAdapter.parseScriptFile filePath with
-      | Error ex -> return $"Error reading {filePath}: {ex.Message}"
-      | Ok statements ->
-        let fileName = Path.GetFileName(filePath)
-        EventTracking.trackInput ctx.Store ctx.SessionId (Features.Events.FileSync fileName) (sprintf "Loading %d statements" statements.Length)
-
-        let mutable successCount = 0
-        let mutable errorMessages = []
-
-        for statement in statements do
-          let request = { Code = statement; Args = Map.empty }
-          notifyElm ctx (SageFsEvent.EvalStarted (ctx.SessionId, statement))
-
-          let! result =
-            ctx.Actor.PostAndAsyncReply(fun reply -> Eval(request, CancellationToken.None, reply))
-            |> Async.StartAsTask
-
-          match result.EvaluationResult with
-          | Ok _ -> successCount <- successCount + 1
-          | Error ex -> errorMessages <- ex.Message :: errorMessages
-
-        if errorMessages.IsEmpty then
-          return $"Success: Loaded {successCount} statements from {fileName}"
-        else
-          let errorText = String.concat "\n" (List.rev errorMessages)
-          return $"Partial: {successCount} succeeded, {errorMessages.Length} failed\nErrors:\n{errorText}"
+      let sid = resolveSessionId ctx sessionId
+      let! routeResult =
+        routeToSession ctx sid
+          (fun replyId -> WorkerProtocol.WorkerMessage.LoadScript(filePath, replyId))
+      return
+        match routeResult with
+        | Ok (WorkerProtocol.WorkerResponse.ScriptLoaded(_, Ok msg)) -> msg
+        | Ok (WorkerProtocol.WorkerResponse.ScriptLoaded(_, Error err)) ->
+          sprintf "Error: %s" (SageFsError.describe err)
+        | Ok (WorkerProtocol.WorkerResponse.WorkerError err) ->
+          sprintf "Error: %s" (SageFsError.describe err)
+        | Ok other -> sprintf "Unexpected response: %A" other
+        | Error msg -> sprintf "Error: %s" msg
     }
-
-  let private resetPushbackWarning (ctx: McpContext) =
-    let state = ctx.GetSessionState()
-    let warmupFailures = ctx.GetWarmupFailures()
-    match state, warmupFailures with
-    | SessionState.Ready, [] ->
-      Some "⚠️ NOTE: The session was healthy (Ready, no warm-up failures). This reset was likely unnecessary. If you encountered eval errors, the problem is almost certainly in your submitted code — fix and resubmit instead of resetting.\n\n"
-    | SessionState.Evaluating, [] ->
-      Some "⚠️ NOTE: The session was actively evaluating with no warm-up issues. If you're resetting due to eval errors, those are in your code, not the session.\n\n"
-    | _ -> None
 
   let resetSession (ctx: McpContext) (sessionId: string option) : Task<string> =
     task {
-      match sessionId with
-      | Some sid ->
-        let! routeResult =
-          routeToSession ctx sid
-            (fun replyId -> WorkerProtocol.WorkerMessage.ResetSession replyId)
-        return
-          match routeResult with
-          | Ok (WorkerProtocol.WorkerResponse.ResetResult(_, Ok ())) ->
-            "Session reset successfully."
-          | Ok (WorkerProtocol.WorkerResponse.ResetResult(_, Error err)) ->
-            sprintf "Error: %s" (SageFsError.describe err)
-          | Ok other -> sprintf "Unexpected response: %A" other
-          | Error msg -> sprintf "Error: %s" msg
-      | None ->
-      let warning = resetPushbackWarning ctx
-      let! result =
-        ctx.Actor.PostAndAsyncReply(fun reply -> ResetSession reply)
-        |> Async.StartAsTask
-      match result with
-      | Ok () ->
-        notifyElm ctx (
-          SageFsEvent.SessionStatusChanged (ctx.SessionId, SessionDisplayStatus.Running))
-        let msg = "Session reset successfully. All previous definitions have been cleared."
-        return (warning |> Option.map (fun w -> w + msg) |> Option.defaultValue msg)
-      | Error err -> return sprintf "Error: Session reset failed — %s" (SageFsError.describe err)
+      let sid = resolveSessionId ctx sessionId
+      let! routeResult =
+        routeToSession ctx sid
+          (fun replyId -> WorkerProtocol.WorkerMessage.ResetSession replyId)
+      return
+        match routeResult with
+        | Ok (WorkerProtocol.WorkerResponse.ResetResult(_, Ok ())) ->
+          notifyElm ctx (
+            SageFsEvent.SessionStatusChanged (sid, SessionDisplayStatus.Running))
+          "Session reset successfully. All previous definitions have been cleared."
+        | Ok (WorkerProtocol.WorkerResponse.ResetResult(_, Error err)) ->
+          sprintf "Error: %s" (SageFsError.describe err)
+        | Ok other -> sprintf "Unexpected response: %A" other
+        | Error msg -> sprintf "Error: %s" msg
     }
 
   let checkFSharpCode (ctx: McpContext) (code: string) (sessionId: string option) : Task<string> =
     task {
-      match sessionId with
-      | Some sid ->
-        let! routeResult =
-          routeToSession ctx sid
-            (fun replyId -> WorkerProtocol.WorkerMessage.CheckCode(code, replyId))
-        return
-          match routeResult with
-          | Ok (WorkerProtocol.WorkerResponse.CheckResult(_, diags)) ->
-            if List.isEmpty diags then "No errors found."
-            else
-              diags
-              |> List.map (fun d ->
-                sprintf "[%s] %s"
-                  (Features.Diagnostics.DiagnosticSeverity.label d.Severity) d.Message)
-              |> String.concat "\n"
-          | Ok other -> sprintf "Unexpected response: %A" other
-          | Error msg -> sprintf "Error: %s" msg
-      | None ->
-      let! diagnostics =
-        ctx.Actor.PostAndAsyncReply(fun reply -> GetDiagnostics(code, reply))
-        |> Async.StartAsTask
-      return McpAdapter.formatDiagnosticsResult diagnostics
+      let sid = resolveSessionId ctx sessionId
+      let! routeResult =
+        routeToSession ctx sid
+          (fun replyId -> WorkerProtocol.WorkerMessage.CheckCode(code, replyId))
+      return
+        match routeResult with
+        | Ok (WorkerProtocol.WorkerResponse.CheckResult(_, diags)) ->
+          if List.isEmpty diags then "No errors found."
+          else
+            diags
+            |> List.map (fun d ->
+              sprintf "[%s] %s"
+                (Features.Diagnostics.DiagnosticSeverity.label d.Severity) d.Message)
+            |> String.concat "\n"
+        | Ok other -> sprintf "Unexpected response: %A" other
+        | Error msg -> sprintf "Error: %s" msg
     }
 
   let hardResetSession (ctx: McpContext) (rebuild: bool) (sessionId: string option) : Task<string> =
     task {
-      match sessionId with
-      | Some sid ->
-        let! routeResult =
-          routeToSession ctx sid
-            (fun replyId -> WorkerProtocol.WorkerMessage.HardResetSession(rebuild, replyId))
-        return
-          match routeResult with
-          | Ok (WorkerProtocol.WorkerResponse.HardResetResult(_, Ok msg)) -> msg
-          | Ok (WorkerProtocol.WorkerResponse.HardResetResult(_, Error err)) ->
-            sprintf "Error: %s" (SageFsError.describe err)
-          | Ok other -> sprintf "Unexpected response: %A" other
-          | Error msg -> sprintf "Error: %s" msg
-      | None ->
-      let warning = resetPushbackWarning ctx
-      let! result =
-        ctx.Actor.PostAndAsyncReply(fun reply -> HardResetSession(rebuild, reply))
-        |> Async.StartAsTask
-      match result with
-      | Ok msg ->
-        notifyElm ctx (
-          SageFsEvent.SessionStatusChanged (ctx.SessionId, SessionDisplayStatus.Restarting))
-        return (warning |> Option.map (fun w -> w + msg) |> Option.defaultValue msg)
-      | Error err -> return sprintf "Error: Hard reset failed — %s" (SageFsError.describe err)
+      let sid = resolveSessionId ctx sessionId
+      notifyElm ctx (
+        SageFsEvent.SessionStatusChanged (sid, SessionDisplayStatus.Restarting))
+      let! routeResult =
+        routeToSession ctx sid
+          (fun replyId -> WorkerProtocol.WorkerMessage.HardResetSession(rebuild, replyId))
+      return
+        match routeResult with
+        | Ok (WorkerProtocol.WorkerResponse.HardResetResult(_, Ok msg)) -> msg
+        | Ok (WorkerProtocol.WorkerResponse.HardResetResult(_, Error err)) ->
+          sprintf "Error: %s" (SageFsError.describe err)
+        | Ok other -> sprintf "Unexpected response: %A" other
+        | Error msg -> sprintf "Error: %s" msg
     }
 
   let cancelEval (ctx: McpContext) : Task<string> =
     task {
-      let cancelled = ctx.CancelEval()
-      if cancelled then
-        notifyElm ctx (SageFsEvent.EvalCancelled ctx.SessionId)
-        return "Evaluation cancelled."
-      else
-        return "No evaluation in progress."
+      let sid = activeSessionId ctx
+      let! routeResult =
+        routeToSession ctx sid
+          (fun _ -> WorkerProtocol.WorkerMessage.CancelEval)
+      return
+        match routeResult with
+        | Ok (WorkerProtocol.WorkerResponse.EvalCancelled true) ->
+          notifyElm ctx (SageFsEvent.EvalCancelled sid)
+          "Evaluation cancelled."
+        | Ok (WorkerProtocol.WorkerResponse.EvalCancelled false) ->
+          "No evaluation in progress."
+        | Ok other -> sprintf "Unexpected response: %A" other
+        | Error msg -> sprintf "Error: %s" msg
     }
 
   let getCompletions (ctx: McpContext) (code: string) (cursorPosition: int) : Task<string> =
     task {
-      let word =
-        if cursorPosition > 0 && cursorPosition <= code.Length then
-          let before = code.[..cursorPosition - 1]
-          let wordChars =
-            before
-            |> Seq.rev
-            |> Seq.takeWhile (fun c -> Char.IsLetterOrDigit c || c = '.' || c = '_')
-            |> Seq.rev
-            |> Seq.toArray
-          System.String(wordChars)
-        else ""
-      let! items =
-        ctx.Actor.PostAndAsyncReply(fun reply -> Autocomplete(code, cursorPosition, word, reply))
-        |> Async.StartAsTask
-      return McpAdapter.formatCompletions items
+      let sid = activeSessionId ctx
+      let! routeResult =
+        routeToSession ctx sid
+          (fun replyId -> WorkerProtocol.WorkerMessage.GetCompletions(code, cursorPosition, replyId))
+      return
+        match routeResult with
+        | Ok (WorkerProtocol.WorkerResponse.CompletionResult(_, completions)) ->
+          if List.isEmpty completions then "No completions available."
+          else String.concat "\n" completions
+        | Ok other -> sprintf "Unexpected response: %A" other
+        | Error msg -> sprintf "Error: %s" msg
     }
 
   let private exploreQualifiedName (ctx: McpContext) (qualifiedName: string) : Task<string> =
     task {
-      match requireTool ctx "get_completions" with
-      | Error msg -> return msg
-      | Ok () ->
+      let sid = activeSessionId ctx
       let code = sprintf "%s." qualifiedName
       let cursor = code.Length
-      let! items =
-        ctx.Actor.PostAndAsyncReply(fun reply -> Autocomplete(code, cursor, qualifiedName + ".", reply))
-        |> Async.StartAsTask
-      return McpAdapter.formatExplorationResult qualifiedName items
+      let! routeResult =
+        routeToSession ctx sid
+          (fun replyId -> WorkerProtocol.WorkerMessage.GetCompletions(code, cursor, replyId))
+      return
+        match routeResult with
+        | Ok (WorkerProtocol.WorkerResponse.CompletionResult(_, completions)) ->
+          if List.isEmpty completions then
+            sprintf "No members found for '%s'" qualifiedName
+          else
+            let header = sprintf "Members of %s:" qualifiedName
+            let items = completions |> List.map (sprintf "  %s") |> String.concat "\n"
+            sprintf "%s\n%s" header items
+        | Ok other -> sprintf "Unexpected response: %A" other
+        | Error msg -> sprintf "Error: %s" msg
     }
 
   let exploreNamespace (ctx: McpContext) (namespaceName: string) : Task<string> =
@@ -825,7 +815,7 @@ module McpTools =
     task {
       match ctx.GetElmRegions with
       | None ->
-        return "Elm state not available — running in embedded mode or Elm loop not started."
+        return "Elm state not available — Elm loop not started."
       | Some getRegions ->
         let regions = getRegions ()
         if regions.IsEmpty then
