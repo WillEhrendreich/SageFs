@@ -78,6 +78,14 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
           |> Result.map (fun () ->
             sprintf "Session '%s' stopped." sessionId)
       }
+    RestartSession = fun sessionId rebuild ->
+      task {
+        let! result =
+          sessionManager.PostAndAsyncReply(fun reply ->
+            SessionManager.SessionCommand.RestartSession(sessionId, rebuild, reply))
+          |> Async.StartAsTask
+        return result
+      }
     GetProxy = fun sessionId ->
       task {
         let! managed =
@@ -254,18 +262,11 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
       })
       (fun () -> task {
         let sid = !activeSessionId
-        let! proxy = sessionOps.GetProxy sid
-        match proxy with
-        | Some send ->
-          let! resp =
-            send (WorkerProtocol.WorkerMessage.HardResetSession(true, "dash"))
-            |> Async.StartAsTask
-          return
-            match resp with
-            | WorkerProtocol.WorkerResponse.HardResetResult(_, Ok msg) -> sprintf "Hard reset: %s" msg
-            | WorkerProtocol.WorkerResponse.HardResetResult(_, Error e) -> sprintf "Hard reset failed: %A" e
-            | other -> sprintf "Unexpected: %A" other
-        | None -> return "Error: No active session"
+        let! result = sessionOps.RestartSession sid true
+        return
+          match result with
+          | Ok msg -> sprintf "Hard reset: %s" msg
+          | Error e -> sprintf "Hard reset failed: %s" (SageFsError.describe e)
       })
       // Session switch handler
       (Some (fun (sid: string) -> task {

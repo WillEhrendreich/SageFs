@@ -30,6 +30,10 @@ module SessionManager =
     | StopSession of
         SessionId *
         AsyncReplyChannel<Result<unit, SageFsError>>
+    | RestartSession of
+        SessionId *
+        rebuild: bool *
+        AsyncReplyChannel<Result<string, SageFsError>>
     | GetSession of
         SessionId *
         AsyncReplyChannel<ManagedSession option>
@@ -142,6 +146,48 @@ module SessionManager =
     session.PipeDisposable.Dispose()
   }
 
+  /// Run `dotnet build` for the primary project.
+  /// Called from the daemon process (worker is already stopped).
+  let private runBuild (projects: string list) (workingDir: string) =
+    let primaryProject =
+      projects
+      |> List.tryHead
+    match primaryProject with
+    | None -> Ok "No projects to build"
+    | Some projFile ->
+      let psi =
+        ProcessStartInfo(
+          "dotnet",
+          sprintf "build \"%s\" --no-restore" projFile,
+          RedirectStandardOutput = true,
+          RedirectStandardError = true,
+          UseShellExecute = false,
+          WorkingDirectory = workingDir)
+      use proc = Process.Start(psi)
+      let stderrLines = System.Collections.Generic.List<string>()
+      let stderrTask =
+        System.Threading.Tasks.Task.Run(fun () ->
+          let mutable line = proc.StandardError.ReadLine()
+          while not (isNull line) do
+            stderrLines.Add(line)
+            line <- proc.StandardError.ReadLine())
+      // Drain stdout
+      let _stdoutTask =
+        System.Threading.Tasks.Task.Run(fun () ->
+          let mutable line = proc.StandardOutput.ReadLine()
+          while not (isNull line) do
+            line <- proc.StandardOutput.ReadLine())
+      let exited = proc.WaitForExit(600_000) // 10 min max
+      if not exited then
+        try proc.Kill(entireProcessTree = true) with _ -> ()
+        Error "Build timed out (10 min limit)"
+      else
+        try stderrTask.Wait(5000) |> ignore with _ -> ()
+        if proc.ExitCode <> 0 then
+          Error (sprintf "Build failed (exit %d): %s" proc.ExitCode (String.concat "\n" stderrLines))
+        else
+          Ok "Build succeeded"
+
   /// Create the supervisor MailboxProcessor.
   let create (ct: CancellationToken) =
     MailboxProcessor<SessionCommand>.Start((fun inbox ->
@@ -169,6 +215,40 @@ module SessionManager =
             let newState = ManagerState.removeSession id state
             reply.Reply(Ok ())
             return! loop newState
+          | None ->
+            reply.Reply(Error (SageFsError.SessionNotFound id))
+            return! loop state
+
+        | SessionCommand.RestartSession(id, rebuild, reply) ->
+          match ManagerState.tryGetSession id state with
+          | Some session ->
+            // 1. Stop the worker (releases all assembly locks)
+            do! stopWorker session
+            let stateAfterStop = ManagerState.removeSession id state
+            // 2. Optionally rebuild
+            let buildResult =
+              if rebuild then runBuild session.Projects session.WorkingDir
+              else Ok "No rebuild requested"
+            match buildResult with
+            | Error msg ->
+              reply.Reply(Error (SageFsError.HardResetFailed msg))
+              return! loop stateAfterStop
+            | Ok _buildMsg ->
+            // 3. Respawn worker with same session ID — fresh process = fresh CLR cache
+            let onExited exitCode =
+              inbox.Post(SessionCommand.WorkerExited(id, exitCode))
+            let! result = spawnWorker id session.Projects session.WorkingDir ct onExited
+            match result with
+            | Ok newManaged ->
+              let restarted =
+                { newManaged with
+                    RestartState = session.RestartState }
+              let newState = ManagerState.addSession id restarted stateAfterStop
+              reply.Reply(Ok "Hard reset complete — worker respawned with fresh assemblies.")
+              return! loop newState
+            | Error err ->
+              reply.Reply(Error err)
+              return! loop stateAfterStop
           | None ->
             reply.Reply(Error (SageFsError.SessionNotFound id))
             return! loop state

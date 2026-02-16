@@ -790,16 +790,27 @@ module McpTools =
       let! sid = resolveSessionId ctx sessionId
       notifyElm ctx (
         SageFsEvent.SessionStatusChanged (sid, SessionDisplayStatus.Restarting))
-      let! routeResult =
-        routeToSession ctx sid
-          (fun replyId -> WorkerProtocol.WorkerMessage.HardResetSession(rebuild, replyId))
-      return
-        match routeResult with
-        | Ok (WorkerProtocol.WorkerResponse.HardResetResult(_, Ok msg)) -> msg
-        | Ok (WorkerProtocol.WorkerResponse.HardResetResult(_, Error err)) ->
-          sprintf "Error: %s" (SageFsError.describe err)
-        | Ok other -> sprintf "Unexpected response: %A" other
-        | Error msg -> sprintf "Error: %s" msg
+      if rebuild then
+        // Respawn the worker process to get a fresh CLR assembly cache.
+        // In-process FSI recreation reuses Default ALC cached assemblies,
+        // so rebuilt DLLs are invisible without a process restart.
+        let! result = ctx.SessionOps.RestartSession sid true
+        return
+          match result with
+          | Ok msg -> msg
+          | Error err -> sprintf "Error: %s" (SageFsError.describe err)
+      else
+        // No rebuild — in-process soft reset is fine (no assembly reloading)
+        let! routeResult =
+          routeToSession ctx sid
+            (fun replyId -> WorkerProtocol.WorkerMessage.HardResetSession(false, replyId))
+        return
+          match routeResult with
+          | Ok (WorkerProtocol.WorkerResponse.HardResetResult(_, Ok msg)) -> msg
+          | Ok (WorkerProtocol.WorkerResponse.HardResetResult(_, Error err)) ->
+            sprintf "Error: %s" (SageFsError.describe err)
+          | Ok other -> sprintf "Unexpected response: %A" other
+          | Error msg -> sprintf "Error: %s" msg
     }
 
   let cancelEval (ctx: McpContext) : Task<string> =
