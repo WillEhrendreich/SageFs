@@ -130,7 +130,7 @@ let renderKeyboardHelp () =
 
 /// Render the dashboard HTML shell.
 /// Datastar initializes and connects to the /dashboard/stream SSE endpoint.
-let private renderShell (version: string) =
+let renderShell (version: string) =
   Elem.html [] [
     Elem.head [] [
       Elem.title [] [ Text.raw "SageFs Dashboard" ]
@@ -218,15 +218,22 @@ let private renderShell (version: string) =
       ]
       Elem.h1 [] [ Text.raw (sprintf "🧙 SageFs Dashboard v%s" version) ]
       Elem.div [ Attr.class' "grid" ] [
-        // Row 1: Eval stats (full width since session info moved to Sessions panel)
-        Elem.div [ Attr.class' "panel" ] [
-          Elem.h2 [] [ Text.raw "Eval Stats" ]
-          Elem.div [ Attr.id "eval-stats" ] [
-            Text.raw "Waiting for data..."
+        // Row 3: Output (full width)
+        Elem.div [ Attr.id "output-section"; Attr.class' "panel full-width" ] [
+          Elem.h2 [] [
+            Text.raw "Output"
+            Elem.button
+              [ Attr.class' "panel-header-btn"
+                Ds.onClick (Ds.post "/dashboard/clear-output") ]
+              [ Text.raw "Clear" ]
           ]
+          Elem.div
+            [ Attr.id "output-panel"
+              Attr.class' "auto-scroll log-box"
+              Attr.style "max-height: 400px; overflow-y: auto;" ]
+            [ Text.raw "No output yet" ]
         ]
-        // Row 2: Evaluate (full width)
-        Elem.div [ Attr.class' "panel full-width" ] [
+        Elem.div [ Attr.id "evaluate-section"; Attr.class' "panel full-width" ] [
           Elem.h2 [] [
             Text.raw "Evaluate"
             Elem.button
@@ -273,22 +280,7 @@ let private renderShell (version: string) =
           ]
           Elem.div [ Attr.id "eval-result" ] []
         ]
-        // Row 3: Output (full width)
-        Elem.div [ Attr.class' "panel full-width" ] [
-          Elem.h2 [] [
-            Text.raw "Output"
-            Elem.button
-              [ Attr.class' "panel-header-btn"
-                Ds.onClick (Ds.post "/dashboard/clear-output") ]
-              [ Text.raw "Clear" ]
-          ]
-          Elem.div
-            [ Attr.id "output-panel"
-              Attr.class' "auto-scroll log-box"
-              Attr.style "max-height: 400px; overflow-y: auto;" ]
-            [ Text.raw "No output yet" ]
-        ]
-        // Row 4: Sessions + Diagnostics
+        // Sessions + Diagnostics
         Elem.div [ Attr.class' "panel" ] [
           Elem.h2 [] [ Text.raw "Sessions" ]
           Elem.div [ Attr.id "session-status"; Attr.style "margin-bottom: 0.5rem; padding-bottom: 0.5rem; border-bottom: 1px solid var(--border);" ] [
@@ -303,7 +295,7 @@ let private renderShell (version: string) =
             Text.raw "No diagnostics"
           ]
         ]
-        // Row 5: Create Session (full width)
+        // Create Session (full width)
         Elem.div [ Attr.class' "panel full-width" ] [
           Elem.h2 [] [ Text.raw "Create Session" ]
           Elem.div [ Attr.style "display: flex; gap: 0.5rem; align-items: flex-end;" ] [
@@ -339,6 +331,13 @@ let private renderShell (version: string) =
               Attr.style "margin-top: 0.5rem;"
               Ds.onClick (Ds.post "/dashboard/session/create") ]
             [ Text.raw "➕ Create Session" ]
+        ]
+      ]
+
+      Elem.div [ Attr.class' "panel" ] [
+        Elem.h2 [] [ Text.raw "Eval Stats" ]
+        Elem.div [ Attr.id "eval-stats" ] [
+          Text.raw "Waiting for data..."
         ]
       ]
       // Auto-scroll output panel when new content arrives
@@ -454,7 +453,7 @@ type ParsedSession = {
   LastActivity: string
 }
 
-let private parseSessionLines (content: string) =
+let parseSessionLines (content: string) =
   let sessionRegex = Regex(@"^(\S+)\s*\[([^\]]+)\](\s*\*)?(\s*\([^)]*\))?(\s*evals:\d+)?(\s*up:(?:just now|\S+))?(\s*dir:\S.*?)?(\s*last:.+)?$")
   let extractTag (prefix: string) (value: string) =
     let v = value.Trim()
@@ -560,7 +559,7 @@ let renderSessions (sessions: ParsedSession list) =
           ])
   ]
 
-let private parseOutputLines (content: string) : OutputLine list =
+let parseOutputLines (content: string) : OutputLine list =
   let tsKindRegex = Regex(@"^\[(\d{2}:\d{2}:\d{2})\]\s*\[(\w+)\]\s*(.*)", RegexOptions.Singleline)
   let kindOnlyRegex = Regex(@"^\[(\w+)\]\s*(.*)", RegexOptions.Singleline)
   content.Split('\n')
@@ -581,7 +580,7 @@ let private parseOutputLines (content: string) : OutputLine list =
         { Timestamp = None; Kind = ResultLine; Text = l })
   |> Array.toList
 
-let private parseDiagLines (content: string) : Diagnostic list =
+let parseDiagLines (content: string) : Diagnostic list =
   let diagRegex = Regex(@"^\[(\w+)\]\s*\((\d+),(\d+)\)\s*(.*)")
   content.Split('\n')
   |> Array.filter (fun (l: string) -> l.Length > 0)
@@ -601,7 +600,7 @@ let private parseDiagLines (content: string) : Diagnostic list =
 
 
 
-let private renderRegionForSse (region: RenderRegion) =
+let renderRegionForSse (region: RenderRegion) =
   match region.Id with
   | "output" -> Some (renderOutput (parseOutputLines region.Content))
   | "diagnostics" -> Some (renderDiagnostics (parseDiagLines region.Content))
@@ -802,7 +801,7 @@ let renderDiscoveredProjects (discovered: DiscoveredProjects) =
   ]
 
 /// Helper: render an eval-result error fragment.
-let private evalResultError (msg: string) =
+let evalResultError (msg: string) =
   Elem.div [ Attr.id "eval-result" ] [
     Elem.pre [ Attr.class' "output-line output-error"; Attr.style "margin-top: 0.5rem;" ] [
       Text.raw msg
@@ -811,7 +810,7 @@ let private evalResultError (msg: string) =
 
 /// Helper: resolve which projects to use from signal data.
 /// Priority: manual > .SageFs/config.fsx > auto-discovery
-let private resolveSessionProjects (dir: string) (manualProjects: string) =
+let resolveSessionProjects (dir: string) (manualProjects: string) =
   if not (String.IsNullOrWhiteSpace manualProjects) then
     manualProjects.Split(',')
     |> Array.map (fun s -> s.Trim())
@@ -836,7 +835,7 @@ let private resolveSessionProjects (dir: string) (manualProjects: string) =
         []
 
 /// Helper: extract a signal by camelCase or kebab-case name.
-let private getSignalString (doc: System.Text.Json.JsonDocument) (camelCase: string) (kebab: string) =
+let getSignalString (doc: System.Text.Json.JsonDocument) (camelCase: string) (kebab: string) =
   match doc.RootElement.TryGetProperty(camelCase) with
   | true, prop -> prop.GetString()
   | _ ->
