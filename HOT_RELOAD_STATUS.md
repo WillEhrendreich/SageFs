@@ -1,4 +1,4 @@
-# SageFs Hot Reload Status - v0.2.7
+# SageFs Hot Reload Status
 
 ## ✅ What Works
 
@@ -45,11 +45,9 @@ When using `SageFs --proj MyProject.fsproj`:
 - **Not yet tested end-to-end** due to console I/O issues when redirecting output
 - Hot reload should work once server is running, based on proven test-hot-reload.fsx example
 
-### Console I/O Redirection
-- PrettyPrompt library throws exception when stdout is redirected
-- Error: `failed to set output console mode`
-- This prevents automated testing via PowerShell output redirection
-- **Workaround**: Run SageFs in native console window for interactive use
+### Console I/O — Resolved
+- PrettyPrompt has been **removed** from SageFs. The daemon-first architecture runs headless; `SageFs connect` provides the REPL client.
+- The original console redirect issue (PrettyPrompt `failed to set output console mode`) no longer applies.
 
 ## 🎯 How to Use Hot Reload
 
@@ -126,7 +124,7 @@ handleHome <- fun ctx ->
 1. Test HarmonyServer hot reload in native console window
 2. Verify handler updates work for HarmonyServer endpoints
 3. Document any additional FSI incompatibilities discovered
-4. Consider auto-rebuilding projects when source files change
+4. ✅ ~~Consider auto-rebuilding projects when source files change~~ — implemented via file watcher with incremental `#load` reload
 5. Add integration tests for hot reload functionality
 
 ## ✨ Summary
