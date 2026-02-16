@@ -134,11 +134,36 @@ let private renderShell (version: string) =
   Elem.html [] [
     Elem.head [] [
       Elem.title [] [ Text.raw "SageFs Dashboard" ]
+      // Connection monitor: intercept fetch to detect SSE stream lifecycle.
+      // Tracks open/close of the /dashboard/stream SSE connection.
+      Elem.script [] [ Text.raw """
+        (function() {
+          var origFetch = window.fetch, streamCount = 0;
+          function setBanner(cls, text) {
+            var b = document.getElementById('server-status');
+            if (b) { b.className = 'conn-banner ' + cls; b.textContent = text; }
+          }
+          window.fetch = function(url) {
+            var isStream = typeof url === 'string' && url.indexOf('/dashboard/stream') !== -1;
+            if (isStream) streamCount++;
+            var p = origFetch.apply(this, arguments);
+            if (isStream) {
+              p.then(function(resp) {
+                if (resp.ok) setBanner('conn-connected', '\u2705 Connected');
+                else setBanner('conn-disconnected', '\u274c Server error (' + resp.status + ')');
+              }).catch(function() {
+                setBanner('conn-disconnected', '\u274c Server disconnected \u2014 waiting for reconnect...');
+              });
+            }
+            return p;
+          };
+        })();
+      """ ]
       Ds.cdnScript
       Elem.style [] [ Text.raw """
-        :root { --bg: #0d1117; --fg: #c9d1d9; --fg-dim: #8b949e; --accent: #58a6ff; --green: #3fb950; --red: #f85149; --border: #30363d; --surface: #161b22; --bg-highlight: #21262d; --yellow: #d29922; }
+        :root { --bg: #0d1117; --fg: #c9d1d9; --fg-dim: #8b949e; --accent: #58a6ff; --green: #3fb950; --red: #f85149; --border: #30363d; --surface: #161b22; --bg-highlight: #21262d; --yellow: #d29922; --font-size: 14px; }
         * { box-sizing: border-box; margin: 0; padding: 0; }
-        body { font-family: 'Cascadia Code', 'Fira Code', monospace; background: var(--bg); color: var(--fg); padding: 1rem; }
+        body { font-family: 'Cascadia Code', 'Fira Code', monospace; background: var(--bg); color: var(--fg); padding: 1rem; font-size: var(--font-size); }
         h1 { color: var(--accent); margin-bottom: 1rem; font-size: 1.4rem; }
         .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
         .panel { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1rem; }
@@ -186,20 +211,13 @@ let private renderShell (version: string) =
     Elem.body [ Ds.safariStreamingFix ] [
       // Dedicated init element that connects to SSE stream (per Falco.Datastar pattern)
       Elem.div [ Ds.onInit (Ds.get "/dashboard/stream") ] []
-      // Connection status banner — pushed by SSE as "Connected", falls back to "Disconnected" via MutationObserver timeout
+      // Connection status banner — managed by client-side health polling
       Elem.div [ Attr.id "server-status"; Attr.class' "conn-banner conn-disconnected" ] [
         Text.raw "⏳ Connecting to server..."
       ]
       Elem.h1 [] [ Text.raw (sprintf "🧙 SageFs Dashboard v%s" version) ]
       Elem.div [ Attr.class' "grid" ] [
-        // Row 1: Session status + Eval stats
-        Elem.div [ Attr.class' "panel" ] [
-          Elem.h2 [] [ Text.raw "Session" ]
-          Elem.div [ Attr.id "session-status" ] [
-            Text.raw "Connecting..."
-          ]
-          Elem.div [ Attr.id "connection-counts"; Attr.class' "meta"; Attr.style "font-size: 0.75rem; margin-top: 4px;" ] []
-        ]
+        // Row 1: Eval stats (full width since session info moved to Sessions panel)
         Elem.div [ Attr.class' "panel" ] [
           Elem.h2 [] [ Text.raw "Eval Stats" ]
           Elem.div [ Attr.id "eval-stats" ] [
@@ -272,9 +290,11 @@ let private renderShell (version: string) =
         // Row 4: Sessions + Diagnostics
         Elem.div [ Attr.class' "panel" ] [
           Elem.h2 [] [ Text.raw "Sessions" ]
-          Elem.div [ Attr.id "sessions-panel"; Attr.style "max-height: 300px; overflow-y: auto;" ] [
-            Text.raw "No sessions"
+          Elem.div [ Attr.id "session-status"; Attr.style "margin-bottom: 0.5rem; padding-bottom: 0.5rem; border-bottom: 1px solid var(--border);" ] [
+            Text.raw "Connecting..."
           ]
+          Elem.div [ Attr.id "connection-counts"; Attr.class' "meta"; Attr.style "font-size: 0.75rem; margin-bottom: 0.5rem;" ] []
+          Elem.div [ Attr.id "sessions-panel"; Attr.style "max-height: 300px; overflow-y: auto;" ] []
         ]
         Elem.div [ Attr.class' "panel" ] [
           Elem.h2 [] [ Text.raw "Diagnostics" ]
@@ -327,33 +347,15 @@ let private renderShell (version: string) =
           if (panel) panel.scrollTop = panel.scrollHeight;
         }).observe(document.getElementById('output-panel') || document.body, { childList: true, subtree: true });
       """ ]
-      // Connection monitoring: listen for Datastar fetch lifecycle events.
-      // SSE push already morphs server-status to "Connected" when data arrives.
-      // This script only handles disconnect detection via timeout.
+      // Font size adjustment: Ctrl+= / Ctrl+- changes --font-size CSS variable
       Elem.script [] [ Text.raw """
         (function() {
-          var banner = document.getElementById('server-status');
-          var timeout = null;
-          var STALE_MS = 12000;
-
-          function markDisconnected() {
-            banner.className = 'conn-banner conn-disconnected';
-            banner.textContent = '\u274c Server disconnected \u2014 waiting for reconnect...';
-          }
-
-          function resetTimeout() {
-            if (timeout) clearTimeout(timeout);
-            timeout = setTimeout(markDisconnected, STALE_MS);
-          }
-
-          // Datastar dispatches 'datastar-fetch' on document for SSE lifecycle
-          document.addEventListener('datastar-fetch', function(e) {
-            var t = e.detail && e.detail.type;
-            if (t === 'error' || t === 'retries-failed') markDisconnected();
-            else resetTimeout();
+          var sizes = [10, 12, 14, 16, 18, 20, 24];
+          var idx = 2;
+          document.addEventListener('keydown', function(e) {
+            if (e.ctrlKey && (e.key === '=' || e.key === '+')) { e.preventDefault(); idx = Math.min(sizes.length - 1, idx + 1); document.documentElement.style.setProperty('--font-size', sizes[idx] + 'px'); }
+            if (e.ctrlKey && e.key === '-') { e.preventDefault(); idx = Math.max(0, idx - 1); document.documentElement.style.setProperty('--font-size', sizes[idx] + 'px'); }
           });
-
-          resetTimeout();
         })();
       """ ]
     ]
@@ -632,11 +634,6 @@ let createStreamHandler
     connectionTracker |> Option.iter (fun t -> t.Register(clientId, Browser, sessionId))
 
     let pushState () = task {
-      // Push server-status as "Connected" — proves SSE is alive
-      do! ssePatchNode ctx (
-        Elem.div [ Attr.id "server-status"; Attr.class' "conn-banner conn-connected" ] [
-          Text.raw "✅ Connected"
-        ])
       let state = getSessionState ()
       let stats = getEvalStats ()
       let stateStr = SessionState.label state
@@ -683,9 +680,17 @@ let createStreamHandler
         // Event-driven: push on every state change
         let tcs = Threading.Tasks.TaskCompletionSource()
         use _ct = ctx.RequestAborted.Register(fun () -> tcs.TrySetResult() |> ignore)
+        // Throttle: coalesce rapid state changes into at most one push per 100ms.
+        // Without this, rapid evals flood the SSE stream and freeze the browser.
+        let mutable dirty = 0
+        let pushThrottled () = task {
+          if Threading.Interlocked.Exchange(&dirty, 1) = 0 then
+            do! Threading.Tasks.Task.Delay(100)
+            Threading.Interlocked.Exchange(&dirty, 0) |> ignore
+            do! pushState ()
+        }
         use _sub = evt.Subscribe(fun _ ->
-          // Fire-and-forget: don't block the event dispatcher thread
-          Threading.Tasks.Task.Run(fun () -> pushState () :> Threading.Tasks.Task)
+          Threading.Tasks.Task.Run(fun () -> pushThrottled () :> Threading.Tasks.Task)
           |> ignore)
         do! tcs.Task
       | None ->
