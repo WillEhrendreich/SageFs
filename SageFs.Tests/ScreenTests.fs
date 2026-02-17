@@ -97,21 +97,22 @@ let screenTests = testList "Screen" [
   testList "Theme config" [
     test "parseConfigLines extracts theme values" {
       let lines = [|
-        """let theme = [ "fgDefault", 200; "bgPanel", 100 ]"""
+        """let theme = [ "fgDefault", "#C8C8C8" """
+        """             "bgPanel", "#646464" ]"""
       |]
       let overrides = Theme.parseConfigLines lines
-      Expect.equal (Map.find "fgDefault" overrides) 200uy "fgDefault parsed"
-      Expect.equal (Map.find "bgPanel" overrides) 100uy "bgPanel parsed"
+      Expect.equal (Map.find "fgDefault" overrides) "#C8C8C8" "fgDefault parsed"
+      Expect.equal (Map.find "bgPanel" overrides) "#646464" "bgPanel parsed"
     }
 
     test "parseConfigLines ignores non-theme lines" {
       let lines = [|
         """let projects = [ "test.fsproj" ]"""
-        """let theme = [ "bgEditor", 50 ]"""
+        """let theme = [ "bgEditor", "#323232" ]"""
       |]
       let overrides = Theme.parseConfigLines lines
       Expect.equal overrides.Count 1 "only theme values parsed"
-      Expect.equal (Map.find "bgEditor" overrides) 50uy "bgEditor parsed"
+      Expect.equal (Map.find "bgEditor" overrides) "#323232" "bgEditor parsed"
     }
 
     test "parseConfigLines returns empty for no theme section" {
@@ -121,10 +122,10 @@ let screenTests = testList "Screen" [
     }
 
     test "withOverrides applies partial overrides" {
-      let overrides = Map.ofList [ "fgDefault", 200uy; "bgPanel", 100uy ]
+      let overrides = Map.ofList [ "fgDefault", "#C8C8C8"; "bgPanel", "#646464" ]
       let result = Theme.withOverrides overrides Theme.defaults
-      Expect.equal result.FgDefault 200uy "fgDefault overridden"
-      Expect.equal result.BgPanel 100uy "bgPanel overridden"
+      Expect.equal result.FgDefault "#C8C8C8" "fgDefault overridden"
+      Expect.equal result.BgPanel "#646464" "bgPanel overridden"
       Expect.equal result.FgDim Theme.defaults.FgDim "fgDim unchanged"
     }
 

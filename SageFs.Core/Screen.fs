@@ -191,7 +191,7 @@ module Screen =
 
     CellGrid.clear grid
     let dt = DrawTarget.create grid (Rect.create 0 0 cols rows)
-    Draw.fill dt Theme.bgPanel
+    Draw.fill dt (Theme.hexToRgb Theme.bgPanel)
 
     let paneRects, _statusRect = computeLayoutWith cfg rows cols
 
@@ -199,9 +199,9 @@ module Screen =
 
     for (paneId, rect) in paneRects do
       let borderColor =
-        if paneId = focusedPane then Theme.borderFocus else Theme.borderNormal
+        if paneId = focusedPane then Theme.hexToRgb Theme.borderFocus else Theme.hexToRgb Theme.borderNormal
       let bg =
-        if paneId = PaneId.Editor then Theme.bgEditor else Theme.bgPanel
+        if paneId = PaneId.Editor then Theme.hexToRgb Theme.bgEditor else Theme.hexToRgb Theme.bgPanel
       let inner =
         Draw.box (DrawTarget.create grid rect) (PaneId.displayName paneId) borderColor bg
 
@@ -212,7 +212,7 @@ module Screen =
         let offset = scrollOffsets |> Map.tryFind paneId |> Option.defaultValue 0
         let skip = min offset (max 0 (lines.Length - 1))
         let visibleLines = lines |> Array.skip skip |> Array.truncate inner.Clip.Height
-        let fg = Theme.fgDefault
+        let fg = Theme.hexToRgb Theme.fgDefault
 
         // Apply syntax highlighting for editor and output panes
         let shouldHighlight =
@@ -233,9 +233,9 @@ module Screen =
 
         // Scroll indicators
         if skip > 0 then
-          Draw.text inner 0 (inner.Clip.Width - 1) Theme.fgDim bg CellAttrs.None "▲"
+          Draw.text inner 0 (inner.Clip.Width - 1) (Theme.hexToRgb Theme.fgDim) bg CellAttrs.None "▲"
         if lines.Length > skip + inner.Clip.Height then
-          Draw.text inner (inner.Clip.Height - 1) (inner.Clip.Width - 1) Theme.fgDim bg CellAttrs.None "▼"
+          Draw.text inner (inner.Clip.Height - 1) (inner.Clip.Width - 1) (Theme.hexToRgb Theme.fgDim) bg CellAttrs.None "▼"
 
         // Track cursor for focused pane
         if paneId = focusedPane then
@@ -267,8 +267,8 @@ module Screen =
             let c = popupCol
             if r < rows - 1 && c + menuWidth < cols then
               let isSelected = i = compl.SelectedIndex
-              let itemFg = if isSelected then Theme.bgEditor else Theme.fgDefault
-              let itemBg = if isSelected then Theme.borderFocus else Theme.bgStatus
+              let itemFg = if isSelected then Theme.hexToRgb Theme.bgEditor else Theme.hexToRgb Theme.fgDefault
+              let itemBg = if isSelected then Theme.hexToRgb Theme.borderFocus else Theme.hexToRgb Theme.bgStatus
               let label = compl.Items.[i].PadRight(menuWidth)
               let itemDt = DrawTarget.create grid (Rect.create r c menuWidth 1)
               Draw.text itemDt 0 0 itemFg itemBg CellAttrs.None (sprintf " %s" label)
@@ -279,7 +279,7 @@ module Screen =
           cursorPos <- Some (rect.Row + 1, rect.Col + 1)
 
     // Status bar
-    Draw.statusBar dt statusLeft statusRight Theme.fgDefault Theme.bgStatus
+    Draw.statusBar dt statusLeft statusRight (Theme.hexToRgb Theme.fgDefault) (Theme.hexToRgb Theme.bgStatus)
 
     cursorPos
 

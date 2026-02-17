@@ -18,9 +18,10 @@ module DrawTarget =
       Clip = Rect.create row col (max 0 (r2 - col)) (max 0 (b2 - row)) }
 
 /// Immediate-mode draw primitives. All operate on DrawTarget (grid + clip rect).
+/// Color parameters are packed RGB uint32 (0x00RRGGBB).
 [<RequireQualifiedAccess>]
 module rec Draw =
-  let text (dt: DrawTarget) (row: int) (col: int) (fg: byte) (bg: byte) (attrs: CellAttrs) (s: string) =
+  let text (dt: DrawTarget) (row: int) (col: int) (fg: uint32) (bg: uint32) (attrs: CellAttrs) (s: string) =
     let absRow = dt.Clip.Row + row
     let absCol = dt.Clip.Col + col
     let maxCol = Rect.right dt.Clip
@@ -32,7 +33,7 @@ module rec Draw =
 
   /// Write text with per-character syntax highlighting from ColorSpan overlays.
   /// Characters not covered by any span use the default fg color.
-  let textHighlighted (dt: DrawTarget) (row: int) (col: int) (defaultFg: byte) (bg: byte) (attrs: CellAttrs) (spans: ColorSpan array) (s: string) =
+  let textHighlighted (dt: DrawTarget) (row: int) (col: int) (defaultFg: uint32) (bg: uint32) (attrs: CellAttrs) (spans: ColorSpan array) (s: string) =
     let absRow = dt.Clip.Row + row
     let absCol = dt.Clip.Col + col
     let maxCol = Rect.right dt.Clip
@@ -50,21 +51,21 @@ module rec Draw =
         CellGrid.set dt.Grid absRow c { Char = s.[i]; Fg = fgs.[i]; Bg = bg; Attrs = attrs }
       c <- c + 1
 
-  let fill (dt: DrawTarget) (bg: byte) =
+  let fill (dt: DrawTarget) (bg: uint32) =
     let cell = { Cell.empty with Bg = bg }
     CellGrid.fillRect dt.Grid dt.Clip cell
 
-  let hline (dt: DrawTarget) (row: int) (fg: byte) (bg: byte) (ch: char) =
+  let hline (dt: DrawTarget) (row: int) (fg: uint32) (bg: uint32) (ch: char) =
     let absRow = dt.Clip.Row + row
     for col in dt.Clip.Col .. Rect.right dt.Clip - 1 do
       CellGrid.set dt.Grid absRow col { Char = ch; Fg = fg; Bg = bg; Attrs = CellAttrs.None }
 
-  let vline (dt: DrawTarget) (col: int) (fg: byte) (bg: byte) (ch: char) =
+  let vline (dt: DrawTarget) (col: int) (fg: uint32) (bg: uint32) (ch: char) =
     let absCol = dt.Clip.Col + col
     for row in dt.Clip.Row .. Rect.bottom dt.Clip - 1 do
       CellGrid.set dt.Grid row absCol { Char = ch; Fg = fg; Bg = bg; Attrs = CellAttrs.None }
 
-  let box (dt: DrawTarget) (title: string) (borderFg: byte) (borderBg: byte) : DrawTarget =
+  let box (dt: DrawTarget) (title: string) (borderFg: uint32) (borderBg: uint32) : DrawTarget =
     let r = dt.Clip
     if r.Width < 2 || r.Height < 2 then dt
     else
@@ -81,10 +82,10 @@ module rec Draw =
       if title.Length > 0 && r.Width > 4 then
         let maxTitleLen = r.Width - 4
         let t = if title.Length > maxTitleLen then title.Substring(0, maxTitleLen) else title
-        text dt 0 2 Theme.fgDefault borderBg CellAttrs.None (sprintf " %s " t)
+        text dt 0 2 (Theme.hexToRgb Theme.fgDefault) borderBg CellAttrs.None (sprintf " %s " t)
       DrawTarget.sub dt (Rect.create (r.Row + 1) (r.Col + 1) (r.Width - 2) (r.Height - 2))
 
-  let scrolledLines (dt: DrawTarget) (lines: string list) (scrollOffset: int) (fg: byte) (bg: byte) =
+  let scrolledLines (dt: DrawTarget) (lines: string list) (scrollOffset: int) (fg: uint32) (bg: uint32) =
     let visibleRows = dt.Clip.Height
     let startLine = max 0 scrollOffset
     for i in 0 .. visibleRows - 1 do
@@ -94,7 +95,7 @@ module rec Draw =
         let maxLen = min line.Length dt.Clip.Width
         text dt i 0 fg bg CellAttrs.None (if maxLen < line.Length then line.Substring(0, maxLen) else line)
 
-  let statusBar (dt: DrawTarget) (left: string) (right: string) (fg: byte) (bg: byte) =
+  let statusBar (dt: DrawTarget) (left: string) (right: string) (fg: uint32) (bg: uint32) =
     let row = dt.Clip.Height - 1
     hline dt row fg bg ' '
     text dt row 0 fg bg CellAttrs.None left

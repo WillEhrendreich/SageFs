@@ -11,16 +11,17 @@ type CellAttrs =
   | Inverse = 4uy
 
 /// A single cell in the rendering grid. Struct for cache-friendly layout.
+/// Fg/Bg are packed RGB (0x00RRGGBB).
 [<Struct>]
 type Cell = {
   Char: char
-  Fg: byte
-  Bg: byte
+  Fg: uint32
+  Bg: uint32
   Attrs: CellAttrs
 }
 
 module Cell =
-  let empty = { Char = ' '; Fg = 255uy; Bg = 0uy; Attrs = CellAttrs.None }
+  let empty = { Char = ' '; Fg = 0x00FFFFFFu; Bg = 0u; Attrs = CellAttrs.None }
   let create ch fg bg attrs = { Char = ch; Fg = fg; Bg = bg; Attrs = attrs }
 
 /// A rectangle in the grid. Smart constructor clamps to non-negative.

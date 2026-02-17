@@ -506,21 +506,21 @@ let private renderHighlightedLine (spans: ColorSpan array) (line: string) : XmlN
       if span.Start >= 0 && span.Start < line.Length then
         let end' = min (span.Start + span.Length) line.Length
         let text = line.Substring(span.Start, end' - span.Start)
-        // Map fg byte to a CSS class using theme defaults
+        // Map fg packed RGB to a CSS class using theme defaults
         let cssClass =
           let theme = Theme.defaults
-          if span.Fg = theme.SynKeyword then "syn-keyword"
-          elif span.Fg = theme.SynString then "syn-string"
-          elif span.Fg = theme.SynComment then "syn-comment"
-          elif span.Fg = theme.SynNumber then "syn-number"
-          elif span.Fg = theme.SynOperator then "syn-operator"
-          elif span.Fg = theme.SynType then "syn-type"
-          elif span.Fg = theme.SynFunction then "syn-function"
-          elif span.Fg = theme.SynModule then "syn-module"
-          elif span.Fg = theme.SynAttribute then "syn-attribute"
-          elif span.Fg = theme.SynPunctuation then "syn-punctuation"
-          elif span.Fg = theme.SynConstant then "syn-constant"
-          elif span.Fg = theme.SynProperty then "syn-property"
+          if span.Fg = Theme.hexToRgb theme.SynKeyword then "syn-keyword"
+          elif span.Fg = Theme.hexToRgb theme.SynString then "syn-string"
+          elif span.Fg = Theme.hexToRgb theme.SynComment then "syn-comment"
+          elif span.Fg = Theme.hexToRgb theme.SynNumber then "syn-number"
+          elif span.Fg = Theme.hexToRgb theme.SynOperator then "syn-operator"
+          elif span.Fg = Theme.hexToRgb theme.SynType then "syn-type"
+          elif span.Fg = Theme.hexToRgb theme.SynFunction then "syn-function"
+          elif span.Fg = Theme.hexToRgb theme.SynModule then "syn-module"
+          elif span.Fg = Theme.hexToRgb theme.SynAttribute then "syn-attribute"
+          elif span.Fg = Theme.hexToRgb theme.SynPunctuation then "syn-punctuation"
+          elif span.Fg = Theme.hexToRgb theme.SynConstant then "syn-constant"
+          elif span.Fg = Theme.hexToRgb theme.SynProperty then "syn-property"
           else ""
         if cssClass <> "" then
           nodes.Add(Elem.span [ Attr.class' cssClass ] [ Text.raw (System.Net.WebUtility.HtmlEncode text) ])

@@ -1,49 +1,49 @@
 namespace SageFs
 
-/// Theme configuration record — all named color values (256-color indices).
+/// Theme configuration record — all named color values as hex RGB strings (e.g. "#c8d3f5").
 type ThemeConfig = {
-  FgDefault: byte; FgDim: byte; FgGreen: byte; FgRed: byte
-  FgYellow: byte; FgCyan: byte; FgBlue: byte; FgMagenta: byte
-  BgDefault: byte; BgPanel: byte; BgEditor: byte
-  BgSelection: byte; BgStatus: byte; BgFocus: byte
-  BorderNormal: byte; BorderFocus: byte
-  ColorPass: byte; ColorFail: byte; ColorWarn: byte; ColorInfo: byte
+  FgDefault: string; FgDim: string; FgGreen: string; FgRed: string
+  FgYellow: string; FgCyan: string; FgBlue: string; FgMagenta: string
+  BgDefault: string; BgPanel: string; BgEditor: string
+  BgSelection: string; BgStatus: string; BgFocus: string
+  BorderNormal: string; BorderFocus: string
+  ColorPass: string; ColorFail: string; ColorWarn: string; ColorInfo: string
   // Syntax highlighting token colors
-  SynKeyword: byte; SynString: byte; SynComment: byte; SynNumber: byte
-  SynOperator: byte; SynType: byte; SynFunction: byte; SynVariable: byte
-  SynPunctuation: byte; SynConstant: byte; SynModule: byte
-  SynAttribute: byte; SynDirective: byte; SynProperty: byte
+  SynKeyword: string; SynString: string; SynComment: string; SynNumber: string
+  SynOperator: string; SynType: string; SynFunction: string; SynVariable: string
+  SynPunctuation: string; SynConstant: string; SynModule: string
+  SynAttribute: string; SynDirective: string; SynProperty: string
 }
 
-/// Named color palette — abstract color IDs (256-color indices).
-/// TUI maps directly to ANSI 256-color. Raylib maps to RGB via a palette table.
+/// Named color palette — hex RGB strings.
+/// TUI converts to truecolor ANSI (38;2;r;g;b). Raylib parses hex directly. Dashboard passes through to CSS.
 module Theme =
   let defaults : ThemeConfig = {
-    FgDefault = 255uy; FgDim = 245uy; FgGreen = 114uy; FgRed = 203uy
-    FgYellow = 179uy; FgCyan = 116uy; FgBlue = 75uy; FgMagenta = 176uy
-    BgDefault = 0uy; BgPanel = 235uy; BgEditor = 234uy
-    BgSelection = 238uy; BgStatus = 236uy; BgFocus = 237uy
-    BorderNormal = 240uy; BorderFocus = 75uy
-    ColorPass = 114uy; ColorFail = 203uy; ColorWarn = 179uy; ColorInfo = 116uy
+    FgDefault = "#ffffff"; FgDim = "#8b8b8b"; FgGreen = "#87d787"; FgRed = "#ff5f5f"
+    FgYellow = "#d7af5f"; FgCyan = "#87d7d7"; FgBlue = "#5fafff"; FgMagenta = "#d787d7"
+    BgDefault = "#000000"; BgPanel = "#262626"; BgEditor = "#1c1c1c"
+    BgSelection = "#444444"; BgStatus = "#303030"; BgFocus = "#3a3a3a"
+    BorderNormal = "#585858"; BorderFocus = "#5fafff"
+    ColorPass = "#87d787"; ColorFail = "#ff5f5f"; ColorWarn = "#d7af5f"; ColorInfo = "#87d7d7"
     // Syntax tokens — One Dark inspired
-    SynKeyword = 176uy    // magenta — let, match, type, if
-    SynString = 114uy     // green — "hello"
-    SynComment = 245uy    // dim gray — // comment
-    SynNumber = 179uy     // yellow — 42, 3.14
-    SynOperator = 116uy   // cyan — |>, +, =
-    SynType = 179uy       // yellow — string, int, MyType
-    SynFunction = 75uy    // blue — function names
-    SynVariable = 255uy   // white — identifiers
-    SynPunctuation = 245uy // dim — ( ) { } [ ]
-    SynConstant = 179uy   // yellow — DU cases, Literal values
-    SynModule = 116uy     // cyan — module names (List, Array, Seq)
-    SynAttribute = 176uy  // magenta — [<Test>]
-    SynDirective = 176uy  // magenta — #r, #load, #if
-    SynProperty = 116uy   // cyan — record fields
+    SynKeyword = "#d787d7"    // magenta — let, match, type, if
+    SynString = "#87d787"     // green — "hello"
+    SynComment = "#8b8b8b"    // dim gray — // comment
+    SynNumber = "#d7af5f"     // yellow — 42, 3.14
+    SynOperator = "#87d7d7"   // cyan — |>, +, =
+    SynType = "#d7af5f"       // yellow — string, int, MyType
+    SynFunction = "#5fafff"   // blue — function names
+    SynVariable = "#ffffff"   // white — identifiers
+    SynPunctuation = "#8b8b8b" // dim — ( ) { } [ ]
+    SynConstant = "#d7af5f"   // yellow — DU cases, Literal values
+    SynModule = "#87d7d7"     // cyan — module names (List, Array, Seq)
+    SynAttribute = "#d787d7"  // magenta — [<Test>]
+    SynDirective = "#d787d7"  // magenta — #r, #load, #if
+    SynProperty = "#87d7d7"   // cyan — record fields
   }
 
-  /// Apply partial overrides from a map of name -> byte value onto a base config
-  let withOverrides (overrides: Map<string, byte>) (base': ThemeConfig) : ThemeConfig =
+  /// Apply partial overrides from a map of name -> hex value onto a base config
+  let withOverrides (overrides: Map<string, string>) (base': ThemeConfig) : ThemeConfig =
     let g key def = overrides |> Map.tryFind key |> Option.defaultValue def
     { FgDefault = g "fgDefault" base'.FgDefault
       FgDim = g "fgDim" base'.FgDim
@@ -118,8 +118,19 @@ module Theme =
   let synDirective   = defaults.SynDirective
   let synProperty    = defaults.SynProperty
 
-  /// Map a tree-sitter capture name (e.g. "@keyword", "@string") to a theme fg color.
-  let tokenColorOfCapture (theme: ThemeConfig) (capture: string) : byte =
+  /// Parse hex RGB string "#RRGGBB" to packed uint32 (0x00RRGGBB).
+  let hexToRgb (hex: string) : uint32 =
+    if hex.Length >= 7 && hex.[0] = '#' then
+      System.UInt32.Parse(hex.Substring(1, 6), System.Globalization.NumberStyles.HexNumber)
+    else 0u
+
+  /// Extract R, G, B bytes from packed uint32 RGB.
+  let inline rgbR (rgb: uint32) = byte (rgb >>> 16)
+  let inline rgbG (rgb: uint32) = byte (rgb >>> 8)
+  let inline rgbB (rgb: uint32) = byte rgb
+
+  /// Map a tree-sitter capture name (e.g. "keyword", "string") to a theme hex color.
+  let tokenColorOfCapture (theme: ThemeConfig) (capture: string) : string =
     match capture with
     | s when s.StartsWith "keyword" -> theme.SynKeyword
     | s when s.StartsWith "string" -> theme.SynString
@@ -142,67 +153,44 @@ module Theme =
     | s when s.StartsWith "spell" -> theme.FgDefault // ignore @spell
     | _ -> theme.FgDefault
 
-  /// ANSI 256-color index to approximate hex RGB for CSS.
-  let ansi256ToHex (idx: byte) : string =
-    let i = int idx
-    if i < 16 then
-      // Standard 16 colors — approximate values
-      let colors = [|
-        "#000000"; "#800000"; "#008000"; "#808000"; "#000080"; "#800080"; "#008080"; "#c0c0c0"
-        "#808080"; "#ff0000"; "#00ff00"; "#ffff00"; "#0000ff"; "#ff00ff"; "#00ffff"; "#ffffff"
-      |]
-      colors.[i]
-    elif i < 232 then
-      // 216-color cube: 6×6×6
-      let ci = i - 16
-      let r = ci / 36
-      let g = (ci % 36) / 6
-      let b = ci % 6
-      let toVal v = if v = 0 then 0 else 55 + v * 40
-      sprintf "#%02x%02x%02x" (toVal r) (toVal g) (toVal b)
-    else
-      // Grayscale: 24 shades
-      let v = 8 + (i - 232) * 10
-      sprintf "#%02x%02x%02x" v v v
-
-  /// Generate CSS custom properties from a theme config.
+  /// Generate CSS custom properties from a theme config (hex passthrough).
   let toCssVariables (theme: ThemeConfig) : string =
-    [| sprintf "--fg-default: %s;" (ansi256ToHex theme.FgDefault)
-       sprintf "--fg-dim: %s;" (ansi256ToHex theme.FgDim)
-       sprintf "--fg-green: %s;" (ansi256ToHex theme.FgGreen)
-       sprintf "--fg-red: %s;" (ansi256ToHex theme.FgRed)
-       sprintf "--fg-yellow: %s;" (ansi256ToHex theme.FgYellow)
-       sprintf "--fg-cyan: %s;" (ansi256ToHex theme.FgCyan)
-       sprintf "--fg-blue: %s;" (ansi256ToHex theme.FgBlue)
-       sprintf "--fg-magenta: %s;" (ansi256ToHex theme.FgMagenta)
-       sprintf "--bg-default: %s;" (ansi256ToHex theme.BgDefault)
-       sprintf "--bg-panel: %s;" (ansi256ToHex theme.BgPanel)
-       sprintf "--bg-editor: %s;" (ansi256ToHex theme.BgEditor)
-       sprintf "--bg-selection: %s;" (ansi256ToHex theme.BgSelection)
-       sprintf "--bg-status: %s;" (ansi256ToHex theme.BgStatus)
-       sprintf "--bg-focus: %s;" (ansi256ToHex theme.BgFocus)
-       sprintf "--border-normal: %s;" (ansi256ToHex theme.BorderNormal)
-       sprintf "--border-focus: %s;" (ansi256ToHex theme.BorderFocus)
-       sprintf "--syn-keyword: %s;" (ansi256ToHex theme.SynKeyword)
-       sprintf "--syn-string: %s;" (ansi256ToHex theme.SynString)
-       sprintf "--syn-comment: %s;" (ansi256ToHex theme.SynComment)
-       sprintf "--syn-number: %s;" (ansi256ToHex theme.SynNumber)
-       sprintf "--syn-operator: %s;" (ansi256ToHex theme.SynOperator)
-       sprintf "--syn-type: %s;" (ansi256ToHex theme.SynType)
-       sprintf "--syn-function: %s;" (ansi256ToHex theme.SynFunction)
-       sprintf "--syn-variable: %s;" (ansi256ToHex theme.SynVariable)
-       sprintf "--syn-punctuation: %s;" (ansi256ToHex theme.SynPunctuation)
-       sprintf "--syn-constant: %s;" (ansi256ToHex theme.SynConstant)
-       sprintf "--syn-module: %s;" (ansi256ToHex theme.SynModule)
-       sprintf "--syn-attribute: %s;" (ansi256ToHex theme.SynAttribute)
-       sprintf "--syn-directive: %s;" (ansi256ToHex theme.SynDirective)
-       sprintf "--syn-property: %s;" (ansi256ToHex theme.SynProperty)
+    [| sprintf "--fg-default: %s;" theme.FgDefault
+       sprintf "--fg-dim: %s;" theme.FgDim
+       sprintf "--fg-green: %s;" theme.FgGreen
+       sprintf "--fg-red: %s;" theme.FgRed
+       sprintf "--fg-yellow: %s;" theme.FgYellow
+       sprintf "--fg-cyan: %s;" theme.FgCyan
+       sprintf "--fg-blue: %s;" theme.FgBlue
+       sprintf "--fg-magenta: %s;" theme.FgMagenta
+       sprintf "--bg-default: %s;" theme.BgDefault
+       sprintf "--bg-panel: %s;" theme.BgPanel
+       sprintf "--bg-editor: %s;" theme.BgEditor
+       sprintf "--bg-selection: %s;" theme.BgSelection
+       sprintf "--bg-status: %s;" theme.BgStatus
+       sprintf "--bg-focus: %s;" theme.BgFocus
+       sprintf "--border-normal: %s;" theme.BorderNormal
+       sprintf "--border-focus: %s;" theme.BorderFocus
+       sprintf "--syn-keyword: %s;" theme.SynKeyword
+       sprintf "--syn-string: %s;" theme.SynString
+       sprintf "--syn-comment: %s;" theme.SynComment
+       sprintf "--syn-number: %s;" theme.SynNumber
+       sprintf "--syn-operator: %s;" theme.SynOperator
+       sprintf "--syn-type: %s;" theme.SynType
+       sprintf "--syn-function: %s;" theme.SynFunction
+       sprintf "--syn-variable: %s;" theme.SynVariable
+       sprintf "--syn-punctuation: %s;" theme.SynPunctuation
+       sprintf "--syn-constant: %s;" theme.SynConstant
+       sprintf "--syn-module: %s;" theme.SynModule
+       sprintf "--syn-attribute: %s;" theme.SynAttribute
+       sprintf "--syn-directive: %s;" theme.SynDirective
+       sprintf "--syn-property: %s;" theme.SynProperty
     |]
     |> String.concat "\n  "
 
   /// Parse theme lines from config.fsx format:
-  ///   let theme = [ "fgDefault", 255; "bgPanel", 235 ]
-  let parseConfigLines (lines: string array) : Map<string, byte> =
+  ///   let theme = [ "fgDefault", "#ffffff"; "bgPanel", "#262626" ]
+  let parseConfigLines (lines: string array) : Map<string, string> =
     let mutable overrides = Map.empty
     let mutable inTheme = false
     for line in lines do
@@ -219,13 +207,18 @@ module Theme =
               let name = trimmed.Substring(q1 + 1, q2 - q1 - 1)
               let comma = trimmed.IndexOf(',', q2 + 1)
               if comma >= 0 then
-                let rest = trimmed.Substring(comma + 1).TrimStart()
-                let numStr =
-                  rest |> Seq.takeWhile System.Char.IsDigit |> System.String.Concat
-                match System.Byte.TryParse(numStr) with
-                | true, v -> overrides <- Map.add name v overrides
-                | _ -> ()
-                i <- comma + 1
+                let rest = trimmed.Substring(comma + 1).Trim()
+                // Look for quoted hex value like "#ffffff"
+                let vq1 = rest.IndexOf('"')
+                if vq1 >= 0 then
+                  let vq2 = rest.IndexOf('"', vq1 + 1)
+                  if vq2 > vq1 then
+                    let value = rest.Substring(vq1 + 1, vq2 - vq1 - 1)
+                    if value.StartsWith("#") then
+                      overrides <- Map.add name value overrides
+                    i <- comma + 1 + vq2 + 1
+                  else i <- trimmed.Length
+                else i <- trimmed.Length
               else i <- trimmed.Length
             else i <- trimmed.Length
           else i <- trimmed.Length

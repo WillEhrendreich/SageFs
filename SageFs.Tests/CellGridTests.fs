@@ -13,14 +13,14 @@ let cellGridTests = testList "CellGrid" [
 
   test "set and get round-trip" {
     let grid = CellGrid.create 2 2
-    let cell = Cell.create 'X' 10uy 20uy CellAttrs.Bold
+    let cell = Cell.create 'X' 0x00FF0000u 0x00008000u CellAttrs.Bold
     CellGrid.set grid 1 0 cell
     Expect.equal (CellGrid.get grid 1 0) cell "should get what was set"
   }
 
   test "set out of bounds is no-op" {
     let grid = CellGrid.create 2 2
-    CellGrid.set grid 5 5 (Cell.create '!' 0uy 0uy CellAttrs.None)
+    CellGrid.set grid 5 5 (Cell.create '!' 0u 0u CellAttrs.None)
     Expect.equal (CellGrid.get grid 0 0) Cell.empty "grid unchanged"
   }
 
@@ -32,24 +32,24 @@ let cellGridTests = testList "CellGrid" [
 
   test "writeString writes chars with attributes" {
     let grid = CellGrid.create 1 5
-    CellGrid.writeString grid 0 1 10uy 20uy CellAttrs.None "Hi"
+    CellGrid.writeString grid 0 1 0x000A0A0Au 0x00141414u CellAttrs.None "Hi"
     Expect.equal (CellGrid.get grid 0 0) Cell.empty "before string"
     Expect.equal (CellGrid.get grid 0 1).Char 'H' "first char"
     Expect.equal (CellGrid.get grid 0 2).Char 'i' "second char"
-    Expect.equal (CellGrid.get grid 0 1).Fg 10uy "fg color"
+    Expect.equal (CellGrid.get grid 0 1).Fg 0x000A0A0Au "fg color"
     Expect.equal (CellGrid.get grid 0 3) Cell.empty "after string"
   }
 
   test "writeString clips at grid edge" {
     let grid = CellGrid.create 1 3
-    CellGrid.writeString grid 0 1 0uy 0uy CellAttrs.None "Hello"
+    CellGrid.writeString grid 0 1 0u 0u CellAttrs.None "Hello"
     Expect.equal (CellGrid.get grid 0 1).Char 'H' "first in bounds"
     Expect.equal (CellGrid.get grid 0 2).Char 'e' "second in bounds"
   }
 
   test "fillRect fills rectangular area" {
     let grid = CellGrid.create 3 4
-    let cell = Cell.create '#' 1uy 2uy CellAttrs.None
+    let cell = Cell.create '#' 0x00010101u 0x00020202u CellAttrs.None
     CellGrid.fillRect grid (Rect.create 0 1 2 2) cell
     Expect.equal (CellGrid.get grid 0 1).Char '#' "top-left of fill"
     Expect.equal (CellGrid.get grid 1 2).Char '#' "bottom-right of fill"
@@ -59,23 +59,23 @@ let cellGridTests = testList "CellGrid" [
 
   test "toText produces correct string" {
     let grid = CellGrid.create 2 3
-    CellGrid.writeString grid 0 0 0uy 0uy CellAttrs.None "abc"
-    CellGrid.writeString grid 1 0 0uy 0uy CellAttrs.None "def"
+    CellGrid.writeString grid 0 0 0u 0u CellAttrs.None "abc"
+    CellGrid.writeString grid 1 0 0u 0u CellAttrs.None "def"
     let txt = CellGrid.toText grid
     Expect.equal txt "abc\r\ndef" "full grid text"
   }
 
   test "toTextTrimmed trims trailing spaces" {
     let grid = CellGrid.create 2 5
-    CellGrid.writeString grid 0 0 0uy 0uy CellAttrs.None "Hi"
-    CellGrid.writeString grid 1 0 0uy 0uy CellAttrs.None "X"
+    CellGrid.writeString grid 0 0 0u 0u CellAttrs.None "Hi"
+    CellGrid.writeString grid 1 0 0u 0u CellAttrs.None "X"
     let txt = CellGrid.toTextTrimmed grid
     Expect.equal txt "Hi\r\nX" "trimmed trailing spaces"
   }
 
   test "clear resets all cells" {
     let grid = CellGrid.create 2 2
-    CellGrid.writeString grid 0 0 10uy 20uy CellAttrs.Bold "AB"
+    CellGrid.writeString grid 0 0 0x000A0000u 0x00140000u CellAttrs.Bold "AB"
     CellGrid.clear grid
     Expect.equal (CellGrid.get grid 0 0) Cell.empty "cleared"
     Expect.equal (CellGrid.get grid 0 1) Cell.empty "cleared"
@@ -164,7 +164,7 @@ let drawTests = testList "Draw" [
   test "text writes at correct position" {
     let grid = CellGrid.create 3 10
     let dt = DrawTarget.create grid (Rect.create 0 0 10 3)
-    Draw.text dt 1 2 Theme.fgDefault Theme.bgDefault CellAttrs.None "Hi"
+    Draw.text dt 1 2 (Theme.hexToRgb Theme.fgDefault) (Theme.hexToRgb Theme.bgDefault) CellAttrs.None "Hi"
     Expect.equal (CellGrid.get grid 1 2).Char 'H' "H at row=1,col=2"
     Expect.equal (CellGrid.get grid 1 3).Char 'i' "i at row=1,col=3"
     Expect.equal (CellGrid.get grid 0 0) Cell.empty "other cells empty"
@@ -173,7 +173,7 @@ let drawTests = testList "Draw" [
   test "text clips at clip boundary" {
     let grid = CellGrid.create 3 10
     let dt = DrawTarget.create grid (Rect.create 0 0 5 3)
-    Draw.text dt 0 3 Theme.fgDefault Theme.bgDefault CellAttrs.None "Hello"
+    Draw.text dt 0 3 (Theme.hexToRgb Theme.fgDefault) (Theme.hexToRgb Theme.bgDefault) CellAttrs.None "Hello"
     Expect.equal (CellGrid.get grid 0 3).Char 'H' "H in bounds"
     Expect.equal (CellGrid.get grid 0 4).Char 'e' "e in bounds"
     Expect.equal (CellGrid.get grid 0 5) Cell.empty "clipped at 5"
@@ -182,15 +182,15 @@ let drawTests = testList "Draw" [
   test "fill sets background on all cells" {
     let grid = CellGrid.create 2 3
     let dt = DrawTarget.create grid (Rect.create 0 0 3 2)
-    Draw.fill dt Theme.bgPanel
-    Expect.equal (CellGrid.get grid 0 0).Bg Theme.bgPanel "bg set"
-    Expect.equal (CellGrid.get grid 1 2).Bg Theme.bgPanel "bg set corner"
+    Draw.fill dt (Theme.hexToRgb Theme.bgPanel)
+    Expect.equal (CellGrid.get grid 0 0).Bg (Theme.hexToRgb Theme.bgPanel) "bg set"
+    Expect.equal (CellGrid.get grid 1 2).Bg (Theme.hexToRgb Theme.bgPanel) "bg set corner"
   }
 
   test "box draws border and returns inner target" {
     let grid = CellGrid.create 5 10
     let dt = DrawTarget.create grid (Rect.create 0 0 10 5)
-    let inner = Draw.box dt "Test" Theme.borderNormal Theme.bgPanel
+    let inner = Draw.box dt "Test" (Theme.hexToRgb Theme.borderNormal) (Theme.hexToRgb Theme.bgPanel)
     Expect.equal (CellGrid.get grid 0 0).Char '\u250C' "top-left corner"
     Expect.equal (CellGrid.get grid 0 9).Char '\u2510' "top-right corner"
     Expect.equal (CellGrid.get grid 4 0).Char '\u2514' "bottom-left corner"
@@ -204,7 +204,7 @@ let drawTests = testList "Draw" [
   test "box title appears in top border" {
     let grid = CellGrid.create 5 20
     let dt = DrawTarget.create grid (Rect.create 0 0 20 5)
-    let _ = Draw.box dt "Output" Theme.borderNormal Theme.bgPanel
+    let _ = Draw.box dt "Output" (Theme.hexToRgb Theme.borderNormal) (Theme.hexToRgb Theme.bgPanel)
     let txt = CellGrid.toText grid
     Expect.stringContains txt "Output" "title in border"
   }
@@ -213,7 +213,7 @@ let drawTests = testList "Draw" [
     let grid = CellGrid.create 3 10
     let dt = DrawTarget.create grid (Rect.create 0 0 10 3)
     let lines = ["line 0"; "line 1"; "line 2"; "line 3"; "line 4"]
-    Draw.scrolledLines dt lines 1 Theme.fgDefault Theme.bgDefault
+    Draw.scrolledLines dt lines 1 (Theme.hexToRgb Theme.fgDefault) (Theme.hexToRgb Theme.bgDefault)
     let txt = CellGrid.toTextTrimmed grid
     Expect.stringContains txt "line 1" "first visible"
     Expect.stringContains txt "line 2" "second visible"
@@ -223,7 +223,7 @@ let drawTests = testList "Draw" [
   test "statusBar shows left and right text" {
     let grid = CellGrid.create 1 20
     let dt = DrawTarget.create grid (Rect.create 0 0 20 1)
-    Draw.statusBar dt "Ready" "0.5ms" Theme.fgDefault Theme.bgStatus
+    Draw.statusBar dt "Ready" "0.5ms" (Theme.hexToRgb Theme.fgDefault) (Theme.hexToRgb Theme.bgStatus)
     let txt = CellGrid.toText grid
     Expect.stringContains txt "Ready" "left text"
     Expect.stringContains txt "0.5ms" "right text"
@@ -234,24 +234,26 @@ let ansiEmitterTests = testList "AnsiEmitter" [
   test "uniform color grid emits minimal escape codes" {
     let grid = CellGrid.create 2 3
     let dt = DrawTarget.create grid (Rect.create 0 0 3 2)
-    Draw.fill dt Theme.bgPanel
-    Draw.text dt 0 0 Theme.fgDefault Theme.bgPanel CellAttrs.None "abc"
-    Draw.text dt 1 0 Theme.fgDefault Theme.bgPanel CellAttrs.None "def"
+    Draw.fill dt (Theme.hexToRgb Theme.bgPanel)
+    Draw.text dt 0 0 (Theme.hexToRgb Theme.fgDefault) (Theme.hexToRgb Theme.bgPanel) CellAttrs.None "abc"
+    Draw.text dt 1 0 (Theme.hexToRgb Theme.fgDefault) (Theme.hexToRgb Theme.bgPanel) CellAttrs.None "def"
     let output = AnsiEmitter.emitGridOnly grid
-    let fgCode = sprintf "\x1b[38;5;%dm" (int Theme.fgDefault)
+    // Truecolor format: 38;2;R;G;B
+    let fgRgb = Theme.hexToRgb Theme.fgDefault
+    let fgCode = sprintf "\x1b[38;2;%d;%d;%dm" (int (Theme.rgbR fgRgb)) (int (Theme.rgbG fgRgb)) (int (Theme.rgbB fgRgb))
     let parts = output.Split(fgCode)
     Expect.isLessThanOrEqual parts.Length 2 "fg code emitted at most once"
   }
 
   test "alternating colors emit codes at transitions" {
     let grid = CellGrid.create 1 4
-    CellGrid.set grid 0 0 (Cell.create 'A' 10uy 0uy CellAttrs.None)
-    CellGrid.set grid 0 1 (Cell.create 'B' 20uy 0uy CellAttrs.None)
-    CellGrid.set grid 0 2 (Cell.create 'C' 10uy 0uy CellAttrs.None)
-    CellGrid.set grid 0 3 (Cell.create 'D' 20uy 0uy CellAttrs.None)
+    CellGrid.set grid 0 0 (Cell.create 'A' 0x000A1420u 0u CellAttrs.None)
+    CellGrid.set grid 0 1 (Cell.create 'B' 0x00283C50u 0u CellAttrs.None)
+    CellGrid.set grid 0 2 (Cell.create 'C' 0x000A1420u 0u CellAttrs.None)
+    CellGrid.set grid 0 3 (Cell.create 'D' 0x00283C50u 0u CellAttrs.None)
     let output = AnsiEmitter.emitGridOnly grid
-    Expect.stringContains output "38;5;10" "fg=10 present"
-    Expect.stringContains output "38;5;20" "fg=20 present"
+    Expect.stringContains output "38;2;10;20;32" "fg=0A1420 present"
+    Expect.stringContains output "38;2;40;60;80" "fg=283C50 present"
   }
 
   test "emit includes cursor positioning and show/hide" {
@@ -264,7 +266,7 @@ let ansiEmitterTests = testList "AnsiEmitter" [
 
   test "bold attribute emitted" {
     let grid = CellGrid.create 1 1
-    CellGrid.set grid 0 0 (Cell.create 'X' 255uy 0uy CellAttrs.Bold)
+    CellGrid.set grid 0 0 (Cell.create 'X' 0x00FFFFFFu 0u CellAttrs.Bold)
     let output = AnsiEmitter.emitGridOnly grid
     Expect.stringContains output "\x1b[1m" "bold code"
   }
@@ -272,10 +274,10 @@ let ansiEmitterTests = testList "AnsiEmitter" [
   test "same color adjacent cells emit no extra codes" {
     let grid = CellGrid.create 1 3
     for i in 0 .. 2 do
-      CellGrid.set grid 0 i (Cell.create (char (65 + i)) 42uy 0uy CellAttrs.None)
+      CellGrid.set grid 0 i (Cell.create (char (65 + i)) 0x002A2A2Au 0u CellAttrs.None)
     let output = AnsiEmitter.emitGridOnly grid
-    let parts = output.Split("\x1b[38;5;42m")
-    Expect.equal parts.Length 2 "exactly one fg=42 code"
+    let parts = output.Split("\x1b[38;2;42;42;42m")
+    Expect.equal parts.Length 2 "exactly one fg=2A2A2A code"
   }
 ]
 
@@ -293,15 +295,22 @@ let performanceTests = testList "Performance" [
 
   test "Draw pipeline 200x60 under 500µs" {
     let grid = CellGrid.create 60 200
+    let fgDef = Theme.hexToRgb Theme.fgDefault
+    let fgG = Theme.hexToRgb Theme.fgGreen
+    let fgR = Theme.hexToRgb Theme.fgRed
+    let bgP = Theme.hexToRgb Theme.bgPanel
+    let bgE = Theme.hexToRgb Theme.bgEditor
+    let brN = Theme.hexToRgb Theme.borderNormal
+    let brF = Theme.hexToRgb Theme.borderFocus
     let sw = System.Diagnostics.Stopwatch.StartNew()
     let iterations = 5000
     for _ in 1 .. iterations do
       let dt = DrawTarget.create grid (Rect.create 0 0 200 60)
-      Draw.fill dt Theme.bgPanel
-      let inner = Draw.box dt "Output" Theme.borderNormal Theme.bgPanel
-      Draw.text inner 0 0 Theme.fgDefault Theme.bgPanel CellAttrs.None "Hello, this is a test line of reasonable length"
-      Draw.text inner 1 0 Theme.fgGreen Theme.bgPanel CellAttrs.None "[15:30:02 INF] Test passed"
-      Draw.text inner 2 0 Theme.fgRed Theme.bgPanel CellAttrs.None "[15:30:02 ERR] Test failed"
+      Draw.fill dt bgP
+      let inner = Draw.box dt "Output" brN bgP
+      Draw.text inner 0 0 fgDef bgP CellAttrs.None "Hello, this is a test line of reasonable length"
+      Draw.text inner 1 0 fgG bgP CellAttrs.None "[15:30:02 INF] Test passed"
+      Draw.text inner 2 0 fgR bgP CellAttrs.None "[15:30:02 ERR] Test failed"
     sw.Stop()
     let avgUs = sw.Elapsed.TotalMicroseconds / float iterations
     Expect.isLessThan avgUs 500.0 (sprintf "draw: %.1f µs" avgUs)
@@ -309,15 +318,20 @@ let performanceTests = testList "Performance" [
 
   test "AnsiEmitter.emit 200x60 under 2ms" {
     let grid = CellGrid.create 60 200
+    let fgDef = Theme.hexToRgb Theme.fgDefault
+    let fgG = Theme.hexToRgb Theme.fgGreen
+    let fgR = Theme.hexToRgb Theme.fgRed
+    let bgP = Theme.hexToRgb Theme.bgPanel
+    let brN = Theme.hexToRgb Theme.borderNormal
     let dt = DrawTarget.create grid (Rect.create 0 0 200 60)
-    Draw.fill dt Theme.bgPanel
+    Draw.fill dt bgP
     for row in 0 .. 30 do
-      Draw.text dt row 0 Theme.fgDefault Theme.bgPanel CellAttrs.None
+      Draw.text dt row 0 fgDef bgP CellAttrs.None
         (sprintf "Line %d: some output text with varying content here" row)
     for row in 31 .. 40 do
       for col in 0 .. 99 do
-        let fg = if col % 2 = 0 then Theme.fgGreen else Theme.fgRed
-        CellGrid.set grid row col (Cell.create 'X' fg Theme.bgPanel CellAttrs.None)
+        let fg = if col % 2 = 0 then fgG else fgR
+        CellGrid.set grid row col (Cell.create 'X' fg bgP CellAttrs.None)
     let sw = System.Diagnostics.Stopwatch.StartNew()
     let iterations = 1000
     for _ in 1 .. iterations do
@@ -329,25 +343,35 @@ let performanceTests = testList "Performance" [
 
   test "Full frame pipeline 200x60 under 6.9ms (144fps)" {
     let grid = CellGrid.create 60 200
+    let fgDef = Theme.hexToRgb Theme.fgDefault
+    let fgG = Theme.hexToRgb Theme.fgGreen
+    let fgR = Theme.hexToRgb Theme.fgRed
+    let fgC = Theme.hexToRgb Theme.fgCyan
+    let fgY = Theme.hexToRgb Theme.fgYellow
+    let bgP = Theme.hexToRgb Theme.bgPanel
+    let bgE = Theme.hexToRgb Theme.bgEditor
+    let bgS = Theme.hexToRgb Theme.bgStatus
+    let brN = Theme.hexToRgb Theme.borderNormal
+    let brF = Theme.hexToRgb Theme.borderFocus
     let sw = System.Diagnostics.Stopwatch.StartNew()
     let iterations = 1000
     for _ in 1 .. iterations do
       CellGrid.clear grid
       let dt = DrawTarget.create grid (Rect.create 0 0 200 60)
-      Draw.fill dt Theme.bgPanel
+      Draw.fill dt bgP
       let left, right = Rect.splitVProp 0.65 dt.Clip
       let outputRect, editorRect = Rect.splitH (left.Height - 6) left
       let sessRect, diagRect = Rect.splitHProp 0.5 right
-      let oInner = Draw.box (DrawTarget.create grid outputRect) "Output" Theme.borderNormal Theme.bgPanel
-      let eInner = Draw.box (DrawTarget.create grid editorRect) "Editor" Theme.borderFocus Theme.bgEditor
-      let sInner = Draw.box (DrawTarget.create grid sessRect) "Sessions" Theme.borderNormal Theme.bgPanel
-      let dInner = Draw.box (DrawTarget.create grid diagRect) "Diagnostics" Theme.borderNormal Theme.bgPanel
+      let oInner = Draw.box (DrawTarget.create grid outputRect) "Output" brN bgP
+      let eInner = Draw.box (DrawTarget.create grid editorRect) "Editor" brF bgE
+      let sInner = Draw.box (DrawTarget.create grid sessRect) "Sessions" brN bgP
+      let dInner = Draw.box (DrawTarget.create grid diagRect) "Diagnostics" brN bgP
       for row in 0 .. min 20 (oInner.Clip.Height - 1) do
-        Draw.text oInner row 0 Theme.fgDefault Theme.bgPanel CellAttrs.None (sprintf "[eval] line %d output" row)
-      Draw.text eInner 0 0 Theme.fgDefault Theme.bgEditor CellAttrs.None "let x = 42"
-      Draw.text sInner 0 0 Theme.fgCyan Theme.bgPanel CellAttrs.None "session-abc123 (Ready)"
-      Draw.text dInner 0 0 Theme.fgYellow Theme.bgPanel CellAttrs.None "No diagnostics"
-      Draw.statusBar dt "Ready | session-abc123" "0.5ms" Theme.fgDefault Theme.bgStatus
+        Draw.text oInner row 0 fgDef bgP CellAttrs.None (sprintf "[eval] line %d output" row)
+      Draw.text eInner 0 0 fgDef bgE CellAttrs.None "let x = 42"
+      Draw.text sInner 0 0 fgC bgP CellAttrs.None "session-abc123 (Ready)"
+      Draw.text dInner 0 0 fgY bgP CellAttrs.None "No diagnostics"
+      Draw.statusBar dt "Ready | session-abc123" "0.5ms" fgDef bgS
       AnsiEmitter.emit grid 55 5 |> ignore
     sw.Stop()
     let avgUs = sw.Elapsed.TotalMicroseconds / float iterations

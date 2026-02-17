@@ -23,18 +23,22 @@ module AnsiCodes =
   let moveUp n = sprintf "%s%dA" esc n
   let moveDown n = sprintf "%s%dB" esc n
 
-  let fg256 n = sprintf "%s38;5;%dm" esc n
-  let bg256 n = sprintf "%s48;5;%dm" esc n
+  let fgHex (hex: string) =
+    let rgb = Theme.hexToRgb hex
+    sprintf "%s38;2;%d;%d;%dm" esc (int (Theme.rgbR rgb)) (int (Theme.rgbG rgb)) (int (Theme.rgbB rgb))
+  let bgHex (hex: string) =
+    let rgb = Theme.hexToRgb hex
+    sprintf "%s48;2;%d;%d;%dm" esc (int (Theme.rgbR rgb)) (int (Theme.rgbG rgb)) (int (Theme.rgbB rgb))
 
-  // Color scheme (matching dashboard CSS)
-  let green = fg256 114
-  let red = fg256 203
-  let yellow = fg256 179
-  let cyan = fg256 116
-  let dimWhite = fg256 245
-  let white = fg256 255
-  let bgPanel = bg256 235
-  let bgEditor = bg256 234
+  // Color scheme (from Theme defaults)
+  let green = fgHex Theme.fgGreen
+  let red = fgHex Theme.fgRed
+  let yellow = fgHex Theme.fgYellow
+  let cyan = fgHex Theme.fgCyan
+  let dimWhite = fgHex Theme.fgDim
+  let white = fgHex Theme.fgDefault
+  let bgPanel = bgHex Theme.bgPanel
+  let bgEditor = bgHex Theme.bgEditor
 
   // Box-drawing characters (Unicode — requires VT100 terminal)
   let boxH = "\u2500"
@@ -58,7 +62,7 @@ module AnsiCodes =
     let lineLen = max 0 (width - titleLen - 5)
     sprintf "%s%s%s %s%s%s %s%s"
       borderColor boxTL boxH
-      (fg256 255) t
+      white t
       borderColor (hline lineLen) boxTR
 
   let boxBottom width borderColor =

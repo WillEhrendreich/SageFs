@@ -7,9 +7,9 @@ open System.Reflection
 open System.Security.Cryptography
 open System.Text
 
-/// A colored span within a line: start column, length, and fg color byte.
+/// A colored span within a line: start column, length, and fg color as packed RGB (0x00RRGGBB).
 [<Struct>]
-type ColorSpan = { Start: int; Length: int; Fg: byte }
+type ColorSpan = { Start: int; Length: int; Fg: uint32 }
 
 /// Tree-sitter based syntax highlighting for F# code.
 module SyntaxHighlight =
@@ -83,7 +83,7 @@ module SyntaxHighlight =
           for capture in result.Captures do
             let node = capture.Node
             let captureName = capture.Name
-            let fg = Theme.tokenColorOfCapture theme captureName
+            let fg = Theme.hexToRgb (Theme.tokenColorOfCapture theme captureName)
 
             let startRow = int node.StartPosition.Row
             let startCol = int node.StartPosition.Column

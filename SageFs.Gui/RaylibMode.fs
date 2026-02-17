@@ -346,7 +346,7 @@ module RaylibMode =
         lastFps <- fps ()
 
         Raylib.BeginDrawing()
-        Raylib.ClearBackground(RaylibPalette.toColor Theme.bgDefault)
+        Raylib.ClearBackground(RaylibPalette.hexToColor Theme.bgDefault)
         RaylibEmitter.emit grid font cellW cellH fontSize
         Raylib.EndDrawing()
 
