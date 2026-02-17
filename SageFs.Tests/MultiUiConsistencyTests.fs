@@ -252,9 +252,52 @@ let actionDispatchTests = testList "action dispatch consistency" [
       |> Expect.isSome (sprintf "UiAction should parse '%s'" name)
 ]
 
+let resizeTests = testList "pane resize" [
+  testCase "UiAction.tryParse ResizeHGrow → ResizeH 1" <| fun _ ->
+    UiAction.tryParse "ResizeHGrow"
+    |> Expect.equal "should parse" (Some (UiAction.ResizeH 1))
+
+  testCase "UiAction.tryParse ResizeHShrink → ResizeH -1" <| fun _ ->
+    UiAction.tryParse "ResizeHShrink"
+    |> Expect.equal "should parse" (Some (UiAction.ResizeH -1))
+
+  testCase "UiAction.tryParse ResizeVGrow → ResizeV 1" <| fun _ ->
+    UiAction.tryParse "ResizeVGrow"
+    |> Expect.equal "should parse" (Some (UiAction.ResizeV 1))
+
+  testCase "UiAction.tryParse ResizeRShrink → ResizeR -1" <| fun _ ->
+    UiAction.tryParse "ResizeRShrink"
+    |> Expect.equal "should parse" (Some (UiAction.ResizeR -1))
+
+  testCase "LayoutConfig.resizeH clamps to bounds" <| fun _ ->
+    let cfg = LayoutConfig.defaults
+    let grown = LayoutConfig.resizeH 20 cfg
+    let shrunk = LayoutConfig.resizeH -20 cfg
+    Expecto.Flip.Expect.floatClose "max 0.9" Accuracy.high 0.9 grown.LeftRightSplit
+    Expecto.Flip.Expect.floatClose "min 0.2" Accuracy.high 0.2 shrunk.LeftRightSplit
+
+  testCase "LayoutConfig.resizeV clamps min to 2" <| fun _ ->
+    let cfg = LayoutConfig.defaults
+    let shrunk = LayoutConfig.resizeV -10 cfg
+    shrunk.OutputEditorSplit |> Expect.equal "min 2" 2
+
+  testCase "LayoutConfig.resizeR clamps to bounds" <| fun _ ->
+    let cfg = LayoutConfig.defaults
+    let grown = LayoutConfig.resizeR 20 cfg
+    let shrunk = LayoutConfig.resizeR -20 cfg
+    Expecto.Flip.Expect.floatClose "max 0.9" Accuracy.high 0.9 grown.SessionsDiagSplit
+    Expecto.Flip.Expect.floatClose "min 0.1" Accuracy.high 0.1 shrunk.SessionsDiagSplit
+
+  testCase "LayoutConfig.resizeH step is 0.05" <| fun _ ->
+    let cfg = LayoutConfig.defaults
+    let grown = LayoutConfig.resizeH 1 cfg
+    Expecto.Flip.Expect.floatClose "default + 0.05" Accuracy.high 0.7 grown.LeftRightSplit
+]
+
 [<Tests>]
 let allMultiUiTests = testList "Multi-UI Consistency" [
   roundtripTests
   multiConsumerTests
   actionDispatchTests
+  resizeTests
 ]

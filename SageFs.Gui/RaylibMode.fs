@@ -46,6 +46,9 @@ module RaylibMode =
     | Action of EditorAction
     | TogglePane of string
     | LayoutPreset of string
+    | ResizeH of int
+    | ResizeV of int
+    | ResizeR of int
 
   /// Convert Raylib KeyboardKey to System.ConsoleKey for KeyMap lookup
   let private raylibToConsoleKey (key: KeyboardKey) : System.ConsoleKey option =
@@ -99,6 +102,9 @@ module RaylibMode =
         | Some (UiAction.FontSizeDown) -> Some FontSizeDown
         | Some (UiAction.TogglePane p) -> Some (TogglePane p)
         | Some (UiAction.LayoutPreset p) -> Some (LayoutPreset p)
+        | Some (UiAction.ResizeH d) -> Some (ResizeH d)
+        | Some (UiAction.ResizeV d) -> Some (ResizeV d)
+        | Some (UiAction.ResizeR d) -> Some (ResizeR d)
         | Some (UiAction.Editor action) -> Some (Action action)
         | None -> None
 
@@ -270,6 +276,12 @@ module RaylibMode =
             | _ -> LayoutConfig.defaults
           if not (layoutConfig.VisiblePanes.Contains focusedPane) then
             focusedPane <- PaneId.Editor
+        | ResizeH d ->
+          layoutConfig <- LayoutConfig.resizeH d layoutConfig
+        | ResizeV d ->
+          layoutConfig <- LayoutConfig.resizeV d layoutConfig
+        | ResizeR d ->
+          layoutConfig <- LayoutConfig.resizeR d layoutConfig
         | Action action ->
           // When Sessions pane is focused, remap movement keys to session navigation
           let remappedAction =

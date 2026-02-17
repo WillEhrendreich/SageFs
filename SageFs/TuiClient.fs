@@ -163,6 +163,15 @@ let run (daemonInfo: DaemonInfo) = task {
           if not (layoutConfig.VisiblePanes.Contains focusedPane) then
             focusedPane <- PaneId.Editor
           render ()
+        | Some (TerminalCommand.ResizeH d) ->
+          layoutConfig <- LayoutConfig.resizeH d layoutConfig
+          render ()
+        | Some (TerminalCommand.ResizeV d) ->
+          layoutConfig <- LayoutConfig.resizeV d layoutConfig
+          render ()
+        | Some (TerminalCommand.ResizeR d) ->
+          layoutConfig <- LayoutConfig.resizeR d layoutConfig
+          render ()
         | Some (TerminalCommand.Action action) ->
           // When Sessions pane is focused, remap movement keys to session navigation
           let remappedAction =

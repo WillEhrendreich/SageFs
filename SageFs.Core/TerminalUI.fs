@@ -259,6 +259,9 @@ type TerminalCommand =
   | Quit
   | TogglePane of string
   | LayoutPreset of string
+  | ResizeH of int
+  | ResizeV of int
+  | ResizeR of int
 
 
 /// Map console key presses to terminal commands
@@ -281,6 +284,9 @@ module TerminalInput =
     | Some (UiAction.FontSizeDown) -> None
     | Some (UiAction.TogglePane p) -> Some (TerminalCommand.TogglePane p)
     | Some (UiAction.LayoutPreset p) -> Some (TerminalCommand.LayoutPreset p)
+    | Some (UiAction.ResizeH d) -> Some (TerminalCommand.ResizeH d)
+    | Some (UiAction.ResizeV d) -> Some (TerminalCommand.ResizeV d)
+    | Some (UiAction.ResizeR d) -> Some (TerminalCommand.ResizeR d)
     | Some (UiAction.Editor action) -> Some (TerminalCommand.Action action)
     | None ->
       // Fall through to character insertion for printable chars

@@ -264,8 +264,29 @@ module SessionManager =
           return! loop state
 
         | SessionCommand.ListSessions reply ->
-          reply.Reply(ManagerState.allInfos state)
-          return! loop state
+          // Refresh status from each alive worker before returning
+          let! updatedState =
+            state.Sessions
+            |> Map.fold (fun stAsync id session ->
+              async {
+                let! st = stAsync
+                if SessionStatus.isAlive session.Info.Status then
+                  try
+                    let replyId = Guid.NewGuid().ToString("N").[..7]
+                    let! resp = session.Proxy (WorkerMessage.GetStatus replyId)
+                    match resp with
+                    | WorkerResponse.StatusResult(_, snapshot) ->
+                      let updated =
+                        { session with
+                            Info = { session.Info with Status = snapshot.Status } }
+                      return ManagerState.addSession id updated st
+                    | _ -> return st
+                  with _ -> return st
+                else return st
+              }
+            ) (async { return state })
+          reply.Reply(ManagerState.allInfos updatedState)
+          return! loop updatedState
 
         | SessionCommand.TouchSession id ->
           match ManagerState.tryGetSession id state with

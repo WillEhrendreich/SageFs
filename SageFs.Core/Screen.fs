@@ -104,6 +104,20 @@ module LayoutConfig =
     else
       { cfg with VisiblePanes = Set.add paneId cfg.VisiblePanes }
 
+  let private clampF lo hi v = max lo (min hi v)
+
+  /// Adjust LeftRightSplit by delta (±1 maps to ±0.05)
+  let resizeH (delta: int) (cfg: LayoutConfig) : LayoutConfig =
+    { cfg with LeftRightSplit = clampF 0.2 0.9 (System.Math.Round(cfg.LeftRightSplit + float delta * 0.05, 2)) }
+
+  /// Adjust OutputEditorSplit by delta (±1 row)
+  let resizeV (delta: int) (cfg: LayoutConfig) : LayoutConfig =
+    { cfg with OutputEditorSplit = max 2 (cfg.OutputEditorSplit + delta) }
+
+  /// Adjust SessionsDiagSplit by delta (±1 maps to ±0.05)
+  let resizeR (delta: int) (cfg: LayoutConfig) : LayoutConfig =
+    { cfg with SessionsDiagSplit = clampF 0.1 0.9 (System.Math.Round(cfg.SessionsDiagSplit + float delta * 0.05, 2)) }
+
 /// Shared screen composition — computes layout and renders panes into a CellGrid.
 /// Used by both TUI (via AnsiEmitter) and GUI (via RaylibEmitter).
 module Screen =

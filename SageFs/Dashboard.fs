@@ -214,6 +214,8 @@ let renderShell (version: string) =
         .eval-btn:disabled { opacity: 0.5; cursor: not-allowed; }
         .sidebar-toggle { background: none; border: 1px solid var(--border); color: var(--fg); border-radius: 4px; padding: 2px 8px; cursor: pointer; font-size: 0.85rem; font-family: inherit; }
         .sidebar-toggle:hover { background: var(--border); }
+        .resize-handle { width: 4px; background: var(--border); cursor: col-resize; flex-shrink: 0; transition: background 0.15s; }
+        .resize-handle:hover, .resize-handle.dragging { background: var(--accent); }
         @media (max-width: 768px) {
           .sidebar { position: fixed; right: 0; top: 0; bottom: 0; z-index: 10; }
           .sidebar.collapsed { width: 0; }
@@ -305,6 +307,8 @@ let renderShell (version: string) =
             Elem.div [ Attr.id "eval-result" ] []
           ]
         ]
+        // Resize handle between main area and sidebar
+        Elem.div [ Attr.class' "resize-handle"; Attr.id "sidebar-resize" ] []
         // Sidebar — sessions, diagnostics, create session
         Elem.div [ Attr.id "sidebar"; Attr.class' "sidebar"; Ds.class' ("collapsed", "!$sidebarOpen") ] [
           Elem.div [ Attr.class' "sidebar-inner" ] [
@@ -400,6 +404,24 @@ let renderShell (version: string) =
               }
             }
           });
+          // Sidebar resize drag
+          var handle = document.getElementById('sidebar-resize');
+          var sidebar = document.getElementById('sidebar');
+          if (handle && sidebar) {
+            var dragging = false;
+            handle.addEventListener('mousedown', function(e) {
+              dragging = true; handle.classList.add('dragging');
+              e.preventDefault();
+            });
+            document.addEventListener('mousemove', function(e) {
+              if (!dragging) return;
+              var w = Math.max(200, Math.min(600, window.innerWidth - e.clientX));
+              sidebar.style.width = w + 'px';
+            });
+            document.addEventListener('mouseup', function() {
+              if (dragging) { dragging = false; handle.classList.remove('dragging'); }
+            });
+          }
         })();
       """ ]
     ]
@@ -534,7 +556,7 @@ let renderSessions (sessions: ParsedSession list) =
         Elem.div
           [ Attr.class' (sprintf "session-row %s" cls)
             Attr.style "display: flex; align-items: center; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid var(--border); cursor: pointer;"
-            Ds.onEvent ("click", sprintf "fetch('/api/dispatch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'sessionSetIndex',value:'%d'})})" i) ]
+            Ds.onEvent ("click", sprintf "fetch('/api/dispatch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'sessionSetIndex',value:'%d'})}).then(function(){fetch('/api/dispatch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'sessionSelect'})})})" i) ]
           [
             Elem.div [ Attr.style "flex: 1; min-width: 0;" ] [
               // Row 1: session ID + status + active indicator
@@ -594,7 +616,7 @@ let renderSessions (sessions: ParsedSession list) =
           ])
     Elem.div
       [ Attr.style "font-size: 0.7rem; color: var(--fg-dim); text-align: center; padding: 4px 0; margin-top: 4px;" ]
-      [ Text.raw "j/k navigate · Enter switch · x stop · 1-9 jump · n new · Ctrl+Tab cycle" ]
+      [ Text.raw "click/Enter switch · x stop · 1-9 jump · n new · Ctrl+Tab cycle" ]
   ]
 
 let parseOutputLines (content: string) : OutputLine list =

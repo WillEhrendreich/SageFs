@@ -140,6 +140,9 @@ and [<RequireQualifiedAccess>] UiAction =
   | FontSizeDown
   | TogglePane of string
   | LayoutPreset of string
+  | ResizeH of int   // delta for LeftRightSplit (-1 = narrower left, +1 = wider left)
+  | ResizeV of int   // delta for OutputEditorSplit (-1 = less editor, +1 = more editor)
+  | ResizeR of int   // delta for SessionsDiagSplit (-1 = less sessions, +1 = more sessions)
 
 /// Maps physical keys to semantic actions
 type KeyMap = Map<KeyCombo, UiAction>
@@ -272,6 +275,12 @@ module UiAction =
     | "PromptCancel" -> Some (UiAction.Editor EditorAction.PromptCancel)
     | s when s.StartsWith("TogglePane.") -> Some (UiAction.TogglePane (s.Substring(11)))
     | s when s.StartsWith("Layout.") -> Some (UiAction.LayoutPreset (s.Substring(7)))
+    | "ResizeHGrow" -> Some (UiAction.ResizeH 1)
+    | "ResizeHShrink" -> Some (UiAction.ResizeH -1)
+    | "ResizeVGrow" -> Some (UiAction.ResizeV 1)
+    | "ResizeVShrink" -> Some (UiAction.ResizeV -1)
+    | "ResizeRGrow" -> Some (UiAction.ResizeR 1)
+    | "ResizeRShrink" -> Some (UiAction.ResizeR -1)
     | _ -> None
 
 module KeyMap =
@@ -343,6 +352,11 @@ module KeyMap =
       // Pane toggle
       KeyCombo.ctrlAlt ConsoleKey.O, UiAction.TogglePane "Output"
       KeyCombo.ctrlAlt ConsoleKey.D, UiAction.TogglePane "Diagnostics"
+      // Pane resize
+      KeyCombo.ctrlAlt ConsoleKey.LeftArrow, UiAction.ResizeH -1
+      KeyCombo.ctrlAlt ConsoleKey.RightArrow, UiAction.ResizeH 1
+      KeyCombo.ctrlAlt ConsoleKey.UpArrow, UiAction.ResizeV 1
+      KeyCombo.ctrlAlt ConsoleKey.DownArrow, UiAction.ResizeV -1
       // Clear output
       KeyCombo.ctrlShift ConsoleKey.L, e EditorAction.ClearOutput
     ] |> Map.ofList
