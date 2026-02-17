@@ -7,15 +7,15 @@ open SageFs
 let screenTests = testList "Screen" [
 
   testList "computeLayout" [
-    test "returns 4 panes" {
+    test "returns 3 panes" {
       let panes, _ = Screen.computeLayout 40 120
-      Expect.equal (List.length panes) 4 "should have 4 panes"
+      Expect.equal (List.length panes) 3 "should have 3 panes"
     }
 
     test "all pane ids are present" {
       let panes, _ = Screen.computeLayout 40 120
       let ids = panes |> List.map fst |> Set.ofList
-      let expected = Set.ofList [ PaneId.Output; PaneId.Editor; PaneId.Sessions; PaneId.Diagnostics ]
+      let expected = Set.ofList [ PaneId.Output; PaneId.Editor; PaneId.Sessions ]
       Expect.equal ids expected "all pane ids present"
     }
 
@@ -135,15 +135,15 @@ let screenTests = testList "Screen" [
   ]
 
   testList "LayoutConfig" [
-    test "defaults includes all 4 panes" {
+    test "defaults includes all 3 panes" {
       let cfg = LayoutConfig.defaults
-      Expect.equal cfg.VisiblePanes.Count 4 "defaults should have 4 visible panes"
+      Expect.equal cfg.VisiblePanes.Count 3 "defaults should have 3 visible panes"
     }
 
     test "togglePane hides a visible pane" {
       let cfg = LayoutConfig.togglePane PaneId.Sessions LayoutConfig.defaults
       Expect.isFalse (cfg.VisiblePanes.Contains PaneId.Sessions) "Sessions should be hidden"
-      Expect.equal cfg.VisiblePanes.Count 3 "should have 3 visible panes"
+      Expect.equal cfg.VisiblePanes.Count 2 "should have 2 visible panes"
     }
 
     test "togglePane shows a hidden pane" {

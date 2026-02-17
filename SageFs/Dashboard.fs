@@ -160,62 +160,77 @@ let renderShell (version: string) =
         })();
       """ ]
       Ds.cdnScript
+      Elem.style [] [ Text.raw (sprintf """
+        :root { %s --font-size: 14px; --sidebar-width: 320px; }
+        * { box-sizing: border-box; margin: 0; padding: 0; }""" (Theme.toCssVariables Theme.defaults)) ]
       Elem.style [] [ Text.raw """
-        :root { --bg: #0d1117; --fg: #c9d1d9; --fg-dim: #8b949e; --accent: #58a6ff; --green: #3fb950; --red: #f85149; --border: #30363d; --surface: #161b22; --bg-highlight: #21262d; --yellow: #d29922; --font-size: 14px; --sidebar-width: 320px; }
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        body { font-family: 'Cascadia Code', 'Fira Code', monospace; background: var(--bg); color: var(--fg); font-size: var(--font-size); height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
-        h1 { color: var(--accent); font-size: 1.4rem; }
-        .app-header { display: flex; align-items: center; justify-content: space-between; padding: 0.5rem 1rem; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+        body { font-family: 'Cascadia Code', 'Fira Code', monospace; background: var(--bg-default); color: var(--fg-default); font-size: var(--font-size); height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+        h1 { color: var(--fg-blue); font-size: 1.4rem; }
+        .app-header { display: flex; align-items: center; justify-content: space-between; padding: 0.5rem 1rem; border-bottom: 1px solid var(--border-normal); flex-shrink: 0; }
         .app-layout { display: flex; flex: 1; overflow: hidden; }
         .main-area { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-width: 0; }
-        .sidebar { width: var(--sidebar-width); border-left: 1px solid var(--border); background: var(--surface); overflow-y: auto; flex-shrink: 0; transition: width 0.2s, padding 0.2s; }
+        .sidebar { width: var(--sidebar-width); border-left: 1px solid var(--border-normal); background: var(--bg-panel); overflow-y: auto; flex-shrink: 0; transition: width 0.2s, padding 0.2s; }
         .sidebar.collapsed { width: 0; padding: 0; overflow: hidden; border-left: none; }
         .sidebar-inner { padding: 0.75rem; display: flex; flex-direction: column; gap: 0.75rem; min-width: var(--sidebar-width); }
-        .panel { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 0.75rem; }
-        .panel h2 { color: var(--accent); font-size: 0.9rem; margin-bottom: 0.5rem; border-bottom: 1px solid var(--border); padding-bottom: 0.5rem; display: flex; justify-content: space-between; align-items: center; }
-        .output-area { flex: 1; display: flex; flex-direction: column; overflow: hidden; border-bottom: 1px solid var(--border); }
+        .panel { background: var(--bg-panel); border: 1px solid var(--border-normal); border-radius: 8px; padding: 0.75rem; }
+        .panel h2 { color: var(--fg-blue); font-size: 0.9rem; margin-bottom: 0.5rem; border-bottom: 1px solid var(--border-normal); padding-bottom: 0.5rem; display: flex; justify-content: space-between; align-items: center; }
+        .output-area { flex: 1; display: flex; flex-direction: column; overflow: hidden; border-bottom: 1px solid var(--border-normal); }
         .output-header { display: flex; align-items: center; justify-content: space-between; padding: 0.5rem 1rem; flex-shrink: 0; }
-        .output-header h2 { color: var(--accent); font-size: 1rem; margin: 0; }
-        #output-panel { flex: 1; overflow-y: auto; scroll-behavior: smooth; background: var(--bg); font-family: 'Cascadia Code', 'Fira Code', monospace; font-size: 0.85rem; padding: 0.25rem 0; }
+        .output-header h2 { color: var(--fg-blue); font-size: 1rem; margin: 0; }
+        #output-panel { flex: 1; overflow-y: auto; scroll-behavior: smooth; background: var(--bg-default); font-family: 'Cascadia Code', 'Fira Code', monospace; font-size: 0.85rem; padding: 0.25rem 0; }
         .eval-area { flex-shrink: 0; padding: 0.75rem 1rem; }
         .status { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.8rem; font-weight: bold; }
-        .status-ready { background: var(--green); color: var(--bg); }
-        .status-warming { background: var(--yellow); color: var(--bg); }
-        .status-faulted { background: var(--red); color: white; }
+        .status-ready { background: var(--fg-green); color: var(--bg-default); }
+        .status-warming { background: var(--fg-yellow); color: var(--bg-default); }
+        .status-faulted { background: var(--fg-red); color: white; }
         .output-line { font-size: 0.85rem; padding: 1px 0.5rem; white-space: pre-wrap; word-break: break-all; line-height: 1.5; }
-        .output-result { color: var(--green); }
-        .output-error { color: var(--red); }
-        .output-info { color: var(--accent); }
-        .output-system { color: #8b949e; }
+        .output-result { color: var(--fg-green); }
+        .output-error { color: var(--fg-red); }
+        .output-info { color: var(--fg-blue); }
+        .output-system { color: var(--fg-dim); }
         .diag { font-size: 0.85rem; padding: 1px 0.5rem; line-height: 1.5; }
-        .diag-error { color: var(--red); }
-        .diag-warning { color: var(--yellow); }
-        .diag-location { font-family: monospace; background: var(--bg-highlight); padding: 1px 4px; border-radius: 3px; font-size: 0.8rem; margin-right: 0.25rem; }
-        .meta { color: #8b949e; font-size: 0.8rem; }
-        .eval-input { width: 100%; background: var(--bg); color: var(--fg); border: 1px solid var(--border); border-radius: 4px; padding: 0.5rem; font-family: inherit; font-size: 0.9rem; resize: vertical; min-height: 80px; tab-size: 2; }
-        .eval-input:focus { outline: 1px solid var(--accent); border-color: var(--accent); }
-        .eval-btn { background: var(--accent); color: var(--bg); border: none; border-radius: 4px; padding: 0.5rem 1rem; cursor: pointer; font-family: inherit; font-weight: bold; margin-top: 0.5rem; transition: opacity 0.15s; }
+        .diag-error { color: var(--fg-red); }
+        .diag-warning { color: var(--fg-yellow); }
+        .diag-location { font-family: monospace; background: var(--bg-selection); padding: 1px 4px; border-radius: 3px; font-size: 0.8rem; margin-right: 0.25rem; }
+        .meta { color: var(--fg-dim); font-size: 0.8rem; }
+        .eval-input { width: 100%; background: var(--bg-editor); color: var(--fg-default); border: 1px solid var(--border-normal); border-radius: 4px; padding: 0.5rem; font-family: inherit; font-size: 0.9rem; resize: vertical; min-height: 80px; tab-size: 2; }
+        .eval-input:focus { outline: 1px solid var(--border-focus); border-color: var(--border-focus); }
+        .eval-btn { background: var(--fg-blue); color: var(--bg-default); border: none; border-radius: 4px; padding: 0.5rem 1rem; cursor: pointer; font-family: inherit; font-weight: bold; margin-top: 0.5rem; transition: opacity 0.15s; }
         .eval-btn:hover { opacity: 0.85; }
         .eval-btn:active { opacity: 0.7; }
-        .session-btn { background: var(--border); color: var(--fg); border: none; border-radius: 4px; padding: 2px 8px; cursor: pointer; font-size: 0.8rem; transition: background 0.15s; }
-        .session-btn:hover { background: var(--accent); color: var(--bg); }
-        .session-btn-danger:hover { background: var(--red); color: white; }
-        .session-selected { background: var(--bg-highlight); border-left: 3px solid var(--accent); }
-        .session-row:hover { background: var(--bg-highlight); }
-        .panel-header-btn { background: none; border: 1px solid var(--border); color: var(--fg); border-radius: 4px; padding: 1px 8px; cursor: pointer; font-size: 0.75rem; font-family: inherit; }
-        .panel-header-btn:hover { background: var(--border); }
+        .session-btn { background: var(--border-normal); color: var(--fg-default); border: none; border-radius: 4px; padding: 2px 8px; cursor: pointer; font-size: 0.8rem; transition: background 0.15s; }
+        .session-btn:hover { background: var(--fg-blue); color: var(--bg-default); }
+        .session-btn-danger:hover { background: var(--fg-red); color: white; }
+        .session-selected { background: var(--bg-selection); border-left: 3px solid var(--border-focus); }
+        .session-row:hover { background: var(--bg-selection); }
+        .panel-header-btn { background: none; border: 1px solid var(--border-normal); color: var(--fg-default); border-radius: 4px; padding: 1px 8px; cursor: pointer; font-size: 0.75rem; font-family: inherit; }
+        .panel-header-btn:hover { background: var(--border-normal); }
         .output-icon { font-weight: bold; margin-right: 0.25rem; }
-        .log-box { background: var(--bg); border: 1px solid var(--border); border-radius: 4px; padding: 0.5rem 0; font-family: 'Cascadia Code', 'Fira Code', monospace; font-size: 0.85rem; }
+        .log-box { background: var(--bg-default); border: 1px solid var(--border-normal); border-radius: 4px; padding: 0.5rem 0; font-family: 'Cascadia Code', 'Fira Code', monospace; font-size: 0.85rem; }
         .conn-banner { padding: 4px 1rem; text-align: center; font-size: 0.8rem; font-weight: bold; border-radius: 0; transition: all 0.3s; flex-shrink: 0; }
-        .conn-connected { background: var(--green); color: var(--bg); }
-        .conn-disconnected { background: var(--red); color: white; animation: pulse 1.5s infinite; }
-        .conn-reconnecting { background: var(--yellow); color: var(--bg); }
+        .conn-connected { background: var(--fg-green); color: var(--bg-default); }
+        .conn-disconnected { background: var(--fg-red); color: white; animation: pulse 1.5s infinite; }
+        .conn-reconnecting { background: var(--fg-yellow); color: var(--bg-default); }
         @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.6; } }
         .eval-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-        .sidebar-toggle { background: none; border: 1px solid var(--border); color: var(--fg); border-radius: 4px; padding: 2px 8px; cursor: pointer; font-size: 0.85rem; font-family: inherit; }
-        .sidebar-toggle:hover { background: var(--border); }
-        .resize-handle { width: 4px; background: var(--border); cursor: col-resize; flex-shrink: 0; transition: background 0.15s; }
-        .resize-handle:hover, .resize-handle.dragging { background: var(--accent); }
+        .sidebar-toggle { background: none; border: 1px solid var(--border-normal); color: var(--fg-default); border-radius: 4px; padding: 2px 8px; cursor: pointer; font-size: 0.85rem; font-family: inherit; }
+        .sidebar-toggle:hover { background: var(--border-normal); }
+        .resize-handle { width: 4px; background: var(--border-normal); cursor: col-resize; flex-shrink: 0; transition: background 0.15s; }
+        .resize-handle:hover, .resize-handle.dragging { background: var(--border-focus); }
+        .syn-keyword { color: var(--syn-keyword); }
+        .syn-string { color: var(--syn-string); }
+        .syn-comment { color: var(--syn-comment); font-style: italic; }
+        .syn-number { color: var(--syn-number); }
+        .syn-operator { color: var(--syn-operator); }
+        .syn-type { color: var(--syn-type); }
+        .syn-function { color: var(--syn-function); }
+        .syn-variable { color: var(--syn-variable); }
+        .syn-punctuation { color: var(--syn-punctuation); }
+        .syn-constant { color: var(--syn-constant); }
+        .syn-module { color: var(--syn-module); }
+        .syn-attribute { color: var(--syn-attribute); }
+        .syn-directive { color: var(--syn-directive); }
+        .syn-property { color: var(--syn-property); }
         @media (max-width: 768px) {
           .sidebar { position: fixed; right: 0; top: 0; bottom: 0; z-index: 10; }
           .sidebar.collapsed { width: 0; }
@@ -455,6 +470,68 @@ let renderEvalStats (stats: EvalStatsView) =
     Text.raw (sprintf "%d evals · avg %.0fms · min %.0fms · max %.0fms" stats.Count stats.AvgMs stats.MinMs stats.MaxMs)
   ]
 
+/// Map a tree-sitter capture name to the CSS class suffix.
+let private captureToCssClass (capture: string) =
+  match capture with
+  | s when s.StartsWith "keyword" -> "syn-keyword"
+  | s when s.StartsWith "string" -> "syn-string"
+  | s when s.StartsWith "comment" -> "syn-comment"
+  | s when s.StartsWith "number" -> "syn-number"
+  | s when s.StartsWith "operator" -> "syn-operator"
+  | s when s.StartsWith "type" -> "syn-type"
+  | s when s.StartsWith "function" -> "syn-function"
+  | s when s.StartsWith "variable" -> "syn-variable"
+  | s when s.StartsWith "punctuation" -> "syn-punctuation"
+  | s when s.StartsWith "constant" -> "syn-constant"
+  | s when s.StartsWith "module" -> "syn-module"
+  | s when s.StartsWith "attribute" -> "syn-attribute"
+  | s when s.StartsWith "property" -> "syn-property"
+  | s when s.StartsWith "boolean" -> "syn-constant"
+  | _ -> ""
+
+/// Render a single line of code with syntax highlighting as HTML spans.
+let private renderHighlightedLine (spans: ColorSpan array) (line: string) : XmlNode list =
+  if spans.Length = 0 || line.Length = 0 then [ Text.raw (System.Net.WebUtility.HtmlEncode line) ]
+  else
+    let nodes = ResizeArray<XmlNode>()
+    let mutable pos = 0
+    for span in spans do
+      // Skip overlapping spans (tree-sitter may produce multiple captures for same position)
+      if span.Start < pos then () else
+      if span.Start > pos && pos < line.Length then
+        // Unhighlighted gap
+        let gapEnd = min span.Start line.Length
+        nodes.Add(Text.raw (System.Net.WebUtility.HtmlEncode(line.Substring(pos, gapEnd - pos))))
+        pos <- gapEnd
+      if span.Start >= 0 && span.Start < line.Length then
+        let end' = min (span.Start + span.Length) line.Length
+        let text = line.Substring(span.Start, end' - span.Start)
+        // Map fg byte to a CSS class using theme defaults
+        let cssClass =
+          let theme = Theme.defaults
+          if span.Fg = theme.SynKeyword then "syn-keyword"
+          elif span.Fg = theme.SynString then "syn-string"
+          elif span.Fg = theme.SynComment then "syn-comment"
+          elif span.Fg = theme.SynNumber then "syn-number"
+          elif span.Fg = theme.SynOperator then "syn-operator"
+          elif span.Fg = theme.SynType then "syn-type"
+          elif span.Fg = theme.SynFunction then "syn-function"
+          elif span.Fg = theme.SynModule then "syn-module"
+          elif span.Fg = theme.SynAttribute then "syn-attribute"
+          elif span.Fg = theme.SynPunctuation then "syn-punctuation"
+          elif span.Fg = theme.SynConstant then "syn-constant"
+          elif span.Fg = theme.SynProperty then "syn-property"
+          else ""
+        if cssClass <> "" then
+          nodes.Add(Elem.span [ Attr.class' cssClass ] [ Text.raw (System.Net.WebUtility.HtmlEncode text) ])
+        else
+          nodes.Add(Text.raw (System.Net.WebUtility.HtmlEncode text))
+        pos <- end'
+    // Remaining unhighlighted text
+    if pos < line.Length then
+      nodes.Add(Text.raw (System.Net.WebUtility.HtmlEncode(line.Substring(pos))))
+    nodes |> Seq.toList
+
 /// Render output lines as an HTML fragment.
 let renderOutput (lines: OutputLine list) =
   Elem.div [ Attr.id "output-panel" ] [
@@ -473,7 +550,15 @@ let renderOutput (lines: OutputLine list) =
               Text.raw t
             ]
           | None -> ()
-          Text.raw line.Text
+          // Apply syntax highlighting to result/info lines (F# code output)
+          if (line.Kind = ResultLine || line.Kind = InfoLine) && SyntaxHighlight.isAvailable () then
+            let allSpans = SyntaxHighlight.tokenize Theme.defaults line.Text
+            if allSpans.Length > 0 then
+              yield! renderHighlightedLine allSpans.[0] line.Text
+            else
+              Text.raw (System.Net.WebUtility.HtmlEncode line.Text)
+          else
+            Text.raw (System.Net.WebUtility.HtmlEncode line.Text)
         ])
   ]
 

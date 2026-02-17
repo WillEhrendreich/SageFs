@@ -74,7 +74,7 @@ type LayoutConfig = {
 
 module LayoutConfig =
   let defaults = {
-    VisiblePanes = Set.ofList [ PaneId.Output; PaneId.Editor; PaneId.Sessions; PaneId.Diagnostics ]
+    VisiblePanes = Set.ofList [ PaneId.Output; PaneId.Editor; PaneId.Sessions ]
     LeftRightSplit = 0.65
     OutputEditorSplit = 6
     SessionsDiagSplit = 0.5
@@ -213,8 +213,23 @@ module Screen =
         let skip = min offset (max 0 (lines.Length - 1))
         let visibleLines = lines |> Array.skip skip |> Array.truncate inner.Clip.Height
         let fg = Theme.fgDefault
+
+        // Apply syntax highlighting for editor and output panes
+        let shouldHighlight =
+          paneId = PaneId.Editor || paneId = PaneId.Output
+        let allSpans =
+          if shouldHighlight && SyntaxHighlight.isAvailable () then
+            SyntaxHighlight.tokenize Theme.defaults region.Content
+          else
+            [||]
+        let spanOffset = skip
+
         visibleLines |> Array.iteri (fun row line ->
-          Draw.text inner row 0 fg bg CellAttrs.None line)
+          let lineIdx = spanOffset + row
+          if shouldHighlight && lineIdx < allSpans.Length && allSpans.[lineIdx].Length > 0 then
+            Draw.textHighlighted inner row 0 fg bg CellAttrs.None allSpans.[lineIdx] line
+          else
+            Draw.text inner row 0 fg bg CellAttrs.None line)
 
         // Scroll indicators
         if skip > 0 then
