@@ -497,3 +497,110 @@ let sessionNavAppTests = testList "SageFsUpdate session navigation" [
     newModel.Editor.Prompt |> Expect.isNone "prompt should close"
     effects |> Expect.isEmpty "no effects on cancel"
 ]
+
+[<Tests>]
+let renderConsistencyTests = testList "Render consistency" [
+  let mkModel () =
+    let snap : SessionSnapshot = {
+      Id = "session-1"; Status = SessionDisplayStatus.Running
+      IsActive = true; Projects = ["Test.fsproj"]; EvalCount = 5
+      UpSince = DateTime.UtcNow.AddHours(-1.0)
+      LastActivity = DateTime.UtcNow; WorkingDirectory = "C:\\Code" }
+    { SageFsModel.initial with
+        Sessions = { Sessions = [snap]; ActiveSessionId = Some "session-1"
+                     TotalEvals = 5; WatchStatus = None }
+        RecentOutput = [
+          { Kind = OutputKind.Result; Text = "val x = 42"
+            Timestamp = DateTime.UtcNow; SessionId = "session-1" }
+        ]
+        Diagnostics = [
+          { Severity = DiagnosticSeverity.Warning; Message = "unused var"
+            Subcategory = ""
+            Range = { StartLine = 1; StartColumn = 1; EndLine = 1; EndColumn = 5 } }
+        ] }
+
+  testCase "render is deterministic — same model produces same regions" <| fun _ ->
+    let model = mkModel ()
+    let r1 = SageFsRender.render model
+    let r2 = SageFsRender.render model
+    r1 |> List.map (fun r -> r.Id, r.Content)
+    |> Expect.equal "regions should be identical" (r2 |> List.map (fun r -> r.Id, r.Content))
+
+  testCase "render produces expected region IDs" <| fun _ ->
+    let regions = SageFsRender.render (mkModel ())
+    let ids = regions |> List.map (fun r -> r.Id)
+    ids |> Expect.contains "should have editor" "editor"
+    ids |> Expect.contains "should have output" "output"
+    ids |> Expect.contains "should have diagnostics" "diagnostics"
+    ids |> Expect.contains "should have sessions" "sessions"
+
+  testCase "prompt appears in editor content when active" <| fun _ ->
+    let model = {
+      mkModel () with
+        Editor = { EditorState.initial with
+                     Prompt = Some { Label = "Dir"; Input = "C:\\Foo"; Purpose = PromptPurpose.CreateSessionDir } } }
+    let regions = SageFsRender.render model
+    let editor = regions |> List.find (fun r -> r.Id = "editor")
+    editor.Content |> Expect.stringContains "should show label" "Dir"
+    editor.Content |> Expect.stringContains "should show input" "C:\\Foo"
+
+  testCase "no prompt means clean editor content" <| fun _ ->
+    let model = mkModel ()
+    let regions = SageFsRender.render model
+    let editor = regions |> List.find (fun r -> r.Id = "editor")
+    editor.Content |> fun c ->
+      c.Contains("───") |> Expect.isFalse "should not have prompt separator"
+
+  testCase "selected session gets > marker" <| fun _ ->
+    let model = {
+      mkModel () with
+        Editor = { EditorState.initial with SelectedSessionIndex = Some 0 } }
+    let regions = SageFsRender.render model
+    let sessions = regions |> List.find (fun r -> r.Id = "sessions")
+    sessions.Content |> Expect.stringContains "should have > marker" ">"
+
+  testCase "output filters by active session" <| fun _ ->
+    let model = {
+      mkModel () with
+        RecentOutput = [
+          { Kind = OutputKind.Result; Text = "active output"
+            Timestamp = DateTime.UtcNow; SessionId = "session-1" }
+          { Kind = OutputKind.Result; Text = "other output"
+            Timestamp = DateTime.UtcNow; SessionId = "session-2" }
+        ] }
+    let regions = SageFsRender.render model
+    let output = regions |> List.find (fun r -> r.Id = "output")
+    output.Content |> Expect.stringContains "should show active" "active output"
+    output.Content |> fun c ->
+      c.Contains("other output") |> Expect.isFalse "should not show other session"
+]
+
+[<Tests>]
+let dispatchRoundTripTests = testList "Dispatch round-trip" [
+  let actionsWithApi = [
+    EditorAction.SessionNavUp, "sessionNavUp"
+    EditorAction.SessionNavDown, "sessionNavDown"
+    EditorAction.SessionSelect, "sessionSelect"
+    EditorAction.SessionDelete, "sessionDelete"
+    EditorAction.ClearOutput, "clearOutput"
+    EditorAction.PromptBackspace, "promptBackspace"
+    EditorAction.PromptConfirm, "promptConfirm"
+    EditorAction.PromptCancel, "promptCancel"
+    EditorAction.ResetSession, "resetSession"
+    EditorAction.HardResetSession, "hardResetSession"
+  ]
+
+  for action, expectedApi in actionsWithApi do
+    testCase (sprintf "actionToApi maps %A to %s" action expectedApi) <| fun _ ->
+      let result = DaemonClient.actionToApi action
+      result |> Expect.isSome (sprintf "%A should have API mapping" action)
+      let apiAction, _ = result.Value
+      apiAction |> Expect.equal "api action name" expectedApi
+
+  testCase "PromptChar includes value in api" <| fun _ ->
+    let result = DaemonClient.actionToApi (EditorAction.PromptChar 'x')
+    result |> Expect.isSome "should have mapping"
+    let apiAction, value = result.Value
+    apiAction |> Expect.equal "action" "promptChar"
+    value |> Expect.equal "value" (Some "x")
+]
