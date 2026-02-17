@@ -102,6 +102,11 @@ module DaemonClient =
     | EditorAction.HistorySearch s -> Some ("historySearch", Some s)
     | EditorAction.ResetSession -> Some ("resetSession", None)
     | EditorAction.HardResetSession -> Some ("hardResetSession", None)
+    | EditorAction.SessionNavUp -> Some ("sessionNavUp", None)
+    | EditorAction.SessionNavDown -> Some ("sessionNavDown", None)
+    | EditorAction.SessionSelect -> Some ("sessionSelect", None)
+    | EditorAction.SessionDelete -> Some ("sessionDelete", None)
+    | EditorAction.ClearOutput -> Some ("clearOutput", None)
     | EditorAction.SwitchMode _ -> None
 
   /// Send an EditorAction to the daemon via POST /api/dispatch.

@@ -161,6 +161,7 @@ type EditorState = {
   History: HistoryState
   Mode: EditMode
   SessionPanelVisible: bool
+  SelectedSessionIndex: int option
 }
 
 module EditorState =
@@ -171,6 +172,7 @@ module EditorState =
     History = { Entries = []; Position = 0; Draft = "" }
     Mode = EditMode.Insert
     SessionPanelVisible = false
+    SelectedSessionIndex = None
   }
 
 /// Pure state transition: action + state → new state + side effects
@@ -329,3 +331,24 @@ module EditorUpdate =
       state, [EditorEffect.RequestReset]
     | EditorAction.HardResetSession ->
       state, [EditorEffect.RequestHardReset]
+    | EditorAction.SessionNavUp ->
+      let idx =
+        match state.SelectedSessionIndex with
+        | None -> 0
+        | Some i -> max 0 (i - 1)
+      { state with SelectedSessionIndex = Some idx }, []
+    | EditorAction.SessionNavDown ->
+      let idx =
+        match state.SelectedSessionIndex with
+        | None -> 0
+        | Some i -> i + 1
+      { state with SelectedSessionIndex = Some idx }, []
+    | EditorAction.SessionSelect ->
+      // The actual session ID resolution happens in SageFsApp
+      // where the model has access to the session list
+      state, []
+    | EditorAction.SessionDelete ->
+      // Same — resolved in SageFsApp where session list is available
+      state, []
+    | EditorAction.ClearOutput ->
+      state, []

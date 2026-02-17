@@ -40,12 +40,49 @@ module SageFsModel =
 
 /// Pure update function: routes SageFsMsg through the right handler.
 module SageFsUpdate =
+  let private resolveSessionId (model: SageFsModel) : string option =
+    match model.Editor.SelectedSessionIndex with
+    | None -> None
+    | Some idx ->
+      let sessions = model.Sessions.Sessions
+      if idx >= 0 && idx < sessions.Length then
+        Some sessions.[idx].Id
+      else None
+
   let update (msg: SageFsMsg) (model: SageFsModel) : SageFsModel * SageFsEffect list =
     match msg with
     | SageFsMsg.Editor action ->
-      let newEditor, effects = EditorUpdate.update action model.Editor
-      { model with Editor = newEditor },
-      effects |> List.map SageFsEffect.Editor
+      match action with
+      | EditorAction.SessionSelect ->
+        match resolveSessionId model with
+        | Some sid ->
+          let newEditor, _ = EditorUpdate.update action model.Editor
+          { model with Editor = newEditor },
+          [SageFsEffect.Editor (EditorEffect.RequestSessionSwitch sid)]
+        | None -> model, []
+      | EditorAction.SessionDelete ->
+        match resolveSessionId model with
+        | Some sid ->
+          let newEditor, _ = EditorUpdate.update action model.Editor
+          { model with Editor = newEditor },
+          [SageFsEffect.Editor (EditorEffect.RequestSessionStop sid)]
+        | None -> model, []
+      | EditorAction.ClearOutput ->
+        { model with RecentOutput = [] },
+        []
+      | EditorAction.SessionNavDown ->
+        let newEditor, effects = EditorUpdate.update action model.Editor
+        // Clamp index to session count
+        let clamped =
+          match newEditor.SelectedSessionIndex with
+          | Some idx -> { newEditor with SelectedSessionIndex = Some (min idx (model.Sessions.Sessions.Length - 1)) }
+          | None -> newEditor
+        { model with Editor = clamped },
+        effects |> List.map SageFsEffect.Editor
+      | _ ->
+        let newEditor, effects = EditorUpdate.update action model.Editor
+        { model with Editor = newEditor },
+        effects |> List.map SageFsEffect.Editor
 
     | SageFsMsg.Event event ->
       match event with
@@ -254,7 +291,7 @@ module SageFsRender =
       Content =
         let now = DateTime.UtcNow
         model.Sessions.Sessions
-        |> List.map (fun s ->
+        |> List.mapi (fun i s ->
           let statusLabel =
             match s.Status with
             | SessionDisplayStatus.Running -> "running"
@@ -264,6 +301,7 @@ module SageFsRender =
             | SessionDisplayStatus.Stale -> "stale"
             | SessionDisplayStatus.Restarting -> "restarting"
           let active = if s.IsActive then " *" else ""
+          let selected = if model.Editor.SelectedSessionIndex = Some i then ">" else " "
           let projects =
             if s.Projects.IsEmpty then ""
             else sprintf " (%s)" (s.Projects |> List.map System.IO.Path.GetFileNameWithoutExtension |> String.concat ", ")
@@ -284,7 +322,7 @@ module SageFsRender =
             elif diff.TotalMinutes < 60.0 then sprintf " last:%dm ago" (int diff.TotalMinutes)
             elif diff.TotalHours < 24.0 then sprintf " last:%dh ago" (int diff.TotalHours)
             else sprintf " last:%dd ago" (int diff.TotalDays)
-          sprintf "%s [%s]%s%s%s%s%s%s" s.Id statusLabel active projects evals uptime dir lastAct)
+          sprintf "%s %s [%s]%s%s%s%s%s%s" selected s.Id statusLabel active projects evals uptime dir lastAct)
         |> String.concat "\n"
       Affordances = []
       Cursor = None

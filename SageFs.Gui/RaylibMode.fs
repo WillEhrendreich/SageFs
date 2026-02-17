@@ -266,7 +266,18 @@ module RaylibMode =
           if not (layoutConfig.VisiblePanes.Contains focusedPane) then
             focusedPane <- PaneId.Editor
         | Action action ->
-          DaemonClient.dispatch client baseUrl action |> fun t -> t.Wait()
+          // When Sessions pane is focused, remap movement keys to session navigation
+          let remappedAction =
+            if focusedPane = PaneId.Sessions then
+              match action with
+              | EditorAction.MoveCursor Direction.Up -> EditorAction.SessionNavUp
+              | EditorAction.MoveCursor Direction.Down -> EditorAction.SessionNavDown
+              | EditorAction.NewLine -> EditorAction.SessionSelect
+              | EditorAction.DeleteBackward -> EditorAction.SessionDelete
+              | EditorAction.DeleteForward -> EditorAction.SessionDelete
+              | other -> other
+            else action
+          DaemonClient.dispatch client baseUrl remappedAction |> fun t -> t.Wait()
         keyCmd <- mapKey ()
 
       // Handle char input (typed text)

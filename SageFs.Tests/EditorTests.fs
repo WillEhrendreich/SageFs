@@ -387,3 +387,54 @@ let renderPipelineTests = testList "RenderPipeline" [
     UiAction.tryParse "HardResetSession"
     |> Expect.equal "should parse HardResetSession" (Some (UiAction.Editor EditorAction.HardResetSession))
 ]
+
+[<Tests>]
+let sessionNavigationTests = testList "Session Navigation" [
+  testCase "SessionNavDown from None sets index to 0" <| fun _ ->
+    let state, _ = EditorUpdate.update EditorAction.SessionNavDown initial
+    state.SelectedSessionIndex
+    |> Expect.equal "should be Some 0" (Some 0)
+
+  testCase "SessionNavDown increments index" <| fun _ ->
+    let state = { initial with SelectedSessionIndex = Some 2 }
+    let state', _ = EditorUpdate.update EditorAction.SessionNavDown state
+    state'.SelectedSessionIndex
+    |> Expect.equal "should be Some 3" (Some 3)
+
+  testCase "SessionNavUp from None sets index to 0" <| fun _ ->
+    let state, _ = EditorUpdate.update EditorAction.SessionNavUp initial
+    state.SelectedSessionIndex
+    |> Expect.equal "should be Some 0" (Some 0)
+
+  testCase "SessionNavUp decrements index" <| fun _ ->
+    let state = { initial with SelectedSessionIndex = Some 2 }
+    let state', _ = EditorUpdate.update EditorAction.SessionNavUp state
+    state'.SelectedSessionIndex
+    |> Expect.equal "should be Some 1" (Some 1)
+
+  testCase "SessionNavUp at 0 stays at 0" <| fun _ ->
+    let state = { initial with SelectedSessionIndex = Some 0 }
+    let state', _ = EditorUpdate.update EditorAction.SessionNavUp state
+    state'.SelectedSessionIndex
+    |> Expect.equal "should be Some 0" (Some 0)
+
+  testCase "UiAction.tryParse SessionNavUp" <| fun _ ->
+    UiAction.tryParse "SessionNavUp"
+    |> Expect.equal "should parse" (Some (UiAction.Editor EditorAction.SessionNavUp))
+
+  testCase "UiAction.tryParse SessionNavDown" <| fun _ ->
+    UiAction.tryParse "SessionNavDown"
+    |> Expect.equal "should parse" (Some (UiAction.Editor EditorAction.SessionNavDown))
+
+  testCase "UiAction.tryParse SessionSelect" <| fun _ ->
+    UiAction.tryParse "SessionSelect"
+    |> Expect.equal "should parse" (Some (UiAction.Editor EditorAction.SessionSelect))
+
+  testCase "UiAction.tryParse SessionDelete" <| fun _ ->
+    UiAction.tryParse "SessionDelete"
+    |> Expect.equal "should parse" (Some (UiAction.Editor EditorAction.SessionDelete))
+
+  testCase "UiAction.tryParse ClearOutput" <| fun _ ->
+    UiAction.tryParse "ClearOutput"
+    |> Expect.equal "should parse" (Some (UiAction.Editor EditorAction.ClearOutput))
+]

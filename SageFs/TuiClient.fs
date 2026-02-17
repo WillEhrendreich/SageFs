@@ -161,7 +161,18 @@ let run (daemonInfo: DaemonInfo) = task {
             focusedPane <- PaneId.Editor
           render ()
         | Some (TerminalCommand.Action action) ->
-          do! DaemonClient.dispatch client baseUrl action
+          // When Sessions pane is focused, remap movement keys to session navigation
+          let remappedAction =
+            if focusedPane = PaneId.Sessions then
+              match action with
+              | EditorAction.MoveCursor Direction.Up -> EditorAction.SessionNavUp
+              | EditorAction.MoveCursor Direction.Down -> EditorAction.SessionNavDown
+              | EditorAction.NewLine -> EditorAction.SessionSelect
+              | EditorAction.DeleteBackward -> EditorAction.SessionDelete
+              | EditorAction.DeleteForward -> EditorAction.SessionDelete
+              | other -> other
+            else action
+          do! DaemonClient.dispatch client baseUrl remappedAction
         | None -> ()
       else
         try

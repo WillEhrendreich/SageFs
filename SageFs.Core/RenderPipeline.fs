@@ -110,6 +110,13 @@ and [<RequireQualifiedAccess>] EditorAction =
   | ToggleSessionPanel
   | ResetSession
   | HardResetSession
+  // Session navigation (when Sessions pane focused)
+  | SessionNavUp
+  | SessionNavDown
+  | SessionSelect
+  | SessionDelete
+  // Output
+  | ClearOutput
 
 /// Every UI-level action (superset of EditorAction for renderers)
 and [<RequireQualifiedAccess>] UiAction =
@@ -245,6 +252,11 @@ module UiAction =
     | "CreateSession" -> Some (UiAction.Editor (EditorAction.CreateSession []))
     | "ResetSession" -> Some (UiAction.Editor EditorAction.ResetSession)
     | "HardResetSession" -> Some (UiAction.Editor EditorAction.HardResetSession)
+    | "SessionNavUp" -> Some (UiAction.Editor EditorAction.SessionNavUp)
+    | "SessionNavDown" -> Some (UiAction.Editor EditorAction.SessionNavDown)
+    | "SessionSelect" -> Some (UiAction.Editor EditorAction.SessionSelect)
+    | "SessionDelete" -> Some (UiAction.Editor EditorAction.SessionDelete)
+    | "ClearOutput" -> Some (UiAction.Editor EditorAction.ClearOutput)
     | s when s.StartsWith("TogglePane.") -> Some (UiAction.TogglePane (s.Substring(11)))
     | s when s.StartsWith("Layout.") -> Some (UiAction.LayoutPreset (s.Substring(7)))
     | _ -> None
