@@ -42,9 +42,8 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
         return
           result
           |> Result.map (fun info ->
-            // Auto-activate first session if none active
-            if !activeSessionId = "" then
-              activeSessionId.Value <- info.Id
+            // Always activate newly created session — caller expects to use it
+            activeSessionId.Value <- info.Id
             SessionOperations.formatSessionInfo DateTime.UtcNow info)
       }
     ListSessions = fun () ->
@@ -188,14 +187,27 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
     | :? System.IO.IOException -> None
     | :? System.AggregateException as ae
         when (ae.InnerException :? System.IO.IOException) -> None
+    | :? System.ObjectDisposedException -> None
+    | :? System.AggregateException as ae
+        when (ae.InnerException :? System.ObjectDisposedException) -> None
 
   let getSessionState () =
-    match tryGetSessionSnapshot () with
-    | Some snap -> WorkerProtocol.SessionStatus.toSessionState snap.Status
-    | None ->
-      if String.IsNullOrEmpty(!activeSessionId)
-      then SessionState.Uninitialized
-      else SessionState.Faulted
+    let sid = !activeSessionId
+    if String.IsNullOrEmpty(sid) then SessionState.Uninitialized
+    else
+      // First try the pipe for live status; fall back to session manager's stored status
+      match tryGetSessionSnapshot () with
+      | Some snap -> WorkerProtocol.SessionStatus.toSessionState snap.Status
+      | None ->
+        try
+          let managed =
+            sessionManager.PostAndAsyncReply(fun reply ->
+              SessionManager.SessionCommand.GetSession(sid, reply))
+            |> Async.RunSynchronously
+          match managed with
+          | Some s -> WorkerProtocol.SessionStatus.toSessionState s.Info.Status
+          | None -> SessionState.Faulted
+        with _ -> SessionState.Faulted
 
   let getEvalStats () =
     match tryGetSessionSnapshot () with
@@ -219,6 +231,18 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
       | None -> ""
     with _ -> ""
 
+  let getSessionProjectCount () =
+    let sid = !activeSessionId
+    try
+      let managed =
+        sessionManager.PostAndAsyncReply(fun reply ->
+          SessionManager.SessionCommand.GetSession(sid, reply))
+        |> Async.RunSynchronously
+      match managed with
+      | Some s -> s.Projects.Length
+      | None -> 0
+    with _ -> 0
+
   let dashboardEndpoints =
     Dashboard.createEndpoints
       version
@@ -226,46 +250,64 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
       getEvalStats
       (fun () -> !activeSessionId)
       getSessionWorkingDir
-      0
+      getSessionProjectCount
       (fun () -> elmRuntime.GetRegions() |> Some)
       (Some stateChangedEvent.Publish)
       (fun code -> task {
         let sid = !activeSessionId
-        let! proxy = sessionOps.GetProxy sid
-        match proxy with
-        | Some send ->
-          let! resp =
-            send (WorkerProtocol.WorkerMessage.EvalCode(code, "dash"))
-            |> Async.StartAsTask
-          let result =
-            match resp with
-            | WorkerProtocol.WorkerResponse.EvalResult(_, Ok msg, diags) ->
-              elmRuntime.Dispatch (SageFsMsg.Event (
-                SageFsEvent.EvalCompleted (sid, msg, diags |> List.map WorkerProtocol.WorkerDiagnostic.toDiagnostic)))
-              msg
-            | WorkerProtocol.WorkerResponse.EvalResult(_, Error err, _) ->
-              let msg = SageFsError.describe err
-              elmRuntime.Dispatch (SageFsMsg.Event (
-                SageFsEvent.EvalFailed (sid, msg)))
-              sprintf "Error: %s" msg
-            | other -> sprintf "Unexpected: %A" other
-          return result
-        | None -> return "Error: No active session"
+        try
+          let! proxy = sessionOps.GetProxy sid
+          match proxy with
+          | Some send ->
+            let! resp =
+              send (WorkerProtocol.WorkerMessage.EvalCode(code, "dash"))
+              |> Async.StartAsTask
+            let result =
+              match resp with
+              | WorkerProtocol.WorkerResponse.EvalResult(_, Ok msg, diags) ->
+                elmRuntime.Dispatch (SageFsMsg.Event (
+                  SageFsEvent.EvalCompleted (sid, msg, diags |> List.map WorkerProtocol.WorkerDiagnostic.toDiagnostic)))
+                msg
+              | WorkerProtocol.WorkerResponse.EvalResult(_, Error err, _) ->
+                let msg = SageFsError.describe err
+                elmRuntime.Dispatch (SageFsMsg.Event (
+                  SageFsEvent.EvalFailed (sid, msg)))
+                sprintf "Error: %s" msg
+              | other -> sprintf "Unexpected: %A" other
+            return result
+          | None -> return "Error: No active session"
+        with
+        | :? System.IO.IOException as ex ->
+          return sprintf "Error: Session pipe broken — %s" ex.Message
+        | :? System.AggregateException as ae
+            when (ae.InnerException :? System.IO.IOException) ->
+          return sprintf "Error: Session pipe broken — %s" ae.InnerException.Message
+        | :? System.ObjectDisposedException as ex ->
+          return sprintf "Error: Session pipe closed — %s" ex.Message
       })
       (fun () -> task {
         let sid = !activeSessionId
-        let! proxy = sessionOps.GetProxy sid
-        match proxy with
-        | Some send ->
-          let! resp =
-            send (WorkerProtocol.WorkerMessage.ResetSession "dash")
-            |> Async.StartAsTask
-          return
-            match resp with
-            | WorkerProtocol.WorkerResponse.ResetResult(_, Ok ()) -> "Session reset successfully"
-            | WorkerProtocol.WorkerResponse.ResetResult(_, Error e) -> sprintf "Reset failed: %A" e
-            | other -> sprintf "Unexpected: %A" other
-        | None -> return "Error: No active session"
+        try
+          let! proxy = sessionOps.GetProxy sid
+          match proxy with
+          | Some send ->
+            let! resp =
+              send (WorkerProtocol.WorkerMessage.ResetSession "dash")
+              |> Async.StartAsTask
+            return
+              match resp with
+              | WorkerProtocol.WorkerResponse.ResetResult(_, Ok ()) -> "Session reset successfully"
+              | WorkerProtocol.WorkerResponse.ResetResult(_, Error e) -> sprintf "Reset failed: %A" e
+              | other -> sprintf "Unexpected: %A" other
+          | None -> return "Error: No active session"
+        with
+        | :? System.IO.IOException as ex ->
+          return sprintf "Error: Session pipe broken — %s" ex.Message
+        | :? System.AggregateException as ae
+            when (ae.InnerException :? System.IO.IOException) ->
+          return sprintf "Error: Session pipe broken — %s" ae.InnerException.Message
+        | :? System.ObjectDisposedException as ex ->
+          return sprintf "Error: Session pipe closed — %s" ex.Message
       })
       (fun () -> task {
         let sid = !activeSessionId
@@ -279,6 +321,7 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
       (Some (fun (sid: string) -> task {
         elmRuntime.Dispatch (SageFsMsg.Event (
           SageFsEvent.SessionSwitched (None, sid)))
+        elmRuntime.Dispatch(SageFsMsg.Editor EditorAction.ListSessions)
         return sprintf "Switched to session '%s'" sid
       }))
       // Session stop handler
@@ -306,6 +349,18 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
       (fun msg -> elmRuntime.Dispatch msg)
       // Shutdown callback for /api/shutdown
       (Some (fun () -> cts.Cancel()))
+      // Previous sessions for picker
+      (fun () ->
+        let infos =
+          sessionManager.PostAndAsyncReply(fun reply ->
+            SessionManager.SessionCommand.ListSessions reply)
+          |> Async.RunSynchronously
+        infos
+        |> List.map (fun (info: WorkerProtocol.SessionInfo) ->
+          { Dashboard.PreviousSession.Id = info.Id
+            WorkingDir = info.WorkingDirectory
+            Projects = info.Projects
+            LastSeen = info.LastActivity }))
   let dashboardTask = task {
     try
       let builder = Microsoft.AspNetCore.Builder.WebApplication.CreateBuilder()
