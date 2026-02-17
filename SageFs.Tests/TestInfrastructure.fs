@@ -41,6 +41,7 @@ let private mkTestSessionOps (result: ActorResult) (sessionId: string) : SageFs.
     GetSessionInfo = fun _ ->
       System.Threading.Tasks.Task.FromResult(
         Some { SageFs.WorkerProtocol.SessionInfo.Id = sessionId
+               Name = None
                Projects = []; WorkingDirectory = ""; SolutionRoot = None
                Status = SageFs.WorkerProtocol.SessionStatus.Ready
                WorkerPid = None; CreatedAt = System.DateTime.UtcNow; LastActivity = System.DateTime.UtcNow }) }

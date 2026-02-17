@@ -459,6 +459,7 @@ module SageFsEffectHandler =
 
   let private sessionInfoToSnapshot (info: SessionInfo) : SessionSnapshot =
     { Id = info.Id
+      Name = info.Name
       Projects = info.Projects
       Status =
         match info.Status with

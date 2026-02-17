@@ -268,23 +268,8 @@ let main args =
   // Subcommand: gui (launch Raylib GUI client for running daemon)
   elif args.Length > 0 && args.[0] = "gui" then
     let launchGui () =
-      let guiExe =
-        let exeDir = System.IO.Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location)
-        let candidate = System.IO.Path.Combine(exeDir, "SageFs.Gui.exe")
-        if System.IO.File.Exists(candidate) then Some candidate
-        else
-          let candidate2 = System.IO.Path.Combine(exeDir, "SageFs.Gui")
-          if System.IO.File.Exists(candidate2) then Some candidate2
-          else None
-      match guiExe with
-      | Some path ->
-        let proc = System.Diagnostics.Process.Start(path)
-        proc.WaitForExit()
-        proc.ExitCode
-      | None ->
-        printfn "SageFs.Gui executable not found. Build it with: dotnet build SageFs.Gui"
-        printfn "Then run: dotnet run --project SageFs.Gui"
-        1
+      SageFs.Gui.RaylibMode.run ()
+      0
     match DaemonState.read () with
     | Some _ -> launchGui ()
     | None ->

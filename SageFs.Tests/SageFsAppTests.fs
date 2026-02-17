@@ -68,7 +68,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
 
   testCase "SessionCreated adds to session list" <| fun _ ->
     let snap = {
-      Id = "s1"; Projects = ["Test.fsproj"]
+      Id = "s1"; Name = None; Projects = ["Test.fsproj"]
       Status = SessionDisplayStatus.Running
       LastActivity = DateTime.UtcNow; EvalCount = 0
       UpSince = DateTime.UtcNow; IsActive = true; WorkingDirectory = "" }
@@ -80,11 +80,11 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
 
   testCase "SessionSwitched updates active session" <| fun _ ->
     let snap1 = {
-      Id = "s1"; Projects = []; Status = SessionDisplayStatus.Running
+      Id = "s1"; Name = None; Projects = []; Status = SessionDisplayStatus.Running
       LastActivity = DateTime.UtcNow; EvalCount = 0
       UpSince = DateTime.UtcNow; IsActive = true; WorkingDirectory = "" }
     let snap2 = {
-      Id = "s2"; Projects = []; Status = SessionDisplayStatus.Running
+      Id = "s2"; Name = None; Projects = []; Status = SessionDisplayStatus.Running
       LastActivity = DateTime.UtcNow; EvalCount = 0
       UpSince = DateTime.UtcNow; IsActive = false; WorkingDirectory = "" }
     let model = {
@@ -105,7 +105,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
 
   testCase "SessionStopped removes session" <| fun _ ->
     let snap = {
-      Id = "s1"; Projects = []; Status = SessionDisplayStatus.Running
+      Id = "s1"; Name = None; Projects = []; Status = SessionDisplayStatus.Running
       LastActivity = DateTime.UtcNow; EvalCount = 0
       UpSince = DateTime.UtcNow; IsActive = true; WorkingDirectory = "" }
     let model = {
@@ -173,7 +173,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
 
   testCase "SessionStale marks session as stale" <| fun _ ->
     let snap = {
-      Id = "s1"; Projects = []; Status = SessionDisplayStatus.Running
+      Id = "s1"; Name = None; Projects = []; Status = SessionDisplayStatus.Running
       LastActivity = DateTime.UtcNow; EvalCount = 0
       UpSince = DateTime.UtcNow; IsActive = true; WorkingDirectory = "" }
     let model = {
@@ -233,7 +233,7 @@ let sageFsRenderTests = testList "SageFsRender" [
 
   testCase "sessions region shows active session" <| fun _ ->
     let snap = {
-      Id = "s1"; Projects = ["Test.fsproj"]
+      Id = "s1"; Name = None; Projects = ["Test.fsproj"]
       Status = SessionDisplayStatus.Running
       LastActivity = DateTime.UtcNow; EvalCount = 0
       UpSince = DateTime.UtcNow; IsActive = true; WorkingDirectory = "" }
@@ -278,9 +278,9 @@ let sageFsRenderTests = testList "SageFsRender" [
           Sessions =
             { SageFsModel.initial.Sessions with
                 Sessions = [
-                  { Id = "s1"; Projects = []; Status = SessionDisplayStatus.Running
+                  { Id = "s1"; Name = None; Projects = []; Status = SessionDisplayStatus.Running
                     LastActivity = now; EvalCount = 0; UpSince = now; IsActive = true; WorkingDirectory = "" }
-                  { Id = "s2"; Projects = []; Status = SessionDisplayStatus.Starting
+                  { Id = "s2"; Name = None; Projects = []; Status = SessionDisplayStatus.Starting
                     LastActivity = now; EvalCount = 0; UpSince = now; IsActive = false; WorkingDirectory = "" }
                 ] } }
     let sessions =
@@ -316,7 +316,7 @@ let sageFsRenderTests = testList "SageFsRender" [
       let sessions =
         [ for i in 0..count-1 do
             { SessionSnapshot.Id = sprintf "session-%d" i
-              Projects = []; Status = statuses.[i % statuses.Length]
+              Name = None; Projects = []; Status = statuses.[i % statuses.Length]
               LastActivity = now; EvalCount = i; UpSince = now
               IsActive = (i = 0); WorkingDirectory = "" } ]
       let model =
@@ -397,7 +397,7 @@ let elmIntegrationTests = testList "ElmLoop integration" [
 [<Tests>]
 let sessionNavAppTests = testList "SageFsUpdate session navigation" [
   let mkSnap id isActive = {
-    Id = id; Projects = []; Status = SessionDisplayStatus.Running
+    Id = id; Name = None; Projects = []; Status = SessionDisplayStatus.Running
     LastActivity = System.DateTime.UtcNow; EvalCount = 0
     UpSince = System.DateTime.UtcNow; IsActive = isActive; WorkingDirectory = "" }
 
@@ -572,7 +572,7 @@ let sessionNavAppTests = testList "SageFsUpdate session navigation" [
 let renderConsistencyTests = testList "Render consistency" [
   let mkModel () =
     let snap : SessionSnapshot = {
-      Id = "session-1"; Status = SessionDisplayStatus.Running
+      Id = "session-1"; Name = None; Status = SessionDisplayStatus.Running
       IsActive = true; Projects = ["Test.fsproj"]; EvalCount = 5
       UpSince = DateTime.UtcNow.AddHours(-1.0)
       LastActivity = DateTime.UtcNow; WorkingDirectory = "C:\\Code" }

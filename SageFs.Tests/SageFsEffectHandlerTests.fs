@@ -30,6 +30,7 @@ module TestDeps =
     (handler: WorkerMessage -> WorkerResponse) : EffectDeps =
     let sessionInfo : SessionInfo = {
       Id = "test-session"
+      Name = None
       Projects = ["Test.fsproj"]
       WorkingDirectory = "."
       SolutionRoot = None
@@ -81,6 +82,7 @@ module TestDeps =
         async {
           let info : SessionInfo = {
             Id = "new-session"
+            Name = None
             Projects = projects
             WorkingDirectory = dir
             SolutionRoot = None

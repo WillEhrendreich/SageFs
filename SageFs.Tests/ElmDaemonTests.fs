@@ -16,6 +16,7 @@ module ElmDaemonTestHelpers =
     (handler: WorkerMessage -> WorkerResponse) : EffectDeps =
     let sessionInfo : SessionInfo = {
       Id = "test-session"
+      Name = None
       Projects = ["Test.fsproj"]
       WorkingDirectory = "."
       SolutionRoot = None
