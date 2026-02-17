@@ -214,8 +214,22 @@ let createFsiSession (logger: ILogger) (outStream: TextWriter) (useAsp: bool) (s
     let args = solutionToFsiArgs logger useAsp sln
     let recorder = new TextWriterRecorder(outStream)
 
+    logger.LogInfo (sprintf "  Creating FSI session with %d args..." (Array.length args))
+    let fsiErrorWriter = new System.IO.StringWriter()
     let fsiSession =
-      FsiEvaluationSession.Create(fsiConfig, args, new StreamReader(Stream.Null), recorder, TextWriter.Null, collectible = true)
+      try
+        FsiEvaluationSession.Create(fsiConfig, args, new StreamReader(Stream.Null), recorder, fsiErrorWriter, collectible = true)
+      with ex ->
+        let fsiErrors = fsiErrorWriter.ToString()
+        if fsiErrors.Length > 0 then
+          logger.LogError (sprintf "  FSI stderr: %s" fsiErrors)
+        logger.LogError (sprintf "  ❌ FsiEvaluationSession.Create failed: %s" ex.Message)
+        if ex.InnerException <> null then
+          logger.LogError (sprintf "    Inner: %s" ex.InnerException.Message)
+        raise ex
+    let fsiInitErrors = fsiErrorWriter.ToString()
+    if fsiInitErrors.Length > 0 then
+      logger.LogWarning (sprintf "  FSI init warnings: %s" fsiInitErrors)
     logger.LogInfo (sprintf "  FSI session created in %dms, loading startup files..." sw.ElapsedMilliseconds)
 
     for fileName in sln.StartupFiles do
@@ -228,7 +242,11 @@ let createFsiSession (logger: ILogger) (outStream: TextWriter) (useAsp: bool) (s
         let beforeCount = (fileContents.Split('\n') |> Array.filter (fun line -> line.TrimStart().StartsWith("use "))).Length
         let afterCount = (compatibleContents.Split('\n') |> Array.filter (fun line -> line.TrimStart().StartsWith("use "))).Length  
         logger.LogInfo $"   Rewrote {beforeCount - afterCount} 'use' statements to 'let'"
-      fsiSession.EvalInteraction(compatibleContents, ct)
+      try
+        fsiSession.EvalInteraction(compatibleContents, ct)
+      with ex ->
+        logger.LogError (sprintf "  ❌ Startup file %s failed: %s" fileName ex.Message)
+        raise ex
 
     let openedNamespaces = System.Collections.Generic.HashSet<string>()
     let namesToOpen = System.Collections.Generic.List<string>()
@@ -817,6 +835,9 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
             | :? OperationCanceledException -> "Initial warm-up timed out after 5 minutes"
             | _ -> sprintf "Initial warm-up failed: %s" ex.Message
           logger.LogError (sprintf "❌ %s" msg)
+          if ex.InnerException <> null then
+            logger.LogError (sprintf "  Inner: %s" ex.InnerException.Message)
+          logger.LogError (sprintf "  Stack: %s" ex.StackTrace)
           // Publish Faulted so MCP clients know the session is dead, not warming up
           let faultedSt = {
             Solution = sln
