@@ -380,13 +380,17 @@ let renderShell (version: string) =
             var tag = (e.target.tagName || '').toLowerCase();
             if (tag !== 'input' && tag !== 'textarea') {
               var action = null;
+              var value = null;
               if (e.key === 'j' || e.key === 'ArrowDown') { action = 'sessionNavDown'; }
               if (e.key === 'k' || e.key === 'ArrowUp') { action = 'sessionNavUp'; }
               if (e.key === 'Enter') { action = 'sessionSelect'; }
               if (e.key === 'x' || e.key === 'Delete') { action = 'sessionDelete'; }
+              if (e.key === 'n') { e.preventDefault(); fetch('/dashboard/session/create', {method:'POST'}); return; }
+              if (e.key >= '1' && e.key <= '9') { action = 'sessionSetIndex'; value = String(parseInt(e.key) - 1); }
               if (action) {
                 e.preventDefault();
-                fetch('/api/dispatch', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({action: action}) });
+                var body = value ? {action: action, value: value} : {action: action};
+                fetch('/api/dispatch', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body) });
               }
             }
           });
@@ -584,7 +588,7 @@ let renderSessions (sessions: ParsedSession list) =
           ])
     Elem.div
       [ Attr.style "font-size: 0.7rem; color: var(--fg-dim); text-align: center; padding: 4px 0; margin-top: 4px;" ]
-      [ Text.raw "j/k navigate · Enter switch · x stop" ]
+      [ Text.raw "j/k navigate · Enter switch · x stop · 1-9 jump · n new" ]
   ]
 
 let parseOutputLines (content: string) : OutputLine list =
