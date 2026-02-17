@@ -342,8 +342,12 @@ let renderShell (version: string) =
                 Elem.button
                   [ Attr.class' "eval-btn"
                     Attr.style "flex: 1; height: 2rem; padding: 0 0.5rem; font-size: 0.8rem;"
+                    Ds.indicator "discoverLoading"
+                    Ds.attr' ("disabled", "$discoverLoading")
                     Ds.onClick (Ds.post "/dashboard/discover-projects") ]
-                  [ Text.raw "🔍 Discover" ]
+                  [ Elem.span [ Ds.show "$discoverLoading" ] [ Text.raw "⏳ " ]
+                    Elem.span [ Ds.show "!$discoverLoading" ] [ Text.raw "🔍 " ]
+                    Text.raw "Discover" ]
               ]
               Elem.div [ Attr.id "discovered-projects" ] []
               Elem.div [ Attr.style "margin-top: 0.5rem;" ] [
@@ -359,8 +363,11 @@ let renderShell (version: string) =
               Elem.button
                 [ Attr.class' "eval-btn"
                   Attr.style "margin-top: 0.5rem; width: 100%; font-size: 0.8rem;"
+                  Ds.indicator "createLoading"
+                  Ds.attr' ("disabled", "$createLoading")
                   Ds.onClick (Ds.post "/dashboard/session/create") ]
-                [ Text.raw "➕ Create" ]
+                [ Elem.span [ Ds.show "$createLoading" ] [ Text.raw "⏳ Creating... " ]
+                  Elem.span [ Ds.show "!$createLoading" ] [ Text.raw "➕ Create" ] ]
             ]
           ]
         ]
@@ -511,7 +518,10 @@ let parseSessionLines (content: string) =
     if v.StartsWith(prefix) then v.Substring(prefix.Length).Trim()
     else ""
   content.Split('\n')
-  |> Array.filter (fun (l: string) -> l.Length > 0)
+  |> Array.filter (fun (l: string) ->
+    l.Length > 0
+    && not (l.StartsWith("───"))
+    && not (l.StartsWith("⏳")))
   |> Array.map (fun (l: string) ->
     let m = sessionRegex.Match(l)
     if m.Success then
@@ -537,10 +547,17 @@ let parseSessionLines (content: string) =
         LastActivity = "" })
   |> Array.toList
 
+let isCreatingSession (content: string) =
+  content.Contains("⏳ Creating session...")
+
 /// Render sessions as an HTML fragment with action buttons.
-let renderSessions (sessions: ParsedSession list) =
+let renderSessions (sessions: ParsedSession list) (creating: bool) =
   Elem.div [ Attr.id "sessions-panel" ] [
-    if sessions.IsEmpty then
+    if creating then
+      Elem.div
+        [ Attr.style "padding: 8px; text-align: center; color: var(--accent); font-size: 0.85rem;" ]
+        [ Text.raw "⏳ Creating session..." ]
+    if sessions.IsEmpty && not creating then
       Text.raw "No sessions"
     else
       yield! sessions |> List.mapi (fun i (s: ParsedSession) ->
@@ -664,7 +681,7 @@ let renderRegionForSse (region: RenderRegion) =
   match region.Id with
   | "output" -> Some (renderOutput (parseOutputLines region.Content))
   | "diagnostics" -> Some (renderDiagnostics (parseDiagLines region.Content))
-  | "sessions" -> Some (renderSessions (parseSessionLines region.Content))
+  | "sessions" -> Some (renderSessions (parseSessionLines region.Content) (isCreatingSession region.Content))
   | _ -> None
 
 let private pushRegions

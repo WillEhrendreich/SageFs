@@ -476,6 +476,7 @@ let run (info: DaemonInfo) = task {
               eprintfn "\x1b[31mNo session matching '%s'. Use #sessions to list.\x1b[0m" sid
       | CreateSession dirOpt ->
         let workDir = dirOpt |> Option.defaultValue Environment.CurrentDirectory
+        printfn "\x1b[33m⏳ Creating session in %s...\x1b[0m" workDir
         match! createSession client baseUrl workDir [] with
         | Ok msg -> printfn "\x1b[33m%s\x1b[0m" msg
         | Error msg -> eprintfn "\x1b[31m%s\x1b[0m" msg

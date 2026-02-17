@@ -23,6 +23,7 @@ type SageFsModel = {
   Sessions: SessionRegistryView
   RecentOutput: OutputLine list
   Diagnostics: Features.Diagnostics.Diagnostic list
+  CreatingSession: bool
 }
 
 module SageFsModel =
@@ -36,6 +37,7 @@ module SageFsModel =
     }
     RecentOutput = []
     Diagnostics = []
+    CreatingSession = false
   }
 
 /// Pure update function: routes SageFsMsg through the right handler.
@@ -114,9 +116,16 @@ module SageFsUpdate =
           | None -> newEditor
         { model with Editor = clamped },
         effects |> List.map SageFsEffect.Editor
+      | EditorAction.CreateSession _ when model.CreatingSession ->
+        // Prevent duplicate session creation while one is in progress
+        model, []
       | _ ->
         let newEditor, effects = EditorUpdate.update action model.Editor
-        { model with Editor = newEditor },
+        let isCreating =
+          effects |> List.exists (function EditorEffect.RequestSessionCreate _ -> true | _ -> false)
+        { model with
+            Editor = newEditor
+            CreatingSession = model.CreatingSession || isCreating },
         effects |> List.map SageFsEffect.Editor
 
     | SageFsMsg.Event event ->
@@ -139,7 +148,10 @@ module SageFsUpdate =
           Timestamp = DateTime.UtcNow
           SessionId = sid
         }
-        { model with RecentOutput = line :: model.RecentOutput }, []
+        let clearCreating = error.Contains "Create failed:"
+        { model with
+            RecentOutput = line :: model.RecentOutput
+            CreatingSession = if clearCreating then false else model.CreatingSession }, []
 
       | SageFsEvent.EvalStarted _ -> model, []
 
@@ -168,6 +180,7 @@ module SageFsUpdate =
         let isFirst = model.Sessions.ActiveSessionId.IsNone
         let snap = if isFirst then { snap with IsActive = true } else snap
         { model with
+            CreatingSession = false
             Sessions = {
               model.Sessions with
                 Sessions = snap :: model.Sessions.Sessions
@@ -366,7 +379,11 @@ module SageFsRender =
           sprintf "%s %s [%s]%s%s%s%s%s%s" selected s.Id statusLabel active projects evals uptime dir lastAct)
         |> String.concat "\n"
         |> fun s ->
-          if s.Length > 0 then sprintf "%s\n─── ↑↓ nav · Enter switch · Del stop · Ctrl+Tab cycle" s
+          let creatingLine =
+            if model.CreatingSession then "\n⏳ Creating session..."
+            else ""
+          if s.Length > 0 then sprintf "%s%s\n─── ↑↓ nav · Enter switch · Del stop · Ctrl+Tab cycle" s creatingLine
+          else if model.CreatingSession then "⏳ Creating session..."
           else s
       Affordances = []
       Cursor = None

@@ -241,10 +241,15 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
         (EditorEffect.RequestSessionCreate ["New.fsproj"]))
     |> Async.RunSynchronously
     log.SessionCreateCalls |> Expect.hasLength "called" 1
-    match dispatched.[0] with
-    | SageFsMsg.Event (SageFsEvent.SessionCreated snap) ->
+    // dispatched is prepend-order: [SessionSwitched; SessionCreated]
+    let created =
+      dispatched |> List.tryPick (function
+        | SageFsMsg.Event (SageFsEvent.SessionCreated snap) -> Some snap
+        | _ -> None)
+    match created with
+    | Some snap ->
       snap.Projects |> Expect.equal "projects" ["Test.fsproj"]
-    | other -> failtestf "expected SessionCreated, got %A" other
+    | None -> failtestf "expected SessionCreated in dispatched, got %A" dispatched
 
   testCase "RequestSessionStop dispatches stopped" <| fun _ ->
     let log = TestDeps.createLog ()
