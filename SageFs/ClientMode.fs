@@ -315,13 +315,16 @@ let private appendHistory (entry: string) =
   with _ -> ()
 
 /// Read a multi-line F# input block (accumulates until ;; is found).
-let private readInputBlock () =
+let private readInputBlock (evalCount: int) =
   let sb = StringBuilder()
   let mutable reading = true
   let mutable firstLine = true
   while reading do
     if firstLine then
-      printf "\x1b[32m> \x1b[0m"
+      if evalCount > 0 then
+        printf "\x1b[90m[%d]\x1b[0m \x1b[32m> \x1b[0m" evalCount
+      else
+        printf "\x1b[32m> \x1b[0m"
     else
       printf "\x1b[90m. \x1b[0m"
     firstLine <- false
@@ -351,8 +354,9 @@ let run (info: DaemonInfo) = task {
   | Ok _ ->
 
   let mutable running = true
+  let mutable evalCount = 0
   while running do
-    match readInputBlock () with
+    match readInputBlock evalCount with
     | None -> running <- false
     | Some input ->
       let trimmed = input.Trim()
@@ -413,11 +417,17 @@ let run (info: DaemonInfo) = task {
         | Error msg -> eprintfn "\x1b[31m%s\x1b[0m" msg
       | EvalCode code ->
         appendHistory code
+        let sw = System.Diagnostics.Stopwatch.StartNew()
         match! evalCode client baseUrl code with
         | Ok result ->
+          sw.Stop()
+          evalCount <- evalCount + 1
           if not (String.IsNullOrWhiteSpace result) then
             printfn "%s" result
+          printfn "\x1b[90m(%dms)\x1b[0m" sw.ElapsedMilliseconds
         | Error msg ->
+          sw.Stop()
+          evalCount <- evalCount + 1
           eprintfn "\x1b[31m%s\x1b[0m" msg
       printfn ""
 
