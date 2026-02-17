@@ -76,7 +76,7 @@ let handleMessage
 
     | WorkerMessage.LoadScript(filePath, replyId) ->
       let code = sprintf "#load @\"%s\"" filePath
-      let request = { Code = code; Args = Map.empty }
+      let request = { Code = code; Args = Map.ofList ["hotReload", box true] }
       use cts = new CancellationTokenSource()
       let! response =
         actor.PostAndAsyncReply(fun rc -> Eval(request, cts.Token, rc))
@@ -128,6 +128,47 @@ let run (sessionId: string) (pipeName: string) (args: Args.Arguments list) = asy
     ActorCreation.createActor actorArgs |> Async.AwaitTask
   let actor = result.Actor
 
+  // Start file watcher unless --no-watch was passed
+  let noWatch = args |> List.exists (function Args.No_Watch -> true | _ -> false)
+  let fileWatcher =
+    if noWatch || List.isEmpty result.ProjectDirectories then
+      None
+    else
+      let config = FileWatcher.defaultWatchConfig result.ProjectDirectories
+      let onFileChanged (change: FileWatcher.FileChange) =
+        match FileWatcher.fileChangeAction change with
+        | FileWatcher.FileChangeAction.Reload filePath ->
+          let code = sprintf "#load @\"%s\"" filePath
+          let request = { Code = code; Args = Map.ofList ["hotReload", box true] }
+          use localCts = new CancellationTokenSource()
+          let response =
+            actor.PostAndAsyncReply(fun rc -> Eval(request, localCts.Token, rc))
+            |> Async.RunSynchronously
+          match response.EvaluationResult with
+          | Ok _ ->
+            let reloaded =
+              response.Metadata
+              |> Map.tryFind "reloadedMethods"
+              |> Option.bind (fun v ->
+                match v with
+                | :? (string list) as methods -> Some methods
+                | _ -> None)
+              |> Option.defaultValue []
+            let fileName = IO.Path.GetFileName filePath
+            if not (List.isEmpty reloaded) then
+              eprintfn "🔥 Hot reloaded %s: %s" fileName (String.Join(", ", reloaded))
+            else
+              eprintfn "📄 Reloaded %s" fileName
+          | Error ex ->
+            eprintfn "⚠️ Reload failed for %s: %s" (IO.Path.GetFileName filePath) (ex.Message)
+        | FileWatcher.FileChangeAction.SoftReset ->
+          eprintfn "📦 Project file changed — soft reset needed"
+          actor.PostAndAsyncReply(fun rc -> ResetSession rc)
+          |> Async.RunSynchronously
+          |> ignore
+        | FileWatcher.FileChangeAction.Ignore -> ()
+      Some (FileWatcher.start config onFileChanged)
+
   // Signal readiness over the pipe
   let handler = handleMessage actor result.GetSessionState result.GetEvalStats
 
@@ -155,4 +196,7 @@ let run (sessionId: string) (pipeName: string) (args: Args.Arguments list) = asy
   | :? OperationCanceledException -> ()
   | ex ->
     eprintfn "Worker %s error: %s" sessionId (ex.ToString())
+
+  // Clean up file watcher
+  fileWatcher |> Option.iter (fun w -> w.Dispose())
 }

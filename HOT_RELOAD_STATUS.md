@@ -2,31 +2,51 @@
 
 ## ✅ What Works
 
-### 1. Hot Reload Functionality
-- **PROVEN WORKING** with `test-hot-reload.fsx` example
-- Mutable handlers can be updated in real-time
-- Changes appear instantly in browser - no restart needed
-- Example: Update `handleHome` function → send to FSI → refresh browser → see changes
+### 1. Automatic File Watching (NEW in 0.4.18)
+- **Worker processes automatically watch project directories** for `.fs`, `.fsx`, `.fsproj` changes
+- On `.fs`/`.fsx` change: debounced `#load` + Harmony method detouring — live-patches running code
+- On `.fsproj` change: triggers soft reset to pick up new references
+- Configurable via `--no-watch` flag to disable
+- 500ms debounce prevents thrashing on rapid saves
 
-### 2. FSI Compatibility Middleware  
+### 2. Hot Reload with Harmony Method Detouring
+- **PROVEN WORKING** with `test-hot-reload.fsx` example
+- Handlers can be updated in real-time — no restart needed
+- File-change-triggered `#load` now carries `hotReload=true` in Args
+- This ensures the Harmony detouring middleware fires on both:
+  - REPL-typed code (interactive)
+  - File-change-triggered reloads (automatic)
+- Changes appear instantly in browser
+
+### 3. FSI Compatibility Middleware  
 - Automatically rewrites `use` → `let` for indented use statements
 - Applies to interactively-sent code via MCP
 - Handles FSI incompatibilities transparently
 - Located in `SageFs/FsiRewrite.fs` and `SageFs/Middleware/FsiCompatibility.fs`
 
-### 3. Multi-line Code Submission
+### 4. Multi-line Code Submission
 - Fixed in `SageFs/Mcp.fs` sendFsharpCode 
 - Splits code by `;;` delimiter
 - Executes each statement sequentially
 - Returns all results concatenated
 
-### 4. Enhanced Error Reporting
+### 5. Enhanced Error Reporting
 - Shows full exception details including:
   - Exception type
   - Message
   - Stack trace
   - Inner exceptions (recursively)
 - Located in `SageFs/Mcp.fs` formatEvalResult
+
+## 🔥 How Hot Reload Works End-to-End
+
+1. **File change detected** → FileWatcher debounces (500ms)
+2. **Action decided** → `fileChangeAction` routes `.fs` → Reload, `.fsproj` → SoftReset
+3. **Code sent to FSI** → `#load @"path/to/file.fs"` with `hotReload=true` in Args
+4. **FSI evaluates** → generates new dynamic assembly with updated method bodies
+5. **Harmony middleware fires** → fuzzy-matches new methods against existing project methods
+6. **Method detour applied** → old method pointers patched to call new implementations
+7. **No restart needed** → next HTTP request uses the new code automatically
 
 ## ⚠️ Known Limitations
 
@@ -36,104 +56,56 @@ When using `SageFs --proj MyProject.fsproj`:
 - The FSI compatibility rewrite only affects:
   - Files loaded with `--use` flag (`.fsx` scripts)
   - Code sent interactively via MCP
+  - Files reloaded via file watcher `#load`
 - Already-compiled DLL code is NOT rewritten
-- **Workaround**: Manually fix source files and rebuild before loading
-
-### HarmonyServer Specific Issues
-- Source file (`harmonyServer.fs`) has been fixed (all `use` → `let`)
-- DLL was successfully rebuilt after fixing source
-- **Not yet tested end-to-end** due to console I/O issues when redirecting output
-- Hot reload should work once server is running, based on proven test-hot-reload.fsx example
 
 ### Console I/O — Resolved
 - PrettyPrompt has been **removed** from SageFs. The daemon-first architecture runs headless; `SageFs connect` provides the REPL client.
-- The original console redirect issue (PrettyPrompt `failed to set output console mode`) no longer applies.
 
 ## 🎯 How to Use Hot Reload
 
-### Simple Test (Proven Working)
+### Automatic (File Watcher — Recommended)
+```powershell
+# Start SageFs with your project — file watching is ON by default
+SageFs --proj HarmonyServer/HarmonyServer.fsproj
+
+# Start your web server from the REPL, then just edit .fs files
+# Changes are picked up automatically!
+# Look for 🔥 or 📄 messages in the SageFs console
+```
+
+### Manual (REPL — For Experimentation)
 ```powershell
 cd C:\Code\Repos\SageFs
 SageFs --use test-hot-reload.fsx
 ```
 
 Wait for "Starting web server..." message, then:
-1. Open browser to http://localhost:5000
-2. In FSI, send updated handler:
-```fsharp
-handleHome <- fun (ctx: HttpContext) ->
-    task {
-        ctx.Response.ContentType <- "text/html"
-        do! ctx.Response.WriteAsync("""
-            <html>
-            <body style='font-family: sans-serif; padding: 50px;'>
-                <h1>SageFs Hot Reload Test</h1>
-                <h2 style='color: red;'>Version 2 - HOT RELOADED!</h2>
-                <p>This was changed without restart</p>
-            </body>
-            </html>
-        """)
-    }
-;;
-```
+1. Open browser to http://localhost:5555
+2. In FSI, send updated handler code
 3. Refresh browser → see changes instantly!
 
-### With Complex Project (HarmonyServer)
+### Disabling File Watching
 ```powershell
-cd C:\Code\Repos\Harmony
-SageFs --proj HarmonyServer/HarmonyServer.fsproj
+SageFs --proj MyProject.fsproj --no-watch
 ```
 
-Then in FSI:
-```fsharp
-// Configure environment
-System.Environment.SetEnvironmentVariable("ConnectionStrings__marten", "Host=localhost;Port=8000;Username=postgres;Password=postgres;Database=marten");;
-System.Environment.SetEnvironmentVariable("ASPNETCORE_ENVIRONMENT", "Development");;
+## 📁 Key Files
 
-// Start server
-let builder = WebApplication.CreateBuilder();;
-let webApp = createWebApp builder;;
-let configuredApp = main webApp;;
-let appTask = System.Threading.Tasks.Task.Run(fun () -> run configuredApp);;
-```
-
-Once running, update handlers:
-```fsharp
-handleHome <- fun ctx ->
-  ( mainLayout "Home"  [
-    Text.h1 "Welcome to Harmony Server"
-    Text.h2 "🔥 HOT RELOAD WORKS! 🔥"
-    divider()
-    Elem.p [] [ Text.raw "This was updated via hot reload!" ]
-    ] ctx
-    |> Response.ofHtml ) ctx
-;;
-```
-
-## 📁 Key Files Modified
-
-- `SageFs/FsiRewrite.fs` - FSI compatibility utilities
-- `SageFs/Middleware/FsiCompatibility.fs` - Automatic rewrite middleware
-- `SageFs/Mcp.fs` - Multi-line code & error reporting
-- `SageFs/AppState.fs` - Apply rewrites during project load
-- `SageFs/ActorCreation.fs` - Register middleware pipeline
-- `Harmony/HarmonyServer/harmonyServer.fs` - Fixed all `use` statements
-
-## 🚀 Next Steps
-
-1. Test HarmonyServer hot reload in native console window
-2. Verify handler updates work for HarmonyServer endpoints
-3. Document any additional FSI incompatibilities discovered
-4. ✅ ~~Consider auto-rebuilding projects when source files change~~ — implemented via file watcher with incremental `#load` reload
-5. Add integration tests for hot reload functionality
+| File | Purpose |
+|------|---------|
+| `SageFs/WorkerMain.fs` | Starts file watcher, routes changes to FSI |
+| `SageFs.Core/FileWatcher.fs` | Pure file watching with debounce |
+| `SageFs.Core/Middleware/HotReloading.fs` | Harmony method detouring |
+| `SageFs.Core/ActorCreation.fs` | Registers middleware pipeline |
+| `SageFs.Tests/HotReloadTests.fs` | 21 integration tests |
+| `SageFs.Tests/FileWatcherTests.fs` | Pure function tests |
 
 ## ✨ Summary
 
-**Hot reload is working and proven!** The core functionality demonstrated with `test-hot-reload.fsx` shows that SageFs can:
-- Load web applications
-- Allow runtime updates to handlers
-- Reflect changes instantly without restart
-
-The FSI compatibility middleware ensures code works in FSI even when it has patterns like indented `use` statements that FSI doesn't normally support.
-
-HarmonyServer is ready to test once run in a proper console environment.
+**Hot reload is fully wired and working!** The system:
+- Watches project directories for `.fs`/`.fsx`/`.fsproj` changes
+- Debounces (500ms) to avoid thrashing
+- Sends `#load` with `hotReload=true` to FSI
+- Harmony library detours method pointers at runtime
+- No restart, no manual intervention — just edit and save
