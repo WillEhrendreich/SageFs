@@ -1094,7 +1094,9 @@ let resolve (workingDir: string) : ResolvedRoot = ...
 
 ## Tier 0 — Critical Infrastructure
 
-### 0.1 Testcontainer Persistence Across Runs
+### 0.1 Testcontainer Persistence Across Runs — ✅ DONE
+
+> Already implemented: `.WithVolumeMount("sagefs-test-pgdata", "/var/lib/postgresql")`, `.WithReuse(true)`, and persistence tests verifying events survive container reuse.
 
 **Problem:** The Testcontainers `PostgreSqlBuilder()` in `EventStoreTests.fs` creates an ephemeral container with no volume mount. When the test process exits, the container is destroyed and all event data is lost. This defeats the purpose of event sourcing — the whole point is that session history persists and can be replayed. The `compose.yml` has a proper `sagefs-pgdata` volume, but the test infrastructure ignores it.
 
@@ -1487,6 +1489,50 @@ The supervisor spawns the daemon as a child process and monitors it:
 
 **Implementation approach:** Same binary. `SageFs -d` starts as supervisor, which `Process.Start`s another `SageFs` with an internal `--server` flag. The `--server` flag is not user-facing.
 
+#### System Tray Icon (Watchdog-Hosted)
+
+The system tray icon lives **inside the watchdog process**, not the daemon. This is architecturally critical — the tray icon must survive daemon restarts/crashes, since its purpose is to control and observe the daemon lifecycle.
+
+**Architecture:**
+```
+Watchdog process (long-lived, owns system tray icon)
+  └── Daemon process (child, may crash/restart/be stopped)
+```
+
+The watchdog is the outermost process. The tray icon is its UI surface. The daemon is a supervised child. If the daemon crashes, the tray icon stays visible and reflects the new state.
+
+**Tray icon states:**
+| Daemon State | Icon Appearance | Tooltip |
+|---|---|---|
+| Running | Normal/green icon | "SageFs daemon running (PID 1234)" |
+| Stopped | Dimmed/grey icon | "SageFs daemon stopped" |
+| Restarting | Pulsing/yellow icon | "SageFs daemon restarting..." |
+| Crashed (backoff) | Red/warning icon | "SageFs daemon crashed, restarting in 4s" |
+
+**Context menu (right-click):**
+- **Watchdog: ON / OFF** — toggle auto-restart behavior
+  - **ON** (default): daemon is automatically restarted on crash with exponential backoff (normal production behavior)
+  - **OFF**: daemon is NOT restarted on crash — it just stays stopped. The tray icon goes grey. This is essential for development scenarios where you're actively working on SageFs itself and don't want the pack/reinstall cycle interrupted by the watchdog respawning the old daemon.
+- **Start Daemon** — manually start the daemon (available when stopped and watchdog is OFF, or when daemon is stopped for any reason)
+- **Stop Daemon** — gracefully stop the daemon without exiting the watchdog
+- **Restart Daemon** — stop + start
+- **Open Logs** — open `~/.SageFs/logs/supervisor.log`
+- **Quit** — stop the daemon and exit the watchdog process entirely
+
+**Development workflow:**
+1. Developer is working on SageFs source code
+2. Right-click tray → toggle watchdog OFF
+3. Stop daemon, do pack/reinstall cycle freely
+4. Start daemon manually when ready to test
+5. Toggle watchdog back ON when done developing
+
+**Implementation notes:**
+- On Windows: use `System.Windows.Forms.NotifyIcon` (or a cross-platform wrapper like `Avalonia.Desktop` tray support)
+- On Linux: `libappindicator` / `StatusNotifierItem` D-Bus protocol
+- On macOS: `NSStatusItem`
+- The watchdog process should be lightweight — no FSI, no Marten, just process supervision + tray icon
+- Consider a cross-platform abstraction: `ITrayIcon` with platform backends, keeping the watchdog core pure
+
 #### MCP Session Routing
 
 MCP tools gain an optional `sessionId` parameter:
@@ -1702,6 +1748,7 @@ This is NOT a full IDE — it's a browser-accessible REPL for quick interactions
 - ✅ `SageFs connect` REPL client, PrettyPrompt removed
 - ✅ Per-directory config (`.SageFs/config.fsx`)
 - 🔲 Dual-renderer parity (TUI + Raylib feature-complete) — in progress
+- 🔲 System tray icon (watchdog-hosted) — daemon state indicator, watchdog ON/OFF toggle, dev workflow support
 - 🔲 Neovim plugin (standalone SageFs.nvim)
 - 🔲 VSCode extension
 - 🔲 BARE wire encoding
@@ -1749,6 +1796,7 @@ This is NOT a full IDE — it's a browser-accessible REPL for quick interactions
 ### Phase 3: Neovim Integration & Watchdog
 13. Neovim plugin — MVP (2.5) — SSE subscription driven by Marten async daemon, inline results, diagnostics
 14. ✅ **Watchdog** (3.2, Phase 3) — supervisor process, exponential backoff, graceful shutdown, `--supervised` flag
+14b. 🔲 **System tray icon** (Phase 3) — watchdog-hosted tray icon with daemon state indicator (running/stopped/crashed), watchdog ON/OFF toggle for dev workflows, manual start/stop/restart controls
 15. ✅ Package/namespace explorer (3.4) — `explore_namespace`, `explore_type` MCP tools
 16. ✅ Startup profile (3.5) — `~/.SageFs/init.fsx`, per-project `.SageFsrc`
 17. BARE wire encoding (3.6) — after SSE works with JSON
