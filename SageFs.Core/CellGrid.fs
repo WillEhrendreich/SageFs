@@ -127,3 +127,24 @@ module CellGrid =
       if row < rows grid - 1 then
         sb.AppendLine() |> ignore
     sb.ToString()
+
+  /// Extract text from a rectangular selection range (inclusive).
+  /// Coordinates are clamped to grid bounds. Lines are right-trimmed.
+  let toTextRange (grid: Cell[,]) (startRow: int) (startCol: int) (endRow: int) (endCol: int) : string =
+    let r = rows grid
+    let c = cols grid
+    let sr = max 0 (min startRow endRow)
+    let er = min (r - 1) (max startRow endRow)
+    let sc = max 0 (min startCol endCol)
+    let ec = min (c - 1) (max startCol endCol)
+    let sb = System.Text.StringBuilder()
+    for row in sr .. er do
+      let mutable lastNonSpace = sc - 1
+      for col in sc .. ec do
+        if grid.[row, col].Char <> ' ' then
+          lastNonSpace <- col
+      for col in sc .. lastNonSpace do
+        sb.Append(grid.[row, col].Char) |> ignore
+      if row < er then
+        sb.AppendLine() |> ignore
+    sb.ToString()

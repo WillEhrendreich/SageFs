@@ -346,7 +346,7 @@ module KeyMap =
       KeyCombo.ctrlShift ConsoleKey.Z, e EditorAction.Redo
       KeyCombo.ctrl ConsoleKey.R, e EditorAction.Undo
       // Cancel
-      KeyCombo.ctrl ConsoleKey.C, e EditorAction.Cancel
+      KeyCombo.ctrlShift ConsoleKey.Q, e EditorAction.Cancel
       // Layout presets
       KeyCombo.ctrlAlt ConsoleKey.D1, UiAction.LayoutPreset "default"
       KeyCombo.ctrlAlt ConsoleKey.D2, UiAction.LayoutPreset "focus"

@@ -453,14 +453,14 @@ let renderShell (version: string) =
   ]
 
 /// Render session status as an HTML fragment for Datastar morphing.
-let renderSessionStatus (sessionState: string) (sessionId: string) (projectCount: int) (workingDir: string) =
+let renderSessionStatus (sessionState: string) (sessionId: string) (workingDir: string) =
   match sessionState with
   | "Ready" ->
     Elem.div [ Attr.id "session-status" ] [
       Elem.span [ Attr.class' "status status-ready" ] [ Text.raw sessionState ]
       Elem.br []
       Elem.span [ Attr.class' "meta" ] [
-        Text.raw (sprintf "Session: %s | CWD: %s | Projects: %d" sessionId workingDir projectCount)
+        Text.raw (sprintf "Session: %s | CWD: %s" sessionId workingDir)
       ]
     ]
   | _ ->
@@ -472,7 +472,7 @@ let renderSessionStatus (sessionState: string) (sessionId: string) (projectCount
       Elem.span [ Attr.class' (sprintf "status %s" statusClass) ] [ Text.raw sessionState ]
       Elem.br []
       Elem.span [ Attr.class' "meta" ] [
-        Text.raw (sprintf "Session: %s | CWD: %s | Projects: %d" sessionId workingDir projectCount)
+        Text.raw (sprintf "Session: %s | CWD: %s" sessionId workingDir)
       ]
     ]
 
@@ -910,7 +910,6 @@ let createStreamHandler
   (getEvalStats: unit -> SageFs.Affordances.EvalStats)
   (getSessionId: unit -> string)
   (getSessionWorkingDir: unit -> string)
-  (getProjectCount: unit -> int)
   (getElmRegions: unit -> RenderRegion list option)
   (stateChanged: IEvent<string> option)
   (connectionTracker: ConnectionTracker option)
@@ -936,7 +935,7 @@ let createStreamHandler
       let isReady = stateStr = "Ready"
       do! Response.ssePatchSignal ctx (SignalPath.sp "serverConnected") true
       do! ssePatchNode ctx (
-        renderSessionStatus stateStr currentSessionId (getProjectCount ()) workingDir)
+        renderSessionStatus stateStr currentSessionId workingDir)
       do! ssePatchNode ctx (
         renderEvalStats
           { Count = stats.EvalCount
@@ -1425,7 +1424,6 @@ let createEndpoints
   (getEvalStats: unit -> SageFs.Affordances.EvalStats)
   (getSessionId: unit -> string)
   (getSessionWorkingDir: unit -> string)
-  (getProjectCount: unit -> int)
   (getElmRegions: unit -> RenderRegion list option)
   (stateChanged: IEvent<string> option)
   (evalCode: string -> Threading.Tasks.Task<string>)
@@ -1441,7 +1439,7 @@ let createEndpoints
   : HttpEndpoint list =
   [
     yield get "/dashboard" (FalcoResponse.ofHtml (renderShell version))
-    yield get "/dashboard/stream" (createStreamHandler getSessionState getEvalStats getSessionId getSessionWorkingDir getProjectCount getElmRegions stateChanged connectionTracker getPreviousSessions)
+    yield get "/dashboard/stream" (createStreamHandler getSessionState getEvalStats getSessionId getSessionWorkingDir getElmRegions stateChanged connectionTracker getPreviousSessions)
     yield post "/dashboard/eval" (createEvalHandler evalCode)
     yield post "/dashboard/reset" (createResetHandler resetSession)
     yield post "/dashboard/hard-reset" (createResetHandler hardResetSession)

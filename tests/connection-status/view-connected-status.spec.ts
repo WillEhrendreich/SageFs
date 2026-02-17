@@ -8,20 +8,13 @@ test.describe('Connection Status', () => {
     // 1. Navigate to http://localhost:37750/dashboard
     await page.goto('http://localhost:37750/dashboard');
 
-    // 2. Wait for the page to fully load
-    await page.getByText("✅ Connected").first().waitFor({ state: 'visible' });
+    // 2. Wait for the SSE stream to connect (server pushes serverConnected signal)
+    // The server-status banner should become hidden when connected
+    const banner = page.locator('#server-status');
+    await expect(banner).toBeHidden({ timeout: 10000 });
 
-    // 3. Check the connection status banner at the top of the page
-    // - expect: The banner should show '✅ Connected'
-    await expect(page.getByText('✅ Connected')).toBeVisible();
-
-    // - expect: The banner should have a green background color or green styling
-    const connectionStatus = page.getByText('✅ Connected');
-    const backgroundColor = await connectionStatus.evaluate((element) => {
-      const styles = window.getComputedStyle(element);
-      return styles.backgroundColor;
-    });
-    
-    expect(backgroundColor).toBe('rgb(63, 185, 80)');
+    // 3. Session status should be visible with session info
+    const sessionStatus = page.locator('#session-status');
+    await expect(sessionStatus).toBeVisible({ timeout: 10000 });
   });
 });

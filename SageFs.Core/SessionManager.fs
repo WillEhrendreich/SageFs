@@ -164,7 +164,7 @@ module SessionManager =
       let psi =
         ProcessStartInfo(
           "dotnet",
-          sprintf "build \"%s\" --no-restore" projFile,
+          sprintf "build \"%s\" --no-restore --no-incremental" projFile,
           RedirectStandardOutput = true,
           RedirectStandardError = true,
           UseShellExecute = false,

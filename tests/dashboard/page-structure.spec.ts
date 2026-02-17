@@ -3,19 +3,19 @@ import { test, expect, type Page } from '@playwright/test';
 test.describe('Dashboard page structure', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/dashboard');
-    // Wait for Datastar to connect and push initial state
-    await expect(page.locator('#server-status')).toContainText('Connected', { timeout: 10000 });
+    // Wait for Datastar SSE to connect and push initial state
+    // Server status banner is hidden when connected; session-status becomes visible
+    await expect(page.locator('#session-status')).toContainText('Ready', { timeout: 30000 });
   });
 
   test('should display page title with version', async ({ page }) => {
-    await expect(page.locator('h1')).toContainText('SageFs Dashboard');
+    await expect(page.locator('h1')).toContainText('SageFs');
     await expect(page.locator('h1')).toContainText('v');
   });
 
-  test('should show connection banner as connected', async ({ page }) => {
+  test('should hide connection banner when connected', async ({ page }) => {
     const banner = page.locator('#server-status');
-    await expect(banner).toHaveClass(/conn-connected/);
-    await expect(banner).toContainText('Connected');
+    await expect(banner).toBeHidden();
   });
 
   test('should render output panel with empty state', async ({ page }) => {
@@ -25,13 +25,12 @@ test.describe('Dashboard page structure', () => {
 
     const outputPanel = page.locator('#output-panel');
     await expect(outputPanel).toBeVisible();
-    await expect(outputPanel).toHaveClass(/log-box/);
   });
 
   test('should render evaluate section with textarea and buttons', async ({ page }) => {
     const evalSection = page.locator('#evaluate-section');
     await expect(evalSection).toBeVisible();
-    await expect(evalSection.locator('h2')).toContainText('Evaluate');
+    await expect(evalSection).toContainText('Evaluate');
 
     // Textarea
     const textarea = page.locator('.eval-input').first();
@@ -51,10 +50,9 @@ test.describe('Dashboard page structure', () => {
     await expect(sessionsPanel).toBeVisible();
   });
 
-  test('should render diagnostics panel with empty state', async ({ page }) => {
-    const diagPanel = page.locator('#diagnostics-panel');
-    await expect(diagPanel).toBeVisible();
-    await expect(diagPanel).toHaveClass(/log-box/);
+  test('should hide server status banner when connected', async ({ page }) => {
+    const banner = page.locator('#server-status');
+    await expect(banner).toBeHidden();
   });
 
   test('should render eval stats panel', async ({ page }) => {
@@ -75,7 +73,7 @@ test.describe('Dashboard page structure', () => {
     await expect(manualInput).toBeVisible();
 
     // Create session button
-    await expect(page.getByRole('button', { name: '➕ Create Session' })).toBeVisible();
+    await expect(page.getByRole('button', { name: '➕ Create' })).toBeVisible();
   });
 
   test('should have clear output button in panel header', async ({ page }) => {

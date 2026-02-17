@@ -7,16 +7,16 @@ test.describe('Session Management', () => {
     // 1. Navigate to http://localhost:37750/dashboard
     await page.goto('http://localhost:37750/dashboard');
 
-    // 2. Wait for the page to fully load and SSE to connect - verify Connection status shows '✅ Connected'
-    await expect(page.getByText('✅ Connected')).toBeVisible();
+    // 2. Wait for the page to fully load and SSE to connect
+    // Server status banner should be hidden when connected
+    await expect(page.locator('#server-status')).toBeHidden({ timeout: 10000 });
 
-    // 3. Locate the Sessions panel
+    // 3. Session status should be visible with session info
+    const sessionStatus = page.locator('#session-status');
+    await expect(sessionStatus).toBeVisible({ timeout: 10000 });
+    await expect(sessionStatus).toContainText('Ready', { timeout: 30000 });
+
+    // 4. Sessions panel in sidebar should exist
     await expect(page.getByRole('heading', { name: 'Sessions' })).toBeVisible();
-    
-    // expect: The panel should show session status (e.g., 'Ready')
-    await expect(page.getByText('Ready')).toBeVisible();
-    
-    // expect: It should display a session ID and show the number of loaded projects
-    await expect(page.getByText(/Session: session-[\w-]+ \| Projects: \d+/)).toBeVisible();
   });
 });

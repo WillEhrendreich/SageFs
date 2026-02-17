@@ -50,6 +50,7 @@ module RaylibMode =
     | ResizeV of int
     | ResizeR of int
     | CycleTheme
+    | CopySelection
 
   /// Convert Raylib KeyboardKey to System.ConsoleKey for KeyMap lookup
   let private raylibToConsoleKey (key: KeyboardKey) : System.ConsoleKey option =
@@ -108,7 +109,10 @@ module RaylibMode =
         | Some (UiAction.ResizeR d) -> Some (ResizeR d)
         | Some (UiAction.CycleTheme) -> Some CycleTheme
         | Some (UiAction.Editor action) -> Some (Action action)
-        | None -> None
+        | None ->
+          // Ctrl+C not in keymap → copy selection
+          if ck = System.ConsoleKey.C && c && not a && not s then Some CopySelection
+          else None
 
   /// Get typed characters (for InsertChar) — separate from key presses
   let private getCharInput () : EditorAction option =
@@ -192,6 +196,10 @@ module RaylibMode =
     let mutable currentThemeName = "One Dark"
     let statelock = obj ()
     let mutable running = true
+    // Text selection state (grid coordinates)
+    let mutable selStart : (int * int) option = None
+    let mutable selEnd : (int * int) option = None
+    let mutable selecting = false
 
     // Init window
     let mutable gridCols = 120
@@ -292,6 +300,16 @@ module RaylibMode =
           let name, theme = ThemePresets.cycleNext currentTheme
           currentTheme <- theme
           currentThemeName <- name
+        | CopySelection ->
+          match selStart, selEnd with
+          | Some (r1, c1), Some (r2, c2) ->
+            let text = CellGrid.toTextRange grid r1 c1 r2 c2
+            if text.Length > 0 then
+              Raylib.SetClipboardText(text)
+            selStart <- None
+            selEnd <- None
+            selecting <- false
+          | _ -> ()
         | Action action ->
           // When Sessions pane is focused, remap movement keys to session navigation
           let remappedAction =
@@ -315,11 +333,16 @@ module RaylibMode =
           DaemonClient.dispatch client baseUrl action |> fun t -> t.Wait()
         charAction <- getCharInput ()
 
-      // Handle mouse click → focus pane + position cursor in editor + select session
+      // Handle mouse → text selection (drag) + focus pane + cursor/session click
       if mousePressed MouseButton.Left then
         let mp = mousePos ()
         let clickCol = int mp.X / cellW
         let clickRow = int mp.Y / cellH
+        // Start text selection
+        selStart <- Some (clickRow, clickCol)
+        selEnd <- Some (clickRow, clickCol)
+        selecting <- true
+        // Focus pane + editor cursor / session click
         let paneRects = Screen.computeLayoutWith layoutConfig gridRows gridCols |> fst
         let clicked =
           paneRects
@@ -338,7 +361,6 @@ module RaylibMode =
               DaemonClient.dispatch client baseUrl (EditorAction.SetCursorPosition (line, contentCol))
               |> fun t -> t.Wait()
           elif id = PaneId.Sessions then
-            // Click on session row → set selection directly
             let contentRow = clickRow - r.Row - 1
             let scrollOff = scrollOffsets |> Map.tryFind PaneId.Sessions |> Option.defaultValue 0
             let sessionIdx = contentRow + scrollOff
@@ -346,6 +368,20 @@ module RaylibMode =
               DaemonClient.dispatch client baseUrl (EditorAction.SessionSetIndex sessionIdx)
               |> fun t -> t.Wait()
         | None -> ()
+      elif selecting && mouseDown MouseButton.Left then
+        // Extend selection while dragging
+        let mp = mousePos ()
+        let dragCol = max 0 (min (gridCols - 1) (int mp.X / cellW))
+        let dragRow = max 0 (min (gridRows - 1) (int mp.Y / cellH))
+        selEnd <- Some (dragRow, dragCol)
+      elif selecting && mouseReleased MouseButton.Left then
+        selecting <- false
+        // If start == end, it was a click not a drag — clear selection
+        match selStart, selEnd with
+        | Some s, Some e when s = e ->
+          selStart <- None
+          selEnd <- None
+        | _ -> ()
 
       if running then
         // Render
@@ -357,7 +393,11 @@ module RaylibMode =
 
         Raylib.BeginDrawing()
         Raylib.ClearBackground(RaylibPalette.hexToColor currentTheme.BgDefault)
-        RaylibEmitter.emit grid font cellW cellH fontSize
+        let sel =
+          match selStart, selEnd with
+          | Some (r1, c1), Some (r2, c2) -> Some (r1, c1, r2, c2)
+          | _ -> None
+        RaylibEmitter.emitWithSelection grid font cellW cellH fontSize sel
         Raylib.EndDrawing()
 
     cts.Cancel()

@@ -348,6 +348,7 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                     match dispatch with
                     | Some d ->
                       d (SageFs.SageFsMsg.Event (SageFs.SageFsEvent.SessionSwitched (None, sid)))
+                      d (SageFs.SageFsMsg.Editor SageFs.EditorAction.ListSessions)
                     | None -> ()
                     do! jsonResponse ctx 200 {| success = true; activeSessionId = sid |}
                 }) :> Task

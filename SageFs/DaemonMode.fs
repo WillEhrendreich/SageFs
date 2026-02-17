@@ -231,18 +231,6 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
       | None -> ""
     with _ -> ""
 
-  let getSessionProjectCount () =
-    let sid = !activeSessionId
-    try
-      let managed =
-        sessionManager.PostAndAsyncReply(fun reply ->
-          SessionManager.SessionCommand.GetSession(sid, reply))
-        |> Async.RunSynchronously
-      match managed with
-      | Some s -> s.Projects.Length
-      | None -> 0
-    with _ -> 0
-
   let dashboardEndpoints =
     Dashboard.createEndpoints
       version
@@ -250,7 +238,6 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
       getEvalStats
       (fun () -> !activeSessionId)
       getSessionWorkingDir
-      getSessionProjectCount
       (fun () -> elmRuntime.GetRegions() |> Some)
       (Some stateChangedEvent.Publish)
       (fun code -> task {

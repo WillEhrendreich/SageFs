@@ -30,4 +30,8 @@ module Rl =
   let inline windowReady () : bool = Raylib.IsWindowReady()
   let inline mousePressed (btn: MouseButton) : bool =
     CBool.op_Implicit(Raylib.IsMouseButtonPressed(btn))
+  let inline mouseDown (btn: MouseButton) : bool =
+    CBool.op_Implicit(Raylib.IsMouseButtonDown(btn))
+  let inline mouseReleased (btn: MouseButton) : bool =
+    CBool.op_Implicit(Raylib.IsMouseButtonReleased(btn))
   let inline mousePos () = Raylib.GetMousePosition()
