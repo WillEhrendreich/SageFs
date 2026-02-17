@@ -82,6 +82,26 @@ module SageFsUpdate =
           { model with Editor = newEditor },
           [SageFsEffect.Editor (EditorEffect.RequestSessionStop sid)]
         | None -> model, []
+      | EditorAction.SessionCycleNext ->
+        let count = model.Sessions.Sessions.Length
+        if count <= 1 then model, []
+        else
+          let currentIdx = model.Editor.SelectedSessionIndex |> Option.defaultValue 0
+          let nextIdx = (currentIdx + 1) % count
+          let sid = model.Sessions.Sessions.[nextIdx].Id
+          let newEditor = { model.Editor with SelectedSessionIndex = Some nextIdx }
+          { model with Editor = newEditor },
+          [SageFsEffect.Editor (EditorEffect.RequestSessionSwitch sid)]
+      | EditorAction.SessionCyclePrev ->
+        let count = model.Sessions.Sessions.Length
+        if count <= 1 then model, []
+        else
+          let currentIdx = model.Editor.SelectedSessionIndex |> Option.defaultValue 0
+          let prevIdx = (currentIdx - 1 + count) % count
+          let sid = model.Sessions.Sessions.[prevIdx].Id
+          let newEditor = { model.Editor with SelectedSessionIndex = Some prevIdx }
+          { model with Editor = newEditor },
+          [SageFsEffect.Editor (EditorEffect.RequestSessionSwitch sid)]
       | EditorAction.ClearOutput ->
         { model with RecentOutput = [] },
         []
@@ -346,7 +366,7 @@ module SageFsRender =
           sprintf "%s %s [%s]%s%s%s%s%s%s" selected s.Id statusLabel active projects evals uptime dir lastAct)
         |> String.concat "\n"
         |> fun s ->
-          if s.Length > 0 then sprintf "%s\n─── ↑↓ nav · Enter switch · Del stop" s
+          if s.Length > 0 then sprintf "%s\n─── ↑↓ nav · Enter switch · Del stop · Ctrl+Tab cycle" s
           else s
       Affordances = []
       Cursor = None

@@ -116,6 +116,9 @@ and [<RequireQualifiedAccess>] EditorAction =
   | SessionSelect
   | SessionDelete
   | SessionSetIndex of int
+  // Quick session cycling (Ctrl+Tab / Ctrl+Shift+Tab)
+  | SessionCycleNext
+  | SessionCyclePrev
   // Output
   | ClearOutput
   // Prompt input (for inline prompts like session create)
@@ -262,6 +265,8 @@ module UiAction =
     | "SessionNavDown" -> Some (UiAction.Editor EditorAction.SessionNavDown)
     | "SessionSelect" -> Some (UiAction.Editor EditorAction.SessionSelect)
     | "SessionDelete" -> Some (UiAction.Editor EditorAction.SessionDelete)
+    | "SessionCycleNext" -> Some (UiAction.Editor EditorAction.SessionCycleNext)
+    | "SessionCyclePrev" -> Some (UiAction.Editor EditorAction.SessionCyclePrev)
     | "ClearOutput" -> Some (UiAction.Editor EditorAction.ClearOutput)
     | "PromptConfirm" -> Some (UiAction.Editor EditorAction.PromptConfirm)
     | "PromptCancel" -> Some (UiAction.Editor EditorAction.PromptCancel)
@@ -299,6 +304,9 @@ module KeyMap =
       KeyCombo.ctrlAlt ConsoleKey.S, e EditorAction.ToggleSessionPanel
       KeyCombo.ctrlAlt ConsoleKey.R, e EditorAction.ResetSession
       KeyCombo.ctrlAlt ConsoleKey.H, e EditorAction.HardResetSession
+      // Quick session cycling
+      KeyCombo.ctrl ConsoleKey.Tab, e EditorAction.SessionCycleNext
+      KeyCombo.ctrlShift ConsoleKey.Tab, e EditorAction.SessionCyclePrev
       // Submit / NewLine
       KeyCombo.ctrl ConsoleKey.Enter, e EditorAction.Submit
       KeyCombo.plain ConsoleKey.Enter, e EditorAction.NewLine

@@ -38,6 +38,7 @@ let run (daemonInfo: DaemonInfo) = task {
   let mutable prevFrame = ""
   let mutable lastRegions : RenderRegion list = []
   let mutable lastSessionState = "Connecting..."
+  let mutable lastSessionId = ""
   let mutable lastEvalCount = 0
   let mutable lastAvgMs = 0.0
   let mutable layoutConfig = LayoutConfig.defaults
@@ -60,10 +61,11 @@ let run (daemonInfo: DaemonInfo) = task {
       try
         let sw = System.Diagnostics.Stopwatch.StartNew()
         let statusLeft =
+          let sid = if lastSessionId.Length > 8 then lastSessionId.[..7] else lastSessionId
           if lastEvalCount > 0 then
-            sprintf " %s | evals: %d (avg %.0fms) | %s" lastSessionState lastEvalCount lastAvgMs (PaneId.displayName focusedPane)
+            sprintf " %s %s | evals: %d (avg %.0fms) | %s" sid lastSessionState lastEvalCount lastAvgMs (PaneId.displayName focusedPane)
           else
-            sprintf " %s | evals: %d | %s" lastSessionState lastEvalCount (PaneId.displayName focusedPane)
+            sprintf " %s %s | evals: %d | %s" sid lastSessionState lastEvalCount (PaneId.displayName focusedPane)
         let statusRight = sprintf " %.1fms |%s" lastFrameMs (StatusHints.build keyMap focusedPane)
         let cursorPos = Screen.drawWith layoutConfig grid lastRegions focusedPane scrollOffsets statusLeft statusRight
         let cursorRow, cursorCol =
@@ -91,7 +93,8 @@ let run (daemonInfo: DaemonInfo) = task {
   let sseTask =
     DaemonClient.runSseListener
       baseUrl
-      (fun sessionState evalCount avgMs regions ->
+      (fun sessionId sessionState evalCount avgMs regions ->
+        lastSessionId <- sessionId
         lastSessionState <- sessionState
         lastEvalCount <- evalCount
         lastAvgMs <- avgMs
