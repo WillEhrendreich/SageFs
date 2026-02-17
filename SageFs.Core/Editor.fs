@@ -372,6 +372,9 @@ module EditorUpdate =
       state, []
     | EditorAction.SessionSetIndex idx ->
       { state with SelectedSessionIndex = Some (max 0 idx) }, []
+    | EditorAction.SessionCycleNext | EditorAction.SessionCyclePrev ->
+      // Handled at SageFsApp level where session list is available
+      state, []
     | EditorAction.ClearOutput ->
       state, []
     | EditorAction.PromptChar c ->

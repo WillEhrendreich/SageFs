@@ -35,17 +35,17 @@ let parseTests = testList "ReplCommand.parse" [
     ReplCommand.parse "#switch abc123"
     |> Expect.equal "" (SwitchSession "abc123")
 
-  testCase "parses #switch with empty id as Help" <| fun () ->
+  testCase "parses #switch with empty id as SwitchSession empty" <| fun () ->
     ReplCommand.parse "#switch "
-    |> Expect.equal "" Help
+    |> Expect.equal "" (SwitchSession "")
 
   testCase "parses #stop with id" <| fun () ->
     ReplCommand.parse "#stop session-42"
     |> Expect.equal "" (StopSession "session-42")
 
-  testCase "parses #stop with empty id as Help" <| fun () ->
+  testCase "parses #stop with empty id as StopSession empty" <| fun () ->
     ReplCommand.parse "#stop "
-    |> Expect.equal "" Help
+    |> Expect.equal "" (StopSession "")
 
   testCase "parses #create with no dir" <| fun () ->
     ReplCommand.parse "#create"

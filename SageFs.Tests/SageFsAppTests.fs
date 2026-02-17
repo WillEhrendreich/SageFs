@@ -287,7 +287,7 @@ let sageFsRenderTests = testList "SageFsRender" [
       SageFsRender.render model
       |> List.find (fun r -> r.Id = "sessions")
     let lines = sessions.Content.Split('\n')
-    lines |> Array.length |> Expect.equal "2 session lines" 2
+    lines |> Array.length |> Expect.equal "2 session lines plus nav hint" 3
     lines.[1].Contains("*")
     |> Expect.isFalse "inactive session has no *"
 
@@ -329,7 +329,8 @@ let sageFsRenderTests = testList "SageFsRender" [
         sessRegion.Content |> Expect.equal "empty" ""
       else
         let lines = sessRegion.Content.Split('\n')
-        lines |> Array.length |> Expect.equal "one line per session" count
+        // count + 1 for the nav hint footer line
+        lines |> Array.length |> Expect.equal "one line per session plus nav hint" (count + 1)
         for i in 0..count-1 do
           lines.[i]
           |> Expect.stringContains "contains session id" (sprintf "session-%d" i)
@@ -496,6 +497,75 @@ let sessionNavAppTests = testList "SageFsUpdate session navigation" [
       SageFsUpdate.update (SageFsMsg.Editor EditorAction.Cancel) model
     newModel.Editor.Prompt |> Expect.isNone "prompt should close"
     effects |> Expect.isEmpty "no effects on cancel"
+
+  testCase "SessionCycleNext moves to next session and switches" <| fun _ ->
+    let model =
+      SageFsModel.initial
+      |> withSessions [mkSnap "s1" true; mkSnap "s2" false; mkSnap "s3" false]
+    let model' = { model with Editor = { model.Editor with SelectedSessionIndex = Some 0 } }
+    let newModel, effects =
+      SageFsUpdate.update (SageFsMsg.Editor EditorAction.SessionCycleNext) model'
+    newModel.Editor.SelectedSessionIndex
+    |> Expect.equal "should move to index 1" (Some 1)
+    match effects with
+    | [SageFsEffect.Editor (EditorEffect.RequestSessionSwitch sid)] ->
+      sid |> Expect.equal "should switch to s2" "s2"
+    | _ -> failtest (sprintf "expected RequestSessionSwitch, got %A" effects)
+
+  testCase "SessionCycleNext wraps around" <| fun _ ->
+    let model =
+      SageFsModel.initial
+      |> withSessions [mkSnap "s1" true; mkSnap "s2" false]
+    let model' = { model with Editor = { model.Editor with SelectedSessionIndex = Some 1 } }
+    let newModel, effects =
+      SageFsUpdate.update (SageFsMsg.Editor EditorAction.SessionCycleNext) model'
+    newModel.Editor.SelectedSessionIndex
+    |> Expect.equal "should wrap to index 0" (Some 0)
+    match effects with
+    | [SageFsEffect.Editor (EditorEffect.RequestSessionSwitch sid)] ->
+      sid |> Expect.equal "should switch to s1" "s1"
+    | _ -> failtest (sprintf "expected RequestSessionSwitch, got %A" effects)
+
+  testCase "SessionCyclePrev moves to previous session and switches" <| fun _ ->
+    let model =
+      SageFsModel.initial
+      |> withSessions [mkSnap "s1" true; mkSnap "s2" false; mkSnap "s3" false]
+    let model' = { model with Editor = { model.Editor with SelectedSessionIndex = Some 2 } }
+    let newModel, effects =
+      SageFsUpdate.update (SageFsMsg.Editor EditorAction.SessionCyclePrev) model'
+    newModel.Editor.SelectedSessionIndex
+    |> Expect.equal "should move to index 1" (Some 1)
+    match effects with
+    | [SageFsEffect.Editor (EditorEffect.RequestSessionSwitch sid)] ->
+      sid |> Expect.equal "should switch to s2" "s2"
+    | _ -> failtest (sprintf "expected RequestSessionSwitch, got %A" effects)
+
+  testCase "SessionCyclePrev wraps around" <| fun _ ->
+    let model =
+      SageFsModel.initial
+      |> withSessions [mkSnap "s1" true; mkSnap "s2" false]
+    let model' = { model with Editor = { model.Editor with SelectedSessionIndex = Some 0 } }
+    let newModel, effects =
+      SageFsUpdate.update (SageFsMsg.Editor EditorAction.SessionCyclePrev) model'
+    newModel.Editor.SelectedSessionIndex
+    |> Expect.equal "should wrap to index 1" (Some 1)
+    match effects with
+    | [SageFsEffect.Editor (EditorEffect.RequestSessionSwitch sid)] ->
+      sid |> Expect.equal "should switch to s2" "s2"
+    | _ -> failtest (sprintf "expected RequestSessionSwitch, got %A" effects)
+
+  testCase "SessionCycleNext with single session does nothing" <| fun _ ->
+    let model =
+      SageFsModel.initial
+      |> withSessions [mkSnap "s1" true]
+    let _, effects =
+      SageFsUpdate.update (SageFsMsg.Editor EditorAction.SessionCycleNext) model
+    effects |> Expect.isEmpty "no effects with single session"
+
+  testCase "SessionCyclePrev with no sessions does nothing" <| fun _ ->
+    let _, effects =
+      SageFsUpdate.update (SageFsMsg.Editor EditorAction.SessionCyclePrev) SageFsModel.initial
+    effects |> Expect.isEmpty "no effects with no sessions"
 ]
 
 [<Tests>]
@@ -582,6 +652,8 @@ let dispatchRoundTripTests = testList "Dispatch round-trip" [
     EditorAction.SessionNavDown, "sessionNavDown"
     EditorAction.SessionSelect, "sessionSelect"
     EditorAction.SessionDelete, "sessionDelete"
+    EditorAction.SessionCycleNext, "sessionCycleNext"
+    EditorAction.SessionCyclePrev, "sessionCyclePrev"
     EditorAction.ClearOutput, "clearOutput"
     EditorAction.PromptBackspace, "promptBackspace"
     EditorAction.PromptConfirm, "promptConfirm"

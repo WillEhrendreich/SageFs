@@ -26,10 +26,14 @@ module DaemonRegionData =
 module DaemonClient =
 
   /// Parse the JSON payload from the /api/state SSE stream.
-  let parseStateEvent (json: string) : (string * int * float * DaemonRegionData list) option =
+  let parseStateEvent (json: string) : (string * string * int * float * DaemonRegionData list) option =
     try
       use doc = JsonDocument.Parse(json)
       let root = doc.RootElement
+      let sessionId =
+        match root.TryGetProperty("sessionId") with
+        | true, el -> el.GetString()
+        | _ -> ""
       let sessionState = root.GetProperty("sessionState").GetString()
       let evalCount = root.GetProperty("evalCount").GetInt32()
       let regions =
@@ -59,7 +63,7 @@ module DaemonClient =
         match root.TryGetProperty("avgMs") with
         | true, el -> el.GetDouble()
         | _ -> 0.0
-      Some (sessionState, evalCount, avgMs, regions)
+      Some (sessionId, sessionState, evalCount, avgMs, regions)
     with _ -> None
 
   /// Map an EditorAction to a (name, value) pair for the dispatch API.
@@ -108,6 +112,8 @@ module DaemonClient =
     | EditorAction.SessionDelete -> Some ("sessionDelete", None)
     | EditorAction.ClearOutput -> Some ("clearOutput", None)
     | EditorAction.SessionSetIndex idx -> Some ("sessionSetIndex", Some (string idx))
+    | EditorAction.SessionCycleNext -> Some ("sessionCycleNext", None)
+    | EditorAction.SessionCyclePrev -> Some ("sessionCyclePrev", None)
     | EditorAction.PromptChar c -> Some ("promptChar", Some (string c))
     | EditorAction.PromptBackspace -> Some ("promptBackspace", None)
     | EditorAction.PromptConfirm -> Some ("promptConfirm", None)
@@ -150,7 +156,8 @@ module DaemonClient =
   }
 
   /// Callback invoked when new state arrives from the SSE stream.
-  type StateCallback = string -> int -> float -> RenderRegion list -> unit
+  /// Args: sessionId, sessionState, evalCount, avgMs, regions
+  type StateCallback = string -> string -> int -> float -> RenderRegion list -> unit
 
   /// Run SSE listener with auto-reconnect. Calls onState for each update.
   /// Calls onReconnecting when connection drops. Blocks until cancelled.
@@ -175,9 +182,9 @@ module DaemonClient =
           if line.StartsWith("data: ") then
             let json = line.Substring(6)
             match parseStateEvent json with
-            | Some (sessionState, evalCount, avgMs, regionData) ->
+            | Some (sessionId, sessionState, evalCount, avgMs, regionData) ->
               let regions = regionData |> List.map DaemonRegionData.toRenderRegion
-              onState sessionState evalCount avgMs regions
+              onState sessionId sessionState evalCount avgMs regions
             | None -> ()
       with
       | :? OperationCanceledException -> ()

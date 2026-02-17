@@ -376,6 +376,12 @@ let renderShell (version: string) =
           document.addEventListener('keydown', function(e) {
             if (e.ctrlKey && (e.key === '=' || e.key === '+')) { e.preventDefault(); idx = Math.min(sizes.length - 1, idx + 1); document.documentElement.style.setProperty('--font-size', sizes[idx] + 'px'); }
             if (e.ctrlKey && e.key === '-') { e.preventDefault(); idx = Math.max(0, idx - 1); document.documentElement.style.setProperty('--font-size', sizes[idx] + 'px'); }
+            if (e.ctrlKey && e.key === 'Tab') {
+              e.preventDefault();
+              var body = {action: e.shiftKey ? 'sessionCyclePrev' : 'sessionCycleNext'};
+              fetch('/api/dispatch', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body) });
+              return;
+            }
             // Session navigation when not typing in an input/textarea
             var tag = (e.target.tagName || '').toLowerCase();
             if (tag !== 'input' && tag !== 'textarea') {
@@ -588,7 +594,7 @@ let renderSessions (sessions: ParsedSession list) =
           ])
     Elem.div
       [ Attr.style "font-size: 0.7rem; color: var(--fg-dim); text-align: center; padding: 4px 0; margin-top: 4px;" ]
-      [ Text.raw "j/k navigate · Enter switch · x stop · 1-9 jump · n new" ]
+      [ Text.raw "j/k navigate · Enter switch · x stop · 1-9 jump · n new · Ctrl+Tab cycle" ]
   ]
 
 let parseOutputLines (content: string) : OutputLine list =
@@ -1013,7 +1019,8 @@ let createApiStateHandler
         | None -> []
       let payload =
         System.Text.Json.JsonSerializer.Serialize(
-          {| sessionState = SessionState.label state
+          {| sessionId = sessionId
+             sessionState = SessionState.label state
              evalCount = stats.EvalCount
              avgMs = if stats.EvalCount > 0 then stats.TotalDuration.TotalMilliseconds / float stats.EvalCount else 0.0
              regions = regions |})
@@ -1115,6 +1122,8 @@ let createApiDispatchHandler
         | "clearOutput" -> Some EditorAction.ClearOutput
         | "sessionSetIndex" ->
           action.value |> Option.bind (fun s -> match Int32.TryParse(s) with true, i -> Some (EditorAction.SessionSetIndex i) | _ -> None)
+        | "sessionCycleNext" -> Some EditorAction.SessionCycleNext
+        | "sessionCyclePrev" -> Some EditorAction.SessionCyclePrev
         | "promptChar" ->
           action.value |> Option.bind (fun s -> if s.Length > 0 then Some (EditorAction.PromptChar s.[0]) else None)
         | "promptBackspace" -> Some EditorAction.PromptBackspace

@@ -113,6 +113,7 @@ module RaylibMode =
   let private renderRegions
     (grid: Cell[,])
     (regions: RenderRegion list)
+    (sessionId: string)
     (sessionState: string)
     (evalCount: int)
     (focusedPane: PaneId)
@@ -122,7 +123,9 @@ module RaylibMode =
     (keyMap: KeyMap)
     (layoutConfig: LayoutConfig) =
 
-    let statusLeft = sprintf " %s | evals: %d | %s" sessionState evalCount (PaneId.displayName focusedPane)
+    let statusLeft =
+      let sid = if sessionId.Length > 8 then sessionId.[..7] else sessionId
+      sprintf " %s %s | evals: %d | %s" sid sessionState evalCount (PaneId.displayName focusedPane)
     let statusRight = sprintf " %dpt | %d fps |%s" fontSize currentFps (StatusHints.build keyMap focusedPane)
     Screen.drawWith layoutConfig grid regions focusedPane scrollOffsets statusLeft statusRight |> ignore
 
@@ -169,6 +172,7 @@ module RaylibMode =
     // Mutable state (updated from SSE thread)
     let mutable lastRegions : RenderRegion list = []
     let mutable lastSessionState = "Connecting..."
+    let mutable lastSessionId = ""
     let mutable lastEvalCount = 0
     let mutable lastFps = 0
     let mutable focusedPane = PaneId.Editor
@@ -204,8 +208,9 @@ module RaylibMode =
       System.Threading.Tasks.Task.Run(fun () ->
         DaemonClient.runSseListener
           baseUrl
-          (fun sessionState evalCount _avgMs regions ->
+          (fun sessionId sessionState evalCount _avgMs regions ->
             lock statelock (fun () ->
+              lastSessionId <- sessionId
               lastSessionState <- sessionState
               lastEvalCount <- evalCount
               lastRegions <- regions))
@@ -322,10 +327,10 @@ module RaylibMode =
 
       if running then
         // Render
-        let regions, sessionState, evalCount =
-          lock statelock (fun () -> lastRegions, lastSessionState, lastEvalCount)
+        let regions, sessionId, sessionState, evalCount =
+          lock statelock (fun () -> lastRegions, lastSessionId, lastSessionState, lastEvalCount)
 
-        renderRegions grid regions sessionState evalCount focusedPane scrollOffsets fontSize lastFps keyMap layoutConfig
+        renderRegions grid regions sessionId sessionState evalCount focusedPane scrollOffsets fontSize lastFps keyMap layoutConfig
         lastFps <- fps ()
 
         Raylib.BeginDrawing()
