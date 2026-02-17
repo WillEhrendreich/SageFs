@@ -43,8 +43,10 @@ sagefs
 SageFs runs as a **daemon with a watchdog** — always alive, always watching. Everything else is a window into it:
 
 - ✅ MCP server for AI agents (SSE push, not polling)
-- ✅ File watcher with incremental `#load` reload (~100ms per change)
-- ✅ Hot reloading — redefine functions, refresh browser
+- ✅ File watcher with automatic `#load` reload (~100ms per change)
+- ✅ Hot reloading — file changes auto-detour mutable handlers, refresh to see it
+- ✅ Multiple frontends — TUI, GUI (Raylib), web dashboard, REPL client, AI agents
+- ✅ Multi-session management — create, switch, stop isolated FSI sessions
 - ✅ Project dependencies loaded with iterative dependency resolution
 - ✅ Shadow-copied assemblies (no DLL locks)
 - ✅ Sub-process session management (Erlang-style supervisor)
@@ -118,25 +120,27 @@ The `>` prompt appears on its own line, followed by the code with preserved inde
 
 ### 🔄 **Hot Reloading**
 
-Hot reloading works by redefining functions at runtime — changes take effect on the next browser refresh.
+Hot reloading is **wired end-to-end**. When you save a `.fs` or `.fsx` file, SageFs automatically:
+
+1. Detects the change via file watcher
+2. Reloads the file via `#load` (~100ms)
+3. Applies Harmony method detours to redirect mutable handlers
+4. Your next browser refresh shows the updated code — no restart needed
 
 ```fsharp
-// Define a mutable handler
+// Define a mutable handler in your web app
 let mutable handleHome (ctx: HttpContext) =
     task {
         ctx.Response.ContentType <- "text/html"
         do! ctx.Response.WriteAsync("<h1>Hello, World!</h1>")
     }
 
-// Later, redefine it in the REPL:
-handleHome <- fun (ctx: HttpContext) ->
-    task {
-        ctx.Response.ContentType <- "text/html"
-        do! ctx.Response.WriteAsync("<h1>Updated without restart!</h1>")
-    }
-;;
+// Edit the file, save — SageFs auto-reloads and detours:
+// handleHome now serves the updated response
 // Refresh browser - changes appear instantly! 🔥
 ```
+
+The file watcher monitors all project directories. Disable with `--no-watch`.
 
 See `test-hot-reload.fsx` for a complete working example.
 
@@ -196,8 +200,52 @@ sagefs                          # Auto-detect in current directory
 
 `sagefs connect` provides a REPL client that connects to the running daemon over HTTP:
 - Command history (persisted in `~/.SageFs/connect_history`)
-- `#reset`, `#hard-reset`, `#status` meta-commands
+- Per-eval timing shown inline
 - Auto-starts the daemon if not running
+
+**REPL commands:**
+| Command | Description |
+|---------|-------------|
+| `#help` | Show available commands |
+| `#status` | Session status, eval stats, uptime |
+| `#sessions` | List all active sessions |
+| `#switch <id>` | Switch to a session by ID (or partial match) |
+| `#create [dir]` | Create a new session (optional working directory) |
+| `#stop <id>` | Stop a session by ID |
+| `#reset` | Soft reset the current session |
+| `#hard-reset` | Full reset with rebuild |
+| `#diag` | Show compiler diagnostics |
+| `#clear` | Clear output |
+| `#quit` | Exit (`#exit`, `#q` also work) |
+
+### 🖥️ **Terminal UI (TUI)**
+
+`sagefs tui` launches a full terminal UI client with panes for editor, output, diagnostics, and sessions:
+
+```bash
+sagefs tui                       # Launch TUI client
+```
+
+- Four-pane layout: editor, output, diagnostics, sessions
+- Tab/Shift+Tab to cycle focus between panes
+- Session navigation: ↑/↓ to select, Enter to switch, x to stop, n to create
+- Number keys 1-9 for quick session jump, Ctrl+Tab to cycle
+- Layout presets for different workflows
+- All keyboard shortcuts displayed in-app
+
+### 🎮 **GUI (Raylib)**
+
+`sagefs gui` launches a native GPU-rendered GUI with the same four-pane layout:
+
+```bash
+sagefs gui                       # Launch Raylib GUI client
+```
+
+- Same Elm-driven layout as TUI — editor, output, diagnostics, sessions
+- Font size control (Ctrl+Plus/Minus, range 8-48)
+- Click sessions to switch, keyboard shortcuts for navigation
+- Pane resizing and layout presets
+- Bundled with the `sagefs` tool — no separate build required
 
 ### 🎯 **Computation Expression Simplification**
 
@@ -233,12 +281,23 @@ sagefs --proj AppHost.fsproj
 ### Basic Commands
 
 ```bash
-sagefs                          # Start with auto-detection
+sagefs                          # Start daemon (auto-detects projects)
 sagefs --proj MyApp.fsproj      # Load specific project
 sagefs --sln MySolution.sln     # Load entire solution
 sagefs --use script.fsx         # Load and run script on startup
 sagefs --help                   # Show all options
 ```
+
+### Frontends
+
+```bash
+sagefs connect                  # REPL client (text-based, over HTTP)
+sagefs tui                      # Terminal UI (4-pane layout)
+sagefs gui                      # Raylib GUI (native GPU window)
+# Dashboard auto-starts at http://localhost:{port+1}/dashboard
+```
+
+All frontends connect to the same running daemon — they're different windows into the same state.
 
 ### MCP Configuration
 
@@ -263,15 +322,17 @@ sagefs -d --proj MyApp.fsproj   # Explicit daemon flag (backward compat alias)
 sagefs --supervised             # Run under watchdog supervisor (auto-restart on crash)
 sagefs --bare                   # Bare session — no project/solution loading, quick startup
 sagefs connect                  # Connect REPL client to running daemon
+sagefs tui                      # Launch terminal UI client
+sagefs gui                      # Launch Raylib GUI client
 sagefs stop                     # Stop running daemon
 sagefs status                   # Show daemon info
 ```
 
 SageFs runs as a daemon by default — a headless server with MCP + HTTP endpoints and a **watchdog** that keeps it alive. If the process crashes, the watchdog restarts it automatically with exponential backoff.
 
-Sub-process worker sessions can be created via MCP tools (`create_session`, `list_sessions`, `stop_session`). A `~/.SageFs/daemon.json` discovery file is written for client connections.
+Sub-process worker sessions can be created via any frontend or MCP tools (`create_session`, `list_sessions`, `stop_session`). Clients discover the running daemon via HTTP health-check probing.
 
-The REPL, terminal UI, web frontend, Neovim integration, and AI agents are all **clients** that connect to the running daemon — they don't embed SageFs, they talk to it.
+The REPL, terminal UI, GUI, web dashboard, and AI agents are all **clients** that connect to the running daemon — they don't embed SageFs, they talk to it.
 
 ### 🖥️ Live Dashboard
 
@@ -286,11 +347,12 @@ http://localhost:37750/dashboard
 The dashboard uses **Server-Sent Events (SSE)** with **Datastar** for real-time DOM morphing:
 - **Session status** — current state (Ready/WarmingUp/Evaluating/Faulted) with color-coded badges
 - **Session metadata** — uptime, working directory, project tags, last activity, eval count
-- **Create sessions** — form with project discovery, manual entry, and `.SageFs/config.fsx` integration
+- **Multi-session management** — create, switch, stop sessions with loading indicators and duplicate guards
 - **Eval stats** — count, avg/min/max duration
 - **Output panel** — live streaming of eval results and errors
 - **Diagnostics panel** — compiler warnings and errors
-- **Eval input** — submit F# code directly from the browser
+- **Eval input** — submit F# code directly from the browser (Ctrl+Enter)
+- **Keyboard shortcuts** — session navigation (↑/↓/Enter/x/n/1-9/Ctrl+Tab)
 - **Server status** — auto-detects server-down and displays reconnection banner
 
 ### Per-Directory Configuration
@@ -368,14 +430,18 @@ dotnet run --project SageFs.Tests -- --filter "WarmUp"
 ```
 
 Tests include:
-- **Snapshot tests** (Verify) — locked-in output formats for echo, eval results, status
+- **Snapshot tests** (Verify) — locked-in output formats for dashboard HTML, echo, eval results
 - **Property-based tests** (FsCheck via Expecto) — warm-up retry, statement splitting, render contracts
 - **Unit tests** — MCP adapter formatting, benign error detection, diagnostics
 - **ElmLoop resilience tests** — Update/Render/OnModelChanged/Effect throw survival, multi-failure sequences
 - **Watchdog tests** — restart decisions, grace periods, exponential backoff, give-up
 - **File watcher tests** — glob pattern matching, trigger/exclude logic, change action routing
+- **Hot reload tests** — file watcher → worker integration, method detouring, auto-reload pipeline
 - **Editor tests** — cursor movement, text editing, selection operations
-- **Session tests** — session operations, display, reset behavior
+- **Session tests** — creation, switching, stopping, reset behavior, navigation across UIs
+- **Session creation UX tests** — duplicate guard, loading indicators, flag lifecycle
+- **Multi-UI consistency tests** — SSE roundtrip, render determinism, dispatch naming parity
+- **Dashboard snapshot tests** — HTML output verification for all dashboard panels
 
 ---
 
@@ -392,13 +458,16 @@ SageFs is a **daemon-first architecture**. The server is always the center — e
                           ┌──────▼──────┐
               ┌───────────┤ SageFs      ├───────────┐
               │           │ Daemon      │           │
-              │           └──┬───┬───┬──┘           │
-              │              │   │   │              │
-         ┌────▼───┐   ┌─────▼─┐ │ ┌─▼─────┐   ┌───▼────┐
-         │Terminal │   │ Web   │ │ │Neovim │   │ VSCode │
-         │ REPL   │   │(SSE)  │ │ │Client │   │ Client │
-         └────────┘   └───────┘ │ └───────┘   └────────┘
-                          ┌─────▼─────┐
+              │           └──┬──┬──┬──┬─┘           │
+              │              │  │  │  │             │
+         ┌────▼───┐   ┌─────▼┐ │  │ ┌▼─────┐  ┌───▼────┐
+         │Connect │   │ TUI  │ │  │ │ GUI  │  │  Web   │
+         │ REPL   │   │      │ │  │ │Raylib│  │(SSE)   │
+         └────────┘   └──────┘ │  │ └──────┘  └────────┘
+                          ┌────▼┐ │
+                          │Nvim │ │
+                          └─────┘ │
+                          ┌───────▼───┐
                           │ AI Agents │
                           │  (MCP)    │
                           └───────────┘
@@ -408,7 +477,8 @@ SageFs is a **daemon-first architecture**. The server is always the center — e
 
 1. **Daemon Process** — The core. Runs FSI engine, MCP server, file watcher, hot reload, live dashboard. Managed by a watchdog that auto-restarts on crash with exponential backoff.
 2. **Worker Sessions** — Isolated FSI sessions spawned as sub-processes, supervised Erlang-style by the SessionManager.
-3. **Clients** — `SageFs connect` (REPL over HTTP), web dashboard, Neovim, VSCode, AI agents all connect to the daemon. They don't embed SageFs — they're windows into it.
+3. **Elm Architecture** — Pure `update : Msg → Model → Model × Effect list` loop drives all UI state. `SageFsEffectHandler` bridges pure state to real infrastructure.
+4. **Clients** — `sagefs connect` (REPL), `sagefs tui` (terminal UI), `sagefs gui` (Raylib GPU), web dashboard, Neovim, AI agents all connect to the daemon. They don't embed SageFs — they're windows into it.
 
 There is no "embedded mode". The daemon IS SageFs.
 
@@ -430,7 +500,8 @@ Core components:
 ## 📊 Project Status
 
 **Target Framework**: .NET 10.0
-**Stability**: Active development — 442+ tests passing
+**Version**: 0.4.19
+**Stability**: Active development — 800+ tests across 53 test files
 **Test Framework**: Expecto + Verify snapshots + FsCheck property tests
 
 ### What's Done
@@ -443,8 +514,8 @@ Core components:
 - ✅ SageFsEffectHandler — bridges pure Elm loop to SessionManager/worker infrastructure
 - ✅ Collectible AssemblyLoadContext for namespace discovery (prevents stale DLLs after rebuild)
 - ✅ Activity-based build timeout (30s inactivity / 10min max) — won't kill long-but-active builds
-- ✅ File watcher with incremental `#load` reload (~100ms, not hard reset)
-- ✅ Hot reload (redefine functions, refresh to see changes)
+- ✅ File watcher wired end-to-end — auto-reloads `.fs`/`.fsx` on save (~100ms)
+- ✅ Hot reload via Harmony method detouring — file change → `#load` → detour → browser refresh
 - ✅ Project/solution loading (`.fsproj`, `.sln`, `.slnx`)
 - ✅ Shadow-copy DLL lock prevention
 - ✅ Event sourcing with Marten (when `SAGEFS_CONNECTION_STRING` set)
@@ -452,51 +523,42 @@ Core components:
 - ✅ Eval cancellation
 - ✅ Console echo for all MCP/exec submissions
 - ✅ Aspire project detection and configuration
-- ✅ Core domain types: Editor, ElmLoop, RenderPipeline, SageFsEvent, SageFsView
-- ✅ SessionDisplay types for UI rendering
-- ✅ ElmDaemon wiring — Elm loop running in daemon, dispatch available to MCP tools
-- ✅ MCP ↔ Elm notifications — eval/reset/cancel/load events flow to Elm model
-- ✅ `get_elm_state` MCP tool — query render regions (editor, output, diagnostics, sessions)
-- ✅ OnModelChanged terminal logging — daemon console shows Elm state changes
-- ✅ File watcher → Elm loop — FileChanged/FileReloaded events with timing and status
-- ✅ Warmup → Elm loop — WarmupCompleted and SessionStatusChanged events
+- ✅ **Terminal UI** (`sagefs tui`) — 4-pane terminal client with session management
+- ✅ **Raylib GUI** (`sagefs gui`) — native GPU-rendered client, bundled with tool
+- ✅ **REPL client** (`sagefs connect`) — text-based REPL with full session commands
+- ✅ **Live dashboard** (Falco + Datastar SSE) — session status, eval, diagnostics, browser eval
+- ✅ Multi-session support — create, switch, stop, navigate with keyboard/mouse/partial ID
+- ✅ Session creation guard — loading indicators and duplicate prevention across all UIs
+- ✅ Session navigation — ↑/↓/Enter/x/n/1-9/Ctrl+Tab across TUI, GUI, dashboard
+- ✅ Pane resizing and layout presets in TUI and GUI
+- ✅ Daemon-first architecture — `SageFs` starts daemon by default, all frontends are clients
 - ✅ Watchdog module (pure + impure) with TDD — restart decisions, grace periods, exponential backoff
 - ✅ `--supervised` flag for daemon mode with auto-restart
-- ✅ Live dashboard (Falco + Datastar SSE) — session status, eval stats, output, diagnostics, browser eval
-- ✅ Daemon-first architecture — `SageFs` starts daemon by default, `-d` is just an alias
-- ✅ `SageFs connect` — REPL client over HTTP to running daemon (auto-starts daemon if needed)
-- ✅ Persistent REPL history in `~/.SageFs/connect_history`
-- ✅ Removed PrettyPrompt dependency — daemon-only architecture, no embedded REPL
-- ✅ `GET /events` SSE endpoint — push-based Elm state changes to any subscriber
-- ✅ Dashboard event-driven SSE — instant push updates instead of polling
-- ✅ Dashboard sessions panel — live view of all FSI sessions with status
-- ✅ Dashboard inline eval results — immediate feedback below code input
-- ✅ Dashboard Ctrl+Enter eval, Reset/Hard Reset buttons, timestamped output
-- ✅ Dashboard parsers — regex-based extraction of timestamps, diagnostic line/col
-- ✅ Dashboard create session form — project discovery, working directory, manual entry
-- ✅ Dashboard server-down detection — auto-detects connection loss, displays reconnection banner
-- ✅ Dashboard rich session metadata — uptime, working dir, project tags, last activity
+- ✅ HTTP health-check daemon discovery — no daemon.json file needed
 - ✅ Per-directory config — `.SageFs/config.fsx` with projects, autoLoad, initScript, defaultArgs
-- ✅ ASP.NET Core info logging suppressed in dashboard
+- ✅ Persistent REPL history in `~/.SageFs/connect_history`
+- ✅ `GET /events` SSE endpoint — push-based Elm state changes to any subscriber
+- ✅ Dashboard server-down detection — auto-detects connection loss, displays reconnection banner
 - ✅ ElmLoop resilience — try/catch guards prevent dispatch loop crashes from callback exceptions
-- ✅ Hard reset warmup timeout (5 min) — prevents stuck WarmingUp state, transitions to Faulted on timeout
+- ✅ Hard reset warmup timeout (5 min) — prevents stuck WarmingUp state, transitions to Faulted
 - ✅ Hard reset progress logging — phase-by-phase status (build, shadow copy, FSI creation, namespace scanning)
 - ✅ Stale shadow directory cleanup — auto-removes old `sagefs-shadow-*` temp dirs during hard reset
 
 ### What's Next
 - 🔲 Connected UI tracking — show MCP, terminal, browser connections per session
+- 🔲 Session persistence across daemon restarts
+- 🔲 System tray launcher
 
 ### Where It's Going
 
-SageFs is evolving into a **multi-frontend immediate-mode architecture** — a single core engine that serves terminal, web (Datastar SSE), Neovim, VSCode, and GPU (Raylib/ImGui) frontends through one unified event bus.
+SageFs is a **multi-frontend immediate-mode architecture** — a single core engine that serves REPL, terminal UI, web (Datastar SSE), GPU (Raylib), Neovim, and AI agents through one unified Elm event bus.
 
-**Architectural pillars:**
+**Architectural pillars (all implemented):**
 - **Custom Elm loop** — `update : Msg -> Model -> Model * Effect list`, pure F#, no framework dependency. `SageFsEffectHandler` bridges pure state updates to real infrastructure (SessionManager, worker proxies)
 - **Immediate-mode rendering** — `UI = render(state)`, no retained widget trees
 - **Affordance-driven HATEOAS** — every element carries its possible actions; domain decides what's *possible*, adapters decide how to *render*
-- **Tree-sitter foundation** — `ionide/tree-sitter-fsharp` for syntax highlighting and structural navigation
-- **Push-based reactive streaming** — single `SageFsEvent` bus, all frontends subscribe via `IObservable<SageFsEvent>`
-- **Neovim-inspired UI protocol** — draw primitives + grid regions, frontend-agnostic rendering
+- **Push-based reactive streaming** — single `SageFsEvent` bus, all frontends subscribe via SSE
+- **Frontend-agnostic rendering** — RenderRegion protocol: editor, output, diagnostics, sessions regions consumed by all UIs
 
 The goal: you write F# domain logic once, and SageFs renders it everywhere — terminal, browser, editor, GPU window. Sage Mode sees all.
 
@@ -516,6 +578,8 @@ MIT License — see [LICENSE](LICENSE) for details
 - [PrettyPrompt](https://github.com/waf/PrettyPrompt) — Powered the original REPL experience (removed in v0.3.1)
 - [Falco](https://github.com/pimbrouwers/Falco) — Functional web framework for the dashboard
 - [Falco.Datastar](https://github.com/pimbrouwers/Falco.Datastar) — Datastar SSE integration for live UI
+- [Raylib-CSharp](https://github.com/ChrisDill/Raylib-cs) — GPU-rendered native GUI frontend
+- [Harmony](https://github.com/pardeike/Harmony) — Runtime method patching for hot reload
 - [Ionide.ProjInfo](https://github.com/ionide/proj-info/) — Project file parsing
 - [ModelContextProtocol](https://modelcontextprotocol.io/) — AI integration standard
 
