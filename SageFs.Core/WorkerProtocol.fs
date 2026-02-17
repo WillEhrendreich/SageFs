@@ -114,6 +114,7 @@ module WorkerProtocol =
 
   type SessionInfo = {
     Id: SessionId
+    Name: string option
     Projects: string list
     WorkingDirectory: string
     SolutionRoot: string option

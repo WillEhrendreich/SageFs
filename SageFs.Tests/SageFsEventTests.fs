@@ -45,7 +45,7 @@ let SageFsEventTests = testList "SageFsEvent" [
 
   testCase "SessionCreated carries snapshot" <| fun _ ->
     let snap = {
-      Id = "s1"; Projects = ["Test.fsproj"]
+      Id = "s1"; Name = None; Projects = ["Test.fsproj"]
       Status = SessionDisplayStatus.Running
       LastActivity = now; EvalCount = 0
       UpSince = now; IsActive = true; WorkingDirectory = "" }
@@ -88,7 +88,7 @@ let SageFsViewTests = testList "SageFsView" [
       Buffer = ValidatedBuffer.empty
       CompletionMenu = None
       ActiveSession = {
-        Id = "s1"; Projects = ["Test.fsproj"]
+        Id = "s1"; Name = None; Projects = ["Test.fsproj"]
         Status = SessionDisplayStatus.Running
         LastActivity = now; EvalCount = 0
         UpSince = now; IsActive = true; WorkingDirectory = "" }
@@ -109,7 +109,7 @@ let SageFsViewTests = testList "SageFsView" [
       Buffer = ValidatedBuffer.empty
       CompletionMenu = None
       ActiveSession = {
-        Id = "s1"; Projects = []; Status = SessionDisplayStatus.Running
+        Id = "s1"; Name = None; Projects = []; Status = SessionDisplayStatus.Running
         LastActivity = now; EvalCount = 1; UpSince = now; IsActive = true; WorkingDirectory = "" }
       RecentOutput = lines
       Diagnostics = []
@@ -123,7 +123,7 @@ let SageFsViewTests = testList "SageFsView" [
       Buffer = ValidatedBuffer.empty
       CompletionMenu = None
       ActiveSession = {
-        Id = "s1"; Projects = []; Status = SessionDisplayStatus.Running
+        Id = "s1"; Name = None; Projects = []; Status = SessionDisplayStatus.Running
         LastActivity = now; EvalCount = 0; UpSince = now; IsActive = true; WorkingDirectory = "" }
       RecentOutput = []
       Diagnostics = []

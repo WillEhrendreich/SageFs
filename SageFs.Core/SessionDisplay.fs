@@ -16,6 +16,7 @@ type SessionDisplayStatus =
 /// A point-in-time snapshot of a session for display
 type SessionSnapshot = {
   Id: SessionId
+  Name: string option
   Projects: string list
   Status: SessionDisplayStatus
   LastActivity: DateTime
@@ -65,6 +66,7 @@ module SessionDisplay =
   /// Build a snapshot from internal session info
   let snapshot (now: DateTime) (activeId: SessionId option) (info: SessionInfo) : SessionSnapshot =
     { Id = info.Id
+      Name = info.Name
       Projects = info.Projects
       Status = displayStatus now info
       LastActivity = info.LastActivity

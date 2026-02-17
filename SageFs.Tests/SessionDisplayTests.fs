@@ -10,6 +10,7 @@ let private now = DateTime(2026, 2, 14, 12, 0, 0)
 
 let private mkInfo id status lastActive : SessionInfo =
   { Id = id
+    Name = None
     Projects = ["Test.fsproj"]
     WorkingDirectory = @"C:\Code"
     SolutionRoot = None
@@ -93,7 +94,7 @@ let registryViewTests = testList "SessionDisplay.registryView" [
 let affordanceTests = testList "SessionDisplay.sessionAffordances" [
   testCase "inactive session has Switch enabled" <| fun _ ->
     let snap = {
-      Id = "s1"; Projects = ["Test.fsproj"]
+      Id = "s1"; Name = None; Projects = ["Test.fsproj"]
       Status = SessionDisplayStatus.Running
       LastActivity = now; EvalCount = 5
       UpSince = now.AddHours(-1.0); IsActive = false; WorkingDirectory = "" }
@@ -104,7 +105,7 @@ let affordanceTests = testList "SessionDisplay.sessionAffordances" [
 
   testCase "active session has Switch disabled" <| fun _ ->
     let snap = {
-      Id = "s1"; Projects = ["Test.fsproj"]
+      Id = "s1"; Name = None; Projects = ["Test.fsproj"]
       Status = SessionDisplayStatus.Running
       LastActivity = now; EvalCount = 5
       UpSince = now.AddHours(-1.0); IsActive = true; WorkingDirectory = "" }
@@ -115,7 +116,7 @@ let affordanceTests = testList "SessionDisplay.sessionAffordances" [
 
   testCase "errored session has Restart affordance" <| fun _ ->
     let snap = {
-      Id = "s1"; Projects = ["Test.fsproj"]
+      Id = "s1"; Name = None; Projects = ["Test.fsproj"]
       Status = SessionDisplayStatus.Errored "crash"
       LastActivity = now; EvalCount = 0
       UpSince = now.AddHours(-1.0); IsActive = false; WorkingDirectory = "" }
@@ -126,7 +127,7 @@ let affordanceTests = testList "SessionDisplay.sessionAffordances" [
 
   testCase "running session has no Restart affordance" <| fun _ ->
     let snap = {
-      Id = "s1"; Projects = ["Test.fsproj"]
+      Id = "s1"; Name = None; Projects = ["Test.fsproj"]
       Status = SessionDisplayStatus.Running
       LastActivity = now; EvalCount = 5
       UpSince = now.AddHours(-1.0); IsActive = true; WorkingDirectory = "" }

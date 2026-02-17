@@ -178,6 +178,7 @@ let workerProtocolTests =
       <| fun _ ->
         let info = {
           Id = "session-abc"
+          Name = None
           Projects = ["Tests.fsproj"]
           WorkingDirectory = @"C:\Code\Repos\SageFs\SageFs.Tests"
           SolutionRoot = Some @"C:\Code\Repos\SageFs"
@@ -193,6 +194,7 @@ let workerProtocolTests =
       <| fun _ ->
         let info = {
           Id = "session-def"
+          Name = None
           Projects = ["App.fsproj"]
           WorkingDirectory = @"C:\Code\MyApp"
           SolutionRoot = None
@@ -225,6 +227,7 @@ let workerProtocolTests =
       <| fun _ ->
         let info = {
           Id = "session-xyz"
+          Name = None
           Projects = ["A.fsproj"; "B.fsproj"]
           WorkingDirectory = @"C:\Code\Repos\Test"
           SolutionRoot = Some @"C:\Code\Repos\Test"

@@ -114,6 +114,7 @@ module SessionManager =
           NamedPipeTransport.connect pipe ct
         let info : SessionInfo = {
           Id = sessionId
+          Name = None
           Projects = projects
           WorkingDirectory = workingDir
           SolutionRoot = SessionInfo.findSolutionRoot workingDir

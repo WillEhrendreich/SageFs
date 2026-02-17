@@ -168,6 +168,7 @@ let managerStateTests =
     testCase "addSession then tryGetSession finds it" <| fun _ ->
       let info : SessionInfo = {
         Id = "test-1"
+        Name = None
         Projects = ["Foo.fsproj"]
         WorkingDirectory = @"C:\test"
         SolutionRoot = None
@@ -194,6 +195,7 @@ let managerStateTests =
     testCase "removeSession then tryGetSession returns None" <| fun _ ->
       let info : SessionInfo = {
         Id = "test-2"
+        Name = None
         Projects = []
         WorkingDirectory = @"C:\test"
         SolutionRoot = None
@@ -222,6 +224,7 @@ let managerStateTests =
       let mkSession id : SageFs.SessionManager.ManagedSession =
         let info : SessionInfo = {
           Id = id
+          Name = None
           Projects = []
           WorkingDirectory = @"C:\test"
           SolutionRoot = None
