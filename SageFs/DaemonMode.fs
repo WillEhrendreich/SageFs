@@ -211,7 +211,7 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
       version
       getSessionState
       getEvalStats
-      (!activeSessionId)
+      (fun () -> !activeSessionId)
       0
       (fun () -> elmRuntime.GetRegions() |> Some)
       (Some stateChangedEvent.Publish)

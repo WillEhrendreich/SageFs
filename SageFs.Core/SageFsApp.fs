@@ -179,11 +179,17 @@ module SageFsUpdate =
       | SageFsEvent.SessionCreated snap ->
         let isFirst = model.Sessions.ActiveSessionId.IsNone
         let snap = if isFirst then { snap with IsActive = true } else snap
+        let existing = model.Sessions.Sessions |> List.exists (fun s -> s.Id = snap.Id)
+        let sessions =
+          if existing then
+            model.Sessions.Sessions |> List.map (fun s -> if s.Id = snap.Id then snap else s)
+          else
+            snap :: model.Sessions.Sessions
         { model with
             CreatingSession = false
             Sessions = {
               model.Sessions with
-                Sessions = snap :: model.Sessions.Sessions
+                Sessions = sessions
                 ActiveSessionId =
                   if isFirst then Some snap.Id
                   else model.Sessions.ActiveSessionId } }, []

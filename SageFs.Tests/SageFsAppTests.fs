@@ -78,7 +78,64 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
     newModel.Sessions.Sessions
     |> Expect.hasLength "should have 1 session" 1
 
-  testCase "SessionSwitched updates active session" <| fun _ ->
+  testCase "SessionCreated with existing ID should upsert, not duplicate" <| fun _ ->
+    let snap = {
+      Id = "s1"; Name = None; Projects = ["A.fsproj"]
+      Status = SessionDisplayStatus.Running
+      LastActivity = DateTime.UtcNow; EvalCount = 0
+      UpSince = DateTime.UtcNow; IsActive = true; WorkingDirectory = "." }
+    let model = {
+      SageFsModel.initial with
+        Sessions = {
+          SageFsModel.initial.Sessions with
+            Sessions = [snap]
+            ActiveSessionId = Some "s1" } }
+    let model2, _ =
+      SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.SessionCreated snap)) model
+    model2.Sessions.Sessions
+    |> Expect.hasLength "should still have exactly 1 session" 1
+
+  testCase "SessionCreated upsert updates session data" <| fun _ ->
+    let snap = {
+      Id = "s1"; Name = None; Projects = ["A.fsproj"]
+      Status = SessionDisplayStatus.Running
+      LastActivity = DateTime.UtcNow; EvalCount = 0
+      UpSince = DateTime.UtcNow; IsActive = true; WorkingDirectory = "." }
+    let model = {
+      SageFsModel.initial with
+        Sessions = {
+          SageFsModel.initial.Sessions with
+            Sessions = [snap]
+            ActiveSessionId = Some "s1" } }
+    let updated = { snap with EvalCount = 42 }
+    let model2, _ =
+      SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.SessionCreated updated)) model
+    model2.Sessions.Sessions
+    |> Expect.hasLength "should have 1 session" 1
+    model2.Sessions.Sessions.[0].EvalCount
+    |> Expect.equal "should have updated eval count" 42
+
+  testCase "Multiple ListSessions refreshes should not accumulate duplicates" <| fun _ ->
+    let snapA = {
+      Id = "s1"; Name = None; Projects = ["A.fsproj"]
+      Status = SessionDisplayStatus.Running
+      LastActivity = DateTime.UtcNow; EvalCount = 0
+      UpSince = DateTime.UtcNow; IsActive = true; WorkingDirectory = "." }
+    let snapB = {
+      Id = "s2"; Name = None; Projects = ["B.fsproj"]
+      Status = SessionDisplayStatus.Running
+      LastActivity = DateTime.UtcNow; EvalCount = 0
+      UpSince = DateTime.UtcNow; IsActive = false; WorkingDirectory = "." }
+    let model = {
+      SageFsModel.initial with
+        Sessions = {
+          SageFsModel.initial.Sessions with
+            Sessions = [snapA; snapB]
+            ActiveSessionId = Some "s1" } }
+    let m1, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.SessionCreated snapA)) model
+    let m2, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.SessionCreated snapB)) m1
+    m2.Sessions.Sessions
+    |> Expect.hasLength "should still have exactly 2 sessions" 2
     let snap1 = {
       Id = "s1"; Name = None; Projects = []; Status = SessionDisplayStatus.Running
       LastActivity = DateTime.UtcNow; EvalCount = 0
