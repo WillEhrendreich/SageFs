@@ -85,7 +85,56 @@ let parseTests = testList "ReplCommand.parse" [
     |> Expect.equal "" (EvalCode "printfn hello")
 ]
 
+let resolveTests =
+  let sessions : SessionInfo list = [
+    { Id = "session-abc123"; Status = "Ready"; IsActive = true; EvalCount = 5; AvgMs = 100.0; WorkingDirectory = @"C:\Code\A"; Projects = ["A.fsproj"] }
+    { Id = "session-def456"; Status = "Ready"; IsActive = false; EvalCount = 0; AvgMs = 0.0; WorkingDirectory = @"C:\Code\B"; Projects = [] }
+    { Id = "session-abc789"; Status = "WarmingUp"; IsActive = false; EvalCount = 0; AvgMs = 0.0; WorkingDirectory = @"C:\Code\C"; Projects = [] }
+  ]
+  testList "resolveSessionId" [
+    testCase "numeric index 1 resolves to first session" <| fun () ->
+      resolveSessionId sessions "1"
+      |> Expect.equal "" (Some "session-abc123")
+
+    testCase "numeric index 2 resolves to second session" <| fun () ->
+      resolveSessionId sessions "2"
+      |> Expect.equal "" (Some "session-def456")
+
+    testCase "numeric index 0 returns None" <| fun () ->
+      resolveSessionId sessions "0"
+      |> Expect.equal "" None
+
+    testCase "numeric index out of range returns None" <| fun () ->
+      resolveSessionId sessions "99"
+      |> Expect.equal "" None
+
+    testCase "exact prefix match resolves" <| fun () ->
+      resolveSessionId sessions "session-def"
+      |> Expect.equal "" (Some "session-def456")
+
+    testCase "ambiguous prefix returns None" <| fun () ->
+      resolveSessionId sessions "session-abc"
+      |> Expect.equal "" None
+
+    testCase "contains match resolves unique" <| fun () ->
+      resolveSessionId sessions "def"
+      |> Expect.equal "" (Some "session-def456")
+
+    testCase "ambiguous contains returns None" <| fun () ->
+      resolveSessionId sessions "abc"
+      |> Expect.equal "" None
+
+    testCase "no match returns None" <| fun () ->
+      resolveSessionId sessions "zzz"
+      |> Expect.equal "" None
+
+    testCase "full ID resolves exactly" <| fun () ->
+      resolveSessionId sessions "session-abc123"
+      |> Expect.equal "" (Some "session-abc123")
+  ]
+
 [<Tests>]
 let tests = testList "ClientMode" [
   parseTests
+  resolveTests
 ]

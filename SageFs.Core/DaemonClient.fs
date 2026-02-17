@@ -107,6 +107,7 @@ module DaemonClient =
     | EditorAction.SessionSelect -> Some ("sessionSelect", None)
     | EditorAction.SessionDelete -> Some ("sessionDelete", None)
     | EditorAction.ClearOutput -> Some ("clearOutput", None)
+    | EditorAction.SessionSetIndex idx -> Some ("sessionSetIndex", Some (string idx))
     | EditorAction.PromptChar c -> Some ("promptChar", Some (string c))
     | EditorAction.PromptBackspace -> Some ("promptBackspace", None)
     | EditorAction.PromptConfirm -> Some ("promptConfirm", None)

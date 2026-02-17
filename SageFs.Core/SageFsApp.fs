@@ -85,12 +85,12 @@ module SageFsUpdate =
       | EditorAction.ClearOutput ->
         { model with RecentOutput = [] },
         []
-      | EditorAction.SessionNavDown ->
+      | EditorAction.SessionNavDown | EditorAction.SessionSetIndex _ ->
         let newEditor, effects = EditorUpdate.update action model.Editor
         // Clamp index to session count
         let clamped =
           match newEditor.SelectedSessionIndex with
-          | Some idx -> { newEditor with SelectedSessionIndex = Some (min idx (model.Sessions.Sessions.Length - 1)) }
+          | Some idx -> { newEditor with SelectedSessionIndex = Some (min idx (max 0 (model.Sessions.Sessions.Length - 1))) }
           | None -> newEditor
         { model with Editor = clamped },
         effects |> List.map SageFsEffect.Editor

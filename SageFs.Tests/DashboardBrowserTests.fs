@@ -29,6 +29,21 @@ module PlaywrightExpect =
     Expect.isTrue found (sprintf "Expected '%s' within %dms" text ms)
   }
 
+  /// Wait for any element matching selector to contain text.
+  /// Useful when the element is created dynamically (e.g. by SSE/Datastar).
+  let waitForSelectorText (ms: int) (page: IPage) (selector: string) (text: string) = task {
+    let sw = Diagnostics.Stopwatch.StartNew()
+    let mutable found = false
+    while not found && sw.ElapsedMilliseconds < int64 ms do
+      let! content = page.EvaluateAsync<string>(
+        sprintf "() => { var el = document.querySelector('%s'); return el ? el.textContent : ''; }" selector)
+      if content <> null && content.Contains(text) then
+        found <- true
+      else
+        do! Task.Delay(250)
+    Expect.isTrue found (sprintf "Expected '%s' in '%s' within %dms" text selector ms)
+  }
+
 /// Shared Playwright instance — created once per test run.
 /// Requires `npx playwright install chromium` to have been run.
 module PlaywrightFixture =
@@ -243,5 +258,136 @@ let tests = testList "Dashboard browser tests" [
     do! PlaywrightExpect.isVisibleAsync grid "grid visible"
     let outputSection = page.Locator("#output-section")
     do! PlaywrightExpect.isVisibleAsync outputSection "output visible"
+  })
+
+  // --- Agent-generated tests (via Playwright test planner + generator agents) ---
+
+  playwrightTest "evaluate simple expression" (fun page -> task {
+    let banner = page.Locator("#server-status")
+    do! PlaywrightExpect.waitForText 15_000 banner "Connected"
+    let textarea =
+      page.GetByRole(
+        AriaRole.Textbox,
+        PageGetByRoleOptions(Name = "Enter F# code..."))
+    do! textarea.FillAsync("let x = 1 + 1;;")
+    do! page.GetByRole(
+      AriaRole.Button, PageGetByRoleOptions(Name = "Eval")).ClickAsync()
+    do! PlaywrightExpect.waitForSelectorText 30_000 page "#eval-result" "val x: int = 2"
+    let! value = textarea.InputValueAsync()
+    Expect.equal value "" "textarea cleared after eval"
+  })
+
+  playwrightTest "evaluate with Ctrl+Enter shortcut" (fun page -> task {
+    let banner = page.Locator("#server-status")
+    do! PlaywrightExpect.waitForText 15_000 banner "Connected"
+    let textarea =
+      page.GetByRole(
+        AriaRole.Textbox,
+        PageGetByRoleOptions(Name = "Enter F# code..."))
+    do! textarea.ClickAsync()
+    do! textarea.FillAsync("""printfn "Hello, World!" """)
+    do! page.Keyboard.PressAsync("Control+Enter")
+    do! PlaywrightExpect.waitForSelectorText 30_000 page "#eval-result" "unit"
+    let! value = textarea.InputValueAsync()
+    Expect.equal value "" "textarea cleared after eval"
+  })
+
+  playwrightTest "evaluate multiline code" (fun page -> task {
+    let banner = page.Locator("#server-status")
+    do! PlaywrightExpect.waitForText 15_000 banner "Connected"
+    let textarea =
+      page.GetByRole(
+        AriaRole.Textbox,
+        PageGetByRoleOptions(Name = "Enter F# code..."))
+    do! textarea.FillAsync("let add x y =\n  x + y\nadd 5 3;;")
+    do! page.GetByRole(
+      AriaRole.Button, PageGetByRoleOptions(Name = "Eval")).ClickAsync()
+    do! PlaywrightExpect.waitForSelectorText 30_000 page "#eval-result" "int = 8"
+  })
+
+  playwrightTest "evaluate code with errors" (fun page -> task {
+    let banner = page.Locator("#server-status")
+    do! PlaywrightExpect.waitForText 15_000 banner "Connected"
+    let textarea =
+      page.GetByRole(
+        AriaRole.Textbox,
+        PageGetByRoleOptions(Name = "Enter F# code..."))
+    do! textarea.FillAsync("let x = undefinedVariable;;")
+    do! page.GetByRole(
+      AriaRole.Button, PageGetByRoleOptions(Name = "Eval")).ClickAsync()
+    do! PlaywrightExpect.waitForSelectorText 30_000 page "#eval-result" "Error"
+  })
+
+  playwrightTest "consecutive evaluations maintain scope" (fun page -> task {
+    let banner = page.Locator("#server-status")
+    do! PlaywrightExpect.waitForText 15_000 banner "Connected"
+    let textarea =
+      page.GetByRole(
+        AriaRole.Textbox,
+        PageGetByRoleOptions(Name = "Enter F# code..."))
+    let evalBtn =
+      page.GetByRole(
+        AriaRole.Button, PageGetByRoleOptions(Name = "Eval"))
+
+    do! textarea.FillAsync("let x = 5;;")
+    do! evalBtn.ClickAsync()
+    do! PlaywrightExpect.waitForSelectorText 30_000 page "#eval-result" "val x: int = 5"
+
+    do! textarea.FillAsync("let y = x + 3;;")
+    do! evalBtn.ClickAsync()
+    do! PlaywrightExpect.waitForSelectorText 30_000 page "#eval-result" "val y: int = 8"
+
+    do! textarea.FillAsync("x + y;;")
+    do! evalBtn.ClickAsync()
+    do! PlaywrightExpect.waitForSelectorText 30_000 page "#eval-result" "val it: int = 13"
+  })
+
+  playwrightTest "keyboard help shows shortcuts" (fun page -> task {
+    let helpBtn =
+      page.GetByRole(
+        AriaRole.Button, PageGetByRoleOptions(Name = "Help"))
+    do! helpBtn.ClickAsync()
+    let table = page.GetByRole(AriaRole.Table)
+    do! PlaywrightExpect.isVisibleAsync table "shortcuts table visible"
+    let ctrlEnter = page.GetByText("Ctrl+Enter")
+    do! PlaywrightExpect.isVisibleAsync ctrlEnter "Ctrl+Enter listed"
+    let ctrlL = page.GetByText("Ctrl+L")
+    do! PlaywrightExpect.isVisibleAsync ctrlL "Ctrl+L listed"
+    let tabKey = page.GetByText("Tab")
+    do! PlaywrightExpect.isVisibleAsync tabKey "Tab listed"
+    do! helpBtn.ClickAsync()
+    do! PlaywrightExpect.isHiddenAsync table "shortcuts table hidden"
+  })
+
+  playwrightTest "sessions panel shows session info" (fun page -> task {
+    let banner = page.Locator("#server-status")
+    do! PlaywrightExpect.waitForText 15_000 banner "Connected"
+    let sessionsHeading =
+      page.GetByRole(
+        AriaRole.Heading, PageGetByRoleOptions(Name = "Sessions"))
+    do! PlaywrightExpect.isVisibleAsync sessionsHeading "Sessions heading"
+    let status = page.Locator("#session-status")
+    do! PlaywrightExpect.waitForText 15_000 status "Session:"
+    let! text = status.TextContentAsync()
+    Expect.isTrue (text.Contains("Projects:")) "shows project count"
+    Expect.isTrue (text.Contains("Ready")) "shows Ready state"
+  })
+
+  playwrightTest "connection banner shows green connected" (fun page -> task {
+    let banner = page.Locator("#server-status")
+    do! PlaywrightExpect.waitForText 15_000 banner "Connected"
+    let! bg = banner.EvaluateAsync<string>(
+      "el => window.getComputedStyle(el).backgroundColor")
+    Expect.isTrue (bg.Contains("63") || bg.Contains("green"))
+      "banner has green background"
+  })
+
+  playwrightTest "diagnostics panel shows no diagnostics" (fun page -> task {
+    let diagHeading =
+      page.GetByRole(
+        AriaRole.Heading, PageGetByRoleOptions(Name = "Diagnostics"))
+    do! PlaywrightExpect.isVisibleAsync diagHeading "Diagnostics heading"
+    let noDiag = page.GetByText("No diagnostics")
+    do! PlaywrightExpect.isVisibleAsync noDiag "empty diagnostics message"
   })
 ]

@@ -370,6 +370,8 @@ module EditorUpdate =
     | EditorAction.SessionDelete ->
       // Same — resolved in SageFsApp where session list is available
       state, []
+    | EditorAction.SessionSetIndex idx ->
+      { state with SelectedSessionIndex = Some (max 0 idx) }, []
     | EditorAction.ClearOutput ->
       state, []
     | EditorAction.PromptChar c ->

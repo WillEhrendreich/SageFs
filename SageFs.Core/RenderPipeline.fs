@@ -115,6 +115,7 @@ and [<RequireQualifiedAccess>] EditorAction =
   | SessionNavDown
   | SessionSelect
   | SessionDelete
+  | SessionSetIndex of int
   // Output
   | ClearOutput
   // Prompt input (for inline prompts like session create)

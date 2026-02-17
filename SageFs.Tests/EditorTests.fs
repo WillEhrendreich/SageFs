@@ -437,6 +437,19 @@ let sessionNavigationTests = testList "Session Navigation" [
   testCase "UiAction.tryParse ClearOutput" <| fun _ ->
     UiAction.tryParse "ClearOutput"
     |> Expect.equal "should parse" (Some (UiAction.Editor EditorAction.ClearOutput))
+
+  testCase "SessionSetIndex sets exact index" <| fun _ ->
+    let state, _ = EditorUpdate.update (EditorAction.SessionSetIndex 2) initial
+    state.SelectedSessionIndex |> Expect.equal "should set index" (Some 2)
+
+  testCase "SessionSetIndex replaces existing index" <| fun _ ->
+    let state = { initial with SelectedSessionIndex = Some 5 }
+    let state', _ = EditorUpdate.update (EditorAction.SessionSetIndex 0) state
+    state'.SelectedSessionIndex |> Expect.equal "should replace" (Some 0)
+
+  testCase "SessionSetIndex negative clamps to 0" <| fun _ ->
+    let state, _ = EditorUpdate.update (EditorAction.SessionSetIndex -3) initial
+    state.SelectedSessionIndex |> Expect.equal "should clamp to 0" (Some 0)
 ]
 
 [<Tests>]

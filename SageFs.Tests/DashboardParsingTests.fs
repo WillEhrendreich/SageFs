@@ -53,13 +53,13 @@ module DashboardParsing =
     |> Array.toList
 
   type ParsedSession = {
-    Id: string; Status: string; IsActive: bool
+    Id: string; Status: string; IsActive: bool; IsSelected: bool
     ProjectsText: string; EvalCount: int
     Uptime: string; WorkingDir: string; LastActivity: string
   }
 
   let parseSessionLines (content: string) =
-    let sessionRegex = Regex(@"^(\S+)\s*\[([^\]]+)\](\s*\*)?(\s*\([^)]*\))?(\s*evals:\d+)?(\s*up:(?:just now|\S+))?(\s*dir:\S.*?)?(\s*last:.+)?$")
+    let sessionRegex = Regex(@"^([> ])\s+(\S+)\s*\[([^\]]+)\](\s*\*)?(\s*\([^)]*\))?(\s*evals:\d+)?(\s*up:(?:just now|\S+))?(\s*dir:\S.*?)?(\s*last:.+)?$")
     let extractTag (prefix: string) (value: string) =
       let v = value.Trim()
       if v.StartsWith(prefix) then v.Substring(prefix.Length).Trim()
@@ -69,17 +69,18 @@ module DashboardParsing =
     |> Array.map (fun (l: string) ->
       let m = sessionRegex.Match(l)
       if m.Success then
-        let evalsMatch = Regex.Match(m.Groups.[5].Value, @"evals:(\d+)")
-        { Id = m.Groups.[1].Value
-          Status = m.Groups.[2].Value
-          IsActive = m.Groups.[3].Value.Contains("*")
-          ProjectsText = m.Groups.[4].Value.Trim()
+        let evalsMatch = Regex.Match(m.Groups.[6].Value, @"evals:(\d+)")
+        { Id = m.Groups.[2].Value
+          Status = m.Groups.[3].Value
+          IsActive = m.Groups.[4].Value.Contains("*")
+          IsSelected = m.Groups.[1].Value = ">"
+          ProjectsText = m.Groups.[5].Value.Trim()
           EvalCount = if evalsMatch.Success then int evalsMatch.Groups.[1].Value else 0
-          Uptime = extractTag "up:" m.Groups.[6].Value
-          WorkingDir = extractTag "dir:" m.Groups.[7].Value
-          LastActivity = extractTag "last:" m.Groups.[8].Value }
+          Uptime = extractTag "up:" m.Groups.[7].Value
+          WorkingDir = extractTag "dir:" m.Groups.[8].Value
+          LastActivity = extractTag "last:" m.Groups.[9].Value }
       else
-        { Id = l.Trim(); Status = "unknown"; IsActive = false
+        { Id = l.Trim(); Status = "unknown"; IsActive = false; IsSelected = false
           ProjectsText = ""; EvalCount = 0
           Uptime = ""; WorkingDir = ""; LastActivity = "" })
     |> Array.toList
@@ -145,44 +146,55 @@ let tests = testList "Dashboard parsing" [
     Expect.equal result [("Warning", "some random diagnostic", 0, 0)] "fallback to Warning 0,0")
 
   testCase "session: parses full session line with all fields" (fun () ->
-    let line = "session-abc [running] * (MyProj, Other) evals:5 up:2h15m dir:C:\\Code\\Test last:3m ago"
+    let line = "> session-abc [running] * (MyProj, Other) evals:5 up:2h15m dir:C:\\Code\\Test last:3m ago"
     let result = DashboardParsing.parseSessionLines line
     Expect.equal result.Length 1 "should parse one session"
     let s = result.[0]
     Expect.equal s.Id "session-abc" "id"
     Expect.equal s.Status "running" "status"
     Expect.isTrue s.IsActive "active"
+    Expect.isTrue s.IsSelected "selected"
     Expect.equal s.EvalCount 5 "evals"
     Expect.equal s.Uptime "2h15m" "uptime"
     Expect.stringContains s.WorkingDir "Code" "working dir"
     Expect.equal s.LastActivity "3m ago" "last activity")
 
   testCase "session: parses minimal session line" (fun () ->
-    let result = DashboardParsing.parseSessionLines "session-1 [starting]"
+    let result = DashboardParsing.parseSessionLines "  session-1 [starting]"
     Expect.equal result.Length 1 "should parse"
     let s = result.[0]
     Expect.equal s.Id "session-1" "id"
     Expect.equal s.Status "starting" "status"
     Expect.isFalse s.IsActive "not active"
+    Expect.isFalse s.IsSelected "not selected"
     Expect.equal s.Uptime "" "no uptime"
     Expect.equal s.WorkingDir "" "no dir"
     Expect.equal s.LastActivity "" "no last")
 
   testCase "session: parses 'just now' uptime" (fun () ->
-    let result = DashboardParsing.parseSessionLines "session-1 [running] up:just now last:just now"
+    let result = DashboardParsing.parseSessionLines "  session-1 [running] up:just now last:just now"
     let s = result.[0]
     Expect.stringContains s.Uptime "just now" "just now uptime"
     Expect.stringContains s.LastActivity "just now" "just now last")
 
   testCase "session: multiple sessions" (fun () ->
-    let lines = "session-1 [running] * up:1h\nsession-2 [starting] up:5m"
+    let lines = "> session-1 [running] * up:1h\n  session-2 [starting] up:5m"
     let result = DashboardParsing.parseSessionLines lines
     Expect.equal result.Length 2 "two sessions"
     Expect.equal result.[0].Id "session-1" "first id"
-    Expect.equal result.[1].Id "session-2" "second id")
+    Expect.isTrue result.[0].IsSelected "first selected"
+    Expect.equal result.[1].Id "session-2" "second id"
+    Expect.isFalse result.[1].IsSelected "second not selected")
 
   testCase "session: error status with reason" (fun () ->
-    let result = DashboardParsing.parseSessionLines "session-x [error: crashed]"
+    let result = DashboardParsing.parseSessionLines "  session-x [error: crashed]"
     let s = result.[0]
     Expect.equal s.Status "error: crashed" "error with reason")
+
+  testCase "session: selected vs unselected parsing" (fun () ->
+    let line = "  session-abc [running] *"
+    let result = DashboardParsing.parseSessionLines line
+    let s = result.[0]
+    Expect.isFalse s.IsSelected "unselected session"
+    Expect.isTrue s.IsActive "but still active")
 ]

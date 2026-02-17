@@ -7,6 +7,17 @@ open System.Text.Json
 open SageFs.Server
 open SageFs
 
+/// Parsed session info from the API.
+type SessionInfo = {
+  Id: string
+  Status: string
+  IsActive: bool
+  EvalCount: int
+  AvgMs: float
+  WorkingDirectory: string
+  Projects: string list
+}
+
 /// Parsed REPL command — pure data, no side effects.
 type ReplCommand =
   | Quit
@@ -34,13 +45,13 @@ module ReplCommand =
     | "#reset" -> Reset
     | "#hard-reset" -> HardReset
     | "#status" -> ShowStatus
-    | s when s.StartsWith("#switch ") ->
-      let sid = s.Substring(8).Trim()
-      if String.IsNullOrWhiteSpace(sid) then Help
+    | s when s.StartsWith("#switch") ->
+      let sid = s.Substring(7).Trim()
+      if String.IsNullOrWhiteSpace(sid) then SwitchSession ""
       else SwitchSession sid
-    | s when s.StartsWith("#stop ") ->
-      let sid = s.Substring(6).Trim()
-      if String.IsNullOrWhiteSpace(sid) then Help
+    | s when s.StartsWith("#stop") ->
+      let sid = (if s.Length > 5 then s.Substring(5) else "").Trim()
+      if String.IsNullOrWhiteSpace(sid) then StopSession ""
       else StopSession sid
     | s when s.StartsWith("#create") ->
       let arg = s.Substring(7).Trim()
@@ -145,8 +156,8 @@ let private hardResetSession (client: HttpClient) (baseUrl: string) = task {
     return Error (sprintf "Connection error: %s" ex.Message)
 }
 
-/// List sessions from the daemon.
-let private listSessions (client: HttpClient) (baseUrl: string) = task {
+/// Fetch structured session list from the daemon.
+let private fetchSessions (client: HttpClient) (baseUrl: string) = task {
   try
     let! response = client.GetAsync(sprintf "%s/api/sessions" baseUrl)
     let! body = response.Content.ReadAsStringAsync()
@@ -157,34 +168,74 @@ let private listSessions (client: HttpClient) (baseUrl: string) = task {
         root.GetProperty("activeSessionId").GetString()
       else ""
     if root.TryGetProperty("sessions") |> fst then
-      let sessions = root.GetProperty("sessions").EnumerateArray() |> Seq.toList
-      if sessions.IsEmpty then
-        return Ok "No sessions running."
-      else
-        let sb = StringBuilder()
-        sb.AppendLine("\x1b[36mSessions:\x1b[0m") |> ignore
-        for s in sessions do
-          let id = s.GetProperty("id").GetString()
-          let status = s.GetProperty("status").GetString()
-          let isActive = s.GetProperty("isActive").GetBoolean()
-          let evalCount = s.GetProperty("evalCount").GetInt32()
-          let avgMs = s.GetProperty("avgDurationMs").GetDouble()
-          let wd = s.GetProperty("workingDirectory").GetString()
-          let projects = s.GetProperty("projects").EnumerateArray() |> Seq.map (fun e -> e.GetString()) |> Seq.toList
-          let marker = if isActive then "\x1b[32m● " else "  "
-          let statusColor = if status = "Ready" then "\x1b[32m" elif status = "WarmingUp" then "\x1b[33m" else "\x1b[31m"
-          sb.AppendFormat("{0}{1}\x1b[0m {2}{3}\x1b[0m  evals:{4} avg:{5:F0}ms", marker, id.[..7], statusColor, status, evalCount, avgMs) |> ignore
-          sb.AppendLine() |> ignore
-          sb.AppendFormat("    dir: {0}", wd) |> ignore
-          sb.AppendLine() |> ignore
-          if not projects.IsEmpty then
-            sb.AppendFormat("    projects: {0}", String.Join(", ", projects |> List.map IO.Path.GetFileNameWithoutExtension)) |> ignore
-            sb.AppendLine() |> ignore
-        return Ok (sb.ToString().TrimEnd())
+      let sessions =
+        root.GetProperty("sessions").EnumerateArray()
+        |> Seq.map (fun s ->
+          { Id = s.GetProperty("id").GetString()
+            Status = s.GetProperty("status").GetString()
+            IsActive = s.GetProperty("isActive").GetBoolean()
+            EvalCount = s.GetProperty("evalCount").GetInt32()
+            AvgMs = s.GetProperty("avgDurationMs").GetDouble()
+            WorkingDirectory = s.GetProperty("workingDirectory").GetString()
+            Projects = s.GetProperty("projects").EnumerateArray() |> Seq.map (fun e -> e.GetString()) |> Seq.toList })
+        |> Seq.toList
+      return Ok (sessions, activeSid)
     else
-      return Ok body
+      return Ok ([], activeSid)
   with ex ->
     return Error (sprintf "Connection error: %s" ex.Message)
+}
+
+/// Resolve a partial session ID or numeric index to a full session ID.
+let internal resolveSessionId (sessions: SessionInfo list) (input: string) =
+  // Try numeric index first (1-based)
+  match Int32.TryParse(input) with
+  | true, n when n >= 1 && n <= sessions.Length -> Some sessions.[n - 1].Id
+  | _ ->
+    // Try exact prefix match
+    let matches = sessions |> List.filter (fun s -> s.Id.StartsWith(input, StringComparison.OrdinalIgnoreCase))
+    match matches with
+    | [single] -> Some single.Id
+    | _ ->
+      // Try contains match
+      let contains = sessions |> List.filter (fun s -> s.Id.Contains(input, StringComparison.OrdinalIgnoreCase))
+      match contains with
+      | [single] -> Some single.Id
+      | _ -> None
+
+/// Format a session for display with a 1-based index.
+let private formatSession (i: int) (s: SessionInfo) =
+  let marker = if s.IsActive then "\x1b[32m●" else " "
+  let statusColor = if s.Status = "Ready" then "\x1b[32m" elif s.Status = "WarmingUp" then "\x1b[33m" else "\x1b[31m"
+  let projects =
+    if s.Projects.IsEmpty then ""
+    else sprintf " (%s)" (s.Projects |> List.map IO.Path.GetFileNameWithoutExtension |> String.concat ", ")
+  let shortId = s.Id.[..min 7 (s.Id.Length - 1)]
+  let line1 = sprintf "  %s \x1b[36m%d\x1b[0m  %s %s%s\x1b[0m  evals:%d avg:%.0fms%s" marker (i + 1) shortId statusColor s.Status s.EvalCount s.AvgMs projects
+  sprintf "%s\n    dir: %s" line1 s.WorkingDirectory
+
+/// Interactive session picker — shows numbered list, reads a number or partial ID.
+let private pickSession (sessions: SessionInfo list) (prompt: string) =
+  printfn "\x1b[36m%s\x1b[0m" prompt
+  sessions |> List.iteri (fun i s -> printfn "%s" (formatSession i s))
+  printfn ""
+  printf "\x1b[33mEnter number or ID (or blank to cancel): \x1b[0m"
+  let input = Console.ReadLine()
+  if String.IsNullOrWhiteSpace(input) then None
+  else resolveSessionId sessions input
+
+/// List sessions from the daemon.
+let private listSessions (client: HttpClient) (baseUrl: string) = task {
+  match! fetchSessions client baseUrl with
+  | Error msg -> return Error msg
+  | Ok ([], _) -> return Ok "No sessions running."
+  | Ok (sessions, _) ->
+    let sb = StringBuilder()
+    sb.AppendLine("\x1b[36mSessions:\x1b[0m") |> ignore
+    sessions |> List.iteri (fun i s -> sb.AppendLine(formatSession i s) |> ignore)
+    sb.AppendLine() |> ignore
+    sb.Append("\x1b[90mUse #switch <number|id> or #stop <number|id>\x1b[0m") |> ignore
+    return Ok (sb.ToString().TrimEnd())
 }
 
 /// Switch to a different session.
@@ -271,10 +322,10 @@ let private showHelp () =
   printfn ""
   printfn "  \x1b[33m#help\x1b[0m              Show this help"
   printfn "  \x1b[33m#status\x1b[0m            Show daemon and session status"
-  printfn "  \x1b[33m#sessions\x1b[0m          List all sessions"
-  printfn "  \x1b[33m#switch <id>\x1b[0m       Switch to a different session"
+  printfn "  \x1b[33m#sessions\x1b[0m          List all sessions (numbered)"
+  printfn "  \x1b[33m#switch [id|#]\x1b[0m     Switch session (interactive picker if no arg)"
   printfn "  \x1b[33m#create [dir]\x1b[0m      Create a new session (auto-discovers projects)"
-  printfn "  \x1b[33m#stop <id>\x1b[0m         Stop a session"
+  printfn "  \x1b[33m#stop [id|#]\x1b[0m       Stop a session (interactive picker if no arg)"
   printfn "  \x1b[33m#diag\x1b[0m              Show current diagnostics"
   printfn "  \x1b[33m#reset\x1b[0m             Soft reset current session"
   printfn "  \x1b[33m#hard-reset\x1b[0m        Hard reset with rebuild"
@@ -369,13 +420,60 @@ let run (info: DaemonInfo) = task {
         | Ok msg -> printfn "%s" msg
         | Error msg -> eprintfn "\x1b[31m%s\x1b[0m" msg
       | SwitchSession sid ->
-        match! switchSession client baseUrl sid with
-        | Ok msg -> printfn "\x1b[33m%s\x1b[0m" msg
-        | Error msg -> eprintfn "\x1b[31m%s\x1b[0m" msg
+        if String.IsNullOrEmpty(sid) then
+          // Interactive picker
+          match! fetchSessions client baseUrl with
+          | Error msg -> eprintfn "\x1b[31m%s\x1b[0m" msg
+          | Ok ([], _) -> printfn "No sessions running."
+          | Ok (sessions, _) ->
+            match pickSession sessions "Switch to session:" with
+            | Some resolvedId ->
+              match! switchSession client baseUrl resolvedId with
+              | Ok msg -> printfn "\x1b[33m%s\x1b[0m" msg
+              | Error msg -> eprintfn "\x1b[31m%s\x1b[0m" msg
+            | None -> printfn "\x1b[90mCancelled.\x1b[0m"
+        else
+          // Partial ID matching
+          match! fetchSessions client baseUrl with
+          | Error _ ->
+            match! switchSession client baseUrl sid with
+            | Ok msg -> printfn "\x1b[33m%s\x1b[0m" msg
+            | Error msg -> eprintfn "\x1b[31m%s\x1b[0m" msg
+          | Ok (sessions, _) ->
+            match resolveSessionId sessions sid with
+            | Some resolvedId ->
+              match! switchSession client baseUrl resolvedId with
+              | Ok msg -> printfn "\x1b[33m%s\x1b[0m" msg
+              | Error msg -> eprintfn "\x1b[31m%s\x1b[0m" msg
+            | None ->
+              eprintfn "\x1b[31mNo session matching '%s'. Use #sessions to list.\x1b[0m" sid
       | StopSession sid ->
-        match! stopSession client baseUrl sid with
-        | Ok msg -> printfn "\x1b[33m%s\x1b[0m" msg
-        | Error msg -> eprintfn "\x1b[31m%s\x1b[0m" msg
+        if String.IsNullOrEmpty(sid) then
+          // Interactive picker
+          match! fetchSessions client baseUrl with
+          | Error msg -> eprintfn "\x1b[31m%s\x1b[0m" msg
+          | Ok ([], _) -> printfn "No sessions running."
+          | Ok (sessions, _) ->
+            match pickSession sessions "Stop session:" with
+            | Some resolvedId ->
+              match! stopSession client baseUrl resolvedId with
+              | Ok msg -> printfn "\x1b[33m%s\x1b[0m" msg
+              | Error msg -> eprintfn "\x1b[31m%s\x1b[0m" msg
+            | None -> printfn "\x1b[90mCancelled.\x1b[0m"
+        else
+          match! fetchSessions client baseUrl with
+          | Error _ ->
+            match! stopSession client baseUrl sid with
+            | Ok msg -> printfn "\x1b[33m%s\x1b[0m" msg
+            | Error msg -> eprintfn "\x1b[31m%s\x1b[0m" msg
+          | Ok (sessions, _) ->
+            match resolveSessionId sessions sid with
+            | Some resolvedId ->
+              match! stopSession client baseUrl resolvedId with
+              | Ok msg -> printfn "\x1b[33m%s\x1b[0m" msg
+              | Error msg -> eprintfn "\x1b[31m%s\x1b[0m" msg
+            | None ->
+              eprintfn "\x1b[31mNo session matching '%s'. Use #sessions to list.\x1b[0m" sid
       | CreateSession dirOpt ->
         let workDir = dirOpt |> Option.defaultValue Environment.CurrentDirectory
         match! createSession client baseUrl workDir [] with

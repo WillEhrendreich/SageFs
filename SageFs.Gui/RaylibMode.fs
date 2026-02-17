@@ -288,7 +288,7 @@ module RaylibMode =
           DaemonClient.dispatch client baseUrl action |> fun t -> t.Wait()
         charAction <- getCharInput ()
 
-      // Handle mouse click → focus pane + position cursor in editor
+      // Handle mouse click → focus pane + position cursor in editor + select session
       if mousePressed MouseButton.Left then
         let mp = mousePos ()
         let clickCol = int mp.X / cellW
@@ -303,13 +303,20 @@ module RaylibMode =
         | Some (id, r) ->
           focusedPane <- id
           if id = PaneId.Editor then
-            // Click position relative to content area (inside border)
             let contentRow = clickRow - r.Row - 1
             let contentCol = clickCol - r.Col - 1
             if contentRow >= 0 && contentCol >= 0 then
               let scrollOff = scrollOffsets |> Map.tryFind PaneId.Editor |> Option.defaultValue 0
               let line = contentRow + scrollOff
               DaemonClient.dispatch client baseUrl (EditorAction.SetCursorPosition (line, contentCol))
+              |> fun t -> t.Wait()
+          elif id = PaneId.Sessions then
+            // Click on session row → set selection directly
+            let contentRow = clickRow - r.Row - 1
+            let scrollOff = scrollOffsets |> Map.tryFind PaneId.Sessions |> Option.defaultValue 0
+            let sessionIdx = contentRow + scrollOff
+            if contentRow >= 0 then
+              DaemonClient.dispatch client baseUrl (EditorAction.SessionSetIndex sessionIdx)
               |> fun t -> t.Wait()
         | None -> ()
 

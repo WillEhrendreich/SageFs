@@ -200,6 +200,8 @@ let renderShell (version: string) =
         .session-btn { background: var(--border); color: var(--fg); border: none; border-radius: 4px; padding: 2px 8px; cursor: pointer; font-size: 0.8rem; transition: background 0.15s; }
         .session-btn:hover { background: var(--accent); color: var(--bg); }
         .session-btn-danger:hover { background: var(--red); color: white; }
+        .session-selected { background: var(--bg-highlight); border-left: 3px solid var(--accent); }
+        .session-row:hover { background: var(--bg-highlight); }
         .panel-header-btn { background: none; border: 1px solid var(--border); color: var(--fg); border-radius: 4px; padding: 1px 8px; cursor: pointer; font-size: 0.75rem; font-family: inherit; }
         .panel-header-btn:hover { background: var(--border); }
         .output-icon { font-weight: bold; margin-right: 0.25rem; }
@@ -374,6 +376,19 @@ let renderShell (version: string) =
           document.addEventListener('keydown', function(e) {
             if (e.ctrlKey && (e.key === '=' || e.key === '+')) { e.preventDefault(); idx = Math.min(sizes.length - 1, idx + 1); document.documentElement.style.setProperty('--font-size', sizes[idx] + 'px'); }
             if (e.ctrlKey && e.key === '-') { e.preventDefault(); idx = Math.max(0, idx - 1); document.documentElement.style.setProperty('--font-size', sizes[idx] + 'px'); }
+            // Session navigation when not typing in an input/textarea
+            var tag = (e.target.tagName || '').toLowerCase();
+            if (tag !== 'input' && tag !== 'textarea') {
+              var action = null;
+              if (e.key === 'j' || e.key === 'ArrowDown') { action = 'sessionNavDown'; }
+              if (e.key === 'k' || e.key === 'ArrowUp') { action = 'sessionNavUp'; }
+              if (e.key === 'Enter') { action = 'sessionSelect'; }
+              if (e.key === 'x' || e.key === 'Delete') { action = 'sessionDelete'; }
+              if (action) {
+                e.preventDefault();
+                fetch('/api/dispatch', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({action: action}) });
+              }
+            }
           });
         })();
       """ ]
@@ -449,6 +464,7 @@ type ParsedSession = {
   Id: string
   Status: string
   IsActive: bool
+  IsSelected: bool
   ProjectsText: string
   EvalCount: int
   Uptime: string
@@ -457,7 +473,7 @@ type ParsedSession = {
 }
 
 let parseSessionLines (content: string) =
-  let sessionRegex = Regex(@"^(\S+)\s*\[([^\]]+)\](\s*\*)?(\s*\([^)]*\))?(\s*evals:\d+)?(\s*up:(?:just now|\S+))?(\s*dir:\S.*?)?(\s*last:.+)?$")
+  let sessionRegex = Regex(@"^([> ])\s+(\S+)\s*\[([^\]]+)\](\s*\*)?(\s*\([^)]*\))?(\s*evals:\d+)?(\s*up:(?:just now|\S+))?(\s*dir:\S.*?)?(\s*last:.+)?$")
   let extractTag (prefix: string) (value: string) =
     let v = value.Trim()
     if v.StartsWith(prefix) then v.Substring(prefix.Length).Trim()
@@ -467,19 +483,21 @@ let parseSessionLines (content: string) =
   |> Array.map (fun (l: string) ->
     let m = sessionRegex.Match(l)
     if m.Success then
-      let evalsMatch = Regex.Match(m.Groups.[5].Value, @"evals:(\d+)")
-      { Id = m.Groups.[1].Value
-        Status = m.Groups.[2].Value
-        IsActive = m.Groups.[3].Value.Contains("*")
-        ProjectsText = m.Groups.[4].Value.Trim()
+      let evalsMatch = Regex.Match(m.Groups.[6].Value, @"evals:(\d+)")
+      { Id = m.Groups.[2].Value
+        Status = m.Groups.[3].Value
+        IsActive = m.Groups.[4].Value.Contains("*")
+        IsSelected = m.Groups.[1].Value = ">"
+        ProjectsText = m.Groups.[5].Value.Trim()
         EvalCount = if evalsMatch.Success then int evalsMatch.Groups.[1].Value else 0
-        Uptime = extractTag "up:" m.Groups.[6].Value
-        WorkingDir = extractTag "dir:" m.Groups.[7].Value
-        LastActivity = extractTag "last:" m.Groups.[8].Value }
+        Uptime = extractTag "up:" m.Groups.[7].Value
+        WorkingDir = extractTag "dir:" m.Groups.[8].Value
+        LastActivity = extractTag "last:" m.Groups.[9].Value }
     else
       { Id = l.Trim()
         Status = "unknown"
         IsActive = false
+        IsSelected = false
         ProjectsText = ""
         EvalCount = 0
         Uptime = ""
@@ -493,16 +511,20 @@ let renderSessions (sessions: ParsedSession list) =
     if sessions.IsEmpty then
       Text.raw "No sessions"
     else
-      yield! sessions |> List.map (fun (s: ParsedSession) ->
+      yield! sessions |> List.mapi (fun i (s: ParsedSession) ->
         let statusClass =
           match s.Status with
           | "running" -> "status-ready"
           | "starting" | "restarting" -> "status-warming"
           | _ -> "status-faulted"
-        let cls = if s.IsActive then "output-result" else ""
+        let cls =
+          if s.IsSelected then "session-selected"
+          elif s.IsActive then "output-result"
+          else ""
         Elem.div
           [ Attr.class' (sprintf "session-row %s" cls)
-            Attr.style "display: flex; align-items: center; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid var(--border);" ]
+            Attr.style "display: flex; align-items: center; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid var(--border); cursor: pointer;"
+            Ds.onEvent ("click", sprintf "fetch('/api/dispatch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'sessionSetIndex',value:'%d'})})" i) ]
           [
             Elem.div [ Attr.style "flex: 1; min-width: 0;" ] [
               // Row 1: session ID + status + active indicator
@@ -560,6 +582,9 @@ let renderSessions (sessions: ParsedSession list) =
                 [ Text.raw "■" ]
             ]
           ])
+    Elem.div
+      [ Attr.style "font-size: 0.7rem; color: var(--fg-dim); text-align: center; padding: 4px 0; margin-top: 4px;" ]
+      [ Text.raw "j/k navigate · Enter switch · x stop" ]
   ]
 
 let parseOutputLines (content: string) : OutputLine list =
@@ -1084,6 +1109,8 @@ let createApiDispatchHandler
         | "sessionSelect" -> Some EditorAction.SessionSelect
         | "sessionDelete" -> Some EditorAction.SessionDelete
         | "clearOutput" -> Some EditorAction.ClearOutput
+        | "sessionSetIndex" ->
+          action.value |> Option.bind (fun s -> match Int32.TryParse(s) with true, i -> Some (EditorAction.SessionSetIndex i) | _ -> None)
         | "promptChar" ->
           action.value |> Option.bind (fun s -> if s.Length > 0 then Some (EditorAction.PromptChar s.[0]) else None)
         | "promptBackspace" -> Some EditorAction.PromptBackspace

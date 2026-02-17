@@ -20,6 +20,10 @@
     </PropertyGroup>
 
     <ItemGroup>
+        <InternalsVisibleTo Include="SageFs.Tests" />
+    </ItemGroup>
+
+    <ItemGroup>
         <Compile Include="DaemonState.fs" />
         <Compile Include="Dashboard.fs" />
         <Compile Include="PostgresInfra.fs" />
