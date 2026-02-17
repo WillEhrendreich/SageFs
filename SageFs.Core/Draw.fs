@@ -30,6 +30,26 @@ module rec Draw =
         CellGrid.set dt.Grid absRow c { Char = s.[i]; Fg = fg; Bg = bg; Attrs = attrs }
       c <- c + 1
 
+  /// Write text with per-character syntax highlighting from ColorSpan overlays.
+  /// Characters not covered by any span use the default fg color.
+  let textHighlighted (dt: DrawTarget) (row: int) (col: int) (defaultFg: byte) (bg: byte) (attrs: CellAttrs) (spans: ColorSpan array) (s: string) =
+    let absRow = dt.Clip.Row + row
+    let absCol = dt.Clip.Col + col
+    let maxCol = Rect.right dt.Clip
+    if absRow < dt.Clip.Row || absRow >= Rect.bottom dt.Clip then () else
+    // Build per-character fg array
+    let len = s.Length
+    let fgs = Array.create len defaultFg
+    for span in spans do
+      let stop = min len (span.Start + span.Length)
+      for i in span.Start .. stop - 1 do
+        fgs.[i] <- span.Fg
+    let mutable c = absCol
+    for i in 0 .. len - 1 do
+      if c < maxCol then
+        CellGrid.set dt.Grid absRow c { Char = s.[i]; Fg = fgs.[i]; Bg = bg; Attrs = attrs }
+      c <- c + 1
+
   let fill (dt: DrawTarget) (bg: byte) =
     let cell = { Cell.empty with Bg = bg }
     CellGrid.fillRect dt.Grid dt.Clip cell

@@ -6,7 +6,7 @@
         <IsPackable>true</IsPackable>
         <ToolCommandName>sagefs</ToolCommandName>
         <PackageOutputPath>./nupkg</PackageOutputPath>
-        <Version>0.4.20</Version>
+        <Version>0.5.0</Version>
 
         <!-- NuGet config -->
         <PackageId>SageFs</PackageId>
@@ -66,6 +66,14 @@
         <PackageReference Include="ModelContextProtocol" />
         <PackageReference Include="ModelContextProtocol.AspNetCore" />
         <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <None Include="..\runtimes\win-x64\native\tree-sitter-fsharp.dll"
+              Pack="true"
+              PackagePath="runtimes\win-x64\native"
+              CopyToOutputDirectory="PreserveNewest"
+              Link="runtimes\win-x64\native\tree-sitter-fsharp.dll" />
     </ItemGroup>
 
 </Project>

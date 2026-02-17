@@ -34,6 +34,7 @@
         <Compile Include="RenderPipeline.fs" />
         <Compile Include="CellGrid.fs" />
         <Compile Include="Theme.fs" />
+        <Compile Include="SyntaxHighlight.fs" />
         <Compile Include="Draw.fs" />
         <Compile Include="AnsiEmitter.fs" />
         <Compile Include="DaemonState.fs" />
@@ -62,10 +63,20 @@
 
     <ItemGroup>
         <EmbeddedResource Include="base.fsx" />
+        <EmbeddedResource Include="highlights.scm" LogicalName="highlights.scm" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <None Include="..\runtimes\win-x64\native\tree-sitter-fsharp.dll"
+              Pack="true"
+              PackagePath="runtimes\win-x64\native"
+              CopyToOutputDirectory="PreserveNewest"
+              Link="runtimes\win-x64\native\tree-sitter-fsharp.dll" />
     </ItemGroup>
 
     <ItemGroup>
         <PackageReference Include="FSharp.Compiler.Service" />
+        <PackageReference Include="TreeSitter.DotNet" />
 
         <PackageReference Include="FuzzySharp" />
         <PackageReference Include="Lib.Harmony" />
