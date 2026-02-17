@@ -49,6 +49,7 @@ module RaylibMode =
     | ResizeH of int
     | ResizeV of int
     | ResizeR of int
+    | CycleTheme
 
   /// Convert Raylib KeyboardKey to System.ConsoleKey for KeyMap lookup
   let private raylibToConsoleKey (key: KeyboardKey) : System.ConsoleKey option =
@@ -105,6 +106,7 @@ module RaylibMode =
         | Some (UiAction.ResizeH d) -> Some (ResizeH d)
         | Some (UiAction.ResizeV d) -> Some (ResizeV d)
         | Some (UiAction.ResizeR d) -> Some (ResizeR d)
+        | Some (UiAction.CycleTheme) -> Some CycleTheme
         | Some (UiAction.Editor action) -> Some (Action action)
         | None -> None
 
@@ -127,13 +129,15 @@ module RaylibMode =
     (fontSize: int)
     (currentFps: int)
     (keyMap: KeyMap)
-    (layoutConfig: LayoutConfig) =
+    (layoutConfig: LayoutConfig)
+    (theme: ThemeConfig)
+    (themeName: string) =
 
     let statusLeft =
       let sid = if sessionId.Length > 8 then sessionId.[..7] else sessionId
       sprintf " %s %s | evals: %d | %s" sid sessionState evalCount (PaneId.displayName focusedPane)
-    let statusRight = sprintf " %dpt | %d fps |%s" fontSize currentFps (StatusHints.build keyMap focusedPane)
-    Screen.drawWith layoutConfig grid regions focusedPane scrollOffsets statusLeft statusRight |> ignore
+    let statusRight = sprintf " %s | %dpt | %d fps |%s" themeName fontSize currentFps (StatusHints.build keyMap focusedPane)
+    Screen.drawWith layoutConfig theme grid regions focusedPane scrollOffsets statusLeft statusRight |> ignore
 
   /// Run the Raylib GUI window connected to daemon.
   let run () =
@@ -184,6 +188,8 @@ module RaylibMode =
     let mutable focusedPane = PaneId.Editor
     let mutable scrollOffsets = Map.empty<PaneId, int>
     let mutable layoutConfig = LayoutConfig.defaults
+    let mutable currentTheme = Theme.defaults
+    let mutable currentThemeName = "One Dark"
     let statelock = obj ()
     let mutable running = true
 
@@ -282,6 +288,10 @@ module RaylibMode =
           layoutConfig <- LayoutConfig.resizeV d layoutConfig
         | ResizeR d ->
           layoutConfig <- LayoutConfig.resizeR d layoutConfig
+        | CycleTheme ->
+          let name, theme = ThemePresets.cycleNext currentTheme
+          currentTheme <- theme
+          currentThemeName <- name
         | Action action ->
           // When Sessions pane is focused, remap movement keys to session navigation
           let remappedAction =
@@ -342,11 +352,11 @@ module RaylibMode =
         let regions, sessionId, sessionState, evalCount =
           lock statelock (fun () -> lastRegions, lastSessionId, lastSessionState, lastEvalCount)
 
-        renderRegions grid regions sessionId sessionState evalCount focusedPane scrollOffsets fontSize lastFps keyMap layoutConfig
+        renderRegions grid regions sessionId sessionState evalCount focusedPane scrollOffsets fontSize lastFps keyMap layoutConfig currentTheme currentThemeName
         lastFps <- fps ()
 
         Raylib.BeginDrawing()
-        Raylib.ClearBackground(RaylibPalette.hexToColor Theme.bgDefault)
+        Raylib.ClearBackground(RaylibPalette.hexToColor currentTheme.BgDefault)
         RaylibEmitter.emit grid font cellW cellH fontSize
         Raylib.EndDrawing()
 

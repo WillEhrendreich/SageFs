@@ -42,6 +42,8 @@ let run (daemonInfo: DaemonInfo) = task {
   let mutable lastEvalCount = 0
   let mutable lastAvgMs = 0.0
   let mutable layoutConfig = LayoutConfig.defaults
+  let mutable currentTheme = Theme.defaults
+  let mutable currentThemeName = "One Dark"
 
   // Load keybindings from config, merge with defaults
   let keyMap =
@@ -66,8 +68,8 @@ let run (daemonInfo: DaemonInfo) = task {
             sprintf " %s %s | evals: %d (avg %.0fms) | %s" sid lastSessionState lastEvalCount lastAvgMs (PaneId.displayName focusedPane)
           else
             sprintf " %s %s | evals: %d | %s" sid lastSessionState lastEvalCount (PaneId.displayName focusedPane)
-        let statusRight = sprintf " %.1fms |%s" lastFrameMs (StatusHints.build keyMap focusedPane)
-        let cursorPos = Screen.drawWith layoutConfig grid lastRegions focusedPane scrollOffsets statusLeft statusRight
+        let statusRight = sprintf " %s | %.1fms |%s" currentThemeName lastFrameMs (StatusHints.build keyMap focusedPane)
+        let cursorPos = Screen.drawWith layoutConfig currentTheme grid lastRegions focusedPane scrollOffsets statusLeft statusRight
         let cursorRow, cursorCol =
           match cursorPos with
           | Some (r, c) -> r, c
@@ -171,6 +173,11 @@ let run (daemonInfo: DaemonInfo) = task {
           render ()
         | Some (TerminalCommand.ResizeR d) ->
           layoutConfig <- LayoutConfig.resizeR d layoutConfig
+          render ()
+        | Some TerminalCommand.CycleTheme ->
+          let name, theme = ThemePresets.cycleNext currentTheme
+          currentTheme <- theme
+          currentThemeName <- name
           render ()
         | Some (TerminalCommand.Action action) ->
           // When Sessions pane is focused, remap movement keys to session navigation

@@ -179,6 +179,7 @@ module Screen =
   /// Returns the cursor position (screen row, col) if the focused pane has one.
   let drawWith
     (cfg: LayoutConfig)
+    (theme: ThemeConfig)
     (grid: Cell[,])
     (regions: RenderRegion list)
     (focusedPane: PaneId)
@@ -191,7 +192,7 @@ module Screen =
 
     CellGrid.clear grid
     let dt = DrawTarget.create grid (Rect.create 0 0 cols rows)
-    Draw.fill dt (Theme.hexToRgb Theme.bgPanel)
+    Draw.fill dt (Theme.hexToRgb theme.BgPanel)
 
     let paneRects, _statusRect = computeLayoutWith cfg rows cols
 
@@ -199,9 +200,9 @@ module Screen =
 
     for (paneId, rect) in paneRects do
       let borderColor =
-        if paneId = focusedPane then Theme.hexToRgb Theme.borderFocus else Theme.hexToRgb Theme.borderNormal
+        if paneId = focusedPane then Theme.hexToRgb theme.BorderFocus else Theme.hexToRgb theme.BorderNormal
       let bg =
-        if paneId = PaneId.Editor then Theme.hexToRgb Theme.bgEditor else Theme.hexToRgb Theme.bgPanel
+        if paneId = PaneId.Editor then Theme.hexToRgb theme.BgEditor else Theme.hexToRgb theme.BgPanel
       let inner =
         Draw.box (DrawTarget.create grid rect) (PaneId.displayName paneId) borderColor bg
 
@@ -212,14 +213,14 @@ module Screen =
         let offset = scrollOffsets |> Map.tryFind paneId |> Option.defaultValue 0
         let skip = min offset (max 0 (lines.Length - 1))
         let visibleLines = lines |> Array.skip skip |> Array.truncate inner.Clip.Height
-        let fg = Theme.hexToRgb Theme.fgDefault
+        let fg = Theme.hexToRgb theme.FgDefault
 
         // Apply syntax highlighting for editor and output panes
         let shouldHighlight =
           paneId = PaneId.Editor || paneId = PaneId.Output
         let allSpans =
           if shouldHighlight && SyntaxHighlight.isAvailable () then
-            SyntaxHighlight.tokenize Theme.defaults region.Content
+            SyntaxHighlight.tokenize theme region.Content
           else
             [||]
         let spanOffset = skip
@@ -233,9 +234,9 @@ module Screen =
 
         // Scroll indicators
         if skip > 0 then
-          Draw.text inner 0 (inner.Clip.Width - 1) (Theme.hexToRgb Theme.fgDim) bg CellAttrs.None "▲"
+          Draw.text inner 0 (inner.Clip.Width - 1) (Theme.hexToRgb theme.FgDim) bg CellAttrs.None "▲"
         if lines.Length > skip + inner.Clip.Height then
-          Draw.text inner (inner.Clip.Height - 1) (inner.Clip.Width - 1) (Theme.hexToRgb Theme.fgDim) bg CellAttrs.None "▼"
+          Draw.text inner (inner.Clip.Height - 1) (inner.Clip.Width - 1) (Theme.hexToRgb theme.FgDim) bg CellAttrs.None "▼"
 
         // Track cursor for focused pane
         if paneId = focusedPane then
@@ -267,8 +268,8 @@ module Screen =
             let c = popupCol
             if r < rows - 1 && c + menuWidth < cols then
               let isSelected = i = compl.SelectedIndex
-              let itemFg = if isSelected then Theme.hexToRgb Theme.bgEditor else Theme.hexToRgb Theme.fgDefault
-              let itemBg = if isSelected then Theme.hexToRgb Theme.borderFocus else Theme.hexToRgb Theme.bgStatus
+              let itemFg = if isSelected then Theme.hexToRgb theme.BgEditor else Theme.hexToRgb theme.FgDefault
+              let itemBg = if isSelected then Theme.hexToRgb theme.BorderFocus else Theme.hexToRgb theme.BgStatus
               let label = compl.Items.[i].PadRight(menuWidth)
               let itemDt = DrawTarget.create grid (Rect.create r c menuWidth 1)
               Draw.text itemDt 0 0 itemFg itemBg CellAttrs.None (sprintf " %s" label)
@@ -279,11 +280,11 @@ module Screen =
           cursorPos <- Some (rect.Row + 1, rect.Col + 1)
 
     // Status bar
-    Draw.statusBar dt statusLeft statusRight (Theme.hexToRgb Theme.fgDefault) (Theme.hexToRgb Theme.bgStatus)
+    Draw.statusBar dt statusLeft statusRight (Theme.hexToRgb theme.FgDefault) (Theme.hexToRgb theme.BgStatus)
 
     cursorPos
 
-  /// Draw all panes and status bar using the default layout config.
+  /// Draw all panes and status bar using the default layout config and theme.
   let draw
     (grid: Cell[,])
     (regions: RenderRegion list)
@@ -291,4 +292,4 @@ module Screen =
     (scrollOffsets: Map<PaneId, int>)
     (statusLeft: string)
     (statusRight: string) : (int * int) option =
-    drawWith LayoutConfig.defaults grid regions focusedPane scrollOffsets statusLeft statusRight
+    drawWith LayoutConfig.defaults Theme.defaults grid regions focusedPane scrollOffsets statusLeft statusRight

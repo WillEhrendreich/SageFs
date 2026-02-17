@@ -206,12 +206,26 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
         MaxDuration = TimeSpan.FromMilliseconds(float snap.MaxDurationMs) }
       : Affordances.EvalStats
     | None -> Affordances.EvalStats.empty
+
+  let getSessionWorkingDir () =
+    let sid = !activeSessionId
+    try
+      let managed =
+        sessionManager.PostAndAsyncReply(fun reply ->
+          SessionManager.SessionCommand.GetSession(sid, reply))
+        |> Async.RunSynchronously
+      match managed with
+      | Some s -> s.Info.WorkingDirectory
+      | None -> ""
+    with _ -> ""
+
   let dashboardEndpoints =
     Dashboard.createEndpoints
       version
       getSessionState
       getEvalStats
       (fun () -> !activeSessionId)
+      getSessionWorkingDir
       0
       (fun () -> elmRuntime.GetRegions() |> Some)
       (Some stateChangedEvent.Publish)

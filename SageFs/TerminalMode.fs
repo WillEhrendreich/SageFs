@@ -66,8 +66,8 @@ let run
           | None -> "No session"
         let evalCount = model.RecentOutput |> List.length
         let statusLeft = sprintf " %s | evals: %d | %s" sessionState evalCount (PaneId.displayName focusedPane)
-        let statusRight = sprintf " %.1fms |%s" lastFrameMs (StatusHints.build keyMap focusedPane)
-        let cursorPos = Screen.drawWith layoutConfig grid regions focusedPane scrollOffsets statusLeft statusRight
+        let statusRight = sprintf " %s | %.1fms |%s" model.ThemeName lastFrameMs (StatusHints.build keyMap focusedPane)
+        let cursorPos = Screen.drawWith layoutConfig model.Theme grid regions focusedPane scrollOffsets statusLeft statusRight
         let cursorRow, cursorCol =
           match cursorPos with
           | Some (r, c) -> r, c
@@ -158,6 +158,9 @@ let run
           render ()
         | Some (TerminalCommand.ResizeR d) ->
           layoutConfig <- LayoutConfig.resizeR d layoutConfig
+          render ()
+        | Some TerminalCommand.CycleTheme ->
+          elmRuntime.Dispatch SageFsMsg.CycleTheme
           render ()
         | Some (TerminalCommand.Action action) ->
           elmRuntime.Dispatch (SageFsMsg.Editor action)

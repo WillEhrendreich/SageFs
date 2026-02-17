@@ -10,6 +10,7 @@ open SageFs.Features.Diagnostics
 type SageFsMsg =
   | Editor of EditorAction
   | Event of SageFsEvent
+  | CycleTheme
 
 /// Side effects the Elm loop can request.
 /// Wraps EditorEffect — will grow as app-level effects emerge.
@@ -24,6 +25,8 @@ type SageFsModel = {
   RecentOutput: OutputLine list
   Diagnostics: Features.Diagnostics.Diagnostic list
   CreatingSession: bool
+  Theme: ThemeConfig
+  ThemeName: string
 }
 
 module SageFsModel =
@@ -38,6 +41,8 @@ module SageFsModel =
     RecentOutput = []
     Diagnostics = []
     CreatingSession = false
+    Theme = Theme.defaults
+    ThemeName = "One Dark"
   }
 
 /// Pure update function: routes SageFsMsg through the right handler.
@@ -280,6 +285,10 @@ module SageFsUpdate =
                 Timestamp = DateTime.UtcNow
                 SessionId = activeId })
           { model with RecentOutput = lines @ model.RecentOutput }, []
+
+    | SageFsMsg.CycleTheme ->
+      let name, theme = ThemePresets.cycleNext model.Theme
+      { model with Theme = theme; ThemeName = name }, []
 
 /// Pure render function: produces RenderRegion list from model.
 /// Every frontend consumes these regions — terminal, web, Neovim, etc.

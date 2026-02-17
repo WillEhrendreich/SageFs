@@ -266,6 +266,7 @@ type TerminalCommand =
   | ResizeH of int
   | ResizeV of int
   | ResizeR of int
+  | CycleTheme
 
 
 /// Map console key presses to terminal commands
@@ -291,6 +292,7 @@ module TerminalInput =
     | Some (UiAction.ResizeH d) -> Some (TerminalCommand.ResizeH d)
     | Some (UiAction.ResizeV d) -> Some (TerminalCommand.ResizeV d)
     | Some (UiAction.ResizeR d) -> Some (TerminalCommand.ResizeR d)
+    | Some (UiAction.CycleTheme) -> Some TerminalCommand.CycleTheme
     | Some (UiAction.Editor action) -> Some (TerminalCommand.Action action)
     | None ->
       // Fall through to character insertion for printable chars

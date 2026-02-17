@@ -34,6 +34,7 @@
         <Compile Include="RenderPipeline.fs" />
         <Compile Include="CellGrid.fs" />
         <Compile Include="Theme.fs" />
+        <Compile Include="ThemePresets.fs" />
         <Compile Include="SyntaxHighlight.fs" />
         <Compile Include="Draw.fs" />
         <Compile Include="AnsiEmitter.fs" />
