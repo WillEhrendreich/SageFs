@@ -50,6 +50,7 @@
         <Compile Include="ScreenTests.fs" />
         <Compile Include="DashboardSnapshotTests.fs" />
         <Compile Include="TuiClientTests.fs" />
+        <Compile Include="MultiUiConsistencyTests.fs" />
         <Compile Include="DashboardBrowserTests.fs" />
         <Compile Include="ElmDaemonTests.fs" />
         <Compile Include="SessionCreationTests.fs" />
