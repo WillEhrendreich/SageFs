@@ -137,7 +137,7 @@ let loadSolution (logger: ILogger) (args: Arguments list) =
       OtherArgs = otherArgs
     }
 
-let solutionToFsiArgs (logger: ILogger) useAsp sln =
+let solutionToFsiArgs (logger: ILogger) (_useAsp: bool) sln =
   let projectDlls = sln.Projects |> Seq.map _.TargetPath
 
   let nugetDlls =
@@ -153,20 +153,23 @@ let solutionToFsiArgs (logger: ILogger) useAsp sln =
     |> List.ofSeq
 
   if List.exists (File.Exists >> not) allDlls then
-    logger.LogError "Not all dlls are found! Pleaase build your project before running REPL"
-    Environment.Exit 1
+    let missing = allDlls |> List.filter (File.Exists >> not)
+    for dll in missing do
+      logger.LogError (sprintf "Missing DLL: %s" dll)
+    failwithf "Not all DLLs are found (%d missing). Please build your project before running REPL" missing.Length
 
   [|
     "fsi"
     yield! allDlls |> Seq.map (sprintf "-r:%s")
     yield! sln.LibPaths |> Seq.map (sprintf "--lib:%s")
     yield! sln.OtherArgs
-    if useAsp then
-      yield!
-        sln.Projects
-        |> Seq.collect _.OtherOptions
-        |> Seq.filter (fun s ->
-          s.StartsWith "-r"
-          && s.EndsWith ".dll"
-          )
+    // Always include framework DLL references from project OtherOptions
+    // (e.g. ASP.NET Core, MVC) — harmless if unused, essential if needed
+    yield!
+      sln.Projects
+      |> Seq.collect _.OtherOptions
+      |> Seq.filter (fun s ->
+        s.StartsWith "-r"
+        && s.EndsWith ".dll"
+        )
   |]

@@ -108,10 +108,10 @@ let handleMessage
 let run (sessionId: string) (pipeName: string) (args: Args.Arguments list) = async {
   let logger =
     { new Utils.ILogger with
-        member _.LogInfo _ = ()
+        member _.LogInfo msg = eprintfn "[worker] %s" msg
         member _.LogDebug _ = ()
-        member _.LogWarning _ = ()
-        member _.LogError _ = () }
+        member _.LogWarning msg = eprintfn "[worker] ⚠️ %s" msg
+        member _.LogError msg = eprintfn "[worker] ❌ %s" msg }
   let onEvent _ = ()
 
   let actorArgs : ActorCreation.ActorArgs = {
