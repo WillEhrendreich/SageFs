@@ -438,3 +438,62 @@ let sessionNavigationTests = testList "Session Navigation" [
     UiAction.tryParse "ClearOutput"
     |> Expect.equal "should parse" (Some (UiAction.Editor EditorAction.ClearOutput))
 ]
+
+[<Tests>]
+let promptTests = testList "Inline Prompt" [
+  testCase "CreateSession with empty projects opens prompt" <| fun _ ->
+    let state, effs = EditorUpdate.update (EditorAction.CreateSession []) initial
+    state.Prompt |> Expect.isSome "should open prompt"
+    state.Prompt.Value.Purpose |> Expect.equal "purpose" PromptPurpose.CreateSessionDir
+    effs |> Expect.isEmpty "no effects until confirm"
+
+  testCase "CreateSession with projects does not open prompt" <| fun _ ->
+    let state, effs = EditorUpdate.update (EditorAction.CreateSession ["Foo.fsproj"]) initial
+    state.Prompt |> Expect.isNone "no prompt when projects specified"
+    effs |> Expect.equal "should create" [EditorEffect.RequestSessionCreate ["Foo.fsproj"]]
+
+  testCase "PromptChar appends character" <| fun _ ->
+    let withPrompt = { initial with Prompt = Some { Label = "Dir"; Input = "/foo"; Purpose = PromptPurpose.CreateSessionDir } }
+    let state, _ = EditorUpdate.update (EditorAction.PromptChar 'x') withPrompt
+    state.Prompt.Value.Input |> Expect.equal "should append" "/foox"
+
+  testCase "PromptBackspace removes last char" <| fun _ ->
+    let withPrompt = { initial with Prompt = Some { Label = "Dir"; Input = "/foo"; Purpose = PromptPurpose.CreateSessionDir } }
+    let state, _ = EditorUpdate.update EditorAction.PromptBackspace withPrompt
+    state.Prompt.Value.Input |> Expect.equal "should remove" "/fo"
+
+  testCase "PromptBackspace on empty input does nothing" <| fun _ ->
+    let withPrompt = { initial with Prompt = Some { Label = "Dir"; Input = ""; Purpose = PromptPurpose.CreateSessionDir } }
+    let state, _ = EditorUpdate.update EditorAction.PromptBackspace withPrompt
+    state.Prompt.Value.Input |> Expect.equal "still empty" ""
+
+  testCase "PromptConfirm creates session with directory" <| fun _ ->
+    let withPrompt = { initial with Prompt = Some { Label = "Dir"; Input = "C:\\Code"; Purpose = PromptPurpose.CreateSessionDir } }
+    let state, effs = EditorUpdate.update EditorAction.PromptConfirm withPrompt
+    state.Prompt |> Expect.isNone "prompt closed"
+    effs |> Expect.equal "should create with dir" [EditorEffect.RequestSessionCreate ["C:\\Code"]]
+
+  testCase "PromptCancel closes prompt without effect" <| fun _ ->
+    let withPrompt = { initial with Prompt = Some { Label = "Dir"; Input = "/foo"; Purpose = PromptPurpose.CreateSessionDir } }
+    let state, effs = EditorUpdate.update EditorAction.PromptCancel withPrompt
+    state.Prompt |> Expect.isNone "prompt closed"
+    effs |> Expect.isEmpty "no effects"
+
+  testCase "PromptChar without active prompt is no-op" <| fun _ ->
+    let state, effs = EditorUpdate.update (EditorAction.PromptChar 'x') initial
+    state.Prompt |> Expect.isNone "still no prompt"
+    effs |> Expect.isEmpty "no effects"
+
+  testCase "PromptConfirm without active prompt is no-op" <| fun _ ->
+    let state, effs = EditorUpdate.update EditorAction.PromptConfirm initial
+    state.Prompt |> Expect.isNone "still no prompt"
+    effs |> Expect.isEmpty "no effects"
+
+  testCase "UiAction.tryParse PromptConfirm" <| fun _ ->
+    UiAction.tryParse "PromptConfirm"
+    |> Expect.equal "should parse" (Some (UiAction.Editor EditorAction.PromptConfirm))
+
+  testCase "UiAction.tryParse PromptCancel" <| fun _ ->
+    UiAction.tryParse "PromptCancel"
+    |> Expect.equal "should parse" (Some (UiAction.Editor EditorAction.PromptCancel))
+]

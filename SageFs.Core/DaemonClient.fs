@@ -107,6 +107,10 @@ module DaemonClient =
     | EditorAction.SessionSelect -> Some ("sessionSelect", None)
     | EditorAction.SessionDelete -> Some ("sessionDelete", None)
     | EditorAction.ClearOutput -> Some ("clearOutput", None)
+    | EditorAction.PromptChar c -> Some ("promptChar", Some (string c))
+    | EditorAction.PromptBackspace -> Some ("promptBackspace", None)
+    | EditorAction.PromptConfirm -> Some ("promptConfirm", None)
+    | EditorAction.PromptCancel -> Some ("promptCancel", None)
     | EditorAction.SwitchMode _ -> None
 
   /// Send an EditorAction to the daemon via POST /api/dispatch.

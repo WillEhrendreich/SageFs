@@ -464,4 +464,36 @@ let sessionNavAppTests = testList "SageFsUpdate session navigation" [
     let newModel, _ =
       SageFsUpdate.update (SageFsMsg.Editor EditorAction.ClearOutput) model
     newModel.RecentOutput |> Expect.isEmpty "output should be cleared"
+
+  testCase "InsertChar remapped to PromptChar when prompt active" <| fun _ ->
+    let model = {
+      SageFsModel.initial with
+        Editor = { EditorState.initial with
+                     Prompt = Some { Label = "Dir"; Input = "ab"; Purpose = PromptPurpose.CreateSessionDir } } }
+    let newModel, _ =
+      SageFsUpdate.update (SageFsMsg.Editor (EditorAction.InsertChar 'c')) model
+    newModel.Editor.Prompt.Value.Input |> Expect.equal "should append via remap" "abc"
+
+  testCase "NewLine remapped to PromptConfirm when prompt active" <| fun _ ->
+    let model = {
+      SageFsModel.initial with
+        Editor = { EditorState.initial with
+                     Prompt = Some { Label = "Dir"; Input = "C:\\Code"; Purpose = PromptPurpose.CreateSessionDir } } }
+    let _, effects =
+      SageFsUpdate.update (SageFsMsg.Editor EditorAction.NewLine) model
+    effects |> List.exists (fun e ->
+      match e with
+      | SageFsEffect.Editor (EditorEffect.RequestSessionCreate _) -> true
+      | _ -> false)
+    |> Expect.isTrue "should produce session create effect"
+
+  testCase "Cancel remapped to PromptCancel when prompt active" <| fun _ ->
+    let model = {
+      SageFsModel.initial with
+        Editor = { EditorState.initial with
+                     Prompt = Some { Label = "Dir"; Input = "test"; Purpose = PromptPurpose.CreateSessionDir } } }
+    let newModel, effects =
+      SageFsUpdate.update (SageFsMsg.Editor EditorAction.Cancel) model
+    newModel.Editor.Prompt |> Expect.isNone "prompt should close"
+    effects |> Expect.isEmpty "no effects on cancel"
 ]

@@ -49,9 +49,24 @@ module SageFsUpdate =
         Some sessions.[idx].Id
       else None
 
+  /// When a prompt is active, remap editor input actions to prompt actions.
+  let private remapForPrompt (action: EditorAction) (prompt: PromptState option) : EditorAction =
+    match prompt with
+    | None -> action
+    | Some _ ->
+      match action with
+      | EditorAction.InsertChar c -> EditorAction.PromptChar c
+      | EditorAction.DeleteBackward -> EditorAction.PromptBackspace
+      | EditorAction.NewLine -> EditorAction.PromptConfirm
+      | EditorAction.Submit -> EditorAction.PromptConfirm
+      | EditorAction.Cancel -> EditorAction.PromptCancel
+      | EditorAction.DismissCompletion -> EditorAction.PromptCancel
+      | other -> other
+
   let update (msg: SageFsMsg) (model: SageFsModel) : SageFsModel * SageFsEffect list =
     match msg with
     | SageFsMsg.Editor action ->
+      let action = remapForPrompt action model.Editor.Prompt
       match action with
       | EditorAction.SessionSelect ->
         match resolveSessionId model with
@@ -237,10 +252,16 @@ module SageFsRender =
       |> Option.map (fun menu ->
         { Items = menu.Items |> List.map (fun i -> i.Label)
           SelectedIndex = menu.SelectedIndex })
+    let editorContent =
+      let bufText = ValidatedBuffer.text model.Editor.Buffer
+      match model.Editor.Prompt with
+      | Some prompt ->
+        sprintf "%s\n─── %s: %s█" bufText prompt.Label prompt.Input
+      | None -> bufText
     let editorRegion = {
       Id = "editor"
       Flags = RegionFlags.Focusable ||| RegionFlags.LiveUpdate
-      Content = ValidatedBuffer.text model.Editor.Buffer
+      Content = editorContent
       Affordances = []
       Cursor = Some { Line = bufCursor.Line; Col = bufCursor.Column }
       Completions = editorCompletions
@@ -476,7 +497,15 @@ module SageFsEffectHandler =
 
       | EditorEffect.RequestSessionCreate projects ->
         async {
-          let! result = deps.CreateSession projects "."
+          let workingDir =
+            match projects with
+            | [dir] when System.IO.Directory.Exists(dir) -> dir
+            | _ -> "."
+          let projectList =
+            match projects with
+            | [dir] when System.IO.Directory.Exists(dir) -> []
+            | other -> other
+          let! result = deps.CreateSession projectList workingDir
           match result with
           | Ok info ->
             dispatch (SageFsMsg.Event (

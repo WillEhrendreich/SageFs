@@ -1084,6 +1084,11 @@ let createApiDispatchHandler
         | "sessionSelect" -> Some EditorAction.SessionSelect
         | "sessionDelete" -> Some EditorAction.SessionDelete
         | "clearOutput" -> Some EditorAction.ClearOutput
+        | "promptChar" ->
+          action.value |> Option.bind (fun s -> if s.Length > 0 then Some (EditorAction.PromptChar s.[0]) else None)
+        | "promptBackspace" -> Some EditorAction.PromptBackspace
+        | "promptConfirm" -> Some EditorAction.PromptConfirm
+        | "promptCancel" -> Some EditorAction.PromptCancel
         | _ -> None
       match editorAction with
       | Some ea ->

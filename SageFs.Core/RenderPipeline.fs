@@ -117,6 +117,11 @@ and [<RequireQualifiedAccess>] EditorAction =
   | SessionDelete
   // Output
   | ClearOutput
+  // Prompt input (for inline prompts like session create)
+  | PromptChar of char
+  | PromptBackspace
+  | PromptConfirm
+  | PromptCancel
 
 /// Every UI-level action (superset of EditorAction for renderers)
 and [<RequireQualifiedAccess>] UiAction =
@@ -257,6 +262,8 @@ module UiAction =
     | "SessionSelect" -> Some (UiAction.Editor EditorAction.SessionSelect)
     | "SessionDelete" -> Some (UiAction.Editor EditorAction.SessionDelete)
     | "ClearOutput" -> Some (UiAction.Editor EditorAction.ClearOutput)
+    | "PromptConfirm" -> Some (UiAction.Editor EditorAction.PromptConfirm)
+    | "PromptCancel" -> Some (UiAction.Editor EditorAction.PromptCancel)
     | s when s.StartsWith("TogglePane.") -> Some (UiAction.TogglePane (s.Substring(11)))
     | s when s.StartsWith("Layout.") -> Some (UiAction.LayoutPreset (s.Substring(7)))
     | _ -> None
@@ -327,6 +334,8 @@ module KeyMap =
       // Pane toggle
       KeyCombo.ctrlAlt ConsoleKey.O, UiAction.TogglePane "Output"
       KeyCombo.ctrlAlt ConsoleKey.D, UiAction.TogglePane "Diagnostics"
+      // Clear output
+      KeyCombo.ctrlShift ConsoleKey.L, e EditorAction.ClearOutput
     ] |> Map.ofList
 
   /// Merge user overrides onto defaults (overrides win)

@@ -23,6 +23,16 @@ type HistoryState = {
   Draft: string
 }
 
+/// Inline prompt for gathering user input (e.g. session create directory)
+type PromptState = {
+  Label: string
+  Input: string
+  Purpose: PromptPurpose
+}
+
+and [<RequireQualifiedAccess>] PromptPurpose =
+  | CreateSessionDir
+
 /// Errors when constructing a ValidatedBuffer
 [<RequireQualifiedAccess>]
 type BufferError =
@@ -162,6 +172,7 @@ type EditorState = {
   Mode: EditMode
   SessionPanelVisible: bool
   SelectedSessionIndex: int option
+  Prompt: PromptState option
 }
 
 module EditorState =
@@ -173,6 +184,7 @@ module EditorState =
     Mode = EditMode.Insert
     SessionPanelVisible = false
     SelectedSessionIndex = None
+    Prompt = None
   }
 
 /// Pure state transition: action + state → new state + side effects
@@ -322,7 +334,15 @@ module EditorUpdate =
     | EditorAction.SwitchSession id ->
       state, [EditorEffect.RequestSessionSwitch id]
     | EditorAction.CreateSession projects ->
-      state, [EditorEffect.RequestSessionCreate projects]
+      if projects.IsEmpty && state.Prompt.IsNone then
+        // Open prompt to ask for working directory
+        { state with
+            Prompt = Some {
+              Label = "Working directory"
+              Input = System.IO.Directory.GetCurrentDirectory()
+              Purpose = PromptPurpose.CreateSessionDir } }, []
+      else
+        state, [EditorEffect.RequestSessionCreate projects]
     | EditorAction.StopSession id ->
       state, [EditorEffect.RequestSessionStop id]
     | EditorAction.ToggleSessionPanel ->
@@ -352,3 +372,24 @@ module EditorUpdate =
       state, []
     | EditorAction.ClearOutput ->
       state, []
+    | EditorAction.PromptChar c ->
+      match state.Prompt with
+      | Some prompt ->
+        { state with Prompt = Some { prompt with Input = prompt.Input + string c } }, []
+      | None -> state, []
+    | EditorAction.PromptBackspace ->
+      match state.Prompt with
+      | Some prompt when prompt.Input.Length > 0 ->
+        { state with Prompt = Some { prompt with Input = prompt.Input.[..prompt.Input.Length - 2] } }, []
+      | _ -> state, []
+    | EditorAction.PromptConfirm ->
+      match state.Prompt with
+      | Some prompt ->
+        let effects =
+          match prompt.Purpose with
+          | PromptPurpose.CreateSessionDir ->
+            [EditorEffect.RequestSessionCreate [prompt.Input]]
+        { state with Prompt = None }, effects
+      | None -> state, []
+    | EditorAction.PromptCancel ->
+      { state with Prompt = None }, []
