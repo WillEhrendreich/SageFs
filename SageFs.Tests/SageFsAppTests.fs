@@ -392,3 +392,76 @@ let elmIntegrationTests = testList "ElmLoop integration" [
     effectExecuted |> Expect.isTrue "effect should have been executed"
     resultReceived |> Expect.isTrue "result should have been received"
 ]
+
+[<Tests>]
+let sessionNavAppTests = testList "SageFsUpdate session navigation" [
+  let mkSnap id isActive = {
+    Id = id; Projects = []; Status = SessionDisplayStatus.Running
+    LastActivity = System.DateTime.UtcNow; EvalCount = 0
+    UpSince = System.DateTime.UtcNow; IsActive = isActive; WorkingDirectory = "" }
+
+  let withSessions (snaps: SessionSnapshot list) (model: SageFsModel) : SageFsModel =
+    { model with
+        Sessions = {
+          model.Sessions with Sessions = snaps } }
+
+  testCase "SessionNavDown clamps to session count" <| fun _ ->
+    let model =
+      SageFsModel.initial
+      |> withSessions [mkSnap "s1" true; mkSnap "s2" false]
+    let model' = { model with Editor = { model.Editor with SelectedSessionIndex = Some 1 } }
+    let newModel, _ =
+      SageFsUpdate.update (SageFsMsg.Editor EditorAction.SessionNavDown) model'
+    newModel.Editor.SelectedSessionIndex
+    |> Expect.equal "should clamp to last index" (Some 1)
+
+  testCase "SessionSelect emits RequestSessionSwitch with correct id" <| fun _ ->
+    let model =
+      SageFsModel.initial
+      |> withSessions [mkSnap "s1" true; mkSnap "s2" false]
+    let model' = { model with Editor = { model.Editor with SelectedSessionIndex = Some 1 } }
+    let _, effects =
+      SageFsUpdate.update (SageFsMsg.Editor EditorAction.SessionSelect) model'
+    match effects with
+    | [SageFsEffect.Editor (EditorEffect.RequestSessionSwitch sid)] ->
+      sid |> Expect.equal "should switch to s2" "s2"
+    | _ -> failtest (sprintf "expected RequestSessionSwitch, got %A" effects)
+
+  testCase "SessionDelete emits RequestSessionStop with correct id" <| fun _ ->
+    let model =
+      SageFsModel.initial
+      |> withSessions [mkSnap "s1" true; mkSnap "s2" false]
+    let model' = { model with Editor = { model.Editor with SelectedSessionIndex = Some 0 } }
+    let _, effects =
+      SageFsUpdate.update (SageFsMsg.Editor EditorAction.SessionDelete) model'
+    match effects with
+    | [SageFsEffect.Editor (EditorEffect.RequestSessionStop sid)] ->
+      sid |> Expect.equal "should stop s1" "s1"
+    | _ -> failtest (sprintf "expected RequestSessionStop, got %A" effects)
+
+  testCase "SessionSelect with no selection does nothing" <| fun _ ->
+    let model = SageFsModel.initial |> withSessions [mkSnap "s1" true]
+    let _, effects =
+      SageFsUpdate.update (SageFsMsg.Editor EditorAction.SessionSelect) model
+    effects |> Expect.isEmpty "no effects when no selection"
+
+  testCase "SessionSelect with out-of-range index does nothing" <| fun _ ->
+    let model =
+      SageFsModel.initial
+      |> withSessions [mkSnap "s1" true]
+    let model' = { model with Editor = { model.Editor with SelectedSessionIndex = Some 5 } }
+    let _, effects =
+      SageFsUpdate.update (SageFsMsg.Editor EditorAction.SessionSelect) model'
+    effects |> Expect.isEmpty "no effects for OOB index"
+
+  testCase "ClearOutput clears recent output" <| fun _ ->
+    let model = {
+      SageFsModel.initial with
+        RecentOutput = [
+          { Kind = OutputKind.Result; Text = "hello"
+            Timestamp = System.DateTime.UtcNow; SessionId = "" }
+        ] }
+    let newModel, _ =
+      SageFsUpdate.update (SageFsMsg.Editor EditorAction.ClearOutput) model
+    newModel.RecentOutput |> Expect.isEmpty "output should be cleared"
+]

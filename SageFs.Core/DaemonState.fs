@@ -35,10 +35,13 @@ module DaemonState =
     | :? InvalidOperationException -> false
 
   /// Probe the daemon's /api/daemon-info endpoint on the dashboard port.
+  /// Falls back to probing /dashboard if /api/daemon-info isn't available
+  /// (e.g. older daemon versions).
   let private probeDaemonHttp (mcpPort: int) : DaemonInfo option =
     let dashboardPort = mcpPort + 1
     try
       use client = new System.Net.Http.HttpClient(Timeout = TimeSpan.FromSeconds(2.0))
+      // Try the structured endpoint first
       let resp = client.GetAsync(sprintf "http://localhost:%d/api/daemon-info" dashboardPort).Result
       if resp.IsSuccessStatusCode then
         let json = resp.Content.ReadAsStringAsync().Result
@@ -67,8 +70,33 @@ module DaemonState =
           WorkingDirectory = workingDir
           Version = version
         }
-      else None
-    with _ -> None
+      else
+        // Fallback: probe /dashboard (always existed) to confirm daemon is alive
+        let fallbackResp = client.GetAsync(sprintf "http://localhost:%d/dashboard" dashboardPort).Result
+        if fallbackResp.IsSuccessStatusCode then
+          Some {
+            Pid = 0
+            Port = mcpPort
+            StartedAt = DateTime.UtcNow
+            WorkingDirectory = Environment.CurrentDirectory
+            Version = "unknown"
+          }
+        else None
+    with _ ->
+      // Last resort: try /dashboard in case /api/daemon-info threw
+      try
+        use client = new System.Net.Http.HttpClient(Timeout = TimeSpan.FromSeconds(2.0))
+        let fallbackResp = client.GetAsync(sprintf "http://localhost:%d/dashboard" dashboardPort).Result
+        if fallbackResp.IsSuccessStatusCode then
+          Some {
+            Pid = 0
+            Port = mcpPort
+            StartedAt = DateTime.UtcNow
+            WorkingDirectory = Environment.CurrentDirectory
+            Version = "unknown"
+          }
+        else None
+      with _ -> None
 
   /// Detect a running daemon by probing the default port via HTTP.
   let read () = probeDaemonHttp defaultMcpPort
