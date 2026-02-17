@@ -345,6 +345,9 @@ module SageFsRender =
             else sprintf " last:%dd ago" (int diff.TotalDays)
           sprintf "%s %s [%s]%s%s%s%s%s%s" selected s.Id statusLabel active projects evals uptime dir lastAct)
         |> String.concat "\n"
+        |> fun s ->
+          if s.Length > 0 then sprintf "%s\n─── ↑↓ nav · Enter switch · Del stop" s
+          else s
       Affordances = []
       Cursor = None
       Completions = None
