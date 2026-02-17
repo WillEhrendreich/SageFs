@@ -40,12 +40,6 @@ module OutputLineKind =
     | InfoLine -> "output-info"
     | SystemLine -> "output-system"
 
-  let toIcon = function
-    | ResultLine -> "✓ "
-    | ErrorLine -> "✗ "
-    | InfoLine -> "ℹ "
-    | SystemLine -> "· "
-
 /// Parsed output line with typed kind.
 type OutputLine = {
   Timestamp: string option
@@ -179,6 +173,21 @@ let renderShell (version: string) =
         .output-header h2 { color: var(--fg-blue); font-size: 1rem; margin: 0; }
         #output-panel { flex: 1; overflow-y: auto; scroll-behavior: smooth; background: var(--bg-default); font-family: 'Cascadia Code', 'Fira Code', monospace; font-size: 0.85rem; padding: 0.25rem 0; }
         .eval-area { flex-shrink: 0; padding: 0.75rem 1rem; }
+        #editor-area { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+        #session-picker:empty { display: none; }
+        #session-picker:not(:empty) ~ #editor-area { display: none; }
+        .picker-container { display: flex; flex-direction: column; align-items: center; justify-content: center; flex: 1; padding: 2rem; gap: 1.5rem; }
+        .picker-container h2 { color: var(--fg-blue); font-size: 1.4rem; margin-bottom: 0.5rem; }
+        .picker-options { display: flex; gap: 1rem; flex-wrap: wrap; justify-content: center; width: 100%; max-width: 900px; }
+        .picker-card { flex: 1; min-width: 240px; background: var(--bg-panel); border: 1px solid var(--border-normal); border-radius: 8px; padding: 1.25rem; cursor: pointer; transition: border-color 0.15s, background 0.15s; }
+        .picker-card:hover { border-color: var(--fg-blue); background: var(--bg-highlight); }
+        .picker-card h3 { color: var(--fg-blue); font-size: 1rem; margin-bottom: 0.5rem; }
+        .picker-card p { color: var(--fg-dim); font-size: 0.85rem; line-height: 1.4; }
+        .picker-form { width: 100%; max-width: 500px; }
+        .picker-form .eval-input { min-height: auto; height: 2rem; margin-bottom: 0.5rem; }
+        .picker-previous { width: 100%; max-width: 600px; }
+        .picker-session-row { display: flex; align-items: center; justify-content: space-between; padding: 0.5rem 0.75rem; border-bottom: 1px solid var(--border-normal); cursor: pointer; border-radius: 4px; transition: background 0.1s; }
+        .picker-session-row:hover { background: var(--bg-highlight); }
         .status { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.8rem; font-weight: bold; }
         .status-ready { background: var(--fg-green); color: var(--bg-default); }
         .status-warming { background: var(--fg-yellow); color: var(--bg-default); }
@@ -205,7 +214,6 @@ let renderShell (version: string) =
         .session-row:hover { background: var(--bg-selection); }
         .panel-header-btn { background: none; border: 1px solid var(--border-normal); color: var(--fg-default); border-radius: 4px; padding: 1px 8px; cursor: pointer; font-size: 0.75rem; font-family: inherit; }
         .panel-header-btn:hover { background: var(--border-normal); }
-        .output-icon { font-weight: bold; margin-right: 0.25rem; }
         .log-box { background: var(--bg-default); border: 1px solid var(--border-normal); border-radius: 4px; padding: 0.5rem 0; font-family: 'Cascadia Code', 'Fira Code', monospace; font-size: 0.85rem; }
         .conn-banner { padding: 4px 1rem; text-align: center; font-size: 0.8rem; font-weight: bold; border-radius: 0; transition: all 0.3s; flex-shrink: 0; }
         .conn-connected { background: var(--fg-green); color: var(--bg-default); }
@@ -239,18 +247,16 @@ let renderShell (version: string) =
     ]
     Elem.body [ Ds.safariStreamingFix ] [
       // Dedicated init element that connects to SSE stream (per Falco.Datastar pattern)
-      Elem.div [ Ds.onInit (Ds.get "/dashboard/stream"); Ds.signal ("helpVisible", "false"); Ds.signal ("sidebarOpen", "true") ] []
-      // Connection status banner
-      Elem.div [ Attr.id "server-status"; Attr.class' "conn-banner conn-disconnected" ] [
+      Elem.div [ Ds.onInit (Ds.get "/dashboard/stream"); Ds.signal ("helpVisible", "false"); Ds.signal ("sidebarOpen", "true"); Ds.signal ("serverConnected", "false") ] []
+      // Connection status banner — hidden when connected
+      Elem.div [ Attr.id "server-status"; Attr.class' "conn-banner conn-disconnected"; Ds.show "!$serverConnected" ] [
         Text.raw "⏳ Connecting to server..."
       ]
       // App header
       Elem.div [ Attr.class' "app-header" ] [
         Elem.h1 [] [ Text.raw (sprintf "🧙 SageFs v%s" version) ]
         Elem.div [ Attr.style "display: flex; align-items: center; gap: 0.75rem;" ] [
-          Elem.div [ Attr.id "session-status"; Attr.style "display: flex; align-items: center; gap: 0.5rem;" ] [
-            Text.raw "Connecting..."
-          ]
+          Elem.div [ Attr.id "session-status" ] []
           Elem.div [ Attr.id "eval-stats"; Attr.class' "meta" ] []
           Elem.button
             [ Attr.class' "sidebar-toggle"
@@ -262,65 +268,69 @@ let renderShell (version: string) =
       Elem.div [ Attr.class' "app-layout" ] [
         // Main content area
         Elem.div [ Attr.class' "main-area" ] [
+          // Session picker — shown when no sessions exist, hidden otherwise
+          Elem.div [ Attr.id "session-picker" ] []
           // Output area — fills available space above eval
-          Elem.div [ Attr.class' "output-area" ] [
-            Elem.div [ Attr.class' "output-header" ] [
-              Elem.h2 [] [ Text.raw "Output" ]
-              Elem.button
-                [ Attr.class' "panel-header-btn"
-                  Ds.onClick (Ds.post "/dashboard/clear-output") ]
-                [ Text.raw "Clear" ]
-            ]
-            Elem.div [ Attr.id "output-panel" ] [
-              Elem.span [ Attr.class' "meta"; Attr.style "padding: 0.5rem;" ] [ Text.raw "No output yet" ]
-            ]
-          ]
-          // Eval area — fixed at bottom
-          Elem.div [ Attr.class' "eval-area" ] [
-            Elem.div [ Attr.style "display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.25rem;" ] [
-              Elem.span [ Attr.style "color: var(--accent); font-weight: bold; font-size: 0.9rem;" ] [ Text.raw "Evaluate" ]
-              Elem.div [ Attr.style "display: flex; align-items: center; gap: 0.5rem;" ] [
-                Elem.span [ Attr.class' "meta"; Attr.style "font-size: 0.75rem;" ] [
-                  Elem.span [ Ds.text """$code ? ($code.split('\\n').length + 'L ' + $code.length + 'c') : ''""" ] []
-                ]
+          Elem.div [ Attr.id "editor-area" ] [
+            Elem.div [ Attr.id "output-section"; Attr.class' "output-area" ] [
+              Elem.div [ Attr.class' "output-header" ] [
+                Elem.h2 [] [ Text.raw "Output" ]
                 Elem.button
                   [ Attr.class' "panel-header-btn"
-                    Ds.onEvent ("click", "$helpVisible = !$helpVisible") ]
-                  [ Text.raw "⌨" ]
+                    Ds.onClick (Ds.post "/dashboard/clear-output") ]
+                  [ Text.raw "Clear" ]
+              ]
+              Elem.div [ Attr.id "output-panel" ] [
+                Elem.span [ Attr.class' "meta"; Attr.style "padding: 0.5rem;" ] [ Text.raw "No output yet" ]
               ]
             ]
-            Elem.div [ Attr.id "keyboard-help-wrapper"; Ds.show "$helpVisible" ] [
-              renderKeyboardHelp ()
+            // Eval area — fixed at bottom
+            Elem.div [ Attr.id "evaluate-section"; Attr.class' "eval-area" ] [
+              Elem.div [ Attr.style "display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.25rem;" ] [
+                Elem.span [ Attr.style "color: var(--accent); font-weight: bold; font-size: 0.9rem;" ] [ Text.raw "Evaluate" ]
+                Elem.div [ Attr.style "display: flex; align-items: center; gap: 0.5rem;" ] [
+                  Elem.span [ Attr.class' "meta"; Attr.style "font-size: 0.75rem;" ] [
+                    Elem.span [ Ds.text """$code ? ($code.split('\\n').length + 'L ' + $code.length + 'c') : ''""" ] []
+                  ]
+                  Elem.button
+                    [ Attr.class' "panel-header-btn"
+                      Ds.onEvent ("click", "$helpVisible = !$helpVisible") ]
+                    [ Text.raw "⌨" ]
+                ]
+              ]
+              Elem.div [ Attr.id "keyboard-help-wrapper"; Ds.show "$helpVisible" ] [
+                renderKeyboardHelp ()
+              ]
+              Elem.textarea
+                [ Attr.class' "eval-input"
+                  Ds.bind "code"
+                  Attr.create "placeholder" "Enter F# code... (Ctrl+Enter to eval)"
+                  Ds.onEvent ("keydown", "if(event.ctrlKey && event.key === 'Enter') { event.preventDefault(); @post('/dashboard/eval') } if(event.ctrlKey && event.key === 'l') { event.preventDefault(); @post('/dashboard/clear-output') } if(event.key === 'Tab') { event.preventDefault(); var s=this.selectionStart; var e=this.selectionEnd; this.value=this.value.substring(0,s)+'  '+this.value.substring(e); this.selectionStart=this.selectionEnd=s+2; this.dispatchEvent(new Event('input')) }")
+                  Attr.create "spellcheck" "false" ]
+                []
+              Elem.div [ Attr.style "display: flex; gap: 0.5rem; margin-top: 0.5rem; align-items: center;" ] [
+                Elem.button
+                  [ Attr.class' "eval-btn"
+                    Ds.indicator "evalLoading"
+                    Ds.attr' ("disabled", "$evalLoading")
+                    Ds.onClick (Ds.post "/dashboard/eval") ]
+                  [ Elem.span [ Ds.show "$evalLoading" ] [ Text.raw "⏳ " ]
+                    Elem.span [ Ds.show "!$evalLoading" ] [ Text.raw "▶ " ]
+                    Text.raw "Eval" ]
+                Elem.button
+                  [ Attr.class' "eval-btn"
+                    Attr.style "background: var(--green);"
+                    Ds.onClick (Ds.post "/dashboard/reset") ]
+                  [ Text.raw "↻ Reset" ]
+                Elem.button
+                  [ Attr.class' "eval-btn"
+                    Attr.style "background: var(--red);"
+                    Ds.onClick (Ds.post "/dashboard/hard-reset") ]
+                  [ Text.raw "⟳ Hard Reset" ]
+              ]
+              Elem.div [ Attr.id "eval-result" ] []
             ]
-            Elem.textarea
-              [ Attr.class' "eval-input"
-                Ds.bind "code"
-                Attr.create "placeholder" "Enter F# code... (Ctrl+Enter to eval)"
-                Ds.onEvent ("keydown", "if(event.ctrlKey && event.key === 'Enter') { event.preventDefault(); @post('/dashboard/eval') } if(event.ctrlKey && event.key === 'l') { event.preventDefault(); @post('/dashboard/clear-output') } if(event.key === 'Tab') { event.preventDefault(); var s=this.selectionStart; var e=this.selectionEnd; this.value=this.value.substring(0,s)+'  '+this.value.substring(e); this.selectionStart=this.selectionEnd=s+2; this.dispatchEvent(new Event('input')) }")
-                Attr.create "spellcheck" "false" ]
-              []
-            Elem.div [ Attr.style "display: flex; gap: 0.5rem; margin-top: 0.5rem; align-items: center;" ] [
-              Elem.button
-                [ Attr.class' "eval-btn"
-                  Ds.indicator "evalLoading"
-                  Ds.attr' ("disabled", "$evalLoading")
-                  Ds.onClick (Ds.post "/dashboard/eval") ]
-                [ Elem.span [ Ds.show "$evalLoading" ] [ Text.raw "⏳ " ]
-                  Elem.span [ Ds.show "!$evalLoading" ] [ Text.raw "▶ " ]
-                  Text.raw "Eval" ]
-              Elem.button
-                [ Attr.class' "eval-btn"
-                  Attr.style "background: var(--green);"
-                  Ds.onClick (Ds.post "/dashboard/reset") ]
-                [ Text.raw "↻ Reset" ]
-              Elem.button
-                [ Attr.class' "eval-btn"
-                  Attr.style "background: var(--red);"
-                  Ds.onClick (Ds.post "/dashboard/hard-reset") ]
-                [ Text.raw "⟳ Hard Reset" ]
-            ]
-            Elem.div [ Attr.id "eval-result" ] []
-          ]
+          ] // close editor-area
         ]
         // Resize handle between main area and sidebar
         Elem.div [ Attr.class' "resize-handle"; Attr.id "sidebar-resize" ] []
@@ -332,13 +342,6 @@ let renderShell (version: string) =
               Elem.h2 [] [ Text.raw "Sessions" ]
               Elem.div [ Attr.id "connection-counts"; Attr.class' "meta"; Attr.style "font-size: 0.75rem; margin-bottom: 0.5rem;" ] []
               Elem.div [ Attr.id "sessions-panel"; Attr.style "max-height: 250px; overflow-y: auto;" ] []
-            ]
-            // Diagnostics
-            Elem.div [ Attr.class' "panel" ] [
-              Elem.h2 [] [ Text.raw "Diagnostics" ]
-              Elem.div [ Attr.id "diagnostics-panel"; Attr.class' "log-box"; Attr.style "max-height: 200px; overflow-y: auto;" ] [
-                Text.raw "No diagnostics"
-              ]
             ]
             // Create Session
             Elem.div [ Attr.class' "panel" ] [
@@ -452,7 +455,14 @@ let renderShell (version: string) =
 /// Render session status as an HTML fragment for Datastar morphing.
 let renderSessionStatus (sessionState: string) (sessionId: string) (projectCount: int) (workingDir: string) =
   match sessionState with
-  | "Ready" -> Elem.div [ Attr.id "session-status"; Attr.style "display: none;" ] []
+  | "Ready" ->
+    Elem.div [ Attr.id "session-status" ] [
+      Elem.span [ Attr.class' "status status-ready" ] [ Text.raw sessionState ]
+      Elem.br []
+      Elem.span [ Attr.class' "meta" ] [
+        Text.raw (sprintf "Session: %s | CWD: %s | Projects: %d" sessionId workingDir projectCount)
+      ]
+    ]
   | _ ->
     let statusClass =
       match sessionState with
@@ -543,9 +553,6 @@ let renderOutput (lines: OutputLine list) =
       yield! lines |> List.map (fun line ->
         let css = OutputLineKind.toCssClass line.Kind
         Elem.div [ Attr.class' (sprintf "output-line %s" css) ] [
-          Elem.span [ Attr.class' (sprintf "output-icon %s" css) ] [
-            Text.raw (OutputLineKind.toIcon line.Kind)
-          ]
           match line.Timestamp with
           | Some t ->
             Elem.span [ Attr.class' "meta"; Attr.style "margin-right: 0.5rem;" ] [
@@ -636,6 +643,113 @@ let parseSessionLines (content: string) =
 
 let isCreatingSession (content: string) =
   content.Contains("⏳ Creating session...")
+
+/// A previously-known session that can be resumed.
+type PreviousSession = {
+  Id: string
+  WorkingDir: string
+  Projects: string list
+  LastSeen: DateTime
+}
+
+/// Render the session picker — shown in the main area when no sessions exist.
+let renderSessionPicker (previous: PreviousSession list) =
+  Elem.div [ Attr.id "session-picker" ] [
+    Elem.div [ Attr.class' "picker-container" ] [
+      Elem.h2 [] [ Text.raw "Start a Session" ]
+      Elem.p [ Attr.class' "meta"; Attr.style "text-align: center; max-width: 500px;" ] [
+        Text.raw "Choose how to get started. You can create a new session or resume a previous one."
+      ]
+      Elem.div [ Attr.class' "picker-options" ] [
+        // Option 1: Create in temp directory
+        Elem.div
+          [ Attr.class' "picker-card"
+            Ds.indicator "tempLoading"
+            Ds.onClick (Ds.post "/dashboard/session/create-temp") ]
+          [ Elem.h3 [] [
+              Elem.span [ Ds.show "$tempLoading" ] [ Text.raw "⏳ " ]
+              Elem.span [ Ds.show "!$tempLoading" ] [ Text.raw "⚡ " ]
+              Text.raw "Quick Start" ]
+            Elem.p [] [ Text.raw "Create a new session in a temporary directory. Good for quick experiments and throwaway work." ] ]
+        // Option 2: Create in custom directory
+        Elem.div [ Attr.class' "picker-card"; Attr.style "cursor: default;" ] [
+          Elem.h3 [] [ Text.raw "📁 Open Directory" ]
+          Elem.p [] [ Text.raw "Create a session in a specific directory with your projects." ]
+          Elem.div [ Attr.class' "picker-form"; Attr.style "margin-top: 0.75rem;" ] [
+            Elem.input
+              [ Attr.class' "eval-input"
+                Attr.style "min-height: auto; height: 2rem;"
+                Ds.bind "newSessionDir"
+                Attr.create "placeholder" @"C:\path\to\project" ]
+            Elem.div [ Attr.style "display: flex; gap: 4px; margin-top: 0.5rem;" ] [
+              Elem.button
+                [ Attr.class' "eval-btn"
+                  Attr.style "flex: 1; height: 2rem; padding: 0 0.5rem; font-size: 0.8rem;"
+                  Ds.indicator "discoverLoading"
+                  Ds.attr' ("disabled", "$discoverLoading")
+                  Ds.onClick (Ds.post "/dashboard/discover-projects") ]
+                [ Elem.span [ Ds.show "$discoverLoading" ] [ Text.raw "⏳ " ]
+                  Elem.span [ Ds.show "!$discoverLoading" ] [ Text.raw "🔍 " ]
+                  Text.raw "Discover" ]
+              Elem.button
+                [ Attr.class' "eval-btn"
+                  Attr.style "flex: 1; height: 2rem; padding: 0 0.5rem; font-size: 0.8rem;"
+                  Ds.indicator "createLoading"
+                  Ds.attr' ("disabled", "$createLoading")
+                  Ds.onClick (Ds.post "/dashboard/session/create") ]
+                [ Elem.span [ Ds.show "$createLoading" ] [ Text.raw "⏳ " ]
+                  Elem.span [ Ds.show "!$createLoading" ] [ Text.raw "➕ " ]
+                  Text.raw "Create" ]
+            ]
+            Elem.div [ Attr.id "discovered-projects" ] []
+          ]
+        ]
+      ]
+      // Previous sessions list
+      if not previous.IsEmpty then
+        Elem.div [ Attr.class' "picker-previous" ] [
+          Elem.h3 [ Attr.style "color: var(--fg-blue); margin-bottom: 0.5rem;" ] [
+            Text.raw "📋 Resume Previous"
+          ]
+          Elem.p [ Attr.class' "meta"; Attr.style "margin-bottom: 0.5rem;" ] [
+            Text.raw "Sessions from the last 90 days. Retention is configurable."
+          ]
+          yield! previous |> List.map (fun s ->
+            let age =
+              let span = DateTime.UtcNow - s.LastSeen
+              if span.TotalDays >= 1.0 then sprintf "%.0fd ago" span.TotalDays
+              elif span.TotalHours >= 1.0 then sprintf "%.0fh ago" span.TotalHours
+              else sprintf "%.0fm ago" span.TotalMinutes
+            Elem.div
+              [ Attr.class' "picker-session-row"
+                Ds.onClick (Ds.post (sprintf "/dashboard/session/resume/%s" s.Id)) ]
+              [ Elem.div [ Attr.style "flex: 1; min-width: 0;" ] [
+                  Elem.div [ Attr.style "display: flex; align-items: center; gap: 0.5rem;" ] [
+                    Elem.span [ Attr.style "font-weight: bold;" ] [ Text.raw s.Id ]
+                    Elem.span [ Attr.class' "meta" ] [ Text.raw age ]
+                  ]
+                  if s.WorkingDir.Length > 0 then
+                    Elem.div
+                      [ Attr.style "font-size: 0.75rem; color: var(--fg-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
+                        Attr.title s.WorkingDir ]
+                      [ Text.raw (sprintf "📁 %s" s.WorkingDir) ]
+                  if not s.Projects.IsEmpty then
+                    Elem.div [ Attr.style "display: flex; gap: 4px; margin-top: 2px; flex-wrap: wrap;" ] [
+                      yield! s.Projects |> List.map (fun p ->
+                        Elem.span
+                          [ Attr.style "font-size: 0.65rem; padding: 1px 5px; border-radius: 3px; background: var(--bg-highlight); color: var(--fg-dim);" ]
+                          [ Text.raw (Path.GetFileName p) ])
+                    ]
+                ]
+                Elem.span [ Attr.style "color: var(--fg-blue); font-size: 0.85rem;" ] [ Text.raw "▶" ]
+              ])
+        ]
+    ]
+  ]
+
+/// Render an empty session picker (hidden — sessions exist).
+let renderSessionPickerEmpty =
+  Elem.div [ Attr.id "session-picker" ] []
 
 /// Render sessions as an HTML fragment with action buttons.
 let renderSessions (sessions: ParsedSession list) (creating: bool) =
@@ -767,18 +881,27 @@ let parseDiagLines (content: string) : Diagnostic list =
 let renderRegionForSse (region: RenderRegion) =
   match region.Id with
   | "output" -> Some (renderOutput (parseOutputLines region.Content))
-  | "diagnostics" -> Some (renderDiagnostics (parseDiagLines region.Content))
   | "sessions" -> Some (renderSessions (parseSessionLines region.Content) (isCreatingSession region.Content))
   | _ -> None
 
 let private pushRegions
   (ctx: HttpContext)
   (regions: RenderRegion list)
+  (getPreviousSessions: unit -> PreviousSession list)
   = task {
     for region in regions do
       match renderRegionForSse region with
       | Some html -> do! ssePatchNode ctx html
       | None -> ()
+      // When sessions region is pushed, also push picker visibility
+      if region.Id = "sessions" then
+        let sessions = parseSessionLines region.Content
+        let creating = isCreatingSession region.Content
+        if sessions.IsEmpty && not creating then
+          let previous = getPreviousSessions ()
+          do! ssePatchNode ctx (renderSessionPicker previous)
+        else
+          do! ssePatchNode ctx renderSessionPickerEmpty
   }
 
 /// Create the SSE stream handler that pushes Elm state to the browser.
@@ -787,10 +910,11 @@ let createStreamHandler
   (getEvalStats: unit -> SageFs.Affordances.EvalStats)
   (getSessionId: unit -> string)
   (getSessionWorkingDir: unit -> string)
-  (projectCount: int)
+  (getProjectCount: unit -> int)
   (getElmRegions: unit -> RenderRegion list option)
   (stateChanged: IEvent<string> option)
   (connectionTracker: ConnectionTracker option)
+  (getPreviousSessions: unit -> PreviousSession list)
   : HttpHandler =
   fun ctx -> task {
     Response.sseStartResponse ctx |> ignore
@@ -809,8 +933,10 @@ let createStreamHandler
         if stats.EvalCount > 0
         then stats.TotalDuration.TotalMilliseconds / float stats.EvalCount
         else 0.0
+      let isReady = stateStr = "Ready"
+      do! Response.ssePatchSignal ctx (SignalPath.sp "serverConnected") true
       do! ssePatchNode ctx (
-        renderSessionStatus stateStr currentSessionId projectCount workingDir)
+        renderSessionStatus stateStr currentSessionId (getProjectCount ()) workingDir)
       do! ssePatchNode ctx (
         renderEvalStats
           { Count = stats.EvalCount
@@ -835,7 +961,7 @@ let createStreamHandler
           ])
       | None -> ()
       match getElmRegions () with
-      | Some regions -> do! pushRegions ctx regions
+      | Some regions -> do! pushRegions ctx regions getPreviousSessions
       | None -> ()
     }
 
@@ -855,7 +981,12 @@ let createStreamHandler
           if Threading.Interlocked.Exchange(&dirty, 1) = 0 then
             do! Threading.Tasks.Task.Delay(100)
             Threading.Interlocked.Exchange(&dirty, 0) |> ignore
-            do! pushState ()
+            try
+              do! pushState ()
+            with
+            | :? System.IO.IOException -> ()
+            | :? System.ObjectDisposedException -> ()
+            | :? OperationCanceledException -> ()
         }
         use _sub = evt.Subscribe(fun _ ->
           Threading.Tasks.Task.Run(fun () -> pushThrottled () :> Threading.Tasks.Task)
@@ -878,26 +1009,30 @@ let createEvalHandler
   (evalCode: string -> Threading.Tasks.Task<string>)
   : HttpHandler =
   fun ctx -> task {
-    let! doc = Request.getSignalsJson ctx
-    let code =
-      match doc.RootElement.TryGetProperty("code") with
-      | true, prop -> prop.GetString()
-      | _ -> ""
-    if String.IsNullOrWhiteSpace code then
-      Response.sseStartResponse ctx |> ignore
-      do! Response.ssePatchSignal ctx (SignalPath.sp "code") ""
-    else
-      let! result = evalCode code
-      Response.sseStartResponse ctx |> ignore
-      do! Response.ssePatchSignal ctx (SignalPath.sp "code") ""
-      // Show result inline below the eval button
-      let resultHtml =
-        Elem.div [ Attr.id "eval-result" ] [
-          Elem.pre [ Attr.class' "output-line output-result"; Attr.style "margin-top: 0.5rem; white-space: pre-wrap;" ] [
-            Text.raw result
+    try
+      let! doc = Request.getSignalsJson ctx
+      let code =
+        match doc.RootElement.TryGetProperty("code") with
+        | true, prop -> prop.GetString()
+        | _ -> ""
+      if String.IsNullOrWhiteSpace code then
+        Response.sseStartResponse ctx |> ignore
+        do! Response.ssePatchSignal ctx (SignalPath.sp "code") ""
+      else
+        let! result = evalCode code
+        Response.sseStartResponse ctx |> ignore
+        do! Response.ssePatchSignal ctx (SignalPath.sp "code") ""
+        // Show result inline below the eval button
+        let resultHtml =
+          Elem.div [ Attr.id "eval-result" ] [
+            Elem.pre [ Attr.class' "output-line output-result"; Attr.style "margin-top: 0.5rem; white-space: pre-wrap;" ] [
+              Text.raw result
+            ]
           ]
-        ]
-      do! ssePatchNode ctx resultHtml
+        do! ssePatchNode ctx resultHtml
+    with
+    | :? System.IO.IOException -> ()
+    | :? System.ObjectDisposedException -> ()
   }
 
 /// Create the reset POST handler.
@@ -905,15 +1040,19 @@ let createResetHandler
   (resetSession: unit -> Threading.Tasks.Task<string>)
   : HttpHandler =
   fun ctx -> task {
-    let! result = resetSession ()
-    Response.sseStartResponse ctx |> ignore
-    let resultHtml =
-      Elem.div [ Attr.id "eval-result" ] [
-        Elem.pre [ Attr.class' "output-line output-info"; Attr.style "margin-top: 0.5rem; white-space: pre-wrap;" ] [
-          Text.raw (sprintf "Reset: %s" result)
+    try
+      let! result = resetSession ()
+      Response.sseStartResponse ctx |> ignore
+      let resultHtml =
+        Elem.div [ Attr.id "eval-result" ] [
+          Elem.pre [ Attr.class' "output-line output-info"; Attr.style "margin-top: 0.5rem; white-space: pre-wrap;" ] [
+            Text.raw (sprintf "Reset: %s" result)
+          ]
         ]
-      ]
-    do! ssePatchNode ctx resultHtml
+      do! ssePatchNode ctx resultHtml
+    with
+    | :? System.IO.IOException -> ()
+    | :? System.ObjectDisposedException -> ()
   }
 
 /// Create the session action handler (switch/stop).
@@ -921,15 +1060,19 @@ let createSessionActionHandler
   (action: string -> Threading.Tasks.Task<string>)
   : string -> HttpHandler =
   fun sessionId ctx -> task {
-    let! result = action sessionId
-    Response.sseStartResponse ctx |> ignore
-    let resultHtml =
-      Elem.div [ Attr.id "eval-result" ] [
-        Elem.pre [ Attr.class' "output-line output-info"; Attr.style "margin-top: 0.5rem; white-space: pre-wrap;" ] [
-          Text.raw result
+    try
+      let! result = action sessionId
+      Response.sseStartResponse ctx |> ignore
+      let resultHtml =
+        Elem.div [ Attr.id "eval-result" ] [
+          Elem.pre [ Attr.class' "output-line output-info"; Attr.style "margin-top: 0.5rem; white-space: pre-wrap;" ] [
+            Text.raw result
+          ]
         ]
-      ]
-    do! ssePatchNode ctx resultHtml
+      do! ssePatchNode ctx resultHtml
+    with
+    | :? System.IO.IOException -> ()
+    | :? System.ObjectDisposedException -> ()
   }
 
 /// Create clear-output handler.
@@ -1282,7 +1425,7 @@ let createEndpoints
   (getEvalStats: unit -> SageFs.Affordances.EvalStats)
   (getSessionId: unit -> string)
   (getSessionWorkingDir: unit -> string)
-  (projectCount: int)
+  (getProjectCount: unit -> int)
   (getElmRegions: unit -> RenderRegion list option)
   (stateChanged: IEvent<string> option)
   (evalCode: string -> Threading.Tasks.Task<string>)
@@ -1294,15 +1437,64 @@ let createEndpoints
   (connectionTracker: ConnectionTracker option)
   (dispatch: SageFsMsg -> unit)
   (shutdownCallback: (unit -> unit) option)
+  (getPreviousSessions: unit -> PreviousSession list)
   : HttpEndpoint list =
   [
     yield get "/dashboard" (FalcoResponse.ofHtml (renderShell version))
-    yield get "/dashboard/stream" (createStreamHandler getSessionState getEvalStats getSessionId getSessionWorkingDir projectCount getElmRegions stateChanged connectionTracker)
+    yield get "/dashboard/stream" (createStreamHandler getSessionState getEvalStats getSessionId getSessionWorkingDir getProjectCount getElmRegions stateChanged connectionTracker getPreviousSessions)
     yield post "/dashboard/eval" (createEvalHandler evalCode)
     yield post "/dashboard/reset" (createResetHandler resetSession)
     yield post "/dashboard/hard-reset" (createResetHandler hardResetSession)
     yield post "/dashboard/clear-output" createClearOutputHandler
     yield post "/dashboard/discover-projects" createDiscoverHandler
+    // Create session in temp directory
+    match createSession with
+    | Some handler ->
+      yield post "/dashboard/session/create-temp" (fun ctx -> task {
+        let tempDir = Path.Combine(Path.GetTempPath(), sprintf "sagefs-%s" (Guid.NewGuid().ToString("N").[..7]))
+        Directory.CreateDirectory(tempDir) |> ignore
+        Response.sseStartResponse ctx |> ignore
+        let! result = handler [] tempDir
+        match result with
+        | Ok msg ->
+          dispatch (SageFsMsg.Editor EditorAction.ListSessions)
+          do! ssePatchNode ctx (
+            Elem.div [ Attr.id "eval-result" ] [
+              Elem.pre [ Attr.class' "output-line output-result"; Attr.style "margin-top: 0.5rem; white-space: pre-wrap;" ] [
+                Text.raw msg
+              ]
+            ])
+        | Error err ->
+          do! ssePatchNode ctx (evalResultError err)
+      })
+    | None -> ()
+    // Resume previous session (re-creates in same working dir)
+    match createSession with
+    | Some handler ->
+      yield mapPost "/dashboard/session/resume/{id}"
+        (fun (r: RequestData) -> r.GetString("id", ""))
+        (fun sessionId -> fun ctx -> task {
+          let previous = getPreviousSessions ()
+          match previous |> List.tryFind (fun s -> s.Id = sessionId) with
+          | Some prev ->
+            Response.sseStartResponse ctx |> ignore
+            let! result = handler prev.Projects prev.WorkingDir
+            match result with
+            | Ok msg ->
+              dispatch (SageFsMsg.Editor EditorAction.ListSessions)
+              do! ssePatchNode ctx (
+                Elem.div [ Attr.id "eval-result" ] [
+                  Elem.pre [ Attr.class' "output-line output-result"; Attr.style "margin-top: 0.5rem; white-space: pre-wrap;" ] [
+                    Text.raw msg
+                  ]
+                ])
+            | Error err ->
+              do! ssePatchNode ctx (evalResultError err)
+          | None ->
+            Response.sseStartResponse ctx |> ignore
+            do! ssePatchNode ctx (evalResultError (sprintf "Previous session '%s' not found" sessionId))
+        })
+    | None -> ()
     // TUI client API
     yield get "/api/state" (createApiStateHandler getSessionState getEvalStats getSessionId getElmRegions stateChanged connectionTracker)
     yield post "/api/dispatch" (createApiDispatchHandler dispatch)

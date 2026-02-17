@@ -544,7 +544,8 @@ module McpTools =
           match proxy with
           | Some _ -> return current
           | None ->
-            // Active session is dead — fall through to auto-create
+            // Active session is dead — clear it so CreateSession can set the new one
+            ctx.ActiveSessionId.Value <- ""
             return! ensureActiveSession ctx
         else
           return! ensureActiveSession ctx
@@ -878,6 +879,8 @@ module McpTools =
   let createSession (ctx: McpContext) (projects: string list) (workingDir: string) : Task<string> =
     task {
       let! result = ctx.SessionOps.CreateSession projects workingDir
+      // Refresh Elm model so dashboard SSE pushes updated session list
+      ctx.Dispatch |> Option.iter (fun d -> d (SageFsMsg.Editor EditorAction.ListSessions))
       match result with
       | Result.Ok info -> return info
       | Result.Error err -> return SageFsError.describe err
@@ -891,6 +894,7 @@ module McpTools =
   let stopSession (ctx: McpContext) (sessionId: string) : Task<string> =
     task {
       let! result = ctx.SessionOps.StopSession sessionId
+      ctx.Dispatch |> Option.iter (fun d -> d (SageFsMsg.Editor EditorAction.ListSessions))
       match result with
       | Result.Ok msg -> return msg
       | Result.Error err -> return SageFsError.describe err
