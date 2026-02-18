@@ -911,8 +911,6 @@ module McpTools =
       | Some _ ->
         let prev = !ctx.ActiveSessionId
         ctx.ActiveSessionId.Value <- sessionId
-        notifyElm ctx (SageFsEvent.SessionSwitched (Some prev, sessionId))
-        ctx.Dispatch |> Option.iter (fun d -> d (SageFsMsg.Editor EditorAction.ListSessions))
         // Persist switch to daemon stream
         do! EventStore.appendEvents ctx.Store "daemon-sessions" [
           Features.Events.SageFsEvent.DaemonSessionSwitched
