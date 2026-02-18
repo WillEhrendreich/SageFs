@@ -237,8 +237,117 @@ module SessionResolutionByWorkingDir =
     }
   ]
 
+module ResetIsolation =
+
+  /// Create a context with two agents on different sessions, plus tracking stubs.
+  let private mkTrackingCtx () =
+    let result = globalActorResult.Value
+    let sessionMap = ConcurrentDictionary<string, string>()
+    sessionMap.["agent1"] <- "session-AAA"
+    sessionMap.["agent2"] <- "session-BBB"
+    let restartLog = System.Collections.Generic.List<string * bool>()
+    let routedSessions = System.Collections.Generic.List<string>()
+    let ops : SessionManagementOps = {
+      CreateSession = fun _ _ -> System.Threading.Tasks.Task.FromResult(Ok "new-session")
+      ListSessions = fun () -> System.Threading.Tasks.Task.FromResult("No sessions")
+      StopSession = fun _ -> System.Threading.Tasks.Task.FromResult(Ok "stopped")
+      RestartSession = fun sid rebuild ->
+        restartLog.Add((sid, rebuild))
+        System.Threading.Tasks.Task.FromResult(Ok "restarted")
+      GetProxy = fun sid ->
+        routedSessions.Add(sid)
+        System.Threading.Tasks.Task.FromResult(None)
+      GetSessionInfo = fun id ->
+        if System.String.IsNullOrEmpty(id) then
+          System.Threading.Tasks.Task.FromResult(None)
+        else
+          System.Threading.Tasks.Task.FromResult(
+            Some { WorkerProtocol.SessionInfo.Id = id
+                   Name = None; Projects = []; WorkingDirectory = ""; SolutionRoot = None
+                   Status = WorkerProtocol.SessionStatus.Ready; WorkerPid = None
+                   CreatedAt = System.DateTime.UtcNow; LastActivity = System.DateTime.UtcNow })
+      GetAllSessions = fun () -> System.Threading.Tasks.Task.FromResult([])
+    }
+    let ctx =
+      { Store = testStore.Value
+        DiagnosticsChanged = result.DiagnosticsChanged
+        StateChanged = None
+        SessionOps = ops
+        SessionMap = sessionMap
+        McpPort = 0
+        Dispatch = None
+        GetElmModel = None
+        GetElmRegions = None } : McpContext
+    ctx, restartLog, routedSessions
+
+  let tests = testList "Reset isolation" [
+    testTask "hardResetSession with rebuild only restarts the targeted session" {
+      let ctx, restartLog, _ = mkTrackingCtx ()
+
+      let! _ = hardResetSession ctx "agent1" true (Some "session-AAA")
+
+      restartLog |> Seq.toList
+      |> Expect.equal "only session-AAA restarted" [("session-AAA", true)]
+
+      ctx.SessionMap.["agent2"]
+      |> Expect.equal "agent2 session untouched" "session-BBB"
+    }
+
+    testTask "hardResetSession without rebuild only routes to the targeted session" {
+      let ctx, restartLog, routedSessions = mkTrackingCtx ()
+
+      let! _ = hardResetSession ctx "agent1" false (Some "session-AAA")
+
+      routedSessions |> Seq.toList
+      |> Expect.equal "only session-AAA routed" ["session-AAA"]
+
+      restartLog.Count
+      |> Expect.equal "no process restarts" 0
+
+      ctx.SessionMap.["agent2"]
+      |> Expect.equal "agent2 session untouched" "session-BBB"
+    }
+
+    testTask "resetSession only routes to the targeted session" {
+      let ctx, restartLog, routedSessions = mkTrackingCtx ()
+
+      let! _ = resetSession ctx "agent1" (Some "session-AAA")
+
+      routedSessions |> Seq.toList
+      |> Expect.equal "only session-AAA routed" ["session-AAA"]
+
+      restartLog.Count
+      |> Expect.equal "no process restarts for soft reset" 0
+
+      ctx.SessionMap.["agent2"]
+      |> Expect.equal "agent2 session untouched" "session-BBB"
+    }
+
+    testTask "concurrent agents: resetting one never touches the other's session" {
+      let ctx, restartLog, routedSessions = mkTrackingCtx ()
+
+      // Agent1 hard resets their session
+      let! _ = hardResetSession ctx "agent1" true (Some "session-AAA")
+      // Agent2 soft resets their session
+      let! _ = resetSession ctx "agent2" (Some "session-BBB")
+
+      restartLog |> Seq.toList
+      |> Expect.equal "only AAA was restarted" [("session-AAA", true)]
+
+      routedSessions |> Seq.toList
+      |> Expect.equal "only BBB was routed for soft reset" ["session-BBB"]
+
+      ctx.SessionMap.["agent1"]
+      |> Expect.equal "agent1 still on AAA" "session-AAA"
+
+      ctx.SessionMap.["agent2"]
+      |> Expect.equal "agent2 still on BBB" "session-BBB"
+    }
+  ]
+
 [<Tests>]
 let sessionIsolationTests = testList "Session Isolation" [
   McpSessionIsolation.tests
   SessionResolutionByWorkingDir.tests
+  ResetIsolation.tests
 ]
