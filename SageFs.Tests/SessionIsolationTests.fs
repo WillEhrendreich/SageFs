@@ -36,6 +36,7 @@ module McpSessionIsolation =
                        WorkerPid = None
                        CreatedAt = System.DateTime.UtcNow
                        LastActivity = System.DateTime.UtcNow })
+          GetAllSessions = fun () -> System.Threading.Tasks.Task.FromResult([])
         }
         ActiveSessionId = ref sessionId
         McpPort = 0
@@ -125,6 +126,7 @@ module McpSessionIsolation =
             RestartSession = fun _ _ -> System.Threading.Tasks.Task.FromResult(Ok "restarted")
             GetProxy = fun _ -> System.Threading.Tasks.Task.FromResult(None)
             GetSessionInfo = fun _ -> System.Threading.Tasks.Task.FromResult(None)
+            GetAllSessions = fun () -> System.Threading.Tasks.Task.FromResult([])
           }
           ActiveSessionId = ref "session-A"
           McpPort = 0
@@ -160,7 +162,77 @@ module McpSessionIsolation =
     }
   ]
 
+module SessionResolutionByWorkingDir =
+
+  let private mkInfo id workDir : WorkerProtocol.SessionInfo =
+    { Id = id; Name = None; Projects = []
+      WorkingDirectory = workDir; SolutionRoot = None
+      Status = WorkerProtocol.SessionStatus.Ready
+      WorkerPid = None
+      CreatedAt = System.DateTime.UtcNow
+      LastActivity = System.DateTime.UtcNow }
+
+  let tests = testList "resolveSessionByWorkingDir" [
+    test "returns None for empty session list" {
+      resolveSessionByWorkingDir [] @"C:\Code\Repos\SageFs"
+      |> Expect.isNone "empty list yields None"
+    }
+
+    test "returns None when no session matches" {
+      let sessions = [ mkInfo "s1" @"C:\Code\Repos\Other" ]
+      resolveSessionByWorkingDir sessions @"C:\Code\Repos\SageFs"
+      |> Expect.isNone "no match yields None"
+    }
+
+    test "finds exact match" {
+      let sessions = [
+        mkInfo "s1" @"C:\Code\Repos\Other"
+        mkInfo "s2" @"C:\Code\Repos\SageFs"
+      ]
+      let result = resolveSessionByWorkingDir sessions @"C:\Code\Repos\SageFs"
+      result |> Expect.isSome "should find matching session"
+      result.Value.Id
+      |> Expect.equal "should return s2" "s2"
+    }
+
+    test "matches with trailing separator on query" {
+      let sessions = [ mkInfo "s1" @"C:\Code\Repos\SageFs" ]
+      let result = resolveSessionByWorkingDir sessions @"C:\Code\Repos\SageFs\"
+      result |> Expect.isSome "trailing sep should match"
+      result.Value.Id
+      |> Expect.equal "should return s1" "s1"
+    }
+
+    test "matches case-insensitively on Windows" {
+      let sessions = [ mkInfo "s1" @"C:\Code\Repos\SageFs" ]
+      let result = resolveSessionByWorkingDir sessions @"c:\code\repos\sagefs"
+      result |> Expect.isSome "case-insensitive match"
+      result.Value.Id
+      |> Expect.equal "should return s1" "s1"
+    }
+
+    test "returns first match when multiple sessions share dir" {
+      let sessions = [
+        mkInfo "s1" @"C:\Code\Repos\SageFs"
+        mkInfo "s2" @"C:\Code\Repos\SageFs"
+      ]
+      let result = resolveSessionByWorkingDir sessions @"C:\Code\Repos\SageFs"
+      result |> Expect.isSome "should find a match"
+      result.Value.Id
+      |> Expect.equal "should return first" "s1"
+    }
+
+    test "session trailing separator matches clean input" {
+      let sessions = [ mkInfo "s1" @"C:\Code\Repos\SageFs\" ]
+      let result = resolveSessionByWorkingDir sessions @"C:\Code\Repos\SageFs"
+      result |> Expect.isSome "session trailing sep should match"
+      result.Value.Id
+      |> Expect.equal "should return s1" "s1"
+    }
+  ]
+
 [<Tests>]
 let sessionIsolationTests = testList "Session Isolation" [
   McpSessionIsolation.tests
+  SessionResolutionByWorkingDir.tests
 ]

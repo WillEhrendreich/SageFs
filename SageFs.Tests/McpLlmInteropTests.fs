@@ -154,7 +154,7 @@ module EnhancedStatusTests =
         task {
           let ctx = sharedCtx ()
           
-          let! result = getStatus ctx
+          let! result = getStatus ctx None
           
           // Should include startup information from AppState
           Expect.stringContains result "Events:" "Should show events"
@@ -168,7 +168,7 @@ module EnhancedStatusTests =
         task {
           let ctx = sharedCtx ()
           
-          let! result = getStatus ctx
+          let! result = getStatus ctx None
           
           // Should include formatted status
           Expect.isNotNull result "Should return result"
@@ -182,7 +182,7 @@ module EnhancedStatusTests =
         task {
           let ctx = sharedCtx ()
           
-          let! result = getStatus ctx
+          let! result = getStatus ctx None
           
           // Should still return basic status
           Expect.stringContains result "Events:" "Should show events"
