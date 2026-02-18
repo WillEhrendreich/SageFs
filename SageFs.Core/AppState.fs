@@ -178,9 +178,53 @@ let wrapErrorMiddleware next (request, st) =
 let buildPipeline (middleware: Middleware list) evalFn =
   List.foldBack (fun m next -> m next) middleware evalFn
 
+open System.Text.RegularExpressions
+
 /// Strip ANSI escape sequences and terminal control codes from a string.
+/// Cursor-reset sequences (move to column 0) become newlines to preserve logical line breaks.
 let private stripAnsi (s: string) =
-  System.Text.RegularExpressions.Regex.Replace(s, @"\x1b\[[0-9;?]*[a-zA-Z]|\x1b\].*?\x07", "")
+  // Turn cursor-to-column-0 into newlines first (preserves Expecto summary as separate line)
+  let s = Regex.Replace(s, @"\x1b\[\d+D", "\n")
+  // Strip hide/show cursor sequences
+  let s = Regex.Replace(s, @"\x1b\[\?25[hl]", "")
+  // Strip remaining ANSI escape sequences
+  Regex.Replace(s, @"\x1b\[[0-9;]*[a-zA-Z]|\x1b\].*?\x07", "")
+
+/// Reformat Expecto summary line into readable multi-line output.
+let private reformatExpectoSummary (line: string) =
+  // Pattern: EXPECTO! N tests run in DURATION for NAME – N passed, N ignored, N failed, N errored. Result!
+  let m = Regex.Match(line, @"EXPECTO!\s+(\d+)\s+tests?\s+run\s+in\s+(\S+)\s+for\s+(.+?)\s+.\s+(\d+)\s+passed,\s+(\d+)\s+ignored,\s+(\d+)\s+failed,\s+(\d+)\s+errored\.\s+(\S+!?)")
+  if m.Success then
+    sprintf "%s: %s tests in %s\n  %s passed\n  %s ignored\n  %s failed\n  %s errored\n  %s"
+      m.Groups.[3].Value m.Groups.[1].Value m.Groups.[2].Value
+      m.Groups.[4].Value m.Groups.[5].Value
+      m.Groups.[6].Value m.Groups.[7].Value m.Groups.[8].Value
+  else line
+
+/// Clean captured stdout: strip ANSI, remove progress noise, reformat Expecto.
+let private cleanStdout (raw: string) =
+  raw
+  |> stripAnsi
+  // Split into lines, clean each
+  |> fun s -> s.Split([| '\n'; '\r' |], StringSplitOptions.RemoveEmptyEntries)
+  |> Array.map (fun l -> l.Trim())
+  // Drop blank/whitespace-only and progress bar lines
+  |> Array.filter (fun l ->
+    l.Length > 0
+    && not (l.StartsWith "Expecto Running")
+    && not (Regex.IsMatch(l, @"^\d+/\d+\s*\|")))
+  // Strip Expecto timestamp prefix [HH:mm:ss LVL] and <Expecto> suffix
+  |> Array.map (fun l ->
+    let l = Regex.Replace(l, @"^\[\d{2}:\d{2}:\d{2}\s+\w{3}\]\s*", "")
+    let l = Regex.Replace(l, @"\s*<Expecto>\s*$", "")
+    l.Trim())
+  |> Array.filter (fun l -> l.Length > 0)
+  // Reformat EXPECTO! summary lines
+  |> Array.map (fun l ->
+    if l.Contains "EXPECTO!" then reformatExpectoSummary l
+    else l)
+  |> String.concat "\n"
+  |> fun s -> s.Trim()
 
 let evalFn (token: CancellationToken) =
   fun ({ Code = code }, st) ->
@@ -198,7 +242,7 @@ let evalFn (token: CancellationToken) =
       match evalRes with
       | Choice1Of2 _ ->
         let fsiOutput = st.OutStream.StopRecording()
-        let stdout = stdoutCapture.ToString() |> stripAnsi |> fun s -> s.Trim()
+        let stdout = stdoutCapture.ToString() |> cleanStdout
         let combined =
           if String.IsNullOrWhiteSpace stdout then fsiOutput
           else sprintf "%s\n%s" fsiOutput stdout
