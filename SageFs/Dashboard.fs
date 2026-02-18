@@ -122,6 +122,14 @@ let renderKeyboardHelp () =
     ]
   ]
 
+/// Generate a JS object literal mapping theme names → CSS variable strings.
+let private themePresetsJs () =
+  let entries =
+    ThemePresets.all
+    |> List.map (fun (name, config) ->
+      sprintf "  %s: `%s`" (System.Text.Json.JsonSerializer.Serialize(name)) (Theme.toCssVariables config))
+  sprintf "{\n%s\n}" (String.concat ",\n" entries)
+
 /// Render the dashboard HTML shell.
 /// Datastar initializes and connects to the /dashboard/stream SSE endpoint.
 let renderShell (version: string) =
@@ -241,6 +249,8 @@ let renderShell (version: string) =
         .sidebar-toggle:hover { background: var(--border-normal); }
         .resize-handle { width: 4px; background: var(--border-normal); cursor: col-resize; flex-shrink: 0; transition: background 0.15s; }
         .resize-handle:hover, .resize-handle.dragging { background: var(--border-focus); }
+        .theme-select { width: 100%; background: var(--bg-editor); color: var(--fg-default); border: 1px solid var(--border-normal); border-radius: 4px; padding: 4px 8px; font-family: inherit; font-size: 0.85rem; cursor: pointer; }
+        .theme-select:focus { outline: 1px solid var(--border-focus); border-color: var(--border-focus); }
         .syn-keyword { color: var(--syn-keyword); }
         .syn-string { color: var(--syn-string); }
         .syn-comment { color: var(--syn-comment); font-style: italic; }
@@ -403,6 +413,16 @@ let renderShell (version: string) =
                 [ Elem.span [ Ds.show "$createLoading" ] [ Text.raw "⏳ Creating... " ]
                   Elem.span [ Ds.show "!$createLoading" ] [ Text.raw "➕ Create" ] ]
             ]
+            // Theme
+            Elem.div [ Attr.class' "panel" ] [
+              Elem.h2 [] [ Text.raw "Theme" ]
+              Elem.select
+                [ Attr.id "theme-picker"; Attr.class' "theme-select" ]
+                (ThemePresets.all |> List.mapi (fun i (name, _) ->
+                  Elem.option
+                    ([ Attr.value name ] @ (if i = 0 then [ Attr.create "selected" "selected" ] else []))
+                    [ Text.raw name ]))
+            ]
           ]
         ]
       ]
@@ -413,6 +433,26 @@ let renderShell (version: string) =
           if (panel) panel.scrollTop = panel.scrollHeight;
         }).observe(document.getElementById('output-panel') || document.body, { childList: true, subtree: true });
       """ ]
+      // Theme picker: swap CSS variables on selection change
+      Elem.script [] [ Text.raw (sprintf """
+        (function() {
+          var themes = %s;
+          var picker = document.getElementById('theme-picker');
+          if (picker) {
+            picker.addEventListener('change', function() {
+              var css = themes[this.value];
+              if (!css) return;
+              css.split(';').forEach(function(decl) {
+                decl = decl.trim();
+                if (!decl) return;
+                var i = decl.indexOf(':');
+                if (i < 0) return;
+                document.documentElement.style.setProperty(decl.substring(0, i).trim(), decl.substring(i + 1).trim());
+              });
+            });
+          }
+        })();
+      """ (themePresetsJs ())) ]
       // Font size adjustment: Ctrl+= / Ctrl+- changes --font-size CSS variable
       Elem.script [] [ Text.raw """
         (function() {
