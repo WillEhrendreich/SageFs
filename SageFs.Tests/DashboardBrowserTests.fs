@@ -101,6 +101,19 @@ let playwrightTest name (body: IPage -> Task<unit>) =
     }
     t.GetAwaiter().GetResult())
 
+/// Like playwrightTest but does NOT auto-navigate — gives a raw page
+/// so the test can set up route interceptions before navigation.
+let playwrightTestRaw name (body: IPage -> Task<unit>) =
+  testCase (sprintf "[Integration] Dashboard browser: %s" name) (fun () ->
+    let t = task {
+      let! page = PlaywrightFixture.newPage ()
+      try
+        do! body page
+      finally
+        page.CloseAsync().GetAwaiter().GetResult()
+    }
+    t.GetAwaiter().GetResult())
+
 [<Tests>]
 let tests = testList "Dashboard browser tests" [
 
@@ -389,5 +402,60 @@ let tests = testList "Dashboard browser tests" [
     do! PlaywrightExpect.isVisibleAsync diagHeading "Diagnostics heading"
     let noDiag = page.GetByText("No diagnostics")
     do! PlaywrightExpect.isVisibleAsync noDiag "empty diagnostics message"
+  })
+
+  // --- Connection banner: disconnect-only design ---
+  // The banner must NOT use Datastar signals (data-show) because the server
+  // can't push signal updates when it's dead. Banner starts hidden; JS shows
+  // it only when problems occur.
+
+  playwrightTest "server-status banner does not have data-show attribute" (fun page -> task {
+    let banner = page.Locator("#server-status")
+    let! attached = banner.IsVisibleAsync()
+    // Banner might be hidden (correct) or visible — either way check for data-show
+    let! dataShow = banner.GetAttributeAsync("data-show")
+    Expect.isNull dataShow
+      "Banner should not use data-show (Datastar signal). Use JS lifecycle instead."
+  })
+
+  playwrightTest "server-status banner is invisible when connected" (fun page -> task {
+    // Give SSE time to connect
+    do! page.WaitForTimeoutAsync(3000.0f)
+    let banner = page.Locator("#server-status")
+    do! PlaywrightExpect.isHiddenAsync banner "Banner should be invisible when connected"
+    let! text = banner.TextContentAsync()
+    let hasConnected =
+      text <> null && text.Contains("Connected", StringComparison.OrdinalIgnoreCase)
+    Expect.isFalse hasConnected "Banner must not contain 'Connected' text"
+  })
+
+  playwrightTestRaw "server-status banner shows when SSE cannot connect" (fun page -> task {
+    // Block SSE stream BEFORE navigating
+    do! page.RouteAsync("**/dashboard/stream", fun route ->
+      route.AbortAsync() |> ignore
+      Task.CompletedTask)
+    let! _ = page.GotoAsync(
+      sprintf "%s/dashboard" PlaywrightFixture.dashboardUrl)
+    // Banner should become visible when SSE fails
+    let banner = page.Locator("#server-status")
+    do! page.WaitForTimeoutAsync(5000.0f)
+    do! PlaywrightExpect.isVisibleAsync banner "Banner should be visible when SSE stream fails"
+  })
+
+  playwrightTestRaw "reconnection polls /api/daemon-info when SSE fails" (fun page -> task {
+    let daemonInfoCount = ref 0
+    page.Request.Add(fun req ->
+      if req.Url.Contains("/api/daemon-info") then
+        System.Threading.Interlocked.Increment(daemonInfoCount) |> ignore)
+    // Block SSE stream
+    do! page.RouteAsync("**/dashboard/stream", fun route ->
+      route.AbortAsync() |> ignore
+      Task.CompletedTask)
+    let! _ = page.GotoAsync(
+      sprintf "%s/dashboard" PlaywrightFixture.dashboardUrl)
+    // Wait for reconnection poller to fire
+    do! page.WaitForTimeoutAsync(6000.0f)
+    Expect.isGreaterThan daemonInfoCount.Value 0
+      "Should poll /api/daemon-info for reconnection when SSE stream fails"
   })
 ]
