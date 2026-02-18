@@ -61,9 +61,13 @@ WORKFLOW: Use this tool instead of dotnet build or dotnet run. SageFs IS your co
     
     [<McpServerTool>]
     [<Description("Get the current FSI session status: startup configuration, loaded projects, session statistics, and available capabilities. Use to verify session health or discover what is loaded.")>]
-    member _.get_fsi_status() : Task<string> =
-        logger.LogDebug("MCP-TOOL: get_fsi_status called")
-        getStatus ctx |> withEcho "get_fsi_status"
+    member _.get_fsi_status(
+        [<Description("Working directory of the MCP client. When provided, automatically resolves the correct session for this directory without requiring manual switch_session calls.")>]
+        working_directory: string
+    ) : Task<string> =
+        let wd = if System.String.IsNullOrWhiteSpace working_directory then None else Some working_directory
+        logger.LogDebug("MCP-TOOL: get_fsi_status called: workingDir={Dir}", working_directory)
+        getStatus ctx wd |> withEcho "get_fsi_status"
 
     [<McpServerTool>]
     [<Description("Get detailed startup information: loaded projects, enabled features, and command-line arguments. Use to understand what capabilities are available in the current session.")>]

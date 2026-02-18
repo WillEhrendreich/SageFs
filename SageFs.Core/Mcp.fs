@@ -441,6 +441,21 @@ module McpTools =
   /// Get the active session ID.
   let private activeSessionId (ctx: McpContext) = !ctx.ActiveSessionId
 
+  /// Normalize a path for comparison: trim trailing separators, lowercase on Windows.
+  let private normalizePath (p: string) =
+    let trimmed = p.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+    if Environment.OSVersion.Platform = PlatformID.Win32NT then
+      trimmed.ToLowerInvariant()
+    else
+      trimmed
+
+  /// Find a session whose WorkingDirectory matches the given path.
+  /// Pure function — no side effects, no context mutation.
+  let resolveSessionByWorkingDir (sessions: WorkerProtocol.SessionInfo list) (workingDir: string) : WorkerProtocol.SessionInfo option =
+    let target = normalizePath workingDir
+    sessions
+    |> List.tryFind (fun s -> normalizePath s.WorkingDirectory = target)
+
   /// Notify the Elm loop of an event (fire-and-forget, no-op if no dispatch).
   let private notifyElm (ctx: McpContext) (event: SageFsEvent) =
     ctx.Dispatch
@@ -649,9 +664,27 @@ module McpTools =
       return McpAdapter.formatEvents events
     }
 
-  let getStatus (ctx: McpContext) : Task<string> =
+  /// Resolve the active session, optionally by working directory.
+  /// If a workingDirectory is given and matches a session, use that session
+  /// and update ActiveSessionId so subsequent calls are routed correctly.
+  let private resolveActiveSession (ctx: McpContext) (workingDirectory: string option) : Task<string> =
     task {
-      let sid = activeSessionId ctx
+      match workingDirectory with
+      | Some wd when not (System.String.IsNullOrWhiteSpace wd) ->
+        let! sessions = ctx.SessionOps.GetAllSessions()
+        match resolveSessionByWorkingDir sessions wd with
+        | Some matched ->
+          ctx.ActiveSessionId.Value <- matched.Id
+          return matched.Id
+        | None ->
+          return activeSessionId ctx
+      | _ ->
+        return activeSessionId ctx
+    }
+
+  let getStatus (ctx: McpContext) (workingDirectory: string option) : Task<string> =
+    task {
+      let! sid = resolveActiveSession ctx workingDirectory
       let eventCount = EventTracking.getEventCount ctx.Store sid
       let! routeResult =
         routeToSession ctx sid

@@ -85,7 +85,7 @@ let tests =
         printfn "Testing getStatus tool..."
         let ctx = sharedCtxWith "status-session"
 
-        let! result = getStatus ctx
+        let! result = getStatus ctx None
 
         printfn "Status: %s" result
         Expect.stringContains result "status-session" "Should show session ID"

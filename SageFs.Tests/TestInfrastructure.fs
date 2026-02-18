@@ -44,7 +44,8 @@ let private mkTestSessionOps (result: ActorResult) (sessionId: string) : SageFs.
                Name = None
                Projects = []; WorkingDirectory = ""; SolutionRoot = None
                Status = SageFs.WorkerProtocol.SessionStatus.Ready
-               WorkerPid = None; CreatedAt = System.DateTime.UtcNow; LastActivity = System.DateTime.UtcNow }) }
+               WorkerPid = None; CreatedAt = System.DateTime.UtcNow; LastActivity = System.DateTime.UtcNow })
+    GetAllSessions = fun () -> System.Threading.Tasks.Task.FromResult([]) }
 
 /// Create a McpContext backed by the global shared actor and Marten store
 let sharedCtx () =

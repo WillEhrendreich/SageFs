@@ -111,6 +111,14 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
           |> Async.StartAsTask
         return managed |> Option.map (fun s -> s.Info)
       }
+    GetAllSessions = fun () ->
+      task {
+        let! sessions =
+          sessionManager.PostAndAsyncReply(fun reply ->
+            SessionManager.SessionCommand.ListSessions reply)
+          |> Async.StartAsTask
+        return sessions
+      }
   }
 
   // Parse initial projects from CLI args (used if no previous sessions)

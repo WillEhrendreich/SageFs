@@ -16,6 +16,8 @@ type SessionManagementOps = {
   GetProxy: SessionId -> Task<SessionProxy option>
   /// Get the SessionInfo for a specific session.
   GetSessionInfo: SessionId -> Task<SessionInfo option>
+  /// Get all active sessions with their metadata.
+  GetAllSessions: unit -> Task<SessionInfo list>
 }
 
 module SessionManagementOps =
@@ -27,4 +29,5 @@ module SessionManagementOps =
     RestartSession = fun _ _ -> Task.FromResult(Result.Error (SageFsError.HardResetFailed "Not available"))
     GetProxy = fun _ -> Task.FromResult(None)
     GetSessionInfo = fun _ -> Task.FromResult(None)
+    GetAllSessions = fun () -> Task.FromResult([])
   }

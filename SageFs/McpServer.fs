@@ -171,7 +171,7 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
             // GET /health — session health check
             app.MapGet("/health", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
                 withErrorHandling ctx (fun () -> task {
-                    let! status = SageFs.McpTools.getStatus mcpContext
+                    let! status = SageFs.McpTools.getStatus mcpContext None
                     do! jsonResponse ctx 200 {| healthy = true; status = status |}
                 }) :> Task
             ) |> ignore
