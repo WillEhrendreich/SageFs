@@ -414,7 +414,7 @@ module SageFsRender =
           let creatingLine =
             if model.CreatingSession then "\n⏳ Creating session..."
             else ""
-          if s.Length > 0 then sprintf "%s%s\n─── ↑↓ nav · Enter switch · Del stop · Ctrl+Tab cycle" s creatingLine
+          if s.Length > 0 then sprintf "%s%s\n... ↑↓ nav · Enter switch · Del stop · ^Tab cycle" s creatingLine
           else if model.CreatingSession then "⏳ Creating session..."
           else s
       Affordances = []
