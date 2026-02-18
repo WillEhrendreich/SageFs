@@ -85,6 +85,33 @@ module rec Draw =
         text dt 0 2 (Theme.hexToRgb Theme.fgDefault) borderBg CellAttrs.None (sprintf " %s " t)
       DrawTarget.sub dt (Rect.create (r.Row + 1) (r.Col + 1) (r.Width - 2) (r.Height - 2))
 
+  /// Merge stacked box corners into proper T-junctions.
+  /// Only adds MISSING vertical connections to corner characters
+  /// when another box-drawing character is directly above/below.
+  let resolveJunctions (dt: DrawTarget) =
+    let r = dt.Clip
+    let isBoxChar ch =
+      ch = '\u2500' || ch = '\u2502' ||
+      ch = '\u250C' || ch = '\u2510' ||
+      ch = '\u2514' || ch = '\u2518' ||
+      ch = '\u251C' || ch = '\u2524' ||
+      ch = '\u252C' || ch = '\u2534' ||
+      ch = '\u253C'
+    for row in r.Row .. Rect.bottom r - 1 do
+      for col in r.Col .. Rect.right r - 1 do
+        let cell = CellGrid.get dt.Grid row col
+        let above = if row > r.Row then (CellGrid.get dt.Grid (row - 1) col).Char else ' '
+        let below = if row < Rect.bottom r - 1 then (CellGrid.get dt.Grid (row + 1) col).Char else ' '
+        let newChar =
+          match cell.Char with
+          | '\u2518' when isBoxChar below -> '\u2524' // ┘ + box below → ┤
+          | '\u2510' when isBoxChar above -> '\u2524' // ┐ + box above → ┤
+          | '\u2514' when isBoxChar below -> '\u251C' // └ + box below → ├
+          | '\u250C' when isBoxChar above -> '\u251C' // ┌ + box above → ├
+          | _ -> cell.Char
+        if newChar <> cell.Char then
+          CellGrid.set dt.Grid row col { cell with Char = newChar }
+
   let scrolledLines (dt: DrawTarget) (lines: string list) (scrollOffset: int) (fg: uint32) (bg: uint32) =
     let visibleRows = dt.Clip.Height
     let startLine = max 0 scrollOffset

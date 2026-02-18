@@ -279,6 +279,9 @@ module Screen =
         if paneId = focusedPane then
           cursorPos <- Some (rect.Row + 1, rect.Col + 1)
 
+    // Merge adjacent box borders into proper T-junctions
+    Draw.resolveJunctions dt
+
     // Status bar
     Draw.statusBar dt statusLeft statusRight (Theme.hexToRgb theme.FgDefault) (Theme.hexToRgb theme.BgStatus)
 

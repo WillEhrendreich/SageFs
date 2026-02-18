@@ -281,6 +281,72 @@ let ansiEmitterTests = testList "AnsiEmitter" [
   }
 ]
 
+let junctionTests = testList "resolveJunctions" [
+  test "stacked corners get T-junctions" {
+    let brN = Theme.hexToRgb Theme.borderNormal
+    let bgP = Theme.hexToRgb Theme.bgPanel
+    let g = CellGrid.create 6 10
+    let dt = DrawTarget.create g (Rect.create 0 0 10 6)
+    Draw.box (DrawTarget.create g (Rect.create 0 0 10 3)) "" brN bgP |> ignore
+    Draw.box (DrawTarget.create g (Rect.create 3 0 10 3)) "" brN bgP |> ignore
+    Draw.resolveJunctions dt
+    let after = CellGrid.toText g
+    Expect.stringContains after "\u251C" "after should have ├"
+    Expect.stringContains after "\u2524" "after should have ┤"
+    let lines = after.Split('\n')
+    Expect.stringStarts lines.[0] "\u250C" "top-left stays ┌"
+    Expect.stringEnds (lines.[0].TrimEnd()) "\u2510" "top-right stays ┐"
+  }
+
+  test "single box unchanged" {
+    let brN = Theme.hexToRgb Theme.borderNormal
+    let bgP = Theme.hexToRgb Theme.bgPanel
+    let g = CellGrid.create 3 10
+    let dt = DrawTarget.create g (Rect.create 0 0 10 3)
+    Draw.box dt "" brN bgP |> ignore
+    let before = CellGrid.toText g
+    Draw.resolveJunctions dt
+    let after = CellGrid.toText g
+    Expect.equal after before "single box should not change"
+  }
+
+  test "side-by-side boxes unchanged" {
+    let brN = Theme.hexToRgb Theme.borderNormal
+    let bgP = Theme.hexToRgb Theme.bgPanel
+    let g = CellGrid.create 3 20
+    let dt = DrawTarget.create g (Rect.create 0 0 20 3)
+    Draw.box (DrawTarget.create g (Rect.create 0 0 10 3)) "" brN bgP |> ignore
+    Draw.box (DrawTarget.create g (Rect.create 0 10 10 3)) "" brN bgP |> ignore
+    let before = CellGrid.toText g
+    Draw.resolveJunctions dt
+    let after = CellGrid.toText g
+    Expect.equal after before "side-by-side boxes should not change"
+  }
+
+  test "full layout junctions" {
+    let brN = Theme.hexToRgb Theme.borderNormal
+    let brF = Theme.hexToRgb Theme.borderFocus
+    let bgP = Theme.hexToRgb Theme.bgPanel
+    let bgE = Theme.hexToRgb Theme.bgEditor
+    let g = CellGrid.create 15 60
+    let dt = DrawTarget.create g (Rect.create 0 0 60 15)
+    Draw.fill dt bgP
+    let panes, _ = Screen.computeLayoutWith LayoutConfig.defaults 15 60
+    for (pid, rect) in panes do
+      let bC = if pid = PaneId.Editor then brF else brN
+      let bg = if pid = PaneId.Editor then bgE else bgP
+      Draw.box (DrawTarget.create g rect) (PaneId.displayName pid) bC bg |> ignore
+    Draw.resolveJunctions dt
+    let lines = (CellGrid.toText g).Split('\n')
+    Expect.stringStarts lines.[7] "\u251C" "Output BL → ├"
+    Expect.isTrue (lines.[7].Contains("\u2524")) "Output BR → ┤"
+    Expect.stringStarts lines.[8] "\u251C" "Editor TL → ├"
+    Expect.isTrue (lines.[8].Contains("\u2524")) "Editor TR → ┤"
+    Expect.stringStarts lines.[0] "\u250C" "Output TL stays ┌"
+    Expect.stringStarts lines.[13] "\u2514" "bottom stays └"
+  }
+]
+
 let performanceTests = testList "Performance" [
   test "CellGrid clear 200x60 under 100µs" {
     let grid = CellGrid.create 60 200
@@ -385,6 +451,7 @@ let allCellGridTests = testList "CellGrid Rendering" [
   cellGridTests
   rectTests
   drawTests
+  junctionTests
   ansiEmitterTests
   performanceTests
 ]
