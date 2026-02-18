@@ -194,12 +194,21 @@ module PaneId =
 
 /// Frame diffing — only redraw rows that changed between frames
 module FrameDiff =
-  /// Split a rendered frame into (row, content) pairs based on moveTo commands
+  /// Split a rendered frame into (row, content) pairs based on moveTo commands.
+  /// Appends to existing rows when the same row appears multiple times (e.g.
+  /// cursor repositioning at end of frame).
   let private parsePositionedLines (frame: string) : Map<int, string> =
-    let mutable result = Map.empty
+    let mutable result = Map.empty<int, Text.StringBuilder>
     let mutable currentRow = -1
-    let sb = System.Text.StringBuilder()
     let mutable i = 0
+
+    let getSb row =
+      match result |> Map.tryFind row with
+      | Some sb -> sb
+      | None ->
+        let sb = Text.StringBuilder()
+        result <- result |> Map.add row sb
+        sb
 
     while i < frame.Length do
       if i + 2 < frame.Length && frame.[i] = '\x1b' && frame.[i+1] = '[' then
@@ -207,36 +216,36 @@ module FrameDiff =
         while j < frame.Length
           && frame.[j] <> 'H' && frame.[j] <> 'A'
           && frame.[j] <> 'B' && frame.[j] <> 'J'
-          && frame.[j] <> 'K' && frame.[j] <> 'm' do
+          && frame.[j] <> 'K' && frame.[j] <> 'm'
+          && frame.[j] <> 'l' && frame.[j] <> 'h' do
           j <- j + 1
+        let seqLen = if j < frame.Length then j - i + 1 else j - i
         if j < frame.Length && frame.[j] = 'H' then
           let coords = frame.Substring(i + 2, j - i - 2)
           let parts = coords.Split(';')
           if parts.Length >= 1 then
-            if currentRow >= 0 then
-              result <- result |> Map.add currentRow (sb.ToString())
-              sb.Clear() |> ignore
             match Int32.TryParse(parts.[0]) with
             | true, row -> currentRow <- row
             | _ -> ()
-          sb.Append(frame.Substring(i, j - i + 1)) |> ignore
-          i <- j + 1
+          if currentRow >= 0 then
+            (getSb currentRow).Append(frame.Substring(i, seqLen)) |> ignore
+          i <- i + seqLen
         else
-          sb.Append(frame.Substring(i, j - i + 1)) |> ignore
-          i <- j + 1
+          if currentRow >= 0 then
+            (getSb currentRow).Append(frame.Substring(i, seqLen)) |> ignore
+          i <- i + seqLen
       else
-        sb.Append(frame.[i]) |> ignore
+        if currentRow >= 0 then
+          (getSb currentRow).Append(frame.[i]) |> ignore
         i <- i + 1
 
-    if currentRow >= 0 then
-      result <- result |> Map.add currentRow (sb.ToString())
-    result
+    result |> Map.map (fun _ sb -> sb.ToString())
 
   /// Create a diff frame containing only rows that changed
   let diff (prevFrame: string) (newFrame: string) : string =
     let prevLines = parsePositionedLines prevFrame
     let newLines = parsePositionedLines newFrame
-    let sb = System.Text.StringBuilder()
+    let sb = Text.StringBuilder()
 
     for kv in newLines do
       match prevLines |> Map.tryFind kv.Key with
