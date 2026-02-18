@@ -344,12 +344,17 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
             app.MapPost("/api/sessions/switch", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
                 withErrorHandling ctx (fun () -> task {
                     let! sid = readJsonProp ctx "sessionId"
+                    let prev = !activeSessionId
                     activeSessionId.Value <- sid
                     match dispatch with
                     | Some d ->
                       d (SageFs.SageFsMsg.Event (SageFs.SageFsEvent.SessionSwitched (None, sid)))
                       d (SageFs.SageFsMsg.Editor SageFs.EditorAction.ListSessions)
                     | None -> ()
+                    do! SageFs.EventStore.appendEvents store "daemon-sessions" [
+                      SageFs.Features.Events.SageFsEvent.DaemonSessionSwitched
+                        {| FromId = Some prev; ToId = sid; SwitchedAt = System.DateTimeOffset.UtcNow |}
+                    ]
                     do! jsonResponse ctx 200 {| success = true; activeSessionId = sid |}
                 }) :> Task
             ) |> ignore

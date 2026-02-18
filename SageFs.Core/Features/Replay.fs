@@ -117,6 +117,10 @@ module SessionReplayState =
     | ScriptLoadFailed _ -> state |> withActivity
     | McpInputReceived _ -> state |> withActivity
     | McpOutputSent _ -> state |> withActivity
+    // Daemon-level events are not relevant to per-session replay
+    | DaemonSessionCreated _ -> state
+    | DaemonSessionStopped _ -> state
+    | DaemonSessionSwitched _ -> state
 
   /// Replay an entire event stream to reconstruct session state.
   let replayStream
@@ -152,3 +156,69 @@ module SessionReplayState =
       lastAct
       state.WarmupErrors.Length
       (state.LastEvalResult |> Option.defaultValue "N/A")
+
+/// A session record as known to the daemon (from event replay).
+type DaemonSessionRecord = {
+  SessionId: string
+  Projects: string list
+  WorkingDir: string
+  CreatedAt: DateTimeOffset
+  StoppedAt: DateTimeOffset option
+}
+
+/// Daemon-level state reconstructed from the daemon-sessions stream.
+type DaemonReplayState = {
+  Sessions: Map<string, DaemonSessionRecord>
+  ActiveSessionId: string option
+}
+
+module DaemonReplayState =
+  let empty : DaemonReplayState = {
+    Sessions = Map.empty
+    ActiveSessionId = None
+  }
+
+  /// Pure fold: apply one daemon event.
+  let applyEvent
+    (state: DaemonReplayState)
+    (event: SageFsEvent)
+    : DaemonReplayState =
+    match event with
+    | DaemonSessionCreated e ->
+      let record = {
+        SessionId = e.SessionId
+        Projects = e.Projects
+        WorkingDir = e.WorkingDir
+        CreatedAt = e.CreatedAt
+        StoppedAt = None
+      }
+      { state with
+          Sessions = state.Sessions |> Map.add e.SessionId record
+          ActiveSessionId = Some e.SessionId }
+    | DaemonSessionStopped e ->
+      let sessions =
+        state.Sessions
+        |> Map.change e.SessionId (Option.map (fun r -> { r with StoppedAt = Some e.StoppedAt }))
+      let activeId =
+        if state.ActiveSessionId = Some e.SessionId then
+          sessions
+          |> Map.toSeq
+          |> Seq.tryFind (fun (_, r) -> r.StoppedAt.IsNone)
+          |> Option.map fst
+        else state.ActiveSessionId
+      { state with Sessions = sessions; ActiveSessionId = activeId }
+    | DaemonSessionSwitched e ->
+      { state with ActiveSessionId = Some e.ToId }
+    | _ -> state
+
+  /// Replay the daemon-sessions stream.
+  let replayStream (events: (DateTimeOffset * SageFsEvent) list) : DaemonReplayState =
+    events
+    |> List.fold (fun state (_, evt) -> applyEvent state evt) empty
+
+  /// Get sessions that were alive (not explicitly stopped).
+  let aliveSessions (state: DaemonReplayState) : DaemonSessionRecord list =
+    state.Sessions
+    |> Map.values
+    |> Seq.filter (fun r -> r.StoppedAt.IsNone)
+    |> Seq.toList

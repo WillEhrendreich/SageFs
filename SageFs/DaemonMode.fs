@@ -32,6 +32,8 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
   // Active session ID — mutable, shared across MCP and dashboard
   let activeSessionId = ref ""
 
+  let daemonStreamId = "daemon-sessions"
+
   let sessionOps : SessionManagementOps = {
     CreateSession = fun projects workingDir ->
       task {
@@ -39,12 +41,15 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
           sessionManager.PostAndAsyncReply(fun reply ->
             SessionManager.SessionCommand.CreateSession(projects, workingDir, reply))
           |> Async.StartAsTask
-        return
-          result
-          |> Result.map (fun info ->
-            // Always activate newly created session — caller expects to use it
-            activeSessionId.Value <- info.Id
-            SessionOperations.formatSessionInfo DateTime.UtcNow info)
+        match result with
+        | Ok info ->
+          activeSessionId.Value <- info.Id
+          do! SageFs.EventStore.appendEvents eventStore daemonStreamId [
+            Features.Events.SageFsEvent.DaemonSessionCreated
+              {| SessionId = info.Id; Projects = projects; WorkingDir = workingDir; CreatedAt = DateTimeOffset.UtcNow |}
+          ]
+          return Ok (SessionOperations.formatSessionInfo DateTime.UtcNow info)
+        | Error e -> return Error e
       }
     ListSessions = fun () ->
       task {
@@ -60,6 +65,11 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
           sessionManager.PostAndAsyncReply(fun reply ->
             SessionManager.SessionCommand.StopSession(sessionId, reply))
           |> Async.StartAsTask
+        // Persist stop event
+        do! SageFs.EventStore.appendEvents eventStore daemonStreamId [
+          Features.Events.SageFsEvent.DaemonSessionStopped
+            {| SessionId = sessionId; StoppedAt = DateTimeOffset.UtcNow |}
+        ]
         // If we stopped the active session, switch to another
         if !activeSessionId = sessionId then
           let! sessions =
@@ -103,7 +113,12 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
       }
   }
 
-  // Spawn the initial session as a worker sub-process
+  // Replay daemon-sessions stream to discover previous sessions
+  let! daemonEvents = SageFs.EventStore.fetchStream eventStore daemonStreamId
+  let daemonState = Features.Replay.DaemonReplayState.replayStream daemonEvents
+  let aliveSessions = Features.Replay.DaemonReplayState.aliveSessions daemonState
+
+  // Resume previously alive sessions, then create initial if needed
   let initialProjects =
     args
     |> List.choose (function
@@ -111,11 +126,46 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
       | _ -> None)
   let workingDir = Environment.CurrentDirectory
 
-  eprintfn "Spawning initial session for %s..." workingDir
-  let! initialResult = sessionOps.CreateSession initialProjects workingDir
-  match initialResult with
-  | Ok info -> eprintfn "Initial session created: %s" info
-  | Error err -> eprintfn "[ERROR] Failed to create initial session: %A" err
+  if not aliveSessions.IsEmpty then
+    eprintfn "Resuming %d previous session(s)..." aliveSessions.Length
+    for prev in aliveSessions do
+      if IO.Directory.Exists prev.WorkingDir then
+        eprintfn "  Resuming session for %s..." prev.WorkingDir
+        let! result = sessionOps.CreateSession prev.Projects prev.WorkingDir
+        match result with
+        | Ok info -> eprintfn "  Resumed: %s" info
+        | Error err -> eprintfn "  [WARN] Failed to resume session for %s: %A" prev.WorkingDir err
+      else
+        eprintfn "  [SKIP] %s — directory no longer exists" prev.WorkingDir
+        // Mark as stopped since we can't resume
+        do! SageFs.EventStore.appendEvents eventStore daemonStreamId [
+          Features.Events.SageFsEvent.DaemonSessionStopped
+            {| SessionId = prev.SessionId; StoppedAt = DateTimeOffset.UtcNow |}
+        ]
+    // Restore active session from last switch event
+    match daemonState.ActiveSessionId with
+    | Some lastActiveId ->
+      // The old session ID won't match the new one — find by working dir
+      let lastRecord = daemonState.Sessions |> Map.tryFind lastActiveId
+      match lastRecord with
+      | Some r ->
+        let! sessions =
+          sessionManager.PostAndAsyncReply(fun reply ->
+            SessionManager.SessionCommand.ListSessions reply)
+          |> Async.StartAsTask
+        let matching =
+          sessions |> List.tryFind (fun s -> s.WorkingDirectory = r.WorkingDir)
+        match matching with
+        | Some s -> activeSessionId.Value <- s.Id
+        | None -> ()
+      | None -> ()
+    | None -> ()
+  else
+    eprintfn "Spawning initial session for %s..." workingDir
+    let! initialResult = sessionOps.CreateSession initialProjects workingDir
+    match initialResult with
+    | Ok info -> eprintfn "Initial session created: %s" info
+    | Error err -> eprintfn "[ERROR] Failed to create initial session: %A" err
 
   // Create state-changed event for SSE subscribers
   let stateChangedEvent = Event<string>()
@@ -336,18 +386,39 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
       (fun msg -> elmRuntime.Dispatch msg)
       // Shutdown callback for /api/shutdown
       (Some (fun () -> cts.Cancel()))
-      // Previous sessions for picker
+      // Previous sessions for picker — merge active + historical from Marten
       (fun () ->
-        let infos =
+        // Active sessions from SessionManager
+        let activeInfos =
           sessionManager.PostAndAsyncReply(fun reply ->
             SessionManager.SessionCommand.ListSessions reply)
           |> Async.RunSynchronously
-        infos
-        |> List.map (fun (info: WorkerProtocol.SessionInfo) ->
-          { Dashboard.PreviousSession.Id = info.Id
-            WorkingDir = info.WorkingDirectory
-            Projects = info.Projects
-            LastSeen = info.LastActivity }))
+        let activeSessions =
+          activeInfos
+          |> List.map (fun (info: WorkerProtocol.SessionInfo) ->
+            { Dashboard.PreviousSession.Id = info.Id
+              Dashboard.PreviousSession.WorkingDir = info.WorkingDirectory
+              Dashboard.PreviousSession.Projects = info.Projects
+              Dashboard.PreviousSession.LastSeen = info.LastActivity })
+        let activeIds = activeSessions |> List.map (fun s -> s.Id) |> Set.ofList
+        // Historical sessions from Marten (stopped ones not currently active)
+        let historicalSessions =
+          try
+            let events =
+              SageFs.EventStore.fetchStream eventStore daemonStreamId
+              |> fun t -> t.ConfigureAwait(false).GetAwaiter().GetResult()
+            let daemonState = Features.Replay.DaemonReplayState.replayStream events
+            daemonState.Sessions
+            |> Map.values
+            |> Seq.filter (fun r -> r.StoppedAt.IsSome && not (activeIds.Contains r.SessionId))
+            |> Seq.map (fun r ->
+              { Dashboard.PreviousSession.Id = r.SessionId
+                Dashboard.PreviousSession.WorkingDir = r.WorkingDir
+                Dashboard.PreviousSession.Projects = r.Projects
+                Dashboard.PreviousSession.LastSeen = r.StoppedAt |> Option.map (fun t -> t.DateTime) |> Option.defaultValue r.CreatedAt.DateTime })
+            |> Seq.toList
+          with _ -> []
+        activeSessions @ historicalSessions)
   let dashboardTask = task {
     try
       let builder = Microsoft.AspNetCore.Builder.WebApplication.CreateBuilder()
@@ -391,7 +462,16 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
   with
   | :? OperationCanceledException -> ()
 
-  // Graceful shutdown: stop all sessions
+  // Graceful shutdown: stop all sessions and persist stop events
+  let! activeSessions =
+    sessionManager.PostAndAsyncReply(fun reply ->
+      SessionManager.SessionCommand.ListSessions reply)
+    |> Async.StartAsTask
+  for info in activeSessions do
+    do! SageFs.EventStore.appendEvents eventStore daemonStreamId [
+      Features.Events.SageFsEvent.DaemonSessionStopped
+        {| SessionId = info.Id; StoppedAt = DateTimeOffset.UtcNow |}
+    ]
   sessionManager.PostAndAsyncReply(fun reply ->
     SessionManager.SessionCommand.StopAll reply)
   |> Async.RunSynchronously

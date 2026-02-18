@@ -60,6 +60,11 @@ type SageFsEvent =
   | McpInputReceived of mcpInput: {| Source: EventSource; Content: string |}
   | McpOutputSent of mcpOutput: {| Source: EventSource; Content: string |}
 
+  // Daemon-level session lifecycle (persisted to daemon-sessions stream)
+  | DaemonSessionCreated of daemonCreated: {| SessionId: string; Projects: string list; WorkingDir: string; CreatedAt: DateTimeOffset |}
+  | DaemonSessionStopped of daemonStopped: {| SessionId: string; StoppedAt: DateTimeOffset |}
+  | DaemonSessionSwitched of daemonSwitched: {| FromId: string option; ToId: string; SwitchedAt: DateTimeOffset |}
+
 /// Metadata attached to every event
 type EventMetadata = {
   Source: EventSource
