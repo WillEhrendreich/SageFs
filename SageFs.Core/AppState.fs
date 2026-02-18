@@ -178,11 +178,16 @@ let wrapErrorMiddleware next (request, st) =
 let buildPipeline (middleware: Middleware list) evalFn =
   List.foldBack (fun m next -> m next) middleware evalFn
 
+/// Strip ANSI escape sequences and terminal control codes from a string.
+let private stripAnsi (s: string) =
+  System.Text.RegularExpressions.Regex.Replace(s, @"\x1b\[[0-9;?]*[a-zA-Z]|\x1b\].*?\x07", "")
+
 let evalFn (token: CancellationToken) =
   fun ({ Code = code }, st) ->
-    // Redirect Console.Out to the recorder so printfn/Expecto output is captured
+    // Capture Console.Out separately so we can reorder: val bindings first, stdout last
     let originalOut = Console.Out
-    Console.SetOut(st.OutStream :> TextWriter)
+    let stdoutCapture = new StringWriter()
+    Console.SetOut(stdoutCapture)
     st.OutStream.StartRecording()
     let thread = Thread.CurrentThread
     token.Register(fun () -> thread.Interrupt()) |> ignore
@@ -191,11 +196,16 @@ let evalFn (token: CancellationToken) =
 
     let evalRes =
       match evalRes with
-      | Choice1Of2 _ -> Ok <| st.OutStream.StopRecording()
+      | Choice1Of2 _ ->
+        let fsiOutput = st.OutStream.StopRecording()
+        let stdout = stdoutCapture.ToString() |> stripAnsi |> fun s -> s.Trim()
+        let combined =
+          if String.IsNullOrWhiteSpace stdout then fsiOutput
+          else sprintf "%s\n%s" fsiOutput stdout
+        Ok combined
       | Choice2Of2 ex -> Error <| ex
 
     st.OutStream.StopRecording() |> ignore
-    // Restore original Console.Out
     Console.SetOut(originalOut)
 
     {
