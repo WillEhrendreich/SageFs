@@ -214,7 +214,7 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
           {| outputCount = outputCount
              diagCount = diagCount
              sessionCount = model.Sessions.Sessions.Length
-             activeSession = model.Sessions.ActiveSessionId |> Option.defaultValue ""
+             activeSession = ActiveSession.sessionId model.Sessions.ActiveSessionId |> Option.defaultValue ""
              timestamp = DateTime.UtcNow.ToString("o") |})
         stateChangedEvent.Trigger json
       with _ -> ())

@@ -33,10 +33,27 @@ type WatchStatus =
   | Paused
   | Disabled
 
+/// Which session this view is focused on — explicit state machine.
+[<RequireQualifiedAccess>]
+type ActiveSession =
+  /// No session exists yet; UI should show "awaiting session" state.
+  | AwaitingSession
+  /// Actively viewing a valid session.
+  | Viewing of SessionId
+
+module ActiveSession =
+  let sessionId = function
+    | ActiveSession.Viewing sid -> Some sid
+    | ActiveSession.AwaitingSession -> None
+
+  let isViewing sid = function
+    | ActiveSession.Viewing id -> id = sid
+    | ActiveSession.AwaitingSession -> false
+
 /// The full session registry view — what every UI renders
 type SessionRegistryView = {
   Sessions: SessionSnapshot list
-  ActiveSessionId: SessionId option
+  ActiveSessionId: ActiveSession
   TotalEvals: int
   WatchStatus: WatchStatus option
 }
@@ -64,7 +81,7 @@ module SessionDisplay =
       SessionDisplayStatus.Errored "Session stopped"
 
   /// Build a snapshot from internal session info
-  let snapshot (now: DateTime) (activeId: SessionId option) (info: SessionInfo) : SessionSnapshot =
+  let snapshot (now: DateTime) (active: ActiveSession) (info: SessionInfo) : SessionSnapshot =
     { Id = info.Id
       Name = info.Name
       Projects = info.Projects
@@ -72,20 +89,20 @@ module SessionDisplay =
       LastActivity = info.LastActivity
       EvalCount = 0
       UpSince = info.CreatedAt
-      IsActive = activeId = Some info.Id
+      IsActive = ActiveSession.isViewing info.Id active
       WorkingDirectory = info.WorkingDirectory }
 
   /// Build the full registry view
   let registryView
     (now: DateTime)
-    (activeId: SessionId option)
+    (active: ActiveSession)
     (sessions: SessionInfo list)
     (watchStatus: WatchStatus option)
     : SessionRegistryView =
     let snapshots =
-      sessions |> List.map (snapshot now activeId)
+      sessions |> List.map (snapshot now active)
     { Sessions = snapshots
-      ActiveSessionId = activeId
+      ActiveSessionId = active
       TotalEvals = snapshots |> List.sumBy (fun s -> s.EvalCount)
       WatchStatus = watchStatus }
 

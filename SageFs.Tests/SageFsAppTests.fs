@@ -89,7 +89,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
         Sessions = {
           SageFsModel.initial.Sessions with
             Sessions = [snap]
-            ActiveSessionId = Some "s1" } }
+            ActiveSessionId = ActiveSession.Viewing "s1" } }
     let model2, _ =
       SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.SessionCreated snap)) model
     model2.Sessions.Sessions
@@ -106,7 +106,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
         Sessions = {
           SageFsModel.initial.Sessions with
             Sessions = [snap]
-            ActiveSessionId = Some "s1" } }
+            ActiveSessionId = ActiveSession.Viewing "s1" } }
     let updated = { snap with EvalCount = 42 }
     let model2, _ =
       SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.SessionCreated updated)) model
@@ -131,7 +131,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
         Sessions = {
           SageFsModel.initial.Sessions with
             Sessions = [snapA; snapB]
-            ActiveSessionId = Some "s1" } }
+            ActiveSessionId = ActiveSession.Viewing "s1" } }
     let m1, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.SessionCreated snapA)) model
     let m2, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.SessionCreated snapB)) m1
     m2.Sessions.Sessions
@@ -154,7 +154,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
     let newModel, _ =
       SageFsUpdate.update (SageFsMsg.Event event) model
     newModel.Sessions.ActiveSessionId
-    |> Expect.equal "should be s2" (Some "s2")
+    |> Expect.equal "should be s2" (ActiveSession.Viewing "s2")
     newModel.Sessions.Sessions
     |> List.find (fun s -> s.Id = "s2")
     |> fun s -> s.IsActive
@@ -637,7 +637,7 @@ let renderConsistencyTests = testList "Render consistency" [
       UpSince = DateTime.UtcNow.AddHours(-1.0)
       LastActivity = DateTime.UtcNow; WorkingDirectory = "C:\\Code" }
     { SageFsModel.initial with
-        Sessions = { Sessions = [snap]; ActiveSessionId = Some "session-1"
+        Sessions = { Sessions = [snap]; ActiveSessionId = ActiveSession.Viewing "session-1"
                      TotalEvals = 5; WatchStatus = None }
         RecentOutput = [
           { Kind = OutputKind.Result; Text = "val x = 42"

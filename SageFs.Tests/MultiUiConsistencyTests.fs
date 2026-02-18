@@ -373,7 +373,7 @@ let elmSessionCyclingTests = testList "Elm session cycling" [
 let elmSessionEventTests = testList "Elm session events" [
   testCase "SessionSwitched updates ActiveSessionId and IsActive flags" <| fun _ ->
     let m', _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.SessionSwitched (None, "sess-b"))) threeSessionModel
-    m'.Sessions.ActiveSessionId |> Expect.equal "active updated" (Some "sess-b")
+    m'.Sessions.ActiveSessionId |> Expect.equal "active updated" (ActiveSession.Viewing "sess-b")
     m'.Sessions.Sessions
     |> List.find (fun s -> s.Id = "sess-b")
     |> fun s -> s.IsActive |> Expect.isTrue "sess-b is active"
@@ -395,10 +395,10 @@ let elmSessionEventTests = testList "Elm session events" [
 
   testCase "SessionCreated auto-activates first session" <| fun _ ->
     let m0 = SageFsModel.initial
-    m0.Sessions.ActiveSessionId |> Expect.isNone "initially none"
+    m0.Sessions.ActiveSessionId |> Expect.equal "initially awaiting" ActiveSession.AwaitingSession
     let snap = mkSnapshot "first" ["X.fsproj"] false
     let m1, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.SessionCreated snap)) m0
-    m1.Sessions.ActiveSessionId |> Expect.equal "auto-activated" (Some "first")
+    m1.Sessions.ActiveSessionId |> Expect.equal "auto-activated" (ActiveSession.Viewing "first")
     m1.Sessions.Sessions |> List.find (fun s -> s.Id = "first")
     |> fun s -> s.IsActive |> Expect.isTrue "first is active"
 
@@ -411,7 +411,7 @@ let elmSessionEventTests = testList "Elm session events" [
 
   testCase "SessionStopped of non-active preserves active" <| fun _ ->
     let m', _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.SessionStopped "sess-c")) threeSessionModel
-    m'.Sessions.ActiveSessionId |> Expect.equal "still sess-a" (Some "sess-a")
+    m'.Sessions.ActiveSessionId |> Expect.equal "still sess-a" (ActiveSession.Viewing "sess-a")
     m'.Sessions.Sessions
     |> List.find (fun s -> s.Id = "sess-a")
     |> fun s -> s.IsActive |> Expect.isTrue "sess-a still active"
@@ -422,7 +422,7 @@ let elmSessionEventTests = testList "Elm session events" [
       switches |> List.fold (fun m sid ->
         let m', _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.SessionSwitched (None, sid))) m
         m') threeSessionModel
-    finalModel.Sessions.ActiveSessionId |> Expect.equal "last switch wins" (Some "sess-b")
+    finalModel.Sessions.ActiveSessionId |> Expect.equal "last switch wins" (ActiveSession.Viewing "sess-b")
     finalModel.Sessions.Sessions
     |> List.filter (fun s -> s.IsActive)
     |> List.length
@@ -614,18 +614,18 @@ let multiSessionLifecycleTests = testList "multi-session lifecycle" [
     let m1, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.SessionCreated (mkSnapshot "s1" ["A.fsproj"] false))) m0
     let m2, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.SessionCreated (mkSnapshot "s2" ["B.fsproj"] false))) m1
     let m3, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.SessionCreated (mkSnapshot "s3" ["C.fsproj"] false))) m2
-    m3.Sessions.ActiveSessionId |> Expect.equal "first auto-active" (Some "s1")
+    m3.Sessions.ActiveSessionId |> Expect.equal "first auto-active" (ActiveSession.Viewing "s1")
     m3.Sessions.Sessions |> List.length |> Expect.equal "3 sessions" 3
     let m4, effs4 = SageFsUpdate.update (SageFsMsg.Editor EditorAction.SessionCycleNext) m3
     effs4 |> List.length |> Expect.equal "cycle emits effect" 1
     let m5, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.SessionSwitched (None, "s2"))) m4
-    m5.Sessions.ActiveSessionId |> Expect.equal "now s2" (Some "s2")
+    m5.Sessions.ActiveSessionId |> Expect.equal "now s2" (ActiveSession.Viewing "s2")
     let m6, _ = SageFsUpdate.update (SageFsMsg.Editor EditorAction.SessionCycleNext) m5
     let m7, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.SessionSwitched (None, "s3"))) m6
-    m7.Sessions.ActiveSessionId |> Expect.equal "now s3" (Some "s3")
+    m7.Sessions.ActiveSessionId |> Expect.equal "now s3" (ActiveSession.Viewing "s3")
     let m8, _ = SageFsUpdate.update (SageFsMsg.Editor EditorAction.SessionCycleNext) m7
     let m9, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.SessionSwitched (None, "s1"))) m8
-    m9.Sessions.ActiveSessionId |> Expect.equal "wraps to s1" (Some "s1")
+    m9.Sessions.ActiveSessionId |> Expect.equal "wraps to s1" (ActiveSession.Viewing "s1")
 
   testCase "stop active session, verify fallback" <| fun _ ->
     let m0 = threeSessionModel
@@ -641,15 +641,15 @@ let multiSessionLifecycleTests = testList "multi-session lifecycle" [
   testCase "create, switch, stop, switch back — full lifecycle" <| fun _ ->
     let m0 = SageFsModel.initial
     let m1, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.SessionCreated (mkSnapshot "s1" ["A.fsproj"] false))) m0
-    m1.Sessions.ActiveSessionId |> Expect.equal "s1 active" (Some "s1")
+    m1.Sessions.ActiveSessionId |> Expect.equal "s1 active" (ActiveSession.Viewing "s1")
     let m2, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.SessionCreated (mkSnapshot "s2" ["B.fsproj"] false))) m1
-    m2.Sessions.ActiveSessionId |> Expect.equal "still s1" (Some "s1")
+    m2.Sessions.ActiveSessionId |> Expect.equal "still s1" (ActiveSession.Viewing "s1")
     let m3, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.SessionSwitched (None, "s2"))) m2
-    m3.Sessions.ActiveSessionId |> Expect.equal "now s2" (Some "s2")
+    m3.Sessions.ActiveSessionId |> Expect.equal "now s2" (ActiveSession.Viewing "s2")
     let m4, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.SessionStopped "s2")) m3
     m4.Sessions.Sessions |> List.length |> Expect.equal "1 left" 1
     let m5, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.SessionSwitched (None, "s1"))) m4
-    m5.Sessions.ActiveSessionId |> Expect.equal "back to s1" (Some "s1")
+    m5.Sessions.ActiveSessionId |> Expect.equal "back to s1" (ActiveSession.Viewing "s1")
 
   testCase "SessionNavDown clamps to session count" <| fun _ ->
     let model =

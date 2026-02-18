@@ -59,17 +59,22 @@ let displayStatusTests = testList "SessionDisplay.displayStatus" [
 let snapshotTests = testList "SessionDisplay.snapshot" [
   testCase "active session marked as active" <| fun _ ->
     let info = mkInfo "s1" SessionStatus.Ready now
-    let snap = SessionDisplay.snapshot now (Some "s1") info
+    let snap = SessionDisplay.snapshot now (ActiveSession.Viewing "s1") info
     snap.IsActive |> Expect.isTrue "should be active"
 
   testCase "inactive session marked as not active" <| fun _ ->
     let info = mkInfo "s1" SessionStatus.Ready now
-    let snap = SessionDisplay.snapshot now (Some "s2") info
+    let snap = SessionDisplay.snapshot now (ActiveSession.Viewing "s2") info
     snap.IsActive |> Expect.isFalse "should not be active"
+
+  testCase "awaiting session means no session is active" <| fun _ ->
+    let info = mkInfo "s1" SessionStatus.Ready now
+    let snap = SessionDisplay.snapshot now ActiveSession.AwaitingSession info
+    snap.IsActive |> Expect.isFalse "should not be active when awaiting"
 
   testCase "snapshot preserves projects" <| fun _ ->
     let info = mkInfo "s1" SessionStatus.Ready now
-    let snap = SessionDisplay.snapshot now None info
+    let snap = SessionDisplay.snapshot now ActiveSession.AwaitingSession info
     snap.Projects |> Expect.equal "should match" ["Test.fsproj"]
 ]
 
@@ -80,14 +85,14 @@ let registryViewTests = testList "SessionDisplay.registryView" [
       mkInfo "s1" SessionStatus.Ready now
       mkInfo "s2" SessionStatus.Evaluating now
     ]
-    let view = SessionDisplay.registryView now (Some "s1") infos None
+    let view = SessionDisplay.registryView now (ActiveSession.Viewing "s1") infos None
     view.Sessions.Length |> Expect.equal "should have 2 sessions" 2
-    view.ActiveSessionId |> Expect.equal "active is s1" (Some "s1")
+    view.ActiveSessionId |> Expect.equal "active is Viewing s1" (ActiveSession.Viewing "s1")
 
-  testCase "empty session list" <| fun _ ->
-    let view = SessionDisplay.registryView now None [] None
+  testCase "empty session list with awaiting" <| fun _ ->
+    let view = SessionDisplay.registryView now ActiveSession.AwaitingSession [] None
     view.Sessions |> Expect.equal "should be empty" []
-    view.ActiveSessionId |> Expect.isNone "no active"
+    view.ActiveSessionId |> Expect.equal "should be awaiting" ActiveSession.AwaitingSession
 ]
 
 [<Tests>]

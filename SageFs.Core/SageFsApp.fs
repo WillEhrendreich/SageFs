@@ -34,7 +34,7 @@ module SageFsModel =
     Editor = EditorState.initial
     Sessions = {
       Sessions = []
-      ActiveSessionId = None
+      ActiveSessionId = ActiveSession.AwaitingSession
       TotalEvals = 0
       WatchStatus = None
     }
@@ -189,7 +189,7 @@ module SageFsUpdate =
         { model with Diagnostics = model.Diagnostics |> Map.add sid diags }, []
 
       | SageFsEvent.SessionCreated snap ->
-        let isFirst = model.Sessions.ActiveSessionId.IsNone
+        let isFirst = model.Sessions.ActiveSessionId = ActiveSession.AwaitingSession
         let snap = if isFirst then { snap with IsActive = true } else snap
         let existing = model.Sessions.Sessions |> List.exists (fun s -> s.Id = snap.Id)
         let sessions =
@@ -203,7 +203,7 @@ module SageFsUpdate =
               model.Sessions with
                 Sessions = sessions
                 ActiveSessionId =
-                  if isFirst then Some snap.Id
+                  if isFirst then ActiveSession.Viewing snap.Id
                   else model.Sessions.ActiveSessionId } }, []
 
       | SageFsEvent.SessionStatusChanged (sessionId, status) ->
@@ -220,7 +220,7 @@ module SageFsUpdate =
         { model with
             Sessions = {
               model.Sessions with
-                ActiveSessionId = Some toId
+                ActiveSessionId = ActiveSession.Viewing toId
                 Sessions =
                   model.Sessions.Sessions
                   |> List.map (fun s ->
@@ -230,18 +230,22 @@ module SageFsUpdate =
         let remaining =
           model.Sessions.Sessions
           |> List.filter (fun s -> s.Id <> sessionId)
-        let wasActive = model.Sessions.ActiveSessionId = Some sessionId
-        let newActiveId =
-          if wasActive then remaining |> List.tryHead |> Option.map (fun s -> s.Id)
+        let wasActive = ActiveSession.isViewing sessionId model.Sessions.ActiveSessionId
+        let newActive =
+          if wasActive then
+            remaining
+            |> List.tryHead
+            |> Option.map (fun s -> ActiveSession.Viewing s.Id)
+            |> Option.defaultValue ActiveSession.AwaitingSession
           else model.Sessions.ActiveSessionId
         let remaining =
           remaining
-          |> List.map (fun s -> { s with IsActive = Some s.Id = newActiveId })
+          |> List.map (fun s -> { s with IsActive = ActiveSession.isViewing s.Id newActive })
         { model with
             Sessions = {
               model.Sessions with
                 Sessions = remaining
-                ActiveSessionId = newActiveId }
+                ActiveSessionId = newActive }
             Diagnostics = model.Diagnostics |> Map.remove sessionId }, []
 
       | SageFsEvent.SessionStale (sessionId, _) ->
@@ -258,7 +262,7 @@ module SageFsUpdate =
       | SageFsEvent.FileChanged _ -> model, []
 
       | SageFsEvent.FileReloaded (path, _, result) ->
-        let activeId = model.Sessions.ActiveSessionId |> Option.defaultValue ""
+        let activeId = ActiveSession.sessionId model.Sessions.ActiveSessionId |> Option.defaultValue ""
         let line =
           match result with
           | Ok msg ->
@@ -276,7 +280,7 @@ module SageFsUpdate =
       | SageFsEvent.WarmupProgress _ -> model, []
 
       | SageFsEvent.WarmupCompleted (_, failures) ->
-        let activeId = model.Sessions.ActiveSessionId |> Option.defaultValue ""
+        let activeId = ActiveSession.sessionId model.Sessions.ActiveSessionId |> Option.defaultValue ""
         if failures.IsEmpty then
           let line = {
             Kind = OutputKind.Info
@@ -323,7 +327,10 @@ module SageFsRender =
       Completions = editorCompletions
     }
 
-    let activeSessionId = model.Sessions.ActiveSessionId |> Option.defaultValue ""
+    let activeSessionId =
+      match model.Sessions.ActiveSessionId with
+      | ActiveSession.Viewing sid -> sid
+      | ActiveSession.AwaitingSession -> ""
     let outputRegion = {
       Id = "output"
       Flags = RegionFlags.Scrollable ||| RegionFlags.LiveUpdate
