@@ -48,7 +48,7 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
             Features.Events.SageFsEvent.DaemonSessionCreated
               {| SessionId = info.Id; Projects = projects; WorkingDir = workingDir; CreatedAt = DateTimeOffset.UtcNow |}
           ]
-          return Ok (SessionOperations.formatSessionInfo DateTime.UtcNow info)
+          return Ok info.Id
         | Error e -> return Error e
       }
     ListSessions = fun () ->

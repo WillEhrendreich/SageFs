@@ -549,7 +549,9 @@ module McpTools =
       eprintfn "[INFO] Auto-creating session at %s with %d project(s)" root projects.Length
       let! result = ctx.SessionOps.CreateSession projects root
       match result with
-      | Ok _ -> return activeSessionId ctx agent
+      | Ok sid ->
+        setActiveSessionId ctx agent sid
+        return sid
       | Error err ->
         return failwithf "Auto-session creation failed at %s: %s" root (SageFsError.describe err)
     }
@@ -925,13 +927,9 @@ module McpTools =
       // Refresh Elm model so dashboard SSE pushes updated session list
       ctx.Dispatch |> Option.iter (fun d -> d (SageFsMsg.Editor EditorAction.ListSessions))
       match result with
-      | Result.Ok info ->
-        // Extract session ID from formatted info and bind to this agent
-        let! sessions = ctx.SessionOps.GetAllSessions()
-        match sessions |> List.tryFind (fun s -> s.WorkingDirectory = workingDir) with
-        | Some s -> setActiveSessionId ctx agent s.Id
-        | None -> ()
-        return info
+      | Result.Ok sid ->
+        setActiveSessionId ctx agent sid
+        return sid
       | Result.Error err -> return SageFsError.describe err
     }
 
