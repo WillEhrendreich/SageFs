@@ -59,6 +59,7 @@
         <Compile Include="ClientModeTests.fs" />
         <Compile Include="ReplayTests.fs" />
         <Compile Include="HotReloadTests.fs" />
+        <Compile Include="SessionIsolationTests.fs" />
         <Compile Include="Program.fs" />
     </ItemGroup>
 
