@@ -57,7 +57,7 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
           sessionManager.PostAndAsyncReply(fun reply ->
             SessionManager.SessionCommand.ListSessions reply)
           |> Async.StartAsTask
-        return SessionOperations.formatSessionList DateTime.UtcNow sessions
+        return SessionOperations.formatSessionList DateTime.UtcNow None sessions
       }
     StopSession = fun sessionId ->
       task {

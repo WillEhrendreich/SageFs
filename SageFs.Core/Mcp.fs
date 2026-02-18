@@ -546,14 +546,30 @@ module McpTools =
             | None -> discoverProjectsAtSync detectedRoot
           detectedRoot, projs
 
-      eprintfn "[INFO] Auto-creating session at %s with %d project(s)" root projects.Length
-      let! result = ctx.SessionOps.CreateSession projects root
-      match result with
-      | Ok sid ->
-        setActiveSessionId ctx agent sid
-        return sid
-      | Error err ->
-        return failwithf "Auto-session creation failed at %s: %s" root (SageFsError.describe err)
+      // Step 4: Check if an existing session for this root has no worker occupants.
+      // Workers (MCP agents) need exclusive sessions; observers (UIs) can share.
+      let! allSessions = ctx.SessionOps.GetAllSessions()
+      let candidateSession =
+        allSessions
+        |> List.filter (fun s -> String.Equals(s.WorkingDirectory, root, StringComparison.OrdinalIgnoreCase))
+        |> List.tryFind (fun s ->
+          let occs = SessionOperations.SessionOccupancy.forSession ctx.SessionMap s.Id
+          not (SessionOperations.SessionOccupancy.hasWorker occs))
+
+      match candidateSession with
+      | Some s ->
+        eprintfn "[INFO] Joining existing session %s at %s (no worker occupants)" s.Id root
+        setActiveSessionId ctx agent s.Id
+        return s.Id
+      | None ->
+        eprintfn "[INFO] Auto-creating session at %s with %d project(s)" root projects.Length
+        let! result = ctx.SessionOps.CreateSession projects root
+        match result with
+        | Ok sid ->
+          setActiveSessionId ctx agent sid
+          return sid
+        | Error err ->
+          return failwithf "Auto-session creation failed at %s: %s" root (SageFsError.describe err)
     }
 
   /// Route to the active session or the specified session.
@@ -933,9 +949,17 @@ module McpTools =
       | Result.Error err -> return SageFsError.describe err
     }
 
-  /// List all active sessions.
+  /// List all active sessions with occupancy information.
   let listSessions (ctx: McpContext) : Task<string> =
-    ctx.SessionOps.ListSessions()
+    task {
+      let! sessions = ctx.SessionOps.GetAllSessions()
+      let occupancyMap =
+        sessions
+        |> List.map (fun s ->
+          s.Id, SessionOperations.SessionOccupancy.forSession ctx.SessionMap s.Id)
+        |> Map.ofList
+      return SessionOperations.formatSessionList System.DateTime.UtcNow (Some occupancyMap) sessions
+    }
 
   /// Stop a session by ID.
   let stopSession (ctx: McpContext) (sessionId: string) : Task<string> =

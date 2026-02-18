@@ -144,7 +144,7 @@ let private mkSessionWithPid id lastActive (status: SessionStatus) pid : Session
 let formatSessionInfoTests = testList "formatSessionInfo" [
   test "includes all fields" {
     let s = mkSessionWithPid "abc123" (now.AddMinutes(-2.0)) SessionStatus.Ready (Some 1234)
-    let output = formatSessionInfo now s
+    let output = formatSessionInfo now None s
     Expect.stringContains "has id" "abc123" output
     Expect.stringContains "has state" "Ready" output
     Expect.stringContains "has PID" "PID 1234" output
@@ -153,44 +153,114 @@ let formatSessionInfoTests = testList "formatSessionInfo" [
   }
   test "handles missing PID" {
     let s = mkSessionWithPid "abc123" now SessionStatus.Starting None
-    let output = formatSessionInfo now s
+    let output = formatSessionInfo now None s
     Expect.stringContains "has no PID" "(no PID)" output
   }
   test "just now for recent activity" {
     let s = mkSessionWithPid "x" (now.AddSeconds(-30.0)) SessionStatus.Ready (Some 1)
-    let output = formatSessionInfo now s
+    let output = formatSessionInfo now None s
     Expect.stringContains "says just now" "just now" output
   }
   test "hours ago" {
     let s = mkSessionWithPid "x" (now.AddHours(-3.0)) SessionStatus.Ready (Some 1)
-    let output = formatSessionInfo now s
+    let output = formatSessionInfo now None s
     Expect.stringContains "says hr ago" "3 hr ago" output
   }
   test "days ago" {
     let s = mkSessionWithPid "x" (now.AddDays(-2.0)) SessionStatus.Ready (Some 1)
-    let output = formatSessionInfo now s
+    let output = formatSessionInfo now None s
     Expect.stringContains "says days ago" "2 days ago" output
   }
 ]
 
 let formatSessionListTests = testList "formatSessionList" [
   test "empty list" {
-    formatSessionList now []
+    formatSessionList now None []
     |> Expect.equal "empty message" "No active sessions."
   }
   test "single session" {
     let s = mkSessionWithPid "s1" (now.AddMinutes(-1.0)) SessionStatus.Ready (Some 100)
-    let output = formatSessionList now [s]
+    let output = formatSessionList now None [s]
     Expect.stringContains "has count" "1 active session(s)" output
     Expect.stringContains "has s1" "s1" output
   }
   test "multiple sessions" {
     let s1 = mkSessionWithPid "s1" (now.AddMinutes(-1.0)) SessionStatus.Ready (Some 100)
     let s2 = mkSessionWithPid "s2" (now.AddMinutes(-5.0)) SessionStatus.Evaluating (Some 200)
-    let output = formatSessionList now [s1; s2]
+    let output = formatSessionList now None [s1; s2]
     Expect.stringContains "has count" "2 active session(s)" output
     Expect.stringContains "has s1" "s1" output
     Expect.stringContains "has s2" "s2" output
+  }
+]
+
+let occupancyTests = testList "SessionOccupancy" [
+  test "classify MCP agents as Worker" {
+    OccupantRole.classify "mcp"
+    |> Expect.equal "mcp is Worker" OccupantRole.Worker
+
+    OccupantRole.classify "mcp-copilot"
+    |> Expect.equal "mcp-copilot is Worker" OccupantRole.Worker
+
+    OccupantRole.classify "agent-1"
+    |> Expect.equal "agent-1 is Worker" OccupantRole.Worker
+  }
+
+  test "classify UI clients as Observer" {
+    OccupantRole.classify "tui"
+    |> Expect.equal "tui is Observer" OccupantRole.Observer
+
+    OccupantRole.classify "dashboard-abc"
+    |> Expect.equal "dashboard is Observer" OccupantRole.Observer
+
+    OccupantRole.classify "http"
+    |> Expect.equal "http is Observer" OccupantRole.Observer
+
+    OccupantRole.classify "gui"
+    |> Expect.equal "gui is Observer" OccupantRole.Observer
+  }
+
+  test "forSession returns occupants for matching session" {
+    let map = System.Collections.Concurrent.ConcurrentDictionary<string, string>()
+    map.["mcp"] <- "s1"
+    map.["tui"] <- "s1"
+    map.["mcp-other"] <- "s2"
+
+    let occs = SessionOccupancy.forSession map "s1"
+    occs |> List.length
+    |> Expect.equal "two occupants for s1" 2
+  }
+
+  test "forSession returns empty for non-matching session" {
+    let map = System.Collections.Concurrent.ConcurrentDictionary<string, string>()
+    map.["mcp"] <- "s1"
+
+    let occs = SessionOccupancy.forSession map "s2"
+    occs |> Expect.isEmpty "no occupants for s2"
+  }
+
+  test "hasWorker detects worker presence" {
+    [ { AgentName = "mcp"; Role = OccupantRole.Worker } ]
+    |> SessionOccupancy.hasWorker
+    |> Expect.isTrue "has a worker"
+  }
+
+  test "hasWorker returns false for observer-only" {
+    [ { AgentName = "tui"; Role = OccupantRole.Observer } ]
+    |> SessionOccupancy.hasWorker
+    |> Expect.isFalse "no workers"
+  }
+
+  test "format shows unoccupied for empty list" {
+    SessionOccupancy.format []
+    |> Expect.equal "unoccupied" "unoccupied"
+  }
+
+  test "format shows workers and observers" {
+    [ { AgentName = "mcp"; Role = OccupantRole.Worker }
+      { AgentName = "tui"; Role = OccupantRole.Observer } ]
+    |> SessionOccupancy.format
+    |> Expect.equal "workers and observers" "1 worker(s): mcp | 1 observer(s)"
   }
 ]
 
@@ -202,4 +272,5 @@ let tests = testList "SessionOperations" [
   describeErrorTests
   formatSessionInfoTests
   formatSessionListTests
+  occupancyTests
 ]
