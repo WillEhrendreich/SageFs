@@ -25,7 +25,7 @@ let sessionResetTests =
           "val resetTestVal"
 
         // Reset the session
-        let! resetResult = resetSession ctx None
+        let! resetResult = resetSession ctx "test" None
         resetResult
         |> Expect.stringContains
           "Reset should report success"
@@ -46,7 +46,7 @@ let sessionResetTests =
       task {
         let ctx = sharedCtxWith "reset-works"
 
-        let! resetResult = resetSession ctx None
+        let! resetResult = resetSession ctx "test" None
         resetResult
         |> Expect.stringContains
           "Reset should succeed"
@@ -66,7 +66,7 @@ let sessionResetTests =
       task {
         let ctx = sharedCtxWith "reset-msg"
 
-        let! result = resetSession ctx None
+        let! result = resetSession ctx "test" None
         let isSuccess =
           result.Contains("success", System.StringComparison.OrdinalIgnoreCase)
           || result.Contains("reset", System.StringComparison.OrdinalIgnoreCase)
@@ -85,7 +85,7 @@ let resetPushbackTests =
     <| fun _ ->
       task {
         let ctx = sharedCtx ()
-        let! result = hardResetSession ctx false None
+        let! result = hardResetSession ctx "test" false None
         result
         |> Expect.stringContains
           "Should include pushback warning for healthy session"
@@ -102,7 +102,7 @@ let resetPushbackTests =
     <| fun _ ->
       task {
         let ctx = sharedCtx ()
-        let! result = hardResetSession ctx false None
+        let! result = hardResetSession ctx "test" false None
         // With unified sessions, warmup failures come from proxy — just verify reset works
         result
         |> Expect.stringContains
@@ -116,7 +116,7 @@ let resetPushbackTests =
     <| fun _ ->
       task {
         let ctx = sharedCtx ()
-        let! result = resetSession ctx None
+        let! result = resetSession ctx "test" None
         result
         |> Expect.stringContains
           "Should include pushback warning for healthy session"
@@ -133,7 +133,7 @@ let resetPushbackTests =
     <| fun _ ->
       task {
         let ctx = sharedCtx ()
-        let! result = resetSession ctx None
+        let! result = resetSession ctx "test" None
         // With unified sessions, warmup failures come from proxy — just verify reset works
         result
         |> Expect.stringContains

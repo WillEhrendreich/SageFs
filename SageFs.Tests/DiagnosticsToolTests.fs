@@ -91,7 +91,7 @@ let checkFSharpCodeTests =
     <| fun _ ->
       task {
         let ctx = sharedCtx ()
-        let! result = checkFSharpCode ctx "let x = 42" None
+        let! result = checkFSharpCode ctx "test" "let x = 42" None
         result
         |> Expect.stringContains "valid code should have no issues" "No issues found"
       }
@@ -102,7 +102,7 @@ let checkFSharpCodeTests =
     <| fun _ ->
       task {
         let ctx = sharedCtx ()
-        let! result = checkFSharpCode ctx "let x: int = \"hello\"" None
+        let! result = checkFSharpCode ctx "test" "let x: int = \"hello\"" None
         result
         |> Expect.stringContains "should report error" "[error]"
       }
@@ -113,7 +113,7 @@ let checkFSharpCodeTests =
     <| fun _ ->
       task {
         let ctx = sharedCtx ()
-        let! result = checkFSharpCode ctx "let y = undefinedValue + 1" None
+        let! result = checkFSharpCode ctx "test" "let y = undefinedValue + 1" None
         result
         |> Expect.stringContains "should report undefined" "[error]"
       }
@@ -125,7 +125,7 @@ let checkFSharpCodeTests =
       task {
         let ctx = sharedCtx ()
         // Check code that would throw at runtime — diagnostics should still work
-        let! result = checkFSharpCode ctx "let z = 1 / 0" None
+        let! result = checkFSharpCode ctx "test" "let z = 1 / 0" None
         // Division by zero is a runtime error, not a compile error
         result
         |> Expect.stringContains "should pass compile check" "No issues found"

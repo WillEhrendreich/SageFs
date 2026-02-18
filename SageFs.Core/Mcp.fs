@@ -426,8 +426,8 @@ module McpTools =
     /// Fires serialized JSON whenever the Elm model changes.
     StateChanged: IEvent<string> option
     SessionOps: SessionManagementOps
-    /// Mutable — tracks which session MCP tools route to.
-    ActiveSessionId: string ref
+    /// Per-connection session tracking, keyed by agent/client name.
+    SessionMap: Collections.Concurrent.ConcurrentDictionary<string, string>
     /// MCP port for status display.
     McpPort: int
     /// Elm loop dispatch function (daemon mode).
@@ -438,8 +438,15 @@ module McpTools =
     GetElmRegions: (unit -> RenderRegion list) option
   }
 
-  /// Get the active session ID.
-  let private activeSessionId (ctx: McpContext) = !ctx.ActiveSessionId
+  /// Get the active session ID for a specific agent/client.
+  let private activeSessionId (ctx: McpContext) (agent: string) =
+    match ctx.SessionMap.TryGetValue(agent) with
+    | true, sid -> sid
+    | _ -> ""
+
+  /// Set the active session ID for a specific agent/client.
+  let private setActiveSessionId (ctx: McpContext) (agent: string) (sid: string) =
+    ctx.SessionMap.[agent] <- sid
 
   /// Normalize a path for comparison: trim trailing separators, lowercase on Windows.
   let private normalizePath (p: string) =
@@ -508,7 +515,7 @@ module McpTools =
 
   /// Auto-create a session when no active session exists.
   /// Resolution order: config isRoot → git root → solution root → CWD.
-  let private ensureActiveSession (ctx: McpContext) : Task<string> =
+  let private ensureActiveSession (ctx: McpContext) (agent: string) : Task<string> =
     task {
       let workingDir = Environment.CurrentDirectory
 
@@ -542,7 +549,7 @@ module McpTools =
       eprintfn "[INFO] Auto-creating session at %s with %d project(s)" root projects.Length
       let! result = ctx.SessionOps.CreateSession projects root
       match result with
-      | Ok _ -> return activeSessionId ctx
+      | Ok _ -> return activeSessionId ctx agent
       | Error err ->
         return failwithf "Auto-session creation failed at %s: %s" root (SageFsError.describe err)
     }
@@ -550,12 +557,12 @@ module McpTools =
   /// Route to the active session or the specified session.
   /// If the active session is empty and no explicit session is given,
   /// auto-creates a session from the working directory.
-  let private resolveSessionId (ctx: McpContext) (sessionId: string option) : Task<string> =
+  let private resolveSessionId (ctx: McpContext) (agent: string) (sessionId: string option) : Task<string> =
     task {
       match sessionId with
       | Some sid -> return sid
       | None ->
-        let current = activeSessionId ctx
+        let current = activeSessionId ctx agent
         if current <> "" then
           // Verify the session is still alive
           let! proxy = ctx.SessionOps.GetProxy current
@@ -563,10 +570,10 @@ module McpTools =
           | Some _ -> return current
           | None ->
             // Active session is dead — clear it so CreateSession can set the new one
-            ctx.ActiveSessionId.Value <- ""
-            return! ensureActiveSession ctx
+            setActiveSessionId ctx agent ""
+            return! ensureActiveSession ctx agent
         else
-          return! ensureActiveSession ctx
+          return! ensureActiveSession ctx agent
     }
 
   /// Get the session status via proxy, returning the SessionState.
@@ -616,7 +623,7 @@ module McpTools =
 
   let sendFSharpCode (ctx: McpContext) (agentName: string) (code: string) (format: OutputFormat) (sessionId: string option) : Task<string> =
     task {
-      let! sid = resolveSessionId ctx sessionId
+      let! sid = resolveSessionId ctx agentName sessionId
       let statements = McpAdapter.splitStatements code
       EventTracking.trackInput ctx.Store sid (Features.Events.McpAgent agentName) code
 
@@ -657,34 +664,34 @@ module McpTools =
       return finalOutput
     }
 
-  let getRecentEvents (ctx: McpContext) (count: int) : Task<string> =
+  let getRecentEvents (ctx: McpContext) (agent: string) (count: int) : Task<string> =
     task {
-      let sid = activeSessionId ctx
+      let sid = activeSessionId ctx agent
       let events = EventTracking.getRecentEvents ctx.Store sid count
       return McpAdapter.formatEvents events
     }
 
   /// Resolve the active session, optionally by working directory.
   /// If a workingDirectory is given and matches a session, use that session
-  /// and update ActiveSessionId so subsequent calls are routed correctly.
-  let private resolveActiveSession (ctx: McpContext) (workingDirectory: string option) : Task<string> =
+  /// and update the per-agent session so subsequent calls are routed correctly.
+  let private resolveActiveSession (ctx: McpContext) (agent: string) (workingDirectory: string option) : Task<string> =
     task {
       match workingDirectory with
       | Some wd when not (System.String.IsNullOrWhiteSpace wd) ->
         let! sessions = ctx.SessionOps.GetAllSessions()
         match resolveSessionByWorkingDir sessions wd with
         | Some matched ->
-          ctx.ActiveSessionId.Value <- matched.Id
+          setActiveSessionId ctx agent matched.Id
           return matched.Id
         | None ->
-          return activeSessionId ctx
+          return activeSessionId ctx agent
       | _ ->
-        return activeSessionId ctx
+        return activeSessionId ctx agent
     }
 
-  let getStatus (ctx: McpContext) (workingDirectory: string option) : Task<string> =
+  let getStatus (ctx: McpContext) (agent: string) (workingDirectory: string option) : Task<string> =
     task {
-      let! sid = resolveActiveSession ctx workingDirectory
+      let! sid = resolveActiveSession ctx agent workingDirectory
       let eventCount = EventTracking.getEventCount ctx.Store sid
       let! routeResult =
         routeToSession ctx sid
@@ -704,9 +711,9 @@ module McpTools =
         return sprintf "Error getting status: %s" msg
     }
 
-  let getStartupInfo (ctx: McpContext) : Task<string> =
+  let getStartupInfo (ctx: McpContext) (agent: string) : Task<string> =
     task {
-      let sid = activeSessionId ctx
+      let sid = activeSessionId ctx agent
       let! info = ctx.SessionOps.GetSessionInfo sid
       match info with
       | Some sessionInfo ->
@@ -722,9 +729,9 @@ module McpTools =
         return "SageFs startup information not available yet — session is still initializing"
     }
 
-  let getStartupInfoJson (ctx: McpContext) : Task<string> =
+  let getStartupInfoJson (ctx: McpContext) (agent: string) : Task<string> =
     task {
-      let sid = activeSessionId ctx
+      let sid = activeSessionId ctx agent
       let! info = ctx.SessionOps.GetSessionInfo sid
       match info with
       | Some sessionInfo ->
@@ -739,9 +746,9 @@ module McpTools =
         return """{"status": "initializing", "message": "Session is still warming up"}"""
     }
 
-  let getAvailableProjects (ctx: McpContext) : Task<string> =
+  let getAvailableProjects (ctx: McpContext) (agent: string) : Task<string> =
     task {
-      let sid = activeSessionId ctx
+      let sid = activeSessionId ctx agent
       let! info = ctx.SessionOps.GetSessionInfo sid
       let workingDir =
         match info with
@@ -769,7 +776,7 @@ module McpTools =
 
   let loadFSharpScript (ctx: McpContext) (agentName: string) (filePath: string) (sessionId: string option) : Task<string> =
     task {
-      let! sid = resolveSessionId ctx sessionId
+      let! sid = resolveSessionId ctx agentName sessionId
       let! routeResult =
         routeToSession ctx sid
           (fun replyId -> WorkerProtocol.WorkerMessage.LoadScript(filePath, replyId))
@@ -784,9 +791,9 @@ module McpTools =
         | Error msg -> sprintf "Error: %s" msg
     }
 
-  let resetSession (ctx: McpContext) (sessionId: string option) : Task<string> =
+  let resetSession (ctx: McpContext) (agent: string) (sessionId: string option) : Task<string> =
     task {
-      let! sid = resolveSessionId ctx sessionId
+      let! sid = resolveSessionId ctx agent sessionId
       let! routeResult =
         routeToSession ctx sid
           (fun replyId -> WorkerProtocol.WorkerMessage.ResetSession replyId)
@@ -802,9 +809,9 @@ module McpTools =
         | Error msg -> sprintf "Error: %s" msg
     }
 
-  let checkFSharpCode (ctx: McpContext) (code: string) (sessionId: string option) : Task<string> =
+  let checkFSharpCode (ctx: McpContext) (agent: string) (code: string) (sessionId: string option) : Task<string> =
     task {
-      let! sid = resolveSessionId ctx sessionId
+      let! sid = resolveSessionId ctx agent sessionId
       let! routeResult =
         routeToSession ctx sid
           (fun replyId -> WorkerProtocol.WorkerMessage.CheckCode(code, replyId))
@@ -822,9 +829,9 @@ module McpTools =
         | Error msg -> sprintf "Error: %s" msg
     }
 
-  let hardResetSession (ctx: McpContext) (rebuild: bool) (sessionId: string option) : Task<string> =
+  let hardResetSession (ctx: McpContext) (agent: string) (rebuild: bool) (sessionId: string option) : Task<string> =
     task {
-      let! sid = resolveSessionId ctx sessionId
+      let! sid = resolveSessionId ctx agent sessionId
       notifyElm ctx (
         SageFsEvent.SessionStatusChanged (sid, SessionDisplayStatus.Restarting))
       if rebuild then
@@ -850,9 +857,9 @@ module McpTools =
           | Error msg -> sprintf "Error: %s" msg
     }
 
-  let cancelEval (ctx: McpContext) : Task<string> =
+  let cancelEval (ctx: McpContext) (agent: string) : Task<string> =
     task {
-      let sid = activeSessionId ctx
+      let sid = activeSessionId ctx agent
       let! routeResult =
         routeToSession ctx sid
           (fun _ -> WorkerProtocol.WorkerMessage.CancelEval)
@@ -867,9 +874,9 @@ module McpTools =
         | Error msg -> sprintf "Error: %s" msg
     }
 
-  let getCompletions (ctx: McpContext) (code: string) (cursorPosition: int) : Task<string> =
+  let getCompletions (ctx: McpContext) (agent: string) (code: string) (cursorPosition: int) : Task<string> =
     task {
-      let sid = activeSessionId ctx
+      let sid = activeSessionId ctx agent
       let! routeResult =
         routeToSession ctx sid
           (fun replyId -> WorkerProtocol.WorkerMessage.GetCompletions(code, cursorPosition, replyId))
@@ -882,9 +889,9 @@ module McpTools =
         | Error msg -> sprintf "Error: %s" msg
     }
 
-  let private exploreQualifiedName (ctx: McpContext) (qualifiedName: string) : Task<string> =
+  let private exploreQualifiedName (ctx: McpContext) (agent: string) (qualifiedName: string) : Task<string> =
     task {
-      let sid = activeSessionId ctx
+      let sid = activeSessionId ctx agent
       let code = sprintf "%s." qualifiedName
       let cursor = code.Length
       let! routeResult =
@@ -903,22 +910,28 @@ module McpTools =
         | Error msg -> sprintf "Error: %s" msg
     }
 
-  let exploreNamespace (ctx: McpContext) (namespaceName: string) : Task<string> =
-    exploreQualifiedName ctx namespaceName
+  let exploreNamespace (ctx: McpContext) (agent: string) (namespaceName: string) : Task<string> =
+    exploreQualifiedName ctx agent namespaceName
 
-  let exploreType (ctx: McpContext) (typeName: string) : Task<string> =
-    exploreQualifiedName ctx typeName
+  let exploreType (ctx: McpContext) (agent: string) (typeName: string) : Task<string> =
+    exploreQualifiedName ctx agent typeName
 
   // ── Session Management Operations ──────────────────────────────
 
-  /// Create a new session.
-  let createSession (ctx: McpContext) (projects: string list) (workingDir: string) : Task<string> =
+  /// Create a new session and bind it to the requesting agent.
+  let createSession (ctx: McpContext) (agent: string) (projects: string list) (workingDir: string) : Task<string> =
     task {
       let! result = ctx.SessionOps.CreateSession projects workingDir
       // Refresh Elm model so dashboard SSE pushes updated session list
       ctx.Dispatch |> Option.iter (fun d -> d (SageFsMsg.Editor EditorAction.ListSessions))
       match result with
-      | Result.Ok info -> return info
+      | Result.Ok info ->
+        // Extract session ID from formatted info and bind to this agent
+        let! sessions = ctx.SessionOps.GetAllSessions()
+        match sessions |> List.tryFind (fun s -> s.WorkingDirectory = workingDir) with
+        | Some s -> setActiveSessionId ctx agent s.Id
+        | None -> ()
+        return info
       | Result.Error err -> return SageFsError.describe err
     }
 
@@ -936,14 +949,14 @@ module McpTools =
       | Result.Error err -> return SageFsError.describe err
     }
 
-  /// Switch the active session. Validates the target exists.
-  let switchSession (ctx: McpContext) (sessionId: string) : Task<string> =
+  /// Switch the active session for a specific agent. Validates the target exists.
+  let switchSession (ctx: McpContext) (agent: string) (sessionId: string) : Task<string> =
     task {
       let! info = ctx.SessionOps.GetSessionInfo sessionId
       match info with
       | Some _ ->
-        let prev = !ctx.ActiveSessionId
-        ctx.ActiveSessionId.Value <- sessionId
+        let prev = activeSessionId ctx agent
+        setActiveSessionId ctx agent sessionId
         // Persist switch to daemon stream
         do! EventStore.appendEvents ctx.Store "daemon-sessions" [
           Features.Events.SageFsEvent.DaemonSessionSwitched

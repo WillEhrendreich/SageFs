@@ -41,11 +41,11 @@ let private withErrorHandling (ctx: Microsoft.AspNetCore.Http.HttpContext) (hand
 }
 
 // Create shared MCP context
-let private mkContext (store: Marten.IDocumentStore) (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.T>) (stateChanged: IEvent<string> option) (sessionOps: SageFs.SessionManagementOps) (activeSessionId: string ref) (mcpPort: int) (dispatch: (SageFs.SageFsMsg -> unit) option) (getElmModel: (unit -> SageFs.SageFsModel) option) (getElmRegions: (unit -> SageFs.RenderRegion list) option) : McpContext =
-  { Store = store; DiagnosticsChanged = diagnosticsChanged; StateChanged = stateChanged; SessionOps = sessionOps; ActiveSessionId = activeSessionId; McpPort = mcpPort; Dispatch = dispatch; GetElmModel = getElmModel; GetElmRegions = getElmRegions }
+let private mkContext (store: Marten.IDocumentStore) (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.T>) (stateChanged: IEvent<string> option) (sessionOps: SageFs.SessionManagementOps) (mcpPort: int) (dispatch: (SageFs.SageFsMsg -> unit) option) (getElmModel: (unit -> SageFs.SageFsModel) option) (getElmRegions: (unit -> SageFs.RenderRegion list) option) : McpContext =
+  { Store = store; DiagnosticsChanged = diagnosticsChanged; StateChanged = stateChanged; SessionOps = sessionOps; SessionMap = System.Collections.Concurrent.ConcurrentDictionary<string, string>(); McpPort = mcpPort; Dispatch = dispatch; GetElmModel = getElmModel; GetElmRegions = getElmRegions }
 
 // Start MCP server in background
-let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.T>) (stateChanged: IEvent<string> option) (store: Marten.IDocumentStore) (port: int) (sessionOps: SageFs.SessionManagementOps) (activeSessionId: string ref) (elmRuntime: SageFs.ElmRuntime<SageFs.SageFsModel, SageFs.SageFsMsg, SageFs.RenderRegion> option) =
+let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.T>) (stateChanged: IEvent<string> option) (store: Marten.IDocumentStore) (port: int) (sessionOps: SageFs.SessionManagementOps) (elmRuntime: SageFs.ElmRuntime<SageFs.SageFsModel, SageFs.SageFsMsg, SageFs.RenderRegion> option) =
     task {
         try
             let dispatch = elmRuntime |> Option.map (fun r -> r.Dispatch)
@@ -94,7 +94,7 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
             ) |> ignore
             
             // Create MCP context
-            let mcpContext = (mkContext store diagnosticsChanged stateChanged sessionOps activeSessionId port dispatch getElmModel getElmRegions)
+            let mcpContext = (mkContext store diagnosticsChanged stateChanged sessionOps port dispatch getElmModel getElmRegions)
             
             // Register MCP services
             builder.Services.AddSingleton<McpContext>(mcpContext) |> ignore
@@ -132,7 +132,7 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
             app.MapMcp() |> ignore
 
             // Shared context — constructed once
-            let mcpContext = mkContext store diagnosticsChanged stateChanged sessionOps activeSessionId port dispatch getElmModel getElmRegions
+            let mcpContext = mkContext store diagnosticsChanged stateChanged sessionOps port dispatch getElmModel getElmRegions
             
             // POST /exec — send F# code to the session
             app.MapPost("/exec", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
@@ -146,7 +146,7 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
             // POST /reset — reset the FSI session
             app.MapPost("/reset", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
                 withErrorHandling ctx (fun () -> task {
-                    let! result = SageFs.McpTools.resetSession mcpContext None
+                    let! result = SageFs.McpTools.resetSession mcpContext "http" None
                     do! jsonResponse ctx 200 {| success = not (result.Contains("Error")); message = result |}
                 }) :> Task
             ) |> ignore
@@ -163,7 +163,7 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                                 json.RootElement.GetProperty("rebuild").GetBoolean()
                             else false
                         with _ -> false
-                    let! result = SageFs.McpTools.hardResetSession mcpContext rebuild None
+                    let! result = SageFs.McpTools.hardResetSession mcpContext "http" rebuild None
                     do! jsonResponse ctx 200 {| success = not (result.Contains("Error")); message = result |}
                 }) :> Task
             ) |> ignore
@@ -171,7 +171,7 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
             // GET /health — session health check
             app.MapGet("/health", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
                 withErrorHandling ctx (fun () -> task {
-                    let! status = SageFs.McpTools.getStatus mcpContext None
+                    let! status = SageFs.McpTools.getStatus mcpContext "http" None
                     do! jsonResponse ctx 200 {| healthy = true; status = status |}
                 }) :> Task
             ) |> ignore
@@ -180,7 +180,7 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
             app.MapPost("/diagnostics", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
                 withErrorHandling ctx (fun () -> task {
                     let! code = readJsonProp ctx "code"
-                    let! _ = SageFs.McpTools.checkFSharpCode mcpContext code None
+                    let! _ = SageFs.McpTools.checkFSharpCode mcpContext "http" code None
                     do! jsonResponse ctx 202 {| accepted = true |}
                 }) :> Task
             ) |> ignore
@@ -238,9 +238,16 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
             ) |> ignore
 
             // GET /api/status — rich JSON status via proxy
+            // Accepts ?sessionId=X to query a specific session
             app.MapGet("/api/status", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
                 withErrorHandling ctx (fun () -> task {
-                    let sid = !activeSessionId
+                    let sid =
+                      match ctx.Request.Query.TryGetValue("sessionId") with
+                      | true, v when v.Count > 0 && not (String.IsNullOrWhiteSpace(v.[0])) -> v.[0]
+                      | _ ->
+                        // Fall back to first available session
+                        let sessions = sessionOps.GetAllSessions().Result
+                        sessions |> List.tryHead |> Option.map (fun s -> s.Id) |> Option.defaultValue ""
                     let! info = sessionOps.GetSessionInfo sid
                     let! statusResult =
                       task {
@@ -302,14 +309,13 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
             app.MapGet("/api/sessions", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
                 withErrorHandling ctx (fun () -> task {
                     let! listing = sessionOps.ListSessions ()
-                    let activeSid = !activeSessionId
                     // Also get per-session snapshots for richer info
                     let sessions = System.Collections.Generic.List<obj>()
                     // Parse listing to extract IDs, then get snapshots
                     // ListSessions returns formatted text; we need structured data
                     // Get all session info from manager
                     let! allInfo = task {
-                      let results = System.Collections.Generic.List<{| id: string; status: string; projects: string list; workingDirectory: string; isActive: bool; evalCount: int; avgDurationMs: float |}>()
+                      let results = System.Collections.Generic.List<{| id: string; status: string; projects: string list; workingDirectory: string; evalCount: int; avgDurationMs: float |}>()
                       // Attempt to get proxy for each known session ID by parsing the listing
                       // The listing is text-based, so we'll try each line
                       let lines = listing.Split('\n') |> Array.filter (fun l -> l.Contains("│") || l.Contains("["))
@@ -332,30 +338,34 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                                     snap.EvalCount, float snap.AvgDurationMs, SageFs.WorkerProtocol.SessionStatus.label snap.Status
                                   | _ -> 0, 0.0, "Unknown"
                                 | None -> 0, 0.0, "Disconnected"
-                              results.Add({| id = candidateId; status = status; projects = i.Projects; workingDirectory = i.WorkingDirectory; isActive = (candidateId = activeSid); evalCount = evalCount; avgDurationMs = avgMs |})
+                              results.Add({| id = candidateId; status = status; projects = i.Projects; workingDirectory = i.WorkingDirectory; evalCount = evalCount; avgDurationMs = avgMs |})
                             | None -> ()
                       return results |> Seq.toList
                     }
-                    do! jsonResponse ctx 200 {| sessions = allInfo; activeSessionId = activeSid |}
+                    do! jsonResponse ctx 200 {| sessions = allInfo |}
                 }) :> Task
             ) |> ignore
 
-            // POST /api/sessions/switch — switch active session
+            // POST /api/sessions/switch — switch session for the requesting client
             app.MapPost("/api/sessions/switch", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
                 withErrorHandling ctx (fun () -> task {
                     let! sid = readJsonProp ctx "sessionId"
-                    let prev = !activeSessionId
-                    activeSessionId.Value <- sid
-                    match dispatch with
-                    | Some d ->
-                      d (SageFs.SageFsMsg.Event (SageFs.SageFsEvent.SessionSwitched (None, sid)))
-                      d (SageFs.SageFsMsg.Editor SageFs.EditorAction.ListSessions)
-                    | None -> ()
-                    do! SageFs.EventStore.appendEvents store "daemon-sessions" [
-                      SageFs.Features.Events.SageFsEvent.DaemonSessionSwitched
-                        {| FromId = Some prev; ToId = sid; SwitchedAt = System.DateTimeOffset.UtcNow |}
-                    ]
-                    do! jsonResponse ctx 200 {| success = true; activeSessionId = sid |}
+                    // Verify session exists
+                    let! info = sessionOps.GetSessionInfo sid
+                    match info with
+                    | Some _ ->
+                      match dispatch with
+                      | Some d ->
+                        d (SageFs.SageFsMsg.Event (SageFs.SageFsEvent.SessionSwitched (None, sid)))
+                        d (SageFs.SageFsMsg.Editor SageFs.EditorAction.ListSessions)
+                      | None -> ()
+                      do! SageFs.EventStore.appendEvents store "daemon-sessions" [
+                        SageFs.Features.Events.SageFsEvent.DaemonSessionSwitched
+                          {| FromId = None; ToId = sid; SwitchedAt = System.DateTimeOffset.UtcNow |}
+                      ]
+                      do! jsonResponse ctx 200 {| success = true; sessionId = sid |}
+                    | None ->
+                      do! jsonResponse ctx 404 {| success = false; error = sprintf "Session '%s' not found" sid |}
                 }) :> Task
             ) |> ignore
 

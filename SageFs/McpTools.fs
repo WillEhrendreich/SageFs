@@ -57,7 +57,7 @@ WORKFLOW: Use this tool instead of dotnet build or dotnet run. SageFs IS your co
     member _.get_recent_fsi_events(count: int option) : Task<string> = 
         let eventCount = defaultArg count 10
         logger.LogDebug("MCP-TOOL: get_recent_fsi_events called: count={Count}", eventCount)
-        getRecentEvents ctx eventCount |> withEcho "get_recent_fsi_events"
+        getRecentEvents ctx "mcp" eventCount |> withEcho "get_recent_fsi_events"
     
     [<McpServerTool>]
     [<Description("Get the current FSI session status: startup configuration, loaded projects, session statistics, and available capabilities. Use to verify session health or discover what is loaded.")>]
@@ -67,19 +67,19 @@ WORKFLOW: Use this tool instead of dotnet build or dotnet run. SageFs IS your co
     ) : Task<string> =
         let wd = if System.String.IsNullOrWhiteSpace working_directory then None else Some working_directory
         logger.LogDebug("MCP-TOOL: get_fsi_status called: workingDir={Dir}", working_directory)
-        getStatus ctx wd |> withEcho "get_fsi_status"
+        getStatus ctx "mcp" wd |> withEcho "get_fsi_status"
 
     [<McpServerTool>]
     [<Description("Get detailed startup information: loaded projects, enabled features, and command-line arguments. Use to understand what capabilities are available in the current session.")>]
     member _.get_startup_info() : Task<string> =
         logger.LogDebug("MCP-TOOL: get_startup_info called")
-        getStartupInfo ctx |> withEcho "get_startup_info"
+        getStartupInfo ctx "mcp" |> withEcho "get_startup_info"
 
     [<McpServerTool>]
     [<Description("DiscoverF# projects (.fsproj) and solutions (.sln/.slnx) in the current working directory. Useful for determining what projects can be loaded with 'SageFs --proj'.")>]
     member _.get_available_projects() : Task<string> =
         logger.LogDebug("MCP-TOOL: get_available_projects called")
-        getAvailableProjects ctx |> withEcho "get_available_projects"
+        getAvailableProjects ctx "mcp" |> withEcho "get_available_projects"
 
     [<McpServerTool>]
     [<Description("""Soft-reset the FSI session. All previously defined types, values, and bindings will be lost. The session is re-warmed with project namespaces.
@@ -96,7 +96,7 @@ WHEN NOT TO USE (common mistake):
 This is a SOFT reset — DLL locks are retained. Use hard_reset_fsi_session only if modules failed to load during warm-up.""")>]
     member _.reset_fsi_session() : Task<string> =
         logger.LogDebug("MCP-TOOL: reset_fsi_session called")
-        resetSession ctx None |> withEcho "reset_fsi_session"
+        resetSession ctx "mcp" None |> withEcho "reset_fsi_session"
 
     [<McpServerTool>]
     [<Description("""Hard reset: dispose the FSI session, release DLL locks via shadow-copy refresh,
@@ -129,7 +129,7 @@ The full pack/reinstall cycle is only needed when SageFs's own source code chang
     member _.hard_reset_fsi_session(rebuild: bool option) : Task<string> =
         let doRebuild = defaultArg rebuild false
         logger.LogDebug("MCP-TOOL: hard_reset_fsi_session called, rebuild={Rebuild}", doRebuild)
-        hardResetSession ctx doRebuild None |> withEcho "hard_reset_fsi_session"
+        hardResetSession ctx "mcp" doRebuild None |> withEcho "hard_reset_fsi_session"
 
     [<McpServerTool>]
     [<Description("""Check F#code for errors without executing it. Returns diagnostics (errors, warnings) from the F# compiler.
@@ -138,13 +138,13 @@ Use this to pre-validate code before sending it with send_fsharp_code, or to che
 WORKFLOW: Use this instead of dotnet build for type-checking. SageFs IS your compiler.""")>]
     member _.check_fsharp_code(code: string) : Task<string> =
         logger.LogDebug("MCP-TOOL: check_fsharp_code called")
-        checkFSharpCode ctx code None |> withEcho "check_fsharp_code"
+        checkFSharpCode ctx "mcp" code None |> withEcho "check_fsharp_code"
 
     [<McpServerTool>]
     [<Description("Cancela running evaluation. Use when an eval is stuck or taking too long. Returns whether a cancellation was performed.")>]
     member _.cancel_eval() : Task<string> =
         logger.LogDebug("MCP-TOOL: cancel_eval called")
-        cancelEval ctx |> withEcho "cancel_eval"
+        cancelEval ctx "mcp" |> withEcho "cancel_eval"
 
     [<McpServerTool>]
     [<Description("Get codecompletions at a cursor position. Returns available completions (types, functions, members) for the code at the given position. Useful for discovering APIs before writing code.")>]
@@ -153,7 +153,7 @@ WORKFLOW: Use this instead of dotnet build for type-checking. SageFs IS your com
         [<Description("Cursor position (0-based character offset) where completions are requested")>] cursor_position: int
     ) : Task<string> =
         logger.LogDebug("MCP-TOOL: get_completions called")
-        getCompletions ctx code cursor_position |> withEcho "get_completions"
+        getCompletions ctx "mcp" code cursor_position |> withEcho "get_completions"
 
     // ── Package Explorer Tools ──────────────────────────────────────
 
@@ -165,7 +165,7 @@ Examples: 'System.Collections.Generic', 'Microsoft.FSharp.Collections', 'FSharp.
         [<Description("Fully-qualified namespace to explore (e.g. 'System.IO', 'Microsoft.FSharp.Collections')")>] namespaceName: string
     ) : Task<string> =
         logger.LogDebug("MCP-TOOL: explore_namespace called: {Namespace}", namespaceName)
-        exploreNamespace ctx namespaceName |> withEcho "explore_namespace"
+        exploreNamespace ctx "mcp" namespaceName |> withEcho "explore_namespace"
 
     [<McpServerTool>]
     [<Description("""Retrieves the members, constructors, and properties of a specific type.
@@ -175,7 +175,7 @@ Examples: 'System.String', 'System.Collections.Generic.List', 'Microsoft.FSharp.
         [<Description("Fully-qualified type name to explore (e.g. 'System.String', 'System.IO.File')")>] typeName: string
     ) : Task<string> =
         logger.LogDebug("MCP-TOOL: explore_type called: {Type}", typeName)
-        exploreType ctx typeName |> withEcho "explore_type"
+        exploreType ctx "mcp" typeName |> withEcho "explore_type"
 
     // ── Session Management Tools ──────────────
 
@@ -189,7 +189,7 @@ Returns session info including the session ID needed for routing commands to thi
     ) : Task<string> =
         logger.LogDebug("MCP-TOOL: create_session called: projects={Projects}, dir={Dir}", projects, working_directory)
         let projectList = projects.Split(',') |> Array.map (fun s -> s.Trim()) |> Array.toList
-        createSession ctx projectList working_directory |> withEcho "create_session"
+        createSession ctx "mcp" projectList working_directory |> withEcho "create_session"
 
     [<McpServerTool>]
     [<Description("""List all active FSI sessions with their metadata: session ID, project names, state, working directory, and last activity.""")>]
@@ -213,7 +213,7 @@ Use list_sessions to see available session IDs.""")>]
         [<Description("Session ID to switch to (from list_sessions)")>] session_id: string
     ) : Task<string> =
         logger.LogDebug("MCP-TOOL: switch_session called: id={Id}", session_id)
-        switchSession ctx session_id |> withEcho "switch_session"
+        switchSession ctx "mcp" session_id |> withEcho "switch_session"
 
     // ── Elm State Tools ──────────────────────────────────────────
 

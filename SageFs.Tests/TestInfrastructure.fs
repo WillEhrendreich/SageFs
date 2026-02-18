@@ -3,6 +3,7 @@ module SageFs.Tests.TestInfrastructure
 open SageFs.ActorCreation
 open SageFs.AppState
 open SageFs.McpTools
+open System.Collections.Concurrent
 
 let quietLogger =
   { new SageFs.Utils.ILogger with
@@ -51,11 +52,13 @@ let private mkTestSessionOps (result: ActorResult) (sessionId: string) : SageFs.
 let sharedCtx () =
   let result = globalActorResult.Value
   let sessionId = SageFs.EventStore.createSessionId ()
+  let sessionMap = ConcurrentDictionary<string, string>()
+  sessionMap.["test"] <- sessionId
   { Store = testStore.Value
     DiagnosticsChanged = result.DiagnosticsChanged
     StateChanged = None
     SessionOps = mkTestSessionOps result sessionId
-    ActiveSessionId = ref sessionId
+    SessionMap = sessionMap
     McpPort = 0
     Dispatch = None
     GetElmModel = None
@@ -64,11 +67,13 @@ let sharedCtx () =
 /// Create a McpContext with a custom session ID backed by the global shared actor
 let sharedCtxWith sessionId =
   let result = globalActorResult.Value
+  let sessionMap = ConcurrentDictionary<string, string>()
+  sessionMap.["test"] <- sessionId
   { Store = testStore.Value
     DiagnosticsChanged = result.DiagnosticsChanged
     StateChanged = None
     SessionOps = mkTestSessionOps result sessionId
-    ActiveSessionId = ref sessionId
+    SessionMap = sessionMap
     McpPort = 0
     Dispatch = None
     GetElmModel = None

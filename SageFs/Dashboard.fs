@@ -962,28 +962,30 @@ let private pushRegions
 
 /// Create the SSE stream handler that pushes Elm state to the browser.
 let createStreamHandler
-  (getSessionState: unit -> SessionState)
-  (getEvalStats: unit -> SageFs.Affordances.EvalStats)
-  (getSessionId: unit -> string)
-  (getSessionWorkingDir: unit -> string)
+  (getSessionState: string -> SessionState)
+  (getEvalStats: string -> SageFs.Affordances.EvalStats)
+  (getSessionWorkingDir: string -> string)
   (getElmRegions: unit -> RenderRegion list option)
   (stateChanged: IEvent<string> option)
   (connectionTracker: ConnectionTracker option)
   (getPreviousSessions: unit -> PreviousSession list)
+  (getAllSessions: unit -> Threading.Tasks.Task<WorkerProtocol.SessionInfo list>)
   : HttpHandler =
   fun ctx -> task {
     Response.sseStartResponse ctx |> ignore
 
     let clientId = Guid.NewGuid().ToString("N").[..7]
-    let sessionId = getSessionId ()
-    connectionTracker |> Option.iter (fun t -> t.Register(clientId, Browser, sessionId))
+    // Resolve initial session: first available session (observer behavior — don't create)
+    let! sessions = getAllSessions ()
+    let mutable currentSessionId =
+      sessions |> List.tryHead |> Option.map (fun s -> s.Id) |> Option.defaultValue ""
+    connectionTracker |> Option.iter (fun t -> t.Register(clientId, Browser, currentSessionId))
 
     let pushState () = task {
-      let state = getSessionState ()
-      let stats = getEvalStats ()
+      let state = getSessionState currentSessionId
+      let stats = getEvalStats currentSessionId
       let stateStr = SessionState.label state
-      let currentSessionId = getSessionId ()
-      let workingDir = getSessionWorkingDir ()
+      let workingDir = getSessionWorkingDir currentSessionId
       let avgMs =
         if stats.EvalCount > 0
         then stats.TotalDuration.TotalMilliseconds / float stats.EvalCount
@@ -1060,7 +1062,7 @@ let createStreamHandler
 
 /// Create the eval POST handler.
 let createEvalHandler
-  (evalCode: string -> Threading.Tasks.Task<string>)
+  (evalCode: string -> string -> Threading.Tasks.Task<string>)
   : HttpHandler =
   fun ctx -> task {
     try
@@ -1069,14 +1071,17 @@ let createEvalHandler
         match doc.RootElement.TryGetProperty("code") with
         | true, prop -> prop.GetString()
         | _ -> ""
+      let sessionId =
+        match doc.RootElement.TryGetProperty("sessionId") with
+        | true, prop -> prop.GetString()
+        | _ -> ""
       if String.IsNullOrWhiteSpace code then
         Response.sseStartResponse ctx |> ignore
         do! Response.ssePatchSignal ctx (SignalPath.sp "code") ""
       else
-        let! result = evalCode code
+        let! result = evalCode sessionId code
         Response.sseStartResponse ctx |> ignore
         do! Response.ssePatchSignal ctx (SignalPath.sp "code") ""
-        // Show result inline below the eval button
         let resultHtml =
           Elem.div [ Attr.id "eval-result" ] [
             Elem.pre [ Attr.class' "output-line output-result"; Attr.style "margin-top: 0.5rem; white-space: pre-wrap;" ] [
@@ -1091,11 +1096,19 @@ let createEvalHandler
 
 /// Create the reset POST handler.
 let createResetHandler
-  (resetSession: unit -> Threading.Tasks.Task<string>)
+  (resetSession: string -> Threading.Tasks.Task<string>)
   : HttpHandler =
   fun ctx -> task {
     try
-      let! result = resetSession ()
+      let! sessionId = task {
+        try
+          let! doc = Request.getSignalsJson ctx
+          match doc.RootElement.TryGetProperty("sessionId") with
+          | true, prop -> return prop.GetString()
+          | _ -> return ""
+        with _ -> return ""
+      }
+      let! result = resetSession sessionId
       Response.sseStartResponse ctx |> ignore
       let resultHtml =
         Elem.div [ Attr.id "eval-result" ] [
@@ -1316,9 +1329,9 @@ let createCreateSessionHandler
 
 /// JSON SSE stream for TUI clients — pushes regions + model summary as JSON.
 let createApiStateHandler
-  (getSessionState: unit -> SessionState)
-  (getEvalStats: unit -> SageFs.Affordances.EvalStats)
-  (getSessionId: unit -> string)
+  (getSessionStateForId: string -> SessionState)
+  (getEvalStatsForId: string -> SageFs.Affordances.EvalStats)
+  (getAllSessions: unit -> Threading.Tasks.Task<WorkerProtocol.SessionInfo list>)
   (getElmRegions: unit -> RenderRegion list option)
   (stateChanged: IEvent<string> option)
   (connectionTracker: ConnectionTracker option)
@@ -1328,14 +1341,19 @@ let createApiStateHandler
     ctx.Response.Headers.["Cache-Control"] <- Microsoft.Extensions.Primitives.StringValues "no-cache"
     ctx.Response.Headers.["Connection"] <- Microsoft.Extensions.Primitives.StringValues "keep-alive"
 
-    let sessionId = getSessionId ()
+    // Each SSE connection tracks its own session via query param
+    let! sessions = getAllSessions ()
+    let defaultSid = sessions |> List.tryHead |> Option.map (fun s -> s.Id) |> Option.defaultValue ""
+    let connSessionId =
+      match ctx.Request.Query.TryGetValue("sessionId") with
+      | true, v when v.Count > 0 && not (String.IsNullOrEmpty(v.[0])) -> v.[0]
+      | _ -> defaultSid
     let clientId = sprintf "tui-%s" (Guid.NewGuid().ToString("N").[..7])
-    connectionTracker |> Option.iter (fun t -> t.Register(clientId, Terminal, sessionId))
+    connectionTracker |> Option.iter (fun t -> t.Register(clientId, Terminal, connSessionId))
 
     let pushJson () = task {
-      let state = getSessionState ()
-      let stats = getEvalStats ()
-      let currentSessionId = getSessionId ()
+      let state = getSessionStateForId connSessionId
+      let stats = getEvalStatsForId connSessionId
       let regions =
         match getElmRegions () with
         | Some r ->
@@ -1348,7 +1366,7 @@ let createApiStateHandler
         | None -> []
       let payload =
         System.Text.Json.JsonSerializer.Serialize(
-          {| sessionId = currentSessionId
+          {| sessionId = connSessionId
              sessionState = SessionState.label state
              evalCount = stats.EvalCount
              avgMs = if stats.EvalCount > 0 then stats.TotalDuration.TotalMilliseconds / float stats.EvalCount else 0.0
@@ -1475,15 +1493,14 @@ let createApiDispatchHandler
 /// Create all dashboard routes.
 let createEndpoints
   (version: string)
-  (getSessionState: unit -> SessionState)
-  (getEvalStats: unit -> SageFs.Affordances.EvalStats)
-  (getSessionId: unit -> string)
-  (getSessionWorkingDir: unit -> string)
+  (getSessionState: string -> SessionState)
+  (getEvalStats: string -> SageFs.Affordances.EvalStats)
+  (getSessionWorkingDir: string -> string)
   (getElmRegions: unit -> RenderRegion list option)
   (stateChanged: IEvent<string> option)
-  (evalCode: string -> Threading.Tasks.Task<string>)
-  (resetSession: unit -> Threading.Tasks.Task<string>)
-  (hardResetSession: unit -> Threading.Tasks.Task<string>)
+  (evalCode: string -> string -> Threading.Tasks.Task<string>)
+  (resetSession: string -> Threading.Tasks.Task<string>)
+  (hardResetSession: string -> Threading.Tasks.Task<string>)
   (switchSession: (string -> Threading.Tasks.Task<string>) option)
   (stopSession: (string -> Threading.Tasks.Task<string>) option)
   (createSession: (string list -> string -> Threading.Tasks.Task<Result<string, string>>) option)
@@ -1491,10 +1508,11 @@ let createEndpoints
   (dispatch: SageFsMsg -> unit)
   (shutdownCallback: (unit -> unit) option)
   (getPreviousSessions: unit -> PreviousSession list)
+  (getAllSessions: unit -> Threading.Tasks.Task<WorkerProtocol.SessionInfo list>)
   : HttpEndpoint list =
   [
     yield get "/dashboard" (FalcoResponse.ofHtml (renderShell version))
-    yield get "/dashboard/stream" (createStreamHandler getSessionState getEvalStats getSessionId getSessionWorkingDir getElmRegions stateChanged connectionTracker getPreviousSessions)
+    yield get "/dashboard/stream" (createStreamHandler getSessionState getEvalStats getSessionWorkingDir getElmRegions stateChanged connectionTracker getPreviousSessions getAllSessions)
     yield post "/dashboard/eval" (createEvalHandler evalCode)
     yield post "/dashboard/reset" (createResetHandler resetSession)
     yield post "/dashboard/hard-reset" (createResetHandler hardResetSession)
@@ -1549,7 +1567,7 @@ let createEndpoints
         })
     | None -> ()
     // TUI client API
-    yield get "/api/state" (createApiStateHandler getSessionState getEvalStats getSessionId getElmRegions stateChanged connectionTracker)
+    yield get "/api/state" (createApiStateHandler getSessionState getEvalStats getAllSessions getElmRegions stateChanged connectionTracker)
     yield post "/api/dispatch" (createApiDispatchHandler dispatch)
     match createSession with
     | Some handler ->

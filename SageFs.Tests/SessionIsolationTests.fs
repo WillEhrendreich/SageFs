@@ -5,6 +5,7 @@ open Expecto.Flip
 open SageFs
 open SageFs.McpTools
 open SageFs.Tests.TestInfrastructure
+open System.Collections.Concurrent
 
 /// Tests that MCP session switch does NOT leak into other clients.
 /// These tests define the contract for per-client session isolation.
@@ -14,6 +15,8 @@ module McpSessionIsolation =
   let ctxWithTracking sessionId =
     let result = globalActorResult.Value
     let dispatched = System.Collections.Generic.List<SageFsMsg>()
+    let sessionMap = ConcurrentDictionary<string, string>()
+    sessionMap.["test"] <- sessionId
     let ctx =
       { Store = testStore.Value
         DiagnosticsChanged = result.DiagnosticsChanged
@@ -38,7 +41,7 @@ module McpSessionIsolation =
                        LastActivity = System.DateTime.UtcNow })
           GetAllSessions = fun () -> System.Threading.Tasks.Task.FromResult([])
         }
-        ActiveSessionId = ref sessionId
+        SessionMap = sessionMap
         McpPort = 0
         Dispatch = Some (fun msg -> dispatched.Add(msg))
         GetElmModel = None
@@ -48,36 +51,37 @@ module McpSessionIsolation =
   /// Call switchSession and return result, ignoring Marten stream errors.
   /// switchSession dispatches to Elm BEFORE appending to the event store,
   /// so dispatch tracking is valid even if the store throws.
-  let switchSessionIgnoringStoreErrors ctx sessionId =
+  let switchSessionIgnoringStoreErrors ctx agent sessionId =
     task {
       try
-        let! result = switchSession ctx sessionId
+        let! result = switchSession ctx agent sessionId
         return Ok result
       with ex ->
-        // Marten may throw on concurrent stream access in tests.
-        // The dispatch side-effects we care about already happened.
         return Error (ex.Message)
     }
 
   let tests = testSequenced <| testList "MCP session isolation" [
 
-    testTask "switchSession updates only the given context's ActiveSessionId" {
+    testTask "switchSession updates only the given context's SessionMap for that agent" {
       let ctx1, _ = ctxWithTracking "session-A"
       let ctx2, _ = ctxWithTracking "session-A"
 
-      let! _ = switchSessionIgnoringStoreErrors ctx1 "session-B"
+      let! _ = switchSessionIgnoringStoreErrors ctx1 "agent1" "session-B"
 
-      !ctx1.ActiveSessionId
-      |> Expect.equal "ctx1 should switch to B" "session-B"
+      ctx1.SessionMap.["agent1"]
+      |> Expect.equal "ctx1 agent1 should switch to B" "session-B"
 
-      !ctx2.ActiveSessionId
+      ctx1.SessionMap.["test"]
+      |> Expect.equal "ctx1 test agent should remain on A" "session-A"
+
+      ctx2.SessionMap.["test"]
       |> Expect.equal "ctx2 should remain on A" "session-A"
     }
 
     testCaseAsync "switchSession does NOT dispatch SessionSwitched to Elm" <| async {
       let ctx, dispatched = ctxWithTracking "session-A"
 
-      let! _ = switchSessionIgnoringStoreErrors ctx "session-B" |> Async.AwaitTask
+      let! _ = switchSessionIgnoringStoreErrors ctx "test" "session-B" |> Async.AwaitTask
 
       dispatched
       |> Seq.filter (fun msg ->
@@ -91,7 +95,7 @@ module McpSessionIsolation =
     testCaseAsync "switchSession does NOT dispatch ListSessions to Elm" <| async {
       let ctx, dispatched = ctxWithTracking "session-A"
 
-      let! _ = switchSessionIgnoringStoreErrors ctx "session-B" |> Async.AwaitTask
+      let! _ = switchSessionIgnoringStoreErrors ctx "test" "session-B" |> Async.AwaitTask
 
       dispatched
       |> Seq.filter (fun msg ->
@@ -106,7 +110,7 @@ module McpSessionIsolation =
       let ctx, _ = ctxWithTracking "session-A"
 
       let! countBefore = EventStore.countEvents ctx.Store "daemon-sessions"
-      let! _ = switchSession ctx "session-B"
+      let! _ = switchSession ctx "test" "session-B"
       let! countAfter = EventStore.countEvents ctx.Store "daemon-sessions"
 
       countAfter - countBefore
@@ -115,6 +119,8 @@ module McpSessionIsolation =
 
     testTask "switchSession returns error for nonexistent session" {
       let result = globalActorResult.Value
+      let sessionMap = ConcurrentDictionary<string, string>()
+      sessionMap.["test"] <- "session-A"
       let ctx =
         { Store = testStore.Value
           DiagnosticsChanged = result.DiagnosticsChanged
@@ -128,13 +134,13 @@ module McpSessionIsolation =
             GetSessionInfo = fun _ -> System.Threading.Tasks.Task.FromResult(None)
             GetAllSessions = fun () -> System.Threading.Tasks.Task.FromResult([])
           }
-          ActiveSessionId = ref "session-A"
+          SessionMap = sessionMap
           McpPort = 0
           Dispatch = None
           GetElmModel = None
           GetElmRegions = None } : McpContext
 
-      let! result = switchSession ctx "nonexistent"
+      let! result = switchSession ctx "test" "nonexistent"
 
       result
       |> Expect.stringContains "should contain error message" "not found"
@@ -144,20 +150,20 @@ module McpSessionIsolation =
       let ctx1, _ = ctxWithTracking "session-A"
       let ctx2, _ = ctxWithTracking "session-B"
 
-      let! _ = switchSessionIgnoringStoreErrors ctx1 "session-C"
+      let! _ = switchSessionIgnoringStoreErrors ctx1 "test" "session-C"
 
-      !ctx1.ActiveSessionId
+      ctx1.SessionMap.["test"]
       |> Expect.equal "ctx1 should be on C" "session-C"
 
-      !ctx2.ActiveSessionId
+      ctx2.SessionMap.["test"]
       |> Expect.equal "ctx2 should still be on B" "session-B"
 
-      let! _ = switchSessionIgnoringStoreErrors ctx2 "session-D"
+      let! _ = switchSessionIgnoringStoreErrors ctx2 "test" "session-D"
 
-      !ctx1.ActiveSessionId
+      ctx1.SessionMap.["test"]
       |> Expect.equal "ctx1 should still be on C" "session-C"
 
-      !ctx2.ActiveSessionId
+      ctx2.SessionMap.["test"]
       |> Expect.equal "ctx2 should be on D" "session-D"
     }
   ]

@@ -89,7 +89,7 @@ module GetStartupInfoTests =
         task {
           let ctx = sharedCtx ()
           
-          let! result = getStartupInfo ctx
+          let! result = getStartupInfo ctx "test"
           
           // Should include key information from StartupConfig in AppState
           Expect.isNotNull result "Should return result"
@@ -105,7 +105,7 @@ module GetStartupInfoTests =
         task {
           let ctx = sharedCtx ()
           
-          let! result = getStartupInfo ctx
+          let! result = getStartupInfo ctx "test"
           
           // Should always return something, even if no config
           Expect.isNotNull result "Should return result"
@@ -118,7 +118,7 @@ module GetStartupInfoTests =
         task {
           let ctx = sharedCtx ()
           
-          let! result = getStartupInfoJson ctx
+          let! result = getStartupInfoJson ctx "test"
           
           // Should be valid JSON that LLMs can parse
           Expect.stringContains result "{" "Should be JSON object"
@@ -131,7 +131,7 @@ module GetStartupInfoTests =
         task {
           let ctx = sharedCtx ()
           
-          let! result = getStartupInfo ctx
+          let! result = getStartupInfo ctx "test"
           
           // Should guide LLMs on how to use SageFs properly
           Expect.stringContains result "SageFs" "Should mention SageFs"
@@ -154,7 +154,7 @@ module EnhancedStatusTests =
         task {
           let ctx = sharedCtx ()
           
-          let! result = getStatus ctx None
+          let! result = getStatus ctx "test" None
           
           // Should include startup information from AppState
           Expect.stringContains result "Events:" "Should show events"
@@ -168,7 +168,7 @@ module EnhancedStatusTests =
         task {
           let ctx = sharedCtx ()
           
-          let! result = getStatus ctx None
+          let! result = getStatus ctx "test" None
           
           // Should include formatted status
           Expect.isNotNull result "Should return result"
@@ -182,7 +182,7 @@ module EnhancedStatusTests =
         task {
           let ctx = sharedCtx ()
           
-          let! result = getStatus ctx None
+          let! result = getStatus ctx "test" None
           
           // Should still return basic status
           Expect.stringContains result "Events:" "Should show events"
@@ -260,7 +260,7 @@ module ProjectDiscoveryTests =
             | Some config -> config.WorkingDirectory
             | None -> Environment.CurrentDirectory
 
-          let! result = getAvailableProjects ctx
+          let! result = getAvailableProjects ctx "test"
 
           Expect.stringContains result "Projects" "Should have projects section"
           Expect.stringContains result "Solutions" "Should have solutions section"

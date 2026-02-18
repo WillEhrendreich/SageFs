@@ -87,9 +87,9 @@ let parseTests = testList "ReplCommand.parse" [
 
 let resolveTests =
   let sessions : SessionInfo list = [
-    { Id = "session-abc123"; Status = "Ready"; IsActive = true; EvalCount = 5; AvgMs = 100.0; WorkingDirectory = @"C:\Code\A"; Projects = ["A.fsproj"] }
-    { Id = "session-def456"; Status = "Ready"; IsActive = false; EvalCount = 0; AvgMs = 0.0; WorkingDirectory = @"C:\Code\B"; Projects = [] }
-    { Id = "session-abc789"; Status = "WarmingUp"; IsActive = false; EvalCount = 0; AvgMs = 0.0; WorkingDirectory = @"C:\Code\C"; Projects = [] }
+    { Id = "session-abc123"; Status = "Ready"; EvalCount = 5; AvgMs = 100.0; WorkingDirectory = @"C:\Code\A"; Projects = ["A.fsproj"] }
+    { Id = "session-def456"; Status = "Ready"; EvalCount = 0; AvgMs = 0.0; WorkingDirectory = @"C:\Code\B"; Projects = [] }
+    { Id = "session-abc789"; Status = "WarmingUp"; EvalCount = 0; AvgMs = 0.0; WorkingDirectory = @"C:\Code\C"; Projects = [] }
   ]
   testList "resolveSessionId" [
     testCase "numeric index 1 resolves to first session" <| fun () ->

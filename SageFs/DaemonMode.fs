@@ -29,8 +29,9 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
   // Create SessionManager — the single source of truth for all sessions
   let sessionManager = SessionManager.create cts.Token
 
-  // Active session ID — mutable, shared across MCP and dashboard
-  let activeSessionId = ref ""
+  // Active session ID — REMOVED: No global shared session.
+  // Each client (MCP, TUI, dashboard) tracks its own session independently.
+  // MCP uses McpContext.SessionMap. UIs pass ?sessionId= in SSE URL.
 
   let daemonStreamId = "daemon-sessions"
 
@@ -43,7 +44,6 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
           |> Async.StartAsTask
         match result with
         | Ok info ->
-          activeSessionId.Value <- info.Id
           do! SageFs.EventStore.appendEvents eventStore daemonStreamId [
             Features.Events.SageFsEvent.DaemonSessionCreated
               {| SessionId = info.Id; Projects = projects; WorkingDir = workingDir; CreatedAt = DateTimeOffset.UtcNow |}
@@ -70,18 +70,6 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
           Features.Events.SageFsEvent.DaemonSessionStopped
             {| SessionId = sessionId; StoppedAt = DateTimeOffset.UtcNow |}
         ]
-        // If we stopped the active session, switch to another
-        if !activeSessionId = sessionId then
-          let! sessions =
-            sessionManager.PostAndAsyncReply(fun reply ->
-              SessionManager.SessionCommand.ListSessions reply)
-            |> Async.StartAsTask
-          let next =
-            sessions
-            |> List.tryFind (fun s -> s.Id <> sessionId)
-            |> Option.map (fun s -> s.Id)
-            |> Option.defaultValue ""
-          activeSessionId.Value <- next
         return
           result
           |> Result.map (fun () ->
@@ -173,22 +161,10 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
             Features.Events.SageFsEvent.DaemonSessionStopped
               {| SessionId = prev.SessionId; StoppedAt = DateTimeOffset.UtcNow |}
           ]
-      // Restore active session from last switch event
+      // Sessions restored — clients will discover them via listing
+      // No global "active session" to restore; each client picks its own
       match daemonState.ActiveSessionId with
-      | Some lastActiveId ->
-        let lastRecord = daemonState.Sessions |> Map.tryFind lastActiveId
-        match lastRecord with
-        | Some r ->
-          let! sessions =
-            sessionManager.PostAndAsyncReply(fun reply ->
-              SessionManager.SessionCommand.ListSessions reply)
-            |> Async.StartAsTask
-          let matching =
-            sessions |> List.tryFind (fun s -> s.WorkingDirectory = r.WorkingDir)
-          match matching with
-          | Some s -> activeSessionId.Value <- s.Id
-          | None -> ()
-        | None -> ()
+      | Some _ -> () // Previously tracked active session — clients resolve on connect
       | None -> ()
     else
       eprintfn "Spawning initial session for %s..." workingDir
@@ -238,16 +214,14 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
       eventStore
       mcpPort
       sessionOps
-      activeSessionId
       (Some elmRuntime)
 
   // Start dashboard web server on MCP port + 1
   let dashboardPort = mcpPort + 1
   let connectionTracker = ConnectionTracker()
-  // Dashboard status helpers — route through active session proxy
+  // Dashboard status helpers — route through session proxy by explicit session ID
   // These are called from SSE handlers; pipe errors must not crash Kestrel.
-  let tryGetSessionSnapshot () =
-    let sid = !activeSessionId
+  let tryGetSessionSnapshot (sid: string) =
     try
       let proxy =
         sessionManager.PostAndAsyncReply(fun reply ->
@@ -270,12 +244,11 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
     | :? System.AggregateException as ae
         when (ae.InnerException :? System.ObjectDisposedException) -> None
 
-  let getSessionState () =
-    let sid = !activeSessionId
+  let getSessionState (sid: string) =
     if String.IsNullOrEmpty(sid) then SessionState.Uninitialized
     else
       // First try the pipe for live status; fall back to session manager's stored status
-      match tryGetSessionSnapshot () with
+      match tryGetSessionSnapshot sid with
       | Some snap -> WorkerProtocol.SessionStatus.toSessionState snap.Status
       | None ->
         try
@@ -288,8 +261,8 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
           | None -> SessionState.Faulted
         with _ -> SessionState.Faulted
 
-  let getEvalStats () =
-    match tryGetSessionSnapshot () with
+  let getEvalStats (sid: string) =
+    match tryGetSessionSnapshot sid with
     | Some snap ->
       { EvalCount = snap.EvalCount
         TotalDuration = TimeSpan.FromMilliseconds(float snap.AvgDurationMs * float snap.EvalCount)
@@ -298,8 +271,7 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
       : Affordances.EvalStats
     | None -> Affordances.EvalStats.empty
 
-  let getSessionWorkingDir () =
-    let sid = !activeSessionId
+  let getSessionWorkingDir (sid: string) =
     try
       let managed =
         sessionManager.PostAndAsyncReply(fun reply ->
@@ -310,17 +282,25 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
       | None -> ""
     with _ -> ""
 
+  let getAllSessions () = task {
+    let! sessions =
+      sessionManager.PostAndAsyncReply(fun reply ->
+        SessionManager.SessionCommand.ListSessions reply)
+      |> Async.StartAsTask
+    return sessions
+  }
+
   let dashboardEndpoints =
     Dashboard.createEndpoints
       version
       getSessionState
       getEvalStats
-      (fun () -> !activeSessionId)
       getSessionWorkingDir
       (fun () -> elmRuntime.GetRegions() |> Some)
       (Some stateChangedEvent.Publish)
-      (fun code -> task {
-        let sid = !activeSessionId
+      (fun sid code -> task {
+        if String.IsNullOrEmpty(sid) then return "Error: No session selected"
+        else
         try
           let! proxy = sessionOps.GetProxy sid
           match proxy with
@@ -351,8 +331,9 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
         | :? System.ObjectDisposedException as ex ->
           return sprintf "Error: Session pipe closed — %s" ex.Message
       })
-      (fun () -> task {
-        let sid = !activeSessionId
+      (fun sid -> task {
+        if String.IsNullOrEmpty(sid) then return "Error: No session selected"
+        else
         try
           let! proxy = sessionOps.GetProxy sid
           match proxy with
@@ -375,17 +356,17 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
         | :? System.ObjectDisposedException as ex ->
           return sprintf "Error: Session pipe closed — %s" ex.Message
       })
-      (fun () -> task {
-        let sid = !activeSessionId
+      (fun sid -> task {
+        if String.IsNullOrEmpty(sid) then return "Error: No session selected"
+        else
         let! result = sessionOps.RestartSession sid true
         return
           match result with
           | Ok msg -> sprintf "Hard reset: %s" msg
           | Error e -> sprintf "Hard reset failed: %s" (SageFsError.describe e)
       })
-      // Session switch handler — per-browser only, no shared Elm dispatch
+      // Session switch handler — per-browser only, no shared state mutation
       (Some (fun (sid: string) -> task {
-        activeSessionId.Value <- sid
         return sprintf "Switched to session '%s'" sid
       }))
       // Session stop handler
@@ -400,7 +381,6 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
       // Create session handler
       (Some (fun (projects: string list) (workingDir: string) -> task {
         let! result = sessionOps.CreateSession projects workingDir
-        // Refresh Elm model's session list so dashboard SSE pushes update
         elmRuntime.Dispatch(SageFsMsg.Editor EditorAction.ListSessions)
         return
           match result with
@@ -446,6 +426,7 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
             |> Seq.toList
           with _ -> []
         activeSessions @ historicalSessions)
+      getAllSessions
   let dashboardTask = task {
     try
       let builder = Microsoft.AspNetCore.Builder.WebApplication.CreateBuilder()

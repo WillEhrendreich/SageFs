@@ -11,7 +11,6 @@ open SageFs
 type SessionInfo = {
   Id: string
   Status: string
-  IsActive: bool
   EvalCount: int
   AvgMs: float
   WorkingDirectory: string
@@ -163,25 +162,20 @@ let private fetchSessions (client: HttpClient) (baseUrl: string) = task {
     let! body = response.Content.ReadAsStringAsync()
     let doc = JsonDocument.Parse(body)
     let root = doc.RootElement
-    let activeSid =
-      if root.TryGetProperty("activeSessionId") |> fst then
-        root.GetProperty("activeSessionId").GetString()
-      else ""
     if root.TryGetProperty("sessions") |> fst then
       let sessions =
         root.GetProperty("sessions").EnumerateArray()
         |> Seq.map (fun s ->
           { Id = s.GetProperty("id").GetString()
             Status = s.GetProperty("status").GetString()
-            IsActive = s.GetProperty("isActive").GetBoolean()
             EvalCount = s.GetProperty("evalCount").GetInt32()
             AvgMs = s.GetProperty("avgDurationMs").GetDouble()
             WorkingDirectory = s.GetProperty("workingDirectory").GetString()
             Projects = s.GetProperty("projects").EnumerateArray() |> Seq.map (fun e -> e.GetString()) |> Seq.toList })
         |> Seq.toList
-      return Ok (sessions, activeSid)
+      return Ok sessions
     else
-      return Ok ([], activeSid)
+      return Ok []
   with ex ->
     return Error (sprintf "Connection error: %s" ex.Message)
 }
@@ -205,7 +199,7 @@ let internal resolveSessionId (sessions: SessionInfo list) (input: string) =
 
 /// Format a session for display with a 1-based index.
 let private formatSession (i: int) (s: SessionInfo) =
-  let marker = if s.IsActive then "\x1b[32m●" else " "
+  let marker = " "  // no global "active" concept
   let statusColor = if s.Status = "Ready" then "\x1b[32m" elif s.Status = "WarmingUp" then "\x1b[33m" else "\x1b[31m"
   let projects =
     if s.Projects.IsEmpty then ""
@@ -228,8 +222,8 @@ let private pickSession (sessions: SessionInfo list) (prompt: string) =
 let private listSessions (client: HttpClient) (baseUrl: string) = task {
   match! fetchSessions client baseUrl with
   | Error msg -> return Error msg
-  | Ok ([], _) -> return Ok "No sessions running."
-  | Ok (sessions, _) ->
+  | Ok [] -> return Ok "No sessions running."
+  | Ok sessions ->
     let sb = StringBuilder()
     sb.AppendLine("\x1b[36mSessions:\x1b[0m") |> ignore
     sessions |> List.iteri (fun i s -> sb.AppendLine(formatSession i s) |> ignore)
@@ -424,8 +418,8 @@ let run (info: DaemonInfo) = task {
           // Interactive picker
           match! fetchSessions client baseUrl with
           | Error msg -> eprintfn "\x1b[31m%s\x1b[0m" msg
-          | Ok ([], _) -> printfn "No sessions running."
-          | Ok (sessions, _) ->
+          | Ok [] -> printfn "No sessions running."
+          | Ok sessions ->
             match pickSession sessions "Switch to session:" with
             | Some resolvedId ->
               match! switchSession client baseUrl resolvedId with
@@ -439,7 +433,7 @@ let run (info: DaemonInfo) = task {
             match! switchSession client baseUrl sid with
             | Ok msg -> printfn "\x1b[33m%s\x1b[0m" msg
             | Error msg -> eprintfn "\x1b[31m%s\x1b[0m" msg
-          | Ok (sessions, _) ->
+          | Ok sessions ->
             match resolveSessionId sessions sid with
             | Some resolvedId ->
               match! switchSession client baseUrl resolvedId with
@@ -452,8 +446,8 @@ let run (info: DaemonInfo) = task {
           // Interactive picker
           match! fetchSessions client baseUrl with
           | Error msg -> eprintfn "\x1b[31m%s\x1b[0m" msg
-          | Ok ([], _) -> printfn "No sessions running."
-          | Ok (sessions, _) ->
+          | Ok [] -> printfn "No sessions running."
+          | Ok sessions ->
             match pickSession sessions "Stop session:" with
             | Some resolvedId ->
               match! stopSession client baseUrl resolvedId with
@@ -466,7 +460,7 @@ let run (info: DaemonInfo) = task {
             match! stopSession client baseUrl sid with
             | Ok msg -> printfn "\x1b[33m%s\x1b[0m" msg
             | Error msg -> eprintfn "\x1b[31m%s\x1b[0m" msg
-          | Ok (sessions, _) ->
+          | Ok sessions ->
             match resolveSessionId sessions sid with
             | Some resolvedId ->
               match! stopSession client baseUrl resolvedId with
