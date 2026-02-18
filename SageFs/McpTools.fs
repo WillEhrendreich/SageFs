@@ -202,6 +202,15 @@ Use list_sessions to see available session IDs.""")>]
         logger.LogDebug("MCP-TOOL: stop_session called: id={Id}", session_id)
         stopSession ctx session_id |> withEcho "stop_session"
 
+    [<McpServerTool>]
+    [<Description("""Switch the active FSI session. Subsequent tool calls route to this session.
+Use list_sessions to see available session IDs.""")>]
+    member _.switch_session(
+        [<Description("Session ID to switch to (from list_sessions)")>] session_id: string
+    ) : Task<string> =
+        logger.LogDebug("MCP-TOOL: switch_session called: id={Id}", session_id)
+        switchSession ctx session_id |> withEcho "switch_session"
+
     // ── Elm State Tools ──────────────────────────────────────────
 
     [<McpServerTool>]

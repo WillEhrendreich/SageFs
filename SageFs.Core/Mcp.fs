@@ -389,6 +389,9 @@ module EventTracking =
       | SessionReset -> "system", "session reset"
       | SessionHardReset e -> "system", sprintf "hard reset (rebuild=%b)" e.Rebuild
       | DiagnosticsCleared -> "system", "diagnostics cleared"
+      | DaemonSessionCreated e -> "daemon", sprintf "session %s created" e.SessionId
+      | DaemonSessionStopped e -> "daemon", sprintf "session %s stopped" e.SessionId
+      | DaemonSessionSwitched e -> "daemon", sprintf "switched to %s" e.ToId
     (ts.UtcDateTime, source, content)
 
   /// Get recent events from the session stream
@@ -898,6 +901,26 @@ module McpTools =
       match result with
       | Result.Ok msg -> return msg
       | Result.Error err -> return SageFsError.describe err
+    }
+
+  /// Switch the active session. Validates the target exists.
+  let switchSession (ctx: McpContext) (sessionId: string) : Task<string> =
+    task {
+      let! info = ctx.SessionOps.GetSessionInfo sessionId
+      match info with
+      | Some _ ->
+        let prev = !ctx.ActiveSessionId
+        ctx.ActiveSessionId.Value <- sessionId
+        notifyElm ctx (SageFsEvent.SessionSwitched (Some prev, sessionId))
+        ctx.Dispatch |> Option.iter (fun d -> d (SageFsMsg.Editor EditorAction.ListSessions))
+        // Persist switch to daemon stream
+        do! EventStore.appendEvents ctx.Store "daemon-sessions" [
+          Features.Events.SageFsEvent.DaemonSessionSwitched
+            {| FromId = Some prev; ToId = sessionId; SwitchedAt = DateTimeOffset.UtcNow |}
+        ]
+        return sprintf "Switched to session '%s'" sessionId
+      | None ->
+        return sprintf "Error: Session '%s' not found" sessionId
     }
 
   // ── Elm State Query ──────────────────────────────────────────────
