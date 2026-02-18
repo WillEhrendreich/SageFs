@@ -113,12 +113,7 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
       }
   }
 
-  // Replay daemon-sessions stream to discover previous sessions
-  let! daemonEvents = SageFs.EventStore.fetchStream eventStore daemonStreamId
-  let daemonState = Features.Replay.DaemonReplayState.replayStream daemonEvents
-  let aliveSessions = Features.Replay.DaemonReplayState.aliveSessions daemonState
-
-  // Resume previously alive sessions, then create initial if needed
+  // Parse initial projects from CLI args (used if no previous sessions)
   let initialProjects =
     args
     |> List.choose (function
@@ -126,46 +121,72 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
       | _ -> None)
   let workingDir = Environment.CurrentDirectory
 
-  if not aliveSessions.IsEmpty then
-    eprintfn "Resuming %d previous session(s)..." aliveSessions.Length
-    for prev in aliveSessions do
-      if IO.Directory.Exists prev.WorkingDir then
-        eprintfn "  Resuming session for %s..." prev.WorkingDir
-        let! result = sessionOps.CreateSession prev.Projects prev.WorkingDir
-        match result with
-        | Ok info -> eprintfn "  Resumed: %s" info
-        | Error err -> eprintfn "  [WARN] Failed to resume session for %s: %A" prev.WorkingDir err
-      else
-        eprintfn "  [SKIP] %s — directory no longer exists" prev.WorkingDir
-        // Mark as stopped since we can't resume
+  // Session resume runs AFTER servers start (deferred below).
+  // This ensures MCP + dashboard are listening before workers spawn.
+  let resumeSessions () = task {
+    let! daemonEvents = SageFs.EventStore.fetchStream eventStore daemonStreamId
+    let daemonState = Features.Replay.DaemonReplayState.replayStream daemonEvents
+    let aliveSessions = Features.Replay.DaemonReplayState.aliveSessions daemonState
+
+    if not aliveSessions.IsEmpty then
+      // Deduplicate by working directory — only resume one session per dir
+      let uniqueByDir =
+        aliveSessions
+        |> List.groupBy (fun r -> r.WorkingDir)
+        |> List.map (fun (_, group) ->
+          // Pick the most recently created session for each dir
+          group |> List.maxBy (fun r -> r.CreatedAt))
+      // Mark all stale duplicates as stopped
+      let staleIds =
+        aliveSessions
+        |> List.map (fun r -> r.SessionId)
+        |> Set.ofList
+      let keptIds =
+        uniqueByDir |> List.map (fun r -> r.SessionId) |> Set.ofList
+      for staleId in Set.difference staleIds keptIds do
         do! SageFs.EventStore.appendEvents eventStore daemonStreamId [
           Features.Events.SageFsEvent.DaemonSessionStopped
-            {| SessionId = prev.SessionId; StoppedAt = DateTimeOffset.UtcNow |}
+            {| SessionId = staleId; StoppedAt = DateTimeOffset.UtcNow |}
         ]
-    // Restore active session from last switch event
-    match daemonState.ActiveSessionId with
-    | Some lastActiveId ->
-      // The old session ID won't match the new one — find by working dir
-      let lastRecord = daemonState.Sessions |> Map.tryFind lastActiveId
-      match lastRecord with
-      | Some r ->
-        let! sessions =
-          sessionManager.PostAndAsyncReply(fun reply ->
-            SessionManager.SessionCommand.ListSessions reply)
-          |> Async.StartAsTask
-        let matching =
-          sessions |> List.tryFind (fun s -> s.WorkingDirectory = r.WorkingDir)
-        match matching with
-        | Some s -> activeSessionId.Value <- s.Id
+      eprintfn "Resuming %d previous session(s) (%d stale duplicates cleaned)..."
+        uniqueByDir.Length (aliveSessions.Length - uniqueByDir.Length)
+      for prev in uniqueByDir do
+        if IO.Directory.Exists prev.WorkingDir then
+          eprintfn "  Resuming session for %s..." prev.WorkingDir
+          let! result = sessionOps.CreateSession prev.Projects prev.WorkingDir
+          match result with
+          | Ok info -> eprintfn "  Resumed: %s" info
+          | Error err -> eprintfn "  [WARN] Failed to resume session for %s: %A" prev.WorkingDir err
+        else
+          eprintfn "  [SKIP] %s — directory no longer exists" prev.WorkingDir
+          do! SageFs.EventStore.appendEvents eventStore daemonStreamId [
+            Features.Events.SageFsEvent.DaemonSessionStopped
+              {| SessionId = prev.SessionId; StoppedAt = DateTimeOffset.UtcNow |}
+          ]
+      // Restore active session from last switch event
+      match daemonState.ActiveSessionId with
+      | Some lastActiveId ->
+        let lastRecord = daemonState.Sessions |> Map.tryFind lastActiveId
+        match lastRecord with
+        | Some r ->
+          let! sessions =
+            sessionManager.PostAndAsyncReply(fun reply ->
+              SessionManager.SessionCommand.ListSessions reply)
+            |> Async.StartAsTask
+          let matching =
+            sessions |> List.tryFind (fun s -> s.WorkingDirectory = r.WorkingDir)
+          match matching with
+          | Some s -> activeSessionId.Value <- s.Id
+          | None -> ()
         | None -> ()
       | None -> ()
-    | None -> ()
-  else
-    eprintfn "Spawning initial session for %s..." workingDir
-    let! initialResult = sessionOps.CreateSession initialProjects workingDir
-    match initialResult with
-    | Ok info -> eprintfn "Initial session created: %s" info
-    | Error err -> eprintfn "[ERROR] Failed to create initial session: %A" err
+    else
+      eprintfn "Spawning initial session for %s..." workingDir
+      let! initialResult = sessionOps.CreateSession initialProjects workingDir
+      match initialResult with
+      | Ok info -> eprintfn "Initial session created: %s" info
+      | Error err -> eprintfn "[ERROR] Failed to create initial session: %A" err
+  }
 
   // Create state-changed event for SSE subscribers
   let stateChangedEvent = Event<string>()
@@ -195,9 +216,6 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
              timestamp = DateTime.UtcNow.ToString("o") |})
         stateChangedEvent.Trigger json
       with _ -> ())
-
-  // Populate session list in Elm model from existing sessions
-  elmRuntime.Dispatch(SageFsMsg.Editor EditorAction.ListSessions)
 
   // Create a diagnostics-changed event (aggregated from workers)
   let diagnosticsChanged = Event<Features.DiagnosticsStore.T>()
@@ -440,8 +458,6 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
   // Workers handle their own warmup, middleware, and file watching.
   // The daemon just needs to wait for the MCP and dashboard servers.
 
-  eprintfn "SageFs daemon ready (PID %d, MCP port %d, dashboard port %d)" Environment.ProcessId mcpPort dashboardPort
-
   Console.CancelKeyPress.Add(fun e ->
     e.Cancel <- true
     eprintfn "Shutting down..."
@@ -450,15 +466,27 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
   AppDomain.CurrentDomain.ProcessExit.Add(fun _ ->
     eprintfn "Daemon stopped.")
 
+  // Start MCP and dashboard servers FIRST so ports are listening
+  let mcpRunning =
+    System.Threading.Tasks.Task.Run(
+      System.Func<System.Threading.Tasks.Task>(fun () -> mcpTask),
+      cts.Token)
+  let dashboardRunning =
+    System.Threading.Tasks.Task.Run(
+      System.Func<System.Threading.Tasks.Task>(fun () -> dashboardTask),
+      cts.Token)
+
+  // Brief yield to let servers bind their ports
+  do! System.Threading.Tasks.Task.Delay(200)
+  eprintfn "SageFs daemon ready (PID %d, MCP port %d, dashboard port %d)" Environment.ProcessId mcpPort dashboardPort
+
+  // NOW resume sessions — servers are listening, MCP clients can connect
+  do! resumeSessions ()
+  // Refresh Elm model's session list after resume
+  elmRuntime.Dispatch(SageFsMsg.Editor EditorAction.ListSessions)
+
   try
-    // Run MCP server and dashboard until cancelled
-    let! _ = System.Threading.Tasks.Task.WhenAny(
-      System.Threading.Tasks.Task.Run(
-        System.Func<System.Threading.Tasks.Task>(fun () -> mcpTask),
-        cts.Token),
-      System.Threading.Tasks.Task.Run(
-        System.Func<System.Threading.Tasks.Task>(fun () -> dashboardTask),
-        cts.Token))
+    let! _ = System.Threading.Tasks.Task.WhenAny(mcpRunning, dashboardRunning)
     ()
   with
   | :? OperationCanceledException -> ()

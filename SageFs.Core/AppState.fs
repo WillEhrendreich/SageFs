@@ -180,6 +180,9 @@ let buildPipeline (middleware: Middleware list) evalFn =
 
 let evalFn (token: CancellationToken) =
   fun ({ Code = code }, st) ->
+    // Redirect Console.Out to the recorder so printfn/Expecto output is captured
+    let originalOut = Console.Out
+    Console.SetOut(st.OutStream :> TextWriter)
     st.OutStream.StartRecording()
     let thread = Thread.CurrentThread
     token.Register(fun () -> thread.Interrupt()) |> ignore
@@ -192,6 +195,8 @@ let evalFn (token: CancellationToken) =
       | Choice2Of2 ex -> Error <| ex
 
     st.OutStream.StopRecording() |> ignore
+    // Restore original Console.Out
+    Console.SetOut(originalOut)
 
     {
       EvaluationResult = evalRes

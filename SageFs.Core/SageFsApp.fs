@@ -158,7 +158,14 @@ module SageFsUpdate =
             RecentOutput = line :: model.RecentOutput
             CreatingSession = if clearCreating then false else model.CreatingSession }, []
 
-      | SageFsEvent.EvalStarted _ -> model, []
+      | SageFsEvent.EvalStarted (sid, code) ->
+        let line = {
+          Kind = OutputKind.Info
+          Text = code
+          Timestamp = DateTime.UtcNow
+          SessionId = sid
+        }
+        { model with RecentOutput = line :: model.RecentOutput }, []
 
       | SageFsEvent.EvalCancelled sid ->
         let line = {
