@@ -175,7 +175,8 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
   let elmRuntime =
     ElmDaemon.start effectDeps (fun model _regions ->
       let outputCount = model.RecentOutput.Length
-      let diagCount = model.Diagnostics.Length
+      let diagCount =
+        model.Diagnostics |> Map.values |> Seq.sumBy List.length
       if not TerminalUIState.IsActive && (outputCount > 0 || diagCount > 0) then
         let latest =
           model.RecentOutput

@@ -23,7 +23,7 @@ type SageFsModel = {
   Editor: EditorState
   Sessions: SessionRegistryView
   RecentOutput: OutputLine list
-  Diagnostics: Features.Diagnostics.Diagnostic list
+  Diagnostics: Map<string, Features.Diagnostics.Diagnostic list>
   CreatingSession: bool
   Theme: ThemeConfig
   ThemeName: string
@@ -39,7 +39,7 @@ module SageFsModel =
       WatchStatus = None
     }
     RecentOutput = []
-    Diagnostics = []
+    Diagnostics = Map.empty
     CreatingSession = false
     Theme = Theme.defaults
     ThemeName = "One Dark"
@@ -144,7 +144,7 @@ module SageFsUpdate =
         }
         { model with
             RecentOutput = line :: model.RecentOutput
-            Diagnostics = diags }, []
+            Diagnostics = model.Diagnostics |> Map.add sid diags }, []
 
       | SageFsEvent.EvalFailed (sid, error) ->
         let line = {
@@ -178,8 +178,8 @@ module SageFsUpdate =
         { model with
             Editor = { model.Editor with CompletionMenu = Some menu } }, []
 
-      | SageFsEvent.DiagnosticsUpdated (_, diags) ->
-        { model with Diagnostics = diags }, []
+      | SageFsEvent.DiagnosticsUpdated (sid, diags) ->
+        { model with Diagnostics = model.Diagnostics |> Map.add sid diags }, []
 
       | SageFsEvent.SessionCreated snap ->
         let isFirst = model.Sessions.ActiveSessionId.IsNone
@@ -234,7 +234,8 @@ module SageFsUpdate =
             Sessions = {
               model.Sessions with
                 Sessions = remaining
-                ActiveSessionId = newActiveId } }, []
+                ActiveSessionId = newActiveId }
+            Diagnostics = model.Diagnostics |> Map.remove sessionId }, []
 
       | SageFsEvent.SessionStale (sessionId, _) ->
         { model with
@@ -344,6 +345,8 @@ module SageFsRender =
       Flags = RegionFlags.LiveUpdate
       Content =
         model.Diagnostics
+        |> Map.tryFind activeSessionId
+        |> Option.defaultValue []
         |> List.map (fun d ->
           sprintf "[%s] (%d,%d) %s"
             (Features.Diagnostics.DiagnosticSeverity.label d.Severity)

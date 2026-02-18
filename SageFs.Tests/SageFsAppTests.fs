@@ -188,6 +188,8 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
     let newModel, _ =
       SageFsUpdate.update (SageFsMsg.Event event) SageFsModel.initial
     newModel.Diagnostics
+    |> Map.tryFind "s1"
+    |> Option.defaultValue []
     |> Expect.hasLength "should have 1 diagnostic" 1
 
   testCase "WarmupCompleted with no failures adds info" <| fun _ ->
@@ -276,12 +278,13 @@ let sageFsRenderTests = testList "SageFsRender" [
   testCase "diagnostics region shows diagnostics" <| fun _ ->
     let model = {
       SageFsModel.initial with
-        Diagnostics = [{
-          Message = "type error"
-          Subcategory = "typecheck"
-          Range = { StartLine = 1; StartColumn = 0; EndLine = 1; EndColumn = 5 }
-          Severity = DiagnosticSeverity.Error
-        }]
+        Diagnostics = Map.ofList [
+          "", [{
+            Message = "type error"
+            Subcategory = "typecheck"
+            Range = { StartLine = 1; StartColumn = 0; EndLine = 1; EndColumn = 5 }
+            Severity = DiagnosticSeverity.Error
+          }] ]
     }
     let regions = SageFsRender.render model
     let diagRegion = regions |> List.find (fun r -> r.Id = "diagnostics")
@@ -640,11 +643,12 @@ let renderConsistencyTests = testList "Render consistency" [
           { Kind = OutputKind.Result; Text = "val x = 42"
             Timestamp = DateTime.UtcNow; SessionId = "session-1" }
         ]
-        Diagnostics = [
-          { Severity = DiagnosticSeverity.Warning; Message = "unused var"
-            Subcategory = ""
-            Range = { StartLine = 1; StartColumn = 1; EndLine = 1; EndColumn = 5 } }
-        ] }
+        Diagnostics = Map.ofList [
+          "session-1", [
+            { Severity = DiagnosticSeverity.Warning; Message = "unused var"
+              Subcategory = ""
+              Range = { StartLine = 1; StartColumn = 1; EndLine = 1; EndColumn = 5 } }
+          ] ] }
 
   testCase "render is deterministic — same model produces same regions" <| fun _ ->
     let model = mkModel ()

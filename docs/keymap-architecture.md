@@ -35,7 +35,13 @@ type Key =
   | Minus | Plus | Equals | LeftBracket | RightBracket
   | Semicolon | Quote | Comma | Period | Slash | Backslash | Backtick
 
-/// Modifier flags — combinable
+// Key DU is deliberately closed — add cases as needed for numpad, media keys,
+// platform-specific keys. Compile errors when a new key appears are preferable
+// to silent fallthrough. (Carmack, Round 2)
+
+/// Modifier flags — combinable (explicit enumeration — exhaustive pattern matching,
+/// no invalid combinations. Composability tradeoff noted — fine at keymap scale
+/// where bindings are defined once and matched many times. Wlaschin, Round 2)
 [<RequireQualifiedAccess>]
 type Modifier =
   | None
@@ -154,12 +160,13 @@ module KeyMap2 =
 - **Prefix collisions rejected at construction** (Seemann, Round 2): `KeyMap2.build` returns `Result<KeyMap2, KeyMapBuildError list>`. If a sequence is a strict prefix of another in the same (mode, scope), construction fails with `AmbiguousPrefix` describing the conflict. No silent shadowing.
 - **No `Leader` case on `KeyInput`** (Seemann): Leader is not a physical key — it's an indirection. The leader key (e.g., `Space`) is resolved to its physical `KeyInput` at trie-construction time when compiling `KeyBinding list → KeyTrieNode`. The matcher never sees `Leader`; it only sees physical keys.
 - **Non-empty `KeySequence`** (Wlaschin): `{ First: KeyInput; Rest: KeyInput list }` makes empty sequences unrepresentable. No runtime guards needed.
-- **No `VimMode: bool` flag** (Seemann): Vim vs non-vim is determined entirely by the binding data. Non-vim mode simply constructs a `KeyMap2` with all bindings in `Insert` mode and no `SwitchInputMode` actions. If the trie has no mode transitions, there's no mode switching.
+- **No `VimMode: bool` flag** (Seemann): Modal vs non-modal is determined entirely by the binding data. Non-modal mode simply constructs a `KeyMap2` with all bindings in `Insert` mode and no `SwitchInputMode` actions. If the trie has no mode transitions, there's no mode switching.
 - **General `KeyContext` instead of `PaneId`**: Panes are just one kind of context. Menus, dialogs, overlays, completion popups, operator-pending state, search, REPL, and plugins all get their own overrides through the same mechanism. `Contexts` is a list ordered most-specific first — lookup walks it until a match is found, then falls back to `Global`.
 - **`Pending` carries accumulated keys** (Wlaschin): Status bar can display pending sequence directly from the match result without shadow state.
 - **`InputMode.tryParse`**, **`Key.tryParse`**, **`KeyContext.tryParse`** (Wlaschin): Every boundary where strings enter the type system returns `Result`. Config parsing never throws.
 - **DSL functions return `Result`** (Wlaschin, Round 2): `normal`, `insert`, `inContext` etc. return `Result<KeyBinding, string>`. Validation errors surface at the definition site with locality, not deferred to trie compilation. `KeyMapDsl.validateAll` collects all results.
 - **Closed `Key` DU instead of `char`/`ConsoleKey`**: Every valid key is a DU case (`Key.A` through `Key.Z`, `Key.Enter`, `Key.Space`, etc.). Typos are compile errors, not runtime bugs. Uppercase is `shift Key.D`, consistent with `ctrl Key.Z` — all modifiers work the same way.
+- **Platform key conversion must be a direct mapping** (Muratori, Round 2): `ConsoleKeyInfo → KeyInput` (TUI) and `KeyboardKey → KeyInput` (Raylib) must be a match expression or lookup table — never string parsing. Runs on every keystroke; easy to get right, annoying to debug if wrong.
 - **Which-key overlay**: When a sequence is `Pending`, a which-key popup enumerates all available continuations from the current trie node. Critical for discoverability since there are no timeouts — the user needs to see what's available.
 - **Keymap debug mode** (Fleury, Round 2): Toggle-able debug logging that shows the full `KeymapContext`, context resolution walk, and `KeyMatchResult` for each key press in the diagnostics pane. Zero cost when disabled — the pure `SequenceMatcher` doesn't log; the Elm `update` wrapper captures input/output around the call.
 
@@ -227,11 +234,13 @@ When a key sequence reaches a dead end (`NoMatch`), the pending buffer is discar
 ### Mode System
 
 **No `VimMode` flag — determined by binding data:**
-- Non-vim mode: construct `KeyMap2` with all bindings in `Insert` mode and no `SwitchInputMode` actions
-- Vim mode: construct `KeyMap2` with Normal/Insert/Visual/Command bindings including `SwitchInputMode` transitions
+- Non-modal mode: construct `KeyMap2` with all bindings in `Insert` mode and no `SwitchInputMode` actions
+- Modal mode: construct `KeyMap2` with Normal/Insert/Visual/Command bindings including `SwitchInputMode` transitions
 - The keymap *data* determines modal behavior — no boolean flag needed
 
-**When vim bindings are present:**
+**User-facing terminology: "modal mode", not "vim mode."** The moment you say "vim," every user expects full vim compatibility (`ciw`, motions, registers, macros). This is a *vim-inspired* modal keymap — call it "modal mode" or "keyboard mode" in the UI, status bar, settings, and documentation. Set expectations honestly.
+
+**When modal bindings are present:**
 - Start in `Normal` mode
 - `i` → Insert, `v` → Visual, `:` → Command, `Escape` → Normal
 - Mode transitions are themselves keybindings (configurable)
@@ -256,6 +265,8 @@ Resolution walks the `KeymapContext.Contexts` list (most-specific first) via `Sc
 3. Fall through to char insertion (Insert mode only)
 
 **Why a context stack, not a single context?** Multiple contexts can be active simultaneously. For example: the `Completion` overlay is visible while the `Pane Editor` is focused while in `Insert` mode. The stack `[Completion; Pane Editor]` means completion bindings take priority over editor bindings, which take priority over global.
+
+**Context stacks should be kept shallow** (typically 2-3 deep). Each key press walks the stack doing a trie lookup per context. At N=3 this is negligible; at N=10+ it's still microseconds but indicates something is wrong with the UI layering. Code should assert or warn if the stack exceeds a reasonable depth (e.g., 8).
 
 **Context examples:**
 
@@ -321,7 +332,7 @@ y               → yank (copy) + Normal mode
 d               → delete selection + Normal mode
 ```
 
-**Non-vim mode (no `SwitchInputMode` bindings present):**
+**Non-modal mode (no `SwitchInputMode` bindings present):**
 All existing bindings preserved exactly, just moved into the new type system. Everything runs in Insert mode permanently. Determined by binding data, not a flag.
 
 ### Config File Format
@@ -381,7 +392,7 @@ Mode indicator rendered by shared `Screen` module (works in TUI + Raylib):
 ┌─ Editor ─────────────────────────── -- NORMAL -- ─┐
 ```
 
-When no `SwitchInputMode` bindings are present (non-vim mode), no mode indicator shown.
+When no `SwitchInputMode` bindings are present (non-modal mode), no mode indicator shown.
 
 Pending sequence shown (like Neovim's `showcmd` / `which-key` — persists until resolved, cancelled, or backstepped):
 ```
@@ -527,7 +538,7 @@ Add which-key overlay, status bar mode indicator, pending sequence display.
 - [ ] `KeyMapDsl.validateAll : Result<KeyBinding, string> list -> Result<KeyBinding list, string list>` for collecting all errors
 - [ ] `Key.tryParse`, `KeyContext.tryParse` for string config boundaries (alongside existing `InputMode.tryParse`)
 - [ ] Extend config file parser for sequence format (all parsing via `tryParse` functions, `Result` throughout)
-- [ ] Non-vim preset: all bindings in Insert mode, no `SwitchInputMode` actions
+- [ ] Non-modal preset: all bindings in Insert mode, no `SwitchInputMode` actions
 - [ ] Leader key configuration
 - [ ] **Property tests — config round-trip:**
   - DSL-constructed bindings and string-parsed bindings produce identical `KeyMap2` for the same logical config
@@ -653,9 +664,9 @@ Then `KeyBinding.Scope: BindingScope` makes the intent unambiguous at every laye
 | No-ambiguous-prefix rule should be enforced at trie construction with `Result.Error` | Seemann | ~~Medium~~ **ADOPTED** |
 | DSL functions should return `Result` to fail at definition point, not compilation | Wlaschin | ~~Medium~~ **ADOPTED** |
 | Extend `tryParse` pattern to `KeyContext` and `Key` for string config boundaries | Wlaschin | ~~Low~~ **ADOPTED** |
-| Keep context stacks shallow — comment the expectation in code | Muratori | Low |
-| Platform key conversion must be a direct mapping, not string parsing | Muratori | Low |
+| Keep context stacks shallow — comment the expectation in code | Muratori | ~~Low~~ **ADOPTED** |
+| Platform key conversion must be a direct mapping, not string parsing | Muratori | ~~Low~~ **ADOPTED** |
 | Add debug/inspect logging for context resolution (diagnostics pane) | Fleury | ~~Medium~~ **ADOPTED** |
-| Don't call it "vim mode" in the UI — use "modal mode" or "keyboard mode" | Carmack | Medium |
-| Consider platform key extensibility (media keys, numpad) — closed DU may need cases | Carmack | Low |
-| `Modifier` DU is explicit enumeration vs `Set` — fine at this scale, note the tradeoff | Wlaschin | Informational |
+| Don't call it "vim mode" in the UI — use "modal mode" or "keyboard mode" | Carmack | ~~Medium~~ **ADOPTED** |
+| Consider platform key extensibility (media keys, numpad) — closed DU may need cases | Carmack | ~~Low~~ **ADOPTED** |
+| `Modifier` DU is explicit enumeration vs `Set` — fine at this scale, note the tradeoff | Wlaschin | ~~Informational~~ **NOTED** |

@@ -189,12 +189,13 @@ let multiConsumerTests = testList "multi-consumer consistency" [
           RecentOutput = [
             { Kind = OutputKind.Result; Text = "output line"; Timestamp = System.DateTime.UtcNow; SessionId = "" }
           ]
-          Diagnostics = [
-            { Message = "unused"
-              Subcategory = ""
-              Range = { StartLine = 1; StartColumn = 0; EndLine = 1; EndColumn = 5 }
-              Severity = Features.Diagnostics.DiagnosticSeverity.Warning }
-          ] }
+          Diagnostics = Map.ofList [
+            "", [
+              { Message = "unused"
+                Subcategory = ""
+                Range = { StartLine = 1; StartColumn = 0; EndLine = 1; EndColumn = 5 }
+                Severity = Features.Diagnostics.DiagnosticSeverity.Warning }
+            ] ] }
     let r1 = SageFsRender.render model
     let r2 = SageFsRender.render model
     r1 |> List.length |> Expect.equal "same count" (r2 |> List.length)
