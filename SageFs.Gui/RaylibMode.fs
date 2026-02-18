@@ -28,7 +28,16 @@ module RaylibMode =
       candidates |> List.tryFind System.IO.File.Exists
     match path with
     | Some p ->
-      let f = Raylib.LoadFontEx(p, size, null, 0)
+      // Load ASCII + Latin-1 Supplement + Box Drawing + Block Elements + Arrows + Misc Symbols
+      let codepoints = ResizeArray<int>()
+      for cp in 0x0020 .. 0x00FF do codepoints.Add(cp) // Basic Latin + Latin-1 Supplement
+      for cp in 0x2500 .. 0x257F do codepoints.Add(cp) // Box Drawing
+      for cp in 0x2580 .. 0x259F do codepoints.Add(cp) // Block Elements (▀▄█░▒▓)
+      for cp in 0x25A0 .. 0x25FF do codepoints.Add(cp) // Geometric Shapes (▲▼◆●)
+      for cp in 0x2190 .. 0x21FF do codepoints.Add(cp) // Arrows (←→↑↓)
+      for cp in 0x2700 .. 0x27BF do codepoints.Add(cp) // Dingbats
+      let arr = codepoints.ToArray()
+      let f = Raylib.LoadFontEx(p, size, arr, arr.Length)
       if CBool.op_Implicit(Raylib.IsFontValid(f)) then f
       else Raylib.GetFontDefault()
     | None -> Raylib.GetFontDefault()

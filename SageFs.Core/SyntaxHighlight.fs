@@ -50,7 +50,7 @@ module SyntaxHighlight =
         eprintfn "SyntaxHighlight init failed: %s" ex.Message
         None
 
-  /// Cache of content hash → per-line ColorSpan arrays.
+  /// Cache of (content + theme) hash → per-line ColorSpan arrays.
   let private cache = ConcurrentDictionary<string, ColorSpan array array>()
 
   let private computeHash (text: string) =
@@ -63,7 +63,7 @@ module SyntaxHighlight =
   let tokenize (theme: ThemeConfig) (code: string) : ColorSpan array array =
     if String.IsNullOrEmpty code then [||]
     else
-      let key = computeHash code
+      let key = sprintf "%s:%s" (computeHash code) theme.SynKeyword
       cache.GetOrAdd(key, fun _ ->
         match resources.Value with
         | None ->
