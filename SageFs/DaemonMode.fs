@@ -123,7 +123,7 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
 
   // Session resume runs AFTER servers start (deferred below).
   // This ensures MCP + dashboard are listening before workers spawn.
-  let resumeSessions () = task {
+  let resumeSessions (onSessionResumed: unit -> unit) = task {
     let! daemonEvents = SageFs.EventStore.fetchStream eventStore daemonStreamId
     let daemonState = Features.Replay.DaemonReplayState.replayStream daemonEvents
     let aliveSessions = Features.Replay.DaemonReplayState.aliveSessions daemonState
@@ -155,7 +155,9 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
           eprintfn "  Resuming session for %s..." prev.WorkingDir
           let! result = sessionOps.CreateSession prev.Projects prev.WorkingDir
           match result with
-          | Ok info -> eprintfn "  Resumed: %s" info
+          | Ok info ->
+            eprintfn "  Resumed: %s" info
+            onSessionResumed ()
           | Error err -> eprintfn "  [WARN] Failed to resume session for %s: %A" prev.WorkingDir err
         else
           eprintfn "  [SKIP] %s — directory no longer exists" prev.WorkingDir
@@ -479,9 +481,9 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
   eprintfn "SageFs daemon ready (PID %d, MCP port %d, dashboard port %d)" Environment.ProcessId mcpPort dashboardPort
 
   // NOW resume sessions — servers are listening, MCP clients can connect
-  do! resumeSessions ()
-  // Refresh Elm model's session list after resume
-  elmRuntime.Dispatch(SageFsMsg.Editor EditorAction.ListSessions)
+  // Each resumed session dispatches ListSessions so dashboard sees them incrementally
+  do! resumeSessions (fun () ->
+    elmRuntime.Dispatch(SageFsMsg.Editor EditorAction.ListSessions))
 
   try
     let! _ = System.Threading.Tasks.Task.WhenAny(mcpRunning, dashboardRunning)
