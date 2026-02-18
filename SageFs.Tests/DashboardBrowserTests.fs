@@ -44,6 +44,21 @@ module PlaywrightExpect =
     Expect.isTrue found (sprintf "Expected '%s' in '%s' within %dms" text selector ms)
   }
 
+  /// Wait for SSE to be connected by checking that session-status has content.
+  /// Use this instead of waiting for the banner (which is now hidden when connected).
+  let waitForSSE (ms: int) (page: IPage) = task {
+    let sw = Diagnostics.Stopwatch.StartNew()
+    let mutable found = false
+    while not found && sw.ElapsedMilliseconds < int64 ms do
+      let! content = page.EvaluateAsync<string>(
+        "() => { var el = document.querySelector('#session-status'); return el ? el.textContent : ''; }")
+      if content <> null && content.Contains("Session:") then
+        found <- true
+      else
+        do! Task.Delay(250)
+    Expect.isTrue found (sprintf "Expected SSE connection within %dms" ms)
+  }
+
 /// Shared Playwright instance — created once per test run.
 /// Requires `npx playwright install chromium` to have been run.
 module PlaywrightFixture =
@@ -127,13 +142,6 @@ let tests = testList "Dashboard browser tests" [
     let! text = h1.TextContentAsync()
     Expect.isTrue (text.Contains("SageFs Dashboard")) "h1 text"
     Expect.isTrue (text.Contains("v")) "h1 version prefix"
-  })
-
-  playwrightTest "connection banner transitions to connected" (fun page -> task {
-    let banner = page.Locator("#server-status")
-    do! PlaywrightExpect.waitForText 10_000 banner "Connected"
-    let! cls = banner.GetAttributeAsync("class")
-    Expect.isTrue (cls.Contains("conn-connected")) "banner has connected class"
   })
 
   playwrightTest "output panel has log-box class" (fun page -> task {
@@ -222,8 +230,7 @@ let tests = testList "Dashboard browser tests" [
 
   playwrightTest "Tab inserts 2 spaces in textarea" (fun page -> task {
     // Wait for Datastar to fully initialize and bind handlers
-    let banner = page.Locator("#server-status")
-    do! PlaywrightExpect.waitForText 10_000 banner "Connected"
+    do! PlaywrightExpect.waitForSSE 10_000 page
     do! page.WaitForTimeoutAsync(1000.0f)
     let textarea = page.Locator(".eval-input").First
     do! textarea.FillAsync("let x")
@@ -246,8 +253,7 @@ let tests = testList "Dashboard browser tests" [
 
   playwrightTest "Ctrl+Enter triggers eval" (fun page -> task {
     // Wait for connection before evaluating
-    let banner = page.Locator("#server-status")
-    do! PlaywrightExpect.waitForText 10_000 banner "Connected"
+    do! PlaywrightExpect.waitForSSE 10_000 page
 
     let textarea = page.Locator(".eval-input").First
     do! textarea.FillAsync("1 + 1;;")
@@ -276,8 +282,7 @@ let tests = testList "Dashboard browser tests" [
   // --- Agent-generated tests (via Playwright test planner + generator agents) ---
 
   playwrightTest "evaluate simple expression" (fun page -> task {
-    let banner = page.Locator("#server-status")
-    do! PlaywrightExpect.waitForText 15_000 banner "Connected"
+    do! PlaywrightExpect.waitForSSE 15_000 page
     let textarea =
       page.GetByRole(
         AriaRole.Textbox,
@@ -291,8 +296,7 @@ let tests = testList "Dashboard browser tests" [
   })
 
   playwrightTest "evaluate with Ctrl+Enter shortcut" (fun page -> task {
-    let banner = page.Locator("#server-status")
-    do! PlaywrightExpect.waitForText 15_000 banner "Connected"
+    do! PlaywrightExpect.waitForSSE 15_000 page
     let textarea =
       page.GetByRole(
         AriaRole.Textbox,
@@ -306,8 +310,7 @@ let tests = testList "Dashboard browser tests" [
   })
 
   playwrightTest "evaluate multiline code" (fun page -> task {
-    let banner = page.Locator("#server-status")
-    do! PlaywrightExpect.waitForText 15_000 banner "Connected"
+    do! PlaywrightExpect.waitForSSE 15_000 page
     let textarea =
       page.GetByRole(
         AriaRole.Textbox,
@@ -319,8 +322,7 @@ let tests = testList "Dashboard browser tests" [
   })
 
   playwrightTest "evaluate code with errors" (fun page -> task {
-    let banner = page.Locator("#server-status")
-    do! PlaywrightExpect.waitForText 15_000 banner "Connected"
+    do! PlaywrightExpect.waitForSSE 15_000 page
     let textarea =
       page.GetByRole(
         AriaRole.Textbox,
@@ -332,8 +334,7 @@ let tests = testList "Dashboard browser tests" [
   })
 
   playwrightTest "consecutive evaluations maintain scope" (fun page -> task {
-    let banner = page.Locator("#server-status")
-    do! PlaywrightExpect.waitForText 15_000 banner "Connected"
+    do! PlaywrightExpect.waitForSSE 15_000 page
     let textarea =
       page.GetByRole(
         AriaRole.Textbox,
@@ -373,8 +374,7 @@ let tests = testList "Dashboard browser tests" [
   })
 
   playwrightTest "sessions panel shows session info" (fun page -> task {
-    let banner = page.Locator("#server-status")
-    do! PlaywrightExpect.waitForText 15_000 banner "Connected"
+    do! PlaywrightExpect.waitForSSE 15_000 page
     let sessionsHeading =
       page.GetByRole(
         AriaRole.Heading, PageGetByRoleOptions(Name = "Sessions"))
@@ -384,15 +384,6 @@ let tests = testList "Dashboard browser tests" [
     let! text = status.TextContentAsync()
     Expect.isTrue (text.Contains("Projects:")) "shows project count"
     Expect.isTrue (text.Contains("Ready")) "shows Ready state"
-  })
-
-  playwrightTest "connection banner shows green connected" (fun page -> task {
-    let banner = page.Locator("#server-status")
-    do! PlaywrightExpect.waitForText 15_000 banner "Connected"
-    let! bg = banner.EvaluateAsync<string>(
-      "el => window.getComputedStyle(el).backgroundColor")
-    Expect.isTrue (bg.Contains("63") || bg.Contains("green"))
-      "banner has green background"
   })
 
   playwrightTest "diagnostics panel shows no diagnostics" (fun page -> task {

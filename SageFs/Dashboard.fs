@@ -129,24 +129,40 @@ let renderShell (version: string) =
     Elem.head [] [
       Elem.title [] [ Text.raw "SageFs Dashboard" ]
       // Connection monitor: intercept fetch to detect SSE stream lifecycle.
-      // Tracks open/close of the /dashboard/stream SSE connection.
+      // Banner is ONLY for problems — hidden by default, shown on failure.
       Elem.script [] [ Text.raw """
         (function() {
-          var origFetch = window.fetch, streamCount = 0;
-          function setBanner(cls, text) {
+          var origFetch = window.fetch, pollTimer = null;
+          function showProblem(text) {
             var b = document.getElementById('server-status');
-            if (b) { b.className = 'conn-banner ' + cls; b.textContent = text; }
+            if (b) { b.className = 'conn-banner conn-disconnected'; b.textContent = text; b.style.display = ''; }
+            startPolling();
+          }
+          function hideBanner() {
+            var b = document.getElementById('server-status');
+            if (b) { b.style.display = 'none'; }
+            stopPolling();
+          }
+          function startPolling() {
+            if (pollTimer) return;
+            pollTimer = setInterval(function() {
+              origFetch('/api/daemon-info').then(function(r) {
+                if (r.ok) hideBanner();
+              }).catch(function() {});
+            }, 2000);
+          }
+          function stopPolling() {
+            if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
           }
           window.fetch = function(url) {
             var isStream = typeof url === 'string' && url.indexOf('/dashboard/stream') !== -1;
-            if (isStream) streamCount++;
             var p = origFetch.apply(this, arguments);
             if (isStream) {
               p.then(function(resp) {
-                if (resp.ok) setBanner('conn-connected', '\u2705 Connected');
-                else setBanner('conn-disconnected', '\u274c Server error (' + resp.status + ')');
+                if (resp.ok) hideBanner();
+                else showProblem('\u274c Server error (' + resp.status + ')');
               }).catch(function() {
-                setBanner('conn-disconnected', '\u274c Server disconnected \u2014 waiting for reconnect...');
+                showProblem('\u274c Server disconnected \u2014 waiting for reconnect...');
               });
             }
             return p;
@@ -247,9 +263,9 @@ let renderShell (version: string) =
     ]
     Elem.body [ Ds.safariStreamingFix ] [
       // Dedicated init element that connects to SSE stream (per Falco.Datastar pattern)
-      Elem.div [ Ds.onInit (Ds.get "/dashboard/stream"); Ds.signal ("helpVisible", "false"); Ds.signal ("sidebarOpen", "true"); Ds.signal ("serverConnected", "false") ] []
-      // Connection status banner — hidden when connected
-      Elem.div [ Attr.id "server-status"; Attr.class' "conn-banner conn-disconnected"; Ds.show "!$serverConnected" ] [
+      Elem.div [ Ds.onInit (Ds.get "/dashboard/stream"); Ds.signal ("helpVisible", "false"); Ds.signal ("sidebarOpen", "true") ] []
+      // Connection status banner — hidden by default, shown only on problems
+      Elem.div [ Attr.id "server-status"; Attr.class' "conn-banner conn-disconnected"; Attr.style "display:none" ] [
         Text.raw "⏳ Connecting to server..."
       ]
       // App header
@@ -933,7 +949,6 @@ let createStreamHandler
         then stats.TotalDuration.TotalMilliseconds / float stats.EvalCount
         else 0.0
       let isReady = stateStr = "Ready"
-      do! Response.ssePatchSignal ctx (SignalPath.sp "serverConnected") true
       do! ssePatchNode ctx (
         renderSessionStatus stateStr currentSessionId workingDir)
       do! ssePatchNode ctx (
