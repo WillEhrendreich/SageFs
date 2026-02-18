@@ -223,11 +223,14 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
     newModel.RecentOutput.[0].Kind
     |> Expect.equal "should be Error" OutputKind.Error
 
-  testCase "EvalStarted is a no-op" <| fun _ ->
+  testCase "EvalStarted adds info output line" <| fun _ ->
     let event = SageFsEvent.EvalStarted ("s1", "let x = 1")
     let newModel, effects =
       SageFsUpdate.update (SageFsMsg.Event event) SageFsModel.initial
-    newModel |> Expect.equal "model unchanged" SageFsModel.initial
+    newModel.RecentOutput |> Expect.hasLength "should have 1 output line" 1
+    newModel.RecentOutput.[0].Kind |> Expect.equal "should be Info" OutputKind.Info
+    newModel.RecentOutput.[0].Text |> Expect.equal "should contain code" "let x = 1"
+    newModel.RecentOutput.[0].SessionId |> Expect.equal "should have session id" "s1"
     effects |> Expect.isEmpty "no effects"
 
   testCase "SessionStale marks session as stale" <| fun _ ->
@@ -419,6 +422,13 @@ let elmIntegrationTests = testList "ElmLoop integration" [
     |> ValidatedBuffer.text
     |> Expect.equal "should have h" "h"
 
+    let snap : SessionSnapshot = {
+      Id = "s1"; Name = None; Projects = ["Test.fsproj"]
+      Status = SessionDisplayStatus.Running; IsActive = true
+      LastActivity = DateTime.UtcNow; EvalCount = 0
+      UpSince = DateTime.UtcNow; WorkingDirectory = "" }
+    dispatch (SageFsMsg.Event (SageFsEvent.SessionCreated snap))
+
     dispatch (SageFsMsg.Event (SageFsEvent.EvalCompleted ("s1", "val x = 42", [])))
     lastModel.Value.RecentOutput
     |> Expect.hasLength "should have output" 1
@@ -449,7 +459,9 @@ let elmIntegrationTests = testList "ElmLoop integration" [
     let dispatch = (ElmLoop.start program SageFsModel.initial).Dispatch
     dispatch (SageFsMsg.Editor (EditorAction.InsertChar '1'))
     dispatch (SageFsMsg.Editor EditorAction.Submit)
-    System.Threading.Thread.Sleep 200
+    let deadline = DateTime.UtcNow.AddSeconds 5.0
+    while not resultReceived && DateTime.UtcNow < deadline do
+      System.Threading.Thread.Sleep 10
     effectExecuted |> Expect.isTrue "effect should have been executed"
     resultReceived |> Expect.isTrue "result should have been received"
 ]
