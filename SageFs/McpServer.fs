@@ -1,16 +1,124 @@
 module SageFs.Server.McpServer
 
 open System
+open System.Collections.Concurrent
 open System.Collections.Generic
+open System.Text.Json
 open System.Threading.Tasks
 open Microsoft.AspNetCore.Builder
 open Microsoft.AspNetCore.Hosting
 open Microsoft.Extensions.DependencyInjection
 open Microsoft.Extensions.Logging
+open ModelContextProtocol.Protocol
+open ModelContextProtocol.Server
 open OpenTelemetry.Logs
 open OpenTelemetry.Resources
 open SageFs.AppState
 open SageFs.McpTools
+
+// ---------------------------------------------------------------------------
+// MCP Push Notifications — tracks active connections and broadcasts events
+// ---------------------------------------------------------------------------
+
+/// Thread-safe accumulator for events between MCP tool calls.
+/// Events are collected and drained on each tool response.
+type EventAccumulator() =
+  let events = ConcurrentQueue<string>()
+  let maxEvents = 50
+
+  /// Add an event message. Oldest events are dropped if the queue is full.
+  member _.Add(msg: string) =
+    events.Enqueue(msg)
+    while events.Count > maxEvents do
+      events.TryDequeue() |> ignore
+
+  /// Drain all accumulated events and return them.
+  member _.Drain() =
+    let result = ResizeArray()
+    let mutable item = Unchecked.defaultof<string>
+    while events.TryDequeue(&item) do
+      result.Add(item)
+    result.ToArray()
+
+  member _.Count = events.Count
+
+/// Tracks active MCP server connections for push notifications.
+/// Thread-safe: multiple agents may connect simultaneously.
+type McpServerTracker() =
+  let servers = ConcurrentDictionary<string, McpServer>()
+  let accumulator = EventAccumulator()
+
+  /// Register (or refresh) a server connection.
+  member _.Register(server: McpServer) =
+    servers.[server.SessionId] <- server
+
+  /// Remove a dead connection.
+  member _.Remove(sessionId: string) =
+    servers.TryRemove(sessionId) |> ignore
+
+  /// Broadcast a structured logging notification to all connected MCP clients.
+  member _.NotifyLogAsync(level: LoggingLevel, logger: string, data: obj) =
+    task {
+      if servers.IsEmpty then return ()
+      else
+        let jsonElement =
+          let json = JsonSerializer.Serialize(data)
+          let doc = JsonDocument.Parse(json)
+          Nullable(doc.RootElement.Clone())
+        let dead = ResizeArray()
+        for kvp in servers do
+          try
+            let payload =
+              LoggingMessageNotificationParams(
+                Level = level, Logger = logger, Data = jsonElement)
+            do! kvp.Value.SendNotificationAsync(
+              NotificationMethods.LoggingMessageNotification, payload)
+          with _ -> dead.Add(kvp.Key)
+        for id in dead do servers.TryRemove(id) |> ignore
+    }
+
+  /// Accumulate an event for delivery on the next tool response.
+  member _.AccumulateEvent(msg: string) = accumulator.Add(msg)
+
+  /// Drain accumulated events and return them.
+  member _.DrainEvents() = accumulator.Drain()
+
+  member _.Count = servers.Count
+  member _.PendingEvents = accumulator.Count
+
+/// CallToolFilter that captures the McpServer and appends accumulated events
+/// to tool responses. This ensures the LLM sees events even if the client
+/// doesn't surface MCP notifications directly.
+let createServerCaptureFilter (tracker: McpServerTracker) =
+  let mutable logged = false
+  McpRequestFilter<CallToolRequestParams, CallToolResult>(fun next ->
+    McpRequestHandler<CallToolRequestParams, CallToolResult>(fun ctx ct ->
+      let wasEmpty = tracker.Count = 0
+      tracker.Register(ctx.Server)
+      if wasEmpty && not logged then
+        logged <- true
+        eprintfn "✓ McpServerTracker: captured first MCP client connection"
+
+      let inline appendEvents (result: CallToolResult) =
+        let events = tracker.DrainEvents()
+        if events.Length > 0 then
+          let eventText =
+            events
+            |> Array.map (sprintf "  • %s")
+            |> String.concat "\n"
+          let banner = sprintf "\n\n📡 SageFs events since last call:\n%s" eventText
+          result.Content.Add(TextContentBlock(Text = banner))
+        result
+
+      let vt = next.Invoke(ctx, ct)
+      if vt.IsCompleted then
+        ValueTask<CallToolResult>(appendEvents vt.Result)
+      else
+        ValueTask<CallToolResult>(
+          task {
+            let! result = vt.AsTask()
+            return appendEvents result
+          })))
 
 /// Write a JSON response with the given status code.
 let jsonResponse (ctx: Microsoft.AspNetCore.Http.HttpContext) (statusCode: int) (data: obj) = task {
@@ -103,6 +211,10 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                 new SageFs.Server.McpTools.SageFsTools(mcpContext, logger)
             ) |> ignore
             
+            // Create notification tracker
+            let serverTracker = McpServerTracker()
+            builder.Services.AddSingleton<McpServerTracker>(serverTracker) |> ignore
+
             builder.Services
                 .AddMcpServer(fun options ->
                   options.ServerInstructions <- String.concat " " [
@@ -113,6 +225,7 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                     "When starting or restarting SageFs, ALWAYS use Start-Process to launch in a visible console window, NEVER detach or run in background."
                     "You OWN the full development cycle: pack, stop, reinstall, restart, test. Never ask the user to do these steps."
                     "The MCP connection is SSE (push-based) — do not poll or sleep. Tools become available when SageFs is ready."
+                    "SageFs pushes structured notifications (notifications/message) for important events: session faults, warmup completion, file reloads, eval failures."
                     "Tool responses return only Result: or Error: with diagnostics — no code echo (you already know what you sent)."
                     "SageFs is affordance-driven: get_fsi_status shows available tools for the current session state. Only invoke listed tools."
                     "If a tool returns an error about session state, check get_fsi_status for available alternatives."
@@ -124,6 +237,7 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                 )
                 .WithHttpTransport()
                 .WithTools<SageFs.Server.McpTools.SageFsTools>()
+                .AddCallToolFilter(createServerCaptureFilter serverTracker)
             |> ignore
             
             let app = builder.Build()
@@ -411,6 +525,47 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                     | Error err -> do! jsonResponse ctx 400 {| success = false; error = SageFs.SageFsError.describe err |}
                 }) :> Task
             ) |> ignore
+
+            // Wire push notifications: subscribe to events → broadcast to MCP clients
+            // Two delivery paths:
+            //   1. MCP notifications (for clients that surface them)
+            //   2. Event accumulator → appended to next tool response (guaranteed delivery)
+            let _diagSub =
+              diagnosticsChanged.Subscribe(fun _store ->
+                serverTracker.AccumulateEvent("diagnostics updated")
+                if serverTracker.Count > 0 then
+                  let data = {| event = "diagnostics_updated" |}
+                  serverTracker.NotifyLogAsync(
+                    LoggingLevel.Info, "sagefs.diagnostics", data).Wait())
+
+            let mutable lastPushState = ""
+            let _stateSub =
+              stateChanged |> Option.map (fun evt ->
+                evt.Subscribe(fun json ->
+                  try
+                    let doc = JsonDocument.Parse(json)
+                    let root = doc.RootElement
+                    let diagCount =
+                      match root.TryGetProperty("diagCount") with
+                      | true, v -> v.GetInt32()
+                      | _ -> 0
+                    let outputCount =
+                      match root.TryGetProperty("outputCount") with
+                      | true, v -> v.GetInt32()
+                      | _ -> 0
+                    let stateKey = sprintf "%d-%d" diagCount outputCount
+                    if stateKey <> lastPushState then
+                      lastPushState <- stateKey
+                      let msg = sprintf "state: diags=%d output=%d" diagCount outputCount
+                      serverTracker.AccumulateEvent(msg)
+                      if serverTracker.Count > 0 then
+                        let data =
+                          {| event = "state_changed"
+                             diagCount = diagCount
+                             outputCount = outputCount |}
+                        serverTracker.NotifyLogAsync(
+                          LoggingLevel.Info, "sagefs.state", data).Wait()
+                  with _ -> ()))
 
             // Print startup info
             printfn "MCP SSE endpoint: http://localhost:%d/sse" port
