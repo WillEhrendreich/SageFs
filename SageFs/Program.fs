@@ -195,26 +195,30 @@ let main args =
       |> Option.bind (fun i ->
         if i + 1 < workerArgs.Length then Some workerArgs.[i + 1] else None)
       |> Option.defaultValue (System.Guid.NewGuid().ToString("N").[..7])
-    let pipeName =
+    let httpPort =
       workerArgs
-      |> List.tryFindIndex (fun a -> a = "--pipe-name")
+      |> List.tryFindIndex (fun a -> a = "--http-port")
       |> Option.bind (fun i ->
-        if i + 1 < workerArgs.Length then Some workerArgs.[i + 1] else None)
-      |> Option.defaultWith (fun () -> SageFs.NamedPipeTransport.pipeName sessionId)
+        if i + 1 < workerArgs.Length then
+          match System.Int32.TryParse(workerArgs.[i + 1]) with
+          | true, p -> Some p
+          | _ -> None
+        else None)
+      |> Option.defaultValue 0
     // Filter out worker-specific flags, pass rest to Argu
     let SageFsArgs =
       workerArgs
       |> List.filter (fun a ->
-        a <> "--session-id" && a <> "--pipe-name"
+        a <> "--session-id" && a <> "--http-port"
         && not (workerArgs
                 |> List.pairwise
                 |> List.exists (fun (prev, cur) ->
-                  cur = a && (prev = "--session-id" || prev = "--pipe-name"))))
+                  cur = a && (prev = "--session-id" || prev = "--http-port"))))
     let parsedArgs =
       try SageFs.Args.parser.ParseCommandLine(SageFsArgs |> List.toArray)
             .GetAllResults()
       with _ -> []
-    WorkerMain.run sessionId pipeName parsedArgs
+    WorkerMain.run sessionId httpPort parsedArgs
     |> Async.RunSynchronously
     0
   // Subcommand: connect (connects to running daemon)

@@ -13,7 +13,6 @@ module SessionManager =
     Info: SessionInfo
     Process: Process
     Proxy: SessionProxy
-    PipeDisposable: IDisposable
     /// Original spawn config — needed for restart.
     Projects: string list
     WorkingDir: string
@@ -69,7 +68,7 @@ module SessionManager =
       |> Map.toList
       |> List.map (fun (_, s) -> s.Info)
 
-  /// Spawn a worker sub-process and connect via named pipe.
+  /// Spawn a worker sub-process and connect via HTTP.
   let private spawnWorker
     (sessionId: SessionId)
     (projects: string list)
@@ -77,8 +76,6 @@ module SessionManager =
     (ct: CancellationToken)
     (onExited: int -> int -> unit)
     = async {
-    let pipe = NamedPipeTransport.pipeName sessionId
-
     let projArgs =
       projects
       |> List.collect (fun p ->
@@ -90,10 +87,11 @@ module SessionManager =
     let psi = ProcessStartInfo()
     psi.FileName <- "SageFs"
     psi.Arguments <-
-      sprintf "worker --session-id %s --pipe-name %s %s" sessionId pipe projArgs
+      sprintf "worker --session-id %s --http-port 0 %s" sessionId projArgs
     psi.WorkingDirectory <- workingDir
     psi.UseShellExecute <- false
     psi.CreateNoWindow <- true
+    psi.RedirectStandardOutput <- true
 
     let proc = new Process()
     proc.StartInfo <- psi
@@ -103,15 +101,21 @@ module SessionManager =
       return Error (SageFsError.WorkerSpawnFailed "Failed to start worker process")
     else
       let workerPid = proc.Id
-      // Register exit handler AFTER Start() so we have the PID.
-      // EnableRaisingEvents=true ensures the event is queued even if the
-      // process exits before we attach — .NET fires it when we subscribe.
       proc.Exited.Add(fun _ -> onExited workerPid proc.ExitCode)
-      // Connect to the worker's named pipe
-      do! Async.Sleep 500 // Brief delay for pipe to be created
+      // Read stdout until we get the WORKER_PORT line
       try
-        let! proxy, disposable =
-          NamedPipeTransport.connect pipe ct
+        let! baseUrl =
+          async {
+            let mutable found = None
+            while Option.isNone found do
+              let! line = proc.StandardOutput.ReadLineAsync() |> Async.AwaitTask
+              if isNull line then
+                failwith "Worker process exited before reporting port"
+              elif line.StartsWith("WORKER_PORT=") then
+                found <- Some (line.Substring("WORKER_PORT=".Length))
+            return found.Value
+          }
+        let proxy = HttpWorkerClient.httpProxy baseUrl
         let info : SessionInfo = {
           Id = sessionId
           Name = None
@@ -128,7 +132,6 @@ module SessionManager =
             Info = info
             Process = proc
             Proxy = proxy
-            PipeDisposable = disposable
             Projects = projects
             WorkingDir = workingDir
             RestartState = RestartPolicy.emptyState
@@ -149,7 +152,6 @@ module SessionManager =
     with _ ->
       try session.Process.Kill() with _ -> ()
       try session.Process.WaitForExit(2000) |> ignore with _ -> ()
-    session.PipeDisposable.Dispose()
   }
 
   /// Run `dotnet build` for the primary project.
@@ -309,7 +311,6 @@ module SessionManager =
             | Some currentPid when currentPid <> workerPid ->
               return! loop state
             | _ ->
-            session.PipeDisposable.Dispose()
             let outcome =
               SessionLifecycle.onWorkerExited
                 state.RestartPolicy

@@ -104,8 +104,8 @@ let handleMessage
       return WorkerResponse.WorkerShuttingDown
   }
 
-/// Run the worker process: create actor, listen on pipe, handle messages.
-let run (sessionId: string) (pipeName: string) (args: Args.Arguments list) = async {
+/// Run the worker process: create actor, start HTTP server, handle messages.
+let run (sessionId: string) (port: int) (args: Args.Arguments list) = async {
   let logger =
     { new Utils.ILogger with
         member _.LogInfo msg = eprintfn "[worker] %s" msg
@@ -191,7 +191,21 @@ let run (sessionId: string) (pipeName: string) (args: Args.Arguments list) = asy
     cts.Cancel())
 
   try
-    do! NamedPipeTransport.listen pipeName handler cts.Token
+    // Start HTTP server on requested port (0 = OS-assigned)
+    let! server =
+      WorkerHttpTransport.startServer handler port
+      |> Async.AwaitTask
+    // Print actual port to stdout so daemon can discover it
+    printfn "WORKER_PORT=%s" server.BaseUrl
+    Console.Out.Flush()
+
+    // Block until cancellation
+    let tcs = Threading.Tasks.TaskCompletionSource<unit>()
+    use _reg = cts.Token.Register(fun () -> tcs.TrySetResult() |> ignore)
+    do! tcs.Task |> Async.AwaitTask
+
+    // Graceful shutdown
+    (server :> IDisposable).Dispose()
   with
   | :? OperationCanceledException -> ()
   | ex ->
