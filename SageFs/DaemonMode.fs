@@ -465,10 +465,31 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
   do! System.Threading.Tasks.Task.Delay(200)
   eprintfn "SageFs daemon ready (PID %d, MCP port %d, dashboard port %d)" Environment.ProcessId mcpPort dashboardPort
 
-  // NOW resume sessions — servers are listening, MCP clients can connect
-  // Each resumed session dispatches ListSessions so dashboard sees them incrementally
-  do! resumeSessions (fun () ->
-    elmRuntime.Dispatch(SageFsMsg.Editor EditorAction.ListSessions))
+  // Resume sessions in background — don't block the daemon main task.
+  // Each resumed session dispatches ListSessions so dashboard sees them incrementally.
+  let _resumeTask =
+    System.Threading.Tasks.Task.Run(fun () ->
+      task {
+        try
+          do! resumeSessions (fun () ->
+            elmRuntime.Dispatch(SageFsMsg.Editor EditorAction.ListSessions))
+        with ex ->
+          eprintfn "[WARN] Session resume failed: %s" ex.Message
+      } :> System.Threading.Tasks.Task)
+
+  // Periodic status polling — refreshes session status (Starting → Ready)
+  // so SSE subscribers see warmup progress in real time.
+  let _statusPollTask =
+    System.Threading.Tasks.Task.Run(fun () ->
+      task {
+        try
+          while not cts.Token.IsCancellationRequested do
+            do! System.Threading.Tasks.Task.Delay(2000, cts.Token)
+            elmRuntime.Dispatch(SageFsMsg.Editor EditorAction.ListSessions)
+        with
+        | :? OperationCanceledException -> ()
+        | ex -> eprintfn "[WARN] Status poll failed: %s" ex.Message
+      } :> System.Threading.Tasks.Task)
 
   try
     let! _ = System.Threading.Tasks.Task.WhenAny(mcpRunning, dashboardRunning)
