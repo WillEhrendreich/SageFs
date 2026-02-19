@@ -200,7 +200,6 @@ let renderShell (version: string) =
         })();
       """ ]
       Ds.cdnScript
-      renderThemeVars "One Dark"
       Elem.style [] [ Text.raw """
         :root { --font-size: 14px; --sidebar-width: 320px; }
         * { box-sizing: border-box; margin: 0; padding: 0; }""" ]
@@ -295,6 +294,8 @@ let renderShell (version: string) =
       """ ]
     ]
     Elem.body [ Ds.safariStreamingFix ] [
+      // Theme CSS vars — in body so Datastar can morph it via SSE
+      renderThemeVars "One Dark"
       // Dedicated init element that connects to SSE stream (per Falco.Datastar pattern)
       Elem.div [ Ds.onInit (Ds.get "/dashboard/stream"); Ds.signal ("helpVisible", "false"); Ds.signal ("sidebarOpen", "true") ] []
       // Connection status banner — hidden by default, shown only on problems
@@ -451,29 +452,23 @@ let renderShell (version: string) =
           if (panel) panel.scrollTop = panel.scrollHeight;
         }).observe(document.getElementById('output-panel') || document.body, { childList: true, subtree: true });
       """ ]
-      // Theme picker: swap CSS variables on selection change, notify server
+      // Theme picker: update style element on selection change, notify server
+      // Uses event delegation so handler survives Datastar DOM morphing
       Elem.script [] [ Text.raw (sprintf """
         (function() {
           var themes = %s;
-          var picker = document.getElementById('theme-picker');
-          if (picker) {
-            picker.addEventListener('change', function() {
-              var css = themes[this.value];
-              if (!css) return;
-              css.split(';').forEach(function(decl) {
-                decl = decl.trim();
-                if (!decl) return;
-                var i = decl.indexOf(':');
-                if (i < 0) return;
-                document.documentElement.style.setProperty(decl.substring(0, i).trim(), decl.substring(i + 1).trim());
-              });
-              fetch('/dashboard/set-theme', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({theme: this.value})
-              });
+          document.addEventListener('change', function(e) {
+            if (e.target.id !== 'theme-picker') return;
+            var css = themes[e.target.value];
+            if (!css) return;
+            var styleEl = document.getElementById('theme-vars');
+            if (styleEl) styleEl.textContent = ':root { ' + css + ' }';
+            fetch('/dashboard/set-theme', {
+              method: 'POST',
+              headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify({theme: e.target.value})
             });
-          }
+          });
         })();
       """ (themePresetsJs ())) ]
       // Font size adjustment: Ctrl+= / Ctrl+- changes --font-size CSS variable
@@ -988,6 +983,7 @@ let createStreamHandler
   (getSessionState: string -> SessionState)
   (getEvalStats: string -> SageFs.Affordances.EvalStats)
   (getSessionWorkingDir: string -> string)
+  (getActiveSessionId: unit -> string)
   (getElmRegions: unit -> RenderRegion list option)
   (stateChanged: IEvent<string> option)
   (connectionTracker: ConnectionTracker option)
@@ -1007,6 +1003,10 @@ let createStreamHandler
     let mutable lastWorkingDir = ""
 
     let pushState () = task {
+      // Track daemon's active session for theme switching
+      let activeId = getActiveSessionId ()
+      if activeId.Length > 0 then
+        currentSessionId <- activeId
       let state = getSessionState currentSessionId
       let stats = getEvalStats currentSessionId
       let stateStr = SessionState.label state
@@ -1553,7 +1553,7 @@ let createEndpoints
   : HttpEndpoint list =
   [
     yield get "/dashboard" (FalcoResponse.ofHtml (renderShell version))
-    yield get "/dashboard/stream" (createStreamHandler getSessionState getEvalStats getSessionWorkingDir getElmRegions stateChanged connectionTracker getPreviousSessions getAllSessions sessionThemes)
+    yield get "/dashboard/stream" (createStreamHandler getSessionState getEvalStats getSessionWorkingDir getActiveSessionId getElmRegions stateChanged connectionTracker getPreviousSessions getAllSessions sessionThemes)
     yield post "/dashboard/eval" (createEvalHandler evalCode)
     yield post "/dashboard/reset" (createResetHandler resetSession)
     yield post "/dashboard/hard-reset" (createResetHandler hardResetSession)
