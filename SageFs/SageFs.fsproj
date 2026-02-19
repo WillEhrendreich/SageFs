@@ -6,11 +6,14 @@
         <IsPackable>true</IsPackable>
         <ToolCommandName>sagefs</ToolCommandName>
         <PackageOutputPath>./nupkg</PackageOutputPath>
-        <Version>0.5.16</Version>
+        <Version>0.5.17</Version>
 
         <!-- NuGet config -->
         <PackageId>SageFs</PackageId>
-        <PackageTags>fsharp;functional;repl;interactive;shell;asp.net core;asp.net;.net core;SageFs;sagefs-web;mcp</PackageTags>
+        <Authors>Will Ehrendreich</Authors>
+        <Description>SageFs — a functional F# REPL, MCP server, and development environment with TUI and GUI modes.</Description>
+        <Copyright>Copyright © 2025-2026 Will Ehrendreich</Copyright>
+        <PackageTags>fsharp;functional;repl;interactive;shell;asp.net core;mcp;tui;gui;sagefs</PackageTags>
         <PackageProjectUrl>https://github.com/WillEhrendreich/SageFs</PackageProjectUrl>
         <PackageLicenseExpression>MIT</PackageLicenseExpression>
         <PackageReadmeFile>Readme.md</PackageReadmeFile>
