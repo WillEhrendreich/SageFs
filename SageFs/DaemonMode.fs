@@ -366,8 +366,9 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
           | Ok msg -> sprintf "Hard reset: %s" msg
           | Error e -> sprintf "Hard reset failed: %s" (SageFsError.describe e)
       })
-      // Session switch handler — per-browser only, no shared state mutation
+      // Session switch handler — update Elm model's active session
       (Some (fun (sid: string) -> task {
+        elmRuntime.Dispatch(SageFsMsg.Event (SageFsEvent.SessionSwitched (None, sid)))
         return sprintf "Switched to session '%s'" sid
       }))
       // Session stop handler
