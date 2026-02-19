@@ -130,6 +130,28 @@ let private themePresetsJs () =
       sprintf "  %s: `%s`" (System.Text.Json.JsonSerializer.Serialize(name)) (Theme.toCssVariables config))
   sprintf "{\n%s\n}" (String.concat ",\n" entries)
 
+/// Render a <style id="theme-vars"> element with CSS variables for the given theme.
+/// Pushed via SSE on session switch — Datastar morphs the existing style element.
+let renderThemeVars (themeName: string) =
+  let config =
+    ThemePresets.all
+    |> List.tryFind (fun (n, _) -> n = themeName)
+    |> Option.map snd
+    |> Option.defaultValue Theme.defaults
+  Elem.style [ Attr.id "theme-vars" ] [
+    Text.raw (sprintf ":root { %s }" (Theme.toCssVariables config))
+  ]
+
+/// Render a <select id="theme-picker"> with the correct option selected.
+/// Pushed via SSE on session switch — Datastar morphs the existing picker.
+let renderThemePicker (selectedTheme: string) =
+  Elem.select
+    [ Attr.id "theme-picker"; Attr.class' "theme-select" ]
+    (ThemePresets.all |> List.map (fun (name, _) ->
+      Elem.option
+        ([ Attr.value name ] @ (if name = selectedTheme then [ Attr.create "selected" "selected" ] else []))
+        [ Text.raw name ]))
+
 /// Render the dashboard HTML shell.
 /// Datastar initializes and connects to the /dashboard/stream SSE endpoint.
 let renderShell (version: string) =
@@ -178,9 +200,10 @@ let renderShell (version: string) =
         })();
       """ ]
       Ds.cdnScript
-      Elem.style [] [ Text.raw (sprintf """
-        :root { %s --font-size: 14px; --sidebar-width: 320px; }
-        * { box-sizing: border-box; margin: 0; padding: 0; }""" (Theme.toCssVariables Theme.defaults)) ]
+      renderThemeVars "One Dark"
+      Elem.style [] [ Text.raw """
+        :root { --font-size: 14px; --sidebar-width: 320px; }
+        * { box-sizing: border-box; margin: 0; padding: 0; }""" ]
       Elem.style [] [ Text.raw """
         body { font-family: 'Cascadia Code', 'Fira Code', monospace; background: var(--bg-default); color: var(--fg-default); font-size: var(--font-size); height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
         h1 { color: var(--fg-blue); font-size: 1.4rem; }
@@ -416,12 +439,7 @@ let renderShell (version: string) =
             // Theme
             Elem.div [ Attr.class' "panel" ] [
               Elem.h2 [] [ Text.raw "Theme" ]
-              Elem.select
-                [ Attr.id "theme-picker"; Attr.class' "theme-select" ]
-                (ThemePresets.all |> List.mapi (fun i (name, _) ->
-                  Elem.option
-                    ([ Attr.value name ] @ (if i = 0 then [ Attr.create "selected" "selected" ] else []))
-                    [ Text.raw name ]))
+              renderThemePicker "One Dark"
             ]
           ]
         ]
@@ -433,7 +451,7 @@ let renderShell (version: string) =
           if (panel) panel.scrollTop = panel.scrollHeight;
         }).observe(document.getElementById('output-panel') || document.body, { childList: true, subtree: true });
       """ ]
-      // Theme picker: swap CSS variables on selection change
+      // Theme picker: swap CSS variables on selection change, notify server
       Elem.script [] [ Text.raw (sprintf """
         (function() {
           var themes = %s;
@@ -448,6 +466,11 @@ let renderShell (version: string) =
                 var i = decl.indexOf(':');
                 if (i < 0) return;
                 document.documentElement.style.setProperty(decl.substring(0, i).trim(), decl.substring(i + 1).trim());
+              });
+              fetch('/dashboard/set-theme', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({theme: this.value})
               });
             });
           }
@@ -512,7 +535,7 @@ let renderShell (version: string) =
 let renderSessionStatus (sessionState: string) (sessionId: string) (workingDir: string) =
   match sessionState with
   | "Ready" ->
-    Elem.div [ Attr.id "session-status" ] [
+    Elem.div [ Attr.id "session-status"; Attr.create "data-working-dir" workingDir ] [
       Elem.span [ Attr.class' "status status-ready" ] [ Text.raw sessionState ]
       Elem.br []
       Elem.span [ Attr.class' "meta" ] [
@@ -524,7 +547,7 @@ let renderSessionStatus (sessionState: string) (sessionId: string) (workingDir: 
       match sessionState with
       | "WarmingUp" -> "status-warming"
       | _ -> "status-faulted"
-    Elem.div [ Attr.id "session-status" ] [
+    Elem.div [ Attr.id "session-status"; Attr.create "data-working-dir" workingDir ] [
       Elem.span [ Attr.class' (sprintf "status %s" statusClass) ] [ Text.raw sessionState ]
       Elem.br []
       Elem.span [ Attr.class' "meta" ] [
@@ -970,6 +993,7 @@ let createStreamHandler
   (connectionTracker: ConnectionTracker option)
   (getPreviousSessions: unit -> PreviousSession list)
   (getAllSessions: unit -> Threading.Tasks.Task<WorkerProtocol.SessionInfo list>)
+  (sessionThemes: Collections.Concurrent.ConcurrentDictionary<string, string>)
   : HttpHandler =
   fun ctx -> task {
     Response.sseStartResponse ctx |> ignore
@@ -980,6 +1004,7 @@ let createStreamHandler
     let mutable currentSessionId =
       sessions |> List.tryHead |> Option.map (fun s -> s.Id) |> Option.defaultValue ""
     connectionTracker |> Option.iter (fun t -> t.Register(clientId, Browser, currentSessionId))
+    let mutable lastWorkingDir = ""
 
     let pushState () = task {
       let state = getSessionState currentSessionId
@@ -993,6 +1018,15 @@ let createStreamHandler
       let isReady = stateStr = "Ready"
       do! ssePatchNode ctx (
         renderSessionStatus stateStr currentSessionId workingDir)
+      // Push theme on session switch (working dir change)
+      if workingDir.Length > 0 && workingDir <> lastWorkingDir then
+        let themeName =
+          match sessionThemes.TryGetValue(workingDir) with
+          | true, n -> n
+          | false, _ -> "One Dark"
+        do! ssePatchNode ctx (renderThemeVars themeName)
+        do! ssePatchNode ctx (renderThemePicker themeName)
+        lastWorkingDir <- workingDir
       do! ssePatchNode ctx (
         renderEvalStats
           { Count = stats.EvalCount
@@ -1331,6 +1365,8 @@ let createCreateSessionHandler
 let createApiStateHandler
   (getSessionStateForId: string -> SessionState)
   (getEvalStatsForId: string -> SageFs.Affordances.EvalStats)
+  (getActiveSessionId: unit -> string)
+  (getSessionWorkingDirById: string -> string)
   (getAllSessions: unit -> Threading.Tasks.Task<WorkerProtocol.SessionInfo list>)
   (getElmRegions: unit -> RenderRegion list option)
   (stateChanged: IEvent<string> option)
@@ -1352,6 +1388,8 @@ let createApiStateHandler
     connectionTracker |> Option.iter (fun t -> t.Register(clientId, Terminal, connSessionId))
 
     let pushJson () = task {
+      let activeSid = getActiveSessionId ()
+      let activeDir = getSessionWorkingDirById activeSid
       let state = getSessionStateForId connSessionId
       let stats = getEvalStatsForId connSessionId
       let regions =
@@ -1370,6 +1408,7 @@ let createApiStateHandler
              sessionState = SessionState.label state
              evalCount = stats.EvalCount
              avgMs = if stats.EvalCount > 0 then stats.TotalDuration.TotalMilliseconds / float stats.EvalCount else 0.0
+             activeWorkingDir = activeDir
              regions = regions |})
       do! ctx.Response.WriteAsync(sprintf "data: %s\n\n" payload)
       do! ctx.Response.Body.FlushAsync()
@@ -1496,6 +1535,7 @@ let createEndpoints
   (getSessionState: string -> SessionState)
   (getEvalStats: string -> SageFs.Affordances.EvalStats)
   (getSessionWorkingDir: string -> string)
+  (getActiveSessionId: unit -> string)
   (getElmRegions: unit -> RenderRegion list option)
   (stateChanged: IEvent<string> option)
   (evalCode: string -> string -> Threading.Tasks.Task<string>)
@@ -1509,15 +1549,31 @@ let createEndpoints
   (shutdownCallback: (unit -> unit) option)
   (getPreviousSessions: unit -> PreviousSession list)
   (getAllSessions: unit -> Threading.Tasks.Task<WorkerProtocol.SessionInfo list>)
+  (sessionThemes: Collections.Concurrent.ConcurrentDictionary<string, string>)
   : HttpEndpoint list =
   [
     yield get "/dashboard" (FalcoResponse.ofHtml (renderShell version))
-    yield get "/dashboard/stream" (createStreamHandler getSessionState getEvalStats getSessionWorkingDir getElmRegions stateChanged connectionTracker getPreviousSessions getAllSessions)
+    yield get "/dashboard/stream" (createStreamHandler getSessionState getEvalStats getSessionWorkingDir getElmRegions stateChanged connectionTracker getPreviousSessions getAllSessions sessionThemes)
     yield post "/dashboard/eval" (createEvalHandler evalCode)
     yield post "/dashboard/reset" (createResetHandler resetSession)
     yield post "/dashboard/hard-reset" (createResetHandler hardResetSession)
     yield post "/dashboard/clear-output" createClearOutputHandler
     yield post "/dashboard/discover-projects" createDiscoverHandler
+    yield post "/dashboard/set-theme" (fun ctx -> task {
+      use reader = new StreamReader(ctx.Request.Body)
+      let! body = reader.ReadToEndAsync()
+      try
+        let req = System.Text.Json.JsonSerializer.Deserialize<{| theme: string |}>(body)
+        let activeId = getActiveSessionId ()
+        let workingDir = getSessionWorkingDir activeId
+        if workingDir.Length > 0 && req.theme.Length > 0 then
+          sessionThemes.[workingDir] <- req.theme
+        ctx.Response.StatusCode <- 200
+        do! ctx.Response.WriteAsJsonAsync({| ok = true |})
+      with ex ->
+        ctx.Response.StatusCode <- 400
+        do! ctx.Response.WriteAsJsonAsync({| error = ex.Message |})
+    })
     // Create session in temp directory
     match createSession with
     | Some handler ->
@@ -1567,7 +1623,7 @@ let createEndpoints
         })
     | None -> ()
     // TUI client API
-    yield get "/api/state" (createApiStateHandler getSessionState getEvalStats getAllSessions getElmRegions stateChanged connectionTracker)
+    yield get "/api/state" (createApiStateHandler getSessionState getEvalStats getActiveSessionId getSessionWorkingDir getAllSessions getElmRegions stateChanged connectionTracker)
     yield post "/api/dispatch" (createApiDispatchHandler dispatch)
     match createSession with
     | Some handler ->
