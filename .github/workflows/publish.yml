@@ -26,6 +26,12 @@ jobs:
     - name: Dotnet Installation Info
       run: dotnet --info
 
+    - name: Build and Test
+      run: |
+        dotnet build
+        dotnet test --no-build --verbosity normal --filter "TestCategory!=Integration"
+      timeout-minutes: 10
+
     - name: Pack
       run: dotnet pack SageFs -c Release -o release /p:ContinuousIntegrationBuild=true
 

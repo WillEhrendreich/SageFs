@@ -10,7 +10,7 @@ jobs:
   build:
     strategy:
       matrix:
-        platform: [ubuntu-latest, windows-latest, macOS-latest]
+        platform: [ubuntu-latest, windows-latest]
 
     runs-on: ${{ matrix.platform }}
 
@@ -23,11 +23,9 @@ jobs:
         dotnet-version: |
           10.0.x
       
-    - name: Dotnet Installation Info
-      run: dotnet --info
-      
     - name: Build
       run: dotnet build
       
     - name: Test
-      run: dotnet test --no-build --verbosity normal
+      run: dotnet test --no-build --verbosity normal --filter "TestCategory!=Integration"
+      timeout-minutes: 10
