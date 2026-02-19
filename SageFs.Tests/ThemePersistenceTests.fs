@@ -445,6 +445,128 @@ let themeSwitchDetectionTests = testList "theme switch detection" [
   }
 ]
 
+// ─── Unit: resolveThemePush pure logic ───────────────────────────────────────
+
+let resolveThemePushTests = testList "resolveThemePush" [
+  // --- Basic happy paths ---
+  test "pushes stored theme when workingDir changes" {
+    let themes = dict [| @"C:\Proj2", "Nordic" |] :> System.Collections.Generic.IDictionary<_,_>
+    let result = resolveThemePush themes "s2" @"C:\Proj2" "s1" @"C:\Proj1"
+    Expect.equal result (Some "Nordic") "should push stored theme for new dir"
+  }
+
+  test "pushes default when workingDir changes to unknown dir" {
+    let themes = dict [||] :> System.Collections.Generic.IDictionary<_,_>
+    let result = resolveThemePush themes "s2" @"C:\Unknown" "s1" @"C:\Proj1"
+    Expect.equal result (Some "One Dark") "should push default for unknown dir"
+  }
+
+  test "no push when nothing changes" {
+    let themes = dict [| @"C:\Proj1", "Dracula" |] :> System.Collections.Generic.IDictionary<_,_>
+    let result = resolveThemePush themes "s1" @"C:\Proj1" "s1" @"C:\Proj1"
+    Expect.isNone result "same session, same dir should not push"
+  }
+
+  // --- Bug 1: same workingDir, different session SHOULD push ---
+  test "pushes when session changes but workingDir is same" {
+    let themes = dict [| @"C:\SageFs", "Nordic" |] :> System.Collections.Generic.IDictionary<_,_>
+    let result = resolveThemePush themes "session-B" @"C:\SageFs" "session-A" @"C:\SageFs"
+    Expect.equal result (Some "Nordic") "different session same dir should push theme"
+  }
+
+  test "pushes default when session changes, same dir, no stored theme" {
+    let themes = dict [||] :> System.Collections.Generic.IDictionary<_,_>
+    let result = resolveThemePush themes "s2" @"C:\Proj" "s1" @"C:\Proj"
+    Expect.equal result (Some "One Dark") "session change with no stored theme should push default"
+  }
+
+  // --- Bug 2: empty workingDir (faulted session) should push default ---
+  test "pushes default when switching to empty workingDir session" {
+    let themes = dict [| @"C:\Proj1", "Nordic" |] :> System.Collections.Generic.IDictionary<_,_>
+    let result = resolveThemePush themes "faulted-session" "" "s1" @"C:\Proj1"
+    Expect.equal result (Some "One Dark") "empty workingDir should push default theme"
+  }
+
+  test "pushes default when both previous and current workingDir empty but session changes" {
+    let themes = dict [||] :> System.Collections.Generic.IDictionary<_,_>
+    let result = resolveThemePush themes "s2" "" "s1" ""
+    Expect.equal result (Some "One Dark") "session change with both dirs empty should push default"
+  }
+
+  // --- Bug 3: switching back from empty workingDir restores theme ---
+  test "restores stored theme when switching back from empty-dir session" {
+    let themes = dict [| @"C:\Proj1", "Gruvbox" |] :> System.Collections.Generic.IDictionary<_,_>
+    // Was on Proj1 (Gruvbox), switched to faulted (empty), now switching back
+    let result = resolveThemePush themes "s1" @"C:\Proj1" "faulted" ""
+    Expect.equal result (Some "Gruvbox") "should restore Gruvbox when returning from empty-dir session"
+  }
+
+  // --- Full round-trip scenario ---
+  test "full round trip: set Nordic, switch away, switch back" {
+    let themes =
+      System.Collections.Concurrent.ConcurrentDictionary<string, string>()
+      :> System.Collections.Generic.IDictionary<_,_>
+    themes.[@"C:\SageFs"] <- "Nordic"
+
+    // Step 1: initial push for session A
+    let r1 = resolveThemePush themes "sA" @"C:\SageFs" "" ""
+    Expect.isSome r1 "initial session should push"
+    Expect.equal r1.Value "Nordic" "should push Nordic"
+
+    // Step 2: switch to session B (different dir, Harmony)
+    let r2 = resolveThemePush themes "sB" @"C:\Harmony" "sA" @"C:\SageFs"
+    Expect.isSome r2 "switch to Harmony should push"
+    Expect.equal r2.Value "One Dark" "Harmony has no stored theme"
+
+    // Step 3: switch back to session A (same dir as step 1)
+    let r3 = resolveThemePush themes "sA" @"C:\SageFs" "sB" @"C:\Harmony"
+    Expect.isSome r3 "switch back should push"
+    Expect.equal r3.Value "Nordic" "should restore Nordic"
+  }
+
+  test "round trip with shared workingDir sessions" {
+    let themes =
+      System.Collections.Concurrent.ConcurrentDictionary<string, string>()
+      :> System.Collections.Generic.IDictionary<_,_>
+    themes.[@"C:\SageFs"] <- "Nordic"
+
+    // Session A at C:\SageFs
+    let r1 = resolveThemePush themes "sA" @"C:\SageFs" "" ""
+    Expect.equal r1 (Some "Nordic") "session A initial push"
+
+    // Session B also at C:\SageFs (different session, same dir)
+    let r2 = resolveThemePush themes "sB" @"C:\SageFs" "sA" @"C:\SageFs"
+    Expect.equal r2 (Some "Nordic") "session B same dir should still push"
+
+    // Session C at C:\Harmony
+    let r3 = resolveThemePush themes "sC" @"C:\Harmony" "sB" @"C:\SageFs"
+    Expect.equal r3 (Some "One Dark") "Harmony no stored theme"
+
+    // Back to session A at C:\SageFs
+    let r4 = resolveThemePush themes "sA" @"C:\SageFs" "sC" @"C:\Harmony"
+    Expect.equal r4 (Some "Nordic") "back to SageFs should restore Nordic"
+  }
+
+  // --- Edge cases ---
+  test "no push when currentSessionId is empty" {
+    let themes = dict [||] :> System.Collections.Generic.IDictionary<_,_>
+    let result = resolveThemePush themes "" @"C:\Proj" "s1" @"C:\Proj"
+    Expect.isNone result "empty currentSessionId should not push"
+  }
+
+  test "initial push on first connection (both previous empty)" {
+    let themes = dict [| @"C:\Proj", "Dracula" |] :> System.Collections.Generic.IDictionary<_,_>
+    let result = resolveThemePush themes "s1" @"C:\Proj" "" ""
+    Expect.equal result (Some "Dracula") "first connection should push stored theme"
+  }
+
+  test "initial push with no stored theme defaults to One Dark" {
+    let themes = dict [||] :> System.Collections.Generic.IDictionary<_,_>
+    let result = resolveThemePush themes "s1" @"C:\NewProj" "" ""
+    Expect.equal result (Some "One Dark") "first connection, no stored theme should push default"
+  }
+]
+
 
 [<Tests>]
 let allThemePersistenceTests = testList "Theme Persistence" [
@@ -457,4 +579,5 @@ let allThemePersistenceTests = testList "Theme Persistence" [
   parseStateEventThemeTests
   sessionThemesTests
   themeSwitchDetectionTests
+  resolveThemePushTests
 ]

@@ -6,7 +6,7 @@
         <IsPackable>true</IsPackable>
         <ToolCommandName>sagefs</ToolCommandName>
         <PackageOutputPath>./nupkg</PackageOutputPath>
-        <Version>0.5.13</Version>
+        <Version>0.5.14</Version>
 
         <!-- NuGet config -->
         <PackageId>SageFs</PackageId>

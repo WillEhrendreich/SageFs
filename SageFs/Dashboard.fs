@@ -978,6 +978,30 @@ let private pushRegions
           do! ssePatchNode ctx renderSessionPickerEmpty
   }
 
+/// Decides whether a theme push is needed after a state change.
+/// Returns Some themeName if push needed, None otherwise.
+/// Pure function — no side effects — for testability.
+let resolveThemePush
+  (themes: System.Collections.Generic.IDictionary<string, string>)
+  (currentSessionId: string)
+  (currentWorkingDir: string)
+  (previousSessionId: string)
+  (previousWorkingDir: string)
+  : string option =
+  let sessionChanged =
+    currentSessionId.Length > 0 && currentSessionId <> previousSessionId
+  let workingDirChanged =
+    currentWorkingDir.Length > 0 && currentWorkingDir <> previousWorkingDir
+  if sessionChanged || workingDirChanged then
+    if currentWorkingDir.Length > 0 then
+      match themes.TryGetValue(currentWorkingDir) with
+      | true, n -> Some n
+      | false, _ -> Some "One Dark"
+    else
+      Some "One Dark"
+  else
+    None
+
 /// Create the SSE stream handler that pushes Elm state to the browser.
 let createStreamHandler
   (getSessionState: string -> SessionState)
@@ -1000,6 +1024,7 @@ let createStreamHandler
     let mutable currentSessionId =
       sessions |> List.tryHead |> Option.map (fun s -> s.Id) |> Option.defaultValue ""
     connectionTracker |> Option.iter (fun t -> t.Register(clientId, Browser, currentSessionId))
+    let mutable lastSessionId = ""
     let mutable lastWorkingDir = ""
 
     let pushState () = task {
@@ -1018,15 +1043,14 @@ let createStreamHandler
       let isReady = stateStr = "Ready"
       do! ssePatchNode ctx (
         renderSessionStatus stateStr currentSessionId workingDir)
-      // Push theme on session switch (working dir change)
-      if workingDir.Length > 0 && workingDir <> lastWorkingDir then
-        let themeName =
-          match sessionThemes.TryGetValue(workingDir) with
-          | true, n -> n
-          | false, _ -> "One Dark"
+      // Push theme when session or working dir changes
+      match resolveThemePush sessionThemes currentSessionId workingDir lastSessionId lastWorkingDir with
+      | Some themeName ->
         do! ssePatchNode ctx (renderThemeVars themeName)
         do! ssePatchNode ctx (renderThemePicker themeName)
-        lastWorkingDir <- workingDir
+      | None -> ()
+      lastSessionId <- currentSessionId
+      lastWorkingDir <- workingDir
       do! ssePatchNode ctx (
         renderEvalStats
           { Count = stats.EvalCount
