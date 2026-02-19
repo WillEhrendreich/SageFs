@@ -11,12 +11,12 @@ open System.Threading
 /// Raylib window loop — immediate-mode GUI rendering of CellGrid.
 /// Connects to running SageFs daemon via same protocol as TUI client.
 module RaylibMode =
-  let private defaultFontSize = 16
-  let private minFontSize = 8
-  let private maxFontSize = 48
+  let defaultFontSize = 16
+  let minFontSize = 8
+  let maxFontSize = 48
 
   /// Try loading a font from well-known paths, fallback to default
-  let private loadFont (size: int) =
+  let loadFont (size: int) =
     let candidates = [
       @"C:\Windows\Fonts\JetBrainsMonoNerdFontMono-Regular.ttf"
       @"C:\Windows\Fonts\JetBrainsMonoNerdFont-Regular.ttf"
@@ -62,7 +62,7 @@ module RaylibMode =
     | CopySelection
 
   /// Convert Raylib KeyboardKey to System.ConsoleKey for KeyMap lookup
-  let private raylibToConsoleKey (key: KeyboardKey) : System.ConsoleKey option =
+  let raylibToConsoleKey (key: KeyboardKey) : System.ConsoleKey option =
     match key with
     | KeyboardKey.Enter -> Some System.ConsoleKey.Enter
     | KeyboardKey.Tab -> Some System.ConsoleKey.Tab
@@ -86,7 +86,7 @@ module RaylibMode =
       Some (enum<System.ConsoleKey> (int System.ConsoleKey.D0 + int k - int KeyboardKey.Zero))
     | _ -> None
 
-  let private mapKeyWith (keyMap: KeyMap) () : GuiCommand option =
+  let mapKeyWith (keyMap: KeyMap) () : GuiCommand option =
     let c = ctrl ()
     let a = alt ()
     let s = shift ()
@@ -124,14 +124,14 @@ module RaylibMode =
           else None
 
   /// Get typed characters (for InsertChar) — separate from key presses
-  let private getCharInput () : EditorAction option =
+  let getCharInput () : EditorAction option =
     let ch = charPressed ()
     if ch > 0 then Some (EditorAction.InsertChar (char ch))
     else None
 
   /// Compute pane layout rects for the given grid dimensions.
   /// Render regions into the CellGrid using shared Screen module
-  let private renderRegions
+  let renderRegions
     (grid: Cell[,])
     (regions: RenderRegion list)
     (sessionId: string)

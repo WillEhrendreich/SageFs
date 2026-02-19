@@ -170,7 +170,7 @@ module McpSessionIsolation =
 
 module SessionResolutionByWorkingDir =
 
-  let private mkInfo id workDir : WorkerProtocol.SessionInfo =
+  let mkInfo id workDir : WorkerProtocol.SessionInfo =
     { Id = id; Name = None; Projects = []
       WorkingDirectory = workDir; SolutionRoot = None
       Status = WorkerProtocol.SessionStatus.Ready
@@ -237,10 +237,80 @@ module SessionResolutionByWorkingDir =
     }
   ]
 
+module WorkingDirRoutingPriority =
+
+  open System.Threading.Tasks
+
+  let mkInfo id workDir : WorkerProtocol.SessionInfo =
+    { Id = id; Name = Some id; Projects = []
+      WorkingDirectory = workDir; SolutionRoot = None
+      Status = WorkerProtocol.SessionStatus.Ready
+      WorkerPid = Some 1234
+      CreatedAt = System.DateTime.UtcNow
+      LastActivity = System.DateTime.UtcNow }
+
+  let dummyProxy : WorkerProtocol.SessionProxy =
+    fun _msg -> async { return WorkerProtocol.WorkerResponse.WorkerReady }
+
+  let mkCtx (sessions: WorkerProtocol.SessionInfo list) (proxies: Map<string, WorkerProtocol.SessionProxy>) : McpContext =
+    let sessionMap = ConcurrentDictionary<string, string>()
+    { Store = Unchecked.defaultof<_>; DiagnosticsChanged = Unchecked.defaultof<_>
+      StateChanged = None
+      SessionOps =
+        { CreateSession = fun _ _ -> Task.FromResult(Error(SageFsError.SessionCreationFailed "n/a"))
+          ListSessions = fun () -> Task.FromResult("")
+          StopSession = fun _ -> Task.FromResult(Error(SageFsError.SessionNotFound "n/a"))
+          RestartSession = fun _ _ -> Task.FromResult(Error(SageFsError.SessionNotFound "n/a"))
+          GetProxy = fun sid -> Task.FromResult(Map.tryFind sid proxies)
+          GetSessionInfo = fun sid -> Task.FromResult(sessions |> List.tryFind (fun s -> s.Id = sid))
+          GetAllSessions = fun () -> Task.FromResult(sessions) }
+      SessionMap = sessionMap; McpPort = 0; Dispatch = None
+      GetElmModel = None; GetElmRegions = None }
+
+  let tests = testList "workingDirectory routing priority" [
+    testTask "workingDirectory should override cached session" {
+      let s1 = mkInfo "sage-id" @"C:\Code\Repos\SageFs"
+      let s2 = mkInfo "harmony-id" @"C:\Code\Repos\Harmony"
+      let ctx = mkCtx [s1;s2] (Map.ofList ["sage-id",dummyProxy;"harmony-id",dummyProxy])
+      setActiveSessionId ctx "mcp" "sage-id"
+      let! resolved = resolveSessionId ctx "mcp" None (Some @"C:\Code\Repos\Harmony")
+      Expect.equal resolved "harmony-id" "should route to Harmony based on workingDirectory"
+    }
+    testTask "workingDirectory routes correctly when no cached session" {
+      let s1 = mkInfo "sage-id" @"C:\Code\Repos\SageFs"
+      let s2 = mkInfo "harmony-id" @"C:\Code\Repos\Harmony"
+      let ctx = mkCtx [s1;s2] (Map.ofList ["sage-id",dummyProxy;"harmony-id",dummyProxy])
+      let! resolved = resolveSessionId ctx "mcp" None (Some @"C:\Code\Repos\Harmony")
+      Expect.equal resolved "harmony-id" "should route to Harmony via workingDirectory"
+    }
+    testTask "explicit sessionId always wins over workingDirectory" {
+      let s1 = mkInfo "sage-id" @"C:\Code\Repos\SageFs"
+      let s2 = mkInfo "harmony-id" @"C:\Code\Repos\Harmony"
+      let ctx = mkCtx [s1;s2] (Map.ofList ["sage-id",dummyProxy;"harmony-id",dummyProxy])
+      let! resolved = resolveSessionId ctx "mcp" (Some "sage-id") (Some @"C:\Code\Repos\Harmony")
+      Expect.equal resolved "sage-id" "explicit sessionId takes priority"
+    }
+    testTask "workingDirectory updates the cached session" {
+      let s1 = mkInfo "sage-id" @"C:\Code\Repos\SageFs"
+      let s2 = mkInfo "harmony-id" @"C:\Code\Repos\Harmony"
+      let ctx = mkCtx [s1;s2] (Map.ofList ["sage-id",dummyProxy;"harmony-id",dummyProxy])
+      setActiveSessionId ctx "mcp" "sage-id"
+      let! _ = resolveSessionId ctx "mcp" None (Some @"C:\Code\Repos\Harmony")
+      Expect.equal (activeSessionId ctx "mcp") "harmony-id" "cached session should update"
+    }
+    testTask "falls back to cached session when workingDirectory is None" {
+      let s1 = mkInfo "sage-id" @"C:\Code\Repos\SageFs"
+      let ctx = mkCtx [s1] (Map.ofList ["sage-id",dummyProxy])
+      setActiveSessionId ctx "mcp" "sage-id"
+      let! resolved = resolveSessionId ctx "mcp" None None
+      Expect.equal resolved "sage-id" "should fall back to cached when no workingDirectory"
+    }
+  ]
+
 module ResetIsolation =
 
   /// Create a context with two agents on different sessions, plus tracking stubs.
-  let private mkTrackingCtx () =
+  let mkTrackingCtx () =
     let result = globalActorResult.Value
     let sessionMap = ConcurrentDictionary<string, string>()
     sessionMap.["agent1"] <- "session-AAA"
@@ -349,5 +419,6 @@ module ResetIsolation =
 let sessionIsolationTests = testList "Session Isolation" [
   McpSessionIsolation.tests
   SessionResolutionByWorkingDir.tests
+  WorkingDirRoutingPriority.tests
   ResetIsolation.tests
 ]

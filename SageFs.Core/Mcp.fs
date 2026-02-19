@@ -371,7 +371,7 @@ module EventTracking =
     |> fun t -> t.ConfigureAwait(false).GetAwaiter().GetResult()
 
   /// Format an event for display
-  let private formatEvent (ts: DateTimeOffset, evt: SageFsEvent) =
+  let formatEvent (ts: DateTimeOffset, evt: SageFsEvent) =
     let source, content =
       match evt with
       | McpInputReceived e -> e.Source.ToString(), e.Content
@@ -439,17 +439,17 @@ module McpTools =
   }
 
   /// Get the active session ID for a specific agent/client.
-  let private activeSessionId (ctx: McpContext) (agent: string) =
+  let activeSessionId (ctx: McpContext) (agent: string) =
     match ctx.SessionMap.TryGetValue(agent) with
     | true, sid -> sid
     | _ -> ""
 
   /// Set the active session ID for a specific agent/client.
-  let private setActiveSessionId (ctx: McpContext) (agent: string) (sid: string) =
+  let setActiveSessionId (ctx: McpContext) (agent: string) (sid: string) =
     ctx.SessionMap.[agent] <- sid
 
   /// Normalize a path for comparison: trim trailing separators, lowercase on Windows.
-  let private normalizePath (p: string) =
+  let normalizePath (p: string) =
     let trimmed = p.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
     if Environment.OSVersion.Platform = PlatformID.Win32NT then
       trimmed.ToLowerInvariant()
@@ -464,13 +464,13 @@ module McpTools =
     |> List.tryFind (fun s -> normalizePath s.WorkingDirectory = target)
 
   /// Notify the Elm loop of an event (fire-and-forget, no-op if no dispatch).
-  let private notifyElm (ctx: McpContext) (event: SageFsEvent) =
+  let notifyElm (ctx: McpContext) (event: SageFsEvent) =
     ctx.Dispatch
     |> Option.iter (fun dispatch ->
       dispatch (SageFsMsg.Event event))
 
   /// Route a WorkerMessage to a specific session via proxy.
-  let private routeToSession
+  let routeToSession
     (ctx: McpContext)
     (sessionId: string)
     (msg: WorkerProtocol.SessionId -> WorkerProtocol.WorkerMessage)
@@ -488,27 +488,27 @@ module McpTools =
 
   /// Route to the active session or the specified session.
   /// When no agent mapping exists, resolves by the caller's working directory.
-  let private resolveSessionId (ctx: McpContext) (agent: string) (sessionId: string option) (workingDirectory: string option) : Task<string> =
+  let resolveSessionId (ctx: McpContext) (agent: string) (sessionId: string option) (workingDirectory: string option) : Task<string> =
     task {
       match sessionId with
       | Some sid -> return sid
       | None ->
-        let current = activeSessionId ctx agent
+        // Working directory takes priority over cached session
         let! candidate =
-          if current <> "" then task { return current }
-          else
-            // Resolve by caller's working directory
-            match workingDirectory with
-            | Some wd when not (System.String.IsNullOrWhiteSpace wd) ->
-              task {
-                let! sessions = ctx.SessionOps.GetAllSessions()
-                match resolveSessionByWorkingDir sessions wd with
-                | Some matched ->
-                  setActiveSessionId ctx agent matched.Id
-                  return matched.Id
-                | None -> return ""
-              }
-            | _ -> task { return "" }
+          match workingDirectory with
+          | Some wd when not (System.String.IsNullOrWhiteSpace wd) ->
+            task {
+              let! sessions = ctx.SessionOps.GetAllSessions()
+              match resolveSessionByWorkingDir sessions wd with
+              | Some matched ->
+                setActiveSessionId ctx agent matched.Id
+                return matched.Id
+              | None ->
+                // No match for this directory — fall back to cached
+                return activeSessionId ctx agent
+            }
+          | _ ->
+            task { return activeSessionId ctx agent }
         if candidate <> "" then
           let! proxy = ctx.SessionOps.GetProxy candidate
           match proxy with
@@ -521,7 +521,7 @@ module McpTools =
     }
 
   /// Get the session status via proxy, returning the SessionState.
-  let private getSessionState (ctx: McpContext) (sessionId: string) : Task<SessionState> =
+  let getSessionState (ctx: McpContext) (sessionId: string) : Task<SessionState> =
     task {
       let! routeResult =
         routeToSession ctx sessionId
@@ -534,7 +534,7 @@ module McpTools =
     }
 
   /// Check tool availability against the active session's state.
-  let private requireTool (ctx: McpContext) (sessionId: string) (toolName: string) : Task<Result<unit, string>> =
+  let requireTool (ctx: McpContext) (sessionId: string) (toolName: string) : Task<Result<unit, string>> =
     task {
       let! state = getSessionState ctx sessionId
       return
@@ -543,7 +543,7 @@ module McpTools =
     }
 
   /// Format a WorkerResponse.EvalResult for display.
-  let private formatWorkerEvalResult (response: WorkerProtocol.WorkerResponse) : string =
+  let formatWorkerEvalResult (response: WorkerProtocol.WorkerResponse) : string =
     match response with
     | WorkerProtocol.WorkerResponse.EvalResult(_, result, diags) ->
       let diagStr =
@@ -815,7 +815,7 @@ module McpTools =
         | Error msg -> sprintf "Error: %s" msg
     }
 
-  let private exploreQualifiedName (ctx: McpContext) (agent: string) (qualifiedName: string) (workingDirectory: string option) : Task<string> =
+  let exploreQualifiedName (ctx: McpContext) (agent: string) (qualifiedName: string) (workingDirectory: string option) : Task<string> =
     task {
       let! sid = resolveSessionId ctx agent None workingDirectory
       let code = sprintf "%s." qualifiedName
@@ -899,7 +899,7 @@ module McpTools =
 
   // ── Elm State Query ──────────────────────────────────────────────
 
-  let private formatRegionFlags (flags: RegionFlags) =
+  let formatRegionFlags (flags: RegionFlags) =
     [ if flags.HasFlag RegionFlags.Focusable then "focusable"
       if flags.HasFlag RegionFlags.Scrollable then "scrollable"
       if flags.HasFlag RegionFlags.LiveUpdate then "live"

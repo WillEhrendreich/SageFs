@@ -4,15 +4,15 @@ open Expecto
 open Expecto.Flip
 open SageFs
 
-let private initial = EditorState.initial
+let initial = EditorState.initial
 
-let private applyActions actions =
+let applyActions actions =
   actions |> List.fold (fun (s, _) a -> EditorUpdate.update a s) (initial, [])
 
-let private bufferText state =
+let bufferText state =
   ValidatedBuffer.text state.Buffer
 
-let private cursorPos state =
+let cursorPos state =
   ValidatedBuffer.cursor state.Buffer
 
 [<Tests>]

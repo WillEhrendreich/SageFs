@@ -5,7 +5,7 @@ open System.Text
 /// ANSI terminal emitter — converts Cell[,] to ANSI escape string.
 /// Uses truecolor (24-bit) escape codes: ESC[38;2;r;g;bm for fg, ESC[48;2;r;g;bm for bg.
 module AnsiEmitter =
-  let private esc = "\x1b["
+  let esc = "\x1b["
 
   let emit (grid: Cell[,]) (cursorRow: int) (cursorCol: int) : string =
     let rows = CellGrid.rows grid

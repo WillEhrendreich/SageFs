@@ -182,7 +182,7 @@ open System.Text.RegularExpressions
 
 /// Strip ANSI escape sequences and terminal control codes from a string.
 /// Cursor-reset sequences (move to column 0) become newlines to preserve logical line breaks.
-let private stripAnsi (s: string) =
+let stripAnsi (s: string) =
   // Turn cursor-to-column-0 into newlines first (preserves Expecto summary as separate line)
   let s = Regex.Replace(s, @"\x1b\[\d+D", "\n")
   // Strip hide/show cursor sequences
@@ -191,7 +191,7 @@ let private stripAnsi (s: string) =
   Regex.Replace(s, @"\x1b\[[0-9;]*[a-zA-Z]|\x1b\].*?\x07", "")
 
 /// Reformat Expecto summary line into readable multi-line output.
-let private reformatExpectoSummary (line: string) =
+let reformatExpectoSummary (line: string) =
   // Pattern: EXPECTO! N tests run in DURATION for NAME – N passed, N ignored, N failed, N errored. Result!
   let m = Regex.Match(line, @"EXPECTO!\s+(\d+)\s+tests?\s+run\s+in\s+(\S+)\s+for\s+(.+?)\s+.\s+(\d+)\s+passed,\s+(\d+)\s+ignored,\s+(\d+)\s+failed,\s+(\d+)\s+errored\.\s+(\S+!?)")
   if m.Success then
@@ -202,7 +202,7 @@ let private reformatExpectoSummary (line: string) =
   else line
 
 /// Clean captured stdout: strip ANSI, remove progress noise, reformat Expecto.
-let private cleanStdout (raw: string) =
+let cleanStdout (raw: string) =
   raw
   |> stripAnsi
   // Split into lines, clean each

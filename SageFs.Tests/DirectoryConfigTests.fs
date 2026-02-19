@@ -6,7 +6,7 @@ open Expecto
 open SageFs
 
 /// Helper to evaluate config and unwrap the Ok result.
-let private evalOk content =
+let evalOk content =
   match DirectoryConfig.evaluate content with
   | Ok cfg -> cfg
   | Error msg -> failwithf "Config evaluation failed: %s" msg

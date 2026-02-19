@@ -197,7 +197,7 @@ module FrameDiff =
   /// Split a rendered frame into (row, content) pairs based on moveTo commands.
   /// Appends to existing rows when the same row appears multiple times (e.g.
   /// cursor repositioning at end of frame).
-  let private parsePositionedLines (frame: string) : Map<int, string> =
+  let parsePositionedLines (frame: string) : Map<int, string> =
     let mutable result = Map.empty<int, Text.StringBuilder>
     let mutable currentRow = -1
     let mutable i = 0
@@ -281,7 +281,7 @@ type TerminalCommand =
 /// Map console key presses to terminal commands
 module TerminalInput =
   /// Convert ConsoleKeyInfo to a KeyCombo for map lookup
-  let private toKeyCombo (key: ConsoleKeyInfo) : KeyCombo =
+  let toKeyCombo (key: ConsoleKeyInfo) : KeyCombo =
     { Key = key.Key; Modifiers = key.Modifiers; Char = None }
 
   /// Look up action in the keybinding map, then fall back to char insertion

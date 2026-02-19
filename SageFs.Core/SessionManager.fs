@@ -69,7 +69,7 @@ module SessionManager =
       |> List.map (fun (_, s) -> s.Info)
 
   /// Spawn a worker sub-process and connect via HTTP.
-  let private spawnWorker
+  let spawnWorker
     (sessionId: SessionId)
     (projects: string list)
     (workingDir: string)
@@ -142,7 +142,7 @@ module SessionManager =
   }
 
   /// Stop a worker gracefully: send Shutdown, wait, then kill.
-  let private stopWorker (session: ManagedSession) = async {
+  let stopWorker (session: ManagedSession) = async {
     try
       let! _ = session.Proxy WorkerMessage.Shutdown
       let exited = session.Process.WaitForExit(3000)
@@ -156,7 +156,7 @@ module SessionManager =
 
   /// Run `dotnet build` for the primary project.
   /// Called from the daemon process (worker is already stopped).
-  let private runBuild (projects: string list) (workingDir: string) =
+  let runBuild (projects: string list) (workingDir: string) =
     let primaryProject =
       projects
       |> List.tryHead

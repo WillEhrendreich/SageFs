@@ -7,10 +7,10 @@ open SageFs.Features.Events
 open SageFs.EventStore
 
 /// Reuse the shared Testcontainers Postgres from EventStoreTests
-let private container () = EventStoreTests.sharedContainer.Value
+let container () = EventStoreTests.sharedContainer.Value
 
 /// Shared store for all module tests (avoids concurrent DDL migration conflicts)
-let private sharedStore = lazy(
+let sharedStore = lazy(
   let connStr = (container ()).GetConnectionString()
   configureStore connStr
 )

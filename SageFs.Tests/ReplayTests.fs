@@ -5,22 +5,22 @@ open Expecto
 open SageFs.Features.Events
 open SageFs.Features.Replay
 
-let private ts = DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero)
-let private mkTs offset = ts.AddMinutes(float offset)
+let ts = DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero)
+let mkTs offset = ts.AddMinutes(float offset)
 
-let private sessionStarted at' =
+let sessionStarted at' =
   SessionStarted {| Config = Map.empty; StartedAt = at' |}
 
-let private evalCompleted code result dur =
+let evalCompleted code result dur =
   EvalCompleted {| Code = code; Result = result; TypeSignature = None; Duration = dur |}
 
-let private evalFailed code err =
+let evalFailed code err =
   EvalFailed {| Code = code; Error = err; Diagnostics = [] |}
 
-let private evalRequested code =
+let evalRequested code =
   EvalRequested {| Code = code; Source = Console |}
 
-let private allEventTypes : (DateTimeOffset * SageFsEvent) list =
+let allEventTypes : (DateTimeOffset * SageFsEvent) list =
   [
     mkTs 0, sessionStarted (mkTs 0)
     mkTs 1, SessionWarmUpCompleted {| Duration = TimeSpan.FromSeconds 2.0; Errors = [] |}
@@ -42,7 +42,7 @@ let private allEventTypes : (DateTimeOffset * SageFsEvent) list =
     mkTs 17, SessionFaulted {| Error = "critical"; StackTrace = Some "at X.Y()" |}
   ]
 
-let private makeRandomEvents (seed: int) =
+let makeRandomEvents (seed: int) =
   let r = Random(seed)
   let count = r.Next(1, 50)
   [ for i in 0 .. count - 1 ->

@@ -6,9 +6,9 @@ open Expecto.Flip
 open SageFs
 open SageFs.WorkerProtocol
 
-let private now = DateTime(2026, 2, 14, 12, 0, 0)
+let now = DateTime(2026, 2, 14, 12, 0, 0)
 
-let private mkInfo id status lastActive : SessionInfo =
+let mkInfo id status lastActive : SessionInfo =
   { Id = id
     Name = None
     Projects = ["Test.fsproj"]

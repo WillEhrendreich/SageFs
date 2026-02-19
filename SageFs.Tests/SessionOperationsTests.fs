@@ -7,7 +7,7 @@ open SageFs
 open SageFs.WorkerProtocol
 open SageFs.SessionOperations
 
-let private mkSession id lastActive (status: SessionStatus) : SessionInfo = {
+let mkSession id lastActive (status: SessionStatus) : SessionInfo = {
   Id = id
   Name = None
   Projects = ["Test.fsproj"]
@@ -127,9 +127,9 @@ let describeErrorTests = testList "SageFsError.describe (session errors)" [
   }
 ]
 
-let private now = DateTime(2026, 2, 14, 12, 0, 0)
+let now = DateTime(2026, 2, 14, 12, 0, 0)
 
-let private mkSessionWithPid id lastActive (status: SessionStatus) pid : SessionInfo = {
+let mkSessionWithPid id lastActive (status: SessionStatus) pid : SessionInfo = {
   Id = id
   Name = None
   Projects = ["Test.fsproj"]

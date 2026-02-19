@@ -6,7 +6,7 @@ open Expecto.Flip
 open SageFs
 open SageFs.WorkerProtocol
 
-let private roundTrip<'T> (value: 'T) =
+let roundTrip<'T> (value: 'T) =
   let json = Serialization.serialize value
   let result = Serialization.deserialize<'T> json
   json, result

@@ -12,11 +12,11 @@ open SageFs.WorkerProtocol
 
 // ─── Helpers ───────────────────────────────────────────────────────
 
-let private testProjectDir =
+let testProjectDir =
   Path.GetFullPath(
     Path.Combine(__SOURCE_DIRECTORY__, "..", "SageFs.Tests"))
 
-let private SageFsExe =
+let SageFsExe =
   let toolDir =
     Path.Combine(
       Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
@@ -26,7 +26,7 @@ let private SageFsExe =
   else "SageFs" // fall back to PATH
 
 /// Kill a process by PID, swallowing errors.
-let private tryKill (pid: int) =
+let tryKill (pid: int) =
   try
     let p = Process.GetProcessById(pid)
     p.Kill()
@@ -276,7 +276,7 @@ let clientModeTests =
 // ─── SessionManager lifecycle: spawn, eval, stop ───────────────────
 
 /// Helper to clean up a session in a finally block.
-let private cleanupSession
+let cleanupSession
   (mgr: MailboxProcessor<SageFs.SessionManager.SessionCommand>)
   (sessionId: SessionId)
   =

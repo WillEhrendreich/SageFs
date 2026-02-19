@@ -8,7 +8,7 @@ open System
 open System.IO
 open System.Threading
 
-let private withTimeout (ms: int) f = async {
+let withTimeout (ms: int) f = async {
   use cts = new CancellationTokenSource(ms)
   return! f cts.Token
 }

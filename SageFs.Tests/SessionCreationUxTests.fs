@@ -5,7 +5,7 @@ open Expecto
 open Expecto.Flip
 open SageFs
 
-let private mkSnap id = {
+let mkSnap id = {
   SessionSnapshot.Id = id
   Name = None
   Status = SessionDisplayStatus.Starting

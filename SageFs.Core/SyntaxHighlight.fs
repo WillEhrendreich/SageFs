@@ -17,7 +17,7 @@ module SyntaxHighlight =
   open TreeSitter
 
   /// Lazy-initialized tree-sitter F# language, parser, and highlight query.
-  let private resources =
+  let resources =
     lazy
       try
         // Find the native DLL — check next to the executing assembly first
@@ -51,9 +51,9 @@ module SyntaxHighlight =
         None
 
   /// Cache of (content + theme) hash → per-line ColorSpan arrays.
-  let private cache = ConcurrentDictionary<string, ColorSpan array array>()
+  let cache = ConcurrentDictionary<string, ColorSpan array array>()
 
-  let private computeHash (text: string) =
+  let computeHash (text: string) =
     use sha = SHA256.Create()
     let bytes = sha.ComputeHash(Encoding.UTF8.GetBytes(text))
     Convert.ToHexString(bytes)

@@ -9,9 +9,9 @@ open SageFs.Utils
 open SageFs.AppState
 
 // Assembly resolver to find dependencies in project output directories
-let private assemblySearchPaths = ResizeArray<string>()
+let assemblySearchPaths = ResizeArray<string>()
 
-let private resolveAssembly (args: ResolveEventArgs) =
+let resolveAssembly (args: ResolveEventArgs) =
   let assemblyName = AssemblyName(args.Name)
   let dllName = assemblyName.Name + ".dll"
 
@@ -30,14 +30,14 @@ let private resolveAssembly (args: ResolveEventArgs) =
   |> Option.defaultValue null
 
 // Register the assembly resolver once
-let private resolverRegistered = ref false
+let resolverRegistered = ref false
 
-let private setupAssemblyResolver () =
+let setupAssemblyResolver () =
   if not !resolverRegistered then
     resolverRegistered := true
     AppDomain.CurrentDomain.add_AssemblyResolve (ResolveEventHandler(fun _ args -> resolveAssembly args))
 
-let private registerSearchPath (path: string) =
+let registerSearchPath (path: string) =
   let dir = Path.GetDirectoryName(path)
 
   if not (assemblySearchPaths.Contains(dir)) then

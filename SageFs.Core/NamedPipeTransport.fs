@@ -43,7 +43,7 @@ module NamedPipeTransport =
       return Some(Encoding.UTF8.GetString(buf))
   }
 
-  let private sendRequest (stream: Stream) (msg: WorkerMessage) = async {
+  let sendRequest (stream: Stream) (msg: WorkerMessage) = async {
     let json = Serialization.serialize msg
     do! writeMessage stream json
     let! reply = readMessage stream

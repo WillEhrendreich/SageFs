@@ -27,12 +27,12 @@ let globalActorResult = lazy(
 )
 
 /// Create a SessionProxy from a test actor result
-let private mkProxy (result: ActorResult) : SageFs.WorkerProtocol.SessionProxy =
+let mkProxy (result: ActorResult) : SageFs.WorkerProtocol.SessionProxy =
   fun msg ->
     SageFs.Server.WorkerMain.handleMessage result.Actor result.GetSessionState result.GetEvalStats msg
 
 /// Create a test SessionManagementOps that routes to the global actor
-let private mkTestSessionOps (result: ActorResult) (sessionId: string) : SageFs.SessionManagementOps =
+let mkTestSessionOps (result: ActorResult) (sessionId: string) : SageFs.SessionManagementOps =
   let proxy = mkProxy result
   { CreateSession = fun _ _ -> System.Threading.Tasks.Task.FromResult(Ok "test-session")
     ListSessions = fun () -> System.Threading.Tasks.Task.FromResult("No sessions")

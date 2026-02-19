@@ -75,7 +75,7 @@ let routeMappingTests =
 
 // ─── HTTP round-trip tests ─────────────────────────────────────────
 
-let private testHandler (msg: WorkerMessage) : Async<WorkerResponse> = async {
+let testHandler (msg: WorkerMessage) : Async<WorkerResponse> = async {
   match msg with
   | WorkerMessage.GetStatus rid ->
     return
@@ -105,7 +105,7 @@ let private testHandler (msg: WorkerMessage) : Async<WorkerResponse> = async {
 }
 
 /// Slow handler that simulates a long eval — the critical test.
-let private slowEvalHandler (msg: WorkerMessage) : Async<WorkerResponse> = async {
+let slowEvalHandler (msg: WorkerMessage) : Async<WorkerResponse> = async {
   match msg with
   | WorkerMessage.EvalCode(_, rid) ->
     // Simulate a long-running eval
@@ -124,7 +124,7 @@ let private slowEvalHandler (msg: WorkerMessage) : Async<WorkerResponse> = async
   | _ -> return WorkerResponse.WorkerError (SageFsError.EvalFailed "unexpected")
 }
 
-let private disposeServer (server: WorkerHttpTransport.HttpWorkerServer) =
+let disposeServer (server: WorkerHttpTransport.HttpWorkerServer) =
   (server :> IDisposable).Dispose()
 
 [<Tests>]

@@ -5,7 +5,7 @@ open System
 /// Generate context-sensitive status bar hints from the active KeyMap.
 module StatusHints =
   /// Short label for a key combo (compact for status bar)
-  let private shortFormat (kc: KeyCombo) : string =
+  let shortFormat (kc: KeyCombo) : string =
     let parts = ResizeArray<string>()
     if kc.Modifiers.HasFlag(ConsoleModifiers.Control) then parts.Add("^")
     if kc.Modifiers.HasFlag(ConsoleModifiers.Alt) then parts.Add("A-")
@@ -29,7 +29,7 @@ module StatusHints =
     parts.Add(keyName)
     String.Concat(parts)
 
-  let private findShort (keyMap: KeyMap) (action: UiAction) : string option =
+  let findShort (keyMap: KeyMap) (action: UiAction) : string option =
     keyMap
     |> Map.tryFindKey (fun _ a -> a = action)
     |> Option.map shortFormat
@@ -104,7 +104,7 @@ module LayoutConfig =
     else
       { cfg with VisiblePanes = Set.add paneId cfg.VisiblePanes }
 
-  let private clampF lo hi v = max lo (min hi v)
+  let clampF lo hi v = max lo (min hi v)
 
   /// Adjust LeftRightSplit by delta (±1 maps to ±0.05)
   let resizeH (delta: int) (cfg: LayoutConfig) : LayoutConfig =

@@ -18,9 +18,9 @@ module DaemonState =
     let home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)
     Path.Combine(home, ".SageFs")
 
-  let private defaultMcpPort = 37749
+  let defaultMcpPort = 37749
 
-  let private jsonOptions =
+  let jsonOptions =
     JsonSerializerOptions(
       PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
       WriteIndented = true
@@ -37,7 +37,7 @@ module DaemonState =
   /// Probe the daemon's /api/daemon-info endpoint on the dashboard port.
   /// Falls back to probing /dashboard if /api/daemon-info isn't available
   /// (e.g. older daemon versions).
-  let private probeDaemonHttp (mcpPort: int) : DaemonInfo option =
+  let probeDaemonHttp (mcpPort: int) : DaemonInfo option =
     let dashboardPort = mcpPort + 1
     try
       use client = new System.Net.Http.HttpClient(Timeout = TimeSpan.FromSeconds(2.0))

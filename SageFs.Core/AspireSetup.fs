@@ -17,7 +17,7 @@ type LaunchSettings = {
   Profiles: Map<string, LaunchProfile>
 }
 
-let private findLatestVersion (packagePath: string) =
+let findLatestVersion (packagePath: string) =
   if Directory.Exists(packagePath) then
     Directory.GetDirectories(packagePath)
     |> Array.map Path.GetFileName
@@ -27,17 +27,17 @@ let private findLatestVersion (packagePath: string) =
   else
     None
 
-let private getRidSuffix () =
+let getRidSuffix () =
   if RuntimeInformation.IsOSPlatform(OSPlatform.Windows) then "win-x64"
   elif RuntimeInformation.IsOSPlatform(OSPlatform.Linux) then "linux-x64"
   elif RuntimeInformation.IsOSPlatform(OSPlatform.OSX) then "osx-x64"
   else "win-x64" // default
 
-let private getDcpExecutableName () =
+let getDcpExecutableName () =
   if RuntimeInformation.IsOSPlatform(OSPlatform.Windows) then "dcp.exe"
   else "dcp"
 
-let private loadLaunchSettings (projectDir: string) : LaunchSettings option =
+let loadLaunchSettings (projectDir: string) : LaunchSettings option =
   try
     let launchSettingsPath = Path.Combine(projectDir, "Properties", "launchSettings.json")
     if File.Exists(launchSettingsPath) then
@@ -95,7 +95,7 @@ let private loadLaunchSettings (projectDir: string) : LaunchSettings option =
   with ex ->
     None
 
-let private setupAspirePaths (logger: ILogger) =
+let setupAspirePaths (logger: ILogger) =
   try
     let nugetPackages = 
       Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".nuget", "packages")
@@ -143,7 +143,7 @@ let private setupAspirePaths (logger: ILogger) =
   with ex ->
     logger.LogDebug $"Error setting up Aspire paths: {ex.Message}"
 
-let private applyLaunchProfile (logger: ILogger) (profile: LaunchProfile) (projectDir: string) =
+let applyLaunchProfile (logger: ILogger) (profile: LaunchProfile) (projectDir: string) =
   logger.LogInfo "Applying Aspire launch profile configuration..."
   
   // Apply all environment variables from the profile
@@ -158,7 +158,7 @@ let private applyLaunchProfile (logger: ILogger) (profile: LaunchProfile) (proje
       logger.LogInfo $"Application URL: {url}"
   | None -> ()
 
-let private hasAspireReferences (projects: ProjectLoading.Solution) =
+let hasAspireReferences (projects: ProjectLoading.Solution) =
   // Check both command-line references and project package references
   let hasInCommandLineRefs =
     projects.References

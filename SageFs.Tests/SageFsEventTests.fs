@@ -5,7 +5,7 @@ open Expecto
 open Expecto.Flip
 open SageFs
 
-let private now = DateTime(2026, 2, 14, 12, 0, 0)
+let now = DateTime(2026, 2, 14, 12, 0, 0)
 
 [<Tests>]
 let outputLineTests = testList "OutputLine" [

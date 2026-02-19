@@ -7,7 +7,7 @@ open SageFs
 /// Each cell is drawn as a colored rectangle + character.
 /// Box-drawing characters are rendered as native Raylib lines/rectangles.
 module RaylibEmitter =
-  let private lineThickness = 1.0f
+  let lineThickness = 1.0f
 
   /// Draw box-drawing character as native Raylib lines.
   /// Returns true if the char was handled, false if it should be drawn as text.

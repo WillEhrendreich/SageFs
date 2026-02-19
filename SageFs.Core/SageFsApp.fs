@@ -47,7 +47,7 @@ module SageFsModel =
 
 /// Pure update function: routes SageFsMsg through the right handler.
 module SageFsUpdate =
-  let private resolveSessionId (model: SageFsModel) : string option =
+  let resolveSessionId (model: SageFsModel) : string option =
     match model.Editor.SelectedSessionIndex with
     | None -> None
     | Some idx ->
@@ -57,7 +57,7 @@ module SageFsUpdate =
       else None
 
   /// When a prompt is active, remap editor input actions to prompt actions.
-  let private remapForPrompt (action: EditorAction) (prompt: PromptState option) : EditorAction =
+  let remapForPrompt (action: EditorAction) (prompt: PromptState option) : EditorAction =
     match prompt with
     | None -> action
     | Some _ ->
@@ -443,10 +443,10 @@ type EffectDeps = {
 /// Converts WorkerResponses back into SageFsMsg for the Elm loop.
 module SageFsEffectHandler =
 
-  let private newReplyId () =
+  let newReplyId () =
     Guid.NewGuid().ToString("N").[..7]
 
-  let private evalResponseToMsg
+  let evalResponseToMsg
     (sessionId: SessionId)
     (response: WorkerResponse) : SageFsMsg =
     match response with
@@ -475,7 +475,7 @@ module SageFsEffectHandler =
         SageFsEvent.EvalFailed (
           sessionId, sprintf "Unexpected response: %A" other))
 
-  let private completionResponseToMsg
+  let completionResponseToMsg
     (response: WorkerResponse) : SageFsMsg =
     match response with
     | WorkerResponse.CompletionResult (_, items) ->
@@ -486,7 +486,7 @@ module SageFsEffectHandler =
     | _ ->
       SageFsMsg.Event (SageFsEvent.CompletionReady [])
 
-  let private withSession
+  let withSession
     (deps: EffectDeps)
     (dispatch: SageFsMsg -> unit)
     (sessionId: SessionId option)
@@ -506,7 +506,7 @@ module SageFsEffectHandler =
           SageFsEvent.EvalFailed ("", SageFsError.describe err)))
     }
 
-  let private sessionInfoToSnapshot (info: SessionInfo) : SessionSnapshot =
+  let sessionInfoToSnapshot (info: SessionInfo) : SessionSnapshot =
     { Id = info.Id
       Name = info.Name
       Projects = info.Projects

@@ -8,7 +8,7 @@ open SageFs.Features.Events
 // Ensures that both MCP clients and human users see all activity
 
 /// Create a fresh Marten store for each test
-let private mkStore schemaName =
+let mkStore schemaName =
   EventStoreTests.createStore schemaName
 
 [<Tests>]

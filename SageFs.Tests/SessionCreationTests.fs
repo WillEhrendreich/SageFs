@@ -8,11 +8,11 @@ open SageFs
 open SageFs.Server.Dashboard
 
 /// Helper: write text to a file with explicit types.
-let private writeText (path: string) (content: string) =
+let writeText (path: string) (content: string) =
   File.WriteAllText(path, content)
 
 /// Create a temp directory, run setup + test, then clean up.
-let private withTempDir (setup: string -> unit) (test: string -> unit) =
+let withTempDir (setup: string -> unit) (test: string -> unit) =
   let dir =
     Path.Combine(
       Path.GetTempPath(),
@@ -25,15 +25,15 @@ let private withTempDir (setup: string -> unit) (test: string -> unit) =
     if Directory.Exists dir then
       Directory.Delete(dir, true)
 
-let private addFakeProject dir name =
+let addFakeProject dir name =
   writeText (Path.Combine(dir, name)) "<Project />"
 
-let private addConfig dir content =
+let addConfig dir content =
   let configDir = Path.Combine(dir, ".SageFs")
   Directory.CreateDirectory(configDir) |> ignore
   writeText (Path.Combine(configDir, "config.fsx")) content
 
-let private addSolution dir name =
+let addSolution dir name =
   writeText (Path.Combine(dir, name)) ""
 
 [<Tests>]

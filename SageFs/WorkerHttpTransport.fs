@@ -28,15 +28,15 @@ module WorkerHttpTransport =
   /// Delegates to HttpWorkerClient in SageFs.Core.
   let toRoute = HttpWorkerClient.toRoute
 
-  let private readBody (ctx: HttpContext) : Task<string> = task {
+  let readBody (ctx: HttpContext) : Task<string> = task {
     use reader = new StreamReader(ctx.Request.Body)
     return! reader.ReadToEndAsync()
   }
 
-  let private jsonProp (doc: JsonDocument) (name: string) =
+  let jsonProp (doc: JsonDocument) (name: string) =
     doc.RootElement.GetProperty(name)
 
-  let private respond
+  let respond
     (handler: WorkerMessage -> Async<WorkerResponse>)
     (ctx: HttpContext)
     (msg: WorkerMessage)

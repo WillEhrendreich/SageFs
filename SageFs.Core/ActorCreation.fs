@@ -19,7 +19,7 @@ open System
 open System.IO
 
 /// Extract unique project directories from a Solution.
-let private projectDirectories (sln: Solution) : string list =
+let projectDirectories (sln: Solution) : string list =
   sln.Projects
   |> List.choose (fun p ->
     let dir = Path.GetDirectoryName(p.ProjectFileName)

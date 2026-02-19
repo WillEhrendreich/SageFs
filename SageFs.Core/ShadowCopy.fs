@@ -45,7 +45,7 @@ let shadowCopySolution (shadowDir: string) (sln: Solution) : Solution =
 /// Tries to remove the shadow directory and all its contents.
 /// If deletion fails (e.g., DLLs still loaded by CLR), schedules for cleanup on exit.
 /// Safe if dir doesn't exist.
-let private pendingCleanups = System.Collections.Concurrent.ConcurrentBag<string>()
+let pendingCleanups = System.Collections.Concurrent.ConcurrentBag<string>()
 
 let cleanupShadowDir (shadowDir: string) : unit =
   if Directory.Exists shadowDir then

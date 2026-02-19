@@ -124,7 +124,7 @@ module SessionOperations =
   }
 
   /// Human-readable relative time (e.g. "5 min ago", "just now").
-  let private formatRelativeTime (now: DateTime) (past: DateTime) : string =
+  let formatRelativeTime (now: DateTime) (past: DateTime) : string =
     let diff = now - past
     if diff.TotalSeconds < 60.0 then "just now"
     elif diff.TotalMinutes < 60.0 then sprintf "%d min ago" (int diff.TotalMinutes)

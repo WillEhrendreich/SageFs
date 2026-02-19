@@ -9,7 +9,7 @@ open SageFs.McpTools
 
 /// Emoji per tool category — printed once as a header, not per-line
 /// Echo MCP tool results to the SageFs console for visibility
-let private withEcho (toolName: string) (t: Task<string>) : Task<string> =
+let withEcho (toolName: string) (t: Task<string>) : Task<string> =
   task {
     let! result = t
     let normalized = result.Replace("\r\n", "\n").Replace("\n", "\r\n")

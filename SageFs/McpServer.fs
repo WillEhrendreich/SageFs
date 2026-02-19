@@ -13,7 +13,7 @@ open SageFs.AppState
 open SageFs.McpTools
 
 /// Write a JSON response with the given status code.
-let private jsonResponse (ctx: Microsoft.AspNetCore.Http.HttpContext) (statusCode: int) (data: obj) = task {
+let jsonResponse (ctx: Microsoft.AspNetCore.Http.HttpContext) (statusCode: int) (data: obj) = task {
   ctx.Response.StatusCode <- statusCode
   ctx.Response.ContentType <- "application/json"
   let json = System.Text.Json.JsonSerializer.Serialize(data)
@@ -21,7 +21,7 @@ let private jsonResponse (ctx: Microsoft.AspNetCore.Http.HttpContext) (statusCod
 }
 
 /// Read JSON body and extract a string property, with fallback to raw body.
-let private readJsonProp (ctx: Microsoft.AspNetCore.Http.HttpContext) (prop: string) = task {
+let readJsonProp (ctx: Microsoft.AspNetCore.Http.HttpContext) (prop: string) = task {
   use reader = new System.IO.StreamReader(ctx.Request.Body)
   let! body = reader.ReadToEndAsync()
   try
@@ -34,14 +34,14 @@ let private readJsonProp (ctx: Microsoft.AspNetCore.Http.HttpContext) (prop: str
 }
 
 /// Wrap an async handler with try/catch and JSON error response.
-let private withErrorHandling (ctx: Microsoft.AspNetCore.Http.HttpContext) (handler: unit -> Task) = task {
+let withErrorHandling (ctx: Microsoft.AspNetCore.Http.HttpContext) (handler: unit -> Task) = task {
   try do! handler ()
   with ex ->
     do! jsonResponse ctx 500 {| success = false; error = ex.Message |}
 }
 
 // Create shared MCP context
-let private mkContext (store: Marten.IDocumentStore) (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.T>) (stateChanged: IEvent<string> option) (sessionOps: SageFs.SessionManagementOps) (mcpPort: int) (dispatch: (SageFs.SageFsMsg -> unit) option) (getElmModel: (unit -> SageFs.SageFsModel) option) (getElmRegions: (unit -> SageFs.RenderRegion list) option) : McpContext =
+let mkContext (store: Marten.IDocumentStore) (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.T>) (stateChanged: IEvent<string> option) (sessionOps: SageFs.SessionManagementOps) (mcpPort: int) (dispatch: (SageFs.SageFsMsg -> unit) option) (getElmModel: (unit -> SageFs.SageFsModel) option) (getElmRegions: (unit -> SageFs.RenderRegion list) option) : McpContext =
   { Store = store; DiagnosticsChanged = diagnosticsChanged; StateChanged = stateChanged; SessionOps = sessionOps; SessionMap = System.Collections.Concurrent.ConcurrentDictionary<string, string>(); McpPort = mcpPort; Dispatch = dispatch; GetElmModel = getElmModel; GetElmRegions = getElmRegions }
 
 // Start MCP server in background

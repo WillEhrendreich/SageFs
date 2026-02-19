@@ -189,7 +189,7 @@ module EditorState =
 
 /// Pure state transition: action + state → new state + side effects
 module EditorUpdate =
-  let private deleteForward (buf: ValidatedBuffer) : ValidatedBuffer =
+  let deleteForward (buf: ValidatedBuffer) : ValidatedBuffer =
     let lines = ValidatedBuffer.lines buf
     let pos = ValidatedBuffer.cursor buf
     let line = lines.[pos.Line]
@@ -214,13 +214,13 @@ module EditorUpdate =
       | Error _ -> buf
     else buf
 
-  let private moveToLineStart (buf: ValidatedBuffer) : ValidatedBuffer =
+  let moveToLineStart (buf: ValidatedBuffer) : ValidatedBuffer =
     let pos = ValidatedBuffer.cursor buf
     match ValidatedBuffer.create (ValidatedBuffer.lines buf) { pos with Column = 0 } with
     | Ok b -> b
     | Error _ -> buf
 
-  let private moveToLineEnd (buf: ValidatedBuffer) : ValidatedBuffer =
+  let moveToLineEnd (buf: ValidatedBuffer) : ValidatedBuffer =
     let pos = ValidatedBuffer.cursor buf
     let lineLen = (ValidatedBuffer.lines buf).[pos.Line].Length
     match ValidatedBuffer.create (ValidatedBuffer.lines buf) { pos with Column = lineLen } with

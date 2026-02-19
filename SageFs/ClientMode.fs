@@ -59,7 +59,7 @@ module ReplCommand =
     | code -> EvalCode code
 
 /// Display daemon connection info.
-let private showConnectionBanner (info: DaemonInfo) =
+let showConnectionBanner (info: DaemonInfo) =
   let elapsed = DateTime.UtcNow - info.StartedAt
   let agoText =
     if elapsed.TotalMinutes < 1.0 then "just now"
@@ -108,7 +108,7 @@ let tryConnect () =
   | None -> None
 
 /// Send F# code to the daemon for evaluation.
-let private evalCode (client: HttpClient) (baseUrl: string) (code: string) = task {
+let evalCode (client: HttpClient) (baseUrl: string) (code: string) = task {
   let json = JsonSerializer.Serialize({| code = code |})
   use content = new StringContent(json, Encoding.UTF8, "application/json")
   try
@@ -134,7 +134,7 @@ let private evalCode (client: HttpClient) (baseUrl: string) (code: string) = tas
 }
 
 /// Send a reset command to the daemon.
-let private resetSession (client: HttpClient) (baseUrl: string) = task {
+let resetSession (client: HttpClient) (baseUrl: string) = task {
   try
     let! response = client.PostAsync(sprintf "%s/reset" baseUrl, null)
     let! body = response.Content.ReadAsStringAsync()
@@ -144,7 +144,7 @@ let private resetSession (client: HttpClient) (baseUrl: string) = task {
 }
 
 /// Send a hard-reset command to the daemon.
-let private hardResetSession (client: HttpClient) (baseUrl: string) = task {
+let hardResetSession (client: HttpClient) (baseUrl: string) = task {
   let json = JsonSerializer.Serialize({| rebuild = true |})
   use content = new StringContent(json, Encoding.UTF8, "application/json")
   try
@@ -156,7 +156,7 @@ let private hardResetSession (client: HttpClient) (baseUrl: string) = task {
 }
 
 /// Fetch structured session list from the daemon.
-let private fetchSessions (client: HttpClient) (baseUrl: string) = task {
+let fetchSessions (client: HttpClient) (baseUrl: string) = task {
   try
     let! response = client.GetAsync(sprintf "%s/api/sessions" baseUrl)
     let! body = response.Content.ReadAsStringAsync()
@@ -198,7 +198,7 @@ let internal resolveSessionId (sessions: SessionInfo list) (input: string) =
       | _ -> None
 
 /// Format a session for display with a 1-based index.
-let private formatSession (i: int) (s: SessionInfo) =
+let formatSession (i: int) (s: SessionInfo) =
   let marker = " "  // no global "active" concept
   let statusColor = if s.Status = "Ready" then "\x1b[32m" elif s.Status = "WarmingUp" then "\x1b[33m" else "\x1b[31m"
   let projects =
@@ -209,7 +209,7 @@ let private formatSession (i: int) (s: SessionInfo) =
   sprintf "%s\n    dir: %s" line1 s.WorkingDirectory
 
 /// Interactive session picker — shows numbered list, reads a number or partial ID.
-let private pickSession (sessions: SessionInfo list) (prompt: string) =
+let pickSession (sessions: SessionInfo list) (prompt: string) =
   printfn "\x1b[36m%s\x1b[0m" prompt
   sessions |> List.iteri (fun i s -> printfn "%s" (formatSession i s))
   printfn ""
@@ -219,7 +219,7 @@ let private pickSession (sessions: SessionInfo list) (prompt: string) =
   else resolveSessionId sessions input
 
 /// List sessions from the daemon.
-let private listSessions (client: HttpClient) (baseUrl: string) = task {
+let listSessions (client: HttpClient) (baseUrl: string) = task {
   match! fetchSessions client baseUrl with
   | Error msg -> return Error msg
   | Ok [] -> return Ok "No sessions running."
@@ -233,7 +233,7 @@ let private listSessions (client: HttpClient) (baseUrl: string) = task {
 }
 
 /// Switch to a different session.
-let private switchSession (client: HttpClient) (baseUrl: string) (sessionId: string) = task {
+let switchSession (client: HttpClient) (baseUrl: string) (sessionId: string) = task {
   let json = JsonSerializer.Serialize({| sessionId = sessionId |})
   use content = new StringContent(json, Encoding.UTF8, "application/json")
   try
@@ -249,7 +249,7 @@ let private switchSession (client: HttpClient) (baseUrl: string) (sessionId: str
 }
 
 /// Stop a session.
-let private stopSession (client: HttpClient) (baseUrl: string) (sessionId: string) = task {
+let stopSession (client: HttpClient) (baseUrl: string) (sessionId: string) = task {
   let json = JsonSerializer.Serialize({| sessionId = sessionId |})
   use content = new StringContent(json, Encoding.UTF8, "application/json")
   try
@@ -267,7 +267,7 @@ let private stopSession (client: HttpClient) (baseUrl: string) (sessionId: strin
 }
 
 /// Create a new session.
-let private createSession (client: HttpClient) (baseUrl: string) (workingDir: string) (projects: string list) = task {
+let createSession (client: HttpClient) (baseUrl: string) (workingDir: string) (projects: string list) = task {
   let json = JsonSerializer.Serialize({| workingDirectory = workingDir; projects = projects |})
   use content = new StringContent(json, Encoding.UTF8, "application/json")
   try
@@ -285,7 +285,7 @@ let private createSession (client: HttpClient) (baseUrl: string) (workingDir: st
 }
 
 /// Get diagnostics from the daemon.
-let private getDiagnostics (client: HttpClient) (baseUrl: string) = task {
+let getDiagnostics (client: HttpClient) (baseUrl: string) = task {
   try
     let! resp = client.GetAsync(sprintf "%s/api/status" baseUrl)
     let! body = resp.Content.ReadAsStringAsync()
@@ -311,7 +311,7 @@ let private getDiagnostics (client: HttpClient) (baseUrl: string) = task {
 }
 
 /// Show help for available REPL commands.
-let private showHelp () =
+let showHelp () =
   printfn "\x1b[36mSageFs Connect REPL Commands:\x1b[0m"
   printfn ""
   printfn "  \x1b[33m#help\x1b[0m              Show this help"
@@ -329,7 +329,7 @@ let private showHelp () =
   printfn "  F# code ending with \x1b[33m;;\x1b[0m is evaluated in the active session."
 
 /// Check daemon health.
-let private checkHealth (client: HttpClient) (baseUrl: string) = task {
+let checkHealth (client: HttpClient) (baseUrl: string) = task {
   try
     let! response = client.GetAsync(sprintf "%s/health" baseUrl)
     let! body = response.Content.ReadAsStringAsync()
@@ -339,13 +339,13 @@ let private checkHealth (client: HttpClient) (baseUrl: string) = task {
 }
 
 /// History file path for connect client.
-let private historyPath =
+let historyPath =
   let dir = IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".SageFs")
   IO.Directory.CreateDirectory(dir) |> ignore
   IO.Path.Combine(dir, "connect_history")
 
 /// Load history from disk.
-let private loadHistory () =
+let loadHistory () =
   if IO.File.Exists(historyPath) then
     IO.File.ReadAllLines(historyPath)
     |> Array.toList
@@ -355,12 +355,12 @@ let private loadHistory () =
   else []
 
 /// Append an entry to history.
-let private appendHistory (entry: string) =
+let appendHistory (entry: string) =
   try IO.File.AppendAllLines(historyPath, [entry])
   with _ -> ()
 
 /// Read a multi-line F# input block (accumulates until ;; is found).
-let private readInputBlock (evalCount: int) =
+let readInputBlock (evalCount: int) =
   let sb = StringBuilder()
   let mutable reading = true
   let mutable firstLine = true

@@ -123,7 +123,7 @@ let renderKeyboardHelp () =
   ]
 
 /// Generate a JS object literal mapping theme names → CSS variable strings.
-let private themePresetsJs () =
+let themePresetsJs () =
   let entries =
     ThemePresets.all
     |> List.map (fun (name, config) ->
@@ -557,7 +557,7 @@ let renderEvalStats (stats: EvalStatsView) =
   ]
 
 /// Map a tree-sitter capture name to the CSS class suffix.
-let private captureToCssClass (capture: string) =
+let captureToCssClass (capture: string) =
   match capture with
   | s when s.StartsWith "keyword" -> "syn-keyword"
   | s when s.StartsWith "string" -> "syn-string"
@@ -576,7 +576,7 @@ let private captureToCssClass (capture: string) =
   | _ -> ""
 
 /// Render a single line of code with syntax highlighting as HTML spans.
-let private renderHighlightedLine (spans: ColorSpan array) (line: string) : XmlNode list =
+let renderHighlightedLine (spans: ColorSpan array) (line: string) : XmlNode list =
   if spans.Length = 0 || line.Length = 0 then [ Text.raw (System.Net.WebUtility.HtmlEncode line) ]
   else
     let nodes = ResizeArray<XmlNode>()
@@ -958,7 +958,7 @@ let renderRegionForSse (region: RenderRegion) =
   | "sessions" -> Some (renderSessions (parseSessionLines region.Content) (isCreatingSession region.Content))
   | _ -> None
 
-let private pushRegions
+let pushRegions
   (ctx: HttpContext)
   (regions: RenderRegion list)
   (getPreviousSessions: unit -> PreviousSession list)
@@ -1296,7 +1296,7 @@ let getSignalString (doc: System.Text.Json.JsonDocument) (camelCase: string) (ke
     | _ -> ""
 
 /// Push discover results for a directory.
-let private pushDiscoverResults (ctx: HttpContext) (dir: string) = task {
+let pushDiscoverResults (ctx: HttpContext) (dir: string) = task {
   let dirConfig = DirectoryConfig.load dir
   let discovered = discoverProjects dir
   let configNote =

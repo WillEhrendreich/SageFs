@@ -9,13 +9,13 @@ open SageFs.AppState
 open SageFs.ActorCreation
 open SageFs.Features.Events
 
-let private quietLogger = SageFs.Tests.TestInfrastructure.quietLogger
+let quietLogger = SageFs.Tests.TestInfrastructure.quietLogger
 
-let private captured = Collections.Generic.List<SageFsEvent>()
-let private onEvent evt = lock captured (fun () -> captured.Add(evt))
+let captured = Collections.Generic.List<SageFsEvent>()
+let onEvent evt = lock captured (fun () -> captured.Add(evt))
 
 /// Single shared actor for all event emission tests
-let private sharedActor = lazy(
+let sharedActor = lazy(
   let args = mkCommonActorArgs quietLogger false onEvent []
   let result = createActor args |> Async.AwaitTask |> Async.RunSynchronously
   result.Actor)

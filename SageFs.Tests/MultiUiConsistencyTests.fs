@@ -8,7 +8,7 @@ open SageFs.SessionDisplay
 open SageFs.Features
 
 /// Simulate the Dashboard's pushJson serialization of RenderRegions.
-let private serializeRegions (sessionId: string) (state: string) (evalCount: int) (avgMs: float) (regions: RenderRegion list) =
+let serializeRegions (sessionId: string) (state: string) (evalCount: int) (avgMs: float) (regions: RenderRegion list) =
   let regionPayloads =
     regions |> List.map (fun region ->
       {| id = region.Id
@@ -24,7 +24,7 @@ let private serializeRegions (sessionId: string) (state: string) (evalCount: int
        activeWorkingDir = ""
        regions = regionPayloads |})
 
-let private mkRegion id content cursor completions : RenderRegion =
+let mkRegion id content cursor completions : RenderRegion =
   { Id = id
     Flags = RegionFlags.None
     Content = content
@@ -256,7 +256,7 @@ let actionDispatchTests = testList "action dispatch consistency" [
       |> Expect.isSome (sprintf "UiAction should parse '%s'" name)
 ]
 
-let private mkSnapshot id projects isActive : SessionSnapshot =
+let mkSnapshot id projects isActive : SessionSnapshot =
   { Id = id
     Name = None
     Status = SessionDisplayStatus.Running
@@ -267,7 +267,7 @@ let private mkSnapshot id projects isActive : SessionSnapshot =
     UpSince = System.DateTime.UtcNow
     WorkingDirectory = "" }
 
-let private threeSessionModel =
+let threeSessionModel =
   let m0 = SageFsModel.initial
   let apply evt m = SageFsUpdate.update (SageFsMsg.Event evt) m |> fst
   m0

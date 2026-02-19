@@ -5,9 +5,9 @@ open Expecto
 open Expecto.Flip
 open SageFs.AppState
 
-let private quietLogger = SageFs.Tests.TestInfrastructure.quietLogger
+let quietLogger = SageFs.Tests.TestInfrastructure.quietLogger
 
-let private createActorResult () =
+let createActorResult () =
   let args = SageFs.ActorCreation.mkCommonActorArgs quietLogger false ignore []
   SageFs.ActorCreation.createActor args |> Async.AwaitTask |> Async.RunSynchronously
 

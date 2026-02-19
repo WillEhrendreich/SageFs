@@ -7,7 +7,7 @@ open SageFs.WorkerProtocol
 open SageFs.AppState
 
 /// Convert internal Diagnostic to WorkerDiagnostic for transport.
-let private toWorkerDiagnostic (d: Features.Diagnostics.Diagnostic) : WorkerDiagnostic =
+let toWorkerDiagnostic (d: Features.Diagnostics.Diagnostic) : WorkerDiagnostic =
   { Severity = d.Severity
     Message = d.Message
     StartLine = d.Range.StartLine
@@ -16,7 +16,7 @@ let private toWorkerDiagnostic (d: Features.Diagnostics.Diagnostic) : WorkerDiag
     EndColumn = d.Range.EndColumn }
 
 /// Convert internal SessionState + EvalStats to WorkerStatusSnapshot.
-let private toStatusSnapshot
+let toStatusSnapshot
   (state: SessionState)
   (stats: Affordances.EvalStats)
   : WorkerStatusSnapshot =
