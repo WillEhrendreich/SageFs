@@ -2054,7 +2054,532 @@ surface). That's the full Molina stack.
 
 ---
 
+## Phase 9: Commercial Architecture — Molina as a Paid Plugin
+
+> *SageFs is MIT. Free. For everybody. Molina is the product. It's what people
+> pay for. This changes everything about how the codebase is structured, how
+> features are gated, how the plugin is distributed, and where the boundary
+> lives between free and paid. The panel argues about all of it.*
+
+### The Business Model
+
+**Open-core**: SageFs (REPL, MCP server, TUI, GUI, Dashboard, event store) is
+free and open source under MIT. Molina (mutation testing engine) is a separate,
+commercially licensed plugin that loads into SageFs at runtime. Users pay for
+Molina. SageFs is the platform that makes Molina possible — and the platform
+stays free to build community, trust, and adoption.
+
+### Expert Deliberation: Where's the Line?
+
+**Pim Brouwers** opens: The first question is: what's the cut? What stays free
+in SageFs, and what requires a Molina license? This isn't just a technical
+decision — it's the core product decision. Get the line wrong and you either
+give away too much (no revenue) or lock away too much (no adoption).
+
+**Carmack**: The line should follow the value chain. SageFs's value is "F# REPL
+with warm FSI sessions." That's free. Molina's value is "mutation testing that
+uses those warm sessions to achieve 50ms/mutant performance." The INSIGHT (that
+warm FSI enables fast mutation testing) is the product. The INFRASTRUCTURE
+(warm FSI itself) is the platform.
+
+Concrete split:
+- **Free (SageFs)**: FSI session management, MCP server, eval/check/complete,
+  middleware pipeline, event store, all UI surfaces, hot reload, diagnostics,
+  A2A/ACP protocol support, plugin loading system
+- **Paid (Molina)**: AST mutation operators, mutant discovery, mutation
+  coordinator actor, session pool for parallel testing, mutation score
+  projection, all Molina UI panes, Molina MCP tools, Level 2 container
+  orchestration, CI integration, `molina-worker` A2A skill
+
+**Scott Wlaschin**: I'd go further. The PLUGIN SYSTEM itself should be free and
+well-documented. Other people should be able to write SageFs plugins. Molina is
+just the first (and best) commercial plugin. If someone wants to build a
+property-based test generator plugin, a code coverage plugin, a documentation
+generator — the platform should welcome that. Molina proves the plugin model
+works. The plugin model makes SageFs sticky.
+
+**Mark Seemann** pushes back: Be careful with "platform thinking" before you
+have a single paying customer. The plugin system needs to serve Molina FIRST.
+If it happens to be general enough for third-party plugins later, great. But
+don't build a plugin marketplace when what you need is a license gate for one
+product. Premature generalization is still premature.
+
+**Muratori** agrees with Seemann HARD: You need three things. A way to compile
+Molina separately from SageFs. A way to load Molina at runtime. A way to check
+a license key. That's it. Everything else — plugin APIs, plugin discovery, plugin
+sandboxing, plugin marketplaces — is YAGNI until you have revenue.
+
+### The Technical Boundary
+
+**Syme**: F# gives us a clean boundary mechanism. Molina is a separate assembly
+— `SageFs.Molina.dll`. It references `SageFs.Core` (the public API surface) but
+NOT `SageFs` (the CLI tool). SageFs discovers and loads `SageFs.Molina.dll` at
+startup via the same `Assembly.LoadFrom` pattern that `HotReloading.fs` already
+uses. The plugin registers its middleware, MCP tools, and actors through a
+well-defined initialization interface.
+
+```
+SageFs.Core.dll     ← Public API (MIT, free)
+  ├── AppState types, Middleware type, Command DU
+  ├── WorkerProtocol types
+  ├── Event types, EventStore
+  ├── Plugin loading interface
+  └── CellGrid, Theme, PaneRenderer (UI abstractions)
+
+SageFs.dll          ← CLI tool (MIT, free)
+  ├── McpServer, McpTools, Dashboard
+  ├── TerminalMode, TuiClient
+  ├── Plugin discovery + loading
+  └── References SageFs.Core
+
+SageFs.Molina.dll   ← Commercial plugin (proprietary license)
+  ├── MutationOperators, MutantDiscovery
+  ├── MolinaCoordinator, SessionPool, MutantRunner actors
+  ├── MolinaProjection (CQRS read model)
+  ├── MolinaMcpTools ([<McpServerTool>] methods)
+  ├── MolinaPaneRenderer (TUI/Raylib UI)
+  ├── MolinaDashboard (Datastar SSE panel)
+  ├── License validation
+  └── References SageFs.Core ONLY
+```
+
+**Johansson**: The key insight is that `SageFs.Molina` ONLY references
+`SageFs.Core`, never `SageFs`. That means:
+1. Molina can be compiled in a separate repository if needed
+2. Molina doesn't depend on the CLI tool's internal wiring
+3. SageFs.Core is the stable public API contract
+4. Breaking changes to `SageFs.Core` are API-breaking for plugins — this forces
+   you to be disciplined about the public surface
+
+**Greg Holden**: And Molina registers itself through the same patterns SageFs
+already uses. Middleware? `AddMiddleware`. MCP tools? Attribute-based discovery
+on plugin assembly types. Dashboard panels? Register routes via a plugin
+initialization callback. The plugin system is just formalizing what SageFs
+already does internally.
+
+### Plugin Loading Architecture
+
+**Wlaschin**: Here's the plugin contract. It's deliberately minimal:
+
+```fsharp
+// In SageFs.Core — the plugin interface
+namespace SageFs.Core.Plugins
+
+type PluginManifest = {
+  Name: string
+  Version: string
+  Description: string
+  License: PluginLicense
+  RequiredCoreVersion: string  // semver range
+}
+
+type PluginLicense =
+  | OpenSource of spdxId: string
+  | Commercial of LicenseValidation
+
+type LicenseValidation = {
+  Validate: unit -> Result<LicenseInfo, LicenseError>
+}
+
+type LicenseInfo = {
+  Holder: string
+  ExpiresAt: DateTimeOffset option
+  Tier: string  // "individual", "team", "enterprise"
+  Features: string list
+}
+
+type LicenseError =
+  | NoLicenseKey
+  | InvalidKey of reason: string
+  | Expired of expiredAt: DateTimeOffset
+  | WrongProduct
+  | NetworkError of message: string
+
+type PluginCapabilities = {
+  Middleware: AppState.Middleware list
+  McpToolTypes: System.Type list  // types with [<McpServerTool>] methods
+  EventTypes: System.Type list    // types for Marten event store registration
+  DashboardRoutes: (string * obj) list  // route patterns
+  PaneRenderers: Map<string, PaneRenderer>
+  A2ASkills: AgentSkill list
+  InitActions: (AppState.AppActor -> Async<unit>) list
+}
+
+/// Every plugin implements this
+type ISageFsPlugin =
+  abstract Manifest: PluginManifest
+  abstract Initialize: AppState.AppActor -> Result<PluginCapabilities, string>
+```
+
+**Muratori**: That's already too much. `ISageFsPlugin` with `Initialize` is all
+you need for v1. `PluginManifest` and `PluginCapabilities` are nice but you can
+start with a single function: `initialize: AppActor -> unit`. Add structure
+when you have a second plugin.
+
+**Carmack** mediates: I'll take Wlaschin's types but Muratori's implementation
+strategy. DEFINE the interface richly (it costs nothing to have good types).
+IMPLEMENT it minimally (Molina is the only consumer, so only build what Molina
+needs). The rich types document the intention. The minimal implementation
+keeps the scope tight.
+
+### License Validation Design
+
+**Bill**: License keys. Keep it dead simple. A signed JWT with claims:
+
+```fsharp
+type MolinaLicenseToken = {
+  sub: string       // "will@example.com"
+  product: string   // "molina"
+  tier: string      // "individual" | "team" | "enterprise"
+  features: string list  // ["level-1", "level-2", "ci-mode"]
+  iat: int64        // issued at (unix timestamp)
+  exp: int64        // expires (unix timestamp)
+}
+```
+
+The token is signed with YOUR private key. Molina ships with the PUBLIC key
+embedded. Validation is: decode JWT, verify signature, check `exp`, check
+`product = "molina"`. No network call required. No license server. No phone
+home. Works offline. Works air-gapped.
+
+**Seemann**: Offline validation means you can't revoke licenses. That's fine
+for individual licenses but a problem for team/enterprise. Consider a hybrid:
+offline validation for the base license, optional online check for team features
+like shared Molina runs across a Marten event store.
+
+**Haynes**: The license key should live in an environment variable or a config
+file. Not hardcoded, not in source control. Standard patterns:
+
+```
+# Environment variable (preferred)
+MOLINA_LICENSE_KEY=eyJhbGciOiJSUzI1NiIs...
+
+# Config file (~/.config/sagefs/molina.license)
+eyJhbGciOiJSUzI1NiIs...
+
+# Per-project (.sagefs/molina.license in repo root — gitignored)
+eyJhbGciOiJSUzI1NiIs...
+```
+
+Search order: env var → project file → user config file. First found wins.
+
+**Primeagen**: And when there's NO license? Molina should still LOAD. It should
+still DISCOVER mutants. It should show you what mutation testing WOULD do. It
+just caps the execution at — what, 10 mutants? 25? Enough to see the value.
+Enough to make you want the full thing. This is the freemium hook.
+
+**Gillilan**: The Dashboard should show it too. "Molina discovered 147 mutants.
+Testing first 10 (free tier). Upgrade to test all 147." With a single SSE
+update when results come in. The constraint itself becomes the marketing.
+
+**Miller**: And the Marten event stream captures it all. `MolinaLicenseChecked`
+event with tier info. `MolinaCapReached` event when the free tier limit hits.
+The projection knows the license state. The UI reflects it. No special code
+paths — just events and projections, same as everything else.
+
+### Tier Structure
+
+**Carmack**: Keep the tiers dead simple. Three tiers, clear value at each:
+
+| Tier | Price | What You Get |
+|------|-------|-------------|
+| **Free** | $0 | 10 mutants per run. Single session. No CI. Shows what Molina can do. |
+| **Individual** | $X/mo | Unlimited mutants. Level 1 parallelism (actor pool). CLI + TUI + GUI + Dashboard. |
+| **Team** | $Y/mo | Everything in Individual + Level 2 (container swarm). CI mode. Shared Marten store. A2A worker skill. Push notifications. |
+
+**Wlaschin**: The feature gating maps cleanly to discriminated unions:
+
+```fsharp
+type MolinaTier =
+  | Free
+  | Individual
+  | Team
+
+module MolinaTier =
+  let maxMutants = function
+    | Free -> Some 10
+    | Individual -> None
+    | Team -> None
+
+  let maxSessions = function
+    | Free -> 1
+    | Individual -> 8  // Level 1 actor pool
+    | Team -> 0        // unlimited (Level 2)
+
+  let allowsCi = function
+    | Free -> false
+    | Individual -> false
+    | Team -> true
+
+  let allowsA2AWorker = function
+    | Free -> false
+    | Individual -> false
+    | Team -> true
+```
+
+**Fluery**: The feature check is a GUARD, not a BRANCH. Don't litter the code
+with `if tier = Team then ...`. Instead, the `MolinaCoordinator` actor checks
+the tier ONCE at run start and configures its parameters accordingly. The rest
+of the code is tier-unaware:
+
+```fsharp
+let configureMolinaRun (tier: MolinaTier) (candidates: MutantCandidate list) =
+  let mutants =
+    match MolinaTier.maxMutants tier with
+    | Some cap -> candidates |> List.truncate cap
+    | None -> candidates
+  let sessionCount =
+    match MolinaTier.maxSessions tier with
+    | 0 -> discoverWorkerCount()  // Level 2: dynamic
+    | n -> n
+  { Mutants = mutants; Sessions = sessionCount; Tier = tier }
+```
+
+### Distribution
+
+**Bill**: NuGet is the distribution channel. But NOT nuget.org for the paid
+package — you don't want free downloads of the commercial binary. Options:
+
+1. **Private NuGet feed** (Azure Artifacts, GitHub Packages, or self-hosted).
+   License key gates access to the feed. `dotnet tool install SageFs.Molina
+   --add-source https://molina.sagefs.dev/nuget`
+
+2. **Direct download** from a gated website. License key → download link →
+   user drops DLL in `~/.config/sagefs/plugins/`. Simpler but no auto-update.
+
+3. **NuGet with embedded license check.** Publish to nuget.org freely, but the
+   DLL checks for a valid license key at load time. Anyone can INSTALL it, but
+   it runs in Free tier without a key. This maximizes distribution and discovery.
+
+**Brouwers**: Option 3 is the right one. Friction kills adoption. If someone
+has to configure a private NuGet feed just to TRY Molina, most won't bother.
+Let them `dotnet tool install SageFs` + drop `SageFs.Molina` NuGet in, and it
+Just Works in free tier. The upgrade path is: buy license → set env var → done.
+
+**Seemann**: Option 3 also means your commercial binary is publicly downloadable
+and inspectable. Someone WILL decompile it. Don't put secrets in the DLL. The
+license validation relies on cryptographic signature verification (JWT + public
+key), not on obscurity. If someone cracks the license check, your recourse is
+legal, not technical. That's fine for a developer tool — your customers are
+professionals who understand licensing.
+
+**Syme**: For the F# ecosystem specifically — there are so few commercial F#
+tools that having one on nuget.org is actually good marketing for the language.
+"Look, someone built a commercial-grade mutation testing tool for F#." That's
+ecosystem credibility.
+
+### Codebase Separation
+
+**Wlaschin**: Two options for where `SageFs.Molina` lives:
+
+**Option A — Monorepo:** Molina lives in the same repo as SageFs, in a
+`SageFs.Molina/` project directory. Same solution. Different license headers.
+Different `.fsproj` with proprietary license metadata. Easier to develop.
+
+**Option B — Separate repo:** Molina gets its own Git repo. References
+`SageFs.Core` via NuGet package (not project reference). Cleaner IP separation.
+Harder to develop (version coordination).
+
+**Muratori**: Monorepo. Always monorepo for a solo developer. The overhead of
+coordinating two repos, two CI pipelines, two version matrices, NuGet
+dependency hell — that's big-company overhead for a one-person product. Put it
+in the same repo. Use directory-level license files. When you have a team and
+the IP separation matters legally, THEN split.
+
+**Seemann** strongly disagrees: The license boundary IS the repo boundary. If
+SageFs is MIT and Molina is proprietary, having them in the same repo creates
+ambiguity. A contributor to SageFs might accidentally see Molina's source. An
+MIT-licensed file might import a proprietary module. A git blame crosses the
+boundary. Clean separation from day one avoids painful untangling later.
+
+**Carmack** breaks the tie: Monorepo with CLEAR boundaries. A `SageFs.Molina/`
+directory with its own LICENSE file (proprietary). The `.fsproj` references
+`SageFs.Core` via project reference during development, but CI publishes them
+as separate NuGet packages. This gives you monorepo development speed with
+separate-package distribution cleanliness. If/when you need true repo
+separation, the project reference → package reference switch is a one-line
+change per `.fsproj`.
+
+### Project Structure
+
+```
+SageFs/                        (repo root)
+├── LICENSE                    (MIT — covers SageFs, SageFs.Core, SageFs.Gui, SageFs.Tests)
+├── SageFs.Core/               (MIT)
+│   ├── Plugins/               (plugin loading interfaces)
+│   │   └── PluginLoader.fs
+│   └── ...
+├── SageFs/                    (MIT)
+│   ├── PluginHost.fs          (discovers + loads plugin DLLs)
+│   └── ...
+├── SageFs.Gui/                (MIT)
+├── SageFs.Tests/              (MIT)
+├── SageFs.Molina/             (PROPRIETARY)
+│   ├── LICENSE                (Commercial — Molina-specific)
+│   ├── SageFs.Molina.fsproj
+│   ├── MolinaPlugin.fs        (ISageFsPlugin implementation)
+│   ├── LicenseValidation.fs
+│   ├── MutationOperators.fs
+│   ├── MutantDiscovery.fs
+│   ├── MolinaCoordinator.fs
+│   ├── MolinaSessionPool.fs
+│   ├── MolinaMutantRunner.fs
+│   ├── MolinaProjection.fs
+│   ├── MolinaMcpTools.fs
+│   ├── MolinaPaneRenderer.fs
+│   ├── MolinaDashboard.fs
+│   └── MolinaReport.fs
+├── SageFs.Molina.Tests/       (PROPRIETARY — Molina-specific tests)
+└── docs/
+    └── mutation-testing-design.md
+```
+
+### Plugin Discovery & Loading
+
+**Syme**: SageFs discovers plugins at startup. Search order:
+
+1. `--plugin <path>` CLI argument (explicit load)
+2. `SAGEFS_PLUGINS` environment variable (colon-separated paths)
+3. `~/.config/sagefs/plugins/` directory (conventional location)
+4. NuGet tool packages that follow naming convention `SageFs.*.dll`
+
+```fsharp
+module PluginHost =
+
+  let private discoverPlugins () : string list =
+    let fromArgs = Args.getPluginPaths()
+    let fromEnv =
+      Environment.GetEnvironmentVariable "SAGEFS_PLUGINS"
+      |> Option.ofObj
+      |> Option.map (fun s -> s.Split(';') |> Array.toList)
+      |> Option.defaultValue []
+    let fromConventional =
+      let dir = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+        ".config", "sagefs", "plugins")
+      if Directory.Exists dir then
+        Directory.GetFiles(dir, "SageFs.*.dll") |> Array.toList
+      else []
+    fromArgs @ fromEnv @ fromConventional |> List.distinct
+
+  let loadPlugin (path: string) : Result<ISageFsPlugin, string> =
+    try
+      let asm = Assembly.LoadFrom(path)
+      let pluginType =
+        asm.GetTypes()
+        |> Array.tryFind (fun t ->
+          t.GetInterfaces()
+          |> Array.exists (fun i -> i.FullName = typeof<ISageFsPlugin>.FullName))
+      match pluginType with
+      | Some t ->
+        let instance = Activator.CreateInstance(t) :?> ISageFsPlugin
+        Ok instance
+      | None ->
+        Error (sprintf "No ISageFsPlugin implementation found in %s" path)
+    with ex ->
+      Error (sprintf "Failed to load plugin %s: %s" path ex.Message)
+
+  let initializePlugins (actor: AppActor) : PluginCapabilities list =
+    discoverPlugins()
+    |> List.choose (fun path ->
+      match loadPlugin path with
+      | Ok plugin ->
+        match plugin.Initialize actor with
+        | Ok caps ->
+          printfn "✅ Loaded plugin: %s v%s" plugin.Manifest.Name plugin.Manifest.Version
+          Some caps
+        | Error msg ->
+          printfn "⚠️ Plugin %s failed to initialize: %s" plugin.Manifest.Name msg
+          None
+      | Error msg ->
+        printfn "⚠️ %s" msg
+        None)
+```
+
+### What SageFs Shows Without Molina
+
+**Gillilan**: This matters for the user experience. When someone runs SageFs
+WITHOUT Molina installed, what do they see?
+
+**Holden**: The Dashboard should have a subtle "Plugins" section. Without
+Molina: "No plugins loaded. Available: Molina (mutation testing) — learn more
+at molina.sagefs.dev." WITH Molina free tier: "Molina (Free) — 10 mutants/run.
+Upgrade at molina.sagefs.dev." WITH Molina licensed: "Molina (Individual) ✅"
+
+**TJ DeVries**: The MCP tools list should reflect it too. Without Molina, the
+`molina_*` tools simply don't exist in `tools/list`. An LLM asking SageFs to
+run mutations gets "unknown tool." That's clean — no fake tools that error with
+"please buy a license." The tools APPEAR when the plugin loads.
+
+**Primeagen**: And the TUI should show it in the status bar. SageFs today shows
+session info, eval count, frame time. With Molina loaded: add a `[M]` indicator.
+With Molina running: `[M: 47/150 killed, 87%]`. The plugin registers its
+pane renderer and status bar extension through the same `PluginCapabilities`.
+
+### Dissenting Opinions
+
+**Muratori** dissents on the plugin system scope: You're designing a plugin
+PLATFORM when you need a license CHECK. The entire `ISageFsPlugin` interface,
+`PluginCapabilities`, discovery paths, capability registration — this is 500
+lines of infrastructure for ONE plugin. Just hardcode the Molina load path.
+`if File.Exists "SageFs.Molina.dll" then loadMolina()`. When you have TWO
+plugins, refactor to a general system. Not before.
+
+**Wlaschin** counters: The plugin interface IS the product boundary. Without it,
+Molina's code bleeds into SageFs's code and you can't license them separately.
+The interface isn't about supporting N plugins — it's about enforcing the
+separation between free and paid. That separation NEEDS a contract, and the
+contract IS the interface.
+
+**Bill** dissents on JWT licensing: JWTs are overkill for a developer tool.
+A simple HMAC-signed string (base64 encoded) is sufficient. Less ceremony, less
+library dependency, same security properties. The JWT ecosystem (libraries,
+token refresh, JWKS endpoints) is designed for web services, not offline license
+validation in a CLI tool.
+
+**Seemann** re-emphasizes the separate repo position: Every week that Molina
+stays in the SageFs monorepo, the coupling gets deeper. Shared test fixtures.
+Shared CI. Shared git history. When you eventually need to separate (and you
+will — for an acquisition, for a partnership, for a legal review), the cost
+of untangling goes up linearly with time. Start separate. Pay the version
+coordination cost now. It's cheaper than the untangling cost later.
+
+### Synthesis
+
+The panel converges on:
+
+1. **SageFs = MIT, Molina = proprietary.** Clear license boundary at the project
+   level. `SageFs.Molina/LICENSE` is the commercial license.
+
+2. **Monorepo for now, separate-repo-ready.** Molina references `SageFs.Core`
+   via project reference during dev, published as separate NuGet packages.
+   One-line switch to package reference when repo split is needed.
+
+3. **Plugin interface in `SageFs.Core`.** Minimal `ISageFsPlugin` + 
+   `PluginCapabilities`. Serves both as the technical boundary and the legal
+   boundary between MIT and proprietary code.
+
+4. **License validation via signed token.** JWT or HMAC-signed — implementation
+   detail. Offline validation. No phone home. Env var / config file. Embedded
+   public key in Molina DLL.
+
+5. **Three tiers: Free / Individual / Team.** Free = 10 mutants (freemium hook).
+   Individual = unlimited + Level 1. Team = Level 2 + CI + A2A workers.
+
+6. **NuGet distribution on nuget.org.** Zero friction. Anyone can install.
+   Runs in free tier without a key. License key upgrades the tier.
+
+7. **Plugin discovery at startup.** CLI arg → env var → conventional directory.
+   Loaded plugins register middleware, MCP tools, dashboard routes, pane
+   renderers, and A2A skills through `PluginCapabilities`.
+
+8. **Muratori's constraint applies:** Build only what Molina needs. The plugin
+   system should be complete enough for Molina and NO MORE. Generalize when a
+   second plugin exists, not before.
+
+---
+
 *Document produced by the SageFs Expert Panel. 15 voices, productive tension,
-three execution tiers, four protocol layers, one architecture. Built on actors,
-events, containers, and the conviction that your test suite should prove what
-it claims.*
+three execution tiers, four protocol layers, one commercial product, one
+architecture. Built on actors, events, containers, a plugin boundary, and
+the conviction that your test suite should prove what it claims.*
