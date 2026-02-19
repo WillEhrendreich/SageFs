@@ -30,4 +30,4 @@ jobs:
       run: dotnet build
       
     - name: Test
-      run: dotnet test --no-build --verbosity normal /p:CoverletOutputFormat=opencover
+      run: dotnet test --no-build --verbosity normal
