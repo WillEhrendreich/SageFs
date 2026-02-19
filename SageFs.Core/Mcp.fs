@@ -486,95 +486,9 @@ module McpTools =
         return Result.Ok response
     }
 
-  /// Discover .fsproj and .sln/.slnx files in a directory.
-  let private discoverProjectsAtSync (root: string) : string list =
-    try
-      // Prefer solution files over individual projects
-      let solutions =
-        Directory.EnumerateFiles(root)
-        |> Seq.filter (fun f ->
-          let ext = Path.GetExtension(f).ToLowerInvariant()
-          ext = ".sln" || ext = ".slnx")
-        |> Seq.map Path.GetFileName
-        |> Seq.toList
-      if not (List.isEmpty solutions) then
-        solutions
-      else
-        Directory.EnumerateFiles(root, "*.fsproj", SearchOption.AllDirectories)
-        |> Seq.map (fun p -> Path.GetRelativePath(root, p))
-        |> Seq.toList
-    with _ -> []
-
-  /// Resolve project paths from a DirectoryConfig's LoadStrategy.
-  let private resolveProjectsFromConfig (cfg: DirectoryConfig) (root: string) : string list =
-    match cfg.Load with
-    | Solution path -> [path]
-    | Projects paths -> paths
-    | AutoDetect -> discoverProjectsAtSync root
-    | NoLoad -> []
-
-  /// Auto-create a session when no active session exists.
-  /// Resolution order: config isRoot → git root → solution root → CWD.
-  let private ensureActiveSession (ctx: McpContext) (agent: string) : Task<string> =
-    task {
-      let workingDir = Environment.CurrentDirectory
-
-      // Step 1: Check .SageFs/config.fsx at CWD for isRoot override
-      let cwdConfig = DirectoryConfig.load workingDir
-      let useLocalRoot =
-        match cwdConfig with
-        | Some cfg when cfg.IsRoot -> true
-        | _ -> false
-
-      let root, projects =
-        if useLocalRoot then
-          eprintfn "[INFO] Using local root override from .SageFs/config.fsx (not walking up to repo root)"
-          let cfg = cwdConfig.Value
-          workingDir, resolveProjectsFromConfig cfg workingDir
-        else
-          // Step 2: Detect root (git root → solution root → CWD)
-          let detectedRoot =
-            WorkerProtocol.SessionInfo.findGitRoot workingDir
-            |> Option.orElseWith (fun () -> WorkerProtocol.SessionInfo.findSolutionRoot workingDir)
-            |> Option.defaultValue workingDir
-
-          // Step 3: Check .SageFs/config.fsx at detected root
-          let rootConfig = if detectedRoot <> workingDir then DirectoryConfig.load detectedRoot else cwdConfig
-          let projs =
-            match rootConfig with
-            | Some cfg -> resolveProjectsFromConfig cfg detectedRoot
-            | None -> discoverProjectsAtSync detectedRoot
-          detectedRoot, projs
-
-      // Step 4: Check if an existing session for this root has no worker occupants.
-      // Workers (MCP agents) need exclusive sessions; observers (UIs) can share.
-      let! allSessions = ctx.SessionOps.GetAllSessions()
-      let candidateSession =
-        allSessions
-        |> List.filter (fun s -> String.Equals(s.WorkingDirectory, root, StringComparison.OrdinalIgnoreCase))
-        |> List.tryFind (fun s ->
-          let occs = SessionOperations.SessionOccupancy.forSession ctx.SessionMap s.Id
-          not (SessionOperations.SessionOccupancy.hasWorker occs))
-
-      match candidateSession with
-      | Some s ->
-        eprintfn "[INFO] Joining existing session %s at %s (no worker occupants)" s.Id root
-        setActiveSessionId ctx agent s.Id
-        return s.Id
-      | None ->
-        eprintfn "[INFO] Auto-creating session at %s with %d project(s)" root projects.Length
-        let! result = ctx.SessionOps.CreateSession projects root
-        match result with
-        | Ok sid ->
-          setActiveSessionId ctx agent sid
-          return sid
-        | Error err ->
-          return failwithf "Auto-session creation failed at %s: %s" root (SageFsError.describe err)
-    }
-
   /// Route to the active session or the specified session.
-  /// If the active session is empty and no explicit session is given,
-  /// auto-creates a session from the working directory.
+  /// If no session is active for this agent, returns an error
+  /// requiring the client to call create_session explicitly.
   let private resolveSessionId (ctx: McpContext) (agent: string) (sessionId: string option) : Task<string> =
     task {
       match sessionId with
@@ -587,11 +501,10 @@ module McpTools =
           match proxy with
           | Some _ -> return current
           | None ->
-            // Active session is dead — clear it so CreateSession can set the new one
             setActiveSessionId ctx agent ""
-            return! ensureActiveSession ctx agent
+            return failwith "Session is no longer running. Use create_session to start a new one."
         else
-          return! ensureActiveSession ctx agent
+          return failwith "No active session. Use create_session to create one first."
     }
 
   /// Get the session status via proxy, returning the SessionState.
