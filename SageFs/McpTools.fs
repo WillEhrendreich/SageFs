@@ -42,22 +42,39 @@ ERROR HANDLING (CRITICAL):
 - Submit smaller pieces (one definition per call) to isolate which part has the error.
 
 WORKFLOW: Use this tool instead of dotnet build or dotnet run. SageFs IS your compiler and runtime.""")>]
-    member _.send_fsharp_code(agentName: string, code: string) : Task<string> =
+    member _.send_fsharp_code(
+        agentName: string,
+        code: string,
+        [<Description("Working directory of the MCP client. When provided, automatically resolves the correct session for this directory without requiring manual switch_session calls.")>]
+        working_directory: string
+    ) : Task<string> =
+        let wd = if System.String.IsNullOrWhiteSpace working_directory then None else Some working_directory
         logger.LogDebug("MCP-TOOL: send_fsharp_code called by {AgentName}: {Code}", agentName, code)
-        sendFSharpCode ctx agentName code OutputFormat.Text None
+        sendFSharpCode ctx agentName code OutputFormat.Text None wd
     
     [<McpServerTool>]
     [<Description("""Load and execute an F# script file (.fsx). The file is parsed into individual statements and each is sent to FSI separately, so partial progress is preserved if a statement fails.""")>]
-    member _.load_fsharp_script(agentName: string, filePath: string) : Task<string> = 
+    member _.load_fsharp_script(
+        agentName: string,
+        filePath: string,
+        [<Description("Working directory of the MCP client. When provided, automatically resolves the correct session for this directory without requiring manual switch_session calls.")>]
+        working_directory: string
+    ) : Task<string> = 
+        let wd = if System.String.IsNullOrWhiteSpace working_directory then None else Some working_directory
         logger.LogDebug("MCP-TOOL: load_fsharp_script called: {FilePath}", filePath)
-        loadFSharpScript ctx agentName filePath None |> withEcho "load_fsharp_script"
+        loadFSharpScript ctx agentName filePath None wd |> withEcho "load_fsharp_script"
     
     [<McpServerTool>]
     [<Description("Get recent FSI events including evaluations, errors, and script loads. Returns the most recent N events (default 10) with timestamps and sources.")>]
-    member _.get_recent_fsi_events(count: int option) : Task<string> = 
+    member _.get_recent_fsi_events(
+        count: int option,
+        [<Description("Working directory of the MCP client. When provided, automatically resolves the correct session for this directory without requiring manual switch_session calls.")>]
+        working_directory: string
+    ) : Task<string> = 
+        let wd = if System.String.IsNullOrWhiteSpace working_directory then None else Some working_directory
         let eventCount = defaultArg count 10
         logger.LogDebug("MCP-TOOL: get_recent_fsi_events called: count={Count}", eventCount)
-        getRecentEvents ctx "mcp" eventCount |> withEcho "get_recent_fsi_events"
+        getRecentEvents ctx "mcp" eventCount wd |> withEcho "get_recent_fsi_events"
     
     [<McpServerTool>]
     [<Description("Get the current FSI session status: startup configuration, loaded projects, session statistics, and available capabilities. Use to verify session health or discover what is loaded.")>]
@@ -67,19 +84,27 @@ WORKFLOW: Use this tool instead of dotnet build or dotnet run. SageFs IS your co
     ) : Task<string> =
         let wd = if System.String.IsNullOrWhiteSpace working_directory then None else Some working_directory
         logger.LogDebug("MCP-TOOL: get_fsi_status called: workingDir={Dir}", working_directory)
-        getStatus ctx "mcp" wd |> withEcho "get_fsi_status"
+        getStatus ctx "mcp" None wd |> withEcho "get_fsi_status"
 
     [<McpServerTool>]
     [<Description("Get detailed startup information: loaded projects, enabled features, and command-line arguments. Use to understand what capabilities are available in the current session.")>]
-    member _.get_startup_info() : Task<string> =
+    member _.get_startup_info(
+        [<Description("Working directory of the MCP client. When provided, automatically resolves the correct session for this directory without requiring manual switch_session calls.")>]
+        working_directory: string
+    ) : Task<string> =
+        let wd = if System.String.IsNullOrWhiteSpace working_directory then None else Some working_directory
         logger.LogDebug("MCP-TOOL: get_startup_info called")
-        getStartupInfo ctx "mcp" |> withEcho "get_startup_info"
+        getStartupInfo ctx "mcp" wd |> withEcho "get_startup_info"
 
     [<McpServerTool>]
     [<Description("DiscoverF# projects (.fsproj) and solutions (.sln/.slnx) in the current working directory. Useful for determining what projects can be loaded with 'SageFs --proj'.")>]
-    member _.get_available_projects() : Task<string> =
+    member _.get_available_projects(
+        [<Description("Working directory of the MCP client. When provided, automatically resolves the correct session for this directory without requiring manual switch_session calls.")>]
+        working_directory: string
+    ) : Task<string> =
+        let wd = if System.String.IsNullOrWhiteSpace working_directory then None else Some working_directory
         logger.LogDebug("MCP-TOOL: get_available_projects called")
-        getAvailableProjects ctx "mcp" |> withEcho "get_available_projects"
+        getAvailableProjects ctx "mcp" wd |> withEcho "get_available_projects"
 
     [<McpServerTool>]
     [<Description("""Soft-reset the FSI session. All previously defined types, values, and bindings will be lost. The session is re-warmed with project namespaces.
@@ -94,9 +119,13 @@ WHEN NOT TO USE (common mistake):
 - You're not sure what went wrong — read the error diagnostics first, they tell you exactly what's wrong.
 
 This is a SOFT reset — DLL locks are retained. Use hard_reset_fsi_session only if modules failed to load during warm-up.""")>]
-    member _.reset_fsi_session() : Task<string> =
+    member _.reset_fsi_session(
+        [<Description("Working directory of the MCP client. When provided, automatically resolves the correct session for this directory without requiring manual switch_session calls.")>]
+        working_directory: string
+    ) : Task<string> =
+        let wd = if System.String.IsNullOrWhiteSpace working_directory then None else Some working_directory
         logger.LogDebug("MCP-TOOL: reset_fsi_session called")
-        resetSession ctx "mcp" None |> withEcho "reset_fsi_session"
+        resetSession ctx "mcp" None wd |> withEcho "reset_fsi_session"
 
     [<McpServerTool>]
     [<Description("""Hard reset: dispose the FSI session, release DLL locks via shadow-copy refresh,
@@ -126,34 +155,51 @@ Set rebuild=true to run 'dotnet build' before reloading.
 
 WORKFLOW: For test-only changes, use this with rebuild=true instead of the full pack/reinstall cycle.
 The full pack/reinstall cycle is only needed when SageFs's own source code changes (SageFs\ or SageFs.Server\).""")>]
-    member _.hard_reset_fsi_session(rebuild: bool option) : Task<string> =
+    member _.hard_reset_fsi_session(
+        rebuild: bool option,
+        [<Description("Working directory of the MCP client. When provided, automatically resolves the correct session for this directory without requiring manual switch_session calls.")>]
+        working_directory: string
+    ) : Task<string> =
+        let wd = if System.String.IsNullOrWhiteSpace working_directory then None else Some working_directory
         let doRebuild = defaultArg rebuild false
         logger.LogDebug("MCP-TOOL: hard_reset_fsi_session called, rebuild={Rebuild}", doRebuild)
-        hardResetSession ctx "mcp" doRebuild None |> withEcho "hard_reset_fsi_session"
+        hardResetSession ctx "mcp" doRebuild None wd |> withEcho "hard_reset_fsi_session"
 
     [<McpServerTool>]
     [<Description("""Check F#code for errors without executing it. Returns diagnostics (errors, warnings) from the F# compiler.
 Use this to pre-validate code before sending it with send_fsharp_code, or to check syntax and types without side effects.
 
 WORKFLOW: Use this instead of dotnet build for type-checking. SageFs IS your compiler.""")>]
-    member _.check_fsharp_code(code: string) : Task<string> =
+    member _.check_fsharp_code(
+        code: string,
+        [<Description("Working directory of the MCP client. When provided, automatically resolves the correct session for this directory without requiring manual switch_session calls.")>]
+        working_directory: string
+    ) : Task<string> =
+        let wd = if System.String.IsNullOrWhiteSpace working_directory then None else Some working_directory
         logger.LogDebug("MCP-TOOL: check_fsharp_code called")
-        checkFSharpCode ctx "mcp" code None |> withEcho "check_fsharp_code"
+        checkFSharpCode ctx "mcp" code None wd |> withEcho "check_fsharp_code"
 
     [<McpServerTool>]
     [<Description("Cancela running evaluation. Use when an eval is stuck or taking too long. Returns whether a cancellation was performed.")>]
-    member _.cancel_eval() : Task<string> =
+    member _.cancel_eval(
+        [<Description("Working directory of the MCP client. When provided, automatically resolves the correct session for this directory without requiring manual switch_session calls.")>]
+        working_directory: string
+    ) : Task<string> =
+        let wd = if System.String.IsNullOrWhiteSpace working_directory then None else Some working_directory
         logger.LogDebug("MCP-TOOL: cancel_eval called")
-        cancelEval ctx "mcp" |> withEcho "cancel_eval"
+        cancelEval ctx "mcp" wd |> withEcho "cancel_eval"
 
     [<McpServerTool>]
     [<Description("Get codecompletions at a cursor position. Returns available completions (types, functions, members) for the code at the given position. Useful for discovering APIs before writing code.")>]
     member _.get_completions(
         [<Description("The F# code to get completions for")>] code: string,
-        [<Description("Cursor position (0-based character offset) where completions are requested")>] cursor_position: int
+        [<Description("Cursor position (0-based character offset) where completions are requested")>] cursor_position: int,
+        [<Description("Working directory of the MCP client. When provided, automatically resolves the correct session for this directory without requiring manual switch_session calls.")>]
+        working_directory: string
     ) : Task<string> =
+        let wd = if System.String.IsNullOrWhiteSpace working_directory then None else Some working_directory
         logger.LogDebug("MCP-TOOL: get_completions called")
-        getCompletions ctx "mcp" code cursor_position |> withEcho "get_completions"
+        getCompletions ctx "mcp" code cursor_position wd |> withEcho "get_completions"
 
     // ── Package Explorer Tools ──────────────────────────────────────
 
@@ -162,20 +208,26 @@ WORKFLOW: Use this instead of dotnet build for type-checking. SageFs IS your com
 Use this to explore .NET and F# APIs without documentation. Provide the fully-qualified namespace name.
 Examples: 'System.Collections.Generic', 'Microsoft.FSharp.Collections', 'FSharp.Control'.""")>]
     member _.explore_namespace(
-        [<Description("Fully-qualified namespace to explore (e.g. 'System.IO', 'Microsoft.FSharp.Collections')")>] namespaceName: string
+        [<Description("Fully-qualified namespace to explore (e.g. 'System.IO', 'Microsoft.FSharp.Collections')")>] namespaceName: string,
+        [<Description("Working directory of the MCP client. When provided, automatically resolves the correct session for this directory without requiring manual switch_session calls.")>]
+        working_directory: string
     ) : Task<string> =
+        let wd = if System.String.IsNullOrWhiteSpace working_directory then None else Some working_directory
         logger.LogDebug("MCP-TOOL: explore_namespace called: {Namespace}", namespaceName)
-        exploreNamespace ctx "mcp" namespaceName |> withEcho "explore_namespace"
+        exploreNamespace ctx "mcp" namespaceName wd |> withEcho "explore_namespace"
 
     [<McpServerTool>]
     [<Description("""Retrieves the members, constructors, and properties of a specific type.
 Use this to discover what methods and properties are available on a type. Provide the fully-qualified type name.
 Examples: 'System.String', 'System.Collections.Generic.List', 'Microsoft.FSharp.Collections.List'.""")>]
     member _.explore_type(
-        [<Description("Fully-qualified type name to explore (e.g. 'System.String', 'System.IO.File')")>] typeName: string
+        [<Description("Fully-qualified type name to explore (e.g. 'System.String', 'System.IO.File')")>] typeName: string,
+        [<Description("Working directory of the MCP client. When provided, automatically resolves the correct session for this directory without requiring manual switch_session calls.")>]
+        working_directory: string
     ) : Task<string> =
+        let wd = if System.String.IsNullOrWhiteSpace working_directory then None else Some working_directory
         logger.LogDebug("MCP-TOOL: explore_type called: {Type}", typeName)
-        exploreType ctx "mcp" typeName |> withEcho "explore_type"
+        exploreType ctx "mcp" typeName wd |> withEcho "explore_type"
 
     // ── Session Management Tools ──────────────
 

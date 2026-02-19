@@ -138,7 +138,7 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
             app.MapPost("/exec", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
                 withErrorHandling ctx (fun () -> task {
                     let! code = readJsonProp ctx "code"
-                    let! result = SageFs.McpTools.sendFSharpCode mcpContext "cli-integrated" code SageFs.McpTools.OutputFormat.Text None
+                    let! result = SageFs.McpTools.sendFSharpCode mcpContext "cli-integrated" code SageFs.McpTools.OutputFormat.Text None None
                     do! jsonResponse ctx 200 {| success = true; result = result |}
                 }) :> Task
             ) |> ignore
@@ -146,7 +146,7 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
             // POST /reset — reset the FSI session
             app.MapPost("/reset", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
                 withErrorHandling ctx (fun () -> task {
-                    let! result = SageFs.McpTools.resetSession mcpContext "http" None
+                    let! result = SageFs.McpTools.resetSession mcpContext "http" None None
                     do! jsonResponse ctx 200 {| success = not (result.Contains("Error")); message = result |}
                 }) :> Task
             ) |> ignore
@@ -163,7 +163,7 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                                 json.RootElement.GetProperty("rebuild").GetBoolean()
                             else false
                         with _ -> false
-                    let! result = SageFs.McpTools.hardResetSession mcpContext "http" rebuild None
+                    let! result = SageFs.McpTools.hardResetSession mcpContext "http" rebuild None None
                     do! jsonResponse ctx 200 {| success = not (result.Contains("Error")); message = result |}
                 }) :> Task
             ) |> ignore
@@ -171,7 +171,7 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
             // GET /health — session health check
             app.MapGet("/health", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
                 withErrorHandling ctx (fun () -> task {
-                    let! status = SageFs.McpTools.getStatus mcpContext "http" None
+                    let! status = SageFs.McpTools.getStatus mcpContext "http" None None
                     do! jsonResponse ctx 200 {| healthy = true; status = status |}
                 }) :> Task
             ) |> ignore
@@ -180,7 +180,7 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
             app.MapPost("/diagnostics", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
                 withErrorHandling ctx (fun () -> task {
                     let! code = readJsonProp ctx "code"
-                    let! _ = SageFs.McpTools.checkFSharpCode mcpContext "http" code None
+                    let! _ = SageFs.McpTools.checkFSharpCode mcpContext "http" code None None
                     do! jsonResponse ctx 202 {| accepted = true |}
                 }) :> Task
             ) |> ignore

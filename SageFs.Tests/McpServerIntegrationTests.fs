@@ -23,7 +23,7 @@ let tests =
         printfn "Testing sendFSharpCode tool..."
         let ctx = sharedCtxWith "test-session"
 
-        let! result = sendFSharpCode ctx "test-agent" "let x = 42" OutputFormat.Text None
+        let! result = sendFSharpCode ctx "test-agent" "let x = 42" OutputFormat.Text None None
 
         printfn "Result: %s" result
         Expect.stringContains result "val x" "Should execute successfully"
@@ -42,7 +42,7 @@ let tests =
         let ctx = sharedCtxWith "collab-session"
 
         // MCP tool executes code
-        let! _ = sendFSharpCode ctx "claude" "let aiValue = 100" OutputFormat.Text None
+        let! _ = sendFSharpCode ctx "claude" "let aiValue = 100" OutputFormat.Text None None
 
         // Check events are tracked
         let events = SageFs.EventTracking.getAllEvents ctx.Store ctx.SessionMap.["test"]
@@ -65,11 +65,11 @@ let tests =
         let ctx = sharedCtxWith "test-session"
 
         // Generate some events
-        let! _ = sendFSharpCode ctx "agent1" "let a = 1" OutputFormat.Text None
-        let! _ = sendFSharpCode ctx "agent2" "let b = 2" OutputFormat.Text None
+        let! _ = sendFSharpCode ctx "agent1" "let a = 1" OutputFormat.Text None None
+        let! _ = sendFSharpCode ctx "agent2" "let b = 2" OutputFormat.Text None None
 
         // Get recent events
-        let! result = getRecentEvents ctx "test" 5
+        let! result = getRecentEvents ctx "test" 5 None
 
         printfn "Events result: %s" result
         Expect.stringContains result "mcp:agent" "Should show MCP sources"
@@ -85,7 +85,7 @@ let tests =
         printfn "Testing getStatus tool..."
         let ctx = sharedCtxWith "status-session"
 
-        let! result = getStatus ctx "test" None
+        let! result = getStatus ctx "test" None None
 
         printfn "Status: %s" result
         Expect.stringContains result "status-session" "Should show session ID"
@@ -110,7 +110,7 @@ let tests =
         System.IO.File.WriteAllText(fsiFile, scriptContent)
 
         try
-          let! result = loadFSharpScript ctx "test-agent" fsiFile None
+          let! result = loadFSharpScript ctx "test-agent" fsiFile None None
 
           printfn "Load result: %s" result
           Expect.stringContains result "Success" "Should load successfully"
@@ -147,11 +147,11 @@ let tests =
         let ctx = sharedCtxWith "collab-session"
 
         // Agent 1 defines something
-        let! result1 = sendFSharpCode ctx "agent1" "let sharedData = [1; 2; 3]" OutputFormat.Text None
+        let! result1 = sendFSharpCode ctx "agent1" "let sharedData = [1; 2; 3]" OutputFormat.Text None None
         Expect.stringContains result1 "val sharedData" "Agent 1 should succeed"
 
         // Agent 2 uses it
-        let! result2 = sendFSharpCode ctx "agent2" "List.sum sharedData" OutputFormat.Text None
+        let! result2 = sendFSharpCode ctx "agent2" "List.sum sharedData" OutputFormat.Text None None
         Expect.stringContains result2 "6" "Agent 2 should use Agent 1's data"
 
         // Check all events are tracked
@@ -186,7 +186,7 @@ let tests =
         let! _ = actor.PostAndAsyncReply(fun reply -> Eval(request1, CancellationToken.None, reply))
 
         // MCP tool uses console user's value
-        let! result = sendFSharpCode ctx "ai-helper" "userValue * 2" OutputFormat.Text None
+        let! result = sendFSharpCode ctx "ai-helper" "userValue * 2" OutputFormat.Text None None
         Expect.stringContains result "84" "MCP should use console value"
 
         // Check mixed sources
@@ -209,7 +209,7 @@ let tests =
         printfn "Testing sendFSharpCode with compilation error..."
         let ctx = sharedCtxWith "error-session"
 
-        let! result = sendFSharpCode ctx "test-agent" "let x = invalid syntax" OutputFormat.Text None
+        let! result = sendFSharpCode ctx "test-agent" "let x = invalid syntax" OutputFormat.Text None None
 
         printfn "Error result: %s" result
         Expect.stringContains result "Error:" "Should return error message"
@@ -228,7 +228,7 @@ let tests =
         printfn "Testing sendFSharpCode with runtime error..."
         let ctx = sharedCtxWith "runtime-error-session"
 
-        let! result = sendFSharpCode ctx "test-agent" "1 / 0" OutputFormat.Text None
+        let! result = sendFSharpCode ctx "test-agent" "1 / 0" OutputFormat.Text None None
 
         printfn "Runtime error result: %s" result
         // Division by zero might be caught at compile time or runtime, either way should track it
@@ -245,7 +245,7 @@ let tests =
         printfn "Testing loadFSharpScript with non-existent file..."
         let ctx = sharedCtxWith "test-session"
 
-        let! result = loadFSharpScript ctx "test-agent" "C:\\nonexistent\\file.fsx" None
+        let! result = loadFSharpScript ctx "test-agent" "C:\\nonexistent\\file.fsx" None None
 
         printfn "Non-existent file result: %s" result
         Expect.stringContains result "Error" "Should return error for non-existent file"
@@ -268,7 +268,7 @@ let tests =
         System.IO.File.WriteAllText(fsiFile, scriptContent)
 
         try
-          let! result = loadFSharpScript ctx "test-agent" fsiFile None
+          let! result = loadFSharpScript ctx "test-agent" fsiFile None None
 
           printfn "Partial failure result: %s" result
           Expect.stringContains result "Partial:" "Should report partial success"
@@ -290,7 +290,7 @@ let tests =
       task {
         let ctx = sharedCtxWith "test-session"
 
-        let! result = sendFSharpCode ctx "test-agent" "let jsonTestVal = 42;;" OutputFormat.Json None
+        let! result = sendFSharpCode ctx "test-agent" "let jsonTestVal = 42;;" OutputFormat.Json None None
 
         let doc = System.Text.Json.JsonDocument.Parse(result)
         let root = doc.RootElement
@@ -305,7 +305,7 @@ let tests =
       task {
         let ctx = sharedCtxWith "test-session"
 
-        let! result = sendFSharpCode ctx "test-agent" "let x: int = \"not an int\";;" OutputFormat.Json None
+        let! result = sendFSharpCode ctx "test-agent" "let x: int = \"not an int\";;" OutputFormat.Json None None
 
         let doc = System.Text.Json.JsonDocument.Parse(result)
         let root = doc.RootElement
@@ -320,7 +320,7 @@ let tests =
       task {
         let ctx = sharedCtxWith "test-session"
 
-        let! result = sendFSharpCode ctx "test-agent" "let a1 = 1;;\nlet b1 = 2;;" OutputFormat.Json None
+        let! result = sendFSharpCode ctx "test-agent" "let a1 = 1;;\nlet b1 = 2;;" OutputFormat.Json None None
 
         let doc = System.Text.Json.JsonDocument.Parse(result)
         let root = doc.RootElement

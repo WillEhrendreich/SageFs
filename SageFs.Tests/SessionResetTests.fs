@@ -18,21 +18,21 @@ let sessionResetTests =
         let ctx = sharedCtxWith "reset-test"
 
         // Define a value
-        let! defineResult = sendFSharpCode ctx "test" "let resetTestVal = 99;;" OutputFormat.Text None
+        let! defineResult = sendFSharpCode ctx "test" "let resetTestVal = 99;;" OutputFormat.Text None None
         defineResult
         |> Expect.stringContains
           "Definition should succeed"
           "val resetTestVal"
 
         // Reset the session
-        let! resetResult = resetSession ctx "test" None
+        let! resetResult = resetSession ctx "test" None None
         resetResult
         |> Expect.stringContains
           "Reset should report success"
           "reset"
 
         // Try to use the value — should fail
-        let! afterReset = sendFSharpCode ctx "test" "resetTestVal;;" OutputFormat.Text None
+        let! afterReset = sendFSharpCode ctx "test" "resetTestVal;;" OutputFormat.Text None None
         afterReset
         |> Expect.stringContains
           "Value should not exist after reset"
@@ -46,13 +46,13 @@ let sessionResetTests =
       task {
         let ctx = sharedCtxWith "reset-works"
 
-        let! resetResult = resetSession ctx "test" None
+        let! resetResult = resetSession ctx "test" None None
         resetResult
         |> Expect.stringContains
           "Reset should succeed"
           "reset"
 
-        let! result = sendFSharpCode ctx "test" "1 + 1;;" OutputFormat.Text None
+        let! result = sendFSharpCode ctx "test" "1 + 1;;" OutputFormat.Text None None
         result
         |> Expect.stringContains
           "Should evaluate after reset"
@@ -66,7 +66,7 @@ let sessionResetTests =
       task {
         let ctx = sharedCtxWith "reset-msg"
 
-        let! result = resetSession ctx "test" None
+        let! result = resetSession ctx "test" None None
         let isSuccess =
           result.Contains("success", System.StringComparison.OrdinalIgnoreCase)
           || result.Contains("reset", System.StringComparison.OrdinalIgnoreCase)
@@ -85,7 +85,7 @@ let resetPushbackTests =
     <| fun _ ->
       task {
         let ctx = sharedCtx ()
-        let! result = hardResetSession ctx "test" false None
+        let! result = hardResetSession ctx "test" false None None
         result
         |> Expect.stringContains
           "Should include pushback warning for healthy session"
@@ -102,7 +102,7 @@ let resetPushbackTests =
     <| fun _ ->
       task {
         let ctx = sharedCtx ()
-        let! result = hardResetSession ctx "test" false None
+        let! result = hardResetSession ctx "test" false None None
         // With unified sessions, warmup failures come from proxy — just verify reset works
         result
         |> Expect.stringContains
@@ -116,7 +116,7 @@ let resetPushbackTests =
     <| fun _ ->
       task {
         let ctx = sharedCtx ()
-        let! result = resetSession ctx "test" None
+        let! result = resetSession ctx "test" None None
         result
         |> Expect.stringContains
           "Should include pushback warning for healthy session"
@@ -133,7 +133,7 @@ let resetPushbackTests =
     <| fun _ ->
       task {
         let ctx = sharedCtx ()
-        let! result = resetSession ctx "test" None
+        let! result = resetSession ctx "test" None None
         // With unified sessions, warmup failures come from proxy — just verify reset works
         result
         |> Expect.stringContains

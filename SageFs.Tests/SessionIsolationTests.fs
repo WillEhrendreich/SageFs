@@ -284,7 +284,7 @@ module ResetIsolation =
     testTask "hardResetSession with rebuild only restarts the targeted session" {
       let ctx, restartLog, _ = mkTrackingCtx ()
 
-      let! _ = hardResetSession ctx "agent1" true (Some "session-AAA")
+      let! _ = hardResetSession ctx "agent1" true (Some "session-AAA") None
 
       restartLog |> Seq.toList
       |> Expect.equal "only session-AAA restarted" [("session-AAA", true)]
@@ -296,7 +296,7 @@ module ResetIsolation =
     testTask "hardResetSession without rebuild only routes to the targeted session" {
       let ctx, restartLog, routedSessions = mkTrackingCtx ()
 
-      let! _ = hardResetSession ctx "agent1" false (Some "session-AAA")
+      let! _ = hardResetSession ctx "agent1" false (Some "session-AAA") None
 
       routedSessions |> Seq.toList
       |> Expect.equal "only session-AAA routed" ["session-AAA"]
@@ -311,7 +311,7 @@ module ResetIsolation =
     testTask "resetSession only routes to the targeted session" {
       let ctx, restartLog, routedSessions = mkTrackingCtx ()
 
-      let! _ = resetSession ctx "agent1" (Some "session-AAA")
+      let! _ = resetSession ctx "agent1" (Some "session-AAA") None
 
       routedSessions |> Seq.toList
       |> Expect.equal "only session-AAA routed" ["session-AAA"]
@@ -327,9 +327,9 @@ module ResetIsolation =
       let ctx, restartLog, routedSessions = mkTrackingCtx ()
 
       // Agent1 hard resets their session
-      let! _ = hardResetSession ctx "agent1" true (Some "session-AAA")
+      let! _ = hardResetSession ctx "agent1" true (Some "session-AAA") None
       // Agent2 soft resets their session
-      let! _ = resetSession ctx "agent2" (Some "session-BBB")
+      let! _ = resetSession ctx "agent2" (Some "session-BBB") None
 
       restartLog |> Seq.toList
       |> Expect.equal "only AAA was restarted" [("session-AAA", true)]
