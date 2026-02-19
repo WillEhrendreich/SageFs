@@ -167,11 +167,7 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
       | Some _ -> () // Previously tracked active session — clients resolve on connect
       | None -> ()
     else
-      eprintfn "Spawning initial session for %s..." workingDir
-      let! initialResult = sessionOps.CreateSession initialProjects workingDir
-      match initialResult with
-      | Ok info -> eprintfn "Initial session created: %s" info
-      | Error err -> eprintfn "[ERROR] Failed to create initial session: %A" err
+      eprintfn "No previous sessions to resume. Waiting for clients to create sessions."
   }
 
   // Create state-changed event for SSE subscribers
