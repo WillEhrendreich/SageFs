@@ -30,7 +30,6 @@
         <Compile Include="AffordanceTests.fs" />
         <Compile Include="WorkerProtocolTests.fs" />
         <Compile Include="DaemonStateTests.fs" />
-        <Compile Include="NamedPipeTransportTests.fs" />
         <Compile Include="DaemonIntegrationTests.fs" />
         <Compile Include="SessionOperationsTests.fs" />
         <Compile Include="RestartPolicyTests.fs" />
@@ -61,6 +60,7 @@
         <Compile Include="ClientModeTests.fs" />
         <Compile Include="ReplayTests.fs" />
         <Compile Include="HotReloadTests.fs" />
+        <Compile Include="WorkerHttpTransportTests.fs" />
         <Compile Include="SessionIsolationTests.fs" />
         <Compile Include="Program.fs" />
     </ItemGroup>
@@ -81,6 +81,7 @@
         <PackageReference Include="Verify.Expecto" />
         <PackageReference Include="Microsoft.Playwright" />
         <PackageReference Include="Testcontainers.PostgreSql" />
+        <FrameworkReference Include="Microsoft.AspNetCore.App" />
     </ItemGroup>
 
     <ItemGroup>

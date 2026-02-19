@@ -25,7 +25,7 @@
         <Compile Include="Affordances.fs" />
         <Compile Include="WorkerProtocol.fs" />
         <Compile Include="SessionMode.fs" />
-        <Compile Include="NamedPipeTransport.fs" />
+        <Compile Include="HttpWorkerClient.fs" />
         <Compile Include="RestartPolicy.fs" />
         <Compile Include="Watchdog.fs" />
         <Compile Include="SessionLifecycle.fs" />

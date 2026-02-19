@@ -30,6 +30,7 @@
         <Compile Include="Logging.fs" />
         <Compile Include="McpTools.fs" />
         <Compile Include="McpServer.fs" />
+        <Compile Include="WorkerHttpTransport.fs" />
         <Compile Include="WorkerMain.fs" />
         <Compile Include="TerminalMode.fs" />
         <Compile Include="TuiClient.fs" />

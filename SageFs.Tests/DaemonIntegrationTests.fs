@@ -9,7 +9,6 @@ open Expecto.Flip
 open SageFs
 open SageFs.Server
 open SageFs.WorkerProtocol
-open SageFs.NamedPipeTransport
 
 // ─── Helpers ───────────────────────────────────────────────────────
 
@@ -33,126 +32,6 @@ let private tryKill (pid: int) =
     p.Kill()
     p.WaitForExit(3000) |> ignore
   with _ -> ()
-
-// ─── NamedPipeTransport: worker-like integration ───────────────────
-
-[<Tests>]
-let workerPipeTests =
-  testList "[Integration] Worker pipe protocol" [
-
-    testCase "server handles multiple sequential requests" <| fun _ ->
-      let name =
-        sprintf "sagefs-int-%s" (Guid.NewGuid().ToString("N").[..7])
-
-      let handler (msg: WorkerMessage) = async {
-        match msg with
-        | WorkerMessage.EvalCode(code, rid) ->
-          return WorkerResponse.EvalResult(rid, Ok (sprintf "evaluated: %s" code), [])
-        | WorkerMessage.GetStatus rid ->
-          return
-            WorkerResponse.StatusResult(
-              rid,
-              { Status = SessionStatus.Ready
-                EvalCount = 0
-                AvgDurationMs = 0L
-                MinDurationMs = 0L
-                MaxDurationMs = 0L })
-        | WorkerMessage.CancelEval ->
-          return WorkerResponse.EvalCancelled false
-        | WorkerMessage.Shutdown ->
-          return WorkerResponse.WorkerShuttingDown
-        | _ ->
-          return WorkerResponse.WorkerError (SageFsError.EvalFailed "not implemented")
-      }
-
-      let test = async {
-        use cts = new CancellationTokenSource(15_000)
-        let ct = cts.Token
-
-        let serverTask =
-          Async.StartAsTask(listen name handler ct, cancellationToken = ct)
-        do! Async.Sleep 200
-
-        let! proxy, disposable = connect name ct
-        use _d = disposable
-
-        // Send 5 sequential requests
-        for i in 1..5 do
-          let rid = sprintf "req-%d" i
-          let! resp = proxy (WorkerMessage.EvalCode(sprintf "code-%d" i, rid))
-          match resp with
-          | WorkerResponse.EvalResult(r, Ok output, _) ->
-            r |> Expect.equal "replyId matches" rid
-            output
-            |> Expect.stringContains "output has code" (sprintf "code-%d" i)
-          | other -> failwithf "unexpected: %A" other
-
-        // Get status
-        let! statusResp = proxy (WorkerMessage.GetStatus "status-1")
-        match statusResp with
-        | WorkerResponse.StatusResult(_, snapshot) ->
-          snapshot.Status |> Expect.equal "status" SessionStatus.Ready
-        | other -> failwithf "unexpected: %A" other
-
-        // Cancel (no eval running)
-        let! cancelResp = proxy WorkerMessage.CancelEval
-        cancelResp
-        |> Expect.equal "cancel response" (WorkerResponse.EvalCancelled false)
-
-        // Shutdown
-        let! _ = proxy WorkerMessage.Shutdown
-        do! serverTask |> Async.AwaitTask
-      }
-
-      test |> Async.RunSynchronously
-
-    testCase "server exits cleanly when client disconnects" <| fun _ ->
-      let name =
-        sprintf "sagefs-int-%s" (Guid.NewGuid().ToString("N").[..7])
-
-      let handler (msg: WorkerMessage) = async {
-        match msg with
-        | WorkerMessage.GetStatus rid ->
-          return
-            WorkerResponse.StatusResult(
-              rid,
-              { Status = SessionStatus.Ready
-                EvalCount = 0
-                AvgDurationMs = 0L
-                MinDurationMs = 0L
-                MaxDurationMs = 0L })
-        | _ ->
-          return WorkerResponse.WorkerError (SageFsError.EvalFailed "unexpected")
-      }
-
-      let test = async {
-        use cts = new CancellationTokenSource(10_000)
-        let ct = cts.Token
-
-        let serverTask =
-          Async.StartAsTask(listen name handler ct, cancellationToken = ct)
-        do! Async.Sleep 200
-
-        // Connect, do one request, then dispose (disconnect)
-        let! proxy, disposable = connect name ct
-        let! resp = proxy (WorkerMessage.GetStatus "s1")
-        match resp with
-        | WorkerResponse.StatusResult _ -> ()
-        | other -> failwithf "unexpected: %A" other
-
-        disposable.Dispose()
-
-        // Server should detect broken pipe and exit cleanly
-        let completed =
-          try
-            serverTask.Wait(5000)
-          with _ -> true // exception from broken pipe is acceptable
-        completed
-        |> Expect.isTrue "server should exit after client disconnect"
-      }
-
-      test |> Async.RunSynchronously
-  ]
 
 // ─── SessionManager: ManagerState pure functions ───────────────────
 
@@ -181,7 +60,6 @@ let managerStateTests =
         Info = info
         Process = new Process()
         Proxy = fun _ -> async { return WorkerResponse.WorkerError (SageFsError.Unexpected (exn "mock")) }
-        PipeDisposable = { new IDisposable with member _.Dispose() = () }
         Projects = ["Foo.fsproj"]
         WorkingDir = @"C:\test"
         RestartState = SageFs.RestartPolicy.emptyState
@@ -208,7 +86,6 @@ let managerStateTests =
         Info = info
         Process = new Process()
         Proxy = fun _ -> async { return WorkerResponse.WorkerError (SageFsError.Unexpected (exn "mock")) }
-        PipeDisposable = { new IDisposable with member _.Dispose() = () }
         Projects = []
         WorkingDir = @"C:\test"
         RestartState = SageFs.RestartPolicy.emptyState
@@ -236,7 +113,6 @@ let managerStateTests =
         { Info = info
           Process = new Process()
           Proxy = fun _ -> async { return WorkerResponse.WorkerError (SageFsError.Unexpected (exn "mock")) }
-          PipeDisposable = { new IDisposable with member _.Dispose() = () }
           Projects = []
           WorkingDir = @"C:\test"
           RestartState = SageFs.RestartPolicy.emptyState }
