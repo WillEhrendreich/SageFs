@@ -196,6 +196,7 @@ module RaylibMode =
     let mutable lastRegions : RenderRegion list = []
     let mutable lastSessionState = "Connecting..."
     let mutable lastSessionId = ""
+    let mutable lastWorkingDir = ""
     let mutable lastEvalCount = 0
     let mutable lastFps = 0
     let mutable focusedPane = PaneId.Editor
@@ -203,6 +204,7 @@ module RaylibMode =
     let mutable layoutConfig = LayoutConfig.defaults
     let mutable currentTheme = Theme.defaults
     let mutable currentThemeName = "One Dark"
+    let sessionThemes = System.Collections.Generic.Dictionary<string, string>()
     let statelock = obj ()
     let mutable running = true
     // Text selection state (grid coordinates)
@@ -237,8 +239,21 @@ module RaylibMode =
       System.Threading.Tasks.Task.Run(fun () ->
         DaemonClient.runSseListener
           baseUrl
-          (fun sessionId sessionState evalCount _avgMs regions ->
+          (fun sessionId sessionState evalCount _avgMs activeWorkingDir regions ->
             lock statelock (fun () ->
+              // Detect session switch by working directory change
+              if activeWorkingDir.Length > 0 && activeWorkingDir <> lastWorkingDir && lastWorkingDir.Length > 0 then
+                sessionThemes.[lastWorkingDir] <- currentThemeName
+                match sessionThemes.TryGetValue(activeWorkingDir) with
+                | true, themeName ->
+                  match ThemePresets.tryFind themeName with
+                  | Some theme ->
+                    currentTheme <- theme
+                    currentThemeName <- themeName
+                  | None -> ()
+                | false, _ -> ()
+              if activeWorkingDir.Length > 0 then
+                lastWorkingDir <- activeWorkingDir
               lastSessionId <- sessionId
               lastSessionState <- sessionState
               lastEvalCount <- evalCount
@@ -309,6 +324,8 @@ module RaylibMode =
           let name, theme = ThemePresets.cycleNext currentTheme
           currentTheme <- theme
           currentThemeName <- name
+          if lastWorkingDir.Length > 0 then
+            sessionThemes.[lastWorkingDir] <- name
         | CopySelection ->
           match selStart, selEnd with
           | Some (r1, c1), Some (r2, c2) ->

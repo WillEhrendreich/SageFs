@@ -39,11 +39,13 @@ let run (daemonInfo: DaemonInfo) = task {
   let mutable lastRegions : RenderRegion list = []
   let mutable lastSessionState = "Connecting..."
   let mutable lastSessionId = ""
+  let mutable lastWorkingDir = ""
   let mutable lastEvalCount = 0
   let mutable lastAvgMs = 0.0
   let mutable layoutConfig = LayoutConfig.defaults
   let mutable currentTheme = Theme.defaults
   let mutable currentThemeName = "One Dark"
+  let sessionThemes = System.Collections.Generic.Dictionary<string, string>()
 
   // Load keybindings from config, merge with defaults
   let keyMap =
@@ -95,7 +97,22 @@ let run (daemonInfo: DaemonInfo) = task {
   let sseTask =
     DaemonClient.runSseListener
       baseUrl
-      (fun sessionId sessionState evalCount avgMs regions ->
+      (fun sessionId sessionState evalCount avgMs activeWorkingDir regions ->
+        // Detect session switch by working directory change
+        if activeWorkingDir.Length > 0 && activeWorkingDir <> lastWorkingDir && lastWorkingDir.Length > 0 then
+          // Save current theme for old session
+          sessionThemes.[lastWorkingDir] <- currentThemeName
+          // Restore theme for new session
+          match sessionThemes.TryGetValue(activeWorkingDir) with
+          | true, themeName ->
+            match ThemePresets.tryFind themeName with
+            | Some theme ->
+              currentTheme <- theme
+              currentThemeName <- themeName
+            | None -> ()
+          | false, _ -> ()
+        if activeWorkingDir.Length > 0 then
+          lastWorkingDir <- activeWorkingDir
         lastSessionId <- sessionId
         lastSessionState <- sessionState
         lastEvalCount <- evalCount
@@ -178,6 +195,8 @@ let run (daemonInfo: DaemonInfo) = task {
           let name, theme = ThemePresets.cycleNext currentTheme
           currentTheme <- theme
           currentThemeName <- name
+          if lastWorkingDir.Length > 0 then
+            sessionThemes.[lastWorkingDir] <- name
           render ()
         | Some (TerminalCommand.Action action) ->
           // When Sessions pane is focused, remap movement keys to session navigation

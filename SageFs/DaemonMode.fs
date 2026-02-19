@@ -286,12 +286,17 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
     return sessions
   }
 
+  let sessionThemes = Collections.Concurrent.ConcurrentDictionary<string, string>()
+
   let dashboardEndpoints =
     Dashboard.createEndpoints
       version
       getSessionState
       getEvalStats
       getSessionWorkingDir
+      (fun () ->
+        let model = elmRuntime.GetModel()
+        ActiveSession.sessionId model.Sessions.ActiveSessionId |> Option.defaultValue "")
       (fun () -> elmRuntime.GetRegions() |> Some)
       (Some stateChangedEvent.Publish)
       (fun sid code -> task {
@@ -423,6 +428,7 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
           with _ -> []
         activeSessions @ historicalSessions)
       getAllSessions
+      sessionThemes
   let dashboardTask = task {
     try
       let builder = Microsoft.AspNetCore.Builder.WebApplication.CreateBuilder()
