@@ -979,7 +979,8 @@ let renderRegionForSse (getSessionState: string -> SessionState) (region: Render
   | "sessions" ->
     let parsed = parseSessionLines region.Content
     let corrected = overrideSessionStatuses getSessionState parsed
-    Some (renderSessions corrected (isCreatingSession region.Content))
+    let visible = corrected |> List.filter (fun s -> s.Status <> "stopped")
+    Some (renderSessions visible (isCreatingSession region.Content))
   | _ -> None
 
 let pushRegions

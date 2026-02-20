@@ -410,3 +410,41 @@ let connectionCountTests =
       let label2 = fmt 2 counts
       Expect.equal label1 label2 "deterministic output")
   ]
+
+// ─── Stopped session filtering ───────────────────────────────────────────────
+
+[<Tests>]
+let stoppedSessionFilterTests =
+  let parse = SageFs.Server.Dashboard.parseSessionLines
+  let override' = SageFs.Server.Dashboard.overrideSessionStatuses
+  testList "Stopped session filtering" [
+    testCase "stopped sessions are filtered from rendered list" (fun () ->
+      // Simulate: two sessions parsed from TUI, one has live state Uninitialized (= stopped)
+      let input = "  sess-a [running] *\n  sess-b [running]"
+      let parsed = parse input
+      let getState id =
+        if id = "sess-b" then SageFs.SessionState.Uninitialized
+        else SageFs.SessionState.Ready
+      let corrected = override' getState parsed
+      let visible = corrected |> List.filter (fun s -> s.Status <> "stopped")
+      Expect.equal visible.Length 1 "stopped session filtered out"
+      Expect.equal visible.[0].Id "sess-a" "only running session remains")
+
+    testCase "faulted sessions are kept visible" (fun () ->
+      let input = "  sess-a [running] *\n  sess-b [running]"
+      let parsed = parse input
+      let getState id =
+        if id = "sess-b" then SageFs.SessionState.Faulted
+        else SageFs.SessionState.Ready
+      let corrected = override' getState parsed
+      let visible = corrected |> List.filter (fun s -> s.Status <> "stopped")
+      Expect.equal visible.Length 2 "faulted session stays visible")
+
+    testCase "all stopped results in empty list" (fun () ->
+      let input = "  sess-a [running]\n  sess-b [starting]"
+      let parsed = parse input
+      let getState _ = SageFs.SessionState.Uninitialized
+      let corrected = override' getState parsed
+      let visible = corrected |> List.filter (fun s -> s.Status <> "stopped")
+      Expect.isEmpty visible "all stopped = empty list")
+  ]
