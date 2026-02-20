@@ -254,7 +254,7 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
             |> Async.RunSynchronously
           match managed with
           | Some s -> WorkerProtocol.SessionStatus.toSessionState s.Info.Status
-          | None -> SessionState.Faulted
+          | None -> SessionState.Uninitialized // session removed; Dashboard filters as "stopped"
         with _ -> SessionState.Faulted
 
   let getEvalStats (sid: string) =
