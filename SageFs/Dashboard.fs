@@ -1050,6 +1050,7 @@ let createStreamHandler
     connectionTracker |> Option.iter (fun t -> t.Register(clientId, Browser, currentSessionId))
     let mutable lastSessionId = ""
     let mutable lastWorkingDir = ""
+    let mutable lastOutputHash = 0
 
     let pushState () = task {
       // Track daemon's active session for theme switching
@@ -1101,7 +1102,16 @@ let createStreamHandler
           ])
       | None -> ()
       match getElmRegions () with
-      | Some regions -> do! pushRegions ctx regions getPreviousSessions getSessionState
+      | Some regions ->
+        // Dedup output region to avoid overwriting reset/clear (Bug #5)
+        let outputRegion = regions |> List.tryFind (fun r -> r.Id = "output")
+        let outputHash = outputRegion |> Option.map (fun r -> r.Content.GetHashCode()) |> Option.defaultValue 0
+        let filteredRegions =
+          if outputHash = lastOutputHash && outputHash <> 0
+          then regions |> List.filter (fun r -> r.Id <> "output")
+          else regions
+        lastOutputHash <- outputHash
+        do! pushRegions ctx filteredRegions getPreviousSessions getSessionState
       | None -> ()
     }
 
@@ -1213,6 +1223,14 @@ let createResetHandler
           ]
         ]
       do! ssePatchNode ctx resultHtml
+      // Clear stale output after reset (Bug #5)
+      let clearedOutput =
+        Elem.div [ Attr.id "output-panel" ] [
+          Elem.span [ Attr.class' "meta"; Attr.style "padding: 0.5rem;" ] [
+            Text.raw (sprintf "Reset: %s" result)
+          ]
+        ]
+      do! ssePatchNode ctx clearedOutput
     with
     | :? System.IO.IOException -> ()
     | :? System.ObjectDisposedException -> ()
