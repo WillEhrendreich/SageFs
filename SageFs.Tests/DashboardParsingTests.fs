@@ -1,6 +1,7 @@
 module SageFs.Tests.DashboardParsingTests
 
 open Expecto
+open SageFs
 open System.Text.RegularExpressions
 
 /// Dashboard output/diagnostics parsers — mirrors Dashboard.fs logic.
@@ -198,3 +199,53 @@ let tests = testList "Dashboard parsing" [
     Expect.isFalse s.IsSelected "unselected session"
     Expect.isTrue s.IsActive "but still active")
 ]
+
+/// Tests for the live session state override (Bug #3)
+module SessionStateOverride =
+  open SageFs
+  open SageFs.Server.Dashboard
+
+  let mkSession id status =
+    { ParsedSession.Id = id
+      Status = status
+      IsActive = false
+      IsSelected = false
+      ProjectsText = ""
+      EvalCount = 0
+      Uptime = ""
+      WorkingDir = ""
+      LastActivity = "" }
+
+[<Tests>]
+let stateOverrideTests =
+  let open' = SageFs.Server.Dashboard.overrideSessionStatuses
+  let mk = SessionStateOverride.mkSession
+  testList "Session state override" [
+    testCase "Ready maps to running" (fun () ->
+      let r = open' (fun _ -> SessionState.Ready) [mk "s1" "starting"]
+      Expect.equal (List.head r).Status "running" "Ready = running")
+
+    testCase "Evaluating maps to running" (fun () ->
+      let r = open' (fun _ -> SessionState.Evaluating) [mk "s1" "starting"]
+      Expect.equal (List.head r).Status "running" "Evaluating = running")
+
+    testCase "WarmingUp maps to starting" (fun () ->
+      let r = open' (fun _ -> SessionState.WarmingUp) [mk "s1" "running"]
+      Expect.equal (List.head r).Status "starting" "WarmingUp = starting")
+
+    testCase "Faulted maps to faulted" (fun () ->
+      let r = open' (fun _ -> SessionState.Faulted) [mk "s1" "running"]
+      Expect.equal (List.head r).Status "faulted" "Faulted = faulted")
+
+    testCase "Uninitialized maps to stopped" (fun () ->
+      let r = open' (fun _ -> SessionState.Uninitialized) [mk "s1" "running"]
+      Expect.equal (List.head r).Status "stopped" "Uninitialized = stopped")
+
+    testCase "overrides each session independently" (fun () ->
+      let sessions = [ mk "live" "starting"; mk "dead" "running" ]
+      let getState sid =
+        if sid = "live" then SessionState.Ready else SessionState.Faulted
+      let r = open' getState sessions
+      Expect.equal (List.head r).Status "running" "live becomes running"
+      Expect.equal (r |> List.item 1).Status "faulted" "dead becomes faulted")
+  ]

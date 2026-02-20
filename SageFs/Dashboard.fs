@@ -956,19 +956,39 @@ let parseDiagLines (content: string) : Diagnostic list =
 
 
 
-let renderRegionForSse (region: RenderRegion) =
+/// Override parsed session statuses with live SessionState data.
+/// The TUI text may be stale — live state is the source of truth.
+let overrideSessionStatuses
+  (getState: string -> SessionState)
+  (sessions: ParsedSession list) : ParsedSession list =
+  sessions
+  |> List.map (fun (s: ParsedSession) ->
+    let liveStatus =
+      match getState s.Id with
+      | SessionState.Ready -> "running"
+      | SessionState.Evaluating -> "running"
+      | SessionState.WarmingUp -> "starting"
+      | SessionState.Faulted -> "faulted"
+      | SessionState.Uninitialized -> "stopped"
+    { s with Status = liveStatus })
+
+let renderRegionForSse (getSessionState: string -> SessionState) (region: RenderRegion) =
   match region.Id with
   | "output" -> Some (renderOutput (parseOutputLines region.Content))
-  | "sessions" -> Some (renderSessions (parseSessionLines region.Content) (isCreatingSession region.Content))
+  | "sessions" ->
+    let parsed = parseSessionLines region.Content
+    let corrected = overrideSessionStatuses getSessionState parsed
+    Some (renderSessions corrected (isCreatingSession region.Content))
   | _ -> None
 
 let pushRegions
   (ctx: HttpContext)
   (regions: RenderRegion list)
   (getPreviousSessions: unit -> PreviousSession list)
+  (getSessionState: string -> SessionState)
   = task {
     for region in regions do
-      match renderRegionForSse region with
+      match renderRegionForSse getSessionState region with
       | Some html -> do! ssePatchNode ctx html
       | None -> ()
       // When sessions region is pushed, also push picker visibility
@@ -1081,7 +1101,7 @@ let createStreamHandler
           ])
       | None -> ()
       match getElmRegions () with
-      | Some regions -> do! pushRegions ctx regions getPreviousSessions
+      | Some regions -> do! pushRegions ctx regions getPreviousSessions getSessionState
       | None -> ()
     }
 
