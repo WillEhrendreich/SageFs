@@ -297,7 +297,7 @@ let renderShell (version: string) =
       // Theme CSS vars — in body so Datastar can morph it via SSE
       renderThemeVars "One Dark"
       // Dedicated init element that connects to SSE stream (per Falco.Datastar pattern)
-      Elem.div [ Ds.onInit (Ds.get "/dashboard/stream"); Ds.signal ("helpVisible", "false"); Ds.signal ("sidebarOpen", "true") ] []
+      Elem.div [ Ds.onInit (Ds.get "/dashboard/stream"); Ds.signal ("helpVisible", "false"); Ds.signal ("sidebarOpen", "true"); Ds.signal ("sessionId", "") ] []
       // Connection status banner — hidden by default, shown only on problems
       Elem.div [ Attr.id "server-status"; Attr.class' "conn-banner conn-disconnected"; Attr.style "display:none" ] [
         Text.raw "⏳ Connecting to server..."
@@ -351,6 +351,7 @@ let renderShell (version: string) =
               Elem.div [ Attr.id "keyboard-help-wrapper"; Ds.show "$helpVisible" ] [
                 renderKeyboardHelp ()
               ]
+              Elem.input [ Attr.type' "hidden"; Ds.bind "sessionId" ]
               Elem.textarea
                 [ Attr.class' "eval-input"
                   Ds.bind "code"
@@ -689,7 +690,10 @@ let parseSessionLines (content: string) =
   |> Array.filter (fun (l: string) ->
     l.Length > 0
     && not (l.StartsWith("───"))
-    && not (l.StartsWith("⏳")))
+    && not (l.StartsWith("⏳"))
+    && not (l.Contains("↑↓ nav"))
+    && not (l.Contains("Enter switch"))
+    && not (l.Contains("Ctrl+Tab cycle")))
   |> Array.map (fun (l: string) ->
     let m = sessionRegex.Match(l)
     if m.Success then
@@ -908,7 +912,7 @@ let renderSessions (sessions: ParsedSession list) (creating: bool) =
           ])
     Elem.div
       [ Attr.style "font-size: 0.7rem; color: var(--fg-dim); text-align: center; padding: 4px 0; margin-top: 4px;" ]
-      [ Text.raw "click/Enter switch · x stop · 1-9 jump · n new · Ctrl+Tab cycle" ]
+      [ Text.raw "⇄ switch · ■ stop" ]
   ]
 
 let parseOutputLines (content: string) : OutputLine list =
@@ -1036,6 +1040,8 @@ let createStreamHandler
       let stats = getEvalStats currentSessionId
       let stateStr = SessionState.label state
       let workingDir = getSessionWorkingDir currentSessionId
+      // Push sessionId signal so eval form can include it
+      do! Response.ssePatchSignal ctx (SignalPath.sp "sessionId") currentSessionId
       let avgMs =
         if stats.EvalCount > 0
         then stats.TotalDuration.TotalMilliseconds / float stats.EvalCount
@@ -1140,10 +1146,22 @@ let createEvalHandler
         let! result = evalCode sessionId code
         Response.sseStartResponse ctx |> ignore
         do! Response.ssePatchSignal ctx (SignalPath.sp "code") ""
+        let isError =
+          result.StartsWith("Error:") || result.Contains("Evaluation failed")
+        let displayResult =
+          if isError then
+            // Clean up raw exception names for readability
+            result
+              .Replace("FSharp.Compiler.Interactive.Shell+FsiCompilationException: ", "")
+              .Replace("Evaluation failed: ", "⚠ ")
+          else result
+        let cssClass =
+          if isError then "output-line output-error"
+          else "output-line output-result"
         let resultHtml =
           Elem.div [ Attr.id "eval-result" ] [
-            Elem.pre [ Attr.class' "output-line output-result"; Attr.style "margin-top: 0.5rem; white-space: pre-wrap;" ] [
-              Text.raw result
+            Elem.pre [ Attr.class' (sprintf "%s" cssClass); Attr.style "margin-top: 0.5rem; white-space: pre-wrap;" ] [
+              Text.raw displayResult
             ]
           ]
         do! ssePatchNode ctx resultHtml
@@ -1188,6 +1206,8 @@ let createSessionActionHandler
     try
       let! result = action sessionId
       Response.sseStartResponse ctx |> ignore
+      // Push sessionId so eval form targets the new session
+      do! Response.ssePatchSignal ctx (SignalPath.sp "sessionId") sessionId
       let resultHtml =
         Elem.div [ Attr.id "eval-result" ] [
           Elem.pre [ Attr.class' "output-line output-info"; Attr.style "margin-top: 0.5rem; white-space: pre-wrap;" ] [
@@ -1356,6 +1376,7 @@ let createDiscoverHandler : HttpHandler =
 /// Create the create-session POST handler.
 let createCreateSessionHandler
   (createSession: string list -> string -> Threading.Tasks.Task<Result<string, string>>)
+  (switchSession: (string -> Threading.Tasks.Task<string>) option)
   : HttpHandler =
   fun ctx -> task {
     let! doc = Request.getSignalsJson ctx
@@ -1372,16 +1393,22 @@ let createCreateSessionHandler
         do! ssePatchNode ctx (evalResultError "No projects found. Enter paths manually or check the directory.")
       else
         let! result = createSession projects dir
-        let resultHtml =
-          match result with
-          | Ok msg ->
+        match result with
+        | Ok newSessionId ->
+          // Switch to the new session so the SSE stream picks it up
+          match switchSession with
+          | Some switch -> let! _ = switch newSessionId in ()
+          | None -> ()
+          // Push the new session's ID so the eval form targets it
+          do! Response.ssePatchSignal ctx (SignalPath.sp "sessionId") newSessionId
+          do! ssePatchNode ctx (
             Elem.div [ Attr.id "eval-result" ] [
               Elem.pre [ Attr.class' "output-line output-result"; Attr.style "margin-top: 0.5rem;" ] [
-                Text.raw msg
+                Text.raw (sprintf "Session '%s' created. Switched to it." newSessionId)
               ]
-            ]
-          | Error msg -> evalResultError (sprintf "Failed: %s" msg)
-        do! ssePatchNode ctx resultHtml
+            ])
+        | Error msg ->
+          do! ssePatchNode ctx (evalResultError (sprintf "Failed: %s" msg))
         do! ssePatchNode ctx (Elem.div [ Attr.id "discovered-projects" ] [])
   }
 
@@ -1651,7 +1678,7 @@ let createEndpoints
     yield post "/api/dispatch" (createApiDispatchHandler dispatch)
     match createSession with
     | Some handler ->
-      yield post "/dashboard/session/create" (createCreateSessionHandler handler)
+      yield post "/dashboard/session/create" (createCreateSessionHandler handler switchSession)
     | None -> ()
     match switchSession with
     | Some handler ->
