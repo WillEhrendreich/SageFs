@@ -1003,14 +1003,14 @@ let overrideSessionStatuses
       | SessionState.Uninitialized -> "stopped"
     { s with Status = liveStatus; StatusMessage = getStatusMsg s.Id })
 
-let renderRegionForSse (getSessionState: string -> SessionState) (getStatusMsg: string -> string option) (region: RenderRegion) =
+let renderRegionForSse (getSessionState: string -> SessionState) (getStatusMsg: string -> string option) (standbyLabel: string) (region: RenderRegion) =
   match region.Id with
   | "output" -> Some (renderOutput (parseOutputLines region.Content))
   | "sessions" ->
     let parsed = parseSessionLines region.Content
     let corrected = overrideSessionStatuses getSessionState getStatusMsg parsed
     let visible = corrected |> List.filter (fun s -> s.Status <> "stopped")
-    Some (renderSessions visible (isCreatingSession region.Content) "")
+    Some (renderSessions visible (isCreatingSession region.Content) standbyLabel)
   | _ -> None
 
 let pushRegions
@@ -1019,9 +1019,10 @@ let pushRegions
   (getPreviousSessions: unit -> PreviousSession list)
   (getSessionState: string -> SessionState)
   (getStatusMsg: string -> string option)
+  (standbyLabel: string)
   = task {
     for region in regions do
-      match renderRegionForSse getSessionState getStatusMsg region with
+      match renderRegionForSse getSessionState getStatusMsg standbyLabel region with
       | Some html -> do! ssePatchNode ctx html
       | None -> ()
       // When sessions region is pushed, also push picker visibility
@@ -1072,6 +1073,7 @@ let createStreamHandler
   (getPreviousSessions: unit -> PreviousSession list)
   (getAllSessions: unit -> Threading.Tasks.Task<WorkerProtocol.SessionInfo list>)
   (sessionThemes: Collections.Concurrent.ConcurrentDictionary<string, string>)
+  (getStandbyInfo: unit -> Threading.Tasks.Task<StandbyInfo>)
   : HttpHandler =
   fun ctx -> task {
     Response.sseStartResponse ctx |> ignore
@@ -1145,7 +1147,9 @@ let createStreamHandler
           then regions |> List.filter (fun r -> r.Id <> "output")
           else regions
         lastOutputHash <- outputHash
-        do! pushRegions ctx filteredRegions getPreviousSessions getSessionState getStatusMsg
+        let! standby = getStandbyInfo ()
+        let sLabel = StandbyInfo.label standby
+        do! pushRegions ctx filteredRegions getPreviousSessions getSessionState getStatusMsg sLabel
       | None -> ()
     }
 
@@ -1682,7 +1686,7 @@ let createEndpoints
   : HttpEndpoint list =
   [
     yield get "/dashboard" (FalcoResponse.ofHtml (renderShell version))
-    yield get "/dashboard/stream" (createStreamHandler getSessionState getStatusMsg getEvalStats getSessionWorkingDir getActiveSessionId getElmRegions stateChanged connectionTracker getPreviousSessions getAllSessions sessionThemes)
+    yield get "/dashboard/stream" (createStreamHandler getSessionState getStatusMsg getEvalStats getSessionWorkingDir getActiveSessionId getElmRegions stateChanged connectionTracker getPreviousSessions getAllSessions sessionThemes getStandbyInfo)
     yield post "/dashboard/eval" (createEvalHandler evalCode)
     yield post "/dashboard/reset" (createResetHandler resetSession)
     yield post "/dashboard/hard-reset" (createResetHandler hardResetSession)
