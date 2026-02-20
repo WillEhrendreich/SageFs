@@ -16,6 +16,7 @@ type StandbySession = {
   Process: Process
   Proxy: SessionProxy option
   State: StandbyState
+  WarmupProgress: string option
   Projects: string list
   WorkingDir: string
   CreatedAt: DateTime
@@ -98,14 +99,15 @@ module StandbyPool =
 /// Summary of standby pool state for UI display
 type StandbyInfo =
   | NoPool
-  | Warming
+  | Warming of progressMessage: string
   | Ready
   | Invalidated
 
 module StandbyInfo =
   let label = function
     | NoPool -> ""
-    | Warming -> "⏳ standby"
+    | Warming "" -> "⏳ standby"
+    | Warming phase -> sprintf "⏳ %s" phase
     | Ready -> "✓ standby"
     | Invalidated -> "⚠ standby"
 

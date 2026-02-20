@@ -259,7 +259,8 @@ let standbyBadgeSseTests = testList "SSE standby badge" [
 
   test "StandbyInfo.label maps correctly" {
     Expect.equal (StandbyInfo.label StandbyInfo.NoPool) "" "NoPool -> empty"
-    Expect.equal (StandbyInfo.label StandbyInfo.Warming) "⏳ standby" "Warming"
+    Expect.equal (StandbyInfo.label (StandbyInfo.Warming "")) "⏳ standby" "Warming empty"
+    Expect.equal (StandbyInfo.label (StandbyInfo.Warming "2/4 Scanned 12 files")) "⏳ 2/4 Scanned 12 files" "Warming with progress"
     Expect.equal (StandbyInfo.label StandbyInfo.Ready) "✓ standby" "Ready"
     Expect.equal (StandbyInfo.label StandbyInfo.Invalidated) "⚠ standby" "Invalidated"
   }
@@ -280,6 +281,33 @@ let standbyBadgeSseTests = testList "SSE standby badge" [
   }
 ]
 
+let warmupProgressSseTests = testList "Standby warmup progress SSE" [
+  test "warming badge with progress shows phase text" {
+    let getState _ = SessionState.Ready
+    let getMsg _ = None
+    let standbyLabel = StandbyInfo.label (StandbyInfo.Warming "2/4 Scanned 12 files")
+    let r = mkRegion "sessions" "No sessions"
+    let result = renderRegionForSse getState getMsg standbyLabel r
+    match result with
+    | Some node ->
+      let html = renderNode node
+      Expect.stringContains html "⏳ 2/4 Scanned 12 files" "should show progress"
+    | None -> failtest "should render sessions region"
+  }
+  test "warming badge with empty progress shows default" {
+    let getState _ = SessionState.Ready
+    let getMsg _ = None
+    let standbyLabel = StandbyInfo.label (StandbyInfo.Warming "")
+    let r = mkRegion "sessions" "No sessions"
+    let result = renderRegionForSse getState getMsg standbyLabel r
+    match result with
+    | Some node ->
+      let html = renderNode node
+      Expect.stringContains html "⏳ standby" "should show default label"
+    | None -> failtest "should render"
+  }
+]
+
 
 [<Tests>]
 let allDashboardSnapshotTests = testList "Dashboard Snapshots" [
@@ -288,4 +316,5 @@ let allDashboardSnapshotTests = testList "Dashboard Snapshots" [
   edgeCaseSnapshotTests
   parserTests
   standbyBadgeSseTests
+  warmupProgressSseTests
 ]
