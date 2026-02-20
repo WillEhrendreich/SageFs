@@ -215,9 +215,10 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
     |> Async.RunSynchronously
     log.SessionListCalls |> Expect.equal "called" 1
     match dispatched.[0] with
-    | SageFsMsg.Event (SageFsEvent.SessionCreated snap) ->
-      snap.Id |> Expect.equal "id" "test-session"
-    | other -> failtestf "expected SessionCreated, got %A" other
+    | SageFsMsg.Event (SageFsEvent.SessionsRefreshed snaps) ->
+      snaps |> Expect.hasLength "one session" 1
+      snaps.[0].Id |> Expect.equal "id" "test-session"
+    | other -> failtestf "expected SessionsRefreshed, got %A" other
 
   testCase "RequestSessionSwitch dispatches switch" <| fun _ ->
     let mutable dispatched : SageFsMsg list = []

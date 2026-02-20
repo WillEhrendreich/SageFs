@@ -37,6 +37,7 @@ type SageFsEvent =
   | EvalCancelled of sessionId: string
   // ── Session lifecycle ──
   | SessionCreated of SessionSnapshot
+  | SessionsRefreshed of SessionSnapshot list
   | SessionStatusChanged of sessionId: string * status: SessionDisplayStatus
   | SessionSwitched of fromId: string option * toId: string
   | SessionStopped of sessionId: string
