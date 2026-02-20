@@ -40,6 +40,8 @@ module SessionManager =
         AsyncReplyChannel<SessionInfo list>
     | TouchSession of SessionId
     | WorkerExited of SessionId * workerPid: int * exitCode: int
+    | WorkerReady of SessionId * workerPid: int * SessionProxy
+    | WorkerSpawnFailed of SessionId * workerPid: int * string
     | ScheduleRestart of SessionId
     | StopAll of AsyncReplyChannel<unit>
 
@@ -68,14 +70,20 @@ module SessionManager =
       |> Map.toList
       |> List.map (fun (_, s) -> s.Info)
 
-  /// Spawn a worker sub-process and connect via HTTP.
-  let spawnWorker
+  /// A proxy that rejects calls while the worker is still starting up.
+  let pendingProxy : SessionProxy =
+    fun _msg -> async {
+      return WorkerResponse.WorkerError (SageFsError.WorkerSpawnFailed "Session is still starting up")
+    }
+
+  /// Start a worker OS process. Returns immediately with the Process
+  /// (does NOT wait for the worker to report its port).
+  let startWorkerProcess
     (sessionId: SessionId)
     (projects: string list)
     (workingDir: string)
-    (ct: CancellationToken)
     (onExited: int -> int -> unit)
-    = async {
+    : Result<Process, SageFsError> =
     let projArgs =
       projects
       |> List.collect (fun p ->
@@ -98,48 +106,40 @@ module SessionManager =
     proc.EnableRaisingEvents <- true
 
     if not (proc.Start()) then
-      return Error (SageFsError.WorkerSpawnFailed "Failed to start worker process")
+      Error (SageFsError.WorkerSpawnFailed "Failed to start worker process")
     else
       let workerPid = proc.Id
       proc.Exited.Add(fun _ -> onExited workerPid proc.ExitCode)
-      // Read stdout until we get the WORKER_PORT line
+      Ok proc
+
+  /// Read the worker's stdout until WORKER_PORT is reported, then post
+  /// a WorkerReady (or WorkerSpawnFailed) message back to the agent.
+  /// Runs completely off the agent loop — never blocks the MailboxProcessor.
+  let awaitWorkerPort
+    (sessionId: SessionId)
+    (proc: Process)
+    (inbox: MailboxProcessor<SessionCommand>)
+    (ct: CancellationToken)
+    =
+    Async.Start(async {
       try
-        let! baseUrl =
-          async {
-            let mutable found = None
-            while Option.isNone found do
-              let! line = proc.StandardOutput.ReadLineAsync() |> Async.AwaitTask
-              if isNull line then
-                failwith "Worker process exited before reporting port"
-              elif line.StartsWith("WORKER_PORT=") then
-                found <- Some (line.Substring("WORKER_PORT=".Length))
-            return found.Value
-          }
+        let mutable found = None
+        while Option.isNone found do
+          let! line = proc.StandardOutput.ReadLineAsync(ct).AsTask() |> Async.AwaitTask
+          if isNull line then
+            failwith "Worker process exited before reporting port"
+          elif line.StartsWith("WORKER_PORT=") then
+            found <- Some (line.Substring("WORKER_PORT=".Length))
+        let baseUrl = found.Value
         let proxy = HttpWorkerClient.httpProxy baseUrl
-        let info : SessionInfo = {
-          Id = sessionId
-          Name = None
-          Projects = projects
-          WorkingDirectory = workingDir
-          SolutionRoot = SessionInfo.findSolutionRoot workingDir
-          CreatedAt = DateTime.UtcNow
-          LastActivity = DateTime.UtcNow
-          Status = SessionStatus.Starting
-          WorkerPid = Some proc.Id
-        }
-        return
-          Ok {
-            Info = info
-            Process = proc
-            Proxy = proxy
-            Projects = projects
-            WorkingDir = workingDir
-            RestartState = RestartPolicy.emptyState
-          }
+        inbox.Post(SessionCommand.WorkerReady(sessionId, proc.Id, proxy))
       with ex ->
         try proc.Kill() with _ -> ()
-        return Error (SageFsError.WorkerSpawnFailed (sprintf "Failed to connect to worker: %s" ex.Message))
-  }
+        inbox.Post(
+          SessionCommand.WorkerSpawnFailed(
+            sessionId, proc.Id,
+            sprintf "Failed to connect to worker: %s" ex.Message))
+    }, ct)
 
   /// Stop a worker gracefully: send Shutdown, wait, then kill.
   let stopWorker (session: ManagedSession) = async {
@@ -206,11 +206,32 @@ module SessionManager =
           let sessionId = Guid.NewGuid().ToString("N").[..7]
           let onExited workerPid exitCode =
             inbox.Post(SessionCommand.WorkerExited(sessionId, workerPid, exitCode))
-          let! result = spawnWorker sessionId projects workingDir ct onExited
-          match result with
-          | Ok managed ->
+          match startWorkerProcess sessionId projects workingDir onExited with
+          | Ok proc ->
+            // Register session immediately with pending proxy — don't block
+            let info : SessionInfo = {
+              Id = sessionId
+              Name = None
+              Projects = projects
+              WorkingDirectory = workingDir
+              SolutionRoot = SessionInfo.findSolutionRoot workingDir
+              CreatedAt = DateTime.UtcNow
+              LastActivity = DateTime.UtcNow
+              Status = SessionStatus.Starting
+              WorkerPid = Some proc.Id
+            }
+            let managed = {
+              Info = info
+              Process = proc
+              Proxy = pendingProxy
+              Projects = projects
+              WorkingDir = workingDir
+              RestartState = RestartPolicy.emptyState
+            }
             let newState = ManagerState.addSession sessionId managed state
-            reply.Reply(Ok managed.Info)
+            reply.Reply(Ok info)
+            // Port discovery runs off the agent loop
+            awaitWorkerPort sessionId proc inbox ct
             return! loop newState
           | Error err ->
             reply.Reply(Error err)
@@ -242,17 +263,33 @@ module SessionManager =
               reply.Reply(Error (SageFsError.HardResetFailed msg))
               return! loop stateAfterStop
             | Ok _buildMsg ->
-            // 3. Respawn worker with same session ID — fresh process = fresh CLR cache
+            // 3. Respawn worker — non-blocking, port discovery runs off agent loop
             let onExited workerPid exitCode =
               inbox.Post(SessionCommand.WorkerExited(id, workerPid, exitCode))
-            let! result = spawnWorker id session.Projects session.WorkingDir ct onExited
-            match result with
-            | Ok newManaged ->
-              let restarted =
-                { newManaged with
-                    RestartState = session.RestartState }
+            match startWorkerProcess id session.Projects session.WorkingDir onExited with
+            | Ok proc ->
+              let info : SessionInfo = {
+                Id = id
+                Name = session.Info.Name
+                Projects = session.Projects
+                WorkingDirectory = session.WorkingDir
+                SolutionRoot = session.Info.SolutionRoot
+                CreatedAt = session.Info.CreatedAt
+                LastActivity = DateTime.UtcNow
+                Status = SessionStatus.Starting
+                WorkerPid = Some proc.Id
+              }
+              let restarted = {
+                Info = info
+                Process = proc
+                Proxy = pendingProxy
+                Projects = session.Projects
+                WorkingDir = session.WorkingDir
+                RestartState = session.RestartState
+              }
               let newState = ManagerState.addSession id restarted stateAfterStop
-              reply.Reply(Ok "Hard reset complete — worker respawned with fresh assemblies.")
+              reply.Reply(Ok "Hard reset complete — worker respawning with fresh assemblies.")
+              awaitWorkerPort id proc inbox ct
               return! loop newState
             | Error err ->
               reply.Reply(Error err)
@@ -303,6 +340,28 @@ module SessionManager =
           | None ->
             return! loop state
 
+        | SessionCommand.WorkerReady(id, _workerPid, proxy) ->
+          match ManagerState.tryGetSession id state with
+          | Some session ->
+            let updated =
+              { session with Proxy = proxy }
+            let newState = ManagerState.addSession id updated state
+            return! loop newState
+          | None ->
+            // Session was stopped before port discovery completed — ignore
+            return! loop state
+
+        | SessionCommand.WorkerSpawnFailed(id, _workerPid, msg) ->
+          match ManagerState.tryGetSession id state with
+          | Some session ->
+            let updated =
+              { session with
+                  Info = { session.Info with Status = SessionStatus.Faulted } }
+            let newState = ManagerState.addSession id updated state
+            return! loop newState
+          | None ->
+            return! loop state
+
         | SessionCommand.WorkerExited(id, workerPid, exitCode) ->
           match ManagerState.tryGetSession id state with
           | Some session ->
@@ -344,14 +403,19 @@ module SessionManager =
           | Some session when session.Info.Status = SessionStatus.Restarting ->
             let onExited workerPid exitCode =
               inbox.Post(SessionCommand.WorkerExited(id, workerPid, exitCode))
-            let! result =
-              spawnWorker id session.Projects session.WorkingDir ct onExited
-            match result with
-            | Ok newManaged ->
+            match startWorkerProcess id session.Projects session.WorkingDir onExited with
+            | Ok proc ->
               let restarted =
-                { newManaged with
-                    RestartState = session.RestartState }
+                { session with
+                    Process = proc
+                    Proxy = pendingProxy
+                    Info =
+                      { session.Info with
+                          Status = SessionStatus.Starting
+                          WorkerPid = Some proc.Id
+                          LastActivity = DateTime.UtcNow } }
               let newState = ManagerState.addSession id restarted state
+              awaitWorkerPort id proc inbox ct
               return! loop newState
             | Error _msg ->
               // Spawn failed — treat as another crash

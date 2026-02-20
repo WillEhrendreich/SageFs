@@ -67,6 +67,8 @@ module SessionReplayState =
     | SessionWarmUpCompleted e ->
       { state with WarmupErrors = e.Errors }
       |> withActivity
+    | SessionWarmUpProgress _ ->
+      state |> withActivity
     | SessionReady ->
       { state with Status = Ready }
       |> withActivity

@@ -88,6 +88,7 @@ module WorkerProtocol =
 
   type WorkerStatusSnapshot = {
     Status: SessionStatus
+    StatusMessage: string option
     EvalCount: int
     AvgDurationMs: int64
     MinDurationMs: int64

@@ -126,6 +126,7 @@ let workerProtocolTests =
           AvgDurationMs = 150L
           MinDurationMs = 5L
           MaxDurationMs = 1000L
+          StatusMessage = None
         }
         let resp = WorkerResponse.StatusResult("r6", status)
         let _, result = roundTrip<WorkerResponse> resp

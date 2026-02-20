@@ -146,21 +146,29 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
         ]
       eprintfn "Resuming %d previous session(s) (%d stale duplicates cleaned)..."
         uniqueByDir.Length (aliveSessions.Length - uniqueByDir.Length)
-      for prev in uniqueByDir do
-        if IO.Directory.Exists prev.WorkingDir then
+      // Skip missing directories first (synchronous, fast)
+      let existing, missing =
+        uniqueByDir |> List.partition (fun prev -> IO.Directory.Exists prev.WorkingDir)
+      for prev in missing do
+        eprintfn "  [SKIP] %s — directory no longer exists" prev.WorkingDir
+        do! SageFs.EventStore.appendEvents eventStore daemonStreamId [
+          Features.Events.SageFsEvent.DaemonSessionStopped
+            {| SessionId = prev.SessionId; StoppedAt = DateTimeOffset.UtcNow |}
+        ]
+      // Resume all valid sessions in parallel — each is an independent worker process
+      let resumeTasks =
+        existing
+        |> List.map (fun prev -> task {
           eprintfn "  Resuming session for %s..." prev.WorkingDir
           let! result = sessionOps.CreateSession prev.Projects prev.WorkingDir
           match result with
           | Ok info ->
             eprintfn "  Resumed: %s" info
             onSessionResumed ()
-          | Error err -> eprintfn "  [WARN] Failed to resume session for %s: %A" prev.WorkingDir err
-        else
-          eprintfn "  [SKIP] %s — directory no longer exists" prev.WorkingDir
-          do! SageFs.EventStore.appendEvents eventStore daemonStreamId [
-            Features.Events.SageFsEvent.DaemonSessionStopped
-              {| SessionId = prev.SessionId; StoppedAt = DateTimeOffset.UtcNow |}
-          ]
+          | Error err ->
+            eprintfn "  [WARN] Failed to resume session for %s: %A" prev.WorkingDir err
+        })
+      do! System.Threading.Tasks.Task.WhenAll(resumeTasks) :> System.Threading.Tasks.Task
       // Sessions restored — clients will discover them via listing
       // No global "active session" to restore; each client picks its own
       match daemonState.ActiveSessionId with
@@ -286,12 +294,18 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
     return sessions
   }
 
+  let getStatusMsg (sid: string) =
+    match tryGetSessionSnapshot sid with
+    | Some snap -> snap.StatusMessage
+    | None -> None
+
   let sessionThemes = Collections.Concurrent.ConcurrentDictionary<string, string>()
 
   let dashboardEndpoints =
     Dashboard.createEndpoints
       version
       getSessionState
+      getStatusMsg
       getEvalStats
       getSessionWorkingDir
       (fun () ->

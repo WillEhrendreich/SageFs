@@ -45,6 +45,7 @@ type ActorResult = {
   GetEvalStats: unit -> Affordances.EvalStats
   GetWarmupFailures: unit -> WarmupFailure list
   GetStartupConfig: unit -> StartupConfig option
+  GetStatusMessage: unit -> string option
   ProjectDirectories: string list
 }
 
@@ -78,10 +79,10 @@ let createActorImmediate a =
   AspireSetup.configureAspireIfNeeded a.Logger sln
 
   let customData = a.InitFunctions |> Seq.map (fun fn -> fn sln) |> Map.ofSeq
-  let appActor, diagnosticsChanged, cancelEval, getSessionState, getEvalStats, getWarmupFailures, getStartupConfig =
+  let appActor, diagnosticsChanged, cancelEval, getSessionState, getEvalStats, getWarmupFailures, getStartupConfig, getStatusMessage =
     mkAppStateActor a.Logger customData a.OutStream a.UseAsp originalSln shadowDir a.OnEvent sln
   let projDirs = projectDirectories originalSln
-  { Actor = appActor; DiagnosticsChanged = diagnosticsChanged; CancelEval = cancelEval; GetSessionState = getSessionState; GetEvalStats = getEvalStats; GetWarmupFailures = getWarmupFailures; GetStartupConfig = getStartupConfig; ProjectDirectories = projDirs }
+  { Actor = appActor; DiagnosticsChanged = diagnosticsChanged; CancelEval = cancelEval; GetSessionState = getSessionState; GetEvalStats = getEvalStats; GetWarmupFailures = getWarmupFailures; GetStartupConfig = getStartupConfig; GetStatusMessage = getStatusMessage; ProjectDirectories = projDirs }
 
 /// Phase 2: Add middleware — blocks until init() completes and the
 /// eval actor is ready to process messages in its main loop.

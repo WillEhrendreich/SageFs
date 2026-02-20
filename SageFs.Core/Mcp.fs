@@ -384,6 +384,7 @@ module EventTracking =
       | ScriptLoadFailed e -> "system", sprintf "failed to load %s: %s" e.FilePath e.Error
       | SessionStarted _ -> "system", "session started"
       | SessionWarmUpCompleted _ -> "system", "warm-up completed"
+      | SessionWarmUpProgress e -> "system", sprintf "warm-up [%d/%d] %s" e.Step e.Total e.Message
       | SessionReady -> "system", "session ready"
       | SessionFaulted e -> "system", e.Error
       | SessionReset -> "system", "session reset"

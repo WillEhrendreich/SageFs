@@ -134,6 +134,7 @@ type QuerySnapshot = {
   EvalStats: Affordances.EvalStats
   StartupConfig: StartupConfig option
   WarmupFailures: WarmupFailure list
+  StatusMessage: string option
 }
 
 /// Internal command for the query actor
@@ -144,6 +145,7 @@ type internal QueryCommand =
   | QueryGetEvalStats of AsyncReplyChannel<Affordances.EvalStats>
   | QueryGetStartupConfig of AsyncReplyChannel<StartupConfig option>
   | QueryGetWarmupFailures of AsyncReplyChannel<WarmupFailure list>
+  | QueryGetStatusMessage of AsyncReplyChannel<string option>
   | QueryAutocomplete of text: string * caret: int * word: string * AsyncReplyChannel<list<AutoCompletion.CompletionItem>>
   | QueryGetDiagnostics of text: string * AsyncReplyChannel<Diagnostics.Diagnostic array>
   | QueryGetBoundValue of name: string * AsyncReplyChannel<obj Option>
@@ -266,7 +268,7 @@ open System.Threading
 /// Creates a fresh FSI session with warm-up: loads startup files and opens namespaces.
 /// The CancellationToken is passed through to FSI EvalInteraction calls so that
 /// warm-up can be cancelled if it takes too long (e.g. a stuck module initializer).
-let createFsiSession (logger: ILogger) (outStream: TextWriter) (useAsp: bool) (sln: Solution) (ct: CancellationToken) =
+let createFsiSession (logger: ILogger) (outStream: TextWriter) (useAsp: bool) (sln: Solution) (ct: CancellationToken) (onProgress: (int * int * string) -> unit) =
   async {
     let sw = System.Diagnostics.Stopwatch.StartNew()
     let fsiConfig = FsiEvaluationSession.GetDefaultConfiguration()
@@ -290,6 +292,7 @@ let createFsiSession (logger: ILogger) (outStream: TextWriter) (useAsp: bool) (s
     if fsiInitErrors.Length > 0 then
       logger.LogWarning (sprintf "  FSI init warnings: %s" fsiInitErrors)
     logger.LogInfo (sprintf "  FSI session created in %dms, loading startup files..." sw.ElapsedMilliseconds)
+    onProgress(1, 4, "FSI session created")
 
     for fileName in sln.StartupFiles do
       ct.ThrowIfCancellationRequested()
@@ -336,6 +339,7 @@ let createFsiSession (logger: ILogger) (outStream: TextWriter) (useAsp: bool) (s
       with ex ->
         logger.LogDebug (sprintf "Could not parse opens from %s: %s" fsFile ex.Message)
     logger.LogInfo (sprintf "  Scanned %d source files for opens in %dms" fileCount sw.ElapsedMilliseconds)
+    onProgress(2, 4, sprintf "Scanned %d source files" fileCount)
 
     // Phase 2: Collect namespaces/modules via reflection
     logger.LogInfo "  Scanning assemblies for namespaces..."
@@ -398,6 +402,7 @@ let createFsiSession (logger: ILogger) (outStream: TextWriter) (useAsp: bool) (s
         logger.LogDebug (sprintf "Could not analyze %s: %s" project.TargetPath ex.Message)
     reflectionAlc.Unload()
     logger.LogInfo (sprintf "  Assembly scan complete in %dms" sw.ElapsedMilliseconds)
+    onProgress(3, 4, sprintf "Scanned assemblies, opening %d namespaces" namesToOpen.Count)
     // Phase 3: Open all collected names with iterative retry
     let opener name =
       ct.ThrowIfCancellationRequested()
@@ -440,6 +445,7 @@ let createFsiSession (logger: ILogger) (outStream: TextWriter) (useAsp: bool) (s
     let warmupFailures =
       failed |> List.map (fun (name, err) -> { Name = name; Error = err })
     logger.LogInfo (sprintf "  Warm-up complete in %dms" sw.ElapsedMilliseconds)
+    onProgress(4, 4, sprintf "Warm-up complete in %dms" sw.ElapsedMilliseconds)
     return fsiSession, recorder, args, warmupFailures
   }
 
@@ -469,6 +475,9 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
         return! loop snapshot
       | QueryGetWarmupFailures reply ->
         reply.Reply snapshot.WarmupFailures
+        return! loop snapshot
+      | QueryGetStatusMessage reply ->
+        reply.Reply snapshot.StatusMessage
         return! loop snapshot
       | QueryAutocomplete(text, caret, word, reply) ->
         let res = AutoCompletion.getCompletions snapshot.AppState.Session text caret word
@@ -505,6 +514,7 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
       EvalStats = Affordances.EvalStats.empty
       StartupConfig = None
       WarmupFailures = []
+      StatusMessage = None
     }
     loop emptySnapshot
   )
@@ -516,6 +526,7 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
       EvalStats = evalStats
       StartupConfig = st.StartupConfig
       WarmupFailures = st.WarmupFailures
+      StatusMessage = None
     })
 
   // Shared refs for cancellation + thread interruption.
@@ -613,7 +624,13 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
             if not (isNull (box st.Session)) then
               (st.Session :> System.IDisposable).Dispose()
             let softResetCts = new CancellationTokenSource(TimeSpan.FromMinutes(5.0))
-            let! newSession, newRecorder, _, warmupFailures = createFsiSession logger outStream useAsp st.Solution softResetCts.Token
+            let onProgress (s,t,msg) =
+              emit (Events.SageFsEvent.SessionWarmUpProgress {| Step = s; Total = t; Message = msg |})
+              queryActor.Post(UpdateSnapshot {
+                AppState = st; SessionState = SessionState.WarmingUp; EvalStats = evalStats
+                StartupConfig = st.StartupConfig; WarmupFailures = st.WarmupFailures
+                StatusMessage = Some (sprintf "[%d/%d] %s" s t msg) })
+            let! newSession, newRecorder, _, warmupFailures = createFsiSession logger outStream useAsp st.Solution softResetCts.Token onProgress
             softResetCts.Dispose()
             let newSt = { st with Session = newSession; OutStream = newRecorder; Diagnostics = Features.DiagnosticsStore.empty; WarmupFailures = warmupFailures }
             logger.LogInfo "✅ FSI session reset complete"
@@ -765,9 +782,15 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
             // we cancel and unblock the mailbox even if FSI is stuck.
             let warmupTask =
               System.Threading.Tasks.Task.Run<Result<_, exn>>(fun () ->
+                let onProgress (s,t,msg) =
+                  emit (Events.SageFsEvent.SessionWarmUpProgress {| Step = s; Total = t; Message = msg |})
+                  queryActor.Post(UpdateSnapshot {
+                    AppState = st; SessionState = SessionState.WarmingUp; EvalStats = evalStats
+                    StartupConfig = st.StartupConfig; WarmupFailures = st.WarmupFailures
+                    StatusMessage = Some (sprintf "[%d/%d] %s" s t msg) })
                 try
                   Async.RunSynchronously(
-                    createFsiSession logger outStream useAsp newSln warmupCts.Token)
+                    createFsiSession logger outStream useAsp newSln warmupCts.Token onProgress)
                   |> Ok
                 with
                 | :? OperationCanceledException as ex -> Error (ex :> exn)
@@ -842,7 +865,16 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
           | None -> ()
 
           let initCts = new CancellationTokenSource(TimeSpan.FromMinutes(5.0))
-          let! fsiSession, recorder, args, warmupFailures = createFsiSession logger outStream useAsp sln initCts.Token
+          let onProgress (s,t,msg) =
+            emit (Events.SageFsEvent.SessionWarmUpProgress {| Step = s; Total = t; Message = msg |})
+            queryActor.Post(UpdateSnapshot {
+              AppState = Unchecked.defaultof<AppState>
+              SessionState = SessionState.WarmingUp
+              EvalStats = Affordances.EvalStats.empty
+              StartupConfig = None
+              WarmupFailures = []
+              StatusMessage = Some (sprintf "[%d/%d] %s" s t msg) })
+          let! fsiSession, recorder, args, warmupFailures = createFsiSession logger outStream useAsp sln initCts.Token onProgress
           initCts.Dispose()
           
           // Evaluate startup profile if found
@@ -1007,8 +1039,11 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
   let getStartupConfig () =
     queryActor.PostAndAsyncReply(fun reply -> QueryGetStartupConfig reply)
     |> Async.RunSynchronously
+  let getStatusMessage () =
+    queryActor.PostAndAsyncReply(fun reply -> QueryGetStatusMessage reply)
+    |> Async.RunSynchronously
   let cancelCurrentEval () =
     actor.PostAndAsyncReply(fun reply -> CancelEval reply)
     |> Async.RunSynchronously
 
-  actor, diagnosticsChangedEvent.Publish, cancelCurrentEval, getSessionState, getEvalStats, getWarmupFailures, getStartupConfig
+  actor, diagnosticsChangedEvent.Publish, cancelCurrentEval, getSessionState, getEvalStats, getWarmupFailures, getStartupConfig, getStatusMessage

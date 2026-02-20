@@ -208,6 +208,7 @@ module SessionStateOverride =
   let mkSession id status =
     { ParsedSession.Id = id
       Status = status
+      StatusMessage = None
       IsActive = false
       IsSelected = false
       ProjectsText = ""
@@ -218,7 +219,7 @@ module SessionStateOverride =
 
 [<Tests>]
 let stateOverrideTests =
-  let open' = SageFs.Server.Dashboard.overrideSessionStatuses
+  let open' getState = SageFs.Server.Dashboard.overrideSessionStatuses getState (fun _ -> None)
   let mk = SessionStateOverride.mkSession
   testList "Session state override" [
     testCase "Ready maps to running" (fun () ->
@@ -416,7 +417,7 @@ let connectionCountTests =
 [<Tests>]
 let stoppedSessionFilterTests =
   let parse = SageFs.Server.Dashboard.parseSessionLines
-  let override' = SageFs.Server.Dashboard.overrideSessionStatuses
+  let override' getState = SageFs.Server.Dashboard.overrideSessionStatuses getState (fun _ -> None)
   testList "Stopped session filtering" [
     testCase "stopped sessions are filtered from rendered list" (fun () ->
       // Simulate: two sessions parsed from TUI, one has live state Uninitialized (= stopped)

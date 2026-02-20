@@ -29,7 +29,7 @@ let globalActorResult = lazy(
 /// Create a SessionProxy from a test actor result
 let mkProxy (result: ActorResult) : SageFs.WorkerProtocol.SessionProxy =
   fun msg ->
-    SageFs.Server.WorkerMain.handleMessage result.Actor result.GetSessionState result.GetEvalStats msg
+    SageFs.Server.WorkerMain.handleMessage result.Actor result.GetSessionState result.GetEvalStats result.GetStatusMessage msg
 
 /// Create a test SessionManagementOps that routes to the global actor
 let mkTestSessionOps (result: ActorResult) (sessionId: string) : SageFs.SessionManagementOps =

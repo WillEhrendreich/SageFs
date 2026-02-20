@@ -19,6 +19,7 @@ let toWorkerDiagnostic (d: Features.Diagnostics.Diagnostic) : WorkerDiagnostic =
 let toStatusSnapshot
   (state: SessionState)
   (stats: Affordances.EvalStats)
+  (statusMsg: string option)
   : WorkerStatusSnapshot =
   let avg =
     if stats.EvalCount > 0 then
@@ -32,6 +33,7 @@ let toStatusSnapshot
     | SessionState.Evaluating -> SessionStatus.Evaluating
     | SessionState.Faulted -> SessionStatus.Faulted
   { Status = status
+    StatusMessage = statusMsg
     EvalCount = stats.EvalCount
     AvgDurationMs = avg
     MinDurationMs = stats.MinDuration.TotalMilliseconds |> int64
@@ -42,6 +44,7 @@ let handleMessage
   (actor: AppActor)
   (getState: unit -> SessionState)
   (getStats: unit -> Affordances.EvalStats)
+  (getStatusMessage: unit -> string option)
   (msg: WorkerMessage)
   : Async<WorkerResponse> =
   async {
@@ -98,7 +101,7 @@ let handleMessage
     | WorkerMessage.GetStatus replyId ->
       let state = getState ()
       let stats = getStats ()
-      return WorkerResponse.StatusResult(replyId, toStatusSnapshot state stats)
+      return WorkerResponse.StatusResult(replyId, toStatusSnapshot state stats (getStatusMessage()))
 
     | WorkerMessage.Shutdown ->
       return WorkerResponse.WorkerShuttingDown
@@ -170,7 +173,7 @@ let run (sessionId: string) (port: int) (args: Args.Arguments list) = async {
       Some (FileWatcher.start config onFileChanged)
 
   // Signal readiness over the pipe
-  let handler = handleMessage actor result.GetSessionState result.GetEvalStats
+  let handler = handleMessage actor result.GetSessionState result.GetEvalStats result.GetStatusMessage
 
   let readyHandler (msg: WorkerMessage) = async {
     match msg with

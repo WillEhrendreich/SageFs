@@ -85,7 +85,8 @@ let testHandler (msg: WorkerMessage) : Async<WorkerResponse> = async {
           EvalCount = 42
           AvgDurationMs = 100L
           MinDurationMs = 5L
-          MaxDurationMs = 500L })
+          MaxDurationMs = 500L
+          StatusMessage = None })
   | WorkerMessage.EvalCode(code, rid) ->
     return WorkerResponse.EvalResult(rid, Ok (sprintf "val it: string = \"%s\"" code), [])
   | WorkerMessage.CheckCode(_, rid) ->
@@ -120,7 +121,8 @@ let slowEvalHandler (msg: WorkerMessage) : Async<WorkerResponse> = async {
           EvalCount = 1
           AvgDurationMs = 0L
           MinDurationMs = 0L
-          MaxDurationMs = 0L })
+          MaxDurationMs = 0L
+          StatusMessage = None })
   | _ -> return WorkerResponse.WorkerError (SageFsError.EvalFailed "unexpected")
 }
 

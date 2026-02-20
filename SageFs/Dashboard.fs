@@ -672,6 +672,7 @@ let renderDiagnostics (diags: Diagnostic list) =
 type ParsedSession = {
   Id: string
   Status: string
+  StatusMessage: string option
   IsActive: bool
   IsSelected: bool
   ProjectsText: string
@@ -701,6 +702,7 @@ let parseSessionLines (content: string) =
       let evalsMatch = Regex.Match(m.Groups.[6].Value, @"evals:(\d+)")
       { Id = m.Groups.[2].Value
         Status = m.Groups.[3].Value
+        StatusMessage = None
         IsActive = m.Groups.[4].Value.Contains("*")
         IsSelected = m.Groups.[1].Value = ">"
         ProjectsText = m.Groups.[5].Value.Trim()
@@ -711,6 +713,7 @@ let parseSessionLines (content: string) =
     else
       { Id = l.Trim()
         Status = "unknown"
+        StatusMessage = None
         IsActive = false
         IsSelected = false
         ProjectsText = ""
@@ -863,6 +866,12 @@ let renderSessions (sessions: ParsedSession list) (creating: bool) =
                   [ Attr.class' (sprintf "status %s" statusClass)
                     Attr.style "font-size: 0.7rem; padding: 1px 6px; border-radius: 3px;" ]
                   [ Text.raw s.Status ]
+                match s.StatusMessage with
+                | Some msg ->
+                  Elem.span
+                    [ Attr.style "font-size: 0.65rem; color: var(--fg-yellow); font-style: italic;" ]
+                    [ Text.raw (sprintf "⏳ %s" msg) ]
+                | None -> ()
                 if s.IsActive then
                   Elem.span [ Attr.style "color: var(--green);" ] [ Text.raw "● active" ]
                 if s.Uptime.Length > 0 then
@@ -961,6 +970,7 @@ let parseDiagLines (content: string) : Diagnostic list =
 /// The TUI text may be stale — live state is the source of truth.
 let overrideSessionStatuses
   (getState: string -> SessionState)
+  (getStatusMsg: string -> string option)
   (sessions: ParsedSession list) : ParsedSession list =
   sessions
   |> List.map (fun (s: ParsedSession) ->
@@ -971,14 +981,14 @@ let overrideSessionStatuses
       | SessionState.WarmingUp -> "starting"
       | SessionState.Faulted -> "faulted"
       | SessionState.Uninitialized -> "stopped"
-    { s with Status = liveStatus })
+    { s with Status = liveStatus; StatusMessage = getStatusMsg s.Id })
 
-let renderRegionForSse (getSessionState: string -> SessionState) (region: RenderRegion) =
+let renderRegionForSse (getSessionState: string -> SessionState) (getStatusMsg: string -> string option) (region: RenderRegion) =
   match region.Id with
   | "output" -> Some (renderOutput (parseOutputLines region.Content))
   | "sessions" ->
     let parsed = parseSessionLines region.Content
-    let corrected = overrideSessionStatuses getSessionState parsed
+    let corrected = overrideSessionStatuses getSessionState getStatusMsg parsed
     let visible = corrected |> List.filter (fun s -> s.Status <> "stopped")
     Some (renderSessions visible (isCreatingSession region.Content))
   | _ -> None
@@ -988,9 +998,10 @@ let pushRegions
   (regions: RenderRegion list)
   (getPreviousSessions: unit -> PreviousSession list)
   (getSessionState: string -> SessionState)
+  (getStatusMsg: string -> string option)
   = task {
     for region in regions do
-      match renderRegionForSse getSessionState region with
+      match renderRegionForSse getSessionState getStatusMsg region with
       | Some html -> do! ssePatchNode ctx html
       | None -> ()
       // When sessions region is pushed, also push picker visibility
@@ -1031,6 +1042,7 @@ let resolveThemePush
 /// Create the SSE stream handler that pushes Elm state to the browser.
 let createStreamHandler
   (getSessionState: string -> SessionState)
+  (getStatusMsg: string -> string option)
   (getEvalStats: string -> SageFs.Affordances.EvalStats)
   (getSessionWorkingDir: string -> string)
   (getActiveSessionId: unit -> string)
@@ -1113,7 +1125,7 @@ let createStreamHandler
           then regions |> List.filter (fun r -> r.Id <> "output")
           else regions
         lastOutputHash <- outputHash
-        do! pushRegions ctx filteredRegions getPreviousSessions getSessionState
+        do! pushRegions ctx filteredRegions getPreviousSessions getSessionState getStatusMsg
       | None -> ()
     }
 
@@ -1624,6 +1636,7 @@ let createApiDispatchHandler
 let createEndpoints
   (version: string)
   (getSessionState: string -> SessionState)
+  (getStatusMsg: string -> string option)
   (getEvalStats: string -> SageFs.Affordances.EvalStats)
   (getSessionWorkingDir: string -> string)
   (getActiveSessionId: unit -> string)
@@ -1644,7 +1657,7 @@ let createEndpoints
   : HttpEndpoint list =
   [
     yield get "/dashboard" (FalcoResponse.ofHtml (renderShell version))
-    yield get "/dashboard/stream" (createStreamHandler getSessionState getEvalStats getSessionWorkingDir getActiveSessionId getElmRegions stateChanged connectionTracker getPreviousSessions getAllSessions sessionThemes)
+    yield get "/dashboard/stream" (createStreamHandler getSessionState getStatusMsg getEvalStats getSessionWorkingDir getActiveSessionId getElmRegions stateChanged connectionTracker getPreviousSessions getAllSessions sessionThemes)
     yield post "/dashboard/eval" (createEvalHandler evalCode)
     yield post "/dashboard/reset" (createResetHandler resetSession)
     yield post "/dashboard/hard-reset" (createResetHandler hardResetSession)
