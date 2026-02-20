@@ -3,7 +3,7 @@ namespace SageFs.Gui
 open Raylib_cs
 open SageFs
 
-/// Raylib emitter — converts Cell[,] to Raylib draw calls.
+/// Raylib emitter — converts CellGrid to Raylib draw calls.
 /// Each cell is drawn as a colored rectangle + character.
 /// Box-drawing characters are rendered as native Raylib lines/rectangles.
 module RaylibEmitter =
@@ -71,7 +71,7 @@ module RaylibEmitter =
     | _ -> false
 
   /// Emit with optional selection highlight. Selection is (startRow, startCol, endRow, endCol).
-  let emitWithSelection (grid: Cell[,]) (font: Font) (cellW: int) (cellH: int) (fontSize: int) (selection: (int * int * int * int) option) =
+  let emitWithSelection (grid: CellGrid) (font: Font) (cellW: int) (cellH: int) (fontSize: int) (selection: (int * int * int * int) option) =
     let rows = CellGrid.rows grid
     let cols = CellGrid.cols grid
     let selHighlight = Color(100uy, 150uy, 255uy, 80uy)
@@ -86,8 +86,9 @@ module RaylibEmitter =
       | None -> -1, -1, -1, -1
 
     for row in 0 .. rows - 1 do
+      let rowBase = row * cols
       for col in 0 .. cols - 1 do
-        let cell = grid.[row, col]
+        let cell = grid.Cells.[rowBase + col]
         let x = col * cellW
         let y = row * cellH
 
@@ -115,5 +116,5 @@ module RaylibEmitter =
             Raylib.DrawTextEx(font, text, System.Numerics.Vector2(float32 x, float32 y), float32 fontSize, 0.0f, fgColor)
 
   /// Emit the grid as Raylib draw calls. Must be called between BeginDrawing/EndDrawing.
-  let emit (grid: Cell[,]) (font: Font) (cellW: int) (cellH: int) (fontSize: int) =
+  let emit (grid: CellGrid) (font: Font) (cellW: int) (cellH: int) (fontSize: int) =
     emitWithSelection grid font cellW cellH fontSize None
