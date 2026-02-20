@@ -180,6 +180,7 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
 
   // Create state-changed event for SSE subscribers
   let stateChangedEvent = Event<string>()
+  let mutable lastStateJson = ""
 
   // Create EffectDeps from SessionManager + start Elm loop
   let effectDeps = ElmDaemon.createEffectDeps sessionManager
@@ -188,23 +189,25 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
       let outputCount = model.RecentOutput.Length
       let diagCount =
         model.Diagnostics |> Map.values |> Seq.sumBy List.length
-      if not TerminalUIState.IsActive && (outputCount > 0 || diagCount > 0) then
-        let latest =
-          model.RecentOutput
-          |> List.tryHead
-          |> Option.map (fun o -> o.Text)
-          |> Option.defaultValue ""
-        eprintfn "\x1b[36m[elm]\x1b[0m output=%d diags=%d | %s"
-          outputCount diagCount latest
-      // Fire SSE event with summary JSON
+      // Fire SSE event with summary JSON — deduplicated
       try
         let json = System.Text.Json.JsonSerializer.Serialize(
           {| outputCount = outputCount
              diagCount = diagCount
              sessionCount = model.Sessions.Sessions.Length
              activeSession = ActiveSession.sessionId model.Sessions.ActiveSessionId |> Option.defaultValue ""
-             timestamp = DateTime.UtcNow.ToString("o") |})
-        stateChangedEvent.Trigger json
+             sessionStatuses = model.Sessions.Sessions |> List.map (fun s -> sprintf "%s:%A" s.Id s.Status) |})
+        if json <> lastStateJson then
+          lastStateJson <- json
+          if not TerminalUIState.IsActive && (outputCount > 0 || diagCount > 0) then
+            let latest =
+              model.RecentOutput
+              |> List.tryHead
+              |> Option.map (fun o -> o.Text)
+              |> Option.defaultValue ""
+            eprintfn "\x1b[36m[elm]\x1b[0m output=%d diags=%d | %s"
+              outputCount diagCount latest
+          stateChangedEvent.Trigger json
       with _ -> ())
 
   // Create a diagnostics-changed event (aggregated from workers)

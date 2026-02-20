@@ -206,6 +206,26 @@ module SageFsUpdate =
                   if isFirst then ActiveSession.Viewing snap.Id
                   else model.Sessions.ActiveSessionId } }, []
 
+      | SageFsEvent.SessionsRefreshed snaps ->
+        let activeId = model.Sessions.ActiveSessionId
+        let merged =
+          snaps |> List.map (fun snap ->
+            let isActive =
+              match activeId with
+              | ActiveSession.Viewing id -> id = snap.Id
+              | _ -> false
+            { snap with IsActive = isActive })
+        let activeId' =
+          match activeId with
+          | ActiveSession.AwaitingSession when not (List.isEmpty merged) ->
+            ActiveSession.Viewing merged.Head.Id
+          | _ -> activeId
+        { model with
+            Sessions = {
+              model.Sessions with
+                Sessions = merged
+                ActiveSessionId = activeId' } }, []
+
       | SageFsEvent.SessionStatusChanged (sessionId, status) ->
         { model with
             Sessions = {
@@ -564,9 +584,8 @@ module SageFsEffectHandler =
       | EditorEffect.RequestSessionList ->
         async {
           let! sessions = deps.ListSessions ()
-          for info in sessions do
-            dispatch (SageFsMsg.Event (
-              SageFsEvent.SessionCreated (sessionInfoToSnapshot info)))
+          let snaps = sessions |> List.map sessionInfoToSnapshot
+          dispatch (SageFsMsg.Event (SageFsEvent.SessionsRefreshed snaps))
         }
 
       | EditorEffect.RequestSessionSwitch sessionId ->

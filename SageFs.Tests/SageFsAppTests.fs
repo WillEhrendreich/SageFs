@@ -160,6 +160,70 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
     |> fun s -> s.IsActive
     |> Expect.isTrue "s2 should be active"
 
+  testCase "SessionsRefreshed replaces all sessions in one update" <| fun _ ->
+    let snap1 = {
+      Id = "s1"; Name = None; Projects = ["A.fsproj"]
+      Status = SessionDisplayStatus.Running
+      LastActivity = DateTime.UtcNow; EvalCount = 0
+      UpSince = DateTime.UtcNow; IsActive = false; WorkingDirectory = "." }
+    let snap2 = {
+      Id = "s2"; Name = None; Projects = ["B.fsproj"]
+      Status = SessionDisplayStatus.Running
+      LastActivity = DateTime.UtcNow; EvalCount = 0
+      UpSince = DateTime.UtcNow; IsActive = false; WorkingDirectory = "." }
+    let model = {
+      SageFsModel.initial with
+        Sessions = {
+          SageFsModel.initial.Sessions with
+            ActiveSessionId = ActiveSession.Viewing "s1" } }
+    let event = SageFsEvent.SessionsRefreshed [snap1; snap2]
+    let newModel, _ =
+      SageFsUpdate.update (SageFsMsg.Event event) model
+    newModel.Sessions.Sessions
+    |> Expect.hasLength "should have 2 sessions" 2
+    newModel.Sessions.Sessions
+    |> List.find (fun s -> s.Id = "s1")
+    |> fun s -> s.IsActive
+    |> Expect.isTrue "s1 should be active (matches ActiveSessionId)"
+
+  testCase "SessionsRefreshed preserves active session" <| fun _ ->
+    let snap1 = {
+      Id = "s1"; Name = None; Projects = ["A.fsproj"]
+      Status = SessionDisplayStatus.Running
+      LastActivity = DateTime.UtcNow; EvalCount = 0
+      UpSince = DateTime.UtcNow; IsActive = false; WorkingDirectory = "." }
+    let snap2 = {
+      Id = "s2"; Name = None; Projects = ["B.fsproj"]
+      Status = SessionDisplayStatus.Running
+      LastActivity = DateTime.UtcNow; EvalCount = 0
+      UpSince = DateTime.UtcNow; IsActive = false; WorkingDirectory = "." }
+    let model = {
+      SageFsModel.initial with
+        Sessions = {
+          SageFsModel.initial.Sessions with
+            ActiveSessionId = ActiveSession.Viewing "s2" } }
+    let event = SageFsEvent.SessionsRefreshed [snap1; snap2]
+    let newModel, _ =
+      SageFsUpdate.update (SageFsMsg.Event event) model
+    newModel.Sessions.ActiveSessionId
+    |> Expect.equal "active should still be s2" (ActiveSession.Viewing "s2")
+    newModel.Sessions.Sessions
+    |> List.find (fun s -> s.Id = "s2")
+    |> fun s -> s.IsActive
+    |> Expect.isTrue "s2 should be marked active"
+
+  testCase "SessionsRefreshed sets first session active when awaiting" <| fun _ ->
+    let snap = {
+      Id = "s1"; Name = None; Projects = ["A.fsproj"]
+      Status = SessionDisplayStatus.Running
+      LastActivity = DateTime.UtcNow; EvalCount = 0
+      UpSince = DateTime.UtcNow; IsActive = false; WorkingDirectory = "." }
+    let event = SageFsEvent.SessionsRefreshed [snap]
+    let newModel, _ =
+      SageFsUpdate.update (SageFsMsg.Event event) SageFsModel.initial
+    newModel.Sessions.ActiveSessionId
+    |> Expect.equal "should auto-select first" (ActiveSession.Viewing "s1")
+
   testCase "SessionStopped removes session" <| fun _ ->
     let snap = {
       Id = "s1"; Name = None; Projects = []; Status = SessionDisplayStatus.Running
