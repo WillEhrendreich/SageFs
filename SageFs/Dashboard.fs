@@ -310,8 +310,9 @@ let renderShell (version: string) =
           Elem.div [ Attr.id "eval-stats"; Attr.class' "meta" ] []
           Elem.button
             [ Attr.class' "sidebar-toggle"
-              Ds.onEvent ("click", "$sidebarOpen = !$sidebarOpen") ]
-            [ Text.raw "☰ Panel" ]
+              Ds.onEvent ("click", "$sidebarOpen = !$sidebarOpen")
+              Ds.text "$sidebarOpen ? '✕ Panel' : '☰ Panel'" ]
+            []
         ]
       ]
       // Main app layout: output+eval on left, sidebar on right
