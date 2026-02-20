@@ -4,6 +4,7 @@ open Expecto
 open VerifyExpecto
 open VerifyTests
 open Falco.Markup
+open SageFs
 open SageFs.Server.Dashboard
 
 let snapshotsDir =
@@ -214,6 +215,71 @@ let parserTests = testList "parser integration" [
   }
 ]
 
+let mkRegion id content = {
+  Id = id; Flags = RegionFlags.None; Content = content
+  Affordances = []; Cursor = None; Completions = None
+}
+
+let standbyBadgeSseTests = testList "SSE standby badge" [
+
+  test "ready standby shows green badge" {
+    let getState _ = SessionState.Ready
+    let getMsg _ = None
+    let r = mkRegion "sessions" "active s1 SageFs.Tests.fsproj C:\\Code\\Repos\\SageFs 42 1m Ready 0"
+    let html = renderRegionForSse getState getMsg "✓ standby" r |> Option.map renderNode |> Option.defaultValue ""
+    Expect.isTrue (html.Contains "standby") "should contain standby"
+    Expect.isTrue (html.Contains "var(--green)") "ready standby should use green"
+  }
+
+  test "warming standby shows yellow badge" {
+    let getState _ = SessionState.Ready
+    let getMsg _ = None
+    let r = mkRegion "sessions" "active s1 SageFs.Tests.fsproj C:\\Code\\Repos\\SageFs 42 1m Ready 0"
+    let html = renderRegionForSse getState getMsg "⏳ standby" r |> Option.map renderNode |> Option.defaultValue ""
+    Expect.isTrue (html.Contains "standby") "should contain standby"
+    Expect.isTrue (html.Contains "var(--fg-yellow)") "warming standby should use yellow"
+  }
+
+  test "invalidated standby shows red badge" {
+    let getState _ = SessionState.Ready
+    let getMsg _ = None
+    let r = mkRegion "sessions" "active s1 SageFs.Tests.fsproj C:\\Code\\Repos\\SageFs 42 1m Ready 0"
+    let html = renderRegionForSse getState getMsg "⚠ standby" r |> Option.map renderNode |> Option.defaultValue ""
+    Expect.isTrue (html.Contains "standby") "should contain standby"
+    Expect.isTrue (html.Contains "var(--red)") "invalidated standby should use red"
+  }
+
+  test "empty label shows no badge" {
+    let getState _ = SessionState.Ready
+    let getMsg _ = None
+    let r = mkRegion "sessions" "active s1 SageFs.Tests.fsproj C:\\Code\\Repos\\SageFs 42 1m Ready 0"
+    let html = renderRegionForSse getState getMsg "" r |> Option.map renderNode |> Option.defaultValue ""
+    Expect.isFalse (html.Contains "standby") "empty label should not show standby badge"
+  }
+
+  test "StandbyInfo.label maps correctly" {
+    Expect.equal (StandbyInfo.label StandbyInfo.NoPool) "" "NoPool -> empty"
+    Expect.equal (StandbyInfo.label StandbyInfo.Warming) "⏳ standby" "Warming"
+    Expect.equal (StandbyInfo.label StandbyInfo.Ready) "✓ standby" "Ready"
+    Expect.equal (StandbyInfo.label StandbyInfo.Invalidated) "⚠ standby" "Invalidated"
+  }
+
+  test "output region unaffected by standby label" {
+    let getState _ = SessionState.Ready
+    let getMsg _ = None
+    let r = mkRegion "output" "[12:00:00] [info] hello world"
+    let html = renderRegionForSse getState getMsg "✓ standby" r |> Option.map renderNode |> Option.defaultValue ""
+    Expect.isFalse (html.Contains "standby") "output region should not contain standby"
+  }
+
+  test "unknown region returns None" {
+    let getState _ = SessionState.Ready
+    let getMsg _ = None
+    let r = mkRegion "unknown" "whatever"
+    Expect.isNone (renderRegionForSse getState getMsg "✓ standby" r) "unknown region -> None"
+  }
+]
+
 
 [<Tests>]
 let allDashboardSnapshotTests = testList "Dashboard Snapshots" [
@@ -221,4 +287,5 @@ let allDashboardSnapshotTests = testList "Dashboard Snapshots" [
   keyboardHelpSnapshotTests
   edgeCaseSnapshotTests
   parserTests
+  standbyBadgeSseTests
 ]

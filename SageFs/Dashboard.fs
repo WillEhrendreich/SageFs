@@ -928,9 +928,9 @@ let renderSessions (sessions: ParsedSession list) (creating: bool) (standbyLabel
           Text.raw "⇄ switch · ■ stop · X stop others"
           if standbyLabel.Length > 0 then
             let color =
-              if standbyLabel.Contains "ready" then "var(--green)"
-              elif standbyLabel.Contains "warming" then "var(--fg-yellow)"
-              elif standbyLabel.Contains "invalidated" then "var(--red)"
+              if standbyLabel.Contains "✓" then "var(--green)"
+              elif standbyLabel.Contains "⏳" then "var(--fg-yellow)"
+              elif standbyLabel.Contains "⚠" then "var(--red)"
               else "var(--fg-dim)"
             Elem.span
               [ Attr.style (sprintf " · font-size: 0.65rem; color: %s;" color) ]
