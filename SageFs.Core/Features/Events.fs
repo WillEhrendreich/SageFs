@@ -38,6 +38,7 @@ type SageFsEvent =
   // Session lifecycle
   | SessionStarted of sessionStarted: {| Config: Map<string, string>; StartedAt: DateTimeOffset |}
   | SessionWarmUpCompleted of warmUpCompleted: {| Duration: TimeSpan; Errors: string list |}
+  | SessionWarmUpProgress of warmUpProgress: {| Step: int; Total: int; Message: string |}
   | SessionReady
   | SessionFaulted of sessionFaulted: {| Error: string; StackTrace: string option |}
   | SessionReset

@@ -277,7 +277,14 @@ module SageFsUpdate =
               SessionId = activeId }
         { model with RecentOutput = line :: model.RecentOutput }, []
 
-      | SageFsEvent.WarmupProgress _ -> model, []
+      | SageFsEvent.WarmupProgress(step, total, msg) ->
+        let activeId = ActiveSession.sessionId model.Sessions.ActiveSessionId |> Option.defaultValue ""
+        let line = {
+          Kind = OutputKind.Info
+          Text = sprintf "⏳ [%d/%d] %s" step total msg
+          Timestamp = DateTime.UtcNow
+          SessionId = activeId }
+        { model with RecentOutput = line :: model.RecentOutput }, []
 
       | SageFsEvent.WarmupCompleted (_, failures) ->
         let activeId = ActiveSession.sessionId model.Sessions.ActiveSessionId |> Option.defaultValue ""
