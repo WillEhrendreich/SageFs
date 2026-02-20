@@ -63,6 +63,7 @@
         <Compile Include="WorkerHttpTransportTests.fs" />
         <Compile Include="SessionIsolationTests.fs" />
         <Compile Include="CleanStdoutTests.fs" />
+        <Compile Include="DiffEmitTests.fs" />
         <Compile Include="Program.fs" />
     </ItemGroup>
 

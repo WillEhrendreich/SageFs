@@ -100,6 +100,9 @@ module CellGrid =
   let clear (grid: CellGrid) =
     Array.Fill(grid.Cells, Cell.empty)
 
+  let clone (grid: CellGrid) : CellGrid =
+    { Cells = Array.copy grid.Cells; Rows = grid.Rows; Cols = grid.Cols }
+
   let writeString (grid: CellGrid) row col fg bg attrs (s: string) =
     let maxCol = grid.Cols
     let mutable c = col
