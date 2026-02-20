@@ -49,6 +49,7 @@ module SessionManager =
     | StandbyReady of StandbyKey * workerPid: int * SessionProxy
     | StandbySpawnFailed of StandbyKey * workerPid: int * string
     | StandbyExited of StandbyKey * workerPid: int
+    | StandbyProgress of StandbyKey * progress: string
     | InvalidateStandbys of workingDir: string
     | GetStandbyInfo of AsyncReplyChannel<StandbyInfo>
 
@@ -206,6 +207,7 @@ module SessionManager =
           Ok "Build succeeded"
 
   /// Await standby worker port discovery — posts StandbyReady or StandbySpawnFailed.
+  /// Also captures WARMUP_PROGRESS lines and posts StandbyProgress updates.
   let awaitStandbyPort
     (key: StandbyKey)
     (proc: Process)
@@ -219,6 +221,9 @@ module SessionManager =
           let! line = proc.StandardOutput.ReadLineAsync(ct).AsTask() |> Async.AwaitTask
           if isNull line then
             failwith "Standby worker exited before reporting port"
+          elif line.StartsWith("WARMUP_PROGRESS=") then
+            let payload = line.Substring("WARMUP_PROGRESS=".Length)
+            inbox.Post(SessionCommand.StandbyProgress(key, payload))
           elif line.StartsWith("WORKER_PORT=") then
             found <- Some (line.Substring("WORKER_PORT=".Length))
         let baseUrl = found.Value
@@ -564,6 +569,7 @@ module SessionManager =
                 Process = proc
                 Proxy = None
                 State = StandbyState.Warming
+                WarmupProgress = None
                 Projects = key.Projects
                 WorkingDir = key.WorkingDir
                 CreatedAt = DateTime.UtcNow
@@ -600,6 +606,15 @@ module SessionManager =
           let newPool = PoolState.removeStandby key state.Pool
           return! loop { state with Pool = newPool }
 
+        | SessionCommand.StandbyProgress(key, progress) ->
+          match PoolState.getStandby key state.Pool with
+          | Some standby when standby.State = StandbyState.Warming ->
+            let updated = { standby with WarmupProgress = Some progress }
+            let newPool = PoolState.setStandby key updated state.Pool
+            return! loop { state with Pool = newPool }
+          | _ ->
+            return! loop state
+
         | SessionCommand.InvalidateStandbys workingDir ->
           // Kill and remove standbys matching this working dir
           let toKill =
@@ -620,7 +635,15 @@ module SessionManager =
               let states = state.Pool.Standbys |> Map.toList |> List.map (fun (_, s) -> s.State)
               if states |> List.exists (fun s -> s = StandbyState.Invalidated) then StandbyInfo.Invalidated
               elif states |> List.forall (fun s -> s = StandbyState.Ready) then StandbyInfo.Ready
-              else StandbyInfo.Warming
+              else
+                let progress =
+                  state.Pool.Standbys
+                  |> Map.toList
+                  |> List.tryPick (fun (_, s) ->
+                    if s.State = StandbyState.Warming then s.WarmupProgress
+                    else None)
+                  |> Option.defaultValue ""
+                StandbyInfo.Warming progress
           reply.Reply info
           return! loop state
       }

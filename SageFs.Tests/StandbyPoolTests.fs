@@ -16,6 +16,7 @@ let makeStandby state proxyOpt = {
   Process = new Process()
   Proxy = proxyOpt
   State = state
+  WarmupProgress = None
   Projects = ["test.fsproj"]
   WorkingDir = "C:\\test"
   CreatedAt = DateTime.UtcNow
@@ -198,6 +199,28 @@ let poolStateTests = testList "PoolState" [
     let k1 = StandbyKey.fromSession ["b.fsproj"; "a.fsproj"] "C:\\dir"
     let k2 = StandbyKey.fromSession ["a.fsproj"; "b.fsproj"] "C:\\dir"
     k1 |> Expect.equal "normalized key" k2
+]
+
+[<Tests>]
+let warmupProgressLabelTests = testList "StandbyInfo warmup progress labels" [
+  testCase "Warming with empty string shows default label" <| fun _ ->
+    StandbyInfo.label (StandbyInfo.Warming "")
+    |> Expect.equal "empty progress = default label" "⏳ standby"
+  testCase "Warming with progress message shows phase" <| fun _ ->
+    StandbyInfo.label (StandbyInfo.Warming "2/4 Scanned 12 files")
+    |> Expect.equal "shows phase text" "⏳ 2/4 Scanned 12 files"
+  testCase "Warming with final phase shows completion" <| fun _ ->
+    StandbyInfo.label (StandbyInfo.Warming "4/4 Warm-up complete in 1234ms")
+    |> Expect.equal "shows final phase" "⏳ 4/4 Warm-up complete in 1234ms"
+  testCase "Ready label unchanged" <| fun _ ->
+    StandbyInfo.label StandbyInfo.Ready
+    |> Expect.equal "ready unchanged" "✓ standby"
+  testCase "Invalidated label unchanged" <| fun _ ->
+    StandbyInfo.label StandbyInfo.Invalidated
+    |> Expect.equal "invalidated unchanged" "⚠ standby"
+  testCase "NoPool label unchanged" <| fun _ ->
+    StandbyInfo.label StandbyInfo.NoPool
+    |> Expect.equal "nopool unchanged" ""
 ]
 
 [<Tests>]

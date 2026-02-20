@@ -115,7 +115,12 @@ let run (sessionId: string) (port: int) (args: Args.Arguments list) = async {
         member _.LogDebug _ = ()
         member _.LogWarning msg = eprintfn "[worker] ⚠️ %s" msg
         member _.LogError msg = eprintfn "[worker] ❌ %s" msg }
-  let onEvent _ = ()
+  let onEvent (evt: Features.Events.SageFsEvent) =
+    match evt with
+    | Features.Events.SageFsEvent.SessionWarmUpProgress p ->
+      printfn "WARMUP_PROGRESS=%d/%d %s" p.Step p.Total p.Message
+      Console.Out.Flush()
+    | _ -> ()
 
   let actorArgs : ActorCreation.ActorArgs = {
     Middleware = ActorCreation.commonMiddleware
