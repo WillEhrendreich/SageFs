@@ -2,12 +2,12 @@ namespace SageFs
 
 open System.Text
 
-/// ANSI terminal emitter — converts Cell[,] to ANSI escape string.
+/// ANSI terminal emitter — converts CellGrid to ANSI escape string.
 /// Uses truecolor (24-bit) escape codes: ESC[38;2;r;g;bm for fg, ESC[48;2;r;g;bm for bg.
 module AnsiEmitter =
   let esc = "\x1b["
 
-  let emit (grid: Cell[,]) (cursorRow: int) (cursorCol: int) : string =
+  let emit (grid: CellGrid) (cursorRow: int) (cursorCol: int) : string =
     let rows = CellGrid.rows grid
     let cols = CellGrid.cols grid
     let sb = StringBuilder(rows * cols * 10)
@@ -21,8 +21,9 @@ module AnsiEmitter =
 
     for row in 0 .. rows - 1 do
       sb.Append(esc).Append(row + 1).Append(";1H") |> ignore
+      let rowBase = row * cols
       for col in 0 .. cols - 1 do
-        let cell = grid.[row, col]
+        let cell = grid.Cells.[rowBase + col]
 
         if cell.Attrs <> lastAttrs then
           sb.Append(esc).Append("0m") |> ignore
@@ -57,7 +58,7 @@ module AnsiEmitter =
 
     sb.ToString()
 
-  let emitGridOnly (grid: Cell[,]) : string =
+  let emitGridOnly (grid: CellGrid) : string =
     let rows = CellGrid.rows grid
     let cols = CellGrid.cols grid
     let sb = StringBuilder(rows * cols * 10)
@@ -67,8 +68,9 @@ module AnsiEmitter =
 
     for row in 0 .. rows - 1 do
       sb.Append(esc).Append(row + 1).Append(";1H") |> ignore
+      let rowBase = row * cols
       for col in 0 .. cols - 1 do
-        let cell = grid.[row, col]
+        let cell = grid.Cells.[rowBase + col]
         if cell.Attrs <> lastAttrs then
           sb.Append(esc).Append("0m") |> ignore
           lastFg <- 0x00FFFFFFu; lastBg <- 0u; lastAttrs <- CellAttrs.None

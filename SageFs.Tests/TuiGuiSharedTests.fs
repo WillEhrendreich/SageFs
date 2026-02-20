@@ -282,8 +282,8 @@ let themeAppliedRenderTests = testList "theme-applied rendering" [
     let dracula = makeGrid ThemePresets.dracula
 
     // Compare background colors of a cell in the panel area
-    let odBg = oneDark.[0, 0].Bg
-    let drBg = dracula.[0, 0].Bg
+    let odBg = (CellGrid.get oneDark 0 0).Bg
+    let drBg = (CellGrid.get dracula 0 0).Bg
     Expect.notEqual odBg drBg "One Dark and Dracula should have different backgrounds"
   }
 
@@ -291,7 +291,7 @@ let themeAppliedRenderTests = testList "theme-applied rendering" [
     let grid = CellGrid.create 20 60
     Screen.drawWith LayoutConfig.defaults ThemePresets.dracula grid [] PaneId.Editor Map.empty "test" "theme" |> ignore
     let statusRow = 19 // last row
-    let statusBg = grid.[statusRow, 0].Bg
+    let statusBg = (CellGrid.get grid statusRow 0).Bg
     let draculaStatusBg = Theme.hexToRgb ThemePresets.dracula.BgStatus
     Expect.equal statusBg draculaStatusBg "status bar should use Dracula status bg"
   }
@@ -302,7 +302,7 @@ let themeAppliedRenderTests = testList "theme-applied rendering" [
     // Output is NOT focused, so its border should be BorderNormal
     Screen.drawWith LayoutConfig.defaults ThemePresets.nordic grid regions PaneId.Editor Map.empty "s" "r" |> ignore
     // Top-left corner of grid is Output pane border (unfocused)
-    let topLeft = grid.[0, 0]
+    let topLeft = CellGrid.get grid 0 0
     let expectedBorderFg = Theme.hexToRgb ThemePresets.nordic.BorderNormal
     Expect.equal topLeft.Fg expectedBorderFg "unfocused pane border should use Nordic's BorderNormal color"
   }
@@ -312,7 +312,7 @@ let themeAppliedRenderTests = testList "theme-applied rendering" [
     let regions = [ mkRegion "output" "test"; mkRegionWithCursor "editor" "code" 0 0 ]
     Screen.drawWith LayoutConfig.defaults ThemePresets.gruvbox grid regions PaneId.Output Map.empty "s" "r" |> ignore
     // The Output pane is focused — its border should use BorderFocus
-    let topLeft = grid.[0, 0]
+    let topLeft = CellGrid.get grid 0 0
     let focusBorderFg = Theme.hexToRgb ThemePresets.gruvbox.BorderFocus
     Expect.equal topLeft.Fg focusBorderFg "focused pane border should use BorderFocus color"
   }

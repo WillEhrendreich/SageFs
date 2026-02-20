@@ -61,7 +61,7 @@ let screenTests = testList "Screen" [
       let mutable nonSpace = 0
       for r in 0 .. CellGrid.rows grid - 1 do
         for c in 0 .. CellGrid.cols grid - 1 do
-          if grid.[r, c].Char <> ' ' then nonSpace <- nonSpace + 1
+          if (CellGrid.get grid r c).Char <> ' ' then nonSpace <- nonSpace + 1
       Expect.isGreaterThan nonSpace 10 "grid should have drawn content"
     }
   ]

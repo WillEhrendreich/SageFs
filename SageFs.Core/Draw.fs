@@ -2,7 +2,7 @@ namespace SageFs
 
 /// A draw target — bundles a grid with a clipping rect.
 type DrawTarget = {
-  Grid: Cell[,]
+  Grid: CellGrid
   Clip: Rect
 }
 

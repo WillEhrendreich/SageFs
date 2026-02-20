@@ -132,7 +132,7 @@ module RaylibMode =
   /// Compute pane layout rects for the given grid dimensions.
   /// Render regions into the CellGrid using shared Screen module
   let renderRegions
-    (grid: Cell[,])
+    (grid: CellGrid)
     (regions: RenderRegion list)
     (sessionId: string)
     (sessionState: string)

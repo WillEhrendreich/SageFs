@@ -180,7 +180,7 @@ module Screen =
   let drawWith
     (cfg: LayoutConfig)
     (theme: ThemeConfig)
-    (grid: Cell[,])
+    (grid: CellGrid)
     (regions: RenderRegion list)
     (focusedPane: PaneId)
     (scrollOffsets: Map<PaneId, int>)
@@ -289,7 +289,7 @@ module Screen =
 
   /// Draw all panes and status bar using the default layout config and theme.
   let draw
-    (grid: Cell[,])
+    (grid: CellGrid)
     (regions: RenderRegion list)
     (focusedPane: PaneId)
     (scrollOffsets: Map<PaneId, int>)
