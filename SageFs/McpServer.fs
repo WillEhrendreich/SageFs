@@ -20,22 +20,104 @@ open SageFs.McpTools
 // MCP Push Notifications — tracks active connections and broadcasts events
 // ---------------------------------------------------------------------------
 
-/// Thread-safe accumulator for events between MCP tool calls.
-/// Events are collected and drained on each tool response.
+open SageFs.Features.Diagnostics
+
+/// Structured events for the push notification accumulator.
+/// Stored as data, formatted for the LLM only on drain.
+[<RequireQualifiedAccess>]
+type PushEvent =
+  /// Diagnostics changed — carries the current set of errors/warnings.
+  | DiagnosticsChanged of errors: (string * int * string) list
+  /// Elm model state changed — carries output & diag counts.
+  | StateChanged of outputCount: int * diagCount: int
+  /// A watched file was reloaded by the file watcher.
+  | FileReloaded of path: string
+  /// Session became faulted.
+  | SessionFaulted of error: string
+  /// Warmup completed.
+  | WarmupCompleted
+
+/// Whether an event REPLACES the previous instance of the same kind
+/// (state/set semantics) or ACCUMULATES alongside it (delta/list semantics).
+[<RequireQualifiedAccess>]
+type MergeStrategy = Replace | Accumulate
+
+module PushEvent =
+  /// Determine how an event merges with existing events of the same type.
+  let mergeStrategy = function
+    | PushEvent.DiagnosticsChanged _ -> MergeStrategy.Replace
+    | PushEvent.StateChanged _ -> MergeStrategy.Replace
+    | PushEvent.SessionFaulted _ -> MergeStrategy.Replace
+    | PushEvent.FileReloaded _ -> MergeStrategy.Accumulate
+    | PushEvent.WarmupCompleted -> MergeStrategy.Replace
+
+  /// Discriminator tag used for Replace dedup.
+  let tag = function
+    | PushEvent.DiagnosticsChanged _ -> 0
+    | PushEvent.StateChanged _ -> 1
+    | PushEvent.FileReloaded _ -> 2
+    | PushEvent.SessionFaulted _ -> 3
+    | PushEvent.WarmupCompleted -> 4
+
+  /// Format a single event for LLM consumption — actionable, concise.
+  let formatForLlm = function
+    | PushEvent.DiagnosticsChanged errors when errors.IsEmpty ->
+      "✓ diagnostics cleared"
+    | PushEvent.DiagnosticsChanged errors ->
+      let lines =
+        errors
+        |> List.truncate 5
+        |> List.map (fun (file, line, msg) ->
+          sprintf "  %s:%d — %s" (IO.Path.GetFileName file) line msg)
+      let header = sprintf "⚠ %d diagnostic(s):" errors.Length
+      let truncNote =
+        if errors.Length > 5 then sprintf "\n  … and %d more" (errors.Length - 5)
+        else ""
+      sprintf "%s\n%s%s" header (String.concat "\n" lines) truncNote
+    | PushEvent.StateChanged (outputCount, diagCount) ->
+      sprintf "state: output=%d diags=%d" outputCount diagCount
+    | PushEvent.FileReloaded path ->
+      sprintf "📄 reloaded %s" (IO.Path.GetFileName path)
+    | PushEvent.SessionFaulted error ->
+      sprintf "🔴 session faulted: %s" error
+    | PushEvent.WarmupCompleted ->
+      "✓ warmup complete"
+
+type AccumulatedEvent = {
+  Timestamp: DateTimeOffset
+  Event: PushEvent
+}
+
+/// Thread-safe accumulator with smart dedup.
+/// Replace-strategy events overwrite the previous instance.
+/// Accumulate-strategy events are appended.
 type EventAccumulator() =
-  let events = ConcurrentQueue<string>()
+  let events = ConcurrentQueue<AccumulatedEvent>()
   let maxEvents = 50
 
-  /// Add an event message. Oldest events are dropped if the queue is full.
-  member _.Add(msg: string) =
-    events.Enqueue(msg)
-    while events.Count > maxEvents do
-      events.TryDequeue() |> ignore
+  member _.Add(evt: PushEvent) =
+    let entry = { Timestamp = DateTimeOffset.UtcNow; Event = evt }
+    match PushEvent.mergeStrategy evt with
+    | MergeStrategy.Replace ->
+      // For Replace events, we can't efficiently remove from ConcurrentQueue.
+      // Instead, drain-and-requeue minus old same-tag events, then add new.
+      // With max 50 events this is O(n) and fast.
+      let tag = PushEvent.tag evt
+      let temp = ResizeArray()
+      let mutable item = Unchecked.defaultof<AccumulatedEvent>
+      while events.TryDequeue(&item) do
+        if PushEvent.tag item.Event <> tag then
+          temp.Add(item)
+      for e in temp do events.Enqueue(e)
+      events.Enqueue(entry)
+    | MergeStrategy.Accumulate ->
+      events.Enqueue(entry)
+      while events.Count > maxEvents do
+        events.TryDequeue() |> ignore
 
-  /// Drain all accumulated events and return them.
   member _.Drain() =
     let result = ResizeArray()
-    let mutable item = Unchecked.defaultof<string>
+    let mutable item = Unchecked.defaultof<AccumulatedEvent>
     while events.TryDequeue(&item) do
       result.Add(item)
     result.ToArray()
@@ -43,16 +125,13 @@ type EventAccumulator() =
   member _.Count = events.Count
 
 /// Tracks active MCP server connections for push notifications.
-/// Thread-safe: multiple agents may connect simultaneously.
 type McpServerTracker() =
   let servers = ConcurrentDictionary<string, McpServer>()
   let accumulator = EventAccumulator()
 
-  /// Register (or refresh) a server connection.
   member _.Register(server: McpServer) =
     servers.[server.SessionId] <- server
 
-  /// Remove a dead connection.
   member _.Remove(sessionId: string) =
     servers.TryRemove(sessionId) |> ignore
 
@@ -77,11 +156,13 @@ type McpServerTracker() =
         for id in dead do servers.TryRemove(id) |> ignore
     }
 
-  /// Accumulate an event for delivery on the next tool response.
-  member _.AccumulateEvent(msg: string) = accumulator.Add(msg)
+  /// Accumulate a structured event for delivery on the next tool response.
+  member _.AccumulateEvent(evt: PushEvent) = accumulator.Add(evt)
 
-  /// Drain accumulated events and return them.
-  member _.DrainEvents() = accumulator.Drain()
+  /// Drain accumulated events, format for LLM, return as string array.
+  member _.DrainEvents() =
+    accumulator.Drain()
+    |> Array.map (fun e -> PushEvent.formatForLlm e.Event)
 
   member _.Count = servers.Count
   member _.PendingEvents = accumulator.Count
@@ -530,15 +611,11 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
             // Two delivery paths:
             //   1. MCP notifications (for clients that surface them)
             //   2. Event accumulator → appended to next tool response (guaranteed delivery)
-            let _diagSub =
-              diagnosticsChanged.Subscribe(fun _store ->
-                serverTracker.AccumulateEvent("diagnostics updated")
-                if serverTracker.Count > 0 then
-                  let data = {| event = "diagnostics_updated" |}
-                  serverTracker.NotifyLogAsync(
-                    LoggingLevel.Info, "sagefs.diagnostics", data).Wait())
+            //
+            // Note: diagnosticsChanged event from DaemonMode is not wired to workers,
+            // so we detect diag changes via stateChanged + Elm model access.
 
-            let mutable lastPushState = ""
+            let mutable lastDiagCount = 0
             let _stateSub =
               stateChanged |> Option.map (fun evt ->
                 evt.Subscribe(fun json ->
@@ -553,18 +630,37 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                       match root.TryGetProperty("outputCount") with
                       | true, v -> v.GetInt32()
                       | _ -> 0
-                    let stateKey = sprintf "%d-%d" diagCount outputCount
-                    if stateKey <> lastPushState then
-                      lastPushState <- stateKey
-                      let msg = sprintf "state: diags=%d output=%d" diagCount outputCount
-                      serverTracker.AccumulateEvent(msg)
-                      if serverTracker.Count > 0 then
-                        let data =
-                          {| event = "state_changed"
-                             diagCount = diagCount
-                             outputCount = outputCount |}
-                        serverTracker.NotifyLogAsync(
-                          LoggingLevel.Info, "sagefs.state", data).Wait()
+
+                    // Always push latest state (Replace dedup keeps only the newest)
+                    serverTracker.AccumulateEvent(
+                      PushEvent.StateChanged(outputCount, diagCount))
+
+                    // When diagCount changes, extract actual diagnostics from Elm model
+                    if diagCount <> lastDiagCount then
+                      lastDiagCount <- diagCount
+                      match getElmModel with
+                      | Some getModel ->
+                        let model = getModel()
+                        let errors =
+                          model.Diagnostics
+                          |> Map.toList
+                          |> List.collect (fun (_, diags) ->
+                            diags
+                            |> List.filter (fun d ->
+                              d.Severity = DiagnosticSeverity.Error)
+                            |> List.map (fun d ->
+                              ("fsi", d.Range.StartLine, d.Message)))
+                        serverTracker.AccumulateEvent(
+                          PushEvent.DiagnosticsChanged errors)
+                      | None -> ()
+
+                    if serverTracker.Count > 0 then
+                      let data =
+                        {| event = "state_changed"
+                           diagCount = diagCount
+                           outputCount = outputCount |}
+                      serverTracker.NotifyLogAsync(
+                        LoggingLevel.Info, "sagefs.state", data).Wait()
                   with _ -> ()))
 
             // Print startup info
