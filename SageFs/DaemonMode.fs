@@ -39,8 +39,14 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
   // Handle shutdown signals
   use cts = new CancellationTokenSource()
 
+  // Create state-changed event for SSE subscribers (created early so SessionManager can trigger it)
+  let stateChangedEvent = Event<string>()
+  let mutable lastStateJson = ""
+
   // Create SessionManager — the single source of truth for all sessions
-  let sessionManager = SessionManager.create cts.Token
+  let sessionManager =
+    SessionManager.create cts.Token (fun () ->
+      stateChangedEvent.Trigger """{"standbyProgress":true}""")
 
   // Active session ID — REMOVED: No global shared session.
   // Each client (MCP, TUI, dashboard) tracks its own session independently.
@@ -199,10 +205,6 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
     else
       eprintfn "No previous sessions to resume. Waiting for clients to create sessions."
   }
-
-  // Create state-changed event for SSE subscribers
-  let stateChangedEvent = Event<string>()
-  let mutable lastStateJson = ""
 
   // Create EffectDeps from SessionManager + start Elm loop
   let effectDeps = ElmDaemon.createEffectDeps sessionManager

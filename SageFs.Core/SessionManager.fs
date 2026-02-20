@@ -253,7 +253,7 @@ module SessionManager =
   }
 
   /// Create the supervisor MailboxProcessor.
-  let create (ct: CancellationToken) =
+  let create (ct: CancellationToken) (onStandbyProgressChanged: unit -> unit) =
     MailboxProcessor<SessionCommand>.Start((fun inbox ->
       let rec loop (state: ManagerState) = async {
         let! cmd = inbox.Receive()
@@ -589,8 +589,10 @@ module SessionManager =
             let ready =
               { standby with
                   Proxy = Some proxy
-                  State = StandbyState.Ready }
+                  State = StandbyState.Ready
+                  WarmupProgress = None }
             let newPool = PoolState.setStandby key ready state.Pool
+            onStandbyProgressChanged ()
             return! loop { state with Pool = newPool }
           | _ ->
             // Stale or unexpected — ignore
@@ -611,6 +613,7 @@ module SessionManager =
           | Some standby when standby.State = StandbyState.Warming ->
             let updated = { standby with WarmupProgress = Some progress }
             let newPool = PoolState.setStandby key updated state.Pool
+            onStandbyProgressChanged ()
             return! loop { state with Pool = newPool }
           | _ ->
             return! loop state
