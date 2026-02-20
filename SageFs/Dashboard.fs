@@ -1089,7 +1089,7 @@ let createStreamHandler
       match connectionTracker with
       | Some tracker ->
         let total = tracker.TotalCount
-        let counts = tracker.GetCounts(currentSessionId)
+        let counts = tracker.GetAllCounts()
         let parts =
           [ if counts.Browsers > 0 then sprintf "🌐 %d" counts.Browsers
             if counts.McpAgents > 0 then sprintf "🤖 %d" counts.McpAgents

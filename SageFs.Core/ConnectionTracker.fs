@@ -40,6 +40,13 @@ type ConnectionTracker() =
     let terminals = bySession |> Seq.filter (fun c -> c.Kind = Terminal) |> Seq.length
     {| Browsers = browsers; McpAgents = mcpAgents; Terminals = terminals |}
 
+  member _.GetAllCounts() =
+    let all = clients.Values
+    let browsers = all |> Seq.filter (fun c -> c.Kind = Browser) |> Seq.length
+    let mcpAgents = all |> Seq.filter (fun c -> c.Kind = McpAgent) |> Seq.length
+    let terminals = all |> Seq.filter (fun c -> c.Kind = Terminal) |> Seq.length
+    {| Browsers = browsers; McpAgents = mcpAgents; Terminals = terminals |}
+
   member _.TotalCount = clients.Count
 
   member _.GetAll() = clients.Values |> Seq.toList

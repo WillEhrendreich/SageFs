@@ -249,3 +249,164 @@ let stateOverrideTests =
       Expect.equal (List.head r).Status "running" "live becomes running"
       Expect.equal (r |> List.item 1).Status "faulted" "dead becomes faulted")
   ]
+
+/// Tests for TUI chrome filtering in session parsing (Bug #2)
+[<Tests>]
+let ghostSessionTests =
+  testList "Ghost session filtering (Bug #2)" [
+    testCase "filters TUI keyboard shortcut lines" (fun () ->
+      let input = "  session-abc [running] *\n↑↓ nav · Enter switch"
+      let sessions = SageFs.Server.Dashboard.parseSessionLines input
+      Expect.equal sessions.Length 1 "only real session, no ghost from shortcuts")
+
+    testCase "filters box-drawing border lines" (fun () ->
+      let input = "  session-abc [running] *\n──────────"
+      let sessions = SageFs.Server.Dashboard.parseSessionLines input
+      Expect.equal sessions.Length 1 "border lines filtered")
+
+    testCase "filters spinner lines" (fun () ->
+      let input = "  session-abc [running] *\n⏳ Loading..."
+      let sessions = SageFs.Server.Dashboard.parseSessionLines input
+      Expect.equal sessions.Length 1 "spinner lines filtered")
+
+    testCase "filters Ctrl+Tab cycle lines" (fun () ->
+      let input = "  session-abc [running] *\nCtrl+Tab cycle sessions"
+      let sessions = SageFs.Server.Dashboard.parseSessionLines input
+      Expect.equal sessions.Length 1 "Ctrl+Tab line filtered")
+
+    testCase "preserves all valid sessions" (fun () ->
+      let input = "  session-abc [running] *\n  session-def [starting]"
+      let sessions = SageFs.Server.Dashboard.parseSessionLines input
+      Expect.equal sessions.Length 2 "both valid sessions kept")
+  ]
+
+/// Tests for error formatting in eval handler (Bug #6)
+module ErrorFormatting =
+  let formatEvalResult (result: string) =
+    let isError =
+      result.StartsWith("Error:") || result.Contains("Evaluation failed")
+    let displayResult =
+      if isError then
+        result
+          .Replace("FSharp.Compiler.Interactive.Shell+FsiCompilationException: ", "")
+          .Replace("Evaluation failed: ", "⚠ ")
+      else result
+    let cssClass =
+      if isError then "output-line output-error"
+      else "output-line output-result"
+    displayResult, cssClass
+
+[<Tests>]
+let errorFormattingTests =
+  testList "Error formatting (Bug #6)" [
+    testCase "strips FsiCompilationException name" (fun () ->
+      let input = "Error: Evaluation failed: FSharp.Compiler.Interactive.Shell+FsiCompilationException: The value 'x' is not defined"
+      let display, css = ErrorFormatting.formatEvalResult input
+      Expect.isFalse (display.Contains("FsiCompilationException")) "should strip exception name"
+      Expect.stringContains display "⚠" "should have warning prefix"
+      Expect.equal css "output-line output-error" "error CSS class")
+
+    testCase "clean error gets warning prefix" (fun () ->
+      let input = "Evaluation failed: syntax error"
+      let display, _ = ErrorFormatting.formatEvalResult input
+      Expect.equal display "⚠ syntax error" "replaces prefix with warning emoji")
+
+    testCase "success result unchanged" (fun () ->
+      let input = "val it: int = 42"
+      let display, css = ErrorFormatting.formatEvalResult input
+      Expect.equal display input "result text unchanged"
+      Expect.equal css "output-line output-result" "success CSS class")
+
+    testCase "Error: prefix detected" (fun () ->
+      let input = "Error: something went wrong"
+      let _, css = ErrorFormatting.formatEvalResult input
+      Expect.equal css "output-line output-error" "Error: triggers error styling")
+  ]
+
+/// Tests for output content-hash dedup (Bug #5)
+module OutputDedup =
+  type Region = { Id: string; Content: string }
+
+  let filterDuplicateOutput (lastHash: int) (regions: Region list) =
+    let outputRegion = regions |> List.tryFind (fun r -> r.Id = "output")
+    let outputHash =
+      outputRegion
+      |> Option.map (fun r -> r.Content.GetHashCode())
+      |> Option.defaultValue 0
+    let filtered =
+      if outputHash = lastHash && outputHash <> 0
+      then regions |> List.filter (fun r -> r.Id <> "output")
+      else regions
+    filtered, outputHash
+
+[<Tests>]
+let outputDedupTests =
+  let filter = OutputDedup.filterDuplicateOutput
+  let mkRegion id content : OutputDedup.Region = { Id = id; Content = content }
+  testList "Output dedup (Bug #5)" [
+    testCase "first push includes output (lastHash=0)" (fun () ->
+      let regions = [mkRegion "output" "hello"; mkRegion "sessions" "s1"]
+      let filtered, hash = filter 0 regions
+      Expect.equal filtered.Length 2 "all regions included on first push"
+      Expect.notEqual hash 0 "hash is non-zero")
+
+    testCase "identical content filtered out" (fun () ->
+      let regions = [mkRegion "output" "hello"; mkRegion "sessions" "s1"]
+      let _, hash1 = filter 0 regions
+      let filtered, _ = filter hash1 regions
+      Expect.equal filtered.Length 1 "output region filtered"
+      Expect.equal (List.head filtered).Id "sessions" "only non-output remains")
+
+    testCase "changed content included" (fun () ->
+      let regions1 = [mkRegion "output" "hello"]
+      let _, hash1 = filter 0 regions1
+      let regions2 = [mkRegion "output" "world"]
+      let filtered, _ = filter hash1 regions2
+      Expect.equal filtered.Length 1 "new output included")
+
+    testCase "no output region passes through" (fun () ->
+      let regions = [mkRegion "sessions" "s1"]
+      let filtered, hash = filter 0 regions
+      Expect.equal filtered.Length 1 "all regions pass"
+      Expect.equal hash 0 "hash stays 0")
+  ]
+
+/// Tests for connection count display formatting (Bug #11)
+module ConnectionCountDisplay =
+  type ConnCounts = { Browsers: int; McpAgents: int; Terminals: int }
+
+  let formatConnectionCounts (total: int) (allCounts: ConnCounts) =
+    let parts =
+      [ if allCounts.Browsers > 0 then sprintf "🌐 %d" allCounts.Browsers
+        if allCounts.McpAgents > 0 then sprintf "🤖 %d" allCounts.McpAgents
+        if allCounts.Terminals > 0 then sprintf "💻 %d" allCounts.Terminals ]
+    if parts.IsEmpty then sprintf "%d connected" total
+    else System.String.Join(" ", parts)
+
+[<Tests>]
+let connectionCountTests =
+  let fmt = ConnectionCountDisplay.formatConnectionCounts
+  let mk b m t : ConnectionCountDisplay.ConnCounts = { Browsers = b; McpAgents = m; Terminals = t }
+  testList "Connection count display (Bug #11)" [
+    testCase "shows icon breakdown when counts available" (fun () ->
+      let label = fmt 3 (mk 1 1 1)
+      Expect.stringContains label "🌐 1" "shows browser icon"
+      Expect.stringContains label "🤖 1" "shows MCP icon"
+      Expect.stringContains label "💻 1" "shows terminal icon")
+
+    testCase "hides zero-count kinds" (fun () ->
+      let label = fmt 2 (mk 2 0 0)
+      Expect.stringContains label "🌐 2" "shows browsers"
+      Expect.isFalse (label.Contains("🤖")) "no MCP icon"
+      Expect.isFalse (label.Contains("💻")) "no terminal icon")
+
+    testCase "shows total when all counts zero" (fun () ->
+      let label = fmt 0 (mk 0 0 0)
+      Expect.equal label "0 connected" "fallback to total")
+
+    testCase "consistent format regardless of input" (fun () ->
+      let counts = mk 1 1 0
+      let label1 = fmt 2 counts
+      let label2 = fmt 2 counts
+      Expect.equal label1 label2 "deterministic output")
+  ]
