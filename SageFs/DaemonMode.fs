@@ -22,6 +22,19 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
   // Set up event store
   let connectionString = PostgresInfra.getOrStartPostgres ()
   let eventStore = SageFs.EventStore.configureStore connectionString
+  let daemonStreamId = "daemon-sessions"
+
+  // Handle --prune: mark all alive sessions as stopped and exit
+  if args |> List.exists (function Args.Arguments.Prune -> true | _ -> false) then
+    let! daemonEvents = SageFs.EventStore.fetchStream eventStore daemonStreamId
+    let daemonState = Features.Replay.DaemonReplayState.replayStream daemonEvents
+    let pruneEvents = Features.Replay.DaemonReplayState.pruneAllSessions daemonState
+    if pruneEvents.IsEmpty then
+      eprintfn "No alive sessions to prune."
+    else
+      do! SageFs.EventStore.appendEvents eventStore daemonStreamId pruneEvents
+      eprintfn "Pruned %d session(s)." pruneEvents.Length
+    return ()
 
   // Handle shutdown signals
   use cts = new CancellationTokenSource()
@@ -32,8 +45,6 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
   // Active session ID — REMOVED: No global shared session.
   // Each client (MCP, TUI, dashboard) tracks its own session independently.
   // MCP uses McpContext.SessionMap. UIs pass ?sessionId= in SSE URL.
-
-  let daemonStreamId = "daemon-sessions"
 
   let sessionOps : SessionManagementOps = {
     CreateSession = fun projects workingDir ->
@@ -108,6 +119,8 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
         return sessions
       }
   }
+
+  let noResume = args |> List.exists (function Args.Arguments.No_Resume -> true | _ -> false)
 
   // Parse initial projects from CLI args (used if no previous sessions)
   let initialProjects =
@@ -492,14 +505,18 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
   // Resume sessions in background — don't block the daemon main task.
   // Each resumed session dispatches ListSessions so dashboard sees them incrementally.
   let _resumeTask =
-    System.Threading.Tasks.Task.Run(fun () ->
-      task {
-        try
-          do! resumeSessions (fun () ->
-            elmRuntime.Dispatch(SageFsMsg.Editor EditorAction.ListSessions))
-        with ex ->
-          eprintfn "[WARN] Session resume failed: %s" ex.Message
-      } :> System.Threading.Tasks.Task)
+    if noResume then
+      eprintfn "Session resume skipped (--no-resume)."
+      System.Threading.Tasks.Task.CompletedTask
+    else
+      System.Threading.Tasks.Task.Run(fun () ->
+        task {
+          try
+            do! resumeSessions (fun () ->
+              elmRuntime.Dispatch(SageFsMsg.Editor EditorAction.ListSessions))
+          with ex ->
+            eprintfn "[WARN] Session resume failed: %s" ex.Message
+        } :> System.Threading.Tasks.Task)
 
   // Periodic status polling — refreshes session status (Starting → Ready)
   // so SSE subscribers see warmup progress in real time.

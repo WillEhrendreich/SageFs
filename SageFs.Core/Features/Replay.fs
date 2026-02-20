@@ -224,3 +224,10 @@ module DaemonReplayState =
     |> Map.values
     |> Seq.filter (fun r -> r.StoppedAt.IsNone)
     |> Seq.toList
+
+  /// Generate stop events for all alive sessions (for --prune).
+  let pruneAllSessions (state: DaemonReplayState) : SageFsEvent list =
+    aliveSessions state
+    |> List.map (fun r ->
+      SageFsEvent.DaemonSessionStopped
+        {| SessionId = r.SessionId; StoppedAt = System.DateTimeOffset.UtcNow |})
