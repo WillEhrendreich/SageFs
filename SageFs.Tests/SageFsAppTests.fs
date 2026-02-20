@@ -1008,7 +1008,7 @@ let renderConsistencyTests = testList "Render consistency" [
       LastActivity = DateTime.UtcNow; WorkingDirectory = "C:\\Code" }
     { SageFsModel.initial with
         Sessions = { Sessions = [snap]; ActiveSessionId = ActiveSession.Viewing "session-1"
-                     TotalEvals = 5; WatchStatus = None }
+                     TotalEvals = 5; WatchStatus = None; Standby = StandbyInfo.NoPool }
         RecentOutput = [
           { Kind = OutputKind.Result; Text = "val x = 42"
             Timestamp = DateTime.UtcNow; SessionId = "session-1" }

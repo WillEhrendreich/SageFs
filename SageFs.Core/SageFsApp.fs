@@ -37,6 +37,7 @@ module SageFsModel =
       ActiveSessionId = ActiveSession.AwaitingSession
       TotalEvals = 0
       WatchStatus = None
+      Standby = StandbyInfo.NoPool
     }
     RecentOutput = []
     Diagnostics = Map.empty
@@ -89,6 +90,13 @@ module SageFsUpdate =
           { model with Editor = newEditor },
           [SageFsEffect.Editor (EditorEffect.RequestSessionStop sid)]
         | None -> model, []
+      | EditorAction.SessionStopOthers ->
+        let activeId = ActiveSession.sessionId model.Sessions.ActiveSessionId
+        let others =
+          model.Sessions.Sessions
+          |> List.filter (fun s -> Some s.Id <> activeId)
+          |> List.map (fun s -> SageFsEffect.Editor (EditorEffect.RequestSessionStop s.Id))
+        model, others
       | EditorAction.SessionCycleNext ->
         let count = model.Sessions.Sessions.Length
         if count <= 1 then model, []

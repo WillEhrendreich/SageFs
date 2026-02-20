@@ -367,8 +367,8 @@ module EditorUpdate =
       // The actual session ID resolution happens in SageFsApp
       // where the model has access to the session list
       state, []
-    | EditorAction.SessionDelete ->
-      // Same — resolved in SageFsApp where session list is available
+    | EditorAction.SessionDelete | EditorAction.SessionStopOthers ->
+      // Resolved in SageFsApp where session list is available
       state, []
     | EditorAction.SessionSetIndex idx ->
       { state with SelectedSessionIndex = Some (max 0 idx) }, []

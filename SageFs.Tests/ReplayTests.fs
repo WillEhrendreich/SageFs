@@ -310,6 +310,67 @@ let formatTests =
       Expect.stringContains output "Last Result: val x = 42" "last result"
   ]
 
+let daemonReplayTests =
+  testList "DaemonReplayState.resumeStopsOldId" [
+    testCase "alive session before stop" <| fun _ ->
+      let events = [
+        ts, DaemonSessionCreated {| SessionId = "old-id"; Projects = ["Foo.fsproj"]; WorkingDir = @"C:\Repos\Foo"; CreatedAt = ts |}
+      ]
+      let state = DaemonReplayState.replayStream events
+      let alive = DaemonReplayState.aliveSessions state
+      Expect.equal alive.Length 1 "1 alive session"
+      Expect.equal alive.[0].SessionId "old-id" "correct id"
+
+    testCase "stopped session is no longer alive" <| fun _ ->
+      let events = [
+        ts, DaemonSessionCreated {| SessionId = "old-id"; Projects = ["Foo.fsproj"]; WorkingDir = @"C:\Repos\Foo"; CreatedAt = ts |}
+        mkTs 1, DaemonSessionStopped {| SessionId = "old-id"; StoppedAt = mkTs 1 |}
+      ]
+      let state = DaemonReplayState.replayStream events
+      let alive = DaemonReplayState.aliveSessions state
+      Expect.equal alive.Length 0 "no alive sessions after stop"
+
+    testCase "resume pattern: old stopped + new created = only new alive" <| fun _ ->
+      let events = [
+        ts, DaemonSessionCreated {| SessionId = "old-id"; Projects = ["Foo.fsproj"]; WorkingDir = @"C:\Repos\Foo"; CreatedAt = ts |}
+        mkTs 10, DaemonSessionCreated {| SessionId = "new-id"; Projects = ["Foo.fsproj"]; WorkingDir = @"C:\Repos\Foo"; CreatedAt = mkTs 10 |}
+        mkTs 10, DaemonSessionStopped {| SessionId = "old-id"; StoppedAt = mkTs 10 |}
+      ]
+      let state = DaemonReplayState.replayStream events
+      let alive = DaemonReplayState.aliveSessions state
+      Expect.equal alive.Length 1 "only new session alive"
+      Expect.equal alive.[0].SessionId "new-id" "new id is the alive one"
+
+    testCase "BUG REPRO: resume without stopping old = zombie" <| fun _ ->
+      let events = [
+        ts, DaemonSessionCreated {| SessionId = "old-id"; Projects = ["Foo.fsproj"]; WorkingDir = @"C:\Repos\Foo"; CreatedAt = ts |}
+        mkTs 10, DaemonSessionCreated {| SessionId = "new-id"; Projects = ["Foo.fsproj"]; WorkingDir = @"C:\Repos\Foo"; CreatedAt = mkTs 10 |}
+      ]
+      let state = DaemonReplayState.replayStream events
+      let alive = DaemonReplayState.aliveSessions state
+      Expect.equal alive.Length 2 "both alive without stop event (bug scenario)"
+
+    testCase "stopping NEW session still leaves OLD zombie alive" <| fun _ ->
+      let events = [
+        ts, DaemonSessionCreated {| SessionId = "old-id"; Projects = ["Foo.fsproj"]; WorkingDir = @"C:\Repos\Foo"; CreatedAt = ts |}
+        mkTs 10, DaemonSessionCreated {| SessionId = "new-id"; Projects = ["Foo.fsproj"]; WorkingDir = @"C:\Repos\Foo"; CreatedAt = mkTs 10 |}
+        mkTs 20, DaemonSessionStopped {| SessionId = "new-id"; StoppedAt = mkTs 20 |}
+      ]
+      let state = DaemonReplayState.replayStream events
+      let alive = DaemonReplayState.aliveSessions state
+      Expect.equal alive.Length 1 "old zombie still alive"
+      Expect.equal alive.[0].SessionId "old-id" "zombie is the old one"
+
+    testCase "pruneAllSessions generates stop events for all alive" <| fun _ ->
+      let events = [
+        ts, DaemonSessionCreated {| SessionId = "s1"; Projects = ["A.fsproj"]; WorkingDir = @"C:\A"; CreatedAt = ts |}
+        ts, DaemonSessionCreated {| SessionId = "s2"; Projects = ["B.fsproj"]; WorkingDir = @"C:\B"; CreatedAt = ts |}
+      ]
+      let state = DaemonReplayState.replayStream events
+      let pruneEvents = DaemonReplayState.pruneAllSessions state
+      Expect.equal pruneEvents.Length 2 "2 stop events generated"
+  ]
+
 [<Tests>]
 let tests =
   testList "Replay" [
@@ -317,4 +378,5 @@ let tests =
     replayStreamTests
     invariantTests
     formatTests
+    daemonReplayTests
   ]

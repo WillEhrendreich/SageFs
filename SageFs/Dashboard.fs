@@ -496,6 +496,7 @@ let renderShell (version: string) =
               if (e.key === 'k' || e.key === 'ArrowUp') { action = 'sessionNavUp'; }
               if (e.key === 'Enter') { action = 'sessionSelect'; }
               if (e.key === 'x' || e.key === 'Delete') { action = 'sessionDelete'; }
+              if (e.key === 'X') { action = 'sessionStopOthers'; }
               if (e.key === 'n') { e.preventDefault(); fetch('/dashboard/session/create', {method:'POST'}); return; }
               if (e.key >= '1' && e.key <= '9') { action = 'sessionSetIndex'; value = String(parseInt(e.key) - 1); }
               if (action) {
@@ -834,7 +835,7 @@ let renderSessionPickerEmpty =
   Elem.div [ Attr.id "session-picker" ] []
 
 /// Render sessions as an HTML fragment with action buttons.
-let renderSessions (sessions: ParsedSession list) (creating: bool) =
+let renderSessions (sessions: ParsedSession list) (creating: bool) (standbyLabel: string) =
   Elem.div [ Attr.id "sessions-panel" ] [
     if creating then
       Elem.div
@@ -921,8 +922,27 @@ let renderSessions (sessions: ParsedSession list) (creating: bool) =
             ]
           ])
     Elem.div
-      [ Attr.style "font-size: 0.7rem; color: var(--fg-dim); text-align: center; padding: 4px 0; margin-top: 4px;" ]
-      [ Text.raw "⇄ switch · ■ stop" ]
+      [ Attr.style "display: flex; justify-content: space-between; align-items: center; font-size: 0.7rem; color: var(--fg-dim); padding: 4px 0; margin-top: 4px;" ]
+      [
+        Elem.span [] [
+          Text.raw "⇄ switch · ■ stop · X stop others"
+          if standbyLabel.Length > 0 then
+            let color =
+              if standbyLabel.Contains "ready" then "var(--green)"
+              elif standbyLabel.Contains "warming" then "var(--fg-yellow)"
+              elif standbyLabel.Contains "invalidated" then "var(--red)"
+              else "var(--fg-dim)"
+            Elem.span
+              [ Attr.style (sprintf " · font-size: 0.65rem; color: %s;" color) ]
+              [ Text.raw (sprintf " · %s" standbyLabel) ]
+        ]
+        if sessions.Length > 1 then
+          Elem.button
+            [ Attr.class' "session-btn session-btn-danger"
+              Attr.style "font-size: 0.65rem; padding: 1px 6px;"
+              Ds.onClick (Ds.post "/dashboard/session/stop-others") ]
+            [ Text.raw "■ stop others" ]
+      ]
   ]
 
 let parseOutputLines (content: string) : OutputLine list =
@@ -990,7 +1010,7 @@ let renderRegionForSse (getSessionState: string -> SessionState) (getStatusMsg: 
     let parsed = parseSessionLines region.Content
     let corrected = overrideSessionStatuses getSessionState getStatusMsg parsed
     let visible = corrected |> List.filter (fun s -> s.Status <> "stopped")
-    Some (renderSessions visible (isCreatingSession region.Content))
+    Some (renderSessions visible (isCreatingSession region.Content) "")
   | _ -> None
 
 let pushRegions
@@ -1474,6 +1494,7 @@ let createApiStateHandler
   (getElmRegions: unit -> RenderRegion list option)
   (stateChanged: IEvent<string> option)
   (connectionTracker: ConnectionTracker option)
+  (getStandbyInfo: unit -> Threading.Tasks.Task<StandbyInfo>)
   : HttpHandler =
   fun ctx -> task {
     ctx.Response.ContentType <- "text/event-stream"
@@ -1505,6 +1526,7 @@ let createApiStateHandler
                completions = region.Completions |> Option.map (fun co ->
                  {| items = co.Items; selectedIndex = co.SelectedIndex |}) |})
         | None -> []
+      let! standby = getStandbyInfo ()
       let payload =
         System.Text.Json.JsonSerializer.Serialize(
           {| sessionId = connSessionId
@@ -1512,6 +1534,7 @@ let createApiStateHandler
              evalCount = stats.EvalCount
              avgMs = if stats.EvalCount > 0 then stats.TotalDuration.TotalMilliseconds / float stats.EvalCount else 0.0
              activeWorkingDir = activeDir
+             standbyLabel = StandbyInfo.label standby
              regions = regions |})
       do! ctx.Response.WriteAsync(sprintf "data: %s\n\n" payload)
       do! ctx.Response.Body.FlushAsync()
@@ -1608,6 +1631,7 @@ let createApiDispatchHandler
         | "sessionNavDown" -> Some EditorAction.SessionNavDown
         | "sessionSelect" -> Some EditorAction.SessionSelect
         | "sessionDelete" -> Some EditorAction.SessionDelete
+        | "sessionStopOthers" -> Some EditorAction.SessionStopOthers
         | "clearOutput" -> Some EditorAction.ClearOutput
         | "sessionSetIndex" ->
           action.value |> Option.bind (fun s -> match Int32.TryParse(s) with true, i -> Some (EditorAction.SessionSetIndex i) | _ -> None)
@@ -1654,6 +1678,7 @@ let createEndpoints
   (getPreviousSessions: unit -> PreviousSession list)
   (getAllSessions: unit -> Threading.Tasks.Task<WorkerProtocol.SessionInfo list>)
   (sessionThemes: Collections.Concurrent.ConcurrentDictionary<string, string>)
+  (getStandbyInfo: unit -> Threading.Tasks.Task<StandbyInfo>)
   : HttpEndpoint list =
   [
     yield get "/dashboard" (FalcoResponse.ofHtml (renderShell version))
@@ -1727,7 +1752,7 @@ let createEndpoints
         })
     | None -> ()
     // TUI client API
-    yield get "/api/state" (createApiStateHandler getSessionState getEvalStats getActiveSessionId getSessionWorkingDir getAllSessions getElmRegions stateChanged connectionTracker)
+    yield get "/api/state" (createApiStateHandler getSessionState getEvalStats getActiveSessionId getSessionWorkingDir getAllSessions getElmRegions stateChanged connectionTracker getStandbyInfo)
     yield post "/api/dispatch" (createApiDispatchHandler dispatch)
     match createSession with
     | Some handler ->
@@ -1744,6 +1769,18 @@ let createEndpoints
       yield mapPost "/dashboard/session/stop/{id}"
         (fun (r: RequestData) -> r.GetString("id", ""))
         (fun sid -> createSessionActionHandler handler sid)
+      yield post "/dashboard/session/stop-others" (fun ctx -> task {
+        let! sessions = getAllSessions ()
+        let activeId = getActiveSessionId ()
+        let others =
+          sessions
+          |> List.filter (fun (s: WorkerProtocol.SessionInfo) -> s.Id <> activeId)
+        for s in others do
+          let! _ = handler s.Id
+          ()
+        dispatch (SageFsMsg.Editor EditorAction.ListSessions)
+        do! ctx.Response.WriteAsJsonAsync({| stopped = others.Length |})
+      })
     | None -> ()
     // Daemon info endpoint for client discovery (replaces daemon.json)
     yield get "/api/daemon-info" (fun ctx -> task {

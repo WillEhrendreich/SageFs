@@ -50,6 +50,7 @@ module SessionManager =
     | StandbySpawnFailed of StandbyKey * workerPid: int * string
     | StandbyExited of StandbyKey * workerPid: int
     | InvalidateStandbys of workingDir: string
+    | GetStandbyInfo of AsyncReplyChannel<StandbyInfo>
 
   type ManagerState = {
     Sessions: Map<SessionId, ManagedSession>
@@ -610,6 +611,18 @@ module SessionManager =
             toKill
             |> Map.fold (fun pool k _ -> PoolState.removeStandby k pool) state.Pool
           return! loop { state with Pool = newPool }
+
+        | SessionCommand.GetStandbyInfo reply ->
+          let info =
+            if not state.Pool.Enabled then StandbyInfo.NoPool
+            elif state.Pool.Standbys.IsEmpty then StandbyInfo.NoPool
+            else
+              let states = state.Pool.Standbys |> Map.toList |> List.map (fun (_, s) -> s.State)
+              if states |> List.exists (fun s -> s = StandbyState.Invalidated) then StandbyInfo.Invalidated
+              elif states |> List.forall (fun s -> s = StandbyState.Ready) then StandbyInfo.Ready
+              else StandbyInfo.Warming
+          reply.Reply info
+          return! loop state
       }
       loop ManagerState.empty
     ), cancellationToken = ct)

@@ -85,12 +85,12 @@ let dashboardRenderSnapshotTests = testList "Dashboard render snapshots" [
         WorkingDir = ""
         LastActivity = "" }
     ]
-    let html = renderSessions sessions false |> renderNode
+    let html = renderSessions sessions false "" |> renderNode
     do! verifyDashboard "dashboard_sessions" html
   }
 
   testTask "renderSessions empty" {
-    let html = renderSessions [] false |> renderNode
+    let html = renderSessions [] false "" |> renderNode
     do! verifyDashboard "dashboard_sessions_empty" html
   }
 
@@ -136,10 +136,9 @@ let edgeCaseSnapshotTests = testList "edge case snapshots" [
         WorkingDir = @"C:\Code\MyProj"
         LastActivity = "eval" }
     ]
-    let html = renderSessions sessions false |> renderNode
+    let html = renderSessions sessions false "" |> renderNode
     do! verifyDashboard "dashboard_sessions_singleActive" html
   }
-
   testTask "renderDiagnostics with zero line col" {
     let diags = [
       { Severity = DiagError; Message = "General compilation error"; Line = 0; Col = 0 }

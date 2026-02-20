@@ -42,6 +42,7 @@ let run (daemonInfo: DaemonInfo) = task {
   let mutable lastWorkingDir = ""
   let mutable lastEvalCount = 0
   let mutable lastAvgMs = 0.0
+  let mutable lastStandbyLabel = ""
   let mutable layoutConfig = LayoutConfig.defaults
   let mutable currentTheme = Theme.defaults
   let mutable currentThemeName = "One Dark"
@@ -66,10 +67,11 @@ let run (daemonInfo: DaemonInfo) = task {
         let sw = System.Diagnostics.Stopwatch.StartNew()
         let statusLeft =
           let sid = if lastSessionId.Length > 8 then lastSessionId.[..7] else lastSessionId
+          let standby = if lastStandbyLabel.Length > 0 then sprintf " | %s" lastStandbyLabel else ""
           if lastEvalCount > 0 then
-            sprintf " %s %s | evals: %d (avg %.0fms) | %s" sid lastSessionState lastEvalCount lastAvgMs (PaneId.displayName focusedPane)
+            sprintf " %s %s | evals: %d (avg %.0fms)%s | %s" sid lastSessionState lastEvalCount lastAvgMs standby (PaneId.displayName focusedPane)
           else
-            sprintf " %s %s | evals: %d | %s" sid lastSessionState lastEvalCount (PaneId.displayName focusedPane)
+            sprintf " %s %s | evals: %d%s | %s" sid lastSessionState lastEvalCount standby (PaneId.displayName focusedPane)
         let statusRight = sprintf " %s | %.1fms |%s" currentThemeName lastFrameMs (StatusHints.build keyMap focusedPane)
         let cursorPos = Screen.drawWith layoutConfig currentTheme grid lastRegions focusedPane scrollOffsets statusLeft statusRight
         let cursorRow, cursorCol =
@@ -94,7 +96,7 @@ let run (daemonInfo: DaemonInfo) = task {
   let sseTask =
     DaemonClient.runSseListener
       baseUrl
-      (fun sessionId sessionState evalCount avgMs activeWorkingDir regions ->
+      (fun sessionId sessionState evalCount avgMs activeWorkingDir standbyLabel regions ->
         // Detect session switch by working directory change
         if activeWorkingDir.Length > 0 && activeWorkingDir <> lastWorkingDir && lastWorkingDir.Length > 0 then
           // Save current theme for old session
@@ -114,6 +116,7 @@ let run (daemonInfo: DaemonInfo) = task {
         lastSessionState <- sessionState
         lastEvalCount <- evalCount
         lastAvgMs <- avgMs
+        lastStandbyLabel <- standbyLabel
         lastRegions <- regions
         render ())
       (fun _ ->

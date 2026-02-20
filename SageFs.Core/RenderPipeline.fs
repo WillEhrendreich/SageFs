@@ -115,6 +115,7 @@ and [<RequireQualifiedAccess>] EditorAction =
   | SessionNavDown
   | SessionSelect
   | SessionDelete
+  | SessionStopOthers
   | SessionSetIndex of int
   // Quick session cycling (Ctrl+Tab / Ctrl+Shift+Tab)
   | SessionCycleNext
@@ -269,6 +270,7 @@ module UiAction =
     | "SessionNavDown" -> Some (UiAction.Editor EditorAction.SessionNavDown)
     | "SessionSelect" -> Some (UiAction.Editor EditorAction.SessionSelect)
     | "SessionDelete" -> Some (UiAction.Editor EditorAction.SessionDelete)
+    | "SessionStopOthers" -> Some (UiAction.Editor EditorAction.SessionStopOthers)
     | "SessionCycleNext" -> Some (UiAction.Editor EditorAction.SessionCycleNext)
     | "SessionCyclePrev" -> Some (UiAction.Editor EditorAction.SessionCyclePrev)
     | "ClearOutput" -> Some (UiAction.Editor EditorAction.ClearOutput)

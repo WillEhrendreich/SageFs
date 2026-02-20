@@ -137,6 +137,7 @@ module RaylibMode =
     (sessionId: string)
     (sessionState: string)
     (evalCount: int)
+    (standbyLabel: string)
     (focusedPane: PaneId)
     (scrollOffsets: Map<PaneId, int>)
     (fontSize: int)
@@ -148,7 +149,8 @@ module RaylibMode =
 
     let statusLeft =
       let sid = if sessionId.Length > 8 then sessionId.[..7] else sessionId
-      sprintf " %s %s | evals: %d | %s" sid sessionState evalCount (PaneId.displayName focusedPane)
+      let standby = if standbyLabel.Length > 0 then sprintf " | %s" standbyLabel else ""
+      sprintf " %s %s | evals: %d%s | %s" sid sessionState evalCount standby (PaneId.displayName focusedPane)
     let statusRight = sprintf " %s | %dpt | %d fps |%s" themeName fontSize currentFps (StatusHints.build keyMap focusedPane)
     Screen.drawWith layoutConfig theme grid regions focusedPane scrollOffsets statusLeft statusRight |> ignore
 
@@ -198,6 +200,7 @@ module RaylibMode =
     let mutable lastSessionId = ""
     let mutable lastWorkingDir = ""
     let mutable lastEvalCount = 0
+    let mutable lastStandbyLabel = ""
     let mutable lastFps = 0
     let mutable focusedPane = PaneId.Editor
     let mutable scrollOffsets = Map.empty<PaneId, int>
@@ -239,7 +242,7 @@ module RaylibMode =
       System.Threading.Tasks.Task.Run(fun () ->
         DaemonClient.runSseListener
           baseUrl
-          (fun sessionId sessionState evalCount _avgMs activeWorkingDir regions ->
+          (fun sessionId sessionState evalCount _avgMs activeWorkingDir standbyLabel regions ->
             lock statelock (fun () ->
               // Detect session switch by working directory change
               if activeWorkingDir.Length > 0 && activeWorkingDir <> lastWorkingDir && lastWorkingDir.Length > 0 then
@@ -257,6 +260,7 @@ module RaylibMode =
               lastSessionId <- sessionId
               lastSessionState <- sessionState
               lastEvalCount <- evalCount
+              lastStandbyLabel <- standbyLabel
               lastRegions <- regions))
           (fun _ ->
             lock statelock (fun () ->
@@ -411,10 +415,10 @@ module RaylibMode =
 
       if running then
         // Render
-        let regions, sessionId, sessionState, evalCount =
-          lock statelock (fun () -> lastRegions, lastSessionId, lastSessionState, lastEvalCount)
+        let regions, sessionId, sessionState, evalCount, standbyLabel =
+          lock statelock (fun () -> lastRegions, lastSessionId, lastSessionState, lastEvalCount, lastStandbyLabel)
 
-        renderRegions grid regions sessionId sessionState evalCount focusedPane scrollOffsets fontSize lastFps keyMap layoutConfig currentTheme currentThemeName
+        renderRegions grid regions sessionId sessionState evalCount standbyLabel focusedPane scrollOffsets fontSize lastFps keyMap layoutConfig currentTheme currentThemeName
         lastFps <- fps ()
 
         Raylib.BeginDrawing()

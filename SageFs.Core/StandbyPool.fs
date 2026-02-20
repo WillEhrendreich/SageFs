@@ -95,6 +95,20 @@ module StandbyPool =
     | _ ->
       RestartDecision.ColdRestart
 
+/// Summary of standby pool state for UI display
+type StandbyInfo =
+  | NoPool
+  | Warming
+  | Ready
+  | Invalidated
+
+module StandbyInfo =
+  let label = function
+    | NoPool -> ""
+    | Warming -> "⏳ standby"
+    | Ready -> "✓ standby"
+    | Invalidated -> "⚠ standby"
+
 /// Tracks standby sessions keyed by config.
 type PoolState = {
   Standbys: Map<StandbyKey, StandbySession>

@@ -26,7 +26,7 @@ module DaemonRegionData =
 module DaemonClient =
 
   /// Parse the JSON payload from the /api/state SSE stream.
-  let parseStateEvent (json: string) : (string * string * int * float * string * DaemonRegionData list) option =
+  let parseStateEvent (json: string) : (string * string * int * float * string * string * DaemonRegionData list) option =
     try
       use doc = JsonDocument.Parse(json)
       let root = doc.RootElement
@@ -67,7 +67,11 @@ module DaemonClient =
         match root.TryGetProperty("activeWorkingDir") with
         | true, el -> el.GetString()
         | _ -> ""
-      Some (sessionId, sessionState, evalCount, avgMs, activeWorkingDir, regions)
+      let standbyLabel =
+        match root.TryGetProperty("standbyLabel") with
+        | true, el -> el.GetString()
+        | _ -> ""
+      Some (sessionId, sessionState, evalCount, avgMs, activeWorkingDir, standbyLabel, regions)
     with _ -> None
 
   /// Map an EditorAction to a (name, value) pair for the dispatch API.
@@ -114,6 +118,7 @@ module DaemonClient =
     | EditorAction.SessionNavDown -> Some ("sessionNavDown", None)
     | EditorAction.SessionSelect -> Some ("sessionSelect", None)
     | EditorAction.SessionDelete -> Some ("sessionDelete", None)
+    | EditorAction.SessionStopOthers -> Some ("sessionStopOthers", None)
     | EditorAction.ClearOutput -> Some ("clearOutput", None)
     | EditorAction.SessionSetIndex idx -> Some ("sessionSetIndex", Some (string idx))
     | EditorAction.SessionCycleNext -> Some ("sessionCycleNext", None)
@@ -160,8 +165,8 @@ module DaemonClient =
   }
 
   /// Callback invoked when new state arrives from the SSE stream.
-  /// Args: sessionId, sessionState, evalCount, avgMs, activeWorkingDir, regions
-  type StateCallback = string -> string -> int -> float -> string -> RenderRegion list -> unit
+  /// Args: sessionId, sessionState, evalCount, avgMs, activeWorkingDir, standbyLabel, regions
+  type StateCallback = string -> string -> int -> float -> string -> string -> RenderRegion list -> unit
 
   /// Run SSE listener with auto-reconnect. Calls onState for each update.
   /// Calls onReconnecting when connection drops. Blocks until cancelled.
@@ -186,9 +191,9 @@ module DaemonClient =
           if line.StartsWith("data: ") then
             let json = line.Substring(6)
             match parseStateEvent json with
-            | Some (sessionId, sessionState, evalCount, avgMs, activeWorkingDir, regionData) ->
+            | Some (sessionId, sessionState, evalCount, avgMs, activeWorkingDir, standbyLabel, regionData) ->
               let regions = regionData |> List.map DaemonRegionData.toRenderRegion
-              onState sessionId sessionState evalCount avgMs activeWorkingDir regions
+              onState sessionId sessionState evalCount avgMs activeWorkingDir standbyLabel regions
             | None -> ()
       with
       | :? OperationCanceledException -> ()

@@ -18,6 +18,8 @@ type SessionManagementOps = {
   GetSessionInfo: SessionId -> Task<SessionInfo option>
   /// Get all active sessions with their metadata.
   GetAllSessions: unit -> Task<SessionInfo list>
+  /// Get summary of standby pool state for UI display.
+  GetStandbyInfo: unit -> Task<StandbyInfo>
 }
 
 module SessionManagementOps =
@@ -30,4 +32,5 @@ module SessionManagementOps =
     GetProxy = fun _ -> Task.FromResult(None)
     GetSessionInfo = fun _ -> Task.FromResult(None)
     GetAllSessions = fun () -> Task.FromResult([])
+    GetStandbyInfo = fun () -> Task.FromResult(StandbyInfo.NoPool)
   }

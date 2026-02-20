@@ -40,6 +40,7 @@ module McpSessionIsolation =
                        CreatedAt = System.DateTime.UtcNow
                        LastActivity = System.DateTime.UtcNow })
           GetAllSessions = fun () -> System.Threading.Tasks.Task.FromResult([])
+          GetStandbyInfo = fun () -> System.Threading.Tasks.Task.FromResult(SageFs.StandbyInfo.NoPool)
         }
         SessionMap = sessionMap
         McpPort = 0
@@ -133,6 +134,7 @@ module McpSessionIsolation =
             GetProxy = fun _ -> System.Threading.Tasks.Task.FromResult(None)
             GetSessionInfo = fun _ -> System.Threading.Tasks.Task.FromResult(None)
             GetAllSessions = fun () -> System.Threading.Tasks.Task.FromResult([])
+            GetStandbyInfo = fun () -> System.Threading.Tasks.Task.FromResult(SageFs.StandbyInfo.NoPool)
           }
           SessionMap = sessionMap
           McpPort = 0
@@ -263,7 +265,8 @@ module WorkingDirRoutingPriority =
           RestartSession = fun _ _ -> Task.FromResult(Error(SageFsError.SessionNotFound "n/a"))
           GetProxy = fun sid -> Task.FromResult(Map.tryFind sid proxies)
           GetSessionInfo = fun sid -> Task.FromResult(sessions |> List.tryFind (fun s -> s.Id = sid))
-          GetAllSessions = fun () -> Task.FromResult(sessions) }
+          GetAllSessions = fun () -> Task.FromResult(sessions)
+          GetStandbyInfo = fun () -> Task.FromResult(StandbyInfo.NoPool) }
       SessionMap = sessionMap; McpPort = 0; Dispatch = None
       GetElmModel = None; GetElmRegions = None }
 
@@ -337,6 +340,7 @@ module ResetIsolation =
                    Status = WorkerProtocol.SessionStatus.Ready; WorkerPid = None
                    CreatedAt = System.DateTime.UtcNow; LastActivity = System.DateTime.UtcNow })
       GetAllSessions = fun () -> System.Threading.Tasks.Task.FromResult([])
+      GetStandbyInfo = fun () -> System.Threading.Tasks.Task.FromResult(SageFs.StandbyInfo.NoPool)
     }
     let ctx =
       { Store = testStore.Value

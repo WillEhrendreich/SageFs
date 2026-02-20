@@ -24,12 +24,12 @@
         <Compile Include="SageFsError.fs" />
         <Compile Include="Affordances.fs" />
         <Compile Include="WorkerProtocol.fs" />
+        <Compile Include="StandbyPool.fs" />
         <Compile Include="SessionMode.fs" />
         <Compile Include="HttpWorkerClient.fs" />
         <Compile Include="RestartPolicy.fs" />
         <Compile Include="Watchdog.fs" />
         <Compile Include="SessionLifecycle.fs" />
-        <Compile Include="StandbyPool.fs" />
         <Compile Include="SessionManager.fs" />
         <Compile Include="SessionOperations.fs" />
         <Compile Include="RenderPipeline.fs" />

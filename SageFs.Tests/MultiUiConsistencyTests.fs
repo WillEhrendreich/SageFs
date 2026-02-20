@@ -22,6 +22,7 @@ let serializeRegions (sessionId: string) (state: string) (evalCount: int) (avgMs
        evalCount = evalCount
        avgMs = avgMs
        activeWorkingDir = ""
+       standbyLabel = ""
        regions = regionPayloads |})
 
 let mkRegion id content cursor completions : RenderRegion =
@@ -38,7 +39,7 @@ let roundtripTests = testList "SSE roundtrip" [
     let json = serializeRegions "sess-1" "Ready" 5 42.5 [original]
     let parsed = parseStateEvent json
     parsed |> Expect.isSome "should parse"
-    let (_, _, _, _, _, regions) = parsed.Value
+    let (_, _, _, _, _, _, regions) = parsed.Value
     regions.[0].Content
     |> Expect.equal "content preserved" original.Content
 
@@ -48,7 +49,7 @@ let roundtripTests = testList "SSE roundtrip" [
     let json = serializeRegions "sess-2" "Ready" 0 0.0 [original]
     let parsed = parseStateEvent json
     parsed |> Expect.isSome "should parse"
-    let (_, _, _, _, _, regions) = parsed.Value
+    let (_, _, _, _, _, _, regions) = parsed.Value
     regions.[0].Cursor |> Expect.isSome "cursor preserved"
     regions.[0].Cursor.Value.Line |> Expect.equal "cursor line" 3
     regions.[0].Cursor.Value.Col |> Expect.equal "cursor col" 7
@@ -59,7 +60,7 @@ let roundtripTests = testList "SSE roundtrip" [
     let json = serializeRegions "sess-3" "Ready" 0 0.0 [original]
     let parsed = parseStateEvent json
     parsed |> Expect.isSome "should parse"
-    let (_, _, _, _, _, regions) = parsed.Value
+    let (_, _, _, _, _, _, regions) = parsed.Value
     regions.[0].Completions |> Expect.isSome "completions preserved"
     regions.[0].Completions.Value.Items
     |> Expect.equal "items preserved" ["foo"; "bar"; "baz"]
@@ -71,7 +72,7 @@ let roundtripTests = testList "SSE roundtrip" [
     let json = serializeRegions "sess-4" "Ready" 0 0.0 [original]
     let parsed = parseStateEvent json
     parsed |> Expect.isSome "should parse"
-    let (_, _, _, _, _, regions) = parsed.Value
+    let (_, _, _, _, _, _, regions) = parsed.Value
     regions.[0].Cursor |> Expect.isNone "None cursor stays None"
 
   testCase "None completions stays None through roundtrip" <| fun _ ->
@@ -79,7 +80,7 @@ let roundtripTests = testList "SSE roundtrip" [
     let json = serializeRegions "sess-5" "Ready" 0 0.0 [original]
     let parsed = parseStateEvent json
     parsed |> Expect.isSome "should parse"
-    let (_, _, _, _, _, regions) = parsed.Value
+    let (_, _, _, _, _, _, regions) = parsed.Value
     regions.[0].Completions |> Expect.isNone "None completions stays None"
 
   testCase "multiple regions preserve order through roundtrip" <| fun _ ->
@@ -92,7 +93,7 @@ let roundtripTests = testList "SSE roundtrip" [
     let json = serializeRegions "sess-6" "Ready" 3 100.0 regions
     let parsed = parseStateEvent json
     parsed |> Expect.isSome "should parse"
-    let (_, _, _, _, _, parsedRegions) = parsed.Value
+    let (_, _, _, _, _, _, parsedRegions) = parsed.Value
     parsedRegions |> List.length |> Expect.equal "count" 4
     parsedRegions |> List.map (fun r -> r.Id)
     |> Expect.equal "order preserved" ["editor"; "output"; "diagnostics"; "sessions"]
@@ -101,7 +102,7 @@ let roundtripTests = testList "SSE roundtrip" [
     let json = serializeRegions "session-abc123" "WarmingUp" 10 55.5 []
     let parsed = parseStateEvent json
     parsed |> Expect.isSome "should parse"
-    let (sid, state, count, avg, _, _) = parsed.Value
+    let (sid, state, count, avg, _, _, _) = parsed.Value
     sid |> Expect.equal "sessionId" "session-abc123"
     state |> Expect.equal "state" "WarmingUp"
     count |> Expect.equal "eval count" 10
@@ -112,7 +113,7 @@ let roundtripTests = testList "SSE roundtrip" [
     let json = serializeRegions "s" "Ready" 0 0.0 [original]
     let parsed = parseStateEvent json
     parsed |> Expect.isSome "should parse"
-    let (_, _, _, _, _, regions) = parsed.Value
+    let (_, _, _, _, _, _, regions) = parsed.Value
     regions.[0].Content |> Expect.equal "empty content" ""
 
   testCase "special characters in content roundtrip" <| fun _ ->
@@ -121,7 +122,7 @@ let roundtripTests = testList "SSE roundtrip" [
     let json = serializeRegions "s" "Ready" 0 0.0 [original]
     let parsed = parseStateEvent json
     parsed |> Expect.isSome "should parse"
-    let (_, _, _, _, _, regions) = parsed.Value
+    let (_, _, _, _, _, _, regions) = parsed.Value
     regions.[0].Content |> Expect.equal "special chars" content
 ]
 
@@ -136,8 +137,8 @@ let multiConsumerTests = testList "multi-consumer consistency" [
     let parse2 = parseStateEvent json
     parse1 |> Expect.isSome "parse1"
     parse2 |> Expect.isSome "parse2"
-    let (sid1, st1, c1, avg1, _, r1) = parse1.Value
-    let (sid2, st2, c2, avg2, _, r2) = parse2.Value
+    let (sid1, st1, c1, avg1, _, _, r1) = parse1.Value
+    let (sid2, st2, c2, avg2, _, _, r2) = parse2.Value
     sid1 |> Expect.equal "sessionId match" sid2
     st1 |> Expect.equal "state match" st2
     c1 |> Expect.equal "count match" c2
@@ -175,9 +176,9 @@ let multiConsumerTests = testList "multi-consumer consistency" [
     for c in consumers do
       c |> Expect.isSome "should parse"
     let baseLine = consumers.[0].Value
-    let (_, _, _, _, _, baseRegions) = baseLine
+    let (_, _, _, _, _, _, baseRegions) = baseLine
     for i in 1..consumers.Length-1 do
-      let (_, _, _, _, _, otherRegions) = consumers.[i].Value
+      let (_, _, _, _, _, _, otherRegions) = consumers.[i].Value
       baseRegions |> List.length
       |> Expect.equal "same region count" (otherRegions |> List.length)
       for j in 0..baseRegions.Length-1 do
@@ -682,9 +683,9 @@ let multiSessionLifecycleTests = testList "multi-session lifecycle" [
     tuiParse |> Expect.isSome "TUI parses"
     guiParse |> Expect.isSome "GUI parses"
     webParse |> Expect.isSome "Web parses"
-    let (sid1, _, _, _, _, r1) = tuiParse.Value
-    let (sid2, _, _, _, _, r2) = guiParse.Value
-    let (sid3, _, _, _, _, r3) = webParse.Value
+    let (sid1, _, _, _, _, _, r1) = tuiParse.Value
+    let (sid2, _, _, _, _, _, r2) = guiParse.Value
+    let (sid3, _, _, _, _, _, r3) = webParse.Value
     sid1 |> Expect.equal "TUI session" "s2"
     sid2 |> Expect.equal "GUI session" "s2"
     sid3 |> Expect.equal "Web session" "s2"

@@ -249,7 +249,7 @@ let parseStateEventThemeTests = testList "parseStateEvent activeWorkingDir" [
     let json = """{"sessionId":"s1","sessionState":"Ready","evalCount":0,"activeWorkingDir":"C:\\Code\\MyProj","regions":[]}"""
     let result = parseStateEvent json
     Expect.isSome result "should parse"
-    let (_, _, _, _, workingDir, _) = result.Value
+    let (_, _, _, _, workingDir, _, _) = result.Value
     Expect.equal workingDir @"C:\Code\MyProj" "activeWorkingDir"
   }
 
@@ -257,15 +257,15 @@ let parseStateEventThemeTests = testList "parseStateEvent activeWorkingDir" [
     let json = """{"sessionId":"s1","sessionState":"Ready","evalCount":0,"regions":[]}"""
     let result = parseStateEvent json
     Expect.isSome result "should parse"
-    let (_, _, _, _, workingDir, _) = result.Value
+    let (_, _, _, _, workingDir, _, _) = result.Value
     Expect.equal workingDir "" "missing activeWorkingDir defaults to empty"
   }
 
-  test "all 6 tuple fields parsed correctly" {
+  test "all 7 tuple fields parsed correctly" {
     let json = """{"sessionId":"abc","sessionState":"WarmingUp","evalCount":7,"avgMs":42.5,"activeWorkingDir":"C:\\test","regions":[{"id":"out","content":"hi"}]}"""
     let result = parseStateEvent json
     Expect.isSome result "should parse"
-    let (sid, state, count, avgMs, workingDir, regions) = result.Value
+    let (sid, state, count, avgMs, workingDir, _, regions) = result.Value
     Expect.equal sid "abc" "sessionId"
     Expect.equal state "WarmingUp" "sessionState"
     Expect.equal count 7 "evalCount"
@@ -278,7 +278,7 @@ let parseStateEventThemeTests = testList "parseStateEvent activeWorkingDir" [
     let json = """{"sessionState":"Ready","evalCount":0,"activeWorkingDir":"/home/user/project","regions":[]}"""
     let result = parseStateEvent json
     Expect.isSome result "should parse"
-    let (_, _, _, _, workingDir, _) = result.Value
+    let (_, _, _, _, workingDir, _, _) = result.Value
     Expect.equal workingDir "/home/user/project" "unix-style path"
   }
 
@@ -286,7 +286,7 @@ let parseStateEventThemeTests = testList "parseStateEvent activeWorkingDir" [
     let json = """{"sessionState":"Ready","evalCount":0,"activeWorkingDir":"C:\\My Projects\\Cool App","regions":[]}"""
     let result = parseStateEvent json
     Expect.isSome result "should parse"
-    let (_, _, _, _, workingDir, _) = result.Value
+    let (_, _, _, _, workingDir, _, _) = result.Value
     Expect.equal workingDir @"C:\My Projects\Cool App" "path with spaces"
   }
 ]

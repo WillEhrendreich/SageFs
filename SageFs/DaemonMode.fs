@@ -118,6 +118,10 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
           |> Async.StartAsTask
         return sessions
       }
+    GetStandbyInfo = fun () ->
+      sessionManager.PostAndAsyncReply(fun reply ->
+        SessionManager.SessionCommand.GetStandbyInfo reply)
+      |> Async.StartAsTask
   }
 
   let noResume = args |> List.exists (function Args.Arguments.No_Resume -> true | _ -> false)
@@ -176,7 +180,12 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
           let! result = sessionOps.CreateSession prev.Projects prev.WorkingDir
           match result with
           | Ok info ->
-            eprintfn "  Resumed: %s" info
+            // Stop the OLD session ID so it doesn't resurrect on next restart
+            do! SageFs.EventStore.appendEvents eventStore daemonStreamId [
+              Features.Events.SageFsEvent.DaemonSessionStopped
+                {| SessionId = prev.SessionId; StoppedAt = DateTimeOffset.UtcNow |}
+            ]
+            eprintfn "  Resumed: %s (retired old id %s)" info prev.SessionId
             onSessionResumed ()
           | Error err ->
             eprintfn "  [WARN] Failed to resume session for %s: %A" prev.WorkingDir err
@@ -460,6 +469,7 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
         activeSessions @ historicalSessions)
       getAllSessions
       sessionThemes
+      sessionOps.GetStandbyInfo
   let dashboardTask = task {
     try
       let builder = Microsoft.AspNetCore.Builder.WebApplication.CreateBuilder()
