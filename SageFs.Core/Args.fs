@@ -13,6 +13,8 @@ type Arguments =
   | [<Unique; AltCommandLine("-v")>] Version
   | [<Unique>] Bare
   | [<Unique>] No_Watch
+  | [<Unique>] No_Resume
+  | [<Unique>] Prune
   | Sln of fileName: string
   | Proj of filename: string
   | [<Unique>] Dir of workingDirectory: string
@@ -28,6 +30,8 @@ type Arguments =
       | Version -> "displays the version of SageFs."
       | Bare -> "start a bare FSI session with no project/solution loading — fast startup for quick one-off use."
       | No_Watch -> "disable file watching — no automatic #load on source file changes."
+      | No_Resume -> "skip restoring previous sessions on daemon startup."
+      | Prune -> "mark all previously alive sessions as stopped in the event store and exit."
       | Sln _ -> "loads all sources and dependencies for given solution."
       | Proj _ -> "loads all sources and dependencies for given fsproj file."
       | Dir _ -> "specifies alternative working directory to current directory."
