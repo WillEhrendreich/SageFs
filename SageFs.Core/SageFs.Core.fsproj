@@ -29,6 +29,7 @@
         <Compile Include="RestartPolicy.fs" />
         <Compile Include="Watchdog.fs" />
         <Compile Include="SessionLifecycle.fs" />
+        <Compile Include="StandbyPool.fs" />
         <Compile Include="SessionManager.fs" />
         <Compile Include="SessionOperations.fs" />
         <Compile Include="RenderPipeline.fs" />

@@ -44,16 +44,24 @@ module SessionManager =
     | WorkerSpawnFailed of SessionId * workerPid: int * string
     | ScheduleRestart of SessionId
     | StopAll of AsyncReplyChannel<unit>
+    // Standby pool commands
+    | WarmStandby of StandbyKey
+    | StandbyReady of StandbyKey * workerPid: int * SessionProxy
+    | StandbySpawnFailed of StandbyKey * workerPid: int * string
+    | StandbyExited of StandbyKey * workerPid: int
+    | InvalidateStandbys of workingDir: string
 
   type ManagerState = {
     Sessions: Map<SessionId, ManagedSession>
     RestartPolicy: RestartPolicy.Policy
+    Pool: PoolState
   }
 
   module ManagerState =
     let empty = {
       Sessions = Map.empty
       RestartPolicy = RestartPolicy.defaultPolicy
+      Pool = PoolState.empty
     }
 
     let addSession id session state =
@@ -196,6 +204,48 @@ module SessionManager =
         else
           Ok "Build succeeded"
 
+  /// Await standby worker port discovery — posts StandbyReady or StandbySpawnFailed.
+  let awaitStandbyPort
+    (key: StandbyKey)
+    (proc: Process)
+    (inbox: MailboxProcessor<SessionCommand>)
+    (ct: CancellationToken)
+    =
+    Async.Start(async {
+      try
+        let mutable found = None
+        while Option.isNone found do
+          let! line = proc.StandardOutput.ReadLineAsync(ct).AsTask() |> Async.AwaitTask
+          if isNull line then
+            failwith "Standby worker exited before reporting port"
+          elif line.StartsWith("WORKER_PORT=") then
+            found <- Some (line.Substring("WORKER_PORT=".Length))
+        let baseUrl = found.Value
+        let proxy = HttpWorkerClient.httpProxy baseUrl
+        inbox.Post(SessionCommand.StandbyReady(key, proc.Id, proxy))
+      with ex ->
+        try proc.Kill() with _ -> ()
+        inbox.Post(
+          SessionCommand.StandbySpawnFailed(
+            key, proc.Id,
+            sprintf "Standby failed: %s" ex.Message))
+    }, ct)
+
+  /// Stop a standby worker process (fire-and-forget).
+  let stopStandbyWorker (standby: StandbySession) = async {
+    try
+      match standby.Proxy with
+      | Some proxy ->
+        let! _ = proxy WorkerMessage.Shutdown
+        let exited = standby.Process.WaitForExit(3000)
+        if not exited then
+          try standby.Process.Kill() with _ -> ()
+      | None ->
+        try standby.Process.Kill() with _ -> ()
+    with _ ->
+      try standby.Process.Kill() with _ -> ()
+  }
+
   /// Create the supervisor MailboxProcessor.
   let create (ct: CancellationToken) =
     MailboxProcessor<SessionCommand>.Start((fun inbox ->
@@ -251,23 +301,13 @@ module SessionManager =
         | SessionCommand.RestartSession(id, rebuild, reply) ->
           match ManagerState.tryGetSession id state with
           | Some session ->
-            // 1. Stop the worker (releases all assembly locks)
-            do! stopWorker session
-            let stateAfterStop = ManagerState.removeSession id state
-            // 2. Optionally rebuild
-            let buildResult =
-              if rebuild then runBuild session.Projects session.WorkingDir
-              else Ok "No rebuild requested"
-            match buildResult with
-            | Error msg ->
-              reply.Reply(Error (SageFsError.HardResetFailed msg))
-              return! loop stateAfterStop
-            | Ok _buildMsg ->
-            // 3. Respawn worker — non-blocking, port discovery runs off agent loop
-            let onExited workerPid exitCode =
-              inbox.Post(SessionCommand.WorkerExited(id, workerPid, exitCode))
-            match startWorkerProcess id session.Projects session.WorkingDir onExited with
-            | Ok proc ->
+            let key = StandbyKey.fromSession session.Projects session.WorkingDir
+            let standby = PoolState.getStandby key state.Pool
+            match StandbyPool.decideRestart rebuild standby with
+            | RestartDecision.SwapStandby readyStandby ->
+              // Fast path: swap the warm standby in
+              do! stopWorker session
+              let stateAfterStop = ManagerState.removeSession id state
               let info : SessionInfo = {
                 Id = id
                 Name = session.Info.Name
@@ -276,24 +316,75 @@ module SessionManager =
                 SolutionRoot = session.Info.SolutionRoot
                 CreatedAt = session.Info.CreatedAt
                 LastActivity = DateTime.UtcNow
-                Status = SessionStatus.Starting
-                WorkerPid = Some proc.Id
+                Status = SessionStatus.Ready
+                WorkerPid = Some readyStandby.Process.Id
               }
-              let restarted = {
+              let swapped = {
                 Info = info
-                Process = proc
-                Proxy = pendingProxy
+                Process = readyStandby.Process
+                Proxy = readyStandby.Proxy.Value
                 Projects = session.Projects
                 WorkingDir = session.WorkingDir
                 RestartState = session.RestartState
               }
-              let newState = ManagerState.addSession id restarted stateAfterStop
-              reply.Reply(Ok "Hard reset complete — worker respawning with fresh assemblies.")
-              awaitWorkerPort id proc inbox ct
+              let poolAfterSwap = PoolState.removeStandby key stateAfterStop.Pool
+              let newState =
+                { ManagerState.addSession id swapped stateAfterStop with
+                    Pool = poolAfterSwap }
+              reply.Reply(Ok "Hard reset complete — swapped warm standby (instant).")
+              // Start warming a new standby for next time
+              inbox.Post(SessionCommand.WarmStandby key)
               return! loop newState
-            | Error err ->
-              reply.Reply(Error err)
-              return! loop stateAfterStop
+            | RestartDecision.ColdRestart ->
+              // Slow path: traditional stop → build → spawn
+              do! stopWorker session
+              // Also kill any stale standby for this config
+              let poolAfterKill =
+                match standby with
+                | Some s ->
+                  Async.Start(stopStandbyWorker s, ct)
+                  PoolState.removeStandby key state.Pool
+                | None -> state.Pool
+              let stateAfterStop =
+                { ManagerState.removeSession id state with Pool = poolAfterKill }
+              let buildResult =
+                if rebuild then runBuild session.Projects session.WorkingDir
+                else Ok "No rebuild requested"
+              match buildResult with
+              | Error msg ->
+                reply.Reply(Error (SageFsError.HardResetFailed msg))
+                return! loop stateAfterStop
+              | Ok _buildMsg ->
+              let onExited workerPid exitCode =
+                inbox.Post(SessionCommand.WorkerExited(id, workerPid, exitCode))
+              match startWorkerProcess id session.Projects session.WorkingDir onExited with
+              | Ok proc ->
+                let info : SessionInfo = {
+                  Id = id
+                  Name = session.Info.Name
+                  Projects = session.Projects
+                  WorkingDirectory = session.WorkingDir
+                  SolutionRoot = session.Info.SolutionRoot
+                  CreatedAt = session.Info.CreatedAt
+                  LastActivity = DateTime.UtcNow
+                  Status = SessionStatus.Starting
+                  WorkerPid = Some proc.Id
+                }
+                let restarted = {
+                  Info = info
+                  Process = proc
+                  Proxy = pendingProxy
+                  Projects = session.Projects
+                  WorkingDir = session.WorkingDir
+                  RestartState = session.RestartState
+                }
+                let newState = ManagerState.addSession id restarted stateAfterStop
+                reply.Reply(Ok "Hard reset complete — worker respawning with fresh assemblies.")
+                awaitWorkerPort id proc inbox ct
+                return! loop newState
+              | Error err ->
+                reply.Reply(Error err)
+                return! loop stateAfterStop
           | None ->
             reply.Reply(Error (SageFsError.SessionNotFound id))
             return! loop state
@@ -346,6 +437,10 @@ module SessionManager =
             let updated =
               { session with Proxy = proxy }
             let newState = ManagerState.addSession id updated state
+            // Trigger standby warmup for this session's config
+            let key = StandbyKey.fromSession session.Projects session.WorkingDir
+            if state.Pool.Enabled && PoolState.getStandby key state.Pool |> Option.isNone then
+              inbox.Post(SessionCommand.WarmStandby key)
             return! loop newState
           | None ->
             // Session was stopped before port discovery completed — ignore
@@ -444,11 +539,77 @@ module SessionManager =
             return! loop state
 
         | SessionCommand.StopAll reply ->
-          // Graceful shutdown of all sessions
+          // Graceful shutdown of all sessions and standbys
           for KeyValue(_, session) in state.Sessions do
             do! stopWorker session
+          for KeyValue(_, standby) in state.Pool.Standbys do
+            do! stopStandbyWorker standby
           reply.Reply(())
           return! loop ManagerState.empty
+
+        // --- Standby pool commands ---
+
+        | SessionCommand.WarmStandby key ->
+          // Only warm if enabled and no standby exists for this config
+          if state.Pool.Enabled
+             && PoolState.getStandby key state.Pool |> Option.isNone then
+            // Generate a temporary session ID for the standby worker
+            let standbyId = sprintf "standby-%s" (Guid.NewGuid().ToString("N").[..7])
+            let onExited workerPid _exitCode =
+              inbox.Post(SessionCommand.StandbyExited(key, workerPid))
+            match startWorkerProcess standbyId key.Projects key.WorkingDir onExited with
+            | Ok proc ->
+              let standby = {
+                Process = proc
+                Proxy = None
+                State = StandbyState.Warming
+                Projects = key.Projects
+                WorkingDir = key.WorkingDir
+                CreatedAt = DateTime.UtcNow
+              }
+              let newPool = PoolState.setStandby key standby state.Pool
+              awaitStandbyPort key proc inbox ct
+              return! loop { state with Pool = newPool }
+            | Error _ ->
+              // Spawn failed — just skip, cold restart still works
+              return! loop state
+          else
+            return! loop state
+
+        | SessionCommand.StandbyReady(key, _workerPid, proxy) ->
+          match PoolState.getStandby key state.Pool with
+          | Some standby when standby.State = StandbyState.Warming ->
+            let ready =
+              { standby with
+                  Proxy = Some proxy
+                  State = StandbyState.Ready }
+            let newPool = PoolState.setStandby key ready state.Pool
+            return! loop { state with Pool = newPool }
+          | _ ->
+            // Stale or unexpected — ignore
+            return! loop state
+
+        | SessionCommand.StandbySpawnFailed(key, _workerPid, _msg) ->
+          // Remove the failed standby
+          let newPool = PoolState.removeStandby key state.Pool
+          return! loop { state with Pool = newPool }
+
+        | SessionCommand.StandbyExited(key, _workerPid) ->
+          // Standby worker exited — remove it
+          let newPool = PoolState.removeStandby key state.Pool
+          return! loop { state with Pool = newPool }
+
+        | SessionCommand.InvalidateStandbys workingDir ->
+          // Kill and remove standbys matching this working dir
+          let toKill =
+            state.Pool.Standbys
+            |> Map.filter (fun k _ -> k.WorkingDir = workingDir)
+          for KeyValue(_, standby) in toKill do
+            Async.Start(stopStandbyWorker standby, ct)
+          let newPool =
+            toKill
+            |> Map.fold (fun pool k _ -> PoolState.removeStandby k pool) state.Pool
+          return! loop { state with Pool = newPool }
       }
       loop ManagerState.empty
     ), cancellationToken = ct)
