@@ -35,7 +35,7 @@ let run (daemonInfo: DaemonInfo) = task {
   let mutable grid = CellGrid.create gridRows gridCols
   let mutable focusedPane = PaneId.Editor
   let mutable scrollOffsets = Map.empty<PaneId, int>
-  let mutable prevFrame = ""
+  let mutable prevGrid : CellGrid option = None
   let mutable lastRegions : RenderRegion list = []
   let mutable lastSessionState = "Connecting..."
   let mutable lastSessionId = ""
@@ -76,16 +76,13 @@ let run (daemonInfo: DaemonInfo) = task {
           match cursorPos with
           | Some (r, c) -> r, c
           | None -> 0, 0
-        let frame = AnsiEmitter.emit grid cursorRow cursorCol
         let output =
-          if prevFrame.Length = 0 then frame
-          else
-            let d = FrameDiff.diff prevFrame frame
-            if d.Length = 0 then ""
-            else d
+          match prevGrid with
+          | None -> AnsiEmitter.emit grid cursorRow cursorCol
+          | Some prev -> AnsiEmitter.emitDiff prev grid cursorRow cursorCol
         if output.Length > 0 then
           Console.Write(output)
-        prevFrame <- frame
+        prevGrid <- Some (CellGrid.clone grid)
         sw.Stop()
         lastFrameMs <- sw.Elapsed.TotalMilliseconds
       with _ -> ())
@@ -135,7 +132,7 @@ let run (daemonInfo: DaemonInfo) = task {
         gridRows <- newRows
         gridCols <- newCols
         grid <- CellGrid.create gridRows gridCols
-        prevFrame <- ""
+        prevGrid <- None
         lock TerminalUIState.consoleLock (fun () ->
           Console.Write(AnsiCodes.clearScreen))
         render ()
@@ -146,7 +143,7 @@ let run (daemonInfo: DaemonInfo) = task {
         | Some TerminalCommand.Quit ->
           cts.Cancel()
         | Some TerminalCommand.Redraw ->
-          prevFrame <- ""
+          prevGrid <- None
           lock TerminalUIState.consoleLock (fun () ->
             Console.Write(AnsiCodes.clearScreen))
           render ()
