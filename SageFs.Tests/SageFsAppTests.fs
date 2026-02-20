@@ -313,6 +313,300 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
       SageFsUpdate.update (SageFsMsg.Event event) model
     newModel.Sessions.Sessions.[0].Status
     |> Expect.equal "should be Stale" SessionDisplayStatus.Stale
+
+  testCase "SessionCycleNext with 0 sessions is no-op" <| fun _ ->
+    let model = SageFsModel.initial
+    let _, effects =
+      SageFsUpdate.update (SageFsMsg.Editor EditorAction.SessionCycleNext) model
+    effects |> Expect.isEmpty "no effects for empty sessions"
+
+  testCase "SessionCycleNext with 1 session is no-op" <| fun _ ->
+    let snap = {
+      Id = "s1"; Name = None; Projects = ["A.fsproj"]
+      Status = SessionDisplayStatus.Running
+      LastActivity = DateTime.UtcNow; EvalCount = 0
+      UpSince = DateTime.UtcNow; IsActive = true; WorkingDirectory = "." }
+    let model = {
+      SageFsModel.initial with
+        Sessions = {
+          SageFsModel.initial.Sessions with
+            Sessions = [snap]
+            ActiveSessionId = ActiveSession.Viewing "s1" } }
+    let _, effects =
+      SageFsUpdate.update (SageFsMsg.Editor EditorAction.SessionCycleNext) model
+    effects |> Expect.isEmpty "no effects for single session"
+
+  testCase "SessionCycleNext wraps from last to first" <| fun _ ->
+    let mkSnap id = {
+      Id = id; Name = None; Projects = []
+      Status = SessionDisplayStatus.Running
+      LastActivity = DateTime.UtcNow; EvalCount = 0
+      UpSince = DateTime.UtcNow; IsActive = false; WorkingDirectory = "." }
+    let model = {
+      SageFsModel.initial with
+        Editor = { EditorState.initial with SelectedSessionIndex = Some 2 }
+        Sessions = {
+          SageFsModel.initial.Sessions with
+            Sessions = [mkSnap "s0"; mkSnap "s1"; mkSnap "s2"]
+            ActiveSessionId = ActiveSession.Viewing "s2" } }
+    let newModel, effects =
+      SageFsUpdate.update (SageFsMsg.Editor EditorAction.SessionCycleNext) model
+    match effects with
+    | [SageFsEffect.Editor (EditorEffect.RequestSessionSwitch sid)] ->
+      sid |> Expect.equal "should wrap to s0" "s0"
+    | _ -> failtest "expected single RequestSessionSwitch effect"
+    newModel.Editor.SelectedSessionIndex
+    |> Expect.equal "index should wrap to 0" (Some 0)
+
+  testCase "SessionCyclePrev with 0 sessions is no-op" <| fun _ ->
+    let _, effects =
+      SageFsUpdate.update (SageFsMsg.Editor EditorAction.SessionCyclePrev) SageFsModel.initial
+    effects |> Expect.isEmpty "no effects for empty sessions"
+
+  testCase "SessionCyclePrev wraps from first to last" <| fun _ ->
+    let mkSnap id = {
+      Id = id; Name = None; Projects = []
+      Status = SessionDisplayStatus.Running
+      LastActivity = DateTime.UtcNow; EvalCount = 0
+      UpSince = DateTime.UtcNow; IsActive = false; WorkingDirectory = "." }
+    let model = {
+      SageFsModel.initial with
+        Editor = { EditorState.initial with SelectedSessionIndex = Some 0 }
+        Sessions = {
+          SageFsModel.initial.Sessions with
+            Sessions = [mkSnap "s0"; mkSnap "s1"; mkSnap "s2"]
+            ActiveSessionId = ActiveSession.Viewing "s0" } }
+    let newModel, effects =
+      SageFsUpdate.update (SageFsMsg.Editor EditorAction.SessionCyclePrev) model
+    match effects with
+    | [SageFsEffect.Editor (EditorEffect.RequestSessionSwitch sid)] ->
+      sid |> Expect.equal "should wrap to s2" "s2"
+    | _ -> failtest "expected single RequestSessionSwitch effect"
+    newModel.Editor.SelectedSessionIndex
+    |> Expect.equal "index should wrap to 2" (Some 2)
+
+  testCase "ClearOutput resets RecentOutput" <| fun _ ->
+    let model = {
+      SageFsModel.initial with
+        RecentOutput = [
+          { Kind = OutputKind.Result; Text = "line1"
+            Timestamp = DateTime.UtcNow; SessionId = "s1" }
+          { Kind = OutputKind.Error; Text = "line2"
+            Timestamp = DateTime.UtcNow; SessionId = "s1" }
+        ] }
+    let newModel, effects =
+      SageFsUpdate.update (SageFsMsg.Editor EditorAction.ClearOutput) model
+    newModel.RecentOutput |> Expect.isEmpty "output should be cleared"
+    effects |> Expect.isEmpty "no effects"
+
+  testCase "CreateSession blocked when already creating" <| fun _ ->
+    let model = { SageFsModel.initial with CreatingSession = true }
+    let _, effects =
+      SageFsUpdate.update
+        (SageFsMsg.Editor (EditorAction.CreateSession ["Test.fsproj"]))
+        model
+    effects |> Expect.isEmpty "should block duplicate create"
+
+  testCase "EvalFailed with Create failed: clears CreatingSession" <| fun _ ->
+    let model = { SageFsModel.initial with CreatingSession = true }
+    let event = SageFsEvent.EvalFailed ("s1", "Create failed: some reason")
+    let newModel, _ =
+      SageFsUpdate.update (SageFsMsg.Event event) model
+    newModel.CreatingSession
+    |> Expect.isFalse "should clear CreatingSession"
+
+  testCase "EvalFailed with normal error keeps CreatingSession" <| fun _ ->
+    let model = { SageFsModel.initial with CreatingSession = true }
+    let event = SageFsEvent.EvalFailed ("s1", "type mismatch")
+    let newModel, _ =
+      SageFsUpdate.update (SageFsMsg.Event event) model
+    newModel.CreatingSession
+    |> Expect.isTrue "should keep CreatingSession"
+
+  testCase "SessionStopped active falls back to next session" <| fun _ ->
+    let snap1 = {
+      Id = "s1"; Name = None; Projects = []
+      Status = SessionDisplayStatus.Running
+      LastActivity = DateTime.UtcNow; EvalCount = 0
+      UpSince = DateTime.UtcNow; IsActive = true; WorkingDirectory = "." }
+    let snap2 = {
+      Id = "s2"; Name = None; Projects = []
+      Status = SessionDisplayStatus.Running
+      LastActivity = DateTime.UtcNow; EvalCount = 0
+      UpSince = DateTime.UtcNow; IsActive = false; WorkingDirectory = "." }
+    let model = {
+      SageFsModel.initial with
+        Sessions = {
+          SageFsModel.initial.Sessions with
+            Sessions = [snap1; snap2]
+            ActiveSessionId = ActiveSession.Viewing "s1" }
+        Diagnostics = Map.ofList ["s1", []; "s2", []] }
+    let event = SageFsEvent.SessionStopped "s1"
+    let newModel, _ =
+      SageFsUpdate.update (SageFsMsg.Event event) model
+    newModel.Sessions.Sessions
+    |> Expect.hasLength "should have 1 session" 1
+    newModel.Sessions.ActiveSessionId
+    |> Expect.equal "should fall back to s2" (ActiveSession.Viewing "s2")
+    newModel.Sessions.Sessions.[0].IsActive
+    |> Expect.isTrue "s2 should be active"
+    newModel.Diagnostics |> Map.containsKey "s1"
+    |> Expect.isFalse "s1 diagnostics removed"
+
+  testCase "SessionStopped non-active doesn't change active" <| fun _ ->
+    let snap1 = {
+      Id = "s1"; Name = None; Projects = []
+      Status = SessionDisplayStatus.Running
+      LastActivity = DateTime.UtcNow; EvalCount = 0
+      UpSince = DateTime.UtcNow; IsActive = true; WorkingDirectory = "." }
+    let snap2 = {
+      Id = "s2"; Name = None; Projects = []
+      Status = SessionDisplayStatus.Running
+      LastActivity = DateTime.UtcNow; EvalCount = 0
+      UpSince = DateTime.UtcNow; IsActive = false; WorkingDirectory = "." }
+    let model = {
+      SageFsModel.initial with
+        Sessions = {
+          SageFsModel.initial.Sessions with
+            Sessions = [snap1; snap2]
+            ActiveSessionId = ActiveSession.Viewing "s1" } }
+    let newModel, _ =
+      SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.SessionStopped "s2")) model
+    newModel.Sessions.ActiveSessionId
+    |> Expect.equal "should stay s1" (ActiveSession.Viewing "s1")
+
+  testCase "SessionStopped last session → AwaitingSession" <| fun _ ->
+    let snap = {
+      Id = "s1"; Name = None; Projects = []
+      Status = SessionDisplayStatus.Running
+      LastActivity = DateTime.UtcNow; EvalCount = 0
+      UpSince = DateTime.UtcNow; IsActive = true; WorkingDirectory = "." }
+    let model = {
+      SageFsModel.initial with
+        Sessions = {
+          SageFsModel.initial.Sessions with
+            Sessions = [snap]
+            ActiveSessionId = ActiveSession.Viewing "s1" } }
+    let newModel, _ =
+      SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.SessionStopped "s1")) model
+    newModel.Sessions.Sessions |> Expect.isEmpty "sessions empty"
+    newModel.Sessions.ActiveSessionId
+    |> Expect.equal "should be AwaitingSession" ActiveSession.AwaitingSession
+
+  testCase "SessionStatusChanged updates status" <| fun _ ->
+    let snap = {
+      Id = "s1"; Name = None; Projects = []
+      Status = SessionDisplayStatus.Running
+      LastActivity = DateTime.UtcNow; EvalCount = 0
+      UpSince = DateTime.UtcNow; IsActive = true; WorkingDirectory = "." }
+    let model = {
+      SageFsModel.initial with
+        Sessions = {
+          SageFsModel.initial.Sessions with
+            Sessions = [snap]
+            ActiveSessionId = ActiveSession.Viewing "s1" } }
+    let event = SageFsEvent.SessionStatusChanged ("s1", SessionDisplayStatus.Errored "faulted")
+    let newModel, _ =
+      SageFsUpdate.update (SageFsMsg.Event event) model
+    match newModel.Sessions.Sessions.[0].Status with
+    | SessionDisplayStatus.Errored _ -> ()
+    | other -> failtestf "expected Errored, got %A" other
+
+  testCase "SessionStatusChanged for unknown session is no-op" <| fun _ ->
+    let event = SageFsEvent.SessionStatusChanged ("x", SessionDisplayStatus.Errored "x")
+    let newModel, effects =
+      SageFsUpdate.update (SageFsMsg.Event event) SageFsModel.initial
+    effects |> Expect.isEmpty "no effects"
+    newModel.Sessions.Sessions |> Expect.isEmpty "still empty"
+
+  testCase "WarmupProgress adds step/total info line" <| fun _ ->
+    let event = SageFsEvent.WarmupProgress(2, 4, "Loading namespaces")
+    let newModel, effects =
+      SageFsUpdate.update (SageFsMsg.Event event) SageFsModel.initial
+    effects |> Expect.isEmpty "no effects"
+    newModel.RecentOutput |> Expect.hasLength "1 output line" 1
+    newModel.RecentOutput.[0].Kind
+    |> Expect.equal "should be Info" OutputKind.Info
+    newModel.RecentOutput.[0].Text
+    |> Expect.stringContains "should contain [2/4]" "[2/4]"
+
+  testCase "DiagnosticsUpdated overwrites previous for same session" <| fun _ ->
+    let diag1 = {
+      Message = "first"; Subcategory = "a"
+      Range = { StartLine = 1; StartColumn = 0; EndLine = 1; EndColumn = 1 }
+      Severity = DiagnosticSeverity.Error }
+    let diag2 = {
+      Message = "second"; Subcategory = "b"
+      Range = { StartLine = 2; StartColumn = 0; EndLine = 2; EndColumn = 1 }
+      Severity = DiagnosticSeverity.Warning }
+    let model = {
+      SageFsModel.initial with
+        Diagnostics = Map.ofList ["s1", [diag1]] }
+    let event = SageFsEvent.DiagnosticsUpdated ("s1", [diag2])
+    let newModel, _ =
+      SageFsUpdate.update (SageFsMsg.Event event) model
+    let diags = newModel.Diagnostics |> Map.find "s1"
+    diags |> Expect.hasLength "should replace with 1 diag" 1
+    diags.[0].Message |> Expect.equal "should be the new diag" "second"
+
+  testCase "SessionCreated auto-selects first session" <| fun _ ->
+    let snap = {
+      Id = "s1"; Name = None; Projects = ["A.fsproj"]
+      Status = SessionDisplayStatus.Running
+      LastActivity = DateTime.UtcNow; EvalCount = 0
+      UpSince = DateTime.UtcNow; IsActive = false; WorkingDirectory = "." }
+    let newModel, _ =
+      SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.SessionCreated snap)) SageFsModel.initial
+    newModel.Sessions.ActiveSessionId
+    |> Expect.equal "should auto-select" (ActiveSession.Viewing "s1")
+    newModel.Sessions.Sessions.[0].IsActive
+    |> Expect.isTrue "should be marked active"
+    newModel.CreatingSession
+    |> Expect.isFalse "should clear CreatingSession"
+
+  testCase "SessionCreated second session doesn't override active" <| fun _ ->
+    let snap1 = {
+      Id = "s1"; Name = None; Projects = []
+      Status = SessionDisplayStatus.Running
+      LastActivity = DateTime.UtcNow; EvalCount = 0
+      UpSince = DateTime.UtcNow; IsActive = true; WorkingDirectory = "." }
+    let model = {
+      SageFsModel.initial with
+        Sessions = {
+          SageFsModel.initial.Sessions with
+            Sessions = [snap1]
+            ActiveSessionId = ActiveSession.Viewing "s1" } }
+    let snap2 = {
+      Id = "s2"; Name = None; Projects = []
+      Status = SessionDisplayStatus.Running
+      LastActivity = DateTime.UtcNow; EvalCount = 0
+      UpSince = DateTime.UtcNow; IsActive = false; WorkingDirectory = "." }
+    let newModel, _ =
+      SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.SessionCreated snap2)) model
+    newModel.Sessions.ActiveSessionId
+    |> Expect.equal "should still be s1" (ActiveSession.Viewing "s1")
+    newModel.Sessions.Sessions
+    |> Expect.hasLength "should have 2 sessions" 2
+
+  testCase "SessionSwitched marks only target active" <| fun _ ->
+    let mkSnap id active = {
+      Id = id; Name = None; Projects = []
+      Status = SessionDisplayStatus.Running
+      LastActivity = DateTime.UtcNow; EvalCount = 0
+      UpSince = DateTime.UtcNow; IsActive = active; WorkingDirectory = "." }
+    let model = {
+      SageFsModel.initial with
+        Sessions = {
+          SageFsModel.initial.Sessions with
+            Sessions = [mkSnap "s1" true; mkSnap "s2" false; mkSnap "s3" false]
+            ActiveSessionId = ActiveSession.Viewing "s1" } }
+    let newModel, _ =
+      SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.SessionSwitched (Some "s1", "s3"))) model
+    newModel.Sessions.ActiveSessionId
+    |> Expect.equal "should be s3" (ActiveSession.Viewing "s3")
+    newModel.Sessions.Sessions
+    |> List.filter (fun s -> s.IsActive)
+    |> Expect.hasLength "only s3 active" 1
 ]
 
 [<Tests>]

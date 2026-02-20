@@ -53,6 +53,32 @@ let displayStatusTests = testList "SessionDisplay.displayStatus" [
     let info = mkInfo "s1" SessionStatus.Restarting now
     SessionDisplay.displayStatus now info
     |> Expect.equal "should be Restarting" SessionDisplayStatus.Restarting
+
+  testCase "Stopped maps to Errored" <| fun _ ->
+    let info = mkInfo "s1" SessionStatus.Stopped now
+    SessionDisplay.displayStatus now info
+    |> function
+      | SessionDisplayStatus.Errored msg ->
+        msg |> Expect.stringContains "should mention stopped" "stopped"
+      | other -> failwith (sprintf "Expected Errored, got %A" other)
+
+  testCase "Evaluating but stale maps to Stale" <| fun _ ->
+    let staleTime = now.AddMinutes(-15.0)
+    let info = mkInfo "s1" SessionStatus.Evaluating staleTime
+    SessionDisplay.displayStatus now info
+    |> Expect.equal "should be Stale" SessionDisplayStatus.Stale
+
+  testCase "exactly 10min idle is not stale (strict >)" <| fun _ ->
+    let tenMin = now.AddMinutes(-10.0)
+    let info = mkInfo "s1" SessionStatus.Ready tenMin
+    SessionDisplay.displayStatus now info
+    |> Expect.equal "should be Running" SessionDisplayStatus.Running
+
+  testCase "10min + 1sec idle is stale" <| fun _ ->
+    let overTen = now.AddMinutes(-10.0).AddSeconds(-1.0)
+    let info = mkInfo "s1" SessionStatus.Ready overTen
+    SessionDisplay.displayStatus now info
+    |> Expect.equal "should be Stale" SessionDisplayStatus.Stale
 ]
 
 [<Tests>]
@@ -140,4 +166,60 @@ let affordanceTests = testList "SessionDisplay.sessionAffordances" [
     affordances
     |> List.exists (fun a -> a.Label = "Restart")
     |> Expect.isFalse "should not have Restart"
+
+  testCase "active running session has no Stop affordance" <| fun _ ->
+    let snap = {
+      Id = "s1"; Name = None; Projects = ["Test.fsproj"]
+      Status = SessionDisplayStatus.Running
+      LastActivity = now; EvalCount = 0
+      UpSince = now; IsActive = true; WorkingDirectory = "" }
+    let affordances = SessionDisplay.sessionAffordances Map.empty snap
+    affordances
+    |> List.exists (fun a -> a.Label = "Stop")
+    |> Expect.isFalse "no Stop for active running session"
+
+  testCase "stale session has Stop even when active" <| fun _ ->
+    let snap = {
+      Id = "s1"; Name = None; Projects = []
+      Status = SessionDisplayStatus.Stale
+      LastActivity = now; EvalCount = 0
+      UpSince = now; IsActive = true; WorkingDirectory = "" }
+    let affordances = SessionDisplay.sessionAffordances Map.empty snap
+    affordances
+    |> List.exists (fun a -> a.Label = "Stop")
+    |> Expect.isTrue "Stop should show for stale session"
+
+  testCase "inactive session has Stop affordance" <| fun _ ->
+    let snap = {
+      Id = "s1"; Name = None; Projects = []
+      Status = SessionDisplayStatus.Running
+      LastActivity = now; EvalCount = 0
+      UpSince = now; IsActive = false; WorkingDirectory = "" }
+    let affordances = SessionDisplay.sessionAffordances Map.empty snap
+    affordances
+    |> List.exists (fun a -> a.Label = "Stop")
+    |> Expect.isTrue "Stop should show for inactive session"
+]
+
+[<Tests>]
+let activeSessionTests = testList "ActiveSession" [
+  testCase "sessionId returns Some for Viewing" <| fun _ ->
+    ActiveSession.sessionId (ActiveSession.Viewing "s1")
+    |> Expect.equal "should be Some s1" (Some "s1")
+
+  testCase "sessionId returns None for AwaitingSession" <| fun _ ->
+    ActiveSession.sessionId ActiveSession.AwaitingSession
+    |> Expect.equal "should be None" None
+
+  testCase "isViewing true for matching id" <| fun _ ->
+    ActiveSession.isViewing "s1" (ActiveSession.Viewing "s1")
+    |> Expect.isTrue "should match"
+
+  testCase "isViewing false for different id" <| fun _ ->
+    ActiveSession.isViewing "s2" (ActiveSession.Viewing "s1")
+    |> Expect.isFalse "should not match"
+
+  testCase "isViewing false for AwaitingSession" <| fun _ ->
+    ActiveSession.isViewing "s1" ActiveSession.AwaitingSession
+    |> Expect.isFalse "awaiting is never viewing"
 ]

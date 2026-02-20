@@ -80,6 +80,26 @@ let cellGridTests = testList "CellGrid" [
     Expect.equal (CellGrid.get grid 0 0) Cell.empty "cleared"
     Expect.equal (CellGrid.get grid 0 1) Cell.empty "cleared"
   }
+
+  test "writeString at origin" {
+    let grid = CellGrid.create 2 5
+    CellGrid.writeString grid 0 0 0u 0u CellAttrs.None "AB"
+    Expect.equal (CellGrid.get grid 0 0).Char 'A' "A at (0,0)"
+    Expect.equal (CellGrid.get grid 0 1).Char 'B' "B at (0,1)"
+  }
+
+  test "writeString empty is no-op" {
+    let grid = CellGrid.create 2 5
+    CellGrid.writeString grid 0 0 0u 0u CellAttrs.None ""
+    Expect.equal (CellGrid.get grid 0 0) Cell.empty "should remain empty"
+  }
+
+  test "fillRect with zero-area rect is no-op" {
+    let grid = CellGrid.create 3 3
+    let cell = Cell.create '#' 0u 0u CellAttrs.None
+    CellGrid.fillRect grid (Rect.create 0 0 0 0) cell
+    Expect.equal (CellGrid.get grid 0 0) Cell.empty "zero area should not fill"
+  }
 ]
 
 let rectTests = testList "Rect" [
