@@ -62,6 +62,7 @@
         <Compile Include="HotReloadTests.fs" />
         <Compile Include="WorkerHttpTransportTests.fs" />
         <Compile Include="SessionIsolationTests.fs" />
+        <Compile Include="CleanStdoutTests.fs" />
         <Compile Include="Program.fs" />
     </ItemGroup>
 
