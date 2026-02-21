@@ -23,10 +23,10 @@ SageFs is a live F# development server — a daemon that sees your code, underst
 ## 🔥 Hot Reload in Action
 
 <p align="center">
-  <img src="docs/hot-reload-demo.gif" alt="SageFs Hot Reload Demo — redefine a function, see the browser update instantly" width="600"/>
+  <img src="docs/hot-reload-demo.gif" alt="SageFs Hot Reload Demo — live Pong with colors, trails, and physics changing in real-time" width="800"/>
 </p>
 
-> Redefine an F# function in SageFs → Harmony patches the running server → browser updates instantly via SSE. No restart, no rebuild.
+> Edit F# → `#load` in SageFs → Harmony patches the running code → browser updates instantly. Colors, trails, physics — all changed live while the game keeps playing. No restart, no rebuild, no state lost.
 
 ---
 
