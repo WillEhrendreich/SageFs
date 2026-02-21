@@ -2,6 +2,28 @@
 
 ## ✅ What Works
 
+### 6. Browser Auto-Refresh via DevReload Middleware (NEW)
+- **`SageFs.DevReload`** — pure broadcaster in `SageFs.Core` with zero ASP.NET dependency
+- **`SageFs.DevReloadMiddleware`** — ASP.NET Core middleware in `SageFs` project
+- Injects a tiny `<script>` before `</body>` in all `text/html` responses
+- Script opens SSE connection to `/__sagefs__/reload`  
+- When Harmony detours fire after a hot reload, `DevReload.triggerReload()` signals all connected browsers
+- Browser auto-refreshes — **no manual F5 needed**
+
+#### Usage in a Falco app
+```fsharp
+open SageFs.DevReloadMiddleware
+
+webHost [||] {
+  use_middleware middleware
+  // your routes...
+}
+```
+Or with `IApplicationBuilder` directly:
+```fsharp
+app.Use(SageFs.DevReloadMiddleware.middleware) |> ignore
+```
+
 ### 1. Automatic File Watching (NEW in 0.4.18)
 - **Worker processes automatically watch project directories** for `.fs`, `.fsx`, `.fsproj` changes
 - On `.fs`/`.fsx` change: debounced `#load` + Harmony method detouring — live-patches running code
@@ -94,6 +116,8 @@ SageFs --proj MyProject.fsproj --no-watch
 
 | File | Purpose |
 |------|---------|
+| `SageFs/DevReloadMiddleware.fs` | ASP.NET middleware: SSE endpoint + HTML script injection |
+| `SageFs.Core/DevReload.fs` | Pure broadcaster: `triggerReload()`, `registerClient`, `unregisterClient` |
 | `SageFs/WorkerMain.fs` | Starts file watcher, routes changes to FSI |
 | `SageFs.Core/FileWatcher.fs` | Pure file watching with debounce |
 | `SageFs.Core/Middleware/HotReloading.fs` | Harmony method detouring |

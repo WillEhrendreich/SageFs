@@ -28,11 +28,30 @@ let getRandomPort () =
 
 let createTestActor () =
   task {
-    // Load the test project which has Falco package references
-    let testProjectPath =
+    // Load the test project which has Falco package references.
+    // Try the standard path first (from test bin/Debug/net10.0 output dir),
+    // then fall back to searching upward from the working directory.
+    let basePath =
       System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..", "..", "..", "SageFs.Tests.fsproj")
+      |> System.IO.Path.GetFullPath
 
-    let fullPath = System.IO.Path.GetFullPath(testProjectPath)
+    let fallbackPath =
+      let rec findUp (dir: string) =
+        let candidate = System.IO.Path.Combine(dir, "SageFs.Tests", "SageFs.Tests.fsproj")
+        if System.IO.File.Exists candidate then Some candidate
+        else
+          let parent = System.IO.Path.GetDirectoryName dir
+          if parent = null || parent = dir then None
+          else findUp parent
+      findUp (System.IO.Directory.GetCurrentDirectory())
+
+    let fullPath =
+      if System.IO.File.Exists basePath then basePath
+      else
+        match fallbackPath with
+        | Some p -> p
+        | None -> failwith (sprintf "Cannot find SageFs.Tests.fsproj (tried %s)" basePath)
+
     printfn "Loading test project from: %s" fullPath
     let args = mkCommonActorArgs logger true ignore [ SageFs.Args.Proj fullPath ]
     let! result = createActor args

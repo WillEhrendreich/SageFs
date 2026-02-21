@@ -7,6 +7,7 @@ open System.Reflection
 open SageFs.ProjectLoading
 open SageFs.Utils
 open SageFs.AppState
+open SageFs.DevReload
 
 // Assembly resolver to find dependencies in project output directories
 let assemblySearchPaths = ResizeArray<string>()
@@ -228,7 +229,20 @@ let handleNewAsmFromRepl (logger: ILogger) (asm: Assembly) (st: State) =
       logger.LogDebug <| "Updating method " + methodToReplace.FullName
       detourMethod methodToReplace.MethodInfo newMethod.MethodInfo
 
-    { st with LastAssembly = Some asm }, List.map (fst >> _.FullName) replacementPairs
+    // Merge new assembly's methods into Methods so future evals can patch functions
+    // defined in FSI (not in project DLLs). Without this, only project-DLL methods
+    // are ever patchable; FSI-first-defined functions are invisible to Harmony.
+    let newMethodsByName =
+      getAllMethods asm
+      |> List.groupBy (fun m -> m.MethodInfo.Name)
+      |> List.map (fun (name, methods) -> name, methods)
+      |> Map.ofList
+
+    let mergedMethods =
+      newMethodsByName |> Map.fold (fun acc k v -> Map.add k v acc) st.Methods
+
+    { st with LastAssembly = Some asm; Methods = mergedMethods },
+    List.map (fst >> _.FullName) replacementPairs
 
 let getOpenModules (replCode: string) st =
   let modules =
@@ -245,38 +259,103 @@ let getOpenModules (replCode: string) st =
         LastOpenModules = (modules @ st.LastOpenModules) |> List.distinct
   }
 
+/// Detect top-level function bindings (not value bindings).
+/// Function bindings have parameters between the name and '=':
+///   let f () = ...      → function (unit param)
+///   let f x y = ...     → function (named params)
+///   let f (x: int) = .. → function (typed params)
+///   let x = 42          → value (no params)
+///   let h : Type = ...  → value (type annotation, no params)
+let private isTopLevelFunctionBinding (line: string) =
+  let trimmed = line.TrimStart()
+  if not (trimmed.StartsWith("let ")) || trimmed.StartsWith("let!") || line <> line.TrimStart() then
+    false
+  else
+    let mutable s = trimmed.Substring(4).TrimStart()
+    for m in ["private "; "internal "; "public "; "inline "; "rec "; "mutable "] do
+      if s.StartsWith(m) then s <- s.Substring(m.Length).TrimStart()
+    match s.IndexOf('=') with
+    | -1 -> false
+    | eqIdx ->
+      let beforeEq = s.Substring(0, eqIdx).Trim()
+      beforeEq.Contains("(") || (beforeEq.Contains(" ") && not (beforeEq.Contains(":")))
+
+/// Detect static member method definitions (not properties).
+/// The F# compiler inlines simple static member bodies at the IL level,
+/// eliminating the call instruction entirely and making Harmony detours invisible.
+let private isStaticMemberFunction (line: string) =
+  let trimmed = line.TrimStart()
+  trimmed.StartsWith("static member ") &&
+    let afterKw = trimmed.Substring("static member ".Length).TrimStart()
+    match afterKw.IndexOf('('), afterKw.IndexOf('=') with
+    | parenIdx, eqIdx when parenIdx >= 0 && (eqIdx < 0 || parenIdx < eqIdx) -> true
+    | _, eqIdx when eqIdx > 0 ->
+      let beforeEq = afterKw.Substring(0, eqIdx).Trim()
+      beforeEq.Contains(" ") && not (beforeEq.Contains(":"))
+    | _ -> false
+
+/// Inject [<MethodImpl(MethodImplOptions.NoInlining)>] on top-level function bindings
+/// and static member methods so Harmony detours work reliably.
+/// Without this, the F# compiler inlines simple static member bodies at the IL level,
+/// and the JIT may inline short let-binding functions — both make Harmony's
+/// entry-point detour invisible to callers.
+let injectNoInlining (code: string) =
+  let lines = code.Replace("\r\n", "\n").Replace("\r", "\n").Split('\n')
+  let needsInjection line = isTopLevelFunctionBinding line || isStaticMemberFunction line
+  let hasFunction = lines |> Array.exists needsInjection
+  if not hasFunction then code
+  else
+    let sb = System.Text.StringBuilder()
+    sb.Append("open System.Runtime.CompilerServices\n") |> ignore
+    for line in lines do
+      if needsInjection line then
+        let indent = line.Length - line.TrimStart().Length
+        let prefix = System.String(' ', indent)
+        sb.Append(prefix + "[<MethodImpl(MethodImplOptions.NoInlining)>]\n") |> ignore
+      sb.Append(line + "\n") |> ignore
+    sb.ToString()
+
 let hotReloadingMiddleware next (request, st: AppState) =
   let hotReloadFlagEnabled =
     match st.Session.TryFindBoundValue "_SageFsHotReload" with
     | Some fsiBoundValue when fsiBoundValue.Value.ReflectionValue = true -> true
     | _ -> false
 
-  let shouldRunHotReload (m: Map<string, obj>) =
+  let shouldTriggerReload (m: Map<string, obj>) =
     match hotReloadFlagEnabled, Map.tryFind "hotReload" m with
     | _, Some v when v = true -> true
     | true, None -> true
     | _ -> false
 
-  match request with
-  | { Args = m } when shouldRunHotReload m ->
-    let response, st = next (request, st)
+  // Inject NoInlining attributes on ALL evals so that functions defined in
+  // earlier evals can be reliably patched by Harmony in future hot-reload evals.
+  // Without this, (a) the F# compiler inlines simple static member bodies at the
+  // IL level, and (b) the JIT may inline short let-binding functions — both make
+  // Harmony's entry-point detour invisible to callers.
+  let request = { request with Code = injectNoInlining request.Code }
 
-    match response.EvaluationResult with
-    | Error _ -> response, st
-    | Ok _ ->
-      let asm = st.Session.DynamicAssemblies |> Array.last
+  let response, st = next (request, st)
 
-      let reloadingSt, updatedMethods =
-        getReloadingState st
-        |> getOpenModules response.EvaluatedCode
-        |> handleNewAsmFromRepl st.Logger asm
+  // Always accumulate method registrations so future hot-reload evals can find them.
+  // Only trigger browser reload when the hotReload flag is explicitly set.
+  match response.EvaluationResult with
+  | Error _ -> response, st
+  | Ok _ ->
+    let asm = st.Session.DynamicAssemblies |> Array.last
 
-      {
-        response with
-            Metadata = response.Metadata.Add("reloadedMethods", updatedMethods)
-      },
-      {
-        st with
-            Custom = st.Custom.Add("hotReload", reloadingSt)
-      }
-  | _ -> next (request, st)
+    let reloadingSt, updatedMethods =
+      getReloadingState st
+      |> getOpenModules response.EvaluatedCode
+      |> handleNewAsmFromRepl st.Logger asm
+
+    if shouldTriggerReload request.Args && not (List.isEmpty updatedMethods) then
+      triggerReload()
+
+    let metadata =
+      if shouldTriggerReload request.Args then
+        response.Metadata.Add("reloadedMethods", updatedMethods)
+      else
+        response.Metadata
+
+    { response with Metadata = metadata },
+    { st with Custom = st.Custom.Add("hotReload", reloadingSt) }

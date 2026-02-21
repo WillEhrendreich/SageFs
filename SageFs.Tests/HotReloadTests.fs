@@ -3,6 +3,7 @@ module SageFs.Tests.HotReloadTests
 open Expecto
 open SageFs.FileWatcher
 open SageFs.AppState
+open SageFs.Middleware.HotReloading
 
 /// Tests that LoadScript EvalRequests carry the correct hot reload flag,
 /// ensuring the Harmony method-detouring middleware fires on file reloads.
@@ -192,6 +193,73 @@ let watchConfigTests =
       |> Flip.Expect.isFalse "should reject bin path"
   ]
 
+/// Tests for the [<MethodImpl(NoInlining)>] injection that prevents
+/// JIT inlining from defeating Harmony's entry-point detours.
+let noInliningInjectionTests =
+  testList "NoInlining injection" [
+    testCase "injects on unit-param function" <| fun () ->
+      let result = injectNoInlining "let f () = 42"
+      Flip.Expect.stringContains
+        "should have MethodImpl attribute" "[<MethodImpl(MethodImplOptions.NoInlining)>]" result
+      Flip.Expect.stringContains
+        "should open CompilerServices" "open System.Runtime.CompilerServices" result
+
+    testCase "skips value bindings" <| fun () ->
+      let result = injectNoInlining "let x = 42"
+      Flip.Expect.equal "value binding should be unchanged" "let x = 42" result
+
+    testCase "injects on named-param function" <| fun () ->
+      let result = injectNoInlining "let add x y = x + y"
+      Flip.Expect.stringContains
+        "should have MethodImpl" "[<MethodImpl(MethodImplOptions.NoInlining)>]" result
+
+    testCase "injects on private function" <| fun () ->
+      let result = injectNoInlining "let private f x y = x + y"
+      Flip.Expect.stringContains
+        "should have MethodImpl" "[<MethodImpl(MethodImplOptions.NoInlining)>]" result
+
+    testCase "skips mutable value" <| fun () ->
+      let result = injectNoInlining "let mutable count = 0"
+      Flip.Expect.equal "mutable val should be unchanged" "let mutable count = 0" result
+
+    testCase "injects on inline function" <| fun () ->
+      let result = injectNoInlining "let inline f x = x"
+      Flip.Expect.stringContains
+        "should have MethodImpl" "[<MethodImpl(MethodImplOptions.NoInlining)>]" result
+
+    testCase "injects on rec function" <| fun () ->
+      let result = injectNoInlining "let rec f n = if n = 0 then 1 else n * f (n-1)"
+      Flip.Expect.stringContains
+        "should have MethodImpl" "[<MethodImpl(MethodImplOptions.NoInlining)>]" result
+
+    testCase "skips typed value binding" <| fun () ->
+      let result = injectNoInlining "let h : int = 42"
+      Flip.Expect.equal "typed val should be unchanged" "let h : int = 42" result
+
+    testCase "skips indented let (not top-level)" <| fun () ->
+      let result = injectNoInlining "  let nested () = 1"
+      Flip.Expect.equal "indented let should be unchanged" "  let nested () = 1" result
+
+    testCase "injects on static member" <| fun () ->
+      let result = injectNoInlining "static member Hello () = \"hi\""
+      Flip.Expect.stringContains
+        "should have MethodImpl" "[<MethodImpl(MethodImplOptions.NoInlining)>]" result
+
+    testCase "handles multi-line code with mixed bindings" <| fun () ->
+      let code = "let greeting () = \"hello\"\nlet count = 0\nlet handler x = greeting ()"
+      let result = injectNoInlining code
+      // greeting and handler get NoInlining, count does not
+      let lines = result.Split('\n')
+      let attrCount =
+        lines |> Array.filter (fun l -> l.Contains("[<MethodImpl(MethodImplOptions.NoInlining)>]")) |> Array.length
+      Flip.Expect.equal "should inject exactly 2 attributes" 2 attrCount
+
+    testCase "preserves original code lines" <| fun () ->
+      let code = "let f () = 42"
+      let result = injectNoInlining code
+      Flip.Expect.stringContains "should contain original" "let f () = 42" result
+  ]
+
 [<Tests>]
 let allHotReloadTests =
   testList "Hot Reload Integration" [
@@ -200,4 +268,5 @@ let allHotReloadTests =
     noWatchFlagTests
     reloadToDetourPipelineTests
     watchConfigTests
+    noInliningInjectionTests
   ]

@@ -20,6 +20,14 @@ SageFs is a live F# development server — a daemon that sees your code, underst
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![.NET](https://img.shields.io/badge/.NET-10.0-purple.svg)](https://dotnet.microsoft.com)
 
+## 🔥 Hot Reload in Action
+
+<p align="center">
+  <img src="docs/hot-reload-demo.gif" alt="SageFs Hot Reload Demo — redefine a function, see the browser update instantly" width="600"/>
+</p>
+
+> Redefine an F# function in SageFs → Harmony patches the running server → browser updates instantly via SSE. No restart, no rebuild.
+
 ---
 
 ## 🚀 Quick Start

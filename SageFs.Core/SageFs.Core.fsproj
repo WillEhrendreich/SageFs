@@ -54,6 +54,7 @@
         <Compile Include="StartupProfile.fs" />
         <Compile Include="FileWatcher.fs" />
         <Compile Include="AppState.fs" />
+        <Compile Include="DevReload.fs" />
         <Compile Include="Middleware\FsiCompatibility.fs" />
         <Compile Include="Middleware\ComputationExpression.fs" />
         <Compile Include="Middleware\Directives.fs" />

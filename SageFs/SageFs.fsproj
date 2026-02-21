@@ -6,7 +6,7 @@
         <IsPackable>true</IsPackable>
         <ToolCommandName>sagefs</ToolCommandName>
         <PackageOutputPath>./nupkg</PackageOutputPath>
-        <Version>0.5.26</Version>
+        <Version>0.5.32</Version>
 
         <!-- NuGet config -->
         <PackageId>SageFs</PackageId>
@@ -34,6 +34,7 @@
         <Compile Include="McpTools.fs" />
         <Compile Include="McpServer.fs" />
         <Compile Include="WorkerHttpTransport.fs" />
+        <Compile Include="DevReloadMiddleware.fs" />
         <Compile Include="WorkerMain.fs" />
         <Compile Include="ConsoleInput.fs" />
         <Compile Include="TerminalMode.fs" />
