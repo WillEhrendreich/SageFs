@@ -295,10 +295,10 @@ module RaylibMode =
           focusedPane <- PaneId.navigate dir focusedPane paneRects
         | ScrollUp ->
           let cur = scrollOffsets |> Map.tryFind focusedPane |> Option.defaultValue 0
-          scrollOffsets <- scrollOffsets |> Map.add focusedPane (max 0 (cur - 3))
+          scrollOffsets <- scrollOffsets |> Map.add focusedPane (cur + 3)
         | ScrollDown ->
           let cur = scrollOffsets |> Map.tryFind focusedPane |> Option.defaultValue 0
-          scrollOffsets <- scrollOffsets |> Map.add focusedPane (cur + 3)
+          scrollOffsets <- scrollOffsets |> Map.add focusedPane (max 0 (cur - 3))
         | Redraw -> ()
         | FontSizeUp ->
           fontSize <- min maxFontSize (fontSize + 2)

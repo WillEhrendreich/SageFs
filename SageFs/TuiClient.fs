@@ -162,11 +162,11 @@ let run (daemonInfo: DaemonInfo) = task {
           render ()
         | Some TerminalCommand.ScrollUp ->
           let cur = scrollOffsets |> Map.tryFind focusedPane |> Option.defaultValue 0
-          scrollOffsets <- scrollOffsets |> Map.add focusedPane (max 0 (cur - 3))
+          scrollOffsets <- scrollOffsets |> Map.add focusedPane (cur + 3)
           render ()
         | Some TerminalCommand.ScrollDown ->
           let cur = scrollOffsets |> Map.tryFind focusedPane |> Option.defaultValue 0
-          scrollOffsets <- scrollOffsets |> Map.add focusedPane (cur + 3)
+          scrollOffsets <- scrollOffsets |> Map.add focusedPane (max 0 (cur - 3))
           render ()
         | Some (TerminalCommand.TogglePane paneName) ->
           match PaneId.tryParse paneName with

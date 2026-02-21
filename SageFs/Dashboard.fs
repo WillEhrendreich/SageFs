@@ -1557,8 +1557,8 @@ let createApiStateHandler
     let pushJson () = task {
       let activeSid = getActiveSessionId ()
       let activeDir = getSessionWorkingDirById activeSid
-      let state = getSessionStateForId connSessionId
-      let stats = getEvalStatsForId connSessionId
+      let state = getSessionStateForId activeSid
+      let stats = getEvalStatsForId activeSid
       let regions =
         match getElmRegions () with
         | Some r ->
@@ -1572,7 +1572,7 @@ let createApiStateHandler
       let! standby = getStandbyInfo ()
       let payload =
         System.Text.Json.JsonSerializer.Serialize(
-          {| sessionId = connSessionId
+          {| sessionId = activeSid
              sessionState = SessionState.label state
              evalCount = stats.EvalCount
              avgMs = if stats.EvalCount > 0 then stats.TotalDuration.TotalMilliseconds / float stats.EvalCount else 0.0

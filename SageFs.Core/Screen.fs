@@ -215,8 +215,9 @@ module Screen =
       match regions |> List.tryFind (fun r -> r.Id = regionId) with
       | Some region ->
         let lines = region.Content.Split('\n')
-        let offset = scrollOffsets |> Map.tryFind paneId |> Option.defaultValue 0
-        let skip = min offset (max 0 (lines.Length - 1))
+        let offsetFromBottom = scrollOffsets |> Map.tryFind paneId |> Option.defaultValue 0
+        // offset 0 = show bottom (latest output), positive = scrolled up from bottom
+        let skip = max 0 (lines.Length - inner.Clip.Height - offsetFromBottom)
         let visibleLines = lines |> Array.skip skip |> Array.truncate inner.Clip.Height
         let fg = Theme.hexToRgb theme.FgDefault
 
