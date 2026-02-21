@@ -19,6 +19,10 @@ module AnsiCodes =
   let enterAltScreen = sprintf "%s?1049h" esc
   let leaveAltScreen = sprintf "%s?1049l" esc
 
+  // SGR mouse tracking (cross-platform, works in Windows Terminal/iTerm2/Linux)
+  let enableMouse = sprintf "%s?1002h%s?1006h" esc esc   // button-event + SGR extended
+  let disableMouse = sprintf "%s?1002l%s?1006l" esc esc
+
   let moveTo row col = sprintf "%s%d;%dH" esc row col
   let moveUp n = sprintf "%s%dA" esc n
   let moveDown n = sprintf "%s%dB" esc n
@@ -115,6 +119,80 @@ module AnsiCodes =
       Console.OutputEncoding <- Text.Encoding.UTF8
       true
 
+  let mutable private savedInputMode = 0u
+
+  /// Enable VT input on Windows stdin (needed for SGR mouse sequences).
+  /// Also disables line input and echo for raw character-by-character reading.
+  let enableVtInput () =
+    if RuntimeInformation.IsOSPlatform(OSPlatform.Windows) then
+      try
+        let STD_INPUT_HANDLE = -10
+        let ENABLE_VIRTUAL_TERMINAL_INPUT = 0x0200u
+        let ENABLE_LINE_INPUT = 0x0002u
+        let ENABLE_ECHO_INPUT = 0x0004u
+        let ENABLE_PROCESSED_INPUT = 0x0001u
+        let kernel32 = NativeLibrary.Load("kernel32.dll")
+        let handle =
+          NativeLibrary.GetExport(kernel32, "GetStdHandle")
+          |> fun ptr ->
+            let fn = Marshal.GetDelegateForFunctionPointer<Func<int, nativeint>>(ptr)
+            fn.Invoke(STD_INPUT_HANDLE)
+        if handle <> nativeint -1 then
+          let getMode = NativeLibrary.GetExport(kernel32, "GetConsoleMode")
+          let setMode = NativeLibrary.GetExport(kernel32, "SetConsoleMode")
+          let mutable mode = 0u
+          let fn = Marshal.GetDelegateForFunctionPointer<GetConsoleModeDelegate>(getMode)
+          if fn.Invoke(handle, &mode) then
+            savedInputMode <- mode
+            let newMode =
+              (mode ||| ENABLE_VIRTUAL_TERMINAL_INPUT)
+              &&& ~~~ENABLE_LINE_INPUT
+              &&& ~~~ENABLE_ECHO_INPUT
+              &&& ~~~ENABLE_PROCESSED_INPUT
+            let setFn = Marshal.GetDelegateForFunctionPointer<SetConsoleModeDelegate>(setMode)
+            setFn.Invoke(handle, newMode) |> ignore
+        true
+      with _ -> false
+    else true
+
+  /// Restore Windows stdin mode to saved state
+  let restoreVtInput () =
+    if RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && savedInputMode <> 0u then
+      try
+        let kernel32 = NativeLibrary.Load("kernel32.dll")
+        let handle =
+          NativeLibrary.GetExport(kernel32, "GetStdHandle")
+          |> fun ptr ->
+            let fn = Marshal.GetDelegateForFunctionPointer<Func<int, nativeint>>(ptr)
+            fn.Invoke(-10)
+        if handle <> nativeint -1 then
+          let setMode = NativeLibrary.GetExport(kernel32, "SetConsoleMode")
+          let setFn = Marshal.GetDelegateForFunctionPointer<SetConsoleModeDelegate>(setMode)
+          setFn.Invoke(handle, savedInputMode) |> ignore
+      with _ -> ()
+
+
+/// Mouse button for cross-platform input events
+[<RequireQualifiedAccess>]
+type MouseButton = Left | Middle | Right | None
+
+/// Mouse action type
+[<RequireQualifiedAccess>]
+type MouseAction = Press | Release | Move | WheelUp | WheelDown
+
+/// Cross-platform mouse event (shared by TUI and GUI)
+type MouseEvent = {
+  Button: MouseButton
+  Action: MouseAction
+  Col: int
+  Row: int
+}
+
+/// Cross-platform input event — keyboard or mouse
+type InputEvent =
+  | KeyEvent of key: ConsoleKey * ch: char * modifiers: ConsoleModifiers
+  | MouseEvent of MouseEvent
+
 
 /// Strongly-typed pane identifier — eliminates stringly-typed region matching
 [<RequireQualifiedAccess>]
@@ -143,6 +221,23 @@ module PaneId =
   let next (current: PaneId) : PaneId =
     let idx = all |> Array.findIndex ((=) current)
     all.[(idx + 1) % all.Length]
+
+  /// Cycle to next pane that is in the visible set
+  let nextVisible (visible: Set<PaneId>) (current: PaneId) : PaneId =
+    if visible.IsEmpty then current
+    else
+      let visibleArr = all |> Array.filter visible.Contains
+      if visibleArr.Length = 0 then current
+      else
+        match visibleArr |> Array.tryFindIndex ((=) current) with
+        | Some idx -> visibleArr.[(idx + 1) % visibleArr.Length]
+        | None -> visibleArr.[0]
+
+  /// First visible pane in canonical order, defaults to Output
+  let firstVisible (visible: Set<PaneId>) : PaneId =
+    all
+    |> Array.tryFind visible.Contains
+    |> Option.defaultValue PaneId.Output
 
   /// Navigate to the nearest pane in the given direction based on layout positions.
   /// Returns the current pane if no neighbor exists in that direction.

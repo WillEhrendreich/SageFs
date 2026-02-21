@@ -66,6 +66,7 @@
         <Compile Include="CleanStdoutTests.fs" />
         <Compile Include="DiffEmitTests.fs" />
         <Compile Include="SyntaxHighlightTests.fs" />
+        <Compile Include="VtInputParserTests.fs" />
         <Compile Include="Program.fs" />
     </ItemGroup>
 

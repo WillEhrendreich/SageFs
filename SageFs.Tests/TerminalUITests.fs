@@ -113,8 +113,54 @@ let paneIdTests = testList "PaneId" [
 ]
 
 
+let paneVisibilityTests = testList "PaneId visibility" [
+  test "nextVisible cycles only visible panes" {
+    let visible = set [PaneId.Output; PaneId.Sessions]
+    let r1 = PaneId.nextVisible visible PaneId.Output
+    let r2 = PaneId.nextVisible visible r1
+    Expect.equal r1 PaneId.Sessions "Output -> Sessions"
+    Expect.equal r2 PaneId.Output "Sessions -> Output"
+  }
+
+  test "nextVisible skips invisible panes" {
+    let visible = set [PaneId.Output; PaneId.Diagnostics]
+    let r = PaneId.nextVisible visible PaneId.Output
+    Expect.equal r PaneId.Diagnostics "should skip Editor and Sessions"
+  }
+
+  test "nextVisible with single pane stays" {
+    let visible = set [PaneId.Output]
+    let r = PaneId.nextVisible visible PaneId.Output
+    Expect.equal r PaneId.Output "single pane stays"
+  }
+
+  test "nextVisible when current not visible returns first visible" {
+    let visible = set [PaneId.Sessions; PaneId.Diagnostics]
+    let r = PaneId.nextVisible visible PaneId.Editor
+    Expect.equal r PaneId.Sessions "should jump to first visible"
+  }
+
+  test "nextVisible empty set returns current" {
+    let r = PaneId.nextVisible Set.empty PaneId.Output
+    Expect.equal r PaneId.Output "empty visible returns current"
+  }
+
+  test "firstVisible returns first in cycle order" {
+    let visible = set [PaneId.Sessions; PaneId.Diagnostics]
+    let r = PaneId.firstVisible visible
+    Expect.equal r PaneId.Sessions "Sessions comes before Diagnostics"
+  }
+
+  test "firstVisible empty set returns Output" {
+    let r = PaneId.firstVisible Set.empty
+    Expect.equal r PaneId.Output "empty set defaults to Output"
+  }
+]
+
+
 [<Tests>]
 let allTerminalUITests = testList "Terminal UI" [
   terminalInputTests
   paneIdTests
+  paneVisibilityTests
 ]

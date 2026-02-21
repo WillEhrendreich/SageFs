@@ -202,7 +202,7 @@ module RaylibMode =
     let mutable lastEvalCount = 0
     let mutable lastStandbyLabel = ""
     let mutable lastFps = 0
-    let mutable focusedPane = PaneId.Editor
+    let mutable focusedPane = PaneId.Output
     let mutable scrollOffsets = Map.empty<PaneId, int>
     let mutable layoutConfig = LayoutConfig.defaults
     let mutable currentTheme =
@@ -289,7 +289,7 @@ module RaylibMode =
         match keyCmd.Value with
         | Quit -> running <- false
         | CycleFocus ->
-          focusedPane <- PaneId.next focusedPane
+          focusedPane <- PaneId.nextVisible layoutConfig.VisiblePanes focusedPane
         | FocusDir dir ->
           let paneRects = Screen.computeLayoutWith layoutConfig gridRows gridCols |> fst
           focusedPane <- PaneId.navigate dir focusedPane paneRects
@@ -311,7 +311,7 @@ module RaylibMode =
           | Some pid ->
             layoutConfig <- LayoutConfig.togglePane pid layoutConfig
             if not (layoutConfig.VisiblePanes.Contains focusedPane) then
-              focusedPane <- PaneId.Editor
+              focusedPane <- PaneId.firstVisible layoutConfig.VisiblePanes
           | None -> ()
         | LayoutPreset presetName ->
           layoutConfig <-
@@ -320,7 +320,7 @@ module RaylibMode =
             | "minimal" -> LayoutConfig.minimal
             | _ -> LayoutConfig.defaults
           if not (layoutConfig.VisiblePanes.Contains focusedPane) then
-            focusedPane <- PaneId.Editor
+            focusedPane <- PaneId.firstVisible layoutConfig.VisiblePanes
         | ResizeH d ->
           layoutConfig <- LayoutConfig.resizeH d layoutConfig
         | ResizeV d ->
@@ -367,7 +367,7 @@ module RaylibMode =
         charAction <- getCharInput ()
 
       // Handle mouse → text selection (drag) + focus pane + cursor/session click
-      if mousePressed MouseButton.Left then
+      if mousePressed Raylib_cs.MouseButton.Left then
         let mp = mousePos ()
         let clickCol = int mp.X / cellW
         let clickRow = int mp.Y / cellH
@@ -401,13 +401,13 @@ module RaylibMode =
               DaemonClient.dispatch client baseUrl (EditorAction.SessionSetIndex sessionIdx)
               |> fun t -> t.Wait()
         | None -> ()
-      elif selecting && mouseDown MouseButton.Left then
+      elif selecting && mouseDown Raylib_cs.MouseButton.Left then
         // Extend selection while dragging
         let mp = mousePos ()
         let dragCol = max 0 (min (gridCols - 1) (int mp.X / cellW))
         let dragRow = max 0 (min (gridRows - 1) (int mp.Y / cellH))
         selEnd <- Some (dragRow, dragCol)
-      elif selecting && mouseReleased MouseButton.Left then
+      elif selecting && mouseReleased Raylib_cs.MouseButton.Left then
         selecting <- false
         // If start == end, it was a click not a drag — clear selection
         match selStart, selEnd with
