@@ -17,3 +17,5 @@ node_modules/
 test-results/
 playwright-report/
 .grepai/
+.github/agents/
+.github/copilot-instructions.md

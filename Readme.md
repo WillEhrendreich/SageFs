@@ -95,6 +95,7 @@ http://localhost:37749/sse
 | `create_session` | Create a new isolated worker session (daemon mode). |
 | `list_sessions` | List all active worker sessions with metadata. |
 | `stop_session` | Stop a specific worker session by ID. |
+| `switch_session` | Switch the active session by ID. |
 
 **Tool Response Format:**
 
@@ -508,8 +509,8 @@ Core components:
 ## 📊 Project Status
 
 **Target Framework**: .NET 10.0
-**Version**: 0.4.19
-**Stability**: Active development — 800+ tests across 53 test files
+**Version**: 0.5.32
+**Stability**: Active development — 1500+ tests across 69 test files
 **Test Framework**: Expecto + Verify snapshots + FsCheck property tests
 
 ### What's Done
