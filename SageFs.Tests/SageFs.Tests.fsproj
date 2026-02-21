@@ -65,6 +65,7 @@
         <Compile Include="SessionIsolationTests.fs" />
         <Compile Include="CleanStdoutTests.fs" />
         <Compile Include="DiffEmitTests.fs" />
+        <Compile Include="SyntaxHighlightTests.fs" />
         <Compile Include="Program.fs" />
     </ItemGroup>
 
