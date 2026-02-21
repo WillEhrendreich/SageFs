@@ -151,8 +151,6 @@ let mutable handleHome (ctx: HttpContext) =
 
 The file watcher monitors all project directories. Disable with `--no-watch`.
 
-See `test-hot-reload.fsx` for a complete working example.
-
 ### 👁️ **File Watching & Incremental Reload**
 
 SageFs watches your source files and automatically reloads changes via FSI `#load` — no restart, no hard reset. Changes take effect in ~100ms.
@@ -272,17 +270,6 @@ sagefs --proj MyWebProject.fsproj
 sagefs --proj AppHost.fsproj
 ```
 
-### 📝 **Enhanced Directives**
-
-```fsharp
-#open MyModule.fs     // Import a file's open statements
-:exec myFile.fs       // Execute a top-level program file
-:e myFile.fs          // Short form of :exec
-:pwd                  // Show current directory
-:q                    // Quit
-:help                 // Show help
-```
-
 ---
 
 ## 📖 Usage
@@ -313,7 +300,6 @@ All frontends connect to the same running daemon — they're different windows i
 ```bash
 sagefs                          # MCP on default port 37749
 sagefs --mcp-port 8080          # Custom port
-sagefs --no-mcp                 # Disable MCP server
 ```
 
 ### File Watching
@@ -327,7 +313,6 @@ sagefs --no-watch               # Disable file watching
 
 ```bash
 sagefs --proj MyApp.fsproj      # Daemon by default
-sagefs -d --proj MyApp.fsproj   # Explicit daemon flag (backward compat alias)
 sagefs --supervised             # Run under watchdog supervisor (auto-restart on crash)
 sagefs --bare                   # Bare session — no project/solution loading, quick startup
 sagefs connect                  # Connect REPL client to running daemon
@@ -370,22 +355,20 @@ Create `.SageFs/config.fsx` in any project directory to configure SageFs default
 
 ```fsharp
 // .SageFs/config.fsx
-let projects = ["src/MyApp.fsproj"; "tests/MyApp.Tests.fsproj"]
-let autoLoad = true
-let initScript = Some "setup.fsx"
-let defaultArgs = ["--no-warn:1182"]
+// This is an F# expression that returns a DirectoryConfig record:
+{ DirectoryConfig.empty with
+    Load = Projects ["src/MyApp.fsproj"; "tests/MyApp.Tests.fsproj"]
+    InitScript = Some "setup.fsx"
+    DefaultArgs = ["--no-warn:1182"] }
 ```
+
+**Load strategies:**
+- `AutoDetect` — auto-discover projects/solutions in the directory (default)
+- `Solution "MyApp.sln"` — load a specific solution
+- `Projects ["Lib.fsproj"; "Tests.fsproj"]` — load specific projects
+- `NoLoad` — bare FSI session, no project loading
 
 **Precedence**: Manual CLI args > `.SageFs/config.fsx` > auto-discovery.
-
-SageFs also auto-discovers `.SageFs/init.fsx` or `.SageFsrc` as startup scripts evaluated in the FSI session.
-
-### ASP.NET Features
-
-```bash
-sagefs                          # Auto-detect web frameworks
-sagefs --no-web                 # Disable ASP.NET features
-```
 
 ---
 
@@ -410,15 +393,13 @@ Add to your MCP config:
 
 ### Claude Desktop
 
-Add to your MCP settings:
+Add to your MCP settings (SageFs uses SSE transport):
 
 ```json
 {
   "mcpServers": {
     "SageFs": {
-      "command": "SageFs",
-      "args": [],
-      "env": {}
+      "url": "http://localhost:37749/sse"
     }
   }
 }
@@ -467,16 +448,13 @@ SageFs is a **daemon-first architecture**. The server is always the center — e
                           ┌──────▼──────┐
               ┌───────────┤ SageFs      ├───────────┐
               │           │ Daemon      │           │
-              │           └──┬──┬──┬──┬─┘           │
-              │              │  │  │  │             │
-         ┌────▼───┐   ┌─────▼┐ │  │ ┌▼─────┐  ┌───▼────┐
-         │Connect │   │ TUI  │ │  │ │ GUI  │  │  Web   │
-         │ REPL   │   │      │ │  │ │Raylib│  │(SSE)   │
-         └────────┘   └──────┘ │  │ └──────┘  └────────┘
-                          ┌────▼┐ │
-                          │Nvim │ │
-                          └─────┘ │
-                          ┌───────▼───┐
+              │           └──┬──┬──┬────┘           │
+              │              │  │  │                │
+         ┌────▼───┐   ┌─────▼┐ │ ┌▼─────┐    ┌───▼────┐
+         │Connect │   │ TUI  │ │ │ GUI  │    │  Web   │
+         │ REPL   │   │      │ │ │Raylib│    │(SSE)   │
+         └────────┘   └──────┘ │ └──────┘    └────────┘
+                          ┌────▼──────┐
                           │ AI Agents │
                           │  (MCP)    │
                           └───────────┘
@@ -487,7 +465,7 @@ SageFs is a **daemon-first architecture**. The server is always the center — e
 1. **Daemon Process** — The core. Runs FSI engine, MCP server, file watcher, hot reload, live dashboard. Managed by a watchdog that auto-restarts on crash with exponential backoff.
 2. **Worker Sessions** — Isolated FSI sessions spawned as sub-processes, supervised Erlang-style by the SessionManager.
 3. **Elm Architecture** — Pure `update : Msg → Model → Model × Effect list` loop drives all UI state. `SageFsEffectHandler` bridges pure state to real infrastructure.
-4. **Clients** — `sagefs connect` (REPL), `sagefs tui` (terminal UI), `sagefs gui` (Raylib GPU), web dashboard, Neovim, AI agents all connect to the daemon. They don't embed SageFs — they're windows into it.
+4. **Clients** — `sagefs connect` (REPL), `sagefs tui` (terminal UI), `sagefs gui` (Raylib GPU), web dashboard, and AI agents all connect to the daemon. They don't embed SageFs — they're windows into it.
 
 There is no "embedded mode". The daemon IS SageFs.
 
@@ -510,13 +488,13 @@ Core components:
 
 **Target Framework**: .NET 10.0
 **Version**: 0.5.32
-**Stability**: Active development — 1500+ tests across 69 test files
+**Stability**: Active development — ~1500 tests across 69 test files
 **Test Framework**: Expecto + Verify snapshots + FsCheck property tests
 
 ### What's Done
 - ✅ Daemon with sub-process worker sessions
 - ✅ SessionManager (Erlang-style supervisor with exponential backoff restart)
-- ✅ MCP server with 17 tools (eval, diagnostics, completions, session management, namespace/type exploration, Elm state)
+- ✅ MCP server with 18 tools (eval, diagnostics, completions, session management, namespace/type exploration, Elm state)
 - ✅ Affordance-driven state machine (tools gated by session lifecycle)
 - ✅ DDD type safety (SageFsError, SessionMode, CompletionKind, SessionStatus DUs)
 - ✅ Elm Architecture core — SageFsMsg, SageFsModel, SageFsUpdate, SageFsRender, SageFsEffectHandler
@@ -554,13 +532,14 @@ Core components:
 - ✅ Stale shadow directory cleanup — auto-removes old `sagefs-shadow-*` temp dirs during hard reset
 
 ### What's Next
+- 🔲 Neovim plugin — inline results, diagnostics, session management
 - 🔲 Connected UI tracking — show MCP, terminal, browser connections per session
 - 🔲 Session persistence across daemon restarts
 - 🔲 System tray launcher
 
 ### Where It's Going
 
-SageFs is a **multi-frontend immediate-mode architecture** — a single core engine that serves REPL, terminal UI, web (Datastar SSE), GPU (Raylib), Neovim, and AI agents through one unified Elm event bus.
+SageFs is a **multi-frontend immediate-mode architecture** — a single core engine that serves REPL, terminal UI, web (Datastar SSE), GPU (Raylib), and AI agents through one unified Elm event bus.
 
 **Architectural pillars (all implemented):**
 - **Custom Elm loop** — `update : Msg -> Model -> Model * Effect list`, pure F#, no framework dependency. `SageFsEffectHandler` bridges pure state updates to real infrastructure (SessionManager, worker proxies)
@@ -570,8 +549,6 @@ SageFs is a **multi-frontend immediate-mode architecture** — a single core eng
 - **Frontend-agnostic rendering** — RenderRegion protocol: editor, output, diagnostics, sessions regions consumed by all UIs
 
 The goal: you write F# domain logic once, and SageFs renders it everywhere — terminal, browser, editor, GPU window. Sage Mode sees all.
-
-See [docs/repl-tui-research.md](docs/repl-tui-research.md) for the full research document.
 
 ---
 
