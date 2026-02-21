@@ -151,7 +151,7 @@ module RaylibMode =
       let sid = if sessionId.Length > 8 then sessionId.[..7] else sessionId
       let standby = if standbyLabel.Length > 0 then sprintf " | %s" standbyLabel else ""
       sprintf " %s %s | evals: %d%s | %s" sid sessionState evalCount standby (PaneId.displayName focusedPane)
-    let statusRight = sprintf " %s | %dpt | %d fps |%s" themeName fontSize currentFps (StatusHints.build keyMap focusedPane)
+    let statusRight = sprintf " %s | %dpt | %d fps |%s" themeName fontSize currentFps (StatusHints.build keyMap focusedPane layoutConfig.VisiblePanes)
     Screen.drawWith layoutConfig theme grid regions focusedPane scrollOffsets statusLeft statusRight |> ignore
 
   /// Run the Raylib GUI window connected to daemon.
@@ -205,8 +205,11 @@ module RaylibMode =
     let mutable focusedPane = PaneId.Editor
     let mutable scrollOffsets = Map.empty<PaneId, int>
     let mutable layoutConfig = LayoutConfig.defaults
-    let mutable currentTheme = Theme.defaults
-    let mutable currentThemeName = "One Dark"
+    let mutable currentTheme =
+      match ThemePresets.tryFind "Kanagawa" with
+      | Some t -> t
+      | None -> Theme.defaults
+    let mutable currentThemeName = "Kanagawa"
     let sessionThemes = System.Collections.Generic.Dictionary<string, string>()
     let statelock = obj ()
     let mutable running = true

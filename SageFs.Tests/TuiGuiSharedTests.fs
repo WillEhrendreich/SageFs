@@ -5,6 +5,11 @@ open VerifyExpecto
 open VerifyTests
 open SageFs
 
+/// Layout with all panes visible, for tests that need the Editor pane
+let allPanesLayout = {
+  LayoutConfig.defaults with
+    VisiblePanes = Set.ofList [ PaneId.Output; PaneId.Editor; PaneId.Sessions ] }
+
 let snapshotsDir =
   System.IO.Path.Combine(__SOURCE_DIRECTORY__, "snapshots")
 
@@ -39,7 +44,7 @@ let paneContentTests = testList "full pane content rendering" [
       mkRegionWithCursor "editor" "let x = 1\nlet y = \"hello\"\nprintfn \"%d\" x" 2 14
       mkRegion "sessions" "abc123 [Ready] * (MyProj.fsproj) evals:5\ndef456 [WarmingUp] (Tests.fsproj)"
     ]
-    Screen.drawWith LayoutConfig.defaults Theme.defaults grid regions PaneId.Editor Map.empty "Session: abc123" "One Dark" |> ignore
+    Screen.drawWith LayoutConfig.defaults Theme.defaults grid regions PaneId.Output Map.empty "Session: abc123" "Kanagawa" |> ignore
     let text = CellGrid.toText grid
     do! verifyGrid "pane_content_default_layout" text
   }
@@ -79,7 +84,7 @@ let paneContentTests = testList "full pane content rendering" [
       mkRegion "output" ""
       mkRegionWithCursor "editor" "let x = 42" 0 10
     ]
-    Screen.draw grid regions PaneId.Editor Map.empty "left" "right" |> ignore
+    Screen.drawWith allPanesLayout Theme.defaults grid regions PaneId.Editor Map.empty "left" "right" |> ignore
     let text = CellGrid.toText grid
     Expect.stringContains text "let x = 42" "editor content should appear in grid"
   }
@@ -430,9 +435,8 @@ let completionRenderTests = testList "completion dropdown rendering" [
     let regions = [
       mkRegionWithCompletions "editor" "let x = Lis" [ "List"; "List.map"; "List.filter"; "List.head" ] 0
     ]
-    Screen.draw grid regions PaneId.Editor Map.empty "s" "r" |> ignore
+    Screen.drawWith allPanesLayout Theme.defaults grid regions PaneId.Editor Map.empty "s" "r" |> ignore
     let text = CellGrid.toText grid
-    // At least the first completion item should be visible
     Expect.stringContains text "List" "completion items should appear in grid"
   }
 
@@ -441,8 +445,7 @@ let completionRenderTests = testList "completion dropdown rendering" [
     let regions = [
       mkRegionWithCompletions "editor" "let x = " [] 0
     ]
-    Screen.draw grid regions PaneId.Editor Map.empty "s" "r" |> ignore
-    // Should not throw
+    Screen.drawWith allPanesLayout Theme.defaults grid regions PaneId.Editor Map.empty "s" "r" |> ignore
     Expect.isGreaterThan (CellGrid.toText grid).Length 0 "grid should render"
   }
 
@@ -452,7 +455,7 @@ let completionRenderTests = testList "completion dropdown rendering" [
       mkRegionWithCompletions "editor" "let x = Lis"
         [ "List"; "List.map"; "List.filter" ] 1
     ]
-    Screen.draw grid regions PaneId.Editor Map.empty "s" "r" |> ignore
+    Screen.drawWith allPanesLayout Theme.defaults grid regions PaneId.Editor Map.empty "s" "r" |> ignore
     let text = CellGrid.toText grid
     Expect.stringContains text "List.map" "selected item should be visible"
   }
@@ -573,7 +576,7 @@ let mousePaneMappingTests = testList "mouse to pane mapping" [
   }
 
   test "navigate via rects matches expected directions" {
-    let panes, _ = Screen.computeLayout 40 120
+    let panes, _ = Screen.computeLayoutWith allPanesLayout 40 120
     // From Output, going Down should reach Editor (both in left column)
     let downFromOutput = PaneId.navigate Direction.Down PaneId.Output panes
     Expect.equal downFromOutput PaneId.Editor "Down from Output should reach Editor"

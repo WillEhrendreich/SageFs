@@ -44,8 +44,11 @@ let run (daemonInfo: DaemonInfo) = task {
   let mutable lastAvgMs = 0.0
   let mutable lastStandbyLabel = ""
   let mutable layoutConfig = LayoutConfig.defaults
-  let mutable currentTheme = Theme.defaults
-  let mutable currentThemeName = "One Dark"
+  let mutable currentTheme =
+    match ThemePresets.tryFind "Kanagawa" with
+    | Some t -> t
+    | None -> Theme.defaults
+  let mutable currentThemeName = "Kanagawa"
   let sessionThemes = System.Collections.Generic.Dictionary<string, string>()
 
   // Load keybindings from config, merge with defaults
@@ -72,7 +75,7 @@ let run (daemonInfo: DaemonInfo) = task {
             sprintf " %s %s | evals: %d (avg %.0fms)%s | %s" sid lastSessionState lastEvalCount lastAvgMs standby (PaneId.displayName focusedPane)
           else
             sprintf " %s %s | evals: %d%s | %s" sid lastSessionState lastEvalCount standby (PaneId.displayName focusedPane)
-        let statusRight = sprintf " %s | %.1fms |%s" currentThemeName lastFrameMs (StatusHints.build keyMap focusedPane)
+        let statusRight = sprintf " %s | %.1fms |%s" currentThemeName lastFrameMs (StatusHints.build keyMap focusedPane layoutConfig.VisiblePanes)
         let cursorPos = Screen.drawWith layoutConfig currentTheme grid lastRegions focusedPane scrollOffsets statusLeft statusRight
         let cursorRow, cursorCol =
           match cursorPos with

@@ -36,16 +36,22 @@ module StatusHints =
 
   /// Build the right-side status bar hints string.
   /// Shows common actions with their configured keybindings.
-  let build (keyMap: KeyMap) (focusedPane: PaneId) : string =
+  let build (keyMap: KeyMap) (focusedPane: PaneId) (layout: Set<PaneId>) : string =
     let hint action label =
       findShort keyMap action
       |> Option.map (fun k -> sprintf "%s:%s" k label)
     let editorHint action label =
       hint (UiAction.Editor action) label
+    let editorToggle =
+      if layout.Contains PaneId.Editor then
+        hint (UiAction.TogglePane "Editor") "hide-editor"
+      else
+        hint (UiAction.TogglePane "Editor") "show-editor"
     let common =
       [ hint UiAction.Quit "quit"
         hint UiAction.CycleFocus "focus"
-        hint UiAction.ScrollUp "scroll" ]
+        hint UiAction.ScrollUp "scroll"
+        editorToggle ]
       |> List.choose id
     let paneHints =
       match focusedPane with
@@ -74,7 +80,7 @@ type LayoutConfig = {
 
 module LayoutConfig =
   let defaults = {
-    VisiblePanes = Set.ofList [ PaneId.Output; PaneId.Editor; PaneId.Sessions ]
+    VisiblePanes = Set.ofList [ PaneId.Output; PaneId.Sessions ]
     LeftRightSplit = 0.65
     OutputEditorSplit = 6
     SessionsDiagSplit = 0.5
@@ -96,10 +102,9 @@ module LayoutConfig =
     SessionsDiagSplit = 0.5
   }
 
-  /// Toggle a pane's visibility. Editor is always visible.
+  /// Toggle a pane's visibility.
   let togglePane (paneId: PaneId) (cfg: LayoutConfig) : LayoutConfig =
-    if paneId = PaneId.Editor then cfg  // editor always visible
-    elif cfg.VisiblePanes.Contains paneId then
+    if cfg.VisiblePanes.Contains paneId then
       { cfg with VisiblePanes = Set.remove paneId cfg.VisiblePanes }
     else
       { cfg with VisiblePanes = Set.add paneId cfg.VisiblePanes }

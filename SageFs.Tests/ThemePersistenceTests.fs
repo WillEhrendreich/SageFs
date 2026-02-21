@@ -458,7 +458,7 @@ let resolveThemePushTests = testList "resolveThemePush" [
   test "pushes default when workingDir changes to unknown dir" {
     let themes = dict [||] :> System.Collections.Generic.IDictionary<_,_>
     let result = resolveThemePush themes "s2" @"C:\Unknown" "s1" @"C:\Proj1"
-    Expect.equal result (Some "One Dark") "should push default for unknown dir"
+    Expect.equal result (Some "Kanagawa") "should push default for unknown dir"
   }
 
   test "no push when nothing changes" {
@@ -477,20 +477,20 @@ let resolveThemePushTests = testList "resolveThemePush" [
   test "pushes default when session changes, same dir, no stored theme" {
     let themes = dict [||] :> System.Collections.Generic.IDictionary<_,_>
     let result = resolveThemePush themes "s2" @"C:\Proj" "s1" @"C:\Proj"
-    Expect.equal result (Some "One Dark") "session change with no stored theme should push default"
+    Expect.equal result (Some "Kanagawa") "session change with no stored theme should push default"
   }
 
   // --- Bug 2: empty workingDir (faulted session) should push default ---
   test "pushes default when switching to empty workingDir session" {
     let themes = dict [| @"C:\Proj1", "Nordic" |] :> System.Collections.Generic.IDictionary<_,_>
     let result = resolveThemePush themes "faulted-session" "" "s1" @"C:\Proj1"
-    Expect.equal result (Some "One Dark") "empty workingDir should push default theme"
+    Expect.equal result (Some "Kanagawa") "empty workingDir should push default theme"
   }
 
   test "pushes default when both previous and current workingDir empty but session changes" {
     let themes = dict [||] :> System.Collections.Generic.IDictionary<_,_>
     let result = resolveThemePush themes "s2" "" "s1" ""
-    Expect.equal result (Some "One Dark") "session change with both dirs empty should push default"
+    Expect.equal result (Some "Kanagawa") "session change with both dirs empty should push default"
   }
 
   // --- Bug 3: switching back from empty workingDir restores theme ---
@@ -516,7 +516,7 @@ let resolveThemePushTests = testList "resolveThemePush" [
     // Step 2: switch to session B (different dir, Harmony)
     let r2 = resolveThemePush themes "sB" @"C:\Harmony" "sA" @"C:\SageFs"
     Expect.isSome r2 "switch to Harmony should push"
-    Expect.equal r2.Value "One Dark" "Harmony has no stored theme"
+    Expect.equal r2.Value "Kanagawa" "Harmony has no stored theme"
 
     // Step 3: switch back to session A (same dir as step 1)
     let r3 = resolveThemePush themes "sA" @"C:\SageFs" "sB" @"C:\Harmony"
@@ -540,7 +540,7 @@ let resolveThemePushTests = testList "resolveThemePush" [
 
     // Session C at C:\Harmony
     let r3 = resolveThemePush themes "sC" @"C:\Harmony" "sB" @"C:\SageFs"
-    Expect.equal r3 (Some "One Dark") "Harmony no stored theme"
+    Expect.equal r3 (Some "Kanagawa") "Harmony no stored theme"
 
     // Back to session A at C:\SageFs
     let r4 = resolveThemePush themes "sA" @"C:\SageFs" "sC" @"C:\Harmony"
@@ -560,11 +560,65 @@ let resolveThemePushTests = testList "resolveThemePush" [
     Expect.equal result (Some "Dracula") "first connection should push stored theme"
   }
 
-  test "initial push with no stored theme defaults to One Dark" {
+  test "initial push with no stored theme defaults to Kanagawa" {
     let themes = dict [||] :> System.Collections.Generic.IDictionary<_,_>
     let result = resolveThemePush themes "s1" @"C:\NewProj" "" ""
-    Expect.equal result (Some "One Dark") "first connection, no stored theme should push default"
+    Expect.equal result (Some "Kanagawa") "first connection, no stored theme should push default"
   }
+]
+
+let themeDiskPersistenceTests = testList "Theme disk persistence" [
+  testCase "saveThemes writes JSON to disk" <| fun _ ->
+    let tempDir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), sprintf "sagefs-test-%s" (System.Guid.NewGuid().ToString("N").[..7]))
+    System.IO.Directory.CreateDirectory(tempDir) |> ignore
+    try
+      let themes = System.Collections.Concurrent.ConcurrentDictionary<string, string>()
+      themes.["C:\\Code\\Repo1"] <- "Kanagawa"
+      themes.["C:\\Code\\Repo2"] <- "Gruvbox"
+      saveThemes tempDir themes
+      let path = System.IO.Path.Combine(tempDir, "themes.json")
+      Expect.isTrue (System.IO.File.Exists(path)) "file should exist"
+      let content = System.IO.File.ReadAllText(path)
+      Expect.stringContains content "Kanagawa" "should have Kanagawa"
+      Expect.stringContains content "Gruvbox" "should have Gruvbox"
+    finally
+      if System.IO.Directory.Exists(tempDir) then System.IO.Directory.Delete(tempDir, true)
+
+  testCase "loadThemes reads JSON from disk" <| fun _ ->
+    let tempDir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), sprintf "sagefs-test-%s" (System.Guid.NewGuid().ToString("N").[..7]))
+    System.IO.Directory.CreateDirectory(tempDir) |> ignore
+    try
+      let json = """{"C:\\Code\\Repo1":"Kanagawa","C:\\Code\\Repo2":"Gruvbox"}"""
+      System.IO.File.WriteAllText(System.IO.Path.Combine(tempDir, "themes.json"), json)
+      let themes = loadThemes tempDir
+      Expect.equal themes.["C:\\Code\\Repo1"] "Kanagawa" "Repo1 theme"
+      Expect.equal themes.["C:\\Code\\Repo2"] "Gruvbox" "Repo2 theme"
+    finally
+      if System.IO.Directory.Exists(tempDir) then System.IO.Directory.Delete(tempDir, true)
+
+  testCase "loadThemes returns empty when file missing" <| fun _ ->
+    let tempDir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), sprintf "sagefs-test-%s" (System.Guid.NewGuid().ToString("N").[..7]))
+    System.IO.Directory.CreateDirectory(tempDir) |> ignore
+    try
+      let themes = loadThemes tempDir
+      Expect.equal themes.Count 0 "should be empty"
+    finally
+      if System.IO.Directory.Exists(tempDir) then System.IO.Directory.Delete(tempDir, true)
+
+  testCase "save then load round trip" <| fun _ ->
+    let tempDir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), sprintf "sagefs-test-%s" (System.Guid.NewGuid().ToString("N").[..7]))
+    System.IO.Directory.CreateDirectory(tempDir) |> ignore
+    try
+      let themes = System.Collections.Concurrent.ConcurrentDictionary<string, string>()
+      themes.["C:\\Code\\SageFs"] <- "Nordic"
+      themes.["C:\\Code\\Harmony"] <- "Dracula"
+      saveThemes tempDir themes
+      let loaded = loadThemes tempDir
+      Expect.equal loaded.["C:\\Code\\SageFs"] "Nordic" "SageFs theme round-tripped"
+      Expect.equal loaded.["C:\\Code\\Harmony"] "Dracula" "Harmony theme round-tripped"
+      Expect.equal loaded.Count 2 "should have exactly 2 entries"
+    finally
+      if System.IO.Directory.Exists(tempDir) then System.IO.Directory.Delete(tempDir, true)
 ]
 
 
@@ -580,4 +634,5 @@ let allThemePersistenceTests = testList "Theme Persistence" [
   sessionThemesTests
   themeSwitchDetectionTests
   resolveThemePushTests
+  themeDiskPersistenceTests
 ]

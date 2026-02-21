@@ -297,7 +297,6 @@ module KeyMap =
     let e a = UiAction.Editor a
     [ // Quit
       KeyCombo.ctrl ConsoleKey.Q, UiAction.Quit
-      KeyCombo.ctrl ConsoleKey.D, UiAction.Quit
       // Focus
       KeyCombo.plain ConsoleKey.Tab, UiAction.CycleFocus
       KeyCombo.ctrl ConsoleKey.H, UiAction.FocusDir Direction.Left
@@ -355,6 +354,7 @@ module KeyMap =
       KeyCombo.ctrlAlt ConsoleKey.D3, UiAction.LayoutPreset "minimal"
       // Pane toggle
       KeyCombo.ctrlAlt ConsoleKey.O, UiAction.TogglePane "Output"
+      KeyCombo.ctrlAlt ConsoleKey.E, UiAction.TogglePane "Editor"
       KeyCombo.ctrlAlt ConsoleKey.D, UiAction.TogglePane "Diagnostics"
       // Pane resize
       KeyCombo.ctrlAlt ConsoleKey.LeftArrow, UiAction.ResizeH -1

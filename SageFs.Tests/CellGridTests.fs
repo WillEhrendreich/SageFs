@@ -351,7 +351,10 @@ let junctionTests = testList "resolveJunctions" [
     let g = CellGrid.create 15 60
     let dt = DrawTarget.create g (Rect.create 0 0 60 15)
     Draw.fill dt bgP
-    let panes, _ = Screen.computeLayoutWith LayoutConfig.defaults 15 60
+    let allPanes = {
+      LayoutConfig.defaults with
+        VisiblePanes = Set.ofList [ PaneId.Output; PaneId.Editor; PaneId.Sessions ] }
+    let panes, _ = Screen.computeLayoutWith allPanes 15 60
     for (pid, rect) in panes do
       let bC = if pid = PaneId.Editor then brF else brN
       let bg = if pid = PaneId.Editor then bgE else bgP

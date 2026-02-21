@@ -14,6 +14,33 @@ open SageFs.Affordances
 
 module FalcoResponse = Falco.Response
 
+let defaultThemeName = "Kanagawa"
+
+/// Save theme preferences to ~/.SageFs/themes.json
+let saveThemes (sageFsDir: string) (themes: Collections.Concurrent.ConcurrentDictionary<string, string>) =
+  try
+    if not (Directory.Exists sageFsDir) then
+      Directory.CreateDirectory sageFsDir |> ignore
+    let path = Path.Combine(sageFsDir, "themes.json")
+    let dict = themes |> Seq.map (fun kv -> kv.Key, kv.Value) |> dict
+    let json = Text.Json.JsonSerializer.Serialize(dict, Text.Json.JsonSerializerOptions(WriteIndented = true))
+    File.WriteAllText(path, json)
+  with _ -> ()
+
+/// Load theme preferences from ~/.SageFs/themes.json
+let loadThemes (sageFsDir: string) : Collections.Concurrent.ConcurrentDictionary<string, string> =
+  let result = Collections.Concurrent.ConcurrentDictionary<string, string>()
+  try
+    let path = Path.Combine(sageFsDir, "themes.json")
+    if File.Exists(path) then
+      let json = File.ReadAllText(path)
+      let dict = Text.Json.JsonSerializer.Deserialize<Collections.Generic.Dictionary<string, string>>(json)
+      if dict <> null then
+        for kv in dict do
+          result.[kv.Key] <- kv.Value
+  with _ -> ()
+  result
+
 /// sseHtmlElements uses renderHtml which prepends <!DOCTYPE html> to every
 /// fragment, causing Datastar to choke. Use renderNode + sseStringElements instead.
 let ssePatchNode (ctx: HttpContext) (node: XmlNode) =
@@ -219,6 +246,10 @@ let renderShell (version: string) =
         .output-header h2 { color: var(--fg-blue); font-size: 1rem; margin: 0; }
         #output-panel { flex: 1; overflow-y: auto; scroll-behavior: smooth; background: var(--bg-default); font-family: 'Cascadia Code', 'Fira Code', monospace; font-size: 0.85rem; padding: 0.25rem 0; }
         .eval-area { flex-shrink: 0; padding: 0.75rem 1rem; }
+        .eval-area summary { list-style: none; user-select: none; }
+        .eval-area summary::-webkit-details-marker { display: none; }
+        .eval-area[open] summary span:first-child { }
+        .eval-area summary span:first-child::before { content: ''; }
         #editor-area { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
         #session-picker:empty { display: none; }
         #session-picker:not(:empty) ~ #editor-area { display: none; }
@@ -295,7 +326,7 @@ let renderShell (version: string) =
     ]
     Elem.body [ Ds.safariStreamingFix ] [
       // Theme CSS vars — in body so Datastar can morph it via SSE
-      renderThemeVars "One Dark"
+      renderThemeVars defaultThemeName
       // Dedicated init element that connects to SSE stream (per Falco.Datastar pattern)
       Elem.div [ Ds.onInit (Ds.get "/dashboard/stream"); Ds.signal ("helpVisible", "false"); Ds.signal ("sidebarOpen", "true"); Ds.signal ("sessionId", "") ] []
       // Connection status banner — hidden by default, shown only on problems
@@ -335,17 +366,17 @@ let renderShell (version: string) =
                 Elem.span [ Attr.class' "meta"; Attr.style "padding: 0.5rem;" ] [ Text.raw "No output yet" ]
               ]
             ]
-            // Eval area — fixed at bottom
-            Elem.div [ Attr.id "evaluate-section"; Attr.class' "eval-area" ] [
-              Elem.div [ Attr.style "display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.25rem;" ] [
-                Elem.span [ Attr.style "color: var(--accent); font-weight: bold; font-size: 0.9rem;" ] [ Text.raw "Evaluate" ]
+            // Eval area — collapsed by default via <details>
+            Elem.create "details" [ Attr.id "evaluate-section"; Attr.class' "eval-area" ] [
+              Elem.create "summary" [ Attr.style "cursor: pointer; display: flex; align-items: center; justify-content: space-between;" ] [
+                Elem.span [ Attr.style "color: var(--accent); font-weight: bold; font-size: 0.9rem;" ] [ Text.raw "▸ Evaluate" ]
                 Elem.div [ Attr.style "display: flex; align-items: center; gap: 0.5rem;" ] [
                   Elem.span [ Attr.class' "meta"; Attr.style "font-size: 0.75rem;" ] [
                     Elem.span [ Ds.text """$code ? ($code.split('\\n').length + 'L ' + $code.length + 'c') : ''""" ] []
                   ]
                   Elem.button
                     [ Attr.class' "panel-header-btn"
-                      Ds.onEvent ("click", "$helpVisible = !$helpVisible") ]
+                      Ds.onEvent ("click", "event.stopPropagation(); $helpVisible = !$helpVisible") ]
                     [ Text.raw "⌨" ]
                 ]
               ]
@@ -442,7 +473,7 @@ let renderShell (version: string) =
             // Theme
             Elem.div [ Attr.class' "panel" ] [
               Elem.h2 [] [ Text.raw "Theme" ]
-              renderThemePicker "One Dark"
+              renderThemePicker defaultThemeName
             ]
           ]
         ]
@@ -473,6 +504,14 @@ let renderShell (version: string) =
           });
         })();
       """ (themePresetsJs ())) ]
+      // Details toggle: update arrow indicator when eval section opens/closes
+      Elem.script [] [ Text.raw """
+        document.addEventListener('toggle', function(e) {
+          if (e.target.id !== 'evaluate-section') return;
+          var label = e.target.querySelector('summary span:first-child');
+          if (label) label.textContent = e.target.open ? '\u25be Evaluate' : '\u25b8 Evaluate';
+        }, true);
+      """ ]
       // Font size adjustment: Ctrl+= / Ctrl+- changes --font-size CSS variable
       Elem.script [] [ Text.raw """
         (function() {
@@ -1054,9 +1093,9 @@ let resolveThemePush
     if currentWorkingDir.Length > 0 then
       match themes.TryGetValue(currentWorkingDir) with
       | true, n -> Some n
-      | false, _ -> Some "One Dark"
+      | false, _ -> Some defaultThemeName
     else
-      Some "One Dark"
+      Some defaultThemeName
   else
     None
 
@@ -1701,6 +1740,7 @@ let createEndpoints
         let workingDir = getSessionWorkingDir activeId
         if workingDir.Length > 0 && req.theme.Length > 0 then
           sessionThemes.[workingDir] <- req.theme
+          saveThemes DaemonState.SageFsDir sessionThemes
         ctx.Response.StatusCode <- 200
         do! ctx.Response.WriteAsJsonAsync({| ok = true |})
       with ex ->

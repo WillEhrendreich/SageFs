@@ -326,7 +326,7 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
     | Some snap -> snap.StatusMessage
     | None -> None
 
-  let sessionThemes = Collections.Concurrent.ConcurrentDictionary<string, string>()
+  let sessionThemes = Dashboard.loadThemes DaemonState.SageFsDir
 
   let dashboardEndpoints =
     Dashboard.createEndpoints

@@ -42,8 +42,11 @@ module SageFsModel =
     RecentOutput = []
     Diagnostics = Map.empty
     CreatingSession = false
-    Theme = Theme.defaults
-    ThemeName = "One Dark"
+    Theme =
+      match ThemePresets.tryFind "Kanagawa" with
+      | Some t -> t
+      | None -> Theme.defaults
+    ThemeName = "Kanagawa"
   }
 
 /// Pure update function: routes SageFsMsg through the right handler.

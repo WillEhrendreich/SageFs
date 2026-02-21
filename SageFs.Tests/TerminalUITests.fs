@@ -24,9 +24,9 @@ let terminalInputTests = testList "TerminalInput" [
     Expect.equal result (Some (TerminalCommand.Action EditorAction.NewLine)) "Enter inserts newline"
   }
 
-  test "Ctrl+D quits" {
+  test "Ctrl+D does not quit" {
     let result = TerminalInput.mapKey (key '\x04' ConsoleKey.D 1)
-    Expect.equal result (Some TerminalCommand.Quit) "Ctrl+D quits"
+    Expect.isNone result "Ctrl+D should not quit"
   }
 
   test "Ctrl+Q quits" {

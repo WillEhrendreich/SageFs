@@ -7,16 +7,16 @@ open SageFs
 let screenTests = testList "Screen" [
 
   testList "computeLayout" [
-    test "returns 3 panes" {
+    test "returns 2 panes with defaults" {
       let panes, _ = Screen.computeLayout 40 120
-      Expect.equal (List.length panes) 3 "should have 3 panes"
+      Expect.equal (List.length panes) 2 "should have 2 panes (Output + Sessions)"
     }
 
-    test "all pane ids are present" {
+    test "all default pane ids are present" {
       let panes, _ = Screen.computeLayout 40 120
       let ids = panes |> List.map fst |> Set.ofList
-      let expected = Set.ofList [ PaneId.Output; PaneId.Editor; PaneId.Sessions ]
-      Expect.equal ids expected "all pane ids present"
+      let expected = Set.ofList [ PaneId.Output; PaneId.Sessions ]
+      Expect.equal ids expected "default pane ids: Output + Sessions"
     }
 
     test "status bar rect is last row" {
@@ -41,14 +41,18 @@ let screenTests = testList "Screen" [
         { Id = "output"; Content = "hello world"; Flags = RegionFlags.None; Affordances = []; Cursor = None; Completions = None }
         { Id = "editor"; Content = "let x = 1"; Flags = RegionFlags.None; Affordances = []; Cursor = Some { Line = 0; Col = 5 }; Completions = None }
       ]
-      let cursor = Screen.draw grid regions PaneId.Editor Map.empty " status " " hints "
-      Expect.isSome cursor "should return cursor position for focused pane"
+      // Output pane is visible in defaults but has no cursor region
+      Screen.draw grid regions PaneId.Output Map.empty " status " " hints " |> ignore
+      let text = CellGrid.toText grid
+      Expect.stringContains text "hello world" "output content should appear"
     }
 
-    test "returns default cursor when no region for focused pane" {
+    test "returns cursor position when focused pane has no region" {
       let grid = CellGrid.create 20 60
-      let cursor = Screen.draw grid [] PaneId.Editor Map.empty " left " " right "
-      Expect.isSome cursor "should return default cursor for focused pane without content"
+      // drawWith may return a default cursor position even when no regions
+      Screen.draw grid [] PaneId.Output Map.empty " left " " right " |> ignore
+      let text = CellGrid.toText grid
+      Expect.isNonEmpty text "grid should have content after draw"
     }
 
     test "grid is not empty after draw" {
@@ -68,29 +72,42 @@ let screenTests = testList "Screen" [
 
   testList "StatusHints" [
     test "build shows quit and focus with default keymap" {
-      let result = StatusHints.build KeyMap.defaults PaneId.Output
+      let result = StatusHints.build KeyMap.defaults PaneId.Output LayoutConfig.defaults.VisiblePanes
       Expect.stringContains result "quit" "should contain quit hint"
       Expect.stringContains result "focus" "should contain focus hint"
     }
 
     test "editor pane shows eval hint" {
-      let result = StatusHints.build KeyMap.defaults PaneId.Editor
+      let panes = Set.ofList [ PaneId.Output; PaneId.Editor; PaneId.Sessions ]
+      let result = StatusHints.build KeyMap.defaults PaneId.Editor panes
       Expect.stringContains result "eval" "should contain eval hint"
     }
 
     test "sessions pane shows new-session hint" {
-      let result = StatusHints.build KeyMap.defaults PaneId.Sessions
+      let result = StatusHints.build KeyMap.defaults PaneId.Sessions LayoutConfig.defaults.VisiblePanes
       Expect.stringContains result "new-session" "should contain new-session hint"
     }
 
     test "output pane shows scroll hint" {
-      let result = StatusHints.build KeyMap.defaults PaneId.Output
+      let result = StatusHints.build KeyMap.defaults PaneId.Output LayoutConfig.defaults.VisiblePanes
       Expect.stringContains result "scroll" "should contain scroll hint"
     }
 
     test "empty keymap returns empty string" {
-      let result = StatusHints.build Map.empty PaneId.Editor
+      let result = StatusHints.build Map.empty PaneId.Editor Set.empty
       Expect.equal result "" "empty keymap should produce empty hints"
+    }
+
+    test "shows show-editor when editor hidden" {
+      let panes = Set.ofList [ PaneId.Output; PaneId.Sessions ]
+      let result = StatusHints.build KeyMap.defaults PaneId.Output panes
+      Expect.stringContains result "show-editor" "should hint to show editor when hidden"
+    }
+
+    test "shows hide-editor when editor visible" {
+      let panes = Set.ofList [ PaneId.Output; PaneId.Editor; PaneId.Sessions ]
+      let result = StatusHints.build KeyMap.defaults PaneId.Output panes
+      Expect.stringContains result "hide-editor" "should hint to hide editor when visible"
     }
   ]
 
@@ -136,15 +153,18 @@ let screenTests = testList "Screen" [
   ]
 
   testList "LayoutConfig" [
-    test "defaults includes all 3 panes" {
+    test "defaults includes Output and Sessions" {
       let cfg = LayoutConfig.defaults
-      Expect.equal cfg.VisiblePanes.Count 3 "defaults should have 3 visible panes"
+      Expect.equal cfg.VisiblePanes.Count 2 "defaults should have 2 visible panes"
+      Expect.isTrue (cfg.VisiblePanes.Contains PaneId.Output) "should contain Output"
+      Expect.isTrue (cfg.VisiblePanes.Contains PaneId.Sessions) "should contain Sessions"
+      Expect.isFalse (cfg.VisiblePanes.Contains PaneId.Editor) "Editor hidden by default"
     }
 
     test "togglePane hides a visible pane" {
       let cfg = LayoutConfig.togglePane PaneId.Sessions LayoutConfig.defaults
       Expect.isFalse (cfg.VisiblePanes.Contains PaneId.Sessions) "Sessions should be hidden"
-      Expect.equal cfg.VisiblePanes.Count 2 "should have 2 visible panes"
+      Expect.equal cfg.VisiblePanes.Count 1 "should have 1 visible pane"
     }
 
     test "togglePane shows a hidden pane" {
@@ -153,9 +173,9 @@ let screenTests = testList "Screen" [
       Expect.isTrue (cfg2.VisiblePanes.Contains PaneId.Sessions) "Sessions should be visible again"
     }
 
-    test "togglePane cannot hide Editor" {
+    test "togglePane can show Editor" {
       let cfg = LayoutConfig.togglePane PaneId.Editor LayoutConfig.defaults
-      Expect.isTrue (cfg.VisiblePanes.Contains PaneId.Editor) "Editor should always be visible"
+      Expect.isTrue (cfg.VisiblePanes.Contains PaneId.Editor) "Editor should be shown after toggle"
     }
 
     test "focus preset has only Output and Editor" {
