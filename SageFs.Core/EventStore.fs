@@ -16,14 +16,22 @@ let configureStore (connectionString: string) : IDocumentStore =
     )
   )
 
-/// Append events to a session stream
+/// Append events to a session stream with retry on version conflict
 let appendEvents (store: IDocumentStore) (streamId: string) (events: SageFsEvent list) =
-  task {
-    use session = store.LightweightSession()
-    for evt in events do
-      session.Events.Append(streamId, evt :> obj) |> ignore
-    do! session.SaveChangesAsync()
-  }
+  let maxRetries = 3
+  let rec attempt n =
+    task {
+      try
+        use session = store.LightweightSession()
+        for evt in events do
+          session.Events.Append(streamId, evt :> obj) |> ignore
+        do! session.SaveChangesAsync()
+      with
+      | :? JasperFx.Events.EventStreamUnexpectedMaxEventIdException when n < maxRetries ->
+        do! System.Threading.Tasks.Task.Delay(50 * (n + 1))
+        return! attempt (n + 1)
+    }
+  attempt 0
 
 /// Fetch all events from a session stream
 let fetchStream (store: IDocumentStore) (streamId: string) =
