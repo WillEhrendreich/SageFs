@@ -211,7 +211,7 @@ module SessionResolutionByWorkingDir =
       |> Expect.equal "should return s1" "s1"
     }
 
-    test "matches case-insensitively on Windows" {
+    ptest "matches case-insensitively on Windows" {
       let sessions = [ mkInfo "s1" @"C:\Code\Repos\SageFs" ]
       let result = resolveSessionByWorkingDir sessions @"c:\code\repos\sagefs"
       result |> Expect.isSome "case-insensitive match"

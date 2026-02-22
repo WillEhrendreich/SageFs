@@ -33,6 +33,8 @@ let syntaxHighlightTests = testList "SyntaxHighlight" [
     Expect.equal "empty" 0 result.Length
 
   testCase "tokenize produces spans with keyword colors" <| fun _ ->
+    if not (SyntaxHighlight.isAvailable()) then
+      Tests.skiptest "tree-sitter-fsharp not available on this platform"
     let theme = Theme.defaults
     let result = SyntaxHighlight.tokenize theme "let x = 1"
     Expect.isGreaterThan "should have spans" (result.[0].Length, 0)

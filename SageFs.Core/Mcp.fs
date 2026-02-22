@@ -458,7 +458,7 @@ module McpTools =
 
   /// Normalize a path for comparison: trim trailing separators, lowercase on Windows.
   let normalizePath (p: string) =
-    let trimmed = p.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+    let trimmed = p.TrimEnd('/', '\\')
     if Environment.OSVersion.Platform = PlatformID.Win32NT then
       trimmed.ToLowerInvariant()
     else

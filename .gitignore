@@ -19,3 +19,4 @@ playwright-report/
 .grepai/
 .github/agents/
 .github/copilot-instructions.md
+*.received.*

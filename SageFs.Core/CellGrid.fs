@@ -128,17 +128,17 @@ module CellGrid =
         Array.Fill(grid.Cells, cell, row * gridCols + startCol, fillWidth)
 
   let toText (grid: CellGrid) : string =
-    let sb = System.Text.StringBuilder(grid.Rows * (grid.Cols + 1))
+    let sb = System.Text.StringBuilder(grid.Rows * (grid.Cols + 2))
     for row in 0 .. grid.Rows - 1 do
       let rowBase = row * grid.Cols
       for col in 0 .. grid.Cols - 1 do
         sb.Append(grid.Cells.[rowBase + col].Char) |> ignore
       if row < grid.Rows - 1 then
-        sb.AppendLine() |> ignore
+        sb.Append("\r\n") |> ignore
     sb.ToString()
 
   let toTextTrimmed (grid: CellGrid) : string =
-    let sb = System.Text.StringBuilder(grid.Rows * (grid.Cols + 1))
+    let sb = System.Text.StringBuilder(grid.Rows * (grid.Cols + 2))
     for row in 0 .. grid.Rows - 1 do
       let rowBase = row * grid.Cols
       let mutable lastNonSpace = -1
@@ -148,7 +148,7 @@ module CellGrid =
       for col in 0 .. lastNonSpace do
         sb.Append(grid.Cells.[rowBase + col].Char) |> ignore
       if row < grid.Rows - 1 then
-        sb.AppendLine() |> ignore
+        sb.Append("\r\n") |> ignore
     sb.ToString()
 
   /// Extract text from a rectangular selection range (inclusive).
@@ -168,7 +168,7 @@ module CellGrid =
       for col in sc .. lastNonSpace do
         sb.Append(grid.Cells.[rowBase + col].Char) |> ignore
       if row < er then
-        sb.AppendLine() |> ignore
+        sb.Append("\r\n") |> ignore
     sb.ToString()
 
 /// Double-buffered grid pair — swap instead of clone each frame. Zero per-frame allocation.

@@ -77,13 +77,14 @@ let fileChangeAction (change: FileChange) : FileChangeAction =
 
 /// Pure: decide if a file change should trigger a rebuild.
 let shouldTriggerRebuild (config: WatchConfig) (filePath: string) : bool =
-  let ext = Path.GetExtension(filePath).ToLowerInvariant()
-  let fileName = Path.GetFileName(filePath)
+  let normalized = filePath.Replace('\\', '/')
+  let ext = Path.GetExtension(normalized).ToLowerInvariant()
+  let fileName = Path.GetFileName(normalized)
   let isTemp =
     fileName.StartsWith("~")
     || fileName.EndsWith(".tmp")
-    || filePath.Contains(sprintf "%cobj%c" Path.DirectorySeparatorChar Path.DirectorySeparatorChar)
-    || filePath.Contains(sprintf "%cbin%c" Path.DirectorySeparatorChar Path.DirectorySeparatorChar)
+    || normalized.Contains("/obj/")
+    || normalized.Contains("/bin/")
   let isExcluded = shouldExcludeFile config.ExcludePatterns filePath
   not isTemp && not isExcluded && List.contains ext config.Extensions
 
