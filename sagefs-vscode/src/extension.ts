@@ -1,11 +1,15 @@
 import * as vscode from "vscode";
 import { SageFsClient, EvalResult } from "./sageFsClient";
+import { SageFsCodeLensProvider } from "./codeLensProvider";
+import { DiagnosticsListener } from "./diagnosticsListener";
 import * as child_process from "child_process";
 
 let client: SageFsClient;
 let outputChannel: vscode.OutputChannel;
 let statusBarItem: vscode.StatusBarItem;
 let daemonProcess: child_process.ChildProcess | undefined;
+let codeLensProvider: SageFsCodeLensProvider;
+let diagnosticsListener: DiagnosticsListener;
 
 export function activate(context: vscode.ExtensionContext): void {
   const config = vscode.workspace.getConfiguration("sagefs");
@@ -28,12 +32,34 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     vscode.commands.registerCommand("sagefs.eval", () => evalSelection()),
     vscode.commands.registerCommand("sagefs.evalFile", () => evalFile()),
+    vscode.commands.registerCommand("sagefs.evalRange", (range: vscode.Range) => evalRange(range)),
     vscode.commands.registerCommand("sagefs.start", () => startDaemon()),
     vscode.commands.registerCommand("sagefs.stop", () => stopDaemon()),
     vscode.commands.registerCommand("sagefs.openDashboard", () => openDashboard()),
     vscode.commands.registerCommand("sagefs.resetSession", () => resetSession()),
     vscode.commands.registerCommand("sagefs.hardReset", () => hardReset())
   );
+
+  // CodeLens provider — shows "▶ Eval" at ;; boundaries
+  codeLensProvider = new SageFsCodeLensProvider();
+  context.subscriptions.push(
+    vscode.languages.registerCodeLensProvider(
+      { language: "fsharp" },
+      codeLensProvider
+    )
+  );
+
+  // Hijack Ionide's "Send to FSI" if available
+  hijackIonideSendToFsi(context);
+
+  // Diagnostics — subscribe to SageFs's /diagnostics SSE stream
+  diagnosticsListener = new DiagnosticsListener(mcpPort);
+  context.subscriptions.push({ dispose: () => diagnosticsListener.dispose() });
+  client.isRunning().then((running) => {
+    if (running) {
+      diagnosticsListener.start();
+    }
+  });
 
   // Listen for config changes
   context.subscriptions.push(
@@ -65,6 +91,7 @@ export function activate(context: vscode.ExtensionContext): void {
 }
 
 export function deactivate(): void {
+  diagnosticsListener?.dispose();
   // Don't kill the daemon — it's a shared resource
 }
 
@@ -152,6 +179,38 @@ async function evalFile(): Promise<void> {
   }
 }
 
+async function evalRange(range: vscode.Range): Promise<void> {
+  const editor = vscode.window.activeTextEditor;
+  if (!editor) {
+    return;
+  }
+  if (!(await ensureRunning())) {
+    return;
+  }
+
+  const code = editor.document.getText(range);
+  if (!code.trim()) {
+    return;
+  }
+
+  const workDir = getWorkingDirectory();
+  outputChannel.show(true);
+  outputChannel.appendLine(`──── eval block ────`);
+  outputChannel.appendLine(code);
+  outputChannel.appendLine("");
+
+  try {
+    const result = await client.evalCode(code, workDir);
+    if (!result.success) {
+      outputChannel.appendLine(`❌ Error:\n${result.error ?? result.result ?? "Unknown error"}`);
+    } else {
+      outputChannel.appendLine(result.result ?? "");
+    }
+  } catch (err) {
+    outputChannel.appendLine(`❌ Connection error: ${err}`);
+  }
+}
+
 // ── Session Management ─────────────────────────────────────────
 
 async function resetSession(): Promise<void> {
@@ -211,6 +270,7 @@ async function startDaemon(): Promise<void> {
       clearInterval(poll);
       outputChannel.appendLine("SageFs daemon is ready.");
       vscode.window.showInformationMessage("SageFs daemon started.");
+      diagnosticsListener.start();
       refreshStatus();
     } else if (attempts > 60) {
       clearInterval(poll);
@@ -306,6 +366,36 @@ async function ensureRunning(): Promise<boolean> {
     return false;
   }
   return false;
+}
+
+// ── Ionide Integration ─────────────────────────────────────────
+
+function hijackIonideSendToFsi(context: vscode.ExtensionContext): void {
+  // Override Ionide's "Send to FSI" commands to route through SageFs.
+  // This is opt-in: if Ionide isn't installed, these are no-ops.
+  const ionideCommands = [
+    "fsi.SendSelection",
+    "fsi.SendLine",
+    "fsi.SendFile",
+  ];
+
+  for (const cmd of ionideCommands) {
+    try {
+      context.subscriptions.push(
+        vscode.commands.registerCommand(cmd, () => {
+          // Route to our eval — same behavior, through SageFs
+          if (cmd === "fsi.SendFile") {
+            vscode.commands.executeCommand("sagefs.evalFile");
+          } else {
+            vscode.commands.executeCommand("sagefs.eval");
+          }
+        })
+      );
+    } catch {
+      // Command already registered by Ionide — that's fine, we can't override.
+      // User can still use Alt+Enter directly.
+    }
+  }
 }
 
 // ── Helpers ────────────────────────────────────────────────────

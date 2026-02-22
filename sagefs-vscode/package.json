@@ -42,6 +42,10 @@
         "title": "SageFs: Evaluate Entire File"
       },
       {
+        "command": "sagefs.evalRange",
+        "title": "SageFs: Evaluate Code Block"
+      },
+      {
         "command": "sagefs.start",
         "title": "SageFs: Start Daemon"
       },
