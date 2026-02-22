@@ -3,13 +3,30 @@ module SageFs.Server.EventStore
 #nowarn "44" // Marten deprecates GeneratedCodeMode, but CritterStackDefaults() requires DI
 
 open System
+open System.IO
 open Marten
 open SageFs.Features.Events
 
+/// TextWriter wrapper that passes everything through except JasperFx assembly reference noise.
+type private FilteringTextWriter(inner: TextWriter) =
+  inherit TextWriter()
+  static let isNoise (s: string) =
+    not (isNull s)
+    && (s.Contains("Could not make an assembly reference to")
+        || (s.Contains("System.IO.FileNotFoundException") && s.Contains("Microsoft.Build")))
+  override _.Encoding = inner.Encoding
+  override _.Write(value: char) = inner.Write(value)
+  override _.Write(value: string) = if not (isNoise value) then inner.Write(value)
+  override _.WriteLine(value: string) = if not (isNoise value) then inner.WriteLine(value)
+  override _.WriteLine() = inner.WriteLine()
+  override _.Flush() = inner.Flush()
+
+let private installFilter =
+  lazy (Console.SetOut(new FilteringTextWriter(Console.Out)))
+
 /// Configure a Marten DocumentStore for SageFs event sourcing.
-/// Uses Auto code gen mode to avoid eager assembly scanning that triggers
-/// FileNotFoundException for Ionide.ProjInfo's transitive Microsoft.Build deps.
 let configureStore (connectionString: string) : IDocumentStore =
+  installFilter.Force()
   DocumentStore.For(fun (o: StoreOptions) ->
     o.Connection(connectionString)
     o.Events.StreamIdentity <- JasperFx.Events.StreamIdentity.AsString
