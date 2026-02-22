@@ -162,6 +162,7 @@ module SessionManager =
     with _ ->
       try session.Process.Kill() with _ -> ()
       try session.Process.WaitForExit(2000) |> ignore with _ -> ()
+    session.Process.Dispose()
   }
 
   /// Run `dotnet build` for the primary project.

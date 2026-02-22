@@ -94,18 +94,17 @@ let start
   (onRebuildNeeded: FileChange -> unit)
   : IDisposable =
 
-  let mutable pendingChange : FileChange option = None
+  let mutable pendingChanges : FileChange list = []
   let lockObj = obj()
 
   let onTimer _ =
-    let change =
+    let changes =
       lock lockObj (fun () ->
-        let c = pendingChange
-        pendingChange <- None
-        c)
-    match change with
-    | Some c -> onRebuildNeeded c
-    | None -> ()
+        let cs = pendingChanges |> List.rev
+        pendingChanges <- []
+        cs)
+    for c in changes do
+      onRebuildNeeded c
 
   let timer = new Threading.Timer(Threading.TimerCallback(onTimer), null, Threading.Timeout.Infinite, Threading.Timeout.Infinite)
 
@@ -127,7 +126,9 @@ let start
               Timestamp = DateTimeOffset.UtcNow
             }
             lock lockObj (fun () ->
-              pendingChange <- Some change
+              // Deduplicate by path — keep latest change per file
+              pendingChanges <-
+                change :: (pendingChanges |> List.filter (fun c -> c.FilePath <> change.FilePath))
               timer.Change(config.DebounceMs, Threading.Timeout.Infinite) |> ignore)
 
         watcher.Changed.Add(handler FileChangeKind.Changed)

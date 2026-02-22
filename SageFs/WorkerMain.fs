@@ -144,37 +144,37 @@ let run (sessionId: string) (port: int) (args: Args.Arguments list) = async {
     else
       let config = FileWatcher.defaultWatchConfig result.ProjectDirectories
       let onFileChanged (change: FileWatcher.FileChange) =
-        match FileWatcher.fileChangeAction change with
-        | FileWatcher.FileChangeAction.Reload filePath ->
-          let code = sprintf "#load @\"%s\"" filePath
-          let request = { Code = code; Args = Map.ofList ["hotReload", box true] }
-          use localCts = new CancellationTokenSource()
-          let response =
-            actor.PostAndAsyncReply(fun rc -> Eval(request, localCts.Token, rc))
-            |> Async.RunSynchronously
-          match response.EvaluationResult with
-          | Ok _ ->
-            let reloaded =
-              response.Metadata
-              |> Map.tryFind "reloadedMethods"
-              |> Option.bind (fun v ->
-                match v with
-                | :? (string list) as methods -> Some methods
-                | _ -> None)
-              |> Option.defaultValue []
-            let fileName = IO.Path.GetFileName filePath
-            if not (List.isEmpty reloaded) then
-              eprintfn "🔥 Hot reloaded %s: %s" fileName (String.Join(", ", reloaded))
-            else
-              eprintfn "📄 Reloaded %s" fileName
-          | Error ex ->
-            eprintfn "⚠️ Reload failed for %s: %s" (IO.Path.GetFileName filePath) (ex.Message)
-        | FileWatcher.FileChangeAction.SoftReset ->
-          eprintfn "📦 Project file changed — soft reset needed"
-          actor.PostAndAsyncReply(fun rc -> ResetSession rc)
-          |> Async.RunSynchronously
-          |> ignore
-        | FileWatcher.FileChangeAction.Ignore -> ()
+        Async.Start(async {
+          match FileWatcher.fileChangeAction change with
+          | FileWatcher.FileChangeAction.Reload filePath ->
+            let code = sprintf "#load @\"%s\"" filePath
+            let request = { Code = code; Args = Map.ofList ["hotReload", box true] }
+            use localCts = new CancellationTokenSource()
+            let! response =
+              actor.PostAndAsyncReply(fun rc -> Eval(request, localCts.Token, rc))
+            match response.EvaluationResult with
+            | Ok _ ->
+              let reloaded =
+                response.Metadata
+                |> Map.tryFind "reloadedMethods"
+                |> Option.bind (fun v ->
+                  match v with
+                  | :? (string list) as methods -> Some methods
+                  | _ -> None)
+                |> Option.defaultValue []
+              let fileName = IO.Path.GetFileName filePath
+              if not (List.isEmpty reloaded) then
+                eprintfn "🔥 Hot reloaded %s: %s" fileName (String.Join(", ", reloaded))
+              else
+                eprintfn "📄 Reloaded %s" fileName
+            | Error ex ->
+              eprintfn "⚠️ Reload failed for %s: %s" (IO.Path.GetFileName filePath) (ex.Message)
+          | FileWatcher.FileChangeAction.SoftReset ->
+            eprintfn "📦 Project file changed — soft reset needed"
+            let! _ = actor.PostAndAsyncReply(fun rc -> ResetSession rc)
+            ()
+          | FileWatcher.FileChangeAction.Ignore -> ()
+        })
       Some (FileWatcher.start config onFileChanged)
 
   // Signal readiness over the pipe
