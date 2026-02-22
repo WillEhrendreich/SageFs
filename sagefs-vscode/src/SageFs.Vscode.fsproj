@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <ProduceReferenceAssembly>false</ProduceReferenceAssembly>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="Vscode.fs" />
+    <Compile Include="SageFsClient.fs" />
+    <Compile Include="DiagnosticsListener.fs" />
+    <Compile Include="CodeLensProvider.fs" />
+    <Compile Include="Extension.fs" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Fable.Core" />
+    <PackageReference Include="Fable.Promise" />
+    <PackageReference Include="Fable.Node" />
+    <PackageReference Include="Fable.Browser.Dom" />
+  </ItemGroup>
+</Project>

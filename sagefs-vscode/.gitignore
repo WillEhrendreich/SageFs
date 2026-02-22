@@ -1,4 +1,7 @@
 out/
+dist/
+fable-out/
 node_modules/
 *.vsix
 .vscode-test/
+*.fable-temp.csproj

@@ -45,5 +45,9 @@
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.0.1" />
     <PackageVersion Include="Microsoft.Playwright" Version="1.58.0" />
     <PackageVersion Include="Raylib-cs" Version="7.0.2" />
+    <PackageVersion Include="Fable.Core" Version="4.5.0" />
+    <PackageVersion Include="Fable.Promise" Version="3.2.0" />
+    <PackageVersion Include="Fable.Node" Version="1.2.0" />
+    <PackageVersion Include="Fable.Browser.Dom" Version="2.16.0" />
   </ItemGroup>
 </Project>

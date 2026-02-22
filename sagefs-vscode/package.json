@@ -29,7 +29,7 @@
     "onLanguage:fsharp",
     "workspaceContains:**/*.fsproj"
   ],
-  "main": "./out/extension.js",
+  "main": "./dist/Extension.js",
   "contributes": {
     "commands": [
       {
@@ -114,12 +114,14 @@
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",
-    "compile": "tsc -p ./",
-    "watch": "tsc -watch -p ./"
+    "compile": "dotnet fable src --outDir fable-out && node esbuild.mjs",
+    "watch": "dotnet fable watch src --outDir fable-out",
+    "compile:ts": "tsc -p ./"
   },
   "devDependencies": {
-    "@types/vscode": "^1.85.0",
     "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "esbuild": "^0.24.2",
     "typescript": "^5.5.0"
   }
 }
