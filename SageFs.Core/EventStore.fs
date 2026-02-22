@@ -18,7 +18,7 @@ let configureStore (connectionString: string) : IDocumentStore =
 
 /// Append events to a session stream with retry on version conflict
 let appendEvents (store: IDocumentStore) (streamId: string) (events: SageFsEvent list) =
-  let maxRetries = 3
+  let config = RetryPolicy.defaults
   let rec attempt n =
     task {
       try
@@ -26,10 +26,13 @@ let appendEvents (store: IDocumentStore) (streamId: string) (events: SageFsEvent
         for evt in events do
           session.Events.Append(streamId, evt :> obj) |> ignore
         do! session.SaveChangesAsync()
-      with
-      | :? JasperFx.Events.EventStreamUnexpectedMaxEventIdException when n < maxRetries ->
-        do! System.Threading.Tasks.Task.Delay(50 * (n + 1))
-        return! attempt (n + 1)
+      with ex ->
+        match RetryPolicy.decide config n ex with
+        | RetryPolicy.RetryAfter delayMs ->
+          do! System.Threading.Tasks.Task.Delay(delayMs)
+          return! attempt (n + 1)
+        | RetryPolicy.GiveUp _ -> raise ex
+        | RetryPolicy.Success -> ()
     }
   attempt 0
 

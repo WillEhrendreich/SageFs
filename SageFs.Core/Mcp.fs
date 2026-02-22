@@ -362,13 +362,11 @@ module EventTracking =
   let trackInput (store: Marten.IDocumentStore) (streamId: string) (source: EventSource) (content: string) =
     let evt = McpInputReceived {| Source = source; Content = content |}
     EventStore.appendEvents store streamId [evt]
-    |> fun t -> t.ConfigureAwait(false).GetAwaiter().GetResult()
 
   /// Track an output event (result sent back to user/agent)
   let trackOutput (store: Marten.IDocumentStore) (streamId: string) (source: EventSource) (content: string) =
     let evt = McpOutputSent {| Source = source; Content = content |}
     EventStore.appendEvents store streamId [evt]
-    |> fun t -> t.ConfigureAwait(false).GetAwaiter().GetResult()
 
   /// Format an event for display
   let formatEvent (ts: DateTimeOffset, evt: SageFsEvent) =
@@ -397,23 +395,26 @@ module EventTracking =
 
   /// Get recent events from the session stream
   let getRecentEvents (store: Marten.IDocumentStore) (streamId: string) (count: int) =
-    EventStore.fetchStream store streamId
-    |> fun t -> t.ConfigureAwait(false).GetAwaiter().GetResult()
-    |> List.map formatEvent
-    |> List.rev
-    |> List.truncate count
-    |> List.rev
+    task {
+      let! events = EventStore.fetchStream store streamId
+      return
+        events
+        |> List.map formatEvent
+        |> List.rev
+        |> List.truncate count
+        |> List.rev
+    }
 
   /// Get all events from the session stream
   let getAllEvents (store: Marten.IDocumentStore) (streamId: string) =
-    EventStore.fetchStream store streamId
-    |> fun t -> t.ConfigureAwait(false).GetAwaiter().GetResult()
-    |> List.map formatEvent
+    task {
+      let! events = EventStore.fetchStream store streamId
+      return events |> List.map formatEvent
+    }
 
   /// Count events in the session stream
   let getEventCount (store: Marten.IDocumentStore) (streamId: string) =
     EventStore.countEvents store streamId
-    |> fun t -> t.ConfigureAwait(false).GetAwaiter().GetResult()
 
 /// MCP tool implementations — all tools route through SessionManager.
 /// There is no "local embedded session" — every session is a worker.
@@ -570,7 +571,7 @@ module McpTools =
     task {
       let! sid = resolveSessionId ctx agentName sessionId workingDirectory
       let statements = McpAdapter.splitStatements code
-      EventTracking.trackInput ctx.Store sid (Features.Events.McpAgent agentName) code
+      do! EventTracking.trackInput ctx.Store sid (Features.Events.McpAgent agentName) code
 
       let mutable allOutputs = []
       for statement in statements do
@@ -605,21 +606,21 @@ module McpTools =
           String.concat "\n\n" (List.rev allOutputs)
         | _ -> allOutputs |> List.tryHead |> Option.defaultValue ""
 
-      EventTracking.trackOutput ctx.Store sid (Features.Events.McpAgent agentName) finalOutput
+      do! EventTracking.trackOutput ctx.Store sid (Features.Events.McpAgent agentName) finalOutput
       return finalOutput
     }
 
   let getRecentEvents (ctx: McpContext) (agent: string) (count: int) (workingDirectory: string option) : Task<string> =
     task {
       let! sid = resolveSessionId ctx agent None workingDirectory
-      let events = EventTracking.getRecentEvents ctx.Store sid count
+      let! events = EventTracking.getRecentEvents ctx.Store sid count
       return McpAdapter.formatEvents events
     }
 
   let getStatus (ctx: McpContext) (agent: string) (sessionId: string option) (workingDirectory: string option) : Task<string> =
     task {
       let! sid = resolveSessionId ctx agent sessionId workingDirectory
-      let eventCount = EventTracking.getEventCount ctx.Store sid
+      let! eventCount = EventTracking.getEventCount ctx.Store sid
       let! routeResult =
         routeToSession ctx sid
           (fun replyId -> WorkerProtocol.WorkerMessage.GetStatus replyId)

@@ -16,14 +16,25 @@ let configureStore (connectionString: string) : IDocumentStore =
     )
   )
 
-/// Append events to a session stream
+/// Append events to a session stream with retry on version conflict
 let appendEvents (store: IDocumentStore) (streamId: string) (events: SageFsEvent list) =
-  task {
-    use session = store.LightweightSession()
-    for evt in events do
-      session.Events.Append(streamId, evt :> obj) |> ignore
-    do! session.SaveChangesAsync()
-  }
+  let config = SageFs.RetryPolicy.defaults
+  let rec attempt n =
+    task {
+      try
+        use session = store.LightweightSession()
+        for evt in events do
+          session.Events.Append(streamId, evt :> obj) |> ignore
+        do! session.SaveChangesAsync()
+      with ex ->
+        match SageFs.RetryPolicy.decide config n ex with
+        | SageFs.RetryPolicy.RetryAfter delayMs ->
+          do! System.Threading.Tasks.Task.Delay(delayMs)
+          return! attempt (n + 1)
+        | SageFs.RetryPolicy.GiveUp _ -> raise ex
+        | SageFs.RetryPolicy.Success -> ()
+    }
+  attempt 0
 
 /// Fetch all events from a session stream
 let fetchStream (store: IDocumentStore) (streamId: string) =
