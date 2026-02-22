@@ -6,7 +6,7 @@ open SageFs.McpTools
 
 [<Tests>]
 let tests =
-  testSequenced <| testList "Package/Namespace Explorer" [
+  testSequenced <| testList "[Integration] Package/Namespace Explorer" [
 
     testList "exploreNamespace" [
       testCase "lists types in System.IO namespace"

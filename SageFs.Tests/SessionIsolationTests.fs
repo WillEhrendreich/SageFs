@@ -61,7 +61,7 @@ module McpSessionIsolation =
         return Error (ex.Message)
     }
 
-  let tests = testSequenced <| testList "MCP session isolation" [
+  let tests = testSequenced <| testList "[Integration] MCP session isolation" [
 
     testTask "switchSession updates only the given context's SessionMap for that agent" {
       let ctx1, _ = ctxWithTracking "session-A"
@@ -354,7 +354,7 @@ module ResetIsolation =
         GetElmRegions = None } : McpContext
     ctx, restartLog, routedSessions
 
-  let tests = testList "Reset isolation" [
+  let tests = testList "[Integration] Reset isolation" [
     testTask "hardResetSession with rebuild only restarts the targeted session" {
       let ctx, restartLog, _ = mkTrackingCtx ()
 

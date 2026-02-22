@@ -79,7 +79,7 @@ let sessionResetTests =
 
 [<Tests>]
 let resetPushbackTests =
-  testList "Reset pushback warnings" [
+  testList "[Integration] Reset pushback warnings" [
 
     ptestCase "hard reset on healthy session includes warning"
     <| fun _ ->

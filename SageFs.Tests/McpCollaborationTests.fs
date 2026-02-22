@@ -13,7 +13,7 @@ let mkStore schemaName =
 
 [<Tests>]
 let tests =
-  testList "MCP Collaboration tests" [
+  testList "[Integration] MCP Collaboration tests" [
 
     testCase "trackInput records input from console"
     <| fun _ ->
