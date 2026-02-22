@@ -49,14 +49,49 @@ dotnet tool install --global SageFs --add-source ./nupkg --no-cache
 
 ### Connect Your AI Agent (MCP)
 
-Once SageFs is running (`sagefs --proj YourApp.fsproj`), point your AI tool at it.
+Once SageFs is running (`sagefs --proj YourApp.fsproj`), point your AI tool at its MCP endpoint.
 
-**GitHub Copilot CLI** — add to your [MCP config](https://docs.github.com/en/copilot/customizing-copilot/extending-copilot-for-your-organization/managing-mcp-servers):
+<details>
+<summary><strong>GitHub Copilot (CLI & VS Code)</strong></summary>
+
+Edit your MCP config file (usually `~/.config/.copilot/mcp-config.json` or wherever your Copilot MCP servers are configured):
 
 ```json
 {
   "mcpServers": {
-    "SageFs": {
+    "sagefs": {
+      "type": "sse",
+      "url": "http://localhost:37749/sse",
+      "headers": {},
+      "tools": ["*"]
+    }
+  }
+}
+```
+
+In **VS Code**, you can also add it to `.vscode/mcp.json` in your workspace:
+
+```json
+{
+  "servers": {
+    "sagefs": {
+      "type": "sse",
+      "url": "http://localhost:37749/sse"
+    }
+  }
+}
+```
+</details>
+
+<details>
+<summary><strong>Claude Code (CLI)</strong></summary>
+
+Add a `.mcp.json` file to your project root:
+
+```json
+{
+  "mcpServers": {
+    "sagefs": {
       "type": "sse",
       "url": "http://localhost:37749/sse"
     }
@@ -64,17 +99,37 @@ Once SageFs is running (`sagefs --proj YourApp.fsproj`), point your AI tool at i
 }
 ```
 
-**Claude Desktop** — add to your MCP settings:
+Or configure globally via `claude mcp add --transport sse sagefs http://localhost:37749/sse`.
+</details>
+
+<details>
+<summary><strong>Claude Desktop</strong></summary>
+
+Edit `claude_desktop_config.json` (Settings → Developer → Edit Config):
 
 ```json
 {
   "mcpServers": {
-    "SageFs": {
+    "sagefs": {
+      "type": "sse",
       "url": "http://localhost:37749/sse"
     }
   }
 }
 ```
+</details>
+
+<details>
+<summary><strong>Any MCP-compatible client</strong></summary>
+
+SageFs exposes a standard [Model Context Protocol](https://modelcontextprotocol.io/) SSE endpoint:
+
+```
+http://localhost:37749/sse
+```
+
+Connect with any MCP client that supports SSE transport. No API key required — it's a local server.
+</details>
 
 Your AI agent now has live access to your F# project — it can execute code, check types, explore APIs, and manage sessions through SageFs.
 
@@ -135,7 +190,19 @@ SageFs is a daemon — one server, many clients. Start it once, connect from any
 
 If you configured MCP during installation (see above), your AI agent already has access. It can execute F# code, check types, explore APIs, and manage sessions — all through SageFs.
 
-### Option 2: REPL Client
+### Option 2: VSCode Extension
+
+The `sagefs-vscode` extension gives you **Alt+Enter** to evaluate F# code directly from your editor.
+
+1. Open the `sagefs-vscode/` folder in VS Code
+2. Press **F5** to launch the Extension Development Host
+3. Open any `.fs` or `.fsx` file and press **Alt+Enter** to evaluate
+
+The extension auto-detects your `.fsproj` and offers to start SageFs if it isn't running. Results appear inline in the editor and in the **SageFs** output channel.
+
+> **Tip:** Open the **web dashboard** (`http://localhost:37750/dashboard`) alongside your editor — it shows session status, eval history, and lets you manage sessions. Click the SageFs status bar item to open it.
+
+### Option 3: REPL Client
 
 ```bash
 sagefs connect

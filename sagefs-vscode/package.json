@@ -1,0 +1,113 @@
+{
+  "name": "sagefs",
+  "displayName": "SageFs — Live F# Development",
+  "description": "Send F# code to SageFs for instant evaluation, type-checking, and hot reload.",
+  "version": "0.1.0",
+  "publisher": "sagefs",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/WillEhrendreich/SageFs"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Notebooks",
+    "Other"
+  ],
+  "keywords": [
+    "fsharp",
+    "f#",
+    "repl",
+    "interactive",
+    "hot-reload",
+    "mcp"
+  ],
+  "activationEvents": [
+    "onLanguage:fsharp",
+    "workspaceContains:**/*.fsproj"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "sagefs.eval",
+        "title": "SageFs: Evaluate Selection / Line",
+        "icon": "$(play)"
+      },
+      {
+        "command": "sagefs.evalFile",
+        "title": "SageFs: Evaluate Entire File"
+      },
+      {
+        "command": "sagefs.start",
+        "title": "SageFs: Start Daemon"
+      },
+      {
+        "command": "sagefs.stop",
+        "title": "SageFs: Stop Daemon"
+      },
+      {
+        "command": "sagefs.openDashboard",
+        "title": "SageFs: Open Dashboard"
+      },
+      {
+        "command": "sagefs.resetSession",
+        "title": "SageFs: Reset Session"
+      },
+      {
+        "command": "sagefs.hardReset",
+        "title": "SageFs: Hard Reset (Rebuild)"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "sagefs.eval",
+        "key": "alt+enter",
+        "when": "editorTextFocus && editorLangId == fsharp"
+      },
+      {
+        "command": "sagefs.evalFile",
+        "key": "alt+shift+enter",
+        "when": "editorTextFocus && editorLangId == fsharp"
+      }
+    ],
+    "configuration": {
+      "title": "SageFs",
+      "properties": {
+        "sagefs.mcpPort": {
+          "type": "number",
+          "default": 37749,
+          "description": "Port for the SageFs MCP server."
+        },
+        "sagefs.dashboardPort": {
+          "type": "number",
+          "default": 37750,
+          "description": "Port for the SageFs dashboard."
+        },
+        "sagefs.autoStart": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically start SageFs daemon when opening an F# project."
+        },
+        "sagefs.projectPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to .fsproj file. If empty, SageFs auto-detects."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.85.0",
+    "@types/node": "^20.0.0",
+    "typescript": "^5.5.0"
+  }
+}
