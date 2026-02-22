@@ -506,6 +506,35 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                     do! jsonResponse ctx 200 data
                 }) :> Task
             ) |> ignore
+
+            // GET /api/system/status — system-level info including watchdog state
+            app.MapGet("/api/system/status", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
+                withErrorHandling ctx (fun () -> task {
+                    let supervised =
+                      Environment.GetEnvironmentVariable("SAGEFS_SUPERVISED")
+                      |> Option.ofObj |> Option.map (fun s -> s = "1") |> Option.defaultValue false
+                    let restartCount =
+                      Environment.GetEnvironmentVariable("SAGEFS_RESTART_COUNT")
+                      |> Option.ofObj |> Option.bind (fun s -> match Int32.TryParse s with true, n -> Some n | _ -> None)
+                      |> Option.defaultValue 0
+                    let proc = System.Diagnostics.Process.GetCurrentProcess()
+                    let uptime = (DateTime.UtcNow - proc.StartTime.ToUniversalTime()).TotalSeconds
+                    let version =
+                      System.Reflection.Assembly.GetExecutingAssembly().GetName().Version
+                      |> Option.ofObj |> Option.map (fun v -> v.ToString()) |> Option.defaultValue "unknown"
+                    let! allSessions = sessionOps.GetAllSessions()
+                    let data =
+                      {| version = version
+                         pid = Environment.ProcessId
+                         uptimeSeconds = uptime
+                         supervised = supervised
+                         restartCount = restartCount
+                         sessionCount = allSessions.Length
+                         mcpPort = port
+                         dashboardPort = port + 1 |}
+                    do! jsonResponse ctx 200 data
+                }) :> Task
+            ) |> ignore
             
             // GET /api/sessions — list all sessions with details
             app.MapGet("/api/sessions", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->

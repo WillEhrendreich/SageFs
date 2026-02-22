@@ -369,8 +369,11 @@ async function refreshStatus(): Promise<void> {
     }
 
     const status = await client.getStatus();
+    const sys = await client.getSystemStatus();
+    const supervised = sys?.supervised ? " $(shield) supervised" : "";
+    const restarts = sys && sys.restartCount > 0 ? ` ${sys.restartCount}↻` : "";
     if (status.connected) {
-      statusBarItem.text = `$(zap) SageFs: ready`;
+      statusBarItem.text = `$(zap) SageFs: ready${supervised}${restarts}`;
       statusBarItem.backgroundColor = undefined;
     } else {
       statusBarItem.text = "$(loading~spin) SageFs: starting...";

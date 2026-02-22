@@ -202,6 +202,21 @@ The extension auto-detects your `.fsproj` and offers to start SageFs if it isn't
 
 > **Tip:** Open the **web dashboard** (`http://localhost:37750/dashboard`) alongside your editor — it shows session status, eval history, and lets you manage sessions. Click the SageFs status bar item to open it.
 
+### Option 2b: Neovim Plugin
+
+[**sagefs.nvim**](https://github.com/WillEhrendreich/sagefs.nvim) gives you the same experience in Neovim — **Alt+Enter** to evaluate `;;`-delimited cells, inline results via extmarks, gutter signs, SSE live updates, and session management.
+
+```lua
+-- lazy.nvim
+{
+  "WillEhrendreich/sagefs.nvim",
+  ft = { "fsharp" },
+  opts = { port = 37749, auto_connect = true },
+}
+```
+
+The plugin auto-connects to the running daemon, shows eval results as virtual text below your code, and marks cells with ✓/✖/⏳ gutter signs. See the [sagefs.nvim README](https://github.com/WillEhrendreich/sagefs.nvim) for full setup and keybindings.
+
 ### Option 3: REPL Client
 
 ```bash
@@ -210,7 +225,7 @@ sagefs connect
 
 A text-based REPL that connects to the running daemon. Type F# code, get results. Use `#help` for commands, `#sessions` to manage multiple sessions.
 
-### Option 3: Terminal UI
+### Option 4: Terminal UI
 
 ```bash
 sagefs tui
@@ -218,7 +233,7 @@ sagefs tui
 
 A four-pane terminal interface: editor, output, diagnostics, sessions. Navigate with Tab, manage sessions with keyboard shortcuts.
 
-### Option 4: GUI
+### Option 5: GUI
 
 ```bash
 sagefs gui
@@ -226,7 +241,7 @@ sagefs gui
 
 A native GPU-rendered window (Raylib) with the same layout as the TUI.
 
-### Option 5: Web Dashboard
+### Option 6: Web Dashboard
 
 Already running at `http://localhost:{port+1}/dashboard`. Submit code, view session status, manage sessions — all from the browser.
 
@@ -283,6 +298,16 @@ Source files are watched automatically. `.fs`/`.fsx` changes reload in ~100ms. F
 
 Run multiple F# sessions simultaneously — different projects, different states. Create, switch, and stop sessions from any frontend.
 
+### 🛡️ Supervised Mode (Watchdog)
+
+For long-running development sessions, start SageFs with `--supervised`:
+
+```bash
+sagefs --supervised --proj MyApp.fsproj
+```
+
+This wraps the daemon in an Erlang-style supervisor that auto-restarts it on crash with exponential backoff (1s → 2s → 4s → max 30s). After 5 consecutive crashes within 5 minutes, the watchdog gives up and reports the failure. Use this when you're leaving SageFs running all day and don't want to manually restart after rare crashes.
+
 ---
 
 ## Common Workflows
@@ -327,10 +352,12 @@ sagefs gui                       # GPU GUI (Raylib)
 sagefs stop                      # Stop running daemon
 sagefs status                    # Show daemon info
 
+# Production / long-running
+sagefs --supervised              # Auto-restart on crash (recommended for long sessions)
+
 # Options
 sagefs --mcp-port 8080           # Custom MCP port
 sagefs --no-watch                # Disable file watcher
-sagefs --supervised              # Auto-restart on crash
 sagefs --use script.fsx          # Run script on startup
 sagefs --help                    # All options
 ```
@@ -446,6 +473,7 @@ MIT — see [LICENSE](LICENSE)
 ## Acknowledgments
 
 - [FsiX](https://github.com/soweli-p/FsiX) — The original F# Interactive experience that inspired SageFs
+- [sagefs.nvim](https://github.com/WillEhrendreich/sagefs.nvim) — Neovim plugin for SageFs (separate repo)
 - [Falco](https://github.com/pimbrouwers/Falco) & [Falco.Datastar](https://github.com/spiraloss/Falco.Datastar) — Dashboard framework
 - [Harmony](https://github.com/pardeike/Harmony) — Runtime method patching for hot reload
 - [Ionide.ProjInfo](https://github.com/ionide/proj-info/) — Project file parsing

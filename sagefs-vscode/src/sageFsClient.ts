@@ -153,6 +153,24 @@ export class SageFsClient {
     }
   }
 
+  /** GET /api/system/status — system-level info including watchdog state */
+  async getSystemStatus(): Promise<{ supervised: boolean; restartCount: number; version: string } | null> {
+    try {
+      const resp = await this.httpGet("/api/system/status", 3000);
+      if (resp.statusCode === 200) {
+        const parsed = JSON.parse(resp.body);
+        return {
+          supervised: parsed.supervised ?? false,
+          restartCount: parsed.restartCount ?? 0,
+          version: parsed.version ?? "unknown",
+        };
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
   private httpGet(
     path: string,
     timeout: number
