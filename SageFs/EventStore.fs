@@ -4,17 +4,23 @@ open System
 open Marten
 open SageFs.Features.Events
 
-/// Configure a Marten DocumentStore for SageFs event sourcing
+/// Configure a Marten DocumentStore for SageFs event sourcing.
+/// Temporarily redirects Console.Out during init to suppress JasperFx assembly reference warnings.
 let configureStore (connectionString: string) : IDocumentStore =
-  DocumentStore.For(fun (o: StoreOptions) ->
-    o.Connection(connectionString)
-    o.Events.StreamIdentity <- JasperFx.Events.StreamIdentity.AsString
-    o.AutoCreateSchemaObjects <- JasperFx.AutoCreate.All
-    o.UseSystemTextJsonForSerialization(
-      configure = fun opts ->
-        opts.Converters.Add(System.Text.Json.Serialization.JsonFSharpConverter())
+  let origOut = System.Console.Out
+  System.Console.SetOut(System.IO.TextWriter.Null)
+  try
+    DocumentStore.For(fun (o: StoreOptions) ->
+      o.Connection(connectionString)
+      o.Events.StreamIdentity <- JasperFx.Events.StreamIdentity.AsString
+      o.AutoCreateSchemaObjects <- JasperFx.AutoCreate.All
+      o.UseSystemTextJsonForSerialization(
+        configure = fun opts ->
+          opts.Converters.Add(System.Text.Json.Serialization.JsonFSharpConverter())
+      )
     )
-  )
+  finally
+    System.Console.SetOut(origOut)
 
 /// Append events to a session stream with retry on version conflict
 let appendEvents (store: IDocumentStore) (streamId: string) (events: SageFsEvent list) =
@@ -26,13 +32,15 @@ let appendEvents (store: IDocumentStore) (streamId: string) (events: SageFsEvent
         for evt in events do
           session.Events.Append(streamId, evt :> obj) |> ignore
         do! session.SaveChangesAsync()
+        return Ok ()
       with ex ->
         match SageFs.RetryPolicy.decide config n ex with
         | SageFs.RetryPolicy.RetryAfter delayMs ->
           do! System.Threading.Tasks.Task.Delay(delayMs)
           return! attempt (n + 1)
-        | SageFs.RetryPolicy.GiveUp _ -> raise ex
-        | SageFs.RetryPolicy.Success -> ()
+        | SageFs.RetryPolicy.GiveUp ex ->
+          return Error (sprintf "Event append failed after %d attempts: %s" (n + 1) ex.Message)
+        | SageFs.RetryPolicy.Success -> return Ok ()
     }
   attempt 0
 

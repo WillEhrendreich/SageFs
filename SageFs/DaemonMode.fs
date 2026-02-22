@@ -32,8 +32,10 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
     if pruneEvents.IsEmpty then
       eprintfn "No alive sessions to prune."
     else
-      do! SageFs.EventStore.appendEvents eventStore daemonStreamId pruneEvents
-      eprintfn "Pruned %d session(s)." pruneEvents.Length
+      let! result = SageFs.EventStore.appendEvents eventStore daemonStreamId pruneEvents
+      match result with
+      | Ok () -> eprintfn "Pruned %d session(s)." pruneEvents.Length
+      | Error msg -> eprintfn "[WARN] Prune failed: %s" msg
     return ()
 
   // Handle shutdown signals
@@ -61,7 +63,7 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
           |> Async.StartAsTask
         match result with
         | Ok info ->
-          do! SageFs.EventStore.appendEvents eventStore daemonStreamId [
+          let! _ = SageFs.EventStore.appendEvents eventStore daemonStreamId [
             Features.Events.SageFsEvent.DaemonSessionCreated
               {| SessionId = info.Id; Projects = projects; WorkingDir = workingDir; CreatedAt = DateTimeOffset.UtcNow |}
           ]
@@ -83,7 +85,7 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
             SessionManager.SessionCommand.StopSession(sessionId, reply))
           |> Async.StartAsTask
         // Persist stop event
-        do! SageFs.EventStore.appendEvents eventStore daemonStreamId [
+        let! _ = SageFs.EventStore.appendEvents eventStore daemonStreamId [
           Features.Events.SageFsEvent.DaemonSessionStopped
             {| SessionId = sessionId; StoppedAt = DateTimeOffset.UtcNow |}
         ]
@@ -163,10 +165,11 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
       let keptIds =
         uniqueByDir |> List.map (fun r -> r.SessionId) |> Set.ofList
       for staleId in Set.difference staleIds keptIds do
-        do! SageFs.EventStore.appendEvents eventStore daemonStreamId [
+        let! _ = SageFs.EventStore.appendEvents eventStore daemonStreamId [
           Features.Events.SageFsEvent.DaemonSessionStopped
             {| SessionId = staleId; StoppedAt = DateTimeOffset.UtcNow |}
         ]
+        ()
       eprintfn "Resuming %d previous session(s) (%d stale duplicates cleaned)..."
         uniqueByDir.Length (aliveSessions.Length - uniqueByDir.Length)
       // Skip missing directories first (synchronous, fast)
@@ -174,10 +177,11 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
         uniqueByDir |> List.partition (fun prev -> IO.Directory.Exists prev.WorkingDir)
       for prev in missing do
         eprintfn "  [SKIP] %s — directory no longer exists" prev.WorkingDir
-        do! SageFs.EventStore.appendEvents eventStore daemonStreamId [
+        let! _ = SageFs.EventStore.appendEvents eventStore daemonStreamId [
           Features.Events.SageFsEvent.DaemonSessionStopped
             {| SessionId = prev.SessionId; StoppedAt = DateTimeOffset.UtcNow |}
         ]
+        ()
       // Resume all valid sessions in parallel — each is an independent worker process
       let resumeTasks =
         existing
@@ -187,7 +191,7 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
           match result with
           | Ok info ->
             // Stop the OLD session ID so it doesn't resurrect on next restart
-            do! SageFs.EventStore.appendEvents eventStore daemonStreamId [
+            let! _ = SageFs.EventStore.appendEvents eventStore daemonStreamId [
               Features.Events.SageFsEvent.DaemonSessionStopped
                 {| SessionId = prev.SessionId; StoppedAt = DateTimeOffset.UtcNow |}
             ]
@@ -556,10 +560,11 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
       SessionManager.SessionCommand.ListSessions reply)
     |> Async.StartAsTask
   for info in activeSessions do
-    do! SageFs.EventStore.appendEvents eventStore daemonStreamId [
+    let! _ = SageFs.EventStore.appendEvents eventStore daemonStreamId [
       Features.Events.SageFsEvent.DaemonSessionStopped
         {| SessionId = info.Id; StoppedAt = DateTimeOffset.UtcNow |}
     ]
+    ()
   sessionManager.PostAndAsyncReply(fun reply ->
     SessionManager.SessionCommand.StopAll reply)
   |> Async.RunSynchronously

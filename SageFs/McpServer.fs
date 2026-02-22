@@ -562,7 +562,7 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                         d (SageFs.SageFsMsg.Event (SageFs.SageFsEvent.SessionSwitched (None, sid)))
                         d (SageFs.SageFsMsg.Editor SageFs.EditorAction.ListSessions)
                       | None -> ()
-                      do! SageFs.EventStore.appendEvents store "daemon-sessions" [
+                      let! _ = SageFs.EventStore.appendEvents store "daemon-sessions" [
                         SageFs.Features.Events.SageFsEvent.DaemonSessionSwitched
                           {| FromId = None; ToId = sid; SwitchedAt = System.DateTimeOffset.UtcNow |}
                       ]

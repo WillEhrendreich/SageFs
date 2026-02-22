@@ -361,12 +361,18 @@ module EventTracking =
   /// Track an input event (code submitted by user/agent/file)
   let trackInput (store: Marten.IDocumentStore) (streamId: string) (source: EventSource) (content: string) =
     let evt = McpInputReceived {| Source = source; Content = content |}
-    EventStore.appendEvents store streamId [evt]
+    task {
+      let! _ = EventStore.appendEvents store streamId [evt]
+      return ()
+    }
 
   /// Track an output event (result sent back to user/agent)
   let trackOutput (store: Marten.IDocumentStore) (streamId: string) (source: EventSource) (content: string) =
     let evt = McpOutputSent {| Source = source; Content = content |}
-    EventStore.appendEvents store streamId [evt]
+    task {
+      let! _ = EventStore.appendEvents store streamId [evt]
+      return ()
+    }
 
   /// Format an event for display
   let formatEvent (ts: DateTimeOffset, evt: SageFsEvent) =
@@ -890,7 +896,7 @@ module McpTools =
         let prev = activeSessionId ctx agent
         setActiveSessionId ctx agent sessionId
         // Persist switch to daemon stream
-        do! EventStore.appendEvents ctx.Store "daemon-sessions" [
+        let! _ = EventStore.appendEvents ctx.Store "daemon-sessions" [
           Features.Events.SageFsEvent.DaemonSessionSwitched
             {| FromId = Some prev; ToId = sessionId; SwitchedAt = DateTimeOffset.UtcNow |}
         ]

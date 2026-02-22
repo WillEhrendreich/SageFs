@@ -24,7 +24,8 @@ let eventStoreModuleTests =
       task {
         let store = sharedStore.Value
         let streamId = createSessionId ()
-        do! appendEvents store streamId [SessionReady]
+        let! result = appendEvents store streamId [SessionReady]
+        result |> Expect.isOk "append should succeed"
         let! events = fetchStream store streamId
         events |> List.map snd |> List.length
         |> Expect.equal "should have one event" 1
@@ -44,7 +45,8 @@ let eventStoreModuleTests =
           SessionReady
           EvalCompleted {| Code = "1 + 1"; Result = "val it: int = 2"; TypeSignature = Some "int"; Duration = TimeSpan.FromMilliseconds(10.) |}
         ]
-        do! appendEvents store streamId events
+        let! result = appendEvents store streamId events
+        result |> Expect.isOk "append should succeed"
         let! fetched = fetchStream store streamId
         fetched |> List.map snd |> List.length
         |> Expect.equal "should have three events" 3
@@ -57,12 +59,13 @@ let eventStoreModuleTests =
       task {
         let store = sharedStore.Value
         let streamId = createSessionId ()
-        do! appendEvents store streamId [
+        let! result = appendEvents store streamId [
           SessionStarted {| Config = Map.empty; StartedAt = DateTimeOffset.UtcNow |}
           SessionReady
           EvalCompleted {| Code = "let x = 42"; Result = "val x: int = 42"; TypeSignature = Some "int"; Duration = TimeSpan.FromMilliseconds(5.) |}
           SessionReset
         ]
+        result |> Expect.isOk "append should succeed"
         let! events = fetchStream store streamId
         match events |> List.map snd with
         | [SessionStarted _; SessionReady; EvalCompleted _; SessionReset] -> ()
