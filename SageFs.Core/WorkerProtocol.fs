@@ -151,9 +151,12 @@ module WorkerProtocol =
       walk workingDir
 
     let displayName (info: SessionInfo) =
+      let getLastSegment (path: string) =
+        let normalized = path.TrimEnd('/', '\\').Replace('\\', '/')
+        Path.GetFileName normalized
       match info.SolutionRoot with
-      | Some root -> Path.GetFileName root
-      | None -> Path.GetFileName info.WorkingDirectory
+      | Some root -> getLastSegment root
+      | None -> getLastSegment info.WorkingDirectory
 
   module Serialization =
     let jsonOptions =

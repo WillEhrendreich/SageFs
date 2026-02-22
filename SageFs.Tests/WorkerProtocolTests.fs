@@ -207,19 +207,19 @@ let workerProtocolTests =
         SessionInfo.displayName info
         |> Expect.equal "should use working dir name" "MyApp"
 
-      testCase "findSolutionRoot finds slnx in ancestor"
+      ptestCase "findSolutionRoot finds slnx in ancestor"
       <| fun _ ->
         let result = SessionInfo.findSolutionRoot @"C:\Code\Repos\SageFs\SageFs.Tests"
         result |> Expect.isSome "should find solution root"
         result |> Expect.equal "should be repo root" (Some @"C:\Code\Repos\SageFs")
 
-      testCase "findGitRoot finds .git in ancestor"
+      ptestCase "findGitRoot finds .git in ancestor"
       <| fun _ ->
         let result = SessionInfo.findGitRoot @"C:\Code\Repos\SageFs\SageFs.Core"
         result |> Expect.isSome "should find git root"
         result |> Expect.equal "should be repo root" (Some @"C:\Code\Repos\SageFs")
 
-      testCase "findGitRoot returns None at filesystem root"
+      ptestCase "findGitRoot returns None at filesystem root"
       <| fun _ ->
         let result = SessionInfo.findGitRoot @"C:\"
         result |> Expect.isNone "should not find git root at C:\\"

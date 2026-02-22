@@ -34,6 +34,8 @@ let dashboardRenderSnapshotTests = testList "Dashboard render snapshots" [
   }
 
   testTask "renderOutput with mixed lines" {
+    if not (SyntaxHighlight.isAvailable()) then
+      Tests.skiptest "tree-sitter not available; snapshot was generated with syntax highlighting"
     let lines = [
       { Timestamp = Some "12:30:45"; Kind = ResultLine; Text = "val x: int = 42" }
       { Timestamp = Some "12:30:46"; Kind = ErrorLine; Text = "Type mismatch" }
@@ -159,6 +161,8 @@ let edgeCaseSnapshotTests = testList "edge case snapshots" [
   }
 
   testTask "renderOutput single result line" {
+    if not (SyntaxHighlight.isAvailable()) then
+      Tests.skiptest "tree-sitter not available; snapshot was generated with syntax highlighting"
     let lines = [ { Timestamp = Some "14:00:00"; Kind = ResultLine; Text = "val it: int = 0" } ]
     let html = renderOutput lines |> renderNode
     do! verifyDashboard "dashboard_output_singleResult" html
