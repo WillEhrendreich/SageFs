@@ -1,0 +1,10 @@
+return {
+  default = {
+    verbose = true,
+    output = "utfTerminal",
+    pattern = "_spec",
+    ROOT = {"spec/"},
+    lua = "lua",
+    helper = "spec/helper.lua",
+  },
+}
