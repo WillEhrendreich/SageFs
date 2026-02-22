@@ -28,7 +28,7 @@ let tests =
       <| fun _ ->
         let ctx = TestInfrastructure.sharedCtx ()
         let result = exploreNamespace ctx "test" "NonExistent.Namespace.Here" None |> fun t -> t.Result
-        Expect.stringContains result "No items found" "Should indicate nothing found"
+        Expect.stringContains result "No members found" "Should indicate nothing found"
     ]
 
     testList "exploreType" [
@@ -51,6 +51,6 @@ let tests =
       <| fun _ ->
         let ctx = TestInfrastructure.sharedCtx ()
         let result = exploreType ctx "test" "NonExistent.Type.Here" None |> fun t -> t.Result
-        Expect.stringContains result "No items found" "Should indicate nothing found"
+        Expect.stringContains result "No members found" "Should indicate nothing found"
     ]
   ]

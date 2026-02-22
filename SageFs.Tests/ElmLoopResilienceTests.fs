@@ -4,8 +4,14 @@ open Expecto
 open Expecto.Flip
 open SageFs
 
+let waitFor (condition: unit -> bool) (timeoutMs: int) =
+  let sw = System.Diagnostics.Stopwatch.StartNew()
+  while not (condition ()) && sw.ElapsedMilliseconds < int64 timeoutMs do
+    System.Threading.Thread.Sleep 10
+  condition ()
+
 let wait () =
-  System.Threading.Thread.Sleep 200
+  System.Threading.Thread.Sleep 500
 
 [<Tests>]
 let elmLoopResilienceTests =
@@ -25,7 +31,7 @@ let elmLoopResilienceTests =
       let rt = ElmLoop.start prog 0
 
       rt.Dispatch 1  // model=1, effect fires
-      wait ()
+      waitFor (fun () -> effCount.Value >= 1) 2000 |> ignore
       effCount.Value |> Expect.equal "effect fired on d1" 1
       rt.GetModel() |> Expect.equal "model is 1" 1
 
@@ -35,7 +41,7 @@ let elmLoopResilienceTests =
       rt.GetModel() |> Expect.equal "model still 1" 1
 
       rt.Dispatch 3  // recovers, model=2
-      wait ()
+      waitFor (fun () -> effCount.Value >= 2) 2000 |> ignore
       effCount.Value |> Expect.equal "effect fires on d3" 2
       rt.GetModel() |> Expect.equal "model is 2" 2
 
@@ -53,16 +59,16 @@ let elmLoopResilienceTests =
       let rt = ElmLoop.start prog 0
 
       rt.Dispatch 1  // model=1, regions=[10]
-      wait ()
+      waitFor (fun () -> effCount.Value >= 1) 2000 |> ignore
       rt.GetRegions() |> Expect.equal "regions from d1" [10]
 
       rt.Dispatch 2  // model=2, Render throws, regions stay [10]
-      wait ()
+      waitFor (fun () -> effCount.Value >= 2) 2000 |> ignore
       effCount.Value |> Expect.equal "effect still fires" 2
       rt.GetRegions() |> Expect.equal "regions preserved" [10]
 
       rt.Dispatch 3  // model=3, Render succeeds with [30]
-      wait ()
+      waitFor (fun () -> effCount.Value >= 3) 2000 |> ignore
       rt.GetRegions() |> Expect.equal "regions recover" [30]
 
     testCase "OnModelChanged throws: effects still fire" <| fun _ ->
@@ -78,16 +84,16 @@ let elmLoopResilienceTests =
       let rt = ElmLoop.start prog 0
 
       rt.Dispatch 1
-      wait ()
+      waitFor (fun () -> effCount.Value >= 1) 2000 |> ignore
       effCount.Value |> Expect.equal "effect on d1" 1
 
       rt.Dispatch 2  // OnModelChanged throws, but effect should still fire
-      wait ()
+      waitFor (fun () -> effCount.Value >= 2) 2000 |> ignore
       effCount.Value |> Expect.equal "effect on d2 despite throw" 2
       rt.GetModel() |> Expect.equal "model updated" 2
 
       rt.Dispatch 3  // recovers
-      wait ()
+      waitFor (fun () -> effCount.Value >= 3) 2000 |> ignore
       effCount.Value |> Expect.equal "effect on d3" 3
 
     testCase "Effect throws: loop still works for subsequent dispatches" <| fun _ ->
@@ -105,7 +111,7 @@ let elmLoopResilienceTests =
       let rt = ElmLoop.start prog 0
 
       rt.Dispatch 1  // effect=1, succeeds
-      wait ()
+      waitFor (fun () -> effCount.Value >= 1) 2000 |> ignore
       effCount.Value |> Expect.equal "effect 1 ran" 1
 
       rt.Dispatch 2  // effect=2, throws
@@ -113,7 +119,7 @@ let elmLoopResilienceTests =
       effCount.Value |> Expect.equal "effect 2 failed" 1
 
       rt.Dispatch 3  // effect=3, succeeds
-      wait ()
+      waitFor (fun () -> effCount.Value >= 2) 2000 |> ignore
       effCount.Value |> Expect.equal "effect 3 ran" 2
 
     testCase "Initial Render throws: starts with empty regions" <| fun _ ->
@@ -150,7 +156,7 @@ let elmLoopResilienceTests =
       rt.GetRegions() |> Expect.equal "regions rendered despite throw" [0]
 
       rt.Dispatch 1
-      wait ()
+      waitFor (fun () -> effCount.Value >= 1) 2000 |> ignore
       effCount.Value |> Expect.equal "effect fires" 1
       rt.GetModel() |> Expect.equal "model updated" 1
 
@@ -174,12 +180,12 @@ let elmLoopResilienceTests =
       let rt = ElmLoop.start prog 0
 
       rt.Dispatch 1  // all good, model=1
-      wait ()
+      waitFor (fun () -> effCount.Value >= 1) 2000 |> ignore
       rt.GetModel() |> Expect.equal "d1 model" 1
       effCount.Value |> Expect.equal "d1 effects" 1
 
       rt.Dispatch 2  // model=2, Render throws, regions preserved
-      wait ()
+      waitFor (fun () -> effCount.Value >= 2) 2000 |> ignore
       rt.GetModel() |> Expect.equal "d2 model" 2
       rt.GetRegions() |> Expect.equal "d2 regions preserved" [1]
 
@@ -188,7 +194,7 @@ let elmLoopResilienceTests =
       rt.GetModel() |> Expect.equal "d3 model unchanged" 2
 
       rt.Dispatch 4  // model=3, OnModelChanged doesn't throw (model=3, not 4)
-      wait ()
+      waitFor (fun () -> effCount.Value >= 3) 2000 |> ignore
       rt.GetModel() |> Expect.equal "d4 model" 3
 
       rt.Dispatch 5  // model=4, OnModelChanged throws; effect=5 throws
@@ -196,7 +202,7 @@ let elmLoopResilienceTests =
       rt.GetModel() |> Expect.equal "d5 model" 4
 
       rt.Dispatch 6  // model=5, all good
-      wait ()
+      waitFor (fun () -> effCount.Value >= 4) 2000 |> ignore
       rt.GetModel() |> Expect.equal "d6 model" 5
       // effects: d1(1)+d2(2)+d4(4)+d5(5 fails)+d6(6) = 4 successes
       effCount.Value |> Expect.equal "total effects" 4

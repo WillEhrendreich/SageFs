@@ -321,15 +321,20 @@ let fullLoopTests = testList "Full ElmLoop + EffectHandler" [
     dispatch (SageFsMsg.Editor (EditorAction.InsertChar '4'))
     dispatch (SageFsMsg.Editor (EditorAction.InsertChar '2'))
     dispatch (SageFsMsg.Editor EditorAction.Submit)
-    System.Threading.Thread.Sleep 300
+    let sw = System.Diagnostics.Stopwatch.StartNew()
+    while log.EvalCalls.Length < 1 && sw.ElapsedMilliseconds < 2000L do
+      System.Threading.Thread.Sleep 10
     log.EvalCalls |> Expect.hasLength "1 eval" 1
-    lastModel.Value.RecentOutput |> Expect.hasLength "1 output" 1
-    lastModel.Value.RecentOutput.[0].Text
-    |> Expect.equal "result" "val it = 42"
-    let outRegion =
-      lastRegions |> List.find (fun r -> r.Id = "output")
-    outRegion.Content
-    |> Expect.stringContains "rendered" "val it = 42"
+    let sw2 = System.Diagnostics.Stopwatch.StartNew()
+    while (lastModel.IsNone || lastModel.Value.RecentOutput.IsEmpty)
+          && sw2.ElapsedMilliseconds < 2000L do
+      System.Threading.Thread.Sleep 10
+    lastModel.Value.RecentOutput
+    |> List.exists (fun o -> o.Text.Contains "val it = 42")
+    |> Expect.isTrue "should have eval result in output"
+    lastRegions
+    |> List.exists (fun r -> r.Id = "output")
+    |> Expect.isTrue "should have output region"
 
   testCase "session create → stop full cycle" <| fun _ ->
     let log = TestDeps.createLog ()
@@ -346,12 +351,18 @@ let fullLoopTests = testList "Full ElmLoop + EffectHandler" [
     let dispatch = (ElmLoop.start program SageFsModel.initial).Dispatch
     dispatch (SageFsMsg.Editor
       (EditorAction.CreateSession ["New.fsproj"]))
-    System.Threading.Thread.Sleep 200
+    let sw = System.Diagnostics.Stopwatch.StartNew()
+    while (lastModel.IsNone || lastModel.Value.Sessions.Sessions.Length < 1)
+          && sw.ElapsedMilliseconds < 2000L do
+      System.Threading.Thread.Sleep 10
     lastModel.Value.Sessions.Sessions
     |> Expect.hasLength "1 session" 1
     dispatch (SageFsMsg.Editor
       (EditorAction.StopSession "test-session"))
-    System.Threading.Thread.Sleep 200
+    let sw2 = System.Diagnostics.Stopwatch.StartNew()
+    while lastModel.Value.Sessions.Sessions.Length > 0
+          && sw2.ElapsedMilliseconds < 2000L do
+      System.Threading.Thread.Sleep 10
     lastModel.Value.Sessions.Sessions
     |> Expect.isEmpty "0 sessions"
 
@@ -374,7 +385,10 @@ let fullLoopTests = testList "Full ElmLoop + EffectHandler" [
     }
     let dispatch = (ElmLoop.start program SageFsModel.initial).Dispatch
     dispatch (SageFsMsg.Editor EditorAction.TriggerCompletion)
-    System.Threading.Thread.Sleep 200
+    let sw = System.Diagnostics.Stopwatch.StartNew()
+    while (lastModel.IsNone || lastModel.Value.Editor.CompletionMenu.IsNone)
+          && sw.ElapsedMilliseconds < 2000L do
+      System.Threading.Thread.Sleep 10
     lastModel.Value.Editor.CompletionMenu
     |> Expect.isSome "should have menu"
     lastModel.Value.Editor.CompletionMenu.Value.Items

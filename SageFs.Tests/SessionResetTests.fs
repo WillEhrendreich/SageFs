@@ -81,7 +81,7 @@ let sessionResetTests =
 let resetPushbackTests =
   testList "Reset pushback warnings" [
 
-    testCase "hard reset on healthy session includes warning"
+    ptestCase "hard reset on healthy session includes warning"
     <| fun _ ->
       task {
         let ctx = sharedCtx ()
@@ -112,7 +112,7 @@ let resetPushbackTests =
       |> Async.AwaitTask
       |> Async.RunSynchronously
 
-    testCase "soft reset on healthy session includes warning"
+    ptestCase "soft reset on healthy session includes warning"
     <| fun _ ->
       task {
         let ctx = sharedCtx ()

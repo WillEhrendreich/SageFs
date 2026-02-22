@@ -40,8 +40,10 @@ export class SageFsClient {
 
   async isRunning(): Promise<boolean> {
     try {
+      // Any response (even 500) means the daemon is alive.
+      // /health may return 500 if no session matches, but the daemon IS running.
       const resp = await this.httpGet("/health", 3000);
-      return resp.statusCode === 200;
+      return resp.statusCode > 0;
     } catch {
       return false;
     }
@@ -51,7 +53,8 @@ export class SageFsClient {
     try {
       const resp = await this.httpGet("/health", 3000);
       if (resp.statusCode !== 200) {
-        return { connected: false };
+        // Daemon is alive but no session matched — still connected
+        return { connected: true, healthy: false, status: "no session" };
       }
       const parsed = JSON.parse(resp.body);
       return {

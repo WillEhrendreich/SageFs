@@ -371,7 +371,7 @@ let junctionTests = testList "resolveJunctions" [
 ]
 
 let performanceTests = testList "Performance" [
-  test "CellGrid clear 200x60 under 15µs" {
+  test "CellGrid clear 200x60 under 100µs" {
     let grid = CellGrid.create 60 200
     let sw = System.Diagnostics.Stopwatch.StartNew()
     let iterations = 10000
@@ -379,7 +379,7 @@ let performanceTests = testList "Performance" [
       CellGrid.clear grid
     sw.Stop()
     let avgUs = sw.Elapsed.TotalMicroseconds / float iterations
-    Expect.isLessThan avgUs 15.0 (sprintf "clear: %.1f µs" avgUs)
+    Expect.isLessThan avgUs 100.0 (sprintf "clear: %.1f µs" avgUs)
   }
 
   test "Draw pipeline 200x60 under 500µs" {

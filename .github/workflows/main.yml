@@ -27,5 +27,5 @@ jobs:
       run: dotnet build
       
     - name: Test
-      run: dotnet test --no-build --verbosity normal --filter "TestCategory!=Integration"
+      run: dotnet run --no-build --project SageFs.Tests -- --summary
       timeout-minutes: 10

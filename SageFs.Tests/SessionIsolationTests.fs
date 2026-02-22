@@ -277,21 +277,21 @@ module WorkingDirRoutingPriority =
       let ctx = mkCtx [s1;s2] (Map.ofList ["sage-id",dummyProxy;"harmony-id",dummyProxy])
       setActiveSessionId ctx "mcp" "sage-id"
       let! resolved = resolveSessionId ctx "mcp" None (Some @"C:\Code\Repos\Harmony")
-      Expect.equal resolved "harmony-id" "should route to Harmony based on workingDirectory"
+      resolved |> Expect.equal "should route to Harmony based on workingDirectory" "harmony-id"
     }
     testTask "workingDirectory routes correctly when no cached session" {
       let s1 = mkInfo "sage-id" @"C:\Code\Repos\SageFs"
       let s2 = mkInfo "harmony-id" @"C:\Code\Repos\Harmony"
       let ctx = mkCtx [s1;s2] (Map.ofList ["sage-id",dummyProxy;"harmony-id",dummyProxy])
       let! resolved = resolveSessionId ctx "mcp" None (Some @"C:\Code\Repos\Harmony")
-      Expect.equal resolved "harmony-id" "should route to Harmony via workingDirectory"
+      resolved |> Expect.equal "should route to Harmony via workingDirectory" "harmony-id"
     }
     testTask "explicit sessionId always wins over workingDirectory" {
       let s1 = mkInfo "sage-id" @"C:\Code\Repos\SageFs"
       let s2 = mkInfo "harmony-id" @"C:\Code\Repos\Harmony"
       let ctx = mkCtx [s1;s2] (Map.ofList ["sage-id",dummyProxy;"harmony-id",dummyProxy])
       let! resolved = resolveSessionId ctx "mcp" (Some "sage-id") (Some @"C:\Code\Repos\Harmony")
-      Expect.equal resolved "sage-id" "explicit sessionId takes priority"
+      resolved |> Expect.equal "explicit sessionId takes priority" "sage-id"
     }
     testTask "workingDirectory updates the cached session" {
       let s1 = mkInfo "sage-id" @"C:\Code\Repos\SageFs"
@@ -299,14 +299,14 @@ module WorkingDirRoutingPriority =
       let ctx = mkCtx [s1;s2] (Map.ofList ["sage-id",dummyProxy;"harmony-id",dummyProxy])
       setActiveSessionId ctx "mcp" "sage-id"
       let! _ = resolveSessionId ctx "mcp" None (Some @"C:\Code\Repos\Harmony")
-      Expect.equal (activeSessionId ctx "mcp") "harmony-id" "cached session should update"
+      activeSessionId ctx "mcp" |> Expect.equal "cached session should update" "harmony-id"
     }
     testTask "falls back to cached session when workingDirectory is None" {
       let s1 = mkInfo "sage-id" @"C:\Code\Repos\SageFs"
       let ctx = mkCtx [s1] (Map.ofList ["sage-id",dummyProxy])
       setActiveSessionId ctx "mcp" "sage-id"
       let! resolved = resolveSessionId ctx "mcp" None None
-      Expect.equal resolved "sage-id" "should fall back to cached when no workingDirectory"
+      resolved |> Expect.equal "should fall back to cached when no workingDirectory" "sage-id"
     }
   ]
 

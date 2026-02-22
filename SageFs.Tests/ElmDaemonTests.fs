@@ -79,8 +79,9 @@ let elmDaemonTests =
           SageFsMsg.Event (
             SageFsEvent.EvalStarted ("s", "code"))
         let model, effects = program.Update msg SageFsModel.initial
-        model
-        |> Expect.equal "model should be unchanged for EvalStarted" SageFsModel.initial
+        model.RecentOutput
+        |> List.length
+        |> Expect.equal "EvalStarted should add one output entry" 1
 
         effects
         |> List.length

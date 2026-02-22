@@ -34,9 +34,9 @@ let terminalInputTests = testList "TerminalInput" [
     Expect.equal result (Some TerminalCommand.Quit) "Ctrl+Q quits"
   }
 
-  test "Ctrl+C cancels" {
+  test "Ctrl+C is not mapped (reserved for terminal)" {
     let result = TerminalInput.mapKey (key '\x03' ConsoleKey.C 1)
-    Expect.equal result (Some (TerminalCommand.Action EditorAction.Cancel)) "Ctrl+C cancels"
+    Expect.isNone result "Ctrl+C not mapped in default keymap"
   }
 
   test "Arrow up moves cursor" {
