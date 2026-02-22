@@ -1,26 +1,25 @@
 module SageFs.Server.EventStore
 
+#nowarn "44" // Marten deprecates GeneratedCodeMode, but CritterStackDefaults() requires DI
+
 open System
 open Marten
 open SageFs.Features.Events
 
 /// Configure a Marten DocumentStore for SageFs event sourcing.
-/// Temporarily redirects Console.Out during init to suppress JasperFx assembly reference warnings.
+/// Uses Auto code gen mode to avoid eager assembly scanning that triggers
+/// FileNotFoundException for Ionide.ProjInfo's transitive Microsoft.Build deps.
 let configureStore (connectionString: string) : IDocumentStore =
-  let origOut = System.Console.Out
-  System.Console.SetOut(System.IO.TextWriter.Null)
-  try
-    DocumentStore.For(fun (o: StoreOptions) ->
-      o.Connection(connectionString)
-      o.Events.StreamIdentity <- JasperFx.Events.StreamIdentity.AsString
-      o.AutoCreateSchemaObjects <- JasperFx.AutoCreate.All
-      o.UseSystemTextJsonForSerialization(
-        configure = fun opts ->
-          opts.Converters.Add(System.Text.Json.Serialization.JsonFSharpConverter())
-      )
+  DocumentStore.For(fun (o: StoreOptions) ->
+    o.Connection(connectionString)
+    o.Events.StreamIdentity <- JasperFx.Events.StreamIdentity.AsString
+    o.AutoCreateSchemaObjects <- JasperFx.AutoCreate.All
+    o.GeneratedCodeMode <- JasperFx.CodeGeneration.TypeLoadMode.Auto
+    o.UseSystemTextJsonForSerialization(
+      configure = fun opts ->
+        opts.Converters.Add(System.Text.Json.Serialization.JsonFSharpConverter())
     )
-  finally
-    System.Console.SetOut(origOut)
+  )
 
 /// Append events to a session stream with retry on version conflict
 let appendEvents (store: IDocumentStore) (streamId: string) (events: SageFsEvent list) =
