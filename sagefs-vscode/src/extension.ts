@@ -37,7 +37,9 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("sagefs.stop", () => stopDaemon()),
     vscode.commands.registerCommand("sagefs.openDashboard", () => openDashboard()),
     vscode.commands.registerCommand("sagefs.resetSession", () => resetSession()),
-    vscode.commands.registerCommand("sagefs.hardReset", () => hardReset())
+    vscode.commands.registerCommand("sagefs.hardReset", () => hardReset()),
+    vscode.commands.registerCommand("sagefs.createSession", () => createSession()),
+    vscode.commands.registerCommand("sagefs.clearResults", () => clearAllDecorations())
   );
 
   // CodeLens provider — shows "▶ Eval" at ;; boundaries
@@ -92,6 +94,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
 export function deactivate(): void {
   diagnosticsListener?.dispose();
+  clearAllDecorations();
   // Don't kill the daemon — it's a shared resource
 }
 
@@ -112,7 +115,6 @@ async function evalSelection(): Promise<void> {
   if (!editor.selection.isEmpty) {
     code = editor.document.getText(editor.selection);
   } else {
-    // Send current line (or block between ;; delimiters)
     code = getCodeBlock(editor);
   }
 
@@ -126,27 +128,40 @@ async function evalSelection(): Promise<void> {
   }
 
   const workDir = getWorkingDirectory();
-  outputChannel.show(true);
-  outputChannel.appendLine(`──── eval ────`);
-  outputChannel.appendLine(code);
-  outputChannel.appendLine("");
 
-  try {
-    const result = await client.evalCode(code, workDir);
+  // Show progress during eval
+  await vscode.window.withProgress(
+    {
+      location: vscode.ProgressLocation.Window,
+      title: "SageFs: evaluating...",
+    },
+    async () => {
+      outputChannel.appendLine(`──── eval ────`);
+      outputChannel.appendLine(code);
+      outputChannel.appendLine("");
 
-    if (!result.success) {
-      outputChannel.appendLine(`❌ Error:\n${result.error ?? result.result ?? "Unknown error"}`);
-      showInlineDiagnostic(editor, result.error ?? result.result ?? "Error");
-    } else {
-      outputChannel.appendLine(`${result.result ?? ""}`);
-      showInlineResult(editor, result.result ?? "");
+      try {
+        const result = await client.evalCode(code, workDir);
+
+        if (!result.success) {
+          const errMsg = result.error ?? result.result ?? "Unknown error";
+          outputChannel.appendLine(`❌ Error:\n${errMsg}`);
+          outputChannel.show(true);
+          showInlineDiagnostic(editor, errMsg);
+        } else {
+          const output = result.result ?? "";
+          outputChannel.appendLine(output);
+          showInlineResult(editor, output);
+        }
+      } catch (err) {
+        outputChannel.appendLine(`❌ Connection error: ${err}`);
+        outputChannel.show(true);
+        vscode.window.showErrorMessage(
+          "Cannot reach SageFs daemon. Is it running?"
+        );
+      }
     }
-  } catch (err) {
-    outputChannel.appendLine(`❌ Connection error: ${err}`);
-    vscode.window.showErrorMessage(
-      "Cannot reach SageFs daemon. Is it running?"
-    );
-  }
+  );
 }
 
 async function evalFile(): Promise<void> {
@@ -229,6 +244,33 @@ async function hardReset(): Promise<void> {
   const result = await client.hardReset(true);
   vscode.window.showInformationMessage(`SageFs: ${result.result ?? result.error ?? "Hard reset complete"}`);
   refreshStatus();
+}
+
+async function createSession(): Promise<void> {
+  if (!(await ensureRunning())) {
+    return;
+  }
+
+  const projPath = await findProject();
+  if (!projPath) {
+    vscode.window.showErrorMessage("No .fsproj found. Open an F# project first.");
+    return;
+  }
+
+  const workDir = getWorkingDirectory() ?? ".";
+
+  await vscode.window.withProgress(
+    { location: vscode.ProgressLocation.Notification, title: "SageFs: Creating session..." },
+    async () => {
+      const result = await client.createSession(projPath, workDir);
+      if (result.success) {
+        vscode.window.showInformationMessage(`SageFs: Session created for ${projPath}`);
+      } else {
+        vscode.window.showErrorMessage(`SageFs: ${result.error ?? "Failed to create session"}`);
+      }
+      refreshStatus();
+    }
+  );
 }
 
 // ── Daemon Lifecycle ───────────────────────────────────────────
@@ -455,13 +497,14 @@ async function findProject(): Promise<string | undefined> {
   });
 }
 
-let inlineDecoration: vscode.TextEditorDecorationType | undefined;
+// ── Inline Result Decorations ──────────────────────────────────
+
+/** Map from end-of-block line → decoration type, so each block keeps its own result */
+const blockDecorations = new Map<number, vscode.TextEditorDecorationType>();
 
 function showInlineResult(editor: vscode.TextEditor, text: string): void {
-  clearInlineDecorations();
-
-  const firstLine = text.split("\n")[0]?.trim() ?? "";
-  if (!firstLine) {
+  const trimmed = text.trim();
+  if (!trimmed) {
     return;
   }
 
@@ -469,25 +512,46 @@ function showInlineResult(editor: vscode.TextEditor, text: string): void {
     ? editor.selection.active.line
     : editor.selection.end.line;
 
-  inlineDecoration = vscode.window.createTextEditorDecorationType({
-    after: {
-      contentText: `  // → ${firstLine}`,
-      color: new vscode.ThemeColor("editorCodeLens.foreground"),
-      fontStyle: "italic",
-    },
-  });
+  // Clear previous decoration for this block
+  clearBlockDecoration(line);
 
-  editor.setDecorations(inlineDecoration, [
-    new vscode.Range(line, 0, line, 0),
-  ]);
+  const lines = trimmed.split("\n");
+  const firstLine = lines[0] ?? "";
 
-  // Auto-clear after 10 seconds
-  setTimeout(() => clearInlineDecorations(), 10000);
+  // Single-line result: show inline after the ;;
+  if (lines.length <= 1) {
+    const deco = vscode.window.createTextEditorDecorationType({
+      after: {
+        contentText: `  // → ${firstLine}`,
+        color: new vscode.ThemeColor("editorCodeLens.foreground"),
+        fontStyle: "italic",
+      },
+    });
+    editor.setDecorations(deco, [new vscode.Range(line, 0, line, 0)]);
+    blockDecorations.set(line, deco);
+  } else {
+    // Multi-line result: show first line inline, rest below via gutter annotation
+    const summary = lines.length <= 4
+      ? lines.join("  │  ")
+      : `${firstLine}  │  ... (${lines.length} lines)`;
+
+    const deco = vscode.window.createTextEditorDecorationType({
+      after: {
+        contentText: `  // → ${summary}`,
+        color: new vscode.ThemeColor("editorCodeLens.foreground"),
+        fontStyle: "italic",
+      },
+      isWholeLine: true,
+    });
+    editor.setDecorations(deco, [new vscode.Range(line, 0, line, 0)]);
+    blockDecorations.set(line, deco);
+  }
+
+  // Auto-clear after 30 seconds
+  setTimeout(() => clearBlockDecoration(line), 30000);
 }
 
 function showInlineDiagnostic(editor: vscode.TextEditor, text: string): void {
-  clearInlineDecorations();
-
   const firstLine = text.split("\n")[0]?.trim() ?? "";
   if (!firstLine) {
     return;
@@ -497,26 +561,34 @@ function showInlineDiagnostic(editor: vscode.TextEditor, text: string): void {
     ? editor.selection.active.line
     : editor.selection.end.line;
 
-  inlineDecoration = vscode.window.createTextEditorDecorationType({
+  clearBlockDecoration(line);
+
+  const deco = vscode.window.createTextEditorDecorationType({
     after: {
       contentText: `  // ❌ ${firstLine}`,
       color: new vscode.ThemeColor("errorForeground"),
       fontStyle: "italic",
     },
   });
+  editor.setDecorations(deco, [new vscode.Range(line, 0, line, 0)]);
+  blockDecorations.set(line, deco);
 
-  editor.setDecorations(inlineDecoration, [
-    new vscode.Range(line, 0, line, 0),
-  ]);
-
-  setTimeout(() => clearInlineDecorations(), 15000);
+  setTimeout(() => clearBlockDecoration(line), 30000);
 }
 
-function clearInlineDecorations(): void {
-  if (inlineDecoration) {
-    inlineDecoration.dispose();
-    inlineDecoration = undefined;
+function clearBlockDecoration(line: number): void {
+  const existing = blockDecorations.get(line);
+  if (existing) {
+    existing.dispose();
+    blockDecorations.delete(line);
   }
+}
+
+function clearAllDecorations(): void {
+  for (const [, deco] of blockDecorations) {
+    deco.dispose();
+  }
+  blockDecorations.clear();
 }
 
 function sleep(ms: number): Promise<void> {

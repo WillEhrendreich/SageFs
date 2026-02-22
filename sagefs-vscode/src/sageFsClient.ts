@@ -120,6 +120,39 @@ export class SageFsClient {
     }
   }
 
+  /** GET /api/sessions — list all sessions */
+  async listSessions(): Promise<{ sessions: Array<{ id: string; name?: string; workingDirectory: string; status: string }> }> {
+    try {
+      const resp = await this.httpGet("/api/sessions", 5000);
+      if (resp.statusCode === 200) {
+        const parsed = JSON.parse(resp.body);
+        return { sessions: Array.isArray(parsed) ? parsed : [] };
+      }
+      return { sessions: [] };
+    } catch {
+      return { sessions: [] };
+    }
+  }
+
+  /** POST /api/sessions/create — create a new session for a project */
+  async createSession(projects: string, workingDirectory: string): Promise<EvalResult> {
+    try {
+      const resp = await this.httpPost(
+        "/api/sessions/create",
+        JSON.stringify({ projects, working_directory: workingDirectory }),
+        30000
+      );
+      const parsed = JSON.parse(resp.body);
+      return {
+        success: parsed.success ?? (resp.statusCode < 400),
+        result: parsed.message ?? parsed.sessionId ?? "Session created",
+        error: parsed.error,
+      };
+    } catch (err) {
+      return { success: false, error: String(err) };
+    }
+  }
+
   private httpGet(
     path: string,
     timeout: number
