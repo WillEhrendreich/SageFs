@@ -12,6 +12,7 @@ open Microsoft.AspNetCore.Hosting.Server.Features
 open Microsoft.Extensions.DependencyInjection
 open Microsoft.Extensions.Logging
 open SageFs.WorkerProtocol
+open SageFs.Core
 
 module WorkerHttpTransport =
 
@@ -52,6 +53,7 @@ module WorkerHttpTransport =
     (handler: WorkerMessage -> Async<WorkerResponse>)
     (hotReloadStateRef: HotReloadState.T ref)
     (projectFiles: string list)
+    (getWarmupContext: unit -> WarmupContext)
     (port: int)
     : Task<HttpWorkerServer> =
     task {
@@ -120,6 +122,13 @@ module WorkerHttpTransport =
 
       app.MapPost("/shutdown", Func<HttpContext, Task>(fun ctx ->
         respond' ctx WorkerMessage.Shutdown)) |> ignore
+
+      // Session context endpoint
+      app.MapGet("/warmup-context", Func<HttpContext, Task>(fun ctx -> task {
+        let wCtx = getWarmupContext ()
+        ctx.Response.ContentType <- "application/json"
+        do! ctx.Response.WriteAsync(Serialization.serialize wCtx)
+      })) |> ignore
 
       // Hot-reload state endpoints
       app.MapGet("/hotreload", Func<HttpContext, Task>(fun ctx -> task {

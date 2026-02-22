@@ -70,6 +70,7 @@
         <Compile Include="SyntaxHighlightTests.fs" />
         <Compile Include="VtInputParserTests.fs" />
         <Compile Include="HttpApiIntegrationTests.fs" />
+        <Compile Include="WarmupContextTests.fs" />
         <Compile Include="Program.fs" />
     </ItemGroup>
 

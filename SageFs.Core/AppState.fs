@@ -11,6 +11,7 @@ open SageFs.Features
 open SageFs.ProjectLoading
 open SageFs.Utils
 open SageFs.WarmUp
+open SageFs.Core
 
 type FilePath = string
 
@@ -94,6 +95,7 @@ type AppState = {
   Custom: Map<string, obj>
   Diagnostics: Features.DiagnosticsStore.T
   WarmupFailures: WarmupFailure list
+  WarmupContext: WarmupContext
   HotReloadState: HotReloadState.T
 }
 
@@ -146,6 +148,7 @@ type internal QueryCommand =
   | QueryGetEvalStats of AsyncReplyChannel<Affordances.EvalStats>
   | QueryGetStartupConfig of AsyncReplyChannel<StartupConfig option>
   | QueryGetWarmupFailures of AsyncReplyChannel<WarmupFailure list>
+  | QueryGetWarmupContext of AsyncReplyChannel<WarmupContext>
   | QueryGetStatusMessage of AsyncReplyChannel<string option>
   | QueryAutocomplete of text: string * caret: int * word: string * AsyncReplyChannel<list<AutoCompletion.CompletionItem>>
   | QueryGetDiagnostics of text: string * AsyncReplyChannel<Diagnostics.Diagnostic array>
@@ -317,6 +320,7 @@ let createFsiSession (logger: ILogger) (outStream: TextWriter) (useAsp: bool) (s
     let openedNamespaces = System.Collections.Generic.HashSet<string>()
     let namesToOpen = System.Collections.Generic.List<string>()
     let moduleNames = System.Collections.Generic.HashSet<string>()
+    let loadedAssemblies = System.Collections.Generic.List<LoadedAssembly>()
 
     // Phase 1: Collect namespaces from source files
     let allFsFiles =
@@ -402,6 +406,13 @@ let createFsiSession (logger: ILogger) (outStream: TextWriter) (useAsp: bool) (s
           if openedNamespaces.Add(m) then
             namesToOpen.Add(m)
             moduleNames.Add(m) |> ignore
+
+        loadedAssemblies.Add({
+          Name = asm.GetName().Name
+          Path = project.TargetPath
+          NamespaceCount = rootNamespaces.Length
+          ModuleCount = topLevelModules.Length
+        } : LoadedAssembly)
       with ex ->
         logger.LogDebug (sprintf "Could not analyze %s: %s" project.TargetPath ex.Message)
     reflectionAlc.Unload()
@@ -448,9 +459,24 @@ let createFsiSession (logger: ILogger) (outStream: TextWriter) (useAsp: bool) (s
 
     let warmupFailures =
       failed |> List.map (fun (name, err) -> { Name = name; Error = err })
+
+    let warmupCtx = {
+      SourceFilesScanned = fileCount
+      AssembliesLoaded = Seq.toList loadedAssemblies
+      NamespacesOpened =
+        succeeded
+        |> List.map (fun name ->
+          { Name = name
+            IsModule = moduleNames.Contains(name)
+            Source = "warmup" })
+      FailedOpens = failed
+      WarmupDurationMs = sw.ElapsedMilliseconds
+      StartedAt = System.DateTimeOffset.UtcNow
+    }
+
     logger.LogInfo (sprintf "  Warm-up complete in %dms" sw.ElapsedMilliseconds)
     onProgress(4, 4, sprintf "Warm-up complete in %dms" sw.ElapsedMilliseconds)
-    return fsiSession, recorder, args, warmupFailures
+    return fsiSession, recorder, args, warmupFailures, warmupCtx
   }
 
 let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStream useAsp (originalSln: Solution) (shadowDir: string option) (onEvent: Events.SageFsEvent -> unit) (sln: Solution) =
@@ -479,6 +505,12 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
         return! loop snapshot
       | QueryGetWarmupFailures reply ->
         reply.Reply snapshot.WarmupFailures
+        return! loop snapshot
+      | QueryGetWarmupContext reply ->
+        let ctx =
+          if obj.ReferenceEquals(snapshot.AppState, null) then WarmupContext.empty
+          else snapshot.AppState.WarmupContext
+        reply.Reply ctx
         return! loop snapshot
       | QueryGetStatusMessage reply ->
         reply.Reply snapshot.StatusMessage
@@ -634,9 +666,9 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
                 AppState = st; SessionState = SessionState.WarmingUp; EvalStats = evalStats
                 StartupConfig = st.StartupConfig; WarmupFailures = st.WarmupFailures
                 StatusMessage = Some (sprintf "[%d/%d] %s" s t msg) })
-            let! newSession, newRecorder, _, warmupFailures = createFsiSession logger outStream useAsp st.Solution softResetCts.Token onProgress
+            let! newSession, newRecorder, _, warmupFailures, warmupCtx = createFsiSession logger outStream useAsp st.Solution softResetCts.Token onProgress
             softResetCts.Dispose()
-            let newSt = { st with Session = newSession; OutStream = newRecorder; Diagnostics = Features.DiagnosticsStore.empty; WarmupFailures = warmupFailures }
+            let newSt = { st with Session = newSession; OutStream = newRecorder; Diagnostics = Features.DiagnosticsStore.empty; WarmupFailures = warmupFailures; WarmupContext = warmupCtx }
             logger.LogInfo "✅ FSI session reset complete"
             let sessionState'' = SessionState.Ready
             publishSnapshot newSt sessionState'' evalStats
@@ -821,7 +853,7 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
               publishSnapshot st failedState evalStats
               reply.Reply(Error (SageFsError.HardResetFailed msg))
               return! loop st middleware failedState evalStats
-            | Ok (newSession, newRecorder, _, warmupFailures) ->
+            | Ok (newSession, newRecorder, _, warmupFailures, warmupCtx) ->
             warmupCts.Dispose()
             let newSt =
               { st with
@@ -830,7 +862,8 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
                   Solution = newSln
                   ShadowDir = Some newShadowDir
                   Diagnostics = Features.DiagnosticsStore.empty
-                  WarmupFailures = warmupFailures }
+                  WarmupFailures = warmupFailures
+                  WarmupContext = warmupCtx }
             logger.LogInfo "✅ Hard reset complete"
             let sessionState'' = SessionState.Ready
             publishSnapshot newSt sessionState'' evalStats
@@ -878,7 +911,7 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
               StartupConfig = None
               WarmupFailures = []
               StatusMessage = Some (sprintf "[%d/%d] %s" s t msg) })
-          let! fsiSession, recorder, args, warmupFailures = createFsiSession logger outStream useAsp sln initCts.Token onProgress
+          let! fsiSession, recorder, args, warmupFailures, warmupCtx = createFsiSession logger outStream useAsp sln initCts.Token onProgress
           initCts.Dispose()
           
           // Evaluate startup profile if found
@@ -909,6 +942,7 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
             Custom = initCustomData
             Diagnostics = Features.DiagnosticsStore.empty
             WarmupFailures = warmupFailures
+            WarmupContext = warmupCtx
             HotReloadState = HotReloadState.empty
             StartupConfig = Some {
               CommandLineArgs = args
@@ -945,6 +979,7 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
             Custom = initCustomData
             Diagnostics = Features.DiagnosticsStore.empty
             WarmupFailures = []
+            WarmupContext = WarmupContext.empty
             StartupConfig = None
             HotReloadState = HotReloadState.empty
           }
@@ -1042,6 +1077,9 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
   let getWarmupFailures () =
     queryActor.PostAndAsyncReply(fun reply -> QueryGetWarmupFailures reply)
     |> Async.RunSynchronously
+  let getWarmupContext () =
+    queryActor.PostAndAsyncReply(fun reply -> QueryGetWarmupContext reply)
+    |> Async.RunSynchronously
   let getStartupConfig () =
     queryActor.PostAndAsyncReply(fun reply -> QueryGetStartupConfig reply)
     |> Async.RunSynchronously
@@ -1052,4 +1090,4 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
     actor.PostAndAsyncReply(fun reply -> CancelEval reply)
     |> Async.RunSynchronously
 
-  actor, diagnosticsChangedEvent.Publish, cancelCurrentEval, getSessionState, getEvalStats, getWarmupFailures, getStartupConfig, getStatusMessage
+  actor, diagnosticsChangedEvent.Publish, cancelCurrentEval, getSessionState, getEvalStats, getWarmupFailures, getWarmupContext, getStartupConfig, getStatusMessage

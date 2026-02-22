@@ -5,6 +5,7 @@ open System.Text
 open System.Text.Json
 open Expecto
 open SageFs
+open SageFs.Core
 open SageFs.Server
 
 let private startTestServer () = task {
@@ -17,7 +18,7 @@ let private startTestServer () = task {
     @"C:\proj\src\Main.fs"
     @"C:\proj\tests\Tests.fs"
   ]
-  let! server = WorkerHttpTransport.startServer handler stateRef projectFiles 0
+  let! server = WorkerHttpTransport.startServer handler stateRef projectFiles (fun () -> WarmupContext.empty) 0
   return server, stateRef
 }
 

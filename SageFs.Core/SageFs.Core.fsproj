@@ -55,6 +55,7 @@
         <Compile Include="ConnectionTracker.fs" />
         <Compile Include="StartupProfile.fs" />
         <Compile Include="HotReloadState.fs" />
+        <Compile Include="WarmupContext.fs" />
         <Compile Include="FileWatcher.fs" />
         <Compile Include="AppState.fs" />
         <Compile Include="DevReload.fs" />

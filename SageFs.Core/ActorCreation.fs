@@ -1,5 +1,6 @@
 module SageFs.ActorCreation
 
+open SageFs.Core
 open SageFs.Middleware
 open SageFs.ProjectLoading
 open SageFs.AppState
@@ -44,6 +45,7 @@ type ActorResult = {
   GetSessionState: unit -> SessionState
   GetEvalStats: unit -> Affordances.EvalStats
   GetWarmupFailures: unit -> WarmupFailure list
+  GetWarmupContext: unit -> WarmupContext
   GetStartupConfig: unit -> StartupConfig option
   GetStatusMessage: unit -> string option
   ProjectDirectories: string list
@@ -81,11 +83,11 @@ let createActorImmediate a =
   AspireSetup.configureAspireIfNeeded a.Logger sln
 
   let customData = a.InitFunctions |> Seq.map (fun fn -> fn sln) |> Map.ofSeq
-  let appActor, diagnosticsChanged, cancelEval, getSessionState, getEvalStats, getWarmupFailures, getStartupConfig, getStatusMessage =
+  let appActor, diagnosticsChanged, cancelEval, getSessionState, getEvalStats, getWarmupFailures, getWarmupContext, getStartupConfig, getStatusMessage =
     mkAppStateActor a.Logger customData a.OutStream a.UseAsp originalSln shadowDir a.OnEvent sln
   let projDirs = projectDirectories originalSln
   let hotReloadStateRef = ref HotReloadState.empty
-  { Actor = appActor; DiagnosticsChanged = diagnosticsChanged; CancelEval = cancelEval; GetSessionState = getSessionState; GetEvalStats = getEvalStats; GetWarmupFailures = getWarmupFailures; GetStartupConfig = getStartupConfig; GetStatusMessage = getStatusMessage; ProjectDirectories = projDirs; HotReloadStateRef = hotReloadStateRef }
+  { Actor = appActor; DiagnosticsChanged = diagnosticsChanged; CancelEval = cancelEval; GetSessionState = getSessionState; GetEvalStats = getEvalStats; GetWarmupFailures = getWarmupFailures; GetWarmupContext = getWarmupContext; GetStartupConfig = getStartupConfig; GetStatusMessage = getStatusMessage; ProjectDirectories = projDirs; HotReloadStateRef = hotReloadStateRef }
 
 /// Phase 2: Add middleware — blocks until init() completes and the
 /// eval actor is ready to process messages in its main loop.

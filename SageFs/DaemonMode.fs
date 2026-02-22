@@ -3,6 +3,7 @@ module SageFs.Server.DaemonMode
 open System
 open System.Threading
 open SageFs
+open SageFs.Core
 open SageFs.Server
 open Falco
 open Falco.Routing
@@ -508,6 +509,17 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
           with _ -> return None
         | None -> return None
       })
+      (fun sessionId -> task {
+        match getWorkerBaseUrl sessionId with
+        | Some baseUrl ->
+          try
+            let client = new Net.Http.HttpClient()
+            let! resp = client.GetStringAsync(sprintf "%s/warmup-context" baseUrl)
+            let ctx = WorkerProtocol.Serialization.deserialize<WarmupContext> resp
+            return Some ctx
+          with _ -> return None
+        | None -> return None
+      })
 
   // Hot-reload proxy endpoints — forward to worker HTTP servers
   let hotReloadHttpClient = new Net.Http.HttpClient()
@@ -566,6 +578,9 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
       mapPost "/api/sessions/{sid}/hotreload/watch-project"
         (fun (r: RequestData) -> r.GetString("sid", ""))
         (fun sid -> fun ctx -> proxyPost sid "/hotreload/watch-project" ctx)
+      mapGet "/api/sessions/{sid}/warmup-context"
+        (fun (r: RequestData) -> r.GetString("sid", ""))
+        (fun sid -> fun ctx -> proxyGet sid "/warmup-context" ctx)
     ]
 
   let dashboardTask = task {

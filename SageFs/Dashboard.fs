@@ -10,6 +10,7 @@ open StarFederation.Datastar.FSharp
 open Microsoft.AspNetCore.Http
 open System.Text.RegularExpressions
 open SageFs
+open SageFs.Core
 open SageFs.Affordances
 
 module FalcoResponse = Falco.Response
@@ -1169,6 +1170,90 @@ let renderHotReloadEmpty =
     ]
   ]
 
+/// Render session context panel with warmup details (assemblies, namespaces, files).
+/// Uses HTML <details>/<summary> so it's collapsed by default.
+let renderSessionContextPanel (ctx: SessionContext) =
+  let summaryText = SessionContext.summary ctx
+
+  let assembliesSection =
+    Elem.details [] [
+      Elem.summary [ Attr.style "font-size: 0.75rem; cursor: pointer;" ] [
+        Text.raw (sprintf "📦 Assemblies (%d)" (ctx.Warmup.AssembliesLoaded |> List.length))
+      ]
+      Elem.ul [ Attr.style "margin: 2px 0; padding-left: 1.2em; font-size: 0.7rem;" ] [
+        for asm in ctx.Warmup.AssembliesLoaded do
+          Elem.li [] [ Text.raw (SessionContext.assemblyLine asm) ]
+      ]
+    ]
+
+  let namespacesSection =
+    let opened = ctx.Warmup.NamespacesOpened
+    let failed = ctx.Warmup.FailedOpens
+    Elem.details [] [
+      Elem.summary [ Attr.style "font-size: 0.75rem; cursor: pointer;" ] [
+        Text.raw (sprintf "📂 Namespaces (%d opened, %d failed)"
+          (opened |> List.length) (failed |> List.length))
+      ]
+      Elem.div [ Attr.style "font-size: 0.7rem;" ] [
+        Elem.ul [ Attr.style "margin: 2px 0; padding-left: 1.2em;" ] [
+          for b in opened do
+            Elem.li [] [ Elem.code [] [ Text.raw (SessionContext.openLine b) ] ]
+        ]
+        if not (List.isEmpty failed) then
+          Elem.div [ Attr.style "color: #e74c3c; margin-top: 0.3em;" ] [
+            Elem.strong [] [ Text.raw "Failed:" ]
+            Elem.ul [ Attr.style "margin: 2px 0; padding-left: 1.2em;" ] [
+              for (name, err) in failed do
+                Elem.li [] [ Text.raw (sprintf "✖ %s: %s" name err) ]
+            ]
+          ]
+      ]
+    ]
+
+  let filesSection =
+    Elem.details [] [
+      Elem.summary [ Attr.style "font-size: 0.75rem; cursor: pointer;" ] [
+        let loadedCount =
+          ctx.FileStatuses
+          |> List.filter (fun f -> f.Readiness = Loaded)
+          |> List.length
+        Text.raw (sprintf "📄 Files (%d/%d loaded)" loadedCount (ctx.FileStatuses |> List.length))
+      ]
+      Elem.ul [ Attr.style "margin: 2px 0; padding-left: 1.2em; font-size: 0.7rem;" ] [
+        for f in ctx.FileStatuses do
+          let color =
+            match f.Readiness with
+            | Loaded -> "#2ecc71"
+            | Stale -> "#f39c12"
+            | LoadFailed -> "#e74c3c"
+            | NotLoaded -> "#95a5a6"
+          Elem.li [ Attr.style (sprintf "color: %s" color) ] [
+            Text.raw (SessionContext.fileLine f)
+          ]
+      ]
+    ]
+
+  Elem.div [ Attr.id "session-context"; Attr.class' "panel" ] [
+    Elem.details [] [
+      Elem.summary [ Attr.style "cursor: pointer; font-weight: bold; font-size: 0.8rem;" ] [
+        Text.raw (sprintf "🔍 Session Context: %s" summaryText)
+      ]
+      Elem.div [ Attr.style "padding-left: 0.5em; margin-top: 0.3em;" ] [
+        assembliesSection
+        namespacesSection
+        filesSection
+      ]
+    ]
+  ]
+
+/// Render empty session context panel when no session is active.
+let renderSessionContextEmpty =
+  Elem.div [ Attr.id "session-context"; Attr.class' "panel" ] [
+    Elem.div [ Attr.style "font-size: 0.8rem; opacity: 0.6;" ] [
+      Text.raw "No session context"
+    ]
+  ]
+
 /// Create the SSE stream handler that pushes Elm state to the browser.
 let createStreamHandler
   (getSessionState: string -> SessionState)
@@ -1184,6 +1269,7 @@ let createStreamHandler
   (sessionThemes: Collections.Concurrent.ConcurrentDictionary<string, string>)
   (getStandbyInfo: unit -> Threading.Tasks.Task<StandbyInfo>)
   (getHotReloadState: string -> Threading.Tasks.Task<{| files: {| path: string; watched: bool |} list; watchedCount: int |} option>)
+  (getWarmupContext: string -> Threading.Tasks.Task<WarmupContext option>)
   : HttpHandler =
   fun ctx -> task {
     Response.sseStartResponse ctx |> ignore
@@ -1260,6 +1346,40 @@ let createStreamHandler
           do! ssePatchNode ctx renderHotReloadEmpty
       else
         do! ssePatchNode ctx renderHotReloadEmpty
+      // Push session context panel
+      if currentSessionId.Length > 0 then
+        try
+          let! wCtx = getWarmupContext currentSessionId
+          match wCtx with
+          | Some ctx' ->
+            let state = getSessionState currentSessionId
+            let hrState =
+              try (getHotReloadState currentSessionId).Result
+              with _ -> None
+            let fileStatuses =
+              match hrState with
+              | Some hr ->
+                hr.files |> List.map (fun f ->
+                  let readiness =
+                    ctx'.NamespacesOpened
+                    |> List.exists (fun b -> f.path.EndsWith(b.Name, StringComparison.OrdinalIgnoreCase))
+                    |> fun loaded -> if loaded then FileReadiness.Loaded else FileReadiness.NotLoaded
+                  { Path = f.path; Readiness = readiness; LastLoadedAt = None; IsWatched = f.watched })
+              | None -> []
+            let sCtx =
+              { SessionId = currentSessionId
+                ProjectNames = []
+                WorkingDir = getSessionWorkingDir currentSessionId
+                Status = SessionState.label (getSessionState currentSessionId)
+                Warmup = ctx'
+                FileStatuses = fileStatuses }
+            do! ssePatchNode ctx (renderSessionContextPanel sCtx)
+          | None ->
+            do! ssePatchNode ctx renderSessionContextEmpty
+        with _ ->
+          do! ssePatchNode ctx renderSessionContextEmpty
+      else
+        do! ssePatchNode ctx renderSessionContextEmpty
       match getElmRegions () with
       | Some regions ->
         // Dedup output region to avoid overwriting reset/clear (Bug #5)
@@ -1807,10 +1927,11 @@ let createEndpoints
   (sessionThemes: Collections.Concurrent.ConcurrentDictionary<string, string>)
   (getStandbyInfo: unit -> Threading.Tasks.Task<StandbyInfo>)
   (getHotReloadState: string -> Threading.Tasks.Task<{| files: {| path: string; watched: bool |} list; watchedCount: int |} option>)
+  (getWarmupContext: string -> Threading.Tasks.Task<WarmupContext option>)
   : HttpEndpoint list =
   [
     yield get "/dashboard" (FalcoResponse.ofHtml (renderShell version))
-    yield get "/dashboard/stream" (createStreamHandler getSessionState getStatusMsg getEvalStats getSessionWorkingDir getActiveSessionId getElmRegions stateChanged connectionTracker getPreviousSessions getAllSessions sessionThemes getStandbyInfo getHotReloadState)
+    yield get "/dashboard/stream" (createStreamHandler getSessionState getStatusMsg getEvalStats getSessionWorkingDir getActiveSessionId getElmRegions stateChanged connectionTracker getPreviousSessions getAllSessions sessionThemes getStandbyInfo getHotReloadState getWarmupContext)
     yield post "/dashboard/eval" (createEvalHandler evalCode)
     yield post "/dashboard/reset" (createResetHandler resetSession)
     yield post "/dashboard/hard-reset" (createResetHandler hardResetSession)
