@@ -93,6 +93,10 @@ module CellGrid =
     if inBounds grid row col then
       grid.Cells.[idx grid row col] <- cell
 
+  /// Unchecked set — caller must guarantee row/col are in bounds.
+  let inline setUnsafe (grid: CellGrid) row col (cell: Cell) =
+    grid.Cells.[row * grid.Cols + col] <- cell
+
   let get (grid: CellGrid) row col =
     if inBounds grid row col then grid.Cells.[idx grid row col]
     else Cell.empty
@@ -166,3 +170,24 @@ module CellGrid =
       if row < er then
         sb.AppendLine() |> ignore
     sb.ToString()
+
+/// Double-buffered grid pair — swap instead of clone each frame. Zero per-frame allocation.
+type DoubleBuffer = {
+  mutable Front: CellGrid
+  mutable Back: CellGrid
+}
+
+module DoubleBuffer =
+  let create rows cols =
+    { Front = CellGrid.create rows cols
+      Back = CellGrid.create rows cols }
+
+  /// Swap front↔back. Returns the new render target (Back).
+  let swap (db: DoubleBuffer) =
+    let tmp = db.Front
+    db.Front <- db.Back
+    db.Back <- tmp
+    db.Back
+
+  let clearBack (db: DoubleBuffer) =
+    CellGrid.clear db.Back

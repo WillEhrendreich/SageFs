@@ -33,22 +33,26 @@ module rec Draw =
 
   /// Write text with per-character syntax highlighting from ColorSpan overlays.
   /// Characters not covered by any span use the default fg color.
+  /// Spans are assumed sorted by Start and non-overlapping.
   let textHighlighted (dt: DrawTarget) (row: int) (col: int) (defaultFg: uint32) (bg: uint32) (attrs: CellAttrs) (spans: ColorSpan array) (s: string) =
     let absRow = dt.Clip.Row + row
     let absCol = dt.Clip.Col + col
     let maxCol = Rect.right dt.Clip
     if absRow < dt.Clip.Row || absRow >= Rect.bottom dt.Clip then () else
-    // Build per-character fg array
-    let len = s.Length
-    let fgs = Array.create len defaultFg
-    for span in spans do
-      let stop = min len (span.Start + span.Length)
-      for i in span.Start .. stop - 1 do
-        fgs.[i] <- span.Fg
     let mutable c = absCol
-    for i in 0 .. len - 1 do
+    let mutable spanIdx = 0
+    let mutable spanEnd = if spans.Length > 0 then spans.[0].Start + spans.[0].Length else 0
+    for i in 0 .. s.Length - 1 do
       if c < maxCol then
-        CellGrid.set dt.Grid absRow c { Char = s.[i]; Fg = fgs.[i]; Bg = bg; Attrs = attrs }
+        while spanIdx < spans.Length && i >= spans.[spanIdx].Start + spans.[spanIdx].Length do
+          spanIdx <- spanIdx + 1
+          if spanIdx < spans.Length then
+            spanEnd <- spans.[spanIdx].Start + spans.[spanIdx].Length
+        let fg =
+          if spanIdx < spans.Length && i >= spans.[spanIdx].Start && i < spanEnd then
+            spans.[spanIdx].Fg
+          else defaultFg
+        CellGrid.set dt.Grid absRow c { Char = s.[i]; Fg = fg; Bg = bg; Attrs = attrs }
       c <- c + 1
 
   let fill (dt: DrawTarget) (bg: uint32) =

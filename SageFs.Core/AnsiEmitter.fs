@@ -100,24 +100,33 @@ module AnsiEmitter =
 
   /// Diff-emit: only emit cells that differ between prev and current grid.
   /// Falls back to full emit when grids differ in size or >30% cells changed.
+  /// Count pass bails early when threshold is exceeded.
   let emitDiff (prev: CellGrid) (curr: CellGrid) (cursorRow: int) (cursorCol: int) : string =
     if prev.Rows <> curr.Rows || prev.Cols <> curr.Cols then
       emit curr cursorRow cursorCol
     else
       let total = curr.Cells.Length
+      let threshold = total * 30 / 100
+
+      // Count pass with early bail
       let mutable changedCount = 0
-      for i in 0 .. total - 1 do
+      let mutable i = 0
+      let mutable bailed = false
+      while i < total && not bailed do
         if curr.Cells.[i] <> prev.Cells.[i] then
           changedCount <- changedCount + 1
+          if changedCount > threshold then
+            bailed <- true
+        i <- i + 1
 
-      if changedCount = 0 then
+      if bailed then
+        emit curr cursorRow cursorCol
+      elif changedCount = 0 then
         let sb = StringBuilder(48)
         sb.Append(esc).Append("?25l") |> ignore
         sb.Append(esc).Append(cursorRow + 1).Append(';').Append(cursorCol + 1).Append('H') |> ignore
         sb.Append(esc).Append("?25h") |> ignore
         sb.ToString()
-      elif changedCount * 100 / total > 30 then
-        emit curr cursorRow cursorCol
       else
         let cols = curr.Cols
         let sb = StringBuilder(changedCount * 30)

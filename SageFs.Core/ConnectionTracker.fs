@@ -34,17 +34,27 @@ type ConnectionTracker() =
     |> Seq.toList
 
   member _.GetCounts(sessionId: string) =
-    let bySession = clients.Values |> Seq.filter (fun c -> c.SessionId = Some sessionId)
-    let browsers = bySession |> Seq.filter (fun c -> c.Kind = Browser) |> Seq.length
-    let mcpAgents = bySession |> Seq.filter (fun c -> c.Kind = McpAgent) |> Seq.length
-    let terminals = bySession |> Seq.filter (fun c -> c.Kind = Terminal) |> Seq.length
+    let mutable browsers = 0
+    let mutable mcpAgents = 0
+    let mutable terminals = 0
+    for kv in clients do
+      let c = kv.Value
+      if c.SessionId = Some sessionId then
+        match c.Kind with
+        | Browser -> browsers <- browsers + 1
+        | McpAgent -> mcpAgents <- mcpAgents + 1
+        | Terminal -> terminals <- terminals + 1
     {| Browsers = browsers; McpAgents = mcpAgents; Terminals = terminals |}
 
   member _.GetAllCounts() =
-    let all = clients.Values
-    let browsers = all |> Seq.filter (fun c -> c.Kind = Browser) |> Seq.length
-    let mcpAgents = all |> Seq.filter (fun c -> c.Kind = McpAgent) |> Seq.length
-    let terminals = all |> Seq.filter (fun c -> c.Kind = Terminal) |> Seq.length
+    let mutable browsers = 0
+    let mutable mcpAgents = 0
+    let mutable terminals = 0
+    for kv in clients do
+      match kv.Value.Kind with
+      | Browser -> browsers <- browsers + 1
+      | McpAgent -> mcpAgents <- mcpAgents + 1
+      | Terminal -> terminals <- terminals + 1
     {| Browsers = browsers; McpAgents = mcpAgents; Terminals = terminals |}
 
   member _.TotalCount = clients.Count
