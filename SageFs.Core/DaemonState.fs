@@ -34,17 +34,19 @@ module DaemonState =
     | :? ArgumentException -> false
     | :? InvalidOperationException -> false
 
+  let private httpClient = new System.Net.Http.HttpClient(Timeout = TimeSpan.FromSeconds(2.0))
+
   /// Probe the daemon's /api/daemon-info endpoint on the dashboard port.
   /// Falls back to probing /dashboard if /api/daemon-info isn't available
   /// (e.g. older daemon versions).
-  let probeDaemonHttp (mcpPort: int) : DaemonInfo option =
+  let probeDaemonHttpAsync (mcpPort: int) : Async<DaemonInfo option> = async {
     let dashboardPort = mcpPort + 1
     try
-      use client = new System.Net.Http.HttpClient(Timeout = TimeSpan.FromSeconds(2.0))
-      // Try the structured endpoint first
-      let resp = client.GetAsync(sprintf "http://localhost:%d/api/daemon-info" dashboardPort).Result
+      let! resp =
+        httpClient.GetAsync(sprintf "http://localhost:%d/api/daemon-info" dashboardPort)
+        |> Async.AwaitTask
       if resp.IsSuccessStatusCode then
-        let json = resp.Content.ReadAsStringAsync().Result
+        let! json = resp.Content.ReadAsStringAsync() |> Async.AwaitTask
         let doc = JsonDocument.Parse(json)
         let root = doc.RootElement
         let pid = root.GetProperty("pid").GetInt32()
@@ -63,7 +65,7 @@ module DaemonState =
           match root.TryGetProperty("workingDirectory") with
           | true, v -> v.GetString()
           | _ -> Environment.CurrentDirectory
-        Some {
+        return Some {
           Pid = pid
           Port = mcpPort
           StartedAt = startedAt
@@ -71,44 +73,59 @@ module DaemonState =
           Version = version
         }
       else
-        // Fallback: probe /dashboard (always existed) to confirm daemon is alive
-        let fallbackResp = client.GetAsync(sprintf "http://localhost:%d/dashboard" dashboardPort).Result
+        let! fallbackResp =
+          httpClient.GetAsync(sprintf "http://localhost:%d/dashboard" dashboardPort)
+          |> Async.AwaitTask
         if fallbackResp.IsSuccessStatusCode then
-          Some {
+          return Some {
             Pid = 0
             Port = mcpPort
             StartedAt = DateTime.UtcNow
             WorkingDirectory = Environment.CurrentDirectory
             Version = "unknown"
           }
-        else None
+        else return None
     with _ ->
-      // Last resort: try /dashboard in case /api/daemon-info threw
       try
-        use client = new System.Net.Http.HttpClient(Timeout = TimeSpan.FromSeconds(2.0))
-        let fallbackResp = client.GetAsync(sprintf "http://localhost:%d/dashboard" dashboardPort).Result
+        let! fallbackResp =
+          httpClient.GetAsync(sprintf "http://localhost:%d/dashboard" dashboardPort)
+          |> Async.AwaitTask
         if fallbackResp.IsSuccessStatusCode then
-          Some {
+          return Some {
             Pid = 0
             Port = mcpPort
             StartedAt = DateTime.UtcNow
             WorkingDirectory = Environment.CurrentDirectory
             Version = "unknown"
           }
-        else None
-      with _ -> None
+        else return None
+      with _ -> return None
+  }
+
+  /// Synchronous wrapper for callers that can't be async yet.
+  let probeDaemonHttp (mcpPort: int) : DaemonInfo option =
+    probeDaemonHttpAsync mcpPort |> Async.RunSynchronously
 
   /// Detect a running daemon by probing the default port via HTTP.
+  let readAsync () = probeDaemonHttpAsync defaultMcpPort
   let read () = probeDaemonHttp defaultMcpPort
 
   /// Detect a running daemon on a specific MCP port.
+  let readOnPortAsync (mcpPort: int) = probeDaemonHttpAsync mcpPort
   let readOnPort (mcpPort: int) = probeDaemonHttp mcpPort
 
   /// Request graceful shutdown via the dashboard API.
-  let requestShutdown (mcpPort: int) =
+  let private shutdownClient = new System.Net.Http.HttpClient(Timeout = TimeSpan.FromSeconds(5.0))
+
+  let requestShutdownAsync (mcpPort: int) = async {
     let dashboardPort = mcpPort + 1
     try
-      use client = new System.Net.Http.HttpClient(Timeout = TimeSpan.FromSeconds(5.0))
-      let resp = client.PostAsync(sprintf "http://localhost:%d/api/shutdown" dashboardPort, null).Result
-      resp.IsSuccessStatusCode
-    with _ -> false
+      let! resp =
+        shutdownClient.PostAsync(sprintf "http://localhost:%d/api/shutdown" dashboardPort, null)
+        |> Async.AwaitTask
+      return resp.IsSuccessStatusCode
+    with _ -> return false
+  }
+
+  let requestShutdown (mcpPort: int) =
+    requestShutdownAsync mcpPort |> Async.RunSynchronously

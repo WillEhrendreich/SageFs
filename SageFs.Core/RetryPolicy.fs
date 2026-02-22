@@ -25,9 +25,12 @@ let isVersionConflict (ex: exn) : bool =
     | _ -> false
   | _ -> false
 
-/// Calculate linear backoff: base * (attempt + 1)
+/// Calculate backoff with jitter: base * (attempt + 1) ± 50%
 let backoffMs (config: RetryConfig) (attempt: int) : int =
-  config.BaseDelayMs * (attempt + 1)
+  let baseDelay = config.BaseDelayMs * (attempt + 1)
+  let jitterRange = baseDelay / 2
+  if jitterRange = 0 then baseDelay
+  else baseDelay - jitterRange + System.Random.Shared.Next(jitterRange * 2)
 
 /// Whether more retries are available
 let shouldRetry (config: RetryConfig) (attempt: int) : bool =

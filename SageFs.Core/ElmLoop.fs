@@ -35,7 +35,7 @@ module ElmLoop =
     let lockObj = obj ()
 
     let rec dispatch (msg: 'Msg) =
-      let newModel, effects =
+      let snapshot, effects =
         lock lockObj (fun () ->
           try
             let m, effs = program.Update msg model
@@ -46,14 +46,14 @@ module ElmLoop =
             model, [])
 
       let regions =
-        try program.Render newModel
+        try program.Render snapshot
         with ex ->
           eprintfn "[ElmLoop] Render threw: %s" ex.Message
           lock lockObj (fun () -> latestRegions)
 
       lock lockObj (fun () -> latestRegions <- regions)
 
-      try program.OnModelChanged newModel regions
+      try program.OnModelChanged snapshot regions
       with ex -> eprintfn "[ElmLoop] OnModelChanged threw: %s" ex.Message
 
       for effect in effects do

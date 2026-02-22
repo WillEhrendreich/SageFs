@@ -39,7 +39,7 @@ module HttpWorkerClient =
 
   /// Create a SessionProxy backed by HTTP to the given base URL.
   let httpProxy (baseUrl: string) : SessionProxy =
-    let client = new HttpClient(BaseAddress = Uri(baseUrl))
+    let client = new HttpClient(BaseAddress = Uri(baseUrl), Timeout = TimeSpan.FromSeconds(30.0))
     fun msg ->
       async {
         let method, path, body = toRoute msg
