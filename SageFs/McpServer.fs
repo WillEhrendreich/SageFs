@@ -332,8 +332,15 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
             // POST /exec — send F# code to the session
             app.MapPost("/exec", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
                 withErrorHandling ctx (fun () -> task {
-                    let! code = readJsonProp ctx "code"
-                    let! result = SageFs.McpTools.sendFSharpCode mcpContext "cli-integrated" code SageFs.McpTools.OutputFormat.Text None None
+                    use reader = new System.IO.StreamReader(ctx.Request.Body)
+                    let! body = reader.ReadToEndAsync()
+                    let json = System.Text.Json.JsonDocument.Parse(body)
+                    let code = json.RootElement.GetProperty("code").GetString()
+                    let wd =
+                      if json.RootElement.TryGetProperty("working_directory") |> fst then
+                        Some (json.RootElement.GetProperty("working_directory").GetString())
+                      else None
+                    let! result = SageFs.McpTools.sendFSharpCode mcpContext "cli-integrated" code SageFs.McpTools.OutputFormat.Text None wd
                     do! jsonResponse ctx 200 {| success = true; result = result |}
                 }) :> Task
             ) |> ignore
@@ -398,8 +405,8 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                         let json = SageFs.McpAdapter.formatDiagnosticsStoreAsJson store
                         let sseEvent = sprintf "event: diagnostics\ndata: %s\n\n" json
                         let bytes = System.Text.Encoding.UTF8.GetBytes(sseEvent)
-                        ctx.Response.Body.WriteAsync(bytes).AsTask().Wait()
-                        ctx.Response.Body.FlushAsync().Wait()
+                        ctx.Response.Body.WriteAsync(bytes).AsTask()
+                        |> fun t -> t.ContinueWith(fun (_: Task) -> ctx.Response.Body.FlushAsync()) |> ignore
                     )
                     do! tcs.Task
                 } :> Task
@@ -421,8 +428,8 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                             try
                                 let sseEvent = sprintf "event: state\ndata: %s\n\n" json
                                 let bytes = System.Text.Encoding.UTF8.GetBytes(sseEvent)
-                                ctx.Response.Body.WriteAsync(bytes).AsTask().Wait()
-                                ctx.Response.Body.FlushAsync().Wait()
+                                ctx.Response.Body.WriteAsync(bytes).AsTask()
+                                |> fun t -> t.ContinueWith(fun (_: Task) -> ctx.Response.Body.FlushAsync()) |> ignore
                             with _ -> ())
                         do! tcs.Task
                     | None ->
@@ -436,13 +443,13 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
             // Accepts ?sessionId=X to query a specific session
             app.MapGet("/api/status", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
                 withErrorHandling ctx (fun () -> task {
-                    let sid =
+                    let! sid = task {
                       match ctx.Request.Query.TryGetValue("sessionId") with
-                      | true, v when v.Count > 0 && not (String.IsNullOrWhiteSpace(v.[0])) -> v.[0]
+                      | true, v when v.Count > 0 && not (String.IsNullOrWhiteSpace(v.[0])) -> return v.[0]
                       | _ ->
-                        // Fall back to first available session
-                        let sessions = sessionOps.GetAllSessions().Result
-                        sessions |> List.tryHead |> Option.map (fun s -> s.Id) |> Option.defaultValue ""
+                        let! sessions = sessionOps.GetAllSessions()
+                        return sessions |> List.tryHead |> Option.map (fun s -> s.Id) |> Option.defaultValue ""
+                    }
                     let! info = sessionOps.GetSessionInfo sid
                     let! statusResult =
                       task {
@@ -524,15 +531,16 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                             match info with
                             | Some i ->
                               let! proxy = sessionOps.GetProxy candidateId
-                              let evalCount, avgMs, status =
+                              let! evalCount, avgMs, status = task {
                                 match proxy with
                                 | Some send ->
-                                  let resp = (send (SageFs.WorkerProtocol.WorkerMessage.GetStatus "api") |> Async.RunSynchronously)
+                                  let! resp = send (SageFs.WorkerProtocol.WorkerMessage.GetStatus "api") |> Async.StartAsTask
                                   match resp with
                                   | SageFs.WorkerProtocol.WorkerResponse.StatusResult(_, snap) ->
-                                    snap.EvalCount, float snap.AvgDurationMs, SageFs.WorkerProtocol.SessionStatus.label snap.Status
-                                  | _ -> 0, 0.0, "Unknown"
-                                | None -> 0, 0.0, "Disconnected"
+                                    return snap.EvalCount, float snap.AvgDurationMs, SageFs.WorkerProtocol.SessionStatus.label snap.Status
+                                  | _ -> return 0, 0.0, "Unknown"
+                                | None -> return 0, 0.0, "Disconnected"
+                              }
                               results.Add({| id = candidateId; status = status; projects = i.Projects; workingDirectory = i.WorkingDirectory; evalCount = evalCount; avgDurationMs = avgMs |})
                             | None -> ()
                       return results |> Seq.toList
@@ -660,7 +668,7 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                            diagCount = diagCount
                            outputCount = outputCount |}
                       serverTracker.NotifyLogAsync(
-                        LoggingLevel.Info, "sagefs.state", data).Wait()
+                        LoggingLevel.Info, "sagefs.state", data) |> ignore
                   with _ -> ()))
 
             // Print startup info
