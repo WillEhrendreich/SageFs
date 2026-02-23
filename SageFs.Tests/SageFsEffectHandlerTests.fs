@@ -71,6 +71,7 @@ module TestDeps =
           log.SessionListCalls <- log.SessionListCalls + 1
           return [sessionInfo]
         }
+      GetWarmupContext = None
     }
 
   let noSessions () : EffectDeps =
@@ -96,6 +97,7 @@ module TestDeps =
       StopSession = fun id ->
         async { return Result.Error (SageFsError.SessionNotFound id) }
       ListSessions = fun () -> async { return [] }
+      GetWarmupContext = None
     }
 
 [<Tests>]
@@ -393,4 +395,107 @@ let fullLoopTests = testList "Full ElmLoop + EffectHandler" [
     |> Expect.isSome "should have menu"
     lastModel.Value.Editor.CompletionMenu.Value.Items
     |> Expect.hasLength "3 items" 3
+
+  testAsync "RequestSessionList dispatches WarmupContextUpdated for Ready session" {
+    let mutable dispatched : SageFsMsg list = []
+    let dispatch msg = dispatched <- dispatched @ [msg]
+    let readySession : SessionInfo = {
+      Id = "s1"; Name = None; Projects = ["Proj.fsproj"]
+      WorkingDirectory = "/code"; SolutionRoot = None
+      CreatedAt = DateTime.UtcNow; LastActivity = DateTime.UtcNow
+      Status = SessionStatus.Ready; WorkerPid = Some 42
+    }
+    let warmup : WarmupContext = {
+      AssembliesLoaded =
+        [{ Name = "A"; Path = "A.dll"; NamespaceCount = 3; ModuleCount = 1 }]
+      NamespacesOpened =
+        [{ Name = "System"; IsModule = false; Source = "warmup" }]
+      FailedOpens = []; WarmupDurationMs = 500L
+      SourceFilesScanned = 2; StartedAt = DateTimeOffset.UtcNow
+    }
+    let getWarmupCtx (sid: string) = async {
+      return Some {
+        SessionId = sid; ProjectNames = ["Proj.fsproj"]
+        WorkingDir = "/code"; Status = "Ready"
+        Warmup = warmup; FileStatuses = []
+      }
+    }
+    let deps : EffectDeps = {
+      ResolveSession = fun _ ->
+        Result.Error (SageFsError.NoActiveSessions)
+      GetProxy = fun _ -> None
+      CreateSession = fun _ _ ->
+        async { return Result.Error (SageFsError.NoActiveSessions) }
+      StopSession = fun _ ->
+        async { return Result.Error (SageFsError.NoActiveSessions) }
+      ListSessions = fun () -> async { return [readySession] }
+      GetWarmupContext = Some getWarmupCtx
+    }
+    do! SageFsEffectHandler.execute deps dispatch
+          (SageFsEffect.Editor EditorEffect.RequestSessionList)
+    dispatched
+    |> List.exists (fun m ->
+      match m with
+      | SageFsMsg.Event (SageFsEvent.WarmupContextUpdated ctx) ->
+        ctx.SessionId = "s1"
+      | _ -> false)
+    |> Expect.isTrue "Should dispatch WarmupContextUpdated for Ready session"
+  }
+
+  testAsync "RequestSessionList skips warmup when GetWarmupContext is None" {
+    let mutable dispatched : SageFsMsg list = []
+    let dispatch msg = dispatched <- dispatched @ [msg]
+    let deps : EffectDeps = {
+      ResolveSession = fun _ ->
+        Result.Error (SageFsError.NoActiveSessions)
+      GetProxy = fun _ -> None
+      CreateSession = fun _ _ ->
+        async { return Result.Error (SageFsError.NoActiveSessions) }
+      StopSession = fun _ ->
+        async { return Result.Error (SageFsError.NoActiveSessions) }
+      ListSessions = fun () -> async {
+        return [{ Id = "s2"; Name = None; Projects = ["T.fsproj"]
+                  WorkingDirectory = "."; SolutionRoot = None
+                  CreatedAt = DateTime.UtcNow; LastActivity = DateTime.UtcNow
+                  Status = SessionStatus.Ready; WorkerPid = Some 1 }]
+      }
+      GetWarmupContext = None
+    }
+    do! SageFsEffectHandler.execute deps dispatch
+          (SageFsEffect.Editor EditorEffect.RequestSessionList)
+    dispatched
+    |> List.exists (fun m ->
+      match m with
+      | SageFsMsg.Event (SageFsEvent.WarmupContextUpdated _) -> true
+      | _ -> false)
+    |> Expect.isFalse
+          "Should NOT dispatch WarmupContextUpdated when GetWarmupContext is None"
+  }
+
+  testAsync "RequestSessionList skips warmup when no Ready session" {
+    let mutable dispatched : SageFsMsg list = []
+    let dispatch msg = dispatched <- dispatched @ [msg]
+    let mutable ctxCalled = false
+    let deps : EffectDeps = {
+      ResolveSession = fun _ ->
+        Result.Error (SageFsError.NoActiveSessions)
+      GetProxy = fun _ -> None
+      CreateSession = fun _ _ ->
+        async { return Result.Error (SageFsError.NoActiveSessions) }
+      StopSession = fun _ ->
+        async { return Result.Error (SageFsError.NoActiveSessions) }
+      ListSessions = fun () -> async {
+        return [{ Id = "s3"; Name = None; Projects = ["T.fsproj"]
+                  WorkingDirectory = "."; SolutionRoot = None
+                  CreatedAt = DateTime.UtcNow; LastActivity = DateTime.UtcNow
+                  Status = SessionStatus.Starting; WorkerPid = None }]
+      }
+      GetWarmupContext =
+        Some (fun _ -> async { ctxCalled <- true; return None })
+    }
+    do! SageFsEffectHandler.execute deps dispatch
+          (SageFsEffect.Editor EditorEffect.RequestSessionList)
+    Expect.isFalse
+      "Should not call GetWarmupContext when no Ready session" ctxCalled
+  }
 ]

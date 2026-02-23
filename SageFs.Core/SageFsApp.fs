@@ -492,6 +492,8 @@ type EffectDeps = {
   StopSession: SessionId -> Async<Result<unit, SageFsError>>
   /// List all sessions
   ListSessions: unit -> Async<SessionInfo list>
+  /// Fetch warmup context for a session (optional — None disables warmup dispatch)
+  GetWarmupContext: (SessionId -> Async<SessionContext option>) option
 }
 
 /// Routes SageFsEffect to real infrastructure via injected deps.
@@ -614,6 +616,20 @@ module SageFsEffectHandler =
           let! sessions = deps.ListSessions ()
           let snaps = sessions |> List.map sessionInfoToSnapshot
           dispatch (SageFsMsg.Event (SageFsEvent.SessionsRefreshed snaps))
+          // Fetch warmup context for the active Ready session
+          match deps.GetWarmupContext with
+          | Some getCtx ->
+            let readySession =
+              sessions |> List.tryFind (fun s -> s.Status = SessionStatus.Ready)
+            match readySession with
+            | Some info ->
+              let! ctx = getCtx info.Id
+              match ctx with
+              | Some sessionCtx ->
+                dispatch (SageFsMsg.Event (SageFsEvent.WarmupContextUpdated sessionCtx))
+              | None -> ()
+            | None -> ()
+          | None -> ()
         }
 
       | EditorEffect.RequestSessionSwitch sessionId ->

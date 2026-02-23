@@ -121,49 +121,43 @@ module McpAdapter =
 
     JsonSerializer.Serialize(result)
 
-  /// Compact warmup context for LLM output footer.
-  /// Healthy sessions: one-liner. Problem sessions: failures expanded.
-  let formatWarmupForLlm (ctx: SessionContext) =
+  /// Full warmup detail for LLM startup info — shows loaded assemblies,
+  /// opened namespaces/modules, failures. Included in get_startup_info only.
+  let formatWarmupDetailForLlm (ctx: SessionContext) =
     let w = ctx.Warmup
     let opened = WarmupContext.totalOpenedCount w
     let failed = WarmupContext.totalFailedCount w
     let asmCount = w.AssembliesLoaded.Length
-    let fileCount = ctx.FileStatuses.Length
-    let loadedFiles =
-      ctx.FileStatuses
-      |> List.filter (fun f -> f.Readiness = Loaded)
-      |> List.length
-    let failedFiles =
-      ctx.FileStatuses
-      |> List.filter (fun f -> f.Readiness = LoadFailed)
-      |> List.length
+    let lines = Collections.Generic.List<string>()
 
-    let parts = ResizeArray<string>()
-    parts.Add(ctx.Status)
-    parts.Add(sprintf "%d asm" asmCount)
-    parts.Add(sprintf "%d/%d ns" opened (opened + failed))
-    if failed > 0 then parts.Add(sprintf "%d ns failed" failed)
-    parts.Add(sprintf "%d/%d files" loadedFiles fileCount)
-    if failedFiles > 0 then parts.Add(sprintf "%d load-failed" failedFiles)
-    parts.Add(sprintf "%dms" w.WarmupDurationMs)
+    lines.Add(
+      sprintf "🔧 Warmup: %d assemblies, %d/%d namespaces opened, %dms"
+        asmCount opened (opened + failed) w.WarmupDurationMs)
 
-    let summary =
-      sprintf "session=%s [%s]"
-        ctx.SessionId (String.concat " | " parts)
+    if asmCount > 0 then
+      lines.Add(sprintf "  Assemblies (%d):" asmCount)
+      for a in w.AssembliesLoaded do
+        lines.Add(sprintf "    📦 %s (%d ns, %d modules)" a.Name a.NamespaceCount a.ModuleCount)
 
-    let failures =
-      let items = ResizeArray<string>()
+    if w.NamespacesOpened.Length > 0 then
+      lines.Add(sprintf "  Opened (%d):" w.NamespacesOpened.Length)
+      for b in w.NamespacesOpened do
+        let kind = if b.IsModule then "module" else "namespace"
+        lines.Add(sprintf "    open %s // %s" b.Name kind)
+
+    if w.FailedOpens.Length > 0 then
+      lines.Add(sprintf "  ⚠ Failed opens (%d):" w.FailedOpens.Length)
       for (name, err) in w.FailedOpens do
-        items.Add(sprintf "    ✖ open %s — %s" name err)
-      for f in ctx.FileStatuses do
-        if f.Readiness = LoadFailed then
-          items.Add(
-            sprintf "    ✖ load %s" (IO.Path.GetFileName f.Path))
-      if items.Count = 0 then ""
-      else
-        sprintf "\n  ⚠ load problems:\n%s" (String.concat "\n" items)
+        lines.Add(sprintf "    ✖ %s — %s" name err)
 
-    sprintf "%s%s" summary failures
+    let files = ctx.FileStatuses
+    if files.Length > 0 then
+      let loaded = files |> List.filter (fun f -> f.Readiness = Loaded) |> List.length
+      lines.Add(sprintf "  Files (%d/%d loaded):" loaded files.Length)
+      for f in files do
+        lines.Add(sprintf "    %s %s" (FileReadiness.icon f.Readiness) f.Path)
+
+    lines |> Seq.toList |> String.concat "\n"
 
   let splitStatements (code: string) : string list =
     let mutable i = 0
@@ -877,7 +871,7 @@ module McpTools =
       let! info = ctx.SessionOps.GetSessionInfo sid
       match info with
       | Some sessionInfo ->
-        return
+        let header =
           sprintf "📋 Startup Information:\n- Session: %s\n- Working Directory: %s\n- Projects: %s\n- MCP Port: %d\n- Status: %s"
             sid
             sessionInfo.WorkingDirectory
@@ -885,6 +879,27 @@ module McpTools =
              else String.concat ", " (sessionInfo.Projects |> List.map Path.GetFileName))
             ctx.McpPort
             (WorkerProtocol.SessionStatus.label sessionInfo.Status)
+        // Fetch and append warmup detail
+        let! warmupDetail =
+          match ctx.GetWarmupContext with
+          | Some getCtx ->
+            task {
+              let! wCtx = getCtx sid
+              match wCtx with
+              | Some warmup ->
+                let sessionCtx : SessionContext = {
+                  SessionId = sid
+                  ProjectNames = sessionInfo.Projects
+                  WorkingDir = sessionInfo.WorkingDirectory
+                  Status = WorkerProtocol.SessionStatus.label sessionInfo.Status
+                  Warmup = warmup
+                  FileStatuses = []
+                }
+                return sprintf "\n\n%s" (McpAdapter.formatWarmupDetailForLlm sessionCtx)
+              | None -> return ""
+            }
+          | None -> Task.FromResult("")
+        return header + warmupDetail
       | None ->
         return "SageFs startup information not available yet — session is still initializing"
     }

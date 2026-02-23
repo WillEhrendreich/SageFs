@@ -128,30 +128,6 @@ type EventAccumulator() =
 type McpServerTracker() =
   let servers = ConcurrentDictionary<string, McpServer>()
   let accumulator = EventAccumulator()
-  let mutable warmupSummary : string option = None
-  let mutable getWarmupSummaryFn : (unit -> string option) option = None
-
-  /// Set a function that lazily builds the warmup summary.
-  member _.SetWarmupSummaryProvider(f: unit -> string option) =
-    getWarmupSummaryFn <- Some f
-
-  /// Cache a pre-formatted warmup summary string for inclusion in tool responses.
-  member _.SetWarmupSummary(summary: string) =
-    warmupSummary <- Some summary
-
-  /// Get warmup summary: cached value, or lazily compute from provider.
-  member _.GetWarmupSummary() =
-    match warmupSummary with
-    | Some s -> Some s
-    | None ->
-      match getWarmupSummaryFn with
-      | Some f ->
-        let result = f()
-        match result with
-        | Some s -> warmupSummary <- Some s
-        | None -> ()
-        result
-      | None -> None
 
   member _.Register(server: McpServer) =
     servers.[server.SessionId] <- server
@@ -213,11 +189,6 @@ let createServerCaptureFilter (tracker: McpServerTracker) =
             |> String.concat "\n"
           let banner = sprintf "\n\n📡 SageFs events since last call:\n%s" eventText
           result.Content.Add(TextContentBlock(Text = banner))
-        // Always include warmup context summary
-        match tracker.GetWarmupSummary() with
-        | Some summary ->
-          result.Content.Add(TextContentBlock(Text = sprintf "\n🔧 %s" summary))
-        | None -> ()
         result
 
       let vt = next.Invoke(ctx, ct)
@@ -323,35 +294,6 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
             
             // Create notification tracker
             let serverTracker = McpServerTracker()
-            serverTracker.SetWarmupSummaryProvider(fun () ->
-              try
-                let activeSid =
-                  mcpContext.SessionMap.Values
-                  |> Seq.tryHead
-                  |> Option.defaultValue ""
-                if System.String.IsNullOrEmpty activeSid then None
-                else
-                  match mcpContext.GetWarmupContext with
-                  | Some getCtx ->
-                    let wCtx = getCtx(activeSid).Result
-                    match wCtx with
-                    | Some warmup ->
-                      let info = mcpContext.SessionOps.GetSessionInfo(activeSid).Result
-                      let sessionCtx : SageFs.SessionContext = {
-                        SessionId = activeSid
-                        ProjectNames =
-                          info |> Option.map (fun i -> i.Projects) |> Option.defaultValue []
-                        WorkingDir =
-                          info |> Option.map (fun i -> i.WorkingDirectory) |> Option.defaultValue ""
-                        Status =
-                          info |> Option.map (fun i -> SageFs.WorkerProtocol.SessionStatus.label i.Status) |> Option.defaultValue "unknown"
-                        Warmup = warmup
-                        FileStatuses = []
-                      }
-                      Some (SageFs.McpAdapter.formatWarmupForLlm sessionCtx)
-                    | None -> None
-                  | None -> None
-              with _ -> None)
             builder.Services.AddSingleton<McpServerTracker>(serverTracker) |> ignore
 
             builder.Services

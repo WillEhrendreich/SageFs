@@ -42,6 +42,7 @@ let createEffectDeps
           sessionManager.PostAndAsyncReply(fun reply ->
             SessionManager.SessionCommand.ListSessions reply)
       }
+    GetWarmupContext = None
   }
 
 /// Create an ElmProgram wired to real SageFs components.

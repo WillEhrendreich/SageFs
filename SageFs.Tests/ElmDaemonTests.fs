@@ -39,6 +39,7 @@ module ElmDaemonTestHelpers =
         async { return Result.Ok () }
       ListSessions = fun () ->
         async { return [sessionInfo] }
+      GetWarmupContext = None
     }
 
   /// Track model changes from OnModelChanged callback

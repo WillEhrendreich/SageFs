@@ -213,7 +213,43 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
   }
 
   // Create EffectDeps from SessionManager + start Elm loop
-  let effectDeps = ElmDaemon.createEffectDeps sessionManager
+  let getWarmupContextForElm (sessionId: string) : Async<SessionContext option> =
+    async {
+      try
+        let! managed =
+          sessionManager.PostAndAsyncReply(fun reply ->
+            SessionManager.SessionCommand.GetSession(sessionId, reply))
+        match managed with
+        | Some s when s.WorkerBaseUrl.Length > 0 ->
+          let client = new Net.Http.HttpClient()
+          let! resp =
+            client.GetStringAsync(sprintf "%s/warmup-context" s.WorkerBaseUrl)
+            |> Async.AwaitTask
+          let warmup = WorkerProtocol.Serialization.deserialize<WarmupContext> resp
+          let! sessions =
+            sessionManager.PostAndAsyncReply(fun reply ->
+              SessionManager.SessionCommand.ListSessions reply)
+          let info = sessions |> List.tryFind (fun si -> si.Id = sessionId)
+          let ctx : SessionContext = {
+            SessionId = sessionId
+            ProjectNames =
+              info |> Option.map (fun i -> i.Projects) |> Option.defaultValue []
+            WorkingDir =
+              info |> Option.map (fun i -> i.WorkingDirectory)
+              |> Option.defaultValue ""
+            Status =
+              info |> Option.map (fun i -> sprintf "%A" i.Status)
+              |> Option.defaultValue "Unknown"
+            Warmup = warmup
+            FileStatuses = []
+          }
+          return Some ctx
+        | _ -> return None
+      with _ -> return None
+    }
+  let effectDeps =
+    { ElmDaemon.createEffectDeps sessionManager with
+        GetWarmupContext = Some getWarmupContextForElm }
   let elmRuntime =
     ElmDaemon.start effectDeps (fun model _regions ->
       let outputCount = model.RecentOutput.Length

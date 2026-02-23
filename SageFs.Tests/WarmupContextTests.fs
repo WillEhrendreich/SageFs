@@ -240,8 +240,8 @@ let mkLlmFile path readiness : FileStatus =
   { Path = path; Readiness = readiness; LastLoadedAt = None; IsWatched = true }
 
 [<Tests>]
-let formatWarmupForLlmTests = testList "formatWarmupForLlm" [
-  testCase "healthy session produces compact one-liner" <| fun _ ->
+let formatWarmupDetailForLlmTests = testList "formatWarmupDetailForLlm" [
+  testCase "healthy session shows assemblies and opened namespaces" <| fun _ ->
     let ctx : SessionContext = {
       SessionId = "abc123"
       ProjectNames = ["MyProj"]
@@ -257,11 +257,14 @@ let formatWarmupForLlmTests = testList "formatWarmupForLlm" [
       }
       FileStatuses = [mkLlmFile "a.fs" Loaded; mkLlmFile "b.fs" Loaded]
     }
-    formatWarmupForLlm ctx
-    |> Expect.equal "compact one-liner"
-      "session=abc123 [Ready | 2 asm | 2/2 ns | 2/2 files | 890ms]"
+    let result = formatWarmupDetailForLlm ctx
+    result |> Expect.stringContains "summary" "2 assemblies, 2/2 namespaces opened, 890ms"
+    result |> Expect.stringContains "asm1" "📦 Asm1 (3 ns, 1 modules)"
+    result |> Expect.stringContains "asm2" "📦 Asm2 (2 ns, 0 modules)"
+    result |> Expect.stringContains "open System" "open System // namespace"
+    result |> Expect.stringContains "open System.IO" "open System.IO // namespace"
 
-  testCase "failed opens expand with warning section" <| fun _ ->
+  testCase "failed opens show warning section" <| fun _ ->
     let ctx : SessionContext = {
       SessionId = "def456"
       ProjectNames = ["BadProj"]
@@ -277,13 +280,12 @@ let formatWarmupForLlmTests = testList "formatWarmupForLlm" [
       }
       FileStatuses = [mkLlmFile "good.fs" Loaded]
     }
-    let result = formatWarmupForLlm ctx
-    result |> Expect.stringContains "summary line" "session=def456"
-    result |> Expect.stringContains "ns failed count" "1 ns failed"
-    result |> Expect.stringContains "warning section" "⚠ load problems:"
-    result |> Expect.stringContains "failed open detail" "✖ open Bad.Ns — not found"
+    let result = formatWarmupDetailForLlm ctx
+    result |> Expect.stringContains "summary ratio" "1/2 namespaces opened"
+    result |> Expect.stringContains "failed section" "⚠ Failed opens (1):"
+    result |> Expect.stringContains "failed detail" "✖ Bad.Ns — not found"
 
-  testCase "failed file loads show in warning section" <| fun _ ->
+  testCase "failed file loads show in files section" <| fun _ ->
     let ctx : SessionContext = {
       SessionId = "ghi789"
       ProjectNames = ["Proj"]
@@ -299,11 +301,12 @@ let formatWarmupForLlmTests = testList "formatWarmupForLlm" [
       }
       FileStatuses = [mkLlmFile "good.fs" Loaded; mkLlmFile "broken.fs" LoadFailed]
     }
-    let result = formatWarmupForLlm ctx
-    result |> Expect.stringContains "load-failed count" "1 load-failed"
-    result |> Expect.stringContains "file failure detail" "✖ load broken.fs"
+    let result = formatWarmupDetailForLlm ctx
+    result |> Expect.stringContains "files header" "Files (1/2 loaded):"
+    result |> Expect.stringContains "loaded file" "● good.fs"
+    result |> Expect.stringContains "failed file" "✖ broken.fs"
 
-  testCase "empty session shows zeros" <| fun _ ->
+  testCase "empty session shows zero summary" <| fun _ ->
     let ctx : SessionContext = {
       SessionId = "empty"
       ProjectNames = []
@@ -312,7 +315,27 @@ let formatWarmupForLlmTests = testList "formatWarmupForLlm" [
       Warmup = WarmupContext.empty
       FileStatuses = []
     }
-    formatWarmupForLlm ctx
-    |> Expect.equal "zero counts"
-      "session=empty [Starting | 0 asm | 0/0 ns | 0/0 files | 0ms]"
+    let result = formatWarmupDetailForLlm ctx
+    result |> Expect.stringContains "zero summary" "0 assemblies, 0/0 namespaces opened, 0ms"
+
+  testCase "modules show as module not namespace" <| fun _ ->
+    let ctx : SessionContext = {
+      SessionId = "mod"
+      ProjectNames = ["P"]
+      WorkingDir = "/code"
+      Status = "Ready"
+      Warmup = {
+        AssembliesLoaded = [mkLlmAsm "A" 1 1]
+        NamespacesOpened = [
+          { Name = "MyModule"; IsModule = true; Source = "warmup" }
+        ]
+        FailedOpens = []
+        WarmupDurationMs = 100L
+        SourceFilesScanned = 1
+        StartedAt = System.DateTimeOffset.UtcNow
+      }
+      FileStatuses = []
+    }
+    let result = formatWarmupDetailForLlm ctx
+    result |> Expect.stringContains "module kind" "open MyModule // module"
 ]
