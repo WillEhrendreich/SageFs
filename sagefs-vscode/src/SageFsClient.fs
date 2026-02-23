@@ -283,6 +283,24 @@ let unwatchAllHotReload (sessionId: string) (c: Client) =
       return false
   }
 
+let watchDirectoryHotReload (sessionId: string) (directory: string) (c: Client) =
+  promise {
+    try
+      let! _ = dashHttpPost c (sprintf "/api/sessions/%s/hotreload/watch-directory" sessionId) (jsonStringify {| directory = directory |}) 5000
+      return true
+    with _ ->
+      return false
+  }
+
+let unwatchDirectoryHotReload (sessionId: string) (directory: string) (c: Client) =
+  promise {
+    try
+      let! _ = dashHttpPost c (sprintf "/api/sessions/%s/hotreload/unwatch-directory" sessionId) (jsonStringify {| directory = directory |}) 5000
+      return true
+    with _ ->
+      return false
+  }
+
 let getWarmupContext (sessionId: string) (c: Client) =
   promise {
     try

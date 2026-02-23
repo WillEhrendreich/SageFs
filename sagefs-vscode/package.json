@@ -97,6 +97,10 @@
         "icon": "$(refresh)"
       },
       {
+        "command": "sagefs.hotReloadToggleDirectory",
+        "title": "SageFs: Toggle Directory Hot Reload"
+      },
+      {
         "command": "sagefs.sessionContextRefresh",
         "title": "SageFs: Refresh Session Context",
         "icon": "$(refresh)"

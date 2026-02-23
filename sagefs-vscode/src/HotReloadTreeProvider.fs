@@ -44,6 +44,12 @@ let private createDirItem (dirPath: string) (childCount: int) (watchedCount: int
   item?contextValue <- "directory"
   item?description <- sprintf "%d/%d watched" watchedCount childCount
   item?iconPath <- Vscode.newThemeColor "symbolIcon.folderForeground"
+  item?command <-
+    createObj [
+      "command" ==> "sagefs.hotReloadToggleDirectory"
+      "title" ==> "Toggle Directory"
+      "arguments" ==> [| box dirPath |]
+    ]
   item
 
 let private createFileItem (file: Client.HotReloadFile) =
@@ -192,3 +198,26 @@ let register (ctx: ExtensionContext) =
   let refreshCmd =
     Commands.registerCommand "sagefs.hotReloadRefresh" (fun _ -> refresh ())
   ctx.subscriptions.Add refreshCmd
+
+  // Toggle Directory command
+  let toggleDirCmd =
+    Commands.registerCommand "sagefs.hotReloadToggleDirectory" (fun arg ->
+      match currentClient, currentSessionId with
+      | Some c, Some sid ->
+        let dir: string = arg |> unbox
+        let allWatched: bool =
+          cachedFiles
+          |> Array.filter (fun f -> getDirectory f.path = dir)
+          |> Array.forall (fun f -> f.watched)
+        promise {
+          if allWatched then
+            let! _ = Client.unwatchDirectoryHotReload sid dir c
+            ()
+          else
+            let! _ = Client.watchDirectoryHotReload sid dir c
+            ()
+          refresh ()
+        } |> ignore
+      | _ -> ()
+    )
+  ctx.subscriptions.Add toggleDirCmd
