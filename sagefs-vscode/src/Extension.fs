@@ -181,7 +181,7 @@ let private showInlineResult (editor: TextEditor) (text: string) =
   let opts = createObj [
     "after" ==> createObj [
       "contentText" ==> contentText
-      "color" ==> newThemeColor "editorCodeLens.foreground"
+      "color" ==> newThemeColor "sagefs.successForeground"
       "fontStyle" ==> "italic"
     ]
   ]
@@ -205,7 +205,7 @@ let private showInlineDiagnostic (editor: TextEditor) (text: string) =
   let opts = createObj [
     "after" ==> createObj [
       "contentText" ==> sprintf "  // ❌ %s" firstLine
-      "color" ==> newThemeColor "errorForeground"
+      "color" ==> newThemeColor "sagefs.errorForeground"
       "fontStyle" ==> "italic"
     ]
   ]

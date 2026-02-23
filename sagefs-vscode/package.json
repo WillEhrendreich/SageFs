@@ -198,7 +198,44 @@
           "group": "navigation"
         }
       ]
-    }
+    },
+    "colors": [
+      {
+        "id": "sagefs.successBackground",
+        "description": "Background color for successful eval results",
+        "defaults": { "dark": "#a6e3a120", "light": "#40a02b20", "highContrast": "#00ff0020" }
+      },
+      {
+        "id": "sagefs.successForeground",
+        "description": "Foreground color for successful eval results",
+        "defaults": { "dark": "#a6e3a1", "light": "#40a02b", "highContrast": "#00ff00" }
+      },
+      {
+        "id": "sagefs.errorBackground",
+        "description": "Background color for eval errors",
+        "defaults": { "dark": "#f38ba820", "light": "#d2004220", "highContrast": "#ff000020" }
+      },
+      {
+        "id": "sagefs.errorForeground",
+        "description": "Foreground color for eval errors",
+        "defaults": { "dark": "#f38ba8", "light": "#d20042", "highContrast": "#ff0000" }
+      },
+      {
+        "id": "sagefs.runningForeground",
+        "description": "Foreground color for running indicator",
+        "defaults": { "dark": "#f9e2af", "light": "#df8e1d", "highContrast": "#ffff00" }
+      },
+      {
+        "id": "sagefs.outputForeground",
+        "description": "Foreground color for output text",
+        "defaults": { "dark": "#a6adc8", "light": "#6c6f85", "highContrast": "#ffffff" }
+      },
+      {
+        "id": "sagefs.staleForeground",
+        "description": "Foreground color for stale results",
+        "defaults": { "dark": "#6c7086", "light": "#9ca0b0", "highContrast": "#808080" }
+      }
+    ]
   },
   "scripts": {
     "sync-version": "node -e \"const fs=require('fs');const x=fs.readFileSync('../SageFs/SageFs.fsproj','utf8');const m=x.match(/<Version>([^<]+)<\\/Version>/);if(m){const p=JSON.parse(fs.readFileSync('package.json','utf8'));p.version=m[1];fs.writeFileSync('package.json',JSON.stringify(p,null,2)+'\\n');console.log('Version synced:',m[1])}\"",
