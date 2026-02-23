@@ -251,6 +251,18 @@ module McpAdapter =
       |> List.map (fun item -> sprintf "%s (%s)" item.DisplayText (Features.AutoCompletion.CompletionKind.label item.Kind))
       |> String.concat "\n"
 
+  let private escapeJson (s: string) =
+    s.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\n", "\\n").Replace("\r", "\\r").Replace("\t", "\\t")
+
+  let formatCompletionsJson (items: Features.AutoCompletion.CompletionItem list) : string =
+    let jsonItems =
+      items
+      |> List.map (fun item ->
+        sprintf """{"label":"%s","kind":"%s","insertText":"%s"}"""
+          (escapeJson item.DisplayText) (Features.AutoCompletion.CompletionKind.label item.Kind) (escapeJson item.ReplacementText))
+      |> String.concat ","
+    sprintf """{"completions":[%s],"count":%d}""" jsonItems (List.length items)
+
   let formatExplorationResult (qualifiedName: string) (items: Features.AutoCompletion.CompletionItem list) : string =
     match items with
     | [] -> sprintf "No items found in '%s'." qualifiedName
@@ -269,6 +281,25 @@ module McpAdapter =
           sprintf "### %s\n%s" kind memberLines)
         |> String.concat "\n\n"
       sprintf "## %s\n\n%s" qualifiedName sections
+
+  let formatExplorationResultJson (qualifiedName: string) (items: Features.AutoCompletion.CompletionItem list) : string =
+    match items with
+    | [] -> sprintf """{"name":"%s","groups":[],"totalCount":0}""" (escapeJson qualifiedName)
+    | items ->
+      let grouped =
+        items
+        |> List.groupBy (fun item -> Features.AutoCompletion.CompletionKind.label item.Kind)
+        |> List.sortBy fst
+      let groupsJson =
+        grouped
+        |> List.map (fun (kind, members) ->
+          let membersJson =
+            members
+            |> List.map (fun m -> sprintf "\"%s\"" (escapeJson m.DisplayText))
+            |> String.concat ","
+          sprintf """{"kind":"%s","members":[%s],"count":%d}""" kind membersJson (List.length members))
+        |> String.concat ","
+      sprintf """{"name":"%s","groups":[%s],"totalCount":%d}""" (escapeJson qualifiedName) groupsJson (List.length items)
 
   let formatStartupInfo (config: AppState.StartupConfig) : string =
     // Filter out verbose -r: assembly references from args display

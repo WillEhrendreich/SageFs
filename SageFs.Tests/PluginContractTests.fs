@@ -372,3 +372,68 @@ let completionTests =
       result |> Expect.stringContains "first item" "ToString (Method)"
       result |> Expect.stringContains "second item" "Length (Property)"
   ]
+
+// ─── formatCompletionsJson ────────────────────────────────────────────
+
+[<Tests>]
+let completionJsonTests =
+  testList "formatCompletionsJson" [
+    testCase "returns valid JSON with completions array" <| fun _ ->
+      let items = [
+        { DisplayText = "ToString"; ReplacementText = "ToString"; Kind = CompletionKind.Method; GetDescription = None }
+        { DisplayText = "Length"; ReplacementText = "Length"; Kind = CompletionKind.Property; GetDescription = None }
+      ]
+      let result = McpAdapter.formatCompletionsJson items
+      use doc = System.Text.Json.JsonDocument.Parse(result)
+      doc.RootElement.GetProperty("completions").GetArrayLength()
+      |> Expect.equal "2 completions" 2
+      doc.RootElement.GetProperty("count").GetInt32()
+      |> Expect.equal "count is 2" 2
+
+    testCase "empty list returns empty completions" <| fun _ ->
+      let result = McpAdapter.formatCompletionsJson []
+      use doc = System.Text.Json.JsonDocument.Parse(result)
+      doc.RootElement.GetProperty("completions").GetArrayLength()
+      |> Expect.equal "0 completions" 0
+
+    testCase "completion items have label, kind, insertText" <| fun _ ->
+      let items = [
+        { DisplayText = "Foo"; ReplacementText = "FooBar"; Kind = CompletionKind.Property; GetDescription = None }
+      ]
+      let result = McpAdapter.formatCompletionsJson items
+      use doc = System.Text.Json.JsonDocument.Parse(result)
+      let first = doc.RootElement.GetProperty("completions").EnumerateArray() |> Seq.head
+      first.GetProperty("label").GetString()
+      |> Expect.equal "label is Foo" "Foo"
+      first.GetProperty("kind").GetString()
+      |> Expect.equal "kind is Property" "Property"
+      first.GetProperty("insertText").GetString()
+      |> Expect.equal "insertText is FooBar" "FooBar"
+  ]
+
+// ─── formatExplorationResultJson ──────────────────────────────────────
+
+[<Tests>]
+let explorationJsonTests =
+  testList "formatExplorationResultJson" [
+    testCase "empty result returns zero count" <| fun _ ->
+      let result = McpAdapter.formatExplorationResultJson "System.IO" []
+      use doc = System.Text.Json.JsonDocument.Parse(result)
+      doc.RootElement.GetProperty("name").GetString()
+      |> Expect.equal "name is System.IO" "System.IO"
+      doc.RootElement.GetProperty("totalCount").GetInt32()
+      |> Expect.equal "count is 0" 0
+
+    testCase "groups items by kind" <| fun _ ->
+      let items = [
+        { DisplayText = "ToString"; ReplacementText = "ToString"; Kind = CompletionKind.Method; GetDescription = None }
+        { DisplayText = "GetHashCode"; ReplacementText = "GetHashCode"; Kind = CompletionKind.Method; GetDescription = None }
+        { DisplayText = "Length"; ReplacementText = "Length"; Kind = CompletionKind.Property; GetDescription = None }
+      ]
+      let result = McpAdapter.formatExplorationResultJson "System.String" items
+      use doc = System.Text.Json.JsonDocument.Parse(result)
+      doc.RootElement.GetProperty("totalCount").GetInt32()
+      |> Expect.equal "total is 3" 3
+      doc.RootElement.GetProperty("groups").GetArrayLength()
+      |> Expect.equal "2 groups" 2
+  ]
