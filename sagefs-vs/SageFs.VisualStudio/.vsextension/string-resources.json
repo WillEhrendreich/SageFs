@@ -8,5 +8,6 @@
   "SageFs.SwitchSession.DisplayName": "SageFs: Switch Session",
   "SageFs.ResetSession.DisplayName": "SageFs: Reset Session",
   "SageFs.HardReset.DisplayName": "SageFs: Hard Reset",
-  "SageFs.ClearResults.DisplayName": "SageFs: Clear Inline Results"
+  "SageFs.ClearResults.DisplayName": "SageFs: Clear Inline Results",
+  "SageFs.ShowSessionContext.DisplayName": "SageFs: Session Context"
 }

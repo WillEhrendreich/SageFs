@@ -47,10 +47,27 @@ internal class EvalSelectionCommand : Command
       code = textView.Document.Text.CopyToString();
     }
 
+    if (output is not null)
+    {
+      await output.WriteLineAsync($"▶ Evaluating ({code.Length} chars)...");
+    }
+
     var result = await client.EvalAsync(code, ct);
     if (output is not null)
     {
-      await output.WriteLineAsync(result);
+      if (result.ExitCode == 0)
+      {
+        await output.WriteLineAsync($"✓ {result.Output}");
+      }
+      else
+      {
+        await output.WriteLineAsync($"✗ Exit code {result.ExitCode}");
+        if (!string.IsNullOrEmpty(result.Output))
+          await output.WriteLineAsync(result.Output);
+        foreach (var diag in result.Diagnostics)
+          await output.WriteLineAsync($"  ⚠ {diag}");
+      }
+      await output.WriteLineAsync("───────────────────────────────────────");
     }
   }
 }
