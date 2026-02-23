@@ -1,0 +1,12 @@
+{
+  "SageFs.EvalSelection.DisplayName": "SageFs: Evaluate Selection",
+  "SageFs.EvalFile.DisplayName": "SageFs: Evaluate File",
+  "SageFs.StartDaemon.DisplayName": "SageFs: Start Daemon",
+  "SageFs.StopDaemon.DisplayName": "SageFs: Stop Daemon",
+  "SageFs.OpenDashboard.DisplayName": "SageFs: Open Dashboard",
+  "SageFs.CreateSession.DisplayName": "SageFs: Create Session",
+  "SageFs.SwitchSession.DisplayName": "SageFs: Switch Session",
+  "SageFs.ResetSession.DisplayName": "SageFs: Reset Session",
+  "SageFs.HardReset.DisplayName": "SageFs: Hard Reset",
+  "SageFs.ClearResults.DisplayName": "SageFs: Clear Inline Results"
+}
