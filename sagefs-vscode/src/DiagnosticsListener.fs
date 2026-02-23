@@ -37,11 +37,16 @@ let start (port: int) (dc: DiagnosticCollection) =
   let url = sprintf "http://localhost:%d/diagnostics" port
 
   let onData (data: obj) =
-    let diagnostics: obj array = data?diagnostics |> unbox
+    let rawDiags = data?diagnostics
+    if isNull rawDiags then () else
+    let diagnostics: obj array = rawDiags |> unbox
     let byFile = System.Collections.Generic.Dictionary<string, ResizeArray<Diagnostic>>()
 
     for diag in diagnostics do
       let file: string = diag?file |> unbox
+      if isNull file then () else
+      let msg = diag?message
+      let message: string = if isNull msg then "" else unbox<string> msg
       let severity =
         match diag?severity |> unbox<string> with
         | "error" -> VDiagnosticSeverity.Error
@@ -53,7 +58,7 @@ let start (port: int) (dc: DiagnosticCollection) =
       let endLine = (diag?endLine |> unbox<int>) - 1 |> max 0
       let endCol = (diag?endColumn |> unbox<int>) - 1 |> max 0
       let range = newRange startLine startCol endLine endCol
-      let d = newDiagnostic range (diag?message |> unbox<string>) severity
+      let d = newDiagnostic range message severity
 
       if not (byFile.ContainsKey file) then
         byFile.[file] <- ResizeArray()

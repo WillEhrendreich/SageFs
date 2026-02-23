@@ -264,7 +264,9 @@ let rec private startDaemon () =
         out.show true
         out.appendLine (sprintf "Starting SageFs daemon with %s..." proj)
         let workDir = getWorkingDirectory () |> Option.defaultValue "."
-        let ext = proj.Substring(proj.LastIndexOf('.'))
+        let ext =
+          let i = proj.LastIndexOf('.')
+          if i >= 0 then proj.Substring(i) else ""
         let flag = if ext = ".sln" || ext = ".slnx" then "--sln" else "--proj"
         let proc = spawn "sagefs" [| flag; proj |] (createObj [
           "cwd" ==> workDir; "detached" ==> true; "stdio" ==> [| box "ignore"; box "pipe"; box "pipe" |]; "shell" ==> true

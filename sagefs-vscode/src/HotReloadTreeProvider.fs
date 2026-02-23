@@ -25,16 +25,20 @@ let mutable private treeView: TreeView<obj> option = None
 // ── Path helpers ─────────────────────────────────────────────────
 
 let private getDirectory (path: string) =
-  let normalized = path.Replace('\\', '/')
-  match normalized.LastIndexOf('/') with
-  | -1 -> ""
-  | i -> normalized.Substring(0, i)
+  if isNull path then ""
+  else
+    let normalized = path.Replace('\\', '/')
+    match normalized.LastIndexOf('/') with
+    | -1 -> ""
+    | i -> normalized.Substring(0, i)
 
 let private getFileName (path: string) =
-  let normalized = path.Replace('\\', '/')
-  match normalized.LastIndexOf('/') with
-  | -1 -> normalized
-  | i -> normalized.Substring(i + 1)
+  if isNull path then ""
+  else
+    let normalized = path.Replace('\\', '/')
+    match normalized.LastIndexOf('/') with
+    | -1 -> normalized
+    | i -> normalized.Substring(i + 1)
 
 // ── TreeDataProvider ─────────────────────────────────────────────
 

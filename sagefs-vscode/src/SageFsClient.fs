@@ -107,10 +107,12 @@ let getStatus (c: Client) =
         return { connected = true; healthy = Some false; status = Some "no session" }
       else
         let parsed = jsonParse resp.body
+        let h = parsed?healthy
+        let s = parsed?status
         return
           { connected = true
-            healthy = Some (parsed?healthy |> unbox<bool>)
-            status = Some (parsed?status |> unbox<string>) }
+            healthy = if isNull h then Some false else Some (unbox<bool> h)
+            status = if isNull s then None else Some (unbox<string> s) }
     with _ ->
       return { connected = false; healthy = None; status = None }
   }
@@ -243,13 +245,24 @@ let getHotReloadState (sessionId: string) (c: Client) =
       let! resp = dashHttpGet c (sprintf "/api/sessions/%s/hotreload" sessionId) 5000
       if resp.statusCode = 200 then
         let parsed = jsonParse resp.body
-        let files =
-          parsed?files
-          |> unbox<obj array>
-          |> Array.map (fun f ->
-            { path = f?path |> unbox<string>
-              watched = f?watched |> unbox<bool> })
-        return Some { files = files; watchedCount = parsed?watchedCount |> unbox<int> }
+        let rawFiles = parsed?files
+        if isNull rawFiles then
+          return Some { files = [||]; watchedCount = 0 }
+        else
+          let files =
+            rawFiles
+            |> unbox<obj array>
+            |> Array.choose (fun f ->
+              let p = f?path
+              if isNull p then None
+              else
+                Some
+                  { path = unbox<string> p
+                    watched =
+                      let w = f?watched
+                      if isNull w then false else unbox<bool> w })
+          let wc = parsed?watchedCount
+          return Some { files = files; watchedCount = if isNull wc then 0 else unbox<int> wc }
       else
         return None
     with _ ->
