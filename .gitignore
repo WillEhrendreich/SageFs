@@ -23,3 +23,5 @@ playwright-report/
 analyzers/community
 
 .fake
+mcp-sdk-nupkg/
+mcp-sdk/
