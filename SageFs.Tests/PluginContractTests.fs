@@ -437,3 +437,47 @@ let explorationJsonTests =
       doc.RootElement.GetProperty("groups").GetArrayLength()
       |> Expect.equal "2 groups" 2
   ]
+
+// ─── formatDiagnosticsResultJson ──────────────────────────────────────
+
+[<Tests>]
+let diagnosticsJsonTests =
+  testList "formatDiagnosticsResultJson" [
+    testCase "single diagnostic has correct fields" <| fun _ ->
+      let diag: Diagnostic = {
+        Message = "Type mismatch"
+        Subcategory = ""
+        Range = { StartLine = 5; StartColumn = 10; EndLine = 5; EndColumn = 20 }
+        Severity = DiagnosticSeverity.Error
+      }
+      let result = McpAdapter.formatDiagnosticsResultJson [| diag |]
+      use doc = JsonDocument.Parse(result)
+      doc.RootElement.GetProperty("count").GetInt32()
+      |> Expect.equal "count 1" 1
+      let first = doc.RootElement.GetProperty("diagnostics").EnumerateArray() |> Seq.head
+      first.GetProperty("severity").GetString()
+      |> Expect.equal "severity is error" "error"
+      first.GetProperty("message").GetString()
+      |> Expect.equal "message matches" "Type mismatch"
+      first.GetProperty("startLine").GetInt32()
+      |> Expect.equal "line 5" 5
+
+    testCase "empty diagnostics returns zero count" <| fun _ ->
+      let result = McpAdapter.formatDiagnosticsResultJson [||]
+      use doc = JsonDocument.Parse(result)
+      doc.RootElement.GetProperty("count").GetInt32()
+      |> Expect.equal "count 0" 0
+
+    testCase "message with quotes produces valid JSON" <| fun _ ->
+      let diag: Diagnostic = {
+        Message = "Expected \"int\" got \"string\""
+        Subcategory = ""
+        Range = { StartLine = 1; StartColumn = 0; EndLine = 1; EndColumn = 5 }
+        Severity = DiagnosticSeverity.Warning
+      }
+      let result = McpAdapter.formatDiagnosticsResultJson [| diag |]
+      use doc = JsonDocument.Parse(result)
+      let first = doc.RootElement.GetProperty("diagnostics").EnumerateArray() |> Seq.head
+      first.GetProperty("message").GetString()
+      |> Expect.stringContains "has int" "int"
+  ]

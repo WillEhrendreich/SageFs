@@ -364,6 +364,16 @@ Started: {timestamp} UTC"""
         sprintf "(%d,%d): [%s] %s" d.Range.StartLine d.Range.StartColumn sev d.Message)
       |> String.concat "\n"
 
+  let formatDiagnosticsResultJson (diagnostics: Features.Diagnostics.Diagnostic array) : string =
+    let items =
+      diagnostics
+      |> Array.map (fun d ->
+        sprintf """{"severity":"%s","message":"%s","startLine":%d,"startColumn":%d,"endLine":%d,"endColumn":%d}"""
+          (Features.Diagnostics.DiagnosticSeverity.label d.Severity) (escapeJson d.Message)
+          d.Range.StartLine d.Range.StartColumn d.Range.EndLine d.Range.EndColumn)
+      |> String.concat ","
+    sprintf """{"diagnostics":[%s],"count":%d}""" items (Array.length diagnostics)
+
   let formatDiagnosticsStoreAsJson (store: Features.DiagnosticsStore.T) : string =
     let entries =
       store
