@@ -17,7 +17,7 @@ let rewriteInlineUseStatements (code: string) : string =
     lines |> Array.mapi (fun i line ->
       let trimmed = line.TrimStart()
       // If line starts with "use " and has indentation (not at column 0)
-      if trimmed.StartsWith("use ") && line.Length > trimmed.Length then
+      if trimmed.StartsWith("use ", System.StringComparison.Ordinal) && line.Length > trimmed.Length then
         rewritten <- true
         line.Replace("use ", "let ")
       else

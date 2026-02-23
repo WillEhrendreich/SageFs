@@ -44,15 +44,15 @@ module ReplCommand =
     | "#reset" -> Reset
     | "#hard-reset" -> HardReset
     | "#status" -> ShowStatus
-    | s when s.StartsWith("#switch") ->
+    | s when s.StartsWith("#switch", System.StringComparison.Ordinal) ->
       let sid = s.Substring(7).Trim()
       if String.IsNullOrWhiteSpace(sid) then SwitchSession ""
       else SwitchSession sid
-    | s when s.StartsWith("#stop") ->
+    | s when s.StartsWith("#stop", System.StringComparison.Ordinal) ->
       let sid = (if s.Length > 5 then s.Substring(5) else "").Trim()
       if String.IsNullOrWhiteSpace(sid) then StopSession ""
       else StopSession sid
-    | s when s.StartsWith("#create") ->
+    | s when s.StartsWith("#create", System.StringComparison.Ordinal) ->
       let arg = s.Substring(7).Trim()
       if String.IsNullOrWhiteSpace(arg) then CreateSession None
       else CreateSession (Some arg)
@@ -379,7 +379,7 @@ let readInputBlock (evalCount: int) =
     else
       sb.AppendLine(line) |> ignore
       let text = sb.ToString().TrimEnd()
-      if text.EndsWith(";;") then
+      if text.EndsWith(";;", System.StringComparison.Ordinal) then
         reading <- false
   let result = sb.ToString().Trim()
   if String.IsNullOrWhiteSpace(result) then None

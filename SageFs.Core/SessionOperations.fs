@@ -77,7 +77,7 @@ module SessionOperations =
     /// Classify an agent name as Worker or Observer.
     /// MCP agents (prefixed "mcp" or "agent-") are workers; everything else is an observer.
     let classify (agentName: string) =
-      if agentName.StartsWith("mcp") || agentName.StartsWith("agent-") then OccupantRole.Worker
+      if agentName.StartsWith("mcp", System.StringComparison.Ordinal) || agentName.StartsWith("agent-", System.StringComparison.Ordinal) then OccupantRole.Worker
       else OccupantRole.Observer
 
     let label = function OccupantRole.Worker -> "worker" | OccupantRole.Observer -> "observer"

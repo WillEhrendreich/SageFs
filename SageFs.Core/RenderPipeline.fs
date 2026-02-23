@@ -278,8 +278,8 @@ module UiAction =
     | "ClearOutput" -> Some (UiAction.Editor EditorAction.ClearOutput)
     | "PromptConfirm" -> Some (UiAction.Editor EditorAction.PromptConfirm)
     | "PromptCancel" -> Some (UiAction.Editor EditorAction.PromptCancel)
-    | s when s.StartsWith("TogglePane.") -> Some (UiAction.TogglePane (s.Substring(11)))
-    | s when s.StartsWith("Layout.") -> Some (UiAction.LayoutPreset (s.Substring(7)))
+    | s when s.StartsWith("TogglePane.", System.StringComparison.Ordinal) -> Some (UiAction.TogglePane (s.Substring(11)))
+    | s when s.StartsWith("Layout.", System.StringComparison.Ordinal) -> Some (UiAction.LayoutPreset (s.Substring(7)))
     | "ResizeHGrow" -> Some (UiAction.ResizeH 1)
     | "ResizeHShrink" -> Some (UiAction.ResizeH -1)
     | "ResizeVGrow" -> Some (UiAction.ResizeV 1)
@@ -385,7 +385,7 @@ module KeyMap =
     let mutable inBindings = false
     for line in lines do
       let trimmed = line.Trim()
-      if trimmed.StartsWith("let keybindings") || trimmed.StartsWith("let Keybindings") then
+      if trimmed.StartsWith("let keybindings", System.StringComparison.Ordinal) || trimmed.StartsWith("let Keybindings", System.StringComparison.Ordinal) then
         inBindings <- true
       if inBindings then
         // Extract "Key", "Action" pairs

@@ -8,7 +8,7 @@ open Testcontainers.PostgreSql
 /// and is reused on next launch (instant restart, no 2s startup).
 let getOrStartPostgres () =
   match Environment.GetEnvironmentVariable("SageFs_CONNECTION_STRING") with
-  | null | "" ->
+  | s when System.String.IsNullOrEmpty s ->
     let container =
       PostgreSqlBuilder()
         .WithDatabase("SageFs")

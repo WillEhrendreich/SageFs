@@ -140,11 +140,14 @@ module SessionManager =
           let! line = proc.StandardOutput.ReadLineAsync(ct).AsTask() |> Async.AwaitTask
           if isNull line then
             failwith "Worker process exited before reporting port"
-          elif line.StartsWith("WORKER_PORT=") then
+          elif line.StartsWith("WORKER_PORT=", System.StringComparison.Ordinal) then
             found <- Some (line.Substring("WORKER_PORT=".Length))
-        let baseUrl = found.Value
-        let proxy = HttpWorkerClient.httpProxy baseUrl
-        inbox.Post(SessionCommand.WorkerReady(sessionId, proc.Id, baseUrl, proxy))
+        match found with
+        | Some baseUrl ->
+          let proxy = HttpWorkerClient.httpProxy baseUrl
+          inbox.Post(SessionCommand.WorkerReady(sessionId, proc.Id, baseUrl, proxy))
+        | None ->
+          failwith "Worker process exited before reporting port"
       with ex ->
         try proc.Kill() with _ -> ()
         inbox.Post(
@@ -224,14 +227,17 @@ module SessionManager =
           let! line = proc.StandardOutput.ReadLineAsync(ct).AsTask() |> Async.AwaitTask
           if isNull line then
             failwith "Standby worker exited before reporting port"
-          elif line.StartsWith("WARMUP_PROGRESS=") then
+          elif line.StartsWith("WARMUP_PROGRESS=", System.StringComparison.Ordinal) then
             let payload = line.Substring("WARMUP_PROGRESS=".Length)
             inbox.Post(SessionCommand.StandbyProgress(key, payload))
-          elif line.StartsWith("WORKER_PORT=") then
+          elif line.StartsWith("WORKER_PORT=", System.StringComparison.Ordinal) then
             found <- Some (line.Substring("WORKER_PORT=".Length))
-        let baseUrl = found.Value
-        let proxy = HttpWorkerClient.httpProxy baseUrl
-        inbox.Post(SessionCommand.StandbyReady(key, proc.Id, proxy))
+        match found with
+        | Some baseUrl ->
+          let proxy = HttpWorkerClient.httpProxy baseUrl
+          inbox.Post(SessionCommand.StandbyReady(key, proc.Id, proxy))
+        | None ->
+          failwith "Standby worker exited before reporting port"
       with ex ->
         try proc.Kill() with _ -> ()
         inbox.Post(
@@ -332,7 +338,10 @@ module SessionManager =
               let swapped = {
                 Info = info
                 Process = readyStandby.Process
-                Proxy = readyStandby.Proxy.Value
+                Proxy =
+                  match readyStandby.Proxy with
+                  | Some p -> p
+                  | None -> failwith "SwapStandby with no proxy"
                 WorkerBaseUrl = ""
                 Projects = session.Projects
                 WorkingDir = session.WorkingDir

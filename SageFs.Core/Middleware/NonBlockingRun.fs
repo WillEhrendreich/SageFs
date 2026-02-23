@@ -24,7 +24,7 @@ let nonBlockingRunMiddleware next (request, st: AppState) =
     let isMultiLine = lines.Length > 1
     
     let rewrittenCode =
-      if isMultiLine && code.TrimEnd().EndsWith(".Build().Run()") then
+      if isMultiLine && code.TrimEnd().EndsWith(".Build().Run()", System.StringComparison.Ordinal) then
         // For multi-line files, only replace the last .Build().Run()
         let lastRunIndex = code.LastIndexOf(".Build().Run()")
         let beforeLastRun = code.Substring(0, lastRunIndex)
@@ -47,7 +47,7 @@ if not (isNull dashPath) && dashPath <> "" then
           else
             ""
             
-        $"""{beforeLastRun}{configInjection}
+        $"""%s{beforeLastRun}%s{configInjection}
 
 let __app = builder.Build()
 printfn "Starting application in background..."
@@ -66,7 +66,7 @@ __app
         // Single-line command: builder.Build().Run()
         let beforeRun = code.Replace(".Build().Run()", ".Build()")
         $"""
-let __app = {beforeRun}
+let __app = %s{beforeRun}
 printfn "Starting application in background..."
 let __appTask = System.Threading.Tasks.Task.Run(fun () -> 
   try 
@@ -78,19 +78,19 @@ printfn "✓ Application starting in background."
 printfn "  Use '__app.StopAsync() |> Async.AwaitTask |> Async.RunSynchronously' to stop"
 __app
 """
-      elif code.EndsWith(".Run()") then
+      elif code.EndsWith(".Run()", System.StringComparison.Ordinal) then
         // Pattern: someApp.Run()
         let appVar = code.Replace(".Run()", "")
         $"""
 printfn "Starting application in background..."
 let __appTask = System.Threading.Tasks.Task.Run(fun () -> 
   try 
-    ({appVar}).Run() 
+    (%s{appVar}).Run() 
   with ex -> 
     eprintfn "Application error: %%s" ex.Message
 )
 printfn "✓ Application running in background"
-{appVar}
+%s{appVar}
 """
       else
         code

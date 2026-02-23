@@ -104,21 +104,21 @@ let setupAspirePaths (logger: ILogger) =
     let dcpExeName = getDcpExecutableName()
     
     // Find DCP (Distributed Control Plane) path
-    let dcpPackagePath = Path.Combine(nugetPackages, $"aspire.hosting.orchestration.{rid}")
+    let dcpPackagePath = Path.Combine(nugetPackages, $"aspire.hosting.orchestration.%s{rid}")
     match findLatestVersion dcpPackagePath with
     | Some version ->
         let dcpExePath = Path.Combine(dcpPackagePath, version, "tools", dcpExeName)
         if File.Exists(dcpExePath) then
           Environment.SetEnvironmentVariable("DcpPublisherSettings__CliPath", dcpExePath)
           Environment.SetEnvironmentVariable("SageFs_ASPIRE_DCP_PATH", dcpExePath)
-          logger.LogInfo $"Aspire DCP: {dcpExePath}"
+          logger.LogInfo $"Aspire DCP: %s{dcpExePath}"
         else
-          logger.LogDebug $"DCP executable not found at: {dcpExePath}"
+          logger.LogDebug $"DCP executable not found at: %s{dcpExePath}"
     | None ->
-        logger.LogDebug $"Aspire DCP package not found at: {dcpPackagePath}"
+        logger.LogDebug $"Aspire DCP package not found at: %s{dcpPackagePath}"
     
     // Find Dashboard path
-    let dashboardPackagePath = Path.Combine(nugetPackages, $"aspire.dashboard.sdk.{rid}")
+    let dashboardPackagePath = Path.Combine(nugetPackages, $"aspire.dashboard.sdk.%s{rid}")
     match findLatestVersion dashboardPackagePath with
     | Some version ->
         // Set the path to the actual DLL, not just the tools directory
@@ -126,11 +126,11 @@ let setupAspirePaths (logger: ILogger) =
         if File.Exists(dashboardDllPath) then
           Environment.SetEnvironmentVariable("DcpPublisherSettings__DashboardPath", dashboardDllPath)
           Environment.SetEnvironmentVariable("SageFs_ASPIRE_DASHBOARD_PATH", dashboardDllPath)
-          logger.LogInfo $"Aspire Dashboard: {dashboardDllPath}"
+          logger.LogInfo $"Aspire Dashboard: %s{dashboardDllPath}"
         else
-          logger.LogDebug $"Dashboard DLL not found at: {dashboardDllPath}"
+          logger.LogDebug $"Dashboard DLL not found at: %s{dashboardDllPath}"
     | None ->
-        logger.LogDebug $"Aspire Dashboard package not found at: {dashboardPackagePath}"
+        logger.LogDebug $"Aspire Dashboard package not found at: %s{dashboardPackagePath}"
     
     // Prevent duplicate endpoints by disabling launchSettings URL loading for child projects
     Environment.SetEnvironmentVariable("ASPNETCORE_SUPPRESS_LAUNCH_PROFILE_URLS", "true")
@@ -141,7 +141,7 @@ let setupAspirePaths (logger: ILogger) =
     logger.LogDebug "Enabled .NET Hot Reload for Aspire project resources"
     
   with ex ->
-    logger.LogDebug $"Error setting up Aspire paths: {ex.Message}"
+    logger.LogDebug $"Error setting up Aspire paths: %s{ex.Message}"
 
 let applyLaunchProfile (logger: ILogger) (profile: LaunchProfile) (projectDir: string) =
   logger.LogInfo "Applying Aspire launch profile configuration..."
@@ -149,13 +149,13 @@ let applyLaunchProfile (logger: ILogger) (profile: LaunchProfile) (projectDir: s
   // Apply all environment variables from the profile
   for KeyValue(key, value) in profile.EnvironmentVariables do
     Environment.SetEnvironmentVariable(key, value)
-    logger.LogDebug $"  {key}={value}"
+    logger.LogDebug $"  %s{key}=%s{value}"
   
   // Set application URL if present
   match profile.ApplicationUrl with
   | Some url ->
       Environment.SetEnvironmentVariable("ASPNETCORE_URLS", url)
-      logger.LogInfo $"Application URL: {url}"
+      logger.LogInfo $"Application URL: %s{url}"
   | None -> ()
 
 let hasAspireReferences (projects: ProjectLoading.Solution) =

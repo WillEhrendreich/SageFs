@@ -220,7 +220,7 @@ let cleanStdout (raw: string) =
   for line in s.Split([| '\n'; '\r' |], StringSplitOptions.RemoveEmptyEntries) do
     let l = line.Trim()
     if l.Length > 0
-       && not (l.StartsWith "Expecto Running")
+       && not (l.StartsWith("Expecto Running", System.StringComparison.Ordinal))
        && not (reProgressBar.IsMatch(l)) then
       let l = reExpectoTimestamp.Replace(l, "")
       let l = reExpectoSuffix.Replace(l, "")
@@ -291,7 +291,7 @@ let createFsiSession (logger: ILogger) (outStream: TextWriter) (useAsp: bool) (s
         if fsiErrors.Length > 0 then
           logger.LogError (sprintf "  FSI stderr: %s" fsiErrors)
         logger.LogError (sprintf "  ❌ FsiEvaluationSession.Create failed: %s" ex.Message)
-        if ex.InnerException <> null then
+        if not (isNull ex.InnerException) then
           logger.LogError (sprintf "    Inner: %s" ex.InnerException.Message)
         raise ex
     let fsiInitErrors = fsiErrorWriter.ToString()
@@ -302,13 +302,13 @@ let createFsiSession (logger: ILogger) (outStream: TextWriter) (useAsp: bool) (s
 
     for fileName in sln.StartupFiles do
       ct.ThrowIfCancellationRequested()
-      logger.LogInfo $"Loading {fileName}"
+      logger.LogInfo $"Loading %s{fileName}"
       let! fileContents = File.ReadAllTextAsync fileName |> Async.AwaitTask
       let compatibleContents = FsiRewrite.rewriteInlineUseStatements fileContents
       if compatibleContents <> fileContents then
         logger.LogInfo $"⚡ Applied FSI compatibility transforms to {fileName}"
-        let beforeCount = (fileContents.Split('\n') |> Array.filter (fun line -> line.TrimStart().StartsWith("use "))).Length
-        let afterCount = (compatibleContents.Split('\n') |> Array.filter (fun line -> line.TrimStart().StartsWith("use "))).Length  
+        let beforeCount = (fileContents.Split('\n') |> Array.filter (fun line -> line.TrimStart().StartsWith("use ", System.StringComparison.Ordinal))).Length
+        let afterCount = (compatibleContents.Split('\n') |> Array.filter (fun line -> line.TrimStart().StartsWith("use ", System.StringComparison.Ordinal))).Length  
         logger.LogInfo $"   Rewrote {beforeCount - afterCount} 'use' statements to 'let'"
       try
         fsiSession.EvalInteraction(compatibleContents, ct)
@@ -325,7 +325,7 @@ let createFsiSession (logger: ILogger) (outStream: TextWriter) (useAsp: bool) (s
     let allFsFiles =
       sln.FsProjects
       |> Seq.collect (fun proj -> proj.SourceFiles)
-      |> Seq.filter (fun f -> f.EndsWith(".fs") || f.EndsWith(".fsx"))
+      |> Seq.filter (fun f -> f.EndsWith(".fs", System.StringComparison.Ordinal) || f.EndsWith(".fsx", System.StringComparison.Ordinal))
       |> Seq.distinct
 
     let mutable fileCount = 0
@@ -337,7 +337,7 @@ let createFsiSession (logger: ILogger) (outStream: TextWriter) (useAsp: bool) (s
           fileCount <- fileCount + 1
           for line in sourceLines do
             let trimmed = line.Trim()
-            if trimmed.StartsWith("open ") && not (trimmed.StartsWith("//")) then
+            if trimmed.StartsWith("open ", System.StringComparison.Ordinal) && not (trimmed.StartsWith("//", System.StringComparison.Ordinal)) then
               let parts = trimmed.Split([|' '; '\t'|], StringSplitOptions.RemoveEmptyEntries)
               if parts.Length >= 2 then
                 let nsName = parts.[1].TrimEnd(';')
@@ -365,7 +365,7 @@ let createFsiSession (logger: ILogger) (outStream: TextWriter) (useAsp: bool) (s
             asm.GetTypes()
           with
           | :? System.Reflection.ReflectionTypeLoadException as ex ->
-            ex.Types |> Array.filter (fun t -> t <> null)
+            ex.Types |> Array.filter (fun t -> not (isNull t))
 
         let rootNamespaces =
           types
@@ -376,7 +376,7 @@ let createFsiSession (logger: ILogger) (outStream: TextWriter) (useAsp: bool) (s
             else
               None)
           |> Array.distinct
-          |> Array.filter (fun ns -> not (ns.StartsWith("<") || ns.StartsWith("$")))
+          |> Array.filter (fun ns -> not (ns.StartsWith("<", System.StringComparison.Ordinal) || ns.StartsWith("$", System.StringComparison.Ordinal)))
 
         let topLevelModules =
           types
@@ -386,12 +386,12 @@ let createFsiSession (logger: ILogger) (outStream: TextWriter) (useAsp: bool) (s
              |> Array.exists (fun attr ->
                let cma = attr :?> Microsoft.FSharp.Core.CompilationMappingAttribute
                cma.SourceConstructFlags = Microsoft.FSharp.Core.SourceConstructFlags.Module)) &&
-            not (t.Name.StartsWith("<") || t.Name.StartsWith("$") || t.Name.Contains("@") || t.Name.Contains("+")))
+            not (t.Name.StartsWith("<", System.StringComparison.Ordinal) || t.Name.StartsWith("$", System.StringComparison.Ordinal) || t.Name.Contains("@") || t.Name.Contains("+")))
           |> Array.map (fun t ->
             // F# compiler adds "Module" suffix when there's a name collision
             // (type abbreviations are erased in IL, so we can't detect all collisions).
             // Always strip it — F# source uses the unsuffixed name.
-            if t.Name.EndsWith("Module") then
+            if t.Name.EndsWith("Module", System.StringComparison.Ordinal) then
               t.Name.Substring(0, t.Name.Length - 6)
             else
               t.Name)
@@ -896,7 +896,7 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
           match sln.Projects |> List.tryHead with
           | Some primaryProject ->
             let projectDir = System.IO.Path.GetDirectoryName(primaryProject.ProjectFileName)
-            logger.LogInfo $"Setting working directory to: {projectDir}"
+            logger.LogInfo $"Setting working directory to: %s{projectDir}"
             System.Environment.CurrentDirectory <- projectDir
           | None -> ()
 
@@ -964,7 +964,7 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
             | :? OperationCanceledException -> "Initial warm-up timed out after 5 minutes"
             | _ -> sprintf "Initial warm-up failed: %s" ex.Message
           logger.LogError (sprintf "❌ %s" msg)
-          if ex.InnerException <> null then
+          if not (isNull ex.InnerException) then
             logger.LogError (sprintf "  Inner: %s" ex.InnerException.Message)
           logger.LogError (sprintf "  Stack: %s" ex.StackTrace)
           // Publish Faulted so MCP clients know the session is dead, not warming up

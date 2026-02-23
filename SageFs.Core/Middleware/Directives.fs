@@ -26,7 +26,7 @@ module OpenDirective =
         | [ SynModuleOrNamespace(decls = codeLines; longId = l) ] ->
           let runOpen (l: LongIdent) =
             let path = l |> Seq.map _.idText |> Seq.toList |> String.concat "."
-            $"open {path}"
+            $"open %s{path}"
 
           let chooseFn =
             function
@@ -39,7 +39,7 @@ module OpenDirective =
           // Only include module open statement if it's not a temp/generated module name
           let moduleName = l |> Seq.map _.idText |> Seq.toList |> String.concat "."
           let moduleOpen = 
-            if moduleName.StartsWith("Tmp") || moduleName = "" then 
+            if moduleName.StartsWith("Tmp", System.StringComparison.Ordinal) || System.String.IsNullOrEmpty moduleName then 
               [] 
             else 
               [runOpen l]
@@ -68,7 +68,7 @@ module OpenDirective =
     | { Code = code; Args = args } when args.ContainsKey "fileName" ->
       let fileName = args["fileName"] :?> string
 
-      if fileName = null || hasOpenedFile fileName then
+      if isNull fileName || hasOpenedFile fileName then
         next (request, st)
       else
         let lines = openDirectiveLines fileName
@@ -79,7 +79,7 @@ module OpenDirective =
 
         let response, st = next ({ request with Code = code }, st)
         response, addOpenedFile st fileName
-    | { Code = code } when code.StartsWith "#o" ->
+    | { Code = code } when code.StartsWith("#o", System.StringComparison.Ordinal) ->
       let commandWords = code.Split " "
 
       if commandWords.Length < 2 then
@@ -102,7 +102,7 @@ module OpenDirective =
 
 let viBindMiddleware next (request, st) =
   match request with
-  | { Code = code } when code.StartsWith ":" ->
+  | { Code = code } when code.StartsWith(":", System.StringComparison.Ordinal) ->
     let commandWords = code.Split(" ", System.StringSplitOptions.RemoveEmptyEntries)
     
     // Handle custom directives before converting to #
@@ -118,11 +118,11 @@ let viBindMiddleware next (request, st) =
       let filePath = Path.GetFullPath fileName
       if File.Exists(filePath) then
         let fileContents = File.ReadAllText(filePath)
-        st.Logger.LogInfo $"Executing: {filePath}"
+        st.Logger.LogInfo $"Executing: %s{filePath}"
         next ({ request with Code = fileContents }, st)
       else
-        st.Logger.LogError $"File not found: {filePath}"
-        { EvaluationResult = Error (System.IO.FileNotFoundException($"File not found: {filePath}")); 
+        st.Logger.LogError $"File not found: %s{filePath}"
+        { EvaluationResult = Error (System.IO.FileNotFoundException($"File not found: %s{filePath}")); 
           Diagnostics = [||]; 
           EvaluatedCode = code; 
           Metadata = Map.empty }, st

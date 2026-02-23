@@ -11,10 +11,10 @@ open SageFs.AppState
 module McpAdapter =
 
   let isSolutionFile (path: string) =
-    path.EndsWith ".sln" || path.EndsWith ".slnx"
+    path.EndsWith(".sln", System.StringComparison.Ordinal) || path.EndsWith(".slnx", System.StringComparison.Ordinal)
 
   let isProjectFile (path: string) =
-    path.EndsWith ".fsproj"
+    path.EndsWith(".fsproj", System.StringComparison.Ordinal)
 
   let formatAvailableProjects (workingDir: string) (projects: string array) (solutions: string array) =
     let projectList =
@@ -211,7 +211,7 @@ module McpAdapter =
 
   let echoStatement (writer: TextWriter) (statement: string) =
     let code =
-      if statement.EndsWith(";;" ) then statement.[.. statement.Length - 3]
+      if statement.EndsWith(";;", System.StringComparison.Ordinal) then statement.[.. statement.Length - 3]
       else statement
     writer.WriteLine()
     writer.WriteLine(">")
@@ -221,7 +221,7 @@ module McpAdapter =
 
   let formatEvents (events: list<DateTime * string * string>) : string =
     events
-    |> List.map (fun (timestamp, source, text) -> $"[{timestamp:O}] {source}: {text}")
+    |> List.map (fun (timestamp, source, text) -> $"[{timestamp:O}] %s{source}: %s{text}")
     |> String.concat "\n"
 
   let parseScriptFile (filePath: string) : Result<list<string>, exn> =
@@ -305,7 +305,7 @@ module McpAdapter =
     // Filter out verbose -r: assembly references from args display
     let importantArgs = 
       config.CommandLineArgs 
-      |> Array.filter (fun arg -> not (arg.StartsWith("-r:") || arg.StartsWith("--reference:")))
+      |> Array.filter (fun arg -> not (arg.StartsWith("-r:", System.StringComparison.Ordinal) || arg.StartsWith("--reference:", System.StringComparison.Ordinal)))
     let argsStr = 
       if importantArgs.Length = 0 then "(none)"
       else String.concat " " importantArgs
@@ -320,7 +320,7 @@ module McpAdapter =
     // Count assembly references for info
     let assemblyCount = 
       config.CommandLineArgs 
-      |> Array.filter (fun arg -> arg.StartsWith("-r:") || arg.StartsWith("--reference:"))
+      |> Array.filter (fun arg -> arg.StartsWith("-r:", System.StringComparison.Ordinal) || arg.StartsWith("--reference:", System.StringComparison.Ordinal))
       |> Array.length
     
     let profileStr =
@@ -330,15 +330,15 @@ module McpAdapter =
 
     $"""SageFs Startup Information:
 
-Args: {argsStr}
-Working Directory: {config.WorkingDirectory}
-Loaded Projects: {projectsStr}
-Assemblies Loaded: {assemblyCount}
-Hot Reload: {hotReloadStr}
-MCP Port: {config.McpPort}
-Aspire Detected: {aspireStr}
-Startup Profile: {profileStr}
-Started: {timestamp} UTC"""
+Args: %s{argsStr}
+Working Directory: %s{config.WorkingDirectory}
+Loaded Projects: %s{projectsStr}
+Assemblies Loaded: %d{assemblyCount}
+Hot Reload: %s{hotReloadStr}
+MCP Port: %d{config.McpPort}
+Aspire Detected: %s{aspireStr}
+Startup Profile: %s{profileStr}
+Started: %s{timestamp} UTC"""
 
   let formatStartupInfoJson (config: AppState.StartupConfig) : string =
     let data = {|

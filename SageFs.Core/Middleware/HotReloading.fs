@@ -97,26 +97,26 @@ let getAllMethods (asm: Assembly) =
     with
     | :? ReflectionTypeLoadException as ex ->
       // Some types failed to load, but we can use the ones that succeeded
-      let loadedTypes = ex.Types |> Array.filter (fun t -> t <> null) |> Array.toList
+      let loadedTypes = ex.Types |> Array.filter (fun t -> not (isNull t)) |> Array.toList
 
       if loadedTypes.Length > 0 then
         printfn
-          $"Warning: Assembly {asm.GetName().Name} has types with missing dependencies - loaded {loadedTypes.Length} types, skipped {ex.Types.Length - loadedTypes.Length}"
+          $"Warning: Assembly %s{asm.GetName().Name} has types with missing dependencies - loaded %d{loadedTypes.Length} types, skipped %d{ex.Types.Length - loadedTypes.Length}"
       else
-        printfn $"Warning: Could not load any types from assembly {asm.GetName().Name} - all types have missing dependencies"
+        printfn $"Warning: Could not load any types from assembly %s{asm.GetName().Name} - all types have missing dependencies"
 
       loadedTypes
     | :? System.IO.FileNotFoundException as ex ->
-      printfn $"Warning: Assembly {asm.GetName().Name} is missing a dependency: {ex.Message}"
+      printfn $"Warning: Assembly %s{asm.GetName().Name} is missing a dependency: %s{ex.Message}"
       []
     | :? System.IO.FileLoadException as ex ->
-      printfn $"Warning: Assembly {asm.GetName().Name} has a load error: {ex.Message}"
+      printfn $"Warning: Assembly %s{asm.GetName().Name} has a load error: %s{ex.Message}"
       []
     | :? System.BadImageFormatException as ex ->
-      printfn $"Warning: Assembly {asm.GetName().Name} has a bad format: {ex.Message}"
+      printfn $"Warning: Assembly %s{asm.GetName().Name} has a bad format: %s{ex.Message}"
       []
     | ex ->
-      printfn $"Warning: Failed to get types from assembly {asm.GetName().Name}: {ex.Message}"
+      printfn $"Warning: Failed to get types from assembly %s{asm.GetName().Name}: %s{ex.Message}"
       []
 
   // Only process exported/public types
@@ -139,13 +139,13 @@ let mkReloadingState (sln: SageFs.ProjectLoading.Solution) =
         Some asm
       with
       | :? System.IO.FileNotFoundException as ex ->
-        printfn $"Warning: Could not load assembly {p.TargetPath}: {ex.Message}"
+        printfn $"Warning: Could not load assembly %s{p.TargetPath}: %s{ex.Message}"
         None
       | :? System.IO.FileLoadException as ex ->
-        printfn $"Warning: Could not load assembly {p.TargetPath}: {ex.Message}"
+        printfn $"Warning: Could not load assembly %s{p.TargetPath}: %s{ex.Message}"
         None
       | :? System.BadImageFormatException as ex ->
-        printfn $"Warning: Could not load assembly {p.TargetPath}: {ex.Message}"
+        printfn $"Warning: Could not load assembly %s{p.TargetPath}: %s{ex.Message}"
         None)
 
   // getAllMethods now handles all reflection errors internally
@@ -167,7 +167,7 @@ let hotReloadingInitFunction sln =
   try
     "hotReload", box <| mkReloadingState sln
   with ex ->
-    printfn $"Warning: HotReloading initialization failed: {ex.Message}"
+    printfn $"Warning: HotReloading initialization failed: %s{ex.Message}"
 
     "hotReload",
     box
@@ -268,12 +268,12 @@ let getOpenModules (replCode: string) st =
 ///   let h : Type = ...  → value (type annotation, no params)
 let private isTopLevelFunctionBinding (line: string) =
   let trimmed = line.TrimStart()
-  if not (trimmed.StartsWith("let ")) || trimmed.StartsWith("let!") || line <> line.TrimStart() then
+  if not (trimmed.StartsWith("let ", System.StringComparison.Ordinal)) || trimmed.StartsWith("let!", System.StringComparison.Ordinal) || line <> line.TrimStart() then
     false
   else
     let mutable s = trimmed.Substring(4).TrimStart()
     for m in ["private "; "internal "; "public "; "inline "; "rec "; "mutable "] do
-      if s.StartsWith(m) then s <- s.Substring(m.Length).TrimStart()
+      if s.StartsWith(m, System.StringComparison.Ordinal) then s <- s.Substring(m.Length).TrimStart()
     match s.IndexOf('=') with
     | -1 -> false
     | eqIdx ->
@@ -285,7 +285,7 @@ let private isTopLevelFunctionBinding (line: string) =
 /// eliminating the call instruction entirely and making Harmony detours invisible.
 let private isStaticMemberFunction (line: string) =
   let trimmed = line.TrimStart()
-  trimmed.StartsWith("static member ") &&
+  trimmed.StartsWith("static member ", System.StringComparison.Ordinal) &&
     let afterKw = trimmed.Substring("static member ".Length).TrimStart()
     match afterKw.IndexOf('('), afterKw.IndexOf('=') with
     | parenIdx, eqIdx when parenIdx >= 0 && (eqIdx < 0 || parenIdx < eqIdx) -> true

@@ -158,8 +158,8 @@ let run (daemonInfo: DaemonInfo) = task {
       let mutable ev = ConsoleInput.RawInput.tryRead ()
       while ev.IsSome && not cts.Token.IsCancellationRequested do
         hadInput <- true
-        match ev.Value with
-        | InputEvent.MouseEvent me ->
+        match ev with
+        | Some (InputEvent.MouseEvent me) ->
           match me.Action with
           | MouseAction.Press when me.Button = MouseButton.Left ->
             // Click-to-focus pane + editor cursor / session click
@@ -197,7 +197,7 @@ let run (daemonInfo: DaemonInfo) = task {
             render ()
           | _ -> () // Ignore release/move for now
 
-        | KeyEvent (key, ch, mods) ->
+        | Some (KeyEvent (key, ch, mods)) ->
           let ki = ConsoleKeyInfo(ch, key, mods.HasFlag(ConsoleModifiers.Shift), mods.HasFlag(ConsoleModifiers.Alt), mods.HasFlag(ConsoleModifiers.Control))
           match TerminalInput.mapKeyWith keyMap ki with
           | Some TerminalCommand.Quit ->
@@ -286,6 +286,8 @@ let run (daemonInfo: DaemonInfo) = task {
               do! DaemonClient.dispatch client baseUrl (EditorAction.InsertChar ch)
             elif ch > '\x7f' then
               do! DaemonClient.dispatch client baseUrl (EditorAction.InsertChar ch)
+
+        | None -> ()
 
         ev <- ConsoleInput.RawInput.tryRead ()
 

@@ -49,7 +49,7 @@ let loadSolution (logger: ILogger) (args: Arguments list) =
     with
     | [] ->
       Directory.EnumerateFiles directory
-      |> Seq.filter (fun s -> s.EndsWith ".sln" || s.EndsWith ".slnx")
+      |> Seq.filter (fun s -> s.EndsWith(".sln", System.StringComparison.Ordinal) || s.EndsWith(".slnx", System.StringComparison.Ordinal))
       |> Seq.toList
     | s -> s |> List.map Path.GetFullPath
 
@@ -62,7 +62,7 @@ let loadSolution (logger: ILogger) (args: Arguments list) =
     with
     | [] ->
       Directory.EnumerateFiles directory
-      |> Seq.filter (fun s -> s.EndsWith ".fsproj")
+      |> Seq.filter (fun s -> s.EndsWith(".fsproj", System.StringComparison.Ordinal))
       |> Seq.toList
     | s -> s |> List.map Path.GetFullPath
 
@@ -169,7 +169,7 @@ let solutionToFsiArgs (logger: ILogger) (_useAsp: bool) sln =
       sln.Projects
       |> Seq.collect _.OtherOptions
       |> Seq.filter (fun s ->
-        s.StartsWith "-r"
-        && s.EndsWith ".dll"
+        s.StartsWith("-r", System.StringComparison.Ordinal)
+        && s.EndsWith(".dll", System.StringComparison.Ordinal)
         )
   |]

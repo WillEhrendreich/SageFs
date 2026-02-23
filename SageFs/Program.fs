@@ -41,7 +41,7 @@ let parseMcpPort (args: string array) =
   let mcpPortIndex = args |> Array.tryFindIndex (fun a -> a = "--mcp-port")
   let defaultPort =
     match Environment.GetEnvironmentVariable("SageFs_MCP_PORT") with
-    | null | "" -> 37749
+    | s when System.String.IsNullOrEmpty s -> 37749
     | portStr ->
       match Int32.TryParse(portStr) with
       | true, p -> p
@@ -60,7 +60,7 @@ let filterArgs (args: string array) (extraFlags: string list) =
            "--version"; "-v" ] @ extraFlags)
   let mcpPortIndex = args |> Array.tryFindIndex (fun a -> a = "--mcp-port")
   let ionideFlags =
-    args |> Array.filter (fun a -> a.StartsWith("--fsi-server-"))
+    args |> Array.filter (fun a -> a.StartsWith("--fsi-server-", System.StringComparison.Ordinal))
   let regularArgs =
     args
     |> Array.filter (fun a ->
@@ -147,7 +147,7 @@ let main args =
   elif args |> Array.exists (fun arg -> arg = "--version" || arg = "-v") then
     let assembly = Assembly.GetExecutingAssembly()
     let version = assembly.GetName().Version
-    printfn $"SageFs version {version}"
+    printfn $"SageFs version %A{version}"
     0
   // Subcommand: stop
   elif args.Length > 0 && args.[0] = "stop" then

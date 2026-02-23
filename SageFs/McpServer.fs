@@ -244,7 +244,7 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
             System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(logPath)) |> ignore
             
             let builder = WebApplication.CreateBuilder([||])
-            builder.WebHost.UseUrls($"http://localhost:{port}") |> ignore
+            builder.WebHost.UseUrls($"http://localhost:%d{port}") |> ignore
 
             // Get version from assembly
             let version = 

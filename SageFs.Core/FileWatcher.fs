@@ -81,8 +81,8 @@ let shouldTriggerRebuild (config: WatchConfig) (filePath: string) : bool =
   let ext = Path.GetExtension(normalized).ToLowerInvariant()
   let fileName = Path.GetFileName(normalized)
   let isTemp =
-    fileName.StartsWith("~")
-    || fileName.EndsWith(".tmp")
+    fileName.StartsWith("~", System.StringComparison.Ordinal)
+    || fileName.EndsWith(".tmp", System.StringComparison.Ordinal)
     || normalized.Contains("/obj/")
     || normalized.Contains("/bin/")
   let isExcluded = shouldExcludeFile config.ExcludePatterns filePath

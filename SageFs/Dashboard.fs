@@ -35,7 +35,7 @@ let loadThemes (sageFsDir: string) : Collections.Concurrent.ConcurrentDictionary
     if File.Exists(path) then
       let json = File.ReadAllText(path)
       let dict = Text.Json.JsonSerializer.Deserialize<Collections.Generic.Dictionary<string, string>>(json)
-      if dict <> null then
+      if not (isNull dict) then
         for kv in dict do
           result.[kv.Key] <- kv.Value
   with _ -> ()
@@ -608,20 +608,20 @@ let renderEvalStats (stats: EvalStatsView) =
 /// Map a tree-sitter capture name to the CSS class suffix.
 let captureToCssClass (capture: string) =
   match capture with
-  | s when s.StartsWith "keyword" -> "syn-keyword"
-  | s when s.StartsWith "string" -> "syn-string"
-  | s when s.StartsWith "comment" -> "syn-comment"
-  | s when s.StartsWith "number" -> "syn-number"
-  | s when s.StartsWith "operator" -> "syn-operator"
-  | s when s.StartsWith "type" -> "syn-type"
-  | s when s.StartsWith "function" -> "syn-function"
-  | s when s.StartsWith "variable" -> "syn-variable"
-  | s when s.StartsWith "punctuation" -> "syn-punctuation"
-  | s when s.StartsWith "constant" -> "syn-constant"
-  | s when s.StartsWith "module" -> "syn-module"
-  | s when s.StartsWith "attribute" -> "syn-attribute"
-  | s when s.StartsWith "property" -> "syn-property"
-  | s when s.StartsWith "boolean" -> "syn-constant"
+  | s when s.StartsWith("keyword", System.StringComparison.Ordinal) -> "syn-keyword"
+  | s when s.StartsWith("string", System.StringComparison.Ordinal) -> "syn-string"
+  | s when s.StartsWith("comment", System.StringComparison.Ordinal) -> "syn-comment"
+  | s when s.StartsWith("number", System.StringComparison.Ordinal) -> "syn-number"
+  | s when s.StartsWith("operator", System.StringComparison.Ordinal) -> "syn-operator"
+  | s when s.StartsWith("type", System.StringComparison.Ordinal) -> "syn-type"
+  | s when s.StartsWith("function", System.StringComparison.Ordinal) -> "syn-function"
+  | s when s.StartsWith("variable", System.StringComparison.Ordinal) -> "syn-variable"
+  | s when s.StartsWith("punctuation", System.StringComparison.Ordinal) -> "syn-punctuation"
+  | s when s.StartsWith("constant", System.StringComparison.Ordinal) -> "syn-constant"
+  | s when s.StartsWith("module", System.StringComparison.Ordinal) -> "syn-module"
+  | s when s.StartsWith("attribute", System.StringComparison.Ordinal) -> "syn-attribute"
+  | s when s.StartsWith("property", System.StringComparison.Ordinal) -> "syn-property"
+  | s when s.StartsWith("boolean", System.StringComparison.Ordinal) -> "syn-constant"
   | _ -> ""
 
 /// Render a single line of code with syntax highlighting as HTML spans.
@@ -733,13 +733,13 @@ let parseSessionLines (content: string) =
   let sessionRegex = Regex(@"^([> ])\s+(\S+)\s*\[([^\]]+)\](\s*\*)?(\s*\([^)]*\))?(\s*evals:\d+)?(\s*up:(?:just now|\S+))?(\s*dir:\S.*?)?(\s*last:.+)?$")
   let extractTag (prefix: string) (value: string) =
     let v = value.Trim()
-    if v.StartsWith(prefix) then v.Substring(prefix.Length).Trim()
+    if v.StartsWith(prefix, System.StringComparison.Ordinal) then v.Substring(prefix.Length).Trim()
     else ""
   content.Split('\n')
   |> Array.filter (fun (l: string) ->
     l.Length > 0
-    && not (l.StartsWith("───"))
-    && not (l.StartsWith("⏳"))
+    && not (l.StartsWith("───", System.StringComparison.Ordinal))
+    && not (l.StartsWith("⏳", System.StringComparison.Ordinal))
     && not (l.Contains("↑↓ nav"))
     && not (l.Contains("Enter switch"))
     && not (l.Contains("Ctrl+Tab cycle")))
@@ -1465,7 +1465,7 @@ let createEvalHandler
         Response.sseStartResponse ctx |> ignore
         do! Response.ssePatchSignal ctx (SignalPath.sp "code") ""
         let isError =
-          result.StartsWith("Error:") || result.Contains("Evaluation failed")
+          result.StartsWith("Error:", System.StringComparison.Ordinal) || result.Contains("Evaluation failed")
         let displayResult =
           if isError then
             // Clean up raw exception names for readability

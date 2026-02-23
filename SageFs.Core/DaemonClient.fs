@@ -188,7 +188,7 @@ module DaemonClient =
           let! line = reader.ReadLineAsync(ct)
           if isNull line then
             raise (IO.IOException("SSE stream ended"))
-          if line.StartsWith("data: ") then
+          if line.StartsWith("data: ", System.StringComparison.Ordinal) then
             let json = line.Substring(6)
             match parseStateEvent json with
             | Some (sessionId, sessionState, evalCount, avgMs, activeWorkingDir, standbyLabel, regionData) ->

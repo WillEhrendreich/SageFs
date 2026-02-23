@@ -51,7 +51,7 @@ let watchByDirectory (dir: string) (allPaths: string seq) (state: T) : T =
     |> Seq.map normalize
     |> Seq.filter (fun p ->
       let d = dirOf p
-      d = nd || d.StartsWith(nd + "/"))
+      d = nd || d.StartsWith(nd + "/", System.StringComparison.Ordinal))
   watchMany matching state
 
 let unwatchByDirectory (dir: string) (state: T) : T =
@@ -60,7 +60,7 @@ let unwatchByDirectory (dir: string) (state: T) : T =
     state.Watched
     |> Set.filter (fun p ->
       let d = dirOf p
-      not (d = nd || d.StartsWith(nd + "/")))
+      not (d = nd || d.StartsWith(nd + "/", System.StringComparison.Ordinal)))
   { state with Watched = remaining }
 
 let watchedInDirectory (dir: string) (state: T) : string list =
@@ -68,7 +68,7 @@ let watchedInDirectory (dir: string) (state: T) : string list =
   state.Watched
   |> Set.filter (fun p ->
     let d = dirOf p
-    d = nd || d.StartsWith(nd + "/"))
+    d = nd || d.StartsWith(nd + "/", System.StringComparison.Ordinal))
   |> Set.toList
 
 let watchByProject (projectPaths: string seq) (state: T) : T =

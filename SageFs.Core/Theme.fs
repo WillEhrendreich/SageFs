@@ -132,25 +132,25 @@ module Theme =
   /// Map a tree-sitter capture name (e.g. "keyword", "string") to a theme hex color.
   let tokenColorOfCapture (theme: ThemeConfig) (capture: string) : string =
     match capture with
-    | s when s.StartsWith "keyword" -> theme.SynKeyword
-    | s when s.StartsWith "string" -> theme.SynString
-    | s when s.StartsWith "comment" -> theme.SynComment
-    | s when s.StartsWith "number" -> theme.SynNumber
-    | s when s.StartsWith "operator" -> theme.SynOperator
-    | s when s.StartsWith "type" -> theme.SynType
-    | s when s.StartsWith "function" -> theme.SynFunction
-    | s when s.StartsWith "variable.parameter" -> theme.SynVariable
-    | s when s.StartsWith "variable.member" -> theme.SynProperty
-    | s when s.StartsWith "variable" -> theme.SynVariable
-    | s when s.StartsWith "punctuation" -> theme.SynPunctuation
-    | s when s.StartsWith "constant.macro" -> theme.SynModule
-    | s when s.StartsWith "constant" -> theme.SynConstant
-    | s when s.StartsWith "module" -> theme.SynModule
-    | s when s.StartsWith "attribute" -> theme.SynAttribute
-    | s when s.StartsWith "property" -> theme.SynProperty
-    | s when s.StartsWith "boolean" -> theme.SynConstant
-    | s when s.StartsWith "character" -> theme.SynOperator
-    | s when s.StartsWith "spell" -> theme.FgDefault // ignore @spell
+    | s when s.StartsWith("keyword", System.StringComparison.Ordinal) -> theme.SynKeyword
+    | s when s.StartsWith("string", System.StringComparison.Ordinal) -> theme.SynString
+    | s when s.StartsWith("comment", System.StringComparison.Ordinal) -> theme.SynComment
+    | s when s.StartsWith("number", System.StringComparison.Ordinal) -> theme.SynNumber
+    | s when s.StartsWith("operator", System.StringComparison.Ordinal) -> theme.SynOperator
+    | s when s.StartsWith("type", System.StringComparison.Ordinal) -> theme.SynType
+    | s when s.StartsWith("function", System.StringComparison.Ordinal) -> theme.SynFunction
+    | s when s.StartsWith("variable.parameter", System.StringComparison.Ordinal) -> theme.SynVariable
+    | s when s.StartsWith("variable.member", System.StringComparison.Ordinal) -> theme.SynProperty
+    | s when s.StartsWith("variable", System.StringComparison.Ordinal) -> theme.SynVariable
+    | s when s.StartsWith("punctuation", System.StringComparison.Ordinal) -> theme.SynPunctuation
+    | s when s.StartsWith("constant.macro", System.StringComparison.Ordinal) -> theme.SynModule
+    | s when s.StartsWith("constant", System.StringComparison.Ordinal) -> theme.SynConstant
+    | s when s.StartsWith("module", System.StringComparison.Ordinal) -> theme.SynModule
+    | s when s.StartsWith("attribute", System.StringComparison.Ordinal) -> theme.SynAttribute
+    | s when s.StartsWith("property", System.StringComparison.Ordinal) -> theme.SynProperty
+    | s when s.StartsWith("boolean", System.StringComparison.Ordinal) -> theme.SynConstant
+    | s when s.StartsWith("character", System.StringComparison.Ordinal) -> theme.SynOperator
+    | s when s.StartsWith("spell", System.StringComparison.Ordinal) -> theme.FgDefault // ignore @spell
     | _ -> theme.FgDefault
 
   /// Generate CSS custom properties from a theme config (hex passthrough).
@@ -195,7 +195,7 @@ module Theme =
     let mutable inTheme = false
     for line in lines do
       let trimmed = line.Trim()
-      if trimmed.StartsWith("let theme") || trimmed.StartsWith("let Theme") then
+      if trimmed.StartsWith("let theme", System.StringComparison.Ordinal) || trimmed.StartsWith("let Theme", System.StringComparison.Ordinal) then
         inTheme <- true
       if inTheme then
         let mutable i = 0
@@ -214,7 +214,7 @@ module Theme =
                   let vq2 = rest.IndexOf('"', vq1 + 1)
                   if vq2 > vq1 then
                     let value = rest.Substring(vq1 + 1, vq2 - vq1 - 1)
-                    if value.StartsWith("#") then
+                    if value.StartsWith("#", System.StringComparison.Ordinal) then
                       overrides <- Map.add name value overrides
                     i <- comma + 1 + vq2 + 1
                   else i <- trimmed.Length
@@ -222,6 +222,6 @@ module Theme =
               else i <- trimmed.Length
             else i <- trimmed.Length
           else i <- trimmed.Length
-        if trimmed.Contains(']') && inTheme && not (trimmed.StartsWith("let")) then
+        if trimmed.Contains(']') && inTheme && not (trimmed.StartsWith("let", System.StringComparison.Ordinal)) then
           inTheme <- false
     overrides

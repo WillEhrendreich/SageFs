@@ -93,7 +93,7 @@ type CompletionItem = {
 
 let scoreCandidate (enteredWord: string) (candidate: string) =
   seq {
-    if candidate.StartsWith enteredWord then
+    if candidate.StartsWith(enteredWord, System.StringComparison.Ordinal) then
       yield 200
 
     yield Fuzz.Ratio(enteredWord, candidate)
@@ -170,8 +170,8 @@ module DirectiveCompletions =
 
       let isDirectory =
         text.Contains(Path.DirectorySeparatorChar)
-        || text.StartsWith "#open"
-        || text.StartsWith ":open"
+        || text.StartsWith("#open", System.StringComparison.Ordinal)
+        || text.StartsWith(":open", System.StringComparison.Ordinal)
 
       if isDirectory then
         let currentDir =
@@ -186,7 +186,7 @@ module DirectiveCompletions =
           |> Seq.map (fun fsEntry -> {
             CompletionItem.DisplayText = fsEntry
             ReplacementText = fsEntry
-            Kind = if fsEntry.EndsWith "/" then CompletionKind.Folder else CompletionKind.File
+            Kind = if fsEntry.EndsWith("/", System.StringComparison.Ordinal) then CompletionKind.Folder else CompletionKind.File
             GetDescription = None
           })
         else
