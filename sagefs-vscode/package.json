@@ -70,6 +70,10 @@
         "title": "SageFs: Create Session"
       },
       {
+        "command": "sagefs.switchSession",
+        "title": "SageFs: Switch Session"
+      },
+      {
         "command": "sagefs.clearResults",
         "title": "SageFs: Clear Inline Results"
       },

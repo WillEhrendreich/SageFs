@@ -18,6 +18,7 @@ let mutable private statusBarItem: StatusBarItem option = None
 let mutable private diagnosticsDisposable: Disposable option = None
 let mutable private diagnosticCollection: DiagnosticCollection option = None
 let mutable private blockDecorations: Map<int, TextEditorDecorationType> = Map.empty
+let mutable private activeSessionId: string option = None
 
 // ── JS Interop ─────────────────────────────────────────────────
 
@@ -176,29 +177,45 @@ let private refreshStatus () =
         sb.text <- "$(circle-slash) SageFs: offline"
         sb.backgroundColor <- None
         sb.show ()
+        activeSessionId <- None
         HotReload.setSession c None
         SessionCtx.setSession c None
       else
         let! status = Client.getStatus c
         let! sys = Client.getSystemStatus c
         let supervised =
-          match sys with Some s when s.supervised -> " $(shield) supervised" | _ -> ""
+          match sys with Some s when s.supervised -> " $(shield)" | _ -> ""
         let restarts =
           match sys with Some s when s.restartCount > 0 -> sprintf " %d↻" s.restartCount | _ -> ""
         if status.connected then
-          sb.text <- sprintf "$(zap) SageFs: ready%s%s" supervised restarts
+          let! sessions = Client.listSessions c
+          let session =
+            match activeSessionId with
+            | Some id -> sessions |> Array.tryFind (fun s -> s.id = id)
+            | None -> sessions |> Array.tryHead
+          match session with
+          | Some s ->
+            activeSessionId <- Some s.id
+            let projLabel =
+              if s.projects.Length > 0 then
+                s.projects
+                |> Array.map (fun p ->
+                  let name = p.Split([|'/'; '\\'|]) |> Array.last
+                  if name.EndsWith(".fsproj") then name.[..name.Length - 8] else name)
+                |> String.concat ","
+              else "session"
+            let evalLabel = if s.evalCount > 0 then sprintf " [%d]" s.evalCount else ""
+            sb.text <- sprintf "$(zap) SageFs: %s%s%s%s" projLabel evalLabel supervised restarts
+          | None ->
+            activeSessionId <- None
+            sb.text <- sprintf "$(zap) SageFs: ready (no session)%s%s" supervised restarts
           sb.backgroundColor <- None
+          let activeId = activeSessionId
+          HotReload.setSession c activeId
+          SessionCtx.setSession c activeId
         else
           sb.text <- "$(loading~spin) SageFs: starting..."
         sb.show ()
-        // Detect active session for tree views
-        let! sessions = Client.listSessions c
-        let activeSession =
-          sessions
-          |> Array.tryHead
-          |> Option.map (fun s -> s.id)
-        HotReload.setSession c activeSession
-        SessionCtx.setSession c activeSession
     with _ ->
       sb.text <- "$(circle-slash) SageFs: offline"
       sb.show ()
@@ -425,6 +442,39 @@ let private createSessionCmd () =
         )
   }
 
+let private switchSessionCmd () =
+  promise {
+    let! ok = ensureRunning ()
+    if ok then
+      let c = getClient ()
+      let! sessions = Client.listSessions c
+      if sessions.Length = 0 then
+        Window.showInformationMessage "No sessions available." [||] |> ignore
+      else
+        let items =
+          sessions |> Array.map (fun s ->
+            let proj =
+              if s.projects.Length > 0 then s.projects |> String.concat ", "
+              else "no project"
+            sprintf "%s (%s) [%s]" s.id proj s.status)
+        let! picked = Window.showQuickPick items "Select a session"
+        match picked with
+        | Some label ->
+          let idx = items |> Array.tryFindIndex (fun i -> i = label)
+          match idx with
+          | Some i ->
+            let sess = sessions.[i]
+            let! ok = Client.switchSession sess.id c
+            if ok then
+              activeSessionId <- Some sess.id
+              Window.showInformationMessage (sprintf "Switched to session %s" sess.id) [||] |> ignore
+            else
+              Window.showErrorMessage "Failed to switch session." [||] |> ignore
+            refreshStatus ()
+          | None -> ()
+        | None -> ()
+  }
+
 let private stopDaemon () =
   daemonProcess |> Option.iter killProc
   daemonProcess <- None
@@ -507,6 +557,7 @@ let activate (context: ExtensionContext) =
   reg "sagefs.resetSession" (fun _ -> resetSessionCmd () |> ignore)
   reg "sagefs.hardReset" (fun _ -> hardResetCmd () |> ignore)
   reg "sagefs.createSession" (fun _ -> createSessionCmd () |> ignore)
+  reg "sagefs.switchSession" (fun _ -> switchSessionCmd () |> ignore)
   reg "sagefs.clearResults" (fun _ -> clearAllDecorations ())
 
   // CodeLens

@@ -30,7 +30,9 @@ type SessionInfo =
   { id: string
     name: string option
     workingDirectory: string
-    status: string }
+    status: string
+    projects: string array
+    evalCount: int }
 
 type LoadedAssemblyInfo =
   { Name: string
@@ -171,7 +173,20 @@ let listSessions (c: Client) =
     try
       let! resp = httpGet c "/api/sessions" 5000
       if resp.statusCode = 200 then
-        return jsonParse resp.body |> unbox<SessionInfo array>
+        let parsed = jsonParse resp.body
+        let sessions: obj array = parsed?sessions |> unbox
+        return
+          sessions |> Array.map (fun s ->
+            { id = s?id |> unbox<string>
+              name = None
+              workingDirectory = s?workingDirectory |> unbox<string>
+              status = s?status |> unbox<string>
+              projects =
+                let p = s?projects
+                if isNull p then [||] else unbox<string array> p
+              evalCount =
+                let e = s?evalCount
+                if isNull e then 0 else unbox<int> e })
       else
         return [||]
     with _ ->
@@ -192,6 +207,17 @@ let createSession (projects: string) (workingDirectory: string) (c: Client) =
             if isNull e then None else Some (unbox<string> e) }
     with err ->
       return { success = false; result = None; error = Some (string err) }
+  }
+
+let switchSession (sessionId: string) (c: Client) =
+  promise {
+    try
+      let payload = {| sessionId = sessionId |}
+      let! resp = httpPost c "/api/sessions/switch" (jsonStringify payload) 5000
+      let parsed = jsonParse resp.body
+      return parsed?success |> unbox<bool>
+    with _ ->
+      return false
   }
 
 let getSystemStatus (c: Client) =
