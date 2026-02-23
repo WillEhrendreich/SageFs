@@ -18,7 +18,7 @@ module VscodeFixture =
   let cdpPort = 9222
   let private userDataDir = @"C:\temp\sagefs-vscode-test"
 
-  let private codeExe =
+  let private codeExePath =
     // 1. Env var override (VSCODE_PATH=C:\wherever\Code.exe)
     let fromEnv =
       Environment.GetEnvironmentVariable("VSCODE_PATH")
@@ -53,9 +53,15 @@ module VscodeFixture =
     fromEnv
     |> Option.orElseWith (fun () -> fromPath.Value)
     |> Option.orElseWith (fun () -> wellKnown |> List.tryFind IO.File.Exists)
-    |> Option.defaultWith (fun () ->
+
+  let private codeExe =
+    match codeExePath with
+    | Some p -> p
+    | None ->
       failwith
-        "VS Code not found. Set VSCODE_PATH env var or ensure 'code' is on PATH")
+        "VS Code not found. Set VSCODE_PATH env var or ensure 'code' is on PATH"
+
+  let isAvailable = codeExePath.IsSome
 
   /// Pre-configure the test profile so dialogs don't block tests.
   let private ensureTestSettings () =
@@ -243,25 +249,31 @@ module VscodeHelpers =
 
 /// Run a test against VSCode with extensions disabled (pure UI tests).
 let vscodeUiTest name (body: IPage -> Task<unit>) =
-  testCase (sprintf "[Integration] VSCode UI: %s" name) (fun () ->
-    let t = task {
-      let! _b =
-        VscodeFixture.ensureBrowser @"C:\Code\Repos\SageFs" true
-      let! page = VscodeFixture.getPage ()
-      do! body page
-    }
-    t.GetAwaiter().GetResult())
+  if not VscodeFixture.isAvailable then
+    ptestCase (sprintf "[Integration] VSCode UI: %s" name) ignore
+  else
+    testCase (sprintf "[Integration] VSCode UI: %s" name) (fun () ->
+      let t = task {
+        let! _b =
+          VscodeFixture.ensureBrowser @"C:\Code\Repos\SageFs" true
+        let! page = VscodeFixture.getPage ()
+        do! body page
+      }
+      t.GetAwaiter().GetResult())
 
 /// Run a test against VSCode with extensions enabled (extension tests).
 let vscodeExtTest name (body: IPage -> Task<unit>) =
-  testCase (sprintf "[Integration] VSCode extension: %s" name) (fun () ->
-    let t = task {
-      let! _b =
-        VscodeFixture.ensureBrowser @"C:\Code\Repos\SageFs" false
-      let! page = VscodeFixture.getPage ()
-      do! body page
-    }
-    t.GetAwaiter().GetResult())
+  if not VscodeFixture.isAvailable then
+    ptestCase (sprintf "[Integration] VSCode extension: %s" name) ignore
+  else
+    testCase (sprintf "[Integration] VSCode extension: %s" name) (fun () ->
+      let t = task {
+        let! _b =
+          VscodeFixture.ensureBrowser @"C:\Code\Repos\SageFs" false
+        let! page = VscodeFixture.getPage ()
+        do! body page
+      }
+      t.GetAwaiter().GetResult())
 
 // ---------------------------------------------------------------------------
 // Smoke tests — extensions disabled, verifies fixture works
