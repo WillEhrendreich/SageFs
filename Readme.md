@@ -72,6 +72,7 @@ The architecture is fully designed with a pure domain model, two-tier provider s
 ## Prerequisites
 
 - [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0)
+- [Docker](https://docs.docker.com/get-docker/) — required for PostgreSQL, which [Marten](https://martendb.io/) uses for event sourcing (managed automatically via [Testcontainers](https://dotnet.testcontainers.org/), no manual setup needed)
 - Git (to clone the repo)
 
 ---
