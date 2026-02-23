@@ -279,21 +279,21 @@ module WorkingDirRoutingPriority =
       let ctx = mkCtx [s1;s2] (Map.ofList ["sage-id",dummyProxy;"harmony-id",dummyProxy])
       setActiveSessionId ctx "mcp" "sage-id"
       let! resolved = resolveSessionId ctx "mcp" None (Some @"C:\Code\Repos\Harmony")
-      resolved |> Expect.equal "should route to Harmony based on workingDirectory" "harmony-id"
+      resolved |> Expect.equal "should route to Harmony based on workingDirectory" (Ok "harmony-id")
     }
     testTask "workingDirectory routes correctly when no cached session" {
       let s1 = mkInfo "sage-id" @"C:\Code\Repos\SageFs"
       let s2 = mkInfo "harmony-id" @"C:\Code\Repos\Harmony"
       let ctx = mkCtx [s1;s2] (Map.ofList ["sage-id",dummyProxy;"harmony-id",dummyProxy])
       let! resolved = resolveSessionId ctx "mcp" None (Some @"C:\Code\Repos\Harmony")
-      resolved |> Expect.equal "should route to Harmony via workingDirectory" "harmony-id"
+      resolved |> Expect.equal "should route to Harmony via workingDirectory" (Ok "harmony-id")
     }
     testTask "explicit sessionId always wins over workingDirectory" {
       let s1 = mkInfo "sage-id" @"C:\Code\Repos\SageFs"
       let s2 = mkInfo "harmony-id" @"C:\Code\Repos\Harmony"
       let ctx = mkCtx [s1;s2] (Map.ofList ["sage-id",dummyProxy;"harmony-id",dummyProxy])
       let! resolved = resolveSessionId ctx "mcp" (Some "sage-id") (Some @"C:\Code\Repos\Harmony")
-      resolved |> Expect.equal "explicit sessionId takes priority" "sage-id"
+      resolved |> Expect.equal "explicit sessionId takes priority" (Ok "sage-id")
     }
     testTask "workingDirectory updates the cached session" {
       let s1 = mkInfo "sage-id" @"C:\Code\Repos\SageFs"
@@ -308,7 +308,7 @@ module WorkingDirRoutingPriority =
       let ctx = mkCtx [s1] (Map.ofList ["sage-id",dummyProxy])
       setActiveSessionId ctx "mcp" "sage-id"
       let! resolved = resolveSessionId ctx "mcp" None None
-      resolved |> Expect.equal "should fall back to cached when no workingDirectory" "sage-id"
+      resolved |> Expect.equal "should fall back to cached when no workingDirectory" (Ok "sage-id")
     }
   ]
 
