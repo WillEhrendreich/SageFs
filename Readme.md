@@ -285,7 +285,7 @@ Already running at `http://localhost:37750/dashboard`. Submit code, view session
 | Feature | TUI | Raylib GUI | Web Dashboard | VS Code | Visual Studio | Neovim |
 |---------|:---:|:----------:|:------------:|:-------:|:------------:|:------:|
 | Eval code | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Eval file | — | — | ✅ | ✅ | ✅ | ✅ |
+| Eval file | n/a¹ | n/a¹ | ✅ | ✅ | ✅ | ✅ |
 | Eval block (`;;`) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Inline results | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Diagnostics | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
@@ -295,12 +295,15 @@ Already running at `http://localhost:37750/dashboard`. Submit code, view session
 | Session context | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Hot reload toggle | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Watch / unwatch all | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Code completion | ✅ | ✅ | ✅ | ✅ | — | ✅ |
+| Code completion | ✅ | ✅ | ✅ | ✅ | —² | ✅ |
 | SSE live updates | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Themes | ✅ | ✅ | ✅ | ✅ | — | ✅ |
-| CodeLens | — | — | — | ✅ | ✅ | ✅ |
+| Themes | ✅ | ✅ | ✅ | ✅ | —² | ✅ |
+| CodeLens | n/a¹ | n/a¹ | n/a¹ | ✅ | ✅ | ✅ |
 | Project discovery | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Session resume | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+
+> ¹ **n/a** — Feature is architecturally inapplicable. TUI/Raylib are REPL interfaces (eval file = just type code); CodeLens requires an editor with source buffers.
+> ² **—** — VS Extensibility SDK (out-of-process, v17.14) does not yet expose completion provider or theme color contribution APIs. The HTTP client (`GetCompletionsAsync`) is implemented; UI integration awaits SDK support.
 
 ---
 
