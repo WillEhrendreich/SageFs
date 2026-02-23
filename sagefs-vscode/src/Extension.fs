@@ -31,6 +31,21 @@ let private unref (proc: obj) : unit = jsNative
 [<Emit("$0.kill()")>]
 let private killProc (proc: obj) : unit = jsNative
 
+[<Emit("$0.stderr")>]
+let private procStderr (proc: obj) : obj = jsNative
+
+[<Emit("$0.stdout")>]
+let private procStdout (proc: obj) : obj = jsNative
+
+[<Emit("$0.on('data', function(d) { if (d != null) $1(String(d)) })")>]
+let private onData (stream: obj) (handler: string -> unit) : unit = jsNative
+
+[<Emit("$0.on('error', function(e) { $1(e.message || String(e)) })")>]
+let private onProcError (proc: obj) (handler: string -> unit) : unit = jsNative
+
+[<Emit("$0.on('exit', function(code, signal) { $1(code == null ? -1 : code, signal == null ? '' : signal) })")>]
+let private onProcExit (proc: obj) (handler: int -> string -> unit) : unit = jsNative
+
 [<Emit("setInterval($0, $1)")>]
 let private setInterval (fn: unit -> unit) (ms: int) : obj = jsNative
 
@@ -68,14 +83,17 @@ let private findProject () =
     if configured <> "" then
       return Some configured
     else
-      let! files = Workspace.findFiles "**/*.fsproj" "**/node_modules/**" 10
-      if files.Length = 0 then
+      let! slnFiles = Workspace.findFiles "**/*.{sln,slnx}" "**/node_modules/**" 5
+      let! projFiles = Workspace.findFiles "**/*.fsproj" "**/node_modules/**" 10
+      let solutions = slnFiles |> Array.map (fun f -> Workspace.asRelativePath f)
+      let projects = projFiles |> Array.map (fun f -> Workspace.asRelativePath f)
+      let all = Array.append solutions projects
+      if all.Length = 0 then
         return None
-      elif files.Length = 1 then
-        return Some (Workspace.asRelativePath files.[0])
+      elif all.Length = 1 then
+        return Some all.[0]
       else
-        let items = files |> Array.map Workspace.asRelativePath
-        let! picked = Window.showQuickPick items "Select an F# project for SageFs"
+        let! picked = Window.showQuickPick all "Select a solution or project for SageFs"
         return picked
   }
 
@@ -135,10 +153,11 @@ let private showInlineResult (editor: TextEditor) (text: string) =
       "color" ==> newThemeColor "editorCodeLens.foreground"
       "fontStyle" ==> "italic"
     ]
-    "isWholeLine" ==> (lines.Length > 1)
   ]
   let deco = Window.createTextEditorDecorationType opts
-  let range = newRange line 0 line 0
+  let lineText = editor.document.lineAt(float line).text
+  let endCol = lineText.Length
+  let range = newRange line endCol line endCol
   editor.setDecorations(deco, ResizeArray [| box range |])
   blockDecorations <- Map.add line deco blockDecorations
   setTimeout (fun () -> clearBlockDecoration line) 30000 |> ignore
@@ -160,7 +179,9 @@ let private showInlineDiagnostic (editor: TextEditor) (text: string) =
     ]
   ]
   let deco = Window.createTextEditorDecorationType opts
-  let range = newRange line 0 line 0
+  let lineText = editor.document.lineAt(float line).text
+  let endCol = lineText.Length
+  let range = newRange line endCol line endCol
   editor.setDecorations(deco, ResizeArray [| box range |])
   blockDecorations <- Map.add line deco blockDecorations
   setTimeout (fun () -> clearBlockDecoration line) 30000 |> ignore
@@ -201,7 +222,10 @@ let private refreshStatus () =
                 s.projects
                 |> Array.map (fun p ->
                   let name = p.Split([|'/'; '\\'|]) |> Array.last
-                  if name.EndsWith(".fsproj") then name.[..name.Length - 8] else name)
+                  if name.EndsWith(".fsproj") then name.[..name.Length - 8]
+                  elif name.EndsWith(".slnx") then name.[..name.Length - 6]
+                  elif name.EndsWith(".sln") then name.[..name.Length - 5]
+                  else name)
                 |> String.concat ","
               else "session"
             let evalLabel = if s.evalCount > 0 then sprintf " [%d]" s.evalCount else ""
@@ -234,15 +258,31 @@ let rec private startDaemon () =
       let! projPath = findProject ()
       match projPath with
       | None ->
-        Window.showErrorMessage "No .fsproj found. Open an F# project first." [||] |> ignore
+        Window.showErrorMessage "No .fsproj or .sln found. Open an F# project first." [||] |> ignore
       | Some proj ->
         let out = getOutput ()
         out.show true
         out.appendLine (sprintf "Starting SageFs daemon with %s..." proj)
         let workDir = getWorkingDirectory () |> Option.defaultValue "."
-        let proc = spawn "sagefs" [| "--proj"; proj |] (createObj [
-          "cwd" ==> workDir; "detached" ==> true; "stdio" ==> "ignore"; "shell" ==> true
+        let ext = proj.Substring(proj.LastIndexOf('.'))
+        let flag = if ext = ".sln" || ext = ".slnx" then "--sln" else "--proj"
+        let proc = spawn "sagefs" [| flag; proj |] (createObj [
+          "cwd" ==> workDir; "detached" ==> true; "stdio" ==> [| box "ignore"; box "pipe"; box "pipe" |]; "shell" ==> true
         ])
+        onProcError proc (fun msg ->
+          out.appendLine (sprintf "[SageFs spawn error] %s" msg)
+          let sb = getStatusBar ()
+          sb.text <- "$(error) SageFs: spawn failed"
+        )
+        onProcExit proc (fun code _signal ->
+          out.appendLine (sprintf "[SageFs] process exited (code %d)" code)
+        )
+        let stderr = procStderr proc
+        if not (isNull stderr) then
+          onData stderr (fun chunk -> out.appendLine chunk)
+        let stdout = procStdout proc
+        if not (isNull stdout) then
+          onData stdout (fun chunk -> out.appendLine chunk)
         unref proc
         daemonProcess <- Some proc
         let sb = getStatusBar ()
@@ -426,7 +466,7 @@ let private createSessionCmd () =
       let! projPath = findProject ()
       match projPath with
       | None ->
-        Window.showErrorMessage "No .fsproj found. Open an F# project first." [||] |> ignore
+        Window.showErrorMessage "No .fsproj or .sln found. Open an F# project first." [||] |> ignore
       | Some proj ->
         let workDir = getWorkingDirectory () |> Option.defaultValue "."
         do! Window.withProgress ProgressLocation.Notification "SageFs: Creating session..." (fun _p _t ->

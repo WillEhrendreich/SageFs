@@ -539,42 +539,30 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
             // GET /api/sessions — list all sessions with details
             app.MapGet("/api/sessions", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
                 withErrorHandling ctx (fun () -> task {
-                    let! listing = sessionOps.ListSessions ()
-                    // Also get per-session snapshots for richer info
-                    let sessions = System.Collections.Generic.List<obj>()
-                    // Parse listing to extract IDs, then get snapshots
-                    // ListSessions returns formatted text; we need structured data
-                    // Get all session info from manager
-                    let! allInfo = task {
-                      let results = System.Collections.Generic.List<{| id: string; status: string; projects: string list; workingDirectory: string; evalCount: int; avgDurationMs: float |}>()
-                      // Attempt to get proxy for each known session ID by parsing the listing
-                      // The listing is text-based, so we'll try each line
-                      let lines = listing.Split('\n') |> Array.filter (fun l -> l.Contains("│") || l.Contains("["))
-                      for line in lines do
-                        // Try to extract session ID from the line
-                        let parts = line.Split([|'['; ']'; '│'; ' '|], StringSplitOptions.RemoveEmptyEntries)
-                        if parts.Length > 0 then
-                          let candidateId = parts.[0].Trim()
-                          if candidateId.Length >= 6 && not (candidateId.Contains("/")) then
-                            let! info = sessionOps.GetSessionInfo candidateId
-                            match info with
-                            | Some i ->
-                              let! proxy = sessionOps.GetProxy candidateId
-                              let! evalCount, avgMs, status = task {
-                                match proxy with
-                                | Some send ->
-                                  let! resp = send (SageFs.WorkerProtocol.WorkerMessage.GetStatus "api") |> Async.StartAsTask
-                                  match resp with
-                                  | SageFs.WorkerProtocol.WorkerResponse.StatusResult(_, snap) ->
-                                    return snap.EvalCount, float snap.AvgDurationMs, SageFs.WorkerProtocol.SessionStatus.label snap.Status
-                                  | _ -> return 0, 0.0, "Unknown"
-                                | None -> return 0, 0.0, "Disconnected"
-                              }
-                              results.Add({| id = candidateId; status = status; projects = i.Projects; workingDirectory = i.WorkingDirectory; evalCount = evalCount; avgDurationMs = avgMs |})
-                            | None -> ()
-                      return results |> Seq.toList
-                    }
-                    do! jsonResponse ctx 200 {| sessions = allInfo |}
+                    let! allSessions = sessionOps.GetAllSessions()
+                    let results = System.Collections.Generic.List<obj>()
+                    for sess in allSessions do
+                      let! proxy = sessionOps.GetProxy sess.Id
+                      let! evalCount, avgMs, status = task {
+                        match proxy with
+                        | Some send ->
+                          try
+                            let! resp = send (SageFs.WorkerProtocol.WorkerMessage.GetStatus "api") |> Async.StartAsTask
+                            match resp with
+                            | SageFs.WorkerProtocol.WorkerResponse.StatusResult(_, snap) ->
+                              return snap.EvalCount, float snap.AvgDurationMs, SageFs.WorkerProtocol.SessionStatus.label snap.Status
+                            | _ -> return 0, 0.0, "Unknown"
+                          with _ -> return 0, 0.0, "Error"
+                        | None -> return 0, 0.0, "Disconnected"
+                      }
+                      results.Add(
+                        {| id = sess.Id
+                           status = status
+                           projects = sess.Projects
+                           workingDirectory = sess.WorkingDirectory
+                           evalCount = evalCount
+                           avgDurationMs = avgMs |} :> obj)
+                    do! jsonResponse ctx 200 {| sessions = results |}
                 }) :> Task
             ) |> ignore
 

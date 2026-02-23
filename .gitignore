@@ -21,3 +21,5 @@ playwright-report/
 .github/copilot-instructions.md
 *.received.*
 analyzers/community
+
+.fake

@@ -2,7 +2,7 @@
   "name": "sagefs",
   "displayName": "SageFs — Live F# Development",
   "description": "Send F# code to SageFs for instant evaluation, type-checking, and hot reload.",
-  "version": "0.1.0",
+  "version": "0.5.36",
   "publisher": "sagefs",
   "license": "MIT",
   "repository": {
@@ -27,7 +27,12 @@
   ],
   "activationEvents": [
     "onLanguage:fsharp",
-    "workspaceContains:**/*.fsproj"
+    "workspaceContains:**/*.fsproj",
+    "workspaceContains:**/*.sln",
+    "workspaceContains:**/*.slnx",
+    "onCommand:sagefs.start",
+    "onCommand:sagefs.stop",
+    "onCommand:sagefs.openDashboard"
   ],
   "main": "./dist/Extension.js",
   "contributes": {
@@ -192,7 +197,8 @@
     }
   },
   "scripts": {
-    "vscode:prepublish": "npm run compile",
+    "sync-version": "node -e \"const fs=require('fs');const x=fs.readFileSync('../SageFs/SageFs.fsproj','utf8');const m=x.match(/<Version>([^<]+)<\\/Version>/);if(m){const p=JSON.parse(fs.readFileSync('package.json','utf8'));p.version=m[1];fs.writeFileSync('package.json',JSON.stringify(p,null,2)+'\\n');console.log('Version synced:',m[1])}\"",
+    "vscode:prepublish": "npm run sync-version && npm run compile",
     "compile": "dotnet fable src --outDir fable-out && node esbuild.mjs",
     "watch": "dotnet fable watch src --outDir fable-out",
     "compile:ts": "tsc -p ./"

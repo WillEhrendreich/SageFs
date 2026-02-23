@@ -73,6 +73,7 @@
         <Compile Include="PluginContractTests.fs" />
         <Compile Include="HttpApiIntegrationTests.fs" />
         <Compile Include="WarmupContextTests.fs" />
+        <Compile Include="VscodeExtensionTests.fs" />
         <Compile Include="Program.fs" />
     </ItemGroup>
 
