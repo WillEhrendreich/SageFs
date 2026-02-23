@@ -54,7 +54,7 @@ module VscodeFixture =
     |> Option.orElseWith (fun () -> fromPath.Value)
     |> Option.orElseWith (fun () -> wellKnown |> List.tryFind IO.File.Exists)
 
-  let private codeExe =
+  let private codeExe () =
     match codeExePath with
     | Some p -> p
     | None ->
@@ -96,7 +96,7 @@ module VscodeFixture =
         "--remote-debugging-port=%d --user-data-dir=\"%s\" --new-window%s \"%s\""
         cdpPort userDataDir extFlag workspaceDir
 
-    let psi = ProcessStartInfo(codeExe, args)
+    let psi = ProcessStartInfo(codeExe (), args)
     psi.UseShellExecute <- true
     let proc = Process.Start(psi)
     codePid <- Some proc.Id
