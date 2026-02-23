@@ -63,9 +63,9 @@ Gutter markers appear in your editor (VS Code, Neovim, TUI, GUI, Visual Studio â
 
 Tests are categorized automatically (Unit, Integration, Browser, Property, Benchmark) with smart run policies â€” unit and property tests run on every keystroke, integration tests run on save, browser tests run on demand. All configurable.
 
-The architecture is fully designed with a [pure domain model](docs/live-testing-architecture.md), two-tier provider system (attribute-based covers 80% of frameworks in ~10 lines, custom providers handle Expecto-style value tests), and OTEL tracing so you can see the full pipeline waterfall in Aspire.
+The architecture is fully designed with a pure domain model, two-tier provider system (attribute-based covers 80% of frameworks in ~10 lines, custom providers handle Expecto-style value tests), and OTEL tracing so you can see the full pipeline waterfall in Aspire.
 
-**Status:** Architecture complete, implementation in progress. Track progress in [`docs/live-testing-architecture.md`](docs/live-testing-architecture.md).
+**Status:** Architecture complete, implementation in progress.
 
 ---
 
