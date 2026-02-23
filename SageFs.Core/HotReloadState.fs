@@ -37,3 +37,43 @@ let toggle (path: string) (state: T) : T =
 
 let watchedCount (state: T) : int =
   state.Watched.Count
+
+let private normalizeDir (dir: string) =
+  (dir.Replace('\\', '/').ToLowerInvariant()).TrimEnd('/')
+
+let private dirOf (path: string) =
+  System.IO.Path.GetDirectoryName(path).Replace('\\', '/')
+
+let watchByDirectory (dir: string) (allPaths: string seq) (state: T) : T =
+  let nd = normalizeDir dir
+  let matching =
+    allPaths
+    |> Seq.map normalize
+    |> Seq.filter (fun p ->
+      let d = dirOf p
+      d = nd || d.StartsWith(nd + "/"))
+  watchMany matching state
+
+let unwatchByDirectory (dir: string) (state: T) : T =
+  let nd = normalizeDir dir
+  let remaining =
+    state.Watched
+    |> Set.filter (fun p ->
+      let d = dirOf p
+      not (d = nd || d.StartsWith(nd + "/")))
+  { state with Watched = remaining }
+
+let watchedInDirectory (dir: string) (state: T) : string list =
+  let nd = normalizeDir dir
+  state.Watched
+  |> Set.filter (fun p ->
+    let d = dirOf p
+    d = nd || d.StartsWith(nd + "/"))
+  |> Set.toList
+
+let watchByProject (projectPaths: string seq) (state: T) : T =
+  watchMany projectPaths state
+
+let unwatchByProject (projectPaths: string seq) (state: T) : T =
+  let normalized = projectPaths |> Seq.map normalize |> Set.ofSeq
+  { state with Watched = Set.difference state.Watched normalized }

@@ -165,16 +165,37 @@ module WorkerHttpTransport =
         let! body = readBody ctx
         use doc = JsonDocument.Parse(body)
         let project = (jsonProp doc "project").GetString()
-        let normalizedDir =
-          let d = project.Replace('\\', '/').ToLowerInvariant()
-          if d.EndsWith("/") then d else d + "/"
-        let matching =
-          projectFiles
-          |> List.filter (fun f ->
-            f.Replace('\\', '/').ToLowerInvariant().StartsWith(normalizedDir))
-        hotReloadStateRef.Value <- HotReloadState.watchMany matching !hotReloadStateRef
+        hotReloadStateRef.Value <- HotReloadState.watchByDirectory project projectFiles !hotReloadStateRef
         ctx.Response.ContentType <- "application/json"
-        do! ctx.Response.WriteAsync(Serialization.serialize {| project = project; watchedCount = List.length matching |})
+        do! ctx.Response.WriteAsync(Serialization.serialize {| project = project; watchedCount = HotReloadState.watchedCount !hotReloadStateRef |})
+      })) |> ignore
+
+      app.MapPost("/hotreload/unwatch-project", Func<HttpContext, Task>(fun ctx -> task {
+        let! body = readBody ctx
+        use doc = JsonDocument.Parse(body)
+        let project = (jsonProp doc "project").GetString()
+        hotReloadStateRef.Value <- HotReloadState.unwatchByDirectory project !hotReloadStateRef
+        ctx.Response.ContentType <- "application/json"
+        do! ctx.Response.WriteAsync(Serialization.serialize {| project = project; watchedCount = HotReloadState.watchedCount !hotReloadStateRef |})
+      })) |> ignore
+
+      app.MapPost("/hotreload/watch-directory", Func<HttpContext, Task>(fun ctx -> task {
+        let! body = readBody ctx
+        use doc = JsonDocument.Parse(body)
+        let dir = (jsonProp doc "directory").GetString()
+        hotReloadStateRef.Value <- HotReloadState.watchByDirectory dir projectFiles !hotReloadStateRef
+        ctx.Response.ContentType <- "application/json"
+        let watched = HotReloadState.watchedInDirectory dir !hotReloadStateRef
+        do! ctx.Response.WriteAsync(Serialization.serialize {| directory = dir; watchedCount = List.length watched |})
+      })) |> ignore
+
+      app.MapPost("/hotreload/unwatch-directory", Func<HttpContext, Task>(fun ctx -> task {
+        let! body = readBody ctx
+        use doc = JsonDocument.Parse(body)
+        let dir = (jsonProp doc "directory").GetString()
+        hotReloadStateRef.Value <- HotReloadState.unwatchByDirectory dir !hotReloadStateRef
+        ctx.Response.ContentType <- "application/json"
+        do! ctx.Response.WriteAsync(Serialization.serialize {| directory = dir; watchedCount = HotReloadState.watchedCount !hotReloadStateRef |})
       })) |> ignore
 
       do! app.StartAsync()

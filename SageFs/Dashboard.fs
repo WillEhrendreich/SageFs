@@ -1138,10 +1138,18 @@ let renderHotReloadPanel (sessionId: string) (files: {| path: string; watched: b
       yield! grouped |> List.collect (fun (dir, dirFiles) ->
         let dirLabel =
           if dir.Length > 40 then "..." + dir.[dir.Length - 37..] else dir
+        let dirWatchedCount = dirFiles |> List.filter (fun f -> f.watched) |> List.length
+        let allWatched = dirWatchedCount = List.length dirFiles
+        let dirIcon = if allWatched then "●" else if dirWatchedCount > 0 then "◐" else "○"
+        let dirColor = if allWatched then "var(--accent, #7aa2f7)" else if dirWatchedCount > 0 then "var(--accent, #7aa2f7)" else "var(--fg-dim, #565f89)"
+        let dirAction = if allWatched then "unwatch-directory" else "watch-directory"
+        let dirKey = if allWatched then "directory" else "directory"
         [
-          Elem.div [ Attr.style "font-weight: 600; margin-top: 4px; opacity: 0.7; font-size: 0.7rem;" ] [
-            Text.raw (sprintf "📁 %s" dirLabel)
-          ]
+          Elem.div
+            [ Attr.style "font-weight: 600; margin-top: 4px; opacity: 0.8; font-size: 0.7rem; cursor: pointer; display: flex; align-items: center; gap: 4px;"
+              Attr.create "onclick" (sprintf "fetch('/api/sessions/%s/hotreload/%s',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({%s:'%s'})})" sessionId dirAction dirKey (dir.Replace("\\", "\\\\"))) ]
+            [ Elem.span [ Attr.style (sprintf "color: %s;" dirColor) ] [ Text.raw dirIcon ]
+              Text.raw (sprintf "📁 %s (%d/%d)" dirLabel dirWatchedCount (List.length dirFiles)) ]
           yield! dirFiles |> List.map (fun f ->
             let fileName =
               let n = f.path.Replace('\\', '/')
