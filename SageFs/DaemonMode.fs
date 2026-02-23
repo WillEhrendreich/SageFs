@@ -243,6 +243,24 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
   // Create a diagnostics-changed event (aggregated from workers)
   let diagnosticsChanged = Event<Features.DiagnosticsStore.T>()
 
+  // Warmup context fetcher for MCP — uses session manager to find worker URL
+  let getWarmupContextForMcp (sessionId: string) : System.Threading.Tasks.Task<WarmupContext option> =
+    task {
+      try
+        let! managed =
+          sessionManager.PostAndAsyncReply(fun reply ->
+            SessionManager.SessionCommand.GetSession(sessionId, reply))
+          |> Async.StartAsTask
+        match managed with
+        | Some s when s.WorkerBaseUrl.Length > 0 ->
+          let client = new Net.Http.HttpClient()
+          let! resp = client.GetStringAsync(sprintf "%s/warmup-context" s.WorkerBaseUrl)
+          let ctx = WorkerProtocol.Serialization.deserialize<WarmupContext> resp
+          return Some ctx
+        | _ -> return None
+      with _ -> return None
+    }
+
   // Start MCP server
   let mcpTask =
     McpServer.startMcpServer
@@ -252,6 +270,7 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
       mcpPort
       sessionOps
       (Some elmRuntime)
+      (Some getWarmupContextForMcp)
 
   // Start dashboard web server on MCP port + 1
   let dashboardPort = mcpPort + 1

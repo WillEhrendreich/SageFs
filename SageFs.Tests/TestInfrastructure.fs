@@ -63,7 +63,8 @@ let sharedCtx () =
     McpPort = 0
     Dispatch = None
     GetElmModel = None
-    GetElmRegions = None } : McpContext
+    GetElmRegions = None
+    GetWarmupContext = None } : McpContext
 
 /// Create a McpContext with a custom session ID backed by the global shared actor
 let sharedCtxWith sessionId =
@@ -78,4 +79,5 @@ let sharedCtxWith sessionId =
     McpPort = 0
     Dispatch = None
     GetElmModel = None
-    GetElmRegions = None } : McpContext
+    GetElmRegions = None
+    GetWarmupContext = None } : McpContext

@@ -3,6 +3,7 @@ module SageFs.Tests.WarmupContextTests
 open Expecto
 open Expecto.Flip
 open SageFs
+open SageFs.McpAdapter
 
 let sampleAssembly: LoadedAssembly = {
   Name = "MyApp"
@@ -227,4 +228,91 @@ let sessionContextTuiTests = testList "SessionContextTui" [
     lines |> List.exists (fun l -> l.Contains("Assemblies")) |> Expect.isFalse "no assemblies section"
     lines |> List.exists (fun l -> l.Contains("Failed")) |> Expect.isFalse "no failed section"
     lines |> List.exists (fun l -> l.Contains("Files")) |> Expect.isFalse "no files section"
+]
+
+let mkLlmAsm name ns mods : LoadedAssembly =
+  { Name = name; Path = sprintf "%s.dll" name; NamespaceCount = ns; ModuleCount = mods }
+
+let mkLlmOpen name : OpenedBinding =
+  { Name = name; IsModule = false; Source = "warmup" }
+
+let mkLlmFile path readiness : FileStatus =
+  { Path = path; Readiness = readiness; LastLoadedAt = None; IsWatched = true }
+
+[<Tests>]
+let formatWarmupForLlmTests = testList "formatWarmupForLlm" [
+  testCase "healthy session produces compact one-liner" <| fun _ ->
+    let ctx : SessionContext = {
+      SessionId = "abc123"
+      ProjectNames = ["MyProj"]
+      WorkingDir = "/code"
+      Status = "Ready"
+      Warmup = {
+        AssembliesLoaded = [mkLlmAsm "Asm1" 3 1; mkLlmAsm "Asm2" 2 0]
+        NamespacesOpened = [mkLlmOpen "System"; mkLlmOpen "System.IO"]
+        FailedOpens = []
+        WarmupDurationMs = 890L
+        SourceFilesScanned = 5
+        StartedAt = System.DateTimeOffset.UtcNow
+      }
+      FileStatuses = [mkLlmFile "a.fs" Loaded; mkLlmFile "b.fs" Loaded]
+    }
+    formatWarmupForLlm ctx
+    |> Expect.equal "compact one-liner"
+      "session=abc123 [Ready | 2 asm | 2/2 ns | 2/2 files | 890ms]"
+
+  testCase "failed opens expand with warning section" <| fun _ ->
+    let ctx : SessionContext = {
+      SessionId = "def456"
+      ProjectNames = ["BadProj"]
+      WorkingDir = "/code"
+      Status = "Ready"
+      Warmup = {
+        AssembliesLoaded = [mkLlmAsm "Asm1" 3 1]
+        NamespacesOpened = [mkLlmOpen "System"]
+        FailedOpens = [("Bad.Ns", "not found")]
+        WarmupDurationMs = 1200L
+        SourceFilesScanned = 3
+        StartedAt = System.DateTimeOffset.UtcNow
+      }
+      FileStatuses = [mkLlmFile "good.fs" Loaded]
+    }
+    let result = formatWarmupForLlm ctx
+    result |> Expect.stringContains "summary line" "session=def456"
+    result |> Expect.stringContains "ns failed count" "1 ns failed"
+    result |> Expect.stringContains "warning section" "⚠ load problems:"
+    result |> Expect.stringContains "failed open detail" "✖ open Bad.Ns — not found"
+
+  testCase "failed file loads show in warning section" <| fun _ ->
+    let ctx : SessionContext = {
+      SessionId = "ghi789"
+      ProjectNames = ["Proj"]
+      WorkingDir = "/code"
+      Status = "Ready"
+      Warmup = {
+        AssembliesLoaded = [mkLlmAsm "Asm1" 2 1]
+        NamespacesOpened = [mkLlmOpen "System"]
+        FailedOpens = []
+        WarmupDurationMs = 500L
+        SourceFilesScanned = 2
+        StartedAt = System.DateTimeOffset.UtcNow
+      }
+      FileStatuses = [mkLlmFile "good.fs" Loaded; mkLlmFile "broken.fs" LoadFailed]
+    }
+    let result = formatWarmupForLlm ctx
+    result |> Expect.stringContains "load-failed count" "1 load-failed"
+    result |> Expect.stringContains "file failure detail" "✖ load broken.fs"
+
+  testCase "empty session shows zeros" <| fun _ ->
+    let ctx : SessionContext = {
+      SessionId = "empty"
+      ProjectNames = []
+      WorkingDir = ""
+      Status = "Starting"
+      Warmup = WarmupContext.empty
+      FileStatuses = []
+    }
+    formatWarmupForLlm ctx
+    |> Expect.equal "zero counts"
+      "session=empty [Starting | 0 asm | 0/0 ns | 0/0 files | 0ms]"
 ]

@@ -128,6 +128,30 @@ type EventAccumulator() =
 type McpServerTracker() =
   let servers = ConcurrentDictionary<string, McpServer>()
   let accumulator = EventAccumulator()
+  let mutable warmupSummary : string option = None
+  let mutable getWarmupSummaryFn : (unit -> string option) option = None
+
+  /// Set a function that lazily builds the warmup summary.
+  member _.SetWarmupSummaryProvider(f: unit -> string option) =
+    getWarmupSummaryFn <- Some f
+
+  /// Cache a pre-formatted warmup summary string for inclusion in tool responses.
+  member _.SetWarmupSummary(summary: string) =
+    warmupSummary <- Some summary
+
+  /// Get warmup summary: cached value, or lazily compute from provider.
+  member _.GetWarmupSummary() =
+    match warmupSummary with
+    | Some s -> Some s
+    | None ->
+      match getWarmupSummaryFn with
+      | Some f ->
+        let result = f()
+        match result with
+        | Some s -> warmupSummary <- Some s
+        | None -> ()
+        result
+      | None -> None
 
   member _.Register(server: McpServer) =
     servers.[server.SessionId] <- server
@@ -189,6 +213,11 @@ let createServerCaptureFilter (tracker: McpServerTracker) =
             |> String.concat "\n"
           let banner = sprintf "\n\n📡 SageFs events since last call:\n%s" eventText
           result.Content.Add(TextContentBlock(Text = banner))
+        // Always include warmup context summary
+        match tracker.GetWarmupSummary() with
+        | Some summary ->
+          result.Content.Add(TextContentBlock(Text = sprintf "\n🔧 %s" summary))
+        | None -> ()
         result
 
       let vt = next.Invoke(ctx, ct)
@@ -230,11 +259,11 @@ let withErrorHandling (ctx: Microsoft.AspNetCore.Http.HttpContext) (handler: uni
 }
 
 // Create shared MCP context
-let mkContext (store: Marten.IDocumentStore) (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.T>) (stateChanged: IEvent<string> option) (sessionOps: SageFs.SessionManagementOps) (mcpPort: int) (dispatch: (SageFs.SageFsMsg -> unit) option) (getElmModel: (unit -> SageFs.SageFsModel) option) (getElmRegions: (unit -> SageFs.RenderRegion list) option) : McpContext =
-  { Store = store; DiagnosticsChanged = diagnosticsChanged; StateChanged = stateChanged; SessionOps = sessionOps; SessionMap = System.Collections.Concurrent.ConcurrentDictionary<string, string>(); McpPort = mcpPort; Dispatch = dispatch; GetElmModel = getElmModel; GetElmRegions = getElmRegions }
+let mkContext (store: Marten.IDocumentStore) (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.T>) (stateChanged: IEvent<string> option) (sessionOps: SageFs.SessionManagementOps) (mcpPort: int) (dispatch: (SageFs.SageFsMsg -> unit) option) (getElmModel: (unit -> SageFs.SageFsModel) option) (getElmRegions: (unit -> SageFs.RenderRegion list) option) (getWarmupContext: (string -> System.Threading.Tasks.Task<SageFs.WarmupContext option>) option) : McpContext =
+  { Store = store; DiagnosticsChanged = diagnosticsChanged; StateChanged = stateChanged; SessionOps = sessionOps; SessionMap = System.Collections.Concurrent.ConcurrentDictionary<string, string>(); McpPort = mcpPort; Dispatch = dispatch; GetElmModel = getElmModel; GetElmRegions = getElmRegions; GetWarmupContext = getWarmupContext }
 
 // Start MCP server in background
-let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.T>) (stateChanged: IEvent<string> option) (store: Marten.IDocumentStore) (port: int) (sessionOps: SageFs.SessionManagementOps) (elmRuntime: SageFs.ElmRuntime<SageFs.SageFsModel, SageFs.SageFsMsg, SageFs.RenderRegion> option) =
+let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.T>) (stateChanged: IEvent<string> option) (store: Marten.IDocumentStore) (port: int) (sessionOps: SageFs.SessionManagementOps) (elmRuntime: SageFs.ElmRuntime<SageFs.SageFsModel, SageFs.SageFsMsg, SageFs.RenderRegion> option) (getWarmupContext: (string -> System.Threading.Tasks.Task<SageFs.WarmupContext option>) option) =
     task {
         try
             let dispatch = elmRuntime |> Option.map (fun r -> r.Dispatch)
@@ -283,7 +312,7 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
             ) |> ignore
             
             // Create MCP context
-            let mcpContext = (mkContext store diagnosticsChanged stateChanged sessionOps port dispatch getElmModel getElmRegions)
+            let mcpContext = (mkContext store diagnosticsChanged stateChanged sessionOps port dispatch getElmModel getElmRegions getWarmupContext)
             
             // Register MCP services
             builder.Services.AddSingleton<McpContext>(mcpContext) |> ignore
@@ -294,6 +323,35 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
             
             // Create notification tracker
             let serverTracker = McpServerTracker()
+            serverTracker.SetWarmupSummaryProvider(fun () ->
+              try
+                let activeSid =
+                  mcpContext.SessionMap.Values
+                  |> Seq.tryHead
+                  |> Option.defaultValue ""
+                if System.String.IsNullOrEmpty activeSid then None
+                else
+                  match mcpContext.GetWarmupContext with
+                  | Some getCtx ->
+                    let wCtx = getCtx(activeSid).Result
+                    match wCtx with
+                    | Some warmup ->
+                      let info = mcpContext.SessionOps.GetSessionInfo(activeSid).Result
+                      let sessionCtx : SageFs.SessionContext = {
+                        SessionId = activeSid
+                        ProjectNames =
+                          info |> Option.map (fun i -> i.Projects) |> Option.defaultValue []
+                        WorkingDir =
+                          info |> Option.map (fun i -> i.WorkingDirectory) |> Option.defaultValue ""
+                        Status =
+                          info |> Option.map (fun i -> SageFs.WorkerProtocol.SessionStatus.label i.Status) |> Option.defaultValue "unknown"
+                        Warmup = warmup
+                        FileStatuses = []
+                      }
+                      Some (SageFs.McpAdapter.formatWarmupForLlm sessionCtx)
+                    | None -> None
+                  | None -> None
+              with _ -> None)
             builder.Services.AddSingleton<McpServerTracker>(serverTracker) |> ignore
 
             builder.Services
@@ -327,7 +385,7 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
             app.MapMcp() |> ignore
 
             // Shared context — constructed once
-            let mcpContext = mkContext store diagnosticsChanged stateChanged sessionOps port dispatch getElmModel getElmRegions
+            let mcpContext = mkContext store diagnosticsChanged stateChanged sessionOps port dispatch getElmModel getElmRegions getWarmupContext
             
             // POST /exec — send F# code to the session
             app.MapPost("/exec", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->

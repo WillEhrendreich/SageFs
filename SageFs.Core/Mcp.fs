@@ -121,6 +121,50 @@ module McpAdapter =
 
     JsonSerializer.Serialize(result)
 
+  /// Compact warmup context for LLM output footer.
+  /// Healthy sessions: one-liner. Problem sessions: failures expanded.
+  let formatWarmupForLlm (ctx: SessionContext) =
+    let w = ctx.Warmup
+    let opened = WarmupContext.totalOpenedCount w
+    let failed = WarmupContext.totalFailedCount w
+    let asmCount = w.AssembliesLoaded.Length
+    let fileCount = ctx.FileStatuses.Length
+    let loadedFiles =
+      ctx.FileStatuses
+      |> List.filter (fun f -> f.Readiness = Loaded)
+      |> List.length
+    let failedFiles =
+      ctx.FileStatuses
+      |> List.filter (fun f -> f.Readiness = LoadFailed)
+      |> List.length
+
+    let parts = ResizeArray<string>()
+    parts.Add(ctx.Status)
+    parts.Add(sprintf "%d asm" asmCount)
+    parts.Add(sprintf "%d/%d ns" opened (opened + failed))
+    if failed > 0 then parts.Add(sprintf "%d ns failed" failed)
+    parts.Add(sprintf "%d/%d files" loadedFiles fileCount)
+    if failedFiles > 0 then parts.Add(sprintf "%d load-failed" failedFiles)
+    parts.Add(sprintf "%dms" w.WarmupDurationMs)
+
+    let summary =
+      sprintf "session=%s [%s]"
+        ctx.SessionId (String.concat " | " parts)
+
+    let failures =
+      let items = ResizeArray<string>()
+      for (name, err) in w.FailedOpens do
+        items.Add(sprintf "    ✖ open %s — %s" name err)
+      for f in ctx.FileStatuses do
+        if f.Readiness = LoadFailed then
+          items.Add(
+            sprintf "    ✖ load %s" (IO.Path.GetFileName f.Path))
+      if items.Count = 0 then ""
+      else
+        sprintf "\n  ⚠ load problems:\n%s" (String.concat "\n" items)
+
+    sprintf "%s%s" summary failures
+
   let splitStatements (code: string) : string list =
     let mutable i = 0
     let len = code.Length
@@ -624,6 +668,8 @@ module McpTools =
     GetElmModel: (unit -> SageFsModel) option
     /// Read the current render regions (daemon mode).
     GetElmRegions: (unit -> RenderRegion list) option
+    /// Fetch warmup context for a session (daemon mode).
+    GetWarmupContext: (string -> Threading.Tasks.Task<WarmupContext option>) option
   }
 
   /// Get the active session ID for a specific agent/client.

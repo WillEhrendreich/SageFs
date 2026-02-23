@@ -46,7 +46,8 @@ module McpSessionIsolation =
         McpPort = 0
         Dispatch = Some (fun msg -> dispatched.Add(msg))
         GetElmModel = None
-        GetElmRegions = None } : McpContext
+        GetElmRegions = None
+        GetWarmupContext = None } : McpContext
     ctx, dispatched
 
   /// Call switchSession and return result, ignoring Marten stream errors.
@@ -140,7 +141,8 @@ module McpSessionIsolation =
           McpPort = 0
           Dispatch = None
           GetElmModel = None
-          GetElmRegions = None } : McpContext
+          GetElmRegions = None
+          GetWarmupContext = None } : McpContext
 
       let! result = switchSession ctx "test" "nonexistent"
 
@@ -268,7 +270,7 @@ module WorkingDirRoutingPriority =
           GetAllSessions = fun () -> Task.FromResult(sessions)
           GetStandbyInfo = fun () -> Task.FromResult(StandbyInfo.NoPool) }
       SessionMap = sessionMap; McpPort = 0; Dispatch = None
-      GetElmModel = None; GetElmRegions = None }
+      GetElmModel = None; GetElmRegions = None; GetWarmupContext = None }
 
   let tests = testList "workingDirectory routing priority" [
     testTask "workingDirectory should override cached session" {
@@ -351,7 +353,8 @@ module ResetIsolation =
         McpPort = 0
         Dispatch = None
         GetElmModel = None
-        GetElmRegions = None } : McpContext
+        GetElmRegions = None
+        GetWarmupContext = None } : McpContext
     ctx, restartLog, routedSessions
 
   let tests = testList "[Integration] Reset isolation" [
