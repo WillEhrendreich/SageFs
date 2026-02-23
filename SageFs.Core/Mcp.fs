@@ -122,11 +122,92 @@ module McpAdapter =
     JsonSerializer.Serialize(result)
 
   let splitStatements (code: string) : string list =
-    code.Split([| ";;" |], StringSplitOptions.RemoveEmptyEntries)
-    |> Array.map (fun s -> s.Trim())
-    |> Array.filter (fun s -> not (String.IsNullOrWhiteSpace s))
-    |> Array.map (fun s -> s + ";;")
-    |> Array.toList
+    let mutable i = 0
+    let len = code.Length
+    let statements = ResizeArray<string>()
+    let current = Text.StringBuilder()
+    let inline peek offset = if i + offset < len then code.[i + offset] else '\000'
+    while i < len do
+      let c = code.[i]
+      match c with
+      | '"' when peek 1 = '"' && peek 2 = '"' ->
+        current.Append("\"\"\"") |> ignore
+        i <- i + 3
+        let mutable inTriple = true
+        while inTriple && i < len do
+          if code.[i] = '"' && peek 1 = '"' && peek 2 = '"' then
+            current.Append("\"\"\"") |> ignore
+            i <- i + 3
+            inTriple <- false
+          else
+            current.Append(code.[i]) |> ignore
+            i <- i + 1
+      | '@' when peek 1 = '"' ->
+        current.Append("@\"") |> ignore
+        i <- i + 2
+        let mutable inVerbatim = true
+        while inVerbatim && i < len do
+          if code.[i] = '"' && peek 1 = '"' then
+            current.Append("\"\"") |> ignore
+            i <- i + 2
+          elif code.[i] = '"' then
+            current.Append('"') |> ignore
+            i <- i + 1
+            inVerbatim <- false
+          else
+            current.Append(code.[i]) |> ignore
+            i <- i + 1
+      | '"' ->
+        current.Append('"') |> ignore
+        i <- i + 1
+        let mutable inStr = true
+        while inStr && i < len do
+          if code.[i] = '\\' then
+            current.Append(code.[i]) |> ignore
+            i <- i + 1
+            if i < len then
+              current.Append(code.[i]) |> ignore
+              i <- i + 1
+          elif code.[i] = '"' then
+            current.Append('"') |> ignore
+            i <- i + 1
+            inStr <- false
+          else
+            current.Append(code.[i]) |> ignore
+            i <- i + 1
+      | '/' when peek 1 = '/' ->
+        while i < len && code.[i] <> '\n' do
+          current.Append(code.[i]) |> ignore
+          i <- i + 1
+      | '(' when peek 1 = '*' ->
+        current.Append("(*") |> ignore
+        i <- i + 2
+        let mutable depth = 1
+        while depth > 0 && i < len do
+          if code.[i] = '(' && peek 1 = '*' then
+            current.Append("(*") |> ignore
+            i <- i + 2
+            depth <- depth + 1
+          elif code.[i] = '*' && peek 1 = ')' then
+            current.Append("*)") |> ignore
+            i <- i + 2
+            depth <- depth - 1
+          else
+            current.Append(code.[i]) |> ignore
+            i <- i + 1
+      | ';' when peek 1 = ';' ->
+        let stmt = current.ToString().Trim()
+        if stmt.Length > 0 then
+          statements.Add(stmt + ";;")
+        current.Clear() |> ignore
+        i <- i + 2
+      | _ ->
+        current.Append(c) |> ignore
+        i <- i + 1
+    let trailing = current.ToString().Trim()
+    if trailing.Length > 0 then
+      statements.Add(trailing)
+    statements |> Seq.toList
 
   let echoStatement (writer: TextWriter) (statement: string) =
     let code =
@@ -146,28 +227,7 @@ module McpAdapter =
   let parseScriptFile (filePath: string) : Result<list<string>, exn> =
     try
       let content = File.ReadAllText(filePath)
-      let lines = content.Split([| '\n'; '\r' |], StringSplitOptions.RemoveEmptyEntries)
-
-      let rec parseStatements (lines: string list) (currentStmt: string list) (statements: string list) =
-        match lines with
-        | [] ->
-          if currentStmt.IsEmpty then
-            statements
-          else
-            (String.concat "\n" (List.rev currentStmt)) :: statements
-        | line :: rest ->
-          let trimmed = line.TrimStart()
-
-          if trimmed.StartsWith("//") then
-            parseStatements rest currentStmt statements
-          elif line.Contains(";;") then
-            let stmt = String.concat "\n" (List.rev (line :: currentStmt))
-            parseStatements rest [] (stmt :: statements)
-          else
-            parseStatements rest (line :: currentStmt) statements
-
-      let statements = parseStatements (Array.toList lines) [] []
-      Ok(List.rev statements)
+      Ok(splitStatements content)
     with ex ->
       Error ex
 
