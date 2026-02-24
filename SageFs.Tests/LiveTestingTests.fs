@@ -1027,3 +1027,96 @@ let transitiveClosureTests = testList "TransitiveCoverage" [
     result |> Expect.equal "empty result" Map.empty
   }
 ]
+
+// --- Phase 4: As-You-Type Pipeline Tests ---
+
+let debounceControllerTests = testList "DebounceController" [
+  test "acquire cancels previous token for same stage" {
+    let dc = new DebounceController()
+    let t1 = dc.Acquire(PipelineStage.TreeSitter)
+    t1.IsCancellationRequested
+    |> Expect.isFalse "first token not cancelled"
+    let _t2 = dc.Acquire(PipelineStage.TreeSitter)
+    t1.IsCancellationRequested
+    |> Expect.isTrue "first token cancelled after re-acquire"
+    (dc :> IDisposable).Dispose()
+  }
+
+  test "different stages are independent" {
+    let dc = new DebounceController()
+    let ts = dc.Acquire(PipelineStage.TreeSitter)
+    let fcs = dc.Acquire(PipelineStage.FcsTypeCheck)
+    let _ts2 = dc.Acquire(PipelineStage.TreeSitter)
+    ts.IsCancellationRequested
+    |> Expect.isTrue "tree-sitter cancelled"
+    fcs.IsCancellationRequested
+    |> Expect.isFalse "fcs NOT cancelled"
+    (dc :> IDisposable).Dispose()
+  }
+
+  test "cancelAll cancels all stages" {
+    let dc = new DebounceController()
+    let ts = dc.Acquire(PipelineStage.TreeSitter)
+    let fcs = dc.Acquire(PipelineStage.FcsTypeCheck)
+    dc.CancelAll()
+    ts.IsCancellationRequested
+    |> Expect.isTrue "tree-sitter cancelled"
+    fcs.IsCancellationRequested
+    |> Expect.isTrue "fcs cancelled"
+  }
+]
+
+let debouncedExecutionTests = testList "DebouncedExecution" [
+  testAsync "cancelled token returns None" {
+    let cts = new Threading.CancellationTokenSource()
+    cts.Cancel()
+    let! result = DebouncedExecution.execute 1 cts.Token (fun () -> 42)
+    result |> Expect.isNone "cancelled should return None"
+  }
+
+  testAsync "valid token returns Some" {
+    let cts = new Threading.CancellationTokenSource()
+    let! result = DebouncedExecution.execute 1 cts.Token (fun () -> 42)
+    result |> Expect.equal "should return Some 42" (Some 42)
+  }
+
+  testAsync "rapid keystrokes: only last executes" {
+    let dc = new DebounceController()
+    let mutable lastResult = None
+    let tokens = [| for i in 1..5 -> dc.Acquire(PipelineStage.TreeSitter), i |]
+    for (token, i) in tokens do
+      if not token.IsCancellationRequested then
+        let! r = DebouncedExecution.execute 1 token (fun () -> i)
+        match r with
+        | Some v -> lastResult <- Some v
+        | None -> ()
+    lastResult
+    |> Expect.equal "only last keystroke should execute" (Some 5)
+    (dc :> IDisposable).Dispose()
+  }
+]
+
+let timedExecutionTests = testList "timed" [
+  test "measures duration" {
+    let (result, elapsed) = DebouncedExecution.timed (fun () ->
+      Threading.Thread.Sleep 50
+      "done")
+    result |> Expect.equal "result" "done"
+    Expect.isTrue "elapsed > 40ms" (elapsed > TimeSpan.FromMilliseconds 40.0)
+  }
+]
+
+let affectedTestPipelineTests = testList "affected-test pipeline" [
+  test "dep graph lookup finds affected tests" {
+    let graph = {
+      TestDependencyGraph.empty with
+        SymbolToTests = Map.ofList [
+          "MyModule.add", [| TestId.create "add-test" "xunit" |]
+          "MyModule.validate", [| TestId.create "validate-test" "xunit" |]
+        ]
+    }
+    let affected = TestDependencyGraph.findAffected ["MyModule.add"] graph
+    affected.Length |> Expect.equal "one affected test" 1
+    affected.[0] |> Expect.equal "correct test" (TestId.create "add-test" "xunit")
+  }
+]

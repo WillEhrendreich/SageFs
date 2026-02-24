@@ -713,3 +713,55 @@ module TestProviderDescriptions =
         | ProviderDescription.AttributeBased d -> d.AssemblyMarker
         | ProviderDescription.Custom d -> d.AssemblyMarker
       Set.contains marker refNames)
+
+// --- Phase 4: As-You-Type Pipeline ---
+
+[<RequireQualifiedAccess>]
+type PipelineStage =
+  | TreeSitter
+  | FcsTypeCheck
+  | TestDiscovery
+  | TestExecution
+
+type StageTiming = {
+  Stage: PipelineStage
+  Duration: TimeSpan
+  Timestamp: DateTimeOffset
+}
+
+/// Manages CancellationTokenSource per pipeline stage.
+/// Acquiring a new token for a stage cancels the previous one.
+type DebounceController() =
+  let sources =
+    System.Collections.Concurrent.ConcurrentDictionary<PipelineStage, Threading.CancellationTokenSource>()
+
+  member _.Acquire(stage: PipelineStage) : Threading.CancellationToken =
+    let newCts = new Threading.CancellationTokenSource()
+    let _ = sources.AddOrUpdate(stage, newCts, fun _ old ->
+      old.Cancel()
+      old.Dispose()
+      newCts)
+    newCts.Token
+
+  member _.CancelAll() =
+    for kvp in sources do
+      kvp.Value.Cancel()
+      kvp.Value.Dispose()
+    sources.Clear()
+
+  interface IDisposable with
+    member this.Dispose() = this.CancelAll()
+
+module DebouncedExecution =
+  let execute (delayMs: int) (token: Threading.CancellationToken) (f: unit -> 'a) : Async<'a option> =
+    async {
+      do! Async.Sleep delayMs
+      if token.IsCancellationRequested then return None
+      else return Some (f ())
+    }
+
+  let timed (f: unit -> 'a) : 'a * TimeSpan =
+    let sw = Diagnostics.Stopwatch.StartNew()
+    let result = f ()
+    sw.Stop()
+    (result, sw.Elapsed)
