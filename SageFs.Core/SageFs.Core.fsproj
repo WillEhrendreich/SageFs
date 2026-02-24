@@ -74,6 +74,7 @@
     <ItemGroup>
         <EmbeddedResource Include="base.fsx" />
         <EmbeddedResource Include="highlights.scm" LogicalName="highlights.scm" />
+        <EmbeddedResource Include="tests.scm" LogicalName="tests.scm" />
     </ItemGroup>
 
     <ItemGroup>
