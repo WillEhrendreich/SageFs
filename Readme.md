@@ -66,7 +66,7 @@ Tests are categorized automatically (Unit, Integration, Browser, Property, Bench
 
 **What's built:**
 
-- [x] **Pure domain model** — `TestId` (SHA256-stable), `TestCase`, `TestResult`, `TestRunStatus`, `TestDependencyGraph`, `CoverageAnnotation`, and full Elm state management (`LiveTestState` with events, update, projection)
+- [x] **Pure domain model** — `TestId` (SHA256-stable), `TestCase`, `TestResult`, `TestRunStatus`, `TestDependencyGraph`, `CoverageAnnotation`, `RunGeneration`, `TestRunPhase`, `ResultFreshness`, `BatchCompletion` — all boolean state replaced with domain DUs, full Elm state management (`LiveTestState` with events, update, projection)
 - [x] **Two-tier provider system** — Attribute-based executor (Tier 1) covers xUnit, NUnit, MSTest, TUnit in ~10 lines each; custom executor (Tier 2) handles Expecto-style value-based tests
 - [x] **Tree-sitter source detection** — `tests.scm` query file detects test attributes in broken/incomplete F# code for instant gutter markers, even before the compiler runs
 - [x] **Test execution orchestration** — `TestOrchestrator` handles discovery, reflection-based execution with async parallelism and semaphore limits
@@ -78,7 +78,7 @@ Tests are categorized automatically (Unit, Integration, Browser, Property, Bench
 - [x] **Run policy enforcement** — `filterByPolicy()` integrated into execution paths so unit tests run on keystroke, integration on save, browser on demand
 - [x] **SSE push of test results** — `TestSummaryChanged` and `TestResultsBatch` events streamed to connected HTTP/SSE clients via push notification architecture
 - [x] **MCP live test tools** — `get_live_test_status` (query test state with file filter), `set_run_policy` (control which categories run when), `get_pipeline_trace` (debug the pipeline waterfall)
-- [x] **128+ tests** — Domain model, executor, tree-sitter, instrumentation, Elm integration, and FsCheck property-based tests all passing
+- [x] **128+ tests** — Domain model, executor, tree-sitter, instrumentation, Elm integration, and FsCheck property-based tests all passing — including state machine property tests for `TestRunPhase` transitions and debounce semantics
 - [x] **FCS dependency graph** — F# Compiler Service `CheckFileResults` wired via `SymbolGraphBuilder` to build symbol→test dependency maps, with `SymbolDiff` for detecting changes between FCS runs and `FileAnalysisCache` for per-file caching
 - [x] **Three-speed pipeline end-to-end** — Full debounced pipeline: keystroke → tree-sitter (50ms) → FCS with adaptive backoff (300ms, max 2000ms) → affected-test execution. `PipelineDebounce` manages per-stage cancellation tokens, `AdaptiveDebounce` backs off dynamically on FCS cancellations
 - [x] **Source mapping** — `SourceMapping` module bridges tree-sitter source locations (file/line/column) to reflection-discovered tests via function name matching, so gutter markers land on the right line even for Expecto-style hierarchical tests
