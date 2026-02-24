@@ -4412,3 +4412,67 @@ let projectAssemblyDiscoveryTests = testList "Project assembly initial discovery
     |> Expect.equal "one test from project" 1
   }
 ]
+
+[<Tests>]
+let mergeDiscoveredTestsTests = testList "LiveTesting.mergeDiscoveredTests" [
+  test "empty incoming preserves existing tests" {
+    let existing = [|
+      { Id = TestId.create "test1" "expecto"; FullName = "test1"; DisplayName = "t1"
+        Origin = TestOrigin.ReflectionOnly; Labels = []; Framework = "expecto"
+        Category = TestCategory.Unit } |]
+    let result = LiveTesting.mergeDiscoveredTests existing [||]
+    result.Length |> Expect.equal "keeps existing" 1
+  }
+
+  test "empty existing uses incoming" {
+    let incoming = [|
+      { Id = TestId.create "test1" "expecto"; FullName = "test1"; DisplayName = "t1"
+        Origin = TestOrigin.ReflectionOnly; Labels = []; Framework = "expecto"
+        Category = TestCategory.Unit } |]
+    let result = LiveTesting.mergeDiscoveredTests [||] incoming
+    result.Length |> Expect.equal "takes incoming" 1
+  }
+
+  test "incoming overrides existing with same TestId" {
+    let existing = [|
+      { Id = TestId.create "test1" "expecto"; FullName = "test1"; DisplayName = "old"
+        Origin = TestOrigin.ReflectionOnly; Labels = []; Framework = "expecto"
+        Category = TestCategory.Unit } |]
+    let incoming = [|
+      { Id = TestId.create "test1" "expecto"; FullName = "test1"; DisplayName = "new"
+        Origin = TestOrigin.ReflectionOnly; Labels = []; Framework = "expecto"
+        Category = TestCategory.Unit } |]
+    let result = LiveTesting.mergeDiscoveredTests existing incoming
+    result.Length |> Expect.equal "one merged test" 1
+    result.[0].DisplayName |> Expect.equal "incoming wins" "new"
+  }
+
+  test "disjoint tests are unioned" {
+    let existing = [|
+      { Id = TestId.create "test1" "expecto"; FullName = "test1"; DisplayName = "t1"
+        Origin = TestOrigin.ReflectionOnly; Labels = []; Framework = "expecto"
+        Category = TestCategory.Unit } |]
+    let incoming = [|
+      { Id = TestId.create "test2" "expecto"; FullName = "test2"; DisplayName = "t2"
+        Origin = TestOrigin.ReflectionOnly; Labels = []; Framework = "expecto"
+        Category = TestCategory.Unit } |]
+    let result = LiveTesting.mergeDiscoveredTests existing incoming
+    result.Length |> Expect.equal "both tests present" 2
+  }
+
+  test "second eval with empty incoming does not wipe tests" {
+    // Simulates: first eval discovers 3454 tests, second eval discovers 0 from FSI
+    let projectTests = [|
+      { Id = TestId.create "proj.test1" "expecto"; FullName = "proj.test1"
+        DisplayName = "t1"; Origin = TestOrigin.ReflectionOnly; Labels = []
+        Framework = "expecto"; Category = TestCategory.Unit }
+      { Id = TestId.create "proj.test2" "expecto"; FullName = "proj.test2"
+        DisplayName = "t2"; Origin = TestOrigin.ReflectionOnly; Labels = []
+        Framework = "expecto"; Category = TestCategory.Unit } |]
+    let afterFirstEval = LiveTesting.mergeDiscoveredTests [||] projectTests
+    // Second eval: FSI dynamic assembly has no tests
+    let afterSecondEval = LiveTesting.mergeDiscoveredTests afterFirstEval [||]
+    afterSecondEval.Length
+    |> Expect.equal "project tests survive second eval" 2
+  }
+]

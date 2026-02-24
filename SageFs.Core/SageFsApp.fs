@@ -368,7 +368,8 @@ module SageFsUpdate =
         { model with LiveTesting = lt }, []
 
       | SageFsEvent.TestsDiscovered tests ->
-        let lt = recomputeStatuses model.LiveTesting (fun s -> { s with DiscoveredTests = tests })
+        let lt = recomputeStatuses model.LiveTesting (fun s ->
+          { s with DiscoveredTests = Features.LiveTesting.LiveTesting.mergeDiscoveredTests s.DiscoveredTests tests })
         { model with LiveTesting = lt }, []
 
       | SageFsEvent.TestRunStarted testIds ->

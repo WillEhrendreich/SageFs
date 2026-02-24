@@ -643,6 +643,21 @@ module LiveTesting =
         Status = status
         PreviousStatus = prevStatus })
 
+  /// Merge incoming discovered tests with existing ones, keyed by TestId.
+  /// Incoming tests take priority for collisions (e.g., FSI redefining a test).
+  /// Empty incoming preserves existing tests (prevents wipe on FSI-only evals).
+  let mergeDiscoveredTests (existing: TestCase array) (incoming: TestCase array) : TestCase array =
+    if Array.isEmpty existing then incoming
+    elif Array.isEmpty incoming then existing
+    else
+      let incomingById = incoming |> Array.map (fun t -> t.Id, t) |> Map.ofArray
+      let merged =
+        existing
+        |> Array.fold (fun acc t ->
+          if Map.containsKey t.Id acc then acc
+          else Map.add t.Id t acc) incomingById
+      merged |> Map.values |> Seq.toArray
+
   let mergeResults (state: LiveTestState) (results: TestRunResult array) : LiveTestState =
     if Array.isEmpty results then state
     else
