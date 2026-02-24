@@ -2662,3 +2662,266 @@ let pipelineCancellationTests = testList "PipelineCancellation" [
     PipelineCancellation.dispose pc
   }
 ]
+
+// --- Phase 4b: FCS Integration & Adaptive Debounce Tests ---
+
+[<Tests>]
+let adaptiveDebounceTests = testList "AdaptiveDebounce" [
+  test "initial delay matches base config" {
+    let ad = AdaptiveDebounce.createDefault()
+    AdaptiveDebounce.currentFcsDelay ad |> Expect.equal "base delay" 300.0
+  }
+
+  test "single cancel increases delay by multiplier" {
+    let ad = AdaptiveDebounce.createDefault() |> AdaptiveDebounce.onFcsCanceled
+    AdaptiveDebounce.currentFcsDelay ad |> Expect.equal "450ms after one cancel" 450.0
+  }
+
+  test "three consecutive cancels compound the backoff" {
+    let ad =
+      AdaptiveDebounce.createDefault()
+      |> AdaptiveDebounce.onFcsCanceled
+      |> AdaptiveDebounce.onFcsCanceled
+      |> AdaptiveDebounce.onFcsCanceled
+    AdaptiveDebounce.currentFcsDelay ad |> Expect.equal "compounded" 1012.5
+  }
+
+  test "backoff caps at MaxFcsMs" {
+    let ad =
+      AdaptiveDebounce.createDefault()
+      |> AdaptiveDebounce.onFcsCanceled
+      |> AdaptiveDebounce.onFcsCanceled
+      |> AdaptiveDebounce.onFcsCanceled
+      |> AdaptiveDebounce.onFcsCanceled
+      |> AdaptiveDebounce.onFcsCanceled
+      |> AdaptiveDebounce.onFcsCanceled
+    AdaptiveDebounce.currentFcsDelay ad |> Expect.equal "capped at 2000" 2000.0
+  }
+
+  test "single success after cancel resets cancel count but not delay" {
+    let ad =
+      AdaptiveDebounce.createDefault()
+      |> AdaptiveDebounce.onFcsCanceled
+      |> AdaptiveDebounce.onFcsCompleted
+    ad.ConsecutiveFcsCancels |> Expect.equal "cancels reset" 0
+    ad.ConsecutiveFcsSuccesses |> Expect.equal "one success" 1
+    AdaptiveDebounce.currentFcsDelay ad |> Expect.equal "still elevated" 450.0
+  }
+
+  test "three consecutive successes reset delay to base" {
+    let ad =
+      AdaptiveDebounce.createDefault()
+      |> AdaptiveDebounce.onFcsCanceled
+      |> AdaptiveDebounce.onFcsCanceled
+      |> AdaptiveDebounce.onFcsCompleted
+      |> AdaptiveDebounce.onFcsCompleted
+      |> AdaptiveDebounce.onFcsCompleted
+    AdaptiveDebounce.currentFcsDelay ad |> Expect.equal "reset to base" 300.0
+    ad.ConsecutiveFcsSuccesses |> Expect.equal "successes reset" 0
+  }
+
+  test "cancel after partial success restarts backoff from current delay" {
+    let ad =
+      AdaptiveDebounce.createDefault()
+      |> AdaptiveDebounce.onFcsCanceled
+      |> AdaptiveDebounce.onFcsCompleted
+      |> AdaptiveDebounce.onFcsCompleted
+      |> AdaptiveDebounce.onFcsCanceled
+    AdaptiveDebounce.currentFcsDelay ad |> Expect.equal "backoff from 450" 675.0
+    ad.ConsecutiveFcsSuccesses |> Expect.equal "successes reset" 0
+  }
+
+  test "consecutive cancels counter tracks correctly" {
+    let ad =
+      AdaptiveDebounce.createDefault()
+      |> AdaptiveDebounce.onFcsCanceled
+      |> AdaptiveDebounce.onFcsCanceled
+    ad.ConsecutiveFcsCancels |> Expect.equal "two cancels" 2
+  }
+]
+
+[<Tests>]
+let symbolGraphTests = testList "SymbolGraphBuilder" [
+  test "buildIndex groups refs by symbol" {
+    let t1 = TestId.create "test1" "expecto"
+    let t2 = TestId.create "test2" "expecto"
+    let refs = [
+      { SymbolFullName = "MyModule.parse"; UsedInTestId = Some t1; FilePath = "F.fs"; Line = 10 }
+      { SymbolFullName = "MyModule.parse"; UsedInTestId = Some t2; FilePath = "F.fs"; Line = 20 }
+      { SymbolFullName = "MyModule.format"; UsedInTestId = Some t1; FilePath = "F.fs"; Line = 15 }
+    ]
+    let index = SymbolGraphBuilder.buildIndex refs
+    index |> Map.find "MyModule.parse" |> Array.length |> Expect.equal "parse has 2 tests" 2
+    index |> Map.find "MyModule.format" |> Array.length |> Expect.equal "format has 1 test" 1
+  }
+
+  test "buildIndex ignores refs outside test functions" {
+    let refs = [
+      { SymbolFullName = "MyModule.helper"; UsedInTestId = None; FilePath = "F.fs"; Line = 5 }
+    ]
+    let index = SymbolGraphBuilder.buildIndex refs
+    index |> Map.isEmpty |> Expect.isTrue "no test context means no entries"
+  }
+
+  test "buildIndex deduplicates test IDs for same symbol" {
+    let t1 = TestId.create "test1" "expecto"
+    let refs = [
+      { SymbolFullName = "MyModule.parse"; UsedInTestId = Some t1; FilePath = "F.fs"; Line = 10 }
+      { SymbolFullName = "MyModule.parse"; UsedInTestId = Some t1; FilePath = "F.fs"; Line = 12 }
+    ]
+    let index = SymbolGraphBuilder.buildIndex refs
+    index |> Map.find "MyModule.parse" |> Array.length |> Expect.equal "deduped" 1
+  }
+
+  test "updateGraph merges new symbols into existing graph" {
+    let t1 = TestId.create "test1" "expecto"
+    let t2 = TestId.create "test2" "expecto"
+    let existingGraph = {
+      TestDependencyGraph.empty with
+        SymbolToTests = Map.ofList ["OldModule.fn", [|t1|]]
+    }
+    let newRefs = [
+      { SymbolFullName = "NewModule.fn"; UsedInTestId = Some t2; FilePath = "New.fs"; Line = 1 }
+    ]
+    let updated = SymbolGraphBuilder.updateGraph newRefs "New.fs" existingGraph
+    updated.SymbolToTests |> Map.containsKey "OldModule.fn" |> Expect.isTrue "old preserved"
+    updated.SymbolToTests |> Map.containsKey "NewModule.fn" |> Expect.isTrue "new added"
+    updated.SourceVersion |> Expect.equal "version bumped" 1
+  }
+
+  test "updateGraph overwrites existing symbol entries for same key" {
+    let t1 = TestId.create "test1" "expecto"
+    let t2 = TestId.create "test2" "expecto"
+    let existingGraph = {
+      TestDependencyGraph.empty with
+        SymbolToTests = Map.ofList ["MyModule.fn", [|t1|]]
+    }
+    let newRefs = [
+      { SymbolFullName = "MyModule.fn"; UsedInTestId = Some t2; FilePath = "F.fs"; Line = 1 }
+    ]
+    let updated = SymbolGraphBuilder.updateGraph newRefs "F.fs" existingGraph
+    let tests = updated.SymbolToTests |> Map.find "MyModule.fn"
+    tests |> Array.length |> Expect.equal "overwritten with new" 1
+    tests.[0] |> Expect.equal "new test id" t2
+  }
+
+  test "empty refs produce empty index" {
+    let index = SymbolGraphBuilder.buildIndex []
+    index |> Map.isEmpty |> Expect.isTrue "empty"
+  }
+]
+
+[<Tests>]
+let symbolDiffTests = testList "SymbolDiff" [
+  test "no changes returns empty" {
+    let syms = Set.ofList ["A.fn"; "B.fn"]
+    SymbolDiff.computeChanges syms syms |> SymbolChanges.isEmpty |> Expect.isTrue "no changes"
+  }
+
+  test "added symbol is detected" {
+    let prev = Set.ofList ["A.fn"]
+    let curr = Set.ofList ["A.fn"; "B.fn"]
+    let sc = SymbolDiff.computeChanges prev curr
+    sc.Added |> Expect.contains "B.fn added" "B.fn"
+    sc.Removed |> Expect.isEmpty "nothing removed"
+  }
+
+  test "removed symbol is detected" {
+    let prev = Set.ofList ["A.fn"; "B.fn"]
+    let curr = Set.ofList ["A.fn"]
+    let sc = SymbolDiff.computeChanges prev curr
+    sc.Removed |> Expect.contains "B.fn removed" "B.fn"
+    sc.Added |> Expect.isEmpty "nothing added"
+  }
+
+  test "both added and removed detected separately" {
+    let prev = Set.ofList ["A.fn"; "B.fn"]
+    let curr = Set.ofList ["A.fn"; "C.fn"]
+    let sc = SymbolDiff.computeChanges prev curr
+    sc.Added |> Expect.contains "C.fn added" "C.fn"
+    sc.Removed |> Expect.contains "B.fn removed" "B.fn"
+  }
+
+  test "fromRefs computes diff from reference lists" {
+    let t1 = TestId.create "t1" "expecto"
+    let prev = [
+      { SymbolFullName = "A.fn"; UsedInTestId = Some t1; FilePath = "F.fs"; Line = 1 }
+      { SymbolFullName = "B.fn"; UsedInTestId = Some t1; FilePath = "F.fs"; Line = 2 }
+    ]
+    let curr = [
+      { SymbolFullName = "A.fn"; UsedInTestId = Some t1; FilePath = "F.fs"; Line = 1 }
+      { SymbolFullName = "C.fn"; UsedInTestId = Some t1; FilePath = "F.fs"; Line = 3 }
+    ]
+    let sc = SymbolDiff.fromRefs prev curr
+    sc.Added |> Expect.hasLength "one added" 1
+    sc.Removed |> Expect.hasLength "one removed" 1
+  }
+
+  test "allChanged combines both lists" {
+    let prev = Set.ofList ["A.fn"; "B.fn"]
+    let curr = Set.ofList ["A.fn"; "C.fn"]
+    let sc = SymbolDiff.computeChanges prev curr
+    sc |> SymbolChanges.allChanged |> Expect.hasLength "two total" 2
+  }
+
+  test "empty previous means all current are added" {
+    let curr = Set.ofList ["A.fn"; "B.fn"]
+    let sc = SymbolDiff.computeChanges Set.empty curr
+    sc.Added |> Expect.hasLength "all new" 2
+    sc.Removed |> Expect.isEmpty "nothing removed"
+  }
+]
+
+[<Tests>]
+let fileAnalysisCacheTests = testList "FileAnalysisCache" [
+  test "empty cache returns all symbols as added" {
+    let t1 = TestId.create "t1" "expecto"
+    let refs = [
+      { SymbolFullName = "A.fn"; UsedInTestId = Some t1; FilePath = "F.fs"; Line = 1 }
+    ]
+    let changes, _ = FileAnalysisCache.empty |> FileAnalysisCache.update "F.fs" refs
+    changes.Added |> Expect.hasLength "one added" 1
+    changes.Removed |> Expect.isEmpty "nothing removed"
+  }
+
+  test "second update with same symbols returns no changes" {
+    let t1 = TestId.create "t1" "expecto"
+    let refs = [
+      { SymbolFullName = "A.fn"; UsedInTestId = Some t1; FilePath = "F.fs"; Line = 1 }
+    ]
+    let _, cache1 = FileAnalysisCache.empty |> FileAnalysisCache.update "F.fs" refs
+    let changes, _ = cache1 |> FileAnalysisCache.update "F.fs" refs
+    changes |> SymbolChanges.isEmpty |> Expect.isTrue "no changes"
+  }
+
+  test "different file doesn't affect existing file's cache" {
+    let t1 = TestId.create "t1" "expecto"
+    let refs1 = [{ SymbolFullName = "A.fn"; UsedInTestId = Some t1; FilePath = "F1.fs"; Line = 1 }]
+    let refs2 = [{ SymbolFullName = "B.fn"; UsedInTestId = Some t1; FilePath = "F2.fs"; Line = 1 }]
+    let _, cache1 = FileAnalysisCache.empty |> FileAnalysisCache.update "F1.fs" refs1
+    let _, cache2 = cache1 |> FileAnalysisCache.update "F2.fs" refs2
+    cache2 |> FileAnalysisCache.getFileSymbols "F1.fs" |> Expect.hasLength "F1 preserved" 1
+    cache2 |> FileAnalysisCache.getFileSymbols "F2.fs" |> Expect.hasLength "F2 added" 1
+  }
+
+  test "modified file separates added and removed" {
+    let t1 = TestId.create "t1" "expecto"
+    let refs1 = [
+      { SymbolFullName = "A.fn"; UsedInTestId = Some t1; FilePath = "F.fs"; Line = 1 }
+      { SymbolFullName = "B.fn"; UsedInTestId = Some t1; FilePath = "F.fs"; Line = 2 }
+    ]
+    let refs2 = [
+      { SymbolFullName = "A.fn"; UsedInTestId = Some t1; FilePath = "F.fs"; Line = 1 }
+      { SymbolFullName = "C.fn"; UsedInTestId = Some t1; FilePath = "F.fs"; Line = 3 }
+    ]
+    let _, cache1 = FileAnalysisCache.empty |> FileAnalysisCache.update "F.fs" refs1
+    let changes, _ = cache1 |> FileAnalysisCache.update "F.fs" refs2
+    changes.Added |> Expect.contains "C added" "C.fn"
+    changes.Removed |> Expect.contains "B removed" "B.fn"
+  }
+
+  test "getFileSymbols returns empty for unknown file" {
+    FileAnalysisCache.empty |> FileAnalysisCache.getFileSymbols "unknown.fs"
+    |> Expect.isEmpty "empty for unknown"
+  }
+]

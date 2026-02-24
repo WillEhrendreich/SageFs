@@ -1106,14 +1106,155 @@ module PipelineEffects =
         if Array.isEmpty filtered then PipelineEffect.NoOp
         else PipelineEffect.RunAffectedTests(filtered, trigger)
 
-/// Wraps LiveTestState + PipelineDebounce + TestDependencyGraph into
-/// a single state record that the Elm update loop can carry.
+/// Adaptive debounce configuration.
+type AdaptiveDebounceConfig = {
+  BaseTreeSitterMs: float
+  BaseFcsMs: float
+  MaxFcsMs: float
+  BackoffMultiplier: float
+  ResetAfterSuccessCount: int
+}
+
+module AdaptiveDebounceConfig =
+  let defaults = {
+    BaseTreeSitterMs = 50.0
+    BaseFcsMs = 300.0
+    MaxFcsMs = 2000.0
+    BackoffMultiplier = 1.5
+    ResetAfterSuccessCount = 3
+  }
+
+/// Tracks FCS cancellation history for adaptive backoff.
+type AdaptiveDebounce = {
+  Config: AdaptiveDebounceConfig
+  ConsecutiveFcsCancels: int
+  ConsecutiveFcsSuccesses: int
+  CurrentFcsDelayMs: float
+}
+
+module AdaptiveDebounce =
+  let create (config: AdaptiveDebounceConfig) = {
+    Config = config
+    ConsecutiveFcsCancels = 0
+    ConsecutiveFcsSuccesses = 0
+    CurrentFcsDelayMs = config.BaseFcsMs
+  }
+
+  let createDefault () = create AdaptiveDebounceConfig.defaults
+
+  let onFcsCanceled (ad: AdaptiveDebounce) =
+    let newCancels = ad.ConsecutiveFcsCancels + 1
+    let newDelay =
+      ad.CurrentFcsDelayMs * ad.Config.BackoffMultiplier
+      |> min ad.Config.MaxFcsMs
+    { ad with
+        ConsecutiveFcsCancels = newCancels
+        ConsecutiveFcsSuccesses = 0
+        CurrentFcsDelayMs = newDelay }
+
+  let onFcsCompleted (ad: AdaptiveDebounce) =
+    let newSuccesses = ad.ConsecutiveFcsSuccesses + 1
+    if newSuccesses >= ad.Config.ResetAfterSuccessCount then
+      { ad with
+          ConsecutiveFcsCancels = 0
+          ConsecutiveFcsSuccesses = 0
+          CurrentFcsDelayMs = ad.Config.BaseFcsMs }
+    else
+      { ad with
+          ConsecutiveFcsCancels = 0
+          ConsecutiveFcsSuccesses = newSuccesses }
+
+  let currentFcsDelay (ad: AdaptiveDebounce) = ad.CurrentFcsDelayMs
+
+/// Represents a resolved symbol reference from FCS.
+type SymbolReference = {
+  SymbolFullName: string
+  UsedInTestId: TestId option
+  FilePath: string
+  Line: int
+}
+
+/// Builds SymbolToTests from a list of symbol references.
+module SymbolGraphBuilder =
+  let buildIndex (refs: SymbolReference list) : Map<string, TestId array> =
+    refs
+    |> List.choose (fun r ->
+      match r.UsedInTestId with
+      | Some tid -> Some (r.SymbolFullName, tid)
+      | None -> None)
+    |> List.groupBy fst
+    |> List.map (fun (sym, pairs) ->
+      sym, pairs |> List.map snd |> List.distinct |> Array.ofList)
+    |> Map.ofList
+
+  let updateGraph (newRefs: SymbolReference list) (filePath: string) (graph: TestDependencyGraph) : TestDependencyGraph =
+    let newIndex = buildIndex newRefs
+    let merged =
+      (graph.SymbolToTests, newIndex)
+      ||> Map.fold (fun acc key value ->
+        Map.add key value acc)
+    { graph with
+        SymbolToTests = merged
+        SourceVersion = graph.SourceVersion + 1 }
+
+/// Result of comparing two sets of symbols — separates added from removed.
+type SymbolChanges = {
+  Added: string list
+  Removed: string list
+}
+
+module SymbolChanges =
+  let empty = { Added = []; Removed = [] }
+  let allChanged (sc: SymbolChanges) = sc.Added @ sc.Removed
+  let isEmpty (sc: SymbolChanges) = List.isEmpty sc.Added && List.isEmpty sc.Removed
+
+/// Detects which symbols changed between two FCS analysis runs.
+module SymbolDiff =
+  let computeChanges (previousSymbols: Set<string>) (currentSymbols: Set<string>) : SymbolChanges =
+    { Added = Set.difference currentSymbols previousSymbols |> Set.toList
+      Removed = Set.difference previousSymbols currentSymbols |> Set.toList }
+
+  let fromRefs (previousRefs: SymbolReference list) (currentRefs: SymbolReference list) : SymbolChanges =
+    let prevSyms = previousRefs |> List.map (fun r -> r.SymbolFullName) |> Set.ofList
+    let currSyms = currentRefs |> List.map (fun r -> r.SymbolFullName) |> Set.ofList
+    computeChanges prevSyms currSyms
+
+/// Caches per-file symbol analysis for efficient diff computation.
+type FileAnalysisCache = {
+  FileSymbols: Map<string, SymbolReference list>
+}
+
+module FileAnalysisCache =
+  let empty = { FileSymbols = Map.empty }
+
+  let private symbolNames (refs: SymbolReference list) =
+    refs |> List.map (fun r -> r.SymbolFullName) |> Set.ofList
+
+  let update (filePath: string) (newRefs: SymbolReference list) (cache: FileAnalysisCache) : SymbolChanges * FileAnalysisCache =
+    let prevNames =
+      cache.FileSymbols
+      |> Map.tryFind filePath
+      |> Option.defaultValue []
+      |> symbolNames
+    let newNames = symbolNames newRefs
+    let changes = SymbolDiff.computeChanges prevNames newNames
+    let newCache = { FileSymbols = Map.add filePath newRefs cache.FileSymbols }
+    changes, newCache
+
+  let getFileSymbols (filePath: string) (cache: FileAnalysisCache) =
+    cache.FileSymbols |> Map.tryFind filePath |> Option.defaultValue []
+
+/// Wraps LiveTestState + PipelineDebounce + TestDependencyGraph + adaptive
+/// debounce + file analysis cache into a single state record for the Elm loop.
 type LiveTestPipelineState = {
   TestState: LiveTestState
   Debounce: PipelineDebounce
   DepGraph: TestDependencyGraph
   ActiveFile: string option
   ChangedSymbols: string list
+  LastTreeSitterResult: SourceTestLocation array option
+  AnalysisCache: FileAnalysisCache
+  AdaptiveDebounce: AdaptiveDebounce
 }
 
 module LiveTestPipelineState =
@@ -1123,6 +1264,9 @@ module LiveTestPipelineState =
     DepGraph = TestDependencyGraph.empty
     ActiveFile = None
     ChangedSymbols = []
+    LastTreeSitterResult = None
+    AnalysisCache = FileAnalysisCache.empty
+    AdaptiveDebounce = AdaptiveDebounce.createDefault()
   }
 
   let onKeystroke (content: string) (filePath: string) (now: DateTimeOffset) (s: LiveTestPipelineState) =
@@ -1132,6 +1276,22 @@ module LiveTestPipelineState =
   let onFileSave (filePath: string) (now: DateTimeOffset) (s: LiveTestPipelineState) =
     let db = s.Debounce |> PipelineDebounce.onFileSave filePath now
     { s with Debounce = db }
+
+  let onFcsComplete (filePath: string) (refs: SymbolReference list) (s: LiveTestPipelineState) =
+    let changes, newCache = FileAnalysisCache.update filePath refs s.AnalysisCache
+    let newDepGraph = SymbolGraphBuilder.updateGraph refs filePath s.DepGraph
+    let newDebounce = AdaptiveDebounce.onFcsCompleted s.AdaptiveDebounce
+    { s with
+        DepGraph = newDepGraph
+        ChangedSymbols = SymbolChanges.allChanged changes
+        AnalysisCache = newCache
+        AdaptiveDebounce = newDebounce }
+
+  let onFcsCanceled (s: LiveTestPipelineState) =
+    { s with AdaptiveDebounce = AdaptiveDebounce.onFcsCanceled s.AdaptiveDebounce }
+
+  let currentFcsDelay (s: LiveTestPipelineState) =
+    AdaptiveDebounce.currentFcsDelay s.AdaptiveDebounce
 
   /// Ticks the debounce channels and produces pipeline effects.
   /// Returns (effects, updatedState).
