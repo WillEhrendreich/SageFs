@@ -74,17 +74,17 @@ Tests are categorized automatically (Unit, Integration, Browser, Property, Bench
 - [x] **OTEL instrumentation** — `ActivitySource` + `Meter` with histograms for tree-sitter, FCS, and execution timing; zero-cost (~50ns) when no collector attached
 - [x] **Elm architecture integration** — 8 event types (`TestsDiscovered`, `TestResultsBatch`, `AffectedTestsComputed`, `CoverageUpdated`, etc.) wired through `SageFsModel` update loop
 - [x] **TUI gutter rendering** — `LineAnnotation` icons/colors rendered in the terminal UI via `RenderPipeline`, toggle with **Ctrl+Alt+T**
+- [x] **Harmony hot-reload trigger** — `LiveTestingHook.afterReload()` called after every successful eval in `HotReloading.fs`, detecting providers, discovering tests, and finding affected tests from updated methods. Results flow through worker protocol metadata into the Elm event loop.
 - [x] **128+ tests** — Domain model, executor, tree-sitter, instrumentation, Elm integration, and FsCheck property-based tests all passing
 
 **What's in progress:**
 
-- [ ] **FCS dependency graph** — Wire F# Compiler Service `CheckFileResults` to build a real call graph for symbol-level reachability (currently type definitions + pure functions exist but no FCS calls)
-- [ ] **Harmony hot-reload trigger** — Connect `LiveTestingHook.afterReload()` to the hot reload pipeline so affected tests re-run automatically after code changes
+- [ ] **FCS dependency graph** — Wire F# Compiler Service `CheckFileResults` to build a real call graph for symbol-level reachability (currently affected tests found by method name matching; FCS would give precise symbol-level coverage)
 - [ ] **Three-speed pipeline end-to-end** — Wire tree-sitter → FCS enrichment → execution into a single debounced pipeline with the three timing tiers
 - [ ] **Run policy enforcement** — Integrate `filterByPolicy()` into the execution trigger so unit tests run on keystroke, integration on save, browser on demand
 - [ ] **SSE push of test results** — Stream `TestResultsBatch` and `TestSummaryChanged` events to connected HTTP/SSE clients
 - [ ] **MCP `get_live_test_status` tool** — Expose live test state to AI agents via the MCP server
-- [ ] **VS Code gutter markers** — CodeLens, DecorationProvider, and TestController integration in the VS Code extension
+- [ ] **VS Code gutter markers** — DecorationProvider and TestController integration in the VS Code extension
 - [ ] **Neovim gutter markers** — Extmark signs and virtual text for test status in sagefs.nvim
 - [ ] **Raylib GUI gutter rendering** — Gutter icons in the GPU-rendered GUI frontend
 - [ ] **Visual Studio gutter markers** — Margin glyphs via the VS Extensibility SDK
