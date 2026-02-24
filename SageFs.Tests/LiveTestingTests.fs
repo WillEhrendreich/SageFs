@@ -1442,10 +1442,12 @@ let stalenessTests = testList "Staleness" [
       Enabled = true
   }
 
-  test "markStale marks affected tests as NotRun" {
+  test "markStale preserves original result for affected tests" {
     let result = Staleness.markStale depGraph [ "Module.add" ] baseState
     let r = Map.find test1.Id result.LastResults
-    r.Result |> Expect.equal "not run" TestResult.NotRun
+    match r.Result with
+    | TestResult.Passed _ -> ()
+    | other -> failwithf "Expected original Passed preserved, got %A" other
     let r2 = Map.find test2.Id result.LastResults
     match r2.Result with
     | TestResult.Passed _ -> ()
@@ -1465,6 +1467,40 @@ let stalenessTests = testList "Staleness" [
   test "markStale with unknown symbol changes nothing" {
     let result = Staleness.markStale depGraph [ "Unknown.func" ] baseState
     result.AffectedTests |> Expect.isEmpty "no affected"
+  }
+
+  test "affected test with prior Passed shows Stale status" {
+    let result = Staleness.markStale depGraph [ "Module.add" ] baseState
+    let entry = result.StatusEntries |> Array.find (fun e -> e.TestId = test1.Id)
+    match entry.Status with
+    | TestRunStatus.Stale -> ()
+    | other -> failwithf "expected Stale but got %A" other
+  }
+
+  test "affected test with no prior result shows Queued status" {
+    let tc3 = mkTestCase "Module.Tests.newTest" "expecto" TestCategory.Unit
+    let graph2 = {
+      TestDependencyGraph.empty with
+        SymbolToTests = Map.ofList [ "Module.add", [| tc3.Id |] ]
+    }
+    let stateNoPrior = {
+      LiveTestState.empty with
+        DiscoveredTests = [| tc3 |]
+        Enabled = true
+    }
+    let result = Staleness.markStale graph2 [ "Module.add" ] stateNoPrior
+    let entry = result.StatusEntries |> Array.find (fun e -> e.TestId = tc3.Id)
+    match entry.Status with
+    | TestRunStatus.Queued -> ()
+    | other -> failwithf "expected Queued but got %A" other
+  }
+
+  test "unaffected test with Passed result stays Passed" {
+    let result = Staleness.markStale depGraph [ "Module.add" ] baseState
+    let entry = result.StatusEntries |> Array.find (fun e -> e.TestId = test2.Id)
+    match entry.Status with
+    | TestRunStatus.Passed _ -> ()
+    | other -> failwithf "unaffected expected Passed but got %A" other
   }
 ]
 
@@ -2923,5 +2959,214 @@ let fileAnalysisCacheTests = testList "FileAnalysisCache" [
   test "getFileSymbols returns empty for unknown file" {
     FileAnalysisCache.empty |> FileAnalysisCache.getFileSymbols "unknown.fs"
     |> Expect.isEmpty "empty for unknown"
+  }
+]
+
+[<Tests>]
+let compositionTests = testList "compositionTests" [
+  test "no-op edit with same symbols produces no affected tests" {
+    let t1 = TestId.create "MyTest.test1" "expecto"
+    let refs = [
+      { SymbolFullName = "Lib.add"; UsedInTestId = Some t1; FilePath = "Lib.fs"; Line = 1 }
+      { SymbolFullName = "Lib.sub"; UsedInTestId = Some t1; FilePath = "Lib.fs"; Line = 5 }
+    ]
+    let _, cache1 = FileAnalysisCache.empty |> FileAnalysisCache.update "Lib.fs" refs
+    let changes, _ = cache1 |> FileAnalysisCache.update "Lib.fs" refs
+    changes |> SymbolChanges.isEmpty |> Expect.isTrue "no symbol changes"
+    let depGraph = {
+      TestDependencyGraph.empty with
+        SymbolToTests = SymbolGraphBuilder.buildIndex refs
+    }
+    let affected = TestDependencyGraph.findAffected (SymbolChanges.allChanged changes) depGraph
+    affected |> Expect.hasLength "no affected tests" 0
+  }
+
+  test "full pipeline roundtrip: keystroke → debounce → effects → affected tests" {
+    let tc = mkTestCase "MyTest.test1" "expecto" TestCategory.Unit
+    let t1 = tc.Id
+    let t0 = DateTimeOffset(2025, 1, 1, 0, 0, 0, TimeSpan.Zero)
+    let depGraph = {
+      TestDependencyGraph.empty with
+        SymbolToTests = Map.ofList ["Lib.add", [|t1|]]
+    }
+    let state = {
+      LiveTestPipelineState.empty with
+        DepGraph = depGraph
+        ChangedSymbols = ["Lib.add"]
+        TestState = { LiveTestState.empty with DiscoveredTests = [|tc|]; Enabled = true }
+    }
+    let s1 = state |> LiveTestPipelineState.onKeystroke "let x = 1" "File.fs" t0
+    let effects30, s30 = s1 |> LiveTestPipelineState.tick (t0.AddMilliseconds(30.0))
+    effects30 |> Expect.isEmpty "nothing at 30ms"
+    let effects51, s51 = s30 |> LiveTestPipelineState.tick (t0.AddMilliseconds(51.0))
+    effects51 |> List.exists (fun e -> match e with PipelineEffect.ParseTreeSitter _ -> true | _ -> false)
+    |> Expect.isTrue "TS fires at 51ms"
+    let effects301, _ = s51 |> LiveTestPipelineState.tick (t0.AddMilliseconds(301.0))
+    effects301 |> List.exists (fun e -> match e with PipelineEffect.RequestFcsTypeCheck _ -> true | _ -> false)
+    |> Expect.isTrue "FCS fires at 301ms"
+    effects301 |> List.exists (fun e -> match e with PipelineEffect.RunAffectedTests _ -> true | _ -> false)
+    |> Expect.isTrue "affected tests triggered"
+  }
+
+  test "burst typing coalesces debounce to single tree-sitter parse" {
+    let t0 = DateTimeOffset(2025, 1, 1, 0, 0, 0, TimeSpan.Zero)
+    let s0 = LiveTestPipelineState.empty
+    let s1 = s0 |> LiveTestPipelineState.onKeystroke "l" "F.fs" t0
+    let s2 = s1 |> LiveTestPipelineState.onKeystroke "le" "F.fs" (t0.AddMilliseconds(20.0))
+    let s3 = s2 |> LiveTestPipelineState.onKeystroke "let" "F.fs" (t0.AddMilliseconds(40.0))
+    let s4 = s3 |> LiveTestPipelineState.onKeystroke "let " "F.fs" (t0.AddMilliseconds(60.0))
+    let s5 = s4 |> LiveTestPipelineState.onKeystroke "let x" "F.fs" (t0.AddMilliseconds(80.0))
+    let effects100, s100 = s5 |> LiveTestPipelineState.tick (t0.AddMilliseconds(100.0))
+    effects100 |> Expect.isEmpty "nothing at 100ms (20ms after last keystroke)"
+    let effects131, _ = s100 |> LiveTestPipelineState.tick (t0.AddMilliseconds(131.0))
+    let tsCount =
+      effects131
+      |> List.filter (fun e -> match e with PipelineEffect.ParseTreeSitter _ -> true | _ -> false)
+      |> List.length
+    tsCount |> Expect.equal "exactly one TS parse" 1
+    s5.ActiveFile |> Expect.equal "active file is F.fs" (Some "F.fs")
+  }
+
+  test "FCS cancel increases delay, successes reset it" {
+    let ad0 = AdaptiveDebounce.createDefault ()
+    ad0.CurrentFcsDelayMs |> Expect.equal "initial delay is 300" 300.0
+    let ad1 = ad0 |> AdaptiveDebounce.onFcsCanceled
+    ad1.CurrentFcsDelayMs |> Expect.equal "after 1 cancel: 450" 450.0
+    ad1.ConsecutiveFcsCancels |> Expect.equal "1 cancel" 1
+    let ad2 = ad1 |> AdaptiveDebounce.onFcsCanceled
+    ad2.CurrentFcsDelayMs |> Expect.equal "after 2 cancels: 675" 675.0
+    let ad3 = ad2 |> AdaptiveDebounce.onFcsCompleted
+    ad3.ConsecutiveFcsSuccesses |> Expect.equal "1 success" 1
+    ad3.CurrentFcsDelayMs |> Expect.equal "delay stays at 675" 675.0
+    let ad4 = ad3 |> AdaptiveDebounce.onFcsCompleted
+    let ad5 = ad4 |> AdaptiveDebounce.onFcsCompleted
+    ad5.CurrentFcsDelayMs |> Expect.equal "reset to 300" 300.0
+    ad5.ConsecutiveFcsCancels |> Expect.equal "cancels reset" 0
+    ad5.ConsecutiveFcsSuccesses |> Expect.equal "successes reset" 0
+  }
+
+  test "symbol rename: cache detects removal+addition, graph finds affected" {
+    let t1 = TestId.create "MyTest.test1" "expecto"
+    let t2 = TestId.create "MyTest.test2" "expecto"
+    let refsV1 = [
+      { SymbolFullName = "Lib.add"; UsedInTestId = Some t1; FilePath = "Lib.fs"; Line = 1 }
+      { SymbolFullName = "Lib.oldFn"; UsedInTestId = Some t2; FilePath = "Lib.fs"; Line = 5 }
+    ]
+    let refsV2 = [
+      { SymbolFullName = "Lib.add"; UsedInTestId = Some t1; FilePath = "Lib.fs"; Line = 1 }
+      { SymbolFullName = "Lib.newFn"; UsedInTestId = Some t2; FilePath = "Lib.fs"; Line = 5 }
+    ]
+    let _, cache1 = FileAnalysisCache.empty |> FileAnalysisCache.update "Lib.fs" refsV1
+    let graph1 = TestDependencyGraph.empty |> SymbolGraphBuilder.updateGraph refsV1 "Lib.fs"
+    let changes, _ = cache1 |> FileAnalysisCache.update "Lib.fs" refsV2
+    changes.Added |> Expect.contains "newFn added" "Lib.newFn"
+    changes.Removed |> Expect.contains "oldFn removed" "Lib.oldFn"
+    let graph2 = graph1 |> SymbolGraphBuilder.updateGraph refsV2 "Lib.fs"
+    let affectedByRemoved = TestDependencyGraph.findAffected changes.Removed graph1
+    affectedByRemoved |> Expect.hasLength "t2 affected by removal" 1
+    let affectedByAdded = TestDependencyGraph.findAffected changes.Added graph2
+    affectedByAdded |> Expect.hasLength "t2 affected by addition" 1
+  }
+
+  test "policy filters affected tests by trigger type" {
+    let unitTC = mkTestCase "UnitTest.test1" "expecto" TestCategory.Unit
+    let integTC = mkTestCase "IntegTest.test1" "expecto" TestCategory.Integration
+    let browserTC = mkTestCase "BrowserTest.test1" "expecto" TestCategory.Browser
+    let allTests = [|unitTC; integTC; browserTC|]
+    let policies = RunPolicyDefaults.defaults
+    let filtered = LiveTesting.filterByPolicy policies RunTrigger.Keystroke allTests
+    filtered |> Array.length |> Expect.equal "only unit on keystroke" 1
+    filtered.[0].Category |> Expect.equal "unit category" TestCategory.Unit
+    let filteredExplicit = LiveTesting.filterByPolicy policies RunTrigger.ExplicitRun allTests
+    filteredExplicit |> Array.length |> Expect.equal "all on explicit" 3
+  }
+
+  test "symbol change marks affected test results as stale" {
+    let tc1 = mkTestCase "MyTest.test1" "expecto" TestCategory.Unit
+    let tc2 = mkTestCase "MyTest.test2" "expecto" TestCategory.Unit
+    let now = DateTimeOffset.UtcNow
+    let passedResult = {
+      TestId = tc1.Id
+      TestName = tc1.FullName
+      Result = TestResult.Passed(TimeSpan.FromMilliseconds(5.0))
+      Timestamp = now
+    }
+    let state = {
+      LiveTestState.empty with
+        DiscoveredTests = [|tc1; tc2|]
+        LastResults = Map.ofList [tc1.Id, passedResult]
+        Enabled = true
+    }
+    let depGraph = {
+      TestDependencyGraph.empty with
+        SymbolToTests = Map.ofList ["Lib.add", [|tc1.Id|]]
+    }
+    let stalified = Staleness.markStale depGraph ["Lib.add"] state
+    stalified.AffectedTests |> Set.contains tc1.Id |> Expect.isTrue "tc1 is affected"
+    stalified.AffectedTests |> Set.contains tc2.Id |> Expect.isFalse "tc2 not affected"
+    match stalified.LastResults |> Map.tryFind tc1.Id with
+    | Some r -> r.Result |> Expect.equal "tc1 result preserved as Passed" (TestResult.Passed(TimeSpan.FromMilliseconds(5.0)))
+    | None -> failtest "tc1 result should still exist"
+    let entry = stalified.StatusEntries |> Array.find (fun e -> e.TestId = tc1.Id)
+    match entry.Status with
+    | TestRunStatus.Stale -> ()
+    | other -> failtestf "expected Stale status but got %A" other
+  }
+
+  test "file switch mid-pipeline resets debounce timers" {
+    let t0 = DateTimeOffset(2025, 1, 1, 0, 0, 0, TimeSpan.Zero)
+    let s0 = LiveTestPipelineState.empty
+    let s1 = s0 |> LiveTestPipelineState.onKeystroke "let x = 1" "File1.fs" t0
+    s1.ActiveFile |> Expect.equal "active is File1" (Some "File1.fs")
+    let s2 = s1 |> LiveTestPipelineState.onKeystroke "let y = 2" "File2.fs" (t0.AddMilliseconds(30.0))
+    s2.ActiveFile |> Expect.equal "active is File2" (Some "File2.fs")
+    let effects51, s51 = s2 |> LiveTestPipelineState.tick (t0.AddMilliseconds(51.0))
+    effects51 |> Expect.isEmpty "no TS at 51ms (file switched)"
+    let effects81, _ = s51 |> LiveTestPipelineState.tick (t0.AddMilliseconds(81.0))
+    let hasTS =
+      effects81
+      |> List.exists (fun e -> match e with PipelineEffect.ParseTreeSitter _ -> true | _ -> false)
+    hasTS |> Expect.isTrue "TS fires for File2 at 81ms"
+  }
+
+  test "FCS completes after new keystroke: debounce restarts" {
+    let t0 = DateTimeOffset(2025, 1, 1, 0, 0, 0, TimeSpan.Zero)
+    let s0 = LiveTestPipelineState.empty
+    let s1 = s0 |> LiveTestPipelineState.onKeystroke "let x = 1" "File.fs" t0
+    let effects1, s2 = s1 |> LiveTestPipelineState.tick (t0.AddMilliseconds(51.0))
+    let hasTS = effects1 |> List.exists (fun e -> match e with PipelineEffect.ParseTreeSitter _ -> true | _ -> false)
+    hasTS |> Expect.isTrue "TS fires after first keystroke"
+    let s3 = s2 |> LiveTestPipelineState.onKeystroke "let x = 2" "File.fs" (t0.AddMilliseconds(100.0))
+    let effects2, s4 = s3 |> LiveTestPipelineState.tick (t0.AddMilliseconds(352.0))
+    let hasFCS = effects2 |> List.exists (fun e -> match e with PipelineEffect.RequestFcsTypeCheck _ -> true | _ -> false)
+    hasFCS |> Expect.isFalse "FCS should NOT fire - debounce restarted by keystroke2"
+    let effects3, _ = s4 |> LiveTestPipelineState.tick (t0.AddMilliseconds(401.0))
+    let hasFCS2 = effects3 |> List.exists (fun e -> match e with PipelineEffect.RequestFcsTypeCheck _ -> true | _ -> false)
+    hasFCS2 |> Expect.isTrue "FCS fires after new debounce window"
+  }
+
+  test "cold start with empty cache: first keystroke produces TS parse" {
+    let t0 = DateTimeOffset(2025, 1, 1, 0, 0, 0, TimeSpan.Zero)
+    let s0 = LiveTestPipelineState.empty
+    let s1 = s0 |> LiveTestPipelineState.onKeystroke "let x = 1" "File.fs" t0
+    s1.AnalysisCache.FileSymbols |> Expect.isEmpty "cache should be empty on first keystroke"
+    let effects, _ = s1 |> LiveTestPipelineState.tick (t0.AddMilliseconds(51.0))
+    let hasTS = effects |> List.exists (fun e -> match e with PipelineEffect.ParseTreeSitter _ -> true | _ -> false)
+    hasTS |> Expect.isTrue "TS fires on first keystroke (cold start)"
+  }
+
+  test "session dispose mid-pipeline: state resets cleanly" {
+    let t0 = DateTimeOffset(2025, 1, 1, 0, 0, 0, TimeSpan.Zero)
+    let s0 = LiveTestPipelineState.empty
+    let s1 = s0 |> LiveTestPipelineState.onKeystroke "let x = 1" "File.fs" t0
+    let _, _ = s1 |> LiveTestPipelineState.tick (t0.AddMilliseconds(51.0))
+    let s3 = LiveTestPipelineState.empty
+    s3.ActiveFile |> Expect.isNone "no active file after reset"
+    s3.AnalysisCache.FileSymbols |> Expect.isEmpty "no cache after reset"
+    let s4 = s3 |> LiveTestPipelineState.onKeystroke "let y = 1" "File2.fs" (t0.AddMilliseconds(200.0))
+    s4.ActiveFile |> Expect.equal "new file" (Some "File2.fs")
+    let effects, _ = s4 |> LiveTestPipelineState.tick (t0.AddMilliseconds(251.0))
+    let hasTS = effects |> List.exists (fun e -> match e with PipelineEffect.ParseTreeSitter _ -> true | _ -> false)
+    hasTS |> Expect.isTrue "TS fires after session reset"
   }
 ]

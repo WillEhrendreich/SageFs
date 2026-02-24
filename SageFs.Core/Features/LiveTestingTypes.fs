@@ -492,7 +492,7 @@ module LiveTesting =
       | Some RunPolicy.OnEveryChange -> true
       | None -> true)
 
-  let private computeStatusEntriesWithHistory
+  let computeStatusEntriesWithHistory
     (previousStatuses: Map<TestId, TestRunStatus>)
     (state: LiveTestState)
     : TestStatusEntry array =
@@ -505,7 +505,9 @@ module LiveTesting =
           if Set.contains test.Id state.AffectedTests && state.IsRunning then
             TestRunStatus.Running
           elif Set.contains test.Id state.AffectedTests then
-            TestRunStatus.Queued
+            match Map.tryFind test.Id state.LastResults with
+            | Some r when r.Result <> TestResult.NotRun -> TestRunStatus.Stale
+            | _ -> TestRunStatus.Queued
           else
             match Map.tryFind test.Id state.LastResults with
             | Some r ->
@@ -944,14 +946,12 @@ module Staleness =
     let affected = TestDependencyGraph.findAffected changedSymbols graph |> Set.ofArray
     if Set.isEmpty affected then state
     else
-      let updatedResults =
-        state.LastResults
-        |> Map.map (fun testId result ->
-          if Set.contains testId affected then
-            { result with Result = TestResult.NotRun; Timestamp = DateTimeOffset.UtcNow }
-          else result)
-      let updatedState = { state with LastResults = updatedResults; AffectedTests = affected }
-      { updatedState with StatusEntries = LiveTesting.computeStatusEntries updatedState }
+      let previousStatuses =
+        state.StatusEntries
+        |> Array.map (fun e -> e.TestId, e.Status)
+        |> Map.ofArray
+      let updatedState = { state with AffectedTests = Set.union state.AffectedTests affected }
+      { updatedState with StatusEntries = LiveTesting.computeStatusEntriesWithHistory previousStatuses updatedState }
 
 // --- Pipeline Orchestrator ---
 
