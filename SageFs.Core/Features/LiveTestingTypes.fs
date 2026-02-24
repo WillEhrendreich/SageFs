@@ -1349,3 +1349,30 @@ module LiveTestPipelineState =
       if Array.isEmpty filtered then []
       else
         [ PipelineEffect.RunAffectedTests(filtered, trigger, System.TimeSpan.Zero, System.TimeSpan.Zero) ]
+
+  /// Filter tests by optional criteria for explicit MCP-triggered runs.
+  /// All filters are AND'd. None = no filter = match all.
+  let filterTestsForExplicitRun
+    (discoveredTests: TestCase array)
+    (fileFilter: string option)
+    (patternFilter: string option)
+    (categoryFilter: TestCategory option)
+    : TestCase array =
+    discoveredTests
+    |> Array.filter (fun tc ->
+      let matchesFile =
+        match fileFilter with
+        | None -> true
+        | Some f ->
+          match tc.Origin with
+          | TestOrigin.SourceMapped (file, _) -> file = f
+          | TestOrigin.ReflectionOnly -> false
+      let matchesPattern =
+        match patternFilter with
+        | None -> true
+        | Some p -> tc.FullName.Contains p || tc.DisplayName.Contains p
+      let matchesCategory =
+        match categoryFilter with
+        | None -> true
+        | Some c -> tc.Category = c
+      matchesFile && matchesPattern && matchesCategory)

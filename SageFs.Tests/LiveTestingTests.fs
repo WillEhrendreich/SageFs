@@ -4560,3 +4560,118 @@ let affectedExecutionTriggerTests = testList "AffectedTestsComputed execution tr
     |> Expect.isEmpty "unknown test IDs should not produce effects"
   }
 ]
+
+// ── findAffectedTests fix + filterTestsForExplicitRun + findAllTestIds tests ──
+
+[<Tests>]
+let findAffectedTestsFixTests =
+  let mkTC id name fw =
+    { Id = TestId.create id name; FullName = name
+      DisplayName = name.Split('.').[name.Split('.').Length - 1]
+      Origin = TestOrigin.ReflectionOnly; Labels = []; Framework = fw
+      Category = TestCategory.Unit }
+  let sampleTests = [|
+    mkTC "t1" "MyModule.Tests.test_add" "expecto"
+    mkTC "t2" "MyModule.Tests.test_sub" "expecto"
+    mkTC "t3" "Other.Tests.test_mul" "xunit"
+  |]
+  testList "findAffectedTests fixed semantics" [
+    test "empty method names returns empty array" {
+      LiveTestingHook.findAffectedTests sampleTests []
+      |> Array.length
+      |> Expect.equal "nothing changed = no affected tests" 0
+    }
+    test "matching method name returns affected test" {
+      LiveTestingHook.findAffectedTests sampleTests ["test_add"]
+      |> Array.length
+      |> Expect.equal "one match" 1
+    }
+    test "multiple matching methods return multiple tests" {
+      LiveTestingHook.findAffectedTests sampleTests ["test_add"; "test_mul"]
+      |> Array.length
+      |> Expect.equal "two matches" 2
+    }
+    test "non-matching method returns empty" {
+      LiveTestingHook.findAffectedTests sampleTests ["nonexistent"]
+      |> Array.length
+      |> Expect.equal "no matches" 0
+    }
+  ]
+
+[<Tests>]
+let findAllTestIdsTests =
+  let mkTC id name fw =
+    { Id = TestId.create id name; FullName = name
+      DisplayName = name.Split('.').[name.Split('.').Length - 1]
+      Origin = TestOrigin.ReflectionOnly; Labels = []; Framework = fw
+      Category = TestCategory.Unit }
+  let sampleTests = [|
+    mkTC "t1" "A.test1" "xunit"
+    mkTC "t2" "B.test2" "xunit"
+  |]
+  testList "findAllTestIds" [
+    test "returns all test IDs" {
+      LiveTestingHook.findAllTestIds sampleTests
+      |> Array.length
+      |> Expect.equal "all tests" 2
+    }
+    test "empty discovered returns empty" {
+      LiveTestingHook.findAllTestIds [||]
+      |> Array.length
+      |> Expect.equal "no tests" 0
+    }
+  ]
+
+[<Tests>]
+let filterTestsForExplicitRunTests =
+  let mkTC id name fw =
+    { Id = TestId.create id name; FullName = name
+      DisplayName = name.Split('.').[name.Split('.').Length - 1]
+      Origin = TestOrigin.ReflectionOnly; Labels = []; Framework = fw
+      Category = TestCategory.Unit }
+  let sampleTests = [|
+    mkTC "t1" "MyModule.Tests.test_add" "expecto"
+    mkTC "t2" "MyModule.Tests.test_sub" "expecto"
+    mkTC "t3" "Other.Tests.test_mul" "xunit"
+  |]
+  testList "filterTestsForExplicitRun" [
+    test "no filters returns all" {
+      LiveTestPipelineState.filterTestsForExplicitRun sampleTests None None None
+      |> Array.length
+      |> Expect.equal "all tests" 3
+    }
+    test "pattern filter matches by FullName" {
+      LiveTestPipelineState.filterTestsForExplicitRun sampleTests None (Some "test_add") None
+      |> Array.length
+      |> Expect.equal "pattern match" 1
+    }
+    test "category filter" {
+      let mixedTests = [|
+        mkTC "t1" "Unit.test1" "xunit"
+        { mkTC "t2" "Integration.test2" "xunit" with Category = TestCategory.Integration }
+      |]
+      LiveTestPipelineState.filterTestsForExplicitRun mixedTests None None (Some TestCategory.Unit)
+      |> Array.length
+      |> Expect.equal "only unit" 1
+    }
+    test "file filter works for SourceMapped" {
+      let mappedTests = [|
+        { mkTC "t1" "Test1" "xunit" with Origin = TestOrigin.SourceMapped ("foo.fs", 10) }
+        { mkTC "t2" "Test2" "xunit" with Origin = TestOrigin.SourceMapped ("bar.fs", 20) }
+        mkTC "t3" "Test3" "xunit"
+      |]
+      LiveTestPipelineState.filterTestsForExplicitRun mappedTests (Some "foo.fs") None None
+      |> Array.length
+      |> Expect.equal "only foo.fs" 1
+    }
+    test "combined filters intersect" {
+      let mixedTests = [|
+        mkTC "t1" "MyModule.add_test" "xunit"
+        { mkTC "t2" "MyModule.db_test" "xunit" with Category = TestCategory.Integration }
+        mkTC "t3" "Other.add_test" "xunit"
+      |]
+      LiveTestPipelineState.filterTestsForExplicitRun mixedTests None (Some "add_test") (Some TestCategory.Unit)
+      |> Array.length
+      |> Expect.equal "pattern + category intersection" 2
+    }
+  ]

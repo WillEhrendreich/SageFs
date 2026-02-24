@@ -1294,3 +1294,38 @@ module McpTools =
         Policies = state.RunPolicies |> Map.toList |> List.map (fun (c, p) -> sprintf "%A: %A" c p)
       |}
       Task.FromResult (JsonSerializer.Serialize(resp, liveTestJsonOpts))
+
+  let runTests
+    (ctx: McpContext)
+    (patternFilter: string option)
+    (categoryFilter: string option)
+    : Task<string> =
+    match ctx.GetElmModel, ctx.Dispatch with
+    | None, _ -> Task.FromResult "Cannot run tests — Elm loop not started."
+    | _, None -> Task.FromResult "Cannot run tests — dispatch not available."
+    | Some getModel, Some dispatch ->
+      let model = getModel ()
+      let state = model.LiveTesting.TestState
+      if not state.Enabled then
+        Task.FromResult "Live testing is disabled. Toggle it on first."
+      else
+        let category =
+          match categoryFilter with
+          | Some c ->
+            match c.ToLowerInvariant() with
+            | "unit" -> Some Features.LiveTesting.TestCategory.Unit
+            | "integration" -> Some Features.LiveTesting.TestCategory.Integration
+            | "browser" -> Some Features.LiveTesting.TestCategory.Browser
+            | "benchmark" -> Some Features.LiveTesting.TestCategory.Benchmark
+            | "architecture" -> Some Features.LiveTesting.TestCategory.Architecture
+            | "property" -> Some Features.LiveTesting.TestCategory.Property
+            | _ -> None
+          | None -> None
+        let tests =
+          Features.LiveTesting.LiveTestPipelineState.filterTestsForExplicitRun
+            state.DiscoveredTests None patternFilter category
+        if Array.isEmpty tests then
+          Task.FromResult (sprintf "No tests matched. Total discovered: %d." state.DiscoveredTests.Length)
+        else
+          dispatch (SageFsMsg.Event (SageFsEvent.RunTestsRequested tests))
+          Task.FromResult (sprintf "Triggered %d tests for execution." tests.Length)

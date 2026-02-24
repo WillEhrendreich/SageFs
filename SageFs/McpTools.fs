@@ -312,3 +312,18 @@ Policies: every (on every change), save (on file save only), demand (manual trig
     member _.get_pipeline_trace() : Task<string> =
         logger.LogDebug("MCP-TOOL: get_pipeline_trace called")
         getPipelineTrace ctx |> withEcho "get_pipeline_trace"
+
+    [<McpServerTool>]
+    [<Description("""Run tests explicitly. Without parameters, runs all discovered unit tests.
+Use pattern to filter by test name (substring match on FullName or DisplayName).
+Use category to filter by test category: unit, integration, browser, benchmark, architecture, property.""")>]
+    member _.run_tests(
+        [<Description("Optional pattern to filter tests by name (substring match)")>]
+        pattern: string,
+        [<Description("Optional category filter: unit, integration, browser, benchmark, architecture, property")>]
+        category: string
+    ) : Task<string> =
+        let p = if System.String.IsNullOrWhiteSpace pattern then None else Some pattern
+        let c = if System.String.IsNullOrWhiteSpace category then None else Some category
+        logger.LogDebug("MCP-TOOL: run_tests called, pattern={Pattern}, category={Category}", pattern, category)
+        runTests ctx p c |> withEcho "run_tests"

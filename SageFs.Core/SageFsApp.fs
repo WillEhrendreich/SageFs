@@ -393,6 +393,18 @@ module SageFsUpdate =
           |> List.map SageFsEffect.Pipeline
         { model with LiveTesting = lt }, effects
 
+      | SageFsEvent.RunTestsRequested tests ->
+        let testIds = tests |> Array.map (fun t -> t.Id)
+        let lt = recomputeStatuses model.LiveTesting (fun s -> { s with AffectedTests = Set.ofArray testIds })
+        let effects =
+          if Array.isEmpty tests || not lt.TestState.Enabled then []
+          else
+            [ Features.LiveTesting.PipelineEffect.RunAffectedTests(
+                tests, Features.LiveTesting.RunTrigger.ExplicitRun,
+                System.TimeSpan.Zero, System.TimeSpan.Zero)
+              |> SageFsEffect.Pipeline ]
+        { model with LiveTesting = lt }, effects
+
       | SageFsEvent.CoverageUpdated coverage ->
         let lt = model.LiveTesting
         let annotations : Features.LiveTesting.CoverageAnnotation array =

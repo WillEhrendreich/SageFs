@@ -63,6 +63,7 @@ type SageFsEvent =
   | RunPolicyChanged of category: Features.LiveTesting.TestCategory * policy: Features.LiveTesting.RunPolicy
   | ProvidersDetected of providers: Features.LiveTesting.ProviderDescription list
   | PipelineTimingRecorded of timing: Features.LiveTesting.PipelineTiming
+  | RunTestsRequested of tests: Features.LiveTesting.TestCase array
 
 /// The complete view state for any SageFs frontend.
 /// Pure data — renderers read this to produce UI.

@@ -516,12 +516,14 @@ module LiveTestingHook =
 
   /// Find which discovered tests are affected by updated method names.
   /// Simple name matching — FCS-based matching comes in Phase 4.
+  /// Find tests affected by method updates. Empty updatedMethodNames means
+  /// nothing changed — returns empty. Use findAllTestIds for explicit "run all".
   let findAffectedTests
     (discoveredTests: TestCase array)
     (updatedMethodNames: string list)
     : TestId array =
     if List.isEmpty updatedMethodNames then
-      discoveredTests |> Array.map (fun t -> t.Id)
+      Array.empty
     else
       discoveredTests
       |> Array.filter (fun tc ->
@@ -530,6 +532,10 @@ module LiveTestingHook =
           tc.FullName.Contains updated
           || updated.Contains (tc.FullName.Split('.').[0])))
       |> Array.map (fun t -> t.Id)
+
+  /// Returns ALL discovered test IDs. Used by explicit "run all" triggers.
+  let findAllTestIds (discoveredTests: TestCase array) : TestId array =
+    discoveredTests |> Array.map (fun t -> t.Id)
 
   /// Main hook: given executors and a freshly loaded assembly,
   /// produce the full result for the Elm loop.
