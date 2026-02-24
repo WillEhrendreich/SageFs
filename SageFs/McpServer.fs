@@ -13,7 +13,9 @@ open Microsoft.Extensions.Logging
 open ModelContextProtocol.Protocol
 open ModelContextProtocol.Server
 open OpenTelemetry.Logs
+open OpenTelemetry.Metrics
 open OpenTelemetry.Resources
+open OpenTelemetry.Trace
 open SageFs.AppState
 open SageFs.McpTools
 
@@ -281,6 +283,18 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                         // .AddConsoleExporter()
                         
                         .AddOtlpExporter() // Uses environment variables
+                    |> ignore
+                )
+                .WithTracing(fun tracing ->
+                    tracing
+                        .AddSource("SageFs.LiveTesting")
+                        .AddOtlpExporter()
+                    |> ignore
+                )
+                .WithMetrics(fun metrics ->
+                    metrics
+                        .AddMeter("SageFs.LiveTesting")
+                        .AddOtlpExporter()
                     |> ignore
                 )
             |> ignore
