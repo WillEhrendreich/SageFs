@@ -1996,25 +1996,25 @@ let pipelineDebounceTests = testList "PipelineDebounce" [
 [<Tests>]
 let pipelineEffectsTests = testList "PipelineEffects" [
   test "fromTick with both payloads produces two effects" {
-    let effects = PipelineEffects.fromTick (Some "code") (Some "file.fs") "file.fs"
+    let effects = PipelineEffects.fromTick (Some "code") (Some "file.fs") "file.fs" None
     effects.Length |> Expect.equal "two effects" 2
     match effects.[0] with
     | PipelineEffect.ParseTreeSitter (content, _) ->
       content |> Expect.equal "ts content" "code"
     | _ -> failtest "expected ParseTreeSitter"
     match effects.[1] with
-    | PipelineEffect.RequestFcsTypeCheck fp ->
+    | PipelineEffect.RequestFcsTypeCheck (fp, _tsElapsed) ->
       fp |> Expect.equal "fcs path" "file.fs"
     | _ -> failtest "expected RequestFcsTypeCheck"
   }
 
   test "fromTick with no payloads produces empty" {
-    let effects = PipelineEffects.fromTick None None "file.fs"
+    let effects = PipelineEffects.fromTick None None "file.fs" None
     effects.Length |> Expect.equal "no effects" 0
   }
 
   test "fromTick with only tree-sitter produces one effect" {
-    let effects = PipelineEffects.fromTick (Some "code") None "file.fs"
+    let effects = PipelineEffects.fromTick (Some "code") None "file.fs" None
     effects.Length |> Expect.equal "one effect" 1
     match effects.[0] with
     | PipelineEffect.ParseTreeSitter _ -> ()
@@ -2031,8 +2031,8 @@ let pipelineEffectsTests = testList "PipelineEffects" [
         SymbolToTests = Map.ofList [ "Module.add", [| tc1.Id |] ]
         TransitiveCoverage = Map.ofList [ "Module.add", [| tc1.Id |] ]
     }
-    match PipelineEffects.afterTypeCheck ["Module.add"] RunTrigger.Keystroke graph state with
-    | Some (PipelineEffect.RunAffectedTests (tests, trigger)) ->
+    match PipelineEffects.afterTypeCheck ["Module.add"] RunTrigger.Keystroke graph state None with
+    | Some (PipelineEffect.RunAffectedTests (tests, trigger, _tsElapsed, _fcsElapsed)) ->
       tests.Length |> Expect.equal "one test" 1
       trigger |> Expect.equal "keystroke trigger" RunTrigger.Keystroke
     | other -> failtestf "expected Some RunAffectedTests, got %A" other
@@ -2041,14 +2041,14 @@ let pipelineEffectsTests = testList "PipelineEffects" [
   test "afterTypeCheck with no affected tests returns None" {
     let state = { LiveTestState.empty with DiscoveredTests = [||]; Enabled = true }
     let graph = TestDependencyGraph.empty
-    PipelineEffects.afterTypeCheck ["unknown.symbol"] RunTrigger.Keystroke graph state
+    PipelineEffects.afterTypeCheck ["unknown.symbol"] RunTrigger.Keystroke graph state None
     |> Expect.isNone "no affected tests"
   }
 
   test "afterTypeCheck when disabled returns None" {
     let state = { LiveTestState.empty with Enabled = false }
     let graph = TestDependencyGraph.empty
-    PipelineEffects.afterTypeCheck ["Module.add"] RunTrigger.Keystroke graph state
+    PipelineEffects.afterTypeCheck ["Module.add"] RunTrigger.Keystroke graph state None
     |> Expect.isNone "disabled"
   }
 
@@ -2069,8 +2069,8 @@ let pipelineEffectsTests = testList "PipelineEffects" [
         SymbolToTests = Map.ofList [ "Module.add", [| tc1.Id; tc2.Id |] ]
         TransitiveCoverage = Map.ofList [ "Module.add", [| tc1.Id; tc2.Id |] ]
     }
-    match PipelineEffects.afterTypeCheck ["Module.add"] RunTrigger.Keystroke graph state with
-    | Some (PipelineEffect.RunAffectedTests (tests, _)) ->
+    match PipelineEffects.afterTypeCheck ["Module.add"] RunTrigger.Keystroke graph state None with
+    | Some (PipelineEffect.RunAffectedTests (tests, _, _, _)) ->
       tests.Length |> Expect.equal "only unit test" 1
       tests.[0].Id |> Expect.equal "unit test id" tc1.Id
     | other -> failtestf "expected Some RunAffectedTests, got %A" other
@@ -2261,10 +2261,10 @@ let effectDispatchTests = testList "EffectDispatcher" [
 
   test "RequestFcsTypeCheck logs file path" {
     let log = EffectDispatcher.create()
-    EffectDispatcher.dispatch log (PipelineEffect.RequestFcsTypeCheck "File.fs")
+    EffectDispatcher.dispatch log (PipelineEffect.RequestFcsTypeCheck("File.fs", System.TimeSpan.Zero))
     log.Effects |> Expect.hasLength "one effect" 1
     match log.Effects.[0] with
-    | PipelineEffect.RequestFcsTypeCheck f -> f |> Expect.equal "file" "File.fs"
+    | PipelineEffect.RequestFcsTypeCheck (f, _) -> f |> Expect.equal "file" "File.fs"
     | _ -> failtest "wrong effect type"
   }
 
@@ -2273,10 +2273,10 @@ let effectDispatchTests = testList "EffectDispatcher" [
     let tests = [| { Id = TestId.create "t1" "expecto"; FullName = "t1"; DisplayName = "t1"
                      Origin = TestOrigin.ReflectionOnly; Labels = []; Framework = "expecto"
                      Category = TestCategory.Unit } |]
-    EffectDispatcher.dispatch log (PipelineEffect.RunAffectedTests(tests, RunTrigger.Keystroke))
+    EffectDispatcher.dispatch log (PipelineEffect.RunAffectedTests(tests, RunTrigger.Keystroke, System.TimeSpan.Zero, System.TimeSpan.Zero))
     log.Effects |> Expect.hasLength "one effect" 1
     match log.Effects.[0] with
-    | PipelineEffect.RunAffectedTests(tcs, trigger) ->
+    | PipelineEffect.RunAffectedTests(tcs, trigger, _, _) ->
       tcs |> Expect.hasLength "one test" 1
       trigger |> Expect.equal "trigger" RunTrigger.Keystroke
     | _ -> failtest "wrong effect type"
@@ -2286,7 +2286,7 @@ let effectDispatchTests = testList "EffectDispatcher" [
     let log = EffectDispatcher.create()
     let effects = [
       PipelineEffect.ParseTreeSitter("x", "f")
-      PipelineEffect.RequestFcsTypeCheck "f"
+      PipelineEffect.RequestFcsTypeCheck("f", System.TimeSpan.Zero)
     ]
     EffectDispatcher.dispatchAll log effects
     log.Effects |> Expect.hasLength "two effects" 2
@@ -2355,10 +2355,10 @@ let endToEndPipelineTests = testList "End-to-end Pipeline" [
     |> List.exists (fun e -> match e with PipelineEffect.RequestFcsTypeCheck _ -> true | _ -> false)
     |> Expect.isTrue "has fcs"
     // Phase 2: afterTypeCheck (after FCS completes) fires RunAffectedTests
-    let runEffect = PipelineEffects.afterTypeCheck s2.ChangedSymbols RunTrigger.Keystroke s2.DepGraph s2.TestState
+    let runEffect = PipelineEffects.afterTypeCheck s2.ChangedSymbols RunTrigger.Keystroke s2.DepGraph s2.TestState None
     runEffect |> Expect.isSome "afterTypeCheck produces RunAffectedTests"
     match runEffect.Value with
-    | PipelineEffect.RunAffectedTests (tests, trigger) ->
+    | PipelineEffect.RunAffectedTests (tests, trigger, _, _) ->
       tests |> Array.length |> Expect.equal "one affected test" 1
       trigger |> Expect.equal "trigger is keystroke" RunTrigger.Keystroke
     | _ -> failwith "expected RunAffectedTests"
@@ -2413,8 +2413,8 @@ let pipelineCancellationTests = testList "PipelineCancellation" [
   test "tokenForEffect returns live tokens" {
     let pc = PipelineCancellation.create()
     let t1 = PipelineCancellation.tokenForEffect (PipelineEffect.ParseTreeSitter("x", "f")) pc
-    let t2 = PipelineCancellation.tokenForEffect (PipelineEffect.RequestFcsTypeCheck "f") pc
-    let t3 = PipelineCancellation.tokenForEffect (PipelineEffect.RunAffectedTests([||], RunTrigger.Keystroke)) pc
+    let t2 = PipelineCancellation.tokenForEffect (PipelineEffect.RequestFcsTypeCheck("f", System.TimeSpan.Zero)) pc
+    let t3 = PipelineCancellation.tokenForEffect (PipelineEffect.RunAffectedTests([||], RunTrigger.Keystroke, System.TimeSpan.Zero, System.TimeSpan.Zero)) pc
     t1.IsCancellationRequested |> Expect.isFalse "ts token live"
     t2.IsCancellationRequested |> Expect.isFalse "fcs token live"
     t3.IsCancellationRequested |> Expect.isFalse "run token live"
@@ -2432,8 +2432,8 @@ let pipelineCancellationTests = testList "PipelineCancellation" [
   test "new fcs effect cancels previous fcs but not tree-sitter" {
     let pc = PipelineCancellation.create()
     let tsToken = PipelineCancellation.tokenForEffect (PipelineEffect.ParseTreeSitter("x", "f")) pc
-    let fcs1 = PipelineCancellation.tokenForEffect (PipelineEffect.RequestFcsTypeCheck "f") pc
-    let _fcs2 = PipelineCancellation.tokenForEffect (PipelineEffect.RequestFcsTypeCheck "f") pc
+    let fcs1 = PipelineCancellation.tokenForEffect (PipelineEffect.RequestFcsTypeCheck("f", System.TimeSpan.Zero)) pc
+    let _fcs2 = PipelineCancellation.tokenForEffect (PipelineEffect.RequestFcsTypeCheck("f", System.TimeSpan.Zero)) pc
     fcs1.IsCancellationRequested |> Expect.isTrue "first fcs cancelled"
     tsToken.IsCancellationRequested |> Expect.isFalse "ts not affected"
     PipelineCancellation.dispose pc
@@ -2441,8 +2441,8 @@ let pipelineCancellationTests = testList "PipelineCancellation" [
 
   test "new test run cancels previous test run" {
     let pc = PipelineCancellation.create()
-    let run1 = PipelineCancellation.tokenForEffect (PipelineEffect.RunAffectedTests([||], RunTrigger.Keystroke)) pc
-    let _run2 = PipelineCancellation.tokenForEffect (PipelineEffect.RunAffectedTests([||], RunTrigger.Keystroke)) pc
+    let run1 = PipelineCancellation.tokenForEffect (PipelineEffect.RunAffectedTests([||], RunTrigger.Keystroke, System.TimeSpan.Zero, System.TimeSpan.Zero)) pc
+    let _run2 = PipelineCancellation.tokenForEffect (PipelineEffect.RunAffectedTests([||], RunTrigger.Keystroke, System.TimeSpan.Zero, System.TimeSpan.Zero)) pc
     run1.IsCancellationRequested |> Expect.isTrue "first run cancelled"
     PipelineCancellation.dispose pc
   }
@@ -2450,8 +2450,8 @@ let pipelineCancellationTests = testList "PipelineCancellation" [
   test "dispose cancels all active tokens" {
     let pc = PipelineCancellation.create()
     let ts = PipelineCancellation.tokenForEffect (PipelineEffect.ParseTreeSitter("x", "f")) pc
-    let fcs = PipelineCancellation.tokenForEffect (PipelineEffect.RequestFcsTypeCheck "f") pc
-    let run = PipelineCancellation.tokenForEffect (PipelineEffect.RunAffectedTests([||], RunTrigger.Keystroke)) pc
+    let fcs = PipelineCancellation.tokenForEffect (PipelineEffect.RequestFcsTypeCheck("f", System.TimeSpan.Zero)) pc
+    let run = PipelineCancellation.tokenForEffect (PipelineEffect.RunAffectedTests([||], RunTrigger.Keystroke, System.TimeSpan.Zero, System.TimeSpan.Zero)) pc
     PipelineCancellation.dispose pc
     ts.IsCancellationRequested |> Expect.isTrue "ts cancelled"
     fcs.IsCancellationRequested |> Expect.isTrue "fcs cancelled"

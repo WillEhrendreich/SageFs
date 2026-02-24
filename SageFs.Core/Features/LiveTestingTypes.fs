@@ -674,6 +674,26 @@ module PipelineTiming =
   let totalMs (t: PipelineTiming) : float =
     treeSitterMs t + fcsMs t + executionMs t
 
+  /// Extract tree-sitter elapsed from any pipeline depth.
+  let accumulatedTsElapsed (t: PipelineTiming option) : System.TimeSpan =
+    match t with
+    | Some timing ->
+      match timing.Depth with
+      | PipelineDepth.TreeSitterOnly ts
+      | PipelineDepth.ThroughFcs (ts, _)
+      | PipelineDepth.ThroughExecution (ts, _, _) -> ts
+    | None -> System.TimeSpan.Zero
+
+  /// Extract FCS elapsed from pipeline depth (Zero if FCS hasn't run).
+  let accumulatedFcsElapsed (t: PipelineTiming option) : System.TimeSpan =
+    match t with
+    | Some timing ->
+      match timing.Depth with
+      | PipelineDepth.ThroughFcs (_, fcs)
+      | PipelineDepth.ThroughExecution (_, fcs, _) -> fcs
+      | _ -> System.TimeSpan.Zero
+    | None -> System.TimeSpan.Zero
+
   let toStatusBar (t: PipelineTiming) : string =
     match t.Depth with
     | PipelineDepth.TreeSitterOnly ts ->
@@ -884,20 +904,23 @@ module PipelineDebounce =
 [<RequireQualifiedAccess>]
 type PipelineEffect =
   | ParseTreeSitter of content: string * filePath: string
-  | RequestFcsTypeCheck of filePath: string
-  | RunAffectedTests of tests: TestCase array * trigger: RunTrigger
+  | RequestFcsTypeCheck of filePath: string * treeSitterElapsed: System.TimeSpan
+  | RunAffectedTests of tests: TestCase array * trigger: RunTrigger * treeSitterElapsed: System.TimeSpan * fcsElapsed: System.TimeSpan
 
 module PipelineEffects =
   let fromTick
     (tsPayload: string option)
     (fcsPayload: string option)
     (filePath: string)
+    (lastTiming: PipelineTiming option)
     : PipelineEffect list =
     [ match tsPayload with
       | Some content -> PipelineEffect.ParseTreeSitter(content, filePath)
       | None -> ()
       match fcsPayload with
-      | Some fp -> PipelineEffect.RequestFcsTypeCheck fp
+      | Some fp ->
+        let tsElapsed = PipelineTiming.accumulatedTsElapsed lastTiming
+        PipelineEffect.RequestFcsTypeCheck(fp, tsElapsed)
       | None -> () ]
 
   let afterTypeCheck
@@ -905,6 +928,7 @@ module PipelineEffects =
     (trigger: RunTrigger)
     (depGraph: TestDependencyGraph)
     (state: LiveTestState)
+    (lastTiming: PipelineTiming option)
     : PipelineEffect option =
     if not state.Enabled then None
     else
@@ -917,7 +941,10 @@ module PipelineEffects =
         let filtered =
           PolicyFilter.filterTests state.RunPolicies trigger affectedTests
         if Array.isEmpty filtered then None
-        else Some (PipelineEffect.RunAffectedTests(filtered, trigger))
+        else
+          let tsElapsed = PipelineTiming.accumulatedTsElapsed lastTiming
+          let fcsElapsed = PipelineTiming.accumulatedFcsElapsed lastTiming
+          Some (PipelineEffect.RunAffectedTests(filtered, trigger, tsElapsed, fcsElapsed))
 
 /// Adaptive debounce configuration.
 type AdaptiveDebounceConfig = {
@@ -1147,7 +1174,7 @@ module LiveTestPipelineState =
     | None -> [], s
     | Some filePath ->
       let (tsPayload, fcsPayload), db = s.Debounce |> PipelineDebounce.tick now
-      let effects = PipelineEffects.fromTick tsPayload fcsPayload filePath
+      let effects = PipelineEffects.fromTick tsPayload fcsPayload filePath s.LastTiming
       effects, { s with Debounce = db }
 
   /// Handles an FCS type-check result: updates state and produces effects.
@@ -1163,7 +1190,7 @@ module LiveTestPipelineState =
     | FcsTypeCheckResult.Success (filePath, refs) ->
       let s1 = onFcsComplete filePath refs s
       let trigger = s.LastTrigger
-      let effect = PipelineEffects.afterTypeCheck s1.ChangedSymbols trigger s1.DepGraph s1.TestState
+      let effect = PipelineEffects.afterTypeCheck s1.ChangedSymbols trigger s1.DepGraph s1.TestState s1.LastTiming
       let effects = effect |> Option.toList
       effects, s1
     | FcsTypeCheckResult.Failed _ ->

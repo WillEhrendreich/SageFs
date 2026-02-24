@@ -640,11 +640,6 @@ type EffectDeps = {
 /// Converts WorkerResponses back into SageFsMsg for the Elm loop.
 module SageFsEffectHandler =
 
-  /// Tracks the last tree-sitter elapsed time so FCS and execution stages
-  /// can build progressively deeper PipelineTiming records.
-  let mutable private lastTreeSitterElapsed = System.TimeSpan.Zero
-  let mutable private lastFcsElapsed = System.TimeSpan.Zero
-
   let newReplyId () =
     Guid.NewGuid().ToString("N").[..7]
 
@@ -845,7 +840,6 @@ module SageFsEffectHandler =
           let sw = System.Diagnostics.Stopwatch.StartNew()
           let locations = Features.LiveTesting.TestTreeSitter.discover filePath content
           sw.Stop()
-          lastTreeSitterElapsed <- sw.Elapsed
           dispatch (SageFsMsg.Event (SageFsEvent.TestLocationsDetected locations))
           let timing : Features.LiveTesting.PipelineTiming = {
             Depth = Features.LiveTesting.PipelineDepth.TreeSitterOnly sw.Elapsed
@@ -854,7 +848,7 @@ module SageFsEffectHandler =
             Timestamp = System.DateTimeOffset.UtcNow
           }
           dispatch (SageFsMsg.Event (SageFsEvent.PipelineTimingRecorded timing))
-        | Features.LiveTesting.PipelineEffect.RequestFcsTypeCheck filePath ->
+        | Features.LiveTesting.PipelineEffect.RequestFcsTypeCheck (filePath, tsElapsed) ->
           let fcsStopwatch = System.Diagnostics.Stopwatch.StartNew()
           do! withSession deps dispatch None (fun _sid proxy ->
             async {
@@ -865,7 +859,6 @@ module SageFsEffectHandler =
                 let replyId = newReplyId ()
                 let! resp = proxy (WorkerMessage.TypeCheckWithSymbols(code, filePath, replyId))
                 fcsStopwatch.Stop()
-                lastFcsElapsed <- fcsStopwatch.Elapsed
                 let result =
                   match resp with
                   | WorkerResponse.TypeCheckWithSymbolsResult(_rid, hasErrors, _diags, symRefs) ->
@@ -878,14 +871,14 @@ module SageFsEffectHandler =
                     Features.LiveTesting.FcsTypeCheckResult.Cancelled filePath
                 dispatch (SageFsMsg.FcsTypeCheckCompleted result)
                 let timing : Features.LiveTesting.PipelineTiming = {
-                  Depth = Features.LiveTesting.PipelineDepth.ThroughFcs(lastTreeSitterElapsed, fcsStopwatch.Elapsed)
+                  Depth = Features.LiveTesting.PipelineDepth.ThroughFcs(tsElapsed, fcsStopwatch.Elapsed)
                   TotalTests = 0; AffectedTests = 0
                   Trigger = Features.LiveTesting.RunTrigger.Keystroke
                   Timestamp = System.DateTimeOffset.UtcNow
                 }
                 dispatch (SageFsMsg.Event (SageFsEvent.PipelineTimingRecorded timing))
             })
-        | Features.LiveTesting.PipelineEffect.RunAffectedTests (tests, trigger) ->
+        | Features.LiveTesting.PipelineEffect.RunAffectedTests (tests, trigger, tsElapsed, fcsElapsed) ->
           if Array.isEmpty tests then ()
           else
             let testIds = tests |> Array.map (fun tc -> tc.Id)
@@ -901,7 +894,7 @@ module SageFsEffectHandler =
                 dispatch (SageFsMsg.Event (SageFsEvent.TestResultsBatch results))
                 let timing : Features.LiveTesting.PipelineTiming = {
                   Depth = Features.LiveTesting.PipelineDepth.ThroughExecution(
-                            lastTreeSitterElapsed, lastFcsElapsed, sw.Elapsed)
+                            tsElapsed, fcsElapsed, sw.Elapsed)
                   TotalTests = tests.Length
                   AffectedTests = tests.Length
                   Trigger = trigger
