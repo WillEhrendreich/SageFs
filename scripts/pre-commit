@@ -1,6 +1,6 @@
 #!/bin/sh
 # Auto-increment patch version in Directory.Build.props on every commit.
-# 0.5.53 -> 0.5.54, etc.
+# Also syncs version into sagefs-vscode/package.json.
 
 PROPS="Directory.Build.props"
 
@@ -18,8 +18,15 @@ PATCH=$(echo "$VERSION" | cut -d. -f3)
 NEW_PATCH=$((PATCH + 1))
 NEW_VERSION="$MAJOR.$MINOR.$NEW_PATCH"
 
+# Bump Directory.Build.props
 sed -i "s|<Version>$VERSION</Version>|<Version>$NEW_VERSION</Version>|" "$PROPS"
-
 git add "$PROPS"
+
+# Sync VS Code extension version
+VSCODE_PKG="sagefs-vscode/package.json"
+if [ -f "$VSCODE_PKG" ]; then
+  sed -i "s|\"version\": \"[^\"]*\"|\"version\": \"$NEW_VERSION\"|" "$VSCODE_PKG"
+  git add "$VSCODE_PKG"
+fi
 
 echo "pre-commit: version $VERSION -> $NEW_VERSION"

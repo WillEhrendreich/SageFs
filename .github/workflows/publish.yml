@@ -103,3 +103,15 @@ jobs:
       with:
         tag_name: ${{ github.ref_name }}
         files: release/*.vsix
+
+    - name: Tag sagefs.nvim with matching version
+      env:
+        NVIM_PAT: ${{ secrets.SAGEFS_NVIM_PAT }}
+      if: env.NVIM_PAT != ''
+      run: |
+        cd "$(mktemp -d)"
+        git clone https://x-access-token:${NVIM_PAT}@github.com/WillEhrendreich/sagefs.nvim.git .
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+        git tag -f "${{ github.ref_name }}" -m "Release ${{ github.ref_name }} (synced from SageFs)"
+        git push origin "${{ github.ref_name }}" --force
