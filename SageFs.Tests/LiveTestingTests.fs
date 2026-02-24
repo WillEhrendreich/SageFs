@@ -3954,3 +3954,85 @@ let liveTestingStatusBarTests = testList "liveTestingStatusBar" [
     result |> Expect.stringContains "should contain pipe separator" " | "
   }
 ]
+
+let pipelineBenchmarkTests = testList "Pipeline Core Benchmark" [
+  test "200-test pipeline core completes under 5ms p95" {
+    let sw = System.Diagnostics.Stopwatch()
+    let makeTestCase i =
+      { Id = TestId.create (sprintf "Module.Tests.test%d" i) "expecto"
+        FullName = sprintf "Module.Tests.test%d" i; DisplayName = sprintf "test%d" i
+        Origin = TestOrigin.SourceMapped ("editor", i + 1); Labels = []; Framework = "expecto"
+        Category = if i % 10 = 0 then TestCategory.Integration else TestCategory.Unit }
+    let tests = Array.init 200 makeTestCase
+    let directMap =
+      tests |> Array.map (fun t -> sprintf "Module.func%d" (t.Id.GetHashCode() % 50), [| t.Id |])
+      |> Array.groupBy fst |> Array.map (fun (sym, pairs) -> sym, pairs |> Array.collect snd) |> Map.ofArray
+    let graph = { SymbolToTests = directMap; TransitiveCoverage = directMap; SourceVersion = 1 }
+    let results =
+      tests.[..149] |> Array.map (fun t ->
+        t.Id, { TestId = t.Id; TestName = t.DisplayName
+                Result = TestResult.Passed (TimeSpan.FromMilliseconds 5.0)
+                Timestamp = DateTimeOffset.UtcNow }) |> Map.ofArray
+    let locs = tests |> Array.map (fun t ->
+      { AttributeName = "Test"; FilePath = "editor"
+        Line = (match t.Origin with TestOrigin.SourceMapped (_, l) -> l | _ -> 0); Column = 0 })
+    let state = { LiveTestState.empty with
+                    DiscoveredTests = tests; LastResults = results; SourceLocations = locs
+                    AffectedTests = tests.[..19] |> Array.map (fun t -> t.Id) |> Set.ofArray }
+    let stateWithEntries = { state with StatusEntries = LiveTesting.computeStatusEntries state }
+
+    let timings = Array.init 100 (fun _ ->
+      sw.Restart()
+      let _ = PipelineOrchestrator.decide stateWithEntries RunTrigger.Keystroke ["Module.func1"] graph
+      let _ = TestDependencyGraph.findAffected ["Module.func1"] graph
+      let _ = LiveTesting.filterByPolicy RunPolicyDefaults.defaults RunTrigger.Keystroke tests
+      let _ = LiveTesting.computeStatusEntries stateWithEntries
+      let _ = LiveTesting.recomputeEditorAnnotations stateWithEntries
+      sw.Stop()
+      sw.Elapsed.TotalMilliseconds)
+
+    let sorted = timings |> Array.sort
+    let p95 = sorted.[94]
+    (p95, 5.0) |> Expect.isLessThan "p95 under 5ms"
+  }
+
+  test "1000-test pipeline core completes under 20ms p95" {
+    let sw = System.Diagnostics.Stopwatch()
+    let makeTestCase i =
+      { Id = TestId.create (sprintf "M.T.t%d" i) "expecto"
+        FullName = sprintf "M.T.t%d" i; DisplayName = sprintf "t%d" i
+        Origin = TestOrigin.SourceMapped ("editor", i + 1); Labels = []; Framework = "expecto"
+        Category = TestCategory.Unit }
+    let tests = Array.init 1000 makeTestCase
+    let directMap =
+      tests |> Array.map (fun t -> sprintf "func%d" (t.Id.GetHashCode() % 200), [| t.Id |])
+      |> Array.groupBy fst |> Array.map (fun (sym, pairs) -> sym, pairs |> Array.collect snd) |> Map.ofArray
+    let graph = { SymbolToTests = directMap; TransitiveCoverage = directMap; SourceVersion = 1 }
+    let results =
+      tests.[..799] |> Array.map (fun t ->
+        t.Id, { TestId = t.Id; TestName = t.DisplayName
+                Result = TestResult.Passed (TimeSpan.FromMilliseconds 3.0)
+                Timestamp = DateTimeOffset.UtcNow }) |> Map.ofArray
+    let locs = tests |> Array.map (fun t ->
+      { AttributeName = "Test"; FilePath = "editor"
+        Line = (match t.Origin with TestOrigin.SourceMapped (_, l) -> l | _ -> 0); Column = 0 })
+    let state = { LiveTestState.empty with
+                    DiscoveredTests = tests; LastResults = results; SourceLocations = locs
+                    AffectedTests = tests.[..49] |> Array.map (fun t -> t.Id) |> Set.ofArray }
+    let stateWithEntries = { state with StatusEntries = LiveTesting.computeStatusEntries state }
+
+    let timings = Array.init 50 (fun _ ->
+      sw.Restart()
+      let _ = PipelineOrchestrator.decide stateWithEntries RunTrigger.Keystroke ["func1"] graph
+      let _ = TestDependencyGraph.findAffected ["func1"] graph
+      let _ = LiveTesting.filterByPolicy RunPolicyDefaults.defaults RunTrigger.Keystroke tests
+      let _ = LiveTesting.computeStatusEntries stateWithEntries
+      let _ = LiveTesting.recomputeEditorAnnotations stateWithEntries
+      sw.Stop()
+      sw.Elapsed.TotalMilliseconds)
+
+    let sorted = timings |> Array.sort
+    let p95 = sorted.[47]
+    (p95, 20.0) |> Expect.isLessThan "p95 under 20ms"
+  }
+]
