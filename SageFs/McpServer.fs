@@ -37,8 +37,8 @@ type PushEvent =
   | SessionFaulted of error: string
   /// Warmup completed.
   | WarmupCompleted
-  /// Test summary changed — carries totals.
-  | TestSummaryChanged of total: int * passed: int * failed: int * stale: int * running: int
+  /// Test summary changed — carries summary record.
+  | TestSummaryChanged of summary: SageFs.Features.LiveTesting.TestSummary
   /// Test results batch — carries count of results.
   | TestResultsBatch of count: int
 
@@ -91,8 +91,8 @@ module PushEvent =
       sprintf "🔴 session faulted: %s" error
     | PushEvent.WarmupCompleted ->
       "✓ warmup complete"
-    | PushEvent.TestSummaryChanged (total, passed, failed, stale, running) ->
-      sprintf "🧪 tests: %d total, %d passed, %d failed, %d stale, %d running" total passed failed stale running
+    | PushEvent.TestSummaryChanged s ->
+      sprintf "🧪 tests: %d total, %d passed, %d failed, %d stale, %d running" s.Total s.Passed s.Failed s.Stale s.Running
     | PushEvent.TestResultsBatch count ->
       sprintf "🧪 %d test result(s) received" count
 
@@ -709,7 +709,7 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                         let s = SageFs.Features.LiveTesting.TestSummary.fromStatuses
                                   (lt.StatusEntries |> Array.map (fun e -> e.Status))
                         serverTracker.AccumulateEvent(
-                          PushEvent.TestSummaryChanged(s.Total, s.Passed, s.Failed, s.Stale, s.Running))
+                          PushEvent.TestSummaryChanged s)
                     | None -> ()
 
                     if serverTracker.Count > 0 then
