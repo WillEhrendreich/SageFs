@@ -392,11 +392,9 @@ let hotReloadingMiddleware next (request, st: AppState) =
                 (fsiHookResult :: projectResults)
                 |> List.map (fun r -> r.DiscoveredTests)
                 |> Array.concat
-              AffectedTestIds =
-                (fsiHookResult :: projectResults)
-                |> List.map (fun r -> r.AffectedTestIds)
-                |> Array.concat
-                |> Array.distinct }
+              // Initial scan: no code changed yet, so don't mark all tests as affected.
+              // Only FSI hook's affected tests matter (from the actual eval).
+              AffectedTestIds = fsiHookResult.AffectedTestIds }
         merged, { reloadingSt with LiveTestInitDone = true }
       else
         fsiHookResult, reloadingSt
