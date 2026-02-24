@@ -1262,7 +1262,7 @@ module McpTools =
       | "benchmark" -> Some Features.LiveTesting.TestCategory.Benchmark
       | "architecture" -> Some Features.LiveTesting.TestCategory.Architecture
       | "property" -> Some Features.LiveTesting.TestCategory.Property
-      | _ -> None
+      | other -> Some (Features.LiveTesting.TestCategory.Custom other)
     let pol =
       match policy.ToLowerInvariant() with
       | "oneverychange" | "every" -> Some Features.LiveTesting.RunPolicy.OnEveryChange
@@ -1330,7 +1330,7 @@ module McpTools =
             | "benchmark" -> Some Features.LiveTesting.TestCategory.Benchmark
             | "architecture" -> Some Features.LiveTesting.TestCategory.Architecture
             | "property" -> Some Features.LiveTesting.TestCategory.Property
-            | _ -> None
+            | other -> Some (Features.LiveTesting.TestCategory.Custom other)
           | None -> None
         let tests =
           Features.LiveTesting.LiveTestPipelineState.filterTestsForExplicitRun

@@ -732,8 +732,11 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                             SageFs.Features.LiveTesting.ResultFreshness.StaleCodeEdited
                           | _ -> SageFs.Features.LiveTesting.ResultFreshness.Fresh
                         let payload =
+                          let completion =
+                            SageFs.Features.LiveTesting.TestResultsBatchPayload.deriveCompletion
+                              freshness lt.DiscoveredTests.Length lt.StatusEntries.Length
                           SageFs.Features.LiveTesting.TestResultsBatchPayload.create
-                            lt.LastGeneration freshness lt.StatusEntries
+                            lt.LastGeneration freshness completion lt.StatusEntries
                         serverTracker.AccumulateEvent(
                           PushEvent.TestResultsBatch payload)
                     | None -> ()

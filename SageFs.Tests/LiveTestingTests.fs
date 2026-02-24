@@ -2117,6 +2117,96 @@ let debounceChannelTests = testList "DebounceChannel" [
 ]
 
 // ============================================================
+// Debounce Channel Property Tests (FsCheck)
+// ============================================================
+
+[<Tests>]
+let debounceChannelPropertyTests = testList "DebounceChannel properties" [
+  testProperty "tryFire always fires after delay has elapsed" (fun (payload: string) (delayMs: FsCheck.PositiveInt) ->
+    let delay = delayMs.Get % 10000 + 1
+    let t0 = DateTimeOffset.UtcNow
+    let ch = DebounceChannel.empty<string> |> DebounceChannel.submit payload delay t0
+    let tFire = t0.AddMilliseconds(float delay + 1.0)
+    let result, _ = DebounceChannel.tryFire tFire ch
+    result = Some payload
+  )
+
+  testProperty "tryFire never fires before delay elapses" (fun (payload: string) (delayMs: FsCheck.PositiveInt) ->
+    let delay = (delayMs.Get % 10000) + 2
+    let t0 = DateTimeOffset.UtcNow
+    let ch = DebounceChannel.empty<string> |> DebounceChannel.submit payload delay t0
+    let tEarly = t0.AddMilliseconds(float (delay - 2))
+    let result, _ = DebounceChannel.tryFire tEarly ch
+    result = None
+  )
+
+  testProperty "newer submission supersedes older" (fun (p1: string) (p2: string) (delayMs: FsCheck.PositiveInt) ->
+    let delay = delayMs.Get % 10000 + 1
+    let t0 = DateTimeOffset.UtcNow
+    let ch =
+      DebounceChannel.empty<string>
+      |> DebounceChannel.submit p1 delay t0
+      |> DebounceChannel.submit p2 delay (t0.AddMilliseconds 10.0)
+    let tFire = t0.AddMilliseconds(float delay + 100.0)
+    let result, _ = DebounceChannel.tryFire tFire ch
+    result = Some p2
+  )
+
+  testProperty "empty channel never fires" (fun (offset: FsCheck.PositiveInt) ->
+    let t0 = DateTimeOffset.UtcNow
+    let result, _ = DebounceChannel.tryFire (t0.AddMilliseconds(float offset.Get)) DebounceChannel.empty<string>
+    result = None
+  )
+]
+
+// ============================================================
+// AdaptiveDebounce Property Tests (FsCheck)
+// ============================================================
+
+[<Tests>]
+let adaptiveDebouncePropertyTests = testList "AdaptiveDebounce properties" [
+  testProperty "onFcsCanceled never decreases delay" (fun (cancels: FsCheck.PositiveInt) ->
+    let n = cancels.Get % 100
+    let mutable ad = AdaptiveDebounce.createDefault()
+    let mutable prevDelay = ad.CurrentFcsDelayMs
+    let mutable monotonic = true
+    for _ in 1 .. n do
+      ad <- AdaptiveDebounce.onFcsCanceled ad
+      if ad.CurrentFcsDelayMs < prevDelay then monotonic <- false
+      prevDelay <- ad.CurrentFcsDelayMs
+    monotonic
+  )
+
+  testProperty "delay never exceeds MaxFcsMs" (fun (cancels: FsCheck.PositiveInt) ->
+    let n = cancels.Get % 200
+    let mutable ad = AdaptiveDebounce.createDefault()
+    for _ in 1 .. n do
+      ad <- AdaptiveDebounce.onFcsCanceled ad
+    ad.CurrentFcsDelayMs <= ad.Config.MaxFcsMs
+  )
+
+  testProperty "enough successes always reset to base" (fun (cancels: FsCheck.PositiveInt) ->
+    let n = cancels.Get % 50
+    let mutable ad = AdaptiveDebounce.createDefault()
+    for _ in 1 .. n do
+      ad <- AdaptiveDebounce.onFcsCanceled ad
+    for _ in 1 .. ad.Config.ResetAfterSuccessCount do
+      ad <- AdaptiveDebounce.onFcsCompleted ad
+    ad.CurrentFcsDelayMs = ad.Config.BaseFcsMs
+  )
+
+  testProperty "cancel then complete does not decrease below cancel level" (fun (cancels: FsCheck.PositiveInt) ->
+    let n = max 1 (cancels.Get % 20)
+    let mutable ad = AdaptiveDebounce.createDefault()
+    for _ in 1 .. n do
+      ad <- AdaptiveDebounce.onFcsCanceled ad
+    let afterCancels = ad.CurrentFcsDelayMs
+    ad <- AdaptiveDebounce.onFcsCompleted ad
+    ad.CurrentFcsDelayMs >= afterCancels || ad.CurrentFcsDelayMs = ad.Config.BaseFcsMs
+  )
+]
+
+// ============================================================
 // Pipeline Debounce Tests
 // ============================================================
 
@@ -3857,7 +3947,7 @@ let batchPayloadTests = testList "TestResultsBatchPayload" [
       Status = TestRunStatus.Passed (System.TimeSpan.FromMilliseconds 5.0)
       PreviousStatus = TestRunStatus.Detected }
     let gen = RunGeneration.next RunGeneration.zero
-    let batch = TestResultsBatchPayload.create gen ResultFreshness.Fresh [| entry |]
+    let batch = TestResultsBatchPayload.create gen ResultFreshness.Fresh (BatchCompletion.Complete(1, 1)) [| entry |]
     batch.Summary.Passed |> Expect.equal "one passed" 1
     batch.Summary.Total |> Expect.equal "one total" 1
     batch.Freshness |> Expect.equal "fresh" ResultFreshness.Fresh
@@ -3866,19 +3956,19 @@ let batchPayloadTests = testList "TestResultsBatchPayload" [
 
   test "create with stale results carries StaleCodeEdited" {
     let gen = RunGeneration.next RunGeneration.zero
-    let batch = TestResultsBatchPayload.create gen ResultFreshness.StaleCodeEdited [||]
+    let batch = TestResultsBatchPayload.create gen ResultFreshness.StaleCodeEdited BatchCompletion.Superseded [||]
     batch.Freshness |> Expect.equal "stale edited" ResultFreshness.StaleCodeEdited
   }
 
   test "create with wrong generation carries StaleWrongGeneration" {
     let gen = RunGeneration.next RunGeneration.zero
-    let batch = TestResultsBatchPayload.create gen ResultFreshness.StaleWrongGeneration [||]
+    let batch = TestResultsBatchPayload.create gen ResultFreshness.StaleWrongGeneration BatchCompletion.Superseded [||]
     batch.Freshness |> Expect.equal "wrong gen" ResultFreshness.StaleWrongGeneration
   }
 
   test "isEmpty returns true for empty entries" {
     let gen = RunGeneration.zero
-    let batch = TestResultsBatchPayload.create gen ResultFreshness.Fresh [||]
+    let batch = TestResultsBatchPayload.create gen ResultFreshness.Fresh (BatchCompletion.Complete(0, 0)) [||]
     TestResultsBatchPayload.isEmpty batch |> Expect.isTrue "should be empty"
   }
 
@@ -3890,7 +3980,7 @@ let batchPayloadTests = testList "TestResultsBatchPayload" [
       Category = TestCategory.Unit; CurrentPolicy = RunPolicy.OnEveryChange
       Status = TestRunStatus.Detected; PreviousStatus = TestRunStatus.Detected }
     let gen = RunGeneration.zero
-    let batch = TestResultsBatchPayload.create gen ResultFreshness.Fresh [| entry |]
+    let batch = TestResultsBatchPayload.create gen ResultFreshness.Fresh (BatchCompletion.Complete(1, 1)) [| entry |]
     TestResultsBatchPayload.isEmpty batch |> Expect.isFalse "should not be empty"
   }
 ]
@@ -4134,7 +4224,9 @@ let sseEnrichmentTests = testList "SSE enrichment round-trip" [
     let merged = LiveTesting.mergeResults state [| result |]
     let entries = LiveTesting.computeStatusEntries merged
     let _newPhase, freshness = TestRunPhase.onResultsArrived gen merged.RunPhase
-    let batch = TestResultsBatchPayload.create gen freshness entries
+    let batch =
+      let completion = TestResultsBatchPayload.deriveCompletion freshness 1 entries.Length
+      TestResultsBatchPayload.create gen freshness completion entries
     batch.Generation |> Expect.equal "generation matches" gen
     batch.Freshness |> Expect.equal "fresh results" ResultFreshness.Fresh
     batch.Entries.Length |> Expect.equal "one entry" 1
@@ -4166,7 +4258,9 @@ let sseEnrichmentTests = testList "SSE enrichment round-trip" [
     let merged = LiveTesting.mergeResults state [| result |]
     let entries = LiveTesting.computeStatusEntries merged
     let _newPhase, freshness = TestRunPhase.onResultsArrived gen editedPhase
-    let batch = TestResultsBatchPayload.create gen freshness entries
+    let batch =
+      let completion = TestResultsBatchPayload.deriveCompletion freshness 1 entries.Length
+      TestResultsBatchPayload.create gen freshness completion entries
     batch.Freshness |> Expect.equal "stale code edited" ResultFreshness.StaleCodeEdited
   }
 ]

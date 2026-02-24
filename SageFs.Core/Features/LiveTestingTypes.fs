@@ -38,6 +38,7 @@ type TestCategory =
   | Benchmark
   | Architecture
   | Property
+  | Custom of string
 
 [<RequireQualifiedAccess>]
 type RunPolicy =
@@ -511,9 +512,17 @@ module TestSummary =
 
 // --- Enriched SSE Batch Payload ---
 
+/// Whether a batch of test results represents a complete run.
+[<RequireQualifiedAccess>]
+type BatchCompletion =
+  | Complete of requested: int * returned: int
+  | Partial of requested: int * returned: int
+  | Superseded
+
 type TestResultsBatchPayload = {
   Generation: RunGeneration
   Freshness: ResultFreshness
+  Completion: BatchCompletion
   Entries: TestStatusEntry array
   Summary: TestSummary
 }
@@ -522,6 +531,7 @@ module TestResultsBatchPayload =
   let create
     (generation: RunGeneration)
     (freshness: ResultFreshness)
+    (completion: BatchCompletion)
     (entries: TestStatusEntry array)
     : TestResultsBatchPayload =
     let summary =
@@ -530,8 +540,19 @@ module TestResultsBatchPayload =
       |> TestSummary.fromStatuses
     { Generation = generation
       Freshness = freshness
+      Completion = completion
       Entries = entries
       Summary = summary }
+
+  /// Derive completion from requested vs returned counts and freshness.
+  let deriveCompletion (freshness: ResultFreshness) (requested: int) (returned: int) : BatchCompletion =
+    match freshness with
+    | StaleCodeEdited | StaleWrongGeneration -> BatchCompletion.Superseded
+    | Fresh ->
+      if returned >= requested then
+        BatchCompletion.Complete(requested, returned)
+      else
+        BatchCompletion.Partial(requested, returned)
 
   let isEmpty (p: TestResultsBatchPayload) =
     Array.isEmpty p.Entries
@@ -1110,9 +1131,10 @@ module PipelineOrchestrator =
       PipelineDecision.TreeSitterOnly
     else
       let affected = TestDependencyGraph.findAffected changedSymbols depGraph
+      let affectedSet = Set.ofArray affected
       let filtered =
         state.DiscoveredTests
-        |> Array.filter (fun tc -> affected |> Array.contains tc.Id)
+        |> Array.filter (fun tc -> affectedSet.Contains tc.Id)
         |> LiveTesting.filterByPolicy state.RunPolicies trigger
       if Array.isEmpty filtered then
         PipelineDecision.TreeSitterOnly
@@ -1233,9 +1255,10 @@ module PipelineEffects =
       let affected = TestDependencyGraph.findAffected changedSymbols depGraph
       if Array.isEmpty affected then None
       else
+        let affectedSet = Set.ofArray affected
         let affectedTests =
           state.DiscoveredTests
-          |> Array.filter (fun tc -> affected |> Array.contains tc.Id)
+          |> Array.filter (fun tc -> affectedSet.Contains tc.Id)
         let filtered =
           PolicyFilter.filterTests state.RunPolicies trigger affectedTests
         if Array.isEmpty filtered then None
