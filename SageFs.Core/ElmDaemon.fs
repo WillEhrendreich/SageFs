@@ -43,6 +43,7 @@ let createEffectDeps
             SessionManager.SessionCommand.ListSessions reply)
       }
     GetWarmupContext = None
+    PipelineCancellation = Features.LiveTesting.PipelineCancellation.create ()
   }
 
 /// Create an ElmProgram wired to real SageFs components.

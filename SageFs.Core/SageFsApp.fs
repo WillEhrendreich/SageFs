@@ -622,6 +622,8 @@ type EffectDeps = {
   ListSessions: unit -> Async<SessionInfo list>
   /// Fetch warmup context for a session (optional — None disables warmup dispatch)
   GetWarmupContext: (SessionId -> Async<SessionContext option>) option
+  /// Pipeline cancellation for stale work
+  PipelineCancellation: Features.LiveTesting.PipelineCancellation
 }
 
 /// Routes SageFsEffect to real infrastructure via injected deps.
@@ -853,11 +855,12 @@ module SageFsEffectHandler =
           else
             let testIds = tests |> Array.map (fun tc -> tc.Id)
             dispatch (SageFsMsg.Event (SageFsEvent.TestRunStarted testIds))
+            let ct = deps.PipelineCancellation.TestRun.next()
             Async.Start(async {
               try
                 let! results =
                   Features.LiveTesting.TestOrchestrator.executeFiltered
-                    Features.LiveTesting.BuiltInExecutors.builtIn 4 tests
+                    Features.LiveTesting.BuiltInExecutors.builtIn 4 tests ct
                 dispatch (SageFsMsg.Event (SageFsEvent.TestResultsBatch results))
               with ex ->
                 let errResults =
@@ -873,5 +876,5 @@ module SageFsEffectHandler =
                        Timestamp = System.DateTimeOffset.UtcNow }
                      : Features.LiveTesting.TestRunResult))
                 dispatch (SageFsMsg.Event (SageFsEvent.TestResultsBatch errResults))
-            })
+            }, ct)
       }

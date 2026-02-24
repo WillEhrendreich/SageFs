@@ -148,36 +148,215 @@ module BuiltInExecutors =
       Execute = ReflectionExecutor.executeMethod
     }
 
+  /// Reflection-based Expecto executor — no compile-time Expecto dependency.
+  /// Uses reflection to call Expecto.TestModule.toTestCodeList, access FlatTest
+  /// properties, and invoke test code. Exception types resolved at runtime.
+  module private ExpectoExecutor =
+    open System.Threading
+
+    /// Cached reflection handles for Expecto types (resolved once per assembly).
+    type ReflectionCache = {
+      ToTestCodeList: MethodInfo
+      FlatTestNameProp: PropertyInfo
+      FlatTestTestProp: PropertyInfo
+      TestCodeTagProp: PropertyInfo
+      AssertExceptionType: System.Type
+      FailedExceptionType: System.Type
+      IgnoreExceptionType: System.Type
+    }
+
+    /// Per-leaf-test: the boxed TestCode DU value + its tag for dispatch.
+    type ReflectedFlatTest = {
+      TestCodeObj: obj
+      Tag: int
+    }
+
+    /// Try to build reflection cache from an assembly that references Expecto.
+    let tryBuildCache (asm: Assembly) : ReflectionCache option =
+      try
+        let expectoRef =
+          asm.GetReferencedAssemblies()
+          |> Array.tryFind (fun a -> a.Name = "Expecto")
+        match expectoRef with
+        | None -> None
+        | Some asmName ->
+          let expAsm = Assembly.Load(asmName)
+          let testModule = expAsm.GetType("Expecto.TestModule")
+          let flatTestType = expAsm.GetType("Expecto.FlatTest")
+          let testCodeType = expAsm.GetType("Expecto.TestCode")
+          if testModule = null || flatTestType = null || testCodeType = null then None
+          else
+            let toTestCodeList =
+              testModule.GetMethod("toTestCodeList", BindingFlags.Public ||| BindingFlags.Static)
+            if toTestCodeList = null then None
+            else
+              Some {
+                ToTestCodeList = toTestCodeList
+                FlatTestNameProp = flatTestType.GetProperty("name")
+                FlatTestTestProp = flatTestType.GetProperty("test")
+                TestCodeTagProp = testCodeType.GetProperty("Tag")
+                AssertExceptionType = expAsm.GetType("Expecto.AssertException")
+                FailedExceptionType = expAsm.GetType("Expecto.FailedException")
+                IgnoreExceptionType = expAsm.GetType("Expecto.IgnoreException")
+              }
+      with _ -> None
+
+    /// Map an exception to TestResult using reflection-resolved Expecto types.
+    let private mapException (cache: ReflectionCache) (ex: exn) (elapsed: TimeSpan) =
+      let exType = ex.GetType()
+      if cache.AssertExceptionType <> null && cache.AssertExceptionType.IsAssignableFrom(exType) then
+        TestResult.Failed(TestFailure.AssertionFailed ex.Message, elapsed)
+      elif cache.FailedExceptionType <> null && cache.FailedExceptionType.IsAssignableFrom(exType) then
+        TestResult.Failed(TestFailure.AssertionFailed ex.Message, elapsed)
+      elif cache.IgnoreExceptionType <> null && cache.IgnoreExceptionType.IsAssignableFrom(exType) then
+        TestResult.Skipped ex.Message
+      elif ex :? OperationCanceledException then
+        TestResult.Skipped "Cancelled"
+      else
+        TestResult.Failed(
+          TestFailure.ExceptionThrown(
+            ex.Message,
+            ex.StackTrace |> Option.ofObj |> Option.defaultValue ""),
+          elapsed)
+
+    /// Execute a reflected test code via reflection.
+    /// Tag 0=Sync (stest), 1=SyncWithCancel (stest), 2=Async (atest), 3+=skip.
+    let executeReflected
+      (cache: ReflectionCache)
+      (rft: ReflectedFlatTest)
+      (ct: CancellationToken)
+      : Async<TestResult> =
+      async {
+        let sw = Stopwatch.StartNew()
+        try
+          match rft.Tag with
+          | 0 -> // Sync: stest is FSharpFunc<unit, unit>
+            ct.ThrowIfCancellationRequested()
+            let stestProp = rft.TestCodeObj.GetType().GetProperty("stest")
+            let syncFn = stestProp.GetValue(rft.TestCodeObj)
+            let invokeMethod = syncFn.GetType().GetMethod("Invoke", [|typeof<unit>|])
+            invokeMethod.Invoke(syncFn, [|box ()|]) |> ignore
+          | 1 -> // SyncWithCancel: stest is FSharpFunc<CancellationToken, unit>
+            let stestProp = rft.TestCodeObj.GetType().GetProperty("stest")
+            let cancelFn = stestProp.GetValue(rft.TestCodeObj)
+            let invokeMethod =
+              cancelFn.GetType().GetMethod("Invoke", [|typeof<CancellationToken>|])
+            invokeMethod.Invoke(cancelFn, [|box ct|]) |> ignore
+          | 2 -> // Async: atest is FSharpAsync<unit>
+            let atestProp = rft.TestCodeObj.GetType().GetProperty("atest")
+            let asyncComp = atestProp.GetValue(rft.TestCodeObj)
+            let runSyncMethod =
+              typeof<Async>.GetMethods()
+              |> Array.find (fun m ->
+                m.Name = "RunSynchronously" && m.GetParameters().Length = 3)
+            let genericMethod = runSyncMethod.MakeGenericMethod([|typeof<unit>|])
+            genericMethod.Invoke(
+              null,
+              [| asyncComp
+                 box (None: int option)
+                 box (Some ct: CancellationToken option) |]) |> ignore
+          | _ -> // AsyncFsCheck or unknown — skip
+            ct.ThrowIfCancellationRequested()
+          sw.Stop()
+          return TestResult.Passed sw.Elapsed
+        with
+        | :? TargetInvocationException as tie ->
+          sw.Stop()
+          let inner = if tie.InnerException <> null then tie.InnerException else tie :> exn
+          return mapException cache inner sw.Elapsed
+        | :? OperationCanceledException ->
+          return TestResult.Skipped "Cancelled"
+        | ex ->
+          sw.Stop()
+          return mapException cache ex sw.Elapsed
+      }
+
+    /// Build a lookup from FullName → ReflectedFlatTest for leaf-level execution.
+    let buildLookup (cache: ReflectionCache) (asm: Assembly) : Map<string, ReflectedFlatTest> =
+      try
+        asm.GetExportedTypes()
+        |> Array.collect (fun t ->
+          t.GetProperties(BindingFlags.Public ||| BindingFlags.Static)
+          |> Array.filter (fun (pi: PropertyInfo) ->
+            pi.GetCustomAttributes(true)
+            |> Array.exists (fun attr -> attr.GetType().Name = "TestsAttribute"))
+          |> Array.collect (fun (pi: PropertyInfo) ->
+            try
+              let testValue = pi.GetValue(null)
+              let propertyFullName = sprintf "%s.%s" t.FullName pi.Name
+              let flatTests = cache.ToTestCodeList.Invoke(null, [|testValue|])
+              let enumerable = flatTests :?> System.Collections.IEnumerable
+              [ for ft in enumerable do
+                  let name = cache.FlatTestNameProp.GetValue(ft) :?> string list
+                  let testCode = cache.FlatTestTestProp.GetValue(ft)
+                  let tag = cache.TestCodeTagProp.GetValue(testCode) :?> int
+                  let testPath = name |> String.concat "/"
+                  let fullName = sprintf "%s/%s" propertyFullName testPath
+                  yield fullName, { TestCodeObj = testCode; Tag = tag } ]
+              |> List.toArray
+            with _ -> [||]))
+        |> Map.ofArray
+      with _ -> Map.empty
+
+    /// Discover individual leaf-level tests from all [<Tests>] properties.
+    let discoverLeafTests (cache: ReflectionCache) (asm: Assembly) : TestCase list =
+      try
+        asm.GetExportedTypes()
+        |> Array.collect (fun t ->
+          t.GetProperties(BindingFlags.Public ||| BindingFlags.Static)
+          |> Array.filter (fun (pi: PropertyInfo) ->
+            pi.GetCustomAttributes(true)
+            |> Array.exists (fun attr -> attr.GetType().Name = "TestsAttribute"))
+          |> Array.collect (fun (pi: PropertyInfo) ->
+            try
+              let testValue = pi.GetValue(null)
+              let propertyFullName = sprintf "%s.%s" t.FullName pi.Name
+              let flatTests = cache.ToTestCodeList.Invoke(null, [|testValue|])
+              let enumerable = flatTests :?> System.Collections.IEnumerable
+              [ for ft in enumerable do
+                  let name = cache.FlatTestNameProp.GetValue(ft) :?> string list
+                  let testPath = name |> String.concat "/"
+                  let fullName = sprintf "%s/%s" propertyFullName testPath
+                  let displayName = name |> List.last
+                  yield { Id = TestId.create fullName "expecto"
+                          FullName = fullName
+                          DisplayName = displayName
+                          Origin = TestOrigin.ReflectionOnly
+                          Labels = []
+                          Framework = "expecto"
+                          Category = TestCategory.Unit } ]
+              |> List.toArray
+            with _ -> [||]))
+        |> Array.toList
+      with
+      | :? ReflectionTypeLoadException -> []
+      | :? TypeLoadException -> []
+
   let expecto : TestExecutor =
+    let mutable reflectionCache: ExpectoExecutor.ReflectionCache option = None
+    let mutable flatTestLookup = Map.empty<string, ExpectoExecutor.ReflectedFlatTest>
     TestExecutor.Custom {
       Description = {
         Name = "expecto"
         AssemblyMarker = "Expecto"
       }
       Discover = fun asm ->
-        try
-          asm.GetExportedTypes()
-          |> Array.collect (fun t ->
-            t.GetProperties(BindingFlags.Public ||| BindingFlags.Static)
-            |> Array.filter (fun pi ->
-              pi.GetCustomAttributes(true)
-              |> Array.exists (fun attr ->
-                attr.GetType().Name = "TestsAttribute"))
-            |> Array.map (fun pi ->
-              let fullName = sprintf "%s.%s" t.FullName pi.Name
-              { Id = TestId.create fullName "expecto"
-                FullName = fullName
-                DisplayName = pi.Name
-                Origin = TestOrigin.ReflectionOnly
-                Labels = []
-                Framework = "expecto"
-                Category = TestCategory.Unit }))
-          |> Array.toList
-        with
-        | :? ReflectionTypeLoadException -> []
-        | :? TypeLoadException -> []
-      Execute = fun _testCase ->
-        async { return TestResult.NotRun }
+        match ExpectoExecutor.tryBuildCache asm with
+        | Some cache ->
+          reflectionCache <- Some cache
+          flatTestLookup <- ExpectoExecutor.buildLookup cache asm
+          ExpectoExecutor.discoverLeafTests cache asm
+        | None -> []
+      Execute = fun testCase ->
+        async {
+          let! ct = Async.CancellationToken
+          match reflectionCache with
+          | None -> return TestResult.NotRun
+          | Some cache ->
+            match Map.tryFind testCase.FullName flatTestLookup with
+            | Some rft -> return! ExpectoExecutor.executeReflected cache rft ct
+            | None -> return TestResult.NotRun
+        }
     }
 
   let builtIn = [ xunit; nunit; mstest; tunit; expecto ]
@@ -213,14 +392,30 @@ module TestOrchestrator =
     (testCase: TestCase)
     : Async<TestRunResult> =
     async {
+      let sw = Stopwatch.StartNew()
       let! result =
-        match findExecutor executors testCase.Framework with
-        | Some (TestExecutor.Custom ce) ->
-          ce.Execute testCase
-        | Some (TestExecutor.AttributeBased _) ->
-          async { return TestResult.NotRun }
-        | None ->
-          async { return TestResult.NotRun }
+        async {
+          try
+            let! r =
+              match findExecutor executors testCase.Framework with
+              | Some (TestExecutor.Custom ce) ->
+                ce.Execute testCase
+              | Some (TestExecutor.AttributeBased _) ->
+                async { return TestResult.NotRun }
+              | None ->
+                async { return TestResult.NotRun }
+            return r
+          with
+          | :? OperationCanceledException ->
+            return TestResult.Skipped "Cancelled"
+          | ex ->
+            sw.Stop()
+            return TestResult.Failed(
+              TestFailure.ExceptionThrown(
+                ex.Message,
+                ex.StackTrace |> Option.ofObj |> Option.defaultValue ""),
+              sw.Elapsed)
+        }
       return {
         TestId = testCase.Id
         TestName = testCase.DisplayName
@@ -233,14 +428,17 @@ module TestOrchestrator =
     (executors: TestExecutor list)
     (maxParallelism: int)
     (tests: TestCase array)
+    (ct: Threading.CancellationToken)
     : Async<TestRunResult array> =
     async {
+      use cts = Threading.CancellationTokenSource.CreateLinkedTokenSource(ct)
+      cts.CancelAfter(TimeSpan.FromSeconds 30.0)
       let semaphore = new Threading.SemaphoreSlim(maxParallelism)
       let! results =
         tests
         |> Array.map (fun tc ->
           async {
-            do! Async.AwaitTask (semaphore.WaitAsync())
+            do! Async.AwaitTask (semaphore.WaitAsync(cts.Token))
             try
               return! executeOne executors tc
             finally

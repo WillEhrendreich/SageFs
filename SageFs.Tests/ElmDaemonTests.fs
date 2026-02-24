@@ -40,6 +40,7 @@ module ElmDaemonTestHelpers =
       ListSessions = fun () ->
         async { return [sessionInfo] }
       GetWarmupContext = None
+      PipelineCancellation = Features.LiveTesting.PipelineCancellation.create ()
     }
 
   /// Track model changes from OnModelChanged callback
