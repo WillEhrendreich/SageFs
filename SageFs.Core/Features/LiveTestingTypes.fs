@@ -992,3 +992,116 @@ module PipelineOrchestrator =
     let idSet = testIds |> Set.ofArray
     state.DiscoveredTests
     |> Array.filter (fun tc -> Set.contains tc.Id idSet)
+
+// --- Debounce + Cancellation (Phase 4 as-you-type) ---
+
+type DebouncedOp<'a> = {
+  Payload: 'a
+  RequestedAt: DateTimeOffset
+  DelayMs: int
+  Generation: int64
+}
+
+type DebounceChannel<'a> = {
+  CurrentGeneration: int64
+  Pending: DebouncedOp<'a> option
+  LastCompleted: DateTimeOffset option
+}
+
+module DebounceChannel =
+  let empty<'a> : DebounceChannel<'a> = {
+    CurrentGeneration = 0L
+    Pending = None
+    LastCompleted = None
+  }
+
+  let submit (payload: 'a) (delayMs: int) (now: DateTimeOffset) (ch: DebounceChannel<'a>) =
+    let gen = ch.CurrentGeneration + 1L
+    { ch with
+        CurrentGeneration = gen
+        Pending = Some { Payload = payload; RequestedAt = now; DelayMs = delayMs; Generation = gen } }
+
+  let tryFire (now: DateTimeOffset) (ch: DebounceChannel<'a>) =
+    match ch.Pending with
+    | None -> None, ch
+    | Some op ->
+      let elapsed = (now - op.RequestedAt).TotalMilliseconds
+      if op.Generation < ch.CurrentGeneration then
+        None, { ch with Pending = None }
+      elif elapsed >= float op.DelayMs then
+        Some op.Payload, { ch with Pending = None; LastCompleted = Some now }
+      else
+        None, ch
+
+  let isStale (ch: DebounceChannel<'a>) =
+    match ch.Pending with
+    | Some op -> op.Generation < ch.CurrentGeneration
+    | None -> false
+
+type PipelineDebounce = {
+  TreeSitter: DebounceChannel<string>
+  Fcs: DebounceChannel<string>
+}
+
+module PipelineDebounce =
+  let empty = {
+    TreeSitter = DebounceChannel.empty
+    Fcs = DebounceChannel.empty
+  }
+
+  let treeSitterDelayMs = 50
+  let fcsDelayMs = 300
+
+  let onKeystroke (content: string) (filePath: string) (now: DateTimeOffset) (db: PipelineDebounce) =
+    { db with
+        TreeSitter = db.TreeSitter |> DebounceChannel.submit content treeSitterDelayMs now
+        Fcs = db.Fcs |> DebounceChannel.submit filePath fcsDelayMs now }
+
+  let onFileSave (filePath: string) (now: DateTimeOffset) (db: PipelineDebounce) =
+    { db with
+        Fcs = db.Fcs |> DebounceChannel.submit filePath 50 now }
+
+  let tick (now: DateTimeOffset) (db: PipelineDebounce) =
+    let tsPayload, tsChannel = DebounceChannel.tryFire now db.TreeSitter
+    let fcsPayload, fcsChannel = DebounceChannel.tryFire now db.Fcs
+    (tsPayload, fcsPayload), { db with TreeSitter = tsChannel; Fcs = fcsChannel }
+
+[<RequireQualifiedAccess>]
+type PipelineEffect =
+  | ParseTreeSitter of content: string * filePath: string
+  | RequestFcsTypeCheck of filePath: string
+  | RunAffectedTests of testIds: TestId array * trigger: RunTrigger
+  | NoOp
+
+module PipelineEffects =
+  let fromTick
+    (tsPayload: string option)
+    (fcsPayload: string option)
+    (filePath: string)
+    : PipelineEffect list =
+    [ match tsPayload with
+      | Some content -> PipelineEffect.ParseTreeSitter(content, filePath)
+      | None -> ()
+      match fcsPayload with
+      | Some fp -> PipelineEffect.RequestFcsTypeCheck fp
+      | None -> () ]
+
+  let afterTypeCheck
+    (changedSymbols: string list)
+    (trigger: RunTrigger)
+    (depGraph: TestDependencyGraph)
+    (state: LiveTestState)
+    : PipelineEffect =
+    if not state.Enabled then PipelineEffect.NoOp
+    else
+      let affected = TestDependencyGraph.findAffected changedSymbols depGraph
+      if Array.isEmpty affected then PipelineEffect.NoOp
+      else
+        let affectedTests =
+          state.DiscoveredTests
+          |> Array.filter (fun tc -> affected |> Array.contains tc.Id)
+        let filtered =
+          PolicyFilter.filterTests state.RunPolicies trigger affectedTests
+          |> Array.map (fun tc -> tc.Id)
+        if Array.isEmpty filtered then PipelineEffect.NoOp
+        else PipelineEffect.RunAffectedTests(filtered, trigger)

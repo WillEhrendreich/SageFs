@@ -346,3 +346,36 @@ module LiveTestingHook =
     { DetectedProviders = providers
       DiscoveredTests = tests
       AffectedTestIds = affected }
+
+// --- Cancellation chaining for stale work ---
+
+/// Manages CancellationTokenSource chaining for stale work cancellation.
+/// Each `next()` cancels the previous CTS and returns a fresh one.
+type CancellationChain() =
+  let mutable current: System.Threading.CancellationTokenSource option = None
+
+  member _.next() =
+    match current with
+    | Some cts ->
+      cts.Cancel()
+      cts.Dispose()
+    | None -> ()
+    let fresh = new System.Threading.CancellationTokenSource()
+    current <- Some fresh
+    fresh.Token
+
+  member _.currentToken =
+    match current with
+    | Some cts -> cts.Token
+    | None -> System.Threading.CancellationToken.None
+
+  member _.dispose() =
+    match current with
+    | Some cts ->
+      cts.Cancel()
+      cts.Dispose()
+      current <- None
+    | None -> ()
+
+  interface IDisposable with
+    member this.Dispose() = this.dispose()

@@ -2071,3 +2071,266 @@ let testSummaryDetailTests = testList "TestSummary" [
     bar |> Expect.equal "none text" "Tests: none"
   }
 ]
+
+// ============================================================
+// Debounce Channel Tests
+// ============================================================
+
+[<Tests>]
+let debounceChannelTests = testList "DebounceChannel" [
+  let t0 = DateTimeOffset(2025, 1, 1, 0, 0, 0, TimeSpan.Zero)
+
+  test "empty channel has no pending" {
+    let ch = DebounceChannel.empty<string>
+    ch.Pending |> Expect.isNone "no pending"
+    ch.CurrentGeneration |> Expect.equal "gen 0" 0L
+  }
+
+  test "submit creates pending op" {
+    let ch = DebounceChannel.empty<string> |> DebounceChannel.submit "hello" 50 t0
+    ch.Pending |> Expect.isSome "has pending"
+    ch.CurrentGeneration |> Expect.equal "gen 1" 1L
+    ch.Pending.Value.Payload |> Expect.equal "payload" "hello"
+    ch.Pending.Value.DelayMs |> Expect.equal "delay" 50
+  }
+
+  test "tryFire before delay returns None" {
+    let ch = DebounceChannel.empty<string> |> DebounceChannel.submit "hello" 50 t0
+    let result, ch' = DebounceChannel.tryFire (t0.AddMilliseconds 30.0) ch
+    result |> Expect.isNone "not ready yet"
+    ch'.Pending |> Expect.isSome "still pending"
+  }
+
+  test "tryFire after delay returns payload" {
+    let ch = DebounceChannel.empty<string> |> DebounceChannel.submit "hello" 50 t0
+    let result, ch' = DebounceChannel.tryFire (t0.AddMilliseconds 51.0) ch
+    result |> Expect.isSome "ready"
+    result.Value |> Expect.equal "payload" "hello"
+    ch'.Pending |> Expect.isNone "cleared"
+    ch'.LastCompleted |> Expect.isSome "completed set"
+  }
+
+  test "newer submit supersedes older pending" {
+    let ch =
+      DebounceChannel.empty<string>
+      |> DebounceChannel.submit "first" 50 t0
+      |> DebounceChannel.submit "second" 50 (t0.AddMilliseconds 20.0)
+    ch.CurrentGeneration |> Expect.equal "gen 2" 2L
+    ch.Pending.Value.Payload |> Expect.equal "latest payload" "second"
+  }
+
+  test "stale op is discarded on tryFire" {
+    let ch =
+      DebounceChannel.empty<string>
+      |> DebounceChannel.submit "first" 50 t0
+    let ch2 = ch |> DebounceChannel.submit "second" 50 (t0.AddMilliseconds 20.0)
+    let staleOp = { Payload = "first"; RequestedAt = t0; DelayMs = 50; Generation = 1L }
+    let ch3 = { ch2 with Pending = Some staleOp }
+    let result, ch4 = DebounceChannel.tryFire (t0.AddMilliseconds 60.0) ch3
+    result |> Expect.isNone "stale, discarded"
+    ch4.Pending |> Expect.isNone "cleared"
+  }
+
+  test "isStale detects superseded pending" {
+    let ch =
+      DebounceChannel.empty<string>
+      |> DebounceChannel.submit "first" 50 t0
+    let staleOp = { Payload = "first"; RequestedAt = t0; DelayMs = 50; Generation = 0L }
+    let ch2 = { ch with Pending = Some staleOp }
+    DebounceChannel.isStale ch2 |> Expect.isTrue "should be stale"
+  }
+
+  test "tryFire on empty channel returns None" {
+    let result, _ = DebounceChannel.tryFire t0 DebounceChannel.empty<string>
+    result |> Expect.isNone "nothing to fire"
+  }
+
+  test "exact delay boundary fires" {
+    let ch = DebounceChannel.empty<string> |> DebounceChannel.submit "hello" 50 t0
+    let result, _ = DebounceChannel.tryFire (t0.AddMilliseconds 50.0) ch
+    result |> Expect.isSome "fires at exact boundary"
+  }
+]
+
+// ============================================================
+// Pipeline Debounce Tests
+// ============================================================
+
+[<Tests>]
+let pipelineDebounceTests = testList "PipelineDebounce" [
+  let t0 = DateTimeOffset(2025, 1, 1, 0, 0, 0, TimeSpan.Zero)
+
+  test "empty has no pending on either channel" {
+    let db = PipelineDebounce.empty
+    db.TreeSitter.Pending |> Expect.isNone "no tree-sitter"
+    db.Fcs.Pending |> Expect.isNone "no fcs"
+  }
+
+  test "onKeystroke submits to both channels" {
+    let db = PipelineDebounce.empty |> PipelineDebounce.onKeystroke "code" "file.fs" t0
+    db.TreeSitter.Pending |> Expect.isSome "tree-sitter pending"
+    db.Fcs.Pending |> Expect.isSome "fcs pending"
+    db.TreeSitter.Pending.Value.DelayMs |> Expect.equal "ts delay" 50
+    db.Fcs.Pending.Value.DelayMs |> Expect.equal "fcs delay" 300
+  }
+
+  test "tree-sitter fires before FCS" {
+    let db = PipelineDebounce.empty |> PipelineDebounce.onKeystroke "code" "file.fs" t0
+    let (tsResult, fcsResult), _ = PipelineDebounce.tick (t0.AddMilliseconds 51.0) db
+    tsResult |> Expect.isSome "tree-sitter fires"
+    fcsResult |> Expect.isNone "fcs not yet"
+  }
+
+  test "both fire after 300ms" {
+    let db = PipelineDebounce.empty |> PipelineDebounce.onKeystroke "code" "file.fs" t0
+    let (tsResult, fcsResult), _ = PipelineDebounce.tick (t0.AddMilliseconds 301.0) db
+    tsResult |> Expect.isSome "tree-sitter fires"
+    fcsResult |> Expect.isSome "fcs fires"
+  }
+
+  test "rapid keystrokes cancel previous debounce" {
+    let db =
+      PipelineDebounce.empty
+      |> PipelineDebounce.onKeystroke "v1" "file.fs" t0
+      |> PipelineDebounce.onKeystroke "v2" "file.fs" (t0.AddMilliseconds 30.0)
+      |> PipelineDebounce.onKeystroke "v3" "file.fs" (t0.AddMilliseconds 60.0)
+    let (tsResult, _), _ = PipelineDebounce.tick (t0.AddMilliseconds 111.0) db
+    tsResult |> Expect.isSome "fires for latest"
+    tsResult.Value |> Expect.equal "latest content" "v3"
+  }
+
+  test "onFileSave uses short FCS delay" {
+    let db =
+      PipelineDebounce.empty
+      |> PipelineDebounce.onKeystroke "code" "file.fs" t0
+      |> PipelineDebounce.onFileSave "file.fs" (t0.AddMilliseconds 100.0)
+    db.Fcs.Pending.Value.DelayMs |> Expect.equal "save uses short delay" 50
+    let (_, fcsResult), _ = PipelineDebounce.tick (t0.AddMilliseconds 151.0) db
+    fcsResult |> Expect.isSome "fcs fires soon after save"
+  }
+
+  test "tick clears fired ops" {
+    let db = PipelineDebounce.empty |> PipelineDebounce.onKeystroke "code" "file.fs" t0
+    let _, db' = PipelineDebounce.tick (t0.AddMilliseconds 301.0) db
+    db'.TreeSitter.Pending |> Expect.isNone "ts cleared"
+    db'.Fcs.Pending |> Expect.isNone "fcs cleared"
+  }
+]
+
+// ============================================================
+// Pipeline Effects Tests
+// ============================================================
+
+[<Tests>]
+let pipelineEffectsTests = testList "PipelineEffects" [
+  test "fromTick with both payloads produces two effects" {
+    let effects = PipelineEffects.fromTick (Some "code") (Some "file.fs") "file.fs"
+    effects.Length |> Expect.equal "two effects" 2
+    match effects.[0] with
+    | PipelineEffect.ParseTreeSitter (content, _) ->
+      content |> Expect.equal "ts content" "code"
+    | _ -> failtest "expected ParseTreeSitter"
+    match effects.[1] with
+    | PipelineEffect.RequestFcsTypeCheck fp ->
+      fp |> Expect.equal "fcs path" "file.fs"
+    | _ -> failtest "expected RequestFcsTypeCheck"
+  }
+
+  test "fromTick with no payloads produces empty" {
+    let effects = PipelineEffects.fromTick None None "file.fs"
+    effects.Length |> Expect.equal "no effects" 0
+  }
+
+  test "fromTick with only tree-sitter produces one effect" {
+    let effects = PipelineEffects.fromTick (Some "code") None "file.fs"
+    effects.Length |> Expect.equal "one effect" 1
+    match effects.[0] with
+    | PipelineEffect.ParseTreeSitter _ -> ()
+    | _ -> failtest "expected ParseTreeSitter"
+  }
+
+  test "afterTypeCheck with affected tests returns RunAffectedTests" {
+    let tc1 = { Id = TestId.create "test1" "xunit"; FullName = "test1"; DisplayName = "test1"
+                Origin = TestOrigin.ReflectionOnly; Labels = []; Framework = "xunit"
+                Category = TestCategory.Unit }
+    let state = { LiveTestState.empty with DiscoveredTests = [| tc1 |]; Enabled = true }
+    let graph = {
+      TestDependencyGraph.empty with
+        SymbolToTests = Map.ofList [ "Module.add", [| tc1.Id |] ]
+    }
+    match PipelineEffects.afterTypeCheck ["Module.add"] RunTrigger.Keystroke graph state with
+    | PipelineEffect.RunAffectedTests (ids, trigger) ->
+      ids.Length |> Expect.equal "one test" 1
+      trigger |> Expect.equal "keystroke trigger" RunTrigger.Keystroke
+    | other -> failtestf "expected RunAffectedTests, got %A" other
+  }
+
+  test "afterTypeCheck with no affected tests returns NoOp" {
+    let state = { LiveTestState.empty with DiscoveredTests = [||]; Enabled = true }
+    let graph = TestDependencyGraph.empty
+    PipelineEffects.afterTypeCheck ["unknown.symbol"] RunTrigger.Keystroke graph state
+    |> Expect.equal "no op" PipelineEffect.NoOp
+  }
+
+  test "afterTypeCheck when disabled returns NoOp" {
+    let state = { LiveTestState.empty with Enabled = false }
+    let graph = TestDependencyGraph.empty
+    PipelineEffects.afterTypeCheck ["Module.add"] RunTrigger.Keystroke graph state
+    |> Expect.equal "disabled" PipelineEffect.NoOp
+  }
+
+  test "afterTypeCheck filters integration tests on keystroke" {
+    let tc1 = { Id = TestId.create "unit1" "xunit"; FullName = "unit1"; DisplayName = "unit1"
+                Origin = TestOrigin.ReflectionOnly; Labels = []; Framework = "xunit"
+                Category = TestCategory.Unit }
+    let tc2 = { Id = TestId.create "integ1" "xunit"; FullName = "integ1"; DisplayName = "integ1"
+                Origin = TestOrigin.ReflectionOnly; Labels = []; Framework = "xunit"
+                Category = TestCategory.Integration }
+    let state = {
+      LiveTestState.empty with
+        DiscoveredTests = [| tc1; tc2 |]
+        Enabled = true
+    }
+    let graph = {
+      TestDependencyGraph.empty with
+        SymbolToTests = Map.ofList [ "Module.add", [| tc1.Id; tc2.Id |] ]
+    }
+    match PipelineEffects.afterTypeCheck ["Module.add"] RunTrigger.Keystroke graph state with
+    | PipelineEffect.RunAffectedTests (ids, _) ->
+      ids.Length |> Expect.equal "only unit test" 1
+      ids.[0] |> Expect.equal "unit test id" tc1.Id
+    | other -> failtestf "expected RunAffectedTests, got %A" other
+  }
+]
+
+[<Tests>]
+let cancellationChainTests = testList "CancellationChain" [
+  test "next returns a live token" {
+    use chain = new CancellationChain()
+    let token = chain.next()
+    token.IsCancellationRequested |> Expect.isFalse "fresh token is live"
+  }
+  test "next cancels previous token" {
+    use chain = new CancellationChain()
+    let t1 = chain.next()
+    let _t2 = chain.next()
+    t1.IsCancellationRequested |> Expect.isTrue "first token cancelled"
+  }
+  test "currentToken reflects latest" {
+    use chain = new CancellationChain()
+    let t1 = chain.next()
+    (chain.currentToken = t1) |> Expect.isTrue "matches t1"
+    let t2 = chain.next()
+    (chain.currentToken = t2) |> Expect.isTrue "matches t2"
+  }
+  test "dispose cancels current token" {
+    let chain = new CancellationChain()
+    let t = chain.next()
+    chain.dispose()
+    t.IsCancellationRequested |> Expect.isTrue "disposed token cancelled"
+  }
+  test "currentToken is None when no next called" {
+    use chain = new CancellationChain()
+    (chain.currentToken = System.Threading.CancellationToken.None) |> Expect.isTrue "none token"
+  }
+]
