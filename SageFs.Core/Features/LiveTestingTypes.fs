@@ -1,9 +1,50 @@
 namespace SageFs.Features.LiveTesting
 
 open System
+open System.IO
 open System.Reflection
 open System.Security.Cryptography
 open System.Text
+
+// --- Assembly Load Diagnostics ---
+
+/// Errors that can occur when loading assemblies for test discovery.
+[<RequireQualifiedAccess>]
+type AssemblyLoadError =
+  | FileNotFound of path: string * message: string
+  | LoadFailed of path: string * message: string
+  | BadImage of path: string * message: string
+
+module AssemblyLoadError =
+  let path (e: AssemblyLoadError) =
+    match e with
+    | AssemblyLoadError.FileNotFound (p, _)
+    | AssemblyLoadError.LoadFailed (p, _)
+    | AssemblyLoadError.BadImage (p, _) -> p
+
+  let message (e: AssemblyLoadError) =
+    match e with
+    | AssemblyLoadError.FileNotFound (_, m)
+    | AssemblyLoadError.LoadFailed (_, m)
+    | AssemblyLoadError.BadImage (_, m) -> m
+
+  let describe (e: AssemblyLoadError) =
+    match e with
+    | AssemblyLoadError.FileNotFound (p, m) -> sprintf "Assembly not found: %s (%s)" p m
+    | AssemblyLoadError.LoadFailed (p, m) -> sprintf "Assembly load failed: %s (%s)" p m
+    | AssemblyLoadError.BadImage (p, m) -> sprintf "Bad image format: %s (%s)" p m
+
+  /// Load an assembly from disk, returning a typed error on failure.
+  let loadAssembly (path: string) : Result<Assembly, AssemblyLoadError> =
+    try
+      Ok(Assembly.LoadFrom(path))
+    with
+    | :? FileNotFoundException as ex ->
+      Error(AssemblyLoadError.FileNotFound(path, ex.Message))
+    | :? FileLoadException as ex ->
+      Error(AssemblyLoadError.LoadFailed(path, ex.Message))
+    | :? BadImageFormatException as ex ->
+      Error(AssemblyLoadError.BadImage(path, ex.Message))
 
 /// Configuration constants for the live testing pipeline.
 [<RequireQualifiedAccess>]
@@ -367,6 +408,7 @@ type LiveTestState = {
   RunPolicies: Map<TestCategory, RunPolicy>
   DetectedProviders: ProviderDescription list
   CachedEditorAnnotations: LineAnnotation array
+  AssemblyLoadErrors: AssemblyLoadError list
 }
 
 module LiveTestState =
@@ -385,6 +427,7 @@ module LiveTestState =
     RunPolicies = RunPolicyDefaults.defaults
     DetectedProviders = []
     CachedEditorAnnotations = Array.empty
+    AssemblyLoadErrors = []
   }
 
 // --- Gutter Rendering Pure Functions ---
@@ -1116,6 +1159,30 @@ type PipelineDecision =
   | TreeSitterOnly
   | FullPipeline of affectedTestIds: TestId array
 
+module TestPrioritization =
+  let private durationMs (r: TestResult) =
+    match r with
+    | TestResult.Passed d -> d.TotalMilliseconds
+    | TestResult.Failed (_, d) -> d.TotalMilliseconds
+    | TestResult.Skipped _ -> 0.0
+    | TestResult.NotRun -> 0.0
+
+  /// Sort tests: failed-first, then fastest-first within same outcome.
+  /// Tests without results go last.
+  let prioritize (lastResults: Map<TestId, TestRunResult>) (tests: TestCase array) : TestCase array =
+    tests
+    |> Array.sortBy (fun tc ->
+      match Map.tryFind tc.Id lastResults with
+      | Some result ->
+        let failedOrder =
+          match result.Result with
+          | TestResult.Failed _ -> 0
+          | TestResult.Skipped _ -> 1
+          | TestResult.Passed _ -> 2
+          | TestResult.NotRun -> 3
+        (failedOrder, durationMs result.Result)
+      | None -> (4, 0.0))
+
 module PipelineOrchestrator =
   let decide
     (state: LiveTestState)
@@ -1261,6 +1328,7 @@ module PipelineEffects =
           |> Array.filter (fun tc -> affectedSet.Contains tc.Id)
         let filtered =
           PolicyFilter.filterTests state.RunPolicies trigger affectedTests
+          |> TestPrioritization.prioritize state.LastResults
         if Array.isEmpty filtered then None
         else
           let tsElapsed = PipelineTiming.accumulatedTsElapsed lastTiming
@@ -1543,6 +1611,7 @@ module LiveTestPipelineState =
         |> Array.filter (fun tc -> affectedIdSet.Contains tc.Id)
       let filtered =
         PolicyFilter.filterTests s.TestState.RunPolicies trigger affectedTests
+        |> TestPrioritization.prioritize s.TestState.LastResults
       if Array.isEmpty filtered then []
       else
         [ PipelineEffect.RunAffectedTests(filtered, trigger, System.TimeSpan.Zero, System.TimeSpan.Zero) ]

@@ -64,6 +64,7 @@ type SageFsEvent =
   | ProvidersDetected of providers: Features.LiveTesting.ProviderDescription list
   | PipelineTimingRecorded of timing: Features.LiveTesting.PipelineTiming
   | RunTestsRequested of tests: Features.LiveTesting.TestCase array
+  | AssemblyLoadFailed of errors: Features.LiveTesting.AssemblyLoadError list
 
 /// The complete view state for any SageFs frontend.
 /// Pure data — renderers read this to produce UI.

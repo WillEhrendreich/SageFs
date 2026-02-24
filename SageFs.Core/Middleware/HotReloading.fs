@@ -8,6 +8,7 @@ open SageFs.ProjectLoading
 open SageFs.Utils
 open SageFs.AppState
 open SageFs.DevReload
+open SageFs.Features.LiveTesting
 
 // Assembly resolver to find dependencies in project output directories
 let assemblySearchPaths = ResizeArray<string>()
@@ -59,6 +60,7 @@ type State = {
   LastOpenModules: string list
   LastAssembly: Assembly Option
   ProjectAssemblies: Assembly list
+  AssemblyLoadErrors: AssemblyLoadError list
   LiveTestInitDone: bool
 }
 
@@ -133,22 +135,18 @@ let mkReloadingState (sln: SageFs.ProjectLoading.Solution) =
   // Register all project output directories for dependency resolution
   sln.Projects |> List.iter (fun p -> registerSearchPath p.TargetPath)
 
-  let assemblies =
+  let results =
     sln.Projects
-    |> List.choose (fun p ->
-      try
-        let asm = Assembly.LoadFrom(p.TargetPath)
-        Some asm
-      with
-      | :? System.IO.FileNotFoundException as ex ->
-        printfn $"Warning: Could not load assembly %s{p.TargetPath}: %s{ex.Message}"
-        None
-      | :? System.IO.FileLoadException as ex ->
-        printfn $"Warning: Could not load assembly %s{p.TargetPath}: %s{ex.Message}"
-        None
-      | :? System.BadImageFormatException as ex ->
-        printfn $"Warning: Could not load assembly %s{p.TargetPath}: %s{ex.Message}"
-        None)
+    |> List.map (fun p -> AssemblyLoadError.loadAssembly p.TargetPath)
+
+  let assemblies =
+    results |> List.choose (fun r -> match r with Ok a -> Some a | _ -> None)
+
+  let loadErrors =
+    results |> List.choose (fun r -> match r with Error e -> Some e | _ -> None)
+
+  if not (List.isEmpty loadErrors) then
+    loadErrors |> List.iter (fun e -> printfn $"Warning: %s{AssemblyLoadError.describe e}")
 
   // getAllMethods now handles all reflection errors internally
   let allMethods = assemblies |> List.collect getAllMethods
@@ -164,6 +162,7 @@ let mkReloadingState (sln: SageFs.ProjectLoading.Solution) =
     LastOpenModules = []
     LastAssembly = None
     ProjectAssemblies = assemblies
+    AssemblyLoadErrors = loadErrors
     LiveTestInitDone = false
   }
 
@@ -180,6 +179,7 @@ let hotReloadingInitFunction sln =
          LastOpenModules = []
          LastAssembly = None
          ProjectAssemblies = []
+         AssemblyLoadErrors = []
          LiveTestInitDone = false
        }
 
@@ -405,6 +405,10 @@ let hotReloadingMiddleware next (request, st: AppState) =
       else
         response.Metadata
     let metadata = metadata.Add("liveTestHookResult", hookResult)
+    let metadata =
+      if not (List.isEmpty reloadingSt.AssemblyLoadErrors) then
+        metadata.Add("assemblyLoadErrors", reloadingSt.AssemblyLoadErrors)
+      else metadata
 
     { response with Metadata = metadata },
     { st with Custom = st.Custom.Add("hotReload", reloadingSt) }

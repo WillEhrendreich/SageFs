@@ -2037,6 +2037,188 @@ let testSummaryDetailTests = testList "TestSummary" [
 ]
 
 // ============================================================
+// Test Prioritization Tests
+// ============================================================
+
+[<Tests>]
+let prioritizationTests = testList "TestPrioritization" [
+  test "failed tests come before passed tests" {
+    let cases = [| mkTestCase "passed1" "expecto" TestCategory.Unit; mkTestCase "failed1" "expecto" TestCategory.Unit |]
+    let results = Map.ofList [
+      mkTestId "passed1" "expecto", mkResult (mkTestId "passed1" "expecto") (TestResult.Passed (ts 10.0))
+      mkTestId "failed1" "expecto", mkResult (mkTestId "failed1" "expecto") (TestResult.Failed (TestFailure.AssertionFailed "bad", ts 10.0))
+    ]
+    let sorted = TestPrioritization.prioritize results cases
+    sorted.[0].FullName |> Expect.equal "failed first" "failed1"
+    sorted.[1].FullName |> Expect.equal "passed second" "passed1"
+  }
+
+  test "among passed, faster tests come first" {
+    let cases = [| mkTestCase "slow" "expecto" TestCategory.Unit; mkTestCase "fast" "expecto" TestCategory.Unit |]
+    let results = Map.ofList [
+      mkTestId "slow" "expecto", mkResult (mkTestId "slow" "expecto") (TestResult.Passed (ts 500.0))
+      mkTestId "fast" "expecto", mkResult (mkTestId "fast" "expecto") (TestResult.Passed (ts 5.0))
+    ]
+    let sorted = TestPrioritization.prioritize results cases
+    sorted.[0].FullName |> Expect.equal "fast first" "fast"
+    sorted.[1].FullName |> Expect.equal "slow second" "slow"
+  }
+
+  test "tests without results go last" {
+    let cases = [| mkTestCase "no.result" "expecto" TestCategory.Unit; mkTestCase "has.result" "expecto" TestCategory.Unit |]
+    let results = Map.ofList [
+      mkTestId "has.result" "expecto", mkResult (mkTestId "has.result" "expecto") (TestResult.Passed (ts 10.0))
+    ]
+    let sorted = TestPrioritization.prioritize results cases
+    sorted.[0].FullName |> Expect.equal "has result first" "has.result"
+    sorted.[1].FullName |> Expect.equal "no result last" "no.result"
+  }
+
+  test "full priority: failed > skipped > passed > not-run > unknown" {
+    let cases = [|
+      mkTestCase "passed" "expecto" TestCategory.Unit
+      mkTestCase "unknown" "expecto" TestCategory.Unit
+      mkTestCase "failed" "expecto" TestCategory.Unit
+      mkTestCase "skipped" "expecto" TestCategory.Unit
+      mkTestCase "notrun" "expecto" TestCategory.Unit
+    |]
+    let results = Map.ofList [
+      mkTestId "passed" "expecto", mkResult (mkTestId "passed" "expecto") (TestResult.Passed (ts 10.0))
+      mkTestId "failed" "expecto", mkResult (mkTestId "failed" "expecto") (TestResult.Failed (TestFailure.AssertionFailed "x", ts 10.0))
+      mkTestId "skipped" "expecto", mkResult (mkTestId "skipped" "expecto") (TestResult.Skipped "reason")
+      mkTestId "notrun" "expecto", mkResult (mkTestId "notrun" "expecto") TestResult.NotRun
+    ]
+    let sorted = TestPrioritization.prioritize results cases
+    sorted |> Array.map (fun tc -> tc.FullName)
+    |> Expect.equal "priority order" [| "failed"; "skipped"; "passed"; "notrun"; "unknown" |]
+  }
+
+  test "empty input returns empty" {
+    TestPrioritization.prioritize Map.empty [||]
+    |> Expect.isEmpty "no tests"
+  }
+]
+
+[<Tests>]
+let prioritizationPropertyTests = testList "TestPrioritization properties" [
+  testProperty "result count is preserved" (fun (n: FsCheck.PositiveInt) ->
+    let count = n.Get % 50 + 1
+    let cases = Array.init count (fun i -> mkTestCase (sprintf "test%d" i) "expecto" TestCategory.Unit)
+    let sorted = TestPrioritization.prioritize Map.empty cases
+    sorted.Length = cases.Length
+  )
+
+  testProperty "failed tests always precede passed tests in output" (fun (seed: int) ->
+    let rng = System.Random(seed)
+    let count = rng.Next(2, 20)
+    let cases = Array.init count (fun i -> mkTestCase (sprintf "t%d" i) "expecto" TestCategory.Unit)
+    let results =
+      cases
+      |> Array.map (fun tc ->
+        let r =
+          if rng.Next(3) = 0
+          then TestResult.Failed (TestFailure.AssertionFailed "x", ts (float (rng.Next(1, 1000))))
+          else TestResult.Passed (ts (float (rng.Next(1, 1000))))
+        tc.Id, mkResult tc.Id r)
+      |> Map.ofArray
+    let sorted = TestPrioritization.prioritize results cases
+    let indexOfLastFailed =
+      sorted |> Array.tryFindIndexBack (fun tc ->
+        match Map.tryFind tc.Id results with
+        | Some r -> match r.Result with TestResult.Failed _ -> true | _ -> false
+        | None -> false)
+    let indexOfFirstPassed =
+      sorted |> Array.tryFindIndex (fun tc ->
+        match Map.tryFind tc.Id results with
+        | Some r -> match r.Result with TestResult.Passed _ -> true | _ -> false
+        | None -> false)
+    match indexOfLastFailed, indexOfFirstPassed with
+    | Some lastFail, Some firstPass -> lastFail < firstPass
+    | _ -> true
+  )
+
+  testProperty "among same-outcome, faster comes first" (fun (seed: int) ->
+    let rng = System.Random(seed)
+    let count = rng.Next(2, 20)
+    let cases = Array.init count (fun i -> mkTestCase (sprintf "t%d" i) "expecto" TestCategory.Unit)
+    let results =
+      cases
+      |> Array.map (fun tc ->
+        let dur = ts (float (rng.Next(1, 1000)))
+        tc.Id, mkResult tc.Id (TestResult.Passed dur))
+      |> Map.ofArray
+    let sorted = TestPrioritization.prioritize results cases
+    let durations =
+      sorted |> Array.choose (fun tc ->
+        match Map.tryFind tc.Id results with
+        | Some r -> match r.Result with TestResult.Passed d -> Some d.TotalMilliseconds | _ -> None
+        | None -> None)
+    durations |> Array.pairwise |> Array.forall (fun (a, b) -> a <= b)
+  )
+]
+
+// Assembly Load Diagnostics Tests
+// ============================================================
+
+[<Tests>]
+let assemblyLoadDiagTests = testList "AssemblyLoadError" [
+  test "FileNotFound carries path and message" {
+    let err = AssemblyLoadError.FileNotFound("/some/path.dll", "File not found")
+    AssemblyLoadError.path err |> Expect.equal "path" "/some/path.dll"
+    AssemblyLoadError.message err |> Expect.equal "message" "File not found"
+  }
+
+  test "LoadFailed carries path and message" {
+    let err = AssemblyLoadError.LoadFailed("/some/path.dll", "Access denied")
+    AssemblyLoadError.path err |> Expect.equal "path" "/some/path.dll"
+    AssemblyLoadError.message err |> Expect.equal "message" "Access denied"
+  }
+
+  test "BadImage carries path and message" {
+    let err = AssemblyLoadError.BadImage("/some/path.dll", "Not a valid PE")
+    AssemblyLoadError.path err |> Expect.equal "path" "/some/path.dll"
+    AssemblyLoadError.message err |> Expect.equal "message" "Not a valid PE"
+  }
+
+  test "describe formats FileNotFound" {
+    AssemblyLoadError.FileNotFound("test.dll", "gone")
+    |> AssemblyLoadError.describe
+    |> Expect.equal "formatted" "Assembly not found: test.dll (gone)"
+  }
+
+  test "describe formats LoadFailed" {
+    AssemblyLoadError.LoadFailed("test.dll", "locked")
+    |> AssemblyLoadError.describe
+    |> Expect.equal "formatted" "Assembly load failed: test.dll (locked)"
+  }
+
+  test "describe formats BadImage" {
+    AssemblyLoadError.BadImage("test.dll", "x86 vs x64")
+    |> AssemblyLoadError.describe
+    |> Expect.equal "formatted" "Bad image format: test.dll (x86 vs x64)"
+  }
+
+  test "loadAssembly returns Error for nonexistent path" {
+    let result = AssemblyLoadError.loadAssembly "C:\\nonexistent\\fake.dll"
+    match result with
+    | Error (AssemblyLoadError.FileNotFound _) -> ()
+    | other -> failtest (sprintf "Expected FileNotFound, got %A" other)
+  }
+
+  test "loadAssembly returns Ok for valid assembly" {
+    let result = AssemblyLoadError.loadAssembly (typeof<AssemblyLoadError>.Assembly.Location)
+    match result with
+    | Ok asm -> asm.GetName().Name |> Expect.equal "loaded" "SageFs.Core"
+    | Error e -> failtest (sprintf "Expected Ok, got Error: %s" (AssemblyLoadError.describe e))
+  }
+
+  test "LiveTestState.empty has no assembly load errors" {
+    LiveTestState.empty.AssemblyLoadErrors
+    |> Expect.isEmpty "no errors"
+  }
+]
+
+// ============================================================
 // Debounce Channel Tests
 // ============================================================
 

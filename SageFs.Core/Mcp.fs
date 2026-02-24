@@ -842,6 +842,16 @@ module McpTools =
                     notifyElm ctx (SageFsEvent.AffectedTestsComputed hookResult.AffectedTestIds)
                 with _ -> ()
               | None -> ()
+              // Dispatch assembly load errors if present
+              match metadata |> Map.tryFind "assemblyLoadErrors" with
+              | Some json ->
+                try
+                  let errors =
+                    WorkerProtocol.Serialization.deserialize<Features.LiveTesting.AssemblyLoadError list> json
+                  if not (List.isEmpty errors) then
+                    notifyElm ctx (SageFsEvent.AssemblyLoadFailed errors)
+                with _ -> ()
+              | None -> ()
             | WorkerProtocol.WorkerResponse.EvalResult(_, Error err, _, _) ->
               notifyElm ctx (
                 SageFsEvent.EvalFailed (sid, SageFsError.describe err))

@@ -449,6 +449,11 @@ module SageFsUpdate =
         { model with
             LiveTesting = { model.LiveTesting with LastTiming = Some timing } }, []
 
+      | SageFsEvent.AssemblyLoadFailed errors ->
+        let lt = recomputeStatuses model.LiveTesting (fun s ->
+          { s with AssemblyLoadErrors = errors })
+        { model with LiveTesting = lt }, []
+
     | SageFsMsg.CycleTheme ->
       let name, theme = ThemePresets.cycleNext model.Theme
       { model with Theme = theme; ThemeName = name }, []
