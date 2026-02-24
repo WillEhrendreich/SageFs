@@ -75,15 +75,15 @@ Tests are categorized automatically (Unit, Integration, Browser, Property, Bench
 - [x] **Elm architecture integration** — 8 event types (`TestsDiscovered`, `TestResultsBatch`, `AffectedTestsComputed`, `CoverageUpdated`, etc.) wired through `SageFsModel` update loop
 - [x] **TUI gutter rendering** — `LineAnnotation` icons/colors rendered in the terminal UI via `RenderPipeline`, toggle with **Ctrl+Alt+T**
 - [x] **Harmony hot-reload trigger** — `LiveTestingHook.afterReload()` called after every successful eval in `HotReloading.fs`, detecting providers, discovering tests, and finding affected tests from updated methods. Results flow through worker protocol metadata into the Elm event loop.
+- [x] **Run policy enforcement** — `filterByPolicy()` integrated into execution paths so unit tests run on keystroke, integration on save, browser on demand
+- [x] **SSE push of test results** — `TestSummaryChanged` and `TestResultsBatch` events streamed to connected HTTP/SSE clients via push notification architecture
+- [x] **MCP live test tools** — `get_live_test_status` (query test state with file filter), `set_run_policy` (control which categories run when), `get_pipeline_trace` (debug the pipeline waterfall)
 - [x] **128+ tests** — Domain model, executor, tree-sitter, instrumentation, Elm integration, and FsCheck property-based tests all passing
 
 **What's in progress:**
 
 - [ ] **FCS dependency graph** — Wire F# Compiler Service `CheckFileResults` to build a real call graph for symbol-level reachability (currently affected tests found by method name matching; FCS would give precise symbol-level coverage)
-- [ ] **Three-speed pipeline end-to-end** — Wire tree-sitter → FCS enrichment → execution into a single debounced pipeline with the three timing tiers
-- [ ] **Run policy enforcement** — Integrate `filterByPolicy()` into the execution trigger so unit tests run on keystroke, integration on save, browser on demand
-- [ ] **SSE push of test results** — Stream `TestResultsBatch` and `TestSummaryChanged` events to connected HTTP/SSE clients
-- [ ] **MCP `get_live_test_status` tool** — Expose live test state to AI agents via the MCP server
+- [ ] **Three-speed pipeline end-to-end** — Wire tree-sitter → FCS enrichment → execution into a single debounced pipeline (histograms ready, debounce not yet connected)
 - [ ] **VS Code gutter markers** — DecorationProvider and TestController integration in the VS Code extension
 - [ ] **Neovim gutter markers** — Extmark signs and virtual text for test status in sagefs.nvim
 - [ ] **Raylib GUI gutter rendering** — Gutter icons in the GPU-rendered GUI frontend
