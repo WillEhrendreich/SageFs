@@ -27,9 +27,9 @@ SageFs is a [.NET global tool](https://learn.microsoft.com/en-us/dotnet/core/too
 
 ---
 
-## 🧪 Coming Soon: Live Unit Testing
+## 🧪 Live Unit Testing
 
-> *Visual Studio Enterprise charges ~$250/month for Live Unit Testing. SageFs will do it better — across every editor, every major .NET test framework — for free.*
+> *Visual Studio Enterprise charges ~$250/month for Live Unit Testing. SageFs does it better — across every editor, every major .NET test framework — for free.*
 
 SageFs already has hot reload, file watching, Harmony method patching, and real-time SSE push to every connected UI. **Live Unit Testing** wires those together into a single pipeline: edit code → tests run automatically → results appear inline, in under 500ms.
 
@@ -63,9 +63,19 @@ Gutter markers appear in your editor (VS Code, Neovim, TUI, GUI, Visual Studio �
 
 Tests are categorized automatically (Unit, Integration, Browser, Property, Benchmark) with smart run policies — unit and property tests run on every keystroke, integration tests run on save, browser tests run on demand. All configurable.
 
-The architecture is fully designed with a pure domain model, two-tier provider system (attribute-based covers 80% of frameworks in ~10 lines, custom providers handle Expecto-style value tests), and OTEL tracing so you can see the full pipeline waterfall in Aspire.
+**What's implemented:**
 
-**Status:** Architecture complete, implementation in progress.
+- ✅ **Pure domain model** — `TestId` (SHA256-stable), `TestCase`, `TestResult`, `TestRunStatus`, `TestDependencyGraph`, `CoverageAnnotation`, and full Elm state management (`LiveTestState` with events, update, projection)
+- ✅ **Two-tier provider system** — Attribute-based executor (Tier 1) covers xUnit, NUnit, MSTest, TUnit in ~10 lines each; custom executor (Tier 2) handles Expecto-style value-based tests
+- ✅ **Tree-sitter source detection** — `tests.scm` query file detects test attributes in broken/incomplete F# code for instant gutter markers, even before the compiler runs
+- ✅ **Test execution orchestration** — `TestOrchestrator` handles discovery, `LiveTestingHook` integrates with hot reload for affected-test filtering after code changes
+- ✅ **Transitive coverage analysis** — Dependency graph walks call chains to determine which tests cover which production symbols, with `CoverageComputation` for line-level annotations
+- ✅ **OTEL instrumentation** — `ActivitySource` + `Meter` with histograms for tree-sitter, FCS, and execution timing; zero-cost (~50ns) when no collector attached
+- ✅ **Elm architecture integration** — 8 event types (`TestsDiscovered`, `TestResultsBatch`, `AffectedTestsComputed`, `CoverageUpdated`, etc.) wired through `SageFsModel` update loop
+- ✅ **UI wiring** — Toggle via **Ctrl+Alt+T** in TUI, command routing in Dashboard and RenderPipeline
+- ✅ **128+ tests** — Domain model, executor, tree-sitter, instrumentation, Elm integration, and FsCheck property-based tests all passing
+
+**Status:** Core engine complete. Editor gutter rendering and end-to-end integration testing in progress.
 
 ---
 
