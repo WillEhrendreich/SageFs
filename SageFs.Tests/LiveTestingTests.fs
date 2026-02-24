@@ -3371,3 +3371,169 @@ let adaptiveDebounceWiringTests = testList "adaptive debounce wiring" [
     | None -> failtest "FCS debounce should have pending"
   }
 ]
+
+// --- Running → Stale regression tests (Gap 1 fix) ---
+
+let private mkSourceMappedTestCase name fw =
+  { Id = TestId.create name fw
+    FullName = name; DisplayName = name
+    Origin = TestOrigin.SourceMapped ("Foo.fs", 10)
+    Labels = []; Framework = fw; Category = TestCategory.Unit }
+
+let private mkPassedResult tid =
+  { TestId = tid; TestName = TestId.value tid
+    Result = TestResult.Passed (TimeSpan.FromMilliseconds 10.0)
+    Timestamp = DateTimeOffset.UtcNow.AddSeconds(-5.0) }
+
+[<Tests>]
+let runningToStaleOnKeystrokeTests = testList "Running → Stale on keystroke" [
+  test "keystroke while tests running sets IsRunning to false" {
+    let tid = TestId.create "TestA" "expecto"
+    let s = {
+      LiveTestPipelineState.empty with
+        TestState = {
+          LiveTestState.empty with
+            DiscoveredTests = [| mkSourceMappedTestCase "TestA" "expecto" |]
+            IsRunning = true
+            AffectedTests = Set.singleton tid
+        }
+    }
+    let s' = LiveTestPipelineState.onKeystroke "changed" "Foo.fs" DateTimeOffset.UtcNow s
+    s'.TestState.IsRunning
+    |> Expect.isFalse "IsRunning should be false after keystroke during running"
+  }
+
+  test "keystroke while tests running preserves AffectedTests" {
+    let tid = TestId.create "TestA" "expecto"
+    let s = {
+      LiveTestPipelineState.empty with
+        TestState = {
+          LiveTestState.empty with
+            DiscoveredTests = [| mkSourceMappedTestCase "TestA" "expecto" |]
+            IsRunning = true
+            AffectedTests = Set.singleton tid
+        }
+    }
+    let s' = LiveTestPipelineState.onKeystroke "changed" "Foo.fs" DateTimeOffset.UtcNow s
+    s'.TestState.AffectedTests
+    |> Expect.isNonEmpty "AffectedTests should be preserved"
+  }
+
+  test "status shows Stale after keystroke during running with previous result" {
+    let tid = TestId.create "TestA" "expecto"
+    let s = {
+      LiveTestPipelineState.empty with
+        TestState = {
+          LiveTestState.empty with
+            DiscoveredTests = [| mkSourceMappedTestCase "TestA" "expecto" |]
+            IsRunning = true
+            AffectedTests = Set.singleton tid
+            LastResults = Map.ofList [ tid, mkPassedResult tid ]
+        }
+    }
+    let s' = LiveTestPipelineState.onKeystroke "changed" "Foo.fs" DateTimeOffset.UtcNow s
+    let entries = LiveTesting.computeStatusEntries s'.TestState
+    entries.[0].Status
+    |> Expect.equal "should be Stale" TestRunStatus.Stale
+  }
+
+  test "status shows Queued for never-run affected test after keystroke" {
+    let tid = TestId.create "TestA" "expecto"
+    let s = {
+      LiveTestPipelineState.empty with
+        TestState = {
+          LiveTestState.empty with
+            DiscoveredTests = [| mkSourceMappedTestCase "TestA" "expecto" |]
+            IsRunning = true
+            AffectedTests = Set.singleton tid
+        }
+    }
+    let s' = LiveTestPipelineState.onKeystroke "changed" "Foo.fs" DateTimeOffset.UtcNow s
+    let entries = LiveTesting.computeStatusEntries s'.TestState
+    entries.[0].Status
+    |> Expect.equal "should be Queued" TestRunStatus.Queued
+  }
+
+  test "keystroke while NOT running does not change IsRunning" {
+    let s = LiveTestPipelineState.empty
+    let s' = LiveTestPipelineState.onKeystroke "changed" "Foo.fs" DateTimeOffset.UtcNow s
+    s'.TestState.IsRunning
+    |> Expect.isFalse "should stay false"
+  }
+]
+
+[<Tests>]
+let runningToStaleOnFileSaveTests = testList "Running → Stale on file save" [
+  test "save while tests running marks Stale" {
+    let tid = TestId.create "TestA" "expecto"
+    let s = {
+      LiveTestPipelineState.empty with
+        TestState = {
+          LiveTestState.empty with
+            DiscoveredTests = [| mkSourceMappedTestCase "TestA" "expecto" |]
+            IsRunning = true
+            AffectedTests = Set.singleton tid
+            LastResults = Map.ofList [ tid, mkPassedResult tid ]
+        }
+    }
+    let s' = LiveTestPipelineState.onFileSave "Foo.fs" DateTimeOffset.UtcNow s
+    s'.TestState.IsRunning
+    |> Expect.isFalse "IsRunning should be false after save during running"
+    let entries = LiveTesting.computeStatusEntries s'.TestState
+    entries.[0].Status
+    |> Expect.equal "should show Stale" TestRunStatus.Stale
+  }
+
+  test "save while NOT running is no-op on IsRunning" {
+    let s = LiveTestPipelineState.empty
+    let s' = LiveTestPipelineState.onFileSave "Foo.fs" DateTimeOffset.UtcNow s
+    s'.TestState.IsRunning
+    |> Expect.isFalse "should stay false"
+  }
+]
+
+[<Tests>]
+let mergeResultsStalenessFixTests = testList "mergeResults staleness handling" [
+  test "stale results (IsRunning already false) keep AffectedTests" {
+    let tid = TestId.create "TestA" "expecto"
+    let result = mkResult tid (TestResult.Passed (TimeSpan.FromMilliseconds 10.0))
+    let s = {
+      LiveTestState.empty with
+        DiscoveredTests = [| mkSourceMappedTestCase "TestA" "expecto" |]
+        IsRunning = false
+        AffectedTests = Set.singleton tid
+    }
+    let s' = LiveTesting.mergeResults s [| result |]
+    s'.AffectedTests
+    |> Expect.isNonEmpty "stale results should keep AffectedTests"
+  }
+
+  test "stale results show Stale status not Passed" {
+    let tid = TestId.create "TestA" "expecto"
+    let result = mkResult tid (TestResult.Passed (TimeSpan.FromMilliseconds 10.0))
+    let s = {
+      LiveTestState.empty with
+        DiscoveredTests = [| mkSourceMappedTestCase "TestA" "expecto" |]
+        IsRunning = false
+        AffectedTests = Set.singleton tid
+    }
+    let s' = LiveTesting.mergeResults s [| result |]
+    let entries = LiveTesting.computeStatusEntries s'
+    entries.[0].Status
+    |> Expect.equal "should show Stale" TestRunStatus.Stale
+  }
+
+  test "fresh results (IsRunning was true) clear AffectedTests" {
+    let tid = TestId.create "TestA" "expecto"
+    let result = mkResult tid (TestResult.Passed (TimeSpan.FromMilliseconds 10.0))
+    let s = {
+      LiveTestState.empty with
+        DiscoveredTests = [| mkSourceMappedTestCase "TestA" "expecto" |]
+        IsRunning = true
+        AffectedTests = Set.singleton tid
+    }
+    let s' = LiveTesting.mergeResults s [| result |]
+    s'.AffectedTests
+    |> Expect.isEmpty "fresh results should clear AffectedTests"
+  }
+]

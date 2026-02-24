@@ -558,11 +558,14 @@ module LiveTesting =
         state.StatusEntries
         |> Array.map (fun e -> e.TestId, e.Status)
         |> Map.ofArray
+      // If IsRunning is already false, code changed mid-run — results are stale.
+      // Keep AffectedTests so status shows Stale instead of the stale result.
+      let alreadyStale = not state.IsRunning
       let updatedState =
         { state with
             LastResults = newResults
             IsRunning = false
-            AffectedTests = Set.empty
+            AffectedTests = if alreadyStale then state.AffectedTests else Set.empty
             History = RunHistory.PreviousRun maxDuration }
       { updatedState with StatusEntries = computeStatusEntriesWithHistory previousStatuses updatedState }
 
@@ -1098,11 +1101,15 @@ module LiveTestPipelineState =
   let onKeystroke (content: string) (filePath: string) (now: DateTimeOffset) (s: LiveTestPipelineState) =
     let fcsDelay = int (currentFcsDelay s)
     let db = s.Debounce |> PipelineDebounce.onKeystroke content filePath fcsDelay now
-    { s with Debounce = db; ActiveFile = Some filePath; LastTrigger = RunTrigger.Keystroke }
+    // When edits arrive while tests are running, in-flight results will be stale.
+    // Set IsRunning=false but keep AffectedTests so computeStatusEntries shows Stale.
+    let ts = if s.TestState.IsRunning then { s.TestState with IsRunning = false } else s.TestState
+    { s with Debounce = db; TestState = ts; ActiveFile = Some filePath; LastTrigger = RunTrigger.Keystroke }
 
   let onFileSave (filePath: string) (now: DateTimeOffset) (s: LiveTestPipelineState) =
     let db = s.Debounce |> PipelineDebounce.onFileSave filePath now
-    { s with Debounce = db; ActiveFile = Some filePath; LastTrigger = RunTrigger.FileSave }
+    let ts = if s.TestState.IsRunning then { s.TestState with IsRunning = false } else s.TestState
+    { s with Debounce = db; TestState = ts; ActiveFile = Some filePath; LastTrigger = RunTrigger.FileSave }
 
   let onFcsComplete (filePath: string) (refs: SymbolReference list) (s: LiveTestPipelineState) =
     let changes, newCache = FileAnalysisCache.update filePath refs s.AnalysisCache
