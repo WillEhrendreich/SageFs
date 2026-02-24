@@ -388,9 +388,16 @@ module SageFsUpdate =
         { model with LiveTesting = lt }, []
 
       | SageFsEvent.TestResultsBatch results ->
-        let merged = Features.LiveTesting.LiveTesting.mergeResults model.LiveTesting.TestState results
+        let merged, needsRetrigger = Features.LiveTesting.LiveTesting.mergeResults model.LiveTesting.TestState results
         let lt = recomputeStatuses model.LiveTesting (fun _ -> merged)
-        { model with LiveTesting = lt }, []
+        let effects =
+          if needsRetrigger && not (Set.isEmpty merged.AffectedTests) then
+            let affectedIds = merged.AffectedTests |> Set.toArray
+            Features.LiveTesting.LiveTestPipelineState.triggerExecutionForAffected
+              affectedIds Features.LiveTesting.RunTrigger.FileSave lt
+            |> List.map SageFsEffect.Pipeline
+          else []
+        { model with LiveTesting = lt }, effects
 
       | SageFsEvent.LiveTestingToggled enabled ->
         let activation = if enabled then Features.LiveTesting.LiveTestingActivation.Active else Features.LiveTesting.LiveTestingActivation.Inactive

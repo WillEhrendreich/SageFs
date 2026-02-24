@@ -168,7 +168,7 @@ let mergeResultsTests = testList "mergeResults" [
   test "merging results updates LastResults map" {
     let tid = mkTestId "t1" "x"
     let results = [| mkResult tid (TestResult.Passed (ts 5.0)) |]
-    let state = LiveTesting.mergeResults LiveTestState.empty results
+    let state, _ = LiveTesting.mergeResults LiveTestState.empty results
     state.LastResults
     |> Map.containsKey tid
     |> Expect.isTrue "should contain result"
@@ -180,6 +180,7 @@ let mergeResultsTests = testList "mergeResults" [
     let running = { LiveTestState.empty with RunPhase = Running gen; LastGeneration = gen }
     let results = [| mkResult tid (TestResult.Passed (ts 5.0)) |]
     LiveTesting.mergeResults running results
+    |> fst
     |> fun s -> TestRunPhase.isRunning s.RunPhase
     |> Expect.isFalse "should stop running"
   }
@@ -187,7 +188,7 @@ let mergeResultsTests = testList "mergeResults" [
   test "merging results updates History to PreviousRun" {
     let tid = mkTestId "t1" "x"
     let results = [| mkResult tid (TestResult.Passed (ts 10.0)) |]
-    let state = LiveTesting.mergeResults LiveTestState.empty results
+    let state, _ = LiveTesting.mergeResults LiveTestState.empty results
     match state.History with
     | RunHistory.PreviousRun _ -> ()
     | RunHistory.NeverRun -> failtest "should be PreviousRun"
@@ -196,9 +197,9 @@ let mergeResultsTests = testList "mergeResults" [
   test "newer result overwrites older for same TestId" {
     let tid = mkTestId "t1" "x"
     let old = [| mkResult tid (TestResult.Passed (ts 5.0)) |]
-    let state1 = LiveTesting.mergeResults LiveTestState.empty old
+    let state1, _ = LiveTesting.mergeResults LiveTestState.empty old
     let newer = [| mkResult tid (TestResult.Failed (TestFailure.AssertionFailed "oops", ts 3.0)) |]
-    let state2 = LiveTesting.mergeResults state1 newer
+    let state2, _ = LiveTesting.mergeResults state1 newer
     match state2.LastResults |> Map.find tid |> fun r -> r.Result with
     | TestResult.Failed _ -> ()
     | _ -> failtest "should be Failed after overwrite"
@@ -209,7 +210,7 @@ let mergeResultsTests = testList "mergeResults" [
     let withResult =
       { LiveTestState.empty with
           LastResults = Map.ofList [ tid, mkResult tid (TestResult.Passed (ts 1.0)) ] }
-    let after = LiveTesting.mergeResults withResult Array.empty
+    let after, _ = LiveTesting.mergeResults withResult Array.empty
     after.LastResults
     |> Map.count
     |> Expect.equal "preserve existing" 1
@@ -752,7 +753,7 @@ let propertyTests = testList "Property-based" [
            { TestId = tid; TestName = TestId.value tid
              Result = LTTestResult.Passed (ts 1.0)
              Timestamp = DateTimeOffset.UtcNow } |]
-    let state = LiveTesting.mergeResults LiveTestState.empty results
+    let state, _ = LiveTesting.mergeResults LiveTestState.empty results
     state.LastResults |> Map.count >= count
   )
 
@@ -1526,7 +1527,7 @@ let statusEntryTests = testList "StatusEntry Computation" [
     let newResults = [|
       mkResult test1.Id (TestResult.Passed (TimeSpan.FromMilliseconds 10.0))
     |]
-    let merged = LiveTesting.mergeResults state newResults
+    let merged, _ = LiveTesting.mergeResults state newResults
     let entry = merged.StatusEntries |> Array.find (fun e -> e.TestId = test1.Id)
     match entry.Status with
     | TestRunStatus.Passed _ -> ()
@@ -1545,7 +1546,7 @@ let statusEntryTests = testList "StatusEntry Computation" [
     let newResults = [|
       mkResult test1.Id (TestResult.Failed (TestFailure.AssertionFailed "oops", TimeSpan.FromMilliseconds 1.0))
     |]
-    let merged = LiveTesting.mergeResults state newResults
+    let merged, _ = LiveTesting.mergeResults state newResults
     let entry = merged.StatusEntries |> Array.find (fun e -> e.TestId = test1.Id)
     match entry.PreviousStatus with
     | TestRunStatus.Passed _ -> ()
@@ -3504,7 +3505,7 @@ let elmWiringBehavioralTests = testList "Elm Wiring Behavioral Scenarios" [
         TestName = tc.FullName
         Result = TestResult.Passed(TimeSpan.FromMilliseconds(5.0))
         Timestamp = now }
-    let merged = LiveTesting.mergeResults state [|result|]
+    let merged, _ = LiveTesting.mergeResults state [|result|]
     merged.StatusEntries |> Array.tryFind (fun e -> e.TestId = tc.Id)
     |> Option.map (fun e -> match e.Status with TestRunStatus.Passed _ -> true | _ -> false)
     |> Option.defaultValue false
@@ -3545,7 +3546,7 @@ let elmWiringBehavioralTests = testList "Elm Wiring Behavioral Scenarios" [
         TestName = tc.FullName
         Result = TestResult.Passed(TimeSpan.FromMilliseconds(3.0))
         Timestamp = now.AddSeconds(1.0) }
-    let cleared = LiveTesting.mergeResults stale [|newResult|]
+    let cleared, _ = LiveTesting.mergeResults stale [|newResult|]
     cleared.StatusEntries |> Array.exists (fun e -> match e.Status with TestRunStatus.Passed _ -> true | _ -> false)
     |> Expect.isTrue "entry is Passed after re-run"
     cleared.AffectedTests |> Set.isEmpty |> Expect.isTrue "no affected tests after re-run"
@@ -3998,7 +3999,7 @@ let mergeResultsStalenessFixTests = testList "mergeResults staleness handling" [
         RunPhase = RunningButEdited gen; LastGeneration = gen
         AffectedTests = Set.singleton tid
     }
-    let s' = LiveTesting.mergeResults s [| result |]
+    let s', _ = LiveTesting.mergeResults s [| result |]
     s'.AffectedTests
     |> Expect.isNonEmpty "stale results should keep AffectedTests"
   }
@@ -4013,7 +4014,7 @@ let mergeResultsStalenessFixTests = testList "mergeResults staleness handling" [
         RunPhase = RunningButEdited gen; LastGeneration = gen
         AffectedTests = Set.singleton tid
     }
-    let s' = LiveTesting.mergeResults s [| result |]
+    let s', _ = LiveTesting.mergeResults s [| result |]
     let entries = LiveTesting.computeStatusEntries s'
     entries.[0].Status
     |> Expect.equal "should show Stale" TestRunStatus.Stale
@@ -4029,13 +4030,80 @@ let mergeResultsStalenessFixTests = testList "mergeResults staleness handling" [
         RunPhase = Running gen; LastGeneration = gen
         AffectedTests = Set.singleton tid
     }
-    let s' = LiveTesting.mergeResults s [| result |]
+    let s', _ = LiveTesting.mergeResults s [| result |]
     s'.AffectedTests
     |> Expect.isEmpty "fresh results should clear AffectedTests"
   }
 ]
 
-// --- RunGeneration, TestRunPhase, and ResultFreshness tests ---
+[<Tests>]
+let mergeResultsRetriggerTests = testList "mergeResults retrigger signal" [
+  test "RunningButEdited with matching gen signals needsRetrigger" {
+    let tid = TestId.create "TestA" "expecto"
+    let result = mkResult tid (TestResult.Passed (TimeSpan.FromMilliseconds 10.0))
+    let gen = RunGeneration.next RunGeneration.zero
+    let s = {
+      LiveTestState.empty with
+        DiscoveredTests = [| mkSourceMappedTestCase "TestA" "expecto" |]
+        RunPhase = RunningButEdited gen; LastGeneration = gen
+        AffectedTests = Set.singleton tid
+    }
+    let _, needsRetrigger = LiveTesting.mergeResults s [| result |]
+    needsRetrigger |> Expect.isTrue "RunningButEdited should signal retrigger"
+  }
+
+  test "Running with matching gen does not signal retrigger" {
+    let tid = TestId.create "TestA" "expecto"
+    let result = mkResult tid (TestResult.Passed (TimeSpan.FromMilliseconds 10.0))
+    let gen = RunGeneration.next RunGeneration.zero
+    let s = {
+      LiveTestState.empty with
+        DiscoveredTests = [| mkSourceMappedTestCase "TestA" "expecto" |]
+        RunPhase = Running gen; LastGeneration = gen
+        AffectedTests = Set.singleton tid
+    }
+    let _, needsRetrigger = LiveTesting.mergeResults s [| result |]
+    needsRetrigger |> Expect.isFalse "Running should not signal retrigger"
+  }
+
+  test "wrong generation does not signal retrigger" {
+    let tid = TestId.create "TestA" "expecto"
+    let result = mkResult tid (TestResult.Passed (TimeSpan.FromMilliseconds 10.0))
+    let gen1 = RunGeneration.next RunGeneration.zero
+    let gen2 = RunGeneration.next gen1
+    let s = {
+      LiveTestState.empty with
+        DiscoveredTests = [| mkSourceMappedTestCase "TestA" "expecto" |]
+        RunPhase = Running gen1; LastGeneration = gen2
+        AffectedTests = Set.singleton tid
+    }
+    let _, needsRetrigger = LiveTesting.mergeResults s [| result |]
+    needsRetrigger |> Expect.isFalse "wrong generation should not retrigger"
+  }
+
+  test "empty results never signal retrigger" {
+    let gen = RunGeneration.next RunGeneration.zero
+    let s = {
+      LiveTestState.empty with
+        RunPhase = RunningButEdited gen; LastGeneration = gen
+    }
+    let _, needsRetrigger = LiveTesting.mergeResults s Array.empty
+    needsRetrigger |> Expect.isFalse "empty results never retrigger"
+  }
+
+  test "Idle phase does not signal retrigger" {
+    let tid = TestId.create "TestA" "expecto"
+    let result = mkResult tid (TestResult.Passed (TimeSpan.FromMilliseconds 10.0))
+    let gen = RunGeneration.next RunGeneration.zero
+    let s = {
+      LiveTestState.empty with
+        DiscoveredTests = [| mkSourceMappedTestCase "TestA" "expecto" |]
+        RunPhase = Idle; LastGeneration = gen
+    }
+    let _, needsRetrigger = LiveTesting.mergeResults s [| result |]
+    needsRetrigger |> Expect.isFalse "Idle should not retrigger"
+  }
+]
 
 [<Tests>]
 let runGenerationTests = testList "RunGeneration" [
@@ -4403,7 +4471,7 @@ let sseEnrichmentTests = testList "SSE enrichment round-trip" [
         RunPhase = phase
         LastGeneration = gen
         AffectedTests = Set.ofList [tid] }
-    let merged = LiveTesting.mergeResults state [| result |]
+    let merged, _ = LiveTesting.mergeResults state [| result |]
     let entries = LiveTesting.computeStatusEntries merged
     let _newPhase, freshness = TestRunPhase.onResultsArrived gen merged.RunPhase
     let batch =
@@ -4437,7 +4505,7 @@ let sseEnrichmentTests = testList "SSE enrichment round-trip" [
       TestId = tid; TestName = "Tests.stale_edit"
       Result = TestResult.Passed (System.TimeSpan.FromMilliseconds 10.0)
       Timestamp = System.DateTimeOffset.UtcNow }
-    let merged = LiveTesting.mergeResults state [| result |]
+    let merged, _ = LiveTesting.mergeResults state [| result |]
     let entries = LiveTesting.computeStatusEntries merged
     let _newPhase, freshness = TestRunPhase.onResultsArrived gen editedPhase
     let batch =

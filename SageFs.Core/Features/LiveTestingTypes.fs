@@ -826,8 +826,11 @@ module LiveTesting =
           else Map.add t.Id t acc) incomingById
       merged |> Map.values |> Seq.toArray
 
-  let mergeResults (state: LiveTestState) (results: TestRunResult array) : LiveTestState =
-    if Array.isEmpty results then state
+  /// Merge test results into state. Returns (newState, needsRetrigger).
+  /// When needsRetrigger is true, code was edited during the run and the pipeline
+  /// should re-trigger with the still-affected tests.
+  let mergeResults (state: LiveTestState) (results: TestRunResult array) : LiveTestState * bool =
+    if Array.isEmpty results then state, false
     else
       let newResults =
         results
@@ -844,10 +847,12 @@ module LiveTesting =
         state.StatusEntries
         |> Array.map (fun e -> e.TestId, e.Status)
         |> Map.ofArray
-      // Use RunPhase to determine if results are stale.
-      // RunningButEdited means code changed mid-run — keep AffectedTests so status shows Stale.
       let newPhase, freshness =
         TestRunPhase.onResultsArrived state.LastGeneration state.RunPhase
+      let needsRetrigger =
+        match freshness with
+        | StaleCodeEdited -> true
+        | Fresh | StaleWrongGeneration -> false
       let alreadyStale =
         match freshness with
         | Fresh -> false
@@ -858,7 +863,7 @@ module LiveTesting =
             RunPhase = newPhase
             AffectedTests = if alreadyStale then state.AffectedTests else Set.empty
             History = RunHistory.PreviousRun maxDuration }
-      { updatedState with StatusEntries = computeStatusEntriesWithHistory previousStatuses updatedState }
+      { updatedState with StatusEntries = computeStatusEntriesWithHistory previousStatuses updatedState }, needsRetrigger
 
   let computeStatusEntries (state: LiveTestState) : TestStatusEntry array =
     computeStatusEntriesWithHistory Map.empty state
@@ -1603,7 +1608,9 @@ module LiveTestPipelineState =
     (trigger: RunTrigger)
     (s: LiveTestPipelineState)
     : PipelineEffect list =
-    if Array.isEmpty affectedIds || s.TestState.Activation = LiveTestingActivation.Inactive then []
+    if Array.isEmpty affectedIds
+       || s.TestState.Activation = LiveTestingActivation.Inactive
+       || TestRunPhase.isRunning s.TestState.RunPhase then []
     else
       let affectedIdSet = Set.ofArray affectedIds
       let affectedTests =
