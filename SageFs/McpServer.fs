@@ -704,7 +704,7 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                     match getElmModel with
                     | Some getModel ->
                       let model = getModel()
-                      let lt = model.LiveTesting
+                      let lt = model.LiveTesting.TestState
                       if lt.StatusEntries.Length > 0 || lt.IsRunning then
                         let s = SageFs.Features.LiveTesting.TestSummary.fromStatuses
                                   (lt.StatusEntries |> Array.map (fun e -> e.Status))

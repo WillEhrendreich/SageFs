@@ -761,11 +761,11 @@ let elmIntegrationTests = testList "LiveTesting Elm Integration" [
 
     test "SageFsModel.initial has empty LiveTestState" {
       let model = SageFsModel.initial
-      model.LiveTesting.DiscoveredTests
+      model.LiveTesting.TestState.DiscoveredTests
       |> Expect.equal "no discovered tests" Array.empty
-      model.LiveTesting.IsRunning
+      model.LiveTesting.TestState.IsRunning
       |> Expect.isFalse "not running"
-      model.LiveTesting.Enabled
+      model.LiveTesting.TestState.Enabled
       |> Expect.isTrue "enabled"
     }
   ]
@@ -796,7 +796,7 @@ let elmIntegrationTests = testList "LiveTesting Elm Integration" [
         SageFsUpdate.update
           (SageFsMsg.Event (SageFsEvent.TestsDiscovered [| tc |]))
           SageFsModel.initial
-      model'.LiveTesting.DiscoveredTests.Length
+      model'.LiveTesting.TestState.DiscoveredTests.Length
       |> Expect.equal "should have 1 test" 1
     }
     test "TestRunStarted sets IsRunning and AffectedTests" {
@@ -805,16 +805,16 @@ let elmIntegrationTests = testList "LiveTesting Elm Integration" [
         SageFsUpdate.update
           (SageFsMsg.Event (SageFsEvent.TestRunStarted [| tid |]))
           SageFsModel.initial
-      model'.LiveTesting.IsRunning
+      model'.LiveTesting.TestState.IsRunning
       |> Expect.isTrue "should be running"
-      Set.contains tid model'.LiveTesting.AffectedTests
+      Set.contains tid model'.LiveTesting.TestState.AffectedTests
       |> Expect.isTrue "should contain test id"
     }
     test "TestResultsBatch merges results and clears IsRunning" {
       let m =
         { SageFsModel.initial with
             LiveTesting =
-              { SageFsModel.initial.LiveTesting with IsRunning = true } }
+              { SageFsModel.initial.LiveTesting with TestState = { SageFsModel.initial.LiveTesting.TestState with IsRunning = true } } }
       let tid = mkTestId "t1" "x"
       let r : TestRunResult =
         { TestId = tid; TestName = "t1"
@@ -823,9 +823,9 @@ let elmIntegrationTests = testList "LiveTesting Elm Integration" [
       let model', _ =
         SageFsUpdate.update
           (SageFsMsg.Event (SageFsEvent.TestResultsBatch [| r |])) m
-      model'.LiveTesting.IsRunning
+      model'.LiveTesting.TestState.IsRunning
       |> Expect.isFalse "should not be running"
-      Map.containsKey tid model'.LiveTesting.LastResults
+      Map.containsKey tid model'.LiveTesting.TestState.LastResults
       |> Expect.isTrue "should have result"
     }
     test "LiveTestingToggled updates Enabled" {
@@ -833,7 +833,7 @@ let elmIntegrationTests = testList "LiveTesting Elm Integration" [
         SageFsUpdate.update
           (SageFsMsg.Event (SageFsEvent.LiveTestingToggled false))
           SageFsModel.initial
-      model'.LiveTesting.Enabled
+      model'.LiveTesting.TestState.Enabled
       |> Expect.isFalse "should be disabled"
     }
     test "AffectedTestsComputed sets AffectedTests" {
@@ -843,7 +843,7 @@ let elmIntegrationTests = testList "LiveTesting Elm Integration" [
         SageFsUpdate.update
           (SageFsMsg.Event (SageFsEvent.AffectedTestsComputed [| t1; t2 |]))
           SageFsModel.initial
-      Set.count model'.LiveTesting.AffectedTests
+      Set.count model'.LiveTesting.TestState.AffectedTests
       |> Expect.equal "should have 2 affected" 2
     }
     test "RunPolicyChanged updates policy" {
@@ -851,7 +851,7 @@ let elmIntegrationTests = testList "LiveTesting Elm Integration" [
         SageFsUpdate.update
           (SageFsMsg.Event (SageFsEvent.RunPolicyChanged (TestCategory.Integration, RunPolicy.OnSaveOnly)))
           SageFsModel.initial
-      Map.find TestCategory.Integration model'.LiveTesting.RunPolicies
+      Map.find TestCategory.Integration model'.LiveTesting.TestState.RunPolicies
       |> Expect.equal "should be OnSaveOnly" RunPolicy.OnSaveOnly
     }
     test "ProvidersDetected updates providers" {
@@ -860,7 +860,7 @@ let elmIntegrationTests = testList "LiveTesting Elm Integration" [
         SageFsUpdate.update
           (SageFsMsg.Event (SageFsEvent.ProvidersDetected [p]))
           SageFsModel.initial
-      model'.LiveTesting.DetectedProviders.Length
+      model'.LiveTesting.TestState.DetectedProviders.Length
       |> Expect.equal "should have 1 provider" 1
     }
     test "CoverageUpdated produces annotations" {
@@ -873,7 +873,7 @@ let elmIntegrationTests = testList "LiveTesting Elm Integration" [
         SageFsUpdate.update
           (SageFsMsg.Event (SageFsEvent.CoverageUpdated cs))
           SageFsModel.initial
-      model'.LiveTesting.CoverageAnnotations.Length
+      model'.LiveTesting.TestState.CoverageAnnotations.Length
       |> Expect.equal "should have 2 annotations" 2
     }
     test "no effects for live testing events" {
@@ -3168,5 +3168,161 @@ let compositionTests = testList "compositionTests" [
     let effects, _ = s4 |> LiveTestPipelineState.tick (t0.AddMilliseconds(251.0))
     let hasTS = effects |> List.exists (fun e -> match e with PipelineEffect.ParseTreeSitter _ -> true | _ -> false)
     hasTS |> Expect.isTrue "TS fires after session reset"
+  }
+]
+
+// --- Elm Wiring Behavioral Scenario Tests ---
+
+let private hasPendingWork (s: LiveTestPipelineState) =
+  s.Debounce.TreeSitter.Pending.IsSome || s.Debounce.Fcs.Pending.IsSome
+
+[<Tests>]
+let elmWiringBehavioralTests = testList "Elm Wiring Behavioral Scenarios" [
+  test "cold start: tick on empty pipeline produces no effects" {
+    let t0 = DateTimeOffset(2025, 1, 1, 0, 0, 0, TimeSpan.Zero)
+    let effects, s' = LiveTestPipelineState.empty |> LiveTestPipelineState.tick t0
+    effects |> Expect.isEmpty "no effects on empty pipeline"
+    s' |> hasPendingWork |> Expect.isFalse "no pending work"
+  }
+
+  test "keystroke then tick past debounce fires TreeSitter parse" {
+    let t0 = DateTimeOffset(2025, 1, 1, 0, 0, 0, TimeSpan.Zero)
+    let s = LiveTestPipelineState.empty |> LiveTestPipelineState.onKeystroke "let x = 1" "File.fs" t0
+    let effects, _ = s |> LiveTestPipelineState.tick (t0.AddMilliseconds(51.0))
+    effects
+    |> List.exists (fun e -> match e with PipelineEffect.ParseTreeSitter _ -> true | _ -> false)
+    |> Expect.isTrue "TreeSitter parse fires after debounce"
+  }
+
+  test "full pipeline: keystroke through FCS debounce" {
+    let tc =
+      { Id = TestId.create "T.t1" "expecto"
+        FullName = "T.t1"
+        DisplayName = "t1"
+        Origin = TestOrigin.ReflectionOnly
+        Labels = []
+        Framework = "expecto"
+        Category = TestCategory.Unit }
+    let t0 = DateTimeOffset(2025, 1, 1, 0, 0, 0, TimeSpan.Zero)
+    let depGraph =
+      { TestDependencyGraph.empty with
+          SymbolToTests = Map.ofList ["Lib.add", [|tc.Id|]] }
+    let state =
+      { LiveTestPipelineState.empty with
+          DepGraph = depGraph
+          ChangedSymbols = ["Lib.add"]
+          TestState =
+            { LiveTestState.empty with
+                DiscoveredTests = [|tc|]
+                Enabled = true } }
+    let s1 = state |> LiveTestPipelineState.onKeystroke "let x = 1" "File.fs" t0
+    let effects301, _ = s1 |> LiveTestPipelineState.tick (t0.AddMilliseconds(301.0))
+    effects301
+    |> List.exists (fun e -> match e with PipelineEffect.RequestFcsTypeCheck _ -> true | _ -> false)
+    |> Expect.isTrue "FCS fires after 300ms debounce"
+  }
+
+  test "pipeline goes idle after both debounces fire" {
+    let t0 = DateTimeOffset(2025, 1, 1, 0, 0, 0, TimeSpan.Zero)
+    let s = LiveTestPipelineState.empty |> LiveTestPipelineState.onKeystroke "let x = 1" "File.fs" t0
+    let _, s51 = s |> LiveTestPipelineState.tick (t0.AddMilliseconds(51.0))
+    let _, s301 = s51 |> LiveTestPipelineState.tick (t0.AddMilliseconds(301.0))
+    s301 |> hasPendingWork |> Expect.isFalse "pipeline idle after both debounces"
+    let effects500, _ = s301 |> LiveTestPipelineState.tick (t0.AddMilliseconds(500.0))
+    effects500 |> Expect.isEmpty "no further effects after idle"
+  }
+
+  test "rapid keystrokes: only latest content fires debounce" {
+    let t0 = DateTimeOffset(2025, 1, 1, 0, 0, 0, TimeSpan.Zero)
+    let s0 = LiveTestPipelineState.empty
+    let s1 = s0 |> LiveTestPipelineState.onKeystroke "l" "F.fs" t0
+    let s2 = s1 |> LiveTestPipelineState.onKeystroke "le" "F.fs" (t0.AddMilliseconds(20.0))
+    let s3 = s2 |> LiveTestPipelineState.onKeystroke "let" "F.fs" (t0.AddMilliseconds(40.0))
+    let effects, _ = s3 |> LiveTestPipelineState.tick (t0.AddMilliseconds(91.0))
+    let tsEffects =
+      effects |> List.choose (fun e -> match e with PipelineEffect.ParseTreeSitter (c, _) -> Some c | _ -> None)
+    tsEffects |> Expect.hasLength "exactly one parse" 1
+  }
+
+  test "test result merge updates status entries" {
+    let tc =
+      { Id = TestId.create "T.t1" "expecto"
+        FullName = "T.t1"
+        DisplayName = "t1"
+        Origin = TestOrigin.ReflectionOnly
+        Labels = []
+        Framework = "expecto"
+        Category = TestCategory.Unit }
+    let now = DateTimeOffset.UtcNow
+    let state =
+      { LiveTestState.empty with
+          DiscoveredTests = [|tc|]
+          Enabled = true }
+    let result : TestRunResult =
+      { TestId = tc.Id
+        TestName = tc.FullName
+        Result = TestResult.Passed(TimeSpan.FromMilliseconds(5.0))
+        Timestamp = now }
+    let merged = LiveTesting.mergeResults state [|result|]
+    merged.StatusEntries |> Array.tryFind (fun e -> e.TestId = tc.Id)
+    |> Option.map (fun e -> match e.Status with TestRunStatus.Passed _ -> true | _ -> false)
+    |> Option.defaultValue false
+    |> Expect.isTrue "status entry shows Passed after merge"
+  }
+
+  test "staleness then re-run clears stale" {
+    let tc =
+      { Id = TestId.create "T.t1" "expecto"
+        FullName = "T.t1"
+        DisplayName = "t1"
+        Origin = TestOrigin.ReflectionOnly
+        Labels = []
+        Framework = "expecto"
+        Category = TestCategory.Unit }
+    let now = DateTimeOffset.UtcNow
+    let result : TestRunResult =
+      { TestId = tc.Id
+        TestName = tc.FullName
+        Result = TestResult.Passed(TimeSpan.FromMilliseconds(5.0))
+        Timestamp = now }
+    let state =
+      { LiveTestState.empty with
+          DiscoveredTests = [|tc|]
+          Enabled = true
+          LastResults = Map.ofList [tc.Id, result] }
+    let depGraph =
+      { TestDependencyGraph.empty with
+          SymbolToTests = Map.ofList ["Lib.add", [|tc.Id|]] }
+    let stale = Staleness.markStale depGraph ["Lib.add"] state
+    stale.StatusEntries |> Array.exists (fun e -> match e.Status with TestRunStatus.Stale -> true | _ -> false)
+    |> Expect.isTrue "entry is Stale after symbol change"
+    let newResult : TestRunResult =
+      { TestId = tc.Id
+        TestName = tc.FullName
+        Result = TestResult.Passed(TimeSpan.FromMilliseconds(3.0))
+        Timestamp = now.AddSeconds(1.0) }
+    let cleared = LiveTesting.mergeResults stale [|newResult|]
+    cleared.StatusEntries |> Array.exists (fun e -> match e.Status with TestRunStatus.Passed _ -> true | _ -> false)
+    |> Expect.isTrue "entry is Passed after re-run"
+    cleared.AffectedTests |> Set.isEmpty |> Expect.isTrue "no affected tests after re-run"
+  }
+
+  test "disabled policy shows PolicyDisabled in status entries" {
+    let tc =
+      { Id = TestId.create "T.t1" "expecto"
+        FullName = "T.t1"
+        DisplayName = "t1"
+        Origin = TestOrigin.ReflectionOnly
+        Labels = []
+        Framework = "expecto"
+        Category = TestCategory.Unit }
+    let state =
+      { LiveTestState.empty with
+          DiscoveredTests = [|tc|]
+          Enabled = true
+          RunPolicies = Map.ofList [TestCategory.Unit, RunPolicy.Disabled] }
+    let entries = LiveTesting.computeStatusEntries state
+    entries |> Array.exists (fun e -> match e.Status with TestRunStatus.PolicyDisabled -> true | _ -> false)
+    |> Expect.isTrue "disabled policy shows PolicyDisabled"
   }
 ]

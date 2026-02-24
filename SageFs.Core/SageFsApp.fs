@@ -14,12 +14,14 @@ type SageFsMsg =
   | ToggleLiveTesting
   | CycleRunPolicy
   | ToggleCoverage
+  | PipelineTick of now: DateTimeOffset
 
 /// Side effects the Elm loop can request.
-/// Wraps EditorEffect — will grow as app-level effects emerge.
+/// Wraps EditorEffect and PipelineEffect for async execution.
 [<RequireQualifiedAccess>]
 type SageFsEffect =
   | Editor of EditorEffect
+  | Pipeline of Features.LiveTesting.PipelineEffect
 
 /// The complete application state managed by the Elm loop.
 type SageFsModel = {
@@ -31,7 +33,7 @@ type SageFsModel = {
   Theme: ThemeConfig
   ThemeName: string
   SessionContext: SessionContext option
-  LiveTesting: Features.LiveTesting.LiveTestState
+  LiveTesting: Features.LiveTesting.LiveTestPipelineState
 }
 
 module SageFsModel =
@@ -53,7 +55,7 @@ module SageFsModel =
       | None -> Theme.defaults
     ThemeName = "Kanagawa"
     SessionContext = None
-    LiveTesting = Features.LiveTesting.LiveTestState.empty
+    LiveTesting = Features.LiveTesting.LiveTestPipelineState.empty
   }
 
 /// Pure update function: routes SageFsMsg through the right handler.
@@ -347,29 +349,34 @@ module SageFsUpdate =
         { model with SessionContext = Some ctx }, []
 
       // ── Live testing events ──
+      | SageFsEvent.TestLocationsDetected locations ->
+        let lt = model.LiveTesting
+        { model with
+            LiveTesting = { lt with TestState = { lt.TestState with SourceLocations = locations } } }, []
+
       | SageFsEvent.TestsDiscovered tests ->
         let lt = model.LiveTesting
         { model with
-            LiveTesting = { lt with DiscoveredTests = tests } }, []
+            LiveTesting = { lt with TestState = { lt.TestState with DiscoveredTests = tests } } }, []
 
       | SageFsEvent.TestRunStarted testIds ->
         let lt = model.LiveTesting
         { model with
-            LiveTesting = { lt with IsRunning = true; AffectedTests = Set.ofArray testIds } }, []
+            LiveTesting = { lt with TestState = { lt.TestState with IsRunning = true; AffectedTests = Set.ofArray testIds } } }, []
 
       | SageFsEvent.TestResultsBatch results ->
-        let lt = Features.LiveTesting.LiveTesting.mergeResults model.LiveTesting results
-        { model with LiveTesting = lt }, []
+        let lt = Features.LiveTesting.LiveTesting.mergeResults model.LiveTesting.TestState results
+        { model with LiveTesting = { model.LiveTesting with TestState = lt } }, []
 
       | SageFsEvent.LiveTestingToggled enabled ->
         let lt = model.LiveTesting
         { model with
-            LiveTesting = { lt with Enabled = enabled } }, []
+            LiveTesting = { lt with TestState = { lt.TestState with Enabled = enabled } } }, []
 
       | SageFsEvent.AffectedTestsComputed testIds ->
         let lt = model.LiveTesting
         { model with
-            LiveTesting = { lt with AffectedTests = Set.ofArray testIds } }, []
+            LiveTesting = { lt with TestState = { lt.TestState with AffectedTests = Set.ofArray testIds } } }, []
 
       | SageFsEvent.CoverageUpdated coverage ->
         let lt = model.LiveTesting
@@ -386,17 +393,17 @@ module SageFsUpdate =
               DefinitionLine = slot.Line
               Status = status })
         { model with
-            LiveTesting = { lt with CoverageAnnotations = annotations } }, []
+            LiveTesting = { lt with TestState = { lt.TestState with CoverageAnnotations = annotations } } }, []
 
       | SageFsEvent.RunPolicyChanged (category, policy) ->
         let lt = model.LiveTesting
         { model with
-            LiveTesting = { lt with RunPolicies = Map.add category policy lt.RunPolicies } }, []
+            LiveTesting = { lt with TestState = { lt.TestState with RunPolicies = Map.add category policy lt.TestState.RunPolicies } } }, []
 
       | SageFsEvent.ProvidersDetected providers ->
         let lt = model.LiveTesting
         { model with
-            LiveTesting = { lt with DetectedProviders = providers } }, []
+            LiveTesting = { lt with TestState = { lt.TestState with DetectedProviders = providers } } }, []
 
     | SageFsMsg.CycleTheme ->
       let name, theme = ThemePresets.cycleNext model.Theme
@@ -405,7 +412,7 @@ module SageFsUpdate =
     | SageFsMsg.ToggleLiveTesting ->
       let lt = model.LiveTesting
       { model with
-          LiveTesting = { lt with Enabled = not lt.Enabled } }, []
+          LiveTesting = { lt with TestState = { lt.TestState with Enabled = not lt.TestState.Enabled } } }, []
 
     | SageFsMsg.CycleRunPolicy ->
       let lt = model.LiveTesting
@@ -416,20 +423,27 @@ module SageFsUpdate =
         | Features.LiveTesting.RunPolicy.OnDemand -> Features.LiveTesting.RunPolicy.Disabled
         | Features.LiveTesting.RunPolicy.Disabled -> Features.LiveTesting.RunPolicy.OnEveryChange
       let unitPolicy =
-        lt.RunPolicies
+        lt.TestState.RunPolicies
         |> Map.tryFind Features.LiveTesting.TestCategory.Unit
         |> Option.defaultValue Features.LiveTesting.RunPolicy.OnEveryChange
       { model with
           LiveTesting =
             { lt with
-                RunPolicies =
-                  lt.RunPolicies
-                  |> Map.add Features.LiveTesting.TestCategory.Unit (nextPolicy unitPolicy) } }, []
+                TestState =
+                  { lt.TestState with
+                      RunPolicies =
+                        lt.TestState.RunPolicies
+                        |> Map.add Features.LiveTesting.TestCategory.Unit (nextPolicy unitPolicy) } } }, []
 
     | SageFsMsg.ToggleCoverage ->
       let lt = model.LiveTesting
       { model with
-          LiveTesting = { lt with ShowCoverage = not lt.ShowCoverage } }, []
+          LiveTesting = { lt with TestState = { lt.TestState with ShowCoverage = not lt.TestState.ShowCoverage } } }, []
+
+    | SageFsMsg.PipelineTick now ->
+      let effects, pipeline' = model.LiveTesting |> Features.LiveTesting.LiveTestPipelineState.tick now
+      let mappedEffects = effects |> List.map SageFsEffect.Pipeline
+      { model with LiveTesting = pipeline' }, mappedEffects
 
 /// Pure render function: produces RenderRegion list from model.
 /// Every frontend consumes these regions — terminal, web, Neovim, etc.
@@ -448,8 +462,8 @@ module SageFsRender =
         sprintf "%s\n─── %s: %s█" bufText prompt.Label prompt.Input
       | None -> bufText
     let editorAnnotations =
-      if model.LiveTesting.Enabled then
-        Features.LiveTesting.LiveTesting.annotationsForFile "editor" model.LiveTesting
+      if model.LiveTesting.TestState.Enabled then
+        Features.LiveTesting.LiveTesting.annotationsForFile "editor" model.LiveTesting.TestState
       else [||]
     let editorRegion = {
       Id = "editor"
@@ -787,3 +801,16 @@ module SageFsEffectHandler =
             dispatch (SageFsMsg.Event (
               SageFsEvent.SessionStatusChanged (sid, SessionDisplayStatus.Restarting)))
           })
+
+    | SageFsEffect.Pipeline pipelineEffect ->
+      async {
+        match pipelineEffect with
+        | Features.LiveTesting.PipelineEffect.ParseTreeSitter (content, filePath) ->
+          let locations = Features.LiveTesting.TestTreeSitter.discover filePath content
+          dispatch (SageFsMsg.Event (SageFsEvent.TestLocationsDetected locations))
+        | Features.LiveTesting.PipelineEffect.RequestFcsTypeCheck _filePath ->
+          () // FCS type-check — handled by existing FCS infrastructure
+        | Features.LiveTesting.PipelineEffect.RunAffectedTests (_testIds, _trigger) ->
+          () // Test execution — handled by existing hot reload hook
+        | Features.LiveTesting.PipelineEffect.NoOp -> ()
+      }

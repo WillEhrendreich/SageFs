@@ -1212,7 +1212,7 @@ module McpTools =
       | None -> return "Live testing not available — Elm loop not started."
       | Some getModel ->
         let model = getModel ()
-        let state = model.LiveTesting
+        let state = model.LiveTesting.TestState
         let summary =
           Features.LiveTesting.TestSummary.fromStatuses
             (state.StatusEntries |> Array.map (fun e -> e.Status))
@@ -1236,7 +1236,7 @@ module McpTools =
         dispatch (SageFsMsg.ToggleLiveTesting)
         match ctx.GetElmModel with
         | Some getModel ->
-          let state = (getModel ()).LiveTesting
+          let state = (getModel ()).LiveTesting.TestState
           return sprintf "Live testing %s." (if state.Enabled then "enabled" else "disabled")
         | None ->
           return "Toggled. State unavailable."
@@ -1276,7 +1276,7 @@ module McpTools =
       match ctx.GetElmModel with
       | None -> return "Pipeline trace not available — Elm loop not started."
       | Some getModel ->
-        let state = (getModel ()).LiveTesting
+        let state = (getModel ()).LiveTesting.TestState
         let summary =
           Features.LiveTesting.TestSummary.fromStatuses
             (state.StatusEntries |> Array.map (fun e -> e.Status))
