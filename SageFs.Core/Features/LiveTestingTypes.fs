@@ -1328,3 +1328,24 @@ module LiveTestPipelineState =
       [], s
     | FcsTypeCheckResult.Cancelled _ ->
       [], onFcsCanceled s
+
+  /// When the hot-reload hook identifies affected tests (via method name matching),
+  /// look up full TestCase objects, filter by RunPolicy, and produce a RunAffectedTests
+  /// effect if any tests should run. This bridges the gap between discovery and execution
+  /// for MCP-triggered evals (which don't go through the FCS type-check pipeline).
+  let triggerExecutionForAffected
+    (affectedIds: TestId array)
+    (trigger: RunTrigger)
+    (s: LiveTestPipelineState)
+    : PipelineEffect list =
+    if Array.isEmpty affectedIds || not s.TestState.Enabled then []
+    else
+      let affectedIdSet = Set.ofArray affectedIds
+      let affectedTests =
+        s.TestState.DiscoveredTests
+        |> Array.filter (fun tc -> affectedIdSet.Contains tc.Id)
+      let filtered =
+        PolicyFilter.filterTests s.TestState.RunPolicies trigger affectedTests
+      if Array.isEmpty filtered then []
+      else
+        [ PipelineEffect.RunAffectedTests(filtered, trigger, System.TimeSpan.Zero, System.TimeSpan.Zero) ]

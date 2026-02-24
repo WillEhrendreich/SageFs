@@ -387,7 +387,11 @@ module SageFsUpdate =
 
       | SageFsEvent.AffectedTestsComputed testIds ->
         let lt = recomputeStatuses model.LiveTesting (fun s -> { s with AffectedTests = Set.ofArray testIds })
-        { model with LiveTesting = lt }, []
+        let effects =
+          Features.LiveTesting.LiveTestPipelineState.triggerExecutionForAffected
+            testIds Features.LiveTesting.RunTrigger.FileSave lt
+          |> List.map SageFsEffect.Pipeline
+        { model with LiveTesting = lt }, effects
 
       | SageFsEvent.CoverageUpdated coverage ->
         let lt = model.LiveTesting

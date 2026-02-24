@@ -4476,3 +4476,87 @@ let mergeDiscoveredTestsTests = testList "LiveTesting.mergeDiscoveredTests" [
     |> Expect.equal "project tests survive second eval" 2
   }
 ]
+
+let affectedExecutionTriggerTests = testList "AffectedTestsComputed execution trigger" [
+  let mkState tests =
+    { LiveTestState.empty with
+        DiscoveredTests = tests
+        Enabled = true
+        RunPolicies = RunPolicyDefaults.defaults }
+  let mkPipelineState tests =
+    { LiveTestPipelineState.empty with
+        TestState = mkState tests }
+  let tc1 = {
+    Id = TestId.create "ns.t1" "expecto"
+    FullName = "ns.t1"; DisplayName = "t1"
+    Origin = TestOrigin.ReflectionOnly
+    Labels = []; Framework = "expecto"; Category = TestCategory.Unit
+  }
+  let tc2 = {
+    Id = TestId.create "ns.t2" "expecto"
+    FullName = "ns.t2"; DisplayName = "t2"
+    Origin = TestOrigin.ReflectionOnly
+    Labels = []; Framework = "expecto"; Category = TestCategory.Integration
+  }
+  let tc3 = {
+    Id = TestId.create "ns.t3" "expecto"
+    FullName = "ns.t3"; DisplayName = "t3"
+    Origin = TestOrigin.ReflectionOnly
+    Labels = []; Framework = "expecto"; Category = TestCategory.Unit
+  }
+
+  test "empty affected IDs produce no effects" {
+    let ps = mkPipelineState [| tc1; tc2 |]
+    let effects = LiveTestPipelineState.triggerExecutionForAffected [||] RunTrigger.FileSave ps
+    effects
+    |> Expect.isEmpty "should produce no effects for empty affected IDs"
+  }
+
+  test "non-empty affected IDs produce RunAffectedTests effect" {
+    let ps = mkPipelineState [| tc1; tc2; tc3 |]
+    let effects = LiveTestPipelineState.triggerExecutionForAffected [| tc1.Id; tc3.Id |] RunTrigger.FileSave ps
+    effects
+    |> List.length
+    |> Expect.equal "should produce exactly one effect" 1
+  }
+
+  test "only unit tests run on FileSave when policy is OnEveryChange" {
+    let ps = mkPipelineState [| tc1; tc2; tc3 |]
+    let effects = LiveTestPipelineState.triggerExecutionForAffected [| tc1.Id; tc2.Id |] RunTrigger.FileSave ps
+    match effects with
+    | [ PipelineEffect.RunAffectedTests (tests, _, _, _) ] ->
+      tests
+      |> Array.length
+      |> Expect.equal "should only include unit test" 1
+      tests.[0].Category
+      |> Expect.equal "should be unit category" TestCategory.Unit
+    | _ -> failtest "expected exactly one RunAffectedTests effect"
+  }
+
+  test "ExplicitRun trigger runs integration tests too" {
+    let ps = mkPipelineState [| tc1; tc2; tc3 |]
+    let effects = LiveTestPipelineState.triggerExecutionForAffected [| tc1.Id; tc2.Id |] RunTrigger.ExplicitRun ps
+    match effects with
+    | [ PipelineEffect.RunAffectedTests (tests, _, _, _) ] ->
+      tests
+      |> Array.length
+      |> Expect.equal "should include both unit and integration" 2
+    | _ -> failtest "expected exactly one RunAffectedTests effect"
+  }
+
+  test "disabled live testing produces no effects" {
+    let ps = { mkPipelineState [| tc1; tc2 |] with
+                 TestState = { (mkState [| tc1; tc2 |]) with Enabled = false } }
+    let effects = LiveTestPipelineState.triggerExecutionForAffected [| tc1.Id |] RunTrigger.FileSave ps
+    effects
+    |> Expect.isEmpty "should produce no effects when disabled"
+  }
+
+  test "affected IDs not in discovered tests are ignored" {
+    let ps = mkPipelineState [| tc1 |]
+    let unknownId = TestId.create "unknown" "expecto"
+    let effects = LiveTestPipelineState.triggerExecutionForAffected [| unknownId |] RunTrigger.FileSave ps
+    effects
+    |> Expect.isEmpty "unknown test IDs should not produce effects"
+  }
+]
