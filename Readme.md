@@ -81,6 +81,10 @@ Tests are categorized automatically (Unit, Integration, Browser, Property, Bench
 - [x] **128+ tests** — Domain model, executor, tree-sitter, instrumentation, Elm integration, and FsCheck property-based tests all passing
 - [x] **FCS dependency graph** — F# Compiler Service `CheckFileResults` wired via `SymbolGraphBuilder` to build symbol→test dependency maps, with `SymbolDiff` for detecting changes between FCS runs and `FileAnalysisCache` for per-file caching
 - [x] **Three-speed pipeline end-to-end** — Full debounced pipeline: keystroke → tree-sitter (50ms) → FCS with adaptive backoff (300ms, max 2000ms) → affected-test execution. `PipelineDebounce` manages per-stage cancellation tokens, `AdaptiveDebounce` backs off dynamically on FCS cancellations
+- [x] **Source mapping** — `SourceMapping` module bridges tree-sitter source locations (file/line/column) to reflection-discovered tests via function name matching, so gutter markers land on the right line even for Expecto-style hierarchical tests
+- [x] **`run_tests` MCP tool** — On-demand test execution with optional pattern and category filters, integrated into the Elm event loop via `RunTestsRequested`
+- [x] **`toggle_live_testing` MCP tool** — Enable/disable live testing from any MCP client
+- [x] **Daemon startup guard** — All editor plugins (VS Code, Visual Studio, CLI, Raylib GUI) now check for an already-running daemon via HTTP probe before spawning a new instance, preventing duplicate daemons
 
 **What's next:**
 
@@ -417,6 +421,11 @@ The MCP response strategy is also optimized for LLM context windows — echoed c
 | `cancel_eval` | Cancel a running evaluation (recover from infinite loops) |
 | `create_session` | Spin up a new isolated FSI session |
 | `hard_reset_fsi_session` | Rebuild and reload (after source file changes) |
+| `get_live_test_status` | Query live test state with optional file filter |
+| `run_tests` | Run tests on demand with pattern/category filters |
+| `set_run_policy` | Control which test categories auto-run and when |
+| `toggle_live_testing` | Enable/disable the live testing pipeline |
+| `get_pipeline_trace` | Debug the three-speed pipeline waterfall |
 
 [Full tool list →](#mcp-tools-reference)
 
