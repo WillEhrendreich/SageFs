@@ -110,11 +110,11 @@ let run (daemonInfo: DaemonInfo) = task {
   let sseTask =
     DaemonClient.runSseListener
       baseUrl
-      (fun sessionId sessionState evalCount avgMs activeWorkingDir standbyLabel liveTestingStatus regions ->
+      (fun event regions ->
         // Detect session switch by working directory change
-        if activeWorkingDir.Length > 0 && activeWorkingDir <> lastWorkingDir && lastWorkingDir.Length > 0 then
+        if event.ActiveWorkingDir.Length > 0 && event.ActiveWorkingDir <> lastWorkingDir && lastWorkingDir.Length > 0 then
           sessionThemes.[lastWorkingDir] <- currentThemeName
-          match sessionThemes.TryGetValue(activeWorkingDir) with
+          match sessionThemes.TryGetValue(event.ActiveWorkingDir) with
           | true, themeName ->
             match ThemePresets.tryFind themeName with
             | Some theme ->
@@ -122,14 +122,14 @@ let run (daemonInfo: DaemonInfo) = task {
               currentThemeName <- themeName
             | None -> ()
           | false, _ -> ()
-        if activeWorkingDir.Length > 0 then
-          lastWorkingDir <- activeWorkingDir
-        lastSessionId <- sessionId
-        lastSessionState <- sessionState
-        lastEvalCount <- evalCount
-        lastAvgMs <- avgMs
-        lastStandbyLabel <- standbyLabel
-        lastLiveTestingStatus <- liveTestingStatus
+        if event.ActiveWorkingDir.Length > 0 then
+          lastWorkingDir <- event.ActiveWorkingDir
+        lastSessionId <- event.SessionId
+        lastSessionState <- event.SessionState
+        lastEvalCount <- event.EvalCount
+        lastAvgMs <- event.AvgMs
+        lastStandbyLabel <- event.StandbyLabel
+        lastLiveTestingStatus <- event.LiveTestingStatus
         lastRegions <- regions
         render ())
       (fun _ ->

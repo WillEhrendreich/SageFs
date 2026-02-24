@@ -9,21 +9,21 @@ let parseStateEventTests = testList "parseStateEvent" [
     let json = """{"sessionState":"Ready","evalCount":5,"regions":[{"id":"output","content":"hello"},{"id":"editor","content":"code"}]}"""
     let result = parseStateEvent json
     Expect.isSome result "should parse valid JSON"
-    let (sid, state, count, _avgMs, _, _, _, regions) = result.Value
-    Expect.equal sid "" "missing sessionId defaults to empty"
-    Expect.equal state "Ready" "session state"
-    Expect.equal count 5 "eval count"
-    Expect.equal regions.Length 2 "region count"
-    Expect.equal regions.[0].Id "output" "first region id"
-    Expect.equal regions.[0].Content "hello" "first region content"
-    Expect.equal regions.[1].Id "editor" "second region id"
+    let e = result.Value
+    Expect.equal e.SessionId "" "missing sessionId defaults to empty"
+    Expect.equal e.SessionState "Ready" "session state"
+    Expect.equal e.EvalCount 5 "eval count"
+    Expect.equal e.Regions.Length 2 "region count"
+    Expect.equal e.Regions.[0].Id "output" "first region id"
+    Expect.equal e.Regions.[0].Content "hello" "first region content"
+    Expect.equal e.Regions.[1].Id "editor" "second region id"
   }
 
   test "parses region with cursor" {
     let json = """{"sessionState":"Ready","evalCount":0,"regions":[{"id":"editor","content":"abc","cursor":{"line":1,"col":3}}]}"""
     let result = parseStateEvent json
     Expect.isSome result "should parse"
-    let (_, _, _avgMs, _, _, _, _, regions) = result.Value
+    let regions = result.Value.Regions
     Expect.isSome regions.[0].Cursor "should have cursor"
     let cursor = regions.[0].Cursor.Value
     Expect.equal cursor.Line 1 "cursor line"
@@ -34,16 +34,14 @@ let parseStateEventTests = testList "parseStateEvent" [
     let json = """{"sessionState":"Ready","evalCount":0,"regions":[{"id":"editor","content":"abc","cursor":null}]}"""
     let result = parseStateEvent json
     Expect.isSome result "should parse"
-    let (_, _, _avgMs, _, _, _, _, regions) = result.Value
-    Expect.isNone regions.[0].Cursor "null cursor should be None"
+    Expect.isNone result.Value.Regions.[0].Cursor "null cursor should be None"
   }
 
   test "parses region without cursor field" {
     let json = """{"sessionState":"Ready","evalCount":0,"regions":[{"id":"editor","content":"abc"}]}"""
     let result = parseStateEvent json
     Expect.isSome result "should parse"
-    let (_, _, _avgMs, _, _, _, _, regions) = result.Value
-    Expect.isNone regions.[0].Cursor "missing cursor should be None"
+    Expect.isNone result.Value.Regions.[0].Cursor "missing cursor should be None"
   }
 
   test "returns None for invalid JSON" {
@@ -61,20 +59,20 @@ let parseStateEventTests = testList "parseStateEvent" [
     let json = """{"sessionState":"WarmingUp","evalCount":0,"regions":[]}"""
     let result = parseStateEvent json
     Expect.isSome result "should parse empty regions"
-    let (_, state, count, _avgMs, _, _, _, regions) = result.Value
-    Expect.equal state "WarmingUp" "state"
-    Expect.equal count 0 "count"
-    Expect.isEmpty regions "empty regions"
+    let e = result.Value
+    Expect.equal e.SessionState "WarmingUp" "state"
+    Expect.equal e.EvalCount 0 "count"
+    Expect.isEmpty e.Regions "empty regions"
   }
 
   test "parses sessionId when present" {
     let json = """{"sessionId":"session-abc123","sessionState":"Ready","evalCount":3,"regions":[]}"""
     let result = parseStateEvent json
     Expect.isSome result "should parse"
-    let (sid, state, count, _avgMs, _, _, _, _regions) = result.Value
-    Expect.equal sid "session-abc123" "sessionId"
-    Expect.equal state "Ready" "session state"
-    Expect.equal count 3 "eval count"
+    let e = result.Value
+    Expect.equal e.SessionId "session-abc123" "sessionId"
+    Expect.equal e.SessionState "Ready" "session state"
+    Expect.equal e.EvalCount 3 "eval count"
   }
 ]
 

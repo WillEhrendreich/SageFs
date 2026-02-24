@@ -23,11 +23,23 @@ module DaemonRegionData =
       Completions = d.Completions
       LineAnnotations = [||] }
 
+/// State event received from the daemon's /api/state SSE stream.
+type StateEvent = {
+  SessionId: string
+  SessionState: string
+  EvalCount: int
+  AvgMs: float
+  ActiveWorkingDir: string
+  StandbyLabel: string
+  LiveTestingStatus: string
+  Regions: DaemonRegionData list
+}
+
 /// Shared daemon client logic for both TUI and GUI.
 module DaemonClient =
 
   /// Parse the JSON payload from the /api/state SSE stream.
-  let parseStateEvent (json: string) : (string * string * int * float * string * string * string * DaemonRegionData list) option =
+  let parseStateEvent (json: string) : StateEvent option =
     try
       use doc = JsonDocument.Parse(json)
       let root = doc.RootElement
@@ -76,7 +88,16 @@ module DaemonClient =
         match root.TryGetProperty("liveTestingStatus") with
         | true, el -> el.GetString()
         | _ -> ""
-      Some (sessionId, sessionState, evalCount, avgMs, activeWorkingDir, standbyLabel, liveTestingStatus, regions)
+      Some {
+        SessionId = sessionId
+        SessionState = sessionState
+        EvalCount = evalCount
+        AvgMs = avgMs
+        ActiveWorkingDir = activeWorkingDir
+        StandbyLabel = standbyLabel
+        LiveTestingStatus = liveTestingStatus
+        Regions = regions
+      }
     with _ -> None
 
   /// Map an EditorAction to a (name, value) pair for the dispatch API.
@@ -170,8 +191,7 @@ module DaemonClient =
   }
 
   /// Callback invoked when new state arrives from the SSE stream.
-  /// Args: sessionId, sessionState, evalCount, avgMs, activeWorkingDir, standbyLabel, liveTestingStatus, regions
-  type StateCallback = string -> string -> int -> float -> string -> string -> string -> RenderRegion list -> unit
+  type StateCallback = StateEvent -> RenderRegion list -> unit
 
   /// Run SSE listener with auto-reconnect. Calls onState for each update.
   /// Calls onReconnecting when connection drops. Blocks until cancelled.
@@ -196,9 +216,9 @@ module DaemonClient =
           if line.StartsWith("data: ", System.StringComparison.Ordinal) then
             let json = line.Substring(6)
             match parseStateEvent json with
-            | Some (sessionId, sessionState, evalCount, avgMs, activeWorkingDir, standbyLabel, liveTestingStatus, regionData) ->
-              let regions = regionData |> List.map DaemonRegionData.toRenderRegion
-              onState sessionId sessionState evalCount avgMs activeWorkingDir standbyLabel liveTestingStatus regions
+            | Some event ->
+              let regions = event.Regions |> List.map DaemonRegionData.toRenderRegion
+              onState event regions
             | None -> ()
       with
       | :? OperationCanceledException -> ()

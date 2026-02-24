@@ -249,45 +249,41 @@ let parseStateEventThemeTests = testList "parseStateEvent activeWorkingDir" [
     let json = """{"sessionId":"s1","sessionState":"Ready","evalCount":0,"activeWorkingDir":"C:\\Code\\MyProj","regions":[]}"""
     let result = parseStateEvent json
     Expect.isSome result "should parse"
-    let (_, _, _, _, workingDir, _, _, _) = result.Value
-    Expect.equal workingDir @"C:\Code\MyProj" "activeWorkingDir"
+    Expect.equal result.Value.ActiveWorkingDir @"C:\Code\MyProj" "activeWorkingDir"
   }
 
   test "activeWorkingDir defaults to empty when missing" {
     let json = """{"sessionId":"s1","sessionState":"Ready","evalCount":0,"regions":[]}"""
     let result = parseStateEvent json
     Expect.isSome result "should parse"
-    let (_, _, _, _, workingDir, _, _, _) = result.Value
-    Expect.equal workingDir "" "missing activeWorkingDir defaults to empty"
+    Expect.equal result.Value.ActiveWorkingDir "" "missing activeWorkingDir defaults to empty"
   }
 
-  test "all 8 tuple fields parsed correctly" {
+  test "all StateEvent fields parsed correctly" {
     let json = """{"sessionId":"abc","sessionState":"WarmingUp","evalCount":7,"avgMs":42.5,"activeWorkingDir":"C:\\test","regions":[{"id":"out","content":"hi"}]}"""
     let result = parseStateEvent json
     Expect.isSome result "should parse"
-    let (sid, state, count, avgMs, workingDir, _, _, regions) = result.Value
-    Expect.equal sid "abc" "sessionId"
-    Expect.equal state "WarmingUp" "sessionState"
-    Expect.equal count 7 "evalCount"
-    Expect.floatClose Accuracy.medium avgMs 42.5 "avgMs"
-    Expect.equal workingDir @"C:\test" "activeWorkingDir"
-    Expect.equal regions.Length 1 "region count"
+    let e = result.Value
+    Expect.equal e.SessionId "abc" "sessionId"
+    Expect.equal e.SessionState "WarmingUp" "sessionState"
+    Expect.equal e.EvalCount 7 "evalCount"
+    Expect.floatClose Accuracy.medium e.AvgMs 42.5 "avgMs"
+    Expect.equal e.ActiveWorkingDir @"C:\test" "activeWorkingDir"
+    Expect.equal e.Regions.Length 1 "region count"
   }
 
   test "activeWorkingDir with forward slashes" {
     let json = """{"sessionState":"Ready","evalCount":0,"activeWorkingDir":"/home/user/project","regions":[]}"""
     let result = parseStateEvent json
     Expect.isSome result "should parse"
-    let (_, _, _, _, workingDir, _, _, _) = result.Value
-    Expect.equal workingDir "/home/user/project" "unix-style path"
+    Expect.equal result.Value.ActiveWorkingDir "/home/user/project" "unix-style path"
   }
 
   test "activeWorkingDir with spaces in path" {
     let json = """{"sessionState":"Ready","evalCount":0,"activeWorkingDir":"C:\\My Projects\\Cool App","regions":[]}"""
     let result = parseStateEvent json
     Expect.isSome result "should parse"
-    let (_, _, _, _, workingDir, _, _, _) = result.Value
-    Expect.equal workingDir @"C:\My Projects\Cool App" "path with spaces"
+    Expect.equal result.Value.ActiveWorkingDir @"C:\My Projects\Cool App" "path with spaces"
   }
 ]
 
