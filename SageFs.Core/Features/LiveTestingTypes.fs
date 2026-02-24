@@ -863,12 +863,11 @@ module PipelineDebounce =
   }
 
   let treeSitterDelayMs = 50
-  let fcsDelayMs = 300
 
-  let onKeystroke (content: string) (filePath: string) (now: DateTimeOffset) (db: PipelineDebounce) =
+  let onKeystroke (content: string) (filePath: string) (fcsDelay: int) (now: DateTimeOffset) (db: PipelineDebounce) =
     { db with
         TreeSitter = db.TreeSitter |> DebounceChannel.submit content treeSitterDelayMs now
-        Fcs = db.Fcs |> DebounceChannel.submit filePath fcsDelayMs now }
+        Fcs = db.Fcs |> DebounceChannel.submit filePath fcsDelay now }
 
   let onFileSave (filePath: string) (now: DateTimeOffset) (db: PipelineDebounce) =
     { db with
@@ -1077,6 +1076,7 @@ type LiveTestPipelineState = {
   LastTreeSitterResult: SourceTestLocation array option
   AnalysisCache: FileAnalysisCache
   AdaptiveDebounce: AdaptiveDebounce
+  LastTrigger: RunTrigger
 }
 
 module LiveTestPipelineState =
@@ -1089,15 +1089,20 @@ module LiveTestPipelineState =
     LastTreeSitterResult = None
     AnalysisCache = FileAnalysisCache.empty
     AdaptiveDebounce = AdaptiveDebounce.createDefault()
+    LastTrigger = RunTrigger.Keystroke
   }
 
+  let currentFcsDelay (s: LiveTestPipelineState) =
+    AdaptiveDebounce.currentFcsDelay s.AdaptiveDebounce
+
   let onKeystroke (content: string) (filePath: string) (now: DateTimeOffset) (s: LiveTestPipelineState) =
-    let db = s.Debounce |> PipelineDebounce.onKeystroke content filePath now
-    { s with Debounce = db; ActiveFile = Some filePath }
+    let fcsDelay = int (currentFcsDelay s)
+    let db = s.Debounce |> PipelineDebounce.onKeystroke content filePath fcsDelay now
+    { s with Debounce = db; ActiveFile = Some filePath; LastTrigger = RunTrigger.Keystroke }
 
   let onFileSave (filePath: string) (now: DateTimeOffset) (s: LiveTestPipelineState) =
     let db = s.Debounce |> PipelineDebounce.onFileSave filePath now
-    { s with Debounce = db; ActiveFile = Some filePath }
+    { s with Debounce = db; ActiveFile = Some filePath; LastTrigger = RunTrigger.FileSave }
 
   let onFcsComplete (filePath: string) (refs: SymbolReference list) (s: LiveTestPipelineState) =
     let changes, newCache = FileAnalysisCache.update filePath refs s.AnalysisCache
@@ -1111,9 +1116,6 @@ module LiveTestPipelineState =
 
   let onFcsCanceled (s: LiveTestPipelineState) =
     { s with AdaptiveDebounce = AdaptiveDebounce.onFcsCanceled s.AdaptiveDebounce }
-
-  let currentFcsDelay (s: LiveTestPipelineState) =
-    AdaptiveDebounce.currentFcsDelay s.AdaptiveDebounce
 
   /// Ticks the debounce channels and produces pipeline effects.
   /// Returns (effects, updatedState).
@@ -1139,7 +1141,7 @@ module LiveTestPipelineState =
     match result with
     | FcsTypeCheckResult.Success (filePath, refs) ->
       let s1 = onFcsComplete filePath refs s
-      let trigger = RunTrigger.Keystroke
+      let trigger = s.LastTrigger
       let effect = PipelineEffects.afterTypeCheck s1.ChangedSymbols trigger s1.DepGraph s1.TestState
       let effects = effect |> Option.toList
       effects, s1

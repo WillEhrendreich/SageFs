@@ -1939,7 +1939,7 @@ let pipelineDebounceTests = testList "PipelineDebounce" [
   }
 
   test "onKeystroke submits to both channels" {
-    let db = PipelineDebounce.empty |> PipelineDebounce.onKeystroke "code" "file.fs" t0
+    let db = PipelineDebounce.empty |> PipelineDebounce.onKeystroke "code" "file.fs" 300 t0
     db.TreeSitter.Pending |> Expect.isSome "tree-sitter pending"
     db.Fcs.Pending |> Expect.isSome "fcs pending"
     db.TreeSitter.Pending.Value.DelayMs |> Expect.equal "ts delay" 50
@@ -1947,14 +1947,14 @@ let pipelineDebounceTests = testList "PipelineDebounce" [
   }
 
   test "tree-sitter fires before FCS" {
-    let db = PipelineDebounce.empty |> PipelineDebounce.onKeystroke "code" "file.fs" t0
+    let db = PipelineDebounce.empty |> PipelineDebounce.onKeystroke "code" "file.fs" 300 t0
     let (tsResult, fcsResult), _ = PipelineDebounce.tick (t0.AddMilliseconds 51.0) db
     tsResult |> Expect.isSome "tree-sitter fires"
     fcsResult |> Expect.isNone "fcs not yet"
   }
 
   test "both fire after 300ms" {
-    let db = PipelineDebounce.empty |> PipelineDebounce.onKeystroke "code" "file.fs" t0
+    let db = PipelineDebounce.empty |> PipelineDebounce.onKeystroke "code" "file.fs" 300 t0
     let (tsResult, fcsResult), _ = PipelineDebounce.tick (t0.AddMilliseconds 301.0) db
     tsResult |> Expect.isSome "tree-sitter fires"
     fcsResult |> Expect.isSome "fcs fires"
@@ -1963,9 +1963,9 @@ let pipelineDebounceTests = testList "PipelineDebounce" [
   test "rapid keystrokes cancel previous debounce" {
     let db =
       PipelineDebounce.empty
-      |> PipelineDebounce.onKeystroke "v1" "file.fs" t0
-      |> PipelineDebounce.onKeystroke "v2" "file.fs" (t0.AddMilliseconds 30.0)
-      |> PipelineDebounce.onKeystroke "v3" "file.fs" (t0.AddMilliseconds 60.0)
+      |> PipelineDebounce.onKeystroke "v1" "file.fs" 300 t0
+      |> PipelineDebounce.onKeystroke "v2" "file.fs" 300 (t0.AddMilliseconds 30.0)
+      |> PipelineDebounce.onKeystroke "v3" "file.fs" 300 (t0.AddMilliseconds 60.0)
     let (tsResult, _), _ = PipelineDebounce.tick (t0.AddMilliseconds 111.0) db
     tsResult |> Expect.isSome "fires for latest"
     tsResult.Value |> Expect.equal "latest content" "v3"
@@ -1974,7 +1974,7 @@ let pipelineDebounceTests = testList "PipelineDebounce" [
   test "onFileSave uses short FCS delay" {
     let db =
       PipelineDebounce.empty
-      |> PipelineDebounce.onKeystroke "code" "file.fs" t0
+      |> PipelineDebounce.onKeystroke "code" "file.fs" 300 t0
       |> PipelineDebounce.onFileSave "file.fs" (t0.AddMilliseconds 100.0)
     db.Fcs.Pending.Value.DelayMs |> Expect.equal "save uses short delay" 50
     let (_, fcsResult), _ = PipelineDebounce.tick (t0.AddMilliseconds 151.0) db
@@ -1982,7 +1982,7 @@ let pipelineDebounceTests = testList "PipelineDebounce" [
   }
 
   test "tick clears fired ops" {
-    let db = PipelineDebounce.empty |> PipelineDebounce.onKeystroke "code" "file.fs" t0
+    let db = PipelineDebounce.empty |> PipelineDebounce.onKeystroke "code" "file.fs" 300 t0
     let _, db' = PipelineDebounce.tick (t0.AddMilliseconds 301.0) db
     db'.TreeSitter.Pending |> Expect.isNone "ts cleared"
     db'.Fcs.Pending |> Expect.isNone "fcs cleared"
@@ -3268,5 +3268,106 @@ let fcsTypeCheckResultTests = testList "FcsTypeCheckResult" [
     effects |> Expect.isEmpty "no effects on failure"
     model'.LiveTesting.DepGraph.SymbolToTests
     |> Expect.isEmpty "dep graph unchanged"
+  }
+]
+
+let triggerWiringTests = testList "RunTrigger wiring" [
+  test "onFileSave sets LastTrigger to FileSave" {
+    let now = DateTimeOffset.UtcNow
+    let s = LiveTestPipelineState.empty |> LiveTestPipelineState.onFileSave "f.fs" now
+    s.LastTrigger |> Expect.equal "trigger is FileSave" RunTrigger.FileSave
+  }
+
+  test "onKeystroke sets LastTrigger to Keystroke" {
+    let now = DateTimeOffset.UtcNow
+    let s = LiveTestPipelineState.empty |> LiveTestPipelineState.onKeystroke "x" "f.fs" now
+    s.LastTrigger |> Expect.equal "trigger is Keystroke" RunTrigger.Keystroke
+  }
+
+  test "handleFcsResult uses stored FileSave trigger for OnSaveOnly tests" {
+    let tc = mkTestCase "Arch.test" "expecto" TestCategory.Architecture
+    let refs = [
+      { SymbolReference.SymbolFullName = "Lib.check"
+        UsedInTestId = Some tc.Id
+        FilePath = "Test.fs"; Line = 5 }
+    ]
+    let now = DateTimeOffset.UtcNow
+    let s0 = {
+      LiveTestPipelineState.empty with
+        TestState = { LiveTestState.empty with
+                        DiscoveredTests = [| tc |]
+                        RunPolicies = RunPolicyDefaults.defaults }
+    }
+    let s1 = s0 |> LiveTestPipelineState.onFileSave "Test.fs" now
+    let effects, _ =
+      LiveTestPipelineState.handleFcsResult (FcsTypeCheckResult.Success ("Test.fs", refs)) s1
+    effects
+    |> List.exists (fun e -> match e with PipelineEffect.RunAffectedTests _ -> true | _ -> false)
+    |> Expect.isTrue "OnSaveOnly test runs with FileSave trigger"
+  }
+
+  test "handleFcsResult with Keystroke trigger filters out OnSaveOnly tests" {
+    let tc = mkTestCase "Arch.test" "expecto" TestCategory.Architecture
+    let refs = [
+      { SymbolReference.SymbolFullName = "Lib.check"
+        UsedInTestId = Some tc.Id
+        FilePath = "Test.fs"; Line = 5 }
+    ]
+    let now = DateTimeOffset.UtcNow
+    let s0 = {
+      LiveTestPipelineState.empty with
+        TestState = { LiveTestState.empty with
+                        DiscoveredTests = [| tc |]
+                        RunPolicies = RunPolicyDefaults.defaults }
+    }
+    let s1 = s0 |> LiveTestPipelineState.onKeystroke "let x = 1" "Test.fs" now
+    let effects, _ =
+      LiveTestPipelineState.handleFcsResult (FcsTypeCheckResult.Success ("Test.fs", refs)) s1
+    effects
+    |> Expect.isEmpty "OnSaveOnly test filtered out on Keystroke"
+  }
+]
+
+let adaptiveDebounceWiringTests = testList "adaptive debounce wiring" [
+  test "onKeystroke uses adaptive FCS delay after cancellations" {
+    let now = DateTimeOffset.UtcNow
+    let s0 = LiveTestPipelineState.empty
+    let s1 = s0 |> LiveTestPipelineState.onFcsCanceled
+    let s2 = s1 |> LiveTestPipelineState.onFcsCanceled
+    let s3 = s2 |> LiveTestPipelineState.onFcsCanceled
+    let expectedDelay = int (300.0 * 1.5 * 1.5 * 1.5)
+    let s4 = s3 |> LiveTestPipelineState.onKeystroke "let x = 1" "Test.fs" now
+    match s4.Debounce.Fcs.Pending with
+    | Some p ->
+      p.DelayMs |> Expect.equal "FCS delay reflects adaptive backoff" expectedDelay
+    | None -> failtest "FCS debounce should have a pending entry"
+  }
+
+  test "onKeystroke uses base delay with no cancellations" {
+    let now = DateTimeOffset.UtcNow
+    let s = LiveTestPipelineState.empty |> LiveTestPipelineState.onKeystroke "x" "f.fs" now
+    match s.Debounce.Fcs.Pending with
+    | Some p ->
+      p.DelayMs |> Expect.equal "base FCS delay" 300
+    | None -> failtest "FCS debounce should have a pending entry"
+  }
+
+  test "adaptive delay resets after consecutive successes" {
+    let now = DateTimeOffset.UtcNow
+    let s0 = LiveTestPipelineState.empty
+    // Cancel to raise delay
+    let s1 = s0 |> LiveTestPipelineState.onFcsCanceled
+    (LiveTestPipelineState.currentFcsDelay s1, 300.0)
+    |> Expect.isGreaterThan "delay raised"
+    // Reset via consecutive successes
+    let mutable s = s1
+    for _ in 1 .. s.AdaptiveDebounce.Config.ResetAfterSuccessCount do
+      let _, sn = LiveTestPipelineState.handleFcsResult (FcsTypeCheckResult.Success ("f.fs", [])) s
+      s <- sn
+    let s2 = s |> LiveTestPipelineState.onKeystroke "x" "f.fs" now
+    match s2.Debounce.Fcs.Pending with
+    | Some p ->
+      p.DelayMs |> Expect.equal "delay reset to base after successes" 300
+    | None -> failtest "FCS debounce should have pending"
   }
 ]
