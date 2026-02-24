@@ -274,3 +274,41 @@ Use list_sessions to see available session IDs.""")>]
     member _.get_elm_state() : Task<string> =
         logger.LogDebug("MCP-TOOL: get_elm_state called")
         getElmState ctx |> withEcho "get_elm_state"
+
+    // ── Live Testing Tools ──────────────────────────────────────
+
+    [<McpServerTool>]
+    [<Description("""Get current live test status. Returns JSON with enabled state, summary (total/passed/failed/stale/running), and per-test status entries.
+Supports optional file filter to get only tests from a specific source file.""")>]
+    member _.get_live_test_status(
+        [<Description("Optional file path to filter tests by source file.")>]
+        file: string
+    ) : Task<string> =
+        let filter = if System.String.IsNullOrWhiteSpace file then None else Some file
+        logger.LogDebug("MCP-TOOL: get_live_test_status called, file={File}", file)
+        getLiveTestStatus ctx filter |> withEcho "get_live_test_status"
+
+    [<McpServerTool>]
+    [<Description("Toggle live testing on or off. When enabled, tests run automatically after hot reload.")>]
+    member _.toggle_live_testing() : Task<string> =
+        logger.LogDebug("MCP-TOOL: toggle_live_testing called")
+        toggleLiveTesting ctx None |> withEcho "toggle_live_testing"
+
+    [<McpServerTool>]
+    [<Description("""Set run policy for a test category. Controls when tests in that category auto-run.
+Categories: unit, integration, browser, benchmark, architecture, property.
+Policies: every (on every change), save (on file save only), demand (manual trigger only), disabled (never run).""")>]
+    member _.set_run_policy(
+        [<Description("Test category: unit, integration, browser, benchmark, architecture, property")>]
+        category: string,
+        [<Description("Run policy: every, save, demand, disabled")>]
+        policy: string
+    ) : Task<string> =
+        logger.LogDebug("MCP-TOOL: set_run_policy called: category={Category}, policy={Policy}", category, policy)
+        setRunPolicy ctx category policy |> withEcho "set_run_policy"
+
+    [<McpServerTool>]
+    [<Description("Get pipeline trace information: enabled state, running status, provider list, run policies, and test summary.")>]
+    member _.get_pipeline_trace() : Task<string> =
+        logger.LogDebug("MCP-TOOL: get_pipeline_trace called")
+        getPipelineTrace ctx |> withEcho "get_pipeline_trace"

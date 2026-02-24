@@ -1198,3 +1198,98 @@ module McpTools =
               else sprintf "%s\n%s" header r.Content)
             |> String.concat "\n\n"
     }
+
+  // ── Live Testing MCP Tools ──────────────────────────────────
+
+  let private liveTestJsonOpts =
+    let o = JsonSerializerOptions(WriteIndented = false)
+    o.Converters.Add(JsonFSharpConverter())
+    o
+
+  let getLiveTestStatus (ctx: McpContext) (fileFilter: string option) : Task<string> =
+    task {
+      match ctx.GetElmModel with
+      | None -> return "Live testing not available — Elm loop not started."
+      | Some getModel ->
+        let model = getModel ()
+        let state = model.LiveTesting
+        let summary =
+          Features.LiveTesting.TestSummary.fromStatuses
+            (state.StatusEntries |> Array.map (fun e -> e.Status))
+        let tests =
+          match fileFilter with
+          | Some f ->
+            state.StatusEntries |> Array.filter (fun e ->
+              match e.Origin with
+              | Features.LiveTesting.TestOrigin.SourceMapped (file, _) -> file = f
+              | Features.LiveTesting.TestOrigin.ReflectionOnly -> false)
+          | None -> state.StatusEntries
+        let resp = {| Enabled = state.Enabled; Summary = summary; Tests = tests |}
+        return JsonSerializer.Serialize(resp, liveTestJsonOpts)
+    }
+
+  let toggleLiveTesting (ctx: McpContext) (enabled: bool option) : Task<string> =
+    task {
+      match ctx.Dispatch with
+      | None -> return "Cannot toggle — Elm loop not started."
+      | Some dispatch ->
+        dispatch (SageFsMsg.ToggleLiveTesting)
+        match ctx.GetElmModel with
+        | Some getModel ->
+          let state = (getModel ()).LiveTesting
+          return sprintf "Live testing %s." (if state.Enabled then "enabled" else "disabled")
+        | None ->
+          return "Toggled. State unavailable."
+    }
+
+  let setRunPolicy (ctx: McpContext) (category: string) (policy: string) : Task<string> =
+    let cat =
+      match category.ToLowerInvariant() with
+      | "unit" -> Some Features.LiveTesting.TestCategory.Unit
+      | "integration" -> Some Features.LiveTesting.TestCategory.Integration
+      | "browser" -> Some Features.LiveTesting.TestCategory.Browser
+      | "benchmark" -> Some Features.LiveTesting.TestCategory.Benchmark
+      | "architecture" -> Some Features.LiveTesting.TestCategory.Architecture
+      | "property" -> Some Features.LiveTesting.TestCategory.Property
+      | _ -> None
+    let pol =
+      match policy.ToLowerInvariant() with
+      | "oneverychange" | "every" -> Some Features.LiveTesting.RunPolicy.OnEveryChange
+      | "onsaveonly" | "save" -> Some Features.LiveTesting.RunPolicy.OnSaveOnly
+      | "ondemand" | "demand" -> Some Features.LiveTesting.RunPolicy.OnDemand
+      | "disabled" | "off" -> Some Features.LiveTesting.RunPolicy.Disabled
+      | _ -> None
+    task {
+      match ctx.Dispatch with
+      | None -> return "Cannot set policy — Elm loop not started."
+      | Some dispatch ->
+        match cat, pol with
+        | Some c, Some p ->
+          dispatch (SageFsMsg.Event (SageFsEvent.RunPolicyChanged (c, p)))
+          return sprintf "Set %s policy to %A." category p
+        | None, _ -> return sprintf "Unknown category: %s. Valid: unit, integration, browser, benchmark, architecture, property." category
+        | _, None -> return sprintf "Unknown policy: %s. Valid: every, save, demand, disabled." policy
+    }
+
+  let getPipelineTrace (ctx: McpContext) : Task<string> =
+    task {
+      match ctx.GetElmModel with
+      | None -> return "Pipeline trace not available — Elm loop not started."
+      | Some getModel ->
+        let state = (getModel ()).LiveTesting
+        let summary =
+          Features.LiveTesting.TestSummary.fromStatuses
+            (state.StatusEntries |> Array.map (fun e -> e.Status))
+        let resp = {|
+          Enabled = state.Enabled
+          IsRunning = state.IsRunning
+          History = state.History
+          Summary = summary
+          Providers = state.DetectedProviders |> List.map (fun p ->
+            match p with
+            | Features.LiveTesting.ProviderDescription.AttributeBased a -> a.Name
+            | Features.LiveTesting.ProviderDescription.Custom c -> c.Name)
+          Policies = state.RunPolicies |> Map.toList |> List.map (fun (c, p) -> sprintf "%A: %A" c p)
+        |}
+        return JsonSerializer.Serialize(resp, liveTestJsonOpts)
+    }

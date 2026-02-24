@@ -37,6 +37,10 @@ type PushEvent =
   | SessionFaulted of error: string
   /// Warmup completed.
   | WarmupCompleted
+  /// Test summary changed — carries totals.
+  | TestSummaryChanged of total: int * passed: int * failed: int * stale: int * running: int
+  /// Test results batch — carries count of results.
+  | TestResultsBatch of count: int
 
 /// Whether an event REPLACES the previous instance of the same kind
 /// (state/set semantics) or ACCUMULATES alongside it (delta/list semantics).
@@ -51,6 +55,8 @@ module PushEvent =
     | PushEvent.SessionFaulted _ -> MergeStrategy.Replace
     | PushEvent.FileReloaded _ -> MergeStrategy.Accumulate
     | PushEvent.WarmupCompleted -> MergeStrategy.Replace
+    | PushEvent.TestSummaryChanged _ -> MergeStrategy.Replace
+    | PushEvent.TestResultsBatch _ -> MergeStrategy.Replace
 
   /// Discriminator tag used for Replace dedup.
   let tag = function
@@ -59,6 +65,8 @@ module PushEvent =
     | PushEvent.FileReloaded _ -> 2
     | PushEvent.SessionFaulted _ -> 3
     | PushEvent.WarmupCompleted -> 4
+    | PushEvent.TestSummaryChanged _ -> 5
+    | PushEvent.TestResultsBatch _ -> 6
 
   /// Format a single event for LLM consumption — actionable, concise.
   let formatForLlm = function
@@ -83,6 +91,10 @@ module PushEvent =
       sprintf "🔴 session faulted: %s" error
     | PushEvent.WarmupCompleted ->
       "✓ warmup complete"
+    | PushEvent.TestSummaryChanged (total, passed, failed, stale, running) ->
+      sprintf "🧪 tests: %d total, %d passed, %d failed, %d stale, %d running" total passed failed stale running
+    | PushEvent.TestResultsBatch count ->
+      sprintf "🧪 %d test result(s) received" count
 
 type AccumulatedEvent = {
   Timestamp: DateTimeOffset
@@ -687,6 +699,18 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                         serverTracker.AccumulateEvent(
                           PushEvent.DiagnosticsChanged errors)
                       | None -> ()
+
+                    // Push live testing summary when test state changes
+                    match getElmModel with
+                    | Some getModel ->
+                      let model = getModel()
+                      let lt = model.LiveTesting
+                      if lt.StatusEntries.Length > 0 || lt.IsRunning then
+                        let s = SageFs.Features.LiveTesting.TestSummary.fromStatuses
+                                  (lt.StatusEntries |> Array.map (fun e -> e.Status))
+                        serverTracker.AccumulateEvent(
+                          PushEvent.TestSummaryChanged(s.Total, s.Passed, s.Failed, s.Stale, s.Running))
+                    | None -> ()
 
                     if serverTracker.Count > 0 then
                       let data =
