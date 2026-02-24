@@ -9,6 +9,32 @@ open SageFs.Features.LiveTesting
 
 // --- Test Helpers ---
 
+/// Resolve path to a project output DLL. In SageFs FSI the test DLL is shadow-copied,
+/// so BaseDirectory points to the tool store, not the test bin.  Fall back to the known
+/// project output directory when the DLL isn't beside the tool executable.
+let resolveTestDll (dllName: string) =
+  let basePath = System.IO.Path.Combine(System.AppDomain.CurrentDomain.BaseDirectory, dllName)
+  if System.IO.File.Exists basePath then basePath
+  else
+    let projBinPath =
+      System.IO.Path.Combine(
+        System.IO.Path.GetDirectoryName(
+          System.IO.Path.GetDirectoryName(
+            System.IO.Path.GetDirectoryName(
+              System.IO.Path.GetDirectoryName(
+                System.IO.Path.GetDirectoryName(
+                  System.AppDomain.CurrentDomain.BaseDirectory))))),
+        "SageFs.Tests", "bin", "Debug", "net10.0", dllName)
+    if System.IO.File.Exists projBinPath then projBinPath
+    else
+      // Last resort: find it among loaded assemblies
+      System.AppDomain.CurrentDomain.GetAssemblies()
+      |> Array.tryFind (fun a ->
+        not (System.String.IsNullOrEmpty a.Location)
+        && System.IO.Path.GetFileName(a.Location) = dllName)
+      |> Option.map (fun a -> a.Location)
+      |> Option.defaultValue basePath
+
 let mkTestId name fw = TestId.create name fw
 let ts (ms: float) = TimeSpan.FromMilliseconds ms
 
@@ -4461,10 +4487,7 @@ let perFileMergeTests = testList "per-file merge correctness" [
 [<Tests>]
 let projectAssemblyDiscoveryTests = testList "Project assembly initial discovery" [
   test "afterReload on SageFs.Tests assembly discovers tests" {
-    let asm = System.Reflection.Assembly.LoadFrom(
-      System.IO.Path.Combine(
-        System.AppDomain.CurrentDomain.BaseDirectory,
-        "SageFs.Tests.dll"))
+    let asm = System.Reflection.Assembly.LoadFrom(resolveTestDll "SageFs.Tests.dll")
     let result = LiveTestingHook.afterReload BuiltInExecutors.builtIn asm []
     Expect.isGreaterThan
       "should discover at least 100 tests"
@@ -4472,10 +4495,7 @@ let projectAssemblyDiscoveryTests = testList "Project assembly initial discovery
   }
 
   test "afterReload detects expecto provider from test assembly" {
-    let asm = System.Reflection.Assembly.LoadFrom(
-      System.IO.Path.Combine(
-        System.AppDomain.CurrentDomain.BaseDirectory,
-        "SageFs.Tests.dll"))
+    let asm = System.Reflection.Assembly.LoadFrom(resolveTestDll "SageFs.Tests.dll")
     let result = LiveTestingHook.afterReload BuiltInExecutors.builtIn asm []
     result.DetectedProviders
     |> List.exists (fun p ->
@@ -4486,10 +4506,7 @@ let projectAssemblyDiscoveryTests = testList "Project assembly initial discovery
   }
 
   test "all discovered tests have framework=expecto" {
-    let asm = System.Reflection.Assembly.LoadFrom(
-      System.IO.Path.Combine(
-        System.AppDomain.CurrentDomain.BaseDirectory,
-        "SageFs.Tests.dll"))
+    let asm = System.Reflection.Assembly.LoadFrom(resolveTestDll "SageFs.Tests.dll")
     let result = LiveTestingHook.afterReload BuiltInExecutors.builtIn asm []
     result.DiscoveredTests
     |> Array.iter (fun t ->
