@@ -2107,6 +2107,16 @@ let cancellationChainTests = testList "CancellationChain" [
     use chain = new CancellationChain()
     (chain.currentToken = System.Threading.CancellationToken.None) |> Expect.isTrue "none token"
   }
+  test "old token accessible after next without ObjectDisposedException" {
+    let chain = new CancellationChain()
+    let t1 = chain.next()
+    let _t2 = chain.next()
+    // Old token must remain accessible — Register should not throw
+    t1.IsCancellationRequested |> Expect.isTrue "t1 cancelled"
+    let _reg = t1.Register(fun () -> ())
+    Expect.isTrue "Register on old token should not throw" true
+    chain.dispose()
+  }
 ]
 
 // --- Phase 4: Pipeline Integration Tests ---

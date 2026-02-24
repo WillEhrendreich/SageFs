@@ -556,7 +556,8 @@ type CancellationChain() =
     match current with
     | Some cts ->
       cts.Cancel()
-      cts.Dispose()
+      // Don't dispose here — mid-flight async code may still reference the token.
+      // Let GC collect cancelled CTS instances. dispose() handles orderly shutdown.
     | None -> ()
     let fresh = new System.Threading.CancellationTokenSource()
     current <- Some fresh
