@@ -162,6 +162,18 @@ type ProviderDescription =
   | AttributeBased of AttributeProviderDescription
   | Custom of CustomProviderDescription
 
+// --- FCS Symbol Extraction (IO boundary) ---
+
+/// Extracted symbol use — pure data, no FCS dependency.
+/// This is the bridge between FCS (IO) and the pure dependency graph builder.
+type ExtractedSymbolUse = {
+  FullName: string
+  DisplayName: string
+  IsFromDefinition: bool
+  StartLine: int
+  EndLine: int
+}
+
 // --- Dependency Graph ---
 
 type TestDependencyGraph = {
@@ -497,6 +509,50 @@ module TestDependencyGraph =
     result
     |> Seq.map (fun kvp -> kvp.Key, kvp.Value |> Seq.toArray)
     |> Map.ofSeq
+
+  /// Build a direct dependency graph from extracted FCS symbol uses.
+  /// `testModuleIdentifier` (e.g. ".Tests.") identifies test function namespaces.
+  /// Returns an inverted index: production symbol → test IDs that reference it.
+  let buildFromSymbolUses
+    (testModuleIdentifier: string)
+    (uses: ExtractedSymbolUse array)
+    : TestDependencyGraph =
+    let testDefs =
+      uses
+      |> Array.filter (fun u ->
+        u.IsFromDefinition
+        && u.FullName.Contains(testModuleIdentifier)
+        && not (u.FullName.EndsWith(testModuleIdentifier)))
+      |> Array.sortBy (fun t -> t.StartLine)
+    let testRanges =
+      [| for i in 0 .. testDefs.Length - 1 do
+           let endLine =
+             if i < testDefs.Length - 1 then testDefs.[i + 1].StartLine - 1
+             else System.Int32.MaxValue
+           yield testDefs.[i], testDefs.[i].StartLine, endLine |]
+    let nonDefUses =
+      uses
+      |> Array.filter (fun u ->
+        not u.IsFromDefinition
+        && not (u.FullName.StartsWith("Microsoft.FSharp"))
+        && u.FullName.Contains("."))
+    let invertedIndex =
+      [| for (testDef, startLine, endLine) in testRanges do
+           let testId = TestId.create testDef.FullName "expecto"
+           let refs =
+             nonDefUses
+             |> Array.filter (fun u ->
+               u.StartLine >= startLine
+               && u.StartLine <= endLine
+               && not (u.FullName.Contains(testModuleIdentifier)))
+           for s in refs do
+             yield s.FullName, testId |]
+      |> Array.groupBy fst
+      |> Array.map (fun (sym, pairs) -> sym, pairs |> Array.map snd |> Array.distinct)
+      |> Map.ofArray
+    { SymbolToTests = invertedIndex
+      TransitiveCoverage = invertedIndex
+      SourceVersion = 1 }
 
 module LiveTesting =
   let filterByPolicy

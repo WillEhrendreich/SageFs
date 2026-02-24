@@ -4036,3 +4036,151 @@ let pipelineBenchmarkTests = testList "Pipeline Core Benchmark" [
     (p95, 20.0) |> Expect.isLessThan "p95 under 20ms"
   }
 ]
+
+// --- FCS Dependency Graph Integration Tests ---
+
+[<Tests>]
+let fcsGraphTests = testList "FCS dependency graph builder" [
+
+  test "builds inverted index from symbol uses" {
+    let uses = [|
+      { FullName = "MyApp.Math.add"; DisplayName = "add"; IsFromDefinition = true; StartLine = 2; EndLine = 2 }
+      { FullName = "MyApp.Math.multiply"; DisplayName = "multiply"; IsFromDefinition = true; StartLine = 3; EndLine = 3 }
+      { FullName = "MyApp.Tests.addTest"; DisplayName = "addTest"; IsFromDefinition = true; StartLine = 5; EndLine = 5 }
+      { FullName = "MyApp.Tests.mulTest"; DisplayName = "mulTest"; IsFromDefinition = true; StartLine = 7; EndLine = 7 }
+      { FullName = "MyApp.Math.add"; DisplayName = "add"; IsFromDefinition = false; StartLine = 5; EndLine = 5 }
+      { FullName = "MyApp.Math.multiply"; DisplayName = "multiply"; IsFromDefinition = false; StartLine = 7; EndLine = 7 }
+    |]
+    let graph = TestDependencyGraph.buildFromSymbolUses ".Tests." uses
+    graph.SymbolToTests.Count
+    |> Expect.equal "should have 2 production symbols" 2
+    let addAffected = TestDependencyGraph.findAffected ["MyApp.Math.add"] graph
+    addAffected.Length
+    |> Expect.equal "add should affect 1 test" 1
+    let mulAffected = TestDependencyGraph.findAffected ["MyApp.Math.multiply"] graph
+    mulAffected.Length
+    |> Expect.equal "multiply should affect 1 test" 1
+  }
+
+  test "test calling multiple production functions maps to all" {
+    let uses = [|
+      { FullName = "MyApp.Math.add"; DisplayName = "add"; IsFromDefinition = true; StartLine = 2; EndLine = 2 }
+      { FullName = "MyApp.Math.multiply"; DisplayName = "multiply"; IsFromDefinition = true; StartLine = 3; EndLine = 3 }
+      { FullName = "MyApp.Tests.combinedTest"; DisplayName = "combinedTest"; IsFromDefinition = true; StartLine = 5; EndLine = 5 }
+      { FullName = "MyApp.Math.add"; DisplayName = "add"; IsFromDefinition = false; StartLine = 6; EndLine = 6 }
+      { FullName = "MyApp.Math.multiply"; DisplayName = "multiply"; IsFromDefinition = false; StartLine = 7; EndLine = 7 }
+    |]
+    let graph = TestDependencyGraph.buildFromSymbolUses ".Tests." uses
+    let combinedId = TestId.create "MyApp.Tests.combinedTest" "expecto"
+    TestDependencyGraph.findAffected ["MyApp.Math.add"] graph
+    |> Array.contains combinedId
+    |> Expect.isTrue "add should affect combinedTest"
+    TestDependencyGraph.findAffected ["MyApp.Math.multiply"] graph
+    |> Array.contains combinedId
+    |> Expect.isTrue "multiply should affect combinedTest"
+  }
+
+  test "unused production symbol has no affected tests" {
+    let uses = [|
+      { FullName = "MyApp.Math.unused"; DisplayName = "unused"; IsFromDefinition = true; StartLine = 2; EndLine = 2 }
+      { FullName = "MyApp.Tests.someTest"; DisplayName = "someTest"; IsFromDefinition = true; StartLine = 5; EndLine = 5 }
+    |]
+    let graph = TestDependencyGraph.buildFromSymbolUses ".Tests." uses
+    TestDependencyGraph.findAffected ["MyApp.Math.unused"] graph
+    |> Array.length
+    |> Expect.equal "unused should affect 0 tests" 0
+  }
+
+  test "multiple changed symbols finds union of affected tests" {
+    let uses = [|
+      { FullName = "MyApp.Math.add"; DisplayName = "add"; IsFromDefinition = true; StartLine = 2; EndLine = 2 }
+      { FullName = "MyApp.Math.sub"; DisplayName = "sub"; IsFromDefinition = true; StartLine = 3; EndLine = 3 }
+      { FullName = "MyApp.Tests.addTest"; DisplayName = "addTest"; IsFromDefinition = true; StartLine = 5; EndLine = 5 }
+      { FullName = "MyApp.Tests.subTest"; DisplayName = "subTest"; IsFromDefinition = true; StartLine = 8; EndLine = 8 }
+      { FullName = "MyApp.Math.add"; DisplayName = "add"; IsFromDefinition = false; StartLine = 6; EndLine = 6 }
+      { FullName = "MyApp.Math.sub"; DisplayName = "sub"; IsFromDefinition = false; StartLine = 9; EndLine = 9 }
+    |]
+    let graph = TestDependencyGraph.buildFromSymbolUses ".Tests." uses
+    TestDependencyGraph.findAffected ["MyApp.Math.add"; "MyApp.Math.sub"] graph
+    |> Array.length
+    |> Expect.equal "should find 2 distinct tests" 2
+  }
+
+  test "empty symbol uses produces empty graph" {
+    let graph = TestDependencyGraph.buildFromSymbolUses ".Tests." [||]
+    graph.SymbolToTests.Count
+    |> Expect.equal "empty uses produces empty graph" 0
+  }
+
+  test "FSharp stdlib uses are excluded from graph" {
+    let uses = [|
+      { FullName = "MyApp.Tests.test1"; DisplayName = "test1"; IsFromDefinition = true; StartLine = 1; EndLine = 1 }
+      { FullName = "Microsoft.FSharp.Core.ExtraTopLevelOperators.printfn"; DisplayName = "printfn"; IsFromDefinition = false; StartLine = 2; EndLine = 2 }
+      { FullName = "MyApp.Logic.doThing"; DisplayName = "doThing"; IsFromDefinition = false; StartLine = 3; EndLine = 3 }
+    |]
+    let graph = TestDependencyGraph.buildFromSymbolUses ".Tests." uses
+    graph.SymbolToTests.Count
+    |> Expect.equal "only production symbols, not stdlib" 1
+    graph.SymbolToTests |> Map.containsKey "Microsoft.FSharp.Core.ExtraTopLevelOperators.printfn"
+    |> Expect.isFalse "should not contain FSharp stdlib"
+  }
+
+  test "orchestrator uses FCS graph for affected test selection" {
+    let uses = [|
+      { FullName = "MyApp.Math.add"; DisplayName = "add"; IsFromDefinition = true; StartLine = 2; EndLine = 2 }
+      { FullName = "MyApp.Tests.addTest"; DisplayName = "addTest"; IsFromDefinition = true; StartLine = 5; EndLine = 5 }
+      { FullName = "MyApp.Tests.otherTest"; DisplayName = "otherTest"; IsFromDefinition = true; StartLine = 8; EndLine = 8 }
+      { FullName = "MyApp.Math.add"; DisplayName = "add"; IsFromDefinition = false; StartLine = 6; EndLine = 6 }
+    |]
+    let graph = TestDependencyGraph.buildFromSymbolUses ".Tests." uses
+    let addTestCase = {
+      Id = TestId.create "MyApp.Tests.addTest" "expecto"
+      FullName = "MyApp.Tests.addTest"; DisplayName = "addTest"
+      Origin = TestOrigin.SourceMapped ("test.fsx", 5)
+      Labels = []; Framework = "expecto"; Category = TestCategory.Unit
+    }
+    let otherTestCase = {
+      Id = TestId.create "MyApp.Tests.otherTest" "expecto"
+      FullName = "MyApp.Tests.otherTest"; DisplayName = "otherTest"
+      Origin = TestOrigin.SourceMapped ("test.fsx", 8)
+      Labels = []; Framework = "expecto"; Category = TestCategory.Unit
+    }
+    let state = { LiveTestState.empty with
+                    DiscoveredTests = [| addTestCase; otherTestCase |]
+                    Enabled = true }
+    let stateWithEntries = { state with StatusEntries = LiveTesting.computeStatusEntries state }
+    match PipelineOrchestrator.decide stateWithEntries RunTrigger.Keystroke ["MyApp.Math.add"] graph with
+    | PipelineDecision.FullPipeline testIds ->
+      testIds.Length
+      |> Expect.equal "should only run addTest, not otherTest" 1
+      testIds.[0]
+      |> Expect.equal "should be addTest" addTestCase.Id
+    | other -> failtest (sprintf "Expected FullPipeline, got %A" other)
+  }
+
+  test "coverage projection with built graph" {
+    let uses = [|
+      { FullName = "MyApp.Math.add"; DisplayName = "add"; IsFromDefinition = true; StartLine = 2; EndLine = 2 }
+      { FullName = "MyApp.Math.unused"; DisplayName = "unused"; IsFromDefinition = true; StartLine = 3; EndLine = 3 }
+      { FullName = "MyApp.Tests.addTest"; DisplayName = "addTest"; IsFromDefinition = true; StartLine = 5; EndLine = 5 }
+      { FullName = "MyApp.Math.add"; DisplayName = "add"; IsFromDefinition = false; StartLine = 6; EndLine = 6 }
+    |]
+    let graph = TestDependencyGraph.buildFromSymbolUses ".Tests." uses
+    let addTestId = TestId.create "MyApp.Tests.addTest" "expecto"
+    let results = Map.ofList [
+      addTestId, {
+        TestId = addTestId; TestName = "addTest"
+        Result = TestResult.Passed (TimeSpan.FromMilliseconds 5.0)
+        Timestamp = DateTimeOffset.UtcNow
+      }
+    ]
+    match CoverageProjection.symbolCoverage graph results "MyApp.Math.add" with
+    | CoverageStatus.Covered (count, allPassing) ->
+      count |> Expect.equal "add covered by 1 test" 1
+      allPassing |> Expect.isTrue "addTest passes"
+    | other -> failtest (sprintf "Expected Covered for add, got %A" other)
+    match CoverageProjection.symbolCoverage graph results "MyApp.Math.unused" with
+    | CoverageStatus.NotCovered -> ()
+    | other -> failtest (sprintf "Expected NotCovered for unused, got %A" other)
+  }
+]
