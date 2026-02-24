@@ -2032,8 +2032,8 @@ let pipelineEffectsTests = testList "PipelineEffects" [
         TransitiveCoverage = Map.ofList [ "Module.add", [| tc1.Id |] ]
     }
     match PipelineEffects.afterTypeCheck ["Module.add"] RunTrigger.Keystroke graph state with
-    | Some (PipelineEffect.RunAffectedTests (ids, trigger)) ->
-      ids.Length |> Expect.equal "one test" 1
+    | Some (PipelineEffect.RunAffectedTests (tests, trigger)) ->
+      tests.Length |> Expect.equal "one test" 1
       trigger |> Expect.equal "keystroke trigger" RunTrigger.Keystroke
     | other -> failtestf "expected Some RunAffectedTests, got %A" other
   }
@@ -2070,9 +2070,9 @@ let pipelineEffectsTests = testList "PipelineEffects" [
         TransitiveCoverage = Map.ofList [ "Module.add", [| tc1.Id; tc2.Id |] ]
     }
     match PipelineEffects.afterTypeCheck ["Module.add"] RunTrigger.Keystroke graph state with
-    | Some (PipelineEffect.RunAffectedTests (ids, _)) ->
-      ids.Length |> Expect.equal "only unit test" 1
-      ids.[0] |> Expect.equal "unit test id" tc1.Id
+    | Some (PipelineEffect.RunAffectedTests (tests, _)) ->
+      tests.Length |> Expect.equal "only unit test" 1
+      tests.[0].Id |> Expect.equal "unit test id" tc1.Id
     | other -> failtestf "expected Some RunAffectedTests, got %A" other
   }
 ]
@@ -2268,14 +2268,16 @@ let effectDispatchTests = testList "EffectDispatcher" [
     | _ -> failtest "wrong effect type"
   }
 
-  test "RunAffectedTests logs test ids and trigger" {
+  test "RunAffectedTests logs tests and trigger" {
     let log = EffectDispatcher.create()
-    let ids = [| TestId.create "t1" "expecto" |]
-    EffectDispatcher.dispatch log (PipelineEffect.RunAffectedTests(ids, RunTrigger.Keystroke))
+    let tests = [| { Id = TestId.create "t1" "expecto"; FullName = "t1"; DisplayName = "t1"
+                     Origin = TestOrigin.ReflectionOnly; Labels = []; Framework = "expecto"
+                     Category = TestCategory.Unit } |]
+    EffectDispatcher.dispatch log (PipelineEffect.RunAffectedTests(tests, RunTrigger.Keystroke))
     log.Effects |> Expect.hasLength "one effect" 1
     match log.Effects.[0] with
-    | PipelineEffect.RunAffectedTests(tids, trigger) ->
-      tids |> Expect.hasLength "one test" 1
+    | PipelineEffect.RunAffectedTests(tcs, trigger) ->
+      tcs |> Expect.hasLength "one test" 1
       trigger |> Expect.equal "trigger" RunTrigger.Keystroke
     | _ -> failtest "wrong effect type"
   }
@@ -2356,8 +2358,8 @@ let endToEndPipelineTests = testList "End-to-end Pipeline" [
     let runEffect = PipelineEffects.afterTypeCheck s2.ChangedSymbols RunTrigger.Keystroke s2.DepGraph s2.TestState
     runEffect |> Expect.isSome "afterTypeCheck produces RunAffectedTests"
     match runEffect.Value with
-    | PipelineEffect.RunAffectedTests (ids, trigger) ->
-      ids |> Array.length |> Expect.equal "one affected test" 1
+    | PipelineEffect.RunAffectedTests (tests, trigger) ->
+      tests |> Array.length |> Expect.equal "one affected test" 1
       trigger |> Expect.equal "trigger is keystroke" RunTrigger.Keystroke
     | _ -> failwith "expected RunAffectedTests"
   }
@@ -3055,7 +3057,8 @@ let elmWiringBehavioralTests = testList "Elm Wiring Behavioral Scenarios" [
       { TestDependencyGraph.empty with
           SymbolToTests = Map.ofList ["Lib.add", [|tc.Id|]]
           TransitiveCoverage = Map.ofList ["Lib.add", [|tc.Id|]] }
-    let stale = Staleness.markStale depGraph ["Lib.add"] state
+    let stale =
+      { Staleness.markStale depGraph ["Lib.add"] state with IsRunning = true }
     stale.StatusEntries |> Array.exists (fun e -> match e.Status with TestRunStatus.Stale -> true | _ -> false)
     |> Expect.isTrue "entry is Stale after symbol change"
     let newResult : TestRunResult =

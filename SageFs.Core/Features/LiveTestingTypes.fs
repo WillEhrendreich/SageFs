@@ -885,7 +885,7 @@ module PipelineDebounce =
 type PipelineEffect =
   | ParseTreeSitter of content: string * filePath: string
   | RequestFcsTypeCheck of filePath: string
-  | RunAffectedTests of testIds: TestId array * trigger: RunTrigger
+  | RunAffectedTests of tests: TestCase array * trigger: RunTrigger
 
 module PipelineEffects =
   let fromTick
@@ -916,7 +916,6 @@ module PipelineEffects =
           |> Array.filter (fun tc -> affected |> Array.contains tc.Id)
         let filtered =
           PolicyFilter.filterTests state.RunPolicies trigger affectedTests
-          |> Array.map (fun tc -> tc.Id)
         if Array.isEmpty filtered then None
         else Some (PipelineEffect.RunAffectedTests(filtered, trigger))
 

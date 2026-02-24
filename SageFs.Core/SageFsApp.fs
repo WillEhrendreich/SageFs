@@ -848,6 +848,30 @@ module SageFsEffectHandler =
                     Features.LiveTesting.FcsTypeCheckResult.Cancelled filePath
                 dispatch (SageFsMsg.FcsTypeCheckCompleted result)
             })
-        | Features.LiveTesting.PipelineEffect.RunAffectedTests (_testIds, _trigger) ->
-          () // Test execution — handled by existing hot reload hook
+        | Features.LiveTesting.PipelineEffect.RunAffectedTests (tests, _trigger) ->
+          if Array.isEmpty tests then ()
+          else
+            let testIds = tests |> Array.map (fun tc -> tc.Id)
+            dispatch (SageFsMsg.Event (SageFsEvent.TestRunStarted testIds))
+            Async.Start(async {
+              try
+                let! results =
+                  Features.LiveTesting.TestOrchestrator.executeFiltered
+                    Features.LiveTesting.BuiltInExecutors.builtIn 4 tests
+                dispatch (SageFsMsg.Event (SageFsEvent.TestResultsBatch results))
+              with ex ->
+                let errResults =
+                  tests |> Array.map (fun tc ->
+                    ({ TestId = tc.Id
+                       TestName = tc.FullName
+                       Result =
+                         Features.LiveTesting.TestResult.Failed(
+                           Features.LiveTesting.TestFailure.ExceptionThrown(
+                             ex.Message,
+                             ex.StackTrace |> Option.ofObj |> Option.defaultValue ""),
+                           System.TimeSpan.Zero)
+                       Timestamp = System.DateTimeOffset.UtcNow }
+                     : Features.LiveTesting.TestRunResult))
+                dispatch (SageFsMsg.Event (SageFsEvent.TestResultsBatch errResults))
+            })
       }
