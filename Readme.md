@@ -83,19 +83,15 @@ Tests are categorized automatically (Unit, Integration, Browser, Property, Bench
 
 - [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0)
 - [Docker](https://docs.docker.com/get-docker/) — required for PostgreSQL, which [Marten](https://martendb.io/) uses for event sourcing (managed automatically via [Testcontainers](https://dotnet.testcontainers.org/), no manual setup needed)
-- Git (to clone the repo)
 
 ---
 
 ## Installation
 
-SageFs is a [.NET global tool](https://learn.microsoft.com/en-us/dotnet/core/tools/global-tools). It will be published to NuGet once stable — for now, clone the repo and install locally:
+SageFs is a [.NET global tool](https://learn.microsoft.com/en-us/dotnet/core/tools/global-tools) published on [NuGet](https://www.nuget.org/packages/SageFs/):
 
 ```bash
-git clone https://github.com/WillEhrendworb/SageFs.git
-cd SageFs
-dotnet build && dotnet pack SageFs -o nupkg
-dotnet tool install --global SageFs --add-source ./nupkg
+dotnet tool install --global SageFs
 ```
 
 Verify it installed:
@@ -104,15 +100,23 @@ Verify it installed:
 sagefs --help
 ```
 
-To **update** after pulling new changes:
+To **update** to the latest version:
 
 ```bash
+dotnet tool update --global SageFs
+```
+
+<details>
+<summary><strong>Build from source</strong></summary>
+
+```bash
+git clone https://github.com/WillEhrendreich/SageFs.git
 cd SageFs
-git pull
-dotnet tool uninstall --global SageFs
 dotnet build && dotnet pack SageFs -o nupkg
 dotnet tool install --global SageFs --add-source ./nupkg --no-cache
 ```
+
+</details>
 
 ---
 
