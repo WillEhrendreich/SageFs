@@ -835,6 +835,7 @@ let activate (context: ExtensionContext) =
           adapter.Refresh changes
           let state = listenerRef |> Option.map (fun l -> l.State ()) |> Option.defaultValue VscLiveTestState.empty
           TestDeco.applyToAllEditors state
+          TestDeco.applyCoverageToAllEditors state
           TestDeco.updateDiagnostics state
           TestLens.updateState state
         OnSummaryUpdate = fun summary -> updateTestStatusBar summary
@@ -849,11 +850,13 @@ let activate (context: ExtensionContext) =
       context.subscriptions.Add (
         Window.onDidChangeVisibleTextEditors (fun _editors ->
           let state = listenerRef |> Option.map (fun l -> l.State ()) |> Option.defaultValue VscLiveTestState.empty
-          TestDeco.applyToAllEditors state))
+          TestDeco.applyToAllEditors state
+          TestDeco.applyCoverageToAllEditors state))
       context.subscriptions.Add (
         Window.onDidChangeActiveTextEditor (fun _editor ->
           let state = listenerRef |> Option.map (fun l -> l.State ()) |> Option.defaultValue VscLiveTestState.empty
-          TestDeco.applyToAllEditors state))
+          TestDeco.applyToAllEditors state
+          TestDeco.applyCoverageToAllEditors state))
       // Auto-discover and create session if none exists
       Client.listSessions c
       |> Promise.iter (fun sessions ->

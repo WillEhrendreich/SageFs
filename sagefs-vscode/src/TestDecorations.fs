@@ -11,6 +11,9 @@ open SageFs.Vscode.LiveTestingTypes
 let mutable passedType: TextEditorDecorationType option = None
 let mutable failedType: TextEditorDecorationType option = None
 let mutable runningType: TextEditorDecorationType option = None
+let mutable coveredPassingType: TextEditorDecorationType option = None
+let mutable coveredFailingType: TextEditorDecorationType option = None
+let mutable notCoveredType: TextEditorDecorationType option = None
 let mutable diagnosticCollection: DiagnosticCollection option = None
 
 let initialize () =
@@ -55,6 +58,36 @@ let initialize () =
       ]))
   diagnosticCollection <-
     Some (Languages.createDiagnosticCollection "sagefs-tests")
+  coveredPassingType <- Some (
+    Window.createTextEditorDecorationType (
+      createObj [
+        "isWholeLine" ==> false
+        "before" ==> createObj [
+          "contentText" ==> "▸"
+          "color" ==> newThemeColor "testing.iconPassed"
+          "margin" ==> "0 0.5em 0 0"
+        ]
+      ]))
+  coveredFailingType <- Some (
+    Window.createTextEditorDecorationType (
+      createObj [
+        "isWholeLine" ==> false
+        "before" ==> createObj [
+          "contentText" ==> "▸"
+          "color" ==> newThemeColor "testing.iconFailed"
+          "margin" ==> "0 0.5em 0 0"
+        ]
+      ]))
+  notCoveredType <- Some (
+    Window.createTextEditorDecorationType (
+      createObj [
+        "isWholeLine" ==> false
+        "before" ==> createObj [
+          "contentText" ==> "○"
+          "color" ==> newThemeColor "disabledForeground"
+          "margin" ==> "0 0.5em 0 0"
+        ]
+      ]))
 
 // ── Decoration application ──────────────────────────────────────
 
@@ -106,6 +139,44 @@ let applyToEditor (state: VscLiveTestState) (editor: TextEditor) =
   failedType |> Option.iter (fun dt -> editor.setDecorations(dt, failedRanges))
   runningType |> Option.iter (fun dt -> editor.setDecorations(dt, runningRanges))
 
+/// Apply coverage decorations to a single text editor
+let applyCoverageToEditor (state: VscLiveTestState) (editor: TextEditor) =
+  let filePath = editor.document.fileName
+  match Map.tryFind filePath state.Coverage with
+  | None ->
+    coveredPassingType |> Option.iter (fun dt -> editor.setDecorations(dt, ResizeArray<obj>()))
+    coveredFailingType |> Option.iter (fun dt -> editor.setDecorations(dt, ResizeArray<obj>()))
+    notCoveredType |> Option.iter (fun dt -> editor.setDecorations(dt, ResizeArray<obj>()))
+  | Some fileCov ->
+    let covPassRanges = ResizeArray<obj>()
+    let covFailRanges = ResizeArray<obj>()
+    let notCovRanges = ResizeArray<obj>()
+    for kvp in fileCov.LineCoverage do
+      let line = kvp.Key
+      match kvp.Value with
+      | VscLineCoverage.Covered (testCount, health) ->
+        let hoverText =
+          match health with
+          | VscCoverageHealth.AllPassing -> sprintf "▸ Covered by %d test(s), all passing" testCount
+          | VscCoverageHealth.SomeFailing -> sprintf "▸ Covered by %d test(s), some failing" testCount
+        match health with
+        | VscCoverageHealth.AllPassing ->
+          covPassRanges.Add(decorationRange line hoverText)
+        | VscCoverageHealth.SomeFailing ->
+          covFailRanges.Add(decorationRange line hoverText)
+      | VscLineCoverage.NotCovered ->
+        notCovRanges.Add(decorationRange line "○ Not covered by any test")
+      | VscLineCoverage.Pending -> ()
+    coveredPassingType |> Option.iter (fun dt -> editor.setDecorations(dt, covPassRanges))
+    coveredFailingType |> Option.iter (fun dt -> editor.setDecorations(dt, covFailRanges))
+    notCoveredType |> Option.iter (fun dt -> editor.setDecorations(dt, notCovRanges))
+
+/// Apply coverage decorations to all visible editors
+let applyCoverageToAllEditors (state: VscLiveTestState) =
+  let editors = Window.getVisibleTextEditors ()
+  for editor in editors do
+    applyCoverageToEditor state editor
+
 /// Apply decorations to all visible editors
 let applyToAllEditors (state: VscLiveTestState) =
   let editors = Window.getVisibleTextEditors ()
@@ -152,8 +223,14 @@ let dispose () =
   passedType |> Option.iter (fun dt -> dt.dispose ())
   failedType |> Option.iter (fun dt -> dt.dispose ())
   runningType |> Option.iter (fun dt -> dt.dispose ())
+  coveredPassingType |> Option.iter (fun dt -> dt.dispose ())
+  coveredFailingType |> Option.iter (fun dt -> dt.dispose ())
+  notCoveredType |> Option.iter (fun dt -> dt.dispose ())
   diagnosticCollection |> Option.iter (fun dc -> dc.dispose ())
   passedType <- None
   failedType <- None
   runningType <- None
+  coveredPassingType <- None
+  coveredFailingType <- None
+  notCoveredType <- None
   diagnosticCollection <- None

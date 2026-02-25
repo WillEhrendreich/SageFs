@@ -635,17 +635,25 @@ SageFs auto-loads `~/.SageFs/init.fsx` on session start, if it exists. Use it fo
 
 ## Troubleshooting
 
-**"SageFs daemon not found"** — Make sure the daemon is running (`sagefs --proj ...` in another terminal). Clients auto-discover via HTTP health check.
+**"SageFs daemon not found"** — Make sure the daemon is running (`sagefs --proj ...` in another terminal). Clients auto-discover via HTTP health check on port 37749. Run `sagefs status` to check.
 
 **"Session is still starting up"** — The FSI session is loading your project. Wait for the "ready" message. Large projects may take 30-60 seconds. The standby pool makes subsequent resets much faster.
 
 **Build errors after code changes** — If you changed `.fs` files and the REPL seems stale, run `hard_reset_fsi_session` (via MCP) or `#hard-reset` (in the REPL). This rebuilds and reloads. Note: file watching handles most cases automatically — you shouldn't need manual resets often.
 
-**Port already in use** — Another SageFs instance is running. Use `sagefs stop` or `sagefs --mcp-port 8080`.
+**Port already in use** — Another SageFs instance is running. Use `sagefs stop` or `sagefs --mcp-port 8080`. Check `sagefs status` to see what's running.
 
 **Running in Docker** — Set `SAGEFS_BIND_HOST=0.0.0.0` so the daemon listens on all interfaces (required for container port mapping). The default `localhost` only binds to the loopback interface.
 
 **Hot reload not working** — Make sure your app uses `SageFs.DevReloadMiddleware` for browser auto-refresh. Check the SageFs console for 🔥 or 📄 messages confirming file changes are detected.
+
+**SSE connections dropping** — Proxies and load balancers may close idle connections. SageFs sends keepalive comments every 15 seconds on SSE endpoints. If using a reverse proxy (nginx, Cloudflare Tunnel), set the proxy timeout to at least 60 seconds.
+
+**Live testing not running** — Verify live testing is enabled with `toggle_live_testing` (MCP) or check the status bar. By default, only unit tests auto-run on every change; integration and browser tests require explicit triggers. Use `set_run_policy` to configure per-category behavior.
+
+**Tests discovered but not executing** — Check the run policy for each test category. Integration, browser, and benchmark tests default to `OnDemand` — they won't auto-run. Use `run_tests` (MCP tool) to trigger them manually, or change the policy with `set_run_policy`.
+
+**Where are the logs?** — The daemon console shows real-time output. For structured logging, SageFs supports OTEL export — connect a collector (e.g., Aspire dashboard) to see traces and metrics. The daemon startup message shows the dashboard URL (default: `http://localhost:37749`).
 
 ---
 
@@ -672,6 +680,11 @@ SageFs auto-loads `~/.SageFs/init.fsx` on session start, if it exists. Use it fo
 | `list_sessions` | List all active sessions. |
 | `stop_session` | Stop a session by ID. |
 | `switch_session` | Switch active session by ID. |
+| `toggle_live_testing` | Enable/disable live unit testing. |
+| `get_live_test_status` | Current test state: summary, per-test status, timing. Filter by file. |
+| `run_tests` | Run tests explicitly — optionally filter by name pattern or category. |
+| `set_run_policy` | Set auto-run policy per test category (every/save/demand/disabled). |
+| `get_pipeline_trace` | Pipeline timing: tree-sitter, FCS, execution, test counts. |
 
 </details>
 

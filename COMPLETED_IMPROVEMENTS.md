@@ -481,3 +481,34 @@ Per IMPROVEMENT_PLAN.md priority matrix:
 **Implemented:** Custom arg parser removing Argu dependency entirely. Supports `--help`, `--version`, `--bare`, `--no-watch`, `--no-resume`, `--prune`, `--sln`, `--proj`, `--dir`, `--reference`, `--load`, `--use`, `--lib`, `--other`.
 
 **Commits:** `d31b95e`, `74d3c2c`
+
+---
+
+## Infrastructure Polish (v0.5.165–v0.5.167) — ✅ DONE
+
+**SSE connection resilience:**
+- Removed aggressive 30-second idle timeout on MCP HTTP transport (was `IdleTimeout = 30s, MaxIdleSessionCount = 100`). Changed to 24-hour timeout with 1000 max idle sessions — only cull at thousands of connections.
+- Added 15-second SSE keepalive heartbeat (`: keepalive\n\n` comments) to both `/events` MCP endpoint and dashboard SSE endpoint. Prevents proxy/LB timeouts on idle connections.
+
+**Toggle activation fix:**
+- ToggleLiveTesting handler now emits `RunAffectedTests` with all discovered tests when toggling ON (was returning empty effects regardless). Uses `ExplicitRun` trigger to bypass RunPolicy filtering — when a user explicitly toggles ON, all tests should run.
+
+**VS Code extension polish:**
+- Replaced 5 hardcoded hex colors with VS Code `ThemeColor` references (`testing.iconPassed`, `testing.iconFailed`, `testing.iconQueued`) — respects user themes.
+- Added `logWarn` helper and replaced 15 silent `with _` error handlers with `with ex -> logWarn "functionName" ex` for debuggability.
+- Startup polling now shows elapsed seconds in status bar ("SageFs starting... (15s)").
+- Added coverage decoration types (▸ covered-passing, ▸ covered-failing, ○ not-covered) wired to `CoverageRefreshed` state change events.
+
+**CI resilience:**
+- Removed `|| true` from VS extension build step (was double-silencing failures alongside `continue-on-error: true`).
+- Added explicit warning step when VS build fails so failures are visible in CI logs.
+- Improved Neovim version sync: shallow clone, update `version.lua`, `continue-on-error` so sync failure doesn't block release.
+
+**Daemon startup UX:**
+- Startup output now shows dashboard, SSE, and health check URLs for quick copy-paste.
+
+**Documentation:**
+- Expanded troubleshooting section with SSE, live testing, and coverage guidance.
+- Updated MCP tools reference to include live testing tools (`toggle_live_testing`, `get_live_test_status`, `run_tests`, `set_run_policy`, `get_pipeline_trace`).
+
+**Tests:** 3 toggle activation behavior tests added (43 → 47 total SageFsUpdate tests).
