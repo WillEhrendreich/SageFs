@@ -148,7 +148,8 @@ and [<RequireQualifiedAccess>] UiAction =
   | CycleTheme
   | HotReloadWatchAll
   | HotReloadUnwatchAll
-  | ToggleLiveTesting
+  | EnableLiveTesting
+  | DisableLiveTesting
   | CycleRunPolicy
   | ToggleCoverage
 
@@ -293,7 +294,8 @@ module UiAction =
     | "CycleTheme" -> Some UiAction.CycleTheme
     | "HotReloadWatchAll" -> Some UiAction.HotReloadWatchAll
     | "HotReloadUnwatchAll" -> Some UiAction.HotReloadUnwatchAll
-    | "ToggleLiveTesting" -> Some UiAction.ToggleLiveTesting
+    | "EnableLiveTesting" -> Some UiAction.EnableLiveTesting
+    | "DisableLiveTesting" -> Some UiAction.DisableLiveTesting
     | "CycleRunPolicy" -> Some UiAction.CycleRunPolicy
     | "ToggleCoverage" -> Some UiAction.ToggleCoverage
     | _ -> None
@@ -380,7 +382,8 @@ module KeyMap =
       KeyCombo.ctrlAlt ConsoleKey.W, UiAction.HotReloadWatchAll
       KeyCombo.ctrlAlt ConsoleKey.U, UiAction.HotReloadUnwatchAll
       // Live Testing
-      KeyCombo.ctrlAlt ConsoleKey.T, UiAction.ToggleLiveTesting
+      KeyCombo.ctrlAlt ConsoleKey.T, UiAction.EnableLiveTesting
+      KeyCombo.create ConsoleKey.T (ConsoleModifiers.Control ||| ConsoleModifiers.Alt ||| ConsoleModifiers.Shift), UiAction.DisableLiveTesting
       KeyCombo.ctrlAlt ConsoleKey.P, UiAction.CycleRunPolicy
       KeyCombo.ctrlAlt ConsoleKey.C, UiAction.ToggleCoverage
     ] |> Map.ofList

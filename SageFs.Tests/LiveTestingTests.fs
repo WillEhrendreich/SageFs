@@ -810,7 +810,8 @@ let elmIntegrationTests = testList "LiveTesting Elm Integration" [
       |> Expect.isTrue (sprintf "SageFsEvent should have %s case" name)
     test "TestsDiscovered" { hasCase "TestsDiscovered" }
     test "TestResultsBatch" { hasCase "TestResultsBatch" }
-    test "LiveTestingToggled" { hasCase "LiveTestingToggled" }
+    test "LiveTestingEnabled" { hasCase "LiveTestingEnabled" }
+    test "LiveTestingDisabled" { hasCase "LiveTestingDisabled" }
     test "AffectedTestsComputed" { hasCase "AffectedTestsComputed" }
     test "CoverageUpdated" { hasCase "CoverageUpdated" }
     test "RunPolicyChanged" { hasCase "RunPolicyChanged" }
@@ -862,13 +863,21 @@ let elmIntegrationTests = testList "LiveTesting Elm Integration" [
       Map.containsKey tid model'.LiveTesting.TestState.LastResults
       |> Expect.isTrue "should have result"
     }
-    test "LiveTestingToggled updates Activation" {
+    test "LiveTestingEnabled activates" {
       let model', _ =
         SageFsUpdate.update
-          (SageFsMsg.Event (SageFsEvent.LiveTestingToggled false))
+          (SageFsMsg.Event SageFsEvent.LiveTestingEnabled)
           SageFsModel.initial
       model'.LiveTesting.TestState.Activation
-      |> Expect.equal "should be disabled" LiveTestingActivation.Inactive
+      |> Expect.equal "should be active" LiveTestingActivation.Active
+    }
+    test "LiveTestingDisabled deactivates" {
+      let model', _ =
+        SageFsUpdate.update
+          (SageFsMsg.Event SageFsEvent.LiveTestingDisabled)
+          SageFsModel.initial
+      model'.LiveTesting.TestState.Activation
+      |> Expect.equal "should be inactive" LiveTestingActivation.Inactive
     }
     test "AffectedTestsComputed sets AffectedTests" {
       let t1 = mkTestId "t1" "x"
@@ -913,7 +922,7 @@ let elmIntegrationTests = testList "LiveTesting Elm Integration" [
     test "no effects for live testing events" {
       let _, effects =
         SageFsUpdate.update
-          (SageFsMsg.Event (SageFsEvent.LiveTestingToggled true))
+          (SageFsMsg.Event SageFsEvent.LiveTestingEnabled)
           SageFsModel.initial
       effects |> Expect.isEmpty "should produce no effects"
     }
@@ -2002,7 +2011,7 @@ let testSummaryDetailTests = testList "TestSummary" [
       TestRunStatus.PolicyDisabled
       TestRunStatus.Detected
     |]
-    let summary = TestSummary.fromStatuses statuses
+    let summary = TestSummary.fromStatuses LiveTestingActivation.Active statuses
     summary.Total |> Expect.equal "total" 7
     summary.Passed |> Expect.equal "passed" 2
     summary.Failed |> Expect.equal "failed" 1
@@ -4197,7 +4206,7 @@ let batchPayloadTests = testList "TestResultsBatchPayload" [
       Status = TestRunStatus.Passed (System.TimeSpan.FromMilliseconds 5.0)
       PreviousStatus = TestRunStatus.Detected }
     let gen = RunGeneration.next RunGeneration.zero
-    let batch = TestResultsBatchPayload.create gen ResultFreshness.Fresh (BatchCompletion.Complete(1, 1)) [| entry |]
+    let batch = TestResultsBatchPayload.create gen ResultFreshness.Fresh (BatchCompletion.Complete(1, 1)) LiveTestingActivation.Active [| entry |]
     batch.Summary.Passed |> Expect.equal "one passed" 1
     batch.Summary.Total |> Expect.equal "one total" 1
     batch.Freshness |> Expect.equal "fresh" ResultFreshness.Fresh
@@ -4206,19 +4215,19 @@ let batchPayloadTests = testList "TestResultsBatchPayload" [
 
   test "create with stale results carries StaleCodeEdited" {
     let gen = RunGeneration.next RunGeneration.zero
-    let batch = TestResultsBatchPayload.create gen ResultFreshness.StaleCodeEdited BatchCompletion.Superseded [||]
+    let batch = TestResultsBatchPayload.create gen ResultFreshness.StaleCodeEdited BatchCompletion.Superseded LiveTestingActivation.Active [||]
     batch.Freshness |> Expect.equal "stale edited" ResultFreshness.StaleCodeEdited
   }
 
   test "create with wrong generation carries StaleWrongGeneration" {
     let gen = RunGeneration.next RunGeneration.zero
-    let batch = TestResultsBatchPayload.create gen ResultFreshness.StaleWrongGeneration BatchCompletion.Superseded [||]
+    let batch = TestResultsBatchPayload.create gen ResultFreshness.StaleWrongGeneration BatchCompletion.Superseded LiveTestingActivation.Active [||]
     batch.Freshness |> Expect.equal "wrong gen" ResultFreshness.StaleWrongGeneration
   }
 
   test "isEmpty returns true for empty entries" {
     let gen = RunGeneration.zero
-    let batch = TestResultsBatchPayload.create gen ResultFreshness.Fresh (BatchCompletion.Complete(0, 0)) [||]
+    let batch = TestResultsBatchPayload.create gen ResultFreshness.Fresh (BatchCompletion.Complete(0, 0)) LiveTestingActivation.Active [||]
     TestResultsBatchPayload.isEmpty batch |> Expect.isTrue "should be empty"
   }
 
@@ -4230,7 +4239,7 @@ let batchPayloadTests = testList "TestResultsBatchPayload" [
       Category = TestCategory.Unit; CurrentPolicy = RunPolicy.OnEveryChange
       Status = TestRunStatus.Detected; PreviousStatus = TestRunStatus.Detected }
     let gen = RunGeneration.zero
-    let batch = TestResultsBatchPayload.create gen ResultFreshness.Fresh (BatchCompletion.Complete(1, 1)) [| entry |]
+    let batch = TestResultsBatchPayload.create gen ResultFreshness.Fresh (BatchCompletion.Complete(1, 1)) LiveTestingActivation.Active [| entry |]
     TestResultsBatchPayload.isEmpty batch |> Expect.isFalse "should not be empty"
   }
 ]
@@ -4476,7 +4485,7 @@ let sseEnrichmentTests = testList "SSE enrichment round-trip" [
     let _newPhase, freshness = TestRunPhase.onResultsArrived gen merged.RunPhase
     let batch =
       let completion = TestResultsBatchPayload.deriveCompletion freshness 1 entries.Length
-      TestResultsBatchPayload.create gen freshness completion entries
+      TestResultsBatchPayload.create gen freshness completion merged.Activation entries
     batch.Generation |> Expect.equal "generation matches" gen
     batch.Freshness |> Expect.equal "fresh results" ResultFreshness.Fresh
     batch.Entries.Length |> Expect.equal "one entry" 1
@@ -4510,7 +4519,7 @@ let sseEnrichmentTests = testList "SSE enrichment round-trip" [
     let _newPhase, freshness = TestRunPhase.onResultsArrived gen editedPhase
     let batch =
       let completion = TestResultsBatchPayload.deriveCompletion freshness 1 entries.Length
-      TestResultsBatchPayload.create gen freshness completion entries
+      TestResultsBatchPayload.create gen freshness completion merged.Activation entries
     batch.Freshness |> Expect.equal "stale code edited" ResultFreshness.StaleCodeEdited
   }
 ]

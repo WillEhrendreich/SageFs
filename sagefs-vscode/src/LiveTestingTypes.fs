@@ -122,7 +122,8 @@ type VscLiveTestEvent =
   | TestsDiscovered of tests: VscTestInfo array
   | TestRunStarted of testIds: VscTestId array
   | TestResultBatch of results: VscTestResult array
-  | LiveTestingToggled of enabled: bool
+  | LiveTestingEnabled
+  | LiveTestingDisabled
   | RunPolicyChanged of category: VscTestCategory * policy: VscRunPolicy
   | PipelineTimingRecorded of treeSitterMs: float * fcsMs: float * executionMs: float
   | CoverageUpdated of coverage: Map<string, VscFileCoverage>
@@ -194,11 +195,13 @@ module VscLiveTestState =
       { state with Results = newResults; RunningTests = stillRunning },
       [ VscStateChange.TestsCompleted results ]
 
-    | VscLiveTestEvent.LiveTestingToggled enabled ->
-      let flag =
-        if enabled then VscLiveTestingEnabled.LiveTestingOn
-        else VscLiveTestingEnabled.LiveTestingOff
-      { state with Enabled = flag }, [ VscStateChange.EnabledChanged flag ]
+    | VscLiveTestEvent.LiveTestingEnabled ->
+      { state with Enabled = VscLiveTestingEnabled.LiveTestingOn },
+      [ VscStateChange.EnabledChanged VscLiveTestingEnabled.LiveTestingOn ]
+
+    | VscLiveTestEvent.LiveTestingDisabled ->
+      { state with Enabled = VscLiveTestingEnabled.LiveTestingOff },
+      [ VscStateChange.EnabledChanged VscLiveTestingEnabled.LiveTestingOff ]
 
     | VscLiveTestEvent.RunPolicyChanged (cat, pol) ->
       { state with Policies = Map.add cat pol state.Policies },

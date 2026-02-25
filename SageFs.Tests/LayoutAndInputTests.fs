@@ -286,7 +286,8 @@ let uiActionParseTests = testList "UiAction.tryParse" [
     UiAction.tryParse "Layout.Default" |> Expect.equal "layout default" (Some (UiAction.LayoutPreset "Default"))
   }
   test "parses live testing actions" {
-    UiAction.tryParse "ToggleLiveTesting" |> Expect.equal "toggle lt" (Some UiAction.ToggleLiveTesting)
+    UiAction.tryParse "EnableLiveTesting" |> Expect.equal "enable lt" (Some UiAction.EnableLiveTesting)
+    UiAction.tryParse "DisableLiveTesting" |> Expect.equal "disable lt" (Some UiAction.DisableLiveTesting)
     UiAction.tryParse "CycleRunPolicy" |> Expect.equal "cycle rp" (Some UiAction.CycleRunPolicy)
     UiAction.tryParse "ToggleCoverage" |> Expect.equal "toggle cov" (Some UiAction.ToggleCoverage)
   }

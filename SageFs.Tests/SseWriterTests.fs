@@ -68,7 +68,7 @@ let sseTests = testList "SSE Writer" [
     testCase "serializes TestSummary to SSE" <| fun () ->
       let opts = JsonSerializerOptions(PropertyNamingPolicy = JsonNamingPolicy.CamelCase)
       let summary: SageFs.Features.LiveTesting.TestSummary = {
-        Total = 10; Passed = 8; Failed = 1; Stale = 1; Running = 0; Disabled = 0
+        Total = 10; Passed = 8; Failed = 1; Stale = 1; Running = 0; Disabled = 0; Enabled = true
       }
       let result = formatTestSummaryEvent opts summary
       result |> Expect.stringContains "should contain event type" "event: test_summary"

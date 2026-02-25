@@ -378,7 +378,8 @@ type TerminalCommand =
   | CycleTheme
   | HotReloadWatchAll
   | HotReloadUnwatchAll
-  | ToggleLiveTesting
+  | EnableLiveTesting
+  | DisableLiveTesting
   | CycleRunPolicy
   | ToggleCoverage
 
@@ -409,7 +410,8 @@ module TerminalInput =
     | Some (UiAction.CycleTheme) -> Some TerminalCommand.CycleTheme
     | Some (UiAction.HotReloadWatchAll) -> Some TerminalCommand.HotReloadWatchAll
     | Some (UiAction.HotReloadUnwatchAll) -> Some TerminalCommand.HotReloadUnwatchAll
-    | Some (UiAction.ToggleLiveTesting) -> Some TerminalCommand.ToggleLiveTesting
+    | Some (UiAction.EnableLiveTesting) -> Some TerminalCommand.EnableLiveTesting
+    | Some (UiAction.DisableLiveTesting) -> Some TerminalCommand.DisableLiveTesting
     | Some (UiAction.CycleRunPolicy) -> Some TerminalCommand.CycleRunPolicy
     | Some (UiAction.ToggleCoverage) -> Some TerminalCommand.ToggleCoverage
     | Some (UiAction.Editor action) -> Some (TerminalCommand.Action action)

@@ -241,7 +241,8 @@ let uiActionTests = testList "UiAction" [
       "CycleTheme", UiAction.CycleTheme
       "HotReloadWatchAll", UiAction.HotReloadWatchAll
       "HotReloadUnwatchAll", UiAction.HotReloadUnwatchAll
-      "ToggleLiveTesting", UiAction.ToggleLiveTesting
+      "EnableLiveTesting", UiAction.EnableLiveTesting
+      "DisableLiveTesting", UiAction.DisableLiveTesting
       "CycleRunPolicy", UiAction.CycleRunPolicy
       "ToggleCoverage", UiAction.ToggleCoverage
       "ResizeHGrow", UiAction.ResizeH 1

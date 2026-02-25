@@ -155,7 +155,10 @@ internal class LiveTestingData : NotifyPropertyChangedObject, IDisposable
   {
     try
     {
-      await client.ToggleLiveTestingAsync(ct);
+      if (IsEnabled)
+        await client.DisableLiveTestingAsync(ct);
+      else
+        await client.EnableLiveTestingAsync(ct);
       IsEnabled = !IsEnabled;
       EnabledStatus = IsEnabled ? "● Live Testing ON" : "○ Live Testing OFF";
     }

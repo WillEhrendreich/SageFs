@@ -83,16 +83,16 @@ Tests are categorized automatically (Unit, Integration, Browser, Property, Bench
 - [x] **Three-speed pipeline end-to-end** — Full debounced pipeline: keystroke → tree-sitter (50ms) → FCS with adaptive backoff (300ms, max 2000ms) → affected-test execution. `PipelineDebounce` manages per-stage cancellation tokens, `AdaptiveDebounce` backs off dynamically on FCS cancellations
 - [x] **Source mapping** — `SourceMapping` module bridges tree-sitter source locations (file/line/column) to reflection-discovered tests via function name matching, so gutter markers land on the right line even for Expecto-style hierarchical tests
 - [x] **`run_tests` MCP tool** — On-demand test execution with optional pattern and category filters, integrated into the Elm event loop via `RunTestsRequested`
-- [x] **`toggle_live_testing` MCP tool** — Enable/disable live testing from any MCP client
+- [x] **`set_live_testing` MCP tool** — Enable/disable live testing from any MCP client
 - [x] **Daemon startup guard** — All editor plugins (VS Code, Visual Studio, CLI, Raylib GUI) now check for an already-running daemon via HTTP probe before spawning a new instance, preventing duplicate daemons
 
 - [x] **Neovim live testing & coverage** — Full sagefs.nvim integration: test gutter signs, test panel, coverage gutter signs, coverage panel, pipeline trace, test policy controls, statusline — 24 modules, 800+ tests
 - [x] **Flaky test detection** — `ResultWindow` sliding window, `TestStability` DU (Stable/Flaky/Insufficient), `FlakyDetection.outcomeOf`, `GutterIcon.TestFlaky` — property-based tested
 - [x] **Per-test coverage correlation** — `CoverageCorrelation.testsForSymbol` and `testsForLine` chain FCS dependency graph → enriched test info, answering "which tests cover this line?"
 
-- [x] **VS Code live testing suite** — Full VS Code integration: inline ✓/✗/● decorations on test lines, native Test Explorer via `TestController` adapter, test result CodeLens above every test function, failure diagnostics as native squiggles, SSE-driven `LiveTestingListener` consuming typed `test_summary` and `test_results_batch` events, policy control commands (`sagefs.toggleLiveTesting`, `sagefs.runTests`, `sagefs.setRunPolicy`), call graph viewer (`sagefs.showCallGraph` → `/api/dependency-graph`), event history QuickPick (`sagefs.showHistory` → `/api/recent-events`), type explorer sidebar, dashboard webview panel — all wired through HTTP proxy endpoints to the daemon
+- [x] **VS Code live testing suite** — Full VS Code integration: inline ✓/✗/● decorations on test lines, native Test Explorer via `TestController` adapter, test result CodeLens above every test function, failure diagnostics as native squiggles, SSE-driven `LiveTestingListener` consuming typed `test_summary` and `test_results_batch` events, policy control commands (`sagefs.enableLiveTesting`, `sagefs.disableLiveTesting`, `sagefs.runTests`, `sagefs.setRunPolicy`), call graph viewer (`sagefs.showCallGraph` → `/api/dependency-graph`), event history QuickPick (`sagefs.showHistory` → `/api/recent-events`), type explorer sidebar, dashboard webview panel — all wired through HTTP proxy endpoints to the daemon
 - [x] **Typed SSE event broadcast** — `/events` endpoint broadcasts `event: test_summary` and `event: test_results_batch` alongside `event: state`, with `JsonFSharpConverter` for proper F# DU serialization. Clients subscribe once and receive all event types over a single SSE stream with auto-reconnect and exponential backoff
-- [x] **HTTP API for editor extensions** — `/api/live-testing/toggle`, `/api/live-testing/policy`, `/api/live-testing/run`, `/api/live-testing/status`, `/api/explore`, `/api/completions`, `/api/dependency-graph`, `/api/recent-events` — RESTful endpoints proxied by VS Code and available to any HTTP client
+- [x] **HTTP API for editor extensions** — `/api/live-testing/enable`, `/api/live-testing/disable`, `/api/live-testing/policy`, `/api/live-testing/run`, `/api/live-testing/status`, `/api/explore`, `/api/completions`, `/api/dependency-graph`, `/api/recent-events` — RESTful endpoints proxied by VS Code and available to any HTTP client
 
 **What's next:**
 
@@ -182,7 +182,7 @@ The **SageFs extension** turns VS Code into a live F# development environment wi
 - **Hot Reload sidebar** — A tree view in the activity bar showing all project files with watch toggles. Toggle individual files, directories, or watch/unwatch everything at once.
 - **Session Context sidebar** — See loaded assemblies, opened namespaces, failed opens, and warmup details for the active session
 - **Type Explorer sidebar** — Browse .NET types and namespaces interactively from the activity bar
-- **Test policy controls** — Toggle live testing, run all tests, or configure run policies (unit on keystroke, integration on save, browser on demand) from the command palette
+- **Test policy controls** — Enable/disable live testing, run all tests, or configure run policies (unit on keystroke, integration on save, browser on demand) from the command palette
 - **Call graph viewer** — Visualize test dependency graphs via `sagefs.showCallGraph`
 - **Event history** — Browse recent pipeline events via `sagefs.showHistory` QuickPick
 - **Dashboard webview** — Open the SageFs dashboard directly inside VS Code as a webview panel
@@ -480,7 +480,7 @@ The MCP response strategy is also optimized for LLM context windows — echoed c
 | `get_live_test_status` | Query live test state with optional file filter |
 | `run_tests` | Run tests on demand with pattern/category filters |
 | `set_run_policy` | Control which test categories auto-run and when |
-| `toggle_live_testing` | Enable/disable the live testing pipeline |
+| `set_live_testing` | Enable/disable the live testing pipeline |
 | `get_pipeline_trace` | Debug the three-speed pipeline waterfall |
 
 [Full tool list →](#mcp-tools-reference)
@@ -651,7 +651,7 @@ SageFs auto-loads `~/.SageFs/init.fsx` on session start, if it exists. Use it fo
 
 **SSE connections dropping** — Proxies and load balancers may close idle connections. SageFs sends keepalive comments every 15 seconds on SSE endpoints. If using a reverse proxy (nginx, Cloudflare Tunnel), set the proxy timeout to at least 60 seconds.
 
-**Live testing not running** — Verify live testing is enabled with `toggle_live_testing` (MCP) or check the status bar. By default, only unit tests auto-run on every change; integration and browser tests require explicit triggers. Use `set_run_policy` to configure per-category behavior.
+**Live testing not running** — Verify live testing is enabled with `set_live_testing` (MCP) or check the status bar. By default, only unit tests auto-run on every change; integration and browser tests require explicit triggers. Use `set_run_policy` to configure per-category behavior.
 
 **Tests discovered but not executing** — Check the run policy for each test category. Integration, browser, and benchmark tests default to `OnDemand` — they won't auto-run. Use `run_tests` (MCP tool) to trigger them manually, or change the policy with `set_run_policy`.
 
@@ -682,7 +682,7 @@ SageFs auto-loads `~/.SageFs/init.fsx` on session start, if it exists. Use it fo
 | `list_sessions` | List all active sessions. |
 | `stop_session` | Stop a session by ID. |
 | `switch_session` | Switch active session by ID. |
-| `toggle_live_testing` | Enable/disable live unit testing. |
+| `set_live_testing` | Enable/disable live unit testing. |
 | `get_live_test_status` | Current test state: summary, per-test status, timing. Filter by file. |
 | `run_tests` | Run tests explicitly — optionally filter by name pattern or category. |
 | `set_run_policy` | Set auto-run policy per test category (every/save/demand/disabled). |

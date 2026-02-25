@@ -668,8 +668,8 @@ let activate (context: ExtensionContext) =
 
   let tsb = Window.createStatusBarItem StatusBarAlignment.Left 49.
   tsb.text <- "$(beaker) No tests"
-  tsb.tooltip <- Some "SageFs live testing — click to toggle"
-  tsb.command <- Some "sagefs.toggleLiveTesting"
+  tsb.tooltip <- Some "SageFs live testing — click to enable"
+  tsb.command <- Some "sagefs.enableLiveTesting"
   testStatusBarItem <- Some tsb
   context.subscriptions.Add (tsb :> obj :?> Disposable)
 
@@ -703,10 +703,19 @@ let activate (context: ExtensionContext) =
   reg "sagefs.switchSession" (fun _ -> switchSessionCmd () |> ignore)
   reg "sagefs.stopSession" (fun _ -> stopSessionCmd () |> ignore)
   reg "sagefs.clearResults" (fun _ -> clearAllDecorations ())
-  reg "sagefs.toggleLiveTesting" (fun _ ->
+  reg "sagefs.enableLiveTesting" (fun _ ->
     match client with
     | Some c ->
-      Client.toggleLiveTesting c
+      Client.enableLiveTesting c
+      |> Promise.iter (fun result ->
+        match result.result with
+        | Some msg -> Window.showInformationMessage msg [||] |> ignore
+        | None -> ())
+    | None -> Window.showWarningMessage "SageFs is not connected" [||] |> ignore)
+  reg "sagefs.disableLiveTesting" (fun _ ->
+    match client with
+    | Some c ->
+      Client.disableLiveTesting c
       |> Promise.iter (fun result ->
         match result.result with
         | Some msg -> Window.showInformationMessage msg [||] |> ignore

@@ -343,6 +343,7 @@ type TestSummary = {
   Stale: int
   Running: int
   Disabled: int
+  Enabled: bool
 }
 
 // --- Run Generation & Phase (replaces IsRunning: bool) ---
@@ -636,9 +637,9 @@ module StatusToGutter =
     { Line = line; Icon = fromCoverageStatus status; Tooltip = tip }
 
 module TestSummary =
-  let empty = { Total = 0; Passed = 0; Failed = 0; Stale = 0; Running = 0; Disabled = 0 }
+  let empty = { Total = 0; Passed = 0; Failed = 0; Stale = 0; Running = 0; Disabled = 0; Enabled = true }
 
-  let fromStatuses (statuses: TestRunStatus array) : TestSummary =
+  let fromStatuses (activation: LiveTestingActivation) (statuses: TestRunStatus array) : TestSummary =
     let mutable passed = 0
     let mutable failed = 0
     let mutable stale = 0
@@ -657,7 +658,8 @@ module TestSummary =
       Failed = failed
       Stale = stale
       Running = running
-      Disabled = disabled }
+      Disabled = disabled
+      Enabled = activation = LiveTestingActivation.Active }
 
   let toStatusBar (s: TestSummary) : string =
     if s.Total = 0 then "Tests: none"
@@ -692,12 +694,13 @@ module TestResultsBatchPayload =
     (generation: RunGeneration)
     (freshness: ResultFreshness)
     (completion: BatchCompletion)
+    (activation: LiveTestingActivation)
     (entries: TestStatusEntry array)
     : TestResultsBatchPayload =
     let summary =
       entries
       |> Array.map (fun e -> e.Status)
-      |> TestSummary.fromStatuses
+      |> TestSummary.fromStatuses activation
     { Generation = generation
       Freshness = freshness
       Completion = completion
@@ -1684,7 +1687,7 @@ module LiveTestPipelineState =
       | None -> ""
       | Some t -> PipelineTiming.toStatusBar t
     let statuses = state.TestState.StatusEntries |> Array.map (fun e -> e.Status)
-    let summary = TestSummary.fromStatuses statuses |> TestSummary.toStatusBar
+    let summary = TestSummary.fromStatuses state.TestState.Activation statuses |> TestSummary.toStatusBar
     match timing, summary with
     | "", "Tests: none" -> ""
     | "", s -> s

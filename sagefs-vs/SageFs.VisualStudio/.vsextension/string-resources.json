@@ -19,7 +19,7 @@
   "SageFs.CodeLens.DisplayName": "SageFs Eval",
   "SageFs.HotReloadToggleDirectory.DisplayName": "SageFs: Toggle Hot Reload for Directory",
   "SageFs.EvalRange.DisplayName": "SageFs: Evaluate Code Block",
-  "SageFs.ToggleLiveTesting.DisplayName": "SageFs: Toggle Live Testing",
+  "SageFs.LiveTesting.DisplayName": "SageFs: Enable/Disable Live Testing",
   "SageFs.RunTests.DisplayName": "SageFs: Run All Tests",
   "SageFs.ShowRecentEvents.DisplayName": "SageFs: Show Recent Events",
   "SageFs.TestCodeLens.DisplayName": "SageFs Live Tests",

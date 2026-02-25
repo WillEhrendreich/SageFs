@@ -62,7 +62,8 @@ module RaylibMode =
     | CopySelection
     | HotReloadWatchAll
     | HotReloadUnwatchAll
-    | ToggleLiveTesting
+    | EnableLiveTesting
+    | DisableLiveTesting
     | CycleRunPolicy
     | ToggleCoverage
 
@@ -124,7 +125,8 @@ module RaylibMode =
         | Some (UiAction.CycleTheme) -> Some CycleTheme
         | Some (UiAction.HotReloadWatchAll) -> Some HotReloadWatchAll
         | Some (UiAction.HotReloadUnwatchAll) -> Some HotReloadUnwatchAll
-        | Some (UiAction.ToggleLiveTesting) -> Some ToggleLiveTesting
+        | Some (UiAction.EnableLiveTesting) -> Some EnableLiveTesting
+        | Some (UiAction.DisableLiveTesting) -> Some DisableLiveTesting
         | Some (UiAction.CycleRunPolicy) -> Some CycleRunPolicy
         | Some (UiAction.ToggleCoverage) -> Some ToggleCoverage
         | Some (UiAction.Editor action) -> Some (Action action)
@@ -367,8 +369,10 @@ module RaylibMode =
             try
               client.PostAsync(sprintf "%s/api/sessions/%s/hotreload/unwatch-all" baseUrl lastSessionId, new System.Net.Http.StringContent("{}", System.Text.Encoding.UTF8, "application/json")).Wait()
             with _ -> ()
-        | ToggleLiveTesting ->
-          DaemonClient.dispatchAction client baseUrl "toggleLiveTesting" None |> fun t -> t.Wait()
+        | EnableLiveTesting ->
+          DaemonClient.dispatchAction client baseUrl "enableLiveTesting" None |> fun t -> t.Wait()
+        | DisableLiveTesting ->
+          DaemonClient.dispatchAction client baseUrl "disableLiveTesting" None |> fun t -> t.Wait()
         | CycleRunPolicy ->
           DaemonClient.dispatchAction client baseUrl "cycleRunPolicy" None |> fun t -> t.Wait()
         | ToggleCoverage ->

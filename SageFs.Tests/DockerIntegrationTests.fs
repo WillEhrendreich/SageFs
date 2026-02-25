@@ -237,7 +237,7 @@ let daemonDockerTests =
         body |> Expect.stringContains "should contain enabled" "enabled"
       })
 
-    dockerTest "toggle live testing" (fun () ->
+    dockerTest "enable live testing" (fun () ->
       task {
         use container = SageFsContainer.create ()
         let! baseUrl = SageFsContainer.startAndGetUrl container
@@ -248,10 +248,10 @@ let daemonDockerTests =
               return status = 200
             with _ -> return false
           })
-        ready |> Expect.isTrue "health should respond before toggle"
+        ready |> Expect.isTrue "health should respond before enable"
         let! (status, body) =
-          DockerHttpHelpers.postJson baseUrl "/api/live-testing/toggle" "{}"
-        status |> Expect.equal "toggle should return 200" 200
+          DockerHttpHelpers.postJson baseUrl "/api/live-testing/enable" "{}"
+        status |> Expect.equal "enable should return 200" 200
         body |> Expect.stringContains "should have enabled field" "enabled"
       })
 

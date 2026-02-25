@@ -2015,7 +2015,8 @@ let createApiDispatchHandler
       // Handle app-level messages that aren't EditorActions
       let appMsg =
         match action.action with
-        | "toggleLiveTesting" -> Some SageFsMsg.ToggleLiveTesting
+        | "enableLiveTesting" -> Some SageFsMsg.EnableLiveTesting
+        | "disableLiveTesting" -> Some SageFsMsg.DisableLiveTesting
         | "cycleRunPolicy" -> Some SageFsMsg.CycleRunPolicy
         | "toggleCoverage" -> Some SageFsMsg.ToggleCoverage
         | _ -> editorAction |> Option.map SageFsMsg.Editor

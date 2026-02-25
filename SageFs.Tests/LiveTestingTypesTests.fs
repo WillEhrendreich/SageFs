@@ -338,7 +338,7 @@ let liveTestingTypesTests = testList "LiveTestingTypes" [
         TestRunStatus.Stale
         TestRunStatus.Running
       |]
-      let s = TestSummary.fromStatuses statuses
+      let s = TestSummary.fromStatuses LiveTestingActivation.Active statuses
       s.Total |> Expect.equal "total 5" 5
       s.Passed |> Expect.equal "passed 2" 2
       s.Failed |> Expect.equal "failed 1" 1
@@ -356,7 +356,7 @@ let liveTestingTypesTests = testList "LiveTestingTypes" [
       bar |> Expect.equal "none when 0" "Tests: none"
     }
     test "fromStatuses empty array" {
-      TestSummary.fromStatuses [||]
+      TestSummary.fromStatuses LiveTestingActivation.Active [||]
       |> fun s -> s.Total
       |> Expect.equal "should be 0" 0
     }
@@ -610,7 +610,7 @@ let liveTestingTypesTests = testList "LiveTestingTypes" [
       |> Expect.equal "should be Superseded" BatchCompletion.Superseded
     }
     test "isEmpty on empty payload" {
-      let p = TestResultsBatchPayload.create RunGeneration.zero Fresh (BatchCompletion.Complete(0,0)) [||]
+      let p = TestResultsBatchPayload.create RunGeneration.zero Fresh (BatchCompletion.Complete(0,0)) LiveTestingActivation.Active [||]
       TestResultsBatchPayload.isEmpty p
       |> Expect.isTrue "should be empty"
     }

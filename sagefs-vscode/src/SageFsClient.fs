@@ -424,10 +424,27 @@ let runTests (pattern: string) (c: Client) =
       return { success = false; result = None; error = Some (string err) }
   }
 
-let toggleLiveTesting (c: Client) =
+let enableLiveTesting (c: Client) =
   promise {
     try
-      let! resp = httpPost c "/api/live-testing/toggle" "{}" 5000
+      let! resp = httpPost c "/api/live-testing/enable" "{}" 5000
+      let parsed = jsonParse resp.body
+      return
+        { success = parsed?success |> unbox<bool>
+          result =
+            let m = parsed?message
+            if isNull m then None else Some (unbox<string> m)
+          error =
+            let e = parsed?error
+            if isNull e then None else Some (unbox<string> e) }
+    with err ->
+      return { success = false; result = None; error = Some (string err) }
+  }
+
+let disableLiveTesting (c: Client) =
+  promise {
+    try
+      let! resp = httpPost c "/api/live-testing/disable" "{}" 5000
       let parsed = jsonParse resp.body
       return
         { success = parsed?success |> unbox<bool>

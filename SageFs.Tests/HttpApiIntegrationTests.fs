@@ -477,16 +477,16 @@ let vsCodeEndpointTests =
         client.Dispose()
         killDaemon proc
 
-    testCase "POST /api/live-testing/toggle returns success and message" <| fun _ ->
+    testCase "POST /api/live-testing/enable returns success and message" <| fun _ ->
       let port = 39950 + (Random().Next(50))
       let proc, client = startDaemon port |> Async.AwaitTask |> Async.RunSynchronously
       try
-        let status, body = postJson client "/api/live-testing/toggle" {||} |> Async.AwaitTask |> Async.RunSynchronously
+        let status, body = postJson client "/api/live-testing/enable" {||} |> Async.AwaitTask |> Async.RunSynchronously
         status |> Expect.equal "200 OK" 200
 
         use doc = JsonDocument.Parse(body)
         doc.RootElement.GetProperty("success").GetBoolean()
-        |> Expect.isTrue "toggle succeeded"
+        |> Expect.isTrue "enable succeeded"
         doc.RootElement.GetProperty("message").GetString()
         |> Expect.isNotEmpty "has message"
       finally

@@ -270,8 +270,11 @@ let run (daemonInfo: DaemonInfo) = task {
                 let! _ = client.PostAsync(sprintf "%s/api/sessions/%s/hotreload/unwatch-all" baseUrl lastSessionId, new StringContent("{}", System.Text.Encoding.UTF8, "application/json"))
                 ()
               with _ -> ()
-          | Some TerminalCommand.ToggleLiveTesting ->
-            do! DaemonClient.dispatchAction client baseUrl "toggleLiveTesting" None |> Async.AwaitTask
+          | Some TerminalCommand.EnableLiveTesting ->
+            do! DaemonClient.dispatchAction client baseUrl "enableLiveTesting" None |> Async.AwaitTask
+            render ()
+          | Some TerminalCommand.DisableLiveTesting ->
+            do! DaemonClient.dispatchAction client baseUrl "disableLiveTesting" None |> Async.AwaitTask
             render ()
           | Some TerminalCommand.CycleRunPolicy ->
             do! DaemonClient.dispatchAction client baseUrl "cycleRunPolicy" None |> Async.AwaitTask

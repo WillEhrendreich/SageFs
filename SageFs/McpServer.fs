@@ -689,11 +689,19 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                 }) :> Task
             ) |> ignore
 
-            // POST /api/live-testing/toggle — toggle live testing
-            app.MapPost("/api/live-testing/toggle", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
+            // POST /api/live-testing/enable — enable live testing
+            app.MapPost("/api/live-testing/enable", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
                 withErrorHandling ctx (fun () -> task {
-                    let! result = SageFs.McpTools.toggleLiveTesting mcpContext None
-                    do! jsonResponse ctx 200 {| success = true; message = result |}
+                    let! result = SageFs.McpTools.setLiveTesting mcpContext true
+                    do! jsonResponse ctx 200 {| success = true; message = result; activation = "active" |}
+                }) :> Task
+            ) |> ignore
+
+            // POST /api/live-testing/disable — disable live testing
+            app.MapPost("/api/live-testing/disable", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
+                withErrorHandling ctx (fun () -> task {
+                    let! result = SageFs.McpTools.setLiveTesting mcpContext false
+                    do! jsonResponse ctx 200 {| success = true; message = result; activation = "inactive" |}
                 }) :> Task
             ) |> ignore
 
@@ -882,7 +890,7 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                       let lt = model.LiveTesting.TestState
                       if lt.StatusEntries.Length > 0 || TestRunPhase.isRunning lt.RunPhase then
                         let s = SageFs.Features.LiveTesting.TestSummary.fromStatuses
-                                  (lt.StatusEntries |> Array.map (fun e -> e.Status))
+                                  lt.Activation (lt.StatusEntries |> Array.map (fun e -> e.Status))
                         serverTracker.AccumulateEvent(
                           PushEvent.TestSummaryChanged s)
                         // Broadcast test summary over SSE
@@ -899,7 +907,7 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                             SageFs.Features.LiveTesting.TestResultsBatchPayload.deriveCompletion
                               freshness lt.DiscoveredTests.Length lt.StatusEntries.Length
                           SageFs.Features.LiveTesting.TestResultsBatchPayload.create
-                            lt.LastGeneration freshness completion lt.StatusEntries
+                            lt.LastGeneration freshness completion lt.Activation lt.StatusEntries
                         serverTracker.AccumulateEvent(
                           PushEvent.TestResultsBatch payload)
                         // Broadcast test results batch over SSE

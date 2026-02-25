@@ -10,14 +10,14 @@ using Microsoft.VisualStudio.Extensibility.Shell;
 #pragma warning disable VSEXTPREVIEW_OUTPUTWINDOW
 
 [VisualStudioContribution]
-internal class ToggleLiveTestingCommand : Command
+internal class LiveTestingCommand : Command
 {
   private readonly Core.SageFsClient client;
   private OutputChannel? output;
 
-  public ToggleLiveTestingCommand(Core.SageFsClient client) => this.client = client;
+  public LiveTestingCommand(Core.SageFsClient client) => this.client = client;
 
-  public override CommandConfiguration CommandConfiguration => new("%SageFs.ToggleLiveTesting.DisplayName%")
+  public override CommandConfiguration CommandConfiguration => new("%SageFs.LiveTesting.DisplayName%")
   {
     Placements = [CommandPlacement.KnownPlacements.ExtensionsMenu],
     Icon = new(ImageMoniker.KnownValues.TestRun, IconSettings.IconAndText),
@@ -31,7 +31,13 @@ internal class ToggleLiveTestingCommand : Command
 
   public override async Task ExecuteCommandAsync(IClientContext context, CancellationToken ct)
   {
-    var enabled = await client.ToggleLiveTestingAsync(ct);
+    var status = await client.GetLiveTestingStatusAsync(ct);
+    bool wasEnabled = status is not null && status.Value.Enabled;
+    bool enabled;
+    if (wasEnabled)
+      enabled = await client.DisableLiveTestingAsync(ct);
+    else
+      enabled = await client.EnableLiveTestingAsync(ct);
     if (output is not null)
       await output.WriteLineAsync(enabled ? "✓ Live testing enabled" : "○ Live testing disabled");
   }

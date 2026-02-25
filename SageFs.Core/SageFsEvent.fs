@@ -57,7 +57,8 @@ type SageFsEvent =
   | TestsDiscovered of tests: Features.LiveTesting.TestCase array
   | TestRunStarted of testIds: Features.LiveTesting.TestId array
   | TestResultsBatch of results: Features.LiveTesting.TestRunResult array
-  | LiveTestingToggled of enabled: bool
+  | LiveTestingEnabled
+  | LiveTestingDisabled
   | AffectedTestsComputed of testIds: Features.LiveTesting.TestId array
   | CoverageUpdated of coverage: Features.LiveTesting.CoverageState
   | RunPolicyChanged of category: Features.LiveTesting.TestCategory * policy: Features.LiveTesting.RunPolicy

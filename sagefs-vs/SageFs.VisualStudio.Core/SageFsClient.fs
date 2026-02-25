@@ -375,18 +375,32 @@ type SageFsClient() =
       return None
   }
 
-  /// Toggle live testing on/off.
-  member this.ToggleLiveTestingAsync(ct: CancellationToken) = task {
+  /// Enable live testing.
+  member this.EnableLiveTestingAsync(ct: CancellationToken) = task {
     try
       let! resp =
         http.PostAsync(
-          sprintf "%s/api/live-testing/toggle" this.BaseUrl,
+          sprintf "%s/api/live-testing/enable" this.BaseUrl,
           new StringContent("{}", Encoding.UTF8, "application/json"), ct)
       let! body = resp.Content.ReadAsStringAsync(ct)
       use doc = JsonDocument.Parse(body)
       return tryBool doc.RootElement "enabled" false
     with _ ->
       return false
+  }
+
+  /// Disable live testing.
+  member this.DisableLiveTestingAsync(ct: CancellationToken) = task {
+    try
+      let! resp =
+        http.PostAsync(
+          sprintf "%s/api/live-testing/disable" this.BaseUrl,
+          new StringContent("{}", Encoding.UTF8, "application/json"), ct)
+      let! body = resp.Content.ReadAsStringAsync(ct)
+      use doc = JsonDocument.Parse(body)
+      return tryBool doc.RootElement "enabled" false
+    with _ ->
+      return true
   }
 
   /// Run all tests (or filtered by pattern).

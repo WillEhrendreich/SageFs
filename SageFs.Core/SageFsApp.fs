@@ -12,7 +12,8 @@ type SageFsMsg =
   | Editor of EditorAction
   | Event of SageFsEvent
   | CycleTheme
-  | ToggleLiveTesting
+  | EnableLiveTesting
+  | DisableLiveTesting
   | CycleRunPolicy
   | ToggleCoverage
   | PipelineTick of now: DateTimeOffset
@@ -399,9 +400,12 @@ module SageFsUpdate =
           else []
         { model with LiveTesting = lt }, effects
 
-      | SageFsEvent.LiveTestingToggled enabled ->
-        let activation = if enabled then Features.LiveTesting.LiveTestingActivation.Active else Features.LiveTesting.LiveTestingActivation.Inactive
-        let lt = recomputeStatuses model.LiveTesting (fun s -> { s with Activation = activation })
+      | SageFsEvent.LiveTestingEnabled ->
+        let lt = recomputeStatuses model.LiveTesting (fun s -> { s with Activation = Features.LiveTesting.LiveTestingActivation.Active })
+        { model with LiveTesting = lt }, []
+
+      | SageFsEvent.LiveTestingDisabled ->
+        let lt = recomputeStatuses model.LiveTesting (fun s -> { s with Activation = Features.LiveTesting.LiveTestingActivation.Inactive })
         { model with LiveTesting = lt }, []
 
       | SageFsEvent.AffectedTestsComputed testIds ->
@@ -465,21 +469,26 @@ module SageFsUpdate =
       let name, theme = ThemePresets.cycleNext model.Theme
       { model with Theme = theme; ThemeName = name }, []
 
-    | SageFsMsg.ToggleLiveTesting ->
-      let wasInactive = model.LiveTesting.TestState.Activation = Features.LiveTesting.LiveTestingActivation.Inactive
-      let toggleActivation =
-        if wasInactive then Features.LiveTesting.LiveTestingActivation.Active
-        else Features.LiveTesting.LiveTestingActivation.Inactive
-      let lt = recomputeStatuses model.LiveTesting (fun s -> { s with Activation = toggleActivation })
-      // When activating with already-discovered tests, run them immediately
-      let effects =
-        if wasInactive && not (Array.isEmpty lt.TestState.DiscoveredTests) then
-          let allIds = lt.TestState.DiscoveredTests |> Array.map (fun tc -> tc.Id)
-          Features.LiveTesting.LiveTestPipelineState.triggerExecutionForAffected
-            allIds Features.LiveTesting.RunTrigger.ExplicitRun lt
-          |> List.map SageFsEffect.Pipeline
-        else []
-      { model with LiveTesting = lt }, effects
+    | SageFsMsg.EnableLiveTesting ->
+      if model.LiveTesting.TestState.Activation = Features.LiveTesting.LiveTestingActivation.Active then
+        model, []
+      else
+        let lt = recomputeStatuses model.LiveTesting (fun s -> { s with Activation = Features.LiveTesting.LiveTestingActivation.Active })
+        let effects =
+          if not (Array.isEmpty lt.TestState.DiscoveredTests) then
+            let allIds = lt.TestState.DiscoveredTests |> Array.map (fun tc -> tc.Id)
+            Features.LiveTesting.LiveTestPipelineState.triggerExecutionForAffected
+              allIds Features.LiveTesting.RunTrigger.ExplicitRun lt
+            |> List.map SageFsEffect.Pipeline
+          else []
+        { model with LiveTesting = lt }, effects
+
+    | SageFsMsg.DisableLiveTesting ->
+      if model.LiveTesting.TestState.Activation = Features.LiveTesting.LiveTestingActivation.Inactive then
+        model, []
+      else
+        let lt = recomputeStatuses model.LiveTesting (fun s -> { s with Activation = Features.LiveTesting.LiveTestingActivation.Inactive })
+        { model with LiveTesting = lt }, []
 
     | SageFsMsg.CycleRunPolicy ->
       let lt = model.LiveTesting
@@ -996,7 +1005,7 @@ module SseDedupKey =
       model.Diagnostics |> Map.values |> Seq.sumBy List.length
     let lt = model.LiveTesting.TestState
     let testSummary =
-      TestSummary.fromStatuses (lt.StatusEntries |> Array.map (fun e -> e.Status))
+      TestSummary.fromStatuses lt.Activation (lt.StatusEntries |> Array.map (fun e -> e.Status))
     System.Text.Json.JsonSerializer.Serialize(
       {| outputCount = outputCount
          diagCount = diagCount

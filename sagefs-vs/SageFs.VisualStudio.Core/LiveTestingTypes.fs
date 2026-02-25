@@ -60,7 +60,8 @@ type LiveTestEvent =
   | TestsDiscovered of tests: TestInfo array
   | TestRunStarted of testIds: TestId array
   | TestResultBatch of results: TestResult array
-  | LiveTestingToggled of enabled: bool
+  | LiveTestingEnabled
+  | LiveTestingDisabled
   | SummaryUpdated of summary: TestSummary
 
 /// Aggregate live testing state
@@ -101,8 +102,10 @@ module LiveTestState =
       let completedIds = results |> Array.map _.Id |> Set.ofArray
       let stillRunning = Set.difference state.RunningTests completedIds
       { state with Results = newResults; RunningTests = stillRunning }
-    | LiveTestEvent.LiveTestingToggled enabled ->
-      { state with Enabled = if enabled then LiveTestingEnabled.On else LiveTestingEnabled.Off }
+    | LiveTestEvent.LiveTestingEnabled ->
+      { state with Enabled = LiveTestingEnabled.On }
+    | LiveTestEvent.LiveTestingDisabled ->
+      { state with Enabled = LiveTestingEnabled.Off }
     | LiveTestEvent.SummaryUpdated summary ->
       { state with LastSummary = Some summary }
 

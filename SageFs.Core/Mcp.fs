@@ -1227,7 +1227,7 @@ module McpTools =
         let state = model.LiveTesting.TestState
         let summary =
           Features.LiveTesting.TestSummary.fromStatuses
-            (state.StatusEntries |> Array.map (fun e -> e.Status))
+            state.Activation (state.StatusEntries |> Array.map (fun e -> e.Status))
         let tests =
           match fileFilter with
           | Some f ->
@@ -1245,12 +1245,13 @@ module McpTools =
         return JsonSerializer.Serialize(resp, liveTestJsonOpts)
     }
 
-  let toggleLiveTesting (ctx: McpContext) (enabled: bool option) : Task<string> =
+  let setLiveTesting (ctx: McpContext) (enabled: bool) : Task<string> =
     task {
       match ctx.Dispatch with
-      | None -> return "Cannot toggle — Elm loop not started."
+      | None -> return "Cannot set live testing — Elm loop not started."
       | Some dispatch ->
-        dispatch (SageFsMsg.ToggleLiveTesting)
+        let msg = if enabled then SageFsMsg.EnableLiveTesting else SageFsMsg.DisableLiveTesting
+        dispatch msg
         match ctx.GetElmModel with
         | Some getModel ->
           let state = (getModel ()).LiveTesting.TestState
@@ -1260,7 +1261,7 @@ module McpTools =
             | Features.LiveTesting.LiveTestingActivation.Inactive -> "disabled"
           return sprintf "Live testing %s." activationLabel
         | None ->
-          return "Toggled. State unavailable."
+          return sprintf "Live testing %s." (if enabled then "enabled" else "disabled")
     }
 
   let setRunPolicy (ctx: McpContext) (category: string) (policy: string) : Task<string> =
@@ -1300,7 +1301,7 @@ module McpTools =
       let state = model.LiveTesting.TestState
       let summary =
         Features.LiveTesting.TestSummary.fromStatuses
-          (state.StatusEntries |> Array.map (fun e -> e.Status))
+          state.Activation (state.StatusEntries |> Array.map (fun e -> e.Status))
       let timing = model.LiveTesting.LastTiming
       let resp = {|
         Enabled = state.Activation = Features.LiveTesting.LiveTestingActivation.Active
