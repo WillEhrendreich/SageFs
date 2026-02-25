@@ -350,6 +350,82 @@ type SageFsClient() =
       return ()
   }
 
+  // ── Live Testing API ──────────────────────────────────────
+
+  /// Get live testing status (enabled, summary, run policies).
+  member this.GetLiveTestingStatusAsync(ct: CancellationToken) = task {
+    try
+      let! body =
+        http.GetStringAsync(
+          sprintf "%s/api/live-testing/status" this.BaseUrl, ct)
+      use doc = JsonDocument.Parse(body)
+      let root = doc.RootElement
+      return Some
+        {| Enabled = tryBool root "enabled" false
+           Summary =
+             match getProp root "summary" with
+             | Some s ->
+               Some { Total = tryInt s "total" 0
+                      Passed = tryInt s "passed" 0
+                      Failed = tryInt s "failed" 0
+                      Running = tryInt s "running" 0
+                      Stale = tryInt s "stale" 0 }
+             | None -> None |}
+    with _ ->
+      return None
+  }
+
+  /// Toggle live testing on/off.
+  member this.ToggleLiveTestingAsync(ct: CancellationToken) = task {
+    try
+      let! resp =
+        http.PostAsync(
+          sprintf "%s/api/live-testing/toggle" this.BaseUrl,
+          new StringContent("{}", Encoding.UTF8, "application/json"), ct)
+      let! body = resp.Content.ReadAsStringAsync(ct)
+      use doc = JsonDocument.Parse(body)
+      return tryBool doc.RootElement "enabled" false
+    with _ ->
+      return false
+  }
+
+  /// Run all tests (or filtered by pattern).
+  member this.RunTestsAsync(pattern: string, ct: CancellationToken) = task {
+    try
+      let json = sprintf """{"pattern":%s}""" (JsonSerializer.Serialize(pattern))
+      let! _ =
+        http.PostAsync(
+          sprintf "%s/api/live-testing/run" this.BaseUrl,
+          new StringContent(json, Encoding.UTF8, "application/json"), ct)
+      return ()
+    with _ -> return ()
+  }
+
+  /// Set run policy for a test category.
+  member this.SetRunPolicyAsync(category: string, policy: string, ct: CancellationToken) = task {
+    try
+      let json = sprintf """{"category":"%s","policy":"%s"}""" category policy
+      let! _ =
+        http.PostAsync(
+          sprintf "%s/api/live-testing/run-policy" this.BaseUrl,
+          new StringContent(json, Encoding.UTF8, "application/json"), ct)
+      return ()
+    with _ -> return ()
+  }
+
+  /// Get recent FSI events.
+  member this.GetRecentEventsAsync(count: int, ct: CancellationToken) = task {
+    try
+      let! body =
+        http.GetStringAsync(
+          sprintf "%s/api/recent-events?count=%d" this.BaseUrl count, ct)
+      return body
+    with _ ->
+      return "[]"
+  }
+
+  // ── Completions ──────────────────────────────────────────
+
   member this.GetCompletionsAsync(code: string, cursorPosition: int, ct: CancellationToken) = task {
     try
       let json =

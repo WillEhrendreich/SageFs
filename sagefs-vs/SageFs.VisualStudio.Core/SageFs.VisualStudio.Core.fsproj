@@ -8,6 +8,7 @@
     <Compile Include="Types.fs" />
     <Compile Include="LiveTestingTypes.fs" />
     <Compile Include="LiveTestingParser.fs" />
+    <Compile Include="LiveTestingSubscriber.fs" />
     <Compile Include="DaemonManager.fs" />
     <Compile Include="SageFsClient.fs" />
     <Compile Include="DiagnosticsSubscriber.fs" />
