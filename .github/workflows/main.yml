@@ -52,6 +52,9 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    permissions:
+      contents: write
+      packages: write
 
     steps:
     - uses: actions/checkout@v5
@@ -68,14 +71,65 @@ jobs:
         dotnet-version: |
           10.0.x
 
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: 20
+
     - name: Build forked MCP SDK packages
       run: |
         dotnet pack mcp-sdk/src/ModelContextProtocol.Core -o mcp-sdk-nupkg -c Release
         dotnet pack mcp-sdk/src/ModelContextProtocol -o mcp-sdk-nupkg -c Release
         dotnet pack mcp-sdk/src/ModelContextProtocol.AspNetCore -o mcp-sdk-nupkg -c Release
 
+    - name: Get version
+      id: version
+      run: |
+        version=$(grep -oP '(?<=<Version>)[^<]+' Directory.Build.props)
+        echo "version=$version" >> $GITHUB_OUTPUT
+
     - name: Pack SageFs
-      run: dotnet pack SageFs -o nupkg -c Release
+      run: dotnet pack SageFs -c Release -o release
+
+    - name: Build VS Code extension
+      working-directory: sagefs-vscode
+      run: |
+        npm ci
+        npx @vscode/vsce package -o ../release/sagefs-${{ steps.version.outputs.version }}.vsix
+
+    - name: Build Visual Studio extension
+      run: |
+        dotnet build sagefs-vs/SageFs.VisualStudio/SageFs.VisualStudio.csproj -c Release
+        cp sagefs-vs/SageFs.VisualStudio/bin/Release/*.vsix release/ 2>/dev/null || true
 
     - name: Push to NuGet
-      run: dotnet nuget push nupkg/*.nupkg --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
+      run: dotnet nuget push release/*.nupkg --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
+
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: v${{ steps.version.outputs.version }}
+        name: v${{ steps.version.outputs.version }}
+        files: |
+          release/*.nupkg
+          release/*.vsix
+        body: |
+          ## SageFs v${{ steps.version.outputs.version }}
+
+          ### Downloads
+          - **NuGet**: `dotnet tool install --global SageFs`
+          - **VS Code**: Install `.vsix` from this release or VS Code Marketplace
+          - **Visual Studio**: Install `.vsix` from this release
+        make_latest: true
+
+    - name: Tag sagefs.nvim with matching version
+      env:
+        NVIM_PAT: ${{ secrets.SAGEFS_NVIM_PAT }}
+      if: env.NVIM_PAT != ''
+      run: |
+        cd "$(mktemp -d)"
+        git clone https://x-access-token:${NVIM_PAT}@github.com/WillEhrendreich/sagefs.nvim.git .
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+        git tag -f "v${{ steps.version.outputs.version }}" -m "Release v${{ steps.version.outputs.version }} (synced from SageFs)"
+        git push origin "v${{ steps.version.outputs.version }}" --force
