@@ -283,6 +283,20 @@ type CoverageState = {
   Hits: bool array
 }
 
+/// Per-test coverage info for a specific symbol
+type CoveringTestInfo = {
+  TestId: TestId
+  DisplayName: string
+  Result: TestResult option
+}
+
+/// Full coverage detail for a symbol — includes which specific tests cover it
+[<RequireQualifiedAccess>]
+type CoverageDetail =
+  | NotCovered
+  | Pending
+  | Covered of tests: CoveringTestInfo array
+
 // --- Pipeline Timing ---
 
 [<RequireQualifiedAccess>]
@@ -308,6 +322,7 @@ type GutterIcon =
   | TestFailed
   | TestRunning
   | TestSkipped
+  | TestFlaky
   | Covered
   | NotCovered
 
@@ -393,6 +408,101 @@ type CoverageVisibility =
   | Shown
   | Hidden
 
+// --- Flaky Test Detection ---
+
+/// Binary outcome for flaky detection (simpler than full TestResult).
+[<Struct; RequireQualifiedAccess>]
+type TestOutcome = Pass | Fail
+
+/// Fixed-size circular buffer of recent test outcomes.
+type ResultWindow = {
+  Outcomes: TestOutcome array
+  WriteIndex: int
+  Count: int
+  WindowSize: int
+}
+
+module ResultWindow =
+  let create windowSize = {
+    Outcomes = Array.create windowSize TestOutcome.Pass
+    WriteIndex = 0
+    Count = 0
+    WindowSize = windowSize
+  }
+
+  let add (outcome: TestOutcome) (w: ResultWindow) =
+    let outcomes = Array.copy w.Outcomes
+    outcomes[w.WriteIndex] <- outcome
+    { w with
+        Outcomes = outcomes
+        WriteIndex = (w.WriteIndex + 1) % w.WindowSize
+        Count = min (w.Count + 1) w.WindowSize }
+
+  let toList (w: ResultWindow) =
+    if w.Count = 0 then []
+    elif w.Count < w.WindowSize then
+      Array.toList w.Outcomes[0 .. w.Count - 1]
+    else
+      let start = w.WriteIndex
+      [ for i in 0 .. w.WindowSize - 1 do
+          yield w.Outcomes[(start + i) % w.WindowSize] ]
+
+  let countFlips (w: ResultWindow) =
+    let items = toList w
+    match items with
+    | [] | [_] -> 0
+    | _ ->
+      items
+      |> List.pairwise
+      |> List.sumBy (fun (a, b) -> if a <> b then 1 else 0)
+
+/// Stability assessment for a test based on outcome history.
+[<RequireQualifiedAccess>]
+type TestStability =
+  | Insufficient
+  | Stable
+  | Flaky of flipCount: int
+
+module TestStability =
+  let assess (minSamples: int) (flipThreshold: int) (w: ResultWindow) =
+    if w.Count < minSamples then TestStability.Insufficient
+    else
+      let flips = ResultWindow.countFlips w
+      if flips >= flipThreshold then TestStability.Flaky flips
+      else TestStability.Stable
+
+module FlakyDefaults =
+  let windowSize = 10
+  let flipThreshold = 2
+  let minSamples = 3
+
+module FlakyDetection =
+  let outcomeOf (result: TestResult) =
+    match result with
+    | TestResult.Passed _ -> TestOutcome.Pass
+    | TestResult.Failed _ -> TestOutcome.Fail
+    | TestResult.Skipped _ | TestResult.NotRun -> TestOutcome.Pass
+
+  let recordResult
+    (testId: TestId)
+    (result: TestResult)
+    (history: Map<TestId, ResultWindow>)
+    : Map<TestId, ResultWindow> =
+    let window =
+      history
+      |> Map.tryFind testId
+      |> Option.defaultWith (fun () -> ResultWindow.create FlakyDefaults.windowSize)
+    let updated = ResultWindow.add (outcomeOf result) window
+    Map.add testId updated history
+
+  let assessTest
+    (testId: TestId)
+    (history: Map<TestId, ResultWindow>)
+    : TestStability =
+    match Map.tryFind testId history with
+    | None -> TestStability.Insufficient
+    | Some w -> TestStability.assess FlakyDefaults.minSamples FlakyDefaults.flipThreshold w
+
 type LiveTestState = {
   SourceLocations: SourceTestLocation array
   DiscoveredTests: TestCase array
@@ -409,6 +519,7 @@ type LiveTestState = {
   DetectedProviders: ProviderDescription list
   CachedEditorAnnotations: LineAnnotation array
   AssemblyLoadErrors: AssemblyLoadError list
+  FlakyHistory: Map<TestId, ResultWindow>
 }
 
 module LiveTestState =
@@ -428,6 +539,7 @@ module LiveTestState =
     DetectedProviders = []
     CachedEditorAnnotations = Array.empty
     AssemblyLoadErrors = []
+    FlakyHistory = Map.empty
   }
 
 // --- Gutter Rendering Pure Functions ---
@@ -439,6 +551,7 @@ module GutterIcon =
     | GutterIcon.TestFailed -> '\u2717'
     | GutterIcon.TestRunning -> '\u27F3'
     | GutterIcon.TestSkipped -> '\u25CB'
+    | GutterIcon.TestFlaky -> '\u2248'
     | GutterIcon.Covered -> '\u258E'
     | GutterIcon.NotCovered -> '\u00B7'
 
@@ -448,6 +561,7 @@ module GutterIcon =
     | GutterIcon.TestFailed -> 160uy
     | GutterIcon.TestRunning -> 75uy
     | GutterIcon.TestSkipped -> 242uy
+    | GutterIcon.TestFlaky -> 214uy
     | GutterIcon.Covered -> 34uy
     | GutterIcon.NotCovered -> 160uy
 
@@ -457,6 +571,7 @@ module GutterIcon =
     | GutterIcon.TestFailed -> "TestFailed"
     | GutterIcon.TestRunning -> "TestRunning"
     | GutterIcon.TestSkipped -> "TestSkipped"
+    | GutterIcon.TestFlaky -> "TestFlaky"
     | GutterIcon.Covered -> "Covered"
     | GutterIcon.NotCovered -> "NotCovered"
 
@@ -466,6 +581,7 @@ module GutterIcon =
     | "TestFailed" -> Some GutterIcon.TestFailed
     | "TestRunning" -> Some GutterIcon.TestRunning
     | "TestSkipped" -> Some GutterIcon.TestSkipped
+    | "TestFlaky" -> Some GutterIcon.TestFlaky
     | "Covered" -> Some GutterIcon.Covered
     | "NotCovered" -> Some GutterIcon.NotCovered
     | _ -> None
@@ -1019,6 +1135,46 @@ module CoverageComputation =
       if covered = total then LineCoverage.FullyCovered
       elif covered = 0 then LineCoverage.NotCovered
       else LineCoverage.PartiallyCovered (covered, total)
+
+/// Per-test coverage correlation: which specific tests cover a given symbol or line
+module CoverageCorrelation =
+  let testsForSymbol
+    (graph: TestDependencyGraph)
+    (discoveredTests: TestCase array)
+    (results: Map<TestId, TestRunResult>)
+    (symbol: string)
+    : CoverageDetail =
+    match Map.tryFind symbol graph.TransitiveCoverage with
+    | None -> CoverageDetail.NotCovered
+    | Some testIds when Array.isEmpty testIds -> CoverageDetail.NotCovered
+    | Some testIds ->
+      let testLookup = discoveredTests |> Array.map (fun tc -> tc.Id, tc) |> Map.ofArray
+      let infos =
+        testIds |> Array.map (fun tid ->
+          let name =
+            match Map.tryFind tid testLookup with
+            | Some tc -> tc.DisplayName
+            | None -> TestId.value tid
+          let result =
+            match Map.tryFind tid results with
+            | Some r -> Some r.Result
+            | None -> None
+          { TestId = tid; DisplayName = name; Result = result })
+      CoverageDetail.Covered infos
+
+  let testsForLine
+    (annotations: CoverageAnnotation array)
+    (graph: TestDependencyGraph)
+    (discoveredTests: TestCase array)
+    (results: Map<TestId, TestRunResult>)
+    (file: string)
+    (line: int)
+    : CoverageDetail =
+    annotations
+    |> Array.tryFind (fun a -> a.FilePath = file && a.DefinitionLine = line)
+    |> function
+       | None -> CoverageDetail.NotCovered
+       | Some ann -> testsForSymbol graph discoveredTests results ann.Symbol
 
 module PipelineTiming =
   let treeSitterMs (t: PipelineTiming) : float =

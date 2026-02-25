@@ -5578,3 +5578,187 @@ let filterTestsForExplicitRunTests =
       |> Expect.equal "pattern + category intersection" 2
     }
   ]
+
+[<Tests>]
+let flakyDetectionTests = testList "FlakyDetection" [
+
+  testProperty "ResultWindow.count never exceeds windowSize" <| fun (windowSize: FsCheck.PositiveInt) ->
+    let ws = max 2 windowSize.Get
+    let w = ResultWindow.create ws
+    let outcomes = [| TestOutcome.Pass; TestOutcome.Fail; TestOutcome.Pass; TestOutcome.Fail; TestOutcome.Pass; TestOutcome.Fail; TestOutcome.Pass; TestOutcome.Fail; TestOutcome.Pass; TestOutcome.Fail; TestOutcome.Pass |]
+    (outcomes |> Array.fold (fun acc o -> ResultWindow.add o acc) w).Count <= ws
+
+  testProperty "ResultWindow.toList length equals min(adds, windowSize)" <| fun (windowSize: FsCheck.PositiveInt) (additions: FsCheck.PositiveInt) ->
+    let ws = max 2 windowSize.Get |> min 50
+    let adds = max 1 additions.Get |> min 100
+    let w = ResultWindow.create ws
+    let outcomes = [| for i in 1..adds -> if i % 2 = 0 then TestOutcome.Pass else TestOutcome.Fail |]
+    (outcomes |> Array.fold (fun acc o -> ResultWindow.add o acc) w |> ResultWindow.toList).Length = min adds ws
+
+  test "insufficient when count < minSamples" {
+    ResultWindow.create 10 |> ResultWindow.add TestOutcome.Pass |> ResultWindow.add TestOutcome.Fail
+    |> TestStability.assess 3 2
+    |> Expect.equal "2 samples = Insufficient" TestStability.Insufficient
+  }
+
+  test "stable when no flips" {
+    ResultWindow.create 10
+    |> ResultWindow.add TestOutcome.Pass |> ResultWindow.add TestOutcome.Pass
+    |> ResultWindow.add TestOutcome.Pass |> ResultWindow.add TestOutcome.Pass
+    |> TestStability.assess 3 2
+    |> Expect.equal "all Pass = Stable" TestStability.Stable
+  }
+
+  test "flaky when flips exceed threshold" {
+    ResultWindow.create 10
+    |> ResultWindow.add TestOutcome.Pass |> ResultWindow.add TestOutcome.Fail
+    |> ResultWindow.add TestOutcome.Pass |> ResultWindow.add TestOutcome.Fail
+    |> TestStability.assess 3 2
+    |> function
+       | TestStability.Flaky n when n >= 2 -> ()
+       | other -> failwithf "expected Flaky with >= 2 flips, got %A" other
+  }
+
+  test "stable transitions back from flaky when consistent" {
+    let w =
+      ResultWindow.create 5
+      |> ResultWindow.add TestOutcome.Pass |> ResultWindow.add TestOutcome.Fail
+      |> ResultWindow.add TestOutcome.Pass |> ResultWindow.add TestOutcome.Fail
+      |> ResultWindow.add TestOutcome.Pass
+    match TestStability.assess 3 2 w with
+    | TestStability.Flaky _ -> ()
+    | other -> failwithf "expected Flaky before, got %A" other
+    w |> ResultWindow.add TestOutcome.Pass |> ResultWindow.add TestOutcome.Pass
+      |> ResultWindow.add TestOutcome.Pass |> ResultWindow.add TestOutcome.Pass
+      |> ResultWindow.add TestOutcome.Pass
+    |> TestStability.assess 3 2
+    |> Expect.equal "stabilized" TestStability.Stable
+  }
+
+  testProperty "empty window is always Insufficient" <| fun (windowSize: FsCheck.PositiveInt) ->
+    let ws = max 2 windowSize.Get |> min 50
+    ResultWindow.create ws |> TestStability.assess 3 2 = TestStability.Insufficient
+
+  testProperty "all same outcome is never Flaky" <| fun (windowSize: FsCheck.PositiveInt) (additions: FsCheck.PositiveInt) ->
+    let ws = max 2 windowSize.Get |> min 50
+    let adds = max 3 additions.Get |> min 100
+    [1..adds] |> List.fold (fun acc _ -> ResultWindow.add TestOutcome.Pass acc) (ResultWindow.create ws)
+    |> TestStability.assess 3 2
+    |> function TestStability.Flaky _ -> false | _ -> true
+
+  testProperty "countFlips is symmetric" <| fun () ->
+    let w1 = ResultWindow.create 4
+              |> ResultWindow.add TestOutcome.Pass |> ResultWindow.add TestOutcome.Fail
+              |> ResultWindow.add TestOutcome.Pass |> ResultWindow.add TestOutcome.Fail
+    let w2 = ResultWindow.create 4
+              |> ResultWindow.add TestOutcome.Fail |> ResultWindow.add TestOutcome.Pass
+              |> ResultWindow.add TestOutcome.Fail |> ResultWindow.add TestOutcome.Pass
+    ResultWindow.countFlips w1 = ResultWindow.countFlips w2
+
+  test "outcomeOf maps Passed to Pass" {
+    FlakyDetection.outcomeOf (TestResult.Passed (TimeSpan.FromMilliseconds 10.0))
+    |> Expect.equal "Passed→Pass" TestOutcome.Pass
+  }
+
+  test "outcomeOf maps Failed to Fail" {
+    FlakyDetection.outcomeOf (TestResult.Failed (TestFailure.AssertionFailed "msg", TimeSpan.FromMilliseconds 10.0))
+    |> Expect.equal "Failed→Fail" TestOutcome.Fail
+  }
+
+  test "recordResult creates window for new test" {
+    let tid = TestId.create "t1" "expecto"
+    let updated = FlakyDetection.recordResult tid (TestResult.Passed (TimeSpan.FromMilliseconds 5.0)) Map.empty
+    Expect.isTrue "should have entry" (Map.containsKey tid updated)
+    (Map.find tid updated).Count |> Expect.equal "1 result" 1
+  }
+
+  test "assessTest returns Insufficient for unknown test" {
+    FlakyDetection.assessTest (TestId.create "unknown" "expecto") Map.empty
+    |> Expect.equal "unknown = Insufficient" TestStability.Insufficient
+  }
+
+  test "GutterIcon.TestFlaky has correct char and color" {
+    GutterIcon.toChar GutterIcon.TestFlaky |> Expect.equal "flaky char" '\u2248'
+    GutterIcon.toColorIndex GutterIcon.TestFlaky |> Expect.equal "flaky color" 214uy
+  }
+
+  test "GutterIcon.TestFlaky roundtrips through label" {
+    GutterIcon.toLabel GutterIcon.TestFlaky |> GutterIcon.parseLabel
+    |> Expect.equal "roundtrip" (Some GutterIcon.TestFlaky)
+  }
+]
+
+[<Tests>]
+let coverageCorrelationTests = testList "CoverageCorrelation" [
+
+  test "testsForSymbol returns NotCovered when symbol not in graph" {
+    let graph = TestDependencyGraph.empty
+    CoverageCorrelation.testsForSymbol graph Array.empty Map.empty "MyModule.add"
+    |> Expect.equal "not in graph" CoverageDetail.NotCovered
+  }
+
+  test "testsForSymbol returns NotCovered when testIds array is empty" {
+    let graph = { TestDependencyGraph.empty with TransitiveCoverage = Map.ofList ["MyModule.add", Array.empty] }
+    CoverageCorrelation.testsForSymbol graph Array.empty Map.empty "MyModule.add"
+    |> Expect.equal "empty array" CoverageDetail.NotCovered
+  }
+
+  test "testsForSymbol returns Covered with test info when tests exist" {
+    let tid1 = TestId.create "test1" "expecto"
+    let tid2 = TestId.create "test2" "expecto"
+    let graph = { TestDependencyGraph.empty with TransitiveCoverage = Map.ofList ["MyModule.add", [| tid1; tid2 |]] }
+    let tests = [|
+      { Id = tid1; FullName = "Tests.test1"; DisplayName = "test1"; Origin = TestOrigin.ReflectionOnly
+        Labels = []; Framework = "expecto"; Category = TestCategory.Unit }
+      { Id = tid2; FullName = "Tests.test2"; DisplayName = "test2"; Origin = TestOrigin.ReflectionOnly
+        Labels = []; Framework = "expecto"; Category = TestCategory.Unit }
+    |]
+    let results = Map.ofList [
+      tid1, { TestId = tid1; TestName = "test1"; Result = TestResult.Passed (TimeSpan.FromMilliseconds 5.0); Timestamp = DateTimeOffset.UtcNow }
+    ]
+    match CoverageCorrelation.testsForSymbol graph tests results "MyModule.add" with
+    | CoverageDetail.Covered infos ->
+      infos.Length |> Expect.equal "2 tests" 2
+      infos.[0].DisplayName |> Expect.equal "name1" "test1"
+      Expect.isSome "has result" infos.[0].Result
+      Expect.isNone "no result yet" infos.[1].Result
+    | other -> failwithf "expected Covered, got %A" other
+  }
+
+  test "testsForSymbol uses TestId hash when test not in discovered" {
+    let tid = TestId.create "orphan" "xunit"
+    let graph = { TestDependencyGraph.empty with TransitiveCoverage = Map.ofList ["Mod.fn", [| tid |]] }
+    match CoverageCorrelation.testsForSymbol graph Array.empty Map.empty "Mod.fn" with
+    | CoverageDetail.Covered infos ->
+      infos.[0].DisplayName |> Expect.equal "falls back to hash" (TestId.value tid)
+    | other -> failwithf "expected Covered, got %A" other
+  }
+
+  test "testsForLine returns NotCovered when no annotation matches" {
+    let annotations = [| { Symbol = "Other.fn"; FilePath = "other.fs"; DefinitionLine = 5; Status = CoverageStatus.NotCovered } |]
+    CoverageCorrelation.testsForLine annotations TestDependencyGraph.empty Array.empty Map.empty "prod.fs" 10
+    |> Expect.equal "no match" CoverageDetail.NotCovered
+  }
+
+  test "testsForLine chains through annotation to graph" {
+    let tid = TestId.create "lineTest" "expecto"
+    let graph = { TestDependencyGraph.empty with TransitiveCoverage = Map.ofList ["Prod.validate", [| tid |]] }
+    let annotations = [| { Symbol = "Prod.validate"; FilePath = "prod.fs"; DefinitionLine = 42; Status = CoverageStatus.Covered (1, CoverageHealth.AllPassing) } |]
+    let tests = [| { Id = tid; FullName = "Tests.lineTest"; DisplayName = "lineTest"; Origin = TestOrigin.ReflectionOnly; Labels = []; Framework = "expecto"; Category = TestCategory.Unit } |]
+    let results = Map.ofList [ tid, { TestId = tid; TestName = "lineTest"; Result = TestResult.Passed (TimeSpan.FromMilliseconds 3.0); Timestamp = DateTimeOffset.UtcNow } ]
+    match CoverageCorrelation.testsForLine annotations graph tests results "prod.fs" 42 with
+    | CoverageDetail.Covered infos ->
+      infos.Length |> Expect.equal "1 test" 1
+      infos.[0].DisplayName |> Expect.equal "correct name" "lineTest"
+      match infos.[0].Result with
+      | Some (TestResult.Passed _) -> ()
+      | other -> failwithf "expected Passed, got %A" other
+    | other -> failwithf "expected Covered, got %A" other
+  }
+
+  test "testsForLine returns NotCovered when annotation exists but graph has no entry" {
+    let annotations = [| { Symbol = "Prod.orphan"; FilePath = "prod.fs"; DefinitionLine = 10; Status = CoverageStatus.Pending } |]
+    CoverageCorrelation.testsForLine annotations TestDependencyGraph.empty Array.empty Map.empty "prod.fs" 10
+    |> Expect.equal "annotation but no graph entry" CoverageDetail.NotCovered
+  }
+]

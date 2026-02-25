@@ -21,6 +21,7 @@ module GutterRender =
     | GutterIcon.TestDiscovered -> Theme.hexToRgb theme.ColorWarn
     | GutterIcon.TestRunning -> Theme.hexToRgb theme.ColorInfo
     | GutterIcon.TestSkipped -> Theme.hexToRgb theme.FgDim
+    | GutterIcon.TestFlaky -> Theme.hexToRgb theme.ColorWarn
     | GutterIcon.Covered -> Theme.hexToRgb theme.ColorPass
     | GutterIcon.NotCovered -> Theme.hexToRgb theme.FgDim
 
