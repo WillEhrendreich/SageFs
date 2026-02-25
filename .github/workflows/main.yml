@@ -96,13 +96,15 @@ jobs:
       run: |
         dotnet tool restore
         npm ci
-        npx @vscode/vsce package -o ../release/sagefs-${{ steps.version.outputs.version }}.vsix
+        npx @vscode/vsce package -o ../release/sagefs-vscode-${{ steps.version.outputs.version }}.vsix
 
     - name: Build Visual Studio extension
       continue-on-error: true
       run: |
         dotnet build sagefs-vs/SageFs.VisualStudio/SageFs.VisualStudio.csproj -c Release || true
-        cp sagefs-vs/SageFs.VisualStudio/bin/Release/*.vsix release/ 2>/dev/null || true
+        for f in sagefs-vs/SageFs.VisualStudio/bin/Release/*.vsix; do
+          [ -f "$f" ] && cp "$f" "release/sagefs-visualstudio-${{ steps.version.outputs.version }}.vsix"
+        done
 
     - name: Push to NuGet
       run: dotnet nuget push release/*.nupkg --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
@@ -120,8 +122,9 @@ jobs:
 
           ### Downloads
           - **NuGet**: `dotnet tool install --global SageFs`
-          - **VS Code**: Install `.vsix` from this release or VS Code Marketplace
-          - **Visual Studio**: Install `.vsix` from this release
+          - **VS Code Extension** (`sagefs-vscode-*.vsix`): Install via `code --install-extension sagefs-vscode-${{ steps.version.outputs.version }}.vsix`
+          - **Visual Studio Extension** (`sagefs-visualstudio-*.vsix`): Double-click to install in Visual Studio 2022+
+          - **Neovim**: See [sagefs.nvim](https://github.com/WillEhrendreich/sagefs.nvim)
         make_latest: true
 
     - name: Tag sagefs.nvim with matching version
