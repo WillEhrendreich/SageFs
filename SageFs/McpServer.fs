@@ -732,6 +732,30 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                 }) :> Task
             ) |> ignore
 
+            // POST /api/explore — explore a namespace or type
+            app.MapPost("/api/explore", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
+                withErrorHandling ctx (fun () -> task {
+                    let! name = readJsonProp ctx "name"
+                    let! result = SageFs.McpTools.exploreNamespace mcpContext "http" name None
+                    ctx.Response.ContentType <- "application/json"
+                    do! ctx.Response.Body.WriteAsync(System.Text.Encoding.UTF8.GetBytes(result))
+                }) :> Task
+            ) |> ignore
+
+            // POST /api/completions — get code completions
+            app.MapPost("/api/completions", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
+                withErrorHandling ctx (fun () -> task {
+                    use reader = new System.IO.StreamReader(ctx.Request.Body)
+                    let! body = reader.ReadToEndAsync()
+                    let json = System.Text.Json.JsonDocument.Parse(body)
+                    let code = json.RootElement.GetProperty("code").GetString()
+                    let cursor = json.RootElement.GetProperty("cursorPosition").GetInt32()
+                    let! result = SageFs.McpTools.getCompletions mcpContext "http" code cursor None
+                    ctx.Response.ContentType <- "application/json"
+                    do! ctx.Response.Body.WriteAsync(System.Text.Encoding.UTF8.GetBytes(result))
+                }) :> Task
+            ) |> ignore
+
             // Wire push notifications: subscribe to events → broadcast to MCP clients
             // Two delivery paths:
             //   1. MCP notifications (for clients that surface them)

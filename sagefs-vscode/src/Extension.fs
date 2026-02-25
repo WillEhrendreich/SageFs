@@ -12,6 +12,7 @@ module HotReload = SageFs.Vscode.HotReloadTreeProvider
 module SessionCtx = SageFs.Vscode.SessionContextTreeProvider
 module LiveTest = SageFs.Vscode.LiveTestingListener
 module TestCtrl = SageFs.Vscode.TestControllerAdapter
+module TypeExpl = SageFs.Vscode.TypeExplorerProvider
 
 open SageFs.Vscode.LiveTestingTypes
 
@@ -28,6 +29,8 @@ let mutable private blockDecorations: Map<int, TextEditorDecorationType> = Map.e
 let mutable private activeSessionId: string option = None
 let mutable private liveTestListener: LiveTest.LiveTestingListener option = None
 let mutable private testAdapter: TestCtrl.TestAdapter option = None
+let mutable private dashboardPanel: WebviewPanel option = None
+let mutable private typeExplorer: TypeExpl.TypeExplorer option = None
 
 // ── JS Interop ─────────────────────────────────────────────────
 
@@ -586,9 +589,28 @@ let private stopDaemon () =
   Window.showInformationMessage "SageFs: stop the daemon from its terminal or use `sagefs stop`." [||] |> ignore
   refreshStatus ()
 
-let private openDashboard () =
+let openDashboard () =
   let c = getClient ()
-  Env.openExternal (uriParse (Client.dashboardUrl c)) |> ignore
+  let dashUrl = Client.dashboardUrl c
+  match dashboardPanel with
+  | Some panel ->
+    panel.reveal 1
+  | None ->
+    let panel =
+      Window.createWebviewPanel
+        "sagefsDashboard"
+        "SageFs Dashboard"
+        2  // ViewColumn.Beside
+        (createObj [ "enableScripts" ==> true ])
+    panel.webview.html <-
+      sprintf """<!DOCTYPE html>
+<html style="height:100%%;margin:0;padding:0">
+<body style="height:100%%;margin:0;padding:0">
+<iframe src="%s" style="width:100%%;height:100%%;border:none"></iframe>
+</body>
+</html>""" dashUrl
+    panel.onDidDispose (fun () -> dashboardPanel <- None) |> ignore
+    dashboardPanel <- Some panel
 
 let private promptAutoStart () =
   promise {
@@ -656,6 +678,9 @@ let activate (context: ExtensionContext) =
   // Session Context TreeView
   SessionCtx.register context
   SessionCtx.setSession c None
+
+  // Type Explorer TreeView
+  typeExplorer <- Some (TypeExpl.create context client)
 
   let reg cmd handler =
     context.subscriptions.Add (Commands.registerCommand cmd handler)

@@ -13,6 +13,7 @@
     <Compile Include="CompletionProvider.fs" />
     <Compile Include="HotReloadTreeProvider.fs" />
     <Compile Include="SessionContextTreeProvider.fs" />
+    <Compile Include="TypeExplorerProvider.fs" />
     <Compile Include="TestControllerAdapter.fs" />
     <Compile Include="Extension.fs" />
   </ItemGroup>

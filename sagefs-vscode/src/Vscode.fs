@@ -128,6 +128,16 @@ type [<AllowNullLiteral>] ProgressOptions =
   abstract location: int with get, set
   abstract title: string option with get, set
 
+type [<AllowNullLiteral>] Webview =
+  abstract html: string with get, set
+  abstract onDidReceiveMessage: listener: (obj -> unit) -> Disposable
+
+type [<AllowNullLiteral>] WebviewPanel =
+  abstract webview: Webview
+  abstract reveal: column: int -> unit
+  abstract onDidDispose: listener: (unit -> unit) -> Disposable
+  abstract dispose: unit -> unit
+
 // ── Testing API ───────────────────────────────────────────────
 
 type [<AllowNullLiteral>] TestItem =
@@ -272,6 +282,11 @@ module Window =
   [<Emit("$0.createTreeView($1, $2)")>]
   let private _createTreeView (w: obj) (viewId: string) (opts: obj) : TreeView<obj> = jsNative
   let createTreeView (viewId: string) (opts: obj) = _createTreeView windowExports viewId opts
+
+  [<Emit("$0.createWebviewPanel($1, $2, $3, $4)")>]
+  let private _createWebviewPanel (w: obj) (viewType: string) (title: string) (column: int) (opts: obj) : WebviewPanel = jsNative
+  let createWebviewPanel (viewType: string) (title: string) (column: int) (opts: obj) =
+    _createWebviewPanel windowExports viewType title column opts
 
 // ── Commands API ────────────────────────────────────────────────
 
