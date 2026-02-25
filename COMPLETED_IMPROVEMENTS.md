@@ -512,3 +512,32 @@ Per IMPROVEMENT_PLAN.md priority matrix:
 - Updated MCP tools reference to include live testing tools (`toggle_live_testing`, `get_live_test_status`, `run_tests`, `set_run_policy`, `get_pipeline_trace`).
 
 **Tests:** 3 toggle activation behavior tests added (43 → 47 total SageFsUpdate tests).
+
+---
+
+## Pure Function Test Coverage Expansion (v0.5.169–v0.5.170) — ✅ DONE
+
+**Problem:** Many pure function modules in SageFs.Core had zero dedicated test coverage despite being critical to correctness: Args parser, SSE writer, Theme, ErrorMessages, RetryPolicy, FsiRewrite.
+
+**Implemented:** 98 new unit tests across 6 modules, all proven in sagefs FSI first (TDD):
+
+| Module | Tests | Coverage |
+|--------|-------|----------|
+| **ArgsParser** | 20 | All flag parsing, defaults, multi-value args, error handling |
+| **SseWriter** | 9 | SSE event formatting, multi-line data, field combinations |
+| **Theme** | 29 | Color lookups, fallbacks, named colors, region colors, all themes |
+| **ErrorMessages** | 17 | Error parsing (case-sensitive Contains), suggestion generation, formatting |
+| **RetryPolicy** | 13 | shouldRetry boundaries, backoff jitter ranges, isVersionConflict, decide |
+| **FsiRewrite** | 10 | use→let rewriting: indented, non-indented preserved, tabs, empty input |
+
+**Files created:**
+- `SageFs.Tests/ArgsParserTests.fs`
+- `SageFs.Tests/SseWriterTests.fs`
+- `SageFs.Tests/ThemeTests.fs`
+- `SageFs.Tests/ErrorMessagesTests.fs`
+- `SageFs.Tests/RetryPolicyTests.fs`
+- `SageFs.Tests/FsiRewriteTests.fs`
+
+**Total test count:** 3826 (up from ~3710).
+
+**Commits:** `55deca5` (v0.5.169), `d41622e` (v0.5.170)
