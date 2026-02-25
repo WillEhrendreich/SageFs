@@ -77,6 +77,9 @@
         <Compile Include="LiveTestingTests.fs" />
         <Compile Include="LiveTestingExecutorTests.fs" />
         <Compile Include="DockerIntegrationTests.fs" />
+        <Compile Include="ArgsParserTests.fs" />
+        <Compile Include="SseWriterTests.fs" />
+        <Compile Include="ThemeTests.fs" />
         <Compile Include="Program.fs" />
     </ItemGroup>
 
