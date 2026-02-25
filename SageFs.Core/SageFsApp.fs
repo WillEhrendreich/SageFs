@@ -466,12 +466,20 @@ module SageFsUpdate =
       { model with Theme = theme; ThemeName = name }, []
 
     | SageFsMsg.ToggleLiveTesting ->
+      let wasInactive = model.LiveTesting.TestState.Activation = Features.LiveTesting.LiveTestingActivation.Inactive
       let toggleActivation =
-        match model.LiveTesting.TestState.Activation with
-        | Features.LiveTesting.LiveTestingActivation.Active -> Features.LiveTesting.LiveTestingActivation.Inactive
-        | Features.LiveTesting.LiveTestingActivation.Inactive -> Features.LiveTesting.LiveTestingActivation.Active
+        if wasInactive then Features.LiveTesting.LiveTestingActivation.Active
+        else Features.LiveTesting.LiveTestingActivation.Inactive
       let lt = recomputeStatuses model.LiveTesting (fun s -> { s with Activation = toggleActivation })
-      { model with LiveTesting = lt }, []
+      // When activating with already-discovered tests, run them immediately
+      let effects =
+        if wasInactive && not (Array.isEmpty lt.TestState.DiscoveredTests) then
+          let allIds = lt.TestState.DiscoveredTests |> Array.map (fun tc -> tc.Id)
+          Features.LiveTesting.LiveTestPipelineState.triggerExecutionForAffected
+            allIds Features.LiveTesting.RunTrigger.ExplicitRun lt
+          |> List.map SageFsEffect.Pipeline
+        else []
+      { model with LiveTesting = lt }, effects
 
     | SageFsMsg.CycleRunPolicy ->
       let lt = model.LiveTesting
