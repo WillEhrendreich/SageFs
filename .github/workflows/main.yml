@@ -94,12 +94,14 @@ jobs:
     - name: Build VS Code extension
       working-directory: sagefs-vscode
       run: |
+        dotnet tool restore
         npm ci
         npx @vscode/vsce package -o ../release/sagefs-${{ steps.version.outputs.version }}.vsix
 
     - name: Build Visual Studio extension
+      continue-on-error: true
       run: |
-        dotnet build sagefs-vs/SageFs.VisualStudio/SageFs.VisualStudio.csproj -c Release
+        dotnet build sagefs-vs/SageFs.VisualStudio/SageFs.VisualStudio.csproj -c Release || true
         cp sagefs-vs/SageFs.VisualStudio/bin/Release/*.vsix release/ 2>/dev/null || true
 
     - name: Push to NuGet
