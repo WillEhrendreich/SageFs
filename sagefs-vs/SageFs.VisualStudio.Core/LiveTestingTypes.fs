@@ -130,3 +130,15 @@ module LiveTestState =
 
   let resultFor (testId: TestId) (state: LiveTestState) =
     Map.tryFind testId state.Results
+
+  let isEnabled (state: LiveTestState) =
+    match state.Enabled with
+    | LiveTestingEnabled.On -> true
+    | LiveTestingEnabled.Off -> false
+
+  let allTests (state: LiveTestState) =
+    state.Tests
+    |> Map.toArray
+    |> Array.map (fun (_, info) ->
+      let result = Map.tryFind info.Id state.Results
+      struct (info, result))

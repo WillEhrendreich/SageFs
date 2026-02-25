@@ -22,5 +22,7 @@
   "SageFs.ToggleLiveTesting.DisplayName": "SageFs: Toggle Live Testing",
   "SageFs.RunTests.DisplayName": "SageFs: Run All Tests",
   "SageFs.ShowRecentEvents.DisplayName": "SageFs: Show Recent Events",
-  "SageFs.TestCodeLens.DisplayName": "SageFs Live Tests"
+  "SageFs.TestCodeLens.DisplayName": "SageFs Live Tests",
+  "SageFs.ShowLiveTesting.DisplayName": "SageFs: Live Testing Dashboard",
+  "SageFs.ShowTypeExplorer.DisplayName": "SageFs: Type Explorer"
 }
