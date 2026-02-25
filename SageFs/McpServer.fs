@@ -477,7 +477,7 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                         use _heartbeat = heartbeat
                         use _sub = evt.Subscribe(fun json ->
                             try
-                                let sseEvent = sprintf "event: state\ndata: %s\n\n" json
+                                let sseEvent = SageFs.SseWriter.formatSseEvent "state" json
                                 let bytes = System.Text.Encoding.UTF8.GetBytes(sseEvent)
                                 ctx.Response.Body.WriteAsync(bytes).AsTask()
                                 |> fun t -> t.ContinueWith(fun (_: Task) -> ctx.Response.Body.FlushAsync()) |> ignore

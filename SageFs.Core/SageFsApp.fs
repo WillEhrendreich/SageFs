@@ -985,3 +985,29 @@ module SageFsEffectHandler =
                 dispatch (SageFsMsg.Event (SageFsEvent.TestResultsBatch errResults))
             }, ct)
       }
+
+/// Pure dedup-key generation for the SSE state-change event.
+/// Including test state fields ensures `/events` SSE fires
+/// when tests change even if output/diagnostics stay the same.
+module SseDedupKey =
+  let fromModel (model: SageFsModel) : string =
+    let outputCount = model.RecentOutput.Length
+    let diagCount =
+      model.Diagnostics |> Map.values |> Seq.sumBy List.length
+    let lt = model.LiveTesting.TestState
+    let testSummary =
+      TestSummary.fromStatuses (lt.StatusEntries |> Array.map (fun e -> e.Status))
+    System.Text.Json.JsonSerializer.Serialize(
+      {| outputCount = outputCount
+         diagCount = diagCount
+         sessionCount = model.Sessions.Sessions.Length
+         activeSession = ActiveSession.sessionId model.Sessions.ActiveSessionId |> Option.defaultValue ""
+         sessionStatuses = model.Sessions.Sessions |> List.map (fun s -> sprintf "%s:%s" s.Id (string s.Status))
+         testTotal = testSummary.Total
+         testPassed = testSummary.Passed
+         testFailed = testSummary.Failed
+         testRunning = testSummary.Running
+         testStale = testSummary.Stale
+         testGeneration = RunGeneration.value lt.LastGeneration
+         testRunPhase = string lt.RunPhase
+         testEnabled = lt.Activation = LiveTestingActivation.Active |})

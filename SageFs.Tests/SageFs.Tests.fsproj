@@ -79,12 +79,14 @@
         <Compile Include="DockerIntegrationTests.fs" />
         <Compile Include="ArgsParserTests.fs" />
         <Compile Include="SseWriterTests.fs" />
+        <Compile Include="SseDedupKeyTests.fs" />
         <Compile Include="ThemeTests.fs" />
         <Compile Include="ErrorMessagesTests.fs" />
         <Compile Include="RetryPolicyTests.fs" />
         <Compile Include="FsiRewriteTests.fs" />
         <Compile Include="LiveTestingTypesTests.fs" />
         <Compile Include="CoverageBoostTests.fs" />
+        <Compile Include="SessionManagerCqrsTests.fs" />
         <Compile Include="Program.fs" />
     </ItemGroup>
 

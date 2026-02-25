@@ -48,7 +48,8 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
   let mutable lastStateJson = ""
 
   // Create SessionManager — the single source of truth for all sessions
-  let sessionManager =
+  // Returns (mailbox, readSnapshot) — CQRS: reads go to snapshot, writes to mailbox
+  let sessionManager, readSnapshot =
     SessionManager.create cts.Token (fun () ->
       stateChangedEvent.Trigger """{"standbyProgress":true}""")
 
@@ -113,25 +114,14 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
         return managed |> Option.map (fun s -> s.Proxy)
       }
     GetSessionInfo = fun sessionId ->
-      task {
-        let! managed =
-          sessionManager.PostAndAsyncReply(fun reply ->
-            SessionManager.SessionCommand.GetSession(sessionId, reply))
-          |> Async.StartAsTask
-        return managed |> Option.map (fun s -> s.Info)
-      }
+      // CQRS read path — lock-free snapshot, no mailbox blocking
+      task { return SessionManager.QuerySnapshot.tryGetSession sessionId (readSnapshot()) }
     GetAllSessions = fun () ->
-      task {
-        let! sessions =
-          sessionManager.PostAndAsyncReply(fun reply ->
-            SessionManager.SessionCommand.ListSessions reply)
-          |> Async.StartAsTask
-        return sessions
-      }
+      // CQRS read path — lock-free snapshot, no mailbox blocking
+      task { return SessionManager.QuerySnapshot.allSessions (readSnapshot()) }
     GetStandbyInfo = fun () ->
-      sessionManager.PostAndAsyncReply(fun reply ->
-        SessionManager.SessionCommand.GetStandbyInfo reply)
-      |> Async.StartAsTask
+      // CQRS read path — lock-free snapshot, no mailbox blocking
+      task { return (readSnapshot()).StandbyInfo }
   }
 
   let noResume = args |> List.exists (function Args.Arguments.No_Resume -> true | _ -> false)
@@ -267,12 +257,7 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
         model.Diagnostics |> Map.values |> Seq.sumBy List.length
       // Fire SSE event with summary JSON — deduplicated
       try
-        let json = System.Text.Json.JsonSerializer.Serialize(
-          {| outputCount = outputCount
-             diagCount = diagCount
-             sessionCount = model.Sessions.Sessions.Length
-             activeSession = ActiveSession.sessionId model.Sessions.ActiveSessionId |> Option.defaultValue ""
-             sessionStatuses = model.Sessions.Sessions |> List.map (fun s -> sprintf "%s:%A" s.Id s.Status) |})
+        let json = SseDedupKey.fromModel model
         if json <> lastStateJson then
           lastStateJson <- json
           if not TerminalUIState.IsActive && (outputCount > 0 || diagCount > 0) then

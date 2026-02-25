@@ -5,9 +5,14 @@ open System.Text
 open System.Text.Json
 open System.Threading.Tasks
 
-/// Pure: format an SSE event string
+/// Pure: format an SSE event string.
+/// Handles data containing newlines per SSE spec (each line as separate data: field).
 let formatSseEvent (eventType: string) (data: string) : string =
-  sprintf "event: %s\ndata: %s\n\n" eventType data
+  if data.Contains("\n") then
+    let dataLines = data.Split('\n') |> Array.map (sprintf "data: %s") |> String.concat "\n"
+    sprintf "event: %s\n%s\n\n" eventType dataLines
+  else
+    sprintf "event: %s\ndata: %s\n\n" eventType data
 
 /// Pure: format SSE event with multiline data
 let formatSseEventMultiline (eventType: string) (lines: string list) : string =
