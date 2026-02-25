@@ -2,7 +2,7 @@
   "name": "sagefs",
   "displayName": "SageFs — Live F# Development",
   "description": "Send F# code to SageFs for instant evaluation, type-checking, and hot reload.",
-  "version": "0.5.143",
+  "version": "0.5.144",
   "publisher": "sagefs",
   "license": "MIT",
   "repository": {
@@ -113,6 +113,18 @@
         "command": "sagefs.sessionContextRefresh",
         "title": "SageFs: Refresh Session Context",
         "icon": "$(refresh)"
+      },
+      {
+        "command": "sagefs.toggleLiveTesting",
+        "title": "SageFs: Toggle Live Testing"
+      },
+      {
+        "command": "sagefs.runTests",
+        "title": "SageFs: Run All Tests"
+      },
+      {
+        "command": "sagefs.setRunPolicy",
+        "title": "SageFs: Set Test Run Policy"
       }
     ],
     "keybindings": [

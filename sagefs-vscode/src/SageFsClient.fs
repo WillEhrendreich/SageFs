@@ -394,19 +394,64 @@ let getCompletions (code: string) (cursorPosition: int) (workingDirectory: strin
 let runTests (pattern: string) (c: Client) =
   promise {
     try
-      let code =
-        if System.String.IsNullOrWhiteSpace pattern then
-          """Expecto.Tests.runTestsWithCLIArgs [] [||] SageFs.Tests.AllTests.tests;;"""
-        else
-          sprintf """Expecto.Tests.runTestsWithCLIArgs [] [||] (SageFs.Tests.AllTests.tests |> Expecto.Tests.filterTestList "%s" []);;""" pattern
-      let! resp = httpPost c "/exec" (jsonStringify {| code = code; working_directory = "" |}) 60000
+      let payload = {| pattern = pattern; category = "" |}
+      let! resp = httpPost c "/api/live-testing/run" (jsonStringify payload) 60000
       let parsed = jsonParse resp.body
       return
         { success = parsed?success |> unbox<bool>
-          result = Some (parsed?result |> unbox<string>)
+          result =
+            let m = parsed?message
+            if isNull m then None else Some (unbox<string> m)
           error =
             let e = parsed?error
             if isNull e then None else Some (unbox<string> e) }
     with err ->
       return { success = false; result = None; error = Some (string err) }
+  }
+
+let toggleLiveTesting (c: Client) =
+  promise {
+    try
+      let! resp = httpPost c "/api/live-testing/toggle" "{}" 5000
+      let parsed = jsonParse resp.body
+      return
+        { success = parsed?success |> unbox<bool>
+          result =
+            let m = parsed?message
+            if isNull m then None else Some (unbox<string> m)
+          error =
+            let e = parsed?error
+            if isNull e then None else Some (unbox<string> e) }
+    with err ->
+      return { success = false; result = None; error = Some (string err) }
+  }
+
+let setRunPolicy (category: string) (policy: string) (c: Client) =
+  promise {
+    try
+      let payload = {| category = category; policy = policy |}
+      let! resp = httpPost c "/api/live-testing/policy" (jsonStringify payload) 5000
+      let parsed = jsonParse resp.body
+      return
+        { success = parsed?success |> unbox<bool>
+          result =
+            let m = parsed?message
+            if isNull m then None else Some (unbox<string> m)
+          error =
+            let e = parsed?error
+            if isNull e then None else Some (unbox<string> e) }
+    with err ->
+      return { success = false; result = None; error = Some (string err) }
+  }
+
+let getLiveTestStatus (c: Client) =
+  promise {
+    try
+      let! resp = httpGet c "/api/live-testing/status" 5000
+      if resp.statusCode = 200 then
+        return Some resp.body
+      else
+        return None
+    with _ ->
+      return None
   }

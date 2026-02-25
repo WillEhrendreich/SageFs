@@ -679,6 +679,59 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                 }) :> Task
             ) |> ignore
 
+            // POST /api/live-testing/toggle — toggle live testing
+            app.MapPost("/api/live-testing/toggle", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
+                withErrorHandling ctx (fun () -> task {
+                    let! result = SageFs.McpTools.toggleLiveTesting mcpContext None
+                    do! jsonResponse ctx 200 {| success = true; message = result |}
+                }) :> Task
+            ) |> ignore
+
+            // POST /api/live-testing/policy — set run policy for a test category
+            app.MapPost("/api/live-testing/policy", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
+                withErrorHandling ctx (fun () -> task {
+                    use reader = new System.IO.StreamReader(ctx.Request.Body)
+                    let! body = reader.ReadToEndAsync()
+                    let json = System.Text.Json.JsonDocument.Parse(body)
+                    let category = json.RootElement.GetProperty("category").GetString()
+                    let policy = json.RootElement.GetProperty("policy").GetString()
+                    let! result = SageFs.McpTools.setRunPolicy mcpContext category policy
+                    do! jsonResponse ctx 200 {| success = true; message = result |}
+                }) :> Task
+            ) |> ignore
+
+            // POST /api/live-testing/run — explicitly run tests
+            app.MapPost("/api/live-testing/run", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
+                withErrorHandling ctx (fun () -> task {
+                    use reader = new System.IO.StreamReader(ctx.Request.Body)
+                    let! body = reader.ReadToEndAsync()
+                    let json = System.Text.Json.JsonDocument.Parse(body)
+                    let pattern =
+                      match json.RootElement.TryGetProperty("pattern") with
+                      | true, v -> let s = v.GetString() in if System.String.IsNullOrWhiteSpace s then None else Some s
+                      | false, _ -> None
+                    let category =
+                      match json.RootElement.TryGetProperty("category") with
+                      | true, v -> let s = v.GetString() in if System.String.IsNullOrWhiteSpace s then None else Some s
+                      | false, _ -> None
+                    let! result = SageFs.McpTools.runTests mcpContext pattern category
+                    do! jsonResponse ctx 200 {| success = true; message = result |}
+                }) :> Task
+            ) |> ignore
+
+            // GET /api/live-testing/status — get live test status
+            app.MapGet("/api/live-testing/status", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
+                withErrorHandling ctx (fun () -> task {
+                    let file =
+                      match ctx.Request.Query.TryGetValue("file") with
+                      | true, v -> Some (v.ToString())
+                      | false, _ -> None
+                    let! result = SageFs.McpTools.getLiveTestStatus mcpContext file
+                    ctx.Response.ContentType <- "application/json"
+                    do! ctx.Response.Body.WriteAsync(System.Text.Encoding.UTF8.GetBytes(result))
+                }) :> Task
+            ) |> ignore
+
             // Wire push notifications: subscribe to events → broadcast to MCP clients
             // Two delivery paths:
             //   1. MCP notifications (for clients that surface them)

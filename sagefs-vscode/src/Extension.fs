@@ -640,7 +640,8 @@ let activate (context: ExtensionContext) =
 
   let tsb = Window.createStatusBarItem StatusBarAlignment.Left 49.
   tsb.text <- "$(beaker) No tests"
-  tsb.tooltip <- Some "SageFs live testing"
+  tsb.tooltip <- Some "SageFs live testing — click to toggle"
+  tsb.command <- Some "sagefs.toggleLiveTesting"
   testStatusBarItem <- Some tsb
   context.subscriptions.Add (tsb :> obj :?> Disposable)
 
@@ -671,6 +672,47 @@ let activate (context: ExtensionContext) =
   reg "sagefs.switchSession" (fun _ -> switchSessionCmd () |> ignore)
   reg "sagefs.stopSession" (fun _ -> stopSessionCmd () |> ignore)
   reg "sagefs.clearResults" (fun _ -> clearAllDecorations ())
+  reg "sagefs.toggleLiveTesting" (fun _ ->
+    match client with
+    | Some c ->
+      Client.toggleLiveTesting c
+      |> Promise.iter (fun result ->
+        match result.result with
+        | Some msg -> Window.showInformationMessage msg [||] |> ignore
+        | None -> ())
+    | None -> Window.showWarningMessage "SageFs is not connected" [||] |> ignore)
+  reg "sagefs.runTests" (fun _ ->
+    match client with
+    | Some c ->
+      Client.runTests "" c
+      |> Promise.iter (fun result ->
+        match result.result with
+        | Some msg -> Window.showInformationMessage msg [||] |> ignore
+        | None -> ())
+    | None -> Window.showWarningMessage "SageFs is not connected" [||] |> ignore)
+  reg "sagefs.setRunPolicy" (fun _ ->
+    match client with
+    | Some c ->
+      Window.showQuickPick
+        [| "unit"; "integration"; "browser"; "benchmark"; "architecture"; "property" |]
+        "Select test category"
+      |> Promise.iter (fun catOpt ->
+        match catOpt with
+        | Some cat ->
+          Window.showQuickPick
+            [| "every"; "save"; "demand"; "disabled" |]
+            (sprintf "Set policy for %s tests" cat)
+          |> Promise.iter (fun polOpt ->
+            match polOpt with
+            | Some pol ->
+              Client.setRunPolicy cat pol c
+              |> Promise.iter (fun result ->
+                match result.result with
+                | Some msg -> Window.showInformationMessage msg [||] |> ignore
+                | None -> ())
+            | None -> ())
+        | None -> ())
+    | None -> Window.showWarningMessage "SageFs is not connected" [||] |> ignore)
 
   // CodeLens
   let lensProvider = Lens.create ()
