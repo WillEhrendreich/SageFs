@@ -289,10 +289,16 @@ Supports optional file filter to get only tests from a specific source file.""")
         getLiveTestStatus ctx filter |> withEcho "get_live_test_status"
 
     [<McpServerTool>]
-    [<Description("Enable or disable live testing. When enabled, tests run automatically after hot reload.")>]
-    member _.set_live_testing(enabled: bool) : Task<string> =
-        logger.LogDebug("MCP-TOOL: set_live_testing called, enabled={Enabled}", enabled)
-        setLiveTesting ctx enabled |> withEcho "set_live_testing"
+    [<Description("Enable live testing. Tests run automatically after hot reload.")>]
+    member _.enable_live_testing() : Task<string> =
+        logger.LogDebug("MCP-TOOL: enable_live_testing called")
+        setLiveTesting ctx true |> withEcho "enable_live_testing"
+
+    [<McpServerTool>]
+    [<Description("Disable live testing. Tests will not run automatically.")>]
+    member _.disable_live_testing() : Task<string> =
+        logger.LogDebug("MCP-TOOL: disable_live_testing called")
+        setLiveTesting ctx false |> withEcho "disable_live_testing"
 
     [<McpServerTool>]
     [<Description("""Set run policy for a test category. Controls when tests in that category auto-run.

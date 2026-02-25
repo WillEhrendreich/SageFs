@@ -5,6 +5,7 @@ open Expecto
 open Expecto.Flip
 open SageFs
 open SageFs.WorkerProtocol
+open SageFs.Features.LiveTesting
 
 let roundTrip<'T> (value: 'T) =
   let json = Serialization.serialize value
@@ -72,6 +73,20 @@ let workerProtocolTests =
       testCase "TypeCheckWithSymbols round-trips"
       <| fun _ ->
         let msg = WorkerMessage.TypeCheckWithSymbols("let x = 42", "test.fsx", "r-tc1")
+        let _, result = roundTrip<WorkerMessage> msg
+        result |> Expect.equal "should round-trip" msg
+
+      testCase "RunTests round-trips"
+      <| fun _ ->
+        let tc: SageFs.Features.LiveTesting.TestCase =
+          { Id = TestId.TestId "abc123"
+            FullName = "MyModule.myTest"
+            DisplayName = "myTest"
+            Origin = TestOrigin.ReflectionOnly
+            Labels = []
+            Framework = "expecto"
+            Category = TestCategory.Unit }
+        let msg = WorkerMessage.RunTests([| tc |], 4, "r-run1")
         let _, result = roundTrip<WorkerMessage> msg
         result |> Expect.equal "should round-trip" msg
     ]
@@ -195,6 +210,24 @@ let workerProtocolTests =
         let sym1 = { WorkerSymbolRef.SymbolFullName = "MyModule.add"; IsFromDefinition = false; FilePath = "MyModule.fs"; Line = 10 }
         let sym2 = { WorkerSymbolRef.SymbolFullName = "MyModule.validate"; IsFromDefinition = true; FilePath = "MyModule.fs"; Line = 20 }
         let resp = WorkerResponse.TypeCheckWithSymbolsResult("r-tc3", true, [diag], [sym1; sym2])
+        let _, result = roundTrip<WorkerResponse> resp
+        result |> Expect.equal "should round-trip" resp
+
+      testCase "TestRunResults round-trips"
+      <| fun _ ->
+        let r1: SageFs.Features.LiveTesting.TestRunResult =
+          { TestId = TestId.TestId "abc123"
+            TestName = "should add"
+            Result = TestResult.Passed (TimeSpan.FromMilliseconds 42.0)
+            Timestamp = DateTimeOffset(2024, 1, 1, 0, 0, 0, TimeSpan.Zero) }
+        let r2: SageFs.Features.LiveTesting.TestRunResult =
+          { TestId = TestId.TestId "def456"
+            TestName = "should fail"
+            Result = TestResult.Failed(
+              TestFailure.AssertionFailed "Expected 42",
+              TimeSpan.FromMilliseconds 15.0)
+            Timestamp = DateTimeOffset(2024, 1, 1, 0, 0, 0, TimeSpan.Zero) }
+        let resp = WorkerResponse.TestRunResults("r-run1", [| r1; r2 |])
         let _, result = roundTrip<WorkerResponse> resp
         result |> Expect.equal "should round-trip" resp
     ]

@@ -8,6 +8,7 @@ open Falco
 open Falco.Routing
 open Microsoft.AspNetCore.Http
 open Microsoft.Extensions.Logging
+open OpenTelemetry.Logs
 
 /// Run SageFs as a headless daemon.
 /// MCP server + SessionManager + Dashboard — all frontends are clients.
@@ -19,7 +20,25 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
     |> Option.map (fun v -> v.ToString())
     |> Option.defaultValue "unknown"
 
-  eprintfn "SageFs daemon v%s starting on port %d..." version mcpPort
+  // Create structured logger for daemon lifecycle (flows to OTEL when configured)
+  let otelConfigured =
+    Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_ENDPOINT")
+    |> Option.ofObj |> Option.isSome
+  let loggerFactory =
+    LoggerFactory.Create(fun builder ->
+      builder
+        .AddConsole()
+        .SetMinimumLevel(LogLevel.Information)
+        .AddFilter("Microsoft", LogLevel.Warning)
+      |> ignore
+      if otelConfigured then
+        builder.AddOpenTelemetry(fun otel ->
+          otel.AddOtlpExporter() |> ignore
+        ) |> ignore
+    )
+  let log = loggerFactory.CreateLogger("SageFs.Daemon")
+
+  log.LogInformation("SageFs daemon v{Version} starting on port {Port}", version, mcpPort)
 
   // Set up event store
   let connectionString = PostgresInfra.getOrStartPostgres ()
@@ -32,12 +51,12 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
     let daemonState = Features.Replay.DaemonReplayState.replayStream daemonEvents
     let pruneEvents = Features.Replay.DaemonReplayState.pruneAllSessions daemonState
     if pruneEvents.IsEmpty then
-      eprintfn "No alive sessions to prune."
+      log.LogInformation("No alive sessions to prune")
     else
       let! result = SageFs.EventStore.appendEvents eventStore daemonStreamId pruneEvents
       match result with
-      | Ok () -> eprintfn "Pruned %d session(s)." pruneEvents.Length
-      | Error msg -> eprintfn "[WARN] Prune failed: %s" msg
+      | Ok () -> log.LogInformation("Pruned {Count} session(s)", pruneEvents.Length)
+      | Error msg -> log.LogWarning("Prune failed: {Error}", msg)
     return ()
 
   // Handle shutdown signals
@@ -162,13 +181,13 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
             {| SessionId = staleId; StoppedAt = DateTimeOffset.UtcNow |}
         ]
         ()
-      eprintfn "Resuming %d previous session(s) (%d stale duplicates cleaned)..."
-        uniqueByDir.Length (aliveSessions.Length - uniqueByDir.Length)
+      log.LogInformation("Resuming {Count} previous session(s) ({Stale} stale duplicates cleaned)",
+        uniqueByDir.Length, (aliveSessions.Length - uniqueByDir.Length))
       // Skip missing directories first (synchronous, fast)
       let existing, missing =
         uniqueByDir |> List.partition (fun prev -> IO.Directory.Exists prev.WorkingDir)
       for prev in missing do
-        eprintfn "  [SKIP] %s — directory no longer exists" prev.WorkingDir
+        log.LogWarning("Skipping session {SessionId} — directory {WorkingDir} no longer exists", prev.SessionId, prev.WorkingDir)
         let! _ = SageFs.EventStore.appendEvents eventStore daemonStreamId [
           Features.Events.SageFsEvent.DaemonSessionStopped
             {| SessionId = prev.SessionId; StoppedAt = DateTimeOffset.UtcNow |}
@@ -178,7 +197,7 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
       let resumeTasks =
         existing
         |> List.map (fun prev -> task {
-          eprintfn "  Resuming session for %s..." prev.WorkingDir
+          log.LogInformation("Resuming session for {WorkingDir}", prev.WorkingDir)
           let! result = sessionOps.CreateSession prev.Projects prev.WorkingDir
           match result with
           | Ok info ->
@@ -187,10 +206,10 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
               Features.Events.SageFsEvent.DaemonSessionStopped
                 {| SessionId = prev.SessionId; StoppedAt = DateTimeOffset.UtcNow |}
             ]
-            eprintfn "  Resumed: %s (retired old id %s)" info prev.SessionId
+            log.LogInformation("Resumed session {Info} (retired old id {OldSessionId})", info, prev.SessionId)
             onSessionResumed ()
           | Error err ->
-            eprintfn "  [WARN] Failed to resume session for %s: %A" prev.WorkingDir err
+            log.LogWarning("Failed to resume session for {WorkingDir}: {Error}", prev.WorkingDir, err)
         })
       do! System.Threading.Tasks.Task.WhenAll(resumeTasks) :> System.Threading.Tasks.Task
       // Sessions restored — clients will discover them via listing
@@ -200,16 +219,16 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
       | None -> ()
     else
       if not initialProjects.IsEmpty then
-        eprintfn "No previous sessions. Creating session from --proj args..."
+        log.LogInformation("No previous sessions. Creating session from --proj args")
         let! result = sessionOps.CreateSession initialProjects workingDir
         match result with
         | Ok info ->
-          eprintfn "  Created session: %s" info
+          log.LogInformation("Created session: {Info}", info)
           onSessionResumed ()
         | Error err ->
-          eprintfn "  [WARN] Failed to create session from --proj: %A" err
+          log.LogWarning("Failed to create session from --proj: {Error}", err)
       else
-        eprintfn "No previous sessions to resume. Waiting for clients to create sessions."
+        log.LogInformation("No previous sessions to resume. Waiting for clients to create sessions")
   }
 
   // Create EffectDeps from SessionManager + start Elm loop
@@ -745,10 +764,10 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
         | h -> h
       app.Urls.Add(sprintf "http://%s:%d" bindHost dashboardPort)
       app.UseRouting().UseFalco(dashboardEndpoints @ hotReloadProxyEndpoints) |> ignore
-      eprintfn "Dashboard available at http://localhost:%d/dashboard" dashboardPort
+      log.LogInformation("Dashboard available at http://localhost:{Port}/dashboard", dashboardPort)
       do! app.RunAsync()
     with ex ->
-      eprintfn "[WARN] Dashboard failed to start: %s" ex.Message
+      log.LogWarning("Dashboard failed to start: {Error}", ex.Message)
   }
 
   // Workers handle their own warmup, middleware, and file watching.
@@ -756,11 +775,11 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
 
   Console.CancelKeyPress.Add(fun e ->
     e.Cancel <- true
-    eprintfn "Shutting down..."
+    log.LogInformation("Shutting down...")
     cts.Cancel())
 
   AppDomain.CurrentDomain.ProcessExit.Add(fun _ ->
-    eprintfn "Daemon stopped.")
+    log.LogInformation("Daemon stopped"))
 
   // Start MCP and dashboard servers FIRST so ports are listening
   let mcpRunning =
@@ -774,16 +793,17 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
 
   // Brief yield to let servers bind their ports
   do! System.Threading.Tasks.Task.Delay(200)
-  eprintfn "SageFs daemon ready (PID %d, MCP port %d, dashboard port %d)" Environment.ProcessId mcpPort dashboardPort
-  eprintfn "  Dashboard: http://localhost:%d/dashboard" dashboardPort
-  eprintfn "  SSE events: http://localhost:%d/events" mcpPort
-  eprintfn "  Health: http://localhost:%d/health" mcpPort
+  log.LogInformation("SageFs daemon ready (PID {Pid}, MCP port {McpPort}, dashboard port {DashboardPort})",
+    Environment.ProcessId, mcpPort, dashboardPort)
+  log.LogInformation("Dashboard: http://localhost:{Port}/dashboard", dashboardPort)
+  log.LogInformation("SSE events: http://localhost:{Port}/events", mcpPort)
+  log.LogInformation("Health: http://localhost:{Port}/health", mcpPort)
 
   // Resume sessions in background — don't block the daemon main task.
   // Each resumed session dispatches ListSessions so dashboard sees them incrementally.
   let _resumeTask =
     if noResume then
-      eprintfn "Session resume skipped (--no-resume)."
+      log.LogInformation("Session resume skipped (--no-resume)")
       System.Threading.Tasks.Task.CompletedTask
     else
       System.Threading.Tasks.Task.Run(fun () ->
@@ -792,7 +812,7 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
             do! resumeSessions (fun () ->
               elmRuntime.Dispatch(SageFsMsg.Editor EditorAction.ListSessions))
           with ex ->
-            eprintfn "[WARN] Session resume failed: %s" ex.Message
+            log.LogWarning("Session resume failed: {Error}", ex.Message)
         } :> System.Threading.Tasks.Task)
 
   // Periodic status polling — refreshes session status (Starting → Ready)
@@ -806,7 +826,7 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
             elmRuntime.Dispatch(SageFsMsg.Editor EditorAction.ListSessions)
         with
         | :? OperationCanceledException -> ()
-        | ex -> eprintfn "[WARN] Status poll failed: %s" ex.Message
+        | ex -> log.LogWarning("Status poll failed: {Error}", ex.Message)
       } :> System.Threading.Tasks.Task)
 
   try

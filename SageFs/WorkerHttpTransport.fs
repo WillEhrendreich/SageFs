@@ -128,6 +128,16 @@ module WorkerHttpTransport =
         return! respond' ctx (WorkerMessage.HardResetSession(rebuild, rid))
       })) |> ignore
 
+      app.MapPost("/run-tests", Func<HttpContext, Task>(fun ctx -> task {
+        let! body = readBody ctx
+        use doc = JsonDocument.Parse(body)
+        let testsJson = (jsonProp doc "tests").GetRawText()
+        let tests = Serialization.deserialize<Features.LiveTesting.TestCase array> testsJson
+        let maxParallelism = (jsonProp doc "maxParallelism").GetInt32()
+        let rid = (jsonProp doc "replyId").GetString()
+        return! respond' ctx (WorkerMessage.RunTests(tests, maxParallelism, rid))
+      })) |> ignore
+
       app.MapPost("/shutdown", Func<HttpContext, Task>(fun ctx ->
         respond' ctx WorkerMessage.Shutdown)) |> ignore
 

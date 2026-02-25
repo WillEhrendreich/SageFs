@@ -9,5 +9,16 @@ services:
       POSTGRES_PASSWORD: SageFs
     volumes:
       - sagefs-pgdata:/var/lib/postgresql/data
+
+  aspire-dashboard:
+    image: mcr.microsoft.com/dotnet/aspire-dashboard:latest
+    ports:
+      - "18888:18888"   # Dashboard UI
+      - "4317:18889"    # OTLP gRPC
+      - "4318:18890"    # OTLP HTTP (protobuf) — use this from SageFs
+    environment:
+      DASHBOARD__FRONTEND__AUTHMODE: Unsecured
+      DASHBOARD__OTLP__AUTHMODE: Unsecured
+
 volumes:
   sagefs-pgdata:

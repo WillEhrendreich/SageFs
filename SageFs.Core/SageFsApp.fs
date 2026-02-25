@@ -958,9 +958,43 @@ module SageFsEffectHandler =
                   "SageFs.LiveTesting.TestExecution")
               let sw = System.Diagnostics.Stopwatch.StartNew()
               try
+                // Route test execution to the WORKER process where the reflection
+                // cache (snapshot) is populated. The host process cannot execute tests
+                // because BuiltInExecutors.builtIn.snapshot is always None here.
                 let! results =
-                  Features.LiveTesting.TestOrchestrator.executeFiltered
-                    Features.LiveTesting.BuiltInExecutors.builtIn 4 tests ct
+                  async {
+                    match deps.ResolveSession None with
+                    | Ok resolution ->
+                      let sid = SessionOperations.sessionId resolution
+                      match deps.GetProxy sid with
+                      | Some proxy ->
+                        let replyId = newReplyId ()
+                        let! resp = proxy (WorkerMessage.RunTests(tests, 4, replyId))
+                        match resp with
+                        | WorkerResponse.TestRunResults (_, workerResults) ->
+                          return workerResults
+                        | _ ->
+                          return tests |> Array.map (fun tc ->
+                            { TestId = tc.Id
+                              TestName = tc.FullName
+                              Result = Features.LiveTesting.TestResult.NotRun
+                              Timestamp = System.DateTimeOffset.UtcNow }
+                            : Features.LiveTesting.TestRunResult)
+                      | None ->
+                        return tests |> Array.map (fun tc ->
+                          { TestId = tc.Id
+                            TestName = tc.FullName
+                            Result = Features.LiveTesting.TestResult.NotRun
+                            Timestamp = System.DateTimeOffset.UtcNow }
+                          : Features.LiveTesting.TestRunResult)
+                    | Error _ ->
+                      return tests |> Array.map (fun tc ->
+                        { TestId = tc.Id
+                          TestName = tc.FullName
+                          Result = Features.LiveTesting.TestResult.NotRun
+                          Timestamp = System.DateTimeOffset.UtcNow }
+                        : Features.LiveTesting.TestRunResult)
+                  }
                 sw.Stop()
                 Features.LiveTesting.LiveTestingInstrumentation.executionHistogram.Record(sw.Elapsed.TotalMilliseconds)
                 if activity <> null then

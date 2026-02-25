@@ -194,7 +194,13 @@ let createServerCaptureFilter (tracker: McpServerTracker) =
       tracker.Register(ctx.Server)
       if wasEmpty && not logged then
         logged <- true
-        eprintfn "✓ McpServerTracker: captured first MCP client connection"
+        let logger =
+          ctx.Services.GetService(typeof<ILoggerFactory>)
+          |> Option.ofObj
+          |> Option.map (fun f -> (f :?> ILoggerFactory).CreateLogger("SageFs.McpServer.Filter"))
+        match logger with
+        | Some l -> l.LogInformation("First MCP client connected")
+        | None -> ()
 
       let inline appendEvents (result: CallToolResult) =
         let events = tracker.DrainEvents()
@@ -273,8 +279,15 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                     .Version
                     .ToString()
 
+            // Only register OTLP exporter when endpoint is configured
+            let otelConfigured =
+              Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_ENDPOINT")
+              |> Option.ofObj
+              |> Option.isSome
+
             // Configure OpenTelemetry with resource attributes
-            builder.Services.AddOpenTelemetry()
+            let otelBuilder =
+              builder.Services.AddOpenTelemetry()
                 .ConfigureResource(fun resource ->
                     resource
                         .AddService("sagefs-mcp-server", serviceVersion = version)
@@ -283,26 +296,27 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                             KeyValuePair<string, obj>("mcp.session", "cli-integrated" :> obj)
                         ]) |> ignore
                 )
-                .WithLogging(fun logging ->
-                    logging
-                        // .AddConsoleExporter()
-                        
-                        .AddOtlpExporter() // Uses environment variables
-                    |> ignore
-                )
                 .WithTracing(fun tracing ->
                     tracing
                         .AddSource("SageFs.LiveTesting")
-                        .AddOtlpExporter()
-                    |> ignore
+                        .AddAspNetCoreInstrumentation()
+                        .AddHttpClientInstrumentation() |> ignore
+                    if otelConfigured then tracing.AddOtlpExporter() |> ignore
                 )
                 .WithMetrics(fun metrics ->
                     metrics
                         .AddMeter("SageFs.LiveTesting")
-                        .AddOtlpExporter()
-                    |> ignore
+                        .AddAspNetCoreInstrumentation()
+                        .AddHttpClientInstrumentation() |> ignore
+                    if otelConfigured then metrics.AddOtlpExporter() |> ignore
                 )
-            |> ignore
+
+            if otelConfigured then
+              otelBuilder.WithLogging(fun logging ->
+                logging.AddOtlpExporter() |> ignore
+              ) |> ignore
+            else
+              otelBuilder |> ignore
 
             // Configure standard logging (file and console)
             builder.WebHost.ConfigureLogging(fun logging -> 
@@ -313,6 +327,8 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                 logging.AddFilter("Microsoft.AspNetCore.Server.Kestrel", LogLevel.Warning) |> ignore
                 logging.AddFilter("Microsoft.Hosting", LogLevel.Warning) |> ignore
                 logging.AddFilter("ModelContextProtocol.Server.McpServer", fun level -> level > LogLevel.Information) |> ignore
+                // Let SageFs-namespaced logs flow through at Information+ for OTEL
+                logging.AddFilter("SageFs", LogLevel.Information) |> ignore
             ) |> ignore
             
             // Create MCP context
@@ -924,24 +940,26 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                         LoggingLevel.Info, "sagefs.state", data) |> ignore
                   with _ -> ()))
 
-            // Print startup info
-            printfn "MCP SSE endpoint: http://localhost:%d/sse" port
-            printfn "MCP message endpoint: http://localhost:%d/message" port
-            printfn "Direct exec endpoint: http://localhost:%d/exec (no session ID required)" port
-            printfn "State events SSE: http://localhost:%d/events" port
-            printfn "Kestrel max connections: 200"
-            printfn "Logs: %s" logPath
+            // Get logger from DI for structured logging (flows to OTEL)
+            let logger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("SageFs.McpServer")
+
+            // Log startup info — structured so OTEL captures it
+            logger.LogInformation("MCP server starting on port {Port}", port)
+            logger.LogInformation("SSE endpoint: http://localhost:{Port}/sse", port)
+            logger.LogInformation("State events SSE: http://localhost:{Port}/events", port)
+            logger.LogInformation("Kestrel max connections: {MaxConnections}", 200)
+            logger.LogInformation("Log file: {LogPath}", logPath)
             
-            // Print OTEL configuration
-            let otelEndpoint = 
-                Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_ENDPOINT") 
-                |> Option.ofObj 
-                |> Option.defaultValue "not configured"
-            
-            if otelEndpoint <> "not configured" then
-                printfn "✓ OpenTelemetry: Enabled → %s" otelEndpoint
+            // Log OTEL configuration
+            if otelConfigured then
+              let endpoint =
+                Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_ENDPOINT")
+              let protocol =
+                Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_PROTOCOL")
+                |> Option.ofObj |> Option.defaultValue "grpc"
+              logger.LogInformation("OpenTelemetry enabled: endpoint={OtelEndpoint}, protocol={OtelProtocol}", endpoint, protocol)
             else
-                printfn "○ OpenTelemetry: Not configured (set OTEL_EXPORTER_OTLP_ENDPOINT)"
+              logger.LogInformation("OpenTelemetry not configured (set OTEL_EXPORTER_OTLP_ENDPOINT)")
             
             do! app.RunAsync()
         with ex ->

@@ -116,6 +116,14 @@ let handleMessage
       let stats = getStats ()
       return WorkerResponse.StatusResult(replyId, toStatusSnapshot state stats (getStatusMessage()))
 
+    | WorkerMessage.RunTests(tests, maxParallelism, replyId) ->
+      let executors = Features.LiveTesting.BuiltInExecutors.builtIn
+      use cts = new CancellationTokenSource(TimeSpan.FromSeconds(float (30 + tests.Length / 10)))
+      let! results =
+        Features.LiveTesting.TestOrchestrator.executeFiltered
+          executors maxParallelism tests cts.Token
+      return WorkerResponse.TestRunResults(replyId, results)
+
     | WorkerMessage.Shutdown ->
       return WorkerResponse.WorkerShuttingDown
   }

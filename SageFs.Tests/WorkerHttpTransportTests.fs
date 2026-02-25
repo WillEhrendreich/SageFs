@@ -103,6 +103,8 @@ let testHandler (msg: WorkerMessage) : Async<WorkerResponse> = async {
     return WorkerResponse.ResetResult(rid, Ok ())
   | WorkerMessage.HardResetSession(_, rid) ->
     return WorkerResponse.HardResetResult(rid, Ok "Reset complete")
+  | WorkerMessage.RunTests(_, _, rid) ->
+    return WorkerResponse.TestRunResults(rid, [||])
   | WorkerMessage.Shutdown ->
     return WorkerResponse.WorkerShuttingDown
 }
