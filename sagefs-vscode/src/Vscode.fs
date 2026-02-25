@@ -288,6 +288,11 @@ module Window =
   let showQuickPick (items: string array) (placeHolder: string) =
     _showQuickPick windowExports items (createObj [ "placeHolder" ==> placeHolder ])
 
+  [<Emit("$0.showInputBox($1)")>]
+  let private _showInputBox (w: obj) (opts: obj) : JS.Promise<string option> = jsNative
+  let showInputBox (prompt: string) =
+    _showInputBox windowExports (createObj [ "prompt" ==> prompt ])
+
   [<Emit("$0.withProgress($1, $2)")>]
   let private _withProgress (w: obj) (opts: obj) (task: obj -> CancellationToken -> JS.Promise<unit>) : JS.Promise<unit> = jsNative
   let withProgress (location: int) (title: string) (task: obj -> CancellationToken -> JS.Promise<unit>) =

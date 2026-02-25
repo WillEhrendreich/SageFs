@@ -479,3 +479,18 @@ let getRecentEvents (count: int) (c: Client) =
     with _ ->
       return None
   }
+
+let getDependencyGraph (symbol: string) (c: Client) =
+  promise {
+    try
+      let path =
+        if symbol = "" then "/api/dependency-graph"
+        else sprintf "/api/dependency-graph?symbol=%s" (JS.encodeURIComponent symbol)
+      let! resp = httpGet c path 10000
+      if resp.statusCode = 200 then
+        return Some resp.body
+      else
+        return None
+    with _ ->
+      return None
+  }

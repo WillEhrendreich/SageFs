@@ -2,7 +2,7 @@
   "name": "sagefs",
   "displayName": "SageFs — Live F# Development",
   "description": "Send F# code to SageFs for instant evaluation, type-checking, and hot reload.",
-  "version": "0.5.147",
+  "version": "0.5.148",
   "publisher": "sagefs",
   "license": "MIT",
   "repository": {
@@ -129,6 +129,10 @@
       {
         "command": "sagefs.showHistory",
         "title": "SageFs: Show Recent Events"
+      },
+      {
+        "command": "sagefs.showCallGraph",
+        "title": "SageFs: Show Test Call Graph"
       }
     ],
     "keybindings": [

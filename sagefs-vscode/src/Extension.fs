@@ -18,6 +18,9 @@ module TestLens = SageFs.Vscode.TestCodeLensProvider
 
 open SageFs.Vscode.LiveTestingTypes
 
+[<Emit("JSON.parse($0)")>]
+let jsonParse (s: string) : obj = jsNative
+
 // ── Mutable state ──────────────────────────────────────────────
 
 let mutable private client: Client.Client option = None
@@ -754,6 +757,44 @@ let activate (context: ExtensionContext) =
             Window.showQuickPick lines "Recent SageFs events"
             |> Promise.iter (fun _ -> ())
         | None -> Window.showWarningMessage "Could not fetch events" [||] |> ignore)
+    | None -> Window.showWarningMessage "SageFs is not connected" [||] |> ignore)
+  reg "sagefs.showCallGraph" (fun _ ->
+    match client with
+    | Some c ->
+      // First show overview, then let user pick a symbol for detail
+      Client.getDependencyGraph "" c
+      |> Promise.iter (fun bodyOpt ->
+        match bodyOpt with
+        | Some body ->
+          let parsed = jsonParse body
+          let total: int = parsed?TotalSymbols |> unbox
+          if total = 0 then
+            Window.showInformationMessage "No dependency graph available yet" [||] |> ignore
+          else
+            Window.showInputBox (sprintf "Enter symbol name (%d symbols tracked)" total)
+            |> Promise.iter (fun inputOpt ->
+              match inputOpt with
+              | Some sym when sym.Trim().Length > 0 ->
+                Client.getDependencyGraph (sym.Trim()) c
+                |> Promise.iter (fun detailOpt ->
+                  match detailOpt with
+                  | Some detail ->
+                    let parsed2 = jsonParse detail
+                    let tests: obj array = parsed2?Tests |> unbox
+                    if tests.Length = 0 then
+                      Window.showInformationMessage (sprintf "No tests cover '%s'" sym) [||] |> ignore
+                    else
+                      let items =
+                        tests |> Array.map (fun t ->
+                          let name: string = t?TestName |> unbox
+                          let status: string = t?Status |> unbox
+                          let icon = match status with "passed" -> "✓" | "failed" -> "✗" | _ -> "●"
+                          sprintf "%s %s [%s]" icon name status)
+                      Window.showQuickPick items (sprintf "Tests covering '%s'" sym)
+                      |> Promise.iter (fun _ -> ())
+                  | None -> Window.showWarningMessage "Could not fetch graph" [||] |> ignore)
+              | _ -> ())
+        | None -> Window.showWarningMessage "Could not fetch dependency graph" [||] |> ignore)
     | None -> Window.showWarningMessage "SageFs is not connected" [||] |> ignore)
 
   // CodeLens

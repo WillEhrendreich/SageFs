@@ -756,6 +756,58 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                 }) :> Task
             ) |> ignore
 
+            // GET /api/dependency-graph — get test dependency graph for a symbol
+            app.MapGet("/api/dependency-graph", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
+                let symbol =
+                  match ctx.Request.Query.TryGetValue("symbol") with
+                  | true, v -> Some (string v)
+                  | _ -> None
+                let json, status =
+                  match getElmModel with
+                  | Some getModel ->
+                    let model = getModel ()
+                    let graph = model.LiveTesting.DepGraph
+                    let results = model.LiveTesting.TestState.LastResults
+                    let body =
+                      match symbol with
+                      | Some sym ->
+                        let tests =
+                          Map.tryFind sym graph.SymbolToTests
+                          |> Option.defaultValue [||]
+                          |> Array.map (fun testId ->
+                            let tid = SageFs.Features.LiveTesting.TestId.value testId
+                            let status =
+                              match Map.tryFind testId results with
+                              | Some r ->
+                                match r.Result with
+                                | SageFs.Features.LiveTesting.TestResult.Passed _ -> "passed"
+                                | SageFs.Features.LiveTesting.TestResult.Failed _ -> "failed"
+                                | _ -> "other"
+                              | None -> "unknown"
+                            let testName =
+                              match Map.tryFind testId results with
+                              | Some r -> r.TestName
+                              | None -> tid
+                            {| TestId = tid; TestName = testName; Status = status |})
+                        System.Text.Json.JsonSerializer.Serialize(
+                          {| Symbol = sym; Tests = tests; TotalSymbols = graph.SymbolToTests.Count |})
+                      | None ->
+                        let symbols =
+                          graph.SymbolToTests
+                          |> Map.toArray
+                          |> Array.map (fun (sym, tids) -> {| Symbol = sym; TestCount = tids.Length |})
+                        System.Text.Json.JsonSerializer.Serialize(
+                          {| Symbols = symbols; TotalSymbols = symbols.Length |})
+                    body, 200
+                  | None ->
+                    """{"error":"Elm model not available"}""", 503
+                task {
+                    ctx.Response.StatusCode <- status
+                    ctx.Response.ContentType <- "application/json"
+                    do! ctx.Response.Body.WriteAsync(System.Text.Encoding.UTF8.GetBytes(json))
+                } :> Task
+            ) |> ignore
+
             // GET /api/recent-events — get recent FSI events
             app.MapGet("/api/recent-events", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
                 task {
