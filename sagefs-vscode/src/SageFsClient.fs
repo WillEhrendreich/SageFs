@@ -3,6 +3,9 @@ module SageFs.Vscode.SageFsClient
 open Fable.Core
 open Fable.Core.JsInterop
 
+[<Emit("console.warn('[SageFs]', $0, $1)")>]
+let private logWarn (context: string) (err: obj) : unit = jsNative
+
 type EvalResult =
   { success: bool
     result: string option
@@ -191,7 +194,8 @@ let listSessions (c: Client) =
                 if isNull e then 0 else unbox<int> e })
       else
         return [||]
-    with _ ->
+    with ex ->
+      logWarn "listSessions" ex
       return [||]
   }
 
@@ -218,7 +222,8 @@ let switchSession (sessionId: string) (c: Client) =
       let! resp = httpPost c "/api/sessions/switch" (jsonStringify payload) 5000
       let parsed = jsonParse resp.body
       return parsed?success |> unbox<bool>
-    with _ ->
+    with ex ->
+      logWarn "switchSession" ex
       return false
   }
 
@@ -229,7 +234,8 @@ let stopSession (sessionId: string) (c: Client) =
       let! resp = httpPost c "/api/sessions/stop" (jsonStringify payload) 10000
       let parsed = jsonParse resp.body
       return parsed?success |> unbox<bool>
-    with _ ->
+    with ex ->
+      logWarn "stopSession" ex
       return false
   }
 
@@ -246,7 +252,8 @@ let getSystemStatus (c: Client) =
               version = parsed?version |> unbox<string> }
       else
         return None
-    with _ ->
+    with ex ->
+      logWarn "getSystemStatus" ex
       return None
   }
 
@@ -276,7 +283,8 @@ let getHotReloadState (sessionId: string) (c: Client) =
           return Some { files = files; watchedCount = if isNull wc then 0 else unbox<int> wc }
       else
         return None
-    with _ ->
+    with ex ->
+      logWarn "getHotReloadState" ex
       return None
   }
 
@@ -285,7 +293,8 @@ let toggleHotReload (sessionId: string) (path: string) (c: Client) =
     try
       let! _ = dashHttpPost c (sprintf "/api/sessions/%s/hotreload/toggle" sessionId) (jsonStringify {| path = path |}) 5000
       return true
-    with _ ->
+    with ex ->
+      logWarn "toggleHotReload" ex
       return false
   }
 
@@ -294,7 +303,8 @@ let watchAllHotReload (sessionId: string) (c: Client) =
     try
       let! _ = dashHttpPost c (sprintf "/api/sessions/%s/hotreload/watch-all" sessionId) "{}" 5000
       return true
-    with _ ->
+    with ex ->
+      logWarn "watchAllHotReload" ex
       return false
   }
 
@@ -303,7 +313,8 @@ let unwatchAllHotReload (sessionId: string) (c: Client) =
     try
       let! _ = dashHttpPost c (sprintf "/api/sessions/%s/hotreload/unwatch-all" sessionId) "{}" 5000
       return true
-    with _ ->
+    with ex ->
+      logWarn "unwatchAllHotReload" ex
       return false
   }
 
@@ -312,7 +323,8 @@ let watchDirectoryHotReload (sessionId: string) (directory: string) (c: Client) 
     try
       let! _ = dashHttpPost c (sprintf "/api/sessions/%s/hotreload/watch-directory" sessionId) (jsonStringify {| directory = directory |}) 5000
       return true
-    with _ ->
+    with ex ->
+      logWarn "watchDirectoryHotReload" ex
       return false
   }
 
@@ -321,7 +333,8 @@ let unwatchDirectoryHotReload (sessionId: string) (directory: string) (c: Client
     try
       let! _ = dashHttpPost c (sprintf "/api/sessions/%s/hotreload/unwatch-directory" sessionId) (jsonStringify {| directory = directory |}) 5000
       return true
-    with _ ->
+    with ex ->
+      logWarn "unwatchDirectoryHotReload" ex
       return false
   }
 
@@ -359,7 +372,8 @@ let getWarmupContext (sessionId: string) (c: Client) =
               WarmupDurationMs = parsed?WarmupDurationMs |> unbox<int> }
       else
         return None
-    with _ ->
+    with ex ->
+      logWarn "getWarmupContext" ex
       return None
   }
 
@@ -387,7 +401,8 @@ let getCompletions (code: string) (cursorPosition: int) (workingDirectory: strin
               insertText = item?insertText |> unbox<string> })
       else
         return [||]
-    with _ ->
+    with ex ->
+      logWarn "getCompletions" ex
       return [||]
   }
 
@@ -452,7 +467,8 @@ let getLiveTestStatus (c: Client) =
         return Some resp.body
       else
         return None
-    with _ ->
+    with ex ->
+      logWarn "getLiveTestStatus" ex
       return None
   }
 
@@ -464,7 +480,8 @@ let explore (name: string) (c: Client) =
         return Some resp.body
       else
         return None
-    with _ ->
+    with ex ->
+      logWarn "explore" ex
       return None
   }
 
@@ -476,7 +493,8 @@ let getRecentEvents (count: int) (c: Client) =
         return Some resp.body
       else
         return None
-    with _ ->
+    with ex ->
+      logWarn "getRecentEvents" ex
       return None
   }
 
@@ -491,6 +509,7 @@ let getDependencyGraph (symbol: string) (c: Client) =
         return Some resp.body
       else
         return None
-    with _ ->
+    with ex ->
+      logWarn "getDependencyGraph" ex
       return None
   }

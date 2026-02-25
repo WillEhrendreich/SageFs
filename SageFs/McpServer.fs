@@ -355,10 +355,9 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                   ]
                 )
                 .WithHttpTransport(fun opts ->
-                    // Prune phantom SSE connections from reconnect storms within 30 seconds
-                    opts.IdleTimeout <- System.TimeSpan.FromSeconds(30.0)
-                    // Allow reasonable concurrent idle sessions for multiple editors
-                    opts.MaxIdleSessionCount <- 100
+                    // SSE connections are long-lived — only cull if we hit thousands
+                    opts.IdleTimeout <- System.TimeSpan.FromHours(24.0)
+                    opts.MaxIdleSessionCount <- 1000
                 )
                 .WithTools<SageFs.Server.McpTools.SageFsTools>()
                 .WithRequestFilters(fun filters ->

@@ -333,6 +333,7 @@ let rec private startDaemon () =
         let id =
           setInterval (fun () ->
             attempts <- attempts + 1
+            sb.text <- sprintf "$(loading~spin) SageFs starting... (%ds)" (attempts * 2)
             Client.isRunning c
             |> Promise.iter (fun ready ->
               if ready then
@@ -347,8 +348,8 @@ let rec private startDaemon () =
                 refreshStatus ()
               elif attempts > 60 then
                 intervalId |> Option.iter clearInterval
-                out.appendLine "Timed out waiting for SageFs daemon."
-                Window.showErrorMessage "SageFs daemon failed to start." [||] |> ignore
+                out.appendLine "Timed out waiting for SageFs daemon after 120s."
+                Window.showErrorMessage "SageFs daemon failed to start after 120s." [||] |> ignore
                 sb.text <- "$(error) SageFs: offline"
             )
           ) 2000

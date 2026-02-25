@@ -21,11 +21,11 @@ let initialize () =
         "isWholeLine" ==> true
         "after" ==> createObj [
           "contentText" ==> " ✓"
-          "color" ==> "#4ec9b0"
+          "color" ==> newThemeColor "testing.iconPassed"
           "fontStyle" ==> "italic"
           "margin" ==> "0 0 0 1em"
         ]
-        "overviewRulerColor" ==> "#4ec9b0"
+        "overviewRulerColor" ==> newThemeColor "testing.iconPassed"
         "overviewRulerLane" ==> 1
       ]))
   failedType <- Some (
@@ -34,11 +34,11 @@ let initialize () =
         "isWholeLine" ==> true
         "after" ==> createObj [
           "contentText" ==> " ✗"
-          "color" ==> "#f44747"
+          "color" ==> newThemeColor "testing.iconFailed"
           "fontStyle" ==> "italic"
           "margin" ==> "0 0 0 1em"
         ]
-        "overviewRulerColor" ==> "#f44747"
+        "overviewRulerColor" ==> newThemeColor "testing.iconFailed"
         "overviewRulerLane" ==> 1
         "backgroundColor" ==> "rgba(244, 71, 71, 0.08)"
       ]))
@@ -48,7 +48,7 @@ let initialize () =
         "isWholeLine" ==> true
         "after" ==> createObj [
           "contentText" ==> " ●"
-          "color" ==> "#569cd6"
+          "color" ==> newThemeColor "testing.iconQueued"
           "fontStyle" ==> "italic"
           "margin" ==> "0 0 0 1em"
         ]
