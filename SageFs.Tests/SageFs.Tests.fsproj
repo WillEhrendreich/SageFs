@@ -87,6 +87,7 @@
         <Compile Include="LiveTestingTypesTests.fs" />
         <Compile Include="CoverageBoostTests.fs" />
         <Compile Include="SessionManagerCqrsTests.fs" />
+        <Compile Include="FeaturesCoverageTests.fs" />
         <Compile Include="Program.fs" />
     </ItemGroup>
 
