@@ -371,3 +371,113 @@ Per IMPROVEMENT_PLAN.md priority matrix:
 **Files:** `docs/repl-tui-research.md`
 
 **Commits:** `6698ce1` (initial research), `01407ff` (Neovim + Elm loop + scope corrections), `b32b41e` (coherence fixes)
+
+---
+
+## Live Testing Engine — ✅ DONE
+
+**Problem:** Visual Studio Enterprise charges $250/month for "Live Unit Testing." SageFs should make that look foolish — instant, framework-agnostic, editor-agnostic live test feedback.
+
+**Implemented — Full end-to-end pipeline:**
+
+1. **Test Discovery** — Reflection-based discovery via `LiveTestingExecutors.fs` (622 lines). Two-tier provider model:
+   - Tier 1: Attribute-based (xUnit `[<Fact>]`, NUnit `[<Test>]`, MSTest `[<TestMethod>]`, TUnit `[<Test>]`) — ~10 lines per framework
+   - Tier 2: Custom (Expecto) — runtime reflection to enumerate value-based test trees
+2. **Hot Reload Integration** — `HotReloading.fs` calls `LiveTestingHook.afterReload` after every eval. Discovers providers, finds affected tests. `injectNoInlining` ensures Harmony detours work.
+3. **Pipeline State Machine** — `LiveTestPipelineState` in `LiveTestingTypes.fs` (1,808 lines). Pure domain model with:
+   - `onKeystroke`/`onFileSave` trigger debounce channels
+   - `tick` (50ms timer) fires pipeline effects
+   - `PipelineEffect` DU: ParseTreeSitter → RequestFcsTypeCheck → RunAffectedTests
+   - `CancellationChain` prevents stale results from overwriting newer ones
+   - `RunGeneration` + `ResultFreshness` track staleness across code edits
+   - `AdaptiveDebounce` adjusts timing based on project size
+4. **Elm Loop Integration** — `SageFsApp.fs` handles all live testing messages:
+   - `ProvidersDetected`, `TestsDiscovered`, `AffectedTestsComputed` → populate state
+   - `TestRunStarted` → update run phase
+   - `TestResultsBatch` → merge results, detect retrigger needs, recompute statuses
+   - `RunAffectedTests` effect handler calls `TestOrchestrator.executeFiltered` with semaphore-limited parallelism
+5. **Gutter Icon Rendering** — 8 `GutterIcon` types (TestDiscovered, TestPassed, TestFailed, TestRunning, TestSkipped, TestFlaky, Covered, NotCovered) mapped to Unicode chars and colors. `CachedEditorAnnotations` recomputed on every state change.
+6. **Run Policies** — `RunPolicy` (OnEveryChange, OnSaveOnly, OnDemand, Disabled) per `TestCategory` (Unit, Integration, Browser, Benchmark, Architecture, Property, Custom). Configurable via MCP tool and HTTP endpoint.
+7. **OTEL Instrumentation** — `LiveTestingInstrumentation.fs` with ActivitySource and Histogram metrics for pipeline phase timing (~50ns overhead when no collector).
+8. **Tree-Sitter Source Detection** — `tests.scm` (84 lines) detects `[<Fact>]`, `[<Test>]`, `[<Tests>]`, `[<Benchmark>]`, `[<Property>]` attributes for source-level test location mapping.
+9. **HTTP Endpoints** — `POST /api/live-testing/toggle`, `POST /api/live-testing/policy`, `POST /api/live-testing/run`, `GET /api/live-testing/status`
+10. **SSE Broadcasting** — `SseWriter.formatTestResultsBatchEvent` serializes `TestResultsBatchPayload` as SSE events for editor consumption
+
+**Files:** `SageFs.Core/Features/LiveTestingTypes.fs`, `LiveTestingExecutors.fs`, `LiveTestingInstrumentation.fs`, `TestTreeSitter.fs`, `SageFs.Core/Middleware/HotReloading.fs`, `SageFs.Core/SageFsApp.fs`, `SageFs.Core/SseWriter.fs`
+
+**Tests:** Full pipeline roundtrip integration tests (keystroke → debounce → FCS → affected tests → execution), debounce property tests, cancellation chain tests, policy filtering tests — part of 1,400+ test suite across 81 test files.
+
+---
+
+## CI/CD Auto-Release Pipeline — ✅ DONE
+
+**Implemented:** GitHub Actions on every master push:
+- Build + test on Ubuntu + Windows matrix
+- Expecto exit code 2 (no TTY) handled as success
+- Auto-pack NuGet tool, build VS Code VSIX, build VS VSIX
+- Push to NuGet, create GitHub Release with all artifacts
+- Tag `sagefs.nvim` repo with matching version
+- VSIX packages clearly named: `sagefs-vscode-*.vsix` and `sagefs-visualstudio-*.vsix`
+
+**File:** `.github/workflows/main.yml`
+
+---
+
+## VS Code Extension — ✅ DONE
+
+**Implemented:** Full-featured VS Code extension (`sagefs-vscode/`) built with Fable (F# → JavaScript):
+- 23 commands (eval, file eval, range eval, daemon start/stop, session management, hot reload, live testing, run policy)
+- CodeLens providers (eval + test)
+- Diagnostics integration
+- SSE subscriber for real-time updates
+- Tree views: Hot Reload files, Session Context, Type Explorer
+- Test decorations (inline pass/fail indicators)
+- Dashboard webview panel
+- Test Explorer integration via TestController adapter
+- Call graph viewer
+- Event history QuickPick
+
+**Files:** 14 .fs files in `sagefs-vscode/src/`
+
+---
+
+## Visual Studio Extension — ✅ DONE
+
+**Implemented:** VS 2022+ extension using new OOP extensibility SDK (`sagefs-vs/`):
+- 24 commands (eval, file eval, range eval, daemon, sessions, hot reload, live testing, run policy)
+- 4 tool windows: Live Testing Dashboard, Type Explorer, Hot Reload Files, Session Context
+- CodeLens providers (eval + test)
+- Diagnostics bridge for Error List integration
+- SSE subscriber for real-time updates
+- F# core library + C# shim pattern for SDK compatibility
+
+**Files:** 7 .fs files in `SageFs.VisualStudio.Core/`, 26 .cs files in `SageFs.VisualStudio/`
+
+**SDK limitations (blocked, not SageFs issues):**
+- No text adornment/decoration API (inline test results)
+- No completion/IntelliSense provider API
+- No Test Explorer integration API
+
+---
+
+## Neovim Plugin (sagefs.nvim) — ✅ DONE
+
+**Implemented:** Standalone Lua plugin at `WillEhrendreich/sagefs.nvim`:
+- 23 Lua modules, 669 tests (617 busted + 52 integration)
+- Cell evaluation, inline results, gutter signs
+- SSE live updates, session management
+- Live test panel, coverage gutter signs
+- Type explorer, history browser
+- Daemon lifecycle management
+- Code completion integration
+- CI with GitHub Actions (unit + E2E)
+
+---
+
+## Unified CLI Arg Parser — ✅ DONE
+
+**Problem:** Argu dependency added weight and didn't support `--help` correctly.
+
+**Implemented:** Custom arg parser removing Argu dependency entirely. Supports `--help`, `--version`, `--bare`, `--no-watch`, `--no-resume`, `--prune`, `--sln`, `--proj`, `--dir`, `--reference`, `--load`, `--use`, `--lib`, `--other`.
+
+**Commits:** `d31b95e`, `74d3c2c`
