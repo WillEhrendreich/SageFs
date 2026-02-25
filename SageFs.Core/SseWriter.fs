@@ -2,6 +2,7 @@ module SageFs.SseWriter
 
 open System.IO
 open System.Text
+open System.Text.Json
 open System.Threading.Tasks
 
 /// Pure: format an SSE event string
@@ -32,3 +33,13 @@ let trySendSseEvent (stream: Stream) (eventType: string) (data: string) : Task<R
   let text = formatSseEvent eventType data
   let bytes = Encoding.UTF8.GetBytes(text)
   trySendBytes stream bytes
+
+/// Format a TestSummary as an SSE event string
+let formatTestSummaryEvent (opts: JsonSerializerOptions) (summary: Features.LiveTesting.TestSummary) : string =
+  let json = JsonSerializer.Serialize(summary, opts)
+  formatSseEvent "test_summary" json
+
+/// Format a TestResultsBatchPayload as an SSE event string
+let formatTestResultsBatchEvent (opts: JsonSerializerOptions) (payload: Features.LiveTesting.TestResultsBatchPayload) : string =
+  let json = JsonSerializer.Serialize(payload, opts)
+  formatSseEvent "test_results_batch" json

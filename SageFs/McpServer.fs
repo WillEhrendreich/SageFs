@@ -325,6 +325,11 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
             let serverTracker = McpServerTracker()
             builder.Services.AddSingleton<McpServerTracker>(serverTracker) |> ignore
 
+            // SSE broadcast for typed test events (clients subscribe via /events)
+            let testEventBroadcast = Event<string>()
+            let sseJsonOpts = JsonSerializerOptions()
+            sseJsonOpts.Converters.Add(System.Text.Json.Serialization.JsonFSharpConverter())
+
             builder.Services
                 .AddMcpServer(fun options ->
                   options.ServerInstructions <- String.concat " " [
@@ -464,6 +469,12 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                             try
                                 let sseEvent = sprintf "event: state\ndata: %s\n\n" json
                                 let bytes = System.Text.Encoding.UTF8.GetBytes(sseEvent)
+                                ctx.Response.Body.WriteAsync(bytes).AsTask()
+                                |> fun t -> t.ContinueWith(fun (_: Task) -> ctx.Response.Body.FlushAsync()) |> ignore
+                            with _ -> ())
+                        use _testSub = testEventBroadcast.Publish.Subscribe(fun sseString ->
+                            try
+                                let bytes = System.Text.Encoding.UTF8.GetBytes(sseString)
                                 ctx.Response.Body.WriteAsync(bytes).AsTask()
                                 |> fun t -> t.ContinueWith(fun (_: Task) -> ctx.Response.Body.FlushAsync()) |> ignore
                             with _ -> ())
@@ -725,6 +736,9 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                                   (lt.StatusEntries |> Array.map (fun e -> e.Status))
                         serverTracker.AccumulateEvent(
                           PushEvent.TestSummaryChanged s)
+                        // Broadcast test summary over SSE
+                        testEventBroadcast.Trigger(
+                          SageFs.SseWriter.formatTestSummaryEvent sseJsonOpts s)
                         // Push enriched test results batch
                         let freshness =
                           match lt.RunPhase with
@@ -739,6 +753,9 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                             lt.LastGeneration freshness completion lt.StatusEntries
                         serverTracker.AccumulateEvent(
                           PushEvent.TestResultsBatch payload)
+                        // Broadcast test results batch over SSE
+                        testEventBroadcast.Trigger(
+                          SageFs.SseWriter.formatTestResultsBatchEvent sseJsonOpts payload)
                     | None -> ()
 
                     if serverTracker.Count > 0 then

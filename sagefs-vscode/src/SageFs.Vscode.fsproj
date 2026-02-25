@@ -5,6 +5,7 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="Vscode.fs" />
+    <Compile Include="LiveTestingTypes.fs" />
     <Compile Include="SageFsClient.fs" />
     <Compile Include="DiagnosticsListener.fs" />
     <Compile Include="CodeLensProvider.fs" />

@@ -56,7 +56,8 @@ module LiveTestingDefaults =
 
 // --- Stable Test Identity ---
 
-type TestId = private TestId of string
+[<RequireQualifiedAccess>]
+type TestId = TestId of string
 
 module TestId =
   /// 16 hex chars = 64 bits of entropy from SHA256. Collision probability
@@ -65,9 +66,9 @@ module TestId =
     let input = sprintf "%s|%s" fullName framework
     let bytes = Encoding.UTF8.GetBytes(input)
     let hash = SHA256.HashData(bytes)
-    TestId(Convert.ToHexString(hash).Substring(0, 16))
+    TestId.TestId(Convert.ToHexString(hash).Substring(0, 16))
 
-  let value (TestId id) = id
+  let value (TestId.TestId id) = id
 
 // --- Test Categories & Run Policies ---
 
@@ -780,7 +781,7 @@ module TestDependencyGraph =
     |> Array.distinct
 
   /// BFS from a symbol through the call graph, returning all reachable symbols.
-  let private reachableFrom (callGraph: Map<string, string array>) (start: string) : string list =
+  let reachableFrom (callGraph: Map<string, string array>) (start: string) : string list =
     let visited = System.Collections.Generic.HashSet<string>()
     let queue = System.Collections.Generic.Queue<string>()
     queue.Enqueue(start)
@@ -1321,7 +1322,7 @@ type PipelineDecision =
   | FullPipeline of affectedTestIds: TestId array
 
 module TestPrioritization =
-  let private durationMs (r: TestResult) =
+  let durationMs (r: TestResult) =
     match r with
     | TestResult.Passed d -> d.TotalMilliseconds
     | TestResult.Failed (_, d) -> d.TotalMilliseconds
@@ -1568,7 +1569,7 @@ type SymbolReference = {
 /// Builds SymbolToTests from a list of symbol references using the line-range heuristic
 /// in buildFromSymbolUses. Converts SymbolReference to ExtractedSymbolUse first.
 module SymbolGraphBuilder =
-  let private toExtractedSymbolUse (sr: SymbolReference) : ExtractedSymbolUse =
+  let toExtractedSymbolUse (sr: SymbolReference) : ExtractedSymbolUse =
     let parts = sr.SymbolFullName.Split('.')
     let displayName = if parts.Length > 0 then parts[parts.Length - 1] else sr.SymbolFullName
     { FullName = sr.SymbolFullName
@@ -1622,7 +1623,7 @@ type FileAnalysisCache = {
 module FileAnalysisCache =
   let empty = { FileSymbols = Map.empty }
 
-  let private symbolNames (refs: SymbolReference list) =
+  let symbolNames (refs: SymbolReference list) =
     refs |> List.map (fun r -> r.SymbolFullName) |> Set.ofList
 
   let update (filePath: string) (newRefs: SymbolReference list) (cache: FileAnalysisCache) : SymbolChanges * FileAnalysisCache =
