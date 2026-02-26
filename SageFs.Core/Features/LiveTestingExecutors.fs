@@ -13,12 +13,20 @@ type AttributeTestExecutor = {
   Execute: MethodInfo -> Async<TestResult>
 }
 
+/// Pure result from discovery: tests + how to run them.
+/// The RunTest closure captures cache/lookup from the SAME discovery call.
+/// No mutable ref needed — this IS the execution capability.
+type DiscoveryResult = {
+  Tests: TestCase list
+  RunTest: TestCase -> Async<TestResult>
+}
+
 /// Tier 2: Custom test executor.
 /// Provider handles its own discovery (e.g., Expecto value-based tests).
+/// Discover returns DiscoveryResult — both tests AND execution capability.
 type CustomTestExecutor = {
   Description: CustomProviderDescription
-  Discover: Assembly -> TestCase list
-  Execute: TestCase -> Async<TestResult>
+  Discover: Assembly -> DiscoveryResult
 }
 
 [<RequireQualifiedAccess>]
@@ -36,7 +44,7 @@ module TestExecutor =
 
 module AttributeDiscovery =
 
-  let private hasTestAttribute (attrs: string list) (mi: MethodInfo) : bool =
+  let hasTestAttribute (attrs: string list) (mi: MethodInfo) : bool =
     mi.GetCustomAttributes(true)
     |> Array.exists (fun attr ->
       let attrName = attr.GetType().Name
@@ -44,7 +52,7 @@ module AttributeDiscovery =
       |> List.exists (fun testAttr ->
         attrName = testAttr || attrName = sprintf "%sAttribute" testAttr))
 
-  let private toTestCase (framework: string) (category: TestCategory) (mi: MethodInfo) : TestCase =
+  let toTestCase (framework: string) (category: TestCategory) (mi: MethodInfo) : TestCase =
     let fullName = sprintf "%s.%s" mi.DeclaringType.FullName mi.Name
     { Id = TestId.create fullName framework
       FullName = fullName
@@ -151,7 +159,7 @@ module BuiltInExecutors =
   /// Reflection-based Expecto executor — no compile-time Expecto dependency.
   /// Uses reflection to call Expecto.TestModule.toTestCodeList, access FlatTest
   /// properties, and invoke test code. Exception types resolved at runtime.
-  module private ExpectoExecutor =
+  module ExpectoExecutor =
     open System.Threading
 
     /// Cached reflection handles for Expecto types (resolved once per assembly).
@@ -202,7 +210,7 @@ module BuiltInExecutors =
       with _ -> None
 
     /// Map an exception to TestResult using reflection-resolved Expecto types.
-    let private mapException (cache: ReflectionCache) (ex: exn) (elapsed: TimeSpan) =
+    let mapException (cache: ReflectionCache) (ex: exn) (elapsed: TimeSpan) =
       let exType = ex.GetType()
       if cache.AssertExceptionType <> null && cache.AssertExceptionType.IsAssignableFrom(exType) then
         TestResult.Failed(TestFailure.AssertionFailed ex.Message, elapsed)
@@ -333,8 +341,6 @@ module BuiltInExecutors =
       | :? TypeLoadException -> []
 
   let expecto : TestExecutor =
-    // Atomic snapshot avoids race between Discover (hot-reload thread) and Execute (async test runner)
-    let snapshot = ref (None: (ExpectoExecutor.ReflectionCache * Map<string, ExpectoExecutor.ReflectedFlatTest>) option)
     TestExecutor.Custom {
       Description = {
         Name = "expecto"
@@ -344,19 +350,17 @@ module BuiltInExecutors =
         match ExpectoExecutor.tryBuildCache asm with
         | Some cache ->
           let lookup = ExpectoExecutor.buildLookup cache asm
-          System.Threading.Interlocked.Exchange(snapshot, Some (cache, lookup)) |> ignore
-          ExpectoExecutor.discoverLeafTests cache asm
-        | None -> []
-      Execute = fun testCase ->
-        async {
-          let! ct = Async.CancellationToken
-          match snapshot.Value with
-          | None -> return TestResult.NotRun
-          | Some (cache, lookup) ->
-            match Map.tryFind testCase.FullName lookup with
-            | Some rft -> return! ExpectoExecutor.executeReflected cache rft ct
-            | None -> return TestResult.NotRun
-        }
+          let tests = ExpectoExecutor.discoverLeafTests cache asm
+          { Tests = tests
+            RunTest = fun testCase ->
+              async {
+                let! ct = Async.CancellationToken
+                match Map.tryFind testCase.FullName lookup with
+                | Some rft -> return! ExpectoExecutor.executeReflected cache rft ct
+                | None -> return TestResult.NotRun
+              } }
+        | None ->
+          { Tests = []; RunTest = fun _ -> async { return TestResult.NotRun } }
     }
 
   let builtIn = [ xunit; nunit; mstest; tunit; expecto ]
@@ -368,45 +372,68 @@ module BuiltInExecutors =
 
 module TestOrchestrator =
 
-  let discoverTests
+  /// Discovery result with composed RunTest from all executors
+  type DiscoverAllResult = {
+    Tests: TestCase list
+    RunTest: TestCase -> Async<TestResult>
+  }
+
+  let discoverAll
     (executors: TestExecutor list)
     (asm: Assembly)
-    : TestCase list =
-    executors
-    |> List.collect (fun executor ->
-      match executor with
-      | TestExecutor.AttributeBased ae ->
-        AttributeDiscovery.discoverInAssembly ae.Description TestCategory.Unit asm
-      | TestExecutor.Custom ce ->
-        ce.Discover asm)
-
-  let findExecutor (executors: TestExecutor list) (framework: string) : TestExecutor option =
-    executors
-    |> List.tryFind (fun e ->
-      match e with
-      | TestExecutor.AttributeBased ae -> ae.Description.Name = framework
-      | TestExecutor.Custom ce -> ce.Description.Name = framework)
+    : DiscoverAllResult =
+    let customResults =
+      executors
+      |> List.choose (fun executor ->
+        match executor with
+        | TestExecutor.Custom ce ->
+          let dr = ce.Discover asm
+          Some (ce.Description.Name, dr)
+        | _ -> None)
+    let attrTests =
+      executors
+      |> List.collect (fun executor ->
+        match executor with
+        | TestExecutor.AttributeBased ae ->
+          AttributeDiscovery.discoverInAssembly ae.Description TestCategory.Unit asm
+        | _ -> [])
+    let allTests =
+      (customResults |> List.collect (fun (_, dr) -> dr.Tests))
+      @ attrTests
+    let runTestByFramework =
+      customResults
+      |> List.map (fun (fw, dr) -> fw, dr.RunTest)
+      |> Map.ofList
+    { Tests = allTests
+      RunTest = fun testCase ->
+        match Map.tryFind testCase.Framework runTestByFramework with
+        | Some runTest -> runTest testCase
+        | None -> async { return TestResult.NotRun } }
 
   let executeOne
-    (executors: TestExecutor list)
+    (runTest: TestCase -> Async<TestResult>)
     (testCase: TestCase)
     : Async<TestRunResult> =
     async {
       let sw = Stopwatch.StartNew()
+      let perTestTimeout = TimeSpan.FromSeconds 5.0
       let! result =
         async {
           try
-            let! r =
-              match findExecutor executors testCase.Framework with
-              | Some (TestExecutor.Custom ce) ->
-                ce.Execute testCase
-              | Some (TestExecutor.AttributeBased _) ->
-                async { return TestResult.NotRun }
-              | None ->
-                async { return TestResult.NotRun }
-            return r
+            let testTask = Async.StartAsTask(runTest testCase)
+            let timeoutTask = Threading.Tasks.Task.Delay(perTestTimeout)
+            let! winner = Threading.Tasks.Task.WhenAny(testTask, timeoutTask) |> Async.AwaitTask
+            if Object.ReferenceEquals(winner, timeoutTask) then
+              sw.Stop()
+              return TestResult.Skipped (sprintf "Timed out after %gs" perTestTimeout.TotalSeconds)
+            else
+              return testTask.Result
           with
           | :? OperationCanceledException ->
+            sw.Stop()
+            return TestResult.Skipped "Cancelled"
+          | :? System.AggregateException as ae when (ae.InnerException :? OperationCanceledException) ->
+            sw.Stop()
             return TestResult.Skipped "Cancelled"
           | ex ->
             sw.Stop()
@@ -425,45 +452,64 @@ module TestOrchestrator =
     }
 
   let executeFiltered
-    (executors: TestExecutor list)
+    (runTest: TestCase -> Async<TestResult>)
+    (onResult: TestRunResult -> unit)
     (maxParallelism: int)
     (tests: TestCase array)
     (ct: Threading.CancellationToken)
-    : Async<TestRunResult array> =
+    : Async<unit> =
     async {
-      use cts = Threading.CancellationTokenSource.CreateLinkedTokenSource(ct)
-      cts.CancelAfter(TimeSpan.FromMilliseconds(float (30_000 + 100 * tests.Length)))
       let semaphore = new Threading.SemaphoreSlim(maxParallelism)
-      let! results =
+      let! _ =
         tests
         |> Array.map (fun tc ->
           async {
-            do! Async.AwaitTask (semaphore.WaitAsync(cts.Token))
+            do! Async.AwaitTask (semaphore.WaitAsync(ct))
             try
-              return! executeOne executors tc
+              let! result = executeOne runTest tc
+              onResult result
             finally
               semaphore.Release() |> ignore
           })
         |> Async.Parallel
-      return results
+      return ()
     }
 
 // --- Hot-reload integration hook ---
 
 /// Pure data returned by the live testing hook after a hot reload.
 /// The Elm loop dispatches this as events (ProvidersDetected, TestsDiscovered, etc.)
+/// RunTest is the composed execution function from all discoverers.
 type LiveTestHookResult = {
+  DetectedProviders: ProviderDescription list
+  DiscoveredTests: TestCase array
+  AffectedTestIds: TestId array
+  RunTest: TestCase -> Async<TestResult>
+}
+
+module LiveTestHookResult =
+  let noOp : TestCase -> Async<TestResult> =
+    fun _ -> async { return TestResult.NotRun }
+  let empty = {
+    DetectedProviders = []
+    DiscoveredTests = [||]
+    AffectedTestIds = [||]
+    RunTest = noOp
+  }
+
+/// Serializable subset of LiveTestHookResult for cross-process transport.
+/// RunTest is a closure and cannot cross process boundaries.
+type LiveTestHookResultDto = {
   DetectedProviders: ProviderDescription list
   DiscoveredTests: TestCase array
   AffectedTestIds: TestId array
 }
 
-module LiveTestHookResult =
-  let empty = {
-    DetectedProviders = []
-    DiscoveredTests = [||]
-    AffectedTestIds = [||]
-  }
+module LiveTestHookResultDto =
+  let fromResult (r: LiveTestHookResult) : LiveTestHookResultDto =
+    { DetectedProviders = r.DetectedProviders
+      DiscoveredTests = r.DiscoveredTests
+      AffectedTestIds = r.AffectedTestIds }
 
 module LiveTestingHook =
 
@@ -491,28 +537,26 @@ module LiveTestingHook =
         else None)
 
   /// Discover all tests in an assembly using matching executors.
+  /// Returns tests and a composed RunTest function.
   let discoverTests
     (executors: TestExecutor list)
     (asm: Assembly)
-    : TestCase array =
+    : TestOrchestrator.DiscoverAllResult =
     let referencedNames =
       try
         asm.GetReferencedAssemblies()
         |> Array.map (fun a -> a.Name)
         |> Set.ofArray
       with _ -> Set.empty
-    executors
-    |> List.collect (fun executor ->
-      match executor with
-      | TestExecutor.AttributeBased ae ->
-        if referencedNames.Contains ae.Description.AssemblyMarker
-        then AttributeDiscovery.discoverInAssembly ae.Description TestCategory.Unit asm
-        else []
-      | TestExecutor.Custom ce ->
-        if referencedNames.Contains ce.Description.AssemblyMarker
-        then ce.Discover asm
-        else [])
-    |> Array.ofList
+    let matchingExecutors =
+      executors
+      |> List.filter (fun executor ->
+        match executor with
+        | TestExecutor.AttributeBased ae ->
+          referencedNames.Contains ae.Description.AssemblyMarker
+        | TestExecutor.Custom ce ->
+          referencedNames.Contains ce.Description.AssemblyMarker)
+    TestOrchestrator.discoverAll matchingExecutors asm
 
   /// Returns ALL discovered test IDs. Used by explicit "run all" triggers
   /// and as conservative fallback when no specific match is found.
@@ -554,11 +598,13 @@ module LiveTestingHook =
     (updatedMethodNames: string list)
     : LiveTestHookResult =
     let providers = detectProviders executors asm
-    let tests = discoverTests executors asm
+    let discovery = discoverTests executors asm
+    let tests = discovery.Tests |> Array.ofList
     let affected = findAffectedTests tests updatedMethodNames
     { DetectedProviders = providers
       DiscoveredTests = tests
-      AffectedTestIds = affected }
+      AffectedTestIds = affected
+      RunTest = discovery.RunTest }
 
 // --- Cancellation chaining for stale work ---
 

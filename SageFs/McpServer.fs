@@ -857,6 +857,8 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
             // so we detect diag changes via stateChanged + Elm model access.
 
             let mutable lastDiagCount = 0
+            let mutable lastTestSsePush = System.Diagnostics.Stopwatch.GetTimestamp()
+            let testSseThrottleMs = 250L
             let _stateSub =
               stateChanged |> Option.map (fun evt ->
                 evt.Subscribe(fun json ->
@@ -905,26 +907,29 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                                   lt.Activation (lt.StatusEntries |> Array.map (fun e -> e.Status))
                         serverTracker.AccumulateEvent(
                           PushEvent.TestSummaryChanged s)
-                        // Broadcast test summary over SSE
-                        testEventBroadcast.Trigger(
-                          SageFs.SseWriter.formatTestSummaryEvent sseJsonOpts s)
-                        // Push enriched test results batch
-                        let freshness =
-                          match lt.RunPhase with
-                          | SageFs.Features.LiveTesting.TestRunPhase.RunningButEdited _ ->
-                            SageFs.Features.LiveTesting.ResultFreshness.StaleCodeEdited
-                          | _ -> SageFs.Features.LiveTesting.ResultFreshness.Fresh
-                        let payload =
-                          let completion =
-                            SageFs.Features.LiveTesting.TestResultsBatchPayload.deriveCompletion
-                              freshness lt.DiscoveredTests.Length lt.StatusEntries.Length
-                          SageFs.Features.LiveTesting.TestResultsBatchPayload.create
-                            lt.LastGeneration freshness completion lt.Activation lt.StatusEntries
-                        serverTracker.AccumulateEvent(
-                          PushEvent.TestResultsBatch payload)
-                        // Broadcast test results batch over SSE
-                        testEventBroadcast.Trigger(
-                          SageFs.SseWriter.formatTestResultsBatchEvent sseJsonOpts payload)
+                        // Throttle SSE broadcasts to avoid flooding clients during streaming
+                        let now = System.Diagnostics.Stopwatch.GetTimestamp()
+                        let elapsedMs = (now - lastTestSsePush) * 1000L / System.Diagnostics.Stopwatch.Frequency
+                        let isRunComplete = not (TestRunPhase.isRunning lt.RunPhase)
+                        if elapsedMs >= testSseThrottleMs || isRunComplete then
+                          lastTestSsePush <- now
+                          testEventBroadcast.Trigger(
+                            SageFs.SseWriter.formatTestSummaryEvent sseJsonOpts s)
+                          let freshness =
+                            match lt.RunPhase with
+                            | SageFs.Features.LiveTesting.TestRunPhase.RunningButEdited _ ->
+                              SageFs.Features.LiveTesting.ResultFreshness.StaleCodeEdited
+                            | _ -> SageFs.Features.LiveTesting.ResultFreshness.Fresh
+                          let payload =
+                            let completion =
+                              SageFs.Features.LiveTesting.TestResultsBatchPayload.deriveCompletion
+                                freshness lt.DiscoveredTests.Length lt.StatusEntries.Length
+                            SageFs.Features.LiveTesting.TestResultsBatchPayload.create
+                              lt.LastGeneration freshness completion lt.Activation lt.StatusEntries
+                          serverTracker.AccumulateEvent(
+                            PushEvent.TestResultsBatch payload)
+                          testEventBroadcast.Trigger(
+                            SageFs.SseWriter.formatTestResultsBatchEvent sseJsonOpts payload)
                     | None -> ()
 
                     if serverTracker.Count > 0 then

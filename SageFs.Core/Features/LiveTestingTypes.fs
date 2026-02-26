@@ -899,21 +899,25 @@ module LiveTesting =
         match Map.tryFind test.Category state.RunPolicies with
         | Some RunPolicy.Disabled -> TestRunStatus.PolicyDisabled
         | _ ->
-          if Set.contains test.Id state.AffectedTests && TestRunPhase.isRunning state.RunPhase then
-            TestRunStatus.Running
-          elif Set.contains test.Id state.AffectedTests then
-            match Map.tryFind test.Id state.LastResults with
-            | Some r when r.Result <> TestResult.NotRun -> TestRunStatus.Stale
-            | _ -> TestRunStatus.Queued
-          else
+          let resultStatus =
             match Map.tryFind test.Id state.LastResults with
             | Some r ->
               match r.Result with
-              | TestResult.Passed d -> TestRunStatus.Passed d
-              | TestResult.Failed (f, d) -> TestRunStatus.Failed (f, d)
-              | TestResult.Skipped reason -> TestRunStatus.Skipped reason
-              | TestResult.NotRun -> TestRunStatus.Detected
-            | None -> TestRunStatus.Detected
+              | TestResult.Passed d -> Some (TestRunStatus.Passed d)
+              | TestResult.Failed (f, d) -> Some (TestRunStatus.Failed (f, d))
+              | TestResult.Skipped reason -> Some (TestRunStatus.Skipped reason)
+              | TestResult.NotRun -> None
+            | None -> None
+          if Set.contains test.Id state.AffectedTests then
+            if TestRunPhase.isRunning state.RunPhase then
+              // Streaming: show result if available, Running if not yet received
+              resultStatus |> Option.defaultValue TestRunStatus.Running
+            else
+              match resultStatus with
+              | Some s -> TestRunStatus.Stale
+              | None -> TestRunStatus.Queued
+          else
+            resultStatus |> Option.defaultValue TestRunStatus.Detected
       let prevStatus =
         match Map.tryFind test.Id previousStatuses with
         | Some prev -> prev
@@ -946,11 +950,12 @@ module LiveTesting =
           else Map.add t.Id t acc) incomingById
       merged |> Map.values |> Seq.toArray
 
-  /// Merge test results into state. Returns (newState, needsRetrigger).
-  /// When needsRetrigger is true, code was edited during the run and the pipeline
-  /// should re-trigger with the still-affected tests.
-  let mergeResults (state: LiveTestState) (results: TestRunResult array) : LiveTestState * bool =
-    if Array.isEmpty results then state, false
+  /// Merge test results into state.
+  /// Does NOT transition RunPhase or clear AffectedTests — those are managed by
+  /// TestRunStarted (sets Running + AffectedTests) and TestRunCompleted (sets Idle + clears).
+  /// This enables streaming results to update incrementally while run is in progress.
+  let mergeResults (state: LiveTestState) (results: TestRunResult array) : LiveTestState =
+    if Array.isEmpty results then state
     else
       let newResults =
         results
@@ -967,23 +972,11 @@ module LiveTesting =
         state.StatusEntries
         |> Array.map (fun e -> e.TestId, e.Status)
         |> Map.ofArray
-      let newPhase, freshness =
-        TestRunPhase.onResultsArrived state.LastGeneration state.RunPhase
-      let needsRetrigger =
-        match freshness with
-        | StaleCodeEdited -> true
-        | Fresh | StaleWrongGeneration -> false
-      let alreadyStale =
-        match freshness with
-        | Fresh -> false
-        | StaleCodeEdited | StaleWrongGeneration -> true
       let updatedState =
         { state with
             LastResults = newResults
-            RunPhase = newPhase
-            AffectedTests = if alreadyStale then state.AffectedTests else Set.empty
             History = RunHistory.PreviousRun maxDuration }
-      { updatedState with StatusEntries = computeStatusEntriesWithHistory previousStatuses updatedState }, needsRetrigger
+      { updatedState with StatusEntries = computeStatusEntriesWithHistory previousStatuses updatedState }
 
   let computeStatusEntries (state: LiveTestState) : TestStatusEntry array =
     computeStatusEntriesWithHistory Map.empty state

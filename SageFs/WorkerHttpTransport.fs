@@ -196,13 +196,15 @@ module WorkerHttpTransport =
           let onResult (result: Features.LiveTesting.TestRunResult) =
             channel.Writer.TryWrite(result) |> ignore
           let runTest = getRunTest()
-          use cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(float (30_000 + 100 * tests.Length)))
+          use cts = new CancellationTokenSource()
           try
             do! Features.LiveTesting.TestOrchestrator.executeFiltered
                   runTest onResult maxParallelism tests cts.Token
                 |> Async.StartAsTask
           with ex ->
-            eprintfn "[worker] Test execution error: %s" ex.Message
+            System.Diagnostics.Activity.Current
+            |> Option.ofObj
+            |> Option.iter (fun a -> a.SetTag("error", ex.Message) |> ignore)
           channel.Writer.Complete()
         }
         let _ = executionTask

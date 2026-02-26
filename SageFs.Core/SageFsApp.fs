@@ -397,21 +397,26 @@ module SageFsUpdate =
         { model with LiveTesting = lt }, []
 
       | SageFsEvent.TestResultsBatch results ->
-        let merged, needsRetrigger = Features.LiveTesting.LiveTesting.mergeResults model.LiveTesting.TestState results
+        let merged = Features.LiveTesting.LiveTesting.mergeResults model.LiveTesting.TestState results
         let lt = recomputeStatuses model.LiveTesting (fun _ -> merged)
+        { model with LiveTesting = lt }, []
+
+      | SageFsEvent.TestRunCompleted ->
+        let testState = model.LiveTesting.TestState
+        let needsRetrigger =
+          match testState.RunPhase with
+          | Features.LiveTesting.TestRunPhase.RunningButEdited _ -> true
+          | _ -> false
+        let affectedIds = testState.AffectedTests |> Set.toArray
+        let lt = recomputeStatuses model.LiveTesting (fun s ->
+          { s with RunPhase = Features.LiveTesting.TestRunPhase.Idle; AffectedTests = Set.empty })
         let effects =
-          if needsRetrigger && not (Set.isEmpty merged.AffectedTests) then
-            let affectedIds = merged.AffectedTests |> Set.toArray
+          if needsRetrigger && affectedIds.Length > 0 then
             Features.LiveTesting.LiveTestPipelineState.triggerExecutionForAffected
               affectedIds Features.LiveTesting.RunTrigger.FileSave lt
             |> List.map SageFsEffect.Pipeline
           else []
         { model with LiveTesting = lt }, effects
-
-      | SageFsEvent.TestRunCompleted ->
-        let lt = recomputeStatuses model.LiveTesting (fun s ->
-          { s with RunPhase = Features.LiveTesting.TestRunPhase.Idle })
-        { model with LiveTesting = lt }, []
 
       | SageFsEvent.LiveTestingEnabled ->
         let lt = recomputeStatuses model.LiveTesting (fun s -> { s with Activation = Features.LiveTesting.LiveTestingActivation.Active })
