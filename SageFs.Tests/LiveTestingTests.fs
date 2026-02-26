@@ -909,7 +909,7 @@ let elmIntegrationTests = testList "LiveTesting Elm Integration" [
       let cs : CoverageState =
         { Slots =
             [| { SequencePoint.File = "a.fs"; Line = 10; Column = 0; BranchId = 0 }
-               { SequencePoint.File = "a.fs"; Line = 10; Column = 5; BranchId = 1 } |]
+               { SequencePoint.File = "a.fs"; Line = 20; Column = 0; BranchId = 0 } |]
           Hits = [| true; false |] }
       let model', _ =
         SageFsUpdate.update
