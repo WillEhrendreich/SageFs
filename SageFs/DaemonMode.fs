@@ -42,7 +42,13 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
 
   // Set up event store
   let connectionString = PostgresInfra.getOrStartPostgres ()
-  let eventStore = SageFs.EventStore.configureStore connectionString
+  match connectionString with
+  | None ->
+    log.LogError("Cannot start daemon without a PostgreSQL event store.")
+    log.LogError("Either start Docker Desktop or set SageFs_CONNECTION_STRING environment variable.")
+    return ()
+  | Some connStr ->
+  let eventStore = SageFs.EventStore.configureStore connStr
   let daemonStreamId = "daemon-sessions"
 
   // Handle --prune: mark all alive sessions as stopped and exit
@@ -853,7 +859,11 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
   Console.CancelKeyPress.Add(fun e ->
     e.Cancel <- true
     log.LogInformation("Shutting down...")
-    cts.Cancel())
+    // Start a watchdog — if graceful shutdown takes too long, force exit
+    System.Threading.Tasks.Task.Delay(5000).ContinueWith(fun (_: System.Threading.Tasks.Task) ->
+      log.LogWarning("Graceful shutdown timed out — forcing exit")
+      Environment.Exit(1)) |> ignore
+    try cts.Cancel() with :? ObjectDisposedException -> ())
 
   AppDomain.CurrentDomain.ProcessExit.Add(fun _ ->
     log.LogInformation("Daemon stopped"))
@@ -917,17 +927,24 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
   liveTestDebounceTimer.Dispose()
   liveTestWatcher.EnableRaisingEvents <- false
   liveTestWatcher.Dispose()
-  let! activeSessions =
-    sessionManager.PostAndAsyncReply(fun reply ->
-      SessionManager.SessionCommand.ListSessions reply)
-    |> Async.StartAsTask
-  for info in activeSessions do
-    let! _ = SageFs.EventStore.appendEvents eventStore daemonStreamId [
-      Features.Events.SageFsEvent.DaemonSessionStopped
-        {| SessionId = info.Id; StoppedAt = DateTimeOffset.UtcNow |}
-    ]
-    ()
-  sessionManager.PostAndAsyncReply(fun reply ->
-    SessionManager.SessionCommand.StopAll reply)
-  |> Async.RunSynchronously
+  try
+    let! activeSessions =
+      sessionManager.PostAndAsyncReply(fun reply ->
+        SessionManager.SessionCommand.ListSessions reply)
+      |> Async.StartAsTask
+    for info in activeSessions do
+      let! _ = SageFs.EventStore.appendEvents eventStore daemonStreamId [
+        Features.Events.SageFsEvent.DaemonSessionStopped
+          {| SessionId = info.Id; StoppedAt = DateTimeOffset.UtcNow |}
+      ]
+      ()
+    // Stop all workers with a timeout — don't block forever if a worker is hung
+    let stopTask =
+      sessionManager.PostAndAsyncReply(fun reply ->
+        SessionManager.SessionCommand.StopAll reply)
+      |> Async.StartAsTask
+    if not (stopTask.Wait(TimeSpan.FromSeconds(3.0))) then
+      log.LogWarning("StopAll timed out — some workers may not have stopped cleanly")
+  with ex ->
+    log.LogWarning("Shutdown cleanup error: {Error}", ex.Message)
 }

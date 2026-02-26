@@ -9,19 +9,26 @@ open Testcontainers.PostgreSql
 let getOrStartPostgres () =
   match Environment.GetEnvironmentVariable("SageFs_CONNECTION_STRING") with
   | s when System.String.IsNullOrEmpty s ->
-    let container =
-      PostgreSqlBuilder()
-        .WithDatabase("SageFs")
-        .WithUsername("postgres")
-        .WithPassword("SageFs")
-        .WithImage("postgres:18")
-        .WithReuse(true)
-        .WithVolumeMount("sagefs-pgdata", "/var/lib/postgresql")
-        .Build()
-    container.StartAsync().GetAwaiter().GetResult()
-    let connStr = container.GetConnectionString()
-    printfn "✓ Event store: PostgreSQL (auto-started via Docker)"
-    connStr
+    try
+      let container =
+        PostgreSqlBuilder()
+          .WithDatabase("SageFs")
+          .WithUsername("postgres")
+          .WithPassword("SageFs")
+          .WithImage("postgres:18")
+          .WithReuse(true)
+          .WithVolumeMount("sagefs-pgdata", "/var/lib/postgresql")
+          .Build()
+      container.StartAsync().GetAwaiter().GetResult()
+      let connStr = container.GetConnectionString()
+      printfn "✓ Event store: PostgreSQL (auto-started via Docker)"
+      Some connStr
+    with ex ->
+      eprintfn "⚠ Docker is not available — session history will not be persisted."
+      eprintfn "  Install and start Docker for persistent session resume across restarts."
+      eprintfn "  Alternatively, set SageFs_CONNECTION_STRING to an existing PostgreSQL instance."
+      eprintfn "  Detail: %s" ex.Message
+      None
   | connectionString ->
     printfn "✓ Event store: PostgreSQL (explicit connection)"
-    connectionString
+    Some connectionString

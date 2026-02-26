@@ -318,13 +318,14 @@ let run (sessionId: string) (port: int) (args: Args.Arguments list) = async {
 
   use cts = new CancellationTokenSource()
 
-  // Handle process signals
+  // Handle process signals — guard against ObjectDisposedException
+  // if the CTS is disposed before the event fires (e.g. daemon kills worker)
   Console.CancelKeyPress.Add(fun e ->
     e.Cancel <- true
-    cts.Cancel())
+    try cts.Cancel() with :? ObjectDisposedException -> ())
 
   AppDomain.CurrentDomain.ProcessExit.Add(fun _ ->
-    cts.Cancel())
+    try cts.Cancel() with :? ObjectDisposedException -> ())
 
   try
     // Start HTTP server on requested port (0 = OS-assigned)
