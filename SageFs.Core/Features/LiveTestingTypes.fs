@@ -1630,7 +1630,10 @@ module PipelineEffects =
         else
           let tsElapsed = PipelineTiming.accumulatedTsElapsed lastTiming
           let fcsElapsed = PipelineTiming.accumulatedFcsElapsed lastTiming
-          Some (PipelineEffect.RunAffectedTests(filtered, trigger, tsElapsed, fcsElapsed, None, instrumentationMaps))
+          let targetSession =
+            filtered
+            |> Array.tryPick (fun tc -> Map.tryFind tc.Id state.TestSessionMap)
+          Some (PipelineEffect.RunAffectedTests(filtered, trigger, tsElapsed, fcsElapsed, targetSession, instrumentationMaps))
 
 /// Adaptive debounce configuration.
 type AdaptiveDebounceConfig = {
@@ -1905,6 +1908,7 @@ module LiveTestPipelineState =
   let triggerExecutionForAffected
     (affectedIds: TestId array)
     (trigger: RunTrigger)
+    (targetSession: string option)
     (s: LiveTestPipelineState)
     : PipelineEffect list =
     if Array.isEmpty affectedIds
@@ -1920,7 +1924,7 @@ module LiveTestPipelineState =
         |> TestPrioritization.prioritize s.TestState.LastResults
       if Array.isEmpty filtered then []
       else
-        [ PipelineEffect.RunAffectedTests(filtered, trigger, System.TimeSpan.Zero, System.TimeSpan.Zero, None, s.InstrumentationMaps) ]
+        [ PipelineEffect.RunAffectedTests(filtered, trigger, System.TimeSpan.Zero, System.TimeSpan.Zero, targetSession, s.InstrumentationMaps) ]
 
   /// Filter tests by optional criteria for explicit MCP-triggered runs.
   /// All filters are AND'd. None = no filter = match all.

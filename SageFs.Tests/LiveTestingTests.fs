@@ -4350,7 +4350,7 @@ let symbolGraphWiringTests = testList "symbol graph wiring integration" [
                         RunPolicies = RunPolicyDefaults.defaults } }
     let effects =
       LiveTestPipelineState.triggerExecutionForAffected
-        [| tid |] RunTrigger.FileSave pipeState
+        [| tid |] RunTrigger.FileSave None pipeState
     effects
     |> List.exists (fun e ->
       match e with
@@ -5464,14 +5464,14 @@ let affectedExecutionTriggerTests = testList "AffectedTestsComputed execution tr
 
   test "empty affected IDs produce no effects" {
     let ps = mkPipelineState [| tc1; tc2 |]
-    let effects = LiveTestPipelineState.triggerExecutionForAffected [||] RunTrigger.FileSave ps
+    let effects = LiveTestPipelineState.triggerExecutionForAffected [||] RunTrigger.FileSave None ps
     effects
     |> Expect.isEmpty "should produce no effects for empty affected IDs"
   }
 
   test "non-empty affected IDs produce RunAffectedTests effect" {
     let ps = mkPipelineState [| tc1; tc2; tc3 |]
-    let effects = LiveTestPipelineState.triggerExecutionForAffected [| tc1.Id; tc3.Id |] RunTrigger.FileSave ps
+    let effects = LiveTestPipelineState.triggerExecutionForAffected [| tc1.Id; tc3.Id |] RunTrigger.FileSave None ps
     effects
     |> List.length
     |> Expect.equal "should produce exactly one effect" 1
@@ -5479,7 +5479,7 @@ let affectedExecutionTriggerTests = testList "AffectedTestsComputed execution tr
 
   test "only unit tests run on FileSave when policy is OnEveryChange" {
     let ps = mkPipelineState [| tc1; tc2; tc3 |]
-    let effects = LiveTestPipelineState.triggerExecutionForAffected [| tc1.Id; tc2.Id |] RunTrigger.FileSave ps
+    let effects = LiveTestPipelineState.triggerExecutionForAffected [| tc1.Id; tc2.Id |] RunTrigger.FileSave None ps
     match effects with
     | [ PipelineEffect.RunAffectedTests (tests, _, _, _, _, _) ] ->
       tests
@@ -5492,7 +5492,7 @@ let affectedExecutionTriggerTests = testList "AffectedTestsComputed execution tr
 
   test "ExplicitRun trigger runs integration tests too" {
     let ps = mkPipelineState [| tc1; tc2; tc3 |]
-    let effects = LiveTestPipelineState.triggerExecutionForAffected [| tc1.Id; tc2.Id |] RunTrigger.ExplicitRun ps
+    let effects = LiveTestPipelineState.triggerExecutionForAffected [| tc1.Id; tc2.Id |] RunTrigger.ExplicitRun None ps
     match effects with
     | [ PipelineEffect.RunAffectedTests (tests, _, _, _, _, _) ] ->
       tests
@@ -5504,7 +5504,7 @@ let affectedExecutionTriggerTests = testList "AffectedTestsComputed execution tr
   test "disabled live testing produces no effects" {
     let ps = { mkPipelineState [| tc1; tc2 |] with
                  TestState = { (mkState [| tc1; tc2 |]) with Activation = LiveTestingActivation.Inactive } }
-    let effects = LiveTestPipelineState.triggerExecutionForAffected [| tc1.Id |] RunTrigger.FileSave ps
+    let effects = LiveTestPipelineState.triggerExecutionForAffected [| tc1.Id |] RunTrigger.FileSave None ps
     effects
     |> Expect.isEmpty "should produce no effects when disabled"
   }
@@ -5512,7 +5512,7 @@ let affectedExecutionTriggerTests = testList "AffectedTestsComputed execution tr
   test "affected IDs not in discovered tests are ignored" {
     let ps = mkPipelineState [| tc1 |]
     let unknownId = TestId.create "unknown" "expecto"
-    let effects = LiveTestPipelineState.triggerExecutionForAffected [| unknownId |] RunTrigger.FileSave ps
+    let effects = LiveTestPipelineState.triggerExecutionForAffected [| unknownId |] RunTrigger.FileSave None ps
     effects
     |> Expect.isEmpty "unknown test IDs should not produce effects"
   }

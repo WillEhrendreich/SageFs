@@ -297,11 +297,18 @@ module SageFsUpdate =
         let remaining =
           remaining
           |> List.map (fun s -> { s with IsActive = ActiveSession.isViewing s.Id newActive })
+        let clearedMap =
+          model.LiveTesting.TestState.TestSessionMap
+          |> Map.filter (fun _ sid -> sid <> sessionId)
+        let lt =
+          { model.LiveTesting with
+              TestState = { model.LiveTesting.TestState with TestSessionMap = clearedMap } }
         { model with
             Sessions = {
               model.Sessions with
                 Sessions = remaining
                 ActiveSessionId = newActive }
+            LiveTesting = lt
             Diagnostics = model.Diagnostics |> Map.remove sessionId }, []
 
       | SageFsEvent.SessionStale (sessionId, _) ->
@@ -403,7 +410,7 @@ module SageFsUpdate =
             // Other sessions' tests belong to different workers and would return NotRun.
             let incomingIds = tests |> Array.map (fun tc -> tc.Id)
             Features.LiveTesting.LiveTestPipelineState.triggerExecutionForAffected
-              incomingIds Features.LiveTesting.RunTrigger.FileSave lt
+              incomingIds Features.LiveTesting.RunTrigger.FileSave (Some sessionId) lt
             |> List.map SageFsEffect.Pipeline
           else []
         { model with LiveTesting = lt }, effects
@@ -437,9 +444,11 @@ module SageFsUpdate =
 
       | SageFsEvent.AffectedTestsComputed testIds ->
         let lt = recomputeStatuses model.LiveTesting (fun s -> { s with AffectedTests = Set.ofArray testIds })
+        let targetSession =
+          testIds |> Array.tryPick (fun tid -> Map.tryFind tid lt.TestState.TestSessionMap)
         let effects =
           Features.LiveTesting.LiveTestPipelineState.triggerExecutionForAffected
-            testIds Features.LiveTesting.RunTrigger.FileSave lt
+            testIds Features.LiveTesting.RunTrigger.FileSave targetSession lt
           |> List.map SageFsEffect.Pipeline
         { model with LiveTesting = lt }, effects
 
@@ -451,10 +460,19 @@ module SageFsUpdate =
         let effects =
           if Array.isEmpty tests || lt.TestState.Activation = Features.LiveTesting.LiveTestingActivation.Inactive then []
           else
-            [ Features.LiveTesting.PipelineEffect.RunAffectedTests(
-                tests, Features.LiveTesting.RunTrigger.ExplicitRun,
-                System.TimeSpan.Zero, System.TimeSpan.Zero, None, lt.InstrumentationMaps)
-              |> SageFsEffect.Pipeline ]
+            let sessionMap = lt.TestState.TestSessionMap
+            tests
+            |> Array.groupBy (fun tc ->
+              match Map.tryFind tc.Id sessionMap with
+              | Some sid -> sid
+              | None -> "")
+            |> Array.toList
+            |> List.map (fun (sid, groupTests) ->
+              let targetSession = if System.String.IsNullOrEmpty sid then None else Some sid
+              Features.LiveTesting.PipelineEffect.RunAffectedTests(
+                groupTests, Features.LiveTesting.RunTrigger.ExplicitRun,
+                System.TimeSpan.Zero, System.TimeSpan.Zero, targetSession, lt.InstrumentationMaps)
+              |> SageFsEffect.Pipeline)
         { model with LiveTesting = lt }, effects
 
       | SageFsEvent.CoverageUpdated coverage ->
@@ -514,10 +532,19 @@ module SageFsUpdate =
         let lt = recomputeStatuses model.LiveTesting (fun s -> { s with Activation = Features.LiveTesting.LiveTestingActivation.Active })
         let effects =
           if not (Array.isEmpty lt.TestState.DiscoveredTests) then
-            let allIds = lt.TestState.DiscoveredTests |> Array.map (fun tc -> tc.Id)
-            Features.LiveTesting.LiveTestPipelineState.triggerExecutionForAffected
-              allIds Features.LiveTesting.RunTrigger.ExplicitRun lt
-            |> List.map SageFsEffect.Pipeline
+            let sessionMap = lt.TestState.TestSessionMap
+            lt.TestState.DiscoveredTests
+            |> Array.groupBy (fun tc ->
+              match Map.tryFind tc.Id sessionMap with
+              | Some sid -> sid
+              | None -> "")
+            |> Array.toList
+            |> List.collect (fun (sid, groupTests) ->
+              let targetSession = if System.String.IsNullOrEmpty sid then None else Some sid
+              let groupIds = groupTests |> Array.map (fun tc -> tc.Id)
+              Features.LiveTesting.LiveTestPipelineState.triggerExecutionForAffected
+                groupIds Features.LiveTesting.RunTrigger.ExplicitRun targetSession lt
+              |> List.map SageFsEffect.Pipeline)
           else []
         { model with LiveTesting = lt }, effects
 
@@ -1009,9 +1036,16 @@ module SageFsEffectHandler =
                 match deps.ResolveSession targetSession with
                 | Ok resolution ->
                   let sid = SessionOperations.sessionId resolution
-                  match deps.GetStreamingTestProxy sid with
+                  // Retry proxy lookup — worker URL may not be registered yet at startup
+                  let mutable proxy = deps.GetStreamingTestProxy sid
+                  let mutable retries = 0
+                  while proxy.IsNone && retries < 20 do
+                    retries <- retries + 1
+                    do! Async.Sleep 500
+                    proxy <- deps.GetStreamingTestProxy sid
+                  match proxy with
                   | Some streamProxy ->
-                    let onResult result =
+                    let onResult (result: Features.LiveTesting.TestRunResult) =
                       dispatch (SageFsMsg.Event (SageFsEvent.TestResultsBatch [| result |]))
                     let onCoverage (hits: bool array) =
                       let mergedMap = Features.LiveTesting.InstrumentationMap.merge instrumentationMaps
