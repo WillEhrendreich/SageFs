@@ -2504,7 +2504,7 @@ let pipelineEffectsTests = testList "PipelineEffects" [
         SymbolToTests = Map.ofList [ "Module.add", [| tc1.Id |] ]
         TransitiveCoverage = Map.ofList [ "Module.add", [| tc1.Id |] ]
     }
-    match PipelineEffects.afterTypeCheck ["Module.add"] RunTrigger.Keystroke graph state None [||] with
+    match PipelineEffects.afterTypeCheck ["Module.add"] "test.fs" RunTrigger.Keystroke graph state None [||] with
     | Some (PipelineEffect.RunAffectedTests (tests, trigger, _tsElapsed, _fcsElapsed, _sessionId, _maps)) ->
       tests.Length |> Expect.equal "one test" 1
       trigger |> Expect.equal "keystroke trigger" RunTrigger.Keystroke
@@ -2514,14 +2514,14 @@ let pipelineEffectsTests = testList "PipelineEffects" [
   test "afterTypeCheck with no affected tests returns None" {
     let state = { LiveTestState.empty with DiscoveredTests = [||]; Activation = LiveTestingActivation.Active }
     let graph = TestDependencyGraph.empty
-    PipelineEffects.afterTypeCheck ["unknown.symbol"] RunTrigger.Keystroke graph state None [||]
+    PipelineEffects.afterTypeCheck ["unknown.symbol"] "test.fs" RunTrigger.Keystroke graph state None [||]
     |> Expect.isNone "no affected tests"
   }
 
   test "afterTypeCheck when disabled returns None" {
     let state = { LiveTestState.empty with Activation = LiveTestingActivation.Inactive }
     let graph = TestDependencyGraph.empty
-    PipelineEffects.afterTypeCheck ["Module.add"] RunTrigger.Keystroke graph state None [||]
+    PipelineEffects.afterTypeCheck ["Module.add"] "test.fs" RunTrigger.Keystroke graph state None [||]
     |> Expect.isNone "disabled"
   }
 
@@ -2541,7 +2541,7 @@ let pipelineEffectsTests = testList "PipelineEffects" [
       TestDependencyGraph.empty with
         TransitiveCoverage = Map.ofList [ "Module.add", [| tc1.Id |] ]
     }
-    PipelineEffects.afterTypeCheck ["Module.add"] RunTrigger.Keystroke graph state None [||]
+    PipelineEffects.afterTypeCheck ["Module.add"] "test.fs" RunTrigger.Keystroke graph state None [||]
     |> Expect.isNone "should not produce effect when tests are running"
   }
 
@@ -2561,7 +2561,7 @@ let pipelineEffectsTests = testList "PipelineEffects" [
       TestDependencyGraph.empty with
         TransitiveCoverage = Map.ofList [ "Module.add", [| tc1.Id |] ]
     }
-    PipelineEffects.afterTypeCheck ["Module.add"] RunTrigger.Keystroke graph state None [||]
+    PipelineEffects.afterTypeCheck ["Module.add"] "test.fs" RunTrigger.Keystroke graph state None [||]
     |> Expect.isNone "should not produce effect when running-but-edited"
   }
 
@@ -2582,7 +2582,7 @@ let pipelineEffectsTests = testList "PipelineEffects" [
         SymbolToTests = Map.ofList [ "Module.add", [| tc1.Id; tc2.Id |] ]
         TransitiveCoverage = Map.ofList [ "Module.add", [| tc1.Id; tc2.Id |] ]
     }
-    match PipelineEffects.afterTypeCheck ["Module.add"] RunTrigger.Keystroke graph state None [||] with
+    match PipelineEffects.afterTypeCheck ["Module.add"] "test.fs" RunTrigger.Keystroke graph state None [||] with
     | Some (PipelineEffect.RunAffectedTests (tests, _, _, _, _, _)) ->
       tests.Length |> Expect.equal "only unit test" 1
       tests.[0].Id |> Expect.equal "unit test id" tc1.Id
@@ -2878,7 +2878,7 @@ let endToEndPipelineTests = testList "End-to-end Pipeline" [
     |> List.exists (fun e -> match e with PipelineEffect.RequestFcsTypeCheck _ -> true | _ -> false)
     |> Expect.isTrue "has fcs"
     // Phase 2: afterTypeCheck (after FCS completes) fires RunAffectedTests
-    let runEffect = PipelineEffects.afterTypeCheck s2.ChangedSymbols RunTrigger.Keystroke s2.DepGraph s2.TestState None s2.InstrumentationMaps
+    let runEffect = PipelineEffects.afterTypeCheck s2.ChangedSymbols "test.fs" RunTrigger.Keystroke s2.DepGraph s2.TestState None s2.InstrumentationMaps
     runEffect |> Expect.isSome "afterTypeCheck produces RunAffectedTests"
     match runEffect.Value with
     | PipelineEffect.RunAffectedTests (tests, trigger, _, _, _, _) ->
@@ -4311,7 +4311,7 @@ let symbolGraphWiringTests = testList "symbol graph wiring integration" [
         RunPolicies = RunPolicyDefaults.defaults }
     let effect =
       PipelineEffects.afterTypeCheck
-        [ "MyModule.add" ] RunTrigger.Keystroke graph ltState None [||]
+        [ "MyModule.add" ] "test.fs" RunTrigger.Keystroke graph ltState None [||]
     match effect with
     | Some (PipelineEffect.RunAffectedTests (tests, _, _, _, _, _)) ->
       tests |> Array.exists (fun t -> t.Id = tid)
@@ -4378,7 +4378,7 @@ let symbolGraphWiringTests = testList "symbol graph wiring integration" [
         Activation = LiveTestingActivation.Inactive
         DiscoveredTests = [| testCase |]
         RunPolicies = RunPolicyDefaults.defaults }
-    PipelineEffects.afterTypeCheck [ "M.func" ] RunTrigger.Keystroke graph ltState None [||]
+    PipelineEffects.afterTypeCheck [ "M.func" ] "test.fs" RunTrigger.Keystroke graph ltState None [||]
     |> Expect.isNone "no effect when disabled"
   }
 
@@ -4396,7 +4396,7 @@ let symbolGraphWiringTests = testList "symbol graph wiring integration" [
         Activation = LiveTestingActivation.Active
         DiscoveredTests = [| testCase |]
         RunPolicies = RunPolicyDefaults.defaults }
-    PipelineEffects.afterTypeCheck [] RunTrigger.Keystroke graph ltState None [||]
+    PipelineEffects.afterTypeCheck [] "test.fs" RunTrigger.Keystroke graph ltState None [||]
     |> Expect.isNone "no effect when no symbols"
   }
 ]
@@ -5888,6 +5888,101 @@ let coverageBitmapWiringTests = testList "CoverageBitmap Pipeline Wiring" [
     LiveTestState.empty.TestCoverageBitmaps
     |> Map.isEmpty
     |> Expect.isTrue "should start empty"
+  }
+]
+
+// --- Coverage-Based Test Selection Tests ---
+
+let coverageSelectionTests = testList "Coverage-based test selection" [
+  test "buildFileMask sets bits for probes in target file only" {
+    let maps = [| { Slots = [|
+      { File = "A.fs"; Line = 1; Column = 0; BranchId = 0 }
+      { File = "A.fs"; Line = 2; Column = 0; BranchId = 1 }
+      { File = "B.fs"; Line = 1; Column = 0; BranchId = 2 }
+    |]; TotalProbes = 3; TrackerTypeName = "t"; HitsFieldName = "h" } |]
+    let mask = CoverageBitmap.buildFileMask "A.fs" maps
+    CoverageBitmap.popCount mask |> Expect.equal "2 probes in A.fs" 2
+    CoverageBitmap.isSet 0 mask |> Expect.isTrue "probe 0 (A.fs:1)"
+    CoverageBitmap.isSet 1 mask |> Expect.isTrue "probe 1 (A.fs:2)"
+    CoverageBitmap.isSet 2 mask |> Expect.isFalse "probe 2 (B.fs:1)"
+  }
+
+  test "buildFileMask with no matching file returns zero popcount" {
+    let maps = [| { Slots = [|
+      { File = "B.fs"; Line = 1; Column = 0; BranchId = 0 }
+    |]; TotalProbes = 1; TrackerTypeName = "t"; HitsFieldName = "h" } |]
+    let mask = CoverageBitmap.buildFileMask "A.fs" maps
+    CoverageBitmap.popCount mask |> Expect.equal "no probes" 0
+  }
+
+  test "findCoverageAffected returns tests covering changed file" {
+    let maps = [| { Slots = [|
+      { File = "A.fs"; Line = 1; Column = 0; BranchId = 0 }
+      { File = "A.fs"; Line = 2; Column = 0; BranchId = 1 }
+      { File = "B.fs"; Line = 1; Column = 0; BranchId = 2 }
+    |]; TotalProbes = 3; TrackerTypeName = "t"; HitsFieldName = "h" } |]
+    let t1 = mkTestId "ns" "test_a"
+    let t2 = mkTestId "ns" "test_b"
+    let bm1 = CoverageBitmap.ofBoolArray [| true; false; false |]
+    let bm2 = CoverageBitmap.ofBoolArray [| false; false; true |]
+    let bitmaps = Map.ofList [ t1, bm1; t2, bm2 ]
+    let affected = CoverageBitmap.findCoverageAffected "A.fs" maps bitmaps
+    affected |> Array.length |> Expect.equal "only t1 affected" 1
+    affected |> Array.contains t1 |> Expect.isTrue "t1 covers A.fs"
+    affected |> Array.contains t2 |> Expect.isFalse "t2 doesn't cover A.fs"
+  }
+
+  test "findCoverageAffected returns empty when no bitmaps exist" {
+    let maps = [| { Slots = [|
+      { File = "A.fs"; Line = 1; Column = 0; BranchId = 0 }
+    |]; TotalProbes = 1; TrackerTypeName = "t"; HitsFieldName = "h" } |]
+    let affected = CoverageBitmap.findCoverageAffected "A.fs" maps Map.empty
+    affected |> Array.isEmpty |> Expect.isTrue "no bitmaps = no coverage-based selection"
+  }
+
+  test "findCoverageAffected skips bitmaps with mismatched size" {
+    let maps = [| { Slots = [|
+      { File = "A.fs"; Line = 1; Column = 0; BranchId = 0 }
+      { File = "A.fs"; Line = 2; Column = 0; BranchId = 1 }
+    |]; TotalProbes = 2; TrackerTypeName = "t"; HitsFieldName = "h" } |]
+    let t1 = mkTestId "ns" "t1"
+    let bm_wrong_size = CoverageBitmap.ofBoolArray [| true; false; true |]
+    let bitmaps = Map.ofList [ t1, bm_wrong_size ]
+    let affected = CoverageBitmap.findCoverageAffected "A.fs" maps bitmaps
+    affected |> Array.isEmpty |> Expect.isTrue "mismatched size skipped"
+  }
+
+  test "afterTypeCheck unions symbol and coverage affected tests" {
+    let tid1 = mkTestId "Tests.t1" "expecto"
+    let tid2 = mkTestId "Tests.t2" "expecto"
+    let tc1 = { Id = tid1; FullName = "Tests.t1"; DisplayName = "t1"
+                Origin = TestOrigin.ReflectionOnly
+                Labels = []; Framework = "expecto"
+                Category = TestCategory.Unit }
+    let tc2 = { Id = tid2; FullName = "Tests.t2"; DisplayName = "t2"
+                Origin = TestOrigin.ReflectionOnly
+                Labels = []; Framework = "expecto"
+                Category = TestCategory.Unit }
+    let graph =
+      { SymbolToTests = Map.empty
+        TransitiveCoverage = Map.ofList [ "Module.add", [| tid1 |] ]
+        PerFileIndex = Map.empty
+        SourceVersion = 0 }
+    let maps = [| { Slots = [|
+      { File = "Module.fs"; Line = 1; Column = 0; BranchId = 0 }
+    |]; TotalProbes = 1; TrackerTypeName = "t"; HitsFieldName = "h" } |]
+    let bm = CoverageBitmap.ofBoolArray [| true |]
+    let state =
+      { LiveTestState.empty with
+          DiscoveredTests = [| tc1; tc2 |]
+          TestCoverageBitmaps = Map.ofList [ tid2, bm ]
+          TestSessionMap = Map.ofList [ tid1, "s"; tid2, "s" ] }
+    match PipelineEffects.afterTypeCheck ["Module.add"] "Module.fs" RunTrigger.Keystroke graph state None maps with
+    | Some (PipelineEffect.RunAffectedTests (tests, _, _, _, _, _)) ->
+      let ids = tests |> Array.map (fun t -> t.Id) |> Set.ofArray
+      ids |> Set.contains tid1 |> Expect.isTrue "t1 from symbol heuristic"
+      ids |> Set.contains tid2 |> Expect.isTrue "t2 from coverage bitmap"
+    | other -> failtestf "expected Some RunAffectedTests, got %A" other
   }
 ]
 

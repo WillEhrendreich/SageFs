@@ -429,6 +429,37 @@ module CoverageBitmap =
       let bit = index % 64
       (bm.Bits.[word] &&& (1UL <<< bit)) <> 0UL
 
+  /// Build a bitmap mask with bits set for all probes in the given file.
+  let buildFileMask (filePath: string) (maps: InstrumentationMap array) : CoverageBitmap =
+    let merged = InstrumentationMap.merge maps
+    if merged.TotalProbes = 0 then empty
+    else
+      let hits = Array.zeroCreate<bool> merged.TotalProbes
+      for i in 0 .. merged.Slots.Length - 1 do
+        if merged.Slots.[i].File = filePath then
+          hits.[i] <- true
+      ofBoolArray hits
+
+  /// Find tests whose coverage bitmaps intersect with probes in the changed file.
+  /// Returns test IDs that have at least one probe hit in the file, based on stored bitmaps.
+  /// Skips tests with mismatched bitmap sizes (stale instrumentation generation).
+  let findCoverageAffected
+    (filePath: string)
+    (maps: InstrumentationMap array)
+    (bitmaps: Map<TestId, CoverageBitmap>)
+    : TestId array =
+    let mask = buildFileMask filePath maps
+    if mask.Count = 0 || popCount mask = 0 then [||]
+    else
+      bitmaps
+      |> Map.toArray
+      |> Array.choose (fun (tid, bm) ->
+        if bm.Count <> mask.Count then None
+        else
+          let intersection = intersect bm mask
+          if popCount intersection > 0 then Some tid
+          else None)
+
 /// Per-test coverage info for a specific symbol
 type CoveringTestInfo = {
   TestId: TestId
@@ -1704,6 +1735,7 @@ module PipelineEffects =
 
   let afterTypeCheck
     (changedSymbols: string list)
+    (changedFilePath: string)
     (trigger: RunTrigger)
     (depGraph: TestDependencyGraph)
     (state: LiveTestState)
@@ -1712,7 +1744,11 @@ module PipelineEffects =
     : PipelineEffect option =
     if state.Activation = LiveTestingActivation.Inactive then None
     else
-      let affected = TestDependencyGraph.findAffected changedSymbols depGraph
+      let symbolAffected = TestDependencyGraph.findAffected changedSymbols depGraph
+      let coverageAffected =
+        CoverageBitmap.findCoverageAffected changedFilePath instrumentationMaps state.TestCoverageBitmaps
+      let affected =
+        Array.append symbolAffected coverageAffected |> Array.distinct
       if Array.isEmpty affected then None
       else
         let affectedSet = Set.ofArray affected
@@ -1992,7 +2028,7 @@ module LiveTestPipelineState =
     | FcsTypeCheckResult.Success (filePath, refs) ->
       let s1 = onFcsComplete filePath refs s
       let trigger = s.LastTrigger
-      let effect = PipelineEffects.afterTypeCheck s1.ChangedSymbols trigger s1.DepGraph s1.TestState s1.LastTiming s1.InstrumentationMaps
+      let effect = PipelineEffects.afterTypeCheck s1.ChangedSymbols filePath trigger s1.DepGraph s1.TestState s1.LastTiming s1.InstrumentationMaps
       let effects = effect |> Option.toList
       effects, s1
     | FcsTypeCheckResult.Failed _ ->
