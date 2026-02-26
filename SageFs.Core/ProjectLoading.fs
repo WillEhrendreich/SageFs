@@ -40,31 +40,30 @@ let loadSolution (logger: ILogger) (args: Arguments list) =
       | _ -> None)
     |> Option.defaultWith Directory.GetCurrentDirectory
 
+  let explicitProjects =
+    args |> List.choose (function Proj p -> Some p | _ -> None)
+
+  let explicitSolutions =
+    args |> List.choose (function Sln s -> Some s | _ -> None)
+
+  // When --proj is given explicitly, don't auto-discover .sln files.
+  // Only auto-discover when neither --proj nor --sln is specified.
   let solutions =
-    match
-      args
-      |> List.choose (function
-        | Sln s -> Some s
-        | _ -> None)
-    with
+    match explicitSolutions with
+    | _ :: _ -> explicitSolutions |> List.map Path.GetFullPath
+    | [] when not explicitProjects.IsEmpty -> []
     | [] ->
       Directory.EnumerateFiles directory
       |> Seq.filter (fun s -> s.EndsWith(".sln", System.StringComparison.Ordinal) || s.EndsWith(".slnx", System.StringComparison.Ordinal))
       |> Seq.toList
-    | s -> s |> List.map Path.GetFullPath
 
   let projects =
-    match
-      args
-      |> List.choose (function
-        | Proj p -> Some p
-        | _ -> None)
-    with
+    match explicitProjects with
+    | _ :: _ -> explicitProjects |> List.map Path.GetFullPath
     | [] ->
       Directory.EnumerateFiles directory
       |> Seq.filter (fun s -> s.EndsWith(".fsproj", System.StringComparison.Ordinal))
       |> Seq.toList
-    | s -> s |> List.map Path.GetFullPath
 
   match solutions, projects with
   | [], [] ->
