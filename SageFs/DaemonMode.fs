@@ -180,12 +180,12 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
     if not aliveSessions.IsEmpty then
       // Dedup phase
       let dedupSpan = Instrumentation.startSpan Instrumentation.sessionSource "sagefs.daemon.session_dedup" []
-      // Deduplicate by working directory — only resume one session per dir
+      // Deduplicate by working directory + projects — resume one session per (dir, projects) pair
       let uniqueByDir =
         aliveSessions
-        |> List.groupBy (fun r -> r.WorkingDir)
+        |> List.groupBy (fun r -> r.WorkingDir, r.Projects |> List.sort)
         |> List.map (fun (_, group) ->
-          // Pick the most recently created session for each dir
+          // Pick the most recently created session for each (dir, projects) pair
           group |> List.maxBy (fun r -> r.CreatedAt))
       // Mark all stale duplicates as stopped
       let staleIds =
@@ -252,15 +252,21 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
       | None -> ()
     else
       if not initialProjects.IsEmpty then
-        log.LogInformation("No previous sessions. Creating session from --proj args")
-        let! result = sessionOps.CreateSession initialProjects workingDir
-        match result with
-        | Ok info ->
-          Instrumentation.daemonSessionsResumed.Add(1L)
-          log.LogInformation("Created session: {Info}", info)
-          onSessionResumed ()
-        | Error err ->
-          log.LogWarning("Failed to create session from --proj: {Error}", err)
+        // Multi-project: create one session per project for independent workers
+        log.LogInformation("No previous sessions. Creating {Count} session(s) from --proj args", initialProjects.Length)
+        let createTasks =
+          initialProjects
+          |> List.map (fun proj -> task {
+            let! result = sessionOps.CreateSession [ proj ] workingDir
+            match result with
+            | Ok info ->
+              Instrumentation.daemonSessionsResumed.Add(1L)
+              log.LogInformation("Created session for {Project}: {Info}", proj, info)
+              onSessionResumed ()
+            | Error err ->
+              log.LogWarning("Failed to create session for {Project}: {Error}", proj, err)
+          })
+        do! System.Threading.Tasks.Task.WhenAll(createTasks) :> System.Threading.Tasks.Task
       else
         log.LogInformation("No previous sessions to resume. Waiting for clients to create sessions")
 
