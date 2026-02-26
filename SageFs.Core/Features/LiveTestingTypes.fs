@@ -1032,6 +1032,15 @@ module SourceMapping =
       if parts.Length > 0 then parts.[parts.Length - 1]
       else fullName
 
+  /// Extract module name from test FullName for disambiguation.
+  /// "SageFs.Tests.McpAdapterTests.tests/Adapter/..." → Some "McpAdapterTests"
+  let extractModuleName (fullName: string) =
+    let slashIdx = fullName.IndexOf('/')
+    let prefix = if slashIdx > 0 then fullName.Substring(0, slashIdx) else fullName
+    let parts = prefix.Split('.')
+    if parts.Length >= 2 then Some parts.[parts.Length - 2]
+    else None
+
   /// Does this attribute name match the given test framework?
   let attributeMatchesFramework (framework: string) (attrName: string) =
     match framework with
@@ -1050,6 +1059,8 @@ module SourceMapping =
 
   /// Merge tree-sitter source locations into discovered tests.
   /// Matches by function name against the test's FullName suffix.
+  /// When multiple locations share a function name (e.g. "tests"),
+  /// uses the module name from FullName to disambiguate by file name.
   /// Tests already source-mapped are preserved unchanged.
   let mergeSourceLocations
     (locations: SourceTestLocation array)
@@ -1067,13 +1078,25 @@ module SourceMapping =
         | TestOrigin.ReflectionOnly ->
           let methodName = extractMethodName test.FullName
           match Map.tryFind methodName locationsByFuncName with
+          | Some locs when locs.Length = 1 ->
+            { test with Origin = TestOrigin.SourceMapped(locs.[0].FilePath, locs.[0].Line) }
           | Some locs ->
+            // Multiple locations share this function name — disambiguate by module name
+            let moduleName = extractModuleName test.FullName
             let matchingLoc =
-              locs
-              |> Array.tryFind (fun loc -> attributeMatchesFramework test.Framework loc.AttributeName)
+              match moduleName with
+              | Some modName ->
+                locs |> Array.tryFind (fun loc ->
+                  let fileName = System.IO.Path.GetFileNameWithoutExtension(loc.FilePath)
+                  fileName = modName || fileName.EndsWith(modName))
+              | None -> None
+            let loc =
+              matchingLoc
+              |> Option.orElseWith (fun () ->
+                locs |> Array.tryFind (fun loc -> attributeMatchesFramework test.Framework loc.AttributeName))
               |> Option.orElseWith (fun () -> locs |> Array.tryHead)
-            match matchingLoc with
-            | Some loc -> { test with Origin = TestOrigin.SourceMapped(loc.FilePath, loc.Line) }
+            match loc with
+            | Some l -> { test with Origin = TestOrigin.SourceMapped(l.FilePath, l.Line) }
             | None -> test
           | None -> test)
 
@@ -1475,7 +1498,8 @@ module PipelineEffects =
     (state: LiveTestState)
     (lastTiming: PipelineTiming option)
     : PipelineEffect option =
-    if state.Activation = LiveTestingActivation.Inactive then None
+    if state.Activation = LiveTestingActivation.Inactive
+       || TestRunPhase.isRunning state.RunPhase then None
     else
       let affected = TestDependencyGraph.findAffected changedSymbols depGraph
       if Array.isEmpty affected then None
@@ -1802,3 +1826,254 @@ module LiveTestPipelineState =
         | None -> true
         | Some c -> tc.Category = c
       matchesFile && matchesPattern && matchesCategory)
+
+// ============================================================
+// Inline Feedback Read Model (CQRS)
+// Universal FileAnnotations projected from LiveTestState
+// ============================================================
+
+[<RequireQualifiedAccess>]
+type AnnotationLayer =
+  | TestStatus
+  | Coverage
+  | CodeLens
+  | InlineFailure
+
+[<RequireQualifiedAccess>]
+type FailurePresentation =
+  | AssertionDiff of expected: string * actual: string
+  | ExceptionMessage of message: string * relevantFrame: string
+  | Timeout of after: TimeSpan
+  | RawMessage of message: string
+
+[<RequireQualifiedAccess>]
+type CodeLensCommand =
+  | RunTest
+  | DebugTest
+  | ShowHistory
+
+[<RequireQualifiedAccess>]
+type AnnotationFreshness =
+  | Current
+  | Stale
+  | Running
+
+type TestLineAnnotation = {
+  Line: int
+  TestId: TestId
+  DisplayName: string
+  Status: TestRunStatus
+  Freshness: AnnotationFreshness
+}
+
+type CoverageLineAnnotation = {
+  Line: int
+  Detail: CoverageStatus
+  CoveringTestIds: TestId array
+}
+
+type InlineFailure = {
+  Line: int
+  TestId: TestId
+  TestName: string
+  Failure: FailurePresentation
+  Duration: TimeSpan
+}
+
+type TestCodeLens = {
+  Line: int
+  Label: string
+  TestId: TestId
+  Command: CodeLensCommand
+}
+
+type FileAnnotations = {
+  FilePath: string
+  TestAnnotations: TestLineAnnotation array
+  CoverageAnnotations: CoverageLineAnnotation array
+  InlineFailures: InlineFailure array
+  CodeLenses: TestCodeLens array
+}
+
+module FailurePresentation =
+  let tryParseAssertionDiff (msg: string) =
+    let lines =
+      msg.Split([| '\n'; '\r' |], StringSplitOptions.RemoveEmptyEntries)
+    let findPrefixed (prefix: string) =
+      lines
+      |> Array.tryFind (fun l ->
+        let t = l.TrimStart()
+        t.StartsWith(prefix + ":", StringComparison.OrdinalIgnoreCase)
+        || t.StartsWith(prefix + " :", StringComparison.OrdinalIgnoreCase))
+      |> Option.map (fun l ->
+        let idx = l.IndexOf(':')
+        if idx >= 0 then l.Substring(idx + 1).Trim()
+        else l.Trim())
+    match findPrefixed "expected", findPrefixed "actual" with
+    | Some e, Some a -> Some(e, a)
+    | _ -> None
+
+  let firstUserFrame (trace: string) =
+    let lines =
+      trace.Split([| '\n'; '\r' |], StringSplitOptions.RemoveEmptyEntries)
+    lines
+    |> Array.tryFind (fun l ->
+      l.Contains(".fs:line") || l.Contains(".cs:line"))
+    |> Option.defaultWith (fun () ->
+      lines |> Array.tryHead |> Option.defaultValue "")
+    |> fun s -> s.Trim()
+
+  let fromTestFailure (f: TestFailure) =
+    match f with
+    | TestFailure.AssertionFailed msg ->
+      match tryParseAssertionDiff msg with
+      | Some(e, a) -> FailurePresentation.AssertionDiff(e, a)
+      | None -> FailurePresentation.RawMessage msg
+    | TestFailure.ExceptionThrown(msg, st) ->
+      FailurePresentation.ExceptionMessage(msg, firstUserFrame st)
+    | TestFailure.TimedOut after ->
+      FailurePresentation.Timeout after
+
+  let inlineLabel maxLen (fp: FailurePresentation) =
+    let raw =
+      match fp with
+      | FailurePresentation.AssertionDiff(e, a) ->
+        sprintf "expected %s, got %s" e a
+      | FailurePresentation.ExceptionMessage(m, _) -> m
+      | FailurePresentation.Timeout t ->
+        sprintf "timed out after %ds" (int t.TotalSeconds)
+      | FailurePresentation.RawMessage m -> m
+    if raw.Length <= maxLen then raw
+    else raw.Substring(0, maxLen - 1) + "…"
+
+module AnnotationFreshness =
+  let fromPhaseAndResult
+    (phase: TestRunPhase)
+    (status: TestRunStatus)
+    =
+    match status with
+    | TestRunStatus.Running
+    | TestRunStatus.Queued -> AnnotationFreshness.Running
+    | TestRunStatus.Stale -> AnnotationFreshness.Stale
+    | _ ->
+      match phase with
+      | TestRunPhase.RunningButEdited _ -> AnnotationFreshness.Stale
+      | _ -> AnnotationFreshness.Current
+
+module TestCodeLens =
+  let label (status: TestRunStatus) (name: string) =
+    match status with
+    | TestRunStatus.Passed d ->
+      sprintf "✓ %s (%.0fms)" name d.TotalMilliseconds
+    | TestRunStatus.Failed(f, d) ->
+      let msg =
+        match f with
+        | TestFailure.AssertionFailed m -> m
+        | TestFailure.ExceptionThrown(m, _) -> m
+        | TestFailure.TimedOut t ->
+          sprintf "timed out after %ds" (int t.TotalSeconds)
+      let t =
+        if msg.Length > 60 then msg.Substring(0, 59) + "…"
+        else msg
+      sprintf "✗ %s: %s (%.0fms)" name t d.TotalMilliseconds
+    | TestRunStatus.Running ->
+      sprintf "● %s running…" name
+    | TestRunStatus.Detected -> sprintf "◆ %s" name
+    | TestRunStatus.Queued -> sprintf "◆ %s (queued)" name
+    | TestRunStatus.Skipped r -> sprintf "○ %s: %s" name r
+    | TestRunStatus.Stale -> sprintf "~ %s (stale)" name
+    | TestRunStatus.PolicyDisabled ->
+      sprintf "○ %s (disabled)" name
+
+  let defaultCommand = function
+    | TestRunStatus.Failed _ -> CodeLensCommand.DebugTest
+    | _ -> CodeLensCommand.RunTest
+
+module FileAnnotations =
+  let empty path =
+    { FilePath = path
+      TestAnnotations = [||]
+      CoverageAnnotations = [||]
+      InlineFailures = [||]
+      CodeLenses = [||] }
+
+  let statusPriority = function
+    | TestRunStatus.Failed _ -> 0
+    | TestRunStatus.Running -> 1
+    | TestRunStatus.Stale -> 2
+    | TestRunStatus.Skipped _ -> 3
+    | TestRunStatus.Detected -> 4
+    | TestRunStatus.Queued -> 5
+    | TestRunStatus.Passed _ -> 6
+    | TestRunStatus.PolicyDisabled -> 7
+
+  let project
+    (filePath: string)
+    (depGraph: TestDependencyGraph option)
+    (state: LiveTestState)
+    =
+    let fileEntries =
+      state.StatusEntries
+      |> Array.choose (fun e ->
+        match e.Origin with
+        | TestOrigin.SourceMapped(f, line) when f = filePath ->
+          Some(e, line)
+        | _ -> None)
+    let testAnnotations =
+      fileEntries
+      |> Array.groupBy (fun (_, line) -> line)
+      |> Array.map (fun (line, entries) ->
+        let worst =
+          entries
+          |> Array.sortBy (fun (e, _) -> statusPriority e.Status)
+          |> Array.head
+          |> fst
+        { Line = line
+          TestId = worst.TestId
+          DisplayName = worst.DisplayName
+          Status = worst.Status
+          Freshness =
+            AnnotationFreshness.fromPhaseAndResult
+              state.RunPhase worst.Status })
+      |> Array.sortBy (fun a -> a.Line)
+    let codeLenses =
+      fileEntries
+      |> Array.map (fun (e, line) ->
+        { Line = line
+          Label = TestCodeLens.label e.Status e.DisplayName
+          TestId = e.TestId
+          Command = TestCodeLens.defaultCommand e.Status })
+      |> Array.sortBy (fun c -> c.Line)
+    let inlineFailures =
+      fileEntries
+      |> Array.choose (fun (e, line) ->
+        match e.Status with
+        | TestRunStatus.Failed(failure, duration) ->
+          Some
+            { Line = line
+              TestId = e.TestId
+              TestName = e.DisplayName
+              Failure =
+                FailurePresentation.fromTestFailure failure
+              Duration = duration }
+        | _ -> None)
+      |> Array.sortBy (fun f -> f.Line)
+    let coverageAnnotations =
+      state.CoverageAnnotations
+      |> Array.filter (fun ca -> ca.FilePath = filePath)
+      |> Array.map (fun ca ->
+        { Line = ca.DefinitionLine
+          Detail = ca.Status
+          CoveringTestIds =
+            match depGraph with
+            | None -> [||]
+            | Some g ->
+              match Map.tryFind ca.Symbol g.SymbolToTests with
+              | Some ids -> ids
+              | None -> [||] })
+      |> Array.sortBy (fun c -> c.Line)
+    { FilePath = filePath
+      TestAnnotations = testAnnotations
+      CoverageAnnotations = coverageAnnotations
+      InlineFailures = inlineFailures
+      CodeLenses = codeLenses }

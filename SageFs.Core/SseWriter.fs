@@ -48,3 +48,8 @@ let formatTestSummaryEvent (opts: JsonSerializerOptions) (summary: Features.Live
 let formatTestResultsBatchEvent (opts: JsonSerializerOptions) (payload: Features.LiveTesting.TestResultsBatchPayload) : string =
   let json = JsonSerializer.Serialize(payload, opts)
   formatSseEvent "test_results_batch" json
+
+/// Format a FileAnnotations as an SSE event string
+let formatFileAnnotationsEvent (opts: JsonSerializerOptions) (annotations: Features.LiveTesting.FileAnnotations) : string =
+  let json = JsonSerializer.Serialize(annotations, opts)
+  formatSseEvent "file_annotations" json

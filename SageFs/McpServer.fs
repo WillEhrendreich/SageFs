@@ -44,6 +44,8 @@ type PushEvent =
   | TestSummaryChanged of summary: SageFs.Features.LiveTesting.TestSummary
   /// Test results batch — carries enriched payload with generation, freshness, entries, summary.
   | TestResultsBatch of payload: SageFs.Features.LiveTesting.TestResultsBatchPayload
+  /// File annotations — per-file inline feedback (test status, coverage, CodeLens, failures).
+  | FileAnnotationsUpdated of annotations: SageFs.Features.LiveTesting.FileAnnotations
 
 /// Whether an event REPLACES the previous instance of the same kind
 /// (state/set semantics) or ACCUMULATES alongside it (delta/list semantics).
@@ -60,6 +62,7 @@ module PushEvent =
     | PushEvent.WarmupCompleted -> MergeStrategy.Replace
     | PushEvent.TestSummaryChanged _ -> MergeStrategy.Replace
     | PushEvent.TestResultsBatch _ -> MergeStrategy.Replace
+    | PushEvent.FileAnnotationsUpdated _ -> MergeStrategy.Replace
 
   /// Discriminator tag used for Replace dedup.
   let tag = function
@@ -70,6 +73,7 @@ module PushEvent =
     | PushEvent.WarmupCompleted -> 4
     | PushEvent.TestSummaryChanged _ -> 5
     | PushEvent.TestResultsBatch _ -> 6
+    | PushEvent.FileAnnotationsUpdated _ -> 7
 
   /// Format a single event for LLM consumption — actionable, concise.
   let formatForLlm = function
@@ -98,6 +102,9 @@ module PushEvent =
       sprintf "🧪 tests: %d total, %d passed, %d failed, %d stale, %d running" s.Total s.Passed s.Failed s.Stale s.Running
     | PushEvent.TestResultsBatch payload ->
       sprintf "🧪 %d test result(s) received (%A)" payload.Entries.Length payload.Freshness
+    | PushEvent.FileAnnotationsUpdated ann ->
+      sprintf "📝 file annotations for %s (%d tests, %d lenses, %d failures)"
+        (IO.Path.GetFileName ann.FilePath) ann.TestAnnotations.Length ann.CodeLenses.Length ann.InlineFailures.Length
 
 type AccumulatedEvent = {
   Timestamp: DateTimeOffset
@@ -931,6 +938,19 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                             PushEvent.TestResultsBatch payload)
                           testEventBroadcast.Trigger(
                             SageFs.SseWriter.formatTestResultsBatchEvent sseJsonOpts payload)
+                          // Compute and push FileAnnotations for each file with source-mapped tests
+                          let files =
+                            lt.StatusEntries
+                            |> Array.choose (fun e ->
+                              match e.Origin with
+                              | TestOrigin.SourceMapped (f, _) -> Some f
+                              | _ -> None)
+                            |> Array.distinct
+                          for file in files do
+                            let fa = SageFs.Features.LiveTesting.FileAnnotations.project file None lt
+                            if fa.TestAnnotations.Length > 0 || fa.CodeLenses.Length > 0 then
+                              testEventBroadcast.Trigger(
+                                SageFs.SseWriter.formatFileAnnotationsEvent sseJsonOpts fa)
                     | None -> ()
 
                     if serverTracker.Count > 0 then

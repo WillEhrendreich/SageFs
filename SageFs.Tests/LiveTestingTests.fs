@@ -2525,6 +2525,42 @@ let pipelineEffectsTests = testList "PipelineEffects" [
     |> Expect.isNone "disabled"
   }
 
+  test "afterTypeCheck when Running returns None (prevents concurrent test runs)" {
+    let tc1 = { Id = TestId.create "test1" "xunit"; FullName = "test1"; DisplayName = "test1"
+                Origin = TestOrigin.ReflectionOnly; Labels = []; Framework = "xunit"
+                Category = TestCategory.Unit }
+    let state = {
+      LiveTestState.empty with
+        DiscoveredTests = [| tc1 |]
+        Activation = LiveTestingActivation.Active
+        RunPhase = TestRunPhase.Running (RunGeneration.RunGeneration 1)
+    }
+    let graph = {
+      TestDependencyGraph.empty with
+        TransitiveCoverage = Map.ofList [ "Module.add", [| tc1.Id |] ]
+    }
+    PipelineEffects.afterTypeCheck ["Module.add"] RunTrigger.Keystroke graph state None
+    |> Expect.isNone "should not produce effect when tests are running"
+  }
+
+  test "afterTypeCheck when RunningButEdited returns None (re-trigger handled by completion)" {
+    let tc1 = { Id = TestId.create "test1" "xunit"; FullName = "test1"; DisplayName = "test1"
+                Origin = TestOrigin.ReflectionOnly; Labels = []; Framework = "xunit"
+                Category = TestCategory.Unit }
+    let state = {
+      LiveTestState.empty with
+        DiscoveredTests = [| tc1 |]
+        Activation = LiveTestingActivation.Active
+        RunPhase = TestRunPhase.RunningButEdited (RunGeneration.RunGeneration 1)
+    }
+    let graph = {
+      TestDependencyGraph.empty with
+        TransitiveCoverage = Map.ofList [ "Module.add", [| tc1.Id |] ]
+    }
+    PipelineEffects.afterTypeCheck ["Module.add"] RunTrigger.Keystroke graph state None
+    |> Expect.isNone "should not produce effect when running-but-edited"
+  }
+
   test "afterTypeCheck filters integration tests on keystroke" {
     let tc1 = { Id = TestId.create "unit1" "xunit"; FullName = "unit1"; DisplayName = "unit1"
                 Origin = TestOrigin.ReflectionOnly; Labels = []; Framework = "xunit"
