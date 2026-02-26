@@ -68,7 +68,7 @@ type SageFsEvent =
   | PipelineTimingRecorded of timing: Features.LiveTesting.PipelineTiming
   | RunTestsRequested of tests: Features.LiveTesting.TestCase array
   | AssemblyLoadFailed of errors: Features.LiveTesting.AssemblyLoadError list
-  | InstrumentationMapsReady of maps: Features.LiveTesting.InstrumentationMap array
+  | InstrumentationMapsReady of sessionId: string * maps: Features.LiveTesting.InstrumentationMap array
 
 /// The complete view state for any SageFs frontend.
 /// Pure data — renderers read this to produce UI.

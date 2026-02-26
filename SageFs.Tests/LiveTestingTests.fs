@@ -2504,25 +2504,25 @@ let pipelineEffectsTests = testList "PipelineEffects" [
         SymbolToTests = Map.ofList [ "Module.add", [| tc1.Id |] ]
         TransitiveCoverage = Map.ofList [ "Module.add", [| tc1.Id |] ]
     }
-    match PipelineEffects.afterTypeCheck ["Module.add"] "test.fs" RunTrigger.Keystroke graph state None [||] with
-    | Some (PipelineEffect.RunAffectedTests (tests, trigger, _tsElapsed, _fcsElapsed, _sessionId, _maps)) ->
+    match PipelineEffects.afterTypeCheck ["Module.add"] "test.fs" RunTrigger.Keystroke graph state None Map.empty with
+    | [ PipelineEffect.RunAffectedTests (tests, trigger, _tsElapsed, _fcsElapsed, _sessionId, _maps) ] ->
       tests.Length |> Expect.equal "one test" 1
       trigger |> Expect.equal "keystroke trigger" RunTrigger.Keystroke
-    | other -> failtestf "expected Some RunAffectedTests, got %A" other
+    | other -> failtestf "expected single RunAffectedTests, got %A" other
   }
 
   test "afterTypeCheck with no affected tests returns None" {
     let state = { LiveTestState.empty with DiscoveredTests = [||]; Activation = LiveTestingActivation.Active }
     let graph = TestDependencyGraph.empty
-    PipelineEffects.afterTypeCheck ["unknown.symbol"] "test.fs" RunTrigger.Keystroke graph state None [||]
-    |> Expect.isNone "no affected tests"
+    PipelineEffects.afterTypeCheck ["unknown.symbol"] "test.fs" RunTrigger.Keystroke graph state None Map.empty
+    |> Expect.isEmpty "no affected tests"
   }
 
   test "afterTypeCheck when disabled returns None" {
     let state = { LiveTestState.empty with Activation = LiveTestingActivation.Inactive }
     let graph = TestDependencyGraph.empty
-    PipelineEffects.afterTypeCheck ["Module.add"] "test.fs" RunTrigger.Keystroke graph state None [||]
-    |> Expect.isNone "disabled"
+    PipelineEffects.afterTypeCheck ["Module.add"] "test.fs" RunTrigger.Keystroke graph state None Map.empty
+    |> Expect.isEmpty "disabled"
   }
 
   test "afterTypeCheck when Running returns None (prevents concurrent test runs)" {
@@ -2541,8 +2541,8 @@ let pipelineEffectsTests = testList "PipelineEffects" [
       TestDependencyGraph.empty with
         TransitiveCoverage = Map.ofList [ "Module.add", [| tc1.Id |] ]
     }
-    PipelineEffects.afterTypeCheck ["Module.add"] "test.fs" RunTrigger.Keystroke graph state None [||]
-    |> Expect.isNone "should not produce effect when tests are running"
+    PipelineEffects.afterTypeCheck ["Module.add"] "test.fs" RunTrigger.Keystroke graph state None Map.empty
+    |> Expect.isEmpty "should not produce effect when tests are running"
   }
 
   test "afterTypeCheck when RunningButEdited returns None (re-trigger handled by completion)" {
@@ -2561,8 +2561,8 @@ let pipelineEffectsTests = testList "PipelineEffects" [
       TestDependencyGraph.empty with
         TransitiveCoverage = Map.ofList [ "Module.add", [| tc1.Id |] ]
     }
-    PipelineEffects.afterTypeCheck ["Module.add"] "test.fs" RunTrigger.Keystroke graph state None [||]
-    |> Expect.isNone "should not produce effect when running-but-edited"
+    PipelineEffects.afterTypeCheck ["Module.add"] "test.fs" RunTrigger.Keystroke graph state None Map.empty
+    |> Expect.isEmpty "should not produce effect when running-but-edited"
   }
 
   test "afterTypeCheck filters integration tests on keystroke" {
@@ -2582,11 +2582,11 @@ let pipelineEffectsTests = testList "PipelineEffects" [
         SymbolToTests = Map.ofList [ "Module.add", [| tc1.Id; tc2.Id |] ]
         TransitiveCoverage = Map.ofList [ "Module.add", [| tc1.Id; tc2.Id |] ]
     }
-    match PipelineEffects.afterTypeCheck ["Module.add"] "test.fs" RunTrigger.Keystroke graph state None [||] with
-    | Some (PipelineEffect.RunAffectedTests (tests, _, _, _, _, _)) ->
+    match PipelineEffects.afterTypeCheck ["Module.add"] "test.fs" RunTrigger.Keystroke graph state None Map.empty with
+    | [ PipelineEffect.RunAffectedTests (tests, _, _, _, _, _) ] ->
       tests.Length |> Expect.equal "only unit test" 1
       tests.[0].Id |> Expect.equal "unit test id" tc1.Id
-    | other -> failtestf "expected Some RunAffectedTests, got %A" other
+    | other -> failtestf "expected single RunAffectedTests, got %A" other
   }
 ]
 
@@ -2878,13 +2878,13 @@ let endToEndPipelineTests = testList "End-to-end Pipeline" [
     |> List.exists (fun e -> match e with PipelineEffect.RequestFcsTypeCheck _ -> true | _ -> false)
     |> Expect.isTrue "has fcs"
     // Phase 2: afterTypeCheck (after FCS completes) fires RunAffectedTests
-    let runEffect = PipelineEffects.afterTypeCheck s2.ChangedSymbols "test.fs" RunTrigger.Keystroke s2.DepGraph s2.TestState None s2.InstrumentationMaps
-    runEffect |> Expect.isSome "afterTypeCheck produces RunAffectedTests"
-    match runEffect.Value with
-    | PipelineEffect.RunAffectedTests (tests, trigger, _, _, _, _) ->
+    let runEffects = PipelineEffects.afterTypeCheck s2.ChangedSymbols "test.fs" RunTrigger.Keystroke s2.DepGraph s2.TestState None s2.InstrumentationMaps
+    runEffects |> List.isEmpty |> Expect.isFalse "afterTypeCheck produces RunAffectedTests"
+    match runEffects with
+    | [ PipelineEffect.RunAffectedTests (tests, trigger, _, _, _, _) ] ->
       tests |> Array.length |> Expect.equal "one affected test" 1
       trigger |> Expect.equal "trigger is keystroke" RunTrigger.Keystroke
-    | _ -> failwith "expected RunAffectedTests"
+    | _ -> failwith "expected single RunAffectedTests"
   }
 
   test "disabled state produces no effects even after delay" {
@@ -4311,12 +4311,12 @@ let symbolGraphWiringTests = testList "symbol graph wiring integration" [
         RunPolicies = RunPolicyDefaults.defaults }
     let effect =
       PipelineEffects.afterTypeCheck
-        [ "MyModule.add" ] "test.fs" RunTrigger.Keystroke graph ltState None [||]
+        [ "MyModule.add" ] "test.fs" RunTrigger.Keystroke graph ltState None Map.empty
     match effect with
-    | Some (PipelineEffect.RunAffectedTests (tests, _, _, _, _, _)) ->
+    | [ PipelineEffect.RunAffectedTests (tests, _, _, _, _, _) ] ->
       tests |> Array.exists (fun t -> t.Id = tid)
       |> Expect.isTrue "should contain affected test"
-    | other -> failtestf "expected Some RunAffectedTests, got %A" other
+    | other -> failtestf "expected single RunAffectedTests, got %A" other
   }
 
   test "handleFcsResult updates dep graph via onFcsComplete" {
@@ -4378,8 +4378,8 @@ let symbolGraphWiringTests = testList "symbol graph wiring integration" [
         Activation = LiveTestingActivation.Inactive
         DiscoveredTests = [| testCase |]
         RunPolicies = RunPolicyDefaults.defaults }
-    PipelineEffects.afterTypeCheck [ "M.func" ] "test.fs" RunTrigger.Keystroke graph ltState None [||]
-    |> Expect.isNone "no effect when disabled"
+    PipelineEffects.afterTypeCheck [ "M.func" ] "test.fs" RunTrigger.Keystroke graph ltState None Map.empty
+    |> Expect.isEmpty "no effect when disabled"
   }
 
   test "no effects when no symbols changed" {
@@ -4396,8 +4396,8 @@ let symbolGraphWiringTests = testList "symbol graph wiring integration" [
         Activation = LiveTestingActivation.Active
         DiscoveredTests = [| testCase |]
         RunPolicies = RunPolicyDefaults.defaults }
-    PipelineEffects.afterTypeCheck [] "test.fs" RunTrigger.Keystroke graph ltState None [||]
-    |> Expect.isNone "no effect when no symbols"
+    PipelineEffects.afterTypeCheck [] "test.fs" RunTrigger.Keystroke graph ltState None Map.empty
+    |> Expect.isEmpty "no effect when no symbols"
   }
 ]
 
@@ -5977,12 +5977,13 @@ let coverageSelectionTests = testList "Coverage-based test selection" [
           DiscoveredTests = [| tc1; tc2 |]
           TestCoverageBitmaps = Map.ofList [ tid2, bm ]
           TestSessionMap = Map.ofList [ tid1, "s"; tid2, "s" ] }
-    match PipelineEffects.afterTypeCheck ["Module.add"] "Module.fs" RunTrigger.Keystroke graph state None maps with
-    | Some (PipelineEffect.RunAffectedTests (tests, _, _, _, _, _)) ->
+    let instrMaps = Map.ofList [ "s", maps ]
+    match PipelineEffects.afterTypeCheck ["Module.add"] "Module.fs" RunTrigger.Keystroke graph state None instrMaps with
+    | [ PipelineEffect.RunAffectedTests (tests, _, _, _, _, _) ] ->
       let ids = tests |> Array.map (fun t -> t.Id) |> Set.ofArray
       ids |> Set.contains tid1 |> Expect.isTrue "t1 from symbol heuristic"
       ids |> Set.contains tid2 |> Expect.isTrue "t2 from coverage bitmap"
-    | other -> failtestf "expected Some RunAffectedTests, got %A" other
+    | other -> failtestf "expected single RunAffectedTests, got %A" other
   }
 ]
 

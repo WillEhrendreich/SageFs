@@ -137,6 +137,21 @@ let loadSolution (logger: ILogger) (args: Arguments list) =
       OtherArgs = otherArgs
     }
 
+/// Detect if a project is a test project via MSBuild property or package references.
+let isTestProject (proj: ProjectOptions) : bool =
+  match proj.AllProperties.TryFind "IsTestProject" with
+  | Some vals when vals |> Set.exists (fun v -> String.Equals(v, "true", StringComparison.OrdinalIgnoreCase)) -> true
+  | _ ->
+    let testPackages = [ "Expecto"; "xunit"; "NUnit"; "MSTest.TestFramework"; "Microsoft.NET.Test.Sdk" ]
+    proj.PackageReferences
+    |> List.exists (fun pr ->
+      let name = Path.GetFileNameWithoutExtension(pr.FullPath)
+      testPackages |> List.exists (fun tp -> name.StartsWith(tp, StringComparison.OrdinalIgnoreCase)))
+
+/// Filter a solution's projects to only test projects.
+let discoverTestProjects (projects: ProjectOptions list) : ProjectOptions list =
+  projects |> List.filter isTestProject
+
 let solutionToFsiArgs (logger: ILogger) (_useAsp: bool) sln =
   let projectDlls = sln.Projects |> Seq.map _.TargetPath
 

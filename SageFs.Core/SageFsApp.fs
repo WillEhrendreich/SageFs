@@ -480,9 +480,13 @@ module SageFsUpdate =
             |> Array.toList
             |> List.map (fun (sid, groupTests) ->
               let targetSession = if System.String.IsNullOrEmpty sid then None else Some sid
+              let sessionMaps =
+                match targetSession |> Option.bind (fun s -> Map.tryFind s lt.InstrumentationMaps) with
+                | Some maps -> maps
+                | None -> lt.InstrumentationMaps |> Map.values |> Seq.collect id |> Array.ofSeq
               Features.LiveTesting.PipelineEffect.RunAffectedTests(
                 groupTests, Features.LiveTesting.RunTrigger.ExplicitRun,
-                System.TimeSpan.Zero, System.TimeSpan.Zero, targetSession, lt.InstrumentationMaps)
+                System.TimeSpan.Zero, System.TimeSpan.Zero, targetSession, sessionMaps)
               |> SageFsEffect.Pipeline)
         { model with LiveTesting = lt }, effects
 
@@ -521,9 +525,9 @@ module SageFsUpdate =
         let lt = recomputeStatuses model.LiveTesting (fun s -> { s with RunPolicies = Map.add category policy s.RunPolicies })
         { model with LiveTesting = lt }, []
 
-      | SageFsEvent.InstrumentationMapsReady maps ->
+      | SageFsEvent.InstrumentationMapsReady (sessionId, maps) ->
         let lt = model.LiveTesting
-        { model with LiveTesting = { lt with InstrumentationMaps = maps } }, []
+        { model with LiveTesting = { lt with InstrumentationMaps = Map.add sessionId maps lt.InstrumentationMaps } }, []
 
       | SageFsEvent.ProvidersDetected providers ->
         let lt = model.LiveTesting

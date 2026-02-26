@@ -1740,16 +1740,20 @@ module PipelineEffects =
     (depGraph: TestDependencyGraph)
     (state: LiveTestState)
     (lastTiming: PipelineTiming option)
-    (instrumentationMaps: InstrumentationMap array)
-    : PipelineEffect option =
-    if state.Activation = LiveTestingActivation.Inactive then None
+    (instrumentationMaps: Map<string, InstrumentationMap array>)
+    : PipelineEffect list =
+    if state.Activation = LiveTestingActivation.Inactive then []
     else
       let symbolAffected = TestDependencyGraph.findAffected changedSymbols depGraph
+      // Compute coverage-affected across all sessions' maps
       let coverageAffected =
-        CoverageBitmap.findCoverageAffected changedFilePath instrumentationMaps state.TestCoverageBitmaps
+        instrumentationMaps
+        |> Map.toArray
+        |> Array.collect (fun (_, maps) ->
+          CoverageBitmap.findCoverageAffected changedFilePath maps state.TestCoverageBitmaps)
       let affected =
         Array.append symbolAffected coverageAffected |> Array.distinct
-      if Array.isEmpty affected then None
+      if Array.isEmpty affected then []
       else
         let affectedSet = Set.ofArray affected
         let affectedTests =
@@ -1758,17 +1762,26 @@ module PipelineEffects =
         let filtered =
           PolicyFilter.filterTests state.RunPolicies trigger affectedTests
           |> TestPrioritization.prioritize state.LastResults
-        if Array.isEmpty filtered then None
+        if Array.isEmpty filtered then []
         else
           let tsElapsed = PipelineTiming.accumulatedTsElapsed lastTiming
           let fcsElapsed = PipelineTiming.accumulatedFcsElapsed lastTiming
-          let targetSession =
-            filtered
-            |> Array.tryPick (fun tc -> Map.tryFind tc.Id state.TestSessionMap)
-          // Per-session guard: skip only if target session is already running
-          if TestRunPhase.isSessionRunning targetSession state.RunPhases then None
-          else
-            Some (PipelineEffect.RunAffectedTests(filtered, trigger, tsElapsed, fcsElapsed, targetSession, instrumentationMaps))
+          // Group affected tests by session, emit one effect per session
+          filtered
+          |> Array.groupBy (fun tc ->
+            match Map.tryFind tc.Id state.TestSessionMap with
+            | Some sid -> sid
+            | None -> "")
+          |> Array.toList
+          |> List.choose (fun (sid, groupTests) ->
+            let targetSession = if System.String.IsNullOrEmpty sid then None else Some sid
+            if TestRunPhase.isSessionRunning targetSession state.RunPhases then None
+            else
+              let sessionMaps =
+                match targetSession |> Option.bind (fun s -> Map.tryFind s instrumentationMaps) with
+                | Some maps -> maps
+                | None -> instrumentationMaps |> Map.values |> Seq.collect id |> Array.ofSeq
+              Some (PipelineEffect.RunAffectedTests(groupTests, trigger, tsElapsed, fcsElapsed, targetSession, sessionMaps)))
 
 /// Adaptive debounce configuration.
 type AdaptiveDebounceConfig = {
@@ -1935,8 +1948,8 @@ type LiveTestPipelineState = {
   AdaptiveDebounce: AdaptiveDebounce
   LastTrigger: RunTrigger
   LastTiming: PipelineTiming option
-  /// IL coverage instrumentation map for the current shadow-copied assemblies.
-  InstrumentationMaps: InstrumentationMap array
+  /// IL coverage instrumentation maps per session (sessionId → maps for that session's assemblies).
+  InstrumentationMaps: Map<string, InstrumentationMap array>
 }
 
 module LiveTestPipelineState =
@@ -1951,7 +1964,7 @@ module LiveTestPipelineState =
     AdaptiveDebounce = AdaptiveDebounce.createDefault()
     LastTrigger = RunTrigger.Keystroke
     LastTiming = None
-    InstrumentationMaps = [||]
+    InstrumentationMaps = Map.empty
   }
 
   let liveTestingStatusBarForSession (activeSessionId: string) (state: LiveTestPipelineState) : string =
@@ -2028,8 +2041,7 @@ module LiveTestPipelineState =
     | FcsTypeCheckResult.Success (filePath, refs) ->
       let s1 = onFcsComplete filePath refs s
       let trigger = s.LastTrigger
-      let effect = PipelineEffects.afterTypeCheck s1.ChangedSymbols filePath trigger s1.DepGraph s1.TestState s1.LastTiming s1.InstrumentationMaps
-      let effects = effect |> Option.toList
+      let effects = PipelineEffects.afterTypeCheck s1.ChangedSymbols filePath trigger s1.DepGraph s1.TestState s1.LastTiming s1.InstrumentationMaps
       effects, s1
     | FcsTypeCheckResult.Failed _ ->
       [], s
@@ -2059,7 +2071,11 @@ module LiveTestPipelineState =
         |> TestPrioritization.prioritize s.TestState.LastResults
       if Array.isEmpty filtered then []
       else
-        [ PipelineEffect.RunAffectedTests(filtered, trigger, System.TimeSpan.Zero, System.TimeSpan.Zero, targetSession, s.InstrumentationMaps) ]
+        let sessionMaps =
+          match targetSession |> Option.bind (fun sid -> Map.tryFind sid s.InstrumentationMaps) with
+          | Some maps -> maps
+          | None -> s.InstrumentationMaps |> Map.values |> Seq.collect id |> Array.ofSeq
+        [ PipelineEffect.RunAffectedTests(filtered, trigger, System.TimeSpan.Zero, System.TimeSpan.Zero, targetSession, sessionMaps) ]
 
   /// Filter tests by optional criteria for explicit MCP-triggered runs.
   /// All filters are AND'd. None = no filter = match all.
