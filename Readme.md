@@ -50,8 +50,9 @@ Gutter markers appear in your editor (VS Code, Neovim, TUI, GUI, Visual Studio â
 
 | | VS Enterprise Live Testing | SageFs Live Testing |
 |---|---|---|
-| **Speed** | 5-30 seconds (full build) | 200-500ms (hot reload, no build) |
-| **Trigger** | File save only | As-you-type (configurable per category) |
+| **Speed** | 5-30 seconds (full MSBuild rebuild) | 200-500ms (FSI hot reload, no build) |
+| **Scope** | Rebuilds all impacted projects | Scope-level: just the function being edited |
+| **Broken code** | Must compile to instrument | Tree-sitter works on broken/incomplete code |
 | **Frameworks** | MSTest, xUnit, NUnit only | + Expecto, TUnit, extensible provider model |
 | **Coverage method** | IL instrumentation (heavy) | FCS typed AST symbol graph (lightweight) |
 | **Editors** | Visual Studio only | VS Code, Neovim, TUI, GUI, Visual Studio, web dashboard |
