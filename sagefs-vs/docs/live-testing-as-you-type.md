@@ -19,7 +19,7 @@ The client-side work is minimal. Per the centralized design, the editor's only j
 
 1. Register text change listener for `*.fs` files
 2. On change: debounce 300ms, cancel previous timer
-3. After debounce: POST full buffer text + editRegion hint + generation counter
+3. After debounce: extract the enclosing function scope, POST it to SageFs
 4. Display results from existing SSE subscription (already done)
 
 ## Implementation
@@ -52,21 +52,23 @@ internal class FSharpTextChangeListener : ExtensionPart, ITextViewChangedListene
       if (!token.IsCancellationRequested)
       {
         var snapshot = args.AfterTextView.Document.AsTextDocumentSnapshot();
-        var fullText = snapshot.Text;
+        var lines = snapshot.Lines.Select(l => l.Text).ToArray();
         var cursorLine = args.AfterTextView.Selection.ActivePosition.Line;
         var gen = Interlocked.Increment(ref _generation);
 
-        // editRegion hint: indentation-based scan (F# core)
-        var editRegion = ScopeExtractor.findEditRegion(
-          fullText.Split('\n'), cursorLine);
-
-        await SageFsClient.PostEvaluateScopeAsync(new
+        var scope = ScopeExtractor.findEnclosingScope(lines, cursorLine);
+        if (scope != null)
         {
-          filePath = snapshot.Uri.LocalPath,
-          fullText = fullText,
-          editRegion = editRegion,
-          generation = gen
-        }, token);
+          await SageFsClient.PostEvaluateScopeAsync(new
+          {
+            filePath = snapshot.Uri.LocalPath,
+            scopeName = scope.Name,
+            scopeText = scope.Text,
+            startLine = scope.StartLine,
+            endLine = scope.EndLine,
+            generation = gen
+          }, token);
+        }
       }
     }
     catch (TaskCanceledException) { }
@@ -74,24 +76,28 @@ internal class FSharpTextChangeListener : ExtensionPart, ITextViewChangedListene
 }
 ```
 
-### Step 2: Edit Region Hint (F# core — optional optimization)
+### Step 2: Scope Extraction — Indentation-Based (F# core)
 
-The `editRegion` is a **hint only** — if wrong, the server falls back to full-file analysis.
-Indentation-based scan for the enclosing `let` binding:
+F# is indentation-sensitive. Scan backwards from cursor for `let` at same/lower indent,
+forward for next binding at same level. This extracts the function definition that the
+server will send to FSI to redefine the binding.
 
 ```fsharp
 module ScopeExtractor =
 
-  let findEditRegion (lines: string[]) (cursorLine: int) =
-    // Scan backwards from cursorLine for line matching: ^\s*let\s+
+  type Scope =
+    { Name: string
+      Text: string
+      StartLine: int
+      EndLine: int }
+
+  let findEnclosingScope (lines: string[]) (cursorLine: int) : Scope option =
+    // Scan backwards from cursorLine for line matching: ^\s*let\s+(\w+)
     // where indentation <= cursorLine's indentation
     // Scan forwards for next binding at same/lower indentation
-    // Return { startLine; endLine } or full-file range as fallback
+    // Return scope with text = lines[start..end] joined
     ...
 ```
-
-This handles 90%+ of F# code. Computation expressions and nested modules may produce
-slightly wrong hints — the server handles this gracefully (falls back to full-file scope detection).
 
 ### Step 3: Add HTTP Client Method (F# core)
 
@@ -105,11 +111,11 @@ member _.PostEvaluateScopeAsync(request: EvaluateScopeRequest, ct) =
 ## Files to Modify
 
 ### C# shim (`SageFs.VisualStudio/`)
-1. Add `FSharpTextChangeListener.cs` — text change with debounce + POST
+1. Add `FSharpTextChangeListener.cs` — text change with debounce + scope extraction + POST
 2. Register in `SageFsExtension.cs` DI container
 
 ### F# core (`SageFs.VisualStudio.Core/`)
-1. Add `ScopeExtractor.fs` — indentation-based edit region hint (optional)
+1. Add `ScopeExtractor.fs` — indentation-based scope finder
 2. `SageFsClient.fs` — add `PostEvaluateScopeAsync` method
 3. `LiveTestingTypes.fs` — add `EvaluateScopeRequest` type
 
@@ -121,7 +127,7 @@ member _.PostEvaluateScopeAsync(request: EvaluateScopeRequest, ct) =
 - **CodeLens refresh**: `LiveTestingSubscriber.StateChanged` already signals CodeLens refresh.
   No changes needed on the results path.
 - **Error List**: `scope_check_failed` SSE events → `DiagnosticsSubscriber` surfaces as warnings
-- **Caret position**: `args.AfterTextView.Selection.ActivePosition` gives cursor line for editRegion hint
+- **Caret position**: `args.AfterTextView.Selection.ActivePosition` gives cursor line for scope extraction
 
 ## Dependencies
 
