@@ -218,25 +218,6 @@ let daemonDockerTests =
         body |> Expect.stringContains "should contain sessions" "sessions"
       })
 
-    dockerTest "live testing status endpoint works" (fun () ->
-      task {
-        use container = SageFsContainer.create ()
-        let! baseUrl = SageFsContainer.startAndGetUrl container
-        let! ready =
-          DockerHttpHelpers.waitFor 30000 1000 (fun () -> task {
-            try
-              let! (status, _) =
-                DockerHttpHelpers.getJson baseUrl "/api/live-testing/status"
-              return status = 200
-            with _ -> return false
-          })
-        ready |> Expect.isTrue "live testing status should respond"
-        let! (status, body) =
-          DockerHttpHelpers.getJson baseUrl "/api/live-testing/status"
-        status |> Expect.equal "should return 200" 200
-        body |> Expect.stringContains "should contain enabled" "enabled"
-      })
-
     dockerTest "enable live testing" (fun () ->
       task {
         use container = SageFsContainer.create ()
@@ -300,11 +281,11 @@ let daemonDockerTests =
         let! ready =
           DockerHttpHelpers.waitFor 60000 2000 (fun () -> task {
             try
-              let! (status, body) =
-                DockerHttpHelpers.getJson baseUrl "/api/live-testing/status"
-              return status = 200 && body.Contains("total")
+              let! (status, _) =
+                DockerHttpHelpers.getJson baseUrl "/api/status"
+              return status = 200
             with _ -> return false
           })
-        ready |> Expect.isTrue "live testing status should report totals"
+        ready |> Expect.isTrue "daemon should be ready"
       })
   ]

@@ -400,7 +400,7 @@ Per IMPROVEMENT_PLAN.md priority matrix:
 6. **Run Policies** — `RunPolicy` (OnEveryChange, OnSaveOnly, OnDemand, Disabled) per `TestCategory` (Unit, Integration, Browser, Benchmark, Architecture, Property, Custom). Configurable via MCP tool and HTTP endpoint.
 7. **OTEL Instrumentation** — `LiveTestingInstrumentation.fs` with ActivitySource and Histogram metrics for pipeline phase timing (~50ns overhead when no collector).
 8. **Tree-Sitter Source Detection** — `tests.scm` (84 lines) detects `[<Fact>]`, `[<Test>]`, `[<Tests>]`, `[<Benchmark>]`, `[<Property>]` attributes for source-level test location mapping.
-9. **HTTP Endpoints** — `POST /api/live-testing/toggle`, `POST /api/live-testing/policy`, `POST /api/live-testing/run`, `GET /api/live-testing/status`
+9. **HTTP Endpoints** — `POST /api/live-testing/toggle`, `POST /api/live-testing/policy`, `POST /api/live-testing/run`
 10. **SSE Broadcasting** — `SseWriter.formatTestResultsBatchEvent` serializes `TestResultsBatchPayload` as SSE events for editor consumption
 
 **Files:** `SageFs.Core/Features/LiveTestingTypes.fs`, `LiveTestingExecutors.fs`, `LiveTestingInstrumentation.fs`, `TestTreeSitter.fs`, `SageFs.Core/Middleware/HotReloading.fs`, `SageFs.Core/SageFsApp.fs`, `SageFs.Core/SseWriter.fs`

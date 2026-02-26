@@ -13,9 +13,14 @@ using Microsoft.VisualStudio.Extensibility.Shell;
 internal class LiveTestingCommand : Command
 {
   private readonly Core.SageFsClient client;
+  private readonly Core.LiveTestingSubscriber subscriber;
   private OutputChannel? output;
 
-  public LiveTestingCommand(Core.SageFsClient client) => this.client = client;
+  public LiveTestingCommand(Core.SageFsClient client, Core.LiveTestingSubscriber subscriber)
+  {
+    this.client = client;
+    this.subscriber = subscriber;
+  }
 
   public override CommandConfiguration CommandConfiguration => new("%SageFs.LiveTesting.DisplayName%")
   {
@@ -31,8 +36,7 @@ internal class LiveTestingCommand : Command
 
   public override async Task ExecuteCommandAsync(IClientContext context, CancellationToken ct)
   {
-    var status = await client.GetLiveTestingStatusAsync(ct);
-    bool wasEnabled = status is not null && status.Value.Enabled;
+    bool wasEnabled = subscriber.CurrentState.Enabled.IsOn;
     bool enabled;
     if (wasEnabled)
       enabled = await client.DisableLiveTestingAsync(ct);

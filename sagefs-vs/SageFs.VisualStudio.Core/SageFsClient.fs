@@ -8,7 +8,7 @@ open System.Threading
 open System.Threading.Tasks
 
 [<AutoOpen>]
-module private JsonHelpers =
+module JsonHelpers =
   let tryStr (el: JsonElement) (prop: string) (fallback: string) =
     let mutable v = Unchecked.defaultof<JsonElement>
     if el.TryGetProperty(prop, &v) && v.ValueKind = JsonValueKind.String then
@@ -55,8 +55,8 @@ type SageFsClient() =
     with get () = dashboardPort
     and set v = dashboardPort <- v
 
-  member private _.BaseUrl = sprintf "http://localhost:%d" mcpPort
-  member private _.DashUrl = sprintf "http://localhost:%d" dashboardPort
+  member _.BaseUrl = sprintf "http://localhost:%d" mcpPort
+  member _.DashUrl = sprintf "http://localhost:%d" dashboardPort
 
   /// Check if the daemon is reachable.
   member this.PingAsync(ct: CancellationToken) = task {
@@ -351,29 +351,6 @@ type SageFsClient() =
   }
 
   // ── Live Testing API ──────────────────────────────────────
-
-  /// Get live testing status (enabled, summary, run policies).
-  member this.GetLiveTestingStatusAsync(ct: CancellationToken) = task {
-    try
-      let! body =
-        http.GetStringAsync(
-          sprintf "%s/api/live-testing/status" this.BaseUrl, ct)
-      use doc = JsonDocument.Parse(body)
-      let root = doc.RootElement
-      return Some
-        {| Enabled = tryBool root "enabled" false
-           Summary =
-             match getProp root "summary" with
-             | Some s ->
-               Some { Total = tryInt s "total" 0
-                      Passed = tryInt s "passed" 0
-                      Failed = tryInt s "failed" 0
-                      Running = tryInt s "running" 0
-                      Stale = tryInt s "stale" 0 }
-             | None -> None |}
-    with _ ->
-      return None
-  }
 
   /// Enable live testing.
   member this.EnableLiveTestingAsync(ct: CancellationToken) = task {

@@ -452,31 +452,6 @@ let sessionLifecycleTests =
 let vsCodeEndpointTests =
   testList "[Integration] VS Code extension endpoints" [
 
-    testCase "GET /api/live-testing/status returns Enabled and Summary" <| fun _ ->
-      let port = 39900 + (Random().Next(50))
-      let proc, client = startDaemon port |> Async.AwaitTask |> Async.RunSynchronously
-      try
-        let status, body = getJson client "/api/live-testing/status" |> Async.AwaitTask |> Async.RunSynchronously
-        status |> Expect.equal "200 OK" 200
-
-        use doc = JsonDocument.Parse(body)
-        let root = doc.RootElement
-        root.TryGetProperty("Enabled") |> fst
-        |> Expect.isTrue "has Enabled field"
-        root.TryGetProperty("Summary") |> fst
-        |> Expect.isTrue "has Summary field"
-
-        let summary = root.GetProperty("Summary")
-        summary.TryGetProperty("Total") |> fst
-        |> Expect.isTrue "Summary has Total"
-        summary.TryGetProperty("Passed") |> fst
-        |> Expect.isTrue "Summary has Passed"
-        summary.TryGetProperty("Failed") |> fst
-        |> Expect.isTrue "Summary has Failed"
-      finally
-        client.Dispose()
-        killDaemon proc
-
     testCase "POST /api/live-testing/enable returns success and message" <| fun _ ->
       let port = 39950 + (Random().Next(50))
       let proc, client = startDaemon port |> Async.AwaitTask |> Async.RunSynchronously

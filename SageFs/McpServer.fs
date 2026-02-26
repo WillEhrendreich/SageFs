@@ -753,20 +753,7 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                 }) :> Task
             ) |> ignore
 
-            // GET /api/live-testing/status — get live test status
-            app.MapGet("/api/live-testing/status", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
-                withErrorHandling ctx (fun () -> task {
-                    let file =
-                      match ctx.Request.Query.TryGetValue("file") with
-                      | true, v -> Some (v.ToString())
-                      | false, _ -> None
-                    let! result = SageFs.McpTools.getLiveTestStatus mcpContext file
-                    ctx.Response.ContentType <- "application/json"
-                    do! ctx.Response.Body.WriteAsync(System.Text.Encoding.UTF8.GetBytes(result))
-                }) :> Task
-            ) |> ignore
-
-            // POST /api/explore — explore a namespace or type
+            // POST /api/explore— explore a namespace or type
             app.MapPost("/api/explore", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
                 withErrorHandling ctx (fun () -> task {
                     let! name = readJsonProp ctx "name"

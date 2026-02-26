@@ -124,14 +124,11 @@ internal class LiveTestingData : NotifyPropertyChangedObject, IDisposable
   {
     try
     {
-      var status = await client.GetLiveTestingStatusAsync(ct);
-      if (status != null)
-      {
-        IsEnabled = status.Value.Enabled;
-        EnabledStatus = IsEnabled ? "● Live Testing ON" : "○ Live Testing OFF";
-        if (status.Value.Summary != null)
-          OnSummaryChanged(null, status.Value.Summary.Value);
-      }
+      var state = subscriber.CurrentState;
+      IsEnabled = state.Enabled.IsOn;
+      EnabledStatus = IsEnabled ? "● Live Testing ON" : "○ Live Testing OFF";
+      if (state.LastSummary != null)
+        OnSummaryChanged(null, state.LastSummary.Value);
 
       var eventsJson = await client.GetRecentEventsAsync(10, ct);
       if (!string.IsNullOrEmpty(eventsJson) && eventsJson != "[]")

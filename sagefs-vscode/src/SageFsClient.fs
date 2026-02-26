@@ -4,7 +4,7 @@ open Fable.Core
 open Fable.Core.JsInterop
 
 [<Emit("console.warn('[SageFs]', $0, $1)")>]
-let private logWarn (context: string) (err: obj) : unit = jsNative
+let logWarn (context: string) (err: obj) : unit = jsNative
 
 type EvalResult =
   { success: bool
@@ -56,16 +56,16 @@ type WarmupContextInfo =
     WarmupDurationMs: int }
 
 [<Emit("new Promise((resolve, reject) => { const http = require('http'); const req = http.get($0, { timeout: $1 }, (res) => { let data = ''; res.on('data', (chunk) => data += chunk); res.on('end', () => resolve({ statusCode: res.statusCode || 0, body: data })); }); req.on('error', reject); req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); }); })")>]
-let private httpGetRaw (url: string) (timeout: int) : JS.Promise<{| statusCode: int; body: string |}> = jsNative
+let httpGetRaw (url: string) (timeout: int) : JS.Promise<{| statusCode: int; body: string |}> = jsNative
 
 [<Emit("new Promise((resolve, reject) => { const http = require('http'); const url = new URL($0); const req = http.request({ hostname: url.hostname, port: url.port, path: url.pathname, method: 'POST', headers: { 'Content-Type': 'application/json' }, timeout: $2 }, (res) => { let data = ''; res.on('data', (chunk) => data += chunk); res.on('end', () => resolve({ statusCode: res.statusCode || 0, body: data })); }); req.on('error', reject); req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); }); req.write($1); req.end(); })")>]
-let private httpPostRaw (url: string) (body: string) (timeout: int) : JS.Promise<{| statusCode: int; body: string |}> = jsNative
+let httpPostRaw (url: string) (body: string) (timeout: int) : JS.Promise<{| statusCode: int; body: string |}> = jsNative
 
 [<Emit("JSON.parse($0)")>]
-let private jsonParse (s: string) : obj = jsNative
+let jsonParse (s: string) : obj = jsNative
 
 [<Emit("JSON.stringify($0)")>]
-let private jsonStringify (o: obj) : string = jsNative
+let jsonStringify (o: obj) : string = jsNative
 
 type Client =
   { mutable mcpPort: int
@@ -81,16 +81,16 @@ let updatePorts (mcpPort: int) (dashboardPort: int) (c: Client) =
   c.mcpPort <- mcpPort
   c.dashboardPort <- dashboardPort
 
-let private httpGet (c: Client) (path: string) (timeout: int) =
+let httpGet (c: Client) (path: string) (timeout: int) =
   httpGetRaw (sprintf "%s%s" (baseUrl c) path) timeout
 
-let private httpPost (c: Client) (path: string) (body: string) (timeout: int) =
+let httpPost (c: Client) (path: string) (body: string) (timeout: int) =
   httpPostRaw (sprintf "%s%s" (baseUrl c) path) body timeout
 
-let private dashHttpGet (c: Client) (path: string) (timeout: int) =
+let dashHttpGet (c: Client) (path: string) (timeout: int) =
   httpGetRaw (sprintf "http://localhost:%d%s" c.dashboardPort path) timeout
 
-let private dashHttpPost (c: Client) (path: string) (body: string) (timeout: int) =
+let dashHttpPost (c: Client) (path: string) (body: string) (timeout: int) =
   httpPostRaw (sprintf "http://localhost:%d%s" c.dashboardPort path) body timeout
 
 let isRunning (c: Client) =
@@ -476,20 +476,7 @@ let setRunPolicy (category: string) (policy: string) (c: Client) =
       return { success = false; result = None; error = Some (string err) }
   }
 
-let getLiveTestStatus (c: Client) =
-  promise {
-    try
-      let! resp = httpGet c "/api/live-testing/status" 5000
-      if resp.statusCode = 200 then
-        return Some resp.body
-      else
-        return None
-    with ex ->
-      logWarn "getLiveTestStatus" ex
-      return None
-  }
-
-let explore (name: string) (c: Client) =
+let explore(name: string) (c: Client) =
   promise {
     try
       let! resp = httpPost c "/api/explore" (jsonStringify {| name = name |}) 10000
