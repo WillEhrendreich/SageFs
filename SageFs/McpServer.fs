@@ -487,6 +487,51 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                 } :> Task
             ) |> ignore
 
+            let replayCachedTestState (body: System.IO.Stream) =
+              match getElmModel with
+              | Some getModel ->
+                try
+                  let model = getModel()
+                  let lt = model.LiveTesting.TestState
+                  if lt.StatusEntries.Length > 0 then
+                    let s = TestSummary.fromStatuses
+                              lt.Activation (lt.StatusEntries |> Array.map (fun e -> e.Status))
+                    let summaryBytes = System.Text.Encoding.UTF8.GetBytes(
+                      SageFs.SseWriter.formatTestSummaryEvent sseJsonOpts s)
+                    body.WriteAsync(summaryBytes).AsTask()
+                    |> fun t -> t.ContinueWith(fun (_: Task) -> body.FlushAsync()) |> ignore
+                    let freshness =
+                      match lt.RunPhase with
+                      | TestRunPhase.RunningButEdited _ -> ResultFreshness.StaleCodeEdited
+                      | _ -> ResultFreshness.Fresh
+                    let payload =
+                      let completion =
+                        TestResultsBatchPayload.deriveCompletion
+                          freshness lt.DiscoveredTests.Length lt.StatusEntries.Length
+                      TestResultsBatchPayload.create
+                        lt.LastGeneration freshness completion lt.Activation lt.StatusEntries
+                    let batchBytes = System.Text.Encoding.UTF8.GetBytes(
+                      SageFs.SseWriter.formatTestResultsBatchEvent sseJsonOpts payload)
+                    body.WriteAsync(batchBytes).AsTask()
+                    |> fun t -> t.ContinueWith(fun (_: Task) -> body.FlushAsync()) |> ignore
+                    let files =
+                      lt.StatusEntries
+                      |> Array.choose (fun e ->
+                        match e.Origin with
+                        | TestOrigin.SourceMapped (f, _) -> Some f
+                        | _ -> None)
+                      |> Array.distinct
+                    for file in files do
+                      let fa = FileAnnotations.project file None lt
+                      if fa.TestAnnotations.Length > 0 || fa.CodeLenses.Length > 0 then
+                        let faBytes = System.Text.Encoding.UTF8.GetBytes(
+                          SageFs.SseWriter.formatFileAnnotationsEvent sseJsonOpts fa)
+                        body.WriteAsync(faBytes).AsTask()
+                        |> fun t -> t.ContinueWith(fun (_: Task) -> body.FlushAsync()) |> ignore
+                with ex ->
+                  eprintfn "SSE replay error: %s" ex.Message
+              | None -> ()
+
             // GET /events — SSE stream of Elm state changes
             app.MapGet("/events", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
                 task {
@@ -520,6 +565,8 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                                 ctx.Response.Body.WriteAsync(bytes).AsTask()
                                 |> fun t -> t.ContinueWith(fun (_: Task) -> ctx.Response.Body.FlushAsync()) |> ignore
                             with _ -> ())
+                        // Replay current test state on new SSE connection
+                        replayCachedTestState ctx.Response.Body
                         do! tcs.Task
                         SageFs.Instrumentation.sseConnectionsActive.Add(-1L)
                     | None ->
@@ -748,6 +795,54 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                     let policy = json.RootElement.GetProperty("policy").GetString()
                     let! result = SageFs.McpTools.setRunPolicy mcpContext category policy
                     do! jsonResponse ctx 200 {| success = true; message = result |}
+                }) :> Task
+            ) |> ignore
+
+            // GET /api/live-testing/file-annotations?file=X — get annotations for a file
+            app.MapGet("/api/live-testing/file-annotations", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
+                withErrorHandling ctx (fun () -> task {
+                    let fileParam = ctx.Request.Query.["file"].ToString()
+                    match getElmModel with
+                    | None -> do! jsonResponse ctx 503 {| error = "Elm loop not started" |}
+                    | Some getModel ->
+                      let model = getModel()
+                      let lt = model.LiveTesting.TestState
+                      // Find the full file path matching the filter
+                      let matchingFiles =
+                        lt.StatusEntries
+                        |> Array.choose (fun e ->
+                          match e.Origin with
+                          | TestOrigin.SourceMapped (f, _) -> Some f
+                          | _ -> None)
+                        |> Array.distinct
+                        |> Array.filter (fun f ->
+                          f = fileParam
+                          || f.EndsWith(fileParam, System.StringComparison.OrdinalIgnoreCase)
+                          || f.EndsWith(
+                               System.IO.Path.DirectorySeparatorChar.ToString() + fileParam,
+                               System.StringComparison.OrdinalIgnoreCase))
+                      match matchingFiles |> Array.tryHead with
+                      | Some fullPath ->
+                        let fa = FileAnnotations.project fullPath None lt
+                        let json = System.Text.Json.JsonSerializer.Serialize(fa, sseJsonOpts)
+                        do! jsonResponse ctx 200 json
+                      | None ->
+                        let fa = FileAnnotations.empty fileParam
+                        let json = System.Text.Json.JsonSerializer.Serialize(fa, sseJsonOpts)
+                        do! jsonResponse ctx 200 json
+                }) :> Task
+            ) |> ignore
+
+            // GET /api/live-testing/status — get test status with optional file filter
+            app.MapGet("/api/live-testing/status", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
+                withErrorHandling ctx (fun () -> task {
+                    let fileParam =
+                      let fp = ctx.Request.Query.["file"].ToString()
+                      if System.String.IsNullOrWhiteSpace fp then None else Some fp
+                    let! result = SageFs.McpTools.getLiveTestStatus mcpContext fileParam
+                    ctx.Response.ContentType <- "application/json"
+                    let bytes = System.Text.Encoding.UTF8.GetBytes(result)
+                    do! ctx.Response.Body.WriteAsync(bytes)
                 }) :> Task
             ) |> ignore
 

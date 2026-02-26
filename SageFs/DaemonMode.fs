@@ -65,6 +65,8 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
   // Create state-changed event for SSE subscribers (created early so SessionManager can trigger it)
   let stateChangedEvent = Event<string>()
   let mutable lastStateJson = ""
+  let mutable lastLoggedOutputCount = 0
+  let mutable lastLoggedDiagCount = 0
   // Test discovery callback — set after elmRuntime is created
   let mutable onTestDiscoveryCallback : (WorkerProtocol.SessionId -> Features.LiveTesting.TestCase array -> Features.LiveTesting.ProviderDescription list -> unit) =
     fun _ _ _ -> ()
@@ -321,7 +323,11 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
         let json = SseDedupKey.fromModel model
         if json <> lastStateJson then
           lastStateJson <- json
-          if not TerminalUIState.IsActive && (outputCount > 0 || diagCount > 0) then
+          let outputChanged = outputCount <> lastLoggedOutputCount
+          let diagChanged = diagCount <> lastLoggedDiagCount
+          if not TerminalUIState.IsActive && (outputChanged || diagChanged) then
+            lastLoggedOutputCount <- outputCount
+            lastLoggedDiagCount <- diagCount
             let latest =
               model.RecentOutput
               |> List.tryHead
@@ -354,9 +360,45 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
     }
 
   // Wire test discovery from SessionManager → Elm model
-  onTestDiscoveryCallback <- fun _sid tests providers ->
+  // After discovery, scan project source files with tree-sitter to produce
+  // SourceTestLocations, enabling source-mapped origins for gutter signs etc.
+  onTestDiscoveryCallback <- fun sid tests providers ->
+    // Scan project directories for test source locations via tree-sitter
+    let snapshot = readSnapshot()
+    let sessionInfo = SessionManager.QuerySnapshot.tryGetSession sid snapshot
+    let projectDirs =
+      match sessionInfo with
+      | Some info ->
+        info.Projects
+        |> List.map (fun proj ->
+          let fullPath = if IO.Path.IsPathRooted proj then proj else IO.Path.Combine(info.WorkingDirectory, proj)
+          IO.Path.GetDirectoryName fullPath)
+        |> List.distinct
+      | None -> [ workingDir ]
+    let locations =
+      if Features.LiveTesting.TestTreeSitter.isAvailable () then
+        projectDirs
+        |> List.toArray
+        |> Array.collect (fun dir ->
+          if IO.Directory.Exists dir then
+            IO.Directory.GetFiles(dir, "*.fs", IO.SearchOption.AllDirectories)
+            |> Array.filter (fun f ->
+              let rel = f.Substring(dir.Length)
+              let sep = string IO.Path.DirectorySeparatorChar
+              not (rel.Contains(sep + "bin" + sep))
+              && not (rel.Contains(sep + "obj" + sep)))
+            |> Array.collect (fun f ->
+              try
+                let code = IO.File.ReadAllText f
+                Features.LiveTesting.TestTreeSitter.discover f code
+              with _ -> Array.empty)
+          else Array.empty)
+      else Array.empty
+    // Dispatch locations BEFORE tests so mergeSourceLocations can enrich them
+    if not (Array.isEmpty locations) then
+      elmRuntime.Dispatch(SageFsMsg.Event (SageFsEvent.TestLocationsDetected (sid, locations)))
     if not (Array.isEmpty tests) then
-      elmRuntime.Dispatch(SageFsMsg.Event (SageFsEvent.TestsDiscovered tests))
+      elmRuntime.Dispatch(SageFsMsg.Event (SageFsEvent.TestsDiscovered (sid, tests)))
     if not (List.isEmpty providers) then
       elmRuntime.Dispatch(SageFsMsg.Event (SageFsEvent.ProvidersDetected providers))
 

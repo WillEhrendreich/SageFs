@@ -362,10 +362,18 @@ module SageFsUpdate =
           { model with RecentOutput = lines @ model.RecentOutput }, []
 
       | SageFsEvent.WarmupContextUpdated ctx ->
-        { model with SessionContext = Some ctx }, []
+        // Re-map any ReflectionOnly tests now that we have source file paths
+        let sourceFiles = ctx.FileStatuses |> List.map (fun f -> f.Path) |> Array.ofList
+        let lt =
+          if Array.isEmpty sourceFiles then model.LiveTesting
+          else
+            recomputeStatuses model.LiveTesting (fun s ->
+              let remapped = Features.LiveTesting.SourceMapping.mapFromProjectFiles sourceFiles s.DiscoveredTests
+              { s with DiscoveredTests = remapped })
+        { model with SessionContext = Some ctx; LiveTesting = lt }, []
 
       // ── Live testing events ──
-      | SageFsEvent.TestLocationsDetected locations ->
+      | SageFsEvent.TestLocationsDetected (_, locations) ->
         let lt = recomputeStatuses model.LiveTesting (fun s ->
           let merged =
             if Array.isEmpty s.DiscoveredTests then s.DiscoveredTests
@@ -373,13 +381,21 @@ module SageFsUpdate =
           { s with SourceLocations = locations; DiscoveredTests = merged })
         { model with LiveTesting = lt }, []
 
-      | SageFsEvent.TestsDiscovered tests ->
+      | SageFsEvent.TestsDiscovered (sessionId, tests) ->
         let lt = recomputeStatuses model.LiveTesting (fun s ->
           let disc = Features.LiveTesting.LiveTesting.mergeDiscoveredTests s.DiscoveredTests tests
-          let merged =
-            if Array.isEmpty s.SourceLocations then disc
+          let withSourceMap =
+            if Array.isEmpty s.SourceLocations then
+              // No tree-sitter yet — map tests to files using module name → file name heuristic
+              let sourceFiles =
+                match model.SessionContext with
+                | Some ctx -> ctx.FileStatuses |> List.map (fun f -> f.Path) |> Array.ofList
+                | None -> [||]
+              Features.LiveTesting.SourceMapping.mapFromProjectFiles sourceFiles disc
             else Features.LiveTesting.SourceMapping.mergeSourceLocations s.SourceLocations disc
-          { s with DiscoveredTests = merged })
+          let newSessionMap =
+            tests |> Array.fold (fun m tc -> Map.add tc.Id sessionId m) s.TestSessionMap
+          { s with DiscoveredTests = withSourceMap; TestSessionMap = newSessionMap })
         let effects =
           if lt.TestState.Activation = Features.LiveTesting.LiveTestingActivation.Active
              && not (Array.isEmpty lt.TestState.DiscoveredTests) then
@@ -444,7 +460,7 @@ module SageFsUpdate =
           else
             [ Features.LiveTesting.PipelineEffect.RunAffectedTests(
                 tests, Features.LiveTesting.RunTrigger.ExplicitRun,
-                System.TimeSpan.Zero, System.TimeSpan.Zero)
+                System.TimeSpan.Zero, System.TimeSpan.Zero, None)
               |> SageFsEffect.Pipeline ]
         { model with LiveTesting = lt }, effects
 
@@ -930,7 +946,7 @@ module SageFsEffectHandler =
           Instrumentation.treeSitterParseMs.Record(elapsed.TotalMilliseconds)
           Features.LiveTesting.LiveTestingInstrumentation.treeSitterHistogram.Record(elapsed.TotalMilliseconds)
           Instrumentation.succeedSpan span
-          dispatch (SageFsMsg.Event (SageFsEvent.TestLocationsDetected locations))
+          dispatch (SageFsMsg.Event (SageFsEvent.TestLocationsDetected ("", locations)))
           let timing : Features.LiveTesting.PipelineTiming = {
             Depth = Features.LiveTesting.PipelineDepth.TreeSitterOnly elapsed
             TotalTests = 0; AffectedTests = 0
@@ -972,7 +988,7 @@ module SageFsEffectHandler =
                 dispatch (SageFsMsg.Event (SageFsEvent.PipelineTimingRecorded timing))
                 Instrumentation.succeedSpan span
             })
-        | Features.LiveTesting.PipelineEffect.RunAffectedTests (tests, trigger, tsElapsed, fcsElapsed) ->
+        | Features.LiveTesting.PipelineEffect.RunAffectedTests (tests, trigger, tsElapsed, fcsElapsed, targetSession) ->
           if Array.isEmpty tests then ()
           else
             let testIds = tests |> Array.map (fun tc -> tc.Id)
@@ -985,7 +1001,7 @@ module SageFsEffectHandler =
                   "SageFs.LiveTesting.TestExecution")
               let sw = System.Diagnostics.Stopwatch.StartNew()
               try
-                match deps.ResolveSession None with
+                match deps.ResolveSession targetSession with
                 | Ok resolution ->
                   let sid = SessionOperations.sessionId resolution
                   match deps.GetStreamingTestProxy sid with

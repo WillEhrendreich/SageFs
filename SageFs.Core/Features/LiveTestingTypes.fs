@@ -522,6 +522,8 @@ type LiveTestState = {
   CachedEditorAnnotations: LineAnnotation array
   AssemblyLoadErrors: AssemblyLoadError list
   FlakyHistory: Map<TestId, ResultWindow>
+  /// Maps each TestId to the session that discovered it, enabling per-session execution routing.
+  TestSessionMap: Map<TestId, string>
 }
 
 module LiveTestState =
@@ -542,6 +544,7 @@ module LiveTestState =
     CachedEditorAnnotations = Array.empty
     AssemblyLoadErrors = []
     FlakyHistory = Map.empty
+    TestSessionMap = Map.empty
   }
 
 // --- Gutter Rendering Pure Functions ---
@@ -1100,6 +1103,30 @@ module SourceMapping =
             | None -> test
           | None -> test)
 
+  /// Map ReflectionOnly tests to source files using project file names.
+  /// Matches the module name from the test FullName to file names in the project.
+  /// E.g. "SageFs.Tests.McpAdapterTests.tests/..." → "McpAdapterTests.fs"
+  let mapFromProjectFiles
+    (sourceFiles: string array)
+    (tests: TestCase array)
+    : TestCase array =
+    if Array.isEmpty sourceFiles then tests
+    else
+      let filesByName =
+        sourceFiles
+        |> Array.map (fun f -> System.IO.Path.GetFileNameWithoutExtension(f), f)
+        |> Map.ofArray
+      tests |> Array.map (fun test ->
+        match test.Origin with
+        | TestOrigin.SourceMapped _ -> test
+        | TestOrigin.ReflectionOnly ->
+          match extractModuleName test.FullName with
+          | Some modName ->
+            match Map.tryFind modName filesByName with
+            | Some filePath -> { test with Origin = TestOrigin.SourceMapped(filePath, 1) }
+            | None -> test
+          | None -> test)
+
 module CoverageProjection =
   let symbolCoverage
     (graph: TestDependencyGraph)
@@ -1473,7 +1500,7 @@ module PipelineDebounce =
 type PipelineEffect =
   | ParseTreeSitter of content: string * filePath: string
   | RequestFcsTypeCheck of filePath: string * treeSitterElapsed: System.TimeSpan
-  | RunAffectedTests of tests: TestCase array * trigger: RunTrigger * treeSitterElapsed: System.TimeSpan * fcsElapsed: System.TimeSpan
+  | RunAffectedTests of tests: TestCase array * trigger: RunTrigger * treeSitterElapsed: System.TimeSpan * fcsElapsed: System.TimeSpan * sessionId: string option
 
 module PipelineEffects =
   let fromTick
@@ -1515,7 +1542,7 @@ module PipelineEffects =
         else
           let tsElapsed = PipelineTiming.accumulatedTsElapsed lastTiming
           let fcsElapsed = PipelineTiming.accumulatedFcsElapsed lastTiming
-          Some (PipelineEffect.RunAffectedTests(filtered, trigger, tsElapsed, fcsElapsed))
+          Some (PipelineEffect.RunAffectedTests(filtered, trigger, tsElapsed, fcsElapsed, None))
 
 /// Adaptive debounce configuration.
 type AdaptiveDebounceConfig = {
@@ -1798,7 +1825,7 @@ module LiveTestPipelineState =
         |> TestPrioritization.prioritize s.TestState.LastResults
       if Array.isEmpty filtered then []
       else
-        [ PipelineEffect.RunAffectedTests(filtered, trigger, System.TimeSpan.Zero, System.TimeSpan.Zero) ]
+        [ PipelineEffect.RunAffectedTests(filtered, trigger, System.TimeSpan.Zero, System.TimeSpan.Zero, None) ]
 
   /// Filter tests by optional criteria for explicit MCP-triggered runs.
   /// All filters are AND'd. None = no filter = match all.

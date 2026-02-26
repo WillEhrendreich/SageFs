@@ -853,7 +853,7 @@ module McpTools =
                   if not (List.isEmpty hookResult.DetectedProviders) then
                     notifyElm ctx (SageFsEvent.ProvidersDetected hookResult.DetectedProviders)
                   if not (Array.isEmpty hookResult.DiscoveredTests) then
-                    notifyElm ctx (SageFsEvent.TestsDiscovered hookResult.DiscoveredTests)
+                    notifyElm ctx (SageFsEvent.TestsDiscovered (sid, hookResult.DiscoveredTests))
                   if not (Array.isEmpty hookResult.AffectedTestIds) then
                     notifyElm ctx (SageFsEvent.AffectedTestsComputed hookResult.AffectedTestIds)
                 with _ -> ()
@@ -1248,9 +1248,13 @@ module McpTools =
         let tests =
           match fileFilter with
           | Some f ->
+            let normalizedFilter = f.Replace('/', System.IO.Path.DirectorySeparatorChar).Replace('\\', System.IO.Path.DirectorySeparatorChar)
             state.StatusEntries |> Array.filter (fun e ->
               match e.Origin with
-              | Features.LiveTesting.TestOrigin.SourceMapped (file, _) -> file = f
+              | Features.LiveTesting.TestOrigin.SourceMapped (file, _) ->
+                file = normalizedFilter
+                || file.EndsWith(normalizedFilter, System.StringComparison.OrdinalIgnoreCase)
+                || file.EndsWith(System.IO.Path.DirectorySeparatorChar.ToString() + normalizedFilter, System.StringComparison.OrdinalIgnoreCase)
               | Features.LiveTesting.TestOrigin.ReflectionOnly -> false)
             |> Some
           | None -> None

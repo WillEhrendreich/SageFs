@@ -53,8 +53,8 @@ type SageFsEvent =
   | WarmupCompleted of duration: TimeSpan * failures: string list
   | WarmupContextUpdated of SessionContext
   // ── Live testing ──
-  | TestLocationsDetected of locations: Features.LiveTesting.SourceTestLocation array
-  | TestsDiscovered of tests: Features.LiveTesting.TestCase array
+  | TestLocationsDetected of sessionId: string * locations: Features.LiveTesting.SourceTestLocation array
+  | TestsDiscovered of sessionId: string * tests: Features.LiveTesting.TestCase array
   | TestRunStarted of testIds: Features.LiveTesting.TestId array
   | TestResultsBatch of results: Features.LiveTesting.TestRunResult array
   | TestRunCompleted
