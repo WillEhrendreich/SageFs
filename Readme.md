@@ -28,82 +28,6 @@ SageFs is a [.NET global tool](https://learn.microsoft.com/en-us/dotnet/core/too
 
 ---
 
-## 🧪 Live Unit Testing
-
-> *Visual Studio Enterprise charges ~$250/month for Live Unit Testing. SageFs does it better — across every editor, every major .NET test framework — for free.*
-
-SageFs already has hot reload, file watching, Harmony method patching, and real-time SSE push to every connected UI. **Live Unit Testing** wires those together into a single pipeline: edit code → tests run automatically → results appear inline, in under 500ms.
-
-**What this looks like in practice:**
-
-```
-✓ let ``should add two numbers`` () =       ← passed (12ms)
-✗ let ``should reject negative`` () =       ← failed: Expected Ok but got Error
-● let ``should handle empty`` () =          ← detected, not yet run
-▸ let validate x =                          ← covered by 3 tests, all passing
-○ let unusedHelper () = ()                  ← not reached by any test
-```
-
-Gutter markers appear in your editor (VS Code, Neovim, TUI, GUI, Visual Studio — all of them) showing test status on test code and test reachability on production code. No configuration, no IL instrumentation, no separate test runner window.
-
-**How it's different from VS Enterprise:**
-
-| | VS Enterprise Live Testing | SageFs Live Testing |
-|---|---|---|
-| **Speed** | 5-30 seconds (full MSBuild rebuild) | 200-500ms (FSI hot reload, no build) |
-| **Scope** | Rebuilds all impacted projects | Scope-level: just the function being edited |
-| **Broken code** | Must compile to instrument | Tree-sitter works on broken/incomplete code |
-| **Frameworks** | MSTest, xUnit, NUnit only | + Expecto, TUnit, extensible provider model |
-| **Coverage method** | IL instrumentation (heavy) | FCS typed AST symbol graph (lightweight) |
-| **Editors** | Visual Studio only | VS Code, Neovim, TUI, GUI, Visual Studio, web dashboard |
-| **Cost** | ~$250/month | Free, MIT licensed |
-
-**Three-speed feedback pipeline:**
-1. **~50ms** — Tree-sitter detects test attributes in broken/incomplete code → immediate gutter markers
-2. **~350ms** — F# Compiler Service type-checks → namespace disambiguation, dependency graph, reachability annotations
-3. **~500ms** — Harmony patches + affected-test execution → ✓/✗ results inline
-
-Tests are categorized automatically (Unit, Integration, Browser, Property, Benchmark) with smart run policies — unit and property tests run on every keystroke, integration tests run on save, browser tests run on demand. All configurable.
-
-**What's built:**
-
-- [x] **Pure domain model** — `TestId` (SHA256-stable), `TestCase`, `TestResult`, `TestRunStatus`, `TestDependencyGraph`, `CoverageAnnotation`, `RunGeneration`, `TestRunPhase`, `ResultFreshness`, `BatchCompletion` — all boolean state replaced with domain DUs, full Elm state management (`LiveTestState` with events, update, projection)
-- [x] **Two-tier provider system** — Attribute-based executor (Tier 1) covers xUnit, NUnit, MSTest, TUnit in ~10 lines each; custom executor (Tier 2) handles Expecto-style value-based tests
-- [x] **Tree-sitter source detection** — `tests.scm` query file detects test attributes in broken/incomplete F# code for instant gutter markers, even before the compiler runs
-- [x] **Test execution orchestration** — `TestOrchestrator` handles discovery, reflection-based execution with async parallelism and semaphore limits
-- [x] **Transitive coverage types & pure functions** — `TestDependencyGraph` with BFS reachability, `CoverageComputation` for line-level annotations, `filterByPolicy()` for trigger-based filtering
-- [x] **OTEL instrumentation** — `ActivitySource` + `Meter` with histograms for tree-sitter, FCS, execution timing, standby pool metrics (pool size, warmup duration, invalidation count, age at swap), and file watcher counters; trace-based exemplar filter; zero-cost (~50ns) when no collector attached
-- [x] **Elm architecture integration** — 8 event types (`TestsDiscovered`, `TestResultsBatch`, `AffectedTestsComputed`, `CoverageUpdated`, etc.) wired through `SageFsModel` update loop
-- [x] **TUI gutter rendering** — `LineAnnotation` icons/colors rendered in the terminal UI via `RenderPipeline`, toggle with **Ctrl+Alt+T**
-- [x] **Harmony hot-reload trigger** — `LiveTestingHook.afterReload()` called after every successful eval in `HotReloading.fs`, detecting providers, discovering tests, and finding affected tests from updated methods. Results flow through worker protocol metadata into the Elm event loop.
-- [x] **Composed multi-provider test execution** — Multiple test providers (FSI hook + project-level reflection) compose their `RunTest` closures with fallthrough semantics — the first provider that can run a test wins. `GetTestDiscovery` worker message enables on-demand discovery without a full eval cycle.
-- [x] **Run policy enforcement** — `filterByPolicy()` integrated into execution paths so unit tests run on keystroke, integration on save, browser on demand
-- [x] **SSE push of test results** — `TestSummaryChanged` and `TestResultsBatch` events streamed to connected HTTP/SSE clients via push notification architecture
-- [x] **MCP live test tools** — `get_live_test_status` (query test state with file filter), `set_run_policy` (control which categories run when), `get_pipeline_trace` (debug the pipeline waterfall)
-- [x] **2900+ tests** — Full test suite covering domain model, executor, tree-sitter, instrumentation, Elm integration, flaky detection, coverage correlation, snapshot tests, and FsCheck property-based tests — including state machine property tests for `TestRunPhase` transitions and debounce semantics
-- [x] **FCS dependency graph** — F# Compiler Service `CheckFileResults` wired via `SymbolGraphBuilder` to build symbol→test dependency maps, with `SymbolDiff` for detecting changes between FCS runs and `FileAnalysisCache` for per-file caching
-- [x] **Three-speed pipeline end-to-end** — Full debounced pipeline: keystroke → tree-sitter (50ms) → FCS with adaptive backoff (300ms, max 2000ms) → affected-test execution. `PipelineDebounce` manages per-stage cancellation tokens, `AdaptiveDebounce` backs off dynamically on FCS cancellations
-- [x] **Source mapping** — `SourceMapping` module bridges tree-sitter source locations (file/line/column) to reflection-discovered tests via function name matching, so gutter markers land on the right line even for Expecto-style hierarchical tests
-- [x] **`run_tests` MCP tool** — On-demand test execution with optional pattern and category filters, integrated into the Elm event loop via `RunTestsRequested`
-- [x] **`set_live_testing` MCP tool** — Enable/disable live testing from any MCP client
-- [x] **Daemon startup guard** — All editor plugins (VS Code, Visual Studio, CLI, Raylib GUI) now check for an already-running daemon via HTTP probe before spawning a new instance, preventing duplicate daemons
-
-- [x] **Neovim live testing & coverage** — Full sagefs.nvim integration: test gutter signs, test panel, coverage gutter signs, coverage panel, pipeline trace, test policy controls, statusline — 24 modules, 800+ tests
-- [x] **Flaky test detection** — `ResultWindow` sliding window, `TestStability` DU (Stable/Flaky/Insufficient), `FlakyDetection.outcomeOf`, `GutterIcon.TestFlaky` — property-based tested
-- [x] **Per-test coverage correlation** — `CoverageCorrelation.testsForSymbol` and `testsForLine` chain FCS dependency graph → enriched test info, answering "which tests cover this line?"
-
-- [x] **VS Code live testing suite** — Full VS Code integration: inline ✓/✗/● decorations on test lines, native Test Explorer via `TestController` adapter, test result CodeLens above every test function, failure diagnostics as native squiggles, SSE-driven `LiveTestingListener` consuming typed `test_summary` and `test_results_batch` events, policy control commands (`sagefs.enableLiveTesting`, `sagefs.disableLiveTesting`, `sagefs.runTests`, `sagefs.setRunPolicy`), call graph viewer (`sagefs.showCallGraph` → `/api/dependency-graph`), event history QuickPick (`sagefs.showHistory` → `/api/recent-events`), type explorer sidebar, dashboard webview panel — all wired through HTTP proxy endpoints to the daemon
-- [x] **Typed SSE event broadcast** — `/events` endpoint broadcasts `event: test_summary` and `event: test_results_batch` alongside `event: state`, with `JsonFSharpConverter` for proper F# DU serialization. Clients subscribe once and receive all event types over a single SSE stream with auto-reconnect and exponential backoff
-- [x] **HTTP API for editor extensions** — `/api/live-testing/enable`, `/api/live-testing/disable`, `/api/live-testing/policy`, `/api/live-testing/run`, `/api/explore`, `/api/completions`, `/api/dependency-graph`, `/api/recent-events` — RESTful endpoints proxied by VS Code and available to any HTTP client
-
-**What's next:**
-
-- [ ] **VS Code coverage gutter markers** — Coverage annotations on production code lines (data ready via `CoverageAnnotation`, UI not yet connected)
-- [ ] **Raylib GUI gutter rendering** — Gutter icons in the GPU-rendered GUI frontend
-- [ ] **Visual Studio gutter markers** — Margin glyphs via the VS Extensibility SDK
-
----
-
 ## Prerequisites
 
 - [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0)
@@ -269,11 +193,13 @@ code --install-extension sagefs-*.vsix
 - **Code completion** — Omnifunc-based completions via SageFs completion endpoint
 - **Combined statusline** — `require("sagefs").statusline()` → session │ testing │ coverage │ daemon
 
-33 commands, 9 user autocmd events, and full parity with VS Code features. See the [sagefs.nvim README](https://github.com/WillEhrendreich/sagefs.nvim) for full setup, keybindings, and architecture details.
+33 commands, 11 user autocmd events, and full parity with VS Code features. See the [sagefs.nvim README](https://github.com/WillEhrendreich/sagefs.nvim) for full setup, keybindings, and architecture details.
 
 ### Visual Studio Extension
 
 The **SageFs Visual Studio extension** in `sagefs-vs/` uses the [VisualStudio.Extensibility](https://learn.microsoft.com/en-us/visualstudio/extensibility/visualstudio.extensibility/) SDK with a thin C# shell and all real logic in an F# core library (`SageFs.VisualStudio.Core`).
+
+> **Note:** The VS extension is in early development. Core eval, CodeLens, and session features work. Live testing gutter markers, coverage, and some advanced features are not yet implemented. See the [sagefs-vs README](sagefs-vs/README.md) for current status.
 
 **What you get:**
 
@@ -282,8 +208,11 @@ The **SageFs Visual Studio extension** in `sagefs-vs/` uses the [VisualStudio.Ex
 - **Error List integration** — SageFs diagnostics stream into the native VS Error List via SSE
 - **Session Context tool window** — Live dashboard showing connection status, assemblies, namespaces, warmup details
 - **Hot reload** — Toggle files, directories, watch/unwatch all from the Extensions menu
+- **Daemon lifecycle** — Start/stop the SageFs daemon from the Extensions menu
 - **Multi-session** — Create, switch, reset, and hard-reset sessions
 - **Output window** — All eval results and command feedback logged to the SageFs output channel
+
+**Not yet implemented:** Live test gutter markers, coverage gutter signs, test panel, test policy picker, type explorer, call graph, history browser, status dashboard, code completion UI (HTTP client ready, VS SDK doesn't expose completion API yet).
 
 ### AI Agent (MCP)
 
@@ -429,7 +358,7 @@ Already running at `http://localhost:37750/dashboard`. Submit code, view session
 | Type explorer | — | — | — | ✅ | — | ✅ |
 | Call graph | — | — | — | ✅ | — | ✅ |
 | History browser | — | — | — | ✅ | — | ✅ |
-| Daemon lifecycle | ✅ | — | — | ✅ | — | ✅ |
+| Daemon lifecycle | ✅ | — | — | ✅ | ✅ | ✅ |
 | Status dashboard | — | — | ✅ | ✅ | — | ✅ |
 
 > ¹ **n/a** — Feature is architecturally inapplicable. TUI/Raylib are REPL interfaces (eval file = just type code); CodeLens requires an editor with source buffers.
@@ -439,6 +368,63 @@ Already running at `http://localhost:37750/dashboard`. Submit code, view session
 ---
 
 ## Key Features
+
+### 🧪 Live Unit Testing
+
+> *Visual Studio Enterprise charges ~$250/month for Live Unit Testing. SageFs does it better — across every editor, every major .NET test framework — for free.*
+
+Edit code → tests run automatically → results appear inline, in under 500ms.
+
+```
+✓ let ``should add two numbers`` () =       ← passed (12ms)
+✗ let ``should reject negative`` () =       ← failed: Expected Ok but got Error
+● let ``should handle empty`` () =          ← detected, not yet run
+▸ let validate x =                          ← covered by 3 tests, all passing
+○ let unusedHelper () = ()                  ← not reached by any test
+```
+
+Gutter markers appear in your editor (VS Code, Neovim, TUI, Visual Studio) showing test status on test code and test reachability on production code. No configuration, no IL instrumentation, no separate test runner window.
+
+**How it's different from VS Enterprise:**
+
+| | VS Enterprise Live Testing | SageFs Live Testing |
+|---|---|---|
+| **Speed** | 5-30 seconds (full MSBuild rebuild) | 200-500ms (FSI hot reload, no build) |
+| **Scope** | Rebuilds all impacted projects | Scope-level: just the function being edited |
+| **Broken code** | Must compile to instrument | Tree-sitter works on broken/incomplete code |
+| **Frameworks** | MSTest, xUnit, NUnit only | + Expecto, TUnit, extensible provider model |
+| **Coverage method** | IL instrumentation (heavy) | FCS typed AST symbol graph (lightweight) |
+| **Editors** | Visual Studio only | VS Code, Neovim, TUI, GUI, Visual Studio, web dashboard |
+| **Cost** | ~$250/month | Free, MIT licensed |
+
+**Three-speed feedback pipeline:**
+1. **~50ms** — Tree-sitter detects test attributes in broken/incomplete code → immediate gutter markers
+2. **~350ms** — F# Compiler Service type-checks → namespace disambiguation, dependency graph, reachability annotations
+3. **~500ms** — Harmony patches + affected-test execution → ✓/✗ results inline
+
+Tests are categorized automatically (Unit, Integration, Browser, Property, Benchmark) with smart run policies — unit and property tests run on every keystroke, integration tests run on save, browser tests run on demand. All configurable.
+
+**What's next:**
+
+- [ ] **As-you-type evaluation** — Edit a function body and tests re-run without saving. Tree-sitter extracts the scope, POSTs to SageFs, FSI redefines the binding. Currently requires save; as-you-type is in development for all editors.
+- [ ] **VS Code coverage gutter markers** — Coverage annotations on production code lines (server data ready, UI not yet connected)
+- [ ] **Raylib GUI gutter rendering** — Gutter icons in the GPU-rendered GUI frontend
+- [ ] **Visual Studio gutter markers** — Margin glyphs via the VS Extensibility SDK
+
+<details>
+<summary><strong>Implementation details (for contributors)</strong></summary>
+
+- Pure domain model with SHA256-stable `TestId`, full Elm state management
+- Two-tier provider: attribute-based (xUnit/NUnit/MSTest/TUnit) + custom (Expecto)
+- Tree-sitter `tests.scm` query for instant detection in broken code
+- FCS `SymbolGraphBuilder` for dependency maps, `SymbolDiff` for change detection
+- `PipelineDebounce` with per-stage cancellation, `AdaptiveDebounce` for FCS backoff
+- `SourceMapping` bridges tree-sitter locations to reflection-discovered tests
+- OTEL instrumentation: histograms for all pipeline stages, zero-cost when no collector
+- SSE push: `test_summary` + `test_results_batch` events with `JsonFSharpConverter`
+- 2900+ tests including FsCheck property-based state machine tests
+
+</details>
 
 ### 🔥 Hot Reload
 
@@ -520,7 +506,7 @@ Hard resets are fast because SageFs maintains a **standby pool** of pre-warmed F
 
 ### 📊 Event Sourcing
 
-All session events (evals, resets, diagnostics, errors) are stored in PostgreSQL via [Marten](https://martendb.io/). Query your development history, replay sessions, and build analytics on top of your coding patterns.
+All session events (evals, resets, diagnostics, errors) are stored in PostgreSQL via [Marten](https://martendb.io/). This provides a durable history of your development sessions. Future tooling will enable session replay and analytics on top of your coding patterns.
 
 ---
 
@@ -559,7 +545,9 @@ SageFs - F# Interactive daemon with MCP, hot reloading, and live dashboard
 
 Usage: SageFs [options]                Start daemon (default mode)
        SageFs --supervised [options]   Start with watchdog auto-restart
-       SageFs connect                  Connect to running daemon
+       SageFs connect                  Connect to running daemon (REPL)
+       SageFs tui                      Terminal UI client for running daemon
+       SageFs gui                      GPU-rendered Raylib GUI client
        SageFs stop                     Stop running daemon
        SageFs status                   Show daemon info
        SageFs worker [options]         Internal: worker process
@@ -657,7 +645,7 @@ SageFs auto-loads `~/.SageFs/init.fsx` on session start, if it exists. Use it fo
 
 **Tests discovered but not executing** — Check the run policy for each test category. Integration, browser, and benchmark tests default to `OnDemand` — they won't auto-run. Use `run_tests` (MCP tool) to trigger them manually, or change the policy with `set_run_policy`.
 
-**Where are the logs?** — The daemon console shows real-time output. For structured logging, SageFs supports OTEL export — connect a collector (e.g., Aspire dashboard) to see traces and metrics. The daemon startup message shows the dashboard URL (default: `http://localhost:37749`).
+**Where are the logs?** — The daemon console shows real-time output. For structured logging, SageFs supports OTEL export — connect a collector (e.g., Aspire dashboard) to see traces and metrics. The daemon startup message shows the dashboard URL (default: `http://localhost:37750/dashboard`).
 
 ---
 
