@@ -278,4 +278,107 @@ let instrumentationTests = testSequenced (testList "Instrumentation" [
     captured |> Expect.isSome "should have captured activity"
     captured.Value.Status |> Expect.equal "should be error status" ActivityStatusCode.Error
   }
+
+  // === Tier 1: Worker OTel env var propagation ===
+  test "workerOtelEnvVars returns service name with session id" {
+    let vars = Instrumentation.workerOtelEnvVars "test-session-42"
+    vars |> Expect.isNonEmpty "should have at least service name"
+    let keys = vars |> List.map fst
+    keys |> Expect.containsAll "should have service name" ["OTEL_SERVICE_NAME"]
+    let svcName = vars |> List.find (fun (k,_) -> k = "OTEL_SERVICE_NAME") |> snd
+    svcName |> Expect.equal "should include session id" "sagefs-worker-test-session-42"
+  }
+  test "workerOtelEnvVars includes endpoint when configured" {
+    let original = System.Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_ENDPOINT")
+    try
+      System.Environment.SetEnvironmentVariable("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317")
+      let vars = Instrumentation.workerOtelEnvVars "sess-1"
+      let keys = vars |> List.map fst
+      keys |> Expect.containsAll "should have endpoint" ["OTEL_EXPORTER_OTLP_ENDPOINT"; "OTEL_SERVICE_NAME"]
+      let ep = vars |> List.find (fun (k,_) -> k = "OTEL_EXPORTER_OTLP_ENDPOINT") |> snd
+      ep |> Expect.equal "should propagate endpoint" "http://localhost:4317"
+    finally
+      System.Environment.SetEnvironmentVariable("OTEL_EXPORTER_OTLP_ENDPOINT", original)
+  }
+
+  // === Tier 1: SSE span filtering ===
+  test "sseFilterPaths lists SSE paths to suppress" {
+    Instrumentation.sseFilterPaths |> Expect.isNonEmpty "should have paths"
+    Instrumentation.sseFilterPaths |> Expect.containsAll "should contain /events and /diagnostics" ["/events"; "/diagnostics"]
+  }
+  test "shouldFilterHttpSpan suppresses SSE paths" {
+    Instrumentation.shouldFilterHttpSpan "/events"
+    |> Expect.isFalse "should suppress /events"
+    Instrumentation.shouldFilterHttpSpan "/diagnostics"
+    |> Expect.isFalse "should suppress /diagnostics"
+    Instrumentation.shouldFilterHttpSpan "/__sagefs__/reload"
+    |> Expect.isFalse "should suppress /__sagefs__/reload"
+    Instrumentation.shouldFilterHttpSpan "/api/status"
+    |> Expect.isTrue "should NOT suppress /api/status"
+    Instrumentation.shouldFilterHttpSpan "/mcp/tool"
+    |> Expect.isTrue "should NOT suppress /mcp/tool"
+  }
+
+  // === Tier 1: ActivityKind on spans ===
+  test "startSpanWithKind creates activity with Server kind" {
+    use listener = new ActivityListener(
+      ShouldListenTo = (fun s -> s.Name = "SageFs.Mcp"),
+      Sample = (fun _ -> ActivitySamplingResult.AllDataAndRecorded))
+    ActivitySource.AddActivityListener(listener)
+    let act = Instrumentation.startSpanWithKind Instrumentation.mcpSource "test.kind" ActivityKind.Server []
+    act |> Expect.isNotNull "should create activity"
+    act.Kind |> Expect.equal "should be Server" ActivityKind.Server
+    act.Stop(); act.Dispose()
+  }
+  test "startSpanWithKind supports Producer kind" {
+    use listener = new ActivityListener(
+      ShouldListenTo = (fun s -> s.Name = "SageFs.Mcp"),
+      Sample = (fun _ -> ActivitySamplingResult.AllDataAndRecorded))
+    ActivitySource.AddActivityListener(listener)
+    let act = Instrumentation.startSpanWithKind Instrumentation.mcpSource "test.producer" ActivityKind.Producer []
+    act |> Expect.isNotNull "should create activity"
+    act.Kind |> Expect.equal "should be Producer" ActivityKind.Producer
+    act.Stop(); act.Dispose()
+  }
+
+  // === Tier 2: RPC semantic conventions on MCP spans ===
+  test "tracedMcpTool sets RPC semantic convention tags" {
+    let mutable captured : Activity option = None
+    use listener = new ActivityListener(
+      ShouldListenTo = (fun s -> s.Name = "SageFs.Mcp"),
+      Sample = (fun _ -> ActivitySamplingResult.AllDataAndRecorded),
+      ActivityStopped = (fun a -> if a.OperationName = "mcp.tool.invoke" then captured <- Some a))
+    ActivitySource.AddActivityListener(listener)
+
+    Instrumentation.tracedMcpTool "send_fsharp_code" "copilot" (fun () ->
+      System.Threading.Tasks.Task.FromResult "ok")
+    |> fun t -> t.Result |> ignore
+
+    captured |> Expect.isSome "should have captured activity"
+    let a = captured.Value
+    a.TagObjects |> Seq.tryFind (fun kv -> kv.Key = "rpc.system")
+    |> Option.map (fun kv -> kv.Value :?> string)
+    |> Expect.equal "rpc.system = mcp" (Some "mcp")
+    a.TagObjects |> Seq.tryFind (fun kv -> kv.Key = "rpc.service")
+    |> Option.map (fun kv -> kv.Value :?> string)
+    |> Expect.equal "rpc.service = sagefs" (Some "sagefs")
+    a.TagObjects |> Seq.tryFind (fun kv -> kv.Key = "rpc.method")
+    |> Option.map (fun kv -> kv.Value :?> string)
+    |> Expect.equal "rpc.method = tool name" (Some "send_fsharp_code")
+  }
+  test "tracedMcpTool uses ActivityKind.Server" {
+    let mutable captured : Activity option = None
+    use listener = new ActivityListener(
+      ShouldListenTo = (fun s -> s.Name = "SageFs.Mcp"),
+      Sample = (fun _ -> ActivitySamplingResult.AllDataAndRecorded),
+      ActivityStopped = (fun a -> if a.OperationName = "mcp.tool.invoke" then captured <- Some a))
+    ActivitySource.AddActivityListener(listener)
+
+    Instrumentation.tracedMcpTool "test_tool" "copilot" (fun () ->
+      System.Threading.Tasks.Task.FromResult "ok")
+    |> fun t -> t.Result |> ignore
+
+    captured |> Expect.isSome "should have captured activity"
+    captured.Value.Kind |> Expect.equal "should be Server kind" ActivityKind.Server
+  }
 ])

@@ -12,8 +12,8 @@ open SageFs.McpTools
 let withEcho (toolName: string) (t: Task<string>) : Task<string> =
   task {
     SageFs.Instrumentation.mcpToolInvocations.Add(1L)
-    let span = SageFs.Instrumentation.startSpan SageFs.Instrumentation.mcpSource "mcp.tool.invoke"
-                 ["mcp.tool.name", box toolName]
+    let span = SageFs.Instrumentation.startSpanWithKind SageFs.Instrumentation.mcpSource "mcp.tool.invoke" System.Diagnostics.ActivityKind.Server
+                 ["mcp.tool.name", box toolName; "rpc.system", box "mcp"; "rpc.service", box "sagefs"; "rpc.method", box toolName]
     let! result = t
     let normalized = result.Replace("\r\n", "\n").Replace("\n", "\r\n")
     eprintfn "\u001b[90m>> %s\u001b[0m" toolName

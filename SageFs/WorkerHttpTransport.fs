@@ -5,6 +5,7 @@ open System.IO
 open System.Text.Json
 open System.Threading
 open System.Threading.Tasks
+open System.Collections.Generic
 open Microsoft.AspNetCore.Builder
 open Microsoft.AspNetCore.Hosting
 open Microsoft.AspNetCore.Http
@@ -12,6 +13,9 @@ open Microsoft.AspNetCore.Hosting.Server
 open Microsoft.AspNetCore.Hosting.Server.Features
 open Microsoft.Extensions.DependencyInjection
 open Microsoft.Extensions.Logging
+open OpenTelemetry.Metrics
+open OpenTelemetry.Resources
+open OpenTelemetry.Trace
 open SageFs.WorkerProtocol
 
 module WorkerHttpTransport =
@@ -61,6 +65,41 @@ module WorkerHttpTransport =
       let builder = WebApplication.CreateBuilder([||])
       builder.WebHost.UseUrls(sprintf "http://127.0.0.1:%d" port) |> ignore
       builder.Logging.ClearProviders() |> ignore
+
+      // Configure OTel for worker process when OTEL endpoint is available
+      let otelEndpoint =
+        Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_ENDPOINT")
+        |> Option.ofObj
+        |> Option.filter (fun s -> not (String.IsNullOrEmpty s))
+      match otelEndpoint with
+      | Some _ ->
+        let svcName =
+          Environment.GetEnvironmentVariable("OTEL_SERVICE_NAME")
+          |> Option.ofObj
+          |> Option.defaultValue "sagefs-worker"
+        builder.Services.AddOpenTelemetry()
+          .ConfigureResource(fun resource ->
+            resource
+              .AddService(svcName)
+              .AddAttributes([
+                KeyValuePair<string, obj>("worker.pid", Environment.ProcessId :> obj)
+              ]) |> ignore)
+          .WithTracing(fun tracing ->
+            for source in SageFs.Instrumentation.allSources do
+              tracing.AddSource(source) |> ignore
+            tracing.AddAspNetCoreInstrumentation(fun opts ->
+                opts.Filter <- fun ctx ->
+                  SageFs.Instrumentation.shouldFilterHttpSpan (ctx.Request.Path.ToString())
+              ) |> ignore
+            tracing.AddOtlpExporter() |> ignore)
+          .WithMetrics(fun metrics ->
+            for meter in SageFs.Instrumentation.allMeters do
+              metrics.AddMeter(meter) |> ignore
+            metrics.AddAspNetCoreInstrumentation() |> ignore
+            metrics.AddOtlpExporter() |> ignore)
+        |> ignore
+      | None -> ()
+
       let app = builder.Build()
 
       let inline respond' ctx msg = respond handler ctx msg

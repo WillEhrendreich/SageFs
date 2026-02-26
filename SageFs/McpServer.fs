@@ -300,7 +300,10 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                     let t = tracing
                     for source in SageFs.Instrumentation.allSources do
                       t.AddSource(source) |> ignore
-                    t.AddAspNetCoreInstrumentation()
+                    t.AddAspNetCoreInstrumentation(fun opts ->
+                        opts.Filter <- fun ctx ->
+                          SageFs.Instrumentation.shouldFilterHttpSpan (ctx.Request.Path.ToString())
+                      )
                       .AddHttpClientInstrumentation() |> ignore
                     if otelConfigured then tracing.AddOtlpExporter() |> ignore
                 )

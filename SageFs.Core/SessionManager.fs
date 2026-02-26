@@ -173,6 +173,10 @@ module SessionManager =
     psi.CreateNoWindow <- true
     psi.RedirectStandardOutput <- true
 
+    // Propagate OTel env vars so workers export to the same collector
+    for (key, value) in Instrumentation.workerOtelEnvVars sessionId do
+      psi.Environment.[key] <- value
+
     let proc = new Process()
     proc.StartInfo <- psi
     proc.EnableRaisingEvents <- true

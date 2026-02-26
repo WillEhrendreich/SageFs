@@ -48,6 +48,27 @@ module Instrumentation =
   let sseConnectionsActive =
     mcpMeter.CreateUpDownCounter<int64>("sagefs.sse.connections_active", description = "Currently active SSE connections")
 
+  /// SSE/long-lived paths to suppress in ASP.NET Core HTTP span instrumentation.
+  let sseFilterPaths =
+    [ "/events"; "/diagnostics"; "/__sagefs__/reload"; "/sse"; "/dashboard/stream" ]
+
+  /// Returns true if the HTTP path should be instrumented (not an SSE long-lived path).
+  let shouldFilterHttpSpan (path: string) =
+    sseFilterPaths |> List.exists (fun p -> path.StartsWith(p)) |> not
+
+  /// Env vars to propagate to worker processes for OTel.
+  /// Always includes service name; includes OTLP endpoint/protocol only if configured.
+  let workerOtelEnvVars (sessionId: string) : (string * string) list =
+    let base' = [ "OTEL_SERVICE_NAME", sprintf "sagefs-worker-%s" sessionId ]
+    let endpoint = System.Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_ENDPOINT")
+    let protocol = System.Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_PROTOCOL")
+    let extras =
+      [ if not (System.String.IsNullOrEmpty endpoint) then
+          "OTEL_EXPORTER_OTLP_ENDPOINT", endpoint
+        if not (System.String.IsNullOrEmpty protocol) then
+          "OTEL_EXPORTER_OTLP_PROTOCOL", protocol ]
+    base' @ extras
+
   /// All ActivitySource names for OTel registration in McpServer.
   let allSources =
     [ "SageFs.SessionManager"
@@ -67,6 +88,14 @@ module Instrumentation =
   /// Start an Activity with initial tags. Returns null when no listener attached.
   let startSpan (source: ActivitySource) (name: string) (tags: (string * obj) list) =
     let activity = source.StartActivity(name)
+    if not (isNull activity) then
+      for (k, v) in tags do
+        activity.SetTag(k, v) |> ignore
+    activity
+
+  /// Start an Activity with a specific ActivityKind and initial tags.
+  let startSpanWithKind (source: ActivitySource) (name: string) (kind: ActivityKind) (tags: (string * obj) list) =
+    let activity = source.StartActivity(name, kind)
     if not (isNull activity) then
       for (k, v) in tags do
         activity.SetTag(k, v) |> ignore
@@ -143,15 +172,18 @@ module Instrumentation =
         return raise ex
     }
 
-  /// Wrap an MCP tool invocation with tracing and counting.
+  /// Wrap an MCP tool invocation with tracing, RPC semantic conventions, and counting.
   let tracedMcpTool (toolName: string) (agentName: string) (f: unit -> System.Threading.Tasks.Task<string>) : System.Threading.Tasks.Task<string> =
     task {
       mcpToolInvocations.Add(1L)
-      let activity = mcpSource.StartActivity("mcp.tool.invoke")
+      let activity = mcpSource.StartActivity("mcp.tool.invoke", ActivityKind.Server)
       try
         if not (isNull activity) then
           activity.SetTag("mcp.tool.name", toolName) |> ignore
           activity.SetTag("mcp.agent.name", agentName) |> ignore
+          activity.SetTag("rpc.system", "mcp") |> ignore
+          activity.SetTag("rpc.service", "sagefs") |> ignore
+          activity.SetTag("rpc.method", toolName) |> ignore
         let! result = f ()
         if not (isNull activity) then
           activity.Stop()
@@ -172,7 +204,7 @@ module Instrumentation =
     task {
       fsiEvals.Add(1L)
       fsiStatements.Add(int64 statementCount)
-      let activity = mcpSource.StartActivity("fsi.eval")
+      let activity = mcpSource.StartActivity("fsi.eval", ActivityKind.Server)
       try
         if not (isNull activity) then
           activity.SetTag("fsi.agent.name", agentName) |> ignore
