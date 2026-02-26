@@ -177,10 +177,10 @@ let mergeResultsTests = testList "mergeResults" [
   test "merging results preserves RunPhase (no transition)" {
     let tid = mkTestId "t1" "x"
     let gen = RunGeneration.next RunGeneration.zero
-    let running = { LiveTestState.empty with RunPhase = Running gen; LastGeneration = gen }
+    let running = { LiveTestState.empty with RunPhases = Map.ofList ["s", Running gen]; LastGeneration = gen }
     let results = [| mkResult tid (TestResult.Passed (ts 5.0)) |]
     LiveTesting.mergeResults running results
-    |> fun s -> TestRunPhase.isRunning s.RunPhase
+    |> fun s -> TestRunPhase.isAnyRunning s.RunPhases
     |> Expect.isTrue "should still be running"
   }
 
@@ -676,7 +676,7 @@ let liveTestStateEmptyTests = testList "LiveTestState.empty" [
   }
 
   test "starts not running" {
-    TestRunPhase.isRunning LiveTestState.empty.RunPhase
+    TestRunPhase.isAnyRunning LiveTestState.empty.RunPhases
     |> Expect.isFalse "not running initially"
   }
 
@@ -795,7 +795,7 @@ let elmIntegrationTests = testList "LiveTesting Elm Integration" [
       let model = SageFsModel.initial
       model.LiveTesting.TestState.DiscoveredTests
       |> Expect.equal "no discovered tests" Array.empty
-      TestRunPhase.isRunning model.LiveTesting.TestState.RunPhase
+      TestRunPhase.isAnyRunning model.LiveTesting.TestState.RunPhases
       |> Expect.isFalse "not running"
       model.LiveTesting.TestState.Activation
       |> Expect.equal "enabled" LiveTestingActivation.Active
@@ -832,13 +832,13 @@ let elmIntegrationTests = testList "LiveTesting Elm Integration" [
       model'.LiveTesting.TestState.DiscoveredTests.Length
       |> Expect.equal "should have 1 test" 1
     }
-    test "TestRunStarted sets RunPhase to Running and AffectedTests" {
+    test "TestRunStarted sets RunPhases to Running and AffectedTests" {
       let tid = mkTestId "t1" "x"
       let model', _ =
         SageFsUpdate.update
-          (SageFsMsg.Event (SageFsEvent.TestRunStarted [| tid |]))
+          (SageFsMsg.Event (SageFsEvent.TestRunStarted ([| tid |], Some "s")))
           SageFsModel.initial
-      TestRunPhase.isRunning model'.LiveTesting.TestState.RunPhase
+      TestRunPhase.isAnyRunning model'.LiveTesting.TestState.RunPhases
       |> Expect.isTrue "should be running"
       Set.contains tid model'.LiveTesting.TestState.AffectedTests
       |> Expect.isTrue "should contain test id"
@@ -848,7 +848,7 @@ let elmIntegrationTests = testList "LiveTesting Elm Integration" [
       let m =
         { SageFsModel.initial with
             LiveTesting =
-              { SageFsModel.initial.LiveTesting with TestState = { SageFsModel.initial.LiveTesting.TestState with RunPhase = Running gen; LastGeneration = gen } } }
+              { SageFsModel.initial.LiveTesting with TestState = { SageFsModel.initial.LiveTesting.TestState with RunPhases = Map.ofList ["s", Running gen]; LastGeneration = gen } } }
       let tid = mkTestId "t1" "x"
       let r : TestRunResult =
         { TestId = tid; TestName = "t1"
@@ -857,7 +857,7 @@ let elmIntegrationTests = testList "LiveTesting Elm Integration" [
       let model', _ =
         SageFsUpdate.update
           (SageFsMsg.Event (SageFsEvent.TestResultsBatch [| r |])) m
-      TestRunPhase.isRunning model'.LiveTesting.TestState.RunPhase
+      TestRunPhase.isAnyRunning model'.LiveTesting.TestState.RunPhases
       |> Expect.isTrue "should still be running (streaming — TestRunCompleted clears phase)"
       Map.containsKey tid model'.LiveTesting.TestState.LastResults
       |> Expect.isTrue "should have result"
@@ -1352,7 +1352,7 @@ let orchestratorTests = testList "PipelineOrchestrator" [
 
   test "decide skips when already running" {
     let gen = RunGeneration.next RunGeneration.zero
-    let state = { baseState with RunPhase = Running gen; LastGeneration = gen }
+    let state = { baseState with RunPhases = Map.ofList ["s", Running gen]; LastGeneration = gen }
     let d = PipelineOrchestrator.decide state RunTrigger.Keystroke [ "Module.add" ] depGraph
     match d with
     | PipelineDecision.Skip _ -> ()
@@ -1508,7 +1508,7 @@ let statusEntryTests = testList "StatusEntry Computation" [
       LiveTestState.empty with
         DiscoveredTests = [| test1 |]; Activation = LiveTestingActivation.Active
         AffectedTests = Set.ofList [ test1.Id ]
-        RunPhase = Running gen; LastGeneration = gen
+        RunPhases = Map.ofList ["s", Running gen]; LastGeneration = gen
     }
     let entries = LiveTesting.computeStatusEntries state
     entries.[0].Status |> Expect.equal "running" TestRunStatus.Running
@@ -1530,7 +1530,7 @@ let statusEntryTests = testList "StatusEntry Computation" [
       LiveTestState.empty with
         DiscoveredTests = [| test1 |]; Activation = LiveTestingActivation.Active
         AffectedTests = Set.ofList [ test1.Id ]
-        RunPhase = Running gen; LastGeneration = gen
+        RunPhases = Map.ofList ["s", Running gen]; LastGeneration = gen
     }
     let newResults = [|
       mkResult test1.Id (TestResult.Passed (TimeSpan.FromMilliseconds 10.0))
@@ -2529,11 +2529,13 @@ let pipelineEffectsTests = testList "PipelineEffects" [
     let tc1 = { Id = TestId.create "test1" "xunit"; FullName = "test1"; DisplayName = "test1"
                 Origin = TestOrigin.ReflectionOnly; Labels = []; Framework = "xunit"
                 Category = TestCategory.Unit }
+    let gen = RunGeneration.RunGeneration 1
     let state = {
       LiveTestState.empty with
         DiscoveredTests = [| tc1 |]
         Activation = LiveTestingActivation.Active
-        RunPhase = TestRunPhase.Running (RunGeneration.RunGeneration 1)
+        RunPhases = Map.ofList [ "test-session", TestRunPhase.Running gen ]
+        TestSessionMap = Map.ofList [ tc1.Id, "test-session" ]
     }
     let graph = {
       TestDependencyGraph.empty with
@@ -2547,11 +2549,13 @@ let pipelineEffectsTests = testList "PipelineEffects" [
     let tc1 = { Id = TestId.create "test1" "xunit"; FullName = "test1"; DisplayName = "test1"
                 Origin = TestOrigin.ReflectionOnly; Labels = []; Framework = "xunit"
                 Category = TestCategory.Unit }
+    let gen = RunGeneration.RunGeneration 1
     let state = {
       LiveTestState.empty with
         DiscoveredTests = [| tc1 |]
         Activation = LiveTestingActivation.Active
-        RunPhase = TestRunPhase.RunningButEdited (RunGeneration.RunGeneration 1)
+        RunPhases = Map.ofList [ "test-session", TestRunPhase.RunningButEdited gen ]
+        TestSessionMap = Map.ofList [ tc1.Id, "test-session" ]
     }
     let graph = {
       TestDependencyGraph.empty with
@@ -3582,7 +3586,7 @@ let elmWiringBehavioralTests = testList "Elm Wiring Behavioral Scenarios" [
           TransitiveCoverage = Map.ofList ["Lib.add", [|tc.Id|]] }
     let gen = RunGeneration.next RunGeneration.zero
     let stale =
-      { Staleness.markStale depGraph ["Lib.add"] state with RunPhase = Running gen; LastGeneration = gen }
+      { Staleness.markStale depGraph ["Lib.add"] state with RunPhases = Map.ofList ["s", Running gen]; LastGeneration = gen }
     stale.StatusEntries |> Array.exists (fun e -> match e.Status with TestRunStatus.Stale -> true | _ -> false)
     |> Expect.isTrue "entry is Stale after symbol change"
     let newResult : TestRunResult =
@@ -3927,12 +3931,12 @@ let runningToStaleOnKeystrokeTests = testList "Running → Stale on keystroke" [
         TestState = {
           LiveTestState.empty with
             DiscoveredTests = [| mkSourceMappedTestCase "TestA" "expecto" |]
-            RunPhase = Running gen; LastGeneration = gen
+            RunPhases = Map.ofList ["s", Running gen]; LastGeneration = gen
             AffectedTests = Set.singleton tid
         }
     }
     let s' = LiveTestPipelineState.onKeystroke "changed" "Foo.fs" DateTimeOffset.UtcNow s
-    match s'.TestState.RunPhase with
+    match (s'.TestState.RunPhases |> Map.tryFind "s" |> Option.defaultValue Idle) with
     | RunningButEdited _ -> ()
     | other -> failwithf "Expected RunningButEdited, got %A" other
   }
@@ -3945,7 +3949,7 @@ let runningToStaleOnKeystrokeTests = testList "Running → Stale on keystroke" [
         TestState = {
           LiveTestState.empty with
             DiscoveredTests = [| mkSourceMappedTestCase "TestA" "expecto" |]
-            RunPhase = Running gen; LastGeneration = gen
+            RunPhases = Map.ofList ["s", Running gen]; LastGeneration = gen
             AffectedTests = Set.singleton tid
         }
     }
@@ -3962,7 +3966,7 @@ let runningToStaleOnKeystrokeTests = testList "Running → Stale on keystroke" [
         TestState = {
           LiveTestState.empty with
             DiscoveredTests = [| mkSourceMappedTestCase "TestA" "expecto" |]
-            RunPhase = Running gen; LastGeneration = gen
+            RunPhases = Map.ofList ["s", Running gen]; LastGeneration = gen
             AffectedTests = Set.singleton tid
             LastResults = Map.ofList [ tid, mkPassedResult tid ]
         }
@@ -3983,7 +3987,7 @@ let runningToStaleOnKeystrokeTests = testList "Running → Stale on keystroke" [
         TestState = {
           LiveTestState.empty with
             DiscoveredTests = [| mkSourceMappedTestCase "TestA" "expecto" |]
-            RunPhase = Running gen; LastGeneration = gen
+            RunPhases = Map.ofList ["s", Running gen]; LastGeneration = gen
             AffectedTests = Set.singleton tid
         }
     }
@@ -3997,7 +4001,7 @@ let runningToStaleOnKeystrokeTests = testList "Running → Stale on keystroke" [
   test "keystroke while NOT running keeps Idle" {
     let s = LiveTestPipelineState.empty
     let s' = LiveTestPipelineState.onKeystroke "changed" "Foo.fs" DateTimeOffset.UtcNow s
-    s'.TestState.RunPhase
+    (s'.TestState.RunPhases |> Map.tryFind "s" |> Option.defaultValue Idle)
     |> Expect.equal "should stay Idle" Idle
   }
 ]
@@ -4012,13 +4016,13 @@ let runningToStaleOnFileSaveTests = testList "Running → Stale on file save" [
         TestState = {
           LiveTestState.empty with
             DiscoveredTests = [| mkSourceMappedTestCase "TestA" "expecto" |]
-            RunPhase = Running gen; LastGeneration = gen
+            RunPhases = Map.ofList ["s", Running gen]; LastGeneration = gen
             AffectedTests = Set.singleton tid
             LastResults = Map.ofList [ tid, mkPassedResult tid ]
         }
     }
     let s' = LiveTestPipelineState.onFileSave "Foo.fs" DateTimeOffset.UtcNow s
-    match s'.TestState.RunPhase with
+    match (s'.TestState.RunPhases |> Map.tryFind "s" |> Option.defaultValue Idle) with
     | RunningButEdited _ -> ()
     | other -> failwithf "Expected RunningButEdited, got %A" other
   }
@@ -4026,7 +4030,7 @@ let runningToStaleOnFileSaveTests = testList "Running → Stale on file save" [
   test "save while NOT running keeps Idle" {
     let s = LiveTestPipelineState.empty
     let s' = LiveTestPipelineState.onFileSave "Foo.fs" DateTimeOffset.UtcNow s
-    s'.TestState.RunPhase
+    (s'.TestState.RunPhases |> Map.tryFind "s" |> Option.defaultValue Idle)
     |> Expect.equal "should stay Idle" Idle
   }
 ]
@@ -4040,7 +4044,7 @@ let mergeResultsStalenessFixTests = testList "mergeResults staleness handling" [
     let s = {
       LiveTestState.empty with
         DiscoveredTests = [| mkSourceMappedTestCase "TestA" "expecto" |]
-        RunPhase = RunningButEdited gen; LastGeneration = gen
+        RunPhases = Map.ofList ["s", RunningButEdited gen]; LastGeneration = gen
         AffectedTests = Set.singleton tid
     }
     let s' = LiveTesting.mergeResults s [| result |]
@@ -4055,7 +4059,7 @@ let mergeResultsStalenessFixTests = testList "mergeResults staleness handling" [
     let s = {
       LiveTestState.empty with
         DiscoveredTests = [| mkSourceMappedTestCase "TestA" "expecto" |]
-        RunPhase = Running gen; LastGeneration = gen
+        RunPhases = Map.ofList ["s", Running gen]; LastGeneration = gen
         AffectedTests = Set.singleton tid
     }
     let s' = LiveTesting.mergeResults s [| result |]
@@ -4072,11 +4076,11 @@ let mergeResultsStalenessFixTests = testList "mergeResults staleness handling" [
     let s = {
       LiveTestState.empty with
         DiscoveredTests = [| mkSourceMappedTestCase "TestA" "expecto" |]
-        RunPhase = Running gen; LastGeneration = gen
+        RunPhases = Map.ofList ["s", Running gen]; LastGeneration = gen
         AffectedTests = Set.singleton tid
     }
     let s' = LiveTesting.mergeResults s [| result |]
-    TestRunPhase.isRunning s'.RunPhase
+    TestRunPhase.isAnyRunning s'.RunPhases
     |> Expect.isTrue "RunPhase should still be Running after mergeResults"
   }
 ]
@@ -4414,7 +4418,7 @@ let optimisticGutterTests = testList "optimistic gutter transitions" [
                                       TestState = { model0.LiveTesting.TestState with
                                                       Activation = LiveTestingActivation.Active
                                                       DiscoveredTests = tests } } }
-    let model2, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestRunStarted [| tid |])) model1
+    let model2, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestRunStarted ([| tid |], Some "s"))) model1
     let entry =
       model2.LiveTesting.TestState.StatusEntries
       |> Array.tryFind (fun e -> e.TestId = tid)
@@ -4440,7 +4444,7 @@ let optimisticGutterTests = testList "optimistic gutter transitions" [
                                       TestState = { model0.LiveTesting.TestState with
                                                       Activation = LiveTestingActivation.Active
                                                       DiscoveredTests = tests } } }
-    let model2, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestRunStarted [| tidA |])) model1
+    let model2, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestRunStarted ([| tidA |], Some "s"))) model1
     let entryB =
       model2.LiveTesting.TestState.StatusEntries
       |> Array.tryFind (fun e -> e.TestId = tidB)
@@ -4468,7 +4472,7 @@ let optimisticGutterTests = testList "optimistic gutter transitions" [
                                                       DiscoveredTests = tests
                                                       LastResults = Map.ofList [ tid, result ] } } }
     let model2, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestsDiscovered ("test-session", tests))) model1
-    let model3, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestRunStarted [| tid |])) model2
+    let model3, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestRunStarted ([| tid |], Some "s"))) model2
     let entry =
       model3.LiveTesting.TestState.StatusEntries
       |> Array.tryFind (fun e -> e.TestId = tid)
@@ -4497,8 +4501,8 @@ let optimisticGutterTests = testList "optimistic gutter transitions" [
                                       TestState = { model0.LiveTesting.TestState with
                                                       Activation = LiveTestingActivation.Active
                                                       DiscoveredTests = tests } } }
-    let model2, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestRunStarted [| tid |])) model1
-    TestRunPhase.isRunning model2.LiveTesting.TestState.RunPhase
+    let model2, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestRunStarted ([| tid |], Some "s"))) model1
+    TestRunPhase.isAnyRunning model2.LiveTesting.TestState.RunPhases
     |> Expect.isTrue "phase should be Running after TestRunStarted dispatch"
   }
 ]
@@ -4522,7 +4526,7 @@ let sseEnrichmentTests = testList "SSE enrichment round-trip" [
       LiveTestState.empty with
         Activation = LiveTestingActivation.Active
         DiscoveredTests = [| testCase |]
-        RunPhase = phase
+        RunPhases = Map.ofList ["s", phase]
         LastGeneration = gen
         AffectedTests = Set.ofList [tid] }
     let merged = LiveTesting.mergeResults state [| result |]
@@ -4552,7 +4556,7 @@ let sseEnrichmentTests = testList "SSE enrichment round-trip" [
       LiveTestState.empty with
         Activation = LiveTestingActivation.Active
         DiscoveredTests = [| testCase |]
-        RunPhase = editedPhase
+        RunPhases = Map.ofList ["s", editedPhase]
         LastGeneration = gen
         AffectedTests = Set.ofList [tid] }
     let result = {
@@ -4637,7 +4641,7 @@ let elmUpdateStatusRecomputationTests = testList "Elm update StatusEntries recom
 
     let model0 = SageFsModel.initial
     let model1, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestsDiscovered ("test-session", tests))) { model0 with LiveTesting = { model0.LiveTesting with TestState = { model0.LiveTesting.TestState with Activation = LiveTestingActivation.Active } } }
-    let model2, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestRunStarted [| tid |])) model1
+    let model2, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestRunStarted ([| tid |], Some "s"))) model1
 
     model2.LiveTesting.TestState.StatusEntries
     |> Array.tryHead
@@ -4685,7 +4689,7 @@ let elmUpdateStatusRecomputationTests = testList "Elm update StatusEntries recom
 
     let model0 = SageFsModel.initial
     let m1, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestsDiscovered ("test-session", tests))) { model0 with LiveTesting = { model0.LiveTesting with TestState = { model0.LiveTesting.TestState with Activation = LiveTestingActivation.Active } } }
-    let m2, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestRunStarted [| tid1; tid2 |])) m1
+    let m2, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestRunStarted ([| tid1; tid2 |], Some "s"))) m1
     let m3, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestResultsBatch results)) m2
 
     let annotations = LiveTesting.annotationsForFile "editor" m3.LiveTesting.TestState

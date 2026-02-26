@@ -536,6 +536,19 @@ module TestRunPhase =
     | Idle -> false
     | Running _ | RunningButEdited _ -> true
 
+  /// Check if a specific session is running in the per-session RunPhases map.
+  let isSessionRunning (sessionId: string option) (phases: Map<string, TestRunPhase>) : bool =
+    match sessionId with
+    | Some sid ->
+      phases |> Map.tryFind sid
+      |> Option.map isRunning
+      |> Option.defaultValue false
+    | None -> phases |> Map.exists (fun _ p -> isRunning p)
+
+  /// Check if any session is running.
+  let isAnyRunning (phases: Map<string, TestRunPhase>) : bool =
+    phases |> Map.exists (fun _ p -> isRunning p)
+
   let currentGeneration (lastGen: RunGeneration) (phase: TestRunPhase) : RunGeneration =
     match phase with
     | Idle -> lastGen
@@ -656,7 +669,8 @@ type LiveTestState = {
   LastResults: Map<TestId, TestRunResult>
   StatusEntries: TestStatusEntry array
   CoverageAnnotations: CoverageAnnotation array
-  RunPhase: TestRunPhase
+  /// Per-session run phase tracking for concurrent multi-worker execution.
+  RunPhases: Map<string, TestRunPhase>
   LastGeneration: RunGeneration
   History: RunHistory
   AffectedTests: Set<TestId>
@@ -678,7 +692,7 @@ module LiveTestState =
     LastResults = Map.empty
     StatusEntries = Array.empty
     CoverageAnnotations = Array.empty
-    RunPhase = Idle
+    RunPhases = Map.empty
     LastGeneration = RunGeneration.zero
     History = RunHistory.NeverRun
     AffectedTests = Set.empty
@@ -1069,7 +1083,9 @@ module LiveTesting =
               | TestResult.NotRun -> None
             | None -> None
           if Set.contains test.Id state.AffectedTests then
-            if TestRunPhase.isRunning state.RunPhase then
+            let testSession = Map.tryFind test.Id state.TestSessionMap
+            let sessionRunning = TestRunPhase.isSessionRunning testSession state.RunPhases
+            if sessionRunning then
               // Streaming: show result if available, Running if not yet received
               resultStatus |> Option.defaultValue TestRunStatus.Running
             else
@@ -1564,7 +1580,7 @@ module PipelineOrchestrator =
     : PipelineDecision =
     if state.Activation = LiveTestingActivation.Inactive then
       PipelineDecision.Skip "Live testing disabled"
-    elif TestRunPhase.isRunning state.RunPhase then
+    elif TestRunPhase.isAnyRunning state.RunPhases then
       PipelineDecision.Skip "Pipeline already running"
     elif Array.isEmpty state.DiscoveredTests then
       PipelineDecision.TreeSitterOnly
@@ -1690,8 +1706,7 @@ module PipelineEffects =
     (lastTiming: PipelineTiming option)
     (instrumentationMaps: InstrumentationMap array)
     : PipelineEffect option =
-    if state.Activation = LiveTestingActivation.Inactive
-       || TestRunPhase.isRunning state.RunPhase then None
+    if state.Activation = LiveTestingActivation.Inactive then None
     else
       let affected = TestDependencyGraph.findAffected changedSymbols depGraph
       if Array.isEmpty affected then None
@@ -1710,7 +1725,10 @@ module PipelineEffects =
           let targetSession =
             filtered
             |> Array.tryPick (fun tc -> Map.tryFind tc.Id state.TestSessionMap)
-          Some (PipelineEffect.RunAffectedTests(filtered, trigger, tsElapsed, fcsElapsed, targetSession, instrumentationMaps))
+          // Per-session guard: skip only if target session is already running
+          if TestRunPhase.isSessionRunning targetSession state.RunPhases then None
+          else
+            Some (PipelineEffect.RunAffectedTests(filtered, trigger, tsElapsed, fcsElapsed, targetSession, instrumentationMaps))
 
 /// Adaptive debounce configuration.
 type AdaptiveDebounceConfig = {
@@ -1920,12 +1938,12 @@ module LiveTestPipelineState =
     let fcsDelay = int (currentFcsDelay s)
     let db = s.Debounce |> PipelineDebounce.onKeystroke content filePath fcsDelay now
     // When edits arrive while tests are running, mark phase as edited so in-flight results are stale.
-    let ts = { s.TestState with RunPhase = TestRunPhase.onEdit s.TestState.RunPhase }
+    let ts = { s.TestState with RunPhases = s.TestState.RunPhases |> Map.map (fun _ p -> TestRunPhase.onEdit p) }
     { s with Debounce = db; TestState = ts; ActiveFile = Some filePath; LastTrigger = RunTrigger.Keystroke }
 
   let onFileSave (filePath: string) (now: DateTimeOffset) (s: LiveTestPipelineState) =
     let db = s.Debounce |> PipelineDebounce.onFileSave filePath now
-    let ts = { s.TestState with RunPhase = TestRunPhase.onEdit s.TestState.RunPhase }
+    let ts = { s.TestState with RunPhases = s.TestState.RunPhases |> Map.map (fun _ p -> TestRunPhase.onEdit p) }
     { s with Debounce = db; TestState = ts; ActiveFile = Some filePath; LastTrigger = RunTrigger.FileSave }
 
   let onFcsComplete (filePath: string) (refs: SymbolReference list) (s: LiveTestPipelineState) =
@@ -1990,7 +2008,7 @@ module LiveTestPipelineState =
     : PipelineEffect list =
     if Array.isEmpty affectedIds
        || s.TestState.Activation = LiveTestingActivation.Inactive
-       || TestRunPhase.isRunning s.TestState.RunPhase then []
+       || TestRunPhase.isSessionRunning targetSession s.TestState.RunPhases then []
     else
       let affectedIdSet = Set.ofArray affectedIds
       let affectedTests =
@@ -2236,8 +2254,13 @@ module FileAnnotations =
           DisplayName = worst.DisplayName
           Status = worst.Status
           Freshness =
+            let testSession = Map.tryFind worst.TestId state.TestSessionMap
+            let phase =
+              match testSession with
+              | Some sid -> state.RunPhases |> Map.tryFind sid |> Option.defaultValue Idle
+              | None -> if TestRunPhase.isAnyRunning state.RunPhases then RunningButEdited RunGeneration.zero else Idle
             AnnotationFreshness.fromPhaseAndResult
-              state.RunPhase worst.Status })
+              phase worst.Status })
       |> Array.sortBy (fun a -> a.Line)
     let codeLenses =
       fileEntries

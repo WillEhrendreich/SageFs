@@ -1336,7 +1336,7 @@ module McpTools =
       let timing = model.LiveTesting.LastTiming
       let resp = {|
         Enabled = state.Activation = Features.LiveTesting.LiveTestingActivation.Active
-        IsRunning = Features.LiveTesting.TestRunPhase.isRunning state.RunPhase
+        IsRunning = Features.LiveTesting.TestRunPhase.isAnyRunning state.RunPhases
         History = state.History
         Summary = summary
         Timing = timing |> Option.map Features.LiveTesting.PipelineTiming.toStatusBar |> Option.defaultValue "no timing yet"

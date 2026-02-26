@@ -32,7 +32,7 @@ let withActivation (activation: LiveTestingActivation) (model: SageFsModel) =
   { model with LiveTesting = { model.LiveTesting with TestState = ts } }
 
 let withRunPhase (phase: TestRunPhase) (model: SageFsModel) =
-  let ts = { model.LiveTesting.TestState with RunPhase = phase }
+  let ts = { model.LiveTesting.TestState with RunPhases = Map.ofList ["s", phase] }
   { model with LiveTesting = { model.LiveTesting with TestState = ts } }
 
 let withGeneration (gen: int) (model: SageFsModel) =

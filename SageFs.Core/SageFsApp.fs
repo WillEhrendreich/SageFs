@@ -415,10 +415,14 @@ module SageFsUpdate =
           else []
         { model with LiveTesting = lt }, effects
 
-      | SageFsEvent.TestRunStarted testIds ->
+      | SageFsEvent.TestRunStarted (testIds, sessionId) ->
         let lt = recomputeStatuses model.LiveTesting (fun s ->
           let phase, gen = TestRunPhase.startRun s.LastGeneration
-          { s with RunPhase = phase; LastGeneration = gen; AffectedTests = Set.ofArray testIds })
+          let phases =
+            match sessionId with
+            | Some sid -> s.RunPhases |> Map.add sid phase
+            | None -> s.RunPhases
+          { s with LastGeneration = gen; AffectedTests = Set.ofArray testIds; RunPhases = phases })
         { model with LiveTesting = lt }, []
 
       | SageFsEvent.TestResultsBatch results ->
@@ -426,12 +430,13 @@ module SageFsUpdate =
         let lt = recomputeStatuses model.LiveTesting (fun _ -> merged)
         { model with LiveTesting = lt }, []
 
-      | SageFsEvent.TestRunCompleted ->
-        // Transition to Idle unconditionally. If RunningButEdited, the results are stale
-        // but the debounced pipeline (already queued from the keystrokes that caused the edit)
-        // will handle re-triggering. NO immediate retrigger — that causes infinite loops.
+      | SageFsEvent.TestRunCompleted sessionId ->
         let lt = recomputeStatuses model.LiveTesting (fun s ->
-          { s with RunPhase = Features.LiveTesting.TestRunPhase.Idle; AffectedTests = Set.empty })
+          let phases =
+            match sessionId with
+            | Some sid -> s.RunPhases |> Map.add sid Features.LiveTesting.TestRunPhase.Idle
+            | None -> s.RunPhases
+          { s with AffectedTests = Set.empty; RunPhases = phases })
         { model with LiveTesting = lt }, []
 
       | SageFsEvent.LiveTestingEnabled ->
@@ -456,7 +461,13 @@ module SageFsUpdate =
         let testIds = tests |> Array.map (fun t -> t.Id)
         let lt = recomputeStatuses model.LiveTesting (fun s ->
           let phase, gen = TestRunPhase.startRun s.LastGeneration
-          { s with RunPhase = phase; LastGeneration = gen; AffectedTests = Set.ofArray testIds })
+          let sessionIds =
+            testIds
+            |> Array.choose (fun tid -> Map.tryFind tid s.TestSessionMap)
+            |> Array.distinct
+          let phases =
+            sessionIds |> Array.fold (fun m sid -> Map.add sid phase m) s.RunPhases
+          { s with LastGeneration = gen; AffectedTests = Set.ofArray testIds; RunPhases = phases })
         let effects =
           if Array.isEmpty tests || lt.TestState.Activation = Features.LiveTesting.LiveTestingActivation.Inactive then []
           else
@@ -1024,7 +1035,7 @@ module SageFsEffectHandler =
           if Array.isEmpty tests then ()
           else
             let testIds = tests |> Array.map (fun tc -> tc.Id)
-            dispatch (SageFsMsg.Event (SageFsEvent.TestRunStarted testIds))
+            dispatch (SageFsMsg.Event (SageFsEvent.TestRunStarted (testIds, targetSession)))
             let ct = deps.PipelineCancellation.TestRun.next()
             let pipelineSpan = Instrumentation.startSpan Instrumentation.pipelineSource "pipeline.test.execution" ["test.count", box tests.Length; "trigger", box (sprintf "%A" trigger)]
             Async.Start(async {
@@ -1080,7 +1091,7 @@ module SageFsEffectHandler =
                   activity.SetTag("test_count", tests.Length) |> ignore
                   activity.SetTag("trigger", sprintf "%A" trigger) |> ignore
                   activity.SetTag("duration_ms", sw.Elapsed.TotalMilliseconds) |> ignore
-                dispatch (SageFsMsg.Event SageFsEvent.TestRunCompleted)
+                dispatch (SageFsMsg.Event (SageFsEvent.TestRunCompleted targetSession))
                 let timing : Features.LiveTesting.PipelineTiming = {
                   Depth = Features.LiveTesting.PipelineDepth.ThroughExecution(
                             tsElapsed, fcsElapsed, sw.Elapsed)
@@ -1107,7 +1118,7 @@ module SageFsEffectHandler =
                        Timestamp = System.DateTimeOffset.UtcNow }
                      : Features.LiveTesting.TestRunResult))
                 dispatch (SageFsMsg.Event (SageFsEvent.TestResultsBatch errResults))
-                dispatch (SageFsMsg.Event SageFsEvent.TestRunCompleted)
+                dispatch (SageFsMsg.Event (SageFsEvent.TestRunCompleted targetSession))
             }, ct)
       }
 
@@ -1136,5 +1147,5 @@ module SseDedupKey =
          testRunning = testSummary.Running
          testStale = testSummary.Stale
          testGeneration = RunGeneration.value lt.LastGeneration
-         testRunPhase = string lt.RunPhase
+         testRunPhase = lt.RunPhases |> Map.toList |> List.map (fun (k,v) -> sprintf "%s:%s" k (string v)) |> String.concat ","
          testEnabled = lt.Activation = LiveTestingActivation.Active |})

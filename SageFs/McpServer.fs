@@ -506,9 +506,9 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                     body.WriteAsync(summaryBytes).AsTask()
                     |> fun t -> t.ContinueWith(fun (_: Task) -> body.FlushAsync()) |> ignore
                     let freshness =
-                      match lt.RunPhase with
-                      | TestRunPhase.RunningButEdited _ -> ResultFreshness.StaleCodeEdited
-                      | _ -> ResultFreshness.Fresh
+                      if lt.RunPhases |> Map.exists (fun _ p -> match p with TestRunPhase.RunningButEdited _ -> true | _ -> false) then
+                        ResultFreshness.StaleCodeEdited
+                      else ResultFreshness.Fresh
                     let payload =
                       let completion =
                         TestResultsBatchPayload.deriveCompletion
@@ -1016,7 +1016,7 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                         |> Option.defaultValue ""
                       let sessionEntries =
                         LiveTestState.statusEntriesForSession activeId lt
-                      if sessionEntries.Length > 0 || TestRunPhase.isRunning lt.RunPhase then
+                      if sessionEntries.Length > 0 || TestRunPhase.isAnyRunning lt.RunPhases then
                         let s = SageFs.Features.LiveTesting.TestSummary.fromStatuses
                                   lt.Activation (sessionEntries |> Array.map (fun e -> e.Status))
                         serverTracker.AccumulateEvent(
@@ -1024,16 +1024,15 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                         // Throttle SSE broadcasts to avoid flooding clients during streaming
                         let now = System.Diagnostics.Stopwatch.GetTimestamp()
                         let elapsedMs = (now - lastTestSsePush) * 1000L / System.Diagnostics.Stopwatch.Frequency
-                        let isRunComplete = not (TestRunPhase.isRunning lt.RunPhase)
+                        let isRunComplete = not (TestRunPhase.isAnyRunning lt.RunPhases)
                         if elapsedMs >= testSseThrottleMs || isRunComplete then
                           lastTestSsePush <- now
                           testEventBroadcast.Trigger(
                             SageFs.SseWriter.formatTestSummaryEvent sseJsonOpts s)
                           let freshness =
-                            match lt.RunPhase with
-                            | SageFs.Features.LiveTesting.TestRunPhase.RunningButEdited _ ->
+                            if lt.RunPhases |> Map.exists (fun _ p -> match p with SageFs.Features.LiveTesting.TestRunPhase.RunningButEdited _ -> true | _ -> false) then
                               SageFs.Features.LiveTesting.ResultFreshness.StaleCodeEdited
-                            | _ -> SageFs.Features.LiveTesting.ResultFreshness.Fresh
+                            else SageFs.Features.LiveTesting.ResultFreshness.Fresh
                           let payload =
                             let completion =
                               SageFs.Features.LiveTesting.TestResultsBatchPayload.deriveCompletion
