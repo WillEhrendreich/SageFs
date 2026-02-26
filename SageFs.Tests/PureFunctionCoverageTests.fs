@@ -14,6 +14,7 @@ open SageFs.FrameDiff
 open SageFs.Features.Replay
 open SageFs.Features.Events
 open SageFs.Features.Diagnostics
+open SageFs
 open System
 open System.Text.Json
 
@@ -932,7 +933,7 @@ let sessionReplayTests = testList "SessionReplayState.applyEvent" [
   test "SessionStarted sets WarmingUp and StartedAt" {
     let evt = SessionStarted {| Config = Map.empty; StartedAt = replayTs |}
     let s = SessionReplayState.applyEvent replayTs SessionReplayState.empty evt
-    s.Status |> Expect.equal "status" WarmingUp
+    s.Status |> Expect.equal "status" ReplayStatus.WarmingUp
     s.StartedAt |> Expect.equal "started" (Some replayTs)
     s.LastActivity |> Expect.equal "activity" (Some replayTs)
   }
@@ -948,28 +949,28 @@ let sessionReplayTests = testList "SessionReplayState.applyEvent" [
   }
   test "SessionReady sets Ready" {
     let s = SessionReplayState.applyEvent replayTs SessionReplayState.empty SessionReady
-    s.Status |> Expect.equal "status" Ready
+    s.Status |> Expect.equal "status" ReplayStatus.Ready
   }
   test "SessionFaulted sets Faulted with error" {
     let evt = SessionFaulted {| Error = "boom"; StackTrace = None |}
     let s = SessionReplayState.applyEvent replayTs SessionReplayState.empty evt
-    s.Status |> Expect.equal "status" (Faulted "boom")
+    s.Status |> Expect.equal "status" (ReplayStatus.Faulted "boom")
   }
   test "SessionReset increments ResetCount and sets WarmingUp" {
     let s = SessionReplayState.applyEvent replayTs SessionReplayState.empty SessionReset
-    s.Status |> Expect.equal "status" WarmingUp
+    s.Status |> Expect.equal "status" ReplayStatus.WarmingUp
     s.ResetCount |> Expect.equal "count" 1
   }
   test "SessionHardReset increments HardResetCount" {
     let evt = SessionHardReset {| Rebuild = true |}
     let s = SessionReplayState.applyEvent replayTs SessionReplayState.empty evt
     s.HardResetCount |> Expect.equal "count" 1
-    s.Status |> Expect.equal "status" WarmingUp
+    s.Status |> Expect.equal "status" ReplayStatus.WarmingUp
   }
   test "EvalRequested sets Evaluating" {
     let evt = EvalRequested {| Code = "1+1"; Source = EventSource.Console |}
     let s = SessionReplayState.applyEvent replayTs SessionReplayState.empty evt
-    s.Status |> Expect.equal "status" Evaluating
+    s.Status |> Expect.equal "status" ReplayStatus.Evaluating
   }
   test "EvalCompleted increments count and records history" {
     let evt = EvalCompleted {| Code = "1+1"; Result = "2"; TypeSignature = Some "int"; Duration = TimeSpan.FromMilliseconds 50.0 |}
@@ -977,14 +978,14 @@ let sessionReplayTests = testList "SessionReplayState.applyEvent" [
     s.EvalCount |> Expect.equal "count" 1
     s.LastEvalResult |> Expect.equal "result" (Some "2")
     s.EvalHistory |> Expect.hasLength "history" 1
-    s.Status |> Expect.equal "status" Ready
+    s.Status |> Expect.equal "status" ReplayStatus.Ready
   }
   test "EvalFailed increments failed count and stores diagnostics" {
     let evt = EvalFailed {| Code = "bad"; Error = "oops"; Diagnostics = [mkDiag DiagnosticSeverity.Error "oops"] |}
     let s = SessionReplayState.applyEvent replayTs SessionReplayState.empty evt
     s.FailedEvalCount |> Expect.equal "count" 1
     s.LastDiagnostics |> Expect.hasLength "diags" 1
-    s.Status |> Expect.equal "status" Ready
+    s.Status |> Expect.equal "status" ReplayStatus.Ready
   }
   test "DiagnosticsChecked stores diagnostics" {
     let evt = DiagnosticsChecked {| Code = "x"; Diagnostics = [mkDiag DiagnosticSeverity.Warning "warn"]; Source = EventSource.Console |}
@@ -1000,7 +1001,7 @@ let sessionReplayTests = testList "SessionReplayState.applyEvent" [
     let evt = ScriptLoaded {| FilePath = "test.fsx"; StatementCount = 3; Source = EventSource.Console |}
     let s = SessionReplayState.applyEvent replayTs SessionReplayState.empty evt
     s.LastActivity |> Expect.equal "activity" (Some replayTs)
-    s.Status |> Expect.equal "status unchanged" NotStarted
+    s.Status |> Expect.equal "status unchanged" ReplayStatus.NotStarted
   }
   test "ScriptLoadFailed updates activity only" {
     let evt = ScriptLoadFailed {| FilePath = "bad.fsx"; Error = "parse error" |}
@@ -1081,7 +1082,7 @@ let replayStreamIntegrationTests = testList "replayStream integration" [
       replayTs.AddSeconds(8.0), SessionReady
     ]
     let final = SessionReplayState.replayStream events
-    final.Status |> Expect.equal "status" Ready
+    final.Status |> Expect.equal "status" ReplayStatus.Ready
     final.EvalCount |> Expect.equal "evals" 1
     final.FailedEvalCount |> Expect.equal "failed" 1
     final.ResetCount |> Expect.equal "resets" 1
@@ -1090,6 +1091,487 @@ let replayStreamIntegrationTests = testList "replayStream integration" [
     final.StartedAt |> Expect.equal "started" (Some replayTs)
     final.LastActivity |> Expect.isSome "has last activity"
   }
+]
+
+// ═══════════════════════════════════════════════════════════
+// ValidatedBuffer — cursor invariants across all operations
+// ═══════════════════════════════════════════════════════════
+
+let validatedBufferTests = testList "ValidatedBuffer" [
+  let pos l c = { Line = l; Column = c } : CursorPosition
+  let ok lines l c = ValidatedBuffer.create lines (pos l c) |> Result.defaultWith (sprintf "%A" >> failwith)
+  testList "create" [
+    test "empty lines returns EmptyLines error" {
+      ValidatedBuffer.create [] (pos 0 0)
+      |> Expect.isError "should fail on empty"
+    }
+    test "valid input succeeds" {
+      ValidatedBuffer.create ["hello"] (pos 0 3)
+      |> Expect.isOk "should succeed"
+    }
+    test "out-of-bounds cursor returns CursorOutOfBounds" {
+      ValidatedBuffer.create ["hi"] (pos 0 5)
+      |> Expect.isError "cursor past line end"
+    }
+    test "negative line returns error" {
+      ValidatedBuffer.create ["hi"] (pos -1 0)
+      |> Expect.isError "negative line"
+    }
+    test "cursor at end of line is valid" {
+      ValidatedBuffer.create ["abc"] (pos 0 3)
+      |> Expect.isOk "cursor at length"
+    }
+  ]
+  testList "setCursor clamping" [
+    test "setCursor clamps line to bounds" {
+      let vb = ok ["ab"; "cd"] 0 0
+      let vb' = ValidatedBuffer.setCursor (pos 99 0) vb
+      vb'.Cursor.Line |> Expect.equal "clamped to last line" 1
+    }
+    test "setCursor clamps column to line length" {
+      let vb = ok ["ab"] 0 0
+      let vb' = ValidatedBuffer.setCursor (pos 0 99) vb
+      vb'.Cursor.Column |> Expect.equal "clamped to line length" 2
+    }
+    test "setCursor clamps negative to zero" {
+      let vb = ok ["ab"] 0 0
+      let vb' = ValidatedBuffer.setCursor (pos -5 -3) vb
+      vb'.Cursor.Line |> Expect.equal "line clamped" 0
+      vb'.Cursor.Column |> Expect.equal "col clamped" 0
+    }
+    testProperty "setCursor is idempotent" <| fun (line: int) (col: int) ->
+      let vb = ok ["hello"; "world"] 0 0
+      let once = ValidatedBuffer.setCursor (pos line col) vb
+      let twice = ValidatedBuffer.setCursor once.Cursor once
+      once.Cursor.Line = twice.Cursor.Line && once.Cursor.Column = twice.Cursor.Column
+  ]
+  testList "insertChar" [
+    test "inserts at cursor and advances" {
+      let vb = ok ["ac"] 0 1
+      let vb' = ValidatedBuffer.insertChar 'b' vb
+      vb'.Lines.[0] |> Expect.equal "inserted" "abc"
+      vb'.Cursor.Column |> Expect.equal "advanced" 2
+    }
+    test "inserts at beginning" {
+      let vb = ok ["bc"] 0 0
+      let vb' = ValidatedBuffer.insertChar 'a' vb
+      vb'.Lines.[0] |> Expect.equal "prepended" "abc"
+    }
+    test "inserts at end" {
+      let vb = ok ["ab"] 0 2
+      let vb' = ValidatedBuffer.insertChar 'c' vb
+      vb'.Lines.[0] |> Expect.equal "appended" "abc"
+    }
+  ]
+  testList "deleteBackward" [
+    test "at (0,0) is no-op" {
+      let vb = ok ["abc"] 0 0
+      let vb' = ValidatedBuffer.deleteBackward vb
+      vb'.Lines.[0] |> Expect.equal "unchanged" "abc"
+      vb'.Cursor.Column |> Expect.equal "still 0" 0
+    }
+    test "mid-line deletes character before cursor" {
+      let vb = ok ["abc"] 0 2
+      let vb' = ValidatedBuffer.deleteBackward vb
+      vb'.Lines.[0] |> Expect.equal "deleted b" "ac"
+      vb'.Cursor.Column |> Expect.equal "moved back" 1
+    }
+    test "at col 0 joins with previous line" {
+      let vb = ok ["ab"; "cd"] 1 0
+      let vb' = ValidatedBuffer.deleteBackward vb
+      vb'.Lines |> Expect.hasLength "merged" 1
+      vb'.Lines.[0] |> Expect.equal "joined" "abcd"
+      vb'.Cursor.Column |> Expect.equal "at join point" 2
+    }
+  ]
+  testList "newLine" [
+    test "splits line at cursor" {
+      let vb = ok ["abcd"] 0 2
+      let vb' = ValidatedBuffer.newLine vb
+      vb'.Lines |> Expect.hasLength "two lines" 2
+      vb'.Lines.[0] |> Expect.equal "before" "ab"
+      vb'.Lines.[1] |> Expect.equal "after" "cd"
+    }
+    test "at col 0 inserts empty line before" {
+      let vb = ok ["abc"] 0 0
+      let vb' = ValidatedBuffer.newLine vb
+      vb'.Lines.[0] |> Expect.equal "empty before" ""
+      vb'.Lines.[1] |> Expect.equal "original" "abc"
+    }
+    test "at end of line inserts empty line after" {
+      let vb = ok ["abc"] 0 3
+      let vb' = ValidatedBuffer.newLine vb
+      vb'.Lines.[0] |> Expect.equal "original" "abc"
+      vb'.Lines.[1] |> Expect.equal "empty after" ""
+    }
+  ]
+  testList "moveCursor" [
+    test "Right advances column" {
+      let vb = ok ["abc"] 0 0
+      let vb' = ValidatedBuffer.moveCursor Direction.Right vb
+      vb'.Cursor.Column |> Expect.equal "moved right" 1
+    }
+    test "Left decrements column" {
+      let vb = ok ["abc"] 0 2
+      let vb' = ValidatedBuffer.moveCursor Direction.Left vb
+      vb'.Cursor.Column |> Expect.equal "moved left" 1
+    }
+    test "Down advances line" {
+      let vb = ok ["ab"; "cd"] 0 0
+      let vb' = ValidatedBuffer.moveCursor Direction.Down vb
+      vb'.Cursor.Line |> Expect.equal "moved down" 1
+    }
+    test "Up decrements line" {
+      let vb = ok ["ab"; "cd"] 1 0
+      let vb' = ValidatedBuffer.moveCursor Direction.Up vb
+      vb'.Cursor.Line |> Expect.equal "moved up" 0
+    }
+    test "Right at end of line wraps to next" {
+      let vb = ok ["ab"; "cd"] 0 2
+      let vb' = ValidatedBuffer.moveCursor Direction.Right vb
+      vb'.Cursor.Line |> Expect.equal "next line" 1
+      vb'.Cursor.Column |> Expect.equal "start of line" 0
+    }
+    test "Left at start wraps to previous line end" {
+      let vb = ok ["ab"; "cd"] 1 0
+      let vb' = ValidatedBuffer.moveCursor Direction.Left vb
+      vb'.Cursor.Line |> Expect.equal "prev line" 0
+      vb'.Cursor.Column |> Expect.equal "end of prev" 2
+    }
+    test "Down at last line is no-op" {
+      let vb = ok ["ab"] 0 0
+      let vb' = ValidatedBuffer.moveCursor Direction.Down vb
+      vb'.Cursor.Line |> Expect.equal "still 0" 0
+    }
+    test "Up at first line is no-op" {
+      let vb = ok ["ab"] 0 1
+      let vb' = ValidatedBuffer.moveCursor Direction.Up vb
+      vb'.Cursor.Line |> Expect.equal "still 0" 0
+    }
+  ]
+  testList "properties" [
+    testProperty "random ops preserve cursor invariant" <| fun (ops: int list) ->
+      let mutable vb = ok ["hello"; "world"] 0 0
+      for op in ops |> List.truncate 20 do
+        vb <-
+          match abs op % 5 with
+          | 0 -> ValidatedBuffer.insertChar 'x' vb
+          | 1 -> ValidatedBuffer.deleteBackward vb
+          | 2 -> ValidatedBuffer.newLine vb
+          | 3 -> ValidatedBuffer.moveCursor Direction.Right vb
+          | _ -> ValidatedBuffer.moveCursor Direction.Down vb
+      vb.Cursor.Line >= 0
+      && vb.Cursor.Line < vb.Lines.Length
+      && vb.Cursor.Column >= 0
+      && vb.Cursor.Column <= vb.Lines.[vb.Cursor.Line].Length
+  ]
+]
+
+// ═══════════════════════════════════════════════════════════
+// Rect — layout geometry, area conservation
+// ═══════════════════════════════════════════════════════════
+
+let rectTests = testList "Rect" [
+  testList "create" [
+    test "basic create" {
+      let r = Rect.create 1 2 10 20
+      r.Row |> Expect.equal "row" 1
+      r.Col |> Expect.equal "col" 2
+      r.Width |> Expect.equal "w" 10
+      r.Height |> Expect.equal "h" 20
+    }
+    test "negative values clamped to 0" {
+      let r = Rect.create -1 -2 -3 -4
+      r.Row |> Expect.equal "row" 0
+      r.Col |> Expect.equal "col" 0
+      r.Width |> Expect.equal "w" 0
+      r.Height |> Expect.equal "h" 0
+    }
+  ]
+  testList "isEmpty" [
+    test "zero width is empty" {
+      Rect.create 0 0 0 10 |> Rect.isEmpty |> Expect.isTrue "w=0"
+    }
+    test "zero height is empty" {
+      Rect.create 0 0 10 0 |> Rect.isEmpty |> Expect.isTrue "h=0"
+    }
+    test "positive dims is not empty" {
+      Rect.create 0 0 5 5 |> Rect.isEmpty |> Expect.isFalse "has area"
+    }
+  ]
+  testList "splitH" [
+    test "split at valid position" {
+      let top, bot = Rect.create 0 0 10 10 |> Rect.splitH 3
+      top.Height |> Expect.equal "top h" 3
+      bot.Height |> Expect.equal "bot h" 7
+      bot.Row |> Expect.equal "bot row" 3
+    }
+    test "split at 0 gives empty top" {
+      let top, _ = Rect.create 0 0 10 10 |> Rect.splitH 0
+      top |> Rect.isEmpty |> Expect.isTrue "top is empty"
+    }
+    test "split past height gives empty bottom" {
+      let _, bot = Rect.create 0 0 10 10 |> Rect.splitH 15
+      bot |> Rect.isEmpty |> Expect.isTrue "bot is empty"
+    }
+    test "split preserves width" {
+      let top, bot = Rect.create 5 5 20 10 |> Rect.splitH 4
+      top.Width |> Expect.equal "top w" 20
+      bot.Width |> Expect.equal "bot w" 20
+    }
+    test "split preserves col offset" {
+      let top, bot = Rect.create 5 5 20 10 |> Rect.splitH 4
+      top.Col |> Expect.equal "top col" 5
+      bot.Col |> Expect.equal "bot col" 5
+    }
+  ]
+  testList "splitV" [
+    test "split at valid position" {
+      let left, right = Rect.create 0 0 10 10 |> Rect.splitV 4
+      left.Width |> Expect.equal "left w" 4
+      right.Width |> Expect.equal "right w" 6
+      right.Col |> Expect.equal "right col" 4
+    }
+    test "split at 0 gives empty left" {
+      let left, _ = Rect.create 0 0 10 10 |> Rect.splitV 0
+      left |> Rect.isEmpty |> Expect.isTrue "left is empty"
+    }
+    test "split past width gives empty right" {
+      let _, right = Rect.create 0 0 10 10 |> Rect.splitV 15
+      right |> Rect.isEmpty |> Expect.isTrue "right is empty"
+    }
+  ]
+  testList "splitHProp and splitVProp" [
+    test "splitHProp 50% gives equal halves" {
+      let top, bot = Rect.create 0 0 10 10 |> Rect.splitHProp 0.5
+      top.Height |> Expect.equal "top h" 5
+      bot.Height |> Expect.equal "bot h" 5
+    }
+    test "splitVProp 50% gives equal halves" {
+      let left, right = Rect.create 0 0 10 10 |> Rect.splitVProp 0.5
+      left.Width |> Expect.equal "left w" 5
+      right.Width |> Expect.equal "right w" 5
+    }
+  ]
+  testList "inset" [
+    test "inset reduces all edges" {
+      let r = Rect.create 0 0 20 20 |> Rect.inset 2
+      r.Row |> Expect.equal "row" 2
+      r.Col |> Expect.equal "col" 2
+      r.Width |> Expect.equal "w" 16
+      r.Height |> Expect.equal "h" 16
+    }
+    test "inset larger than half clamps to empty" {
+      let r = Rect.create 0 0 4 4 |> Rect.inset 5
+      r |> Rect.isEmpty |> Expect.isTrue "over-inset is empty"
+    }
+  ]
+  testList "properties" [
+    testProperty "splitH area conservation" <| fun (w: PositiveInt) (h: PositiveInt) (at: PositiveInt) ->
+      let r = Rect.create 0 0 w.Get h.Get
+      let top, bot = Rect.splitH (at.Get % (h.Get + 1)) r
+      top.Width * top.Height + bot.Width * bot.Height = r.Width * r.Height
+  ]
+]
+
+// ═══════════════════════════════════════════════════════════
+// RestartPolicy — supervision correctness
+// ═══════════════════════════════════════════════════════════
+
+let restartPolicyTests = testList "RestartPolicy" [
+  let policy : RestartPolicy.Policy = {
+    MaxRestarts = 3
+    BackoffBase = TimeSpan.FromSeconds 1.0
+    BackoffMax = TimeSpan.FromSeconds 30.0
+    ResetWindow = TimeSpan.FromMinutes 1.0
+  }
+  testList "nextBackoff" [
+    test "count 0 returns base delay" {
+      let d = RestartPolicy.nextBackoff policy 0
+      d |> Expect.equal "base" policy.BackoffBase
+    }
+    test "exponential growth" {
+      let d1 = RestartPolicy.nextBackoff policy 1
+      let d2 = RestartPolicy.nextBackoff policy 2
+      (d2, d1) |> Expect.isGreaterThan "grows"
+    }
+    test "capped at max" {
+      let d = RestartPolicy.nextBackoff policy 20
+      (d, policy.BackoffMax) |> Expect.isLessThanOrEqual "capped"
+    }
+    test "large count does not overflow" {
+      let bigPolicy = { policy with MaxRestarts = 100 }
+      let d = RestartPolicy.nextBackoff bigPolicy 50
+      (d, TimeSpan.Zero) |> Expect.isGreaterThan "positive"
+    }
+  ]
+  testList "decide" [
+    let now = DateTime(2024, 1, 1, 12, 0, 0)
+    test "fresh state allows restart" {
+      match RestartPolicy.decide policy RestartPolicy.emptyState now with
+      | RestartPolicy.Decision.Restart _, _ -> ()
+      | RestartPolicy.Decision.GiveUp e, _ -> failwith (sprintf "expected restart, got %A" e)
+    }
+    test "within limit allows restart" {
+      let state = { RestartPolicy.emptyState with RestartCount = 2; WindowStart = Some now }
+      match RestartPolicy.decide policy state now with
+      | RestartPolicy.Decision.Restart _, _ -> ()
+      | RestartPolicy.Decision.GiveUp e, _ -> failwith (sprintf "expected restart, got %A" e)
+    }
+    test "at limit gives up" {
+      let state = { RestartPolicy.emptyState with RestartCount = 3; WindowStart = Some now }
+      match RestartPolicy.decide policy state now with
+      | RestartPolicy.Decision.GiveUp _, _ -> ()
+      | RestartPolicy.Decision.Restart _, _ -> failwith "expected give up at limit"
+    }
+    test "past limit gives up" {
+      let state = { RestartPolicy.emptyState with RestartCount = 5; WindowStart = Some now }
+      match RestartPolicy.decide policy state now with
+      | RestartPolicy.Decision.GiveUp _, _ -> ()
+      | RestartPolicy.Decision.Restart _, _ -> failwith "expected give up past limit"
+    }
+    test "window expiry resets count" {
+      let oldStart = now.AddMinutes(-2.0)
+      let state = { RestartPolicy.emptyState with RestartCount = 3; WindowStart = Some oldStart }
+      match RestartPolicy.decide policy state now with
+      | RestartPolicy.Decision.Restart _, newState ->
+        newState.RestartCount |> Expect.equal "reset count" 1
+      | RestartPolicy.Decision.GiveUp e, _ -> failwith (sprintf "expected reset, got %A" e)
+    }
+    test "window boundary is strict greater-than" {
+      let exactBoundary = now.AddMinutes(-1.0)
+      let state = { RestartPolicy.emptyState with RestartCount = 3; WindowStart = Some exactBoundary }
+      match RestartPolicy.decide policy state now with
+      | RestartPolicy.Decision.GiveUp _, _ -> ()
+      | RestartPolicy.Decision.Restart _, _ -> failwith "exactly at boundary should NOT reset"
+    }
+    test "decide increments count" {
+      let state = { RestartPolicy.emptyState with RestartCount = 1; WindowStart = Some now }
+      match RestartPolicy.decide policy state now with
+      | RestartPolicy.Decision.Restart _, newState ->
+        newState.RestartCount |> Expect.equal "incremented" 2
+      | RestartPolicy.Decision.GiveUp e, _ -> failwith (sprintf "expected ok, got %A" e)
+    }
+  ]
+]
+
+// ═══════════════════════════════════════════════════════════
+// CellGrid — rendering oracle: toText, toTextTrimmed, toTextRange
+// ═══════════════════════════════════════════════════════════
+
+let cellGridTests = testList "CellGrid" [
+  testList "toText" [
+    test "empty grid returns empty string" {
+      let grid = CellGrid.create 0 0
+      CellGrid.toText grid |> Expect.equal "empty" ""
+    }
+    test "known pattern produces exact string" {
+      let grid = CellGrid.create 2 3
+      CellGrid.set grid 0 0 { Cell.empty with Char = 'A' }
+      CellGrid.set grid 0 1 { Cell.empty with Char = 'B' }
+      CellGrid.set grid 0 2 { Cell.empty with Char = 'C' }
+      CellGrid.set grid 1 0 { Cell.empty with Char = 'D' }
+      CellGrid.set grid 1 1 { Cell.empty with Char = 'E' }
+      CellGrid.set grid 1 2 { Cell.empty with Char = 'F' }
+      let text = CellGrid.toText grid
+      text |> Expect.equal "grid text" "ABC\r\nDEF"
+    }
+  ]
+  testList "toTextTrimmed" [
+    test "strips trailing spaces" {
+      let grid = CellGrid.create 1 5
+      CellGrid.set grid 0 0 { Cell.empty with Char = 'H' }
+      CellGrid.set grid 0 1 { Cell.empty with Char = 'i' }
+      let text = CellGrid.toTextTrimmed grid
+      text |> Expect.equal "trimmed" "Hi"
+    }
+    test "preserves leading spaces" {
+      let grid = CellGrid.create 1 4
+      CellGrid.set grid 0 1 { Cell.empty with Char = 'X' }
+      let text = CellGrid.toTextTrimmed grid
+      text |> Expect.stringContains "has leading space" " X"
+    }
+    test "all-space row becomes empty" {
+      let grid = CellGrid.create 1 5
+      let text = CellGrid.toTextTrimmed grid
+      text.Trim() |> Expect.equal "all spaces trimmed" ""
+    }
+  ]
+  testList "toTextRange" [
+    test "extracts subregion" {
+      let grid = CellGrid.create 3 4
+      for r in 0..2 do
+        for c in 0..3 do
+          CellGrid.set grid r c { Cell.empty with Char = char (65 + r * 4 + c) }
+      let text = CellGrid.toTextRange grid 1 1 2 2
+      text |> Expect.stringContains "has F" "F"
+    }
+    test "clamps OOB coordinates" {
+      let grid = CellGrid.create 2 3
+      CellGrid.set grid 0 0 { Cell.empty with Char = 'X' }
+      let text = CellGrid.toTextRange grid 0 0 99 99
+      text |> Expect.stringContains "has X" "X"
+    }
+    test "inverted start/end is normalized" {
+      let grid = CellGrid.create 2 3
+      CellGrid.set grid 0 0 { Cell.empty with Char = 'A' }
+      CellGrid.set grid 1 2 { Cell.empty with Char = 'Z' }
+      let text = CellGrid.toTextRange grid 1 2 0 0
+      text |> Expect.stringContains "has A" "A"
+    }
+  ]
+]
+
+// ═══════════════════════════════════════════════════════════
+// Theme — color parsing and token-to-color mapping
+// ═══════════════════════════════════════════════════════════
+
+let themeTests = testList "Theme" [
+  testList "hexToRgb" [
+    test "red" { Theme.hexToRgb "#FF0000" |> Expect.equal "red" 0x00FF0000u }
+    test "green" { Theme.hexToRgb "#00FF00" |> Expect.equal "green" 0x0000FF00u }
+    test "blue" { Theme.hexToRgb "#0000FF" |> Expect.equal "blue" 0x000000FFu }
+    test "white" { Theme.hexToRgb "#FFFFFF" |> Expect.equal "white" 0x00FFFFFFu }
+    test "black" { Theme.hexToRgb "#000000" |> Expect.equal "black" 0u }
+    test "invalid returns 0" { Theme.hexToRgb "invalid" |> Expect.equal "fallback" 0u }
+    test "short hex returns 0" { Theme.hexToRgb "#FFF" |> Expect.equal "too short" 0u }
+    test "empty returns 0" { Theme.hexToRgb "" |> Expect.equal "empty" 0u }
+  ]
+  testList "tokenColorOfCapture" [
+    let theme = Theme.defaults
+    test "keyword maps to SynKeyword" {
+      Theme.tokenColorOfCapture theme "keyword.control"
+      |> Expect.equal "keyword" theme.SynKeyword
+    }
+    test "string maps to SynString" {
+      Theme.tokenColorOfCapture theme "string.quoted"
+      |> Expect.equal "string" theme.SynString
+    }
+    test "comment maps to SynComment" {
+      Theme.tokenColorOfCapture theme "comment.line"
+      |> Expect.equal "comment" theme.SynComment
+    }
+    test "variable.parameter beats generic variable" {
+      Theme.tokenColorOfCapture theme "variable.parameter"
+      |> Expect.equal "param" theme.SynVariable
+    }
+    test "variable.member maps to SynProperty" {
+      Theme.tokenColorOfCapture theme "variable.member"
+      |> Expect.equal "member" theme.SynProperty
+    }
+    test "generic variable maps to SynVariable" {
+      Theme.tokenColorOfCapture theme "variable"
+      |> Expect.equal "var" theme.SynVariable
+    }
+    test "unknown capture maps to FgDefault" {
+      Theme.tokenColorOfCapture theme "totally.unknown"
+      |> Expect.equal "default" theme.FgDefault
+    }
+    test "spell maps to FgDefault" {
+      Theme.tokenColorOfCapture theme "spell"
+      |> Expect.equal "spell" theme.FgDefault
+    }
+  ]
 ]
 
 [<Tests>]
@@ -1180,5 +1662,12 @@ let allPureFunctionCoverageTests = testList "Pure function coverage" [
       daemonReplayTests
       replayStreamIntegrationTests
     ]
+  ]
+  testList "ValidatedBuffer, Rect, RestartPolicy, CellGrid, Theme" [
+    validatedBufferTests
+    rectTests
+    restartPolicyTests
+    cellGridTests
+    themeTests
   ]
 ]
