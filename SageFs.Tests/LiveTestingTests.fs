@@ -827,7 +827,7 @@ let elmIntegrationTests = testList "LiveTesting Elm Integration" [
           Category = TestCategory.Unit }
       let model', _ =
         SageFsUpdate.update
-          (SageFsMsg.Event (SageFsEvent.TestsDiscovered [| tc |]))
+          (SageFsMsg.Event (SageFsEvent.TestsDiscovered ("test-session", [| tc |])))
           SageFsModel.initial
       model'.LiveTesting.TestState.DiscoveredTests.Length
       |> Expect.equal "should have 1 test" 1
@@ -843,7 +843,7 @@ let elmIntegrationTests = testList "LiveTesting Elm Integration" [
       Set.contains tid model'.LiveTesting.TestState.AffectedTests
       |> Expect.isTrue "should contain test id"
     }
-    test "TestResultsBatch merges results and clears RunPhase" {
+    test "TestResultsBatch merges results but keeps RunPhase (cleared by TestRunCompleted)" {
       let gen = RunGeneration.next RunGeneration.zero
       let m =
         { SageFsModel.initial with
@@ -858,7 +858,7 @@ let elmIntegrationTests = testList "LiveTesting Elm Integration" [
         SageFsUpdate.update
           (SageFsMsg.Event (SageFsEvent.TestResultsBatch [| r |])) m
       TestRunPhase.isRunning model'.LiveTesting.TestState.RunPhase
-      |> Expect.isFalse "should not be running"
+      |> Expect.isTrue "should still be running (streaming — TestRunCompleted clears phase)"
       Map.containsKey tid model'.LiveTesting.TestState.LastResults
       |> Expect.isTrue "should have result"
     }
@@ -2505,7 +2505,7 @@ let pipelineEffectsTests = testList "PipelineEffects" [
         TransitiveCoverage = Map.ofList [ "Module.add", [| tc1.Id |] ]
     }
     match PipelineEffects.afterTypeCheck ["Module.add"] RunTrigger.Keystroke graph state None with
-    | Some (PipelineEffect.RunAffectedTests (tests, trigger, _tsElapsed, _fcsElapsed)) ->
+    | Some (PipelineEffect.RunAffectedTests (tests, trigger, _tsElapsed, _fcsElapsed, _sessionId)) ->
       tests.Length |> Expect.equal "one test" 1
       trigger |> Expect.equal "keystroke trigger" RunTrigger.Keystroke
     | other -> failtestf "expected Some RunAffectedTests, got %A" other
@@ -2579,7 +2579,7 @@ let pipelineEffectsTests = testList "PipelineEffects" [
         TransitiveCoverage = Map.ofList [ "Module.add", [| tc1.Id; tc2.Id |] ]
     }
     match PipelineEffects.afterTypeCheck ["Module.add"] RunTrigger.Keystroke graph state None with
-    | Some (PipelineEffect.RunAffectedTests (tests, _, _, _)) ->
+    | Some (PipelineEffect.RunAffectedTests (tests, _, _, _, _)) ->
       tests.Length |> Expect.equal "only unit test" 1
       tests.[0].Id |> Expect.equal "unit test id" tc1.Id
     | other -> failtestf "expected Some RunAffectedTests, got %A" other
@@ -2792,10 +2792,10 @@ let effectDispatchTests = testList "EffectDispatcher" [
     let tests = [| { Id = TestId.create "t1" "expecto"; FullName = "t1"; DisplayName = "t1"
                      Origin = TestOrigin.ReflectionOnly; Labels = []; Framework = "expecto"
                      Category = TestCategory.Unit } |]
-    EffectDispatcher.dispatch log (PipelineEffect.RunAffectedTests(tests, RunTrigger.Keystroke, System.TimeSpan.Zero, System.TimeSpan.Zero))
+    EffectDispatcher.dispatch log (PipelineEffect.RunAffectedTests(tests, RunTrigger.Keystroke, System.TimeSpan.Zero, System.TimeSpan.Zero, None))
     log.Effects |> Expect.hasLength "one effect" 1
     match log.Effects.[0] with
-    | PipelineEffect.RunAffectedTests(tcs, trigger, _, _) ->
+    | PipelineEffect.RunAffectedTests(tcs, trigger, _, _, _) ->
       tcs |> Expect.hasLength "one test" 1
       trigger |> Expect.equal "trigger" RunTrigger.Keystroke
     | _ -> failtest "wrong effect type"
@@ -2877,7 +2877,7 @@ let endToEndPipelineTests = testList "End-to-end Pipeline" [
     let runEffect = PipelineEffects.afterTypeCheck s2.ChangedSymbols RunTrigger.Keystroke s2.DepGraph s2.TestState None
     runEffect |> Expect.isSome "afterTypeCheck produces RunAffectedTests"
     match runEffect.Value with
-    | PipelineEffect.RunAffectedTests (tests, trigger, _, _) ->
+    | PipelineEffect.RunAffectedTests (tests, trigger, _, _, _) ->
       tests |> Array.length |> Expect.equal "one affected test" 1
       trigger |> Expect.equal "trigger is keystroke" RunTrigger.Keystroke
     | _ -> failwith "expected RunAffectedTests"
@@ -2933,7 +2933,7 @@ let pipelineCancellationTests = testList "PipelineCancellation" [
     let pc = PipelineCancellation.create()
     let t1 = PipelineCancellation.tokenForEffect (PipelineEffect.ParseTreeSitter("x", "f")) pc
     let t2 = PipelineCancellation.tokenForEffect (PipelineEffect.RequestFcsTypeCheck("f", System.TimeSpan.Zero)) pc
-    let t3 = PipelineCancellation.tokenForEffect (PipelineEffect.RunAffectedTests([||], RunTrigger.Keystroke, System.TimeSpan.Zero, System.TimeSpan.Zero)) pc
+    let t3 = PipelineCancellation.tokenForEffect (PipelineEffect.RunAffectedTests([||], RunTrigger.Keystroke, System.TimeSpan.Zero, System.TimeSpan.Zero, None)) pc
     t1.IsCancellationRequested |> Expect.isFalse "ts token live"
     t2.IsCancellationRequested |> Expect.isFalse "fcs token live"
     t3.IsCancellationRequested |> Expect.isFalse "run token live"
@@ -2960,8 +2960,8 @@ let pipelineCancellationTests = testList "PipelineCancellation" [
 
   test "new test run cancels previous test run" {
     let pc = PipelineCancellation.create()
-    let run1 = PipelineCancellation.tokenForEffect (PipelineEffect.RunAffectedTests([||], RunTrigger.Keystroke, System.TimeSpan.Zero, System.TimeSpan.Zero)) pc
-    let _run2 = PipelineCancellation.tokenForEffect (PipelineEffect.RunAffectedTests([||], RunTrigger.Keystroke, System.TimeSpan.Zero, System.TimeSpan.Zero)) pc
+    let run1 = PipelineCancellation.tokenForEffect (PipelineEffect.RunAffectedTests([||], RunTrigger.Keystroke, System.TimeSpan.Zero, System.TimeSpan.Zero, None)) pc
+    let _run2 = PipelineCancellation.tokenForEffect (PipelineEffect.RunAffectedTests([||], RunTrigger.Keystroke, System.TimeSpan.Zero, System.TimeSpan.Zero, None)) pc
     run1.IsCancellationRequested |> Expect.isTrue "first run cancelled"
     PipelineCancellation.dispose pc
   }
@@ -2970,7 +2970,7 @@ let pipelineCancellationTests = testList "PipelineCancellation" [
     let pc = PipelineCancellation.create()
     let ts = PipelineCancellation.tokenForEffect (PipelineEffect.ParseTreeSitter("x", "f")) pc
     let fcs = PipelineCancellation.tokenForEffect (PipelineEffect.RequestFcsTypeCheck("f", System.TimeSpan.Zero)) pc
-    let run = PipelineCancellation.tokenForEffect (PipelineEffect.RunAffectedTests([||], RunTrigger.Keystroke, System.TimeSpan.Zero, System.TimeSpan.Zero)) pc
+    let run = PipelineCancellation.tokenForEffect (PipelineEffect.RunAffectedTests([||], RunTrigger.Keystroke, System.TimeSpan.Zero, System.TimeSpan.Zero, None)) pc
     PipelineCancellation.dispose pc
     ts.IsCancellationRequested |> Expect.isTrue "ts cancelled"
     fcs.IsCancellationRequested |> Expect.isTrue "fcs cancelled"
@@ -3954,7 +3954,7 @@ let runningToStaleOnKeystrokeTests = testList "Running → Stale on keystroke" [
     |> Expect.isNonEmpty "AffectedTests should be preserved"
   }
 
-  test "status shows Running after keystroke during running (still running, just edited)" {
+  test "status shows Passed after keystroke during running (streaming shows available result)" {
     let tid = TestId.create "TestA" "expecto"
     let gen = RunGeneration.next RunGeneration.zero
     let s = {
@@ -3969,9 +3969,10 @@ let runningToStaleOnKeystrokeTests = testList "Running → Stale on keystroke" [
     }
     let s' = LiveTestPipelineState.onKeystroke "changed" "Foo.fs" DateTimeOffset.UtcNow s
     let entries = LiveTesting.computeStatusEntries s'.TestState
-    // RunningButEdited is still considered "running" — tests are still in-flight
-    entries.[0].Status
-    |> Expect.equal "should be Running (still in-flight)" TestRunStatus.Running
+    // Streaming: result already available, so shows Passed (not Running)
+    match entries.[0].Status with
+    | TestRunStatus.Passed _ -> ()
+    | other -> failtestf "expected Passed, got %A" other
   }
 
   test "status shows Queued for never-run affected test after keystroke" {
@@ -4233,7 +4234,7 @@ let symbolGraphWiringTests = testList "symbol graph wiring integration" [
       PipelineEffects.afterTypeCheck
         [ "MyModule.add" ] RunTrigger.Keystroke graph ltState None
     match effect with
-    | Some (PipelineEffect.RunAffectedTests (tests, _, _, _)) ->
+    | Some (PipelineEffect.RunAffectedTests (tests, _, _, _, _)) ->
       tests |> Array.exists (fun t -> t.Id = tid)
       |> Expect.isTrue "should contain affected test"
     | other -> failtestf "expected Some RunAffectedTests, got %A" other
@@ -4278,7 +4279,7 @@ let symbolGraphWiringTests = testList "symbol graph wiring integration" [
     effects
     |> List.exists (fun e ->
       match e with
-      | PipelineEffect.RunAffectedTests (tests, _, _, _) ->
+      | PipelineEffect.RunAffectedTests (tests, _, _, _, _) ->
         tests |> Array.exists (fun t -> t.Id = tid)
       | _ -> false)
     |> Expect.isTrue "should produce RunAffectedTests via fallback"
@@ -4373,7 +4374,7 @@ let optimisticGutterTests = testList "optimistic gutter transitions" [
     | None -> failtest "expected status entry for unaffected test"
   }
 
-  test "TestRunStarted transitions previous Passed to Running with correct PreviousStatus" {
+  test "TestRunStarted keeps previous Passed status visible (streaming shows available result)" {
     let tid = TestId.create "Tests.prev_passed" "expecto"
     let tests = [|
       { Id = tid; FullName = "Tests.prev_passed"; DisplayName = "prev_passed"
@@ -4391,14 +4392,17 @@ let optimisticGutterTests = testList "optimistic gutter transitions" [
                                                       Activation = LiveTestingActivation.Active
                                                       DiscoveredTests = tests
                                                       LastResults = Map.ofList [ tid, result ] } } }
-    let model2, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestsDiscovered tests)) model1
+    let model2, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestsDiscovered ("test-session", tests))) model1
     let model3, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestRunStarted [| tid |])) model2
     let entry =
       model3.LiveTesting.TestState.StatusEntries
       |> Array.tryFind (fun e -> e.TestId = tid)
     match entry with
     | Some e ->
-      e.Status |> Expect.equal "should be Running" TestRunStatus.Running
+      // Streaming: previous result stays visible during run
+      match e.Status with
+      | TestRunStatus.Passed _ -> ()
+      | other -> failtestf "expected Passed (streaming), got %A" other
       match e.PreviousStatus with
       | TestRunStatus.Passed _ -> ()
       | other -> failtestf "expected previous Passed, got %A" other
@@ -4502,7 +4506,7 @@ let elmUpdateStatusRecomputationTests = testList "Elm update StatusEntries recom
 
     let model0 = SageFsModel.initial
     let model1 = { model0 with LiveTesting = { model0.LiveTesting with TestState = { model0.LiveTesting.TestState with Activation = LiveTestingActivation.Active } } }
-    let model2, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestsDiscovered tests)) model1
+    let model2, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestsDiscovered ("test-session", tests))) model1
 
     model2.LiveTesting.TestState.StatusEntries
     |> Array.length
@@ -4540,7 +4544,7 @@ let elmUpdateStatusRecomputationTests = testList "Elm update StatusEntries recom
 
     let model0 = SageFsModel.initial
     let model1 = { model0 with LiveTesting = { model0.LiveTesting with TestState = { model0.LiveTesting.TestState with Activation = LiveTestingActivation.Active } } }
-    let model2, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestsDiscovered tests)) model1
+    let model2, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestsDiscovered ("test-session", tests))) model1
 
     let annotations = LiveTesting.annotationsForFile "editor" model2.LiveTesting.TestState
     annotations
@@ -4557,7 +4561,7 @@ let elmUpdateStatusRecomputationTests = testList "Elm update StatusEntries recom
     |]
 
     let model0 = SageFsModel.initial
-    let model1, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestsDiscovered tests)) { model0 with LiveTesting = { model0.LiveTesting with TestState = { model0.LiveTesting.TestState with Activation = LiveTestingActivation.Active } } }
+    let model1, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestsDiscovered ("test-session", tests))) { model0 with LiveTesting = { model0.LiveTesting with TestState = { model0.LiveTesting.TestState with Activation = LiveTestingActivation.Active } } }
     let model2, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestRunStarted [| tid |])) model1
 
     model2.LiveTesting.TestState.StatusEntries
@@ -4575,7 +4579,7 @@ let elmUpdateStatusRecomputationTests = testList "Elm update StatusEntries recom
     |]
 
     let model0 = SageFsModel.initial
-    let model1, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestsDiscovered tests)) { model0 with LiveTesting = { model0.LiveTesting with TestState = { model0.LiveTesting.TestState with Activation = LiveTestingActivation.Active } } }
+    let model1, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestsDiscovered ("test-session", tests))) { model0 with LiveTesting = { model0.LiveTesting with TestState = { model0.LiveTesting.TestState with Activation = LiveTestingActivation.Active } } }
     let model2, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.RunPolicyChanged (TestCategory.Unit, RunPolicy.Disabled))) model1
 
     model2.LiveTesting.TestState.StatusEntries
@@ -4605,7 +4609,7 @@ let elmUpdateStatusRecomputationTests = testList "Elm update StatusEntries recom
     |]
 
     let model0 = SageFsModel.initial
-    let m1, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestsDiscovered tests)) { model0 with LiveTesting = { model0.LiveTesting with TestState = { model0.LiveTesting.TestState with Activation = LiveTestingActivation.Active } } }
+    let m1, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestsDiscovered ("test-session", tests))) { model0 with LiveTesting = { model0.LiveTesting with TestState = { model0.LiveTesting.TestState with Activation = LiveTestingActivation.Active } } }
     let m2, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestRunStarted [| tid1; tid2 |])) m1
     let m3, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestResultsBatch results)) m2
 
@@ -4668,7 +4672,7 @@ let serializationRoundtripTests = testList "serialization roundtrip integration"
 
     let m0 = SageFsModel.initial
     let m1, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.ProvidersDetected deserialized.DetectedProviders)) m0
-    let m2, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestsDiscovered deserialized.DiscoveredTests)) m1
+    let m2, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestsDiscovered ("test-session", deserialized.DiscoveredTests))) m1
     let m3, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.AffectedTestsComputed deserialized.AffectedTestIds)) m2
 
     let annotations = LiveTesting.annotationsForFile "Mod.fs" m3.LiveTesting.TestState
@@ -5402,7 +5406,7 @@ let affectedExecutionTriggerTests = testList "AffectedTestsComputed execution tr
     let ps = mkPipelineState [| tc1; tc2; tc3 |]
     let effects = LiveTestPipelineState.triggerExecutionForAffected [| tc1.Id; tc2.Id |] RunTrigger.FileSave ps
     match effects with
-    | [ PipelineEffect.RunAffectedTests (tests, _, _, _) ] ->
+    | [ PipelineEffect.RunAffectedTests (tests, _, _, _, _) ] ->
       tests
       |> Array.length
       |> Expect.equal "should only include unit test" 1
@@ -5415,7 +5419,7 @@ let affectedExecutionTriggerTests = testList "AffectedTestsComputed execution tr
     let ps = mkPipelineState [| tc1; tc2; tc3 |]
     let effects = LiveTestPipelineState.triggerExecutionForAffected [| tc1.Id; tc2.Id |] RunTrigger.ExplicitRun ps
     match effects with
-    | [ PipelineEffect.RunAffectedTests (tests, _, _, _) ] ->
+    | [ PipelineEffect.RunAffectedTests (tests, _, _, _, _) ] ->
       tests
       |> Array.length
       |> Expect.equal "should include both unit and integration" 2
