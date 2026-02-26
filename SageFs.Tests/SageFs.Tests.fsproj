@@ -92,6 +92,7 @@
         <Compile Include="MiscCoverageTests.fs" />
         <Compile Include="InstrumentationTests.fs" />
         <Compile Include="LayoutAndInputTests.fs" />
+        <Compile Include="PureFunctionCoverageTests.fs" />
         <Compile Include="Program.fs" />
     </ItemGroup>
 
