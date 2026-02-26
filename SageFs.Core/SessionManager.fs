@@ -455,6 +455,9 @@ module SessionManager =
               reply.Reply(Ok "Hard reset complete — swapped warm standby (instant).")
               Instrumentation.sessionsRestarted.Add(1L)
               Instrumentation.standbySwaps.Add(1L)
+              let ageMs = (DateTime.UtcNow - readyStandby.CreatedAt).TotalMilliseconds
+              Instrumentation.standbyAgeAtSwapMs.Record(ageMs)
+              Instrumentation.standbyPoolSize.Add(-1L)
               Instrumentation.succeedSpan span
               // Start warming a new standby for next time
               inbox.Post(SessionCommand.WarmStandby key)
@@ -751,6 +754,9 @@ module SessionManager =
                   State = StandbyState.Ready
                   WarmupProgress = None }
             let newPool = PoolState.setStandby key ready state.Pool
+            let warmupMs = (DateTime.UtcNow - standby.CreatedAt).TotalMilliseconds
+            Instrumentation.standbyWarmupMs.Record(warmupMs)
+            Instrumentation.standbyPoolSize.Add(1L)
             onStandbyProgressChanged ()
             return! loop { state with Pool = newPool }
           | _ ->
@@ -789,6 +795,8 @@ module SessionManager =
             state.Pool.Standbys
             |> Map.filter (fun k _ -> k.WorkingDir = workingDir)
           for KeyValue(_, standby) in toKill do
+            Instrumentation.standbyInvalidations.Add(1L)
+            Instrumentation.standbyPoolSize.Add(-1L)
             Async.Start(stopStandbyWorker standby, ct)
           let newPool =
             toKill

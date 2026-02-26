@@ -12,9 +12,9 @@ open System.Threading.Tasks
 // share the same ConcurrentDictionary. Without this, triggerReload() in
 // the host DLL would iterate an empty dict while the browser's SSE client
 // registered against the FSI shadow-copy DLL's dict.
-let private domainKey = "SageFs.DevReload.clients"
+let domainKey = "SageFs.DevReload.clients"
 
-let private getClients () : ConcurrentDictionary<string, TaskCompletionSource<unit>> =
+let getClients () : ConcurrentDictionary<string, TaskCompletionSource<unit>> =
   let interned = String.Intern(domainKey)
   lock interned (fun () ->
     match AppDomain.CurrentDomain.GetData(domainKey) with

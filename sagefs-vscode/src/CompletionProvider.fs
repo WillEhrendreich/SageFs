@@ -6,7 +6,7 @@ open Vscode
 
 module Client = SageFs.Vscode.SageFsClient
 
-let private kindToVscode (kind: string) =
+let kindToVscode (kind: string) =
   match kind with
   | "Method" -> CompletionItemKind.Method
   | "Function" -> CompletionItemKind.Function

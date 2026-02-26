@@ -272,7 +272,7 @@ let getOpenModules (replCode: string) st =
 ///   let f (x: int) = .. → function (typed params)
 ///   let x = 42          → value (no params)
 ///   let h : Type = ...  → value (type annotation, no params)
-let private isTopLevelFunctionBinding (line: string) =
+let isTopLevelFunctionBinding (line: string) =
   let trimmed = line.TrimStart()
   if not (trimmed.StartsWith("let ", System.StringComparison.Ordinal)) || trimmed.StartsWith("let!", System.StringComparison.Ordinal) || line <> line.TrimStart() then
     false
@@ -289,7 +289,7 @@ let private isTopLevelFunctionBinding (line: string) =
 /// Detect static member method definitions (not properties).
 /// The F# compiler inlines simple static member bodies at the IL level,
 /// eliminating the call instruction entirely and making Harmony detours invisible.
-let private isStaticMemberFunction (line: string) =
+let isStaticMemberFunction (line: string) =
   let trimmed = line.TrimStart()
   trimmed.StartsWith("static member ", System.StringComparison.Ordinal) &&
     let afterKw = trimmed.Substring("static member ".Length).TrimStart()
@@ -380,21 +380,37 @@ let hotReloadingMiddleware next (request, st: AppState) =
                 []
             with _ -> SageFs.Features.LiveTesting.LiveTestHookResult.empty)
         let merged =
+          let allResults = fsiHookResult :: projectResults
+          let composedRunTest =
+            let runTests = allResults |> List.map (fun r -> r.RunTest)
+            fun (tc: SageFs.Features.LiveTesting.TestCase) ->
+              let rec tryRunners remaining =
+                async {
+                  match remaining with
+                  | [] -> return SageFs.Features.LiveTesting.TestResult.NotRun
+                  | rt :: rest ->
+                    let! result = rt tc
+                    match result with
+                    | SageFs.Features.LiveTesting.TestResult.NotRun -> return! tryRunners rest
+                    | found -> return found
+                }
+              tryRunners runTests
           { SageFs.Features.LiveTesting.LiveTestHookResult.empty with
               DetectedProviders =
-                (fsiHookResult :: projectResults)
+                allResults
                 |> List.collect (fun r -> r.DetectedProviders)
                 |> List.distinctBy (fun p ->
                   match p with
                   | SageFs.Features.LiveTesting.ProviderDescription.AttributeBased a -> a.Name
                   | SageFs.Features.LiveTesting.ProviderDescription.Custom c -> c.Name)
               DiscoveredTests =
-                (fsiHookResult :: projectResults)
+                allResults
                 |> List.map (fun r -> r.DiscoveredTests)
                 |> Array.concat
               // Initial scan: no code changed yet, so don't mark all tests as affected.
               // Only FSI hook's affected tests matter (from the actual eval).
-              AffectedTestIds = fsiHookResult.AffectedTestIds }
+              AffectedTestIds = fsiHookResult.AffectedTestIds
+              RunTest = composedRunTest }
         merged, { reloadingSt with LiveTestInitDone = true }
       else
         fsiHookResult, reloadingSt
@@ -404,7 +420,8 @@ let hotReloadingMiddleware next (request, st: AppState) =
         response.Metadata.Add("reloadedMethods", updatedMethods)
       else
         response.Metadata
-    let metadata = metadata.Add("liveTestHookResult", hookResult)
+    let metadata = metadata.Add("liveTestHookResult", SageFs.Features.LiveTesting.LiveTestHookResultDto.fromResult hookResult)
+    let metadata = metadata.Add("liveTestRunTest", hookResult.RunTest)
     let metadata =
       if not (List.isEmpty reloadingSt.AssemblyLoadErrors) then
         metadata.Add("assemblyLoadErrors", reloadingSt.AssemblyLoadErrors)

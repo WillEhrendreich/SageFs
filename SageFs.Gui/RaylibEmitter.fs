@@ -11,7 +11,7 @@ module RaylibEmitter =
 
   /// Draw box-drawing character as native Raylib lines.
   /// Returns true if the char was handled, false if it should be drawn as text.
-  let inline private drawBoxChar (ch: char) (x: int) (y: int) (cw: int) (ch2: int) (fg: Color) =
+  let inline drawBoxChar (ch: char) (x: int) (y: int) (cw: int) (ch2: int) (fg: Color) =
     let xf = float32 x
     let yf = float32 y
     let cwf = float32 cw

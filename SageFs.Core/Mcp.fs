@@ -265,7 +265,19 @@ module McpAdapter =
     |> String.concat "\n"
 
   let escapeJson (s: string) =
-    s.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\n", "\\n").Replace("\r", "\\r").Replace("\t", "\\t")
+    let sb = Text.StringBuilder(s.Length)
+    for c in s do
+      match c with
+      | '\\' -> sb.Append("\\\\") |> ignore
+      | '"' -> sb.Append("\\\"") |> ignore
+      | '\n' -> sb.Append("\\n") |> ignore
+      | '\r' -> sb.Append("\\r") |> ignore
+      | '\t' -> sb.Append("\\t") |> ignore
+      | '\b' -> sb.Append("\\b") |> ignore
+      | '\u000C' -> sb.Append("\\f") |> ignore
+      | c when c < '\u0020' -> sb.Append(sprintf "\\u%04X" (int c)) |> ignore
+      | c -> sb.Append(c) |> ignore
+    sb.ToString()
 
   let formatEventsJson (events: list<DateTime * string * string>) : string =
     let items =

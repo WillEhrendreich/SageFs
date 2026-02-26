@@ -3,8 +3,8 @@ module SageFs.Tests.DiffEmitTests
 open Expecto
 open SageFs
 
-let private fg = Theme.hexToRgb "#ffffff"
-let private bg = Theme.hexToRgb "#000000"
+let fg = Theme.hexToRgb "#ffffff"
+let bg = Theme.hexToRgb "#000000"
 
 let diffEmitTests =
   testList "AnsiEmitter.emitDiff" [

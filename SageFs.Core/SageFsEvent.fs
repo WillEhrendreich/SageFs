@@ -57,6 +57,7 @@ type SageFsEvent =
   | TestsDiscovered of tests: Features.LiveTesting.TestCase array
   | TestRunStarted of testIds: Features.LiveTesting.TestId array
   | TestResultsBatch of results: Features.LiveTesting.TestRunResult array
+  | TestRunCompleted
   | LiveTestingEnabled
   | LiveTestingDisabled
   | AffectedTestsComputed of testIds: Features.LiveTesting.TestId array

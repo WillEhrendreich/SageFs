@@ -236,7 +236,7 @@ module VDiagnosticSeverity =
 // ── Window API ──────────────────────────────────────────────────
 
 [<Import("window", "vscode")>]
-let private windowExports: obj = jsNative
+let windowExports: obj = jsNative
 
 module Window =
   [<Emit("$0.activeTextEditor")>]
@@ -264,188 +264,188 @@ module Window =
     onDidChangeActiveTextEditorRaw windowExports handler
 
   [<Emit("$0.createOutputChannel($1)")>]
-  let private _createOutputChannel (w: obj) (name: string) : OutputChannel = jsNative
+  let _createOutputChannel (w: obj) (name: string) : OutputChannel = jsNative
   let createOutputChannel (name: string) = _createOutputChannel windowExports name
 
   [<Emit("$0.createStatusBarItem($1, $2)")>]
-  let private _createStatusBarItem (w: obj) (alignment: int) (priority: float) : StatusBarItem = jsNative
+  let _createStatusBarItem (w: obj) (alignment: int) (priority: float) : StatusBarItem = jsNative
   let createStatusBarItem (alignment: int) (priority: float) = _createStatusBarItem windowExports alignment priority
 
   [<Emit("$0.showInformationMessage($1, ...$2)")>]
-  let private _showInfoMsg (w: obj) (msg: string) (items: string array) : JS.Promise<string option> = jsNative
+  let _showInfoMsg (w: obj) (msg: string) (items: string array) : JS.Promise<string option> = jsNative
   let showInformationMessage (msg: string) (items: string array) = _showInfoMsg windowExports msg items
 
   [<Emit("$0.showWarningMessage($1, ...$2)")>]
-  let private _showWarnMsg (w: obj) (msg: string) (items: string array) : JS.Promise<string option> = jsNative
+  let _showWarnMsg (w: obj) (msg: string) (items: string array) : JS.Promise<string option> = jsNative
   let showWarningMessage (msg: string) (items: string array) = _showWarnMsg windowExports msg items
 
   [<Emit("$0.showErrorMessage($1, ...$2)")>]
-  let private _showErrMsg (w: obj) (msg: string) (items: string array) : JS.Promise<string option> = jsNative
+  let _showErrMsg (w: obj) (msg: string) (items: string array) : JS.Promise<string option> = jsNative
   let showErrorMessage (msg: string) (items: string array) = _showErrMsg windowExports msg items
 
   [<Emit("$0.showQuickPick($1, $2)")>]
-  let private _showQuickPick (w: obj) (items: string array) (opts: obj) : JS.Promise<string option> = jsNative
+  let _showQuickPick (w: obj) (items: string array) (opts: obj) : JS.Promise<string option> = jsNative
   let showQuickPick (items: string array) (placeHolder: string) =
     _showQuickPick windowExports items (createObj [ "placeHolder" ==> placeHolder ])
 
   [<Emit("$0.showInputBox($1)")>]
-  let private _showInputBox (w: obj) (opts: obj) : JS.Promise<string option> = jsNative
+  let _showInputBox (w: obj) (opts: obj) : JS.Promise<string option> = jsNative
   let showInputBox (prompt: string) =
     _showInputBox windowExports (createObj [ "prompt" ==> prompt ])
 
   [<Emit("$0.withProgress($1, $2)")>]
-  let private _withProgress (w: obj) (opts: obj) (task: obj -> CancellationToken -> JS.Promise<unit>) : JS.Promise<unit> = jsNative
+  let _withProgress (w: obj) (opts: obj) (task: obj -> CancellationToken -> JS.Promise<unit>) : JS.Promise<unit> = jsNative
   let withProgress (location: int) (title: string) (task: obj -> CancellationToken -> JS.Promise<unit>) =
     _withProgress windowExports (createObj [ "location" ==> location; "title" ==> title ]) task
 
   [<Emit("$0.createTextEditorDecorationType($1)")>]
-  let private _createDecoType (w: obj) (opts: obj) : TextEditorDecorationType = jsNative
+  let _createDecoType (w: obj) (opts: obj) : TextEditorDecorationType = jsNative
   let createTextEditorDecorationType (opts: obj) = _createDecoType windowExports opts
 
   [<Emit("$0.createTreeView($1, $2)")>]
-  let private _createTreeView (w: obj) (viewId: string) (opts: obj) : TreeView<obj> = jsNative
+  let _createTreeView (w: obj) (viewId: string) (opts: obj) : TreeView<obj> = jsNative
   let createTreeView (viewId: string) (opts: obj) = _createTreeView windowExports viewId opts
 
   [<Emit("$0.createWebviewPanel($1, $2, $3, $4)")>]
-  let private _createWebviewPanel (w: obj) (viewType: string) (title: string) (column: int) (opts: obj) : WebviewPanel = jsNative
+  let _createWebviewPanel (w: obj) (viewType: string) (title: string) (column: int) (opts: obj) : WebviewPanel = jsNative
   let createWebviewPanel (viewType: string) (title: string) (column: int) (opts: obj) =
     _createWebviewPanel windowExports viewType title column opts
 
 // ── Commands API ────────────────────────────────────────────────
 
 [<Import("commands", "vscode")>]
-let private commandsExports: obj = jsNative
+let commandsExports: obj = jsNative
 
 module Commands =
   [<Emit("$0.registerCommand($1, $2)")>]
-  let private _registerCommand (c: obj) (command: string) (handler: obj -> unit) : Disposable = jsNative
+  let _registerCommand (c: obj) (command: string) (handler: obj -> unit) : Disposable = jsNative
   let registerCommand (command: string) (handler: obj -> unit) = _registerCommand commandsExports command handler
 
   [<Emit("$0.executeCommand($1)")>]
-  let private _executeCommand (c: obj) (command: string) : JS.Promise<obj> = jsNative
+  let _executeCommand (c: obj) (command: string) : JS.Promise<obj> = jsNative
   let executeCommand (command: string) = _executeCommand commandsExports command
 
   [<Emit("$0.getCommands()")>]
-  let private _getCommands (c: obj) : JS.Promise<string array> = jsNative
+  let _getCommands (c: obj) : JS.Promise<string array> = jsNative
   let getCommands () = _getCommands commandsExports
 
 // ── Workspace API ───────────────────────────────────────────────
 
 [<Import("workspace", "vscode")>]
-let private workspaceExports: obj = jsNative
+let workspaceExports: obj = jsNative
 
 module Workspace =
   [<Emit("$0.workspaceFolders")>]
-  let private _workspaceFolders (w: obj) : WorkspaceFolder array option = jsNative
+  let _workspaceFolders (w: obj) : WorkspaceFolder array option = jsNative
   let workspaceFolders () = _workspaceFolders workspaceExports
 
   [<Emit("$0.getConfiguration($1)")>]
-  let private _getConfiguration (w: obj) (section: string) : WorkspaceConfiguration = jsNative
+  let _getConfiguration (w: obj) (section: string) : WorkspaceConfiguration = jsNative
   let getConfiguration (section: string) = _getConfiguration workspaceExports section
 
   [<Emit("$0.findFiles($1, $2, $3)")>]
-  let private _findFiles (w: obj) (pattern: string) (exclude: string) (maxResults: int) : JS.Promise<Uri array> = jsNative
+  let _findFiles (w: obj) (pattern: string) (exclude: string) (maxResults: int) : JS.Promise<Uri array> = jsNative
   let findFiles (pattern: string) (exclude: string) (maxResults: int) = _findFiles workspaceExports pattern exclude maxResults
 
   [<Emit("$0.asRelativePath($1)")>]
-  let private _asRelativePath (w: obj) (uri: Uri) : string = jsNative
+  let _asRelativePath (w: obj) (uri: Uri) : string = jsNative
   let asRelativePath (uri: Uri) = _asRelativePath workspaceExports uri
 
   [<Emit("$0.asRelativePath($1)")>]
-  let private _asRelativePathStr (w: obj) (path: string) : string = jsNative
+  let _asRelativePathStr (w: obj) (path: string) : string = jsNative
   let asRelativePathStr (path: string) = _asRelativePathStr workspaceExports path
 
   [<Emit("$0.onDidChangeConfiguration($1)")>]
-  let private _onDidChangeConfiguration (w: obj) (handler: ConfigurationChangeEvent -> unit) : Disposable = jsNative
+  let _onDidChangeConfiguration (w: obj) (handler: ConfigurationChangeEvent -> unit) : Disposable = jsNative
   let onDidChangeConfiguration (handler: ConfigurationChangeEvent -> unit) = _onDidChangeConfiguration workspaceExports handler
 
 // ── Languages API ───────────────────────────────────────────────
 
 [<Import("languages", "vscode")>]
-let private languagesExports: obj = jsNative
+let languagesExports: obj = jsNative
 
 module Languages =
   [<Emit("$0.registerCodeLensProvider($1, $2)")>]
-  let private _registerCodeLensProvider (l: obj) (selector: obj) (provider: obj) : Disposable = jsNative
+  let _registerCodeLensProvider (l: obj) (selector: obj) (provider: obj) : Disposable = jsNative
   let registerCodeLensProvider (language: string) (provider: obj) =
     _registerCodeLensProvider languagesExports (createObj [ "language" ==> language ]) provider
 
   [<Emit("$0.registerCompletionItemProvider($1, $2, ...$3)")>]
-  let private _registerCompletionItemProvider (l: obj) (selector: obj) (provider: obj) (triggerChars: string array) : Disposable = jsNative
+  let _registerCompletionItemProvider (l: obj) (selector: obj) (provider: obj) (triggerChars: string array) : Disposable = jsNative
   let registerCompletionItemProvider (language: string) (provider: obj) (triggerChars: string array) =
     _registerCompletionItemProvider languagesExports (createObj [ "language" ==> language ]) provider triggerChars
 
   [<Emit("$0.createDiagnosticCollection($1)")>]
-  let private _createDiagnosticCollection (l: obj) (name: string) : DiagnosticCollection = jsNative
+  let _createDiagnosticCollection (l: obj) (name: string) : DiagnosticCollection = jsNative
   let createDiagnosticCollection (name: string) = _createDiagnosticCollection languagesExports name
 
 // ── Tests API ───────────────────────────────────────────────────
 
 [<Import("tests", "vscode")>]
-let private testsExports: obj = jsNative
+let testsExports: obj = jsNative
 
 module Tests =
   [<Emit("$0.createTestController($1, $2)")>]
-  let private _createTestController (t: obj) (id: string) (label: string) : TestController = jsNative
+  let _createTestController (t: obj) (id: string) (label: string) : TestController = jsNative
   let createTestController (id: string) (label: string) = _createTestController testsExports id label
 
 // ── Env API ─────────────────────────────────────────────────────
 
 [<Import("env", "vscode")>]
-let private envExports: obj = jsNative
+let envExports: obj = jsNative
 
 module Env =
   [<Emit("$0.openExternal($1)")>]
-  let private _openExternal (e: obj) (uri: Uri) : JS.Promise<bool> = jsNative
+  let _openExternal (e: obj) (uri: Uri) : JS.Promise<bool> = jsNative
   let openExternal (uri: Uri) = _openExternal envExports uri
 
 // ── Constructors ────────────────────────────────────────────────
 
 [<ImportAll("vscode")>]
-let private vscodeAll: obj = jsNative
+let vscodeAll: obj = jsNative
 
 [<Emit("new $0.Range($1, $2, $3, $4)")>]
-let private _newRange (v: obj) (sl: int) (sc: int) (el: int) (ec: int) : Range = jsNative
+let _newRange (v: obj) (sl: int) (sc: int) (el: int) (ec: int) : Range = jsNative
 let newRange (sl: int) (sc: int) (el: int) (ec: int) = _newRange vscodeAll sl sc el ec
 
 [<Emit("new $0.Position($1, $2)")>]
-let private _newPosition (v: obj) (l: int) (c: int) : Position = jsNative
+let _newPosition (v: obj) (l: int) (c: int) : Position = jsNative
 let newPosition (l: int) (c: int) = _newPosition vscodeAll l c
 
 [<Emit("new $0.ThemeColor($1)")>]
-let private _newThemeColor (v: obj) (id: string) : obj = jsNative
+let _newThemeColor (v: obj) (id: string) : obj = jsNative
 let newThemeColor (id: string) = _newThemeColor vscodeAll id
 
 [<Emit("new $0.ThemeIcon($1)")>]
-let private _newThemeIcon (v: obj) (id: string) : obj = jsNative
+let _newThemeIcon (v: obj) (id: string) : obj = jsNative
 let newThemeIcon (id: string) = _newThemeIcon vscodeAll id
 
 [<Emit("$0.Uri.parse($1)")>]
-let private _uriParse (v: obj) (s: string) : Uri = jsNative
+let _uriParse (v: obj) (s: string) : Uri = jsNative
 let uriParse (s: string) = _uriParse vscodeAll s
 
 [<Emit("$0.Uri.file($1)")>]
-let private _uriFile (v: obj) (path: string) : Uri = jsNative
+let _uriFile (v: obj) (path: string) : Uri = jsNative
 let uriFile (path: string) = _uriFile vscodeAll path
 
 [<Emit("new $0.Diagnostic($1, $2, $3)")>]
-let private _newDiagnostic (v: obj) (range: Range) (message: string) (severity: int) : Diagnostic = jsNative
+let _newDiagnostic (v: obj) (range: Range) (message: string) (severity: int) : Diagnostic = jsNative
 let newDiagnostic (range: Range) (message: string) (severity: int) = _newDiagnostic vscodeAll range message severity
 
 [<Emit("new $0.TestMessage($1)")>]
-let private _newTestMessage (v: obj) (message: string) : obj = jsNative
+let _newTestMessage (v: obj) (message: string) : obj = jsNative
 let newTestMessage (message: string) = _newTestMessage vscodeAll message
 
 [<Emit("new $0.CodeLens($1, $2)")>]
-let private _newCodeLens (v: obj) (range: Range) (cmd: obj) : CodeLens = jsNative
+let _newCodeLens (v: obj) (range: Range) (cmd: obj) : CodeLens = jsNative
 let newCodeLens (range: Range) (cmd: obj) = _newCodeLens vscodeAll range cmd
 
 [<Emit("new $0.EventEmitter()")>]
-let private _newEventEmitter (v: obj) : EventEmitter<'T> = jsNative
+let _newEventEmitter (v: obj) : EventEmitter<'T> = jsNative
 let newEventEmitter<'T> () : EventEmitter<'T> = _newEventEmitter vscodeAll
 
 [<Emit("new $0.CompletionItem($1, $2)")>]
-let private _newCompletionItem (v: obj) (label: string) (kind: int) : obj = jsNative
+let _newCompletionItem (v: obj) (label: string) (kind: int) : obj = jsNative
 let newCompletionItem (label: string) (kind: int) = _newCompletionItem vscodeAll label kind
 
 [<RequireQualifiedAccess>]
@@ -484,5 +484,5 @@ module TreeItemCollapsibleState =
   let Expanded: int = jsNative
 
 [<Emit("new $0.TreeItem($1, $2)")>]
-let private _newTreeItem (v: obj) (label: string) (collapsibleState: int) : TreeItem = jsNative
+let _newTreeItem (v: obj) (label: string) (collapsibleState: int) : TreeItem = jsNative
 let newTreeItem (label: string) (collapsibleState: int) = _newTreeItem vscodeAll label collapsibleState

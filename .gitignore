@@ -25,3 +25,5 @@ analyzers/community
 .fake
 mcp-sdk-nupkg/
 mcp-sdk/
+*.log
+aspire-traces.png

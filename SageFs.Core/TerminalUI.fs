@@ -119,7 +119,7 @@ module AnsiCodes =
       Console.OutputEncoding <- Text.Encoding.UTF8
       true
 
-  let mutable private savedInputMode = 0u
+  let mutable savedInputMode = 0u
 
   /// Enable VT input on Windows stdin (needed for SGR mouse sequences).
   /// Also disables line input and echo for raw character-by-character reading.

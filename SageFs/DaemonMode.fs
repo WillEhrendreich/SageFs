@@ -65,12 +65,16 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
   // Create state-changed event for SSE subscribers (created early so SessionManager can trigger it)
   let stateChangedEvent = Event<string>()
   let mutable lastStateJson = ""
+  // Test discovery callback — set after elmRuntime is created
+  let mutable onTestDiscoveryCallback : (WorkerProtocol.SessionId -> Features.LiveTesting.TestCase array -> Features.LiveTesting.ProviderDescription list -> unit) =
+    fun _ _ _ -> ()
 
   // Create SessionManager — the single source of truth for all sessions
   // Returns (mailbox, readSnapshot) — CQRS: reads go to snapshot, writes to mailbox
   let sessionManager, readSnapshot =
-    SessionManager.create cts.Token (fun () ->
-      stateChangedEvent.Trigger """{"standbyProgress":true}""")
+    SessionManager.create cts.Token
+      (fun () -> stateChangedEvent.Trigger """{"standbyProgress":true}""")
+      (fun sid tests providers -> onTestDiscoveryCallback sid tests providers)
 
   // Active session ID — REMOVED: No global shared session.
   // Each client (MCP, TUI, dashboard) tracks its own session independently.
@@ -268,7 +272,13 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
     }
   let effectDeps =
     { ElmDaemon.createEffectDeps sessionManager readSnapshot with
-        GetWarmupContext = Some getWarmupContextForElm }
+        GetWarmupContext = Some getWarmupContextForElm
+        GetStreamingTestProxy = fun sid ->
+          let snapshot = readSnapshot()
+          match Map.tryFind sid snapshot.WorkerBaseUrls with
+          | Some url when url.Length > 0 ->
+            Some (HttpWorkerClient.streamingTestProxy url)
+          | _ -> None }
   let elmRuntime =
     ElmDaemon.start effectDeps (fun model _regions ->
       let outputCount = model.RecentOutput.Length
@@ -310,6 +320,13 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
         | _ -> return None
       with _ -> return None
     }
+
+  // Wire test discovery from SessionManager → Elm model
+  onTestDiscoveryCallback <- fun _sid tests providers ->
+    if not (Array.isEmpty tests) then
+      elmRuntime.Dispatch(SageFsMsg.Event (SageFsEvent.TestsDiscovered tests))
+    if not (List.isEmpty providers) then
+      elmRuntime.Dispatch(SageFsMsg.Event (SageFsEvent.ProvidersDetected providers))
 
   // Start MCP server
   let mcpTask =

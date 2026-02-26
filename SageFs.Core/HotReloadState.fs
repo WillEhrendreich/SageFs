@@ -6,7 +6,7 @@ type T = {
   Watched: Set<string>
 }
 
-let private normalize (path: string) =
+let normalize (path: string) =
   path.Replace('\\', '/').ToLowerInvariant()
 
 let empty : T = { Watched = Set.empty }
@@ -38,10 +38,10 @@ let toggle (path: string) (state: T) : T =
 let watchedCount (state: T) : int =
   state.Watched.Count
 
-let private normalizeDir (dir: string) =
+let normalizeDir (dir: string) =
   (dir.Replace('\\', '/').ToLowerInvariant()).TrimEnd('/')
 
-let private dirOf (path: string) =
+let dirOf (path: string) =
   System.IO.Path.GetDirectoryName(path).Replace('\\', '/')
 
 let watchByDirectory (dir: string) (allPaths: string seq) (state: T) : T =

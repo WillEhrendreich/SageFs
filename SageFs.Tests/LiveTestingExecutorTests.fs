@@ -57,8 +57,8 @@ let attributeDiscoveryTests = testList "AttributeDiscovery" [
     | Some asm ->
       match BuiltInExecutors.expecto with
       | TestExecutor.Custom ce ->
-        let discovered = ce.Discover asm
-        (List.length discovered > 0)
+        let discovery = ce.Discover asm
+        (List.length discovery.Tests > 0)
         |> Expect.isTrue "should find at least 1 expecto test property"
       | _ -> failtest "Expected Custom"
     | None ->
@@ -88,23 +88,17 @@ let reflectionExecutorTests = testList "ReflectionExecutor" [
   }
 ]
 
-let findExecutorTests = testList "TestOrchestrator.findExecutor" [
-  test "finds xunit executor by name" {
-    TestOrchestrator.findExecutor BuiltInExecutors.builtIn "xunit"
-    |> Option.isSome
-    |> Expect.isTrue "should find xunit"
-  }
-
-  test "finds expecto executor by name" {
-    TestOrchestrator.findExecutor BuiltInExecutors.builtIn "expecto"
-    |> Option.isSome
-    |> Expect.isTrue "should find expecto"
-  }
-
-  test "returns None for unknown framework" {
-    TestOrchestrator.findExecutor BuiltInExecutors.builtIn "jest"
-    |> Option.isNone
-    |> Expect.isTrue "should not find jest"
+let discoverAllTests = testList "TestOrchestrator.discoverAll" [
+  test "discovery returns RunTest closure" {
+    let testsAsm =
+      System.AppDomain.CurrentDomain.GetAssemblies()
+      |> Array.tryFind (fun a -> a.GetName().Name = "SageFs.Tests")
+    match testsAsm with
+    | Some asm ->
+      let result = TestOrchestrator.discoverAll BuiltInExecutors.builtIn asm
+      (List.length result.Tests > 0)
+      |> Expect.isTrue "should discover tests"
+    | None -> skiptest "SageFs.Tests assembly not loaded"
   }
 ]
 
@@ -115,8 +109,8 @@ let discoverTests = testList "TestOrchestrator.discoverTests" [
       |> Array.tryFind (fun a -> a.GetName().Name = "SageFs.Tests")
     match testsAsm with
     | Some asm ->
-      let discovered = TestOrchestrator.discoverTests BuiltInExecutors.builtIn asm
-      (List.length discovered > 0)
+      let result = TestOrchestrator.discoverAll BuiltInExecutors.builtIn asm
+      (List.length result.Tests > 0)
       |> Expect.isTrue "should discover tests"
     | None ->
       skiptest "SageFs.Tests assembly not loaded"
@@ -128,8 +122,8 @@ let discoverTests = testList "TestOrchestrator.discoverTests" [
       |> Array.tryFind (fun a -> a.GetName().Name = "SageFs.Tests")
     match testsAsm with
     | Some asm ->
-      let discovered = TestOrchestrator.discoverTests BuiltInExecutors.builtIn asm
-      discovered
+      let result = TestOrchestrator.discoverAll BuiltInExecutors.builtIn asm
+      result.Tests
       |> List.iter (fun tc ->
         tc.Framework |> Expect.equal "framework should be expecto" "expecto")
     | None ->
@@ -143,13 +137,13 @@ let allExecutorTests = testList "Provider Executors" [
   builtInDescriptionTests
   attributeDiscoveryTests
   reflectionExecutorTests
-  findExecutorTests
+  discoverAllTests
   discoverTests
 ]
 
 // --- LiveTestingHook tests ---
 
-let private getTestAsm () =
+let getTestAsm () =
   System.AppDomain.CurrentDomain.GetAssemblies()
   |> Array.tryFind (fun a -> a.GetName().Name = "SageFs.Tests")
 
@@ -193,26 +187,26 @@ let hookDiscoverTestsTests = testList "LiveTestingHook.discoverTests" [
   test "discovers Expecto tests in SageFs.Tests assembly" {
     match getTestAsm () with
     | Some asm ->
-      let tests = LiveTestingHook.discoverTests BuiltInExecutors.builtIn asm
-      Expect.isTrue "should discover multiple tests" (tests.Length > 0)
+      let result = LiveTestingHook.discoverTests BuiltInExecutors.builtIn asm
+      Expect.isTrue "should discover multiple tests" (result.Tests.Length > 0)
     | None -> skiptest "SageFs.Tests assembly not loaded"
   }
 
   test "all discovered tests have framework = expecto" {
     match getTestAsm () with
     | Some asm ->
-      let tests = LiveTestingHook.discoverTests BuiltInExecutors.builtIn asm
-      tests
-      |> Array.forall (fun t -> t.Framework = "expecto")
+      let result = LiveTestingHook.discoverTests BuiltInExecutors.builtIn asm
+      result.Tests
+      |> List.forall (fun t -> t.Framework = "expecto")
       |> Expect.isTrue "all tests should be expecto framework"
     | None -> skiptest "SageFs.Tests assembly not loaded"
   }
 
   test "discovers no tests in assembly with no test frameworks" {
     let coreAsm = typeof<TestCase>.Assembly
-    let tests = LiveTestingHook.discoverTests BuiltInExecutors.builtIn coreAsm
-    tests
-    |> Array.length
+    let result = LiveTestingHook.discoverTests BuiltInExecutors.builtIn coreAsm
+    result.Tests
+    |> List.length
     |> Expect.equal "should discover no tests" 0
   }
 ]

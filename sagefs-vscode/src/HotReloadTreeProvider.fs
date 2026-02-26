@@ -16,22 +16,22 @@ type HotReloadItem =
 
 // ── Mutable state ────────────────────────────────────────────────
 
-let mutable private currentClient: Client.Client option = None
-let mutable private currentSessionId: string option = None
-let mutable private cachedFiles: Client.HotReloadFile array = [||]
-let mutable private refreshEmitter: EventEmitter<obj> option = None
-let mutable private treeView: TreeView<obj> option = None
-let mutable private autoRefreshTimer: obj option = None
+let mutable currentClient: Client.Client option = None
+let mutable currentSessionId: string option = None
+let mutable cachedFiles: Client.HotReloadFile array = [||]
+let mutable refreshEmitter: EventEmitter<obj> option = None
+let mutable treeView: TreeView<obj> option = None
+let mutable autoRefreshTimer: obj option = None
 
 [<Emit("setInterval($0, $1)")>]
-let private jsSetInterval (fn: unit -> unit) (ms: int) : obj = jsNative
+let jsSetInterval (fn: unit -> unit) (ms: int) : obj = jsNative
 
 [<Emit("clearInterval($0)")>]
-let private jsClearInterval (handle: obj) : unit = jsNative
+let jsClearInterval (handle: obj) : unit = jsNative
 
 // ── Path helpers ─────────────────────────────────────────────────
 
-let private getDirectory (path: string) =
+let getDirectory (path: string) =
   if isNull path then ""
   else
     let normalized = path.Replace('\\', '/')
@@ -39,7 +39,7 @@ let private getDirectory (path: string) =
     | -1 -> ""
     | i -> normalized.Substring(0, i)
 
-let private getFileName (path: string) =
+let getFileName (path: string) =
   if isNull path then ""
   else
     let normalized = path.Replace('\\', '/')
@@ -49,7 +49,7 @@ let private getFileName (path: string) =
 
 // ── TreeDataProvider ─────────────────────────────────────────────
 
-let private createDirItem (dirPath: string) (childCount: int) (watchedCount: int) =
+let createDirItem (dirPath: string) (childCount: int) (watchedCount: int) =
   let label = if dirPath = "" then "(root)" else dirPath
   let item = newTreeItem label TreeItemCollapsibleState.Expanded
   item?contextValue <- "directory"
@@ -63,7 +63,7 @@ let private createDirItem (dirPath: string) (childCount: int) (watchedCount: int
     ]
   item
 
-let private createFileItem (file: Client.HotReloadFile) =
+let createFileItem (file: Client.HotReloadFile) =
   let label = getFileName file.path
   let item = newTreeItem label TreeItemCollapsibleState.None
   item?contextValue <- if file.watched then "watchedFile" else "unwatchedFile"
@@ -82,12 +82,12 @@ let private createFileItem (file: Client.HotReloadFile) =
       Vscode.newThemeColor "testing.iconSkipped"
   item
 
-let private groupByDirectory (files: Client.HotReloadFile array) =
+let groupByDirectory (files: Client.HotReloadFile array) =
   files
   |> Array.groupBy (fun f -> getDirectory f.path)
   |> Array.sortBy fst
 
-let private getChildren (element: obj option) : JS.Promise<obj array> =
+let getChildren (element: obj option) : JS.Promise<obj array> =
   promise {
     match element with
     | None ->
@@ -118,9 +118,9 @@ let private getChildren (element: obj option) : JS.Promise<obj array> =
         return [||]
   }
 
-let private getTreeItem (element: obj) : obj = element
+let getTreeItem (element: obj) : obj = element
 
-let private createProvider () =
+let createProvider () =
   let emitter = newEventEmitter<obj> ()
   refreshEmitter <- Some emitter
   createObj [

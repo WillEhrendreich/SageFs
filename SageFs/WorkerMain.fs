@@ -252,6 +252,16 @@ let run (sessionId: string) (port: int) (args: Args.Arguments list) = async {
     else
       let config = FileWatcher.defaultWatchConfig result.ProjectDirectories
       let onFileChanged (change: FileWatcher.FileChange) =
+        let ext = IO.Path.GetExtension(change.FilePath)
+        let kind = match change.Kind with
+                   | FileWatcher.FileChangeKind.Changed -> "Modified"
+                   | FileWatcher.FileChangeKind.Created -> "Created"
+                   | FileWatcher.FileChangeKind.Deleted -> "Deleted"
+                   | FileWatcher.FileChangeKind.Renamed -> "Renamed"
+        Instrumentation.fileWatcherChanges.Add(
+          1L,
+          System.Collections.Generic.KeyValuePair("file.extension", ext :> obj),
+          System.Collections.Generic.KeyValuePair("change.kind", kind :> obj))
         Async.Start(async {
           match FileWatcher.fileChangeAction change with
           | FileWatcher.FileChangeAction.Reload filePath ->

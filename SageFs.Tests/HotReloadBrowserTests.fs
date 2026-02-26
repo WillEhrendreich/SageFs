@@ -7,21 +7,21 @@ open Expecto
 open Microsoft.Playwright
 open SageFs.AppState
 
-let private evalCode (actor: AppActor) code =
+let evalCode (actor: AppActor) code =
   task {
     let request = { Code = code; Args = Map.empty }
     let! response = actor.PostAndAsyncReply(fun reply -> Eval(request, CancellationToken.None, reply))
     return response
   }
 
-let private evalHotReload (actor: AppActor) code =
+let evalHotReload (actor: AppActor) code =
   task {
     let request = { Code = code; Args = Map.ofList [ "hotReload", box true ] }
     let! response = actor.PostAndAsyncReply(fun reply -> Eval(request, CancellationToken.None, reply))
     return response
   }
 
-let private waitForServer (port: int) =
+let waitForServer (port: int) =
   task {
     use client = new System.Net.Http.HttpClient()
     let sw = Diagnostics.Stopwatch.StartNew()
@@ -38,17 +38,17 @@ let private waitForServer (port: int) =
   }
 
 /// Run JS on a Playwright page, discarding the return value.
-let private js (page: IPage) (script: string) =
+let js (page: IPage) (script: string) =
   task { let! _ = page.EvaluateAsync(script) in () }
 
 /// Run JS with a JSON-serialized string arg injected via %s placeholder.
-let private jsWithArg (page: IPage) (scriptTemplate: string) (arg: string) =
+let jsWithArg (page: IPage) (scriptTemplate: string) (arg: string) =
   let escaped = System.Text.Json.JsonSerializer.Serialize(arg)
   let script = scriptTemplate.Replace("{0}", escaped)
   task { let! _ = page.EvaluateAsync(script) in () }
 
 /// The demo page shell with animated code + browser split view.
-let private demoShell = """<!DOCTYPE html>
+let demoShell = """<!DOCTYPE html>
 <html><head><style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { display: flex; width: 1200px; height: 520px; font-family: 'Segoe UI', system-ui, sans-serif; overflow: hidden; }

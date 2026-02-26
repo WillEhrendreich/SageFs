@@ -11,14 +11,14 @@ open Microsoft.Playwright
 /// Launches a separate instance with its own user-data-dir to avoid
 /// interfering with the developer's main VSCode window.
 module VscodeFixture =
-  let mutable private pw: IPlaywright option = None
-  let mutable private browser: IBrowser option = None
-  let mutable private codePid: int option = None
+  let mutable pw: IPlaywright option = None
+  let mutable browser: IBrowser option = None
+  let mutable codePid: int option = None
 
   let cdpPort = 9222
-  let private userDataDir = @"C:\temp\sagefs-vscode-test"
+  let userDataDir = @"C:\temp\sagefs-vscode-test"
 
-  let private codeExePath =
+  let codeExePath =
     // 1. Env var override (VSCODE_PATH=C:\wherever\Code.exe)
     let fromEnv =
       Environment.GetEnvironmentVariable("VSCODE_PATH")
@@ -54,7 +54,7 @@ module VscodeFixture =
     |> Option.orElseWith (fun () -> fromPath.Value)
     |> Option.orElseWith (fun () -> wellKnown |> List.tryFind IO.File.Exists)
 
-  let private codeExe () =
+  let codeExe () =
     match codeExePath with
     | Some p -> p
     | None ->
@@ -64,7 +64,7 @@ module VscodeFixture =
   let isAvailable = codeExePath.IsSome
 
   /// Pre-configure the test profile so dialogs don't block tests.
-  let private ensureTestSettings () =
+  let ensureTestSettings () =
     let userDir = IO.Path.Combine(userDataDir, "User")
     if not (IO.Directory.Exists userDir) then
       IO.Directory.CreateDirectory(userDir) |> ignore
@@ -78,7 +78,7 @@ module VscodeFixture =
     IO.File.WriteAllText(settingsPath, settings)
 
   /// Kill any Code processes started recently that might hold our CDP port.
-  let private killOrphans () =
+  let killOrphans () =
     for p in Process.GetProcessesByName("Code") do
       try
         if (DateTime.Now - p.StartTime).TotalMinutes < 30.0 then
@@ -87,7 +87,7 @@ module VscodeFixture =
     Threading.Thread.Sleep(2000)
 
   /// Launch VSCode via ShellExecute to detach from parent job object.
-  let private launchVscode (workspaceDir: string) (disableExtensions: bool) =
+  let launchVscode (workspaceDir: string) (disableExtensions: bool) =
     ensureTestSettings ()
 
     let extFlag = if disableExtensions then " --disable-extensions" else ""
@@ -103,7 +103,7 @@ module VscodeFixture =
     proc.Id
 
   /// Poll CDP /json/version until the endpoint responds.
-  let private waitForCdp (timeoutMs: int) = task {
+  let waitForCdp (timeoutMs: int) = task {
     let sw = Stopwatch.StartNew()
     use client = new Net.Http.HttpClient()
     let mutable ready = false

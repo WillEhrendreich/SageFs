@@ -313,6 +313,7 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                       m.AddMeter(meter) |> ignore
                     m.AddAspNetCoreInstrumentation()
                       .AddHttpClientInstrumentation() |> ignore
+                    metrics.SetExemplarFilter(OpenTelemetry.Metrics.ExemplarFilterType.TraceBased) |> ignore
                     if otelConfigured then metrics.AddOtlpExporter() |> ignore
                 )
 

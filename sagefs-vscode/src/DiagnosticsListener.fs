@@ -43,7 +43,7 @@ open Vscode
   startListening();
   return { dispose: () => { if (req) req.destroy(); } };
 })()""")>]
-let private subscribeSse (url: string) (onData: obj -> unit) : Disposable = jsNative
+let subscribeSse (url: string) (onData: obj -> unit) : Disposable = jsNative
 
 let start (port: int) (dc: DiagnosticCollection) =
   let url = sprintf "http://localhost:%d/diagnostics" port

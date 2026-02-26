@@ -7,7 +7,7 @@ open SageFs
 open SageFs.Features.LiveTesting
 
 /// Helper to create a TestStatusEntry
-let private makeEntry (i: int) (status: TestRunStatus) : TestStatusEntry =
+let makeEntry (i: int) (status: TestRunStatus) : TestStatusEntry =
   { TestId = TestId.TestId (sprintf "test-%d" i)
     DisplayName = sprintf "Test %d" i
     FullName = sprintf "Namespace.Test%d" i
@@ -18,24 +18,24 @@ let private makeEntry (i: int) (status: TestRunStatus) : TestStatusEntry =
     Status = status
     PreviousStatus = TestRunStatus.Queued }
 
-let private baseModel = SageFsModel.initial
+let baseModel = SageFsModel.initial
 
-let private withTests (count: int) (model: SageFsModel) =
+let withTests (count: int) (model: SageFsModel) =
   let entries =
     [| for i in 1..count ->
         makeEntry i (TestRunStatus.Passed (TimeSpan.FromMilliseconds 10.0)) |]
   let ts = { model.LiveTesting.TestState with StatusEntries = entries }
   { model with LiveTesting = { model.LiveTesting with TestState = ts } }
 
-let private withActivation (activation: LiveTestingActivation) (model: SageFsModel) =
+let withActivation (activation: LiveTestingActivation) (model: SageFsModel) =
   let ts = { model.LiveTesting.TestState with Activation = activation }
   { model with LiveTesting = { model.LiveTesting with TestState = ts } }
 
-let private withRunPhase (phase: TestRunPhase) (model: SageFsModel) =
+let withRunPhase (phase: TestRunPhase) (model: SageFsModel) =
   let ts = { model.LiveTesting.TestState with RunPhase = phase }
   { model with LiveTesting = { model.LiveTesting with TestState = ts } }
 
-let private withGeneration (gen: int) (model: SageFsModel) =
+let withGeneration (gen: int) (model: SageFsModel) =
   let ts = { model.LiveTesting.TestState with LastGeneration = RunGeneration gen }
   { model with LiveTesting = { model.LiveTesting with TestState = ts } }
 

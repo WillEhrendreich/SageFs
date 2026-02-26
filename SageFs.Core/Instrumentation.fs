@@ -48,6 +48,20 @@ module Instrumentation =
   let sseConnectionsActive =
     mcpMeter.CreateUpDownCounter<int64>("sagefs.sse.connections_active", description = "Currently active SSE connections")
 
+  // Standby pool metrics
+  let standbyPoolSize =
+    sessionMeter.CreateUpDownCounter<int64>("sagefs.standby.pool_size", description = "Current standby pool size")
+  let standbyWarmupMs =
+    sessionMeter.CreateHistogram<float>("sagefs.standby.warmup_ms", "ms", "Standby warmup duration")
+  let standbyInvalidations =
+    sessionMeter.CreateCounter<int64>("sagefs.standby.invalidations_total", description = "Total standby invalidations")
+  let standbyAgeAtSwapMs =
+    sessionMeter.CreateHistogram<float>("sagefs.standby.age_at_swap_ms", "ms", "Standby age at time of swap")
+
+  // File watcher counter
+  let fileWatcherChanges =
+    pipelineMeter.CreateCounter<int64>("sagefs.filewatcher.changes_total", description = "Total file watcher change events")
+
   /// SSE/long-lived paths to suppress in ASP.NET Core HTTP span instrumentation.
   let sseFilterPaths =
     [ "/events"; "/diagnostics"; "/__sagefs__/reload"; "/sse"; "/dashboard/stream" ]

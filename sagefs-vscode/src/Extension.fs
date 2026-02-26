@@ -23,77 +23,77 @@ let jsonParse (s: string) : obj = jsNative
 
 // ── Mutable state ──────────────────────────────────────────────
 
-let mutable private client: Client.Client option = None
-let mutable private outputChannel: OutputChannel option = None
-let mutable private statusBarItem: StatusBarItem option = None
-let mutable private testStatusBarItem: StatusBarItem option = None
-let mutable private diagnosticsDisposable: Disposable option = None
-let mutable private sseDisposable: Disposable option = None
-let mutable private diagnosticCollection: DiagnosticCollection option = None
-let mutable private blockDecorations: Map<int, TextEditorDecorationType> = Map.empty
-let mutable private activeSessionId: string option = None
-let mutable private liveTestListener: LiveTest.LiveTestingListener option = None
-let mutable private testAdapter: TestCtrl.TestAdapter option = None
-let mutable private dashboardPanel: WebviewPanel option = None
-let mutable private typeExplorer: TypeExpl.TypeExplorer option = None
+let mutable client: Client.Client option = None
+let mutable outputChannel: OutputChannel option = None
+let mutable statusBarItem: StatusBarItem option = None
+let mutable testStatusBarItem: StatusBarItem option = None
+let mutable diagnosticsDisposable: Disposable option = None
+let mutable sseDisposable: Disposable option = None
+let mutable diagnosticCollection: DiagnosticCollection option = None
+let mutable blockDecorations: Map<int, TextEditorDecorationType> = Map.empty
+let mutable activeSessionId: string option = None
+let mutable liveTestListener: LiveTest.LiveTestingListener option = None
+let mutable testAdapter: TestCtrl.TestAdapter option = None
+let mutable dashboardPanel: WebviewPanel option = None
+let mutable typeExplorer: TypeExpl.TypeExplorer option = None
 
 // ── JS Interop ─────────────────────────────────────────────────
 
 [<Emit("require('child_process').spawn($0, $1, $2)")>]
-let private spawn (cmd: string) (args: string array) (opts: obj) : obj = jsNative
+let spawn (cmd: string) (args: string array) (opts: obj) : obj = jsNative
 
 [<Emit("$0.unref()")>]
-let private unref (proc: obj) : unit = jsNative
+let unref (proc: obj) : unit = jsNative
 
 [<Emit("$0.kill()")>]
-let private killProc (proc: obj) : unit = jsNative
+let killProc (proc: obj) : unit = jsNative
 
 [<Emit("$0.stderr")>]
-let private procStderr (proc: obj) : obj = jsNative
+let procStderr (proc: obj) : obj = jsNative
 
 [<Emit("$0.stdout")>]
-let private procStdout (proc: obj) : obj = jsNative
+let procStdout (proc: obj) : obj = jsNative
 
 [<Emit("$0.on('data', function(d) { if (d != null) $1(String(d)) })")>]
-let private onData (stream: obj) (handler: string -> unit) : unit = jsNative
+let onData (stream: obj) (handler: string -> unit) : unit = jsNative
 
 [<Emit("$0.on('error', function(e) { $1(e.message || String(e)) })")>]
-let private onProcError (proc: obj) (handler: string -> unit) : unit = jsNative
+let onProcError (proc: obj) (handler: string -> unit) : unit = jsNative
 
 [<Emit("$0.on('exit', function(code, signal) { $1(code == null ? -1 : code, signal == null ? '' : signal) })")>]
-let private onProcExit (proc: obj) (handler: int -> string -> unit) : unit = jsNative
+let onProcExit (proc: obj) (handler: int -> string -> unit) : unit = jsNative
 
 [<Emit("setInterval($0, $1)")>]
-let private setInterval (fn: unit -> unit) (ms: int) : obj = jsNative
+let setInterval (fn: unit -> unit) (ms: int) : obj = jsNative
 
 [<Emit("clearInterval($0)")>]
-let private clearInterval (id: obj) : unit = jsNative
+let clearInterval (id: obj) : unit = jsNative
 
 [<Emit("setTimeout($0, $1)")>]
-let private setTimeout (fn: unit -> unit) (ms: int) : obj = jsNative
+let setTimeout (fn: unit -> unit) (ms: int) : obj = jsNative
 
 [<Emit("new Promise(resolve => setTimeout(resolve, $0))")>]
-let private sleep (ms: int) : JS.Promise<unit> = jsNative
+let sleep (ms: int) : JS.Promise<unit> = jsNative
 
-let mutable private daemonProcess: obj option = None
+let mutable daemonProcess: obj option = None
 
 // ── Helpers ────────────────────────────────────────────────────
 
-let private getClient () =
+let getClient () =
   match client with Some c -> c | None -> failwith "SageFs not activated"
 
-let private getOutput () =
+let getOutput () =
   match outputChannel with Some o -> o | None -> failwith "SageFs not activated"
 
-let private getStatusBar () =
+let getStatusBar () =
   match statusBarItem with Some s -> s | None -> failwith "SageFs not activated"
 
-let private getWorkingDirectory () =
+let getWorkingDirectory () =
   match Workspace.workspaceFolders () with
   | Some fs when fs.Length > 0 -> Some fs.[0].uri.fsPath
   | _ -> None
 
-let private findProject () =
+let findProject () =
   promise {
     let config = Workspace.getConfiguration "sagefs"
     let configured = config.get("projectPath", "")
@@ -114,7 +114,7 @@ let private findProject () =
         return picked
   }
 
-let private getCodeBlock (editor: TextEditor) =
+let getCodeBlock (editor: TextEditor) =
   let doc = editor.document
   let pos = editor.selection.active
   let mutable startLine = int pos.line
@@ -136,18 +136,18 @@ let private getCodeBlock (editor: TextEditor) =
 
 // ── Decorations ────────────────────────────────────────────────
 
-let private clearBlockDecoration (line: int) =
+let clearBlockDecoration (line: int) =
   match Map.tryFind line blockDecorations with
   | Some deco ->
     deco.dispose () |> ignore
     blockDecorations <- Map.remove line blockDecorations
   | None -> ()
 
-let private clearAllDecorations () =
+let clearAllDecorations () =
   blockDecorations |> Map.iter (fun _ deco -> deco.dispose () |> ignore)
   blockDecorations <- Map.empty
 
-let private showInlineResult (editor: TextEditor) (text: string) =
+let showInlineResult (editor: TextEditor) (text: string) =
   let trimmed = text.Trim()
   if trimmed = "" then () else
   let line =
@@ -179,7 +179,7 @@ let private showInlineResult (editor: TextEditor) (text: string) =
   blockDecorations <- Map.add line deco blockDecorations
   setTimeout (fun () -> clearBlockDecoration line) 30000 |> ignore
 
-let private showInlineDiagnostic (editor: TextEditor) (text: string) =
+let showInlineDiagnostic (editor: TextEditor) (text: string) =
   let firstLine =
     let parts = text.Split('\n')
     if parts.Length > 0 then parts.[0].Trim() else ""
@@ -226,7 +226,7 @@ let updateTestStatusBar (summary: VscTestSummary) =
       sb.backgroundColor <- None
     sb.show ()
 
-let private refreshStatus () =
+let refreshStatus () =
   promise {
     let c = getClient ()
     let sb = getStatusBar ()
@@ -285,7 +285,7 @@ let private refreshStatus () =
 
 // ── Daemon Lifecycle ───────────────────────────────────────────
 
-let rec private startDaemon () =
+let rec startDaemon () =
   promise {
     let c = getClient ()
     let! running = Client.isRunning c
@@ -356,7 +356,7 @@ let rec private startDaemon () =
         intervalId <- Some id
   }
 
-and private ensureRunning () =
+and ensureRunning () =
   promise {
     let c = getClient ()
     let! running = Client.isRunning c
@@ -381,7 +381,7 @@ and private ensureRunning () =
 
 // ── Commands ───────────────────────────────────────────────────
 
-let private evalSelection () =
+let evalSelection () =
   promise {
     match Window.getActiveTextEditor () with
     | None ->
@@ -427,7 +427,7 @@ let private evalSelection () =
           )
   }
 
-let private evalFile () =
+let evalFile () =
   promise {
     match Window.getActiveTextEditor () with
     | None -> ()
@@ -451,7 +451,7 @@ let private evalFile () =
             out.appendLine (sprintf "❌ Connection error: %s" (string err))
   }
 
-let private evalRange (args: obj) =
+let evalRange (args: obj) =
   promise {
     match Window.getActiveTextEditor () with
     | None -> ()
@@ -478,7 +478,7 @@ let private evalRange (args: obj) =
             out.appendLine (sprintf "❌ Connection error: %s" (string err))
   }
 
-let private resetSessionCmd () =
+let resetSessionCmd () =
   promise {
     let! ok = ensureRunning ()
     if ok then
@@ -489,7 +489,7 @@ let private resetSessionCmd () =
       refreshStatus ()
   }
 
-let private hardResetCmd () =
+let hardResetCmd () =
   promise {
     let! ok = ensureRunning ()
     if ok then
@@ -500,7 +500,7 @@ let private hardResetCmd () =
       refreshStatus ()
   }
 
-let private createSessionCmd () =
+let createSessionCmd () =
   promise {
     let! ok = ensureRunning ()
     if ok then
@@ -523,7 +523,7 @@ let private createSessionCmd () =
         )
   }
 
-let private switchSessionCmd () =
+let switchSessionCmd () =
   promise {
     let! ok = ensureRunning ()
     if ok then
@@ -556,7 +556,7 @@ let private switchSessionCmd () =
         | None -> ()
   }
 
-let private stopSessionCmd () =
+let stopSessionCmd () =
   promise {
     let! ok = ensureRunning ()
     if ok then
@@ -589,7 +589,7 @@ let private stopSessionCmd () =
         | None -> ()
   }
 
-let private stopDaemon () =
+let stopDaemon () =
   daemonProcess |> Option.iter killProc
   daemonProcess <- None
   Window.showInformationMessage "SageFs: stop the daemon from its terminal or use `sagefs stop`." [||] |> ignore
@@ -618,7 +618,7 @@ let openDashboard () =
     panel.onDidDispose (fun () -> dashboardPanel <- None) |> ignore
     dashboardPanel <- Some panel
 
-let private promptAutoStart () =
+let promptAutoStart () =
   promise {
     let! projPath = findProject ()
     match projPath with
@@ -634,7 +634,7 @@ let private promptAutoStart () =
       | _ -> ()
   }
 
-let private hijackIonideSendToFsi (subs: ResizeArray<Disposable>) =
+let hijackIonideSendToFsi (subs: ResizeArray<Disposable>) =
   for cmd in [| "fsi.SendSelection"; "fsi.SendLine"; "fsi.SendFile" |] do
     try
       let disp =

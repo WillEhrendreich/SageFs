@@ -62,8 +62,8 @@ module PlaywrightExpect =
 /// Shared Playwright instance — created once per test run.
 /// Requires `npx playwright install chromium` to have been run.
 module PlaywrightFixture =
-  let mutable private pw: IPlaywright option = None
-  let mutable private browser: IBrowser option = None
+  let mutable pw: IPlaywright option = None
+  let mutable browser: IBrowser option = None
 
   let dashboardUrl =
     let port =

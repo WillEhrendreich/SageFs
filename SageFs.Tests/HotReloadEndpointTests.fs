@@ -7,7 +7,7 @@ open Expecto
 open SageFs
 open SageFs.Server
 
-let private startTestServer () = task {
+let startTestServer () = task {
   let handler (_msg: WorkerProtocol.WorkerMessage) = async {
     return WorkerProtocol.WorkerResponse.WorkerShuttingDown
   }
@@ -17,25 +17,25 @@ let private startTestServer () = task {
     @"C:\proj\src\Main.fs"
     @"C:\proj\tests\Tests.fs"
   ]
-  let! server = WorkerHttpTransport.startServer handler stateRef projectFiles (fun () -> WarmupContext.empty) 0
+  let! server = WorkerHttpTransport.startServer handler stateRef projectFiles (fun () -> WarmupContext.empty) (fun () -> fun _tc -> async { return Features.LiveTesting.TestResult.NotRun }) 0
   return server, stateRef
 }
 
-let private httpClient = new HttpClient()
+let httpClient = new HttpClient()
 
-let private getJson (url: string) = task {
+let getJson (url: string) = task {
   let! resp = httpClient.GetStringAsync(url)
   return JsonDocument.Parse(resp)
 }
 
-let private postJson (url: string) (body: string) = task {
+let postJson (url: string) (body: string) = task {
   use content = new StringContent(body, Encoding.UTF8, "application/json")
   let! resp = httpClient.PostAsync(url, content)
   let! respBody = resp.Content.ReadAsStringAsync()
   return JsonDocument.Parse(respBody)
 }
 
-let private getHotReloadRoot (baseUrl: string) = task {
+let getHotReloadRoot (baseUrl: string) = task {
   let! (doc: JsonDocument) = getJson (sprintf "%s/hotreload" baseUrl)
   return doc.RootElement
 }

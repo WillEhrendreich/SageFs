@@ -5,10 +5,10 @@ open Expecto
 open SageFs
 open SageFs.Server.ConsoleInput
 
-let private feed (parser: VtInputParser) (s: string) =
+let feed (parser: VtInputParser) (s: string) =
   for c in s do parser.Feed(c)
 
-let private drain (parser: VtInputParser) =
+let drain (parser: VtInputParser) =
   let mutable events = []
   let mutable ev = parser.TryDequeue()
   while ev.IsSome do

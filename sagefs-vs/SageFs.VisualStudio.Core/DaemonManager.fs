@@ -7,7 +7,7 @@ open System.Net.Http
 /// Manages the SageFs daemon process lifecycle.
 module DaemonManager =
 
-  let private defaultMcpPort = 37749
+  let defaultMcpPort = 37749
 
   /// Check if a SageFs daemon is already running on the given port.
   let isDaemonRunning (mcpPort: int) =

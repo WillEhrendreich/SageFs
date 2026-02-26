@@ -96,6 +96,7 @@ module WorkerHttpTransport =
             for meter in SageFs.Instrumentation.allMeters do
               metrics.AddMeter(meter) |> ignore
             metrics.AddAspNetCoreInstrumentation() |> ignore
+            metrics.SetExemplarFilter(OpenTelemetry.Metrics.ExemplarFilterType.TraceBased) |> ignore
             metrics.AddOtlpExporter() |> ignore)
         |> ignore
       | None -> ()

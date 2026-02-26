@@ -466,7 +466,7 @@ let completionRenderTests = testList "completion dropdown rendering" [
 
 let raylibKeyMappingTests = testList "Raylib key mapping logic" [
   // Test the ConsoleKey → UiAction mapping (shared KeyMap logic)
-  // since raylibToConsoleKey is private, we test the shared keymap path
+  // raylibToConsoleKey — we test via the shared keymap path
 
   test "Ctrl+Q maps to Quit in default keymap" {
     let combo = KeyCombo.ctrl System.ConsoleKey.Q

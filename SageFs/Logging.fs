@@ -2,7 +2,7 @@ module SageFs.Server.Logging
 
 open SageFs.Utils
 
-module private Logging =
+module Logging =
   let logInfo = printfn "%s"
   let logDebug = printfn "\u001b[90m %s \u001b[0m"
   let logWarning = printfn "\u001b[33m %s \u001b[0m"

@@ -8,7 +8,7 @@ open SageFs
 /// VT escape sequence parser state machine.
 /// Parses both keyboard VT sequences and SGR mouse events (mode 1006).
 /// Cross-platform: works in Windows Terminal, iTerm2, and Linux terminals.
-type private ParserState =
+type ParserState =
   | Normal
   | GotEsc
   | GotCsi
@@ -192,10 +192,10 @@ type VtInputParser() =
 /// Background thread reads stdin character-by-character, feeds VT parser.
 /// Main loop drains parsed InputEvent values.
 module RawInput =
-  let private parser = VtInputParser()
-  let private charQueue = ConcurrentQueue<char>()
-  let mutable private running = false
-  let mutable private readerThread : Thread option = None
+  let parser = VtInputParser()
+  let charQueue = ConcurrentQueue<char>()
+  let mutable running = false
+  let mutable readerThread : Thread option = None
 
   /// Start background stdin reader. Call after raw mode is enabled.
   let start () =

@@ -188,13 +188,13 @@ let buildPipeline (middleware: Middleware list) evalFn =
 open System.Text.RegularExpressions
 
 // Pre-compiled regex patterns for cleanStdout (avoids recompilation per call)
-let private reAnsiCursorReset = Regex(@"\x1b\[\d+D", RegexOptions.Compiled)
-let private reAnsiCursorVis = Regex(@"\x1b\[\?25[hl]", RegexOptions.Compiled)
-let private reAnsiEscape = Regex(@"\x1b\[[0-9;]*[a-zA-Z]|\x1b\].*?\x07", RegexOptions.Compiled)
-let private reProgressBar = Regex(@"^\d+/\d+\s*\|", RegexOptions.Compiled)
-let private reExpectoTimestamp = Regex(@"^\[\d{2}:\d{2}:\d{2}\s+\w{3}\]\s*", RegexOptions.Compiled)
-let private reExpectoSuffix = Regex(@"\s*<Expecto>\s*$", RegexOptions.Compiled)
-let private reExpectoSummary = Regex(@"EXPECTO!\s+(\d+)\s+tests?\s+run\s+in\s+(\S+)\s+for\s+(.+?)\s+.\s+(\d+)\s+passed,\s+(\d+)\s+ignored,\s+(\d+)\s+failed,\s+(\d+)\s+errored\.\s+(\S+!?)", RegexOptions.Compiled)
+let reAnsiCursorReset = Regex(@"\x1b\[\d+D", RegexOptions.Compiled)
+let reAnsiCursorVis = Regex(@"\x1b\[\?25[hl]", RegexOptions.Compiled)
+let reAnsiEscape = Regex(@"\x1b\[[0-9;]*[a-zA-Z]|\x1b\].*?\x07", RegexOptions.Compiled)
+let reProgressBar = Regex(@"^\d+/\d+\s*\|", RegexOptions.Compiled)
+let reExpectoTimestamp = Regex(@"^\[\d{2}:\d{2}:\d{2}\s+\w{3}\]\s*", RegexOptions.Compiled)
+let reExpectoSuffix = Regex(@"\s*<Expecto>\s*$", RegexOptions.Compiled)
+let reExpectoSummary = Regex(@"EXPECTO!\s+(\d+)\s+tests?\s+run\s+in\s+(\S+)\s+for\s+(.+?)\s+.\s+(\d+)\s+passed,\s+(\d+)\s+ignored,\s+(\d+)\s+failed,\s+(\d+)\s+errored\.\s+(\S+!?)", RegexOptions.Compiled)
 
 /// Strip ANSI escape sequences and terminal control codes from a string.
 /// Cursor-reset sequences (move to column 0) become newlines to preserve logical line breaks.

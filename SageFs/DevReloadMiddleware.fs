@@ -6,7 +6,7 @@ open System.Text
 open System.Threading.Tasks
 open Microsoft.AspNetCore.Http
 
-let private reloadScript =
+let reloadScript =
   """<script>
 (function(){
   var es=new EventSource('/__sagefs__/reload');
@@ -15,7 +15,7 @@ let private reloadScript =
 })();
 </script>"""
 
-let private sseHandler (ctx: HttpContext) = task {
+let sseHandler (ctx: HttpContext) = task {
   ctx.Response.ContentType <- "text/event-stream"
   ctx.Response.Headers["Cache-Control"] <- "no-cache"
   ctx.Response.Headers["X-Accel-Buffering"] <- "no"

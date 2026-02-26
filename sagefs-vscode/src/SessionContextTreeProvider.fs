@@ -8,34 +8,34 @@ module Client = SageFs.Vscode.SageFsClient
 
 // ── Mutable state ────────────────────────────────────────────────
 
-let mutable private currentClient: Client.Client option = None
-let mutable private currentSessionId: string option = None
-let mutable private cachedContext: Client.WarmupContextInfo option = None
-let mutable private refreshEmitter: EventEmitter<obj> option = None
-let mutable private autoRefreshTimer: obj option = None
+let mutable currentClient: Client.Client option = None
+let mutable currentSessionId: string option = None
+let mutable cachedContext: Client.WarmupContextInfo option = None
+let mutable refreshEmitter: EventEmitter<obj> option = None
+let mutable autoRefreshTimer: obj option = None
 
 [<Emit("setInterval($0, $1)")>]
-let private jsSetInterval (fn: unit -> unit) (ms: int) : obj = jsNative
+let jsSetInterval (fn: unit -> unit) (ms: int) : obj = jsNative
 
 [<Emit("clearInterval($0)")>]
-let private jsClearInterval (handle: obj) : unit = jsNative
+let jsClearInterval (handle: obj) : unit = jsNative
 
 // ── Tree item builders ───────────────────────────────────────────
 
-let private sectionItem (label: string) (desc: string) (icon: string) =
+let sectionItem (label: string) (desc: string) (icon: string) =
   let item = newTreeItem label TreeItemCollapsibleState.Expanded
   item?description <- desc
   item?iconPath <- Vscode.newThemeIcon icon
   item?contextValue <- "section"
   item
 
-let private leafItem (label: string) (desc: string) (icon: string) =
+let leafItem (label: string) (desc: string) (icon: string) =
   let item = newTreeItem label TreeItemCollapsibleState.None
   item?description <- desc
   item?iconPath <- Vscode.newThemeIcon icon
   item
 
-let private summaryItem (ctx: Client.WarmupContextInfo) =
+let summaryItem (ctx: Client.WarmupContextInfo) =
   let nsCount = ctx.NamespacesOpened.Length
   let failCount = ctx.FailedOpens.Length
   let desc =
@@ -51,7 +51,7 @@ let private summaryItem (ctx: Client.WarmupContextInfo) =
 
 // ── TreeDataProvider ─────────────────────────────────────────────
 
-let private getChildren (element: obj option) : JS.Promise<obj array> =
+let getChildren (element: obj option) : JS.Promise<obj array> =
   promise {
     match element with
     | None ->
@@ -120,9 +120,9 @@ let private getChildren (element: obj option) : JS.Promise<obj array> =
       | _ -> return [||]
   }
 
-let private getTreeItem (element: obj) : obj = element
+let getTreeItem (element: obj) : obj = element
 
-let private createProvider () =
+let createProvider () =
   let emitter = newEventEmitter<obj> ()
   refreshEmitter <- Some emitter
   createObj [

@@ -1,4 +1,4 @@
-module SageFs.Tests.WorkerProtocolTests
+module SageFs.Tests.WorkerProtocolTests // trigger discovery
 
 open System
 open Expecto

@@ -40,7 +40,7 @@ type BufferError =
   | CursorOutOfBounds of cursor: CursorPosition * lineCount: int * maxCol: int
 
 /// A buffer with invariants enforced: never empty, cursor always in bounds
-type ValidatedBuffer = private {
+type ValidatedBuffer = {
   Lines: string list
   Cursor: CursorPosition
 }

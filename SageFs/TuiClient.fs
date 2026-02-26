@@ -6,7 +6,7 @@ open System.Threading
 open SageFs
 
 /// Convert an InputEvent (from VT parser) to a TerminalCommand via KeyMap lookup
-let private mapInputEvent (keyMap: KeyMap) (ev: InputEvent) : TerminalCommand option =
+let mapInputEvent (keyMap: KeyMap) (ev: InputEvent) : TerminalCommand option =
   match ev with
   | KeyEvent (key, ch, mods) ->
     let ki = ConsoleKeyInfo(ch, key, mods.HasFlag(ConsoleModifiers.Shift), mods.HasFlag(ConsoleModifiers.Alt), mods.HasFlag(ConsoleModifiers.Control))

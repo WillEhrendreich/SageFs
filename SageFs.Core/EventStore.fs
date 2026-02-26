@@ -10,7 +10,7 @@ open SageFs.Features.Events
 /// TextWriter wrapper that passes everything through except JasperFx assembly reference noise.
 /// JasperFx.RuntimeCompiler walks all loaded assemblies during code gen and Console.WriteLines
 /// when it can't resolve transitive deps (e.g. Ionide.ProjInfo → Microsoft.Build.Framework).
-type private FilteringTextWriter(inner: TextWriter) =
+type FilteringTextWriter(inner: TextWriter) =
   inherit TextWriter()
   static let isNoise (s: string) =
     not (isNull s)
@@ -24,7 +24,7 @@ type private FilteringTextWriter(inner: TextWriter) =
   override _.Flush() = inner.Flush()
 
 /// Install the filtering writer once, idempotently
-let private installFilter =
+let installFilter =
   lazy (Console.SetOut(new FilteringTextWriter(Console.Out)))
 
 /// Configure a Marten DocumentStore for SageFs event sourcing.

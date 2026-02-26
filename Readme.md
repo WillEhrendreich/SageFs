@@ -71,10 +71,11 @@ Tests are categorized automatically (Unit, Integration, Browser, Property, Bench
 - [x] **Tree-sitter source detection** — `tests.scm` query file detects test attributes in broken/incomplete F# code for instant gutter markers, even before the compiler runs
 - [x] **Test execution orchestration** — `TestOrchestrator` handles discovery, reflection-based execution with async parallelism and semaphore limits
 - [x] **Transitive coverage types & pure functions** — `TestDependencyGraph` with BFS reachability, `CoverageComputation` for line-level annotations, `filterByPolicy()` for trigger-based filtering
-- [x] **OTEL instrumentation** — `ActivitySource` + `Meter` with histograms for tree-sitter, FCS, and execution timing; zero-cost (~50ns) when no collector attached
+- [x] **OTEL instrumentation** — `ActivitySource` + `Meter` with histograms for tree-sitter, FCS, execution timing, standby pool metrics (pool size, warmup duration, invalidation count, age at swap), and file watcher counters; trace-based exemplar filter; zero-cost (~50ns) when no collector attached
 - [x] **Elm architecture integration** — 8 event types (`TestsDiscovered`, `TestResultsBatch`, `AffectedTestsComputed`, `CoverageUpdated`, etc.) wired through `SageFsModel` update loop
 - [x] **TUI gutter rendering** — `LineAnnotation` icons/colors rendered in the terminal UI via `RenderPipeline`, toggle with **Ctrl+Alt+T**
 - [x] **Harmony hot-reload trigger** — `LiveTestingHook.afterReload()` called after every successful eval in `HotReloading.fs`, detecting providers, discovering tests, and finding affected tests from updated methods. Results flow through worker protocol metadata into the Elm event loop.
+- [x] **Composed multi-provider test execution** — Multiple test providers (FSI hook + project-level reflection) compose their `RunTest` closures with fallthrough semantics — the first provider that can run a test wins. `GetTestDiscovery` worker message enables on-demand discovery without a full eval cycle.
 - [x] **Run policy enforcement** — `filterByPolicy()` integrated into execution paths so unit tests run on keystroke, integration on save, browser on demand
 - [x] **SSE push of test results** — `TestSummaryChanged` and `TestResultsBatch` events streamed to connected HTTP/SSE clients via push notification architecture
 - [x] **MCP live test tools** — `get_live_test_status` (query test state with file filter), `set_run_policy` (control which categories run when), `get_pipeline_trace` (debug the pipeline waterfall)

@@ -8,7 +8,7 @@ open Marten
 open SageFs.Features.Events
 
 /// TextWriter wrapper that passes everything through except JasperFx assembly reference noise.
-type private FilteringTextWriter(inner: TextWriter) =
+type FilteringTextWriter(inner: TextWriter) =
   inherit TextWriter()
   static let isNoise (s: string) =
     not (isNull s)
@@ -21,7 +21,7 @@ type private FilteringTextWriter(inner: TextWriter) =
   override _.WriteLine() = inner.WriteLine()
   override _.Flush() = inner.Flush()
 
-let private installFilter =
+let installFilter =
   lazy (Console.SetOut(new FilteringTextWriter(Console.Out)))
 
 /// Configure a Marten DocumentStore for SageFs event sourcing.

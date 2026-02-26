@@ -69,6 +69,7 @@ module WorkerProtocol =
     | HardResetSession of rebuild: bool * replyId: string
     | GetStatus of replyId: string
     | RunTests of tests: Features.LiveTesting.TestCase array * maxParallelism: int * replyId: string
+    | GetTestDiscovery of replyId: string
     | Shutdown
 
   type WorkerDiagnostic = {
@@ -133,6 +134,7 @@ module WorkerProtocol =
     | HardResetResult of replyId: string * result: Result<string, SageFsError>
     | ScriptLoaded of replyId: string * result: Result<string, SageFsError>
     | TestRunResults of replyId: string * results: Features.LiveTesting.TestRunResult array
+    | InitialTestDiscovery of tests: Features.LiveTesting.TestCase array * providers: Features.LiveTesting.ProviderDescription list
     | WorkerReady
     | WorkerShuttingDown
     | WorkerError of SageFsError

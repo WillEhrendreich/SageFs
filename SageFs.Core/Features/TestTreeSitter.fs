@@ -12,7 +12,7 @@ module TestTreeSitter =
 
   /// Lazy-initialized tree-sitter F# language and test query.
   /// Shared across all calls — parse is per-invocation but query compilation is one-time.
-  let private resources =
+  let resources =
     lazy
       try
         let asmDir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location)
