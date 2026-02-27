@@ -181,6 +181,8 @@ module CoverageInstrumenter =
                 else ""
               Line = sp.StartLine
               Column = sp.StartColumn
+              EndLine = sp.EndLine
+              EndColumn = sp.EndColumn
               BranchId = slotId }
             : SageFs.Features.LiveTesting.SequencePoint)
         let map =

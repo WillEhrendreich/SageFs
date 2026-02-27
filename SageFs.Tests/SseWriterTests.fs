@@ -313,7 +313,8 @@ let protocolSnapshotTests = testList "Protocol Snapshots" [
 
     testCase "CoverageLineAnnotation shape" <| fun () ->
       let cla : CoverageLineAnnotation = {
-        Line = 42; Detail = CoverageStatus.Covered(2, CoverageHealth.AllPassing)
+        Line = 42; EndLine = 0; EndColumn = 0
+        Detail = CoverageStatus.Covered(2, CoverageHealth.AllPassing)
         CoveringTestIds = [| TestId.TestId "t1"; TestId.TestId "t2" |]
         BranchCoverage = None
       }
@@ -471,7 +472,7 @@ let sessionScopingTests = testList "SSE Session Scoping" [
 ]
 
 let private mkSp file line col bid : SequencePoint =
-  { File = file; Line = line; Column = col; BranchId = bid }
+  { File = file; Line = line; Column = col; EndLine = 0; EndColumn = 0; BranchId = bid }
 
 [<Tests>]
 let branchCoverageTests = testList "Branch Coverage Wiring" [

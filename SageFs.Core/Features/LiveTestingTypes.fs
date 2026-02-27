@@ -276,8 +276,15 @@ type SequencePoint = {
   File: string
   Line: int
   Column: int
+  EndLine: int
+  EndColumn: int
   BranchId: int
 }
+
+module SequencePoint =
+  /// Check if the sequence point has valid range data (non-degenerate).
+  let hasRange (sp: SequencePoint) =
+    sp.EndLine > 0 && (sp.EndLine > sp.Line || (sp.EndLine = sp.Line && sp.EndColumn > sp.Column))
 
 type CoverageState = {
   Slots: SequencePoint array
@@ -2180,6 +2187,8 @@ type TestLineAnnotation = {
 
 type CoverageLineAnnotation = {
   Line: int
+  EndLine: int
+  EndColumn: int
   Detail: CoverageStatus
   CoveringTestIds: TestId array
   BranchCoverage: LineCoverage option
@@ -2381,6 +2390,8 @@ module FileAnnotations =
       |> Array.filter (fun ca -> ca.FilePath = filePath)
       |> Array.map (fun ca ->
         { Line = ca.DefinitionLine
+          EndLine = 0
+          EndColumn = 0
           Detail = ca.Status
           CoveringTestIds =
             match depGraph with
@@ -2441,6 +2452,8 @@ module FileAnnotations =
         synthesized
         |> Array.map (fun ca ->
           { Line = ca.DefinitionLine
+            EndLine = 0
+            EndColumn = 0
             Detail = ca.Status
             CoveringTestIds =
               match Map.tryFind ca.Symbol pipelineState.DepGraph.SymbolToTests with
