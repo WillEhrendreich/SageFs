@@ -334,7 +334,7 @@ module McpContextTests =
         
         // Context should be valid without StartupConfig field
         Expect.isTrue true "Should have actor"
-        Expect.isTrue (box ctx.Store <> null) "Should have store"
+        Expect.isTrue (box ctx.Persistence <> null) "Should have persistence"
     ]
 
 // ============================================================================

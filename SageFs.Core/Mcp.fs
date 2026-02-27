@@ -591,18 +591,18 @@ module EventTracking =
   open SageFs.Features.Events
 
   /// Track an input event (code submitted by user/agent/file)
-  let trackInput (store: Marten.IDocumentStore) (streamId: string) (source: EventSource) (content: string) =
+  let trackInput (p: EventStore.EventPersistence) (streamId: string) (source: EventSource) (content: string) =
     let evt = McpInputReceived {| Source = source; Content = content |}
     task {
-      let! _ = EventStore.appendEvents store streamId [evt]
+      let! _ = p.AppendEvents streamId [evt]
       return ()
     }
 
   /// Track an output event (result sent back to user/agent)
-  let trackOutput (store: Marten.IDocumentStore) (streamId: string) (source: EventSource) (content: string) =
+  let trackOutput (p: EventStore.EventPersistence) (streamId: string) (source: EventSource) (content: string) =
     let evt = McpOutputSent {| Source = source; Content = content |}
     task {
-      let! _ = EventStore.appendEvents store streamId [evt]
+      let! _ = p.AppendEvents streamId [evt]
       return ()
     }
 
@@ -632,9 +632,9 @@ module EventTracking =
     (ts.UtcDateTime, source, content)
 
   /// Get recent events from the session stream
-  let getRecentEvents (store: Marten.IDocumentStore) (streamId: string) (count: int) =
+  let getRecentEvents (p: EventStore.EventPersistence) (streamId: string) (count: int) =
     task {
-      let! events = EventStore.fetchStream store streamId
+      let! events = p.FetchStream streamId
       return
         events
         |> List.map formatEvent
@@ -644,15 +644,15 @@ module EventTracking =
     }
 
   /// Get all events from the session stream
-  let getAllEvents (store: Marten.IDocumentStore) (streamId: string) =
+  let getAllEvents (p: EventStore.EventPersistence) (streamId: string) =
     task {
-      let! events = EventStore.fetchStream store streamId
+      let! events = p.FetchStream streamId
       return events |> List.map formatEvent
     }
 
   /// Count events in the session stream
-  let getEventCount (store: Marten.IDocumentStore) (streamId: string) =
-    EventStore.countEvents store streamId
+  let getEventCount (p: EventStore.EventPersistence) (streamId: string) =
+    p.CountEvents streamId
 
 /// MCP tool implementations — all tools route through SessionManager.
 /// There is no "local embedded session" — every session is a worker.
@@ -661,7 +661,7 @@ module McpTools =
   open System.Threading
 
   type McpContext = {
-    Store: Marten.IDocumentStore
+    Persistence: EventStore.EventPersistence
     DiagnosticsChanged: IEvent<Features.DiagnosticsStore.T>
     /// Fires serialized JSON whenever the Elm model changes.
     StateChanged: IEvent<string> option
@@ -828,7 +828,7 @@ module McpTools =
       Instrumentation.fsiStatements.Add(int64 statements.Length)
       let span = Instrumentation.startSpan Instrumentation.mcpSource "fsi.eval"
                    ["fsi.agent.name", box agentName; "fsi.statement.count", box statements.Length; "fsi.session.id", box sid]
-      do! EventTracking.trackInput ctx.Store sid (Features.Events.McpAgent agentName) code
+      do! EventTracking.trackInput ctx.Persistence sid (Features.Events.McpAgent agentName) code
 
       let mutable allOutputs = []
       for statement in statements do
@@ -887,20 +887,20 @@ module McpTools =
           String.concat "\n\n" (List.rev allOutputs)
         | _ -> allOutputs |> List.tryHead |> Option.defaultValue ""
 
-      do! EventTracking.trackOutput ctx.Store sid (Features.Events.McpAgent agentName) finalOutput
+      do! EventTracking.trackOutput ctx.Persistence sid (Features.Events.McpAgent agentName) finalOutput
       Instrumentation.succeedSpan span
       return finalOutput
     })
 
   let getRecentEvents (ctx: McpContext) (agent: string) (count: int) (workingDirectory: string option) : Task<string> =
     withSessionWd ctx agent workingDirectory (fun sid -> task {
-      let! events = EventTracking.getRecentEvents ctx.Store sid count
+      let! events = EventTracking.getRecentEvents ctx.Persistence sid count
       return McpAdapter.formatEvents events
     })
 
   let getStatus (ctx: McpContext) (agent: string) (sessionId: string option) (workingDirectory: string option) : Task<string> =
     withSession ctx agent sessionId workingDirectory (fun sid -> task {
-      let! eventCount = EventTracking.getEventCount ctx.Store sid
+      let! eventCount = EventTracking.getEventCount ctx.Persistence sid
       let! routeResult =
         routeToSession ctx sid
           (fun replyId -> WorkerProtocol.WorkerMessage.GetStatus replyId)
@@ -1188,7 +1188,7 @@ module McpTools =
         let prev = activeSessionId ctx agent
         setActiveSessionId ctx agent sessionId
         // Persist switch to daemon stream
-        let! _ = EventStore.appendEvents ctx.Store "daemon-sessions" [
+        let! _ = ctx.Persistence.AppendEvents "daemon-sessions" [
           Features.Events.SageFsEvent.DaemonSessionSwitched
             {| FromId = Some prev; ToId = sessionId; SwitchedAt = DateTimeOffset.UtcNow |}
         ]

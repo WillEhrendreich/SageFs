@@ -114,3 +114,23 @@ let countEvents (store: IDocumentStore) (streamId: string) =
 /// Create a session stream ID
 let createSessionId () =
   sprintf "session-%s" (Guid.NewGuid().ToString("N").[..7])
+
+/// Persistence abstraction: InMemory (no-op) or PostgreSQL-backed.
+type EventPersistence = {
+  AppendEvents: string -> SageFsEvent list -> Threading.Tasks.Task<Result<unit, string>>
+  FetchStream: string -> Threading.Tasks.Task<(DateTimeOffset * SageFsEvent) list>
+  CountEvents: string -> Threading.Tasks.Task<int>
+}
+
+module EventPersistence =
+  let inMemory () : EventPersistence = {
+    AppendEvents = fun _ _ -> Threading.Tasks.Task.FromResult (Ok ())
+    FetchStream = fun _ -> Threading.Tasks.Task.FromResult []
+    CountEvents = fun _ -> Threading.Tasks.Task.FromResult 0
+  }
+
+  let postgres (store: IDocumentStore) : EventPersistence = {
+    AppendEvents = fun streamId events -> appendEvents store streamId events
+    FetchStream = fun streamId -> fetchStream store streamId
+    CountEvents = fun streamId -> countEvents store streamId
+  }

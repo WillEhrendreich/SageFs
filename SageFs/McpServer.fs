@@ -259,11 +259,11 @@ let withErrorHandling (ctx: Microsoft.AspNetCore.Http.HttpContext) (handler: uni
 }
 
 // Create shared MCP context
-let mkContext (store: Marten.IDocumentStore) (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.T>) (stateChanged: IEvent<string> option) (sessionOps: SageFs.SessionManagementOps) (mcpPort: int) (dispatch: (SageFs.SageFsMsg -> unit) option) (getElmModel: (unit -> SageFs.SageFsModel) option) (getElmRegions: (unit -> SageFs.RenderRegion list) option) (getWarmupContext: (string -> System.Threading.Tasks.Task<SageFs.WarmupContext option>) option) : McpContext =
-  { Store = store; DiagnosticsChanged = diagnosticsChanged; StateChanged = stateChanged; SessionOps = sessionOps; SessionMap = System.Collections.Concurrent.ConcurrentDictionary<string, string>(); McpPort = mcpPort; Dispatch = dispatch; GetElmModel = getElmModel; GetElmRegions = getElmRegions; GetWarmupContext = getWarmupContext }
+let mkContext (persistence: SageFs.EventStore.EventPersistence) (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.T>) (stateChanged: IEvent<string> option) (sessionOps: SageFs.SessionManagementOps) (mcpPort: int) (dispatch: (SageFs.SageFsMsg -> unit) option) (getElmModel: (unit -> SageFs.SageFsModel) option) (getElmRegions: (unit -> SageFs.RenderRegion list) option) (getWarmupContext: (string -> System.Threading.Tasks.Task<SageFs.WarmupContext option>) option) : McpContext =
+  { Persistence = persistence; DiagnosticsChanged = diagnosticsChanged; StateChanged = stateChanged; SessionOps = sessionOps; SessionMap = System.Collections.Concurrent.ConcurrentDictionary<string, string>(); McpPort = mcpPort; Dispatch = dispatch; GetElmModel = getElmModel; GetElmRegions = getElmRegions; GetWarmupContext = getWarmupContext }
 
 // Start MCP server in background
-let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.T>) (stateChanged: IEvent<string> option) (store: Marten.IDocumentStore) (port: int) (sessionOps: SageFs.SessionManagementOps) (elmRuntime: SageFs.ElmRuntime<SageFs.SageFsModel, SageFs.SageFsMsg, SageFs.RenderRegion> option) (getWarmupContext: (string -> System.Threading.Tasks.Task<SageFs.WarmupContext option>) option) =
+let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.T>) (stateChanged: IEvent<string> option) (persistence: SageFs.EventStore.EventPersistence) (port: int) (sessionOps: SageFs.SessionManagementOps) (elmRuntime: SageFs.ElmRuntime<SageFs.SageFsModel, SageFs.SageFsMsg, SageFs.RenderRegion> option) (getWarmupContext: (string -> System.Threading.Tasks.Task<SageFs.WarmupContext option>) option) =
     task {
         try
             let dispatch = elmRuntime |> Option.map (fun r -> r.Dispatch)
@@ -346,7 +346,7 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
             ) |> ignore
             
             // Create MCP context
-            let mcpContext = (mkContext store diagnosticsChanged stateChanged sessionOps port dispatch getElmModel getElmRegions getWarmupContext)
+            let mcpContext = (mkContext persistence diagnosticsChanged stateChanged sessionOps port dispatch getElmModel getElmRegions getWarmupContext)
             
             // Register MCP services
             builder.Services.AddSingleton<McpContext>(mcpContext) |> ignore
@@ -401,7 +401,7 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
             app.MapMcp() |> ignore
 
             // Shared context — constructed once
-            let mcpContext = mkContext store diagnosticsChanged stateChanged sessionOps port dispatch getElmModel getElmRegions getWarmupContext
+            let mcpContext = mkContext persistence diagnosticsChanged stateChanged sessionOps port dispatch getElmModel getElmRegions getWarmupContext
             
             // POST /exec — send F# code to the session
             app.MapPost("/exec", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
@@ -723,7 +723,7 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                         d (SageFs.SageFsMsg.Event (SageFs.SageFsEvent.SessionSwitched (None, sid)))
                         d (SageFs.SageFsMsg.Editor SageFs.EditorAction.ListSessions)
                       | None -> ()
-                      let! _ = SageFs.EventStore.appendEvents store "daemon-sessions" [
+                      let! _ = mcpContext.Persistence.AppendEvents "daemon-sessions" [
                         SageFs.Features.Events.SageFsEvent.DaemonSessionSwitched
                           {| FromId = None; ToId = sid; SwitchedAt = System.DateTimeOffset.UtcNow |}
                       ]

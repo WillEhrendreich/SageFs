@@ -18,7 +18,7 @@ module McpSessionIsolation =
     let sessionMap = ConcurrentDictionary<string, string>()
     sessionMap.["test"] <- sessionId
     let ctx =
-      { Store = testStore.Value
+      { Persistence = SageFs.EventStore.EventPersistence.postgres testStore.Value
         DiagnosticsChanged = result.DiagnosticsChanged
         StateChanged = None
         SessionOps = {
@@ -111,9 +111,9 @@ module McpSessionIsolation =
     testTask "switchSession persists DaemonSessionSwitched event to store" {
       let ctx, _ = ctxWithTracking "session-A"
 
-      let! countBefore = EventStore.countEvents ctx.Store "daemon-sessions"
+      let! countBefore = ctx.Persistence.CountEvents "daemon-sessions"
       let! _ = switchSession ctx "test" "session-B"
-      let! countAfter = EventStore.countEvents ctx.Store "daemon-sessions"
+      let! countAfter = ctx.Persistence.CountEvents "daemon-sessions"
 
       countAfter - countBefore
       |> Expect.equal "should append exactly 1 event to daemon-sessions stream" 1
@@ -124,7 +124,7 @@ module McpSessionIsolation =
       let sessionMap = ConcurrentDictionary<string, string>()
       sessionMap.["test"] <- "session-A"
       let ctx =
-        { Store = testStore.Value
+        { Persistence = SageFs.EventStore.EventPersistence.postgres testStore.Value
           DiagnosticsChanged = result.DiagnosticsChanged
           StateChanged = None
           SessionOps = {
@@ -258,7 +258,7 @@ module WorkingDirRoutingPriority =
 
   let mkCtx (sessions: WorkerProtocol.SessionInfo list) (proxies: Map<string, WorkerProtocol.SessionProxy>) : McpContext =
     let sessionMap = ConcurrentDictionary<string, string>()
-    { Store = Unchecked.defaultof<_>; DiagnosticsChanged = Unchecked.defaultof<_>
+    { Persistence = SageFs.EventStore.EventPersistence.inMemory (); DiagnosticsChanged = Unchecked.defaultof<_>
       StateChanged = None
       SessionOps =
         { CreateSession = fun _ _ -> Task.FromResult(Error(SageFsError.SessionCreationFailed "n/a"))
@@ -345,7 +345,7 @@ module ResetIsolation =
       GetStandbyInfo = fun () -> System.Threading.Tasks.Task.FromResult(SageFs.StandbyInfo.NoPool)
     }
     let ctx =
-      { Store = testStore.Value
+      { Persistence = SageFs.EventStore.EventPersistence.postgres testStore.Value
         DiagnosticsChanged = result.DiagnosticsChanged
         StateChanged = None
         SessionOps = ops

@@ -6,6 +6,7 @@ type Arguments =
   | No_Watch
   | No_Resume
   | Prune
+  | Persist
   | Sln of fileName: string
   | Proj of filename: string
   | Dir of workingDirectory: string
@@ -25,6 +26,7 @@ let rec parseLoop (args: string list) (acc: Arguments list) =
   | "--no-watch" :: rest -> parseLoop rest (No_Watch :: acc)
   | "--no-resume" :: rest -> parseLoop rest (No_Resume :: acc)
   | "--prune" :: rest -> parseLoop rest (Prune :: acc)
+  | "--persist" :: rest -> parseLoop rest (Persist :: acc)
   | "--sln" :: file :: rest -> parseLoop rest (Sln file :: acc)
   | "--proj" :: file :: rest -> parseLoop rest (Proj file :: acc)
   | "--dir" :: dir :: rest -> parseLoop rest (Dir dir :: acc)

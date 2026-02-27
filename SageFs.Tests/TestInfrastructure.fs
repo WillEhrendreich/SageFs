@@ -55,7 +55,7 @@ let sharedCtx () =
   let sessionId = SageFs.EventStore.createSessionId ()
   let sessionMap = ConcurrentDictionary<string, string>()
   sessionMap.["test"] <- sessionId
-  { Store = testStore.Value
+  { Persistence = SageFs.EventStore.EventPersistence.postgres testStore.Value
     DiagnosticsChanged = result.DiagnosticsChanged
     StateChanged = None
     SessionOps = mkTestSessionOps result sessionId
@@ -71,7 +71,7 @@ let sharedCtxWith sessionId =
   let result = globalActorResult.Value
   let sessionMap = ConcurrentDictionary<string, string>()
   sessionMap.["test"] <- sessionId
-  { Store = testStore.Value
+  { Persistence = SageFs.EventStore.EventPersistence.postgres testStore.Value
     DiagnosticsChanged = result.DiagnosticsChanged
     StateChanged = None
     SessionOps = mkTestSessionOps result sessionId

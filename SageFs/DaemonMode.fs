@@ -40,26 +40,40 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
 
   log.LogInformation("SageFs daemon v{Version} starting on port {Port}", version, mcpPort)
 
-  // Set up event store
-  let connectionString = PostgresInfra.getOrStartPostgres ()
-  match connectionString with
-  | None ->
-    log.LogError("Cannot start daemon without a PostgreSQL event store.")
-    log.LogError("Either start Docker Desktop or set SageFs_CONNECTION_STRING environment variable.")
-    return ()
-  | Some connStr ->
-  let eventStore = SageFs.EventStore.configureStore connStr
+  // Set up persistence: InMemory by default, PostgreSQL with --persist or SAGEFS_CONNECTION_STRING
+  let hasPersist = args |> List.exists (function Args.Arguments.Persist -> true | _ -> false)
+  let envConnStr = System.Environment.GetEnvironmentVariable("SAGEFS_CONNECTION_STRING")
+  let persistence =
+    if hasPersist || not (System.String.IsNullOrEmpty envConnStr) then
+      let connectionString =
+        if not (System.String.IsNullOrEmpty envConnStr) then
+          log.LogInformation("Using PostgreSQL from SAGEFS_CONNECTION_STRING")
+          Some envConnStr
+        else
+          log.LogInformation("--persist: starting PostgreSQL via Docker...")
+          PostgresInfra.getOrStartPostgres ()
+      match connectionString with
+      | Some connStr ->
+        let store = SageFs.EventStore.configureStore connStr
+        log.LogInformation("Event persistence: PostgreSQL")
+        SageFs.EventStore.EventPersistence.postgres store
+      | None ->
+        log.LogWarning("PostgreSQL unavailable, falling back to InMemory mode")
+        SageFs.EventStore.EventPersistence.inMemory ()
+    else
+      log.LogInformation("Event persistence: InMemory (use --persist for PostgreSQL)")
+      SageFs.EventStore.EventPersistence.inMemory ()
   let daemonStreamId = "daemon-sessions"
 
   // Handle --prune: mark all alive sessions as stopped and exit
   if args |> List.exists (function Args.Arguments.Prune -> true | _ -> false) then
-    let! daemonEvents = SageFs.EventStore.fetchStream eventStore daemonStreamId
+    let! daemonEvents = persistence.FetchStream daemonStreamId
     let daemonState = Features.Replay.DaemonReplayState.replayStream daemonEvents
     let pruneEvents = Features.Replay.DaemonReplayState.pruneAllSessions daemonState
     if pruneEvents.IsEmpty then
       log.LogInformation("No alive sessions to prune")
     else
-      let! result = SageFs.EventStore.appendEvents eventStore daemonStreamId pruneEvents
+      let! result = persistence.AppendEvents daemonStreamId pruneEvents
       match result with
       | Ok () -> log.LogInformation("Pruned {Count} session(s)", pruneEvents.Length)
       | Error msg -> log.LogWarning("Prune failed: {Error}", msg)
@@ -97,7 +111,7 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
           |> Async.StartAsTask
         match result with
         | Ok info ->
-          let! _ = SageFs.EventStore.appendEvents eventStore daemonStreamId [
+          let! _ = persistence.AppendEvents daemonStreamId [
             Features.Events.SageFsEvent.DaemonSessionCreated
               {| SessionId = info.Id; Projects = projects; WorkingDir = workingDir; CreatedAt = DateTimeOffset.UtcNow |}
           ]
@@ -119,7 +133,7 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
             SessionManager.SessionCommand.StopSession(sessionId, reply))
           |> Async.StartAsTask
         // Persist stop event
-        let! _ = SageFs.EventStore.appendEvents eventStore daemonStreamId [
+        let! _ = persistence.AppendEvents daemonStreamId [
           Features.Events.SageFsEvent.DaemonSessionStopped
             {| SessionId = sessionId; StoppedAt = DateTimeOffset.UtcNow |}
         ]
@@ -173,7 +187,7 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
 
     // Replay phase
     let replaySpan = Instrumentation.startSpan Instrumentation.sessionSource "sagefs.daemon.event_replay" []
-    let! daemonEvents = SageFs.EventStore.fetchStream eventStore daemonStreamId
+    let! daemonEvents = persistence.FetchStream daemonStreamId
     let daemonState = Features.Replay.DaemonReplayState.replayStream daemonEvents
     let eventCount = daemonEvents.Length
     Instrumentation.daemonReplayEventCount.Add(int64 eventCount)
@@ -202,7 +216,7 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
         uniqueByDir |> List.map (fun r -> r.SessionId) |> Set.ofList
       let prunedCount = (Set.difference staleIds keptIds).Count
       for staleId in Set.difference staleIds keptIds do
-        let! _ = SageFs.EventStore.appendEvents eventStore daemonStreamId [
+        let! _ = persistence.AppendEvents daemonStreamId [
           Features.Events.SageFsEvent.DaemonSessionStopped
             {| SessionId = staleId; StoppedAt = DateTimeOffset.UtcNow |}
         ]
@@ -221,7 +235,7 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
         uniqueByDir |> List.partition (fun prev -> IO.Directory.Exists prev.WorkingDir)
       for prev in missing do
         log.LogWarning("Skipping session {SessionId} — directory {WorkingDir} no longer exists", prev.SessionId, prev.WorkingDir)
-        let! _ = SageFs.EventStore.appendEvents eventStore daemonStreamId [
+        let! _ = persistence.AppendEvents daemonStreamId [
           Features.Events.SageFsEvent.DaemonSessionStopped
             {| SessionId = prev.SessionId; StoppedAt = DateTimeOffset.UtcNow |}
         ]
@@ -237,7 +251,7 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
           | Ok info ->
             Instrumentation.daemonSessionsResumed.Add(1L)
             // Stop the OLD session ID so it doesn't resurrect on next restart
-            let! _ = SageFs.EventStore.appendEvents eventStore daemonStreamId [
+            let! _ = persistence.AppendEvents daemonStreamId [
               Features.Events.SageFsEvent.DaemonSessionStopped
                 {| SessionId = prev.SessionId; StoppedAt = DateTimeOffset.UtcNow |}
             ]
@@ -419,7 +433,7 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
     McpServer.startMcpServer
       diagnosticsChanged.Publish
       (Some stateChangedEvent.Publish)
-      eventStore
+      persistence
       mcpPort
       sessionOps
       (Some elmRuntime)
@@ -676,7 +690,7 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
         let historicalSessions =
           try
             let events =
-              SageFs.EventStore.fetchStream eventStore daemonStreamId
+              persistence.FetchStream daemonStreamId
               |> fun t -> t.ConfigureAwait(false).GetAwaiter().GetResult()
             let daemonState = Features.Replay.DaemonReplayState.replayStream events
             daemonState.Sessions
@@ -933,7 +947,7 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
         SessionManager.SessionCommand.ListSessions reply)
       |> Async.StartAsTask
     for info in activeSessions do
-      let! _ = SageFs.EventStore.appendEvents eventStore daemonStreamId [
+      let! _ = persistence.AppendEvents daemonStreamId [
         Features.Events.SageFsEvent.DaemonSessionStopped
           {| SessionId = info.Id; StoppedAt = DateTimeOffset.UtcNow |}
       ]
