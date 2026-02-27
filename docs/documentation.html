@@ -1,0 +1,808 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SageFs — Documentation</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=Newsreader:ital,opsz,wght@0,6..72,300;0,6..72,400;0,6..72,500;1,6..72,300;1,6..72,400&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&display=swap');
+
+  :root {
+    --bg: #08090c;
+    --bg-warm: #0c0d11;
+    --surface: #111318;
+    --surface-raised: #181b22;
+    --surface-hover: #1f232d;
+    --border: #252a36;
+    --border-bright: #3a4158;
+    --text: #b8c0d4;
+    --text-dim: #5e6a84;
+    --text-bright: #e4e9f5;
+    --text-heading: #f0f3fa;
+    --blue: #6cb6ff;
+    --purple: #c49bff;
+    --green: #6fdb80;
+    --orange: #f5a762;
+    --pink: #f28ec4;
+    --cyan: #6ee7ef;
+    --red: #ff8b82;
+    --yellow: #ebc950;
+    --glow-blue: rgba(108,182,255,0.08);
+    --glow-purple: rgba(196,155,255,0.08);
+    --glow-green: rgba(111,219,128,0.06);
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'DM Sans', sans-serif;
+    font-size: 15px;
+    line-height: 1.7;
+  }
+
+  /* grain */
+  body::after {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.025'/%3E%3C/svg%3E");
+    pointer-events: none;
+    z-index: 9999;
+  }
+
+  /* NAV */
+  nav {
+    position: fixed;
+    top: 0; left: 0; right: 0;
+    z-index: 100;
+    background: rgba(8,9,12,0.85);
+    backdrop-filter: blur(20px);
+    border-bottom: 1px solid var(--border);
+    padding: 0 32px;
+    display: flex;
+    align-items: center;
+    height: 52px;
+    gap: 32px;
+  }
+  nav .logo {
+    font-family: 'JetBrains Mono', monospace;
+    font-weight: 700;
+    font-size: 16px;
+    color: var(--blue);
+    letter-spacing: -0.5px;
+    white-space: nowrap;
+  }
+  nav .logo a { color: inherit; text-decoration: none; }
+  nav a {
+    color: var(--text-dim);
+    text-decoration: none;
+    font-size: 13px;
+    font-weight: 500;
+    letter-spacing: 0.3px;
+    transition: color 0.2s;
+  }
+  nav a:hover { color: var(--text-bright); }
+
+  /* LAYOUT */
+  .page-layout {
+    display: flex;
+    max-width: 1300px;
+    margin: 0 auto;
+    padding-top: 52px;
+  }
+
+  /* SIDEBAR */
+  .sidebar {
+    position: sticky;
+    top: 52px;
+    width: 240px;
+    height: calc(100vh - 52px);
+    overflow-y: auto;
+    padding: 32px 16px 32px 24px;
+    border-right: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  .sidebar-section {
+    margin-bottom: 28px;
+  }
+  .sidebar-section h4 {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    color: var(--text-dim);
+    margin-bottom: 10px;
+    padding-left: 8px;
+  }
+  .sidebar-section a {
+    display: block;
+    padding: 5px 8px;
+    font-size: 13px;
+    color: var(--text-dim);
+    text-decoration: none;
+    border-radius: 5px;
+    transition: all 0.15s;
+  }
+  .sidebar-section a:hover {
+    color: var(--text-bright);
+    background: var(--surface);
+  }
+
+  /* CONTENT */
+  .content {
+    flex: 1;
+    padding: 48px 48px 120px;
+    max-width: 860px;
+    min-width: 0;
+  }
+
+  .doc-title {
+    font-family: 'Newsreader', serif;
+    font-size: 38px;
+    font-weight: 400;
+    color: var(--text-heading);
+    letter-spacing: -0.5px;
+    margin-bottom: 12px;
+    line-height: 1.2;
+  }
+  .doc-subtitle {
+    color: var(--text-dim);
+    font-size: 16px;
+    margin-bottom: 48px;
+    line-height: 1.8;
+  }
+
+  h2 {
+    font-family: 'Newsreader', serif;
+    font-size: 28px;
+    font-weight: 400;
+    color: var(--text-heading);
+    letter-spacing: -0.3px;
+    margin-top: 56px;
+    margin-bottom: 16px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border);
+  }
+  h2:first-of-type { margin-top: 0; border-top: none; padding-top: 0; }
+
+  h3 {
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--text-bright);
+    margin-top: 32px;
+    margin-bottom: 10px;
+  }
+
+  p {
+    margin-bottom: 16px;
+    line-height: 1.8;
+  }
+
+  a { color: var(--blue); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  code {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px;
+    background: rgba(255,255,255,0.06);
+    padding: 2px 6px;
+    border-radius: 4px;
+    color: var(--text-bright);
+  }
+
+  pre {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px 24px;
+    overflow-x: auto;
+    margin: 16px 0 24px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px;
+    line-height: 1.7;
+    color: var(--text-bright);
+  }
+  pre code {
+    background: none;
+    padding: 0;
+    border-radius: 0;
+  }
+
+  /* TABLE */
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 16px 0 24px;
+  }
+  th {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--text-dim);
+    text-align: left;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+  }
+  td {
+    padding: 10px 14px;
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+    font-size: 14px;
+    vertical-align: top;
+  }
+  td code { font-size: 12px; }
+  tr:hover td { background: rgba(255,255,255,0.02); }
+
+  /* CALLOUT */
+  .callout {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--blue);
+    border-radius: 8px;
+    padding: 18px 22px;
+    margin: 20px 0;
+    font-size: 14px;
+  }
+  .callout.green { border-left-color: var(--green); }
+  .callout.orange { border-left-color: var(--orange); }
+  .callout.purple { border-left-color: var(--purple); }
+  .callout strong { color: var(--text-bright); }
+
+  /* LISTS */
+  ul, ol {
+    margin: 8px 0 16px 24px;
+    line-height: 1.8;
+  }
+  li { margin-bottom: 4px; }
+
+  /* FOOTER */
+  footer {
+    text-align: center;
+    padding: 40px;
+    color: var(--text-dim);
+    font-size: 13px;
+    border-top: 1px solid var(--border);
+  }
+  footer code { font-size: 12px; }
+
+  @media (max-width: 900px) {
+    .sidebar { display: none; }
+    .content { padding: 32px 20px 80px; }
+  }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="logo"><a href="index.html">SageFs</a></div>
+  <a href="index.html">Architecture</a>
+  <a href="documentation.html" style="color:var(--blue);">Docs</a>
+  <a href="https://github.com/WillEhrendreich/SageFs" target="_blank" style="margin-left:auto;color:var(--text-dim);">GitHub ↗</a>
+</nav>
+
+<div class="page-layout">
+
+<!-- SIDEBAR -->
+<aside class="sidebar">
+  <div class="sidebar-section">
+    <h4>Getting Started</h4>
+    <a href="#install">Installation</a>
+    <a href="#quickstart">Quick Start</a>
+    <a href="#modes">Startup Modes</a>
+  </div>
+  <div class="sidebar-section">
+    <h4>CLI Reference</h4>
+    <a href="#subcommands">Subcommands</a>
+    <a href="#flags">Flags</a>
+    <a href="#env">Environment Variables</a>
+  </div>
+  <div class="sidebar-section">
+    <h4>MCP Tools</h4>
+    <a href="#mcp-overview">Overview</a>
+    <a href="#mcp-tools">Tool Reference</a>
+    <a href="#mcp-states">State Machine</a>
+  </div>
+  <div class="sidebar-section">
+    <h4>Architecture</h4>
+    <a href="#daemon">Daemon &amp; Workers</a>
+    <a href="#elm">Elm Architecture</a>
+    <a href="#rendering">Rendering Pipeline</a>
+    <a href="#live-testing">Live Testing</a>
+    <a href="#hot-reload">Hot Reload</a>
+  </div>
+  <div class="sidebar-section">
+    <h4>Editors</h4>
+    <a href="#neovim">Neovim</a>
+    <a href="#vscode">VS Code</a>
+    <a href="#vs">Visual Studio</a>
+    <a href="#tui">Built-in TUI</a>
+    <a href="#gui">Raylib GUI</a>
+  </div>
+</aside>
+
+<!-- CONTENT -->
+<main class="content">
+
+<h1 class="doc-title">Documentation</h1>
+<p class="doc-subtitle">
+  Everything you need to know about installing, configuring, and using SageFs —
+  the live F# development environment with instant feedback.
+</p>
+
+<!-- ─── GETTING STARTED ─── -->
+<h2 id="install">Installation</h2>
+
+<p>SageFs is distributed as a .NET global tool. You need the <a href="https://dotnet.microsoft.com/download/dotnet/10.0">.NET 10 SDK</a> installed.</p>
+
+<pre><code>dotnet tool install --global SageFs</code></pre>
+
+<p>Verify the installation:</p>
+<pre><code>SageFs --version</code></pre>
+
+<div class="callout green">
+  <strong>Tip:</strong> SageFs auto-detects existing daemons. If one is already running for your project,
+  it connects instead of starting a new one.
+</div>
+
+<h2 id="quickstart">Quick Start</h2>
+
+<p>Point SageFs at your F# project and start coding:</p>
+
+<pre><code># Start with a project
+SageFs --proj path/to/MyProject.fsproj
+
+# Or with a solution
+SageFs --sln path/to/MySolution.slnx
+
+# Or auto-detect from current directory
+SageFs</code></pre>
+
+<p>
+  SageFs launches a <strong>daemon</strong> that loads your project, pre-compiles your dependencies,
+  and opens an interactive session. You'll see a full-screen TUI with an editor pane, output pane,
+  and test status. Hit <code>Ctrl+Enter</code> to evaluate code, or just save a file —
+  the daemon watches for changes and hot-reloads automatically.
+</p>
+
+<h2 id="modes">Startup Modes</h2>
+
+<p>SageFs operates in several modes depending on how you invoke it:</p>
+
+<table>
+  <thead><tr><th>Mode</th><th>What It Does</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><code>SageFs --proj X.fsproj</code></td>
+      <td><strong>Default (daemon + TUI).</strong> Starts the daemon if not running, then opens the terminal UI. This is the most common invocation.</td>
+    </tr>
+    <tr>
+      <td><code>SageFs tui</code></td>
+      <td>Connect to an <em>already running</em> daemon with the terminal UI. Fails if no daemon is found.</td>
+    </tr>
+    <tr>
+      <td><code>SageFs gui</code></td>
+      <td>Connect to a running daemon with the <strong>Raylib GPU GUI</strong> — same features, rendered with GPU quads instead of ANSI.</td>
+    </tr>
+    <tr>
+      <td><code>SageFs connect</code></td>
+      <td>Attach a plain REPL to a running daemon. No TUI chrome — just stdin/stdout eval.</td>
+    </tr>
+    <tr>
+      <td><code>SageFs status</code></td>
+      <td>Print daemon info (PID, port, sessions, uptime) and exit.</td>
+    </tr>
+    <tr>
+      <td><code>SageFs stop</code></td>
+      <td>Gracefully stop the running daemon.</td>
+    </tr>
+  </tbody>
+</table>
+
+<!-- ─── CLI REFERENCE ─── -->
+<h2 id="subcommands">Subcommands</h2>
+
+<table>
+  <thead><tr><th>Subcommand</th><th>Description</th></tr></thead>
+  <tbody>
+    <tr><td><code>daemon</code></td><td>Start as background daemon (default when no subcommand given)</td></tr>
+    <tr><td><code>worker</code></td><td>Internal: launched by the daemon to run an isolated FSI worker process</td></tr>
+    <tr><td><code>connect</code></td><td>Plain REPL connection to a running daemon</td></tr>
+    <tr><td><code>tui</code></td><td>Terminal UI client — full interactive TUI connected to the daemon</td></tr>
+    <tr><td><code>gui</code></td><td>Raylib GPU GUI client — same features, GPU-rendered window</td></tr>
+    <tr><td><code>stop</code></td><td>Stop the running daemon</td></tr>
+    <tr><td><code>status</code></td><td>Show daemon info and exit</td></tr>
+  </tbody>
+</table>
+
+<p>Source: <a href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs/Program.fs"><code>SageFs/Program.fs</code></a></p>
+
+<h2 id="flags">Flags</h2>
+
+<table>
+  <thead><tr><th>Flag</th><th>Description</th></tr></thead>
+  <tbody>
+    <tr><td><code>--proj &lt;file&gt;</code></td><td>Load a specific <code>.fsproj</code> project file</td></tr>
+    <tr><td><code>--sln &lt;file&gt;</code></td><td>Load a <code>.sln</code> or <code>.slnx</code> solution file</td></tr>
+    <tr><td><code>--dir &lt;path&gt;</code></td><td>Set the working directory</td></tr>
+    <tr><td><code>--no-watch</code></td><td>Disable file watching — no auto-reload on save</td></tr>
+    <tr><td><code>--no-resume</code></td><td>Don't restore previous session state on startup</td></tr>
+    <tr><td><code>--bare</code></td><td>Minimal startup — skip warmup, no project pre-loading</td></tr>
+    <tr><td><code>--prune</code></td><td>Clean up stale session data before starting</td></tr>
+    <tr><td><code>--persist</code></td><td>Enable persistent event store for session history</td></tr>
+    <tr><td><code>--mcp-port &lt;n&gt;</code></td><td>Set custom MCP server port (default: 37749)</td></tr>
+    <tr><td><code>--supervised</code></td><td>Run under watchdog — auto-restart on crash</td></tr>
+    <tr><td><code>-r:&lt;file&gt;</code></td><td>Add an assembly reference</td></tr>
+    <tr><td><code>--load &lt;file&gt;</code></td><td>Load and execute an F# script file on startup</td></tr>
+    <tr><td><code>--use &lt;file&gt;</code></td><td>Use an F# script file (like <code>--load</code> but in fresh scope)</td></tr>
+    <tr><td><code>--lib &lt;dirs&gt;</code></td><td>Add library search directories (comma-separated)</td></tr>
+    <tr><td><code>-h</code>, <code>--help</code></td><td>Show help and exit</td></tr>
+    <tr><td><code>-v</code>, <code>--version</code></td><td>Show version and exit</td></tr>
+  </tbody>
+</table>
+
+<p>Source: <a href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/Args.fs"><code>SageFs.Core/Args.fs</code></a></p>
+
+<h2 id="env">Environment Variables</h2>
+
+<table>
+  <thead><tr><th>Variable</th><th>Description</th><th>Default</th></tr></thead>
+  <tbody>
+    <tr><td><code>SageFs_MCP_PORT</code></td><td>Override the MCP server port</td><td><code>37749</code></td></tr>
+    <tr><td><code>SAGEFS_BIND_HOST</code></td><td>Bind address for the daemon HTTP server</td><td><code>localhost</code></td></tr>
+  </tbody>
+</table>
+
+<!-- ─── MCP ─── -->
+<h2 id="mcp-overview">MCP — Model Context Protocol</h2>
+
+<p>
+  SageFs exposes an <a href="https://modelcontextprotocol.io/">MCP</a> server that allows
+  AI agents (Claude, GitHub Copilot, etc.) to interact with live F# sessions. The MCP server
+  runs on port <strong>37749</strong> by default and serves tools over Server-Sent Events (SSE).
+</p>
+
+<p>
+  The available tools change based on session state — you can't evaluate code while the session
+  is still warming up, for example. This is by design: it prevents race conditions and gives
+  agents clear feedback about what's possible at any moment.
+</p>
+
+<p>Source: <a href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/Mcp.fs"><code>SageFs.Core/Mcp.fs</code></a>,
+  <a href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/Affordances.fs"><code>SageFs.Core/Affordances.fs</code></a></p>
+
+<h2 id="mcp-tools">MCP Tool Reference</h2>
+
+<table>
+  <thead><tr><th>Tool</th><th>Description</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><code>send_fsharp_code</code></td>
+      <td>Execute F# code in the live session. Each <code>;;</code> is an isolated transaction — partial progress survives failures. Returns evaluation output or errors.</td>
+    </tr>
+    <tr>
+      <td><code>check_fsharp_code</code></td>
+      <td>Type-check code without executing it. Returns compiler diagnostics (errors, warnings) — the AI equivalent of "does this compile?"</td>
+    </tr>
+    <tr>
+      <td><code>load_fsharp_script</code></td>
+      <td>Load and execute an <code>.fsx</code> file. Each statement runs independently, so partial progress is preserved if a statement fails.</td>
+    </tr>
+    <tr>
+      <td><code>get_completions</code></td>
+      <td>Code completions at a cursor position. Returns available types, functions, and members from the loaded project and all referenced assemblies.</td>
+    </tr>
+    <tr>
+      <td><code>explore_namespace</code></td>
+      <td>Browse types, functions, and sub-namespaces within a given .NET namespace. No documentation needed — explore the type system interactively.</td>
+    </tr>
+    <tr>
+      <td><code>explore_type</code></td>
+      <td>View members, constructors, and properties of a specific type. Provide the fully-qualified name (e.g., <code>System.String</code>).</td>
+    </tr>
+    <tr>
+      <td><code>run_tests</code></td>
+      <td>Execute tests by name pattern, category, or run all. Returns structured pass/fail results with timing data.</td>
+    </tr>
+    <tr>
+      <td><code>get_live_test_status</code></td>
+      <td>Query the current state of all discovered tests — passing, failing, stale, running. Optionally filter by source file.</td>
+    </tr>
+    <tr>
+      <td><code>get_fsi_status</code></td>
+      <td>Session health check: loaded projects, session statistics, available capabilities, and current state.</td>
+    </tr>
+    <tr>
+      <td><code>get_startup_info</code></td>
+      <td>Detailed startup information: loaded projects, enabled features, command-line arguments.</td>
+    </tr>
+    <tr>
+      <td><code>get_recent_fsi_events</code></td>
+      <td>Recent FSI events (evaluations, errors, script loads) with timestamps. Default: last 10 events.</td>
+    </tr>
+    <tr>
+      <td><code>get_pipeline_trace</code></td>
+      <td>Pipeline diagnostics: enabled state, provider list, run policies, and per-test timing for finding bottlenecks.</td>
+    </tr>
+    <tr>
+      <td><code>reset_fsi_session</code></td>
+      <td>Soft reset: clears all user-defined types and values but keeps the session alive. Project namespaces are re-warmed.</td>
+    </tr>
+    <tr>
+      <td><code>hard_reset_fsi_session</code></td>
+      <td>Hard reset: disposes the session, releases DLL locks, optionally rebuilds the project, creates a fresh session. Use <code>rebuild=true</code> after editing <code>.fs</code> files.</td>
+    </tr>
+    <tr>
+      <td><code>cancel_eval</code></td>
+      <td>Cancel a running evaluation. Use when an eval is stuck or taking too long.</td>
+    </tr>
+    <tr>
+      <td><code>set_run_policy</code></td>
+      <td>Set when tests in a category auto-run. Categories: unit, integration, browser, benchmark, architecture, property. Policies: every, save, demand, disabled.</td>
+    </tr>
+    <tr>
+      <td><code>enable_live_testing</code></td>
+      <td>Turn on automatic test execution after hot reload.</td>
+    </tr>
+    <tr>
+      <td><code>disable_live_testing</code></td>
+      <td>Turn off automatic test execution.</td>
+    </tr>
+    <tr>
+      <td><code>get_available_projects</code></td>
+      <td>Discover <code>.fsproj</code> and <code>.sln</code>/<code>.slnx</code> files in the working directory.</td>
+    </tr>
+    <tr>
+      <td><code>create_session</code></td>
+      <td>Create a new FSI session with specified project(s). Each session runs in its own worker process.</td>
+    </tr>
+    <tr>
+      <td><code>list_sessions</code></td>
+      <td>List all active FSI sessions with metadata: session ID, projects, state, working directory, last activity.</td>
+    </tr>
+    <tr>
+      <td><code>switch_session</code></td>
+      <td>Switch the active session. Subsequent tool calls route to the selected session.</td>
+    </tr>
+    <tr>
+      <td><code>stop_session</code></td>
+      <td>Stop an active FSI session. The worker process is gracefully shut down.</td>
+    </tr>
+    <tr>
+      <td><code>get_elm_state</code></td>
+      <td>Get the current Elm model rendered as regions — shows editor content, output, diagnostics, sessions.</td>
+    </tr>
+  </tbody>
+</table>
+
+<h2 id="mcp-states">Session State Machine</h2>
+
+<p>
+  The MCP tools available to an agent depend on the session's current state. This prevents
+  race conditions — you can't evaluate code while the session is still loading your project.
+</p>
+
+<table>
+  <thead><tr><th>State</th><th>Available Tools</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><strong>Uninitialized</strong></td>
+      <td><code>get_fsi_status</code></td>
+    </tr>
+    <tr>
+      <td><strong>WarmingUp</strong></td>
+      <td><code>get_fsi_status</code>, <code>get_recent_fsi_events</code></td>
+    </tr>
+    <tr>
+      <td><strong>Ready</strong></td>
+      <td><code>send_fsharp_code</code>, <code>load_fsharp_script</code>, <code>check_fsharp_code</code>, <code>get_completions</code>, <code>reset_fsi_session</code>, <code>hard_reset_fsi_session</code>, <code>cancel_eval</code>, <code>get_fsi_status</code>, <code>get_startup_info</code>, <code>get_recent_fsi_events</code></td>
+    </tr>
+    <tr>
+      <td><strong>Evaluating</strong></td>
+      <td><code>cancel_eval</code>, <code>get_fsi_status</code>, <code>get_recent_fsi_events</code>, <code>get_completions</code>, <code>check_fsharp_code</code></td>
+    </tr>
+    <tr>
+      <td><strong>Faulted</strong></td>
+      <td><code>get_fsi_status</code>, <code>get_recent_fsi_events</code>, <code>reset_fsi_session</code>, <code>hard_reset_fsi_session</code></td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="callout purple">
+  <strong>Note for AI agents:</strong> If you get "Operation could not be completed due to earlier error,"
+  that means <em>your code</em> has a bug — the session is fine. Read the diagnostics, fix the code,
+  and resubmit. Do <strong>not</strong> reset the session.
+</div>
+
+<!-- ─── ARCHITECTURE ─── -->
+<h2 id="daemon">Daemon &amp; Workers</h2>
+
+<p>
+  SageFs uses a <strong>daemon + worker</strong> architecture. When you start SageFs, a single daemon process
+  launches and manages everything: HTTP endpoints, SSE subscriptions, MCP server, session routing.
+  Actual F# evaluation happens in separate <strong>worker</strong> processes — one per session.
+</p>
+
+<h3>Why separate processes?</h3>
+<ul>
+  <li><strong>Crash isolation</strong> — a worker crash doesn't take down the daemon or other sessions</li>
+  <li><strong>DLL locking</strong> — each worker has its own assembly load context via shadow copying</li>
+  <li><strong>Parallelism</strong> — multiple sessions can evaluate code concurrently</li>
+</ul>
+
+<h3>Worker Protocol</h3>
+<p>
+  The daemon communicates with workers over HTTP using a typed message protocol defined in
+  <a href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/WorkerProtocol.fs"><code>WorkerProtocol.fs</code></a>.
+  Each message is a discriminated union case — evaluate, check types, get completions, reset, etc.
+</p>
+
+<h3>Standby Pool</h3>
+<p>
+  To eliminate cold-start delays, the daemon maintains a <strong>standby pool</strong> of pre-warmed workers
+  (<a href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/StandbyPool.fs"><code>StandbyPool.fs</code></a>).
+  When you reset a session, a warm standby swaps in instantly — your project is already compiled and loaded.
+  The pool auto-replenishes when <code>.fsproj</code> changes are detected.
+</p>
+
+<h3>Crash Recovery</h3>
+<p>
+  The <a href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/Watchdog.fs"><code>Watchdog</code></a>
+  monitors every worker. If one crashes, it auto-restarts with exponential backoff. State is
+  event-sourced (<a href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/EventStore.fs"><code>EventStore.fs</code></a>),
+  so a recovered session resumes where it left off.
+</p>
+
+<h2 id="elm">Elm Architecture</h2>
+
+<p>
+  All state management follows the <strong>Elm architecture</strong> (TEA — The Elm Architecture):
+</p>
+
+<pre><code>type Update = Msg → Model → Model * Effect list</code></pre>
+
+<p>
+  Every event — keystrokes, file changes, test results, SSE messages, MCP requests — dispatches
+  through a pure <code>update</code> function. No shared mutable state. No locks. Side effects
+  execute <em>after</em> the model updates. The UI is always a pure function of the current model.
+</p>
+
+<p>Key files:</p>
+<ul>
+  <li><a href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/ElmLoop.fs"><code>ElmLoop.fs</code></a> — generic event loop implementation</li>
+  <li><a href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/SageFsApp.fs"><code>SageFsApp.fs</code></a> — main app wiring: routes messages to features</li>
+  <li><a href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/ElmDaemon.fs"><code>ElmDaemon.fs</code></a> — daemon-mode loop with SSE and HTTP</li>
+  <li><a href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/AppState.fs"><code>AppState.fs</code></a> — the single immutable model record</li>
+</ul>
+
+<h2 id="rendering">Rendering Pipeline</h2>
+
+<p>
+  SageFs has two UI frontends — a <strong>terminal TUI</strong> and a <strong>Raylib GPU GUI</strong> —
+  that share the exact same rendering pipeline:
+</p>
+
+<pre><code>ElmModel → render → RenderRegion list → Screen.draw → Cell[,] → Backend.emit
+                                                                   ├── AnsiEmitter (TUI)
+                                                                   └── RaylibEmitter (GUI)</code></pre>
+
+<p>
+  The shared <code>Cell[,]</code> grid is a 2D array of characters with colors and attributes.
+  All layout, drawing, and pane composition happens at this abstract level
+  (<a href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/TerminalUI.fs"><code>TerminalUI.fs</code></a>).
+  The TUI backend emits ANSI escape codes; the Raylib backend draws GPU quads.
+  Same logic, pixel-perfect parity.
+</p>
+
+<h2 id="live-testing">Live Testing</h2>
+
+<p>
+  SageFs discovers and runs tests <em>continuously</em> as you code. The three-speed pipeline:
+</p>
+
+<ol>
+  <li><strong>Discovery</strong> (~50ms) — <a href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/Features/TestTreeSitter.fs"><code>TestTreeSitter.fs</code></a> finds test functions using Tree-sitter, even in code that won't compile</li>
+  <li><strong>Dependency Graph</strong> (~350ms) — the F# Compiler Service builds a graph of what changed and what depends on it</li>
+  <li><strong>Execution</strong> — only affected tests run via <a href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/Features/LiveTestingExecutors.fs"><code>LiveTestingExecutors.fs</code></a></li>
+</ol>
+
+<h3>Run Policies</h3>
+<p>Tests are categorized, and each category has a configurable run policy:</p>
+
+<table>
+  <thead><tr><th>Policy</th><th>When Tests Run</th></tr></thead>
+  <tbody>
+    <tr><td><code>every</code></td><td>On every change (keystroke-level). Default for unit tests.</td></tr>
+    <tr><td><code>save</code></td><td>On file save only. Good for integration tests.</td></tr>
+    <tr><td><code>demand</code></td><td>Manual trigger only. For slow browser/benchmark tests.</td></tr>
+    <tr><td><code>disabled</code></td><td>Never auto-run.</td></tr>
+  </tbody>
+</table>
+
+<h2 id="hot-reload">Hot Reload</h2>
+
+<p>
+  When you save an <code>.fs</code> file, SageFs patches method pointers at runtime — no IL instrumentation,
+  no process restart. Changed functions are live in <strong>~100ms</strong>. The pipeline:
+</p>
+
+<ol>
+  <li><a href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/FileWatcher.fs"><code>FileWatcher.fs</code></a> detects the change</li>
+  <li>Only the changed file recompiles (F# Compiler Services incremental compilation)</li>
+  <li><a href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/Middleware/HotReloading.fs"><code>HotReloading.fs</code></a> patches the method table</li>
+  <li>Live testing pipeline re-runs affected tests</li>
+  <li>All connected editors receive updated results via SSE</li>
+</ol>
+
+<!-- ─── EDITORS ─── -->
+<h2 id="neovim">Neovim Plugin</h2>
+
+<p>
+  The Neovim plugin (<a href="https://github.com/WillEhrendreich/sagefs.nvim"><code>sagefs.nvim</code></a>)
+  is a first-class client with 23 Lua modules and 669 tests. It connects to the running daemon
+  via SSE and provides:
+</p>
+
+<ul>
+  <li><strong>Cell evaluation</strong> — send code to the daemon with <code>Ctrl+Enter</code></li>
+  <li><strong>Inline results</strong> — evaluation output displayed as virtual text next to your code</li>
+  <li><strong>Gutter signs</strong> — green/red marks for test pass/fail status on each line</li>
+  <li><strong>Live test panel</strong> — floating window showing all tests and their current state</li>
+  <li><strong>Coverage gutter</strong> — highlights which lines are exercised by passing tests</li>
+  <li><strong>Type explorer</strong> — browse .NET namespaces and types from within Neovim</li>
+  <li><strong>Session management</strong> — create, switch, reset sessions via commands</li>
+  <li><strong>Code completions</strong> — powered by the daemon's F# Compiler Services integration</li>
+  <li><strong>Daemon lifecycle</strong> — auto-detects or starts the daemon</li>
+</ul>
+
+<h2 id="vscode">VS Code Extension</h2>
+
+<p>
+  The VS Code extension lives in <a href="https://github.com/WillEhrendreich/SageFs/tree/master/sagefs-vscode"><code>sagefs-vscode/</code></a>
+  and is written in F# compiled to JavaScript via <a href="https://fable.io/">Fable</a>.
+  It manages the daemon lifecycle and connects to it for real-time feedback.
+</p>
+
+<h2 id="vs">Visual Studio Extension</h2>
+
+<p>
+  The Visual Studio extension lives in <a href="https://github.com/WillEhrendreich/SageFs/tree/master/sagefs-vs"><code>sagefs-vs/</code></a>.
+  It uses the VS Extensibility SDK (net8.0-windows8.0) with a C# shim
+  (<a href="https://github.com/WillEhrendreich/SageFs/tree/master/sagefs-vs/SageFs.VisualStudio"><code>SageFs.VisualStudio</code></a>)
+  and F# core logic
+  (<a href="https://github.com/WillEhrendreich/SageFs/tree/master/sagefs-vs/SageFs.VisualStudio.Core"><code>SageFs.VisualStudio.Core</code></a>).
+</p>
+
+<h2 id="tui">Built-in TUI</h2>
+
+<p>
+  The default SageFs experience. A full-screen terminal interface with multiple panes:
+  editor, output, sessions, tests, diagnostics, and a status bar showing frame time.
+  Built on the shared <code>Cell[,]</code> rendering pipeline. Source:
+  <a href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs/TuiClient.fs"><code>SageFs/TuiClient.fs</code></a>.
+</p>
+
+<h2 id="gui">Raylib GPU GUI</h2>
+
+<p>
+  Same features as the TUI but rendered in a GPU-accelerated window using
+  <a href="https://www.raylib.com/">Raylib</a>. Provides crisp font rendering and smooth
+  scrolling. Lives in <a href="https://github.com/WillEhrendreich/SageFs/tree/master/SageFs.Gui"><code>SageFs.Gui/</code></a>.
+  Launch with <code>SageFs gui</code> or <code>SageFs --both</code> to run TUI and GUI simultaneously.
+</p>
+
+</main>
+</div>
+
+<footer>
+  <a href="index.html">← Architecture</a> &nbsp;·&nbsp;
+  <a href="https://github.com/WillEhrendreich/SageFs">GitHub</a> &nbsp;·&nbsp;
+  Built with F# and a single-minded refusal to wait for <code>dotnet build</code>.
+</footer>
+
+</body>
+</html>

@@ -384,6 +384,14 @@
     border-radius: 3px;
     margin: 1px 2px;
   }
+  .engine-card .engine-files a {
+    text-decoration: none;
+    transition: all 0.15s;
+  }
+  .engine-card .engine-files a:hover code {
+    background: rgba(108,182,255,0.15);
+    color: var(--blue);
+  }
 
   /* colored engine icons */
   .engine-icon.blue { background: var(--glow-blue); color: var(--blue); }
@@ -568,6 +576,14 @@
   }
   .stat {
     padding: 20px;
+    text-decoration: none;
+    display: block;
+    border-radius: 10px;
+    transition: all 0.2s;
+    cursor: pointer;
+  }
+  .stat:hover {
+    background: var(--surface-hover);
   }
   .stat .stat-num {
     font-family: 'Newsreader', serif;
@@ -619,7 +635,9 @@
     background: rgba(255,255,255,0.06);
     border: 1px solid rgba(255,255,255,0.1);
     color: var(--text);
-    cursor: default;
+    cursor: pointer;
+    text-decoration: none;
+    display: inline-block;
     transition: all 0.2s;
     position: relative;
   }
@@ -723,6 +741,8 @@
   <a href="#protocol">One Daemon</a>
   <a href="#ai">AI Integration</a>
   <a href="#map">Full Map</a>
+  <a href="documentation.html" style="color:var(--blue);">Docs</a>
+  <a href="https://github.com/WillEhrendreich/SageFs" target="_blank" style="margin-left:auto;color:var(--text-dim);">GitHub ↗</a>
 </nav>
 
 <!-- HERO -->
@@ -986,7 +1006,7 @@
         Changed functions are live in ~100ms. The browser auto-refreshes via SSE.
         Only the changed file recompiles; everything else stays warm.
       </div>
-      <div class="engine-files"><code>HotReloading.fs</code> <code>HotReloadState.fs</code> <code>FileWatcher.fs</code></div>
+      <div class="engine-files"><a href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/Middleware/HotReloading.fs" target="_blank"><code>HotReloading.fs</code></a> <a href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/HotReloadState.fs" target="_blank"><code>HotReloadState.fs</code></a> <a href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/FileWatcher.fs" target="_blank"><code>FileWatcher.fs</code></a></div>
     </div>
 
     <div class="engine-card">
@@ -1000,7 +1020,7 @@
         Tests run on every change by default — no save needed. Configurable per category:
         unit on every keystroke, integration on save, browser on demand.
       </div>
-      <div class="engine-files"><code>LiveTestRunner.fs</code> <code>LiveTestDiscovery.fs</code> <code>LiveTestStatus.fs</code> <code>LiveTestPipeline.fs</code></div>
+      <div class="engine-files"><a href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/Features/LiveTestingExecutors.fs" target="_blank"><code>LiveTestingExecutors.fs</code></a> <a href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/Features/TestTreeSitter.fs" target="_blank"><code>TestTreeSitter.fs</code></a> <a href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/Features/LiveTestingTypes.fs" target="_blank"><code>LiveTestingTypes.fs</code></a></div>
     </div>
 
     <div class="engine-card">
@@ -1014,7 +1034,7 @@
         <code>get_completions</code> tool. Explore any loaded .NET API interactively.
         Diagnostics (type errors, warnings) stream inline as you type.
       </div>
-      <div class="engine-files"><code>AutoCompletion.fs</code> <code>Diagnostics.fs</code> <code>Completions.fs</code> <code>Editor.fs</code></div>
+      <div class="engine-files"><a href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/Features/AutoCompletion.fs" target="_blank"><code>AutoCompletion.fs</code></a> <a href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/Features/Diagnostics.fs" target="_blank"><code>Diagnostics.fs</code></a> <a href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/Editor.fs" target="_blank"><code>Editor.fs</code></a></div>
     </div>
 
     <div class="engine-card">
@@ -1027,7 +1047,7 @@
         Sessions persist across daemon restarts. Soft reset clears definitions;
         hard reset rebuilds from scratch.
       </div>
-      <div class="engine-files"><code>SessionManager.fs</code> <code>SessionLifecycle.fs</code> <code>SessionOperations.fs</code></div>
+      <div class="engine-files"><a href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/SessionManager.fs" target="_blank"><code>SessionManager.fs</code></a> <a href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/SessionLifecycle.fs" target="_blank"><code>SessionLifecycle.fs</code></a> <a href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/SessionOperations.fs" target="_blank"><code>SessionOperations.fs</code></a></div>
     </div>
 
     <div class="engine-card">
@@ -1039,7 +1059,7 @@
         already compiled and loaded. When you reset, the standby swaps in instantly —
         no cold start. The pool auto-heats when project files change.
       </div>
-      <div class="engine-files"><code>StandbyPool.fs</code> <code>WorkerProtocol.fs</code> <code>HttpWorkerClient.fs</code></div>
+      <div class="engine-files"><a href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/StandbyPool.fs" target="_blank"><code>StandbyPool.fs</code></a> <a href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/WorkerProtocol.fs" target="_blank"><code>WorkerProtocol.fs</code></a> <a href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/HttpWorkerClient.fs" target="_blank"><code>HttpWorkerClient.fs</code></a></div>
     </div>
 
     <div class="engine-card">
@@ -1051,7 +1071,7 @@
         The TUI backend emits ANSI escape codes. The Raylib backend draws GPU quads.
         Same layout engine, same input handling, pixel-perfect parity.
       </div>
-      <div class="engine-files"><code>RenderPipeline.fs</code> <code>CellGrid.fs</code> <code>Draw.fs</code> <code>Screen.fs</code> <code>AnsiEmitter.fs</code></div>
+      <div class="engine-files"><a href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/RenderPipeline.fs" target="_blank"><code>RenderPipeline.fs</code></a> <a href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/CellGrid.fs" target="_blank"><code>CellGrid.fs</code></a> <a href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/Draw.fs" target="_blank"><code>Draw.fs</code></a> <a href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/Screen.fs" target="_blank"><code>Screen.fs</code></a> <a href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/AnsiEmitter.fs" target="_blank"><code>AnsiEmitter.fs</code></a></div>
     </div>
 
     <div class="engine-card">
@@ -1064,7 +1084,7 @@
         No shared mutable state. No locks. Side effects execute after the model updates.
         The UI is always a pure function of the current model.
       </div>
-      <div class="engine-files"><code>ElmLoop.fs</code> <code>SageFsApp.fs</code> <code>ElmDaemon.fs</code> <code>AppState.fs</code></div>
+      <div class="engine-files"><a href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/ElmLoop.fs" target="_blank"><code>ElmLoop.fs</code></a> <a href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/SageFsApp.fs" target="_blank"><code>SageFsApp.fs</code></a> <a href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/ElmDaemon.fs" target="_blank"><code>ElmDaemon.fs</code></a> <a href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/AppState.fs" target="_blank"><code>AppState.fs</code></a></div>
     </div>
 
     <div class="engine-card">
@@ -1077,7 +1097,7 @@
         is supervised at the OS level. State is event-sourced, so nothing is lost.
         A crashed session resumes exactly where it left off.
       </div>
-      <div class="engine-files"><code>Watchdog.fs</code> <code>DaemonState.fs</code> <code>EventStore.fs</code></div>
+      <div class="engine-files"><a href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/Watchdog.fs" target="_blank"><code>Watchdog.fs</code></a> <a href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/DaemonState.fs" target="_blank"><code>DaemonState.fs</code></a> <a href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/EventStore.fs" target="_blank"><code>EventStore.fs</code></a></div>
     </div>
 
     <div class="engine-card">
@@ -1090,7 +1110,7 @@
         Pipeline trace tool shows exactly where time is spent: discovery, compilation,
         execution, rendering.
       </div>
-      <div class="engine-files"><code>Instrumentation.fs</code> <code>Tracing.fs</code></div>
+      <div class="engine-files"><a href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/Instrumentation.fs" target="_blank"><code>Instrumentation.fs</code></a></div>
     </div>
 
   </div>
@@ -1156,12 +1176,12 @@
     <div class="arch-layer">
       <div class="arch-layer-label">🏗️ Foundation — bootstrapping, configuration, utilities</div>
       <div class="arch-modules">
-        <span class="arch-mod" data-tip="CLI argument parsing — project paths, flags like --no-watch, --bare, --tui, --gui">Args</span>
-        <span class="arch-mod" data-tip="Shared helper functions used across the entire codebase">Utils</span>
-        <span class="arch-mod" data-tip="Reads .fsproj files to discover source files, references, and NuGet dependencies">ProjectLoading</span>
-        <span class="arch-mod" data-tip="Copies assemblies to temp dirs so the originals aren't locked — enables hot reload without file locks">ShadowCopy</span>
-        <span class="arch-mod" data-tip="Pre-loads your project's namespaces into a new FSI session so you can use your types immediately">WarmUp</span>
-        <span class="arch-mod" data-tip="OpenTelemetry tracing — measures time spent in each phase of the pipeline">Instrumentation</span>
+        <a class="arch-mod" data-tip="CLI argument parsing — project paths, flags like --no-watch, --bare, --tui, --gui" href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/Args.fs">Args</a>
+        <a class="arch-mod" data-tip="Shared helper functions used across the entire codebase" href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/Utils.fs">Utils</a>
+        <a class="arch-mod" data-tip="Reads .fsproj files to discover source files, references, and NuGet dependencies" href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/ProjectLoading.fs">ProjectLoading</a>
+        <a class="arch-mod" data-tip="Copies assemblies to temp dirs so the originals aren't locked — enables hot reload without file locks" href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/ShadowCopy.fs">ShadowCopy</a>
+        <a class="arch-mod" data-tip="Pre-loads your project's namespaces into a new FSI session so you can use your types immediately" href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/WarmUp.fs">WarmUp</a>
+        <a class="arch-mod" data-tip="OpenTelemetry tracing — measures time spent in each phase of the pipeline" href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/Instrumentation.fs">Instrumentation</a>
       </div>
     </div>
 
@@ -1170,10 +1190,10 @@
     <div class="arch-layer">
       <div class="arch-layer-label">🔌 Worker System — isolated FSI process management</div>
       <div class="arch-modules">
-        <span class="arch-mod" data-tip="Message types for daemon ↔ worker communication — eval, check, reset, completions, test execution">WorkerProtocol</span>
-        <span class="arch-mod" data-tip="Sends commands to worker processes over HTTP and reads back structured results">HttpWorkerClient</span>
-        <span class="arch-mod" data-tip="Pre-warms spare worker processes in the background so session restarts are near-instant">StandbyPool</span>
-        <span class="arch-mod" data-tip="Monitors worker health and auto-restarts crashed processes with exponential backoff">Watchdog</span>
+        <a class="arch-mod" data-tip="Message types for daemon ↔ worker communication — eval, check, reset, completions, test execution" href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/WorkerProtocol.fs">WorkerProtocol</a>
+        <a class="arch-mod" data-tip="Sends commands to worker processes over HTTP and reads back structured results" href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/HttpWorkerClient.fs">HttpWorkerClient</a>
+        <a class="arch-mod" data-tip="Pre-warms spare worker processes in the background so session restarts are near-instant" href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/StandbyPool.fs">StandbyPool</a>
+        <a class="arch-mod" data-tip="Monitors worker health and auto-restarts crashed processes with exponential backoff" href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/Watchdog.fs">Watchdog</a>
       </div>
     </div>
 
@@ -1182,11 +1202,11 @@
     <div class="arch-layer">
       <div class="arch-layer-label">📋 Session Layer — lifecycle, state, operations</div>
       <div class="arch-modules">
-        <span class="arch-mod" data-tip="Tracks all active sessions, routes messages to the right worker, handles create/destroy">SessionManager</span>
-        <span class="arch-mod" data-tip="State machine for session states: creating → warming → ready → evaluating → resetting">SessionLifecycle</span>
-        <span class="arch-mod" data-tip="High-level operations: eval code, check types, get completions, reset, load scripts">SessionOperations</span>
-        <span class="arch-mod" data-tip="Persists session events so history survives daemon restarts">EventStore</span>
-        <span class="arch-mod" data-tip="Writes a marker file so other clients can discover a running daemon and connect to it">DaemonState</span>
+        <a class="arch-mod" data-tip="Tracks all active sessions, routes messages to the right worker, handles create/destroy" href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/SessionManager.fs">SessionManager</a>
+        <a class="arch-mod" data-tip="State machine for session states: creating → warming → ready → evaluating → resetting" href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/SessionLifecycle.fs">SessionLifecycle</a>
+        <a class="arch-mod" data-tip="High-level operations: eval code, check types, get completions, reset, load scripts" href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/SessionOperations.fs">SessionOperations</a>
+        <a class="arch-mod" data-tip="Persists session events so history survives daemon restarts" href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/EventStore.fs">EventStore</a>
+        <a class="arch-mod" data-tip="Tracks daemon port and state so other clients can discover and connect" href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/DaemonState.fs">DaemonState</a>
       </div>
     </div>
 
@@ -1195,18 +1215,19 @@
     <div class="arch-layer">
       <div class="arch-layer-label">✨ Features — the user-facing capabilities</div>
       <div class="arch-modules">
-        <span class="arch-mod" data-tip="Executes affected tests and reports pass/fail results back to all connected clients">LiveTestRunner</span>
-        <span class="arch-mod" data-tip="Finds test methods in your project using Tree-sitter — works even when code doesn't compile">LiveTestDiscovery</span>
-        <span class="arch-mod" data-tip="Tracks the current state of every test: passing, failing, stale, running">LiveTestStatus</span>
-        <span class="arch-mod" data-tip="Orchestrates the three-speed pipeline: discover → build dependency graph → execute affected tests">LiveTestPipeline</span>
-        <span class="arch-mod" data-tip="Structured events for test lifecycle: started, passed, failed, skipped — consumed by all UIs">LiveTestEvents</span>
-        <span class="arch-mod" data-tip="F# Compiler Services integration for type-aware code completions with fuzzy matching">AutoCompletion</span>
-        <span class="arch-mod" data-tip="Transforms raw compiler completion data into structured items for the editor popup and MCP">Completions</span>
-        <span class="arch-mod" data-tip="Streams type errors and warnings inline as you type — no manual build step needed">Diagnostics</span>
-        <span class="arch-mod" data-tip="Line-level test coverage — shows which lines are exercised by passing tests">Coverage</span>
-        <span class="arch-mod" data-tip="Patches method pointers at runtime when you save — changed functions are live in ~100ms">HotReloading</span>
-        <span class="arch-mod" data-tip="Tracks which files are being watched and their reload status">HotReloadState</span>
-        <span class="arch-mod" data-tip="Watches your project tree for .fs/.fsx/.fsproj changes and routes them to the right handler">FileWatcher</span>
+        <a class="arch-mod" data-tip="Type definitions for live testing: test status, run policies, pipeline state, result types" href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/Features/LiveTestingTypes.fs">LiveTestingTypes</a>
+        <a class="arch-mod" data-tip="Test execution engine — runs affected tests and reports pass/fail to all connected clients" href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/Features/LiveTestingExecutors.fs">LiveTestingExecutors</a>
+        <a class="arch-mod" data-tip="Metrics and tracing for the live testing pipeline — measures discovery, compilation, and execution time" href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/Features/LiveTestingInstrumentation.fs">LiveTestingInstrumentation</a>
+        <a class="arch-mod" data-tip="Tree-sitter based test discovery — finds tests even in broken code that won't compile" href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/Features/TestTreeSitter.fs">TestTreeSitter</a>
+        <a class="arch-mod" data-tip="F# Compiler Services integration for type-aware code completions with fuzzy matching" href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/Features/AutoCompletion.fs">AutoCompletion</a>
+        <a class="arch-mod" data-tip="Streams type errors and warnings inline as you type — no manual build step needed" href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/Features/Diagnostics.fs">Diagnostics</a>
+        <a class="arch-mod" data-tip="Persistent store for diagnostics — tracks errors across sessions and file changes" href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/Features/DiagnosticsStore.fs">DiagnosticsStore</a>
+        <a class="arch-mod" data-tip="Line-level test coverage — instruments code to show which lines are exercised by passing tests" href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/Features/CoverageInstrumenter.fs">CoverageInstrumenter</a>
+        <a class="arch-mod" data-tip="Structured events for the feature system — consumed by all UIs and the event store" href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/Features/Events.fs">Events</a>
+        <a class="arch-mod" data-tip="Session replay — reconstructs state from stored events for debugging and recovery" href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/Features/Replay.fs">Replay</a>
+        <a class="arch-mod" data-tip="Patches method pointers at runtime when you save — changed functions are live in ~100ms" href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/Middleware/HotReloading.fs">HotReloading</a>
+        <a class="arch-mod" data-tip="Tracks which files are being watched and their reload status" href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/HotReloadState.fs">HotReloadState</a>
+        <a class="arch-mod" data-tip="Watches your project tree for .fs/.fsx/.fsproj changes and routes them to the right handler" href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/FileWatcher.fs">FileWatcher</a>
       </div>
     </div>
 
@@ -1215,16 +1236,16 @@
     <div class="arch-layer">
       <div class="arch-layer-label">🖼️ Rendering — abstract grid → any backend</div>
       <div class="arch-modules">
-        <span class="arch-mod" data-tip="Text editor state machine — cursor, selection, vi modes, undo/redo, completion popup, keybindings">Editor</span>
-        <span class="arch-mod" data-tip="Multi-line text buffer with validation — tracks cursor position, handles insertions and deletions">ValidatedBuffer</span>
-        <span class="arch-mod" data-tip="Defines render regions, editor actions, and the mapping from keystrokes to actions">RenderPipeline</span>
-        <span class="arch-mod" data-tip="The abstract Cell[,] grid that both TUI and Raylib render from — characters + colors + attributes">CellGrid</span>
-        <span class="arch-mod" data-tip="Primitive drawing operations: text, boxes, borders, fills — writes to the CellGrid">Draw</span>
-        <span class="arch-mod" data-tip="Splits the screen into panes — handles sizing, positioning, and focus tracking">Layout</span>
-        <span class="arch-mod" data-tip="Composes all panes into the final frame — output, editor, sessions, tests, diagnostics, status bar">Screen</span>
-        <span class="arch-mod" data-tip="Renders individual pane content — each pane type (output, editor, tests) has its own renderer">PaneRenderer</span>
-        <span class="arch-mod" data-tip="Color schemes and styling — abstract color IDs mapped to 256-color ANSI or Raylib RGB">Theme</span>
-        <span class="arch-mod" data-tip="Converts the Cell[,] grid into ANSI escape codes for terminal output">AnsiEmitter</span>
+        <a class="arch-mod" data-tip="Text editor state machine — cursor, selection, vi modes, undo/redo, completion popup, keybindings" href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/Editor.fs">Editor</a>
+        <a class="arch-mod" data-tip="Defines render regions, editor actions, and the mapping from keystrokes to actions" href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/RenderPipeline.fs">RenderPipeline</a>
+        <a class="arch-mod" data-tip="The abstract Cell[,] grid that both TUI and Raylib render from — characters + colors + attributes" href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/CellGrid.fs">CellGrid</a>
+        <a class="arch-mod" data-tip="Primitive drawing operations: text, boxes, borders, fills — writes to the CellGrid" href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/Draw.fs">Draw</a>
+        <a class="arch-mod" data-tip="Composes all panes into the final frame — output, editor, sessions, tests, diagnostics, status bar" href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/Screen.fs">Screen</a>
+        <a class="arch-mod" data-tip="All UI types: Cell, Rect, Layout, PaneRenderer — the shared vocabulary for both TUI and Raylib" href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/TerminalUI.fs">TerminalUI</a>
+        <a class="arch-mod" data-tip="Color schemes and styling — abstract color IDs mapped to 256-color ANSI or Raylib RGB" href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/Theme.fs">Theme</a>
+        <a class="arch-mod" data-tip="Pre-built color themes — dark palettes, accent colors, syntax highlighting presets" href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/ThemePresets.fs">ThemePresets</a>
+        <a class="arch-mod" data-tip="F# syntax highlighting — tokenizes code for colored display in the editor" href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/SyntaxHighlight.fs">SyntaxHighlight</a>
+        <a class="arch-mod" data-tip="Converts the Cell[,] grid into ANSI escape codes for terminal output" href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/AnsiEmitter.fs">AnsiEmitter</a>
       </div>
     </div>
 
@@ -1233,10 +1254,10 @@
     <div class="arch-layer">
       <div class="arch-layer-label">🔁 Elm Loop — the heart of state management</div>
       <div class="arch-modules">
-        <span class="arch-mod" data-tip="Generic Elm-style event loop: dispatch message → pure update → render → execute side effects">ElmLoop</span>
-        <span class="arch-mod" data-tip="The main application: wires all features into a single update function with message routing">SageFsApp</span>
-        <span class="arch-mod" data-tip="Daemon-mode Elm loop — manages SSE subscriptions, HTTP endpoints, and multi-client broadcasting">ElmDaemon</span>
-        <span class="arch-mod" data-tip="The immutable model — all UI state, session data, test results, editor state in one record">AppState</span>
+        <a class="arch-mod" data-tip="Generic Elm-style event loop: dispatch message → pure update → render → execute side effects" href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/ElmLoop.fs">ElmLoop</a>
+        <a class="arch-mod" data-tip="The main application: wires all features into a single update function with message routing" href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/SageFsApp.fs">SageFsApp</a>
+        <a class="arch-mod" data-tip="Daemon-mode Elm loop — manages SSE subscriptions, HTTP endpoints, and multi-client broadcasting" href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/ElmDaemon.fs">ElmDaemon</a>
+        <a class="arch-mod" data-tip="The immutable model — all UI state, session data, test results, editor state in one record" href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/AppState.fs">AppState</a>
       </div>
     </div>
 
@@ -1245,10 +1266,10 @@
     <div class="arch-layer">
       <div class="arch-layer-label">🧩 Middleware — FSI compatibility, computation expressions, directives</div>
       <div class="arch-modules">
-        <span class="arch-mod" data-tip="Bridges gaps between SageFs's FSI and standard F# Interactive — handles quirks and edge cases">FsiCompatibility</span>
-        <span class="arch-mod" data-tip="Custom computation expressions for monadic workflows in the REPL">ComputationExpression</span>
-        <span class="arch-mod" data-tip="Processes #r, #load, #time and other FSI directives with SageFs-specific enhancements">Directives</span>
-        <span class="arch-mod" data-tip="Runs FSI evaluations without blocking the UI thread — keeps the TUI responsive during long evals">NonBlockingRun</span>
+        <a class="arch-mod" data-tip="Bridges gaps between SageFs's FSI and standard F# Interactive — handles quirks and edge cases" href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/Middleware/FsiCompatibility.fs">FsiCompatibility</a>
+        <a class="arch-mod" data-tip="Custom computation expressions for monadic workflows in the REPL" href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/Middleware/ComputationExpression.fs">ComputationExpression</a>
+        <a class="arch-mod" data-tip="Processes #r, #load, #time and other FSI directives with SageFs-specific enhancements" href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/Middleware/Directives.fs">Directives</a>
+        <a class="arch-mod" data-tip="Runs FSI evaluations without blocking the UI thread — keeps the TUI responsive during long evals" href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/Middleware/NonBlockingRun.fs">NonBlockingRun</a>
       </div>
     </div>
 
@@ -1257,11 +1278,11 @@
     <div class="arch-layer">
       <div class="arch-layer-label">🚀 Orchestration — wiring it all together</div>
       <div class="arch-modules">
-        <span class="arch-mod" data-tip="Creates and wires up all actor processes — sessions, workers, standby pool, watchdog, file watcher">ActorCreation</span>
-        <span class="arch-mod" data-tip="Model Context Protocol server — exposes eval, check, completions, tests, and exploration to AI agents">Mcp</span>
-        <span class="arch-mod" data-tip="Runs the background daemon: HTTP server, SSE broadcasting, MCP endpoint, session orchestration">DaemonMode</span>
-        <span class="arch-mod" data-tip="Terminal UI client that connects to a running daemon and renders the interactive TUI">TuiClient</span>
-        <span class="arch-mod" data-tip="Entry point — parses args, detects existing daemon, launches in the right mode">Program</span>
+        <a class="arch-mod" data-tip="Creates and wires up all actor processes — sessions, workers, standby pool, watchdog, file watcher" href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/ActorCreation.fs">ActorCreation</a>
+        <a class="arch-mod" data-tip="Model Context Protocol server — exposes eval, check, completions, tests, and exploration to AI agents" href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/Mcp.fs">Mcp</a>
+        <a class="arch-mod" data-tip="Runs the background daemon: HTTP server, SSE broadcasting, MCP endpoint, session orchestration" href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs/DaemonMode.fs">DaemonMode</a>
+        <a class="arch-mod" data-tip="Terminal UI client that connects to a running daemon and renders the interactive TUI" href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs/TuiClient.fs">TuiClient</a>
+        <a class="arch-mod" data-tip="Entry point — parses args, detects existing daemon, launches in the right mode" href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs/Program.fs">Program</a>
       </div>
     </div>
 
@@ -1271,30 +1292,30 @@
 <!-- ─── STATS ─── -->
 <div class="stats-band reveal">
   <div class="stats-grid">
-    <div class="stat">
+    <a class="stat" href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/SageFs.Core.fsproj" target="_blank">
       <div class="stat-num">66</div>
       <div class="stat-label">Core modules</div>
-    </div>
-    <div class="stat">
+    </a>
+    <a class="stat" href="https://github.com/WillEhrendreich/SageFs/tree/master/SageFs.Core" target="_blank">
       <div class="stat-num">~28K</div>
       <div class="stat-label">Lines of production F#</div>
-    </div>
-    <div class="stat">
+    </a>
+    <a class="stat" href="https://github.com/WillEhrendreich/SageFs/tree/master/SageFs.Tests" target="_blank">
       <div class="stat-num">2,691</div>
       <div class="stat-label">Tests (SageFs)</div>
-    </div>
-    <div class="stat">
+    </a>
+    <a class="stat" href="#editors" style="text-decoration:none;">
       <div class="stat-num">5</div>
       <div class="stat-label">Editor integrations</div>
-    </div>
-    <div class="stat">
+    </a>
+    <a class="stat" href="https://github.com/WillEhrendreich/SageFs/commits/master" target="_blank">
       <div class="stat-num">13</div>
       <div class="stat-label">Days to build</div>
-    </div>
-    <div class="stat">
+    </a>
+    <a class="stat" href="https://github.com/WillEhrendreich/SageFs/commits/master" target="_blank">
       <div class="stat-num">490</div>
       <div class="stat-label">Commits</div>
-    </div>
+    </a>
   </div>
 </div>
 
