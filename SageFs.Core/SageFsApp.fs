@@ -515,6 +515,7 @@ module SageFsUpdate =
             LiveTesting = { lt with TestState = { lt.TestState with CoverageAnnotations = annotations } } }, []
 
       | SageFsEvent.CoverageBitmapCollected (testIds, bitmap) ->
+        Instrumentation.coverageBitmapsCollected.Add(1L)
         let lt = model.LiveTesting
         let bitmaps =
           testIds |> Array.fold (fun acc tid -> Map.add tid bitmap acc) lt.TestState.TestCoverageBitmaps
@@ -526,6 +527,9 @@ module SageFsUpdate =
         { model with LiveTesting = lt }, []
 
       | SageFsEvent.InstrumentationMapsReady (sessionId, maps) ->
+        Instrumentation.coverageMapsReceived.Add(1L)
+        let totalProbes = maps |> Array.sumBy (fun m -> m.TotalProbes) |> int64
+        Instrumentation.coverageProbesTotal.Add(totalProbes)
         let lt = model.LiveTesting
         { model with LiveTesting = { lt with InstrumentationMaps = Map.add sessionId maps lt.InstrumentationMaps } }, []
 

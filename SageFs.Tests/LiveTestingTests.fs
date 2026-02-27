@@ -5824,6 +5824,7 @@ let coverageCorrelationTests = testList "CoverageCorrelation" [
 
 // --- CoverageBitmap Pipeline Wiring Tests ---
 
+[<Tests>]
 let coverageBitmapWiringTests = testList "CoverageBitmap Pipeline Wiring" [
   test "CoverageBitmapCollected populates TestCoverageBitmaps map" {
     let tid1 = mkTestId "ns" "t1"
@@ -5893,6 +5894,7 @@ let coverageBitmapWiringTests = testList "CoverageBitmap Pipeline Wiring" [
 
 // --- Coverage-Based Test Selection Tests ---
 
+[<Tests>]
 let coverageSelectionTests = testList "Coverage-based test selection" [
   test "buildFileMask sets bits for probes in target file only" {
     let maps = [| { Slots = [|
@@ -5989,6 +5991,7 @@ let coverageSelectionTests = testList "Coverage-based test selection" [
 
 // --- CoverageBitmap Tests ---
 
+[<Tests>]
 let coverageBitmapTests = testList "CoverageBitmap" [
   testList "ofBoolArray/toBoolArray round-trip" [
     test "empty array round-trips" {
@@ -6134,4 +6137,167 @@ let coverageBitmapTests = testList "CoverageBitmap" [
       bm.Bits.Length |> Expect.equal "should use 41 words for 2608 probes" 41
     }
   ]
+]
+
+// --- E2E Pipeline Flow Tests ---
+
+[<Tests>]
+let e2ePipelineFlowTests = testList "E2E Pipeline Flow" [
+  test "file change through to test status update" {
+    let sessionId = "test-session"
+    let tid = TestId.TestId "MyModule.myTest should work"
+    let testCase = {
+      TestCase.Id = tid; DisplayName = "myTest should work"; FullName = "MyModule.myTest should work"
+      Origin = TestOrigin.ReflectionOnly; Labels = []; Framework = "Expecto"; Category = TestCategory.Unit
+    }
+    let model0 = SageFsModel.initial
+    let snap = {
+      SessionSnapshot.Id = sessionId; Name = Some "TestSession"; Projects = ["MyProject.fsproj"]
+      Status = SessionDisplayStatus.Running; LastActivity = System.DateTime.UtcNow
+      EvalCount = 0; UpSince = System.DateTime.UtcNow; IsActive = true; WorkingDirectory = "C:\\Test"
+    }
+    let model1, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.SessionCreated snap)) model0
+    let model2, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestsDiscovered (sessionId, [| testCase |]))) model1
+    model2.LiveTesting.TestState.DiscoveredTests |> Array.length |> Expect.equal "should have 1 discovered test" 1
+
+    let model3, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestRunStarted ([| tid |], Some sessionId))) model2
+    let result = {
+      TestRunResult.TestId = tid; TestName = "myTest should work"
+      Result = TestResult.Passed (System.TimeSpan.FromMilliseconds 42.0)
+      Timestamp = System.DateTimeOffset.UtcNow
+    }
+    let model4, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestResultsBatch [| result |])) model3
+    model4.LiveTesting.TestState.LastResults |> Map.tryFind tid |> Expect.isSome "should have result for test"
+
+    let model5, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestRunCompleted (Some sessionId))) model4
+    model5.LiveTesting.TestState.RunPhases |> Map.tryFind sessionId
+    |> fun p -> match p with | Some TestRunPhase.Idle -> () | other -> failwithf "Expected Idle but got %A" other
+  }
+
+  test "test summary produces correct counts" {
+    let statuses = [|
+      TestRunStatus.Passed (System.TimeSpan.FromMilliseconds 10.0)
+      TestRunStatus.Failed (TestFailure.AssertionFailed "oops", System.TimeSpan.FromMilliseconds 5.0)
+    |]
+    let summary = TestSummary.fromStatuses LiveTestingActivation.Active statuses
+    summary.Total |> Expect.equal "total should be 2" 2
+    summary.Passed |> Expect.equal "passed should be 1" 1
+    summary.Failed |> Expect.equal "failed should be 1" 1
+    let bar = TestSummary.toStatusBar summary
+    bar |> Expect.isNotEmpty "status bar should not be empty"
+  }
+
+  test "multi-session test isolation" {
+    let tid1 = TestId.TestId "test.in.session1"
+    let tid2 = TestId.TestId "test.in.session2"
+    let tc1 = { TestCase.Id = tid1; FullName = "test.in.session1"; DisplayName = "t1"; Origin = TestOrigin.ReflectionOnly; Labels = []; Framework = "Expecto"; Category = TestCategory.Unit }
+    let tc2 = { TestCase.Id = tid2; FullName = "test.in.session2"; DisplayName = "t2"; Origin = TestOrigin.ReflectionOnly; Labels = []; Framework = "Expecto"; Category = TestCategory.Unit }
+    let m0 = SageFsModel.initial
+    let snap1 = { SessionSnapshot.Id = "s1"; Name = Some "S1"; Projects = ["A.fsproj"]; Status = SessionDisplayStatus.Running; LastActivity = System.DateTime.UtcNow; EvalCount = 0; UpSince = System.DateTime.UtcNow; IsActive = true; WorkingDirectory = "C:\\A" }
+    let snap2 = { SessionSnapshot.Id = "s2"; Name = Some "S2"; Projects = ["B.fsproj"]; Status = SessionDisplayStatus.Running; LastActivity = System.DateTime.UtcNow; EvalCount = 0; UpSince = System.DateTime.UtcNow; IsActive = false; WorkingDirectory = "C:\\B" }
+    let m1, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.SessionCreated snap1)) m0
+    let m2, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.SessionCreated snap2)) m1
+    let m3, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestsDiscovered ("s1", [| tc1 |]))) m2
+    let m4, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestsDiscovered ("s2", [| tc2 |]))) m3
+    m4.LiveTesting.TestState.TestSessionMap |> Map.find tid1 |> Expect.equal "t1 in s1" "s1"
+    m4.LiveTesting.TestState.TestSessionMap |> Map.find tid2 |> Expect.equal "t2 in s2" "s2"
+
+    let m5, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestRunStarted ([| tid1 |], Some "s1"))) m4
+    let r1 = { TestRunResult.TestId = tid1; TestName = "t1"; Result = TestResult.Passed (System.TimeSpan.FromMilliseconds 10.0); Timestamp = System.DateTimeOffset.UtcNow }
+    let m6, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestResultsBatch [| r1 |])) m5
+    let s2Status = m6.LiveTesting.TestState.StatusEntries |> Array.tryFind (fun e -> e.TestId = tid2)
+    match s2Status with
+    | Some entry -> match entry.Status with | TestRunStatus.Passed _ -> failwith "s2's test should NOT be Passed" | _ -> ()
+    | None -> ()
+  }
+]
+
+// --- Coverage Pipeline Verification Tests ---
+
+[<Tests>]
+let coveragePipelineVerificationTests = testList "Coverage Pipeline Verification" [
+  test "InstrumentationMapsReady populates model maps" {
+    let maps = [|
+      { InstrumentationMap.Slots = [| { SequencePoint.File = "test.fs"; Line = 10; Column = 1; BranchId = 0 } |]
+        TotalProbes = 1; TrackerTypeName = "__SageFsCoverage"; HitsFieldName = "Hits" }
+    |]
+    let model0 = SageFsModel.initial
+    let model1, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.InstrumentationMapsReady ("s1", maps))) model0
+    model1.LiveTesting.InstrumentationMaps
+    |> Map.containsKey "s1"
+    |> Expect.isTrue "should have maps for session s1"
+    model1.LiveTesting.InstrumentationMaps
+    |> Map.find "s1"
+    |> Array.length
+    |> Expect.equal "should have 1 map" 1
+  }
+
+  test "CoverageBitmapCollected populates TestCoverageBitmaps" {
+    let tid = TestId.TestId "ns.test1"
+    let bitmap = CoverageBitmap.ofBoolArray [| true; false; true |]
+    let model0 = SageFsModel.initial
+    let model1, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.CoverageBitmapCollected ([| tid |], bitmap))) model0
+    model1.LiveTesting.TestState.TestCoverageBitmaps
+    |> Map.containsKey tid
+    |> Expect.isTrue "should have bitmap for test"
+  }
+
+  test "afterTypeCheck uses coverage bitmaps when both maps and bitmaps exist" {
+    let tid = TestId.TestId "ns.test1"
+    let sp = { SequencePoint.File = "src/MyFile.fs"; Line = 10; Column = 1; BranchId = 0 }
+    let imap = {
+      InstrumentationMap.Slots = [| sp |]; TotalProbes = 1
+      TrackerTypeName = "__SageFsCoverage"; HitsFieldName = "Hits"
+    }
+    let bitmap = CoverageBitmap.ofBoolArray [| true |]
+    let state = {
+      LiveTestState.empty with
+        Activation = LiveTestingActivation.Active
+        DiscoveredTests = [|
+          { TestCase.Id = tid; FullName = "ns.test1"; DisplayName = "test1"
+            Origin = TestOrigin.ReflectionOnly; Labels = []; Framework = "Expecto"
+            Category = TestCategory.Unit }
+        |]
+        TestCoverageBitmaps = Map.ofList [ tid, bitmap ]
+        TestSessionMap = Map.ofList [ tid, "s1" ]
+        RunPhases = Map.ofList [ "s1", TestRunPhase.Idle ]
+    }
+    let instrumentationMaps = Map.ofList [ "s1", [| imap |] ]
+    let effects =
+      PipelineEffects.afterTypeCheck
+        [] "src/MyFile.fs" RunTrigger.FileSave
+        TestDependencyGraph.empty state None instrumentationMaps
+    effects
+    |> List.isEmpty
+    |> Expect.isFalse "should produce RunAffectedTests effect when coverage matches"
+  }
+
+  test "afterTypeCheck with empty bitmaps skips coverage path" {
+    let tid = TestId.TestId "ns.test2"
+    let sp = { SequencePoint.File = "src/Other.fs"; Line = 5; Column = 1; BranchId = 0 }
+    let imap = {
+      InstrumentationMap.Slots = [| sp |]; TotalProbes = 1
+      TrackerTypeName = "__SageFsCoverage"; HitsFieldName = "Hits"
+    }
+    let state = {
+      LiveTestState.empty with
+        Activation = LiveTestingActivation.Active
+        DiscoveredTests = [|
+          { TestCase.Id = tid; FullName = "ns.test2"; DisplayName = "test2"
+            Origin = TestOrigin.ReflectionOnly; Labels = []; Framework = "Expecto"
+            Category = TestCategory.Unit }
+        |]
+        TestCoverageBitmaps = Map.empty
+        TestSessionMap = Map.ofList [ tid, "s1" ]
+        RunPhases = Map.ofList [ "s1", TestRunPhase.Idle ]
+    }
+    let instrumentationMaps = Map.ofList [ "s1", [| imap |] ]
+    let effects =
+      PipelineEffects.afterTypeCheck
+        [] "src/Other.fs" RunTrigger.FileSave
+        TestDependencyGraph.empty state None instrumentationMaps
+    effects
+    |> List.isEmpty
+    |> Expect.isTrue "should produce no effects without bitmaps"
+  }
 ]

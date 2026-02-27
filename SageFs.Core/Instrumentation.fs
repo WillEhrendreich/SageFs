@@ -100,6 +100,14 @@ module Instrumentation =
   let liveTestingAssemblyLoadErrors =
     pipelineMeter.CreateCounter<int64>("sagefs.live_testing.assembly_load_errors_total", description = "Total assembly load errors during test discovery")
 
+  // Coverage instrumentation observability
+  let coverageMapsReceived =
+    pipelineMeter.CreateCounter<int64>("sagefs.coverage.maps_received_total", description = "Total instrumentation map batches received from workers")
+  let coverageProbesTotal =
+    pipelineMeter.CreateCounter<int64>("sagefs.coverage.probes_total", description = "Total IL probes across received instrumentation maps")
+  let coverageBitmapsCollected =
+    pipelineMeter.CreateCounter<int64>("sagefs.coverage.bitmaps_collected_total", description = "Total coverage bitmap collections from test runs")
+
   // P2: DevReload connected clients
   let devReloadConnectedClients =
     mcpMeter.CreateUpDownCounter<int64>("sagefs.devreload.connected_clients", description = "Currently connected SSE reload clients")
