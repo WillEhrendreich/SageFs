@@ -65,7 +65,8 @@ let parseSummary (data: obj) : VscTestSummary =
     Passed = data?Passed |> unbox<int>
     Failed = data?Failed |> unbox<int>
     Running = data?Running |> unbox<int>
-    Stale = data?Stale |> unbox<int> }
+    Stale = data?Stale |> unbox<int>
+    Disabled = data?Disabled |> unbox<int> }
 
 /// Map a server TestStatusEntry to VscTestResult
 let parseTestResult (entry: obj) : VscTestResult =
@@ -99,6 +100,8 @@ let parseTestResult (entry: obj) : VscTestResult =
       let fields = status?Fields |> unbox<obj array>
       VscTestOutcome.Skipped(fields.[0] |> unbox<string>)
     | "Running" -> VscTestOutcome.Running
+    | "Stale" -> VscTestOutcome.Stale
+    | "PolicyDisabled" -> VscTestOutcome.PolicyDisabled
     | _ -> VscTestOutcome.Skipped "unknown status"
   let durationMs =
     match statusCase with
@@ -152,16 +155,31 @@ let parseTestInfo (entry: obj) : VscTestInfo =
     FilePath = filePath
     Line = line }
 
+/// Parse Freshness DU from server JSON (Case/Fields or plain string)
+let parseFreshness (data: obj) : VscResultFreshness =
+  let freshnessObj = data?Freshness
+  if isNull freshnessObj then VscResultFreshness.Fresh
+  else
+    let caseStr : string =
+      let c = freshnessObj?Case
+      if isNull c then string freshnessObj
+      else c |> unbox<string>
+    match caseStr with
+    | "StaleCodeEdited" -> VscResultFreshness.StaleCodeEdited
+    | "StaleWrongGeneration" -> VscResultFreshness.StaleWrongGeneration
+    | _ -> VscResultFreshness.Fresh
+
 /// Parse test_results_batch → VscLiveTestEvent pair (discovery + results)
 let parseResultsBatch (data: obj) : VscLiveTestEvent list =
   let entries = data?Entries
   if isNull entries then []
   else
+    let freshness = parseFreshness data
     let entryArray : obj array = entries |> unbox
     let testInfos = entryArray |> Array.map parseTestInfo
     let testResults = entryArray |> Array.map parseTestResult
     [ VscLiveTestEvent.TestsDiscovered testInfos
-      VscLiveTestEvent.TestResultBatch testResults ]
+      VscLiveTestEvent.TestResultBatch (testResults, freshness) ]
 
 // ── Listener lifecycle ───────────────────────────────────────
 

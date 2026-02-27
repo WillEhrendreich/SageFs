@@ -32,6 +32,8 @@ let formatTitle (result: LiveTestingTypes.VscTestResult) =
   | LiveTestingTypes.VscTestOutcome.Running -> "● Running…"
   | LiveTestingTypes.VscTestOutcome.Skipped reason -> sprintf "⊘ Skipped: %s" reason
   | LiveTestingTypes.VscTestOutcome.Errored msg -> sprintf "✗ Error: %s" msg
+  | LiveTestingTypes.VscTestOutcome.Stale -> "◌ Stale"
+  | LiveTestingTypes.VscTestOutcome.PolicyDisabled -> "⊘ Disabled"
 
 /// Creates a CodeLens provider for test results
 let create () =

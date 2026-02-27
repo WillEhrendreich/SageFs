@@ -65,6 +65,10 @@ let create
         | VscTestOutcome.Errored msg ->
           let message = newTestMessage msg
           run.failed(item, message, durationMs)
+        | VscTestOutcome.Stale ->
+          run.skipped item
+        | VscTestOutcome.PolicyDisabled ->
+          run.skipped item
       | false, _ -> ()
     run.``end`` ()
 

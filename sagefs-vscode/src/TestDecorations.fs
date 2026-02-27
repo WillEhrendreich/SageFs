@@ -131,6 +131,10 @@ let applyToEditor (state: VscLiveTestState) (editor: TextEditor) =
           runningRanges.Add(decorationRange line (sprintf "● Running: %s" test.DisplayName))
         | VscTestOutcome.Skipped reason ->
           passedRanges.Add(decorationRange line (sprintf "⊘ Skipped: %s — %s" test.DisplayName reason))
+        | VscTestOutcome.Stale ->
+          runningRanges.Add(decorationRange line (sprintf "◌ Stale: %s" test.DisplayName))
+        | VscTestOutcome.PolicyDisabled ->
+          passedRanges.Add(decorationRange line (sprintf "⊘ Disabled: %s" test.DisplayName))
       | None ->
         runningRanges.Add(decorationRange line (sprintf "◆ %s (not yet run)" test.DisplayName))
     | None -> ()

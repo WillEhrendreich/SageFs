@@ -122,6 +122,8 @@ module LiveTestingParser =
             TestOutcome.Skipped reason, None
           | _ -> TestOutcome.Skipped "", None
         | None -> TestOutcome.Skipped "", None
+      | "Stale" -> TestOutcome.Stale, None
+      | "PolicyDisabled" -> TestOutcome.PolicyDisabled, None
       | "Running" -> TestOutcome.Running, None
       | _ -> TestOutcome.Detected, None
     { Id = id; Outcome = outcome; DurationMs = durationMs; Output = None }
@@ -131,16 +133,32 @@ module LiveTestingParser =
       Passed = tryInt root "Passed" 0
       Failed = tryInt root "Failed" 0
       Running = tryInt root "Running" 0
-      Stale = tryInt root "Stale" 0 }
+      Stale = tryInt root "Stale" 0
+      Disabled = tryInt root "Disabled" 0 }
+
+  let parseFreshness (root: JsonElement) : ResultFreshness =
+    match getProp root "Freshness" with
+    | Some el when el.ValueKind = JsonValueKind.Object ->
+      match tryStr el "Case" "Fresh" with
+      | "StaleCodeEdited" -> ResultFreshness.StaleCodeEdited
+      | "StaleWrongGeneration" -> ResultFreshness.StaleWrongGeneration
+      | _ -> ResultFreshness.Fresh
+    | Some el when el.ValueKind = JsonValueKind.String ->
+      match el.GetString() with
+      | "StaleCodeEdited" -> ResultFreshness.StaleCodeEdited
+      | "StaleWrongGeneration" -> ResultFreshness.StaleWrongGeneration
+      | _ -> ResultFreshness.Fresh
+    | _ -> ResultFreshness.Fresh
 
   let parseResultsBatch (root: JsonElement) : LiveTestEvent list =
+    let freshness = parseFreshness root
     match getProp root "Entries" with
     | Some entries when entries.ValueKind = JsonValueKind.Array ->
       let entryArray = [| for e in entries.EnumerateArray() -> e |]
       let testInfos = entryArray |> Array.map parseTestInfo
       let testResults = entryArray |> Array.map parseTestResult
       [ LiveTestEvent.TestsDiscovered testInfos
-        LiveTestEvent.TestResultBatch testResults ]
+        LiveTestEvent.TestResultBatch (testResults, freshness) ]
     | _ -> []
 
   let parseSseEvent (eventType: string) (json: string) : LiveTestEvent list =

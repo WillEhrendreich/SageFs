@@ -13,10 +13,15 @@ type LiveTestingSubscriber(port: int) =
   let mutable state = LiveTestState.empty
   let stateChanged = Event<LiveTestState>()
   let summaryChanged = Event<TestSummary>()
+  let changeEmitted = Event<LiveTestChange>()
 
   /// Fires when test state changes (discovery, results, toggle)
   [<CLIEvent>]
   member _.StateChanged = stateChanged.Publish
+
+  /// Fires when a discrete change occurs (for UI adapters)
+  [<CLIEvent>]
+  member _.ChangeEmitted = changeEmitted.Publish
 
   /// Fires when a test_summary SSE event arrives
   [<CLIEvent>]
@@ -50,7 +55,10 @@ type LiveTestingSubscriber(port: int) =
               let json = line.Substring(6)
               let events = LiveTestingParser.parseSseEvent currentEvent json
               for evt in events do
-                state <- LiveTestState.update evt state
+                let newState, changes = LiveTestState.update evt state
+                state <- newState
+                for change in changes do
+                  changeEmitted.Trigger(change)
                 match evt with
                 | LiveTestEvent.SummaryUpdated s -> summaryChanged.Trigger(s)
                 | _ -> ()
@@ -129,6 +137,8 @@ type LiveTestingSubscriber(port: int) =
       | TestOutcome.Errored msg -> sprintf "✗ Error: %s" (if msg.Length > 50 then msg.[..49] + "…" else msg)
       | TestOutcome.Running -> "◆ Running…"
       | TestOutcome.Detected -> "● Detected"
+      | TestOutcome.Stale -> "◌ Stale"
+      | TestOutcome.PolicyDisabled -> "⊘ Disabled"
     | None -> "● Not Run"
 
   /// Format a tooltip with full test details.
@@ -143,6 +153,8 @@ type LiveTestingSubscriber(port: int) =
         | TestOutcome.Errored _ -> "Errored"
         | TestOutcome.Running -> "Running"
         | TestOutcome.Detected -> "Detected"
+        | TestOutcome.Stale -> "Stale"
+        | TestOutcome.PolicyDisabled -> "Disabled"
       let duration =
         match r.DurationMs with
         | Some ms -> sprintf " (%0.1fms)" ms

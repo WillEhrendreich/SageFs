@@ -8,6 +8,8 @@ type VscTestOutcome =
   | Skipped of reason: string
   | Running
   | Errored of message: string
+  | Stale
+  | PolicyDisabled
 
 /// Stable test identity across reloads
 [<RequireQualifiedAccess>]
@@ -116,28 +118,24 @@ type VscLiveTestingEnabled =
   | LiveTestingOn
   | LiveTestingOff
 
+/// Result freshness — mirrors daemon's ResultFreshness
+[<RequireQualifiedAccess>]
+type VscResultFreshness =
+  | Fresh
+  | StaleCodeEdited
+  | StaleWrongGeneration
+
 /// SSE events from the SageFs server
 [<RequireQualifiedAccess>]
 type VscLiveTestEvent =
   | TestsDiscovered of tests: VscTestInfo array
   | TestRunStarted of testIds: VscTestId array
-  | TestResultBatch of results: VscTestResult array
+  | TestResultBatch of results: VscTestResult array * freshness: VscResultFreshness
   | LiveTestingEnabled
   | LiveTestingDisabled
   | RunPolicyChanged of category: VscTestCategory * policy: VscRunPolicy
   | PipelineTimingRecorded of treeSitterMs: float * fcsMs: float * executionMs: float
   | CoverageUpdated of coverage: Map<string, VscFileCoverage>
-
-/// UI change signals — what the TestController adapter needs to update
-[<RequireQualifiedAccess>]
-type VscStateChange =
-  | TestsAdded of VscTestInfo array
-  | TestsStarted of VscTestId array
-  | TestsCompleted of VscTestResult array
-  | EnabledChanged of VscLiveTestingEnabled
-  | PolicyUpdated of VscTestCategory * VscRunPolicy
-  | TimingUpdated of treeSitterMs: float * fcsMs: float * executionMs: float
-  | CoverageRefreshed of Map<string, VscFileCoverage>
 
 /// Test summary counts
 type VscTestSummary = {
@@ -146,7 +144,21 @@ type VscTestSummary = {
   Failed: int
   Running: int
   Stale: int
+  Disabled: int
 }
+
+/// UI change signals — what the TestController adapter needs to update
+[<RequireQualifiedAccess>]
+type VscStateChange =
+  | TestsAdded of VscTestInfo array
+  | TestsStarted of VscTestId array
+  | TestsCompleted of VscTestResult array
+  | ResultsStale of VscResultFreshness
+  | EnabledChanged of VscLiveTestingEnabled
+  | PolicyUpdated of VscTestCategory * VscRunPolicy
+  | TimingUpdated of treeSitterMs: float * fcsMs: float * executionMs: float
+  | CoverageRefreshed of Map<string, VscFileCoverage>
+  | SummaryChanged of VscTestSummary
 
 /// Aggregate live testing state — pure data, no functions
 type VscLiveTestState = {
@@ -157,6 +169,7 @@ type VscLiveTestState = {
   Policies: Map<VscTestCategory, VscRunPolicy>
   Enabled: VscLiveTestingEnabled
   LastTiming: (float * float * float) option
+  Freshness: VscResultFreshness
 }
 
 module VscLiveTestState =
@@ -168,6 +181,7 @@ module VscLiveTestState =
     Policies = Map.empty
     Enabled = VscLiveTestingEnabled.LiveTestingOff
     LastTiming = None
+    Freshness = VscResultFreshness.Fresh
   }
 
   /// Pure fold: event → state → (new state * changes for UI)
@@ -184,16 +198,21 @@ module VscLiveTestState =
         ids |> Array.fold (fun m id ->
           Map.add id { Id = id; Outcome = VscTestOutcome.Running; DurationMs = None; Output = None } m
         ) state.Results
-      { state with RunningTests = running; Results = results },
+      { state with RunningTests = running; Results = results; Freshness = VscResultFreshness.Fresh },
       [ VscStateChange.TestsStarted ids ]
 
-    | VscLiveTestEvent.TestResultBatch results ->
+    | VscLiveTestEvent.TestResultBatch (results, freshness) ->
       let newResults =
         results |> Array.fold (fun m r -> Map.add r.Id r m) state.Results
       let completedIds = results |> Array.map (fun r -> r.Id) |> Set.ofArray
       let stillRunning = Set.difference state.RunningTests completedIds
-      { state with Results = newResults; RunningTests = stillRunning },
-      [ VscStateChange.TestsCompleted results ]
+      let changes = [
+        VscStateChange.TestsCompleted results
+        if freshness <> VscResultFreshness.Fresh then
+          VscStateChange.ResultsStale freshness
+      ]
+      { state with Results = newResults; RunningTests = stillRunning; Freshness = freshness },
+      changes
 
     | VscLiveTestEvent.LiveTestingEnabled ->
       { state with Enabled = VscLiveTestingEnabled.LiveTestingOn },
@@ -219,13 +238,26 @@ module VscLiveTestState =
     let total = state.Tests.Count
     let mutable passed = 0
     let mutable failed = 0
-    let running = state.RunningTests.Count
+    let mutable stale = 0
+    let mutable disabled = 0
     state.Results |> Map.iter (fun _ r ->
       match r.Outcome with
       | VscTestOutcome.Passed -> passed <- passed + 1
       | VscTestOutcome.Failed _ | VscTestOutcome.Errored _ -> failed <- failed + 1
+      | VscTestOutcome.Stale -> stale <- stale + 1
+      | VscTestOutcome.PolicyDisabled -> disabled <- disabled + 1
       | _ -> ())
-    { Total = total; Passed = passed; Failed = failed; Running = running; Stale = 0 }
+    let stale =
+      if state.Freshness <> VscResultFreshness.Fresh then
+        state.Results
+        |> Map.filter (fun _ r ->
+          match r.Outcome with
+          | VscTestOutcome.Running -> false
+          | _ -> true)
+        |> Map.count
+      else stale
+    { Total = total; Passed = passed; Failed = failed
+      Running = state.RunningTests.Count; Stale = stale; Disabled = disabled }
 
   /// Get tests for a specific file
   let testsForFile (filePath: string) (state: VscLiveTestState) : VscTestInfo list =
