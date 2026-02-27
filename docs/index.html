@@ -136,6 +136,97 @@
   }
   .hero .cmd span { color: var(--text-dim); }
 
+  /* ─── GETTING STARTED ─── */
+  .getting-started {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 0 32px 80px;
+  }
+  .getting-started .gs-label {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    color: var(--text-dim);
+    margin-bottom: 24px;
+    text-align: center;
+  }
+  .gs-steps {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 20px;
+    margin-bottom: 28px;
+  }
+  .gs-step {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 24px;
+    transition: border-color 0.2s, transform 0.2s;
+  }
+  .gs-step:hover {
+    border-color: var(--border-bright);
+    transform: translateY(-2px);
+  }
+  .gs-step .gs-num {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--green);
+    margin-bottom: 8px;
+    display: block;
+  }
+  .gs-step h3 {
+    font-family: 'Newsreader', serif;
+    font-size: 20px;
+    font-weight: 400;
+    color: var(--text-heading);
+    margin-bottom: 10px;
+  }
+  .gs-step p {
+    font-size: 14px;
+    color: var(--text-dim);
+    line-height: 1.7;
+  }
+  .gs-step pre {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px;
+    color: var(--green);
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px 14px;
+    margin-top: 12px;
+    overflow-x: auto;
+  }
+  .gs-step pre span { color: var(--text-dim); }
+  .gs-prereq {
+    font-size: 13px;
+    color: var(--text-dim);
+    text-align: center;
+    margin-bottom: 24px;
+  }
+  .gs-prereq a {
+    color: var(--blue);
+    text-decoration: none;
+    border-bottom: 1px solid rgba(108,182,255,0.3);
+  }
+  .gs-prereq a:hover { border-bottom-color: var(--blue); }
+  .gs-more {
+    text-align: center;
+    margin-top: 8px;
+  }
+  .gs-more a {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px;
+    color: var(--blue);
+    text-decoration: none;
+    border-bottom: 1px solid rgba(108,182,255,0.3);
+    transition: border-color 0.2s;
+  }
+  .gs-more a:hover { border-bottom-color: var(--blue); }
+
   /* ─── SECTION LAYOUT ─── */
   section {
     max-width: 1200px;
@@ -735,6 +826,7 @@
 <!-- NAV -->
 <nav>
   <div class="logo">SageFs</div>
+  <a href="#get-started">Get Started</a>
   <a href="#journey">The Journey</a>
   <a href="#editors">Your Editor</a>
   <a href="#engine">The Engine</a>
@@ -754,6 +846,36 @@
     Results stream to every editor you use, from a single shared daemon.
   </p>
   <div class="cmd"><span>$</span> sagefs --proj MyProject.fsproj</div>
+</div>
+
+<!-- ─── GETTING STARTED ─── -->
+<div id="get-started" class="getting-started reveal">
+  <div class="gs-label">Get started in 60 seconds</div>
+  <div class="gs-prereq">Requires the <a href="https://dotnet.microsoft.com/download/dotnet/10.0">.NET 10 SDK</a></div>
+
+  <div class="gs-steps">
+    <div class="gs-step">
+      <span class="gs-num">01</span>
+      <h3>Install</h3>
+      <p>SageFs is a .NET global tool. One command, no config files.</p>
+      <pre><span>$</span> dotnet tool install --global SageFs</pre>
+    </div>
+
+    <div class="gs-step">
+      <span class="gs-num">02</span>
+      <h3>Run</h3>
+      <p>Point it at your project. The daemon starts, loads dependencies, and opens the TUI.</p>
+      <pre><span>$</span> sagefs --proj MyProject.fsproj</pre>
+    </div>
+
+    <div class="gs-step">
+      <span class="gs-num">03</span>
+      <h3>Code</h3>
+      <p>Edit any <code>.fs</code> file — tests run on every change. Hit <code>Ctrl+Enter</code> to evaluate code on demand. Results stream to your editor.</p>
+    </div>
+  </div>
+
+  <div class="gs-more"><a href="documentation.html">Full documentation →</a></div>
 </div>
 
 <!-- ─── THE JOURNEY ─── -->
