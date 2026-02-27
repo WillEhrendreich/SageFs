@@ -165,7 +165,7 @@ module SessionManager =
       |> String.concat " "
 
     let psi = ProcessStartInfo()
-    psi.FileName <- "SageFs"
+    psi.FileName <- "sagefs"
     psi.Arguments <-
       sprintf "worker --session-id %s --http-port 0 %s" sessionId projArgs
     psi.WorkingDirectory <- workingDir

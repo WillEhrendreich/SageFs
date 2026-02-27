@@ -836,21 +836,8 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                     | Some getModel ->
                       let model = getModel()
                       let lt = model.LiveTesting.TestState
-                      // Find the full file path matching the filter
-                      let matchingFiles =
-                        lt.StatusEntries
-                        |> Array.choose (fun e ->
-                          match e.Origin with
-                          | TestOrigin.SourceMapped (f, _) -> Some f
-                          | _ -> None)
-                        |> Array.distinct
-                        |> Array.filter (fun f ->
-                          f = fileParam
-                          || f.EndsWith(fileParam, System.StringComparison.OrdinalIgnoreCase)
-                          || f.EndsWith(
-                               System.IO.Path.DirectorySeparatorChar.ToString() + fileParam,
-                               System.StringComparison.OrdinalIgnoreCase))
-                      match matchingFiles |> Array.tryHead with
+                      let matchingFile = FileAnnotations.resolveFilePath fileParam lt.StatusEntries model.LiveTesting.InstrumentationMaps
+                      match matchingFile with
                       | Some fullPath ->
                         let fa = FileAnnotations.projectWithCoverage fullPath model.LiveTesting
                         let json = System.Text.Json.JsonSerializer.Serialize(fa, sseJsonOpts)
@@ -1078,7 +1065,16 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                               | TestOrigin.SourceMapped (f, _) -> Some f
                               | _ -> None)
                             |> Array.distinct
-                          for file in files do
+                          // Also push for production code files with coverage from instrumentation maps
+                          let instrFiles =
+                            model.LiveTesting.InstrumentationMaps
+                            |> Map.values |> Seq.collect id
+                            |> Seq.collect (fun m -> m.Slots |> Array.map (fun s -> s.File))
+                            |> Seq.distinct
+                            |> Seq.filter (fun f -> not (Array.contains f files))
+                            |> Array.ofSeq
+                          let allFiles = Array.append files instrFiles
+                          for file in allFiles do
                             let fa = SageFs.Features.LiveTesting.FileAnnotations.projectWithCoverage file model.LiveTesting
                             if fa.TestAnnotations.Length > 0 || fa.CodeLenses.Length > 0 || fa.CoverageAnnotations.Length > 0 then
                               testEventBroadcast.Trigger(

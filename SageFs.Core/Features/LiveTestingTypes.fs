@@ -2450,6 +2450,32 @@ module FileAnnotations =
         |> Array.sortBy (fun c -> c.Line)
       { base' with CoverageAnnotations = coverageLineAnnotations }
 
+  /// Resolve a file path query to a full path by checking test sources first,
+  /// then production code files from instrumentation maps.
+  let resolveFilePath (fileParam: string) (statusEntries: TestStatusEntry array) (instrMaps: Map<string, InstrumentationMap array>) : string option =
+    let matchesParam (f: string) =
+      f = fileParam
+      || f.EndsWith(fileParam, System.StringComparison.OrdinalIgnoreCase)
+      || f.EndsWith(
+           System.IO.Path.DirectorySeparatorChar.ToString() + fileParam,
+           System.StringComparison.OrdinalIgnoreCase)
+    let testFile =
+      statusEntries
+      |> Array.choose (fun e ->
+        match e.Origin with
+        | TestOrigin.SourceMapped (f, _) -> Some f
+        | _ -> None)
+      |> Array.distinct
+      |> Array.tryFind matchesParam
+    match testFile with
+    | Some _ -> testFile
+    | None ->
+      instrMaps
+      |> Map.values |> Seq.collect id
+      |> Seq.collect (fun m -> m.Slots |> Array.map (fun s -> s.File))
+      |> Seq.distinct
+      |> Seq.tryFind matchesParam
+
 type SessionInvariantViolation = {
   Message: string
   RunPhaseKeys: Set<string>
