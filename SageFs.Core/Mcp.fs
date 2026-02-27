@@ -1360,19 +1360,89 @@ module McpTools =
       |}
       Task.FromResult (JsonSerializer.Serialize(resp, liveTestJsonOpts))
 
+  type RunTestsResult =
+    | Completed of passed: int * failed: int * total: int
+    | TimedOut of passed: int * failed: int * running: int * total: int
+    | Disabled
+    | NoTestsMatched of totalDiscovered: int
+
+  module RunTestsResult =
+    let format result =
+      match result with
+      | Completed (p, f, total) ->
+        if f = 0 then sprintf "✅ All %d tests passed." total
+        else sprintf "❌ %d passed, %d failed out of %d tests." p f total
+      | TimedOut (p, f, running, total) ->
+        sprintf "⏱️ Timed out: %d passed, %d failed, %d still running out of %d tests. Use get_live_test_status for updates." p f running total
+      | Disabled ->
+        "Live testing is disabled. Toggle it on first."
+      | NoTestsMatched totalDiscovered ->
+        sprintf "No tests matched. Total discovered: %d." totalDiscovered
+
+  let countStatuses
+    (entries: Features.LiveTesting.TestStatusEntry array)
+    (triggeredSet: Set<Features.LiveTesting.TestId>)
+    : int * int * int =
+    let mutable passed = 0
+    let mutable failed = 0
+    let mutable running = 0
+    for e in entries do
+      if Set.contains e.TestId triggeredSet then
+        match e.Status with
+        | Features.LiveTesting.TestRunStatus.Passed _ -> passed <- passed + 1
+        | Features.LiveTesting.TestRunStatus.Failed _ -> failed <- failed + 1
+        | Features.LiveTesting.TestRunStatus.Running -> running <- running + 1
+        | _ -> ()
+    (passed, failed, running)
+
+  let pollForTestCompletion
+    (getModel: unit -> SageFsModel)
+    (triggeredTestIds: Features.LiveTesting.TestId array)
+    (timeoutSeconds: int)
+    : Task<RunTestsResult> =
+    let total = triggeredTestIds.Length
+    if timeoutSeconds = 0 then
+      let model = getModel ()
+      let entries = model.LiveTesting.TestState.StatusEntries
+      let triggeredSet = Set.ofArray triggeredTestIds
+      let (p, f, _) = countStatuses entries triggeredSet
+      Task.FromResult (Completed (p, f, total))
+    else
+      task {
+        let deadline = DateTime.UtcNow.AddSeconds(float timeoutSeconds)
+        let triggeredSet = Set.ofArray triggeredTestIds
+        let mutable result = None
+        while result.IsNone && DateTime.UtcNow < deadline do
+          let model = getModel ()
+          let entries = model.LiveTesting.TestState.StatusEntries
+          let (p, f, r) = countStatuses entries triggeredSet
+          if p + f >= total then
+            result <- Some (Completed (p, f, total))
+          else
+            do! Task.Delay 200
+        match result with
+        | Some r -> return r
+        | None ->
+          let model = getModel ()
+          let entries = model.LiveTesting.TestState.StatusEntries
+          let (p, f, r) = countStatuses entries triggeredSet
+          return TimedOut (p, f, r, total)
+      }
+
   let runTests
     (ctx: McpContext)
     (patternFilter: string option)
     (categoryFilter: string option)
+    (timeoutSeconds: int)
     : Task<string> =
     match ctx.GetElmModel, ctx.Dispatch with
-    | None, _ -> Task.FromResult "Cannot run tests — Elm loop not started."
-    | _, None -> Task.FromResult "Cannot run tests — dispatch not available."
+    | None, _ -> Task.FromResult (RunTestsResult.format Disabled)
+    | _, None -> Task.FromResult (RunTestsResult.format Disabled)
     | Some getModel, Some dispatch ->
       let model = getModel ()
       let state = model.LiveTesting.TestState
       if state.Activation = Features.LiveTesting.LiveTestingActivation.Inactive then
-        Task.FromResult "Live testing is disabled. Toggle it on first."
+        Task.FromResult (RunTestsResult.format Disabled)
       else
         let category =
           match categoryFilter with
@@ -1390,7 +1460,14 @@ module McpTools =
           Features.LiveTesting.LiveTestPipelineState.filterTestsForExplicitRun
             state.DiscoveredTests None patternFilter category
         if Array.isEmpty tests then
-          Task.FromResult (sprintf "No tests matched. Total discovered: %d." state.DiscoveredTests.Length)
+          Task.FromResult (RunTestsResult.format (NoTestsMatched state.DiscoveredTests.Length))
         else
+          let testIds = tests |> Array.map (fun tc -> tc.Id)
           dispatch (SageFsMsg.Event (SageFsEvent.RunTestsRequested tests))
-          Task.FromResult (sprintf "Triggered %d tests for execution." tests.Length)
+          if timeoutSeconds = 0 then
+            Task.FromResult (sprintf "Triggered %d tests for execution." tests.Length)
+          else
+            task {
+              let! result = pollForTestCompletion getModel testIds timeoutSeconds
+              return RunTestsResult.format result
+            }

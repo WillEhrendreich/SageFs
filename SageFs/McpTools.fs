@@ -327,14 +327,18 @@ Policies: every (on every change), save (on file save only), demand (manual trig
     [<McpServerTool>]
     [<Description("""Run tests explicitly. Without parameters, runs all discovered unit tests.
 Use pattern to filter by test name (substring match on FullName or DisplayName).
-Use category to filter by test category: unit, integration, browser, benchmark, architecture, property.""")>]
+Use category to filter by test category: unit, integration, browser, benchmark, architecture, property.
+Use timeout_seconds to wait for results (default 30). Set to 0 for fire-and-forget.""")>]
     member _.run_tests(
         [<Description("Optional pattern to filter tests by name (substring match)")>]
         pattern: string,
         [<Description("Optional category filter: unit, integration, browser, benchmark, architecture, property")>]
-        category: string
+        category: string,
+        [<Description("Seconds to wait for test completion (default 30, 0 = fire-and-forget)")>]
+        timeout_seconds: int
     ) : Task<string> =
         let p = if System.String.IsNullOrWhiteSpace pattern then None else Some pattern
         let c = if System.String.IsNullOrWhiteSpace category then None else Some category
-        logger.LogDebug("MCP-TOOL: run_tests called, pattern={Pattern}, category={Category}", pattern, category)
-        runTests ctx p c |> withEcho "run_tests"
+        let t = if timeout_seconds <= 0 then 0 else timeout_seconds
+        logger.LogDebug("MCP-TOOL: run_tests called, pattern={Pattern}, category={Category}, timeout={Timeout}", pattern, category, t)
+        runTests ctx p c t |> withEcho "run_tests"
