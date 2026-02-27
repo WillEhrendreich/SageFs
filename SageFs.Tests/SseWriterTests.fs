@@ -469,3 +469,90 @@ let sessionScopingTests = testList "SSE Session Scoping" [
       |> Expect.equal "path preserved" "src/Foo.fs"
   ]
 ]
+
+let private mkSp file line col bid : SequencePoint =
+  { File = file; Line = line; Column = col; BranchId = bid }
+
+[<Tests>]
+let branchCoverageTests = testList "Branch Coverage Wiring" [
+  testList "CoverageBitmap.union" [
+    testCase "union of disjoint bitmaps" <| fun () ->
+      let a = CoverageBitmap.ofBoolArray [| true; false; false; false |]
+      let b = CoverageBitmap.ofBoolArray [| false; true; false; false |]
+      CoverageBitmap.union a b |> CoverageBitmap.toBoolArray
+      |> Expect.equal "combined" [| true; true; false; false |]
+
+    testCase "union of empty" <| fun () ->
+      CoverageBitmap.union CoverageBitmap.empty CoverageBitmap.empty
+      |> fun r -> r.Count |> Expect.equal "count" 0
+  ]
+
+  testList "computeLineCoverageForFile" [
+    testCase "partial coverage returns PartiallyCovered" <| fun () ->
+      let map : InstrumentationMap = {
+        Slots = [| mkSp "f.fs" 10 0 0; mkSp "f.fs" 10 10 1; mkSp "f.fs" 10 20 2 |]
+        TotalProbes = 3; TrackerTypeName = "t"; HitsFieldName = "h"
+      }
+      let bm = CoverageBitmap.ofBoolArray [| true; false; true |]
+      let bms = Map.ofList [ TestId.TestId "t1", bm ]
+      CoverageBitmap.computeLineCoverageForFile "f.fs" [| map |] bms
+      |> Map.tryFind 10
+      |> Expect.equal "partial" (Some (LineCoverage.PartiallyCovered(2, 3)))
+
+    testCase "all probes hit returns FullyCovered" <| fun () ->
+      let map : InstrumentationMap = {
+        Slots = [| mkSp "f.fs" 10 0 0; mkSp "f.fs" 10 10 1 |]
+        TotalProbes = 2; TrackerTypeName = "t"; HitsFieldName = "h"
+      }
+      let bm = CoverageBitmap.ofBoolArray [| true; true |]
+      let bms = Map.ofList [ TestId.TestId "t1", bm ]
+      CoverageBitmap.computeLineCoverageForFile "f.fs" [| map |] bms
+      |> Map.tryFind 10
+      |> Expect.equal "full" (Some LineCoverage.FullyCovered)
+
+    testCase "no probes hit returns NotCovered" <| fun () ->
+      let map : InstrumentationMap = {
+        Slots = [| mkSp "f.fs" 10 0 0; mkSp "f.fs" 10 10 1 |]
+        TotalProbes = 2; TrackerTypeName = "t"; HitsFieldName = "h"
+      }
+      let bm = CoverageBitmap.ofBoolArray [| false; false |]
+      let bms = Map.ofList [ TestId.TestId "t1", bm ]
+      CoverageBitmap.computeLineCoverageForFile "f.fs" [| map |] bms
+      |> Map.tryFind 10
+      |> Expect.equal "not covered" (Some LineCoverage.NotCovered)
+
+    testCase "multiple tests OR coverage together" <| fun () ->
+      let map : InstrumentationMap = {
+        Slots = [| mkSp "f.fs" 10 0 0; mkSp "f.fs" 10 10 1; mkSp "f.fs" 10 20 2 |]
+        TotalProbes = 3; TrackerTypeName = "t"; HitsFieldName = "h"
+      }
+      let bm1 = CoverageBitmap.ofBoolArray [| true; false; false |]
+      let bm2 = CoverageBitmap.ofBoolArray [| false; false; true |]
+      let bms = Map.ofList [ TestId.TestId "t1", bm1; TestId.TestId "t2", bm2 ]
+      CoverageBitmap.computeLineCoverageForFile "f.fs" [| map |] bms
+      |> Map.tryFind 10
+      |> Expect.equal "OR'd partial" (Some (LineCoverage.PartiallyCovered(2, 3)))
+
+    testCase "empty maps returns empty" <| fun () ->
+      CoverageBitmap.computeLineCoverageForFile "f.fs" [||] Map.empty
+      |> Expect.isEmpty "empty"
+
+    testCase "no matching bitmaps returns empty" <| fun () ->
+      let map : InstrumentationMap = {
+        Slots = [| mkSp "f.fs" 10 0 0 |]
+        TotalProbes = 1; TrackerTypeName = "t"; HitsFieldName = "h"
+      }
+      CoverageBitmap.computeLineCoverageForFile "f.fs" [| map |] Map.empty
+      |> Expect.isEmpty "empty"
+
+    testCase "different file returns empty" <| fun () ->
+      let map : InstrumentationMap = {
+        Slots = [| mkSp "other.fs" 10 0 0 |]
+        TotalProbes = 1; TrackerTypeName = "t"; HitsFieldName = "h"
+      }
+      let bm = CoverageBitmap.ofBoolArray [| true |]
+      let bms = Map.ofList [ TestId.TestId "t1", bm ]
+      CoverageBitmap.computeLineCoverageForFile "f.fs" [| map |] bms
+      |> Expect.isEmpty "empty"
+  ]
+]

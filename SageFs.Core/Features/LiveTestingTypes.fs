@@ -421,6 +421,14 @@ module CoverageBitmap =
     let bits = Array.init a.Bits.Length (fun i -> a.Bits.[i] ^^^ b.Bits.[i])
     { Bits = bits; Count = a.Count }
 
+  /// Bitwise OR — union of two coverage bitmaps.
+  let union (a: CoverageBitmap) (b: CoverageBitmap) : CoverageBitmap =
+    if a.Count = 0 && b.Count = 0 then empty
+    elif a.Count <> b.Count then failwith "CoverageBitmap size mismatch"
+    else
+      let bits = Array.init a.Bits.Length (fun i -> a.Bits.[i] ||| b.Bits.[i])
+      { Bits = bits; Count = a.Count }
+
   /// Check if a specific probe index is set.
   let isSet (index: int) (bm: CoverageBitmap) : bool =
     if index < 0 || index >= bm.Count then false
@@ -459,6 +467,29 @@ module CoverageBitmap =
           let intersection = intersect bm mask
           if popCount intersection > 0 then Some tid
           else None)
+
+  /// Merge all test bitmaps via OR, compute LineCoverage per line for a file.
+  let computeLineCoverageForFile
+    (filePath: string)
+    (maps: InstrumentationMap array)
+    (bitmaps: Map<TestId, CoverageBitmap>)
+    : Map<int, LineCoverage> =
+    let merged = InstrumentationMap.merge maps
+    if merged.TotalProbes = 0 || merged.Slots.Length = 0 then Map.empty
+    else
+      let compatBitmaps =
+        bitmaps |> Map.values |> Seq.filter (fun bm -> bm.Count = merged.TotalProbes) |> Seq.toArray
+      if compatBitmaps.Length = 0 then Map.empty
+      else
+        let combined =
+          compatBitmaps
+          |> Array.reduce (fun acc bm ->
+            let bits = Array.init acc.Bits.Length (fun i -> acc.Bits.[i] ||| bm.Bits.[i])
+            { Bits = bits; Count = acc.Count })
+        let hits = toBoolArray combined
+        let state = InstrumentationMap.toCoverageState hits merged
+        let allLineCov = ILCoverage.computeLineCoverage state
+        allLineCov |> Map.tryFind filePath |> Option.defaultValue Map.empty
 
 /// Per-test coverage info for a specific symbol
 type CoveringTestInfo = {
@@ -2395,8 +2426,15 @@ module FileAnnotations =
   let projectWithCoverage (filePath: string) (pipelineState: LiveTestPipelineState) : FileAnnotations =
     let depGraph = Some pipelineState.DepGraph
     let base' = project filePath depGraph pipelineState.TestState
+    let allMaps = pipelineState.InstrumentationMaps |> Map.values |> Seq.collect id |> Array.ofSeq
+    let lineCovMap = CoverageBitmap.computeLineCoverageForFile filePath allMaps pipelineState.TestState.TestCoverageBitmaps
+    let enrichWithBranch (anns: CoverageLineAnnotation array) =
+      anns |> Array.map (fun ca ->
+        match Map.tryFind ca.Line lineCovMap with
+        | Some lc -> { ca with BranchCoverage = Some lc }
+        | None -> ca)
     if base'.CoverageAnnotations.Length > 0 then
-      base'
+      { base' with CoverageAnnotations = enrichWithBranch base'.CoverageAnnotations }
     else
       let synthesized = synthesizeCoverage filePath pipelineState.AnalysisCache pipelineState.DepGraph pipelineState.TestState.LastResults
       let coverageLineAnnotations =
@@ -2408,7 +2446,7 @@ module FileAnnotations =
               match Map.tryFind ca.Symbol pipelineState.DepGraph.SymbolToTests with
               | Some ids -> ids
               | None -> [||]
-            BranchCoverage = None })
+            BranchCoverage = Map.tryFind ca.DefinitionLine lineCovMap })
         |> Array.sortBy (fun c -> c.Line)
       { base' with CoverageAnnotations = coverageLineAnnotations }
 
