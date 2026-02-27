@@ -123,11 +123,23 @@ type EventPersistence = {
 }
 
 module EventPersistence =
-  let inMemory () : EventPersistence = {
-    AppendEvents = fun _ _ -> Threading.Tasks.Task.FromResult (Ok ())
-    FetchStream = fun _ -> Threading.Tasks.Task.FromResult []
-    CountEvents = fun _ -> Threading.Tasks.Task.FromResult 0
-  }
+  let inMemory () : EventPersistence =
+    let streams = System.Collections.Concurrent.ConcurrentDictionary<string, (DateTimeOffset * SageFsEvent) list>()
+    {
+      AppendEvents = fun streamId events ->
+        let now = DateTimeOffset.UtcNow
+        let stamped = events |> List.map (fun e -> (now, e))
+        streams.AddOrUpdate(streamId, stamped, fun _ existing -> existing @ stamped) |> ignore
+        Threading.Tasks.Task.FromResult (Ok ())
+      FetchStream = fun streamId ->
+        match streams.TryGetValue streamId with
+        | true, events -> Threading.Tasks.Task.FromResult events
+        | false, _ -> Threading.Tasks.Task.FromResult []
+      CountEvents = fun streamId ->
+        match streams.TryGetValue streamId with
+        | true, events -> Threading.Tasks.Task.FromResult events.Length
+        | false, _ -> Threading.Tasks.Task.FromResult 0
+    }
 
   let postgres (store: IDocumentStore) : EventPersistence = {
     AppendEvents = fun streamId events -> appendEvents store streamId events
