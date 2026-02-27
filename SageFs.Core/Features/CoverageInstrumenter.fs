@@ -5,6 +5,7 @@ open System.IO
 open System.Reflection
 open Mono.Cecil
 open Mono.Cecil.Cil
+open Mono.Cecil.Rocks
 
 /// Cecil-based IL instrumentation for branch coverage.
 /// Injects a __SageFsCoverage tracker class with bool[] Hits field,
@@ -89,14 +90,50 @@ module CoverageInstrumenter =
     moduleDef.Types.Add(tracker)
     (tracker, hitMethod, hitsField)
 
+  /// Insert instructions before target, updating all exception handler
+  /// boundaries and branch operands that reference the target instruction.
+  /// Cecil's InsertBefore does NOT update these references — we must do it
+  /// ourselves, exactly as AltCover and Coverlet both do.
+  let private insertBeforeWithFixup
+    (il: ILProcessor) (target: Instruction) (newInstrs: Instruction list) =
+    let firstInserted =
+      newInstrs
+      |> List.rev
+      |> List.fold (fun next instr -> il.InsertBefore(next, instr); instr) target
+
+    for handler in il.Body.ExceptionHandlers do
+      if handler.TryStart = target then handler.TryStart <- firstInserted
+      if handler.TryEnd = target then handler.TryEnd <- firstInserted
+      if handler.HandlerStart = target then handler.HandlerStart <- firstInserted
+      if handler.HandlerEnd = target then handler.HandlerEnd <- firstInserted
+      if handler.FilterStart = target then handler.FilterStart <- firstInserted
+
+    for instr in il.Body.Instructions do
+      match instr.OpCode.OperandType with
+      | OperandType.InlineBrTarget
+      | OperandType.ShortInlineBrTarget ->
+        if Object.ReferenceEquals(instr.Operand, target) then
+          instr.Operand <- firstInserted
+      | OperandType.InlineSwitch ->
+        let targets = instr.Operand :?> Instruction array
+        for i in 0 .. targets.Length - 1 do
+          if Object.ReferenceEquals(targets.[i], target) then
+            targets.[i] <- firstInserted
+      | _ -> ()
+
+    firstInserted
+
   /// Insert Hit(slotId) calls before each sequence point instruction.
+  /// Uses SimplifyMacros/OptimizeMacros to prevent short-branch overflow
+  /// when probe instructions push branch targets beyond ±127 byte range.
   let insertProbes
     (hitMethod: MethodDefinition)
     (points: (MethodDefinition * Cil.SequencePoint * int) array) =
     let byMethod = points |> Array.groupBy (fun (m, _, _) -> m)
     for (m, methodPoints) in byMethod do
+      m.Body.SimplifyMacros()
       let il = m.Body.GetILProcessor()
-      // Insert from end to start to preserve IL offsets
+      // Insert from end to start to preserve IL offsets for lookup
       let sorted =
         methodPoints
         |> Array.sortByDescending (fun (_, sp, _) -> sp.Offset)
@@ -109,9 +146,9 @@ module CoverageInstrumenter =
           let loadId = il.Create(OpCodes.Ldc_I4, slotId)
           let callHit =
             il.Create(OpCodes.Call, hitMethod :> MethodReference)
-          il.InsertBefore(instr, loadId)
-          il.InsertBefore(instr, callHit)
+          insertBeforeWithFixup il instr [ loadId; callHit ] |> ignore
         | None -> ()
+      m.Body.OptimizeMacros()
 
   /// Instrument an assembly: inject tracker + probes at sequence points.
   /// Returns (InstrumentationMap, instrumentedAssemblyPath) or error.
@@ -243,15 +280,44 @@ module CoverageInstrumenter =
               hitsField.SetValue(null, Array.create arr.Length false)
       with _ -> ()
 
+  /// Track consecutive instrumentation failures for circuit breaker.
+  let mutable private consecutiveFailures = 0
+  let private maxConsecutiveFailures = 3
+
+  /// Reset the circuit breaker (e.g., after a successful instrumentation).
+  let resetCircuitBreaker () = consecutiveFailures <- 0
+
+  /// Check if the circuit breaker has tripped.
+  let isCircuitBroken () = consecutiveFailures >= maxConsecutiveFailures
+
   /// Instrument all project DLLs in a shadow-copied solution for IL coverage.
   /// Returns the instrumentation maps for all successfully instrumented assemblies.
+  /// Circuit breaker: after 3 consecutive failures, disables instrumentation.
   let instrumentShadowSolution (projectTargetPaths: string list)
     : InstrumentationMap array =
-    projectTargetPaths
-    |> List.toArray
-    |> Array.choose (fun targetPath ->
-      if File.Exists(targetPath) then
-        match instrumentAssemblyInPlace targetPath with
-        | Ok map when map.TotalProbes > 0 -> Some map
-        | _ -> None
-      else None)
+    if isCircuitBroken () then
+      eprintfn "⚠️ IL coverage instrumentation disabled after %d consecutive failures" consecutiveFailures
+      [||]
+    else
+      let mutable hadFailure = false
+      let results =
+        projectTargetPaths
+        |> List.toArray
+        |> Array.choose (fun targetPath ->
+          if File.Exists(targetPath) then
+            match instrumentAssemblyInPlace targetPath with
+            | Ok map when map.TotalProbes > 0 ->
+              Some map
+            | Ok _ -> None
+            | Error msg ->
+              hadFailure <- true
+              eprintfn "⚠️ IL instrumentation failed for %s: %s" (Path.GetFileName targetPath) msg
+              None
+          else None)
+      if hadFailure then
+        consecutiveFailures <- consecutiveFailures + 1
+        if isCircuitBroken () then
+          eprintfn "🛑 IL coverage circuit breaker tripped after %d failures — instrumentation disabled for this session" consecutiveFailures
+      else
+        consecutiveFailures <- 0
+      results

@@ -100,7 +100,13 @@
         <PackageReference Include="Fantomas.Core" />
         <PackageReference Include="Marten" />
         <PackageReference Include="FSharp.SystemTextJson" />
-        <PackageReference Include="Mono.Cecil" />
+        <PackageReference Include="Mono.Cecil" GeneratePathProperty="true" />
     </ItemGroup>
+
+    <Target Name="AddCecilRocksReference" BeforeTargets="ResolveAssemblyReferences">
+        <ItemGroup>
+            <Reference Include="$(PkgMono_Cecil)\lib\netstandard2.0\Mono.Cecil.Rocks.dll" />
+        </ItemGroup>
+    </Target>
 
 </Project>
