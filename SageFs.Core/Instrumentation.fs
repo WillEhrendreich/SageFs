@@ -41,6 +41,10 @@ module Instrumentation =
 
   let mcpToolInvocations =
     mcpMeter.CreateCounter<int64>("sagefs.mcp.tool_invocations_total", description = "Total MCP tool invocations")
+  let mcpToolSuccesses =
+    mcpMeter.CreateCounter<int64>("sagefs.mcp.tool_successes_total", description = "Total successful MCP tool invocations")
+  let mcpToolFailures =
+    mcpMeter.CreateCounter<int64>("sagefs.mcp.tool_failures_total", description = "Total failed MCP tool invocations")
   let fsiEvals =
     mcpMeter.CreateCounter<int64>("sagefs.fsi.evals_total", description = "Total FSI eval calls")
   let fsiStatements =
@@ -237,11 +241,13 @@ module Instrumentation =
           activity.SetTag("rpc.service", "sagefs") |> ignore
           activity.SetTag("rpc.method", toolName) |> ignore
         let! result = f ()
+        mcpToolSuccesses.Add(1L, System.Collections.Generic.KeyValuePair("mcp.tool.name", box toolName))
         if not (isNull activity) then
           activity.Stop()
           activity.Dispose()
         return result
       with ex ->
+        mcpToolFailures.Add(1L, System.Collections.Generic.KeyValuePair("mcp.tool.name", box toolName))
         if not (isNull activity) then
           activity.SetTag("error", true) |> ignore
           activity.SetTag("error.message", ex.Message) |> ignore

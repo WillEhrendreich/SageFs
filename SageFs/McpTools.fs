@@ -14,12 +14,18 @@ let withEcho (toolName: string) (t: Task<string>) : Task<string> =
     SageFs.Instrumentation.mcpToolInvocations.Add(1L)
     let span = SageFs.Instrumentation.startSpanWithKind SageFs.Instrumentation.mcpSource "mcp.tool.invoke" System.Diagnostics.ActivityKind.Server
                  ["mcp.tool.name", box toolName; "rpc.system", box "mcp"; "rpc.service", box "sagefs"; "rpc.method", box toolName]
-    let! result = t
-    let normalized = result.Replace("\r\n", "\n").Replace("\n", "\r\n")
-    eprintfn "\u001b[90m>> %s\u001b[0m" toolName
-    eprintfn "\u001b[90m%s\u001b[0m" normalized
-    SageFs.Instrumentation.succeedSpan span
-    return result
+    try
+      let! result = t
+      SageFs.Instrumentation.mcpToolSuccesses.Add(1L, System.Collections.Generic.KeyValuePair("mcp.tool.name", box toolName))
+      let normalized = result.Replace("\r\n", "\n").Replace("\n", "\r\n")
+      eprintfn "\u001b[90m>> %s\u001b[0m" toolName
+      eprintfn "\u001b[90m%s\u001b[0m" normalized
+      SageFs.Instrumentation.succeedSpan span
+      return result
+    with ex ->
+      SageFs.Instrumentation.mcpToolFailures.Add(1L, System.Collections.Generic.KeyValuePair("mcp.tool.name", box toolName))
+      SageFs.Instrumentation.failSpan span ex.Message
+      return raise ex
   }
 
 type SageFsTools(ctx: McpContext, logger: ILogger<SageFsTools>) =
