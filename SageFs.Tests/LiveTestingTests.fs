@@ -6019,6 +6019,124 @@ let sequencePointRangeTests = testList "SequencePoint.hasRange" [
     |> Expect.isFalse "inverted range should be degenerate"
 ]
 
+// --- projectWithCoverage Range Enrichment Tests ---
+
+let private mkTestSp file line col endLine endCol : SequencePoint =
+  { File = file; Line = line; Column = col; EndLine = endLine; EndColumn = endCol; BranchId = 0 }
+
+let private mkTestMap (slots: SequencePoint array) : InstrumentationMap =
+  { Slots = slots; TotalProbes = slots.Length; TrackerTypeName = "T"; HitsFieldName = "H" }
+
+[<Tests>]
+let rangeLookupTests = testList "FileAnnotations.projectWithCoverage range enrichment" [
+  test "enriches CoverageLineAnnotation with EndLine/EndColumn from matching SequencePoint" {
+    let filePath = @"C:\src\MyModule.fs"
+    let sp = mkTestSp filePath 10 4 15 20
+    let maps = [| mkTestMap [| sp |] |]
+    let ca : CoverageAnnotation =
+      { Symbol = "MyModule.foo"; FilePath = filePath; DefinitionLine = 10
+        Status = CoverageStatus.Covered(1, CoverageHealth.AllPassing) }
+    let state = { LiveTestState.empty with CoverageAnnotations = [| ca |] }
+    let pipeline =
+      { LiveTestPipelineState.empty with
+          TestState = state
+          InstrumentationMaps = Map.ofList [ "sess1", maps ] }
+    let result = FileAnnotations.projectWithCoverage filePath pipeline
+    result.CoverageAnnotations |> Expect.hasLength "should have one annotation" 1
+    result.CoverageAnnotations.[0].EndLine |> Expect.equal "EndLine should come from SP" 15
+    result.CoverageAnnotations.[0].EndColumn |> Expect.equal "EndColumn should come from SP" 20
+  }
+
+  test "EndLine/EndColumn remain 0 when no matching SequencePoint exists" {
+    let filePath = @"C:\src\MyModule.fs"
+    let sp = mkTestSp @"C:\src\Other.fs" 10 4 15 20
+    let maps = [| mkTestMap [| sp |] |]
+    let ca : CoverageAnnotation =
+      { Symbol = "MyModule.foo"; FilePath = filePath; DefinitionLine = 10
+        Status = CoverageStatus.Covered(1, CoverageHealth.AllPassing) }
+    let state = { LiveTestState.empty with CoverageAnnotations = [| ca |] }
+    let pipeline =
+      { LiveTestPipelineState.empty with
+          TestState = state
+          InstrumentationMaps = Map.ofList [ "sess1", maps ] }
+    let result = FileAnnotations.projectWithCoverage filePath pipeline
+    result.CoverageAnnotations |> Expect.hasLength "should have one annotation" 1
+    result.CoverageAnnotations.[0].EndLine |> Expect.equal "EndLine should be 0" 0
+    result.CoverageAnnotations.[0].EndColumn |> Expect.equal "EndColumn should be 0" 0
+  }
+
+  test "picks widest range when multiple SPs on same line" {
+    let filePath = @"C:\src\MyModule.fs"
+    let sp1 = mkTestSp filePath 10 4 10 20
+    let sp2 = mkTestSp filePath 10 4 12 30
+    let maps = [| mkTestMap [| sp1; sp2 |] |]
+    let ca : CoverageAnnotation =
+      { Symbol = "MyModule.foo"; FilePath = filePath; DefinitionLine = 10
+        Status = CoverageStatus.Covered(1, CoverageHealth.AllPassing) }
+    let state = { LiveTestState.empty with CoverageAnnotations = [| ca |] }
+    let pipeline =
+      { LiveTestPipelineState.empty with
+          TestState = state
+          InstrumentationMaps = Map.ofList [ "sess1", maps ] }
+    let result = FileAnnotations.projectWithCoverage filePath pipeline
+    result.CoverageAnnotations.[0].EndLine |> Expect.equal "should pick widest EndLine" 12
+    result.CoverageAnnotations.[0].EndColumn |> Expect.equal "should pick widest EndColumn" 30
+  }
+
+  test "filters out degenerate SPs (EndLine=0)" {
+    let filePath = @"C:\src\MyModule.fs"
+    let spDegen : SequencePoint =
+      { File = filePath; Line = 10; Column = 4; EndLine = 0; EndColumn = 0; BranchId = 0 }
+    let spGood = mkTestSp filePath 10 4 15 20
+    let maps = [| mkTestMap [| spDegen; spGood |] |]
+    let ca : CoverageAnnotation =
+      { Symbol = "MyModule.foo"; FilePath = filePath; DefinitionLine = 10
+        Status = CoverageStatus.Covered(1, CoverageHealth.AllPassing) }
+    let state = { LiveTestState.empty with CoverageAnnotations = [| ca |] }
+    let pipeline =
+      { LiveTestPipelineState.empty with
+          TestState = state
+          InstrumentationMaps = Map.ofList [ "sess1", maps ] }
+    let result = FileAnnotations.projectWithCoverage filePath pipeline
+    result.CoverageAnnotations.[0].EndLine |> Expect.equal "should use good SP" 15
+    result.CoverageAnnotations.[0].EndColumn |> Expect.equal "should use good SP EndColumn" 20
+  }
+
+  test "enriches synthesized coverage annotations with range data" {
+    let filePath = @"C:\src\MyModule.fs"
+    let sp = mkTestSp filePath 10 4 15 20
+    let maps = [| mkTestMap [| sp |] |]
+    let tid = TestId.TestId "test1"
+    let passed = TestResult.Passed(System.TimeSpan.FromMilliseconds 100.0)
+    let depGraph =
+      { TestDependencyGraph.empty with
+          SymbolToTests = Map.ofList [ "MyModule.foo", [| tid |] ] }
+    let lastResults =
+      Map.ofList
+        [ tid,
+          { TestId = tid; TestName = "test1"; Result = passed
+            Timestamp = System.DateTimeOffset.UtcNow } ]
+    let symRef : SymbolReference =
+      { SymbolFullName = "MyModule.foo"; UseKind = SymbolUseKind.Definition
+        UsedInTestId = None; FilePath = filePath; Line = 10 }
+    let analysisCache =
+      { FileAnalysisCache.empty with
+          FileSymbols = Map.ofList [ filePath, [ symRef ] ] }
+    let state =
+      { LiveTestState.empty with
+          LastResults = lastResults; CoverageAnnotations = [||] }
+    let pipeline =
+      { LiveTestPipelineState.empty with
+          TestState = state; DepGraph = depGraph
+          AnalysisCache = analysisCache
+          InstrumentationMaps = Map.ofList [ "sess1", maps ] }
+    let result = FileAnnotations.projectWithCoverage filePath pipeline
+    result.CoverageAnnotations |> Expect.hasLength "should synthesize one annotation" 1
+    result.CoverageAnnotations.[0].EndLine |> Expect.equal "synthesized EndLine from SP" 15
+    result.CoverageAnnotations.[0].EndColumn |> Expect.equal "synthesized EndColumn from SP" 20
+  }
+]
+
 // --- CoverageBitmap Tests ---
 
 [<Tests>]
