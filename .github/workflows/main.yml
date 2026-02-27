@@ -48,8 +48,59 @@ jobs:
         if [ $rc -eq 0 ] || [ $rc -eq 2 ]; then exit 0; else exit $rc; fi
       timeout-minutes: 10
 
+  extensions:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v5
+
+    - name: Checkout forked MCP SDK
+      uses: actions/checkout@v5
+      with:
+        repository: WillEhrendreich/ModelContextProtocolSdk
+        path: mcp-sdk
+
+    - name: Install Dotnet
+      uses: actions/setup-dotnet@v5
+      with:
+        dotnet-version: |
+          10.0.x
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: 20
+
+    - name: Build forked MCP SDK packages
+      run: |
+        dotnet pack mcp-sdk/src/ModelContextProtocol.Core -o mcp-sdk-nupkg -c Release
+        dotnet pack mcp-sdk/src/ModelContextProtocol -o mcp-sdk-nupkg -c Release
+        dotnet pack mcp-sdk/src/ModelContextProtocol.AspNetCore -o mcp-sdk-nupkg -c Release
+
+    - name: Build core
+      run: dotnet build
+
+    - name: Check formatting
+      run: dotnet format --verify-no-changes --verbosity minimal
+
+    - name: Build VS Code extension
+      working-directory: sagefs-vscode
+      run: |
+        dotnet tool restore
+        npm ci
+        npm run compile
+
+    - name: Build Visual Studio extension
+      id: vs-build
+      continue-on-error: true
+      run: dotnet build sagefs-vs/SageFs.VisualStudio/SageFs.VisualStudio.csproj -c Release
+
+    - name: Warn if VS extension build failed
+      if: steps.vs-build.outcome == 'failure'
+      run: echo "::warning::Visual Studio extension build failed — skipped (may need Windows)"
+
   publish:
-    needs: build
+    needs: [build, extensions]
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/master'
     permissions:
