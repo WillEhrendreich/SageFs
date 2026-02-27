@@ -80,7 +80,7 @@ let showConnectionBanner (info: DaemonInfo) =
 /// Start daemon in background, wait for it to be ready.
 let startDaemonInBackground (daemonArgs: string) =
   let psi = System.Diagnostics.ProcessStartInfo()
-  psi.FileName <- "SageFs"
+  psi.FileName <- "sagefs"
   psi.Arguments <- sprintf "-d %s" daemonArgs
   psi.UseShellExecute <- false
   psi.CreateNoWindow <- true
