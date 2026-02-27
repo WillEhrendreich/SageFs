@@ -54,7 +54,7 @@ let createProgram
   (onModelChanged: SageFsModel -> RenderRegion list -> unit)
   : ElmProgram<SageFsModel, SageFsMsg, SageFsEffect, RenderRegion> =
   {
-    Update = SageFsUpdate.update
+    Update = SageFsUpdate.updateWithInvariant
     Render = SageFsRender.render
     ExecuteEffect = SageFsEffectHandler.execute deps
     OnModelChanged = onModelChanged

@@ -2408,3 +2408,29 @@ module FileAnnotations =
               | None -> [||] })
         |> Array.sortBy (fun c -> c.Line)
       { base' with CoverageAnnotations = coverageLineAnnotations }
+
+type SessionInvariantViolation = {
+  Message: string
+  RunPhaseKeys: Set<string>
+  InstrumentationMapKeys: Set<string>
+  TestSessionMapKeys: Set<string>
+}
+
+module SessionInvariant =
+  /// Validates steady-state consistency of per-session maps.
+  /// Returns None during initialization (when either map is empty).
+  let validate (state: LiveTestState) (instrMaps: Map<string, InstrumentationMap array>) : SessionInvariantViolation option =
+    let runPhaseKeys = state.RunPhases |> Map.keys |> Set.ofSeq
+    let instrMapKeys = instrMaps |> Map.keys |> Set.ofSeq
+    let sessionMapKeys = state.TestSessionMap |> Map.keys |> Set.ofSeq |> Set.map (fun (TestId.TestId tid) -> tid)
+    if Set.isEmpty runPhaseKeys || Set.isEmpty instrMapKeys then
+      None
+    else
+      if runPhaseKeys <> instrMapKeys then
+        Some {
+          Message = sprintf "Session key mismatch: RunPhases has %A, InstrumentationMaps has %A" runPhaseKeys instrMapKeys
+          RunPhaseKeys = runPhaseKeys
+          InstrumentationMapKeys = instrMapKeys
+          TestSessionMapKeys = sessionMapKeys
+        }
+      else None

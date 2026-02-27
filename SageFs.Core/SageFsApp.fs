@@ -624,6 +624,17 @@ module SageFsUpdate =
       let mappedEffects = effects |> List.map SageFsEffect.Pipeline
       { model with LiveTesting = pipeline' }, mappedEffects
 
+  let updateWithInvariant (msg: SageFsMsg) (model: SageFsModel) : SageFsModel * SageFsEffect list =
+    let model', effects = update msg model
+    #if DEBUG
+    match SessionInvariant.validate model'.LiveTesting.TestState model'.LiveTesting.InstrumentationMaps with
+    | Some violation ->
+      System.Diagnostics.Debug.WriteLine(
+        sprintf "SESSION INVARIANT VIOLATION after %A: %s" msg violation.Message)
+    | None -> ()
+    #endif
+    model', effects
+
 /// Pure render function: produces RenderRegion list from model.
 /// Every frontend consumes these regions — terminal, web, Neovim, etc.
 module SageFsRender =
