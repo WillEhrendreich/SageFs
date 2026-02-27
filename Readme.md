@@ -298,6 +298,27 @@ http://localhost:37749/sse
 Connect with any MCP client that supports SSE transport. No API key required — it's a local server.
 </details>
 
+<details>
+<summary><strong>Agent Edit→Test→Poll workflow</strong></summary>
+
+The ideal AI agent loop with SageFs:
+
+1. **Edit code** — agent writes to `.fs` files (via editor or filesystem tools)
+2. **Tests auto-run** — SageFs's file watcher detects the change, runs affected tests automatically
+3. **Poll status** — agent calls `get_live_test_status` to see pass/fail results
+
+```
+Agent edits src/MyModule.fs
+  → SageFs detects change (~100ms)
+  → Affected tests run (~200-500ms)
+  → Agent polls get_live_test_status → sees green/red
+```
+
+Alternatively, for explicit control: `run_tests` with `pattern` or `category` filters runs tests synchronously and returns results directly. Use `timeout_seconds` to set a deadline.
+
+The key insight: **you don't need to call `send_fsharp_code` to trigger tests.** Just edit files. SageFs's pipeline handles the rest. Use `send_fsharp_code` for exploratory work, prototyping, and REPL-style development.
+</details>
+
 ### REPL Client
 
 ```bash
@@ -472,6 +493,8 @@ The MCP response strategy is also optimized for LLM context windows — echoed c
 | `get_pipeline_trace` | Debug the three-speed pipeline waterfall |
 
 [Full tool list →](#mcp-tools-reference)
+
+> **Security scope:** The MCP server binds to `localhost` only and has no authentication. This is by design — SageFs is a local development tool. The HTTP and SSE endpoints are tunnelable (e.g., via VS Code Remote or SSH port forwarding) but are not authenticated, so exposing them to untrusted networks is not recommended. If you need remote access, use SSH tunneling or a VPN.
 
 ### 📦 Project & Solution Support
 
