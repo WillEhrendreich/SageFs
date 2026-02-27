@@ -6,6 +6,7 @@ SageFs is a [.NET global tool](https://learn.microsoft.com/en-us/dotnet/core/too
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![.NET](https://img.shields.io/badge/.NET-10.0-purple.svg)](https://dotnet.microsoft.com)
+[![Save→Green](https://img.shields.io/badge/save→green-<500ms-brightgreen)]()
 
 <p align="center">
   <img src="docs/hot-reload-demo.gif" alt="SageFs Hot Reload Demo — edit F# code and see changes in the browser instantly" width="800"/>
