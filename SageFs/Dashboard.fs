@@ -1616,7 +1616,7 @@ let createEvalHandler
   : HttpHandler =
   fun ctx -> task {
     try
-      let! doc = Request.getSignalsJson ctx
+      use! doc = Request.getSignalsJson ctx
       let code =
         match doc.RootElement.TryGetProperty("code") with
         | true, prop -> prop.GetString()
@@ -1734,7 +1734,7 @@ let createResetHandler
     try
       let! sessionId = task {
         try
-          let! doc = Request.getSignalsJson ctx
+          use! doc = Request.getSignalsJson ctx
           match doc.RootElement.TryGetProperty("sessionId") with
           | true, prop -> return prop.GetString()
           | _ -> return ""
@@ -1920,7 +1920,7 @@ let pushDiscoverResults (ctx: HttpContext) (dir: string) = task {
 /// Create the discover-projects POST handler.
 let createDiscoverHandler : HttpHandler =
   fun ctx -> task {
-    let! doc = Request.getSignalsJson ctx
+    use! doc = Request.getSignalsJson ctx
     let dir = getSignalString doc "newSessionDir" "new-session-dir"
     Response.sseStartResponse ctx |> ignore
     if String.IsNullOrWhiteSpace dir then
@@ -1945,7 +1945,7 @@ let createCreateSessionHandler
   (switchSession: (string -> Threading.Tasks.Task<Result<string, string>>) option)
   : HttpHandler =
   fun ctx -> task {
-    let! doc = Request.getSignalsJson ctx
+    use! doc = Request.getSignalsJson ctx
     let dir = getSignalString doc "newSessionDir" "new-session-dir"
     let manualProjects = getSignalString doc "manualProjects" "manual-projects"
     Response.sseStartResponse ctx |> ignore

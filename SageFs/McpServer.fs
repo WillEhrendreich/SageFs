@@ -135,8 +135,9 @@ type EventAccumulator() =
         events.Enqueue(entry))
     | MergeStrategy.Accumulate ->
       events.Enqueue(entry)
-      while events.Count > maxEvents do
-        events.TryDequeue() |> ignore
+      lock replaceLock (fun () ->
+        while events.Count > maxEvents do
+          events.TryDequeue() |> ignore)
 
   member _.Drain() =
     lock replaceLock (fun () ->
@@ -935,7 +936,15 @@ let startMcpServer (cfg: McpServerConfig) =
                             | SageFs.WorkerProtocol.WorkerResponse.StatusResult(_, snap) ->
                               return snap.EvalCount, float snap.AvgDurationMs, SageFs.WorkerProtocol.SessionStatus.label snap.Status
                             | _ -> return 0, 0.0, "Unknown"
-                          with _ -> return 0, 0.0, "Error"
+                          with
+                          | :? System.Net.Http.HttpRequestException as ex ->
+                            eprintfn "[MCP] Session status HTTP error for %s: %s" sess.Id ex.Message
+                            return 0, 0.0, "Error"
+                          | :? System.Threading.Tasks.TaskCanceledException ->
+                            return 0, 0.0, "Timeout"
+                          | ex ->
+                            eprintfn "[MCP] Session status unexpected error for %s: %s (%s)" sess.Id ex.Message (ex.GetType().Name)
+                            return 0, 0.0, "Error"
                         | None -> return 0, 0.0, "Disconnected"
                       }
                       results.Add(
