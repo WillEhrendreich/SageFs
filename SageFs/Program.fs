@@ -18,16 +18,23 @@ type NewlineNormalizingWriter(inner: TextWriter) =
     with get () = inner.NewLine
     and set v = inner.NewLine <- v
   override _.Write(value: char) =
-    if value = '\n' then
-      if not lastCharWasCR then
-        inner.Write '\r'
+    match value with
+    | '\n' ->
+      match lastCharWasCR with
+      | false -> inner.Write '\r'
+      | true -> ()
       inner.Write '\n'
       lastCharWasCR <- false
-    else
-      lastCharWasCR <- (value = '\r')
+    | '\r' ->
+      lastCharWasCR <- true
+      inner.Write value
+    | _ ->
+      lastCharWasCR <- false
       inner.Write value
   override _.Write(value: string) =
-    if not (isNull value) then
+    match isNull value with
+    | true -> ()
+    | false ->
       let normalized = value.Replace("\r\n", "\n").Replace("\n", "\r\n")
       inner.Write normalized
   override _.Write(buffer: char[], index: int, count: int) =
@@ -71,17 +78,44 @@ let filterArgs (args: string array) =
       match mcpPortIndex with
       | Some i when i + 1 < args.Length && a = args.[i + 1] -> false
       | _ -> true)
-  if ionideFlags.Length > 0 then
-    Array.concat [regularArgs; [|"--other"|]; ionideFlags]
-  else
-    regularArgs
+  match ionideFlags.Length > 0 with
+  | true -> Array.concat [regularArgs; [|"--other"|]; ionideFlags]
+  | false -> regularArgs
+
+/// CLI command parsed from arguments — replaces if/elif chain with pattern matching.
+type CliCommand =
+  | ShowHelp
+  | ShowVersion
+  | Stop
+  | Status
+  | Worker of workerArgs: string list
+  | Connect of remainingArgs: string array
+  | Tui of remainingArgs: string array
+  | Gui of remainingArgs: string array
+  | Daemon of args: string array
+
+module CliCommand =
+  let parse (args: string array) =
+    let hasFlag flag = args |> Array.exists (fun a -> a = flag)
+    match () with
+    | _ when hasFlag "--help" || hasFlag "-h" -> ShowHelp
+    | _ when hasFlag "--version" || hasFlag "-v" -> ShowVersion
+    | _ when args.Length > 0 && args.[0] = "stop" -> Stop
+    | _ when args.Length > 0 && args.[0] = "status" -> Status
+    | _ when args.Length > 0 && args.[0] = "worker" -> Worker (args.[1..] |> Array.toList)
+    | _ when args.Length > 0 && args.[0] = "connect" -> Connect args
+    | _ when args.Length > 0 && args.[0] = "tui" -> Tui args
+    | _ when args.Length > 0 && args.[0] = "gui" -> Gui args
+    | _ -> Daemon args
 
 /// Run daemon mode (default behavior).
 let runDaemon (args: string array) =
   let mcpPort = parseMcpPort args
   let filteredArgs = filterArgs args
   let parsedArgs = Args.parseArgs filteredArgs
-  if args |> Array.exists (fun a -> a = "--supervised") then
+  let isSupervised = args |> Array.exists (fun a -> a = "--supervised")
+  match isSupervised with
+  | true ->
     let daemonArgs =
       args
       |> Array.filter (fun a -> a <> "--supervised")
@@ -97,7 +131,7 @@ let runDaemon (args: string array) =
       cts.Token
     |> _.GetAwaiter() |> _.GetResult()
     0
-  else
+  | false ->
     DaemonMode.run mcpPort parsedArgs
     |> _.GetAwaiter() |> _.GetResult()
     0
@@ -107,8 +141,8 @@ let main args =
   // Wrap Console.Out to normalize \n to \r\n on Windows console.
   Console.SetOut(new NewlineNormalizingWriter(Console.Out))
 
-  // Check for --help or -h flag
-  if args |> Array.exists (fun arg -> arg = "--help" || arg = "-h") then
+  match CliCommand.parse args with
+  | ShowHelp ->
     printfn "SageFs - F# Interactive daemon with MCP, hot reloading, and live dashboard"
     printfn ""
     printfn "Usage: SageFs [options]                Start daemon (default mode)"
@@ -165,22 +199,22 @@ let main args =
     printfn "  SageFs status                       Show daemon status"
     printfn ""
     0
-  // Check for --version or -v flag
-  elif args |> Array.exists (fun arg -> arg = "--version" || arg = "-v") then
+
+  | ShowVersion ->
     let assembly = Assembly.GetExecutingAssembly()
     let version = assembly.GetName().Version
     printfn $"SageFs version %A{version}"
     0
-  // Subcommand: stop
-  elif args.Length > 0 && args.[0] = "stop" then
+
+  | Stop ->
     let mcpPort = parseMcpPort args
     match DaemonState.readOnPort mcpPort with
     | Some info ->
-      if DaemonState.requestShutdown mcpPort then
+      match DaemonState.requestShutdown mcpPort with
+      | true ->
         printfn "Daemon shutting down (PID %d)" info.Pid
         0
-      else
-        // Fallback: kill by PID if shutdown endpoint failed
+      | false ->
         try
           let proc = System.Diagnostics.Process.GetProcessById(info.Pid)
           proc.Kill()
@@ -193,8 +227,8 @@ let main args =
     | None ->
       printfn "No daemon running"
       0
-  // Subcommand: status
-  elif args.Length > 0 && args.[0] = "status" then
+
+  | Status ->
     let mcpPort = parseMcpPort args
     match DaemonState.readOnPort mcpPort with
     | Some info ->
@@ -208,26 +242,27 @@ let main args =
     | None ->
       printfn "No daemon running"
       1
-  // Subcommand: worker (internal)
-  elif args.Length > 0 && args.[0] = "worker" then
-    let workerArgs = args.[1..] |> Array.toList
+
+  | Worker workerArgs ->
     let sessionId =
       workerArgs
       |> List.tryFindIndex (fun a -> a = "--session-id")
       |> Option.bind (fun i ->
-        if i + 1 < workerArgs.Length then Some workerArgs.[i + 1] else None)
+        match i + 1 < workerArgs.Length with
+        | true -> Some workerArgs.[i + 1]
+        | false -> None)
       |> Option.defaultValue (System.Guid.NewGuid().ToString("N").[..7])
     let httpPort =
       workerArgs
       |> List.tryFindIndex (fun a -> a = "--http-port")
       |> Option.bind (fun i ->
-        if i + 1 < workerArgs.Length then
+        match i + 1 < workerArgs.Length with
+        | true ->
           match System.Int32.TryParse(workerArgs.[i + 1]) with
           | true, p -> Some p
           | _ -> None
-        else None)
+        | false -> None)
       |> Option.defaultValue 0
-    // Filter out worker-specific flags, pass rest to Args.parseArgs
     let workerSpecific = set ["--session-id"; "--http-port"]
     let filteredArgs =
       workerArgs
@@ -241,8 +276,8 @@ let main args =
     WorkerMain.run sessionId httpPort parsedArgs
     |> Async.RunSynchronously
     0
-  // Subcommand: connect (connects to running daemon)
-  elif args.Length > 0 && args.[0] = "connect" then
+
+  | Connect _ ->
     match DaemonState.read () with
     | Some info ->
       ClientMode.run info
@@ -265,8 +300,8 @@ let main args =
       | Error err ->
         printfn "Failed to start daemon: %A" err
         1
-  // Subcommand: tui (terminal UI client for running daemon)
-  elif args.Length > 0 && args.[0] = "tui" then
+
+  | Tui _ ->
     match DaemonState.read () with
     | Some info ->
       TuiClient.run info
@@ -289,8 +324,8 @@ let main args =
       | Error err ->
         printfn "Failed to start daemon: %A" err
         1
-  // Subcommand: gui (launch Raylib GUI client for running daemon)
-  elif args.Length > 0 && args.[0] = "gui" then
+
+  | Gui _ ->
     let launchGui () =
       SageFs.Gui.RaylibMode.run ()
       0
@@ -307,8 +342,8 @@ let main args =
       | Error err ->
         printfn "Failed to start daemon: %A" err
         1
-  // Default: daemon mode (or TUI if daemon already running)
-  else
+
+  | Daemon _ ->
     match DaemonState.read () with
     | Some info ->
       printfn "SageFs daemon already running (PID %d, port %d). Launching TUI..." info.Pid info.Port
