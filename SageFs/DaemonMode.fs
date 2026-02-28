@@ -360,7 +360,18 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
           }
           return Some ctx
         | _ -> return None
-      with _ -> return None
+      with
+      | :? System.IO.IOException as ex ->
+        eprintfn "[getWarmupContextForElm] IO error: %s" ex.Message
+        return None
+      | :? System.Net.Http.HttpRequestException as ex ->
+        eprintfn "[getWarmupContextForElm] HTTP error: %s" ex.Message
+        return None
+      | :? System.Threading.Tasks.TaskCanceledException ->
+        return None
+      | ex ->
+        eprintfn "[getWarmupContextForElm] Unexpected: %s (%s)" ex.Message (ex.GetType().Name)
+        return None
     }
   let effectDeps =
     { ElmDaemon.createEffectDeps sessionManager readSnapshot with
@@ -394,7 +405,7 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
             eprintfn "\x1b[36m[elm]\x1b[0m output=%d diags=%d | %s"
               outputCount diagCount latest
           stateChangedEvent.Trigger (ModelChanged json)
-      with _ -> ())
+      with ex -> eprintfn "[elm] State change propagation error: %s (%s)" ex.Message (ex.GetType().Name))
 
   // Create a diagnostics-changed event (aggregated from workers)
   let diagnosticsChanged = Event<Features.DiagnosticsStore.T>()
@@ -434,7 +445,7 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
   // Hotreload state fetcher for MCP — returns watched file paths
   let getHotReloadStateForMcp (sessionId: string) : System.Threading.Tasks.Task<string list option> =
     fetchWorkerEndpoint sessionId "/hotreload" mcpFetchTimeoutSec (fun resp ->
-      let doc = System.Text.Json.JsonDocument.Parse(resp)
+      use doc = System.Text.Json.JsonDocument.Parse(resp)
       doc.RootElement.GetProperty("files").EnumerateArray()
       |> Seq.filter (fun f -> f.GetProperty("watched").GetBoolean())
       |> Seq.map (fun f -> f.GetProperty("path").GetString())

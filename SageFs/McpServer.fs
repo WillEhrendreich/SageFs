@@ -166,7 +166,7 @@ type McpServerTracker() =
       else
         let jsonElement =
           let json = JsonSerializer.Serialize(data)
-          let doc = JsonDocument.Parse(json)
+          use doc = JsonDocument.Parse(json)
           doc.RootElement.Clone()
         let dead = ResizeArray()
         for kvp in servers do
@@ -176,7 +176,11 @@ type McpServerTracker() =
                 Level = level, Logger = logger, Data = jsonElement)
             do! kvp.Value.SendNotificationAsync(
               NotificationMethods.LoggingMessageNotification, payload)
-          with _ -> dead.Add(kvp.Key)
+          with
+          | :? System.IO.IOException | :? ObjectDisposedException -> dead.Add(kvp.Key)
+          | ex ->
+            eprintfn "[MCP] NotifyLog error for %s: %s" kvp.Key ex.Message
+            dead.Add(kvp.Key)
         for id in dead do servers.TryRemove(id) |> ignore
     }
 
@@ -250,18 +254,20 @@ let readJsonProp (ctx: Microsoft.AspNetCore.Http.HttpContext) (prop: string) = t
   use reader = new System.IO.StreamReader(ctx.Request.Body)
   let! body = reader.ReadToEndAsync()
   try
-    let json = System.Text.Json.JsonDocument.Parse(body)
-    if json.RootElement.TryGetProperty(prop) |> fst then
-      return json.RootElement.GetProperty(prop).GetString()
-    else
-      return body
+    use json = System.Text.Json.JsonDocument.Parse(body)
+    match json.RootElement.TryGetProperty(prop) with
+    | true, v -> return v.GetString()
+    | _ -> return body
   with _ -> return body
 }
 
 /// Wrap an async handler with try/catch and JSON error response.
 let withErrorHandling (ctx: Microsoft.AspNetCore.Http.HttpContext) (handler: unit -> Task) = task {
   try do! handler ()
-  with ex ->
+  with
+  | :? System.Text.Json.JsonException as je ->
+    do! jsonResponse ctx 400 {| success = false; error = je.Message |}
+  | ex ->
     do! jsonResponse ctx 500 {| success = false; error = ex.Message |}
 }
 
@@ -1343,7 +1349,7 @@ let startMcpServer (cfg: McpServerConfig) =
                   match change with
                   | DaemonStateChange.ModelChanged json ->
                     try
-                      let doc = JsonDocument.Parse(json)
+                      use doc = JsonDocument.Parse(json)
                       let root = doc.RootElement
                       let diagCount =
                         match root.TryGetProperty("diagCount") with
