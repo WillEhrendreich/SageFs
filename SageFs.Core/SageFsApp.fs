@@ -1066,6 +1066,7 @@ module SageFsEffectHandler =
             let hasInstrMaps = not (Array.isEmpty instrumentationMaps)
             let pipelineSpan = Instrumentation.startSpan Instrumentation.pipelineSource "pipeline.test.execution" ["test.count", box tests.Length; "trigger", box (sprintf "%A" trigger); "coverage.has_maps", box hasInstrMaps; "coverage.probe_count", box (instrumentationMaps |> Array.sumBy (fun m -> m.TotalProbes))]
             Async.Start(async {
+              Instrumentation.testExecutionActiveCount.Add(1L)
               use activity =
                 Features.LiveTesting.LiveTestingInstrumentation.activitySource.StartActivity(
                   "SageFs.LiveTesting.TestExecution")
@@ -1084,6 +1085,7 @@ module SageFsEffectHandler =
                   match proxy with
                   | Some streamProxy ->
                     let onResult (result: Features.LiveTesting.TestRunResult) =
+                      Instrumentation.testResultBatchSize.Record(1L)
                       dispatch (SageFsMsg.Event (SageFsEvent.TestResultsBatch [| result |]))
                     let onCoverage (hits: bool array) =
                       let mergedMap = Features.LiveTesting.InstrumentationMap.merge instrumentationMaps
@@ -1135,6 +1137,7 @@ module SageFsEffectHandler =
                 }
                 dispatch (SageFsMsg.Event (SageFsEvent.PipelineTimingRecorded timing))
                 Instrumentation.succeedSpan pipelineSpan
+                Instrumentation.testExecutionActiveCount.Add(-1L)
               with ex ->
                 sw.Stop()
                 Instrumentation.failSpan pipelineSpan ex.Message
@@ -1152,6 +1155,7 @@ module SageFsEffectHandler =
                      : Features.LiveTesting.TestRunResult))
                 dispatch (SageFsMsg.Event (SageFsEvent.TestResultsBatch errResults))
                 dispatch (SageFsMsg.Event (SageFsEvent.TestRunCompleted targetSession))
+                Instrumentation.testExecutionActiveCount.Add(-1L)
             }, ct)
       }
 

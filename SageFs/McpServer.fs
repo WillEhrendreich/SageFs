@@ -455,6 +455,33 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                 }) :> Task
             ) |> ignore
 
+            // GET /diag/threadpool — ThreadPool state for measuring starvation
+            app.MapGet("/diag/threadpool", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
+                task {
+                    let workerThreads = ref 0
+                    let completionPortThreads = ref 0
+                    let maxWorkerThreads = ref 0
+                    let maxCompletionPortThreads = ref 0
+                    let minWorkerThreads = ref 0
+                    let minCompletionPortThreads = ref 0
+                    System.Threading.ThreadPool.GetAvailableThreads(workerThreads, completionPortThreads)
+                    System.Threading.ThreadPool.GetMaxThreads(maxWorkerThreads, maxCompletionPortThreads)
+                    System.Threading.ThreadPool.GetMinThreads(minWorkerThreads, minCompletionPortThreads)
+                    let pending = System.Threading.ThreadPool.PendingWorkItemCount
+                    let threadCount = System.Threading.ThreadPool.ThreadCount
+                    do! jsonResponse ctx 200
+                          {| available = workerThreads.Value
+                             max = maxWorkerThreads.Value
+                             min = minWorkerThreads.Value
+                             pending = pending
+                             threadCount = threadCount
+                             completionPort =
+                               {| available = completionPortThreads.Value
+                                  max = maxCompletionPortThreads.Value
+                                  min = minCompletionPortThreads.Value |} |}
+                } :> Task
+            ) |> ignore
+
             // GET /version — protocol version and server info
             app.MapGet("/version", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
                 task {
@@ -740,6 +767,9 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                     let! info = sessionOps.GetSessionInfo sid
                     match info with
                     | Some _ ->
+                      // Update per-agent session map so /exec and other HTTP endpoints route correctly
+                      SageFs.McpTools.setActiveSessionId mcpContext "cli-integrated" sid
+                      SageFs.McpTools.setActiveSessionId mcpContext "http" sid
                       match dispatch with
                       | Some d ->
                         d (SageFs.SageFsMsg.Event (SageFs.SageFsEvent.SessionSwitched (None, sid)))
@@ -785,6 +815,9 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                     let! result = sessionOps.CreateSession projects workingDir
                     match result with
                     | Ok msg ->
+                      // Activate the new session for HTTP endpoints
+                      SageFs.McpTools.setActiveSessionId mcpContext "cli-integrated" msg
+                      SageFs.McpTools.setActiveSessionId mcpContext "http" msg
                       match dispatch with
                       | Some d -> d (SageFs.SageFsMsg.Editor SageFs.EditorAction.ListSessions)
                       | None -> ()

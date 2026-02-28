@@ -105,6 +105,26 @@ module WorkerHttpTransport =
 
       let inline respond' ctx msg = respond handler ctx msg
 
+      // Diagnostic: ThreadPool state for measuring starvation
+      app.MapGet("/diag/threadpool", Func<HttpContext, Task>(fun ctx -> task {
+        let workerThreads = ref 0
+        let completionPortThreads = ref 0
+        let maxWorkerThreads = ref 0
+        let maxCompletionPortThreads = ref 0
+        let minWorkerThreads = ref 0
+        let minCompletionPortThreads = ref 0
+        Threading.ThreadPool.GetAvailableThreads(workerThreads, completionPortThreads)
+        Threading.ThreadPool.GetMaxThreads(maxWorkerThreads, maxCompletionPortThreads)
+        Threading.ThreadPool.GetMinThreads(minWorkerThreads, minCompletionPortThreads)
+        let pending = Threading.ThreadPool.PendingWorkItemCount
+        let threadCount = Threading.ThreadPool.ThreadCount
+        ctx.Response.ContentType <- "application/json"
+        do! ctx.Response.WriteAsync(sprintf
+          """{"available":%d,"max":%d,"min":%d,"pending":%d,"threadCount":%d,"completionPort":{"available":%d,"max":%d,"min":%d}}"""
+          workerThreads.Value maxWorkerThreads.Value minWorkerThreads.Value pending threadCount
+          completionPortThreads.Value maxCompletionPortThreads.Value minCompletionPortThreads.Value)
+      })) |> ignore
+
       app.MapGet("/status", Func<HttpContext, Task>(fun ctx -> task {
         let rid = ctx.Request.Query["replyId"].ToString()
         return! respond' ctx (WorkerMessage.GetStatus rid)

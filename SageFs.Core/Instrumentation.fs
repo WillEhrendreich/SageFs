@@ -108,6 +108,24 @@ module Instrumentation =
   let coverageBitmapsCollected =
     pipelineMeter.CreateCounter<int64>("sagefs.coverage.bitmaps_collected_total", description = "Total coverage bitmap collections from test runs")
 
+  // Daemon blocking diagnostics
+  let threadPoolPending =
+    pipelineMeter.CreateObservableGauge<int64>(
+      "sagefs.threadpool.pending_work_items",
+      (fun () -> int64 System.Threading.ThreadPool.PendingWorkItemCount),
+      description = "ThreadPool pending work items")
+  let threadPoolCount =
+    pipelineMeter.CreateObservableGauge<int64>(
+      "sagefs.threadpool.thread_count",
+      (fun () -> int64 System.Threading.ThreadPool.ThreadCount),
+      description = "ThreadPool active thread count")
+  let elmDispatchCount =
+    pipelineMeter.CreateCounter<int64>("sagefs.elmloop.dispatch_total", description = "Total Elm dispatch calls")
+  let testResultBatchSize =
+    pipelineMeter.CreateHistogram<int64>("sagefs.live_testing.result_batch_size", description = "Number of results per TestResultsBatch dispatch")
+  let testExecutionActiveCount =
+    pipelineMeter.CreateUpDownCounter<int64>("sagefs.live_testing.active_executions", description = "Currently executing test runs")
+
   // P2: DevReload connected clients
   let devReloadConnectedClients =
     mcpMeter.CreateUpDownCounter<int64>("sagefs.devreload.connected_clients", description = "Currently connected SSE reload clients")

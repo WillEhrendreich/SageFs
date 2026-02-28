@@ -38,6 +38,7 @@ module ElmLoop =
     let sw = Stopwatch()
 
     let rec dispatch (msg: 'Msg) =
+      Instrumentation.elmDispatchCount.Add(1L)
       sw.Restart()
       let snapshot, effects =
         lock lockObj (fun () ->
