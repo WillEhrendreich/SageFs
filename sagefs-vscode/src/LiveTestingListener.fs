@@ -187,16 +187,22 @@ type LiveTestingCallbacks = {
   OnStateChange: VscStateChange list -> unit
   OnSummaryUpdate: VscTestSummary -> unit
   OnStatusRefresh: unit -> unit
+  OnBindingsUpdate: obj array -> unit
+  OnPipelineTraceUpdate: obj -> unit
 }
 
 type LiveTestingListener = {
   State: unit -> VscLiveTestState
   Summary: unit -> VscTestSummary
+  Bindings: unit -> obj array
+  PipelineTrace: unit -> obj option
   Dispose: unit -> unit
 }
 
 let start (port: int) (callbacks: LiveTestingCallbacks) : LiveTestingListener =
   let mutable state = VscLiveTestState.empty
+  let mutable bindings: obj array = [||]
+  let mutable pipelineTrace: obj option = None
   let url = sprintf "http://localhost:%d/events" port
 
   let processEvent (eventType: string) (data: obj) =
@@ -216,9 +222,15 @@ let start (port: int) (callbacks: LiveTestingCallbacks) : LiveTestingListener =
     | "state" ->
       callbacks.OnStatusRefresh ()
     | "session" ->
-      // Session events (warmup_context_snapshot, hotreload_snapshot)
-      // Currently logged for forward compatibility; handlers added as needed
       ()
+    | "bindings_snapshot" ->
+      let arr = data?Bindings
+      if not (isNull arr) then
+        bindings <- arr |> unbox
+        callbacks.OnBindingsUpdate bindings
+    | "pipeline_trace" ->
+      pipelineTrace <- Some data
+      callbacks.OnPipelineTraceUpdate data
     | _ ->
       ()
 
@@ -226,4 +238,6 @@ let start (port: int) (callbacks: LiveTestingCallbacks) : LiveTestingListener =
 
   { State = fun () -> state
     Summary = fun () -> VscLiveTestState.summary state
+    Bindings = fun () -> bindings
+    PipelineTrace = fun () -> pipelineTrace
     Dispose = fun () -> disposable.dispose () |> ignore }

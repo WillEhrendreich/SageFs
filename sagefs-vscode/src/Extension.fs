@@ -37,6 +37,9 @@ let mutable testAdapter: TestCtrl.TestAdapter option = None
 let mutable dashboardPanel: WebviewPanel option = None
 let mutable typeExplorer: TypeExpl.TypeExplorer option = None
 
+// FSI bindings and pipeline trace — maintained by SSE events (server-side CQRS)
+// No client-side parsing; server pushes snapshots via SSE bindings_snapshot/pipeline_trace events
+
 // ── JS Interop ─────────────────────────────────────────────────
 
 [<Emit("require('child_process').spawn($0, $1, $2)")>]
@@ -950,6 +953,42 @@ let activate (context: ExtensionContext) =
               | _ -> ())
         | None -> Window.showWarningMessage "Could not fetch dependency graph" [||] |> ignore)
     | None -> Window.showWarningMessage "SageFs is not connected" [||] |> ignore)
+  reg "sagefs.showBindings" (fun _ ->
+    match liveTestListener with
+    | Some listener ->
+      let bindings = listener.Bindings ()
+      if bindings.Length = 0 then
+        Window.showInformationMessage "No FSI bindings yet" [||] |> ignore
+      else
+        let items =
+          bindings |> Array.map (fun b ->
+            let name: string = b?Name |> unbox
+            let typeSig: string = b?TypeSig |> unbox
+            let shadow: int = b?ShadowCount |> unbox
+            let shadowLabel = if shadow > 1 then sprintf " (×%d)" shadow else ""
+            sprintf "%s : %s%s" name typeSig shadowLabel)
+        Window.showQuickPick items "FSI Bindings"
+        |> Promise.iter (fun _ -> ())
+    | None -> Window.showInformationMessage "No FSI bindings yet" [||] |> ignore)
+  reg "sagefs.showPipelineTrace" (fun _ ->
+    match liveTestListener with
+    | Some listener ->
+      match listener.PipelineTrace () with
+      | Some trace ->
+        let enabled: bool = trace?Enabled |> unbox
+        let running: bool = trace?IsRunning |> unbox
+        let total: int = trace?Summary?Total |> unbox
+        let passed: int = trace?Summary?Passed |> unbox
+        let failed: int = trace?Summary?Failed |> unbox
+        let items = [|
+          sprintf "Enabled: %b" enabled
+          sprintf "Running: %b" running
+          sprintf "Total: %d | Passed: %d | Failed: %d" total passed failed
+        |]
+        Window.showQuickPick items "Pipeline Trace"
+        |> Promise.iter (fun _ -> ())
+      | None -> Window.showInformationMessage "No pipeline trace data yet" [||] |> ignore
+    | None -> Window.showInformationMessage "No pipeline trace data yet" [||] |> ignore)
 
   // CodeLens
   let lensProvider = Lens.create ()
@@ -993,6 +1032,8 @@ let activate (context: ExtensionContext) =
           TestLens.updateState state
         OnSummaryUpdate = fun summary -> updateTestStatusBar summary
         OnStatusRefresh = fun () -> refreshStatus ()
+        OnBindingsUpdate = fun _ -> ()
+        OnPipelineTraceUpdate = fun _ -> ()
       }
       listenerRef <- Some listener
       liveTestListener <- Some listener

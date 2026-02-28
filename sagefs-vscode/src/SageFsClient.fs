@@ -543,3 +543,16 @@ let loadScript (filePath: string) (c: Client) =
     with err ->
       return { success = false; result = None; error = Some (string err) }
   }
+
+let getPipelineTrace (c: Client) =
+  promise {
+    try
+      let! resp = httpGet c "/api/live-testing/pipeline-trace" 5000
+      if resp.statusCode = 200 then
+        return Some resp.body
+      else
+        return None
+    with ex ->
+      logWarn "getPipelineTrace" ex
+      return None
+  }

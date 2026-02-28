@@ -407,6 +407,9 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
 
             // Shared context — constructed once
             let mcpContext = mkContext persistence diagnosticsChanged stateChanged sessionOps port dispatch getElmModel getElmRegions getWarmupContext
+
+            // CQRS: server-side bindings tracking — pushed via SSE, not polled
+            let mutable fsiBindings: Map<string, SageFs.SseWriter.FsiBinding> = Map.empty
             
             // POST /exec — send F# code to the session
             app.MapPost("/exec", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
@@ -745,6 +748,19 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                         do! replaySessionSnapshot ctx.Response.Body
                         // Replay current test state on new SSE connection
                         replayCachedTestState ctx.Response.Body
+                        // Replay current bindings snapshot
+                        if fsiBindings.Count > 0 then
+                          let activeId =
+                            match getElmModel with
+                            | Some gm ->
+                              SageFs.ActiveSession.sessionId (gm().Sessions.ActiveSessionId)
+                              |> Option.defaultValue ""
+                            | None -> ""
+                          let snapshot = fsiBindings |> Map.values |> Array.ofSeq
+                          let frame = SageFs.SseWriter.formatBindingsSnapshotEvent sseJsonOpts (Some activeId) snapshot
+                          let bytes = System.Text.Encoding.UTF8.GetBytes(frame)
+                          ctx.Response.Body.WriteAsync(bytes).AsTask()
+                          |> fun t -> t.ContinueWith(fun (_: Task) -> ctx.Response.Body.FlushAsync()) |> ignore
                         do! tcs.Task
                         SageFs.Instrumentation.sseConnectionsActive.Add(-1L)
                     | None ->
@@ -1126,6 +1142,15 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                 } :> Task
             ) |> ignore
 
+            // GET /api/live-testing/pipeline-trace — pipeline trace (mirrors MCP get_pipeline_trace)
+            app.MapGet("/api/live-testing/pipeline-trace", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
+                withErrorHandling ctx (fun () -> task {
+                    let! result = SageFs.McpTools.getPipelineTrace mcpContext
+                    ctx.Response.ContentType <- "application/json"
+                    do! ctx.Response.Body.WriteAsync(System.Text.Encoding.UTF8.GetBytes(result))
+                }) :> Task
+            ) |> ignore
+
             // GET /api/recent-events — get recent FSI events
             app.MapGet("/api/recent-events", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
                 task {
@@ -1147,6 +1172,9 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
             let mutable lastDiagCount = 0
             let mutable lastTestSsePush = System.Diagnostics.Stopwatch.GetTimestamp()
             let testSseThrottleMs = 250L
+            let mutable lastOutputCount = 0
+            // CQRS: pipeline trace change detection
+            let mutable lastPipelineTraceJson = ""
             let _stateSub =
               stateChanged |> Option.map (fun evt ->
                 evt.Subscribe(fun json ->
@@ -1184,6 +1212,67 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                         serverTracker.AccumulateEvent(
                           PushEvent.DiagnosticsChanged errors)
                       | None -> ()
+
+                    // CQRS: Parse bindings from eval output and push via SSE
+                    if outputCount <> lastOutputCount then
+                      // Output cleared (reset) → clear bindings
+                      if outputCount < lastOutputCount then
+                        fsiBindings <- Map.empty
+                      lastOutputCount <- outputCount
+                      match getElmModel with
+                      | Some getModel ->
+                        let model = getModel()
+                        let activeId =
+                          SageFs.ActiveSession.sessionId model.Sessions.ActiveSessionId
+                          |> Option.defaultValue ""
+                        // Re-parse all current output to rebuild bindings map
+                        let allOutput =
+                          model.RecentOutput
+                          |> List.filter (fun o -> o.Kind = SageFs.OutputKind.Result && o.SessionId = activeId)
+                          |> List.rev // oldest first for correct shadow counting
+                          |> List.map (fun o -> o.Text)
+                          |> String.concat "\n"
+                        let parsed = SageFs.SseWriter.parseBindingsFromOutput allOutput
+                        let newBindings =
+                          SageFs.SseWriter.accumulateBindings Map.empty parsed
+                        if newBindings <> fsiBindings then
+                          fsiBindings <- newBindings
+                          let snapshot = fsiBindings |> Map.values |> Array.ofSeq
+                          testEventBroadcast.Trigger(
+                            SageFs.SseWriter.formatBindingsSnapshotEvent sseJsonOpts (Some activeId) snapshot)
+                      | None -> ()
+
+                    // CQRS: Push pipeline trace when it changes
+                    match getElmModel with
+                    | Some getModel ->
+                      let traceJson =
+                        try
+                          let model = getModel()
+                          let lt = model.LiveTesting
+                          let activeId =
+                            SageFs.ActiveSession.sessionId model.Sessions.ActiveSessionId
+                            |> Option.defaultValue ""
+                          let summary = SageFs.Features.LiveTesting.TestSummary.fromStatuses
+                                          lt.TestState.Activation
+                                          (LiveTestState.statusEntriesForSession activeId lt.TestState
+                                           |> Array.map (fun e -> e.Status))
+                          System.Text.Json.JsonSerializer.Serialize(
+                            {| Enabled = lt.TestState.Activation = LiveTestingActivation.Active
+                               IsRunning = TestRunPhase.isAnyRunning lt.TestState.RunPhases
+                               Summary = {| Total = summary.Total; Passed = summary.Passed; Failed = summary.Failed
+                                            Running = summary.Running; Stale = summary.Stale |} |}, sseJsonOpts)
+                        with _ -> ""
+                      if traceJson.Length > 0 && traceJson <> lastPipelineTraceJson then
+                        lastPipelineTraceJson <- traceJson
+                        let activeId =
+                          match getElmModel with
+                          | Some gm ->
+                            SageFs.ActiveSession.sessionId (gm().Sessions.ActiveSessionId)
+                            |> Option.defaultValue ""
+                          | None -> ""
+                        testEventBroadcast.Trigger(
+                          SageFs.SseWriter.formatPipelineTraceEvent (Some activeId) traceJson)
+                    | None -> ()
 
                     // Push live testing summary when test state changes
                     match getElmModel with
