@@ -108,12 +108,15 @@ let parseTestInfo (entry: obj) : VscTestInfo =
     | Some "SourceMapped" ->
       let fields = duFields origin |> Option.defaultValue [||]
       match fields.Length >= 2 with
-      | true -> Some(fields.[0] |> unbox<string>), Some(fields.[1] |> unbox<int>)
+      | true ->
+        let fp = tryOfObj (unbox<string> fields.[0])
+        let ln = tryOfObj (unbox<int> fields.[1])
+        fp, ln
       | false -> None, None
     | _ -> None, None
   { Id = VscTestId.create testIdStr
-    DisplayName = entry?DisplayName |> unbox<string>
-    FullName = entry?FullName |> unbox<string>
+    DisplayName = tryField<string> "DisplayName" entry |> Option.defaultValue ""
+    FullName = tryField<string> "FullName" entry |> Option.defaultValue ""
     FilePath = filePath
     Line = line }
 
@@ -130,7 +133,7 @@ let parseResultsBatch (data: obj) : VscLiveTestEvent list =
   tryOfObj entries
   |> Option.map (fun entries ->
     let freshness = parseFreshness data
-    let entryArray : obj array = entries |> unbox
+    let entryArray = tryOfObj entries |> Option.map unbox<obj array> |> Option.defaultValue [||]
     let testInfos = entryArray |> Array.map parseTestInfo
     let testResults = entryArray |> Array.map parseTestResult
     [ VscLiveTestEvent.TestsDiscovered testInfos
@@ -181,9 +184,9 @@ let start (port: int) (callbacks: LiveTestingCallbacks) : LiveTestingListener =
     | "session" ->
       ()
     | "bindings_snapshot" ->
-      tryOfObj data?Bindings
+      tryField<obj array> "Bindings" data
       |> Option.iter (fun arr ->
-        bindings <- arr |> unbox
+        bindings <- arr
         callbacks.OnBindingsUpdate bindings)
     | "pipeline_trace" ->
       pipelineTrace <- Some data

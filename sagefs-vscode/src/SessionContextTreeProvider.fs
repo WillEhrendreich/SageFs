@@ -59,7 +59,7 @@ let getChildren (element: obj option) : JS.Promise<obj array> =
       | Some ctx ->
         return [| summaryItem ctx :> obj |]
     | Some el ->
-      let ctx = el?contextValue |> unbox<string>
+      let ctx = tryField<string> "contextValue" el |> Option.defaultValue ""
       match ctx with
       | "summary" ->
         match cachedContext with
@@ -92,7 +92,7 @@ let getChildren (element: obj option) : JS.Promise<obj array> =
                 "error" :> obj)
           return sections.ToArray()
       | "section" ->
-        let label = el?label |> unbox<string>
+        let label = tryField<string> "label" el |> Option.defaultValue ""
         match cachedContext with
         | None -> return [||]
         | Some wc ->

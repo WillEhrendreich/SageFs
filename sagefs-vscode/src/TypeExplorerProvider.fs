@@ -3,6 +3,7 @@ module SageFs.Vscode.TypeExplorerProvider
 open Fable.Core
 open Fable.Core.JsInterop
 open Vscode
+open SageFs.Vscode.JsHelpers
 
 module Client = SageFs.Vscode.SageFsClient
 
@@ -44,7 +45,7 @@ let private parseLine (line: string) : obj =
 let private parseExploreResponse (json: string) : obj array option =
   try
     let parsed = jsonParse json
-    let text = parsed?content |> unbox<string>
+    let text = tryField<string> "content" parsed |> Option.defaultValue ""
     text.Split('\n')
     |> Array.filter (fun l -> l.Trim().Length > 0)
     |> Array.truncate 50
@@ -72,10 +73,10 @@ let getChildren (element: obj option) : JS.Promise<obj array> =
     | None, _ ->
       let item = expandableItem "Namespaces" "explore loaded types" "symbol-namespace" "ns-root"
       return [| item :> obj |]
-    | Some el, Some c when (el?contextValue |> unbox<string>) = "ns-root" ->
+    | Some el, Some c when (tryField<string> "contextValue" el |> Option.defaultValue "") = "ns-root" ->
       return! exploreAndParse "System" "Error parsing response" c
     | Some el, Some c ->
-      let ctx = el?contextValue |> unbox<string>
+      let ctx = tryField<string> "contextValue" el |> Option.defaultValue ""
       match ctx with
       | c' when c' <> null && c'.StartsWith("ns:") ->
         return! exploreAndParse (c'.Substring(3)) "Error parsing" c
