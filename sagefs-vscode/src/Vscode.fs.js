@@ -104,6 +104,10 @@ export function Workspace_onDidChangeConfiguration(handler) {
     return workspace.onDidChangeConfiguration(handler);
 }
 
+export function Workspace_onDidChangeTextDocument(handler) {
+    return workspace.onDidChangeTextDocument(handler);
+}
+
 export function Languages_registerCodeLensProvider(language, provider) {
     return languages.registerCodeLensProvider({
         language: language,

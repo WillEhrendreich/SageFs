@@ -136,16 +136,50 @@ let getCodeBlock (editor: TextEditor) =
 
 // ── Decorations ────────────────────────────────────────────────
 
+let mutable staleDecorations: Map<int, TextEditorDecorationType> = Map.empty
+
 let clearBlockDecoration (line: int) =
   match Map.tryFind line blockDecorations with
   | Some deco ->
     deco.dispose () |> ignore
     blockDecorations <- Map.remove line blockDecorations
   | None -> ()
+  match Map.tryFind line staleDecorations with
+  | Some deco ->
+    deco.dispose () |> ignore
+    staleDecorations <- Map.remove line staleDecorations
+  | None -> ()
 
 let clearAllDecorations () =
   blockDecorations |> Map.iter (fun _ deco -> deco.dispose () |> ignore)
   blockDecorations <- Map.empty
+  staleDecorations |> Map.iter (fun _ deco -> deco.dispose () |> ignore)
+  staleDecorations <- Map.empty
+
+let markDecorationsStale (editor: TextEditor) =
+  // Replace fresh decorations with dimmed stale versions
+  let lines = blockDecorations |> Map.toList |> List.map fst
+  for line in lines do
+    match Map.tryFind line blockDecorations with
+    | Some deco ->
+      deco.dispose () |> ignore
+      blockDecorations <- Map.remove line blockDecorations
+      // Skip if already stale
+      if not (Map.containsKey line staleDecorations) then
+        let staleOpts = createObj [
+          "after" ==> createObj [
+            "contentText" ==> "  // ⏸ stale"
+            "color" ==> newThemeColor "sagefs.staleForeground"
+            "fontStyle" ==> "italic"
+          ]
+        ]
+        let staleDeco = Window.createTextEditorDecorationType staleOpts
+        let lineText = editor.document.lineAt(float line).text
+        let endCol = lineText.Length
+        let range = newRange line endCol line endCol
+        editor.setDecorations(staleDeco, ResizeArray [| box range |])
+        staleDecorations <- Map.add line staleDeco staleDecorations
+    | None -> ()
 
 [<Emit("performance.now()")>]
 let performanceNow () : float = jsNative
@@ -774,6 +808,15 @@ let activate (context: ExtensionContext) =
   let dc = Languages.createDiagnosticCollection "sagefs"
   diagnosticCollection <- Some dc
   context.subscriptions.Add (dc :> obj :?> Disposable)
+
+  // Mark inline results as stale when F# documents change
+  let docChangeSub = Workspace.onDidChangeTextDocument (fun _evt ->
+    match Window.getActiveTextEditor () with
+    | Some ed when ed.document.fileName.EndsWith(".fs") || ed.document.fileName.EndsWith(".fsx") ->
+      if not (Map.isEmpty blockDecorations) then
+        markDecorationsStale ed
+    | _ -> ())
+  context.subscriptions.Add docChangeSub
 
   // Hot Reload TreeView
   HotReload.register context

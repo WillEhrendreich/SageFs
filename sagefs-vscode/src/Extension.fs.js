@@ -1,11 +1,12 @@
-import { defaultOf, equals, comparePrimitives, createAtom } from "./fable_modules/fable-library-js.4.29.0/Util.js";
-import { add, iterate, remove, tryFind, empty } from "./fable_modules/fable-library-js.4.29.0/Map.js";
-import { Workspace_onDidChangeConfiguration, Window_onDidChangeActiveTextEditor, Window_onDidChangeVisibleTextEditors, Languages_registerCompletionItemProvider, Languages_registerCodeLensProvider, Window_showInputBox, Languages_createDiagnosticCollection, Window_createStatusBarItem, Window_createOutputChannel, Commands_executeCommand, Commands_registerCommand, newSelection, newPosition, Window_createWebviewPanel, Window_withProgress, Window_getActiveTextEditor, Window_showWarningMessage, Window_showErrorMessage, Window_showInformationMessage, newThemeColor, Window_createTextEditorDecorationType, newRange, Window_showQuickPick, Workspace_asRelativePath, Workspace_findFiles, Workspace_getConfiguration, Workspace_workspaceFolders } from "./Vscode.fs.js";
+import { defaultOf, equals, disposeSafe, getEnumerator, comparePrimitives, createAtom } from "./fable_modules/fable-library-js.4.29.0/Util.js";
+import { isEmpty, add, containsKey, toList, iterate, remove, tryFind, empty } from "./fable_modules/fable-library-js.4.29.0/Map.js";
+import { Workspace_onDidChangeConfiguration, Window_onDidChangeActiveTextEditor, Window_onDidChangeVisibleTextEditors, Languages_registerCompletionItemProvider, Languages_registerCodeLensProvider, Window_showInputBox, Workspace_onDidChangeTextDocument, Languages_createDiagnosticCollection, Window_createStatusBarItem, Window_createOutputChannel, Commands_executeCommand, Commands_registerCommand, newSelection, newPosition, Window_createWebviewPanel, Window_withProgress, Window_getActiveTextEditor, Window_showWarningMessage, Window_showErrorMessage, Window_showInformationMessage, newThemeColor, Window_createTextEditorDecorationType, newRange, Window_showQuickPick, Workspace_asRelativePath, Workspace_findFiles, Workspace_getConfiguration, Workspace_workspaceFolders } from "./Vscode.fs.js";
 import { tryFindIndex, last, tryFind as tryFind_1, tryHead, map, append, item } from "./fable_modules/fable-library-js.4.29.0/Array.js";
 import { PromiseBuilder__While_2044D34, PromiseBuilder__For_1565554B, PromiseBuilder__Delay_62FBFDE1, PromiseBuilder__Run_212F1D4B } from "./fable_modules/Fable.Promise.3.2.0/Promise.fs.js";
 import { promise } from "./fable_modules/Fable.Promise.3.2.0/PromiseImpl.fs.js";
 import { substring, split, join, printf, toText, trimEnd } from "./fable_modules/fable-library-js.4.29.0/String.js";
-import { map as map_1, bind, orElse, toArray, defaultArg, some } from "./fable_modules/fable-library-js.4.29.0/Option.js";
+import { map as map_1 } from "./fable_modules/fable-library-js.4.29.0/List.js";
+import { map as map_2, bind, orElse, toArray, defaultArg, some } from "./fable_modules/fable-library-js.4.29.0/Option.js";
 import { updatePorts, getDependencyGraph, getRecentEvents, setRunPolicy, runTests, disableLiveTesting, enableLiveTesting, create, loadScript, cancelEval, dashboardUrl, stopSession, switchSession, createSession, hardReset, resetSession, evalCode, listSessions, getSystemStatus, getStatus, isRunning } from "./SageFsClient.fs.js";
 import { register, setSession } from "./HotReloadTreeProvider.fs.js";
 import { register as register_1, setSession as setSession_1 } from "./SessionContextTreeProvider.fs.js";
@@ -141,6 +142,10 @@ export function getCodeBlock(editor) {
     return doc.getText(range);
 }
 
+export let staleDecorations = createAtom(empty({
+    Compare: comparePrimitives,
+}));
+
 export function clearBlockDecoration(line) {
     const matchValue = tryFind(line, blockDecorations());
     if (matchValue == null) {
@@ -149,6 +154,14 @@ export function clearBlockDecoration(line) {
         const deco = matchValue;
         const value = deco.dispose();
         blockDecorations(remove(line, blockDecorations()));
+    }
+    const matchValue_1 = tryFind(line, staleDecorations());
+    if (matchValue_1 == null) {
+    }
+    else {
+        const deco_1 = matchValue_1;
+        const value_1 = deco_1.dispose();
+        staleDecorations(remove(line, staleDecorations()));
     }
 }
 
@@ -159,6 +172,46 @@ export function clearAllDecorations() {
     blockDecorations(empty({
         Compare: comparePrimitives,
     }));
+    iterate((_arg_1, deco_1) => {
+        const value_1 = deco_1.dispose();
+    }, staleDecorations());
+    staleDecorations(empty({
+        Compare: comparePrimitives,
+    }));
+}
+
+export function markDecorationsStale(editor) {
+    const enumerator = getEnumerator(map_1((tuple) => tuple[0], toList(blockDecorations())));
+    try {
+        while (enumerator["System.Collections.IEnumerator.MoveNext"]()) {
+            const line = enumerator["System.Collections.Generic.IEnumerator`1.get_Current"]() | 0;
+            const matchValue = tryFind(line, blockDecorations());
+            if (matchValue == null) {
+            }
+            else {
+                const deco = matchValue;
+                const value = deco.dispose();
+                blockDecorations(remove(line, blockDecorations()));
+                if (!containsKey(line, staleDecorations())) {
+                    const staleDeco = Window_createTextEditorDecorationType({
+                        after: {
+                            contentText: "  // ⏸ stale",
+                            color: newThemeColor("sagefs.staleForeground"),
+                            fontStyle: "italic",
+                        },
+                    });
+                    const lineText = editor.document.lineAt(line).text;
+                    const endCol = lineText.length | 0;
+                    const range = newRange(line, endCol, line, endCol);
+                    editor.setDecorations(staleDeco, [range]);
+                    staleDecorations(add(line, staleDeco, staleDecorations()));
+                }
+            }
+        }
+    }
+    finally {
+        disposeSafe(enumerator);
+    }
 }
 
 export function formatDuration(ms) {
@@ -1001,6 +1054,35 @@ export function activate(context) {
     const dc = Languages_createDiagnosticCollection("sagefs");
     diagnosticCollection(dc);
     void (context.subscriptions.push(dc));
+    const docChangeSub = Workspace_onDidChangeTextDocument((_evt) => {
+        let ed;
+        const matchValue = Window_getActiveTextEditor();
+        let matchResult, ed_1;
+        if (matchValue != null) {
+            if ((ed = matchValue, ed.document.fileName.endsWith(".fs") ? true : ed.document.fileName.endsWith(".fsx"))) {
+                matchResult = 0;
+                ed_1 = matchValue;
+            }
+            else {
+                matchResult = 1;
+            }
+        }
+        else {
+            matchResult = 1;
+        }
+        switch (matchResult) {
+            case 0: {
+                if (!isEmpty(blockDecorations())) {
+                    markDecorationsStale(ed_1);
+                }
+                break;
+            }
+            case 1: {
+                break;
+            }
+        }
+    });
+    void (context.subscriptions.push(docChangeSub));
     register(context);
     setSession(c, undefined);
     register_1(context);
@@ -1061,11 +1143,11 @@ export function activate(context) {
         else {
             const pr = enableLiveTesting(client());
             void (pr.then((result) => {
-                const matchValue = result.result;
-                if (matchValue == null) {
+                const matchValue_1 = result.result;
+                if (matchValue_1 == null) {
                 }
                 else {
-                    Window_showInformationMessage(matchValue, []);
+                    Window_showInformationMessage(matchValue_1, []);
                 }
             }));
         }
@@ -1077,11 +1159,11 @@ export function activate(context) {
         else {
             const pr_1 = disableLiveTesting(client());
             void (pr_1.then((result_1) => {
-                const matchValue_1 = result_1.result;
-                if (matchValue_1 == null) {
+                const matchValue_2 = result_1.result;
+                if (matchValue_2 == null) {
                 }
                 else {
-                    Window_showInformationMessage(matchValue_1, []);
+                    Window_showInformationMessage(matchValue_2, []);
                 }
             }));
         }
@@ -1093,11 +1175,11 @@ export function activate(context) {
         else {
             const pr_2 = runTests("", client());
             void (pr_2.then((result_2) => {
-                const matchValue_2 = result_2.result;
-                if (matchValue_2 == null) {
+                const matchValue_3 = result_2.result;
+                if (matchValue_3 == null) {
                 }
                 else {
-                    Window_showInformationMessage(matchValue_2, []);
+                    Window_showInformationMessage(matchValue_3, []);
                 }
             }));
         }
@@ -1121,11 +1203,11 @@ export function activate(context) {
                         else {
                             const pr_3 = setRunPolicy(cat, polOpt, c_4);
                             void (pr_3.then((result_3) => {
-                                const matchValue_3 = result_3.result;
-                                if (matchValue_3 == null) {
+                                const matchValue_4 = result_3.result;
+                                if (matchValue_4 == null) {
                                 }
                                 else {
-                                    Window_showInformationMessage(matchValue_3, []);
+                                    Window_showInformationMessage(matchValue_4, []);
                                 }
                             }));
                         }
@@ -1183,20 +1265,20 @@ export function activate(context) {
                         const pr_10 = Window_showInputBox(toText(printf("Enter symbol name (%d symbols tracked)"))(total));
                         void (pr_10.then((inputOpt) => {
                             let sym;
-                            let matchResult, sym_1;
+                            let matchResult_1, sym_1;
                             if (inputOpt != null) {
                                 if ((sym = inputOpt, sym.trim().length > 0)) {
-                                    matchResult = 0;
+                                    matchResult_1 = 0;
                                     sym_1 = inputOpt;
                                 }
                                 else {
-                                    matchResult = 1;
+                                    matchResult_1 = 1;
                                 }
                             }
                             else {
-                                matchResult = 1;
+                                matchResult_1 = 1;
                             }
-                            switch (matchResult) {
+                            switch (matchResult_1) {
                                 case 0: {
                                     const pr_9 = getDependencyGraph(sym_1.trim(), c_6);
                                     void (pr_9.then((detailOpt) => {
@@ -1258,7 +1340,7 @@ export function activate(context) {
             let listenerRef = undefined;
             const listener = start_1(c.mcpPort, new LiveTestingCallbacks((changes) => {
                 adapter.Refresh(changes);
-                const state = defaultArg(map_1((l_1) => l_1.State(), listenerRef), VscLiveTestStateModule_empty);
+                const state = defaultArg(map_2((l_1) => l_1.State(), listenerRef), VscLiveTestStateModule_empty);
                 applyToAllEditors(state);
                 applyCoverageToAllEditors(state);
                 updateDiagnostics(state);
@@ -1277,12 +1359,12 @@ export function activate(context) {
                 },
             });
             void (context.subscriptions.push(Window_onDidChangeVisibleTextEditors((_editors) => {
-                const state_1 = defaultArg(map_1((l_2) => l_2.State(), listenerRef), VscLiveTestStateModule_empty);
+                const state_1 = defaultArg(map_2((l_2) => l_2.State(), listenerRef), VscLiveTestStateModule_empty);
                 applyToAllEditors(state_1);
                 applyCoverageToAllEditors(state_1);
             })));
             void (context.subscriptions.push(Window_onDidChangeActiveTextEditor((_editor) => {
-                const state_2 = defaultArg(map_1((l_3) => l_3.State(), listenerRef), VscLiveTestStateModule_empty);
+                const state_2 = defaultArg(map_2((l_3) => l_3.State(), listenerRef), VscLiveTestStateModule_empty);
                 applyToAllEditors(state_2);
                 applyCoverageToAllEditors(state_2);
             })));
@@ -1298,19 +1380,19 @@ export function activate(context) {
                             const workDir = defaultArg(getWorkingDirectory(), ".");
                             const pr_13 = Window_showInformationMessage(toText(printf("SageFs is running but has no session. Create one for %s?"))(proj), ["Create Session", "Not Now"]);
                             void (pr_13.then((choice) => {
-                                let matchResult_1;
+                                let matchResult_2;
                                 if (choice != null) {
                                     if (choice === "Create Session") {
-                                        matchResult_1 = 0;
+                                        matchResult_2 = 0;
                                     }
                                     else {
-                                        matchResult_1 = 1;
+                                        matchResult_2 = 1;
                                     }
                                 }
                                 else {
-                                    matchResult_1 = 1;
+                                    matchResult_2 = 1;
                                 }
-                                switch (matchResult_1) {
+                                switch (matchResult_2) {
                                     case 0: {
                                         const pr_12 = createSession(proj, workDir, c);
                                         void (pr_12.then((result_4) => {

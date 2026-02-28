@@ -359,6 +359,10 @@ module Workspace =
   let _onDidChangeConfiguration (w: obj) (handler: ConfigurationChangeEvent -> unit) : Disposable = jsNative
   let onDidChangeConfiguration (handler: ConfigurationChangeEvent -> unit) = _onDidChangeConfiguration workspaceExports handler
 
+  [<Emit("$0.onDidChangeTextDocument($1)")>]
+  let _onDidChangeTextDocument (w: obj) (handler: obj -> unit) : Disposable = jsNative
+  let onDidChangeTextDocument (handler: obj -> unit) = _onDidChangeTextDocument workspaceExports handler
+
 // ── Languages API ───────────────────────────────────────────────
 
 [<Import("languages", "vscode")>]
