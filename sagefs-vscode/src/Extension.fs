@@ -1025,5 +1025,9 @@ let deactivate () =
   liveTestListener <- None
   testAdapter |> Option.iter (fun a -> a.Dispose ())
   testAdapter <- None
+  typeExplorer |> Option.iter (fun te -> te.dispose ())
+  typeExplorer <- None
+  dashboardPanel |> Option.iter (fun p -> p.dispose () |> ignore)
+  dashboardPanel <- None
   TestDeco.dispose ()
   clearAllDecorations ()
