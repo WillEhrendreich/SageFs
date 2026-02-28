@@ -100,6 +100,7 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
       (fun () -> stateChangedEvent.Trigger """{"standbyProgress":true}""")
       (fun sid tests providers -> onTestDiscoveryCallback sid tests providers)
       (fun sid maps -> onInstrumentationMapsCallback sid maps)
+      (fun sid -> stateChangedEvent.Trigger (sprintf """{"sessionReady":"%s"}""" sid))
 
   // Active session ID — REMOVED: No global shared session.
   // Each client (MCP, TUI, dashboard) tracks its own session independently.

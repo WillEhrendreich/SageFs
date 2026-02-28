@@ -346,7 +346,8 @@ module SessionManager =
     (ct: CancellationToken)
     (onStandbyProgressChanged: unit -> unit)
     (onTestDiscovery: SessionId -> Features.LiveTesting.TestCase array -> Features.LiveTesting.ProviderDescription list -> unit)
-    (onInstrumentationMaps: SessionId -> Features.LiveTesting.InstrumentationMap array -> unit) =
+    (onInstrumentationMaps: SessionId -> Features.LiveTesting.InstrumentationMap array -> unit)
+    (onSessionReady: SessionId -> unit) =
     let snapshotRef = ref QuerySnapshot.empty
     let mailbox = MailboxProcessor<SessionCommand>.Start((fun inbox ->
       let publishSnapshot (state: ManagerState) =
@@ -580,6 +581,7 @@ module SessionManager =
             if state.Pool.Enabled && PoolState.getStandby key state.Pool |> Option.isNone then
               inbox.Post(SessionCommand.WarmStandby key)
             onStandbyProgressChanged ()
+            onSessionReady id
             // Request initial test discovery from the worker
             Async.Start(async {
               try

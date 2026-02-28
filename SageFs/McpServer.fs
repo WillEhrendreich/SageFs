@@ -361,6 +361,8 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
 
             // SSE broadcast for typed test events (clients subscribe via /events)
             let testEventBroadcast = Event<string>()
+            // SSE broadcast for typed session events (warmup, hotreload)
+            let sessionEventBroadcast = Event<string>()
             // SSE serialization uses default PascalCase (NOT camelCase) + JsonFSharpConverter
             // for Case/Fields DU encoding. This differs from WorkerProtocol.Serialization.jsonOptions
             // which uses type/value format. Both VS Code and VS parsers expect PascalCase + Case/Fields.
@@ -653,6 +655,53 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                   eprintfn "SSE replay error: %s" ex.Message
               | None -> ()
 
+            // Detect hotreload mutations and push typed session events
+            // Detect session ready and push warmup context snapshot
+            match stateChanged, getHotReloadState, getElmModel, getWarmupContext with
+            | Some evt, Some getHr, Some getModel, Some getCtx ->
+              evt.Subscribe(fun json ->
+                if json.Contains("hotReloadChanged") then
+                  task {
+                    try
+                      let activeId =
+                        let model = getModel()
+                        SageFs.ActiveSession.sessionId model.Sessions.ActiveSessionId
+                        |> Option.defaultValue ""
+                      if activeId.Length > 0 then
+                        let! hrOpt = getHr activeId
+                        match hrOpt with
+                        | Some watchedFiles ->
+                          let evt = SageFs.SessionEvents.HotReloadSnapshot(activeId, watchedFiles)
+                          let frame = SageFs.SessionEvents.formatSessionSseEvent evt
+                          sessionEventBroadcast.Trigger(frame)
+                        | None -> ()
+                    with _ -> ()
+                  } |> ignore
+                elif json.Contains("sessionReady") then
+                  task {
+                    try
+                      let doc = System.Text.Json.JsonDocument.Parse(json)
+                      let sid = doc.RootElement.GetProperty("sessionReady").GetString()
+                      if sid.Length > 0 then
+                        let! ctxOpt = getCtx sid
+                        match ctxOpt with
+                        | Some ctx ->
+                          let evt = SageFs.SessionEvents.WarmupContextSnapshot(sid, ctx)
+                          let frame = SageFs.SessionEvents.formatSessionSseEvent evt
+                          sessionEventBroadcast.Trigger(frame)
+                        | None -> ()
+                        // Also push hotreload state for the new session
+                        let! hrOpt = getHr sid
+                        match hrOpt with
+                        | Some watchedFiles ->
+                          let hrEvt = SageFs.SessionEvents.HotReloadSnapshot(sid, watchedFiles)
+                          let hrFrame = SageFs.SessionEvents.formatSessionSseEvent hrEvt
+                          sessionEventBroadcast.Trigger(hrFrame)
+                        | None -> ()
+                    with _ -> ()
+                  } |> ignore) |> ignore
+            | _ -> ()
+
             // GET /events — SSE stream of Elm state changes
             app.MapGet("/events", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
                 task {
@@ -681,6 +730,12 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                                 |> fun t -> t.ContinueWith(fun (_: Task) -> ctx.Response.Body.FlushAsync()) |> ignore
                             with _ -> ())
                         use _testSub = testEventBroadcast.Publish.Subscribe(fun sseString ->
+                            try
+                                let bytes = System.Text.Encoding.UTF8.GetBytes(sseString)
+                                ctx.Response.Body.WriteAsync(bytes).AsTask()
+                                |> fun t -> t.ContinueWith(fun (_: Task) -> ctx.Response.Body.FlushAsync()) |> ignore
+                            with _ -> ())
+                        use _sessionSub = sessionEventBroadcast.Publish.Subscribe(fun sseString ->
                             try
                                 let bytes = System.Text.Encoding.UTF8.GetBytes(sseString)
                                 ctx.Response.Body.WriteAsync(bytes).AsTask()
