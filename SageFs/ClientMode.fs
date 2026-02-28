@@ -114,7 +114,7 @@ let evalCode (client: HttpClient) (baseUrl: string) (code: string) = task {
   try
     let! response = client.PostAsync(sprintf "%s/exec" baseUrl, content)
     let! body = response.Content.ReadAsStringAsync()
-    let doc = JsonDocument.Parse(body)
+    use doc = JsonDocument.Parse(body)
     let root = doc.RootElement
     if root.TryGetProperty("success") |> fst then
       let success = root.GetProperty("success").GetBoolean()
@@ -160,7 +160,7 @@ let fetchSessions (client: HttpClient) (baseUrl: string) = task {
   try
     let! response = client.GetAsync(sprintf "%s/api/sessions" baseUrl)
     let! body = response.Content.ReadAsStringAsync()
-    let doc = JsonDocument.Parse(body)
+    use doc = JsonDocument.Parse(body)
     let root = doc.RootElement
     if root.TryGetProperty("sessions") |> fst then
       let sessions =
@@ -239,7 +239,7 @@ let switchSession (client: HttpClient) (baseUrl: string) (sessionId: string) = t
   try
     let! response = client.PostAsync(sprintf "%s/api/sessions/switch" baseUrl, content)
     let! body = response.Content.ReadAsStringAsync()
-    let doc = JsonDocument.Parse(body)
+    use doc = JsonDocument.Parse(body)
     if doc.RootElement.GetProperty("success").GetBoolean() then
       return Ok (sprintf "Switched to session '%s'" sessionId)
     else
@@ -255,7 +255,7 @@ let stopSession (client: HttpClient) (baseUrl: string) (sessionId: string) = tas
   try
     let! response = client.PostAsync(sprintf "%s/api/sessions/stop" baseUrl, content)
     let! body = response.Content.ReadAsStringAsync()
-    let doc = JsonDocument.Parse(body)
+    use doc = JsonDocument.Parse(body)
     if doc.RootElement.TryGetProperty("success") |> fst && doc.RootElement.GetProperty("success").GetBoolean() then
       let msg = doc.RootElement.GetProperty("message").GetString()
       return Ok msg
@@ -273,7 +273,7 @@ let createSession (client: HttpClient) (baseUrl: string) (workingDir: string) (p
   try
     let! response = client.PostAsync(sprintf "%s/api/sessions/create" baseUrl, content)
     let! body = response.Content.ReadAsStringAsync()
-    let doc = JsonDocument.Parse(body)
+    use doc = JsonDocument.Parse(body)
     if doc.RootElement.TryGetProperty("success") |> fst && doc.RootElement.GetProperty("success").GetBoolean() then
       let msg = doc.RootElement.GetProperty("message").GetString()
       return Ok msg
@@ -289,7 +289,7 @@ let getDiagnostics (client: HttpClient) (baseUrl: string) = task {
   try
     let! resp = client.GetAsync(sprintf "%s/api/status" baseUrl)
     let! body = resp.Content.ReadAsStringAsync()
-    let doc = JsonDocument.Parse(body)
+    use doc = JsonDocument.Parse(body)
     let root = doc.RootElement
     if root.TryGetProperty("regions") |> fst then
       let regions = root.GetProperty("regions").EnumerateArray() |> Seq.toList
@@ -493,7 +493,7 @@ let run (info: DaemonInfo) = task {
           try
             let! resp = client.GetAsync(sprintf "%s/api/status" baseUrl)
             let! body = resp.Content.ReadAsStringAsync()
-            let doc = System.Text.Json.JsonDocument.Parse(body)
+            use doc = System.Text.Json.JsonDocument.Parse(body)
             let r = doc.RootElement
             let get (name: string) =
               if r.TryGetProperty(name) |> fst then r.GetProperty(name).ToString() else "?"

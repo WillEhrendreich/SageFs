@@ -2047,13 +2047,17 @@ let createApiStateHandler
                 let bytes = Text.Encoding.UTF8.GetBytes(": keepalive\n\n")
                 ctx.Response.Body.WriteAsync(bytes).AsTask()
                 |> fun t -> t.ContinueWith(fun (_: Threading.Tasks.Task) -> ctx.Response.Body.FlushAsync()) |> ignore
-            with _ -> ()), null, 15000, 15000)
+            with
+            | :? System.IO.IOException | :? ObjectDisposedException -> ()
+            | ex -> eprintfn "[dashboard] Heartbeat error: %s" ex.Message), null, 15000, 15000)
         use _heartbeat = heartbeat
         use _sub = evt.Subscribe(fun _ ->
           Threading.Tasks.Task.Run(fun () ->
             task {
               try do! pushJson ()
-              with _ -> ()
+              with
+              | :? System.IO.IOException | :? ObjectDisposedException -> ()
+              | ex -> eprintfn "[dashboard] Push error: %s" ex.Message
             } :> Threading.Tasks.Task)
           |> ignore)
         do! tcs.Task
