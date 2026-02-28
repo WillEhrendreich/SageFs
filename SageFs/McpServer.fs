@@ -238,6 +238,12 @@ let jsonResponse (ctx: Microsoft.AspNetCore.Http.HttpContext) (statusCode: int) 
   do! ctx.Response.Body.WriteAsync(System.Text.Encoding.UTF8.GetBytes(json))
 }
 
+/// Write a pre-serialized JSON string as the response body.
+let rawJsonResponse (ctx: Microsoft.AspNetCore.Http.HttpContext) (json: string) = task {
+  ctx.Response.ContentType <- "application/json"
+  do! ctx.Response.Body.WriteAsync(System.Text.Encoding.UTF8.GetBytes(json))
+}
+
 /// Read JSON body and extract a string property, with fallback to raw body.
 let readJsonProp (ctx: Microsoft.AspNetCore.Http.HttpContext) (prop: string) = task {
   use reader = new System.IO.StreamReader(ctx.Request.Body)
@@ -264,6 +270,19 @@ let readJsonBody (ctx: Microsoft.AspNetCore.Http.HttpContext) = task {
   let! body = reader.ReadToEndAsync()
   return System.Text.Json.JsonDocument.Parse(body)
 }
+
+/// Write an SSE frame to a stream (awaitable — use in task{} CEs).
+let writeSseFrame (body: System.IO.Stream) (frame: string) = task {
+  let bytes = System.Text.Encoding.UTF8.GetBytes(frame)
+  do! body.WriteAsync(bytes)
+  do! body.FlushAsync()
+}
+
+/// Write an SSE frame to a stream (fire-and-forget — use in event subscriptions).
+let writeSseFrameSync (body: System.IO.Stream) (frame: string) =
+  let bytes = System.Text.Encoding.UTF8.GetBytes(frame)
+  body.WriteAsync(bytes).AsTask()
+  |> fun t -> t.ContinueWith(fun (_: Task) -> body.FlushAsync()) |> ignore
 
 // Create shared MCP context
 let mkContext (persistence: SageFs.EventStore.EventPersistence) (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.T>) (stateChanged: IEvent<string> option) (sessionOps: SageFs.SessionManagementOps) (mcpPort: int) (dispatch: (SageFs.SageFsMsg -> unit) option) (getElmModel: (unit -> SageFs.SageFsModel) option) (getElmRegions: (unit -> SageFs.RenderRegion list) option) (getWarmupContext: (string -> System.Threading.Tasks.Task<SageFs.WarmupContext option>) option) : McpContext =
@@ -571,17 +590,14 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
 
                     // Send initial empty diagnostics
                     let initialEvent = sprintf "event: diagnostics\ndata: []\n\n"
-                    do! ctx.Response.Body.WriteAsync(System.Text.Encoding.UTF8.GetBytes(initialEvent))
-                    do! ctx.Response.Body.FlushAsync()
+                    do! writeSseFrame ctx.Response.Body initialEvent
 
                     let tcs = System.Threading.Tasks.TaskCompletionSource()
                     use _ct = ctx.RequestAborted.Register(fun () -> tcs.TrySetResult() |> ignore)
                     use _sub = diagnosticsChanged.Subscribe(fun store ->
                         let json = SageFs.McpAdapter.formatDiagnosticsStoreAsJson store
                         let sseEvent = sprintf "event: diagnostics\ndata: %s\n\n" json
-                        let bytes = System.Text.Encoding.UTF8.GetBytes(sseEvent)
-                        ctx.Response.Body.WriteAsync(bytes).AsTask()
-                        |> fun t -> t.ContinueWith(fun (_: Task) -> ctx.Response.Body.FlushAsync()) |> ignore
+                        writeSseFrameSync ctx.Response.Body sseEvent
                     )
                     do! tcs.Task
                     SageFs.Instrumentation.sseConnectionsActive.Add(-1L)
@@ -603,10 +619,7 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                       match ctxOpt with
                       | Some ctx ->
                         let evt = SageFs.SessionEvents.WarmupContextSnapshot(activeId, ctx)
-                        let frame = SageFs.SessionEvents.formatSessionSseEvent evt
-                        let bytes = System.Text.Encoding.UTF8.GetBytes(frame)
-                        do! body.WriteAsync(bytes)
-                        do! body.FlushAsync()
+                        do! evt |> SageFs.SessionEvents.formatSessionSseEvent |> writeSseFrame body
                       | None -> ()
                       // Replay hotreload state
                       match getHotReloadState with
@@ -615,10 +628,7 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                         match hrOpt with
                         | Some watchedFiles ->
                           let hrEvt = SageFs.SessionEvents.HotReloadSnapshot(activeId, watchedFiles)
-                          let hrFrame = SageFs.SessionEvents.formatSessionSseEvent hrEvt
-                          let hrBytes = System.Text.Encoding.UTF8.GetBytes(hrFrame)
-                          do! body.WriteAsync(hrBytes)
-                          do! body.FlushAsync()
+                          do! hrEvt |> SageFs.SessionEvents.formatSessionSseEvent |> writeSseFrame body
                         | None -> ()
                       | None -> ()
                   with _ -> ()
@@ -637,10 +647,8 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                   | true ->
                     let s = TestSummary.fromStatuses
                               lt.Activation (sessionEntries |> Array.map (fun e -> e.Status))
-                    let summaryBytes = System.Text.Encoding.UTF8.GetBytes(
-                      SageFs.SseWriter.formatTestSummaryEvent sseJsonOpts (Some activeId) s)
-                    body.WriteAsync(summaryBytes).AsTask()
-                    |> fun t -> t.ContinueWith(fun (_: Task) -> body.FlushAsync()) |> ignore
+                    SageFs.SseWriter.formatTestSummaryEvent sseJsonOpts (Some activeId) s
+                    |> writeSseFrameSync body
                     let freshness =
                       match lt.RunPhases |> Map.exists (fun _ p -> match p with TestRunPhase.RunningButEdited _ -> true | _ -> false) with
                       | true -> ResultFreshness.StaleCodeEdited
@@ -651,10 +659,8 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                           freshness lt.DiscoveredTests.Length sessionEntries.Length
                       TestResultsBatchPayload.create
                         lt.LastGeneration freshness completion lt.Activation sessionEntries
-                    let batchBytes = System.Text.Encoding.UTF8.GetBytes(
-                      SageFs.SseWriter.formatTestResultsBatchEvent sseJsonOpts (Some activeId) payload)
-                    body.WriteAsync(batchBytes).AsTask()
-                    |> fun t -> t.ContinueWith(fun (_: Task) -> body.FlushAsync()) |> ignore
+                    SageFs.SseWriter.formatTestResultsBatchEvent sseJsonOpts (Some activeId) payload
+                    |> writeSseFrameSync body
                     let files =
                       sessionEntries
                       |> Array.choose (fun e ->
@@ -667,10 +673,8 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                       let fa = FileAnnotations.projectWithCoverage file pipeline
                       match fa.TestAnnotations.Length > 0 || fa.CodeLenses.Length > 0 || fa.CoverageAnnotations.Length > 0 with
                       | true ->
-                        let faBytes = System.Text.Encoding.UTF8.GetBytes(
-                          SageFs.SseWriter.formatFileAnnotationsEvent sseJsonOpts (Some activeId) fa)
-                        body.WriteAsync(faBytes).AsTask()
-                        |> fun t -> t.ContinueWith(fun (_: Task) -> body.FlushAsync()) |> ignore
+                        SageFs.SseWriter.formatFileAnnotationsEvent sseJsonOpts (Some activeId) fa
+                        |> writeSseFrameSync body
                       | false -> ()
                 with ex ->
                   eprintfn "SSE replay error: %s" ex.Message)
@@ -737,30 +741,21 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                         // Heartbeat keeps connection alive through proxies
                         let heartbeat = new System.Threading.Timer((fun _ ->
                             try
-                                let bytes = System.Text.Encoding.UTF8.GetBytes(": keepalive\n\n")
-                                ctx.Response.Body.WriteAsync(bytes).AsTask()
-                                |> fun t -> t.ContinueWith(fun (_: Task) -> ctx.Response.Body.FlushAsync()) |> ignore
+                                writeSseFrameSync ctx.Response.Body ": keepalive\n\n"
                             with _ -> ()), null, 15000, 15000)
                         use _heartbeat = heartbeat
                         use _sub = evt.Subscribe(fun change ->
                             try
-                                let json = DaemonStateChange.toJson change
-                                let sseEvent = SageFs.SseWriter.formatSseEvent "state" json
-                                let bytes = System.Text.Encoding.UTF8.GetBytes(sseEvent)
-                                ctx.Response.Body.WriteAsync(bytes).AsTask()
-                                |> fun t -> t.ContinueWith(fun (_: Task) -> ctx.Response.Body.FlushAsync()) |> ignore
+                                change
+                                |> DaemonStateChange.toJson
+                                |> SageFs.SseWriter.formatSseEvent "state"
+                                |> writeSseFrameSync ctx.Response.Body
                             with _ -> ())
                         use _testSub = testEventBroadcast.Publish.Subscribe(fun sseString ->
-                            try
-                                let bytes = System.Text.Encoding.UTF8.GetBytes(sseString)
-                                ctx.Response.Body.WriteAsync(bytes).AsTask()
-                                |> fun t -> t.ContinueWith(fun (_: Task) -> ctx.Response.Body.FlushAsync()) |> ignore
+                            try writeSseFrameSync ctx.Response.Body sseString
                             with _ -> ())
                         use _sessionSub = sessionEventBroadcast.Publish.Subscribe(fun sseString ->
-                            try
-                                let bytes = System.Text.Encoding.UTF8.GetBytes(sseString)
-                                ctx.Response.Body.WriteAsync(bytes).AsTask()
-                                |> fun t -> t.ContinueWith(fun (_: Task) -> ctx.Response.Body.FlushAsync()) |> ignore
+                            try writeSseFrameSync ctx.Response.Body sseString
                             with _ -> ())
                         // Replay session snapshot FIRST (warmup context) — awaited to ensure delivery
                         do! replaySessionSnapshot ctx.Response.Body
@@ -769,18 +764,15 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                         // Replay current bindings snapshot
                         match fsiBindings.Count, activeSessionId () with
                         | count, Some sid when count > 0 ->
-                          let snapshot = fsiBindings |> Map.values |> Array.ofSeq
-                          let frame = SageFs.SseWriter.formatBindingsSnapshotEvent sseJsonOpts (Some sid) snapshot
-                          let bytes = System.Text.Encoding.UTF8.GetBytes(frame)
-                          ctx.Response.Body.WriteAsync(bytes).AsTask()
-                          |> fun t -> t.ContinueWith(fun (_: Task) -> ctx.Response.Body.FlushAsync()) |> ignore
+                          fsiBindings |> Map.values |> Array.ofSeq
+                          |> SageFs.SseWriter.formatBindingsSnapshotEvent sseJsonOpts (Some sid)
+                          |> writeSseFrameSync ctx.Response.Body
                         | _ -> ()
                         do! tcs.Task
                         SageFs.Instrumentation.sseConnectionsActive.Add(-1L)
                     | None ->
                         ctx.Response.StatusCode <- 501
-                        let msg = System.Text.Encoding.UTF8.GetBytes("event: error\ndata: {\"error\":\"No Elm loop available\"}\n\n")
-                        do! ctx.Response.Body.WriteAsync(msg)
+                        do! writeSseFrame ctx.Response.Body "event: error\ndata: {\"error\":\"No Elm loop available\"}\n\n"
                 } :> Task
             ) |> ignore
 
@@ -1047,9 +1039,7 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                       let fp = ctx.Request.Query.["file"].ToString()
                       if System.String.IsNullOrWhiteSpace fp then None else Some fp
                     let! result = SageFs.McpTools.getLiveTestStatus mcpContext fileParam
-                    ctx.Response.ContentType <- "application/json"
-                    let bytes = System.Text.Encoding.UTF8.GetBytes(result)
-                    do! ctx.Response.Body.WriteAsync(bytes)
+                    do! rawJsonResponse ctx result
                 }) :> Task
             ) |> ignore
 
@@ -1079,8 +1069,7 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                 withErrorHandling ctx (fun () -> task {
                     let! name = readJsonProp ctx "name"
                     let! result = SageFs.McpTools.exploreNamespace mcpContext "http" name None
-                    ctx.Response.ContentType <- "application/json"
-                    do! ctx.Response.Body.WriteAsync(System.Text.Encoding.UTF8.GetBytes(result))
+                    do! rawJsonResponse ctx result
                 }) :> Task
             ) |> ignore
 
@@ -1091,8 +1080,7 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                     let code = json.RootElement.GetProperty("code").GetString()
                     let cursor = json.RootElement.GetProperty("cursorPosition").GetInt32()
                     let! result = SageFs.McpTools.getCompletions mcpContext "http" code cursor None
-                    ctx.Response.ContentType <- "application/json"
-                    do! ctx.Response.Body.WriteAsync(System.Text.Encoding.UTF8.GetBytes(result))
+                    do! rawJsonResponse ctx result
                 }) :> Task
             ) |> ignore
 
@@ -1143,8 +1131,7 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                     """{"error":"Elm model not available"}""", 503
                 task {
                     ctx.Response.StatusCode <- status
-                    ctx.Response.ContentType <- "application/json"
-                    do! ctx.Response.Body.WriteAsync(System.Text.Encoding.UTF8.GetBytes(json))
+                    do! rawJsonResponse ctx json
                 } :> Task
             ) |> ignore
 
@@ -1152,8 +1139,7 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
             app.MapGet("/api/live-testing/pipeline-trace", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
                 withErrorHandling ctx (fun () -> task {
                     let! result = SageFs.McpTools.getPipelineTrace mcpContext
-                    ctx.Response.ContentType <- "application/json"
-                    do! ctx.Response.Body.WriteAsync(System.Text.Encoding.UTF8.GetBytes(result))
+                    do! rawJsonResponse ctx result
                 }) :> Task
             ) |> ignore
 
@@ -1165,8 +1151,7 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                       | true, v -> match System.Int32.TryParse(string v) with true, n -> n | _ -> 20
                       | _ -> 20
                     let! result = SageFs.McpTools.getRecentEvents mcpContext "http" count None
-                    ctx.Response.ContentType <- "application/json"
-                    do! ctx.Response.Body.WriteAsync(System.Text.Encoding.UTF8.GetBytes(result))
+                    do! rawJsonResponse ctx result
                 } :> Task
             ) |> ignore
 

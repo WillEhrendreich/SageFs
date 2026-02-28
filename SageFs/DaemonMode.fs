@@ -859,34 +859,19 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
         ctx.Response.StatusCode <- 404
         do! ctx.Response.WriteAsJsonAsync({| error = "Session not found or not ready" |})
     }
+    let extractSid = fun (r: RequestData) -> r.GetString("sid", "")
+    let proxyGetRoute path = mapGet (sprintf "/api/sessions/{sid}%s" path) extractSid (fun sid -> fun ctx -> proxyGet sid path ctx)
+    let proxyPostRoute path = mapPost (sprintf "/api/sessions/{sid}%s" path) extractSid (fun sid -> fun ctx -> proxyPost sid path ctx)
     [
-      mapGet "/api/sessions/{sid}/hotreload"
-        (fun (r: RequestData) -> r.GetString("sid", ""))
-        (fun sid -> fun ctx -> proxyGet sid "/hotreload" ctx)
-      mapPost "/api/sessions/{sid}/hotreload/toggle"
-        (fun (r: RequestData) -> r.GetString("sid", ""))
-        (fun sid -> fun ctx -> proxyPost sid "/hotreload/toggle" ctx)
-      mapPost "/api/sessions/{sid}/hotreload/watch-all"
-        (fun (r: RequestData) -> r.GetString("sid", ""))
-        (fun sid -> fun ctx -> proxyPost sid "/hotreload/watch-all" ctx)
-      mapPost "/api/sessions/{sid}/hotreload/unwatch-all"
-        (fun (r: RequestData) -> r.GetString("sid", ""))
-        (fun sid -> fun ctx -> proxyPost sid "/hotreload/unwatch-all" ctx)
-      mapPost "/api/sessions/{sid}/hotreload/watch-project"
-        (fun (r: RequestData) -> r.GetString("sid", ""))
-        (fun sid -> fun ctx -> proxyPost sid "/hotreload/watch-project" ctx)
-      mapPost "/api/sessions/{sid}/hotreload/unwatch-project"
-        (fun (r: RequestData) -> r.GetString("sid", ""))
-        (fun sid -> fun ctx -> proxyPost sid "/hotreload/unwatch-project" ctx)
-      mapPost "/api/sessions/{sid}/hotreload/watch-directory"
-        (fun (r: RequestData) -> r.GetString("sid", ""))
-        (fun sid -> fun ctx -> proxyPost sid "/hotreload/watch-directory" ctx)
-      mapPost "/api/sessions/{sid}/hotreload/unwatch-directory"
-        (fun (r: RequestData) -> r.GetString("sid", ""))
-        (fun sid -> fun ctx -> proxyPost sid "/hotreload/unwatch-directory" ctx)
-      mapGet "/api/sessions/{sid}/warmup-context"
-        (fun (r: RequestData) -> r.GetString("sid", ""))
-        (fun sid -> fun ctx -> proxyGet sid "/warmup-context" ctx)
+      proxyGetRoute "/hotreload"
+      proxyPostRoute "/hotreload/toggle"
+      proxyPostRoute "/hotreload/watch-all"
+      proxyPostRoute "/hotreload/unwatch-all"
+      proxyPostRoute "/hotreload/watch-project"
+      proxyPostRoute "/hotreload/unwatch-project"
+      proxyPostRoute "/hotreload/watch-directory"
+      proxyPostRoute "/hotreload/unwatch-directory"
+      proxyGetRoute "/warmup-context"
     ]
 
   let dashboardTask = task {
