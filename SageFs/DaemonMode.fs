@@ -709,32 +709,32 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
         | Ok (WorkerProtocol.WorkerResponse.EvalResult(_, Ok msg, diags, _)) ->
           elmRuntime.Dispatch (SageFsMsg.Event (
             SageFsEvent.EvalCompleted (sid, msg, diags |> List.map WorkerProtocol.WorkerDiagnostic.toDiagnostic)))
-          msg
+          Ok msg
         | Ok (WorkerProtocol.WorkerResponse.EvalResult(_, Error err, _, _)) ->
           let msg = SageFsError.describe err
           elmRuntime.Dispatch (SageFsMsg.Event (SageFsEvent.EvalFailed (sid, msg)))
-          sprintf "Error: %s" msg
-        | Ok other -> sprintf "Unexpected: %A" other
-        | Error e -> sprintf "Error: %s" e
+          Error msg
+        | Ok other -> Error (sprintf "Unexpected: %A" other)
+        | Error e -> Error e
     }
     ResetSession = fun sid -> task {
       let! result = proxyToSession sessionOps.GetProxy sid (WorkerProtocol.WorkerMessage.ResetSession "dash")
       return
         match result with
-        | Ok (WorkerProtocol.WorkerResponse.ResetResult(_, Ok ())) -> "Session reset successfully"
-        | Ok (WorkerProtocol.WorkerResponse.ResetResult(_, Error e)) -> sprintf "Reset failed: %A" e
-        | Ok other -> sprintf "Unexpected: %A" other
-        | Error e -> sprintf "Error: %s" e
+        | Ok (WorkerProtocol.WorkerResponse.ResetResult(_, Ok ())) -> Ok "Session reset successfully"
+        | Ok (WorkerProtocol.WorkerResponse.ResetResult(_, Error e)) -> Error (sprintf "Reset failed: %A" e)
+        | Ok other -> Error (sprintf "Unexpected: %A" other)
+        | Error e -> Error e
     }
     HardResetSession = fun sid -> task {
       match sid with
-      | null | "" -> return "Error: No session selected"
+      | null | "" -> return Error "No session selected"
       | _ ->
         let! result = sessionOps.RestartSession sid true
         return
           match result with
-          | Ok msg -> sprintf "Hard reset: %s" msg
-          | Error e -> sprintf "Hard reset failed: %s" (SageFsError.describe e)
+          | Ok msg -> Ok (sprintf "Hard reset: %s" msg)
+          | Error e -> Error (sprintf "Hard reset failed: %s" (SageFsError.describe e))
     }
     Dispatch = fun msg -> elmRuntime.Dispatch msg
     SwitchSession = Some (fun (sid: string) -> task {

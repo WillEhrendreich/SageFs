@@ -841,9 +841,9 @@ type DashboardQueries = {
 
 /// Commands that mutate session state.
 type DashboardActions = {
-  EvalCode: string -> string -> Threading.Tasks.Task<string>
-  ResetSession: string -> Threading.Tasks.Task<string>
-  HardResetSession: string -> Threading.Tasks.Task<string>
+  EvalCode: string -> string -> Threading.Tasks.Task<Result<string, string>>
+  ResetSession: string -> Threading.Tasks.Task<Result<string, string>>
+  HardResetSession: string -> Threading.Tasks.Task<Result<string, string>>
   Dispatch: SageFsMsg -> unit
   SwitchSession: (string -> Threading.Tasks.Task<string>) option
   StopSession: (string -> Threading.Tasks.Task<string>) option
@@ -1612,7 +1612,7 @@ let createStreamHandler
 
 /// Create the eval POST handler.
 let createEvalHandler
-  (evalCode: string -> string -> Threading.Tasks.Task<string>)
+  (evalCode: string -> string -> Threading.Tasks.Task<Result<string, string>>)
   : HttpHandler =
   fun ctx -> task {
     try
@@ -1637,21 +1637,17 @@ let createEvalHandler
         let! result = evalCode sessionId codeWithTerminator
         Response.sseStartResponse ctx |> ignore
         do! Response.ssePatchSignal ctx (SignalPath.sp "code") ""
-        let isError =
-          result.StartsWith("Error:", System.StringComparison.Ordinal) || result.Contains("Evaluation failed")
-        let displayResult =
-          if isError then
-            // Clean up raw exception names for readability
-            result
+        let displayResult, cssClass =
+          match result with
+          | Ok msg -> msg, "output-line output-result"
+          | Error err ->
+            err
               .Replace("FSharp.Compiler.Interactive.Shell+FsiCompilationException: ", "")
-              .Replace("Evaluation failed: ", "⚠ ")
-          else result
-        let cssClass =
-          if isError then "output-line output-error"
-          else "output-line output-result"
+              .Replace("Evaluation failed: ", "⚠ "),
+            "output-line output-error"
         let resultHtml =
           Elem.div [ Attr.id "eval-result" ] [
-            Elem.pre [ Attr.class' (sprintf "%s" cssClass); Attr.style "margin-top: 0.5rem; white-space: pre-wrap;" ] [
+            Elem.pre [ Attr.class' cssClass; Attr.style "margin-top: 0.5rem; white-space: pre-wrap;" ] [
               Text.raw displayResult
             ]
           ]
@@ -1663,7 +1659,7 @@ let createEvalHandler
 
 /// Create the eval-file POST handler (reads file, evals its content).
 let createEvalFileHandler
-  (evalCode: string -> string -> Threading.Tasks.Task<string>)
+  (evalCode: string -> string -> Threading.Tasks.Task<Result<string, string>>)
   : HttpHandler =
   fun ctx -> task {
     try
@@ -1688,7 +1684,9 @@ let createEvalFileHandler
           if trimmed.EndsWith(";;") then code
           else sprintf "%s;;" trimmed
         let! result = evalCode sessionId codeWithTerminator
-        do! ctx.Response.WriteAsJsonAsync({| success = true; result = result |})
+        match result with
+        | Ok msg -> do! ctx.Response.WriteAsJsonAsync({| success = true; result = msg |})
+        | Error err -> do! ctx.Response.WriteAsJsonAsync({| success = false; error = err |})
     with ex ->
       ctx.Response.StatusCode <- 500
       do! ctx.Response.WriteAsJsonAsync({| error = ex.Message |})
@@ -1728,7 +1726,7 @@ let createCompletionsHandler
 
 /// Create the reset POST handler.
 let createResetHandler
-  (resetSession: string -> Threading.Tasks.Task<string>)
+  (resetSession: string -> Threading.Tasks.Task<Result<string, string>>)
   : HttpHandler =
   fun ctx -> task {
     try
@@ -1742,10 +1740,14 @@ let createResetHandler
       }
       let! result = resetSession sessionId
       Response.sseStartResponse ctx |> ignore
+      let msg =
+        match result with
+        | Ok m -> m
+        | Error e -> sprintf "Failed: %s" e
       let resultHtml =
         Elem.div [ Attr.id "eval-result" ] [
           Elem.pre [ Attr.class' "output-line output-info"; Attr.style "margin-top: 0.5rem; white-space: pre-wrap;" ] [
-            Text.raw (sprintf "Reset: %s" result)
+            Text.raw (sprintf "Reset: %s" msg)
           ]
         ]
       do! ssePatchNode ctx resultHtml
@@ -1753,7 +1755,7 @@ let createResetHandler
       let clearedOutput =
         Elem.div [ Attr.id "output-panel" ] [
           Elem.span [ Attr.class' "meta"; Attr.style "padding: 0.5rem;" ] [
-            Text.raw (sprintf "Reset: %s" result)
+            Text.raw (sprintf "Reset: %s" msg)
           ]
         ]
       do! ssePatchNode ctx clearedOutput
