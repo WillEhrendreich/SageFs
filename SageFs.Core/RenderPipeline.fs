@@ -333,7 +333,7 @@ module KeyMap =
       KeyCombo.ctrl ConsoleKey.Tab, e EditorAction.SessionCycleNext
       KeyCombo.ctrlShift ConsoleKey.Tab, e EditorAction.SessionCyclePrev
       // Submit / NewLine
-      KeyCombo.ctrl ConsoleKey.Enter, e EditorAction.Submit
+      KeyCombo.alt ConsoleKey.Enter, e EditorAction.Submit
       KeyCombo.plain ConsoleKey.Enter, e EditorAction.NewLine
       // Editing
       KeyCombo.plain ConsoleKey.Backspace, e EditorAction.DeleteBackward
@@ -393,7 +393,7 @@ module KeyMap =
     overrides |> Map.fold (fun acc k v -> Map.add k v acc) base'
 
   /// Parse keybinding lines from config.fsx format:
-  ///   let keybindings = [ "Ctrl+Q", "Quit"; "Ctrl+Enter", "Submit" ]
+  ///   let keybindings = [ "Ctrl+Q", "Quit"; "Alt+Enter", "Submit" ]
   let parseConfigLines (lines: string array) : KeyMap =
     let mutable bindings = Map.empty
     let mutable inBindings = false

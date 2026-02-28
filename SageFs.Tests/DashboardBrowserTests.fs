@@ -251,13 +251,13 @@ let tests = testList "Dashboard browser tests" [
     Expect.isTrue (result.Contains("  ")) "2 spaces inserted via Tab handler"
   })
 
-  playwrightTest "Ctrl+Enter triggers eval" (fun page -> task {
+  playwrightTest "Alt+Enter triggers eval" (fun page -> task {
     // Wait for connection before evaluating
     do! PlaywrightExpect.waitForSSE 10_000 page
 
     let textarea = page.Locator(".eval-input").First
     do! textarea.FillAsync("1 + 1;;")
-    do! textarea.PressAsync("Control+Enter")
+    do! textarea.PressAsync("Alt+Enter")
 
     let evalResult = page.Locator("#eval-result")
     do! evalResult.WaitForAsync(
@@ -295,7 +295,7 @@ let tests = testList "Dashboard browser tests" [
     Expect.equal value "" "textarea cleared after eval"
   })
 
-  playwrightTest "evaluate with Ctrl+Enter shortcut" (fun page -> task {
+  playwrightTest "evaluate with Alt+Enter shortcut" (fun page -> task {
     do! PlaywrightExpect.waitForSSE 15_000 page
     let textarea =
       page.GetByRole(
@@ -303,7 +303,7 @@ let tests = testList "Dashboard browser tests" [
         PageGetByRoleOptions(Name = "Enter F# code..."))
     do! textarea.ClickAsync()
     do! textarea.FillAsync("""printfn "Hello, World!" """)
-    do! page.Keyboard.PressAsync("Control+Enter")
+    do! page.Keyboard.PressAsync("Alt+Enter")
     do! PlaywrightExpect.waitForSelectorText 30_000 page "#eval-result" "unit"
     let! value = textarea.InputValueAsync()
     Expect.equal value "" "textarea cleared after eval"
@@ -363,8 +363,8 @@ let tests = testList "Dashboard browser tests" [
     do! helpBtn.ClickAsync()
     let table = page.GetByRole(AriaRole.Table)
     do! PlaywrightExpect.isVisibleAsync table "shortcuts table visible"
-    let ctrlEnter = page.GetByText("Ctrl+Enter")
-    do! PlaywrightExpect.isVisibleAsync ctrlEnter "Ctrl+Enter listed"
+    let altEnter = page.GetByText("Alt+Enter")
+    do! PlaywrightExpect.isVisibleAsync altEnter "Alt+Enter listed"
     let ctrlL = page.GetByText("Ctrl+L")
     do! PlaywrightExpect.isVisibleAsync ctrlL "Ctrl+L listed"
     let tabKey = page.GetByText("Tab")

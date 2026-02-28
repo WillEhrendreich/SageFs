@@ -14,9 +14,9 @@ let terminalInputTests = testList "TerminalInput" [
     Expect.equal result (Some TerminalCommand.CycleFocus) "Tab should cycle focus"
   }
 
-  test "Ctrl+Enter submits" {
-    let result = TerminalInput.mapKey (key '\n' ConsoleKey.Enter 1)
-    Expect.equal result (Some (TerminalCommand.Action EditorAction.Submit)) "Ctrl+Enter submits"
+  test "Alt+Enter submits" {
+    let result = TerminalInput.mapKey (key '\n' ConsoleKey.Enter 2)
+    Expect.equal result (Some (TerminalCommand.Action EditorAction.Submit)) "Alt+Enter submits"
   }
 
   test "Enter inserts newline" {

@@ -281,7 +281,7 @@ printfn "Hot reload demo started on port %d"
           do! Task.Delay(600)
 
           // ---- SCENE 3: Eval + Harmony patching ----
-          do! js page "setStatus('Ctrl+Enter — Harmony patching methods...', '#fab387')"
+          do! js page "setStatus('Alt+Enter — Harmony patching methods...', '#fab387')"
 
           let hotCode =
             """let demoGreeting () = "Hot reloaded! v2" """ + "\n" +

@@ -482,10 +482,10 @@ let raylibKeyMappingTests = testList "Raylib key mapping logic" [
     Expect.equal action (Some (UiAction.FocusDir Direction.Left)) "Ctrl+H should map to FocusDir Left"
   }
 
-  test "Ctrl+Enter maps to Editor Submit" {
-    let combo = KeyCombo.ctrl System.ConsoleKey.Enter
+  test "Alt+Enter maps to Editor Submit" {
+    let combo = KeyCombo.alt System.ConsoleKey.Enter
     let action = KeyMap.defaults |> Map.tryFind combo
-    Expect.equal action (Some (UiAction.Editor EditorAction.Submit)) "Ctrl+Enter should map to Submit"
+    Expect.equal action (Some (UiAction.Editor EditorAction.Submit)) "Alt+Enter should map to Submit"
   }
 
   test "PageUp maps to ScrollUp" {

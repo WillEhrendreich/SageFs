@@ -86,7 +86,7 @@ sagefs --proj MyApp.fsproj
 4. It opens an **MCP server** on `http://localhost:37749/sse` (for AI agents)
 5. It opens a **live dashboard** at `http://localhost:37750/dashboard`
 
-**That's it.** SageFs is running. Open the dashboard, press **Ctrl+Enter** on some F# code, and see the result immediately.
+**That's it.** SageFs is running. Open the dashboard, press **Alt+Enter** on some F# code, and see the result immediately.
 
 ---
 
