@@ -5,6 +5,7 @@ open Fable.Core.JsInterop
 open Vscode
 
 open SageFs.Vscode.LiveTestingTypes
+open SageFs.Vscode.JsHelpers
 
 module Client = SageFs.Vscode.SageFsClient
 
@@ -22,6 +23,28 @@ let create
 
   let controller = Tests.createTestController "sagefs" "SageFs Live Tests"
   let testItemMap = System.Collections.Generic.Dictionary<string, TestItem>()
+  let mutable activeRun: TestRun option = None
+  let mutable endRunTimer: obj option = None
+
+  let endActiveRun () =
+    endRunTimer |> Option.iter jsClearInterval
+    endRunTimer <- None
+    activeRun |> Option.iter (fun r -> r.``end`` ())
+    activeRun <- None
+
+  let getOrCreateRun () =
+    match activeRun with
+    | Some run -> run
+    | None ->
+      let request = createObj [ "include" ==> null; "exclude" ==> null ] :?> TestRunRequest
+      let run = controller.createTestRun request
+      activeRun <- Some run
+      run
+
+  /// Schedule run.end() after 500ms debounce — resets on each new batch.
+  let scheduleEndRun () =
+    endRunTimer |> Option.iter jsClearInterval
+    endRunTimer <- Some (jsSetTimeout (fun () -> endActiveRun ()) 500)
 
   let ensureTestItem (info: VscTestInfo) =
     let id = VscTestId.value info.Id
@@ -45,8 +68,7 @@ let create
       item
 
   let applyResults (results: VscTestResult array) =
-    let request = createObj [ "include" ==> null; "exclude" ==> null ] :?> TestRunRequest
-    let run = controller.createTestRun request
+    let run = getOrCreateRun ()
     for result in results do
       let id = VscTestId.value result.Id
       match testItemMap.TryGetValue(id) with
@@ -70,7 +92,7 @@ let create
         | VscTestOutcome.PolicyDisabled ->
           run.skipped item
       | false, _ -> ()
-    run.``end`` ()
+    scheduleEndRun ()
 
   let runHandler (request: TestRunRequest) (_token: CancellationToken) : JS.Promise<unit> =
     promise {
@@ -101,16 +123,15 @@ let create
       | VscStateChange.TestsCompleted results ->
         applyResults results
       | VscStateChange.TestsStarted ids ->
-        let request = createObj [ "include" ==> null; "exclude" ==> null ] :?> TestRunRequest
-        let run = controller.createTestRun request
+        endActiveRun ()
+        let run = getOrCreateRun ()
         for id in ids do
           let idStr = VscTestId.value id
           match testItemMap.TryGetValue(idStr) with
           | true, item -> run.started item
           | false, _ -> ()
-        run.``end`` ()
       | _ -> ()
 
   { Controller = controller
     Refresh = refresh
-    Dispose = fun () -> controller.dispose () }
+    Dispose = fun () -> endActiveRun (); controller.dispose () }
