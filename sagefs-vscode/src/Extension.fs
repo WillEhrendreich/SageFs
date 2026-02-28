@@ -538,13 +538,13 @@ let switchSessionCmd () =
           match idx with
           | Some i ->
             let sess = sessions.[i]
-            let! switched = Client.switchSession sess.id c
-            match switched with
-            | true ->
+            let! result = Client.switchSession sess.id c
+            match result with
+            | Client.Succeeded _ ->
               activeSessionId <- Some sess.id
               Window.showInformationMessage (sprintf "Switched to session %s" sess.id) [||] |> ignore
-            | false ->
-              Window.showErrorMessage "Failed to switch session." [||] |> ignore
+            | Client.Failed err ->
+              Window.showErrorMessage (sprintf "Failed to switch session: %s" err) [||] |> ignore
             refreshStatus ()
           | None -> ()
         | None -> ()
@@ -570,15 +570,15 @@ let stopSessionCmd () =
           match idx with
           | Some i ->
             let sess = sessions.[i]
-            let! stopped = Client.stopSession sess.id c
-            match stopped with
-            | true ->
+            let! result = Client.stopSession sess.id c
+            match result with
+            | Client.Succeeded _ ->
               match activeSessionId with
               | Some id when id = sess.id -> activeSessionId <- None
               | _ -> ()
               Window.showInformationMessage (sprintf "Stopped session %s" sess.id) [||] |> ignore
-            | false ->
-              Window.showErrorMessage "Failed to stop session." [||] |> ignore
+            | Client.Failed err ->
+              Window.showErrorMessage (sprintf "Failed to stop session: %s" err) [||] |> ignore
             refreshStatus ()
           | None -> ()
         | None -> ()

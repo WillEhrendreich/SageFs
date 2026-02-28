@@ -101,6 +101,14 @@ let dashHttpPost (c: Client) (path: string) (body: string) (timeout: int) =
   httpPostRaw (sprintf "http://localhost:%d%s" c.dashboardPort path) body timeout
 
 // ── JSON field helpers (null-safe boundary parsing) ──────────────────────
+
+/// Convert a potentially-null value to Option.
+/// In Fable/JS: null and undefined → None, everything else → Some.
+let inline tryOfObj (x: 'a) : 'a option =
+  match isNull (box x) with
+  | true -> None
+  | false -> Some x
+
 let tryField<'T> (name: string) (obj: obj) : 'T option =
   let v = obj?(name)
   match isNull v with
@@ -127,6 +135,59 @@ let postCommand (c: Client) (path: string) (body: string) (timeout: int) : JS.Pr
       return jsonParse resp.body |> parseOutcome
     with err ->
       return Failed (string err)
+  }
+
+// ── HTTP helpers (compress repeated GET/POST patterns) ───────────────────
+
+/// GET from MCP port, parse JSON on 200, None otherwise.
+let getJson<'a> (ctx: string) (path: string) (timeout: int) (parse: obj -> 'a) (c: Client) : JS.Promise<'a option> =
+  promise {
+    try
+      let! resp = httpGet c path timeout
+      match resp.statusCode with
+      | 200 -> return jsonParse resp.body |> parse |> Some
+      | _ -> return None
+    with ex ->
+      logWarn ctx ex
+      return None
+  }
+
+/// GET raw body from MCP port on 200, None otherwise.
+let getRaw (ctx: string) (path: string) (timeout: int) (c: Client) : JS.Promise<string option> =
+  promise {
+    try
+      let! resp = httpGet c path timeout
+      match resp.statusCode with
+      | 200 -> return Some resp.body
+      | _ -> return None
+    with ex ->
+      logWarn ctx ex
+      return None
+  }
+
+/// GET from dashboard port, parse JSON on 200, None otherwise.
+let dashGetJson<'a> (ctx: string) (path: string) (timeout: int) (parse: obj -> 'a) (c: Client) : JS.Promise<'a option> =
+  promise {
+    try
+      let! resp = dashHttpGet c path timeout
+      match resp.statusCode with
+      | 200 -> return jsonParse resp.body |> parse |> Some
+      | _ -> return None
+    with ex ->
+      logWarn ctx ex
+      return None
+  }
+
+/// POST to dashboard port, succeed on 2xx, fail otherwise.
+let dashPostOutcome (ctx: string) (path: string) (body: string) (timeout: int) (c: Client) : JS.Promise<ApiOutcome> =
+  promise {
+    try
+      let! resp = dashHttpPost c path body timeout
+      match resp.statusCode with
+      | s when s >= 200 && s < 300 -> return Succeeded None
+      | _ -> return Failed (sprintf "%s: HTTP %d" ctx resp.statusCode)
+    with err ->
+      return Failed (sprintf "%s: %s" ctx (string err))
   }
 
 let isRunning (c: Client) =
@@ -165,193 +226,100 @@ let resetSession (c: Client) =
 let hardReset (rebuild: bool) (c: Client) =
   postCommand c "/hard-reset" (jsonStringify {| rebuild = rebuild |}) 60000
 
+let parseSessions (parsed: obj) =
+  let sessions: obj array = parsed?sessions |> unbox
+  sessions |> Array.map (fun s ->
+    { id = s?id |> unbox<string>
+      name = None
+      workingDirectory = s?workingDirectory |> unbox<string>
+      status = s?status |> unbox<string>
+      projects = tryField<string array> "projects" s |> Option.defaultValue [||]
+      evalCount = tryField<int> "evalCount" s |> Option.defaultValue 0 })
+
 let listSessions (c: Client) =
   promise {
-    try
-      let! resp = httpGet c "/api/sessions" 5000
-      match resp.statusCode with
-      | 200 ->
-        let parsed = jsonParse resp.body
-        let sessions: obj array = parsed?sessions |> unbox
-        return
-          sessions |> Array.map (fun s ->
-            { id = s?id |> unbox<string>
-              name = None
-              workingDirectory = s?workingDirectory |> unbox<string>
-              status = s?status |> unbox<string>
-              projects = tryField<string array> "projects" s |> Option.defaultValue [||]
-              evalCount = tryField<int> "evalCount" s |> Option.defaultValue 0 })
-      | _ ->
-        return [||]
-    with ex ->
-      logWarn "listSessions" ex
-      return [||]
+    let! result = getJson "listSessions" "/api/sessions" 5000 parseSessions c
+    return result |> Option.defaultValue [||]
   }
 
 let createSession (projects: string) (workingDirectory: string) (c: Client) =
   postCommand c "/api/sessions/create" (jsonStringify {| projects = [| projects |]; workingDirectory = workingDirectory |}) 30000
 
 let switchSession (sessionId: string) (c: Client) =
-  promise {
-    try
-      let payload = {| sessionId = sessionId |}
-      let! resp = httpPost c "/api/sessions/switch" (jsonStringify payload) 5000
-      let parsed = jsonParse resp.body
-      return parsed?success |> unbox<bool>
-    with ex ->
-      logWarn "switchSession" ex
-      return false
-  }
+  postCommand c "/api/sessions/switch" (jsonStringify {| sessionId = sessionId |}) 5000
 
 let stopSession (sessionId: string) (c: Client) =
-  promise {
-    try
-      let payload = {| sessionId = sessionId |}
-      let! resp = httpPost c "/api/sessions/stop" (jsonStringify payload) 10000
-      let parsed = jsonParse resp.body
-      return parsed?success |> unbox<bool>
-    with ex ->
-      logWarn "stopSession" ex
-      return false
-  }
+  postCommand c "/api/sessions/stop" (jsonStringify {| sessionId = sessionId |}) 10000
+
+let parseSystemStatus (parsed: obj) =
+  { supervised = parsed?supervised |> unbox<bool>
+    restartCount = parsed?restartCount |> unbox<int>
+    version = parsed?version |> unbox<string> }
 
 let getSystemStatus (c: Client) =
-  promise {
-    try
-      let! resp = httpGet c "/api/system/status" 3000
-      match resp.statusCode with
-      | 200 ->
-        let parsed = jsonParse resp.body
-        return
-          Some
-            { supervised = parsed?supervised |> unbox<bool>
-              restartCount = parsed?restartCount |> unbox<int>
-              version = parsed?version |> unbox<string> }
-      | _ ->
-        return None
-    with ex ->
-      logWarn "getSystemStatus" ex
-      return None
-  }
+  getJson "getSystemStatus" "/api/system/status" 3000 parseSystemStatus c
+
+let parseHotReloadState (parsed: obj) =
+  let files =
+    tryOfObj (parsed?files)
+    |> Option.map (fun rawFiles ->
+      rawFiles
+      |> unbox<obj array>
+      |> Array.choose (fun f ->
+        tryField<string> "path" f
+        |> Option.map (fun p ->
+          { path = p
+            watched = tryField<bool> "watched" f |> Option.defaultValue false })))
+    |> Option.defaultValue [||]
+  let wc = tryField<int> "watchedCount" parsed |> Option.defaultValue 0
+  { files = files; watchedCount = wc }
 
 let getHotReloadState (sessionId: string) (c: Client) =
-  promise {
-    try
-      let! resp = dashHttpGet c (sprintf "/api/sessions/%s/hotreload" sessionId) 5000
-      match resp.statusCode with
-      | 200 ->
-        let parsed = jsonParse resp.body
-        let rawFiles = parsed?files
-        match isNull rawFiles with
-        | true ->
-          return Some { files = [||]; watchedCount = 0 }
-        | false ->
-          let files =
-            rawFiles
-            |> unbox<obj array>
-            |> Array.choose (fun f ->
-              tryField<string> "path" f
-              |> Option.map (fun p ->
-                { path = p
-                  watched = tryField<bool> "watched" f |> Option.defaultValue false }))
-          let wc = tryField<int> "watchedCount" parsed |> Option.defaultValue 0
-          return Some { files = files; watchedCount = wc }
-      | _ ->
-        return None
-    with ex ->
-      logWarn "getHotReloadState" ex
-      return None
-  }
+  dashGetJson "getHotReloadState" (sprintf "/api/sessions/%s/hotreload" sessionId) 5000 parseHotReloadState c
 
 let toggleHotReload (sessionId: string) (path: string) (c: Client) =
-  promise {
-    try
-      let! _ = dashHttpPost c (sprintf "/api/sessions/%s/hotreload/toggle" sessionId) (jsonStringify {| path = path |}) 5000
-      return true
-    with ex ->
-      logWarn "toggleHotReload" ex
-      return false
-  }
+  dashPostOutcome "toggleHotReload" (sprintf "/api/sessions/%s/hotreload/toggle" sessionId) (jsonStringify {| path = path |}) 5000 c
 
 let watchAllHotReload (sessionId: string) (c: Client) =
-  promise {
-    try
-      let! _ = dashHttpPost c (sprintf "/api/sessions/%s/hotreload/watch-all" sessionId) "{}" 5000
-      return true
-    with ex ->
-      logWarn "watchAllHotReload" ex
-      return false
-  }
+  dashPostOutcome "watchAllHotReload" (sprintf "/api/sessions/%s/hotreload/watch-all" sessionId) "{}" 5000 c
 
 let unwatchAllHotReload (sessionId: string) (c: Client) =
-  promise {
-    try
-      let! _ = dashHttpPost c (sprintf "/api/sessions/%s/hotreload/unwatch-all" sessionId) "{}" 5000
-      return true
-    with ex ->
-      logWarn "unwatchAllHotReload" ex
-      return false
-  }
+  dashPostOutcome "unwatchAllHotReload" (sprintf "/api/sessions/%s/hotreload/unwatch-all" sessionId) "{}" 5000 c
 
 let watchDirectoryHotReload (sessionId: string) (directory: string) (c: Client) =
-  promise {
-    try
-      let! _ = dashHttpPost c (sprintf "/api/sessions/%s/hotreload/watch-directory" sessionId) (jsonStringify {| directory = directory |}) 5000
-      return true
-    with ex ->
-      logWarn "watchDirectoryHotReload" ex
-      return false
-  }
+  dashPostOutcome "watchDirectoryHotReload" (sprintf "/api/sessions/%s/hotreload/watch-directory" sessionId) (jsonStringify {| directory = directory |}) 5000 c
 
 let unwatchDirectoryHotReload (sessionId: string) (directory: string) (c: Client) =
-  promise {
-    try
-      let! _ = dashHttpPost c (sprintf "/api/sessions/%s/hotreload/unwatch-directory" sessionId) (jsonStringify {| directory = directory |}) 5000
-      return true
-    with ex ->
-      logWarn "unwatchDirectoryHotReload" ex
-      return false
-  }
+  dashPostOutcome "unwatchDirectoryHotReload" (sprintf "/api/sessions/%s/hotreload/unwatch-directory" sessionId) (jsonStringify {| directory = directory |}) 5000 c
+
+let parseWarmupContext (parsed: obj) =
+  let assemblies =
+    parsed?AssembliesLoaded
+    |> unbox<obj array>
+    |> Array.map (fun a ->
+      { Name = a?Name |> unbox<string>
+        Path = a?Path |> unbox<string>
+        NamespaceCount = a?NamespaceCount |> unbox<int>
+        ModuleCount = a?ModuleCount |> unbox<int> })
+  let opened =
+    parsed?NamespacesOpened
+    |> unbox<obj array>
+    |> Array.map (fun b ->
+      { Name = b?Name |> unbox<string>
+        IsModule = b?IsModule |> unbox<bool>
+        Source = b?Source |> unbox<string> })
+  let failed =
+    parsed?FailedOpens
+    |> unbox<obj array>
+    |> Array.map (fun f -> f |> unbox<string array>)
+  { SourceFilesScanned = parsed?SourceFilesScanned |> unbox<int>
+    AssembliesLoaded = assemblies
+    NamespacesOpened = opened
+    FailedOpens = failed
+    WarmupDurationMs = parsed?WarmupDurationMs |> unbox<int> }
 
 let getWarmupContext (sessionId: string) (c: Client) =
-  promise {
-    try
-      let! resp = dashHttpGet c (sprintf "/api/sessions/%s/warmup-context" sessionId) 5000
-      match resp.statusCode with
-      | 200 ->
-        let parsed = jsonParse resp.body
-        let assemblies =
-          parsed?AssembliesLoaded
-          |> unbox<obj array>
-          |> Array.map (fun a ->
-            { Name = a?Name |> unbox<string>
-              Path = a?Path |> unbox<string>
-              NamespaceCount = a?NamespaceCount |> unbox<int>
-              ModuleCount = a?ModuleCount |> unbox<int> })
-        let opened =
-          parsed?NamespacesOpened
-          |> unbox<obj array>
-          |> Array.map (fun b ->
-            { Name = b?Name |> unbox<string>
-              IsModule = b?IsModule |> unbox<bool>
-              Source = b?Source |> unbox<string> })
-        let failed =
-          parsed?FailedOpens
-          |> unbox<obj array>
-          |> Array.map (fun f -> f |> unbox<string array>)
-        return
-          Some
-            { SourceFilesScanned = parsed?SourceFilesScanned |> unbox<int>
-              AssembliesLoaded = assemblies
-              NamespacesOpened = opened
-              FailedOpens = failed
-              WarmupDurationMs = parsed?WarmupDurationMs |> unbox<int> }
-      | _ ->
-        return None
-    with ex ->
-      logWarn "getWarmupContext" ex
-      return None
-  }
+  dashGetJson "getWarmupContext" (sprintf "/api/sessions/%s/warmup-context" sessionId) 5000 parseWarmupContext c
 
 type CompletionResult =
   { label: string
@@ -395,7 +363,7 @@ let disableLiveTesting (c: Client) =
 let setRunPolicy (category: string) (policy: string) (c: Client) =
   postCommand c "/api/live-testing/policy" (jsonStringify {| category = category; policy = policy |}) 5000
 
-let explore(name: string) (c: Client) =
+let explore (name: string) (c: Client) =
   promise {
     try
       let! resp = httpPost c "/api/explore" (jsonStringify {| name = name |}) 10000
@@ -408,32 +376,14 @@ let explore(name: string) (c: Client) =
   }
 
 let getRecentEvents (count: int) (c: Client) =
-  promise {
-    try
-      let! resp = httpGet c (sprintf "/api/recent-events?count=%d" count) 10000
-      match resp.statusCode with
-      | 200 -> return Some resp.body
-      | _ -> return None
-    with ex ->
-      logWarn "getRecentEvents" ex
-      return None
-  }
+  getRaw "getRecentEvents" (sprintf "/api/recent-events?count=%d" count) 10000 c
 
 let getDependencyGraph (symbol: string) (c: Client) =
-  promise {
-    try
-      let path =
-        match symbol with
-        | "" -> "/api/dependency-graph"
-        | s -> sprintf "/api/dependency-graph?symbol=%s" (JS.encodeURIComponent s)
-      let! resp = httpGet c path 10000
-      match resp.statusCode with
-      | 200 -> return Some resp.body
-      | _ -> return None
-    with ex ->
-      logWarn "getDependencyGraph" ex
-      return None
-  }
+  let path =
+    match symbol with
+    | "" -> "/api/dependency-graph"
+    | s -> sprintf "/api/dependency-graph?symbol=%s" (JS.encodeURIComponent s)
+  getRaw "getDependencyGraph" path 10000 c
 
 let cancelEval (c: Client) =
   postCommand c "/api/cancel-eval" "{}" 5000
@@ -443,31 +393,11 @@ let loadScript (filePath: string) (c: Client) =
   postCommand c "/exec" (jsonStringify {| code = code; working_directory = "" |}) 30000
 
 let getPipelineTrace (c: Client) =
-  promise {
-    try
-      let! resp = httpGet c "/api/live-testing/pipeline-trace" 5000
-      match resp.statusCode with
-      | 200 -> return Some resp.body
-      | _ -> return None
-    with ex ->
-      logWarn "getPipelineTrace" ex
-      return None
-  }
+  getRaw "getPipelineTrace" "/api/live-testing/pipeline-trace" 5000 c
 
 type ExportResult =
   { content: string
     evalCount: int }
 
 let exportSessionAsFsx (sessionId: string) (c: Client) =
-  promise {
-    try
-      let! resp = httpGet c (sprintf "/api/sessions/%s/export-fsx" (JS.encodeURIComponent sessionId)) 15000
-      match resp.statusCode with
-      | 200 ->
-        let parsed: ExportResult = !!JS.JSON.parse(resp.body)
-        return Some parsed
-      | _ -> return None
-    with ex ->
-      logWarn "exportSessionAsFsx" ex
-      return None
-  }
+  getJson "exportSessionAsFsx" (sprintf "/api/sessions/%s/export-fsx" (JS.encodeURIComponent sessionId)) 15000 (fun p -> !!p : ExportResult) c
