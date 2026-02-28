@@ -51,10 +51,12 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
         .SetMinimumLevel(LogLevel.Information)
         .AddFilter("Microsoft", LogLevel.Warning)
       |> ignore
-      if otelConfigured then
+      match otelConfigured with
+      | true ->
         builder.AddOpenTelemetry(fun otel ->
           otel.AddOtlpExporter() |> ignore
         ) |> ignore
+      | false -> ()
     )
   let log = loggerFactory.CreateLogger("SageFs.Daemon")
   // Shared HttpClient for all daemon→worker HTTP calls (avoids socket exhaustion)
@@ -71,12 +73,14 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
   let hasPersist = args |> List.exists (function Args.Arguments.Persist -> true | _ -> false)
   let envConnStr = System.Environment.GetEnvironmentVariable("SAGEFS_CONNECTION_STRING")
   let persistence =
-    if hasPersist || not (System.String.IsNullOrEmpty envConnStr) then
+    match hasPersist || not (System.String.IsNullOrEmpty envConnStr) with
+    | true ->
       let connectionString =
-        if not (System.String.IsNullOrEmpty envConnStr) then
+        match System.String.IsNullOrEmpty envConnStr with
+        | false ->
           log.LogInformation("Using PostgreSQL from SAGEFS_CONNECTION_STRING")
           Some envConnStr
-        else
+        | true ->
           log.LogInformation("--persist: starting PostgreSQL via Docker...")
           PostgresInfra.getOrStartPostgres ()
       match connectionString with
@@ -87,24 +91,27 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
       | None ->
         log.LogWarning("PostgreSQL unavailable, falling back to InMemory mode")
         SageFs.EventStore.EventPersistence.inMemory ()
-    else
+    | false ->
       log.LogInformation("Event persistence: InMemory (use --persist for PostgreSQL)")
       SageFs.EventStore.EventPersistence.inMemory ()
   let daemonStreamId = "daemon-sessions"
 
   // Handle --prune: mark all alive sessions as stopped and exit
-  if args |> List.exists (function Args.Arguments.Prune -> true | _ -> false) then
+  match args |> List.exists (function Args.Arguments.Prune -> true | _ -> false) with
+  | true ->
     let! daemonEvents = persistence.FetchStream daemonStreamId
     let daemonState = Features.Replay.DaemonReplayState.replayStream daemonEvents
     let pruneEvents = Features.Replay.DaemonReplayState.pruneAllSessions daemonState
-    if pruneEvents.IsEmpty then
+    match pruneEvents.IsEmpty with
+    | true ->
       log.LogInformation("No alive sessions to prune")
-    else
+    | false ->
       let! result = persistence.AppendEvents daemonStreamId pruneEvents
       match result with
       | Ok () -> log.LogInformation("Pruned {Count} session(s)", pruneEvents.Length)
       | Error msg -> log.LogWarning("Prune failed: {Error}", msg)
     return ()
+  | false -> ()
 
   // Handle shutdown signals
   use cts = new CancellationTokenSource()
@@ -217,13 +224,15 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
     let daemonState = Features.Replay.DaemonReplayState.replayStream daemonEvents
     let eventCount = daemonEvents.Length
     Instrumentation.daemonReplayEventCount.Add(int64 eventCount)
-    if not (isNull replaySpan) then
-      replaySpan.SetTag("event_count", eventCount) |> ignore
+    match isNull replaySpan with
+    | false -> replaySpan.SetTag("event_count", eventCount) |> ignore
+    | true -> ()
     Instrumentation.succeedSpan replaySpan
 
     let aliveSessions = Features.Replay.DaemonReplayState.aliveSessions daemonState
 
-    if not aliveSessions.IsEmpty then
+    match aliveSessions.IsEmpty with
+    | false ->
       // Dedup phase
       let dedupSpan = Instrumentation.startSpan Instrumentation.sessionSource "sagefs.daemon.session_dedup" []
       // Deduplicate by working directory + projects — resume one session per (dir, projects) pair
@@ -247,11 +256,14 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
             {| SessionId = staleId; StoppedAt = DateTimeOffset.UtcNow |}
         ]
         ()
-      if prunedCount > 0 then
-        Instrumentation.daemonDuplicatesPruned.Add(int64 prunedCount)
-      if not (isNull dedupSpan) then
+      match prunedCount > 0 with
+      | true -> Instrumentation.daemonDuplicatesPruned.Add(int64 prunedCount)
+      | false -> ()
+      match isNull dedupSpan with
+      | false ->
         dedupSpan.SetTag("alive_count", aliveSessions.Length) |> ignore
         dedupSpan.SetTag("dedup_removed", prunedCount) |> ignore
+      | true -> ()
       Instrumentation.succeedSpan dedupSpan
 
       log.LogInformation("Resuming {Count} previous session(s) ({Stale} stale duplicates cleaned)",
@@ -287,8 +299,9 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
             log.LogWarning("Failed to resume session for {WorkingDir}: {Error}", prev.WorkingDir, err)
         })
       do! System.Threading.Tasks.Task.WhenAll(resumeTasks) :> System.Threading.Tasks.Task
-      if not (isNull resumeSpan) then
-        resumeSpan.SetTag("resumed_count", existing.Length) |> ignore
+      match isNull resumeSpan with
+      | false -> resumeSpan.SetTag("resumed_count", existing.Length) |> ignore
+      | true -> ()
       Instrumentation.succeedSpan resumeSpan
 
       // Sessions restored — clients will discover them via listing
@@ -296,8 +309,9 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
       match daemonState.ActiveSessionId with
       | Some _ -> () // Previously tracked active session — clients resolve on connect
       | None -> ()
-    else
-      if not initialProjects.IsEmpty then
+    | true ->
+      match initialProjects.IsEmpty with
+      | false ->
         // Multi-project: create one session per project for independent workers
         log.LogInformation("No previous sessions. Creating {Count} session(s) from --proj args", initialProjects.Length)
         let createTasks =
@@ -313,7 +327,7 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
               log.LogWarning("Failed to create session for {Project}: {Error}", proj, err)
           })
         do! System.Threading.Tasks.Task.WhenAll(createTasks) :> System.Threading.Tasks.Task
-      else
+      | true ->
         log.LogInformation("No previous sessions to resume. Waiting for clients to create sessions")
 
     startupSw.Stop()
@@ -384,11 +398,13 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
       // Fire SSE event with summary JSON — deduplicated
       try
         let json = SseDedupKey.fromModel model
-        if json <> lastStateJson then
+        match json <> lastStateJson with
+        | true ->
           lastStateJson <- json
           let outputChanged = outputCount <> lastLoggedOutputCount
           let diagChanged = diagCount <> lastLoggedDiagCount
-          if not TerminalUIState.IsActive && (outputChanged || diagChanged) then
+          match (not TerminalUIState.IsActive) && (outputChanged || diagChanged) with
+          | true ->
             lastLoggedOutputCount <- outputCount
             lastLoggedDiagCount <- diagCount
             let latest =
@@ -398,7 +414,9 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
               |> Option.defaultValue ""
             eprintfn "\x1b[36m[elm]\x1b[0m output=%d diags=%d | %s"
               outputCount diagCount latest
+          | false -> ()
           stateChangedEvent.Trigger (ModelChanged json)
+        | false -> ()
       with ex -> eprintfn "[elm] State change propagation error: %s (%s)" ex.Message (ex.GetType().Name))
 
   // Create a diagnostics-changed event (aggregated from workers)
@@ -462,11 +480,13 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
         |> List.distinct
       | None -> [ workingDir ]
     let locations =
-      if Features.LiveTesting.TestTreeSitter.isAvailable () then
+      match Features.LiveTesting.TestTreeSitter.isAvailable () with
+      | true ->
         projectDirs
         |> List.toArray
         |> Array.collect (fun dir ->
-          if IO.Directory.Exists dir then
+          match IO.Directory.Exists dir with
+          | true ->
             IO.Directory.GetFiles(dir, "*.fs", IO.SearchOption.AllDirectories)
             |> Array.filter (fun f ->
               let rel = f.Substring(dir.Length)
@@ -478,15 +498,18 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
                 let code = IO.File.ReadAllText f
                 Features.LiveTesting.TestTreeSitter.discover f code
               with _ -> Array.empty)
-          else Array.empty)
-      else Array.empty
+          | false -> Array.empty)
+      | false -> Array.empty
     // Dispatch locations BEFORE tests so mergeSourceLocations can enrich them
-    if not (Array.isEmpty locations) then
-      elmRuntime.Dispatch(SageFsMsg.Event (SageFsEvent.TestLocationsDetected (sid, locations)))
-    if not (Array.isEmpty tests) then
-      elmRuntime.Dispatch(SageFsMsg.Event (SageFsEvent.TestsDiscovered (sid, tests)))
-    if not (List.isEmpty providers) then
-      elmRuntime.Dispatch(SageFsMsg.Event (SageFsEvent.ProvidersDetected providers))
+    match Array.isEmpty locations with
+    | false -> elmRuntime.Dispatch(SageFsMsg.Event (SageFsEvent.TestLocationsDetected (sid, locations)))
+    | true -> ()
+    match Array.isEmpty tests with
+    | false -> elmRuntime.Dispatch(SageFsMsg.Event (SageFsEvent.TestsDiscovered (sid, tests)))
+    | true -> ()
+    match List.isEmpty providers with
+    | false -> elmRuntime.Dispatch(SageFsMsg.Event (SageFsEvent.ProvidersDetected providers))
+    | true -> ()
 
   // Wire instrumentation maps from SessionManager → Elm model
   onInstrumentationMapsCallback <- fun sid maps ->
@@ -526,9 +549,11 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
     for path in paths do
       try
         let fi = System.IO.FileInfo(path)
-        if fi.Exists && fi.Length < 1_048_576L then
+        match fi.Exists && fi.Length < 1_048_576L with
+        | true ->
           let content = System.IO.File.ReadAllText(path)
           elmRuntime.Dispatch(SageFsMsg.FileContentChanged(path, content))
+        | false -> ()
       with
       | :? System.IO.IOException -> ()
       | :? System.UnauthorizedAccessException -> ()
@@ -539,12 +564,14 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
 
   let handleFileChanged (e: System.IO.FileSystemEventArgs) =
     let path = e.FullPath
-    if SageFs.FileWatcher.shouldTriggerRebuild
+    match SageFs.FileWatcher.shouldTriggerRebuild
         { Directories = [workingDir]; Extensions = [".fs"; ".fsx"]; ExcludePatterns = []; DebounceMs = 200 }
-        path then
+        path with
+    | true ->
       lock liveTestWatcherLock (fun () ->
         liveTestPendingPaths <- liveTestPendingPaths |> Set.add path
         liveTestDebounceTimer.Change(200, System.Threading.Timeout.Infinite) |> ignore)
+    | false -> ()
 
   let liveTestWatcher = new System.IO.FileSystemWatcher(workingDir)
   liveTestWatcher.IncludeSubdirectories <- true
@@ -599,8 +626,9 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
   }
 
   let getSessionState (sid: string) =
-    if String.IsNullOrEmpty(sid) then SessionState.Uninitialized
-    else
+    match String.IsNullOrEmpty(sid) with
+    | true -> SessionState.Uninitialized
+    | false ->
       let snapshot = readSnapshot()
       match SessionManager.QuerySnapshot.tryGetSession sid snapshot with
       | Some info -> WorkerProtocol.SessionStatus.toSessionState info.Status
@@ -807,8 +835,9 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
     ConnectionTracker = Some connectionTracker
     SessionThemes = sessionThemes
     GetCompletions = Some (fun (sessionId: string) (code: string) (cursorPos: int) -> task {
-      if String.IsNullOrEmpty(sessionId) then return []
-      else
+      match String.IsNullOrEmpty(sessionId) with
+      | true -> return []
+      | false ->
       try
         let! proxy = sessionOps.GetProxy sessionId
         match proxy with
@@ -849,7 +878,9 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
           ctx.Response.ContentType <- "application/json"
           ctx.Response.StatusCode <- statusCode
           do! ctx.Response.WriteAsync(respBody)
-          if triggerChange then stateChangedEvent.Trigger HotReloadChanged
+          match triggerChange with
+          | true -> stateChangedEvent.Trigger HotReloadChanged
+          | false -> ()
         with ex ->
           ctx.Response.StatusCode <- 502
           do! ctx.Response.WriteAsJsonAsync({| error = ex.Message |})
@@ -943,10 +974,11 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
   // Resume sessions in background — don't block the daemon main task.
   // Each resumed session dispatches ListSessions so dashboard sees them incrementally.
   let _resumeTask =
-    if noResume then
+    match noResume with
+    | true ->
       log.LogInformation("Session resume skipped (--no-resume)")
       System.Threading.Tasks.Task.CompletedTask
-    else
+    | false ->
       System.Threading.Tasks.Task.Run(fun () ->
         task {
           try
@@ -995,8 +1027,9 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
       sessionManager.PostAndAsyncReply(fun reply ->
         SessionManager.SessionCommand.StopAll reply)
       |> Async.StartAsTask
-    if not (stopTask.Wait(TimeSpan.FromSeconds(3.0))) then
-      log.LogWarning("StopAll timed out — some workers may not have stopped cleanly")
+    match stopTask.Wait(TimeSpan.FromSeconds(3.0)) with
+    | false -> log.LogWarning("StopAll timed out — some workers may not have stopped cleanly")
+    | true -> ()
   with ex ->
     log.LogWarning("Shutdown cleanup error: {Error}", ex.Message)
 }
