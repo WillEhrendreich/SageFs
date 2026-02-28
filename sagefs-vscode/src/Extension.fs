@@ -597,16 +597,7 @@ let evalAdvance () =
   }
 
 let cancelEvalCmd () =
-  match client with
-  | Some c ->
-    Client.cancelEval c
-    |> Promise.iter (fun result ->
-      match result with
-      | Client.Succeeded _ ->
-        Window.showInformationMessage "Eval cancelled." [||] |> ignore
-      | Client.Failed err ->
-        Window.showWarningMessage err [||] |> ignore)
-  | None -> Window.showWarningMessage "SageFs is not connected" [||] |> ignore
+  simpleCommand "Eval cancelled" Client.cancelEval
 
 let loadScriptCmd () =
   withClient (fun c ->
@@ -710,7 +701,7 @@ let activate (context: ExtensionContext) =
   reg "sagefs.evalFile" (fun _ -> evalFile () |> ignore)
   reg "sagefs.evalRange" (fun args -> evalRange args |> ignore)
   reg "sagefs.evalAdvance" (fun _ -> evalAdvance () |> ignore)
-  reg "sagefs.cancelEval" (fun _ -> cancelEvalCmd ())
+  reg "sagefs.cancelEval" (fun _ -> cancelEvalCmd () |> ignore)
   reg "sagefs.loadScript" (fun _ -> loadScriptCmd () |> ignore)
   reg "sagefs.start" (fun _ -> startDaemon () |> ignore)
   reg "sagefs.stop" (fun _ -> stopDaemon ())
@@ -728,51 +719,44 @@ let activate (context: ExtensionContext) =
   reg "sagefs.runTests" (fun _ ->
     simpleCommand "Tests queued" (Client.runTests "") |> ignore)
   reg "sagefs.setRunPolicy" (fun _ ->
-    match client with
-    | Some c ->
-      Window.showQuickPick
-        [| "unit"; "integration"; "browser"; "benchmark"; "architecture"; "property" |]
-        "Select test category"
-      |> Promise.iter (fun catOpt ->
+    withClient (fun c ->
+      promise {
+        let! catOpt = Window.showQuickPick
+                        [| "unit"; "integration"; "browser"; "benchmark"; "architecture"; "property" |]
+                        "Select test category"
         match catOpt with
         | Some cat ->
-          Window.showQuickPick
-            [| "every"; "save"; "demand"; "disabled" |]
-            (sprintf "Set policy for %s tests" cat)
-          |> Promise.iter (fun polOpt ->
-            match polOpt with
-            | Some pol ->
-              Client.setRunPolicy cat pol c
-              |> Promise.iter (fun result ->
-                match Client.ApiOutcome.message result with
-                | Some msg -> Window.showInformationMessage msg [||] |> ignore
-                | None -> ())
-            | None -> ())
-        | None -> ())
-    | None -> Window.showWarningMessage "SageFs is not connected" [||] |> ignore)
+          let! polOpt = Window.showQuickPick
+                          [| "every"; "save"; "demand"; "disabled" |]
+                          (sprintf "Set policy for %s tests" cat)
+          match polOpt with
+          | Some pol ->
+            let! result = Client.setRunPolicy cat pol c
+            result
+            |> Client.ApiOutcome.message
+            |> Option.iter (fun msg -> Window.showInformationMessage msg [||] |> ignore)
+          | None -> ()
+        | None -> ()
+      }) |> ignore)
   reg "sagefs.showHistory" (fun _ ->
-    match client with
-    | Some c ->
-      Client.getRecentEvents 30 c
-      |> Promise.iter (fun bodyOpt ->
+    withClient (fun c ->
+      promise {
+        let! bodyOpt = Client.getRecentEvents 30 c
         match bodyOpt with
         | Some body ->
           let lines = body.Split('\n') |> Array.filter (fun l -> l.Trim().Length > 0)
           match lines with
-          | [||] ->
-            Window.showInformationMessage "No recent events" [||] |> ignore
-          | _ ->
-            Window.showQuickPick lines "Recent SageFs events"
-            |> Promise.iter (fun _ -> ())
-        | None -> Window.showWarningMessage "Could not fetch events" [||] |> ignore)
-    | None -> Window.showWarningMessage "SageFs is not connected" [||] |> ignore)
+          | [||] -> Window.showInformationMessage "No recent events" [||] |> ignore
+          | _ -> Window.showQuickPick lines "Recent SageFs events" |> Promise.start
+        | None -> Window.showWarningMessage "Could not fetch events" [||] |> ignore
+      }) |> ignore)
   reg "sagefs.showCallGraph" (fun _ ->
-    match client with
-    | Some c ->
-      // First show overview, then let user pick a symbol for detail
-      Client.getDependencyGraph "" c
-      |> Promise.iter (fun bodyOpt ->
-        match bodyOpt with
+    withClient (fun c ->
+      promise {
+        let! overviewOpt = Client.getDependencyGraph "" c
+        match overviewOpt with
+        | None ->
+          Window.showWarningMessage "Could not fetch dependency graph" [||] |> ignore
         | Some body ->
           let parsed = jsonParse body
           let total: int = parsed?TotalSymbols |> unbox
@@ -780,79 +764,77 @@ let activate (context: ExtensionContext) =
           | 0 ->
             Window.showInformationMessage "No dependency graph available yet" [||] |> ignore
           | _ ->
-            Window.showInputBox (sprintf "Enter symbol name (%d symbols tracked)" total)
-            |> Promise.iter (fun inputOpt ->
-              match inputOpt with
-              | Some sym when sym.Trim().Length > 0 ->
-                Client.getDependencyGraph (sym.Trim()) c
-                |> Promise.iter (fun detailOpt ->
-                  match detailOpt with
-                  | Some detail ->
-                    let parsed2 = jsonParse detail
-                    let tests: obj array = parsed2?Tests |> unbox
-                    match tests with
-                    | [||] ->
-                      Window.showInformationMessage (sprintf "No tests cover '%s'" sym) [||] |> ignore
-                    | _ ->
-                      let items =
-                        tests |> Array.map (fun t ->
-                          let name: string = t?TestName |> unbox
-                          let status: string = t?Status |> unbox
-                          let icon = match status with "passed" -> "✓" | "failed" -> "✗" | _ -> "●"
-                          sprintf "%s %s [%s]" icon name status)
-                      Window.showQuickPick items (sprintf "Tests covering '%s'" sym)
-                      |> Promise.iter (fun _ -> ())
-                  | None -> Window.showWarningMessage "Could not fetch graph" [||] |> ignore)
-              | _ -> ())
-        | None -> Window.showWarningMessage "Could not fetch dependency graph" [||] |> ignore)
-    | None -> Window.showWarningMessage "SageFs is not connected" [||] |> ignore)
+            let! inputOpt = Window.showInputBox (sprintf "Enter symbol name (%d symbols tracked)" total)
+            match inputOpt with
+            | Some sym when sym.Trim().Length > 0 ->
+              let! detailOpt = Client.getDependencyGraph (sym.Trim()) c
+              match detailOpt with
+              | None ->
+                Window.showWarningMessage "Could not fetch graph" [||] |> ignore
+              | Some detail ->
+                let parsed2 = jsonParse detail
+                let tests: obj array = parsed2?Tests |> unbox
+                match tests with
+                | [||] ->
+                  Window.showInformationMessage (sprintf "No tests cover '%s'" sym) [||] |> ignore
+                | _ ->
+                  let items =
+                    tests |> Array.map (fun t ->
+                      let name: string = t?TestName |> unbox
+                      let status: string = t?Status |> unbox
+                      let icon = match status with "passed" -> "✓" | "failed" -> "✗" | _ -> "●"
+                      sprintf "%s %s [%s]" icon name status)
+                  Window.showQuickPick items (sprintf "Tests covering '%s'" sym) |> Promise.start
+            | _ -> ()
+      }) |> ignore)
   reg "sagefs.showBindings" (fun _ ->
     match liveTestListener |> Option.map (fun l -> l.Bindings ()) with
     | Some [||] | None ->
       Window.showInformationMessage "No FSI bindings yet" [||] |> ignore
     | Some bindings ->
       let items =
-        bindings |> Array.map (fun b ->
-          let name: string = b?Name |> unbox
-          let typeSig: string = b?TypeSig |> unbox
-          let shadow: int = b?ShadowCount |> unbox
-          let shadowLabel = match shadow with n when n > 1 -> sprintf " (×%d)" n | _ -> ""
-          sprintf "%s : %s%s" name typeSig shadowLabel)
+        bindings |> Array.choose (fun b ->
+          match tryField<string> "Name" b, tryField<string> "TypeSig" b with
+          | Some name, Some typeSig ->
+            let shadow = tryField<int> "ShadowCount" b |> Option.defaultValue 0
+            let shadowLabel = match shadow with n when n > 1 -> sprintf " (×%d)" n | _ -> ""
+            Some (sprintf "%s : %s%s" name typeSig shadowLabel)
+          | _ -> None)
       Window.showQuickPick items "FSI Bindings"
-      |> Promise.iter (fun _ -> ()))
+      |> Promise.start)
   reg "sagefs.showPipelineTrace" (fun _ ->
     match liveTestListener |> Option.bind (fun l -> l.PipelineTrace ()) with
     | Some trace ->
-      let enabled: bool = trace?Enabled |> unbox
-      let running: bool = trace?IsRunning |> unbox
-      let total: int = trace?Summary?Total |> unbox
-      let passed: int = trace?Summary?Passed |> unbox
-      let failed: int = trace?Summary?Failed |> unbox
+      let get name = tryField<int> name trace |> Option.defaultValue 0
       let items = [|
-        sprintf "Enabled: %b" enabled
-        sprintf "Running: %b" running
-        sprintf "Total: %d | Passed: %d | Failed: %d" total passed failed
+        sprintf "Enabled: %b" (tryField<bool> "Enabled" trace |> Option.defaultValue false)
+        sprintf "Running: %b" (tryField<bool> "IsRunning" trace |> Option.defaultValue false)
+        sprintf "Total: %d | Passed: %d | Failed: %d"
+          (tryField "Summary" trace |> Option.bind (tryField<int> "Total") |> Option.defaultValue 0)
+          (tryField "Summary" trace |> Option.bind (tryField<int> "Passed") |> Option.defaultValue 0)
+          (tryField "Summary" trace |> Option.bind (tryField<int> "Failed") |> Option.defaultValue 0)
       |]
-      Window.showQuickPick items "Pipeline Trace"
-      |> Promise.iter (fun _ -> ())
+      Window.showQuickPick items "Pipeline Trace" |> Promise.start
     | None -> Window.showInformationMessage "No pipeline trace data yet" [||] |> ignore)
 
   reg "sagefs.exportSession" (fun _ ->
-    match client, activeSessionId with
-    | None, _ -> Window.showWarningMessage "SageFs is not connected" [||] |> ignore
-    | _, None -> Window.showInformationMessage "No active session" [||] |> ignore
-    | Some c, Some sid ->
-      Client.exportSessionAsFsx sid c
-      |> Promise.iter (fun result ->
-        match result with
-        | None -> Window.showErrorMessage "Failed to export session" [||] |> ignore
-        | Some r ->
-          match r.evalCount with
-          | 0 -> Window.showInformationMessage "No evaluations to export" [||] |> ignore
-          | _ ->
-            Workspace.openTextDocument r.content "fsharp"
-            |> Promise.bind (fun doc -> Window.showTextDocument doc)
-            |> Promise.iter (fun _ -> ())))
+    withClient (fun c ->
+      promise {
+        match activeSessionId with
+        | None ->
+          Window.showInformationMessage "No active session" [||] |> ignore
+        | Some sid ->
+          let! result = Client.exportSessionAsFsx sid c
+          match result with
+          | None ->
+            Window.showErrorMessage "Failed to export session" [||] |> ignore
+          | Some r ->
+            match r.evalCount with
+            | 0 -> Window.showInformationMessage "No evaluations to export" [||] |> ignore
+            | _ ->
+              let! doc = Workspace.openTextDocument r.content "fsharp"
+              Window.showTextDocument doc |> Promise.start
+      }) |> ignore)
   let lensProvider = Lens.create ()
   context.subscriptions.Add (Languages.registerCodeLensProvider "fsharp" lensProvider)
   let testLensProvider = TestLens.create ()
