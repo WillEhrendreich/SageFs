@@ -341,6 +341,15 @@ and ensureRunning () =
 
 // ── Commands ───────────────────────────────────────────────────
 
+/// Wraps the ensureRunning + getClient boilerplate.
+let withClient (action: Client.Client -> JS.Promise<unit>) =
+  promise {
+    let! ok = ensureRunning ()
+    match ok with
+    | false -> ()
+    | true -> do! action (getClient ())
+  }
+
 let evalSelection () =
   promise {
     match Window.getActiveTextEditor () with
@@ -460,37 +469,26 @@ let evalRange (args: obj) =
   }
 
 let resetSessionCmd () =
-  promise {
-    let! ok = ensureRunning ()
-    match ok with
-    | false -> ()
-    | true ->
-      let c = getClient ()
+  withClient (fun c ->
+    promise {
       let! result = Client.resetSession c
       let msg = result |> Client.ApiOutcome.messageOrDefault "Reset complete"
       Window.showInformationMessage (sprintf "SageFs: %s" msg) [||] |> ignore
       refreshStatus ()
-  }
+    })
 
 let hardResetCmd () =
-  promise {
-    let! ok = ensureRunning ()
-    match ok with
-    | false -> ()
-    | true ->
-      let c = getClient ()
+  withClient (fun c ->
+    promise {
       let! result = Client.hardReset true c
       let msg = result |> Client.ApiOutcome.messageOrDefault "Hard reset complete"
       Window.showInformationMessage (sprintf "SageFs: %s" msg) [||] |> ignore
       refreshStatus ()
-  }
+    })
 
 let createSessionCmd () =
-  promise {
-    let! ok = ensureRunning ()
-    match ok with
-    | false -> ()
-    | true ->
+  withClient (fun c ->
+    promise {
       let! projPath = findProject ()
       match projPath with
       | None ->
@@ -499,7 +497,6 @@ let createSessionCmd () =
         let workDir = getWorkingDirectory () |> Option.defaultValue "."
         do! Window.withProgress ProgressLocation.Notification "SageFs: Creating session..." (fun _p _t ->
           promise {
-            let c = getClient ()
             let! result = Client.createSession proj workDir c
             match result with
             | Client.Succeeded _ ->
@@ -509,7 +506,7 @@ let createSessionCmd () =
             refreshStatus ()
           }
         )
-  }
+    })
 
 let private formatSessionLabel (s: Client.SessionInfo) =
   let proj =
@@ -519,12 +516,8 @@ let private formatSessionLabel (s: Client.SessionInfo) =
   sprintf "%s (%s) [%s]" s.id proj s.status
 
 let switchSessionCmd () =
-  promise {
-    let! ok = ensureRunning ()
-    match ok with
-    | false -> ()
-    | true ->
-      let c = getClient ()
+  withClient (fun c ->
+    promise {
       let! sessions = Client.listSessions c
       match sessions with
       | [||] ->
@@ -548,15 +541,11 @@ let switchSessionCmd () =
             refreshStatus ()
           | None -> ()
         | None -> ()
-  }
+    })
 
 let stopSessionCmd () =
-  promise {
-    let! ok = ensureRunning ()
-    match ok with
-    | false -> ()
-    | true ->
-      let c = getClient ()
+  withClient (fun c ->
+    promise {
       let! sessions = Client.listSessions c
       match sessions with
       | [||] ->
@@ -582,7 +571,7 @@ let stopSessionCmd () =
             refreshStatus ()
           | None -> ()
         | None -> ()
-  }
+    })
 
 let stopDaemon () =
   daemonProcess |> Option.iter killProc
@@ -680,14 +669,10 @@ let cancelEvalCmd () =
   | None -> Window.showWarningMessage "SageFs is not connected" [||] |> ignore
 
 let loadScriptCmd () =
-  promise {
-    let! ok = ensureRunning ()
-    match ok with
-    | false -> ()
-    | true ->
+  withClient (fun c ->
+    promise {
       match Window.getActiveTextEditor () with
       | Some ed when ed.document.fileName.EndsWith(".fsx") ->
-        let c = getClient ()
         let! result = Client.loadScript ed.document.fileName c
         match result with
         | Client.Succeeded _ ->
@@ -697,7 +682,7 @@ let loadScriptCmd () =
           Window.showErrorMessage err [||] |> ignore
       | _ ->
         Window.showWarningMessage "Open an .fsx file to load it as a script." [||] |> ignore
-  }
+    })
 
 let promptAutoStart () =
   promise {
