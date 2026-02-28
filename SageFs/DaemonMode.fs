@@ -369,16 +369,36 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
   let getWarmupContextForMcp (sessionId: string) : System.Threading.Tasks.Task<WarmupContext option> =
     task {
       try
-        let! managed =
-          sessionManager.PostAndAsyncReply(fun reply ->
-            SessionManager.SessionCommand.GetSession(sessionId, reply))
-          |> Async.StartAsTask
-        match managed with
-        | Some s when s.WorkerBaseUrl.Length > 0 ->
+        // CQRS read path — bypass mailbox, use snapshot for worker URL
+        let snapshot = readSnapshot()
+        match Map.tryFind sessionId snapshot.WorkerBaseUrls with
+        | Some baseUrl when baseUrl.Length > 0 ->
           let client = new Net.Http.HttpClient()
-          let! resp = client.GetStringAsync(sprintf "%s/warmup-context" s.WorkerBaseUrl)
+          client.Timeout <- System.TimeSpan.FromSeconds(5.0)
+          let! resp = client.GetStringAsync(sprintf "%s/warmup-context" baseUrl)
           let ctx = WorkerProtocol.Serialization.deserialize<WarmupContext> resp
           return Some ctx
+        | _ -> return None
+      with _ -> return None
+    }
+
+  // Hotreload state fetcher for MCP — returns watched file paths
+  let getHotReloadStateForMcp (sessionId: string) : System.Threading.Tasks.Task<string list option> =
+    task {
+      try
+        let snapshot = readSnapshot()
+        match Map.tryFind sessionId snapshot.WorkerBaseUrls with
+        | Some baseUrl when baseUrl.Length > 0 ->
+          let client = new Net.Http.HttpClient()
+          client.Timeout <- System.TimeSpan.FromSeconds(5.0)
+          let! resp = client.GetStringAsync(sprintf "%s/hotreload" baseUrl)
+          let doc = System.Text.Json.JsonDocument.Parse(resp)
+          let files =
+            doc.RootElement.GetProperty("files").EnumerateArray()
+            |> Seq.filter (fun f -> f.GetProperty("watched").GetBoolean())
+            |> Seq.map (fun f -> f.GetProperty("path").GetString())
+            |> Seq.toList
+          return Some files
         | _ -> return None
       with _ -> return None
     }
@@ -440,6 +460,7 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
       sessionOps
       (Some elmRuntime)
       (Some getWarmupContextForMcp)
+      (Some getHotReloadStateForMcp)
 
   // Pipeline tick timer — drives debounce channels for live testing (50ms fixed interval)
   let pipelineTimer = new System.Threading.Timer(

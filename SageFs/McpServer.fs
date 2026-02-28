@@ -263,7 +263,7 @@ let mkContext (persistence: SageFs.EventStore.EventPersistence) (diagnosticsChan
   { Persistence = persistence; DiagnosticsChanged = diagnosticsChanged; StateChanged = stateChanged; SessionOps = sessionOps; SessionMap = System.Collections.Concurrent.ConcurrentDictionary<string, string>(); McpPort = mcpPort; Dispatch = dispatch; GetElmModel = getElmModel; GetElmRegions = getElmRegions; GetWarmupContext = getWarmupContext }
 
 // Start MCP server in background
-let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.T>) (stateChanged: IEvent<string> option) (persistence: SageFs.EventStore.EventPersistence) (port: int) (sessionOps: SageFs.SessionManagementOps) (elmRuntime: SageFs.ElmRuntime<SageFs.SageFsModel, SageFs.SageFsMsg, SageFs.RenderRegion> option) (getWarmupContext: (string -> System.Threading.Tasks.Task<SageFs.WarmupContext option>) option) =
+let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.T>) (stateChanged: IEvent<string> option) (persistence: SageFs.EventStore.EventPersistence) (port: int) (sessionOps: SageFs.SessionManagementOps) (elmRuntime: SageFs.ElmRuntime<SageFs.SageFsModel, SageFs.SageFsMsg, SageFs.RenderRegion> option) (getWarmupContext: (string -> System.Threading.Tasks.Task<SageFs.WarmupContext option>) option) (getHotReloadState: (string -> System.Threading.Tasks.Task<string list option>) option) =
     task {
         try
             let dispatch = elmRuntime |> Option.map (fun r -> r.Dispatch)
@@ -565,6 +565,43 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                 } :> Task
             ) |> ignore
 
+            let replaySessionSnapshot (body: System.IO.Stream) =
+              match getElmModel, getWarmupContext with
+              | Some getModel, Some getCtx ->
+                task {
+                  try
+                    let activeId =
+                      let model = getModel()
+                      SageFs.ActiveSession.sessionId model.Sessions.ActiveSessionId
+                      |> Option.defaultValue ""
+                    if activeId.Length > 0 then
+                      // Replay warmup context
+                      let! ctxOpt = getCtx activeId
+                      match ctxOpt with
+                      | Some ctx ->
+                        let evt = SageFs.SessionEvents.WarmupContextSnapshot(activeId, ctx)
+                        let frame = SageFs.SessionEvents.formatSessionSseEvent evt
+                        let bytes = System.Text.Encoding.UTF8.GetBytes(frame)
+                        do! body.WriteAsync(bytes)
+                        do! body.FlushAsync()
+                      | None -> ()
+                      // Replay hotreload state
+                      match getHotReloadState with
+                      | Some getHr ->
+                        let! hrOpt = getHr activeId
+                        match hrOpt with
+                        | Some watchedFiles ->
+                          let hrEvt = SageFs.SessionEvents.HotReloadSnapshot(activeId, watchedFiles)
+                          let hrFrame = SageFs.SessionEvents.formatSessionSseEvent hrEvt
+                          let hrBytes = System.Text.Encoding.UTF8.GetBytes(hrFrame)
+                          do! body.WriteAsync(hrBytes)
+                          do! body.FlushAsync()
+                        | None -> ()
+                      | None -> ()
+                  with _ -> ()
+                }
+              | _ -> task { () }
+
             let replayCachedTestState (body: System.IO.Stream) =
               match getElmModel with
               | Some getModel ->
@@ -649,6 +686,8 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                                 ctx.Response.Body.WriteAsync(bytes).AsTask()
                                 |> fun t -> t.ContinueWith(fun (_: Task) -> ctx.Response.Body.FlushAsync()) |> ignore
                             with _ -> ())
+                        // Replay session snapshot FIRST (warmup context) — awaited to ensure delivery
+                        do! replaySessionSnapshot ctx.Response.Body
                         // Replay current test state on new SSE connection
                         replayCachedTestState ctx.Response.Body
                         do! tcs.Task
