@@ -475,15 +475,16 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
 
   // Start MCP server
   let mcpTask =
-    McpServer.startMcpServer
-      diagnosticsChanged.Publish
-      (Some stateChangedEvent.Publish)
-      persistence
-      mcpPort
-      sessionOps
-      (Some elmRuntime)
-      (Some getWarmupContextForMcp)
-      (Some getHotReloadStateForMcp)
+    McpServer.startMcpServer {
+      DiagnosticsChanged = diagnosticsChanged.Publish
+      StateChanged = Some stateChangedEvent.Publish
+      Persistence = persistence
+      Port = mcpPort
+      SessionOps = sessionOps
+      ElmRuntime = Some elmRuntime
+      GetWarmupContext = Some getWarmupContextForMcp
+      GetHotReloadState = Some getHotReloadStateForMcp
+    }
 
   // Pipeline tick timer — drives debounce channels for live testing (50ms fixed interval)
   let pipelineTimer = new System.Threading.Timer(

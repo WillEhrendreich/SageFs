@@ -286,17 +286,32 @@ let writeSseFrameSync (body: System.IO.Stream) (frame: string) =
     body.Flush()
   with _ -> () // Stream closed — client disconnected
 
+/// Configuration for the MCP server — replaces 8 positional params on startMcpServer.
+type McpServerConfig = {
+  DiagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.T>
+  StateChanged: IEvent<DaemonStateChange> option
+  Persistence: SageFs.EventStore.EventPersistence
+  Port: int
+  SessionOps: SageFs.SessionManagementOps
+  ElmRuntime: SageFs.ElmRuntime<SageFs.SageFsModel, SageFs.SageFsMsg, SageFs.RenderRegion> option
+  GetWarmupContext: (string -> Task<SageFs.WarmupContext option>) option
+  GetHotReloadState: (string -> Task<string list option>) option
+}
+
 // Create shared MCP context
-let mkContext (persistence: SageFs.EventStore.EventPersistence) (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.T>) (stateChanged: IEvent<string> option) (sessionOps: SageFs.SessionManagementOps) (mcpPort: int) (dispatch: (SageFs.SageFsMsg -> unit) option) (getElmModel: (unit -> SageFs.SageFsModel) option) (getElmRegions: (unit -> SageFs.RenderRegion list) option) (getWarmupContext: (string -> System.Threading.Tasks.Task<SageFs.WarmupContext option>) option) : McpContext =
-  { Persistence = persistence; DiagnosticsChanged = diagnosticsChanged; StateChanged = stateChanged; SessionOps = sessionOps; SessionMap = System.Collections.Concurrent.ConcurrentDictionary<string, string>(); McpPort = mcpPort; Dispatch = dispatch; GetElmModel = getElmModel; GetElmRegions = getElmRegions; GetWarmupContext = getWarmupContext }
+let mkContext (cfg: McpServerConfig) (stateChangedStr: IEvent<string> option) : McpContext =
+  let dispatch = cfg.ElmRuntime |> Option.map (fun r -> r.Dispatch)
+  let getElmModel = cfg.ElmRuntime |> Option.map (fun r -> r.GetModel)
+  let getElmRegions = cfg.ElmRuntime |> Option.map (fun r -> r.GetRegions)
+  { Persistence = cfg.Persistence; DiagnosticsChanged = cfg.DiagnosticsChanged; StateChanged = stateChangedStr; SessionOps = cfg.SessionOps; SessionMap = ConcurrentDictionary<string, string>(); McpPort = cfg.Port; Dispatch = dispatch; GetElmModel = getElmModel; GetElmRegions = getElmRegions; GetWarmupContext = cfg.GetWarmupContext }
 
 // Start MCP server in background
-let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.T>) (stateChanged: IEvent<DaemonStateChange> option) (persistence: SageFs.EventStore.EventPersistence) (port: int) (sessionOps: SageFs.SessionManagementOps) (elmRuntime: SageFs.ElmRuntime<SageFs.SageFsModel, SageFs.SageFsMsg, SageFs.RenderRegion> option) (getWarmupContext: (string -> System.Threading.Tasks.Task<SageFs.WarmupContext option>) option) (getHotReloadState: (string -> System.Threading.Tasks.Task<string list option>) option) =
+let startMcpServer (cfg: McpServerConfig) =
     task {
         try
-            let dispatch = elmRuntime |> Option.map (fun r -> r.Dispatch)
-            let getElmModel = elmRuntime |> Option.map (fun r -> r.GetModel)
-            let getElmRegions = elmRuntime |> Option.map (fun r -> r.GetRegions)
+            let dispatch = cfg.ElmRuntime |> Option.map (fun r -> r.Dispatch)
+            let getElmModel = cfg.ElmRuntime |> Option.map (fun r -> r.GetModel)
+            let getElmRegions = cfg.ElmRuntime |> Option.map (fun r -> r.GetRegions)
             let logPath = System.IO.Path.Combine(System.Environment.GetFolderPath(System.Environment.SpecialFolder.LocalApplicationData), "SageFs", "mcp-server.log")
             System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(logPath)) |> ignore
             
@@ -305,7 +320,7 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
               match System.Environment.GetEnvironmentVariable("SAGEFS_BIND_HOST") with
               | null | "" -> "localhost"
               | h -> h
-            builder.WebHost.UseUrls($"http://%s{bindHost}:%d{port}") |> ignore
+            builder.WebHost.UseUrls($"http://%s{bindHost}:%d{cfg.Port}") |> ignore
 
             // Get version from assembly
             let version = 
@@ -327,7 +342,7 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                     resource
                         .AddService("sagefs-mcp-server", serviceVersion = version)
                         .AddAttributes([
-                            KeyValuePair<string, obj>("mcp.port", port :> obj)
+                            KeyValuePair<string, obj>("mcp.port", cfg.Port :> obj)
                             KeyValuePair<string, obj>("mcp.session", "cli-integrated" :> obj)
                         ]) |> ignore
                 )
@@ -375,12 +390,12 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
             
             // Map typed DU events to strings for McpContext (SageFs.Core can't reference DaemonStateChange)
             let stateChangedStr : IEvent<string> option =
-              stateChanged |> Option.map (fun evt ->
+              cfg.StateChanged |> Option.map (fun evt ->
                 let bridge = Event<string>()
                 evt.Add(DaemonStateChange.toJson >> bridge.Trigger)
                 bridge.Publish)
             // Create MCP context
-            let mcpContext = (mkContext persistence diagnosticsChanged stateChangedStr sessionOps port dispatch getElmModel getElmRegions getWarmupContext)
+            let mcpContext = mkContext cfg stateChangedStr
             
             // Register MCP services
             builder.Services.AddSingleton<McpContext>(mcpContext) |> ignore
@@ -596,7 +611,7 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
 
                     let tcs = System.Threading.Tasks.TaskCompletionSource()
                     use _ct = ctx.RequestAborted.Register(fun () -> tcs.TrySetResult() |> ignore)
-                    use _sub = diagnosticsChanged.Subscribe(fun store ->
+                    use _sub = cfg.DiagnosticsChanged.Subscribe(fun store ->
                         let json = SageFs.McpAdapter.formatDiagnosticsStoreAsJson store
                         let sseEvent = sprintf "event: diagnostics\ndata: %s\n\n" json
                         writeSseFrameSync ctx.Response.Body sseEvent
@@ -607,7 +622,7 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
             ) |> ignore
 
             let replaySessionSnapshot (body: System.IO.Stream) =
-              match getElmModel, getWarmupContext with
+              match getElmModel, cfg.GetWarmupContext with
               | Some getModel, Some getCtx ->
                 task {
                   try
@@ -624,7 +639,7 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                         do! evt |> SageFs.SessionEvents.formatSessionSseEvent |> writeSseFrame body
                       | None -> ()
                       // Replay hotreload state
-                      match getHotReloadState with
+                      match cfg.GetHotReloadState with
                       | Some getHr ->
                         let! hrOpt = getHr activeId
                         match hrOpt with
@@ -683,7 +698,7 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
 
             // Detect hotreload mutations and push typed session events
             // Detect session ready and push warmup context snapshot
-            match stateChanged, getHotReloadState, getElmModel, getWarmupContext with
+            match cfg.StateChanged, cfg.GetHotReloadState, getElmModel, cfg.GetWarmupContext with
             | Some evt, Some getHr, Some getModel, Some getCtx ->
               evt.Subscribe(fun change ->
                 match change with
@@ -736,7 +751,7 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                     ctx.Response.Headers.["Cache-Control"] <- Microsoft.Extensions.Primitives.StringValues("no-cache")
                     ctx.Response.Headers.["Connection"] <- Microsoft.Extensions.Primitives.StringValues("keep-alive")
 
-                    match stateChanged with
+                    match cfg.StateChanged with
                     | Some evt ->
                         let tcs = System.Threading.Tasks.TaskCompletionSource()
                         use _ct = ctx.RequestAborted.Register(fun () -> tcs.TrySetResult() |> ignore)
@@ -786,13 +801,13 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                       match ctx.Request.Query.TryGetValue("sessionId") with
                       | true, v when v.Count > 0 && not (String.IsNullOrWhiteSpace(v.[0])) -> return v.[0]
                       | _ ->
-                        let! sessions = sessionOps.GetAllSessions()
+                        let! sessions = cfg.SessionOps.GetAllSessions()
                         return sessions |> List.tryHead |> Option.map (fun s -> s.Id) |> Option.defaultValue ""
                     }
-                    let! info = sessionOps.GetSessionInfo sid
+                    let! info = cfg.SessionOps.GetSessionInfo sid
                     let! statusResult =
                       task {
-                        let! proxy = sessionOps.GetProxy sid
+                        let! proxy = cfg.SessionOps.GetProxy sid
                         match proxy with
                         | Some send ->
                           let! resp = send (SageFs.WorkerProtocol.WorkerMessage.GetStatus "api") |> Async.StartAsTask
@@ -861,7 +876,7 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                     let version =
                       System.Reflection.Assembly.GetExecutingAssembly().GetName().Version
                       |> Option.ofObj |> Option.map (fun v -> v.ToString()) |> Option.defaultValue "unknown"
-                    let! allSessions = sessionOps.GetAllSessions()
+                    let! allSessions = cfg.SessionOps.GetAllSessions()
                     let data =
                       {| version = version
                          pid = Environment.ProcessId
@@ -869,8 +884,8 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                          supervised = supervised
                          restartCount = restartCount
                          sessionCount = allSessions.Length
-                         mcpPort = port
-                         dashboardPort = port + 1 |}
+                         mcpPort = cfg.Port
+                         dashboardPort = cfg.Port + 1 |}
                     do! jsonResponse ctx 200 data
                 }) :> Task
             ) |> ignore
@@ -878,10 +893,10 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
             // GET /api/sessions — list all sessions with details
             app.MapGet("/api/sessions", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
                 withErrorHandling ctx (fun () -> task {
-                    let! allSessions = sessionOps.GetAllSessions()
+                    let! allSessions = cfg.SessionOps.GetAllSessions()
                     let results = System.Collections.Generic.List<obj>()
                     for sess in allSessions do
-                      let! proxy = sessionOps.GetProxy sess.Id
+                      let! proxy = cfg.SessionOps.GetProxy sess.Id
                       let! evalCount, avgMs, status = task {
                         match proxy with
                         | Some send ->
@@ -910,7 +925,7 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                 withErrorHandling ctx (fun () -> task {
                     let! sid = readJsonProp ctx "sessionId"
                     // Verify session exists
-                    let! info = sessionOps.GetSessionInfo sid
+                    let! info = cfg.SessionOps.GetSessionInfo sid
                     match info with
                     | Some _ ->
                       // Update per-agent session map so /exec and other HTTP endpoints route correctly
@@ -956,7 +971,7 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                           [ projProp.GetString() ]
                         | _ -> []
                       else []
-                    let! result = sessionOps.CreateSession projects workingDir
+                    let! result = cfg.SessionOps.CreateSession projects workingDir
                     match result with
                     | Ok msg ->
                       // Activate the new session for HTTP endpoints
@@ -975,7 +990,7 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
             app.MapPost("/api/sessions/stop", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
                 withErrorHandling ctx (fun () -> task {
                     let! sid = readJsonProp ctx "sessionId"
-                    let! result = sessionOps.StopSession sid
+                    let! result = cfg.SessionOps.StopSession sid
                     match dispatch with
                     | Some d -> d (SageFs.SageFsMsg.Editor SageFs.EditorAction.ListSessions)
                     | None -> ()
@@ -1316,7 +1331,7 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                       | false -> ())
 
             let _stateSub =
-              stateChanged |> Option.map (fun evt ->
+              cfg.StateChanged |> Option.map (fun evt ->
                 evt.Subscribe(fun change ->
                   match change with
                   | DaemonStateChange.ModelChanged json ->
@@ -1356,9 +1371,9 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
             let logger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("SageFs.McpServer")
 
             // Log startup info — structured so OTEL captures it
-            logger.LogInformation("MCP server starting on port {Port}", port)
-            logger.LogInformation("SSE endpoint: http://localhost:{Port}/sse", port)
-            logger.LogInformation("State events SSE: http://localhost:{Port}/events", port)
+            logger.LogInformation("MCP server starting on port {Port}", cfg.Port)
+            logger.LogInformation("SSE endpoint: http://localhost:{Port}/sse", cfg.Port)
+            logger.LogInformation("State events SSE: http://localhost:{Port}/events", cfg.Port)
             logger.LogInformation("Kestrel max connections: {MaxConnections}", 200)
             logger.LogInformation("Log file: {LogPath}", logPath)
             
