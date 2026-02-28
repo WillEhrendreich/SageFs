@@ -1170,6 +1170,23 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                     do! ctx.Response.Body.WriteAsync(System.Text.Encoding.UTF8.GetBytes(result))
                 } :> Task
             ) |> ignore
+
+            // GET /api/sessions/{sid}/export-fsx — export eval history as .fsx script
+            app.MapGet("/api/sessions/{sid}/export-fsx", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
+                withErrorHandling ctx (fun () -> task {
+                    let sid = ctx.Request.RouteValues.["sid"] |> string
+                    let! events = mcpContext.Persistence.FetchStream sid
+                    let replayState =
+                      events
+                      |> SageFs.Features.Replay.SessionReplayState.replayStream
+                    match replayState.EvalHistory with
+                    | [] ->
+                      do! jsonResponse ctx 200 {| content = ""; evalCount = 0 |}
+                    | _ ->
+                      let fsx = SageFs.Features.Replay.SessionReplayState.exportAsFsx replayState
+                      do! jsonResponse ctx 200 {| content = fsx; evalCount = replayState.EvalHistory.Length |}
+                }) :> Task
+            ) |> ignore
             //   1. MCP notifications (for clients that surface them)
             //   2. Event accumulator → appended to next tool response (guaranteed delivery)
             //

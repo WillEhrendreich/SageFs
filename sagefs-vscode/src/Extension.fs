@@ -990,7 +990,22 @@ let activate (context: ExtensionContext) =
       | None -> Window.showInformationMessage "No pipeline trace data yet" [||] |> ignore
     | None -> Window.showInformationMessage "No pipeline trace data yet" [||] |> ignore)
 
-  // CodeLens
+  reg "sagefs.exportSession" (fun _ ->
+    match client, activeSessionId with
+    | None, _ -> Window.showWarningMessage "SageFs is not connected" [||] |> ignore
+    | _, None -> Window.showInformationMessage "No active session" [||] |> ignore
+    | Some c, Some sid ->
+      Client.exportSessionAsFsx sid c
+      |> Promise.iter (fun result ->
+        match result with
+        | None -> Window.showErrorMessage "Failed to export session" [||] |> ignore
+        | Some r ->
+          match r.evalCount with
+          | 0 -> Window.showInformationMessage "No evaluations to export" [||] |> ignore
+          | _ ->
+            Workspace.openTextDocument r.content "fsharp"
+            |> Promise.bind (fun doc -> Window.showTextDocument doc)
+            |> Promise.iter (fun _ -> ())))
   let lensProvider = Lens.create ()
   context.subscriptions.Add (Languages.registerCodeLensProvider "fsharp" lensProvider)
   let testLensProvider = TestLens.create ()

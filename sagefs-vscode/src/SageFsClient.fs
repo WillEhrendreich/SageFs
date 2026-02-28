@@ -556,3 +556,21 @@ let getPipelineTrace (c: Client) =
       logWarn "getPipelineTrace" ex
       return None
   }
+
+type ExportResult =
+  { content: string
+    evalCount: int }
+
+let exportSessionAsFsx (sessionId: string) (c: Client) =
+  promise {
+    try
+      let! resp = httpGet c (sprintf "/api/sessions/%s/export-fsx" (JS.encodeURIComponent sessionId)) 15000
+      match resp.statusCode with
+      | 200 ->
+        let parsed: ExportResult = !!JS.JSON.parse(resp.body)
+        return Some parsed
+      | _ -> return None
+    with ex ->
+      logWarn "exportSessionAsFsx" ex
+      return None
+  }

@@ -311,6 +311,10 @@ module Window =
   let createWebviewPanel (viewType: string) (title: string) (column: int) (opts: obj) =
     _createWebviewPanel windowExports viewType title column opts
 
+  [<Emit("$0.showTextDocument($1)")>]
+  let _showTextDocument (w: obj) (doc: obj) : JS.Promise<obj> = jsNative
+  let showTextDocument (doc: obj) = _showTextDocument windowExports doc
+
 // ── Commands API ────────────────────────────────────────────────
 
 [<Import("commands", "vscode")>]
@@ -362,6 +366,11 @@ module Workspace =
   [<Emit("$0.onDidChangeTextDocument($1)")>]
   let _onDidChangeTextDocument (w: obj) (handler: obj -> unit) : Disposable = jsNative
   let onDidChangeTextDocument (handler: obj -> unit) = _onDidChangeTextDocument workspaceExports handler
+
+  [<Emit("$0.openTextDocument($1)")>]
+  let _openTextDocument (w: obj) (options: obj) : JS.Promise<obj> = jsNative
+  let openTextDocument (content: string) (language: string) =
+    _openTextDocument workspaceExports (createObj [ "content" ==> content; "language" ==> language ])
 
 // ── Languages API ───────────────────────────────────────────────
 

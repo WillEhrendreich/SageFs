@@ -159,6 +159,24 @@ module SessionReplayState =
       state.WarmupErrors.Length
       (state.LastEvalResult |> Option.defaultValue "N/A")
 
+  /// Pure: format eval history as an .fsx script for export.
+  let exportAsFsx (state: SessionReplayState) : string =
+    let header =
+      sprintf "// SageFs session export — %s\n// %d evaluations\n"
+        (DateTimeOffset.UtcNow.ToString("yyyy-MM-dd HH:mm:ss"))
+        state.EvalHistory.Length
+    let formatRecord (i: int) (r: EvalRecord) =
+      let typeSig = r.TypeSignature |> Option.defaultValue ""
+      sprintf "// [%d] %s — %s\n%s\n"
+        (i + 1)
+        (r.Timestamp.ToLocalTime().ToString("HH:mm:ss"))
+        typeSig
+        r.Code
+    state.EvalHistory
+    |> List.mapi formatRecord
+    |> String.concat "\n"
+    |> sprintf "%s%s" header
+
 /// A session record as known to the daemon (from event replay).
 type DaemonSessionRecord = {
   SessionId: string
