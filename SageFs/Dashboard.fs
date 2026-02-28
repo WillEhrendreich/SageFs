@@ -821,6 +821,45 @@ type PreviousSession = {
   LastSeen: DateTime
 }
 
+/// State queries — always-present read accessors for dashboard rendering.
+type DashboardQueries = {
+  GetSessionState: string -> SessionState
+  GetStatusMsg: string -> string option
+  GetEvalStats: string -> Threading.Tasks.Task<SageFs.Affordances.EvalStats>
+  GetSessionWorkingDir: string -> string
+  GetActiveSessionId: unit -> string
+  GetElmRegions: unit -> RenderRegion list option
+  GetPreviousSessions: unit -> Threading.Tasks.Task<PreviousSession list>
+  GetAllSessions: unit -> Threading.Tasks.Task<WorkerProtocol.SessionInfo list>
+  GetStandbyInfo: unit -> Threading.Tasks.Task<StandbyInfo>
+  GetHotReloadState: string -> Threading.Tasks.Task<{| files: {| path: string; watched: bool |} list; watchedCount: int |} option>
+  GetWarmupContext: string -> Threading.Tasks.Task<WarmupContext option>
+  GetWarmupProgress: string -> string
+  GetPipelineTrace: unit -> {| Timing: Features.LiveTesting.PipelineTiming option; IsRunning: bool; Summary: Features.LiveTesting.TestSummary |} option
+  GetLiveTestingStatus: unit -> string
+}
+
+/// Commands that mutate session state.
+type DashboardActions = {
+  EvalCode: string -> string -> Threading.Tasks.Task<string>
+  ResetSession: string -> Threading.Tasks.Task<string>
+  HardResetSession: string -> Threading.Tasks.Task<string>
+  Dispatch: SageFsMsg -> unit
+  SwitchSession: (string -> Threading.Tasks.Task<string>) option
+  StopSession: (string -> Threading.Tasks.Task<string>) option
+  CreateSession: (string list -> string -> Threading.Tasks.Task<Result<string, string>>) option
+  ShutdownCallback: (unit -> unit) option
+}
+
+/// Infrastructure dependencies — event sources, tracking, themes.
+type DashboardInfra = {
+  Version: string
+  StateChanged: IEvent<DaemonStateChange> option
+  ConnectionTracker: ConnectionTracker option
+  SessionThemes: Collections.Concurrent.ConcurrentDictionary<string, string>
+  GetCompletions: (string -> string -> int -> Threading.Tasks.Task<Features.AutoCompletion.CompletionItem list>) option
+}
+
 /// Render the session picker — shown in the main area when no sessions exist.
 let renderSessionPicker (previous: PreviousSession list) =
   Elem.div [ Attr.id "session-picker" ] [
@@ -1391,22 +1430,8 @@ let renderPipelineTraceEmpty =
 
 /// Create the SSE stream handler that pushes Elm state to the browser.
 let createStreamHandler
-  (getSessionState: string -> SessionState)
-  (getStatusMsg: string -> string option)
-  (getEvalStats: string -> Threading.Tasks.Task<SageFs.Affordances.EvalStats>)
-  (getSessionWorkingDir: string -> string)
-  (getActiveSessionId: unit -> string)
-  (getElmRegions: unit -> RenderRegion list option)
-  (stateChanged: IEvent<DaemonStateChange> option)
-  (connectionTracker: ConnectionTracker option)
-  (getPreviousSessions: unit -> Threading.Tasks.Task<PreviousSession list>)
-  (getAllSessions: unit -> Threading.Tasks.Task<WorkerProtocol.SessionInfo list>)
-  (sessionThemes: Collections.Concurrent.ConcurrentDictionary<string, string>)
-  (getStandbyInfo: unit -> Threading.Tasks.Task<StandbyInfo>)
-  (getHotReloadState: string -> Threading.Tasks.Task<{| files: {| path: string; watched: bool |} list; watchedCount: int |} option>)
-  (getWarmupContext: string -> Threading.Tasks.Task<WarmupContext option>)
-  (getWarmupProgress: string -> string)
-  (getPipelineTrace: unit -> {| Timing: Features.LiveTesting.PipelineTiming option; IsRunning: bool; Summary: Features.LiveTesting.TestSummary |} option)
+  (q: DashboardQueries)
+  (infra: DashboardInfra)
   : HttpHandler =
   fun ctx -> task {
     SageFs.Instrumentation.sseConnectionsActive.Add(1L)
@@ -1414,23 +1439,23 @@ let createStreamHandler
 
     let clientId = Guid.NewGuid().ToString("N").[..7]
     // Resolve initial session: first available session (observer behavior — don't create)
-    let! sessions = getAllSessions ()
+    let! sessions = q.GetAllSessions ()
     let mutable currentSessionId =
       sessions |> List.tryHead |> Option.map (fun s -> s.Id) |> Option.defaultValue ""
-    connectionTracker |> Option.iter (fun t -> t.Register(clientId, Browser, currentSessionId))
+    infra.ConnectionTracker |> Option.iter (fun t -> t.Register(clientId, Browser, currentSessionId))
     let mutable lastSessionId = ""
     let mutable lastWorkingDir = ""
     let mutable lastOutputHash = 0
 
     let pushState () = task {
       // Track daemon's active session for theme switching
-      let activeId = getActiveSessionId ()
+      let activeId = q.GetActiveSessionId ()
       if activeId.Length > 0 then
         currentSessionId <- activeId
-      let state = getSessionState currentSessionId
-      let! stats = getEvalStats currentSessionId
+      let state = q.GetSessionState currentSessionId
+      let! stats = q.GetEvalStats currentSessionId
       let stateStr = SessionState.label state
-      let workingDir = getSessionWorkingDir currentSessionId
+      let workingDir = q.GetSessionWorkingDir currentSessionId
       // Push sessionId signal so eval form can include it
       do! Response.ssePatchSignal ctx (SignalPath.sp "sessionId") currentSessionId
       let avgMs =
@@ -1439,9 +1464,9 @@ let createStreamHandler
         else 0.0
       let isReady = stateStr = "Ready"
       do! ssePatchNode ctx (
-        renderSessionStatus stateStr currentSessionId workingDir (getWarmupProgress currentSessionId))
+        renderSessionStatus stateStr currentSessionId workingDir (q.GetWarmupProgress currentSessionId))
       // Push theme when session or working dir changes
-      match resolveThemePush sessionThemes currentSessionId workingDir lastSessionId lastWorkingDir with
+      match resolveThemePush infra.SessionThemes currentSessionId workingDir lastSessionId lastWorkingDir with
       | Some themeName ->
         do! ssePatchNode ctx (renderThemeVars themeName)
         do! ssePatchNode ctx (renderThemePicker themeName)
@@ -1455,7 +1480,7 @@ let createStreamHandler
             MinMs = stats.MinDuration.TotalMilliseconds
             MaxMs = stats.MaxDuration.TotalMilliseconds })
       // Push connection counts
-      match connectionTracker with
+      match infra.ConnectionTracker with
       | Some tracker ->
         let total = tracker.TotalCount
         let counts = tracker.GetAllCounts()
@@ -1474,7 +1499,7 @@ let createStreamHandler
       // Push hot-reload file panel
       if currentSessionId.Length > 0 then
         try
-          let! hrState = getHotReloadState currentSessionId
+          let! hrState = q.GetHotReloadState currentSessionId
           match hrState with
           | Some hr ->
             do! ssePatchNode ctx (renderHotReloadPanel currentSessionId hr.files hr.watchedCount)
@@ -1487,13 +1512,13 @@ let createStreamHandler
       // Push session context panel
       if currentSessionId.Length > 0 then
         try
-          let! wCtx = getWarmupContext currentSessionId
+          let! wCtx = q.GetWarmupContext currentSessionId
           match wCtx with
           | Some ctx' ->
-            let state = getSessionState currentSessionId
+            let state = q.GetSessionState currentSessionId
             let! hrState =
               task {
-                try return! getHotReloadState currentSessionId
+                try return! q.GetHotReloadState currentSessionId
                 with _ -> return None
               }
             let fileStatuses =
@@ -1509,8 +1534,8 @@ let createStreamHandler
             let sCtx =
               { SessionId = currentSessionId
                 ProjectNames = []
-                WorkingDir = getSessionWorkingDir currentSessionId
-                Status = SessionState.label (getSessionState currentSessionId)
+                WorkingDir = q.GetSessionWorkingDir currentSessionId
+                Status = SessionState.label (q.GetSessionState currentSessionId)
                 Warmup = ctx'
                 FileStatuses = fileStatuses }
             do! ssePatchNode ctx (renderSessionContextPanel sCtx)
@@ -1521,12 +1546,12 @@ let createStreamHandler
       else
         do! ssePatchNode ctx renderSessionContextEmpty
       // Push pipeline trace panel
-      match getPipelineTrace () with
+      match q.GetPipelineTrace () with
       | Some trace ->
         do! ssePatchNode ctx (renderPipelineTracePanel trace.Timing trace.IsRunning trace.Summary)
       | None ->
         do! ssePatchNode ctx renderPipelineTraceEmpty
-      match getElmRegions () with
+      match q.GetElmRegions () with
       | Some regions ->
         // Dedup output region to avoid overwriting reset/clear (Bug #5)
         let outputRegion = regions |> List.tryFind (fun r -> r.Id = "output")
@@ -1536,9 +1561,9 @@ let createStreamHandler
           then regions |> List.filter (fun r -> r.Id <> "output")
           else regions
         lastOutputHash <- outputHash
-        let! standby = getStandbyInfo ()
+        let! standby = q.GetStandbyInfo ()
         let sLabel = StandbyInfo.label standby
-        do! pushRegions ctx filteredRegions getPreviousSessions getSessionState getStatusMsg sLabel
+        do! pushRegions ctx filteredRegions q.GetPreviousSessions q.GetSessionState q.GetStatusMsg sLabel
       | None -> ()
     }
 
@@ -1549,7 +1574,7 @@ let createStreamHandler
       with ex ->
         eprintfn "[Dashboard SSE] Initial pushState failed: %s" ex.Message
 
-      match stateChanged with
+      match infra.StateChanged with
       | Some evt ->
         // Event-driven: push on every state change
         let tcs = Threading.Tasks.TaskCompletionSource()
@@ -1583,7 +1608,7 @@ let createStreamHandler
           | :? OperationCanceledException -> ()
     finally
       SageFs.Instrumentation.sseConnectionsActive.Add(-1L)
-      connectionTracker |> Option.iter (fun t -> t.Unregister(clientId))
+      infra.ConnectionTracker |> Option.iter (fun t -> t.Unregister(clientId))
   }
 
 /// Create the eval POST handler.
@@ -1954,16 +1979,8 @@ let createCreateSessionHandler
 
 /// JSON SSE stream for TUI clients — pushes regions + model summary as JSON.
 let createApiStateHandler
-  (getSessionStateForId: string -> SessionState)
-  (getEvalStatsForId: string -> Threading.Tasks.Task<SageFs.Affordances.EvalStats>)
-  (getActiveSessionId: unit -> string)
-  (getSessionWorkingDirById: string -> string)
-  (getAllSessions: unit -> Threading.Tasks.Task<WorkerProtocol.SessionInfo list>)
-  (getElmRegions: unit -> RenderRegion list option)
-  (stateChanged: IEvent<DaemonStateChange> option)
-  (connectionTracker: ConnectionTracker option)
-  (getStandbyInfo: unit -> Threading.Tasks.Task<StandbyInfo>)
-  (getLiveTestingStatus: unit -> string)
+  (q: DashboardQueries)
+  (infra: DashboardInfra)
   : HttpHandler =
   fun ctx -> task {
     SageFs.Instrumentation.sseConnectionsActive.Add(1L)
@@ -1972,22 +1989,22 @@ let createApiStateHandler
     ctx.Response.Headers.["Connection"] <- Microsoft.Extensions.Primitives.StringValues "keep-alive"
 
     // Each SSE connection tracks its own session via query param
-    let! sessions = getAllSessions ()
+    let! sessions = q.GetAllSessions ()
     let defaultSid = sessions |> List.tryHead |> Option.map (fun s -> s.Id) |> Option.defaultValue ""
     let connSessionId =
       match ctx.Request.Query.TryGetValue("sessionId") with
       | true, v when v.Count > 0 && not (String.IsNullOrEmpty(v.[0])) -> v.[0]
       | _ -> defaultSid
     let clientId = sprintf "tui-%s" (Guid.NewGuid().ToString("N").[..7])
-    connectionTracker |> Option.iter (fun t -> t.Register(clientId, Terminal, connSessionId))
+    infra.ConnectionTracker |> Option.iter (fun t -> t.Register(clientId, Terminal, connSessionId))
 
     let pushJson () = task {
-      let activeSid = getActiveSessionId ()
-      let activeDir = getSessionWorkingDirById activeSid
-      let state = getSessionStateForId activeSid
-      let! stats = getEvalStatsForId activeSid
+      let activeSid = q.GetActiveSessionId ()
+      let activeDir = q.GetSessionWorkingDir activeSid
+      let state = q.GetSessionState activeSid
+      let! stats = q.GetEvalStats activeSid
       let regions =
-        match getElmRegions () with
+        match q.GetElmRegions () with
         | Some r ->
           r |> List.map (fun region ->
             {| id = region.Id
@@ -2001,8 +2018,8 @@ let createApiStateHandler
                       icon = SageFs.Features.LiveTesting.GutterIcon.toLabel a.Icon
                       tooltip = a.Tooltip |}) |})
         | None -> []
-      let! standby = getStandbyInfo ()
-      let liveTestingStatus = getLiveTestingStatus ()
+      let! standby = q.GetStandbyInfo ()
+      let liveTestingStatus = q.GetLiveTestingStatus ()
       let payload =
         System.Text.Json.JsonSerializer.Serialize(
           {| sessionId = activeSid
@@ -2019,7 +2036,7 @@ let createApiStateHandler
 
     try
       do! pushJson ()
-      match stateChanged with
+      match infra.StateChanged with
       | Some evt ->
         let tcs = Threading.Tasks.TaskCompletionSource()
         use _ct = ctx.RequestAborted.Register(fun () -> tcs.TrySetResult() |> ignore)
@@ -2049,7 +2066,7 @@ let createApiStateHandler
           | _ -> () // Pipe broken or write error — ignore
     finally
       SageFs.Instrumentation.sseConnectionsActive.Add(-1L)
-      connectionTracker |> Option.iter (fun t -> t.Unregister(clientId))
+      infra.ConnectionTracker |> Option.iter (fun t -> t.Unregister(clientId))
   }
 
 /// Parse an editor action string + optional value into an EditorAction DU case.
@@ -2152,44 +2169,20 @@ let createApiDispatchHandler
 
 /// Create all dashboard routes.
 let createEndpoints
-  (version: string)
-  (getSessionState: string -> SessionState)
-  (getStatusMsg: string -> string option)
-  (getEvalStats: string -> Threading.Tasks.Task<SageFs.Affordances.EvalStats>)
-  (getSessionWorkingDir: string -> string)
-  (getActiveSessionId: unit -> string)
-  (getElmRegions: unit -> RenderRegion list option)
-  (stateChanged: IEvent<DaemonStateChange> option)
-  (evalCode: string -> string -> Threading.Tasks.Task<string>)
-  (resetSession: string -> Threading.Tasks.Task<string>)
-  (hardResetSession: string -> Threading.Tasks.Task<string>)
-  (switchSession: (string -> Threading.Tasks.Task<string>) option)
-  (stopSession: (string -> Threading.Tasks.Task<string>) option)
-  (createSession: (string list -> string -> Threading.Tasks.Task<Result<string, string>>) option)
-  (connectionTracker: ConnectionTracker option)
-  (dispatch: SageFsMsg -> unit)
-  (shutdownCallback: (unit -> unit) option)
-  (getPreviousSessions: unit -> Threading.Tasks.Task<PreviousSession list>)
-  (getAllSessions: unit -> Threading.Tasks.Task<WorkerProtocol.SessionInfo list>)
-  (sessionThemes: Collections.Concurrent.ConcurrentDictionary<string, string>)
-  (getStandbyInfo: unit -> Threading.Tasks.Task<StandbyInfo>)
-  (getHotReloadState: string -> Threading.Tasks.Task<{| files: {| path: string; watched: bool |} list; watchedCount: int |} option>)
-  (getWarmupContext: string -> Threading.Tasks.Task<WarmupContext option>)
-  (getCompletions: (string -> string -> int -> Threading.Tasks.Task<Features.AutoCompletion.CompletionItem list>) option)
-  (getLiveTestingStatus: unit -> string)
-  (getWarmupProgress: string -> string)
-  (getPipelineTrace: unit -> {| Timing: Features.LiveTesting.PipelineTiming option; IsRunning: bool; Summary: Features.LiveTesting.TestSummary |} option)
+  (q: DashboardQueries)
+  (a: DashboardActions)
+  (infra: DashboardInfra)
   : HttpEndpoint list =
   [
-    yield get "/dashboard" (FalcoResponse.ofHtml (renderShell version))
-    yield get "/dashboard/stream" (createStreamHandler getSessionState getStatusMsg getEvalStats getSessionWorkingDir getActiveSessionId getElmRegions stateChanged connectionTracker getPreviousSessions getAllSessions sessionThemes getStandbyInfo getHotReloadState getWarmupContext getWarmupProgress getPipelineTrace)
-    yield post "/dashboard/eval" (createEvalHandler evalCode)
-    yield post "/dashboard/eval-file" (createEvalFileHandler evalCode)
-    match getCompletions with
+    yield get "/dashboard" (FalcoResponse.ofHtml (renderShell infra.Version))
+    yield get "/dashboard/stream" (createStreamHandler q infra)
+    yield post "/dashboard/eval" (createEvalHandler a.EvalCode)
+    yield post "/dashboard/eval-file" (createEvalFileHandler a.EvalCode)
+    match infra.GetCompletions with
     | Some gc -> yield post "/dashboard/completions" (createCompletionsHandler gc)
     | None -> ()
-    yield post "/dashboard/reset" (createResetHandler resetSession)
-    yield post "/dashboard/hard-reset" (createResetHandler hardResetSession)
+    yield post "/dashboard/reset" (createResetHandler a.ResetSession)
+    yield post "/dashboard/hard-reset" (createResetHandler a.HardResetSession)
     yield post "/dashboard/clear-output" createClearOutputHandler
     yield post "/dashboard/discover-projects" createDiscoverHandler
     yield post "/dashboard/set-theme" (fun ctx -> task {
@@ -2197,11 +2190,11 @@ let createEndpoints
       let! body = reader.ReadToEndAsync()
       try
         let req = System.Text.Json.JsonSerializer.Deserialize<{| theme: string |}>(body)
-        let activeId = getActiveSessionId ()
-        let workingDir = getSessionWorkingDir activeId
+        let activeId = q.GetActiveSessionId ()
+        let workingDir = q.GetSessionWorkingDir activeId
         if workingDir.Length > 0 && req.theme.Length > 0 then
-          sessionThemes.[workingDir] <- req.theme
-          saveThemes DaemonState.SageFsDir sessionThemes
+          infra.SessionThemes.[workingDir] <- req.theme
+          saveThemes DaemonState.SageFsDir infra.SessionThemes
         ctx.Response.StatusCode <- 200
         do! ctx.Response.WriteAsJsonAsync({| ok = true |})
       with ex ->
@@ -2209,7 +2202,7 @@ let createEndpoints
         do! ctx.Response.WriteAsJsonAsync({| error = ex.Message |})
     })
     // Create session in temp directory
-    match createSession with
+    match a.CreateSession with
     | Some handler ->
       yield post "/dashboard/session/create-temp" (fun ctx -> task {
         let tempDir = Path.Combine(Path.GetTempPath(), sprintf "sagefs-%s" (Guid.NewGuid().ToString("N").[..7]))
@@ -2218,7 +2211,7 @@ let createEndpoints
         let! result = handler [] tempDir
         match result with
         | Ok msg ->
-          dispatch (SageFsMsg.Editor EditorAction.ListSessions)
+          a.Dispatch (SageFsMsg.Editor EditorAction.ListSessions)
           do! ssePatchNode ctx (
             Elem.div [ Attr.id "eval-result" ] [
               Elem.pre [ Attr.class' "output-line output-result"; Attr.style "margin-top: 0.5rem; white-space: pre-wrap;" ] [
@@ -2230,19 +2223,19 @@ let createEndpoints
       })
     | None -> ()
     // Resume previous session (re-creates in same working dir)
-    match createSession with
+    match a.CreateSession with
     | Some handler ->
       yield mapPost "/dashboard/session/resume/{id}"
         (fun (r: RequestData) -> r.GetString("id", ""))
         (fun sessionId -> fun ctx -> task {
-          let! previous = getPreviousSessions ()
+          let! previous = q.GetPreviousSessions ()
           match previous |> List.tryFind (fun s -> s.Id = sessionId) with
           | Some prev ->
             Response.sseStartResponse ctx |> ignore
             let! result = handler prev.Projects prev.WorkingDir
             match result with
             | Ok msg ->
-              dispatch (SageFsMsg.Editor EditorAction.ListSessions)
+              a.Dispatch (SageFsMsg.Editor EditorAction.ListSessions)
               do! ssePatchNode ctx (
                 Elem.div [ Attr.id "eval-result" ] [
                   Elem.pre [ Attr.class' "output-line output-result"; Attr.style "margin-top: 0.5rem; white-space: pre-wrap;" ] [
@@ -2257,33 +2250,33 @@ let createEndpoints
         })
     | None -> ()
     // TUI client API
-    yield get "/api/state" (createApiStateHandler getSessionState getEvalStats getActiveSessionId getSessionWorkingDir getAllSessions getElmRegions stateChanged connectionTracker getStandbyInfo getLiveTestingStatus)
-    yield post "/api/dispatch" (createApiDispatchHandler dispatch)
-    match createSession with
+    yield get "/api/state" (createApiStateHandler q infra)
+    yield post "/api/dispatch" (createApiDispatchHandler a.Dispatch)
+    match a.CreateSession with
     | Some handler ->
-      yield post "/dashboard/session/create" (createCreateSessionHandler handler switchSession)
+      yield post "/dashboard/session/create" (createCreateSessionHandler handler a.SwitchSession)
     | None -> ()
-    match switchSession with
+    match a.SwitchSession with
     | Some handler ->
       yield mapPost "/dashboard/session/switch/{id}"
         (fun (r: RequestData) -> r.GetString("id", ""))
         (fun sid -> createSessionActionHandler handler sid)
     | None -> ()
-    match stopSession with
+    match a.StopSession with
     | Some handler ->
       yield mapPost "/dashboard/session/stop/{id}"
         (fun (r: RequestData) -> r.GetString("id", ""))
         (fun sid -> createSessionActionHandler handler sid)
       yield post "/dashboard/session/stop-others" (fun ctx -> task {
-        let! sessions = getAllSessions ()
-        let activeId = getActiveSessionId ()
+        let! sessions = q.GetAllSessions ()
+        let activeId = q.GetActiveSessionId ()
         let others =
           sessions
           |> List.filter (fun (s: WorkerProtocol.SessionInfo) -> s.Id <> activeId)
         for s in others do
           let! _ = handler s.Id
           ()
-        dispatch (SageFsMsg.Editor EditorAction.ListSessions)
+        a.Dispatch (SageFsMsg.Editor EditorAction.ListSessions)
         do! ctx.Response.WriteAsJsonAsync({| stopped = others.Length |})
       })
     | None -> ()
@@ -2294,13 +2287,13 @@ let createEndpoints
         proc.StartTime.ToUniversalTime()
       do! ctx.Response.WriteAsJsonAsync({|
         pid = Environment.ProcessId
-        version = version
+        version = infra.Version
         startedAt = startedAt.ToString("o")
         workingDirectory = Environment.CurrentDirectory
       |})
     })
     // Graceful shutdown endpoint
-    match shutdownCallback with
+    match a.ShutdownCallback with
     | Some shutdown ->
       yield post "/api/shutdown" (fun ctx -> task {
         do! ctx.Response.WriteAsJsonAsync({| status = "shutting_down" |})

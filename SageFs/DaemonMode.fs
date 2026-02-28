@@ -627,197 +627,195 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
 
   let sessionThemes = Dashboard.loadThemes DaemonState.SageFsDir
 
-  let dashboardEndpoints =
-    Dashboard.createEndpoints
-      version
-      getSessionState
-      getStatusMsg
-      getEvalStatsAsync
-      getSessionWorkingDir
-      (fun () ->
-        let model = elmRuntime.GetModel()
-        ActiveSession.sessionId model.Sessions.ActiveSessionId |> Option.defaultValue "")
-      (fun () -> elmRuntime.GetRegions() |> Some)
-      (Some stateChangedEvent.Publish)
-      (fun sid code -> task {
-        let! result = proxyToSession sessionOps.GetProxy sid (WorkerProtocol.WorkerMessage.EvalCode(code, "dash"))
-        return
-          match result with
-          | Ok (WorkerProtocol.WorkerResponse.EvalResult(_, Ok msg, diags, _)) ->
-            elmRuntime.Dispatch (SageFsMsg.Event (
-              SageFsEvent.EvalCompleted (sid, msg, diags |> List.map WorkerProtocol.WorkerDiagnostic.toDiagnostic)))
-            msg
-          | Ok (WorkerProtocol.WorkerResponse.EvalResult(_, Error err, _, _)) ->
-            let msg = SageFsError.describe err
-            elmRuntime.Dispatch (SageFsMsg.Event (SageFsEvent.EvalFailed (sid, msg)))
-            sprintf "Error: %s" msg
-          | Ok other -> sprintf "Unexpected: %A" other
-          | Error e -> sprintf "Error: %s" e
-      })
-      (fun sid -> task {
-        let! result = proxyToSession sessionOps.GetProxy sid (WorkerProtocol.WorkerMessage.ResetSession "dash")
-        return
-          match result with
-          | Ok (WorkerProtocol.WorkerResponse.ResetResult(_, Ok ())) -> "Session reset successfully"
-          | Ok (WorkerProtocol.WorkerResponse.ResetResult(_, Error e)) -> sprintf "Reset failed: %A" e
-          | Ok other -> sprintf "Unexpected: %A" other
-          | Error e -> sprintf "Error: %s" e
-      })
-      (fun sid -> task {
-        match sid with
-        | null | "" -> return "Error: No session selected"
-        | _ ->
-          let! result = sessionOps.RestartSession sid true
-          return
-            match result with
-            | Ok msg -> sprintf "Hard reset: %s" msg
-            | Error e -> sprintf "Hard reset failed: %s" (SageFsError.describe e)
-      })
-      // Session switch handler — update Elm model's active session
-      (Some (fun (sid: string) -> task {
-        elmRuntime.Dispatch(SageFsMsg.Event (SageFsEvent.SessionSwitched (None, sid)))
-        return sprintf "Switched to session '%s'" sid
-      }))
-      // Session stop handler
-      (Some (fun (sid: string) -> task {
-        let! result = sessionOps.StopSession sid
-        elmRuntime.Dispatch(SageFsMsg.Editor EditorAction.ListSessions)
-        return
-          match result with
-          | Ok msg -> msg
-          | Error e -> sprintf "Stop failed: %A" e
-      }))
-      // Create session handler
-      (Some (fun (projects: string list) (workingDir: string) -> task {
-        let! result = sessionOps.CreateSession projects workingDir
-        elmRuntime.Dispatch(SageFsMsg.Editor EditorAction.ListSessions)
-        return
-          match result with
-          | Ok msg -> Ok msg
-          | Error e -> Error (sprintf "%A" e)
-      }))
-      // Connection tracker
-      (Some connectionTracker)
-      // Dispatch for TUI client API
-      (fun msg -> elmRuntime.Dispatch msg)
-      // Shutdown callback for /api/shutdown
-      (Some (fun () -> cts.Cancel()))
-      // Previous sessions for picker — merge active + historical from Marten
-      (fun () -> task {
-        // Active sessions from CQRS snapshot (non-blocking)
-        let snapshot = readSnapshot()
-        let activeSessions =
-          SessionManager.QuerySnapshot.allSessions snapshot
-          |> List.map (fun (info: WorkerProtocol.SessionInfo) ->
-            { Dashboard.PreviousSession.Id = info.Id
-              Dashboard.PreviousSession.WorkingDir = info.WorkingDirectory
-              Dashboard.PreviousSession.Projects = info.Projects
-              Dashboard.PreviousSession.LastSeen = info.LastActivity })
-        let activeIds = activeSessions |> List.map (fun s -> s.Id) |> Set.ofList
-        // Historical sessions from Marten (stopped ones not currently active)
-        let! historicalSessions = task {
-          try
-            let! events = persistence.FetchStream daemonStreamId
-            let daemonState = Features.Replay.DaemonReplayState.replayStream events
-            return
-              daemonState.Sessions
-              |> Map.values
-              |> Seq.filter (fun r -> r.StoppedAt.IsSome && not (activeIds.Contains r.SessionId))
-              |> Seq.map (fun r ->
-                { Dashboard.PreviousSession.Id = r.SessionId
-                  Dashboard.PreviousSession.WorkingDir = r.WorkingDir
-                  Dashboard.PreviousSession.Projects = r.Projects
-                  Dashboard.PreviousSession.LastSeen = r.StoppedAt |> Option.map (fun t -> t.DateTime) |> Option.defaultValue r.CreatedAt.DateTime })
-              |> Seq.toList
-          with _ -> return []
-        }
-        return activeSessions @ historicalSessions
-      })
-      getAllSessions
-      sessionThemes
-      sessionOps.GetStandbyInfo
-      (fun sessionId -> task {
-        match getWorkerBaseUrl sessionId with
-        | Some baseUrl ->
-          try
-            use cts = new Threading.CancellationTokenSource(TimeSpan.FromSeconds(2.0))
-            let! resp = httpClient.GetStringAsync(sprintf "%s/hotreload" baseUrl, cts.Token)
-            use doc = Text.Json.JsonDocument.Parse(resp)
-            let root = doc.RootElement
-            let files =
-              root.GetProperty("files").EnumerateArray()
-              |> Seq.map (fun el ->
-                {| path = el.GetProperty("path").GetString()
-                   watched = el.GetProperty("watched").GetBoolean() |})
-              |> Seq.toList
-            let watchedCount = root.GetProperty("watchedCount").GetInt32()
-            return Some {| files = files; watchedCount = watchedCount |}
-          with _ -> return None
-        | None -> return None
-      })
-      (fun sessionId -> task {
-        match getWorkerBaseUrl sessionId with
-        | Some baseUrl ->
-          try
-            use cts = new Threading.CancellationTokenSource(TimeSpan.FromSeconds(2.0))
-            let! resp = httpClient.GetStringAsync(sprintf "%s/warmup-context" baseUrl, cts.Token)
-            let ctx = WorkerProtocol.Serialization.deserialize<WarmupContext> resp
-            return Some ctx
-          with _ -> return None
-        | None -> return None
-      })
-      // Completions handler — routes to worker
-      (Some (fun (sessionId: string) (code: string) (cursorPos: int) -> task {
-        if String.IsNullOrEmpty(sessionId) then return []
-        else
+  let dashboardQueries : Dashboard.DashboardQueries = {
+    GetSessionState = getSessionState
+    GetStatusMsg = getStatusMsg
+    GetEvalStats = getEvalStatsAsync
+    GetSessionWorkingDir = getSessionWorkingDir
+    GetActiveSessionId = fun () ->
+      let model = elmRuntime.GetModel()
+      ActiveSession.sessionId model.Sessions.ActiveSessionId |> Option.defaultValue ""
+    GetElmRegions = fun () -> elmRuntime.GetRegions() |> Some
+    GetPreviousSessions = fun () -> task {
+      // Active sessions from CQRS snapshot (non-blocking)
+      let snapshot = readSnapshot()
+      let activeSessions =
+        SessionManager.QuerySnapshot.allSessions snapshot
+        |> List.map (fun (info: WorkerProtocol.SessionInfo) ->
+          { Dashboard.PreviousSession.Id = info.Id
+            Dashboard.PreviousSession.WorkingDir = info.WorkingDirectory
+            Dashboard.PreviousSession.Projects = info.Projects
+            Dashboard.PreviousSession.LastSeen = info.LastActivity })
+      let activeIds = activeSessions |> List.map (fun s -> s.Id) |> Set.ofList
+      // Historical sessions from Marten (stopped ones not currently active)
+      let! historicalSessions = task {
         try
-          let! proxy = sessionOps.GetProxy sessionId
-          match proxy with
-          | Some send ->
-            let replyId = sprintf "dash-comp-%d" (System.Random.Shared.Next())
-            let! resp =
-              send (WorkerProtocol.WorkerMessage.GetCompletions(code, cursorPos, replyId))
-              |> Async.StartAsTask
-            return
-              match resp with
-              | WorkerProtocol.WorkerResponse.CompletionResult(_, items) ->
-                items |> List.map (fun label ->
-                  { SageFs.Features.AutoCompletion.DisplayText = label
-                    SageFs.Features.AutoCompletion.ReplacementText = label
-                    SageFs.Features.AutoCompletion.Kind = SageFs.Features.AutoCompletion.CompletionKind.Variable
-                    SageFs.Features.AutoCompletion.GetDescription = None })
-              | _ -> []
-          | None -> return []
+          let! events = persistence.FetchStream daemonStreamId
+          let daemonState = Features.Replay.DaemonReplayState.replayStream events
+          return
+            daemonState.Sessions
+            |> Map.values
+            |> Seq.filter (fun r -> r.StoppedAt.IsSome && not (activeIds.Contains r.SessionId))
+            |> Seq.map (fun r ->
+              { Dashboard.PreviousSession.Id = r.SessionId
+                Dashboard.PreviousSession.WorkingDir = r.WorkingDir
+                Dashboard.PreviousSession.Projects = r.Projects
+                Dashboard.PreviousSession.LastSeen = r.StoppedAt |> Option.map (fun t -> t.DateTime) |> Option.defaultValue r.CreatedAt.DateTime })
+            |> Seq.toList
         with _ -> return []
-      }))
-      // Live testing status for TUI/Raylib status bar
-      (fun () ->
-        let model = elmRuntime.GetModel()
-        let activeId =
-          SageFs.ActiveSession.sessionId model.Sessions.ActiveSessionId
-          |> Option.defaultValue ""
-        SageFs.Features.LiveTesting.LiveTestPipelineState.liveTestingStatusBarForSession activeId model.LiveTesting)
-      // Warmup progress from CQRS snapshot
-      (fun sessionId ->
-        let snapshot = readSnapshot()
-        match Map.tryFind sessionId snapshot.WarmupProgress with
-        | Some progress -> progress
-        | None -> "")
-      // Pipeline trace from Elm model
-      (fun () ->
-        let model = elmRuntime.GetModel()
-        let activeId =
-          SageFs.ActiveSession.sessionId model.Sessions.ActiveSessionId
-          |> Option.defaultValue ""
-        let state = model.LiveTesting.TestState
-        let sessionEntries =
-          Features.LiveTesting.LiveTestState.statusEntriesForSession activeId state
-        let summary =
-          Features.LiveTesting.TestSummary.fromStatuses
-            state.Activation (sessionEntries |> Array.map (fun e -> e.Status))
-        Some {| Timing = model.LiveTesting.LastTiming
-                IsRunning = Features.LiveTesting.TestRunPhase.isAnyRunning state.RunPhases
-                Summary = summary |})
+      }
+      return activeSessions @ historicalSessions
+    }
+    GetAllSessions = getAllSessions
+    GetStandbyInfo = sessionOps.GetStandbyInfo
+    GetHotReloadState = fun sessionId -> task {
+      match getWorkerBaseUrl sessionId with
+      | Some baseUrl ->
+        try
+          use cts = new Threading.CancellationTokenSource(TimeSpan.FromSeconds(2.0))
+          let! resp = httpClient.GetStringAsync(sprintf "%s/hotreload" baseUrl, cts.Token)
+          use doc = Text.Json.JsonDocument.Parse(resp)
+          let root = doc.RootElement
+          let files =
+            root.GetProperty("files").EnumerateArray()
+            |> Seq.map (fun el ->
+              {| path = el.GetProperty("path").GetString()
+                 watched = el.GetProperty("watched").GetBoolean() |})
+            |> Seq.toList
+          let watchedCount = root.GetProperty("watchedCount").GetInt32()
+          return Some {| files = files; watchedCount = watchedCount |}
+        with _ -> return None
+      | None -> return None
+    }
+    GetWarmupContext = fun sessionId -> task {
+      match getWorkerBaseUrl sessionId with
+      | Some baseUrl ->
+        try
+          use cts = new Threading.CancellationTokenSource(TimeSpan.FromSeconds(2.0))
+          let! resp = httpClient.GetStringAsync(sprintf "%s/warmup-context" baseUrl, cts.Token)
+          let ctx = WorkerProtocol.Serialization.deserialize<WarmupContext> resp
+          return Some ctx
+        with _ -> return None
+      | None -> return None
+    }
+    GetWarmupProgress = fun sessionId ->
+      let snapshot = readSnapshot()
+      match Map.tryFind sessionId snapshot.WarmupProgress with
+      | Some progress -> progress
+      | None -> ""
+    GetPipelineTrace = fun () ->
+      let model = elmRuntime.GetModel()
+      let activeId =
+        SageFs.ActiveSession.sessionId model.Sessions.ActiveSessionId
+        |> Option.defaultValue ""
+      let state = model.LiveTesting.TestState
+      let sessionEntries =
+        Features.LiveTesting.LiveTestState.statusEntriesForSession activeId state
+      let summary =
+        Features.LiveTesting.TestSummary.fromStatuses
+          state.Activation (sessionEntries |> Array.map (fun e -> e.Status))
+      Some {| Timing = model.LiveTesting.LastTiming
+              IsRunning = Features.LiveTesting.TestRunPhase.isAnyRunning state.RunPhases
+              Summary = summary |}
+    GetLiveTestingStatus = fun () ->
+      let model = elmRuntime.GetModel()
+      let activeId =
+        SageFs.ActiveSession.sessionId model.Sessions.ActiveSessionId
+        |> Option.defaultValue ""
+      SageFs.Features.LiveTesting.LiveTestPipelineState.liveTestingStatusBarForSession activeId model.LiveTesting
+  }
+
+  let dashboardActions : Dashboard.DashboardActions = {
+    EvalCode = fun sid code -> task {
+      let! result = proxyToSession sessionOps.GetProxy sid (WorkerProtocol.WorkerMessage.EvalCode(code, "dash"))
+      return
+        match result with
+        | Ok (WorkerProtocol.WorkerResponse.EvalResult(_, Ok msg, diags, _)) ->
+          elmRuntime.Dispatch (SageFsMsg.Event (
+            SageFsEvent.EvalCompleted (sid, msg, diags |> List.map WorkerProtocol.WorkerDiagnostic.toDiagnostic)))
+          msg
+        | Ok (WorkerProtocol.WorkerResponse.EvalResult(_, Error err, _, _)) ->
+          let msg = SageFsError.describe err
+          elmRuntime.Dispatch (SageFsMsg.Event (SageFsEvent.EvalFailed (sid, msg)))
+          sprintf "Error: %s" msg
+        | Ok other -> sprintf "Unexpected: %A" other
+        | Error e -> sprintf "Error: %s" e
+    }
+    ResetSession = fun sid -> task {
+      let! result = proxyToSession sessionOps.GetProxy sid (WorkerProtocol.WorkerMessage.ResetSession "dash")
+      return
+        match result with
+        | Ok (WorkerProtocol.WorkerResponse.ResetResult(_, Ok ())) -> "Session reset successfully"
+        | Ok (WorkerProtocol.WorkerResponse.ResetResult(_, Error e)) -> sprintf "Reset failed: %A" e
+        | Ok other -> sprintf "Unexpected: %A" other
+        | Error e -> sprintf "Error: %s" e
+    }
+    HardResetSession = fun sid -> task {
+      match sid with
+      | null | "" -> return "Error: No session selected"
+      | _ ->
+        let! result = sessionOps.RestartSession sid true
+        return
+          match result with
+          | Ok msg -> sprintf "Hard reset: %s" msg
+          | Error e -> sprintf "Hard reset failed: %s" (SageFsError.describe e)
+    }
+    Dispatch = fun msg -> elmRuntime.Dispatch msg
+    SwitchSession = Some (fun (sid: string) -> task {
+      elmRuntime.Dispatch(SageFsMsg.Event (SageFsEvent.SessionSwitched (None, sid)))
+      return sprintf "Switched to session '%s'" sid
+    })
+    StopSession = Some (fun (sid: string) -> task {
+      let! result = sessionOps.StopSession sid
+      elmRuntime.Dispatch(SageFsMsg.Editor EditorAction.ListSessions)
+      return
+        match result with
+        | Ok msg -> msg
+        | Error e -> sprintf "Stop failed: %A" e
+    })
+    CreateSession = Some (fun (projects: string list) (workingDir: string) -> task {
+      let! result = sessionOps.CreateSession projects workingDir
+      elmRuntime.Dispatch(SageFsMsg.Editor EditorAction.ListSessions)
+      return
+        match result with
+        | Ok msg -> Ok msg
+        | Error e -> Error (sprintf "%A" e)
+    })
+    ShutdownCallback = Some (fun () -> cts.Cancel())
+  }
+
+  let dashboardInfra : Dashboard.DashboardInfra = {
+    Version = version
+    StateChanged = Some stateChangedEvent.Publish
+    ConnectionTracker = Some connectionTracker
+    SessionThemes = sessionThemes
+    GetCompletions = Some (fun (sessionId: string) (code: string) (cursorPos: int) -> task {
+      if String.IsNullOrEmpty(sessionId) then return []
+      else
+      try
+        let! proxy = sessionOps.GetProxy sessionId
+        match proxy with
+        | Some send ->
+          let replyId = sprintf "dash-comp-%d" (System.Random.Shared.Next())
+          let! resp =
+            send (WorkerProtocol.WorkerMessage.GetCompletions(code, cursorPos, replyId))
+            |> Async.StartAsTask
+          return
+            match resp with
+            | WorkerProtocol.WorkerResponse.CompletionResult(_, items) ->
+              items |> List.map (fun label ->
+                { SageFs.Features.AutoCompletion.DisplayText = label
+                  SageFs.Features.AutoCompletion.ReplacementText = label
+                  SageFs.Features.AutoCompletion.Kind = SageFs.Features.AutoCompletion.CompletionKind.Variable
+                  SageFs.Features.AutoCompletion.GetDescription = None })
+            | _ -> []
+        | None -> return []
+      with _ -> return []
+    })
+  }
+
+  let dashboardEndpoints =
+    Dashboard.createEndpoints dashboardQueries dashboardActions dashboardInfra
 
   // Hot-reload proxy endpoints — forward to worker HTTP servers
   let hotReloadProxyEndpoints : HttpEndpoint list =
