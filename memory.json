@@ -1,0 +1,31 @@
+{
+  "last_run": "2026-02-28T16:24:20Z",
+  "last_run_id": "22524387619",
+  "backlog_cursor": "Y3Vyc29yOnYyOpK0MjAyNi0wMi0yOFQxNTowNzo0MVrO7rShdg==",
+  "issues_cursor_reset": false,
+  "comments_made": {
+    "9": "2026-02-28T16:24:20Z",
+    "10": "2026-02-28T16:24:20Z",
+    "11": "2026-02-28T16:24:20Z",
+    "12": "2026-02-28T16:24:20Z"
+  },
+  "labels_applied": {
+    "9": ["bug", "needs investigation"],
+    "10": ["bug"],
+    "11": ["question"],
+    "12": ["question"]
+  },
+  "fix_attempts": {},
+  "monthly_summary_issue": {
+    "number": "created_this_run",
+    "month": "2026-02",
+    "title": "[Repo Assist] Monthly Activity 2026-02"
+  },
+  "tasks_last_run": {
+    "task1_triage": "2026-02-28T16:24:20Z",
+    "task7_labels": "2026-02-28T16:24:20Z",
+    "task9_welcome": null,
+    "task11_monthly": "2026-02-28T16:24:20Z"
+  },
+  "notes": "First run. All 4 open issues (#9, #10, #11, #12) commented on. Issue #10 needs native tree-sitter libs for osx-arm64/linux-x64 — potential future PR. Monthly Activity issue created this run (number TBD). No open PRs."
+}
