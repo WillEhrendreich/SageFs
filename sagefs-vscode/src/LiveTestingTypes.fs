@@ -237,20 +237,19 @@ module VscLiveTestState =
   /// Compute test summary from current state
   let summary (state: VscLiveTestState) : VscTestSummary =
     let total = state.Tests.Count
-    let mutable passed = 0
-    let mutable failed = 0
-    let mutable stale = 0
-    let mutable disabled = 0
-    state.Results |> Map.iter (fun _ r ->
-      match r.Outcome with
-      | VscTestOutcome.Passed -> passed <- passed + 1
-      | VscTestOutcome.Failed _ | VscTestOutcome.Errored _ -> failed <- failed + 1
-      | VscTestOutcome.Stale -> stale <- stale + 1
-      | VscTestOutcome.PolicyDisabled -> disabled <- disabled + 1
-      | _ -> ())
+    let (passed, failed, stale0, disabled) =
+      state.Results
+      |> Map.fold (fun (p, f, s, d) _ r ->
+        match r.Outcome with
+        | VscTestOutcome.Passed -> (p + 1, f, s, d)
+        | VscTestOutcome.Failed _ | VscTestOutcome.Errored _ -> (p, f + 1, s, d)
+        | VscTestOutcome.Stale -> (p, f, s + 1, d)
+        | VscTestOutcome.PolicyDisabled -> (p, f, s, d + 1)
+        | _ -> (p, f, s, d)
+      ) (0, 0, 0, 0)
     let stale =
       match state.Freshness with
-      | VscResultFreshness.Fresh -> stale
+      | VscResultFreshness.Fresh -> stale0
       | _ ->
         state.Results
         |> Map.filter (fun _ r ->
