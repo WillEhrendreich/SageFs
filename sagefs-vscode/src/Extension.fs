@@ -672,27 +672,27 @@ let activate (context: ExtensionContext) =
   let reg cmd handler =
     context.subscriptions.Add (Commands.registerCommand cmd handler)
 
-  reg "sagefs.eval" (fun _ -> evalSelection () |> ignore)
-  reg "sagefs.evalFile" (fun _ -> evalFile () |> ignore)
-  reg "sagefs.evalRange" (fun args -> evalRange args |> ignore)
-  reg "sagefs.evalAdvance" (fun _ -> evalAdvance () |> ignore)
-  reg "sagefs.cancelEval" (fun _ -> cancelEvalCmd () |> ignore)
-  reg "sagefs.loadScript" (fun _ -> loadScriptCmd () |> ignore)
-  reg "sagefs.start" (fun _ -> startDaemon () |> ignore)
+  reg "sagefs.eval" (fun _ -> evalSelection () |> promiseIgnore)
+  reg "sagefs.evalFile" (fun _ -> evalFile () |> promiseIgnore)
+  reg "sagefs.evalRange" (fun args -> evalRange args |> promiseIgnore)
+  reg "sagefs.evalAdvance" (fun _ -> evalAdvance () |> promiseIgnore)
+  reg "sagefs.cancelEval" (fun _ -> cancelEvalCmd () |> promiseIgnore)
+  reg "sagefs.loadScript" (fun _ -> loadScriptCmd () |> promiseIgnore)
+  reg "sagefs.start" (fun _ -> startDaemon () |> promiseIgnore)
   reg "sagefs.stop" (fun _ -> stopDaemon ())
   reg "sagefs.openDashboard" (fun _ -> openDashboard ())
-  reg "sagefs.resetSession" (fun _ -> resetSessionCmd () |> ignore)
-  reg "sagefs.hardReset" (fun _ -> hardResetCmd () |> ignore)
-  reg "sagefs.createSession" (fun _ -> createSessionCmd () |> ignore)
-  reg "sagefs.switchSession" (fun _ -> switchSessionCmd () |> ignore)
-  reg "sagefs.stopSession" (fun _ -> stopSessionCmd () |> ignore)
+  reg "sagefs.resetSession" (fun _ -> resetSessionCmd () |> promiseIgnore)
+  reg "sagefs.hardReset" (fun _ -> hardResetCmd () |> promiseIgnore)
+  reg "sagefs.createSession" (fun _ -> createSessionCmd () |> promiseIgnore)
+  reg "sagefs.switchSession" (fun _ -> switchSessionCmd () |> promiseIgnore)
+  reg "sagefs.stopSession" (fun _ -> stopSessionCmd () |> promiseIgnore)
   reg "sagefs.clearResults" (fun _ -> InlineDeco.clearAllDecorations ())
   reg "sagefs.enableLiveTesting" (fun _ ->
-    simpleCommand "Live testing enabled" Client.enableLiveTesting |> ignore)
+    simpleCommand "Live testing enabled" Client.enableLiveTesting |> promiseIgnore)
   reg "sagefs.disableLiveTesting" (fun _ ->
-    simpleCommand "Live testing disabled" Client.disableLiveTesting |> ignore)
+    simpleCommand "Live testing disabled" Client.disableLiveTesting |> promiseIgnore)
   reg "sagefs.runTests" (fun _ ->
-    simpleCommand "Tests queued" (Client.runTests "") |> ignore)
+    simpleCommand "Tests queued" (Client.runTests "") |> promiseIgnore)
   reg "sagefs.setRunPolicy" (fun _ ->
     withClient (fun c ->
       promise {
@@ -712,7 +712,7 @@ let activate (context: ExtensionContext) =
             |> Option.iter (fun msg -> Window.showInformationMessage msg [||] |> ignore)
           | None -> ()
         | None -> ()
-      }) |> ignore)
+      }) |> promiseIgnore)
   reg "sagefs.showHistory" (fun _ ->
     withClient (fun c ->
       promise {
@@ -724,7 +724,7 @@ let activate (context: ExtensionContext) =
           | [||] -> Window.showInformationMessage "No recent events" [||] |> ignore
           | _ -> Window.showQuickPick lines "Recent SageFs events" |> Promise.start
         | None -> Window.showWarningMessage "Could not fetch events" [||] |> ignore
-      }) |> ignore)
+      }) |> promiseIgnore)
   reg "sagefs.showCallGraph" (fun _ ->
     withClient (fun c ->
       promise {
@@ -761,7 +761,7 @@ let activate (context: ExtensionContext) =
                       sprintf "%s %s [%s]" icon name status)
                   Window.showQuickPick items (sprintf "Tests covering '%s'" sym) |> Promise.start
             | _ -> ()
-      }) |> ignore)
+      }) |> promiseIgnore)
   reg "sagefs.showBindings" (fun _ ->
     match liveTestListener |> Option.map (fun l -> l.Bindings ()) with
     | Some [||] | None ->
@@ -809,7 +809,7 @@ let activate (context: ExtensionContext) =
             | _ ->
               let! doc = Workspace.openTextDocument r.content "fsharp"
               Window.showTextDocument doc |> Promise.start
-      }) |> ignore)
+      }) |> promiseIgnore)
   let lensProvider = Lens.create ()
   context.subscriptions.Add (Languages.registerCodeLensProvider "fsharp" lensProvider)
   let testLensProvider = TestLens.create ()
@@ -947,7 +947,7 @@ let activate (context: ExtensionContext) =
           match projPath with
           | Some _ -> do! startDaemon ()
           | None -> ()
-        } |> ignore
+        } |> promiseIgnore
       | true -> ()
     )
   | false -> ()
