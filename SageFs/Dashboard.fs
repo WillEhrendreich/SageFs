@@ -1102,7 +1102,7 @@ let renderRegionForSse (getSessionState: string -> SessionState) (getStatusMsg: 
 let pushRegions
   (ctx: HttpContext)
   (regions: RenderRegion list)
-  (getPreviousSessions: unit -> PreviousSession list)
+  (getPreviousSessions: unit -> Threading.Tasks.Task<PreviousSession list>)
   (getSessionState: string -> SessionState)
   (getStatusMsg: string -> string option)
   (standbyLabel: string)
@@ -1116,7 +1116,7 @@ let pushRegions
         let sessions = parseSessionLines region.Content
         let creating = isCreatingSession region.Content
         if sessions.IsEmpty && not creating then
-          let previous = getPreviousSessions ()
+          let! previous = getPreviousSessions ()
           do! ssePatchNode ctx (renderSessionPicker previous)
         else
           do! ssePatchNode ctx renderSessionPickerEmpty
@@ -1399,7 +1399,7 @@ let createStreamHandler
   (getElmRegions: unit -> RenderRegion list option)
   (stateChanged: IEvent<DaemonStateChange> option)
   (connectionTracker: ConnectionTracker option)
-  (getPreviousSessions: unit -> PreviousSession list)
+  (getPreviousSessions: unit -> Threading.Tasks.Task<PreviousSession list>)
   (getAllSessions: unit -> Threading.Tasks.Task<WorkerProtocol.SessionInfo list>)
   (sessionThemes: Collections.Concurrent.ConcurrentDictionary<string, string>)
   (getStandbyInfo: unit -> Threading.Tasks.Task<StandbyInfo>)
@@ -2169,7 +2169,7 @@ let createEndpoints
   (connectionTracker: ConnectionTracker option)
   (dispatch: SageFsMsg -> unit)
   (shutdownCallback: (unit -> unit) option)
-  (getPreviousSessions: unit -> PreviousSession list)
+  (getPreviousSessions: unit -> Threading.Tasks.Task<PreviousSession list>)
   (getAllSessions: unit -> Threading.Tasks.Task<WorkerProtocol.SessionInfo list>)
   (sessionThemes: Collections.Concurrent.ConcurrentDictionary<string, string>)
   (getStandbyInfo: unit -> Threading.Tasks.Task<StandbyInfo>)
@@ -2235,7 +2235,7 @@ let createEndpoints
       yield mapPost "/dashboard/session/resume/{id}"
         (fun (r: RequestData) -> r.GetString("id", ""))
         (fun sessionId -> fun ctx -> task {
-          let previous = getPreviousSessions ()
+          let! previous = getPreviousSessions ()
           match previous |> List.tryFind (fun s -> s.Id = sessionId) with
           | Some prev ->
             Response.sseStartResponse ctx |> ignore

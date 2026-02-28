@@ -258,6 +258,13 @@ let withErrorHandling (ctx: Microsoft.AspNetCore.Http.HttpContext) (handler: uni
     do! jsonResponse ctx 500 {| success = false; error = ex.Message |}
 }
 
+/// Read and parse the request body as a JSON document.
+let readJsonBody (ctx: Microsoft.AspNetCore.Http.HttpContext) = task {
+  use reader = new System.IO.StreamReader(ctx.Request.Body)
+  let! body = reader.ReadToEndAsync()
+  return System.Text.Json.JsonDocument.Parse(body)
+}
+
 // Create shared MCP context
 let mkContext (persistence: SageFs.EventStore.EventPersistence) (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.T>) (stateChanged: IEvent<string> option) (sessionOps: SageFs.SessionManagementOps) (mcpPort: int) (dispatch: (SageFs.SageFsMsg -> unit) option) (getElmModel: (unit -> SageFs.SageFsModel) option) (getElmRegions: (unit -> SageFs.RenderRegion list) option) (getWarmupContext: (string -> System.Threading.Tasks.Task<SageFs.WarmupContext option>) option) : McpContext =
   { Persistence = persistence; DiagnosticsChanged = diagnosticsChanged; StateChanged = stateChanged; SessionOps = sessionOps; SessionMap = System.Collections.Concurrent.ConcurrentDictionary<string, string>(); McpPort = mcpPort; Dispatch = dispatch; GetElmModel = getElmModel; GetElmRegions = getElmRegions; GetWarmupContext = getWarmupContext }
@@ -411,8 +418,7 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
             // Map MCP endpoints
             app.MapMcp() |> ignore
 
-            // Shared context — constructed once
-            let mcpContext = mkContext persistence diagnosticsChanged stateChangedStr sessionOps port dispatch getElmModel getElmRegions getWarmupContext
+            // mcpContext already constructed above for DI — reuse it for route handlers
 
             // ── Helpers: eliminate repeated getElmModel/activeId patterns ──
 
@@ -432,9 +438,7 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
             // POST /exec — send F# code to the session
             app.MapPost("/exec", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
                 withErrorHandling ctx (fun () -> task {
-                    use reader = new System.IO.StreamReader(ctx.Request.Body)
-                    let! body = reader.ReadToEndAsync()
-                    let json = System.Text.Json.JsonDocument.Parse(body)
+                    use! json = readJsonBody ctx
                     let code = json.RootElement.GetProperty("code").GetString()
                     let wd =
                       if json.RootElement.TryGetProperty("working_directory") |> fst then
@@ -456,11 +460,9 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
             // POST /hard-reset — hard reset with optional rebuild
             app.MapPost("/hard-reset", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
                 withErrorHandling ctx (fun () -> task {
-                    use reader = new System.IO.StreamReader(ctx.Request.Body)
-                    let! body = reader.ReadToEndAsync()
+                    use! json = readJsonBody ctx
                     let rebuild =
                         try
-                            let json = System.Text.Json.JsonDocument.Parse(body)
                             if json.RootElement.TryGetProperty("rebuild") |> fst then
                                 json.RootElement.GetProperty("rebuild").GetBoolean()
                             else false
@@ -489,9 +491,7 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
             // POST /load-script — load an .fsx script file
             app.MapPost("/load-script", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
                 withErrorHandling ctx (fun () -> task {
-                    use reader = new System.IO.StreamReader(ctx.Request.Body)
-                    let! body = reader.ReadToEndAsync()
-                    let json = System.Text.Json.JsonDocument.Parse(body)
+                    use! json = readJsonBody ctx
                     let filePath = json.RootElement.GetProperty("path").GetString()
                     let! _result = SageFs.McpTools.loadFSharpScript mcpContext "http" filePath None None
                     do! jsonResponse ctx 200 {| received = true |}
@@ -940,9 +940,7 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
             // POST /api/sessions/create — create a new session
             app.MapPost("/api/sessions/create", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
                 withErrorHandling ctx (fun () -> task {
-                    use reader = new System.IO.StreamReader(ctx.Request.Body)
-                    let! body = reader.ReadToEndAsync()
-                    let doc = System.Text.Json.JsonDocument.Parse(body)
+                    use! doc = readJsonBody ctx
                     let root = doc.RootElement
                     let workingDir =
                       let tryProp (name: string) =
@@ -1012,9 +1010,7 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
             // POST /api/live-testing/policy — set run policy for a test category
             app.MapPost("/api/live-testing/policy", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
                 withErrorHandling ctx (fun () -> task {
-                    use reader = new System.IO.StreamReader(ctx.Request.Body)
-                    let! body = reader.ReadToEndAsync()
-                    let json = System.Text.Json.JsonDocument.Parse(body)
+                    use! json = readJsonBody ctx
                     let category = json.RootElement.GetProperty("category").GetString()
                     let policy = json.RootElement.GetProperty("policy").GetString()
                     let! result = SageFs.McpTools.setRunPolicy mcpContext category policy
@@ -1060,9 +1056,7 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
             // POST /api/live-testing/run — explicitly run tests
             app.MapPost("/api/live-testing/run", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
                 withErrorHandling ctx (fun () -> task {
-                    use reader = new System.IO.StreamReader(ctx.Request.Body)
-                    let! body = reader.ReadToEndAsync()
-                    let json = System.Text.Json.JsonDocument.Parse(body)
+                    use! json = readJsonBody ctx
                     let pattern =
                       match json.RootElement.TryGetProperty("pattern") with
                       | true, v -> let s = v.GetString() in if System.String.IsNullOrWhiteSpace s then None else Some s
@@ -1093,9 +1087,7 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
             // POST /api/completions — get code completions
             app.MapPost("/api/completions", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
                 withErrorHandling ctx (fun () -> task {
-                    use reader = new System.IO.StreamReader(ctx.Request.Body)
-                    let! body = reader.ReadToEndAsync()
-                    let json = System.Text.Json.JsonDocument.Parse(body)
+                    use! json = readJsonBody ctx
                     let code = json.RootElement.GetProperty("code").GetString()
                     let cursor = json.RootElement.GetProperty("cursorPosition").GetInt32()
                     let! result = SageFs.McpTools.getCompletions mcpContext "http" code cursor None

@@ -402,9 +402,8 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
         let snapshot = readSnapshot()
         match Map.tryFind sessionId snapshot.WorkerBaseUrls with
         | Some baseUrl when baseUrl.Length > 0 ->
-          let client = httpClient
-          client.Timeout <- System.TimeSpan.FromSeconds(5.0)
-          let! resp = client.GetStringAsync(sprintf "%s/warmup-context" baseUrl)
+          use cts = new System.Threading.CancellationTokenSource(System.TimeSpan.FromSeconds(5.0))
+          let! resp = httpClient.GetStringAsync(sprintf "%s/warmup-context" baseUrl, cts.Token)
           let ctx = WorkerProtocol.Serialization.deserialize<WarmupContext> resp
           return Some ctx
         | _ -> return None
@@ -418,9 +417,8 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
         let snapshot = readSnapshot()
         match Map.tryFind sessionId snapshot.WorkerBaseUrls with
         | Some baseUrl when baseUrl.Length > 0 ->
-          let client = httpClient
-          client.Timeout <- System.TimeSpan.FromSeconds(5.0)
-          let! resp = client.GetStringAsync(sprintf "%s/hotreload" baseUrl)
+          use cts = new System.Threading.CancellationTokenSource(System.TimeSpan.FromSeconds(5.0))
+          let! resp = httpClient.GetStringAsync(sprintf "%s/hotreload" baseUrl, cts.Token)
           let doc = System.Text.Json.JsonDocument.Parse(resp)
           let files =
             doc.RootElement.GetProperty("files").EnumerateArray()
@@ -552,9 +550,8 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
     match SessionManager.QuerySnapshot.tryGetSession sid snapshot, Map.tryFind sid snapshot.WorkerBaseUrls with
     | Some _, Some baseUrl when baseUrl.Length > 0 ->
       try
-        let client = httpClient
-        client.Timeout <- TimeSpan.FromSeconds(2.0)
-        let! resp = client.GetStringAsync(sprintf "%s/status?replyId=dash" baseUrl)
+        use cts = new Threading.CancellationTokenSource(TimeSpan.FromSeconds(2.0))
+        let! resp = httpClient.GetStringAsync(sprintf "%s/status?replyId=dash" baseUrl, cts.Token)
         use doc = Text.Json.JsonDocument.Parse(resp)
         let root = doc.RootElement
         let snap : WorkerProtocol.WorkerStatusSnapshot = {
@@ -591,9 +588,8 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
     match Map.tryFind sid snapshot.WorkerBaseUrls with
     | Some baseUrl when baseUrl.Length > 0 ->
       try
-        let client = httpClient
-        client.Timeout <- TimeSpan.FromSeconds(2.0)
-        let! resp = client.GetStringAsync(sprintf "%s/status?replyId=dash-stats" baseUrl)
+        use cts = new Threading.CancellationTokenSource(TimeSpan.FromSeconds(2.0))
+        let! resp = httpClient.GetStringAsync(sprintf "%s/status?replyId=dash-stats" baseUrl, cts.Token)
         use doc = Text.Json.JsonDocument.Parse(resp)
         let root = doc.RootElement
         let evalCount = root.GetProperty("evalCount").GetInt32()
@@ -707,7 +703,7 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
       // Shutdown callback for /api/shutdown
       (Some (fun () -> cts.Cancel()))
       // Previous sessions for picker — merge active + historical from Marten
-      (fun () ->
+      (fun () -> task {
         // Active sessions from CQRS snapshot (non-blocking)
         let snapshot = readSnapshot()
         let activeSessions =
@@ -719,23 +715,24 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
               Dashboard.PreviousSession.LastSeen = info.LastActivity })
         let activeIds = activeSessions |> List.map (fun s -> s.Id) |> Set.ofList
         // Historical sessions from Marten (stopped ones not currently active)
-        let historicalSessions =
+        let! historicalSessions = task {
           try
-            let events =
-              persistence.FetchStream daemonStreamId
-              |> fun t -> t.ConfigureAwait(false).GetAwaiter().GetResult()
+            let! events = persistence.FetchStream daemonStreamId
             let daemonState = Features.Replay.DaemonReplayState.replayStream events
-            daemonState.Sessions
-            |> Map.values
-            |> Seq.filter (fun r -> r.StoppedAt.IsSome && not (activeIds.Contains r.SessionId))
-            |> Seq.map (fun r ->
-              { Dashboard.PreviousSession.Id = r.SessionId
-                Dashboard.PreviousSession.WorkingDir = r.WorkingDir
-                Dashboard.PreviousSession.Projects = r.Projects
-                Dashboard.PreviousSession.LastSeen = r.StoppedAt |> Option.map (fun t -> t.DateTime) |> Option.defaultValue r.CreatedAt.DateTime })
-            |> Seq.toList
-          with _ -> []
-        activeSessions @ historicalSessions)
+            return
+              daemonState.Sessions
+              |> Map.values
+              |> Seq.filter (fun r -> r.StoppedAt.IsSome && not (activeIds.Contains r.SessionId))
+              |> Seq.map (fun r ->
+                { Dashboard.PreviousSession.Id = r.SessionId
+                  Dashboard.PreviousSession.WorkingDir = r.WorkingDir
+                  Dashboard.PreviousSession.Projects = r.Projects
+                  Dashboard.PreviousSession.LastSeen = r.StoppedAt |> Option.map (fun t -> t.DateTime) |> Option.defaultValue r.CreatedAt.DateTime })
+              |> Seq.toList
+          with _ -> return []
+        }
+        return activeSessions @ historicalSessions
+      })
       getAllSessions
       sessionThemes
       sessionOps.GetStandbyInfo
@@ -743,9 +740,8 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
         match getWorkerBaseUrl sessionId with
         | Some baseUrl ->
           try
-            let client = httpClient
-            client.Timeout <- TimeSpan.FromSeconds(2.0)
-            let! resp = client.GetStringAsync(sprintf "%s/hotreload" baseUrl)
+            use cts = new Threading.CancellationTokenSource(TimeSpan.FromSeconds(2.0))
+            let! resp = httpClient.GetStringAsync(sprintf "%s/hotreload" baseUrl, cts.Token)
             use doc = Text.Json.JsonDocument.Parse(resp)
             let root = doc.RootElement
             let files =
@@ -763,9 +759,8 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
         match getWorkerBaseUrl sessionId with
         | Some baseUrl ->
           try
-            let client = httpClient
-            client.Timeout <- TimeSpan.FromSeconds(2.0)
-            let! resp = client.GetStringAsync(sprintf "%s/warmup-context" baseUrl)
+            use cts = new Threading.CancellationTokenSource(TimeSpan.FromSeconds(2.0))
+            let! resp = httpClient.GetStringAsync(sprintf "%s/warmup-context" baseUrl, cts.Token)
             let ctx = WorkerProtocol.Serialization.deserialize<WarmupContext> resp
             return Some ctx
           with _ -> return None
