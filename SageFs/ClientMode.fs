@@ -46,26 +46,30 @@ module ReplCommand =
     | "#status" -> ShowStatus
     | s when s.StartsWith("#switch", System.StringComparison.Ordinal) ->
       let sid = s.Substring(7).Trim()
-      if String.IsNullOrWhiteSpace(sid) then SwitchSession ""
-      else SwitchSession sid
+      match String.IsNullOrWhiteSpace(sid) with
+      | true -> SwitchSession ""
+      | false -> SwitchSession sid
     | s when s.StartsWith("#stop", System.StringComparison.Ordinal) ->
-      let sid = (if s.Length > 5 then s.Substring(5) else "").Trim()
-      if String.IsNullOrWhiteSpace(sid) then StopSession ""
-      else StopSession sid
+      let sid = (match s.Length > 5 with true -> s.Substring(5) | false -> "").Trim()
+      match String.IsNullOrWhiteSpace(sid) with
+      | true -> StopSession ""
+      | false -> StopSession sid
     | s when s.StartsWith("#create", System.StringComparison.Ordinal) ->
       let arg = s.Substring(7).Trim()
-      if String.IsNullOrWhiteSpace(arg) then CreateSession None
-      else CreateSession (Some arg)
+      match String.IsNullOrWhiteSpace(arg) with
+      | true -> CreateSession None
+      | false -> CreateSession (Some arg)
     | code -> EvalCode code
 
 /// Display daemon connection info.
 let showConnectionBanner (info: DaemonInfo) =
   let elapsed = DateTime.UtcNow - info.StartedAt
   let agoText =
-    if elapsed.TotalMinutes < 1.0 then "just now"
-    elif elapsed.TotalHours < 1.0 then sprintf "%dm ago" (int elapsed.TotalMinutes)
-    elif elapsed.TotalDays < 1.0 then sprintf "%dh ago" (int elapsed.TotalHours)
-    else sprintf "%dd ago" (int elapsed.TotalDays)
+    match elapsed.TotalMinutes, elapsed.TotalHours, elapsed.TotalDays with
+    | m, _, _ when m < 1.0 -> "just now"
+    | _, h, _ when h < 1.0 -> sprintf "%dm ago" (int elapsed.TotalMinutes)
+    | _, _, d when d < 1.0 -> sprintf "%dh ago" (int elapsed.TotalHours)
+    | _ -> sprintf "%dd ago" (int elapsed.TotalDays)
   printfn "\x1b[36m╭─────────────────────────────────────────────╮\x1b[0m"
   printfn "\x1b[36m│\x1b[0m  SageFs v%s — connected to daemon          \x1b[36m│\x1b[0m" info.Version
   printfn "\x1b[36m│\x1b[0m  PID %d • port %d • started %s        \x1b[36m│\x1b[0m" info.Pid info.Port agoText
@@ -86,9 +90,10 @@ let startDaemonInBackground (daemonArgs: string) =
   psi.CreateNoWindow <- true
 
   let proc = System.Diagnostics.Process.Start(psi)
-  if isNull proc then
+  match isNull proc with
+  | true ->
     Error (SageFsError.DaemonStartFailed "Failed to start daemon")
-  else
+  | false ->
     let mutable attempts = 0
     let mutable found = false
     while attempts < 30 && not found do
@@ -96,8 +101,9 @@ let startDaemonInBackground (daemonArgs: string) =
       match DaemonState.read () with
       | Some _ -> found <- true
       | None -> attempts <- attempts + 1
-    if found then Ok ()
-    else Error (SageFsError.DaemonStartFailed "Daemon started but did not become ready in 15s")
+    match found with
+    | true -> Ok ()
+    | false -> Error (SageFsError.DaemonStartFailed "Daemon started but did not become ready in 15s")
 
 /// Check if a daemon is running and show its info.
 let tryConnect () =
@@ -106,6 +112,13 @@ let tryConnect () =
     showConnectionBanner info
     Some info
   | None -> None
+
+/// Convert connection exceptions to SageFsError.
+let private connectionErrorToSageFsError (ex: exn) : SageFsError =
+  match ex with
+  | :? System.Net.Http.HttpRequestException -> SageFsError.DaemonNotRunning
+  | :? System.Threading.Tasks.TaskCanceledException -> SageFsError.DaemonNotRunning
+  | _ -> SageFsError.Unexpected ex
 
 /// Send F# code to the daemon for evaluation.
 let evalCode (client: HttpClient) (baseUrl: string) (code: string) = task {
@@ -116,21 +129,22 @@ let evalCode (client: HttpClient) (baseUrl: string) (code: string) = task {
     let! body = response.Content.ReadAsStringAsync()
     use doc = JsonDocument.Parse(body)
     let root = doc.RootElement
-    if root.TryGetProperty("success") |> fst then
-      let success = root.GetProperty("success").GetBoolean()
-      if success then
+    match root.TryGetProperty("success") with
+    | true, successProp ->
+      match successProp.GetBoolean() with
+      | true ->
         let result = root.GetProperty("result").GetString()
         return Ok result
-      else
+      | false ->
         let error =
-          if root.TryGetProperty("error") |> fst then
-            root.GetProperty("error").GetString()
-          else "Unknown error"
-        return Error error
-    else
+          match root.TryGetProperty("error") with
+          | true, errorProp -> errorProp.GetString()
+          | false, _ -> "Unknown error"
+        return Error (SageFsError.EvalFailed error)
+    | false, _ ->
       return Ok body
   with ex ->
-    return Error (sprintf "Connection error: %s" ex.Message)
+    return Error (connectionErrorToSageFsError ex)
 }
 
 /// Send a reset command to the daemon.
@@ -140,7 +154,7 @@ let resetSession (client: HttpClient) (baseUrl: string) = task {
     let! body = response.Content.ReadAsStringAsync()
     return Ok body
   with ex ->
-    return Error (sprintf "Connection error: %s" ex.Message)
+    return Error (connectionErrorToSageFsError ex)
 }
 
 /// Send a hard-reset command to the daemon.
@@ -152,7 +166,7 @@ let hardResetSession (client: HttpClient) (baseUrl: string) = task {
     let! body = response.Content.ReadAsStringAsync()
     return Ok body
   with ex ->
-    return Error (sprintf "Connection error: %s" ex.Message)
+    return Error (connectionErrorToSageFsError ex)
 }
 
 /// Fetch structured session list from the daemon.
@@ -162,9 +176,10 @@ let fetchSessions (client: HttpClient) (baseUrl: string) = task {
     let! body = response.Content.ReadAsStringAsync()
     use doc = JsonDocument.Parse(body)
     let root = doc.RootElement
-    if root.TryGetProperty("sessions") |> fst then
+    match root.TryGetProperty("sessions") with
+    | true, sessionsProp ->
       let sessions =
-        root.GetProperty("sessions").EnumerateArray()
+        sessionsProp.EnumerateArray()
         |> Seq.map (fun s ->
           { Id = s.GetProperty("id").GetString()
             Status = s.GetProperty("status").GetString()
@@ -174,10 +189,10 @@ let fetchSessions (client: HttpClient) (baseUrl: string) = task {
             Projects = s.GetProperty("projects").EnumerateArray() |> Seq.map (fun e -> e.GetString()) |> Seq.toList })
         |> Seq.toList
       return Ok sessions
-    else
+    | false, _ ->
       return Ok []
   with ex ->
-    return Error (sprintf "Connection error: %s" ex.Message)
+    return Error (connectionErrorToSageFsError ex)
 }
 
 /// Resolve a partial session ID or numeric index to a full session ID.
@@ -199,11 +214,16 @@ let internal resolveSessionId (sessions: SessionInfo list) (input: string) =
 
 /// Format a session for display with a 1-based index.
 let formatSession (i: int) (s: SessionInfo) =
-  let marker = " "  // no global "active" concept
-  let statusColor = if s.Status = "Ready" then "\x1b[32m" elif s.Status = "WarmingUp" then "\x1b[33m" else "\x1b[31m"
+  let marker = " "
+  let statusColor =
+    match s.Status with
+    | "Ready" -> "\x1b[32m"
+    | "WarmingUp" -> "\x1b[33m"
+    | _ -> "\x1b[31m"
   let projects =
-    if s.Projects.IsEmpty then ""
-    else sprintf " (%s)" (s.Projects |> List.map IO.Path.GetFileNameWithoutExtension |> String.concat ", ")
+    match s.Projects with
+    | [] -> ""
+    | ps -> sprintf " (%s)" (ps |> List.map IO.Path.GetFileNameWithoutExtension |> String.concat ", ")
   let shortId = s.Id.[..min 7 (s.Id.Length - 1)]
   let line1 = sprintf "  %s \x1b[36m%d\x1b[0m  %s %s%s\x1b[0m  evals:%d avg:%.0fms%s" marker (i + 1) shortId statusColor s.Status s.EvalCount s.AvgMs projects
   sprintf "%s\n    dir: %s" line1 s.WorkingDirectory
@@ -215,13 +235,14 @@ let pickSession (sessions: SessionInfo list) (prompt: string) =
   printfn ""
   printf "\x1b[33mEnter number or ID (or blank to cancel): \x1b[0m"
   let input = Console.ReadLine()
-  if String.IsNullOrWhiteSpace(input) then None
-  else resolveSessionId sessions input
+  match String.IsNullOrWhiteSpace(input) with
+  | true -> None
+  | false -> resolveSessionId sessions input
 
 /// List sessions from the daemon.
 let listSessions (client: HttpClient) (baseUrl: string) = task {
   match! fetchSessions client baseUrl with
-  | Error msg -> return Error msg
+  | Error err -> return Error err
   | Ok [] -> return Ok "No sessions running."
   | Ok sessions ->
     let sb = StringBuilder()
@@ -240,12 +261,11 @@ let switchSession (client: HttpClient) (baseUrl: string) (sessionId: string) = t
     let! response = client.PostAsync(sprintf "%s/api/sessions/switch" baseUrl, content)
     let! body = response.Content.ReadAsStringAsync()
     use doc = JsonDocument.Parse(body)
-    if doc.RootElement.GetProperty("success").GetBoolean() then
-      return Ok (sprintf "Switched to session '%s'" sessionId)
-    else
-      return Error "Switch failed"
+    match doc.RootElement.GetProperty("success").GetBoolean() with
+    | true -> return Ok (sprintf "Switched to session '%s'" sessionId)
+    | false -> return Error (SageFsError.SessionSwitchFailed(sessionId, "Server rejected switch request"))
   with ex ->
-    return Error (sprintf "Connection error: %s" ex.Message)
+    return Error (connectionErrorToSageFsError ex)
 }
 
 /// Stop a session.
@@ -256,14 +276,17 @@ let stopSession (client: HttpClient) (baseUrl: string) (sessionId: string) = tas
     let! response = client.PostAsync(sprintf "%s/api/sessions/stop" baseUrl, content)
     let! body = response.Content.ReadAsStringAsync()
     use doc = JsonDocument.Parse(body)
-    if doc.RootElement.TryGetProperty("success") |> fst && doc.RootElement.GetProperty("success").GetBoolean() then
-      let msg = doc.RootElement.GetProperty("message").GetString()
+    let root = doc.RootElement
+    match root.TryGetProperty("success"), root.TryGetProperty("error") with
+    | (true, successProp), _ when successProp.GetBoolean() ->
+      let msg = root.GetProperty("message").GetString()
       return Ok msg
-    else
-      let err = if doc.RootElement.TryGetProperty("error") |> fst then doc.RootElement.GetProperty("error").GetString() else "Stop failed"
-      return Error err
+    | _, (true, errorProp) ->
+      return Error (SageFsError.SessionStopFailed(sessionId, errorProp.GetString()))
+    | _ ->
+      return Error (SageFsError.SessionStopFailed(sessionId, "Stop failed"))
   with ex ->
-    return Error (sprintf "Connection error: %s" ex.Message)
+    return Error (connectionErrorToSageFsError ex)
 }
 
 /// Create a new session.
@@ -274,14 +297,17 @@ let createSession (client: HttpClient) (baseUrl: string) (workingDir: string) (p
     let! response = client.PostAsync(sprintf "%s/api/sessions/create" baseUrl, content)
     let! body = response.Content.ReadAsStringAsync()
     use doc = JsonDocument.Parse(body)
-    if doc.RootElement.TryGetProperty("success") |> fst && doc.RootElement.GetProperty("success").GetBoolean() then
-      let msg = doc.RootElement.GetProperty("message").GetString()
+    let root = doc.RootElement
+    match root.TryGetProperty("success"), root.TryGetProperty("error") with
+    | (true, successProp), _ when successProp.GetBoolean() ->
+      let msg = root.GetProperty("message").GetString()
       return Ok msg
-    else
-      let err = if doc.RootElement.TryGetProperty("error") |> fst then doc.RootElement.GetProperty("error").GetString() else "Create failed"
-      return Error err
+    | _, (true, errorProp) ->
+      return Error (SageFsError.SessionCreationFailed(errorProp.GetString()))
+    | _ ->
+      return Error (SageFsError.SessionCreationFailed "Create failed")
   with ex ->
-    return Error (sprintf "Connection error: %s" ex.Message)
+    return Error (connectionErrorToSageFsError ex)
 }
 
 /// Get diagnostics from the daemon.
@@ -291,23 +317,23 @@ let getDiagnostics (client: HttpClient) (baseUrl: string) = task {
     let! body = resp.Content.ReadAsStringAsync()
     use doc = JsonDocument.Parse(body)
     let root = doc.RootElement
-    if root.TryGetProperty("regions") |> fst then
-      let regions = root.GetProperty("regions").EnumerateArray() |> Seq.toList
+    match root.TryGetProperty("regions") with
+    | true, regionsProp ->
+      let regions = regionsProp.EnumerateArray() |> Seq.toList
       let diagRegion =
         regions |> List.tryFind (fun r ->
           r.GetProperty("id").GetString() = "diagnostics")
       match diagRegion with
       | Some r ->
         let content = r.GetProperty("content").GetString()
-        if String.IsNullOrWhiteSpace(content) then
-          return Ok "No diagnostics."
-        else
-          return Ok (sprintf "\x1b[36mDiagnostics:\x1b[0m\n%s" content)
+        match String.IsNullOrWhiteSpace(content) with
+        | true -> return Ok "No diagnostics."
+        | false -> return Ok (sprintf "\x1b[36mDiagnostics:\x1b[0m\n%s" content)
       | None -> return Ok "No diagnostics available."
-    else
+    | false, _ ->
       return Ok "No diagnostics available."
   with ex ->
-    return Error (sprintf "Connection error: %s" ex.Message)
+    return Error (connectionErrorToSageFsError ex)
 }
 
 /// Show help for available REPL commands.
@@ -335,7 +361,7 @@ let checkHealth (client: HttpClient) (baseUrl: string) = task {
     let! body = response.Content.ReadAsStringAsync()
     return Ok body
   with ex ->
-    return Error (sprintf "Connection error: %s" ex.Message)
+    return Error (connectionErrorToSageFsError ex)
 }
 
 /// History file path for connect client.
@@ -346,13 +372,14 @@ let historyPath =
 
 /// Load history from disk.
 let loadHistory () =
-  if IO.File.Exists(historyPath) then
+  match IO.File.Exists(historyPath) with
+  | true ->
     IO.File.ReadAllLines(historyPath)
     |> Array.toList
     |> List.rev
     |> List.truncate 500
     |> List.rev
-  else []
+  | false -> []
 
 /// Append an entry to history.
 let appendHistory (entry: string) =
@@ -365,25 +392,28 @@ let readInputBlock (evalCount: int) =
   let mutable reading = true
   let mutable firstLine = true
   while reading do
-    if firstLine then
-      if evalCount > 0 then
-        printf "\x1b[90m[%d]\x1b[0m \x1b[32m> \x1b[0m" evalCount
-      else
-        printf "\x1b[32m> \x1b[0m"
-    else
+    match firstLine with
+    | true ->
+      match evalCount > 0 with
+      | true -> printf "\x1b[90m[%d]\x1b[0m \x1b[32m> \x1b[0m" evalCount
+      | false -> printf "\x1b[32m> \x1b[0m"
+    | false ->
       printf "\x1b[90m. \x1b[0m"
     firstLine <- false
     let line = Console.ReadLine()
-    if isNull line then
+    match isNull line with
+    | true ->
       reading <- false
-    else
+    | false ->
       sb.AppendLine(line) |> ignore
       let text = sb.ToString().TrimEnd()
-      if text.EndsWith(";;", System.StringComparison.Ordinal) then
-        reading <- false
+      match text.EndsWith(";;", System.StringComparison.Ordinal) with
+      | true -> reading <- false
+      | false -> ()
   let result = sb.ToString().Trim()
-  if String.IsNullOrWhiteSpace(result) then None
-  else Some result
+  match String.IsNullOrWhiteSpace(result) with
+  | true -> None
+  | false -> Some result
 
 /// Run the connect REPL loop.
 let run (info: DaemonInfo) = task {
@@ -393,13 +423,14 @@ let run (info: DaemonInfo) = task {
 
   // Verify connection
   match! checkHealth client baseUrl with
-  | Error msg ->
-    eprintfn "\x1b[31mCannot connect to daemon: %s\x1b[0m" msg
+  | Error err ->
+    eprintfn "\x1b[31mCannot connect to daemon: %s\x1b[0m" (SageFsError.describe err)
     return 1
   | Ok _ ->
 
   let mutable running = true
   let mutable evalCount = 0
+  let printError (err: SageFsError) = eprintfn "\x1b[31m%s\x1b[0m" (SageFsError.describe err)
   while running do
     match readInputBlock evalCount with
     | None -> running <- false
@@ -412,60 +443,59 @@ let run (info: DaemonInfo) = task {
       | ListSessions ->
         match! listSessions client baseUrl with
         | Ok msg -> printfn "%s" msg
-        | Error msg -> eprintfn "\x1b[31m%s\x1b[0m" msg
+        | Error err -> printError err
       | SwitchSession sid ->
-        if String.IsNullOrEmpty(sid) then
-          // Interactive picker
+        match String.IsNullOrEmpty(sid) with
+        | true ->
           match! fetchSessions client baseUrl with
-          | Error msg -> eprintfn "\x1b[31m%s\x1b[0m" msg
+          | Error err -> printError err
           | Ok [] -> printfn "No sessions running."
           | Ok sessions ->
             match pickSession sessions "Switch to session:" with
             | Some resolvedId ->
               match! switchSession client baseUrl resolvedId with
               | Ok msg -> printfn "\x1b[33m%s\x1b[0m" msg
-              | Error msg -> eprintfn "\x1b[31m%s\x1b[0m" msg
+              | Error err -> printError err
             | None -> printfn "\x1b[90mCancelled.\x1b[0m"
-        else
-          // Partial ID matching
+        | false ->
           match! fetchSessions client baseUrl with
           | Error _ ->
             match! switchSession client baseUrl sid with
             | Ok msg -> printfn "\x1b[33m%s\x1b[0m" msg
-            | Error msg -> eprintfn "\x1b[31m%s\x1b[0m" msg
+            | Error err -> printError err
           | Ok sessions ->
             match resolveSessionId sessions sid with
             | Some resolvedId ->
               match! switchSession client baseUrl resolvedId with
               | Ok msg -> printfn "\x1b[33m%s\x1b[0m" msg
-              | Error msg -> eprintfn "\x1b[31m%s\x1b[0m" msg
+              | Error err -> printError err
             | None ->
               eprintfn "\x1b[31mNo session matching '%s'. Use #sessions to list.\x1b[0m" sid
       | StopSession sid ->
-        if String.IsNullOrEmpty(sid) then
-          // Interactive picker
+        match String.IsNullOrEmpty(sid) with
+        | true ->
           match! fetchSessions client baseUrl with
-          | Error msg -> eprintfn "\x1b[31m%s\x1b[0m" msg
+          | Error err -> printError err
           | Ok [] -> printfn "No sessions running."
           | Ok sessions ->
             match pickSession sessions "Stop session:" with
             | Some resolvedId ->
               match! stopSession client baseUrl resolvedId with
               | Ok msg -> printfn "\x1b[33m%s\x1b[0m" msg
-              | Error msg -> eprintfn "\x1b[31m%s\x1b[0m" msg
+              | Error err -> printError err
             | None -> printfn "\x1b[90mCancelled.\x1b[0m"
-        else
+        | false ->
           match! fetchSessions client baseUrl with
           | Error _ ->
             match! stopSession client baseUrl sid with
             | Ok msg -> printfn "\x1b[33m%s\x1b[0m" msg
-            | Error msg -> eprintfn "\x1b[31m%s\x1b[0m" msg
+            | Error err -> printError err
           | Ok sessions ->
             match resolveSessionId sessions sid with
             | Some resolvedId ->
               match! stopSession client baseUrl resolvedId with
               | Ok msg -> printfn "\x1b[33m%s\x1b[0m" msg
-              | Error msg -> eprintfn "\x1b[31m%s\x1b[0m" msg
+              | Error err -> printError err
             | None ->
               eprintfn "\x1b[31mNo session matching '%s'. Use #sessions to list.\x1b[0m" sid
       | CreateSession dirOpt ->
@@ -473,20 +503,20 @@ let run (info: DaemonInfo) = task {
         printfn "\x1b[33m⏳ Creating session in %s...\x1b[0m" workDir
         match! createSession client baseUrl workDir [] with
         | Ok msg -> printfn "\x1b[33m%s\x1b[0m" msg
-        | Error msg -> eprintfn "\x1b[31m%s\x1b[0m" msg
+        | Error err -> printError err
       | ShowDiagnostics ->
         match! getDiagnostics client baseUrl with
         | Ok msg -> printfn "%s" msg
-        | Error msg -> eprintfn "\x1b[31m%s\x1b[0m" msg
+        | Error err -> printError err
       | Reset ->
         match! resetSession client baseUrl with
         | Ok msg -> printfn "\x1b[33m%s\x1b[0m" msg
-        | Error msg -> eprintfn "\x1b[31m%s\x1b[0m" msg
+        | Error err -> printError err
       | HardReset ->
         printfn "\x1b[33mHard resetting (with rebuild)...\x1b[0m"
         match! hardResetSession client baseUrl with
         | Ok msg -> printfn "\x1b[33m%s\x1b[0m" msg
-        | Error msg -> eprintfn "\x1b[31m%s\x1b[0m" msg
+        | Error err -> printError err
       | ShowStatus ->
         match! checkHealth client baseUrl with
         | Ok _ ->
@@ -496,7 +526,9 @@ let run (info: DaemonInfo) = task {
             use doc = System.Text.Json.JsonDocument.Parse(body)
             let r = doc.RootElement
             let get (name: string) =
-              if r.TryGetProperty(name) |> fst then r.GetProperty(name).ToString() else "?"
+              match r.TryGetProperty(name) with
+              | true, prop -> prop.ToString()
+              | false, _ -> "?"
             printfn "\x1b[36mSageFs Status\x1b[0m"
             printfn "  Session:    %s (%s)" (get "sessionId") (get "sessionState")
             printfn "  Version:    %s" (get "version")
@@ -507,7 +539,7 @@ let run (info: DaemonInfo) = task {
             printfn "  Directory:  %s" (get "workingDirectory")
           with ex ->
             printfn "Status: connected (details unavailable: %s)" ex.Message
-        | Error msg -> eprintfn "\x1b[31m%s\x1b[0m" msg
+        | Error err -> printError err
       | EvalCode code ->
         appendHistory code
         let sw = System.Diagnostics.Stopwatch.StartNew()
@@ -515,13 +547,14 @@ let run (info: DaemonInfo) = task {
         | Ok result ->
           sw.Stop()
           evalCount <- evalCount + 1
-          if not (String.IsNullOrWhiteSpace result) then
-            printfn "%s" result
+          match String.IsNullOrWhiteSpace result with
+          | false -> printfn "%s" result
+          | true -> ()
           printfn "\x1b[90m(%dms)\x1b[0m" sw.ElapsedMilliseconds
-        | Error msg ->
+        | Error err ->
           sw.Stop()
           evalCount <- evalCount + 1
-          eprintfn "\x1b[31m%s\x1b[0m" msg
+          printError err
       printfn ""
 
   printfn "Disconnected."

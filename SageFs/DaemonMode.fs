@@ -16,9 +16,9 @@ let proxyToSession
   (getProxy: string -> Threading.Tasks.Task<(WorkerProtocol.WorkerMessage -> Async<WorkerProtocol.WorkerResponse>) option>)
   (sid: string)
   (msg: WorkerProtocol.WorkerMessage)
-  : Threading.Tasks.Task<Result<WorkerProtocol.WorkerResponse, string>> = task {
+  : Threading.Tasks.Task<Result<WorkerProtocol.WorkerResponse, SageFsError>> = task {
   match sid with
-  | null | "" -> return Error "No session selected"
+  | null | "" -> return Error (SageFsError.SessionNotFound (sid |> Option.ofObj |> Option.defaultValue ""))
   | _ ->
     try
       let! proxy = getProxy sid
@@ -26,14 +26,14 @@ let proxyToSession
       | Some send ->
         let! resp = send msg |> Async.StartAsTask
         return Ok resp
-      | None -> return Error "No active session"
+      | None -> return Error (SageFsError.WorkerCommunicationFailed(sid, "No proxy available for session"))
     with
     | :? IO.IOException as ex ->
-      return Error (sprintf "Session pipe broken — %s" ex.Message)
+      return Error (SageFsError.WorkerCommunicationFailed(sid, sprintf "Session pipe broken — %s" ex.Message))
     | :? AggregateException as ae when (ae.InnerException :? IO.IOException) ->
-      return Error (sprintf "Session pipe broken — %s" ae.InnerException.Message)
+      return Error (SageFsError.WorkerCommunicationFailed(sid, sprintf "Session pipe broken — %s" ae.InnerException.Message))
     | :? ObjectDisposedException as ex ->
-      return Error (sprintf "Session pipe closed — %s" ex.Message)
+      return Error (SageFsError.WorkerCommunicationFailed(sid, sprintf "Session pipe closed — %s" ex.Message))
 }
 
 /// Run SageFs as a headless daemon.
@@ -756,7 +756,7 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
           elmRuntime.Dispatch (SageFsMsg.Event (SageFsEvent.EvalFailed (sid, msg)))
           Error msg
         | Ok other -> Error (sprintf "Unexpected: %A" other)
-        | Error e -> Error e
+        | Error e -> Error (SageFsError.describe e)
     }
     ResetSession = fun sid -> task {
       let! result = proxyToSession sessionOps.GetProxy sid (WorkerProtocol.WorkerMessage.ResetSession "dash")
@@ -765,11 +765,11 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
         | Ok (WorkerProtocol.WorkerResponse.ResetResult(_, Ok ())) -> Ok "Session reset successfully"
         | Ok (WorkerProtocol.WorkerResponse.ResetResult(_, Error e)) -> Error (sprintf "Reset failed: %A" e)
         | Ok other -> Error (sprintf "Unexpected: %A" other)
-        | Error e -> Error e
+        | Error e -> Error (SageFsError.describe e)
     }
     HardResetSession = fun sid -> task {
       match sid with
-      | null | "" -> return Error "No session selected"
+      | null | "" -> return Error (SageFsError.describe (SageFsError.SessionNotFound ""))
       | _ ->
         let! result = sessionOps.RestartSession sid true
         return
@@ -788,7 +788,7 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
       return
         match result with
         | Ok msg -> Ok msg
-        | Error e -> Error (sprintf "Stop failed: %A" e)
+        | Error e -> Error (SageFsError.describe e)
     })
     CreateSession = Some (fun (projects: string list) (workingDir: string) -> task {
       let! result = sessionOps.CreateSession projects workingDir
@@ -796,7 +796,7 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
       return
         match result with
         | Ok msg -> Ok msg
-        | Error e -> Error (sprintf "%A" e)
+        | Error e -> Error (SageFsError.describe e)
     })
     ShutdownCallback = Some (fun () -> cts.Cancel())
   }
