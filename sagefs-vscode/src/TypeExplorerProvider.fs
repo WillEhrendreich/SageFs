@@ -29,72 +29,57 @@ let expandableItem (label: string) (desc: string) (icon: string) (contextValue: 
   item?contextValue <- contextValue
   item
 
+let private parseLine (line: string) : obj =
+  let trimmed = line.Trim()
+  match trimmed with
+  | t when t.StartsWith("namespace") || t.StartsWith("module") ->
+    let name = t.Split(' ') |> Array.last
+    expandableItem name "" "symbol-namespace" (sprintf "ns:%s" name) :> obj
+  | t when t.StartsWith("type") ->
+    let name = t.Split(' ') |> Array.tryItem 1 |> Option.defaultValue t
+    leafItem name "type" "symbol-class" :> obj
+  | t ->
+    leafItem t "" "symbol-misc" :> obj
+
+let private parseExploreResponse (json: string) : obj array option =
+  try
+    let parsed = jsonParse json
+    let text = parsed?content |> unbox<string>
+    text.Split('\n')
+    |> Array.filter (fun l -> l.Trim().Length > 0)
+    |> Array.truncate 50
+    |> Array.map parseLine
+    |> Some
+  with _ -> None
+
+let private exploreAndParse (query: string) (errorMsg: string) (c: Client.Client) =
+  promise {
+    let! result = Client.explore query c
+    match result with
+    | Some json ->
+      match parseExploreResponse json with
+      | Some items -> return items
+      | None -> return [| leafItem errorMsg "" "warning" :> obj |]
+    | None ->
+      return [| leafItem "Not connected" "" "warning" :> obj |]
+  }
+
 // ── TreeDataProvider ─────────────────────────────────────────────
 
 let getChildren (element: obj option) : JS.Promise<obj array> =
   promise {
     match element, currentClient with
     | None, _ ->
-      // Root: show prompt to explore
       let item = expandableItem "Namespaces" "explore loaded types" "symbol-namespace" "ns-root"
       return [| item :> obj |]
     | Some el, Some c when (el?contextValue |> unbox<string>) = "ns-root" ->
-      // Load top-level namespaces from the session
-      let! result = Client.explore "System" c
-      match result with
-      | Some json ->
-        try
-          let parsed = jsonParse json
-          let text = parsed?content |> unbox<string>
-          let lines =
-            text.Split('\n')
-            |> Array.filter (fun l -> l.Trim().Length > 0)
-            |> Array.truncate 50
-          return
-            lines |> Array.map (fun line ->
-              let trimmed = line.Trim()
-              if trimmed.StartsWith("namespace") || trimmed.StartsWith("module") then
-                let name = trimmed.Split(' ') |> Array.last
-                expandableItem name "" "symbol-namespace" (sprintf "ns:%s" name) :> obj
-              elif trimmed.StartsWith("type") then
-                let name = trimmed.Split(' ') |> Array.tryItem 1 |> Option.defaultValue trimmed
-                leafItem name "type" "symbol-class" :> obj
-              else
-                leafItem trimmed "" "symbol-misc" :> obj)
-        with _ ->
-          return [| leafItem "Error parsing response" "" "warning" :> obj |]
-      | None ->
-        return [| leafItem "Not connected" "" "warning" :> obj |]
+      return! exploreAndParse "System" "Error parsing response" c
     | Some el, Some c ->
       let ctx = el?contextValue |> unbox<string>
-      if ctx <> null && ctx.StartsWith("ns:") then
-        let nsName = ctx.Substring(3)
-        let! result = Client.explore nsName c
-        match result with
-        | Some json ->
-          try
-            let parsed = jsonParse json
-            let text = parsed?content |> unbox<string>
-            let lines =
-              text.Split('\n')
-              |> Array.filter (fun l -> l.Trim().Length > 0)
-              |> Array.truncate 50
-            return
-              lines |> Array.map (fun line ->
-                let trimmed = line.Trim()
-                if trimmed.StartsWith("namespace") || trimmed.StartsWith("module") then
-                  let name = trimmed.Split(' ') |> Array.last
-                  expandableItem name "" "symbol-namespace" (sprintf "ns:%s" name) :> obj
-                elif trimmed.StartsWith("type") then
-                  let name = trimmed.Split(' ') |> Array.tryItem 1 |> Option.defaultValue trimmed
-                  leafItem name "type" "symbol-class" :> obj
-                else
-                  leafItem trimmed "" "symbol-misc" :> obj)
-          with _ ->
-            return [| leafItem "Error parsing" "" "warning" :> obj |]
-        | None ->
-          return [| leafItem "Could not explore" "" "warning" :> obj |]
-      else
+      match ctx with
+      | c' when c' <> null && c'.StartsWith("ns:") ->
+        return! exploreAndParse (c'.Substring(3)) "Error parsing" c
+      | _ ->
         return [||]
     | _, None ->
       return [| leafItem "Not connected" "" "warning" :> obj |]
