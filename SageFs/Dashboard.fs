@@ -1504,7 +1504,12 @@ let createStreamHandler
             do! ssePatchNode ctx (renderHotReloadPanel currentSessionId hr.files hr.watchedCount)
           | None ->
             do! ssePatchNode ctx renderHotReloadEmpty
-        with _ ->
+        with
+        | :? System.IO.IOException | :? ObjectDisposedException
+        | :? System.Net.Http.HttpRequestException | :? Threading.Tasks.TaskCanceledException ->
+          do! ssePatchNode ctx renderHotReloadEmpty
+        | ex ->
+          eprintfn "[dashboard] Hot-reload panel error: %s (%s)" ex.Message (ex.GetType().Name)
           do! ssePatchNode ctx renderHotReloadEmpty
       else
         do! ssePatchNode ctx renderHotReloadEmpty
@@ -1518,7 +1523,9 @@ let createStreamHandler
             let! hrState =
               task {
                 try return! q.GetHotReloadState currentSessionId
-                with _ -> return None
+                with
+                | :? System.IO.IOException | :? ObjectDisposedException
+                | :? System.Net.Http.HttpRequestException | :? Threading.Tasks.TaskCanceledException -> return None
               }
             let fileStatuses =
               match hrState with
@@ -1540,7 +1547,12 @@ let createStreamHandler
             do! ssePatchNode ctx (renderSessionContextPanel sCtx)
           | None ->
             do! ssePatchNode ctx renderSessionContextEmpty
-        with _ ->
+        with
+        | :? System.IO.IOException | :? ObjectDisposedException
+        | :? System.Net.Http.HttpRequestException | :? Threading.Tasks.TaskCanceledException ->
+          do! ssePatchNode ctx renderSessionContextEmpty
+        | ex ->
+          eprintfn "[dashboard] Session context panel error: %s (%s)" ex.Message (ex.GetType().Name)
           do! ssePatchNode ctx renderSessionContextEmpty
       else
         do! ssePatchNode ctx renderSessionContextEmpty

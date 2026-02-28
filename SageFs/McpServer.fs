@@ -873,7 +873,9 @@ let startMcpServer (cfg: McpServerConfig) =
                          warmupFailures = ([] : {| name: string; error: string |} list)
                          regions = regionData
                          pid = Environment.ProcessId
-                         uptime = (DateTime.UtcNow - System.Diagnostics.Process.GetCurrentProcess().StartTime.ToUniversalTime()).TotalSeconds |}
+                         uptime =
+                           use proc = System.Diagnostics.Process.GetCurrentProcess()
+                           (DateTime.UtcNow - proc.StartTime.ToUniversalTime()).TotalSeconds |}
                     do! jsonResponse ctx 200 data
                 }) :> Task
             ) |> ignore
@@ -888,7 +890,7 @@ let startMcpServer (cfg: McpServerConfig) =
                       Environment.GetEnvironmentVariable("SAGEFS_RESTART_COUNT")
                       |> Option.ofObj |> Option.bind (fun s -> match Int32.TryParse s with true, n -> Some n | _ -> None)
                       |> Option.defaultValue 0
-                    let proc = System.Diagnostics.Process.GetCurrentProcess()
+                    use proc = System.Diagnostics.Process.GetCurrentProcess()
                     let uptime = (DateTime.UtcNow - proc.StartTime.ToUniversalTime()).TotalSeconds
                     let version = DaemonInfo.version
                     let! allSessions = cfg.SessionOps.GetAllSessions()
