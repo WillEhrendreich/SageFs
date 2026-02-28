@@ -16,6 +16,24 @@ module FalcoResponse = Falco.Response
 
 let defaultThemeName = "Kanagawa"
 
+/// Precomputed syntax-color RGB → CSS class lookup (eliminates 12-branch if/elif chain)
+let syntaxColorLookup =
+  let t = Theme.defaults
+  dict [
+    Theme.hexToRgb t.SynKeyword, "syn-keyword"
+    Theme.hexToRgb t.SynString, "syn-string"
+    Theme.hexToRgb t.SynComment, "syn-comment"
+    Theme.hexToRgb t.SynNumber, "syn-number"
+    Theme.hexToRgb t.SynOperator, "syn-operator"
+    Theme.hexToRgb t.SynType, "syn-type"
+    Theme.hexToRgb t.SynFunction, "syn-function"
+    Theme.hexToRgb t.SynModule, "syn-module"
+    Theme.hexToRgb t.SynAttribute, "syn-attribute"
+    Theme.hexToRgb t.SynPunctuation, "syn-punctuation"
+    Theme.hexToRgb t.SynConstant, "syn-constant"
+    Theme.hexToRgb t.SynProperty, "syn-property"
+  ]
+
 /// Save theme preferences to ~/.SageFs/themes.json
 let saveThemes (sageFsDir: string) (themes: Collections.Concurrent.ConcurrentDictionary<string, string>) =
   try
@@ -674,22 +692,11 @@ let renderHighlightedLine (spans: ColorSpan array) (line: string) : XmlNode list
       if span.Start >= 0 && span.Start < line.Length then
         let end' = min (span.Start + span.Length) line.Length
         let text = line.Substring(span.Start, end' - span.Start)
-        // Map fg packed RGB to a CSS class using theme defaults
+        // Map fg packed RGB to a CSS class using precomputed lookup table
         let cssClass =
-          let theme = Theme.defaults
-          if span.Fg = Theme.hexToRgb theme.SynKeyword then "syn-keyword"
-          elif span.Fg = Theme.hexToRgb theme.SynString then "syn-string"
-          elif span.Fg = Theme.hexToRgb theme.SynComment then "syn-comment"
-          elif span.Fg = Theme.hexToRgb theme.SynNumber then "syn-number"
-          elif span.Fg = Theme.hexToRgb theme.SynOperator then "syn-operator"
-          elif span.Fg = Theme.hexToRgb theme.SynType then "syn-type"
-          elif span.Fg = Theme.hexToRgb theme.SynFunction then "syn-function"
-          elif span.Fg = Theme.hexToRgb theme.SynModule then "syn-module"
-          elif span.Fg = Theme.hexToRgb theme.SynAttribute then "syn-attribute"
-          elif span.Fg = Theme.hexToRgb theme.SynPunctuation then "syn-punctuation"
-          elif span.Fg = Theme.hexToRgb theme.SynConstant then "syn-constant"
-          elif span.Fg = Theme.hexToRgb theme.SynProperty then "syn-property"
-          else ""
+          match syntaxColorLookup.TryGetValue(span.Fg) with
+          | true, cls -> cls
+          | false, _ -> ""
         if cssClass <> "" then
           nodes.Add(Elem.span [ Attr.class' cssClass ] [ Text.raw (System.Net.WebUtility.HtmlEncode text) ])
         else
@@ -2045,6 +2052,80 @@ let createApiStateHandler
       connectionTracker |> Option.iter (fun t -> t.Unregister(clientId))
   }
 
+/// Parse an editor action string + optional value into an EditorAction DU case.
+let parseEditorAction (actionName: string) (value: string option) : EditorAction option =
+  match actionName with
+  | "insertChar" ->
+    value |> Option.bind (fun s -> if s.Length > 0 then Some (EditorAction.InsertChar s.[0]) else None)
+  | "newLine" -> Some EditorAction.NewLine
+  | "submit" -> Some EditorAction.Submit
+  | "cancel" -> Some EditorAction.Cancel
+  | "deleteBackward" -> Some EditorAction.DeleteBackward
+  | "deleteForward" -> Some EditorAction.DeleteForward
+  | "deleteWord" -> Some EditorAction.DeleteWord
+  | "moveUp" -> Some (EditorAction.MoveCursor Direction.Up)
+  | "moveDown" -> Some (EditorAction.MoveCursor Direction.Down)
+  | "moveLeft" -> Some (EditorAction.MoveCursor Direction.Left)
+  | "moveRight" -> Some (EditorAction.MoveCursor Direction.Right)
+  | "setCursorPosition" ->
+    value |> Option.bind (fun v ->
+      let parts = (v : string).Split(',')
+      match parts.Length = 2 with
+      | false -> None
+      | true ->
+        match Int32.TryParse(parts.[0] : string), Int32.TryParse(parts.[1] : string) with
+        | (true, line), (true, col) -> Some (EditorAction.SetCursorPosition (line, col))
+        | _ -> None)
+  | "moveWordForward" -> Some EditorAction.MoveWordForward
+  | "moveWordBackward" -> Some EditorAction.MoveWordBackward
+  | "moveToLineStart" -> Some EditorAction.MoveToLineStart
+  | "moveToLineEnd" -> Some EditorAction.MoveToLineEnd
+  | "undo" -> Some EditorAction.Undo
+  | "selectAll" -> Some EditorAction.SelectAll
+  | "triggerCompletion" -> Some EditorAction.TriggerCompletion
+  | "dismissCompletion" -> Some EditorAction.DismissCompletion
+  | "historyPrevious" -> Some EditorAction.HistoryPrevious
+  | "historyNext" -> Some EditorAction.HistoryNext
+  | "acceptCompletion" -> Some EditorAction.AcceptCompletion
+  | "nextCompletion" -> Some EditorAction.NextCompletion
+  | "previousCompletion" -> Some EditorAction.PreviousCompletion
+  | "selectWord" -> Some EditorAction.SelectWord
+  | "deleteToEndOfLine" -> Some EditorAction.DeleteToEndOfLine
+  | "redo" -> Some EditorAction.Redo
+  | "toggleSessionPanel" -> Some EditorAction.ToggleSessionPanel
+  | "listSessions" -> Some EditorAction.ListSessions
+  | "switchSession" -> value |> Option.map EditorAction.SwitchSession
+  | "createSession" -> value |> Option.map (fun v -> EditorAction.CreateSession [v])
+  | "stopSession" -> value |> Option.map EditorAction.StopSession
+  | "historySearch" -> value |> Option.map EditorAction.HistorySearch
+  | "resetSession" -> Some EditorAction.ResetSession
+  | "hardResetSession" -> Some EditorAction.HardResetSession
+  | "sessionNavUp" -> Some EditorAction.SessionNavUp
+  | "sessionNavDown" -> Some EditorAction.SessionNavDown
+  | "sessionSelect" -> Some EditorAction.SessionSelect
+  | "sessionDelete" -> Some EditorAction.SessionDelete
+  | "sessionStopOthers" -> Some EditorAction.SessionStopOthers
+  | "clearOutput" -> Some EditorAction.ClearOutput
+  | "sessionSetIndex" ->
+    value |> Option.bind (fun s -> match Int32.TryParse(s) with true, i -> Some (EditorAction.SessionSetIndex i) | _ -> None)
+  | "sessionCycleNext" -> Some EditorAction.SessionCycleNext
+  | "sessionCyclePrev" -> Some EditorAction.SessionCyclePrev
+  | "promptChar" ->
+    value |> Option.bind (fun s -> if s.Length > 0 then Some (EditorAction.PromptChar s.[0]) else None)
+  | "promptBackspace" -> Some EditorAction.PromptBackspace
+  | "promptConfirm" -> Some EditorAction.PromptConfirm
+  | "promptCancel" -> Some EditorAction.PromptCancel
+  | _ -> None
+
+/// Parse an app-level message, falling back to EditorAction wrapped in SageFsMsg.Editor.
+let parseAppMsg (actionName: string) (editorAction: EditorAction option) : SageFsMsg option =
+  match actionName with
+  | "enableLiveTesting" -> Some SageFsMsg.EnableLiveTesting
+  | "disableLiveTesting" -> Some SageFsMsg.DisableLiveTesting
+  | "cycleRunPolicy" -> Some SageFsMsg.CycleRunPolicy
+  | "toggleCoverage" -> Some SageFsMsg.ToggleCoverage
+  | _ -> editorAction |> Option.map SageFsMsg.Editor
+
 /// POST /api/dispatch — accept EditorAction JSON and dispatch to Elm runtime.
 let createApiDispatchHandler
   (dispatch: SageFsMsg -> unit)
@@ -2054,82 +2135,8 @@ let createApiDispatchHandler
     let! body = reader.ReadToEndAsync()
     try
       let action = System.Text.Json.JsonSerializer.Deserialize<{| action: string; value: string option |}>(body)
-      let editorAction =
-        match action.action with
-        | "insertChar" ->
-          action.value |> Option.bind (fun s -> if s.Length > 0 then Some (EditorAction.InsertChar s.[0]) else None)
-        | "newLine" -> Some EditorAction.NewLine
-        | "submit" -> Some EditorAction.Submit
-        | "cancel" -> Some EditorAction.Cancel
-        | "deleteBackward" -> Some EditorAction.DeleteBackward
-        | "deleteForward" -> Some EditorAction.DeleteForward
-        | "deleteWord" -> Some EditorAction.DeleteWord
-        | "moveUp" -> Some (EditorAction.MoveCursor Direction.Up)
-        | "moveDown" -> Some (EditorAction.MoveCursor Direction.Down)
-        | "moveLeft" -> Some (EditorAction.MoveCursor Direction.Left)
-        | "moveRight" -> Some (EditorAction.MoveCursor Direction.Right)
-        | "setCursorPosition" ->
-          match action.value with
-          | Some v ->
-            let parts = (v : string).Split(',')
-            if parts.Length = 2 then
-              match System.Int32.TryParse(parts.[0] : string), System.Int32.TryParse(parts.[1] : string) with
-              | (true, line), (true, col) -> Some (EditorAction.SetCursorPosition (line, col))
-              | _ -> None
-            else None
-          | None -> None
-        | "moveWordForward" -> Some EditorAction.MoveWordForward
-        | "moveWordBackward" -> Some EditorAction.MoveWordBackward
-        | "moveToLineStart" -> Some EditorAction.MoveToLineStart
-        | "moveToLineEnd" -> Some EditorAction.MoveToLineEnd
-        | "undo" -> Some EditorAction.Undo
-        | "selectAll" -> Some EditorAction.SelectAll
-        | "triggerCompletion" -> Some EditorAction.TriggerCompletion
-        | "dismissCompletion" -> Some EditorAction.DismissCompletion
-        | "historyPrevious" -> Some EditorAction.HistoryPrevious
-        | "historyNext" -> Some EditorAction.HistoryNext
-        | "acceptCompletion" -> Some EditorAction.AcceptCompletion
-        | "nextCompletion" -> Some EditorAction.NextCompletion
-        | "previousCompletion" -> Some EditorAction.PreviousCompletion
-        | "selectWord" -> Some EditorAction.SelectWord
-        | "deleteToEndOfLine" -> Some EditorAction.DeleteToEndOfLine
-        | "redo" -> Some EditorAction.Redo
-        | "toggleSessionPanel" -> Some EditorAction.ToggleSessionPanel
-        | "listSessions" -> Some EditorAction.ListSessions
-        | "switchSession" ->
-          action.value |> Option.map EditorAction.SwitchSession
-        | "createSession" ->
-          action.value |> Option.map (fun v -> EditorAction.CreateSession [v])
-        | "stopSession" ->
-          action.value |> Option.map EditorAction.StopSession
-        | "historySearch" ->
-          action.value |> Option.map EditorAction.HistorySearch
-        | "resetSession" -> Some EditorAction.ResetSession
-        | "hardResetSession" -> Some EditorAction.HardResetSession
-        | "sessionNavUp" -> Some EditorAction.SessionNavUp
-        | "sessionNavDown" -> Some EditorAction.SessionNavDown
-        | "sessionSelect" -> Some EditorAction.SessionSelect
-        | "sessionDelete" -> Some EditorAction.SessionDelete
-        | "sessionStopOthers" -> Some EditorAction.SessionStopOthers
-        | "clearOutput" -> Some EditorAction.ClearOutput
-        | "sessionSetIndex" ->
-          action.value |> Option.bind (fun s -> match Int32.TryParse(s) with true, i -> Some (EditorAction.SessionSetIndex i) | _ -> None)
-        | "sessionCycleNext" -> Some EditorAction.SessionCycleNext
-        | "sessionCyclePrev" -> Some EditorAction.SessionCyclePrev
-        | "promptChar" ->
-          action.value |> Option.bind (fun s -> if s.Length > 0 then Some (EditorAction.PromptChar s.[0]) else None)
-        | "promptBackspace" -> Some EditorAction.PromptBackspace
-        | "promptConfirm" -> Some EditorAction.PromptConfirm
-        | "promptCancel" -> Some EditorAction.PromptCancel
-        | _ -> None
-      // Handle app-level messages that aren't EditorActions
-      let appMsg =
-        match action.action with
-        | "enableLiveTesting" -> Some SageFsMsg.EnableLiveTesting
-        | "disableLiveTesting" -> Some SageFsMsg.DisableLiveTesting
-        | "cycleRunPolicy" -> Some SageFsMsg.CycleRunPolicy
-        | "toggleCoverage" -> Some SageFsMsg.ToggleCoverage
-        | _ -> editorAction |> Option.map SageFsMsg.Editor
+      let editorAction = parseEditorAction action.action action.value
+      let appMsg = parseAppMsg action.action editorAction
       match appMsg with
       | Some msg ->
         dispatch msg
