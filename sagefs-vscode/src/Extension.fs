@@ -100,19 +100,18 @@ let findProject () =
   promise {
     let config = Workspace.getConfiguration "sagefs"
     let configured = config.get("projectPath", "")
-    if configured <> "" then
-      return Some configured
-    else
+    match configured with
+    | c when c <> "" -> return Some c
+    | _ ->
       let! slnFiles = Workspace.findFiles "**/*.{sln,slnx}" "**/node_modules/**" 5
       let! projFiles = Workspace.findFiles "**/*.fsproj" "**/node_modules/**" 10
       let solutions = slnFiles |> Array.map (fun f -> Workspace.asRelativePath f)
       let projects = projFiles |> Array.map (fun f -> Workspace.asRelativePath f)
       let all = Array.append solutions projects
-      if all.Length = 0 then
-        return None
-      elif all.Length = 1 then
-        return Some all.[0]
-      else
+      match all with
+      | [||] -> return None
+      | [| single |] -> return Some single
+      | _ ->
         let! picked = Window.showQuickPick all "Select a solution or project for SageFs"
         return picked
   }
@@ -152,21 +151,22 @@ let updateTestStatusBar (summary: VscTestSummary) =
   match testStatusBarItem with
   | None -> ()
   | Some sb ->
-    if summary.Total = 0 then
-      sb.text <- "$(beaker) No tests"
-      sb.backgroundColor <- None
-    elif summary.Failed > 0 then
-      sb.text <- sprintf "$(testing-error-icon) %d/%d failed" summary.Failed summary.Total
-      sb.backgroundColor <- Some (newThemeColor "statusBarItem.errorBackground")
-    elif summary.Running > 0 then
-      sb.text <- sprintf "$(sync~spin) Running %d/%d" summary.Running summary.Total
-      sb.backgroundColor <- None
-    elif summary.Stale > 0 then
-      sb.text <- sprintf "$(warning) %d/%d stale" summary.Stale summary.Total
-      sb.backgroundColor <- Some (newThemeColor "statusBarItem.warningBackground")
-    else
-      sb.text <- sprintf "$(testing-passed-icon) %d/%d passed" summary.Passed summary.Total
-      sb.backgroundColor <- None
+    let text, bg =
+      match summary with
+      | s when s.Total = 0 ->
+        "$(beaker) No tests", None
+      | s when s.Failed > 0 ->
+        sprintf "$(testing-error-icon) %d/%d failed" s.Failed s.Total,
+        Some (newThemeColor "statusBarItem.errorBackground")
+      | s when s.Running > 0 ->
+        sprintf "$(sync~spin) Running %d/%d" s.Running s.Total, None
+      | s when s.Stale > 0 ->
+        sprintf "$(warning) %d/%d stale" s.Stale s.Total,
+        Some (newThemeColor "statusBarItem.warningBackground")
+      | s ->
+        sprintf "$(testing-passed-icon) %d/%d passed" s.Passed s.Total, None
+    sb.text <- text
+    sb.backgroundColor <- bg
     sb.show ()
 
 let refreshStatus () =
@@ -175,21 +175,29 @@ let refreshStatus () =
     let sb = getStatusBar ()
     try
       let! running = Client.isRunning c
-      if not running then
+      match running with
+      | false ->
         sb.text <- "$(circle-slash) SageFs: offline"
         sb.backgroundColor <- None
         sb.show ()
         activeSessionId <- None
         HotReload.setSession c None
         SessionCtx.setSession c None
-      else
+      | true ->
         let! status = Client.getStatus c
         let! sys = Client.getSystemStatus c
         let supervised =
           match sys with Some s when s.supervised -> " $(shield)" | _ -> ""
         let restarts =
           match sys with Some s when s.restartCount > 0 -> sprintf " %d↻" s.restartCount | _ -> ""
-        if status.connected then
+        let stripExt (name: string) =
+          match name with
+          | n when n.EndsWith(".fsproj") -> n.[..n.Length - 8]
+          | n when n.EndsWith(".slnx") -> n.[..n.Length - 6]
+          | n when n.EndsWith(".sln") -> n.[..n.Length - 5]
+          | n -> n
+        match status.connected with
+        | true ->
           let! sessions = Client.listSessions c
           let session =
             match activeSessionId with
@@ -199,17 +207,13 @@ let refreshStatus () =
           | Some s ->
             activeSessionId <- Some s.id
             let projLabel =
-              if s.projects.Length > 0 then
-                s.projects
-                |> Array.map (fun p ->
-                  let name = p.Split([|'/'; '\\'|]) |> Array.last
-                  if name.EndsWith(".fsproj") then name.[..name.Length - 8]
-                  elif name.EndsWith(".slnx") then name.[..name.Length - 6]
-                  elif name.EndsWith(".sln") then name.[..name.Length - 5]
-                  else name)
+              match s.projects with
+              | [||] -> "session"
+              | ps ->
+                ps
+                |> Array.map (fun p -> p.Split([|'/'; '\\'|]) |> Array.last |> stripExt)
                 |> String.concat ","
-              else "session"
-            let evalLabel = if s.evalCount > 0 then sprintf " [%d]" s.evalCount else ""
+            let evalLabel = match s.evalCount with 0 -> "" | n -> sprintf " [%d]" n
             sb.text <- sprintf "$(zap) SageFs: %s%s%s%s" projLabel evalLabel supervised restarts
           | None ->
             activeSessionId <- None
@@ -218,7 +222,7 @@ let refreshStatus () =
           let activeId = activeSessionId
           HotReload.setSession c activeId
           SessionCtx.setSession c activeId
-        else
+        | false ->
           sb.text <- "$(loading~spin) SageFs: starting..."
         sb.show ()
     with _ ->
@@ -846,40 +850,34 @@ let activate (context: ExtensionContext) =
         | None -> Window.showWarningMessage "Could not fetch dependency graph" [||] |> ignore)
     | None -> Window.showWarningMessage "SageFs is not connected" [||] |> ignore)
   reg "sagefs.showBindings" (fun _ ->
-    match liveTestListener with
-    | Some listener ->
-      let bindings = listener.Bindings ()
-      if bindings.Length = 0 then
-        Window.showInformationMessage "No FSI bindings yet" [||] |> ignore
-      else
-        let items =
-          bindings |> Array.map (fun b ->
-            let name: string = b?Name |> unbox
-            let typeSig: string = b?TypeSig |> unbox
-            let shadow: int = b?ShadowCount |> unbox
-            let shadowLabel = if shadow > 1 then sprintf " (×%d)" shadow else ""
-            sprintf "%s : %s%s" name typeSig shadowLabel)
-        Window.showQuickPick items "FSI Bindings"
-        |> Promise.iter (fun _ -> ())
-    | None -> Window.showInformationMessage "No FSI bindings yet" [||] |> ignore)
+    match liveTestListener |> Option.map (fun l -> l.Bindings ()) with
+    | Some [||] | None ->
+      Window.showInformationMessage "No FSI bindings yet" [||] |> ignore
+    | Some bindings ->
+      let items =
+        bindings |> Array.map (fun b ->
+          let name: string = b?Name |> unbox
+          let typeSig: string = b?TypeSig |> unbox
+          let shadow: int = b?ShadowCount |> unbox
+          let shadowLabel = match shadow with n when n > 1 -> sprintf " (×%d)" n | _ -> ""
+          sprintf "%s : %s%s" name typeSig shadowLabel)
+      Window.showQuickPick items "FSI Bindings"
+      |> Promise.iter (fun _ -> ()))
   reg "sagefs.showPipelineTrace" (fun _ ->
-    match liveTestListener with
-    | Some listener ->
-      match listener.PipelineTrace () with
-      | Some trace ->
-        let enabled: bool = trace?Enabled |> unbox
-        let running: bool = trace?IsRunning |> unbox
-        let total: int = trace?Summary?Total |> unbox
-        let passed: int = trace?Summary?Passed |> unbox
-        let failed: int = trace?Summary?Failed |> unbox
-        let items = [|
-          sprintf "Enabled: %b" enabled
-          sprintf "Running: %b" running
-          sprintf "Total: %d | Passed: %d | Failed: %d" total passed failed
-        |]
-        Window.showQuickPick items "Pipeline Trace"
-        |> Promise.iter (fun _ -> ())
-      | None -> Window.showInformationMessage "No pipeline trace data yet" [||] |> ignore
+    match liveTestListener |> Option.bind (fun l -> l.PipelineTrace ()) with
+    | Some trace ->
+      let enabled: bool = trace?Enabled |> unbox
+      let running: bool = trace?IsRunning |> unbox
+      let total: int = trace?Summary?Total |> unbox
+      let passed: int = trace?Summary?Passed |> unbox
+      let failed: int = trace?Summary?Failed |> unbox
+      let items = [|
+        sprintf "Enabled: %b" enabled
+        sprintf "Running: %b" running
+        sprintf "Total: %d | Passed: %d | Failed: %d" total passed failed
+      |]
+      Window.showQuickPick items "Pipeline Trace"
+      |> Promise.iter (fun _ -> ())
     | None -> Window.showInformationMessage "No pipeline trace data yet" [||] |> ignore)
 
   reg "sagefs.exportSession" (fun _ ->
