@@ -32,16 +32,18 @@ let jsClearInterval (handle: obj) : unit = jsNative
 // ── Path helpers ─────────────────────────────────────────────────
 
 let getDirectory (path: string) =
-  if isNull path then ""
-  else
+  match path with
+  | null -> ""
+  | _ ->
     let normalized = path.Replace('\\', '/')
     match normalized.LastIndexOf('/') with
     | -1 -> ""
     | i -> normalized.Substring(0, i)
 
 let getFileName (path: string) =
-  if isNull path then ""
-  else
+  match path with
+  | null -> ""
+  | _ ->
     let normalized = path.Replace('\\', '/')
     match normalized.LastIndexOf('/') with
     | -1 -> normalized
@@ -66,8 +68,12 @@ let createDirItem (dirPath: string) (childCount: int) (watchedCount: int) =
 let createFileItem (file: Client.HotReloadFile) =
   let label = getFileName file.path
   let item = newTreeItem label TreeItemCollapsibleState.None
-  item?contextValue <- if file.watched then "watchedFile" else "unwatchedFile"
-  item?description <- if file.watched then "● watching" else "○ not watching"
+  let ctxVal, desc, iconColor =
+    match file.watched with
+    | true -> "watchedFile", "● watching", "testing.iconPassed"
+    | false -> "unwatchedFile", "○ not watching", "testing.iconSkipped"
+  item?contextValue <- ctxVal
+  item?description <- desc
   item?tooltip <- file.path
   item?command <-
     createObj [
@@ -75,11 +81,7 @@ let createFileItem (file: Client.HotReloadFile) =
       "title" ==> "Toggle Hot Reload"
       "arguments" ==> [| file.path |]
     ]
-  item?iconPath <-
-    if file.watched then
-      Vscode.newThemeColor "testing.iconPassed"
-    else
-      Vscode.newThemeColor "testing.iconSkipped"
+  item?iconPath <- Vscode.newThemeColor iconColor
   item
 
 let groupByDirectory (files: Client.HotReloadFile array) =
@@ -92,14 +94,14 @@ let getChildren (element: obj option) : JS.Promise<obj array> =
     match element with
     | None ->
       let groups = groupByDirectory cachedFiles
-      if groups.Length = 0 then
+      match groups with
+      | [||] ->
         let item = newTreeItem "No session active" TreeItemCollapsibleState.None
         item?description <- "Start a session to manage hot reload"
         return [| item :> obj |]
-      elif groups.Length = 1 then
-        let (_, files) = groups.[0]
+      | [| (_, files) |] ->
         return files |> Array.map (fun f -> createFileItem f :> obj)
-      else
+      | _ ->
         return
           groups
           |> Array.map (fun (dir, files) ->
@@ -107,14 +109,15 @@ let getChildren (element: obj option) : JS.Promise<obj array> =
             createDirItem dir files.Length watchedCount :> obj)
     | Some el ->
       let ctx: string = el?contextValue |> unbox
-      if ctx = "directory" then
+      match ctx with
+      | "directory" ->
         let label: string = el?label |> unbox
-        let dir = if label = "(root)" then "" else label
+        let dir = match label with "(root)" -> "" | d -> d
         let files =
           cachedFiles
           |> Array.filter (fun f -> getDirectory f.path = dir)
         return files |> Array.map (fun f -> createFileItem f :> obj)
-      else
+      | _ ->
         return [||]
   }
 
@@ -228,10 +231,11 @@ let register (ctx: ExtensionContext) =
           |> Array.filter (fun f -> getDirectory f.path = dir)
           |> Array.forall (fun f -> f.watched)
         promise {
-          if allWatched then
+          match allWatched with
+          | true ->
             let! _ = Client.unwatchDirectoryHotReload sid dir c
             ()
-          else
+          | false ->
             let! _ = Client.watchDirectoryHotReload sid dir c
             ()
           refresh ()
