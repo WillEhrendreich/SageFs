@@ -202,7 +202,7 @@ let listSessions (c: Client) =
 let createSession (projects: string) (workingDirectory: string) (c: Client) =
   promise {
     try
-      let payload = {| projects = projects; working_directory = workingDirectory |}
+      let payload = {| projects = [| projects |]; workingDirectory = workingDirectory |}
       let! resp = httpPost c "/api/sessions/create" (jsonStringify payload) 30000
       let parsed = jsonParse resp.body
       return

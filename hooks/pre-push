@@ -1,0 +1,2 @@
+#!/bin/sh
+pwsh -File "$(dirname "$0")/pre-push.ps1"

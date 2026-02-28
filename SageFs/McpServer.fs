@@ -763,14 +763,24 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                     let doc = System.Text.Json.JsonDocument.Parse(body)
                     let root = doc.RootElement
                     let workingDir =
-                      if root.TryGetProperty("workingDirectory") |> fst then
-                        root.GetProperty("workingDirectory").GetString()
-                      else Environment.CurrentDirectory
+                      let tryProp (name: string) =
+                        let mutable value = Unchecked.defaultof<System.Text.Json.JsonElement>
+                        if root.TryGetProperty(name, &value) then Some (value.GetString())
+                        else None
+                      tryProp "workingDirectory"
+                      |> Option.orElseWith (fun () -> tryProp "working_directory")
+                      |> Option.defaultValue Environment.CurrentDirectory
                     let projects =
-                      if root.TryGetProperty("projects") |> fst then
-                        root.GetProperty("projects").EnumerateArray()
-                        |> Seq.map (fun e -> e.GetString())
-                        |> Seq.toList
+                      let mutable projProp = Unchecked.defaultof<System.Text.Json.JsonElement>
+                      if root.TryGetProperty("projects", &projProp) then
+                        match projProp.ValueKind with
+                        | System.Text.Json.JsonValueKind.Array ->
+                          projProp.EnumerateArray()
+                          |> Seq.map (fun e -> e.GetString())
+                          |> Seq.toList
+                        | System.Text.Json.JsonValueKind.String ->
+                          [ projProp.GetString() ]
+                        | _ -> []
                       else []
                     let! result = sessionOps.CreateSession projects workingDir
                     match result with

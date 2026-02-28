@@ -453,9 +453,9 @@ let coverageComputationTests = testList "CoverageComputation" [
   test "line with all branches hit is FullyCovered" {
     let state = {
       Slots = [|
-        { File = "a.fs"; Line = 10; Column = 0; BranchId = 0 }
-        { File = "a.fs"; Line = 10; Column = 5; BranchId = 1 }
-        { File = "a.fs"; Line = 10; Column = 10; BranchId = 2 }
+        { File = "a.fs"; Line = 10; Column = 0; EndLine = 0; EndColumn = 0; BranchId = 0 }
+        { File = "a.fs"; Line = 10; Column = 5; EndLine = 0; EndColumn = 0; BranchId = 1 }
+        { File = "a.fs"; Line = 10; Column = 10; EndLine = 0; EndColumn = 0; BranchId = 2 }
       |]
       Hits = [| true; true; true |]
     }
@@ -467,9 +467,9 @@ let coverageComputationTests = testList "CoverageComputation" [
   test "line with some branches hit is PartiallyCovered" {
     let state = {
       Slots = [|
-        { File = "a.fs"; Line = 10; Column = 0; BranchId = 0 }
-        { File = "a.fs"; Line = 10; Column = 5; BranchId = 1 }
-        { File = "a.fs"; Line = 10; Column = 10; BranchId = 2 }
+        { File = "a.fs"; Line = 10; Column = 0; EndLine = 0; EndColumn = 0; BranchId = 0 }
+        { File = "a.fs"; Line = 10; Column = 5; EndLine = 0; EndColumn = 0; BranchId = 1 }
+        { File = "a.fs"; Line = 10; Column = 10; EndLine = 0; EndColumn = 0; BranchId = 2 }
       |]
       Hits = [| true; false; true |]
     }
@@ -481,8 +481,8 @@ let coverageComputationTests = testList "CoverageComputation" [
   test "line with no branches hit is NotCovered" {
     let state = {
       Slots = [|
-        { File = "a.fs"; Line = 10; Column = 0; BranchId = 0 }
-        { File = "a.fs"; Line = 10; Column = 5; BranchId = 1 }
+        { File = "a.fs"; Line = 10; Column = 0; EndLine = 0; EndColumn = 0; BranchId = 0 }
+        { File = "a.fs"; Line = 10; Column = 5; EndLine = 0; EndColumn = 0; BranchId = 1 }
       |]
       Hits = [| false; false |]
     }
@@ -494,7 +494,7 @@ let coverageComputationTests = testList "CoverageComputation" [
   test "line with no slots is NotCovered" {
     let state = {
       Slots = [|
-        { File = "a.fs"; Line = 20; Column = 0; BranchId = 0 }
+        { File = "a.fs"; Line = 20; Column = 0; EndLine = 0; EndColumn = 0; BranchId = 0 }
       |]
       Hits = [| true |]
     }
@@ -505,7 +505,7 @@ let coverageComputationTests = testList "CoverageComputation" [
 
   test "single slot line fully covered returns FullyCovered" {
     let state = {
-      Slots = [| { File = "a.fs"; Line = 5; Column = 0; BranchId = 0 } |]
+      Slots = [| { File = "a.fs"; Line = 5; Column = 0; EndLine = 0; EndColumn = 0; BranchId = 0 } |]
       Hits = [| true |]
     }
     match CoverageComputation.computeLineCoverage state "a.fs" 5 with
@@ -908,8 +908,8 @@ let elmIntegrationTests = testList "LiveTesting Elm Integration" [
     test "CoverageUpdated produces annotations" {
       let cs : CoverageState =
         { Slots =
-            [| { SequencePoint.File = "a.fs"; Line = 10; Column = 0; BranchId = 0 }
-               { SequencePoint.File = "a.fs"; Line = 20; Column = 0; BranchId = 0 } |]
+            [| { SequencePoint.File = "a.fs"; Line = 10; Column = 0; EndLine = 0; EndColumn = 0; BranchId = 0 }
+               { SequencePoint.File = "a.fs"; Line = 20; Column = 0; EndLine = 0; EndColumn = 0; BranchId = 0 } |]
           Hits = [| true; false |] }
       let model', _ =
         SageFsUpdate.update
@@ -1859,10 +1859,10 @@ let coverageProjectionExtendedTests = testList "Coverage Projection Extended" [
   test "IL line coverage computes correctly" {
     let covState = {
       Slots = [|
-        { File = "test.fs"; Line = 10; Column = 0; BranchId = 0 }
-        { File = "test.fs"; Line = 10; Column = 0; BranchId = 1 }
-        { File = "test.fs"; Line = 10; Column = 0; BranchId = 2 }
-        { File = "test.fs"; Line = 20; Column = 0; BranchId = 0 }
+        { File = "test.fs"; Line = 10; Column = 0; EndLine = 0; EndColumn = 0; BranchId = 0 }
+        { File = "test.fs"; Line = 10; Column = 0; EndLine = 0; EndColumn = 0; BranchId = 1 }
+        { File = "test.fs"; Line = 10; Column = 0; EndLine = 0; EndColumn = 0; BranchId = 2 }
+        { File = "test.fs"; Line = 20; Column = 0; EndLine = 0; EndColumn = 0; BranchId = 0 }
       |]
       Hits = [| true; true; false; false |]
     }
@@ -5898,9 +5898,9 @@ let coverageBitmapWiringTests = testList "CoverageBitmap Pipeline Wiring" [
 let coverageSelectionTests = testList "Coverage-based test selection" [
   test "buildFileMask sets bits for probes in target file only" {
     let maps = [| { Slots = [|
-      { File = "A.fs"; Line = 1; Column = 0; BranchId = 0 }
-      { File = "A.fs"; Line = 2; Column = 0; BranchId = 1 }
-      { File = "B.fs"; Line = 1; Column = 0; BranchId = 2 }
+      { File = "A.fs"; Line = 1; Column = 0; EndLine = 0; EndColumn = 0; BranchId = 0 }
+      { File = "A.fs"; Line = 2; Column = 0; EndLine = 0; EndColumn = 0; BranchId = 1 }
+      { File = "B.fs"; Line = 1; Column = 0; EndLine = 0; EndColumn = 0; BranchId = 2 }
     |]; TotalProbes = 3; TrackerTypeName = "t"; HitsFieldName = "h" } |]
     let mask = CoverageBitmap.buildFileMask "A.fs" maps
     CoverageBitmap.popCount mask |> Expect.equal "2 probes in A.fs" 2
@@ -5911,7 +5911,7 @@ let coverageSelectionTests = testList "Coverage-based test selection" [
 
   test "buildFileMask with no matching file returns zero popcount" {
     let maps = [| { Slots = [|
-      { File = "B.fs"; Line = 1; Column = 0; BranchId = 0 }
+      { File = "B.fs"; Line = 1; Column = 0; EndLine = 0; EndColumn = 0; BranchId = 0 }
     |]; TotalProbes = 1; TrackerTypeName = "t"; HitsFieldName = "h" } |]
     let mask = CoverageBitmap.buildFileMask "A.fs" maps
     CoverageBitmap.popCount mask |> Expect.equal "no probes" 0
@@ -5919,9 +5919,9 @@ let coverageSelectionTests = testList "Coverage-based test selection" [
 
   test "findCoverageAffected returns tests covering changed file" {
     let maps = [| { Slots = [|
-      { File = "A.fs"; Line = 1; Column = 0; BranchId = 0 }
-      { File = "A.fs"; Line = 2; Column = 0; BranchId = 1 }
-      { File = "B.fs"; Line = 1; Column = 0; BranchId = 2 }
+      { File = "A.fs"; Line = 1; Column = 0; EndLine = 0; EndColumn = 0; BranchId = 0 }
+      { File = "A.fs"; Line = 2; Column = 0; EndLine = 0; EndColumn = 0; BranchId = 1 }
+      { File = "B.fs"; Line = 1; Column = 0; EndLine = 0; EndColumn = 0; BranchId = 2 }
     |]; TotalProbes = 3; TrackerTypeName = "t"; HitsFieldName = "h" } |]
     let t1 = mkTestId "ns" "test_a"
     let t2 = mkTestId "ns" "test_b"
@@ -5936,7 +5936,7 @@ let coverageSelectionTests = testList "Coverage-based test selection" [
 
   test "findCoverageAffected returns empty when no bitmaps exist" {
     let maps = [| { Slots = [|
-      { File = "A.fs"; Line = 1; Column = 0; BranchId = 0 }
+      { File = "A.fs"; Line = 1; Column = 0; EndLine = 0; EndColumn = 0; BranchId = 0 }
     |]; TotalProbes = 1; TrackerTypeName = "t"; HitsFieldName = "h" } |]
     let affected = CoverageBitmap.findCoverageAffected "A.fs" maps Map.empty
     affected |> Array.isEmpty |> Expect.isTrue "no bitmaps = no coverage-based selection"
@@ -5944,8 +5944,8 @@ let coverageSelectionTests = testList "Coverage-based test selection" [
 
   test "findCoverageAffected skips bitmaps with mismatched size" {
     let maps = [| { Slots = [|
-      { File = "A.fs"; Line = 1; Column = 0; BranchId = 0 }
-      { File = "A.fs"; Line = 2; Column = 0; BranchId = 1 }
+      { File = "A.fs"; Line = 1; Column = 0; EndLine = 0; EndColumn = 0; BranchId = 0 }
+      { File = "A.fs"; Line = 2; Column = 0; EndLine = 0; EndColumn = 0; BranchId = 1 }
     |]; TotalProbes = 2; TrackerTypeName = "t"; HitsFieldName = "h" } |]
     let t1 = mkTestId "ns" "t1"
     let bm_wrong_size = CoverageBitmap.ofBoolArray [| true; false; true |]
@@ -5971,7 +5971,7 @@ let coverageSelectionTests = testList "Coverage-based test selection" [
         PerFileIndex = Map.empty
         SourceVersion = 0 }
     let maps = [| { Slots = [|
-      { File = "Module.fs"; Line = 1; Column = 0; BranchId = 0 }
+      { File = "Module.fs"; Line = 1; Column = 0; EndLine = 0; EndColumn = 0; BranchId = 0 }
     |]; TotalProbes = 1; TrackerTypeName = "t"; HitsFieldName = "h" } |]
     let bm = CoverageBitmap.ofBoolArray [| true |]
     let state =
@@ -5986,6 +5986,154 @@ let coverageSelectionTests = testList "Coverage-based test selection" [
       ids |> Set.contains tid1 |> Expect.isTrue "t1 from symbol heuristic"
       ids |> Set.contains tid2 |> Expect.isTrue "t2 from coverage bitmap"
     | other -> failtestf "expected single RunAffectedTests, got %A" other
+  }
+]
+
+// --- SequencePoint Range Tests ---
+
+[<Tests>]
+let sequencePointRangeTests = testList "SequencePoint.hasRange" [
+  testCase "valid range returns true" <| fun () ->
+    { File = "a.fs"; Line = 10; Column = 4; EndLine = 10; EndColumn = 20; BranchId = 0 }
+    |> SequencePoint.hasRange
+    |> Expect.isTrue "single-line range should be valid"
+
+  testCase "multi-line range returns true" <| fun () ->
+    { File = "a.fs"; Line = 10; Column = 0; EndLine = 12; EndColumn = 5; BranchId = 0 }
+    |> SequencePoint.hasRange
+    |> Expect.isTrue "multi-line range should be valid"
+
+  testCase "zero EndLine returns false (degenerate)" <| fun () ->
+    { File = "a.fs"; Line = 10; Column = 0; EndLine = 0; EndColumn = 0; BranchId = 0 }
+    |> SequencePoint.hasRange
+    |> Expect.isFalse "zero EndLine should be degenerate"
+
+  testCase "same line same column returns false (zero-width)" <| fun () ->
+    { File = "a.fs"; Line = 10; Column = 5; EndLine = 10; EndColumn = 5; BranchId = 0 }
+    |> SequencePoint.hasRange
+    |> Expect.isFalse "zero-width range should be degenerate"
+
+  testCase "EndLine before Line returns false (inverted)" <| fun () ->
+    { File = "a.fs"; Line = 10; Column = 0; EndLine = 9; EndColumn = 20; BranchId = 0 }
+    |> SequencePoint.hasRange
+    |> Expect.isFalse "inverted range should be degenerate"
+]
+
+// --- projectWithCoverage Range Enrichment Tests ---
+
+let private mkTestSp file line col endLine endCol : SequencePoint =
+  { File = file; Line = line; Column = col; EndLine = endLine; EndColumn = endCol; BranchId = 0 }
+
+let private mkTestMap (slots: SequencePoint array) : InstrumentationMap =
+  { Slots = slots; TotalProbes = slots.Length; TrackerTypeName = "T"; HitsFieldName = "H" }
+
+[<Tests>]
+let rangeLookupTests = testList "FileAnnotations.projectWithCoverage range enrichment" [
+  test "enriches CoverageLineAnnotation with EndLine/EndColumn from matching SequencePoint" {
+    let filePath = @"C:\src\MyModule.fs"
+    let sp = mkTestSp filePath 10 4 15 20
+    let maps = [| mkTestMap [| sp |] |]
+    let ca : CoverageAnnotation =
+      { Symbol = "MyModule.foo"; FilePath = filePath; DefinitionLine = 10
+        Status = CoverageStatus.Covered(1, CoverageHealth.AllPassing) }
+    let state = { LiveTestState.empty with CoverageAnnotations = [| ca |] }
+    let pipeline =
+      { LiveTestPipelineState.empty with
+          TestState = state
+          InstrumentationMaps = Map.ofList [ "sess1", maps ] }
+    let result = FileAnnotations.projectWithCoverage filePath pipeline
+    result.CoverageAnnotations |> Expect.hasLength "should have one annotation" 1
+    result.CoverageAnnotations.[0].EndLine |> Expect.equal "EndLine should come from SP" 15
+    result.CoverageAnnotations.[0].EndColumn |> Expect.equal "EndColumn should come from SP" 20
+  }
+
+  test "EndLine/EndColumn remain 0 when no matching SequencePoint exists" {
+    let filePath = @"C:\src\MyModule.fs"
+    let sp = mkTestSp @"C:\src\Other.fs" 10 4 15 20
+    let maps = [| mkTestMap [| sp |] |]
+    let ca : CoverageAnnotation =
+      { Symbol = "MyModule.foo"; FilePath = filePath; DefinitionLine = 10
+        Status = CoverageStatus.Covered(1, CoverageHealth.AllPassing) }
+    let state = { LiveTestState.empty with CoverageAnnotations = [| ca |] }
+    let pipeline =
+      { LiveTestPipelineState.empty with
+          TestState = state
+          InstrumentationMaps = Map.ofList [ "sess1", maps ] }
+    let result = FileAnnotations.projectWithCoverage filePath pipeline
+    result.CoverageAnnotations |> Expect.hasLength "should have one annotation" 1
+    result.CoverageAnnotations.[0].EndLine |> Expect.equal "EndLine should be 0" 0
+    result.CoverageAnnotations.[0].EndColumn |> Expect.equal "EndColumn should be 0" 0
+  }
+
+  test "picks widest range when multiple SPs on same line" {
+    let filePath = @"C:\src\MyModule.fs"
+    let sp1 = mkTestSp filePath 10 4 10 20
+    let sp2 = mkTestSp filePath 10 4 12 30
+    let maps = [| mkTestMap [| sp1; sp2 |] |]
+    let ca : CoverageAnnotation =
+      { Symbol = "MyModule.foo"; FilePath = filePath; DefinitionLine = 10
+        Status = CoverageStatus.Covered(1, CoverageHealth.AllPassing) }
+    let state = { LiveTestState.empty with CoverageAnnotations = [| ca |] }
+    let pipeline =
+      { LiveTestPipelineState.empty with
+          TestState = state
+          InstrumentationMaps = Map.ofList [ "sess1", maps ] }
+    let result = FileAnnotations.projectWithCoverage filePath pipeline
+    result.CoverageAnnotations.[0].EndLine |> Expect.equal "should pick widest EndLine" 12
+    result.CoverageAnnotations.[0].EndColumn |> Expect.equal "should pick widest EndColumn" 30
+  }
+
+  test "filters out degenerate SPs (EndLine=0)" {
+    let filePath = @"C:\src\MyModule.fs"
+    let spDegen : SequencePoint =
+      { File = filePath; Line = 10; Column = 4; EndLine = 0; EndColumn = 0; BranchId = 0 }
+    let spGood = mkTestSp filePath 10 4 15 20
+    let maps = [| mkTestMap [| spDegen; spGood |] |]
+    let ca : CoverageAnnotation =
+      { Symbol = "MyModule.foo"; FilePath = filePath; DefinitionLine = 10
+        Status = CoverageStatus.Covered(1, CoverageHealth.AllPassing) }
+    let state = { LiveTestState.empty with CoverageAnnotations = [| ca |] }
+    let pipeline =
+      { LiveTestPipelineState.empty with
+          TestState = state
+          InstrumentationMaps = Map.ofList [ "sess1", maps ] }
+    let result = FileAnnotations.projectWithCoverage filePath pipeline
+    result.CoverageAnnotations.[0].EndLine |> Expect.equal "should use good SP" 15
+    result.CoverageAnnotations.[0].EndColumn |> Expect.equal "should use good SP EndColumn" 20
+  }
+
+  test "enriches synthesized coverage annotations with range data" {
+    let filePath = @"C:\src\MyModule.fs"
+    let sp = mkTestSp filePath 10 4 15 20
+    let maps = [| mkTestMap [| sp |] |]
+    let tid = TestId.TestId "test1"
+    let passed = TestResult.Passed(System.TimeSpan.FromMilliseconds 100.0)
+    let depGraph =
+      { TestDependencyGraph.empty with
+          SymbolToTests = Map.ofList [ "MyModule.foo", [| tid |] ] }
+    let lastResults =
+      Map.ofList
+        [ tid,
+          { TestId = tid; TestName = "test1"; Result = passed
+            Timestamp = System.DateTimeOffset.UtcNow } ]
+    let symRef : SymbolReference =
+      { SymbolFullName = "MyModule.foo"; UseKind = SymbolUseKind.Definition
+        UsedInTestId = None; FilePath = filePath; Line = 10 }
+    let analysisCache =
+      { FileAnalysisCache.empty with
+          FileSymbols = Map.ofList [ filePath, [ symRef ] ] }
+    let state =
+      { LiveTestState.empty with
+          LastResults = lastResults; CoverageAnnotations = [||] }
+    let pipeline =
+      { LiveTestPipelineState.empty with
+          TestState = state; DepGraph = depGraph
+          AnalysisCache = analysisCache
+          InstrumentationMaps = Map.ofList [ "sess1", maps ] }
+    let result = FileAnnotations.projectWithCoverage filePath pipeline
+    result.CoverageAnnotations |> Expect.hasLength "should synthesize one annotation" 1
+    result.CoverageAnnotations.[0].EndLine |> Expect.equal "synthesized EndLine from SP" 15
+    result.CoverageAnnotations.[0].EndColumn |> Expect.equal "synthesized EndColumn from SP" 20
   }
 ]
 
@@ -6218,7 +6366,7 @@ let e2ePipelineFlowTests = testList "E2E Pipeline Flow" [
 let coveragePipelineVerificationTests = testList "Coverage Pipeline Verification" [
   test "InstrumentationMapsReady populates model maps" {
     let maps = [|
-      { InstrumentationMap.Slots = [| { SequencePoint.File = "test.fs"; Line = 10; Column = 1; BranchId = 0 } |]
+      { InstrumentationMap.Slots = [| { SequencePoint.File = "test.fs"; Line = 10; Column = 1; EndLine = 0; EndColumn = 0; BranchId = 0 } |]
         TotalProbes = 1; TrackerTypeName = "__SageFsCoverage"; HitsFieldName = "Hits" }
     |]
     let model0 = SageFsModel.initial
@@ -6244,7 +6392,7 @@ let coveragePipelineVerificationTests = testList "Coverage Pipeline Verification
 
   test "afterTypeCheck uses coverage bitmaps when both maps and bitmaps exist" {
     let tid = TestId.TestId "ns.test1"
-    let sp = { SequencePoint.File = "src/MyFile.fs"; Line = 10; Column = 1; BranchId = 0 }
+    let sp = { SequencePoint.File = "src/MyFile.fs"; Line = 10; Column = 1; EndLine = 0; EndColumn = 0; BranchId = 0 }
     let imap = {
       InstrumentationMap.Slots = [| sp |]; TotalProbes = 1
       TrackerTypeName = "__SageFsCoverage"; HitsFieldName = "Hits"
@@ -6274,7 +6422,7 @@ let coveragePipelineVerificationTests = testList "Coverage Pipeline Verification
 
   test "afterTypeCheck with empty bitmaps skips coverage path" {
     let tid = TestId.TestId "ns.test2"
-    let sp = { SequencePoint.File = "src/Other.fs"; Line = 5; Column = 1; BranchId = 0 }
+    let sp = { SequencePoint.File = "src/Other.fs"; Line = 5; Column = 1; EndLine = 0; EndColumn = 0; BranchId = 0 }
     let imap = {
       InstrumentationMap.Slots = [| sp |]; TotalProbes = 1
       TrackerTypeName = "__SageFsCoverage"; HitsFieldName = "Hits"

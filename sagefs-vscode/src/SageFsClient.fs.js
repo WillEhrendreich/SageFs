@@ -255,8 +255,8 @@ export function listSessions(c) {
 export function createSession(projects, workingDirectory, c) {
     return PromiseBuilder__Run_212F1D4B(promise, PromiseBuilder__Delay_62FBFDE1(promise, () => (PromiseBuilder__Delay_62FBFDE1(promise, () => {
         const payload = {
-            projects: projects,
-            working_directory: workingDirectory,
+            projects: [projects],
+            workingDirectory: workingDirectory,
         };
         return httpPost(c, "/api/sessions/create", JSON.stringify(payload), 30000).then((_arg) => {
             let e;

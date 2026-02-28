@@ -839,7 +839,10 @@ module McpTools =
         let output =
           match routeResult with
           | Ok response ->
-            let formatted = formatWorkerEvalResult response
+            let formatted =
+              match format with
+              | Json -> McpAdapter.formatWorkerEvalResultJson response
+              | Text -> formatWorkerEvalResult response
             match response with
             | WorkerProtocol.WorkerResponse.EvalResult(_, Ok _, diags, metadata) ->
               notifyElm ctx (

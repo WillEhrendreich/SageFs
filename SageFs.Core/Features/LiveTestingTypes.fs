@@ -276,8 +276,15 @@ type SequencePoint = {
   File: string
   Line: int
   Column: int
+  EndLine: int
+  EndColumn: int
   BranchId: int
 }
+
+module SequencePoint =
+  /// Check if the sequence point has valid range data (non-degenerate).
+  let hasRange (sp: SequencePoint) =
+    sp.EndLine > 0 && (sp.EndLine > sp.Line || (sp.EndLine = sp.Line && sp.EndColumn > sp.Column))
 
 type CoverageState = {
   Slots: SequencePoint array
@@ -2180,6 +2187,8 @@ type TestLineAnnotation = {
 
 type CoverageLineAnnotation = {
   Line: int
+  EndLine: int
+  EndColumn: int
   Detail: CoverageStatus
   CoveringTestIds: TestId array
   BranchCoverage: LineCoverage option
@@ -2320,6 +2329,18 @@ module FileAnnotations =
     | TestRunStatus.Passed _ -> 6
     | TestRunStatus.PolicyDisabled -> 7
 
+  /// Build a lookup from (file, line) → (endLine, endColumn) from sequence points.
+  /// When multiple SPs exist for the same line, picks the widest range.
+  let private buildRangeLookup (maps: InstrumentationMap seq) : Map<string * int, int * int> =
+    maps
+    |> Seq.collect (fun m -> m.Slots)
+    |> Seq.filter SequencePoint.hasRange
+    |> Seq.groupBy (fun sp -> sp.File, sp.Line)
+    |> Seq.map (fun (key, sps) ->
+      let best = sps |> Seq.maxBy (fun sp -> sp.EndLine, sp.EndColumn)
+      key, (best.EndLine, best.EndColumn))
+    |> Map.ofSeq
+
   let project
     (filePath: string)
     (depGraph: TestDependencyGraph option)
@@ -2381,6 +2402,8 @@ module FileAnnotations =
       |> Array.filter (fun ca -> ca.FilePath = filePath)
       |> Array.map (fun ca ->
         { Line = ca.DefinitionLine
+          EndLine = 0
+          EndColumn = 0
           Detail = ca.Status
           CoveringTestIds =
             match depGraph with
@@ -2428,11 +2451,17 @@ module FileAnnotations =
     let base' = project filePath depGraph pipelineState.TestState
     let allMaps = pipelineState.InstrumentationMaps |> Map.values |> Seq.collect id |> Array.ofSeq
     let lineCovMap = CoverageBitmap.computeLineCoverageForFile filePath allMaps pipelineState.TestState.TestCoverageBitmaps
+    let rangeLookup = buildRangeLookup allMaps
+    let enrichWithRange (ca: CoverageLineAnnotation) =
+      match Map.tryFind (filePath, ca.Line) rangeLookup with
+      | Some (endL, endC) -> { ca with EndLine = endL; EndColumn = endC }
+      | None -> ca
     let enrichWithBranch (anns: CoverageLineAnnotation array) =
       anns |> Array.map (fun ca ->
-        match Map.tryFind ca.Line lineCovMap with
-        | Some lc -> { ca with BranchCoverage = Some lc }
-        | None -> ca)
+        let ca' = enrichWithRange ca
+        match Map.tryFind ca'.Line lineCovMap with
+        | Some lc -> { ca' with BranchCoverage = Some lc }
+        | None -> ca')
     if base'.CoverageAnnotations.Length > 0 then
       { base' with CoverageAnnotations = enrichWithBranch base'.CoverageAnnotations }
     else
@@ -2440,7 +2469,13 @@ module FileAnnotations =
       let coverageLineAnnotations =
         synthesized
         |> Array.map (fun ca ->
+          let endLine, endColumn =
+            match Map.tryFind (filePath, ca.DefinitionLine) rangeLookup with
+            | Some (el, ec) -> el, ec
+            | None -> 0, 0
           { Line = ca.DefinitionLine
+            EndLine = endLine
+            EndColumn = endColumn
             Detail = ca.Status
             CoveringTestIds =
               match Map.tryFind ca.Symbol pipelineState.DepGraph.SymbolToTests with

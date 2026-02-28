@@ -125,6 +125,8 @@ type LineCoverage =
 /// Coverage annotation for a single source line
 type CoverageLineAnnotation = {
   Line: int
+  EndLine: int
+  EndColumn: int
   Detail: CoverageStatus
   CoveringTestIds: string array
   BranchCoverage: LineCoverage option
