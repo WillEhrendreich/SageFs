@@ -1462,7 +1462,6 @@ let createStreamHandler
         if stats.EvalCount > 0
         then stats.TotalDuration.TotalMilliseconds / float stats.EvalCount
         else 0.0
-      let isReady = stateStr = "Ready"
       do! ssePatchNode ctx (
         renderSessionStatus stateStr currentSessionId workingDir (q.GetWarmupProgress currentSessionId))
       // Push theme when session or working dir changes

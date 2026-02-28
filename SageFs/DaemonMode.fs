@@ -394,41 +394,37 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
   // Create a diagnostics-changed event (aggregated from workers)
   let diagnosticsChanged = Event<Features.DiagnosticsStore.T>()
 
+  let getWorkerBaseUrl (sid: string) =
+    let snapshot = readSnapshot()
+    match Map.tryFind sid snapshot.WorkerBaseUrls with
+    | Some url when url.Length > 0 -> Some url
+    | _ -> None
+
+  /// Fetch JSON from a worker endpoint with timeout, returning None on failure.
+  let fetchWorkerEndpoint (sessionId: string) (path: string) (timeout: float) (parse: string -> 'T) : Threading.Tasks.Task<'T option> = task {
+    match getWorkerBaseUrl sessionId with
+    | Some baseUrl ->
+      try
+        use cts = new Threading.CancellationTokenSource(TimeSpan.FromSeconds(timeout))
+        let! resp = httpClient.GetStringAsync(sprintf "%s%s" baseUrl path, cts.Token)
+        return Some (parse resp)
+      with _ -> return None
+    | None -> return None
+  }
+
   // Warmup context fetcher for MCP — uses session manager to find worker URL
   let getWarmupContextForMcp (sessionId: string) : System.Threading.Tasks.Task<WarmupContext option> =
-    task {
-      try
-        // CQRS read path — bypass mailbox, use snapshot for worker URL
-        let snapshot = readSnapshot()
-        match Map.tryFind sessionId snapshot.WorkerBaseUrls with
-        | Some baseUrl when baseUrl.Length > 0 ->
-          use cts = new System.Threading.CancellationTokenSource(System.TimeSpan.FromSeconds(5.0))
-          let! resp = httpClient.GetStringAsync(sprintf "%s/warmup-context" baseUrl, cts.Token)
-          let ctx = WorkerProtocol.Serialization.deserialize<WarmupContext> resp
-          return Some ctx
-        | _ -> return None
-      with _ -> return None
-    }
+    fetchWorkerEndpoint sessionId "/warmup-context" 5.0
+      (WorkerProtocol.Serialization.deserialize<WarmupContext>)
 
   // Hotreload state fetcher for MCP — returns watched file paths
   let getHotReloadStateForMcp (sessionId: string) : System.Threading.Tasks.Task<string list option> =
-    task {
-      try
-        let snapshot = readSnapshot()
-        match Map.tryFind sessionId snapshot.WorkerBaseUrls with
-        | Some baseUrl when baseUrl.Length > 0 ->
-          use cts = new System.Threading.CancellationTokenSource(System.TimeSpan.FromSeconds(5.0))
-          let! resp = httpClient.GetStringAsync(sprintf "%s/hotreload" baseUrl, cts.Token)
-          let doc = System.Text.Json.JsonDocument.Parse(resp)
-          let files =
-            doc.RootElement.GetProperty("files").EnumerateArray()
-            |> Seq.filter (fun f -> f.GetProperty("watched").GetBoolean())
-            |> Seq.map (fun f -> f.GetProperty("path").GetString())
-            |> Seq.toList
-          return Some files
-        | _ -> return None
-      with _ -> return None
-    }
+    fetchWorkerEndpoint sessionId "/hotreload" 5.0 (fun resp ->
+      let doc = System.Text.Json.JsonDocument.Parse(resp)
+      doc.RootElement.GetProperty("files").EnumerateArray()
+      |> Seq.filter (fun f -> f.GetProperty("watched").GetBoolean())
+      |> Seq.map (fun f -> f.GetProperty("path").GetString())
+      |> Seq.toList)
 
   // Wire test discovery from SessionManager → Elm model
   // After discovery, scan project source files with tree-sitter to produce
@@ -619,11 +615,6 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
   let getStatusMsg (sid: string) =
     readSnapshot().WarmupProgress |> Map.tryFind sid
 
-  let getWorkerBaseUrl (sid: string) =
-    let snapshot = readSnapshot()
-    match Map.tryFind sid snapshot.WorkerBaseUrls with
-    | Some url when url.Length > 0 -> Some url
-    | _ -> None
 
   let sessionThemes = Dashboard.loadThemes DaemonState.SageFsDir
 
@@ -668,36 +659,21 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
     }
     GetAllSessions = getAllSessions
     GetStandbyInfo = sessionOps.GetStandbyInfo
-    GetHotReloadState = fun sessionId -> task {
-      match getWorkerBaseUrl sessionId with
-      | Some baseUrl ->
-        try
-          use cts = new Threading.CancellationTokenSource(TimeSpan.FromSeconds(2.0))
-          let! resp = httpClient.GetStringAsync(sprintf "%s/hotreload" baseUrl, cts.Token)
-          use doc = Text.Json.JsonDocument.Parse(resp)
-          let root = doc.RootElement
-          let files =
-            root.GetProperty("files").EnumerateArray()
-            |> Seq.map (fun el ->
-              {| path = el.GetProperty("path").GetString()
-                 watched = el.GetProperty("watched").GetBoolean() |})
-            |> Seq.toList
-          let watchedCount = root.GetProperty("watchedCount").GetInt32()
-          return Some {| files = files; watchedCount = watchedCount |}
-        with _ -> return None
-      | None -> return None
-    }
-    GetWarmupContext = fun sessionId -> task {
-      match getWorkerBaseUrl sessionId with
-      | Some baseUrl ->
-        try
-          use cts = new Threading.CancellationTokenSource(TimeSpan.FromSeconds(2.0))
-          let! resp = httpClient.GetStringAsync(sprintf "%s/warmup-context" baseUrl, cts.Token)
-          let ctx = WorkerProtocol.Serialization.deserialize<WarmupContext> resp
-          return Some ctx
-        with _ -> return None
-      | None -> return None
-    }
+    GetHotReloadState = fun sessionId ->
+      fetchWorkerEndpoint sessionId "/hotreload" 2.0 (fun resp ->
+        use doc = Text.Json.JsonDocument.Parse(resp)
+        let root = doc.RootElement
+        let files =
+          root.GetProperty("files").EnumerateArray()
+          |> Seq.map (fun el ->
+            {| path = el.GetProperty("path").GetString()
+               watched = el.GetProperty("watched").GetBoolean() |})
+          |> Seq.toList
+        let watchedCount = root.GetProperty("watchedCount").GetInt32()
+        {| files = files; watchedCount = watchedCount |})
+    GetWarmupContext = fun sessionId ->
+      fetchWorkerEndpoint sessionId "/warmup-context" 2.0
+        (WorkerProtocol.Serialization.deserialize<WarmupContext>)
     GetWarmupProgress = fun sessionId ->
       let snapshot = readSnapshot()
       match Map.tryFind sessionId snapshot.WarmupProgress with

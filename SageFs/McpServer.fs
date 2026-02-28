@@ -278,11 +278,13 @@ let writeSseFrame (body: System.IO.Stream) (frame: string) = task {
   do! body.FlushAsync()
 }
 
-/// Write an SSE frame to a stream (fire-and-forget — use in event subscriptions).
+/// Write an SSE frame to a stream (synchronous — use in event subscriptions).
 let writeSseFrameSync (body: System.IO.Stream) (frame: string) =
-  let bytes = System.Text.Encoding.UTF8.GetBytes(frame)
-  body.WriteAsync(bytes).AsTask()
-  |> fun t -> t.ContinueWith(fun (_: Task) -> body.FlushAsync()) |> ignore
+  try
+    let bytes = System.Text.Encoding.UTF8.GetBytes(frame)
+    body.Write(bytes, 0, bytes.Length)
+    body.Flush()
+  with _ -> () // Stream closed — client disconnected
 
 // Create shared MCP context
 let mkContext (persistence: SageFs.EventStore.EventPersistence) (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.T>) (stateChanged: IEvent<string> option) (sessionOps: SageFs.SessionManagementOps) (mcpPort: int) (dispatch: (SageFs.SageFsMsg -> unit) option) (getElmModel: (unit -> SageFs.SageFsModel) option) (getElmRegions: (unit -> SageFs.RenderRegion list) option) (getWarmupContext: (string -> System.Threading.Tasks.Task<SageFs.WarmupContext option>) option) : McpContext =
