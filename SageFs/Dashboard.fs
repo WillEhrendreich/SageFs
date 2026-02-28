@@ -845,8 +845,8 @@ type DashboardActions = {
   ResetSession: string -> Threading.Tasks.Task<Result<string, string>>
   HardResetSession: string -> Threading.Tasks.Task<Result<string, string>>
   Dispatch: SageFsMsg -> unit
-  SwitchSession: (string -> Threading.Tasks.Task<string>) option
-  StopSession: (string -> Threading.Tasks.Task<string>) option
+  SwitchSession: (string -> Threading.Tasks.Task<Result<string, string>>) option
+  StopSession: (string -> Threading.Tasks.Task<Result<string, string>>) option
   CreateSession: (string list -> string -> Threading.Tasks.Task<Result<string, string>>) option
   ShutdownCallback: (unit -> unit) option
 }
@@ -1686,7 +1686,9 @@ let createEvalFileHandler
         let! result = evalCode sessionId codeWithTerminator
         match result with
         | Ok msg -> do! ctx.Response.WriteAsJsonAsync({| success = true; result = msg |})
-        | Error err -> do! ctx.Response.WriteAsJsonAsync({| success = false; error = err |})
+        | Error err ->
+          ctx.Response.StatusCode <- 422
+          do! ctx.Response.WriteAsJsonAsync({| success = false; error = err |})
     with ex ->
       ctx.Response.StatusCode <- 500
       do! ctx.Response.WriteAsJsonAsync({| error = ex.Message |})
@@ -1766,7 +1768,7 @@ let createResetHandler
 
 /// Create the session action handler (switch/stop).
 let createSessionActionHandler
-  (action: string -> Threading.Tasks.Task<string>)
+  (action: string -> Threading.Tasks.Task<Result<string, string>>)
   : string -> HttpHandler =
   fun sessionId ctx -> task {
     try
@@ -1774,10 +1776,14 @@ let createSessionActionHandler
       Response.sseStartResponse ctx |> ignore
       // Push sessionId so eval form targets the new session
       do! Response.ssePatchSignal ctx (SignalPath.sp "sessionId") sessionId
+      let msg, cssClass =
+        match result with
+        | Ok m -> m, "output-line output-info"
+        | Error e -> e, "output-line output-error"
       let resultHtml =
         Elem.div [ Attr.id "eval-result" ] [
-          Elem.pre [ Attr.class' "output-line output-info"; Attr.style "margin-top: 0.5rem; white-space: pre-wrap;" ] [
-            Text.raw result
+          Elem.pre [ Attr.class' cssClass; Attr.style "margin-top: 0.5rem; white-space: pre-wrap;" ] [
+            Text.raw msg
           ]
         ]
       do! ssePatchNode ctx resultHtml
@@ -1942,7 +1948,7 @@ let createDiscoverHandler : HttpHandler =
 /// Create the create-session POST handler.
 let createCreateSessionHandler
   (createSession: string list -> string -> Threading.Tasks.Task<Result<string, string>>)
-  (switchSession: (string -> Threading.Tasks.Task<string>) option)
+  (switchSession: (string -> Threading.Tasks.Task<Result<string, string>>) option)
   : HttpHandler =
   fun ctx -> task {
     let! doc = Request.getSignalsJson ctx

@@ -66,6 +66,11 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
   // Shared HttpClient for all daemon→worker HTTP calls (avoids socket exhaustion)
   let httpClient = new Net.Http.HttpClient()
 
+  /// Timeout for agent-facing worker fetches (MCP tools, SSE session events).
+  let mcpFetchTimeoutSec = 5.0
+  /// Timeout for user-facing worker fetches (dashboard responses).
+  let dashboardFetchTimeoutSec = 2.0
+
   log.LogInformation("SageFs daemon v{Version} starting on port {Port}", version, mcpPort)
 
   // Set up persistence: InMemory by default, PostgreSQL with --persist or SAGEFS_CONNECTION_STRING
@@ -408,18 +413,27 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
         use cts = new Threading.CancellationTokenSource(TimeSpan.FromSeconds(timeout))
         let! resp = httpClient.GetStringAsync(sprintf "%s%s" baseUrl path, cts.Token)
         return Some (parse resp)
-      with _ -> return None
+      with
+      | :? Threading.Tasks.TaskCanceledException ->
+        eprintfn "[fetchWorkerEndpoint] Timeout (%.0fs) fetching %s for session %s" timeout path sessionId
+        return None
+      | :? Net.Http.HttpRequestException as ex ->
+        eprintfn "[fetchWorkerEndpoint] HTTP error fetching %s for session %s: %s" path sessionId ex.Message
+        return None
+      | ex ->
+        eprintfn "[fetchWorkerEndpoint] Unexpected error fetching %s for session %s: %s" path sessionId (ex.GetType().Name)
+        return None
     | None -> return None
   }
 
   // Warmup context fetcher for MCP — uses session manager to find worker URL
   let getWarmupContextForMcp (sessionId: string) : System.Threading.Tasks.Task<WarmupContext option> =
-    fetchWorkerEndpoint sessionId "/warmup-context" 5.0
+    fetchWorkerEndpoint sessionId "/warmup-context" mcpFetchTimeoutSec
       (WorkerProtocol.Serialization.deserialize<WarmupContext>)
 
   // Hotreload state fetcher for MCP — returns watched file paths
   let getHotReloadStateForMcp (sessionId: string) : System.Threading.Tasks.Task<string list option> =
-    fetchWorkerEndpoint sessionId "/hotreload" 5.0 (fun resp ->
+    fetchWorkerEndpoint sessionId "/hotreload" mcpFetchTimeoutSec (fun resp ->
       let doc = System.Text.Json.JsonDocument.Parse(resp)
       doc.RootElement.GetProperty("files").EnumerateArray()
       |> Seq.filter (fun f -> f.GetProperty("watched").GetBoolean())
@@ -661,7 +675,7 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
     GetAllSessions = getAllSessions
     GetStandbyInfo = sessionOps.GetStandbyInfo
     GetHotReloadState = fun sessionId ->
-      fetchWorkerEndpoint sessionId "/hotreload" 2.0 (fun resp ->
+      fetchWorkerEndpoint sessionId "/hotreload" dashboardFetchTimeoutSec (fun resp ->
         use doc = Text.Json.JsonDocument.Parse(resp)
         let root = doc.RootElement
         let files =
@@ -673,7 +687,7 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
         let watchedCount = root.GetProperty("watchedCount").GetInt32()
         {| files = files; watchedCount = watchedCount |})
     GetWarmupContext = fun sessionId ->
-      fetchWorkerEndpoint sessionId "/warmup-context" 2.0
+      fetchWorkerEndpoint sessionId "/warmup-context" dashboardFetchTimeoutSec
         (WorkerProtocol.Serialization.deserialize<WarmupContext>)
     GetWarmupProgress = fun sessionId ->
       let snapshot = readSnapshot()
@@ -740,15 +754,15 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
     Dispatch = fun msg -> elmRuntime.Dispatch msg
     SwitchSession = Some (fun (sid: string) -> task {
       elmRuntime.Dispatch(SageFsMsg.Event (SageFsEvent.SessionSwitched (None, sid)))
-      return sprintf "Switched to session '%s'" sid
+      return Ok (sprintf "Switched to session '%s'" sid)
     })
     StopSession = Some (fun (sid: string) -> task {
       let! result = sessionOps.StopSession sid
       elmRuntime.Dispatch(SageFsMsg.Editor EditorAction.ListSessions)
       return
         match result with
-        | Ok msg -> msg
-        | Error e -> sprintf "Stop failed: %A" e
+        | Ok msg -> Ok msg
+        | Error e -> Error (sprintf "Stop failed: %A" e)
     })
     CreateSession = Some (fun (projects: string list) (workingDir: string) -> task {
       let! result = sessionOps.CreateSession projects workingDir

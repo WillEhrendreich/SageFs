@@ -284,7 +284,9 @@ let writeSseFrameSync (body: System.IO.Stream) (frame: string) =
     let bytes = System.Text.Encoding.UTF8.GetBytes(frame)
     body.Write(bytes, 0, bytes.Length)
     body.Flush()
-  with _ -> () // Stream closed — client disconnected
+  with
+  | :? System.IO.IOException -> () // Client disconnected
+  | :? ObjectDisposedException -> () // Stream disposed
 
 /// Configuration for the MCP server — replaces 8 positional params on startMcpServer.
 type McpServerConfig = {
@@ -298,8 +300,8 @@ type McpServerConfig = {
   GetHotReloadState: (string -> Task<string list option>) option
 }
 
-// Create shared MCP context
-let mkContext (cfg: McpServerConfig) (stateChangedStr: IEvent<string> option) : McpContext =
+// Create shared MCP context (private — called only by startMcpServer)
+let private mkContext (cfg: McpServerConfig) (stateChangedStr: IEvent<string> option) : McpContext =
   let dispatch = cfg.ElmRuntime |> Option.map (fun r -> r.Dispatch)
   let getElmModel = cfg.ElmRuntime |> Option.map (fun r -> r.GetModel)
   let getElmRegions = cfg.ElmRuntime |> Option.map (fun r -> r.GetRegions)
@@ -648,7 +650,9 @@ let startMcpServer (cfg: McpServerConfig) =
                           do! hrEvt |> SageFs.SessionEvents.formatSessionSseEvent |> writeSseFrame body
                         | None -> ()
                       | None -> ()
-                  with _ -> ()
+                  with
+                  | :? System.IO.IOException | :? ObjectDisposedException -> ()
+                  | ex -> eprintfn "[SSE] Session snapshot replay error: %s" ex.Message
                 }
               | _ -> task { () }
 
@@ -717,7 +721,9 @@ let startMcpServer (cfg: McpServerConfig) =
                           let frame = SageFs.SessionEvents.formatSessionSseEvent evt
                           sessionEventBroadcast.Trigger(frame)
                         | None -> ()
-                    with _ -> ()
+                    with
+                    | :? System.IO.IOException -> ()
+                    | ex -> eprintfn "[SSE] HotReload push error: %s" ex.Message
                   } |> ignore
                 | DaemonStateChange.SessionReady sid ->
                   task {
@@ -738,7 +744,9 @@ let startMcpServer (cfg: McpServerConfig) =
                           let hrFrame = SageFs.SessionEvents.formatSessionSseEvent hrEvt
                           sessionEventBroadcast.Trigger(hrFrame)
                         | None -> ()
-                    with _ -> ()
+                    with
+                    | :? System.IO.IOException -> ()
+                    | ex -> eprintfn "[SSE] SessionReady push error: %s" ex.Message
                   } |> ignore
                 | _ -> ()) |> ignore
             | _ -> ()
@@ -759,7 +767,9 @@ let startMcpServer (cfg: McpServerConfig) =
                         let heartbeat = new System.Threading.Timer((fun _ ->
                             try
                                 writeSseFrameSync ctx.Response.Body ": keepalive\n\n"
-                            with _ -> ()), null, 15000, 15000)
+                            with
+                            | :? System.IO.IOException | :? ObjectDisposedException -> ()
+                            | ex -> eprintfn "[SSE] Heartbeat error: %s" ex.Message), null, 15000, 15000)
                         use _heartbeat = heartbeat
                         use _sub = evt.Subscribe(fun change ->
                             try
@@ -767,13 +777,19 @@ let startMcpServer (cfg: McpServerConfig) =
                                 |> DaemonStateChange.toJson
                                 |> SageFs.SseWriter.formatSseEvent "state"
                                 |> writeSseFrameSync ctx.Response.Body
-                            with _ -> ())
+                            with
+                            | :? System.IO.IOException | :? ObjectDisposedException -> ()
+                            | ex -> eprintfn "[SSE] State event error: %s" ex.Message)
                         use _testSub = testEventBroadcast.Publish.Subscribe(fun sseString ->
                             try writeSseFrameSync ctx.Response.Body sseString
-                            with _ -> ())
+                            with
+                            | :? System.IO.IOException | :? ObjectDisposedException -> ()
+                            | ex -> eprintfn "[SSE] Test event error: %s" ex.Message)
                         use _sessionSub = sessionEventBroadcast.Publish.Subscribe(fun sseString ->
                             try writeSseFrameSync ctx.Response.Body sseString
-                            with _ -> ())
+                            with
+                            | :? System.IO.IOException | :? ObjectDisposedException -> ()
+                            | ex -> eprintfn "[SSE] Session event error: %s" ex.Message)
                         // Replay session snapshot FIRST (warmup context) — awaited to ensure delivery
                         do! replaySessionSnapshot ctx.Response.Body
                         // Replay current test state on new SSE connection
@@ -1364,7 +1380,9 @@ let startMcpServer (cfg: McpServerConfig) =
                              outputCount = outputCount |}
                         serverTracker.NotifyLogAsync(
                           LoggingLevel.Info, "sagefs.state", data) |> ignore
-                    with _ -> ()
+                    with
+                    | :? System.IO.IOException | :? ObjectDisposedException -> ()
+                    | ex -> eprintfn "[MCP] State change handler error: %s" ex.Message
                   | _ -> ()))
 
             // Get logger from DI for structured logging (flows to OTEL)
