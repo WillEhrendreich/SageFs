@@ -72,29 +72,52 @@ type FsiBinding = {
   ShadowCount: int
 }
 
+// ── Binding parser: Option.bind pipeline (ROP) ──
+
+/// Try to strip a prefix, returning the rest or None
+let private tryStripPrefix (prefix: string) (s: string) =
+  match s.Trim() with
+  | t when t.StartsWith(prefix) -> Some (t.Substring(prefix.Length))
+  | _ -> None
+
+/// Strip "mutable " prefix if present (total function, always succeeds)
+let private stripMutablePrefix (s: string) =
+  match s with
+  | t when t.StartsWith("mutable ") -> t.Substring(8)
+  | t -> t
+
+/// Split at first colon into (name, typeSig), or None
+let private splitAtColon (s: string) =
+  match s.IndexOf(':') with
+  | i when i > 0 -> Some (s.Substring(0, i).Trim(), s.Substring(i + 1).Trim())
+  | _ -> None
+
+/// Strip trailing "= value" from a type signature
+let private cleanTypeSig (typeSig: string) =
+  match typeSig.LastIndexOf('=') with
+  | i when i > 0 -> typeSig.Substring(0, i).Trim()
+  | _ -> typeSig
+
+/// Validate a binding name: skip "it" (expression results) and tuple patterns
+let private validateBindingName (name: string, typeSig: string) =
+  match name with
+  | "it" -> None
+  | n when n.Contains("(") -> None
+  | _ -> Some (name, typeSig)
+
+/// Parse a single FSI output line into (name, typeSig) via Option.bind pipeline
+let private tryParseBinding (line: string) =
+  line
+  |> tryStripPrefix "val "
+  |> Option.map stripMutablePrefix
+  |> Option.bind splitAtColon
+  |> Option.map (fun (name, ts) -> name, cleanTypeSig ts)
+  |> Option.bind validateBindingName
+
 /// Parse `val name : type = value` lines from FSI output.
 /// Skips `val it` (expression results) and tuple patterns.
 let parseBindingsFromOutput (output: string) : (string * string) array =
-  output.Split('\n')
-  |> Array.choose (fun line ->
-    let trimmed = line.Trim()
-    if trimmed.StartsWith("val ") then
-      let rest = trimmed.Substring(4)
-      // Handle `val mutable name : type`
-      let rest = if rest.StartsWith("mutable ") then rest.Substring(8) else rest
-      let colonIdx = rest.IndexOf(':')
-      if colonIdx > 0 then
-        let name = rest.Substring(0, colonIdx).Trim()
-        let typeSig = rest.Substring(colonIdx + 1).Trim()
-        // Strip `= value` suffix
-        let eqIdx = typeSig.LastIndexOf('=')
-        let cleanSig = if eqIdx > 0 then typeSig.Substring(0, eqIdx).Trim() else typeSig
-        // Skip `it` (expression result) and tuple patterns like (x, y)
-        if name <> "it" && not (name.Contains("(")) then
-          Some (name, cleanSig)
-        else None
-      else None
-    else None)
+  output.Split('\n') |> Array.choose tryParseBinding
 
 /// Accumulate parsed bindings into a running map, tracking shadow counts.
 let accumulateBindings
