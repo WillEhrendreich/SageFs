@@ -215,6 +215,10 @@ let start (port: int) (callbacks: LiveTestingCallbacks) : LiveTestingListener =
         callbacks.OnStateChange allChanges
     | "state" ->
       callbacks.OnStatusRefresh ()
+    | "session" ->
+      // Session events (warmup_context_snapshot, hotreload_snapshot)
+      // Currently logged for forward compatibility; handlers added as needed
+      ()
     | _ ->
       ()
 
