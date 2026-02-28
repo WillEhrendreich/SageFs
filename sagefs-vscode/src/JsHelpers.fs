@@ -32,6 +32,17 @@ let performanceNow () : float = jsNative
 [<Emit("new Promise(resolve => setTimeout(resolve, $0))")>]
 let sleep (ms: int) : JS.Promise<unit> = jsNative
 
+// ── Promise helpers ─────────────────────────────────────────────────────
+
+[<Emit("console.error('[SageFs] unhandled promise rejection:', $0)")>]
+let private logPromiseError (err: obj) : unit = jsNative
+
+/// Ignore a promise's result but log rejections instead of swallowing them silently.
+let promiseIgnore (p: JS.Promise<_>) : unit =
+  p
+  |> Promise.catch (fun err -> logPromiseError err)
+  |> Promise.start
+
 // ── SSE subscribers with exponential backoff reconnect ──────────────────
 
 /// Simple SSE subscriber: parses `data:` lines as JSON, calls onData(parsed).

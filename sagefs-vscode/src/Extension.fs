@@ -311,6 +311,16 @@ let withClient (action: Client.Client -> JS.Promise<unit>) =
     if ok then do! action (getClient ())
   }
 
+/// Fire a client action that returns ApiOutcome, show its message, then refresh.
+let simpleCommand (defaultMsg: string) (action: Client.Client -> JS.Promise<Client.ApiOutcome>) =
+  withClient (fun c ->
+    promise {
+      let! result = action c
+      let msg = result |> Client.ApiOutcome.messageOrDefault defaultMsg
+      Window.showInformationMessage (sprintf "SageFs: %s" msg) [||] |> ignore
+      refreshStatus ()
+    })
+
 type EvalResult =
   | EvalOk of output: string * elapsed: float
   | EvalError of message: string
@@ -425,22 +435,10 @@ let evalRange (args: obj) =
   }
 
 let resetSessionCmd () =
-  withClient (fun c ->
-    promise {
-      let! result = Client.resetSession c
-      let msg = result |> Client.ApiOutcome.messageOrDefault "Reset complete"
-      Window.showInformationMessage (sprintf "SageFs: %s" msg) [||] |> ignore
-      refreshStatus ()
-    })
+  simpleCommand "Reset complete" Client.resetSession
 
 let hardResetCmd () =
-  withClient (fun c ->
-    promise {
-      let! result = Client.hardReset true c
-      let msg = result |> Client.ApiOutcome.messageOrDefault "Hard reset complete"
-      Window.showInformationMessage (sprintf "SageFs: %s" msg) [||] |> ignore
-      refreshStatus ()
-    })
+  simpleCommand "Hard reset complete" (Client.hardReset true)
 
 let createSessionCmd () =
   withClient (fun c ->
@@ -724,32 +722,11 @@ let activate (context: ExtensionContext) =
   reg "sagefs.stopSession" (fun _ -> stopSessionCmd () |> ignore)
   reg "sagefs.clearResults" (fun _ -> clearAllDecorations ())
   reg "sagefs.enableLiveTesting" (fun _ ->
-    match client with
-    | Some c ->
-      Client.enableLiveTesting c
-      |> Promise.iter (fun result ->
-        match Client.ApiOutcome.message result with
-        | Some msg -> Window.showInformationMessage msg [||] |> ignore
-        | None -> ())
-    | None -> Window.showWarningMessage "SageFs is not connected" [||] |> ignore)
+    simpleCommand "Live testing enabled" Client.enableLiveTesting |> ignore)
   reg "sagefs.disableLiveTesting" (fun _ ->
-    match client with
-    | Some c ->
-      Client.disableLiveTesting c
-      |> Promise.iter (fun result ->
-        match Client.ApiOutcome.message result with
-        | Some msg -> Window.showInformationMessage msg [||] |> ignore
-        | None -> ())
-    | None -> Window.showWarningMessage "SageFs is not connected" [||] |> ignore)
+    simpleCommand "Live testing disabled" Client.disableLiveTesting |> ignore)
   reg "sagefs.runTests" (fun _ ->
-    match client with
-    | Some c ->
-      Client.runTests "" c
-      |> Promise.iter (fun result ->
-        match Client.ApiOutcome.message result with
-        | Some msg -> Window.showInformationMessage msg [||] |> ignore
-        | None -> ())
-    | None -> Window.showWarningMessage "SageFs is not connected" [||] |> ignore)
+    simpleCommand "Tests queued" (Client.runTests "") |> ignore)
   reg "sagefs.setRunPolicy" (fun _ ->
     match client with
     | Some c ->
