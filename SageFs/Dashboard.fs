@@ -1841,6 +1841,14 @@ let evalResultError (msg: string) =
 /// Helper: resolve which projects to use from signal data.
 /// Priority: manual > .SageFs/config.fsx > auto-discovery
 let resolveSessionProjects (dir: string) (manualProjects: string) =
+  let autoDetectProjects dir =
+    let discovered = discoverProjects dir
+    if not discovered.Solutions.IsEmpty then
+      [ Path.Combine(dir, discovered.Solutions.Head) ]
+    elif not discovered.Projects.IsEmpty then
+      discovered.Projects |> List.map (fun p -> Path.Combine(dir, p))
+    else
+      []
   if not (String.IsNullOrWhiteSpace manualProjects) then
     manualProjects.Split(',')
     |> Array.map (fun s -> s.Trim())
@@ -1861,22 +1869,8 @@ let resolveSessionProjects (dir: string) (manualProjects: string) =
           if Path.IsPathRooted p then p
           else Path.Combine(dir, p))
       | NoLoad -> []
-      | AutoDetect ->
-        let discovered = discoverProjects dir
-        if not discovered.Solutions.IsEmpty then
-          [ Path.Combine(dir, discovered.Solutions.Head) ]
-        elif not discovered.Projects.IsEmpty then
-          discovered.Projects |> List.map (fun p -> Path.Combine(dir, p))
-        else
-          []
-    | _ ->
-      let discovered = discoverProjects dir
-      if not discovered.Solutions.IsEmpty then
-        [ Path.Combine(dir, discovered.Solutions.Head) ]
-      elif not discovered.Projects.IsEmpty then
-        discovered.Projects |> List.map (fun p -> Path.Combine(dir, p))
-      else
-        []
+      | AutoDetect -> autoDetectProjects dir
+    | _ -> autoDetectProjects dir
 
 /// Helper: extract a signal by camelCase or kebab-case name.
 let getSignalString (doc: System.Text.Json.JsonDocument) (camelCase: string) (kebab: string) =

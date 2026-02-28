@@ -810,37 +810,16 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
 
   // Hot-reload proxy endpoints — forward to worker HTTP servers
   let hotReloadProxyEndpoints : HttpEndpoint list =
-    let proxyGet (sid: string) (workerPath: string) (ctx: Microsoft.AspNetCore.Http.HttpContext) = task {
+    let proxyToWorker (sid: string) (workerPath: string) (httpCall: string -> Threading.Tasks.Task<string * int * bool>) (ctx: Microsoft.AspNetCore.Http.HttpContext) = task {
       match getWorkerBaseUrl sid with
       | Some baseUrl ->
         try
           let url = sprintf "%s%s" baseUrl workerPath
-          let! resp = httpClient.GetStringAsync(url)
+          let! (respBody, statusCode, triggerChange) = httpCall url
           ctx.Response.ContentType <- "application/json"
-          do! ctx.Response.WriteAsync(resp)
-        with ex ->
-          ctx.Response.StatusCode <- 502
-          do! ctx.Response.WriteAsJsonAsync({| error = ex.Message |})
-      | None ->
-        ctx.Response.StatusCode <- 404
-        do! ctx.Response.WriteAsJsonAsync({| error = "Session not found or not ready" |})
-    }
-    let proxyPost (sid: string) (workerPath: string) (ctx: Microsoft.AspNetCore.Http.HttpContext) = task {
-      match getWorkerBaseUrl sid with
-      | Some baseUrl ->
-        try
-          let url = sprintf "%s%s" baseUrl workerPath
-          use reader = new IO.StreamReader(ctx.Request.Body)
-          let! body = reader.ReadToEndAsync()
-          use content = new Net.Http.StringContent(body, Text.Encoding.UTF8, "application/json")
-          let! resp = httpClient.PostAsync(url, content)
-          let! respBody = resp.Content.ReadAsStringAsync()
-          ctx.Response.ContentType <- "application/json"
-          ctx.Response.StatusCode <- int resp.StatusCode
+          ctx.Response.StatusCode <- statusCode
           do! ctx.Response.WriteAsync(respBody)
-          // Trigger SSE push so Dashboard updates hot-reload panel
-          if resp.IsSuccessStatusCode then
-            stateChangedEvent.Trigger HotReloadChanged
+          if triggerChange then stateChangedEvent.Trigger HotReloadChanged
         with ex ->
           ctx.Response.StatusCode <- 502
           do! ctx.Response.WriteAsJsonAsync({| error = ex.Message |})
@@ -848,6 +827,20 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
         ctx.Response.StatusCode <- 404
         do! ctx.Response.WriteAsJsonAsync({| error = "Session not found or not ready" |})
     }
+    let proxyGet (sid: string) (workerPath: string) (ctx: Microsoft.AspNetCore.Http.HttpContext) =
+      proxyToWorker sid workerPath (fun url -> task {
+        let! resp = httpClient.GetStringAsync(url)
+        return (resp, 200, false)
+      }) ctx
+    let proxyPost (sid: string) (workerPath: string) (ctx: Microsoft.AspNetCore.Http.HttpContext) =
+      proxyToWorker sid workerPath (fun url -> task {
+        use reader = new IO.StreamReader(ctx.Request.Body)
+        let! body = reader.ReadToEndAsync()
+        use content = new Net.Http.StringContent(body, Text.Encoding.UTF8, "application/json")
+        let! resp = httpClient.PostAsync(url, content)
+        let! respBody = resp.Content.ReadAsStringAsync()
+        return (respBody, int resp.StatusCode, resp.IsSuccessStatusCode)
+      }) ctx
     let extractSid = fun (r: RequestData) -> r.GetString("sid", "")
     let proxyGetRoute path = mapGet (sprintf "/api/sessions/{sid}%s" path) extractSid (fun sid -> fun ctx -> proxyGet sid path ctx)
     let proxyPostRoute path = mapPost (sprintf "/api/sessions/{sid}%s" path) extractSid (fun sid -> fun ctx -> proxyPost sid path ctx)

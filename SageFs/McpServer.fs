@@ -117,33 +117,34 @@ type AccumulatedEvent = {
 type EventAccumulator() =
   let events = ConcurrentQueue<AccumulatedEvent>()
   let maxEvents = 50
+  let replaceLock = obj()
 
   member _.Add(evt: PushEvent) =
     let entry = { Timestamp = DateTimeOffset.UtcNow; Event = evt }
     match PushEvent.mergeStrategy evt with
     | MergeStrategy.Replace ->
-      // For Replace events, we can't efficiently remove from ConcurrentQueue.
-      // Instead, drain-and-requeue minus old same-tag events, then add new.
-      // With max 50 events this is O(n) and fast.
-      let tag = PushEvent.tag evt
-      let temp = ResizeArray()
-      let mutable item = Unchecked.defaultof<AccumulatedEvent>
-      while events.TryDequeue(&item) do
-        if PushEvent.tag item.Event <> tag then
-          temp.Add(item)
-      for e in temp do events.Enqueue(e)
-      events.Enqueue(entry)
+      // Drain-and-requeue is not atomic on ConcurrentQueue; lock the Replace path.
+      lock replaceLock (fun () ->
+        let tag = PushEvent.tag evt
+        let temp = ResizeArray()
+        let mutable item = Unchecked.defaultof<AccumulatedEvent>
+        while events.TryDequeue(&item) do
+          if PushEvent.tag item.Event <> tag then
+            temp.Add(item)
+        for e in temp do events.Enqueue(e)
+        events.Enqueue(entry))
     | MergeStrategy.Accumulate ->
       events.Enqueue(entry)
       while events.Count > maxEvents do
         events.TryDequeue() |> ignore
 
   member _.Drain() =
-    let result = ResizeArray()
-    let mutable item = Unchecked.defaultof<AccumulatedEvent>
-    while events.TryDequeue(&item) do
-      result.Add(item)
-    result.ToArray()
+    lock replaceLock (fun () ->
+      let result = ResizeArray()
+      let mutable item = Unchecked.defaultof<AccumulatedEvent>
+      while events.TryDequeue(&item) do
+        result.Add(item)
+      result.ToArray())
 
   member _.Count = events.Count
 
@@ -288,6 +289,12 @@ let writeSseFrameSync (body: System.IO.Stream) (frame: string) =
   | :? System.IO.IOException -> () // Client disconnected
   | :? ObjectDisposedException -> () // Stream disposed
 
+/// Set standard SSE response headers.
+let setSseHeaders (ctx: Microsoft.AspNetCore.Http.HttpContext) =
+  ctx.Response.ContentType <- "text/event-stream"
+  ctx.Response.Headers.["Cache-Control"] <- Microsoft.Extensions.Primitives.StringValues("no-cache")
+  ctx.Response.Headers.["Connection"] <- Microsoft.Extensions.Primitives.StringValues("keep-alive")
+
 /// Configuration for the MCP server — replaces 8 positional params on startMcpServer.
 type McpServerConfig = {
   DiagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.T>
@@ -329,7 +336,9 @@ let startMcpServer (cfg: McpServerConfig) =
                 System.Reflection.Assembly.GetExecutingAssembly()
                     .GetName()
                     .Version
-                    .ToString()
+                |> Option.ofObj
+                |> Option.map (fun v -> v.ToString())
+                |> Option.defaultValue "unknown"
 
             // Only register OTLP exporter when endpoint is configured
             let otelConfigured =
@@ -603,9 +612,7 @@ let startMcpServer (cfg: McpServerConfig) =
             app.MapGet("/diagnostics", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
                 task {
                     SageFs.Instrumentation.sseConnectionsActive.Add(1L)
-                    ctx.Response.ContentType <- "text/event-stream"
-                    ctx.Response.Headers.["Cache-Control"] <- Microsoft.Extensions.Primitives.StringValues("no-cache")
-                    ctx.Response.Headers.["Connection"] <- Microsoft.Extensions.Primitives.StringValues("keep-alive")
+                    setSseHeaders ctx
 
                     // Send initial empty diagnostics
                     let initialEvent = sprintf "event: diagnostics\ndata: []\n\n"
@@ -663,17 +670,15 @@ let startMcpServer (cfg: McpServerConfig) =
                   let activeId = activeSessionId () |> Option.defaultValue ""
                   let sessionEntries =
                     LiveTestState.statusEntriesForSession activeId lt
-                  match sessionEntries.Length > 0 with
-                  | false -> ()
-                  | true ->
+                  if sessionEntries.Length > 0 then
                     let s = TestSummary.fromStatuses
                               lt.Activation (sessionEntries |> Array.map (fun e -> e.Status))
                     SageFs.SseWriter.formatTestSummaryEvent sseJsonOpts (Some activeId) s
                     |> writeSseFrameSync body
                     let freshness =
-                      match lt.RunPhases |> Map.exists (fun _ p -> match p with TestRunPhase.RunningButEdited _ -> true | _ -> false) with
-                      | true -> ResultFreshness.StaleCodeEdited
-                      | false -> ResultFreshness.Fresh
+                      if lt.RunPhases |> Map.exists (fun _ p -> match p with TestRunPhase.RunningButEdited _ -> true | _ -> false)
+                      then ResultFreshness.StaleCodeEdited
+                      else ResultFreshness.Fresh
                     let payload =
                       let completion =
                         TestResultsBatchPayload.deriveCompletion
@@ -692,11 +697,9 @@ let startMcpServer (cfg: McpServerConfig) =
                     let pipeline = model.LiveTesting
                     for file in files do
                       let fa = FileAnnotations.projectWithCoverage file pipeline
-                      match fa.TestAnnotations.Length > 0 || fa.CodeLenses.Length > 0 || fa.CoverageAnnotations.Length > 0 with
-                      | true ->
+                      if fa.TestAnnotations.Length > 0 || fa.CodeLenses.Length > 0 || fa.CoverageAnnotations.Length > 0 then
                         SageFs.SseWriter.formatFileAnnotationsEvent sseJsonOpts (Some activeId) fa
                         |> writeSseFrameSync body
-                      | false -> ()
                 with ex ->
                   eprintfn "SSE replay error: %s" ex.Message)
 
@@ -724,7 +727,10 @@ let startMcpServer (cfg: McpServerConfig) =
                     with
                     | :? System.IO.IOException -> ()
                     | ex -> eprintfn "[SSE] HotReload push error: %s" ex.Message
-                  } |> ignore
+                  }
+                  |> fun t -> t.ContinueWith(fun (t: Threading.Tasks.Task) ->
+                    if t.IsFaulted then eprintfn "[SSE] HotReload push fault: %s" t.Exception.InnerException.Message)
+                  |> ignore
                 | DaemonStateChange.SessionReady sid ->
                   task {
                     try
@@ -747,7 +753,10 @@ let startMcpServer (cfg: McpServerConfig) =
                     with
                     | :? System.IO.IOException -> ()
                     | ex -> eprintfn "[SSE] SessionReady push error: %s" ex.Message
-                  } |> ignore
+                  }
+                  |> fun t -> t.ContinueWith(fun (t: Threading.Tasks.Task) ->
+                    if t.IsFaulted then eprintfn "[SSE] SessionReady push fault: %s" t.Exception.InnerException.Message)
+                  |> ignore
                 | _ -> ()) |> ignore
             | _ -> ()
 
@@ -755,9 +764,7 @@ let startMcpServer (cfg: McpServerConfig) =
             app.MapGet("/events", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
                 task {
                     SageFs.Instrumentation.sseConnectionsActive.Add(1L)
-                    ctx.Response.ContentType <- "text/event-stream"
-                    ctx.Response.Headers.["Cache-Control"] <- Microsoft.Extensions.Primitives.StringValues("no-cache")
-                    ctx.Response.Headers.["Connection"] <- Microsoft.Extensions.Primitives.StringValues("keep-alive")
+                    setSseHeaders ctx
 
                     match cfg.StateChanged with
                     | Some evt ->
@@ -1217,9 +1224,7 @@ let startMcpServer (cfg: McpServerConfig) =
             let mutable lastPipelineTraceJson = ""
 
             let handleDiagnosticsChange diagCount =
-              match diagCount <> lastDiagCount with
-              | false -> ()
-              | true ->
+              if diagCount <> lastDiagCount then
                 lastDiagCount <- diagCount
                 withModel (fun model ->
                   let errors =
@@ -1235,12 +1240,8 @@ let startMcpServer (cfg: McpServerConfig) =
                     PushEvent.DiagnosticsChanged errors))
 
             let handleBindingsChange outputCount =
-              match outputCount <> lastOutputCount with
-              | false -> ()
-              | true ->
-                match outputCount < lastOutputCount with
-                | true -> fsiBindings <- Map.empty
-                | false -> ()
+              if outputCount <> lastOutputCount then
+                if outputCount < lastOutputCount then fsiBindings <- Map.empty
                 lastOutputCount <- outputCount
                 withModel (fun model ->
                   let sid = activeSessionId () |> Option.defaultValue ""
@@ -1252,9 +1253,7 @@ let startMcpServer (cfg: McpServerConfig) =
                     |> String.concat "\n"
                     |> SageFs.SseWriter.parseBindingsFromOutput
                     |> SageFs.SseWriter.accumulateBindings Map.empty
-                  match newBindings <> fsiBindings with
-                  | false -> ()
-                  | true ->
+                  if newBindings <> fsiBindings then
                     fsiBindings <- newBindings
                     fsiBindings
                     |> Map.values |> Array.ofSeq
@@ -1279,9 +1278,7 @@ let startMcpServer (cfg: McpServerConfig) =
                          Summary = {| Total = summary.Total; Passed = summary.Passed; Failed = summary.Failed
                                       Running = summary.Running; Stale = summary.Stale |} |}, sseJsonOpts)
                   with _ -> ""
-                match traceJson.Length > 0 && traceJson <> lastPipelineTraceJson with
-                | false -> ()
-                | true ->
+                if traceJson.Length > 0 && traceJson <> lastPipelineTraceJson then
                   lastPipelineTraceJson <- traceJson
                   testEventBroadcast.Trigger(
                     SageFs.SseWriter.formatPipelineTraceEvent sid traceJson))
@@ -1293,9 +1290,7 @@ let startMcpServer (cfg: McpServerConfig) =
                   activeSessionId () |> Option.defaultValue ""
                 let sessionEntries =
                   LiveTestState.statusEntriesForSession activeId lt
-                match sessionEntries.Length > 0 || TestRunPhase.isAnyRunning lt.RunPhases with
-                | false -> ()
-                | true ->
+                if sessionEntries.Length > 0 || TestRunPhase.isAnyRunning lt.RunPhases then
                   let s = SageFs.Features.LiveTesting.TestSummary.fromStatuses
                             lt.Activation (sessionEntries |> Array.map (fun e -> e.Status))
                   serverTracker.AccumulateEvent(
@@ -1303,16 +1298,14 @@ let startMcpServer (cfg: McpServerConfig) =
                   let now = System.Diagnostics.Stopwatch.GetTimestamp()
                   let elapsedMs = (now - lastTestSsePush) * 1000L / System.Diagnostics.Stopwatch.Frequency
                   let isRunComplete = not (TestRunPhase.isAnyRunning lt.RunPhases)
-                  match elapsedMs >= testSseThrottleMs || isRunComplete with
-                  | false -> ()
-                  | true ->
+                  if elapsedMs >= testSseThrottleMs || isRunComplete then
                     lastTestSsePush <- now
                     testEventBroadcast.Trigger(
                       SageFs.SseWriter.formatTestSummaryEvent sseJsonOpts (Some activeId) s)
                     let freshness =
-                      match lt.RunPhases |> Map.exists (fun _ p -> match p with SageFs.Features.LiveTesting.TestRunPhase.RunningButEdited _ -> true | _ -> false) with
-                      | true -> SageFs.Features.LiveTesting.ResultFreshness.StaleCodeEdited
-                      | false -> SageFs.Features.LiveTesting.ResultFreshness.Fresh
+                      if lt.RunPhases |> Map.exists (fun _ p -> match p with SageFs.Features.LiveTesting.TestRunPhase.RunningButEdited _ -> true | _ -> false)
+                      then SageFs.Features.LiveTesting.ResultFreshness.StaleCodeEdited
+                      else SageFs.Features.LiveTesting.ResultFreshness.Fresh
                     let payload =
                       let completion =
                         SageFs.Features.LiveTesting.TestResultsBatchPayload.deriveCompletion
@@ -1340,11 +1333,9 @@ let startMcpServer (cfg: McpServerConfig) =
                     let allFiles = Array.append files instrFiles
                     for file in allFiles do
                       let fa = SageFs.Features.LiveTesting.FileAnnotations.projectWithCoverage file model.LiveTesting
-                      match fa.TestAnnotations.Length > 0 || fa.CodeLenses.Length > 0 || fa.CoverageAnnotations.Length > 0 with
-                      | true ->
+                      if fa.TestAnnotations.Length > 0 || fa.CodeLenses.Length > 0 || fa.CoverageAnnotations.Length > 0 then
                         testEventBroadcast.Trigger(
-                          SageFs.SseWriter.formatFileAnnotationsEvent sseJsonOpts (Some activeId) fa)
-                      | false -> ())
+                          SageFs.SseWriter.formatFileAnnotationsEvent sseJsonOpts (Some activeId) fa))
 
             let _stateSub =
               cfg.StateChanged |> Option.map (fun evt ->
@@ -1371,9 +1362,7 @@ let startMcpServer (cfg: McpServerConfig) =
                       handlePipelineTraceChange ()
                       handleTestSummaryChange ()
 
-                      match serverTracker.Count > 0 with
-                      | false -> ()
-                      | true ->
+                      if serverTracker.Count > 0 then
                         let data =
                           {| event = "state_changed"
                              diagCount = diagCount
