@@ -339,19 +339,10 @@ let startMcpServer (cfg: McpServerConfig) =
             builder.WebHost.UseUrls($"http://%s{bindHost}:%d{cfg.Port}") |> ignore
 
             // Get version from assembly
-            let version = 
-                System.Reflection.Assembly.GetExecutingAssembly()
-                    .GetName()
-                    .Version
-                |> Option.ofObj
-                |> Option.map (fun v -> v.ToString())
-                |> Option.defaultValue "unknown"
+            let version = DaemonInfo.version
 
             // Only register OTLP exporter when endpoint is configured
-            let otelConfigured =
-              Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_ENDPOINT")
-              |> Option.ofObj
-              |> Option.isSome
+            let otelConfigured = DaemonInfo.otelConfigured
 
             // Configure OpenTelemetry with resource attributes
             let otelBuilder =
@@ -848,11 +839,7 @@ let startMcpServer (cfg: McpServerConfig) =
                       match getElmRegions with
                       | Some getRegions -> getRegions ()
                       | None -> []
-                    let version =
-                      System.Reflection.Assembly.GetExecutingAssembly().GetName().Version
-                      |> Option.ofObj
-                      |> Option.map (fun v -> v.ToString())
-                      |> Option.defaultValue "unknown"
+                    let version = DaemonInfo.version
                     let regionData =
                       elmRegions |> List.map (fun (r: SageFs.RenderRegion) ->
                         {| id = r.Id
@@ -903,9 +890,7 @@ let startMcpServer (cfg: McpServerConfig) =
                       |> Option.defaultValue 0
                     let proc = System.Diagnostics.Process.GetCurrentProcess()
                     let uptime = (DateTime.UtcNow - proc.StartTime.ToUniversalTime()).TotalSeconds
-                    let version =
-                      System.Reflection.Assembly.GetExecutingAssembly().GetName().Version
-                      |> Option.ofObj |> Option.map (fun v -> v.ToString()) |> Option.defaultValue "unknown"
+                    let version = DaemonInfo.version
                     let! allSessions = cfg.SessionOps.GetAllSessions()
                     let data =
                       {| version = version

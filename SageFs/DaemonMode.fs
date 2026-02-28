@@ -40,16 +40,10 @@ let proxyToSession
 /// MCP server + SessionManager + Dashboard — all frontends are clients.
 /// Every session is a worker sub-process managed by SessionManager.
 let run (mcpPort: int) (args: Args.Arguments list) = task {
-  let version =
-    System.Reflection.Assembly.GetExecutingAssembly().GetName().Version
-    |> Option.ofObj
-    |> Option.map (fun v -> v.ToString())
-    |> Option.defaultValue "unknown"
+  let version = DaemonInfo.version
 
   // Create structured logger for daemon lifecycle (flows to OTEL when configured)
-  let otelConfigured =
-    Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_ENDPOINT")
-    |> Option.ofObj |> Option.isSome
+  let otelConfigured = DaemonInfo.otelConfigured
   let loggerFactory =
     LoggerFactory.Create(fun builder ->
       builder
@@ -592,7 +586,15 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
           MaxDurationMs = root.GetProperty("maxDurationMs").GetInt64()
         }
         return Some snap
-      with _ -> return None
+      with
+      | :? System.Net.Http.HttpRequestException -> return None
+      | :? Threading.Tasks.TaskCanceledException -> return None
+      | :? Text.Json.JsonException as ex ->
+        eprintfn "[tryGetSessionSnapshot] JSON parse error for %s: %s" sid ex.Message
+        return None
+      | ex ->
+        eprintfn "[tryGetSessionSnapshot] Unexpected error for %s: %s (%s)" sid ex.Message (ex.GetType().Name)
+        return None
     | _ -> return None
   }
 
@@ -624,7 +626,14 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
             MinDuration = TimeSpan.FromMilliseconds(float minMs)
             MaxDuration = TimeSpan.FromMilliseconds(float maxMs) }
           : Affordances.EvalStats
-      with _ -> return Affordances.EvalStats.empty
+      with
+      | :? System.Net.Http.HttpRequestException | :? Threading.Tasks.TaskCanceledException -> return Affordances.EvalStats.empty
+      | :? Text.Json.JsonException as ex ->
+        eprintfn "[getEvalStats] JSON parse error for %s: %s" sid ex.Message
+        return Affordances.EvalStats.empty
+      | ex ->
+        eprintfn "[getEvalStats] Unexpected error for %s: %s (%s)" sid ex.Message (ex.GetType().Name)
+        return Affordances.EvalStats.empty
     | _ -> return Affordances.EvalStats.empty
   }
 
@@ -679,7 +688,13 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
                 Dashboard.PreviousSession.Projects = r.Projects
                 Dashboard.PreviousSession.LastSeen = r.StoppedAt |> Option.map (fun t -> t.DateTime) |> Option.defaultValue r.CreatedAt.DateTime })
             |> Seq.toList
-        with _ -> return []
+        with
+        | :? Marten.Exceptions.MartenException as ex ->
+          eprintfn "[getPreviousSessions] Marten error: %s" ex.Message
+          return []
+        | ex ->
+          eprintfn "[getPreviousSessions] Unexpected error: %s (%s)" ex.Message (ex.GetType().Name)
+          return []
       }
       return activeSessions @ historicalSessions
     }
@@ -812,7 +827,11 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
                   SageFs.Features.AutoCompletion.GetDescription = None })
             | _ -> []
         | None -> return []
-      with _ -> return []
+      with
+      | :? System.Net.Http.HttpRequestException | :? Threading.Tasks.TaskCanceledException -> return []
+      | ex ->
+        eprintfn "[getCompletions] Error for session: %s (%s)" ex.Message (ex.GetType().Name)
+        return []
     })
   }
 

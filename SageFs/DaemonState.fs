@@ -16,6 +16,17 @@ module DaemonStateChange =
     | HotReloadChanged -> """{"hotReloadChanged":true}"""
     | StandbyProgress -> """{"standbyProgress":true}"""
 
+module DaemonInfo =
+  let version =
+    System.Reflection.Assembly.GetExecutingAssembly().GetName().Version
+    |> Option.ofObj
+    |> Option.map (fun v -> v.ToString())
+    |> Option.defaultValue "unknown"
+
+  let otelConfigured =
+    System.Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_ENDPOINT")
+    |> Option.ofObj |> Option.isSome
+
 // DaemonInfo and DaemonState are now in SageFs namespace (SageFs.Core).
 // This module re-exports functions so existing code using SageFs.Server.DaemonState compiles.
 module DaemonState =
