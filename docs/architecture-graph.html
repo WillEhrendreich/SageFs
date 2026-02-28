@@ -949,12 +949,13 @@
       <h3>Neovim</h3>
       <span class="card-tech">Lua · 25 modules · 885 tests</span>
       <p>
-        Cell-based evaluation with <code>;;</code> boundaries — like Jupyter for Vim.
-        Virtual text for inline results, SSE-driven live diagnostics, gutter signs for
-        test pass/fail and code coverage. A full IDE experience in the terminal.
+        Two eval modes: tree-sitter auto-detects the enclosing scope in <code>.fs</code> files
+        (inferred mode), or use <code>;;</code> delimiters for explicit cell boundaries
+        (manual mode). Virtual text for inline results, SSE-driven live diagnostics, gutter signs for
+        test pass/fail and code coverage.
       </p>
       <ul class="card-features">
-        <li>;; cell eval</li>
+        <li>tree-sitter scope eval</li>
         <li>live diagnostics</li>
         <li>coverage gutter</li>
         <li>test panel</li>
@@ -984,15 +985,15 @@
       <h3>Terminal (TUI)</h3>
       <span class="card-tech">F# · ANSI rendering · built-in</span>
       <p>
-        A full terminal IDE with panes for code editing, eval output, session management,
-        and live test results. Vi-style keybindings, undo/redo, inline autocompletion.
+        A terminal interface with panes for code input, eval output, session management,
+        and live test results. Completion menus, 256-color themes.
         Works over SSH. Zero dependencies.
       </p>
       <ul class="card-features">
         <li>Ctrl+Enter eval</li>
         <li>split panes</li>
         <li>session picker</li>
-        <li>256-color themes</li>
+        <li>completions</li>
       </ul>
     </div>
 
@@ -1002,8 +1003,8 @@
       <span class="card-tech">F# · Raylib-cs · OpenGL</span>
       <p>
         A GPU-accelerated rendering of the same UI. Crisp text at any resolution,
-        smooth scrolling, and sub-millisecond frame times. Shares the exact same
-        layout engine as the terminal — pixel-perfect feature parity.
+        smooth scrolling, and sub-millisecond frame times. Shares the same
+        layout engine as the terminal — gutter features are still catching up.
       </p>
       <ul class="card-features">
         <li>GPU-rendered text</li>
@@ -1018,15 +1019,16 @@
       <h3>Visual Studio</h3>
       <span class="card-tech">F# + C# · VS Extensibility · 7 modules</span>
       <p>
-        Full integration with Visual Studio's tool windows.
-        Same eval, testing, and hot reload features — embedded in the IDE
+        Integration with Visual Studio's tool windows.
+        Eval, CodeLens, and session management — embedded in the IDE
         enterprise teams already use. Daemon auto-management included.
+        Live testing UI is still in progress.
       </p>
       <ul class="card-features">
         <li>tool windows</li>
         <li>daemon management</li>
         <li>session control</li>
-        <li>test integration</li>
+        <li>CodeLens eval</li>
       </ul>
     </div>
 
