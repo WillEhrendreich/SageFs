@@ -15,11 +15,8 @@ let createEffectDeps
       let sessions = SessionManager.QuerySnapshot.allSessions (readSnapshot())
       SessionOperations.resolveSession sessionIdOpt sessions
     GetProxy = fun sessionId ->
-      let managed =
-        sessionManager.PostAndAsyncReply(fun reply ->
-          SessionManager.SessionCommand.GetSession(sessionId, reply))
-        |> Async.RunSynchronously
-      managed |> Option.map (fun s -> s.Proxy)
+      // CQRS read path — lock-free snapshot, no mailbox blocking
+      HttpWorkerClient.proxyFromUrls sessionId (readSnapshot()).WorkerBaseUrls
     CreateSession = fun projects workingDir ->
       async {
         let! result =
@@ -37,11 +34,8 @@ let createEffectDeps
         return result
       }
     ListSessions = fun () ->
-      async {
-        return!
-          sessionManager.PostAndAsyncReply(fun reply ->
-            SessionManager.SessionCommand.ListSessions reply)
-      }
+      // CQRS read path — lock-free snapshot, no mailbox blocking
+      async { return SessionManager.QuerySnapshot.allSessions (readSnapshot()) }
     GetStreamingTestProxy = fun _sessionId -> None
     GetWarmupContext = None
     PipelineCancellation = Features.LiveTesting.PipelineCancellation.create ()

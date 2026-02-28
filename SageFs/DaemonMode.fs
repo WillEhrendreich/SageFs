@@ -154,13 +154,8 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
         return result
       }
     GetProxy = fun sessionId ->
-      task {
-        let! managed =
-          sessionManager.PostAndAsyncReply(fun reply ->
-            SessionManager.SessionCommand.GetSession(sessionId, reply))
-          |> Async.StartAsTask
-        return managed |> Option.map (fun s -> s.Proxy)
-      }
+      // CQRS read path — lock-free snapshot, no mailbox blocking
+      task { return HttpWorkerClient.proxyFromUrls sessionId (readSnapshot()).WorkerBaseUrls }
     GetSessionInfo = fun sessionId ->
       // CQRS read path — lock-free snapshot, no mailbox blocking
       task { return SessionManager.QuerySnapshot.tryGetSession sessionId (readSnapshot()) }

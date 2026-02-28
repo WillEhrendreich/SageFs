@@ -69,6 +69,23 @@ module HttpWorkerClient =
         return Serialization.deserialize<WorkerResponse> json
       }
 
+  /// Cached proxy factory — reuses HttpClient instances per worker URL.
+  /// Use this for CQRS-based proxy resolution to avoid mailbox contention.
+  let private proxyCache =
+    System.Collections.Concurrent.ConcurrentDictionary<string, SessionProxy>()
+
+  let cachedProxy (baseUrl: string) : SessionProxy =
+    proxyCache.GetOrAdd(baseUrl, System.Func<string, SessionProxy>(httpProxy))
+
+  /// Resolve a proxy from worker base URLs — lock-free, no mailbox.
+  let proxyFromUrls
+    (sessionId: string)
+    (workerBaseUrls: Map<string, string>)
+    : SessionProxy option =
+    match Map.tryFind sessionId workerBaseUrls with
+    | Some url when url.Length > 0 -> Some (cachedProxy url)
+    | _ -> None
+
   /// Create a streaming test proxy that reads SSE events from the worker.
   /// Each test result is dispatched individually via the onResult callback.
   let streamingTestProxy (baseUrl: string)
