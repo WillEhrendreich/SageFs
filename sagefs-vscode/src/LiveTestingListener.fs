@@ -61,39 +61,32 @@ let subscribeTypedSse (url: string) (onEvent: string -> obj -> unit) : Disposabl
 
 /// Extract DU Case string from a Fable-serialized DU object
 let parseDuCase (du: obj) : string option =
-  match isNull du with
-  | true -> None
-  | false ->
+  if isNull du then None
+  else
     let c = du?Case
-    match isNull c with
-    | true -> Some (string du)
-    | false -> Some (c |> unbox<string>)
+    if isNull c then Some (string du)
+    else Some (c |> unbox<string>)
 
 /// Extract the first field from a Fable-serialized DU's Fields array
 let duFirstField<'T> (du: obj) : 'T option =
-  match isNull du with
-  | true -> None
-  | false ->
+  if isNull du then None
+  else
     let fields = du?Fields
-    match isNull fields with
-    | true -> None
-    | false -> Some ((fields :> obj array).[0] |> unbox<'T>)
+    if isNull fields then None
+    else Some ((fields :> obj array).[0] |> unbox<'T>)
 
 /// Extract DU Fields array from a Fable-serialized DU
 let duFields (du: obj) : obj array option =
-  match isNull du with
-  | true -> None
-  | false ->
+  if isNull du then None
+  else
     let fields = du?Fields
-    match isNull fields with
-    | true -> None
-    | false -> Some (fields |> unbox<obj array>)
+    if isNull fields then None
+    else Some (fields |> unbox<obj array>)
 
 /// Parse HH:MM:SS duration string to milliseconds
 let parseDuration (dur: string) : float option =
-  match isNull (box dur) with
-  | true -> None
-  | false ->
+  if isNull (box dur) then None
+  else
     let parts = dur.Split(':')
     match parts.Length with
     | 3 ->
@@ -105,9 +98,8 @@ let parseDuration (dur: string) : float option =
 
 /// Extract TestId string from a server TestId DU object
 let parseTestId (testIdObj: obj) : string =
-  match isNull testIdObj with
-  | true -> ""
-  | false -> duFirstField<string> testIdObj |> Option.defaultValue (string testIdObj)
+  if isNull testIdObj then ""
+  else duFirstField<string> testIdObj |> Option.defaultValue (string testIdObj)
 
 /// Map server TestSummary JSON to VscTestSummary
 let parseSummary (data: obj) : VscTestSummary =
@@ -161,9 +153,8 @@ let parseTestInfo (entry: obj) : VscTestInfo =
     match parseDuCase origin with
     | Some "SourceMapped" ->
       let fields = duFields origin |> Option.defaultValue [||]
-      match fields.Length >= 2 with
-      | true -> Some(fields.[0] |> unbox<string>), Some(fields.[1] |> unbox<int>)
-      | false -> None, None
+      if fields.Length >= 2 then Some(fields.[0] |> unbox<string>), Some(fields.[1] |> unbox<int>)
+      else None, None
     | _ -> None, None
   { Id = VscTestId.create testIdStr
     DisplayName = entry?DisplayName |> unbox<string>
@@ -181,9 +172,8 @@ let parseFreshness (data: obj) : VscResultFreshness =
 /// Parse test_results_batch → VscLiveTestEvent pair (discovery + results)
 let parseResultsBatch (data: obj) : VscLiveTestEvent list =
   let entries = data?Entries
-  match isNull entries with
-  | true -> []
-  | false ->
+  if isNull entries then []
+  else
     let freshness = parseFreshness data
     let entryArray : obj array = entries |> unbox
     let testInfos = entryArray |> Array.map parseTestInfo
@@ -227,18 +217,14 @@ let start (port: int) (callbacks: LiveTestingCallbacks) : LiveTestingListener =
         let newState, changes = VscLiveTestState.update evt state
         state <- newState
         allChanges <- allChanges @ changes
-      match allChanges.IsEmpty with
-      | true -> ()
-      | false -> callbacks.OnStateChange allChanges
+      if not allChanges.IsEmpty then callbacks.OnStateChange allChanges
     | "state" ->
       callbacks.OnStatusRefresh ()
     | "session" ->
       ()
     | "bindings_snapshot" ->
       let arr = data?Bindings
-      match isNull arr with
-      | true -> ()
-      | false ->
+      if not (isNull arr) then
         bindings <- arr |> unbox
         callbacks.OnBindingsUpdate bindings
     | "pipeline_trace" ->

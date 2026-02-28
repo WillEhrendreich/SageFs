@@ -50,43 +50,34 @@ let start (port: int) (dc: DiagnosticCollection) =
 
   let onData (data: obj) =
     let rawDiags = data?diagnostics
-    match isNull rawDiags with
-    | true -> ()
-    | false ->
-    let diagnostics: obj array = rawDiags |> unbox
-    let byFile = System.Collections.Generic.Dictionary<string, ResizeArray<Diagnostic>>()
+    if not (isNull rawDiags) then
+      let diagnostics: obj array = rawDiags |> unbox
+      let byFile = System.Collections.Generic.Dictionary<string, ResizeArray<Diagnostic>>()
 
-    for diag in diagnostics do
-      let file: string = diag?file |> unbox
-      match isNull file with
-      | true -> ()
-      | false ->
-      let msg = diag?message
-      let message: string =
-        match isNull msg with
-        | true -> ""
-        | false -> unbox<string> msg
-      let severity =
-        match diag?severity |> unbox<string> with
-        | "error" -> VDiagnosticSeverity.Error
-        | "warning" -> VDiagnosticSeverity.Warning
-        | "info" -> VDiagnosticSeverity.Information
-        | _ -> VDiagnosticSeverity.Hint
-      let startLine = (diag?startLine |> unbox<int>) - 1 |> max 0
-      let startCol = (diag?startColumn |> unbox<int>) - 1 |> max 0
-      let endLine = (diag?endLine |> unbox<int>) - 1 |> max 0
-      let endCol = (diag?endColumn |> unbox<int>) - 1 |> max 0
-      let range = newRange startLine startCol endLine endCol
-      let d = newDiagnostic range message severity
+      for diag in diagnostics do
+        let file: string = diag?file |> unbox
+        if not (isNull file) then
+          let msg = diag?message
+          let message: string = if isNull msg then "" else unbox<string> msg
+          let severity =
+            match diag?severity |> unbox<string> with
+            | "error" -> VDiagnosticSeverity.Error
+            | "warning" -> VDiagnosticSeverity.Warning
+            | "info" -> VDiagnosticSeverity.Information
+            | _ -> VDiagnosticSeverity.Hint
+          let startLine = (diag?startLine |> unbox<int>) - 1 |> max 0
+          let startCol = (diag?startColumn |> unbox<int>) - 1 |> max 0
+          let endLine = (diag?endLine |> unbox<int>) - 1 |> max 0
+          let endCol = (diag?endColumn |> unbox<int>) - 1 |> max 0
+          let range = newRange startLine startCol endLine endCol
+          let d = newDiagnostic range message severity
 
-      match byFile.ContainsKey file with
-      | true -> ()
-      | false -> byFile.[file] <- ResizeArray()
-      byFile.[file].Add(d)
+          if not (byFile.ContainsKey file) then byFile.[file] <- ResizeArray()
+          byFile.[file].Add(d)
 
-    dc.clear ()
-    for kv in byFile do
-      let uri = uriFile kv.Key
-      dc.set (uri, kv.Value)
+      dc.clear ()
+      for kv in byFile do
+        let uri = uriFile kv.Key
+        dc.set (uri, kv.Value)
 
   subscribeSse url onData

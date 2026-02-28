@@ -27,10 +27,7 @@ let formatTitle (result: LiveTestingTypes.VscTestResult) =
     | Some ms -> sprintf "✓ Passed (%.0fms)" ms
     | None -> "✓ Passed"
   | LiveTestingTypes.VscTestOutcome.Failed msg ->
-    let short =
-      match msg.Length > 60 with
-      | true -> msg.[..59] + "…"
-      | false -> msg
+    let short = if msg.Length > 60 then msg.[..59] + "…" else msg
     sprintf "✗ Failed: %s" short
   | LiveTestingTypes.VscTestOutcome.Running -> "● Running…"
   | LiveTestingTypes.VscTestOutcome.Skipped reason -> sprintf "⊘ Skipped: %s" reason

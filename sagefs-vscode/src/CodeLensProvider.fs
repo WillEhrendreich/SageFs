@@ -14,8 +14,7 @@ let create () =
       let lenses = ResizeArray<CodeLens>()
       for i in 0 .. lines.Length - 1 do
         let line = lines.[i].TrimEnd()
-        match line.EndsWith(";;") with
-        | true ->
+        if line.EndsWith(";;") then
           let range = newRange i 0 i line.Length
           let cmd = createObj [
             "title" ==> "▶ Eval"
@@ -23,6 +22,5 @@ let create () =
             "arguments" ==> [| box i |]
           ]
           lenses.Add(newCodeLens range cmd)
-        | false -> ()
       lenses.ToArray()
   ]

@@ -120,15 +120,11 @@ let getCodeBlock (editor: TextEditor) =
   let doc = editor.document
   let pos = editor.selection.active
   let mutable startLine = int pos.line
-  while startLine > 0 do
-    match doc.lineAt(float (startLine - 1)).text.TrimEnd().EndsWith(";;") with
-    | true -> startLine <- startLine
-    | false -> startLine <- startLine - 1
+  while startLine > 0 && not (doc.lineAt(float (startLine - 1)).text.TrimEnd().EndsWith(";;")) do
+    startLine <- startLine - 1
   let mutable endLine = int pos.line
-  while endLine < int doc.lineCount - 1 do
-    match doc.lineAt(float endLine).text.TrimEnd().EndsWith(";;") with
-    | true -> endLine <- endLine
-    | false -> endLine <- endLine + 1
+  while endLine < int doc.lineCount - 1 && not (doc.lineAt(float endLine).text.TrimEnd().EndsWith(";;")) do
+    endLine <- endLine + 1
   let range = newRange startLine 0 endLine (int (doc.lineAt(float endLine).text.Length))
   doc.getTextRange range
 
@@ -171,15 +167,14 @@ let refreshStatus () =
     let sb = getStatusBar ()
     try
       let! running = Client.isRunning c
-      match running with
-      | false ->
+      if not running then
         sb.text <- "$(circle-slash) SageFs: offline"
         sb.backgroundColor <- None
         sb.show ()
         activeSessionId <- None
         HotReload.setSession c None
         SessionCtx.setSession c None
-      | true ->
+      else
         let! status = Client.getStatus c
         let! sys = Client.getSystemStatus c
         let supervised =
@@ -192,8 +187,7 @@ let refreshStatus () =
           | n when n.EndsWith(".slnx") -> n.[..n.Length - 6]
           | n when n.EndsWith(".sln") -> n.[..n.Length - 5]
           | n -> n
-        match status.connected with
-        | true ->
+        if status.connected then
           let! sessions = Client.listSessions c
           let session =
             match activeSessionId with
@@ -218,7 +212,7 @@ let refreshStatus () =
           let activeId = activeSessionId
           HotReload.setSession c activeId
           SessionCtx.setSession c activeId
-        | false ->
+        else
           sb.text <- "$(loading~spin) SageFs: starting..."
         sb.show ()
     with _ ->
@@ -232,11 +226,10 @@ let rec startDaemon () =
   promise {
     let c = getClient ()
     let! running = Client.isRunning c
-    match running with
-    | true ->
+    if running then
       Window.showInformationMessage "SageFs daemon is already running." [||] |> ignore
       refreshStatus ()
-    | false ->
+    else
       let! projPath = findProject ()
       match projPath with
       | None ->
@@ -248,9 +241,7 @@ let rec startDaemon () =
         let workDir = getWorkingDirectory () |> Option.defaultValue "."
         let ext =
           let i = proj.LastIndexOf('.')
-          match i >= 0 with
-          | true -> proj.Substring(i)
-          | false -> ""
+          if i >= 0 then proj.Substring(i) else ""
         let flag =
           match ext with
           | ".sln" | ".slnx" -> "--sln"
@@ -267,13 +258,9 @@ let rec startDaemon () =
           out.appendLine (sprintf "[SageFs] process exited (code %d)" code)
         )
         let stderr = procStderr proc
-        match isNull stderr with
-        | false -> onData stderr (fun chunk -> out.appendLine chunk)
-        | true -> ()
+        if not (isNull stderr) then onData stderr (fun chunk -> out.appendLine chunk)
         let stdout = procStdout proc
-        match isNull stdout with
-        | false -> onData stdout (fun chunk -> out.appendLine chunk)
-        | true -> ()
+        if not (isNull stdout) then onData stdout (fun chunk -> out.appendLine chunk)
         unref proc
         daemonProcess <- Some proc
         let sb = getStatusBar ()
@@ -287,8 +274,7 @@ let rec startDaemon () =
             sb.text <- sprintf "$(loading~spin) SageFs starting... (%ds)" (attempts * 2)
             Client.isRunning c
             |> Promise.iter (fun ready ->
-              match ready, attempts > 60 with
-              | true, _ ->
+              if ready then
                 intervalId |> Option.iter clearInterval
                 out.appendLine "SageFs daemon is ready."
                 Window.showInformationMessage "SageFs daemon started." [||] |> ignore
@@ -298,12 +284,11 @@ let rec startDaemon () =
                   diagnosticsDisposable <- Some (Diag.start c.mcpPort dc)
                 | None -> ()
                 refreshStatus ()
-              | false, true ->
+              elif attempts > 60 then
                 intervalId |> Option.iter clearInterval
                 out.appendLine "Timed out waiting for SageFs daemon after 120s."
                 Window.showErrorMessage "SageFs daemon failed to start after 120s." [||] |> ignore
                 sb.text <- "$(error) SageFs: offline"
-              | false, false -> ()
             )
           ) 2000
         intervalId <- Some id
@@ -313,27 +298,20 @@ and ensureRunning () =
   promise {
     let c = getClient ()
     let! running = Client.isRunning c
-    match running with
-    | true -> return true
-    | false ->
+    if running then return true
+    else
       let! choice = Window.showWarningMessage "SageFs daemon is not running." [| "Start SageFs"; "Cancel" |]
       match choice with
       | Some "Start SageFs" ->
         do! startDaemon ()
         let mutable ready = false
         for _ in 0 .. 14 do
-          match ready with
-          | true -> ()
-          | false ->
+          if not ready then
             do! sleep 2000
             let! r = Client.isRunning c
-            match r with
-            | true -> ready <- true
-            | false -> ()
-        match ready with
-        | false ->
+            if r then ready <- true
+        if not ready then
           Window.showErrorMessage "SageFs didn't start in time." [||] |> ignore
-        | true -> ()
         return ready
       | _ ->
         return false
@@ -345,9 +323,7 @@ and ensureRunning () =
 let withClient (action: Client.Client -> JS.Promise<unit>) =
   promise {
     let! ok = ensureRunning ()
-    match ok with
-    | false -> ()
-    | true -> do! action (getClient ())
+    if ok then do! action (getClient ())
   }
 
 let evalSelection () =
@@ -357,21 +333,16 @@ let evalSelection () =
       Window.showWarningMessage "No active editor." [||] |> ignore
     | Some ed ->
       let! ok = ensureRunning ()
-      match ok with
-      | false -> ()
-      | true ->
+      if ok then
         let mutable code =
-          match ed.selection.isEmpty with
-          | false ->
+          if not ed.selection.isEmpty then
             ed.document.getTextRange (newRange (int ed.selection.start.line) (int ed.selection.start.character) (int ed.selection.``end``.line) (int ed.selection.``end``.character))
-          | true ->
+          else
             getCodeBlock ed
         match code.Trim() with
         | "" -> ()
         | _ ->
-          match code.TrimEnd().EndsWith(";;") with
-          | true -> ()
-          | false -> code <- code.TrimEnd() + ";;"
+          if not (code.TrimEnd().EndsWith(";;")) then code <- code.TrimEnd() + ";;"
           let workDir = getWorkingDirectory ()
           let out = getOutput ()
           do! Window.withProgress ProgressLocation.Window "SageFs: evaluating..." (fun _progress _token ->
@@ -407,9 +378,7 @@ let evalFile () =
     | None -> ()
     | Some ed ->
       let! ok = ensureRunning ()
-      match ok with
-      | false -> ()
-      | true ->
+      if ok then
         let code = ed.document.getText ()
         match code.Trim() with
         | "" -> ()
@@ -438,9 +407,7 @@ let evalRange (args: obj) =
     | None -> ()
     | Some ed ->
       let! ok = ensureRunning ()
-      match ok with
-      | false -> ()
-      | true ->
+      if ok then
         let range: Range = unbox args
         let code = ed.document.getTextRange range
         match code.Trim() with
@@ -609,21 +576,16 @@ let evalAdvance () =
       Window.showWarningMessage "No active editor." [||] |> ignore
     | Some ed ->
       let! ok = ensureRunning ()
-      match ok with
-      | false -> ()
-      | true ->
+      if ok then
         let mutable code =
-          match ed.selection.isEmpty with
-          | false ->
+          if not ed.selection.isEmpty then
             ed.document.getTextRange (newRange (int ed.selection.start.line) (int ed.selection.start.character) (int ed.selection.``end``.line) (int ed.selection.``end``.character))
-          | true ->
+          else
             getCodeBlock ed
         match code.Trim() with
         | "" -> ()
         | _ ->
-          match code.TrimEnd().EndsWith(";;") with
-          | true -> ()
-          | false -> code <- code.TrimEnd() + ";;"
+          if not (code.TrimEnd().EndsWith(";;")) then code <- code.TrimEnd() + ";;"
           let workDir = getWorkingDirectory ()
           let out = getOutput ()
           try
@@ -645,13 +607,11 @@ let evalAdvance () =
               let mutable nextLine = curLine + 1
               while nextLine < lineCount && ed.document.lineAt(float nextLine).text.Trim() = "" do
                 nextLine <- nextLine + 1
-              match nextLine < lineCount with
-              | true ->
+              if nextLine < lineCount then
                 let pos = newPosition nextLine 0
                 let sel = newSelection pos pos
                 setEditorSelection ed sel
                 revealEditorRange ed (newRange nextLine 0 nextLine 0)
-              | false -> ()
           with err ->
             out.appendLine (sprintf "❌ Connection error: %s" (string err))
   }
@@ -748,9 +708,7 @@ let activate (context: ExtensionContext) =
   let docChangeSub = Workspace.onDidChangeTextDocument (fun _evt ->
     match Window.getActiveTextEditor () with
     | Some ed when ed.document.fileName.EndsWith(".fs") || ed.document.fileName.EndsWith(".fsx") ->
-      match Map.isEmpty InlineDeco.blockDecorations with
-      | false -> markDecorationsStale ed
-      | true -> ()
+      if not (Map.isEmpty InlineDeco.blockDecorations) then markDecorationsStale ed
     | _ -> ())
   context.subscriptions.Add docChangeSub
 
@@ -1028,19 +986,15 @@ let activate (context: ExtensionContext) =
 
   Client.isRunning c
   |> Promise.iter (fun running ->
-    match running with
-    | false -> ()
-    | true -> connectToRunningDaemon c
+    if running then connectToRunningDaemon c
   )
 
   // Config change listener
   context.subscriptions.Add (
     Workspace.onDidChangeConfiguration (fun e ->
-      match e.affectsConfiguration "sagefs" with
-      | true ->
+      if e.affectsConfiguration "sagefs" then
         let cfg = Workspace.getConfiguration "sagefs"
         Client.updatePorts (cfg.get("mcpPort", 37749)) (cfg.get("dashboardPort", 37750)) c
-      | false -> ()
     )
   )
 
@@ -1053,14 +1007,10 @@ let activate (context: ExtensionContext) =
 
   // Auto-start (silently — no prompt dialog)
   let autoStart = config.get("autoStart", true)
-  match autoStart with
-  | false -> ()
-  | true ->
+  if autoStart then
     Client.isRunning c
     |> Promise.iter (fun running ->
-      match running with
-      | true -> ()
-      | false ->
+      if not running then
         promise {
           let! projPath = findProject ()
           match projPath with

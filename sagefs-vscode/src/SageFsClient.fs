@@ -105,24 +105,19 @@ let dashHttpPost (c: Client) (path: string) (body: string) (timeout: int) =
 /// Convert a potentially-null value to Option.
 /// In Fable/JS: null and undefined → None, everything else → Some.
 let inline tryOfObj (x: 'a) : 'a option =
-  match isNull (box x) with
-  | true -> None
-  | false -> Some x
+  if isNull (box x) then None else Some x
 
 let tryField<'T> (name: string) (obj: obj) : 'T option =
   let v = obj?(name)
-  match isNull v with
-  | true -> None
-  | false -> Some (unbox<'T> v)
+  if isNull v then None else Some (unbox<'T> v)
 
 let parseOutcome (parsed: obj) : ApiOutcome =
   let success = tryField<bool> "success" parsed |> Option.defaultValue false
-  match success with
-  | true ->
+  if success then
     tryField<string> "message" parsed
     |> Option.orElse (tryField<string> "result" parsed)
     |> Succeeded
-  | false ->
+  else
     tryField<string> "error" parsed
     |> Option.defaultValue "Unknown error"
     |> Failed

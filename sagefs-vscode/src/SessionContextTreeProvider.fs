@@ -114,10 +114,7 @@ let getChildren (element: obj option) : JS.Promise<obj array> =
             return
               wc.NamespacesOpened
               |> Array.map (fun b ->
-                let kind =
-                  match b.IsModule with
-                  | true -> "module"
-                  | false -> "namespace"
+                let kind = if b.IsModule then "module" else "namespace"
                 leafItem b.Name (sprintf "%s via %s" kind b.Source) "symbol-namespace" :> obj)
           | "Failed Opens" ->
             return
@@ -144,10 +141,7 @@ let createProvider () =
   createObj [
     "onDidChangeTreeData" ==> emitter.event
     "getChildren" ==> fun (el: obj) ->
-      let elOpt =
-        match isNull el with
-        | true -> None
-        | false -> Some el
+      let elOpt = if isNull el then None else Some el
       getChildren elOpt
     "getTreeItem" ==> getTreeItem
   ]
