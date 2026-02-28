@@ -551,15 +551,28 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
       | None -> SessionState.Uninitialized
 
   let getEvalStatsAsync (sid: string) = task {
-    match! tryGetSessionSnapshotAsync sid with
-    | Some snap ->
-      return
-        { EvalCount = snap.EvalCount
-          TotalDuration = TimeSpan.FromMilliseconds(float snap.AvgDurationMs * float snap.EvalCount)
-          MinDuration = TimeSpan.FromMilliseconds(float snap.MinDurationMs)
-          MaxDuration = TimeSpan.FromMilliseconds(float snap.MaxDurationMs) }
-        : Affordances.EvalStats
-    | None -> return Affordances.EvalStats.empty
+    // CQRS: bypass MailboxProcessor — call worker HTTP directly
+    let snapshot = readSnapshot()
+    match Map.tryFind sid snapshot.WorkerBaseUrls with
+    | Some baseUrl when baseUrl.Length > 0 ->
+      try
+        let client = new Net.Http.HttpClient()
+        client.Timeout <- TimeSpan.FromSeconds(2.0)
+        let! resp = client.GetStringAsync(sprintf "%s/status?replyId=dash-stats" baseUrl)
+        use doc = Text.Json.JsonDocument.Parse(resp)
+        let root = doc.RootElement
+        let evalCount = root.GetProperty("evalCount").GetInt32()
+        let avgMs = root.GetProperty("avgDurationMs").GetInt64()
+        let minMs = root.GetProperty("minDurationMs").GetInt64()
+        let maxMs = root.GetProperty("maxDurationMs").GetInt64()
+        return
+          { EvalCount = evalCount
+            TotalDuration = TimeSpan.FromMilliseconds(float avgMs * float evalCount)
+            MinDuration = TimeSpan.FromMilliseconds(float minMs)
+            MaxDuration = TimeSpan.FromMilliseconds(float maxMs) }
+          : Affordances.EvalStats
+      with _ -> return Affordances.EvalStats.empty
+    | _ -> return Affordances.EvalStats.empty
   }
 
   let getSessionWorkingDir (sid: string) =
@@ -569,11 +582,7 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
     | None -> ""
 
   let getAllSessions () = task {
-    let! sessions =
-      sessionManager.PostAndAsyncReply(fun reply ->
-        SessionManager.SessionCommand.ListSessions reply)
-      |> Async.StartAsTask
-    return sessions
+    return SessionManager.QuerySnapshot.allSessions (readSnapshot())
   }
 
   let getStatusMsg (sid: string) =
@@ -736,6 +745,7 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
         | Some baseUrl ->
           try
             let client = new Net.Http.HttpClient()
+            client.Timeout <- TimeSpan.FromSeconds(2.0)
             let! resp = client.GetStringAsync(sprintf "%s/hotreload" baseUrl)
             use doc = Text.Json.JsonDocument.Parse(resp)
             let root = doc.RootElement
@@ -755,6 +765,7 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
         | Some baseUrl ->
           try
             let client = new Net.Http.HttpClient()
+            client.Timeout <- TimeSpan.FromSeconds(2.0)
             let! resp = client.GetStringAsync(sprintf "%s/warmup-context" baseUrl)
             let ctx = WorkerProtocol.Serialization.deserialize<WarmupContext> resp
             return Some ctx
@@ -798,6 +809,21 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
         match Map.tryFind sessionId snapshot.WarmupProgress with
         | Some progress -> progress
         | None -> "")
+      // Pipeline trace from Elm model
+      (fun () ->
+        let model = elmRuntime.GetModel()
+        let activeId =
+          SageFs.ActiveSession.sessionId model.Sessions.ActiveSessionId
+          |> Option.defaultValue ""
+        let state = model.LiveTesting.TestState
+        let sessionEntries =
+          Features.LiveTesting.LiveTestState.statusEntriesForSession activeId state
+        let summary =
+          Features.LiveTesting.TestSummary.fromStatuses
+            state.Activation (sessionEntries |> Array.map (fun e -> e.Status))
+        Some {| Timing = model.LiveTesting.LastTiming
+                IsRunning = Features.LiveTesting.TestRunPhase.isAnyRunning state.RunPhases
+                Summary = summary |})
 
   // Hot-reload proxy endpoints — forward to worker HTTP servers
   let hotReloadHttpClient = new Net.Http.HttpClient()

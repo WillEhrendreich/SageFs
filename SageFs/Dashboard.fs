@@ -487,6 +487,13 @@ let renderShell (version: string) =
                 [ Elem.span [ Ds.show "$createLoading" ] [ Text.raw "⏳ Creating... " ]
                   Elem.span [ Ds.show "!$createLoading" ] [ Text.raw "➕ Create" ] ]
             ]
+            // Pipeline Trace
+            Elem.div [ Attr.id "pipeline-trace"; Attr.class' "panel" ] [
+              Elem.h2 [] [ Text.raw "Pipeline" ]
+              Elem.div [ Attr.style "font-size: 0.8rem; opacity: 0.6;" ] [
+                Text.raw "No active session"
+              ]
+            ]
             // Hot Reload
             Elem.div [ Attr.id "hot-reload-panel"; Attr.class' "panel" ] [
               Elem.h2 [] [ Text.raw "Hot Reload" ]
@@ -1287,6 +1294,94 @@ let renderSessionContextEmpty =
     ]
   ]
 
+// ── Pipeline Trace Panel ──────────────────────────────────────────────
+
+let private renderPipelinePhase (label: string) (ms: float) (maxMs: float) (icon: string) =
+  let pct = if maxMs > 0.0 then min 100.0 (ms / maxMs * 100.0) else 0.0
+  let color =
+    if ms < 50.0 then "var(--green, #27ae60)"
+    elif ms < 500.0 then "var(--yellow, #f39c12)"
+    else "var(--red, #e74c3c)"
+  Elem.div [ Attr.style "margin-bottom: 4px;" ] [
+    Elem.div [ Attr.style "display: flex; justify-content: space-between; font-size: 0.75rem;" ] [
+      Elem.span [] [ Text.raw (sprintf "%s %s" icon label) ]
+      Elem.span [] [ Text.raw (sprintf "%.0fms" ms) ]
+    ]
+    Elem.div [ Attr.style "height: 4px; background: var(--bg-alt, #2a2a2a); border-radius: 2px; overflow: hidden;" ] [
+      Elem.div [ Attr.style (sprintf "width: %.0f%%; height: 100%%; background: %s; border-radius: 2px;" pct color) ] []
+    ]
+  ]
+
+let renderPipelineTracePanel
+  (timing: Features.LiveTesting.PipelineTiming option)
+  (isRunning: bool)
+  (summary: Features.LiveTesting.TestSummary)
+  =
+  let statusLabel =
+    if not summary.Enabled then "⏸ disabled"
+    elif isRunning then "⏳ running"
+    else "✅ idle"
+  let summaryParts = [
+    yield Elem.span [ Attr.style "color: var(--green, #27ae60);" ] [
+      Text.raw (sprintf "✓ %d" summary.Passed) ]
+    yield Elem.span [ Attr.style "color: var(--red, #e74c3c);" ] [
+      Text.raw (sprintf "✗ %d" summary.Failed) ]
+    yield Elem.span [ Attr.style "opacity: 0.6;" ] [
+      Text.raw (sprintf "/ %d" summary.Total) ]
+    if summary.Stale > 0 then
+      yield Elem.span [ Attr.style "color: var(--yellow, #f39c12);" ] [
+        Text.raw (sprintf "⟳ %d stale" summary.Stale) ]
+    if summary.Running > 0 then
+      yield Elem.span [ Attr.style "color: var(--cyan, #3498db);" ] [
+        Text.raw (sprintf "⏳ %d" summary.Running) ]
+  ]
+  let timingSection =
+    match timing with
+    | None ->
+      Elem.div [ Attr.style "font-size: 0.75rem; opacity: 0.5; padding: 4px 0;" ] [
+        Text.raw "No timing data yet" ]
+    | Some t ->
+      let tsMs, fcsMs, execMs =
+        match t.Depth with
+        | Features.LiveTesting.PipelineDepth.TreeSitterOnly ts -> ts.TotalMilliseconds, 0.0, 0.0
+        | Features.LiveTesting.PipelineDepth.ThroughFcs (ts, fcs) -> ts.TotalMilliseconds, fcs.TotalMilliseconds, 0.0
+        | Features.LiveTesting.PipelineDepth.ThroughExecution (ts, fcs, exec) -> ts.TotalMilliseconds, fcs.TotalMilliseconds, exec.TotalMilliseconds
+      let totalMs = tsMs + fcsMs + execMs
+      let maxMs = max totalMs 1.0
+      Elem.div [] [
+        yield renderPipelinePhase "Tree-sitter" tsMs maxMs "🌳"
+        match t.Depth with
+        | Features.LiveTesting.PipelineDepth.TreeSitterOnly _ -> ()
+        | _ -> yield renderPipelinePhase "FCS Check" fcsMs maxMs "🔍"
+        match t.Depth with
+        | Features.LiveTesting.PipelineDepth.ThroughExecution _ -> yield renderPipelinePhase "Execution" execMs maxMs "🧪"
+        | _ -> ()
+        yield Elem.div [ Attr.style "font-size: 0.7rem; opacity: 0.5; margin-top: 4px;" ] [
+          Text.raw (sprintf "%.0fms total • %d/%d tests • %s"
+            totalMs t.AffectedTests t.TotalTests
+            (match t.Trigger with
+             | Features.LiveTesting.RunTrigger.Keystroke -> "keystroke"
+             | Features.LiveTesting.RunTrigger.FileSave -> "save"
+             | Features.LiveTesting.RunTrigger.ExplicitRun -> "manual"))
+        ]
+      ]
+  Elem.div [ Attr.id "pipeline-trace"; Attr.class' "panel" ] [
+    Elem.div [ Attr.style "display: flex; justify-content: space-between; align-items: center;" ] [
+      Elem.h2 [ Attr.style "margin: 0;" ] [ Text.raw "Pipeline" ]
+      Elem.span [ Attr.style "font-size: 0.7rem; opacity: 0.7;" ] [ Text.raw statusLabel ]
+    ]
+    Elem.div [ Attr.style "display: flex; gap: 8px; font-size: 0.75rem; margin: 6px 0;" ] summaryParts
+    timingSection
+  ]
+
+let renderPipelineTraceEmpty =
+  Elem.div [ Attr.id "pipeline-trace"; Attr.class' "panel" ] [
+    Elem.h2 [] [ Text.raw "Pipeline" ]
+    Elem.div [ Attr.style "font-size: 0.8rem; opacity: 0.6;" ] [
+      Text.raw "No active session"
+    ]
+  ]
+
 /// Create the SSE stream handler that pushes Elm state to the browser.
 let createStreamHandler
   (getSessionState: string -> SessionState)
@@ -1304,6 +1399,7 @@ let createStreamHandler
   (getHotReloadState: string -> Threading.Tasks.Task<{| files: {| path: string; watched: bool |} list; watchedCount: int |} option>)
   (getWarmupContext: string -> Threading.Tasks.Task<WarmupContext option>)
   (getWarmupProgress: string -> string)
+  (getPipelineTrace: unit -> {| Timing: Features.LiveTesting.PipelineTiming option; IsRunning: bool; Summary: Features.LiveTesting.TestSummary |} option)
   : HttpHandler =
   fun ctx -> task {
     SageFs.Instrumentation.sseConnectionsActive.Add(1L)
@@ -1417,6 +1513,12 @@ let createStreamHandler
           do! ssePatchNode ctx renderSessionContextEmpty
       else
         do! ssePatchNode ctx renderSessionContextEmpty
+      // Push pipeline trace panel
+      match getPipelineTrace () with
+      | Some trace ->
+        do! ssePatchNode ctx (renderPipelineTracePanel trace.Timing trace.IsRunning trace.Summary)
+      | None ->
+        do! ssePatchNode ctx renderPipelineTraceEmpty
       match getElmRegions () with
       | Some regions ->
         // Dedup output region to avoid overwriting reset/clear (Bug #5)
@@ -1434,8 +1536,11 @@ let createStreamHandler
     }
 
     try
-      // Push initial state
-      do! pushState ()
+      // Push initial state (catch all exceptions — don't let a transient failure kill the stream)
+      try
+        do! pushState ()
+      with ex ->
+        eprintfn "[Dashboard SSE] Initial pushState failed: %s" ex.Message
 
       match stateChanged with
       | Some evt ->
@@ -1455,6 +1560,7 @@ let createStreamHandler
             | :? System.IO.IOException -> ()
             | :? System.ObjectDisposedException -> ()
             | :? OperationCanceledException -> ()
+            | ex -> eprintfn "[Dashboard SSE] pushState failed: %s" ex.Message
         }
         use _sub = evt.Subscribe(fun _ ->
           Threading.Tasks.Task.Run(fun () -> pushThrottled () :> Threading.Tasks.Task)
@@ -2065,10 +2171,11 @@ let createEndpoints
   (getCompletions: (string -> string -> int -> Threading.Tasks.Task<Features.AutoCompletion.CompletionItem list>) option)
   (getLiveTestingStatus: unit -> string)
   (getWarmupProgress: string -> string)
+  (getPipelineTrace: unit -> {| Timing: Features.LiveTesting.PipelineTiming option; IsRunning: bool; Summary: Features.LiveTesting.TestSummary |} option)
   : HttpEndpoint list =
   [
     yield get "/dashboard" (FalcoResponse.ofHtml (renderShell version))
-    yield get "/dashboard/stream" (createStreamHandler getSessionState getStatusMsg getEvalStats getSessionWorkingDir getActiveSessionId getElmRegions stateChanged connectionTracker getPreviousSessions getAllSessions sessionThemes getStandbyInfo getHotReloadState getWarmupContext getWarmupProgress)
+    yield get "/dashboard/stream" (createStreamHandler getSessionState getStatusMsg getEvalStats getSessionWorkingDir getActiveSessionId getElmRegions stateChanged connectionTracker getPreviousSessions getAllSessions sessionThemes getStandbyInfo getHotReloadState getWarmupContext getWarmupProgress getPipelineTrace)
     yield post "/dashboard/eval" (createEvalHandler evalCode)
     yield post "/dashboard/eval-file" (createEvalFileHandler evalCode)
     match getCompletions with
