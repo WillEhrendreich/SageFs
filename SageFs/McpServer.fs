@@ -259,7 +259,7 @@ let readJsonProp (ctx: Microsoft.AspNetCore.Http.HttpContext) (prop: string) = t
     match json.RootElement.TryGetProperty(prop) with
     | true, v -> return v.GetString()
     | _ -> return body
-  with _ -> return body
+  with :? System.Text.Json.JsonException -> return body
 }
 
 /// Wrap an async handler with try/catch and JSON error response.
@@ -511,7 +511,7 @@ let startMcpServer (cfg: McpServerConfig) =
                             if json.RootElement.TryGetProperty("rebuild") |> fst then
                                 json.RootElement.GetProperty("rebuild").GetBoolean()
                             else false
-                        with _ -> false
+                        with :? System.Text.Json.JsonException -> false
                     let! result = SageFs.McpTools.hardResetSession mcpContext "http" rebuild None None
                     do! jsonResponse ctx 200 {| success = not (result.Contains("Error")); message = result |}
                 }) :> Task
@@ -1277,7 +1277,13 @@ let startMcpServer (cfg: McpServerConfig) =
                          IsRunning = TestRunPhase.isAnyRunning lt.TestState.RunPhases
                          Summary = {| Total = summary.Total; Passed = summary.Passed; Failed = summary.Failed
                                       Running = summary.Running; Stale = summary.Stale |} |}, sseJsonOpts)
-                  with _ -> ""
+                  with
+                  | :? System.Text.Json.JsonException as ex ->
+                    eprintfn "[MCP] Pipeline trace serialization error: %s" ex.Message
+                    ""
+                  | ex ->
+                    eprintfn "[MCP] Pipeline trace unexpected error: %s (%s)" ex.Message (ex.GetType().Name)
+                    ""
                 if traceJson.Length > 0 && traceJson <> lastPipelineTraceJson then
                   lastPipelineTraceJson <- traceJson
                   testEventBroadcast.Trigger(
