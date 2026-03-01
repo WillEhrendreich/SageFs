@@ -610,10 +610,22 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
             match root.TryGetProperty("statusMessage") with
             | true, v when v.ValueKind <> Text.Json.JsonValueKind.Null -> Some (v.GetString())
             | _ -> None
-          EvalCount = root.GetProperty("evalCount").GetInt32()
-          AvgDurationMs = root.GetProperty("avgDurationMs").GetInt64()
-          MinDurationMs = root.GetProperty("minDurationMs").GetInt64()
-          MaxDurationMs = root.GetProperty("maxDurationMs").GetInt64()
+          EvalCount =
+            match root.TryGetProperty("evalCount") with
+            | true, v -> v.GetInt32()
+            | false, _ -> 0
+          AvgDurationMs =
+            match root.TryGetProperty("avgDurationMs") with
+            | true, v -> v.GetInt64()
+            | false, _ -> 0L
+          MinDurationMs =
+            match root.TryGetProperty("minDurationMs") with
+            | true, v -> v.GetInt64()
+            | false, _ -> 0L
+          MaxDurationMs =
+            match root.TryGetProperty("maxDurationMs") with
+            | true, v -> v.GetInt64()
+            | false, _ -> 0L
         }
         return Some snap
       with
@@ -647,10 +659,18 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
         let! resp = httpClient.GetStringAsync(sprintf "%s/status?replyId=dash-stats" baseUrl, cts.Token)
         use doc = Text.Json.JsonDocument.Parse(resp)
         let root = doc.RootElement
-        let evalCount = root.GetProperty("evalCount").GetInt32()
-        let avgMs = root.GetProperty("avgDurationMs").GetInt64()
-        let minMs = root.GetProperty("minDurationMs").GetInt64()
-        let maxMs = root.GetProperty("maxDurationMs").GetInt64()
+        let getInt (name: string) def =
+          match root.TryGetProperty(name) with
+          | true, v -> v.GetInt32()
+          | false, _ -> def
+        let getLong (name: string) def =
+          match root.TryGetProperty(name) with
+          | true, v -> v.GetInt64()
+          | false, _ -> def
+        let evalCount = getInt "evalCount" 0
+        let avgMs = getLong "avgDurationMs" 0L
+        let minMs = getLong "minDurationMs" 0L
+        let maxMs = getLong "maxDurationMs" 0L
         return
           { EvalCount = evalCount
             TotalDuration = TimeSpan.FromMilliseconds(float avgMs * float evalCount)
