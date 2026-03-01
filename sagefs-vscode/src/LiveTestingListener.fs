@@ -149,6 +149,7 @@ type LiveTestingCallbacks = {
   OnStatusRefresh: unit -> unit
   OnBindingsUpdate: obj array -> unit
   OnPipelineTraceUpdate: obj -> unit
+  OnFeatureEvent: FeatureCallbacks option
 }
 
 type LiveTestingListener = {
@@ -156,6 +157,10 @@ type LiveTestingListener = {
   Summary: unit -> VscTestSummary
   Bindings: unit -> obj array
   PipelineTrace: unit -> obj option
+  EvalDiff: unit -> VscEvalDiff option
+  CellGraph: unit -> VscCellGraph option
+  BindingScope: unit -> VscBindingScopeSnapshot option
+  Timeline: unit -> VscTimelineStats option
   Dispose: unit -> unit
 }
 
@@ -163,7 +168,17 @@ let start (port: int) (callbacks: LiveTestingCallbacks) : LiveTestingListener =
   let mutable state = VscLiveTestState.empty
   let mutable bindings: obj array = [||]
   let mutable pipelineTrace: obj option = None
+  let mutable evalDiff: VscEvalDiff option = None
+  let mutable cellGraph: VscCellGraph option = None
+  let mutable bindingScope: VscBindingScopeSnapshot option = None
+  let mutable timeline: VscTimelineStats option = None
   let url = sprintf "http://localhost:%d/events" port
+
+  let featureCallbacks =
+    { OnEvalDiff = fun d -> evalDiff <- Some d
+      OnCellGraph = fun g -> cellGraph <- Some g
+      OnBindingScope = fun s -> bindingScope <- Some s
+      OnTimeline = fun t -> timeline <- Some t }
 
   let processEvent (eventType: string) (data: obj) =
     match eventType with
@@ -192,12 +207,18 @@ let start (port: int) (callbacks: LiveTestingCallbacks) : LiveTestingListener =
       pipelineTrace <- Some data
       callbacks.OnPipelineTraceUpdate data
     | "eval_diff"
-    | "cell_graph"
-    | "binding_scope"
+    | "cell_dependencies"
+    | "binding_scope_map"
     | "eval_timeline" ->
-      // Feature events parsed by FeatureTypes.processFeatureEvent
-      // Consumer wiring added when UI components are implemented
-      ()
+      let merged =
+        match callbacks.OnFeatureEvent with
+        | Some custom ->
+          { OnEvalDiff = fun d -> featureCallbacks.OnEvalDiff d; custom.OnEvalDiff d
+            OnCellGraph = fun g -> featureCallbacks.OnCellGraph g; custom.OnCellGraph g
+            OnBindingScope = fun s -> featureCallbacks.OnBindingScope s; custom.OnBindingScope s
+            OnTimeline = fun t -> featureCallbacks.OnTimeline t; custom.OnTimeline t }
+        | None -> featureCallbacks
+      processFeatureEvent eventType data merged
     | _ ->
       ()
 
@@ -207,4 +228,8 @@ let start (port: int) (callbacks: LiveTestingCallbacks) : LiveTestingListener =
     Summary = fun () -> VscLiveTestState.summary state
     Bindings = fun () -> bindings
     PipelineTrace = fun () -> pipelineTrace
+    EvalDiff = fun () -> evalDiff
+    CellGraph = fun () -> cellGraph
+    BindingScope = fun () -> bindingScope
+    Timeline = fun () -> timeline
     Dispose = fun () -> disposable.dispose () |> ignore }

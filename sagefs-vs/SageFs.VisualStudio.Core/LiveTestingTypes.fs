@@ -143,6 +143,14 @@ type LiveTestEvent =
   | SummaryUpdated of summary: TestSummary
   | RunPolicyChanged of category: TestCategory * policy: RunPolicy
 
+/// SSE feature events from the SageFs server
+[<RequireQualifiedAccess>]
+type FeatureEvent =
+  | EvalDiff of EvalDiffInfo
+  | CellGraph of CellGraphInfo
+  | BindingScope of BindingScopeInfo
+  | Timeline of TimelineStatsInfo
+
 /// Change signals — what the tool window adapter needs to update
 [<RequireQualifiedAccess>]
 type LiveTestChange =

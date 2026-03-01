@@ -868,6 +868,7 @@ let activate (context: ExtensionContext) =
       OnStatusRefresh = fun () -> refreshStatus ()
       OnBindingsUpdate = fun _ -> ()
       OnPipelineTraceUpdate = fun _ -> ()
+      OnFeatureEvent = None
     }
     liveTestListener <- Some listener
     sseDisposable <- Some {

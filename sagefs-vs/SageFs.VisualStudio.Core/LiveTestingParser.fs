@@ -170,3 +170,106 @@ module LiveTestingParser =
       | "test_results_batch" -> parseResultsBatch root
       | _ -> []
     with _ -> []
+
+  let tryFloat (el: JsonElement) (prop: string) =
+    let mutable v = Unchecked.defaultof<JsonElement>
+    if el.TryGetProperty(prop, &v) && v.ValueKind = JsonValueKind.Number then Some (v.GetDouble()) else None
+
+  let tryIntList (el: JsonElement) (prop: string) =
+    match getProp el prop with
+    | Some arr when arr.ValueKind = JsonValueKind.Array ->
+      [ for e in arr.EnumerateArray() do
+          if e.ValueKind = JsonValueKind.Number then yield e.GetInt32() ]
+    | _ -> []
+
+  let tryStrList (el: JsonElement) (prop: string) =
+    match getProp el prop with
+    | Some arr when arr.ValueKind = JsonValueKind.Array ->
+      [ for e in arr.EnumerateArray() do
+          if e.ValueKind = JsonValueKind.String then yield e.GetString() ]
+    | _ -> []
+
+  let parseDiffLine (el: JsonElement) : DiffLineInfo =
+    let kindStr = tryStr el "Kind" "unchanged"
+    let kind =
+      match kindStr.ToLowerInvariant() with
+      | "added" -> DiffLineKind.Added
+      | "removed" -> DiffLineKind.Removed
+      | "modified" -> DiffLineKind.Modified
+      | _ -> DiffLineKind.Unchanged
+    { Kind = kind
+      Text = tryStr el "Text" ""
+      OldText =
+        match getProp el "OldText" with
+        | Some v when v.ValueKind = JsonValueKind.String && v.GetString() <> "" -> Some (v.GetString())
+        | _ -> None }
+
+  let parseEvalDiff (root: JsonElement) : EvalDiffInfo =
+    let lines =
+      match getProp root "Lines" with
+      | Some arr when arr.ValueKind = JsonValueKind.Array ->
+        [ for e in arr.EnumerateArray() -> parseDiffLine e ]
+      | _ -> []
+    let hasDiff = lines |> List.exists (fun l -> l.Kind <> DiffLineKind.Unchanged)
+    { Lines = lines
+      Summary =
+        { Added = tryInt root "Added" 0
+          Removed = tryInt root "Removed" 0
+          Modified = tryInt root "Modified" 0
+          Unchanged = tryInt root "Unchanged" 0 }
+      HasDiff = hasDiff }
+
+  let parseCellGraph (root: JsonElement) : CellGraphInfo =
+    let nodes =
+      match getProp root "Nodes" with
+      | Some arr when arr.ValueKind = JsonValueKind.Array ->
+        [ for e in arr.EnumerateArray() ->
+            { CellNodeInfo.CellId = tryInt e "Id" 0
+              Source = tryStr e "Source" ""
+              Produces = tryStrList e "Produces"
+              Consumes = tryStrList e "Consumes"
+              IsStale = false } ]
+      | _ -> []
+    let edges =
+      match getProp root "Edges" with
+      | Some arr when arr.ValueKind = JsonValueKind.Array ->
+        [ for e in arr.EnumerateArray() ->
+            { CellEdgeInfo.From = tryInt e "From" 0; To = tryInt e "To" 0 } ]
+      | _ -> []
+    { Cells = nodes; Edges = edges }
+
+  let parseBindingScope (root: JsonElement) : BindingScopeInfo =
+    let bindings =
+      match getProp root "Bindings" with
+      | Some arr when arr.ValueKind = JsonValueKind.Array ->
+        [ for e in arr.EnumerateArray() ->
+            { BindingDetailInfo.Name = tryStr e "Name" ""
+              TypeSig = tryStr e "TypeSig" ""
+              CellIndex = tryInt e "CellIndex" 0
+              IsShadowed = (tryIntList e "ShadowedBy" |> List.isEmpty |> not)
+              ShadowedBy = tryIntList e "ShadowedBy"
+              ReferencedIn = tryIntList e "ReferencedIn" } ]
+      | _ -> []
+    { Bindings = bindings
+      ActiveCount = tryInt root "ActiveCount" 0
+      ShadowedCount = tryInt root "ShadowedCount" 0 }
+
+  let parseTimeline (root: JsonElement) : TimelineStatsInfo =
+    { Count = tryInt root "Count" 0
+      P50Ms = tryFloat root "P50Ms"
+      P95Ms = tryFloat root "P95Ms"
+      P99Ms = tryFloat root "P99Ms"
+      MeanMs = tryFloat root "MeanMs"
+      Sparkline = tryStr root "Sparkline" "" }
+
+  let parseFeatureSseEvent (eventType: string) (json: string) : FeatureEvent option =
+    try
+      use doc = JsonDocument.Parse(json)
+      let root = doc.RootElement
+      match eventType with
+      | "eval_diff" -> Some (FeatureEvent.EvalDiff (parseEvalDiff root))
+      | "cell_dependencies" -> Some (FeatureEvent.CellGraph (parseCellGraph root))
+      | "binding_scope_map" -> Some (FeatureEvent.BindingScope (parseBindingScope root))
+      | "eval_timeline" -> Some (FeatureEvent.Timeline (parseTimeline root))
+      | _ -> None
+    with _ -> None

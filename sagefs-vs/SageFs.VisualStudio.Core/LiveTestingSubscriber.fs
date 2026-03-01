@@ -15,6 +15,7 @@ type LiveTestingSubscriber(port: int) =
   let stateChanged = Event<LiveTestState>()
   let summaryChanged = Event<TestSummary>()
   let changeEmitted = Event<LiveTestChange>()
+  let featureReceived = Event<FeatureEvent>()
 
   /// Fires when test state changes (discovery, results, toggle)
   [<CLIEvent>]
@@ -27,6 +28,10 @@ type LiveTestingSubscriber(port: int) =
   /// Fires when a test_summary SSE event arrives
   [<CLIEvent>]
   member _.SummaryChanged = summaryChanged.Publish
+
+  /// Fires when a feature event (eval_diff, cell_dependencies, etc.) arrives
+  [<CLIEvent>]
+  member _.FeatureReceived = featureReceived.Publish
 
   member _.State = state
 
@@ -65,6 +70,9 @@ type LiveTestingSubscriber(port: int) =
                 | _ -> ()
               if not events.IsEmpty then
                 stateChanged.Trigger(state)
+              match LiveTestingParser.parseFeatureSseEvent currentEvent json with
+              | Some fe -> featureReceived.Trigger(fe)
+              | None -> ()
               currentEvent <- "message"
             elif line.Trim() = "" then
               currentEvent <- "message"

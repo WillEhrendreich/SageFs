@@ -200,8 +200,8 @@ let parseNotebookCell (data: obj) : VscNotebookCell =
 let processFeatureEvent (eventType: string) (data: obj) (callbacks: FeatureCallbacks) =
   match eventType with
   | "eval_diff" -> callbacks.OnEvalDiff (parseEvalDiff data)
-  | "cell_graph" -> callbacks.OnCellGraph (parseCellGraph data)
-  | "binding_scope" -> callbacks.OnBindingScope (parseBindingScopeSnapshot data)
+  | "cell_dependencies" -> callbacks.OnCellGraph (parseCellGraph data)
+  | "binding_scope_map" -> callbacks.OnBindingScope (parseBindingScopeSnapshot data)
   | "eval_timeline" -> callbacks.OnTimeline (parseTimelineStats data)
   | _ -> ()
 

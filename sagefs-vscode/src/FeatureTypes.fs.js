@@ -266,11 +266,11 @@ export function processFeatureEvent(eventType, data, callbacks) {
             callbacks.OnEvalDiff(parseEvalDiff(data));
             break;
         }
-        case "cell_graph": {
+        case "cell_dependencies": {
             callbacks.OnCellGraph(parseCellGraph(data));
             break;
         }
-        case "binding_scope": {
+        case "binding_scope_map": {
             callbacks.OnBindingScope(parseBindingScopeSnapshot(data));
             break;
         }
