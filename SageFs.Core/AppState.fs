@@ -29,12 +29,14 @@ type TextWriterRecorder(writerToRecord: TextWriter) =
     | None -> ()
     | Some recorder -> recorder.Append value |> ignore
 
-    if value = '\n' then
-      if not lastCharWasCR then
-        writerToRecord.Write '\r'
+    match value with
+    | '\n' ->
+      match lastCharWasCR with
+      | false -> writerToRecord.Write '\r'
+      | true -> ()
       writerToRecord.Write '\n'
       lastCharWasCR <- false
-    else
+    | _ ->
       lastCharWasCR <- (value = '\r')
       writerToRecord.Write value
 
@@ -206,12 +208,13 @@ let stripAnsi (s: string) =
 /// Reformat Expecto summary line into readable multi-line output.
 let reformatExpectoSummary (line: string) =
   let m = reExpectoSummary.Match(line)
-  if m.Success then
+  match m.Success with
+  | true ->
     sprintf "%s: %s tests in %s\n  %s passed\n  %s ignored\n  %s failed\n  %s errored\n  %s"
       m.Groups.[3].Value m.Groups.[1].Value m.Groups.[2].Value
       m.Groups.[4].Value m.Groups.[5].Value
       m.Groups.[6].Value m.Groups.[7].Value m.Groups.[8].Value
-  else line
+  | false -> line
 
 /// Clean captured stdout: strip ANSI, remove progress noise, reformat Expecto.
 /// Uses pre-compiled regex and single-pass line processing for 1.7× speedup.
@@ -221,19 +224,26 @@ let cleanStdout (raw: string) =
   let mutable first = true
   for line in s.Split([| '\n'; '\r' |], StringSplitOptions.RemoveEmptyEntries) do
     let l = line.Trim()
-    if l.Length > 0
-       && not (l.StartsWith("Expecto Running", System.StringComparison.Ordinal))
-       && not (reProgressBar.IsMatch(l)) then
+    match l.Length > 0
+          && not (l.StartsWith("Expecto Running", System.StringComparison.Ordinal))
+          && not (reProgressBar.IsMatch(l)) with
+    | true ->
       let l = reExpectoTimestamp.Replace(l, "")
       let l = reExpectoSuffix.Replace(l, "")
       let l = l.Trim()
-      if l.Length > 0 then
+      match l.Length > 0 with
+      | true ->
         let l =
-          if l.Contains "EXPECTO!" then reformatExpectoSummary l
-          else l
-        if not first then sb.Append('\n') |> ignore
+          match l.Contains "EXPECTO!" with
+          | true -> reformatExpectoSummary l
+          | false -> l
+        match first with
+        | false -> sb.Append('\n') |> ignore
+        | true -> ()
         sb.Append(l) |> ignore
         first <- false
+      | false -> ()
+    | false -> ()
   sb.ToString()
 
 let evalFn (token: CancellationToken) =
@@ -254,8 +264,9 @@ let evalFn (token: CancellationToken) =
         let fsiOutput = st.OutStream.StopRecording()
         let stdout = stdoutCapture.ToString() |> cleanStdout
         let combined =
-          if String.IsNullOrWhiteSpace stdout then fsiOutput
-          else sprintf "%s\n%s" fsiOutput stdout
+          match String.IsNullOrWhiteSpace stdout with
+          | true -> fsiOutput
+          | false -> sprintf "%s\n%s" fsiOutput stdout
         Ok combined
       | Choice2Of2 ex -> Error <| ex
 
@@ -290,15 +301,18 @@ let createFsiSession (logger: ILogger) (outStream: TextWriter) (useAsp: bool) (s
         FsiEvaluationSession.Create(fsiConfig, args, new StreamReader(Stream.Null), recorder, fsiErrorWriter, collectible = true)
       with ex ->
         let fsiErrors = fsiErrorWriter.ToString()
-        if fsiErrors.Length > 0 then
-          logger.LogError (sprintf "  FSI stderr: %s" fsiErrors)
+        match fsiErrors.Length > 0 with
+        | true -> logger.LogError (sprintf "  FSI stderr: %s" fsiErrors)
+        | false -> ()
         logger.LogError (sprintf "  ❌ FsiEvaluationSession.Create failed: %s" ex.Message)
-        if not (isNull ex.InnerException) then
-          logger.LogError (sprintf "    Inner: %s" ex.InnerException.Message)
+        match isNull ex.InnerException with
+        | false -> logger.LogError (sprintf "    Inner: %s" ex.InnerException.Message)
+        | true -> ()
         raise ex
     let fsiInitErrors = fsiErrorWriter.ToString()
-    if fsiInitErrors.Length > 0 then
-      logger.LogWarning (sprintf "  FSI init warnings: %s" fsiInitErrors)
+    match fsiInitErrors.Length > 0 with
+    | true -> logger.LogWarning (sprintf "  FSI init warnings: %s" fsiInitErrors)
+    | false -> ()
     logger.LogInfo (sprintf "  FSI session created in %dms, loading startup files..." sw.ElapsedMilliseconds)
     onProgress(1, 4, "FSI session created")
 
@@ -307,11 +321,13 @@ let createFsiSession (logger: ILogger) (outStream: TextWriter) (useAsp: bool) (s
       logger.LogInfo $"Loading %s{fileName}"
       let! fileContents = File.ReadAllTextAsync fileName |> Async.AwaitTask
       let compatibleContents = FsiRewrite.rewriteInlineUseStatements fileContents
-      if compatibleContents <> fileContents then
+      match compatibleContents <> fileContents with
+      | true ->
         logger.LogInfo $"⚡ Applied FSI compatibility transforms to {fileName}"
         let beforeCount = (fileContents.Split('\n') |> Array.filter (fun line -> line.TrimStart().StartsWith("use ", System.StringComparison.Ordinal))).Length
         let afterCount = (compatibleContents.Split('\n') |> Array.filter (fun line -> line.TrimStart().StartsWith("use ", System.StringComparison.Ordinal))).Length  
         logger.LogInfo $"   Rewrote {beforeCount - afterCount} 'use' statements to 'let'"
+      | false -> ()
       try
         fsiSession.EvalInteraction(compatibleContents, ct)
       with ex ->
@@ -334,17 +350,25 @@ let createFsiSession (logger: ILogger) (outStream: TextWriter) (useAsp: bool) (s
     for fsFile in allFsFiles do
       ct.ThrowIfCancellationRequested()
       try
-        if File.Exists(fsFile) then
+        match File.Exists(fsFile) with
+        | true ->
           let! sourceLines = File.ReadAllLinesAsync fsFile |> Async.AwaitTask
           fileCount <- fileCount + 1
           for line in sourceLines do
             let trimmed = line.Trim()
-            if trimmed.StartsWith("open ", System.StringComparison.Ordinal) && not (trimmed.StartsWith("//", System.StringComparison.Ordinal)) then
+            match trimmed.StartsWith("open ", System.StringComparison.Ordinal) && not (trimmed.StartsWith("//", System.StringComparison.Ordinal)) with
+            | true ->
               let parts = trimmed.Split([|' '; '\t'|], StringSplitOptions.RemoveEmptyEntries)
-              if parts.Length >= 2 then
+              match parts.Length >= 2 with
+              | true ->
                 let nsName = parts.[1].TrimEnd(';')
-                if openedNamespaces.Add(nsName) then
+                match openedNamespaces.Add(nsName) with
+                | true ->
                   namesToOpen.Add(nsName)
+                | false -> ()
+              | false -> ()
+            | false -> ()
+        | false -> ()
       with ex ->
         logger.LogDebug (sprintf "Could not parse opens from %s: %s" fsFile ex.Message)
     logger.LogInfo (sprintf "  Scanned %d source files for opens in %dms" fileCount sw.ElapsedMilliseconds)
@@ -372,10 +396,11 @@ let createFsiSession (logger: ILogger) (outStream: TextWriter) (useAsp: bool) (s
         let rootNamespaces =
           types
           |> Array.choose (fun t ->
-            if not (t.Namespace |> isNull) then
+            match isNull t.Namespace with
+            | false ->
               let parts = t.Namespace.Split('.')
-              if parts.Length > 0 then Some parts.[0] else None
-            else
+              match parts.Length > 0 with | true -> Some parts.[0] | false -> None
+            | true ->
               None)
           |> Array.distinct
           |> Array.filter (fun ns -> not (ns.StartsWith("<", System.StringComparison.Ordinal) || ns.StartsWith("$", System.StringComparison.Ordinal)))
@@ -390,23 +415,22 @@ let createFsiSession (logger: ILogger) (outStream: TextWriter) (useAsp: bool) (s
                cma.SourceConstructFlags = Microsoft.FSharp.Core.SourceConstructFlags.Module)) &&
             not (t.Name.StartsWith("<", System.StringComparison.Ordinal) || t.Name.StartsWith("$", System.StringComparison.Ordinal) || t.Name.Contains("@") || t.Name.Contains("+")))
           |> Array.map (fun t ->
-            // F# compiler adds "Module" suffix when there's a name collision
-            // (type abbreviations are erased in IL, so we can't detect all collisions).
-            // Always strip it — F# source uses the unsuffixed name.
-            if t.Name.EndsWith("Module", System.StringComparison.Ordinal) then
-              t.Name.Substring(0, t.Name.Length - 6)
-            else
-              t.Name)
+            match t.Name.EndsWith("Module", System.StringComparison.Ordinal) with
+            | true -> t.Name.Substring(0, t.Name.Length - 6)
+            | false -> t.Name)
           |> Array.distinct
 
         for ns in rootNamespaces do
-          if openedNamespaces.Add(ns) then
-            namesToOpen.Add(ns)
+          match openedNamespaces.Add(ns) with
+          | true -> namesToOpen.Add(ns)
+          | false -> ()
 
         for m in topLevelModules do
-          if openedNamespaces.Add(m) then
+          match openedNamespaces.Add(m) with
+          | true ->
             namesToOpen.Add(m)
             moduleNames.Add(m) |> ignore
+          | false -> ()
 
         loadedAssemblies.Add({
           Name = asm.GetName().Name
@@ -422,36 +446,41 @@ let createFsiSession (logger: ILogger) (outStream: TextWriter) (useAsp: bool) (s
     // Phase 3: Open all collected names with iterative retry
     let opener name =
       ct.ThrowIfCancellationRequested()
-      let label = if moduleNames.Contains(name) then "module" else "namespace"
+      let label = match moduleNames.Contains(name) with | true -> "module" | false -> "namespace"
       logger.LogDebug (sprintf "Opening %s: %s" label name)
       let result, diagnostics = fsiSession.EvalInteractionNonThrowing(sprintf "open %s;;" name, ct)
       match result with
       | Choice1Of2 _ ->
-        if moduleNames.Contains(name) then
-          logger.LogInfo (sprintf "✅ Opened module: %s" name)
+        match moduleNames.Contains(name) with
+        | true -> logger.LogInfo (sprintf "✅ Opened module: %s" name)
+        | false -> ()
         Ok ()
       | Choice2Of2 ex ->
         let allText = sprintf "%s %s" ex.Message (diagnostics |> Array.map (fun d -> d.Message) |> String.concat " ")
-        if isBenignOpenError allText then
+        match isBenignOpenError allText with
+        | true ->
           logger.LogDebug (sprintf "⏭️ Skipped %s (RequireQualifiedAccess — types accessible via qualified paths)" name)
           Ok ()
-        else
+        | false ->
           Error ex.Message
 
     let totalNames = namesToOpen.Count
     logger.LogInfo (sprintf "Opening %d namespaces/modules (with dependency retry)..." totalNames)
     let succeeded, failed = openWithRetry 5 opener (Seq.toList namesToOpen)
     logger.LogInfo (sprintf "✅ Opened %d/%d namespaces/modules in %dms" (List.length succeeded) totalNames sw.ElapsedMilliseconds)
-    if not (List.isEmpty failed) then
+    match List.isEmpty failed with
+    | false ->
       logger.LogWarning (sprintf "⚠️  %d could not be opened (missing dependencies or type errors)" (List.length failed))
       for name, err in failed do
         let shortErr =
-          if err.Contains("earlier error") then "cascade from earlier failure"
-          elif err.Contains("not defined") then "not defined in scope"
-          else
+          match err.Contains("earlier error"), err.Contains("not defined") with
+          | true, _ -> "cascade from earlier failure"
+          | false, true -> "not defined in scope"
+          | false, false ->
             let lines = err.Split('\n')
-            if lines.Length > 0 then lines.[0].Trim() else err
+            match lines.Length > 0 with | true -> lines.[0].Trim() | false -> err
         logger.LogDebug (sprintf "  ✗ %s — %s" name shortErr)
+    | true -> ()
 
     // Restore core F# after warm-up opens. User project libraries like FSharpPlus shadow
     // min/max with SRTP-generic versions and replace the async CE builder.
@@ -509,8 +538,9 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
         return! loop snapshot
       | QueryGetWarmupContext reply ->
         let ctx =
-          if obj.ReferenceEquals(snapshot.AppState, null) then WarmupContext.empty
-          else snapshot.AppState.WarmupContext
+          match obj.ReferenceEquals(snapshot.AppState, null) with
+          | true -> WarmupContext.empty
+          | false -> snapshot.AppState.WarmupContext
         reply.Reply ctx
         return! loop snapshot
       | QueryGetStatusMessage reply ->
@@ -671,13 +701,14 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
             // Wait briefly for any in-flight eval thread to finish
             match currentEvalThread.Value with
             | Some thread ->
-              if not (thread.Join(2000)) then
-                logger.LogWarning "⚠️ Eval thread did not exit in time, proceeding with reset"
+              match thread.Join(2000) with
+              | false -> logger.LogWarning "⚠️ Eval thread did not exit in time, proceeding with reset"
+              | true -> ()
               currentEvalThread.Value <- None
             | None -> ()
-            // Dispose may be called after a faulted init where Session is null
-            if not (isNull (box st.Session)) then
-              (st.Session :> System.IDisposable).Dispose()
+            match isNull (box st.Session) with
+            | false -> (st.Session :> System.IDisposable).Dispose()
+            | true -> ()
             let softResetCts = new CancellationTokenSource(TimeSpan.FromMinutes(5.0))
             let onProgress (s,t,msg) =
               emit (Events.SageFsEvent.SessionWarmUpProgress {| Step = s; Total = t; Message = msg |})
@@ -708,19 +739,20 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
             // Wait briefly for any in-flight eval thread to finish
             match currentEvalThread.Value with
             | Some thread ->
-              if not (thread.Join(2000)) then
-                logger.LogWarning "⚠️ Eval thread did not exit in time, proceeding with hard reset"
+              match thread.Join(2000) with
+              | false -> logger.LogWarning "⚠️ Eval thread did not exit in time, proceeding with hard reset"
+              | true -> ()
               currentEvalThread.Value <- None
             | None -> ()
 
-            // Dispose may be called after a faulted init where Session is null
-            if not (isNull (box st.Session)) then
-              // Dispose on a background thread with timeout — FSI dispose can
-              // hang if the session is in a bad internal state.
+            match isNull (box st.Session) with
+            | false ->
               let disposeTask = System.Threading.Tasks.Task.Run(fun () ->
                 (st.Session :> System.IDisposable).Dispose())
-              if not (disposeTask.Wait(TimeSpan.FromSeconds(10.0))) then
-                logger.LogWarning "⚠️ Session dispose timed out after 10s, continuing..."
+              match disposeTask.Wait(TimeSpan.FromSeconds(10.0)) with
+              | false -> logger.LogWarning "⚠️ Session dispose timed out after 10s, continuing..."
+              | true -> ()
+            | true -> ()
             // Required before dotnet build can overwrite assemblies on Windows
             GC.Collect()
             GC.WaitForPendingFinalizers()
@@ -730,7 +762,8 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
             | Some dir -> ShadowCopy.cleanupShadowDir dir
             | None -> ()
 
-            if rebuild then
+            match rebuild with
+            | true ->
               // Build only the primary project — dotnet build resolves dependencies transitively.
               // Building each project separately is redundant and slow for multi-project solutions.
               let primaryProject =
@@ -773,55 +806,65 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
                   let mutable finished = false
                   let mutable timedOut = false
                   while not finished do
-                    if proc.WaitForExit(1000) then
+                    match proc.WaitForExit(1000) with
+                    | true ->
                       finished <- true
-                    else
+                    | false ->
                       let now = DateTime.UtcNow
                       let totalMs = (now - startedAt).TotalMilliseconds
                       let inactiveMs = (now - lastActivity).TotalMilliseconds
-                      if totalMs > float maxTotalMs then
+                      match totalMs > float maxTotalMs with
+                      | true ->
                         logger.LogWarning (sprintf "  ⚠️ Build exceeded %d min limit" (maxTotalMs / 60_000))
                         timedOut <- true
                         finished <- true
-                      elif inactiveMs > float inactivityLimitMs then
-                        logger.LogWarning (sprintf "  ⚠️ Build inactive for %ds (no output)" (inactivityLimitMs / 1000))
-                        timedOut <- true
-                        finished <- true
-                  if timedOut then
+                      | false ->
+                        match inactiveMs > float inactivityLimitMs with
+                        | true ->
+                          logger.LogWarning (sprintf "  ⚠️ Build inactive for %ds (no output)" (inactivityLimitMs / 1000))
+                          timedOut <- true
+                          finished <- true
+                        | false -> ()
+                  match timedOut with
+                  | true ->
                     try proc.Kill(entireProcessTree = true) with _ -> ()
                     -1, sprintf "Build timed out (inactive for %ds or exceeded %d min limit)" (inactivityLimitMs / 1000) (maxTotalMs / 60_000)
-                  else
+                  | false ->
                     try stderrTask.Wait(5000) |> ignore with _ -> ()
                     proc.ExitCode, String.concat "\n" stderrLines
                 let exitCode, stderr = runBuild ()
-                if exitCode <> 0 then
-                  if stderr.Contains("denied") || stderr.Contains("locked") then
+                match exitCode <> 0 with
+                | true ->
+                  match stderr.Contains("denied") || stderr.Contains("locked") with
+                  | true ->
                     logger.LogWarning "  ⚠️ DLL lock detected, retrying after GC..."
                     GC.Collect()
                     GC.WaitForPendingFinalizers()
                     GC.Collect()
                     Thread.Sleep(500)
                     let retryCode, retryErr = runBuild ()
-                    if retryCode <> 0 then
+                    match retryCode <> 0 with
+                    | true ->
                       let msg = sprintf "Build failed on retry (exit code %d): %s" retryCode retryErr
                       logger.LogError (sprintf "  ❌ %s" msg)
                       let failedState = SessionState.Faulted
                       publishSnapshot st failedState evalStats
                       reply.Reply(Error (SageFsError.HardResetFailed msg))
                       return! loop st middleware failedState evalStats
-                    else
+                    | false ->
                       logger.LogInfo "  ✅ Build succeeded on retry"
-                  else
+                  | false ->
                     let msg = sprintf "Build failed (exit code %d): %s" exitCode stderr
                     logger.LogError (sprintf "  ❌ %s" msg)
                     let failedState = SessionState.Faulted
                     publishSnapshot st failedState evalStats
                     reply.Reply(Error (SageFsError.HardResetFailed msg))
                     return! loop st middleware failedState evalStats
-                else
+                | false ->
                   logger.LogInfo "  ✅ Build succeeded"
               | None ->
                 logger.LogWarning "  ⚠️ No project to build"
+            | false -> ()
 
             let newShadowDir = ShadowCopy.createShadowDir ()
             logger.LogInfo "  Creating shadow copies..."
@@ -861,10 +904,11 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
             let! winner = System.Threading.Tasks.Task.WhenAny(warmupTask, timeoutTask) |> Async.AwaitTask
             let! warmupResult =
               async {
-                if Object.ReferenceEquals(winner, warmupTask) then
+                match Object.ReferenceEquals(winner, warmupTask) with
+                | true ->
                   let! r = warmupTask |> Async.AwaitTask
                   return r
-                else
+                | false ->
                   logger.LogWarning "  ⚠️ Warmup timed out, cancelling..."
                   warmupCts.Cancel()
                   return Error (System.TimeoutException(sprintf "Warmup timed out after %.0f minutes" warmupTimeout.TotalMinutes) :> exn)
@@ -915,10 +959,12 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
             StartedAt = DateTimeOffset.UtcNow
           |})
 
-          if not (List.isEmpty sln.Projects) then
+          match List.isEmpty sln.Projects with
+          | false ->
             logger.LogInfo "Loading these projects: "
             for project in sln.Projects do
               logger.LogInfo project.ProjectFileName
+          | true -> ()
 
           match sln.Projects |> List.tryHead with
           | Some primaryProject ->
@@ -991,8 +1037,9 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
             | :? OperationCanceledException -> "Initial warm-up timed out after 5 minutes"
             | _ -> sprintf "Initial warm-up failed: %s" ex.Message
           logger.LogError (sprintf "❌ %s" msg)
-          if not (isNull ex.InnerException) then
-            logger.LogError (sprintf "  Inner: %s" ex.InnerException.Message)
+          match isNull ex.InnerException with
+          | false -> logger.LogError (sprintf "  Inner: %s" ex.InnerException.Message)
+          | true -> ()
           logger.LogError (sprintf "  Stack: %s" ex.StackTrace)
           // Publish Faulted so MCP clients know the session is dead, not warming up
           let faultedSt = {
@@ -1107,8 +1154,9 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
     snap.WarmupFailures
   let getWarmupContext () =
     let snap = System.Threading.Volatile.Read(&latestSnapshot)
-    if obj.ReferenceEquals(snap.AppState, null) then WarmupContext.empty
-    else snap.AppState.WarmupContext
+    match obj.ReferenceEquals(snap.AppState, null) with
+    | true -> WarmupContext.empty
+    | false -> snap.AppState.WarmupContext
   let getStartupConfig () =
     let snap = System.Threading.Volatile.Read(&latestSnapshot)
     snap.StartupConfig
