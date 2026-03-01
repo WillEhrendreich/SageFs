@@ -94,6 +94,11 @@
         <Compile Include="LayoutAndInputTests.fs" />
         <Compile Include="PureFunctionCoverageTests.fs" />
         <Compile Include="CoverageInstrumenterTests.fs" />
+        <Compile Include="EvalDiffTests.fs" />
+        <Compile Include="CellDependencyGraphTests.fs" />
+        <Compile Include="BindingExplorerTests.fs" />
+        <Compile Include="EvalTimelineTests.fs" />
+        <Compile Include="NotebookExportTests.fs" />
         <Compile Include="Program.fs" />
     </ItemGroup>
 

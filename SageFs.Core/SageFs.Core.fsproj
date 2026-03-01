@@ -24,6 +24,11 @@
         <Compile Include="Features\DiagnosticsStore.fs" />
         <Compile Include="Features\Events.fs" />
         <Compile Include="Features\Replay.fs" />
+        <Compile Include="Features\EvalDiff.fs" />
+        <Compile Include="Features\CellDependencyGraph.fs" />
+        <Compile Include="Features\BindingExplorer.fs" />
+        <Compile Include="Features\EvalTimeline.fs" />
+        <Compile Include="Features\NotebookExport.fs" />
         <Compile Include="RetryPolicy.fs" />
         <Compile Include="SseWriter.fs" />
         <Compile Include="EventStore.fs" />
