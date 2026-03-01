@@ -462,10 +462,10 @@ let startMcpServer (cfg: McpServerConfig) =
             let sseJsonOpts = JsonSerializerOptions()
             sseJsonOpts.Converters.Add(System.Text.Json.Serialization.JsonFSharpConverter())
 
-            // Response compression: Brotli at fastest level for all HTTP/SSE responses
+            // Response compression: Brotli at fastest level for HTTP responses
+            // NOTE: text/event-stream excluded — compression buffers defeat SSE real-time delivery
             builder.Services.AddResponseCompression(fun opts ->
               opts.EnableForHttps <- true
-              opts.MimeTypes <- ResponseCompressionDefaults.MimeTypes |> Seq.append ["text/event-stream"]
               opts.Providers.Add<BrotliCompressionProvider>()
               opts.Providers.Add<GzipCompressionProvider>()
             ) |> ignore
@@ -532,6 +532,8 @@ let startMcpServer (cfg: McpServerConfig) =
 
             // CQRS: server-side bindings tracking — pushed via SSE, not polled
             let mutable fsiBindings: Map<string, SageFs.SseWriter.FsiBinding> = Map.empty
+            let mutable featurePushState = SageFs.Features.FeatureHooks.FeaturePushState.empty
+            let mutable lastFeatureOutputCount = 0
             
             // POST /exec — send F# code to the session
             app.MapPost("/exec", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
@@ -542,7 +544,10 @@ let startMcpServer (cfg: McpServerConfig) =
                       match json.RootElement.TryGetProperty("working_directory") with
                       | true, prop -> Some (prop.GetString())
                       | false, _ -> None
+                    let sw = System.Diagnostics.Stopwatch.StartNew()
                     let! result = SageFs.McpTools.sendFSharpCode mcpContext "cli-integrated" code SageFs.McpTools.OutputFormat.Text None wd
+                    sw.Stop()
+                    featurePushState <- SageFs.Features.FeatureHooks.recordEval code result sw.ElapsedMilliseconds featurePushState
                     do! jsonResponse ctx 200 {| success = true; result = result |}
                 }) :> Task
             ) |> ignore
@@ -841,6 +846,14 @@ let startMcpServer (cfg: McpServerConfig) =
                           |> writeSseFrame ctx.Response.Body
                           |> fun t -> t.Wait()
                         | _ -> ()
+                        // Replay feature push state for new SSE connections
+                        [featurePushState.LastEvalDiffSse
+                         featurePushState.LastCellDepsSse
+                         featurePushState.LastBindingScopeSse
+                         featurePushState.LastEvalTimelineSse]
+                        |> List.choose id
+                        |> List.iter (fun sse ->
+                          writeSseFrame ctx.Response.Body sse |> fun t -> t.Wait())
                         // Build typed source from state changes
                         let stateSource =
                           evt |> Observable.map (fun change ->
@@ -1419,6 +1432,35 @@ let startMcpServer (cfg: McpServerConfig) =
                   | false -> ()
                 | false -> ())
 
+            let handleFeaturePush outputCount =
+              match outputCount <> lastFeatureOutputCount with
+              | true ->
+                lastFeatureOutputCount <- outputCount
+                withModel (fun model ->
+                  let sid = activeSessionId ()
+                  let outputText =
+                    model.RecentOutput
+                    |> List.filter (fun o ->
+                      o.Kind = SageFs.OutputKind.Result
+                      && o.SessionId = (sid |> Option.defaultValue ""))
+                    |> List.rev
+                    |> List.map (fun o -> o.Text)
+                    |> String.concat "\n"
+                  let state = featurePushState
+                  let state, diffSse =
+                    SageFs.Features.FeatureHooks.computeEvalDiffPush sseJsonOpts sid outputText state
+                  let state, depsSse =
+                    SageFs.Features.FeatureHooks.computeCellDepsPush sseJsonOpts sid state
+                  let state, scopeSse =
+                    SageFs.Features.FeatureHooks.computeBindingScopePush sseJsonOpts sid state
+                  let state, timelineSse =
+                    SageFs.Features.FeatureHooks.computeEvalTimelinePush sseJsonOpts sid state
+                  featurePushState <- state
+                  [diffSse; depsSse; scopeSse; timelineSse]
+                  |> List.choose id
+                  |> List.iter testEventBroadcast.Trigger)
+              | false -> ()
+
             let _stateSub =
               cfg.StateChanged |> Option.map (fun evt ->
                 evt.Subscribe(fun change ->
@@ -1443,6 +1485,7 @@ let startMcpServer (cfg: McpServerConfig) =
                       handleBindingsChange outputCount
                       handlePipelineTraceChange ()
                       handleTestSummaryChange ()
+                      handleFeaturePush outputCount
 
                       match serverTracker.Count > 0 with
                       | true ->

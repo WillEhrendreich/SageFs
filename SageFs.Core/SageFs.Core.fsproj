@@ -31,6 +31,7 @@
         <Compile Include="Features\NotebookExport.fs" />
         <Compile Include="RetryPolicy.fs" />
         <Compile Include="SseWriter.fs" />
+        <Compile Include="Features\FeatureHooks.fs" />
         <Compile Include="EventStore.fs" />
         <Compile Include="FsiRewrite.fs" />
         <Compile Include="SessionState.fs" />

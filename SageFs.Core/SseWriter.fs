@@ -144,3 +144,54 @@ let formatBindingsSnapshotEvent (opts: JsonSerializerOptions) (sessionId: string
 let formatPipelineTraceEvent (sessionId: string option) (traceJson: string) : string =
   let json = injectSessionId sessionId traceJson
   formatSseEvent "pipeline_trace" json
+
+// ── Feature SSE formatters (CQRS: push-only, no GET endpoints) ──
+
+/// Format an eval diff as an SSE event string
+let formatEvalDiffEvent (opts: JsonSerializerOptions) (sessionId: string option) (summary: Features.EvalDiff.DiffSummary) : string =
+  let payload =
+    {| Lines = summary.Lines |> List.map (fun l ->
+         match l with
+         | Features.EvalDiff.Added s -> {| Kind = "added"; Text = s; OldText = "" |}
+         | Features.EvalDiff.Removed s -> {| Kind = "removed"; Text = ""; OldText = s |}
+         | Features.EvalDiff.Modified (o, n) -> {| Kind = "modified"; Text = n; OldText = o |}
+         | Features.EvalDiff.Unchanged s -> {| Kind = "unchanged"; Text = s; OldText = "" |})
+       Added = summary.AddedCount
+       Removed = summary.RemovedCount
+       Modified = summary.ModifiedCount
+       Unchanged = summary.UnchangedCount |}
+  let json = JsonSerializer.Serialize(payload, opts) |> injectSessionId sessionId
+  formatSseEvent "eval_diff" json
+
+/// Format a cell dependency graph as an SSE event string
+let formatCellDependenciesEvent (opts: JsonSerializerOptions) (sessionId: string option) (graph: Features.CellDependencyGraph.CellGraph) : string =
+  let payload =
+    {| Nodes = graph.Cells |> Map.values |> Seq.map (fun c ->
+         {| Id = c.Id; Produces = c.Produces; Consumes = c.Consumes |})
+         |> Array.ofSeq
+       Edges = graph.Edges |> List.map (fun (f, t) -> {| From = f; To = t |}) |}
+  let json = JsonSerializer.Serialize(payload, opts) |> injectSessionId sessionId
+  formatSseEvent "cell_dependencies" json
+
+/// Format a binding scope map as an SSE event string
+let formatBindingScopeMapEvent (opts: JsonSerializerOptions) (sessionId: string option) (snapshot: Features.BindingExplorer.BindingScopeSnapshot) : string =
+  let payload =
+    {| Bindings = snapshot.Bindings |> List.map (fun b ->
+         {| Name = b.Name; TypeSig = b.TypeSig; CellIndex = b.CellIndex
+            ShadowedBy = b.ShadowedBy; ReferencedIn = b.ReferencedIn |})
+       ActiveCount = snapshot.ActiveBindings.Count
+       ShadowedCount = snapshot.ShadowedBindings.Length |}
+  let json = JsonSerializer.Serialize(payload, opts) |> injectSessionId sessionId
+  formatSseEvent "binding_scope_map" json
+
+/// Format eval timeline stats as an SSE event string
+let formatEvalTimelineEvent (opts: JsonSerializerOptions) (sessionId: string option) (stats: Features.EvalTimeline.TimelineStats) : string =
+  let payload =
+    {| Count = stats.Count
+       P50Ms = stats.P50Ms
+       P95Ms = stats.P95Ms
+       P99Ms = stats.P99Ms
+       MeanMs = stats.MeanMs
+       Sparkline = stats.Sparkline |}
+  let json = JsonSerializer.Serialize(payload, opts) |> injectSessionId sessionId
+  formatSseEvent "eval_timeline" json

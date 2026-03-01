@@ -99,6 +99,8 @@
         <Compile Include="BindingExplorerTests.fs" />
         <Compile Include="EvalTimelineTests.fs" />
         <Compile Include="NotebookExportTests.fs" />
+        <Compile Include="SseFeatureFormatTests.fs" />
+        <Compile Include="FeatureHookTests.fs" />
         <Compile Include="Program.fs" />
     </ItemGroup>
 
