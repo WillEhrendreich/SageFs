@@ -421,6 +421,14 @@ SageFs is **daemon-first** — one server, many clients. Worker sessions run as 
 
 ---
 
+## Contributing
+
+SageFs is open source and we welcome contributions! Whether it's a bug fix, documentation improvement, new test, or a whole feature — PRs are encouraged.
+
+**→ [Read the Contributing Guide](CONTRIBUTING.md)** for setup instructions, debugging workflow, coding standards, and how to make your first PR.
+
+New to the codebase? Check the **Good First Contributions** section in the contributing guide for places where help is especially welcome.
+
 ## License
 
 [MIT](LICENSE)
