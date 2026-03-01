@@ -19,11 +19,23 @@ jobs:
     steps:
     - uses: actions/checkout@v5
 
+    - name: Checkout forked MCP SDK
+      uses: actions/checkout@v5
+      with:
+        repository: WillEhrendreich/ModelContextProtocolSdk
+        path: mcp-sdk
+
     - name: Install Dotnet
       uses: actions/setup-dotnet@v5
       with:
         dotnet-version: |
           10.0.x
+
+    - name: Build forked MCP SDK packages
+      run: |
+        dotnet pack mcp-sdk/src/ModelContextProtocol.Core -o mcp-sdk-nupkg -c Release
+        dotnet pack mcp-sdk/src/ModelContextProtocol -o mcp-sdk-nupkg -c Release
+        dotnet pack mcp-sdk/src/ModelContextProtocol.AspNetCore -o mcp-sdk-nupkg -c Release
 
     - name: Build
       run: dotnet build
