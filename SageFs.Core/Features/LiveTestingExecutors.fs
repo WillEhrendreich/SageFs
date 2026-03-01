@@ -445,7 +445,7 @@ module TestOrchestrator =
               sw.Stop()
               return TestResult.Skipped (sprintf "Timed out after %gs" perTestTimeout.TotalSeconds)
             | false ->
-              return testTask.Result
+              return! testTask |> Async.AwaitTask
           with
           | :? OperationCanceledException ->
             sw.Stop()

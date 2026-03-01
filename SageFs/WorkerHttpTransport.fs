@@ -227,21 +227,30 @@ module WorkerHttpTransport =
         let channel = System.Threading.Channels.Channel.CreateUnbounded<Features.LiveTesting.TestRunResult>()
 
         let executionTask = task {
-          let onResult (result: Features.LiveTesting.TestRunResult) =
-            channel.Writer.TryWrite(result) |> ignore
-          let runTest = getRunTest()
-          use cts = new CancellationTokenSource()
           try
-            do! Features.LiveTesting.TestOrchestrator.executeFiltered
-                  runTest onResult maxParallelism tests cts.Token
-                |> Async.StartAsTask
-          with ex ->
-            System.Diagnostics.Activity.Current
-            |> Option.ofObj
-            |> Option.iter (fun a -> a.SetTag("error", ex.Message) |> ignore)
-          channel.Writer.Complete()
+            let onResult (result: Features.LiveTesting.TestRunResult) =
+              channel.Writer.TryWrite(result) |> ignore
+            let runTest = getRunTest()
+            use cts = CancellationTokenSource.CreateLinkedTokenSource(ctx.RequestAborted)
+            try
+              do! Features.LiveTesting.TestOrchestrator.executeFiltered
+                    runTest onResult maxParallelism tests cts.Token
+                  |> Async.StartAsTask
+            with ex ->
+              System.Diagnostics.Activity.Current
+              |> Option.ofObj
+              |> Option.iter (fun a -> a.SetTag("error", ex.Message) |> ignore)
+              eprintfn "[run-tests-stream] execution error: %s" ex.Message
+          finally
+            channel.Writer.TryComplete() |> ignore
         }
-        let _ = executionTask
+
+        // Start execution — don't await, let the channel reader loop drive the SSE stream
+        use _ = executionTask.ContinueWith(fun (t: Threading.Tasks.Task) ->
+          match t.IsFaulted with
+          | true -> eprintfn "[run-tests-stream] unhandled: %s" t.Exception.Message
+          | false -> ()
+        )
 
         let writer = ctx.Response.Body
         let mutable keepReading = true
