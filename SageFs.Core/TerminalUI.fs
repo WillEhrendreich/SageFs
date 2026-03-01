@@ -62,7 +62,7 @@ module AnsiCodes =
 
   let boxTop title width borderColor =
     let titleLen = min (String.length title) (width - 4)
-    let t = if titleLen > 0 then title.Substring(0, titleLen) else ""
+    let t = match titleLen > 0 with | true -> title.Substring(0, titleLen) | false -> ""
     let lineLen = max 0 (width - titleLen - 5)
     sprintf "%s%s%s %s%s%s %s%s"
       borderColor boxTL boxH
@@ -82,7 +82,8 @@ module AnsiCodes =
   /// Try to enable Windows VT100 processing for ANSI escape support.
   /// Returns true if VT100 is available.
   let enableVT100 () =
-    if RuntimeInformation.IsOSPlatform(OSPlatform.Windows) then
+    match RuntimeInformation.IsOSPlatform(OSPlatform.Windows) with
+    | true ->
       try
         // P/Invoke kernel32 for VT100 on Windows
         let STD_OUTPUT_HANDLE = -11
@@ -94,7 +95,8 @@ module AnsiCodes =
           |> fun ptr ->
             let fn = Marshal.GetDelegateForFunctionPointer<Func<int, nativeint>>(ptr)
             fn.Invoke(STD_OUTPUT_HANDLE)
-        if handle <> nativeint -1 then
+        match handle <> nativeint -1 with
+        | true ->
           let getMode =
             NativeLibrary.GetExport(
               NativeLibrary.Load("kernel32.dll"),
@@ -107,14 +109,17 @@ module AnsiCodes =
           let getModeResult =
             let fn = Marshal.GetDelegateForFunctionPointer<GetConsoleModeDelegate>(getMode)
             fn.Invoke(handle, &mode)
-          if getModeResult then
+          match getModeResult with
+          | true ->
             let newMode = mode ||| ENABLE_VIRTUAL_TERMINAL_PROCESSING
             let fn = Marshal.GetDelegateForFunctionPointer<SetConsoleModeDelegate>(setMode)
             fn.Invoke(handle, newMode) |> ignore
+          | false -> ()
+        | false -> ()
         Console.OutputEncoding <- Text.Encoding.UTF8
         true
       with _ -> false
-    else
+    | false ->
       // Unix terminals generally support VT100 natively
       Console.OutputEncoding <- Text.Encoding.UTF8
       true
@@ -124,7 +129,8 @@ module AnsiCodes =
   /// Enable VT input on Windows stdin (needed for SGR mouse sequences).
   /// Also disables line input and echo for raw character-by-character reading.
   let enableVtInput () =
-    if RuntimeInformation.IsOSPlatform(OSPlatform.Windows) then
+    match RuntimeInformation.IsOSPlatform(OSPlatform.Windows) with
+    | true ->
       try
         let STD_INPUT_HANDLE = -10
         let ENABLE_VIRTUAL_TERMINAL_INPUT = 0x0200u
@@ -137,12 +143,14 @@ module AnsiCodes =
           |> fun ptr ->
             let fn = Marshal.GetDelegateForFunctionPointer<Func<int, nativeint>>(ptr)
             fn.Invoke(STD_INPUT_HANDLE)
-        if handle <> nativeint -1 then
+        match handle <> nativeint -1 with
+        | true ->
           let getMode = NativeLibrary.GetExport(kernel32, "GetConsoleMode")
           let setMode = NativeLibrary.GetExport(kernel32, "SetConsoleMode")
           let mutable mode = 0u
           let fn = Marshal.GetDelegateForFunctionPointer<GetConsoleModeDelegate>(getMode)
-          if fn.Invoke(handle, &mode) then
+          match fn.Invoke(handle, &mode) with
+          | true ->
             savedInputMode <- mode
             let newMode =
               (mode ||| ENABLE_VIRTUAL_TERMINAL_INPUT)
@@ -151,13 +159,16 @@ module AnsiCodes =
               &&& ~~~ENABLE_PROCESSED_INPUT
             let setFn = Marshal.GetDelegateForFunctionPointer<SetConsoleModeDelegate>(setMode)
             setFn.Invoke(handle, newMode) |> ignore
+          | false -> ()
+        | false -> ()
         true
       with _ -> false
-    else true
+    | false -> true
 
   /// Restore Windows stdin mode to saved state
   let restoreVtInput () =
-    if RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && savedInputMode <> 0u then
+    match RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && savedInputMode <> 0u with
+    | true ->
       try
         let kernel32 = NativeLibrary.Load("kernel32.dll")
         let handle =
@@ -165,11 +176,14 @@ module AnsiCodes =
           |> fun ptr ->
             let fn = Marshal.GetDelegateForFunctionPointer<Func<int, nativeint>>(ptr)
             fn.Invoke(-10)
-        if handle <> nativeint -1 then
+        match handle <> nativeint -1 with
+        | true ->
           let setMode = NativeLibrary.GetExport(kernel32, "SetConsoleMode")
           let setFn = Marshal.GetDelegateForFunctionPointer<SetConsoleModeDelegate>(setMode)
           setFn.Invoke(handle, savedInputMode) |> ignore
+        | false -> ()
       with _ -> ()
+    | false -> ()
 
 
 /// Mouse button for cross-platform input events
@@ -227,11 +241,13 @@ module PaneId =
 
   /// Cycle to next pane that is in the visible set
   let nextVisible (visible: Set<PaneId>) (current: PaneId) : PaneId =
-    if visible.IsEmpty then current
-    else
+    match visible.IsEmpty with
+    | true -> current
+    | false ->
       let visibleArr = all |> Array.filter visible.Contains
-      if visibleArr.Length = 0 then current
-      else
+      match visibleArr.Length = 0 with
+      | true -> current
+      | false ->
         match visibleArr |> Array.tryFindIndex ((=) current) with
         | Some idx -> visibleArr.[(idx + 1) % visibleArr.Length]
         | None -> visibleArr.[0]
@@ -255,8 +271,9 @@ module PaneId =
       let candidates =
         paneRects
         |> List.filter (fun (id, r) ->
-          if id = current then false
-          else
+          match id = current with
+          | true -> false
+          | false ->
             let cRow = r.Row + r.Height / 2
             let cCol = r.Col + r.Width / 2
             match direction with
@@ -311,7 +328,8 @@ module FrameDiff =
         sb
 
     while i < frame.Length do
-      if i + 2 < frame.Length && frame.[i] = '\x1b' && frame.[i+1] = '[' then
+      match i + 2 < frame.Length && frame.[i] = '\x1b' && frame.[i+1] = '[' with
+      | true ->
         let mutable j = i + 2
         while j < frame.Length
           && frame.[j] <> 'H' && frame.[j] <> 'A'
@@ -319,24 +337,33 @@ module FrameDiff =
           && frame.[j] <> 'K' && frame.[j] <> 'm'
           && frame.[j] <> 'l' && frame.[j] <> 'h' do
           j <- j + 1
-        let seqLen = if j < frame.Length then j - i + 1 else j - i
-        if j < frame.Length && frame.[j] = 'H' then
+        let seqLen = match j < frame.Length with | true -> j - i + 1 | false -> j - i
+        match j < frame.Length && frame.[j] = 'H' with
+        | true ->
           let coords = frame.Substring(i + 2, j - i - 2)
           let parts = coords.Split(';')
-          if parts.Length >= 1 then
+          match parts.Length >= 1 with
+          | true ->
             match Int32.TryParse(parts.[0]) with
             | true, row -> currentRow <- row
             | _ -> ()
-          if currentRow >= 0 then
+          | false -> ()
+          match currentRow >= 0 with
+          | true ->
             (getSb currentRow).Append(frame.Substring(i, seqLen)) |> ignore
+          | false -> ()
           i <- i + seqLen
-        else
-          if currentRow >= 0 then
+        | false ->
+          match currentRow >= 0 with
+          | true ->
             (getSb currentRow).Append(frame.Substring(i, seqLen)) |> ignore
+          | false -> ()
           i <- i + seqLen
-      else
-        if currentRow >= 0 then
+      | false ->
+        match currentRow >= 0 with
+        | true ->
           (getSb currentRow).Append(frame.[i]) |> ignore
+        | false -> ()
         i <- i + 1
 
     result |> Map.map (fun _ sb -> sb.ToString())
@@ -417,11 +444,14 @@ module TerminalInput =
     | Some (UiAction.Editor action) -> Some (TerminalCommand.Action action)
     | None ->
       // Fall through to character insertion for printable chars
-      if key.KeyChar >= ' ' && key.KeyChar <= '~' then
+      match key.KeyChar >= ' ' && key.KeyChar <= '~' with
+      | true ->
         Some (TerminalCommand.Action (EditorAction.InsertChar key.KeyChar))
-      elif key.KeyChar > '\x7f' then
-        Some (TerminalCommand.Action (EditorAction.InsertChar key.KeyChar))
-      else None
+      | false ->
+        match key.KeyChar > '\x7f' with
+        | true ->
+          Some (TerminalCommand.Action (EditorAction.InsertChar key.KeyChar))
+        | false -> None
 
   /// Map using default keybindings (backwards compatibility)
   let mapKey (key: ConsoleKeyInfo) : TerminalCommand option =

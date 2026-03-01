@@ -22,28 +22,31 @@ let resolveAssembly (args: ResolveEventArgs) =
   |> Seq.tryPick (fun searchPath ->
     let fullPath = Path.Combine(searchPath, dllName)
 
-    if File.Exists(fullPath) then
+    match File.Exists(fullPath) with
+    | true ->
       try
         Some(Assembly.LoadFrom(fullPath))
       with _ ->
         None
-    else
-      None)
+    | false -> None)
   |> Option.defaultValue null
 
 // Register the assembly resolver once
 let resolverRegistered = ref false
 
 let setupAssemblyResolver () =
-  if not !resolverRegistered then
+  match !resolverRegistered with
+  | false ->
     resolverRegistered := true
     AppDomain.CurrentDomain.add_AssemblyResolve (ResolveEventHandler(fun _ args -> resolveAssembly args))
+  | true -> ()
 
 let registerSearchPath (path: string) =
   let dir = Path.GetDirectoryName(path)
 
-  if not (assemblySearchPaths.Contains(dir)) then
-    assemblySearchPaths.Add(dir)
+  match assemblySearchPaths.Contains(dir) with
+  | false -> assemblySearchPaths.Add(dir)
+  | true -> ()
 
 type Method = {
   MethodInfo: MethodInfo
@@ -72,10 +75,9 @@ let getAllMethods (asm: Assembly) =
   let rec getMethods currentPath (t: Type) =
     try
       let newPath =
-        if t.Name.Contains "FSI_" then
-          currentPath
-        else
-          t.Name :: currentPath
+        match t.Name.Contains "FSI_" with
+        | true -> currentPath
+        | false -> t.Name :: currentPath
 
       let methods =
         t.GetMethods()
@@ -103,10 +105,11 @@ let getAllMethods (asm: Assembly) =
       // Some types failed to load, but we can use the ones that succeeded
       let loadedTypes = ex.Types |> Array.filter (fun t -> not (isNull t)) |> Array.toList
 
-      if loadedTypes.Length > 0 then
+      match loadedTypes.Length > 0 with
+      | true ->
         printfn
           $"Warning: Assembly %s{asm.GetName().Name} has types with missing dependencies - loaded %d{loadedTypes.Length} types, skipped %d{ex.Types.Length - loadedTypes.Length}"
-      else
+      | false ->
         printfn $"Warning: Could not load any types from assembly %s{asm.GetName().Name} - all types have missing dependencies"
 
       loadedTypes
@@ -145,8 +148,10 @@ let mkReloadingState (sln: SageFs.ProjectLoading.Solution) =
   let loadErrors =
     results |> List.choose (fun r -> match r with Error e -> Some e | _ -> None)
 
-  if not (List.isEmpty loadErrors) then
+  match List.isEmpty loadErrors with
+  | false ->
     loadErrors |> List.iter (fun e -> printfn $"Warning: %s{AssemblyLoadError.describe e}")
+  | true -> ()
 
   // getAllMethods now handles all reflection errors internally
   let allMethods = assemblies |> List.collect getAllMethods
@@ -274,12 +279,14 @@ let getOpenModules (replCode: string) st =
 ///   let h : Type = ...  → value (type annotation, no params)
 let isTopLevelFunctionBinding (line: string) =
   let trimmed = line.TrimStart()
-  if not (trimmed.StartsWith("let ", System.StringComparison.Ordinal)) || trimmed.StartsWith("let!", System.StringComparison.Ordinal) || line <> line.TrimStart() then
-    false
-  else
+  match not (trimmed.StartsWith("let ", System.StringComparison.Ordinal)) || trimmed.StartsWith("let!", System.StringComparison.Ordinal) || line <> line.TrimStart() with
+  | true -> false
+  | false ->
     let mutable s = trimmed.Substring(4).TrimStart()
     for m in ["private "; "internal "; "public "; "inline "; "rec "; "mutable "] do
-      if s.StartsWith(m, System.StringComparison.Ordinal) then s <- s.Substring(m.Length).TrimStart()
+      match s.StartsWith(m, System.StringComparison.Ordinal) with
+      | true -> s <- s.Substring(m.Length).TrimStart()
+      | false -> ()
     match s.IndexOf('=') with
     | -1 -> false
     | eqIdx ->
@@ -309,15 +316,18 @@ let injectNoInlining (code: string) =
   let lines = code.Replace("\r\n", "\n").Replace("\r", "\n").Split('\n')
   let needsInjection line = isTopLevelFunctionBinding line || isStaticMemberFunction line
   let hasFunction = lines |> Array.exists needsInjection
-  if not hasFunction then code
-  else
+  match hasFunction with
+  | false -> code
+  | true ->
     let sb = System.Text.StringBuilder()
     sb.Append("open System.Runtime.CompilerServices\n") |> ignore
     for line in lines do
-      if needsInjection line then
+      match needsInjection line with
+      | true ->
         let indent = line.Length - line.TrimStart().Length
         let prefix = System.String(' ', indent)
         sb.Append(prefix + "[<MethodImpl(MethodImplOptions.NoInlining)>]\n") |> ignore
+      | false -> ()
       sb.Append(line + "\n") |> ignore
     sb.ToString()
 
@@ -354,8 +364,9 @@ let hotReloadingMiddleware next (request, st: AppState) =
       |> getOpenModules response.EvaluatedCode
       |> handleNewAsmFromRepl st.Logger asm
 
-    if shouldTriggerReload request.Args && not (List.isEmpty updatedMethods) then
-      triggerReload()
+    match shouldTriggerReload request.Args && not (List.isEmpty updatedMethods) with
+    | true -> triggerReload()
+    | false -> ()
 
     // Live testing hook: discover tests and detect providers after every successful eval.
     // Results flow as metadata → Elm loop dispatches as events.
@@ -369,7 +380,8 @@ let hotReloadingMiddleware next (request, st: AppState) =
     // This ensures tests in the compiled DLL are discovered immediately,
     // not just tests defined interactively in FSI.
     let hookResult, reloadingSt =
-      if not reloadingSt.LiveTestInitDone && not (List.isEmpty reloadingSt.ProjectAssemblies) then
+      match not reloadingSt.LiveTestInitDone && not (List.isEmpty reloadingSt.ProjectAssemblies) with
+      | true ->
         let projectResults =
           reloadingSt.ProjectAssemblies
           |> List.map (fun projAsm ->
@@ -412,20 +424,19 @@ let hotReloadingMiddleware next (request, st: AppState) =
               AffectedTestIds = fsiHookResult.AffectedTestIds
               RunTest = composedRunTest }
         merged, { reloadingSt with LiveTestInitDone = true }
-      else
+      | false ->
         fsiHookResult, reloadingSt
 
     let metadata =
-      if shouldTriggerReload request.Args then
-        response.Metadata.Add("reloadedMethods", updatedMethods)
-      else
-        response.Metadata
+      match shouldTriggerReload request.Args with
+      | true -> response.Metadata.Add("reloadedMethods", updatedMethods)
+      | false -> response.Metadata
     let metadata = metadata.Add("liveTestHookResult", SageFs.Features.LiveTesting.LiveTestHookResultDto.fromResult hookResult)
     let metadata = metadata.Add("liveTestRunTest", hookResult.RunTest)
     let metadata =
-      if not (List.isEmpty reloadingSt.AssemblyLoadErrors) then
-        metadata.Add("assemblyLoadErrors", reloadingSt.AssemblyLoadErrors)
-      else metadata
+      match List.isEmpty reloadingSt.AssemblyLoadErrors with
+      | false -> metadata.Add("assemblyLoadErrors", reloadingSt.AssemblyLoadErrors)
+      | true -> metadata
 
     { response with Metadata = metadata },
     { st with Custom = st.Custom.Add("hotReload", reloadingSt) }

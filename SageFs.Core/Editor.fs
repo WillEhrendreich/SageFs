@@ -54,10 +54,9 @@ module ValidatedBuffer =
       let maxLine = lineCount - 1
       let clampedLine = min (max 0 cursor.Line) maxLine
       let maxCol = lines.[clampedLine].Length
-      if cursor.Line < 0 || cursor.Line > maxLine || cursor.Column < 0 || cursor.Column > maxCol then
-        Error (BufferError.CursorOutOfBounds (cursor, lineCount, maxCol))
-      else
-        Ok { Lines = lines; Cursor = cursor }
+      match cursor.Line < 0 || cursor.Line > maxLine || cursor.Column < 0 || cursor.Column > maxCol with
+      | true -> Error (BufferError.CursorOutOfBounds (cursor, lineCount, maxCol))
+      | false -> Ok { Lines = lines; Cursor = cursor }
 
   let empty =
     { Lines = [""]; Cursor = { Line = 0; Column = 0 } }
@@ -82,44 +81,50 @@ module ValidatedBuffer =
     let newLine = line.Insert(col, c.ToString())
     let newLines =
       buf.Lines
-      |> List.mapi (fun i l -> if i = buf.Cursor.Line then newLine else l)
+      |> List.mapi (fun i l -> match i = buf.Cursor.Line with | true -> newLine | false -> l)
     { Lines = newLines; Cursor = { buf.Cursor with Column = col + 1 } }
 
   let deleteBackward (buf: ValidatedBuffer) : ValidatedBuffer =
     let line = buf.Lines.[buf.Cursor.Line]
     let col = buf.Cursor.Column
-    if col > 0 then
+    match col > 0 with
+    | true ->
       let newLine = line.Remove(col - 1, 1)
       let newLines =
         buf.Lines
-        |> List.mapi (fun i l -> if i = buf.Cursor.Line then newLine else l)
+        |> List.mapi (fun i l -> match i = buf.Cursor.Line with | true -> newLine | false -> l)
       { Lines = newLines; Cursor = { buf.Cursor with Column = col - 1 } }
-    elif buf.Cursor.Line > 0 then
-      let prevLine = buf.Lines.[buf.Cursor.Line - 1]
-      let joined = prevLine + line
-      let newLines =
-        buf.Lines
-        |> List.indexed
-        |> List.choose (fun (i, l) ->
-          if i = buf.Cursor.Line - 1 then Some joined
-          elif i = buf.Cursor.Line then None
-          else Some l)
-      { Lines = newLines; Cursor = { Line = buf.Cursor.Line - 1; Column = prevLine.Length } }
-    else
-      buf
+    | false ->
+      match buf.Cursor.Line > 0 with
+      | true ->
+        let prevLine = buf.Lines.[buf.Cursor.Line - 1]
+        let joined = prevLine + line
+        let newLines =
+          buf.Lines
+          |> List.indexed
+          |> List.choose (fun (i, l) ->
+            match i = buf.Cursor.Line - 1 with
+            | true -> Some joined
+            | false ->
+              match i = buf.Cursor.Line with
+              | true -> None
+              | false -> Some l)
+        { Lines = newLines; Cursor = { Line = buf.Cursor.Line - 1; Column = prevLine.Length } }
+      | false -> buf
 
   let newLine (buf: ValidatedBuffer) : ValidatedBuffer =
     let line = buf.Lines.[buf.Cursor.Line]
     let col = buf.Cursor.Column
     let before = line.[..col-1]
-    let after = if col < line.Length then line.[col..] else ""
-    let before' = if col = 0 then "" else before
+    let after = match col < line.Length with | true -> line.[col..] | false -> ""
+    let before' = match col = 0 with | true -> "" | false -> before
     let newLines =
       buf.Lines
       |> List.indexed
       |> List.collect (fun (i, l) ->
-        if i = buf.Cursor.Line then [before'; after]
-        else [l])
+        match i = buf.Cursor.Line with
+        | true -> [before'; after]
+        | false -> [l])
     { Lines = newLines; Cursor = { Line = buf.Cursor.Line + 1; Column = 0 } }
 
   let moveCursor (dir: Direction) (buf: ValidatedBuffer) : ValidatedBuffer =
@@ -127,27 +132,34 @@ module ValidatedBuffer =
     let newPos =
       match dir with
       | Direction.Left ->
-        if pos.Column > 0 then { pos with Column = pos.Column - 1 }
-        elif pos.Line > 0 then
-          let prevLen = buf.Lines.[pos.Line - 1].Length
-          { Line = pos.Line - 1; Column = prevLen }
-        else pos
+        match pos.Column > 0 with
+        | true -> { pos with Column = pos.Column - 1 }
+        | false ->
+          match pos.Line > 0 with
+          | true ->
+            let prevLen = buf.Lines.[pos.Line - 1].Length
+            { Line = pos.Line - 1; Column = prevLen }
+          | false -> pos
       | Direction.Right ->
         let lineLen = buf.Lines.[pos.Line].Length
-        if pos.Column < lineLen then { pos with Column = pos.Column + 1 }
-        elif pos.Line < buf.Lines.Length - 1 then
-          { Line = pos.Line + 1; Column = 0 }
-        else pos
+        match pos.Column < lineLen with
+        | true -> { pos with Column = pos.Column + 1 }
+        | false ->
+          match pos.Line < buf.Lines.Length - 1 with
+          | true -> { Line = pos.Line + 1; Column = 0 }
+          | false -> pos
       | Direction.Up ->
-        if pos.Line > 0 then
+        match pos.Line > 0 with
+        | true ->
           let prevLen = buf.Lines.[pos.Line - 1].Length
           { Line = pos.Line - 1; Column = min pos.Column prevLen }
-        else pos
+        | false -> pos
       | Direction.Down ->
-        if pos.Line < buf.Lines.Length - 1 then
+        match pos.Line < buf.Lines.Length - 1 with
+        | true ->
           let nextLen = buf.Lines.[pos.Line + 1].Length
           { Line = pos.Line + 1; Column = min pos.Column nextLen }
-        else pos
+        | false -> pos
     { buf with Cursor = newPos }
 
 /// Side effects described as data — never executed in the pure domain
@@ -193,26 +205,32 @@ module EditorUpdate =
     let lines = ValidatedBuffer.lines buf
     let pos = ValidatedBuffer.cursor buf
     let line = lines.[pos.Line]
-    if pos.Column < line.Length then
+    match pos.Column < line.Length with
+    | true ->
       let newLine = line.Remove(pos.Column, 1)
-      let newLines = lines |> List.mapi (fun i l -> if i = pos.Line then newLine else l)
+      let newLines = lines |> List.mapi (fun i l -> match i = pos.Line with | true -> newLine | false -> l)
       match ValidatedBuffer.create newLines pos with
       | Ok b -> b
       | Error _ -> buf
-    elif pos.Line < lines.Length - 1 then
-      let nextLine = lines.[pos.Line + 1]
-      let joined = line + nextLine
-      let newLines =
-        lines
-        |> List.indexed
-        |> List.choose (fun (i, l) ->
-          if i = pos.Line then Some joined
-          elif i = pos.Line + 1 then None
-          else Some l)
-      match ValidatedBuffer.create newLines pos with
-      | Ok b -> b
-      | Error _ -> buf
-    else buf
+    | false ->
+      match pos.Line < lines.Length - 1 with
+      | true ->
+        let nextLine = lines.[pos.Line + 1]
+        let joined = line + nextLine
+        let newLines =
+          lines
+          |> List.indexed
+          |> List.choose (fun (i, l) ->
+            match i = pos.Line with
+            | true -> Some joined
+            | false ->
+              match i = pos.Line + 1 with
+              | true -> None
+              | false -> Some l)
+        match ValidatedBuffer.create newLines pos with
+        | Ok b -> b
+        | Error _ -> buf
+      | false -> buf
 
   let moveToLineStart (buf: ValidatedBuffer) : ValidatedBuffer =
     let pos = ValidatedBuffer.cursor buf
@@ -264,12 +282,12 @@ module EditorUpdate =
         let filterLen = menu.FilterText.Length
         let start = max 0 (pos.Column - filterLen)
         let before = line.[..start-1]
-        let before' = if start = 0 then "" else before
-        let after = if pos.Column < line.Length then line.[pos.Column..] else ""
+        let before' = match start = 0 with | true -> "" | false -> before
+        let after = match pos.Column < line.Length with | true -> line.[pos.Column..] | false -> ""
         let newLine = before' + item.Label + after
-        let newCol = (if start = 0 then 0 else before.Length) + item.Label.Length
+        let newCol = (match start = 0 with | true -> 0 | false -> before.Length) + item.Label.Length
         let lines = ValidatedBuffer.lines buf
-        let newLines = lines |> List.mapi (fun i l -> if i = pos.Line then newLine else l)
+        let newLines = lines |> List.mapi (fun i l -> match i = pos.Line with | true -> newLine | false -> l)
         let newBuf =
           match ValidatedBuffer.create newLines { pos with Column = newCol } with
           | Ok b -> b
@@ -316,8 +334,8 @@ module EditorUpdate =
       let lines = ValidatedBuffer.lines state.Buffer
       let line = lines.[pos.Line]
       let newLine = line.[..pos.Column-1]
-      let newLine' = if pos.Column = 0 then "" else newLine
-      let newLines = lines |> List.mapi (fun i l -> if i = pos.Line then newLine' else l)
+      let newLine' = match pos.Column = 0 with | true -> "" | false -> newLine
+      let newLines = lines |> List.mapi (fun i l -> match i = pos.Line with | true -> newLine' | false -> l)
       match ValidatedBuffer.create newLines pos with
       | Ok b -> { state with Buffer = b }, []
       | Error _ -> state, []
@@ -334,14 +352,15 @@ module EditorUpdate =
     | EditorAction.SwitchSession id ->
       state, [EditorEffect.RequestSessionSwitch id]
     | EditorAction.CreateSession projects ->
-      if projects.IsEmpty && state.Prompt.IsNone then
+      match projects.IsEmpty && state.Prompt.IsNone with
+      | true ->
         // Open prompt to ask for working directory
         { state with
             Prompt = Some {
               Label = "Working directory"
               Input = System.IO.Directory.GetCurrentDirectory()
               Purpose = PromptPurpose.CreateSessionDir } }, []
-      else
+      | false ->
         state, [EditorEffect.RequestSessionCreate projects]
     | EditorAction.StopSession id ->
       state, [EditorEffect.RequestSessionStop id]

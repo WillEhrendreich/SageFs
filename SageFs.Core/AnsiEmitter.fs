@@ -25,30 +25,39 @@ module AnsiEmitter =
       for col in 0 .. cols - 1 do
         let cell = grid.Cells.[rowBase + col]
 
-        if cell.Attrs <> lastAttrs then
+        match cell.Attrs <> lastAttrs with
+        | true ->
           sb.Append(esc).Append("0m") |> ignore
           lastFg <- 0x00FFFFFFu; lastBg <- 0u; lastAttrs <- CellAttrs.None
-          if cell.Attrs &&& CellAttrs.Bold = CellAttrs.Bold then
-            sb.Append(esc).Append("1m") |> ignore
-          if cell.Attrs &&& CellAttrs.Dim = CellAttrs.Dim then
-            sb.Append(esc).Append("2m") |> ignore
-          if cell.Attrs &&& CellAttrs.Inverse = CellAttrs.Inverse then
-            sb.Append(esc).Append("7m") |> ignore
+          match cell.Attrs &&& CellAttrs.Bold = CellAttrs.Bold with
+          | true -> sb.Append(esc).Append("1m") |> ignore
+          | false -> ()
+          match cell.Attrs &&& CellAttrs.Dim = CellAttrs.Dim with
+          | true -> sb.Append(esc).Append("2m") |> ignore
+          | false -> ()
+          match cell.Attrs &&& CellAttrs.Inverse = CellAttrs.Inverse with
+          | true -> sb.Append(esc).Append("7m") |> ignore
+          | false -> ()
           lastAttrs <- cell.Attrs
+        | false -> ()
 
-        if cell.Fg <> lastFg then
+        match cell.Fg <> lastFg with
+        | true ->
           sb.Append(esc).Append("38;2;")
             .Append(int (Theme.rgbR cell.Fg)).Append(';')
             .Append(int (Theme.rgbG cell.Fg)).Append(';')
             .Append(int (Theme.rgbB cell.Fg)).Append('m') |> ignore
           lastFg <- cell.Fg
+        | false -> ()
 
-        if cell.Bg <> lastBg then
+        match cell.Bg <> lastBg with
+        | true ->
           sb.Append(esc).Append("48;2;")
             .Append(int (Theme.rgbR cell.Bg)).Append(';')
             .Append(int (Theme.rgbG cell.Bg)).Append(';')
             .Append(int (Theme.rgbB cell.Bg)).Append('m') |> ignore
           lastBg <- cell.Bg
+        | false -> ()
 
         sb.Append(cell.Char) |> ignore
 
@@ -71,28 +80,37 @@ module AnsiEmitter =
       let rowBase = row * cols
       for col in 0 .. cols - 1 do
         let cell = grid.Cells.[rowBase + col]
-        if cell.Attrs <> lastAttrs then
+        match cell.Attrs <> lastAttrs with
+        | true ->
           sb.Append(esc).Append("0m") |> ignore
           lastFg <- 0x00FFFFFFu; lastBg <- 0u; lastAttrs <- CellAttrs.None
-          if cell.Attrs &&& CellAttrs.Bold = CellAttrs.Bold then
-            sb.Append(esc).Append("1m") |> ignore
-          if cell.Attrs &&& CellAttrs.Dim = CellAttrs.Dim then
-            sb.Append(esc).Append("2m") |> ignore
-          if cell.Attrs &&& CellAttrs.Inverse = CellAttrs.Inverse then
-            sb.Append(esc).Append("7m") |> ignore
+          match cell.Attrs &&& CellAttrs.Bold = CellAttrs.Bold with
+          | true -> sb.Append(esc).Append("1m") |> ignore
+          | false -> ()
+          match cell.Attrs &&& CellAttrs.Dim = CellAttrs.Dim with
+          | true -> sb.Append(esc).Append("2m") |> ignore
+          | false -> ()
+          match cell.Attrs &&& CellAttrs.Inverse = CellAttrs.Inverse with
+          | true -> sb.Append(esc).Append("7m") |> ignore
+          | false -> ()
           lastAttrs <- cell.Attrs
-        if cell.Fg <> lastFg then
+        | false -> ()
+        match cell.Fg <> lastFg with
+        | true ->
           sb.Append(esc).Append("38;2;")
             .Append(int (Theme.rgbR cell.Fg)).Append(';')
             .Append(int (Theme.rgbG cell.Fg)).Append(';')
             .Append(int (Theme.rgbB cell.Fg)).Append('m') |> ignore
           lastFg <- cell.Fg
-        if cell.Bg <> lastBg then
+        | false -> ()
+        match cell.Bg <> lastBg with
+        | true ->
           sb.Append(esc).Append("48;2;")
             .Append(int (Theme.rgbR cell.Bg)).Append(';')
             .Append(int (Theme.rgbG cell.Bg)).Append(';')
             .Append(int (Theme.rgbB cell.Bg)).Append('m') |> ignore
           lastBg <- cell.Bg
+        | false -> ()
         sb.Append(cell.Char) |> ignore
 
     sb.Append(esc).Append("0m") |> ignore
@@ -102,9 +120,9 @@ module AnsiEmitter =
   /// Falls back to full emit when grids differ in size or >30% cells changed.
   /// Count pass bails early when threshold is exceeded.
   let emitDiff (prev: CellGrid) (curr: CellGrid) (cursorRow: int) (cursorCol: int) : string =
-    if prev.Rows <> curr.Rows || prev.Cols <> curr.Cols then
-      emit curr cursorRow cursorCol
-    else
+    match prev.Rows <> curr.Rows || prev.Cols <> curr.Cols with
+    | true -> emit curr cursorRow cursorCol
+    | false ->
       let total = curr.Cells.Length
       let threshold = total * 30 / 100
 
@@ -113,62 +131,79 @@ module AnsiEmitter =
       let mutable i = 0
       let mutable bailed = false
       while i < total && not bailed do
-        if curr.Cells.[i] <> prev.Cells.[i] then
+        match curr.Cells.[i] <> prev.Cells.[i] with
+        | true ->
           changedCount <- changedCount + 1
-          if changedCount > threshold then
-            bailed <- true
+          match changedCount > threshold with
+          | true -> bailed <- true
+          | false -> ()
+        | false -> ()
         i <- i + 1
 
-      if bailed then
-        emit curr cursorRow cursorCol
-      elif changedCount = 0 then
-        let sb = StringBuilder(48)
-        sb.Append(esc).Append("?25l") |> ignore
-        sb.Append(esc).Append(cursorRow + 1).Append(';').Append(cursorCol + 1).Append('H') |> ignore
-        sb.Append(esc).Append("?25h") |> ignore
-        sb.ToString()
-      else
-        let cols = curr.Cols
-        let sb = StringBuilder(changedCount * 30)
-        sb.Append(esc).Append("?25l") |> ignore
-        let mutable lastFg = 0x00FFFFFFu
-        let mutable lastBg = 0u
-        let mutable lastAttrs = CellAttrs.None
-        let mutable lastRow = -1
-        let mutable lastCol = -1
-        for i in 0 .. total - 1 do
-          let cell = curr.Cells.[i]
-          if cell <> prev.Cells.[i] then
-            let row = i / cols
-            let col = i % cols
-            if row <> lastRow || col <> lastCol + 1 then
-              sb.Append(esc).Append(row + 1).Append(';').Append(col + 1).Append('H') |> ignore
-            if cell.Attrs <> lastAttrs then
-              sb.Append(esc).Append("0m") |> ignore
-              lastFg <- 0x00FFFFFFu; lastBg <- 0u; lastAttrs <- CellAttrs.None
-              if cell.Attrs &&& CellAttrs.Bold = CellAttrs.Bold then
-                sb.Append(esc).Append("1m") |> ignore
-              if cell.Attrs &&& CellAttrs.Dim = CellAttrs.Dim then
-                sb.Append(esc).Append("2m") |> ignore
-              if cell.Attrs &&& CellAttrs.Inverse = CellAttrs.Inverse then
-                sb.Append(esc).Append("7m") |> ignore
-              lastAttrs <- cell.Attrs
-            if cell.Fg <> lastFg then
-              sb.Append(esc).Append("38;2;")
-                .Append(int (Theme.rgbR cell.Fg)).Append(';')
-                .Append(int (Theme.rgbG cell.Fg)).Append(';')
-                .Append(int (Theme.rgbB cell.Fg)).Append('m') |> ignore
-              lastFg <- cell.Fg
-            if cell.Bg <> lastBg then
-              sb.Append(esc).Append("48;2;")
-                .Append(int (Theme.rgbR cell.Bg)).Append(';')
-                .Append(int (Theme.rgbG cell.Bg)).Append(';')
-                .Append(int (Theme.rgbB cell.Bg)).Append('m') |> ignore
-              lastBg <- cell.Bg
-            sb.Append(cell.Char) |> ignore
-            lastRow <- row
-            lastCol <- col
-        sb.Append(esc).Append("0m") |> ignore
-        sb.Append(esc).Append(cursorRow + 1).Append(';').Append(cursorCol + 1).Append('H') |> ignore
-        sb.Append(esc).Append("?25h") |> ignore
-        sb.ToString()
+      match bailed with
+      | true -> emit curr cursorRow cursorCol
+      | false ->
+        match changedCount = 0 with
+        | true ->
+          let sb = StringBuilder(48)
+          sb.Append(esc).Append("?25l") |> ignore
+          sb.Append(esc).Append(cursorRow + 1).Append(';').Append(cursorCol + 1).Append('H') |> ignore
+          sb.Append(esc).Append("?25h") |> ignore
+          sb.ToString()
+        | false ->
+          let cols = curr.Cols
+          let sb = StringBuilder(changedCount * 30)
+          sb.Append(esc).Append("?25l") |> ignore
+          let mutable lastFg = 0x00FFFFFFu
+          let mutable lastBg = 0u
+          let mutable lastAttrs = CellAttrs.None
+          let mutable lastRow = -1
+          let mutable lastCol = -1
+          for i in 0 .. total - 1 do
+            let cell = curr.Cells.[i]
+            match cell <> prev.Cells.[i] with
+            | true ->
+              let row = i / cols
+              let col = i % cols
+              match row <> lastRow || col <> lastCol + 1 with
+              | true -> sb.Append(esc).Append(row + 1).Append(';').Append(col + 1).Append('H') |> ignore
+              | false -> ()
+              match cell.Attrs <> lastAttrs with
+              | true ->
+                sb.Append(esc).Append("0m") |> ignore
+                lastFg <- 0x00FFFFFFu; lastBg <- 0u; lastAttrs <- CellAttrs.None
+                match cell.Attrs &&& CellAttrs.Bold = CellAttrs.Bold with
+                | true -> sb.Append(esc).Append("1m") |> ignore
+                | false -> ()
+                match cell.Attrs &&& CellAttrs.Dim = CellAttrs.Dim with
+                | true -> sb.Append(esc).Append("2m") |> ignore
+                | false -> ()
+                match cell.Attrs &&& CellAttrs.Inverse = CellAttrs.Inverse with
+                | true -> sb.Append(esc).Append("7m") |> ignore
+                | false -> ()
+                lastAttrs <- cell.Attrs
+              | false -> ()
+              match cell.Fg <> lastFg with
+              | true ->
+                sb.Append(esc).Append("38;2;")
+                  .Append(int (Theme.rgbR cell.Fg)).Append(';')
+                  .Append(int (Theme.rgbG cell.Fg)).Append(';')
+                  .Append(int (Theme.rgbB cell.Fg)).Append('m') |> ignore
+                lastFg <- cell.Fg
+              | false -> ()
+              match cell.Bg <> lastBg with
+              | true ->
+                sb.Append(esc).Append("48;2;")
+                  .Append(int (Theme.rgbR cell.Bg)).Append(';')
+                  .Append(int (Theme.rgbG cell.Bg)).Append(';')
+                  .Append(int (Theme.rgbB cell.Bg)).Append('m') |> ignore
+                lastBg <- cell.Bg
+              | false -> ()
+              sb.Append(cell.Char) |> ignore
+              lastRow <- row
+              lastCol <- col
+            | false -> ()
+          sb.Append(esc).Append("0m") |> ignore
+          sb.Append(esc).Append(cursorRow + 1).Append(';').Append(cursorCol + 1).Append('H') |> ignore
+          sb.Append(esc).Append("?25h") |> ignore
+          sb.ToString()

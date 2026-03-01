@@ -18,35 +18,46 @@ type LaunchSettings = {
 }
 
 let findLatestVersion (packagePath: string) =
-  if Directory.Exists(packagePath) then
+  match Directory.Exists(packagePath) with
+  | true ->
     Directory.GetDirectories(packagePath)
     |> Array.choose (fun d ->
       let v = Path.GetFileName d
-      if v.Contains(".") then Some v else None)
+      match v.Contains(".") with
+      | true -> Some v
+      | false -> None)
     |> Array.sortDescending
     |> Array.tryHead
-  else
+  | false ->
     None
 
 let getRidSuffix () =
-  if RuntimeInformation.IsOSPlatform(OSPlatform.Windows) then "win-x64"
-  elif RuntimeInformation.IsOSPlatform(OSPlatform.Linux) then "linux-x64"
-  elif RuntimeInformation.IsOSPlatform(OSPlatform.OSX) then "osx-x64"
-  else "win-x64" // default
+  match RuntimeInformation.IsOSPlatform(OSPlatform.Windows) with
+  | true -> "win-x64"
+  | false ->
+    match RuntimeInformation.IsOSPlatform(OSPlatform.Linux) with
+    | true -> "linux-x64"
+    | false ->
+      match RuntimeInformation.IsOSPlatform(OSPlatform.OSX) with
+      | true -> "osx-x64"
+      | false -> "win-x64" // default
 
 let getDcpExecutableName () =
-  if RuntimeInformation.IsOSPlatform(OSPlatform.Windows) then "dcp.exe"
-  else "dcp"
+  match RuntimeInformation.IsOSPlatform(OSPlatform.Windows) with
+  | true -> "dcp.exe"
+  | false -> "dcp"
 
 let loadLaunchSettings (projectDir: string) : LaunchSettings option =
   try
     let launchSettingsPath = Path.Combine(projectDir, "Properties", "launchSettings.json")
-    if File.Exists(launchSettingsPath) then
+    match File.Exists(launchSettingsPath) with
+    | true ->
       let json = File.ReadAllText(launchSettingsPath)
       let doc = JsonDocument.Parse(json)
       
       let profiles = 
-        if doc.RootElement.TryGetProperty("profiles") |> fst then
+        match doc.RootElement.TryGetProperty("profiles") |> fst with
+        | true ->
           let profilesElement = doc.RootElement.GetProperty("profiles")
           profilesElement.EnumerateObject()
           |> Seq.map (fun prop ->
@@ -54,31 +65,29 @@ let loadLaunchSettings (projectDir: string) : LaunchSettings option =
             let profile = prop.Value
             
             let envVars = 
-              if profile.TryGetProperty("environmentVariables") |> fst then
+              match profile.TryGetProperty("environmentVariables") |> fst with
+              | true ->
                 let envElement = profile.GetProperty("environmentVariables")
                 envElement.EnumerateObject()
                 |> Seq.map (fun envProp -> envProp.Name, envProp.Value.GetString())
                 |> Map.ofSeq
-              else
+              | false ->
                 Map.empty
             
             let appUrl = 
-              if profile.TryGetProperty("applicationUrl") |> fst then
-                Some (profile.GetProperty("applicationUrl").GetString())
-              else
-                None
+              match profile.TryGetProperty("applicationUrl") |> fst with
+              | true -> Some (profile.GetProperty("applicationUrl").GetString())
+              | false -> None
             
             let commandName = 
-              if profile.TryGetProperty("commandName") |> fst then
-                profile.GetProperty("commandName").GetString()
-              else
-                "Project"
+              match profile.TryGetProperty("commandName") |> fst with
+              | true -> profile.GetProperty("commandName").GetString()
+              | false -> "Project"
             
             let launchBrowser =
-              if profile.TryGetProperty("launchBrowser") |> fst then
-                profile.GetProperty("launchBrowser").GetBoolean()
-              else
-                false
+              match profile.TryGetProperty("launchBrowser") |> fst with
+              | true -> profile.GetProperty("launchBrowser").GetBoolean()
+              | false -> false
             
             profileName, {
               CommandName = commandName
@@ -87,11 +96,11 @@ let loadLaunchSettings (projectDir: string) : LaunchSettings option =
               ApplicationUrl = appUrl
             })
           |> Map.ofSeq
-        else
+        | false ->
           Map.empty
       
       Some { Profiles = profiles }
-    else
+    | false ->
       None
   with ex ->
     None
@@ -109,11 +118,12 @@ let setupAspirePaths (logger: ILogger) =
     match findLatestVersion dcpPackagePath with
     | Some version ->
         let dcpExePath = Path.Combine(dcpPackagePath, version, "tools", dcpExeName)
-        if File.Exists(dcpExePath) then
+        match File.Exists(dcpExePath) with
+        | true ->
           Environment.SetEnvironmentVariable("DcpPublisherSettings__CliPath", dcpExePath)
           Environment.SetEnvironmentVariable("SageFs_ASPIRE_DCP_PATH", dcpExePath)
           logger.LogInfo $"Aspire DCP: %s{dcpExePath}"
-        else
+        | false ->
           logger.LogDebug $"DCP executable not found at: %s{dcpExePath}"
     | None ->
         logger.LogDebug $"Aspire DCP package not found at: %s{dcpPackagePath}"
@@ -124,11 +134,12 @@ let setupAspirePaths (logger: ILogger) =
     | Some version ->
         // Set the path to the actual DLL, not just the tools directory
         let dashboardDllPath = Path.Combine(dashboardPackagePath, version, "tools", "Aspire.Dashboard.dll")
-        if File.Exists(dashboardDllPath) then
+        match File.Exists(dashboardDllPath) with
+        | true ->
           Environment.SetEnvironmentVariable("DcpPublisherSettings__DashboardPath", dashboardDllPath)
           Environment.SetEnvironmentVariable("SageFs_ASPIRE_DASHBOARD_PATH", dashboardDllPath)
           logger.LogInfo $"Aspire Dashboard: %s{dashboardDllPath}"
-        else
+        | false ->
           logger.LogDebug $"Dashboard DLL not found at: %s{dashboardDllPath}"
     | None ->
         logger.LogDebug $"Aspire Dashboard package not found at: %s{dashboardPackagePath}"
@@ -174,7 +185,8 @@ let hasAspireReferences (projects: ProjectLoading.Solution) =
   hasInCommandLineRefs || hasInProjectRefs
 
 let configureAspireIfNeeded (logger: ILogger) (solution: ProjectLoading.Solution) =
-  if hasAspireReferences solution then
+  match hasAspireReferences solution with
+  | true ->
     logger.LogWarning "⚠️  Aspire AppHost project detected"
     logger.LogWarning "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     logger.LogWarning "Hot reload will NOT work for Aspire-orchestrated services!"
@@ -211,5 +223,5 @@ let configureAspireIfNeeded (logger: ILogger) (solution: ProjectLoading.Solution
         | None ->
             logger.LogDebug "No launchSettings.json found, using basic Aspire configuration"
     | None -> ()
-  else
+  | false ->
     ()

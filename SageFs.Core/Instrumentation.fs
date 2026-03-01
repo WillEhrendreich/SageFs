@@ -159,10 +159,12 @@ module Instrumentation =
     let endpoint = System.Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_ENDPOINT")
     let protocol = System.Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_PROTOCOL")
     let extras =
-      [ if not (System.String.IsNullOrEmpty endpoint) then
-          "OTEL_EXPORTER_OTLP_ENDPOINT", endpoint
-        if not (System.String.IsNullOrEmpty protocol) then
-          "OTEL_EXPORTER_OTLP_PROTOCOL", protocol ]
+      [ match System.String.IsNullOrEmpty endpoint with
+        | false -> "OTEL_EXPORTER_OTLP_ENDPOINT", endpoint
+        | true -> ()
+        match System.String.IsNullOrEmpty protocol with
+        | false -> "OTEL_EXPORTER_OTLP_PROTOCOL", protocol
+        | true -> () ]
     base' @ extras
 
   /// All ActivitySource names for OTel registration in McpServer.
@@ -184,33 +186,41 @@ module Instrumentation =
   /// Start an Activity with initial tags. Returns null when no listener attached.
   let startSpan (source: ActivitySource) (name: string) (tags: (string * obj) list) =
     let activity = source.StartActivity(name)
-    if not (isNull activity) then
+    match isNull activity with
+    | false ->
       for (k, v) in tags do
         activity.SetTag(k, v) |> ignore
+    | true -> ()
     activity
 
   /// Start an Activity with a specific ActivityKind and initial tags.
   let startSpanWithKind (source: ActivitySource) (name: string) (kind: ActivityKind) (tags: (string * obj) list) =
     let activity = source.StartActivity(name, kind)
-    if not (isNull activity) then
+    match isNull activity with
+    | false ->
       for (k, v) in tags do
         activity.SetTag(k, v) |> ignore
+    | true -> ()
     activity
 
   /// Stop an activity with success status.
   let succeedSpan (activity: Activity) =
-    if not (isNull activity) then
+    match isNull activity with
+    | false ->
       activity.Stop()
       activity.Dispose()
+    | true -> ()
 
   /// Stop an activity with error status and message.
   let failSpan (activity: Activity) (message: string) =
-    if not (isNull activity) then
+    match isNull activity with
+    | false ->
       activity.SetTag("error", true) |> ignore
       activity.SetTag("error.message", message) |> ignore
       activity.SetStatus(ActivityStatusCode.Error, message) |> ignore
       activity.Stop()
       activity.Dispose()
+    | true -> ()
 
   /// Wrap a synchronous operation with Activity tracing.
   /// Tags are set on the activity before it is stopped.
@@ -221,16 +231,19 @@ module Instrumentation =
     try
       let result = f ()
       sw.Stop()
-      if not (isNull activity) then
+      match isNull activity with
+      | false ->
         for (k, v) in tags do
           activity.SetTag(k, v) |> ignore
         activity.SetTag("duration_ms", sw.Elapsed.TotalMilliseconds) |> ignore
         activity.Stop()
         activity.Dispose()
+      | true -> ()
       result
     with ex ->
       sw.Stop()
-      if not (isNull activity) then
+      match isNull activity with
+      | false ->
         activity.SetTag("error", true) |> ignore
         activity.SetTag("error.type", ex.GetType().Name) |> ignore
         activity.SetTag("error.message", ex.Message) |> ignore
@@ -238,6 +251,7 @@ module Instrumentation =
         activity.SetStatus(ActivityStatusCode.Error, ex.Message) |> ignore
         activity.Stop()
         activity.Dispose()
+      | true -> ()
       raise ex
 
   /// Wrap an async operation with Activity tracing.
@@ -248,16 +262,19 @@ module Instrumentation =
       try
         let! result = f ()
         sw.Stop()
-        if not (isNull activity) then
+        match isNull activity with
+        | false ->
           for (k, v) in tags do
             activity.SetTag(k, v) |> ignore
           activity.SetTag("duration_ms", sw.Elapsed.TotalMilliseconds) |> ignore
           activity.Stop()
           activity.Dispose()
+        | true -> ()
         return result
       with ex ->
         sw.Stop()
-        if not (isNull activity) then
+        match isNull activity with
+        | false ->
           activity.SetTag("error", true) |> ignore
           activity.SetTag("error.type", ex.GetType().Name) |> ignore
           activity.SetTag("error.message", ex.Message) |> ignore
@@ -265,6 +282,7 @@ module Instrumentation =
           activity.SetStatus(ActivityStatusCode.Error, ex.Message) |> ignore
           activity.Stop()
           activity.Dispose()
+        | true -> ()
         return raise ex
     }
 
@@ -274,26 +292,32 @@ module Instrumentation =
       mcpToolInvocations.Add(1L)
       let activity = mcpSource.StartActivity("mcp.tool.invoke", ActivityKind.Server)
       try
-        if not (isNull activity) then
+        match isNull activity with
+        | false ->
           activity.SetTag("mcp.tool.name", toolName) |> ignore
           activity.SetTag("mcp.agent.name", agentName) |> ignore
           activity.SetTag("rpc.system", "mcp") |> ignore
           activity.SetTag("rpc.service", "sagefs") |> ignore
           activity.SetTag("rpc.method", toolName) |> ignore
+        | true -> ()
         let! result = f ()
         mcpToolSuccesses.Add(1L, System.Collections.Generic.KeyValuePair("mcp.tool.name", box toolName))
-        if not (isNull activity) then
+        match isNull activity with
+        | false ->
           activity.Stop()
           activity.Dispose()
+        | true -> ()
         return result
       with ex ->
         mcpToolFailures.Add(1L, System.Collections.Generic.KeyValuePair("mcp.tool.name", box toolName))
-        if not (isNull activity) then
+        match isNull activity with
+        | false ->
           activity.SetTag("error", true) |> ignore
           activity.SetTag("error.message", ex.Message) |> ignore
           activity.SetStatus(ActivityStatusCode.Error, ex.Message) |> ignore
           activity.Stop()
           activity.Dispose()
+        | true -> ()
         return raise ex
     }
 
@@ -328,22 +352,28 @@ module Instrumentation =
       fsiStatements.Add(int64 statementCount)
       let activity = mcpSource.StartActivity("fsi.eval", ActivityKind.Server)
       try
-        if not (isNull activity) then
+        match isNull activity with
+        | false ->
           activity.SetTag("fsi.agent.name", agentName) |> ignore
           activity.SetTag("fsi.statement.count", statementCount) |> ignore
           activity.SetTag("fsi.session.id", sessionId) |> ignore
+        | true -> ()
         let! result = f ()
-        if not (isNull activity) then
+        match isNull activity with
+        | false ->
           activity.Stop()
           activity.Dispose()
+        | true -> ()
         return result
       with ex ->
-        if not (isNull activity) then
+        match isNull activity with
+        | false ->
           activity.SetTag("error", true) |> ignore
           activity.SetTag("error.message", ex.Message) |> ignore
           activity.SetStatus(ActivityStatusCode.Error, ex.Message) |> ignore
           activity.Stop()
           activity.Dispose()
+        | true -> ()
         return raise ex
     }
 
@@ -355,16 +385,19 @@ module Instrumentation =
       try
         let! result = f ()
         sw.Stop()
-        if not (isNull activity) then
+        match isNull activity with
+        | false ->
           for (k, v) in tags do
             activity.SetTag(k, v) |> ignore
           activity.SetTag("duration_ms", sw.Elapsed.TotalMilliseconds) |> ignore
           activity.Stop()
           activity.Dispose()
+        | true -> ()
         return result
       with ex ->
         sw.Stop()
-        if not (isNull activity) then
+        match isNull activity with
+        | false ->
           activity.SetTag("error", true) |> ignore
           activity.SetTag("error.type", ex.GetType().Name) |> ignore
           activity.SetTag("error.message", ex.Message) |> ignore
@@ -372,5 +405,6 @@ module Instrumentation =
           activity.SetStatus(ActivityStatusCode.Error, ex.Message) |> ignore
           activity.Stop()
           activity.Dispose()
+        | true -> ()
         return raise ex
     }

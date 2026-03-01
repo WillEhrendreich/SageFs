@@ -87,8 +87,9 @@ module ReflectionExecutor =
       let sw = Stopwatch.StartNew()
       try
         let instance =
-          if mi.IsStatic then null
-          else Activator.CreateInstance(mi.DeclaringType)
+          match mi.IsStatic with
+          | true -> null
+          | false -> Activator.CreateInstance(mi.DeclaringType)
         let result = mi.Invoke(instance, [||])
         match result with
         | :? Threading.Tasks.Task as task ->
@@ -99,13 +100,17 @@ module ReflectionExecutor =
       with
       | :? TargetInvocationException as tie ->
         sw.Stop()
-        let inner = if tie.InnerException <> null then tie.InnerException else tie :> exn
+        let inner =
+          match tie.InnerException <> null with
+          | true -> tie.InnerException
+          | false -> tie :> exn
         let isAssertion =
           inner.GetType().Name.Contains("Assert")
           || inner.GetType().Name.Contains("Expect")
-        if isAssertion then
+        match isAssertion with
+        | true ->
           return TestResult.Failed (TestFailure.AssertionFailed inner.Message, sw.Elapsed)
-        else
+        | false ->
           return TestResult.Failed (TestFailure.ExceptionThrown (inner.Message, inner.StackTrace), sw.Elapsed)
       | ex ->
         sw.Stop()
@@ -192,12 +197,14 @@ module BuiltInExecutors =
           let testModule = expAsm.GetType("Expecto.TestModule")
           let flatTestType = expAsm.GetType("Expecto.FlatTest")
           let testCodeType = expAsm.GetType("Expecto.TestCode")
-          if testModule = null || flatTestType = null || testCodeType = null then None
-          else
+          match testModule = null || flatTestType = null || testCodeType = null with
+          | true -> None
+          | false ->
             let toTestCodeList =
               testModule.GetMethod("toTestCodeList", BindingFlags.Public ||| BindingFlags.Static)
-            if toTestCodeList = null then None
-            else
+            match toTestCodeList = null with
+            | true -> None
+            | false ->
               Some {
                 ToTestCodeList = toTestCodeList
                 FlatTestNameProp = flatTestType.GetProperty("name")
@@ -212,20 +219,27 @@ module BuiltInExecutors =
     /// Map an exception to TestResult using reflection-resolved Expecto types.
     let mapException (cache: ReflectionCache) (ex: exn) (elapsed: TimeSpan) =
       let exType = ex.GetType()
-      if cache.AssertExceptionType <> null && cache.AssertExceptionType.IsAssignableFrom(exType) then
+      match cache.AssertExceptionType <> null && cache.AssertExceptionType.IsAssignableFrom(exType) with
+      | true ->
         TestResult.Failed(TestFailure.AssertionFailed ex.Message, elapsed)
-      elif cache.FailedExceptionType <> null && cache.FailedExceptionType.IsAssignableFrom(exType) then
-        TestResult.Failed(TestFailure.AssertionFailed ex.Message, elapsed)
-      elif cache.IgnoreExceptionType <> null && cache.IgnoreExceptionType.IsAssignableFrom(exType) then
-        TestResult.Skipped ex.Message
-      elif ex :? OperationCanceledException then
-        TestResult.Skipped "Cancelled"
-      else
-        TestResult.Failed(
-          TestFailure.ExceptionThrown(
-            ex.Message,
-            ex.StackTrace |> Option.ofObj |> Option.defaultValue ""),
-          elapsed)
+      | false ->
+        match cache.FailedExceptionType <> null && cache.FailedExceptionType.IsAssignableFrom(exType) with
+        | true ->
+          TestResult.Failed(TestFailure.AssertionFailed ex.Message, elapsed)
+        | false ->
+          match cache.IgnoreExceptionType <> null && cache.IgnoreExceptionType.IsAssignableFrom(exType) with
+          | true ->
+            TestResult.Skipped ex.Message
+          | false ->
+            match ex :? OperationCanceledException with
+            | true ->
+              TestResult.Skipped "Cancelled"
+            | false ->
+              TestResult.Failed(
+                TestFailure.ExceptionThrown(
+                  ex.Message,
+                  ex.StackTrace |> Option.ofObj |> Option.defaultValue ""),
+                elapsed)
 
     /// Execute a reflected test code via reflection.
     /// Tag 0=Sync (stest), 1=SyncWithCancel (stest), 2=Async (atest), 3+=skip.
@@ -270,7 +284,10 @@ module BuiltInExecutors =
         with
         | :? TargetInvocationException as tie ->
           sw.Stop()
-          let inner = if tie.InnerException <> null then tie.InnerException else tie :> exn
+          let inner =
+            match tie.InnerException <> null with
+            | true -> tie.InnerException
+            | false -> tie :> exn
           return mapException cache inner sw.Elapsed
         | :? OperationCanceledException ->
           return TestResult.Skipped "Cancelled"
@@ -423,10 +440,11 @@ module TestOrchestrator =
             let testTask = Async.StartAsTask(runTest testCase)
             let timeoutTask = Threading.Tasks.Task.Delay(perTestTimeout)
             let! winner = Threading.Tasks.Task.WhenAny(testTask, timeoutTask) |> Async.AwaitTask
-            if Object.ReferenceEquals(winner, timeoutTask) then
+            match Object.ReferenceEquals(winner, timeoutTask) with
+            | true ->
               sw.Stop()
               return TestResult.Skipped (sprintf "Timed out after %gs" perTestTimeout.TotalSeconds)
-            else
+            | false ->
               return testTask.Result
           with
           | :? OperationCanceledException ->
@@ -529,13 +547,13 @@ module LiveTestingHook =
     |> List.choose (fun executor ->
       match executor with
       | TestExecutor.AttributeBased ae ->
-        if referencedNames.Contains ae.Description.AssemblyMarker
-        then Some (ProviderDescription.AttributeBased ae.Description)
-        else None
+        match referencedNames.Contains ae.Description.AssemblyMarker with
+        | true -> Some (ProviderDescription.AttributeBased ae.Description)
+        | false -> None
       | TestExecutor.Custom ce ->
-        if referencedNames.Contains ce.Description.AssemblyMarker
-        then Some (ProviderDescription.Custom ce.Description)
-        else None)
+        match referencedNames.Contains ce.Description.AssemblyMarker with
+        | true -> Some (ProviderDescription.Custom ce.Description)
+        | false -> None)
 
   /// Discover all tests in an assembly using matching executors.
   /// Returns tests and a composed RunTest function.
@@ -573,9 +591,9 @@ module LiveTestingHook =
     (discoveredTests: TestCase array)
     (updatedMethodNames: string list)
     : TestId array =
-    if List.isEmpty updatedMethodNames then
-      Array.empty
-    else
+    match List.isEmpty updatedMethodNames with
+    | true -> Array.empty
+    | false ->
       let matched =
         discoveredTests
         |> Array.filter (fun tc ->
@@ -586,10 +604,9 @@ module LiveTestingHook =
         |> Array.map (fun t -> t.Id)
       // Conservative fallback: if nothing matched, run everything.
       // Better to run extra tests than silently miss affected ones.
-      if Array.isEmpty matched then
-        findAllTestIds discoveredTests
-      else
-        matched
+      match Array.isEmpty matched with
+      | true -> findAllTestIds discoveredTests
+      | false -> matched
 
   /// Main hook: given executors and a freshly loaded assembly,
   /// produce the full result for the Elm loop.

@@ -120,9 +120,9 @@ module Theme =
 
   /// Parse hex RGB string "#RRGGBB" to packed uint32 (0x00RRGGBB).
   let hexToRgb (hex: string) : uint32 =
-    if hex.Length >= 7 && hex.[0] = '#' then
-      System.UInt32.Parse(hex.Substring(1, 6), System.Globalization.NumberStyles.HexNumber)
-    else 0u
+    match hex.Length >= 7 && hex.[0] = '#' with
+    | true -> System.UInt32.Parse(hex.Substring(1, 6), System.Globalization.NumberStyles.HexNumber)
+    | false -> 0u
 
   /// Extract R, G, B bytes from packed uint32 RGB.
   let inline rgbR (rgb: uint32) = byte (rgb >>> 16)
@@ -195,33 +195,43 @@ module Theme =
     let mutable inTheme = false
     for line in lines do
       let trimmed = line.Trim()
-      if trimmed.StartsWith("let theme", System.StringComparison.Ordinal) || trimmed.StartsWith("let Theme", System.StringComparison.Ordinal) then
-        inTheme <- true
-      if inTheme then
+      match trimmed.StartsWith("let theme", System.StringComparison.Ordinal) || trimmed.StartsWith("let Theme", System.StringComparison.Ordinal) with
+      | true -> inTheme <- true
+      | false -> ()
+      match inTheme with
+      | true ->
         let mutable i = 0
         while i < trimmed.Length do
           let q1 = trimmed.IndexOf('"', i)
-          if q1 >= 0 then
+          match q1 >= 0 with
+          | true ->
             let q2 = trimmed.IndexOf('"', q1 + 1)
-            if q2 > q1 then
+            match q2 > q1 with
+            | true ->
               let name = trimmed.Substring(q1 + 1, q2 - q1 - 1)
               let comma = trimmed.IndexOf(',', q2 + 1)
-              if comma >= 0 then
+              match comma >= 0 with
+              | true ->
                 let rest = trimmed.Substring(comma + 1).Trim()
                 // Look for quoted hex value like "#ffffff"
                 let vq1 = rest.IndexOf('"')
-                if vq1 >= 0 then
+                match vq1 >= 0 with
+                | true ->
                   let vq2 = rest.IndexOf('"', vq1 + 1)
-                  if vq2 > vq1 then
+                  match vq2 > vq1 with
+                  | true ->
                     let value = rest.Substring(vq1 + 1, vq2 - vq1 - 1)
-                    if value.StartsWith("#", System.StringComparison.Ordinal) then
-                      overrides <- Map.add name value overrides
+                    match value.StartsWith("#", System.StringComparison.Ordinal) with
+                    | true -> overrides <- Map.add name value overrides
+                    | false -> ()
                     i <- comma + 1 + vq2 + 1
-                  else i <- trimmed.Length
-                else i <- trimmed.Length
-              else i <- trimmed.Length
-            else i <- trimmed.Length
-          else i <- trimmed.Length
-        if trimmed.Contains(']') && inTheme && not (trimmed.StartsWith("let", System.StringComparison.Ordinal)) then
-          inTheme <- false
+                  | false -> i <- trimmed.Length
+                | false -> i <- trimmed.Length
+              | false -> i <- trimmed.Length
+            | false -> i <- trimmed.Length
+          | false -> i <- trimmed.Length
+        match trimmed.Contains(']') && inTheme && not (trimmed.StartsWith("let", System.StringComparison.Ordinal)) with
+        | true -> inTheme <- false
+        | false -> ()
+      | false -> ()
     overrides

@@ -200,20 +200,27 @@ module KeyCombo =
         | "-" | "minus" -> Some ConsoleKey.OemMinus
         | s when s.Length = 1 ->
           let c = System.Char.ToUpper(s.[0])
-          if c >= 'A' && c <= 'Z' then
-            Some (enum<ConsoleKey> (int c))
-          elif c >= '0' && c <= '9' then
-            Some (enum<ConsoleKey> (int ConsoleKey.D0 + int c - int '0'))
-          else None
+          match c >= 'A' && c <= 'Z' with
+          | true -> Some (enum<ConsoleKey> (int c))
+          | false ->
+            match c >= '0' && c <= '9' with
+            | true -> Some (enum<ConsoleKey> (int ConsoleKey.D0 + int c - int '0'))
+            | false -> None
         | _ -> None
       parsed |> Option.map (fun k -> { Key = k; Modifiers = mods; Char = None })
 
   /// Format a KeyCombo as a human-readable string
   let format (kc: KeyCombo) : string =
     let parts = ResizeArray<string>()
-    if kc.Modifiers.HasFlag(ConsoleModifiers.Control) then parts.Add("Ctrl")
-    if kc.Modifiers.HasFlag(ConsoleModifiers.Alt) then parts.Add("Alt")
-    if kc.Modifiers.HasFlag(ConsoleModifiers.Shift) then parts.Add("Shift")
+    match kc.Modifiers.HasFlag(ConsoleModifiers.Control) with
+    | true -> parts.Add("Ctrl")
+    | false -> ()
+    match kc.Modifiers.HasFlag(ConsoleModifiers.Alt) with
+    | true -> parts.Add("Alt")
+    | false -> ()
+    match kc.Modifiers.HasFlag(ConsoleModifiers.Shift) with
+    | true -> parts.Add("Shift")
+    | false -> ()
     let keyName =
       match kc.Key with
       | ConsoleKey.OemPlus -> "="
@@ -399,29 +406,38 @@ module KeyMap =
     let mutable inBindings = false
     for line in lines do
       let trimmed = line.Trim()
-      if trimmed.StartsWith("let keybindings", System.StringComparison.Ordinal) || trimmed.StartsWith("let Keybindings", System.StringComparison.Ordinal) then
-        inBindings <- true
-      if inBindings then
+      match trimmed.StartsWith("let keybindings", System.StringComparison.Ordinal) || trimmed.StartsWith("let Keybindings", System.StringComparison.Ordinal) with
+      | true -> inBindings <- true
+      | false -> ()
+      match inBindings with
+      | true ->
         // Extract "Key", "Action" pairs
         let mutable i = 0
         while i < trimmed.Length do
           let q1 = trimmed.IndexOf('"', i)
-          if q1 >= 0 then
+          match q1 >= 0 with
+          | true ->
             let q2 = trimmed.IndexOf('"', q1 + 1)
-            if q2 > q1 then
+            match q2 > q1 with
+            | true ->
               let keyStr = trimmed.Substring(q1 + 1, q2 - q1 - 1)
               let q3 = trimmed.IndexOf('"', q2 + 1)
-              if q3 > q2 then
+              match q3 > q2 with
+              | true ->
                 let q4 = trimmed.IndexOf('"', q3 + 1)
-                if q4 > q3 then
+                match q4 > q3 with
+                | true ->
                   let actionStr = trimmed.Substring(q3 + 1, q4 - q3 - 1)
                   match KeyCombo.tryParse keyStr, UiAction.tryParse actionStr with
                   | Some kc, Some act -> bindings <- Map.add kc act bindings
                   | _ -> ()
                   i <- q4 + 1
-                else i <- trimmed.Length
-              else i <- trimmed.Length
-            else i <- trimmed.Length
-          else i <- trimmed.Length
-        if trimmed.Contains(']') then inBindings <- false
+                | false -> i <- trimmed.Length
+              | false -> i <- trimmed.Length
+            | false -> i <- trimmed.Length
+          | false -> i <- trimmed.Length
+        match trimmed.Contains(']') with
+        | true -> inBindings <- false
+        | false -> ()
+      | false -> ()
     bindings
