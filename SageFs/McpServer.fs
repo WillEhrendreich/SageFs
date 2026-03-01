@@ -87,8 +87,9 @@ module PushEvent =
           sprintf "  %s:%d — %s" (IO.Path.GetFileName file) line msg)
       let header = sprintf "⚠ %d diagnostic(s):" errors.Length
       let truncNote =
-        if errors.Length > 5 then sprintf "\n  … and %d more" (errors.Length - 5)
-        else ""
+        match errors.Length > 5 with
+        | true -> sprintf "\n  … and %d more" (errors.Length - 5)
+        | false -> ""
       sprintf "%s\n%s%s" header (String.concat "\n" lines) truncNote
     | PushEvent.StateChanged (outputCount, diagCount) ->
       sprintf "state: output=%d diags=%d" outputCount diagCount
@@ -129,8 +130,9 @@ type EventAccumulator() =
         let temp = ResizeArray()
         let mutable item = Unchecked.defaultof<AccumulatedEvent>
         while events.TryDequeue(&item) do
-          if PushEvent.tag item.Event <> tag then
-            temp.Add(item)
+          match PushEvent.tag item.Event <> tag with
+          | true -> temp.Add(item)
+          | false -> ()
         for e in temp do events.Enqueue(e)
         events.Enqueue(entry))
     | MergeStrategy.Accumulate ->
@@ -163,8 +165,9 @@ type McpServerTracker() =
   /// Broadcast a structured logging notification to all connected MCP clients.
   member _.NotifyLogAsync(level: LoggingLevel, logger: string, data: obj) =
     task {
-      if servers.IsEmpty then return ()
-      else
+      match servers.IsEmpty with
+      | true -> return ()
+      | false ->
         let jsonElement =
           let json = JsonSerializer.Serialize(data)
           use doc = JsonDocument.Parse(json)
@@ -205,7 +208,8 @@ let createServerCaptureFilter (tracker: McpServerTracker) =
     McpRequestHandler<CallToolRequestParams, CallToolResult>(fun ctx ct ->
       let wasEmpty = tracker.Count = 0
       tracker.Register(ctx.Server)
-      if wasEmpty && not logged then
+      match wasEmpty && not logged with
+      | true ->
         logged <- true
         let logger =
           ctx.Services.GetService(typeof<ILoggerFactory>)
@@ -214,22 +218,26 @@ let createServerCaptureFilter (tracker: McpServerTracker) =
         match logger with
         | Some l -> l.LogInformation("First MCP client connected")
         | None -> ()
+      | false -> ()
 
       let inline appendEvents (result: CallToolResult) =
         let events = tracker.DrainEvents()
-        if events.Length > 0 then
+        match events.Length > 0 with
+        | true ->
           let eventText =
             events
             |> Array.map (sprintf "  • %s")
             |> String.concat "\n"
           let banner = sprintf "\n\n📡 SageFs events since last call:\n%s" eventText
           result.Content.Add(TextContentBlock(Text = banner))
+        | false -> ()
         result
 
       let vt = next.Invoke(ctx, ct)
-      if vt.IsCompleted then
+      match vt.IsCompleted with
+      | true ->
         ValueTask<CallToolResult>(appendEvents vt.Result)
-      else
+      | false ->
         ValueTask<CallToolResult>(
           task {
             let! result = vt.AsTask()
@@ -364,7 +372,9 @@ let startMcpServer (cfg: McpServerConfig) =
                           SageFs.Instrumentation.shouldFilterHttpSpan (ctx.Request.Path.ToString())
                       )
                       .AddHttpClientInstrumentation() |> ignore
-                    if otelConfigured then tracing.AddOtlpExporter() |> ignore
+                    match otelConfigured with
+                    | true -> tracing.AddOtlpExporter() |> ignore
+                    | false -> ()
                 )
                 .WithMetrics(fun metrics ->
                     let m = metrics
@@ -373,14 +383,17 @@ let startMcpServer (cfg: McpServerConfig) =
                     m.AddAspNetCoreInstrumentation()
                       .AddHttpClientInstrumentation() |> ignore
                     metrics.SetExemplarFilter(OpenTelemetry.Metrics.ExemplarFilterType.TraceBased) |> ignore
-                    if otelConfigured then metrics.AddOtlpExporter() |> ignore
+                    match otelConfigured with
+                    | true -> metrics.AddOtlpExporter() |> ignore
+                    | false -> ()
                 )
 
-            if otelConfigured then
+            match otelConfigured with
+            | true ->
               otelBuilder.WithLogging(fun logging ->
                 logging.AddOtlpExporter() |> ignore
               ) |> ignore
-            else
+            | false ->
               otelBuilder |> ignore
 
             // Configure standard logging (file and console)
@@ -486,9 +499,9 @@ let startMcpServer (cfg: McpServerConfig) =
                     use! json = readJsonBody ctx
                     let code = json.RootElement.GetProperty("code").GetString()
                     let wd =
-                      if json.RootElement.TryGetProperty("working_directory") |> fst then
-                        Some (json.RootElement.GetProperty("working_directory").GetString())
-                      else None
+                      match json.RootElement.TryGetProperty("working_directory") with
+                      | true, prop -> Some (prop.GetString())
+                      | false, _ -> None
                     let! result = SageFs.McpTools.sendFSharpCode mcpContext "cli-integrated" code SageFs.McpTools.OutputFormat.Text None wd
                     do! jsonResponse ctx 200 {| success = true; result = result |}
                 }) :> Task
@@ -508,9 +521,9 @@ let startMcpServer (cfg: McpServerConfig) =
                     use! json = readJsonBody ctx
                     let rebuild =
                         try
-                            if json.RootElement.TryGetProperty("rebuild") |> fst then
-                                json.RootElement.GetProperty("rebuild").GetBoolean()
-                            else false
+                            match json.RootElement.TryGetProperty("rebuild") with
+                            | true, prop -> prop.GetBoolean()
+                            | false, _ -> false
                         with :? System.Text.Json.JsonException -> false
                     let! result = SageFs.McpTools.hardResetSession mcpContext "http" rebuild None None
                     do! jsonResponse ctx 200 {| success = not (result.Contains("Error")); message = result |}
@@ -637,7 +650,8 @@ let startMcpServer (cfg: McpServerConfig) =
                       let model = getModel()
                       SageFs.ActiveSession.sessionId model.Sessions.ActiveSessionId
                       |> Option.defaultValue ""
-                    if activeId.Length > 0 then
+                    match activeId.Length > 0 with
+                    | true ->
                       // Replay warmup context
                       let! ctxOpt = getCtx activeId
                       match ctxOpt with
@@ -655,6 +669,7 @@ let startMcpServer (cfg: McpServerConfig) =
                           do! hrEvt |> SageFs.SessionEvents.formatSessionSseEvent |> writeSseFrame body
                         | None -> ()
                       | None -> ()
+                    | false -> ()
                   with
                   | :? System.IO.IOException | :? ObjectDisposedException -> ()
                   | ex -> eprintfn "[SSE] Session snapshot replay error: %s" ex.Message
@@ -668,15 +683,16 @@ let startMcpServer (cfg: McpServerConfig) =
                   let activeId = activeSessionId () |> Option.defaultValue ""
                   let sessionEntries =
                     LiveTestState.statusEntriesForSession activeId lt
-                  if sessionEntries.Length > 0 then
+                  match sessionEntries.Length > 0 with
+                  | true ->
                     let s = TestSummary.fromStatuses
                               lt.Activation (sessionEntries |> Array.map (fun e -> e.Status))
                     SageFs.SseWriter.formatTestSummaryEvent sseJsonOpts (Some activeId) s
                     |> writeSseFrameSync body
                     let freshness =
-                      if lt.RunPhases |> Map.exists (fun _ p -> match p with TestRunPhase.RunningButEdited _ -> true | _ -> false)
-                      then ResultFreshness.StaleCodeEdited
-                      else ResultFreshness.Fresh
+                      match lt.RunPhases |> Map.exists (fun _ p -> match p with TestRunPhase.RunningButEdited _ -> true | _ -> false) with
+                      | true -> ResultFreshness.StaleCodeEdited
+                      | false -> ResultFreshness.Fresh
                     let payload =
                       let completion =
                         TestResultsBatchPayload.deriveCompletion
@@ -695,9 +711,12 @@ let startMcpServer (cfg: McpServerConfig) =
                     let pipeline = model.LiveTesting
                     for file in files do
                       let fa = FileAnnotations.projectWithCoverage file pipeline
-                      if fa.TestAnnotations.Length > 0 || fa.CodeLenses.Length > 0 || fa.CoverageAnnotations.Length > 0 then
+                      match fa.TestAnnotations.Length > 0 || fa.CodeLenses.Length > 0 || fa.CoverageAnnotations.Length > 0 with
+                      | true ->
                         SageFs.SseWriter.formatFileAnnotationsEvent sseJsonOpts (Some activeId) fa
                         |> writeSseFrameSync body
+                      | false -> ()
+                  | false -> ()
                 with ex ->
                   eprintfn "SSE replay error: %s" ex.Message)
 
@@ -714,7 +733,8 @@ let startMcpServer (cfg: McpServerConfig) =
                         let model = getModel()
                         SageFs.ActiveSession.sessionId model.Sessions.ActiveSessionId
                         |> Option.defaultValue ""
-                      if activeId.Length > 0 then
+                      match activeId.Length > 0 with
+                      | true ->
                         let! hrOpt = getHr activeId
                         match hrOpt with
                         | Some watchedFiles ->
@@ -722,17 +742,21 @@ let startMcpServer (cfg: McpServerConfig) =
                           let frame = SageFs.SessionEvents.formatSessionSseEvent evt
                           sessionEventBroadcast.Trigger(frame)
                         | None -> ()
+                      | false -> ()
                     with
                     | :? System.IO.IOException -> ()
                     | ex -> eprintfn "[SSE] HotReload push error: %s" ex.Message
                   }
                   |> fun t -> t.ContinueWith(fun (t: Threading.Tasks.Task) ->
-                    if t.IsFaulted then eprintfn "[SSE] HotReload push fault: %s" t.Exception.InnerException.Message)
+                    match t.IsFaulted with
+                    | true -> eprintfn "[SSE] HotReload push fault: %s" t.Exception.InnerException.Message
+                    | false -> ())
                   |> ignore
                 | DaemonStateChange.SessionReady sid ->
                   task {
                     try
-                      if sid.Length > 0 then
+                      match sid.Length > 0 with
+                      | true ->
                         let! ctxOpt = getCtx sid
                         match ctxOpt with
                         | Some ctx ->
@@ -748,12 +772,15 @@ let startMcpServer (cfg: McpServerConfig) =
                           let hrFrame = SageFs.SessionEvents.formatSessionSseEvent hrEvt
                           sessionEventBroadcast.Trigger(hrFrame)
                         | None -> ()
+                      | false -> ()
                     with
                     | :? System.IO.IOException -> ()
                     | ex -> eprintfn "[SSE] SessionReady push error: %s" ex.Message
                   }
                   |> fun t -> t.ContinueWith(fun (t: Threading.Tasks.Task) ->
-                    if t.IsFaulted then eprintfn "[SSE] SessionReady push fault: %s" t.Exception.InnerException.Message)
+                    match t.IsFaulted with
+                    | true -> eprintfn "[SSE] SessionReady push fault: %s" t.Exception.InnerException.Message
+                    | false -> ())
                   |> ignore
                 | _ -> ()) |> ignore
             | _ -> ()
@@ -843,14 +870,14 @@ let startMcpServer (cfg: McpServerConfig) =
                     let regionData =
                       elmRegions |> List.map (fun (r: SageFs.RenderRegion) ->
                         {| id = r.Id
-                           content = r.Content |> fun s -> if s.Length > 2000 then s.[..1999] else s
+                           content = r.Content |> fun s -> match s.Length > 2000 with | true -> s.[..1999] | false -> s
                            affordances = r.Affordances |> List.map (fun a -> a.ToString()) |})
                     let sessionState, evalCount, avgMs, minMs, maxMs =
                       match statusResult with
                       | Some (SageFs.WorkerProtocol.WorkerResponse.StatusResult(_, snap)) ->
                         SageFs.WorkerProtocol.SessionStatus.label snap.Status,
                         snap.EvalCount,
-                        (if snap.EvalCount > 0 then float snap.AvgDurationMs else 0.0),
+                        (match snap.EvalCount > 0 with | true -> float snap.AvgDurationMs | false -> 0.0),
                         float snap.MinDurationMs,
                         float snap.MaxDurationMs
                       | _ -> "Unknown", 0, 0.0, 0.0, 0.0
@@ -979,14 +1006,16 @@ let startMcpServer (cfg: McpServerConfig) =
                     let workingDir =
                       let tryProp (name: string) =
                         let mutable value = Unchecked.defaultof<System.Text.Json.JsonElement>
-                        if root.TryGetProperty(name, &value) then Some (value.GetString())
-                        else None
+                        match root.TryGetProperty(name, &value) with
+                        | true -> Some (value.GetString())
+                        | false -> None
                       tryProp "workingDirectory"
                       |> Option.orElseWith (fun () -> tryProp "working_directory")
                       |> Option.defaultValue Environment.CurrentDirectory
                     let projects =
                       let mutable projProp = Unchecked.defaultof<System.Text.Json.JsonElement>
-                      if root.TryGetProperty("projects", &projProp) then
+                      match root.TryGetProperty("projects", &projProp) with
+                      | true ->
                         match projProp.ValueKind with
                         | System.Text.Json.JsonValueKind.Array ->
                           projProp.EnumerateArray()
@@ -995,7 +1024,7 @@ let startMcpServer (cfg: McpServerConfig) =
                         | System.Text.Json.JsonValueKind.String ->
                           [ projProp.GetString() ]
                         | _ -> []
-                      else []
+                      | false -> []
                     let! result = cfg.SessionOps.CreateSession projects workingDir
                     match result with
                     | Ok msg ->
@@ -1079,7 +1108,9 @@ let startMcpServer (cfg: McpServerConfig) =
                 withErrorHandling ctx (fun () -> task {
                     let fileParam =
                       let fp = ctx.Request.Query.["file"].ToString()
-                      if System.String.IsNullOrWhiteSpace fp then None else Some fp
+                      match System.String.IsNullOrWhiteSpace fp with
+                      | true -> None
+                      | false -> Some fp
                     let! result = SageFs.McpTools.getLiveTestStatus mcpContext fileParam
                     do! rawJsonResponse ctx result
                 }) :> Task
@@ -1091,11 +1122,19 @@ let startMcpServer (cfg: McpServerConfig) =
                     use! json = readJsonBody ctx
                     let pattern =
                       match json.RootElement.TryGetProperty("pattern") with
-                      | true, v -> let s = v.GetString() in if System.String.IsNullOrWhiteSpace s then None else Some s
+                      | true, v ->
+                        let s = v.GetString()
+                        match System.String.IsNullOrWhiteSpace s with
+                        | true -> None
+                        | false -> Some s
                       | false, _ -> None
                     let category =
                       match json.RootElement.TryGetProperty("category") with
-                      | true, v -> let s = v.GetString() in if System.String.IsNullOrWhiteSpace s then None else Some s
+                      | true, v ->
+                        let s = v.GetString()
+                        match System.String.IsNullOrWhiteSpace s with
+                        | true -> None
+                        | false -> Some s
                       | false, _ -> None
                     let timeout =
                       match json.RootElement.TryGetProperty("timeout_seconds") with
@@ -1226,7 +1265,8 @@ let startMcpServer (cfg: McpServerConfig) =
             let mutable lastPipelineTraceJson = ""
 
             let handleDiagnosticsChange diagCount =
-              if diagCount <> lastDiagCount then
+              match diagCount <> lastDiagCount with
+              | true ->
                 lastDiagCount <- diagCount
                 withModel (fun model ->
                   let errors =
@@ -1240,10 +1280,14 @@ let startMcpServer (cfg: McpServerConfig) =
                         ("fsi", d.Range.StartLine, d.Message)))
                   serverTracker.AccumulateEvent(
                     PushEvent.DiagnosticsChanged errors))
+              | false -> ()
 
             let handleBindingsChange outputCount =
-              if outputCount <> lastOutputCount then
-                if outputCount < lastOutputCount then fsiBindings <- Map.empty
+              match outputCount <> lastOutputCount with
+              | true ->
+                match outputCount < lastOutputCount with
+                | true -> fsiBindings <- Map.empty
+                | false -> ()
                 lastOutputCount <- outputCount
                 withModel (fun model ->
                   let sid = activeSessionId () |> Option.defaultValue ""
@@ -1255,12 +1299,15 @@ let startMcpServer (cfg: McpServerConfig) =
                     |> String.concat "\n"
                     |> SageFs.SseWriter.parseBindingsFromOutput
                     |> SageFs.SseWriter.accumulateBindings Map.empty
-                  if newBindings <> fsiBindings then
+                  match newBindings <> fsiBindings with
+                  | true ->
                     fsiBindings <- newBindings
                     fsiBindings
                     |> Map.values |> Array.ofSeq
                     |> SageFs.SseWriter.formatBindingsSnapshotEvent sseJsonOpts (Some sid)
-                    |> testEventBroadcast.Trigger)
+                    |> testEventBroadcast.Trigger
+                  | false -> ())
+              | false -> ()
 
             let handlePipelineTraceChange () =
               withModel (fun model ->
@@ -1286,10 +1333,12 @@ let startMcpServer (cfg: McpServerConfig) =
                   | ex ->
                     eprintfn "[MCP] Pipeline trace unexpected error: %s (%s)" ex.Message (ex.GetType().Name)
                     ""
-                if traceJson.Length > 0 && traceJson <> lastPipelineTraceJson then
+                match traceJson.Length > 0 && traceJson <> lastPipelineTraceJson with
+                | true ->
                   lastPipelineTraceJson <- traceJson
                   testEventBroadcast.Trigger(
-                    SageFs.SseWriter.formatPipelineTraceEvent sid traceJson))
+                    SageFs.SseWriter.formatPipelineTraceEvent sid traceJson)
+                | false -> ())
 
             let handleTestSummaryChange () =
               withModel (fun model ->
@@ -1298,7 +1347,8 @@ let startMcpServer (cfg: McpServerConfig) =
                   activeSessionId () |> Option.defaultValue ""
                 let sessionEntries =
                   LiveTestState.statusEntriesForSession activeId lt
-                if sessionEntries.Length > 0 || TestRunPhase.isAnyRunning lt.RunPhases then
+                match sessionEntries.Length > 0 || TestRunPhase.isAnyRunning lt.RunPhases with
+                | true ->
                   let s = SageFs.Features.LiveTesting.TestSummary.fromStatuses
                             lt.Activation (sessionEntries |> Array.map (fun e -> e.Status))
                   serverTracker.AccumulateEvent(
@@ -1306,14 +1356,15 @@ let startMcpServer (cfg: McpServerConfig) =
                   let now = System.Diagnostics.Stopwatch.GetTimestamp()
                   let elapsedMs = (now - lastTestSsePush) * 1000L / System.Diagnostics.Stopwatch.Frequency
                   let isRunComplete = not (TestRunPhase.isAnyRunning lt.RunPhases)
-                  if elapsedMs >= testSseThrottleMs || isRunComplete then
+                  match elapsedMs >= testSseThrottleMs || isRunComplete with
+                  | true ->
                     lastTestSsePush <- now
                     testEventBroadcast.Trigger(
                       SageFs.SseWriter.formatTestSummaryEvent sseJsonOpts (Some activeId) s)
                     let freshness =
-                      if lt.RunPhases |> Map.exists (fun _ p -> match p with SageFs.Features.LiveTesting.TestRunPhase.RunningButEdited _ -> true | _ -> false)
-                      then SageFs.Features.LiveTesting.ResultFreshness.StaleCodeEdited
-                      else SageFs.Features.LiveTesting.ResultFreshness.Fresh
+                      match lt.RunPhases |> Map.exists (fun _ p -> match p with SageFs.Features.LiveTesting.TestRunPhase.RunningButEdited _ -> true | _ -> false) with
+                      | true -> SageFs.Features.LiveTesting.ResultFreshness.StaleCodeEdited
+                      | false -> SageFs.Features.LiveTesting.ResultFreshness.Fresh
                     let payload =
                       let completion =
                         SageFs.Features.LiveTesting.TestResultsBatchPayload.deriveCompletion
@@ -1341,9 +1392,13 @@ let startMcpServer (cfg: McpServerConfig) =
                     let allFiles = Array.append files instrFiles
                     for file in allFiles do
                       let fa = SageFs.Features.LiveTesting.FileAnnotations.projectWithCoverage file model.LiveTesting
-                      if fa.TestAnnotations.Length > 0 || fa.CodeLenses.Length > 0 || fa.CoverageAnnotations.Length > 0 then
+                      match fa.TestAnnotations.Length > 0 || fa.CodeLenses.Length > 0 || fa.CoverageAnnotations.Length > 0 with
+                      | true ->
                         testEventBroadcast.Trigger(
-                          SageFs.SseWriter.formatFileAnnotationsEvent sseJsonOpts (Some activeId) fa))
+                          SageFs.SseWriter.formatFileAnnotationsEvent sseJsonOpts (Some activeId) fa)
+                      | false -> ()
+                  | false -> ()
+                | false -> ())
 
             let _stateSub =
               cfg.StateChanged |> Option.map (fun evt ->
@@ -1370,13 +1425,15 @@ let startMcpServer (cfg: McpServerConfig) =
                       handlePipelineTraceChange ()
                       handleTestSummaryChange ()
 
-                      if serverTracker.Count > 0 then
+                      match serverTracker.Count > 0 with
+                      | true ->
                         let data =
                           {| event = "state_changed"
                              diagCount = diagCount
                              outputCount = outputCount |}
                         serverTracker.NotifyLogAsync(
                           LoggingLevel.Info, "sagefs.state", data) |> ignore
+                      | false -> ()
                     with
                     | :? System.IO.IOException | :? ObjectDisposedException -> ()
                     | ex -> eprintfn "[MCP] State change handler error: %s" ex.Message
@@ -1393,14 +1450,15 @@ let startMcpServer (cfg: McpServerConfig) =
             logger.LogInformation("Log file: {LogPath}", logPath)
             
             // Log OTEL configuration
-            if otelConfigured then
+            match otelConfigured with
+            | true ->
               let endpoint =
                 Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_ENDPOINT")
               let protocol =
                 Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_PROTOCOL")
                 |> Option.ofObj |> Option.defaultValue "grpc"
               logger.LogInformation("OpenTelemetry enabled: endpoint={OtelEndpoint}, protocol={OtelProtocol}", endpoint, protocol)
-            else
+            | false ->
               logger.LogInformation("OpenTelemetry not configured (set OTEL_EXPORTER_OTLP_ENDPOINT)")
             
             do! app.RunAsync()
