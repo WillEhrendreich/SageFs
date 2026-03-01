@@ -16,7 +16,8 @@ let nonBlockingRunMiddleware next (request, st: AppState) =
     not (code.Contains("Task.Run")) &&
     not (code.Contains("runFromRepl"))
   
-  if hasBlockingRun then
+  match hasBlockingRun with
+  | true ->
     st.Logger.LogDebug "Detected blocking .Run() call, converting to non-blocking execution..."
     
     // Check if this is a multi-line file (contains newlines) with .Build().Run() at the end
@@ -24,7 +25,10 @@ let nonBlockingRunMiddleware next (request, st: AppState) =
     let isMultiLine = lines.Length > 1
     
     let rewrittenCode =
-      if isMultiLine && code.TrimEnd().EndsWith(".Build().Run()", System.StringComparison.Ordinal) then
+      match (isMultiLine && code.TrimEnd().EndsWith(".Build().Run()", System.StringComparison.Ordinal),
+             (not isMultiLine) && code.Contains(".Build().Run()"),
+             code.EndsWith(".Run()", System.StringComparison.Ordinal)) with
+      | true, _, _ ->
         // For multi-line files, only replace the last .Build().Run()
         let lastRunIndex = code.LastIndexOf(".Build().Run()", System.StringComparison.Ordinal)
         let beforeLastRun = code.Substring(0, lastRunIndex)
@@ -32,8 +36,9 @@ let nonBlockingRunMiddleware next (request, st: AppState) =
         // Check if this is an Aspire app (contains DistributedApplication)
         let isAspire = code.Contains("DistributedApplication")
         
-        let configInjection = 
-          if isAspire then
+        let configInjection =
+          match isAspire with
+          | true ->
             // Inject Aspire DCP and Dashboard paths from environment
             """
 // SageFs: Auto-configure Aspire paths
@@ -44,7 +49,7 @@ if not (isNull dcpPath) && dcpPath <> "" then
 if not (isNull dashPath) && dashPath <> "" then
   builder.Configuration["DcpPublisher:DashboardPath"] <- dashPath
 """
-          else
+          | false ->
             ""
             
         $"""%s{beforeLastRun}%s{configInjection}
@@ -62,7 +67,7 @@ printfn "✓ Application starting in background."
 printfn "  Use '__app.StopAsync() |> Async.AwaitTask |> Async.RunSynchronously' to stop"
 __app
 """
-      elif not isMultiLine && code.Contains(".Build().Run()") then
+      | _, true, _ ->
         // Single-line command: builder.Build().Run()
         let beforeRun = code.Replace(".Build().Run()", ".Build()")
         $"""
@@ -78,7 +83,7 @@ printfn "✓ Application starting in background."
 printfn "  Use '__app.StopAsync() |> Async.AwaitTask |> Async.RunSynchronously' to stop"
 __app
 """
-      elif code.EndsWith(".Run()", System.StringComparison.Ordinal) then
+      | _, _, true ->
         // Pattern: someApp.Run()
         let appVar = code.Replace(".Run()", "")
         $"""
@@ -92,10 +97,10 @@ let __appTask = System.Threading.Tasks.Task.Run(fun () ->
 printfn "✓ Application running in background"
 %s{appVar}
 """
-      else
+      | _ ->
         code
     
     let newRequest = { request with Code = rewrittenCode }
     next (newRequest, st)
-  else
+  | false ->
     next (request, st)

@@ -39,10 +39,9 @@ module OpenDirective =
           // Only include module open statement if it's not a temp/generated module name
           let moduleName = l |> Seq.map _.idText |> Seq.toList |> String.concat "."
           let moduleOpen = 
-            if moduleName.StartsWith("Tmp", System.StringComparison.Ordinal) || System.String.IsNullOrEmpty moduleName then 
-              [] 
-            else 
-              [runOpen l]
+            match moduleName.StartsWith("Tmp", System.StringComparison.Ordinal) || System.String.IsNullOrEmpty moduleName with
+            | true -> []
+            | false -> [runOpen l]
           
           moduleOpen @ List.choose chooseFn codeLines
         | _ -> []
@@ -68,9 +67,10 @@ module OpenDirective =
     | { Code = code; Args = args } when args.ContainsKey "fileName" ->
       let fileName = args["fileName"] :?> string
 
-      if isNull fileName || hasOpenedFile fileName then
+      match isNull fileName || hasOpenedFile fileName with
+      | true ->
         next (request, st)
-      else
+      | false ->
         let lines = openDirectiveLines fileName
         let code = lines @ [ code ] |> String.concat "\n"
 
@@ -82,9 +82,10 @@ module OpenDirective =
     | { Code = code } when code.StartsWith("#o", System.StringComparison.Ordinal) ->
       let commandWords = code.Split " "
 
-      if commandWords.Length < 2 then
+      match commandWords.Length < 2 with
+      | true ->
         next (request, st)
-      else
+      | false ->
         match commandWords[0] with
         | "#o"
         | "#open" ->
@@ -116,11 +117,12 @@ let viBindMiddleware next (request, st) =
     | [| ":exec"; fileName |] | [| ":e"; fileName |] ->
       // Execute entire file contents directly (for top-level program files)
       let filePath = Path.GetFullPath fileName
-      if File.Exists(filePath) then
+      match File.Exists(filePath) with
+      | true ->
         let fileContents = File.ReadAllText(filePath)
         st.Logger.LogInfo $"Executing: %s{filePath}"
         next ({ request with Code = fileContents }, st)
-      else
+      | false ->
         st.Logger.LogError $"File not found: %s{filePath}"
         { EvaluationResult = Error (System.IO.FileNotFoundException($"File not found: %s{filePath}")); 
           Diagnostics = [||]; 

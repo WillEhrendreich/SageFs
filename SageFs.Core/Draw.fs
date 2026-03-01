@@ -27,8 +27,9 @@ module rec Draw =
     let maxCol = Rect.right dt.Clip
     let mutable c = absCol
     for i in 0 .. s.Length - 1 do
-      if c < maxCol && absRow >= dt.Clip.Row && absRow < Rect.bottom dt.Clip then
-        CellGrid.set dt.Grid absRow c { Char = s.[i]; Fg = fg; Bg = bg; Attrs = attrs }
+      match c < maxCol && absRow >= dt.Clip.Row && absRow < Rect.bottom dt.Clip with
+      | true -> CellGrid.set dt.Grid absRow c { Char = s.[i]; Fg = fg; Bg = bg; Attrs = attrs }
+      | false -> ()
       c <- c + 1
 
   /// Write text with per-character syntax highlighting from ColorSpan overlays.
@@ -38,21 +39,26 @@ module rec Draw =
     let absRow = dt.Clip.Row + row
     let absCol = dt.Clip.Col + col
     let maxCol = Rect.right dt.Clip
-    if absRow < dt.Clip.Row || absRow >= Rect.bottom dt.Clip then () else
+    match absRow < dt.Clip.Row || absRow >= Rect.bottom dt.Clip with
+    | true -> ()
+    | false ->
     let mutable c = absCol
     let mutable spanIdx = 0
-    let mutable spanEnd = if spans.Length > 0 then spans.[0].Start + spans.[0].Length else 0
+    let mutable spanEnd = match spans.Length > 0 with | true -> spans.[0].Start + spans.[0].Length | false -> 0
     for i in 0 .. s.Length - 1 do
-      if c < maxCol then
+      match c < maxCol with
+      | true ->
         while spanIdx < spans.Length && i >= spans.[spanIdx].Start + spans.[spanIdx].Length do
           spanIdx <- spanIdx + 1
-          if spanIdx < spans.Length then
-            spanEnd <- spans.[spanIdx].Start + spans.[spanIdx].Length
+          match spanIdx < spans.Length with
+          | true -> spanEnd <- spans.[spanIdx].Start + spans.[spanIdx].Length
+          | false -> ()
         let fg =
-          if spanIdx < spans.Length && i >= spans.[spanIdx].Start && i < spanEnd then
-            spans.[spanIdx].Fg
-          else defaultFg
+          match spanIdx < spans.Length && i >= spans.[spanIdx].Start && i < spanEnd with
+          | true -> spans.[spanIdx].Fg
+          | false -> defaultFg
         CellGrid.set dt.Grid absRow c { Char = s.[i]; Fg = fg; Bg = bg; Attrs = attrs }
+      | false -> ()
       c <- c + 1
 
   let fill (dt: DrawTarget) (bg: uint32) =
@@ -71,8 +77,9 @@ module rec Draw =
 
   let box (dt: DrawTarget) (title: string) (borderFg: uint32) (borderBg: uint32) : DrawTarget =
     let r = dt.Clip
-    if r.Width < 2 || r.Height < 2 then dt
-    else
+    match r.Width < 2 || r.Height < 2 with
+    | true -> dt
+    | false ->
       CellGrid.set dt.Grid r.Row r.Col { Char = '\u250C'; Fg = borderFg; Bg = borderBg; Attrs = CellAttrs.None }
       CellGrid.set dt.Grid r.Row (Rect.right r - 1) { Char = '\u2510'; Fg = borderFg; Bg = borderBg; Attrs = CellAttrs.None }
       CellGrid.set dt.Grid (Rect.bottom r - 1) r.Col { Char = '\u2514'; Fg = borderFg; Bg = borderBg; Attrs = CellAttrs.None }
@@ -83,10 +90,12 @@ module rec Draw =
       for row in r.Row + 1 .. Rect.bottom r - 2 do
         CellGrid.set dt.Grid row r.Col { Char = '\u2502'; Fg = borderFg; Bg = borderBg; Attrs = CellAttrs.None }
         CellGrid.set dt.Grid row (Rect.right r - 1) { Char = '\u2502'; Fg = borderFg; Bg = borderBg; Attrs = CellAttrs.None }
-      if title.Length > 0 && r.Width > 4 then
+      match title.Length > 0 && r.Width > 4 with
+      | true ->
         let maxTitleLen = r.Width - 4
-        let t = if title.Length > maxTitleLen then title.Substring(0, maxTitleLen) else title
+        let t = match title.Length > maxTitleLen with | true -> title.Substring(0, maxTitleLen) | false -> title
         text dt 0 2 (Theme.hexToRgb Theme.fgDefault) borderBg CellAttrs.None (sprintf " %s " t)
+      | false -> ()
       DrawTarget.sub dt (Rect.create (r.Row + 1) (r.Col + 1) (r.Width - 2) (r.Height - 2))
 
   /// Merge stacked box corners into proper T-junctions.
@@ -104,8 +113,8 @@ module rec Draw =
     for row in r.Row .. Rect.bottom r - 1 do
       for col in r.Col .. Rect.right r - 1 do
         let cell = CellGrid.get dt.Grid row col
-        let above = if row > r.Row then (CellGrid.get dt.Grid (row - 1) col).Char else ' '
-        let below = if row < Rect.bottom r - 1 then (CellGrid.get dt.Grid (row + 1) col).Char else ' '
+        let above = match row > r.Row with | true -> (CellGrid.get dt.Grid (row - 1) col).Char | false -> ' '
+        let below = match row < Rect.bottom r - 1 with | true -> (CellGrid.get dt.Grid (row + 1) col).Char | false -> ' '
         let newChar =
           match cell.Char with
           | '\u2518' when isBoxChar below -> '\u2524' // ┘ + box below → ┤
@@ -113,23 +122,27 @@ module rec Draw =
           | '\u2514' when isBoxChar below -> '\u251C' // └ + box below → ├
           | '\u250C' when isBoxChar above -> '\u251C' // ┌ + box above → ├
           | _ -> cell.Char
-        if newChar <> cell.Char then
-          CellGrid.set dt.Grid row col { cell with Char = newChar }
+        match newChar <> cell.Char with
+        | true -> CellGrid.set dt.Grid row col { cell with Char = newChar }
+        | false -> ()
 
   let scrolledLines (dt: DrawTarget) (lines: string list) (scrollOffset: int) (fg: uint32) (bg: uint32) =
     let visibleRows = dt.Clip.Height
     let startLine = max 0 scrollOffset
     for i in 0 .. visibleRows - 1 do
       let lineIdx = startLine + i
-      if lineIdx < lines.Length then
+      match lineIdx < lines.Length with
+      | true ->
         let line = lines.[lineIdx]
         let maxLen = min line.Length dt.Clip.Width
-        text dt i 0 fg bg CellAttrs.None (if maxLen < line.Length then line.Substring(0, maxLen) else line)
+        text dt i 0 fg bg CellAttrs.None (match maxLen < line.Length with | true -> line.Substring(0, maxLen) | false -> line)
+      | false -> ()
 
   let statusBar (dt: DrawTarget) (left: string) (right: string) (fg: uint32) (bg: uint32) =
     let row = dt.Clip.Height - 1
     hline dt row fg bg ' '
     text dt row 0 fg bg CellAttrs.None left
     let rightCol = dt.Clip.Width - right.Length
-    if rightCol > left.Length then
-      text dt row rightCol fg bg CellAttrs.None right
+    match rightCol > left.Length with
+    | true -> text dt row rightCol fg bg CellAttrs.None right
+    | false -> ()

@@ -90,16 +90,18 @@ module CellGrid =
     row >= 0 && row < grid.Rows && col >= 0 && col < grid.Cols
 
   let set (grid: CellGrid) row col (cell: Cell) =
-    if inBounds grid row col then
-      grid.Cells.[idx grid row col] <- cell
+    match inBounds grid row col with
+    | true -> grid.Cells.[idx grid row col] <- cell
+    | false -> ()
 
   /// Unchecked set — caller must guarantee row/col are in bounds.
   let inline setUnsafe (grid: CellGrid) row col (cell: Cell) =
     grid.Cells.[row * grid.Cols + col] <- cell
 
   let get (grid: CellGrid) row col =
-    if inBounds grid row col then grid.Cells.[idx grid row col]
-    else Cell.empty
+    match inBounds grid row col with
+    | true -> grid.Cells.[idx grid row col]
+    | false -> Cell.empty
 
   let clear (grid: CellGrid) =
     Array.Fill(grid.Cells, Cell.empty)
@@ -111,8 +113,9 @@ module CellGrid =
     let maxCol = grid.Cols
     let mutable c = col
     for i in 0 .. s.Length - 1 do
-      if c >= 0 && c < maxCol && row >= 0 && row < grid.Rows then
-        grid.Cells.[row * maxCol + c] <- { Char = s.[i]; Fg = fg; Bg = bg; Attrs = attrs }
+      match c >= 0 && c < maxCol && row >= 0 && row < grid.Rows with
+      | true -> grid.Cells.[row * maxCol + c] <- { Char = s.[i]; Fg = fg; Bg = bg; Attrs = attrs }
+      | false -> ()
       c <- c + 1
 
   let fillRect (grid: CellGrid) (r: Rect) (cell: Cell) =
@@ -123,9 +126,11 @@ module CellGrid =
     let startCol = max 0 r.Col
     let endCol = min gridCols (r.Col + r.Width)
     let fillWidth = endCol - startCol
-    if fillWidth > 0 then
+    match fillWidth > 0 with
+    | true ->
       for row in startRow .. endRow - 1 do
         Array.Fill(grid.Cells, cell, row * gridCols + startCol, fillWidth)
+    | false -> ()
 
   let toText (grid: CellGrid) : string =
     let sb = System.Text.StringBuilder(grid.Rows * (grid.Cols + 2))
@@ -133,8 +138,9 @@ module CellGrid =
       let rowBase = row * grid.Cols
       for col in 0 .. grid.Cols - 1 do
         sb.Append(grid.Cells.[rowBase + col].Char) |> ignore
-      if row < grid.Rows - 1 then
-        sb.Append("\r\n") |> ignore
+      match row < grid.Rows - 1 with
+      | true -> sb.Append("\r\n") |> ignore
+      | false -> ()
     sb.ToString()
 
   let toTextTrimmed (grid: CellGrid) : string =
@@ -143,12 +149,14 @@ module CellGrid =
       let rowBase = row * grid.Cols
       let mutable lastNonSpace = -1
       for col in 0 .. grid.Cols - 1 do
-        if grid.Cells.[rowBase + col].Char <> ' ' then
-          lastNonSpace <- col
+        match grid.Cells.[rowBase + col].Char <> ' ' with
+        | true -> lastNonSpace <- col
+        | false -> ()
       for col in 0 .. lastNonSpace do
         sb.Append(grid.Cells.[rowBase + col].Char) |> ignore
-      if row < grid.Rows - 1 then
-        sb.Append("\r\n") |> ignore
+      match row < grid.Rows - 1 with
+      | true -> sb.Append("\r\n") |> ignore
+      | false -> ()
     sb.ToString()
 
   /// Extract text from a rectangular selection range (inclusive).
@@ -163,12 +171,14 @@ module CellGrid =
       let rowBase = row * grid.Cols
       let mutable lastNonSpace = sc - 1
       for col in sc .. ec do
-        if grid.Cells.[rowBase + col].Char <> ' ' then
-          lastNonSpace <- col
+        match grid.Cells.[rowBase + col].Char <> ' ' with
+        | true -> lastNonSpace <- col
+        | false -> ()
       for col in sc .. lastNonSpace do
         sb.Append(grid.Cells.[rowBase + col].Char) |> ignore
-      if row < er then
-        sb.Append("\r\n") |> ignore
+      match row < er with
+      | true -> sb.Append("\r\n") |> ignore
+      | false -> ()
     sb.ToString()
 
 /// Double-buffered grid pair — swap instead of clone each frame. Zero per-frame allocation.

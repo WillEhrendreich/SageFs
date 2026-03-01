@@ -117,8 +117,9 @@ module WorkerProtocol =
     let toDomain (ws: WorkerSymbolRef) : Features.LiveTesting.SymbolReference =
       { SymbolFullName = ws.SymbolFullName
         UseKind =
-          if ws.IsFromDefinition then Features.LiveTesting.SymbolUseKind.Definition
-          else Features.LiveTesting.SymbolUseKind.Reference
+          match ws.IsFromDefinition with
+          | true -> Features.LiveTesting.SymbolUseKind.Definition
+          | false -> Features.LiveTesting.SymbolUseKind.Reference
         UsedInTestId = None
         FilePath = ws.FilePath
         Line = ws.Line }
@@ -161,25 +162,29 @@ module WorkerProtocol =
     /// Walk up from dir looking for .git directory.
     let findGitRoot (startDir: string) : string option =
       let rec walk (dir: string) =
-        if Directory.Exists(Path.Combine(dir, ".git")) then Some dir
-        else
+        match Directory.Exists(Path.Combine(dir, ".git")) with
+        | true -> Some dir
+        | false ->
           let parent = Path.GetDirectoryName dir
-          if isNull parent || parent = dir then None
-          else walk parent
+          match isNull parent || parent = dir with
+          | true -> None
+          | false -> walk parent
       walk startDir
 
     let findSolutionRoot (workingDir: string) =
       let rec walk (dir: string) =
         let parent = Path.GetDirectoryName dir
-        if isNull parent || parent = dir then None
-        else
+        match isNull parent || parent = dir with
+        | true -> None
+        | false ->
           let hasSln =
             Directory.GetFiles(dir, "*.sln")
             |> Array.append (Directory.GetFiles(dir, "*.slnx"))
             |> Array.isEmpty
             |> not
-          if hasSln then Some dir
-          else walk parent
+          match hasSln with
+          | true -> Some dir
+          | false -> walk parent
       walk workingDir
 
     let displayName (info: SessionInfo) =

@@ -33,10 +33,9 @@ module SessionOperations =
     : Result<SessionResolution, SageFsError> =
     match requestedId with
     | Some id ->
-      if sessions |> List.exists (fun s -> s.Id = id) then
-        Result.Ok (SessionResolution.Resolved id)
-      else
-        Result.Error (SageFsError.SessionNotFound id)
+      match sessions |> List.exists (fun s -> s.Id = id) with
+      | true -> Result.Ok (SessionResolution.Resolved id)
+      | false -> Result.Error (SageFsError.SessionNotFound id)
     | None ->
       match sessions with
       | [] ->
@@ -77,8 +76,9 @@ module SessionOperations =
     /// Classify an agent name as Worker or Observer.
     /// MCP agents (prefixed "mcp" or "agent-") are workers; everything else is an observer.
     let classify (agentName: string) =
-      if agentName.StartsWith("mcp", System.StringComparison.Ordinal) || agentName.StartsWith("agent-", System.StringComparison.Ordinal) then OccupantRole.Worker
-      else OccupantRole.Observer
+      match agentName.StartsWith("mcp", System.StringComparison.Ordinal) || agentName.StartsWith("agent-", System.StringComparison.Ordinal) with
+      | true -> OccupantRole.Worker
+      | false -> OccupantRole.Observer
 
     let label = function OccupantRole.Worker -> "worker" | OccupantRole.Observer -> "observer"
 
@@ -107,11 +107,15 @@ module SessionOperations =
         let workers = occs |> List.filter (fun o -> o.Role = OccupantRole.Worker)
         let observers = occs |> List.filter (fun o -> o.Role = OccupantRole.Observer)
         let parts = [
-          if not workers.IsEmpty then
+          match workers.IsEmpty with
+          | false ->
             let names = workers |> List.map (fun o -> o.AgentName) |> String.concat ", "
             sprintf "%d worker(s): %s" workers.Length names
-          if not observers.IsEmpty then
+          | true -> ()
+          match observers.IsEmpty with
+          | false ->
             sprintf "%d observer(s)" observers.Length
+          | true -> ()
         ]
         parts |> String.concat " | "
 
@@ -126,10 +130,15 @@ module SessionOperations =
   /// Human-readable relative time (e.g. "5 min ago", "just now").
   let formatRelativeTime (now: DateTime) (past: DateTime) : string =
     let diff = now - past
-    if diff.TotalSeconds < 60.0 then "just now"
-    elif diff.TotalMinutes < 60.0 then sprintf "%d min ago" (int diff.TotalMinutes)
-    elif diff.TotalHours < 24.0 then sprintf "%d hr ago" (int diff.TotalHours)
-    else sprintf "%d days ago" (int diff.TotalDays)
+    match diff.TotalSeconds < 60.0 with
+    | true -> "just now"
+    | false ->
+      match diff.TotalMinutes < 60.0 with
+      | true -> sprintf "%d min ago" (int diff.TotalMinutes)
+      | false ->
+        match diff.TotalHours < 24.0 with
+        | true -> sprintf "%d hr ago" (int diff.TotalHours)
+        | false -> sprintf "%d days ago" (int diff.TotalDays)
 
   /// Format a single session for display, with optional occupancy info.
   let formatSessionInfo (now: DateTime) (occupancy: SessionOccupancy list option) (info: SessionInfo) : string =

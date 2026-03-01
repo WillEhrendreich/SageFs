@@ -37,8 +37,9 @@ module SyntaxHighlight =
         let asm = Assembly.GetExecutingAssembly()
         let queryText =
           use stream = asm.GetManifestResourceStream("highlights.scm")
-          if isNull stream then
-            failwith "highlights.scm embedded resource not found"
+          match isNull stream with
+          | true -> failwith "highlights.scm embedded resource not found"
+          | false -> ()
           use reader = new StreamReader(stream)
           reader.ReadToEnd()
 
@@ -55,8 +56,9 @@ module SyntaxHighlight =
   /// Tokenize F# code into per-line color spans using tree-sitter.
   /// Returns an array of arrays: one ColorSpan array per line.
   let tokenize (theme: ThemeConfig) (code: string) : ColorSpan array array =
-    if String.IsNullOrEmpty code then [||]
-    else
+    match String.IsNullOrEmpty code with
+    | true -> [||]
+    | false ->
       let key = String.Concat(code, "\x00", theme.SynKeyword)
       cache.GetOrAdd(key, fun _ ->
         match resources.Value with
@@ -84,19 +86,26 @@ module SyntaxHighlight =
             let endRow = int node.EndPosition.Row
             let endCol = int node.EndPosition.Column
 
-            if startRow = endRow then
+            match startRow = endRow with
+            | true ->
               // Single-line capture
-              if startRow < spanLists.Length then
+              match startRow < spanLists.Length with
+              | true ->
                 spanLists.[startRow].Add({ Start = startCol; Length = endCol - startCol; Fg = fg })
-            else
+              | false -> ()
+            | false ->
               // Multi-line capture — split across lines
-              if startRow < spanLists.Length then
+              match startRow < spanLists.Length with
+              | true ->
                 let firstLineLen = lines.[startRow].Length - startCol
                 spanLists.[startRow].Add({ Start = startCol; Length = max 0 firstLineLen; Fg = fg })
+              | false -> ()
               for row in (startRow + 1) .. (min (endRow - 1) (spanLists.Length - 1)) do
                 spanLists.[row].Add({ Start = 0; Length = lines.[row].Length; Fg = fg })
-              if endRow < spanLists.Length then
+              match endRow < spanLists.Length with
+              | true ->
                 spanLists.[endRow].Add({ Start = 0; Length = endCol; Fg = fg })
+              | false -> ()
 
           // Sort spans by start position per line and convert to arrays
           spanLists

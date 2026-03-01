@@ -93,8 +93,9 @@ type CompletionItem = {
 
 let scoreCandidate (enteredWord: string) (candidate: string) =
   seq {
-    if candidate.StartsWith(enteredWord, System.StringComparison.Ordinal) then
-      yield 200
+    match candidate.StartsWith(enteredWord, System.StringComparison.Ordinal) with
+    | true -> yield 200
+    | false -> ()
 
     yield Fuzz.Ratio(enteredWord, candidate)
     yield int (100.0 / (float candidate.Length + 1.0))
@@ -147,7 +148,8 @@ module DirectiveCompletions =
     entry.Substring(i)
 
   let commandCompletions (text: string) carret (wordToReplace: string) =
-    if not (text.Contains(' ')) then
+    match text.Contains(' ') with
+    | false ->
       directives
       |> Seq.map (fun keyword -> {
         CompletionItem.DisplayText = keyword
@@ -155,7 +157,7 @@ module DirectiveCompletions =
         Kind = CompletionKind.Keyword
         GetDescription = None
       })
-    else
+    | true ->
       let currentWord =
         let textList = text |> Seq.toList
 
@@ -173,12 +175,14 @@ module DirectiveCompletions =
         || text.StartsWith("#open", System.StringComparison.Ordinal)
         || text.StartsWith(":open", System.StringComparison.Ordinal)
 
-      if isDirectory then
+      match isDirectory with
+      | true ->
         let currentDir =
           [| Directory.GetCurrentDirectory(); Path.GetDirectoryName currentWord |]
           |> Path.Combine
 
-        if Directory.Exists currentDir then
+        match Directory.Exists currentDir with
+        | true ->
           Directory.EnumerateFiles currentDir
           |> Seq.append (Directory.EnumerateDirectories currentDir |> Seq.map (fun d -> d + "/"))
           |> Seq.map (fun e -> Path.GetRelativePath(currentDir, e))
@@ -186,12 +190,12 @@ module DirectiveCompletions =
           |> Seq.map (fun fsEntry -> {
             CompletionItem.DisplayText = fsEntry
             ReplacementText = fsEntry
-            Kind = if fsEntry.EndsWith("/", System.StringComparison.Ordinal) then CompletionKind.Folder else CompletionKind.File
+            Kind = match fsEntry.EndsWith("/", System.StringComparison.Ordinal) with | true -> CompletionKind.Folder | false -> CompletionKind.File
             GetDescription = None
           })
-        else
+        | false ->
           []
-      else
+      | false ->
         []
 
 let getCompletions session text carret word =

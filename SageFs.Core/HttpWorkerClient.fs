@@ -107,20 +107,29 @@ module HttpWorkerClient =
         let mutable isCoverageEvent = false
         while keepReading do
           let! line = reader.ReadLineAsync() |> Async.AwaitTask
-          if isNull line then
-            keepReading <- false
-          elif line.StartsWith("event: done") then
-            keepReading <- false
-          elif line.StartsWith("event: coverage") then
-            isCoverageEvent <- true
-          elif line.StartsWith("data: ") then
-            let json = line.Substring(6)
-            if isCoverageEvent then
-              isCoverageEvent <- false
-              // Coverage data is ignored here — collected via separate proxy
-            elif json <> "{}" then
-              let result = Serialization.deserialize<Features.LiveTesting.TestRunResult> json
-              onResult result
+          match isNull line with
+          | true -> keepReading <- false
+          | false ->
+            match line.StartsWith("event: done") with
+            | true -> keepReading <- false
+            | false ->
+              match line.StartsWith("event: coverage") with
+              | true -> isCoverageEvent <- true
+              | false ->
+                match line.StartsWith("data: ") with
+                | true ->
+                  let json = line.Substring(6)
+                  match isCoverageEvent with
+                  | true ->
+                    isCoverageEvent <- false
+                    // Coverage data is ignored here — collected via separate proxy
+                  | false ->
+                    match json <> "{}" with
+                    | true ->
+                      let result = Serialization.deserialize<Features.LiveTesting.TestRunResult> json
+                      onResult result
+                    | false -> ()
+                | false -> ()
       }
 
   /// Streaming test proxy that also collects IL coverage hits.
@@ -144,23 +153,32 @@ module HttpWorkerClient =
         let mutable isCoverageEvent = false
         while keepReading do
           let! line = reader.ReadLineAsync() |> Async.AwaitTask
-          if isNull line then
-            keepReading <- false
-          elif line.StartsWith("event: done") then
-            keepReading <- false
-          elif line.StartsWith("event: coverage") then
-            isCoverageEvent <- true
-          elif line.StartsWith("data: ") then
-            let json = line.Substring(6)
-            if isCoverageEvent then
-              isCoverageEvent <- false
-              try
-                let doc = System.Text.Json.JsonDocument.Parse(json)
-                let hitsArr = doc.RootElement.GetProperty("hits")
-                let hits = [| for i in 0 .. hitsArr.GetArrayLength() - 1 -> hitsArr.[i].GetBoolean() |]
-                onCoverage hits
-              with _ -> ()
-            elif json <> "{}" then
-              let result = Serialization.deserialize<Features.LiveTesting.TestRunResult> json
-              onResult result
+          match isNull line with
+          | true -> keepReading <- false
+          | false ->
+            match line.StartsWith("event: done") with
+            | true -> keepReading <- false
+            | false ->
+              match line.StartsWith("event: coverage") with
+              | true -> isCoverageEvent <- true
+              | false ->
+                match line.StartsWith("data: ") with
+                | true ->
+                  let json = line.Substring(6)
+                  match isCoverageEvent with
+                  | true ->
+                    isCoverageEvent <- false
+                    try
+                      let doc = System.Text.Json.JsonDocument.Parse(json)
+                      let hitsArr = doc.RootElement.GetProperty("hits")
+                      let hits = [| for i in 0 .. hitsArr.GetArrayLength() - 1 -> hitsArr.[i].GetBoolean() |]
+                      onCoverage hits
+                    with _ -> ()
+                  | false ->
+                    match json <> "{}" with
+                    | true ->
+                      let result = Serialization.deserialize<Features.LiveTesting.TestRunResult> json
+                      onResult result
+                    | false -> ()
+                | false -> ()
       }
