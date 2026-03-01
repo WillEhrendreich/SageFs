@@ -37,8 +37,9 @@ let syntaxColorLookup =
 /// Save theme preferences to ~/.SageFs/themes.json
 let saveThemes (sageFsDir: string) (themes: Collections.Concurrent.ConcurrentDictionary<string, string>) =
   try
-    if not (Directory.Exists sageFsDir) then
-      Directory.CreateDirectory sageFsDir |> ignore
+    match Directory.Exists sageFsDir with
+    | false -> Directory.CreateDirectory sageFsDir |> ignore
+    | true -> ()
     let path = Path.Combine(sageFsDir, "themes.json")
     let dict = themes |> Seq.map (fun kv -> kv.Key, kv.Value) |> dict
     let json = Text.Json.JsonSerializer.Serialize(dict, Text.Json.JsonSerializerOptions(WriteIndented = true))
@@ -50,12 +51,16 @@ let loadThemes (sageFsDir: string) : Collections.Concurrent.ConcurrentDictionary
   let result = Collections.Concurrent.ConcurrentDictionary<string, string>()
   try
     let path = Path.Combine(sageFsDir, "themes.json")
-    if File.Exists(path) then
+    match File.Exists(path) with
+    | true ->
       let json = File.ReadAllText(path)
       let dict = Text.Json.JsonSerializer.Deserialize<Collections.Generic.Dictionary<string, string>>(json)
-      if not (isNull dict) then
+      match isNull dict with
+      | false ->
         for kv in dict do
           result.[kv.Key] <- kv.Value
+      | true -> ()
+    | false -> ()
   with _ -> ()
   result
 
@@ -194,7 +199,7 @@ let renderThemePicker (selectedTheme: string) =
     [ Attr.id "theme-picker"; Attr.class' "theme-select" ]
     (ThemePresets.all |> List.map (fun (name, _) ->
       Elem.option
-        ([ Attr.value name ] @ (if name = selectedTheme then [ Attr.create "selected" "selected" ] else []))
+        ([ Attr.value name ] @ (match name = selectedTheme with | true -> [ Attr.create "selected" "selected" ] | false -> []))
         [ Text.raw name ]))
 
 /// Render the dashboard HTML shell.
@@ -620,12 +625,13 @@ let renderShell (version: string) =
 /// Render session status as an HTML fragment for Datastar morphing.
 let renderSessionStatus (sessionState: string) (sessionId: string) (workingDir: string) (warmupProgress: string) =
   let warmupNode =
-    if warmupProgress.Length > 0 then
+    match warmupProgress.Length > 0 with
+    | true ->
       [ Elem.br []
         Elem.span [ Attr.class' "meta warmup-progress" ] [
           Text.raw (sprintf "⏳ %s" warmupProgress)
         ] ]
-    else []
+    | false -> []
   match sessionState with
   | "Ready" ->
     Elem.div [ Attr.id "session-status"; Attr.create "data-working-dir" workingDir ] [
@@ -677,19 +683,23 @@ let captureToCssClass (capture: string) =
 
 /// Render a single line of code with syntax highlighting as HTML spans.
 let renderHighlightedLine (spans: ColorSpan array) (line: string) : XmlNode list =
-  if spans.Length = 0 || line.Length = 0 then [ Text.raw (System.Net.WebUtility.HtmlEncode line) ]
-  else
+  match spans.Length = 0 || line.Length = 0 with
+  | true -> [ Text.raw (System.Net.WebUtility.HtmlEncode line) ]
+  | false ->
     let nodes = ResizeArray<XmlNode>()
     let mutable pos = 0
     for span in spans do
-      // Skip overlapping spans (tree-sitter may produce multiple captures for same position)
-      if span.Start < pos then () else
-      if span.Start > pos && pos < line.Length then
-        // Unhighlighted gap
+      match span.Start < pos with
+      | true -> ()
+      | false ->
+      match span.Start > pos && pos < line.Length with
+      | true ->
         let gapEnd = min span.Start line.Length
         nodes.Add(Text.raw (System.Net.WebUtility.HtmlEncode(line.Substring(pos, gapEnd - pos))))
         pos <- gapEnd
-      if span.Start >= 0 && span.Start < line.Length then
+      | false -> ()
+      match span.Start >= 0 && span.Start < line.Length with
+      | true ->
         let end' = min (span.Start + span.Length) line.Length
         let text = line.Substring(span.Start, end' - span.Start)
         // Map fg packed RGB to a CSS class using precomputed lookup table
@@ -697,22 +707,26 @@ let renderHighlightedLine (spans: ColorSpan array) (line: string) : XmlNode list
           match syntaxColorLookup.TryGetValue(span.Fg) with
           | true, cls -> cls
           | false, _ -> ""
-        if cssClass <> "" then
+        match cssClass <> "" with
+        | true ->
           nodes.Add(Elem.span [ Attr.class' cssClass ] [ Text.raw (System.Net.WebUtility.HtmlEncode text) ])
-        else
+        | false ->
           nodes.Add(Text.raw (System.Net.WebUtility.HtmlEncode text))
         pos <- end'
-    // Remaining unhighlighted text
-    if pos < line.Length then
+      | false -> ()
+    match pos < line.Length with
+    | true ->
       nodes.Add(Text.raw (System.Net.WebUtility.HtmlEncode(line.Substring(pos))))
+    | false -> ()
     nodes |> Seq.toList
 
 /// Render output lines as an HTML fragment.
 let renderOutput (lines: OutputLine list) =
   Elem.div [ Attr.id "output-panel" ] [
-    if lines.IsEmpty then
+    match lines.IsEmpty with
+    | true ->
       Elem.span [ Attr.class' "meta" ] [ Text.raw "No output yet" ]
-    else
+    | false ->
       yield! lines |> List.map (fun line ->
         let css = OutputLineKind.toCssClass line.Kind
         Elem.div [ Attr.class' (sprintf "output-line %s" css) ] [
@@ -722,14 +736,13 @@ let renderOutput (lines: OutputLine list) =
               Text.raw t
             ]
           | None -> ()
-          // Apply syntax highlighting to result/info lines (F# code output)
-          if (line.Kind = ResultLine || line.Kind = InfoLine) && SyntaxHighlight.isAvailable () then
+          match (line.Kind = ResultLine || line.Kind = InfoLine) && SyntaxHighlight.isAvailable () with
+          | true ->
             let allSpans = SyntaxHighlight.tokenize Theme.defaults line.Text
-            if allSpans.Length > 0 then
-              yield! renderHighlightedLine allSpans.[0] line.Text
-            else
-              Text.raw (System.Net.WebUtility.HtmlEncode line.Text)
-          else
+            match allSpans.Length > 0 with
+            | true -> yield! renderHighlightedLine allSpans.[0] line.Text
+            | false -> Text.raw (System.Net.WebUtility.HtmlEncode line.Text)
+          | false ->
             Text.raw (System.Net.WebUtility.HtmlEncode line.Text)
         ])
   ]
@@ -737,19 +750,22 @@ let renderOutput (lines: OutputLine list) =
 /// Render diagnostics as an HTML fragment.
 let renderDiagnostics (diags: Diagnostic list) =
   Elem.div [ Attr.id "diagnostics-panel"; Attr.class' "log-box" ] [
-    if diags.IsEmpty then
+    match diags.IsEmpty with
+    | true ->
       Elem.span [ Attr.class' "meta" ] [ Text.raw "No diagnostics" ]
-    else
+    | false ->
       yield! diags |> List.map (fun diag ->
         let cls = DiagSeverity.toCssClass diag.Severity
         Elem.div [ Attr.class' (sprintf "diag %s" cls) ] [
           Elem.span [ Attr.style "margin-right: 0.25rem;" ] [
             Text.raw (DiagSeverity.toIcon diag.Severity)
           ]
-          if diag.Line > 0 || diag.Col > 0 then
+          match diag.Line > 0 || diag.Col > 0 with
+          | true ->
             Elem.span [ Attr.class' "diag-location" ] [
               Text.raw (sprintf "L%d:%d" diag.Line diag.Col)
             ]
+          | false -> ()
           Elem.span [] [
             Text.raw (sprintf " %s" diag.Message)
           ]
@@ -773,8 +789,9 @@ let parseSessionLines (content: string) =
   let sessionRegex = Regex(@"^([> ])\s+(\S+)\s*\[([^\]]+)\](\s*\*)?(\s*\([^)]*\))?(\s*evals:\d+)?(\s*up:(?:just now|\S+))?(\s*dir:\S.*?)?(\s*last:.+)?$")
   let extractTag (prefix: string) (value: string) =
     let v = value.Trim()
-    if v.StartsWith(prefix, System.StringComparison.Ordinal) then v.Substring(prefix.Length).Trim()
-    else ""
+    match v.StartsWith(prefix, System.StringComparison.Ordinal) with
+    | true -> v.Substring(prefix.Length).Trim()
+    | false -> ""
   content.Split('\n')
   |> Array.filter (fun (l: string) ->
     l.Length > 0
@@ -785,7 +802,8 @@ let parseSessionLines (content: string) =
     && not (l.Contains("Ctrl+Tab cycle")))
   |> Array.map (fun (l: string) ->
     let m = sessionRegex.Match(l)
-    if m.Success then
+    match m.Success with
+    | true ->
       let evalsMatch = Regex.Match(m.Groups.[6].Value, @"evals:(\d+)")
       { Id = m.Groups.[2].Value
         Status = m.Groups.[3].Value
@@ -793,11 +811,11 @@ let parseSessionLines (content: string) =
         IsActive = m.Groups.[4].Value.Contains("*")
         IsSelected = m.Groups.[1].Value = ">"
         ProjectsText = m.Groups.[5].Value.Trim()
-        EvalCount = if evalsMatch.Success then int evalsMatch.Groups.[1].Value else 0
+        EvalCount = match evalsMatch.Success with | true -> int evalsMatch.Groups.[1].Value | false -> 0
         Uptime = extractTag "up:" m.Groups.[7].Value
         WorkingDir = extractTag "dir:" m.Groups.[8].Value
         LastActivity = extractTag "last:" m.Groups.[9].Value }
-    else
+    | false ->
       { Id = l.Trim()
         Status = "unknown"
         StatusMessage = None
@@ -913,8 +931,8 @@ let renderSessionPicker (previous: PreviousSession list) =
           ]
         ]
       ]
-      // Previous sessions list
-      if not previous.IsEmpty then
+      match previous.IsEmpty with
+      | false ->
         Elem.div [ Attr.class' "picker-previous" ] [
           Elem.h3 [ Attr.style "color: var(--fg-blue); margin-bottom: 0.5rem;" ] [
             Text.raw "📋 Resume Previous"
@@ -925,9 +943,12 @@ let renderSessionPicker (previous: PreviousSession list) =
           yield! previous |> List.map (fun s ->
             let age =
               let span = DateTime.UtcNow - s.LastSeen
-              if span.TotalDays >= 1.0 then sprintf "%.0fd ago" span.TotalDays
-              elif span.TotalHours >= 1.0 then sprintf "%.0fh ago" span.TotalHours
-              else sprintf "%.0fm ago" span.TotalMinutes
+              match span.TotalDays >= 1.0 with
+              | true -> sprintf "%.0fd ago" span.TotalDays
+              | false ->
+                match span.TotalHours >= 1.0 with
+                | true -> sprintf "%.0fh ago" span.TotalHours
+                | false -> sprintf "%.0fm ago" span.TotalMinutes
             Elem.div
               [ Attr.class' "picker-session-row"
                 Ds.onClick (Ds.post (sprintf "/dashboard/session/resume/%s" s.Id)) ]
@@ -936,22 +957,27 @@ let renderSessionPicker (previous: PreviousSession list) =
                     Elem.span [ Attr.style "font-weight: bold;" ] [ Text.raw s.Id ]
                     Elem.span [ Attr.class' "meta" ] [ Text.raw age ]
                   ]
-                  if s.WorkingDir.Length > 0 then
+                  match s.WorkingDir.Length > 0 with
+                  | true ->
                     Elem.div
                       [ Attr.style "font-size: 0.75rem; color: var(--fg-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
                         Attr.title s.WorkingDir ]
                       [ Text.raw (sprintf "📁 %s" s.WorkingDir) ]
-                  if not s.Projects.IsEmpty then
+                  | false -> ()
+                  match s.Projects.IsEmpty with
+                  | false ->
                     Elem.div [ Attr.style "display: flex; gap: 4px; margin-top: 2px; flex-wrap: wrap;" ] [
                       yield! s.Projects |> List.map (fun p ->
                         Elem.span
                           [ Attr.style "font-size: 0.65rem; padding: 1px 5px; border-radius: 3px; background: var(--bg-highlight); color: var(--fg-dim);" ]
                           [ Text.raw (Path.GetFileName p) ])
                     ]
+                  | true -> ()
                 ]
                 Elem.span [ Attr.style "color: var(--fg-blue); font-size: 0.85rem;" ] [ Text.raw "▶" ]
               ])
         ]
+      | true -> ()
     ]
   ]
 
@@ -962,13 +988,16 @@ let renderSessionPickerEmpty =
 /// Render sessions as an HTML fragment with action buttons.
 let renderSessions (sessions: ParsedSession list) (creating: bool) (standbyLabel: string) =
   Elem.div [ Attr.id "sessions-panel" ] [
-    if creating then
+    match creating with
+    | true ->
       Elem.div
         [ Attr.style "padding: 8px; text-align: center; color: var(--accent); font-size: 0.85rem;" ]
         [ Text.raw "⏳ Creating session..." ]
-    if sessions.IsEmpty && not creating then
+    | false -> ()
+    match sessions.IsEmpty && not creating with
+    | true ->
       Text.raw "No sessions"
-    else
+    | false ->
       yield! sessions |> List.mapi (fun i (s: ParsedSession) ->
         let statusClass =
           match s.Status with
@@ -976,9 +1005,10 @@ let renderSessions (sessions: ParsedSession list) (creating: bool) (standbyLabel
           | "starting" | "restarting" -> "status-warming"
           | _ -> "status-faulted"
         let cls =
-          if s.IsSelected then "session-selected"
-          elif s.IsActive then "output-result"
-          else ""
+          match s.IsSelected, s.IsActive with
+          | true, _ -> "session-selected"
+          | false, true -> "output-result"
+          | false, false -> ""
         Elem.div
           [ Attr.class' (sprintf "session-row %s" cls)
             Attr.style "display: flex; align-items: center; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid var(--border); cursor: pointer;"
@@ -998,23 +1028,29 @@ let renderSessions (sessions: ParsedSession list) (creating: bool) (standbyLabel
                     [ Attr.style "font-size: 0.65rem; color: var(--fg-yellow); font-style: italic;" ]
                     [ Text.raw (sprintf "⏳ %s" msg) ]
                 | None -> ()
-                if s.IsActive then
+                match s.IsActive with
+                | true ->
                   Elem.span [ Attr.style "color: var(--green);" ] [ Text.raw "● active" ]
-                if s.Uptime.Length > 0 then
+                | false -> ()
+                match s.Uptime.Length > 0 with
+                | true ->
                   Elem.span [ Attr.class' "meta"; Attr.style "margin-left: auto;" ] [
                     Text.raw (sprintf "⏱ %s" s.Uptime)
                   ]
+                | false -> ()
               ]
               // Row 2: working directory
-              if s.WorkingDir.Length > 0 then
+              match s.WorkingDir.Length > 0 with
+              | true ->
                 Elem.div
                   [ Attr.style "font-size: 0.75rem; color: var(--fg-dim); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
                     Attr.title s.WorkingDir ]
                   [ Text.raw (sprintf "📁 %s" s.WorkingDir) ]
+              | false -> ()
               // Row 3: projects as tags + evals + last activity
               Elem.div [ Attr.style "display: flex; align-items: center; gap: 0.5rem; margin-top: 2px; flex-wrap: wrap;" ] [
-                if s.ProjectsText.Length > 0 then
-                  // Parse project names from "(Proj1, Proj2)" format and render as tags
+                match s.ProjectsText.Length > 0 with
+                | true ->
                   let projNames =
                     s.ProjectsText.Trim('(', ')')
                       .Split(',')
@@ -1024,22 +1060,29 @@ let renderSessions (sessions: ParsedSession list) (creating: bool) (standbyLabel
                     Elem.span
                       [ Attr.style "font-size: 0.65rem; padding: 1px 5px; border-radius: 3px; background: var(--bg-highlight); color: var(--fg-dim);" ]
                       [ Text.raw pName ])
-                if s.EvalCount > 0 then
+                | false -> ()
+                match s.EvalCount > 0 with
+                | true ->
                   Elem.span [ Attr.class' "meta" ] [
                     Text.raw (sprintf "evals: %d" s.EvalCount)
                   ]
-                if s.LastActivity.Length > 0 then
+                | false -> ()
+                match s.LastActivity.Length > 0 with
+                | true ->
                   Elem.span [ Attr.class' "meta"; Attr.style "margin-left: auto;" ] [
                     Text.raw (sprintf "last: %s" s.LastActivity)
                   ]
+                | false -> ()
               ]
             ]
             Elem.div [ Attr.style "display: flex; gap: 4px; margin-left: 8px;" ] [
-              if not s.IsActive then
+              match s.IsActive with
+              | false ->
                 Elem.button
                   [ Attr.class' "session-btn"
                     Ds.onClick (Ds.post (sprintf "/dashboard/session/switch/%s" s.Id)) ]
                   [ Text.raw "⇄" ]
+              | true -> ()
               Elem.button
                 [ Attr.class' "session-btn session-btn-danger"
                   Ds.onClick (Ds.post (sprintf "/dashboard/session/stop/%s" s.Id)) ]
@@ -1051,22 +1094,27 @@ let renderSessions (sessions: ParsedSession list) (creating: bool) (standbyLabel
       [
         Elem.span [] [
           Text.raw "⇄ switch · ■ stop · X stop others"
-          if standbyLabel.Length > 0 then
+          match standbyLabel.Length > 0 with
+          | true ->
             let color =
-              if standbyLabel.Contains "✓" then "var(--green)"
-              elif standbyLabel.Contains "⏳" then "var(--fg-yellow)"
-              elif standbyLabel.Contains "⚠" then "var(--red)"
-              else "var(--fg-dim)"
+              match standbyLabel with
+              | s when s.Contains "✓" -> "var(--green)"
+              | s when s.Contains "⏳" -> "var(--fg-yellow)"
+              | s when s.Contains "⚠" -> "var(--red)"
+              | _ -> "var(--fg-dim)"
             Elem.span
               [ Attr.style (sprintf " · font-size: 0.65rem; color: %s;" color) ]
               [ Text.raw (sprintf " · %s" standbyLabel) ]
+          | false -> ()
         ]
-        if sessions.Length > 1 then
+        match sessions.Length > 1 with
+        | true ->
           Elem.button
             [ Attr.class' "session-btn session-btn-danger"
               Attr.style "font-size: 0.65rem; padding: 1px 6px;"
               Ds.onClick (Ds.post "/dashboard/session/stop-others") ]
             [ Text.raw "■ stop others" ]
+        | false -> ()
       ]
   ]
 
@@ -1077,17 +1125,19 @@ let parseOutputLines (content: string) : OutputLine list =
   |> Array.filter (fun (l: string) -> l.Length > 0)
   |> Array.map (fun (l: string) ->
     let m = tsKindRegex.Match(l)
-    if m.Success then
+    match m.Success with
+    | true ->
       { Timestamp = Some m.Groups.[1].Value
         Kind = OutputLineKind.fromString m.Groups.[2].Value
         Text = m.Groups.[3].Value }
-    else
+    | false ->
       let m2 = kindOnlyRegex.Match(l)
-      if m2.Success then
+      match m2.Success with
+      | true ->
         { Timestamp = None
           Kind = OutputLineKind.fromString m2.Groups.[1].Value
           Text = m2.Groups.[2].Value }
-      else
+      | false ->
         { Timestamp = None; Kind = ResultLine; Text = l })
   |> Array.toList
 
@@ -1097,13 +1147,14 @@ let parseDiagLines (content: string) : Diagnostic list =
   |> Array.filter (fun (l: string) -> l.Length > 0)
   |> Array.map (fun (l: string) ->
     let m = diagRegex.Match(l)
-    if m.Success then
+    match m.Success with
+    | true ->
       { Severity = DiagSeverity.fromString m.Groups.[1].Value
         Message = m.Groups.[4].Value
         Line = int m.Groups.[2].Value
         Col = int m.Groups.[3].Value }
-    else
-      { Severity = if l.Contains("[error]") then DiagError else DiagWarning
+    | false ->
+      { Severity = match l.Contains("[error]") with | true -> DiagError | false -> DiagWarning
         Message = l
         Line = 0
         Col = 0 })
@@ -1151,14 +1202,17 @@ let pushRegions
       | Some html -> do! ssePatchNode ctx html
       | None -> ()
       // When sessions region is pushed, also push picker visibility
-      if region.Id = "sessions" then
+      match region.Id = "sessions" with
+      | true ->
         let sessions = parseSessionLines region.Content
         let creating = isCreatingSession region.Content
-        if sessions.IsEmpty && not creating then
+        match sessions.IsEmpty && not creating with
+        | true ->
           let! previous = getPreviousSessions ()
           do! ssePatchNode ctx (renderSessionPicker previous)
-        else
+        | false ->
           do! ssePatchNode ctx renderSessionPickerEmpty
+      | false -> ()
   }
 
 /// Decides whether a theme push is needed after a state change.
@@ -1175,14 +1229,16 @@ let resolveThemePush
     currentSessionId.Length > 0 && currentSessionId <> previousSessionId
   let workingDirChanged =
     currentWorkingDir.Length > 0 && currentWorkingDir <> previousWorkingDir
-  if sessionChanged || workingDirChanged then
-    if currentWorkingDir.Length > 0 then
+  match sessionChanged || workingDirChanged with
+  | true ->
+    match currentWorkingDir.Length > 0 with
+    | true ->
       match themes.TryGetValue(currentWorkingDir) with
       | true, n -> Some n
       | false, _ -> Some defaultThemeName
-    else
+    | false ->
       Some defaultThemeName
-  else
+  | false ->
     None
 
 /// Render the hot-reload panel with a file list grouped by directory.
@@ -1216,13 +1272,15 @@ let renderHotReloadPanel (sessionId: string) (files: {| path: string; watched: b
     Elem.div [ Attr.style "max-height: 200px; overflow-y: auto; font-size: 0.75rem;" ] [
       yield! grouped |> List.collect (fun (dir, dirFiles) ->
         let dirLabel =
-          if dir.Length > 40 then "..." + dir.[dir.Length - 37..] else dir
+          match dir.Length > 40 with
+          | true -> "..." + dir.[dir.Length - 37..]
+          | false -> dir
         let dirWatchedCount = dirFiles |> List.filter (fun f -> f.watched) |> List.length
         let allWatched = dirWatchedCount = List.length dirFiles
-        let dirIcon = if allWatched then "●" else if dirWatchedCount > 0 then "◐" else "○"
-        let dirColor = if allWatched then "var(--accent, #7aa2f7)" else if dirWatchedCount > 0 then "var(--accent, #7aa2f7)" else "var(--fg-dim, #565f89)"
-        let dirAction = if allWatched then "unwatch-directory" else "watch-directory"
-        let dirKey = if allWatched then "directory" else "directory"
+        let dirIcon = match allWatched, dirWatchedCount > 0 with | true, _ -> "●" | false, true -> "◐" | false, false -> "○"
+        let dirColor = match allWatched || dirWatchedCount > 0 with | true -> "var(--accent, #7aa2f7)" | false -> "var(--fg-dim, #565f89)"
+        let dirAction = match allWatched with | true -> "unwatch-directory" | false -> "watch-directory"
+        let dirKey = "directory"
         [
           Elem.div
             [ Attr.style "font-weight: 600; margin-top: 4px; opacity: 0.8; font-size: 0.7rem; cursor: pointer; display: flex; align-items: center; gap: 4px;"
@@ -1235,13 +1293,13 @@ let renderHotReloadPanel (sessionId: string) (files: {| path: string; watched: b
               match n.LastIndexOf('/') with
               | -1 -> n
               | idx -> n.[idx + 1..]
-            let icon = if f.watched then "●" else "○"
-            let color = if f.watched then "var(--accent, #7aa2f7)" else "var(--fg-dim, #565f89)"
+            let icon = match f.watched with | true -> "●" | false -> "○"
+            let color = match f.watched with | true -> "var(--accent, #7aa2f7)" | false -> "var(--fg-dim, #565f89)"
             Elem.div
               [ Attr.style "cursor: pointer; padding: 1px 4px; display: flex; align-items: center; gap: 4px;"
                 Attr.create "onclick" (sprintf "fetch('/api/sessions/%s/hotreload/toggle',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:'%s'})})" sessionId (f.path.Replace("\\", "\\\\"))) ]
               [ Elem.span [ Attr.style (sprintf "color: %s; font-size: 0.8rem;" color) ] [ Text.raw icon ]
-                Elem.span [ Attr.style (if f.watched then "opacity: 1" else "opacity: 0.6") ] [ Text.raw fileName ] ]
+                Elem.span [ Attr.style (match f.watched with | true -> "opacity: 1" | false -> "opacity: 0.6") ] [ Text.raw fileName ] ]
           )
         ])
     ]
@@ -1285,7 +1343,8 @@ let renderSessionContextPanel (ctx: SessionContext) =
           for b in opened do
             Elem.li [] [ Elem.code [] [ Text.raw (SessionContext.openLine b) ] ]
         ]
-        if not (List.isEmpty failed) then
+        match List.isEmpty failed with
+        | false ->
           Elem.div [ Attr.style "color: #e74c3c; margin-top: 0.3em;" ] [
             Elem.strong [] [ Text.raw "Failed:" ]
             Elem.ul [ Attr.style "margin: 2px 0; padding-left: 1.2em;" ] [
@@ -1293,6 +1352,7 @@ let renderSessionContextPanel (ctx: SessionContext) =
                 Elem.li [] [ Text.raw (sprintf "✖ %s: %s" name err) ]
             ]
           ]
+        | true -> ()
       ]
     ]
 
@@ -1343,11 +1403,12 @@ let renderSessionContextEmpty =
 // ── Pipeline Trace Panel ──────────────────────────────────────────────
 
 let private renderPipelinePhase (label: string) (ms: float) (maxMs: float) (icon: string) =
-  let pct = if maxMs > 0.0 then min 100.0 (ms / maxMs * 100.0) else 0.0
+  let pct = match maxMs > 0.0 with | true -> min 100.0 (ms / maxMs * 100.0) | false -> 0.0
   let color =
-    if ms < 50.0 then "var(--green, #27ae60)"
-    elif ms < 500.0 then "var(--yellow, #f39c12)"
-    else "var(--red, #e74c3c)"
+    match ms with
+    | ms when ms < 50.0 -> "var(--green, #27ae60)"
+    | ms when ms < 500.0 -> "var(--yellow, #f39c12)"
+    | _ -> "var(--red, #e74c3c)"
   Elem.div [ Attr.style "margin-bottom: 4px;" ] [
     Elem.div [ Attr.style "display: flex; justify-content: space-between; font-size: 0.75rem;" ] [
       Elem.span [] [ Text.raw (sprintf "%s %s" icon label) ]
@@ -1364,9 +1425,10 @@ let renderPipelineTracePanel
   (summary: Features.LiveTesting.TestSummary)
   =
   let statusLabel =
-    if not summary.Enabled then "⏸ disabled"
-    elif isRunning then "⏳ running"
-    else "✅ idle"
+    match summary.Enabled, isRunning with
+    | false, _ -> "⏸ disabled"
+    | true, true -> "⏳ running"
+    | true, false -> "✅ idle"
   let summaryParts = [
     yield Elem.span [ Attr.style "color: var(--green, #27ae60);" ] [
       Text.raw (sprintf "✓ %d" summary.Passed) ]
@@ -1374,12 +1436,16 @@ let renderPipelineTracePanel
       Text.raw (sprintf "✗ %d" summary.Failed) ]
     yield Elem.span [ Attr.style "opacity: 0.6;" ] [
       Text.raw (sprintf "/ %d" summary.Total) ]
-    if summary.Stale > 0 then
+    match summary.Stale > 0 with
+    | true ->
       yield Elem.span [ Attr.style "color: var(--yellow, #f39c12);" ] [
         Text.raw (sprintf "⟳ %d stale" summary.Stale) ]
-    if summary.Running > 0 then
+    | false -> ()
+    match summary.Running > 0 with
+    | true ->
       yield Elem.span [ Attr.style "color: var(--cyan, #3498db);" ] [
         Text.raw (sprintf "⏳ %d" summary.Running) ]
+    | false -> ()
   ]
   let timingSection =
     match timing with
@@ -1450,8 +1516,9 @@ let createStreamHandler
     let pushState () = task {
       // Track daemon's active session for theme switching
       let activeId = q.GetActiveSessionId ()
-      if activeId.Length > 0 then
-        currentSessionId <- activeId
+      match activeId.Length > 0 with
+      | true -> currentSessionId <- activeId
+      | false -> ()
       let state = q.GetSessionState currentSessionId
       let! stats = q.GetEvalStats currentSessionId
       let stateStr = SessionState.label state
@@ -1459,9 +1526,9 @@ let createStreamHandler
       // Push sessionId signal so eval form can include it
       do! Response.ssePatchSignal ctx (SignalPath.sp "sessionId") currentSessionId
       let avgMs =
-        if stats.EvalCount > 0
-        then stats.TotalDuration.TotalMilliseconds / float stats.EvalCount
-        else 0.0
+        match stats.EvalCount > 0 with
+        | true -> stats.TotalDuration.TotalMilliseconds / float stats.EvalCount
+        | false -> 0.0
       do! ssePatchNode ctx (
         renderSessionStatus stateStr currentSessionId workingDir (q.GetWarmupProgress currentSessionId))
       // Push theme when session or working dir changes
@@ -1484,19 +1551,21 @@ let createStreamHandler
         let total = tracker.TotalCount
         let counts = tracker.GetAllCounts()
         let parts =
-          [ if counts.Browsers > 0 then sprintf "🌐 %d" counts.Browsers
-            if counts.McpAgents > 0 then sprintf "🤖 %d" counts.McpAgents
-            if counts.Terminals > 0 then sprintf "💻 %d" counts.Terminals ]
+          [ match counts.Browsers > 0 with | true -> sprintf "🌐 %d" counts.Browsers | false -> ()
+            match counts.McpAgents > 0 with | true -> sprintf "🤖 %d" counts.McpAgents | false -> ()
+            match counts.Terminals > 0 with | true -> sprintf "💻 %d" counts.Terminals | false -> () ]
         let label =
-          if parts.IsEmpty then sprintf "%d connected" total
-          else sprintf "%s" (String.Join(" ", parts))
+          match parts.IsEmpty with
+          | true -> sprintf "%d connected" total
+          | false -> sprintf "%s" (String.Join(" ", parts))
         do! ssePatchNode ctx (
           Elem.div [ Attr.id "connection-counts"; Attr.class' "meta"; Attr.style "font-size: 0.75rem; margin-top: 4px;" ] [
             Text.raw label
           ])
       | None -> ()
       // Push hot-reload file panel
-      if currentSessionId.Length > 0 then
+      match currentSessionId.Length > 0 with
+      | true ->
         try
           let! hrState = q.GetHotReloadState currentSessionId
           match hrState with
@@ -1511,10 +1580,11 @@ let createStreamHandler
         | ex ->
           eprintfn "[dashboard] Hot-reload panel error: %s (%s)" ex.Message (ex.GetType().Name)
           do! ssePatchNode ctx renderHotReloadEmpty
-      else
+      | false ->
         do! ssePatchNode ctx renderHotReloadEmpty
       // Push session context panel
-      if currentSessionId.Length > 0 then
+      match currentSessionId.Length > 0 with
+      | true ->
         try
           let! wCtx = q.GetWarmupContext currentSessionId
           match wCtx with
@@ -1534,7 +1604,7 @@ let createStreamHandler
                   let readiness =
                     ctx'.NamespacesOpened
                     |> List.exists (fun b -> f.path.EndsWith(b.Name, StringComparison.OrdinalIgnoreCase))
-                    |> fun loaded -> if loaded then FileReadiness.Loaded else FileReadiness.NotLoaded
+                    |> fun loaded -> match loaded with | true -> FileReadiness.Loaded | false -> FileReadiness.NotLoaded
                   { Path = f.path; Readiness = readiness; LastLoadedAt = None; IsWatched = f.watched })
               | None -> []
             let sCtx =
@@ -1554,7 +1624,7 @@ let createStreamHandler
         | ex ->
           eprintfn "[dashboard] Session context panel error: %s (%s)" ex.Message (ex.GetType().Name)
           do! ssePatchNode ctx renderSessionContextEmpty
-      else
+      | false ->
         do! ssePatchNode ctx renderSessionContextEmpty
       // Push pipeline trace panel
       match q.GetPipelineTrace () with
@@ -1568,9 +1638,9 @@ let createStreamHandler
         let outputRegion = regions |> List.tryFind (fun r -> r.Id = "output")
         let outputHash = outputRegion |> Option.map (fun r -> r.Content.GetHashCode()) |> Option.defaultValue 0
         let filteredRegions =
-          if outputHash = lastOutputHash && outputHash <> 0
-          then regions |> List.filter (fun r -> r.Id <> "output")
-          else regions
+          match outputHash = lastOutputHash && outputHash <> 0 with
+          | true -> regions |> List.filter (fun r -> r.Id <> "output")
+          | false -> regions
         lastOutputHash <- outputHash
         let! standby = q.GetStandbyInfo ()
         let sLabel = StandbyInfo.label standby
@@ -1594,7 +1664,8 @@ let createStreamHandler
         // Without this, rapid evals flood the SSE stream and freeze the browser.
         let mutable dirty = 0
         let pushThrottled () = task {
-          if Threading.Interlocked.Exchange(&dirty, 1) = 0 then
+          match Threading.Interlocked.Exchange(&dirty, 1) = 0 with
+          | true ->
             do! Threading.Tasks.Task.Delay(100)
             Threading.Interlocked.Exchange(&dirty, 0) |> ignore
             try
@@ -1604,6 +1675,7 @@ let createStreamHandler
             | :? System.ObjectDisposedException -> ()
             | :? OperationCanceledException -> ()
             | ex -> eprintfn "[Dashboard SSE] pushState failed: %s" ex.Message
+          | false -> ()
         }
         use _sub = evt.Subscribe(fun _ ->
           Threading.Tasks.Task.Run(fun () -> pushThrottled () :> Threading.Tasks.Task)
@@ -1637,15 +1709,16 @@ let createEvalHandler
         match doc.RootElement.TryGetProperty("sessionId") with
         | true, prop -> prop.GetString()
         | _ -> ""
-      if String.IsNullOrWhiteSpace code then
+      match String.IsNullOrWhiteSpace code with
+      | true ->
         Response.sseStartResponse ctx |> ignore
         do! Response.ssePatchSignal ctx (SignalPath.sp "code") ""
-      else
-        // Auto-append ;; if not present (FSI block terminator)
+      | false ->
         let codeWithTerminator =
           let trimmed = code.TrimEnd()
-          if trimmed.EndsWith(";;") then code
-          else sprintf "%s;;" trimmed
+          match trimmed.EndsWith(";;") with
+          | true -> code
+          | false -> sprintf "%s;;" trimmed
         let! result = evalCode sessionId codeWithTerminator
         Response.sseStartResponse ctx |> ignore
         do! Response.ssePatchSignal ctx (SignalPath.sp "code") ""
@@ -1686,15 +1759,17 @@ let createEvalFileHandler
         match doc.RootElement.TryGetProperty("sessionId") with
         | true, prop -> prop.GetString()
         | _ -> ""
-      if String.IsNullOrWhiteSpace filePath || not (File.Exists filePath) then
+      match String.IsNullOrWhiteSpace filePath || not (File.Exists filePath) with
+      | true ->
         ctx.Response.StatusCode <- 400
         do! ctx.Response.WriteAsJsonAsync({| error = "File not found or path missing" |})
-      else
+      | false ->
         let code = File.ReadAllText(filePath)
         let codeWithTerminator =
           let trimmed = code.TrimEnd()
-          if trimmed.EndsWith(";;") then code
-          else sprintf "%s;;" trimmed
+          match trimmed.EndsWith(";;") with
+          | true -> code
+          | false -> sprintf "%s;;" trimmed
         let! result = evalCode sessionId codeWithTerminator
         match result with
         | Ok msg -> do! ctx.Response.WriteAsJsonAsync({| success = true; result = msg |})
@@ -1725,10 +1800,11 @@ let createCompletionsHandler
         match doc.RootElement.TryGetProperty("sessionId") with
         | true, prop -> prop.GetString()
         | _ -> ""
-      if String.IsNullOrWhiteSpace code || cursorPos < 0 then
+      match String.IsNullOrWhiteSpace code || cursorPos < 0 with
+      | true ->
         ctx.Response.ContentType <- "application/json"
         do! ctx.Response.WriteAsJsonAsync({| completions = [||]; count = 0 |})
-      else
+      | false ->
         let! items = getCompletions sessionId code cursorPos
         let json = McpAdapter.formatCompletionsJson items
         ctx.Response.ContentType <- "application/json"
@@ -1817,27 +1893,31 @@ let createClearOutputHandler : HttpHandler =
 /// Render discovered projects as an SSE fragment.
 let renderDiscoveredProjects (discovered: DiscoveredProjects) =
   Elem.div [ Attr.id "discovered-projects"; Attr.style "margin-top: 0.5rem;" ] [
-    if discovered.Solutions.IsEmpty && discovered.Projects.IsEmpty then
+    match discovered.Solutions.IsEmpty && discovered.Projects.IsEmpty with
+    | true ->
       Elem.div [ Attr.class' "output-line output-error" ] [
         Text.raw (sprintf "No .sln/.fsproj found in %s" discovered.WorkingDir)
       ]
-    else
+    | false ->
       Elem.div [ Attr.class' "output-line output-result" ] [
         Text.raw (sprintf "Found in %s:" discovered.WorkingDir)
       ]
-      if not discovered.Solutions.IsEmpty then
+      match discovered.Solutions.IsEmpty with
+      | false ->
         yield! discovered.Solutions |> List.map (fun s ->
           Elem.div [ Attr.class' "output-line output-info"; Attr.style "padding-left: 1rem;" ] [
             Text.raw (sprintf "📁 %s (solution)" s)
           ])
+      | true -> ()
       yield! discovered.Projects |> List.map (fun p ->
         Elem.div [ Attr.class' "output-line"; Attr.style "padding-left: 1rem;" ] [
           Text.raw (sprintf "📄 %s" p)
         ])
       Elem.div [ Attr.class' "meta"; Attr.style "margin-top: 4px;" ] [
-        if not discovered.Solutions.IsEmpty then
+        match discovered.Solutions.IsEmpty with
+        | false ->
           Text.raw "Will use solution file. Click 'Create Session' to proceed."
-        else
+        | true ->
           Text.raw "Will load all projects. Click 'Create Session' to proceed."
       ]
   ]
@@ -1855,31 +1935,34 @@ let evalResultError (msg: string) =
 let resolveSessionProjects (dir: string) (manualProjects: string) =
   let autoDetectProjects dir =
     let discovered = discoverProjects dir
-    if not discovered.Solutions.IsEmpty then
-      [ Path.Combine(dir, discovered.Solutions.Head) ]
-    elif not discovered.Projects.IsEmpty then
-      discovered.Projects |> List.map (fun p -> Path.Combine(dir, p))
-    else
-      []
-  if not (String.IsNullOrWhiteSpace manualProjects) then
+    match discovered.Solutions.IsEmpty with
+    | false -> [ Path.Combine(dir, discovered.Solutions.Head) ]
+    | true ->
+      match discovered.Projects.IsEmpty with
+      | false -> discovered.Projects |> List.map (fun p -> Path.Combine(dir, p))
+      | true -> []
+  match String.IsNullOrWhiteSpace manualProjects with
+  | false ->
     manualProjects.Split(',')
     |> Array.map (fun s -> s.Trim())
     |> Array.filter (fun s -> s.Length > 0)
     |> Array.map (fun p ->
-      if Path.IsPathRooted p then p
-      else Path.Combine(dir, p))
+      match Path.IsPathRooted p with
+      | true -> p
+      | false -> Path.Combine(dir, p))
     |> Array.toList
-  else
+  | true ->
     match DirectoryConfig.load dir with
     | Some config ->
       match config.Load with
       | Solution path ->
-        let full = if Path.IsPathRooted path then path else Path.Combine(dir, path)
+        let full = match Path.IsPathRooted path with | true -> path | false -> Path.Combine(dir, path)
         [ full ]
       | Projects paths ->
         paths |> List.map (fun p ->
-          if Path.IsPathRooted p then p
-          else Path.Combine(dir, p))
+          match Path.IsPathRooted p with
+          | true -> p
+          | false -> Path.Combine(dir, p))
       | NoLoad -> []
       | AutoDetect -> autoDetectProjects dir
     | _ -> autoDetectProjects dir
@@ -1935,19 +2018,20 @@ let createDiscoverHandler : HttpHandler =
     use! doc = Request.getSignalsJson ctx
     let dir = getSignalString doc "newSessionDir" "new-session-dir"
     Response.sseStartResponse ctx |> ignore
-    if String.IsNullOrWhiteSpace dir then
+    match String.IsNullOrWhiteSpace dir, Directory.Exists dir with
+    | true, _ ->
       do! ssePatchNode ctx (
         Elem.div [ Attr.id "discovered-projects" ] [
           Elem.span [ Attr.class' "output-line output-error" ] [
             Text.raw "Enter a working directory first"
           ]])
-    elif not (Directory.Exists dir) then
+    | false, false ->
       do! ssePatchNode ctx (
         Elem.div [ Attr.id "discovered-projects" ] [
           Elem.span [ Attr.class' "output-line output-error" ] [
             Text.raw (sprintf "Directory not found: %s" dir)
           ]])
-    else
+    | false, true ->
       do! pushDiscoverResults ctx dir
   }
 
@@ -1961,15 +2045,17 @@ let createCreateSessionHandler
     let dir = getSignalString doc "newSessionDir" "new-session-dir"
     let manualProjects = getSignalString doc "manualProjects" "manual-projects"
     Response.sseStartResponse ctx |> ignore
-    if String.IsNullOrWhiteSpace dir then
+    match String.IsNullOrWhiteSpace dir, Directory.Exists dir with
+    | true, _ ->
       do! ssePatchNode ctx (evalResultError "Working directory is required")
-    elif not (Directory.Exists dir) then
+    | false, false ->
       do! ssePatchNode ctx (evalResultError (sprintf "Directory not found: %s" dir))
-    else
+    | false, true ->
       let projects = resolveSessionProjects dir manualProjects
-      if projects.IsEmpty then
+      match projects.IsEmpty with
+      | true ->
         do! ssePatchNode ctx (evalResultError "No projects found. Enter paths manually or check the directory.")
-      else
+      | false ->
         let! result = createSession projects dir
         match result with
         | Ok newSessionId ->
@@ -2209,9 +2295,11 @@ let createEndpoints
         let req = System.Text.Json.JsonSerializer.Deserialize<{| theme: string |}>(body)
         let activeId = q.GetActiveSessionId ()
         let workingDir = q.GetSessionWorkingDir activeId
-        if workingDir.Length > 0 && req.theme.Length > 0 then
+        match workingDir.Length > 0 && req.theme.Length > 0 with
+        | true ->
           infra.SessionThemes.[workingDir] <- req.theme
           saveThemes DaemonState.SageFsDir infra.SessionThemes
+        | false -> ()
         ctx.Response.StatusCode <- 200
         do! ctx.Response.WriteAsJsonAsync({| ok = true |})
       with ex ->
