@@ -40,6 +40,128 @@ module JsonHelpers =
     let mutable v = Unchecked.defaultof<JsonElement>
     if el.TryGetProperty(prop, &v) then Some v else None
 
+  let tryFloat (el: JsonElement) (prop: string) =
+    let mutable v = Unchecked.defaultof<JsonElement>
+    if el.TryGetProperty(prop, &v) && v.ValueKind = JsonValueKind.Number then
+      Some (v.GetDouble())
+    else None
+
+[<AutoOpen>]
+module FeatureParsers =
+  let parseDiffLineInfo (el: JsonElement) : DiffLineInfo =
+    let kind =
+      match tryStr el "kind" "unchanged" with
+      | "added" -> DiffLineKind.Added
+      | "removed" -> DiffLineKind.Removed
+      | "modified" -> DiffLineKind.Modified
+      | _ -> DiffLineKind.Unchanged
+    let oldText =
+      match getProp el "oldText" with
+      | Some v when v.ValueKind = JsonValueKind.String -> Some (v.GetString())
+      | _ -> None
+    { Kind = kind; Text = tryStr el "text" ""; OldText = oldText }
+
+  let parseDiffSummaryInfo (el: JsonElement) : DiffSummaryInfo =
+    { Added = tryInt el "added" 0
+      Removed = tryInt el "removed" 0
+      Modified = tryInt el "modified" 0
+      Unchanged = tryInt el "unchanged" 0 }
+
+  let parseEvalDiffInfo (el: JsonElement) : EvalDiffInfo =
+    let lines =
+      match tryArr el "lines" with
+      | Some arr -> [ for l in arr.EnumerateArray() -> parseDiffLineInfo l ]
+      | None -> []
+    let summary =
+      match getProp el "summary" with
+      | Some s -> parseDiffSummaryInfo s
+      | None -> { Added = 0; Removed = 0; Modified = 0; Unchanged = 0 }
+    { Lines = lines; Summary = summary; HasDiff = tryBool el "hasDiff" false }
+
+  let parseCellNodeInfo (el: JsonElement) : CellNodeInfo =
+    let produces =
+      match tryArr el "produces" with
+      | Some arr -> [ for p in arr.EnumerateArray() -> p.GetString() ]
+      | None -> []
+    let consumes =
+      match tryArr el "consumes" with
+      | Some arr -> [ for c in arr.EnumerateArray() -> c.GetString() ]
+      | None -> []
+    { CellId = tryInt el "cellId" 0
+      Source = tryStr el "source" ""
+      Produces = produces
+      Consumes = consumes
+      IsStale = tryBool el "isStale" false }
+
+  let parseCellEdgeInfo (el: JsonElement) : CellEdgeInfo =
+    { From = tryInt el "from" 0; To = tryInt el "to" 0 }
+
+  let parseCellGraphInfo (el: JsonElement) : CellGraphInfo =
+    let cells =
+      match tryArr el "cells" with
+      | Some arr -> [ for c in arr.EnumerateArray() -> parseCellNodeInfo c ]
+      | None -> []
+    let edges =
+      match tryArr el "edges" with
+      | Some arr -> [ for e in arr.EnumerateArray() -> parseCellEdgeInfo e ]
+      | None -> []
+    { Cells = cells; Edges = edges }
+
+  let parseBindingDetailInfo (el: JsonElement) : BindingDetailInfo =
+    let shadowedBy =
+      match tryArr el "shadowedBy" with
+      | Some arr -> [ for s in arr.EnumerateArray() -> s.GetInt32() ]
+      | None -> []
+    let referencedIn =
+      match tryArr el "referencedIn" with
+      | Some arr -> [ for r in arr.EnumerateArray() -> r.GetInt32() ]
+      | None -> []
+    { Name = tryStr el "name" ""
+      TypeSig = tryStr el "typeSig" ""
+      CellIndex = tryInt el "cellIndex" 0
+      IsShadowed = tryBool el "isShadowed" false
+      ShadowedBy = shadowedBy
+      ReferencedIn = referencedIn }
+
+  let parseBindingScopeInfo (el: JsonElement) : BindingScopeInfo =
+    let bindings =
+      match tryArr el "bindings" with
+      | Some arr -> [ for b in arr.EnumerateArray() -> parseBindingDetailInfo b ]
+      | None -> []
+    { Bindings = bindings
+      ActiveCount = tryInt el "activeCount" 0
+      ShadowedCount = tryInt el "shadowedCount" 0 }
+
+  let parseTimelineStatsInfo (el: JsonElement) : TimelineStatsInfo =
+    { Count = tryInt el "count" 0
+      P50Ms = tryFloat el "p50Ms"
+      P95Ms = tryFloat el "p95Ms"
+      P99Ms = tryFloat el "p99Ms"
+      MeanMs = tryFloat el "meanMs"
+      Sparkline = tryStr el "sparkline" "" }
+
+  let parseNotebookCellInfo (el: JsonElement) : NotebookCellInfo =
+    let deps =
+      match tryArr el "deps" with
+      | Some arr -> [ for d in arr.EnumerateArray() -> d.GetInt32() ]
+      | None -> []
+    let bindings =
+      match tryArr el "bindings" with
+      | Some arr -> [ for b in arr.EnumerateArray() -> b.GetString() ]
+      | None -> []
+    { Index = tryInt el "index" 0
+      Label =
+        match getProp el "label" with
+        | Some v when v.ValueKind = JsonValueKind.String -> Some (v.GetString())
+        | _ -> None
+      Code = tryStr el "code" ""
+      Output =
+        match getProp el "output" with
+        | Some v when v.ValueKind = JsonValueKind.String -> Some (v.GetString())
+        | _ -> None
+      Deps = deps
+      Bindings = bindings }
+
 /// HTTP client for communicating with the SageFs daemon.
 /// Registered as a singleton via DI in the extension entry point.
 type SageFsClient() =
@@ -441,6 +563,75 @@ type SageFsClient() =
         | None -> [||]
     with _ ->
       return [||]
+  }
+
+  /// Get the cell dependency graph from the daemon.
+  member this.GetCellGraphAsync(ct: CancellationToken) = task {
+    try
+      let! body = http.GetStringAsync(sprintf "%s/api/dependency-graph" this.BaseUrl, ct)
+      use doc = JsonDocument.Parse(body)
+      return Some (parseCellGraphInfo doc.RootElement)
+    with _ -> return None
+  }
+
+  /// Get binding scope snapshot for a session.
+  member this.GetBindingScopeAsync(sessionId: string, ct: CancellationToken) = task {
+    try
+      let! body =
+        http.GetStringAsync(
+          sprintf "%s/api/sessions/%s/binding-scope" this.BaseUrl sessionId, ct)
+      use doc = JsonDocument.Parse(body)
+      return Some (parseBindingScopeInfo doc.RootElement)
+    with _ -> return None
+  }
+
+  /// Get eval timeline statistics for a session.
+  member this.GetTimelineStatsAsync(sessionId: string, ct: CancellationToken) = task {
+    try
+      let! body =
+        http.GetStringAsync(
+          sprintf "%s/api/sessions/%s/timeline" this.BaseUrl sessionId, ct)
+      use doc = JsonDocument.Parse(body)
+      return Some (parseTimelineStatsInfo doc.RootElement)
+    with _ -> return None
+  }
+
+  /// Export a session as an FSX script.
+  member this.ExportSessionAsync(sessionId: string, ct: CancellationToken) = task {
+    try
+      let! body =
+        http.GetStringAsync(
+          sprintf "%s/api/sessions/%s/export-fsx" this.BaseUrl sessionId, ct)
+      return Some body
+    with _ -> return None
+  }
+
+  /// Explore a type's members.
+  member this.ExploreAsync(typeName: string, ct: CancellationToken) = task {
+    try
+      let! body =
+        http.GetStringAsync(
+          sprintf "%s/api/explore?type=%s" this.BaseUrl (Uri.EscapeDataString typeName), ct)
+      return Some body
+    with _ -> return None
+  }
+
+  /// Cancel the current evaluation.
+  member this.CancelEvalAsync(ct: CancellationToken) = task {
+    try
+      let! resp = http.PostAsync(sprintf "%s/api/cancel" this.BaseUrl, null, ct)
+      return resp.IsSuccessStatusCode
+    with _ -> return false
+  }
+
+  /// Get the live testing pipeline trace.
+  member this.GetPipelineTraceAsync(ct: CancellationToken) = task {
+    try
+      let! body =
+        http.GetStringAsync(
+          sprintf "%s/api/live-testing/pipeline-trace" this.BaseUrl, ct)
+      return Some body
+    with _ -> return None
   }
 
   interface IDisposable with

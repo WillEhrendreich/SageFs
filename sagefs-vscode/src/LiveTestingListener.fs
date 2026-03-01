@@ -5,6 +5,7 @@ open Vscode
 
 open SageFs.Vscode.LiveTestingTypes
 open SageFs.Vscode.JsHelpers
+open SageFs.Vscode.FeatureTypes
 
 // ── Server JSON → VscLiveTestEvent mappers ───────────────────
 
@@ -190,6 +191,13 @@ let start (port: int) (callbacks: LiveTestingCallbacks) : LiveTestingListener =
     | "pipeline_trace" ->
       pipelineTrace <- Some data
       callbacks.OnPipelineTraceUpdate data
+    | "eval_diff"
+    | "cell_graph"
+    | "binding_scope"
+    | "eval_timeline" ->
+      // Feature events parsed by FeatureTypes.processFeatureEvent
+      // Consumer wiring added when UI components are implemented
+      ()
     | _ ->
       ()
 
