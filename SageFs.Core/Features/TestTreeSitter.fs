@@ -16,17 +16,41 @@ module TestTreeSitter =
     lazy
       try
         let asmDir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location)
+        let rid =
+          match Environment.OSVersion.Platform, Runtime.InteropServices.RuntimeInformation.OSArchitecture with
+          | PlatformID.Win32NT, Runtime.InteropServices.Architecture.X64 -> "win-x64"
+          | PlatformID.Win32NT, Runtime.InteropServices.Architecture.Arm64 -> "win-arm64"
+          | PlatformID.Unix, Runtime.InteropServices.Architecture.X64 ->
+            match Runtime.InteropServices.RuntimeInformation.IsOSPlatform(Runtime.InteropServices.OSPlatform.OSX) with
+            | true -> "osx-x64"
+            | false -> "linux-x64"
+          | PlatformID.Unix, Runtime.InteropServices.Architecture.Arm64 ->
+            match Runtime.InteropServices.RuntimeInformation.IsOSPlatform(Runtime.InteropServices.OSPlatform.OSX) with
+            | true -> "osx-arm64"
+            | false -> "linux-arm64"
+          | _ -> "win-x64"
+        let libName =
+          match Runtime.InteropServices.RuntimeInformation.IsOSPlatform(Runtime.InteropServices.OSPlatform.Windows) with
+          | true -> "tree-sitter-fsharp.dll"
+          | false ->
+            match Runtime.InteropServices.RuntimeInformation.IsOSPlatform(Runtime.InteropServices.OSPlatform.OSX) with
+            | true -> "libtree-sitter-fsharp.dylib"
+            | false -> "libtree-sitter-fsharp.so"
         let candidates = [
+          Path.Combine(asmDir, "runtimes", rid, "native", libName)
+          Path.Combine(asmDir, libName)
+          Path.Combine(AppContext.BaseDirectory, "runtimes", rid, "native", libName)
           Path.Combine(asmDir, "runtimes", "win-x64", "native", "tree-sitter-fsharp.dll")
-          Path.Combine(asmDir, "tree-sitter-fsharp.dll")
-          Path.Combine(AppContext.BaseDirectory, "runtimes", "win-x64", "native", "tree-sitter-fsharp.dll")
         ]
         let dllPath =
           candidates
           |> List.tryFind File.Exists
-          |> Option.defaultWith (fun () ->
-            failwith (sprintf "tree-sitter-fsharp.dll not found. Searched: %s" (String.Join(", ", candidates))))
-        let lang = new Language(dllPath, "tree_sitter_fsharp")
+        match dllPath with
+        | None ->
+          eprintfn "TestTreeSitter: native library not found for %s. Searched: %s" rid (String.Join(", ", candidates))
+          None
+        | Some path ->
+        let lang = new Language(path, "tree_sitter_fsharp")
         let asm = Assembly.GetExecutingAssembly()
         let queryText =
           use stream = asm.GetManifestResourceStream("tests.scm")

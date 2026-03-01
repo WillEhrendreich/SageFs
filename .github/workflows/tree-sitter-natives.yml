@@ -1,0 +1,92 @@
+name: Build tree-sitter-fsharp natives
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/tree-sitter-natives.yml'
+
+jobs:
+  build-native:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            rid: linux-x64
+            lib: libtree-sitter-fsharp.so
+          - os: ubuntu-24.04-arm
+            rid: linux-arm64
+            lib: libtree-sitter-fsharp.so
+          - os: macos-latest
+            rid: osx-arm64
+            lib: libtree-sitter-fsharp.dylib
+          - os: macos-13
+            rid: osx-x64
+            lib: libtree-sitter-fsharp.dylib
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+    - uses: actions/checkout@v5
+
+    - name: Clone ionide/tree-sitter-fsharp
+      run: git clone --depth 1 https://github.com/ionide/tree-sitter-fsharp.git ts-fsharp
+
+    - name: Install tree-sitter CLI
+      run: npm install -g tree-sitter-cli
+
+    - name: Generate parser
+      working-directory: ts-fsharp
+      run: |
+        cd fsharp && tree-sitter generate --no-bindings && cd ..
+        cd fsharp_signature && tree-sitter generate --no-bindings && cd ..
+
+    - name: Build shared library
+      working-directory: ts-fsharp
+      run: make
+
+    - name: Copy to runtimes
+      run: |
+        cp ts-fsharp/${{ matrix.lib }} runtimes/${{ matrix.rid }}/native/${{ matrix.lib }}
+        ls -la runtimes/${{ matrix.rid }}/native/
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: tree-sitter-fsharp-${{ matrix.rid }}
+        path: runtimes/${{ matrix.rid }}/native/${{ matrix.lib }}
+
+  commit-natives:
+    needs: build-native
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+    - uses: actions/checkout@v5
+
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: native-artifacts
+
+    - name: Place natives in runtimes
+      run: |
+        for rid in linux-x64 linux-arm64 osx-arm64 osx-x64; do
+          mkdir -p "runtimes/$rid/native"
+          cp native-artifacts/tree-sitter-fsharp-$rid/* "runtimes/$rid/native/" || true
+          ls -la "runtimes/$rid/native/" 2>/dev/null || echo "No files for $rid"
+        done
+
+    - name: Commit natives
+      run: |
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+        git add runtimes/
+        git diff --cached --quiet && echo "No changes" && exit 0
+        git commit -m "build(natives): add cross-platform tree-sitter-fsharp libraries
+
+        Built from ionide/tree-sitter-fsharp for linux-x64, linux-arm64, osx-arm64, osx-x64.
+
+        Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
+        git push

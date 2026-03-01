@@ -92,6 +92,30 @@
               PackagePath="runtimes\win-x64\native"
               CopyToOutputDirectory="PreserveNewest"
               Link="runtimes\win-x64\native\tree-sitter-fsharp.dll" />
+        <None Include="..\runtimes\osx-arm64\native\libtree-sitter-fsharp.dylib"
+              Condition="Exists('..\runtimes\osx-arm64\native\libtree-sitter-fsharp.dylib')"
+              Pack="true"
+              PackagePath="runtimes\osx-arm64\native"
+              CopyToOutputDirectory="PreserveNewest"
+              Link="runtimes\osx-arm64\native\libtree-sitter-fsharp.dylib" />
+        <None Include="..\runtimes\osx-x64\native\libtree-sitter-fsharp.dylib"
+              Condition="Exists('..\runtimes\osx-x64\native\libtree-sitter-fsharp.dylib')"
+              Pack="true"
+              PackagePath="runtimes\osx-x64\native"
+              CopyToOutputDirectory="PreserveNewest"
+              Link="runtimes\osx-x64\native\libtree-sitter-fsharp.dylib" />
+        <None Include="..\runtimes\linux-x64\native\libtree-sitter-fsharp.so"
+              Condition="Exists('..\runtimes\linux-x64\native\libtree-sitter-fsharp.so')"
+              Pack="true"
+              PackagePath="runtimes\linux-x64\native"
+              CopyToOutputDirectory="PreserveNewest"
+              Link="runtimes\linux-x64\native\libtree-sitter-fsharp.so" />
+        <None Include="..\runtimes\linux-arm64\native\libtree-sitter-fsharp.so"
+              Condition="Exists('..\runtimes\linux-arm64\native\libtree-sitter-fsharp.so')"
+              Pack="true"
+              PackagePath="runtimes\linux-arm64\native"
+              CopyToOutputDirectory="PreserveNewest"
+              Link="runtimes\linux-arm64\native\libtree-sitter-fsharp.so" />
     </ItemGroup>
 
     <ItemGroup>

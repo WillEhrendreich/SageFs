@@ -67,8 +67,8 @@ let parseSummary (data: obj) : VscTestSummary =
 
 /// Map a server TestStatusEntry to VscTestResult
 let parseTestResult (entry: obj) : VscTestResult =
-  let id = entry?TestId |> parseTestId |> VscTestId.create
-  let status = entry?Status
+  let id = tryField<obj> "TestId" entry |> Option.map parseTestId |> Option.defaultValue "" |> VscTestId.create
+  let status = tryField<obj> "Status" entry |> Option.defaultValue (obj())
   let statusCase = parseDuCase status |> Option.defaultValue "Detected"
   let fields = duFields status
   let outcome =
@@ -102,16 +102,16 @@ let parseTestResult (entry: obj) : VscTestResult =
 
 /// Map a server TestStatusEntry to VscTestInfo
 let parseTestInfo (entry: obj) : VscTestInfo =
-  let testIdStr = entry?TestId |> parseTestId
-  let origin = entry?Origin
+  let testIdStr = tryField<obj> "TestId" entry |> Option.map parseTestId |> Option.defaultValue ""
+  let origin = tryField<obj> "Origin" entry |> Option.defaultValue (obj())
   let filePath, line =
     match parseDuCase origin with
     | Some "SourceMapped" ->
       let fields = duFields origin |> Option.defaultValue [||]
       match fields.Length >= 2 with
       | true ->
-        let fp = tryOfObj (unbox<string> fields.[0])
-        let ln = tryOfObj (unbox<int> fields.[1])
+        let fp = fields |> Array.tryItem 0 |> Option.bind (fun x -> tryOfObj (unbox<string> x))
+        let ln = fields |> Array.tryItem 1 |> Option.bind (fun x -> tryOfObj (unbox<int> x))
         fp, ln
       | false -> None, None
     | _ -> None, None
@@ -123,15 +123,15 @@ let parseTestInfo (entry: obj) : VscTestInfo =
 
 /// Parse Freshness DU from server JSON (Case/Fields or plain string)
 let parseFreshness (data: obj) : VscResultFreshness =
-  match parseDuCase (data?Freshness) with
+  match tryField<obj> "Freshness" data |> Option.bind parseDuCase with
   | Some "StaleCodeEdited" -> VscResultFreshness.StaleCodeEdited
   | Some "StaleWrongGeneration" -> VscResultFreshness.StaleWrongGeneration
   | _ -> VscResultFreshness.Fresh
 
 /// Parse test_results_batch → VscLiveTestEvent pair (discovery + results)
 let parseResultsBatch (data: obj) : VscLiveTestEvent list =
-  let entries = data?Entries
-  tryOfObj entries
+  tryField<obj> "Entries" data
+  |> Option.bind tryOfObj
   |> Option.map (fun entries ->
     let freshness = parseFreshness data
     let entryArray = tryOfObj entries |> Option.map unbox<obj array> |> Option.defaultValue [||]
