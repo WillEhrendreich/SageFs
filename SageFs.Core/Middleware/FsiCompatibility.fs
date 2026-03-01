@@ -10,8 +10,9 @@ let fsiCompatibilityMiddleware next (request, st: AppState) =
   
   let rewrittenCode = SageFs.FsiRewrite.rewriteInlineUseStatements code
   
-  if rewrittenCode <> code then
-    st.Logger.LogDebug "FSI Compatibility: Rewrote 'use' to 'let' for FSI compatibility"
+  match rewrittenCode <> code with
+  | true -> st.Logger.LogDebug "FSI Compatibility: Rewrote 'use' to 'let' for FSI compatibility"
+  | false -> ()
   
   let newRequest = { request with Code = rewrittenCode }
   next (newRequest, st)

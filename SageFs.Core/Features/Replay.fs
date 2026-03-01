@@ -220,12 +220,13 @@ module DaemonReplayState =
         state.Sessions
         |> Map.change e.SessionId (Option.map (fun r -> { r with StoppedAt = Some e.StoppedAt }))
       let activeId =
-        if state.ActiveSessionId = Some e.SessionId then
+        match state.ActiveSessionId = Some e.SessionId with
+        | true ->
           sessions
           |> Map.toSeq
           |> Seq.tryFind (fun (_, r) -> r.StoppedAt.IsNone)
           |> Option.map fst
-        else state.ActiveSessionId
+        | false -> state.ActiveSessionId
       { state with Sessions = sessions; ActiveSessionId = activeId }
     | DaemonSessionSwitched e ->
       { state with ActiveSessionId = Some e.ToId }

@@ -24,8 +24,9 @@ let projectDirectories (sln: Solution) : string list =
   sln.Projects
   |> List.choose (fun p ->
     let dir = Path.GetDirectoryName(p.ProjectFileName)
-    if String.IsNullOrEmpty(dir) then None
-    else Some (Path.GetFullPath(dir)))
+    match String.IsNullOrEmpty(dir) with
+    | true -> None
+    | false -> Some (Path.GetFullPath(dir)))
   |> List.distinct
 
 type ActorArgs = {
@@ -63,19 +64,21 @@ let createActorImmediate a =
   let isBare = parsedArgs |> List.exists (function Args.Bare -> true | _ -> false)
 
   let originalSln =
-    if isBare then
+    match isBare with
+    | true ->
       a.Logger.LogInfo "Bare session — skipping project discovery"
       ProjectLoading.emptySolution
-    else
+    | false ->
       a.Logger.LogInfo "Discovering projects..."
       let sln = loadSolution a.Logger parsedArgs
       a.Logger.LogInfo "Project loading complete."
       sln
 
   let shadowDir, sln, instrumentationMaps =
-    if List.isEmpty originalSln.Projects && List.isEmpty originalSln.References then
+    match List.isEmpty originalSln.Projects && List.isEmpty originalSln.References with
+    | true ->
       None, originalSln, ([||] : Features.LiveTesting.InstrumentationMap array)
-    else
+    | false ->
       a.Logger.LogInfo "Creating shadow copies of assemblies..."
       let dir = ShadowCopy.createShadowDir ()
       let shadowSln = ShadowCopy.shadowCopySolution dir originalSln

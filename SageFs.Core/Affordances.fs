@@ -19,20 +19,22 @@ module EvalStats =
   }
 
   let record (duration: TimeSpan) (stats: EvalStats) =
-    if stats.EvalCount = 0 then
+    match stats.EvalCount = 0 with
+    | true ->
       { EvalCount = 1
         TotalDuration = duration
         MinDuration = duration
         MaxDuration = duration }
-    else
+    | false ->
       { EvalCount = stats.EvalCount + 1
         TotalDuration = stats.TotalDuration + duration
         MinDuration = min stats.MinDuration duration
         MaxDuration = max stats.MaxDuration duration }
 
   let averageDuration (stats: EvalStats) =
-    if stats.EvalCount = 0 then TimeSpan.Zero
-    else TimeSpan.FromTicks(stats.TotalDuration.Ticks / int64 stats.EvalCount)
+    match stats.EvalCount = 0 with
+    | true -> TimeSpan.Zero
+    | false -> TimeSpan.FromTicks(stats.TotalDuration.Ticks / int64 stats.EvalCount)
 
 /// Pure function: given a session state, returns the list of tool names
 /// that are valid to invoke. Agents should only call listed tools.
@@ -69,7 +71,8 @@ let availableTools (state: SessionState) : string list =
 /// Returns Ok () if available, Error with SageFsError.ToolNotAvailable.
 let checkToolAvailability (state: SessionState) (toolName: string) : Result<unit, SageFsError> =
   let tools = availableTools state
-  if tools |> List.contains toolName then
+  match tools |> List.contains toolName with
+  | true ->
     Ok ()
-  else
+  | false ->
     Error (SageFsError.ToolNotAvailable(toolName, state, tools))

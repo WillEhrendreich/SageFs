@@ -30,8 +30,9 @@ module TestTreeSitter =
         let asm = Assembly.GetExecutingAssembly()
         let queryText =
           use stream = asm.GetManifestResourceStream("tests.scm")
-          if isNull stream then
-            failwith "tests.scm embedded resource not found"
+          match isNull stream with
+          | true -> failwith "tests.scm embedded resource not found"
+          | false -> ()
           use reader = new StreamReader(stream)
           reader.ReadToEnd()
         let query = new Query(lang, queryText)
@@ -43,8 +44,9 @@ module TestTreeSitter =
   /// Discover test locations in F# source code.
   /// Returns SourceTestLocation array with attribute name, file path, line, and column.
   let discover (filePath: string) (code: string) : SourceTestLocation array =
-    if String.IsNullOrWhiteSpace code then Array.empty
-    else
+    match String.IsNullOrWhiteSpace code with
+    | true -> Array.empty
+    | false ->
       match resources.Value with
       | None -> Array.empty
       | Some (lang, query) ->
@@ -62,7 +64,8 @@ module TestTreeSitter =
           | "test.attribute" ->
             currentAttr <- code.Substring(int node.StartIndex, int node.EndIndex - int node.StartIndex)
           | "test.name" ->
-            if currentAttr.Length > 0 then
+            match currentAttr.Length > 0 with
+            | true ->
               let funcName = code.Substring(int node.StartIndex, int node.EndIndex - int node.StartIndex)
               locations.Add {
                 AttributeName = currentAttr
@@ -72,6 +75,7 @@ module TestTreeSitter =
                 Column = int node.StartPosition.Column
               }
               currentAttr <- ""
+            | false -> ()
           | _ -> ()
 
         locations.ToArray()

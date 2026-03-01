@@ -82,11 +82,12 @@ let extractSymbolReferences
   : SymbolReference list =
   checkResults.GetAllUsesOfAllSymbolsInFile()
   |> Seq.choose (fun su ->
-    if su.IsFromOpenStatement then None
-    else
+    match su.IsFromOpenStatement with
+    | true -> None
+    | false ->
       Some {
         SymbolFullName = su.Symbol.FullName
-        UseKind = if su.IsFromDefinition then SymbolUseKind.Definition else SymbolUseKind.Reference
+        UseKind = match su.IsFromDefinition with | true -> SymbolUseKind.Definition | false -> SymbolUseKind.Reference
         UsedInTestId = None
         FilePath = filePath
         Line = su.Range.StartLine
@@ -111,6 +112,7 @@ let getTypeCheckWithSymbols
   let hasErrors =
     diagnostics |> Array.exists (fun d -> d.Severity = DiagnosticSeverity.Error)
   let symbolRefs =
-    if hasErrors then []
-    else extractSymbolReferences filePath typed
+    match hasErrors with
+    | true -> []
+    | false -> extractSymbolReferences filePath typed
   { Diagnostics = diagnostics; HasErrors = hasErrors; SymbolRefs = symbolRefs }

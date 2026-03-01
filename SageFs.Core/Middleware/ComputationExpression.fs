@@ -213,9 +213,9 @@ let rewriteCompExpr (logger: ILogger) code =
     match parsed with
     | None -> return code
     | Some parsed ->
-      if not <| isCompExpr parsed.tree then
-        return code
-      else
+      match isCompExpr parsed.tree with
+      | false -> return code
+      | true ->
         let rewrittenAst = rewriteParsedExpr parsed.tree
 
         let! code =
@@ -225,11 +225,12 @@ let rewriteCompExpr (logger: ILogger) code =
         let logCode code =
           logger.LogDebug $"Rewriting user computation expression input to: \n {code}"
 
-        if parsed.hasTupleHack then
+        match parsed.hasTupleHack with
+        | true ->
           let code = code.Substring(0, code.Length - 2)
           logCode code
           return code
-        else
+        | false ->
           logCode code
           return code
   }

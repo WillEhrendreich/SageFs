@@ -30,10 +30,9 @@ let watchAll (paths: string seq) (_state: T) : T =
 
 let toggle (path: string) (state: T) : T =
   let p = normalize path
-  if state.Watched.Contains(p) then
-    { state with Watched = state.Watched.Remove(p) }
-  else
-    { state with Watched = state.Watched.Add(p) }
+  match state.Watched.Contains(p) with
+  | true -> { state with Watched = state.Watched.Remove(p) }
+  | false -> { state with Watched = state.Watched.Add(p) }
 
 let watchedCount (state: T) : int =
   state.Watched.Count

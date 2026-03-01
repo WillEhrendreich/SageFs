@@ -66,10 +66,11 @@ module DirectoryConfig =
       let errors =
         diagnostics
         |> Array.filter (fun d -> d.Severity = FSharp.Compiler.Diagnostics.FSharpDiagnosticSeverity.Error)
-      if errors.Length > 0 then
+      match errors.Length > 0 with
+      | true ->
         let msgs = errors |> Array.map (fun d -> d.Message) |> String.concat "; "
         Error (sprintf "Config evaluation errors: %s" msgs)
-      else
+      | false ->
         match result with
         | Choice1Of2 (Some fsiValue) ->
           match fsiValue.ReflectionValue with
@@ -84,12 +85,13 @@ module DirectoryConfig =
 
   let load (workingDir: string) : DirectoryConfig option =
     let path = configPath workingDir
-    if File.Exists path then
+    match File.Exists path with
+    | true ->
       let content = File.ReadAllText path
       match evaluate content with
       | Ok cfg -> Some cfg
       | Error msg ->
         eprintfn "Warning: failed to load %s: %s (using defaults)" path msg
         Some empty
-    else
+    | false ->
       None

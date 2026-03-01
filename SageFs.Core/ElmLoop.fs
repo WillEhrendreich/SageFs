@@ -70,8 +70,9 @@ module ElmLoop =
       sw.Stop()
       Instrumentation.elmloopCallbackMs.Record(sw.Elapsed.TotalMilliseconds)
 
-      if not effects.IsEmpty then
-        Instrumentation.elmloopEffectsSpawned.Add(int64 effects.Length)
+      match effects.IsEmpty with
+      | false -> Instrumentation.elmloopEffectsSpawned.Add(int64 effects.Length)
+      | true -> ()
       for effect in effects do
         Async.Start (async {
           try do! program.ExecuteEffect dispatch effect

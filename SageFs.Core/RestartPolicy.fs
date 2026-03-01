@@ -55,8 +55,9 @@ module RestartPolicy =
   /// Calculate the backoff delay for a given restart count.
   /// Exponential: base * 2^(count-1), capped at max.
   let nextBackoff (policy: Policy) (restartCount: int) : TimeSpan =
-    if restartCount <= 0 then policy.BackoffBase
-    else
+    match restartCount <= 0 with
+    | true -> policy.BackoffBase
+    | false ->
       let exponent = min restartCount 20
       let multiplier = Math.Pow(2.0, float (exponent - 1))
       let delay = policy.BackoffBase.TotalMilliseconds * multiplier
@@ -81,13 +82,14 @@ module RestartPolicy =
         emptyState
       | _ -> state
 
-    if effectiveState.RestartCount >= policy.MaxRestarts then
+    match effectiveState.RestartCount >= policy.MaxRestarts with
+    | true ->
       let error =
         SageFsError.RestartLimitExceeded(
           effectiveState.RestartCount,
           policy.ResetWindow.TotalMinutes)
       Decision.GiveUp error, effectiveState
-    else
+    | false ->
       let newCount = effectiveState.RestartCount + 1
       let delay = nextBackoff policy newCount
       let newState = {

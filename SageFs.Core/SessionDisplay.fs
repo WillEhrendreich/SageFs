@@ -68,10 +68,9 @@ module SessionDisplay =
     match info.Status with
     | SessionStatus.Ready
     | SessionStatus.Evaluating ->
-      if now - info.LastActivity > staleDuration then
-        SessionDisplayStatus.Stale
-      else
-        SessionDisplayStatus.Running
+      match now - info.LastActivity > staleDuration with
+      | true -> SessionDisplayStatus.Stale
+      | false -> SessionDisplayStatus.Running
     | SessionStatus.Starting ->
       SessionDisplayStatus.Starting
     | SessionStatus.Faulted ->
@@ -116,12 +115,14 @@ module SessionDisplay =
           Label = "Switch"
           KeyHint = KeyMap.hintFor keyMap (EditorAction.SwitchSession snap.Id)
           Enabled = not snap.IsActive }
-      if snap.Status = SessionDisplayStatus.Stale || not snap.IsActive then
+      match snap.Status = SessionDisplayStatus.Stale || not snap.IsActive with
+      | true ->
         yield
           { Action = EditorAction.StopSession snap.Id
             Label = "Stop"
             KeyHint = KeyMap.hintFor keyMap (EditorAction.StopSession snap.Id)
             Enabled = true }
+      | false -> ()
       match snap.Status with
       | SessionDisplayStatus.Errored _ ->
         yield

@@ -11,10 +11,9 @@ let codeHash (code: string) =
 
 let add (code: string) (diags: Diagnostic array) (store: T) : T =
   let key = codeHash code
-  if Array.isEmpty diags then
-    Map.remove key store
-  else
-    Map.add key (Array.toList diags) store
+  match Array.isEmpty diags with
+  | true -> Map.remove key store
+  | false -> Map.add key (Array.toList diags) store
 
 let forCode (code: string) (store: T) : Diagnostic list =
   let key = codeHash code

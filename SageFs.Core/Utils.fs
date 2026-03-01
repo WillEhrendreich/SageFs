@@ -15,10 +15,11 @@ module Configuration =
   let getEmbeddedFileAsString fileName (asm: Assembly) =
     task {
       let stream = asm.GetManifestResourceStream fileName
-      if isNull stream then
+      match isNull stream with
+      | true ->
         let available = asm.GetManifestResourceNames() |> String.concat ", "
         return failwithf "Embedded resource '%s' not found in %s. Available: %s" fileName asm.FullName available
-      else
+      | false ->
         use s = stream
         use reader = new StreamReader(s)
         return! reader.ReadToEndAsync()
@@ -32,7 +33,8 @@ module Configuration =
       Environment.GetFolderPath Environment.SpecialFolder.ApplicationData
       |> fun s -> Path.Combine [| s; "SageFs" |]
 
-    if not <| Directory.Exists configDir then
-      do Directory.CreateDirectory configDir |> ignore
+    match Directory.Exists configDir with
+    | false -> do Directory.CreateDirectory configDir |> ignore
+    | true -> ()
 
     configDir

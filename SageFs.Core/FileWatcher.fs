@@ -112,7 +112,8 @@ let start
   let watchers =
     config.Directories
     |> List.choose (fun dir ->
-      if Directory.Exists(dir) then
+      match Directory.Exists(dir) with
+      | true ->
         let watcher = new FileSystemWatcher(dir)
         watcher.IncludeSubdirectories <- false
         watcher.NotifyFilter <- NotifyFilters.LastWrite ||| NotifyFilters.FileName
@@ -120,7 +121,8 @@ let start
           watcher.Filters.Add(sprintf "*%s" ext)
 
         let handler (kind: FileChangeKind) (e: FileSystemEventArgs) =
-          if shouldTriggerRebuild config e.FullPath then
+          match shouldTriggerRebuild config e.FullPath with
+          | true ->
             let change = {
               FilePath = e.FullPath
               Kind = kind
@@ -131,6 +133,7 @@ let start
               pendingChanges <-
                 change :: (pendingChanges |> List.filter (fun c -> c.FilePath <> change.FilePath))
               timer.Change(config.DebounceMs, Threading.Timeout.Infinite) |> ignore)
+          | false -> ()
 
         watcher.Changed.Add(handler FileChangeKind.Changed)
         watcher.Created.Add(handler FileChangeKind.Created)
@@ -138,7 +141,7 @@ let start
         watcher.Renamed.Add(fun e -> handler FileChangeKind.Renamed e)
         watcher.EnableRaisingEvents <- true
         Some (watcher :> IDisposable)
-      else
+      | false ->
         None)
 
   { new IDisposable with

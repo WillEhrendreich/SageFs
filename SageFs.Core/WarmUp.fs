@@ -17,12 +17,13 @@ let openWithRetry
   : string list * (string * string) list =
   let firstErrors = System.Collections.Generic.Dictionary<string, string>()
   let rec loop round remaining acc =
-    if round > maxRounds || List.isEmpty remaining then
+    match round > maxRounds || List.isEmpty remaining with
+    | true ->
       (acc, remaining |> List.map (fun n ->
         match firstErrors.TryGetValue(n) with
         | true, e -> n, e
         | _ -> n, "max retries exceeded"))
-    else
+    | false ->
       let results =
         remaining
         |> List.map (fun name -> name, opener name)
@@ -35,13 +36,15 @@ let openWithRetry
         |> List.choose (fun (n, r) ->
           match r with
           | Error e ->
-            if not (firstErrors.ContainsKey(n)) then
-              firstErrors.[n] <- e
+            match firstErrors.ContainsKey(n) with
+            | false -> firstErrors.[n] <- e
+            | true -> ()
             Some (n, e)
           | _ -> None)
-      if List.isEmpty succeeded then
+      match List.isEmpty succeeded with
+      | true ->
         (acc, failed |> List.map (fun (n, _) ->
           n, (match firstErrors.TryGetValue(n) with true, e -> e | _ -> "unknown")))
-      else
+      | false ->
         loop (round + 1) (failed |> List.map fst) (acc @ succeeded)
   loop 1 names []

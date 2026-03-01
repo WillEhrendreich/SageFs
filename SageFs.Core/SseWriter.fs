@@ -8,10 +8,11 @@ open System.Threading.Tasks
 /// Pure: format an SSE event string.
 /// Handles data containing newlines per SSE spec (each line as separate data: field).
 let formatSseEvent (eventType: string) (data: string) : string =
-  if data.Contains("\n") then
+  match data.Contains("\n") with
+  | true ->
     let dataLines = data.Split('\n') |> Array.map (sprintf "data: %s") |> String.concat "\n"
     sprintf "event: %s\n%s\n\n" eventType dataLines
-  else
+  | false ->
     sprintf "event: %s\ndata: %s\n\n" eventType data
 
 /// Pure: format SSE event with multiline data
@@ -44,9 +45,10 @@ let injectSessionId (sessionId: string option) (json: string) : string =
   match sessionId with
   | None -> json
   | Some sid ->
-    if json.StartsWith("{") then
+    match json.StartsWith("{") with
+    | true ->
       sprintf """{"SessionId":"%s",%s""" sid (json.Substring(1))
-    else json
+    | false -> json
 
 /// Format a TestSummary as an SSE event string
 let formatTestSummaryEvent (opts: JsonSerializerOptions) (sessionId: string option) (summary: Features.LiveTesting.TestSummary) : string =

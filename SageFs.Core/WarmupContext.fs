@@ -112,14 +112,14 @@ module SessionContext =
     sprintf "📦 %s (%d ns, %d mod)" asm.Name asm.NamespaceCount asm.ModuleCount
 
   let openLine (b: OpenedBinding) =
-    let kind = if b.IsModule then "module" else "namespace"
+    let kind = match b.IsModule with | true -> "module" | false -> "namespace"
     sprintf "open %s // %s via %s" b.Name kind b.Source
 
   let fileLine (f: FileStatus) =
     sprintf "%s %s%s"
       (FileReadiness.icon f.Readiness)
       f.Path
-      (if f.IsWatched then " 👁" else "")
+      (match f.IsWatched with | true -> " 👁" | false -> "")
 
 /// TUI-specific formatting for session context — plain text lines.
 module SessionContextTui =
@@ -137,32 +137,41 @@ module SessionContextTui =
   let detailLines (ctx: SessionContext) =
     let lines = System.Collections.Generic.List<string>()
     lines.Add(sprintf "Session: %s" ctx.SessionId)
-    if ctx.WorkingDir.Length > 0 then
-      lines.Add(sprintf "Dir: %s" ctx.WorkingDir)
+    match ctx.WorkingDir.Length > 0 with
+    | true -> lines.Add(sprintf "Dir: %s" ctx.WorkingDir)
+    | false -> ()
 
     let asms = ctx.Warmup.AssembliesLoaded
-    if asms.Length > 0 then
+    match asms.Length > 0 with
+    | true ->
       lines.Add(sprintf "── Assemblies (%d) ──" asms.Length)
       for a in asms do
         lines.Add(SessionContext.assemblyLine a)
+    | false -> ()
 
     let opened = ctx.Warmup.NamespacesOpened
-    if opened.Length > 0 then
+    match opened.Length > 0 with
+    | true ->
       lines.Add(sprintf "── Opened (%d) ──" opened.Length)
       for b in opened do
         lines.Add(SessionContext.openLine b)
+    | false -> ()
 
     let failed = ctx.Warmup.FailedOpens
-    if failed.Length > 0 then
+    match failed.Length > 0 with
+    | true ->
       lines.Add(sprintf "── Failed (%d) ──" failed.Length)
       for (name, err) in failed do
         lines.Add(sprintf "✖ %s: %s" name err)
+    | false -> ()
 
     let files = ctx.FileStatuses
-    if files.Length > 0 then
+    match files.Length > 0 with
+    | true ->
       lines.Add(sprintf "── Files (%d) ──" files.Length)
       for f in files do
         lines.Add(SessionContext.fileLine f)
+    | false -> ()
 
     lines |> Seq.toList
 

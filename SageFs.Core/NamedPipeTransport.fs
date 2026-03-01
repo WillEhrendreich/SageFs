@@ -27,9 +27,9 @@ module NamedPipeTransport =
   let readMessage (stream: Stream) = async {
     let lenBuf = Array.zeroCreate<byte> 4
     let! bytesRead = stream.ReadAsync(lenBuf, 0, 4) |> Async.AwaitTask
-    if bytesRead < 4 then
-      return None
-    else
+    match bytesRead < 4 with
+    | true -> return None
+    | false ->
       let len =
         System.Net.IPAddress.NetworkToHostOrder(
           BitConverter.ToInt32(lenBuf, 0))
@@ -38,7 +38,9 @@ module NamedPipeTransport =
       while offset < len do
         let! n =
           stream.ReadAsync(buf, offset, len - offset) |> Async.AwaitTask
-        if n = 0 then failwith "Pipe closed during read"
+        match n = 0 with
+        | true -> failwith "Pipe closed during read"
+        | false -> ()
         offset <- offset + n
       return Some(Encoding.UTF8.GetString(buf))
   }

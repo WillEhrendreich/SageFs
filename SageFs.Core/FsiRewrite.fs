@@ -11,14 +11,16 @@ let rewriteInlineUseStatements (code: string) : string =
   let rewrittenLines =
     lines |> Array.mapi (fun i line ->
       let trimmed = line.TrimStart()
-      if trimmed.StartsWith("use ", System.StringComparison.Ordinal) && line.Length > trimmed.Length then
+      match trimmed.StartsWith("use ", System.StringComparison.Ordinal) && line.Length > trimmed.Length with
+      | true ->
         rewritten <- true
         let indent = line.Length - trimmed.Length
         line.Substring(0, indent) + "let " + trimmed.Substring(4)
-      else
+      | false ->
         line
     )
-  if rewritten then
+  match rewritten with
+  | true ->
     String.Join("\n", rewrittenLines)
-  else
+  | false ->
     code

@@ -233,15 +233,18 @@ module DaemonClient =
         retryDelay <- 1000
         while not ct.IsCancellationRequested do
           let! line = reader.ReadLineAsync(ct)
-          if isNull line then
-            raise (IO.IOException("SSE stream ended"))
-          if line.StartsWith("data: ", System.StringComparison.Ordinal) then
+          match isNull line with
+          | true -> raise (IO.IOException("SSE stream ended"))
+          | false -> ()
+          match line.StartsWith("data: ", System.StringComparison.Ordinal) with
+          | true ->
             let json = line.Substring(6)
             match parseStateEvent json with
             | Some event ->
               let regions = event.Regions |> List.map DaemonRegionData.toRenderRegion
               onState event regions
             | None -> ()
+          | false -> ()
       with
       | :? OperationCanceledException -> ()
       | _ when not ct.IsCancellationRequested ->

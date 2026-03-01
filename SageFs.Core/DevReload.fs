@@ -41,5 +41,6 @@ let registerClient (id: string) =
 
 let unregisterClient (id: string) =
   let clients = getClients ()
-  if clients.TryRemove(id) |> fst then
-    Instrumentation.devReloadConnectedClients.Add(-1L)
+  match clients.TryRemove(id) |> fst with
+  | true -> Instrumentation.devReloadConnectedClients.Add(-1L)
+  | false -> ()

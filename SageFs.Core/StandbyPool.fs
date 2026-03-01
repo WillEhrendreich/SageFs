@@ -41,7 +41,9 @@ with
       match obj with
       | :? StandbyKey as y ->
         let c = compare x.Projects y.Projects
-        if c <> 0 then c else compare x.WorkingDir y.WorkingDir
+        match c <> 0 with
+        | true -> c
+        | false -> compare x.WorkingDir y.WorkingDir
       | _ -> 1
 
 module StandbyKey =
@@ -142,9 +144,8 @@ module PoolState =
     let updated =
       state.Standbys
       |> Map.map (fun key standby ->
-        if key.WorkingDir = workingDir
-           && StandbyPool.shouldInvalidate (Some standby) then
-          { standby with State = StandbyState.Invalidated }
-        else
-          standby)
+        match key.WorkingDir = workingDir
+              && StandbyPool.shouldInvalidate (Some standby) with
+        | true -> { standby with State = StandbyState.Invalidated }
+        | false -> standby)
     { state with Standbys = updated }

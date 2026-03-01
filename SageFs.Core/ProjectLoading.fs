@@ -166,11 +166,13 @@ let solutionToFsiArgs (logger: ILogger) (_useAsp: bool) sln =
     |> Seq.distinct
     |> List.ofSeq
 
-  if List.exists (File.Exists >> not) allDlls then
+  match List.exists (File.Exists >> not) allDlls with
+  | true ->
     let missing = allDlls |> List.filter (File.Exists >> not)
     for dll in missing do
       logger.LogError (sprintf "Missing DLL: %s" dll)
     failwithf "Not all DLLs are found (%d missing). Please build your project before running REPL" missing.Length
+  | false -> ()
 
   [|
     "fsi"

@@ -29,8 +29,9 @@ let isVersionConflict (ex: exn) : bool =
 let backoffMs (config: RetryConfig) (attempt: int) : int =
   let baseDelay = config.BaseDelayMs * (attempt + 1)
   let jitterRange = baseDelay / 2
-  if jitterRange = 0 then baseDelay
-  else baseDelay - jitterRange + System.Random.Shared.Next(jitterRange * 2)
+  match jitterRange = 0 with
+  | true -> baseDelay
+  | false -> baseDelay - jitterRange + System.Random.Shared.Next(jitterRange * 2)
 
 /// Whether more retries are available
 let shouldRetry (config: RetryConfig) (attempt: int) : bool =
@@ -38,6 +39,9 @@ let shouldRetry (config: RetryConfig) (attempt: int) : bool =
 
 /// Pure decision: given config, attempt number, and exception, decide what to do
 let decide (config: RetryConfig) (attempt: int) (ex: exn) : RetryOutcome =
-  if not (isVersionConflict ex) then GiveUp ex
-  elif not (shouldRetry config attempt) then GiveUp ex
-  else RetryAfter (backoffMs config attempt)
+  match isVersionConflict ex with
+  | false -> GiveUp ex
+  | true ->
+    match shouldRetry config attempt with
+    | false -> GiveUp ex
+    | true -> RetryAfter (backoffMs config attempt)

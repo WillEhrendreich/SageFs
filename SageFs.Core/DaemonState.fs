@@ -45,7 +45,8 @@ module DaemonState =
       let! resp =
         httpClient.GetAsync(sprintf "http://localhost:%d/api/daemon-info" dashboardPort)
         |> Async.AwaitTask
-      if resp.IsSuccessStatusCode then
+      match resp.IsSuccessStatusCode with
+      | true ->
         let! json = resp.Content.ReadAsStringAsync() |> Async.AwaitTask
         let doc = JsonDocument.Parse(json)
         let root = doc.RootElement
@@ -72,11 +73,12 @@ module DaemonState =
           WorkingDirectory = workingDir
           Version = version
         }
-      else
+      | false ->
         let! fallbackResp =
           httpClient.GetAsync(sprintf "http://localhost:%d/dashboard" dashboardPort)
           |> Async.AwaitTask
-        if fallbackResp.IsSuccessStatusCode then
+        match fallbackResp.IsSuccessStatusCode with
+        | true ->
           return Some {
             Pid = 0
             Port = mcpPort
@@ -84,13 +86,14 @@ module DaemonState =
             WorkingDirectory = Environment.CurrentDirectory
             Version = "unknown"
           }
-        else return None
+        | false -> return None
     with _ ->
       try
         let! fallbackResp =
           httpClient.GetAsync(sprintf "http://localhost:%d/dashboard" dashboardPort)
           |> Async.AwaitTask
-        if fallbackResp.IsSuccessStatusCode then
+        match fallbackResp.IsSuccessStatusCode with
+        | true ->
           return Some {
             Pid = 0
             Port = mcpPort
@@ -98,7 +101,7 @@ module DaemonState =
             WorkingDirectory = Environment.CurrentDirectory
             Version = "unknown"
           }
-        else return None
+        | false -> return None
       with _ -> return None
   }
 

@@ -25,9 +25,10 @@ module SessionLifecycle =
     (exitCode: int)
     (now: DateTime)
     : ExitOutcome =
-    if exitCode = 0 then
+    match exitCode = 0 with
+    | true ->
       ExitOutcome.Graceful
-    else
+    | false ->
       let decision, newState = RestartPolicy.decide policy restartState now
       match decision with
       | RestartPolicy.Decision.Restart delay ->

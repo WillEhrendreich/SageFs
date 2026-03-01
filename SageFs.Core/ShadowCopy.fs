@@ -16,16 +16,18 @@ let createShadowDir () : string =
 /// Copies a DLL (and companion .pdb) to the shadow directory.
 /// Returns the new path if copied, or the original path if source doesn't exist.
 let shadowCopyFile (shadowDir: string) (sourcePath: string) : string =
-  if not (File.Exists sourcePath) then
-    sourcePath
-  else
+  match File.Exists sourcePath with
+  | false -> sourcePath
+  | true ->
     let fileName = Path.GetFileName sourcePath
     let destPath = Path.Combine(shadowDir, fileName)
     File.Copy(sourcePath, destPath, true)
     let pdbSource = Path.ChangeExtension(sourcePath, ".pdb")
-    if File.Exists pdbSource then
+    match File.Exists pdbSource with
+    | true ->
       let pdbDest = Path.ChangeExtension(destPath, ".pdb")
       File.Copy(pdbSource, pdbDest, true)
+    | false -> ()
     destPath
 
 /// Rewrites a Solution's assembly references to point at shadow copies.
@@ -48,19 +50,22 @@ let shadowCopySolution (shadowDir: string) (sln: Solution) : Solution =
 let pendingCleanups = System.Collections.Concurrent.ConcurrentBag<string>()
 
 let cleanupShadowDir (shadowDir: string) : unit =
-  if Directory.Exists shadowDir then
+  match Directory.Exists shadowDir with
+  | true ->
     try
       Directory.Delete(shadowDir, true)
     with
     | :? UnauthorizedAccessException
     | :? IO.IOException ->
       pendingCleanups.Add(shadowDir)
+  | false -> ()
 
 let cleanupAllPending () : unit =
   for dir in pendingCleanups do
     try
-      if Directory.Exists dir then
-        Directory.Delete(dir, true)
+      match Directory.Exists dir with
+      | true -> Directory.Delete(dir, true)
+      | false -> ()
     with _ -> ()
 
 /// Removes all sagefs-shadow-* directories except the most recent one.
@@ -74,9 +79,11 @@ let cleanupStaleDirs () : unit =
         try Directory.GetLastWriteTimeUtc d
         with _ -> DateTime.MinValue)
     // Keep the most recent, clean the rest
-    if shadowDirs.Length > 1 then
+    match shadowDirs.Length > 1 with
+    | true ->
       for dir in shadowDirs.[1..] do
         try Directory.Delete(dir, true)
         with _ -> ()
+    | false -> ()
   with _ -> ()
 

@@ -39,11 +39,13 @@ type ConnectionTracker() =
     let mutable terminals = 0
     for kv in clients do
       let c = kv.Value
-      if c.SessionId = Some sessionId then
+      match c.SessionId = Some sessionId with
+      | true ->
         match c.Kind with
         | Browser -> browsers <- browsers + 1
         | McpAgent -> mcpAgents <- mcpAgents + 1
         | Terminal -> terminals <- terminals + 1
+      | false -> ()
     {| Browsers = browsers; McpAgents = mcpAgents; Terminals = terminals |}
 
   member _.GetAllCounts() =

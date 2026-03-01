@@ -26,8 +26,10 @@ module LiveTestingInstrumentation =
     let sw = Stopwatch.StartNew()
     let result = f ()
     sw.Stop()
-    if activity <> null then
+    match activity <> null with
+    | true ->
       for (k, v) in tags do
         activity.SetTag(k, v) |> ignore
       activity.SetTag("duration_ms", sw.Elapsed.TotalMilliseconds) |> ignore
+    | false -> ()
     result
