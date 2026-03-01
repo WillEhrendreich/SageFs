@@ -2,13 +2,14 @@ import { FSharpRef, Record } from "./fable_modules/fable-library-js.4.29.0/Types
 import { record_type, lambda_type, unit_type, list_type, class_type } from "./fable_modules/fable-library-js.4.29.0/Reflection.js";
 import { VscTestIdModule_value, VscStateChange_$reflection } from "./LiveTestingTypes.fs.js";
 import { newTestMessage, newRange, uriFile, Tests_createTestController } from "./Vscode.fs.js";
+import { iterate } from "./fable_modules/fable-library-js.4.29.0/Seq.js";
+import { some, defaultArg, map, toArray } from "./fable_modules/fable-library-js.4.29.0/Option.js";
+import { disposeSafe, getEnumerator, defaultOf } from "./fable_modules/fable-library-js.4.29.0/Util.js";
 import { PromiseBuilder__Delay_62FBFDE1, PromiseBuilder__Run_212F1D4B } from "./fable_modules/Fable.Promise.3.2.0/Promise.fs.js";
 import { item as item_4 } from "./fable_modules/fable-library-js.4.29.0/Array.js";
 import { promise } from "./fable_modules/Fable.Promise.3.2.0/PromiseImpl.fs.js";
 import { runTests } from "./SageFsClient.fs.js";
-import { defaultOf, disposeSafe, getEnumerator } from "./fable_modules/fable-library-js.4.29.0/Util.js";
 import { tryGetValue } from "./fable_modules/fable-library-js.4.29.0/MapUtil.js";
-import { defaultArg, map } from "./fable_modules/fable-library-js.4.29.0/Option.js";
 
 export class TestAdapter extends Record {
     constructor(Controller, Refresh, Dispose) {
@@ -26,6 +27,32 @@ export function TestAdapter_$reflection() {
 export function create(getClient) {
     const controller = Tests_createTestController("sagefs", "SageFs Live Tests");
     const testItemMap = new Map([]);
+    let activeRun = undefined;
+    let endRunTimer = undefined;
+    const endActiveRun = () => {
+        iterate((id) => {
+            clearTimeout(id);
+        }, toArray(endRunTimer));
+        endRunTimer = undefined;
+        iterate((r) => {
+            r.end();
+        }, toArray(activeRun));
+        activeRun = undefined;
+    };
+    const getOrCreateRun = () => {
+        if (activeRun == null) {
+            const request = {
+                include: defaultOf(),
+                exclude: defaultOf(),
+            };
+            const run_1 = controller.createTestRun(request);
+            activeRun = run_1;
+            return run_1;
+        }
+        else {
+            return activeRun;
+        }
+    };
     const _runProfile = controller.createRunProfile("Run Tests", (1), ((req, token) => PromiseBuilder__Run_212F1D4B(promise, PromiseBuilder__Delay_62FBFDE1(promise, () => {
         let items;
         const matchValue_4 = getClient();
@@ -63,7 +90,7 @@ export function create(getClient) {
         }
     }))), true);
     return new TestAdapter(controller, (changes) => {
-        let info, id, matchValue, outArg, item, uri, item_1, u, matchValue_1, line;
+        let info, id_2, matchValue, outArg, item, uri, item_1, u, matchValue_1, line;
         const enumerator = getEnumerator(changes);
         try {
             while (enumerator["System.Collections.IEnumerator.MoveNext"]()) {
@@ -72,25 +99,21 @@ export function create(getClient) {
                     case 0: {
                         const tests = change.fields[0];
                         for (let idx_1 = 0; idx_1 <= (tests.length - 1); idx_1++) {
-                            (info = item_4(idx_1, tests), (id = VscTestIdModule_value(info.Id), (matchValue = ((outArg = defaultOf(), [tryGetValue(testItemMap, id, new FSharpRef(() => outArg, (v) => {
+                            (info = item_4(idx_1, tests), (id_2 = VscTestIdModule_value(info.Id), (matchValue = ((outArg = defaultOf(), [tryGetValue(testItemMap, id_2, new FSharpRef(() => outArg, (v) => {
                                 outArg = v;
-                            })), outArg])), matchValue[0] ? ((item = matchValue[1], (item.label = info.DisplayName, item))) : ((uri = map(uriFile, info.FilePath), (item_1 = ((uri == null) ? (controller.createTestItem(id, info.DisplayName, undefined)) : ((u = uri, controller.createTestItem(id, info.DisplayName, u)))), ((matchValue_1 = info.Line, (matchValue_1 == null) ? undefined : ((line = (matchValue_1 | 0), item_1.range = newRange(line - 1, 0, line - 1, 0)))), (controller.items.add(item_1), (testItemMap.set(id, item_1), item_1)))))))));
+                            })), outArg])), matchValue[0] ? ((item = matchValue[1], (item.label = info.DisplayName, item))) : ((uri = map(uriFile, info.FilePath), (item_1 = ((uri == null) ? (controller.createTestItem(id_2, info.DisplayName, undefined)) : ((u = uri, controller.createTestItem(id_2, info.DisplayName, u)))), ((matchValue_1 = info.Line, (matchValue_1 == null) ? undefined : ((line = (matchValue_1 | 0), item_1.range = newRange(line - 1, 0, line - 1, 0)))), (controller.items.add(item_1), (testItemMap.set(id_2, item_1), item_1)))))))));
                         }
                         break;
                     }
                     case 2: {
                         const results = change.fields[0];
-                        const request = {
-                            include: defaultOf(),
-                            exclude: defaultOf(),
-                        };
-                        const run = controller.createTestRun(request);
+                        const run_2 = getOrCreateRun();
                         for (let idx = 0; idx <= (results.length - 1); idx++) {
                             const result = item_4(idx, results);
-                            const id_1 = VscTestIdModule_value(result.Id);
+                            const id_3 = VscTestIdModule_value(result.Id);
                             let matchValue_2;
                             let outArg_1 = defaultOf();
-                            matchValue_2 = [tryGetValue(testItemMap, id_1, new FSharpRef(() => outArg_1, (v_1) => {
+                            matchValue_2 = [tryGetValue(testItemMap, id_3, new FSharpRef(() => outArg_1, (v_1) => {
                                 outArg_1 = v_1;
                             })), outArg_1];
                             if (matchValue_2[0]) {
@@ -100,45 +123,47 @@ export function create(getClient) {
                                 switch (matchValue_3.tag) {
                                     case 1: {
                                         const message = newTestMessage(matchValue_3.fields[0]);
-                                        run.failed(item_2, message, durationMs);
+                                        run_2.failed(item_2, message, durationMs);
                                         break;
                                     }
                                     case 2: {
-                                        run.skipped(item_2);
+                                        run_2.skipped(item_2);
                                         break;
                                     }
                                     case 3: {
-                                        run.started(item_2);
+                                        run_2.started(item_2);
                                         break;
                                     }
                                     case 4: {
                                         const message_1 = newTestMessage(matchValue_3.fields[0]);
-                                        run.failed(item_2, message_1, durationMs);
+                                        run_2.failed(item_2, message_1, durationMs);
                                         break;
                                     }
                                     case 5: {
-                                        run.skipped(item_2);
+                                        run_2.skipped(item_2);
                                         break;
                                     }
                                     case 6: {
-                                        run.skipped(item_2);
+                                        run_2.skipped(item_2);
                                         break;
                                     }
                                     default:
-                                        run.passed(item_2, durationMs);
+                                        run_2.passed(item_2, durationMs);
                                 }
                             }
                         }
-                        run.end();
+                        iterate((id_1) => {
+                            clearTimeout(id_1);
+                        }, toArray(endRunTimer));
+                        endRunTimer = some(setTimeout((() => {
+                            endActiveRun();
+                        }), 500));
                         break;
                     }
                     case 1: {
                         const ids = change.fields[0];
-                        const request_2 = {
-                            include: defaultOf(),
-                            exclude: defaultOf(),
-                        };
-                        const run_1 = controller.createTestRun(request_2);
+                        endActiveRun();
+                        const run_3 = getOrCreateRun();
                         for (let idx_2 = 0; idx_2 <= (ids.length - 1); idx_2++) {
                             const idStr = VscTestIdModule_value(item_4(idx_2, ids));
                             let matchValue_6;
@@ -147,10 +172,9 @@ export function create(getClient) {
                                 outArg_2 = v_2;
                             })), outArg_2];
                             if (matchValue_6[0]) {
-                                run_1.started(matchValue_6[1]);
+                                run_3.started(matchValue_6[1]);
                             }
                         }
-                        run_1.end();
                         break;
                     }
                     default:
@@ -162,6 +186,7 @@ export function create(getClient) {
             disposeSafe(enumerator);
         }
     }, () => {
+        endActiveRun();
         controller.dispose();
     });
 }

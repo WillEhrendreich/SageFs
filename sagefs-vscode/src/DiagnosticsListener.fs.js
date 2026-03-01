@@ -1,53 +1,30 @@
+import { tryField, subscribeSse } from "./JsHelpers.fs.js";
 import { printf, toText } from "./fable_modules/fable-library-js.4.29.0/String.js";
+import { iterate } from "./fable_modules/fable-library-js.4.29.0/Seq.js";
 import { item } from "./fable_modules/fable-library-js.4.29.0/Array.js";
+import { toArray, defaultArg } from "./fable_modules/fable-library-js.4.29.0/Option.js";
 import { uriFile, newRange, newDiagnostic } from "./Vscode.fs.js";
 import { max } from "./fable_modules/fable-library-js.4.29.0/Double.js";
 import { getItemFromDict } from "./fable_modules/fable-library-js.4.29.0/MapUtil.js";
 import { disposeSafe, getEnumerator } from "./fable_modules/fable-library-js.4.29.0/Util.js";
 
 export function start(port, dc) {
-    const url = toText(printf("http://localhost:%d/diagnostics"))(port);
-    return (() => {
-  const http = require('http');
-  let req;
-  let buffer = '';
-  let retryDelay = 1000;
-  const maxDelay = 30000;
-  const startListening = () => {
-    req = http.get(url, { timeout: 0 }, (res) => {
-      retryDelay = 1000;
-      res.on('data', (chunk) => {
-        buffer += chunk.toString();
-        let lines = buffer.split('\\n');
-        buffer = lines.pop() || '';
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            try {
-              const data = JSON.parse(line.slice(6));
-              ((data) => {
-        const rawDiags = data.diagnostics;
-        if (rawDiags == null) {
-        }
-        else {
-            const diagnostics = rawDiags;
+    return subscribeSse(toText(printf("http://localhost:%d/diagnostics"))(port), (data) => {
+        iterate((diagnostics) => {
             const byFile = new Map([]);
             for (let idx = 0; idx <= (diagnostics.length - 1); idx++) {
                 const diag = item(idx, diagnostics);
-                const file = diag.file;
-                if (file == null) {
-                }
-                else {
-                    const msg = diag.message;
-                    const message = (msg == null) ? "" : msg;
+                iterate((file) => {
+                    const message = defaultArg(tryField("message", diag), "");
                     let severity;
-                    const matchValue = diag.severity;
+                    const matchValue = defaultArg(tryField("severity", diag), "");
                     severity = ((matchValue === "error") ? (0) : ((matchValue === "warning") ? (1) : ((matchValue === "info") ? (2) : (3))));
-                    const d = newDiagnostic(newRange(max(0, diag.startLine - 1), max(0, diag.startColumn - 1), max(0, diag.endLine - 1), max(0, diag.endColumn - 1)), message, severity);
+                    const d = newDiagnostic(newRange(max(0, defaultArg(tryField("startLine", diag), 1) - 1), max(0, defaultArg(tryField("startColumn", diag), 1) - 1), max(0, defaultArg(tryField("endLine", diag), 1) - 1), max(0, defaultArg(tryField("endColumn", diag), 1) - 1)), message, severity);
                     if (!byFile.has(file)) {
                         byFile.set(file, []);
                     }
                     void (getItemFromDict(byFile, file).push(d));
-                }
+                }, toArray(tryField("file", diag)));
             }
             dc.clear();
             let enumerator = getEnumerator(byFile);
@@ -61,28 +38,7 @@ export function start(port, dc) {
             finally {
                 disposeSafe(enumerator);
             }
-        }
-    })(data);
-            } catch (_) {}
-          }
-        }
-      });
-      res.on('end', () => {
-        retryDelay = Math.min(retryDelay * 2, maxDelay);
-        setTimeout(startListening, retryDelay);
-      });
-      res.on('error', () => {
-        retryDelay = Math.min(retryDelay * 2, maxDelay);
-        setTimeout(startListening, retryDelay);
-      });
+        }, toArray(tryField("diagnostics", data)));
     });
-    req.on('error', () => {
-      retryDelay = Math.min(retryDelay * 2, maxDelay);
-      setTimeout(startListening, retryDelay);
-    });
-  };
-  startListening();
-  return { dispose: () => { if (req) req.destroy(); } };
-})();
 }
 

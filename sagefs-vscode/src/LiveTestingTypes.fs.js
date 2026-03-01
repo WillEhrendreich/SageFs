@@ -1,7 +1,7 @@
 import { Record, Union } from "./fable_modules/fable-library-js.4.29.0/Types.js";
 import { tuple_type, array_type, class_type, float64_type, record_type, int32_type, option_type, union_type, string_type } from "./fable_modules/fable-library-js.4.29.0/Reflection.js";
-import { tryFind, toList as toList_1, filter, count, iterate, FSharpMap__get_Count, add, empty } from "./fable_modules/fable-library-js.4.29.0/Map.js";
-import { equals, comparePrimitives, compare } from "./fable_modules/fable-library-js.4.29.0/Util.js";
+import { tryFind, toList as toList_1, filter, count, fold as fold_1, FSharpMap__get_Count, add, empty } from "./fable_modules/fable-library-js.4.29.0/Map.js";
+import { uncurry3, comparePrimitives, compare } from "./fable_modules/fable-library-js.4.29.0/Util.js";
 import { FSharpSet__get_Count, difference, ofArray, empty as empty_1 } from "./fable_modules/fable-library-js.4.29.0/Set.js";
 import { map, fold } from "./fable_modules/fable-library-js.4.29.0/Array.js";
 import { choose, singleton } from "./fable_modules/fable-library-js.4.29.0/List.js";
@@ -337,7 +337,14 @@ export function VscLiveTestStateModule_update(event, state) {
             const freshness = event.fields[1];
             return [new VscLiveTestState(state.Tests, fold((m_2, r) => add(r.Id, r, m_2), state.Results, results_1), state.Coverage, difference(state.RunningTests, ofArray(map((r_1) => r_1.Id, results_1), {
                 Compare: compare,
-            })), state.Policies, state.Enabled, state.LastTiming, freshness), toList(delay(() => append(singleton_1(new VscStateChange(2, [results_1])), delay(() => (!equals(freshness, new VscResultFreshness(0, [])) ? singleton_1(new VscStateChange(3, [freshness])) : empty_2())))))];
+            })), state.Policies, state.Enabled, state.LastTiming, freshness), toList(delay(() => append(singleton_1(new VscStateChange(2, [results_1])), delay(() => {
+                if (freshness.tag === 0) {
+                    return empty_2();
+                }
+                else {
+                    return singleton_1(new VscStateChange(3, [freshness]));
+                }
+            }))))];
         }
         case 3:
             return [new VscLiveTestState(state.Tests, state.Results, state.Coverage, state.RunningTests, state.Policies, new VscLiveTestingEnabled(0, []), state.LastTiming, state.Freshness), singleton(new VscStateChange(4, [new VscLiveTestingEnabled(0, [])]))];
@@ -370,43 +377,37 @@ export function VscLiveTestStateModule_update(event, state) {
  */
 export function VscLiveTestStateModule_summary(state) {
     const total = FSharpMap__get_Count(state.Tests) | 0;
-    let passed = 0;
-    let failed = 0;
-    let stale = 0;
-    let disabled = 0;
-    iterate((_arg, r) => {
-        const matchValue = r.Outcome;
-        switch (matchValue.tag) {
-            case 0: {
-                passed = ((passed + 1) | 0);
-                break;
+    const patternInput = fold_1(uncurry3((tupledArg) => ((_arg) => {
+        const p = tupledArg[0] | 0;
+        const f = tupledArg[1] | 0;
+        const s = tupledArg[2] | 0;
+        const d = tupledArg[3] | 0;
+        return (r) => {
+            const matchValue = r.Outcome;
+            switch (matchValue.tag) {
+                case 0:
+                    return [p + 1, f, s, d];
+                case 1:
+                case 4:
+                    return [p, f + 1, s, d];
+                case 5:
+                    return [p, f, s + 1, d];
+                case 6:
+                    return [p, f, s, d + 1];
+                default:
+                    return [p, f, s, d];
             }
-            case 1:
-            case 4: {
-                failed = ((failed + 1) | 0);
-                break;
-            }
-            case 5: {
-                stale = ((stale + 1) | 0);
-                break;
-            }
-            case 6: {
-                disabled = ((disabled + 1) | 0);
-                break;
-            }
-            default:
-                undefined;
-        }
-    }, state.Results);
-    const stale_1 = (!equals(state.Freshness, new VscResultFreshness(0, [])) ? count(filter((_arg_1, r_1) => {
+        };
+    })), [0, 0, 0, 0], state.Results);
+    const stale = ((state.Freshness.tag === 0) ? patternInput[2] : count(filter((_arg_1, r_1) => {
         if (r_1.Outcome.tag === 3) {
             return false;
         }
         else {
             return true;
         }
-    }, state.Results)) : stale) | 0;
-    return new VscTestSummary(total, passed, failed, FSharpSet__get_Count(state.RunningTests), stale_1, disabled);
+    }, state.Results))) | 0;
+    return new VscTestSummary(total, patternInput[0], patternInput[1], FSharpSet__get_Count(state.RunningTests), stale, patternInput[3]);
 }
 
 /**

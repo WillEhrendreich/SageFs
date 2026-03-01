@@ -1,22 +1,65 @@
-import { toString, Record } from "./fable_modules/fable-library-js.4.29.0/Types.js";
-import { array_type, int32_type, record_type, option_type, string_type, bool_type } from "./fable_modules/fable-library-js.4.29.0/Reflection.js";
+import { toString, Record, Union } from "./fable_modules/fable-library-js.4.29.0/Types.js";
+import { array_type, int32_type, record_type, bool_type, union_type, option_type, string_type } from "./fable_modules/fable-library-js.4.29.0/Reflection.js";
 import { printf, toText } from "./fable_modules/fable-library-js.4.29.0/String.js";
+import { map as map_1, some, orElse, defaultArg } from "./fable_modules/fable-library-js.4.29.0/Option.js";
+import { tryField } from "./JsHelpers.fs.js";
 import { PromiseBuilder__Delay_62FBFDE1, PromiseBuilder__Run_212F1D4B } from "./fable_modules/Fable.Promise.3.2.0/Promise.fs.js";
 import { promise } from "./fable_modules/Fable.Promise.3.2.0/PromiseImpl.fs.js";
 import { choose, map } from "./fable_modules/fable-library-js.4.29.0/Array.js";
-import { defaultArg } from "./fable_modules/fable-library-js.4.29.0/Option.js";
 
-export class EvalResult extends Record {
-    constructor(success, result, error) {
+export class ApiOutcome extends Union {
+    constructor(tag, fields) {
         super();
-        this.success = success;
-        this.result = result;
-        this.error = error;
+        this.tag = tag;
+        this.fields = fields;
+    }
+    cases() {
+        return ["Succeeded", "Failed"];
     }
 }
 
-export function EvalResult_$reflection() {
-    return record_type("SageFs.Vscode.SageFsClient.EvalResult", [], EvalResult, () => [["success", bool_type], ["result", option_type(string_type)], ["error", option_type(string_type)]]);
+export function ApiOutcome_$reflection() {
+    return union_type("SageFs.Vscode.SageFsClient.ApiOutcome", [], ApiOutcome, () => [[["message", option_type(string_type)]], [["error", string_type]]]);
+}
+
+export function ApiOutcomeModule_message(_arg) {
+    if (_arg.tag === 1) {
+        return undefined;
+    }
+    else {
+        return _arg.fields[0];
+    }
+}
+
+export function ApiOutcomeModule_error(_arg) {
+    if (_arg.tag === 0) {
+        return undefined;
+    }
+    else {
+        return _arg.fields[0];
+    }
+}
+
+export function ApiOutcomeModule_isOk(_arg) {
+    if (_arg.tag === 1) {
+        return false;
+    }
+    else {
+        return true;
+    }
+}
+
+export function ApiOutcomeModule_messageOrDefault(fallback, _arg) {
+    if (_arg.tag === 1) {
+        return _arg.fields[0];
+    }
+    else if (_arg.fields[0] == null) {
+        return fallback;
+    }
+    else {
+        const m = _arg.fields[0];
+        return m;
+    }
 }
 
 export class SageFsStatus extends Record {
@@ -178,6 +221,75 @@ export function dashHttpPost(c, path, body, timeout) {
     return new Promise((resolve, reject) => { const http = require('http'); const url = new URL((arg = (c.dashboardPort | 0), toText(printf("http://localhost:%d%s"))(arg)(path))); const req = http.request({ hostname: url.hostname, port: url.port, path: url.pathname, method: 'POST', headers: { 'Content-Type': 'application/json' }, timeout: timeout }, (res) => { let data = ''; res.on('data', (chunk) => data += chunk); res.on('end', () => resolve({ statusCode: res.statusCode || 0, body: data })); }); req.on('error', reject); req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); }); req.write(body); req.end(); });
 }
 
+export function parseOutcome(parsed) {
+    if (defaultArg(tryField("success", parsed), false)) {
+        return new ApiOutcome(0, [orElse(tryField("message", parsed), tryField("result", parsed))]);
+    }
+    else {
+        return new ApiOutcome(1, [defaultArg(tryField("error", parsed), "Unknown error")]);
+    }
+}
+
+/**
+ * POST a command, parse the standard { success, message/result, error } response.
+ */
+export function postCommand(c, path, body, timeout) {
+    return PromiseBuilder__Run_212F1D4B(promise, PromiseBuilder__Delay_62FBFDE1(promise, () => (PromiseBuilder__Delay_62FBFDE1(promise, () => (httpPost(c, path, body, timeout).then((_arg) => (Promise.resolve(parseOutcome(JSON.parse(_arg.body))))))).catch((_arg_1) => (Promise.resolve(new ApiOutcome(1, [toString(_arg_1)])))))));
+}
+
+/**
+ * GET from MCP port, parse JSON on 200, None otherwise.
+ */
+export function getJson(ctx, path, timeout, parse, c) {
+    return PromiseBuilder__Run_212F1D4B(promise, PromiseBuilder__Delay_62FBFDE1(promise, () => (PromiseBuilder__Delay_62FBFDE1(promise, () => (httpGet(c, path, timeout).then((_arg) => {
+        const resp = _arg;
+        return (resp.statusCode === 200) ? (Promise.resolve(some(parse(JSON.parse(resp.body))))) : (Promise.resolve(undefined));
+    }))).catch((_arg_1) => {
+        console.warn('[SageFs]', ctx, _arg_1);
+        return Promise.resolve(undefined);
+    }))));
+}
+
+/**
+ * GET raw body from MCP port on 200, None otherwise.
+ */
+export function getRaw(ctx, path, timeout, c) {
+    return PromiseBuilder__Run_212F1D4B(promise, PromiseBuilder__Delay_62FBFDE1(promise, () => (PromiseBuilder__Delay_62FBFDE1(promise, () => (httpGet(c, path, timeout).then((_arg) => {
+        const resp = _arg;
+        return (resp.statusCode === 200) ? (Promise.resolve(resp.body)) : (Promise.resolve(undefined));
+    }))).catch((_arg_1) => {
+        console.warn('[SageFs]', ctx, _arg_1);
+        return Promise.resolve(undefined);
+    }))));
+}
+
+/**
+ * GET from dashboard port, parse JSON on 200, None otherwise.
+ */
+export function dashGetJson(ctx, path, timeout, parse, c) {
+    return PromiseBuilder__Run_212F1D4B(promise, PromiseBuilder__Delay_62FBFDE1(promise, () => (PromiseBuilder__Delay_62FBFDE1(promise, () => (dashHttpGet(c, path, timeout).then((_arg) => {
+        const resp = _arg;
+        return (resp.statusCode === 200) ? (Promise.resolve(some(parse(JSON.parse(resp.body))))) : (Promise.resolve(undefined));
+    }))).catch((_arg_1) => {
+        console.warn('[SageFs]', ctx, _arg_1);
+        return Promise.resolve(undefined);
+    }))));
+}
+
+/**
+ * POST to dashboard port, succeed on 2xx, fail otherwise.
+ */
+export function dashPostOutcome(ctx, path, body, timeout, c) {
+    return PromiseBuilder__Run_212F1D4B(promise, PromiseBuilder__Delay_62FBFDE1(promise, () => (PromiseBuilder__Delay_62FBFDE1(promise, () => (dashHttpPost(c, path, body, timeout).then((_arg) => {
+        let s;
+        const resp = _arg;
+        return ((s = (resp.statusCode | 0), (s >= 200) && (s < 300))) ? (Promise.resolve(new ApiOutcome(0, [undefined]))) : (Promise.resolve(new ApiOutcome(1, [toText(printf("%s: HTTP %d"))(ctx)(resp.statusCode)])));
+    }))).catch((_arg_1) => {
+        let arg_3;
+        return Promise.resolve(new ApiOutcome(1, [(arg_3 = toString(_arg_1), toText(printf("%s: %s"))(ctx)(arg_3))]));
+    }))));
+}
+
 export function isRunning(c) {
     return PromiseBuilder__Run_212F1D4B(promise, PromiseBuilder__Delay_62FBFDE1(promise, () => (PromiseBuilder__Delay_62FBFDE1(promise, () => (httpGet(c, "/health", 3000).then((_arg) => (Promise.resolve(_arg.statusCode > 0))))).catch((_arg_1) => (Promise.resolve(false))))));
 }
@@ -185,224 +297,116 @@ export function isRunning(c) {
 export function getStatus(c) {
     return PromiseBuilder__Run_212F1D4B(promise, PromiseBuilder__Delay_62FBFDE1(promise, () => (PromiseBuilder__Delay_62FBFDE1(promise, () => (httpGet(c, "/health", 3000).then((_arg) => {
         const resp = _arg;
-        if (resp.statusCode !== 200) {
-            return Promise.resolve(new SageFsStatus(true, false, "no session"));
+        if (resp.statusCode === 200) {
+            const parsed = JSON.parse(resp.body);
+            return Promise.resolve(new SageFsStatus(true, orElse(tryField("healthy", parsed), false), tryField("status", parsed)));
         }
         else {
-            const parsed = JSON.parse(resp.body);
-            const h = parsed.healthy;
-            const s = parsed.status;
-            return Promise.resolve(new SageFsStatus(true, (h == null) ? false : h, (s == null) ? undefined : s));
+            return Promise.resolve(new SageFsStatus(true, false, "no session"));
         }
     }))).catch((_arg_1) => (Promise.resolve(new SageFsStatus(false, undefined, undefined)))))));
 }
 
 export function evalCode(code, workingDirectory, c) {
-    return PromiseBuilder__Run_212F1D4B(promise, PromiseBuilder__Delay_62FBFDE1(promise, () => {
-        const payload = (workingDirectory == null) ? {
-            code: code,
-            working_directory: "",
-        } : {
-            code: code,
-            working_directory: workingDirectory,
-        };
-        return PromiseBuilder__Delay_62FBFDE1(promise, () => (httpPost(c, "/exec", JSON.stringify(payload), 30000).then((_arg) => {
-            let e;
-            const parsed = JSON.parse(_arg.body);
-            return Promise.resolve(new EvalResult(parsed.success, parsed.result, (e = parsed.error, (e == null) ? undefined : e)));
-        }))).catch((_arg_1) => (Promise.resolve(new EvalResult(false, undefined, toString(_arg_1)))));
-    }));
+    const wd = defaultArg(workingDirectory, "");
+    return postCommand(c, "/exec", JSON.stringify({
+        code: code,
+        working_directory: wd,
+    }), 30000);
 }
 
 export function resetSession(c) {
-    return PromiseBuilder__Run_212F1D4B(promise, PromiseBuilder__Delay_62FBFDE1(promise, () => (PromiseBuilder__Delay_62FBFDE1(promise, () => (httpPost(c, "/reset", "{}", 15000).then((_arg) => {
-        let m, e;
-        const parsed = JSON.parse(_arg.body);
-        return Promise.resolve(new EvalResult(parsed.success, (m = parsed.message, (m == null) ? undefined : m), (e = parsed.error, (e == null) ? undefined : e)));
-    }))).catch((_arg_1) => (Promise.resolve(new EvalResult(false, undefined, toString(_arg_1))))))));
+    return postCommand(c, "/reset", "{}", 15000);
 }
 
 export function hardReset(rebuild, c) {
-    return PromiseBuilder__Run_212F1D4B(promise, PromiseBuilder__Delay_62FBFDE1(promise, () => (PromiseBuilder__Delay_62FBFDE1(promise, () => (httpPost(c, "/hard-reset", JSON.stringify({
+    return postCommand(c, "/hard-reset", JSON.stringify({
         rebuild: rebuild,
-    }), 60000).then((_arg) => {
-        let m, e;
-        const parsed = JSON.parse(_arg.body);
-        return Promise.resolve(new EvalResult(parsed.success, (m = parsed.message, (m == null) ? undefined : m), (e = parsed.error, (e == null) ? undefined : e)));
-    }))).catch((_arg_1) => (Promise.resolve(new EvalResult(false, undefined, toString(_arg_1))))))));
+    }), 60000);
+}
+
+export function parseSessions(parsed) {
+    return map((s) => (new SessionInfo(defaultArg(tryField("id", s), ""), undefined, defaultArg(tryField("workingDirectory", s), ""), defaultArg(tryField("status", s), "unknown"), defaultArg(tryField("projects", s), []), defaultArg(tryField("evalCount", s), 0))), defaultArg(tryField("sessions", parsed), []));
 }
 
 export function listSessions(c) {
-    return PromiseBuilder__Run_212F1D4B(promise, PromiseBuilder__Delay_62FBFDE1(promise, () => (PromiseBuilder__Delay_62FBFDE1(promise, () => (httpGet(c, "/api/sessions", 5000).then((_arg) => {
-        const resp = _arg;
-        if (resp.statusCode === 200) {
-            const parsed = JSON.parse(resp.body);
-            const sessions = parsed.sessions;
-            return Promise.resolve(map((s) => {
-                let p, e;
-                return new SessionInfo(s.id, undefined, s.workingDirectory, s.status, (p = s.projects, (p == null) ? [] : p), (e = s.evalCount, (e == null) ? 0 : e));
-            }, sessions));
-        }
-        else {
-            return Promise.resolve([]);
-        }
-    }))).catch((_arg_1) => {
-        console.warn('[SageFs]', "listSessions", _arg_1);
-        return Promise.resolve([]);
-    }))));
+    return PromiseBuilder__Run_212F1D4B(promise, PromiseBuilder__Delay_62FBFDE1(promise, () => (getJson("listSessions", "/api/sessions", 5000, parseSessions, c).then((_arg) => (Promise.resolve(defaultArg(_arg, [])))))));
 }
 
 export function createSession(projects, workingDirectory, c) {
-    return PromiseBuilder__Run_212F1D4B(promise, PromiseBuilder__Delay_62FBFDE1(promise, () => (PromiseBuilder__Delay_62FBFDE1(promise, () => {
-        const payload = {
-            projects: [projects],
-            workingDirectory: workingDirectory,
-        };
-        return httpPost(c, "/api/sessions/create", JSON.stringify(payload), 30000).then((_arg) => {
-            let e;
-            const parsed = JSON.parse(_arg.body);
-            return Promise.resolve(new EvalResult(parsed.success, parsed.message, (e = parsed.error, (e == null) ? undefined : e)));
-        });
-    }).catch((_arg_1) => (Promise.resolve(new EvalResult(false, undefined, toString(_arg_1))))))));
+    return postCommand(c, "/api/sessions/create", JSON.stringify({
+        projects: [projects],
+        workingDirectory: workingDirectory,
+    }), 30000);
 }
 
 export function switchSession(sessionId, c) {
-    return PromiseBuilder__Run_212F1D4B(promise, PromiseBuilder__Delay_62FBFDE1(promise, () => (PromiseBuilder__Delay_62FBFDE1(promise, () => {
-        const payload = {
-            sessionId: sessionId,
-        };
-        return httpPost(c, "/api/sessions/switch", JSON.stringify(payload), 5000).then((_arg) => {
-            const parsed = JSON.parse(_arg.body);
-            return Promise.resolve(parsed.success);
-        });
-    }).catch((_arg_1) => {
-        console.warn('[SageFs]', "switchSession", _arg_1);
-        return Promise.resolve(false);
-    }))));
+    return postCommand(c, "/api/sessions/switch", JSON.stringify({
+        sessionId: sessionId,
+    }), 5000);
 }
 
 export function stopSession(sessionId, c) {
-    return PromiseBuilder__Run_212F1D4B(promise, PromiseBuilder__Delay_62FBFDE1(promise, () => (PromiseBuilder__Delay_62FBFDE1(promise, () => {
-        const payload = {
-            sessionId: sessionId,
-        };
-        return httpPost(c, "/api/sessions/stop", JSON.stringify(payload), 10000).then((_arg) => {
-            const parsed = JSON.parse(_arg.body);
-            return Promise.resolve(parsed.success);
-        });
-    }).catch((_arg_1) => {
-        console.warn('[SageFs]', "stopSession", _arg_1);
-        return Promise.resolve(false);
-    }))));
+    return postCommand(c, "/api/sessions/stop", JSON.stringify({
+        sessionId: sessionId,
+    }), 10000);
+}
+
+export function parseSystemStatus(parsed) {
+    return new SystemStatus(defaultArg(tryField("supervised", parsed), false), defaultArg(tryField("restartCount", parsed), 0), defaultArg(tryField("version", parsed), "?"));
 }
 
 export function getSystemStatus(c) {
-    return PromiseBuilder__Run_212F1D4B(promise, PromiseBuilder__Delay_62FBFDE1(promise, () => (PromiseBuilder__Delay_62FBFDE1(promise, () => (httpGet(c, "/api/system/status", 3000).then((_arg) => {
-        const resp = _arg;
-        if (resp.statusCode === 200) {
-            const parsed = JSON.parse(resp.body);
-            return Promise.resolve(new SystemStatus(parsed.supervised, parsed.restartCount, parsed.version));
-        }
-        else {
-            return Promise.resolve(undefined);
-        }
-    }))).catch((_arg_1) => {
-        console.warn('[SageFs]', "getSystemStatus", _arg_1);
-        return Promise.resolve(undefined);
-    }))));
+    return getJson("getSystemStatus", "/api/system/status", 3000, parseSystemStatus, c);
+}
+
+export function parseHotReloadState(parsed) {
+    let x;
+    return new HotReloadState(defaultArg(map_1((rawFiles) => choose((f) => map_1((p) => (new HotReloadFile(p, defaultArg(tryField("watched", f), false))), tryField("path", f)), rawFiles), (x = parsed.files, (x == null) ? undefined : some(x))), []), defaultArg(tryField("watchedCount", parsed), 0));
 }
 
 export function getHotReloadState(sessionId, c) {
-    return PromiseBuilder__Run_212F1D4B(promise, PromiseBuilder__Delay_62FBFDE1(promise, () => (PromiseBuilder__Delay_62FBFDE1(promise, () => (dashHttpGet(c, toText(printf("/api/sessions/%s/hotreload"))(sessionId), 5000).then((_arg) => {
-        const resp = _arg;
-        if (resp.statusCode === 200) {
-            const parsed = JSON.parse(resp.body);
-            const rawFiles = parsed.files;
-            if (rawFiles == null) {
-                return Promise.resolve(new HotReloadState([], 0));
-            }
-            else {
-                const files = choose((f) => {
-                    let w;
-                    const p = f.path;
-                    if (p == null) {
-                        return undefined;
-                    }
-                    else {
-                        return new HotReloadFile(p, (w = f.watched, (w == null) ? false : w));
-                    }
-                }, rawFiles);
-                const wc = parsed.watchedCount;
-                return Promise.resolve(new HotReloadState(files, (wc == null) ? 0 : wc));
-            }
-        }
-        else {
-            return Promise.resolve(undefined);
-        }
-    }))).catch((_arg_1) => {
-        console.warn('[SageFs]', "getHotReloadState", _arg_1);
-        return Promise.resolve(undefined);
-    }))));
+    return dashGetJson("getHotReloadState", toText(printf("/api/sessions/%s/hotreload"))(sessionId), 5000, parseHotReloadState, c);
 }
 
 export function toggleHotReload(sessionId, path, c) {
-    return PromiseBuilder__Run_212F1D4B(promise, PromiseBuilder__Delay_62FBFDE1(promise, () => (PromiseBuilder__Delay_62FBFDE1(promise, () => (dashHttpPost(c, toText(printf("/api/sessions/%s/hotreload/toggle"))(sessionId), JSON.stringify({
+    return dashPostOutcome("toggleHotReload", toText(printf("/api/sessions/%s/hotreload/toggle"))(sessionId), JSON.stringify({
         path: path,
-    }), 5000).then((_arg) => (Promise.resolve(true))))).catch((_arg_1) => {
-        console.warn('[SageFs]', "toggleHotReload", _arg_1);
-        return Promise.resolve(false);
-    }))));
+    }), 5000, c);
 }
 
 export function watchAllHotReload(sessionId, c) {
-    return PromiseBuilder__Run_212F1D4B(promise, PromiseBuilder__Delay_62FBFDE1(promise, () => (PromiseBuilder__Delay_62FBFDE1(promise, () => (dashHttpPost(c, toText(printf("/api/sessions/%s/hotreload/watch-all"))(sessionId), "{}", 5000).then((_arg) => (Promise.resolve(true))))).catch((_arg_1) => {
-        console.warn('[SageFs]', "watchAllHotReload", _arg_1);
-        return Promise.resolve(false);
-    }))));
+    return dashPostOutcome("watchAllHotReload", toText(printf("/api/sessions/%s/hotreload/watch-all"))(sessionId), "{}", 5000, c);
 }
 
 export function unwatchAllHotReload(sessionId, c) {
-    return PromiseBuilder__Run_212F1D4B(promise, PromiseBuilder__Delay_62FBFDE1(promise, () => (PromiseBuilder__Delay_62FBFDE1(promise, () => (dashHttpPost(c, toText(printf("/api/sessions/%s/hotreload/unwatch-all"))(sessionId), "{}", 5000).then((_arg) => (Promise.resolve(true))))).catch((_arg_1) => {
-        console.warn('[SageFs]', "unwatchAllHotReload", _arg_1);
-        return Promise.resolve(false);
-    }))));
+    return dashPostOutcome("unwatchAllHotReload", toText(printf("/api/sessions/%s/hotreload/unwatch-all"))(sessionId), "{}", 5000, c);
 }
 
 export function watchDirectoryHotReload(sessionId, directory, c) {
-    return PromiseBuilder__Run_212F1D4B(promise, PromiseBuilder__Delay_62FBFDE1(promise, () => (PromiseBuilder__Delay_62FBFDE1(promise, () => (dashHttpPost(c, toText(printf("/api/sessions/%s/hotreload/watch-directory"))(sessionId), JSON.stringify({
+    return dashPostOutcome("watchDirectoryHotReload", toText(printf("/api/sessions/%s/hotreload/watch-directory"))(sessionId), JSON.stringify({
         directory: directory,
-    }), 5000).then((_arg) => (Promise.resolve(true))))).catch((_arg_1) => {
-        console.warn('[SageFs]', "watchDirectoryHotReload", _arg_1);
-        return Promise.resolve(false);
-    }))));
+    }), 5000, c);
 }
 
 export function unwatchDirectoryHotReload(sessionId, directory, c) {
-    return PromiseBuilder__Run_212F1D4B(promise, PromiseBuilder__Delay_62FBFDE1(promise, () => (PromiseBuilder__Delay_62FBFDE1(promise, () => (dashHttpPost(c, toText(printf("/api/sessions/%s/hotreload/unwatch-directory"))(sessionId), JSON.stringify({
+    return dashPostOutcome("unwatchDirectoryHotReload", toText(printf("/api/sessions/%s/hotreload/unwatch-directory"))(sessionId), JSON.stringify({
         directory: directory,
-    }), 5000).then((_arg) => (Promise.resolve(true))))).catch((_arg_1) => {
-        console.warn('[SageFs]', "unwatchDirectoryHotReload", _arg_1);
-        return Promise.resolve(false);
-    }))));
+    }), 5000, c);
+}
+
+export function parseWarmupContext(parsed) {
+    const assemblies = map((a) => (new LoadedAssemblyInfo(defaultArg(tryField("Name", a), ""), defaultArg(tryField("Path", a), ""), defaultArg(tryField("NamespaceCount", a), 0), defaultArg(tryField("ModuleCount", a), 0))), defaultArg(tryField("AssembliesLoaded", parsed), []));
+    const opened = map((b) => (new OpenedBindingInfo(defaultArg(tryField("Name", b), ""), defaultArg(tryField("IsModule", b), false), defaultArg(tryField("Source", b), ""))), defaultArg(tryField("NamespacesOpened", parsed), []));
+    const failed = map((f) => {
+        let x;
+        return defaultArg(map_1((value_10) => value_10, (x = f, (x == null) ? undefined : some(x))), []);
+    }, defaultArg(tryField("FailedOpens", parsed), []));
+    return new WarmupContextInfo(defaultArg(tryField("SourceFilesScanned", parsed), 0), assemblies, opened, failed, defaultArg(tryField("WarmupDurationMs", parsed), 0));
 }
 
 export function getWarmupContext(sessionId, c) {
-    return PromiseBuilder__Run_212F1D4B(promise, PromiseBuilder__Delay_62FBFDE1(promise, () => (PromiseBuilder__Delay_62FBFDE1(promise, () => (dashHttpGet(c, toText(printf("/api/sessions/%s/warmup-context"))(sessionId), 5000).then((_arg) => {
-        const resp = _arg;
-        if (resp.statusCode === 200) {
-            const parsed = JSON.parse(resp.body);
-            const assemblies = map((a) => (new LoadedAssemblyInfo(a.Name, a.Path, a.NamespaceCount, a.ModuleCount)), parsed.AssembliesLoaded);
-            const opened = map((b) => (new OpenedBindingInfo(b.Name, b.IsModule, b.Source)), parsed.NamespacesOpened);
-            const failed = map((f) => f, parsed.FailedOpens);
-            return Promise.resolve(new WarmupContextInfo(parsed.SourceFilesScanned, assemblies, opened, failed, parsed.WarmupDurationMs));
-        }
-        else {
-            return Promise.resolve(undefined);
-        }
-    }))).catch((_arg_1) => {
-        console.warn('[SageFs]', "getWarmupContext", _arg_1);
-        return Promise.resolve(undefined);
-    }))));
+    return dashGetJson("getWarmupContext", toText(printf("/api/sessions/%s/warmup-context"))(sessionId), 5000, parseWarmupContext, c);
 }
 
 export class CompletionResult extends Record {
@@ -428,9 +432,8 @@ export function getCompletions(code, cursorPosition, workingDirectory, c) {
         return dashHttpPost(c, "/dashboard/completions", JSON.stringify(payload), 10000).then((_arg) => {
             const resp = _arg;
             if (resp.statusCode === 200) {
-                const parsed = JSON.parse(resp.body);
-                const items = parsed.completions;
-                return Promise.resolve(map((item) => (new CompletionResult(item.label, item.kind, item.insertText)), items));
+                const items = defaultArg(tryField("completions", JSON.parse(resp.body)), []);
+                return Promise.resolve(map((item) => (new CompletionResult(defaultArg(tryField("label", item), ""), defaultArg(tryField("kind", item), ""), defaultArg(tryField("insertText", item), ""))), items));
             }
             else {
                 return Promise.resolve([]);
@@ -443,47 +446,25 @@ export function getCompletions(code, cursorPosition, workingDirectory, c) {
 }
 
 export function runTests(pattern, c) {
-    return PromiseBuilder__Run_212F1D4B(promise, PromiseBuilder__Delay_62FBFDE1(promise, () => (PromiseBuilder__Delay_62FBFDE1(promise, () => {
-        const payload = {
-            category: "",
-            pattern: pattern,
-        };
-        return httpPost(c, "/api/live-testing/run", JSON.stringify(payload), 60000).then((_arg) => {
-            let m, e;
-            const parsed = JSON.parse(_arg.body);
-            return Promise.resolve(new EvalResult(parsed.success, (m = parsed.message, (m == null) ? undefined : m), (e = parsed.error, (e == null) ? undefined : e)));
-        });
-    }).catch((_arg_1) => (Promise.resolve(new EvalResult(false, undefined, toString(_arg_1))))))));
+    return postCommand(c, "/api/live-testing/run", JSON.stringify({
+        category: "",
+        pattern: pattern,
+    }), 60000);
 }
 
 export function enableLiveTesting(c) {
-    return PromiseBuilder__Run_212F1D4B(promise, PromiseBuilder__Delay_62FBFDE1(promise, () => (PromiseBuilder__Delay_62FBFDE1(promise, () => (httpPost(c, "/api/live-testing/enable", "{}", 5000).then((_arg) => {
-        let m, e;
-        const parsed = JSON.parse(_arg.body);
-        return Promise.resolve(new EvalResult(parsed.success, (m = parsed.message, (m == null) ? undefined : m), (e = parsed.error, (e == null) ? undefined : e)));
-    }))).catch((_arg_1) => (Promise.resolve(new EvalResult(false, undefined, toString(_arg_1))))))));
+    return postCommand(c, "/api/live-testing/enable", "{}", 5000);
 }
 
 export function disableLiveTesting(c) {
-    return PromiseBuilder__Run_212F1D4B(promise, PromiseBuilder__Delay_62FBFDE1(promise, () => (PromiseBuilder__Delay_62FBFDE1(promise, () => (httpPost(c, "/api/live-testing/disable", "{}", 5000).then((_arg) => {
-        let m, e;
-        const parsed = JSON.parse(_arg.body);
-        return Promise.resolve(new EvalResult(parsed.success, (m = parsed.message, (m == null) ? undefined : m), (e = parsed.error, (e == null) ? undefined : e)));
-    }))).catch((_arg_1) => (Promise.resolve(new EvalResult(false, undefined, toString(_arg_1))))))));
+    return postCommand(c, "/api/live-testing/disable", "{}", 5000);
 }
 
 export function setRunPolicy(category, policy, c) {
-    return PromiseBuilder__Run_212F1D4B(promise, PromiseBuilder__Delay_62FBFDE1(promise, () => (PromiseBuilder__Delay_62FBFDE1(promise, () => {
-        const payload = {
-            category: category,
-            policy: policy,
-        };
-        return httpPost(c, "/api/live-testing/policy", JSON.stringify(payload), 5000).then((_arg) => {
-            let m, e;
-            const parsed = JSON.parse(_arg.body);
-            return Promise.resolve(new EvalResult(parsed.success, (m = parsed.message, (m == null) ? undefined : m), (e = parsed.error, (e == null) ? undefined : e)));
-        });
-    }).catch((_arg_1) => (Promise.resolve(new EvalResult(false, undefined, toString(_arg_1))))))));
+    return postCommand(c, "/api/live-testing/policy", JSON.stringify({
+        category: category,
+        policy: policy,
+    }), 5000);
 }
 
 export function explore(name, c) {
@@ -499,51 +480,44 @@ export function explore(name, c) {
 }
 
 export function getRecentEvents(count, c) {
-    return PromiseBuilder__Run_212F1D4B(promise, PromiseBuilder__Delay_62FBFDE1(promise, () => (PromiseBuilder__Delay_62FBFDE1(promise, () => (httpGet(c, toText(printf("/api/recent-events?count=%d"))(count), 10000).then((_arg) => {
-        const resp = _arg;
-        return (resp.statusCode === 200) ? (Promise.resolve(resp.body)) : (Promise.resolve(undefined));
-    }))).catch((_arg_1) => {
-        console.warn('[SageFs]', "getRecentEvents", _arg_1);
-        return Promise.resolve(undefined);
-    }))));
+    return getRaw("getRecentEvents", toText(printf("/api/recent-events?count=%d"))(count), 10000, c);
 }
 
 export function getDependencyGraph(symbol, c) {
-    return PromiseBuilder__Run_212F1D4B(promise, PromiseBuilder__Delay_62FBFDE1(promise, () => (PromiseBuilder__Delay_62FBFDE1(promise, () => {
-        let path;
-        if (symbol === "") {
-            path = "/api/dependency-graph";
-        }
-        else {
-            const arg = encodeURIComponent(symbol);
-            path = toText(printf("/api/dependency-graph?symbol=%s"))(arg);
-        }
-        return httpGet(c, path, 10000).then((_arg) => {
-            const resp = _arg;
-            return (resp.statusCode === 200) ? (Promise.resolve(resp.body)) : (Promise.resolve(undefined));
-        });
-    }).catch((_arg_1) => {
-        console.warn('[SageFs]', "getDependencyGraph", _arg_1);
-        return Promise.resolve(undefined);
-    }))));
+    let arg;
+    return getRaw("getDependencyGraph", (symbol === "") ? "/api/dependency-graph" : ((arg = encodeURIComponent(symbol), toText(printf("/api/dependency-graph?symbol=%s"))(arg))), 10000, c);
 }
 
 export function cancelEval(c) {
-    return PromiseBuilder__Run_212F1D4B(promise, PromiseBuilder__Delay_62FBFDE1(promise, () => (PromiseBuilder__Delay_62FBFDE1(promise, () => (httpPost(c, "/api/cancel-eval", "{}", 5000).then((_arg) => (Promise.resolve(new EvalResult(true, "Eval cancelled", undefined)))))).catch((_arg_1) => (Promise.resolve(new EvalResult(false, undefined, toString(_arg_1))))))));
+    return postCommand(c, "/api/cancel-eval", "{}", 5000);
 }
 
 export function loadScript(filePath, c) {
     const code = toText(printf("#load @\"%s\";;"))(filePath);
-    return PromiseBuilder__Run_212F1D4B(promise, PromiseBuilder__Delay_62FBFDE1(promise, () => (PromiseBuilder__Delay_62FBFDE1(promise, () => {
-        const payload = {
-            code: code,
-            working_directory: "",
-        };
-        return httpPost(c, "/exec", JSON.stringify(payload), 30000).then((_arg) => {
-            let r;
-            const parsed = JSON.parse(_arg.body);
-            return Promise.resolve(new EvalResult(parsed.success, (r = parsed.result, (r == null) ? undefined : r), undefined));
-        });
-    }).catch((_arg_1) => (Promise.resolve(new EvalResult(false, undefined, toString(_arg_1))))))));
+    return postCommand(c, "/exec", JSON.stringify({
+        code: code,
+        working_directory: "",
+    }), 30000);
+}
+
+export function getPipelineTrace(c) {
+    return getRaw("getPipelineTrace", "/api/live-testing/pipeline-trace", 5000, c);
+}
+
+export class ExportResult extends Record {
+    constructor(content, evalCount) {
+        super();
+        this.content = content;
+        this.evalCount = (evalCount | 0);
+    }
+}
+
+export function ExportResult_$reflection() {
+    return record_type("SageFs.Vscode.SageFsClient.ExportResult", [], ExportResult, () => [["content", string_type], ["evalCount", int32_type]]);
+}
+
+export function exportSessionAsFsx(sessionId, c) {
+    let arg;
+    return getJson("exportSessionAsFsx", (arg = encodeURIComponent(sessionId), toText(printf("/api/sessions/%s/export-fsx"))(arg)), 15000, (p) => p, c);
 }
 

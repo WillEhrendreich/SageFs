@@ -1,12 +1,13 @@
 import { Record } from "./fable_modules/fable-library-js.4.29.0/Types.js";
 import { record_type, array_type, bool_type, string_type } from "./fable_modules/fable-library-js.4.29.0/Reflection.js";
-import { defaultOf, comparePrimitives, stringHash, createAtom } from "./fable_modules/fable-library-js.4.29.0/Util.js";
+import { equalArrays, comparePrimitives, stringHash, defaultOf, createAtom } from "./fable_modules/fable-library-js.4.29.0/Util.js";
 import { printf, toText, substring, replace } from "./fable_modules/fable-library-js.4.29.0/String.js";
 import { Commands_registerCommand, Window_createTreeView, newEventEmitter, newThemeColor, newTreeItem } from "./Vscode.fs.js";
-import { item as item_1, map, sortBy } from "./fable_modules/fable-library-js.4.29.0/Array.js";
+import { item as item_1, equalsWith, map, sortBy } from "./fable_modules/fable-library-js.4.29.0/Array.js";
 import { Array_groupBy } from "./fable_modules/fable-library-js.4.29.0/Seq2.js";
 import { PromiseBuilder__Delay_62FBFDE1, PromiseBuilder__Run_212F1D4B } from "./fable_modules/Fable.Promise.3.2.0/Promise.fs.js";
-import { some, value as value_6 } from "./fable_modules/fable-library-js.4.29.0/Option.js";
+import { some, defaultArg, value as value_2 } from "./fable_modules/fable-library-js.4.29.0/Option.js";
+import { promiseIgnore, tryField } from "./JsHelpers.fs.js";
 import { promise } from "./fable_modules/Fable.Promise.3.2.0/PromiseImpl.fs.js";
 import { watchDirectoryHotReload, unwatchDirectoryHotReload, unwatchAllHotReload, watchAllHotReload, toggleHotReload, getHotReloadState } from "./SageFsClient.fs.js";
 
@@ -37,7 +38,7 @@ export let treeView = createAtom(undefined);
 export let autoRefreshTimer = createAtom(undefined);
 
 export function getDirectory(path) {
-    if (path == null) {
+    if (path === defaultOf()) {
         return "";
     }
     else {
@@ -53,7 +54,7 @@ export function getDirectory(path) {
 }
 
 export function getFileName(path) {
-    if (path == null) {
+    if (path === defaultOf()) {
         return "";
     }
     else {
@@ -83,15 +84,16 @@ export function createDirItem(dirPath, childCount, watchedCount) {
 
 export function createFileItem(file) {
     const item = newTreeItem(getFileName(file.path), 0);
-    item.contextValue = (file.watched ? "watchedFile" : "unwatchedFile");
-    item.description = (file.watched ? "● watching" : "○ not watching");
+    const patternInput = file.watched ? ["watchedFile", "● watching", "testing.iconPassed"] : ["unwatchedFile", "○ not watching", "testing.iconSkipped"];
+    item.contextValue = patternInput[0];
+    item.description = patternInput[1];
     item.tooltip = file.path;
     item.command = {
         command: "sagefs.hotReloadToggle",
         title: "Toggle Hot Reload",
         arguments: [file.path],
     };
-    item.iconPath = (file.watched ? newThemeColor("testing.iconPassed") : newThemeColor("testing.iconSkipped"));
+    item.iconPath = newThemeColor(patternInput[2]);
     return item;
 }
 
@@ -107,9 +109,9 @@ export function groupByDirectory(files) {
 export function getChildren(element) {
     return PromiseBuilder__Run_212F1D4B(promise, PromiseBuilder__Delay_62FBFDE1(promise, () => {
         if (element != null) {
-            const el = value_6(element);
-            if (el.contextValue === "directory") {
-                const label = el.label;
+            const el = value_2(element);
+            if (defaultArg(tryField("contextValue", el), "") === "directory") {
+                const label = defaultArg(tryField("label", el), "");
                 const dir_1 = (label === "(root)") ? "" : label;
                 let files_2;
                 const array_4 = cachedFiles();
@@ -122,24 +124,23 @@ export function getChildren(element) {
         }
         else {
             const groups = groupByDirectory(cachedFiles());
-            switch (groups.length) {
-                case 0: {
-                    const item = newTreeItem("No session active", 0);
-                    item.description = "Start a session to manage hot reload";
-                    return Promise.resolve([item]);
-                }
-                case 1: {
-                    const patternInput = item_1(0, groups);
-                    return Promise.resolve(map(createFileItem, patternInput[1]));
-                }
-                default:
-                    return Promise.resolve(map((tupledArg) => {
-                        const files_1 = tupledArg[1];
-                        let watchedCount;
-                        const array_2 = files_1.filter((f_1) => f_1.watched);
-                        watchedCount = array_2.length;
-                        return createDirItem(tupledArg[0], files_1.length, watchedCount);
-                    }, groups));
+            if (!equalsWith(equalArrays, groups, defaultOf()) && (groups.length === 0)) {
+                const item = newTreeItem("No session active", 0);
+                item.description = "Start a session to manage hot reload";
+                return Promise.resolve([item]);
+            }
+            else if (!equalsWith(equalArrays, groups, defaultOf()) && (groups.length === 1)) {
+                const files = item_1(0, groups)[1];
+                return Promise.resolve(map(createFileItem, files));
+            }
+            else {
+                return Promise.resolve(map((tupledArg) => {
+                    const files_1 = tupledArg[1];
+                    let watchedCount;
+                    const array_2 = files_1.filter((f_1) => f_1.watched);
+                    watchedCount = array_2.length;
+                    return createDirItem(tupledArg[0], files_1.length, watchedCount);
+                }, groups));
             }
         }
     }));
@@ -154,7 +155,10 @@ export function createProvider() {
     refreshEmitter(emitter);
     return {
         onDidChangeTreeData: emitter.event,
-        getChildren: (el) => getChildren((el == null) ? undefined : some(el)),
+        getChildren: (el) => {
+            let x;
+            return getChildren((x = el, (x == null) ? undefined : some(x)));
+        },
         getTreeItem: getTreeItem,
     };
 }
@@ -178,7 +182,7 @@ export function refresh() {
     }
     switch (matchResult) {
         case 0: {
-            PromiseBuilder__Run_212F1D4B(promise, PromiseBuilder__Delay_62FBFDE1(promise, () => (getHotReloadState(sid, c).then((_arg) => {
+            promiseIgnore(PromiseBuilder__Run_212F1D4B(promise, PromiseBuilder__Delay_62FBFDE1(promise, () => (getHotReloadState(sid, c).then((_arg) => {
                 let s;
                 const state = _arg;
                 return ((state == null) ? ((cachedFiles([]), Promise.resolve())) : ((s = state, (cachedFiles(s.files), Promise.resolve())))).then(() => PromiseBuilder__Delay_62FBFDE1(promise, () => {
@@ -191,7 +195,7 @@ export function refresh() {
                         return Promise.resolve();
                     }
                 }));
-            }))));
+            })))));
             break;
         }
         case 1: {
@@ -213,7 +217,7 @@ export function setSession(c, sessionId) {
     if (autoRefreshTimer() == null) {
     }
     else {
-        const t = value_6(autoRefreshTimer());
+        const t = value_2(autoRefreshTimer());
         clearInterval(t);
         autoRefreshTimer(undefined);
     }
@@ -235,6 +239,7 @@ export function register(ctx) {
     treeView(tv);
     void (ctx.subscriptions.push(tv));
     const toggleCmd = Commands_registerCommand("sagefs.hotReloadToggle", (arg) => {
+        let x;
         const matchValue = currentClient();
         const matchValue_1 = currentSessionId();
         let matchResult, c, sid;
@@ -253,10 +258,11 @@ export function register(ctx) {
         }
         switch (matchResult) {
             case 0: {
-                PromiseBuilder__Run_212F1D4B(promise, PromiseBuilder__Delay_62FBFDE1(promise, () => (toggleHotReload(sid, arg, c).then((_arg) => {
+                const path = defaultArg((x = arg, (x == null) ? undefined : x), "");
+                promiseIgnore(PromiseBuilder__Run_212F1D4B(promise, PromiseBuilder__Delay_62FBFDE1(promise, () => (toggleHotReload(sid, path, c).then((_arg) => {
                     refresh();
                     return Promise.resolve();
-                }))));
+                })))));
                 break;
             }
             case 1: {
@@ -284,10 +290,10 @@ export function register(ctx) {
         }
         switch (matchResult_1) {
             case 0: {
-                PromiseBuilder__Run_212F1D4B(promise, PromiseBuilder__Delay_62FBFDE1(promise, () => (watchAllHotReload(sid_1, c_1).then((_arg_2) => {
+                promiseIgnore(PromiseBuilder__Run_212F1D4B(promise, PromiseBuilder__Delay_62FBFDE1(promise, () => (watchAllHotReload(sid_1, c_1).then((_arg_2) => {
                     refresh();
                     return Promise.resolve();
-                }))));
+                })))));
                 break;
             }
             case 1: {
@@ -315,10 +321,10 @@ export function register(ctx) {
         }
         switch (matchResult_2) {
             case 0: {
-                PromiseBuilder__Run_212F1D4B(promise, PromiseBuilder__Delay_62FBFDE1(promise, () => (unwatchAllHotReload(sid_2, c_2).then((_arg_4) => {
+                promiseIgnore(PromiseBuilder__Run_212F1D4B(promise, PromiseBuilder__Delay_62FBFDE1(promise, () => (unwatchAllHotReload(sid_2, c_2).then((_arg_4) => {
                     refresh();
                     return Promise.resolve();
-                }))));
+                })))));
                 break;
             }
             case 1: {
@@ -332,6 +338,7 @@ export function register(ctx) {
     });
     void (ctx.subscriptions.push(refreshCmd));
     const toggleDirCmd = Commands_registerCommand("sagefs.hotReloadToggleDirectory", (arg_1) => {
+        let x_1;
         const matchValue_9 = currentClient();
         const matchValue_10 = currentSessionId();
         let matchResult_3, c_3, sid_3;
@@ -350,20 +357,20 @@ export function register(ctx) {
         }
         switch (matchResult_3) {
             case 0: {
-                const dir = arg_1;
+                const dir = defaultArg((x_1 = arg_1, (x_1 == null) ? undefined : x_1), "");
                 let allWatched;
                 let array_1;
                 const array = cachedFiles();
                 array_1 = array.filter((f) => (getDirectory(f.path) === dir));
                 allWatched = array_1.every((f_1) => f_1.watched);
-                PromiseBuilder__Run_212F1D4B(promise, PromiseBuilder__Delay_62FBFDE1(promise, () => ((allWatched ? (unwatchDirectoryHotReload(sid_3, dir, c_3).then((_arg_6) => {
+                promiseIgnore(PromiseBuilder__Run_212F1D4B(promise, PromiseBuilder__Delay_62FBFDE1(promise, () => ((allWatched ? (unwatchDirectoryHotReload(sid_3, dir, c_3).then((_arg_6) => {
                     return Promise.resolve();
                 })) : (watchDirectoryHotReload(sid_3, dir, c_3).then((_arg_7) => {
                     return Promise.resolve();
                 }))).then(() => PromiseBuilder__Delay_62FBFDE1(promise, () => {
                     refresh();
                     return Promise.resolve();
-                })))));
+                }))))));
                 break;
             }
             case 1: {

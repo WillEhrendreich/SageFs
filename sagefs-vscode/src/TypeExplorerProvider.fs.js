@@ -1,11 +1,12 @@
 import { defaultOf, createAtom } from "./fable_modules/fable-library-js.4.29.0/Util.js";
 import { Window_createTreeView, newEventEmitter, newThemeIcon, newTreeItem } from "./Vscode.fs.js";
+import { truncate, map, tryItem, last } from "./fable_modules/fable-library-js.4.29.0/Array.js";
+import { substring, printf, toText } from "./fable_modules/fable-library-js.4.29.0/String.js";
+import { value as value_2, defaultArg } from "./fable_modules/fable-library-js.4.29.0/Option.js";
+import { tryField } from "./JsHelpers.fs.js";
 import { PromiseBuilder__Delay_62FBFDE1, PromiseBuilder__Run_212F1D4B } from "./fable_modules/Fable.Promise.3.2.0/Promise.fs.js";
 import { promise } from "./fable_modules/Fable.Promise.3.2.0/PromiseImpl.fs.js";
-import { defaultArg, value as value_4 } from "./fable_modules/fable-library-js.4.29.0/Option.js";
 import { explore } from "./SageFsClient.fs.js";
-import { tryItem, last, map, truncate } from "./fable_modules/fable-library-js.4.29.0/Array.js";
-import { substring, printf, toText } from "./fable_modules/fable-library-js.4.29.0/String.js";
 import { Record } from "./fable_modules/fable-library-js.4.29.0/Types.js";
 import { record_type, lambda_type, unit_type, class_type, obj_type } from "./fable_modules/fable-library-js.4.29.0/Reflection.js";
 
@@ -28,84 +29,70 @@ export function expandableItem(label, desc, icon, contextValue) {
     return item;
 }
 
+function parseLine(line) {
+    let t;
+    const trimmed = line.trim();
+    if ((t = trimmed, t.startsWith("namespace") ? true : t.startsWith("module"))) {
+        const name = last(trimmed.split(" "));
+        return expandableItem(name, "", "symbol-namespace", toText(printf("ns:%s"))(name));
+    }
+    else if (trimmed.startsWith("type")) {
+        const t_3 = trimmed;
+        return leafItem(defaultArg(tryItem(1, t_3.split(" ")), t_3), "type", "symbol-class");
+    }
+    else {
+        return leafItem(trimmed, "", "symbol-misc");
+    }
+}
+
+function parseExploreResponse(json) {
+    let array;
+    try {
+        const text = defaultArg(tryField("content", JSON.parse(json)), "");
+        return map(parseLine, truncate(50, (array = text.split("\n"), array.filter((l) => (l.trim().length > 0)))));
+    }
+    catch (matchValue) {
+        return undefined;
+    }
+}
+
+function exploreAndParse(query, errorMsg, c) {
+    return PromiseBuilder__Run_212F1D4B(promise, PromiseBuilder__Delay_62FBFDE1(promise, () => (explore(query, c).then((_arg) => {
+        const result = _arg;
+        if (result == null) {
+            return Promise.resolve([leafItem("Not connected", "", "warning")]);
+        }
+        else {
+            const matchValue = parseExploreResponse(result);
+            if (matchValue == null) {
+                return Promise.resolve([leafItem(errorMsg, "", "warning")]);
+            }
+            else {
+                const items = matchValue;
+                return Promise.resolve(items);
+            }
+        }
+    }))));
+}
+
 export function getChildren(element) {
     return PromiseBuilder__Run_212F1D4B(promise, PromiseBuilder__Delay_62FBFDE1(promise, () => {
-        let el, c;
+        let c, c$0027;
         const matchValue = currentClient();
         if (element != null) {
             if (matchValue == null) {
                 return Promise.resolve([leafItem("Not connected", "", "warning")]);
             }
-            else if ((el = value_4(element), (c = matchValue, el.contextValue === "ns-root"))) {
+            else if ((c = matchValue, defaultArg(tryField("contextValue", value_2(element)), "") === "ns-root")) {
                 const c_1 = matchValue;
-                const el_1 = value_4(element);
-                return explore("System", c_1).then((_arg) => {
-                    const result = _arg;
-                    if (result == null) {
-                        return Promise.resolve([leafItem("Not connected", "", "warning")]);
-                    }
-                    else {
-                        const json = result;
-                        return PromiseBuilder__Delay_62FBFDE1(promise, () => {
-                            let array;
-                            const parsed = JSON.parse(json);
-                            const text = parsed.content;
-                            const lines = truncate(50, (array = text.split("\n"), array.filter((l) => (l.trim().length > 0))));
-                            return Promise.resolve(map((line) => {
-                                const trimmed = line.trim();
-                                if (trimmed.startsWith("namespace") ? true : trimmed.startsWith("module")) {
-                                    const name = last(trimmed.split(" "));
-                                    return expandableItem(name, "", "symbol-namespace", toText(printf("ns:%s"))(name));
-                                }
-                                else if (trimmed.startsWith("type")) {
-                                    return leafItem(defaultArg(tryItem(1, trimmed.split(" ")), trimmed), "type", "symbol-class");
-                                }
-                                else {
-                                    return leafItem(trimmed, "", "symbol-misc");
-                                }
-                            }, lines));
-                        }).catch((_arg_1) => (Promise.resolve([leafItem("Error parsing response", "", "warning")])));
-                    }
-                });
+                const el_1 = value_2(element);
+                return exploreAndParse("System", "Error parsing response", c_1);
             }
             else {
                 const c_2 = matchValue;
-                const el_2 = value_4(element);
-                const ctx = el_2.contextValue;
-                if ((ctx !== defaultOf()) && ctx.startsWith("ns:")) {
-                    const nsName = substring(ctx, 3);
-                    return explore(nsName, c_2).then((_arg_2) => {
-                        const result_1 = _arg_2;
-                        if (result_1 == null) {
-                            return Promise.resolve([leafItem("Could not explore", "", "warning")]);
-                        }
-                        else {
-                            const json_1 = result_1;
-                            return PromiseBuilder__Delay_62FBFDE1(promise, () => {
-                                let array_5;
-                                const parsed_1 = JSON.parse(json_1);
-                                const text_1 = parsed_1.content;
-                                const lines_1 = truncate(50, (array_5 = text_1.split("\n"), array_5.filter((l_1) => (l_1.trim().length > 0))));
-                                return Promise.resolve(map((line_1) => {
-                                    const trimmed_1 = line_1.trim();
-                                    if (trimmed_1.startsWith("namespace") ? true : trimmed_1.startsWith("module")) {
-                                        const name_2 = last(trimmed_1.split(" "));
-                                        return expandableItem(name_2, "", "symbol-namespace", toText(printf("ns:%s"))(name_2));
-                                    }
-                                    else if (trimmed_1.startsWith("type")) {
-                                        return leafItem(defaultArg(tryItem(1, trimmed_1.split(" ")), trimmed_1), "type", "symbol-class");
-                                    }
-                                    else {
-                                        return leafItem(trimmed_1, "", "symbol-misc");
-                                    }
-                                }, lines_1));
-                            }).catch((_arg_3) => (Promise.resolve([leafItem("Error parsing", "", "warning")])));
-                        }
-                    });
-                }
-                else {
-                    return Promise.resolve([]);
-                }
+                const el_2 = value_2(element);
+                const ctx = defaultArg(tryField("contextValue", el_2), "");
+                return ((c$0027 = ctx, (c$0027 !== defaultOf()) && c$0027.startsWith("ns:"))) ? (exploreAndParse(substring(ctx, 3), "Error parsing", c_2)) : (Promise.resolve([]));
             }
         }
         else {

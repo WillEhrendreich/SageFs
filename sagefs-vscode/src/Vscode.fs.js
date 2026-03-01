@@ -68,6 +68,10 @@ export function Window_createWebviewPanel(viewType, title, column, opts) {
     return window$.createWebviewPanel(viewType, title, column, opts);
 }
 
+export function Window_showTextDocument(doc) {
+    return window$.showTextDocument(doc);
+}
+
 export function Commands_registerCommand(command, handler) {
     return commands.registerCommand(command, handler);
 }
@@ -106,6 +110,13 @@ export function Workspace_onDidChangeConfiguration(handler) {
 
 export function Workspace_onDidChangeTextDocument(handler) {
     return workspace.onDidChangeTextDocument(handler);
+}
+
+export function Workspace_openTextDocument(content, language) {
+    return workspace.openTextDocument({
+        content: content,
+        language: language,
+    });
 }
 
 export function Languages_registerCodeLensProvider(language, provider) {
