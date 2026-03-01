@@ -5,6 +5,128 @@ open SageFs.WorkerProtocol
 open SageFs.Features.Diagnostics
 open SageFs.Features.LiveTesting
 
+/// Converts a SessionContext into OutputLine list for the warmup banner.
+/// Shown in the output pane BEFORE any eval results so users know what was loaded.
+module WarmupBanner =
+  let toOutputLines (ctx: SessionContext) : OutputLine list =
+    let w = ctx.Warmup
+    let sid = ctx.SessionId
+    let now = DateTime.UtcNow
+    let opened = w.NamespacesOpened.Length
+    let failed = w.FailedOpens.Length
+    let asmCount = w.AssembliesLoaded.Length
+    let lines = Collections.Generic.List<OutputLine>()
+    lines.Add {
+      Kind = OutputKind.System
+      Text = sprintf "🔧 Warmup: %d assemblies, %d opened, %d failed, %dms"
+        asmCount opened failed w.WarmupDurationMs
+      Timestamp = now; SessionId = sid
+    }
+    match asmCount > 0 with
+    | true ->
+      for a in w.AssembliesLoaded do
+        lines.Add {
+          Kind = OutputKind.System
+          Text = sprintf "  📦 %s (%d ns, %d modules)" a.Name a.NamespaceCount a.ModuleCount
+          Timestamp = now; SessionId = sid
+        }
+    | false -> ()
+    match w.NamespacesOpened.Length > 0 with
+    | true ->
+      for b in w.NamespacesOpened do
+        let kind = match b.IsModule with | true -> "module" | false -> "namespace"
+        lines.Add {
+          Kind = OutputKind.System
+          Text = sprintf "  open %s // %s" b.Name kind
+          Timestamp = now; SessionId = sid
+        }
+    | false -> ()
+    for (name, err) in w.FailedOpens do
+      lines.Add {
+        Kind = OutputKind.Error
+        Text = sprintf "  ✖ Failed to open %s — %s" name err
+        Timestamp = now; SessionId = sid
+      }
+    match ctx.FileStatuses.Length > 0 with
+    | true ->
+      let loaded = ctx.FileStatuses |> List.filter (fun f -> f.Readiness = Loaded) |> List.length
+      lines.Add {
+        Kind = OutputKind.System
+        Text = sprintf "  Files (%d/%d loaded):" loaded ctx.FileStatuses.Length
+        Timestamp = now; SessionId = sid
+      }
+      for f in ctx.FileStatuses do
+        lines.Add {
+          Kind = OutputKind.System
+          Text = sprintf "    %s %s" (FileReadiness.icon f.Readiness) f.Path
+          Timestamp = now; SessionId = sid
+        }
+    | false -> ()
+    lines |> Seq.toList
+
+/// Converts TestRunResult[] into OutputLine list for the session output pane.
+/// Shows per-test name, pass/fail status, duration, and failure messages.
+module TestOutputFormatter =
+  let private formatDuration (ts: TimeSpan) =
+    match ts.TotalMilliseconds < 1000.0 with
+    | true -> sprintf "%dms" (int ts.TotalMilliseconds)
+    | false -> sprintf "%.1fs" ts.TotalSeconds
+
+  let private resultLine (r: TestRunResult) : OutputLine =
+    let now = DateTime.UtcNow
+    match r.Result with
+    | TestResult.Passed duration ->
+      { Kind = OutputKind.Info
+        Text = sprintf "  ✅ %s (%s)" r.TestName (formatDuration duration)
+        Timestamp = now; SessionId = "" }
+    | TestResult.Failed (failure, duration) ->
+      let failMsg =
+        match failure with
+        | TestFailure.AssertionFailed msg -> msg
+        | TestFailure.ExceptionThrown (msg, _) -> msg
+        | TestFailure.TimedOut after -> sprintf "Timed out after %s" (formatDuration after)
+      { Kind = OutputKind.Error
+        Text = sprintf "  ❌ %s (%s)\n     %s" r.TestName (formatDuration duration) failMsg
+        Timestamp = now; SessionId = "" }
+    | TestResult.Skipped reason ->
+      { Kind = OutputKind.System
+        Text = sprintf "  ⏭️ %s — %s" r.TestName reason
+        Timestamp = now; SessionId = "" }
+    | TestResult.NotRun ->
+      { Kind = OutputKind.System
+        Text = sprintf "  ⊘ %s (not run)" r.TestName
+        Timestamp = now; SessionId = "" }
+
+  let private resultLines (r: TestRunResult) : OutputLine list =
+    let now = DateTime.UtcNow
+    let main = resultLine r
+    match r.Output with
+    | Some output when not (String.IsNullOrWhiteSpace output) ->
+      let outputLine =
+        { Kind = OutputKind.System
+          Text = sprintf "     │ %s" (output.Replace("\n", "\n     │ "))
+          Timestamp = now; SessionId = "" }
+      [main; outputLine]
+    | _ -> [main]
+
+  let toOutputLines (results: TestRunResult array) : OutputLine list =
+    results |> Array.toList |> List.collect resultLines
+
+  let summaryLine (results: TestRunResult array) : OutputLine =
+    let passed = results |> Array.filter (fun r -> match r.Result with TestResult.Passed _ -> true | _ -> false) |> Array.length
+    let failed = results |> Array.filter (fun r -> match r.Result with TestResult.Failed _ -> true | _ -> false) |> Array.length
+    let skipped = results |> Array.filter (fun r -> match r.Result with TestResult.Skipped _ -> true | _ -> false) |> Array.length
+    let totalDuration =
+      results |> Array.sumBy (fun r ->
+        match r.Result with
+        | TestResult.Passed d -> d.TotalMilliseconds
+        | TestResult.Failed (_, d) -> d.TotalMilliseconds
+        | _ -> 0.0)
+    let kind = match failed > 0 with | true -> OutputKind.Error | false -> OutputKind.Info
+    { Kind = kind
+      Text = sprintf "🧪 Test run complete: %d passed, %d failed, %d skipped (%s)" passed failed skipped (formatDuration (TimeSpan.FromMilliseconds totalDuration))
+      Timestamp = DateTime.UtcNow; SessionId = "" }
+
 /// The unified message type for the SageFs Elm loop.
 /// All state changes flow through here — user actions and system events.
 [<RequireQualifiedAccess>]
@@ -38,6 +160,8 @@ type SageFsModel = {
   ThemeName: string
   SessionContext: SessionContext option
   LiveTesting: Features.LiveTesting.LiveTestPipelineState
+  /// Accumulates test results from batches for the summary on TestRunCompleted.
+  PendingTestResults: Features.LiveTesting.TestRunResult list
 }
 
 module SageFsModel =
@@ -60,6 +184,7 @@ module SageFsModel =
     ThemeName = "Kanagawa"
     SessionContext = None
     LiveTesting = Features.LiveTesting.LiveTestPipelineState.empty
+    PendingTestResults = []
   }
 
 /// Pure update function: routes SageFsMsg through the right handler.
@@ -376,6 +501,8 @@ module SageFsUpdate =
           { model with RecentOutput = lines @ model.RecentOutput }, []
 
       | SageFsEvent.WarmupContextUpdated ctx ->
+        // Inject warmup banner into output BEFORE any eval results
+        let bannerLines = WarmupBanner.toOutputLines ctx
         // Re-map any ReflectionOnly tests now that we have source file paths
         let sourceFiles = ctx.FileStatuses |> List.map (fun f -> f.Path) |> Array.ofList
         let lt =
@@ -385,7 +512,11 @@ module SageFsUpdate =
             recomputeStatuses model.LiveTesting (fun s ->
               let remapped = Features.LiveTesting.SourceMapping.mapFromProjectFiles sourceFiles s.DiscoveredTests
               { s with DiscoveredTests = remapped })
-        { model with SessionContext = Some ctx; LiveTesting = lt }, []
+        // bannerLines are prepended (newest-first convention: List.rev so header is last/oldest)
+        { model with
+            SessionContext = Some ctx
+            LiveTesting = lt
+            RecentOutput = (List.rev bannerLines) @ model.RecentOutput }, []
 
       // ── Live testing events ──
       | SageFsEvent.TestLocationsDetected (_, locations) ->
@@ -439,7 +570,11 @@ module SageFsUpdate =
       | SageFsEvent.TestResultsBatch results ->
         let merged = Features.LiveTesting.LiveTesting.mergeResults model.LiveTesting.TestState results
         let lt = recomputeStatuses model.LiveTesting (fun _ -> merged)
-        { model with LiveTesting = lt }, []
+        let outputLines = TestOutputFormatter.toOutputLines results
+        { model with
+            LiveTesting = lt
+            PendingTestResults = model.PendingTestResults @ (Array.toList results)
+            RecentOutput = (List.rev outputLines) @ model.RecentOutput }, []
 
       | SageFsEvent.TestRunCompleted sessionId ->
         let lt = recomputeStatuses model.LiveTesting (fun s ->
@@ -448,7 +583,11 @@ module SageFsUpdate =
             | Some sid -> s.RunPhases |> Map.add sid Features.LiveTesting.TestRunPhase.Idle
             | None -> s.RunPhases
           { s with AffectedTests = Set.empty; RunPhases = phases })
-        { model with LiveTesting = lt }, []
+        let summary = TestOutputFormatter.summaryLine (model.PendingTestResults |> Array.ofList)
+        { model with
+            LiveTesting = lt
+            PendingTestResults = []
+            RecentOutput = summary :: model.RecentOutput }, []
 
       | SageFsEvent.LiveTestingEnabled ->
         let lt = recomputeStatuses model.LiveTesting (fun s -> { s with Activation = Features.LiveTesting.LiveTestingActivation.Active })
@@ -1155,7 +1294,8 @@ module SageFsEffectHandler =
                         { TestId = tc.Id
                           TestName = tc.FullName
                           Result = Features.LiveTesting.TestResult.NotRun
-                          Timestamp = System.DateTimeOffset.UtcNow }
+                          Timestamp = System.DateTimeOffset.UtcNow
+                          Output = None }
                         : Features.LiveTesting.TestRunResult)
                     dispatch (SageFsMsg.Event (SageFsEvent.TestResultsBatch notRunResults))
                 | Error _ ->
@@ -1164,7 +1304,8 @@ module SageFsEffectHandler =
                       { TestId = tc.Id
                         TestName = tc.FullName
                         Result = Features.LiveTesting.TestResult.NotRun
-                        Timestamp = System.DateTimeOffset.UtcNow }
+                        Timestamp = System.DateTimeOffset.UtcNow
+                        Output = None }
                       : Features.LiveTesting.TestRunResult)
                   dispatch (SageFsMsg.Event (SageFsEvent.TestResultsBatch notRunResults))
                 sw.Stop()
@@ -1203,7 +1344,8 @@ module SageFsEffectHandler =
                              ex.Message,
                              ex.StackTrace |> Option.ofObj |> Option.defaultValue ""),
                            System.TimeSpan.Zero)
-                       Timestamp = System.DateTimeOffset.UtcNow }
+                       Timestamp = System.DateTimeOffset.UtcNow
+                       Output = None }
                      : Features.LiveTesting.TestRunResult))
                 dispatch (SageFsMsg.Event (SageFsEvent.TestResultsBatch errResults))
                 dispatch (SageFsMsg.Event (SageFsEvent.TestRunCompleted targetSession))

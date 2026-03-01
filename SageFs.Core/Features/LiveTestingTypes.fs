@@ -164,6 +164,8 @@ type TestRunResult = {
   TestName: string
   Result: TestResult
   Timestamp: DateTimeOffset
+  /// Captured console output (stdout) from the test execution.
+  Output: string option
 }
 
 // --- Run History ---

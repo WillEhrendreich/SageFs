@@ -219,14 +219,16 @@ let workerProtocolTests =
           { TestId = TestId.TestId "abc123"
             TestName = "should add"
             Result = TestResult.Passed (TimeSpan.FromMilliseconds 42.0)
-            Timestamp = DateTimeOffset(2024, 1, 1, 0, 0, 0, TimeSpan.Zero) }
+            Timestamp = DateTimeOffset(2024, 1, 1, 0, 0, 0, TimeSpan.Zero)
+            Output = None }
         let r2: SageFs.Features.LiveTesting.TestRunResult =
           { TestId = TestId.TestId "def456"
             TestName = "should fail"
             Result = TestResult.Failed(
               TestFailure.AssertionFailed "Expected 42",
               TimeSpan.FromMilliseconds 15.0)
-            Timestamp = DateTimeOffset(2024, 1, 1, 0, 0, 0, TimeSpan.Zero) }
+            Timestamp = DateTimeOffset(2024, 1, 1, 0, 0, 0, TimeSpan.Zero)
+            Output = None }
         let resp = WorkerResponse.TestRunResults("r-run1", [| r1; r2 |])
         let _, result = roundTrip<WorkerResponse> resp
         result |> Expect.equal "should round-trip" resp

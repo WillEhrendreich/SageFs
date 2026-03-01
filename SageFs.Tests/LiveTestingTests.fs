@@ -46,7 +46,7 @@ let mkTestCase name fw category =
 
 let mkResult testId result =
   { TestId = testId; TestName = TestId.value testId
-    Result = result; Timestamp = DateTimeOffset.UtcNow }
+    Result = result; Timestamp = DateTimeOffset.UtcNow; Output = None }
 
 let mkAssemblyInfo name (refs: string list) =
   { Name = name; Location = sprintf "/%s.dll" name
@@ -751,7 +751,7 @@ let propertyTests = testList "Property-based" [
            let tid = mkTestId (sprintf "t%d" i) "x"
            { TestId = tid; TestName = TestId.value tid
              Result = LTTestResult.Passed (ts 1.0)
-             Timestamp = DateTimeOffset.UtcNow } |]
+             Timestamp = DateTimeOffset.UtcNow; Output = None } |]
     let state = LiveTesting.mergeResults LiveTestState.empty results
     state.LastResults |> Map.count >= count
   )
@@ -853,7 +853,8 @@ let elmIntegrationTests = testList "LiveTesting Elm Integration" [
       let r : TestRunResult =
         { TestId = tid; TestName = "t1"
           Result = LTTestResult.Passed (ts 5.0)
-          Timestamp = DateTimeOffset.UtcNow }
+          Timestamp = DateTimeOffset.UtcNow
+          Output = None }
       let model', _ =
         SageFsUpdate.update
           (SageFsMsg.Event (SageFsEvent.TestResultsBatch [| r |])) m
@@ -1220,7 +1221,7 @@ let stalenessTests = testList "Staleness" [
       DisplayName = "test2"; Origin = TestOrigin.ReflectionOnly
       Labels = []; Framework = "expecto"; Category = TestCategory.Unit }
   let mkResult tid res =
-    { TestId = tid; TestName = ""; Result = res; Timestamp = DateTimeOffset.UtcNow }
+    { TestId = tid; TestName = ""; Result = res; Timestamp = DateTimeOffset.UtcNow; Output = None }
   let depGraph = {
     SymbolToTests = Map.ofList [
       "Module.add", [| test1.Id |]
@@ -1465,7 +1466,7 @@ let statusEntryTests = testList "StatusEntry Computation" [
       DisplayName = "test2"; Origin = TestOrigin.ReflectionOnly
       Labels = []; Framework = "expecto"; Category = TestCategory.Unit }
   let mkResult tid res =
-    { TestId = tid; TestName = ""; Result = res; Timestamp = DateTimeOffset.UtcNow }
+    { TestId = tid; TestName = ""; Result = res; Timestamp = DateTimeOffset.UtcNow; Output = None }
 
   test "computeStatusEntries maps Passed results correctly" {
     let state = {
@@ -1680,7 +1681,7 @@ let annotationTests = testList "Gutter Annotations" [
       DisplayName = "test1"; Origin = TestOrigin.SourceMapped ("test.fs", 10)
       Labels = []; Framework = "expecto"; Category = TestCategory.Unit }
   let mkResult tid res =
-    { TestId = tid; TestName = ""; Result = res; Timestamp = DateTimeOffset.UtcNow }
+    { TestId = tid; TestName = ""; Result = res; Timestamp = DateTimeOffset.UtcNow; Output = None }
 
   test "annotationsForFile returns tree-sitter locations when no results" {
     let state = {
@@ -1798,7 +1799,7 @@ let coverageProjectionExtendedTests = testList "Coverage Projection Extended" [
       DisplayName = "test2"; Origin = TestOrigin.ReflectionOnly
       Labels = []; Framework = "expecto"; Category = TestCategory.Unit }
   let mkResult tid res =
-    { TestId = tid; TestName = ""; Result = res; Timestamp = DateTimeOffset.UtcNow }
+    { TestId = tid; TestName = ""; Result = res; Timestamp = DateTimeOffset.UtcNow; Output = None }
   let results = Map.ofList [
     test1.Id, mkResult test1.Id (TestResult.Passed (TimeSpan.FromMilliseconds 5.0))
     test2.Id, mkResult test2.Id (TestResult.Passed (TimeSpan.FromMilliseconds 3.0))
@@ -3378,6 +3379,7 @@ let compositionTests = testList "compositionTests" [
       TestName = tc1.FullName
       Result = TestResult.Passed(TimeSpan.FromMilliseconds(5.0))
       Timestamp = now
+      Output = None
     }
     let state = {
       LiveTestState.empty with
@@ -3552,7 +3554,8 @@ let elmWiringBehavioralTests = testList "Elm Wiring Behavioral Scenarios" [
       { TestId = tc.Id
         TestName = tc.FullName
         Result = TestResult.Passed(TimeSpan.FromMilliseconds(5.0))
-        Timestamp = now }
+        Timestamp = now
+        Output = None }
     let merged = LiveTesting.mergeResults state [|result|]
     merged.StatusEntries |> Array.tryFind (fun e -> e.TestId = tc.Id)
     |> Option.map (fun e -> match e.Status with TestRunStatus.Passed _ -> true | _ -> false)
@@ -3574,7 +3577,8 @@ let elmWiringBehavioralTests = testList "Elm Wiring Behavioral Scenarios" [
       { TestId = tc.Id
         TestName = tc.FullName
         Result = TestResult.Passed(TimeSpan.FromMilliseconds(5.0))
-        Timestamp = now }
+        Timestamp = now
+        Output = None }
     let state =
       { LiveTestState.empty with
           DiscoveredTests = [|tc|]
@@ -3593,7 +3597,8 @@ let elmWiringBehavioralTests = testList "Elm Wiring Behavioral Scenarios" [
       { TestId = tc.Id
         TestName = tc.FullName
         Result = TestResult.Passed(TimeSpan.FromMilliseconds(3.0))
-        Timestamp = now.AddSeconds(1.0) }
+        Timestamp = now.AddSeconds(1.0)
+        Output = None }
     let cleared = LiveTesting.mergeResults stale [|newResult|]
     cleared.StatusEntries |> Array.exists (fun e -> match e.Status with TestRunStatus.Passed _ -> true | _ -> false)
     |> Expect.isTrue "entry is Passed after re-run"
@@ -3919,7 +3924,7 @@ let mkSourceMappedTestCase name fw =
 let mkPassedResult tid =
   { TestId = tid; TestName = TestId.value tid
     Result = TestResult.Passed (TimeSpan.FromMilliseconds 10.0)
-    Timestamp = DateTimeOffset.UtcNow.AddSeconds(-5.0) }
+    Timestamp = DateTimeOffset.UtcNow.AddSeconds(-5.0); Output = None }
 
 [<Tests>]
 let runningToStaleOnKeystrokeTests = testList "Running → Stale on keystroke" [
@@ -4463,7 +4468,7 @@ let optimisticGutterTests = testList "optimistic gutter transitions" [
     let dur = System.TimeSpan.FromMilliseconds 10.0
     let result = {
       TestId = tid; TestName = "Tests.prev_passed"
-      Result = TestResult.Passed dur; Timestamp = System.DateTimeOffset.UtcNow }
+      Result = TestResult.Passed dur; Timestamp = System.DateTimeOffset.UtcNow; Output = None }
     let model0 = SageFsModel.initial
     let model1 = { model0 with
                     LiveTesting = { model0.LiveTesting with
@@ -4520,7 +4525,7 @@ let sseEnrichmentTests = testList "SSE enrichment round-trip" [
     let dur = System.TimeSpan.FromMilliseconds 42.0
     let result = {
       TestId = tid; TestName = "Tests.round_trip"
-      Result = TestResult.Passed dur; Timestamp = System.DateTimeOffset.UtcNow }
+      Result = TestResult.Passed dur; Timestamp = System.DateTimeOffset.UtcNow; Output = None }
     let phase, gen = TestRunPhase.startRun RunGeneration.zero
     let state = {
       LiveTestState.empty with
@@ -4562,7 +4567,7 @@ let sseEnrichmentTests = testList "SSE enrichment round-trip" [
     let result = {
       TestId = tid; TestName = "Tests.stale_edit"
       Result = TestResult.Passed (System.TimeSpan.FromMilliseconds 10.0)
-      Timestamp = System.DateTimeOffset.UtcNow }
+      Timestamp = System.DateTimeOffset.UtcNow; Output = None }
     let merged = LiveTesting.mergeResults state [| result |]
     let entries = LiveTesting.computeStatusEntries merged
     let _newPhase, freshness = TestRunPhase.onResultsArrived gen editedPhase
@@ -4681,10 +4686,10 @@ let elmUpdateStatusRecomputationTests = testList "Elm update StatusEntries recom
     let results = [|
       { TestId = tid1; TestName = "test1"
         Result = TestResult.Passed (TimeSpan.FromMilliseconds 5.0)
-        Timestamp = DateTimeOffset.UtcNow }
+        Timestamp = DateTimeOffset.UtcNow; Output = None }
       { TestId = tid2; TestName = "test2"
         Result = TestResult.Failed (TestFailure.AssertionFailed "Expected 42 got 43", TimeSpan.FromMilliseconds 12.0)
-        Timestamp = DateTimeOffset.UtcNow }
+        Timestamp = DateTimeOffset.UtcNow; Output = None }
     |]
 
     let model0 = SageFsModel.initial
@@ -4959,7 +4964,7 @@ let pipelineBenchmarkTests = testList "Pipeline Core Benchmark" [
       tests.[..149] |> Array.map (fun t ->
         t.Id, { TestId = t.Id; TestName = t.DisplayName
                 Result = TestResult.Passed (TimeSpan.FromMilliseconds 5.0)
-                Timestamp = DateTimeOffset.UtcNow }) |> Map.ofArray
+                Timestamp = DateTimeOffset.UtcNow; Output = None }) |> Map.ofArray
     let locs = tests |> Array.mapi (fun i t ->
       { AttributeName = "Test"; FunctionName = sprintf "t%d" i; FilePath = "editor"
         Line = (match t.Origin with TestOrigin.SourceMapped (_, l) -> l | _ -> 0); Column = 0 })
@@ -4999,7 +5004,7 @@ let pipelineBenchmarkTests = testList "Pipeline Core Benchmark" [
       tests.[..799] |> Array.map (fun t ->
         t.Id, { TestId = t.Id; TestName = t.DisplayName
                 Result = TestResult.Passed (TimeSpan.FromMilliseconds 3.0)
-                Timestamp = DateTimeOffset.UtcNow }) |> Map.ofArray
+                Timestamp = DateTimeOffset.UtcNow; Output = None }) |> Map.ofArray
     let locs = tests |> Array.mapi (fun i t ->
       { AttributeName = "Test"; FunctionName = sprintf "t%d" i; FilePath = "editor"
         Line = (match t.Origin with TestOrigin.SourceMapped (_, l) -> l | _ -> 0); Column = 0 })
@@ -5158,7 +5163,7 @@ let fcsGraphTests = testList "FCS dependency graph builder" [
       addTestId, {
         TestId = addTestId; TestName = "addTest"
         Result = TestResult.Passed (TimeSpan.FromMilliseconds 5.0)
-        Timestamp = DateTimeOffset.UtcNow
+        Timestamp = DateTimeOffset.UtcNow; Output = None
       }
     ]
     match CoverageProjection.symbolCoverage graph results "MyApp.Math.add" with
@@ -5773,7 +5778,7 @@ let coverageCorrelationTests = testList "CoverageCorrelation" [
         Labels = []; Framework = "expecto"; Category = TestCategory.Unit }
     |]
     let results = Map.ofList [
-      tid1, { TestId = tid1; TestName = "test1"; Result = TestResult.Passed (TimeSpan.FromMilliseconds 5.0); Timestamp = DateTimeOffset.UtcNow }
+      tid1, { TestId = tid1; TestName = "test1"; Result = TestResult.Passed (TimeSpan.FromMilliseconds 5.0); Timestamp = DateTimeOffset.UtcNow; Output = None }
     ]
     match CoverageCorrelation.testsForSymbol graph tests results "MyModule.add" with
     | CoverageDetail.Covered infos ->
@@ -5804,7 +5809,7 @@ let coverageCorrelationTests = testList "CoverageCorrelation" [
     let graph = { TestDependencyGraph.empty with TransitiveCoverage = Map.ofList ["Prod.validate", [| tid |]] }
     let annotations = [| { Symbol = "Prod.validate"; FilePath = "prod.fs"; DefinitionLine = 42; Status = CoverageStatus.Covered (1, CoverageHealth.AllPassing) } |]
     let tests = [| { Id = tid; FullName = "Tests.lineTest"; DisplayName = "lineTest"; Origin = TestOrigin.ReflectionOnly; Labels = []; Framework = "expecto"; Category = TestCategory.Unit } |]
-    let results = Map.ofList [ tid, { TestId = tid; TestName = "lineTest"; Result = TestResult.Passed (TimeSpan.FromMilliseconds 3.0); Timestamp = DateTimeOffset.UtcNow } ]
+    let results = Map.ofList [ tid, { TestId = tid; TestName = "lineTest"; Result = TestResult.Passed (TimeSpan.FromMilliseconds 3.0); Timestamp = DateTimeOffset.UtcNow; Output = None } ]
     match CoverageCorrelation.testsForLine annotations graph tests results "prod.fs" 42 with
     | CoverageDetail.Covered infos ->
       infos.Length |> Expect.equal "1 test" 1
@@ -6115,7 +6120,7 @@ let rangeLookupTests = testList "FileAnnotations.projectWithCoverage range enric
       Map.ofList
         [ tid,
           { TestId = tid; TestName = "test1"; Result = passed
-            Timestamp = System.DateTimeOffset.UtcNow } ]
+            Timestamp = System.DateTimeOffset.UtcNow; Output = None } ]
     let symRef : SymbolReference =
       { SymbolFullName = "MyModule.foo"; UseKind = SymbolUseKind.Definition
         UsedInTestId = None; FilePath = filePath; Line = 10 }
@@ -6313,6 +6318,7 @@ let e2ePipelineFlowTests = testList "E2E Pipeline Flow" [
       TestRunResult.TestId = tid; TestName = "myTest should work"
       Result = TestResult.Passed (System.TimeSpan.FromMilliseconds 42.0)
       Timestamp = System.DateTimeOffset.UtcNow
+      Output = None
     }
     let model4, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestResultsBatch [| result |])) model3
     model4.LiveTesting.TestState.LastResults |> Map.tryFind tid |> Expect.isSome "should have result for test"
@@ -6351,7 +6357,7 @@ let e2ePipelineFlowTests = testList "E2E Pipeline Flow" [
     m4.LiveTesting.TestState.TestSessionMap |> Map.find tid2 |> Expect.equal "t2 in s2" "s2"
 
     let m5, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestRunStarted ([| tid1 |], Some "s1"))) m4
-    let r1 = { TestRunResult.TestId = tid1; TestName = "t1"; Result = TestResult.Passed (System.TimeSpan.FromMilliseconds 10.0); Timestamp = System.DateTimeOffset.UtcNow }
+    let r1 = { TestRunResult.TestId = tid1; TestName = "t1"; Result = TestResult.Passed (System.TimeSpan.FromMilliseconds 10.0); Timestamp = System.DateTimeOffset.UtcNow; Output = None }
     let m6, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestResultsBatch [| r1 |])) m5
     let s2Status = m6.LiveTesting.TestState.StatusEntries |> Array.tryFind (fun e -> e.TestId = tid2)
     match s2Status with

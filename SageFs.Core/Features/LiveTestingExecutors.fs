@@ -434,6 +434,9 @@ module TestOrchestrator =
     async {
       let sw = Stopwatch.StartNew()
       let perTestTimeout = TimeSpan.FromSeconds 5.0
+      let stdoutCapture = new IO.StringWriter()
+      let originalOut = Console.Out
+      Console.SetOut(stdoutCapture)
       let! result =
         async {
           try
@@ -461,11 +464,18 @@ module TestOrchestrator =
                 ex.StackTrace |> Option.ofObj |> Option.defaultValue ""),
               sw.Elapsed)
         }
+      Console.SetOut(originalOut)
+      let captured = stdoutCapture.ToString()
+      let output =
+        match String.IsNullOrWhiteSpace captured with
+        | true -> None
+        | false -> Some (captured.TrimEnd())
       return {
         TestId = testCase.Id
         TestName = testCase.DisplayName
         Result = result
         Timestamp = DateTimeOffset.UtcNow
+        Output = output
       }
     }
 
