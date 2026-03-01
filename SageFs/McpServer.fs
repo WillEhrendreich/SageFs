@@ -5,6 +5,7 @@ open System.Collections.Concurrent
 open System.Collections.Generic
 open System.Text.Json
 open System.Threading
+open System.Threading.Channels
 open System.Threading.Tasks
 open Microsoft.AspNetCore.Builder
 open Microsoft.AspNetCore.Hosting
@@ -16,6 +17,7 @@ open OpenTelemetry.Logs
 open OpenTelemetry.Metrics
 open OpenTelemetry.Resources
 open OpenTelemetry.Trace
+open Microsoft.AspNetCore.ResponseCompression
 open SageFs.AppState
 open SageFs.McpTools
 
@@ -294,15 +296,35 @@ let writeSseFrame (body: System.IO.Stream) (frame: string) = task {
   do! body.FlushAsync()
 }
 
-/// Write an SSE frame to a stream (synchronous — use in event subscriptions).
-let writeSseFrameSync (body: System.IO.Stream) (frame: string) =
-  try
-    let bytes = System.Text.Encoding.UTF8.GetBytes(frame)
-    body.Write(bytes, 0, bytes.Length)
-    body.Flush()
-  with
-  | :? System.IO.IOException -> () // Client disconnected
-  | :? ObjectDisposedException -> () // Stream disposed
+/// Run a single-writer SSE loop: all Observable sources and heartbeat
+/// funnel through a bounded Channel, one async reader writes to the stream.
+/// Fixes: (1) sync IO on Kestrel, (2) concurrent write data race.
+let runSseWriteLoop
+  (body: System.IO.Stream)
+  (ct: CancellationToken)
+  (sources: IObservable<string> list)
+  (heartbeatMs: int) =
+  task {
+    let opts = BoundedChannelOptions(128, FullMode = BoundedChannelFullMode.DropOldest)
+    let ch = Channel.CreateBounded<string>(opts)
+    let subs = ResizeArray<IDisposable>()
+    try
+      for src in sources do
+        src.Subscribe(fun frame -> ch.Writer.TryWrite(frame) |> ignore)
+        |> subs.Add
+      use _heartbeat =
+        new Timer((fun _ -> ch.Writer.TryWrite(": keepalive\n\n") |> ignore), null, heartbeatMs, heartbeatMs)
+      try
+        while not ct.IsCancellationRequested do
+          let! frame = ch.Reader.ReadAsync(ct)
+          do! writeSseFrame body frame
+      with
+      | :? OperationCanceledException -> ()
+      | :? System.IO.IOException -> ()
+      | :? ObjectDisposedException -> ()
+    finally
+      for sub in subs do sub.Dispose()
+  }
 
 /// Set standard SSE response headers.
 let setSseHeaders (ctx: Microsoft.AspNetCore.Http.HttpContext) =
@@ -440,6 +462,17 @@ let startMcpServer (cfg: McpServerConfig) =
             let sseJsonOpts = JsonSerializerOptions()
             sseJsonOpts.Converters.Add(System.Text.Json.Serialization.JsonFSharpConverter())
 
+            // Response compression: Brotli at fastest level for all HTTP/SSE responses
+            builder.Services.AddResponseCompression(fun opts ->
+              opts.EnableForHttps <- true
+              opts.MimeTypes <- ResponseCompressionDefaults.MimeTypes |> Seq.append ["text/event-stream"]
+              opts.Providers.Add<BrotliCompressionProvider>()
+              opts.Providers.Add<GzipCompressionProvider>()
+            ) |> ignore
+            builder.Services.Configure<BrotliCompressionProviderOptions>(fun (opts: BrotliCompressionProviderOptions) ->
+              opts.Level <- System.IO.Compression.CompressionLevel.Fastest
+            ) |> ignore
+
             builder.Services
                 .AddMcpServer(fun options ->
                   options.ServerInstructions <- String.concat " " [
@@ -473,6 +506,8 @@ let startMcpServer (cfg: McpServerConfig) =
             
             let app = builder.Build()
 
+            app.UseResponseCompression() |> ignore
+
             // Map MCP endpoints
             app.MapMcp() |> ignore
 
@@ -483,6 +518,11 @@ let startMcpServer (cfg: McpServerConfig) =
             /// Execute a side-effect with the current Elm model, or do nothing
             let withModel (f: SageFs.SageFsModel -> unit) =
               getElmModel |> Option.iter (fun getModel -> f (getModel()))
+
+            let withModelAsync (f: SageFs.SageFsModel -> Task) =
+              match getElmModel with
+              | Some getModel -> f (getModel())
+              | None -> Task.CompletedTask
 
             /// Get the active session ID from the current model
             let activeSessionId () =
@@ -629,14 +669,11 @@ let startMcpServer (cfg: McpServerConfig) =
                     let initialEvent = sprintf "event: diagnostics\ndata: []\n\n"
                     do! writeSseFrame ctx.Response.Body initialEvent
 
-                    let tcs = System.Threading.Tasks.TaskCompletionSource()
-                    use _ct = ctx.RequestAborted.Register(fun () -> tcs.TrySetResult() |> ignore)
-                    use _sub = cfg.DiagnosticsChanged.Subscribe(fun store ->
+                    let diagSource =
+                      cfg.DiagnosticsChanged |> Observable.map (fun store ->
                         let json = SageFs.McpAdapter.formatDiagnosticsStoreAsJson store
-                        let sseEvent = sprintf "event: diagnostics\ndata: %s\n\n" json
-                        writeSseFrameSync ctx.Response.Body sseEvent
-                    )
-                    do! tcs.Task
+                        sprintf "event: diagnostics\ndata: %s\n\n" json)
+                    do! runSseWriteLoop ctx.Response.Body ctx.RequestAborted [diagSource] 30000
                     SageFs.Instrumentation.sseConnectionsActive.Add(-1L)
                 } :> Task
             ) |> ignore
@@ -677,7 +714,7 @@ let startMcpServer (cfg: McpServerConfig) =
               | _ -> task { () }
 
             let replayCachedTestState (body: System.IO.Stream) =
-              withModel (fun model ->
+              withModelAsync (fun model -> task {
                 try
                   let lt = model.LiveTesting.TestState
                   let activeId = activeSessionId () |> Option.defaultValue ""
@@ -687,8 +724,8 @@ let startMcpServer (cfg: McpServerConfig) =
                   | true ->
                     let s = TestSummary.fromStatuses
                               lt.Activation (sessionEntries |> Array.map (fun e -> e.Status))
-                    SageFs.SseWriter.formatTestSummaryEvent sseJsonOpts (Some activeId) s
-                    |> writeSseFrameSync body
+                    do! SageFs.SseWriter.formatTestSummaryEvent sseJsonOpts (Some activeId) s
+                        |> writeSseFrame body
                     let freshness =
                       match lt.RunPhases |> Map.exists (fun _ p -> match p with TestRunPhase.RunningButEdited _ -> true | _ -> false) with
                       | true -> ResultFreshness.StaleCodeEdited
@@ -699,8 +736,8 @@ let startMcpServer (cfg: McpServerConfig) =
                           freshness lt.DiscoveredTests.Length sessionEntries.Length
                       TestResultsBatchPayload.create
                         lt.LastGeneration freshness completion lt.Activation sessionEntries
-                    SageFs.SseWriter.formatTestResultsBatchEvent sseJsonOpts (Some activeId) payload
-                    |> writeSseFrameSync body
+                    do! SageFs.SseWriter.formatTestResultsBatchEvent sseJsonOpts (Some activeId) payload
+                        |> writeSseFrame body
                     let files =
                       sessionEntries
                       |> Array.choose (fun e ->
@@ -713,12 +750,13 @@ let startMcpServer (cfg: McpServerConfig) =
                       let fa = FileAnnotations.projectWithCoverage file pipeline
                       match fa.TestAnnotations.Length > 0 || fa.CodeLenses.Length > 0 || fa.CoverageAnnotations.Length > 0 with
                       | true ->
-                        SageFs.SseWriter.formatFileAnnotationsEvent sseJsonOpts (Some activeId) fa
-                        |> writeSseFrameSync body
+                        do! SageFs.SseWriter.formatFileAnnotationsEvent sseJsonOpts (Some activeId) fa
+                            |> writeSseFrame body
                       | false -> ()
                   | false -> ()
                 with ex ->
-                  eprintfn "SSE replay error: %s" ex.Message)
+                  eprintfn "SSE replay error: %s" ex.Message
+              })
 
             // Detect hotreload mutations and push typed session events
             // Detect session ready and push warmup context snapshot
@@ -793,47 +831,28 @@ let startMcpServer (cfg: McpServerConfig) =
 
                     match cfg.StateChanged with
                     | Some evt ->
-                        let tcs = System.Threading.Tasks.TaskCompletionSource()
-                        use _ct = ctx.RequestAborted.Register(fun () -> tcs.TrySetResult() |> ignore)
-                        // Heartbeat keeps connection alive through proxies
-                        let heartbeat = new System.Threading.Timer((fun _ ->
-                            try
-                                writeSseFrameSync ctx.Response.Body ": keepalive\n\n"
-                            with
-                            | :? System.IO.IOException | :? ObjectDisposedException -> ()
-                            | ex -> eprintfn "[SSE] Heartbeat error: %s" ex.Message), null, 15000, 15000)
-                        use _heartbeat = heartbeat
-                        use _sub = evt.Subscribe(fun change ->
-                            try
-                                change
-                                |> DaemonStateChange.toJson
-                                |> SageFs.SseWriter.formatSseEvent "state"
-                                |> writeSseFrameSync ctx.Response.Body
-                            with
-                            | :? System.IO.IOException | :? ObjectDisposedException -> ()
-                            | ex -> eprintfn "[SSE] State event error: %s" ex.Message)
-                        use _testSub = testEventBroadcast.Publish.Subscribe(fun sseString ->
-                            try writeSseFrameSync ctx.Response.Body sseString
-                            with
-                            | :? System.IO.IOException | :? ObjectDisposedException -> ()
-                            | ex -> eprintfn "[SSE] Test event error: %s" ex.Message)
-                        use _sessionSub = sessionEventBroadcast.Publish.Subscribe(fun sseString ->
-                            try writeSseFrameSync ctx.Response.Body sseString
-                            with
-                            | :? System.IO.IOException | :? ObjectDisposedException -> ()
-                            | ex -> eprintfn "[SSE] Session event error: %s" ex.Message)
-                        // Replay session snapshot FIRST (warmup context) — awaited to ensure delivery
+                        // Replay snapshots BEFORE subscriptions — direct async writes (no race)
                         do! replaySessionSnapshot ctx.Response.Body
-                        // Replay current test state on new SSE connection
-                        replayCachedTestState ctx.Response.Body
-                        // Replay current bindings snapshot
+                        do! replayCachedTestState ctx.Response.Body
                         match fsiBindings.Count, activeSessionId () with
                         | count, Some sid when count > 0 ->
                           fsiBindings |> Map.values |> Array.ofSeq
                           |> SageFs.SseWriter.formatBindingsSnapshotEvent sseJsonOpts (Some sid)
-                          |> writeSseFrameSync ctx.Response.Body
+                          |> writeSseFrame ctx.Response.Body
+                          |> fun t -> t.Wait()
                         | _ -> ()
-                        do! tcs.Task
+                        // Build typed source from state changes
+                        let stateSource =
+                          evt |> Observable.map (fun change ->
+                            change
+                            |> DaemonStateChange.toJson
+                            |> SageFs.SseWriter.formatSseEvent "state")
+                        // Channel write loop: all sources + heartbeat funneled through one async writer
+                        do! runSseWriteLoop
+                              ctx.Response.Body
+                              ctx.RequestAborted
+                              [ stateSource; testEventBroadcast.Publish; sessionEventBroadcast.Publish ]
+                              15000
                         SageFs.Instrumentation.sseConnectionsActive.Add(-1L)
                     | None ->
                         ctx.Response.StatusCode <- 501
