@@ -309,18 +309,18 @@ module InstrumentationMap =
 
   /// Convert raw hit data + instrumentation map → CoverageState.
   let toCoverageState (hits: bool array) (map: InstrumentationMap) : CoverageState =
-    if hits.Length <> map.TotalProbes then
-      { Slots = [||]; Hits = [||] }
-    else
-      { Slots = map.Slots; Hits = hits }
+    match hits.Length <> map.TotalProbes with
+    | true -> { Slots = [||]; Hits = [||] }
+    | false -> { Slots = map.Slots; Hits = hits }
 
   /// Merge multiple maps into one (concatenates slots).
   /// Worker collects concatenated hits across all assemblies,
   /// so the merged map's slot order must match.
   let merge (maps: InstrumentationMap array) : InstrumentationMap =
-    if maps.Length = 0 then empty
-    elif maps.Length = 1 then maps.[0]
-    else
+    match maps.Length with
+    | 0 -> empty
+    | 1 -> maps.[0]
+    | _ ->
       let allSlots = maps |> Array.collect (fun m -> m.Slots)
       { Slots = allSlots
         TotalProbes = allSlots.Length
@@ -331,9 +331,9 @@ module InstrumentationMap =
 module ILCoverage =
   /// Group sequence point hits by (file, line) → per-line coverage status.
   let computeLineCoverage (state: CoverageState) : Map<string, Map<int, LineCoverage>> =
-    if state.Slots.Length = 0 || state.Slots.Length <> state.Hits.Length then
-      Map.empty
-    else
+    match state.Slots.Length = 0 || state.Slots.Length <> state.Hits.Length with
+    | true -> Map.empty
+    | false ->
       state.Slots
       |> Array.mapi (fun i sp -> sp, state.Hits.[i])
       |> Array.groupBy (fun (sp, _) -> sp.File)
@@ -345,9 +345,10 @@ module ILCoverage =
             let total = linePoints.Length
             let covered = linePoints |> Array.filter snd |> Array.length
             let status =
-              if covered = total then LineCoverage.FullyCovered
-              elif covered > 0 then LineCoverage.PartiallyCovered(covered, total)
-              else LineCoverage.NotCovered
+              match covered = total, covered > 0 with
+              | true, _ -> LineCoverage.FullyCovered
+              | false, true -> LineCoverage.PartiallyCovered(covered, total)
+              | false, false -> LineCoverage.NotCovered
             line, status)
           |> Map.ofArray
         file, lineMap)
@@ -375,21 +376,25 @@ module CoverageBitmap =
   /// Pack a bool array into a CoverageBitmap.
   let ofBoolArray (hits: bool array) : CoverageBitmap =
     let count = hits.Length
-    if count = 0 then empty
-    else
+    match count = 0 with
+    | true -> empty
+    | false ->
       let words = wordsNeeded count
       let bits = Array.zeroCreate<uint64> words
       for i in 0 .. count - 1 do
-        if hits.[i] then
+        match hits.[i] with
+        | true ->
           let word = i / 64
           let bit = i % 64
           bits.[word] <- bits.[word] ||| (1UL <<< bit)
+        | false -> ()
       { Bits = bits; Count = count }
 
   /// Unpack a CoverageBitmap back to a bool array.
   let toBoolArray (bm: CoverageBitmap) : bool array =
-    if bm.Count = 0 then [||]
-    else
+    match bm.Count = 0 with
+    | true -> [||]
+    | false ->
       let result = Array.zeroCreate<bool> bm.Count
       for i in 0 .. bm.Count - 1 do
         let word = i / 64
@@ -400,8 +405,9 @@ module CoverageBitmap =
   /// Check if two bitmaps have identical coverage (same size + same bits).
   /// JIT auto-vectorizes this comparison loop.
   let equivalent (a: CoverageBitmap) (b: CoverageBitmap) : bool =
-    if a.Count <> b.Count then false
-    else
+    match a.Count <> b.Count with
+    | true -> false
+    | false ->
       let mutable eq = true
       let mutable i = 0
       while eq && i < a.Bits.Length do
@@ -418,28 +424,34 @@ module CoverageBitmap =
 
   /// Bitwise AND — intersection of two coverage bitmaps.
   let intersect (a: CoverageBitmap) (b: CoverageBitmap) : CoverageBitmap =
-    if a.Count <> b.Count then failwith "CoverageBitmap size mismatch"
+    match a.Count <> b.Count with
+    | true -> failwith "CoverageBitmap size mismatch"
+    | false -> ()
     let bits = Array.init a.Bits.Length (fun i -> a.Bits.[i] &&& b.Bits.[i])
     { Bits = bits; Count = a.Count }
 
   /// Bitwise XOR — symmetric difference of two coverage bitmaps.
   let xorDiff (a: CoverageBitmap) (b: CoverageBitmap) : CoverageBitmap =
-    if a.Count <> b.Count then failwith "CoverageBitmap size mismatch"
+    match a.Count <> b.Count with
+    | true -> failwith "CoverageBitmap size mismatch"
+    | false -> ()
     let bits = Array.init a.Bits.Length (fun i -> a.Bits.[i] ^^^ b.Bits.[i])
     { Bits = bits; Count = a.Count }
 
   /// Bitwise OR — union of two coverage bitmaps.
   let union (a: CoverageBitmap) (b: CoverageBitmap) : CoverageBitmap =
-    if a.Count = 0 && b.Count = 0 then empty
-    elif a.Count <> b.Count then failwith "CoverageBitmap size mismatch"
-    else
+    match a.Count = 0 && b.Count = 0, a.Count <> b.Count with
+    | true, _ -> empty
+    | _, true -> failwith "CoverageBitmap size mismatch"
+    | false, false ->
       let bits = Array.init a.Bits.Length (fun i -> a.Bits.[i] ||| b.Bits.[i])
       { Bits = bits; Count = a.Count }
 
   /// Check if a specific probe index is set.
   let isSet (index: int) (bm: CoverageBitmap) : bool =
-    if index < 0 || index >= bm.Count then false
-    else
+    match index < 0 || index >= bm.Count with
+    | true -> false
+    | false ->
       let word = index / 64
       let bit = index % 64
       (bm.Bits.[word] &&& (1UL <<< bit)) <> 0UL
@@ -447,12 +459,14 @@ module CoverageBitmap =
   /// Build a bitmap mask with bits set for all probes in the given file.
   let buildFileMask (filePath: string) (maps: InstrumentationMap array) : CoverageBitmap =
     let merged = InstrumentationMap.merge maps
-    if merged.TotalProbes = 0 then empty
-    else
+    match merged.TotalProbes = 0 with
+    | true -> empty
+    | false ->
       let hits = Array.zeroCreate<bool> merged.TotalProbes
       for i in 0 .. merged.Slots.Length - 1 do
-        if merged.Slots.[i].File = filePath then
-          hits.[i] <- true
+        match merged.Slots.[i].File = filePath with
+        | true -> hits.[i] <- true
+        | false -> ()
       ofBoolArray hits
 
   /// Find tests whose coverage bitmaps intersect with probes in the changed file.
@@ -464,16 +478,19 @@ module CoverageBitmap =
     (bitmaps: Map<TestId, CoverageBitmap>)
     : TestId array =
     let mask = buildFileMask filePath maps
-    if mask.Count = 0 || popCount mask = 0 then [||]
-    else
+    match mask.Count = 0 || popCount mask = 0 with
+    | true -> [||]
+    | false ->
       bitmaps
       |> Map.toArray
       |> Array.choose (fun (tid, bm) ->
-        if bm.Count <> mask.Count then None
-        else
+        match bm.Count <> mask.Count with
+        | true -> None
+        | false ->
           let intersection = intersect bm mask
-          if popCount intersection > 0 then Some tid
-          else None)
+          match popCount intersection > 0 with
+          | true -> Some tid
+          | false -> None)
 
   /// Merge all test bitmaps via OR, compute LineCoverage per line for a file.
   let computeLineCoverageForFile
@@ -482,12 +499,14 @@ module CoverageBitmap =
     (bitmaps: Map<TestId, CoverageBitmap>)
     : Map<int, LineCoverage> =
     let merged = InstrumentationMap.merge maps
-    if merged.TotalProbes = 0 || merged.Slots.Length = 0 then Map.empty
-    else
+    match merged.TotalProbes = 0 || merged.Slots.Length = 0 with
+    | true -> Map.empty
+    | false ->
       let compatBitmaps =
         bitmaps |> Map.values |> Seq.filter (fun bm -> bm.Count = merged.TotalProbes) |> Seq.toArray
-      if compatBitmaps.Length = 0 then Map.empty
-      else
+      match compatBitmaps.Length = 0 with
+      | true -> Map.empty
+      | false ->
         let combined =
           compatBitmaps
           |> Array.reduce (fun acc bm ->
@@ -668,10 +687,11 @@ module ResultWindow =
         Count = min (w.Count + 1) w.WindowSize }
 
   let toList (w: ResultWindow) =
-    if w.Count = 0 then []
-    elif w.Count < w.WindowSize then
+    match w.Count = 0, w.Count < w.WindowSize with
+    | true, _ -> []
+    | false, true ->
       Array.toList w.Outcomes[0 .. w.Count - 1]
-    else
+    | false, false ->
       let start = w.WriteIndex
       [ for i in 0 .. w.WindowSize - 1 do
           yield w.Outcomes[(start + i) % w.WindowSize] ]
@@ -683,7 +703,7 @@ module ResultWindow =
     | _ ->
       items
       |> List.pairwise
-      |> List.sumBy (fun (a, b) -> if a <> b then 1 else 0)
+      |> List.sumBy (fun (a, b) -> match a <> b with | true -> 1 | false -> 0)
 
 /// Stability assessment for a test based on outcome history.
 [<RequireQualifiedAccess>]
@@ -694,11 +714,13 @@ type TestStability =
 
 module TestStability =
   let assess (minSamples: int) (flipThreshold: int) (w: ResultWindow) =
-    if w.Count < minSamples then TestStability.Insufficient
-    else
+    match w.Count < minSamples with
+    | true -> TestStability.Insufficient
+    | false ->
       let flips = ResultWindow.countFlips w
-      if flips >= flipThreshold then TestStability.Flaky flips
-      else TestStability.Stable
+      match flips >= flipThreshold with
+      | true -> TestStability.Flaky flips
+      | false -> TestStability.Stable
 
 module FlakyDefaults =
   let windowSize = 10
@@ -782,9 +804,9 @@ module LiveTestState =
   /// Filter StatusEntries to only include tests belonging to the given session.
   /// When sessionId is empty or no session map entries exist, returns all entries (backwards compat).
   let statusEntriesForSession (sessionId: string) (state: LiveTestState) : TestStatusEntry array =
-    if System.String.IsNullOrEmpty sessionId || Map.isEmpty state.TestSessionMap then
-      state.StatusEntries
-    else
+    match System.String.IsNullOrEmpty sessionId || Map.isEmpty state.TestSessionMap with
+    | true -> state.StatusEntries
+    | false ->
       state.StatusEntries
       |> Array.filter (fun e ->
         match Map.tryFind e.TestId state.TestSessionMap with
@@ -909,14 +931,15 @@ module TestSummary =
       Enabled = activation = LiveTestingActivation.Active }
 
   let toStatusBar (s: TestSummary) : string =
-    if s.Total = 0 then "Tests: none"
-    elif s.Failed > 0 then
+    match s.Total, s.Failed, s.Running, s.Stale with
+    | 0, _, _, _ -> "Tests: none"
+    | _, f, _, _ when f > 0 ->
       sprintf "Tests: %d/%d \u2717%d" s.Passed s.Total s.Failed
-    elif s.Running > 0 then
+    | _, _, r, _ when r > 0 ->
       sprintf "Tests: %d/%d \u27F3%d" s.Passed s.Total s.Running
-    elif s.Stale > 0 then
+    | _, _, _, st when st > 0 ->
       sprintf "Tests: %d/%d \u25CF%d" s.Passed s.Total s.Stale
-    else
+    | _ ->
       sprintf "Tests: %d/%d \u2713" s.Passed s.Total
 
 // --- Enriched SSE Batch Payload ---
@@ -959,10 +982,9 @@ module TestResultsBatchPayload =
     match freshness with
     | StaleCodeEdited | StaleWrongGeneration -> BatchCompletion.Superseded
     | Fresh ->
-      if returned >= requested then
-        BatchCompletion.Complete(requested, returned)
-      else
-        BatchCompletion.Partial(requested, returned)
+      match returned >= requested with
+      | true -> BatchCompletion.Complete(requested, returned)
+      | false -> BatchCompletion.Partial(requested, returned)
 
   let isEmpty (p: TestResultsBatchPayload) =
     Array.isEmpty p.Entries
@@ -975,26 +997,33 @@ module CategoryDetection =
     (referencedAssemblies: string array)
     : TestCategory =
     let labelLower = labels |> List.map (fun l -> l.ToLowerInvariant())
-    if labelLower |> List.exists (fun l -> l.Contains "integration") then
-      TestCategory.Integration
-    elif labelLower |> List.exists (fun l -> l.Contains "browser" || l.Contains "e2e" || l.Contains "ui") then
-      TestCategory.Browser
-    elif labelLower |> List.exists (fun l -> l.Contains "benchmark") then
-      TestCategory.Benchmark
-    elif labelLower |> List.exists (fun l -> l.Contains "property") then
-      TestCategory.Property
-    elif labelLower |> List.exists (fun l -> l.Contains "architecture" || l.Contains "arch") then
-      TestCategory.Architecture
-    elif fullName.ToLowerInvariant().Contains "integration" then
-      TestCategory.Integration
-    elif fullName.ToLowerInvariant().Contains "browser" || fullName.ToLowerInvariant().Contains "e2e" then
-      TestCategory.Browser
-    elif referencedAssemblies |> Array.exists (fun a -> a.Contains "Microsoft.Playwright") then
-      TestCategory.Browser
-    elif referencedAssemblies |> Array.exists (fun a -> a.Contains "BenchmarkDotNet") then
-      TestCategory.Benchmark
-    else
-      TestCategory.Unit
+    match labelLower |> List.exists (fun l -> l.Contains "integration") with
+    | true -> TestCategory.Integration
+    | false ->
+    match labelLower |> List.exists (fun l -> l.Contains "browser" || l.Contains "e2e" || l.Contains "ui") with
+    | true -> TestCategory.Browser
+    | false ->
+    match labelLower |> List.exists (fun l -> l.Contains "benchmark") with
+    | true -> TestCategory.Benchmark
+    | false ->
+    match labelLower |> List.exists (fun l -> l.Contains "property") with
+    | true -> TestCategory.Property
+    | false ->
+    match labelLower |> List.exists (fun l -> l.Contains "architecture" || l.Contains "arch") with
+    | true -> TestCategory.Architecture
+    | false ->
+    match fullName.ToLowerInvariant().Contains "integration" with
+    | true -> TestCategory.Integration
+    | false ->
+    match fullName.ToLowerInvariant().Contains "browser" || fullName.ToLowerInvariant().Contains "e2e" with
+    | true -> TestCategory.Browser
+    | false ->
+    match referencedAssemblies |> Array.exists (fun a -> a.Contains "Microsoft.Playwright") with
+    | true -> TestCategory.Browser
+    | false ->
+    match referencedAssemblies |> Array.exists (fun a -> a.Contains "BenchmarkDotNet") with
+    | true -> TestCategory.Benchmark
+    | false -> TestCategory.Unit
 
 // --- Pure functions ---
 
@@ -1041,8 +1070,9 @@ module TestDependencyGraph =
       match Map.tryFind current callGraph with
       | Some callees ->
         for callee in callees do
-          if visited.Add(callee) then
-            queue.Enqueue(callee)
+          match visited.Add(callee) with
+          | true -> queue.Enqueue(callee)
+          | false -> ()
       | None -> ()
     visited |> Seq.toList
 
@@ -1087,8 +1117,9 @@ module TestDependencyGraph =
     let testRanges =
       [| for i in 0 .. testDefs.Length - 1 do
            let endLine =
-             if i < testDefs.Length - 1 then testDefs.[i + 1].StartLine - 1
-             else System.Int32.MaxValue
+             match i < testDefs.Length - 1 with
+             | true -> testDefs.[i + 1].StartLine - 1
+             | false -> System.Int32.MaxValue
            yield testDefs.[i], testDefs.[i].StartLine, endLine |]
     let nonDefUses =
       uses
@@ -1155,17 +1186,19 @@ module LiveTesting =
               | TestResult.Skipped reason -> Some (TestRunStatus.Skipped reason)
               | TestResult.NotRun -> None
             | None -> None
-          if Set.contains test.Id state.AffectedTests then
+          match Set.contains test.Id state.AffectedTests with
+          | true ->
             let testSession = Map.tryFind test.Id state.TestSessionMap
             let sessionRunning = TestRunPhase.isSessionRunning testSession state.RunPhases
-            if sessionRunning then
+            match sessionRunning with
+            | true ->
               // Streaming: show result if available, Running if not yet received
               resultStatus |> Option.defaultValue TestRunStatus.Running
-            else
+            | false ->
               match resultStatus with
               | Some s -> TestRunStatus.Stale
               | None -> TestRunStatus.Queued
-          else
+          | false ->
             resultStatus |> Option.defaultValue TestRunStatus.Detected
       let prevStatus =
         match Map.tryFind test.Id previousStatuses with
@@ -1188,15 +1221,17 @@ module LiveTesting =
   /// Incoming tests take priority for collisions (e.g., FSI redefining a test).
   /// Empty incoming preserves existing tests (prevents wipe on FSI-only evals).
   let mergeDiscoveredTests (existing: TestCase array) (incoming: TestCase array) : TestCase array =
-    if Array.isEmpty existing then incoming
-    elif Array.isEmpty incoming then existing
-    else
+    match Array.isEmpty existing, Array.isEmpty incoming with
+    | true, _ -> incoming
+    | _, true -> existing
+    | false, false ->
       let incomingById = incoming |> Array.map (fun t -> t.Id, t) |> Map.ofArray
       let merged =
         existing
         |> Array.fold (fun acc t ->
-          if Map.containsKey t.Id acc then acc
-          else Map.add t.Id t acc) incomingById
+          match Map.containsKey t.Id acc with
+          | true -> acc
+          | false -> Map.add t.Id t acc) incomingById
       merged |> Map.values |> Seq.toArray
 
   /// Merge test results into state.
@@ -1204,8 +1239,9 @@ module LiveTesting =
   /// TestRunStarted (sets Running + AffectedTests) and TestRunCompleted (sets Idle + clears).
   /// This enables streaming results to update incrementally while run is in progress.
   let mergeResults (state: LiveTestState) (results: TestRunResult array) : LiveTestState =
-    if Array.isEmpty results then state
-    else
+    match Array.isEmpty results with
+    | true -> state
+    | false ->
       let newResults =
         results
         |> Array.fold (fun acc r ->
@@ -1213,8 +1249,9 @@ module LiveTesting =
           | TestResult.NotRun ->
             // Never overwrite a real result with NotRun — NotRun means "not executed
             // in this batch" (e.g., test belongs to a different session's worker).
-            if Map.containsKey r.TestId acc then acc
-            else Map.add r.TestId r acc
+            match Map.containsKey r.TestId acc with
+            | true -> acc
+            | false -> Map.add r.TestId r acc
           | _ -> Map.add r.TestId r acc) state.LastResults
       let maxDuration =
         results
@@ -1278,15 +1315,18 @@ module SourceMapping =
   /// For "Namespace.Module.myTests/should add numbers" → "myTests" (Expecto hierarchical)
   let extractMethodName (fullName: string) =
     let slashIdx = fullName.IndexOf('/')
-    if slashIdx > 0 then
+    match slashIdx > 0 with
+    | true ->
       let prefix = fullName.Substring(0, slashIdx)
       let lastDot = prefix.LastIndexOf('.')
-      if lastDot >= 0 then prefix.Substring(lastDot + 1)
-      else prefix
-    else
+      match lastDot >= 0 with
+      | true -> prefix.Substring(lastDot + 1)
+      | false -> prefix
+    | false ->
       let parts = fullName.Split('.')
-      if parts.Length > 0 then parts.[parts.Length - 1]
-      else fullName
+      match parts.Length > 0 with
+      | true -> parts.[parts.Length - 1]
+      | false -> fullName
 
   /// Extract module name from test FullName for disambiguation.
   /// "SageFs.Tests.McpAdapterTests.tests/Adapter/..." → Some "McpAdapterTests"
@@ -1294,8 +1334,9 @@ module SourceMapping =
     let slashIdx = fullName.IndexOf('/')
     let prefix = if slashIdx > 0 then fullName.Substring(0, slashIdx) else fullName
     let parts = prefix.Split('.')
-    if parts.Length >= 2 then Some parts.[parts.Length - 2]
-    else None
+    match parts.Length >= 2 with
+    | true -> Some parts.[parts.Length - 2]
+    | false -> None
 
   /// Does this attribute name match the given test framework?
   let attributeMatchesFramework (framework: string) (attrName: string) =
@@ -1322,8 +1363,9 @@ module SourceMapping =
     (locations: SourceTestLocation array)
     (tests: TestCase array)
     : TestCase array =
-    if Array.isEmpty locations then tests
-    else
+    match Array.isEmpty locations with
+    | true -> tests
+    | false ->
       let locationsByFuncName =
         locations
         |> Array.groupBy (fun loc -> loc.FunctionName)
@@ -1363,8 +1405,9 @@ module SourceMapping =
     (sourceFiles: string array)
     (tests: TestCase array)
     : TestCase array =
-    if Array.isEmpty sourceFiles then tests
-    else
+    match Array.isEmpty sourceFiles with
+    | true -> tests
+    | false ->
       let filesByName =
         sourceFiles
         |> Array.map (fun f -> System.IO.Path.GetFileNameWithoutExtension(f), f)
@@ -1399,7 +1442,9 @@ module CoverageProjection =
               | TestResult.Passed _ -> true
               | _ -> false
             | None -> false)
-        if allPass then CoverageHealth.AllPassing else CoverageHealth.SomeFailing
+        match allPass with
+        | true -> CoverageHealth.AllPassing
+        | false -> CoverageHealth.SomeFailing
       CoverageStatus.Covered (tests.Length, health)
 
   let computeAll
@@ -1408,8 +1453,9 @@ module CoverageProjection =
     : Map<string, CoverageStatus> =
     graph.TransitiveCoverage
     |> Map.map (fun symbol tests ->
-      if Array.isEmpty tests then CoverageStatus.NotCovered
-      else
+      match Array.isEmpty tests with
+      | true -> CoverageStatus.NotCovered
+      | false ->
         let health =
           let allPass =
             tests |> Array.forall (fun tid ->
@@ -1419,7 +1465,9 @@ module CoverageProjection =
                 | TestResult.Passed _ -> true
                 | _ -> false
               | None -> false)
-          if allPass then CoverageHealth.AllPassing else CoverageHealth.SomeFailing
+          match allPass with
+          | true -> CoverageHealth.AllPassing
+          | false -> CoverageHealth.SomeFailing
         CoverageStatus.Covered (tests.Length, health))
 
 module CoverageComputation =
@@ -1428,13 +1476,15 @@ module CoverageComputation =
       state.Slots
       |> Array.mapi (fun i slot -> (slot, state.Hits.[i]))
       |> Array.filter (fun (slot, _) -> slot.File = file && slot.Line = line)
-    if Array.isEmpty matching then LineCoverage.NotCovered
-    else
+    match Array.isEmpty matching with
+    | true -> LineCoverage.NotCovered
+    | false ->
       let total = matching.Length
       let covered = matching |> Array.filter snd |> Array.length
-      if covered = total then LineCoverage.FullyCovered
-      elif covered = 0 then LineCoverage.NotCovered
-      else LineCoverage.PartiallyCovered (covered, total)
+      match covered = total, covered = 0 with
+      | true, _ -> LineCoverage.FullyCovered
+      | _, true -> LineCoverage.NotCovered
+      | false, false -> LineCoverage.PartiallyCovered (covered, total)
 
 /// Per-test coverage correlation: which specific tests cover a given symbol or line
 module CoverageCorrelation =
@@ -1603,8 +1653,9 @@ module Staleness =
     (state: LiveTestState)
     : LiveTestState =
     let affected = TestDependencyGraph.findAffected changedSymbols graph |> Set.ofArray
-    if Set.isEmpty affected then state
-    else
+    match Set.isEmpty affected with
+    | true -> state
+    | false ->
       let previousStatuses =
         state.StatusEntries
         |> Array.map (fun e -> e.TestId, e.Status)
@@ -1651,22 +1702,25 @@ module PipelineOrchestrator =
     (changedSymbols: string list)
     (depGraph: TestDependencyGraph)
     : PipelineDecision =
-    if state.Activation = LiveTestingActivation.Inactive then
+    match state.Activation = LiveTestingActivation.Inactive,
+          TestRunPhase.isAnyRunning state.RunPhases,
+          Array.isEmpty state.DiscoveredTests with
+    | true, _, _ ->
       PipelineDecision.Skip "Live testing disabled"
-    elif TestRunPhase.isAnyRunning state.RunPhases then
+    | _, true, _ ->
       PipelineDecision.Skip "Pipeline already running"
-    elif Array.isEmpty state.DiscoveredTests then
+    | _, _, true ->
       PipelineDecision.TreeSitterOnly
-    else
+    | false, false, false ->
       let affected = TestDependencyGraph.findAffected changedSymbols depGraph
       let affectedSet = Set.ofArray affected
       let filtered =
         state.DiscoveredTests
         |> Array.filter (fun tc -> affectedSet.Contains tc.Id)
         |> LiveTesting.filterByPolicy state.RunPolicies trigger
-      if Array.isEmpty filtered then
-        PipelineDecision.TreeSitterOnly
-      else
+      match Array.isEmpty filtered with
+      | true -> PipelineDecision.TreeSitterOnly
+      | false ->
         PipelineDecision.FullPipeline (filtered |> Array.map (fun tc -> tc.Id))
 
   let buildRunBatch
@@ -1710,11 +1764,12 @@ module DebounceChannel =
     | None -> None, ch
     | Some op ->
       let elapsed = (now - op.RequestedAt).TotalMilliseconds
-      if op.Generation < ch.CurrentGeneration then
+      match op.Generation < ch.CurrentGeneration, elapsed >= float op.DelayMs with
+      | true, _ ->
         None, { ch with Pending = None }
-      elif elapsed >= float op.DelayMs then
+      | _, true ->
         Some op.Payload, { ch with Pending = None; LastCompleted = Some now }
-      else
+      | false, false ->
         None, ch
 
   let isStale (ch: DebounceChannel<'a>) =
@@ -1780,23 +1835,26 @@ module PipelineEffects =
     (lastTiming: PipelineTiming option)
     (instrumentationMaps: Map<string, InstrumentationMap array>)
     : PipelineEffect list =
-    if state.Activation = LiveTestingActivation.Inactive then []
-    else
+    match state.Activation = LiveTestingActivation.Inactive with
+    | true -> []
+    | false ->
       let symbolAffected = TestDependencyGraph.findAffected changedSymbols depGraph
       // Compute coverage-affected across all sessions' maps
       let hasMaps = not (Map.isEmpty instrumentationMaps)
       let hasBitmaps = not (Map.isEmpty state.TestCoverageBitmaps)
       let coverageAffected =
-        if hasMaps && hasBitmaps then
+        match hasMaps && hasBitmaps with
+        | true ->
           instrumentationMaps
           |> Map.toArray
           |> Array.collect (fun (_, maps) ->
             CoverageBitmap.findCoverageAffected changedFilePath maps state.TestCoverageBitmaps)
-        else [||]
+        | false -> [||]
       let affected =
         Array.append symbolAffected coverageAffected |> Array.distinct
-      if Array.isEmpty affected then []
-      else
+      match Array.isEmpty affected with
+      | true -> []
+      | false ->
         let affectedSet = Set.ofArray affected
         let affectedTests =
           state.DiscoveredTests
@@ -1804,8 +1862,9 @@ module PipelineEffects =
         let filtered =
           PolicyFilter.filterTests state.RunPolicies trigger affectedTests
           |> TestPrioritization.prioritize state.LastResults
-        if Array.isEmpty filtered then []
-        else
+        match Array.isEmpty filtered with
+        | true -> []
+        | false ->
           let tsElapsed = PipelineTiming.accumulatedTsElapsed lastTiming
           let fcsElapsed = PipelineTiming.accumulatedFcsElapsed lastTiming
           // Group affected tests by session, emit one effect per session
@@ -1817,8 +1876,9 @@ module PipelineEffects =
           |> Array.toList
           |> List.choose (fun (sid, groupTests) ->
             let targetSession = if System.String.IsNullOrEmpty sid then None else Some sid
-            if TestRunPhase.isSessionRunning targetSession state.RunPhases then None
-            else
+            match TestRunPhase.isSessionRunning targetSession state.RunPhases with
+            | true -> None
+            | false ->
               let sessionMaps =
                 match targetSession |> Option.bind (fun s -> Map.tryFind s instrumentationMaps) with
                 | Some maps -> maps
@@ -1873,12 +1933,13 @@ module AdaptiveDebounce =
 
   let onFcsCompleted (ad: AdaptiveDebounce) =
     let newSuccesses = ad.ConsecutiveFcsSuccesses + 1
-    if newSuccesses >= ad.Config.ResetAfterSuccessCount then
+    match newSuccesses >= ad.Config.ResetAfterSuccessCount with
+    | true ->
       { ad with
           ConsecutiveFcsCancels = 0
           ConsecutiveFcsSuccesses = 0
           CurrentFcsDelayMs = ad.Config.BaseFcsMs }
-    else
+    | false ->
       { ad with
           ConsecutiveFcsCancels = 0
           ConsecutiveFcsSuccesses = newSuccesses }
@@ -2100,10 +2161,11 @@ module LiveTestPipelineState =
     (targetSession: string option)
     (s: LiveTestPipelineState)
     : PipelineEffect list =
-    if Array.isEmpty affectedIds
-       || s.TestState.Activation = LiveTestingActivation.Inactive
-       || TestRunPhase.isSessionRunning targetSession s.TestState.RunPhases then []
-    else
+    match Array.isEmpty affectedIds
+          || s.TestState.Activation = LiveTestingActivation.Inactive
+          || TestRunPhase.isSessionRunning targetSession s.TestState.RunPhases with
+    | true -> []
+    | false ->
       let affectedIdSet = Set.ofArray affectedIds
       let affectedTests =
         s.TestState.DiscoveredTests
@@ -2111,8 +2173,9 @@ module LiveTestPipelineState =
       let filtered =
         PolicyFilter.filterTests s.TestState.RunPolicies trigger affectedTests
         |> TestPrioritization.prioritize s.TestState.LastResults
-      if Array.isEmpty filtered then []
-      else
+      match Array.isEmpty filtered with
+      | true -> []
+      | false ->
         let sessionMaps =
           match targetSession |> Option.bind (fun sid -> Map.tryFind sid s.InstrumentationMaps) with
           | Some maps -> maps
@@ -2229,8 +2292,9 @@ module FailurePresentation =
         || t.StartsWith(prefix + " :", StringComparison.OrdinalIgnoreCase))
       |> Option.map (fun l ->
         let idx = l.IndexOf(':')
-        if idx >= 0 then l.Substring(idx + 1).Trim()
-        else l.Trim())
+        match idx >= 0 with
+        | true -> l.Substring(idx + 1).Trim()
+        | false -> l.Trim())
     match findPrefixed "expected", findPrefixed "actual" with
     | Some e, Some a -> Some(e, a)
     | _ -> None
@@ -2265,8 +2329,9 @@ module FailurePresentation =
       | FailurePresentation.Timeout t ->
         sprintf "timed out after %ds" (int t.TotalSeconds)
       | FailurePresentation.RawMessage m -> m
-    if raw.Length <= maxLen then raw
-    else raw.Substring(0, maxLen - 1) + "…"
+    match raw.Length <= maxLen with
+    | true -> raw
+    | false -> raw.Substring(0, maxLen - 1) + "…"
 
 module AnnotationFreshness =
   let fromPhaseAndResult
@@ -2295,8 +2360,9 @@ module TestCodeLens =
         | TestFailure.TimedOut t ->
           sprintf "timed out after %ds" (int t.TotalSeconds)
       let t =
-        if msg.Length > 60 then msg.Substring(0, 59) + "…"
-        else msg
+        match msg.Length > 60 with
+        | true -> msg.Substring(0, 59) + "…"
+        | false -> msg
       sprintf "✗ %s: %s (%.0fms)" name t d.TotalMilliseconds
     | TestRunStatus.Running ->
       sprintf "● %s running…" name
@@ -2462,9 +2528,10 @@ module FileAnnotations =
         match Map.tryFind ca'.Line lineCovMap with
         | Some lc -> { ca' with BranchCoverage = Some lc }
         | None -> ca')
-    if base'.CoverageAnnotations.Length > 0 then
+    match base'.CoverageAnnotations.Length > 0 with
+    | true ->
       { base' with CoverageAnnotations = enrichWithBranch base'.CoverageAnnotations }
-    else
+    | false ->
       let synthesized = synthesizeCoverage filePath pipelineState.AnalysisCache pipelineState.DepGraph pipelineState.TestState.LastResults
       let coverageLineAnnotations =
         synthesized
@@ -2525,14 +2592,15 @@ module SessionInvariant =
     let runPhaseKeys = state.RunPhases |> Map.keys |> Set.ofSeq
     let instrMapKeys = instrMaps |> Map.keys |> Set.ofSeq
     let sessionMapKeys = state.TestSessionMap |> Map.keys |> Set.ofSeq |> Set.map (fun (TestId.TestId tid) -> tid)
-    if Set.isEmpty runPhaseKeys || Set.isEmpty instrMapKeys then
-      None
-    else
-      if runPhaseKeys <> instrMapKeys then
+    match Set.isEmpty runPhaseKeys || Set.isEmpty instrMapKeys with
+    | true -> None
+    | false ->
+      match runPhaseKeys <> instrMapKeys with
+      | true ->
         Some {
           Message = sprintf "Session key mismatch: RunPhases has %A, InstrumentationMaps has %A" runPhaseKeys instrMapKeys
           RunPhaseKeys = runPhaseKeys
           InstrumentationMapKeys = instrMapKeys
           TestSessionMapKeys = sessionMapKeys
         }
-      else None
+      | false -> None

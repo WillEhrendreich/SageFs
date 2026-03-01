@@ -20,11 +20,13 @@ module McpAdapter =
 
   let formatAvailableProjects (workingDir: string) (projects: string array) (solutions: string array) =
     let projectList =
-      if Array.isEmpty projects then "  (none found)"
-      else projects |> Array.map (sprintf "  - %s") |> String.concat "\n"
+      match Array.isEmpty projects with
+      | true -> "  (none found)"
+      | false -> projects |> Array.map (sprintf "  - %s") |> String.concat "\n"
     let solutionList =
-      if Array.isEmpty solutions then "  (none found)"
-      else solutions |> Array.map (sprintf "  - %s") |> String.concat "\n"
+      match Array.isEmpty solutions with
+      | true -> "  (none found)"
+      | false -> solutions |> Array.map (sprintf "  - %s") |> String.concat "\n"
     sprintf "Available Projects/Solutions in %s:\n\n📦 F# Projects (.fsproj):\n%s\n\n📂 Solutions (.sln/.slnx):\n%s\n\n💡 To load a project: SageFs --proj ProjectName.fsproj\n💡 To load a solution: SageFs --sln SolutionName.sln\n💡 To auto-detect: SageFs (in directory with project/solution)" workingDir projectList solutionList
 
   let formatStartupBanner (version: string) (mcpPort: int option) =
@@ -39,8 +41,9 @@ module McpAdapter =
       | None -> ""
     
     let diagnosticsSection =
-      if Array.isEmpty result.Diagnostics then ""
-      else
+      match Array.isEmpty result.Diagnostics with
+      | true -> ""
+      | false ->
         let items =
           result.Diagnostics
           |> Array.map (fun d ->
@@ -56,10 +59,9 @@ module McpAdapter =
           let suggestion = ErrorMessages.getSuggestion parsed
           sprintf "Error: %s\n%s%s" ex.Message suggestion diagnosticsSection
     
-    if String.IsNullOrEmpty(stdout) then
-      output
-    else
-      sprintf "%s\n%s" stdout output
+    match String.IsNullOrEmpty(stdout) with
+    | true -> output
+    | false -> sprintf "%s\n%s" stdout output
 
   type StructuredDiagnostic = {
     [<JsonPropertyName("severity")>] Severity: string
@@ -90,7 +92,7 @@ module McpAdapter =
       match response.Metadata.TryFind "stdout" with
       | Some (s: obj) ->
         let v = s.ToString()
-        if String.IsNullOrEmpty v then null else v
+        match String.IsNullOrEmpty v with | true -> null | false -> v
       | None -> null
 
     let diagnostics =
@@ -136,28 +138,36 @@ module McpAdapter =
       sprintf "🔧 Warmup: %d assemblies, %d/%d namespaces opened, %dms"
         asmCount opened (opened + failed) w.WarmupDurationMs)
 
-    if asmCount > 0 then
+    match asmCount > 0 with
+    | true ->
       lines.Add(sprintf "  Assemblies (%d):" asmCount)
       for a in w.AssembliesLoaded do
         lines.Add(sprintf "    📦 %s (%d ns, %d modules)" a.Name a.NamespaceCount a.ModuleCount)
+    | false -> ()
 
-    if w.NamespacesOpened.Length > 0 then
+    match w.NamespacesOpened.Length > 0 with
+    | true ->
       lines.Add(sprintf "  Opened (%d):" w.NamespacesOpened.Length)
       for b in w.NamespacesOpened do
-        let kind = if b.IsModule then "module" else "namespace"
+        let kind = match b.IsModule with | true -> "module" | false -> "namespace"
         lines.Add(sprintf "    open %s // %s" b.Name kind)
+    | false -> ()
 
-    if w.FailedOpens.Length > 0 then
+    match w.FailedOpens.Length > 0 with
+    | true ->
       lines.Add(sprintf "  ⚠ Failed opens (%d):" w.FailedOpens.Length)
       for (name, err) in w.FailedOpens do
         lines.Add(sprintf "    ✖ %s — %s" name err)
+    | false -> ()
 
     let files = ctx.FileStatuses
-    if files.Length > 0 then
+    match files.Length > 0 with
+    | true ->
       let loaded = files |> List.filter (fun f -> f.Readiness = Loaded) |> List.length
       lines.Add(sprintf "  Files (%d/%d loaded):" loaded files.Length)
       for f in files do
         lines.Add(sprintf "    %s %s" (FileReadiness.icon f.Readiness) f.Path)
+    | false -> ()
 
     lines |> Seq.toList |> String.concat "\n"
 
@@ -166,7 +176,7 @@ module McpAdapter =
     let len = code.Length
     let statements = ResizeArray<string>()
     let current = Text.StringBuilder()
-    let inline peek offset = if i + offset < len then code.[i + offset] else '\000'
+    let inline peek offset = match i + offset < len with | true -> code.[i + offset] | false -> '\000'
     while i < len do
       let c = code.[i]
       match c with
@@ -175,11 +185,12 @@ module McpAdapter =
         i <- i + 3
         let mutable inTriple = true
         while inTriple && i < len do
-          if code.[i] = '"' && peek 1 = '"' && peek 2 = '"' then
+          match code.[i] = '"' && peek 1 = '"' && peek 2 = '"' with
+          | true ->
             current.Append("\"\"\"") |> ignore
             i <- i + 3
             inTriple <- false
-          else
+          | false ->
             current.Append(code.[i]) |> ignore
             i <- i + 1
       | '@' when peek 1 = '"' ->
@@ -187,14 +198,15 @@ module McpAdapter =
         i <- i + 2
         let mutable inVerbatim = true
         while inVerbatim && i < len do
-          if code.[i] = '"' && peek 1 = '"' then
+          match code.[i] = '"' && peek 1 = '"', code.[i] = '"' with
+          | true, _ ->
             current.Append("\"\"") |> ignore
             i <- i + 2
-          elif code.[i] = '"' then
+          | _, true ->
             current.Append('"') |> ignore
             i <- i + 1
             inVerbatim <- false
-          else
+          | _ ->
             current.Append(code.[i]) |> ignore
             i <- i + 1
       | '"' ->
@@ -202,17 +214,20 @@ module McpAdapter =
         i <- i + 1
         let mutable inStr = true
         while inStr && i < len do
-          if code.[i] = '\\' then
+          match code.[i] = '\\', code.[i] = '"' with
+          | true, _ ->
             current.Append(code.[i]) |> ignore
             i <- i + 1
-            if i < len then
+            match i < len with
+            | true ->
               current.Append(code.[i]) |> ignore
               i <- i + 1
-          elif code.[i] = '"' then
+            | false -> ()
+          | _, true ->
             current.Append('"') |> ignore
             i <- i + 1
             inStr <- false
-          else
+          | _ ->
             current.Append(code.[i]) |> ignore
             i <- i + 1
       | '/' when peek 1 = '/' ->
@@ -224,35 +239,39 @@ module McpAdapter =
         i <- i + 2
         let mutable depth = 1
         while depth > 0 && i < len do
-          if code.[i] = '(' && peek 1 = '*' then
+          match code.[i] = '(' && peek 1 = '*', code.[i] = '*' && peek 1 = ')' with
+          | true, _ ->
             current.Append("(*") |> ignore
             i <- i + 2
             depth <- depth + 1
-          elif code.[i] = '*' && peek 1 = ')' then
+          | _, true ->
             current.Append("*)") |> ignore
             i <- i + 2
             depth <- depth - 1
-          else
+          | _ ->
             current.Append(code.[i]) |> ignore
             i <- i + 1
       | ';' when peek 1 = ';' ->
         let stmt = current.ToString().Trim()
-        if stmt.Length > 0 then
-          statements.Add(stmt + ";;")
+        match stmt.Length > 0 with
+        | true -> statements.Add(stmt + ";;")
+        | false -> ()
         current.Clear() |> ignore
         i <- i + 2
       | _ ->
         current.Append(c) |> ignore
         i <- i + 1
     let trailing = current.ToString().Trim()
-    if trailing.Length > 0 then
-      statements.Add(trailing)
+    match trailing.Length > 0 with
+    | true -> statements.Add(trailing)
+    | false -> ()
     statements |> Seq.toList
 
   let echoStatement (writer: TextWriter) (statement: string) =
     let code =
-      if statement.EndsWith(";;", System.StringComparison.Ordinal) then statement.[.. statement.Length - 3]
-      else statement
+      match statement.EndsWith(";;", System.StringComparison.Ordinal) with
+      | true -> statement.[.. statement.Length - 3]
+      | false -> statement
     writer.WriteLine()
     writer.WriteLine(">")
     let lines = code.TrimEnd().Split([| '\n' |])
@@ -381,14 +400,16 @@ module McpAdapter =
       config.CommandLineArgs 
       |> Array.filter (fun arg -> not (arg.StartsWith("-r:", System.StringComparison.Ordinal) || arg.StartsWith("--reference:", System.StringComparison.Ordinal)))
     let argsStr = 
-      if importantArgs.Length = 0 then "(none)"
-      else String.concat " " importantArgs
+      match importantArgs.Length = 0 with
+      | true -> "(none)"
+      | false -> String.concat " " importantArgs
     
     let projectsStr = 
-      if config.LoadedProjects.IsEmpty then "None"
-      else String.concat ", " config.LoadedProjects
-    let hotReloadStr = if config.HotReloadEnabled then "Enabled ✓" else "Disabled"
-    let aspireStr = if config.AspireDetected then "Yes ✓" else "No"
+      match config.LoadedProjects.IsEmpty with
+      | true -> "None"
+      | false -> String.concat ", " config.LoadedProjects
+    let hotReloadStr = match config.HotReloadEnabled with | true -> "Enabled ✓" | false -> "Disabled"
+    let aspireStr = match config.AspireDetected with | true -> "Yes ✓" | false -> "No"
     let timestamp = config.StartupTimestamp.ToString("yyyy-MM-dd HH:mm:ss")
     
     // Count assembly references for info
@@ -429,9 +450,9 @@ Started: %s{timestamp} UTC"""
     JsonSerializer.Serialize(data, opts)
 
   let formatDiagnosticsResult (diagnostics: Features.Diagnostics.Diagnostic array) : string =
-    if Array.isEmpty diagnostics then
-      "No issues found."
-    else
+    match Array.isEmpty diagnostics with
+    | true -> "No issues found."
+    | false ->
       diagnostics
       |> Array.map (fun d ->
         let sev = Features.Diagnostics.DiagnosticSeverity.label d.Severity
@@ -472,16 +493,17 @@ Started: %s{timestamp} UTC"""
       match startupConfig with
       | None -> "Unknown"
       | Some config -> 
-          if config.LoadedProjects.IsEmpty then "None"
-          else String.concat ", " (config.LoadedProjects |> List.map Path.GetFileName)
+          match config.LoadedProjects.IsEmpty with
+          | true -> "None"
+          | false -> String.concat ", " (config.LoadedProjects |> List.map Path.GetFileName)
     
     let startupSection =
       match startupConfig with
       | None -> ""
       | Some config ->
-          let hotReload = if config.HotReloadEnabled then "✅" else "❌"
-          let aspire = if config.AspireDetected then "✅" else "❌"
-          let fileWatch = if config.HotReloadEnabled then "✅ (auto-reload .fs/.fsx via #load)" else "❌"
+          let hotReload = match config.HotReloadEnabled with | true -> "✅" | false -> "❌"
+          let aspire = match config.AspireDetected with | true -> "✅" | false -> "❌"
+          let fileWatch = match config.HotReloadEnabled with | true -> "✅ (auto-reload .fs/.fsx via #load)" | false -> "❌"
           sprintf """
 
 📋 Startup Information:
@@ -546,13 +568,15 @@ Available: %s%s%s""" sessionId eventCount (SessionState.label state) projectsStr
     : string =
     let state = WorkerProtocol.SessionStatus.toSessionState snapshot.Status
     let projectsStr =
-      if info.Projects.IsEmpty then "None"
-      else String.concat ", " (info.Projects |> List.map Path.GetFileName)
+      match info.Projects.IsEmpty with
+      | true -> "None"
+      | false -> String.concat ", " (info.Projects |> List.map Path.GetFileName)
     let statsSection =
-      if snapshot.EvalCount > 0 then
+      match snapshot.EvalCount > 0 with
+      | true ->
         sprintf "\nEvals: %d | Avg: %dms | Min: %dms | Max: %dms"
           snapshot.EvalCount snapshot.AvgDurationMs snapshot.MinDurationMs snapshot.MaxDurationMs
-      else ""
+      | false -> ""
     let tools = Affordances.availableTools state |> String.concat ", "
     sprintf """Session: %s | Events: %d | State: %s | Projects: %s
 Available: %s%s
@@ -693,10 +717,9 @@ module McpTools =
   /// Normalize a path for comparison: trim trailing separators, lowercase on Windows.
   let normalizePath (p: string) =
     let trimmed = p.TrimEnd('/', '\\')
-    if Environment.OSVersion.Platform = PlatformID.Win32NT then
-      trimmed.Replace('/', '\\').ToLowerInvariant()
-    else
-      trimmed
+    match Environment.OSVersion.Platform = PlatformID.Win32NT with
+    | true -> trimmed.Replace('/', '\\').ToLowerInvariant()
+    | false -> trimmed
 
   /// Find a session whose WorkingDirectory matches the given path.
   /// Pure function — no side effects, no context mutation.
@@ -752,14 +775,15 @@ module McpTools =
             }
           | _ ->
             task { return activeSessionId ctx agent }
-        if candidate <> "" then
+        match candidate <> "" with
+        | true ->
           let! proxy = ctx.SessionOps.GetProxy candidate
           match proxy with
           | Some _ -> return Ok candidate
           | None ->
             setActiveSessionId ctx agent ""
             return Error "Session is no longer running. Use create_session to start a new one."
-        else
+        | false ->
           return Error "No active session. Use create_session to create one first."
     }
 
@@ -803,8 +827,9 @@ module McpTools =
     match response with
     | WorkerProtocol.WorkerResponse.EvalResult(_, result, diags, _) ->
       let diagStr =
-        if List.isEmpty diags then ""
-        else
+        match List.isEmpty diags with
+        | true -> ""
+        | false ->
           diags
           |> List.map (fun d ->
             sprintf "  [%s] %s"
@@ -843,12 +868,15 @@ module McpTools =
             try
               let hookResult =
                 WorkerProtocol.Serialization.deserialize<Features.LiveTesting.LiveTestHookResultDto> json
-              if not (List.isEmpty hookResult.DetectedProviders) then
-                notifyElm ctx (SageFsEvent.ProvidersDetected hookResult.DetectedProviders)
-              if not (Array.isEmpty hookResult.DiscoveredTests) then
-                notifyElm ctx (SageFsEvent.TestsDiscovered (sid, hookResult.DiscoveredTests))
-              if not (Array.isEmpty hookResult.AffectedTestIds) then
-                notifyElm ctx (SageFsEvent.AffectedTestsComputed hookResult.AffectedTestIds)
+              match List.isEmpty hookResult.DetectedProviders with
+              | false -> notifyElm ctx (SageFsEvent.ProvidersDetected hookResult.DetectedProviders)
+              | true -> ()
+              match Array.isEmpty hookResult.DiscoveredTests with
+              | false -> notifyElm ctx (SageFsEvent.TestsDiscovered (sid, hookResult.DiscoveredTests))
+              | true -> ()
+              match Array.isEmpty hookResult.AffectedTestIds with
+              | false -> notifyElm ctx (SageFsEvent.AffectedTestsComputed hookResult.AffectedTestIds)
+              | true -> ()
             with _ -> ()
           | None -> ()
           match metadata |> Map.tryFind "assemblyLoadErrors" with
@@ -856,8 +884,9 @@ module McpTools =
             try
               let errors =
                 WorkerProtocol.Serialization.deserialize<Features.LiveTesting.AssemblyLoadError list> json
-              if not (List.isEmpty errors) then
-                notifyElm ctx (SageFsEvent.AssemblyLoadFailed errors)
+              match List.isEmpty errors with
+              | false -> notifyElm ctx (SageFsEvent.AssemblyLoadFailed errors)
+              | true -> ()
             with _ -> ()
           | None -> ()
         | WorkerProtocol.WorkerResponse.EvalResult(_, Error err, _, _) ->
@@ -934,8 +963,9 @@ module McpTools =
           sprintf "📋 Startup Information:\n- Session: %s\n- Working Directory: %s\n- Projects: %s\n- MCP Port: %d\n- Status: %s"
             sid
             sessionInfo.WorkingDirectory
-            (if sessionInfo.Projects.IsEmpty then "None"
-             else String.concat ", " (sessionInfo.Projects |> List.map Path.GetFileName))
+            (match sessionInfo.Projects.IsEmpty with
+             | true -> "None"
+             | false -> String.concat ", " (sessionInfo.Projects |> List.map Path.GetFileName))
             ctx.McpPort
             (WorkerProtocol.SessionStatus.label sessionInfo.Status)
         // Fetch and append warmup detail
@@ -1047,8 +1077,9 @@ module McpTools =
       return
         match routeResult with
         | Ok (WorkerProtocol.WorkerResponse.CheckResult(_, diags)) ->
-          if List.isEmpty diags then "No errors found."
-          else
+          match List.isEmpty diags with
+          | true -> "No errors found."
+          | false ->
             diags
             |> List.map (fun d ->
               sprintf "[%s] %s"
@@ -1062,7 +1093,8 @@ module McpTools =
     withSession ctx agent sessionId workingDirectory (fun sid -> task {
       notifyElm ctx (
         SageFsEvent.SessionStatusChanged (sid, SessionDisplayStatus.Restarting))
-      if rebuild then
+      match rebuild with
+      | true ->
         notifyElm ctx (
           SageFsEvent.WarmupProgress (1, 4, "Building project..."))
         // Fire-and-forget: build + restart happens in background.
@@ -1079,7 +1111,7 @@ module McpTools =
               SageFsEvent.SessionStatusChanged (sid, SessionDisplayStatus.Errored (SageFsError.describe err)))
         } |> ignore
         return "Hard reset initiated — rebuilding project. Use get_fsi_status to check when ready."
-      else
+      | false ->
         let! routeResult =
           routeToSession ctx sid
             (fun replyId -> WorkerProtocol.WorkerMessage.HardResetSession(false, replyId))
@@ -1116,8 +1148,9 @@ module McpTools =
       return
         match routeResult with
         | Ok (WorkerProtocol.WorkerResponse.CompletionResult(_, completions)) ->
-          if List.isEmpty completions then "No completions available."
-          else String.concat "\n" completions
+          match List.isEmpty completions with
+          | true -> "No completions available."
+          | false -> String.concat "\n" completions
         | Ok other -> sprintf "Unexpected response: %A" other
         | Error msg -> sprintf "Error: %s" msg
     })
@@ -1132,9 +1165,10 @@ module McpTools =
       return
         match routeResult with
         | Ok (WorkerProtocol.WorkerResponse.CompletionResult(_, completions)) ->
-          if List.isEmpty completions then
+          match List.isEmpty completions with
+          | true ->
             sprintf "No members found for '%s'" qualifiedName
-          else
+          | false ->
             let header = sprintf "Members of %s:" qualifiedName
             let items = completions |> List.map (sprintf "  %s") |> String.concat "\n"
             sprintf "%s\n%s" header items
@@ -1221,16 +1255,18 @@ module McpTools =
         return "Elm state not available — Elm loop not started."
       | Some getRegions ->
         let regions = getRegions ()
-        if regions.IsEmpty then
+        match regions.IsEmpty with
+        | true ->
           return "No render regions available."
-        else
+        | false ->
           return
             regions
             |> List.map (fun r ->
               let header =
                 sprintf "── %s [%s] ──" r.Id (formatRegionFlags r.Flags)
-              if String.IsNullOrWhiteSpace r.Content then header
-              else sprintf "%s\n%s" header r.Content)
+              match String.IsNullOrWhiteSpace r.Content with
+              | true -> header
+              | false -> sprintf "%s\n%s" header r.Content)
             |> String.concat "\n\n"
     }
 
@@ -1273,8 +1309,9 @@ module McpTools =
           let enabled = state.Activation = Features.LiveTesting.LiveTestingActivation.Active
           let bitmapStats =
             let count = Map.count state.TestCoverageBitmaps
-            if count = 0 then None
-            else
+            match count = 0 with
+            | true -> None
+            | false ->
               let avgProbes =
                 state.TestCoverageBitmaps
                 |> Map.toSeq
@@ -1294,7 +1331,7 @@ module McpTools =
       match ctx.Dispatch with
       | None -> return "Cannot set live testing — Elm loop not started."
       | Some dispatch ->
-        let msg = if enabled then SageFsMsg.EnableLiveTesting else SageFsMsg.DisableLiveTesting
+        let msg = match enabled with | true -> SageFsMsg.EnableLiveTesting | false -> SageFsMsg.DisableLiveTesting
         dispatch msg
         match ctx.GetElmModel with
         | Some getModel ->
@@ -1305,7 +1342,7 @@ module McpTools =
             | Features.LiveTesting.LiveTestingActivation.Inactive -> "disabled"
           return sprintf "Live testing %s." activationLabel
         | None ->
-          return sprintf "Live testing %s." (if enabled then "enabled" else "disabled")
+          return sprintf "Live testing %s." (match enabled with | true -> "enabled" | false -> "disabled")
     }
 
   let setRunPolicy (ctx: McpContext) (category: string) (policy: string) : Task<string> =
@@ -1376,8 +1413,9 @@ module McpTools =
     let format result =
       match result with
       | Completed (p, f, total) ->
-        if f = 0 then sprintf "✅ All %d tests passed." total
-        else sprintf "❌ %d passed, %d failed out of %d tests." p f total
+        match f = 0 with
+        | true -> sprintf "✅ All %d tests passed." total
+        | false -> sprintf "❌ %d passed, %d failed out of %d tests." p f total
       | TimedOut (p, f, running, total) ->
         sprintf "⏱️ Timed out: %d passed, %d failed, %d still running out of %d tests. Use get_live_test_status for updates." p f running total
       | Disabled ->
@@ -1393,12 +1431,14 @@ module McpTools =
     let mutable failed = 0
     let mutable running = 0
     for e in entries do
-      if Set.contains e.TestId triggeredSet then
+      match Set.contains e.TestId triggeredSet with
+      | true ->
         match e.Status with
         | Features.LiveTesting.TestRunStatus.Passed _ -> passed <- passed + 1
         | Features.LiveTesting.TestRunStatus.Failed _ -> failed <- failed + 1
         | Features.LiveTesting.TestRunStatus.Running -> running <- running + 1
         | _ -> ()
+      | false -> ()
     (passed, failed, running)
 
   let pollForTestCompletion
@@ -1407,13 +1447,14 @@ module McpTools =
     (timeoutSeconds: int)
     : Task<RunTestsResult> =
     let total = triggeredTestIds.Length
-    if timeoutSeconds = 0 then
+    match timeoutSeconds = 0 with
+    | true ->
       let model = getModel ()
       let entries = model.LiveTesting.TestState.StatusEntries
       let triggeredSet = Set.ofArray triggeredTestIds
       let (p, f, _) = countStatuses entries triggeredSet
       Task.FromResult (Completed (p, f, total))
-    else
+    | false ->
       task {
         let deadline = DateTime.UtcNow.AddSeconds(float timeoutSeconds)
         let triggeredSet = Set.ofArray triggeredTestIds
@@ -1422,9 +1463,10 @@ module McpTools =
           let model = getModel ()
           let entries = model.LiveTesting.TestState.StatusEntries
           let (p, f, r) = countStatuses entries triggeredSet
-          if p + f >= total then
+          match p + f >= total with
+          | true ->
             result <- Some (Completed (p, f, total))
-          else
+          | false ->
             do! Task.Delay 200
         match result with
         | Some r -> return r
@@ -1447,9 +1489,10 @@ module McpTools =
     | Some getModel, Some dispatch ->
       let model = getModel ()
       let state = model.LiveTesting.TestState
-      if state.Activation = Features.LiveTesting.LiveTestingActivation.Inactive then
+      match state.Activation = Features.LiveTesting.LiveTestingActivation.Inactive with
+      | true ->
         Task.FromResult (RunTestsResult.format Disabled)
-      else
+      | false ->
         let category =
           match categoryFilter with
           | Some c ->
@@ -1465,14 +1508,16 @@ module McpTools =
         let tests =
           Features.LiveTesting.LiveTestPipelineState.filterTestsForExplicitRun
             state.DiscoveredTests None patternFilter category
-        if Array.isEmpty tests then
+        match Array.isEmpty tests with
+        | true ->
           Task.FromResult (RunTestsResult.format (NoTestsMatched state.DiscoveredTests.Length))
-        else
+        | false ->
           let testIds = tests |> Array.map (fun tc -> tc.Id)
           dispatch (SageFsMsg.Event (SageFsEvent.RunTestsRequested tests))
-          if timeoutSeconds = 0 then
+          match timeoutSeconds = 0 with
+          | true ->
             Task.FromResult (sprintf "Triggered %d tests for execution." tests.Length)
-          else
+          | false ->
             task {
               let! result = pollForTestCompletion getModel testIds timeoutSeconds
               return RunTestsResult.format result

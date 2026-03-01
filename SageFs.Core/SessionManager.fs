@@ -103,19 +103,26 @@ module SessionManager =
 
   /// Compute standby info from pool state (pure function).
   let computeStandbyInfo (pool: PoolState) : StandbyInfo =
-    if not pool.Enabled then StandbyInfo.NoPool
-    elif pool.Standbys.IsEmpty then StandbyInfo.NoPool
-    else
+    match pool.Enabled with
+    | false -> StandbyInfo.NoPool
+    | true ->
+    match pool.Standbys.IsEmpty with
+    | true -> StandbyInfo.NoPool
+    | false ->
       let states = pool.Standbys |> Map.toList |> List.map (fun (_, s) -> s.State)
-      if states |> List.exists (fun s -> s = StandbyState.Invalidated) then StandbyInfo.Invalidated
-      elif states |> List.forall (fun s -> s = StandbyState.Ready) then StandbyInfo.Ready
-      else
+      match states |> List.exists (fun s -> s = StandbyState.Invalidated) with
+      | true -> StandbyInfo.Invalidated
+      | false ->
+      match states |> List.forall (fun s -> s = StandbyState.Ready) with
+      | true -> StandbyInfo.Ready
+      | false ->
         let progress =
           pool.Standbys
           |> Map.toList
           |> List.tryPick (fun (_, s) ->
-            if s.State = StandbyState.Warming then s.WarmupProgress
-            else None)
+            match s.State = StandbyState.Warming with
+            | true -> s.WarmupProgress
+            | false -> None)
           |> Option.defaultValue ""
         StandbyInfo.Warming progress
 
@@ -127,7 +134,9 @@ module SessionManager =
       let workerUrls =
         state.Sessions
         |> Map.fold (fun acc id ms ->
-          if ms.WorkerBaseUrl.Length > 0 then Map.add id ms.WorkerBaseUrl acc else acc) Map.empty
+          match ms.WorkerBaseUrl.Length > 0 with
+          | true -> Map.add id ms.WorkerBaseUrl acc
+          | false -> acc) Map.empty
       { Sessions = sessions; StandbyInfo = standby; WarmupProgress = state.WarmupProgress; WorkerBaseUrls = workerUrls }
 
     /// Project a snapshot directly from ManagerState (computes standby info).
@@ -160,8 +169,9 @@ module SessionManager =
       projects
       |> List.collect (fun p ->
         let ext = System.IO.Path.GetExtension(p).ToLowerInvariant()
-        if ext = ".sln" || ext = ".slnx" then [ "--sln"; p ]
-        else [ "--proj"; p ])
+        match ext = ".sln" || ext = ".slnx" with
+        | true -> [ "--sln"; p ]
+        | false -> [ "--proj"; p ])
       |> String.concat " "
 
     let psi = ProcessStartInfo()
@@ -181,9 +191,10 @@ module SessionManager =
     proc.StartInfo <- psi
     proc.EnableRaisingEvents <- true
 
-    if not (proc.Start()) then
+    match proc.Start() with
+    | false ->
       Error (SageFsError.WorkerSpawnFailed "Failed to start worker process")
-    else
+    | true ->
       let workerPid = proc.Id
       proc.Exited.Add(fun _ -> onExited workerPid proc.ExitCode)
       Ok proc
@@ -202,13 +213,19 @@ module SessionManager =
         let mutable found = None
         while Option.isNone found do
           let! line = proc.StandardOutput.ReadLineAsync(ct).AsTask() |> Async.AwaitTask
-          if isNull line then
+          match isNull line with
+          | true ->
             failwith "Worker process exited before reporting port"
-          elif line.StartsWith("WARMUP_PROGRESS=", System.StringComparison.Ordinal) then
+          | false ->
+          match line.StartsWith("WARMUP_PROGRESS=", System.StringComparison.Ordinal) with
+          | true ->
             let payload = line.Substring("WARMUP_PROGRESS=".Length)
             inbox.Post(SessionCommand.WorkerWarmupProgress(sessionId, payload))
-          elif line.StartsWith("WORKER_PORT=", System.StringComparison.Ordinal) then
+          | false ->
+          match line.StartsWith("WORKER_PORT=", System.StringComparison.Ordinal) with
+          | true ->
             found <- Some (line.Substring("WORKER_PORT=".Length))
+          | false -> ()
         match found with
         | Some baseUrl ->
           let proxy = HttpWorkerClient.httpProxy baseUrl
@@ -228,9 +245,11 @@ module SessionManager =
     try
       let! _ = session.Proxy WorkerMessage.Shutdown
       let exited = session.Process.WaitForExit(3000)
-      if not exited then
+      match exited with
+      | false ->
         try session.Process.Kill() with _ -> ()
         try session.Process.WaitForExit(2000) |> ignore with _ -> ()
+      | true -> ()
     with _ ->
       try session.Process.Kill() with _ -> ()
       try session.Process.WaitForExit(2000) |> ignore with _ -> ()
@@ -271,23 +290,27 @@ module SessionManager =
         let tcs = System.Threading.Tasks.TaskCompletionSource<bool>()
         proc.EnableRaisingEvents <- true
         proc.Exited.Add(fun _ -> tcs.TrySetResult(true) |> ignore)
-        if proc.HasExited then tcs.TrySetResult(true) |> ignore
+        match proc.HasExited with
+        | true -> tcs.TrySetResult(true) |> ignore
+        | false -> ()
         let timeoutTask = System.Threading.Tasks.Task.Delay(600_000, ct)
         let! completed =
           System.Threading.Tasks.Task.WhenAny(tcs.Task, timeoutTask)
           |> Async.AwaitTask
-        if Object.ReferenceEquals(completed, timeoutTask) then
+        match Object.ReferenceEquals(completed, timeoutTask) with
+        | true ->
           try proc.Kill(entireProcessTree = true) with _ -> ()
           proc.Dispose()
           return Error "Build timed out (10 min limit)"
-        else
+        | false ->
           try stderrTask.Wait(5000) |> ignore with _ -> ()
           try stdoutTask.Wait(5000) |> ignore with _ -> ()
           let exitCode = proc.ExitCode
           proc.Dispose()
-          if exitCode <> 0 then
+          match exitCode <> 0 with
+          | true ->
             return Error (sprintf "Build failed (exit %d): %s" exitCode (String.concat "\n" stderrLines))
-          else
+          | false ->
             return Ok "Build succeeded"
     }
 
@@ -304,13 +327,19 @@ module SessionManager =
         let mutable found = None
         while Option.isNone found do
           let! line = proc.StandardOutput.ReadLineAsync(ct).AsTask() |> Async.AwaitTask
-          if isNull line then
+          match isNull line with
+          | true ->
             failwith "Standby worker exited before reporting port"
-          elif line.StartsWith("WARMUP_PROGRESS=", System.StringComparison.Ordinal) then
+          | false ->
+          match line.StartsWith("WARMUP_PROGRESS=", System.StringComparison.Ordinal) with
+          | true ->
             let payload = line.Substring("WARMUP_PROGRESS=".Length)
             inbox.Post(SessionCommand.StandbyProgress(key, payload))
-          elif line.StartsWith("WORKER_PORT=", System.StringComparison.Ordinal) then
+          | false ->
+          match line.StartsWith("WORKER_PORT=", System.StringComparison.Ordinal) with
+          | true ->
             found <- Some (line.Substring("WORKER_PORT=".Length))
+          | false -> ()
         match found with
         | Some baseUrl ->
           let proxy = HttpWorkerClient.httpProxy baseUrl
@@ -332,8 +361,10 @@ module SessionManager =
       | Some proxy ->
         let! _ = proxy WorkerMessage.Shutdown
         let exited = standby.Process.WaitForExit(3000)
-        if not exited then
+        match exited with
+        | false ->
           try standby.Process.Kill() with _ -> ()
+        | true -> ()
       | None ->
         try standby.Process.Kill() with _ -> ()
     with _ ->
@@ -424,7 +455,9 @@ module SessionManager =
             match StandbyPool.decideRestart rebuild standby with
             | RestartDecision.SwapStandby readyStandby ->
               // Fast path: swap the warm standby in
-              if not (isNull span) then span.SetTag("restart.decision", "standby_swap") |> ignore
+              match isNull span with
+              | false -> span.SetTag("restart.decision", "standby_swap") |> ignore
+              | true -> ()
               do! stopWorker session
               let stateAfterStop = ManagerState.removeSession id state
               let info : SessionInfo = {
@@ -466,7 +499,9 @@ module SessionManager =
               return! loop newState
             | RestartDecision.ColdRestart ->
               // Slow path: traditional stop → build → spawn
-              if not (isNull span) then span.SetTag("restart.decision", "cold_restart") |> ignore
+              match isNull span with
+              | false -> span.SetTag("restart.decision", "cold_restart") |> ignore
+              | true -> ()
               do! stopWorker session
               // Also kill any stale standby for this config
               let poolAfterKill =
@@ -478,8 +513,9 @@ module SessionManager =
               let stateAfterStop =
                 { ManagerState.removeSession id state with Pool = poolAfterKill }
               let! buildResult =
-                if rebuild then runBuildAsync session.Projects session.WorkingDir
-                else async { return Ok "No rebuild requested" }
+                match rebuild with
+                | true -> runBuildAsync session.Projects session.WorkingDir
+                | false -> async { return Ok "No rebuild requested" }
               match buildResult with
               | Error msg ->
                 reply.Reply(Error (SageFsError.HardResetFailed msg))
@@ -537,7 +573,8 @@ module SessionManager =
             |> Map.fold (fun stAsync id session ->
               async {
                 let! st = stAsync
-                if SessionStatus.isAlive session.Info.Status then
+                match SessionStatus.isAlive session.Info.Status with
+                | true ->
                   try
                     let replyId = Guid.NewGuid().ToString("N").[..7]
                     let! resp = session.Proxy (WorkerMessage.GetStatus replyId)
@@ -549,7 +586,7 @@ module SessionManager =
                       return ManagerState.addSession id updated st
                     | _ -> return st
                   with _ -> return st
-                else return st
+                | false -> return st
               }
             ) (async { return state })
           reply.Reply(ManagerState.allInfos updatedState)
@@ -578,8 +615,9 @@ module SessionManager =
                   WarmupProgress = Map.remove id state.WarmupProgress }
             // Trigger standby warmup for this session's config
             let key = StandbyKey.fromSession session.Projects session.WorkingDir
-            if state.Pool.Enabled && PoolState.getStandby key state.Pool |> Option.isNone then
-              inbox.Post(SessionCommand.WarmStandby key)
+            match state.Pool.Enabled && (PoolState.getStandby key state.Pool |> Option.isNone) with
+            | true -> inbox.Post(SessionCommand.WarmStandby key)
+            | false -> ()
             onStandbyProgressChanged ()
             onSessionReady id
             // Request initial test discovery from the worker
@@ -632,7 +670,9 @@ module SessionManager =
             // Ignore stale exit events from old workers (e.g., after RestartSession)
             match session.Info.WorkerPid with
             | Some currentPid when currentPid <> workerPid ->
-              if not (isNull span) then span.SetTag("stale_event", true) |> ignore
+              match isNull span with
+              | false -> span.SetTag("stale_event", true) |> ignore
+              | true -> ()
               Instrumentation.succeedSpan span
               return! loop state
             | _ ->
@@ -645,21 +685,27 @@ module SessionManager =
             let newStatus = SessionLifecycle.statusAfterExit outcome
             match outcome with
             | SessionLifecycle.ExitOutcome.Graceful ->
-              if not (isNull span) then span.SetTag("outcome", "graceful") |> ignore
+              match isNull span with
+              | false -> span.SetTag("outcome", "graceful") |> ignore
+              | true -> ()
               Instrumentation.activeSessions.Add(-1L)
               Instrumentation.succeedSpan span
               let newState = ManagerState.removeSession id state
               return! loop newState
             | SessionLifecycle.ExitOutcome.Abandoned _ ->
-              if not (isNull span) then span.SetTag("outcome", "abandoned") |> ignore
+              match isNull span with
+              | false -> span.SetTag("outcome", "abandoned") |> ignore
+              | true -> ()
               Instrumentation.activeSessions.Add(-1L)
               Instrumentation.succeedSpan span
               let newState = ManagerState.removeSession id state
               return! loop newState
             | SessionLifecycle.ExitOutcome.RestartAfter(delay, newRestartState) ->
-              if not (isNull span) then
+              match isNull span with
+              | false ->
                 span.SetTag("outcome", "restart_scheduled") |> ignore
                 span.SetTag("restart.delay_ms", delay.TotalMilliseconds) |> ignore
+              | true -> ()
               Instrumentation.succeedSpan span
               let updated =
                 { session with
@@ -733,8 +779,9 @@ module SessionManager =
 
         | SessionCommand.WarmStandby key ->
           // Only warm if enabled and no standby exists for this config
-          if state.Pool.Enabled
-             && PoolState.getStandby key state.Pool |> Option.isNone then
+          match state.Pool.Enabled
+                && (PoolState.getStandby key state.Pool |> Option.isNone) with
+          | true ->
             // Generate a temporary session ID for the standby worker
             let standbyId = sprintf "standby-%s" (Guid.NewGuid().ToString("N").[..7])
             let onExited workerPid _exitCode =
@@ -756,7 +803,7 @@ module SessionManager =
             | Error _ ->
               // Spawn failed — just skip, cold restart still works
               return! loop state
-          else
+          | false ->
             return! loop state
 
         | SessionCommand.StandbyReady(key, _workerPid, proxy) ->

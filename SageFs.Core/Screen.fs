@@ -7,7 +7,7 @@ open SageFs.Features.LiveTesting
 module GutterRender =
   /// Gutter width: 0 if no annotations, 2 if any exist.
   let gutterWidth (annotations: LineAnnotation array) : int =
-    if annotations.Length = 0 then 0 else 2
+    match annotations.Length = 0 with | true -> 0 | false -> 2
 
   /// Build a lookup from line number to annotation for O(1) access.
   let buildLookup (annotations: LineAnnotation array) : Map<int, LineAnnotation> =
@@ -30,9 +30,9 @@ module StatusHints =
   /// Short label for a key combo (compact for status bar)
   let shortFormat (kc: KeyCombo) : string =
     let parts = ResizeArray<string>()
-    if kc.Modifiers.HasFlag(ConsoleModifiers.Control) then parts.Add("^")
-    if kc.Modifiers.HasFlag(ConsoleModifiers.Alt) then parts.Add("A-")
-    if kc.Modifiers.HasFlag(ConsoleModifiers.Shift) then parts.Add("S-")
+    match kc.Modifiers.HasFlag(ConsoleModifiers.Control) with | true -> parts.Add("^") | false -> ()
+    match kc.Modifiers.HasFlag(ConsoleModifiers.Alt) with | true -> parts.Add("A-") | false -> ()
+    match kc.Modifiers.HasFlag(ConsoleModifiers.Shift) with | true -> parts.Add("S-") | false -> ()
     let keyName =
       match kc.Key with
       | ConsoleKey.Enter -> "Enter"
@@ -66,10 +66,9 @@ module StatusHints =
     let editorHint action label =
       hint (UiAction.Editor action) label
     let editorToggle =
-      if layout.Contains PaneId.Editor then
-        hint (UiAction.TogglePane "Editor") "hide-editor"
-      else
-        hint (UiAction.TogglePane "Editor") "show-editor"
+      match layout.Contains PaneId.Editor with
+      | true -> hint (UiAction.TogglePane "Editor") "hide-editor"
+      | false -> hint (UiAction.TogglePane "Editor") "show-editor"
     let common =
       [ hint UiAction.Quit "quit"
         hint UiAction.CycleFocus "focus"
@@ -90,8 +89,9 @@ module StatusHints =
         [ editorHint (EditorAction.CreateSession []) "new-session" ]
         |> List.choose id
     let all = paneHints @ common
-    if all.IsEmpty then ""
-    else sprintf " %s " (String.concat " | " all)
+    match all.IsEmpty with
+    | true -> ""
+    | false -> sprintf " %s " (String.concat " | " all)
 
 /// Layout configuration — which panes are visible and how space is divided.
 type LayoutConfig = {
@@ -127,10 +127,9 @@ module LayoutConfig =
 
   /// Toggle a pane's visibility.
   let togglePane (paneId: PaneId) (cfg: LayoutConfig) : LayoutConfig =
-    if cfg.VisiblePanes.Contains paneId then
-      { cfg with VisiblePanes = Set.remove paneId cfg.VisiblePanes }
-    else
-      { cfg with VisiblePanes = Set.add paneId cfg.VisiblePanes }
+    match cfg.VisiblePanes.Contains paneId with
+    | true -> { cfg with VisiblePanes = Set.remove paneId cfg.VisiblePanes }
+    | false -> { cfg with VisiblePanes = Set.add paneId cfg.VisiblePanes }
 
   let clampF lo hi v = max lo (min hi v)
 
@@ -159,17 +158,20 @@ module Screen =
     let hasRight =
       cfg.VisiblePanes.Contains PaneId.Sessions || cfg.VisiblePanes.Contains PaneId.Diagnostics || cfg.VisiblePanes.Contains PaneId.Context
     let panes = ResizeArray<PaneId * Rect>()
-    if hasLeft && hasRight then
+    match hasLeft, hasRight with
+    | true, true ->
       let left, right = Rect.splitVProp cfg.LeftRightSplit contentArea
       // Left column
-      if cfg.VisiblePanes.Contains PaneId.Output && cfg.VisiblePanes.Contains PaneId.Editor then
+      match cfg.VisiblePanes.Contains PaneId.Output, cfg.VisiblePanes.Contains PaneId.Editor with
+      | true, true ->
         let outputRect, editorRect = Rect.splitH (left.Height - cfg.OutputEditorSplit) left
         panes.Add(PaneId.Output, outputRect)
         panes.Add(PaneId.Editor, editorRect)
-      elif cfg.VisiblePanes.Contains PaneId.Output then
+      | true, false ->
         panes.Add(PaneId.Output, left)
-      elif cfg.VisiblePanes.Contains PaneId.Editor then
+      | false, true ->
         panes.Add(PaneId.Editor, left)
+      | false, false -> ()
       // Right column — split evenly among visible right-column panes
       let rightPanes =
         [PaneId.Sessions; PaneId.Context; PaneId.Diagnostics]
@@ -186,18 +188,20 @@ module Screen =
         many |> List.iteri (fun i pid ->
           let isLast = i = count - 1
           let rowOff = right.Row + i * h
-          let height = if isLast then right.Height - i * h else h
+          let height = match isLast with | true -> right.Height - i * h | false -> h
           panes.Add(pid, Rect.create rowOff right.Col right.Width height))
-    elif hasLeft then
-      if cfg.VisiblePanes.Contains PaneId.Output && cfg.VisiblePanes.Contains PaneId.Editor then
+    | true, false ->
+      match cfg.VisiblePanes.Contains PaneId.Output, cfg.VisiblePanes.Contains PaneId.Editor with
+      | true, true ->
         let outputRect, editorRect = Rect.splitH (contentArea.Height - cfg.OutputEditorSplit) contentArea
         panes.Add(PaneId.Output, outputRect)
         panes.Add(PaneId.Editor, editorRect)
-      elif cfg.VisiblePanes.Contains PaneId.Output then
+      | true, false ->
         panes.Add(PaneId.Output, contentArea)
-      elif cfg.VisiblePanes.Contains PaneId.Editor then
+      | false, true ->
         panes.Add(PaneId.Editor, contentArea)
-    elif hasRight then
+      | false, false -> ()
+    | false, true ->
       let rightPanes =
         [PaneId.Sessions; PaneId.Context; PaneId.Diagnostics]
         |> List.filter cfg.VisiblePanes.Contains
@@ -213,8 +217,9 @@ module Screen =
         many |> List.iteri (fun i pid ->
           let isLast = i = count - 1
           let rowOff = contentArea.Row + i * h
-          let height = if isLast then contentArea.Height - i * h else h
+          let height = match isLast with | true -> contentArea.Height - i * h | false -> h
           panes.Add(pid, Rect.create rowOff contentArea.Col contentArea.Width height))
+    | false, false -> ()
     panes |> Seq.toList, statusRect
 
   /// Compute the standard 4-pane layout for the given grid dimensions.
@@ -246,9 +251,9 @@ module Screen =
 
     for (paneId, rect) in paneRects do
       let borderColor =
-        if paneId = focusedPane then Theme.hexToRgb theme.BorderFocus else Theme.hexToRgb theme.BorderNormal
+        match paneId = focusedPane with | true -> Theme.hexToRgb theme.BorderFocus | false -> Theme.hexToRgb theme.BorderNormal
       let bg =
-        if paneId = PaneId.Editor then Theme.hexToRgb theme.BgEditor else Theme.hexToRgb theme.BgPanel
+        match paneId = PaneId.Editor with | true -> Theme.hexToRgb theme.BgEditor | false -> Theme.hexToRgb theme.BgPanel
       let inner =
         Draw.box (DrawTarget.create grid rect) (PaneId.displayName paneId) borderColor bg
 
@@ -265,43 +270,47 @@ module Screen =
         // Gutter annotations (test status / coverage icons)
         let gw = GutterRender.gutterWidth region.LineAnnotations
         let annotationLookup =
-          if gw > 0 then GutterRender.buildLookup region.LineAnnotations
-          else Map.empty
+          match gw > 0 with
+          | true -> GutterRender.buildLookup region.LineAnnotations
+          | false -> Map.empty
 
         // Apply syntax highlighting for editor and output panes
         let shouldHighlight =
           paneId = PaneId.Editor || paneId = PaneId.Output
         let allSpans =
-          if shouldHighlight && SyntaxHighlight.isAvailable () then
-            SyntaxHighlight.tokenize theme region.Content
-          else
-            [||]
+          match shouldHighlight && SyntaxHighlight.isAvailable () with
+          | true -> SyntaxHighlight.tokenize theme region.Content
+          | false -> [||]
         let spanOffset = skip
 
         visibleLines |> Array.iteri (fun row line ->
           let lineIdx = spanOffset + row
           // Draw gutter icon if annotations exist
-          if gw > 0 then
+          match gw > 0 with
+          | true ->
             match Map.tryFind lineIdx annotationLookup with
             | Some ann ->
               let iconFg = GutterRender.iconFgColor theme ann.Icon
               Draw.text inner row 0 iconFg bg CellAttrs.None (sprintf "%c " (GutterIcon.toChar ann.Icon))
             | None ->
               Draw.text inner row 0 (Theme.hexToRgb theme.FgDim) bg CellAttrs.None "  "
+          | false -> ()
           // Draw text content offset by gutter width
-          if shouldHighlight && lineIdx < allSpans.Length && allSpans.[lineIdx].Length > 0 then
-            Draw.textHighlighted inner row gw fg bg CellAttrs.None allSpans.[lineIdx] line
-          else
-            Draw.text inner row gw fg bg CellAttrs.None line)
+          match shouldHighlight && lineIdx < allSpans.Length && allSpans.[lineIdx].Length > 0 with
+          | true -> Draw.textHighlighted inner row gw fg bg CellAttrs.None allSpans.[lineIdx] line
+          | false -> Draw.text inner row gw fg bg CellAttrs.None line)
 
         // Scroll indicators
-        if skip > 0 then
-          Draw.text inner 0 (inner.Clip.Width - 1) (Theme.hexToRgb theme.FgDim) bg CellAttrs.None "▲"
-        if lines.Length > skip + inner.Clip.Height then
-          Draw.text inner (inner.Clip.Height - 1) (inner.Clip.Width - 1) (Theme.hexToRgb theme.FgDim) bg CellAttrs.None "▼"
+        match skip > 0 with
+        | true -> Draw.text inner 0 (inner.Clip.Width - 1) (Theme.hexToRgb theme.FgDim) bg CellAttrs.None "▲"
+        | false -> ()
+        match lines.Length > skip + inner.Clip.Height with
+        | true -> Draw.text inner (inner.Clip.Height - 1) (inner.Clip.Width - 1) (Theme.hexToRgb theme.FgDim) bg CellAttrs.None "▼"
+        | false -> ()
 
         // Track cursor for focused pane (offset by gutter width)
-        if paneId = focusedPane then
+        match paneId = focusedPane with
+        | true ->
           match region.Cursor with
           | Some c ->
             let screenRow = rect.Row + 1 + c.Line
@@ -309,6 +318,7 @@ module Screen =
             cursorPos <- Some (screenRow, screenCol)
           | None ->
             cursorPos <- Some (rect.Row + 1, rect.Col + 1 + gw)
+        | false -> ()
 
         // Completion popup overlay (offset by gutter width)
         match region.Completions with
@@ -328,18 +338,21 @@ module Screen =
           for i in 0 .. maxVisible - 1 do
             let r = popupRow + i
             let c = popupCol
-            if r < rows - 1 && c + menuWidth < cols then
+            match r < rows - 1 && c + menuWidth < cols with
+            | true ->
               let isSelected = i = compl.SelectedIndex
-              let itemFg = if isSelected then Theme.hexToRgb theme.BgEditor else Theme.hexToRgb theme.FgDefault
-              let itemBg = if isSelected then Theme.hexToRgb theme.BorderFocus else Theme.hexToRgb theme.BgStatus
+              let itemFg = match isSelected with | true -> Theme.hexToRgb theme.BgEditor | false -> Theme.hexToRgb theme.FgDefault
+              let itemBg = match isSelected with | true -> Theme.hexToRgb theme.BorderFocus | false -> Theme.hexToRgb theme.BgStatus
               let label = compl.Items.[i].PadRight(menuWidth)
               let itemDt = DrawTarget.create grid (Rect.create r c menuWidth 1)
               Draw.text itemDt 0 0 itemFg itemBg CellAttrs.None (sprintf " %s" label)
+            | false -> ()
         | _ -> ()
       | None ->
         // Default cursor at content start for focused pane
-        if paneId = focusedPane then
-          cursorPos <- Some (rect.Row + 1, rect.Col + 1)
+        match paneId = focusedPane with
+        | true -> cursorPos <- Some (rect.Row + 1, rect.Col + 1)
+        | false -> ()
 
     // Merge adjacent box borders into proper T-junctions
     Draw.resolveJunctions dt

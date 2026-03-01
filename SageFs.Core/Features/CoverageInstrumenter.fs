@@ -25,13 +25,17 @@ module CoverageInstrumenter =
     [|
       for t in moduleDef.Types do
         for m in methodsOf t do
-          if m.HasBody
-             && m.DebugInformation <> null
-             && m.DebugInformation.HasSequencePoints then
+          match m.HasBody
+                && m.DebugInformation <> null
+                && m.DebugInformation.HasSequencePoints with
+          | true ->
             for sp in m.DebugInformation.SequencePoints do
-              if not sp.IsHidden then
+              match sp.IsHidden with
+              | false ->
                 yield (m, sp, slotId)
                 slotId <- slotId + 1
+              | true -> ()
+          | false -> ()
     |]
 
   /// Inject the __SageFsCoverage static class into the module.
@@ -108,23 +112,35 @@ module CoverageInstrumenter =
       |> List.fold (fun next instr -> il.InsertBefore(next, instr); instr) target
 
     for handler in il.Body.ExceptionHandlers do
-      if handler.TryStart = target then handler.TryStart <- firstInserted
-      if handler.TryEnd = target then handler.TryEnd <- firstInserted
-      if handler.HandlerStart = target then handler.HandlerStart <- firstInserted
-      if handler.HandlerEnd = target then handler.HandlerEnd <- firstInserted
-      if handler.FilterStart = target then handler.FilterStart <- firstInserted
+      match handler.TryStart = target with
+      | true -> handler.TryStart <- firstInserted
+      | false -> ()
+      match handler.TryEnd = target with
+      | true -> handler.TryEnd <- firstInserted
+      | false -> ()
+      match handler.HandlerStart = target with
+      | true -> handler.HandlerStart <- firstInserted
+      | false -> ()
+      match handler.HandlerEnd = target with
+      | true -> handler.HandlerEnd <- firstInserted
+      | false -> ()
+      match handler.FilterStart = target with
+      | true -> handler.FilterStart <- firstInserted
+      | false -> ()
 
     for instr in il.Body.Instructions do
       match instr.OpCode.OperandType with
       | OperandType.InlineBrTarget
       | OperandType.ShortInlineBrTarget ->
-        if Object.ReferenceEquals(instr.Operand, target) then
-          instr.Operand <- firstInserted
+        match Object.ReferenceEquals(instr.Operand, target) with
+        | true -> instr.Operand <- firstInserted
+        | false -> ()
       | OperandType.InlineSwitch ->
         let targets = instr.Operand :?> Instruction array
         for i in 0 .. targets.Length - 1 do
-          if Object.ReferenceEquals(targets.[i], target) then
-            targets.[i] <- firstInserted
+          match Object.ReferenceEquals(targets.[i], target) with
+          | true -> targets.[i] <- firstInserted
+          | false -> ()
       | _ -> ()
 
     firstInserted
@@ -170,15 +186,17 @@ module CoverageInstrumenter =
       use asm = AssemblyDefinition.ReadAssembly(assemblyPath, readerParams)
       let moduleDef = asm.MainModule
       let points = collectSequencePoints moduleDef
-      if points.Length = 0 then
+      match points.Length = 0 with
+      | true ->
         Ok(InstrumentationMap.empty, assemblyPath)
-      else
+      | false ->
         let slots =
           points
           |> Array.map (fun (_, sp, slotId) ->
             { File =
-                if sp.Document <> null then sp.Document.Url
-                else ""
+                match sp.Document <> null with
+                | true -> sp.Document.Url
+                | false -> ""
               Line = sp.StartLine
               Column = sp.StartColumn
               EndLine = sp.EndLine
@@ -211,17 +229,20 @@ module CoverageInstrumenter =
     match instrumentAssembly assemblyPath with
     | Error e -> Error e
     | Ok(map, instrPath) ->
-      if instrPath = assemblyPath then
+      match instrPath = assemblyPath with
+      | true ->
         Ok map
-      else
+      | false ->
         try
           let pdbPath = Path.ChangeExtension(assemblyPath, ".pdb")
           let instrPdb = Path.ChangeExtension(instrPath, ".pdb")
           File.Delete(assemblyPath)
           File.Move(instrPath, assemblyPath)
-          if File.Exists(instrPdb) && File.Exists(pdbPath) then
+          match File.Exists(instrPdb) && File.Exists(pdbPath) with
+          | true ->
             File.Delete(pdbPath)
             File.Move(instrPdb, pdbPath)
+          | false -> ()
           Ok map
         with ex ->
           Error(sprintf "Failed to replace assembly: %s" ex.Message)
@@ -231,17 +252,20 @@ module CoverageInstrumenter =
     (asm: Assembly)
     (map: InstrumentationMap)
     : CoverageState option =
-    if map.TotalProbes = 0 then
+    match map.TotalProbes = 0 with
+    | true ->
       None
-    else
+    | false ->
       let trackerType = asm.GetType(map.TrackerTypeName)
-      if trackerType = null then
+      match trackerType = null with
+      | true ->
         None
-      else
+      | false ->
         let hitsField = trackerType.GetField(map.HitsFieldName)
-        if hitsField = null then
+        match hitsField = null with
+        | true ->
           None
-        else
+        | false ->
           let hits = hitsField.GetValue(null) :?> bool array
           Some(InstrumentationMap.toCoverageState hits map)
 
@@ -250,12 +274,18 @@ module CoverageInstrumenter =
     (asm: Assembly)
     (map: InstrumentationMap)
     : unit =
-    if map.TotalProbes > 0 then
+    match map.TotalProbes > 0 with
+    | true ->
       let trackerType = asm.GetType(map.TrackerTypeName)
-      if trackerType <> null then
+      match trackerType <> null with
+      | true ->
         let hitsField = trackerType.GetField(map.HitsFieldName)
-        if hitsField <> null then
+        match hitsField <> null with
+        | true ->
           hitsField.SetValue(null, Array.create map.TotalProbes false)
+        | false -> ()
+      | false -> ()
+    | false -> ()
 
   /// Discover __SageFsCoverage tracker in all loaded assemblies and collect hits.
   /// Concatenates hits from all instrumented assemblies in order.
@@ -265,27 +295,36 @@ module CoverageInstrumenter =
       |> Array.choose (fun asm ->
         try
           let trackerType = asm.GetType("__SageFsCoverage")
-          if trackerType <> null then
+          match trackerType <> null with
+          | true ->
             let hitsField = trackerType.GetField("Hits")
-            if hitsField <> null then
+            match hitsField <> null with
+            | true ->
               Some(hitsField.GetValue(null) :?> bool array)
-            else None
-          else None
+            | false -> None
+          | false -> None
         with _ -> None)
-    if allHits.Length = 0 then None
-    else Some(Array.concat allHits)
+    match allHits.Length = 0 with
+    | true -> None
+    | false -> Some(Array.concat allHits)
 
   /// Reset __SageFsCoverage tracker in all loaded assemblies.
   let discoverAndResetHits (assemblies: Assembly array) : unit =
     for asm in assemblies do
       try
         let trackerType = asm.GetType("__SageFsCoverage")
-        if trackerType <> null then
+        match trackerType <> null with
+        | true ->
           let hitsField = trackerType.GetField("Hits")
-          if hitsField <> null then
+          match hitsField <> null with
+          | true ->
             let arr = hitsField.GetValue(null) :?> bool array
-            if arr <> null then
+            match arr <> null with
+            | true ->
               hitsField.SetValue(null, Array.create arr.Length false)
+            | false -> ()
+          | false -> ()
+        | false -> ()
       with _ -> ()
 
   /// Track consecutive instrumentation failures for circuit breaker.
@@ -303,16 +342,18 @@ module CoverageInstrumenter =
   /// Circuit breaker: after 3 consecutive failures, disables instrumentation.
   let instrumentShadowSolution (projectTargetPaths: string list)
     : InstrumentationMap array =
-    if isCircuitBroken () then
+    match isCircuitBroken () with
+    | true ->
       eprintfn "⚠️ IL coverage instrumentation disabled after %d consecutive failures" consecutiveFailures
       [||]
-    else
+    | false ->
       let mutable hadFailure = false
       let results =
         projectTargetPaths
         |> List.toArray
         |> Array.choose (fun targetPath ->
-          if File.Exists(targetPath) then
+          match File.Exists(targetPath) with
+          | true ->
             match instrumentAssemblyInPlace targetPath with
             | Ok map when map.TotalProbes > 0 ->
               Some map
@@ -321,11 +362,14 @@ module CoverageInstrumenter =
               hadFailure <- true
               eprintfn "⚠️ IL instrumentation failed for %s: %s" (Path.GetFileName targetPath) msg
               None
-          else None)
-      if hadFailure then
+          | false -> None)
+      match hadFailure with
+      | true ->
         consecutiveFailures <- consecutiveFailures + 1
-        if isCircuitBroken () then
+        match isCircuitBroken () with
+        | true ->
           eprintfn "🛑 IL coverage circuit breaker tripped after %d failures — instrumentation disabled for this session" consecutiveFailures
-      else
+        | false -> ()
+      | false ->
         consecutiveFailures <- 0
       results

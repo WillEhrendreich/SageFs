@@ -69,9 +69,9 @@ module SageFsUpdate =
     | None -> None
     | Some idx ->
       let sessions = model.Sessions.Sessions
-      if idx >= 0 && idx < sessions.Length then
-        Some sessions.[idx].Id
-      else None
+      match idx >= 0 && idx < sessions.Length with
+      | true -> Some sessions.[idx].Id
+      | false -> None
 
   /// When a prompt is active, remap editor input actions to prompt actions.
   let remapForPrompt (action: EditorAction) (prompt: PromptState option) : EditorAction =
@@ -127,8 +127,9 @@ module SageFsUpdate =
         model, others
       | EditorAction.SessionCycleNext ->
         let count = model.Sessions.Sessions.Length
-        if count <= 1 then model, []
-        else
+        match count <= 1 with
+        | true -> model, []
+        | false ->
           let currentIdx = model.Editor.SelectedSessionIndex |> Option.defaultValue 0
           let nextIdx = (currentIdx + 1) % count
           let sid = model.Sessions.Sessions.[nextIdx].Id
@@ -137,8 +138,9 @@ module SageFsUpdate =
           [SageFsEffect.Editor (EditorEffect.RequestSessionSwitch sid)]
       | EditorAction.SessionCyclePrev ->
         let count = model.Sessions.Sessions.Length
-        if count <= 1 then model, []
-        else
+        match count <= 1 with
+        | true -> model, []
+        | false ->
           let currentIdx = model.Editor.SelectedSessionIndex |> Option.defaultValue 0
           let prevIdx = (currentIdx - 1 + count) % count
           let sid = model.Sessions.Sessions.[prevIdx].Id
@@ -192,7 +194,7 @@ module SageFsUpdate =
         let clearCreating = error.Contains "Create failed:"
         { model with
             RecentOutput = line :: model.RecentOutput
-            CreatingSession = if clearCreating then false else model.CreatingSession }, []
+            CreatingSession = match clearCreating with | true -> false | false -> model.CreatingSession }, []
 
       | SageFsEvent.EvalStarted (sid, code) ->
         let line = {
@@ -226,12 +228,13 @@ module SageFsUpdate =
 
       | SageFsEvent.SessionCreated snap ->
         let isFirst = model.Sessions.ActiveSessionId = ActiveSession.AwaitingSession
-        let snap = if isFirst then { snap with IsActive = true } else snap
+        let snap = match isFirst with | true -> { snap with IsActive = true } | false -> snap
         let existing = model.Sessions.Sessions |> List.exists (fun s -> s.Id = snap.Id)
         let sessions =
-          if existing then
-            model.Sessions.Sessions |> List.map (fun s -> if s.Id = snap.Id then snap else s)
-          else
+          match existing with
+          | true ->
+            model.Sessions.Sessions |> List.map (fun s -> match s.Id = snap.Id with | true -> snap | false -> s)
+          | false ->
             snap :: model.Sessions.Sessions
         { model with
             CreatingSession = false
@@ -239,8 +242,9 @@ module SageFsUpdate =
               model.Sessions with
                 Sessions = sessions
                 ActiveSessionId =
-                  if isFirst then ActiveSession.Viewing snap.Id
-                  else model.Sessions.ActiveSessionId } }, []
+                  match isFirst with
+                  | true -> ActiveSession.Viewing snap.Id
+                  | false -> model.Sessions.ActiveSessionId } }, []
 
       | SageFsEvent.SessionsRefreshed snaps ->
         let activeId = model.Sessions.ActiveSessionId
@@ -269,8 +273,9 @@ module SageFsUpdate =
                 Sessions =
                   model.Sessions.Sessions
                   |> List.map (fun s ->
-                    if s.Id = sessionId then { s with Status = status }
-                    else s) } }, []
+                    match s.Id = sessionId with
+                    | true -> { s with Status = status }
+                    | false -> s) } }, []
 
       | SageFsEvent.SessionSwitched (_, toId) ->
         { model with
@@ -288,12 +293,13 @@ module SageFsUpdate =
           |> List.filter (fun s -> s.Id <> sessionId)
         let wasActive = ActiveSession.isViewing sessionId model.Sessions.ActiveSessionId
         let newActive =
-          if wasActive then
+          match wasActive with
+          | true ->
             remaining
             |> List.tryHead
             |> Option.map (fun s -> ActiveSession.Viewing s.Id)
             |> Option.defaultValue ActiveSession.AwaitingSession
-          else model.Sessions.ActiveSessionId
+          | false -> model.Sessions.ActiveSessionId
         let remaining =
           remaining
           |> List.map (fun s -> { s with IsActive = ActiveSession.isViewing s.Id newActive })
@@ -318,9 +324,9 @@ module SageFsUpdate =
                 Sessions =
                   model.Sessions.Sessions
                   |> List.map (fun s ->
-                    if s.Id = sessionId
-                    then { s with Status = SessionDisplayStatus.Stale }
-                    else s) } }, []
+                    match s.Id = sessionId with
+                    | true -> { s with Status = SessionDisplayStatus.Stale }
+                    | false -> s) } }, []
 
       | SageFsEvent.FileChanged _ -> model, []
 
@@ -351,7 +357,8 @@ module SageFsUpdate =
 
       | SageFsEvent.WarmupCompleted (_, failures) ->
         let activeId = ActiveSession.sessionId model.Sessions.ActiveSessionId |> Option.defaultValue ""
-        if failures.IsEmpty then
+        match failures.IsEmpty with
+        | true ->
           let line = {
             Kind = OutputKind.Info
             Text = "Warmup complete"
@@ -359,7 +366,7 @@ module SageFsUpdate =
             SessionId = activeId
           }
           { model with RecentOutput = line :: model.RecentOutput }, []
-        else
+        | false ->
           let lines =
             failures |> List.map (fun f ->
               { Kind = OutputKind.Error
@@ -372,8 +379,9 @@ module SageFsUpdate =
         // Re-map any ReflectionOnly tests now that we have source file paths
         let sourceFiles = ctx.FileStatuses |> List.map (fun f -> f.Path) |> Array.ofList
         let lt =
-          if Array.isEmpty sourceFiles then model.LiveTesting
-          else
+          match Array.isEmpty sourceFiles with
+          | true -> model.LiveTesting
+          | false ->
             recomputeStatuses model.LiveTesting (fun s ->
               let remapped = Features.LiveTesting.SourceMapping.mapFromProjectFiles sourceFiles s.DiscoveredTests
               { s with DiscoveredTests = remapped })
@@ -383,8 +391,9 @@ module SageFsUpdate =
       | SageFsEvent.TestLocationsDetected (_, locations) ->
         let lt = recomputeStatuses model.LiveTesting (fun s ->
           let merged =
-            if Array.isEmpty s.DiscoveredTests then s.DiscoveredTests
-            else Features.LiveTesting.SourceMapping.mergeSourceLocations locations s.DiscoveredTests
+            match Array.isEmpty s.DiscoveredTests with
+            | true -> s.DiscoveredTests
+            | false -> Features.LiveTesting.SourceMapping.mergeSourceLocations locations s.DiscoveredTests
           { s with SourceLocations = locations; DiscoveredTests = merged })
         { model with LiveTesting = lt }, []
 
@@ -392,27 +401,29 @@ module SageFsUpdate =
         let lt = recomputeStatuses model.LiveTesting (fun s ->
           let disc = Features.LiveTesting.LiveTesting.mergeDiscoveredTests s.DiscoveredTests tests
           let withSourceMap =
-            if Array.isEmpty s.SourceLocations then
+            match Array.isEmpty s.SourceLocations with
+            | true ->
               // No tree-sitter yet — map tests to files using module name → file name heuristic
               let sourceFiles =
                 match model.SessionContext with
                 | Some ctx -> ctx.FileStatuses |> List.map (fun f -> f.Path) |> Array.ofList
                 | None -> [||]
               Features.LiveTesting.SourceMapping.mapFromProjectFiles sourceFiles disc
-            else Features.LiveTesting.SourceMapping.mergeSourceLocations s.SourceLocations disc
+            | false -> Features.LiveTesting.SourceMapping.mergeSourceLocations s.SourceLocations disc
           let newSessionMap =
             tests |> Array.fold (fun m tc -> Map.add tc.Id sessionId m) s.TestSessionMap
           { s with DiscoveredTests = withSourceMap; TestSessionMap = newSessionMap })
         let effects =
-          if lt.TestState.Activation = Features.LiveTesting.LiveTestingActivation.Active
-             && not (Array.isEmpty tests) then
+          match lt.TestState.Activation = Features.LiveTesting.LiveTestingActivation.Active
+                && not (Array.isEmpty tests) with
+          | true ->
             // Only trigger execution for the INCOMING session's tests, not all discovered.
             // Other sessions' tests belong to different workers and would return NotRun.
             let incomingIds = tests |> Array.map (fun tc -> tc.Id)
             Features.LiveTesting.LiveTestPipelineState.triggerExecutionForAffected
               incomingIds Features.LiveTesting.RunTrigger.FileSave (Some sessionId) lt
             |> List.map SageFsEffect.Pipeline
-          else []
+          | false -> []
         { model with LiveTesting = lt }, effects
 
       | SageFsEvent.TestRunStarted (testIds, sessionId) ->
@@ -469,8 +480,9 @@ module SageFsUpdate =
             sessionIds |> Array.fold (fun m sid -> Map.add sid phase m) s.RunPhases
           { s with LastGeneration = gen; AffectedTests = Set.ofArray testIds; RunPhases = phases })
         let effects =
-          if Array.isEmpty tests || lt.TestState.Activation = Features.LiveTesting.LiveTestingActivation.Inactive then []
-          else
+          match Array.isEmpty tests || lt.TestState.Activation = Features.LiveTesting.LiveTestingActivation.Inactive with
+          | true -> []
+          | false ->
             let sessionMap = lt.TestState.TestSessionMap
             tests
             |> Array.groupBy (fun tc ->
@@ -479,7 +491,7 @@ module SageFsUpdate =
               | None -> "")
             |> Array.toList
             |> List.map (fun (sid, groupTests) ->
-              let targetSession = if System.String.IsNullOrEmpty sid then None else Some sid
+              let targetSession = match System.String.IsNullOrEmpty sid with | true -> None | false -> Some sid
               let sessionMaps =
                 match targetSession |> Option.bind (fun s -> Map.tryFind s lt.InstrumentationMaps) with
                 | Some maps -> maps
@@ -501,11 +513,12 @@ module SageFsUpdate =
             let total = slots.Length
             let covered = slots |> Array.filter snd |> Array.length
             let status =
-              if covered = 0 then
+              match covered with
+              | 0 ->
                 Features.LiveTesting.CoverageStatus.NotCovered
-              elif covered = total then
+              | c when c = total ->
                 Features.LiveTesting.CoverageStatus.Covered (total, Features.LiveTesting.CoverageHealth.AllPassing)
-              else
+              | _ ->
                 Features.LiveTesting.CoverageStatus.Covered (covered, Features.LiveTesting.CoverageHealth.SomeFailing)
             { Symbol = sprintf "%s:%d" file line
               FilePath = file
@@ -552,12 +565,15 @@ module SageFsUpdate =
       { model with Theme = theme; ThemeName = name }, []
 
     | SageFsMsg.EnableLiveTesting ->
-      if model.LiveTesting.TestState.Activation = Features.LiveTesting.LiveTestingActivation.Active then
+      match model.LiveTesting.TestState.Activation = Features.LiveTesting.LiveTestingActivation.Active with
+      | true ->
         model, []
-      else
+      | false ->
         let lt = recomputeStatuses model.LiveTesting (fun s -> { s with Activation = Features.LiveTesting.LiveTestingActivation.Active })
         let effects =
-          if not (Array.isEmpty lt.TestState.DiscoveredTests) then
+          match Array.isEmpty lt.TestState.DiscoveredTests with
+          | true -> []
+          | false ->
             let sessionMap = lt.TestState.TestSessionMap
             lt.TestState.DiscoveredTests
             |> Array.groupBy (fun tc ->
@@ -566,18 +582,18 @@ module SageFsUpdate =
               | None -> "")
             |> Array.toList
             |> List.collect (fun (sid, groupTests) ->
-              let targetSession = if System.String.IsNullOrEmpty sid then None else Some sid
+              let targetSession = match System.String.IsNullOrEmpty sid with | true -> None | false -> Some sid
               let groupIds = groupTests |> Array.map (fun tc -> tc.Id)
               Features.LiveTesting.LiveTestPipelineState.triggerExecutionForAffected
                 groupIds Features.LiveTesting.RunTrigger.ExplicitRun targetSession lt
               |> List.map SageFsEffect.Pipeline)
-          else []
         { model with LiveTesting = lt }, effects
 
     | SageFsMsg.DisableLiveTesting ->
-      if model.LiveTesting.TestState.Activation = Features.LiveTesting.LiveTestingActivation.Inactive then
+      match model.LiveTesting.TestState.Activation = Features.LiveTesting.LiveTestingActivation.Inactive with
+      | true ->
         model, []
-      else
+      | false ->
         let lt = recomputeStatuses model.LiveTesting (fun s -> { s with Activation = Features.LiveTesting.LiveTestingActivation.Inactive })
         { model with LiveTesting = lt }, []
 
@@ -612,13 +628,14 @@ module SageFsUpdate =
       { model with LiveTesting = pipeline' }, mappedEffects
 
     | SageFsMsg.FileContentChanged (filePath, content) ->
-      if model.LiveTesting.TestState.Activation = Features.LiveTesting.LiveTestingActivation.Active then
+      match model.LiveTesting.TestState.Activation = Features.LiveTesting.LiveTestingActivation.Active with
+      | true ->
         let now = DateTimeOffset.UtcNow
         let pipeline' =
           model.LiveTesting
           |> Features.LiveTesting.LiveTestPipelineState.onKeystroke content filePath now
         { model with LiveTesting = pipeline' }, []
-      else
+      | false ->
         model, []
 
     | SageFsMsg.FcsTypeCheckCompleted result ->
@@ -727,37 +744,47 @@ module SageFsRender =
             | SessionDisplayStatus.Suspended -> "suspended"
             | SessionDisplayStatus.Stale -> "stale"
             | SessionDisplayStatus.Restarting -> "restarting"
-          let active = if s.IsActive then " *" else ""
-          let selected = if model.Editor.SelectedSessionIndex = Some i then ">" else " "
+          let active = match s.IsActive with | true -> " *" | false -> ""
+          let selected = match model.Editor.SelectedSessionIndex = Some i with | true -> ">" | false -> " "
           let projects =
-            if s.Projects.IsEmpty then ""
-            else sprintf " (%s)" (s.Projects |> List.map System.IO.Path.GetFileNameWithoutExtension |> String.concat ", ")
+            match s.Projects.IsEmpty with
+            | true -> ""
+            | false -> sprintf " (%s)" (s.Projects |> List.map System.IO.Path.GetFileNameWithoutExtension |> String.concat ", ")
           let evals =
-            if s.EvalCount > 0 then sprintf " evals:%d" s.EvalCount else ""
+            match s.EvalCount > 0 with
+            | true -> sprintf " evals:%d" s.EvalCount
+            | false -> ""
           let uptime =
             let ts = now - s.UpSince
-            if ts.TotalDays >= 1.0 then sprintf " up:%dd%dh" (int ts.TotalDays) ts.Hours
-            elif ts.TotalHours >= 1.0 then sprintf " up:%dh%dm" (int ts.TotalHours) ts.Minutes
-            elif ts.TotalMinutes >= 1.0 then sprintf " up:%dm" (int ts.TotalMinutes)
-            else " up:just now"
+            match ts with
+            | ts when ts.TotalDays >= 1.0 -> sprintf " up:%dd%dh" (int ts.TotalDays) ts.Hours
+            | ts when ts.TotalHours >= 1.0 -> sprintf " up:%dh%dm" (int ts.TotalHours) ts.Minutes
+            | ts when ts.TotalMinutes >= 1.0 -> sprintf " up:%dm" (int ts.TotalMinutes)
+            | _ -> " up:just now"
           let dir =
-            if s.WorkingDirectory.Length > 0 then sprintf " dir:%s" s.WorkingDirectory
-            else ""
+            match s.WorkingDirectory.Length > 0 with
+            | true -> sprintf " dir:%s" s.WorkingDirectory
+            | false -> ""
           let lastAct =
             let diff = now - s.LastActivity
-            if diff.TotalSeconds < 60.0 then " last:just now"
-            elif diff.TotalMinutes < 60.0 then sprintf " last:%dm ago" (int diff.TotalMinutes)
-            elif diff.TotalHours < 24.0 then sprintf " last:%dh ago" (int diff.TotalHours)
-            else sprintf " last:%dd ago" (int diff.TotalDays)
+            match diff with
+            | diff when diff.TotalSeconds < 60.0 -> " last:just now"
+            | diff when diff.TotalMinutes < 60.0 -> sprintf " last:%dm ago" (int diff.TotalMinutes)
+            | diff when diff.TotalHours < 24.0 -> sprintf " last:%dh ago" (int diff.TotalHours)
+            | _ -> sprintf " last:%dd ago" (int diff.TotalDays)
           sprintf "%s %s [%s]%s%s%s%s%s%s" selected s.Id statusLabel active projects evals uptime dir lastAct)
         |> String.concat "\n"
         |> fun s ->
           let creatingLine =
-            if model.CreatingSession then "\n⏳ Creating session..."
-            else ""
-          if s.Length > 0 then sprintf "%s%s\n... ↑↓ nav · Enter switch · Del stop · ^Tab cycle" s creatingLine
-          else if model.CreatingSession then "⏳ Creating session..."
-          else s
+            match model.CreatingSession with
+            | true -> "\n⏳ Creating session..."
+            | false -> ""
+          match s.Length > 0 with
+          | true -> sprintf "%s%s\n... ↑↓ nav · Enter switch · Del stop · ^Tab cycle" s creatingLine
+          | false ->
+            match model.CreatingSession with
+            | true -> "⏳ Creating session..."
+            | false -> s
       Affordances = []
       Cursor = None
       Completions = None
@@ -1031,7 +1058,8 @@ module SageFsEffectHandler =
               let code =
                 try System.IO.File.ReadAllText(filePath)
                 with _ -> ""
-              if code <> "" then
+              match code <> "" with
+              | true ->
                 let replyId = newReplyId ()
                 let! resp = proxy (WorkerMessage.TypeCheckWithSymbols(code, filePath, replyId))
                 fcsStopwatch.Stop()
@@ -1040,9 +1068,10 @@ module SageFsEffectHandler =
                 let result =
                   match resp with
                   | WorkerResponse.TypeCheckWithSymbolsResult(_rid, hasErrors, _diags, symRefs) ->
-                    if hasErrors then
+                    match hasErrors with
+                    | true ->
                       Features.LiveTesting.FcsTypeCheckResult.Failed(filePath, [])
-                    else
+                    | false ->
                       let refs = symRefs |> List.map WorkerProtocol.WorkerSymbolRef.toDomain
                       Features.LiveTesting.FcsTypeCheckResult.Success(filePath, refs)
                   | _ ->
@@ -1056,10 +1085,12 @@ module SageFsEffectHandler =
                 }
                 dispatch (SageFsMsg.Event (SageFsEvent.PipelineTimingRecorded timing))
                 Instrumentation.succeedSpan span
+              | false -> ()
             })
         | Features.LiveTesting.PipelineEffect.RunAffectedTests (tests, trigger, tsElapsed, fcsElapsed, targetSession, instrumentationMaps) ->
-          if Array.isEmpty tests then ()
-          else
+          match Array.isEmpty tests with
+          | true -> ()
+          | false ->
             let testIds = tests |> Array.map (fun tc -> tc.Id)
             dispatch (SageFsMsg.Event (SageFsEvent.TestRunStarted (testIds, targetSession)))
             let ct = deps.PipelineCancellation.TestRun.next()
@@ -1090,25 +1121,32 @@ module SageFsEffectHandler =
                       let mutable item = Unchecked.defaultof<_>
                       while resultBuffer.TryDequeue(&item) do
                         batch.Add(item)
-                      if batch.Count > 0 then
+                      match batch.Count > 0 with
+                      | true ->
                         Instrumentation.testResultBatchSize.Record(int64 batch.Count)
                         dispatch (SageFsMsg.Event (SageFsEvent.TestResultsBatch (batch.ToArray())))
+                      | false -> ()
                     let batchSize = 50
                     let onResult (result: Features.LiveTesting.TestRunResult) =
                       resultBuffer.Enqueue(result)
-                      if resultBuffer.Count >= batchSize then
-                        flushBuffer ()
+                      match resultBuffer.Count >= batchSize with
+                      | true -> flushBuffer ()
+                      | false -> ()
                     let onCoverage (hits: bool array) =
                       let mergedMap = Features.LiveTesting.InstrumentationMap.merge instrumentationMaps
-                      if mergedMap.TotalProbes > 0 && hits.Length = mergedMap.TotalProbes then
+                      match mergedMap.TotalProbes > 0 && hits.Length = mergedMap.TotalProbes with
+                      | true ->
                         let coverage = Features.LiveTesting.InstrumentationMap.toCoverageState hits mergedMap
                         dispatch (SageFsMsg.Event (SageFsEvent.CoverageUpdated coverage))
                         let bitmap = Features.LiveTesting.CoverageBitmap.ofBoolArray hits
                         dispatch (SageFsMsg.Event (SageFsEvent.CoverageBitmapCollected (testIds, bitmap)))
-                        if activity <> null then
+                        match activity <> null with
+                        | true ->
                           activity.SetTag("coverage.total_probes", hits.Length) |> ignore
                           activity.SetTag("coverage.hit_probes", Features.LiveTesting.CoverageBitmap.popCount bitmap) |> ignore
                           activity.SetTag("coverage.tests_in_batch", testIds.Length) |> ignore
+                        | false -> ()
+                      | false -> ()
                     do! streamProxy tests 4 onResult onCoverage
                     flushBuffer () // flush any remaining results
                   | None ->
@@ -1134,10 +1172,12 @@ module SageFsEffectHandler =
                 let endToEndMs = tsElapsed.TotalMilliseconds + fcsElapsed.TotalMilliseconds + sw.Elapsed.TotalMilliseconds
                 Instrumentation.pipelineEndToEnd.Record(endToEndMs)
                 Features.LiveTesting.LiveTestingInstrumentation.executionHistogram.Record(sw.Elapsed.TotalMilliseconds)
-                if activity <> null then
+                match activity <> null with
+                | true ->
                   activity.SetTag("test_count", tests.Length) |> ignore
                   activity.SetTag("trigger", sprintf "%A" trigger) |> ignore
                   activity.SetTag("duration_ms", sw.Elapsed.TotalMilliseconds) |> ignore
+                | false -> ()
                 dispatch (SageFsMsg.Event (SageFsEvent.TestRunCompleted targetSession))
                 let timing : Features.LiveTesting.PipelineTiming = {
                   Depth = Features.LiveTesting.PipelineDepth.ThroughExecution(
