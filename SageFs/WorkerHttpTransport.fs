@@ -234,19 +234,21 @@ module WorkerHttpTransport =
         let mutable keepReading = true
         while keepReading do
           let! canRead = channel.Reader.WaitToReadAsync(ctx.RequestAborted)
-          if canRead then
+          match canRead with
+          | true ->
             let mutable hasItem = true
             while hasItem do
               let (success, result) = channel.Reader.TryRead()
-              if success then
+              match success with
+              | true ->
                 let json = Serialization.serialize result
                 let line = sprintf "data: %s\n\n" json
                 let bytes = Text.Encoding.UTF8.GetBytes(line)
                 do! writer.WriteAsync(bytes, 0, bytes.Length)
                 do! writer.FlushAsync()
-              else
+              | false ->
                 hasItem <- false
-          else
+          | false ->
             keepReading <- false
 
         let doneBytes = Text.Encoding.UTF8.GetBytes("event: done\ndata: {}\n\n")

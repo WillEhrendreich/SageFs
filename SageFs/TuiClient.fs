@@ -79,12 +79,13 @@ let run (daemonInfo: DaemonInfo) = task {
       try
         let sw = System.Diagnostics.Stopwatch.StartNew()
         let statusLeft =
-          let sid = if lastSessionId.Length > 8 then lastSessionId.[..7] else lastSessionId
-          let standby = if lastStandbyLabel.Length > 0 then sprintf " | %s" lastStandbyLabel else ""
-          let liveTesting = if lastLiveTestingStatus.Length > 0 then sprintf " | %s" lastLiveTestingStatus else ""
-          if lastEvalCount > 0 then
+          let sid = match lastSessionId.Length > 8 with | true -> lastSessionId.[..7] | false -> lastSessionId
+          let standby = match lastStandbyLabel.Length > 0 with | true -> sprintf " | %s" lastStandbyLabel | false -> ""
+          let liveTesting = match lastLiveTestingStatus.Length > 0 with | true -> sprintf " | %s" lastLiveTestingStatus | false -> ""
+          match lastEvalCount > 0 with
+          | true ->
             sprintf " %s %s | evals: %d (avg %.0fms)%s%s | %s" sid lastSessionState lastEvalCount lastAvgMs standby liveTesting (PaneId.displayName focusedPane)
-          else
+          | false ->
             sprintf " %s %s | evals: %d%s%s | %s" sid lastSessionState lastEvalCount standby liveTesting (PaneId.displayName focusedPane)
         let statusRight = sprintf " %s | %.1fms |%s" currentThemeName lastFrameMs (StatusHints.build keyMap focusedPane layoutConfig.VisiblePanes)
         let cursorPos = Screen.drawWith layoutConfig currentTheme grid lastRegions focusedPane scrollOffsets statusLeft statusRight
@@ -96,8 +97,9 @@ let run (daemonInfo: DaemonInfo) = task {
           match prevGrid with
           | None -> AnsiEmitter.emit grid cursorRow cursorCol
           | Some prev -> AnsiEmitter.emitDiff prev grid cursorRow cursorCol
-        if output.Length > 0 then
-          Console.Write(output)
+        match output.Length > 0 with
+        | true -> Console.Write(output)
+        | false -> ()
         prevGrid <- Some (CellGrid.clone grid)
         sw.Stop()
         lastFrameMs <- sw.Elapsed.TotalMilliseconds
@@ -111,8 +113,8 @@ let run (daemonInfo: DaemonInfo) = task {
     DaemonClient.runSseListener
       baseUrl
       (fun event regions ->
-        // Detect session switch by working directory change
-        if event.ActiveWorkingDir.Length > 0 && event.ActiveWorkingDir <> lastWorkingDir && lastWorkingDir.Length > 0 then
+        match event.ActiveWorkingDir.Length > 0 && event.ActiveWorkingDir <> lastWorkingDir && lastWorkingDir.Length > 0 with
+        | true ->
           sessionThemes.[lastWorkingDir] <- currentThemeName
           match sessionThemes.TryGetValue(event.ActiveWorkingDir) with
           | true, themeName ->
@@ -122,8 +124,10 @@ let run (daemonInfo: DaemonInfo) = task {
               currentThemeName <- themeName
             | None -> ()
           | false, _ -> ()
-        if event.ActiveWorkingDir.Length > 0 then
-          lastWorkingDir <- event.ActiveWorkingDir
+        | false -> ()
+        match event.ActiveWorkingDir.Length > 0 with
+        | true -> lastWorkingDir <- event.ActiveWorkingDir
+        | false -> ()
         lastSessionId <- event.SessionId
         lastSessionState <- event.SessionState
         lastEvalCount <- event.EvalCount
@@ -144,7 +148,8 @@ let run (daemonInfo: DaemonInfo) = task {
       // Check for terminal resize
       let newRows = Console.WindowHeight
       let newCols = Console.WindowWidth
-      if newRows <> gridRows || newCols <> gridCols then
+      match newRows <> gridRows || newCols <> gridCols with
+      | true ->
         gridRows <- newRows
         gridCols <- newCols
         grid <- CellGrid.create gridRows gridCols
@@ -152,6 +157,7 @@ let run (daemonInfo: DaemonInfo) = task {
         lock TerminalUIState.consoleLock (fun () ->
           Console.Write(AnsiCodes.clearScreen))
         render ()
+      | false -> ()
 
       // Process raw stdin chars through VT parser
       ConsoleInput.RawInput.processChars ()
@@ -175,19 +181,25 @@ let run (daemonInfo: DaemonInfo) = task {
             match clicked with
             | Some (id, r) ->
               focusedPane <- id
-              if id = PaneId.Editor then
+              match id with
+              | PaneId.Editor ->
                 let contentRow = me.Row - r.Row - 1
                 let contentCol = me.Col - r.Col - 1
-                if contentRow >= 0 && contentCol >= 0 then
+                match contentRow >= 0 && contentCol >= 0 with
+                | true ->
                   let scrollOff = scrollOffsets |> Map.tryFind PaneId.Editor |> Option.defaultValue 0
                   let line = contentRow + scrollOff
                   do! DaemonClient.dispatch client baseUrl (EditorAction.SetCursorPosition (line, contentCol))
-              elif id = PaneId.Sessions then
+                | false -> ()
+              | PaneId.Sessions ->
                 let contentRow = me.Row - r.Row - 1
                 let scrollOff = scrollOffsets |> Map.tryFind PaneId.Sessions |> Option.defaultValue 0
                 let sessionIdx = contentRow + scrollOff
-                if contentRow >= 0 then
+                match contentRow >= 0 with
+                | true ->
                   do! DaemonClient.dispatch client baseUrl (EditorAction.SessionSetIndex sessionIdx)
+                | false -> ()
+              | _ -> ()
             | None -> ()
             render ()
           | MouseAction.WheelUp ->
@@ -229,8 +241,9 @@ let run (daemonInfo: DaemonInfo) = task {
             match PaneId.tryParse paneName with
             | Some pid ->
               layoutConfig <- LayoutConfig.togglePane pid layoutConfig
-              if not (layoutConfig.VisiblePanes.Contains focusedPane) then
-                focusedPane <- PaneId.firstVisible layoutConfig.VisiblePanes
+              match layoutConfig.VisiblePanes.Contains focusedPane with
+              | false -> focusedPane <- PaneId.firstVisible layoutConfig.VisiblePanes
+              | true -> ()
               render ()
             | None -> ()
           | Some (TerminalCommand.LayoutPreset presetName) ->
@@ -239,8 +252,9 @@ let run (daemonInfo: DaemonInfo) = task {
               | "focus" -> LayoutConfig.focus
               | "minimal" -> LayoutConfig.minimal
               | _ -> LayoutConfig.defaults
-            if not (layoutConfig.VisiblePanes.Contains focusedPane) then
-              focusedPane <- PaneId.firstVisible layoutConfig.VisiblePanes
+            match layoutConfig.VisiblePanes.Contains focusedPane with
+            | false -> focusedPane <- PaneId.firstVisible layoutConfig.VisiblePanes
+            | true -> ()
             render ()
           | Some (TerminalCommand.ResizeH d) ->
             layoutConfig <- LayoutConfig.resizeH d layoutConfig
@@ -255,21 +269,26 @@ let run (daemonInfo: DaemonInfo) = task {
             let name, theme = ThemePresets.cycleNext currentTheme
             currentTheme <- theme
             currentThemeName <- name
-            if lastWorkingDir.Length > 0 then
-              sessionThemes.[lastWorkingDir] <- name
+            match lastWorkingDir.Length > 0 with
+            | true -> sessionThemes.[lastWorkingDir] <- name
+            | false -> ()
             render ()
           | Some TerminalCommand.HotReloadWatchAll ->
-            if lastSessionId.Length > 0 then
+            match lastSessionId.Length > 0 with
+            | true ->
               try
                 let! _ = client.PostAsync(sprintf "%s/api/sessions/%s/hotreload/watch-all" baseUrl lastSessionId, new StringContent("{}", System.Text.Encoding.UTF8, "application/json"))
                 ()
               with _ -> ()
+            | false -> ()
           | Some TerminalCommand.HotReloadUnwatchAll ->
-            if lastSessionId.Length > 0 then
+            match lastSessionId.Length > 0 with
+            | true ->
               try
                 let! _ = client.PostAsync(sprintf "%s/api/sessions/%s/hotreload/unwatch-all" baseUrl lastSessionId, new StringContent("{}", System.Text.Encoding.UTF8, "application/json"))
                 ()
               with _ -> ()
+            | false -> ()
           | Some TerminalCommand.EnableLiveTesting ->
             do! DaemonClient.dispatchAction client baseUrl "enableLiveTesting" None |> Async.AwaitTask
             render ()
@@ -283,9 +302,9 @@ let run (daemonInfo: DaemonInfo) = task {
             do! DaemonClient.dispatchAction client baseUrl "toggleCoverage" None |> Async.AwaitTask
             render ()
           | Some (TerminalCommand.Action action) ->
-            // When Sessions pane is focused, remap movement keys
             let remappedAction =
-              if focusedPane = PaneId.Sessions then
+              match focusedPane = PaneId.Sessions with
+              | true ->
                 match action with
                 | EditorAction.MoveCursor Direction.Up -> EditorAction.SessionNavUp
                 | EditorAction.MoveCursor Direction.Down -> EditorAction.SessionNavDown
@@ -293,23 +312,26 @@ let run (daemonInfo: DaemonInfo) = task {
                 | EditorAction.DeleteBackward -> EditorAction.SessionDelete
                 | EditorAction.DeleteForward -> EditorAction.SessionDelete
                 | other -> other
-              else action
+              | false -> action
             do! DaemonClient.dispatch client baseUrl remappedAction
           | None ->
-            // No keymap match — try printable char insertion
-            if ch >= ' ' && ch <= '~' then
+            match ch with
+            | c when c >= ' ' && c <= '~' ->
               do! DaemonClient.dispatch client baseUrl (EditorAction.InsertChar ch)
-            elif ch > '\x7f' then
+            | c when c > '\x7f' ->
               do! DaemonClient.dispatch client baseUrl (EditorAction.InsertChar ch)
+            | _ -> ()
 
         | None -> ()
 
         ev <- ConsoleInput.RawInput.tryRead ()
 
-      if not hadInput then
+      match hadInput with
+      | false ->
         try
           do! Threading.Tasks.Task.Delay(8, cts.Token)
         with :? OperationCanceledException -> ()
+      | true -> ()
   finally
     ConsoleInput.RawInput.stop ()
     TerminalMode.restoreConsole ()

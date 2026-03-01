@@ -58,7 +58,7 @@ WORKFLOW: Use this tool instead of dotnet build or dotnet run. SageFs IS your co
         [<Description("Working directory of the MCP client. When provided, automatically resolves the correct session for this directory without requiring manual switch_session calls.")>]
         working_directory: string
     ) : Task<string> =
-        let wd = if System.String.IsNullOrWhiteSpace working_directory then None else Some working_directory
+        let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
         logger.LogDebug("MCP-TOOL: send_fsharp_code called by {AgentName}: {Code}", agentName, code)
         SageFs.Instrumentation.mcpToolInvocations.Add(1L)
         sendFSharpCode ctx agentName code OutputFormat.Text None wd
@@ -71,7 +71,7 @@ WORKFLOW: Use this tool instead of dotnet build or dotnet run. SageFs IS your co
         [<Description("Working directory of the MCP client. When provided, automatically resolves the correct session for this directory without requiring manual switch_session calls.")>]
         working_directory: string
     ) : Task<string> = 
-        let wd = if System.String.IsNullOrWhiteSpace working_directory then None else Some working_directory
+        let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
         logger.LogDebug("MCP-TOOL: load_fsharp_script called: {FilePath}", filePath)
         loadFSharpScript ctx agentName filePath None wd |> withEcho "load_fsharp_script"
     
@@ -82,7 +82,7 @@ WORKFLOW: Use this tool instead of dotnet build or dotnet run. SageFs IS your co
         [<Description("Working directory of the MCP client. When provided, automatically resolves the correct session for this directory without requiring manual switch_session calls.")>]
         working_directory: string
     ) : Task<string> = 
-        let wd = if System.String.IsNullOrWhiteSpace working_directory then None else Some working_directory
+        let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
         let eventCount = defaultArg count 10
         logger.LogDebug("MCP-TOOL: get_recent_fsi_events called: count={Count}", eventCount)
         getRecentEvents ctx "mcp" eventCount wd |> withEcho "get_recent_fsi_events"
@@ -93,7 +93,7 @@ WORKFLOW: Use this tool instead of dotnet build or dotnet run. SageFs IS your co
         [<Description("Working directory of the MCP client. When provided, automatically resolves the correct session for this directory without requiring manual switch_session calls.")>]
         working_directory: string
     ) : Task<string> =
-        let wd = if System.String.IsNullOrWhiteSpace working_directory then None else Some working_directory
+        let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
         logger.LogDebug("MCP-TOOL: get_fsi_status called: workingDir={Dir}", working_directory)
         getStatus ctx "mcp" None wd |> withEcho "get_fsi_status"
 
@@ -103,7 +103,7 @@ WORKFLOW: Use this tool instead of dotnet build or dotnet run. SageFs IS your co
         [<Description("Working directory of the MCP client. When provided, automatically resolves the correct session for this directory without requiring manual switch_session calls.")>]
         working_directory: string
     ) : Task<string> =
-        let wd = if System.String.IsNullOrWhiteSpace working_directory then None else Some working_directory
+        let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
         logger.LogDebug("MCP-TOOL: get_startup_info called")
         getStartupInfo ctx "mcp" wd |> withEcho "get_startup_info"
 
@@ -113,7 +113,7 @@ WORKFLOW: Use this tool instead of dotnet build or dotnet run. SageFs IS your co
         [<Description("Working directory of the MCP client. When provided, automatically resolves the correct session for this directory without requiring manual switch_session calls.")>]
         working_directory: string
     ) : Task<string> =
-        let wd = if System.String.IsNullOrWhiteSpace working_directory then None else Some working_directory
+        let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
         logger.LogDebug("MCP-TOOL: get_available_projects called")
         getAvailableProjects ctx "mcp" wd |> withEcho "get_available_projects"
 
@@ -134,7 +134,7 @@ This is a SOFT reset — DLL locks are retained. Use hard_reset_fsi_session only
         [<Description("Working directory of the MCP client. When provided, automatically resolves the correct session for this directory without requiring manual switch_session calls.")>]
         working_directory: string
     ) : Task<string> =
-        let wd = if System.String.IsNullOrWhiteSpace working_directory then None else Some working_directory
+        let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
         logger.LogDebug("MCP-TOOL: reset_fsi_session called")
         resetSession ctx "mcp" None wd |> withEcho "reset_fsi_session"
 
@@ -171,7 +171,7 @@ The full pack/reinstall cycle is only needed when SageFs's own source code chang
         [<Description("Working directory of the MCP client. When provided, automatically resolves the correct session for this directory without requiring manual switch_session calls.")>]
         working_directory: string
     ) : Task<string> =
-        let wd = if System.String.IsNullOrWhiteSpace working_directory then None else Some working_directory
+        let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
         let doRebuild = defaultArg rebuild false
         logger.LogDebug("MCP-TOOL: hard_reset_fsi_session called, rebuild={Rebuild}", doRebuild)
         hardResetSession ctx "mcp" doRebuild None wd |> withEcho "hard_reset_fsi_session"
@@ -186,7 +186,7 @@ WORKFLOW: Use this instead of dotnet build for type-checking. SageFs IS your com
         [<Description("Working directory of the MCP client. When provided, automatically resolves the correct session for this directory without requiring manual switch_session calls.")>]
         working_directory: string
     ) : Task<string> =
-        let wd = if System.String.IsNullOrWhiteSpace working_directory then None else Some working_directory
+        let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
         logger.LogDebug("MCP-TOOL: check_fsharp_code called")
         checkFSharpCode ctx "mcp" code None wd |> withEcho "check_fsharp_code"
 
@@ -196,7 +196,7 @@ WORKFLOW: Use this instead of dotnet build for type-checking. SageFs IS your com
         [<Description("Working directory of the MCP client. When provided, automatically resolves the correct session for this directory without requiring manual switch_session calls.")>]
         working_directory: string
     ) : Task<string> =
-        let wd = if System.String.IsNullOrWhiteSpace working_directory then None else Some working_directory
+        let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
         logger.LogDebug("MCP-TOOL: cancel_eval called")
         cancelEval ctx "mcp" wd |> withEcho "cancel_eval"
 
@@ -208,7 +208,7 @@ WORKFLOW: Use this instead of dotnet build for type-checking. SageFs IS your com
         [<Description("Working directory of the MCP client. When provided, automatically resolves the correct session for this directory without requiring manual switch_session calls.")>]
         working_directory: string
     ) : Task<string> =
-        let wd = if System.String.IsNullOrWhiteSpace working_directory then None else Some working_directory
+        let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
         logger.LogDebug("MCP-TOOL: get_completions called")
         getCompletions ctx "mcp" code cursor_position wd |> withEcho "get_completions"
 
@@ -223,7 +223,7 @@ Examples: 'System.Collections.Generic', 'Microsoft.FSharp.Collections', 'FSharp.
         [<Description("Working directory of the MCP client. When provided, automatically resolves the correct session for this directory without requiring manual switch_session calls.")>]
         working_directory: string
     ) : Task<string> =
-        let wd = if System.String.IsNullOrWhiteSpace working_directory then None else Some working_directory
+        let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
         logger.LogDebug("MCP-TOOL: explore_namespace called: {Namespace}", namespaceName)
         exploreNamespace ctx "mcp" namespaceName wd |> withEcho "explore_namespace"
 
@@ -236,7 +236,7 @@ Examples: 'System.String', 'System.Collections.Generic.List', 'Microsoft.FSharp.
         [<Description("Working directory of the MCP client. When provided, automatically resolves the correct session for this directory without requiring manual switch_session calls.")>]
         working_directory: string
     ) : Task<string> =
-        let wd = if System.String.IsNullOrWhiteSpace working_directory then None else Some working_directory
+        let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
         logger.LogDebug("MCP-TOOL: explore_type called: {Type}", typeName)
         exploreType ctx "mcp" typeName wd |> withEcho "explore_type"
 
@@ -295,7 +295,7 @@ Supports optional file filter to get only tests from a specific source file.""")
         [<Description("Optional file path to filter tests by source file.")>]
         file: string
     ) : Task<string> =
-        let filter = if System.String.IsNullOrWhiteSpace file then None else Some file
+        let filter = match System.String.IsNullOrWhiteSpace file with | true -> None | false -> Some file
         logger.LogDebug("MCP-TOOL: get_live_test_status called, file={File}", file)
         getLiveTestStatus ctx filter |> withEcho "get_live_test_status"
 
@@ -343,8 +343,8 @@ Use timeout_seconds to wait for results (default 30). Set to 0 for fire-and-forg
         [<Description("Seconds to wait for test completion (default 30, 0 = fire-and-forget)")>]
         timeout_seconds: int
     ) : Task<string> =
-        let p = if System.String.IsNullOrWhiteSpace pattern then None else Some pattern
-        let c = if System.String.IsNullOrWhiteSpace category then None else Some category
-        let t = if timeout_seconds <= 0 then 0 else timeout_seconds
+        let p = match System.String.IsNullOrWhiteSpace pattern with | true -> None | false -> Some pattern
+        let c = match System.String.IsNullOrWhiteSpace category with | true -> None | false -> Some category
+        let t = match timeout_seconds <= 0 with | true -> 0 | false -> timeout_seconds
         logger.LogDebug("MCP-TOOL: run_tests called, pattern={Pattern}, category={Category}, timeout={Timeout}", pattern, category, t)
         runTests ctx p c t |> withEcho "run_tests"

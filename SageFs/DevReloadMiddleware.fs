@@ -34,9 +34,10 @@ let sseHandler (ctx: HttpContext) = task {
 /// or via Falco: webHost [||] { use_middleware middleware ... }
 let middleware (next: RequestDelegate) =
   RequestDelegate(fun ctx -> task {
-    if ctx.Request.Path.Value = "/__sagefs__/reload" then
+    match ctx.Request.Path.Value = "/__sagefs__/reload" with
+    | true ->
       do! sseHandler ctx
-    else
+    | false ->
       use ms = new MemoryStream()
       let originalBody = ctx.Response.Body
       ctx.Response.Body <- ms
@@ -47,18 +48,18 @@ let middleware (next: RequestDelegate) =
         responseContentType.Contains("text/html") &&
         ctx.Response.StatusCode >= 200 &&
         ctx.Response.StatusCode < 300
-      if shouldInject then
+      match shouldInject with
+      | true ->
         let content = (new StreamReader(ms, Encoding.UTF8, leaveOpen = true)).ReadToEnd()
         let injected =
-          if content.Contains("</body>") then
-            content.Replace("</body>", reloadScript + "</body>")
-          else
-            content
+          match content.Contains("</body>") with
+          | true -> content.Replace("</body>", reloadScript + "</body>")
+          | false -> content
         let bytes = Encoding.UTF8.GetBytes(injected)
         ctx.Response.ContentLength <- Nullable(int64 bytes.Length)
         ctx.Response.Body <- originalBody
         do! originalBody.WriteAsync(ReadOnlyMemory bytes)
-      else
+      | false ->
         ms.Position <- 0L
         ctx.Response.Body <- originalBody
         do! ms.CopyToAsync(originalBody)

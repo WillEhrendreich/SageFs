@@ -22,9 +22,9 @@ let toStatusSnapshot
   (statusMsg: string option)
   : WorkerStatusSnapshot =
   let avg =
-    if stats.EvalCount > 0 then
-      stats.TotalDuration.TotalMilliseconds / float stats.EvalCount |> int64
-    else 0L
+    match stats.EvalCount > 0 with
+    | true -> stats.TotalDuration.TotalMilliseconds / float stats.EvalCount |> int64
+    | false -> 0L
   let status =
     match state with
     | SessionState.Uninitialized
@@ -208,8 +208,9 @@ let run (sessionId: string) (port: int) (args: Args.Arguments list) = async {
         let hr =
           Features.LiveTesting.LiveTestingHook.afterReload
             Features.LiveTesting.BuiltInExecutors.builtIn asm []
-        if hr.DiscoveredTests.Length > 0 then Some hr
-        else None
+        match hr.DiscoveredTests.Length > 0 with
+        | true -> Some hr
+        | false -> None
       with _ -> None)
 
   let initialDiscoveredTests =
@@ -225,11 +226,12 @@ let run (sessionId: string) (port: int) (args: Args.Arguments list) = async {
 
   let projectRunTest =
     let runTests = projectDiscoveryResults |> Array.map (fun r -> r.RunTest)
-    if runTests.Length = 0 then
+    match runTests.Length with
+    | 0 ->
       Features.LiveTesting.LiveTestHookResult.noOp
-    elif runTests.Length = 1 then
+    | 1 ->
       runTests.[0]
-    else
+    | _ ->
       fun (tc: Features.LiveTesting.TestCase) ->
         let rec tryRunners (idx: int) remaining = async {
           match remaining with
@@ -260,9 +262,9 @@ let run (sessionId: string) (port: int) (args: Args.Arguments list) = async {
   // Start file watcher unless --no-watch was passed
   let noWatch = args |> List.exists (function Args.No_Watch -> true | _ -> false)
   let fileWatcher =
-    if noWatch || List.isEmpty result.ProjectDirectories then
-      None
-    else
+    match noWatch || List.isEmpty result.ProjectDirectories with
+    | true -> None
+    | false ->
       let config = FileWatcher.defaultWatchConfig result.ProjectDirectories
       let onFileChanged (change: FileWatcher.FileChange) =
         let ext = IO.Path.GetExtension(change.FilePath)
@@ -278,9 +280,9 @@ let run (sessionId: string) (port: int) (args: Args.Arguments list) = async {
         Async.Start(async {
           match FileWatcher.fileChangeAction change with
           | FileWatcher.FileChangeAction.Reload filePath ->
-            if not (HotReloadState.isWatched filePath !result.HotReloadStateRef) then
-              () // File not opted-in for hot-reload
-            else
+            match HotReloadState.isWatched filePath !result.HotReloadStateRef with
+            | false -> ()
+            | true ->
             let code = sprintf "#load @\"%s\"" filePath
             let request = { Code = code; Args = Map.ofList ["hotReload", box true] }
             use localCts = new CancellationTokenSource()
@@ -302,9 +304,10 @@ let run (sessionId: string) (port: int) (args: Args.Arguments list) = async {
                   | _ -> None)
                 |> Option.defaultValue []
               let fileName = IO.Path.GetFileName filePath
-              if not (List.isEmpty reloaded) then
+              match List.isEmpty reloaded with
+              | false ->
                 eprintfn "🔥 Hot reloaded %s: %s" fileName (String.Join(", ", reloaded))
-              else
+              | true ->
                 eprintfn "📄 Reloaded %s" fileName
             | Error ex ->
               eprintfn "⚠️ Reload failed for %s: %s" (IO.Path.GetFileName filePath) (ex.Message)
@@ -345,14 +348,15 @@ let run (sessionId: string) (port: int) (args: Args.Arguments list) = async {
     let projectFiles =
       result.ProjectDirectories
       |> List.collect (fun dir ->
-        if IO.Directory.Exists(dir) then
+        match IO.Directory.Exists(dir) with
+        | true ->
           IO.Directory.GetFiles(dir, "*.fs", IO.SearchOption.AllDirectories)
           |> Array.append (IO.Directory.GetFiles(dir, "*.fsx", IO.SearchOption.AllDirectories))
           |> Array.toList
           |> List.filter (fun f ->
             let n = f.Replace('\\', '/')
             not (n.Contains("/obj/") || n.Contains("/bin/")))
-        else [])
+        | false -> [])
     let! server =
       WorkerHttpTransport.startServer readyHandler result.HotReloadStateRef projectFiles result.GetWarmupContext getRunTest port
       |> Async.AwaitTask

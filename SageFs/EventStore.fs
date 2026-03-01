@@ -16,8 +16,8 @@ type FilteringTextWriter(inner: TextWriter) =
         || (s.Contains("System.IO.FileNotFoundException") && s.Contains("Microsoft.Build")))
   override _.Encoding = inner.Encoding
   override _.Write(value: char) = inner.Write(value)
-  override _.Write(value: string) = if not (isNoise value) then inner.Write(value)
-  override _.WriteLine(value: string) = if not (isNoise value) then inner.WriteLine(value)
+  override _.Write(value: string) = match isNoise value with | false -> inner.Write(value) | true -> ()
+  override _.WriteLine(value: string) = match isNoise value with | false -> inner.WriteLine(value) | true -> ()
   override _.WriteLine() = inner.WriteLine()
   override _.Flush() = inner.Flush()
 

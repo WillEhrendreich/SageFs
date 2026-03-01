@@ -20,8 +20,9 @@ let run
     match pid with
     | None -> DaemonStatus.NotRunning
     | Some pid ->
-      if DaemonState.isProcessAlive pid then DaemonStatus.Running
-      else DaemonStatus.NotRunning
+      match DaemonState.isProcessAlive pid with
+      | true -> DaemonStatus.Running
+      | false -> DaemonStatus.NotRunning
 
   let startDaemon () =
     let exePath =

@@ -25,12 +25,12 @@ type VtInputParser() =
   let emitMouse me = events.Enqueue(InputEvent.MouseEvent me)
 
   let parseCsiCommand (rawParams: string) (cmd: char) =
-    let parts = if rawParams.Length > 0 then rawParams.Split(';') else [||]
+    let parts = match rawParams.Length > 0 with | true -> rawParams.Split(';') | false -> [||]
     let param n =
-      if n < parts.Length then
-        match Int32.TryParse(parts.[n]) with true, v -> v | _ -> 0
-      else 0
-    let modCode = if parts.Length >= 2 then param (parts.Length - 1) else 1
+      match n < parts.Length with
+      | true -> match Int32.TryParse(parts.[n]) with true, v -> v | _ -> 0
+      | false -> 0
+    let modCode = match parts.Length >= 2 with | true -> param (parts.Length - 1) | false -> 1
     let mods =
       match modCode with
       | 2 -> ConsoleModifiers.Shift
@@ -68,28 +68,32 @@ type VtInputParser() =
 
   let parseMouseEvent (isPress: bool) =
     let parts = paramBuf.ToString().Split(';')
-    if parts.Length = 3 then
+    match parts.Length = 3 with
+    | true ->
       match Int32.TryParse(parts.[0]), Int32.TryParse(parts.[1]), Int32.TryParse(parts.[2]) with
       | (true, btnCode), (true, col), (true, row) ->
         let isWheel = btnCode &&& 64 <> 0
         let isMotion = btnCode &&& 32 <> 0
         let baseBtn = btnCode &&& 3
         let button =
-          if isWheel then MouseButton.None
-          else
+          match isWheel with
+          | true -> MouseButton.None
+          | false ->
             match baseBtn with
             | 0 -> MouseButton.Left
             | 1 -> MouseButton.Middle
             | 2 -> MouseButton.Right
             | _ -> MouseButton.None
         let action =
-          if isWheel then
-            if baseBtn = 0 then MouseAction.WheelUp else MouseAction.WheelDown
-          elif isMotion then MouseAction.Move
-          elif isPress then MouseAction.Press
-          else MouseAction.Release
+          match isWheel, isMotion, isPress with
+          | true, _, _ ->
+            match baseBtn = 0 with | true -> MouseAction.WheelUp | false -> MouseAction.WheelDown
+          | false, true, _ -> MouseAction.Move
+          | false, false, true -> MouseAction.Press
+          | false, false, false -> MouseAction.Release
         emitMouse { Button = button; Action = action; Col = col - 1; Row = row - 1 }
       | _ -> ()
+    | false -> ()
 
   member _.Feed(ch: char) =
     match state, ch with
@@ -181,7 +185,7 @@ type VtInputParser() =
 
   member _.TryDequeue() =
     let mutable ev = Unchecked.defaultof<InputEvent>
-    if events.TryDequeue(&ev) then Some ev else None
+    match events.TryDequeue(&ev) with | true -> Some ev | false -> None
 
   member _.HasEvents = not events.IsEmpty
   member _.IsMidSequence =
@@ -199,8 +203,9 @@ module RawInput =
 
   /// Start background stdin reader. Call after raw mode is enabled.
   let start () =
-    if running then ()
-    else
+    match running with
+    | true -> ()
+    | false ->
       running <- true
       let t = Thread(fun () ->
         let stdin = Console.OpenStandardInput()
@@ -208,9 +213,11 @@ module RawInput =
         while running do
           try
             let n = stdin.Read(buf, 0, buf.Length)
-            if n > 0 then
+            match n > 0 with
+            | true ->
               for i in 0 .. n - 1 do
                 charQueue.Enqueue(char buf.[i])
+            | false -> ()
           with _ -> ())
       t.IsBackground <- true
       t.Name <- "SageFs-RawInput"
@@ -228,8 +235,9 @@ module RawInput =
     while charQueue.TryDequeue(&ch) do
       parser.Feed(ch)
     // If parser is mid-sequence and no more chars, flush after natural delay
-    if parser.IsMidSequence && charQueue.IsEmpty then
-      parser.Flush()
+    match parser.IsMidSequence && charQueue.IsEmpty with
+    | true -> parser.Flush()
+    | false -> ()
 
   /// Try to dequeue the next parsed InputEvent
   let tryRead () = parser.TryDequeue()

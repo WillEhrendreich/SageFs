@@ -475,7 +475,7 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
       | Some info ->
         info.Projects
         |> List.map (fun proj ->
-          let fullPath = if IO.Path.IsPathRooted proj then proj else IO.Path.Combine(info.WorkingDirectory, proj)
+          let fullPath = match IO.Path.IsPathRooted proj with | true -> proj | false -> IO.Path.Combine(info.WorkingDirectory, proj)
           IO.Path.GetDirectoryName fullPath)
         |> List.distinct
       | None -> [ workingDir ]
