@@ -31,7 +31,7 @@ SageFs does it better. In every editor. In under 500ms. On broken code. For free
 | **Broken code** | ✗ Must compile first | **✓ Tree-sitter works on incomplete code** |
 | **Scope** | Rebuilds all impacted projects | **Function-level** — just what changed |
 | **Frameworks** | MSTest · xUnit · NUnit | **+ Expecto · TUnit** · extensible |
-| **Coverage** | IL instrumentation (heavy) | **Dual:** FCS symbol graph + IL branch probes |
+| **Coverage** | IL instrumentation (heavy) | **Dual:** symbol dependency graph + IL branch probes |
 | **Editors** | Visual Studio only | **VS Code · Neovim · TUI · GUI · Visual Studio · Web** |
 | **Price** | ~$250/month | **Free, MIT licensed** |
 
@@ -50,7 +50,7 @@ SageFs does it better. In every editor. In under 500ms. On broken code. For free
 
 1. **~50ms** — Tree-sitter detects test attributes in broken/incomplete code → immediate gutter markers
 2. **~350ms** — F# Compiler Service type-checks → dependency graph, reachability annotations
-3. **~500ms** — Harmony patches + affected-test execution → ✓/✗ results inline
+3. **~500ms** — Affected-test execution via hot-eval → ✓/✗ results inline
 
 Tests are auto-categorized (Unit, Integration, Browser, Property, Benchmark) with smart run policies — unit tests run on every keystroke, integration on save, browser on demand. All configurable.
 
@@ -77,7 +77,7 @@ graph TB
     D["<b>SageFs Daemon</b><br/>FSI · File Watcher · MCP · Hot Reload · Dashboard"]
 
     D --- VS["VS Code<br/><i>Fable F#→JS</i>"]
-    D --- NV["Neovim<br/><i>24 Lua modules</i>"]
+    D --- NV["Neovim<br/><i>37 Lua modules</i>"]
     D --- VI["Visual Studio<br/><i>Extensibility SDK</i>"]
     D --- TU["Terminal TUI<br/><i>ANSI renderer</i>"]
     D --- GU["Raylib GUI<br/><i>GPU renderer</i>"]
@@ -169,7 +169,7 @@ Features: Alt+Enter eval, CodeLens, live test decorations, native Test Explorer 
 
 #### Neovim
 
-[**sagefs.nvim**](https://github.com/WillEhrendreich/sagefs.nvim) — 24 Lua modules, 800+ tests, 33 commands, 11 autocmd events.
+[**sagefs.nvim**](https://github.com/WillEhrendreich/sagefs.nvim) — 37 Lua modules, 1100+ tests, 48 commands.
 
 ```lua
 -- lazy.nvim
