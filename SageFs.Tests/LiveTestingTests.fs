@@ -665,9 +665,9 @@ let liveTestStateEmptyTests = testList "LiveTestState.empty" [
     LiveTestState.empty.CoverageAnnotations |> Expect.hasLength "no coverage" 0
   }
 
-  test "starts enabled" {
+  test "starts inactive (demand-only)" {
     LiveTestState.empty.Activation
-    |> Expect.equal "enabled by default" LiveTestingActivation.Active
+    |> Expect.equal "inactive by default" LiveTestingActivation.Inactive
   }
 
   test "starts with coverage shown" {
