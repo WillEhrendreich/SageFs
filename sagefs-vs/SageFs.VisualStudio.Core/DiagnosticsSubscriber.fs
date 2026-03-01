@@ -9,7 +9,8 @@ open System.Threading.Tasks
 /// Connects to SageFs daemon's SSE diagnostics endpoint and
 /// forwards events through a callback.
 type DiagnosticsSubscriber(port: int) =
-  let http = new HttpClient()
+  let handler = new HttpClientHandler(AutomaticDecompression = System.Net.DecompressionMethods.All)
+  let http = new HttpClient(handler)
   let mutable cts: CancellationTokenSource option = None
 
   let tryStr (el: JsonElement) (prop: string) (fb: string) =

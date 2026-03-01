@@ -418,10 +418,9 @@ let readInputBlock (evalCount: int) =
 /// Run the connect REPL loop.
 let run (info: DaemonInfo) = task {
   let baseUrl = sprintf "http://localhost:%d" info.Port
-  use client = new HttpClient()
+  use handler = new HttpClientHandler(AutomaticDecompression = System.Net.DecompressionMethods.All)
+  use client = new HttpClient(handler)
   client.Timeout <- TimeSpan.FromMinutes(5.0)
-
-  // Verify connection
   match! checkHealth client baseUrl with
   | Error err ->
     eprintfn "\x1b[31mCannot connect to daemon: %s\x1b[0m" (SageFsError.describe err)

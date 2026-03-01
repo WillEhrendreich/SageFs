@@ -12,6 +12,7 @@ open Microsoft.AspNetCore.Http
 open Microsoft.AspNetCore.Hosting.Server
 open Microsoft.AspNetCore.Hosting.Server.Features
 open Microsoft.Extensions.DependencyInjection
+open Microsoft.AspNetCore.ResponseCompression
 open Microsoft.Extensions.Logging
 open OpenTelemetry.Metrics
 open OpenTelemetry.Resources
@@ -66,6 +67,16 @@ module WorkerHttpTransport =
       builder.WebHost.UseUrls(sprintf "http://127.0.0.1:%d" port) |> ignore
       builder.Logging.ClearProviders() |> ignore
 
+      // Response compression: Brotli at fastest level for all responses
+      builder.Services.AddResponseCompression(fun opts ->
+        opts.EnableForHttps <- true
+        opts.Providers.Add<BrotliCompressionProvider>()
+        opts.Providers.Add<GzipCompressionProvider>()
+      ) |> ignore
+      builder.Services.Configure<BrotliCompressionProviderOptions>(fun (opts: BrotliCompressionProviderOptions) ->
+        opts.Level <- System.IO.Compression.CompressionLevel.Fastest
+      ) |> ignore
+
       // Configure OTel for worker process when OTEL endpoint is available
       let otelEndpoint =
         Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_ENDPOINT")
@@ -102,6 +113,8 @@ module WorkerHttpTransport =
       | None -> ()
 
       let app = builder.Build()
+
+      app.UseResponseCompression() |> ignore
 
       let inline respond' ctx msg = respond handler ctx msg
 

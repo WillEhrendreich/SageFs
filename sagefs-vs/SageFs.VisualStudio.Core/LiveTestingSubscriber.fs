@@ -8,7 +8,8 @@ open System.Threading.Tasks
 /// SSE subscriber for the /events endpoint.
 /// Parses event:/data: lines, maintains LiveTestState, dispatches callbacks.
 type LiveTestingSubscriber(port: int) =
-  let http = new HttpClient()
+  let handler = new HttpClientHandler(AutomaticDecompression = System.Net.DecompressionMethods.All)
+  let http = new HttpClient(handler)
   let mutable cts: CancellationTokenSource option = None
   let mutable state = LiveTestState.empty
   let stateChanged = Event<LiveTestState>()

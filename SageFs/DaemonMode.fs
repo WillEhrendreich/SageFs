@@ -7,6 +7,9 @@ open SageFs.Server
 open Falco
 open Falco.Routing
 open Microsoft.AspNetCore.Http
+open Microsoft.AspNetCore.Builder
+open Microsoft.AspNetCore.ResponseCompression
+open Microsoft.Extensions.DependencyInjection
 open Microsoft.Extensions.Logging
 open OpenTelemetry.Logs
 
@@ -919,18 +922,29 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
 
   let dashboardTask = task {
     try
-      let builder = Microsoft.AspNetCore.Builder.WebApplication.CreateBuilder()
+      let builder = WebApplication.CreateBuilder()
       // Suppress ASP.NET Core info logging (routing, hosting) for dashboard
       builder.Logging
         .AddFilter("Microsoft.AspNetCore", LogLevel.Warning)
         .AddFilter("Microsoft.Hosting", LogLevel.Warning)
       |> ignore
+      // Response compression: Brotli at fastest level for dashboard SSE + JSON
+      builder.Services.AddResponseCompression(fun opts ->
+        opts.EnableForHttps <- true
+        opts.MimeTypes <- ResponseCompressionDefaults.MimeTypes |> Seq.append ["text/event-stream"]
+        opts.Providers.Add<BrotliCompressionProvider>()
+        opts.Providers.Add<GzipCompressionProvider>()
+      ) |> ignore
+      builder.Services.Configure<BrotliCompressionProviderOptions>(fun (opts: BrotliCompressionProviderOptions) ->
+        opts.Level <- System.IO.Compression.CompressionLevel.Fastest
+      ) |> ignore
       let app = builder.Build()
       let bindHost =
         match System.Environment.GetEnvironmentVariable("SAGEFS_BIND_HOST") with
         | null | "" -> "localhost"
         | h -> h
       app.Urls.Add(sprintf "http://%s:%d" bindHost dashboardPort)
+      app.UseResponseCompression() |> ignore
       app.UseRouting().UseFalco(dashboardEndpoints @ hotReloadProxyEndpoints) |> ignore
       log.LogInformation("Dashboard available at http://localhost:{Port}/dashboard", dashboardPort)
       do! app.RunAsync()

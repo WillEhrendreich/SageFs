@@ -195,7 +195,8 @@ module RaylibMode =
     let baseUrl = sprintf "http://localhost:%d" dashboardPort
 
     // Verify connection before opening window
-    use client = new HttpClient()
+    use handler = new HttpClientHandler(AutomaticDecompression = System.Net.DecompressionMethods.All)
+    use client = new HttpClient(handler)
     client.Timeout <- TimeSpan.FromHours(24.0)
     let connected =
       try

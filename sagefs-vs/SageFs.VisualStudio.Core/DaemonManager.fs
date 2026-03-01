@@ -11,7 +11,8 @@ module DaemonManager =
 
   /// Check if a SageFs daemon is already running on the given port.
   let isDaemonRunning (mcpPort: int) =
-    use client = new HttpClient(Timeout = TimeSpan.FromSeconds(2.0))
+    use handler = new HttpClientHandler(AutomaticDecompression = System.Net.DecompressionMethods.All)
+    use client = new HttpClient(handler, Timeout = TimeSpan.FromSeconds(2.0))
     let dashboardPort = mcpPort + 1
     try
       let resp =

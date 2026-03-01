@@ -1,6 +1,7 @@
 // SSE subscriber with exponential backoff reconnect.
 // Shared implementation for both simple and typed SSE subscriptions.
 const http = require('http');
+const zlib = require('zlib');
 
 function createSseSubscriber(url, onMessage) {
   let req;
@@ -27,10 +28,20 @@ function createSseSubscriber(url, onMessage) {
   };
 
   const startListening = () => {
-    req = http.get(url, { timeout: 0 }, (res) => {
+    req = http.get(url, { timeout: 0, headers: { 'Accept-Encoding': 'br, gzip, deflate' } }, (res) => {
       retryDelay = 1000;
       resetInactivity();
-      res.on('data', (chunk) => {
+      // Decompress if server sent compressed response
+      let stream = res;
+      const encoding = (res.headers['content-encoding'] || '').trim();
+      if (encoding === 'br') {
+        stream = res.pipe(zlib.createBrotliDecompress());
+      } else if (encoding === 'gzip') {
+        stream = res.pipe(zlib.createGunzip());
+      } else if (encoding === 'deflate') {
+        stream = res.pipe(zlib.createInflate());
+      }
+      stream.on('data', (chunk) => {
         resetInactivity();
         buffer += chunk.toString();
         const lines = buffer.split('\n');
@@ -49,7 +60,8 @@ function createSseSubscriber(url, onMessage) {
           }
         }
       });
-      res.on('end', reconnect);
+      stream.on('end', reconnect);
+      stream.on('error', reconnect);
       res.on('error', reconnect);
     });
     req.on('error', reconnect);

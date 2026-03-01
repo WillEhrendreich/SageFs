@@ -17,7 +17,8 @@ let mapInputEvent (keyMap: KeyMap) (ev: InputEvent) : TerminalCommand option =
 let run (daemonInfo: DaemonInfo) = task {
   let dashboardPort = daemonInfo.Port + 1
   let baseUrl = sprintf "http://localhost:%d" dashboardPort
-  use client = new HttpClient()
+  use handler = new HttpClientHandler(AutomaticDecompression = System.Net.DecompressionMethods.All)
+  use client = new HttpClient(handler)
   client.Timeout <- TimeSpan.FromHours(24.0)
 
   // Verify daemon is reachable

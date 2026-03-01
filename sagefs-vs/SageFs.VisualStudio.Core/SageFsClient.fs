@@ -167,7 +167,8 @@ module FeatureParsers =
 type SageFsClient() =
   let mutable mcpPort = 37749
   let mutable dashboardPort = 37750
-  let http = new HttpClient()
+  let handler = new HttpClientHandler(AutomaticDecompression = System.Net.DecompressionMethods.All)
+  let http = new HttpClient(handler)
 
   member _.McpPort
     with get () = mcpPort

@@ -203,7 +203,8 @@ module DaemonClient =
   let verifyConnection (daemonInfo: DaemonInfo) = task {
     let dashboardPort = daemonInfo.Port + 1
     let baseUrl = sprintf "http://localhost:%d" dashboardPort
-    use client = new HttpClient()
+    use handler = new HttpClientHandler(AutomaticDecompression = System.Net.DecompressionMethods.All)
+    use client = new HttpClient(handler)
     try
       let! resp = client.GetAsync(sprintf "%s/dashboard" baseUrl)
       resp.EnsureSuccessStatusCode() |> ignore
@@ -226,7 +227,8 @@ module DaemonClient =
     let maxRetryDelay = 30000
     while not ct.IsCancellationRequested do
       try
-        use sseClient = new HttpClient()
+        use sseHandler = new HttpClientHandler(AutomaticDecompression = System.Net.DecompressionMethods.All)
+        use sseClient = new HttpClient(sseHandler)
         sseClient.Timeout <- TimeSpan.FromHours(24.0)
         let! stream = sseClient.GetStreamAsync(sprintf "%s/api/state" baseUrl, ct)
         use reader = new IO.StreamReader(stream)
