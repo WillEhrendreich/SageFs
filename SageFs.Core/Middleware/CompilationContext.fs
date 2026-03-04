@@ -9,6 +9,19 @@ open Fantomas.FCS.Syntax
 // Types
 // ─────────────────────────────────────────────────────────────────
 
+/// How the editor is sending code for evaluation.
+type EvalMode =
+  | File
+  | Block
+  | Auto
+
+module EvalMode =
+  let parse (s: string option) =
+    match s with
+    | Some "file" -> File
+    | Some "block" -> Block
+    | _ -> Auto
+
 /// A module or namespace container in a file's hierarchy.
 type ModuleContainer = {
   QualifiedName: string
@@ -179,7 +192,7 @@ let parseFileStructureCached
 // ─────────────────────────────────────────────────────────────────
 
 /// Find the deepest container whose declaration range includes blockStartLine.
-let locateBlock (fs: FileStructure) (blockStartLine: int option) (_code: string)
+let locateBlock (fs: FileStructure) (blockStartLine: int option)
     : ModuleContainer option =
   match blockStartLine with
   | Some startLine ->
@@ -204,7 +217,8 @@ let locateBlock (fs: FileStructure) (blockStartLine: int option) (_code: string)
       match single.Children with
       | [ onlyChild ] -> Some onlyChild
       | _ -> Some single
-    | _ -> fs.Containers |> List.tryHead
+    // Multiple top-level containers (multi-namespace): ambiguous without line info
+    | _ -> None
 
 // ─────────────────────────────────────────────────────────────────
 // Whole-file transformation
@@ -264,23 +278,37 @@ let transformBlock
     (evaluatedModules: Set<string>)
     (code: string)
     : PreprocessResult =
-  let needsOpen = Set.contains container.QualifiedName evaluatedModules
-  let openLine =
-    match needsOpen with
-    | true -> [ sprintf "open %s" container.QualifiedName ]
-    | false -> []
-  let indentedCode = indentCode code
-  let wrapper =
-    [ yield! openLine
-      yield! container.Opens
-      yield sprintf "module %s =" container.QualifiedName
-      yield indentedCode ]
-    |> String.concat "\n"
-  let linesAdded = openLine.Length + container.Opens.Length + 1
-  { Code = wrapper
-    LineOffset = linesAdded
-    ColumnOffset = 2
-    OriginalFilePath = None }
+  match container.Kind with
+  | SynModuleOrNamespaceKind.DeclaredNamespace
+  | SynModuleOrNamespaceKind.GlobalNamespace ->
+    // Namespace container: emit opens but don't wrap in a module
+    let wrapper =
+      [ yield! container.Opens
+        yield code ]
+      |> String.concat "\n"
+    let linesAdded = container.Opens.Length
+    { Code = wrapper
+      LineOffset = linesAdded
+      ColumnOffset = 0
+      OriginalFilePath = None }
+  | _ ->
+    let needsOpen = Set.contains container.QualifiedName evaluatedModules
+    let openLine =
+      match needsOpen with
+      | true -> [ sprintf "open %s" container.QualifiedName ]
+      | false -> []
+    let indentedCode = indentCode code
+    let wrapper =
+      [ yield! openLine
+        yield! container.Opens
+        yield sprintf "module %s =" container.QualifiedName
+        yield indentedCode ]
+      |> String.concat "\n"
+    let linesAdded = openLine.Length + container.Opens.Length + 1
+    { Code = wrapper
+      LineOffset = linesAdded
+      ColumnOffset = 2
+      OriginalFilePath = None }
 
 // ─────────────────────────────────────────────────────────────────
 // Core preprocessing — the public API
@@ -290,7 +318,7 @@ let transformBlock
 /// Returns the preprocessed result and updated set of evaluated modules.
 let preprocessForFsi
     (fileStructure: FileStructure option)
-    (evalMode: string option)
+    (evalMode: EvalMode)
     (blockStartLine: int option)
     (evaluatedModules: Set<string>)
     (code: string)
@@ -304,9 +332,9 @@ let preprocessForFsi
   | Some fs ->
     let isWholeFile =
       match evalMode with
-      | Some "file" -> true
-      | Some "block" -> false
-      | _ ->
+      | File -> true
+      | Block -> false
+      | Auto ->
         let firstNonBlank =
           splitLines code |> Array.tryFind (fun l -> l.Trim() <> "")
         match firstNonBlank with
@@ -327,7 +355,7 @@ let preprocessForFsi
       updatedModules
 
     | false ->
-      let container = locateBlock fs blockStartLine code
+      let container = locateBlock fs blockStartLine
       match container with
       | None ->
         { Code = code; LineOffset = 0; ColumnOffset = 0

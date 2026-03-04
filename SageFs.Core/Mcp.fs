@@ -977,13 +977,22 @@ module McpTools =
             let fs, cache =
               Middleware.CompilationContext.parseFileStructureCached fp code state.FileCache
             Some fs, cache
-          with _ -> None, state.FileCache
+          with
+          | :? System.OperationCanceledException -> reraise()
+          | exn ->
+            Log.debug "CompilationContext parse failed for %s: %s" fp exn.Message
+            None, state.FileCache
         | None -> None, state.FileCache
 
+      let parsedMode = Middleware.CompilationContext.EvalMode.parse evalMode
       let preprocessed, updatedModules =
         Middleware.CompilationContext.preprocessForFsi
-          fileStructure evalMode blockStartLine state.EvaluatedModules code
+          fileStructure parsedMode blockStartLine state.EvaluatedModules code
 
+      // Note: concurrent MCP calls for the same session could race here.
+      // Blast radius is small — lost cache entry means one extra ~7ms parse,
+      // lost EvaluatedModules entry means unnecessary `open` or duplicate module error.
+      // Acceptable since evals are effectively serialized per session by the FSI lock.
       compilationStates.[sid] <- { state with EvaluatedModules = updatedModules; FileCache = updatedCache }
 
       let statements = McpAdapter.splitStatements preprocessed.Code

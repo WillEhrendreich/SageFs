@@ -152,7 +152,7 @@ let preprocessForFsiTests =
       test "file-level module → nested module with indented body" {
         let fs = parseFileStructure "GameOfLife.fs" Fixtures.fileLevelModule
         let result, _ =
-          preprocessForFsi (Some fs) (Some "file") None Set.empty
+          preprocessForFsi (Some fs) (File) None Set.empty
             Fixtures.fileLevelModule
         result.Code
         |> Expect.stringContains "should start with module decl" "module GameOfLife ="
@@ -165,7 +165,7 @@ let preprocessForFsiTests =
       test "namespace file → namespace stripped" {
         let fs = parseFileStructure "Domain.fs" Fixtures.namespaceOnly
         let result, _ =
-          preprocessForFsi (Some fs) (Some "file") None Set.empty
+          preprocessForFsi (Some fs) (File) None Set.empty
             Fixtures.namespaceOnly
         (result.Code.Contains("namespace MyApp.Domain"))
         |> Expect.isFalse "namespace should be stripped"
@@ -174,7 +174,7 @@ let preprocessForFsiTests =
       test "namespace + module file → namespace stripped, module preserved" {
         let fs = parseFileStructure "Domain.fs" Fixtures.namespacePlusModule
         let result, _ =
-          preprocessForFsi (Some fs) (Some "file") None Set.empty
+          preprocessForFsi (Some fs) (File) None Set.empty
             Fixtures.namespacePlusModule
         (result.Code.Contains("namespace MyApp.Domain"))
         |> Expect.isFalse "namespace should be stripped"
@@ -185,7 +185,7 @@ let preprocessForFsiTests =
       test "no declaration file → pass through unchanged" {
         let fs = parseFileStructure "Script.fsx" Fixtures.noDeclaration
         let result, _ =
-          preprocessForFsi (Some fs) (Some "file") None Set.empty
+          preprocessForFsi (Some fs) (File) None Set.empty
             Fixtures.noDeclaration
         result.Code
         |> Expect.equal "should be unchanged" Fixtures.noDeclaration
@@ -194,7 +194,7 @@ let preprocessForFsiTests =
       test "internal module → access modifier preserved" {
         let fs = parseFileStructure "Internal.fs" Fixtures.internalModule
         let result, _ =
-          preprocessForFsi (Some fs) (Some "file") None Set.empty
+          preprocessForFsi (Some fs) (File) None Set.empty
             Fixtures.internalModule
         result.Code
         |> Expect.stringContains "should have internal" "internal"
@@ -205,7 +205,7 @@ let preprocessForFsiTests =
       test "whole file marks all modules as evaluated" {
         let fs = parseFileStructure "Domain.fs" Fixtures.namespaceMultiModule
         let _, mods =
-          preprocessForFsi (Some fs) (Some "file") None Set.empty
+          preprocessForFsi (Some fs) (File) None Set.empty
             Fixtures.namespaceMultiModule
         mods |> Set.contains "MyApp.Domain"
         |> Expect.isTrue "should track namespace"
@@ -221,7 +221,7 @@ let preprocessForFsiTests =
       test "block from file-level module → wrapped in module" {
         let fs = parseFileStructure "GameOfLife.fs" Fixtures.fileLevelModule
         let result, evaluatedModules =
-          preprocessForFsi (Some fs) (Some "block") None Set.empty
+          preprocessForFsi (Some fs) (Block) None Set.empty
             Fixtures.blockFromModule
         result.Code
         |> Expect.stringContains "should have module wrapper" "module GameOfLife ="
@@ -235,7 +235,7 @@ let preprocessForFsiTests =
         let fs = parseFileStructure "GameOfLife.fs" Fixtures.fileLevelModule
         let alreadyEvald = Set.singleton "GameOfLife"
         let result, _ =
-          preprocessForFsi (Some fs) (Some "block") None alreadyEvald
+          preprocessForFsi (Some fs) (Block) None alreadyEvald
             Fixtures.blockFromModule
         result.Code
         |> Expect.stringContains "should have open" "open GameOfLife"
@@ -246,7 +246,7 @@ let preprocessForFsiTests =
       test "block from namespace+module → wrapped with qualified name" {
         let fs = parseFileStructure "Domain.fs" Fixtures.namespacePlusModule
         let result, evaluatedModules =
-          preprocessForFsi (Some fs) (Some "block") (Some 7) Set.empty
+          preprocessForFsi (Some fs) (Block) (Some 7) Set.empty
             Fixtures.blockFromNamespacedModule
         result.Code
         |> Expect.stringContains "should use qualified name"
@@ -257,7 +257,7 @@ let preprocessForFsiTests =
 
       test "block with no file context → pass through unchanged" {
         let result, _ =
-          preprocessForFsi None (Some "block") None Set.empty "let x = 42"
+          preprocessForFsi None (Block) None Set.empty "let x = 42"
         result.Code
         |> Expect.equal "should be unchanged" "let x = 42"
         result.LineOffset
@@ -270,7 +270,7 @@ let preprocessForFsiTests =
       test "whole-file module transform has zero line offset" {
         let fs = parseFileStructure "GameOfLife.fs" Fixtures.fileLevelModule
         let result, _ =
-          preprocessForFsi (Some fs) (Some "file") None Set.empty
+          preprocessForFsi (Some fs) (File) None Set.empty
             Fixtures.fileLevelModule
         result.LineOffset
         |> Expect.equal "module replacement has zero line offset" 0
@@ -282,7 +282,7 @@ let preprocessForFsiTests =
         let fs = parseFileStructure "GameOfLife.fs" Fixtures.fileLevelModule
         let alreadyEvald = Set.singleton "GameOfLife"
         let result, _ =
-          preprocessForFsi (Some fs) (Some "block") None alreadyEvald
+          preprocessForFsi (Some fs) (Block) None alreadyEvald
             Fixtures.blockFromModule
         // open GameOfLife (1) + open System (1) + module GameOfLife = (1) = 3 lines
         (result.LineOffset, 0)
@@ -294,7 +294,7 @@ let preprocessForFsiTests =
       test "first block wrap adds opens + module line" {
         let fs = parseFileStructure "GameOfLife.fs" Fixtures.fileLevelModule
         let result, _ =
-          preprocessForFsi (Some fs) (Some "block") None Set.empty
+          preprocessForFsi (Some fs) (Block) None Set.empty
             Fixtures.blockFromModule
         let expectedOpens = fs.Containers.[0].Opens.Length
         result.LineOffset
@@ -303,7 +303,7 @@ let preprocessForFsiTests =
 
       test "no-op transform has zero offsets" {
         let result, _ =
-          preprocessForFsi None None None Set.empty "let x = 42"
+          preprocessForFsi None Auto None Set.empty "let x = 42"
         result.LineOffset |> Expect.equal "zero" 0
         result.ColumnOffset |> Expect.equal "zero" 0
       }
@@ -314,7 +314,7 @@ let preprocessForFsiTests =
       test "code starting with file-level module detected as whole file" {
         let fs = parseFileStructure "GameOfLife.fs" Fixtures.fileLevelModule
         let result, _ =
-          preprocessForFsi (Some fs) None None Set.empty
+          preprocessForFsi (Some fs) Auto None Set.empty
             Fixtures.fileLevelModule
         result.Code
         |> Expect.stringContains "should transform" "module GameOfLife ="
@@ -323,7 +323,7 @@ let preprocessForFsiTests =
       test "code without module/namespace detected as block" {
         let fs = parseFileStructure "GameOfLife.fs" Fixtures.fileLevelModule
         let result, _ =
-          preprocessForFsi (Some fs) None None Set.empty "let x = 42"
+          preprocessForFsi (Some fs) Auto None Set.empty "let x = 42"
         result.Code
         |> Expect.stringContains "should wrap" "module GameOfLife ="
       }
@@ -339,7 +339,7 @@ let locateBlockTests =
 
     test "locates block in file-level module by line number" {
       let fs = parseFileStructure "GameOfLife.fs" Fixtures.fileLevelModule
-      let container = locateBlock fs (Some 8) "let randomGrid w h density ="
+      let container = locateBlock fs (Some 8)
       container |> Expect.isSome "should find container"
       container.Value.QualifiedName
       |> Expect.equal "should be GameOfLife" "GameOfLife"
@@ -347,7 +347,7 @@ let locateBlockTests =
 
     test "locates block in nested module by line number" {
       let fs = parseFileStructure "Domain.fs" Fixtures.namespacePlusModule
-      let container = locateBlock fs (Some 7) "let step grid = grid"
+      let container = locateBlock fs (Some 7)
       container |> Expect.isSome "should find nested module"
       container.Value.QualifiedName
       |> Expect.equal "should be qualified" "MyApp.Domain.GameOfLife"
@@ -355,7 +355,7 @@ let locateBlockTests =
 
     test "locates block in second module of multi-module file" {
       let fs = parseFileStructure "Domain.fs" Fixtures.namespaceMultiModule
-      let container = locateBlock fs (Some 10) """let render grid = sprintf "%A" grid"""
+      let container = locateBlock fs (Some 10)
       container |> Expect.isSome "should find Rendering"
       container.Value.QualifiedName
       |> Expect.equal "should be Rendering" "MyApp.Domain.Rendering"
@@ -363,7 +363,7 @@ let locateBlockTests =
 
     test "falls back to top-level when no line number" {
       let fs = parseFileStructure "GameOfLife.fs" Fixtures.fileLevelModule
-      let container = locateBlock fs None "let step grid = grid"
+      let container = locateBlock fs None
       container |> Expect.isSome "should fall back to top-level"
       container.Value.QualifiedName
       |> Expect.equal "should be GameOfLife" "GameOfLife"
@@ -371,7 +371,7 @@ let locateBlockTests =
 
     test "namespace+module with no line falls back to single child" {
       let fs = parseFileStructure "Domain.fs" Fixtures.namespacePlusModule
-      let container = locateBlock fs None "let step grid = grid"
+      let container = locateBlock fs None
       container |> Expect.isSome "should find single child"
       container.Value.QualifiedName
       |> Expect.equal "should be the nested module" "MyApp.Domain.GameOfLife"
@@ -393,7 +393,7 @@ let propertyTests =
         "open System\nlet x = DateTime.Now"
       ]
       for code in codes do
-        let result, _ = preprocessForFsi None None None Set.empty code
+        let result, _ = preprocessForFsi None Auto None Set.empty code
         result.Code
         |> Expect.equal
             (sprintf "identity for: %s..." (code.Substring(0, min 20 code.Length)))
@@ -403,7 +403,7 @@ let propertyTests =
     test "line offset consistency for whole-file module" {
       let fs = parseFileStructure "GameOfLife.fs" Fixtures.fileLevelModule
       let result, _ =
-        preprocessForFsi (Some fs) (Some "file") None Set.empty
+        preprocessForFsi (Some fs) (File) None Set.empty
           Fixtures.fileLevelModule
       let originalLines = Fixtures.fileLevelModule.Split('\n').Length
       let transformedLines = result.Code.Split('\n').Length
@@ -414,11 +414,11 @@ let propertyTests =
     test "evaluated modules accumulate correctly" {
       let fs = parseFileStructure "GameOfLife.fs" Fixtures.fileLevelModule
       let _, mods1 =
-        preprocessForFsi (Some fs) (Some "block") None Set.empty "let x = 1"
+        preprocessForFsi (Some fs) (Block) None Set.empty "let x = 1"
       mods1 |> Set.contains "GameOfLife"
       |> Expect.isTrue "should add module on first eval"
       let _, mods2 =
-        preprocessForFsi (Some fs) (Some "block") None mods1 "let y = 2"
+        preprocessForFsi (Some fs) (Block) None mods1 "let y = 2"
       mods2 |> Set.contains "GameOfLife"
       |> Expect.isTrue "should still contain module"
     }
@@ -634,6 +634,62 @@ let perfMeasurementTests =
   ]
 
 // ─────────────────────────────────────────────────────────────────
+// 8. EvalMode + namespace-as-container tests
+// ─────────────────────────────────────────────────────────────────
+
+let evalModeTests =
+  testList "EvalMode" [
+    test "parse Some file → File" {
+      EvalMode.parse (Some "file") |> Expect.equal "should be File" File
+    }
+    test "parse Some block → Block" {
+      EvalMode.parse (Some "block") |> Expect.equal "should be Block" Block
+    }
+    test "parse None → Auto" {
+      EvalMode.parse None |> Expect.equal "should be Auto" Auto
+    }
+    test "parse Some unknown → Auto" {
+      EvalMode.parse (Some "whatever") |> Expect.equal "should be Auto" Auto
+    }
+    test "parse Some File (case-sensitive) → Auto" {
+      EvalMode.parse (Some "File") |> Expect.equal "should be Auto" Auto
+    }
+  ]
+
+let namespaceContainerTests =
+  testList "namespace-as-container" [
+
+    test "block in namespace-only file has zero column offset" {
+      let fs = parseFileStructure "Domain.fs" Fixtures.namespaceOnly
+      let result, _ =
+        preprocessForFsi (Some fs) Block None Set.empty "let x = 42"
+      result.ColumnOffset
+      |> Expect.equal "namespace blocks get no indent" 0
+    }
+
+    test "block in namespace-only file does not emit module wrapper" {
+      let fs = parseFileStructure "Domain.fs" Fixtures.namespaceOnly
+      let result, _ =
+        preprocessForFsi (Some fs) Block None Set.empty "let x = 42"
+      result.Code.Contains("module MyApp.Domain =")
+      |> Expect.isFalse "should not wrap namespace as module"
+    }
+
+    test "multi-namespace file with no line returns None from locateBlock" {
+      let multiNs = """namespace First
+
+let a = 1
+
+namespace Second
+
+let b = 2"""
+      let fs = parseFileStructure "Multi.fs" multiNs
+      let container = locateBlock fs None
+      container |> Expect.isNone "ambiguous without line info"
+    }
+  ]
+
+// ─────────────────────────────────────────────────────────────────
 // All tests
 // ─────────────────────────────────────────────────────────────────
 
@@ -648,4 +704,6 @@ let allCompilationContextTests =
     responseDiagnosticTests
     fileCacheTests
     perfMeasurementTests
+    evalModeTests
+    namespaceContainerTests
   ]
