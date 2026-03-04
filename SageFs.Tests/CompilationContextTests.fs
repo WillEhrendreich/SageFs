@@ -6,6 +6,12 @@ open SageFs
 open SageFs.Middleware.CompilationContext
 open SageFs.WorkerProtocol
 
+/// Sync wrapper for tests — awaits the Task-returning parseFileStructure.
+let parseFs path code = (parseFileStructure path code).Result
+
+/// Sync wrapper for tests — awaits the Task-returning parseFileStructureCached.
+let parseFsCached path code cache = (parseFileStructureCached path code cache).Result
+
 // ─────────────────────────────────────────────────────────────────
 // Fixture data — real F# file contents for test scenarios
 // ─────────────────────────────────────────────────────────────────
@@ -86,7 +92,7 @@ let parseFileStructureTests =
   testList "parseFileStructure" [
 
     test "parses file-level module" {
-      let fs = parseFileStructure "GameOfLife.fs" Fixtures.fileLevelModule
+      let fs = parseFs "GameOfLife.fs" Fixtures.fileLevelModule
       fs.HasFileLevelModule |> Expect.isTrue "should detect file-level module"
       fs.Containers |> Expect.hasLength "should have one container" 1
       fs.Containers.[0].QualifiedName
@@ -94,7 +100,7 @@ let parseFileStructureTests =
     }
 
     test "parses namespace + named module" {
-      let fs = parseFileStructure "Domain.fs" Fixtures.namespacePlusModule
+      let fs = parseFs "Domain.fs" Fixtures.namespacePlusModule
       fs.HasFileLevelModule |> Expect.isFalse "namespace is not file-level module"
       fs.Containers |> Expect.hasLength "should have one namespace" 1
       fs.Containers.[0].QualifiedName
@@ -105,7 +111,7 @@ let parseFileStructureTests =
     }
 
     test "parses namespace with multiple modules" {
-      let fs = parseFileStructure "Domain.fs" Fixtures.namespaceMultiModule
+      let fs = parseFs "Domain.fs" Fixtures.namespaceMultiModule
       fs.Containers.[0].Children |> Expect.hasLength "should have 2 nested modules" 2
       fs.Containers.[0].Children.[0].QualifiedName
       |> Expect.equal "first module" "MyApp.Domain.GameOfLife"
@@ -114,26 +120,26 @@ let parseFileStructureTests =
     }
 
     test "parses internal module" {
-      let fs = parseFileStructure "Internal.fs" Fixtures.internalModule
+      let fs = parseFs "Internal.fs" Fixtures.internalModule
       fs.HasFileLevelModule |> Expect.isTrue "should detect file-level module"
       fs.Containers.[0].AccessModifier
       |> Expect.isSome "should have access modifier"
     }
 
     test "parses file with no module or namespace" {
-      let fs = parseFileStructure "Script.fsx" Fixtures.noDeclaration
+      let fs = parseFs "Script.fsx" Fixtures.noDeclaration
       fs.HasFileLevelModule |> Expect.isFalse "no file-level module"
     }
 
     test "collects open statements" {
-      let fs = parseFileStructure "GameOfLife.fs" Fixtures.fileLevelModule
+      let fs = parseFs "GameOfLife.fs" Fixtures.fileLevelModule
       fs.Containers.[0].Opens
       |> List.exists (fun o -> o.Contains("System"))
       |> Expect.isTrue "should have open System"
     }
 
     test "tracks declaration ranges" {
-      let fs = parseFileStructure "GameOfLife.fs" Fixtures.fileLevelModule
+      let fs = parseFs "GameOfLife.fs" Fixtures.fileLevelModule
       fs.Containers.[0].DeclarationRanges
       |> List.isEmpty
       |> Expect.isFalse "should have declaration ranges"
@@ -150,7 +156,7 @@ let preprocessForFsiTests =
     testList "whole-file eval" [
 
       test "file-level module → nested module with indented body" {
-        let fs = parseFileStructure "GameOfLife.fs" Fixtures.fileLevelModule
+        let fs = parseFs "GameOfLife.fs" Fixtures.fileLevelModule
         let result, _ =
           preprocessForFsi (Some fs) (File) None Set.empty
             Fixtures.fileLevelModule
@@ -163,7 +169,7 @@ let preprocessForFsiTests =
       }
 
       test "namespace file → namespace stripped" {
-        let fs = parseFileStructure "Domain.fs" Fixtures.namespaceOnly
+        let fs = parseFs "Domain.fs" Fixtures.namespaceOnly
         let result, _ =
           preprocessForFsi (Some fs) (File) None Set.empty
             Fixtures.namespaceOnly
@@ -172,7 +178,7 @@ let preprocessForFsiTests =
       }
 
       test "namespace + module file → namespace stripped, module preserved" {
-        let fs = parseFileStructure "Domain.fs" Fixtures.namespacePlusModule
+        let fs = parseFs "Domain.fs" Fixtures.namespacePlusModule
         let result, _ =
           preprocessForFsi (Some fs) (File) None Set.empty
             Fixtures.namespacePlusModule
@@ -183,7 +189,7 @@ let preprocessForFsiTests =
       }
 
       test "no declaration file → pass through unchanged" {
-        let fs = parseFileStructure "Script.fsx" Fixtures.noDeclaration
+        let fs = parseFs "Script.fsx" Fixtures.noDeclaration
         let result, _ =
           preprocessForFsi (Some fs) (File) None Set.empty
             Fixtures.noDeclaration
@@ -192,7 +198,7 @@ let preprocessForFsiTests =
       }
 
       test "internal module → access modifier preserved" {
-        let fs = parseFileStructure "Internal.fs" Fixtures.internalModule
+        let fs = parseFs "Internal.fs" Fixtures.internalModule
         let result, _ =
           preprocessForFsi (Some fs) (File) None Set.empty
             Fixtures.internalModule
@@ -203,7 +209,7 @@ let preprocessForFsiTests =
       }
 
       test "whole file marks all modules as evaluated" {
-        let fs = parseFileStructure "Domain.fs" Fixtures.namespaceMultiModule
+        let fs = parseFs "Domain.fs" Fixtures.namespaceMultiModule
         let _, mods =
           preprocessForFsi (Some fs) (File) None Set.empty
             Fixtures.namespaceMultiModule
@@ -219,7 +225,7 @@ let preprocessForFsiTests =
     testList "block eval" [
 
       test "block from file-level module → wrapped in module" {
-        let fs = parseFileStructure "GameOfLife.fs" Fixtures.fileLevelModule
+        let fs = parseFs "GameOfLife.fs" Fixtures.fileLevelModule
         let result, evaluatedModules =
           preprocessForFsi (Some fs) (Block) None Set.empty
             Fixtures.blockFromModule
@@ -232,7 +238,7 @@ let preprocessForFsiTests =
       }
 
       test "second block from same module → gets open prepended" {
-        let fs = parseFileStructure "GameOfLife.fs" Fixtures.fileLevelModule
+        let fs = parseFs "GameOfLife.fs" Fixtures.fileLevelModule
         let alreadyEvald = Set.singleton "GameOfLife"
         let result, _ =
           preprocessForFsi (Some fs) (Block) None alreadyEvald
@@ -244,7 +250,7 @@ let preprocessForFsiTests =
       }
 
       test "block from namespace+module → wrapped with qualified name" {
-        let fs = parseFileStructure "Domain.fs" Fixtures.namespacePlusModule
+        let fs = parseFs "Domain.fs" Fixtures.namespacePlusModule
         let result, evaluatedModules =
           preprocessForFsi (Some fs) (Block) (Some 7) Set.empty
             Fixtures.blockFromNamespacedModule
@@ -268,7 +274,7 @@ let preprocessForFsiTests =
     testList "line offset tracking" [
 
       test "whole-file module transform has zero line offset" {
-        let fs = parseFileStructure "GameOfLife.fs" Fixtures.fileLevelModule
+        let fs = parseFs "GameOfLife.fs" Fixtures.fileLevelModule
         let result, _ =
           preprocessForFsi (Some fs) (File) None Set.empty
             Fixtures.fileLevelModule
@@ -279,7 +285,7 @@ let preprocessForFsiTests =
       }
 
       test "block wrap with prior eval adds lines for open + module" {
-        let fs = parseFileStructure "GameOfLife.fs" Fixtures.fileLevelModule
+        let fs = parseFs "GameOfLife.fs" Fixtures.fileLevelModule
         let alreadyEvald = Set.singleton "GameOfLife"
         let result, _ =
           preprocessForFsi (Some fs) (Block) None alreadyEvald
@@ -292,7 +298,7 @@ let preprocessForFsiTests =
       }
 
       test "first block wrap adds opens + module line" {
-        let fs = parseFileStructure "GameOfLife.fs" Fixtures.fileLevelModule
+        let fs = parseFs "GameOfLife.fs" Fixtures.fileLevelModule
         let result, _ =
           preprocessForFsi (Some fs) (Block) None Set.empty
             Fixtures.blockFromModule
@@ -312,7 +318,7 @@ let preprocessForFsiTests =
     testList "heuristic eval mode detection" [
 
       test "code starting with file-level module detected as whole file" {
-        let fs = parseFileStructure "GameOfLife.fs" Fixtures.fileLevelModule
+        let fs = parseFs "GameOfLife.fs" Fixtures.fileLevelModule
         let result, _ =
           preprocessForFsi (Some fs) Auto None Set.empty
             Fixtures.fileLevelModule
@@ -321,7 +327,7 @@ let preprocessForFsiTests =
       }
 
       test "code without module/namespace detected as block" {
-        let fs = parseFileStructure "GameOfLife.fs" Fixtures.fileLevelModule
+        let fs = parseFs "GameOfLife.fs" Fixtures.fileLevelModule
         let result, _ =
           preprocessForFsi (Some fs) Auto None Set.empty "let x = 42"
         result.Code
@@ -338,7 +344,7 @@ let locateBlockTests =
   testList "locateBlock" [
 
     test "locates block in file-level module by line number" {
-      let fs = parseFileStructure "GameOfLife.fs" Fixtures.fileLevelModule
+      let fs = parseFs "GameOfLife.fs" Fixtures.fileLevelModule
       let container = locateBlock fs (Some 8)
       container |> Expect.isSome "should find container"
       container.Value.QualifiedName
@@ -346,7 +352,7 @@ let locateBlockTests =
     }
 
     test "locates block in nested module by line number" {
-      let fs = parseFileStructure "Domain.fs" Fixtures.namespacePlusModule
+      let fs = parseFs "Domain.fs" Fixtures.namespacePlusModule
       let container = locateBlock fs (Some 7)
       container |> Expect.isSome "should find nested module"
       container.Value.QualifiedName
@@ -354,7 +360,7 @@ let locateBlockTests =
     }
 
     test "locates block in second module of multi-module file" {
-      let fs = parseFileStructure "Domain.fs" Fixtures.namespaceMultiModule
+      let fs = parseFs "Domain.fs" Fixtures.namespaceMultiModule
       let container = locateBlock fs (Some 10)
       container |> Expect.isSome "should find Rendering"
       container.Value.QualifiedName
@@ -362,7 +368,7 @@ let locateBlockTests =
     }
 
     test "falls back to top-level when no line number" {
-      let fs = parseFileStructure "GameOfLife.fs" Fixtures.fileLevelModule
+      let fs = parseFs "GameOfLife.fs" Fixtures.fileLevelModule
       let container = locateBlock fs None
       container |> Expect.isSome "should fall back to top-level"
       container.Value.QualifiedName
@@ -370,7 +376,7 @@ let locateBlockTests =
     }
 
     test "namespace+module with no line falls back to single child" {
-      let fs = parseFileStructure "Domain.fs" Fixtures.namespacePlusModule
+      let fs = parseFs "Domain.fs" Fixtures.namespacePlusModule
       let container = locateBlock fs None
       container |> Expect.isSome "should find single child"
       container.Value.QualifiedName
@@ -401,7 +407,7 @@ let propertyTests =
     }
 
     test "line offset consistency for whole-file module" {
-      let fs = parseFileStructure "GameOfLife.fs" Fixtures.fileLevelModule
+      let fs = parseFs "GameOfLife.fs" Fixtures.fileLevelModule
       let result, _ =
         preprocessForFsi (Some fs) (File) None Set.empty
           Fixtures.fileLevelModule
@@ -412,7 +418,7 @@ let propertyTests =
     }
 
     test "evaluated modules accumulate correctly" {
-      let fs = parseFileStructure "GameOfLife.fs" Fixtures.fileLevelModule
+      let fs = parseFs "GameOfLife.fs" Fixtures.fileLevelModule
       let _, mods1 =
         preprocessForFsi (Some fs) (Block) None Set.empty "let x = 1"
       mods1 |> Set.contains "GameOfLife"
@@ -526,15 +532,15 @@ let responseDiagnosticTests =
   ]
 
 // ─────────────────────────────────────────────────────────────────
-// parseFileStructureCached tests
+// parseFsCached tests
 // ─────────────────────────────────────────────────────────────────
 
 let fileCacheTests =
-  testList "parseFileStructureCached" [
+  testList "parseFsCached" [
     test "cache miss parses and stores" {
       let code = Fixtures.fileLevelModule
       let emptyCache = Map.empty
-      let fs, cache = parseFileStructureCached "Test.fs" code emptyCache
+      let fs, cache = parseFsCached "Test.fs" code emptyCache
       fs.Containers |> Expect.isNonEmpty "should have containers"
       cache |> Map.containsKey "Test.fs"
       |> Expect.isTrue "should be cached"
@@ -542,8 +548,8 @@ let fileCacheTests =
 
     test "cache hit returns same structure without re-parse" {
       let code = Fixtures.fileLevelModule
-      let fs1, cache1 = parseFileStructureCached "Test.fs" code Map.empty
-      let fs2, cache2 = parseFileStructureCached "Test.fs" code cache1
+      let fs1, cache1 = parseFsCached "Test.fs" code Map.empty
+      let fs2, cache2 = parseFsCached "Test.fs" code cache1
       fs2.Containers.Length
       |> Expect.equal "same container count" fs1.Containers.Length
       cache2 |> Map.count
@@ -552,9 +558,9 @@ let fileCacheTests =
 
     test "cache invalidates on content change" {
       let code1 = Fixtures.fileLevelModule
-      let _, cache1 = parseFileStructureCached "Test.fs" code1 Map.empty
+      let _, cache1 = parseFsCached "Test.fs" code1 Map.empty
       let code2 = Fixtures.namespacePlusModule
-      let fs2, cache2 = parseFileStructureCached "Test.fs" code2 cache1
+      let fs2, cache2 = parseFsCached "Test.fs" code2 cache1
       fs2.FilePath |> Expect.equal "same path" "Test.fs"
       cache2 |> Map.count
       |> Expect.equal "still one entry (replaced)" 1
@@ -566,8 +572,8 @@ let fileCacheTests =
 
     test "different file paths get separate cache entries" {
       let code = Fixtures.fileLevelModule
-      let _, cache1 = parseFileStructureCached "A.fs" code Map.empty
-      let _, cache2 = parseFileStructureCached "B.fs" code cache1
+      let _, cache1 = parseFsCached "A.fs" code Map.empty
+      let _, cache2 = parseFsCached "B.fs" code cache1
       cache2 |> Map.count
       |> Expect.equal "two entries" 2
     }
@@ -597,13 +603,13 @@ let perfMeasurementTests =
 
       // Cold parse
       sw.Start()
-      let _, cache = parseFileStructureCached "Perf.fs" code Map.empty
+      let _, cache = parseFsCached "Perf.fs" code Map.empty
       sw.Stop()
       let coldMs = sw.Elapsed.TotalMilliseconds
 
       // Cache hit
       sw.Restart()
-      let _, _ = parseFileStructureCached "Perf.fs" code cache
+      let _, _ = parseFsCached "Perf.fs" code cache
       sw.Stop()
       let hotMs = sw.Elapsed.TotalMilliseconds
 
@@ -620,12 +626,12 @@ let perfMeasurementTests =
       let sw = System.Diagnostics.Stopwatch()
 
       sw.Start()
-      parseFileStructure "Small.fs" small |> ignore
+      parseFs "Small.fs" small |> ignore
       sw.Stop()
       let smallMs = sw.Elapsed.TotalMilliseconds
 
       sw.Restart()
-      parseFileStructure "Large.fs" large |> ignore
+      parseFs "Large.fs" large |> ignore
       sw.Stop()
       let largeMs = sw.Elapsed.TotalMilliseconds
 
@@ -660,7 +666,7 @@ let namespaceContainerTests =
   testList "namespace-as-container" [
 
     test "block in namespace-only file has zero column offset" {
-      let fs = parseFileStructure "Domain.fs" Fixtures.namespaceOnly
+      let fs = parseFs "Domain.fs" Fixtures.namespaceOnly
       let result, _ =
         preprocessForFsi (Some fs) Block None Set.empty "let x = 42"
       result.ColumnOffset
@@ -668,7 +674,7 @@ let namespaceContainerTests =
     }
 
     test "block in namespace-only file does not emit module wrapper" {
-      let fs = parseFileStructure "Domain.fs" Fixtures.namespaceOnly
+      let fs = parseFs "Domain.fs" Fixtures.namespaceOnly
       let result, _ =
         preprocessForFsi (Some fs) Block None Set.empty "let x = 42"
       result.Code.Contains("module MyApp.Domain =")
@@ -683,7 +689,7 @@ let a = 1
 namespace Second
 
 let b = 2"""
-      let fs = parseFileStructure "Multi.fs" multiNs
+      let fs = parseFs "Multi.fs" multiNs
       let container = locateBlock fs None
       container |> Expect.isNone "ambiguous without line info"
     }

@@ -2,6 +2,7 @@ module SageFs.Middleware.CompilationContext
 
 #nowarn "57"
 
+open System.Threading.Tasks
 open Fantomas.Core
 open Fantomas.FCS.Syntax
 
@@ -160,8 +161,8 @@ let extractContainer (prefix: string) (synMod: SynModuleOrNamespace) =
   }
 
 /// Parse a file's module/namespace structure using FCS.
-let parseFileStructure (filePath: string) (code: string) : FileStructure =
-  let results = CodeFormatter.ParseAsync(false, code) |> Async.RunSynchronously
+let parseFileStructure (filePath: string) (code: string) : Task<FileStructure> = task {
+  let! results = CodeFormatter.ParseAsync(false, code) |> Async.StartAsTask
   let res, _ = results.[0]
   match res with
   | ParsedInput.ImplFile(ParsedImplFileInput(contents = contents)) ->
@@ -169,23 +170,25 @@ let parseFileStructure (filePath: string) (code: string) : FileStructure =
     let hasFileLevelModule =
       containers
       |> List.exists (fun c -> c.Kind = SynModuleOrNamespaceKind.NamedModule)
-    { FilePath = filePath; Containers = containers; HasFileLevelModule = hasFileLevelModule }
+    return { FilePath = filePath; Containers = containers; HasFileLevelModule = hasFileLevelModule }
   | _ ->
-    { FilePath = filePath; Containers = []; HasFileLevelModule = false }
+    return { FilePath = filePath; Containers = []; HasFileLevelModule = false }
+}
 
 /// Parse with content-hash caching: skips FCS parse when file content hasn't changed.
 /// Returns updated FileCache alongside the result.
 let parseFileStructureCached
     (filePath: string) (code: string)
     (cache: Map<string, string * FileStructure>)
-    : FileStructure * Map<string, string * FileStructure> =
+    : Task<FileStructure * Map<string, string * FileStructure>> = task {
   let hash = contentHash code
   match cache |> Map.tryFind filePath with
   | Some (cachedHash, fs) when cachedHash = hash ->
-    fs, cache
+    return fs, cache
   | _ ->
-    let fs = parseFileStructure filePath code
-    fs, cache |> Map.add filePath (hash, fs)
+    let! fs = parseFileStructure filePath code
+    return fs, cache |> Map.add filePath (hash, fs)
+}
 
 // ─────────────────────────────────────────────────────────────────
 // Block location resolution

@@ -972,19 +972,21 @@ module McpTools =
       let state =
         compilationStates.GetOrAdd(sid, fun _ -> Middleware.CompilationContext.CompilationState.empty)
 
-      let fileStructure, updatedCache =
+      let! fileStructure, updatedCache =
         match filePath with
-        | Some fp ->
+        | Some fp -> task {
           try
-            let fs, cache =
+            let! fs, cache =
               Middleware.CompilationContext.parseFileStructureCached fp code state.FileCache
-            Some fs, cache
+            return Some fs, cache
           with
-          | :? System.OperationCanceledException -> reraise()
+          | :? System.OperationCanceledException as ex ->
+            return raise ex
           | exn ->
             Log.debug "CompilationContext parse failed for %s: %s" fp exn.Message
-            None, state.FileCache
-        | None -> None, state.FileCache
+            return None, state.FileCache
+          }
+        | None -> Task.FromResult(None, state.FileCache)
 
       let parsedMode = Middleware.CompilationContext.EvalMode.parse evalMode
       let preprocessed, updatedModules =
