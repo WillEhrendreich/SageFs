@@ -843,6 +843,95 @@ let resumePreviousSessions
   Instrumentation.succeedSpan startupSpan
 }
 
+/// Create the Elm runtime with warmup context, streaming test proxy, and SSE dedup.
+let createElmRuntime
+  (sessionManager: MailboxProcessor<SessionManager.SessionCommand>)
+  (readSnapshot: unit -> SessionManager.QuerySnapshot)
+  (httpClient: System.Net.Http.HttpClient)
+  (stateChangedEvent: Event<DaemonStateChange>) =
+  let mutable lastStateJson = ""
+  let mutable lastLoggedOutputCount = 0
+  let mutable lastLoggedDiagCount = 0
+  let getWarmupContextForElm (sessionId: string) : Async<SessionContext option> =
+    async {
+      try
+        let! managed =
+          sessionManager.PostAndAsyncReply(fun reply ->
+            SessionManager.SessionCommand.GetSession(sessionId, reply))
+        match managed with
+        | Some s when s.WorkerBaseUrl.Length > 0 ->
+          let! resp =
+            httpClient.GetStringAsync(sprintf "%s/warmup-context" s.WorkerBaseUrl)
+            |> Async.AwaitTask
+          let warmup = WorkerProtocol.Serialization.deserialize<WarmupContext> resp
+          let! sessions =
+            sessionManager.PostAndAsyncReply(fun reply ->
+              SessionManager.SessionCommand.ListSessions reply)
+          let info = sessions |> List.tryFind (fun si -> si.Id = sessionId)
+          return Some {
+            SessionId = sessionId
+            ProjectNames =
+              info |> Option.map (fun i -> i.Projects) |> Option.defaultValue []
+            WorkingDir =
+              info |> Option.map (fun i -> i.WorkingDirectory)
+              |> Option.defaultValue ""
+            Status =
+              info |> Option.map (fun i -> sprintf "%A" i.Status)
+              |> Option.defaultValue "Unknown"
+            Warmup = warmup
+            FileStatuses = []
+          }
+        | _ -> return None
+      with
+      | :? System.IO.IOException as ex ->
+        Log.error "[getWarmupContextForElm] IO error: %s" ex.Message
+        return None
+      | :? System.Net.Http.HttpRequestException as ex ->
+        Log.error "[getWarmupContextForElm] HTTP error: %s" ex.Message
+        return None
+      | :? System.Threading.Tasks.TaskCanceledException ->
+        return None
+      | ex ->
+        Log.error "[getWarmupContextForElm] Unexpected: %s (%s)" ex.Message (ex.GetType().Name)
+        return None
+    }
+  let effectDeps =
+    { ElmDaemon.createEffectDeps sessionManager readSnapshot with
+        GetWarmupContext = Some getWarmupContextForElm
+        GetStreamingTestProxy = fun sid ->
+          let snapshot = readSnapshot()
+          match Map.tryFind sid snapshot.WorkerBaseUrls with
+          | Some url when url.Length > 0 ->
+            Some (HttpWorkerClient.streamingTestProxyWithCoverage url)
+          | _ -> None }
+  ElmDaemon.start effectDeps (fun model _regions ->
+    let activeBuf = model.RecentOutput.GetActiveBuffer(model.Sessions.ActiveSessionId)
+    let outputCount = activeBuf.Count
+    let diagCount =
+      model.Diagnostics |> Map.values |> Seq.sumBy List.length
+    try
+      let json = SseDedupKey.fromModel model
+      match json <> lastStateJson with
+      | true ->
+        lastStateJson <- json
+        let significantOutputChange = abs (outputCount - lastLoggedOutputCount) >= 50
+        let diagChanged = diagCount <> lastLoggedDiagCount
+        match (not TerminalUIState.IsActive) && (significantOutputChange || diagChanged) with
+        | true ->
+          lastLoggedOutputCount <- outputCount
+          lastLoggedDiagCount <- diagCount
+          let latest =
+            match activeBuf.IsEmpty with
+            | true -> ""
+            | false -> activeBuf.[0].Text
+          Log.info "[elm] output=%d diags=%d | %s"
+            outputCount diagCount latest
+        | false -> ()
+        System.Threading.ThreadPool.QueueUserWorkItem(fun _ ->
+          stateChangedEvent.Trigger (ModelChanged (outputCount, diagCount))) |> ignore
+      | false -> ()
+    with ex -> Log.error "[elm] State change propagation error: %s (%s)" ex.Message (ex.GetType().Name))
+
 /// Run SageFs as a headless daemon.
 /// MCP server + SessionManager + Dashboard — all frontends are clients.
 /// Every session is a worker sub-process managed by SessionManager.
@@ -868,9 +957,6 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
   | false -> ()
 
   use cts = infra.Cts
-  let mutable lastStateJson = ""
-  let mutable lastLoggedOutputCount = 0
-  let mutable lastLoggedDiagCount = 0
   // Test discovery callback — set after elmRuntime is created
   let mutable onTestDiscoveryCallback : (WorkerProtocol.SessionId -> Features.LiveTesting.TestCase array -> Features.LiveTesting.ProviderDescription list -> unit) =
     fun _ _ _ -> ()
@@ -900,95 +986,7 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
     resumePreviousSessions infra sessionOps workingDir onSessionResumed
 
   // Create EffectDeps from SessionManager + start Elm loop
-  let getWarmupContextForElm (sessionId: string) : Async<SessionContext option> =
-    async {
-      try
-        let! managed =
-          sessionManager.PostAndAsyncReply(fun reply ->
-            SessionManager.SessionCommand.GetSession(sessionId, reply))
-        match managed with
-        | Some s when s.WorkerBaseUrl.Length > 0 ->
-          let client = httpClient
-          let! resp =
-            client.GetStringAsync(sprintf "%s/warmup-context" s.WorkerBaseUrl)
-            |> Async.AwaitTask
-          let warmup = WorkerProtocol.Serialization.deserialize<WarmupContext> resp
-          let! sessions =
-            sessionManager.PostAndAsyncReply(fun reply ->
-              SessionManager.SessionCommand.ListSessions reply)
-          let info = sessions |> List.tryFind (fun si -> si.Id = sessionId)
-          let ctx : SessionContext = {
-            SessionId = sessionId
-            ProjectNames =
-              info |> Option.map (fun i -> i.Projects) |> Option.defaultValue []
-            WorkingDir =
-              info |> Option.map (fun i -> i.WorkingDirectory)
-              |> Option.defaultValue ""
-            Status =
-              info |> Option.map (fun i -> sprintf "%A" i.Status)
-              |> Option.defaultValue "Unknown"
-            Warmup = warmup
-            FileStatuses = []
-          }
-          return Some ctx
-        | _ -> return None
-      with
-      | :? System.IO.IOException as ex ->
-        Log.error "[getWarmupContextForElm] IO error: %s" ex.Message
-        return None
-      | :? System.Net.Http.HttpRequestException as ex ->
-        Log.error "[getWarmupContextForElm] HTTP error: %s" ex.Message
-        return None
-      | :? System.Threading.Tasks.TaskCanceledException ->
-        return None
-      | ex ->
-        Log.error "[getWarmupContextForElm] Unexpected: %s (%s)" ex.Message (ex.GetType().Name)
-        return None
-    }
-  let effectDeps =
-    { ElmDaemon.createEffectDeps sessionManager readSnapshot with
-        GetWarmupContext = Some getWarmupContextForElm
-        GetStreamingTestProxy = fun sid ->
-          let snapshot = readSnapshot()
-          match Map.tryFind sid snapshot.WorkerBaseUrls with
-          | Some url when url.Length > 0 ->
-            Some (HttpWorkerClient.streamingTestProxyWithCoverage url)
-          | _ -> None }
-  let elmRuntime =
-    ElmDaemon.start effectDeps (fun model _regions ->
-      let activeBuf = model.RecentOutput.GetActiveBuffer(model.Sessions.ActiveSessionId)
-      let outputCount = activeBuf.Count
-      let diagCount =
-        model.Diagnostics |> Map.values |> Seq.sumBy List.length
-      // Fire SSE event with summary JSON — deduplicated
-      try
-        let json = SseDedupKey.fromModel model
-        match json <> lastStateJson with
-        | true ->
-          lastStateJson <- json
-          let outputChanged = outputCount <> lastLoggedOutputCount
-          let diagChanged = diagCount <> lastLoggedDiagCount
-          // Rate-limit output logging: only log when output jumps by ≥50 or diags change.
-          // During warmup, FSI produces ~500 output lines → 83 log entries without this.
-          let significantOutputChange = abs (outputCount - lastLoggedOutputCount) >= 50
-          match (not TerminalUIState.IsActive) && (significantOutputChange || diagChanged) with
-          | true ->
-            lastLoggedOutputCount <- outputCount
-            lastLoggedDiagCount <- diagCount
-            let latest =
-              match activeBuf.IsEmpty with
-              | true -> ""
-              | false -> activeBuf.[0].Text
-            Log.info "[elm] output=%d diags=%d | %s"
-              outputCount diagCount latest
-          | false -> ()
-          // Non-blocking: fire SSE push on thread pool so ElmLoop drain returns immediately.
-          // Subscribers (MCP, Dashboard) do JSON parsing + SSE writes that took 50-90ms
-          // when run synchronously on the drain thread.
-          System.Threading.ThreadPool.QueueUserWorkItem(fun _ ->
-            stateChangedEvent.Trigger (ModelChanged (outputCount, diagCount))) |> ignore
-        | false -> ()
-      with ex -> Log.error "[elm] State change propagation error: %s (%s)" ex.Message (ex.GetType().Name))
+  let elmRuntime = createElmRuntime sessionManager readSnapshot httpClient stateChangedEvent
 
   // Create a diagnostics-changed event (aggregated from workers)
   let diagnosticsChanged = Event<Features.DiagnosticsStore.T>()
