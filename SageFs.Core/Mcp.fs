@@ -890,15 +890,33 @@ module McpTools =
 
   type OutputFormat = Text | Json
 
+  /// Adjust diagnostic line/column numbers in a WorkerResponse by preprocessing offsets.
+  let adjustResponseDiagnostics (lineOffset: int) (colOffset: int) (response: WorkerProtocol.WorkerResponse) =
+    match lineOffset, colOffset with
+    | 0, 0 -> response
+    | _ ->
+      match response with
+      | WorkerProtocol.WorkerResponse.EvalResult(rid, result, diags, meta) ->
+        let adjusted =
+          diags |> List.map (fun d ->
+            { d with
+                StartLine = Middleware.CompilationContext.mapDiagnosticLine lineOffset d.StartLine
+                StartColumn = Middleware.CompilationContext.mapDiagnosticColumn colOffset d.StartColumn
+                EndLine = Middleware.CompilationContext.mapDiagnosticLine lineOffset d.EndLine
+                EndColumn = Middleware.CompilationContext.mapDiagnosticColumn colOffset d.EndColumn })
+        WorkerProtocol.WorkerResponse.EvalResult(rid, result, adjusted, meta)
+      | other -> other
+
   /// Evaluate a single FSI statement, dispatch Elm events, return formatted output.
-  let private evalSingleStatement (ctx: McpContext) (sid: string) (format: OutputFormat) (statement: string) = task {
+  let private evalSingleStatement (ctx: McpContext) (sid: string) (format: OutputFormat) (lineOffset: int) (colOffset: int) (statement: string) = task {
     notifyElm ctx (SageFsEvent.EvalStarted (sid, statement))
     let! routeResult =
       routeToSession ctx sid
         (fun replyId -> WorkerProtocol.WorkerMessage.EvalCode(statement, replyId))
     return
       match routeResult with
-      | Ok response ->
+      | Ok rawResponse ->
+        let response = adjustResponseDiagnostics lineOffset colOffset rawResponse
         let formatted =
           match format with
           | Json -> McpAdapter.formatWorkerEvalResultJson response
@@ -974,7 +992,7 @@ module McpTools =
 
       let mutable allOutputs = []
       for statement in statements do
-        let! output = evalSingleStatement ctx sid format statement
+        let! output = evalSingleStatement ctx sid format preprocessed.LineOffset preprocessed.ColumnOffset statement
         allOutputs <- output :: allOutputs
 
       let finalOutput =

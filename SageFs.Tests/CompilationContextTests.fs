@@ -2,7 +2,9 @@ module SageFs.Tests.CompilationContextTests
 
 open Expecto
 open Expecto.Flip
+open SageFs
 open SageFs.Middleware.CompilationContext
+open SageFs.WorkerProtocol
 
 // ─────────────────────────────────────────────────────────────────
 // Fixture data — real F# file contents for test scenarios
@@ -453,6 +455,77 @@ let diagnosticMappingTests =
   ]
 
 // ─────────────────────────────────────────────────────────────────
+// 6. Response diagnostic adjustment tests
+// ─────────────────────────────────────────────────────────────────
+
+let responseDiagnosticTests =
+  testList "adjustResponseDiagnostics" [
+
+    test "adjusts all line/column fields on EvalResult diagnostics" {
+      let diag : WorkerDiagnostic =
+        { Severity = Features.Diagnostics.DiagnosticSeverity.Error
+          Message = "type mismatch"
+          StartLine = 7; StartColumn = 6
+          EndLine = 7; EndColumn = 12 }
+      let response =
+        WorkerResponse.EvalResult("r1", Ok "done", [diag], Map.empty)
+      let adjusted =
+        McpTools.adjustResponseDiagnostics 3 2 response
+      match adjusted with
+      | WorkerResponse.EvalResult(_, _, [d], _) ->
+        d.StartLine |> Expect.equal "startLine 7-3=4" 4
+        d.StartColumn |> Expect.equal "startCol 6-2=4" 4
+        d.EndLine |> Expect.equal "endLine 7-3=4" 4
+        d.EndColumn |> Expect.equal "endCol 12-2=10" 10
+      | other -> failwith (sprintf "unexpected: %A" other)
+    }
+
+    test "zero offsets returns same response" {
+      let diag : WorkerDiagnostic =
+        { Severity = Features.Diagnostics.DiagnosticSeverity.Warning
+          Message = "unused"
+          StartLine = 5; StartColumn = 3
+          EndLine = 5; EndColumn = 8 }
+      let response =
+        WorkerResponse.EvalResult("r1", Ok "ok", [diag], Map.empty)
+      let adjusted =
+        McpTools.adjustResponseDiagnostics 0 0 response
+      match adjusted with
+      | WorkerResponse.EvalResult(_, _, [d], _) ->
+        d.StartLine |> Expect.equal "unchanged" 5
+        d.StartColumn |> Expect.equal "unchanged" 3
+      | other -> failwith (sprintf "unexpected: %A" other)
+    }
+
+    test "non-EvalResult responses pass through unchanged" {
+      let response = WorkerResponse.WorkerError (SageFsError.PipeClosed)
+      let adjusted =
+        McpTools.adjustResponseDiagnostics 5 3 response
+      match adjusted with
+      | WorkerResponse.WorkerError (SageFsError.PipeClosed) -> ()
+      | other -> failwith (sprintf "unexpected: %A" other)
+    }
+
+    test "column clamped to zero" {
+      let diag : WorkerDiagnostic =
+        { Severity = Features.Diagnostics.DiagnosticSeverity.Error
+          Message = "err"
+          StartLine = 3; StartColumn = 1
+          EndLine = 3; EndColumn = 5 }
+      let response =
+        WorkerResponse.EvalResult("r1", Error (SageFsError.EvalFailed "x"), [diag], Map.empty)
+      let adjusted =
+        McpTools.adjustResponseDiagnostics 1 4 response
+      match adjusted with
+      | WorkerResponse.EvalResult(_, _, [d], _) ->
+        d.StartLine |> Expect.equal "line 3-1=2" 2
+        d.StartColumn |> Expect.equal "col 1-4=0 (clamped)" 0
+        d.EndColumn |> Expect.equal "col 5-4=1" 1
+      | other -> failwith (sprintf "unexpected: %A" other)
+    }
+  ]
+
+// ─────────────────────────────────────────────────────────────────
 // All tests
 // ─────────────────────────────────────────────────────────────────
 
@@ -464,4 +537,5 @@ let allCompilationContextTests =
     locateBlockTests
     propertyTests
     diagnosticMappingTests
+    responseDiagnosticTests
   ]
