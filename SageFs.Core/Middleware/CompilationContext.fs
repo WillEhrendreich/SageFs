@@ -17,7 +17,7 @@ type EvalMode =
 
 module EvalMode =
   let parse (s: string option) =
-    match s with
+    match s |> Option.map (fun v -> v.ToLowerInvariant()) with
     | Some "file" -> File
     | Some "block" -> Block
     | _ -> Auto

@@ -651,8 +651,8 @@ let evalModeTests =
     test "parse Some unknown → Auto" {
       EvalMode.parse (Some "whatever") |> Expect.equal "should be Auto" Auto
     }
-    test "parse Some File (case-sensitive) → Auto" {
-      EvalMode.parse (Some "File") |> Expect.equal "should be Auto" Auto
+    test "parse Some File (case-insensitive) → File" {
+      EvalMode.parse (Some "File") |> Expect.equal "should be File" File
     }
   ]
 

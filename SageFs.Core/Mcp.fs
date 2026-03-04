@@ -373,7 +373,9 @@ module McpAdapter =
               match text.Length > 0 with
               | true -> sprintf ""","detail":"%s" """ (escapeJson text)
               | false -> ""
-            with _ -> ""
+            with
+            | :? System.OperationCanceledException -> reraise()
+            | _ -> ""
           | None -> ""
         sprintf """{"label":"%s","kind":"%s","insertText":"%s"%s}"""
           (escapeJson item.DisplayText) (Features.AutoCompletion.CompletionKind.label item.Kind) (escapeJson item.ReplacementText) detail)
@@ -1117,7 +1119,9 @@ module McpTools =
           |> Seq.filter McpAdapter.isProjectFile
           |> Seq.map (fun p -> Path.GetRelativePath(workingDir, p))
           |> Seq.toArray
-        with _ -> [||]
+        with
+        | :? System.OperationCanceledException -> reraise()
+        | _ -> [||]
 
       let solutions =
         try
@@ -1125,7 +1129,9 @@ module McpTools =
           |> Seq.filter McpAdapter.isSolutionFile
           |> Seq.map Path.GetFileName
           |> Seq.toArray
-        with _ -> [||]
+        with
+        | :? System.OperationCanceledException -> reraise()
+        | _ -> [||]
 
       return McpAdapter.formatAvailableProjects workingDir projects solutions
     })
