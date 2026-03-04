@@ -37,13 +37,14 @@ internal class EvalFileCommand : Command
     if (textView is null) return;
 
     var code = textView.Document.Text.CopyToString();
+    var filePath = textView.Document.Uri.LocalPath;
 
     if (output is not null)
     {
       await output.WriteLineAsync($"▶ Evaluating file ({code.Length} chars)...");
     }
 
-    var result = await client.EvalAsync(code, ct);
+    var result = await client.EvalWithContextAsync(code, filePath, "file", 0, ct);
     if (output is not null)
     {
       if (result.ExitCode == 0)

@@ -191,9 +191,18 @@ type SageFsClient() =
   }
 
   /// Evaluate F# code via the daemon's exec endpoint.
-  member this.EvalAsync(code: string, ct: CancellationToken) = task {
+  member this.EvalAsync(code: string, ct: CancellationToken) =
+    this.EvalWithContextAsync(code, "", "", 0, ct)
+
+  /// Evaluate F# code with compilation context (file path, eval mode, block start line).
+  member this.EvalWithContextAsync(code: string, filePath: string, evalMode: string, blockStartLine: int, ct: CancellationToken) = task {
     try
-      let json = sprintf """{"code":%s}""" (JsonSerializer.Serialize(code))
+      let json =
+        sprintf """{"code":%s,"file_path":%s,"eval_mode":%s,"block_start_line":%d}"""
+          (JsonSerializer.Serialize(code))
+          (JsonSerializer.Serialize(filePath))
+          (JsonSerializer.Serialize(evalMode))
+          blockStartLine
       use content = new StringContent(json, Encoding.UTF8, "application/json")
       let! resp = http.PostAsync(sprintf "%s/exec" this.BaseUrl, content, ct)
       let! body = resp.Content.ReadAsStringAsync(ct)

@@ -55,10 +55,13 @@ internal class EvalRangeCommand : Command
 
     if (string.IsNullOrWhiteSpace(code)) return;
 
+    var filePath = textView.Document.Uri.LocalPath;
+    var startLine = textView.Selection.Extent.Start.GetContainingLine().LineNumber + 1; // 0-based → 1-based
+
     if (output is not null)
       await output.WriteLineAsync($"▶ Evaluating block ({code.Length} chars)...");
 
-    var result = await client.EvalAsync(code, ct);
+    var result = await client.EvalWithContextAsync(code, filePath, "block", startLine, ct);
     if (output is not null)
     {
       if (result.ExitCode == 0)

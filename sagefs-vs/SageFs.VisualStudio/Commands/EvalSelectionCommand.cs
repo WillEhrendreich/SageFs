@@ -36,11 +36,14 @@ internal class EvalSelectionCommand : Command
     using var textView = await context.GetActiveTextViewAsync(ct);
     if (textView is null) return;
 
+    var filePath = textView.Document.Uri.LocalPath;
     var selection = textView.Selection;
     string code;
+    int startLine = 0;
     if (!selection.IsEmpty)
     {
       code = selection.Extent.CopyToString();
+      startLine = selection.Extent.Start.GetContainingLine().LineNumber + 1; // 0-based → 1-based
     }
     else
     {
@@ -52,7 +55,7 @@ internal class EvalSelectionCommand : Command
       await output.WriteLineAsync($"▶ Evaluating ({code.Length} chars)...");
     }
 
-    var result = await client.EvalAsync(code, ct);
+    var result = await client.EvalWithContextAsync(code, filePath, "block", startLine, ct);
     if (output is not null)
     {
       if (result.ExitCode == 0)
