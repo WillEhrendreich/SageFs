@@ -98,6 +98,44 @@ graph TB
 
 ---
 
+## Mental Model — How SageFs Works
+
+SageFs has exactly **three concepts**: a daemon, sessions, and clients.
+
+```
+┌──────────────────────────────────────────────────────┐
+│  SageFs Daemon (one per machine)                     │
+│                                                      │
+│  ┌─────────┐  ┌─────────┐  ┌─────────┐              │
+│  │ Session  │  │ Session  │  │ Session  │  ...       │
+│  │ Worker 1 │  │ Worker 2 │  │ Worker 3 │             │
+│  │ MyApp    │  │ Tests    │  │ Bare FSI │             │
+│  └─────────┘  └─────────┘  └─────────┘              │
+│                                                      │
+│  MCP Server · Dashboard · File Watcher · Hot Reload  │
+└───────┬──────────┬──────────┬──────────┬─────────────┘
+        │          │          │          │
+    VS Code     Neovim      TUI      AI Agent
+```
+
+**The daemon is a service.** It starts bare — no project, no session. It just listens. Clients tell it what to do.
+
+**Sessions are isolated workers.** Each session is a separate OS process with its own FSI instance, its own loaded project, its own file watcher. They can't interfere with each other. Create as many as you need.
+
+**Clients are thin.** Your editor plugin, the TUI, an AI agent — they all connect to the same daemon. They create sessions, send code, read results. Multiple clients can share the same session or each use their own.
+
+**The workflow:**
+
+1. Start the daemon: `sagefs`
+2. A client (editor, CLI, AI) creates a session: `POST /api/sessions/create` with a project path
+3. The daemon spawns a worker, loads the project, starts watching files
+4. The client sends code, reads diagnostics, runs tests — all through the daemon
+5. Other clients can connect to the same session simultaneously
+
+This means **the daemon doesn't need to know your project at startup**. It discovers projects when clients ask for sessions. You can run `sagefs` with no arguments in any directory and it's ready for any project.
+
+---
+
 ## Get Started
 
 **Prerequisites:** [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0). That's it.
@@ -106,15 +144,17 @@ graph TB
 # Install
 dotnet tool install --global SageFs
 
-# Run (in any F# project directory)
-sagefs --proj MyApp.fsproj
+# Start the daemon (in any directory)
+sagefs
 
-# Connect from your editor, open the dashboard, or point an AI agent at it
+# Or let your editor start it — VS Code, Neovim, and Visual Studio
+# all auto-start the daemon and create sessions for your open project.
+
 # MCP endpoint:  http://localhost:37749/sse
 # Dashboard:     http://localhost:37750/dashboard
 ```
 
-SageFs builds your project, loads all dependencies into a live FSI session, watches your files, starts the MCP server, and opens the dashboard. You're ready.
+SageFs starts, listens for clients, and creates sessions on demand. Your editor plugin handles the rest — discovering your project, creating a session, and connecting you to a live FSI environment.
 
 <details>
 <summary>Build from source</summary>
@@ -323,22 +363,22 @@ Design: length-prefixed strings, section headers with byte-count envelopes, vers
 <br />
 
 ```
-Usage: sagefs [options]                Start daemon
-       sagefs --supervised [options]   Start with watchdog
-       sagefs connect                  REPL client
-       sagefs tui                      Terminal UI
-       sagefs gui                      GPU GUI (Raylib)
-       sagefs stop                     Stop daemon
-       sagefs status                   Show info
+Usage: sagefs [options]                Start daemon (bare, waits for clients)
+       sagefs --supervised [options]   Start with watchdog auto-restart
+       sagefs tui                      Terminal UI (starts daemon if needed)
+       sagefs gui                      GPU GUI via Raylib (starts daemon if needed)
+       sagefs stop                     Stop running daemon
+       sagefs status                   Show daemon info
 
-Key options:
-  --proj FILE       Load .fsproj
-  --sln FILE        Load .sln/.slnx
-  --bare            No project, bare FSI
-  --supervised      Auto-restart on crash
-  --no-watch        Disable file watcher
+Daemon options:
+  --no-resume       Skip restoring previous sessions on startup
+  --no-watch        Disable file watching for all sessions
+  --prune           Mark all stale sessions as stopped, then exit
+  --supervised      Auto-restart on crash (exponential backoff)
   --mcp-port PORT   Custom MCP port (default: 37749)
 ```
+
+Sessions are created by clients (editor plugins, AI agents, or the API directly), not by CLI flags. The daemon starts bare and waits.
 
 Full options: `sagefs --help`
 
@@ -359,7 +399,7 @@ Full options: `sagefs --help`
 
 **Startup profile** — `~/.SageFs/init.fsx` auto-loads on every session start.
 
-**Precedence:** CLI args > `.SageFs/config.fsx` > auto-discovery.
+**Precedence:** Per-directory config > auto-discovery from working directory.
 
 </details>
 
@@ -402,7 +442,7 @@ Rewrite logic: [`SageFs.Core/FsiRewrite.fs`](SageFs.Core/FsiRewrite.fs) (~25 lin
 
 <br />
 
-SageFs is **daemon-first** — one server, many clients. Worker sessions run as isolated sub-processes (Erlang-style fault isolation). The TUI and Raylib GUI share the same `Cell[,]` grid rendering abstraction — same keybindings, same layout, different backends.
+SageFs is **daemon-first** — one server, many clients. The daemon starts bare and creates sessions on demand. Each session is an **isolated worker sub-process** (Erlang-style fault isolation) with its own FSI, project, and file watcher. The TUI and Raylib GUI share the same `Cell[,]` grid rendering abstraction — same keybindings, same layout, different backends.
 
 ```
                 ┌───────────────┐
