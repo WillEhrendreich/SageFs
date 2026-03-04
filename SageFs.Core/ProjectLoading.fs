@@ -8,7 +8,6 @@ open Ionide.ProjInfo
 
 open Ionide.ProjInfo.Types
 open SageFs.Utils
-open SageFs.Args
 
 type FileName = string
 type DllName = string
@@ -32,22 +31,14 @@ let emptySolution = {
   OtherArgs = []
 }
 
-let loadSolution (logger: ILogger) (args: Arguments list) =
-  let directory =
-    args
-    |> List.tryPick (function
-      | Dir d -> Some d
-      | _ -> None)
-    |> Option.defaultWith Directory.GetCurrentDirectory
+let loadSolution (logger: ILogger) (config: Args.ProjectLoadConfig) =
+  let directory = config.WorkingDir
 
-  let explicitProjects =
-    args |> List.choose (function Proj p -> Some p | _ -> None)
+  let explicitProjects = config.Projects
+  let explicitSolutions = config.Solutions
 
-  let explicitSolutions =
-    args |> List.choose (function Sln s -> Some s | _ -> None)
-
-  // When --proj is given explicitly, don't auto-discover .sln files.
-  // Only auto-discover when neither --proj nor --sln is specified.
+  // When projects are given explicitly, don't auto-discover .sln files.
+  // Only auto-discover when neither projects nor solutions is specified.
   let solutions =
     match explicitSolutions with
     | _ :: _ -> explicitSolutions |> List.map Path.GetFullPath
@@ -60,7 +51,7 @@ let loadSolution (logger: ILogger) (args: Arguments list) =
   let projects =
     match explicitProjects with
     | _ :: _ -> explicitProjects |> List.map Path.GetFullPath
-    | [] when not explicitSolutions.IsEmpty -> [] // --sln handles its own projects
+    | [] when not explicitSolutions.IsEmpty -> [] // solutions handle their own projects
     | [] ->
       Directory.EnumerateFiles directory
       |> Seq.filter (fun s -> s.EndsWith(".fsproj", System.StringComparison.Ordinal))
@@ -104,37 +95,13 @@ let loadSolution (logger: ILogger) (args: Arguments list) =
 
     let fcsProjectOptions = List.ofSeq <| FCS.mapManyOptions projects
 
-    let startupFiles =
-      args
-      |> List.choose (function
-        | Use f -> Some(Path.GetFullPath f)
-        | _ -> None)
-
-    let references =
-      args
-      |> List.choose (function
-        | Reference r -> Some(Path.GetFullPath r)
-        | _ -> None)
-
-    let libPaths =
-      args
-      |> List.collect (function
-        | Lib l -> List.map Path.GetFullPath l
-        | _ -> [])
-
-    let otherArgs =
-      args
-      |> List.collect (function
-        | Other args -> args
-        | _ -> [])
-
     {
       FsProjects = fcsProjectOptions
       Projects = projects |> Seq.toList
-      StartupFiles = startupFiles
-      References = references
-      LibPaths = libPaths
-      OtherArgs = otherArgs
+      StartupFiles = []
+      References = []
+      LibPaths = []
+      OtherArgs = []
     }
 
 /// Detect if a project is a test project via MSBuild property or package references.

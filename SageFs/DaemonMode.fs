@@ -105,7 +105,7 @@ let appendEventsAsync (infra: DaemonInfra) (events: Features.Events.SageFsEvent 
     } :> System.Threading.Tasks.Task) |> ignore
 
 /// Create one-time daemon infrastructure (logger, HTTP client, persistence, CTS).
-let createDaemonInfrastructure (args: Args.Arguments list) : DaemonInfra =
+let createDaemonInfrastructure () : DaemonInfra =
   let otelConfigured = DaemonInfo.otelConfigured
   let loggerFactory =
     LoggerFactory.Create(fun builder ->
@@ -160,8 +160,8 @@ let createDaemonInfrastructure (args: Args.Arguments list) : DaemonInfra =
   }
 
 /// Handle --prune flag: mark all alive sessions as stopped and return true if pruned.
-let handlePrune (infra: DaemonInfra) (args: Args.Arguments list) = task {
-  match args |> List.exists (function Args.Arguments.Prune -> true | _ -> false) with
+let handlePrune (infra: DaemonInfra) (flags: Args.DaemonFlags) = task {
+  match flags.Prune with
   | true ->
     let! daemonEvents = infra.Persistence.FetchStream infra.DaemonStreamId
     let daemonState = Features.Replay.DaemonReplayState.replayStream daemonEvents
@@ -456,11 +456,10 @@ let performGracefulShutdown
 
 /// Resume previous sessions from binary manifest (or Marten fallback).
 /// Creates new sessions for each alive-but-deduplicated entry, or
-/// falls back to --proj args if no previous sessions exist.
+/// starts bare if no previous sessions exist.
 let resumePreviousSessions
   (infra: DaemonInfra)
   (sessionOps: SessionManagementOps)
-  (initialProjects: string list)
   (workingDir: string)
   (onSessionResumed: unit -> unit)
   = task {
@@ -591,25 +590,7 @@ let resumePreviousSessions
     | Some _ -> () // Previously tracked active session — clients resolve on connect
     | None -> ()
   | true ->
-    match initialProjects.IsEmpty with
-    | false ->
-      // Multi-project: create one session per project for independent workers
-      log.LogInformation("No previous sessions. Creating {Count} session(s) from --proj args", initialProjects.Length)
-      let createTasks =
-        initialProjects
-        |> List.map (fun proj -> task {
-          let! result = sessionOps.CreateSession [ proj ] workingDir
-          match result with
-          | Ok info ->
-            Instrumentation.daemonSessionsResumed.Add(1L)
-            log.LogInformation("Created session for {Project}: {Info}", proj, info)
-            onSessionResumed ()
-          | Error err ->
-            log.LogWarning("Failed to create session for {Project}: {Error}", proj, err)
-        })
-      do! System.Threading.Tasks.Task.WhenAll(createTasks) :> System.Threading.Tasks.Task
-    | true ->
-      log.LogInformation("No previous sessions to resume. Waiting for clients to create sessions")
+    log.LogInformation("No previous sessions to resume. Waiting for clients to create sessions")
 
   startupSw.Stop()
   Instrumentation.daemonStartupMs.Record(startupSw.Elapsed.TotalMilliseconds)
@@ -619,9 +600,9 @@ let resumePreviousSessions
 /// Run SageFs as a headless daemon.
 /// MCP server + SessionManager + Dashboard — all frontends are clients.
 /// Every session is a worker sub-process managed by SessionManager.
-let run (mcpPort: int) (args: Args.Arguments list) = task {
+let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
   let version = DaemonInfo.version
-  let infra = createDaemonInfrastructure args
+  let infra = createDaemonInfrastructure ()
   let log = infra.Log
   let httpClient = infra.HttpClient
   let persistence = infra.Persistence
@@ -635,7 +616,7 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
   let appendEventsAsync events = appendEventsAsync infra events
 
   // Handle --prune: mark all alive sessions as stopped and exit
-  let! pruned = handlePrune infra args
+  let! pruned = handlePrune infra flags
   match pruned with
   | true -> return ()
   | false -> ()
@@ -664,19 +645,13 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
 
   let sessionOps = createSessionOps sessionManager readSnapshot appendEventsAsync
 
-  let noResume = args |> List.exists (function Args.Arguments.No_Resume -> true | _ -> false)
+  let noResume = flags.NoResume
 
-  // Parse initial projects from CLI args (used if no previous sessions)
-  let initialProjects =
-    args
-    |> List.choose (function
-      | Args.Arguments.Proj p -> Some p
-      | _ -> None)
   let workingDir = Environment.CurrentDirectory
 
   // resumeSessions delegates to module-level function with captured infra
   let resumeSessions onSessionResumed =
-    resumePreviousSessions infra sessionOps initialProjects workingDir onSessionResumed
+    resumePreviousSessions infra sessionOps workingDir onSessionResumed
 
   // Create EffectDeps from SessionManager + start Elm loop
   let getWarmupContextForElm (sessionId: string) : Async<SessionContext option> =
@@ -1258,18 +1233,7 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
       stcOrphans + sfsOrphans, stcOrphans, sfsOrphans)
   | false -> ()
 
-  // Eagerly load cached test state for initial projects — shows results before FSI warmup
-  match initialProjects with
-  | [] -> ()
-  | projects ->
-    match Features.DaemonPersistence.loadTestCache DaemonState.SageFsDir projects with
-    | Ok cachedState ->
-      log.LogInformation("Restored cached test state ({CoverageCount} coverage, {ResultCount} results) in <100ms",
-        cachedState.TestCoverageBitmaps.Count, cachedState.LastResults.Count)
-      elmRuntime.Dispatch(SageFsMsg.RestoreTestCache cachedState)
-      let (Features.LiveTesting.RunGeneration gen) = cachedState.LastGeneration
-      lastSavedGeneration <- gen
-    | Error msg -> log.LogDebug("No pre-warmup test cache: {Reason}", msg)
+  // Test cache pre-loading happens per-session after resume, not eagerly
 
   // Resume sessions in background — don't block the daemon main task.
   // Each resumed session dispatches ListSessions so dashboard sees them incrementally.

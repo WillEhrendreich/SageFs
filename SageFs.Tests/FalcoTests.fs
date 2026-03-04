@@ -53,7 +53,10 @@ let createTestActor () =
         | None -> failwith (sprintf "Cannot find SageFs.Tests.fsproj (tried %s)" basePath)
 
     printfn "Loading test project from: %s" fullPath
-    let args = mkCommonActorArgs logger true ignore [ SageFs.Args.Proj fullPath ]
+    let loadConfig : SageFs.Args.ProjectLoadConfig = {
+      Projects = [fullPath]; Solutions = []; WorkingDir = System.IO.Path.GetDirectoryName(fullPath)
+    }
+    let args = mkCommonActorArgs logger true ignore loadConfig false
     let! result = createActor args
     return result.Actor
   }

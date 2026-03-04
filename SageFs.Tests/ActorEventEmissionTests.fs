@@ -16,7 +16,7 @@ let onEvent evt = lock captured (fun () -> captured.Add(evt))
 
 /// Single shared actor for all event emission tests
 let sharedActor = lazy(
-  let args = mkCommonActorArgs quietLogger false onEvent []
+  let args = mkCommonActorArgs quietLogger false onEvent SageFs.Args.ProjectLoadConfig.empty true
   let result = createActor args |> Async.AwaitTask |> Async.RunSynchronously
   result.Actor)
 

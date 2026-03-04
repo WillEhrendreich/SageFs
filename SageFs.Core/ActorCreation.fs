@@ -35,7 +35,8 @@ type ActorArgs = {
   Logger: Utils.ILogger
   OutStream: TextWriter
   UseAsp: bool
-  ParsedArgs: Args.Arguments list
+  LoadConfig: Args.ProjectLoadConfig
+  IsBare: bool
   OnEvent: Features.Events.SageFsEvent -> unit
 }
 
@@ -60,17 +61,14 @@ type ActorResult = {
 /// The FSI session init runs in the background — callers can start
 /// serving MCP (get_fsi_status etc.) right away while warm-up proceeds.
 let createActorImmediate a =
-  let parsedArgs = a.ParsedArgs
-  let isBare = parsedArgs |> List.exists (function Args.Bare -> true | _ -> false)
-
   let originalSln =
-    match isBare with
+    match a.IsBare with
     | true ->
       a.Logger.LogInfo "Bare session — skipping project discovery"
       ProjectLoading.emptySolution
     | false ->
       a.Logger.LogInfo "Discovering projects..."
-      let sln = loadSolution a.Logger parsedArgs
+      let sln = loadSolution a.Logger a.LoadConfig
       a.Logger.LogInfo "Project loading complete."
       sln
 
@@ -114,11 +112,12 @@ let createActor a =
     return result
   }
 
-let mkCommonActorArgs logger useAsp (onEvent: Features.Events.SageFsEvent -> unit) args = {
+let mkCommonActorArgs logger useAsp (onEvent: Features.Events.SageFsEvent -> unit) (loadConfig: Args.ProjectLoadConfig) (isBare: bool) = {
   Middleware = commonMiddleware
   InitFunctions = commonInitFunctions
   UseAsp = useAsp
-  ParsedArgs = args
+  LoadConfig = loadConfig
+  IsBare = isBare
   OutStream = stdout
   Logger = logger
   OnEvent = onEvent

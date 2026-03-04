@@ -61,26 +61,6 @@ let parseMcpPort (args: string array) =
     | _ -> defaultPort
   | _ -> defaultPort
 
-/// Filter out SageFs-specific flags, keep FSI-passthrough args.
-let filterArgs (args: string array) =
-  let sageFsFlags =
-    set [ "--mcp-port"; "--help"; "-h";
-          "--version"; "-v"; "--supervised" ]
-  let mcpPortIndex = args |> Array.tryFindIndex (fun a -> a = "--mcp-port")
-  let ionideFlags =
-    args |> Array.filter (fun a -> a.StartsWith("--fsi-server-", System.StringComparison.Ordinal))
-  let regularArgs =
-    args
-    |> Array.filter (fun a ->
-      not (sageFsFlags.Contains(a))
-      && not (Array.contains a ionideFlags))
-    |> Array.filter (fun a ->
-      match mcpPortIndex with
-      | Some i when i + 1 < args.Length && a = args.[i + 1] -> false
-      | _ -> true)
-  match ionideFlags.Length > 0 with
-  | true -> Array.concat [regularArgs; [|"--other"|]; ionideFlags]
-  | false -> regularArgs
 
 /// CLI command parsed from arguments — replaces if/elif chain with pattern matching.
 type CliCommand =
@@ -132,8 +112,7 @@ let startDaemonInBackground (daemonArgs: string) =
 /// Run daemon mode (default behavior).
 let runDaemon (args: string array) =
   let mcpPort = parseMcpPort args
-  let filteredArgs = filterArgs args
-  let parsedArgs = Args.parseArgs filteredArgs
+  let flags = Args.DaemonFlags.parse (Array.toList args)
   let isSupervised = args |> Array.exists (fun a -> a = "--supervised")
   match isSupervised with
   | true ->
@@ -153,7 +132,7 @@ let runDaemon (args: string array) =
     |> _.GetAwaiter() |> _.GetResult()
     0
   | false ->
-    DaemonMode.run mcpPort parsedArgs
+    DaemonMode.run mcpPort flags
     |> _.GetAwaiter() |> _.GetResult()
     0
 
@@ -179,18 +158,9 @@ let main args =
     printfn "  --help, -h             Show this help message"
     printfn "  --mcp-port PORT        Set custom MCP server port (default: 37749)"
     printfn "  --supervised           Run under watchdog supervisor (auto-restart on crash)"
-    printfn "  --bare                 Start a bare FSI session — no project/solution loading"
     printfn "  --no-watch             Disable file watching — no automatic #load on changes"
     printfn "  --no-resume            Skip restoring previous sessions on daemon startup"
     printfn "  --prune                Mark all stale sessions as stopped and exit"
-    printfn "  --proj FILE            Load project from .fsproj file"
-    printfn "  --sln FILE             Load all projects from solution file"
-    printfn "  --dir DIR              Set working directory"
-    printfn "  --reference:FILE       Reference a .NET assembly"
-    printfn "  --load:FILE            Load and compile an F# source file at startup"
-    printfn "  --use:FILE             Use a file for initial input/prompt config"
-    printfn "  --lib DIR [DIR...]     Directories to search for referenced assemblies"
-    printfn "  --other ARGS...        Pass remaining arguments to FSI"
     printfn ""
     printfn "Environment Variables:"
     printfn "  SageFs_MCP_PORT           Override MCP server port (same as --mcp-port)"
@@ -208,9 +178,8 @@ let main args =
     printfn "  If a daemon is already running, `sagefs` (no subcommand) launches the TUI."
     printfn ""
     printfn "Examples:"
-    printfn "  SageFs                              Start daemon"
-    printfn "  SageFs --proj MyProject.fsproj      Start daemon with project"
-    printfn "  SageFs --mcp-port 47700 --proj X    Start daemon on custom port"
+    printfn "  SageFs                              Start daemon (auto-discovers projects)"
+    printfn "  SageFs --mcp-port 47700             Start daemon on custom port"
     printfn "  SageFs --supervised                 Start with auto-restart"
     printfn "  SageFs tui                          Terminal UI (starts daemon if needed)"
     printfn "  SageFs gui                          Raylib GUI (starts daemon if needed)"
@@ -281,17 +250,8 @@ let main args =
           | _ -> None
         | false -> None)
       |> Option.defaultValue 0
-    let workerSpecific = set ["--session-id"; "--http-port"]
-    let filteredArgs =
-      workerArgs
-      |> List.filter (fun a ->
-        not (workerSpecific.Contains a)
-        && not (workerArgs
-                |> List.pairwise
-                |> List.exists (fun (prev, cur) ->
-                  cur = a && workerSpecific.Contains prev)))
-    let parsedArgs = Args.parseArgs (filteredArgs |> List.toArray)
-    WorkerMain.run sessionId httpPort parsedArgs
+    // Projects, bare, no-watch now come from env vars — no CLI parsing needed
+    WorkerMain.run sessionId httpPort
     |> Async.RunSynchronously
     0
 

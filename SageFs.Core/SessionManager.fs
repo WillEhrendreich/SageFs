@@ -197,19 +197,11 @@ module SessionManager =
     (workingDir: string)
     (onExited: int -> int -> unit)
     : Result<Process, SageFsError> =
-    let projArgs =
-      projects
-      |> List.collect (fun p ->
-        let ext = System.IO.Path.GetExtension(p).ToLowerInvariant()
-        match ext = ".sln" || ext = ".slnx" with
-        | true -> [ "--sln"; p ]
-        | false -> [ "--proj"; p ])
-      |> String.concat " "
+    let args, envVars = Args.buildWorkerSpawnConfig sessionId projects false false
 
     let psi = ProcessStartInfo()
     psi.FileName <- "sagefs"
-    psi.Arguments <-
-      sprintf "worker --session-id %s --http-port 0 %s" sessionId projArgs
+    psi.Arguments <- args
     psi.WorkingDirectory <- workingDir
     psi.UseShellExecute <- false
     psi.CreateNoWindow <- true
@@ -217,6 +209,10 @@ module SessionManager =
 
     // Propagate OTel env vars so workers export to the same collector
     for (key, value) in Instrumentation.workerOtelEnvVars sessionId do
+      psi.Environment.[key] <- value
+
+    // Propagate session config as env vars (replaces --sln/--proj CLI args)
+    for (key, value) in envVars do
       psi.Environment.[key] <- value
 
     let proc = new Process()

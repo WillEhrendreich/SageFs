@@ -44,7 +44,7 @@ let testStore = lazy(
 /// Single shared actor result for all read-only tests across the entire test suite.
 /// Created once on first access, reused everywhere.
 let globalActorResult = lazy(
-  let args = mkCommonActorArgs quietLogger false ignore []
+  let args = mkCommonActorArgs quietLogger false ignore SageFs.Args.ProjectLoadConfig.empty true
   createActor args |> Async.AwaitTask |> Async.RunSynchronously
 )
 

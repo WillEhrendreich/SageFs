@@ -95,20 +95,17 @@ let fileWatcherIntegrationTests =
       |> Flip.Expect.equal "should ignore" FileChangeAction.Ignore
   ]
 
-/// Tests that the No_Watch flag and empty directories properly disable file watching.
+/// Tests that the NoWatch config and empty directories properly disable file watching.
 let noWatchFlagTests =
-  testList "No_Watch flag" [
-    testCase "No_Watch is a valid Args.Arguments case" <| fun () ->
-      let args = [SageFs.Args.No_Watch; SageFs.Args.Proj "test.fsproj"]
-      let hasNoWatch =
-        args |> List.exists (function SageFs.Args.No_Watch -> true | _ -> false)
-      hasNoWatch |> Flip.Expect.isTrue "should detect No_Watch"
+  testList "NoWatch config" [
+    testCase "WorkerConfig.NoWatch=true disables file watching" <| fun () ->
+      let config = SageFs.Args.WorkerConfig.fromEnvironmentWith
+                     (fun k -> match k with "SAGEFS_NO_WATCH" -> "1" | _ -> null) "test" 0
+      config.NoWatch |> Flip.Expect.isTrue "should detect NoWatch"
 
-    testCase "No_Watch absent means file watching enabled" <| fun () ->
-      let args = [SageFs.Args.Proj "test.fsproj"]
-      let hasNoWatch =
-        args |> List.exists (function SageFs.Args.No_Watch -> true | _ -> false)
-      hasNoWatch |> Flip.Expect.isFalse "should not find No_Watch"
+    testCase "WorkerConfig.NoWatch=false means file watching enabled" <| fun () ->
+      let config = SageFs.Args.WorkerConfig.fromEnvironmentWith (fun _ -> null) "test" 0
+      config.NoWatch |> Flip.Expect.isFalse "should not find NoWatch"
 
     testCase "empty project directories skips file watcher" <| fun () ->
       let dirs : string list = []

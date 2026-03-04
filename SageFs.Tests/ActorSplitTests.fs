@@ -8,7 +8,7 @@ open SageFs.AppState
 let quietLogger = SageFs.Tests.TestInfrastructure.quietLogger
 
 let createActorResult () =
-  let args = SageFs.ActorCreation.mkCommonActorArgs quietLogger false ignore []
+  let args = SageFs.ActorCreation.mkCommonActorArgs quietLogger false ignore SageFs.Args.ProjectLoadConfig.empty true
   SageFs.ActorCreation.createActor args |> Async.AwaitTask |> Async.RunSynchronously
 
 [<Tests>]

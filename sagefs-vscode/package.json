@@ -2,7 +2,7 @@
   "name": "sagefs",
   "displayName": "SageFs — Live F# Development",
   "description": "Send F# code to SageFs for instant evaluation, type-checking, and hot reload.",
-  "version": "0.5.508",
+  "version": "0.5.509",
   "publisher": "sagefs",
   "license": "MIT",
   "icon": "icon.png",
@@ -344,8 +344,8 @@
         },
         {
           "id": "sagefs-types",
-          "name": "Type Explorer",
-          "contextualTitle": "SageFs Type Explorer"
+          "name": "API Browser",
+          "contextualTitle": "SageFs API Browser"
         }
       ]
     },

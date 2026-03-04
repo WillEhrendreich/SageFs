@@ -162,7 +162,9 @@ let handleMessage
   }
 
 /// Run the worker process: create actor, start HTTP server, handle messages.
-let run (sessionId: string) (port: int) (args: Args.Arguments list) = async {
+let run (sessionId: string) (port: int) = async {
+  let workerConfig = Args.WorkerConfig.fromEnvironment sessionId port
+  let loadConfig = Args.ProjectLoadConfig.fromWorkerConfig workerConfig
   let logger =
     { new Utils.ILogger with
         member _.LogInfo msg = Log.info "%s" msg
@@ -182,7 +184,8 @@ let run (sessionId: string) (port: int) (args: Args.Arguments list) = async {
     Logger = logger
     OutStream = IO.TextWriter.Null
     UseAsp = false
-    ParsedArgs = args
+    LoadConfig = loadConfig
+    IsBare = workerConfig.IsBare
     OnEvent = onEvent
   }
 
@@ -260,10 +263,9 @@ let run (sessionId: string) (port: int) (args: Args.Arguments list) = async {
     | None -> projectRunTest
   let setDynamicRunTest v = latestDynamicRunTest <- Some v
 
-  // Start file watcher unless --no-watch was passed
-  let noWatch = args |> List.exists (function Args.No_Watch -> true | _ -> false)
+  // Start file watcher unless no-watch was set
   let fileWatcher =
-    match noWatch || List.isEmpty result.ProjectDirectories with
+    match workerConfig.NoWatch || List.isEmpty result.ProjectDirectories with
     | true -> None
     | false ->
       let config = FileWatcher.defaultWatchConfig result.ProjectDirectories

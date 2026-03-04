@@ -86,6 +86,7 @@
         <Compile Include="LiveTestingExecutorTests.fs" />
         <Compile Include="DockerIntegrationTests.fs" />
         <Compile Include="ArgsParserTests.fs" />
+        <Compile Include="ArgsCleanupTests.fs" />
         <Compile Include="SseWriterTests.fs" />
         <Compile Include="SseDedupKeyTests.fs" />
         <Compile Include="ThemeTests.fs" />
