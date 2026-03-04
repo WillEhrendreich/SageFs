@@ -40,7 +40,8 @@ type PreprocessResult = {
 /// Session-level compilation context state.
 type CompilationState = {
   EvaluatedModules: Set<string>
-  FileCache: Map<string, FileStructure>
+  /// Cache keyed by filePath, value is (contentHash, FileStructure).
+  FileCache: Map<string, string * FileStructure>
 }
 
 module CompilationState =
@@ -52,6 +53,13 @@ module CompilationState =
 // ─────────────────────────────────────────────────────────────────
 
 let normalizeLineEndings (s: string) = s.Replace("\r\n", "\n").Replace("\r", "\n")
+
+/// Compute a fast content hash for cache invalidation.
+let contentHash (code: string) =
+  use hasher = System.Security.Cryptography.SHA256.Create()
+  let bytes = System.Text.Encoding.UTF8.GetBytes(code)
+  let hash = hasher.ComputeHash(bytes)
+  System.Convert.ToHexString(hash)
 
 let splitLines (code: string) =
   (normalizeLineEndings code).Split('\n')
@@ -151,6 +159,20 @@ let parseFileStructure (filePath: string) (code: string) : FileStructure =
     { FilePath = filePath; Containers = containers; HasFileLevelModule = hasFileLevelModule }
   | _ ->
     { FilePath = filePath; Containers = []; HasFileLevelModule = false }
+
+/// Parse with content-hash caching: skips FCS parse when file content hasn't changed.
+/// Returns updated FileCache alongside the result.
+let parseFileStructureCached
+    (filePath: string) (code: string)
+    (cache: Map<string, string * FileStructure>)
+    : FileStructure * Map<string, string * FileStructure> =
+  let hash = contentHash code
+  match cache |> Map.tryFind filePath with
+  | Some (cachedHash, fs) when cachedHash = hash ->
+    fs, cache
+  | _ ->
+    let fs = parseFileStructure filePath code
+    fs, cache |> Map.add filePath (hash, fs)
 
 // ─────────────────────────────────────────────────────────────────
 // Block location resolution

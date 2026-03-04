@@ -526,6 +526,66 @@ let responseDiagnosticTests =
   ]
 
 // ─────────────────────────────────────────────────────────────────
+// parseFileStructureCached tests
+// ─────────────────────────────────────────────────────────────────
+
+let fileCacheTests =
+  testList "parseFileStructureCached" [
+    test "cache miss parses and stores" {
+      let code = Fixtures.fileLevelModule
+      let emptyCache = Map.empty
+      let fs, cache = parseFileStructureCached "Test.fs" code emptyCache
+      fs.Containers |> Expect.isNonEmpty "should have containers"
+      cache |> Map.containsKey "Test.fs"
+      |> Expect.isTrue "should be cached"
+    }
+
+    test "cache hit returns same structure without re-parse" {
+      let code = Fixtures.fileLevelModule
+      let fs1, cache1 = parseFileStructureCached "Test.fs" code Map.empty
+      let fs2, cache2 = parseFileStructureCached "Test.fs" code cache1
+      fs2.Containers.Length
+      |> Expect.equal "same container count" fs1.Containers.Length
+      cache2 |> Map.count
+      |> Expect.equal "still one entry" 1
+    }
+
+    test "cache invalidates on content change" {
+      let code1 = Fixtures.fileLevelModule
+      let _, cache1 = parseFileStructureCached "Test.fs" code1 Map.empty
+      let code2 = Fixtures.namespacePlusModule
+      let fs2, cache2 = parseFileStructureCached "Test.fs" code2 cache1
+      fs2.FilePath |> Expect.equal "same path" "Test.fs"
+      cache2 |> Map.count
+      |> Expect.equal "still one entry (replaced)" 1
+      // content hash should differ
+      let (h1, _) = cache1 |> Map.find "Test.fs"
+      let (h2, _) = cache2 |> Map.find "Test.fs"
+      h2 |> Expect.notEqual "hash should differ" h1
+    }
+
+    test "different file paths get separate cache entries" {
+      let code = Fixtures.fileLevelModule
+      let _, cache1 = parseFileStructureCached "A.fs" code Map.empty
+      let _, cache2 = parseFileStructureCached "B.fs" code cache1
+      cache2 |> Map.count
+      |> Expect.equal "two entries" 2
+    }
+
+    test "contentHash is deterministic" {
+      let h1 = contentHash "let x = 42"
+      let h2 = contentHash "let x = 42"
+      h2 |> Expect.equal "same input same hash" h1
+    }
+
+    test "contentHash differs for different content" {
+      let h1 = contentHash "let x = 42"
+      let h2 = contentHash "let x = 43"
+      h2 |> Expect.notEqual "different input different hash" h1
+    }
+  ]
+
+// ─────────────────────────────────────────────────────────────────
 // All tests
 // ─────────────────────────────────────────────────────────────────
 
@@ -538,4 +598,5 @@ let allCompilationContextTests =
     propertyTests
     diagnosticMappingTests
     responseDiagnosticTests
+    fileCacheTests
   ]

@@ -967,21 +967,24 @@ module McpTools =
       (filePath: string option) (evalMode: string option) (blockStartLine: int option)
       : Task<string> =
     withSession ctx agentName sessionId workingDirectory (fun sid -> task {
-      let fileStructure =
-        match filePath with
-        | Some fp ->
-          try Some (Middleware.CompilationContext.parseFileStructure fp code)
-          with _ -> None
-        | None -> None
-
       let state =
         compilationStates.GetOrAdd(sid, fun _ -> Middleware.CompilationContext.CompilationState.empty)
+
+      let fileStructure, updatedCache =
+        match filePath with
+        | Some fp ->
+          try
+            let fs, cache =
+              Middleware.CompilationContext.parseFileStructureCached fp code state.FileCache
+            Some fs, cache
+          with _ -> None, state.FileCache
+        | None -> None, state.FileCache
 
       let preprocessed, updatedModules =
         Middleware.CompilationContext.preprocessForFsi
           fileStructure evalMode blockStartLine state.EvaluatedModules code
 
-      compilationStates.[sid] <- { state with EvaluatedModules = updatedModules }
+      compilationStates.[sid] <- { state with EvaluatedModules = updatedModules; FileCache = updatedCache }
 
       let statements = McpAdapter.splitStatements preprocessed.Code
       Instrumentation.fsiEvals.Add(1L)
