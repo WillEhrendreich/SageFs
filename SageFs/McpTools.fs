@@ -57,12 +57,21 @@ WORKFLOW: Use this tool instead of dotnet build or dotnet run. SageFs IS your co
         agentName: string,
         code: string,
         [<Description("Working directory of the MCP client. When provided, automatically resolves the correct session for this directory without requiring manual switch_session calls.")>]
-        working_directory: string
+        working_directory: string,
+        [<Description("Absolute path to the source file this code came from. Enables module context detection — SageFs wraps the code in the correct module/namespace for FSI evaluation.")>]
+        file_path: string,
+        [<Description("How the code is being evaluated: 'file' for whole-file send, 'block' for a selected region. When omitted, auto-detected from code content.")>]
+        eval_mode: string,
+        [<Description("1-based line number where the selected block starts in the source file. Helps resolve which module the block belongs to in multi-module files.")>]
+        block_start_line: System.Nullable<int>
     ) : Task<string> =
         let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
+        let fp = match System.String.IsNullOrWhiteSpace file_path with | true -> None | false -> Some file_path
+        let em = match System.String.IsNullOrWhiteSpace eval_mode with | true -> None | false -> Some eval_mode
+        let bsl = match block_start_line.HasValue with | true -> Some block_start_line.Value | false -> None
         logger.LogDebug("MCP-TOOL: send_fsharp_code called by {AgentName}: {Code}", agentName, code)
         SageFs.Instrumentation.mcpToolInvocations.Add(1L)
-        sendFSharpCode ctx agentName code OutputFormat.Text None wd None None None
+        sendFSharpCode ctx agentName code OutputFormat.Text None wd fp em bsl
     
     [<McpServerTool>]
     [<Description("""Load and execute an F# script file (.fsx). The file is parsed into individual statements and each is sent to FSI separately, so partial progress is preserved if a statement fails.""")>]

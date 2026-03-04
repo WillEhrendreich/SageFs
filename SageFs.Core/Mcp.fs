@@ -1124,6 +1124,7 @@ module McpTools =
       return
         match routeResult with
         | Ok (WorkerProtocol.WorkerResponse.ResetResult(_, Ok ())) ->
+          compilationStates.TryRemove(sid) |> ignore
           notifyElm ctx (
             SageFsEvent.SessionStatusChanged (sid, SessionDisplayStatus.Running))
           "Session reset successfully. All previous definitions have been cleared."
@@ -1159,6 +1160,7 @@ module McpTools =
         SageFsEvent.SessionStatusChanged (sid, SessionDisplayStatus.Restarting))
       match rebuild with
       | true ->
+        compilationStates.TryRemove(sid) |> ignore
         notifyElm ctx (
           SageFsEvent.WarmupProgress (1, 4, "Building project..."))
         // Fire-and-forget: build + restart happens in background.
@@ -1176,6 +1178,7 @@ module McpTools =
         } |> ignore
         return "Hard reset initiated — rebuilding project. Use get_fsi_status to check when ready."
       | false ->
+        compilationStates.TryRemove(sid) |> ignore
         let! routeResult =
           routeToSession ctx sid
             (fun replyId -> WorkerProtocol.WorkerMessage.HardResetSession(false, replyId))
