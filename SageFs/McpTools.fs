@@ -62,7 +62,7 @@ WORKFLOW: Use this tool instead of dotnet build or dotnet run. SageFs IS your co
         let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
         logger.LogDebug("MCP-TOOL: send_fsharp_code called by {AgentName}: {Code}", agentName, code)
         SageFs.Instrumentation.mcpToolInvocations.Add(1L)
-        sendFSharpCode ctx agentName code OutputFormat.Text None wd
+        sendFSharpCode ctx agentName code OutputFormat.Text None wd None None None
     
     [<McpServerTool>]
     [<Description("""Load and execute an F# script file (.fsx). The file is parsed into individual statements and each is sent to FSI separately, so partial progress is preserved if a statement fails.""")>]

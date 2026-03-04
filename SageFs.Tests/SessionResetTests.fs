@@ -18,7 +18,7 @@ let sessionResetTests =
         let ctx = sharedCtxWith "reset-test"
 
         // Define a value
-        let! defineResult = sendFSharpCode ctx "test" "let resetTestVal = 99;;" OutputFormat.Text None None
+        let! defineResult = sendFSharpCode ctx "test" "let resetTestVal = 99;;" OutputFormat.Text None None None None None
         defineResult
         |> Expect.stringContains
           "Definition should succeed"
@@ -32,7 +32,7 @@ let sessionResetTests =
           "reset"
 
         // Try to use the value — should fail
-        let! afterReset = sendFSharpCode ctx "test" "resetTestVal;;" OutputFormat.Text None None
+        let! afterReset = sendFSharpCode ctx "test" "resetTestVal;;" OutputFormat.Text None None None None None
         afterReset
         |> Expect.stringContains
           "Value should not exist after reset"
@@ -52,7 +52,7 @@ let sessionResetTests =
           "Reset should succeed"
           "reset"
 
-        let! result = sendFSharpCode ctx "test" "1 + 1;;" OutputFormat.Text None None
+        let! result = sendFSharpCode ctx "test" "1 + 1;;" OutputFormat.Text None None None None None
         result
         |> Expect.stringContains
           "Should evaluate after reset"

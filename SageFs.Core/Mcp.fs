@@ -738,6 +738,10 @@ module McpTools =
   let setActiveSessionId (ctx: McpContext) (agent: string) (sid: string) =
     ctx.SessionMap.[agent] <- sid
 
+  /// Per-session compilation context state (evaluated modules, file cache).
+  let compilationStates =
+    Collections.Concurrent.ConcurrentDictionary<string, Middleware.CompilationContext.CompilationState>()
+
   /// Normalize a path for comparison: trim trailing separators, lowercase on Windows.
   let normalizePath (p: string) =
     let trimmed = p.TrimEnd('/', '\\')
@@ -939,9 +943,29 @@ module McpTools =
         sprintf "Error: %s" msg
   }
 
-  let sendFSharpCode (ctx: McpContext) (agentName: string) (code: string) (format: OutputFormat) (sessionId: string option) (workingDirectory: string option) : Task<string> =
+  let sendFSharpCode
+      (ctx: McpContext) (agentName: string) (code: string) (format: OutputFormat)
+      (sessionId: string option) (workingDirectory: string option)
+      (filePath: string option) (evalMode: string option) (blockStartLine: int option)
+      : Task<string> =
     withSession ctx agentName sessionId workingDirectory (fun sid -> task {
-      let statements = McpAdapter.splitStatements code
+      let fileStructure =
+        match filePath with
+        | Some fp ->
+          try Some (Middleware.CompilationContext.parseFileStructure fp code)
+          with _ -> None
+        | None -> None
+
+      let state =
+        compilationStates.GetOrAdd(sid, fun _ -> Middleware.CompilationContext.CompilationState.empty)
+
+      let preprocessed, updatedModules =
+        Middleware.CompilationContext.preprocessForFsi
+          fileStructure evalMode blockStartLine state.EvaluatedModules code
+
+      compilationStates.[sid] <- { state with EvaluatedModules = updatedModules }
+
+      let statements = McpAdapter.splitStatements preprocessed.Code
       Instrumentation.fsiEvals.Add(1L)
       Instrumentation.fsiStatements.Add(int64 statements.Length)
       let span = Instrumentation.startSpan Instrumentation.mcpSource "fsi.eval"

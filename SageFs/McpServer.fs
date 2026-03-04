@@ -432,8 +432,20 @@ let startMcpServer (cfg: McpServerConfig) =
                       match json.RootElement.TryGetProperty("working_directory") with
                       | true, prop -> Some (prop.GetString())
                       | false, _ -> None
+                    let filePath =
+                      match json.RootElement.TryGetProperty("file_path") with
+                      | true, prop -> Some (prop.GetString())
+                      | false, _ -> None
+                    let evalMode =
+                      match json.RootElement.TryGetProperty("eval_mode") with
+                      | true, prop -> Some (prop.GetString())
+                      | false, _ -> None
+                    let blockStartLine =
+                      match json.RootElement.TryGetProperty("block_start_line") with
+                      | true, prop -> Some (prop.GetInt32())
+                      | false, _ -> None
                     let sw = System.Diagnostics.Stopwatch.StartNew()
-                    let! result = SageFs.McpTools.sendFSharpCode mcpContext "cli-integrated" code SageFs.McpTools.OutputFormat.Text None wd
+                    let! result = SageFs.McpTools.sendFSharpCode mcpContext "cli-integrated" code SageFs.McpTools.OutputFormat.Text None wd filePath evalMode blockStartLine
                     sw.Stop()
                     featurePushState <- SageFs.Features.FeatureHooks.recordEval code result sw.ElapsedMilliseconds featurePushState
                     do! jsonResponse ctx 200 {| success = true; result = result |}
