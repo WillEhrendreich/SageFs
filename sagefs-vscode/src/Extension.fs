@@ -255,6 +255,9 @@ let refreshStatus () =
         let restarts =
           match sys with Some s when s.restartCount > 0 -> sprintf " %d↻" s.restartCount | _ -> ""
         let stripExt (name: string) =
+          match jsIsNullOrUndefined (box name) with
+          | true -> ""
+          | false ->
           match name with
           | n when n.EndsWith(".fsproj") -> n.[..n.Length - 8]
           | n when n.EndsWith(".slnx") -> n.[..n.Length - 6]
@@ -275,8 +278,12 @@ let refreshStatus () =
               | [||] -> "session"
               | ps ->
                 ps
-                |> Array.map (fun p -> p.Split([|'/'; '\\'|]) |> Array.last |> stripExt)
+                |> Array.choose (fun p ->
+                  match jsIsNullOrUndefined (box p) with
+                  | true -> None
+                  | false -> p.Split([|'/'; '\\'|]) |> Array.last |> stripExt |> Some)
                 |> String.concat ","
+                |> fun s -> match s with "" -> "session" | x -> x
             let evalLabel = match s.evalCount with 0 -> "" | n -> sprintf " [%d]" n
             sb.text <- sprintf "$(zap) SageFs: %s%s%s%s" projLabel evalLabel supervised restarts
           | None ->
@@ -287,6 +294,7 @@ let refreshStatus () =
           HotReload.setSession c activeId
           SessionCtx.setSession c activeId
           Sessions.setSession c activeId
+          TypeExpl.setClient (Some c)
         | Some "Starting" | Some "Restarting" ->
           sb.text <- "$(loading~spin) SageFs: warming up..."
           sb.backgroundColor <- None
@@ -466,7 +474,7 @@ let waitForSessionReady () : JS.Promise<bool> =
     return ready
   }
 
-let evalCore (code: string) : JS.Promise<EvalResult> =
+let evalCore (code: string) (filePath: string option) (evalMode: string option) (blockStartLine: int option) : JS.Promise<EvalResult> =
   promise {
     try
       match client with
@@ -482,7 +490,7 @@ let evalCore (code: string) : JS.Promise<EvalResult> =
           (getOutput()).appendLine "Session ready, evaluating..."
           let workDir = getWorkingDirectory ()
           let startTime = performanceNow ()
-          let! result = Client.evalCode code workDir c
+          let! result = Client.evalCode code workDir filePath evalMode blockStartLine c
           let elapsed = performanceNow () - startTime
           match result with
           | Client.Failed errMsg -> return EvalError errMsg
@@ -491,7 +499,7 @@ let evalCore (code: string) : JS.Promise<EvalResult> =
       else
         let workDir = getWorkingDirectory ()
         let startTime = performanceNow ()
-        let! result = Client.evalCode code workDir c
+        let! result = Client.evalCode code workDir filePath evalMode blockStartLine c
         let elapsed = performanceNow () - startTime
         match result with
         | Client.Failed errMsg -> return EvalError errMsg
@@ -514,21 +522,8 @@ let logEvalResult (out: OutputChannel) (result: EvalResult) =
     out.show true
   result
 
-/// Collect module context (open declarations) from above a given line.
-/// Only collects `open` statements — `module` declarations are file-level
-/// constructs that FSI doesn't support and would cause cascade errors.
-let getModuleContext (doc: TextDocument) (blockStartLine: int) =
-  let mutable ctx = ResizeArray<string>()
-  for i in 0 .. blockStartLine - 1 do
-    let text = doc.lineAt(float i).text.TrimStart()
-    if text.StartsWith("open ") then
-      ctx.Add(doc.lineAt(float i).text)
-  match ctx.Count with
-  | 0 -> None
-  | _ -> Some (String.concat "\n" ctx)
-
-/// Get code from selection or code block, prepend module context, append ;; if needed.
-/// Returns (code, startLine, endLine) for flash highlight and inline result placement.
+/// Get code from selection or code block, append ;; if needed.
+/// Returns (code, startLine, endLine) — server handles module context.
 let getEvalCode (ed: TextEditor) =
   let doc = ed.document
   let raw, blockStartLine, blockEndLine =
@@ -543,12 +538,7 @@ let getEvalCode (ed: TextEditor) =
   | "" -> None
   | _ ->
     let code = if raw.TrimEnd().EndsWith(";;") then raw else raw.TrimEnd() + ";;"
-    let ctx = getModuleContext doc blockStartLine
-    let fullCode =
-      match ctx with
-      | Some context -> context + "\n" + code
-      | None -> code
-    Some (fullCode, blockStartLine, blockEndLine)
+    Some (code, blockStartLine, blockEndLine)
 
 let evalSelection () =
   promise {
@@ -560,6 +550,8 @@ let evalSelection () =
       match ok, getEvalCode ed with
       | false, _ | _, None -> ()
       | true, Some (code, blockStart, blockEnd) ->
+        let filePath = Some ed.document.fileName
+        let blockLine = Some (blockStart + 1) // VS Code is 0-based, server is 1-based
         InlineDeco.flashEvalRange ed blockStart blockEnd
         let out = getOutput ()
         do! Window.withProgress ProgressLocation.Window "SageFs: evaluating..." (fun _progress _token ->
@@ -567,7 +559,7 @@ let evalSelection () =
             out.appendLine "──── eval ────"
             out.appendLine code
             out.appendLine ""
-            let! result = evalCore code
+            let! result = evalCore code filePath (Some "block") blockLine
             match logEvalResult out result with
             | EvalError errMsg ->
               out.show true
@@ -594,10 +586,11 @@ let evalFile () =
       match ok, code.Trim() with
       | false, _ | _, "" -> ()
       | true, _ ->
+        let filePath = Some ed.document.fileName
         let out = getOutput ()
         out.show true
         out.appendLine (sprintf "──── eval file: %s ────" ed.document.fileName)
-        let! result = evalCore code
+        let! result = evalCore code filePath (Some "file") None
         logEvalResult out result |> ignore
   }
 
@@ -615,17 +608,14 @@ let evalRange (args: obj) =
       | true, _ ->
         let code = if raw.TrimEnd().EndsWith(";;") then raw else raw.TrimEnd() + ";;"
         let startLine = int range.start.line
-        let ctx = getModuleContext ed.document startLine
-        let fullCode =
-          match ctx with
-          | Some context -> context + "\n" + code
-          | None -> code
+        let filePath = Some ed.document.fileName
+        let blockLine = Some (startLine + 1) // 0-based → 1-based
         let out = getOutput ()
         out.show true
         out.appendLine "──── eval block ────"
-        out.appendLine fullCode
+        out.appendLine code
         out.appendLine ""
-        let! result = evalCore fullCode
+        let! result = evalCore code filePath (Some "block") blockLine
         match logEvalResult out result with
         | EvalOk (output, elapsed) ->
           InlineDeco.showInlineResult ed output (Some elapsed) (Some endLine)
@@ -684,13 +674,10 @@ let evalAllBlocks () =
           | "" -> ()
           | _ ->
             let code = if raw.TrimEnd().EndsWith(";;") then raw else raw.TrimEnd() + ";;"
-            let ctx = getModuleContext doc blockStart
-            let fullCode =
-              match ctx with
-              | Some context -> context + "\n" + code
-              | None -> code
+            let filePath = Some doc.fileName
+            let blockLine = Some (blockStart + 1) // 0-based → 1-based
             InlineDeco.flashEvalRange ed blockStart blockEnd
-            let! result = evalCore fullCode
+            let! result = evalCore code filePath (Some "block") blockLine
             match logEvalResult out result with
             | EvalOk (output, elapsed) ->
               InlineDeco.showInlineResult ed output (Some elapsed) (Some blockEnd)
@@ -923,9 +910,11 @@ let evalAdvance () =
       match ok, getEvalCode ed with
       | false, _ | _, None -> ()
       | true, Some (code, blockStart, blockEnd) ->
+        let filePath = Some ed.document.fileName
+        let blockLine = Some (blockStart + 1) // 0-based → 1-based
         InlineDeco.flashEvalRange ed blockStart blockEnd
         let out = getOutput ()
-        let! result = evalCore code
+        let! result = evalCore code filePath (Some "block") blockLine
         match logEvalResult out result with
         | EvalError errMsg ->
           InlineDeco.showInlineDiagnostic ed errMsg (Some blockEnd)
@@ -1051,6 +1040,9 @@ let activate (context: ExtensionContext) =
   let out = Window.createOutputChannel "SageFs"
   outputChannel <- Some out
 
+  // Log unhandled promise rejections with stack traces to the output channel
+  installRejectionHandler (fun msg -> out.appendLine msg)
+
   let sb = Window.createStatusBarItem StatusBarAlignment.Left 50.
   sb.command <- Some "sagefs.sessionMenu"
   sb.tooltip <- Some "Click for SageFs session menu"
@@ -1093,7 +1085,7 @@ let activate (context: ExtensionContext) =
   Sessions.setSession c None
 
   // Type Explorer TreeView
-  typeExplorer <- Some (TypeExpl.create context client)
+  typeExplorer <- Some (TypeExpl.create context client (fun () -> activeSessionId))
 
   let reg cmd handler =
     context.subscriptions.Add (Commands.registerCommand cmd handler)

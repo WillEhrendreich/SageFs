@@ -212,9 +212,12 @@ let isReady (c: Client) =
     | _ -> return false
   }
 
-let evalCode (code: string) (workingDirectory: string option) (c: Client) =
+let evalCode (code: string) (workingDirectory: string option) (filePath: string option) (evalMode: string option) (blockStartLine: int option) (c: Client) =
   let wd = workingDirectory |> Option.defaultValue ""
-  postCommand c "/exec" (jsonStringify {| code = code; working_directory = wd |}) 30000
+  let fp = filePath |> Option.defaultValue ""
+  let em = evalMode |> Option.defaultValue ""
+  let bsl = blockStartLine |> Option.defaultValue 0
+  postCommand c "/exec" (jsonStringify {| code = code; working_directory = wd; file_path = fp; eval_mode = em; block_start_line = bsl |}) 30000
 
 let resetSession (c: Client) =
   postCommand c "/reset" "{}" 15000
@@ -375,6 +378,24 @@ let explore (name: string) (c: Client) =
       | _ -> return None
     with ex ->
       c.log (sprintf "[warn] explore: %O" ex)
+      return None
+  }
+
+/// Call /dashboard/completions with "Name." to get structured JSON:
+/// { completions: [{ label, kind, insertText, detail? }], count }
+let exploreCompletions (qualifiedName: string) (sessionId: string) (c: Client) =
+  promise {
+    try
+      let code = sprintf "%s." qualifiedName
+      let body = jsonStringify {| code = code; cursorPos = code.Length; sessionId = sessionId |}
+      let! resp = dashHttpPost c "/dashboard/completions" body 10000
+      match resp.statusCode with
+      | 200 -> return Some resp.body
+      | _ ->
+        c.log (sprintf "[warn] exploreCompletions %s: status %d" qualifiedName resp.statusCode)
+        return None
+    with ex ->
+      c.log (sprintf "[warn] exploreCompletions: %O" ex)
       return None
   }
 
