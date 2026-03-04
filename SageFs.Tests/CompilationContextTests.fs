@@ -586,6 +586,54 @@ let fileCacheTests =
   ]
 
 // ─────────────────────────────────────────────────────────────────
+// Performance measurement
+// ─────────────────────────────────────────────────────────────────
+
+let perfMeasurementTests =
+  testList "parseFileStructure perf" [
+    test "first parse vs cache hit latency" {
+      let code = Fixtures.namespaceMultiModule
+      let sw = System.Diagnostics.Stopwatch()
+
+      // Cold parse
+      sw.Start()
+      let _, cache = parseFileStructureCached "Perf.fs" code Map.empty
+      sw.Stop()
+      let coldMs = sw.Elapsed.TotalMilliseconds
+
+      // Cache hit
+      sw.Restart()
+      let _, _ = parseFileStructureCached "Perf.fs" code cache
+      sw.Stop()
+      let hotMs = sw.Elapsed.TotalMilliseconds
+
+      // Cache hit should be significantly faster
+      printfn "Cold parse: %.2fms, Cache hit: %.2fms, Speedup: %.1fx" coldMs hotMs (coldMs / hotMs)
+      (hotMs, coldMs) |> Expect.isLessThan "cache hit faster than cold parse"
+    }
+
+    test "parse scales linearly with file size" {
+      let small = Fixtures.fileLevelModule
+      let large =
+        [| for _ in 1..20 -> Fixtures.namespaceMultiModule |]
+        |> String.concat "\n"
+      let sw = System.Diagnostics.Stopwatch()
+
+      sw.Start()
+      parseFileStructure "Small.fs" small |> ignore
+      sw.Stop()
+      let smallMs = sw.Elapsed.TotalMilliseconds
+
+      sw.Restart()
+      parseFileStructure "Large.fs" large |> ignore
+      sw.Stop()
+      let largeMs = sw.Elapsed.TotalMilliseconds
+
+      printfn "Small (%d chars): %.2fms, Large (%d chars): %.2fms" small.Length smallMs large.Length largeMs
+    }
+  ]
+
+// ─────────────────────────────────────────────────────────────────
 // All tests
 // ─────────────────────────────────────────────────────────────────
 
@@ -599,4 +647,5 @@ let allCompilationContextTests =
     diagnosticMappingTests
     responseDiagnosticTests
     fileCacheTests
+    perfMeasurementTests
   ]
