@@ -29,7 +29,10 @@ let private projectLabel (s: Client.SessionInfo) =
   | [||] -> "no project"
   | ps ->
     ps
-    |> Array.map (fun p -> p.Split([|'/'; '\\'|]) |> Array.last |> stripExt)
+    |> Array.choose (fun p ->
+      match jsIsNullOrUndefined (box p) with
+      | true -> None
+      | false -> p.Split([|'/'; '\\'|]) |> Array.last |> stripExt |> Some)
     |> String.concat ", "
 
 let private statusIcon (status: string) =
@@ -47,8 +50,8 @@ let getChildren (_element: obj option) : JS.Promise<obj array> =
     match cachedSessions with
     | [||] ->
       let item = newTreeItem "No sessions" TreeItemCollapsibleState.None
-      item?description <- "Create one with $(add) above"
-      item?iconPath <- Vscode.newThemeIcon "info"
+      item.description <- "Create one with $(add) above"
+      item.iconPath <- Vscode.newThemeIcon "info"
       return [| item :> obj |]
     | sessions ->
       return
@@ -60,24 +63,24 @@ let getChildren (_element: obj option) : JS.Promise<obj array> =
             | None -> false
           let label = sprintf "%s %s" (statusIcon s.status) (projectLabel s)
           let item = newTreeItem label TreeItemCollapsibleState.None
-          item?description <-
+          item.description <-
             match s.evalCount with
             | 0 -> s.status
             | n -> sprintf "%s [%d evals]" s.status n
-          item?iconPath <-
+          item.iconPath <-
             match isActive with
             | true -> Vscode.newThemeIcon "star-full"
             | false -> Vscode.newThemeIcon "terminal"
-          item?contextValue <-
+          item.contextValue <-
             match isActive, s.status with
             | true, "Ready" -> "session-active-ready"
             | true, _ -> "session-active"
             | false, "Stopped" -> "session-stopped"
             | false, _ -> "session-inactive"
-          item?tooltip <-
+          item.tooltip <-
             sprintf "ID: %s\nStatus: %s\nProject: %s\nEvals: %d"
               s.id s.status (projectLabel s) s.evalCount
-          // Store session id for command args
+          // Store session id for command args (custom property, not in VS Code API)
           item?sessionId <- s.id
           item :> obj)
   }

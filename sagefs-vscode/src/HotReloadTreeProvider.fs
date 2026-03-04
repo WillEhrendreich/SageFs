@@ -54,10 +54,10 @@ let createDirItem (dirPath: string) (childCount: int) (watchedCount: int) =
     | "" -> "(root)"
     | p -> p
   let item = newTreeItem label TreeItemCollapsibleState.Expanded
-  item?contextValue <- "directory"
-  item?description <- sprintf "%d/%d watched" watchedCount childCount
-  item?iconPath <- Vscode.newThemeColor "symbolIcon.folderForeground"
-  item?command <-
+  item.contextValue <- "directory"
+  item.description <- sprintf "%d/%d watched" watchedCount childCount
+  item.iconPath <- Vscode.newThemeIcon "folder"
+  item.command <-
     createObj [
       "command" ==> "sagefs.hotReloadToggleDirectory"
       "title" ==> "Toggle Directory"
@@ -72,16 +72,19 @@ let createFileItem (file: Client.HotReloadFile) =
     match file.watched with
     | true -> "watchedFile", "● watching", "testing.iconPassed"
     | false -> "unwatchedFile", "○ not watching", "testing.iconSkipped"
-  item?contextValue <- ctxVal
-  item?description <- desc
-  item?tooltip <- file.path
-  item?command <-
+  item.contextValue <- ctxVal
+  item.description <- desc
+  item.tooltip <- file.path
+  item.command <-
     createObj [
       "command" ==> "sagefs.hotReloadToggle"
       "title" ==> "Toggle Hot Reload"
       "arguments" ==> [| file.path |]
     ]
-  item?iconPath <- Vscode.newThemeColor iconColor
+  item.iconPath <-
+    match file.watched with
+    | true -> Vscode.newThemeIcon "eye"
+    | false -> Vscode.newThemeIcon "eye-closed"
   item
 
 let groupByDirectory (files: Client.HotReloadFile array) =
@@ -102,7 +105,7 @@ let getChildren (element: obj option) : JS.Promise<obj array> =
       match groups with
       | [||] ->
         let item = newTreeItem "No session active" TreeItemCollapsibleState.None
-        item?description <- "Start a session to manage hot reload"
+        item.description <- "Start a session to manage hot reload"
         return [| item :> obj |]
       | [| (_, files) |] ->
         return files |> Array.map (fun f -> createFileItem f :> obj)
@@ -144,19 +147,24 @@ let createProvider () =
 let refresh () =
   match currentClient, currentSessionId with
   | Some c, Some sid ->
+    c.log (sprintf "[hotreload] refresh: sessionId=%s" sid)
     isLoading <- true
     match refreshEmitter with Some e -> e.fire null | None -> ()
     promise {
       let! state = Client.getHotReloadState sid c
       match state with
-      | Some s -> cachedFiles <- s.files
-      | None -> cachedFiles <- [||]
+      | Some s ->
+        c.log (sprintf "[hotreload] got %d files" s.files.Length)
+        cachedFiles <- s.files
+      | None ->
+        c.log "[hotreload] getHotReloadState returned None"
+        cachedFiles <- [||]
       isLoading <- false
       match refreshEmitter with
       | Some e -> e.fire null
       | None -> ()
     } |> promiseIgnore
-  | _ ->
+  | c, sid ->
     isLoading <- false
     cachedFiles <- [||]
     match refreshEmitter with

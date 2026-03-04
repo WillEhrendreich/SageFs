@@ -110,7 +110,15 @@ type [<AllowNullLiteral>] QuickPickOptions =
   abstract placeHolder: string option with get, set
 
 type [<AllowNullLiteral>] TreeItem =
-  interface end
+  abstract label: string with get, set
+  abstract description: string with get, set
+  abstract tooltip: string with get, set
+  abstract iconPath: obj with get, set
+  abstract contextValue: string with get, set
+  abstract command: obj with get, set
+  abstract collapsibleState: int with get, set
+  abstract id: string with get, set
+  abstract resourceUri: Uri with get, set
 
 type [<AllowNullLiteral>] EventEmitter<'T> =
   abstract event: obj
@@ -477,9 +485,18 @@ let newCodeLens (range: Range) (cmd: obj) = _newCodeLens vscodeAll range cmd
 let _newEventEmitter (v: obj) : EventEmitter<'T> = jsNative
 let newEventEmitter<'T> () : EventEmitter<'T> = _newEventEmitter vscodeAll
 
+type [<AllowNullLiteral>] CompletionItem =
+  abstract label: string with get, set
+  abstract kind: int with get, set
+  abstract detail: string with get, set
+  abstract insertText: string with get, set
+  abstract sortText: string with get, set
+  abstract filterText: string with get, set
+  abstract documentation: string with get, set
+
 [<Emit("new $0.CompletionItem($1, $2)")>]
-let _newCompletionItem (v: obj) (label: string) (kind: int) : obj = jsNative
-let newCompletionItem (label: string) (kind: int) = _newCompletionItem vscodeAll label kind
+let _newCompletionItem (v: obj) (label: string) (kind: int) : CompletionItem = jsNative
+let newCompletionItem (label: string) (kind: int) : CompletionItem = _newCompletionItem vscodeAll label kind
 
 [<RequireQualifiedAccess>]
 module CompletionItemKind =

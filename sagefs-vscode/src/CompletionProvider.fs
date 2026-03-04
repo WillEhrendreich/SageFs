@@ -34,8 +34,8 @@ let create (getClient: unit -> Client.Client option) (getWorkDir: unit -> string
             items
             |> Array.map (fun item ->
               let ci = newCompletionItem item.label (kindToVscode item.kind)
-              ci?insertText <- item.insertText
-              item.detail |> Option.iter (fun d -> ci?detail <- d)
+              ci.insertText <- item.insertText
+              item.detail |> Option.iter (fun d -> ci.detail <- d)
               ci)
       }
   ]

@@ -21,15 +21,15 @@ let mutable isLoading: bool = false
 
 let sectionItem (label: string) (desc: string) (icon: string) =
   let item = newTreeItem label TreeItemCollapsibleState.Expanded
-  item?description <- desc
-  item?iconPath <- Vscode.newThemeIcon icon
-  item?contextValue <- "section"
+  item.description <- desc
+  item.iconPath <- Vscode.newThemeIcon icon
+  item.contextValue <- "section"
   item
 
 let leafItem (label: string) (desc: string) (icon: string) =
   let item = newTreeItem label TreeItemCollapsibleState.None
-  item?description <- desc
-  item?iconPath <- Vscode.newThemeIcon icon
+  item.description <- desc
+  item.iconPath <- Vscode.newThemeIcon icon
   item
 
 let summaryItem (ctx: Client.WarmupContextInfo) =
@@ -39,12 +39,12 @@ let summaryItem (ctx: Client.WarmupContextInfo) =
     sprintf "%d assemblies | %d namespaces | %dms"
       ctx.AssembliesLoaded.Length nsCount ctx.WarmupDurationMs
   let item = newTreeItem "Session Context" TreeItemCollapsibleState.Expanded
-  item?description <- desc
-  item?iconPath <- Vscode.newThemeIcon "symbol-event"
-  item?contextValue <- "summary"
+  item.description <- desc
+  item.iconPath <- Vscode.newThemeIcon "symbol-event"
+  item.contextValue <- "summary"
   match failCount with
   | 0 -> ()
-  | _ -> item?description <- sprintf "%s | %d failed" desc failCount
+  | _ -> item.description <- sprintf "%s | %d failed" desc failCount
   item
 
 // ── TreeDataProvider ─────────────────────────────────────────────
@@ -61,7 +61,7 @@ let getChildren (element: obj option) : JS.Promise<obj array> =
       match cachedContext with
       | None ->
         let item = newTreeItem "No session context" TreeItemCollapsibleState.None
-        item?description <- "Waiting for session..."
+        item.description <- "Waiting for session..."
         return [| item :> obj |]
       | Some ctx ->
         return [| summaryItem ctx :> obj |]

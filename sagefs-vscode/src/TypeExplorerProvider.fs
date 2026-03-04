@@ -12,54 +12,100 @@ module Client = SageFs.Vscode.SageFsClient
 
 let mutable currentClient: Client.Client option = None
 let mutable refreshEmitter: EventEmitter<obj> option = None
+let mutable getSessionId: unit -> string option = fun () -> None
+
+// ── Kind → icon mapping ─────────────────────────────────────────
+
+let private kindIcon (kind: string) =
+  match kind with
+  | "Namespace" -> "symbol-namespace"
+  | "Module" -> "symbol-module"
+  | "Class" -> "symbol-class"
+  | "Struct" -> "symbol-struct"
+  | "Interface" -> "symbol-interface"
+  | "Enum" -> "symbol-enum"
+  | "Union" -> "symbol-enum"
+  | "Type" -> "symbol-class"
+  | "Method" | "OverriddenMethod" | "ExtensionMethod" -> "symbol-method"
+  | "Property" -> "symbol-property"
+  | "Field" -> "symbol-field"
+  | "Event" -> "symbol-event"
+  | "Constant" -> "symbol-constant"
+  | "Variable" -> "symbol-variable"
+  | "EnumMember" -> "symbol-enum-member"
+  | "Keyword" -> "symbol-keyword"
+  | _ -> "symbol-misc"
+
+let private drillableKinds =
+  Set [ "Namespace"; "Module"; "Class"; "Struct"; "Interface"; "Enum"; "Union"; "Type" ]
 
 // ── Tree item builders───────────────────────────────────────────
 
 let leafItem (label: string) (desc: string) (icon: string) =
   let item = newTreeItem label TreeItemCollapsibleState.None
-  item?description <- desc
-  item?iconPath <- Vscode.newThemeIcon icon
+  item.description <- desc
+  item.iconPath <- Vscode.newThemeIcon icon
   item
 
 let expandableItem (label: string) (desc: string) (icon: string) (contextValue: string) =
   let item = newTreeItem label TreeItemCollapsibleState.Collapsed
-  item?description <- desc
-  item?iconPath <- Vscode.newThemeIcon icon
-  item?contextValue <- contextValue
+  item.description <- desc
+  item.iconPath <- Vscode.newThemeIcon icon
+  item.contextValue <- contextValue
   item
 
-let private parseLine (line: string) : obj =
-  let trimmed = line.Trim()
-  match trimmed with
-  | t when t.StartsWith("namespace") || t.StartsWith("module") ->
-    let name = t.Split(' ') |> Array.last
-    expandableItem name "" "symbol-namespace" (sprintf "ns:%s" name) :> obj
-  | t when t.StartsWith("type") ->
-    let name = t.Split(' ') |> Array.tryItem 1 |> Option.defaultValue t
-    leafItem name "type" "symbol-class" :> obj
-  | t ->
-    leafItem t "" "symbol-misc" :> obj
+// ── Completions parsing ─────────────────────────────────────────
 
-let private parseExploreResponse (text: string) : obj array option =
+let private parseCompletionsJson (parentContext: string) (json: string) : obj array option =
   try
-    text.Split('\n')
-    |> Array.filter (fun l -> l.Trim().Length > 0)
-    |> Array.truncate 50
-    |> Array.map parseLine
-    |> Some
+    let parsed = jsonParse json
+    let completions: obj array =
+      match jsIsNullOrUndefined parsed?completions with
+      | true -> [||]
+      | false -> !!parsed?completions
+    match completions.Length with
+    | 0 -> Some [| leafItem "No members" "" "info" :> obj |]
+    | _ ->
+      completions
+      |> Array.truncate 200
+      |> Array.map (fun c ->
+        let label = fieldString "label" c |> Option.defaultValue "?"
+        let kind = fieldString "kind" c |> Option.defaultValue ""
+        let insertText = fieldString "insertText" c |> Option.defaultValue label
+        let detail = fieldString "detail" c |> Option.defaultValue ""
+        let icon = kindIcon kind
+        let fullName =
+          match parentContext with
+          | "" | null -> insertText
+          | p -> sprintf "%s.%s" p insertText
+        match drillableKinds.Contains kind with
+        | true ->
+          let desc = match kind with "" -> "" | k -> k
+          expandableItem label desc icon (sprintf "explore:%s" fullName) :> obj
+        | false ->
+          let desc = match detail with "" -> kind | d -> d
+          leafItem label desc icon :> obj)
+      |> Some
   with _ -> None
 
-let private exploreAndParse (query: string) (errorMsg: string) (c: Client.Client) =
+let private exploreAndParse (query: string) (c: Client.Client) =
   promise {
-    let! result = Client.explore query c
+    let sid = getSessionId () |> Option.defaultValue ""
+    let! result = Client.exploreCompletions query sid c
     match result with
     | Some json ->
-      match parseExploreResponse json with
+      match parseCompletionsJson query json with
       | Some items -> return items
-      | None -> return [| leafItem errorMsg "" "warning" :> obj |]
+      | None -> return [| leafItem "Error parsing response" "" "warning" :> obj |]
     | None ->
       return [| leafItem "Not connected" "" "warning" :> obj |]
   }
+
+// ── Common roots ────────────────────────────────────────────────
+
+let private commonRoots =
+  [| "System"; "System.Collections.Generic"; "System.IO"; "System.Linq"
+     "System.Text"; "Microsoft.FSharp.Collections"; "Microsoft.FSharp.Core" |]
 
 // ── TreeDataProvider ─────────────────────────────────────────────
 
@@ -67,17 +113,16 @@ let getChildren (element: obj option) : JS.Promise<obj array> =
   promise {
     match element, currentClient with
     | None, _ ->
-      let item = expandableItem "Namespaces" "explore loaded types" "symbol-namespace" "ns-root"
-      return [| item :> obj |]
-    | Some el, Some c when (fieldString "contextValue" el |> Option.defaultValue "") = "ns-root" ->
-      let config = Workspace.getConfiguration "sagefs"
-      let rootNs = config.get("typeExplorerRoot", "")
-      return! exploreAndParse rootNs "Error parsing response" c
+      let roots =
+        commonRoots
+        |> Array.map (fun ns ->
+          expandableItem ns "" "symbol-namespace" (sprintf "explore:%s" ns) :> obj)
+      return roots
     | Some el, Some c ->
       let ctx = fieldString "contextValue" el |> Option.defaultValue ""
       match ctx with
-      | c' when c' <> null && c'.StartsWith("ns:") ->
-        return! exploreAndParse (c'.Substring(3)) "Error parsing" c
+      | c' when c' <> null && c'.StartsWith("explore:") ->
+        return! exploreAndParse (c'.Substring(8)) c
       | _ ->
         return [||]
     | _, None ->
@@ -93,8 +138,9 @@ type TypeExplorer = {
   dispose: unit -> unit
 }
 
-let create (context: ExtensionContext) (c: Client.Client option) : TypeExplorer =
+let create (context: ExtensionContext) (c: Client.Client option) (sessionIdFn: unit -> string option) : TypeExplorer =
   currentClient <- c
+  getSessionId <- sessionIdFn
   let emitter = newEventEmitter<obj> ()
   refreshEmitter <- Some emitter
   let provider =
