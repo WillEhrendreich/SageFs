@@ -564,7 +564,7 @@ let createFsiSession (logger: ILogger) (outStream: TextWriter) (useAsp: bool) (s
 
 let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStream useAsp (originalSln: Solution) (shadowDir: string option) (onEvent: Events.SageFsEvent -> unit) (sln: Solution) =
   let diagnosticsChangedEvent = Event<Features.DiagnosticsStore.T>()
-  let emit evt = try onEvent evt with _ -> ()
+  let emit evt = try onEvent evt with ex -> logger.LogWarning (sprintf "Event emission failed: %s" ex.Message)
 
   // Query actor: serves all reads from an immutable snapshot.
   // No mutable state — receives snapshots via UpdateSnapshot message.
@@ -916,10 +916,10 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
                         | false -> ()
                   match timedOut with
                   | true ->
-                    try proc.Kill(entireProcessTree = true) with _ -> ()
+                    try proc.Kill(entireProcessTree = true) with ex -> logger.LogDebug (sprintf "Build kill failed: %s" ex.Message)
                     -1, sprintf "Build timed out (inactive for %ds or exceeded %d min limit)" (inactivityLimitMs / 1000) (maxTotalMs / 60_000)
                   | false ->
-                    try stderrTask.Wait(5000) |> ignore with _ -> ()
+                    try stderrTask.Wait(5000) |> ignore with ex -> logger.LogDebug (sprintf "Build stderr wait failed: %s" ex.Message)
                     proc.ExitCode, String.concat "\n" stderrLines
                 let exitCode, stderr = runBuild ()
                 match exitCode <> 0 with
@@ -1184,10 +1184,12 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
                 // on I/O (ReadLine, pipe read, etc.) where tokens aren't checked
                 match currentEvalThread.Value with
                 | Some thread ->
-                  try thread.Interrupt() with _ -> ()
+                  try thread.Interrupt() with ex -> logger.LogWarning (sprintf "Thread interrupt during cancel failed: %s" ex.Message)
                 | None -> ()
                 true
-              with _ -> false
+              with ex ->
+                logger.LogWarning (sprintf "Eval cancellation failed: %s" ex.Message)
+                false
             | None -> false
           reply.Reply cancelled
 
@@ -1203,19 +1205,19 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
         | ResetSession reply ->
           // Cancel any running eval before resetting
           match currentEvalCts.Value with
-          | Some cts -> try cts.Cancel() with _ -> ()
+          | Some cts -> try cts.Cancel() with ex -> logger.LogDebug (sprintf "Reset cancel failed: %s" ex.Message)
           | None -> ()
           match currentEvalThread.Value with
-          | Some thread -> try thread.Interrupt() with _ -> ()
+          | Some thread -> try thread.Interrupt() with ex -> logger.LogDebug (sprintf "Reset interrupt failed: %s" ex.Message)
           | None -> ()
           evalActor.Post(EvalReset reply)
         | HardResetSession(rebuild, reply) ->
           // Cancel any running eval before hard resetting
           match currentEvalCts.Value with
-          | Some cts -> try cts.Cancel() with _ -> ()
+          | Some cts -> try cts.Cancel() with ex -> logger.LogDebug (sprintf "Hard reset cancel failed: %s" ex.Message)
           | None -> ()
           match currentEvalThread.Value with
-          | Some thread -> try thread.Interrupt() with _ -> ()
+          | Some thread -> try thread.Interrupt() with ex -> logger.LogDebug (sprintf "Hard reset interrupt failed: %s" ex.Message)
           | None -> ()
           evalActor.Post(EvalHardReset(rebuild, reply))
       }

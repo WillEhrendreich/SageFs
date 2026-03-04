@@ -519,7 +519,11 @@ let startMcpServer (cfg: McpServerConfig) =
                             | SageFs.WorkerProtocol.WorkerResponse.StatusResult(_, snap) ->
                               return SageFs.WorkerProtocol.SessionStatus.label snap.Status
                             | _ -> return "unknown"
-                          with _ -> return "error"
+                          with
+                          | :? OperationCanceledException -> return "cancelled"
+                          | ex ->
+                            Log.debug "[MCP] health check error for session: %s" ex.Message
+                            return "error"
                         | None -> return "starting"
                     }
                     let healthy = sessionStatus = "Ready" || sessionStatus = "Evaluating"

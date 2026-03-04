@@ -87,7 +87,8 @@ module DaemonState =
             Version = "unknown"
           }
         | false -> return None
-    with _ ->
+    with ex ->
+      Utils.Log.debug "[DaemonState] MCP status probe failed on port %d: %s" mcpPort ex.Message
       try
         let! fallbackResp =
           httpClient.GetAsync(sprintf "http://localhost:%d/dashboard" dashboardPort)
@@ -102,7 +103,9 @@ module DaemonState =
             Version = "unknown"
           }
         | false -> return None
-      with _ -> return None
+      with ex2 ->
+        Utils.Log.debug "[DaemonState] Dashboard fallback also failed on port %d: %s" dashboardPort ex2.Message
+        return None
   }
 
   /// Synchronous wrapper for callers that can't be async yet.
@@ -127,7 +130,9 @@ module DaemonState =
         shutdownClient.PostAsync(sprintf "http://localhost:%d/api/shutdown" dashboardPort, null)
         |> Async.AwaitTask
       return resp.IsSuccessStatusCode
-    with _ -> return false
+    with ex ->
+      Utils.Log.debug "[DaemonState] Shutdown request to port %d failed: %s" mcpPort ex.Message
+      return false
   }
 
   let requestShutdown (mcpPort: int) =
