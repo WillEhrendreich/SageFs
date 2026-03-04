@@ -84,6 +84,7 @@
         <Compile Include="Middleware\FsiCompatibility.fs" />
         <Compile Include="Middleware\ComputationExpression.fs" />
         <Compile Include="Middleware\Directives.fs" />
+        <Compile Include="Middleware\CompilationContext.fs" />
         <Compile Include="Middleware\NonBlockingRun.fs" />
         <Compile Include="Middleware\HotReloading.fs" />
         <Compile Include="ActorCreation.fs" />

@@ -115,6 +115,7 @@
         <Compile Include="BinaryFormatTests.fs" />
         <Compile Include="ManifestPersistenceTests.fs" />
         <Compile Include="McpStateHandlerTests.fs" />
+        <Compile Include="CompilationContextTests.fs" />
         <Compile Include="Program.fs" />
     </ItemGroup>
 
