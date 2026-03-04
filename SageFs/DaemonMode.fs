@@ -454,6 +454,252 @@ let performGracefulShutdown
   | false -> log.LogWarning("StopAll timed out — some workers may not have stopped cleanly")
   | true -> ()
 
+/// Handle test discovery from SessionManager → Elm model.
+/// Scans project source files with tree-sitter, then dispatches
+/// locations and test cases to the Elm loop.
+let handleTestDiscovery
+  (readSnapshot: unit -> SessionManager.QuerySnapshot)
+  (workingDir: string)
+  (log: ILogger)
+  (dispatch: SageFsMsg -> unit)
+  (sid: string)
+  (tests: Features.LiveTesting.TestCase array)
+  (providers: Features.LiveTesting.ProviderDescription list) =
+  let sessionInfo = SessionManager.QuerySnapshot.tryGetSession sid (readSnapshot())
+  let projectDirs =
+    match sessionInfo with
+    | Some info ->
+      info.Projects
+      |> List.map (fun proj ->
+        let fullPath =
+          match IO.Path.IsPathRooted proj with
+          | true -> proj
+          | false -> IO.Path.Combine(info.WorkingDirectory, proj)
+        IO.Path.GetDirectoryName fullPath)
+      |> List.distinct
+    | None -> [ workingDir ]
+  let locations =
+    match Features.LiveTesting.TestTreeSitter.isAvailable () with
+    | true ->
+      projectDirs
+      |> List.toArray
+      |> Array.collect (fun dir ->
+        match IO.Directory.Exists dir with
+        | true ->
+          IO.Directory.GetFiles(dir, "*.fs", IO.SearchOption.AllDirectories)
+          |> Array.filter (fun f ->
+            let rel = f.Substring(dir.Length)
+            let sep = string IO.Path.DirectorySeparatorChar
+            not (rel.Contains(sep + "bin" + sep))
+            && not (rel.Contains(sep + "obj" + sep)))
+          |> Array.collect (fun f ->
+            try
+              let code = IO.File.ReadAllText f
+              Features.LiveTesting.TestTreeSitter.discover f code
+            with ex ->
+              log.LogWarning("[Daemon] Tree-sitter discovery failed for {File}: {Error}", f, ex.Message)
+              Array.empty)
+        | false -> Array.empty)
+    | false -> Array.empty
+  match Array.isEmpty locations with
+  | false -> dispatch (SageFsMsg.Event (SageFsEvent.TestLocationsDetected (sid, locations)))
+  | true -> ()
+  match Array.isEmpty tests with
+  | false -> dispatch (SageFsMsg.Event (SageFsEvent.TestsDiscovered (sid, tests)))
+  | true -> ()
+  match List.isEmpty providers with
+  | false -> dispatch (SageFsMsg.Event (SageFsEvent.ProvidersDetected providers))
+  | true -> ()
+
+/// Parse warmup progress string ("step/total msg") and dispatch to Elm.
+let handleWarmupProgress (dispatch: SageFsMsg -> unit) (_sid: string) (progress: string) =
+  match progress.IndexOf('/') with
+  | slashIdx when slashIdx > 0 ->
+    match progress.IndexOf(' ', slashIdx) with
+    | spaceIdx when spaceIdx > slashIdx ->
+      match System.Int32.TryParse(progress.[..slashIdx-1]),
+            System.Int32.TryParse(progress.[slashIdx+1..spaceIdx-1]) with
+      | (true, step), (true, total) ->
+        let msg = progress.[spaceIdx+1..]
+        dispatch (SageFsMsg.Event (SageFsEvent.WarmupProgress (step, total, msg)))
+      | _ -> ()
+    | _ -> ()
+  | _ -> ()
+
+/// Periodic cache + manifest save callback.
+/// Only writes when RunGeneration has advanced since last save.
+let periodicCacheSave
+  (log: ILogger)
+  (readSnapshot: unit -> SessionManager.QuerySnapshot)
+  (getModel: unit -> SageFsModel)
+  (lastSavedGeneration: int ref) =
+  try
+    let model = getModel()
+    let (Features.LiveTesting.RunGeneration gen) = model.LiveTesting.TestState.LastGeneration
+    match gen > lastSavedGeneration.Value with
+    | true ->
+      let sw = System.Diagnostics.Stopwatch.StartNew()
+      let activeSessions = SessionManager.QuerySnapshot.allSessions (readSnapshot())
+      let uniqueProjectSets =
+        activeSessions
+        |> List.map (fun s -> s.Projects)
+        |> List.distinctBy (fun ps ->
+          ps |> List.sort |> List.map (fun p -> p.Replace("\\", "/").ToLowerInvariant()) |> String.concat "|")
+      for projects in uniqueProjectSets do
+        match Features.DaemonPersistence.saveTestCache DaemonState.SageFsDir projects model.LiveTesting.TestState with
+        | Ok path -> log.LogDebug("Periodic cache save to {Path} (gen {Gen})", path, gen)
+        | Error err ->
+          Instrumentation.persistenceSaveErrors.Add(
+            1L, System.Collections.Generic.KeyValuePair("format", box "stc1"))
+          log.LogWarning("Periodic cache save failed: {Error}", err)
+      sw.Stop()
+      Instrumentation.cacheSaveCount.Add(1L)
+      Instrumentation.cacheSaveMs.Record(
+        sw.Elapsed.TotalMilliseconds,
+        System.Collections.Generic.KeyValuePair("coverage_entries", box (int64 model.LiveTesting.TestState.TestCoverageBitmaps.Count)),
+        System.Collections.Generic.KeyValuePair("result_entries", box (int64 model.LiveTesting.TestState.LastResults.Count)))
+      lastSavedGeneration.Value <- gen
+    | false -> ()
+  with ex ->
+    Instrumentation.periodicTaskErrors.Add(
+      1L, System.Collections.Generic.KeyValuePair("task", box "cache_save"))
+    log.LogWarning("Periodic cache save error: {Error}", ex.Message)
+
+/// Periodic manifest save (binary session resume).
+let periodicManifestSave (log: ILogger) (readSnapshot: unit -> SessionManager.QuerySnapshot) =
+  try
+    let replayState = buildReplayState readSnapshot
+    match Features.DaemonPersistence.saveManifest DaemonState.SageFsDir replayState with
+    | Ok path -> log.LogDebug("Periodic manifest save to {Path}", path)
+    | Error err ->
+      Instrumentation.persistenceSaveErrors.Add(
+        1L, System.Collections.Generic.KeyValuePair("format", box "sfm1"))
+      log.LogWarning("Periodic manifest save failed: {Error}", err)
+  with ex ->
+    Instrumentation.periodicTaskErrors.Add(
+      1L, System.Collections.Generic.KeyValuePair("task", box "manifest_save"))
+    log.LogWarning("Periodic manifest save error: {Error}", ex.Message)
+
+/// Create a debounced file watcher for live testing.
+/// Returns (watcher, debounceTimer) — caller must dispose both.
+let createLiveTestWatcher
+  (workingDir: string)
+  (dispatch: SageFsMsg -> unit) =
+  let mutable pendingPaths : Set<string> = Set.empty
+  let watcherLock = obj()
+  let debounceCallback _ =
+    let paths =
+      lock watcherLock (fun () ->
+        let ps = pendingPaths
+        pendingPaths <- Set.empty
+        ps)
+    for path in paths do
+      try
+        let fi = System.IO.FileInfo(path)
+        match fi.Exists && fi.Length < 1_048_576L with
+        | true ->
+          let content = System.IO.File.ReadAllText(path)
+          dispatch (SageFsMsg.FileContentChanged(path, content))
+        | false -> ()
+      with
+      | :? System.IO.IOException -> ()
+      | :? System.UnauthorizedAccessException -> ()
+  let debounceTimer = new System.Threading.Timer(
+    System.Threading.TimerCallback(debounceCallback), null,
+    System.Threading.Timeout.Infinite, System.Threading.Timeout.Infinite)
+  let handleFileChanged (e: System.IO.FileSystemEventArgs) =
+    let path = e.FullPath
+    match SageFs.FileWatcher.shouldTriggerRebuild
+        { Directories = [workingDir]; Extensions = [".fs"; ".fsx"]; ExcludePatterns = []; DebounceMs = 200 }
+        path with
+    | true ->
+      lock watcherLock (fun () ->
+        pendingPaths <- pendingPaths |> Set.add path
+        debounceTimer.Change(200, System.Threading.Timeout.Infinite) |> ignore)
+    | false -> ()
+  let watcher = new System.IO.FileSystemWatcher(workingDir)
+  watcher.IncludeSubdirectories <- true
+  watcher.NotifyFilter <- System.IO.NotifyFilters.LastWrite
+  watcher.Filters.Add("*.fs")
+  watcher.Filters.Add("*.fsx")
+  watcher.Changed.Add(handleFileChanged)
+  watcher.Created.Add(handleFileChanged)
+  watcher.EnableRaisingEvents <- true
+  watcher, debounceTimer
+
+/// Get previous sessions: active from CQRS snapshot + historical from Marten.
+let getPreviousSessions
+  (readSnapshot: unit -> SessionManager.QuerySnapshot)
+  (persistence: SageFs.EventStore.EventPersistence)
+  (daemonStreamId: string) = task {
+  let snapshot = readSnapshot()
+  let activeSessions =
+    SessionManager.QuerySnapshot.allSessions snapshot
+    |> List.map (fun (info: WorkerProtocol.SessionInfo) ->
+      { PreviousSession.Id = info.Id
+        PreviousSession.WorkingDir = info.WorkingDirectory
+        PreviousSession.Projects = info.Projects
+        PreviousSession.LastSeen = info.LastActivity })
+  let activeIds = activeSessions |> List.map (fun s -> s.Id) |> Set.ofList
+  let! historicalSessions = task {
+    try
+      let! events = persistence.FetchStream daemonStreamId
+      let daemonState = Features.Replay.DaemonReplayState.replayStream events
+      return
+        daemonState.Sessions
+        |> Map.values
+        |> Seq.filter (fun r -> r.StoppedAt.IsSome && not (activeIds.Contains r.SessionId))
+        |> Seq.map (fun r ->
+          { PreviousSession.Id = r.SessionId
+            PreviousSession.WorkingDir = r.WorkingDir
+            PreviousSession.Projects = r.Projects
+            PreviousSession.LastSeen = r.StoppedAt |> Option.map (fun t -> t.DateTime) |> Option.defaultValue r.CreatedAt.DateTime })
+        |> Seq.toList
+    with
+    | :? Marten.Exceptions.MartenException as ex ->
+      Log.error "[getPreviousSessions] Marten error: %s" ex.Message
+      return []
+    | ex ->
+      Log.error "[getPreviousSessions] Unexpected error: %s (%s)" ex.Message (ex.GetType().Name)
+      return []
+  }
+  return activeSessions @ historicalSessions
+}
+
+/// Start dashboard web server with Brotli compression.
+let startDashboardServer
+  (log: ILogger)
+  (dashboardPort: int)
+  (endpoints: HttpEndpoint list) = task {
+  try
+    let builder = WebApplication.CreateBuilder()
+    builder.Logging
+      .AddFilter("Microsoft.AspNetCore", LogLevel.Warning)
+      .AddFilter("Microsoft.Hosting", LogLevel.Warning)
+    |> ignore
+    builder.Services.AddResponseCompression(fun opts ->
+      opts.EnableForHttps <- true
+      opts.MimeTypes <- ResponseCompressionDefaults.MimeTypes |> Seq.append ["text/event-stream"]
+      opts.Providers.Add<BrotliCompressionProvider>()
+      opts.Providers.Add<GzipCompressionProvider>()
+    ) |> ignore
+    builder.Services.Configure<BrotliCompressionProviderOptions>(fun (opts: BrotliCompressionProviderOptions) ->
+      opts.Level <- System.IO.Compression.CompressionLevel.Fastest
+    ) |> ignore
+    let app = builder.Build()
+    let bindHost =
+      match System.Environment.GetEnvironmentVariable("SAGEFS_BIND_HOST") with
+      | null | "" -> "localhost"
+      | h -> h
+    app.Urls.Add(sprintf "http://%s:%d" bindHost dashboardPort)
+    app.UseResponseCompression() |> ignore
+    app.UseRouting().UseFalco(endpoints) |> ignore
+    log.LogInformation("Dashboard available at http://localhost:{Port}/dashboard", dashboardPort)
+    do! app.RunAsync()
+  with ex ->
+    log.LogWarning("Dashboard failed to start: {Error}", ex.Message)
+}
+
 /// Resume previous sessions from binary manifest (or Marten fallback).
 /// Creates new sessions for each alive-but-deduplicated entry, or
 /// starts bare if no previous sessions exist.
@@ -767,74 +1013,14 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
       |> Seq.toList)
 
   // Wire test discovery from SessionManager → Elm model
-  // After discovery, scan project source files with tree-sitter to produce
-  // SourceTestLocations, enabling source-mapped origins for gutter signs etc.
-  onTestDiscoveryCallback <- fun sid tests providers ->
-    // Scan project directories for test source locations via tree-sitter
-    let snapshot = readSnapshot()
-    let sessionInfo = SessionManager.QuerySnapshot.tryGetSession sid snapshot
-    let projectDirs =
-      match sessionInfo with
-      | Some info ->
-        info.Projects
-        |> List.map (fun proj ->
-          let fullPath = match IO.Path.IsPathRooted proj with | true -> proj | false -> IO.Path.Combine(info.WorkingDirectory, proj)
-          IO.Path.GetDirectoryName fullPath)
-        |> List.distinct
-      | None -> [ workingDir ]
-    let locations =
-      match Features.LiveTesting.TestTreeSitter.isAvailable () with
-      | true ->
-        projectDirs
-        |> List.toArray
-        |> Array.collect (fun dir ->
-          match IO.Directory.Exists dir with
-          | true ->
-            IO.Directory.GetFiles(dir, "*.fs", IO.SearchOption.AllDirectories)
-            |> Array.filter (fun f ->
-              let rel = f.Substring(dir.Length)
-              let sep = string IO.Path.DirectorySeparatorChar
-              not (rel.Contains(sep + "bin" + sep))
-              && not (rel.Contains(sep + "obj" + sep)))
-            |> Array.collect (fun f ->
-              try
-                let code = IO.File.ReadAllText f
-                Features.LiveTesting.TestTreeSitter.discover f code
-              with ex ->
-                log.LogWarning("[Daemon] Tree-sitter discovery failed for {File}: {Error}", f, ex.Message)
-                Array.empty)
-          | false -> Array.empty)
-      | false -> Array.empty
-    // Dispatch locations BEFORE tests so mergeSourceLocations can enrich them
-    match Array.isEmpty locations with
-    | false -> elmRuntime.Dispatch(SageFsMsg.Event (SageFsEvent.TestLocationsDetected (sid, locations)))
-    | true -> ()
-    match Array.isEmpty tests with
-    | false -> elmRuntime.Dispatch(SageFsMsg.Event (SageFsEvent.TestsDiscovered (sid, tests)))
-    | true -> ()
-    match List.isEmpty providers with
-    | false -> elmRuntime.Dispatch(SageFsMsg.Event (SageFsEvent.ProvidersDetected providers))
-    | true -> ()
+  onTestDiscoveryCallback <- handleTestDiscovery readSnapshot workingDir log elmRuntime.Dispatch
 
   // Wire instrumentation maps from SessionManager → Elm model
   onInstrumentationMapsCallback <- fun sid maps ->
     elmRuntime.Dispatch(SageFsMsg.Event (SageFsEvent.InstrumentationMapsReady (sid, maps)))
 
   // Wire warmup progress from SessionManager → Elm model (per-namespace granularity)
-  onWarmupProgressCallback <- fun _sid progress ->
-    // Parse "step/total msg" format from WARMUP_PROGRESS= protocol
-    match progress.IndexOf('/') with
-    | slashIdx when slashIdx > 0 ->
-      match progress.IndexOf(' ', slashIdx) with
-      | spaceIdx when spaceIdx > slashIdx ->
-        match System.Int32.TryParse(progress.[..slashIdx-1]),
-              System.Int32.TryParse(progress.[slashIdx+1..spaceIdx-1]) with
-        | (true, step), (true, total) ->
-          let msg = progress.[spaceIdx+1..]
-          elmRuntime.Dispatch(SageFsMsg.Event (SageFsEvent.WarmupProgress (step, total, msg)))
-        | _ -> ()
-      | _ -> ()
-    | _ -> ()
+  onWarmupProgressCallback <- handleWarmupProgress elmRuntime.Dispatch
 
   // Start MCP server
   let mcpTask =
@@ -858,102 +1044,15 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
 
   // Periodic test cache save — crash recovery for test results.
   // Fires every 60s, only writes when RunGeneration has advanced since last save.
-  let mutable lastSavedGeneration = 0
+  let lastSavedGeneration = ref 0
   let cacheSaveTimer = new System.Threading.Timer(
     System.Threading.TimerCallback(fun _ ->
-      try
-        let model = elmRuntime.GetModel()
-        let (Features.LiveTesting.RunGeneration gen) = model.LiveTesting.TestState.LastGeneration
-        match gen > lastSavedGeneration with
-        | true ->
-          let sw = System.Diagnostics.Stopwatch.StartNew()
-          let activeSessions = SessionManager.QuerySnapshot.allSessions (readSnapshot())
-          let uniqueProjectSets =
-            activeSessions
-            |> List.map (fun s -> s.Projects)
-            |> List.distinctBy (fun ps ->
-              ps |> List.sort |> List.map (fun p -> p.Replace("\\", "/").ToLowerInvariant()) |> String.concat "|")
-          for projects in uniqueProjectSets do
-            match Features.DaemonPersistence.saveTestCache DaemonState.SageFsDir projects model.LiveTesting.TestState with
-            | Ok path -> log.LogDebug("Periodic cache save to {Path} (gen {Gen})", path, gen)
-            | Error err ->
-              Instrumentation.persistenceSaveErrors.Add(
-                1L, System.Collections.Generic.KeyValuePair("format", box "stc1"))
-              log.LogWarning("Periodic cache save failed: {Error}", err)
-          sw.Stop()
-          Instrumentation.cacheSaveCount.Add(1L)
-          Instrumentation.cacheSaveMs.Record(
-            sw.Elapsed.TotalMilliseconds,
-            System.Collections.Generic.KeyValuePair("coverage_entries", box (int64 model.LiveTesting.TestState.TestCoverageBitmaps.Count)),
-            System.Collections.Generic.KeyValuePair("result_entries", box (int64 model.LiveTesting.TestState.LastResults.Count)))
-          lastSavedGeneration <- gen
-        | false -> ()
-      with ex ->
-        Instrumentation.periodicTaskErrors.Add(
-          1L, System.Collections.Generic.KeyValuePair("task", box "cache_save"))
-        log.LogWarning("Periodic cache save error: {Error}", ex.Message)
-      // Periodic manifest save (binary session resume)
-      try
-        let replayState = buildReplayState readSnapshot
-        match Features.DaemonPersistence.saveManifest DaemonState.SageFsDir replayState with
-        | Ok path -> log.LogDebug("Periodic manifest save to {Path}", path)
-        | Error err ->
-          Instrumentation.persistenceSaveErrors.Add(
-            1L, System.Collections.Generic.KeyValuePair("format", box "sfm1"))
-          log.LogWarning("Periodic manifest save failed: {Error}", err)
-      with ex ->
-        Instrumentation.periodicTaskErrors.Add(
-          1L, System.Collections.Generic.KeyValuePair("task", box "manifest_save"))
-        log.LogWarning("Periodic manifest save error: {Error}", ex.Message)),
+      periodicCacheSave log readSnapshot elmRuntime.GetModel lastSavedGeneration
+      periodicManifestSave log readSnapshot),
     null, 60_000, 60_000)
 
-  // Live testing file watcher — monitors *.fs and *.fsx changes, dispatches FileContentChanged.
-  // Uses timer-based debounce with per-path deduplication (same pattern as FileWatcher.start).
-  // File content is read in the debounced callback, NOT in the raw FSW handler.
-  let mutable liveTestPendingPaths : Set<string> = Set.empty
-  let liveTestWatcherLock = obj()
-
-  let liveTestDebounceCallback _ =
-    let paths =
-      lock liveTestWatcherLock (fun () ->
-        let ps = liveTestPendingPaths
-        liveTestPendingPaths <- Set.empty
-        ps)
-    for path in paths do
-      try
-        let fi = System.IO.FileInfo(path)
-        match fi.Exists && fi.Length < 1_048_576L with
-        | true ->
-          let content = System.IO.File.ReadAllText(path)
-          elmRuntime.Dispatch(SageFsMsg.FileContentChanged(path, content))
-        | false -> ()
-      with
-      | :? System.IO.IOException -> ()
-      | :? System.UnauthorizedAccessException -> ()
-
-  let liveTestDebounceTimer = new System.Threading.Timer(
-    System.Threading.TimerCallback(liveTestDebounceCallback), null,
-    System.Threading.Timeout.Infinite, System.Threading.Timeout.Infinite)
-
-  let handleFileChanged (e: System.IO.FileSystemEventArgs) =
-    let path = e.FullPath
-    match SageFs.FileWatcher.shouldTriggerRebuild
-        { Directories = [workingDir]; Extensions = [".fs"; ".fsx"]; ExcludePatterns = []; DebounceMs = 200 }
-        path with
-    | true ->
-      lock liveTestWatcherLock (fun () ->
-        liveTestPendingPaths <- liveTestPendingPaths |> Set.add path
-        liveTestDebounceTimer.Change(200, System.Threading.Timeout.Infinite) |> ignore)
-    | false -> ()
-
-  let liveTestWatcher = new System.IO.FileSystemWatcher(workingDir)
-  liveTestWatcher.IncludeSubdirectories <- true
-  liveTestWatcher.NotifyFilter <- System.IO.NotifyFilters.LastWrite
-  liveTestWatcher.Filters.Add("*.fs")
-  liveTestWatcher.Filters.Add("*.fsx")
-  liveTestWatcher.Changed.Add(handleFileChanged)
-  liveTestWatcher.Created.Add(handleFileChanged)
-  liveTestWatcher.EnableRaisingEvents <- true
+  // Live testing file watcher — monitors *.fs and *.fsx changes
+  let liveTestWatcher, liveTestDebounceTimer = createLiveTestWatcher workingDir elmRuntime.Dispatch
 
   // Start dashboard web server on MCP port + 1
   let dashboardPort = mcpPort + 1
@@ -976,42 +1075,8 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
       let model = elmRuntime.GetModel()
       ActiveSession.sessionId model.Sessions.ActiveSessionId |> Option.defaultValue ""
     GetElmRegions = fun () -> elmRuntime.GetRegions() |> Some
-    GetPreviousSessions = fun () -> task {
-      // Active sessions from CQRS snapshot (non-blocking)
-      let snapshot = readSnapshot()
-      let activeSessions =
-        SessionManager.QuerySnapshot.allSessions snapshot
-        |> List.map (fun (info: WorkerProtocol.SessionInfo) ->
-          { PreviousSession.Id = info.Id
-            PreviousSession.WorkingDir = info.WorkingDirectory
-            PreviousSession.Projects = info.Projects
-            PreviousSession.LastSeen = info.LastActivity })
-      let activeIds = activeSessions |> List.map (fun s -> s.Id) |> Set.ofList
-      // Historical sessions from Marten (stopped ones not currently active)
-      let! historicalSessions = task {
-        try
-          let! events = persistence.FetchStream daemonStreamId
-          let daemonState = Features.Replay.DaemonReplayState.replayStream events
-          return
-            daemonState.Sessions
-            |> Map.values
-            |> Seq.filter (fun r -> r.StoppedAt.IsSome && not (activeIds.Contains r.SessionId))
-            |> Seq.map (fun r ->
-              { PreviousSession.Id = r.SessionId
-                PreviousSession.WorkingDir = r.WorkingDir
-                PreviousSession.Projects = r.Projects
-                PreviousSession.LastSeen = r.StoppedAt |> Option.map (fun t -> t.DateTime) |> Option.defaultValue r.CreatedAt.DateTime })
-            |> Seq.toList
-        with
-        | :? Marten.Exceptions.MartenException as ex ->
-          Log.error "[getPreviousSessions] Marten error: %s" ex.Message
-          return []
-        | ex ->
-          Log.error "[getPreviousSessions] Unexpected error: %s (%s)" ex.Message (ex.GetType().Name)
-          return []
-      }
-      return activeSessions @ historicalSessions
-    }
+    GetPreviousSessions = fun () ->
+      getPreviousSessions readSnapshot persistence daemonStreamId
     GetAllSessions = fun () -> task { return SessionManager.QuerySnapshot.allSessions (readSnapshot()) }
     GetStandbyInfo = sessionOps.GetStandbyInfo
     GetSessionStandbyInfo = fun sessionId ->
@@ -1157,37 +1222,8 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
 
   let hotReloadProxyEndpoints = createHotReloadProxyEndpoints getWorkerBaseUrl httpClient stateChangedEvent
 
-  let dashboardTask = task {
-    try
-      let builder = WebApplication.CreateBuilder()
-      // Suppress ASP.NET Core info logging (routing, hosting) for dashboard
-      builder.Logging
-        .AddFilter("Microsoft.AspNetCore", LogLevel.Warning)
-        .AddFilter("Microsoft.Hosting", LogLevel.Warning)
-      |> ignore
-      // Response compression: Brotli at fastest level for dashboard SSE + JSON
-      builder.Services.AddResponseCompression(fun opts ->
-        opts.EnableForHttps <- true
-        opts.MimeTypes <- ResponseCompressionDefaults.MimeTypes |> Seq.append ["text/event-stream"]
-        opts.Providers.Add<BrotliCompressionProvider>()
-        opts.Providers.Add<GzipCompressionProvider>()
-      ) |> ignore
-      builder.Services.Configure<BrotliCompressionProviderOptions>(fun (opts: BrotliCompressionProviderOptions) ->
-        opts.Level <- System.IO.Compression.CompressionLevel.Fastest
-      ) |> ignore
-      let app = builder.Build()
-      let bindHost =
-        match System.Environment.GetEnvironmentVariable("SAGEFS_BIND_HOST") with
-        | null | "" -> "localhost"
-        | h -> h
-      app.Urls.Add(sprintf "http://%s:%d" bindHost dashboardPort)
-      app.UseResponseCompression() |> ignore
-      app.UseRouting().UseFalco(dashboardEndpoints @ hotReloadProxyEndpoints) |> ignore
-      log.LogInformation("Dashboard available at http://localhost:{Port}/dashboard", dashboardPort)
-      do! app.RunAsync()
-    with ex ->
-      log.LogWarning("Dashboard failed to start: {Error}", ex.Message)
-  }
+  let dashboardTask =
+    startDashboardServer log dashboardPort (dashboardEndpoints @ hotReloadProxyEndpoints)
 
   // Workers handle their own warmup, middleware, and file watching.
   // The daemon just needs to wait for the MCP and dashboard servers.
@@ -1262,8 +1298,8 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
                   cachedState.TestCoverageBitmaps.Count, cachedState.LastResults.Count)
                 elmRuntime.Dispatch(SageFsMsg.RestoreTestCache cachedState)
                 let (Features.LiveTesting.RunGeneration gen) = cachedState.LastGeneration
-                match gen > lastSavedGeneration with
-                | true -> lastSavedGeneration <- gen
+                match gen > lastSavedGeneration.Value with
+                | true -> lastSavedGeneration.Value <- gen
                 | false -> ()
               | Error msg -> log.LogDebug("No test cache available: {Reason}", msg)
           with ex ->
