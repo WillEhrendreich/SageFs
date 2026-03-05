@@ -804,10 +804,18 @@ let resumePreviousSessions
         Features.Events.SageFsEvent.DaemonSessionStopped
           {| SessionId = prev.SessionId; StoppedAt = DateTimeOffset.UtcNow |}
       ]
+    // Filter to sessions relevant to current working directory
+    let relevant, irrelevant =
+      existing |> List.partition (fun prev ->
+        prev.WorkingDir.StartsWith(workingDir, System.StringComparison.OrdinalIgnoreCase) ||
+        workingDir.StartsWith(prev.WorkingDir, System.StringComparison.OrdinalIgnoreCase))
+    for prev in irrelevant do
+      log.LogInformation("Skipping session {SessionId} for {WorkingDir} — not under daemon directory {DaemonDir}",
+        prev.SessionId, prev.WorkingDir, workingDir)
     // Resume all valid sessions in parallel — each is an independent worker process
     let resumeSpan = Instrumentation.startSpan Instrumentation.sessionSource "sagefs.daemon.session_resume" []
     let resumeTasks =
-      existing
+      relevant
       |> List.map (fun prev -> task {
         log.LogInformation("Resuming session for {WorkingDir}", prev.WorkingDir)
         let! result = sessionOps.CreateSession prev.Projects prev.WorkingDir
@@ -826,7 +834,7 @@ let resumePreviousSessions
       })
     do! System.Threading.Tasks.Task.WhenAll(resumeTasks) :> System.Threading.Tasks.Task
     match isNull resumeSpan with
-    | false -> resumeSpan.SetTag("resumed_count", existing.Length) |> ignore
+    | false -> resumeSpan.SetTag("resumed_count", relevant.Length) |> ignore
     | true -> ()
     Instrumentation.succeedSpan resumeSpan
 
