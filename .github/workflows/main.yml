@@ -92,18 +92,38 @@ jobs:
         npm ci
         npm run compile
 
+  vs-extension:
+    runs-on: windows-latest
+
+    steps:
+    - uses: actions/checkout@v5
+
+    - name: Checkout forked MCP SDK
+      uses: actions/checkout@v5
+      with:
+        repository: WillEhrendreich/ModelContextProtocolSdk
+        path: mcp-sdk
+
+    - name: Install Dotnet
+      uses: actions/setup-dotnet@v5
+      with:
+        dotnet-version: |
+          10.0.x
+          8.0.x
+        dotnet-quality: preview
+
+    - name: Build forked MCP SDK packages
+      run: |
+        dotnet pack mcp-sdk/src/ModelContextProtocol.Core -o mcp-sdk-nupkg -c Release
+        dotnet pack mcp-sdk/src/ModelContextProtocol -o mcp-sdk-nupkg -c Release
+        dotnet pack mcp-sdk/src/ModelContextProtocol.AspNetCore -o mcp-sdk-nupkg -c Release
+
     - name: Build Visual Studio extension
-      id: vs-build
-      continue-on-error: true
       run: dotnet build sagefs-vs/SageFs.VisualStudio/SageFs.VisualStudio.csproj -c Release
 
-    - name: Warn if VS extension build failed
-      if: steps.vs-build.outcome == 'failure'
-      run: echo "::warning::Visual Studio extension build failed — skipped (may need Windows)"
-
   publish:
-    needs: [build, extensions]
-    runs-on: ubuntu-latest
+    needs: [build, extensions, vs-extension]
+    runs-on: windows-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/master'
     permissions:
       contents: write
@@ -138,9 +158,10 @@ jobs:
 
     - name: Get version
       id: version
+      shell: pwsh
       run: |
-        version=$(grep -oP '(?<=<Version>)[^<]+' Directory.Build.props)
-        echo "version=$version" >> $GITHUB_OUTPUT
+        $version = ([xml](Get-Content Directory.Build.props)).Project.PropertyGroup.Version
+        "version=$version" >> $env:GITHUB_OUTPUT
 
     - name: Pack SageFs
       run: dotnet pack SageFs -c Release -o release
@@ -152,18 +173,16 @@ jobs:
         npm ci
         npx @vscode/vsce package -o ../release/sagefs-vscode-${{ steps.version.outputs.version }}.vsix
 
+    - name: Install .NET 8 SDK for VS extension
+      uses: actions/setup-dotnet@v5
+      with:
+        dotnet-version: 8.0.x
+
     - name: Build Visual Studio extension
-      id: vs-build
-      continue-on-error: true
       run: |
         dotnet build sagefs-vs/SageFs.VisualStudio/SageFs.VisualStudio.csproj -c Release
-        for f in sagefs-vs/SageFs.VisualStudio/bin/Release/*.vsix; do
-          [ -f "$f" ] && cp "$f" "release/sagefs-visualstudio-${{ steps.version.outputs.version }}.vsix"
-        done
-
-    - name: Warn if VS extension build failed
-      if: steps.vs-build.outcome == 'failure'
-      run: echo "::warning::Visual Studio extension build failed — VSIX will not be included in this release"
+        $vsix = Get-ChildItem sagefs-vs/SageFs.VisualStudio/bin/Release/*.vsix -ErrorAction SilentlyContinue
+        if ($vsix) { Copy-Item $vsix.FullName "release/sagefs-visualstudio-${{ steps.version.outputs.version }}.vsix" }
 
     - name: Push to NuGet
       run: dotnet nuget push release/*.nupkg --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
@@ -191,15 +210,17 @@ jobs:
         NVIM_PAT: ${{ secrets.SAGEFS_NVIM_PAT }}
       if: env.NVIM_PAT != ''
       continue-on-error: true
+      shell: pwsh
       run: |
-        cd "$(mktemp -d)"
-        git clone --depth 1 https://x-access-token:${NVIM_PAT}@github.com/WillEhrendreich/sagefs.nvim.git .
+        $tmpDir = New-Item -ItemType Directory -Path (Join-Path $env:TEMP "sagefs-nvim-$(Get-Random)")
+        Push-Location $tmpDir
+        git clone --depth 1 "https://x-access-token:$($env:NVIM_PAT)@github.com/WillEhrendreich/sagefs.nvim.git" .
         git config user.name "github-actions[bot]"
         git config user.email "github-actions[bot]@users.noreply.github.com"
-        # Update version.lua to match
-        echo "return '${{ steps.version.outputs.version }}'" > lua/sagefs/version.lua
+        Set-Content -Path "lua/sagefs/version.lua" -Value "return '${{ steps.version.outputs.version }}'"
         git add lua/sagefs/version.lua
-        git diff --cached --quiet || git commit -m "chore: sync version to v${{ steps.version.outputs.version }}"
-        git push origin main || true
+        $changed = git diff --cached --quiet; if ($LASTEXITCODE -ne 0) { git commit -m "chore: sync version to v${{ steps.version.outputs.version }}" }
+        git push origin main
         git tag -f "v${{ steps.version.outputs.version }}" -m "Release v${{ steps.version.outputs.version }} (synced from SageFs)"
         git push origin "v${{ steps.version.outputs.version }}" --force
+        Pop-Location
