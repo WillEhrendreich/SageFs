@@ -432,6 +432,8 @@ let createStreamHandler
               | :? System.IO.IOException -> ()
               | :? ObjectDisposedException -> ()
               | :? OperationCanceledException -> ()
+              | :? System.ArgumentOutOfRangeException -> ()
+              | :? System.InvalidOperationException -> ()
               return! loop ()
             | Some () ->
               // Got a state change — drain + coalesce + push
@@ -446,7 +448,9 @@ let createStreamHandler
               | :? System.IO.IOException -> ()
               | :? ObjectDisposedException -> ()
               | :? OperationCanceledException -> ()
-              | ex -> Log.error "[Dashboard SSE] pushState failed: %s" ex.Message
+              | :? System.ArgumentOutOfRangeException -> ()
+              | :? System.InvalidOperationException -> ()
+              | ex -> Log.debug "[Dashboard SSE] pushState failed: %s" ex.Message
               return! loop ()
           }
           loop ()), ctx.RequestAborted)
@@ -794,14 +798,14 @@ let createApiStateHandler
         let pushLock = new Threading.SemaphoreSlim(1, 1)
         // Heartbeat keeps connection alive through proxies
         let heartbeat = new Threading.Timer((fun _ ->
-            try
-                let bytes = Text.Encoding.UTF8.GetBytes(": keepalive\n\n")
-                ctx.Response.Body.WriteAsync(bytes).AsTask()
-                |> fun t -> t.ContinueWith(fun (_: Threading.Tasks.Task) -> ctx.Response.Body.FlushAsync()) |> ignore
-            with
-            | :? System.IO.IOException | :? ObjectDisposedException -> ()
-            | :? System.ArgumentOutOfRangeException | :? System.InvalidOperationException -> ()
-            | ex -> Log.error "[dashboard] Heartbeat error: %s" ex.Message), null, 15000, 15000)
+            Threading.Tasks.Task.Run(fun () ->
+              task {
+                try
+                  let bytes = Text.Encoding.UTF8.GetBytes(": keepalive\n\n")
+                  do! ctx.Response.Body.WriteAsync(bytes)
+                  do! ctx.Response.Body.FlushAsync()
+                with _ -> () // Client disconnected — silently ignore
+              } :> Threading.Tasks.Task) |> ignore), null, 15000, 15000)
         use _heartbeat = heartbeat
         use _sub = evt.Subscribe(fun _ ->
           Threading.Tasks.Task.Run(fun () ->
@@ -810,12 +814,15 @@ let createApiStateHandler
               match pushLock.Wait(0) with
               | false -> ()
               | true ->
-                try do! pushJson ()
-                with
-                | :? System.IO.IOException | :? ObjectDisposedException -> ()
-                | :? System.ArgumentOutOfRangeException | :? System.InvalidOperationException -> ()
-                | ex -> Log.error "[dashboard] Push error: %s" ex.Message
-                pushLock.Release() |> ignore
+                try
+                  try do! pushJson ()
+                  with
+                  | :? System.IO.IOException | :? ObjectDisposedException -> ()
+                  | :? System.ArgumentOutOfRangeException | :? System.InvalidOperationException -> ()
+                  | :? OperationCanceledException -> ()
+                  | ex -> Log.debug "[dashboard] Push error: %s" ex.Message
+                finally
+                  pushLock.Release() |> ignore
             } :> Threading.Tasks.Task)
           |> ignore)
         do! tcs.Task

@@ -672,7 +672,9 @@ let startDashboardServer
     |> ignore
     builder.Services.AddResponseCompression(fun opts ->
       opts.EnableForHttps <- true
-      opts.MimeTypes <- ResponseCompressionDefaults.MimeTypes |> Seq.append ["text/event-stream"]
+      // Do NOT compress text/event-stream — SSE is a long-lived stream.
+      // Response compression buffers output and FinishCompressionAsync() throws
+      // ArgumentOutOfRangeException on StreamPipeWriter when the client disconnects.
       opts.Providers.Add<BrotliCompressionProvider>()
       opts.Providers.Add<GzipCompressionProvider>()
     ) |> ignore
