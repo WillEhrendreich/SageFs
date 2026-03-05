@@ -51,18 +51,44 @@ let private patchMethod (harmony: HarmonyLib.Harmony) (targetType: Type) (method
     Log.info "[DevReload] Patched %s.%s" targetType.Name methodName
 
 /// Install Harmony patches on WebApplication.Run and RunAsync.
-/// Safe to call early — the prefix is a no-op until setWorkerPort is called.
+/// Uses lazy patching: if WebApplication type is already loaded, patches immediately.
+/// Otherwise, hooks AppDomain.AssemblyLoad to apply patches when ASP.NET Core loads.
+/// Chesterton's fence: In FSI-hosted server scenarios (e.g. running Harmony inside
+/// SageFs REPL), WebApplication type loads AFTER worker startup. Eager-only patching
+/// silently misses these late-loaded types, leaving DevReload injection broken.
 let install () =
   match isDisabled () with
   | true ->
     Log.info "[DevReload] Disabled via SAGEFS_DEVRELOAD env var"
   | false ->
-    try
-      let harmony = HarmonyLib.Harmony("sagefs.devreload")
-      patchMethod harmony typeof<WebApplication> "Run" [| typeof<string> |]
-      patchMethod harmony typeof<WebApplication> "RunAsync" [| typeof<string> |]
-    with ex ->
-      Log.warn "[DevReload] Harmony patch installation failed: %s" (ex.Message)
+    let harmony = HarmonyLib.Harmony("sagefs.devreload")
+    let tryPatch () =
+      try
+        let waType = typeof<WebApplication>
+        match waType with
+        | null -> false
+        | t ->
+          patchMethod harmony t "Run" [| typeof<string> |]
+          patchMethod harmony t "RunAsync" [| typeof<string> |]
+          true
+      with _ -> false
+    // Try immediate patching first
+    match tryPatch () with
+    | true ->
+      Log.info "[DevReload] Patches applied immediately"
+    | false ->
+      // Lazy patching: wait for Microsoft.AspNetCore to load
+      Log.info "[DevReload] WebApplication not yet loaded — deferring patches to AssemblyLoad event"
+      let mutable patched = false
+      AppDomain.CurrentDomain.add_AssemblyLoad(AssemblyLoadEventHandler(fun _ args ->
+        match patched || not (args.LoadedAssembly.GetName().Name = "Microsoft.AspNetCore") with
+        | true -> ()
+        | false ->
+          match tryPatch () with
+          | true ->
+            patched <- true
+            Log.info "[DevReload] Lazy patches applied after Microsoft.AspNetCore loaded"
+          | false -> ()))
 
 /// Manual helper for non-WebApplication hosts.
 /// Call from user code: SageFs.DevReloadInjector.injectMiddleware app workerPort

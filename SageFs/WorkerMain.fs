@@ -264,8 +264,15 @@ let run (sessionId: string) (port: int) = async {
   // Start file watcher unless no-watch was set
   let fileWatcher =
     match workerConfig.NoWatch || List.isEmpty result.ProjectDirectories with
-    | true -> None
+    | true ->
+      match workerConfig.NoWatch with
+      | true -> Log.info "File watcher disabled (SAGEFS_NO_WATCH=1)"
+      | false -> Log.warn "File watcher skipped: no project directories found"
+      None
     | false ->
+      Log.info "File watcher starting for %d directories: %s"
+        result.ProjectDirectories.Length
+        (String.Join(", ", result.ProjectDirectories))
       let config = FileWatcher.defaultWatchConfig result.ProjectDirectories
       let onFileChanged (change: FileWatcher.FileChange) =
         let ext = IO.Path.GetExtension(change.FilePath)
