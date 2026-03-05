@@ -213,7 +213,8 @@ let main args =
           proc.WaitForExit(3000) |> ignore
           printfn "Daemon stopped (PID %d)" info.Pid
           0
-        with _ ->
+        with ex ->
+          eprintfn "Stop daemon error for PID %d: %s" info.Pid ex.Message
           printfn "Daemon was not running (stale PID %d)" info.Pid
           0
     | None ->

@@ -230,13 +230,44 @@ Uses the [VisualStudio.Extensibility](https://learn.microsoft.com/en-us/visualst
 
 #### AI Agent (MCP)
 
-Connect any MCP client to `http://localhost:37749/sse`:
+SageFs exposes 23 MCP tools — from `send_fsharp_code` to `run_tests` to `explore_type`. Any MCP client can connect.
 
+**Streamable HTTP** (recommended — auto-reconnects, no session drops):
+```json
+{ "mcpServers": { "sagefs": { "type": "streamable-http", "url": "http://localhost:37749/" } } }
+```
+
+**SSE** (legacy clients that don't support Streamable HTTP yet):
 ```json
 { "mcpServers": { "sagefs": { "type": "sse", "url": "http://localhost:37749/sse" } } }
 ```
 
-Works with GitHub Copilot (CLI & VS Code), Claude Code, Claude Desktop, and any MCP-compatible tool. 23 tools available — from `send_fsharp_code` to `run_tests` to `explore_type`. The **edit → auto-test → poll** workflow means agents don't even need to call eval — just edit files and check `get_live_test_status`.
+<details>
+<summary>Per-client config examples</summary>
+
+**GitHub Copilot (CLI)** — `~/.copilot/github-copilot/mcp.json`:
+```json
+{ "servers": { "sagefs": { "type": "sse", "url": "http://localhost:37749/sse" } } }
+```
+
+**Claude Code** — `~/.claude/claude_desktop_config.json`:
+```json
+{ "mcpServers": { "sagefs": { "type": "sse", "url": "http://localhost:37749/sse" } } }
+```
+
+**Windsurf / Cursor** — `.cursor/mcp.json` or Windsurf MCP settings:
+```json
+{ "mcpServers": { "sagefs": { "type": "sse", "url": "http://localhost:37749/sse" } } }
+```
+
+**OpenCode** — `mcp.json`:
+```json
+{ "mcpServers": { "sagefs": { "url": "http://localhost:37749/sse" } } }
+```
+
+</details>
+
+Works with GitHub Copilot (CLI & VS Code), Claude Code, Claude Desktop, OpenCode, Windsurf, Cursor, and any MCP-compatible tool. The **edit → auto-test → poll** workflow means agents don't even need to call eval — just edit files and check `get_live_test_status`.
 
 #### TUI / GUI / Web Dashboard / REPL
 

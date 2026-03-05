@@ -1437,5 +1437,5 @@ let startMcpServer (cfg: McpServerConfig) =
     | :? System.IO.IOException as ex when ex.Message.Contains("address") || ex.Message.Contains("already") ->
       Log.error "Port %d is already in use. Another SageFs instance may be running — try 'sagefs status' or use --mcp-port to pick a different port." cfg.Port
     | ex ->
-      Log.error "MCP server failed to start: %s" ex.Message
+      Log.error "MCP server failed to start (%s): %s" (ex.GetType().Name) ex.Message
   }
