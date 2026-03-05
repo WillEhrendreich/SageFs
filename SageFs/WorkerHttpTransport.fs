@@ -486,9 +486,11 @@ module WorkerHttpTransport =
                   match evt with
                   | DevReload.DevReloadEvent.Compiling None -> compilingBytes
                   | DevReload.DevReloadEvent.Compiling (Some file) ->
-                    // Dynamic payload with filename — can't pre-allocate
+                    // Dynamic payload with filename — can't pre-allocate.
+                    // Use JsonSerializer.Serialize for proper escaping of control chars,
+                    // Unicode, and special characters in filenames.
                     Text.Encoding.UTF8.GetBytes(
-                      sprintf """data: {"type":"compiling","file":"%s"}""" (file.Replace("\\", "\\\\").Replace("\"", "\\\"")) + "\n\n")
+                      sprintf """data: {"type":"compiling","file":%s}""" (System.Text.Json.JsonSerializer.Serialize(file)) + "\n\n")
                   | DevReload.DevReloadEvent.Reload -> reloadBytes
                   | DevReload.DevReloadEvent.CompilationFailed summary ->
                     Text.Encoding.UTF8.GetBytes(

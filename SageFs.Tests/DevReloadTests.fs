@@ -93,10 +93,10 @@ let propertyTests = testSequenced <| testList "DevReload.Properties" [
       true)
 
   testPropertyWithConfig { FsCheckConfig.defaultConfig with maxTest = 50 }
-    "every Compiling is resolvable by Reload or CompilationFailed" <|
-    // Intent: the DU has exactly 3 cases, and the lifecycle is
-    // Compiling → (Reload | CompilationFailed). This test verifies
-    // the DU shape enables this pattern.
+    "DU exhaustiveness: exactly 3 lifecycle cases (documentary)" <|
+    // Documentary test — verifies the DU has exactly 3 cases by pattern matching
+    // without a wildcard. If a 4th case is added, this fails to compile.
+    // The lifecycle is: Compiling → (Reload | CompilationFailed).
     Prop.forAll (Arb.fromGen genDevReloadEvent) (fun evt ->
       match evt with
       | Compiling _ -> true
@@ -419,6 +419,39 @@ let sseFormatTests = testList "DevReload.SSEFormat" [
     let opens = script |> Seq.filter ((=) '{') |> Seq.length
     let closes = script |> Seq.filter ((=) '}') |> Seq.length
     opens |> Expect.equal "braces should be balanced" closes
+  }
+
+  test "compiling SSE payload with filename uses JsonSerializer" {
+    // Chesterton's fence: manual Replace("\\","\\\\") missed control chars
+    // and Unicode escapes. JsonSerializer.Serialize handles all edge cases.
+    let file = "src\\Models\\UserTest.fs"
+    let serialized = System.Text.Json.JsonSerializer.Serialize(file)
+    let payload = sprintf "data: {\"type\":\"compiling\",\"file\":%s}" serialized
+    // The serialized filename should be valid JSON — parse it to prove
+    let json = payload.Substring(6) // strip "data: "
+    let doc = System.Text.Json.JsonDocument.Parse(json)
+    let roundTripped = doc.RootElement.GetProperty("file").GetString()
+    roundTripped |> Expect.equal "filename should round-trip through JSON" file
+  }
+
+  test "compiling SSE payload handles quotes in filename" {
+    let file = "User\"Test.fs"
+    let serialized = System.Text.Json.JsonSerializer.Serialize(file)
+    let payload = sprintf "data: {\"type\":\"compiling\",\"file\":%s}" serialized
+    let json = payload.Substring(6)
+    let doc = System.Text.Json.JsonDocument.Parse(json)
+    let roundTripped = doc.RootElement.GetProperty("file").GetString()
+    roundTripped |> Expect.equal "quoted filename should round-trip" file
+  }
+
+  test "failed SSE payload round-trips error through JSON" {
+    let error = "Error in line 42: unexpected token"
+    let serialized = System.Text.Json.JsonSerializer.Serialize(error)
+    let payload = sprintf "data: {\"type\":\"failed\",\"error\":%s}" serialized
+    let json = payload.Substring(6)
+    let doc = System.Text.Json.JsonDocument.Parse(json)
+    let roundTripped = doc.RootElement.GetProperty("error").GetString()
+    roundTripped |> Expect.equal "error should round-trip through JSON" error
   }
 ]
 
