@@ -284,7 +284,7 @@ let run (sessionId: string) (port: int) = async {
             match HotReloadState.isWatched filePath !result.HotReloadStateRef with
             | false -> ()
             | true ->
-            DevReload.broadcastCompiling ()
+            DevReload.broadcastCompiling (Some (IO.Path.GetFileName filePath))
             let code = sprintf "#load @\"%s\"" filePath
             let request = { Code = code; Args = Map.ofList ["hotReload", box true] }
             use localCts = new CancellationTokenSource()
@@ -312,7 +312,14 @@ let run (sessionId: string) (port: int) = async {
               | true ->
                 Log.info "Reloaded %s" fileName
             | Error ex ->
-              Log.warn "Reload failed for %s: %s" (IO.Path.GetFileName filePath) (ex.Message)
+              // Chesterton's fence: broadcastCompilationFailed ensures the browser
+              // overlay transitions from "Recompiling..." to the error message.
+              // Without this, compilation errors leave the overlay stuck on blue
+              // "Recompiling..." forever — the #1 reported DX issue.
+              let fileName = IO.Path.GetFileName filePath
+              let summary = sprintf "%s: %s" fileName ex.Message
+              DevReload.broadcastCompilationFailed summary
+              Log.warn "Reload failed for %s: %s" fileName (ex.Message)
           | FileWatcher.FileChangeAction.SoftReset ->
             Log.info "Project file changed — soft reset needed"
             let! _ = actor.PostAndAsyncReply(fun rc -> ResetSession rc)

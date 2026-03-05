@@ -7,6 +7,15 @@ open Microsoft.AspNetCore.Http
 
 /// Generate the reload script. Port > 0 connects cross-origin to the worker's
 /// SSE endpoint; port 0 falls back to a same-origin relative path (for tests).
+///
+/// Chesterton's fence: the script includes several deliberate design choices:
+/// - Infinite-reload guard via sessionStorage prevents reload bombs when the
+///   server sends malformed JSON (catch block calls reload → reconnect → same
+///   bad event → infinite loop). Counter resets after 5s of stability.
+/// - retry:1000 is sent by the SSE endpoint (not the script) for faster reconnect.
+/// - console.debug logging aids debugging the hot-reload system itself.
+/// - Error overlay shows compilation errors *in the browser* — this is what makes
+///   the DX tweet-worthy. Elm and Vite do this; FsiX does not.
 let reloadScript (workerPort: int) =
   let sseUrl =
     match workerPort > 0 with
@@ -14,28 +23,52 @@ let reloadScript (workerPort: int) =
     | false -> "/__sagefs__/reload"
   sprintf """<script data-sagefs-injected="devreload">
 (function(){
-  if (document.querySelector('script[data-sagefs-injected="devreload"]').dataset.sagefsDup) return;
-  document.querySelector('script[data-sagefs-injected="devreload"]').dataset.sagefsDup = '1';
-  var d = document.createElement('div');
+  const s = document.querySelector('script[data-sagefs-injected="devreload"]');
+  if (s.dataset.sagefsDup) return;
+  s.dataset.sagefsDup = '1';
+  const d = document.createElement('div');
   d.id = 'sagefs-reload-indicator';
-  d.style.cssText = 'position:fixed;top:8px;right:8px;z-index:2147483647;padding:6px 14px;border-radius:6px;font:13px/1.4 system-ui,sans-serif;color:#fff;background:#2563eb;opacity:0;pointer-events:none;transition:opacity .2s';
+  d.style.cssText = 'position:fixed;top:8px;right:8px;z-index:2147483647;padding:8px 16px;border-radius:8px;font:13px/1.5 system-ui,sans-serif;color:#fff;background:#2563eb;opacity:0;pointer-events:none;transition:opacity .2s;box-shadow:0 2px 12px rgba(0,0,0,.2);max-width:480px;white-space:pre-wrap;word-break:break-word';
   document.body.appendChild(d);
-  var es = new EventSource('%s');
+  let reloadCount = 0;
+  let reloadTimer = null;
+  const safeReload = function() {
+    reloadCount++;
+    if (reloadCount > 3) {
+      d.textContent = '⚠ SageFs: too many reloads — paused. Save again to retry.';
+      d.style.background = '#dc2626';
+      d.style.opacity = '1';
+      console.warn('[SageFs] Reload guard: stopped after ' + reloadCount + ' rapid reloads');
+      return;
+    }
+    clearTimeout(reloadTimer);
+    reloadTimer = setTimeout(function(){ reloadCount = 0; }, 5000);
+    window.location.reload();
+  };
+  const es = new EventSource('%s');
   es.onmessage = function(e) {
     try {
-      var msg = JSON.parse(e.data);
+      const msg = JSON.parse(e.data);
+      console.debug('[SageFs]', msg.type, msg);
       if (msg.type === 'compiling') {
-        d.textContent = '⟳ Recompiling...';
+        const label = msg.file ? '⟳ Recompiling ' + msg.file + '...' : '⟳ Recompiling...';
+        d.textContent = label;
         d.style.background = '#2563eb';
         d.style.opacity = '1';
       } else if (msg.type === 'reload') {
         d.textContent = '✓ Updated';
         d.style.background = '#16a34a';
         d.style.opacity = '1';
-        setTimeout(function(){ window.location.reload(); }, 150);
+        setTimeout(safeReload, 80);
+      } else if (msg.type === 'failed') {
+        d.textContent = '✗ ' + (msg.error || 'Compilation failed');
+        d.style.background = '#dc2626';
+        d.style.opacity = '1';
+        console.error('[SageFs] Compilation failed:', msg.error);
       }
     } catch(ex) {
-      window.location.reload();
+      console.warn('[SageFs] Bad SSE payload:', e.data, ex);
+      safeReload();
     }
   };
   es.onerror = function() {

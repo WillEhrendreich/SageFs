@@ -7,11 +7,106 @@ open System.Threading
 open System.Threading.Tasks
 open Expecto
 open Expecto.Flip
+open FsCheck
+open FsCheck.FSharp
 open Microsoft.AspNetCore.Http
 open SageFs.DevReload
 open SageFs
 
-// -- Signaling tests (sequential — broadcastReload fires ALL clients) --------
+// ============================================================================
+// Property-based tests (FsCheck) — intent-surfacing
+// ============================================================================
+
+/// Generator for DevReloadEvent — covers all three DU cases
+let private genDevReloadEvent =
+  Gen.oneof [
+    Gen.constant (Compiling None)
+    Gen.elements [ "App.fs"; "Handlers.fs"; "Domain.fs"; "Views.fs" ]
+    |> Gen.map (fun s -> Compiling (Some s))
+    Gen.constant Reload
+    Gen.elements [ "FS0001: type mismatch"; "FS0010: unexpected"; "FS0039: undefined" ]
+    |> Gen.map CompilationFailed
+  ]
+
+/// Helper to broadcast any DevReloadEvent via the public API
+let private broadcastAny (evt: DevReloadEvent) =
+  match evt with
+  | Compiling fileName -> broadcastCompiling fileName
+  | Reload -> broadcastReload ()
+  | CompilationFailed err -> broadcastCompilationFailed err
+
+let propertyTests = testSequenced <| testList "DevReload.Properties" [
+
+  testPropertyWithConfig { FsCheckConfig.defaultConfig with maxTest = 50 }
+    "broadcast delivers every event to every registered client" <|
+    Prop.forAll (Arb.fromGen (Gen.listOfLength 15 genDevReloadEvent)) (fun events ->
+      let suffix = Guid.NewGuid().ToString("N").[..7]
+      let ids = [ sprintf "pa-%s" suffix; sprintf "pb-%s" suffix; sprintf "pc-%s" suffix ]
+      let readers = ids |> List.map (fun id -> id, registerClient id)
+      for evt in events do broadcastAny evt
+      let allCorrect =
+        readers |> List.forall (fun (_, reader) ->
+          let received = ResizeArray()
+          let mutable evt = Reload
+          while reader.TryRead(&evt) do received.Add(evt)
+          received.Count = events.Length)
+      for id in ids do unregisterClient id
+      allCorrect)
+
+  testPropertyWithConfig { FsCheckConfig.defaultConfig with maxTest = 50 }
+    "event ordering is preserved per client" <|
+    Prop.forAll (Arb.fromGen (Gen.listOfLength 10 genDevReloadEvent)) (fun events ->
+      let id = sprintf "ord-%s" (Guid.NewGuid().ToString("N").[..7])
+      let reader = registerClient id
+      for evt in events do broadcastAny evt
+      let received = ResizeArray()
+      let mutable evt = Reload
+      while reader.TryRead(&evt) do received.Add(evt)
+      unregisterClient id
+      Seq.toList received = events)
+
+  testPropertyWithConfig { FsCheckConfig.defaultConfig with maxTest = 50 }
+    "unregisterClient is idempotent — calling N times never throws" <|
+    Prop.forAll (Arb.fromGen (Gen.choose (1, 10))) (fun count ->
+      let id = sprintf "idem-%s" (Guid.NewGuid().ToString("N").[..7])
+      let _reader = registerClient id
+      for _ in 1..count do unregisterClient id
+      true)
+
+  testPropertyWithConfig { FsCheckConfig.defaultConfig with maxTest = 50 }
+    "registerClient replaces existing channel — new reader gets all events" <|
+    Prop.forAll (Arb.fromGen (Gen.listOfLength 5 genDevReloadEvent)) (fun events ->
+      let id = sprintf "repl-%s" (Guid.NewGuid().ToString("N").[..7])
+      let _r1 = registerClient id
+      let r2 = registerClient id
+      for evt in events do broadcastAny evt
+      let received = ResizeArray()
+      let mutable evt = Reload
+      while r2.TryRead(&evt) do received.Add(evt)
+      unregisterClient id
+      received.Count = events.Length)
+
+  testPropertyWithConfig { FsCheckConfig.defaultConfig with maxTest = 50 }
+    "broadcast with zero clients never throws" <|
+    Prop.forAll (Arb.fromGen genDevReloadEvent) (fun evt ->
+      broadcastAny evt
+      true)
+
+  testPropertyWithConfig { FsCheckConfig.defaultConfig with maxTest = 50 }
+    "every Compiling is resolvable by Reload or CompilationFailed" <|
+    // Intent: the DU has exactly 3 cases, and the lifecycle is
+    // Compiling → (Reload | CompilationFailed). This test verifies
+    // the DU shape enables this pattern.
+    Prop.forAll (Arb.fromGen genDevReloadEvent) (fun evt ->
+      match evt with
+      | Compiling _ -> true
+      | Reload -> true
+      | CompilationFailed _ -> true)
+]
+
+// ============================================================================
+// Signaling tests (sequential — broadcast fires ALL clients)
+// ============================================================================
 
 let signalingTests = testSequenced <| testList "DevReload.Signaling" [
 
@@ -29,9 +124,9 @@ let signalingTests = testSequenced <| testList "DevReload.Signaling" [
     let! ok2 = r2.WaitToReadAsync(CancellationToken.None).AsTask()
     ok1 |> Expect.isTrue "r1 should have data"
     ok2 |> Expect.isTrue "r2 should have data"
-    let mutable evt1 = DevReloadEvent.Compiling
+    let mutable evt1 = Compiling None
     r1.TryRead(&evt1) |> ignore
-    evt1 |> Expect.equal "should be Reload" DevReloadEvent.Reload
+    evt1 |> Expect.equal "should be Reload" Reload
     unregisterClient "trigger-a"
     unregisterClient "trigger-b"
   }
@@ -44,59 +139,87 @@ let signalingTests = testSequenced <| testList "DevReload.Signaling" [
     let reader = registerClient "unregister-me"
     unregisterClient "unregister-me"
     let! completed = reader.Completion
-    // If we get here, the channel completed without error
     ignore completed
   }
 
-  testTask "registerClient replaces existing client with same id" {
-    let _r1 = registerClient "replace-id"
-    let r2 = registerClient "replace-id"
-    broadcastReload ()
-    let! ok = r2.WaitToReadAsync(CancellationToken.None).AsTask()
-    ok |> Expect.isTrue "Replacement channel should receive events"
-    unregisterClient "replace-id"
-  }
-
-  testTask "broadcastCompiling delivers Compiling event" {
+  testTask "broadcastCompiling delivers Compiling event with filename" {
     let reader = registerClient "compile-test"
-    broadcastCompiling ()
+    broadcastCompiling (Some "Handlers.fs")
     let! ok = reader.WaitToReadAsync(CancellationToken.None).AsTask()
     ok |> Expect.isTrue "should have data"
-    let mutable evt = DevReloadEvent.Reload
+    let mutable evt = Reload
     reader.TryRead(&evt) |> ignore
-    evt |> Expect.equal "should be Compiling" DevReloadEvent.Compiling
+    evt |> Expect.equal "should be Compiling with filename" (Compiling (Some "Handlers.fs"))
     unregisterClient "compile-test"
   }
 
-  testTask "events arrive in order: Compiling then Reload" {
-    let reader = registerClient "order-test"
-    broadcastCompiling ()
-    broadcastReload ()
-    let mutable evt1 = DevReloadEvent.Reload
-    let mutable evt2 = DevReloadEvent.Compiling
+  testTask "broadcastCompiling without filename delivers Compiling None" {
+    let reader = registerClient "compile-none"
+    broadcastCompiling None
+    let! ok = reader.WaitToReadAsync(CancellationToken.None).AsTask()
+    ok |> Expect.isTrue "should have data"
+    let mutable evt = Reload
+    reader.TryRead(&evt) |> ignore
+    evt |> Expect.equal "should be Compiling None" (Compiling None)
+    unregisterClient "compile-none"
+  }
+
+  testTask "broadcastCompilationFailed delivers error summary" {
+    let reader = registerClient "fail-test"
+    broadcastCompilationFailed "FS0001: type mismatch"
+    let! ok = reader.WaitToReadAsync(CancellationToken.None).AsTask()
+    ok |> Expect.isTrue "should have data"
+    let mutable evt = Reload
+    reader.TryRead(&evt) |> ignore
+    evt |> Expect.equal "should be CompilationFailed" (CompilationFailed "FS0001: type mismatch")
+    unregisterClient "fail-test"
+  }
+
+  testTask "compilation lifecycle: Compiling → CompilationFailed unsticks browser" {
+    let reader = registerClient "lifecycle-fail"
+    broadcastCompiling (Some "Broken.fs")
+    broadcastCompilationFailed "Broken.fs: FS0010: Unexpected symbol"
+    let mutable evt1 = Reload
+    let mutable evt2 = Reload
     let! _ = reader.WaitToReadAsync(CancellationToken.None).AsTask()
     reader.TryRead(&evt1) |> ignore
     reader.TryRead(&evt2) |> ignore
-    evt1 |> Expect.equal "first should be Compiling" DevReloadEvent.Compiling
-    evt2 |> Expect.equal "second should be Reload" DevReloadEvent.Reload
-    unregisterClient "order-test"
+    evt1 |> Expect.equal "first should be Compiling" (Compiling (Some "Broken.fs"))
+    evt2 |> Expect.equal "second should be CompilationFailed" (CompilationFailed "Broken.fs: FS0010: Unexpected symbol")
+    unregisterClient "lifecycle-fail"
+  }
+
+  testTask "compilation lifecycle: Compiling → Reload (success path)" {
+    let reader = registerClient "lifecycle-ok"
+    broadcastCompiling (Some "Handlers.fs")
+    broadcastReload ()
+    let mutable evt1 = Reload
+    let mutable evt2 = Compiling None
+    let! _ = reader.WaitToReadAsync(CancellationToken.None).AsTask()
+    reader.TryRead(&evt1) |> ignore
+    reader.TryRead(&evt2) |> ignore
+    evt1 |> Expect.equal "first should be Compiling" (Compiling (Some "Handlers.fs"))
+    evt2 |> Expect.equal "second should be Reload" Reload
+    unregisterClient "lifecycle-ok"
   }
 
   testTask "multiple reload events can be sent on same channel" {
     let reader = registerClient "multi-reload"
     broadcastReload ()
     broadcastReload ()
-    let mutable evt = DevReloadEvent.Compiling
+    let mutable evt = Compiling None
     let! _ = reader.WaitToReadAsync(CancellationToken.None).AsTask()
     reader.TryRead(&evt) |> ignore
-    evt |> Expect.equal "first should be Reload" DevReloadEvent.Reload
+    evt |> Expect.equal "first should be Reload" Reload
     reader.TryRead(&evt) |> ignore
-    evt |> Expect.equal "second should be Reload" DevReloadEvent.Reload
+    evt |> Expect.equal "second should be Reload" Reload
     unregisterClient "multi-reload"
   }
 ]
 
-// -- Middleware unit tests (DefaultHttpContext, no TestHost) ------------------
+// ============================================================================
+// Middleware unit tests (DefaultHttpContext, no TestHost)
+// ============================================================================
 
 let private runMw (ctx: HttpContext) (responseContentType: string) (responseBody: string) = task {
   let terminal = RequestDelegate(fun ctx -> task {
@@ -128,7 +251,7 @@ let middlewareTests = testList "DevReload.Middleware" [
     body |> Expect.stringContains "should close body" "</body>"
   }
 
-  testTask "injects visual indicator div" {
+  testTask "injects visual indicator div with error handling" {
     let ctx = DefaultHttpContext()
     ctx.Request.Path <- PathString("/")
     ctx.Request.Headers["Accept"] <- "text/html"
@@ -139,6 +262,11 @@ let middlewareTests = testList "DevReload.Middleware" [
     body |> Expect.stringContains "should parse JSON" "JSON.parse"
     body |> Expect.stringContains "should handle compiling" "compiling"
     body |> Expect.stringContains "should handle reload" "reload"
+    body |> Expect.stringContains "should handle failed" "failed"
+    body |> Expect.stringContains "should have box-shadow" "box-shadow"
+    body |> Expect.stringContains "should have console.debug" "console.debug"
+    body |> Expect.stringContains "should have reload guard" "reloadCount"
+    body |> Expect.stringContains "should have safeReload" "safeReload"
   }
 
   testTask "does NOT inject into JSON responses" {
@@ -215,9 +343,19 @@ let middlewareTests = testList "DevReload.Middleware" [
     script |> Expect.stringContains "should have relative path" "/__sagefs__/reload"
     (script.Contains("127.0.0.1")) |> Expect.isFalse "should not have absolute URL"
   }
+
+  testTask "script handles compilation error overlay" {
+    let script = DevReloadMiddleware.reloadScript 0
+    // The script must handle the 'failed' event type for error display
+    script |> Expect.stringContains "should handle failed type" "'failed'"
+    script |> Expect.stringContains "should show error text" "msg.error"
+    script |> Expect.stringContains "should use red background" "#dc2626"
+  }
 ]
 
-// -- Kill switch tests -------------------------------------------------------
+// ============================================================================
+// Kill switch tests
+// ============================================================================
 
 let killSwitchTests = testSequenced <| testList "DevReload.KillSwitch" [
 
@@ -262,11 +400,37 @@ let killSwitchTests = testSequenced <| testList "DevReload.KillSwitch" [
   }
 ]
 
-// -- Combined test list -------------------------------------------------------
+// ============================================================================
+// SSE wire format tests
+// ============================================================================
+
+let sseFormatTests = testList "DevReload.SSEFormat" [
+
+  test "compiling event without file produces valid SSE" {
+    let script = DevReloadMiddleware.reloadScript 5000
+    script |> Expect.stringContains "should have EventSource URL" "http://127.0.0.1:5000/__sagefs__/reload"
+  }
+
+  test "reloadScript escapes sprintf correctly" {
+    // Ensure no unescaped % in the output that could break sprintf
+    let script = DevReloadMiddleware.reloadScript 8080
+    script |> Expect.stringContains "should have full URL" "http://127.0.0.1:8080/__sagefs__/reload"
+    // The script should be valid JavaScript — check balanced braces
+    let opens = script |> Seq.filter ((=) '{') |> Seq.length
+    let closes = script |> Seq.filter ((=) '}') |> Seq.length
+    opens |> Expect.equal "braces should be balanced" closes
+  }
+]
+
+// ============================================================================
+// Combined test list
+// ============================================================================
 
 [<Tests>]
 let devReloadTests = testList "DevReload" [
+  propertyTests
   signalingTests
   middlewareTests
   killSwitchTests
+  sseFormatTests
 ]

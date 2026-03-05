@@ -434,8 +434,17 @@ module WorkerHttpTransport =
       })) |> ignore
 
       // DevReload SSE endpoint — browsers connect here for hot-reload notifications.
-      // Long-lived: sends heartbeats every 15s, compiling/reload events as they happen.
+      // Long-lived: sends heartbeats every 15s, compiling/reload/failed events as they happen.
       // Cross-origin (user's app port → worker port), so CORS header is required.
+      //
+      // Chesterton's fence: pre-allocated byte arrays avoid per-event allocation.
+      // The heartbeat fires every 15s for the lifetime of every connected browser tab —
+      // that's a long-lived allocation pattern worth eliminating.
+      let heartbeatBytes = Text.Encoding.UTF8.GetBytes(": heartbeat\n\n")
+      let connectedBytes = Text.Encoding.UTF8.GetBytes(": connected\n\nretry: 1000\n\n")
+      let compilingBytes = Text.Encoding.UTF8.GetBytes("""data: {"type":"compiling"}""" + "\n\n")
+      let reloadBytes = Text.Encoding.UTF8.GetBytes("""data: {"type":"reload"}""" + "\n\n")
+
       app.MapGet("/__sagefs__/reload", Func<HttpContext, Task>(fun ctx -> task {
         ctx.Response.ContentType <- "text/event-stream"
         ctx.Response.Headers["Cache-Control"] <- "no-cache"
@@ -446,20 +455,21 @@ module WorkerHttpTransport =
 
         let id = Guid.NewGuid().ToString("N")
 
-        let connBytes = Text.Encoding.UTF8.GetBytes(": connected\n\n")
-        do! ctx.Response.Body.WriteAsync(ReadOnlyMemory connBytes)
+        do! ctx.Response.Body.WriteAsync(ReadOnlyMemory connectedBytes)
         do! ctx.Response.Body.FlushAsync()
 
         let reader = DevReload.registerClient id
-        let cleanup = { new IDisposable with member _.Dispose() = DevReload.unregisterClient id }
-        use _ = cleanup
+        // Chesterton's fence: use ONLY RequestAborted.Register for cleanup.
+        // Previously had both `use cleanup` IDisposable AND RequestAborted.Register,
+        // which caused double-unregister on cancellation. unregisterClient is idempotent
+        // (second call is a no-op) but the double-fire is confusing and the IDisposable
+        // cleanup is unnecessary when RequestAborted covers all exit paths.
         use _ = ctx.RequestAborted.Register(fun () -> DevReload.unregisterClient id)
 
         try
           let ct = ctx.RequestAborted
           while not ct.IsCancellationRequested do
-            // Wait up to 15s for an event, else send heartbeat
-            let mutable evt = DevReload.DevReloadEvent.Compiling
+            let mutable evt = DevReload.DevReloadEvent.Reload
             let! hasEvent =
               task {
                 try
@@ -472,21 +482,34 @@ module WorkerHttpTransport =
             match hasEvent with
             | true ->
               while reader.TryRead(&evt) do
-                let payload =
+                let bytes =
                   match evt with
-                  | DevReload.DevReloadEvent.Compiling -> """data: {"type":"compiling"}""" + "\n\n"
-                  | DevReload.DevReloadEvent.Reload -> """data: {"type":"reload"}""" + "\n\n"
-                let bytes = Text.Encoding.UTF8.GetBytes(payload)
+                  | DevReload.DevReloadEvent.Compiling None -> compilingBytes
+                  | DevReload.DevReloadEvent.Compiling (Some file) ->
+                    // Dynamic payload with filename — can't pre-allocate
+                    Text.Encoding.UTF8.GetBytes(
+                      sprintf """data: {"type":"compiling","file":"%s"}""" (file.Replace("\\", "\\\\").Replace("\"", "\\\"")) + "\n\n")
+                  | DevReload.DevReloadEvent.Reload -> reloadBytes
+                  | DevReload.DevReloadEvent.CompilationFailed summary ->
+                    Text.Encoding.UTF8.GetBytes(
+                      sprintf """data: {"type":"failed","error":%s}""" (System.Text.Json.JsonSerializer.Serialize(summary)) + "\n\n")
                 do! ctx.Response.Body.WriteAsync(ReadOnlyMemory bytes)
                 do! ctx.Response.Body.FlushAsync()
             | false ->
-              // Heartbeat — keeps proxies and browsers from killing the connection
-              let hb = Text.Encoding.UTF8.GetBytes(": heartbeat\n\n")
-              do! ctx.Response.Body.WriteAsync(ReadOnlyMemory hb)
+              do! ctx.Response.Body.WriteAsync(ReadOnlyMemory heartbeatBytes)
               do! ctx.Response.Body.FlushAsync()
         with
+        // Chesterton's fence: match Dashboard's exception handling pattern.
+        // All of these occur in real-world ASP.NET SSE when browsers disconnect
+        // mid-write, proxies reset connections, or Kestrel's response stream
+        // enters an invalid state. Without catching them, the SSE loop dies with
+        // a noisy stack trace in the logs.
         | :? Tasks.TaskCanceledException -> ()
         | :? OperationCanceledException -> ()
+        | :? IOException -> ()
+        | :? ObjectDisposedException -> ()
+        | :? ArgumentOutOfRangeException -> ()
+        | :? InvalidOperationException -> ()
       })) |> ignore
 
       do! app.StartAsync()
