@@ -799,16 +799,22 @@ let resumePreviousSessions
     let existing, missing =
       uniqueByDir |> List.partition (fun prev -> IO.Directory.Exists prev.WorkingDir)
     for prev in missing do
-      log.LogWarning("Skipping session {SessionId} — directory {WorkingDir} no longer exists", prev.SessionId, prev.WorkingDir)
-      appendEventsAsync [
-        Features.Events.SageFsEvent.DaemonSessionStopped
-          {| SessionId = prev.SessionId; StoppedAt = DateTimeOffset.UtcNow |}
-      ]
+      log.LogWarning("Skipping session {SessionId} — directory {WorkingDir} no longer exists (will retry next startup)", prev.SessionId, prev.WorkingDir)
     // Filter to sessions relevant to current working directory
+    let isSubdirectoryOf (parent: string) (child: string) =
+      let comparison =
+        match System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Windows) with
+        | true -> System.StringComparison.OrdinalIgnoreCase
+        | false -> System.StringComparison.Ordinal
+      let normalizedParent =
+        match parent.EndsWith(string IO.Path.DirectorySeparatorChar) || parent.EndsWith(string IO.Path.AltDirectorySeparatorChar) with
+        | true -> parent
+        | false -> parent + string IO.Path.DirectorySeparatorChar
+      child.StartsWith(normalizedParent, comparison) || child.Equals(parent, comparison)
     let relevant, irrelevant =
       existing |> List.partition (fun prev ->
-        prev.WorkingDir.StartsWith(workingDir, System.StringComparison.OrdinalIgnoreCase) ||
-        workingDir.StartsWith(prev.WorkingDir, System.StringComparison.OrdinalIgnoreCase))
+        isSubdirectoryOf workingDir prev.WorkingDir ||
+        isSubdirectoryOf prev.WorkingDir workingDir)
     for prev in irrelevant do
       log.LogInformation("Skipping session {SessionId} for {WorkingDir} — not under daemon directory {DaemonDir}",
         prev.SessionId, prev.WorkingDir, workingDir)
