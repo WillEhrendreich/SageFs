@@ -141,6 +141,7 @@
         <PackageReference Include="System.Configuration.ConfigurationManager" />
         <PackageReference Include="Fantomas.Core" />
         <PackageReference Include="FSharp.SystemTextJson" />
+        <PackageReference Include="FsToolkit.ErrorHandling" />
         <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
         <PackageReference Include="Mono.Cecil" GeneratePathProperty="true" />
     </ItemGroup>

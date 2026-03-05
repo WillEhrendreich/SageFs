@@ -245,12 +245,10 @@ module CoverageInstrumenter =
   /// Returns InstrumentationMap or error. The original path is overwritten.
   let instrumentAssemblyInPlace (assemblyPath: string)
     : Result<InstrumentationMap, string> =
-    match instrumentAssembly assemblyPath with
-    | Error e -> Error e
-    | Ok(map, instrPath) ->
+    instrumentAssembly assemblyPath
+    |> Result.bind (fun (map, instrPath) ->
       match instrPath = assemblyPath with
-      | true ->
-        Ok map
+      | true -> Ok map
       | false ->
         try
           let pdbPath = Path.ChangeExtension(assemblyPath, ".pdb")
@@ -264,7 +262,7 @@ module CoverageInstrumenter =
           | false -> ()
           Ok map
         with ex ->
-          Error(sprintf "Failed to replace assembly: %s" ex.Message)
+          Error(sprintf "Failed to replace assembly: %s" ex.Message))
 
   /// Collect coverage hits from an instrumented assembly via reflection.
   let collectCoverageHits

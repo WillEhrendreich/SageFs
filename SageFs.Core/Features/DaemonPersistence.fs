@@ -30,9 +30,8 @@ module DaemonPersistence =
   /// Load LiveTestState from .sagetc binary cache.
   let loadTestCache (sageFsDir: string) (projects: string list) : Result<LiveTestState, string> =
     let hash = projectHash projects
-    match TestCacheFile.load sageFsDir hash with
-    | Ok stcData -> Ok (TestCacheMapping.toLiveTestState stcData)
-    | Error e -> Error e
+    TestCacheFile.load sageFsDir hash
+    |> Result.map TestCacheMapping.toLiveTestState
 
   /// Save session replay state to .sagefs binary.
   let saveSession
@@ -44,9 +43,8 @@ module DaemonPersistence =
 
   /// Load session replay state from .sagefs binary.
   let loadSession (sageFsDir: string) (sessionId: string) : Result<Replay.SessionReplayState, string> =
-    match SessionFile.load sageFsDir sessionId with
-    | Ok sfsData -> Ok (SessionMapping.toReplayState sfsData)
-    | Error e -> Error e
+    SessionFile.load sageFsDir sessionId
+    |> Result.map SessionMapping.toReplayState
 
   /// Save daemon session manifest to .sagefm binary.
   let saveManifest (sageFsDir: string) (state: Replay.DaemonReplayState) : Result<string, string> =
@@ -55,6 +53,5 @@ module DaemonPersistence =
 
   /// Load daemon session manifest from .sagefm binary.
   let loadManifest (sageFsDir: string) : Result<Replay.DaemonReplayState, string> =
-    match ManifestFile.load sageFsDir with
-    | Ok data -> Ok (ManifestMapping.toReplayState data)
-    | Error e -> Error e
+    ManifestFile.load sageFsDir
+    |> Result.map ManifestMapping.toReplayState
