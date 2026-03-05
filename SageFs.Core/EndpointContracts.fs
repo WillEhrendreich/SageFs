@@ -23,6 +23,11 @@ module EndpointContracts =
       category = category
     }
 
+  /// API contract version. Increment when endpoints are added, removed, or
+  /// have breaking changes to request/response shapes. Plugins can check this
+  /// against their minimum required version to detect incompatibility.
+  let apiVersion = 1
+
   /// All daemon endpoints grouped by category.
   let coreEndpoints = [
     Endpoint.create POST "/exec" "Execution" "Execute F# code in session"

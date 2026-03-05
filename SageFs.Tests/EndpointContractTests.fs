@@ -67,6 +67,19 @@ let endpointContractTests = testList "EndpointContracts" [
     }
   ]
 
+  testList "API version" [
+    test "apiVersion is a positive integer" {
+      (apiVersion, 1)
+      |> Expect.isGreaterThanOrEqual "apiVersion must be at least 1"
+    }
+
+    test "apiVersion matches current contract shape" {
+      // Pin the version so any contract change forces a conscious version bump
+      apiVersion
+      |> Expect.equal "apiVersion should be 1 for current contract" 1
+    }
+  ]
+
   testList "Endpoint registry" [
     test "all endpoints have non-empty path" {
       all

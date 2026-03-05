@@ -889,6 +889,7 @@ let mapHealthRoutes (app: WebApplication) (rctx: RouteContext) =
       do! jsonResponse ctx 200
             {| version = infoVersion
                protocolVersion = 1
+               apiVersion = SageFs.EndpointContracts.apiVersion
                server = "sagefs"
                mcp = true
                sse = true |}
