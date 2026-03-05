@@ -31,12 +31,30 @@ let renderKeyboardHelp () =
   ]
 
 /// Generate a JS object literal mapping theme names → CSS variable strings.
-let themePresetsJs () =
-  let entries =
-    ThemePresets.all
-    |> List.map (fun (name, config) ->
-      sprintf "  %s: `%s`" (System.Text.Json.JsonSerializer.Serialize(name)) (Theme.toCssVariables config))
-  sprintf "{\n%s\n}" (String.concat ",\n" entries)
+/// Render the completion dropdown as server-side HTML for Datastar morph.
+/// Each item has data-on-click that calls the client-side insertion utility.
+let renderCompletionDropdown (items: Features.AutoCompletion.CompletionItem list) (cursorPos: int) =
+  let escJs (s: string) = s.Replace("\\", "\\\\").Replace("'", "\\'")
+  match items with
+  | [] ->
+    Elem.div
+      [ Attr.id DomIds.CompletionDropdown
+        Attr.style "display:none; position:absolute; bottom:100%; left:0; max-height:200px; overflow-y:auto; background:var(--bg-default); border:1px solid var(--bg-selection); border-radius:4px; z-index:100; min-width:200px; font-size:0.85em; box-shadow:0 -2px 8px rgba(0,0,0,0.3);" ]
+      []
+  | items ->
+    Elem.div
+      [ Attr.id DomIds.CompletionDropdown
+        Attr.style "display:block; position:absolute; bottom:100%; left:0; max-height:200px; overflow-y:auto; background:var(--bg-default); border:1px solid var(--bg-selection); border-radius:4px; z-index:100; min-width:200px; font-size:0.85em; box-shadow:0 -2px 8px rgba(0,0,0,0.3);" ]
+      (items |> List.mapi (fun i item ->
+        Elem.div
+          [ Attr.class' "comp-item"
+            Attr.style (sprintf "padding:2px 6px;cursor:pointer;%s" (match i with | 0 -> "background:var(--bg-selection)" | _ -> ""))
+            Ds.onEvent ("click", sprintf "window._insertComp('%s',%d)" (escJs item.ReplacementText) cursorPos) ]
+          [ Text.raw item.DisplayText
+            Elem.span [ Attr.style "opacity:0.5;font-size:0.8em;margin-left:4px;" ] [
+              Text.raw (sprintf "(%s)" (Features.AutoCompletion.CompletionKind.label item.Kind))
+            ]
+          ]))
 
 /// Render a <style id="theme-vars"> element with CSS variables for the given theme.
 /// Pushed via SSE on session switch — Datastar morphs the existing style element.
@@ -52,9 +70,13 @@ let renderThemeVars (themeName: string) =
 
 /// Render a <select id="theme-picker"> with the correct option selected.
 /// Pushed via SSE on session switch — Datastar morphs the existing picker.
+/// Uses Ds.bind for two-way signal sync and Ds.onEvent to POST theme change.
 let renderThemePicker (selectedTheme: string) =
   Elem.select
-    [ Attr.id DomIds.ThemePicker; Attr.class' "theme-select" ]
+    [ Attr.id DomIds.ThemePicker
+      Attr.class' "theme-select"
+      Ds.bind Signals.Theme
+      Ds.onEvent ("change", "@post('/dashboard/set-theme')") ]
     (ThemePresets.all |> List.map (fun (name, _) ->
       Elem.option
         ([ Attr.value name ] @ (match name = selectedTheme with | true -> [ Attr.create "selected" "selected" ] | false -> []))
@@ -419,7 +441,7 @@ let renderSessions (sessions: ParsedSession list) (creating: bool) =
         Elem.div
           [ Attr.class' (sprintf "session-row flex-between %s" cls)
             Attr.style "padding: 8px 0; border-bottom: 1px solid var(--border-normal); cursor: pointer;"
-            Ds.onEvent ("click", sprintf "fetch('/api/dispatch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'sessionSetIndex',value:'%d'})}).then(function(){fetch('/api/dispatch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'sessionSelect'})})})" i) ]
+            Ds.onClick (Ds.post (sprintf "/dashboard/session/switch/%s" s.Id)) ]
           [
             Elem.div [ Attr.style "flex: 1; min-width: 0;" ] [
               // Row 1: session ID + status + active indicator
@@ -669,7 +691,7 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
                   Ds.bind Signals.Code
                   Attr.create "placeholder" "Enter F# code... (Alt+Enter to eval, ;; auto-appended)"
                   Ds.onEvent ("keydown", "if(event.altKey && event.key === 'Enter') { event.preventDefault(); @post('/dashboard/eval') } if(event.ctrlKey && event.key === 'l') { event.preventDefault(); @post('/dashboard/clear-output') } if(event.key === 'Tab') { event.preventDefault(); var s=this.selectionStart; var e=this.selectionEnd; this.value=this.value.substring(0,s)+'  '+this.value.substring(e); this.selectionStart=this.selectionEnd=s+2; this.dispatchEvent(new Event('input')) } if(event.key === 'Escape') { document.getElementById('completion-dropdown').style.display='none' }")
-                  Ds.onEvent ("input", "clearTimeout(window._compTimer); var ta=this; window._compTimer=setTimeout(function(){ var code=ta.value; var pos=ta.selectionStart; if(pos>0 && (code[pos-1]==='.' || (code[pos-1]>='a' && code[pos-1]<='z') || (code[pos-1]>='A' && code[pos-1]<='Z'))) { var sid=document.querySelector('[data-signal-sessionId]'); var sidVal=sid?sid.value:''; fetch('/dashboard/completions',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code:code,cursorPos:pos,sessionId:sidVal})}).then(r=>r.json()).then(d=>{ var dd=document.getElementById('completion-dropdown'); if(d.completions && d.completions.length>0){ dd.innerHTML=d.completions.map(function(c,i){return '<div class=\"comp-item\" data-insert=\"'+c.insertText+'\" style=\"padding:2px 6px;cursor:pointer;'+(i===0?'background:var(--bg-selection)':'')+'\">'+c.label+' <span style=\"opacity:0.5;font-size:0.8em\">('+c.kind+')</span></div>'}).join(''); dd.style.display='block'; dd.querySelectorAll('.comp-item').forEach(function(el){ el.onclick=function(){ var ins=el.dataset.insert; var before=ta.value.substring(0,pos); var wordStart=before.search(/[a-zA-Z0-9_]*$/); ta.value=ta.value.substring(0,wordStart)+ins+ta.value.substring(pos); ta.selectionStart=ta.selectionEnd=wordStart+ins.length; ta.dispatchEvent(new Event('input')); dd.style.display='none'; ta.focus(); }}) } else { dd.style.display='none' } }).catch(function(){}) } }, 300)")
+                  Ds.onEvent ("input.debounce_300ms", sprintf "var c=this.value[this.selectionStart-1]; $%s = this.selectionStart; if(c==='.'||(c>='a'&&c<='z')||(c>='A'&&c<='Z')){@post('/dashboard/completions')}" Signals.CursorPos)
                   Attr.create "spellcheck" "false" ]
                 []
               Elem.div

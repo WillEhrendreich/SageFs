@@ -54,6 +54,8 @@ module Signals =
   let [<Literal>] DiscoverLoading = "discoverLoading"
   let [<Literal>] CreateLoading = "createLoading"
   let [<Literal>] TempLoading = "tempLoading"
+  let [<Literal>] Theme = "theme"
+  let [<Literal>] CursorPos = "cursorPos"
 
 /// Precomputed syntax-color RGB → CSS class lookup (eliminates 12-branch if/elif chain)
 let syntaxColorLookup =

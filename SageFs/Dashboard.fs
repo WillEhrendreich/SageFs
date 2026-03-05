@@ -107,6 +107,24 @@ let connectionMonitorScript () =
     })();
   """ DomIds.ServerStatus DomIds.ServerStatus) ]
 
+/// Completion insertion utility — called from server-rendered dropdown items.
+/// Inserts text at cursor position, replacing the partial word being typed.
+let completionInsertScript () =
+  Elem.script [] [ Text.raw (sprintf """
+    window._insertComp = function(text, reqPos) {
+      var ta = document.getElementById('%s');
+      if (!ta) return;
+      var pos = ta.selectionStart;
+      var before = ta.value.substring(0, pos);
+      var wordStart = before.search(/[a-zA-Z0-9_]*$/);
+      ta.value = ta.value.substring(0, wordStart) + text + ta.value.substring(pos);
+      ta.selectionStart = ta.selectionEnd = wordStart + text.length;
+      ta.dispatchEvent(new Event('input'));
+      document.getElementById('%s').style.display = 'none';
+      ta.focus();
+    };
+  """ DomIds.EvalTextarea DomIds.CompletionDropdown) ]
+
 /// Auto-scroll output panel to bottom when new content arrives via SSE morph.
 let autoScrollScript () =
   Elem.script [] [ Text.raw (sprintf """
@@ -115,27 +133,6 @@ let autoScrollScript () =
       if (panel) panel.scrollTop = panel.scrollHeight;
     }).observe(document.getElementById('%s') || document.body, { childList: true, subtree: true });
   """ DomIds.OutputPanel DomIds.Main) ]
-
-/// Theme picker — update style element on selection change, notify server.
-/// Uses event delegation so handler survives Datastar DOM morphing.
-let themeSwitcherScript () =
-  Elem.script [] [ Text.raw (sprintf """
-    (function() {
-      var themes = %s;
-      document.addEventListener('change', function(e) {
-        if (e.target.id !== '%s') return;
-        var css = themes[e.target.value];
-        if (!css) return;
-        var styleEl = document.getElementById('%s');
-        if (styleEl) styleEl.textContent = ':root { ' + css + ' }';
-        fetch('/dashboard/set-theme', {
-          method: 'POST',
-          headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({theme: e.target.value})
-        });
-      });
-    })();
-  """ (themePresetsJs ()) DomIds.ThemePicker DomIds.ThemeVars) ]
 
 /// Details toggle — update arrow indicator when eval section opens/closes.
 let detailsToggleScript () =
@@ -211,7 +208,7 @@ let renderShell (version: string) =
       Elem.link [ Attr.rel "stylesheet"; Attr.href "/dashboard/dashboard.css" ]
     ]
     Elem.body [ Ds.safariStreamingFix ] [
-      Elem.div [ Ds.onInit (Ds.get "/dashboard/stream"); Ds.signal (Signals.HelpVisible, "false"); Ds.signal (Signals.SidebarOpen, "true"); Ds.signal (Signals.SessionId, ""); Ds.signal (Signals.Code, ""); Ds.signal (Signals.NewSessionDir, ""); Ds.signal (Signals.ManualProjects, "") ] []
+      Elem.div [ Ds.onInit (Ds.get "/dashboard/stream"); Ds.signal (Signals.HelpVisible, "false"); Ds.signal (Signals.SidebarOpen, "true"); Ds.signal (Signals.SessionId, ""); Ds.signal (Signals.Code, ""); Ds.signal (Signals.NewSessionDir, ""); Ds.signal (Signals.ManualProjects, ""); Ds.signal (Signals.Theme, ""); Ds.signal (Signals.CursorPos, "0") ] []
       Elem.div [ Attr.id DomIds.ServerStatus; Attr.class' "conn-banner conn-disconnected"; Attr.style "display:none" ] [
         Text.raw "⏳ Connecting to server..."
       ]
@@ -220,8 +217,8 @@ let renderShell (version: string) =
           Text.raw "⏳ Loading dashboard..."
         ]
       ]
+      completionInsertScript ()
       autoScrollScript ()
-      themeSwitcherScript ()
       detailsToggleScript ()
       keyboardHandlerScript ()
     ]
@@ -562,30 +559,33 @@ let createCompletionsHandler
   : HttpHandler =
   fun ctx -> task {
     try
-      use reader = new StreamReader(ctx.Request.Body)
-      let! body = reader.ReadToEndAsync()
-      use doc = System.Text.Json.JsonDocument.Parse(body)
+      use! doc = Request.getSignalsJson ctx
       let code =
-        match doc.RootElement.TryGetProperty("code") with
+        match doc.RootElement.TryGetProperty(Signals.Code) with
         | true, prop -> prop.GetString()
         | _ -> ""
       let cursorPos =
-        match doc.RootElement.TryGetProperty("cursorPos") with
-        | true, prop -> prop.GetInt32()
+        match doc.RootElement.TryGetProperty(Signals.CursorPos) with
+        | true, prop ->
+          match prop.ValueKind with
+          | System.Text.Json.JsonValueKind.Number -> prop.GetInt32()
+          | System.Text.Json.JsonValueKind.String ->
+            match System.Int32.TryParse(prop.GetString()) with
+            | true, v -> v
+            | false, _ -> -1
+          | _ -> -1
         | _ -> -1
       let sessionId =
-        match doc.RootElement.TryGetProperty("sessionId") with
+        match doc.RootElement.TryGetProperty(Signals.SessionId) with
         | true, prop -> prop.GetString()
         | _ -> ""
+      Response.sseStartResponse ctx |> ignore
       match String.IsNullOrWhiteSpace code || cursorPos < 0 with
       | true ->
-        ctx.Response.ContentType <- "application/json"
-        do! ctx.Response.WriteAsJsonAsync({| completions = [||]; count = 0 |})
+        do! ssePatchNode ctx (renderCompletionDropdown [] 0)
       | false ->
         let! items = getCompletions sessionId code cursorPos
-        let json = McpAdapter.formatCompletionsJson items
-        ctx.Response.ContentType <- "application/json"
-        do! ctx.Response.WriteAsync(json)
+        do! ssePatchNode ctx (renderCompletionDropdown items cursorPos)
     with ex ->
       ctx.Response.StatusCode <- 500
       do! ctx.Response.WriteAsJsonAsync({| error = ex.Message |})
@@ -795,36 +795,42 @@ let createApiStateHandler
       | Some evt ->
         let tcs = Threading.Tasks.TaskCompletionSource()
         use _ct = ctx.RequestAborted.Register(fun () -> tcs.TrySetResult() |> ignore)
-        let pushLock = new Threading.SemaphoreSlim(1, 1)
-        // Heartbeat keeps connection alive through proxies
-        let heartbeat = new Threading.Timer((fun _ ->
-            Threading.Tasks.Task.Run(fun () ->
-              task {
-                try
-                  let bytes = Text.Encoding.UTF8.GetBytes(": keepalive\n\n")
-                  do! ctx.Response.Body.WriteAsync(bytes)
-                  do! ctx.Response.Body.FlushAsync()
-                with _ -> () // Client disconnected — silently ignore
-              } :> Threading.Tasks.Task) |> ignore), null, 15000, 15000)
-        use _heartbeat = heartbeat
+        // Serialize SSE writes via MailboxProcessor — matches Datastar handler pattern.
+        // Coalesces rapid state changes: drain queued, throttle 100ms, drain again, push once.
+        // Heartbeat: when idle >15s, sends `: keepalive\n\n` SSE comment.
+        let pushAgent = MailboxProcessor.Start((fun inbox ->
+          let rec loop () = async {
+            let! msg = inbox.TryReceive(15_000)
+            match msg with
+            | None ->
+              try
+                let bytes = Text.Encoding.UTF8.GetBytes(": keepalive\n\n")
+                do! ctx.Response.Body.AsyncWrite(bytes, 0, bytes.Length)
+                do! ctx.Response.Body.FlushAsync() |> Async.AwaitTask
+              with
+              | :? System.IO.IOException | :? ObjectDisposedException -> ()
+              | :? OperationCanceledException -> ()
+              | :? System.ArgumentOutOfRangeException | :? System.InvalidOperationException -> ()
+              return! loop ()
+            | Some () ->
+              while inbox.CurrentQueueLength > 0 do
+                do! inbox.Receive()
+              do! Async.Sleep 100
+              while inbox.CurrentQueueLength > 0 do
+                do! inbox.Receive()
+              try
+                do! pushJson () |> Async.AwaitTask
+              with
+              | :? System.IO.IOException | :? ObjectDisposedException -> ()
+              | :? OperationCanceledException -> ()
+              | :? System.ArgumentOutOfRangeException | :? System.InvalidOperationException -> ()
+              | ex -> Log.debug "[dashboard] Push error: %s" ex.Message
+              return! loop ()
+          }
+          loop ()), ctx.RequestAborted)
         use _sub = evt.Subscribe(fun _ ->
-          Threading.Tasks.Task.Run(fun () ->
-            task {
-              // Skip if another push is in flight (coalesce rapid updates)
-              match pushLock.Wait(0) with
-              | false -> ()
-              | true ->
-                try
-                  try do! pushJson ()
-                  with
-                  | :? System.IO.IOException | :? ObjectDisposedException -> ()
-                  | :? System.ArgumentOutOfRangeException | :? System.InvalidOperationException -> ()
-                  | :? OperationCanceledException -> ()
-                  | ex -> Log.debug "[dashboard] Push error: %s" ex.Message
-                finally
-                  pushLock.Release() |> ignore
-            } :> Threading.Tasks.Task)
-          |> ignore)
+          try pushAgent.Post(())
+          with :? ObjectDisposedException -> ())
         do! tcs.Task
       | None ->
         while not ctx.RequestAborted.IsCancellationRequested do
@@ -889,15 +895,17 @@ let createEndpoints
     yield post "/dashboard/clear-output" createClearOutputHandler
     yield post "/dashboard/discover-projects" createDiscoverHandler
     yield post "/dashboard/set-theme" (fun ctx -> task {
-      use reader = new StreamReader(ctx.Request.Body)
-      let! body = reader.ReadToEndAsync()
       try
-        let req = System.Text.Json.JsonSerializer.Deserialize<{| theme: string |}>(body)
+        use! doc = Request.getSignalsJson ctx
+        let theme =
+          match doc.RootElement.TryGetProperty(Signals.Theme) with
+          | true, prop -> prop.GetString()
+          | _ -> ""
         let activeId = q.GetActiveSessionId ()
         let workingDir = q.GetSessionWorkingDir activeId
-        match workingDir.Length > 0 && req.theme.Length > 0 with
+        match workingDir.Length > 0 && theme.Length > 0 with
         | true ->
-          infra.SessionThemes.[workingDir] <- req.theme
+          infra.SessionThemes.[workingDir] <- theme
           saveThemes DaemonState.SageFsDir infra.SessionThemes
         | false -> ()
         ctx.Response.StatusCode <- 200
