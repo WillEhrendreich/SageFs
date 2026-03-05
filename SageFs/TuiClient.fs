@@ -42,7 +42,7 @@ let run (daemonInfo: DaemonInfo) = task {
   let cols = Console.WindowWidth
   let mutable gridRows = rows
   let mutable gridCols = cols
-  let mutable grid = CellGrid.create gridRows gridCols
+  let mutable grid = CellGrid.rent gridRows gridCols
   let mutable focusedPane = PaneId.Output // Fix: start on visible pane
   let mutable scrollOffsets = Map.empty<PaneId, int>
   let mutable prevGrid : CellGrid option = None
@@ -154,7 +154,8 @@ let run (daemonInfo: DaemonInfo) = task {
       | true ->
         gridRows <- newRows
         gridCols <- newCols
-        grid <- CellGrid.create gridRows gridCols
+        CellGrid.release grid
+        grid <- CellGrid.rent gridRows gridCols
         prevGrid <- None
         lock TerminalUIState.consoleLock (fun () ->
           Console.Write(AnsiCodes.clearScreen))

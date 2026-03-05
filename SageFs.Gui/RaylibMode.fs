@@ -246,7 +246,7 @@ module RaylibMode =
     let mutable charSize = Raylib.MeasureTextEx(font, "M", float32 fontSize, 0.0f)
     let mutable cellW = max 1 (int (System.MathF.Ceiling(charSize.X)))
     let mutable cellH = max 1 (int (System.MathF.Ceiling(charSize.Y)) + 2)
-    let mutable grid = CellGrid.create gridRows gridCols
+    let mutable grid = CellGrid.rent gridRows gridCols
 
     let reloadFont () =
       Raylib.UnloadFont(font)
@@ -298,7 +298,8 @@ module RaylibMode =
       if newCols <> gridCols || newRows <> gridRows then
         gridCols <- newCols
         gridRows <- newRows
-        grid <- CellGrid.create gridRows gridCols
+        CellGrid.release grid
+        grid <- CellGrid.rent gridRows gridCols
 
       // Handle input — process all pending keys
       let mutable keyCmd = mapKey ()

@@ -508,6 +508,39 @@ let cellGridPropertyTests = testList "CellGrid properties" [
       Expect.equal (CellGrid.get grid -1 0) Cell.empty "negative"
 ]
 
+let cellGridPoolTests = testList "CellGrid.rent/release" [
+  testCase "rent creates grid filled with Cell.empty" <| fun _ ->
+    let grid = CellGrid.rent 3 4
+    CellGrid.rows grid |> Expecto.Flip.Expect.equal "rows" 3
+    CellGrid.cols grid |> Expecto.Flip.Expect.equal "cols" 4
+    CellGrid.get grid 0 0 |> Expecto.Flip.Expect.equal "empty cell" Cell.empty
+    CellGrid.get grid 2 3 |> Expecto.Flip.Expect.equal "last cell empty" Cell.empty
+    CellGrid.release grid
+
+  testCase "rent then release does not throw" <| fun _ ->
+    let grid = CellGrid.rent 10 20
+    CellGrid.release grid
+
+  testCase "rented grid supports set/get" <| fun _ ->
+    let grid = CellGrid.rent 2 2
+    let cell = Cell.create 'Z' 0xFF0000u 0u CellAttrs.Bold
+    CellGrid.set grid 0 1 cell
+    CellGrid.get grid 0 1 |> Expecto.Flip.Expect.equal "roundtrip" cell
+    CellGrid.release grid
+
+  testCase "rent array length >= rows * cols" <| fun _ ->
+    let grid = CellGrid.rent 5 7
+    (grid.Cells.Length >= 5 * 7) |> Expecto.Flip.Expect.isTrue "pool may over-allocate"
+    CellGrid.release grid
+
+  testCase "clear works on rented grid" <| fun _ ->
+    let grid = CellGrid.rent 3 3
+    CellGrid.set grid 1 1 (Cell.create 'A' 0u 0u CellAttrs.None)
+    CellGrid.clear grid
+    CellGrid.get grid 1 1 |> Expecto.Flip.Expect.equal "cleared" Cell.empty
+    CellGrid.release grid
+]
+
 [<Tests>]
 let allCellGridTests = testList "CellGrid Rendering" [
   cellGridTests
@@ -517,4 +550,5 @@ let allCellGridTests = testList "CellGrid Rendering" [
   ansiEmitterTests
   performanceTests
   cellGridPropertyTests
+  cellGridPoolTests
 ]

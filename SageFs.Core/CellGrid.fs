@@ -76,10 +76,24 @@ type CellGrid = {
 }
 
 module CellGrid =
+  open System.Buffers
+
   let create (rows: int) (cols: int) : CellGrid =
     { Cells = Array.create (rows * cols) Cell.empty
       Rows = rows
       Cols = cols }
+
+  /// Rent a grid from ArrayPool — caller MUST call `release` when done.
+  /// Cells are cleared to Cell.empty (ArrayPool doesn't zero).
+  let rent (rows: int) (cols: int) : CellGrid =
+    let size = rows * cols
+    let arr = ArrayPool<Cell>.Shared.Rent(size)
+    Array.Fill(arr, Cell.empty, 0, size)
+    { Cells = arr; Rows = rows; Cols = cols }
+
+  /// Return a rented grid's array to the pool.
+  let release (grid: CellGrid) =
+    ArrayPool<Cell>.Shared.Return(grid.Cells, clearArray = false)
 
   let rows (grid: CellGrid) = grid.Rows
   let cols (grid: CellGrid) = grid.Cols
@@ -189,8 +203,8 @@ type DoubleBuffer = {
 
 module DoubleBuffer =
   let create rows cols =
-    { Front = CellGrid.create rows cols
-      Back = CellGrid.create rows cols }
+    { Front = CellGrid.rent rows cols
+      Back = CellGrid.rent rows cols }
 
   /// Swap front↔back. Returns the new render target (Back).
   let swap (db: DoubleBuffer) =
@@ -201,3 +215,8 @@ module DoubleBuffer =
 
   let clearBack (db: DoubleBuffer) =
     CellGrid.clear db.Back
+
+  /// Return pooled arrays. Call when resizing or shutting down.
+  let release (db: DoubleBuffer) =
+    CellGrid.release db.Front
+    CellGrid.release db.Back
