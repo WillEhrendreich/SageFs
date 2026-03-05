@@ -39,12 +39,16 @@ module ElmLoop =
   open System.Threading
   open SageFs.Utils
 
-  let private kvp k v = System.Collections.Generic.KeyValuePair(k, v :> obj)
+  let kvp k v = System.Collections.Generic.KeyValuePair(k, v :> obj)
+
+  let msgLabelCache =
+    ConcurrentDictionary<struct (System.Type * int * System.Type * int), string>()
 
   /// Label a DU value for diagnostics. Unwraps one level for nested DUs:
   /// SageFsMsg.Event(SageFsEvent.EvalCompleted _) → "Event.EvalCompleted"
   /// SageFsMsg.CycleTheme → "CycleTheme"
-  let private msgLabel (msg: obj) : string =
+  /// Cached by (Type, outerTag, innerTag) to avoid repeated reflection.
+  let msgLabel (msg: obj) : string =
     let t = msg.GetType()
     match Microsoft.FSharp.Reflection.FSharpType.IsUnion(t) with
     | true ->
@@ -52,8 +56,11 @@ module ElmLoop =
       match fields.Length = 1 && Microsoft.FSharp.Reflection.FSharpType.IsUnion(fields.[0].GetType()) with
       | true ->
         let inner, _ = Microsoft.FSharp.Reflection.FSharpValue.GetUnionFields(fields.[0], fields.[0].GetType())
-        sprintf "%s.%s" case.Name inner.Name
-      | false -> case.Name
+        let key = struct (t, case.Tag, fields.[0].GetType(), inner.Tag)
+        msgLabelCache.GetOrAdd(key, fun _ -> sprintf "%s.%s" case.Name inner.Name)
+      | false ->
+        let key = struct (t, case.Tag, typeof<unit>, 0)
+        msgLabelCache.GetOrAdd(key, fun _ -> case.Name)
     | false -> t.Name
 
   /// Start the Elm loop with an initial model.

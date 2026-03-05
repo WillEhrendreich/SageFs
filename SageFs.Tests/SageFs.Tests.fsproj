@@ -42,6 +42,7 @@
         <Compile Include="SageFsAppTests.fs" />
         <Compile Include="SageFsEffectHandlerTests.fs" />
         <Compile Include="ElmLoopResilienceTests.fs" />
+        <Compile Include="ElmLoopMsgLabelTests.fs" />
         <Compile Include="DashboardParsingTests.fs" />
         <Compile Include="DirectoryConfigTests.fs" />
         <Compile Include="ConnectionTrackerTests.fs" />
