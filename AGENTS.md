@@ -14,7 +14,7 @@ SageFs is an F# live development environment — a REPL-powered tool with editor
 - **Real-time UI**: Falco.Datastar (SSE-based)
 - **Testing**: Expecto (behavior-driven, property-based with FsCheck)
 - **Snapshot testing**: Verify
-- **Database**: PostgreSQL with Marten (event sourcing)
+- **Persistence**: Binary manifest format (.sagefm) for session and test state
 - **Package management**: Central package management via `Directory.Packages.props`
 
 ## Critical Coding Standards
@@ -70,7 +70,7 @@ dotnet pack SageFs -o nupkg  # Package the CLI tool
 ## Architecture Principles
 
 - **Dual-renderer**: TUI and Raylib GUI share the same `Cell[,]` grid abstraction
-- **Event sourcing**: State changes modeled as events (Marten)
+- **Binary persistence**: Session/test state via CRC-validated binary manifest (.sagefm)
 - **CQRS**: Separate read/write models
 - **Vertical slices**: Features as single files for locality of behavior
 - **Daemon architecture**: Long-running FSI session with MCP server for editor communication
