@@ -146,15 +146,21 @@ dotnet tool install --global SageFs
 
 # Start the daemon (in any directory)
 sagefs
-
-# Or let your editor start it — VS Code, Neovim, and Visual Studio
-# all auto-start the daemon and create sessions for your open project.
-
-# MCP endpoint:  http://localhost:37749/sse
-# Dashboard:     http://localhost:37750/dashboard
 ```
 
-SageFs starts, listens for clients, and creates sessions on demand. Your editor plugin handles the rest — discovering your project, creating a session, and connecting you to a live FSI environment.
+**What happens next:**
+
+1. The daemon starts and prints its endpoints (MCP, dashboard, health)
+2. Open your editor — VS Code, Neovim, and Visual Studio auto-start sessions for your open project
+3. Edit an F# file and save — live test results appear in your editor within 500ms
+4. Or visit the **dashboard** at `http://localhost:37750/dashboard` to see everything live
+
+```
+MCP endpoint:  http://localhost:37749/sse    ← connect AI agents here
+Dashboard:     http://localhost:37750/dashboard  ← live web UI
+```
+
+No project flag needed — the daemon discovers projects when your editor (or an AI agent) creates a session.
 
 <details>
 <summary>Build from source</summary>
@@ -283,7 +289,7 @@ Run multiple F# sessions simultaneously — different projects, different states
 <br />
 
 ```bash
-sagefs --supervised --proj MyApp.fsproj
+sagefs --supervised
 ```
 
 Erlang-style supervisor with exponential backoff (1s → 2s → 4s → max 30s). After 5 consecutive crashes within 5 minutes, it reports the failure. Watchdog state exposed via `/api/system/status` and shown in the VS Code status bar. Use this when leaving SageFs running all day.

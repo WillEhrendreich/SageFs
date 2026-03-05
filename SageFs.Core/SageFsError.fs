@@ -108,9 +108,9 @@ module SageFsError =
     | SageFsError.DaemonStartFailed reason ->
       sprintf "Failed to start daemon: %s" reason
     | SageFsError.DaemonNotRunning ->
-      "SageFs daemon is not running. Start it with 'sagefs --proj <project>'."
+      "SageFs daemon is not running. Start it with 'sagefs' in your project directory."
     | SageFsError.PortInUse port ->
-      sprintf "Port %d is already in use" port
+      sprintf "Port %d is already in use. Another SageFs instance may be running — try 'sagefs status' or use --mcp-port to pick a different port." port
     | SageFsError.ConnectionStringMissing ->
       "Database connection string not configured"
     | SageFsError.SseConnectionError reason ->
