@@ -68,7 +68,6 @@
         <PackageReference Include="OpenTelemetry.Instrumentation.Http" />
         <PackageReference Include="OpenTelemetry.Instrumentation.Runtime" />
         <PackageReference Include="Serilog.Extensions.Logging.File" />
-        <PackageReference Include="Marten" />
         <PackageReference Include="FSharp.SystemTextJson" />
         <PackageReference Include="ModelContextProtocol" />
         <PackageReference Include="ModelContextProtocol.AspNetCore" />

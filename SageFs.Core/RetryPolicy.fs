@@ -14,16 +14,10 @@ type RetryOutcome =
 
 let defaults = { MaxRetries = 3; BaseDelayMs = 50 }
 
-/// Classify whether an exception is a Marten/PostgreSQL version conflict
-let isVersionConflict (ex: exn) : bool =
-  match ex with
-  | :? JasperFx.Events.EventStreamUnexpectedMaxEventIdException -> true
-  | :? Marten.Exceptions.MartenCommandException as mce ->
-    match mce.InnerException with
-    | :? Npgsql.PostgresException as pe ->
-      pe.SqlState = "23505"
-    | _ -> false
-  | _ -> false
+/// Classify whether an exception is a retryable version conflict.
+/// With Marten removed, this currently always returns false — retained
+/// for the RetryPolicy API shape in case a future persistence layer needs it.
+let isVersionConflict (_ex: exn) : bool = false
 
 /// Calculate backoff with jitter: base * (attempt + 1) ± 50%
 let backoffMs (config: RetryConfig) (attempt: int) : int =

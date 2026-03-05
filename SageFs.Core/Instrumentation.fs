@@ -268,16 +268,14 @@ module Instrumentation =
       "SageFs.LiveTesting"
       "SageFs.ElmLoop"
       "SageFs.Mcp"
-      "SageFs.Daemon"
-      "Marten" ]
+      "SageFs.Daemon" ]
 
   /// All Meter names for OTel registration in McpServer.
   let allMeters =
     [ "SageFs.SessionManager"
       "SageFs.TestCycle"
       "SageFs.LiveTesting"
-      "SageFs.Mcp"
-      "Marten" ]
+      "SageFs.Mcp" ]
 
   /// Start an Activity with initial tags. Returns null when no listener attached.
   let startSpan (source: ActivitySource) (name: string) (tags: (string * obj) list) =

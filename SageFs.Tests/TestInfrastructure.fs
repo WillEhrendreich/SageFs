@@ -68,7 +68,7 @@ let mkTestSessionOps (result: ActorResult) (sessionId: string) : SageFs.SessionM
 /// Create a McpContext backed by the global shared actor
 let sharedCtx () =
   let result = globalActorResult.Value
-  let sessionId = SageFs.EventStore.createSessionId ()
+  let sessionId = sprintf "session-%s" (System.Guid.NewGuid().ToString("N").[..7])
   let sessionMap = ConcurrentDictionary<string, string>()
   sessionMap.["test"] <- sessionId
   { Persistence = SageFs.EventStore.EventPersistence.noop

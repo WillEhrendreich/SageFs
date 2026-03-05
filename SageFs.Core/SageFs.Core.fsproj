@@ -139,7 +139,6 @@
         <PackageReference Include="Ionide.ProjInfo.FCS" />
         <PackageReference Include="System.Configuration.ConfigurationManager" />
         <PackageReference Include="Fantomas.Core" />
-        <PackageReference Include="Marten" />
         <PackageReference Include="FSharp.SystemTextJson" />
         <PackageReference Include="Mono.Cecil" GeneratePathProperty="true" />
     </ItemGroup>

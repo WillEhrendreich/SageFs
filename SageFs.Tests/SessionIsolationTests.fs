@@ -50,7 +50,7 @@ module McpSessionIsolation =
         GetWarmupContext = None } : McpContext
     ctx, dispatched
 
-  /// Call switchSession and return result, ignoring Marten stream errors.
+  /// Call switchSession and return result, ignoring event store errors.
   /// switchSession dispatches to Elm BEFORE appending to the event store,
   /// so dispatch tracking is valid even if the store throws.
   let switchSessionIgnoringStoreErrors ctx agent sessionId =

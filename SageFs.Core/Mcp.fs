@@ -635,7 +635,7 @@ Available: %s%s
       sprintf """{"success":false,"error":"%s","diagnostics":[]}"""
         (escapeJson (sprintf "Unexpected response: %A" other))
 
-/// Event tracking for collaborative MCP mode — backed by Marten event store
+/// Event tracking for collaborative MCP mode — backed by binary persistence
 module EventTracking =
 
   open SageFs.Features.Events
