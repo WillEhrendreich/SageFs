@@ -556,4 +556,18 @@ let branchCoverageTests = testList "Branch Coverage Wiring" [
       CoverageBitmap.computeLineCoverageForFile "f.fs" [| map |] bms
       |> Expect.isEmpty "empty"
   ]
+
+  testList "formatRetryHint" [
+    testCase "formats retry hint per SSE spec" <| fun () ->
+      formatRetryHint 3000
+      |> Expect.equal "should be retry: N\\n\\n" "retry: 3000\n\n"
+
+    testCase "formats 1ms retry hint" <| fun () ->
+      formatRetryHint 1
+      |> Expect.equal "minimum positive" "retry: 1\n\n"
+
+    testCase "formats large retry value" <| fun () ->
+      formatRetryHint 60000
+      |> Expect.equal "60 second retry" "retry: 60000\n\n"
+  ]
 ]

@@ -5,6 +5,11 @@ open System.Text
 open System.Text.Json
 open System.Threading.Tasks
 
+/// Pure: format an SSE retry hint per the EventSource spec.
+/// Tells the client how many milliseconds to wait before reconnecting.
+let formatRetryHint (retryMs: int) : string =
+  sprintf "retry: %d\n\n" retryMs
+
 /// Pure: format an SSE event string.
 /// Handles data containing newlines per SSE spec (each line as separate data: field).
 let formatSseEvent (eventType: string) (data: string) : string =

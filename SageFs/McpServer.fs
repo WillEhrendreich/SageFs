@@ -192,6 +192,8 @@ let runSseWriteLoop
         |> subs.Add
       use _heartbeat =
         new Timer((fun _ -> ch.Writer.TryWrite(": keepalive\n\n") |> ignore), null, heartbeatMs, heartbeatMs)
+      // Send retry hint as first frame — tells client reconnection interval per SSE spec
+      do! writeSseFrame body (SageFs.SseWriter.formatRetryHint heartbeatMs)
       try
         while not ct.IsCancellationRequested do
           let! frame = ch.Reader.ReadAsync(ct)
