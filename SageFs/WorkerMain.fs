@@ -279,6 +279,17 @@ let run (sessionId: string) (port: int) = async {
       // preprocessForFsi can't determine which modules are already `open`'d,
       // leading to duplicate module errors or missing opens.
       let mutable compilationState = Middleware.CompilationContext.CompilationState.empty
+      // Chesterton's fence: SemaphoreSlim(1,1) serializes file change processing.
+      // Without this, two different files changing within the debounce window spawn
+      // two async workflows that race on `compilationState` — the mutable
+      // EvaluatedModules set could lose an entry from a concurrent read-modify-write.
+      let compilationLock = new Threading.SemaphoreSlim(1, 1)
+      // Chesterton's fence: per-file CancellationTokenSource enables cancel-and-restart.
+      // When a user rapid-saves, the new change cancels the previous eval for the same
+      // file (which may be compiling an intermediate broken state), so only the latest
+      // content is evaluated. Without this, rapid saves queue up multiple evals that
+      // flash red errors before the final green.
+      let perFileCts = System.Collections.Concurrent.ConcurrentDictionary<string, CancellationTokenSource>()
       let onFileChanged (change: FileWatcher.FileChange) =
         let ext = IO.Path.GetExtension(change.FilePath)
         let kind = match change.Kind with
@@ -290,103 +301,129 @@ let run (sessionId: string) (port: int) = async {
           1L,
           System.Collections.Generic.KeyValuePair("file.extension", ext :> obj),
           System.Collections.Generic.KeyValuePair("change.kind", kind :> obj))
+        // Cancel any in-flight eval for this exact file — only latest save matters
+        let filePath = change.FilePath
+        let newCts = new CancellationTokenSource()
+        match perFileCts.TryGetValue(filePath) with
+        | true, oldCts ->
+          try oldCts.Cancel() with _ -> ()
+          oldCts.Dispose()
+        | _ -> ()
+        perFileCts.[filePath] <- newCts
+        let ct = newCts.Token
         Async.Start(async {
+          do! compilationLock.WaitAsync(ct) |> Async.AwaitTask
           try
-            match FileWatcher.fileChangeAction change with
-            | FileWatcher.FileChangeAction.Reload filePath ->
-              match HotReloadState.isWatched filePath !result.HotReloadStateRef with
-              | false ->
-                Log.debug "File changed but not in hot-reload watch set: %s (watched: %d files)"
-                  (IO.Path.GetFileName filePath) (HotReloadState.watchedCount !result.HotReloadStateRef)
-              | true ->
-              DevReload.broadcastCompiling (Some (IO.Path.GetFileName filePath))
-              // Chesterton's fence: read file and preprocess through CompilationContext
-              // instead of using `#load`. `#load` re-executes the entire file including
-              // module-level side effects (server startup, DB connections), causing type
-              // errors ("unit doesn't match Task") in files with effectful top-level code.
-              // CompilationContext strips the module declaration and wraps definitions
-              // properly for FSI, preserving only type/function definitions. The existing
-              // HotReloading middleware then applies NoInlining + Harmony detours.
-              let fileContent = IO.File.ReadAllText(filePath)
-              let! fileStructure, updatedCache = async {
-                try
-                  let! fs, cache =
-                    Middleware.CompilationContext.parseFileStructureCached
-                      filePath fileContent compilationState.FileCache
-                    |> Async.AwaitTask
-                  return Some fs, cache
-                with exn ->
-                  Log.debug "CompilationContext parse failed for %s, falling back to #load: %s"
-                    filePath exn.Message
-                  return None, compilationState.FileCache
-              }
-              let preprocessed, updatedModules =
-                Middleware.CompilationContext.preprocessForFsi
-                  fileStructure
-                  Middleware.CompilationContext.EvalMode.File
-                  None
-                  compilationState.EvaluatedModules
-                  fileContent
-              compilationState <-
-                { compilationState with
-                    EvaluatedModules = updatedModules
-                    FileCache = updatedCache }
-              let code =
-                match fileStructure with
-                | Some _ -> preprocessed.Code
-                | None -> sprintf "#load @\"%s\"" filePath // fallback if parse fails
-              let request = { Code = code; Args = Map.ofList ["hotReload", box true] }
-              use localCts = new CancellationTokenSource()
-              let! response =
-                actor.PostAndAsyncReply(fun rc -> Eval(request, localCts.Token, rc))
-              match response.EvaluationResult with
-              | Ok _ ->
-                // Capture RunTest from hot-reload discovery
-                match response.Metadata |> Map.tryFind "liveTestRunTest" with
-                | Some (:? (Features.LiveTesting.TestCase -> Async<Features.LiveTesting.TestResult>) as runTest) ->
-                  setDynamicRunTest runTest
-                | _ -> ()
-                let reloaded =
-                  response.Metadata
-                  |> Map.tryFind "reloadedMethods"
-                  |> Option.bind (fun v ->
-                    match v with
-                    | :? (string list) as methods -> Some methods
-                    | _ -> None)
-                  |> Option.defaultValue []
-                let fileName = IO.Path.GetFileName filePath
-                match List.isEmpty reloaded with
+            try
+              ct.ThrowIfCancellationRequested()
+              match FileWatcher.fileChangeAction change with
+              | FileWatcher.FileChangeAction.Reload filePath ->
+                match HotReloadState.isWatched filePath !result.HotReloadStateRef with
                 | false ->
-                  Log.info "Hot reloaded %s: %s" fileName (String.Join(", ", reloaded))
+                  Log.debug "File changed but not in hot-reload watch set: %s (watched: %d files)"
+                    (IO.Path.GetFileName filePath) (HotReloadState.watchedCount !result.HotReloadStateRef)
                 | true ->
-                  // Chesterton's fence: broadcastReload even when no methods were detouring.
-                  // When a file adds NEW types/functions (not modifying existing ones),
-                  // Harmony finds no methods to detour, so triggerReload() in HotReloading.fs
-                  // is never called. Without this, the browser stays stuck on "⟳ Recompiling..."
-                  // forever — violating the Compiling→(Reload|CompilationFailed) contract.
-                  DevReload.broadcastReload ()
-                  Log.info "Reloaded %s" fileName
-              | Error ex ->
-                // Chesterton's fence: broadcastCompilationFailed ensures the browser
-                // overlay transitions from "Recompiling..." to the error message.
-                // Without this, compilation errors leave the overlay stuck on blue
-                // "Recompiling..." forever — the #1 reported DX issue.
-                let fileName = IO.Path.GetFileName filePath
-                let summary = sprintf "%s: %s" fileName ex.Message
-                DevReload.broadcastCompilationFailed summary
-                Log.warn "Reload failed for %s: %s" fileName (ex.Message)
-            | FileWatcher.FileChangeAction.SoftReset ->
-              Log.info "Project file changed — soft reset needed"
-              let! _ = actor.PostAndAsyncReply(fun rc -> ResetSession rc)
-              ()
-            | FileWatcher.FileChangeAction.Ignore -> ()
-          with ex ->
-            // Chesterton's fence: if the actor mailbox crashes or PostAndAsyncReply
-            // throws, we must still close the Compiling→(Reload|CompilationFailed)
-            // lifecycle. Without this catch-all, an unhandled exception leaves the
-            // browser stuck on "⟳ Recompiling..." with no recovery path.
-            DevReload.broadcastCompilationFailed (sprintf "Internal error: %s" ex.Message)
-            Log.error "File watcher async failed: %s" (ex.ToString())
+                DevReload.broadcastCompiling (Some (IO.Path.GetFileName filePath))
+                // Chesterton's fence: read file and preprocess through CompilationContext
+                // instead of using `#load`. `#load` re-executes the entire file including
+                // module-level side effects (server startup, DB connections), causing type
+                // errors ("unit doesn't match Task") in files with effectful top-level code.
+                // CompilationContext strips the module declaration and wraps definitions
+                // properly for FSI, preserving only type/function definitions. The existing
+                // HotReloading middleware then applies NoInlining + Harmony detours.
+                let fileContent = IO.File.ReadAllText(filePath)
+                let! fileStructure, updatedCache = async {
+                  try
+                    let! fs, cache =
+                      Middleware.CompilationContext.parseFileStructureCached
+                        filePath fileContent compilationState.FileCache
+                      |> Async.AwaitTask
+                    return Some fs, cache
+                  with exn ->
+                    // Chesterton's fence: do NOT fall back to #load here. #load re-executes
+                    // the entire file including module-level side effects (app.RunAsync(),
+                    // DB connections), which is the exact bug CompilationContext was built
+                    // to fix. Instead, broadcast the parse failure to the browser and skip
+                    // the reload. The user sees the error, fixes the file, saves again.
+                    Log.warn "CompilationContext parse failed for %s — file not reloaded: %s"
+                      filePath exn.Message
+                    DevReload.broadcastCompilationFailed
+                      (sprintf "Parse failed for %s: %s" (IO.Path.GetFileName filePath) exn.Message)
+                    return None, compilationState.FileCache
+                }
+                match fileStructure with
+                | None -> () // parse failed — error already broadcast, skip reload
+                | Some _ ->
+                let preprocessed, updatedModules =
+                  Middleware.CompilationContext.preprocessForFsi
+                    fileStructure
+                    Middleware.CompilationContext.EvalMode.File
+                    None
+                    compilationState.EvaluatedModules
+                    fileContent
+                compilationState <-
+                  { compilationState with
+                      EvaluatedModules = updatedModules
+                      FileCache = updatedCache }
+                let code = preprocessed.Code
+                let request = { Code = code; Args = Map.ofList ["hotReload", box true] }
+                use localCts = new CancellationTokenSource()
+                let! response =
+                  actor.PostAndAsyncReply(fun rc -> Eval(request, localCts.Token, rc))
+                match response.EvaluationResult with
+                | Ok _ ->
+                  // Capture RunTest from hot-reload discovery
+                  match response.Metadata |> Map.tryFind "liveTestRunTest" with
+                  | Some (:? (Features.LiveTesting.TestCase -> Async<Features.LiveTesting.TestResult>) as runTest) ->
+                    setDynamicRunTest runTest
+                  | _ -> ()
+                  let reloaded =
+                    response.Metadata
+                    |> Map.tryFind "reloadedMethods"
+                    |> Option.bind (fun v ->
+                      match v with
+                      | :? (string list) as methods -> Some methods
+                      | _ -> None)
+                    |> Option.defaultValue []
+                  let fileName = IO.Path.GetFileName filePath
+                  match List.isEmpty reloaded with
+                  | false ->
+                    Log.info "Hot reloaded %s: %s" fileName (String.Join(", ", reloaded))
+                  | true ->
+                    // Chesterton's fence: broadcastReload even when no methods were detouring.
+                    // When a file adds NEW types/functions (not modifying existing ones),
+                    // Harmony finds no methods to detour, so triggerReload() in HotReloading.fs
+                    // is never called. Without this, the browser stays stuck on "⟳ Recompiling..."
+                    // forever — violating the Compiling→(Reload|CompilationFailed) contract.
+                    DevReload.broadcastReload ()
+                    Log.info "Reloaded %s" fileName
+                | Error ex ->
+                  // Chesterton's fence: broadcastCompilationFailed ensures the browser
+                  // overlay transitions from "Recompiling..." to the error message.
+                  // Without this, compilation errors leave the overlay stuck on blue
+                  // "Recompiling..." forever — the #1 reported DX issue.
+                  let fileName = IO.Path.GetFileName filePath
+                  let summary = sprintf "%s: %s" fileName ex.Message
+                  DevReload.broadcastCompilationFailed summary
+                  Log.warn "Reload failed for %s: %s" fileName (ex.Message)
+              | FileWatcher.FileChangeAction.SoftReset ->
+                Log.info "Project file changed — soft reset needed"
+                let! _ = actor.PostAndAsyncReply(fun rc -> ResetSession rc)
+                ()
+              | FileWatcher.FileChangeAction.Ignore -> ()
+            with
+            | :? OperationCanceledException ->
+              Log.debug "File change cancelled (superseded by newer save): %s"
+                (IO.Path.GetFileName change.FilePath)
+            | ex ->
+              // Chesterton's fence: if the actor mailbox crashes or PostAndAsyncReply
+              // throws, we must still close the Compiling→(Reload|CompilationFailed)
+              // lifecycle. Without this catch-all, an unhandled exception leaves the
+              // browser stuck on "⟳ Recompiling..." with no recovery path.
+              DevReload.broadcastCompilationFailed (sprintf "Internal error: %s" ex.Message)
+              Log.error "File watcher async failed: %s" (ex.ToString())
+          finally
+            compilationLock.Release() |> ignore
         })
       Some (FileWatcher.start config onFileChanged)
 

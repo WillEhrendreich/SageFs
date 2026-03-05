@@ -39,6 +39,8 @@ let reloadScript (workerPort: int) =
   let compilingStart = null;
   let compilingTimer = null;
   let compilingLabel = '';
+  // Restore scroll position from previous reload (if any)
+  try { const sy = sessionStorage.getItem('__sagefs_scrollY'); if (sy) { window.scrollTo(0, parseInt(sy)); sessionStorage.removeItem('__sagefs_scrollY'); } } catch(e) {}
   const safeReload = function() {
     reloadCount++;
     if (reloadCount > 3) {
@@ -50,6 +52,7 @@ let reloadScript (workerPort: int) =
     }
     clearTimeout(reloadTimer);
     reloadTimer = setTimeout(function(){ reloadCount = 0; }, 5000);
+    try { sessionStorage.setItem('__sagefs_scrollY', '' + window.scrollY); } catch(e) {}
     window.location.reload();
   };
   const es = new EventSource('%s');

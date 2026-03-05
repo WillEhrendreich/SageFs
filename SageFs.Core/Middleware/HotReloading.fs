@@ -17,12 +17,12 @@ let resolveAssembly (args: ResolveEventArgs) =
   let assemblyName = AssemblyName(args.Name)
   let dllName = assemblyName.Name + ".dll"
 
-  // Chesterton's fence: version-aware resolution prevents 0x80131040 (manifest
-  // mismatch). When multiple NuGet package versions provide the same DLL, we must
-  // load a version >= the requested version. Without this check, first-match wins
-  // regardless of version, causing strong-name validation failures at runtime.
+  // Chesterton's fence: collect all version-compatible candidates and pick the
+  // highest version. tryPick would return the first-match, which depends on search
+  // path order — non-deterministic when multiple NuGet versions provide the same DLL.
+  // Preferring the highest version satisfies binding redirects and strong-name checks.
   assemblySearchPaths
-  |> Seq.tryPick (fun searchPath ->
+  |> Seq.choose (fun searchPath ->
     let fullPath = Path.Combine(searchPath, dllName)
 
     match File.Exists(fullPath) with
@@ -42,6 +42,8 @@ let resolveAssembly (args: ResolveEventArgs) =
         Log.debug "Failed to load assembly from %s: %s" fullPath ex.Message
         None
     | false -> None)
+  |> Seq.sortByDescending (fun asm -> asm.GetName().Version)
+  |> Seq.tryHead
   |> Option.defaultValue null
 
 // Register the assembly resolver once
@@ -235,8 +237,6 @@ let detourMethod (method: MethodBase) (replacement: MethodBase) =
     // MonoMod does not yet support .NET 11+ CoreCLR — skip detour gracefully
     ()
 
-open FuzzySharp
-
 let handleNewAsmFromRepl (logger: ILogger) (asm: Assembly) (st: State) =
   match st.LastAssembly with
   | Some prev when prev = asm -> st, []
@@ -253,14 +253,28 @@ let handleNewAsmFromRepl (logger: ILogger) (asm: Assembly) (st: State) =
                getParams existingMethod = getParams newMethod
                && existingMethod.MethodInfo.ReturnType = newMethod.MethodInfo.ReturnType
                && existingMethod.FullName.Contains newMethod.FullName)
+            // Chesterton's fence: exact qualified-name matching replaces FuzzySharp.
+            // Fuzzy string matching for method identity is a heuristic that can match
+            // the wrong method (e.g. `getUser` vs `getUsers` have high Fuzz.Ratio).
+            // Instead: prefer exact suffix match with last-opened module prepended,
+            // then fall back to exact suffix match on the raw FullName.
             >> Seq.sortByDescending (fun existingMethod ->
+               // Prefer match with module prefix: "Module.handler" == "Module.handler"
                let moduleCandidate =
                  st.LastOpenModules
-                 |> Seq.map (fun o -> Fuzz.Ratio(o + newMethod.FullName, existingMethod.FullName))
+                 |> Seq.map (fun o ->
+                   match existingMethod.FullName.EndsWith(o + "." + newMethod.FullName,
+                     StringComparison.Ordinal) with
+                   | true -> 2 // exact match with module prefix
+                   | false -> 0)
                  |> Seq.tryHead
                  |> Option.defaultValue 0
-
-               let noModuleCandidate = Fuzz.Ratio(newMethod.FullName, existingMethod.FullName)
+               // Exact suffix match without module prefix
+               let noModuleCandidate =
+                 match existingMethod.FullName.EndsWith(newMethod.FullName,
+                   StringComparison.Ordinal) with
+                 | true -> 1
+                 | false -> 0
                max moduleCandidate noModuleCandidate)
             >> Seq.tryHead)
         |> Option.map (fun oldMethod -> oldMethod, newMethod))

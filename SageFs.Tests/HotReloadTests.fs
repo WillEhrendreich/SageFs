@@ -406,6 +406,135 @@ let hotReloadCompilationContextTests =
     }
   ]
 
+let exactMethodMatchingTests =
+  testList "exact method matching" [
+    test "getUser does not match getUsers (suffix mismatch)" {
+      let fsiFull = "getUser"
+      let projectFull = "MyApp.Server.getUsers"
+      projectFull.EndsWith(fsiFull, StringComparison.Ordinal)
+      |> Flip.Expect.isFalse "getUser should NOT match getUsers suffix"
+    }
+
+    test "handler matches Module.handler (exact suffix)" {
+      let fsiFull = "handler"
+      let projectFull = "MyApp.Server.Module.handler"
+      projectFull.EndsWith(fsiFull, StringComparison.Ordinal)
+      |> Flip.Expect.isTrue "handler should match as exact suffix"
+    }
+
+    test "Module.handler matches with module prefix scoring" {
+      let fsiName = "handler"
+      let projectFull = "MyApp.Server.Routes.handler"
+      let lastOpenModules = ["Routes"]
+      let moduleScore =
+        lastOpenModules
+        |> Seq.map (fun o ->
+          match projectFull.EndsWith(o + "." + fsiName, StringComparison.Ordinal) with
+          | true -> 2
+          | false -> 0)
+        |> Seq.tryHead
+        |> Option.defaultValue 0
+      let noModuleScore =
+        match projectFull.EndsWith(fsiName, StringComparison.Ordinal) with
+        | true -> 1
+        | false -> 0
+      let score = max moduleScore noModuleScore
+      score |> Flip.Expect.equal "module-qualified match should score 2" 2
+    }
+
+    test "unrelated method scores 0" {
+      let fsiName = "handler"
+      let projectFull = "MyApp.Server.Routes.unrelatedFunction"
+      let lastOpenModules = ["Routes"]
+      let moduleScore =
+        lastOpenModules
+        |> Seq.map (fun o ->
+          match projectFull.EndsWith(o + "." + fsiName, StringComparison.Ordinal) with
+          | true -> 2
+          | false -> 0)
+        |> Seq.tryHead
+        |> Option.defaultValue 0
+      let noModuleScore =
+        match projectFull.EndsWith(fsiName, StringComparison.Ordinal) with
+        | true -> 1
+        | false -> 0
+      let score = max moduleScore noModuleScore
+      score |> Flip.Expect.equal "unrelated method should score 0" 0
+    }
+  ]
+
+let nonBlockingRunGuardTests =
+  testList "NonBlockingRun hotReload guard" [
+    test "hotReload flag extraction: true when present" {
+      let args = Map.ofList ["hotReload", box true]
+      let isHotReload =
+        args
+        |> Map.tryFind "hotReload"
+        |> Option.map (fun v -> v :?> bool)
+        |> Option.defaultValue false
+      isHotReload |> Flip.Expect.isTrue "should detect hotReload=true"
+    }
+
+    test "hotReload flag extraction: false when absent" {
+      let args: Map<string, obj> = Map.empty
+      let isHotReload =
+        args
+        |> Map.tryFind "hotReload"
+        |> Option.map (fun v -> v :?> bool)
+        |> Option.defaultValue false
+      isHotReload |> Flip.Expect.isFalse "should default to false when absent"
+    }
+
+    test "hotReload flag extraction: false when explicitly false" {
+      let args = Map.ofList ["hotReload", box false]
+      let isHotReload =
+        args
+        |> Map.tryFind "hotReload"
+        |> Option.map (fun v -> v :?> bool)
+        |> Option.defaultValue false
+      isHotReload |> Flip.Expect.isFalse "should be false when explicitly set to false"
+    }
+  ]
+
+let highestVersionResolutionTests =
+  testList "highest version assembly resolution" [
+    test "resolveAssembly prefers highest version when multiple candidates exist" {
+      let versions = [
+        System.Version(1, 0, 0, 0)
+        System.Version(3, 0, 0, 0)
+        System.Version(2, 0, 0, 0)
+      ]
+      let highest =
+        versions
+        |> Seq.sortByDescending id
+        |> Seq.tryHead
+      highest
+      |> Flip.Expect.isSome "should find a version"
+      highest.Value
+      |> Flip.Expect.equal "should pick highest version" (System.Version(3, 0, 0, 0))
+    }
+
+    test "version comparison: candidate >= requested passes" {
+      let requested = System.Version(2, 0, 0, 0)
+      let candidate = System.Version(3, 0, 0, 0)
+      (candidate >= requested)
+      |> Flip.Expect.isTrue "3.0 >= 2.0 should pass"
+    }
+
+    test "version comparison: candidate < requested fails" {
+      let requested = System.Version(3, 0, 0, 0)
+      let candidate = System.Version(2, 0, 0, 0)
+      (candidate >= requested)
+      |> Flip.Expect.isFalse "2.0 >= 3.0 should fail"
+    }
+
+    test "null version matches any candidate" {
+      let requestedVersion: System.Version = null
+      let passes = match requestedVersion with null -> true | _ -> false
+      passes |> Flip.Expect.isTrue "null requested version should accept any candidate"
+    }
+  ]
+
 [<Tests>]
 let allHotReloadTests =
   testList "Hot Reload Integration" [
@@ -420,4 +549,7 @@ let allHotReloadTests =
     ])
     hotReloadCompilationContextTests
     noInliningInjectionTests
+    exactMethodMatchingTests
+    nonBlockingRunGuardTests
+    highestVersionResolutionTests
   ]

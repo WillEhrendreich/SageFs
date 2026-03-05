@@ -7,6 +7,19 @@ open SageFs.Utils
 // Middleware to automatically wrap blocking .Run() calls in non-blocking wrappers
 // Works for any application: ASP.NET, Aspire, or any app with a .Run() method
 let nonBlockingRunMiddleware next (request, st: AppState) =
+  // Chesterton's fence: skip rewriting during hot reload. When DevReloadInjector
+  // is active, it patches WebApplication.Run/RunAsync via Harmony prefix — that
+  // prefix already handles middleware injection. NonBlockingRun's string rewriting
+  // of `.Run()` → `Task.Run(fun () -> .Run())` would conflict, potentially wrapping
+  // an already-patched call, or producing different behavior than the Harmony path.
+  let isHotReload =
+    request.Args
+    |> Map.tryFind "hotReload"
+    |> Option.map (fun v -> v :?> bool)
+    |> Option.defaultValue false
+  match isHotReload with
+  | true -> next (request, st)
+  | false ->
   let code = request.Code.Trim()
   
   // Detect patterns like: app.Run(), builder.Build().Run(), etc.
