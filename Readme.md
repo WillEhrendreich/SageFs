@@ -9,7 +9,7 @@ A live F# engine — hot reload, live testing, AI-native — for every editor, f
 [![NuGet](https://img.shields.io/nuget/v/SageFs?style=flat-square&logo=nuget&color=004880)](https://www.nuget.org/packages/SageFs/)
 [![.NET 10](https://img.shields.io/badge/.NET-10.0-512BD4?style=flat-square&logo=dotnet)](https://dotnet.microsoft.com)
 [![License: MIT](https://img.shields.io/badge/license-MIT-22c55e?style=flat-square)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-3150+-22c55e?style=flat-square)]()
+[![Tests](https://img.shields.io/badge/tests-3300+-22c55e?style=flat-square)]()
 [![Save → Green](https://img.shields.io/badge/save→green-<500ms-f59e0b?style=flat-square)]()
 
 </div>
@@ -30,7 +30,7 @@ SageFs does it better. In every editor. In under 500ms. On broken code. For free
 | **Speed** | 5–30 sec (MSBuild rebuild) | **200–500ms** (FSI hot eval) |
 | **Broken code** | ✗ Must compile first | **✓ Tree-sitter works on incomplete code** |
 | **Scope** | Rebuilds all impacted projects | **Function-level** — just what changed |
-| **Frameworks** | MSTest · xUnit · NUnit | **+ Expecto · TUnit** · extensible |
+| **Frameworks** | MSTest · xUnit · NUnit | **+ Expecto · TUnit · xUnit v3** · extensible |
 | **Coverage** | IL instrumentation (heavy) | **Dual:** symbol dependency graph + IL branch probes |
 | **Editors** | Visual Studio only | **VS Code · Neovim · TUI · GUI · Visual Studio · Web** |
 | **Price** | ~$250/month | **Free, MIT licensed** |
@@ -150,7 +150,7 @@ sagefs
 # Or let your editor start it — VS Code, Neovim, and Visual Studio
 # all auto-start the daemon and create sessions for your open project.
 
-# MCP endpoint:  http://localhost:37749/sse
+# MCP endpoint:  http://localhost:37749/mcp
 # Dashboard:     http://localhost:37750/dashboard
 ```
 
@@ -224,10 +224,10 @@ Uses the [VisualStudio.Extensibility](https://learn.microsoft.com/en-us/visualst
 
 #### AI Agent (MCP)
 
-Connect any MCP client to `http://localhost:37749/sse`:
+Connect any MCP client to `http://localhost:37749/mcp` (Streamable HTTP transport):
 
 ```json
-{ "mcpServers": { "sagefs": { "type": "sse", "url": "http://localhost:37749/sse" } } }
+{ "mcpServers": { "sagefs": { "type": "sse", "url": "http://localhost:37749/mcp" } } }
 ```
 
 Works with GitHub Copilot (CLI & VS Code), Claude Code, Claude Desktop, and any MCP-compatible tool. 23 tools available — from `send_fsharp_code` to `run_tests` to `explore_type`. The **edit → auto-test → poll** workflow means agents don't even need to call eval — just edit files and check `get_live_test_status`.
@@ -300,11 +300,11 @@ SageFs maintains a pool of pre-warmed FSI sessions. Hard resets swap the active 
 </details>
 
 <details>
-<summary><strong>📊 Event Sourcing — durable session history</strong></summary>
+<summary><strong>📊 Event Sourcing — optional audit trail</strong></summary>
 
 <br />
 
-All session events (evals, resets, diagnostics, errors) stored in PostgreSQL via [Marten](https://martendb.io/). Requires Docker + `--persist` flag. Without it, SageFs runs fully in-memory with zero external dependencies.
+Session events (evals, resets, diagnostics, errors) can optionally be stored in PostgreSQL via [Marten](https://martendb.io/) as an audit trail. Requires Docker + `--persist` flag. **This is not required** — SageFs runs fully in-memory and persists session state to binary files (see below). PostgreSQL is a supplementary audit log, not the source of truth.
 
 </details>
 
@@ -472,7 +472,7 @@ SageFs is **daemon-first** — one server, many clients. The daemon starts bare 
      └──────┘  └───────┘
 ```
 
-3150+ tests: Expecto unit tests, FsCheck property-based state machine tests, Verify snapshots, Testcontainers integration tests, binary persistence property tests.
+3300+ tests: Expecto unit tests, FsCheck property-based state machine tests, Verify snapshots, Testcontainers integration tests, binary persistence property tests.
 
 </details>
 

@@ -740,7 +740,7 @@ let wireCoreLogs (app: WebApplication) =
 let logStartup (app: WebApplication) (port: int) (logPath: string) (otelConfigured: bool) =
   let logger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("SageFs.McpServer")
   logger.LogInformation("MCP server starting on port {Port}", port)
-  logger.LogInformation("SSE endpoint: http://localhost:{Port}/sse", port)
+  logger.LogInformation("MCP endpoint: http://localhost:{Port}/mcp (Streamable HTTP)", port)
   logger.LogInformation("State events SSE: http://localhost:{Port}/events", port)
   logger.LogInformation("Kestrel max connections: {MaxConnections}", 200)
   logger.LogInformation("Log file: {LogPath}", logPath)
