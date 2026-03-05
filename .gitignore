@@ -29,3 +29,5 @@ mcp-sdk/
 aspire-traces.png
 otel-*.png
 **/TestResults.junit.xml
+
+BenchmarkDotNet.Artifacts/
