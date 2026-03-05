@@ -81,7 +81,8 @@ let dashboardRenderSnapshotTests = testList "Dashboard render snapshots" [
         Uptime = "3m"
         WorkingDir = @"C:\Code\MyProj"
         LastActivity = "eval"
-        StandbyLabel = "" }
+        StandbyLabel = ""
+        TestSummary = None }
       { Id = "session-def"
         Status = "stopped"
         StatusMessage = None
@@ -92,7 +93,8 @@ let dashboardRenderSnapshotTests = testList "Dashboard render snapshots" [
         Uptime = ""
         WorkingDir = ""
         LastActivity = ""
-        StandbyLabel = "" }
+        StandbyLabel = ""
+        TestSummary = None }
     ]
     let html = renderSessions sessions false |> renderNode
     do! verifyDashboard "dashboard_sessions" html
@@ -144,7 +146,8 @@ let edgeCaseSnapshotTests = testList "edge case snapshots" [
         Uptime = "15m"
         WorkingDir = @"C:\Code\MyProj"
         LastActivity = "eval"
-        StandbyLabel = "" }
+        StandbyLabel = ""
+        TestSummary = None }
     ]
     let html = renderSessions sessions false |> renderNode
     do! verifyDashboard "dashboard_sessions_singleActive" html

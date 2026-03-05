@@ -412,6 +412,21 @@ let renderSessions (sessions: ParsedSession list) (creating: bool) =
                     Text.raw (sprintf "evals: %d" s.EvalCount)
                   ]
                 | false -> ()
+                match s.TestSummary with
+                | Some ts when ts.Total > 0 ->
+                  let badge = Features.LiveTesting.TestSummary.toInlineBadge ts
+                  let badgeColor =
+                    match ts.Failed > 0 with
+                    | true -> "var(--fg-red)"
+                    | false ->
+                      match ts.Running > 0 with
+                      | true -> "var(--fg-blue)"
+                      | false -> "var(--fg-green)"
+                  Elem.span
+                    [ Attr.class' "badge"
+                      Attr.style (sprintf "color: %s; font-size: 0.7rem;" badgeColor) ]
+                    [ Text.raw badge ]
+                | _ -> ()
                 match s.LastActivity.Length > 0 with
                 | true ->
                   Elem.span [ Attr.class' "meta"; Attr.style "margin-left: auto;" ] [

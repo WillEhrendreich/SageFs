@@ -968,6 +968,28 @@ module TestSummary =
       Disabled = disabled
       Enabled = activation = LiveTestingActivation.Active }
 
+  /// Compact inline badge for per-session display: "✓42 ✗2" or "✓10" or "⟳3"
+  let toInlineBadge (s: TestSummary) : string =
+    match s.Total with
+    | 0 -> ""
+    | _ ->
+      let parts = System.Collections.Generic.List<string>()
+      match s.Passed > 0 with
+      | true -> parts.Add(sprintf "✓%d" s.Passed)
+      | false -> ()
+      match s.Failed > 0 with
+      | true -> parts.Add(sprintf "✗%d" s.Failed)
+      | false -> ()
+      match s.Running > 0 with
+      | true -> parts.Add(sprintf "⟳%d" s.Running)
+      | false -> ()
+      match s.Stale > 0 with
+      | true -> parts.Add(sprintf "●%d" s.Stale)
+      | false -> ()
+      match parts.Count = 0 with
+      | true -> sprintf "%d tests" s.Total
+      | false -> System.String.Join(" ", parts)
+
   let toStatusBar (s: TestSummary) : string =
     match s.Total, s.Failed, s.Running, s.Stale with
     | 0, _, _, _ -> "Tests: none"

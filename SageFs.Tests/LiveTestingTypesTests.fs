@@ -363,6 +363,35 @@ let liveTestingTypesTests = testList "LiveTestingTypes" [
       |> fun s -> s.Total
       |> Expect.equal "should be 0" 0
     }
+    test "toInlineBadge with passed and failed" {
+      let s = { TestSummary.empty with Total = 44; Passed = 42; Failed = 2 }
+      TestSummary.toInlineBadge s
+      |> Expect.equal "should show pass+fail" "✓42 ✗2"
+    }
+    test "toInlineBadge all passed" {
+      let s = { TestSummary.empty with Total = 10; Passed = 10 }
+      TestSummary.toInlineBadge s
+      |> Expect.equal "should show pass only" "✓10"
+    }
+    test "toInlineBadge with running" {
+      let s = { TestSummary.empty with Total = 5; Passed = 2; Running = 3 }
+      TestSummary.toInlineBadge s
+      |> Expect.equal "should show pass+running" "✓2 ⟳3"
+    }
+    test "toInlineBadge with stale" {
+      let s = { TestSummary.empty with Total = 8; Passed = 6; Stale = 2 }
+      TestSummary.toInlineBadge s
+      |> Expect.equal "should show pass+stale" "✓6 ●2"
+    }
+    test "toInlineBadge empty" {
+      TestSummary.toInlineBadge TestSummary.empty
+      |> Expect.equal "empty for 0 tests" ""
+    }
+    test "toInlineBadge all disabled" {
+      let s = { TestSummary.empty with Total = 3; Disabled = 3 }
+      TestSummary.toInlineBadge s
+      |> Expect.equal "fallback for no status parts" "3 tests"
+    }
   ]
 
   testList "CategoryDetection" [

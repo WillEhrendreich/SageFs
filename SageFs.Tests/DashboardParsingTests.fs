@@ -1,6 +1,7 @@
 module SageFs.Tests.DashboardParsingTests
 
 open Expecto
+open Falco.Markup
 open SageFs
 open SageFs.Server.DashboardTypes
 open SageFs.Server.DashboardFragments
@@ -219,7 +220,8 @@ module SessionStateOverride =
       Uptime = ""
       WorkingDir = ""
       LastActivity = ""
-      StandbyLabel = "" }
+      StandbyLabel = ""
+      TestSummary = None }
 
 [<Tests>]
 let stateOverrideTests =
@@ -452,6 +454,70 @@ let stoppedSessionFilterTests =
       let corrected = override' getState parsed
       let visible = corrected |> List.filter (fun s -> s.Status <> "stopped")
       Expect.isEmpty visible "all stopped = empty list")
+  ]
+
+[<Tests>]
+let perSessionTestSummaryTests =
+  let parse = SageFs.Server.DashboardTypes.parseSessionLines
+  testList "Per-session test summary" [
+    testCase "parsed sessions have TestSummary = None by default" (fun () ->
+      let input = "  sess-a [running] *"
+      let sessions = parse input
+      Expect.isNone sessions.[0].TestSummary "parsed sessions start with no test summary")
+
+    testCase "TestSummary can be injected via record update" (fun () ->
+      let input = "  sess-a [running] *"
+      let sessions = parse input
+      let summary =
+        { SageFs.Features.LiveTesting.TestSummary.empty with
+            Total = 42; Passed = 40; Failed = 2 }
+      let enriched = { sessions.[0] with TestSummary = Some summary }
+      Expect.isSome enriched.TestSummary "should have summary"
+      Expect.equal enriched.TestSummary.Value.Total 42 "total 42"
+      Expect.equal enriched.TestSummary.Value.Failed 2 "failed 2")
+
+    testCase "inline badge renders in session HTML when TestSummary present" (fun () ->
+      let summary =
+        { SageFs.Features.LiveTesting.TestSummary.empty with
+            Total = 10; Passed = 8; Failed = 2 }
+      let session : ParsedSession =
+        { Id = "sess-a"
+          Status = "running"
+          StatusMessage = None
+          IsActive = true
+          IsSelected = false
+          ProjectsText = "(MyProj)"
+          EvalCount = 5
+          Uptime = "2m"
+          WorkingDir = "/tmp"
+          LastActivity = "just now"
+          StandbyLabel = ""
+          TestSummary = Some summary }
+      let html =
+        renderSessions [session] false
+        |> renderNode
+      Expect.isTrue (html.Contains("✓8")) "should contain passed badge"
+      Expect.isTrue (html.Contains("✗2")) "should contain failed badge")
+
+    testCase "no badge when TestSummary is None" (fun () ->
+      let session : ParsedSession =
+        { Id = "sess-a"
+          Status = "running"
+          StatusMessage = None
+          IsActive = true
+          IsSelected = false
+          ProjectsText = "(MyProj)"
+          EvalCount = 5
+          Uptime = "2m"
+          WorkingDir = "/tmp"
+          LastActivity = "just now"
+          StandbyLabel = ""
+          TestSummary = None }
+      let html =
+        renderSessions [session] false
+        |> renderNode
+      Expect.isFalse (html.Contains("✓")) "no pass badge when no tests"
+      Expect.isFalse (html.Contains("✗")) "no fail badge when no tests")
   ]
 
 [<Tests>]

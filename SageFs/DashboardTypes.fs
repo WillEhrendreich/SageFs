@@ -174,6 +174,7 @@ type ParsedSession = {
   WorkingDir: string
   LastActivity: string
   StandbyLabel: string
+  TestSummary: Features.LiveTesting.TestSummary option
 }
 
 let parseSessionLines (content: string) =
@@ -206,7 +207,8 @@ let parseSessionLines (content: string) =
         Uptime = extractTag "up:" m.Groups.[7].Value
         WorkingDir = extractTag "dir:" m.Groups.[8].Value
         LastActivity = extractTag "last:" m.Groups.[9].Value
-        StandbyLabel = "" }
+        StandbyLabel = ""
+        TestSummary = None }
     | false ->
       { Id = l.Trim()
         Status = "unknown"
@@ -218,7 +220,8 @@ let parseSessionLines (content: string) =
         Uptime = ""
         WorkingDir = ""
         LastActivity = ""
-        StandbyLabel = "" })
+        StandbyLabel = ""
+        TestSummary = None })
   |> Array.toList
 
 let isCreatingSession (content: string) =
@@ -307,6 +310,7 @@ type DashboardQueries = {
   GetWarmupContext: string -> Threading.Tasks.Task<WarmupContext option>
   GetWarmupProgress: string -> string
   GetTestTrace: unit -> {| Timing: Features.LiveTesting.TestCycleTiming option; IsRunning: bool; Summary: Features.LiveTesting.TestSummary |} option
+  GetSessionTestSummary: string -> Features.LiveTesting.TestSummary option
   GetLiveTestingStatus: unit -> string
 }
 

@@ -1111,6 +1111,17 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
       Some {| Timing = model.LiveTesting.LastTiming
               IsRunning = Features.LiveTesting.TestRunPhase.isAnyRunning state.RunPhases
               Summary = summary |}
+    GetSessionTestSummary = fun sessionId ->
+      let model = elmRuntime.GetModel()
+      let state = model.LiveTesting.TestState
+      let entries =
+        Features.LiveTesting.LiveTestState.statusEntriesForSession sessionId state
+      match entries.Length with
+      | 0 -> None
+      | _ ->
+        Features.LiveTesting.TestSummary.fromStatuses
+          state.Activation (entries |> Array.map (fun e -> e.Status))
+        |> Some
     GetLiveTestingStatus = fun () ->
       let model = elmRuntime.GetModel()
       let activeId =
