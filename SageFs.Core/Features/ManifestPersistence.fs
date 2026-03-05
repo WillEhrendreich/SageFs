@@ -50,6 +50,8 @@ module ManifestWriter =
     bw.Flush()
     ms.ToArray()
 
+  let currentFormatVersion = 1us
+
   let write (data: DaemonManifestData) : byte[] =
     let sessPayload = writeSess data.Entries
     let sectionCount = 1u
@@ -67,7 +69,7 @@ module ManifestWriter =
 
     // Header (64 bytes)
     bw.Write([| 0x53uy; 0x46uy; 0x4Duy; 0x31uy |]) // "SFM1"
-    bw.Write(1us)                                     // format_version
+    bw.Write(currentFormatVersion)                    // format_version
     bw.Write(1us)                                     // min_reader_version
     bw.Write(sectionCount)                            // section_count
     bw.Write(0u)                                      // flags
@@ -121,7 +123,14 @@ module ManifestReader =
       use br = new BinaryReader(ms)
 
       br.ReadBytes(4) |> ignore
-      let _formatVersion = br.ReadUInt16()
+      let formatVersion = br.ReadUInt16()
+
+      match formatVersion with
+      | 0us -> err (sprintf "Unsupported format version %d" formatVersion)
+      | v when v > ManifestWriter.currentFormatVersion ->
+        err (sprintf "Unsupported format version %d (expected %d)" v ManifestWriter.currentFormatVersion)
+      | _ ->
+
       let minReaderVersion = br.ReadUInt16()
       let sectionCount = br.ReadUInt32() |> int
       let _flags = br.ReadUInt32()

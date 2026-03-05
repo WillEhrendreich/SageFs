@@ -172,6 +172,50 @@ let manifestBinaryTests = testList "DaemonManifest binary format" [
 ]
 
 [<Tests>]
+let manifestVersionTests = testList "DaemonManifest format version" [
+
+  testCase "v1 format is accepted" <| fun _ ->
+    let data = { Entries = []; ActiveSessionId = None; CreatedAtMs = 1L }
+    let bytes = ManifestWriter.write data
+    ManifestReader.read bytes |> Result.isOk |> Expect.isTrue "v1 should succeed"
+
+  testCase "unknown format version is rejected" <| fun _ ->
+    let data = { Entries = []; ActiveSessionId = None; CreatedAtMs = 1L }
+    let bytes = ManifestWriter.write data
+    // Patch format_version field (bytes 4-5) to v99
+    let patched = Array.copy bytes
+    patched.[4] <- 99uy; patched.[5] <- 0uy
+    // Re-compute header CRC so we test version check, not CRC
+    let forCrc = Array.copy patched
+    forCrc.[36] <- 0uy; forCrc.[37] <- 0uy; forCrc.[38] <- 0uy; forCrc.[39] <- 0uy
+    let crc = Crc32.computeAll forCrc
+    let cb = System.BitConverter.GetBytes(crc)
+    System.Array.Copy(cb, 0, patched, 36, 4)
+    match ManifestReader.read patched with
+    | Error msg ->
+      msg |> Expect.stringContains "mentions version" "format version"
+    | Ok _ -> failwith "Should reject unknown format version"
+
+  testCase "format version 0 is rejected" <| fun _ ->
+    let data = { Entries = []; ActiveSessionId = None; CreatedAtMs = 1L }
+    let bytes = ManifestWriter.write data
+    let patched = Array.copy bytes
+    patched.[4] <- 0uy; patched.[5] <- 0uy
+    let forCrc = Array.copy patched
+    forCrc.[36] <- 0uy; forCrc.[37] <- 0uy; forCrc.[38] <- 0uy; forCrc.[39] <- 0uy
+    let crc = Crc32.computeAll forCrc
+    let cb = System.BitConverter.GetBytes(crc)
+    System.Array.Copy(cb, 0, patched, 36, 4)
+    match ManifestReader.read patched with
+    | Error msg ->
+      msg |> Expect.stringContains "mentions version" "format version"
+    | Ok _ -> failwith "Should reject format version 0"
+
+  testCase "currentFormatVersion equals 1" <| fun _ ->
+    ManifestWriter.currentFormatVersion |> Expect.equal "writer version" 1us
+]
+
+[<Tests>]
 let manifestMappingTests = testList "ManifestMapping" [
   testCase "replay state → manifest → replay state roundtrips" <| fun _ ->
     let now = DateTimeOffset.UtcNow
