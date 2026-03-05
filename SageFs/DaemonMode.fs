@@ -1143,9 +1143,9 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
       | _ ->
         let! result = sessionOps.RestartSession sid true
         return
-          match result with
-          | Ok msg -> Ok (sprintf "Hard reset: %s" msg)
-          | Error e -> Error (sprintf "Hard reset failed: %s" (SageFsError.describe e))
+          result
+          |> Result.map (sprintf "Hard reset: %s")
+          |> Result.mapError (fun e -> sprintf "Hard reset failed: %s" (SageFsError.describe e))
     }
     Dispatch = fun msg -> elmRuntime.Dispatch msg
     SwitchSession = Some (fun (sid: string) -> task {
@@ -1155,18 +1155,12 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
     StopSession = Some (fun (sid: string) -> task {
       let! result = sessionOps.StopSession sid
       elmRuntime.Dispatch(SageFsMsg.Editor EditorAction.ListSessions)
-      return
-        match result with
-        | Ok msg -> Ok msg
-        | Error e -> Error (SageFsError.describe e)
+      return result |> Result.mapError SageFsError.describe
     })
     CreateSession = Some (fun (projects: string list) (workingDir: string) -> task {
       let! result = sessionOps.CreateSession projects workingDir
       elmRuntime.Dispatch(SageFsMsg.Editor EditorAction.ListSessions)
-      return
-        match result with
-        | Ok msg -> Ok msg
-        | Error e -> Error (SageFsError.describe e)
+      return result |> Result.mapError SageFsError.describe
     })
     ShutdownCallback = Some (fun () -> cts.Cancel())
   }

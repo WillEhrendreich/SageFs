@@ -60,10 +60,7 @@ let handleMessage
         actor.PostAndAsyncReply(fun rc -> Eval(request, cts.Token, rc))
         |> Instrumentation.tracedActorPost Instrumentation.EvalCategory.Repl
       let diags = response.Diagnostics |> Array.map toWorkerDiagnostic |> Array.toList
-      let result =
-        match response.EvaluationResult with
-        | Ok output -> Ok output
-        | Error ex -> Error (ex.ToString())
+      let result = response.EvaluationResult |> Result.mapError (fun ex -> ex.ToString())
       let metadata =
         response.Metadata
         |> Map.fold (fun acc k v ->
@@ -118,10 +115,7 @@ let handleMessage
       let! response =
         actor.PostAndAsyncReply(fun rc -> Eval(request, cts.Token, rc))
         |> Instrumentation.tracedActorPost Instrumentation.EvalCategory.HotReload
-      let result =
-        match response.EvaluationResult with
-        | Ok output -> Ok output
-        | Error ex -> Error (ex.ToString())
+      let result = response.EvaluationResult |> Result.mapError (fun ex -> ex.ToString())
       return WorkerResponse.ScriptLoaded(replyId, result |> Result.mapError SageFsError.ScriptLoadFailed)
 
     | WorkerMessage.ResetSession replyId ->
