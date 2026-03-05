@@ -159,21 +159,31 @@ let createDaemonInfrastructure () : DaemonInfra =
     DashboardFetchTimeoutSec = 0.5
   }
 
-/// Handle --prune flag: mark all alive sessions as stopped and return true if pruned.
+/// Handle --prune flag: clear the binary manifest and return true if pruned.
 let handlePrune (infra: DaemonInfra) (flags: Args.DaemonFlags) = task {
   match flags.Prune with
   | true ->
-    let! daemonEvents = infra.Persistence.FetchStream infra.DaemonStreamId
-    let daemonState = Features.Replay.DaemonReplayState.replayStream daemonEvents
-    let pruneEvents = Features.Replay.DaemonReplayState.pruneAllSessions daemonState
-    match pruneEvents.IsEmpty with
-    | true ->
-      infra.Log.LogInformation("No alive sessions to prune")
-    | false ->
-      let! result = infra.Persistence.AppendEvents infra.DaemonStreamId pruneEvents
-      match result with
-      | Ok () -> infra.Log.LogInformation("Pruned {Count} session(s)", pruneEvents.Length)
-      | Error msg -> infra.Log.LogWarning("Prune failed: {Error}", msg)
+    match Features.DaemonPersistence.loadManifest DaemonState.SageFsDir with
+    | Ok state ->
+      let aliveSessions = Features.Replay.DaemonReplayState.aliveSessions state
+      match aliveSessions.IsEmpty with
+      | true ->
+        infra.Log.LogInformation("No alive sessions to prune")
+      | false ->
+        let now = DateTimeOffset.UtcNow
+        let pruned =
+          { state with
+              Sessions =
+                state.Sessions
+                |> Map.map (fun _ r ->
+                  match r.StoppedAt with
+                  | Some _ -> r
+                  | None -> { r with StoppedAt = Some now }) }
+        match Features.DaemonPersistence.saveManifest DaemonState.SageFsDir pruned with
+        | Ok _ -> infra.Log.LogInformation("Pruned {Count} session(s) from binary manifest", aliveSessions.Length)
+        | Error msg -> infra.Log.LogWarning("Prune save failed: {Error}", msg)
+    | Error _ ->
+      infra.Log.LogInformation("No binary manifest found — nothing to prune")
     return true
   | false -> return false
 }
@@ -627,7 +637,7 @@ let createLiveTestWatcher
   watcher.EnableRaisingEvents <- true
   watcher, debounceTimer
 
-/// Get previous sessions: active from CQRS snapshot + historical from Marten.
+/// Get previous sessions: active from CQRS snapshot + historical from binary manifest.
 let getPreviousSessions
   (readSnapshot: unit -> SessionManager.QuerySnapshot)
   (persistence: SageFs.EventStore.EventPersistence)
@@ -641,28 +651,19 @@ let getPreviousSessions
         PreviousSession.Projects = info.Projects
         PreviousSession.LastSeen = info.LastActivity })
   let activeIds = activeSessions |> List.map (fun s -> s.Id) |> Set.ofList
-  let! historicalSessions = task {
-    try
-      let! events = persistence.FetchStream daemonStreamId
-      let daemonState = Features.Replay.DaemonReplayState.replayStream events
-      return
-        daemonState.Sessions
-        |> Map.values
-        |> Seq.filter (fun r -> r.StoppedAt.IsSome && not (activeIds.Contains r.SessionId))
-        |> Seq.map (fun r ->
-          { PreviousSession.Id = r.SessionId
-            PreviousSession.WorkingDir = r.WorkingDir
-            PreviousSession.Projects = r.Projects
-            PreviousSession.LastSeen = r.StoppedAt |> Option.map (fun t -> t.DateTime) |> Option.defaultValue r.CreatedAt.DateTime })
-        |> Seq.toList
-    with
-    | :? Marten.Exceptions.MartenException as ex ->
-      Log.error "[getPreviousSessions] Marten error: %s" ex.Message
-      return []
-    | ex ->
-      Log.error "[getPreviousSessions] Unexpected error: %s (%s)" ex.Message (ex.GetType().Name)
-      return []
-  }
+  let historicalSessions =
+    match Features.DaemonPersistence.loadManifest DaemonState.SageFsDir with
+    | Ok daemonState ->
+      daemonState.Sessions
+      |> Map.values
+      |> Seq.filter (fun r -> r.StoppedAt.IsSome && not (activeIds.Contains r.SessionId))
+      |> Seq.map (fun r ->
+        { PreviousSession.Id = r.SessionId
+          PreviousSession.WorkingDir = r.WorkingDir
+          PreviousSession.Projects = r.Projects
+          PreviousSession.LastSeen = r.StoppedAt |> Option.map (fun t -> t.DateTime) |> Option.defaultValue r.CreatedAt.DateTime })
+      |> Seq.toList
+    | Error _ -> []
   return activeSessions @ historicalSessions
 }
 
@@ -700,7 +701,7 @@ let startDashboardServer
     log.LogWarning("Dashboard failed to start: {Error}", ex.Message)
 }
 
-/// Resume previous sessions from binary manifest (or Marten fallback).
+/// Resume previous sessions from binary manifest.
 /// Creates new sessions for each alive-but-deduplicated entry, or
 /// starts bare if no previous sessions exist.
 let resumePreviousSessions
@@ -710,13 +711,11 @@ let resumePreviousSessions
   (onSessionResumed: unit -> unit)
   = task {
   let log = infra.Log
-  let persistence = infra.Persistence
-  let daemonStreamId = infra.DaemonStreamId
   let appendEventsAsync events = appendEventsAsync infra events
   let startupSw = System.Diagnostics.Stopwatch.StartNew()
   let startupSpan = Instrumentation.startSpan Instrumentation.sessionSource "sagefs.daemon.startup" []
 
-  // Binary-first: try loading session manifest before Marten
+  // Load session manifest from binary — the sole source of truth
   let binarySpan = Instrumentation.startSpan Instrumentation.sessionSource "sagefs.daemon.binary_manifest_load" []
   let binarySw = System.Diagnostics.Stopwatch.StartNew()
   let manifestResult = Features.DaemonPersistence.loadManifest DaemonState.SageFsDir
@@ -725,8 +724,7 @@ let resumePreviousSessions
   | false -> binarySpan.SetTag("binary_load_ms", binarySw.Elapsed.TotalMilliseconds) |> ignore
   | true -> ()
 
-  // Determine session state: prefer binary manifest, fall back to Marten replay
-  let! daemonState =
+  let daemonState =
     match manifestResult with
     | Ok state ->
       log.LogInformation("Loaded session manifest from binary ({Count} sessions, {Ms:F1}ms)",
@@ -735,27 +733,14 @@ let resumePreviousSessions
       | false -> binarySpan.SetTag("source", "binary") |> ignore
       | true -> ()
       Instrumentation.succeedSpan binarySpan
-      System.Threading.Tasks.Task.FromResult(state)
+      state
     | Error binaryErr ->
-      log.LogDebug("No binary manifest ({Error}), falling back to Marten replay", binaryErr)
+      log.LogInformation("No binary manifest ({Error}) — starting fresh", binaryErr)
       match isNull binarySpan with
-      | false -> binarySpan.SetTag("source", "marten_fallback") |> ignore
+      | false -> binarySpan.SetTag("source", "none") |> ignore
       | true -> ()
       Instrumentation.succeedSpan binarySpan
-
-      // Replay phase (Marten fallback)
-      task {
-        let replaySpan = Instrumentation.startSpan Instrumentation.sessionSource "sagefs.daemon.event_replay" []
-        let! daemonEvents = persistence.FetchStream daemonStreamId
-        let state = Features.Replay.DaemonReplayState.replayStream daemonEvents
-        let eventCount = daemonEvents.Length
-        Instrumentation.daemonReplayEventCount.Add(int64 eventCount)
-        match isNull replaySpan with
-        | false -> replaySpan.SetTag("event_count", eventCount) |> ignore
-        | true -> ()
-        Instrumentation.succeedSpan replaySpan
-        return state
-      }
+      Features.Replay.DaemonReplayState.empty
 
   let aliveSessions = Features.Replay.DaemonReplayState.aliveSessions daemonState
 
