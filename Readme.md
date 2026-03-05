@@ -341,7 +341,7 @@ SageFs maintains a pool of pre-warmed FSI sessions. Hard resets swap the active 
 
 <br />
 
-Session events (evals, resets, diagnostics, errors) can optionally be stored in PostgreSQL via [Marten](https://martendb.io/) as an audit trail. Requires Docker + `--persist` flag. **This is not required** — SageFs runs fully in-memory and persists session state to binary files (see below). PostgreSQL is a supplementary audit log, not the source of truth.
+Session events (evals, resets, diagnostics, errors) can optionally be logged to PostgreSQL via [Marten](https://martendb.io/) as a supplementary audit trail. Requires Docker and the `SAGEFS_CONNECTION_STRING` environment variable. **This is not required** — SageFs runs fully with binary persistence (see below). PostgreSQL events are fire-and-forget and are not the source of truth.
 
 </details>
 

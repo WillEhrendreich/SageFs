@@ -168,7 +168,8 @@ let main args =
     printfn ""
     printfn "Daemon:"
     printfn "  SageFs runs as a daemon by default. The daemon provides:"
-    printfn "    MCP server      http://localhost:37749/sse  (AI agent integration)"
+    printfn "    MCP server      http://localhost:37749/     (Streamable HTTP)"
+    printfn "                    http://localhost:37749/sse (SSE for older clients)"
     printfn "    Dashboard       http://localhost:37750/dashboard  (live web UI)"
     printfn "    File watcher    Auto-reload .fs/.fsx changes via #load"
     printfn "    Hot reload      Runtime function redefinition"
@@ -231,6 +232,20 @@ let main args =
       printfn "  Started:    %s" (info.StartedAt.ToString("o"))
       printfn "  Directory:  %s" info.WorkingDirectory
       printfn "  Version:    %s" info.Version
+      printfn "  Dashboard:  http://localhost:%d/dashboard" (info.Port + 1)
+      printfn "  MCP (SSE):  http://localhost:%d/sse" info.Port
+      try
+        use client = new System.Net.Http.HttpClient(Timeout = TimeSpan.FromSeconds(3.0))
+        let resp = client.GetAsync(sprintf "http://localhost:%d/api/sessions" info.Port).Result
+        match resp.IsSuccessStatusCode with
+        | true ->
+          let json = resp.Content.ReadAsStringAsync().Result
+          let doc = System.Text.Json.JsonDocument.Parse(json)
+          let sessions = doc.RootElement.GetProperty("sessions")
+          let count = sessions.GetArrayLength()
+          printfn "  Sessions:   %d active" count
+        | false -> ()
+      with _ -> ()
       0
     | None ->
       printfn "No daemon running"
