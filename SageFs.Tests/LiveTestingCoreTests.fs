@@ -303,10 +303,10 @@ let providerDetectionTests = testList "TestProviderDescriptions" [
     |> Expect.hasLength "no assemblies, no providers" 0
   }
 
-  test "builtIn has 5 providers" {
+  test "builtIn has 6 providers" {
     TestProviderDescriptions.builtInDescriptions
     |> List.length
-    |> Expect.equal "5 built-in" 5
+    |> Expect.equal "6 built-in" 6
   }
 ]
 

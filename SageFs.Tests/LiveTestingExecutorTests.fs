@@ -27,7 +27,7 @@ let builtInDescriptionTests = testList "BuiltInExecutors.descriptions" [
   test "has 5 built-in providers" {
     BuiltInExecutors.descriptions
     |> List.length
-    |> Expect.equal "should have 5 providers" 5
+    |> Expect.equal "should have 6 providers" 6
   }
 
   test "includes all framework names" {

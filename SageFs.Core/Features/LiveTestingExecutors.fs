@@ -133,6 +133,16 @@ module BuiltInExecutors =
       Execute = ReflectionExecutor.executeMethod
     }
 
+  let xunitV3 : TestExecutor =
+    TestExecutor.AttributeBased {
+      Description = {
+        Name = TestFramework.XUnit
+        TestAttributes = ["Fact"; "Theory"]
+        AssemblyMarker = "xunit.v3.core"
+      }
+      Execute = ReflectionExecutor.executeMethod
+    }
+
   let nunit : TestExecutor =
     TestExecutor.AttributeBased {
       Description = {
@@ -397,7 +407,7 @@ module BuiltInExecutors =
         result
     }
 
-  let builtIn = [ xunit; nunit; mstest; tunit; expecto ]
+  let builtIn = [ xunit; xunitV3; nunit; mstest; tunit; expecto ]
 
   let descriptions : ProviderDescription list =
     builtIn |> List.map TestExecutor.description
