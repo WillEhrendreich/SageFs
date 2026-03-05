@@ -525,7 +525,7 @@ SageFs</code></pre>
       <td>Recent FSI events (evaluations, errors, script loads) with timestamps. Default: last 10 events.</td>
     </tr>
     <tr>
-      <td><code>get_pipeline_trace</code></td>
+      <td><code>get_test_trace</code></td>
       <td>Pipeline diagnostics: enabled state, provider list, run policies, and per-test timing for finding bottlenecks.</td>
     </tr>
     <tr>
@@ -653,7 +653,7 @@ SageFs</code></pre>
 <p>
   The <a href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/Watchdog.fs"><code>Watchdog</code></a>
   monitors every worker. If one crashes, it auto-restarts with exponential backoff. State is
-  event-sourced (<a href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/EventStore.fs"><code>EventStore.fs</code></a>),
+  State is persisted to binary manifests (<a href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/EventStore.fs"><code>EventStore.fs</code></a>),
   so a recovered session resumes where it left off.
 </p>
 

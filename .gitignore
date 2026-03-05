@@ -31,3 +31,4 @@ otel-*.png
 **/TestResults.junit.xml
 
 BenchmarkDotNet.Artifacts/
+viz-output/

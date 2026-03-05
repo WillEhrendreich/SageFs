@@ -9,7 +9,7 @@ A live F# engine — hot reload, live testing, AI-native — for every editor, f
 [![NuGet](https://img.shields.io/nuget/v/SageFs?style=flat-square&logo=nuget&color=004880)](https://www.nuget.org/packages/SageFs/)
 [![.NET 10](https://img.shields.io/badge/.NET-10.0-512BD4?style=flat-square&logo=dotnet)](https://dotnet.microsoft.com)
 [![License: MIT](https://img.shields.io/badge/license-MIT-22c55e?style=flat-square)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-3300+-22c55e?style=flat-square)]()
+[![Tests](https://img.shields.io/badge/tests-3500+-22c55e?style=flat-square)]()
 [![Save → Green](https://img.shields.io/badge/save→green-<500ms-f59e0b?style=flat-square)]()
 
 </div>
@@ -215,7 +215,7 @@ Features: Alt+Enter eval, CodeLens, live test decorations, native Test Explorer 
 
 #### Neovim
 
-[**sagefs.nvim**](https://github.com/WillEhrendreich/sagefs.nvim) — 37 Lua modules, 1100+ tests, 48 commands.
+[**sagefs.nvim**](https://github.com/WillEhrendreich/sagefs.nvim) — 37 Lua modules, 1160 tests, 46 commands.
 
 ```lua
 -- lazy.nvim
@@ -230,7 +230,7 @@ Uses the [VisualStudio.Extensibility](https://learn.microsoft.com/en-us/visualst
 
 #### AI Agent (MCP)
 
-SageFs exposes 23 MCP tools — from `send_fsharp_code` to `run_tests` to `explore_type`. Any MCP client can connect.
+SageFs exposes 24 MCP tools — from `send_fsharp_code` to `run_tests` to `explore_type`. Any MCP client can connect.
 
 **Streamable HTTP** (recommended — auto-reconnects, no session drops):
 ```json
@@ -501,7 +501,7 @@ SageFs is **daemon-first** — one server, many clients. The daemon starts bare 
      └──────┘  └───────┘
 ```
 
-3100+ tests: Expecto unit tests, FsCheck property-based state machine tests, Verify snapshots, binary persistence property tests.
+3500+ tests: Expecto unit tests, FsCheck property-based state machine tests, Verify snapshots, binary persistence property tests.
 
 </details>
 

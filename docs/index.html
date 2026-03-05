@@ -948,7 +948,7 @@
     <div class="editor-card" data-color="cyan">
       <span class="card-icon">🧩</span>
       <h3>Neovim</h3>
-      <span class="card-tech">Lua · 25 modules · 885 tests</span>
+      <span class="card-tech">Lua · 37 modules · 1160 tests</span>
       <p>
         Two eval modes: tree-sitter auto-detects the enclosing scope in <code>.fs</code> files
         (inferred mode), or use <code>;;</code> delimiters for explicit cell boundaries
@@ -967,7 +967,7 @@
     <div class="editor-card" data-color="green">
       <span class="card-icon">💻</span>
       <h3>VS Code</h3>
-      <span class="card-tech">F# via Fable → JavaScript · 14 modules</span>
+      <span class="card-tech">F# via Fable → JavaScript · 21 modules</span>
       <p>
         Select code, hit <code>Alt+Enter</code>, see colored annotations inline.
         Sidebar panels for hot reload file trees, live test status, type exploration,
@@ -1018,7 +1018,7 @@
     <div class="editor-card" data-color="orange">
       <span class="card-icon">🏢</span>
       <h3>Visual Studio</h3>
-      <span class="card-tech">F# + C# · VS Extensibility · 7 modules</span>
+      <span class="card-tech">F# + C# · VS Extensibility · 44 modules</span>
       <p>
         Integration with Visual Studio's tool windows.
         Eval, CodeLens, and session management — embedded in the IDE
@@ -1219,7 +1219,7 @@
       <div class="engine-how">
         Erlang-style supervision. The watchdog monitors every worker process —
         if one crashes, it auto-restarts with exponential backoff. The daemon itself
-        is supervised at the OS level. State is event-sourced, so nothing is lost.
+        is supervised at the OS level. State is persisted to binary manifests, so nothing is lost.
         A crashed session resumes exactly where it left off.
       </div>
       <div class="engine-files"><a href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/Watchdog.fs" target="_blank"><code>Watchdog.fs</code></a> <a href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/DaemonState.fs" target="_blank"><code>DaemonState.fs</code></a> <a href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/EventStore.fs" target="_blank"><code>EventStore.fs</code></a></div>
@@ -1281,7 +1281,7 @@
       <div class="tool-desc">Load and execute an <code>.fsx</code> script file. Each statement runs independently — partial progress survives failures.</div>
     </div>
     <div class="ai-tool">
-      <div class="tool-name">get_pipeline_trace</div>
+      <div class="tool-name">get_test_trace</div>
       <div class="tool-desc">Diagnose slow test runs. See enabled providers, run policies, and per-test timing to find bottlenecks.</div>
     </div>
   </div>
@@ -1292,7 +1292,7 @@
   <div class="section-label">The complete picture</div>
   <div class="section-title">Every module, every layer</div>
   <div class="section-desc">
-    SageFs.Core is the shared engine (66 modules). The CLI and GUI projects are thin shells
+    SageFs.Core is the shared engine (94 modules). The CLI and GUI projects are thin shells
     that consume Core's rendering pipeline. Here's the full compilation-order dependency map.
   </div>
 
@@ -1418,15 +1418,15 @@
 <div class="stats-band reveal">
   <div class="stats-grid">
     <a class="stat" href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/SageFs.Core.fsproj" target="_blank">
-      <div class="stat-num">66</div>
+      <div class="stat-num">94</div>
       <div class="stat-label">Core modules</div>
     </a>
     <a class="stat" href="https://github.com/WillEhrendreich/SageFs/tree/master/SageFs.Core" target="_blank">
-      <div class="stat-num">~28K</div>
+      <div class="stat-num">~35K</div>
       <div class="stat-label">Lines of production F#</div>
     </a>
     <a class="stat" href="https://github.com/WillEhrendreich/SageFs/tree/master/SageFs.Tests" target="_blank">
-      <div class="stat-num">2,691</div>
+      <div class="stat-num">3,500+</div>
       <div class="stat-label">Tests (SageFs)</div>
     </a>
     <a class="stat" href="#editors" style="text-decoration:none;">
@@ -1434,11 +1434,11 @@
       <div class="stat-label">Editor integrations</div>
     </a>
     <a class="stat" href="https://github.com/WillEhrendreich/SageFs/commits/master" target="_blank">
-      <div class="stat-num">13</div>
+      <div class="stat-num">19</div>
       <div class="stat-label">Days to build</div>
     </a>
     <a class="stat" href="https://github.com/WillEhrendreich/SageFs/commits/master" target="_blank">
-      <div class="stat-num">490</div>
+      <div class="stat-num">790+</div>
       <div class="stat-label">Commits</div>
     </a>
   </div>
