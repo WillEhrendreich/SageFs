@@ -279,58 +279,66 @@ let run (sessionId: string) (port: int) = async {
           System.Collections.Generic.KeyValuePair("file.extension", ext :> obj),
           System.Collections.Generic.KeyValuePair("change.kind", kind :> obj))
         Async.Start(async {
-          match FileWatcher.fileChangeAction change with
-          | FileWatcher.FileChangeAction.Reload filePath ->
-            match HotReloadState.isWatched filePath !result.HotReloadStateRef with
-            | false -> ()
-            | true ->
-            DevReload.broadcastCompiling (Some (IO.Path.GetFileName filePath))
-            let code = sprintf "#load @\"%s\"" filePath
-            let request = { Code = code; Args = Map.ofList ["hotReload", box true] }
-            use localCts = new CancellationTokenSource()
-            let! response =
-              actor.PostAndAsyncReply(fun rc -> Eval(request, localCts.Token, rc))
-            match response.EvaluationResult with
-            | Ok _ ->
-              // Capture RunTest from hot-reload discovery
-              match response.Metadata |> Map.tryFind "liveTestRunTest" with
-              | Some (:? (Features.LiveTesting.TestCase -> Async<Features.LiveTesting.TestResult>) as runTest) ->
-                setDynamicRunTest runTest
-              | _ -> ()
-              let reloaded =
-                response.Metadata
-                |> Map.tryFind "reloadedMethods"
-                |> Option.bind (fun v ->
-                  match v with
-                  | :? (string list) as methods -> Some methods
-                  | _ -> None)
-                |> Option.defaultValue []
-              let fileName = IO.Path.GetFileName filePath
-              match List.isEmpty reloaded with
-              | false ->
-                Log.info "Hot reloaded %s: %s" fileName (String.Join(", ", reloaded))
+          try
+            match FileWatcher.fileChangeAction change with
+            | FileWatcher.FileChangeAction.Reload filePath ->
+              match HotReloadState.isWatched filePath !result.HotReloadStateRef with
+              | false -> ()
               | true ->
-                // Chesterton's fence: broadcastReload even when no methods were detouring.
-                // When a file adds NEW types/functions (not modifying existing ones),
-                // Harmony finds no methods to detour, so triggerReload() in HotReloading.fs
-                // is never called. Without this, the browser stays stuck on "⟳ Recompiling..."
-                // forever — violating the Compiling→(Reload|CompilationFailed) contract.
-                DevReload.broadcastReload ()
-                Log.info "Reloaded %s" fileName
-            | Error ex ->
-              // Chesterton's fence: broadcastCompilationFailed ensures the browser
-              // overlay transitions from "Recompiling..." to the error message.
-              // Without this, compilation errors leave the overlay stuck on blue
-              // "Recompiling..." forever — the #1 reported DX issue.
-              let fileName = IO.Path.GetFileName filePath
-              let summary = sprintf "%s: %s" fileName ex.Message
-              DevReload.broadcastCompilationFailed summary
-              Log.warn "Reload failed for %s: %s" fileName (ex.Message)
-          | FileWatcher.FileChangeAction.SoftReset ->
-            Log.info "Project file changed — soft reset needed"
-            let! _ = actor.PostAndAsyncReply(fun rc -> ResetSession rc)
-            ()
-          | FileWatcher.FileChangeAction.Ignore -> ()
+              DevReload.broadcastCompiling (Some (IO.Path.GetFileName filePath))
+              let code = sprintf "#load @\"%s\"" filePath
+              let request = { Code = code; Args = Map.ofList ["hotReload", box true] }
+              use localCts = new CancellationTokenSource()
+              let! response =
+                actor.PostAndAsyncReply(fun rc -> Eval(request, localCts.Token, rc))
+              match response.EvaluationResult with
+              | Ok _ ->
+                // Capture RunTest from hot-reload discovery
+                match response.Metadata |> Map.tryFind "liveTestRunTest" with
+                | Some (:? (Features.LiveTesting.TestCase -> Async<Features.LiveTesting.TestResult>) as runTest) ->
+                  setDynamicRunTest runTest
+                | _ -> ()
+                let reloaded =
+                  response.Metadata
+                  |> Map.tryFind "reloadedMethods"
+                  |> Option.bind (fun v ->
+                    match v with
+                    | :? (string list) as methods -> Some methods
+                    | _ -> None)
+                  |> Option.defaultValue []
+                let fileName = IO.Path.GetFileName filePath
+                match List.isEmpty reloaded with
+                | false ->
+                  Log.info "Hot reloaded %s: %s" fileName (String.Join(", ", reloaded))
+                | true ->
+                  // Chesterton's fence: broadcastReload even when no methods were detouring.
+                  // When a file adds NEW types/functions (not modifying existing ones),
+                  // Harmony finds no methods to detour, so triggerReload() in HotReloading.fs
+                  // is never called. Without this, the browser stays stuck on "⟳ Recompiling..."
+                  // forever — violating the Compiling→(Reload|CompilationFailed) contract.
+                  DevReload.broadcastReload ()
+                  Log.info "Reloaded %s" fileName
+              | Error ex ->
+                // Chesterton's fence: broadcastCompilationFailed ensures the browser
+                // overlay transitions from "Recompiling..." to the error message.
+                // Without this, compilation errors leave the overlay stuck on blue
+                // "Recompiling..." forever — the #1 reported DX issue.
+                let fileName = IO.Path.GetFileName filePath
+                let summary = sprintf "%s: %s" fileName ex.Message
+                DevReload.broadcastCompilationFailed summary
+                Log.warn "Reload failed for %s: %s" fileName (ex.Message)
+            | FileWatcher.FileChangeAction.SoftReset ->
+              Log.info "Project file changed — soft reset needed"
+              let! _ = actor.PostAndAsyncReply(fun rc -> ResetSession rc)
+              ()
+            | FileWatcher.FileChangeAction.Ignore -> ()
+          with ex ->
+            // Chesterton's fence: if the actor mailbox crashes or PostAndAsyncReply
+            // throws, we must still close the Compiling→(Reload|CompilationFailed)
+            // lifecycle. Without this catch-all, an unhandled exception leaves the
+            // browser stuck on "⟳ Recompiling..." with no recovery path.
+            DevReload.broadcastCompilationFailed (sprintf "Internal error: %s" ex.Message)
+            Log.error "File watcher async failed: %s" (ex.ToString())
         })
       Some (FileWatcher.start config onFileChanged)
 
@@ -381,7 +389,7 @@ let run (sessionId: string) (port: int) = async {
     | "opt-in" -> ()
     | _ ->
       result.HotReloadStateRef.Value <-
-        HotReloadState.watchAll (projectFiles |> List.map (fun f -> f)) HotReloadState.empty
+        HotReloadState.watchAll projectFiles HotReloadState.empty
       Log.info "Hot reload: watching %d project files by default" projectFiles.Length
     let! server =
       WorkerHttpTransport.startServer readyHandler result.HotReloadStateRef projectFiles result.GetWarmupContext getRunTest port

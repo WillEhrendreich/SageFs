@@ -35,6 +35,7 @@ let reloadScript (workerPort: int) =
   document.body.appendChild(d);
   let reloadCount = 0;
   let reloadTimer = null;
+  let reconnectTimer = null;
   let compilingStart = null;
   let compilingTimer = null;
   let compilingLabel = '';
@@ -53,6 +54,7 @@ let reloadScript (workerPort: int) =
   };
   const es = new EventSource('%s');
   es.onmessage = function(e) {
+    clearTimeout(reconnectTimer);
     try {
       const msg = JSON.parse(e.data);
       console.debug('[SageFs]', msg.type, msg);
@@ -70,7 +72,8 @@ let reloadScript (workerPort: int) =
         }, 200);
       } else if (msg.type === 'reload') {
         clearInterval(compilingTimer);
-        d.textContent = '✓ Updated';
+        const dur = compilingStart ? ' in ' + ((Date.now() - compilingStart) / 1000).toFixed(1) + 's' : '';
+        d.textContent = '✓ Updated' + dur;
         d.style.background = '#16a34a';
         d.style.opacity = '1';
         d.style.animation = '';
@@ -94,7 +97,7 @@ let reloadScript (workerPort: int) =
     d.textContent = '⚡ Reconnecting...';
     d.style.background = '#d97706';
     d.style.opacity = '1';
-    setTimeout(function(){ d.style.opacity = '0'; }, 3000);
+    reconnectTimer = setTimeout(function(){ d.style.opacity = '0'; }, 3000);
   };
 })();
 </script>""" sseUrl

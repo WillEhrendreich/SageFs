@@ -1,0 +1,22 @@
+name: Repo Visualizer
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  diagram:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Update diagram
+        uses: githubocto/repo-visualizer@0.7.1
+        with:
+          output_file: "docs/repo-diagram.svg"
+          excluded_paths: "node_modules,nupkg,coverage-report,test-results,BenchmarkDotNet.Artifacts,playwright-report,mcp-sdk-nupkg,mcp-sdk,runtimes,viz-output,.github"
+          commit_message: "docs: update repo visualization diagram [skip ci]"
+          root_path: ""
+          max_depth: 9
