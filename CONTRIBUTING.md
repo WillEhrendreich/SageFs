@@ -140,6 +140,21 @@ VS Code: Use the built-in .NET debugger. Create a `launch.json` that targets `Sa
 
 Visual Studio / Rider: Open `SageFs.slnx`, set `SageFs.Tests` as the startup project, and hit F5.
 
+### Running Benchmarks
+
+BenchmarkDotNet benchmarks cover 5 critical paths (CellGrid allocation, manifest persistence, error description, SSE formatting, msgLabel caching). Run in Release mode:
+
+```bash
+# List all available benchmarks
+dotnet run -c Release --project SageFs.Tests -- --benchmark --list flat
+
+# Run a specific benchmark by pattern
+dotnet run -c Release --project SageFs.Tests -- --benchmark --filter "*CellGrid*"
+
+# Run all benchmarks
+dotnet run -c Release --project SageFs.Tests -- --benchmark
+```
+
 ### The Pack/Reinstall Cycle
 
 When you change SageFs's own source code (anything in `SageFs/` or `SageFs.Core/`), you need to rebuild and reinstall:
