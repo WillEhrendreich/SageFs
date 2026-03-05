@@ -183,3 +183,136 @@ module SageFsError =
     | SageFsError.HotReloadStateError _ -> 500
     | SageFsError.DaemonStartFailed _ -> 500
     | SageFsError.Unexpected _ -> 500
+
+  /// Client errors: 4xx — the request was malformed or referred to missing resources.
+  let isClientError = function
+    | SageFsError.SessionNotFound _ -> true
+    | SageFsError.NoActiveSessions -> true
+    | SageFsError.DaemonNotRunning -> true
+    | SageFsError.AmbiguousSessions _ -> true
+    | SageFsError.JsonParseError _ -> true
+    | SageFsError.ToolNotAvailable _ -> true
+    | SageFsError.ToolNotAvailable _
+    | SageFsError.SessionCreationFailed _
+    | SageFsError.SessionStopFailed _
+    | SageFsError.SessionSwitchFailed _
+    | SageFsError.WorkerCommunicationFailed _
+    | SageFsError.WorkerSpawnFailed _
+    | SageFsError.WorkerTimeout _
+    | SageFsError.WorkerHttpError _
+    | SageFsError.PipeClosed
+    | SageFsError.EvalFailed _
+    | SageFsError.ResetFailed _
+    | SageFsError.HardResetFailed _
+    | SageFsError.ScriptLoadFailed _
+    | SageFsError.CheckFailed _
+    | SageFsError.CompletionFailed _
+    | SageFsError.CancelFailed _
+    | SageFsError.WarmupOpenFailed _
+    | SageFsError.WarmupContextFailed _
+    | SageFsError.HotReloadFailed _
+    | SageFsError.HotReloadStateError _
+    | SageFsError.RestartLimitExceeded _
+    | SageFsError.DaemonStartFailed _
+    | SageFsError.PortInUse _
+    | SageFsError.SseConnectionError _
+    | SageFsError.Unexpected _ -> false
+
+  /// Server errors: 500 — internal failures not caused by the client.
+  let isServerError = function
+    | SageFsError.SessionCreationFailed _ -> true
+    | SageFsError.SessionStopFailed _ -> true
+    | SageFsError.SessionSwitchFailed _ -> true
+    | SageFsError.EvalFailed _ -> true
+    | SageFsError.ResetFailed _ -> true
+    | SageFsError.HardResetFailed _ -> true
+    | SageFsError.ScriptLoadFailed _ -> true
+    | SageFsError.CheckFailed _ -> true
+    | SageFsError.CompletionFailed _ -> true
+    | SageFsError.CancelFailed _ -> true
+    | SageFsError.WarmupOpenFailed _ -> true
+    | SageFsError.WarmupContextFailed _ -> true
+    | SageFsError.HotReloadFailed _ -> true
+    | SageFsError.HotReloadStateError _ -> true
+    | SageFsError.DaemonStartFailed _ -> true
+    | SageFsError.Unexpected _ -> true
+    | SageFsError.ToolNotAvailable _
+    | SageFsError.SessionNotFound _
+    | SageFsError.NoActiveSessions
+    | SageFsError.AmbiguousSessions _
+    | SageFsError.JsonParseError _
+    | SageFsError.DaemonNotRunning
+    | SageFsError.WorkerCommunicationFailed _
+    | SageFsError.WorkerSpawnFailed _
+    | SageFsError.WorkerTimeout _
+    | SageFsError.WorkerHttpError _
+    | SageFsError.PipeClosed
+    | SageFsError.SseConnectionError _
+    | SageFsError.RestartLimitExceeded _
+    | SageFsError.PortInUse _ -> false
+
+  /// Gateway errors: 502/504 — the worker (upstream) is unreachable or timed out.
+  let isGatewayError = function
+    | SageFsError.WorkerCommunicationFailed _ -> true
+    | SageFsError.WorkerSpawnFailed _ -> true
+    | SageFsError.WorkerTimeout _ -> true
+    | SageFsError.WorkerHttpError _ -> true
+    | SageFsError.PipeClosed -> true
+    | SageFsError.SseConnectionError _ -> true
+    | SageFsError.ToolNotAvailable _
+    | SageFsError.SessionNotFound _
+    | SageFsError.NoActiveSessions
+    | SageFsError.AmbiguousSessions _
+    | SageFsError.JsonParseError _
+    | SageFsError.DaemonNotRunning
+    | SageFsError.SessionCreationFailed _
+    | SageFsError.SessionStopFailed _
+    | SageFsError.SessionSwitchFailed _
+    | SageFsError.EvalFailed _
+    | SageFsError.ResetFailed _
+    | SageFsError.HardResetFailed _
+    | SageFsError.ScriptLoadFailed _
+    | SageFsError.CheckFailed _
+    | SageFsError.CompletionFailed _
+    | SageFsError.CancelFailed _
+    | SageFsError.WarmupOpenFailed _
+    | SageFsError.WarmupContextFailed _
+    | SageFsError.HotReloadFailed _
+    | SageFsError.HotReloadStateError _
+    | SageFsError.RestartLimitExceeded _
+    | SageFsError.DaemonStartFailed _
+    | SageFsError.PortInUse _
+    | SageFsError.Unexpected _ -> false
+
+  /// Infrastructure errors: 409 — system-level conflicts (port in use, restart limit).
+  let isInfraError = function
+    | SageFsError.PortInUse _ -> true
+    | SageFsError.RestartLimitExceeded _ -> true
+    | SageFsError.ToolNotAvailable _
+    | SageFsError.SessionNotFound _
+    | SageFsError.NoActiveSessions
+    | SageFsError.AmbiguousSessions _
+    | SageFsError.JsonParseError _
+    | SageFsError.DaemonNotRunning
+    | SageFsError.SessionCreationFailed _
+    | SageFsError.SessionStopFailed _
+    | SageFsError.SessionSwitchFailed _
+    | SageFsError.WorkerCommunicationFailed _
+    | SageFsError.WorkerSpawnFailed _
+    | SageFsError.WorkerTimeout _
+    | SageFsError.WorkerHttpError _
+    | SageFsError.PipeClosed
+    | SageFsError.EvalFailed _
+    | SageFsError.ResetFailed _
+    | SageFsError.HardResetFailed _
+    | SageFsError.ScriptLoadFailed _
+    | SageFsError.CheckFailed _
+    | SageFsError.CompletionFailed _
+    | SageFsError.CancelFailed _
+    | SageFsError.WarmupOpenFailed _
+    | SageFsError.WarmupContextFailed _
+    | SageFsError.HotReloadFailed _
+    | SageFsError.HotReloadStateError _
+    | SageFsError.DaemonStartFailed _
+    | SageFsError.SseConnectionError _
+    | SageFsError.Unexpected _ -> false
