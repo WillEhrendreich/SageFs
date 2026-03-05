@@ -1122,6 +1122,29 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
         Features.LiveTesting.TestSummary.fromStatuses
           state.Activation (entries |> Array.map (fun e -> e.Status))
         |> Some
+    GetSessionCoverageSummary = fun sessionId ->
+      let model = elmRuntime.GetModel()
+      let state = model.LiveTesting.TestState
+      let sessionTestIds =
+        match System.String.IsNullOrEmpty sessionId || Map.isEmpty state.TestSessionMap with
+        | true -> state.TestCoverageBitmaps |> Map.keys |> Set.ofSeq
+        | false ->
+          state.TestSessionMap
+          |> Map.toSeq
+          |> Seq.choose (fun (tid, sid) ->
+            match sid = sessionId with
+            | true -> Some tid
+            | false -> None)
+          |> Set.ofSeq
+      let bitmaps =
+        sessionTestIds
+        |> Seq.choose (fun tid -> Map.tryFind tid state.TestCoverageBitmaps)
+        |> Seq.toArray
+      match bitmaps.Length with
+      | 0 -> None
+      | _ ->
+        Features.LiveTesting.CoverageSummary.fromBitmaps 16 (bitmaps |> Seq.ofArray)
+        |> Some
     GetLiveTestingStatus = fun () ->
       let model = elmRuntime.GetModel()
       let activeId =

@@ -427,6 +427,33 @@ let renderSessions (sessions: ParsedSession list) (creating: bool) =
                       Attr.style (sprintf "color: %s; font-size: 0.7rem;" badgeColor) ]
                     [ Text.raw badge ]
                 | _ -> ()
+                match s.CoverageSummary with
+                | Some cs when cs.TotalProbes > 0 ->
+                  let gradientStops =
+                    cs.DensityStrip
+                    |> Array.mapi (fun i d ->
+                      let color =
+                        match d with
+                        | x when x >= 0.8 -> "var(--fg-green)"
+                        | x when x >= 0.4 -> "var(--fg-yellow)"
+                        | x when x > 0.0 -> "var(--fg-red)"
+                        | _ -> "var(--bg-focus)"
+                      let startPct = float i / float cs.DensityStrip.Length * 100.0
+                      let endPct = float (i + 1) / float cs.DensityStrip.Length * 100.0
+                      sprintf "%s %.0f%%,%s %.0f%%" color startPct color endPct)
+                    |> String.concat ","
+                  let pct = sprintf "%.0f%%" cs.CoveragePercent
+                  let title = sprintf "Coverage: %s (%d/%d probes)" pct cs.CoveredProbes cs.TotalProbes
+                  Elem.span [ Attr.style "display:inline-flex;align-items:center;gap:2px;" ] [
+                    Elem.span
+                      [ Attr.style (sprintf "display:inline-block;width:48px;height:8px;border-radius:2px;background:linear-gradient(to right,%s);" gradientStops)
+                        Attr.title title ]
+                      []
+                    Elem.span
+                      [ Attr.style "font-size:0.6rem;color:var(--fg-dim);" ]
+                      [ Text.raw pct ]
+                  ]
+                | _ -> ()
                 match s.LastActivity.Length > 0 with
                 | true ->
                   Elem.span [ Attr.class' "meta"; Attr.style "margin-left: auto;" ] [

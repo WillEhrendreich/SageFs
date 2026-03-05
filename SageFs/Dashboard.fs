@@ -355,9 +355,11 @@ let createStreamHandler
               |> List.map (fun s ->
                 let info = q.GetSessionStandbyInfo s.Id
                 let testSummary = q.GetSessionTestSummary s.Id
+                let coverageSummary = q.GetSessionCoverageSummary s.Id
                 { s with
                     StandbyLabel = StandbyInfo.label info
-                    TestSummary = testSummary })
+                    TestSummary = testSummary
+                    CoverageSummary = coverageSummary })
             let creating = isCreatingSession r.Content
             let sess = renderSessions visible creating
             let! pick =

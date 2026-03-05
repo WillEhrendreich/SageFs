@@ -221,7 +221,8 @@ module SessionStateOverride =
       WorkingDir = ""
       LastActivity = ""
       StandbyLabel = ""
-      TestSummary = None }
+      TestSummary = None
+      CoverageSummary = None }
 
 [<Tests>]
 let stateOverrideTests =
@@ -492,7 +493,8 @@ let perSessionTestSummaryTests =
           WorkingDir = "/tmp"
           LastActivity = "just now"
           StandbyLabel = ""
-          TestSummary = Some summary }
+          TestSummary = Some summary
+          CoverageSummary = None }
       let html =
         renderSessions [session] false
         |> renderNode
@@ -512,12 +514,62 @@ let perSessionTestSummaryTests =
           WorkingDir = "/tmp"
           LastActivity = "just now"
           StandbyLabel = ""
-          TestSummary = None }
+          TestSummary = None
+          CoverageSummary = None }
       let html =
         renderSessions [session] false
         |> renderNode
       Expect.isFalse (html.Contains("✓")) "no pass badge when no tests"
       Expect.isFalse (html.Contains("✗")) "no fail badge when no tests")
+  ]
+
+[<Tests>]
+let perSessionCoverageTests =
+  testList "Per-session coverage strip" [
+    testCase "coverage strip renders gradient when CoverageSummary present" (fun () ->
+      let summary =
+        { SageFs.Features.LiveTesting.CoverageSummary.empty with
+            TotalProbes = 64; CoveredProbes = 48; CoveragePercent = 75.0
+            DensityStrip = [| 1.0; 0.8; 0.5; 0.0 |] }
+      let session : ParsedSession =
+        { Id = "sess-cov"
+          Status = "running"
+          StatusMessage = None
+          IsActive = true
+          IsSelected = false
+          ProjectsText = "(MyProj)"
+          EvalCount = 5
+          Uptime = "2m"
+          WorkingDir = "/tmp"
+          LastActivity = "just now"
+          StandbyLabel = ""
+          TestSummary = None
+          CoverageSummary = Some summary }
+      let html =
+        renderSessions [session] false
+        |> renderNode
+      Expect.isTrue (html.Contains("linear-gradient")) "should render gradient"
+      Expect.isTrue (html.Contains("75%")) "should show percentage")
+
+    testCase "no coverage strip when CoverageSummary is None" (fun () ->
+      let session : ParsedSession =
+        { Id = "sess-nocov"
+          Status = "running"
+          StatusMessage = None
+          IsActive = true
+          IsSelected = false
+          ProjectsText = "(MyProj)"
+          EvalCount = 5
+          Uptime = "2m"
+          WorkingDir = "/tmp"
+          LastActivity = "just now"
+          StandbyLabel = ""
+          TestSummary = None
+          CoverageSummary = None }
+      let html =
+        renderSessions [session] false
+        |> renderNode
+      Expect.isFalse (html.Contains("linear-gradient")) "no gradient without coverage")
   ]
 
 [<Tests>]

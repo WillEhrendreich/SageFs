@@ -905,3 +905,97 @@ let liveTestingTypesTests = testList "LiveTestingTypes" [
           true |> Expect.isTrue "no exception")
   ]
 ]
+
+[<Tests>]
+let coverageSummaryTests = testList "CoverageSummary" [
+  testList "fromBitmaps" [
+    test "empty sequence returns empty summary" {
+      let result = CoverageSummary.fromBitmaps 16 Seq.empty
+      result.TotalProbes |> Expect.equal "zero probes" 0
+      result.CoveredProbes |> Expect.equal "zero covered" 0
+      result.DensityStrip |> Expect.isEmpty "empty strip"
+    }
+
+    test "single bitmap all covered" {
+      let bm = CoverageBitmap.ofBoolArray (Array.create 64 true)
+      let result = CoverageSummary.fromBitmaps 4 (Seq.singleton bm)
+      result.TotalProbes |> Expect.equal "64 probes" 64
+      result.CoveredProbes |> Expect.equal "all covered" 64
+      (result.CoveragePercent > 99.9)
+      |> Expect.isTrue "100% coverage"
+      result.DensityStrip.Length |> Expect.equal "4 chunks" 4
+      result.DensityStrip |> Array.forall (fun d -> d >= 1.0)
+      |> Expect.isTrue "all chunks fully covered"
+    }
+
+    test "single bitmap none covered" {
+      let bm = CoverageBitmap.ofBoolArray (Array.create 64 false)
+      let result = CoverageSummary.fromBitmaps 4 (Seq.singleton bm)
+      result.TotalProbes |> Expect.equal "64 probes" 64
+      result.CoveredProbes |> Expect.equal "none covered" 0
+      (result.CoveragePercent < 0.1)
+      |> Expect.isTrue "0% coverage"
+      result.DensityStrip |> Array.forall (fun d -> d = 0.0)
+      |> Expect.isTrue "all chunks zero"
+    }
+
+    test "OR merge of two bitmaps" {
+      let half1 = Array.init 64 (fun i -> i < 32)
+      let half2 = Array.init 64 (fun i -> i >= 32)
+      let bm1 = CoverageBitmap.ofBoolArray half1
+      let bm2 = CoverageBitmap.ofBoolArray half2
+      let result = CoverageSummary.fromBitmaps 4 [ bm1; bm2 ]
+      result.CoveredProbes |> Expect.equal "all 64 covered via merge" 64
+    }
+
+    test "incompatible bitmap counts excluded" {
+      let bm64 = CoverageBitmap.ofBoolArray (Array.create 64 true)
+      let bm128 = CoverageBitmap.ofBoolArray (Array.create 128 false)
+      let result = CoverageSummary.fromBitmaps 4 [ bm64; bm128 ]
+      result.TotalProbes |> Expect.equal "uses first bitmap count" 64
+    }
+
+    test "zero-count bitmaps filtered" {
+      let bm0 = CoverageBitmap.empty
+      let bm64 = CoverageBitmap.ofBoolArray (Array.init 64 (fun i -> i < 8))
+      let result = CoverageSummary.fromBitmaps 4 [ bm0; bm64 ]
+      result.TotalProbes |> Expect.equal "only valid bitmap" 64
+    }
+  ]
+
+  testList "toTextStrip" [
+    test "empty summary returns empty string" {
+      CoverageSummary.toTextStrip CoverageSummary.empty
+      |> Expect.equal "empty" ""
+    }
+
+    test "full coverage gives block chars" {
+      let s = { TotalProbes = 4; CoveredProbes = 4; CoveragePercent = 100.0; DensityStrip = [| 1.0; 1.0; 1.0; 1.0 |] }
+      let result = CoverageSummary.toTextStrip s
+      result |> Expect.stringContains "has full blocks" "\u2588"
+      result |> Expect.stringContains "has pct" "100"
+    }
+
+    test "zero coverage gives dots" {
+      let s = { TotalProbes = 4; CoveredProbes = 0; CoveragePercent = 0.0; DensityStrip = [| 0.0; 0.0; 0.0; 0.0 |] }
+      let result = CoverageSummary.toTextStrip s
+      result |> Expect.stringContains "has dot" "\u00B7"
+    }
+
+    test "mixed density uses various block chars" {
+      let s = { TotalProbes = 64; CoveredProbes = 28; CoveragePercent = 43.75
+                DensityStrip = [| 1.0; 0.6; 0.3; 0.0 |] }
+      let result = CoverageSummary.toTextStrip s
+      result |> Expect.stringContains "has full block" "\u2588"
+      result |> Expect.stringContains "has medium block" "\u2593"
+      result |> Expect.stringContains "has light block" "\u2592"
+      result |> Expect.stringContains "has dot" "\u00B7"
+    }
+
+    test "percentage is formatted" {
+      let s = { TotalProbes = 100; CoveredProbes = 44; CoveragePercent = 44.0; DensityStrip = [| 0.44 |] }
+      let result = CoverageSummary.toTextStrip s
+      result |> Expect.stringContains "pct formatted" "44"
+    }
+  ]
+]
