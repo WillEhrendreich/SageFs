@@ -197,7 +197,7 @@ let run (sessionId: string) (port: int) = async {
   // Warm-up evals go through the middleware (which discovers tests and builds a RunTest closure),
   // but the response metadata is consumed internally by the actor — handleMessage never sees it.
   // We discover tests directly from loaded assemblies after actor creation.
-  let testFrameworkMarkers = [| "Expecto"; "xunit.core"; "nunit.framework"; "Microsoft.VisualStudio.TestPlatform.TestFramework"; "TUnit.Core" |]
+  let testFrameworkMarkers = [| "Expecto"; "xunit.core"; "xunit.v3.core"; "nunit.framework"; "Microsoft.VisualStudio.TestPlatform.TestFramework"; "TUnit.Core" |]
   let testAssemblies =
     System.AppDomain.CurrentDomain.GetAssemblies()
     |> Array.filter (fun a ->

@@ -1622,6 +1622,10 @@ module TestProviderDescriptions =
       AssemblyMarker = "xunit.core"
     }
     ProviderDescription.AttributeBased {
+      Name = TestFramework.XUnit; TestAttributes = ["Fact"; "Theory"]
+      AssemblyMarker = "xunit.v3.core"
+    }
+    ProviderDescription.AttributeBased {
       Name = TestFramework.NUnit; TestAttributes = ["Test"; "TestCase"; "TestCaseSource"]
       AssemblyMarker = "nunit.framework"
     }

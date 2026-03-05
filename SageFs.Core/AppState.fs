@@ -439,7 +439,9 @@ let createFsiSession (logger: ILogger) (outStream: TextWriter) (useAsp: bool) (s
              |> Array.exists (fun attr ->
                let cma = attr :?> Microsoft.FSharp.Core.CompilationMappingAttribute
                cma.SourceConstructFlags = Microsoft.FSharp.Core.SourceConstructFlags.Module)) &&
-            not (t.Name.StartsWith("<", System.StringComparison.Ordinal) || t.Name.StartsWith("$", System.StringComparison.Ordinal) || t.Name.Contains("@") || t.Name.Contains("+")))
+            not (t.Name.StartsWith("<", System.StringComparison.Ordinal) || t.Name.StartsWith("$", System.StringComparison.Ordinal) || t.Name.Contains("@") || t.Name.Contains("+")) &&
+            t.IsPublic &&
+            t.GetCustomAttributes(typeof<Microsoft.FSharp.Core.RequireQualifiedAccessAttribute>, false).Length = 0)
           |> Array.map (fun t ->
             match t.Name.EndsWith("Module", System.StringComparison.Ordinal) with
             | true -> t.Name.Substring(0, t.Name.Length - 6)

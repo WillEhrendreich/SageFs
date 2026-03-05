@@ -109,7 +109,7 @@ let isTestProject (proj: ProjectOptions) : bool =
   match proj.AllProperties.TryFind "IsTestProject" with
   | Some vals when vals |> Set.exists (fun v -> String.Equals(v, "true", StringComparison.OrdinalIgnoreCase)) -> true
   | _ ->
-    let testPackages = [ "Expecto"; "xunit"; "NUnit"; "MSTest.TestFramework"; "Microsoft.NET.Test.Sdk" ]
+    let testPackages = [ "Expecto"; "xunit"; "xunit.v3"; "NUnit"; "MSTest.TestFramework"; "Microsoft.NET.Test.Sdk" ]
     proj.PackageReferences
     |> List.exists (fun pr ->
       let name = Path.GetFileNameWithoutExtension(pr.FullPath)
