@@ -36,16 +36,12 @@ type SageFsError =
   // ── Hot reload ──
   | HotReloadFailed of path: string * reason: string
   | HotReloadStateError of sessionId: string * reason: string
-  // ── Event store ──
-  | EventAppendFailed of stream: string * expectedVersion: int * reason: string
-  | EventFetchFailed of stream: string * reason: string
   // ── Restart policy ──
   | RestartLimitExceeded of restartCount: int * windowMinutes: float
   // ── Infrastructure ──
   | DaemonStartFailed of reason: string
   | DaemonNotRunning
   | PortInUse of port: int
-  | ConnectionStringMissing
   | SseConnectionError of reason: string
   | JsonParseError of context: string * reason: string
   | Unexpected of exn
@@ -99,10 +95,6 @@ module SageFsError =
       sprintf "Hot reload failed for '%s': %s. Check the file for syntax errors." path reason
     | SageFsError.HotReloadStateError(id, reason) ->
       sprintf "Hot reload state error in session '%s': %s" id reason
-    | SageFsError.EventAppendFailed(stream, ver, reason) ->
-      sprintf "Failed to append to stream '%s' at version %d: %s" stream ver reason
-    | SageFsError.EventFetchFailed(stream, reason) ->
-      sprintf "Failed to fetch from stream '%s': %s" stream reason
     | SageFsError.RestartLimitExceeded(count, windowMin) ->
       sprintf "Worker restarted %d times within %.0f minutes — giving up. Check the log file for crash details and restart SageFs." count windowMin
     | SageFsError.DaemonStartFailed reason ->
@@ -111,8 +103,6 @@ module SageFsError =
       "SageFs daemon is not running. Start it with 'sagefs' in your project directory."
     | SageFsError.PortInUse port ->
       sprintf "Port %d is already in use. Another SageFs instance may be running — try 'sagefs status' or use --mcp-port to pick a different port." port
-    | SageFsError.ConnectionStringMissing ->
-      "Database connection string not configured"
     | SageFsError.SseConnectionError reason ->
       sprintf "SSE connection failed: %s" reason
     | SageFsError.JsonParseError(context, reason) ->
@@ -124,7 +114,6 @@ module SageFsError =
     // Critical — system-level failures, daemon can't operate
     | SageFsError.DaemonStartFailed _ -> LogLevel.Critical
     | SageFsError.PortInUse _ -> LogLevel.Critical
-    | SageFsError.ConnectionStringMissing -> LogLevel.Critical
     | SageFsError.RestartLimitExceeded _ -> LogLevel.Critical
     // Error — operation failed, user action needed
     | SageFsError.WorkerSpawnFailed _ -> LogLevel.Error
@@ -138,8 +127,6 @@ module SageFsError =
     | SageFsError.HardResetFailed _ -> LogLevel.Error
     | SageFsError.ScriptLoadFailed _ -> LogLevel.Error
     | SageFsError.HotReloadFailed _ -> LogLevel.Error
-    | SageFsError.EventAppendFailed _ -> LogLevel.Error
-    | SageFsError.EventFetchFailed _ -> LogLevel.Error
     | SageFsError.SseConnectionError _ -> LogLevel.Error
     | SageFsError.Unexpected _ -> LogLevel.Error
     // Warning — degraded but recoverable
@@ -171,7 +158,6 @@ module SageFsError =
     // 409 Conflict
     | SageFsError.PortInUse _ -> 409
     | SageFsError.RestartLimitExceeded _ -> 409
-    | SageFsError.ConnectionStringMissing -> 409
     // 504 Gateway Timeout
     | SageFsError.WorkerTimeout _ -> 504
     // 502 Bad Gateway
@@ -195,7 +181,5 @@ module SageFsError =
     | SageFsError.WarmupContextFailed _ -> 500
     | SageFsError.HotReloadFailed _ -> 500
     | SageFsError.HotReloadStateError _ -> 500
-    | SageFsError.EventAppendFailed _ -> 500
-    | SageFsError.EventFetchFailed _ -> 500
     | SageFsError.DaemonStartFailed _ -> 500
     | SageFsError.Unexpected _ -> 500
