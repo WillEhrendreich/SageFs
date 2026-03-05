@@ -171,9 +171,9 @@ let watchConfigTests =
       Flip.Expect.contains "should watch .fsx" ".fsx" config.Extensions
       Flip.Expect.contains "should watch .fsproj" ".fsproj" config.Extensions
 
-    testCase "defaultWatchConfig debounce is 500ms" <| fun () ->
+    testCase "defaultWatchConfig debounce is 200ms" <| fun () ->
       let config = defaultWatchConfig [@"C:\Code\Proj1"]
-      Flip.Expect.equal "debounce should be 500" 500 config.DebounceMs
+      Flip.Expect.equal "debounce should be 200" 200 config.DebounceMs
 
     testCase "watches multiple project directories" <| fun () ->
       let dirs = [@"C:\Code\Server"; @"C:\Code\Types"; @"C:\Code\Tests"]

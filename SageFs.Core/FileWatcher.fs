@@ -47,7 +47,7 @@ let defaultWatchConfig dirs : WatchConfig = {
   Directories = dirs
   Extensions = [".fs"; ".fsx"; ".fsproj"]
   ExcludePatterns = []
-  DebounceMs = 500
+  DebounceMs = 200
 }
 
 /// What action to take when a file changes.
@@ -127,7 +127,12 @@ let start
       match Directory.Exists(dir) with
       | true ->
         let watcher = new FileSystemWatcher(dir)
-        watcher.IncludeSubdirectories <- false
+        // Chesterton's fence: IncludeSubdirectories must be true. Real F# projects
+        // always have subdirectories (Handlers/, Models/, etc.). Without this, files
+        // outside the root dir are listed in the hot-reload UI but silently unwatched.
+        // Duplicate events from nested dirs are already handled by path deduplication
+        // in the debounce logic below.
+        watcher.IncludeSubdirectories <- true
         watcher.NotifyFilter <- NotifyFilters.LastWrite ||| NotifyFilters.FileName
         for ext in config.Extensions do
           watcher.Filters.Add(sprintf "*%s" ext)

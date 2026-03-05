@@ -267,6 +267,8 @@ let middlewareTests = testList "DevReload.Middleware" [
     body |> Expect.stringContains "should have console.debug" "console.debug"
     body |> Expect.stringContains "should have reload guard" "reloadCount"
     body |> Expect.stringContains "should have safeReload" "safeReload"
+    body |> Expect.stringContains "should have elapsed timer" "compilingStart"
+    body |> Expect.stringContains "should have shake animation" "sagefs-shake"
   }
 
   testTask "does NOT inject into JSON responses" {

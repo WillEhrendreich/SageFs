@@ -26,12 +26,18 @@ let reloadScript (workerPort: int) =
   const s = document.querySelector('script[data-sagefs-injected="devreload"]');
   if (s.dataset.sagefsDup) return;
   s.dataset.sagefsDup = '1';
+  const style = document.createElement('style');
+  style.textContent = '@keyframes sagefs-shake{0%%,100%%{transform:translateX(0)}25%%{transform:translateX(-4px)}75%%{transform:translateX(4px)}}';
+  document.head.appendChild(style);
   const d = document.createElement('div');
   d.id = 'sagefs-reload-indicator';
   d.style.cssText = 'position:fixed;top:8px;right:8px;z-index:2147483647;padding:8px 16px;border-radius:8px;font:13px/1.5 system-ui,sans-serif;color:#fff;background:#2563eb;opacity:0;pointer-events:none;transition:opacity .2s;box-shadow:0 2px 12px rgba(0,0,0,.2);max-width:480px;white-space:pre-wrap;word-break:break-word';
   document.body.appendChild(d);
   let reloadCount = 0;
   let reloadTimer = null;
+  let compilingStart = null;
+  let compilingTimer = null;
+  let compilingLabel = '';
   const safeReload = function() {
     reloadCount++;
     if (reloadCount > 3) {
@@ -51,19 +57,31 @@ let reloadScript (workerPort: int) =
       const msg = JSON.parse(e.data);
       console.debug('[SageFs]', msg.type, msg);
       if (msg.type === 'compiling') {
-        const label = msg.file ? '⟳ Recompiling ' + msg.file + '...' : '⟳ Recompiling...';
-        d.textContent = label;
+        compilingLabel = msg.file ? '⟳ Recompiling ' + msg.file + '...' : '⟳ Recompiling...';
+        compilingStart = Date.now();
+        d.textContent = compilingLabel;
         d.style.background = '#2563eb';
         d.style.opacity = '1';
+        d.style.animation = '';
+        clearInterval(compilingTimer);
+        compilingTimer = setInterval(function() {
+          const elapsed = ((Date.now() - compilingStart) / 1000).toFixed(1);
+          d.textContent = compilingLabel + ' (' + elapsed + 's)';
+        }, 200);
       } else if (msg.type === 'reload') {
+        clearInterval(compilingTimer);
         d.textContent = '✓ Updated';
         d.style.background = '#16a34a';
         d.style.opacity = '1';
-        setTimeout(safeReload, 80);
+        d.style.animation = '';
+        safeReload();
       } else if (msg.type === 'failed') {
+        clearInterval(compilingTimer);
         d.textContent = '✗ ' + (msg.error || 'Compilation failed');
         d.style.background = '#dc2626';
         d.style.opacity = '1';
+        d.style.animation = 'sagefs-shake 0.3s';
+        setTimeout(function(){ d.style.animation = ''; }, 300);
         console.error('[SageFs] Compilation failed:', msg.error);
       }
     } catch(ex) {
@@ -72,6 +90,7 @@ let reloadScript (workerPort: int) =
     }
   };
   es.onerror = function() {
+    clearInterval(compilingTimer);
     d.textContent = '⚡ Reconnecting...';
     d.style.background = '#d97706';
     d.style.opacity = '1';

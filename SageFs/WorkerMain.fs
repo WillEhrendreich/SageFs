@@ -310,6 +310,12 @@ let run (sessionId: string) (port: int) = async {
               | false ->
                 Log.info "Hot reloaded %s: %s" fileName (String.Join(", ", reloaded))
               | true ->
+                // Chesterton's fence: broadcastReload even when no methods were detouring.
+                // When a file adds NEW types/functions (not modifying existing ones),
+                // Harmony finds no methods to detour, so triggerReload() in HotReloading.fs
+                // is never called. Without this, the browser stays stuck on "⟳ Recompiling..."
+                // forever — violating the Compiling→(Reload|CompilationFailed) contract.
+                DevReload.broadcastReload ()
                 Log.info "Reloaded %s" fileName
             | Error ex ->
               // Chesterton's fence: broadcastCompilationFailed ensures the browser
@@ -366,6 +372,17 @@ let run (sessionId: string) (port: int) = async {
             let n = f.Replace('\\', '/')
             not (n.Contains("/obj/") || n.Contains("/bin/")))
         | false -> [])
+
+    // Chesterton's fence: watch all project files by default. Without this,
+    // hot-reload is silently OFF until users discover the toggle UI and manually
+    // opt files in — the #1 onboarding friction point. Users who want the old
+    // opt-in behavior can set SAGEFS_HOT_RELOAD=opt-in.
+    match Environment.GetEnvironmentVariable("SAGEFS_HOT_RELOAD") with
+    | "opt-in" -> ()
+    | _ ->
+      result.HotReloadStateRef.Value <-
+        HotReloadState.watchAll (projectFiles |> List.map (fun f -> f)) HotReloadState.empty
+      Log.info "Hot reload: watching %d project files by default" projectFiles.Length
     let! server =
       WorkerHttpTransport.startServer readyHandler result.HotReloadStateRef projectFiles result.GetWarmupContext getRunTest port
       |> Async.AwaitTask
