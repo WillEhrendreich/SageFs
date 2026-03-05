@@ -9,6 +9,19 @@ module WorkerProtocol =
 
   type SessionId = string
 
+  module SessionId =
+    let validPattern = System.Text.RegularExpressions.Regex(@"^[0-9a-f]{8}$", System.Text.RegularExpressions.RegexOptions.Compiled)
+
+    /// Validate a session ID from an untrusted source (HTTP, MCP).
+    /// Session IDs are 8-char lowercase hex strings (truncated GUID).
+    let validate (raw: string) : Result<SessionId, string> =
+      match System.String.IsNullOrEmpty(raw) with
+      | true -> Error "session ID is empty"
+      | false ->
+        match validPattern.IsMatch(raw) with
+        | true -> Ok raw
+        | false -> Error (sprintf "invalid session ID format: '%s'" raw)
+
   /// Lifecycle state of a managed session — no stringly-typed matching.
   [<RequireQualifiedAccess>]
   type SessionStatus =

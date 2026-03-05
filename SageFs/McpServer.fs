@@ -150,6 +150,16 @@ let readJsonProp (ctx: Microsoft.AspNetCore.Http.HttpContext) (prop: string) = t
   with :? System.Text.Json.JsonException -> return body
 }
 
+/// Read and validate a sessionId from JSON body. Returns 400 on invalid format.
+let readValidatedSessionId (ctx: Microsoft.AspNetCore.Http.HttpContext) = task {
+  let! raw = readJsonProp ctx "sessionId"
+  match SageFs.WorkerProtocol.SessionId.validate raw with
+  | Ok sid -> return Some sid
+  | Error msg ->
+    do! jsonResponse ctx 400 {| success = false; error = msg |}
+    return None
+}
+
 /// Wrap an async handler with try/catch and JSON error response.
 let withErrorHandling (ctx: Microsoft.AspNetCore.Http.HttpContext) (handler: unit -> Task) = task {
   try do! handler ()
@@ -1102,24 +1112,27 @@ let mapSessionRoutes (app: WebApplication) (rctx: RouteContext) =
   ) |> ignore
   app.MapPost("/api/sessions/switch", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
     withErrorHandling ctx (fun () -> task {
-      let! sid = readJsonProp ctx "sessionId"
-      let! info = rctx.Config.SessionOps.GetSessionInfo sid
-      match info with
-      | Some _ ->
-        SageFs.McpTools.setActiveSessionId rctx.McpContext "cli-integrated" sid
-        SageFs.McpTools.setActiveSessionId rctx.McpContext "http" sid
-        match rctx.Dispatch with
-        | Some d ->
-          d (SageFs.SageFsMsg.Event (SageFs.SageFsEvent.SessionSwitched (None, sid)))
-          d (SageFs.SageFsMsg.Editor SageFs.EditorAction.ListSessions)
-        | None -> ()
-        let! _ = rctx.McpContext.Persistence.AppendEvents "daemon-sessions" [
-          SageFs.Features.Events.SageFsEvent.DaemonSessionSwitched
-            {| FromId = None; ToId = sid; SwitchedAt = System.DateTimeOffset.UtcNow |}
-        ]
-        do! jsonResponse ctx 200 {| success = true; sessionId = sid |}
-      | None ->
-        do! jsonResponse ctx 404 {| success = false; error = sprintf "Session '%s' not found" sid |}
+      let! sidOpt = readValidatedSessionId ctx
+      match sidOpt with
+      | None -> () // 400 already sent
+      | Some sid ->
+        let! info = rctx.Config.SessionOps.GetSessionInfo sid
+        match info with
+        | Some _ ->
+          SageFs.McpTools.setActiveSessionId rctx.McpContext "cli-integrated" sid
+          SageFs.McpTools.setActiveSessionId rctx.McpContext "http" sid
+          match rctx.Dispatch with
+          | Some d ->
+            d (SageFs.SageFsMsg.Event (SageFs.SageFsEvent.SessionSwitched (None, sid)))
+            d (SageFs.SageFsMsg.Editor SageFs.EditorAction.ListSessions)
+          | None -> ()
+          let! _ = rctx.McpContext.Persistence.AppendEvents "daemon-sessions" [
+            SageFs.Features.Events.SageFsEvent.DaemonSessionSwitched
+              {| FromId = None; ToId = sid; SwitchedAt = System.DateTimeOffset.UtcNow |}
+          ]
+          do! jsonResponse ctx 200 {| success = true; sessionId = sid |}
+        | None ->
+          do! jsonResponse ctx 404 {| success = false; error = sprintf "Session '%s' not found" sid |}
     }) :> Task
   ) |> ignore
   app.MapPost("/api/sessions/create", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
@@ -1163,14 +1176,17 @@ let mapSessionRoutes (app: WebApplication) (rctx: RouteContext) =
   ) |> ignore
   app.MapPost("/api/sessions/stop", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
     withErrorHandling ctx (fun () -> task {
-      let! sid = readJsonProp ctx "sessionId"
-      let! result = rctx.Config.SessionOps.StopSession sid
-      match rctx.Dispatch with
-      | Some d -> d (SageFs.SageFsMsg.Editor SageFs.EditorAction.ListSessions)
-      | None -> ()
-      match result with
-      | Ok msg -> do! jsonResponse ctx 200 {| success = true; message = msg |}
-      | Error err -> do! jsonResponse ctx 400 {| success = false; error = SageFs.SageFsError.describe err |}
+      let! sidOpt = readValidatedSessionId ctx
+      match sidOpt with
+      | None -> () // 400 already sent
+      | Some sid ->
+        let! result = rctx.Config.SessionOps.StopSession sid
+        match rctx.Dispatch with
+        | Some d -> d (SageFs.SageFsMsg.Editor SageFs.EditorAction.ListSessions)
+        | None -> ()
+        match result with
+        | Ok msg -> do! jsonResponse ctx 200 {| success = true; message = msg |}
+        | Error err -> do! jsonResponse ctx 400 {| success = false; error = SageFs.SageFsError.describe err |}
     }) :> Task
   ) |> ignore
 
@@ -1339,17 +1355,21 @@ let mapAnalysisRoutes (app: WebApplication) (rctx: RouteContext) =
   ) |> ignore
   app.MapGet("/api/sessions/{sid}/export-fsx", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
     withErrorHandling ctx (fun () -> task {
-      let sid = ctx.Request.RouteValues.["sid"] |> string
-      let! events = rctx.McpContext.Persistence.FetchStream sid
-      let replayState =
-        events
-        |> SageFs.Features.Replay.SessionReplayState.replayStream
-      match replayState.EvalHistory with
-      | [] ->
-        do! jsonResponse ctx 200 {| content = ""; evalCount = 0 |}
-      | _ ->
-        let fsx = SageFs.Features.Replay.SessionReplayState.exportAsFsx replayState
-        do! jsonResponse ctx 200 {| content = fsx; evalCount = replayState.EvalHistory.Length |}
+      let raw = ctx.Request.RouteValues.["sid"] |> string
+      match SageFs.WorkerProtocol.SessionId.validate raw with
+      | Error msg ->
+        do! jsonResponse ctx 400 {| success = false; error = msg |}
+      | Ok sid ->
+        let! events = rctx.McpContext.Persistence.FetchStream sid
+        let replayState =
+          events
+          |> SageFs.Features.Replay.SessionReplayState.replayStream
+        match replayState.EvalHistory with
+        | [] ->
+          do! jsonResponse ctx 200 {| content = ""; evalCount = 0 |}
+        | _ ->
+          let fsx = SageFs.Features.Replay.SessionReplayState.exportAsFsx replayState
+          do! jsonResponse ctx 200 {| content = fsx; evalCount = replayState.EvalHistory.Length |}
     }) :> Task
   ) |> ignore
 

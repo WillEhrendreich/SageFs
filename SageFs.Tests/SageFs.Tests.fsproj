@@ -116,6 +116,7 @@
         <Compile Include="CompilationContextTests.fs" />
         <Compile Include="SageFsErrorClassificationTests.fs" />
         <Compile Include="ResultCeTests.fs" />
+        <Compile Include="SessionIdTests.fs" />
         <Compile Include="EndpointContractTests.fs" />
         <Compile Include="FsiRegressionTests.fs" />
         <Compile Include="Benchmarks.fs" />
