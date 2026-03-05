@@ -62,29 +62,29 @@ module SageFsError =
     | SageFsError.AmbiguousSessions descriptions ->
       sprintf "Multiple sessions active. Specify sessionId:\n%s" (descriptions |> String.concat "\n")
     | SageFsError.SessionCreationFailed reason ->
-      sprintf "Failed to create session: %s" reason
+      sprintf "Failed to create session: %s. Check the project path exists and contains a valid .fsproj." reason
     | SageFsError.SessionStopFailed(id, reason) ->
       sprintf "Failed to stop session '%s': %s" id reason
     | SageFsError.SessionSwitchFailed(id, reason) ->
-      sprintf "Failed to switch to session '%s': %s" id reason
+      sprintf "Failed to switch to session '%s': %s. Use list_sessions to check available sessions." id reason
     | SageFsError.WorkerCommunicationFailed(id, reason) ->
-      sprintf "Cannot reach session '%s': %s" id reason
+      sprintf "Cannot reach session '%s': %s. The worker may have crashed — try hard_reset_fsi_session." id reason
     | SageFsError.WorkerSpawnFailed reason ->
-      sprintf "Failed to start worker: %s" reason
+      sprintf "Failed to start worker: %s. Ensure the .NET SDK is installed and the project builds with 'dotnet build'." reason
     | SageFsError.WorkerTimeout(id, operation, sec) ->
-      sprintf "Session '%s' timed out during %s after %.1fs" id operation sec
+      sprintf "Session '%s' timed out during %s after %.1fs. Try again or use hard_reset_fsi_session." id operation sec
     | SageFsError.WorkerHttpError(id, endpoint, status) ->
       sprintf "Session '%s' returned HTTP %d for %s" id status endpoint
     | SageFsError.PipeClosed ->
-      "Pipe closed unexpectedly"
+      "Pipe closed unexpectedly. The worker process may have crashed — try hard_reset_fsi_session to recover."
     | SageFsError.EvalFailed reason ->
       sprintf "Evaluation failed: %s" reason
     | SageFsError.ResetFailed reason ->
-      sprintf "Reset failed: %s" reason
+      sprintf "Reset failed: %s. Try hard_reset_fsi_session for a full restart." reason
     | SageFsError.HardResetFailed reason ->
-      sprintf "Hard reset failed: %s" reason
+      sprintf "Hard reset failed: %s. Check that the project builds with 'dotnet build'." reason
     | SageFsError.ScriptLoadFailed reason ->
-      sprintf "Script load failed: %s" reason
+      sprintf "Script load failed: %s. Check that the file exists and has valid F# syntax." reason
     | SageFsError.CheckFailed reason ->
       sprintf "Type check failed: %s" reason
     | SageFsError.CompletionFailed(id, reason) ->
@@ -96,7 +96,7 @@ module SageFsError =
     | SageFsError.WarmupContextFailed(id, reason) ->
       sprintf "Failed to get warmup context for session '%s': %s" id reason
     | SageFsError.HotReloadFailed(path, reason) ->
-      sprintf "Hot reload failed for '%s': %s" path reason
+      sprintf "Hot reload failed for '%s': %s. Check the file for syntax errors." path reason
     | SageFsError.HotReloadStateError(id, reason) ->
       sprintf "Hot reload state error in session '%s': %s" id reason
     | SageFsError.EventAppendFailed(stream, ver, reason) ->
@@ -104,7 +104,7 @@ module SageFsError =
     | SageFsError.EventFetchFailed(stream, reason) ->
       sprintf "Failed to fetch from stream '%s': %s" stream reason
     | SageFsError.RestartLimitExceeded(count, windowMin) ->
-      sprintf "Worker restarted %d times within %.0f minutes. Giving up." count windowMin
+      sprintf "Worker restarted %d times within %.0f minutes — giving up. Check the log file for crash details and restart SageFs." count windowMin
     | SageFsError.DaemonStartFailed reason ->
       sprintf "Failed to start daemon: %s" reason
     | SageFsError.DaemonNotRunning ->
