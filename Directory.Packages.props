@@ -4,6 +4,7 @@
     <CentralPackageTransitivePinningEnabled>false</CentralPackageTransitivePinningEnabled>
   </PropertyGroup>
   <ItemGroup>
+    <PackageVersion Include="BenchmarkDotNet" Version="0.15.8" />
     <PackageVersion Include="Expecto" Version="11.0.0-alpha8" />
     <PackageVersion Include="Expecto.FsCheck" Version="11.0.0-alpha8" />
     <PackageVersion Include="Expecto.Hopac" Version="11.0.0-alpha8" />

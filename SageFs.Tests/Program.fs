@@ -6,6 +6,14 @@ open VerifyTests
 
 [<EntryPoint>]
 let main argv =
+  // Run BenchmarkDotNet if --benchmark flag is passed
+  let isBenchmark = argv |> Array.exists (fun a -> a = "--benchmark")
+  match isBenchmark with
+  | true ->
+    let benchArgv = argv |> Array.filter (fun a -> a <> "--benchmark")
+    SageFs.Tests.Benchmarks.BenchmarkRunner.run benchArgv
+  | false ->
+
   let configureVerify () =
     VerifierSettings.DisableRequireUniquePrefix()
     let isCI =

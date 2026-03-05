@@ -4,6 +4,7 @@
         <OutputType>Exe</OutputType>
         <GenerateProgramFile>false</GenerateProgramFile>
         <LangVersion>preview</LangVersion>
+        <NoWarn>$(NoWarn);FS3511</NoWarn>
     </PropertyGroup>
 
     <ItemGroup>
@@ -113,10 +114,12 @@
         <Compile Include="McpStateHandlerTests.fs" />
         <Compile Include="CompilationContextTests.fs" />
         <Compile Include="SageFsErrorClassificationTests.fs" />
+        <Compile Include="Benchmarks.fs" />
         <Compile Include="Program.fs" />
     </ItemGroup>
 
     <ItemGroup>
+        <PackageReference Include="BenchmarkDotNet" />
         <PackageReference Include="Expecto" />
         <PackageReference Include="Expecto.FsCheck" />
         <PackageReference Include="Expecto.Hopac" />
