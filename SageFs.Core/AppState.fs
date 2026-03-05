@@ -395,7 +395,7 @@ let createFsiSession (logger: ILogger) (outStream: TextWriter) (useAsp: bool) (s
             | false -> ()
         | false -> ()
       with ex ->
-        logger.LogDebug (sprintf "Could not parse opens from %s: %s" fsFile ex.Message)
+        logger.LogWarning (sprintf "Could not parse opens from %s: %s" fsFile ex.Message)
     logger.LogInfo (sprintf "  Scanned %d source files for opens in %dms" fileCount sw.ElapsedMilliseconds)
     let scanPhaseMs = sw.ElapsedMilliseconds
     onProgress(2, 4, sprintf "Scanned %d source files" fileCount)
@@ -467,7 +467,7 @@ let createFsiSession (logger: ILogger) (outStream: TextWriter) (useAsp: bool) (s
           ModuleCount = topLevelModules.Length
         } : LoadedAssembly)
       with ex ->
-        logger.LogDebug (sprintf "Could not analyze %s: %s" project.TargetPath ex.Message)
+        logger.LogWarning (sprintf "Could not analyze %s: %s" project.TargetPath ex.Message)
     reflectionAlc.Unload()
     logger.LogInfo (sprintf "  Assembly scan complete in %dms" sw.ElapsedMilliseconds)
     let assemblyPhaseMs = sw.ElapsedMilliseconds
@@ -1062,11 +1062,20 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
           | None -> ()
 
           let initCts = new CancellationTokenSource(Timeouts.initSessionCancellation)
+          let warmupSw = System.Diagnostics.Stopwatch.StartNew()
           let onProgress (s,t,msg) =
             emit (Events.SageFsEvent.SessionWarmUpProgress {| Step = s; Total = t; Message = msg |})
             publishPhase (Initializing (Some (sprintf "[%d/%d] %s" s t msg))) Affordances.EvalStats.empty
           let! fsiSession, recorder, args, warmupFailures, warmupCtx = createFsiSession logger outStream useAsp sln initCts.Token onProgress
+          warmupSw.Stop()
           initCts.Dispose()
+          
+          let warmupErrors =
+            warmupFailures
+            |> List.map (fun f ->
+              let kind = match f.IsModule with | true -> "module" | false -> "namespace"
+              sprintf "%s (%s): %s" f.Name kind f.ErrorMessage)
+          emit (Events.SessionWarmUpCompleted {| Duration = warmupSw.Elapsed; Errors = warmupErrors |})
           
           // Evaluate startup profile if found
           let startupProfileResult =
