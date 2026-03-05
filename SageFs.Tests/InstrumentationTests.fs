@@ -595,4 +595,9 @@ let instrumentationTests = testSequenced (testList "Instrumentation" [
       && parsed.spanId = spanId
       && parsed.flags = flags
     | Error _ -> false
+
+  test "sseFrameBytes histogram is created" {
+    Instrumentation.sseFrameBytes.Enabled
+    |> Expect.isTrue "sseFrameBytes histogram should be enabled"
+  }
 ])

@@ -175,6 +175,8 @@ module Instrumentation =
     mcpMeter.CreateCounter<int64>("sagefs.sse.write_errors_total", description = "Total SSE write errors")
   let sseConnectionDurationMs =
     mcpMeter.CreateHistogram<float>("sagefs.sse.connection_duration_ms", "ms", "SSE connection lifetime duration")
+  let sseFrameBytes =
+    mcpMeter.CreateHistogram<int64>("sagefs.sse.frame_bytes", "B", "SSE frame size in bytes")
 
   // P2: RED metric gaps — EventStore fetch
   let eventstoreFetchDurationMs =

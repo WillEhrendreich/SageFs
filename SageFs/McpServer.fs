@@ -170,6 +170,7 @@ let readJsonBody (ctx: Microsoft.AspNetCore.Http.HttpContext) = task {
 /// Write an SSE frame to a stream (awaitable — use in task{} CEs).
 let writeSseFrame (body: System.IO.Stream) (frame: string) = task {
   let bytes = System.Text.Encoding.UTF8.GetBytes(frame)
+  SageFs.Instrumentation.sseFrameBytes.Record(int64 bytes.Length)
   do! body.WriteAsync(bytes)
   do! body.FlushAsync()
 }
