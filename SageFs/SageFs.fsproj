@@ -34,7 +34,6 @@
         <Compile Include="DashboardTypes.fs" />
     <Compile Include="DashboardFragments.fs" />
         <Compile Include="Dashboard.fs" />
-        <Compile Include="PostgresInfra.fs" />
         <Compile Include="McpTools.fs" />
         <Compile Include="McpServer.fs" />
         <Compile Include="WorkerHttpTransport.fs" />
@@ -70,7 +69,6 @@
         <PackageReference Include="OpenTelemetry.Instrumentation.Runtime" />
         <PackageReference Include="Serilog.Extensions.Logging.File" />
         <PackageReference Include="Marten" />
-        <PackageReference Include="Testcontainers.PostgreSql" />
         <PackageReference Include="FSharp.SystemTextJson" />
         <PackageReference Include="ModelContextProtocol" />
         <PackageReference Include="ModelContextProtocol.AspNetCore" />

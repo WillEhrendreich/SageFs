@@ -7,12 +7,10 @@
     </PropertyGroup>
 
     <ItemGroup>
-        <Compile Include="EventStoreTests.fs" />
         <Compile Include="TestInfrastructure.fs" />
         <Compile Include="FalcoTests.fs" />
         <Compile Include="PushEventTests.fs" />
         <Compile Include="McpAdapterTests.fs" />
-        <Compile Include="McpCollaborationTests.fs" />
         <Compile Include="McpServerE2ETests.fs" />
         <Compile Include="McpServerIntegrationTests.fs" />
         <Compile Include="McpLlmInteropTests.fs" />
@@ -26,7 +24,6 @@
         <Compile Include="StandbyPoolTests.fs" />
         <Compile Include="DiagnosticsToolTests.fs" />
         <Compile Include="DiagnosticsStoreTests.fs" />
-        <Compile Include="EventStoreModuleTests.fs" />
         <Compile Include="ActorEventEmissionTests.fs" />
         <Compile Include="EvalCancellationTests.fs" />
         <Compile Include="ActorSplitTests.fs" />
@@ -84,8 +81,6 @@
         <Compile Include="LiveTestingElmTests.fs" />
         <Compile Include="LiveTestingGraphTests.fs" />
         <Compile Include="LiveTestingExecutorTests.fs" />
-        <Compile Include="DockerIntegrationTests.fs" />
-
         <Compile Include="ArgsCleanupTests.fs" />
         <Compile Include="SseWriterTests.fs" />
         <Compile Include="SseDedupKeyTests.fs" />
@@ -133,7 +128,6 @@
         <PackageReference Include="FSharp.SystemTextJson" />
         <PackageReference Include="Verify.Expecto" />
         <PackageReference Include="Microsoft.Playwright" />
-        <PackageReference Include="Testcontainers.PostgreSql" />
         <FrameworkReference Include="Microsoft.AspNetCore.App" />
     </ItemGroup>
 

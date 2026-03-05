@@ -336,14 +336,6 @@ SageFs maintains a pool of pre-warmed FSI sessions. Hard resets swap the active 
 
 </details>
 
-<details>
-<summary><strong>📊 Event Sourcing — optional audit trail</strong></summary>
-
-<br />
-
-Session events (evals, resets, diagnostics, errors) can optionally be logged to PostgreSQL via [Marten](https://martendb.io/) as a supplementary audit trail. Requires Docker and the `SAGEFS_CONNECTION_STRING` environment variable. **This is not required** — SageFs runs fully with binary persistence (see below). PostgreSQL events are fire-and-forget and are not the source of truth.
-
-</details>
 
 <details>
 <summary><strong>💾 Binary Session Persistence — instant resume</strong></summary>
@@ -509,7 +501,7 @@ SageFs is **daemon-first** — one server, many clients. The daemon starts bare 
      └──────┘  └───────┘
 ```
 
-3300+ tests: Expecto unit tests, FsCheck property-based state machine tests, Verify snapshots, Testcontainers integration tests, binary persistence property tests.
+3100+ tests: Expecto unit tests, FsCheck property-based state machine tests, Verify snapshots, binary persistence property tests.
 
 </details>
 
@@ -531,4 +523,4 @@ New to the codebase? Check the **Good First Contributions** section in the contr
 
 SageFs exists because of Jo Van Eyck's [fsi-mcp-server](https://github.com/jovaneyck/fsi-mcp-server) — an elegant, minimal F# Interactive MCP server that proved the concept of connecting FSI to editors via MCP. That project was the catalyst that made everything here possible.
 
-[FsiX](https://github.com/soweli-p/FsiX) · [sagefs.nvim](https://github.com/WillEhrendreich/sagefs.nvim) · [Falco](https://github.com/pimbrouwers/Falco) & [Falco.Datastar](https://github.com/spiraloss/Falco.Datastar) · [Harmony](https://github.com/pardeike/Harmony) · [Ionide.ProjInfo](https://github.com/ionide/proj-info/) · [Marten](https://martendb.io/) · [Raylib-cs](https://github.com/ChrisDill/Raylib-cs) · [Fable](https://fable.io/) · [ModelContextProtocol](https://modelcontextprotocol.io/)
+[FsiX](https://github.com/soweli-p/FsiX) · [sagefs.nvim](https://github.com/WillEhrendreich/sagefs.nvim) · [Falco](https://github.com/pimbrouwers/Falco) & [Falco.Datastar](https://github.com/spiraloss/Falco.Datastar) · [Harmony](https://github.com/pardeike/Harmony) · [Ionide.ProjInfo](https://github.com/ionide/proj-info/) · [Raylib-cs](https://github.com/ChrisDill/Raylib-cs) · [Fable](https://fable.io/) · [ModelContextProtocol](https://modelcontextprotocol.io/)

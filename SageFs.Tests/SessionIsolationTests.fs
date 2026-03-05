@@ -18,7 +18,7 @@ module McpSessionIsolation =
     let sessionMap = ConcurrentDictionary<string, string>()
     sessionMap.["test"] <- sessionId
     let ctx =
-      { Persistence = SageFs.EventStore.EventPersistence.postgres testStore.Value
+      { Persistence = SageFs.EventStore.EventPersistence.noop
         DiagnosticsChanged = result.DiagnosticsChanged
         StateChanged = None
         SessionOps = {
@@ -124,7 +124,7 @@ module McpSessionIsolation =
       let sessionMap = ConcurrentDictionary<string, string>()
       sessionMap.["test"] <- "session-A"
       let ctx =
-        { Persistence = SageFs.EventStore.EventPersistence.postgres testStore.Value
+        { Persistence = SageFs.EventStore.EventPersistence.noop
           DiagnosticsChanged = result.DiagnosticsChanged
           StateChanged = None
           SessionOps = {
@@ -350,7 +350,7 @@ module ResetIsolation =
       GetStandbyInfo = fun () -> System.Threading.Tasks.Task.FromResult(SageFs.StandbyInfo.NoPool)
     }
     let ctx =
-      { Persistence = SageFs.EventStore.EventPersistence.postgres testStore.Value
+      { Persistence = SageFs.EventStore.EventPersistence.noop
         DiagnosticsChanged = result.DiagnosticsChanged
         StateChanged = None
         SessionOps = ops

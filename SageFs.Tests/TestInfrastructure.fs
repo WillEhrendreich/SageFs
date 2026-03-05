@@ -35,12 +35,6 @@ let waitForAsync (timeoutMs: int) (condition: unit -> System.Threading.Tasks.Tas
     return result
   }
 
-/// Shared Marten store for tests — uses the same Testcontainer as EventStoreTests
-let testStore = lazy(
-  let container = EventStoreTests.sharedContainer.Value
-  SageFs.EventStore.configureStore (container.GetConnectionString())
-)
-
 /// Single shared actor result for all read-only tests across the entire test suite.
 /// Created once on first access, reused everywhere.
 let globalActorResult = lazy(
@@ -71,13 +65,13 @@ let mkTestSessionOps (result: ActorResult) (sessionId: string) : SageFs.SessionM
     GetAllSessions = fun () -> System.Threading.Tasks.Task.FromResult([])
     GetStandbyInfo = fun () -> System.Threading.Tasks.Task.FromResult(SageFs.StandbyInfo.NoPool) }
 
-/// Create a McpContext backed by the global shared actor and Marten store
+/// Create a McpContext backed by the global shared actor
 let sharedCtx () =
   let result = globalActorResult.Value
   let sessionId = SageFs.EventStore.createSessionId ()
   let sessionMap = ConcurrentDictionary<string, string>()
   sessionMap.["test"] <- sessionId
-  { Persistence = SageFs.EventStore.EventPersistence.postgres testStore.Value
+  { Persistence = SageFs.EventStore.EventPersistence.noop
     DiagnosticsChanged = result.DiagnosticsChanged
     StateChanged = None
     SessionOps = mkTestSessionOps result sessionId
@@ -93,7 +87,7 @@ let sharedCtxWith sessionId =
   let result = globalActorResult.Value
   let sessionMap = ConcurrentDictionary<string, string>()
   sessionMap.["test"] <- sessionId
-  { Persistence = SageFs.EventStore.EventPersistence.postgres testStore.Value
+  { Persistence = SageFs.EventStore.EventPersistence.noop
     DiagnosticsChanged = result.DiagnosticsChanged
     StateChanged = None
     SessionOps = mkTestSessionOps result sessionId

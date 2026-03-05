@@ -137,15 +137,7 @@ let createDaemonInfrastructure () : DaemonInfra =
     log.LogInformation("ThreadPool min threads: {Old} → {New}", minWorker, desiredMin)
   | false -> ()
 
-  let persistence =
-    match PostgresInfra.getOrStartPostgres () with
-    | Ok connStr ->
-      let store = SageFs.EventStore.configureStore connStr
-      log.LogInformation("Event persistence: PostgreSQL")
-      SageFs.EventStore.EventPersistence.postgres store
-    | Error msg ->
-      log.LogWarning("PostgreSQL unavailable ({Error}), running in binary-only mode", msg)
-      SageFs.EventStore.EventPersistence.noop
+  let persistence = SageFs.EventStore.EventPersistence.noop
 
   {
     Log = log
