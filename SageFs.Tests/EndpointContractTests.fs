@@ -1,0 +1,134 @@
+module SageFs.Tests.EndpointContractTests
+
+open Expecto
+open Expecto.Flip
+open SageFs.EndpointContracts
+
+[<Tests>]
+let endpointContractTests = testList "EndpointContracts" [
+
+  testList "Neovim contract" [
+    test "all Neovim contract endpoints exist in daemon" {
+      let missing = missingEndpoints neovimContract
+      missing
+      |> Expect.isEmpty
+        (sprintf "Neovim contract has endpoints missing from daemon: %A" missing)
+    }
+
+    test "Neovim contract has expected count" {
+      neovimContract
+      |> List.length
+      |> Expect.equal "should have 19 endpoints" 19
+    }
+
+    test "Neovim contract includes SSE events endpoint" {
+      neovimContract
+      |> List.exists (fun (m, p) -> m = GET && p = "/events")
+      |> Expect.isTrue "SSE /events must be in Neovim contract"
+    }
+
+    test "Neovim contract includes /exec" {
+      neovimContract
+      |> List.exists (fun (m, p) -> m = POST && p = "/exec")
+      |> Expect.isTrue "/exec must be in Neovim contract"
+    }
+
+    test "Neovim contract includes session management" {
+      let sessionPaths =
+        neovimContract
+        |> List.filter (fun (_, p) -> p.Contains("/api/sessions"))
+        |> List.length
+      (sessionPaths, 4)
+      |> Expect.isGreaterThanOrEqual "at least 4 session endpoints"
+    }
+
+    test "Neovim contract includes live testing" {
+      let testPaths =
+        neovimContract
+        |> List.filter (fun (_, p) -> p.Contains("/api/live-testing"))
+        |> List.length
+      (testPaths, 3)
+      |> Expect.isGreaterThanOrEqual "at least 3 testing endpoints"
+    }
+  ]
+
+  testList "VS Code contract" [
+    test "all VS Code contract endpoints exist in daemon" {
+      let missing = missingEndpoints vscodeContract
+      missing
+      |> Expect.isEmpty
+        (sprintf "VS Code contract has endpoints missing from daemon: %A" missing)
+    }
+
+    test "VS Code contract has expected count" {
+      vscodeContract
+      |> List.length
+      |> Expect.equal "should have 13 endpoints" 13
+    }
+  ]
+
+  testList "Endpoint registry" [
+    test "all endpoints have non-empty path" {
+      all
+      |> List.filter (fun ep -> System.String.IsNullOrEmpty(ep.path))
+      |> Expect.isEmpty "no endpoint should have empty path"
+    }
+
+    test "all endpoints have non-empty description" {
+      all
+      |> List.filter (fun ep -> System.String.IsNullOrEmpty(ep.description))
+      |> Expect.isEmpty "no endpoint should have empty description"
+    }
+
+    test "all endpoint paths start with /" {
+      all
+      |> List.filter (fun ep -> not (ep.path.StartsWith("/")))
+      |> Expect.isEmpty "all paths must start with /"
+    }
+
+    test "no duplicate endpoint definitions" {
+      let dupes =
+        all
+        |> List.groupBy (fun ep -> (ep.method, normalizePath ep.path))
+        |> List.filter (fun (_, group) -> group.Length > 1)
+        |> List.map fst
+      dupes
+      |> Expect.isEmpty (sprintf "duplicate endpoints: %A" dupes)
+    }
+
+    test "endpoint count is at least 25" {
+      (all |> List.length, 25)
+      |> Expect.isGreaterThanOrEqual "at least 25 endpoints"
+    }
+  ]
+
+  testList "Contract validation" [
+    test "normalizePath replaces all placeholders" {
+      normalizePath "/api/sessions/{sid}/hotreload"
+      |> Expect.equal "should normalize" "/api/sessions/{id}/hotreload"
+    }
+
+    test "normalizePath handles multiple placeholders" {
+      normalizePath "/api/{a}/foo/{b}/bar"
+      |> Expect.equal "should normalize both" "/api/{id}/foo/{id}/bar"
+    }
+
+    test "normalizePath leaves paths without placeholders unchanged" {
+      normalizePath "/api/sessions"
+      |> Expect.equal "should be unchanged" "/api/sessions"
+    }
+
+    test "uncovered endpoints returns daemon endpoints not in any contract" {
+      let uncovered = uncoveredEndpoints [neovimContract; vscodeContract]
+      // There should be some uncovered endpoints (dashboard, diagnostics, etc.)
+      (uncovered |> List.length, 0)
+      |> Expect.isGreaterThan "some endpoints are uncovered"
+    }
+
+    testProperty "missingEndpoints returns empty for subset of all" <| fun (idx: int) ->
+      let safeIdx = abs idx % (max 1 (all.Length))
+      let ep = all.[safeIdx]
+      let contract = [(ep.method, ep.path)]
+      missingEndpoints contract |> List.isEmpty
+  ]
+]

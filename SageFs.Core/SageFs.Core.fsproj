@@ -12,6 +12,7 @@
         <Compile Include="BinaryFormat.fs" />
         <Compile Include="Instrumentation.fs" />
         <Compile Include="FeatureParity.fs" />
+        <Compile Include="EndpointContracts.fs" />
         <Compile Include="ResilientActor.fs" />
         <Compile Include="ProjectLoading.fs" />
         <Compile Include="ShadowCopy.fs" />

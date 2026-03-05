@@ -116,6 +116,7 @@
         <Compile Include="CompilationContextTests.fs" />
         <Compile Include="SageFsErrorClassificationTests.fs" />
         <Compile Include="ResultCeTests.fs" />
+        <Compile Include="EndpointContractTests.fs" />
         <Compile Include="Benchmarks.fs" />
         <Compile Include="Program.fs" />
     </ItemGroup>
