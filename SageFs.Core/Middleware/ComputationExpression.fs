@@ -12,11 +12,14 @@ let parse code =
     try
       let! res = CodeFormatter.ParseOakAsync(false, code)
 
-      return
-        Some {|
-          tree = res |> Array.head |> fst
-          hasTupleHack = false
-        |}
+      match res |> Array.tryHead with
+      | Some(tree, _) ->
+        return
+          Some {|
+            tree = tree
+            hasTupleHack = false
+          |}
+      | None -> return None
     with _ ->
       try
         let! res =
@@ -24,35 +27,41 @@ let parse code =
           |> fun code -> code + Environment.NewLine + "()"
           |> fun code -> CodeFormatter.ParseOakAsync(false, code)
 
-        return
-          Some {|
-            tree = res |> Array.head |> fst
-            hasTupleHack = true
-          |}
+        match res |> Array.tryHead with
+        | Some(tree, _) ->
+          return
+            Some {|
+              tree = tree
+              hasTupleHack = true
+            |}
+        | None -> return None
       with _ ->
         return None
   }
 
 let isCompExpr (parsed: Oak) =
-  let parsed = parsed.ModulesOrNamespaces.Head |> _.Declarations
+  match parsed.ModulesOrNamespaces |> List.tryHead with
+  | None -> false
+  | Some head ->
+    let parsed = head |> _.Declarations
 
-  let rec isExprComp =
-    function
-    | Expr.CompExprBody _ -> true
-    | Expr.IfThenElse e -> isExprComp e.ElseExpr || isExprComp e.ThenExpr
-    | Expr.IfThen e -> isExprComp e.ThenExpr
-    | Expr.IfThenElif e -> e.Branches |> List.exists (fun e -> isExprComp e.ThenExpr)
-    | Expr.For e -> isExprComp e.DoBody
-    | Expr.ForEach e -> isExprComp e.BodyExpr
-    | Expr.While e -> isExprComp e.DoExpr
-    | Expr.Match e -> e.Clauses |> List.exists (fun e -> isExprComp e.BodyExpr)
-    | Expr.MatchLambda e -> e.Clauses |> List.exists (fun e -> isExprComp e.BodyExpr)
-    | _ -> false
+    let rec isExprComp =
+      function
+      | Expr.CompExprBody _ -> true
+      | Expr.IfThenElse e -> isExprComp e.ElseExpr || isExprComp e.ThenExpr
+      | Expr.IfThen e -> isExprComp e.ThenExpr
+      | Expr.IfThenElif e -> e.Branches |> List.exists (fun e -> isExprComp e.ThenExpr)
+      | Expr.For e -> isExprComp e.DoBody
+      | Expr.ForEach e -> isExprComp e.BodyExpr
+      | Expr.While e -> isExprComp e.DoExpr
+      | Expr.Match e -> e.Clauses |> List.exists (fun e -> isExprComp e.BodyExpr)
+      | Expr.MatchLambda e -> e.Clauses |> List.exists (fun e -> isExprComp e.BodyExpr)
+      | _ -> false
 
-  parsed
-  |> List.exists (function
-    | ModuleDecl.DeclExpr expr -> isExprComp expr
-    | _ -> false)
+    parsed
+    |> List.exists (function
+      | ModuleDecl.DeclExpr expr -> isExprComp expr
+      | _ -> false)
 
 let rewriteParsedExpr (parsed: Oak) =
   let wrapInCompExpr range (expr: Expr) =

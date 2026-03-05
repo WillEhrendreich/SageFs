@@ -437,8 +437,9 @@ module WorkerHttpTransport =
 
       let server = app.Services.GetRequiredService<IServer>()
       let addresses = server.Features.Get<IServerAddressesFeature>().Addresses
-      let actualUrl = addresses |> Seq.head
-      return new HttpWorkerServer(actualUrl, app)
+      match addresses |> Seq.tryHead with
+      | Some actualUrl -> return new HttpWorkerServer(actualUrl, app)
+      | None -> return failwith "Worker server started but reported no addresses"
     }
 
   /// Create a SessionProxy backed by HTTP to the given base URL.
