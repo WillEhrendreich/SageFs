@@ -111,7 +111,7 @@ let processBindingsChangeTests = testList "processBindingsChange" [
 
   test "resets bindings when output count decreases (session reset)" {
     let oldBindings =
-      Map.ofList [ "x", { Name = "x"; TypeSig = "int"; ShadowCount = 0 } ]
+      Map.ofList [ "x", { Name = "x"; TypeSig = "int"; ShadowCount = 0; Value = None } ]
     let count, _, effects = processBindingsChange 1 Map.empty 5 oldBindings
     count |> Expect.equal "count updated" 1
     effects |> Expect.isEmpty "no broadcast for empty->empty"
@@ -119,7 +119,7 @@ let processBindingsChangeTests = testList "processBindingsChange" [
 
   test "broadcasts when bindings change" {
     let newB =
-      Map.ofList [ "y", { Name = "y"; TypeSig = "string"; ShadowCount = 0 } ]
+      Map.ofList [ "y", { Name = "y"; TypeSig = "string"; ShadowCount = 0; Value = None } ]
     let _, _, effects = processBindingsChange 2 newB 1 Map.empty
     effects |> Expect.hasLength "one effect" 1
     match effects.[0] with

@@ -10,7 +10,7 @@ let bindingExplorerTests = testList "BindingExplorer" [
   testList "parseBinding" [
     testCase "extracts name and type from val line" <| fun () ->
       parseBinding "val x : int = 1"
-      |> Expect.equal "should parse x:int" (Some ("x", "int = 1"))
+      |> Expect.equal "should parse x:int" (Some ("x", "int", Some "1"))
 
     testCase "rejects non-val lines" <| fun () ->
       parseBinding "let x = 1"
@@ -18,7 +18,7 @@ let bindingExplorerTests = testList "BindingExplorer" [
 
     testCase "handles val with no colon" <| fun () ->
       parseBinding "val mutable x"
-      |> Expect.equal "should parse with empty typesig" (Some ("mutable x", ""))
+      |> Expect.equal "should parse with empty typesig" (Some ("mutable x", "", None))
   ]
 
   testList "buildScopeSnapshot" [

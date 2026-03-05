@@ -12,27 +12,27 @@ let fsiRegressionTests = testList "FSI regression" [
   testList "val binding format" [
     test "parses simple val binding" {
       SseWriter.parseBindingsFromOutput "val x : int = 42"
-      |> Expect.equal "should parse x:int" [| ("x", "int") |]
+      |> Expect.equal "should parse x:int" [| ("x", "int", Some "42") |]
     }
 
     test "parses string val binding" {
       SseWriter.parseBindingsFromOutput "val greeting : string = \"hello\""
-      |> Expect.equal "should parse greeting:string" [| ("greeting", "string") |]
+      |> Expect.equal "should parse greeting:string" [| ("greeting", "string", Some "\"hello\"") |]
     }
 
     test "parses list val binding" {
       SseWriter.parseBindingsFromOutput "val xs : int list = [1; 2; 3]"
-      |> Expect.equal "should parse xs:int list" [| ("xs", "int list") |]
+      |> Expect.equal "should parse xs:int list" [| ("xs", "int list", Some "[1; 2; 3]") |]
     }
 
     test "parses function val binding" {
       SseWriter.parseBindingsFromOutput "val f : int -> string"
-      |> Expect.equal "should parse f:int -> string" [| ("f", "int -> string") |]
+      |> Expect.equal "should parse f:int -> string" [| ("f", "int -> string", None) |]
     }
 
     test "parses mutable val binding" {
       SseWriter.parseBindingsFromOutput "val mutable counter : int = 0"
-      |> Expect.equal "should parse mutable" [| ("counter", "int") |]
+      |> Expect.equal "should parse mutable" [| ("counter", "int", Some "0") |]
     }
 
     test "skips val it (expression result)" {
@@ -49,12 +49,12 @@ let fsiRegressionTests = testList "FSI regression" [
       let output = "val x : int = 1\nval y : string = \"hi\"\nval it : bool = true"
       SseWriter.parseBindingsFromOutput output
       |> Expect.equal "should parse x and y, skip it"
-        [| ("x", "int"); ("y", "string") |]
+        [| ("x", "int", Some "1"); ("y", "string", Some "\"hi\"") |]
     }
 
     test "handles generic type val binding" {
       SseWriter.parseBindingsFromOutput "val m : Map<string, int>"
-      |> Expect.equal "should parse generic" [| ("m", "Map<string, int>") |]
+      |> Expect.equal "should parse generic" [| ("m", "Map<string, int>", None) |]
     }
 
     testProperty "non-val lines produce no bindings" <| fun (line: string) ->

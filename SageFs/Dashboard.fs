@@ -354,11 +354,13 @@ let createStreamHandler
                 let testSummary = q.GetSessionTestSummary s.Id
                 let coverageSummary = q.GetSessionCoverageSummary s.Id
                 let treemapEntries = q.GetSessionTestTreemap s.Id
+                let bindingEntries = q.GetSessionBindings s.Id
                 { s with
                     StandbyLabel = StandbyInfo.label info
                     TestSummary = testSummary
                     CoverageSummary = coverageSummary
-                    TestTreemapEntries = treemapEntries })
+                    TestTreemapEntries = treemapEntries
+                    BindingEntries = bindingEntries })
             let creating = isCreatingSession r.Content
             let sess = renderSessions visible creating
             let! pick =
@@ -789,6 +791,7 @@ let createApiStateHandler
       | Some evt ->
         let tcs = Threading.Tasks.TaskCompletionSource()
         use _ct = ctx.RequestAborted.Register(fun () -> tcs.TrySetResult() |> ignore)
+        let pushLock = new Threading.SemaphoreSlim(1, 1)
         // Heartbeat keeps connection alive through proxies
         let heartbeat = new Threading.Timer((fun _ ->
             try
@@ -797,15 +800,22 @@ let createApiStateHandler
                 |> fun t -> t.ContinueWith(fun (_: Threading.Tasks.Task) -> ctx.Response.Body.FlushAsync()) |> ignore
             with
             | :? System.IO.IOException | :? ObjectDisposedException -> ()
+            | :? System.ArgumentOutOfRangeException | :? System.InvalidOperationException -> ()
             | ex -> Log.error "[dashboard] Heartbeat error: %s" ex.Message), null, 15000, 15000)
         use _heartbeat = heartbeat
         use _sub = evt.Subscribe(fun _ ->
           Threading.Tasks.Task.Run(fun () ->
             task {
-              try do! pushJson ()
-              with
-              | :? System.IO.IOException | :? ObjectDisposedException -> ()
-              | ex -> Log.error "[dashboard] Push error: %s" ex.Message
+              // Skip if another push is in flight (coalesce rapid updates)
+              match pushLock.Wait(0) with
+              | false -> ()
+              | true ->
+                try do! pushJson ()
+                with
+                | :? System.IO.IOException | :? ObjectDisposedException -> ()
+                | :? System.ArgumentOutOfRangeException | :? System.InvalidOperationException -> ()
+                | ex -> Log.error "[dashboard] Push error: %s" ex.Message
+                pushLock.Release() |> ignore
             } :> Threading.Tasks.Task)
           |> ignore)
         do! tcs.Task

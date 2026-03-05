@@ -178,6 +178,7 @@ type ParsedSession = {
   TestSummary: Features.LiveTesting.TestSummary option
   CoverageSummary: Features.LiveTesting.CoverageSummary option
   TestTreemapEntries: Features.LiveTesting.TestTreemapEntry array
+  BindingEntries: Features.BindingExplorer.BindingInfo array
 }
 
 let parseSessionLines (content: string) =
@@ -213,7 +214,8 @@ let parseSessionLines (content: string) =
         StandbyLabel = ""
         TestSummary = None
         CoverageSummary = None
-        TestTreemapEntries = [||] }
+        TestTreemapEntries = [||]
+        BindingEntries = [||] }
     | false ->
       { Id = l.Trim()
         Status = "unknown"
@@ -228,7 +230,8 @@ let parseSessionLines (content: string) =
         StandbyLabel = ""
         TestSummary = None
         CoverageSummary = None
-        TestTreemapEntries = [||] })
+        TestTreemapEntries = [||]
+        BindingEntries = [||] })
   |> Array.toList
 
 let isCreatingSession (content: string) =
@@ -319,6 +322,7 @@ type DashboardQueries = {
   GetSessionTestSummary: string -> Features.LiveTesting.TestSummary option
   GetSessionCoverageSummary: string -> Features.LiveTesting.CoverageSummary option
   GetSessionTestTreemap: string -> Features.LiveTesting.TestTreemapEntry array
+  GetSessionBindings: string -> Features.BindingExplorer.BindingInfo array
   GetBindingScopeSnapshot: unit -> Features.BindingExplorer.BindingScopeSnapshot option
   GetLiveTestingStatus: unit -> string
 }

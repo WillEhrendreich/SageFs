@@ -224,7 +224,8 @@ module SessionStateOverride =
       StandbyLabel = ""
       TestSummary = None
       CoverageSummary = None
-      TestTreemapEntries = [||] }
+      TestTreemapEntries = [||]
+      BindingEntries = [||] }
 
 [<Tests>]
 let stateOverrideTests =
@@ -497,7 +498,8 @@ let perSessionTestSummaryTests =
           StandbyLabel = ""
           TestSummary = Some summary
           CoverageSummary = None
-          TestTreemapEntries = [||] }
+          TestTreemapEntries = [||]
+          BindingEntries = [||] }
       let html =
         renderSessions [session] false
         |> renderNode
@@ -519,7 +521,8 @@ let perSessionTestSummaryTests =
           StandbyLabel = ""
           TestSummary = None
           CoverageSummary = None
-          TestTreemapEntries = [||] }
+          TestTreemapEntries = [||]
+          BindingEntries = [||] }
       let html =
         renderSessions [session] false
         |> renderNode
@@ -549,7 +552,8 @@ let perSessionCoverageTests =
           StandbyLabel = ""
           TestSummary = None
           CoverageSummary = Some summary
-          TestTreemapEntries = [||] }
+          TestTreemapEntries = [||]
+          BindingEntries = [||] }
       let html =
         renderSessions [session] false
         |> renderNode
@@ -571,7 +575,8 @@ let perSessionCoverageTests =
           StandbyLabel = ""
           TestSummary = None
           CoverageSummary = None
-          TestTreemapEntries = [||] }
+          TestTreemapEntries = [||]
+          BindingEntries = [||] }
       let html =
         renderSessions [session] false
         |> renderNode
@@ -590,12 +595,12 @@ let bindingsPanelTests =
     testCase "active bindings render name and type" (fun () ->
       let scope : SageFs.Features.BindingExplorer.BindingScopeSnapshot = {
         Bindings = [
-          { Name = "x"; TypeSig = "int"; CellIndex = 0; ShadowedBy = []; ReferencedIn = [] }
-          { Name = "greet"; TypeSig = "string -> string"; CellIndex = 1; ShadowedBy = []; ReferencedIn = [] }
+          { Name = "x"; TypeSig = "int"; CellIndex = 0; ShadowedBy = []; ReferencedIn = []; Value = None }
+          { Name = "greet"; TypeSig = "string -> string"; CellIndex = 1; ShadowedBy = []; ReferencedIn = []; Value = None }
         ]
         ActiveBindings =
-          [ ("x", { Name = "x"; TypeSig = "int"; CellIndex = 0; ShadowedBy = []; ReferencedIn = [] })
-            ("greet", { Name = "greet"; TypeSig = "string -> string"; CellIndex = 1; ShadowedBy = []; ReferencedIn = [] }) ]
+          [ ("x", { Name = "x"; TypeSig = "int"; CellIndex = 0; ShadowedBy = []; ReferencedIn = []; Value = None })
+            ("greet", { Name = "greet"; TypeSig = "string -> string"; CellIndex = 1; ShadowedBy = []; ReferencedIn = []; Value = None }) ]
           |> Map.ofList
         ShadowedBindings = []
       }
@@ -609,14 +614,14 @@ let bindingsPanelTests =
     testCase "shadowed bindings render in collapsed section" (fun () ->
       let scope : SageFs.Features.BindingExplorer.BindingScopeSnapshot = {
         Bindings = [
-          { Name = "x"; TypeSig = "int"; CellIndex = 0; ShadowedBy = [2]; ReferencedIn = [] }
-          { Name = "x"; TypeSig = "string"; CellIndex = 2; ShadowedBy = []; ReferencedIn = [] }
+          { Name = "x"; TypeSig = "int"; CellIndex = 0; ShadowedBy = [2]; ReferencedIn = []; Value = None }
+          { Name = "x"; TypeSig = "string"; CellIndex = 2; ShadowedBy = []; ReferencedIn = []; Value = None }
         ]
         ActiveBindings =
-          [ ("x", { Name = "x"; TypeSig = "string"; CellIndex = 2; ShadowedBy = []; ReferencedIn = [] }) ]
+          [ ("x", { Name = "x"; TypeSig = "string"; CellIndex = 2; ShadowedBy = []; ReferencedIn = []; Value = None }) ]
           |> Map.ofList
         ShadowedBindings =
-          [ { Name = "x"; TypeSig = "int"; CellIndex = 0; ShadowedBy = [2]; ReferencedIn = [] } ]
+          [ { Name = "x"; TypeSig = "int"; CellIndex = 0; ShadowedBy = [2]; ReferencedIn = []; Value = None } ]
       }
       let html = renderBindingsPanel (Some scope) |> renderNode
       Expect.isTrue (html.Contains("Bindings (1)")) "shows active count 1"
@@ -625,10 +630,10 @@ let bindingsPanelTests =
     testCase "reference count shown when binding is referenced" (fun () ->
       let scope : SageFs.Features.BindingExplorer.BindingScopeSnapshot = {
         Bindings = [
-          { Name = "helper"; TypeSig = "int -> int"; CellIndex = 0; ShadowedBy = []; ReferencedIn = [1; 2] }
+          { Name = "helper"; TypeSig = "int -> int"; CellIndex = 0; ShadowedBy = []; ReferencedIn = [1; 2]; Value = None }
         ]
         ActiveBindings =
-          [ ("helper", { Name = "helper"; TypeSig = "int -> int"; CellIndex = 0; ShadowedBy = []; ReferencedIn = [1; 2] }) ]
+          [ ("helper", { Name = "helper"; TypeSig = "int -> int"; CellIndex = 0; ShadowedBy = []; ReferencedIn = [1; 2]; Value = None }) ]
           |> Map.ofList
         ShadowedBindings = []
       }

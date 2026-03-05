@@ -84,7 +84,7 @@ let dashboardRenderSnapshotTests = testList "Dashboard render snapshots" [
         StandbyLabel = ""
         TestSummary = None
         CoverageSummary = None
-        TestTreemapEntries = [||] }
+        TestTreemapEntries = [||]; BindingEntries = [||] }
       { Id = "session-def"
         Status = "stopped"
         StatusMessage = None
@@ -98,7 +98,7 @@ let dashboardRenderSnapshotTests = testList "Dashboard render snapshots" [
         StandbyLabel = ""
         TestSummary = None
         CoverageSummary = None
-        TestTreemapEntries = [||] }
+        TestTreemapEntries = [||]; BindingEntries = [||] }
     ]
     let html = renderSessions sessions false |> renderNode
     do! verifyDashboard "dashboard_sessions" html
@@ -153,7 +153,7 @@ let edgeCaseSnapshotTests = testList "edge case snapshots" [
         StandbyLabel = ""
         TestSummary = None
         CoverageSummary = None
-        TestTreemapEntries = [||] }
+        TestTreemapEntries = [||]; BindingEntries = [||] }
     ]
     let html = renderSessions sessions false |> renderNode
     do! verifyDashboard "dashboard_sessions_singleActive" html

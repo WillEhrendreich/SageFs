@@ -362,6 +362,36 @@ let renderTestTreemap (entries: Features.LiveTesting.TestTreemapEntry array) : X
                 ]
               | false -> () ]) ]
 
+/// Render per-session bound values explorer (collapsible, with values)
+let renderBindingExplorer (bindings: Features.BindingExplorer.BindingInfo array) : XmlNode =
+  match bindings.Length with
+  | 0 -> Elem.div [] []
+  | _ ->
+    Elem.div [ Attr.style "font-size: 0.72rem; max-height: 200px; overflow-y: auto;" ] [
+      for b in bindings do
+        Elem.div
+          [ Attr.style "display:flex;align-items:baseline;gap:0.4em;padding:2px 0;border-bottom:1px solid var(--border-normal,#333);" ]
+          [ Elem.code
+              [ Attr.style "color:var(--fg-cyan,#56b6c2);font-weight:bold;white-space:nowrap;font-size:0.7rem;" ]
+              [ Text.raw b.Name ]
+            Elem.span
+              [ Attr.style "color:var(--fg-dim,#666);font-size:0.65rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" ]
+              [ Text.raw (sprintf ": %s" b.TypeSig) ]
+            match b.Value with
+            | Some v ->
+              Elem.span
+                [ Attr.style "color:var(--fg-green,#98c379);font-size:0.65rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:120px;"
+                  Attr.title v ]
+                [ Text.raw (sprintf "= %s" v) ]
+            | None -> ()
+            match b.ReferencedIn.Length with
+            | 0 -> ()
+            | n ->
+              Elem.span
+                [ Attr.style "color:var(--fg-yellow,#e5c07b);font-size:0.6rem;white-space:nowrap;" ]
+                [ Text.raw (sprintf "→%d" n) ] ]
+    ]
+
 /// Render sessions as an HTML fragment with action buttons.
 let renderSessions (sessions: ParsedSession list) (creating: bool) =
   Elem.div [ Attr.id DomIds.SessionsPanel ] [
@@ -534,6 +564,16 @@ let renderSessions (sessions: ParsedSession list) (creating: bool) =
                     [ Attr.style "cursor:pointer;color:var(--fg-dim);user-select:none;" ]
                     [ Text.raw (sprintf "🧪 %d tests · %s" s.TestTreemapEntries.Length durationLabel) ]
                   renderTestTreemap s.TestTreemapEntries ]
+            // Collapsible bound values explorer
+            match s.BindingEntries.Length with
+            | 0 -> ()
+            | _ ->
+              Elem.details
+                [ Attr.style "margin-top: 4px; font-size: 0.75rem;" ]
+                [ Elem.summary
+                    [ Attr.style "cursor:pointer;color:var(--fg-dim);user-select:none;" ]
+                    [ Text.raw (sprintf "📦 %d bindings" s.BindingEntries.Length) ]
+                  renderBindingExplorer s.BindingEntries ]
           ])
     Elem.div
       [ Attr.style "display: flex; justify-content: space-between; align-items: center; font-size: 0.7rem; color: var(--fg-dim); padding: 4px 0; margin-top: 4px;" ]
@@ -573,12 +613,13 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
   Elem.div [ Attr.id DomIds.Main ] [
     // Theme CSS variables — morphed with every push so theme changes propagate
     snap.ThemeVars
-    // App header — version, status, stats, sidebar toggle
+    // App header — version, status, stats, theme, sidebar toggle
     Elem.div [ Attr.class' "app-header" ] [
       Elem.h1 [] [ Text.raw (sprintf "🧙 SageFs v%s" snap.Version) ]
-      Elem.div [ Attr.class' "flex-row"; Attr.style "gap: 0.75rem;" ] [
+      Elem.div [ Attr.class' "flex-row"; Attr.style "gap: 0.75rem; align-items: center;" ] [
         renderSessionStatus snap.SessionState snap.SessionId snap.WorkingDir snap.WarmupProgress
         renderEvalStats snap.EvalStats
+        snap.ThemePicker
         Elem.button
           [ Attr.class' "sidebar-toggle"
             Ds.onEvent ("click", "$sidebarOpen = !$sidebarOpen")
@@ -671,16 +712,20 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
       ]
       // Resize handle between main area and sidebar
       Elem.div [ Attr.class' "resize-handle"; Attr.id DomIds.SidebarResize ] []
-      // Sidebar — sessions, diagnostics, panels
+      // Sidebar — sessions, panels, new session at bottom
       Elem.div [ Attr.id DomIds.Sidebar; Attr.class' "sidebar"; Ds.class' ("collapsed", "!$sidebarOpen") ] [
         Elem.div [ Attr.class' "sidebar-inner" ] [
-          // Sessions panel
+          // Sessions panel (with context + bindings inline per row)
           Elem.div [ Attr.class' "panel" ] [
             Elem.h2 [] [ Text.raw "Sessions" ]
             connectionNode
             snap.SessionsPanel
           ]
-          // Create Session
+          // Dynamic sidebar panels — rendered from current state
+          snap.HotReloadPanel
+          snap.BindingsPanel
+          snap.SessionContextPanel
+          // Create Session — at the bottom
           Elem.div [ Attr.class' "panel" ] [
             Elem.h2 [] [ Text.raw "New Session" ]
             Elem.div [] [
@@ -723,15 +768,6 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
                 Ds.onClick (Ds.post "/dashboard/session/create") ]
               [ Elem.span [ Ds.show "$createLoading" ] [ Text.raw "⏳ Creating... " ]
                 Elem.span [ Ds.show "!$createLoading" ] [ Text.raw "➕ Create" ] ]
-          ]
-          // Dynamic sidebar panels — rendered from current state
-          snap.HotReloadPanel
-          snap.SessionContextPanel
-          snap.BindingsPanel
-          // Theme picker
-          Elem.div [ Attr.class' "panel" ] [
-            Elem.h2 [] [ Text.raw "Theme" ]
-            snap.ThemePicker
           ]
         ]
       ]

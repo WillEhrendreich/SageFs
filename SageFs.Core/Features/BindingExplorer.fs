@@ -3,6 +3,7 @@ module SageFs.Features.BindingExplorer
 type BindingInfo = {
   Name: string
   TypeSig: string
+  Value: string option
   CellIndex: int
   ShadowedBy: int list
   ReferencedIn: int list
@@ -14,18 +15,29 @@ type BindingScopeSnapshot = {
   ShadowedBindings: BindingInfo list
 }
 
-let parseBinding (fsiLine: string) : (string * string) option =
+let parseBinding (fsiLine: string) : (string * string * string option) option =
   let trimmed = fsiLine.Trim()
-  if trimmed.StartsWith("val ") then
+  match trimmed.StartsWith("val ") with
+  | false -> None
+  | true ->
     let rest = trimmed.Substring(4)
     let colonIdx = rest.IndexOf(':')
-    if colonIdx > 0 then
+    match colonIdx > 0 with
+    | false -> Some (rest, "", None)
+    | true ->
       let name = rest.Substring(0, colonIdx).Trim()
-      let typeSig = rest.Substring(colonIdx + 1).Trim()
-      Some (name, typeSig)
-    else
-      Some (rest, "")
-  else None
+      let afterColon = rest.Substring(colonIdx + 1).Trim()
+      let eqIdx = afterColon.LastIndexOf('=')
+      match eqIdx > 0 with
+      | false -> Some (name, afterColon, None)
+      | true ->
+        let typeSig = afterColon.Substring(0, eqIdx).Trim()
+        let value = afterColon.Substring(eqIdx + 1).Trim()
+        let valueOpt =
+          match value with
+          | "" -> None
+          | v -> Some v
+        Some (name, typeSig, valueOpt)
 
 type CellInput = {
   CellIndex: int
@@ -39,9 +51,10 @@ let buildScopeSnapshot (cells: CellInput list) : BindingScopeSnapshot =
     |> List.collect (fun cell ->
       cell.FsiOutput.Split('\n')
       |> Array.choose parseBinding
-      |> Array.map (fun (name, typeSig) ->
+      |> Array.map (fun (name, typeSig, valueOpt) ->
         { Name = name
           TypeSig = typeSig
+          Value = valueOpt
           CellIndex = cell.CellIndex
           ShadowedBy = []
           ReferencedIn = [] })

@@ -76,6 +76,7 @@ let formatFileAnnotationsEvent (opts: JsonSerializerOptions) (sessionId: string 
 type FsiBinding = {
   Name: string
   TypeSig: string
+  Value: string option
   ShadowCount: int
 }
 
@@ -99,45 +100,52 @@ let private splitAtColon (s: string) =
   | i when i > 0 -> Some (s.Substring(0, i).Trim(), s.Substring(i + 1).Trim())
   | _ -> None
 
-/// Strip trailing "= value" from a type signature
-let private cleanTypeSig (typeSig: string) =
+/// Split trailing "= value" from a type signature, returning (typeSig, valueOpt)
+let private splitTypeSigAndValue (typeSig: string) =
   match typeSig.LastIndexOf('=') with
-  | i when i > 0 -> typeSig.Substring(0, i).Trim()
-  | _ -> typeSig
+  | i when i > 0 ->
+    let ts = typeSig.Substring(0, i).Trim()
+    let v = typeSig.Substring(i + 1).Trim()
+    match v with
+    | "" -> (ts, None)
+    | _ -> (ts, Some v)
+  | _ -> (typeSig, None)
 
 /// Validate a binding name: skip "it" (expression results) and tuple patterns
-let private validateBindingName (name: string, typeSig: string) =
+let private validateBindingName (name: string, typeSig: string, value: string option) =
   match name with
   | "it" -> None
   | n when n.Contains("(") -> None
-  | _ -> Some (name, typeSig)
+  | _ -> Some (name, typeSig, value)
 
-/// Parse a single FSI output line into (name, typeSig) via Option.bind pipeline
+/// Parse a single FSI output line into (name, typeSig, value) via Option.bind pipeline
 let private tryParseBinding (line: string) =
   line
   |> tryStripPrefix "val "
   |> Option.map stripMutablePrefix
   |> Option.bind splitAtColon
-  |> Option.map (fun (name, ts) -> name, cleanTypeSig ts)
+  |> Option.map (fun (name, ts) ->
+    let (typeSig, value) = splitTypeSigAndValue ts
+    (name, typeSig, value))
   |> Option.bind validateBindingName
 
 /// Parse `val name : type = value` lines from FSI output.
 /// Skips `val it` (expression results) and tuple patterns.
-let parseBindingsFromOutput (output: string) : (string * string) array =
+let parseBindingsFromOutput (output: string) : (string * string * string option) array =
   output.Split('\n') |> Array.choose tryParseBinding
 
 /// Accumulate parsed bindings into a running map, tracking shadow counts.
 let accumulateBindings
   (existing: Map<string, FsiBinding>)
-  (parsed: (string * string) array)
+  (parsed: (string * string * string option) array)
   : Map<string, FsiBinding> =
   parsed
-  |> Array.fold (fun acc (name, typeSig) ->
+  |> Array.fold (fun acc (name, typeSig, value) ->
     let count =
       match Map.tryFind name acc with
       | Some b -> b.ShadowCount + 1
       | None -> 1
-    Map.add name { Name = name; TypeSig = typeSig; ShadowCount = count } acc
+    Map.add name { Name = name; TypeSig = typeSig; Value = value; ShadowCount = count } acc
   ) existing
 
 /// Format a bindings snapshot as an SSE event string

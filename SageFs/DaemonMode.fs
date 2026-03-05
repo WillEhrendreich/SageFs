@@ -1141,6 +1141,18 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
       let entries =
         Features.LiveTesting.LiveTestState.statusEntriesForSession sessionId state
       Features.LiveTesting.TestTreemap.fromStatusEntries entries
+    GetSessionBindings = fun sessionId ->
+      match sharedBindingScope.Value with
+      | Some scope ->
+        let activeId =
+          SageFs.ActiveSession.sessionId (elmRuntime.GetModel().Sessions.ActiveSessionId)
+          |> Option.defaultValue ""
+        match activeId = sessionId with
+        | true ->
+          scope.ActiveBindings
+          |> Map.values |> Array.ofSeq
+        | false -> [||]
+      | None -> [||]
     GetBindingScopeSnapshot = fun () -> sharedBindingScope.Value
     GetLiveTestingStatus = fun () ->
       let model = elmRuntime.GetModel()
