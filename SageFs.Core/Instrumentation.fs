@@ -239,6 +239,48 @@ module Instrumentation =
   let shouldFilterHttpSpan (path: string) =
     sseFilterPaths |> List.exists (fun p -> path.StartsWith(p)) |> not
 
+  /// W3C TraceContext traceparent header parsed into fields.
+  type TraceparentHeader = {
+    version: byte
+    traceId: string
+    spanId: string
+    flags: byte
+  }
+
+  /// Format a TraceparentHeader as a W3C traceparent string: {version}-{traceId}-{spanId}-{flags}
+  let formatTraceparent (h: TraceparentHeader) =
+    sprintf "%02x-%s-%s-%02x" h.version h.traceId h.spanId h.flags
+
+  /// Parse a W3C traceparent string into a TraceparentHeader.
+  /// Validates: 4 dash-separated segments, traceId=32 hex chars, spanId=16 hex chars, neither all-zero.
+  let parseTraceparent (s: string) : Result<TraceparentHeader, string> =
+    let parts = s.Split('-')
+    match parts.Length >= 4 with
+    | false -> Error "expected at least 4 dash-separated segments"
+    | true ->
+      let ver = parts.[0]
+      let tid = parts.[1]
+      let sid = parts.[2]
+      let fl = parts.[3]
+      match tid.Length = 32 with
+      | false -> Error (sprintf "traceId must be 32 hex chars, got %d" tid.Length)
+      | true ->
+        match sid.Length = 16 with
+        | false -> Error (sprintf "spanId must be 16 hex chars, got %d" sid.Length)
+        | true ->
+          match tid = System.String('0', 32) with
+          | true -> Error "traceId must not be all-zero"
+          | false ->
+            match sid = System.String('0', 16) with
+            | true -> Error "spanId must not be all-zero"
+            | false ->
+              Ok {
+                version = System.Convert.ToByte(ver, 16)
+                traceId = tid
+                spanId = sid
+                flags = System.Convert.ToByte(fl, 16)
+              }
+
   /// Env vars to propagate to worker processes for OTel.
   /// Always includes service name; includes OTLP endpoint/protocol only if configured.
   /// Propagates current W3C TraceContext as TRACEPARENT so worker spans link to daemon traces.
@@ -257,8 +299,13 @@ module Instrumentation =
         match Activity.Current with
         | null -> ()
         | a ->
-          let traceparent = sprintf "00-%s-%s-%02x" (a.TraceId.ToHexString()) (a.SpanId.ToHexString()) (int a.ActivityTraceFlags)
-          "TRACEPARENT", traceparent ]
+          let header = {
+            version = 0uy
+            traceId = a.TraceId.ToHexString()
+            spanId = a.SpanId.ToHexString()
+            flags = byte a.ActivityTraceFlags
+          }
+          "TRACEPARENT", formatTraceparent header ]
     base' @ extras
 
   /// All ActivitySource names for OTel registration in McpServer.

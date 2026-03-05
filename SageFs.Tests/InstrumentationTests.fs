@@ -499,4 +499,100 @@ let instrumentationTests = testSequenced (testList "Instrumentation" [
     capturedTagKeys |> Expect.contains "has event_count" "event_count"
     capturedTagKeys |> Expect.contains "has duration_ms" "duration_ms"
   }
+
+  // === Phase 3.2: W3C TraceContext parsing and formatting ===
+  test "formatTraceparent produces W3C format" {
+    let header: Instrumentation.TraceparentHeader = {
+      version = 0uy
+      traceId = "0af7651916cd43dd8448eb211c80319c"
+      spanId = "b7ad6b7169203331"
+      flags = 1uy
+    }
+    Instrumentation.formatTraceparent header
+    |> Expect.equal "should be W3C format" "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
+  }
+  test "parseTraceparent roundtrips with formatTraceparent" {
+    let original = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
+    match Instrumentation.parseTraceparent original with
+    | Ok parsed ->
+      Instrumentation.formatTraceparent parsed
+      |> Expect.equal "should roundtrip" original
+    | Error e -> failwith (sprintf "parse failed: %s" e)
+  }
+  test "parseTraceparent extracts correct fields" {
+    match Instrumentation.parseTraceparent "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-00" with
+    | Ok h ->
+      h.version |> Expect.equal "version" 0uy
+      h.traceId |> Expect.equal "traceId" "4bf92f3577b34da6a3ce929d0e0e4736"
+      h.spanId |> Expect.equal "spanId" "00f067aa0ba902b7"
+      h.flags |> Expect.equal "flags" 0uy
+    | Error e -> failwith (sprintf "parse failed: %s" e)
+  }
+  test "parseTraceparent rejects too few segments" {
+    match Instrumentation.parseTraceparent "00-abc-def" with
+    | Error _ -> ()
+    | Ok _ -> failwith "should reject invalid format"
+  }
+  test "parseTraceparent rejects invalid traceId length" {
+    match Instrumentation.parseTraceparent "00-0af765-b7ad6b7169203331-01" with
+    | Error e ->
+      e |> Expect.stringContains "should mention traceId" "traceId"
+    | Ok _ -> failwith "should reject short traceId"
+  }
+  test "parseTraceparent rejects invalid spanId length" {
+    match Instrumentation.parseTraceparent "00-0af7651916cd43dd8448eb211c80319c-b7ad-01" with
+    | Error e ->
+      e |> Expect.stringContains "should mention spanId" "spanId"
+    | Ok _ -> failwith "should reject short spanId"
+  }
+  test "parseTraceparent rejects all-zero traceId" {
+    match Instrumentation.parseTraceparent "00-00000000000000000000000000000000-b7ad6b7169203331-01" with
+    | Error e ->
+      e |> Expect.stringContains "should mention zero" "zero"
+    | Ok _ -> failwith "should reject all-zero traceId"
+  }
+  test "parseTraceparent rejects all-zero spanId" {
+    match Instrumentation.parseTraceparent "00-0af7651916cd43dd8448eb211c80319c-0000000000000000-01" with
+    | Error e ->
+      e |> Expect.stringContains "should mention zero" "zero"
+    | Ok _ -> failwith "should reject all-zero spanId"
+  }
+  test "workerOtelEnvVars includes valid traceparent when Activity is active" {
+    use listener = new ActivityListener(
+      ShouldListenTo = (fun s -> s.Name = "SageFs.Mcp"),
+      Sample = (fun _ -> ActivitySamplingResult.AllDataAndRecorded))
+    ActivitySource.AddActivityListener(listener)
+    use act = Instrumentation.mcpSource.StartActivity("test.trace.propagation")
+    let vars = Instrumentation.workerOtelEnvVars "trace-test"
+    let tpOpt = vars |> List.tryFind (fun (k,_) -> k = "TRACEPARENT") |> Option.map snd
+    tpOpt |> Expect.isSome "should have TRACEPARENT"
+    match Instrumentation.parseTraceparent tpOpt.Value with
+    | Ok h ->
+      h.version |> Expect.equal "version 00" 0uy
+      h.traceId |> Expect.equal "traceId matches activity" (act.TraceId.ToHexString())
+      h.spanId |> Expect.equal "spanId matches activity" (act.SpanId.ToHexString())
+    | Error e -> failwith (sprintf "invalid traceparent: %s" e)
+  }
+  testProperty "formatTraceparent >> parseTraceparent roundtrips" <| fun (version: byte) (flags: byte) ->
+    // Generate valid hex strings of correct length
+    let rng = System.Random(int version + int flags)
+    let hexChar () = "0123456789abcdef".[rng.Next(16)]
+    let traceId = System.String(Array.init 32 (fun _ -> hexChar()))
+    let spanId = System.String(Array.init 16 (fun _ -> hexChar()))
+    // Ensure not all-zero
+    let traceId = match traceId with t when t = System.String('0', 32) -> "0000000000000000000000000000000a" | t -> t
+    let spanId = match spanId with s when s = System.String('0', 16) -> "000000000000000a" | s -> s
+    let header: Instrumentation.TraceparentHeader = {
+      version = version
+      traceId = traceId
+      spanId = spanId
+      flags = flags
+    }
+    let formatted = Instrumentation.formatTraceparent header
+    match Instrumentation.parseTraceparent formatted with
+    | Ok parsed ->
+      parsed.traceId = traceId
+      && parsed.spanId = spanId
+      && parsed.flags = flags
+    | Error _ -> false
 ])
