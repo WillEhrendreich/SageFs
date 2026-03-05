@@ -927,8 +927,15 @@ let createElmRuntime
 /// MCP server + SessionManager + Dashboard — all frontends are clients.
 /// Every session is a worker sub-process managed by SessionManager.
 let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
+  let startupSw = System.Diagnostics.Stopwatch.StartNew()
+  let startupSpan =
+    Instrumentation.startSpan Instrumentation.daemonSource "sagefs.daemon.startup" [
+      "daemon.port", box mcpPort
+    ]
   let version = DaemonInfo.version
-  let infra = createDaemonInfrastructure ()
+  let infra =
+    Instrumentation.traced Instrumentation.daemonSource "sagefs.daemon.infra_create" [] (fun () ->
+      createDaemonInfrastructure ())
   let log = infra.Log
   let httpClient = infra.HttpClient
   let persistence = infra.Persistence
@@ -1235,8 +1242,15 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
 
   // Brief yield to let servers bind their ports
   do! System.Threading.Tasks.Task.Delay(200)
-  log.LogInformation("SageFs daemon ready (PID {Pid}, MCP port {McpPort}, dashboard port {DashboardPort})",
-    Environment.ProcessId, mcpPort, dashboardPort)
+  startupSw.Stop()
+  Instrumentation.startupDurationMs.Record(startupSw.Elapsed.TotalMilliseconds)
+  match isNull startupSpan |> not with
+  | true ->
+    startupSpan.SetTag("startup_ms", startupSw.Elapsed.TotalMilliseconds) |> ignore
+    Instrumentation.succeedSpan startupSpan
+  | false -> ()
+  log.LogInformation("SageFs daemon ready in {StartupMs:F0}ms (PID {Pid}, MCP port {McpPort}, dashboard port {DashboardPort})",
+    startupSw.Elapsed.TotalMilliseconds, Environment.ProcessId, mcpPort, dashboardPort)
   log.LogInformation("Dashboard: http://localhost:{Port}/dashboard", dashboardPort)
   log.LogInformation("SSE events: http://localhost:{Port}/events", mcpPort)
   log.LogInformation("Health: http://localhost:{Port}/health", mcpPort)

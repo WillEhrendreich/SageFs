@@ -600,4 +600,14 @@ let instrumentationTests = testSequenced (testList "Instrumentation" [
     Instrumentation.sseFrameBytes.Enabled
     |> Expect.isTrue "sseFrameBytes histogram should be enabled"
   }
+
+  test "startupDurationMs histogram is created" {
+    Instrumentation.startupDurationMs.Enabled
+    |> Expect.isTrue "startupDurationMs histogram should be enabled"
+  }
+
+  test "daemonMeter is created" {
+    Instrumentation.daemonMeter.Name
+    |> Expect.equal "should be SageFs.Daemon" "SageFs.Daemon"
+  }
 ])

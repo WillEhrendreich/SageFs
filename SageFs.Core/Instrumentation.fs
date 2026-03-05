@@ -18,6 +18,11 @@ module Instrumentation =
   let sessionMeter = new Meter("SageFs.SessionManager")
   let testCycleMeter = new Meter("SageFs.TestCycle")
   let mcpMeter = new Meter("SageFs.Mcp")
+  let daemonMeter = new Meter("SageFs.Daemon")
+
+  // Daemon startup timing
+  let startupDurationMs =
+    daemonMeter.CreateHistogram<float>("sagefs.daemon.startup_duration_ms", "ms", "Daemon startup duration to ready state")
 
   let sessionsCreated =
     sessionMeter.CreateCounter<int64>("sagefs.sessions.created_total", description = "Total sessions created")
