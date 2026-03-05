@@ -433,6 +433,62 @@ module WorkerHttpTransport =
         do! ctx.Response.WriteAsync(Serialization.serialize {| directory = dir; watchedCount = HotReloadState.watchedCount !hotReloadStateRef |})
       })) |> ignore
 
+      // DevReload SSE endpoint — browsers connect here for hot-reload notifications.
+      // Long-lived: sends heartbeats every 15s, compiling/reload events as they happen.
+      // Cross-origin (user's app port → worker port), so CORS header is required.
+      app.MapGet("/__sagefs__/reload", Func<HttpContext, Task>(fun ctx -> task {
+        ctx.Response.ContentType <- "text/event-stream"
+        ctx.Response.Headers["Cache-Control"] <- "no-cache"
+        ctx.Response.Headers["Connection"] <- "keep-alive"
+        ctx.Response.Headers["X-Accel-Buffering"] <- "no"
+        ctx.Response.Headers["Access-Control-Allow-Origin"] <- "*"
+        do! ctx.Response.Body.FlushAsync()
+
+        let id = Guid.NewGuid().ToString("N")
+
+        let connBytes = Text.Encoding.UTF8.GetBytes(": connected\n\n")
+        do! ctx.Response.Body.WriteAsync(ReadOnlyMemory connBytes)
+        do! ctx.Response.Body.FlushAsync()
+
+        let reader = DevReload.registerClient id
+        let cleanup = { new IDisposable with member _.Dispose() = DevReload.unregisterClient id }
+        use _ = cleanup
+        use _ = ctx.RequestAborted.Register(fun () -> DevReload.unregisterClient id)
+
+        try
+          let ct = ctx.RequestAborted
+          while not ct.IsCancellationRequested do
+            // Wait up to 15s for an event, else send heartbeat
+            let mutable evt = DevReload.DevReloadEvent.Compiling
+            let! hasEvent =
+              task {
+                try
+                  use cts = new CancellationTokenSource(TimeSpan.FromSeconds(15.0))
+                  use linked = CancellationTokenSource.CreateLinkedTokenSource(cts.Token, ct)
+                  return! reader.WaitToReadAsync(linked.Token).AsTask()
+                with
+                | :? OperationCanceledException -> return false
+              }
+            match hasEvent with
+            | true ->
+              while reader.TryRead(&evt) do
+                let payload =
+                  match evt with
+                  | DevReload.DevReloadEvent.Compiling -> """data: {"type":"compiling"}""" + "\n\n"
+                  | DevReload.DevReloadEvent.Reload -> """data: {"type":"reload"}""" + "\n\n"
+                let bytes = Text.Encoding.UTF8.GetBytes(payload)
+                do! ctx.Response.Body.WriteAsync(ReadOnlyMemory bytes)
+                do! ctx.Response.Body.FlushAsync()
+            | false ->
+              // Heartbeat — keeps proxies and browsers from killing the connection
+              let hb = Text.Encoding.UTF8.GetBytes(": heartbeat\n\n")
+              do! ctx.Response.Body.WriteAsync(ReadOnlyMemory hb)
+              do! ctx.Response.Body.FlushAsync()
+        with
+        | :? Tasks.TaskCanceledException -> ()
+        | :? OperationCanceledException -> ()
+      })) |> ignore
+
       do! app.StartAsync()
 
       let server = app.Services.GetRequiredService<IServer>()

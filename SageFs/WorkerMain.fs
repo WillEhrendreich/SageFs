@@ -187,6 +187,10 @@ let run (sessionId: string) (port: int) = async {
     ActorCreation.createActor actorArgs |> Async.AwaitTask
   let actor = result.Actor
 
+  // Install DevReload Harmony patches before any user code runs.
+  // Safe to call early — prefix is a no-op until setWorkerPort provides the port.
+  DevReloadInjector.install()
+
   // Two-layer RunTest: project assemblies (stable) + dynamic FSI assemblies (updated per eval).
   // Warm-up evals go through the middleware (which discovers tests and builds a RunTest closure),
   // but the response metadata is consumed internally by the actor — handleMessage never sees it.
@@ -280,6 +284,7 @@ let run (sessionId: string) (port: int) = async {
             match HotReloadState.isWatched filePath !result.HotReloadStateRef with
             | false -> ()
             | true ->
+            DevReload.broadcastCompiling ()
             let code = sprintf "#load @\"%s\"" filePath
             let request = { Code = code; Args = Map.ofList ["hotReload", box true] }
             use localCts = new CancellationTokenSource()
@@ -360,6 +365,10 @@ let run (sessionId: string) (port: int) = async {
     // Print actual port to stdout so daemon can discover it
     printfn "WORKER_PORT=%s" server.BaseUrl
     Console.Out.Flush()
+
+    // Tell DevReload Harmony patches which port to inject into user scripts
+    let uri = Uri(server.BaseUrl)
+    DevReloadInjector.setWorkerPort uri.Port
 
     // Block until cancellation
     let tcs = Threading.Tasks.TaskCompletionSource<unit>()

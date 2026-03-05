@@ -65,6 +65,7 @@
         <Compile Include="HotReloadStateTests.fs" />
         <Compile Include="HotReloadBrowserTests.fs" />
         <Compile Include="HotReloadEndpointTests.fs" />
+        <Compile Include="DevReloadTests.fs" />
         <Compile Include="WorkerHttpTransportTests.fs" />
         <Compile Include="SessionIsolationTests.fs" />
         <Compile Include="CleanStdoutTests.fs" />

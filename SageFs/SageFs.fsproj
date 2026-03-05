@@ -38,6 +38,7 @@
         <Compile Include="McpServer.fs" />
         <Compile Include="WorkerHttpTransport.fs" />
         <Compile Include="DevReloadMiddleware.fs" />
+        <Compile Include="DevReloadInjector.fs" />
         <Compile Include="WorkerMain.fs" />
         <Compile Include="ConsoleInput.fs" />
         <Compile Include="TerminalMode.fs" />
