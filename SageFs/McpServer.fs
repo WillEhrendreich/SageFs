@@ -614,878 +614,825 @@ let wireModelChangeHandlers
       | ex -> Log.error "[MCP] State change handler error: %s" ex.Message
     | _ -> ())
 
+
 // Start MCP server in background
-let startMcpServer (cfg: McpServerConfig) =
-    task {
+type RouteContext = {
+  Config: McpServerConfig
+  McpContext: McpContext
+  SseContext: SseContext
+  Dispatch: (SageFs.SageFsMsg -> unit) option
+  GetElmRegions: (unit -> SageFs.RenderRegion list) option
+  FsiBindings: Map<string, SageFs.SseWriter.FsiBinding> ref
+  FeaturePushState: SageFs.Features.FeatureHooks.FeaturePushState ref
+  LastFeatureOutputCount: int ref
+}
+
+let configureOtel (builder: WebApplicationBuilder) (port: int) (version: string) (otelConfigured: bool) =
+  builder.Services.AddOpenTelemetry()
+    .ConfigureResource(fun resource ->
+      resource
+        .AddService("sagefs-mcp-server", serviceVersion = version)
+        .AddAttributes([
+          KeyValuePair<string, obj>("mcp.port", port :> obj)
+          KeyValuePair<string, obj>("mcp.session", "cli-integrated" :> obj)
+        ]) |> ignore
+    )
+    .WithTracing(fun tracing ->
+      let t = tracing
+      for source in SageFs.Instrumentation.allSources do
+        t.AddSource(source) |> ignore
+      t.AddAspNetCoreInstrumentation(fun opts ->
+          opts.Filter <- fun ctx ->
+            SageFs.Instrumentation.shouldFilterHttpSpan (ctx.Request.Path.ToString())
+        )
+        .AddHttpClientInstrumentation() |> ignore
+      match otelConfigured with
+      | true -> tracing.AddOtlpExporter() |> ignore
+      | false -> ()
+    )
+    .WithMetrics(fun metrics ->
+      let m = metrics
+      for meter in SageFs.Instrumentation.allMeters do
+        m.AddMeter(meter) |> ignore
+      m.AddAspNetCoreInstrumentation()
+        .AddHttpClientInstrumentation() |> ignore
+      metrics.SetExemplarFilter(OpenTelemetry.Metrics.ExemplarFilterType.TraceBased) |> ignore
+      match otelConfigured with
+      | true -> metrics.AddOtlpExporter() |> ignore
+      | false -> ()
+    )
+  |> ignore
+
+let configureLogging (builder: WebApplicationBuilder) (logPath: string) (otelConfigured: bool) =
+  builder.WebHost.ConfigureLogging(fun logging ->
+    logging.AddConsole() |> ignore
+    logging.AddFile(logPath, minimumLevel = LogLevel.Information) |> ignore
+    logging.AddFilter("Microsoft.AspNetCore", LogLevel.Warning) |> ignore
+    logging.AddFilter("Microsoft.AspNetCore.Server.Kestrel", LogLevel.Warning) |> ignore
+    logging.AddFilter("Microsoft.Hosting", LogLevel.Warning) |> ignore
+    logging.AddFilter("ModelContextProtocol.Server.McpServer", fun level -> level > LogLevel.Information) |> ignore
+    logging.AddFilter("ModelContextProtocol.AspNetCore.SseHandler", LogLevel.Warning) |> ignore
+    logging.AddFilter("SageFs", LogLevel.Information) |> ignore
+    match otelConfigured with
+    | true ->
+      logging.AddOpenTelemetry(fun otel ->
+        otel.IncludeFormattedMessage <- true
+        otel.IncludeScopes <- true
+        otel.AddOtlpExporter() |> ignore
+      ) |> ignore
+    | false -> ()
+  ) |> ignore
+
+let configureCompression (builder: WebApplicationBuilder) =
+  builder.Services.AddResponseCompression(fun opts ->
+    opts.EnableForHttps <- true
+    opts.Providers.Add<BrotliCompressionProvider>()
+    opts.Providers.Add<GzipCompressionProvider>()
+  ) |> ignore
+  builder.Services.Configure<BrotliCompressionProviderOptions>(fun (opts: BrotliCompressionProviderOptions) ->
+    opts.Level <- System.IO.Compression.CompressionLevel.Fastest
+  ) |> ignore
+
+let configureMcpProtocol (builder: WebApplicationBuilder) (mcpContext: McpContext) (serverTracker: McpServerTracker) =
+  builder.Services.AddSingleton<McpContext>(mcpContext) |> ignore
+  builder.Services.AddSingleton<SageFs.Server.McpTools.SageFsTools>(fun serviceProvider ->
+    let logger = serviceProvider.GetRequiredService<ILogger<SageFs.Server.McpTools.SageFsTools>>()
+    new SageFs.Server.McpTools.SageFsTools(mcpContext, logger)
+  ) |> ignore
+  builder.Services.AddSingleton<McpServerTracker>(serverTracker) |> ignore
+  builder.Services
+    .AddMcpServer(fun options ->
+      options.ServerInstructions <- String.concat " " [
+        "SageFs is an affordance-driven F# Interactive (FSI) REPL with MCP integration."
+        "ALWAYS use SageFs MCP tools for ALL F# work \u2014 never shell out to dotnet build, dotnet run, or PowerShell commands."
+        "PowerShell is ONLY for process management: starting/stopping SageFs, dotnet pack, dotnet tool install/uninstall."
+        "SageFs runs as a VISIBLE terminal window \u2014 the user watches it."
+        "When starting or restarting SageFs, ALWAYS use Start-Process to launch in a visible console window, NEVER detach or run in background."
+        "You OWN the full development cycle: pack, stop, reinstall, restart, test. Never ask the user to do these steps."
+        "The MCP connection is SSE (push-based) \u2014 do not poll or sleep. Tools become available when SageFs is ready."
+        "SageFs pushes structured notifications (notifications/message) for important events: session faults, warmup completion, file reloads, eval failures."
+        "Tool responses return only Result: or Error: with diagnostics \u2014 no code echo (you already know what you sent)."
+        "SageFs is affordance-driven: get_fsi_status shows available tools for the current session state. Only invoke listed tools."
+        "If a tool returns an error about session state, check get_fsi_status for available alternatives."
+        "Use send_fsharp_code for incremental, small code blocks. End statements with ';;' for evaluation."
+        "FILE WATCHING: SageFs automatically watches .fs/.fsx source files and reloads changes via #load (~100ms). You do NOT need hard_reset to pick up source file edits."
+        "hard_reset_fsi_session with rebuild=true is ONLY needed when .fsproj changes (new files, packages) or warm-up fails. The file watcher handles .fs/.fsx changes automatically."
+        "Use cancel_eval to stop a running evaluation. Use reset_fsi_session only if warm-up failed."
+      ]
+    )
+    .WithHttpTransport(fun opts ->
+      opts.IdleTimeout <- SageFs.Timeouts.sseKeepAlive
+      opts.MaxIdleSessionCount <- 1000
+    )
+    .WithTools<SageFs.Server.McpTools.SageFsTools>()
+    .WithRequestFilters(fun filters ->
+      filters.AddCallToolFilter(createServerCaptureFilter serverTracker) |> ignore
+    )
+  |> ignore
+
+let wireCoreLogs (app: WebApplication) =
+  let coreLogger = app.Services.GetRequiredService<Microsoft.Extensions.Logging.ILoggerFactory>().CreateLogger("SageFs.Core")
+  SageFs.Utils.Log.logInfo <- fun msg -> coreLogger.LogInformation(msg)
+  SageFs.Utils.Log.logDebug <- fun msg -> coreLogger.LogDebug(msg)
+  SageFs.Utils.Log.logWarn <- fun msg -> coreLogger.LogWarning(msg)
+  SageFs.Utils.Log.logError <- fun msg -> coreLogger.LogError(msg)
+
+let logStartup (app: WebApplication) (port: int) (logPath: string) (otelConfigured: bool) =
+  let logger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("SageFs.McpServer")
+  logger.LogInformation("MCP server starting on port {Port}", port)
+  logger.LogInformation("SSE endpoint: http://localhost:{Port}/sse", port)
+  logger.LogInformation("State events SSE: http://localhost:{Port}/events", port)
+  logger.LogInformation("Kestrel max connections: {MaxConnections}", 200)
+  logger.LogInformation("Log file: {LogPath}", logPath)
+  match otelConfigured with
+  | true ->
+    let endpoint = Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_ENDPOINT")
+    let protocol =
+      Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_PROTOCOL")
+      |> Option.ofObj |> Option.defaultValue "grpc"
+    logger.LogInformation("OpenTelemetry enabled: endpoint={OtelEndpoint}, protocol={OtelProtocol}", endpoint, protocol)
+  | false ->
+    logger.LogInformation("OpenTelemetry not configured (set OTEL_EXPORTER_OTLP_ENDPOINT)")
+
+let mapExecutionRoutes (app: WebApplication) (rctx: RouteContext) =
+  app.MapPost("/exec", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
+    withErrorHandling ctx (fun () -> task {
+      use! json = readJsonBody ctx
+      let code = json.RootElement.GetProperty("code").GetString()
+      let wd =
+        match json.RootElement.TryGetProperty("working_directory") with
+        | true, prop -> Some (prop.GetString())
+        | false, _ -> None
+      let filePath =
+        match json.RootElement.TryGetProperty("file_path") with
+        | true, prop -> Some (prop.GetString())
+        | false, _ -> None
+      let evalMode =
+        match json.RootElement.TryGetProperty("eval_mode") with
+        | true, prop -> Some (prop.GetString())
+        | false, _ -> None
+      let blockStartLine =
+        match json.RootElement.TryGetProperty("block_start_line") with
+        | true, prop -> Some (prop.GetInt32())
+        | false, _ -> None
+      let sw = System.Diagnostics.Stopwatch.StartNew()
+      let! result = SageFs.McpTools.sendFSharpCode rctx.McpContext "cli-integrated" code SageFs.McpTools.OutputFormat.Text None wd filePath evalMode blockStartLine
+      sw.Stop()
+      rctx.FeaturePushState.Value <- SageFs.Features.FeatureHooks.recordEval code result sw.ElapsedMilliseconds rctx.FeaturePushState.Value
+      do! jsonResponse ctx 200 {| success = true; result = result |}
+    }) :> Task
+  ) |> ignore
+  app.MapPost("/reset", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
+    withErrorHandling ctx (fun () -> task {
+      let! result = SageFs.McpTools.resetSession rctx.McpContext "http" None None
+      do! jsonResponse ctx 200 {| success = not (result.Contains("Error")); message = result |}
+    }) :> Task
+  ) |> ignore
+  app.MapPost("/hard-reset", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
+    withErrorHandling ctx (fun () -> task {
+      use! json = readJsonBody ctx
+      let rebuild =
         try
-            let dispatch = cfg.ElmRuntime |> Option.map (fun r -> r.Dispatch)
-            let getElmModel = cfg.ElmRuntime |> Option.map (fun r -> r.GetModel)
-            let getElmRegions = cfg.ElmRuntime |> Option.map (fun r -> r.GetRegions)
-            let logPath = System.IO.Path.Combine(System.Environment.GetFolderPath(System.Environment.SpecialFolder.LocalApplicationData), "SageFs", "mcp-server.log")
-            System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(logPath)) |> ignore
-            
-            let builder = WebApplication.CreateBuilder([||])
-            let bindHost =
-              match System.Environment.GetEnvironmentVariable("SAGEFS_BIND_HOST") with
-              | null | "" -> "localhost"
-              | h -> h
-            builder.WebHost.UseUrls($"http://%s{bindHost}:%d{cfg.Port}") |> ignore
+          match json.RootElement.TryGetProperty("rebuild") with
+          | true, prop -> prop.GetBoolean()
+          | false, _ -> false
+        with :? System.Text.Json.JsonException -> false
+      let! result = SageFs.McpTools.hardResetSession rctx.McpContext "http" rebuild None None
+      do! jsonResponse ctx 200 {| success = not (result.Contains("Error")); message = result |}
+    }) :> Task
+  ) |> ignore
+  app.MapPost("/cancel", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
+    withErrorHandling ctx (fun () -> task {
+      let! _result = SageFs.McpTools.cancelEval rctx.McpContext "http" None
+      do! jsonResponse ctx 200 {| received = true |}
+    }) :> Task
+  ) |> ignore
+  app.MapPost("/api/cancel-eval", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
+    withErrorHandling ctx (fun () -> task {
+      let! _result = SageFs.McpTools.cancelEval rctx.McpContext "http" None
+      do! jsonResponse ctx 200 {| received = true |}
+    }) :> Task
+  ) |> ignore
+  app.MapPost("/load-script", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
+    withErrorHandling ctx (fun () -> task {
+      use! json = readJsonBody ctx
+      let filePath = json.RootElement.GetProperty("path").GetString()
+      let! _result = SageFs.McpTools.loadFSharpScript rctx.McpContext "http" filePath None None
+      do! jsonResponse ctx 200 {| received = true |}
+    }) :> Task
+  ) |> ignore
 
-            // Get version from assembly
-            let version = DaemonInfo.version
+let mapHealthRoutes (app: WebApplication) (rctx: RouteContext) =
+  app.MapGet("/health", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
+    withErrorHandling ctx (fun () -> task {
+      let! allSessions = rctx.Config.SessionOps.GetAllSessions()
+      let! sessionStatus = task {
+        match allSessions |> Seq.tryHead with
+        | None -> return "no session"
+        | Some sess ->
+          let! proxy = rctx.Config.SessionOps.GetProxy sess.Id
+          match proxy with
+          | Some send ->
+            try
+              let! resp = send (SageFs.WorkerProtocol.WorkerMessage.GetStatus "health") |> Async.StartAsTask
+              match resp with
+              | SageFs.WorkerProtocol.WorkerResponse.StatusResult(_, snap) ->
+                return SageFs.WorkerProtocol.SessionStatus.label snap.Status
+              | _ -> return "unknown"
+            with
+            | :? OperationCanceledException -> return "cancelled"
+            | ex ->
+              Log.debug "[MCP] health check error for session: %s" ex.Message
+              return "error"
+          | None -> return "starting"
+      }
+      let healthy = sessionStatus = "Ready" || sessionStatus = "Evaluating"
+      do! jsonResponse ctx 200 {| healthy = healthy; status = sessionStatus |}
+    }) :> Task
+  ) |> ignore
+  app.MapGet("/diag/threadpool", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
+    task {
+      let workerThreads = ref 0
+      let completionPortThreads = ref 0
+      let maxWorkerThreads = ref 0
+      let maxCompletionPortThreads = ref 0
+      let minWorkerThreads = ref 0
+      let minCompletionPortThreads = ref 0
+      System.Threading.ThreadPool.GetAvailableThreads(workerThreads, completionPortThreads)
+      System.Threading.ThreadPool.GetMaxThreads(maxWorkerThreads, maxCompletionPortThreads)
+      System.Threading.ThreadPool.GetMinThreads(minWorkerThreads, minCompletionPortThreads)
+      let pending = System.Threading.ThreadPool.PendingWorkItemCount
+      let threadCount = System.Threading.ThreadPool.ThreadCount
+      do! jsonResponse ctx 200
+            {| available = workerThreads.Value
+               max = maxWorkerThreads.Value
+               min = minWorkerThreads.Value
+               pending = pending
+               threadCount = threadCount
+               completionPort =
+                 {| available = completionPortThreads.Value
+                    max = maxCompletionPortThreads.Value
+                    min = minCompletionPortThreads.Value |} |}
+    } :> Task
+  ) |> ignore
+  app.MapGet("/version", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
+    task {
+      let asm = typeof<SageFs.SageFsModel>.Assembly
+      let v = asm.GetName().Version
+      let infoVersion =
+        asm.GetCustomAttributes(typeof<System.Reflection.AssemblyInformationalVersionAttribute>, false)
+        |> Array.tryHead
+        |> Option.map (fun a -> (a :?> System.Reflection.AssemblyInformationalVersionAttribute).InformationalVersion)
+        |> Option.defaultValue (string v)
+      do! jsonResponse ctx 200
+            {| version = infoVersion
+               protocolVersion = 1
+               server = "sagefs"
+               mcp = true
+               sse = true |}
+    } :> Task
+  ) |> ignore
 
-            // Only register OTLP exporter when endpoint is configured
-            let otelConfigured = DaemonInfo.otelConfigured
+let mapDiagnosticsRoutes (app: WebApplication) (rctx: RouteContext) =
+  app.MapPost("/diagnostics", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
+    withErrorHandling ctx (fun () -> task {
+      let! code = readJsonProp ctx "code"
+      let! _ = SageFs.McpTools.checkFSharpCode rctx.McpContext "http" code None None
+      do! jsonResponse ctx 202 {| accepted = true |}
+    }) :> Task
+  ) |> ignore
+  app.MapGet("/diagnostics", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
+    task {
+      SageFs.Instrumentation.sseConnectionsActive.Add(1L)
+      setSseHeaders ctx
+      let initialEvent = sprintf "event: diagnostics\ndata: []\n\n"
+      do! writeSseFrame ctx.Response.Body initialEvent
+      let diagSource =
+        rctx.Config.DiagnosticsChanged |> Observable.map (fun store ->
+          let json = SageFs.McpAdapter.formatDiagnosticsStoreAsJson store
+          sprintf "event: diagnostics\ndata: %s\n\n" json)
+      do! runSseWriteLoop ctx.Response.Body ctx.RequestAborted [diagSource] 30000
+      SageFs.Instrumentation.sseConnectionsActive.Add(-1L)
+    } :> Task
+  ) |> ignore
 
-            // Configure OpenTelemetry with resource attributes
-            let otelBuilder =
-              builder.Services.AddOpenTelemetry()
-                .ConfigureResource(fun resource ->
-                    resource
-                        .AddService("sagefs-mcp-server", serviceVersion = version)
-                        .AddAttributes([
-                            KeyValuePair<string, obj>("mcp.port", cfg.Port :> obj)
-                            KeyValuePair<string, obj>("mcp.session", "cli-integrated" :> obj)
-                        ]) |> ignore
-                )
-                .WithTracing(fun tracing ->
-                    let t = tracing
-                    for source in SageFs.Instrumentation.allSources do
-                      t.AddSource(source) |> ignore
-                    t.AddAspNetCoreInstrumentation(fun opts ->
-                        opts.Filter <- fun ctx ->
-                          SageFs.Instrumentation.shouldFilterHttpSpan (ctx.Request.Path.ToString())
-                      )
-                      .AddHttpClientInstrumentation() |> ignore
-                    match otelConfigured with
-                    | true -> tracing.AddOtlpExporter() |> ignore
-                    | false -> ()
-                )
-                .WithMetrics(fun metrics ->
-                    let m = metrics
-                    for meter in SageFs.Instrumentation.allMeters do
-                      m.AddMeter(meter) |> ignore
-                    m.AddAspNetCoreInstrumentation()
-                      .AddHttpClientInstrumentation() |> ignore
-                    metrics.SetExemplarFilter(OpenTelemetry.Metrics.ExemplarFilterType.TraceBased) |> ignore
-                    match otelConfigured with
-                    | true -> metrics.AddOtlpExporter() |> ignore
-                    | false -> ()
-                )
+let mapEventsRoute (app: WebApplication) (rctx: RouteContext) =
+  app.MapGet("/events", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
+    task {
+      SageFs.Instrumentation.sseConnectionsActive.Add(1L)
+      let connSw = System.Diagnostics.Stopwatch.StartNew()
+      let connActivity =
+        SageFs.Instrumentation.startSpanWithKind
+          SageFs.Instrumentation.daemonSource "sse.connection"
+          System.Diagnostics.ActivityKind.Server
+          [("sse.endpoint", box "/events")]
+      setSseHeaders ctx
+      match rctx.Config.StateChanged with
+      | Some evt ->
+        do! replaySessionSnapshot rctx.SseContext ctx.Response.Body
+        do! replayCachedTestState rctx.SseContext ctx.Response.Body
+        match rctx.FsiBindings.Value.Count, SseContext.activeSessionId rctx.SseContext with
+        | count, Some sid when count > 0 ->
+          rctx.FsiBindings.Value |> Map.values |> Array.ofSeq
+          |> SageFs.SseWriter.formatBindingsSnapshotEvent rctx.SseContext.SseJsonOpts (Some sid)
+          |> writeSseFrame ctx.Response.Body
+          |> fun t -> t.Wait()
+        | _ -> ()
+        [rctx.FeaturePushState.Value.LastEvalDiffSse
+         rctx.FeaturePushState.Value.LastCellDepsSse
+         rctx.FeaturePushState.Value.LastBindingScopeSse
+         rctx.FeaturePushState.Value.LastEvalTimelineSse]
+        |> List.choose id
+        |> List.iter (fun sse ->
+          writeSseFrame ctx.Response.Body sse |> fun t -> t.Wait())
+        let stateSource =
+          evt |> Observable.map (fun change ->
+            change
+            |> DaemonStateChange.toJson
+            |> SageFs.SseWriter.formatSseEvent "state")
+        do! runSseWriteLoop
+              ctx.Response.Body
+              ctx.RequestAborted
+              [ stateSource; rctx.SseContext.TestEventBroadcast.Publish; rctx.SseContext.SessionEventBroadcast.Publish ]
+              15000
+        connSw.Stop()
+        SageFs.Instrumentation.sseConnectionDurationMs.Record(connSw.Elapsed.TotalMilliseconds)
+        SageFs.Instrumentation.sseConnectionsActive.Add(-1L)
+        SageFs.Instrumentation.succeedSpan connActivity
+      | None ->
+        ctx.Response.StatusCode <- 501
+        do! writeSseFrame ctx.Response.Body "event: error\ndata: {\"error\":\"No Elm loop available\"}\n\n"
+        connSw.Stop()
+        SageFs.Instrumentation.sseConnectionDurationMs.Record(connSw.Elapsed.TotalMilliseconds)
+        SageFs.Instrumentation.sseConnectionsActive.Add(-1L)
+        SageFs.Instrumentation.failSpan connActivity "No Elm loop available"
+    } :> Task
+  ) |> ignore
 
-            // Configure standard logging (file, console, and OTEL)
-            builder.WebHost.ConfigureLogging(fun logging -> 
-                logging.AddConsole() |> ignore
-                logging.AddFile(logPath, minimumLevel = LogLevel.Information) |> ignore
-                // Silence ASP.NET plumbing on both console and file
-                logging.AddFilter("Microsoft.AspNetCore", LogLevel.Warning) |> ignore
-                logging.AddFilter("Microsoft.AspNetCore.Server.Kestrel", LogLevel.Warning) |> ignore
-                logging.AddFilter("Microsoft.Hosting", LogLevel.Warning) |> ignore
-                logging.AddFilter("ModelContextProtocol.Server.McpServer", fun level -> level > LogLevel.Information) |> ignore
-                logging.AddFilter("ModelContextProtocol.AspNetCore.SseHandler", LogLevel.Warning) |> ignore
-                // Let SageFs-namespaced logs flow through at Information+ for OTEL
-                logging.AddFilter("SageFs", LogLevel.Information) |> ignore
-                // Wire ILogger → OTEL structured logs (traces alone don't carry log messages)
-                match otelConfigured with
-                | true ->
-                  logging.AddOpenTelemetry(fun otel ->
-                    otel.IncludeFormattedMessage <- true
-                    otel.IncludeScopes <- true
-                    otel.AddOtlpExporter() |> ignore
-                  ) |> ignore
-                | false -> ()
-            ) |> ignore
-            
-            // Map typed DU events to strings for McpContext (SageFs.Core can't reference DaemonStateChange)
-            let stateChangedStr : IEvent<string> option =
-              cfg.StateChanged |> Option.map (fun evt ->
-                let bridge = Event<string>()
-                evt.Add(DaemonStateChange.toJson >> bridge.Trigger)
-                bridge.Publish)
-            // Create MCP context
-            let mcpContext = mkContext cfg stateChangedStr
-            
-            // Register MCP services
-            builder.Services.AddSingleton<McpContext>(mcpContext) |> ignore
-            builder.Services.AddSingleton<SageFs.Server.McpTools.SageFsTools>(fun serviceProvider ->
-                let logger = serviceProvider.GetRequiredService<ILogger<SageFs.Server.McpTools.SageFsTools>>()
-                new SageFs.Server.McpTools.SageFsTools(mcpContext, logger)
-            ) |> ignore
-            
-            // Create notification tracker
-            let serverTracker = McpServerTracker()
-            builder.Services.AddSingleton<McpServerTracker>(serverTracker) |> ignore
+let mapStatusRoutes (app: WebApplication) (rctx: RouteContext) =
+  app.MapGet("/api/status", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
+    withErrorHandling ctx (fun () -> task {
+      let! sid = task {
+        match ctx.Request.Query.TryGetValue("sessionId") with
+        | true, v when v.Count > 0 && not (String.IsNullOrWhiteSpace(v.[0])) -> return v.[0]
+        | _ ->
+          let! sessions = rctx.Config.SessionOps.GetAllSessions()
+          return sessions |> List.tryHead |> Option.map (fun s -> s.Id) |> Option.defaultValue ""
+      }
+      let! info = rctx.Config.SessionOps.GetSessionInfo sid
+      let! statusResult =
+        task {
+          let! proxy = rctx.Config.SessionOps.GetProxy sid
+          match proxy with
+          | Some send ->
+            let! resp = send (SageFs.WorkerProtocol.WorkerMessage.GetStatus "api") |> Async.StartAsTask
+            return Some resp
+          | None -> return None
+        }
+      let elmRegions =
+        match rctx.GetElmRegions with
+        | Some getRegions -> getRegions ()
+        | None -> []
+      let version = DaemonInfo.version
+      let regionData =
+        elmRegions |> List.map (fun (r: SageFs.RenderRegion) ->
+          {| id = r.Id
+             content = r.Content |> fun s -> match s.Length > 2000 with | true -> s.[..1999] | false -> s
+             affordances = r.Affordances |> List.map (fun a -> a.ToString()) |})
+      let sessionState, evalCount, avgMs, minMs, maxMs =
+        match statusResult with
+        | Some (SageFs.WorkerProtocol.WorkerResponse.StatusResult(_, snap)) ->
+          SageFs.WorkerProtocol.SessionStatus.label snap.Status,
+          snap.EvalCount,
+          (match snap.EvalCount > 0 with | true -> float snap.AvgDurationMs | false -> 0.0),
+          float snap.MinDurationMs,
+          float snap.MaxDurationMs
+        | _ -> "Unknown", 0, 0.0, 0.0, 0.0
+      let workingDir =
+        info |> Option.map (fun i -> i.WorkingDirectory) |> Option.defaultValue ""
+      let projects =
+        info |> Option.map (fun i -> i.Projects) |> Option.defaultValue []
+      let data =
+        {| version = version
+           sessionId = sid
+           sessionState = sessionState
+           evalCount = evalCount
+           totalDurationMs = avgMs * float evalCount
+           avgDurationMs = avgMs
+           minDurationMs = minMs
+           maxDurationMs = maxMs
+           workingDirectory = workingDir
+           projectCount = projects.Length
+           projects = projects
+           warmupFailures = ([] : {| name: string; error: string |} list)
+           regions = regionData
+           pid = Environment.ProcessId
+           uptime =
+             use proc = System.Diagnostics.Process.GetCurrentProcess()
+             (DateTime.UtcNow - proc.StartTime.ToUniversalTime()).TotalSeconds |}
+      do! jsonResponse ctx 200 data
+    }) :> Task
+  ) |> ignore
+  app.MapGet("/api/system/status", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
+    withErrorHandling ctx (fun () -> task {
+      let supervised =
+        Environment.GetEnvironmentVariable("SAGEFS_SUPERVISED")
+        |> Option.ofObj |> Option.map (fun s -> s = "1") |> Option.defaultValue false
+      let restartCount =
+        Environment.GetEnvironmentVariable("SAGEFS_RESTART_COUNT")
+        |> Option.ofObj |> Option.bind (fun s -> match Int32.TryParse s with true, n -> Some n | _ -> None)
+        |> Option.defaultValue 0
+      use proc = System.Diagnostics.Process.GetCurrentProcess()
+      let uptime = (DateTime.UtcNow - proc.StartTime.ToUniversalTime()).TotalSeconds
+      let version = DaemonInfo.version
+      let! allSessions = rctx.Config.SessionOps.GetAllSessions()
+      let data =
+        {| version = version
+           pid = Environment.ProcessId
+           uptimeSeconds = uptime
+           supervised = supervised
+           restartCount = restartCount
+           sessionCount = allSessions.Length
+           mcpPort = rctx.Config.Port
+           dashboardPort = rctx.Config.Port + 1 |}
+      do! jsonResponse ctx 200 data
+    }) :> Task
+  ) |> ignore
 
-            // SSE broadcast for typed test events (clients subscribe via /events)
-            let testEventBroadcast = Event<string>()
-            // SSE broadcast for typed session events (warmup, hotreload)
-            let sessionEventBroadcast = Event<string>()
-            // SSE serialization uses default PascalCase (NOT camelCase) + JsonFSharpConverter
-            // for Case/Fields DU encoding. This differs from WorkerProtocol.Serialization.jsonOptions
-            // which uses type/value format. Both VS Code and VS parsers expect PascalCase + Case/Fields.
-            let sseJsonOpts = JsonSerializerOptions()
-            sseJsonOpts.Converters.Add(System.Text.Json.Serialization.JsonFSharpConverter())
+let mapSessionRoutes (app: WebApplication) (rctx: RouteContext) =
+  app.MapGet("/api/sessions", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
+    withErrorHandling ctx (fun () -> task {
+      let! allSessions = rctx.Config.SessionOps.GetAllSessions()
+      let results = System.Collections.Generic.List<obj>()
+      for sess in allSessions do
+        let! proxy = rctx.Config.SessionOps.GetProxy sess.Id
+        let! evalCount, avgMs, status = task {
+          match proxy with
+          | Some send ->
+            try
+              let! resp = send (SageFs.WorkerProtocol.WorkerMessage.GetStatus "api") |> Async.StartAsTask
+              match resp with
+              | SageFs.WorkerProtocol.WorkerResponse.StatusResult(_, snap) ->
+                return snap.EvalCount, float snap.AvgDurationMs, SageFs.WorkerProtocol.SessionStatus.label snap.Status
+              | _ -> return 0, 0.0, "Unknown"
+            with
+            | :? System.Net.Http.HttpRequestException as ex ->
+              Log.error "[MCP] Session status HTTP error for %s: %s" sess.Id ex.Message
+              return 0, 0.0, "Error"
+            | :? System.Threading.Tasks.TaskCanceledException ->
+              return 0, 0.0, "Timeout"
+            | ex ->
+              Log.error "[MCP] Session status unexpected error for %s: %s (%s)" sess.Id ex.Message (ex.GetType().Name)
+              return 0, 0.0, "Error"
+          | None -> return 0, 0.0, "Disconnected"
+        }
+        results.Add(
+          {| id = sess.Id
+             status = status
+             projects = sess.Projects
+             workingDirectory = sess.WorkingDirectory
+             evalCount = evalCount
+             avgDurationMs = avgMs |} :> obj)
+      do! jsonResponse ctx 200 {| sessions = results |}
+    }) :> Task
+  ) |> ignore
+  app.MapPost("/api/sessions/switch", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
+    withErrorHandling ctx (fun () -> task {
+      let! sid = readJsonProp ctx "sessionId"
+      let! info = rctx.Config.SessionOps.GetSessionInfo sid
+      match info with
+      | Some _ ->
+        SageFs.McpTools.setActiveSessionId rctx.McpContext "cli-integrated" sid
+        SageFs.McpTools.setActiveSessionId rctx.McpContext "http" sid
+        match rctx.Dispatch with
+        | Some d ->
+          d (SageFs.SageFsMsg.Event (SageFs.SageFsEvent.SessionSwitched (None, sid)))
+          d (SageFs.SageFsMsg.Editor SageFs.EditorAction.ListSessions)
+        | None -> ()
+        let! _ = rctx.McpContext.Persistence.AppendEvents "daemon-sessions" [
+          SageFs.Features.Events.SageFsEvent.DaemonSessionSwitched
+            {| FromId = None; ToId = sid; SwitchedAt = System.DateTimeOffset.UtcNow |}
+        ]
+        do! jsonResponse ctx 200 {| success = true; sessionId = sid |}
+      | None ->
+        do! jsonResponse ctx 404 {| success = false; error = sprintf "Session '%s' not found" sid |}
+    }) :> Task
+  ) |> ignore
+  app.MapPost("/api/sessions/create", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
+    withErrorHandling ctx (fun () -> task {
+      use! doc = readJsonBody ctx
+      let root = doc.RootElement
+      let workingDir =
+        let tryProp (name: string) =
+          let mutable value = Unchecked.defaultof<System.Text.Json.JsonElement>
+          match root.TryGetProperty(name, &value) with
+          | true -> Some (value.GetString())
+          | false -> None
+        tryProp "workingDirectory"
+        |> Option.orElseWith (fun () -> tryProp "working_directory")
+        |> Option.defaultValue Environment.CurrentDirectory
+      let projects =
+        let mutable projProp = Unchecked.defaultof<System.Text.Json.JsonElement>
+        match root.TryGetProperty("projects", &projProp) with
+        | true ->
+          match projProp.ValueKind with
+          | System.Text.Json.JsonValueKind.Array ->
+            projProp.EnumerateArray()
+            |> Seq.map (fun e -> e.GetString())
+            |> Seq.toList
+          | System.Text.Json.JsonValueKind.String ->
+            [ projProp.GetString() ]
+          | _ -> []
+        | false -> []
+      let! result = rctx.Config.SessionOps.CreateSession projects workingDir
+      match result with
+      | Ok msg ->
+        SageFs.McpTools.setActiveSessionId rctx.McpContext "cli-integrated" msg
+        SageFs.McpTools.setActiveSessionId rctx.McpContext "http" msg
+        match rctx.Dispatch with
+        | Some d -> d (SageFs.SageFsMsg.Editor SageFs.EditorAction.ListSessions)
+        | None -> ()
+        do! jsonResponse ctx 200 {| success = true; message = msg |}
+      | Error err ->
+        do! jsonResponse ctx 400 {| success = false; error = SageFs.SageFsError.describe err |}
+    }) :> Task
+  ) |> ignore
+  app.MapPost("/api/sessions/stop", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
+    withErrorHandling ctx (fun () -> task {
+      let! sid = readJsonProp ctx "sessionId"
+      let! result = rctx.Config.SessionOps.StopSession sid
+      match rctx.Dispatch with
+      | Some d -> d (SageFs.SageFsMsg.Editor SageFs.EditorAction.ListSessions)
+      | None -> ()
+      match result with
+      | Ok msg -> do! jsonResponse ctx 200 {| success = true; message = msg |}
+      | Error err -> do! jsonResponse ctx 400 {| success = false; error = SageFs.SageFsError.describe err |}
+    }) :> Task
+  ) |> ignore
 
-            // Response compression: Brotli at fastest level for HTTP responses
-            // NOTE: text/event-stream excluded — compression buffers defeat SSE real-time delivery
-            builder.Services.AddResponseCompression(fun opts ->
-              opts.EnableForHttps <- true
-              opts.Providers.Add<BrotliCompressionProvider>()
-              opts.Providers.Add<GzipCompressionProvider>()
-            ) |> ignore
-            builder.Services.Configure<BrotliCompressionProviderOptions>(fun (opts: BrotliCompressionProviderOptions) ->
-              opts.Level <- System.IO.Compression.CompressionLevel.Fastest
-            ) |> ignore
+let mapLiveTestingRoutes (app: WebApplication) (rctx: RouteContext) =
+  app.MapPost("/api/live-testing/enable", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
+    withErrorHandling ctx (fun () -> task {
+      let! result = SageFs.McpTools.setLiveTesting rctx.McpContext true
+      do! jsonResponse ctx 200 {| success = true; message = result; activation = "active" |}
+    }) :> Task
+  ) |> ignore
+  app.MapPost("/api/live-testing/disable", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
+    withErrorHandling ctx (fun () -> task {
+      let! result = SageFs.McpTools.setLiveTesting rctx.McpContext false
+      do! jsonResponse ctx 200 {| success = true; message = result; activation = "inactive" |}
+    }) :> Task
+  ) |> ignore
+  app.MapPost("/api/live-testing/policy", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
+    withErrorHandling ctx (fun () -> task {
+      use! json = readJsonBody ctx
+      let category = json.RootElement.GetProperty("category").GetString()
+      let policy = json.RootElement.GetProperty("policy").GetString()
+      let! result = SageFs.McpTools.setRunPolicy rctx.McpContext category policy
+      do! jsonResponse ctx 200 {| success = true; message = result |}
+    }) :> Task
+  ) |> ignore
+  app.MapGet("/api/live-testing/file-annotations", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
+    withErrorHandling ctx (fun () -> task {
+      let fileParam = ctx.Request.Query.["file"].ToString()
+      match rctx.SseContext.GetElmModel with
+      | None -> do! jsonResponse ctx 503 {| error = "Elm loop not started" |}
+      | Some getModel ->
+        let model = getModel()
+        let lt = model.LiveTesting.TestState
+        let matchingFile = FileAnnotations.resolveFilePath fileParam lt.StatusEntries model.LiveTesting.InstrumentationMaps
+        match matchingFile with
+        | Some fullPath ->
+          let fa = FileAnnotations.projectWithCoverage fullPath model.LiveTesting
+          let json = System.Text.Json.JsonSerializer.Serialize(fa, rctx.SseContext.SseJsonOpts)
+          do! jsonResponse ctx 200 json
+        | None ->
+          let fa = FileAnnotations.empty fileParam
+          let json = System.Text.Json.JsonSerializer.Serialize(fa, rctx.SseContext.SseJsonOpts)
+          do! jsonResponse ctx 200 json
+    }) :> Task
+  ) |> ignore
+  app.MapGet("/api/live-testing/status", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
+    withErrorHandling ctx (fun () -> task {
+      let fileParam =
+        let fp = ctx.Request.Query.["file"].ToString()
+        match System.String.IsNullOrWhiteSpace fp with
+        | true -> None
+        | false -> Some fp
+      let! result = SageFs.McpTools.getLiveTestStatus rctx.McpContext fileParam
+      do! rawJsonResponse ctx result
+    }) :> Task
+  ) |> ignore
+  app.MapPost("/api/live-testing/run", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
+    withErrorHandling ctx (fun () -> task {
+      use! json = readJsonBody ctx
+      let pattern =
+        match json.RootElement.TryGetProperty("pattern") with
+        | true, v ->
+          let s = v.GetString()
+          match System.String.IsNullOrWhiteSpace s with
+          | true -> None
+          | false -> Some s
+        | false, _ -> None
+      let category =
+        match json.RootElement.TryGetProperty("category") with
+        | true, v ->
+          let s = v.GetString()
+          match System.String.IsNullOrWhiteSpace s with
+          | true -> None
+          | false -> Some s
+        | false, _ -> None
+      let timeout =
+        match json.RootElement.TryGetProperty("timeout_seconds") with
+        | true, v -> match v.TryGetInt32() with true, i -> i | _ -> 30
+        | false, _ -> 30
+      let! result = SageFs.McpTools.runTests rctx.McpContext pattern category timeout
+      do! jsonResponse ctx 200 {| success = true; message = result |}
+    }) :> Task
+  ) |> ignore
+  app.MapGet("/api/live-testing/test-trace", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
+    withErrorHandling ctx (fun () -> task {
+      let! result = SageFs.McpTools.getTestTrace rctx.McpContext
+      do! rawJsonResponse ctx result
+    }) :> Task
+  ) |> ignore
 
-            builder.Services
-                .AddMcpServer(fun options ->
-                  options.ServerInstructions <- String.concat " " [
-                    "SageFs is an affordance-driven F# Interactive (FSI) REPL with MCP integration."
-                    "ALWAYS use SageFs MCP tools for ALL F# work — never shell out to dotnet build, dotnet run, or PowerShell commands."
-                    "PowerShell is ONLY for process management: starting/stopping SageFs, dotnet pack, dotnet tool install/uninstall."
-                    "SageFs runs as a VISIBLE terminal window — the user watches it."
-                    "When starting or restarting SageFs, ALWAYS use Start-Process to launch in a visible console window, NEVER detach or run in background."
-                    "You OWN the full development cycle: pack, stop, reinstall, restart, test. Never ask the user to do these steps."
-                    "The MCP connection is SSE (push-based) — do not poll or sleep. Tools become available when SageFs is ready."
-                    "SageFs pushes structured notifications (notifications/message) for important events: session faults, warmup completion, file reloads, eval failures."
-                    "Tool responses return only Result: or Error: with diagnostics — no code echo (you already know what you sent)."
-                    "SageFs is affordance-driven: get_fsi_status shows available tools for the current session state. Only invoke listed tools."
-                    "If a tool returns an error about session state, check get_fsi_status for available alternatives."
-                    "Use send_fsharp_code for incremental, small code blocks. End statements with ';;' for evaluation."
-                    "FILE WATCHING: SageFs automatically watches .fs/.fsx source files and reloads changes via #load (~100ms). You do NOT need hard_reset to pick up source file edits."
-                    "hard_reset_fsi_session with rebuild=true is ONLY needed when .fsproj changes (new files, packages) or warm-up fails. The file watcher handles .fs/.fsx changes automatically."
-                    "Use cancel_eval to stop a running evaluation. Use reset_fsi_session only if warm-up failed."
-                  ]
-                )
-                .WithHttpTransport(fun opts ->
-                    // SSE connections are long-lived — only cull if we hit thousands
-                    opts.IdleTimeout <- SageFs.Timeouts.sseKeepAlive
-                    opts.MaxIdleSessionCount <- 1000
-                )
-                .WithTools<SageFs.Server.McpTools.SageFsTools>()
-                .WithRequestFilters(fun filters ->
-                    filters.AddCallToolFilter(createServerCaptureFilter serverTracker) |> ignore
-                )
-            |> ignore
-            
-            let app = builder.Build()
+let mapAnalysisRoutes (app: WebApplication) (rctx: RouteContext) =
+  app.MapPost("/api/explore", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
+    withErrorHandling ctx (fun () -> task {
+      let! name = readJsonProp ctx "name"
+      let! result = SageFs.McpTools.exploreNamespace rctx.McpContext "http" name None
+      do! rawJsonResponse ctx result
+    }) :> Task
+  ) |> ignore
+  app.MapPost("/api/completions", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
+    withErrorHandling ctx (fun () -> task {
+      use! json = readJsonBody ctx
+      let code = json.RootElement.GetProperty("code").GetString()
+      let cursor = json.RootElement.GetProperty("cursorPosition").GetInt32()
+      let! result = SageFs.McpTools.getCompletions rctx.McpContext "http" code cursor None
+      do! rawJsonResponse ctx result
+    }) :> Task
+  ) |> ignore
+  app.MapGet("/api/dependency-graph", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
+    let symbol =
+      match ctx.Request.Query.TryGetValue("symbol") with
+      | true, v -> Some (string v)
+      | _ -> None
+    let json, status =
+      match rctx.SseContext.GetElmModel with
+      | Some getModel ->
+        let model = getModel ()
+        let graph = model.LiveTesting.DepGraph
+        let results = model.LiveTesting.TestState.LastResults
+        let body =
+          match symbol with
+          | Some sym ->
+            let tests =
+              Map.tryFind sym graph.SymbolToTests
+              |> Option.defaultValue [||]
+              |> Array.map (fun testId ->
+                let tid = SageFs.Features.LiveTesting.TestId.value testId
+                let status =
+                  match Map.tryFind testId results with
+                  | Some r ->
+                    match r.Result with
+                    | SageFs.Features.LiveTesting.TestResult.Passed _ -> "passed"
+                    | SageFs.Features.LiveTesting.TestResult.Failed _ -> "failed"
+                    | _ -> "other"
+                  | None -> "unknown"
+                let testName =
+                  match Map.tryFind testId results with
+                  | Some r -> r.TestName
+                  | None -> tid
+                {| TestId = tid; TestName = testName; Status = status |})
+            System.Text.Json.JsonSerializer.Serialize(
+              {| Symbol = sym; Tests = tests; TotalSymbols = graph.SymbolToTests.Count |})
+          | None ->
+            let symbols =
+              graph.SymbolToTests
+              |> Map.toArray
+              |> Array.map (fun (sym, tids) -> {| Symbol = sym; TestCount = tids.Length |})
+            System.Text.Json.JsonSerializer.Serialize(
+              {| Symbols = symbols; TotalSymbols = symbols.Length |})
+        body, 200
+      | None ->
+        """{"error":"Elm model not available"}""", 503
+    task {
+      ctx.Response.StatusCode <- status
+      do! rawJsonResponse ctx json
+    } :> Task
+  ) |> ignore
+  app.MapGet("/api/recent-events", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
+    task {
+      let count =
+        match ctx.Request.Query.TryGetValue("count") with
+        | true, v -> match System.Int32.TryParse(string v) with true, n -> n | _ -> 20
+        | _ -> 20
+      let! result = SageFs.McpTools.getRecentEvents rctx.McpContext "http" count None
+      do! rawJsonResponse ctx result
+    } :> Task
+  ) |> ignore
+  app.MapGet("/api/sessions/{sid}/export-fsx", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
+    withErrorHandling ctx (fun () -> task {
+      let sid = ctx.Request.RouteValues.["sid"] |> string
+      let! events = rctx.McpContext.Persistence.FetchStream sid
+      let replayState =
+        events
+        |> SageFs.Features.Replay.SessionReplayState.replayStream
+      match replayState.EvalHistory with
+      | [] ->
+        do! jsonResponse ctx 200 {| content = ""; evalCount = 0 |}
+      | _ ->
+        let fsx = SageFs.Features.Replay.SessionReplayState.exportAsFsx replayState
+        do! jsonResponse ctx 200 {| content = fsx; evalCount = replayState.EvalHistory.Length |}
+    }) :> Task
+  ) |> ignore
 
-            // Wire SageFs.Core Log module to OTEL-connected ILogger
-            let coreLogger = app.Services.GetRequiredService<Microsoft.Extensions.Logging.ILoggerFactory>().CreateLogger("SageFs.Core")
-            SageFs.Utils.Log.logInfo <- fun msg -> coreLogger.LogInformation(msg)
-            SageFs.Utils.Log.logDebug <- fun msg -> coreLogger.LogDebug(msg)
-            SageFs.Utils.Log.logWarn <- fun msg -> coreLogger.LogWarning(msg)
-            SageFs.Utils.Log.logError <- fun msg -> coreLogger.LogError(msg)
+let startMcpServer (cfg: McpServerConfig) =
+  task {
+    try
+      let dispatch = cfg.ElmRuntime |> Option.map (fun r -> r.Dispatch)
+      let getElmRegions = cfg.ElmRuntime |> Option.map (fun r -> r.GetRegions)
+      let logPath = System.IO.Path.Combine(System.Environment.GetFolderPath(System.Environment.SpecialFolder.LocalApplicationData), "SageFs", "mcp-server.log")
+      System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(logPath)) |> ignore
+      let version = DaemonInfo.version
+      let otelConfigured = DaemonInfo.otelConfigured
 
-            app.UseResponseCompression() |> ignore
+      let builder = WebApplication.CreateBuilder([||])
+      let bindHost =
+        match System.Environment.GetEnvironmentVariable("SAGEFS_BIND_HOST") with
+        | null | "" -> "localhost"
+        | h -> h
+      builder.WebHost.UseUrls(sprintf "http://%s:%d" bindHost cfg.Port) |> ignore
 
-            // Map MCP endpoints
-            app.MapMcp() |> ignore
+      // Phase 1: Infrastructure
+      configureOtel builder cfg.Port version otelConfigured
+      configureLogging builder logPath otelConfigured
+      configureCompression builder
 
-            // mcpContext already constructed above for DI — reuse it for route handlers
+      // Phase 2: Services + MCP protocol
+      let stateChangedStr : IEvent<string> option =
+        cfg.StateChanged |> Option.map (fun evt ->
+          let bridge = Event<string>()
+          evt.Add(DaemonStateChange.toJson >> bridge.Trigger)
+          bridge.Publish)
+      let mcpContext = mkContext cfg stateChangedStr
+      let serverTracker = McpServerTracker()
+      let sseJsonOpts = JsonSerializerOptions()
+      sseJsonOpts.Converters.Add(System.Text.Json.Serialization.JsonFSharpConverter())
+      configureMcpProtocol builder mcpContext serverTracker
 
-            // CQRS: server-side bindings tracking — pushed via SSE, not polled
-            // Ref cells so module-level handlers can share state with /events endpoint
-            let fsiBindings = ref (Map.empty: Map<string, SageFs.SseWriter.FsiBinding>)
-            let featurePushState = ref SageFs.Features.FeatureHooks.FeaturePushState.empty
-            let lastFeatureOutputCount = ref 0
+      let app = builder.Build()
+      wireCoreLogs app
+      app.UseResponseCompression() |> ignore
+      app.MapMcp() |> ignore
 
-            // SSE context bundles immutable deps for extracted handlers
-            let sseCtx: SseContext = {
-              GetElmModel = getElmModel
-              GetWarmupContext = cfg.GetWarmupContext
-              GetHotReloadState = cfg.GetHotReloadState
-              SseJsonOpts = sseJsonOpts
-              TestEventBroadcast = testEventBroadcast
-              SessionEventBroadcast = sessionEventBroadcast
-              ServerTracker = serverTracker
-            }
-            
-            // POST /exec — send F# code to the session
-            app.MapPost("/exec", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
-                withErrorHandling ctx (fun () -> task {
-                    use! json = readJsonBody ctx
-                    let code = json.RootElement.GetProperty("code").GetString()
-                    let wd =
-                      match json.RootElement.TryGetProperty("working_directory") with
-                      | true, prop -> Some (prop.GetString())
-                      | false, _ -> None
-                    let filePath =
-                      match json.RootElement.TryGetProperty("file_path") with
-                      | true, prop -> Some (prop.GetString())
-                      | false, _ -> None
-                    let evalMode =
-                      match json.RootElement.TryGetProperty("eval_mode") with
-                      | true, prop -> Some (prop.GetString())
-                      | false, _ -> None
-                    let blockStartLine =
-                      match json.RootElement.TryGetProperty("block_start_line") with
-                      | true, prop -> Some (prop.GetInt32())
-                      | false, _ -> None
-                    let sw = System.Diagnostics.Stopwatch.StartNew()
-                    let! result = SageFs.McpTools.sendFSharpCode mcpContext "cli-integrated" code SageFs.McpTools.OutputFormat.Text None wd filePath evalMode blockStartLine
-                    sw.Stop()
-                    featurePushState.Value <- SageFs.Features.FeatureHooks.recordEval code result sw.ElapsedMilliseconds featurePushState.Value
-                    do! jsonResponse ctx 200 {| success = true; result = result |}
-                }) :> Task
-            ) |> ignore
+      // Phase 3: Route context + routes
+      let fsiBindings = ref (Map.empty: Map<string, SageFs.SseWriter.FsiBinding>)
+      let featurePushState = ref SageFs.Features.FeatureHooks.FeaturePushState.empty
+      let lastFeatureOutputCount = ref 0
+      let testEventBroadcast = Event<string>()
+      let sessionEventBroadcast = Event<string>()
+      let sseCtx: SseContext = {
+        GetElmModel = cfg.ElmRuntime |> Option.map (fun r -> r.GetModel)
+        GetWarmupContext = cfg.GetWarmupContext
+        GetHotReloadState = cfg.GetHotReloadState
+        SseJsonOpts = sseJsonOpts
+        TestEventBroadcast = testEventBroadcast
+        SessionEventBroadcast = sessionEventBroadcast
+        ServerTracker = serverTracker
+      }
+      let rctx: RouteContext = {
+        Config = cfg
+        McpContext = mcpContext
+        SseContext = sseCtx
+        Dispatch = dispatch
+        GetElmRegions = getElmRegions
+        FsiBindings = fsiBindings
+        FeaturePushState = featurePushState
+        LastFeatureOutputCount = lastFeatureOutputCount
+      }
 
-            // POST /reset — reset the FSI session
-            app.MapPost("/reset", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
-                withErrorHandling ctx (fun () -> task {
-                    let! result = SageFs.McpTools.resetSession mcpContext "http" None None
-                    do! jsonResponse ctx 200 {| success = not (result.Contains("Error")); message = result |}
-                }) :> Task
-            ) |> ignore
+      match cfg.StateChanged with
+      | Some evt -> wireSessionEventSubscription evt sseCtx
+      | None -> ()
 
-            // POST /hard-reset — hard reset with optional rebuild
-            app.MapPost("/hard-reset", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
-                withErrorHandling ctx (fun () -> task {
-                    use! json = readJsonBody ctx
-                    let rebuild =
-                        try
-                            match json.RootElement.TryGetProperty("rebuild") with
-                            | true, prop -> prop.GetBoolean()
-                            | false, _ -> false
-                        with :? System.Text.Json.JsonException -> false
-                    let! result = SageFs.McpTools.hardResetSession mcpContext "http" rebuild None None
-                    do! jsonResponse ctx 200 {| success = not (result.Contains("Error")); message = result |}
-                }) :> Task
-            ) |> ignore
+      mapExecutionRoutes app rctx
+      mapHealthRoutes app rctx
+      mapDiagnosticsRoutes app rctx
+      mapEventsRoute app rctx
+      mapStatusRoutes app rctx
+      mapSessionRoutes app rctx
+      mapLiveTestingRoutes app rctx
+      mapAnalysisRoutes app rctx
 
-            // POST /cancel — cancel a running evaluation
-            // Also mapped as /api/cancel-eval for Neovim plugin compatibility
-            app.MapPost("/cancel", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
-                withErrorHandling ctx (fun () -> task {
-                    let! _result = SageFs.McpTools.cancelEval mcpContext "http" None
-                    do! jsonResponse ctx 200 {| received = true |}
-                }) :> Task
-            ) |> ignore
+      let _stateSub =
+        cfg.StateChanged |> Option.map (fun evt ->
+          wireModelChangeHandlers evt sseCtx fsiBindings featurePushState lastFeatureOutputCount)
 
-            app.MapPost("/api/cancel-eval", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
-                withErrorHandling ctx (fun () -> task {
-                    let! _result = SageFs.McpTools.cancelEval mcpContext "http" None
-                    do! jsonResponse ctx 200 {| received = true |}
-                }) :> Task
-            ) |> ignore
-
-            // POST /load-script — load an .fsx script file
-            app.MapPost("/load-script", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
-                withErrorHandling ctx (fun () -> task {
-                    use! json = readJsonBody ctx
-                    let filePath = json.RootElement.GetProperty("path").GetString()
-                    let! _result = SageFs.McpTools.loadFSharpScript mcpContext "http" filePath None None
-                    do! jsonResponse ctx 200 {| received = true |}
-                }) :> Task
-            ) |> ignore
-
-            // GET /health — session health check
-            app.MapGet("/health", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
-                withErrorHandling ctx (fun () -> task {
-                    // Get simple machine-readable session status for extension polling
-                    let! allSessions = cfg.SessionOps.GetAllSessions()
-                    let! sessionStatus = task {
-                      match allSessions |> Seq.tryHead with
-                      | None -> return "no session"
-                      | Some sess ->
-                        let! proxy = cfg.SessionOps.GetProxy sess.Id
-                        match proxy with
-                        | Some send ->
-                          try
-                            let! resp = send (SageFs.WorkerProtocol.WorkerMessage.GetStatus "health") |> Async.StartAsTask
-                            match resp with
-                            | SageFs.WorkerProtocol.WorkerResponse.StatusResult(_, snap) ->
-                              return SageFs.WorkerProtocol.SessionStatus.label snap.Status
-                            | _ -> return "unknown"
-                          with
-                          | :? OperationCanceledException -> return "cancelled"
-                          | ex ->
-                            Log.debug "[MCP] health check error for session: %s" ex.Message
-                            return "error"
-                        | None -> return "starting"
-                    }
-                    let healthy = sessionStatus = "Ready" || sessionStatus = "Evaluating"
-                    do! jsonResponse ctx 200 {| healthy = healthy; status = sessionStatus |}
-                }) :> Task
-            ) |> ignore
-
-            // GET /diag/threadpool — ThreadPool state for measuring starvation
-            app.MapGet("/diag/threadpool", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
-                task {
-                    let workerThreads = ref 0
-                    let completionPortThreads = ref 0
-                    let maxWorkerThreads = ref 0
-                    let maxCompletionPortThreads = ref 0
-                    let minWorkerThreads = ref 0
-                    let minCompletionPortThreads = ref 0
-                    System.Threading.ThreadPool.GetAvailableThreads(workerThreads, completionPortThreads)
-                    System.Threading.ThreadPool.GetMaxThreads(maxWorkerThreads, maxCompletionPortThreads)
-                    System.Threading.ThreadPool.GetMinThreads(minWorkerThreads, minCompletionPortThreads)
-                    let pending = System.Threading.ThreadPool.PendingWorkItemCount
-                    let threadCount = System.Threading.ThreadPool.ThreadCount
-                    do! jsonResponse ctx 200
-                          {| available = workerThreads.Value
-                             max = maxWorkerThreads.Value
-                             min = minWorkerThreads.Value
-                             pending = pending
-                             threadCount = threadCount
-                             completionPort =
-                               {| available = completionPortThreads.Value
-                                  max = maxCompletionPortThreads.Value
-                                  min = minCompletionPortThreads.Value |} |}
-                } :> Task
-            ) |> ignore
-
-            // GET /version — protocol version and server info
-            app.MapGet("/version", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
-                task {
-                    let asm = typeof<SageFs.SageFsModel>.Assembly
-                    let v = asm.GetName().Version
-                    let infoVersion =
-                        asm.GetCustomAttributes(typeof<System.Reflection.AssemblyInformationalVersionAttribute>, false)
-                        |> Array.tryHead
-                        |> Option.map (fun a -> (a :?> System.Reflection.AssemblyInformationalVersionAttribute).InformationalVersion)
-                        |> Option.defaultValue (string v)
-                    do! jsonResponse ctx 200
-                          {| version = infoVersion
-                             protocolVersion = 1
-                             server = "sagefs"
-                             mcp = true
-                             sse = true |}
-                } :> Task
-            ) |> ignore
-
-            // POST /diagnostics — fire-and-forget diagnostics check via proxy
-            app.MapPost("/diagnostics", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
-                withErrorHandling ctx (fun () -> task {
-                    let! code = readJsonProp ctx "code"
-                    let! _ = SageFs.McpTools.checkFSharpCode mcpContext "http" code None None
-                    do! jsonResponse ctx 202 {| accepted = true |}
-                }) :> Task
-            ) |> ignore
-
-            // GET /diagnostics — SSE stream of diagnostics updates
-            app.MapGet("/diagnostics", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
-                task {
-                    SageFs.Instrumentation.sseConnectionsActive.Add(1L)
-                    setSseHeaders ctx
-
-                    // Send initial empty diagnostics
-                    let initialEvent = sprintf "event: diagnostics\ndata: []\n\n"
-                    do! writeSseFrame ctx.Response.Body initialEvent
-
-                    let diagSource =
-                      cfg.DiagnosticsChanged |> Observable.map (fun store ->
-                        let json = SageFs.McpAdapter.formatDiagnosticsStoreAsJson store
-                        sprintf "event: diagnostics\ndata: %s\n\n" json)
-                    do! runSseWriteLoop ctx.Response.Body ctx.RequestAborted [diagSource] 30000
-                    SageFs.Instrumentation.sseConnectionsActive.Add(-1L)
-                } :> Task
-            ) |> ignore
-
-            // Session event subscription: push HotReload/SessionReady via SSE
-            match cfg.StateChanged with
-            | Some evt -> wireSessionEventSubscription evt sseCtx
-            | None -> ()
-
-            // GET /events — SSE stream of Elm state changes
-            app.MapGet("/events", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
-                task {
-                    SageFs.Instrumentation.sseConnectionsActive.Add(1L)
-                    let connSw = System.Diagnostics.Stopwatch.StartNew()
-                    let connActivity =
-                      SageFs.Instrumentation.startSpanWithKind
-                        SageFs.Instrumentation.daemonSource "sse.connection"
-                        System.Diagnostics.ActivityKind.Server
-                        [("sse.endpoint", box "/events")]
-                    setSseHeaders ctx
-
-                    match cfg.StateChanged with
-                    | Some evt ->
-                        // Replay snapshots BEFORE subscriptions — direct async writes (no race)
-                        do! replaySessionSnapshot sseCtx ctx.Response.Body
-                        do! replayCachedTestState sseCtx ctx.Response.Body
-                        match fsiBindings.Value.Count, SseContext.activeSessionId sseCtx with
-                        | count, Some sid when count > 0 ->
-                          fsiBindings.Value |> Map.values |> Array.ofSeq
-                          |> SageFs.SseWriter.formatBindingsSnapshotEvent sseJsonOpts (Some sid)
-                          |> writeSseFrame ctx.Response.Body
-                          |> fun t -> t.Wait()
-                        | _ -> ()
-                        // Replay feature push state for new SSE connections
-                        [featurePushState.Value.LastEvalDiffSse
-                         featurePushState.Value.LastCellDepsSse
-                         featurePushState.Value.LastBindingScopeSse
-                         featurePushState.Value.LastEvalTimelineSse]
-                        |> List.choose id
-                        |> List.iter (fun sse ->
-                          writeSseFrame ctx.Response.Body sse |> fun t -> t.Wait())
-                        // Build typed source from state changes
-                        let stateSource =
-                          evt |> Observable.map (fun change ->
-                            change
-                            |> DaemonStateChange.toJson
-                            |> SageFs.SseWriter.formatSseEvent "state")
-                        // Channel write loop: all sources + heartbeat funneled through one async writer
-                        do! runSseWriteLoop
-                              ctx.Response.Body
-                              ctx.RequestAborted
-                              [ stateSource; testEventBroadcast.Publish; sessionEventBroadcast.Publish ]
-                              15000
-                        connSw.Stop()
-                        SageFs.Instrumentation.sseConnectionDurationMs.Record(connSw.Elapsed.TotalMilliseconds)
-                        SageFs.Instrumentation.sseConnectionsActive.Add(-1L)
-                        SageFs.Instrumentation.succeedSpan connActivity
-                    | None ->
-                        ctx.Response.StatusCode <- 501
-                        do! writeSseFrame ctx.Response.Body "event: error\ndata: {\"error\":\"No Elm loop available\"}\n\n"
-                        connSw.Stop()
-                        SageFs.Instrumentation.sseConnectionDurationMs.Record(connSw.Elapsed.TotalMilliseconds)
-                        SageFs.Instrumentation.sseConnectionsActive.Add(-1L)
-                        SageFs.Instrumentation.failSpan connActivity "No Elm loop available"
-                } :> Task
-            ) |> ignore
-
-            // GET /api/status — rich JSON status via proxy
-            // Accepts ?sessionId=X to query a specific session
-            app.MapGet("/api/status", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
-                withErrorHandling ctx (fun () -> task {
-                    let! sid = task {
-                      match ctx.Request.Query.TryGetValue("sessionId") with
-                      | true, v when v.Count > 0 && not (String.IsNullOrWhiteSpace(v.[0])) -> return v.[0]
-                      | _ ->
-                        let! sessions = cfg.SessionOps.GetAllSessions()
-                        return sessions |> List.tryHead |> Option.map (fun s -> s.Id) |> Option.defaultValue ""
-                    }
-                    let! info = cfg.SessionOps.GetSessionInfo sid
-                    let! statusResult =
-                      task {
-                        let! proxy = cfg.SessionOps.GetProxy sid
-                        match proxy with
-                        | Some send ->
-                          let! resp = send (SageFs.WorkerProtocol.WorkerMessage.GetStatus "api") |> Async.StartAsTask
-                          return Some resp
-                        | None -> return None
-                      }
-                    let elmRegions =
-                      match getElmRegions with
-                      | Some getRegions -> getRegions ()
-                      | None -> []
-                    let version = DaemonInfo.version
-                    let regionData =
-                      elmRegions |> List.map (fun (r: SageFs.RenderRegion) ->
-                        {| id = r.Id
-                           content = r.Content |> fun s -> match s.Length > 2000 with | true -> s.[..1999] | false -> s
-                           affordances = r.Affordances |> List.map (fun a -> a.ToString()) |})
-                    let sessionState, evalCount, avgMs, minMs, maxMs =
-                      match statusResult with
-                      | Some (SageFs.WorkerProtocol.WorkerResponse.StatusResult(_, snap)) ->
-                        SageFs.WorkerProtocol.SessionStatus.label snap.Status,
-                        snap.EvalCount,
-                        (match snap.EvalCount > 0 with | true -> float snap.AvgDurationMs | false -> 0.0),
-                        float snap.MinDurationMs,
-                        float snap.MaxDurationMs
-                      | _ -> "Unknown", 0, 0.0, 0.0, 0.0
-                    let workingDir =
-                      info |> Option.map (fun i -> i.WorkingDirectory) |> Option.defaultValue ""
-                    let projects =
-                      info |> Option.map (fun i -> i.Projects) |> Option.defaultValue []
-                    let data =
-                      {| version = version
-                         sessionId = sid
-                         sessionState = sessionState
-                         evalCount = evalCount
-                         totalDurationMs = avgMs * float evalCount
-                         avgDurationMs = avgMs
-                         minDurationMs = minMs
-                         maxDurationMs = maxMs
-                         workingDirectory = workingDir
-                         projectCount = projects.Length
-                         projects = projects
-                         warmupFailures = ([] : {| name: string; error: string |} list)
-                         regions = regionData
-                         pid = Environment.ProcessId
-                         uptime =
-                           use proc = System.Diagnostics.Process.GetCurrentProcess()
-                           (DateTime.UtcNow - proc.StartTime.ToUniversalTime()).TotalSeconds |}
-                    do! jsonResponse ctx 200 data
-                }) :> Task
-            ) |> ignore
-
-            // GET /api/system/status — system-level info including watchdog state
-            app.MapGet("/api/system/status", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
-                withErrorHandling ctx (fun () -> task {
-                    let supervised =
-                      Environment.GetEnvironmentVariable("SAGEFS_SUPERVISED")
-                      |> Option.ofObj |> Option.map (fun s -> s = "1") |> Option.defaultValue false
-                    let restartCount =
-                      Environment.GetEnvironmentVariable("SAGEFS_RESTART_COUNT")
-                      |> Option.ofObj |> Option.bind (fun s -> match Int32.TryParse s with true, n -> Some n | _ -> None)
-                      |> Option.defaultValue 0
-                    use proc = System.Diagnostics.Process.GetCurrentProcess()
-                    let uptime = (DateTime.UtcNow - proc.StartTime.ToUniversalTime()).TotalSeconds
-                    let version = DaemonInfo.version
-                    let! allSessions = cfg.SessionOps.GetAllSessions()
-                    let data =
-                      {| version = version
-                         pid = Environment.ProcessId
-                         uptimeSeconds = uptime
-                         supervised = supervised
-                         restartCount = restartCount
-                         sessionCount = allSessions.Length
-                         mcpPort = cfg.Port
-                         dashboardPort = cfg.Port + 1 |}
-                    do! jsonResponse ctx 200 data
-                }) :> Task
-            ) |> ignore
-            
-            // GET /api/sessions — list all sessions with details
-            app.MapGet("/api/sessions", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
-                withErrorHandling ctx (fun () -> task {
-                    let! allSessions = cfg.SessionOps.GetAllSessions()
-                    let results = System.Collections.Generic.List<obj>()
-                    for sess in allSessions do
-                      let! proxy = cfg.SessionOps.GetProxy sess.Id
-                      let! evalCount, avgMs, status = task {
-                        match proxy with
-                        | Some send ->
-                          try
-                            let! resp = send (SageFs.WorkerProtocol.WorkerMessage.GetStatus "api") |> Async.StartAsTask
-                            match resp with
-                            | SageFs.WorkerProtocol.WorkerResponse.StatusResult(_, snap) ->
-                              return snap.EvalCount, float snap.AvgDurationMs, SageFs.WorkerProtocol.SessionStatus.label snap.Status
-                            | _ -> return 0, 0.0, "Unknown"
-                          with
-                          | :? System.Net.Http.HttpRequestException as ex ->
-                            Log.error "[MCP] Session status HTTP error for %s: %s" sess.Id ex.Message
-                            return 0, 0.0, "Error"
-                          | :? System.Threading.Tasks.TaskCanceledException ->
-                            return 0, 0.0, "Timeout"
-                          | ex ->
-                            Log.error "[MCP] Session status unexpected error for %s: %s (%s)" sess.Id ex.Message (ex.GetType().Name)
-                            return 0, 0.0, "Error"
-                        | None -> return 0, 0.0, "Disconnected"
-                      }
-                      results.Add(
-                        {| id = sess.Id
-                           status = status
-                           projects = sess.Projects
-                           workingDirectory = sess.WorkingDirectory
-                           evalCount = evalCount
-                           avgDurationMs = avgMs |} :> obj)
-                    do! jsonResponse ctx 200 {| sessions = results |}
-                }) :> Task
-            ) |> ignore
-
-            // POST /api/sessions/switch — switch session for the requesting client
-            app.MapPost("/api/sessions/switch", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
-                withErrorHandling ctx (fun () -> task {
-                    let! sid = readJsonProp ctx "sessionId"
-                    // Verify session exists
-                    let! info = cfg.SessionOps.GetSessionInfo sid
-                    match info with
-                    | Some _ ->
-                      // Update per-agent session map so /exec and other HTTP endpoints route correctly
-                      SageFs.McpTools.setActiveSessionId mcpContext "cli-integrated" sid
-                      SageFs.McpTools.setActiveSessionId mcpContext "http" sid
-                      match dispatch with
-                      | Some d ->
-                        d (SageFs.SageFsMsg.Event (SageFs.SageFsEvent.SessionSwitched (None, sid)))
-                        d (SageFs.SageFsMsg.Editor SageFs.EditorAction.ListSessions)
-                      | None -> ()
-                      let! _ = mcpContext.Persistence.AppendEvents "daemon-sessions" [
-                        SageFs.Features.Events.SageFsEvent.DaemonSessionSwitched
-                          {| FromId = None; ToId = sid; SwitchedAt = System.DateTimeOffset.UtcNow |}
-                      ]
-                      do! jsonResponse ctx 200 {| success = true; sessionId = sid |}
-                    | None ->
-                      do! jsonResponse ctx 404 {| success = false; error = sprintf "Session '%s' not found" sid |}
-                }) :> Task
-            ) |> ignore
-
-            // POST /api/sessions/create — create a new session
-            app.MapPost("/api/sessions/create", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
-                withErrorHandling ctx (fun () -> task {
-                    use! doc = readJsonBody ctx
-                    let root = doc.RootElement
-                    let workingDir =
-                      let tryProp (name: string) =
-                        let mutable value = Unchecked.defaultof<System.Text.Json.JsonElement>
-                        match root.TryGetProperty(name, &value) with
-                        | true -> Some (value.GetString())
-                        | false -> None
-                      tryProp "workingDirectory"
-                      |> Option.orElseWith (fun () -> tryProp "working_directory")
-                      |> Option.defaultValue Environment.CurrentDirectory
-                    let projects =
-                      let mutable projProp = Unchecked.defaultof<System.Text.Json.JsonElement>
-                      match root.TryGetProperty("projects", &projProp) with
-                      | true ->
-                        match projProp.ValueKind with
-                        | System.Text.Json.JsonValueKind.Array ->
-                          projProp.EnumerateArray()
-                          |> Seq.map (fun e -> e.GetString())
-                          |> Seq.toList
-                        | System.Text.Json.JsonValueKind.String ->
-                          [ projProp.GetString() ]
-                        | _ -> []
-                      | false -> []
-                    let! result = cfg.SessionOps.CreateSession projects workingDir
-                    match result with
-                    | Ok msg ->
-                      // Activate the new session for HTTP endpoints
-                      SageFs.McpTools.setActiveSessionId mcpContext "cli-integrated" msg
-                      SageFs.McpTools.setActiveSessionId mcpContext "http" msg
-                      match dispatch with
-                      | Some d -> d (SageFs.SageFsMsg.Editor SageFs.EditorAction.ListSessions)
-                      | None -> ()
-                      do! jsonResponse ctx 200 {| success = true; message = msg |}
-                    | Error err ->
-                      do! jsonResponse ctx 400 {| success = false; error = SageFs.SageFsError.describe err |}
-                }) :> Task
-            ) |> ignore
-
-            // POST /api/sessions/stop — stop a session
-            app.MapPost("/api/sessions/stop", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
-                withErrorHandling ctx (fun () -> task {
-                    let! sid = readJsonProp ctx "sessionId"
-                    let! result = cfg.SessionOps.StopSession sid
-                    match dispatch with
-                    | Some d -> d (SageFs.SageFsMsg.Editor SageFs.EditorAction.ListSessions)
-                    | None -> ()
-                    match result with
-                    | Ok msg -> do! jsonResponse ctx 200 {| success = true; message = msg |}
-                    | Error err -> do! jsonResponse ctx 400 {| success = false; error = SageFs.SageFsError.describe err |}
-                }) :> Task
-            ) |> ignore
-
-            // POST /api/live-testing/enable — enable live testing
-            app.MapPost("/api/live-testing/enable", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
-                withErrorHandling ctx (fun () -> task {
-                    let! result = SageFs.McpTools.setLiveTesting mcpContext true
-                    do! jsonResponse ctx 200 {| success = true; message = result; activation = "active" |}
-                }) :> Task
-            ) |> ignore
-
-            // POST /api/live-testing/disable — disable live testing
-            app.MapPost("/api/live-testing/disable", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
-                withErrorHandling ctx (fun () -> task {
-                    let! result = SageFs.McpTools.setLiveTesting mcpContext false
-                    do! jsonResponse ctx 200 {| success = true; message = result; activation = "inactive" |}
-                }) :> Task
-            ) |> ignore
-
-            // POST /api/live-testing/policy — set run policy for a test category
-            app.MapPost("/api/live-testing/policy", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
-                withErrorHandling ctx (fun () -> task {
-                    use! json = readJsonBody ctx
-                    let category = json.RootElement.GetProperty("category").GetString()
-                    let policy = json.RootElement.GetProperty("policy").GetString()
-                    let! result = SageFs.McpTools.setRunPolicy mcpContext category policy
-                    do! jsonResponse ctx 200 {| success = true; message = result |}
-                }) :> Task
-            ) |> ignore
-
-            // GET /api/live-testing/file-annotations?file=X — get annotations for a file
-            app.MapGet("/api/live-testing/file-annotations", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
-                withErrorHandling ctx (fun () -> task {
-                    let fileParam = ctx.Request.Query.["file"].ToString()
-                    match getElmModel with
-                    | None -> do! jsonResponse ctx 503 {| error = "Elm loop not started" |}
-                    | Some getModel ->
-                      let model = getModel()
-                      let lt = model.LiveTesting.TestState
-                      let matchingFile = FileAnnotations.resolveFilePath fileParam lt.StatusEntries model.LiveTesting.InstrumentationMaps
-                      match matchingFile with
-                      | Some fullPath ->
-                        let fa = FileAnnotations.projectWithCoverage fullPath model.LiveTesting
-                        let json = System.Text.Json.JsonSerializer.Serialize(fa, sseJsonOpts)
-                        do! jsonResponse ctx 200 json
-                      | None ->
-                        let fa = FileAnnotations.empty fileParam
-                        let json = System.Text.Json.JsonSerializer.Serialize(fa, sseJsonOpts)
-                        do! jsonResponse ctx 200 json
-                }) :> Task
-            ) |> ignore
-
-            // GET /api/live-testing/status — get test status with optional file filter
-            app.MapGet("/api/live-testing/status", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
-                withErrorHandling ctx (fun () -> task {
-                    let fileParam =
-                      let fp = ctx.Request.Query.["file"].ToString()
-                      match System.String.IsNullOrWhiteSpace fp with
-                      | true -> None
-                      | false -> Some fp
-                    let! result = SageFs.McpTools.getLiveTestStatus mcpContext fileParam
-                    do! rawJsonResponse ctx result
-                }) :> Task
-            ) |> ignore
-
-            // POST /api/live-testing/run — explicitly run tests
-            app.MapPost("/api/live-testing/run", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
-                withErrorHandling ctx (fun () -> task {
-                    use! json = readJsonBody ctx
-                    let pattern =
-                      match json.RootElement.TryGetProperty("pattern") with
-                      | true, v ->
-                        let s = v.GetString()
-                        match System.String.IsNullOrWhiteSpace s with
-                        | true -> None
-                        | false -> Some s
-                      | false, _ -> None
-                    let category =
-                      match json.RootElement.TryGetProperty("category") with
-                      | true, v ->
-                        let s = v.GetString()
-                        match System.String.IsNullOrWhiteSpace s with
-                        | true -> None
-                        | false -> Some s
-                      | false, _ -> None
-                    let timeout =
-                      match json.RootElement.TryGetProperty("timeout_seconds") with
-                      | true, v -> match v.TryGetInt32() with true, i -> i | _ -> 30
-                      | false, _ -> 30
-                    let! result = SageFs.McpTools.runTests mcpContext pattern category timeout
-                    do! jsonResponse ctx 200 {| success = true; message = result |}
-                }) :> Task
-            ) |> ignore
-
-            // POST /api/explore— explore a namespace or type
-            app.MapPost("/api/explore", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
-                withErrorHandling ctx (fun () -> task {
-                    let! name = readJsonProp ctx "name"
-                    let! result = SageFs.McpTools.exploreNamespace mcpContext "http" name None
-                    do! rawJsonResponse ctx result
-                }) :> Task
-            ) |> ignore
-
-            // POST /api/completions — get code completions
-            app.MapPost("/api/completions", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
-                withErrorHandling ctx (fun () -> task {
-                    use! json = readJsonBody ctx
-                    let code = json.RootElement.GetProperty("code").GetString()
-                    let cursor = json.RootElement.GetProperty("cursorPosition").GetInt32()
-                    let! result = SageFs.McpTools.getCompletions mcpContext "http" code cursor None
-                    do! rawJsonResponse ctx result
-                }) :> Task
-            ) |> ignore
-
-            // GET /api/dependency-graph — get test dependency graph for a symbol
-            app.MapGet("/api/dependency-graph", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
-                let symbol =
-                  match ctx.Request.Query.TryGetValue("symbol") with
-                  | true, v -> Some (string v)
-                  | _ -> None
-                let json, status =
-                  match getElmModel with
-                  | Some getModel ->
-                    let model = getModel ()
-                    let graph = model.LiveTesting.DepGraph
-                    let results = model.LiveTesting.TestState.LastResults
-                    let body =
-                      match symbol with
-                      | Some sym ->
-                        let tests =
-                          Map.tryFind sym graph.SymbolToTests
-                          |> Option.defaultValue [||]
-                          |> Array.map (fun testId ->
-                            let tid = SageFs.Features.LiveTesting.TestId.value testId
-                            let status =
-                              match Map.tryFind testId results with
-                              | Some r ->
-                                match r.Result with
-                                | SageFs.Features.LiveTesting.TestResult.Passed _ -> "passed"
-                                | SageFs.Features.LiveTesting.TestResult.Failed _ -> "failed"
-                                | _ -> "other"
-                              | None -> "unknown"
-                            let testName =
-                              match Map.tryFind testId results with
-                              | Some r -> r.TestName
-                              | None -> tid
-                            {| TestId = tid; TestName = testName; Status = status |})
-                        System.Text.Json.JsonSerializer.Serialize(
-                          {| Symbol = sym; Tests = tests; TotalSymbols = graph.SymbolToTests.Count |})
-                      | None ->
-                        let symbols =
-                          graph.SymbolToTests
-                          |> Map.toArray
-                          |> Array.map (fun (sym, tids) -> {| Symbol = sym; TestCount = tids.Length |})
-                        System.Text.Json.JsonSerializer.Serialize(
-                          {| Symbols = symbols; TotalSymbols = symbols.Length |})
-                    body, 200
-                  | None ->
-                    """{"error":"Elm model not available"}""", 503
-                task {
-                    ctx.Response.StatusCode <- status
-                    do! rawJsonResponse ctx json
-                } :> Task
-            ) |> ignore
-
-            // GET /api/live-testing/test-trace — test trace (mirrors MCP get_test_trace)
-            app.MapGet("/api/live-testing/test-trace", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
-                withErrorHandling ctx (fun () -> task {
-                    let! result = SageFs.McpTools.getTestTrace mcpContext
-                    do! rawJsonResponse ctx result
-                }) :> Task
-            ) |> ignore
-
-            // GET /api/recent-events — get recent FSI events
-            app.MapGet("/api/recent-events", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
-                task {
-                    let count =
-                      match ctx.Request.Query.TryGetValue("count") with
-                      | true, v -> match System.Int32.TryParse(string v) with true, n -> n | _ -> 20
-                      | _ -> 20
-                    let! result = SageFs.McpTools.getRecentEvents mcpContext "http" count None
-                    do! rawJsonResponse ctx result
-                } :> Task
-            ) |> ignore
-
-            // GET /api/sessions/{sid}/export-fsx — export eval history as .fsx script
-            app.MapGet("/api/sessions/{sid}/export-fsx", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
-                withErrorHandling ctx (fun () -> task {
-                    let sid = ctx.Request.RouteValues.["sid"] |> string
-                    let! events = mcpContext.Persistence.FetchStream sid
-                    let replayState =
-                      events
-                      |> SageFs.Features.Replay.SessionReplayState.replayStream
-                    match replayState.EvalHistory with
-                    | [] ->
-                      do! jsonResponse ctx 200 {| content = ""; evalCount = 0 |}
-                    | _ ->
-                      let fsx = SageFs.Features.Replay.SessionReplayState.exportAsFsx replayState
-                      do! jsonResponse ctx 200 {| content = fsx; evalCount = replayState.EvalHistory.Length |}
-                }) :> Task
-            ) |> ignore
-            // State change → SSE + MCP notifications
-            // Pure handler logic lives in McpStateHandlers.fs; wiring is in wireModelChangeHandlers.
-            let _stateSub =
-              cfg.StateChanged |> Option.map (fun evt ->
-                wireModelChangeHandlers evt sseCtx fsiBindings featurePushState lastFeatureOutputCount)
-
-            // Get logger from DI for structured logging (flows to OTEL)
-            let logger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("SageFs.McpServer")
-
-            // Log startup info — structured so OTEL captures it
-            logger.LogInformation("MCP server starting on port {Port}", cfg.Port)
-            logger.LogInformation("SSE endpoint: http://localhost:{Port}/sse", cfg.Port)
-            logger.LogInformation("State events SSE: http://localhost:{Port}/events", cfg.Port)
-            logger.LogInformation("Kestrel max connections: {MaxConnections}", 200)
-            logger.LogInformation("Log file: {LogPath}", logPath)
-            
-            // Log OTEL configuration
-            match otelConfigured with
-            | true ->
-              let endpoint =
-                Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_ENDPOINT")
-              let protocol =
-                Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_PROTOCOL")
-                |> Option.ofObj |> Option.defaultValue "grpc"
-              logger.LogInformation("OpenTelemetry enabled: endpoint={OtelEndpoint}, protocol={OtelProtocol}", endpoint, protocol)
-            | false ->
-              logger.LogInformation("OpenTelemetry not configured (set OTEL_EXPORTER_OTLP_ENDPOINT)")
-            
-            do! app.RunAsync()
-        with ex ->
-            Log.error "MCP server failed to start: %s" ex.Message
-    }
+      logStartup app cfg.Port logPath otelConfigured
+      do! app.RunAsync()
+    with ex ->
+      Log.error "MCP server failed to start: %s" ex.Message
+  }
