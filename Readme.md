@@ -150,7 +150,7 @@ sagefs
 # Or let your editor start it — VS Code, Neovim, and Visual Studio
 # all auto-start the daemon and create sessions for your open project.
 
-# MCP endpoint:  http://localhost:37749/mcp
+# MCP endpoint:  http://localhost:37749/sse
 # Dashboard:     http://localhost:37750/dashboard
 ```
 
@@ -224,10 +224,10 @@ Uses the [VisualStudio.Extensibility](https://learn.microsoft.com/en-us/visualst
 
 #### AI Agent (MCP)
 
-Connect any MCP client to `http://localhost:37749/mcp` (Streamable HTTP transport):
+Connect any MCP client to `http://localhost:37749/sse`:
 
 ```json
-{ "mcpServers": { "sagefs": { "type": "sse", "url": "http://localhost:37749/mcp" } } }
+{ "mcpServers": { "sagefs": { "type": "sse", "url": "http://localhost:37749/sse" } } }
 ```
 
 Works with GitHub Copilot (CLI & VS Code), Claude Code, Claude Desktop, and any MCP-compatible tool. 23 tools available — from `send_fsharp_code` to `run_tests` to `explore_type`. The **edit → auto-test → poll** workflow means agents don't even need to call eval — just edit files and check `get_live_test_status`.
