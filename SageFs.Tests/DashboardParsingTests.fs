@@ -3,6 +3,7 @@ module SageFs.Tests.DashboardParsingTests
 open Expecto
 open Falco.Markup
 open SageFs
+open SageFs.Features.BindingExplorer
 open SageFs.Server.DashboardTypes
 open SageFs.Server.DashboardFragments
 open System.Text.RegularExpressions
@@ -570,6 +571,64 @@ let perSessionCoverageTests =
         renderSessions [session] false
         |> renderNode
       Expect.isFalse (html.Contains("linear-gradient")) "no gradient without coverage")
+  ]
+
+[<Tests>]
+let bindingsPanelTests =
+  testList "Bindings panel rendering" [
+    testCase "empty panel when no snapshot" (fun () ->
+      let html = renderBindingsPanel None |> renderNode
+      Expect.isTrue (html.Contains("bindings-panel")) "has panel id"
+      Expect.isTrue (html.Contains("Bindings (0)")) "shows zero count"
+      Expect.isTrue (html.Contains("No bindings yet")) "shows placeholder")
+
+    testCase "active bindings render name and type" (fun () ->
+      let scope : SageFs.Features.BindingExplorer.BindingScopeSnapshot = {
+        Bindings = [
+          { Name = "x"; TypeSig = "int"; CellIndex = 0; ShadowedBy = []; ReferencedIn = [] }
+          { Name = "greet"; TypeSig = "string -> string"; CellIndex = 1; ShadowedBy = []; ReferencedIn = [] }
+        ]
+        ActiveBindings =
+          [ ("x", { Name = "x"; TypeSig = "int"; CellIndex = 0; ShadowedBy = []; ReferencedIn = [] })
+            ("greet", { Name = "greet"; TypeSig = "string -> string"; CellIndex = 1; ShadowedBy = []; ReferencedIn = [] }) ]
+          |> Map.ofList
+        ShadowedBindings = []
+      }
+      let html = renderBindingsPanel (Some scope) |> renderNode
+      Expect.isTrue (html.Contains("Bindings (2)")) "shows count of 2"
+      Expect.isTrue (html.Contains("x")) "has binding name x"
+      Expect.isTrue (html.Contains("int")) "has type sig int"
+      Expect.isTrue (html.Contains("greet")) "has binding name greet"
+      Expect.isTrue (html.Contains("string -&gt; string") || html.Contains("string -> string")) "has function type sig")
+
+    testCase "shadowed bindings render in collapsed section" (fun () ->
+      let scope : SageFs.Features.BindingExplorer.BindingScopeSnapshot = {
+        Bindings = [
+          { Name = "x"; TypeSig = "int"; CellIndex = 0; ShadowedBy = [2]; ReferencedIn = [] }
+          { Name = "x"; TypeSig = "string"; CellIndex = 2; ShadowedBy = []; ReferencedIn = [] }
+        ]
+        ActiveBindings =
+          [ ("x", { Name = "x"; TypeSig = "string"; CellIndex = 2; ShadowedBy = []; ReferencedIn = [] }) ]
+          |> Map.ofList
+        ShadowedBindings =
+          [ { Name = "x"; TypeSig = "int"; CellIndex = 0; ShadowedBy = [2]; ReferencedIn = [] } ]
+      }
+      let html = renderBindingsPanel (Some scope) |> renderNode
+      Expect.isTrue (html.Contains("Bindings (1)")) "shows active count 1"
+      Expect.isTrue (html.Contains("1 shadowed")) "mentions shadowed count")
+
+    testCase "reference count shown when binding is referenced" (fun () ->
+      let scope : SageFs.Features.BindingExplorer.BindingScopeSnapshot = {
+        Bindings = [
+          { Name = "helper"; TypeSig = "int -> int"; CellIndex = 0; ShadowedBy = []; ReferencedIn = [1; 2] }
+        ]
+        ActiveBindings =
+          [ ("helper", { Name = "helper"; TypeSig = "int -> int"; CellIndex = 0; ShadowedBy = []; ReferencedIn = [1; 2] }) ]
+          |> Map.ofList
+        ShadowedBindings = []
+      }
+      let html = renderBindingsPanel (Some scope) |> renderNode
+      Expect.isTrue (html.Contains("→2")) "shows reference count arrow")
   ]
 
 [<Tests>]

@@ -39,6 +39,7 @@ module DomIds =
   let [<Literal>] OutputSection = "output-section"
   let [<Literal>] Sidebar = "sidebar"
   let [<Literal>] SidebarResize = "sidebar-resize"
+  let [<Literal>] BindingsPanel = "bindings-panel"
 
 /// Datastar signal names — shared between Ds.signal init and Ds.bind/Ds.show refs.
 [<RequireQualifiedAccess>]
@@ -315,6 +316,7 @@ type DashboardQueries = {
   GetTestTrace: unit -> {| Timing: Features.LiveTesting.TestCycleTiming option; IsRunning: bool; Summary: Features.LiveTesting.TestSummary |} option
   GetSessionTestSummary: string -> Features.LiveTesting.TestSummary option
   GetSessionCoverageSummary: string -> Features.LiveTesting.CoverageSummary option
+  GetBindingScopeSnapshot: unit -> Features.BindingExplorer.BindingScopeSnapshot option
   GetLiveTestingStatus: unit -> string
 }
 
@@ -358,6 +360,7 @@ type DashboardSnapshot = {
   SessionPicker: XmlNode
   ThemePicker: XmlNode
   ThemeVars: XmlNode
+  BindingsPanel: XmlNode
 }
 
 /// Parse an editor action string + optional value into an EditorAction DU case.

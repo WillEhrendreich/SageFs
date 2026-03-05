@@ -72,14 +72,16 @@ let computeCellDepsPush (opts: System.Text.Json.JsonSerializerOptions) (sessionI
   else
     { state with LastCellDepsSse = Some sseStr }, Some sseStr
 
+let buildScopeFromState (state: FeaturePushState) =
+  state.EvalHistory
+  |> List.map (fun (e: EvalHistoryEntry) ->
+    { BindingExplorer.CellInput.CellIndex = e.CellIndex
+      BindingExplorer.CellInput.FsiOutput = e.Result
+      BindingExplorer.CellInput.Source = e.Code } : BindingExplorer.CellInput)
+  |> BindingExplorer.buildScopeSnapshot
+
 let computeBindingScopePush (opts: System.Text.Json.JsonSerializerOptions) (sessionId: string option) (state: FeaturePushState) =
-  let inputs =
-    state.EvalHistory
-    |> List.map (fun (e: EvalHistoryEntry) ->
-      { BindingExplorer.CellInput.CellIndex = e.CellIndex
-        BindingExplorer.CellInput.FsiOutput = e.Result
-        BindingExplorer.CellInput.Source = e.Code } : BindingExplorer.CellInput)
-  let snapshot = BindingExplorer.buildScopeSnapshot inputs
+  let snapshot = buildScopeFromState state
   let sseStr = SageFs.SseWriter.formatBindingScopeMapEvent opts sessionId snapshot
   if Some sseStr = state.LastBindingScopeSse then
     { state with LastBindingScopeSse = Some sseStr }, None

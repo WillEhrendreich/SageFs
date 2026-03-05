@@ -333,6 +333,8 @@ let createStreamHandler
         match q.GetTestTrace () with
         | Some trace -> renderTestTracePanel trace.Timing trace.IsRunning trace.Summary
         | None -> renderTestTraceEmpty
+      // Build bindings explorer panel
+      let bindingsPanel = renderBindingsPanel (q.GetBindingScopeSnapshot ())
       // Build output + sessions from Elm regions
       let! outputPanel, sessionsPanel, sessionPicker = task {
         match q.GetElmRegions () with
@@ -398,6 +400,7 @@ let createStreamHandler
         SessionPicker = sessionPicker
         ThemePicker = renderThemePicker themeName
         ThemeVars = renderThemeVars themeName
+        BindingsPanel = bindingsPanel
       }
       do! ssePatchNode ctx (renderMainContent snap)
     }

@@ -235,6 +235,7 @@ type McpServerConfig = {
   ElmRuntime: SageFs.ElmRuntime<SageFs.SageFsModel, SageFs.SageFsMsg, SageFs.RenderRegion> option
   GetWarmupContext: (string -> Task<SageFs.WarmupContext option>) option
   GetHotReloadState: (string -> Task<string list option>) option
+  SharedBindingScope: SageFs.Features.BindingExplorer.BindingScopeSnapshot option ref
 }
 
 // Create shared MCP context (private — called only by startMcpServer)
@@ -437,7 +438,8 @@ let wireModelChangeHandlers
   (ctx: SseContext)
   (fsiBindings: Map<string, SageFs.SseWriter.FsiBinding> ref)
   (featurePushState: SageFs.Features.FeatureHooks.FeaturePushState ref)
-  (lastFeatureOutputCount: int ref) =
+  (lastFeatureOutputCount: int ref)
+  (sharedBindingScope: SageFs.Features.BindingExplorer.BindingScopeSnapshot option ref) =
   let modelChangeState = ref ModelChangeState.empty
 
   let handleDiagnosticsChange diagCount =
@@ -588,6 +590,7 @@ let wireModelChangeHandlers
           SageFs.Features.FeatureHooks.computeCellDepsPush ctx.SseJsonOpts sid state
         let state, scopeSse =
           SageFs.Features.FeatureHooks.computeBindingScopePush ctx.SseJsonOpts sid state
+        sharedBindingScope.Value <- Some (SageFs.Features.FeatureHooks.buildScopeFromState state)
         let state, timelineSse =
           SageFs.Features.FeatureHooks.computeEvalTimelinePush ctx.SseJsonOpts sid state
         featurePushState.Value <- state
@@ -1453,7 +1456,7 @@ let startMcpServer (cfg: McpServerConfig) =
 
       let _stateSub =
         cfg.StateChanged |> Option.map (fun evt ->
-          wireModelChangeHandlers evt sseCtx fsiBindings featurePushState lastFeatureOutputCount)
+          wireModelChangeHandlers evt sseCtx fsiBindings featurePushState lastFeatureOutputCount cfg.SharedBindingScope)
 
       logStartup app cfg.Port logPath otelConfigured
       do! app.RunAsync()

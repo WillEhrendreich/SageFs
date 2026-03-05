@@ -669,6 +669,7 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
           snap.TestTracePanel
           snap.HotReloadPanel
           snap.SessionContextPanel
+          snap.BindingsPanel
           // Theme picker
           Elem.div [ Attr.class' "panel" ] [
             Elem.h2 [] [ Text.raw "Theme" ]
@@ -1076,6 +1077,60 @@ let renderTestTraceEmpty =
     Elem.div [ Attr.style "font-size: 0.8rem; opacity: 0.6;" ] [
       Text.raw "No active session"
     ]
+  ]
+
+let renderBindingsPanel (snapshot: Features.BindingExplorer.BindingScopeSnapshot option) =
+  let activeCount =
+    snapshot |> Option.map (fun s -> s.ActiveBindings.Count) |> Option.defaultValue 0
+  let shadowedCount =
+    snapshot |> Option.map (fun s -> s.ShadowedBindings.Length) |> Option.defaultValue 0
+  Elem.div [ Attr.id DomIds.BindingsPanel; Attr.class' "panel" ] [
+    Elem.h2 [] [ Text.raw (sprintf "Bindings (%d)" activeCount) ]
+    match snapshot with
+    | None ->
+      Elem.div [ Attr.class' "meta" ] [ Text.raw "No bindings yet — evaluate some code" ]
+    | Some scope ->
+      match scope.ActiveBindings.Count with
+      | 0 ->
+        Elem.div [ Attr.class' "meta" ] [ Text.raw "No active bindings" ]
+      | _ ->
+        Elem.div [ Attr.style "font-size: 0.75rem;" ] [
+          for KeyValue(_, b) in scope.ActiveBindings do
+            Elem.div [ Attr.style "display: flex; align-items: baseline; gap: 0.5em; padding: 2px 0; border-bottom: 1px solid var(--border, #333);" ] [
+              Elem.code [ Attr.style "color: var(--fg-cyan, #56b6c2); font-weight: bold; white-space: nowrap;" ] [
+                Text.raw b.Name
+              ]
+              Elem.span [ Attr.style "color: var(--fg-dim, #666); font-size: 0.7rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" ] [
+                Text.raw b.TypeSig
+              ]
+              Elem.span [ Attr.style "color: var(--fg-dim, #555); font-size: 0.65rem; white-space: nowrap;" ] [
+                Text.raw (sprintf "cell %d" b.CellIndex)
+              ]
+              match b.ReferencedIn.Length with
+              | 0 -> ()
+              | n ->
+                Elem.span [ Attr.style "color: var(--fg-yellow, #e5c07b); font-size: 0.65rem; white-space: nowrap;" ] [
+                  Text.raw (sprintf "→%d" n)
+                ]
+            ]
+        ]
+        match shadowedCount with
+        | 0 -> ()
+        | _ ->
+          Elem.details [ Attr.style "margin-top: 0.5em;" ] [
+            Elem.summary [ Attr.style "font-size: 0.7rem; cursor: pointer; color: var(--fg-dim, #666);" ] [
+              Text.raw (sprintf "👻 %d shadowed" shadowedCount)
+            ]
+            Elem.div [ Attr.style "font-size: 0.7rem; opacity: 0.6;" ] [
+              for b in scope.ShadowedBindings do
+                Elem.div [ Attr.style "padding: 1px 0;" ] [
+                  Elem.code [] [ Text.raw b.Name ]
+                  Elem.span [ Attr.style "color: var(--fg-dim, #555); margin-left: 0.3em;" ] [
+                    Text.raw (sprintf ": %s (cell %d)" b.TypeSig b.CellIndex)
+                  ]
+                ]
+            ]
+          ]
   ]
 
 /// Create the SSE stream handler that pushes Elm state to the browser.

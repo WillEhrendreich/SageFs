@@ -265,6 +265,7 @@ let shellStructureTests = testList "shell structure (replaces browser existence 
     TestTracePanel = Elem.div [] []; OutputPanel = Elem.div [] []
     SessionsPanel = Elem.div [] []; SessionPicker = Elem.div [] []
     ThemePicker = Elem.div [] []; ThemeVars = Elem.div [] []
+    BindingsPanel = Elem.div [] []
   }
 
   test "renderMainContent shows version" {

@@ -1018,6 +1018,9 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
   // Wire warmup progress from SessionManager → Elm model (per-namespace granularity)
   onWarmupProgressCallback <- handleWarmupProgress elmRuntime.Dispatch
 
+  // Shared binding scope snapshot — written by MCP server, read by dashboard
+  let sharedBindingScope : SageFs.Features.BindingExplorer.BindingScopeSnapshot option ref = ref None
+
   // Start MCP server
   let mcpTask =
     McpServer.startMcpServer {
@@ -1029,6 +1032,7 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
       ElmRuntime = Some elmRuntime
       GetWarmupContext = Some getWarmupContextForMcp
       GetHotReloadState = Some getHotReloadStateForMcp
+      SharedBindingScope = sharedBindingScope
     }
 
   // Test cycle tick timer — drives debounce channels for live testing (200ms interval)
@@ -1145,6 +1149,7 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
       | _ ->
         Features.LiveTesting.CoverageSummary.fromBitmaps 16 (bitmaps |> Seq.ofArray)
         |> Some
+    GetBindingScopeSnapshot = fun () -> sharedBindingScope.Value
     GetLiveTestingStatus = fun () ->
       let model = elmRuntime.GetModel()
       let activeId =
