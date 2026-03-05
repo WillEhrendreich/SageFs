@@ -328,11 +328,6 @@ let createStreamHandler
                 FileStatuses = fileStatuses }
           | None -> renderSessionContextEmpty
         | false -> renderSessionContextEmpty
-      // Build test trace panel
-      let ttPanel =
-        match q.GetTestTrace () with
-        | Some trace -> renderTestTracePanel trace.Timing trace.IsRunning trace.Summary
-        | None -> renderTestTraceEmpty
       // Build bindings explorer panel
       let bindingsPanel = renderBindingsPanel (q.GetBindingScopeSnapshot ())
       // Build output + sessions from Elm regions
@@ -358,10 +353,12 @@ let createStreamHandler
                 let info = q.GetSessionStandbyInfo s.Id
                 let testSummary = q.GetSessionTestSummary s.Id
                 let coverageSummary = q.GetSessionCoverageSummary s.Id
+                let treemapEntries = q.GetSessionTestTreemap s.Id
                 { s with
                     StandbyLabel = StandbyInfo.label info
                     TestSummary = testSummary
-                    CoverageSummary = coverageSummary })
+                    CoverageSummary = coverageSummary
+                    TestTreemapEntries = treemapEntries })
             let creating = isCreatingSession r.Content
             let sess = renderSessions visible creating
             let! pick =
@@ -394,7 +391,6 @@ let createStreamHandler
         ConnectionLabel = connectionLabel
         HotReloadPanel = hrPanel
         SessionContextPanel = scPanel
-        TestTracePanel = ttPanel
         OutputPanel = outputPanel
         SessionsPanel = sessionsPanel
         SessionPicker = sessionPicker

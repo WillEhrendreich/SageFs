@@ -1101,20 +1101,6 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
       match Map.tryFind sessionId snapshot.WarmupProgress with
       | Some progress -> progress
       | None -> ""
-    GetTestTrace = fun () ->
-      let model = elmRuntime.GetModel()
-      let activeId =
-        SageFs.ActiveSession.sessionId model.Sessions.ActiveSessionId
-        |> Option.defaultValue ""
-      let state = model.LiveTesting.TestState
-      let sessionEntries =
-        Features.LiveTesting.LiveTestState.statusEntriesForSession activeId state
-      let summary =
-        Features.LiveTesting.TestSummary.fromStatuses
-          state.Activation (sessionEntries |> Array.map (fun e -> e.Status))
-      Some {| Timing = model.LiveTesting.LastTiming
-              IsRunning = Features.LiveTesting.TestRunPhase.isAnyRunning state.RunPhases
-              Summary = summary |}
     GetSessionTestSummary = fun sessionId ->
       let model = elmRuntime.GetModel()
       let state = model.LiveTesting.TestState
@@ -1149,6 +1135,12 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
       | _ ->
         Features.LiveTesting.CoverageSummary.fromBitmaps 16 (bitmaps |> Seq.ofArray)
         |> Some
+    GetSessionTestTreemap = fun sessionId ->
+      let model = elmRuntime.GetModel()
+      let state = model.LiveTesting.TestState
+      let entries =
+        Features.LiveTesting.LiveTestState.statusEntriesForSession sessionId state
+      Features.LiveTesting.TestTreemap.fromStatusEntries entries
     GetBindingScopeSnapshot = fun () -> sharedBindingScope.Value
     GetLiveTestingStatus = fun () ->
       let model = elmRuntime.GetModel()

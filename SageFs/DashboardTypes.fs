@@ -177,6 +177,7 @@ type ParsedSession = {
   StandbyLabel: string
   TestSummary: Features.LiveTesting.TestSummary option
   CoverageSummary: Features.LiveTesting.CoverageSummary option
+  TestTreemapEntries: Features.LiveTesting.TestTreemapEntry array
 }
 
 let parseSessionLines (content: string) =
@@ -211,7 +212,8 @@ let parseSessionLines (content: string) =
         LastActivity = extractTag "last:" m.Groups.[9].Value
         StandbyLabel = ""
         TestSummary = None
-        CoverageSummary = None }
+        CoverageSummary = None
+        TestTreemapEntries = [||] }
     | false ->
       { Id = l.Trim()
         Status = "unknown"
@@ -225,7 +227,8 @@ let parseSessionLines (content: string) =
         LastActivity = ""
         StandbyLabel = ""
         TestSummary = None
-        CoverageSummary = None })
+        CoverageSummary = None
+        TestTreemapEntries = [||] })
   |> Array.toList
 
 let isCreatingSession (content: string) =
@@ -313,9 +316,9 @@ type DashboardQueries = {
   GetHotReloadState: string -> Threading.Tasks.Task<{| files: {| path: string; watched: bool |} list; watchedCount: int |} option>
   GetWarmupContext: string -> Threading.Tasks.Task<WarmupContext option>
   GetWarmupProgress: string -> string
-  GetTestTrace: unit -> {| Timing: Features.LiveTesting.TestCycleTiming option; IsRunning: bool; Summary: Features.LiveTesting.TestSummary |} option
   GetSessionTestSummary: string -> Features.LiveTesting.TestSummary option
   GetSessionCoverageSummary: string -> Features.LiveTesting.CoverageSummary option
+  GetSessionTestTreemap: string -> Features.LiveTesting.TestTreemapEntry array
   GetBindingScopeSnapshot: unit -> Features.BindingExplorer.BindingScopeSnapshot option
   GetLiveTestingStatus: unit -> string
 }
@@ -354,7 +357,6 @@ type DashboardSnapshot = {
   ConnectionLabel: string option
   HotReloadPanel: XmlNode
   SessionContextPanel: XmlNode
-  TestTracePanel: XmlNode
   OutputPanel: XmlNode
   SessionsPanel: XmlNode
   SessionPicker: XmlNode

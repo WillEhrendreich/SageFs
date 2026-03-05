@@ -223,7 +223,8 @@ module SessionStateOverride =
       LastActivity = ""
       StandbyLabel = ""
       TestSummary = None
-      CoverageSummary = None }
+      CoverageSummary = None
+      TestTreemapEntries = [||] }
 
 [<Tests>]
 let stateOverrideTests =
@@ -495,7 +496,8 @@ let perSessionTestSummaryTests =
           LastActivity = "just now"
           StandbyLabel = ""
           TestSummary = Some summary
-          CoverageSummary = None }
+          CoverageSummary = None
+          TestTreemapEntries = [||] }
       let html =
         renderSessions [session] false
         |> renderNode
@@ -516,7 +518,8 @@ let perSessionTestSummaryTests =
           LastActivity = "just now"
           StandbyLabel = ""
           TestSummary = None
-          CoverageSummary = None }
+          CoverageSummary = None
+          TestTreemapEntries = [||] }
       let html =
         renderSessions [session] false
         |> renderNode
@@ -545,7 +548,8 @@ let perSessionCoverageTests =
           LastActivity = "just now"
           StandbyLabel = ""
           TestSummary = None
-          CoverageSummary = Some summary }
+          CoverageSummary = Some summary
+          TestTreemapEntries = [||] }
       let html =
         renderSessions [session] false
         |> renderNode
@@ -566,7 +570,8 @@ let perSessionCoverageTests =
           LastActivity = "just now"
           StandbyLabel = ""
           TestSummary = None
-          CoverageSummary = None }
+          CoverageSummary = None
+          TestTreemapEntries = [||] }
       let html =
         renderSessions [session] false
         |> renderNode

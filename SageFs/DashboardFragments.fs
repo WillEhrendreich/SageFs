@@ -318,6 +318,50 @@ let renderSessionPicker (previous: PreviousSession list) =
 let renderSessionPickerEmpty =
   Elem.div [ Attr.id DomIds.SessionPicker ] []
 
+// ── Test Treemap (WizTree-style: area = duration) ─────────────────
+
+/// Render a squarified treemap of test results where area = duration.
+/// Failed tests are red, passed are green — instantly see slow + broken.
+let renderTestTreemap (entries: Features.LiveTesting.TestTreemapEntry array) : XmlNode =
+  match entries.Length with
+  | 0 -> Elem.div [] []
+  | _ ->
+    let rects = Features.LiveTesting.TestTreemap.layout 320.0 180.0 entries
+    Elem.div
+      [ Attr.style "position:relative;width:320px;height:180px;border-radius:4px;overflow:hidden;background:var(--bg-focus,#1a1a1a);margin-top:4px;" ]
+      [ yield! rects |> Array.map (fun r ->
+          let bgColor =
+            match r.Entry.Status with
+            | Features.LiveTesting.TreemapStatus.Passed -> "var(--fg-green,#27ae60)"
+            | Features.LiveTesting.TreemapStatus.Failed -> "var(--fg-red,#e74c3c)"
+            | Features.LiveTesting.TreemapStatus.Running -> "var(--fg-blue,#3498db)"
+            | Features.LiveTesting.TreemapStatus.Skipped -> "var(--fg-yellow,#f39c12)"
+            | Features.LiveTesting.TreemapStatus.Other -> "var(--bg-focus,#2a2a2a)"
+          let durationLabel =
+            match r.Entry.DurationMs with
+            | ms when ms >= 1000.0 -> sprintf "%.1fs" (ms / 1000.0)
+            | ms when ms >= 1.0 -> sprintf "%.0fms" ms
+            | ms -> sprintf "%.2fms" ms
+          let title = sprintf "%s — %s" r.Entry.DisplayName durationLabel
+          let showLabel = r.W >= 28.0 && r.H >= 14.0
+          let showDuration = r.W >= 40.0 && r.H >= 22.0
+          Elem.div
+            [ Attr.style (sprintf "position:absolute;left:%.1fpx;top:%.1fpx;width:%.1fpx;height:%.1fpx;background:%s;opacity:0.85;border:0.5px solid rgba(0,0,0,0.3);overflow:hidden;box-sizing:border-box;"
+                r.X r.Y r.W r.H bgColor)
+              Attr.title title ]
+            [ match showLabel with
+              | true ->
+                Elem.div [ Attr.style "font-size:0.5rem;color:#fff;padding:1px 2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.1;" ] [
+                  Text.raw r.Entry.DisplayName
+                ]
+              | false -> ()
+              match showDuration with
+              | true ->
+                Elem.div [ Attr.style "font-size:0.45rem;color:rgba(255,255,255,0.7);padding:0 2px;line-height:1;" ] [
+                  Text.raw durationLabel
+                ]
+              | false -> () ]) ]
+
 /// Render sessions as an HTML fragment with action buttons.
 let renderSessions (sessions: ParsedSession list) (creating: bool) =
   Elem.div [ Attr.id DomIds.SessionsPanel ] [
@@ -475,6 +519,21 @@ let renderSessions (sessions: ParsedSession list) (creating: bool) =
                   Ds.onClick (Ds.post (sprintf "/dashboard/session/stop/%s" s.Id)) ]
                 [ Text.raw "■" ]
             ]
+            // Collapsible test treemap (WizTree-style: area = test duration)
+            match s.TestTreemapEntries.Length with
+            | 0 -> ()
+            | _ ->
+              let totalMs = s.TestTreemapEntries |> Array.sumBy (fun e -> e.DurationMs)
+              let durationLabel =
+                match totalMs with
+                | ms when ms >= 1000.0 -> sprintf "%.1fs" (ms / 1000.0)
+                | ms -> sprintf "%.0fms" ms
+              Elem.details
+                [ Attr.style "margin-top: 4px; font-size: 0.75rem;" ]
+                [ Elem.summary
+                    [ Attr.style "cursor:pointer;color:var(--fg-dim);user-select:none;" ]
+                    [ Text.raw (sprintf "🧪 %d tests · %s" s.TestTreemapEntries.Length durationLabel) ]
+                  renderTestTreemap s.TestTreemapEntries ]
           ])
     Elem.div
       [ Attr.style "display: flex; justify-content: space-between; align-items: center; font-size: 0.7rem; color: var(--fg-dim); padding: 4px 0; margin-top: 4px;" ]
@@ -666,7 +725,6 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
                 Elem.span [ Ds.show "!$createLoading" ] [ Text.raw "➕ Create" ] ]
           ]
           // Dynamic sidebar panels — rendered from current state
-          snap.TestTracePanel
           snap.HotReloadPanel
           snap.SessionContextPanel
           snap.BindingsPanel
@@ -982,100 +1040,6 @@ let renderSessionContextEmpty =
   Elem.div [ Attr.id DomIds.SessionContext; Attr.class' "panel" ] [
     Elem.div [ Attr.style "font-size: 0.8rem; opacity: 0.6;" ] [
       Text.raw "No session context"
-    ]
-  ]
-
-// ── Test Trace Panel ──────────────────────────────────────────────
-
-let private renderTestPhase (label: string) (ms: float) (maxMs: float) (icon: string) =
-  let pct = match maxMs > 0.0 with | true -> min 100.0 (ms / maxMs * 100.0) | false -> 0.0
-  let color =
-    match ms with
-    | ms when ms < 50.0 -> "var(--fg-green, #27ae60)"
-    | ms when ms < 500.0 -> "var(--fg-yellow, #f39c12)"
-    | _ -> "var(--fg-red, #e74c3c)"
-  Elem.div [ Attr.style "margin-bottom: 4px;" ] [
-    Elem.div [ Attr.style "display: flex; justify-content: space-between; font-size: 0.75rem;" ] [
-      Elem.span [] [ Text.raw (sprintf "%s %s" icon label) ]
-      Elem.span [] [ Text.raw (sprintf "%.0fms" ms) ]
-    ]
-    Elem.div [ Attr.class' "progress-track-sm" ] [
-      Elem.div [ Attr.style (sprintf "width: %.0f%%; height: 100%%; background: %s; border-radius: 2px;" pct color) ] []
-    ]
-  ]
-
-let renderTestTracePanel
-  (timing: Features.LiveTesting.TestCycleTiming option)
-  (isRunning: bool)
-  (summary: Features.LiveTesting.TestSummary)
-  =
-  let statusLabel =
-    match summary.Enabled, isRunning with
-    | false, _ -> "⏸ disabled"
-    | true, true -> "⏳ running"
-    | true, false -> "✅ idle"
-  let summaryParts = [
-    yield Elem.span [ Attr.style "color: var(--fg-green, #27ae60);" ] [
-      Text.raw (sprintf "✓ %d" summary.Passed) ]
-    yield Elem.span [ Attr.style "color: var(--fg-red, #e74c3c);" ] [
-      Text.raw (sprintf "✗ %d" summary.Failed) ]
-    yield Elem.span [ Attr.style "opacity: 0.6;" ] [
-      Text.raw (sprintf "/ %d" summary.Total) ]
-    match summary.Stale > 0 with
-    | true ->
-      yield Elem.span [ Attr.style "color: var(--fg-yellow, #f39c12);" ] [
-        Text.raw (sprintf "⟳ %d stale" summary.Stale) ]
-    | false -> ()
-    match summary.Running > 0 with
-    | true ->
-      yield Elem.span [ Attr.style "color: var(--fg-cyan, #3498db);" ] [
-        Text.raw (sprintf "⏳ %d" summary.Running) ]
-    | false -> ()
-  ]
-  let timingSection =
-    match timing with
-    | None ->
-      Elem.div [ Attr.style "font-size: 0.75rem; opacity: 0.5; padding: 4px 0;" ] [
-        Text.raw "No timing data yet" ]
-    | Some t ->
-      let tsMs, fcsMs, execMs =
-        match t.Depth with
-        | Features.LiveTesting.TestCycleDepth.TreeSitterOnly ts -> ts.TotalMilliseconds, 0.0, 0.0
-        | Features.LiveTesting.TestCycleDepth.ThroughFcs (ts, fcs) -> ts.TotalMilliseconds, fcs.TotalMilliseconds, 0.0
-        | Features.LiveTesting.TestCycleDepth.ThroughExecution (ts, fcs, exec) -> ts.TotalMilliseconds, fcs.TotalMilliseconds, exec.TotalMilliseconds
-      let totalMs = tsMs + fcsMs + execMs
-      let maxMs = max totalMs 1.0
-      Elem.div [] [
-        yield renderTestPhase "Tree-sitter" tsMs maxMs "🌳"
-        match t.Depth with
-        | Features.LiveTesting.TestCycleDepth.TreeSitterOnly _ -> ()
-        | _ -> yield renderTestPhase "FCS Check" fcsMs maxMs "🔍"
-        match t.Depth with
-        | Features.LiveTesting.TestCycleDepth.ThroughExecution _ -> yield renderTestPhase "Execution" execMs maxMs "🧪"
-        | _ -> ()
-        yield Elem.div [ Attr.style "font-size: 0.7rem; opacity: 0.5; margin-top: 4px;" ] [
-          Text.raw (sprintf "%.0fms total • %d/%d tests • %s"
-            totalMs t.AffectedTests t.TotalTests
-            (match t.Trigger with
-             | Features.LiveTesting.RunTrigger.Keystroke -> "keystroke"
-             | Features.LiveTesting.RunTrigger.FileSave -> "save"
-             | Features.LiveTesting.RunTrigger.ExplicitRun -> "manual"))
-        ]
-      ]
-  Elem.div [ Attr.id DomIds.TestTrace; Attr.class' "panel" ] [
-    Elem.div [ Attr.style "display: flex; justify-content: space-between; align-items: center;" ] [
-      Elem.h2 [ Attr.style "margin: 0;" ] [ Text.raw "Tests" ]
-      Elem.span [ Attr.style "font-size: 0.7rem; opacity: 0.7;" ] [ Text.raw statusLabel ]
-    ]
-    Elem.div [ Attr.style "display: flex; gap: 8px; font-size: 0.75rem; margin: 6px 0;" ] summaryParts
-    timingSection
-  ]
-
-let renderTestTraceEmpty =
-  Elem.div [ Attr.id DomIds.TestTrace; Attr.class' "panel" ] [
-    Elem.h2 [] [ Text.raw "Tests" ]
-    Elem.div [ Attr.style "font-size: 0.8rem; opacity: 0.6;" ] [
-      Text.raw "No active session"
     ]
   ]
 

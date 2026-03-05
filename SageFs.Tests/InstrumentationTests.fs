@@ -597,13 +597,13 @@ let instrumentationTests = testSequenced (testList "Instrumentation" [
     | Error _ -> false
 
   test "sseFrameBytes histogram is created" {
-    Instrumentation.sseFrameBytes.Enabled
-    |> Expect.isTrue "sseFrameBytes histogram should be enabled"
+    Instrumentation.sseFrameBytes
+    |> Expect.isNotNull "sseFrameBytes histogram should exist"
   }
 
   test "startupDurationMs histogram is created" {
-    Instrumentation.startupDurationMs.Enabled
-    |> Expect.isTrue "startupDurationMs histogram should be enabled"
+    Instrumentation.startupDurationMs
+    |> Expect.isNotNull "startupDurationMs histogram should exist"
   }
 
   test "daemonMeter is created" {

@@ -83,7 +83,8 @@ let dashboardRenderSnapshotTests = testList "Dashboard render snapshots" [
         LastActivity = "eval"
         StandbyLabel = ""
         TestSummary = None
-        CoverageSummary = None }
+        CoverageSummary = None
+        TestTreemapEntries = [||] }
       { Id = "session-def"
         Status = "stopped"
         StatusMessage = None
@@ -96,7 +97,8 @@ let dashboardRenderSnapshotTests = testList "Dashboard render snapshots" [
         LastActivity = ""
         StandbyLabel = ""
         TestSummary = None
-        CoverageSummary = None }
+        CoverageSummary = None
+        TestTreemapEntries = [||] }
     ]
     let html = renderSessions sessions false |> renderNode
     do! verifyDashboard "dashboard_sessions" html
@@ -150,7 +152,8 @@ let edgeCaseSnapshotTests = testList "edge case snapshots" [
         LastActivity = "eval"
         StandbyLabel = ""
         TestSummary = None
-        CoverageSummary = None }
+        CoverageSummary = None
+        TestTreemapEntries = [||] }
     ]
     let html = renderSessions sessions false |> renderNode
     do! verifyDashboard "dashboard_sessions_singleActive" html
@@ -262,7 +265,7 @@ let shellStructureTests = testList "shell structure (replaces browser existence 
     WarmupProgress = ""; EvalStats = { Count = 0; AvgMs = 0.0; MinMs = 0.0; MaxMs = 0.0 }
     ThemeName = "default"; ConnectionLabel = None
     HotReloadPanel = Elem.div [] []; SessionContextPanel = Elem.div [] []
-    TestTracePanel = Elem.div [] []; OutputPanel = Elem.div [] []
+    OutputPanel = Elem.div [] []
     SessionsPanel = Elem.div [] []; SessionPicker = Elem.div [] []
     ThemePicker = Elem.div [] []; ThemeVars = Elem.div [] []
     BindingsPanel = Elem.div [] []
