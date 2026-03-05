@@ -185,7 +185,7 @@ jobs:
         if ($vsix) { Copy-Item $vsix.FullName "release/sagefs-visualstudio-${{ steps.version.outputs.version }}.vsix" }
 
     - name: Push to NuGet
-      run: dotnet nuget push release/*.nupkg --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
+      run: dotnet nuget push "release/SageFs.${{ steps.version.outputs.version }}.nupkg" --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
 
     - name: Create GitHub Release
       uses: softprops/action-gh-release@v2
