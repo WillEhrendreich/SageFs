@@ -5,6 +5,7 @@ open System.Reflection
 open System.Collections.Concurrent
 open Microsoft.AspNetCore.Builder
 open Microsoft.AspNetCore.Http
+open System.Threading
 open SageFs.Utils
 
 /// Worker HTTP port — set after the worker server starts.
@@ -71,24 +72,33 @@ let install () =
           patchMethod harmony t "Run" [| typeof<string> |]
           patchMethod harmony t "RunAsync" [| typeof<string> |]
           true
-      with _ -> false
+      with ex ->
+        Log.debug "[DevReload] tryPatch probe failed: %s" ex.Message
+        false
     // Try immediate patching first
     match tryPatch () with
     | true ->
       Log.info "[DevReload] Patches applied immediately"
     | false ->
       // Lazy patching: wait for Microsoft.AspNetCore to load
+      // Chesterton's fence: Interlocked.CompareExchange instead of mutable bool
+      // documents concurrency intent — AssemblyLoad fires on the loading thread,
+      // so concurrent loads could race. CAS makes it a provably one-shot guard.
       Log.info "[DevReload] WebApplication not yet loaded — deferring patches to AssemblyLoad event"
-      let mutable patched = false
+      let patched = ref 0
       AppDomain.CurrentDomain.add_AssemblyLoad(AssemblyLoadEventHandler(fun _ args ->
-        match patched || not (args.LoadedAssembly.GetName().Name = "Microsoft.AspNetCore") with
-        | true -> ()
-        | false ->
-          match tryPatch () with
+        match args.LoadedAssembly.GetName().Name = "Microsoft.AspNetCore" with
+        | false -> ()
+        | true ->
+          match Interlocked.CompareExchange(patched, 1, 0) = 0 with
+          | false -> () // already patched by another thread
           | true ->
-            patched <- true
-            Log.info "[DevReload] Lazy patches applied after Microsoft.AspNetCore loaded"
-          | false -> ()))
+            match tryPatch () with
+            | true ->
+              Log.info "[DevReload] Lazy patches applied after Microsoft.AspNetCore loaded"
+            | false ->
+              Interlocked.Exchange(patched, 0) |> ignore // reset so next load can retry
+              Log.warn "[DevReload] Lazy patching failed even after Microsoft.AspNetCore loaded"))
 
 /// Manual helper for non-WebApplication hosts.
 /// Call from user code: SageFs.DevReloadInjector.injectMiddleware app workerPort

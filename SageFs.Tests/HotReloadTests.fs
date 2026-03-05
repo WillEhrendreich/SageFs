@@ -1,5 +1,6 @@
 module SageFs.Tests.HotReloadTests
 
+open System
 open Expecto
 open SageFs.FileWatcher
 open SageFs.AppState
@@ -300,6 +301,111 @@ let noInliningInjectionTests =
       Flip.Expect.stringContains "should contain original" "let f () = 42" result
   ]
 
+let versionAwareResolutionTests =
+  testList "version-aware assembly resolution" [
+    test "registerSearchPath registers assembly directory" {
+      assemblySearchPaths.Clear()
+      let expectoAsm = typeof<Expecto.TestCode>.Assembly
+      let expectoDir = IO.Path.GetDirectoryName(expectoAsm.Location : string)
+      registerSearchPath expectoAsm.Location
+      assemblySearchPaths.Contains(expectoDir)
+      |> Flip.Expect.isTrue "should have registered Expecto directory"
+    }
+
+    test "registerSearchPath handles duplicate paths" {
+      assemblySearchPaths.Clear()
+      let testAsm = typeof<Expecto.TestCode>.Assembly
+      registerSearchPath testAsm.Location
+      let countAfterFirst = assemblySearchPaths.Count
+      registerSearchPath testAsm.Location
+      assemblySearchPaths.Count
+      |> Flip.Expect.equal "count should not increase for duplicates" countAfterFirst
+    }
+
+    test "assemblySearchPaths is non-empty after registration" {
+      assemblySearchPaths.Clear()
+      let expectoAsm = typeof<Expecto.TestCode>.Assembly
+      registerSearchPath expectoAsm.Location
+      (assemblySearchPaths.Count, 0)
+      |> Flip.Expect.isGreaterThan "should have at least one search path"
+    }
+  ]
+
+let hotReloadCompilationContextTests =
+  testList "hot-reload CompilationContext integration" [
+    test "File mode wraps module declaration for FSI" {
+      let code = "module MyApp.Server\n\nopen System\n\nlet handler () = \"hello\"\n"
+      let fs =
+        SageFs.Middleware.CompilationContext.parseFileStructure "C:/project/Server.fs" code
+        |> Async.AwaitTask |> Async.RunSynchronously
+      let result, _ =
+        SageFs.Middleware.CompilationContext.preprocessForFsi
+          (Some fs) SageFs.Middleware.CompilationContext.EvalMode.File None Set.empty code
+      let lines = result.Code.Split('\n')
+      let hasStandaloneModule =
+        lines
+        |> Array.exists (fun l ->
+          let t = l.Trim()
+          t.StartsWith("module ") && not (t.EndsWith("=")))
+      hasStandaloneModule
+      |> Flip.Expect.isFalse "should not have standalone module declaration (would fail in FSI)"
+    }
+
+    test "File mode preserves function definitions" {
+      let code = "module MyApp.Handlers\n\nlet index () = \"Welcome\"\nlet about () = \"About\"\n"
+      let fs =
+        SageFs.Middleware.CompilationContext.parseFileStructure "C:/project/Handlers.fs" code
+        |> Async.AwaitTask |> Async.RunSynchronously
+      let result, _ =
+        SageFs.Middleware.CompilationContext.preprocessForFsi
+          (Some fs) SageFs.Middleware.CompilationContext.EvalMode.File None Set.empty code
+      result.Code |> Flip.Expect.stringContains "should contain index function" "index"
+      result.Code |> Flip.Expect.stringContains "should contain about function" "about"
+    }
+
+    test "File mode tracks evaluated modules" {
+      let code = "module MyApp.Domain\n\ntype User = { Name: string }\n"
+      let fs =
+        SageFs.Middleware.CompilationContext.parseFileStructure "C:/project/Domain.fs" code
+        |> Async.AwaitTask |> Async.RunSynchronously
+      let _, updatedModules =
+        SageFs.Middleware.CompilationContext.preprocessForFsi
+          (Some fs) SageFs.Middleware.CompilationContext.EvalMode.File None Set.empty code
+      updatedModules.Contains("MyApp.Domain")
+      |> Flip.Expect.isTrue "should track MyApp.Domain as evaluated module"
+    }
+
+    test "Successive file reloads accumulate module context" {
+      let code1 = "module MyApp.Types\n\ntype Color = Red | Green | Blue\n"
+      let fs1 =
+        SageFs.Middleware.CompilationContext.parseFileStructure "C:/project/Types.fs" code1
+        |> Async.AwaitTask |> Async.RunSynchronously
+      let _, modules1 =
+        SageFs.Middleware.CompilationContext.preprocessForFsi
+          (Some fs1) SageFs.Middleware.CompilationContext.EvalMode.File None Set.empty code1
+      let code2 = "module MyApp.Logic\n\nlet describe color = sprintf \"%A\" color\n"
+      let fs2 =
+        SageFs.Middleware.CompilationContext.parseFileStructure "C:/project/Logic.fs" code2
+        |> Async.AwaitTask |> Async.RunSynchronously
+      let _, modules2 =
+        SageFs.Middleware.CompilationContext.preprocessForFsi
+          (Some fs2) SageFs.Middleware.CompilationContext.EvalMode.File None modules1 code2
+      modules2.Contains("MyApp.Types")
+      |> Flip.Expect.isTrue "should still have Types module"
+      modules2.Contains("MyApp.Logic")
+      |> Flip.Expect.isTrue "should also have Logic module"
+    }
+
+    test "Fallback to raw code when fileStructure is None" {
+      let code = "#load @\"C:\\project\\file.fs\""
+      let result, modules =
+        SageFs.Middleware.CompilationContext.preprocessForFsi
+          None SageFs.Middleware.CompilationContext.EvalMode.File None Set.empty code
+      result.Code |> Flip.Expect.equal "should pass through raw code" code
+      modules |> Flip.Expect.isEmpty "should not update modules on fallback"
+    }
+  ]
+
 [<Tests>]
 let allHotReloadTests =
   testList "Hot Reload Integration" [
@@ -308,6 +414,10 @@ let allHotReloadTests =
     noWatchFlagTests
     reloadToDetourCycleTests
     watchConfigTests
-    assemblySearchPathTests
+    testSequenced (testList "assembly search paths (sequenced)" [
+      assemblySearchPathTests
+      versionAwareResolutionTests
+    ])
+    hotReloadCompilationContextTests
     noInliningInjectionTests
   ]

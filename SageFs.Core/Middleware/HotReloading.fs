@@ -17,7 +17,10 @@ let resolveAssembly (args: ResolveEventArgs) =
   let assemblyName = AssemblyName(args.Name)
   let dllName = assemblyName.Name + ".dll"
 
-  // Search in all registered paths
+  // Chesterton's fence: version-aware resolution prevents 0x80131040 (manifest
+  // mismatch). When multiple NuGet package versions provide the same DLL, we must
+  // load a version >= the requested version. Without this check, first-match wins
+  // regardless of version, causing strong-name validation failures at runtime.
   assemblySearchPaths
   |> Seq.tryPick (fun searchPath ->
     let fullPath = Path.Combine(searchPath, dllName)
@@ -25,8 +28,18 @@ let resolveAssembly (args: ResolveEventArgs) =
     match File.Exists(fullPath) with
     | true ->
       try
-        Some(Assembly.LoadFrom(fullPath))
-      with _ ->
+        let candidate = Assembly.LoadFrom(fullPath)
+        match assemblyName.Version with
+        | null -> Some candidate
+        | requestedVersion ->
+          match candidate.GetName().Version >= requestedVersion with
+          | true -> Some candidate
+          | false ->
+            Log.debug "Assembly %s version %O < requested %O, skipping %s"
+              assemblyName.Name (candidate.GetName().Version) requestedVersion searchPath
+            None
+      with ex ->
+        Log.debug "Failed to load assembly from %s: %s" fullPath ex.Message
         None
     | false -> None)
   |> Option.defaultValue null

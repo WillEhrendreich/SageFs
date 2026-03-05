@@ -274,6 +274,11 @@ let run (sessionId: string) (port: int) = async {
         result.ProjectDirectories.Length
         (String.Join(", ", result.ProjectDirectories))
       let config = FileWatcher.defaultWatchConfig result.ProjectDirectories
+      // Chesterton's fence: per-watcher CompilationState tracks module context
+      // across hot-reload cycles. Without this, each reload is context-free —
+      // preprocessForFsi can't determine which modules are already `open`'d,
+      // leading to duplicate module errors or missing opens.
+      let mutable compilationState = Middleware.CompilationContext.CompilationState.empty
       let onFileChanged (change: FileWatcher.FileChange) =
         let ext = IO.Path.GetExtension(change.FilePath)
         let kind = match change.Kind with
@@ -290,10 +295,46 @@ let run (sessionId: string) (port: int) = async {
             match FileWatcher.fileChangeAction change with
             | FileWatcher.FileChangeAction.Reload filePath ->
               match HotReloadState.isWatched filePath !result.HotReloadStateRef with
-              | false -> ()
+              | false ->
+                Log.debug "File changed but not in hot-reload watch set: %s (watched: %d files)"
+                  (IO.Path.GetFileName filePath) (HotReloadState.watchedCount !result.HotReloadStateRef)
               | true ->
               DevReload.broadcastCompiling (Some (IO.Path.GetFileName filePath))
-              let code = sprintf "#load @\"%s\"" filePath
+              // Chesterton's fence: read file and preprocess through CompilationContext
+              // instead of using `#load`. `#load` re-executes the entire file including
+              // module-level side effects (server startup, DB connections), causing type
+              // errors ("unit doesn't match Task") in files with effectful top-level code.
+              // CompilationContext strips the module declaration and wraps definitions
+              // properly for FSI, preserving only type/function definitions. The existing
+              // HotReloading middleware then applies NoInlining + Harmony detours.
+              let fileContent = IO.File.ReadAllText(filePath)
+              let! fileStructure, updatedCache = async {
+                try
+                  let! fs, cache =
+                    Middleware.CompilationContext.parseFileStructureCached
+                      filePath fileContent compilationState.FileCache
+                    |> Async.AwaitTask
+                  return Some fs, cache
+                with exn ->
+                  Log.debug "CompilationContext parse failed for %s, falling back to #load: %s"
+                    filePath exn.Message
+                  return None, compilationState.FileCache
+              }
+              let preprocessed, updatedModules =
+                Middleware.CompilationContext.preprocessForFsi
+                  fileStructure
+                  Middleware.CompilationContext.EvalMode.File
+                  None
+                  compilationState.EvaluatedModules
+                  fileContent
+              compilationState <-
+                { compilationState with
+                    EvaluatedModules = updatedModules
+                    FileCache = updatedCache }
+              let code =
+                match fileStructure with
+                | Some _ -> preprocessed.Code
+                | None -> sprintf "#load @\"%s\"" filePath // fallback if parse fails
               let request = { Code = code; Args = Map.ofList ["hotReload", box true] }
               use localCts = new CancellationTokenSource()
               let! response =
