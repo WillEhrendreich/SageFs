@@ -190,6 +190,49 @@ let watchConfigTests =
       |> Flip.Expect.isFalse "should reject bin path"
   ]
 
+/// Tests that mkReloadingState registers NuGet package directories
+/// and framework SDK directories in assemblySearchPaths, not just project outputs.
+/// Chesterton's fence: Without this, transitive NuGet dependencies (e.g.
+/// OpenTelemetry.Instrumentation.AspNetCore) fail to resolve at runtime when
+/// loading real-world projects like Harmony inside SageFs FSI.
+let assemblySearchPathTests =
+  testList "assembly search paths" [
+    testCase "registerSearchPath extracts directory from DLL path" <| fun () ->
+      assemblySearchPaths.Clear()
+      registerSearchPath @"C:\Fake\bin\Debug\net10.0\MyProject.dll"
+      assemblySearchPaths
+      |> Seq.contains @"C:\Fake\bin\Debug\net10.0"
+      |> Flip.Expect.isTrue "should register DLL's parent directory"
+
+    testCase "registerSearchPath deduplicates same directory" <| fun () ->
+      assemblySearchPaths.Clear()
+      registerSearchPath @"C:\Fake\bin\MyProject.dll"
+      registerSearchPath @"C:\Fake\bin\OtherProject.dll"
+      assemblySearchPaths.Count
+      |> Flip.Expect.equal "should have only 1 directory" 1
+
+    testCase "registerSearchPath tracks multiple distinct directories" <| fun () ->
+      assemblySearchPaths.Clear()
+      registerSearchPath @"C:\Dir1\A.dll"
+      registerSearchPath @"C:\Dir2\B.dll"
+      assemblySearchPaths.Count
+      |> Flip.Expect.equal "should have 2 directories" 2
+
+    testCase "NuGet package path registers correctly" <| fun () ->
+      assemblySearchPaths.Clear()
+      registerSearchPath @"C:\Users\me\.nuget\packages\opentelemetry\1.15.0\lib\net8.0\OpenTelemetry.dll"
+      assemblySearchPaths
+      |> Seq.contains @"C:\Users\me\.nuget\packages\opentelemetry\1.15.0\lib\net8.0"
+      |> Flip.Expect.isTrue "should register NuGet package directory"
+
+    testCase "framework SDK path registers correctly" <| fun () ->
+      assemblySearchPaths.Clear()
+      registerSearchPath @"C:\Program Files\dotnet\shared\Microsoft.AspNetCore.App\10.0.0\Microsoft.AspNetCore.dll"
+      assemblySearchPaths
+      |> Seq.contains @"C:\Program Files\dotnet\shared\Microsoft.AspNetCore.App\10.0.0"
+      |> Flip.Expect.isTrue "should register framework SDK directory"
+  ]
+
 /// Tests for the [<MethodImpl(NoInlining)>] injection that prevents
 /// JIT inlining from defeating Harmony's entry-point detours.
 let noInliningInjectionTests =
@@ -265,5 +308,6 @@ let allHotReloadTests =
     noWatchFlagTests
     reloadToDetourCycleTests
     watchConfigTests
+    assemblySearchPathTests
     noInliningInjectionTests
   ]

@@ -138,6 +138,17 @@ let mkReloadingState (sln: SageFs.ProjectLoading.Solution) =
   // Register all project output directories for dependency resolution
   sln.Projects |> List.iter (fun p -> registerSearchPath p.TargetPath)
 
+  // Register NuGet package directories so transitive dependencies resolve at runtime
+  sln.Projects
+  |> List.iter (fun p ->
+    p.PackageReferences |> List.iter (fun pr -> registerSearchPath pr.FullPath)
+    // Also register framework/SDK DLL directories from OtherOptions -r: args
+    p.OtherOptions
+    |> List.filter (fun s ->
+      s.StartsWith("-r:", System.StringComparison.Ordinal)
+      && s.EndsWith(".dll", System.StringComparison.Ordinal))
+    |> List.iter (fun s -> registerSearchPath (s.Substring(3))))
+
   let results =
     sln.Projects
     |> List.map (fun p -> AssemblyLoadError.loadAssembly p.TargetPath)
