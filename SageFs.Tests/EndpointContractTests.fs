@@ -109,9 +109,17 @@ let endpointContractTests = testList "EndpointContracts" [
       |> Expect.isEmpty (sprintf "duplicate endpoints: %A" dupes)
     }
 
-    test "endpoint count is at least 25" {
-      (all |> List.length, 25)
-      |> Expect.isGreaterThanOrEqual "at least 25 endpoints"
+    test "endpoint count pinned — update contracts when adding endpoints" {
+      // CI GATE: This count is pinned. When you add a daemon endpoint:
+      // 1. Add it to the appropriate list in EndpointContracts.fs
+      // 2. Decide which plugin contracts need it (neovimContract, vscodeContract)
+      // 3. Bump apiVersion if it's a breaking change
+      // 4. Update this count
+      all
+      |> List.length
+      |> Expect.equal
+        "endpoint count changed — update contracts and bump this number"
+        33
     }
   ]
 
