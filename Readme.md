@@ -19,6 +19,16 @@ A live F# engine — hot reload, live testing, AI-native — for every editor, f
 
 <br/>
 
+> ### 🆕 Never written F#? You're in the right place.
+>
+> Pick your language — each guide maps familiar concepts to F#, with runnable examples that show results the instant you press Alt+Enter.
+>
+> 🐍 [Python](#-coming-from-python) · 📓 [Jupyter](#-coming-from-jupyter-notebooks) · 🔷 [C#](#-coming-from-c) · ☕ [Java](#-coming-from-java) · 🟨 [JS/TS](#-coming-from-javascript--typescript) · 🦀 [Rust](#-coming-from-rust) · 🧘 [F# Koans](#-coming-from-fsharpkoans)
+>
+> Or just dive in: `dotnet tool install --global SageFs && sagefs` — then open any `.fsx` file and hit Alt+Enter.
+
+---
+
 ## The $3,000/year Feature — Free
 
 Visual Studio Enterprise charges **~$250/month per seat** for Live Unit Testing. That's **$3,000/year per developer.** It only works in Visual Studio. It only supports 3 frameworks. It takes 5-30 seconds. It requires your code to compile.
@@ -173,7 +183,8 @@ Dashboard:     http://localhost:37750/dashboard  ← live web UI
 
 No project flag needed — the daemon discovers projects when your editor (or an AI agent) creates a session.
 
-> **New to F#?** Jump straight to the [migration guide for your language](#welcome-traveler----pick-your-home-language) and grab a starter sample tailored to where you're coming from. 🐍 Python · 📓 Jupyter · 🔷 C# · ☕ Java · 🟨 JS/TS · 🦀 Rust · 🧘 FSharpKoans
+> **New to F#?** You don't need any F# knowledge to start. Jump to the [migration guide for your language](#welcome-traveler----pick-your-home-language) — each one maps concepts you already know to F#, with runnable examples.
+> 🐍 Python · 📓 Jupyter · 🔷 C# · ☕ Java · 🟨 JS/TS · 🦀 Rust · 🧘 [F# Koans](#-coming-from-fsharpkoans) (21 guided exercises)
 
 <details>
 <summary>Build from source</summary>
@@ -705,7 +716,7 @@ Pain you're leaving behind: The 2-4 second `dotnet watch run` cycle, terminal-on
 - No more `dotnet run` cycles — feedback in ~200ms
 - Your koan-learned skills (DUs, pipelines, options, pattern matching) applied to real domains
 
-**→ [Start here: `samples/from-koans/hello.fsx`](samples/from-koans/hello.fsx)**
+**→ [Start here: `samples/from-koans/00-about-sagefs-koans.fsx`](samples/from-koans/00-about-sagefs-koans.fsx)** (the roadmap — then work through `01-about-asserts.fsx` → `21-about-filtering.fsx` at your own pace)
 
 ```fsharp
 // Koans taught you this:
