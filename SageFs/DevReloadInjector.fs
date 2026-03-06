@@ -24,12 +24,12 @@ let private isDisabled () =
   | _ -> false
 
 /// Try to insert middleware at position 0 in the pipeline via reflection.
-/// DevReload must run BEFORE ResponseCompression — compression wraps the body
-/// stream, preventing the body-swap injection from seeing the raw HTML.
+/// DevReload runs as outermost middleware to guarantee it executes before
+/// the implicit endpoint routing. The middleware itself strips Accept-Encoding
+/// on HTML requests so ResponseCompression doesn't interfere with body-swap.
 let private tryInsertFirst (appBuilder: IApplicationBuilder) (mw: Func<RequestDelegate, RequestDelegate>) =
   try
     let appType = appBuilder.GetType()
-    // WebApplication delegates to an internal ApplicationBuilder
     let abProp = appType.GetProperty("ApplicationBuilder", BindingFlags.NonPublic ||| BindingFlags.Instance)
     let target =
       match abProp with
@@ -52,7 +52,6 @@ let private injectInto (appBuilder: IApplicationBuilder) =
   | false -> () // already injected
   | true ->
     let mw = Func<RequestDelegate, RequestDelegate>(DevReloadMiddleware.createMiddleware workerPort)
-    // Insert at pipeline head so DevReload runs before ResponseCompression.
     match tryInsertFirst appBuilder mw with
     | true ->
       Log.info "[DevReload] Auto-injected hot-reload middleware at pipeline head (worker port %d)" workerPort

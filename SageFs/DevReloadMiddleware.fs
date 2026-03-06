@@ -203,6 +203,10 @@ let createMiddleware (workerPort: int) =
         | false ->
           do! next.Invoke(ctx)
         | true ->
+          // Suppress response compression for HTML so body-swap sees raw HTML.
+          // Without this, ResponseCompression writes gzip bytes to our MemoryStream
+          // and the script injection can't find </body> in compressed bytes.
+          ctx.Request.Headers.Remove("Accept-Encoding") |> ignore
           use ms = new MemoryStream()
           let originalBody = ctx.Response.Body
           ctx.Response.Body <- ms
