@@ -220,6 +220,58 @@ let multiLineBindingTests = testList "Multi-line binding detection" [
   }
 ]
 
+// ── Binding Classification DU ───────────────────────────────────────────
+
+let classifyBindingTests = testList "classifyBinding" [
+  test "single-line function → FunctionBinding" {
+    let lines = [| "let add x y = x + y" |]
+    classifyBinding lines 0 |> Expect.equal "should be FunctionBinding" FunctionBinding
+  }
+  test "value binding → ValueBinding" {
+    let lines = [| "let x = 42" |]
+    classifyBinding lines 0 |> Expect.equal "should be ValueBinding" ValueBinding
+  }
+  test "static member method → StaticMemberMethod" {
+    let lines = [| "  static member Create (x: int) = x" |]
+    classifyBinding lines 0 |> Expect.equal "should be StaticMemberMethod" StaticMemberMethod
+  }
+  test "multi-line function → MultiLineFunction" {
+    let lines = [| "let handler"; "    (ctx: HttpContext)"; "    (next: RequestDelegate) ="; "    task { return () }" |]
+    classifyBinding lines 0 |> Expect.equal "should be MultiLineFunction" MultiLineFunction
+  }
+  test "not a binding → Unknown" {
+    let lines = [| "printfn \"hello\"" |]
+    classifyBinding lines 0 |> Expect.equal "should be Unknown" Unknown
+  }
+  test "indented let → Unknown" {
+    let lines = [| "  let x = 42" |]
+    classifyBinding lines 0 |> Expect.equal "should be Unknown for indented" Unknown
+  }
+  test "value with type annotation → ValueBinding" {
+    let lines = [| "let x : int = 42" |]
+    classifyBinding lines 0 |> Expect.equal "should be ValueBinding" ValueBinding
+  }
+  test "function with typed params → FunctionBinding" {
+    let lines = [| "let add (x: int) (y: int) = x + y" |]
+    classifyBinding lines 0 |> Expect.equal "should be FunctionBinding" FunctionBinding
+  }
+  test "needsNoInlining true for FunctionBinding" {
+    needsNoInlining FunctionBinding |> Expect.isTrue "functions need NoInlining"
+  }
+  test "needsNoInlining true for StaticMemberMethod" {
+    needsNoInlining StaticMemberMethod |> Expect.isTrue "static members need NoInlining"
+  }
+  test "needsNoInlining true for MultiLineFunction" {
+    needsNoInlining MultiLineFunction |> Expect.isTrue "multi-line functions need NoInlining"
+  }
+  test "needsNoInlining false for ValueBinding" {
+    needsNoInlining ValueBinding |> Expect.isFalse "values don't need NoInlining"
+  }
+  test "needsNoInlining false for Unknown" {
+    needsNoInlining Unknown |> Expect.isFalse "unknown doesn't need NoInlining"
+  }
+]
+
 // ── Combined ────────────────────────────────────────────────────────────
 
 [<Tests>]
@@ -229,4 +281,5 @@ let hotReloadingPropertyTests = testList "HotReloading property & edge-case" [
   getOpenModulesTests
   propertyTests
   multiLineBindingTests
+  classifyBindingTests
 ]

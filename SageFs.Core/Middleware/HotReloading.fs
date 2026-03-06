@@ -453,6 +453,39 @@ let isMultiLineFunctionBinding (lines: string[]) (idx: int) : bool =
           let beforeEq = combined.Substring(0, eqIdx).Trim()
           beforeEq.Contains("(") || (beforeEq.Contains(" ") && not (beforeEq.Contains(":")))
 
+/// Classification of a binding for hot-reload purposes.
+type BindingKind =
+  | FunctionBinding     // let f x = ...
+  | ValueBinding        // let x = 42
+  | StaticMemberMethod  // static member F x = ...
+  | MultiLineFunction   // let f\n  (x: int)\n  (y: int) = ...
+  | Unknown             // not a binding line
+
+/// Classify a source line (in context of surrounding lines) into a BindingKind.
+let classifyBinding (lines: string[]) (idx: int) : BindingKind =
+  let line = lines.[idx]
+  match isStaticMemberFunction line with
+  | true -> StaticMemberMethod
+  | false ->
+    match isTopLevelFunctionBinding line with
+    | true -> FunctionBinding
+    | false ->
+      match isMultiLineFunctionBinding lines idx with
+      | true -> MultiLineFunction
+      | false ->
+        let trimmed = line.TrimStart()
+        match trimmed.StartsWith("let ", System.StringComparison.Ordinal)
+              && not (trimmed.StartsWith("let!", System.StringComparison.Ordinal))
+              && line = line.TrimStart() with
+        | true -> ValueBinding
+        | false -> Unknown
+
+/// Whether a binding kind needs [<MethodImpl(NoInlining)>] for Harmony detours.
+let needsNoInlining (kind: BindingKind) =
+  match kind with
+  | FunctionBinding | StaticMemberMethod | MultiLineFunction -> true
+  | ValueBinding | Unknown -> false
+
 /// Inject [<MethodImpl(MethodImplOptions.NoInlining)>] on top-level function bindings
 /// (including multi-line signatures) and static member methods so Harmony detours work.
 /// Without this, the F# compiler inlines simple static member bodies at the IL level,
@@ -460,18 +493,13 @@ let isMultiLineFunctionBinding (lines: string[]) (idx: int) : bool =
 /// entry-point detour invisible to callers.
 let injectNoInlining (code: string) =
   let lines = code.Replace("\r\n", "\n").Replace("\r", "\n").Split('\n')
-  let singleLineNeedsInjection line =
-    isTopLevelFunctionBinding line || isStaticMemberFunction line
   let injectionLines =
     lines
-    |> Array.mapi (fun idx line ->
-      match singleLineNeedsInjection line with
+    |> Array.mapi (fun idx _ -> idx, classifyBinding lines idx)
+    |> Array.choose (fun (idx, kind) ->
+      match needsNoInlining kind with
       | true -> Some idx
-      | false ->
-        match isMultiLineFunctionBinding lines idx with
-        | true -> Some idx
-        | false -> None)
-    |> Array.choose id
+      | false -> None)
     |> Set.ofArray
   match injectionLines.IsEmpty with
   | true -> code
