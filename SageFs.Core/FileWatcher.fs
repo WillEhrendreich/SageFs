@@ -131,6 +131,7 @@ let start
         try
           let watcher = new FileSystemWatcher(dir)
           watcher.IncludeSubdirectories <- true
+          watcher.InternalBufferSize <- 65536 // 64KB — default 8KB overflows on batch saves
           watcher.NotifyFilter <- NotifyFilters.LastWrite ||| NotifyFilters.FileName
           for ext in config.Extensions do
             watcher.Filters.Add(sprintf "*%s" ext)
@@ -154,8 +155,10 @@ let start
           watcher.Created.Add(handler FileChangeKind.Created)
           watcher.Deleted.Add(handler FileChangeKind.Deleted)
           watcher.Renamed.Add(fun e -> handler FileChangeKind.Renamed e)
+          watcher.Error.Add(fun e ->
+            Log.warn "[FileWatcher] Buffer overflow in %s — events may have been lost. Cause: %s" dir (e.GetException().Message))
           watcher.EnableRaisingEvents <- true
-          Log.info "FileWatcher started for %s with %d filters: %A" dir watcher.Filters.Count (Seq.toList watcher.Filters)
+          Log.info "FileWatcher started for %s with %d filters, buffer=%dKB: %A" dir watcher.Filters.Count (watcher.InternalBufferSize / 1024) (Seq.toList watcher.Filters)
           Some (watcher :> IDisposable)
         with ex ->
           Log.warn "[FileWatcher] Cannot watch %s: %s — hot-reload disabled for this directory" dir ex.Message

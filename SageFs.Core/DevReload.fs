@@ -18,6 +18,7 @@ type DevReloadHealth =
   | Degraded of reason: string
 
 module DevReloadHealthTracker =
+  let private healthLock = obj()
   let mutable private currentHealth = Disabled
   let mutable private onTransition: (DevReloadHealth -> unit) option = None
 
@@ -30,16 +31,18 @@ module DevReloadHealthTracker =
     onTransition <- None
 
   let transition (newState: DevReloadHealth) =
-    let prev = currentHealth
-    currentHealth <- newState
-    Log.info "[DevReload] Health: %A → %A" prev newState
-    match onTransition with
-    | Some cb -> cb newState
-    | None -> ()
+    lock healthLock (fun () ->
+      let prev = currentHealth
+      currentHealth <- newState
+      Log.info "[DevReload] Health: %A → %A" prev newState
+      match onTransition with
+      | Some cb -> cb newState
+      | None -> ())
 
   let reset () =
-    currentHealth <- Disabled
-    onTransition <- None
+    lock healthLock (fun () ->
+      currentHealth <- Disabled
+      onTransition <- None)
 
 /// Structured diagnostic for browser error display. Carries source-mapped
 /// line numbers (LineOffset already applied) so the browser shows correct

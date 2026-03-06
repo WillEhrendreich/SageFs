@@ -76,8 +76,13 @@ let resolveAssembly (args: ResolveEventArgs) =
       try Assembly.Load(name)
       with _ ->
         // Last resort: load from byte array to bypass native binder identity tracking.
-        // This avoids the path-based version check entirely but loses PDB association.
-        try Assembly.Load(File.ReadAllBytes(path))
+        // This avoids the path-based version check entirely. Load PDB sidecar if
+        // available so stack traces retain source line numbers.
+        try
+          let pdbPath = Path.ChangeExtension(path, ".pdb")
+          match File.Exists(pdbPath) with
+          | true -> Assembly.Load(File.ReadAllBytes(path), File.ReadAllBytes(pdbPath))
+          | false -> Assembly.Load(File.ReadAllBytes(path))
         with _ -> null)
   |> Option.defaultValue null
 
@@ -386,28 +391,89 @@ let isStaticMemberFunction (line: string) =
       beforeEq.Contains(" ") && not (beforeEq.Contains(":"))
     | _ -> false
 
+/// Strip `let` keyword + modifiers, returning the remaining text after the name.
+/// Used by multi-line binding detection to identify function signatures that span lines.
+let private startsLetBinding (line: string) =
+  let trimmed = line.TrimStart()
+  match trimmed.StartsWith("let ", System.StringComparison.Ordinal)
+        && not (trimmed.StartsWith("let!", System.StringComparison.Ordinal))
+        && line = line.TrimStart() with
+  | false -> None
+  | true ->
+    let mutable s = trimmed.Substring(4).TrimStart()
+    for m in ["private "; "internal "; "public "; "inline "; "rec "; "mutable "] do
+      match s.StartsWith(m, System.StringComparison.Ordinal) with
+      | true -> s <- s.Substring(m.Length).TrimStart()
+      | false -> ()
+    Some s
+
+/// Detect multi-line function bindings where params span multiple lines:
+///   let handler
+///       (ctx: HttpContext)
+///       (next: RequestDelegate) =
+///       task { ... }
+/// Scans up to 5 lines forward from a `let` line to find the `=`.
+let isMultiLineFunctionBinding (lines: string[]) (idx: int) : bool =
+  match startsLetBinding lines.[idx] with
+  | None -> false
+  | Some afterName ->
+    match afterName.Contains("=") with
+    | true -> false // single-line — handled by isTopLevelFunctionBinding
+    | false ->
+      let maxLookahead = 5
+      let mutable found = false
+      let mutable combined = afterName
+      let mutable i = idx + 1
+      while i < lines.Length && i <= idx + maxLookahead && not found do
+        let nextLine = lines.[i].TrimStart()
+        combined <- combined + " " + nextLine
+        match nextLine.Contains("=") with
+        | true -> found <- true
+        | false -> ()
+        i <- i + 1
+      match found with
+      | false -> false
+      | true ->
+        match combined.IndexOf('=') with
+        | -1 -> false
+        | eqIdx ->
+          let beforeEq = combined.Substring(0, eqIdx).Trim()
+          beforeEq.Contains("(") || (beforeEq.Contains(" ") && not (beforeEq.Contains(":")))
+
 /// Inject [<MethodImpl(MethodImplOptions.NoInlining)>] on top-level function bindings
-/// and static member methods so Harmony detours work reliably.
+/// (including multi-line signatures) and static member methods so Harmony detours work.
 /// Without this, the F# compiler inlines simple static member bodies at the IL level,
 /// and the JIT may inline short let-binding functions — both make Harmony's
 /// entry-point detour invisible to callers.
 let injectNoInlining (code: string) =
   let lines = code.Replace("\r\n", "\n").Replace("\r", "\n").Split('\n')
-  let needsInjection line = isTopLevelFunctionBinding line || isStaticMemberFunction line
-  let hasFunction = lines |> Array.exists needsInjection
-  match hasFunction with
-  | false -> code
-  | true ->
+  let singleLineNeedsInjection line =
+    isTopLevelFunctionBinding line || isStaticMemberFunction line
+  let injectionLines =
+    lines
+    |> Array.mapi (fun idx line ->
+      match singleLineNeedsInjection line with
+      | true -> Some idx
+      | false ->
+        match isMultiLineFunctionBinding lines idx with
+        | true -> Some idx
+        | false -> None)
+    |> Array.choose id
+    |> Set.ofArray
+  match injectionLines.IsEmpty with
+  | true -> code
+  | false ->
     let sb = System.Text.StringBuilder()
     sb.Append("open System.Runtime.CompilerServices\n") |> ignore
-    for line in lines do
-      match needsInjection line with
+    for i in 0 .. lines.Length - 1 do
+      match Set.contains i injectionLines with
       | true ->
+        let line = lines.[i]
         let indent = line.Length - line.TrimStart().Length
         let prefix = System.String(' ', indent)
         sb.Append(prefix + "[<MethodImpl(MethodImplOptions.NoInlining)>]\n") |> ignore
       | false -> ()
-      sb.Append(line + "\n") |> ignore
+      sb.Append(lines.[i] + "\n") |> ignore
     sb.ToString()
 
 let hotReloadingMiddleware next (request, st: AppState) =

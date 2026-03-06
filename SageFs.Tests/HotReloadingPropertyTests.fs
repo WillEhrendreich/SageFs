@@ -179,6 +179,47 @@ let propertyTests = testList "HotReloading properties" [
     |> Expect.equal "no dupes" result.Length
 ]
 
+// ── Multi-line Binding Detection Tests ──────────────────────────────────
+
+let multiLineBindingTests = testList "Multi-line binding detection" [
+  test "multi-line function: let + params on next line" {
+    let code = "let handler\n    (ctx: HttpContext)\n    (next: RequestDelegate) =\n    task { return () }"
+    let result = injectNoInlining code
+    result.Contains("[<MethodImpl(MethodImplOptions.NoInlining)>]")
+    |> Expect.isTrue "should inject NoInlining for multi-line function"
+  }
+  test "multi-line function: single-line decl, body on next" {
+    let code = "let handler (ctx: HttpContext) =\n    task { return () }"
+    let result = injectNoInlining code
+    result.Contains("[<MethodImpl(MethodImplOptions.NoInlining)>]")
+    |> Expect.isTrue "should inject NoInlining for single-line function decl"
+  }
+  test "multi-line value binding: no params across lines" {
+    let code = "let config =\n    { Port = 8080\n      Host = \"localhost\" }"
+    let result = injectNoInlining code
+    result.Contains("[<MethodImpl(MethodImplOptions.NoInlining)>]")
+    |> Expect.isFalse "value bindings should NOT get NoInlining"
+  }
+  test "multi-line with private modifier and params" {
+    let code = "let private handler\n    (ctx: HttpContext) : Task<unit> =\n    task { return () }"
+    let result = injectNoInlining code
+    result.Contains("[<MethodImpl(MethodImplOptions.NoInlining)>]")
+    |> Expect.isTrue "private multi-line function should get NoInlining"
+  }
+  test "multi-line with rec modifier" {
+    let code = "let rec traverse\n    (node: TreeNode)\n    (depth: int) =\n    match node with\n    | Leaf -> depth"
+    let result = injectNoInlining code
+    result.Contains("[<MethodImpl(MethodImplOptions.NoInlining)>]")
+    |> Expect.isTrue "rec multi-line function should get NoInlining"
+  }
+  test "multi-line beyond lookahead: no injection" {
+    let code = "let handler\n    someStuff\n    moreStuff\n    yetMore\n    andMore\n    still\n    nope"
+    let result = injectNoInlining code
+    result.Contains("[<MethodImpl(MethodImplOptions.NoInlining)>]")
+    |> Expect.isFalse "incomplete binding beyond lookahead should not inject"
+  }
+]
+
 // ── Combined ────────────────────────────────────────────────────────────
 
 [<Tests>]
@@ -187,4 +228,5 @@ let hotReloadingPropertyTests = testList "HotReloading property & edge-case" [
   isStaticMemberFunctionExtended
   getOpenModulesTests
   propertyTests
+  multiLineBindingTests
 ]
