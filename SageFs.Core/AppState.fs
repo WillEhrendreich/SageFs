@@ -411,61 +411,65 @@ let createFsiSession (logger: ILogger) (outStream: TextWriter) (useAsp: bool) (s
     for project in sln.Projects do
       ct.ThrowIfCancellationRequested()
       try
-        let asm = reflectionAlc.LoadFromAssemblyPath(project.TargetPath)
-        let types =
-          try
-            asm.GetTypes()
-          with
-          | :? System.Reflection.ReflectionTypeLoadException as ex ->
-            ex.Types |> Array.filter (fun t -> not (isNull t))
+        match System.IO.File.Exists(project.TargetPath) with
+        | false ->
+          Log.warn "[Warmup] DLL not found: %s — run 'dotnet build' first." project.TargetPath
+        | true ->
+          let asm = reflectionAlc.LoadFromAssemblyPath(project.TargetPath)
+          let types =
+            try
+              asm.GetTypes()
+            with
+            | :? System.Reflection.ReflectionTypeLoadException as ex ->
+              ex.Types |> Array.filter (fun t -> not (isNull t))
 
-        let rootNamespaces =
-          types
-          |> Array.choose (fun t ->
-            match isNull t.Namespace with
-            | false ->
-              let parts = t.Namespace.Split('.')
-              match parts.Length > 0 with | true -> Some parts.[0] | false -> None
+          let rootNamespaces =
+            types
+            |> Array.choose (fun t ->
+              match isNull t.Namespace with
+              | false ->
+                let parts = t.Namespace.Split('.')
+                match parts.Length > 0 with | true -> Some parts.[0] | false -> None
+              | true ->
+                None)
+            |> Array.distinct
+            |> Array.filter (fun ns -> not (ns.StartsWith("<", System.StringComparison.Ordinal) || ns.StartsWith("$", System.StringComparison.Ordinal)))
+
+          let topLevelModules =
+            types
+            |> Array.filter (fun t -> 
+              t.Namespace |> isNull && 
+              (t.GetCustomAttributes(typeof<Microsoft.FSharp.Core.CompilationMappingAttribute>, false)
+               |> Array.exists (fun attr ->
+                 let cma = attr :?> Microsoft.FSharp.Core.CompilationMappingAttribute
+                 cma.SourceConstructFlags = Microsoft.FSharp.Core.SourceConstructFlags.Module)) &&
+              not (t.Name.StartsWith("<", System.StringComparison.Ordinal) || t.Name.StartsWith("$", System.StringComparison.Ordinal) || t.Name.Contains("@") || t.Name.Contains("+")) &&
+              t.IsPublic &&
+              t.GetCustomAttributes(typeof<Microsoft.FSharp.Core.RequireQualifiedAccessAttribute>, false).Length = 0)
+            |> Array.map (fun t ->
+              match t.Name.EndsWith("Module", System.StringComparison.Ordinal) with
+              | true -> t.Name.Substring(0, t.Name.Length - 6)
+              | false -> t.Name)
+            |> Array.distinct
+
+          for ns in rootNamespaces do
+            match openedNamespaces.Add(ns) with
+            | true -> namesToOpen.Add(ns)
+            | false -> ()
+
+          for m in topLevelModules do
+            match openedNamespaces.Add(m) with
             | true ->
-              None)
-          |> Array.distinct
-          |> Array.filter (fun ns -> not (ns.StartsWith("<", System.StringComparison.Ordinal) || ns.StartsWith("$", System.StringComparison.Ordinal)))
+              namesToOpen.Add(m)
+              moduleNames.Add(m) |> ignore
+            | false -> ()
 
-        let topLevelModules =
-          types
-          |> Array.filter (fun t -> 
-            t.Namespace |> isNull && 
-            (t.GetCustomAttributes(typeof<Microsoft.FSharp.Core.CompilationMappingAttribute>, false)
-             |> Array.exists (fun attr ->
-               let cma = attr :?> Microsoft.FSharp.Core.CompilationMappingAttribute
-               cma.SourceConstructFlags = Microsoft.FSharp.Core.SourceConstructFlags.Module)) &&
-            not (t.Name.StartsWith("<", System.StringComparison.Ordinal) || t.Name.StartsWith("$", System.StringComparison.Ordinal) || t.Name.Contains("@") || t.Name.Contains("+")) &&
-            t.IsPublic &&
-            t.GetCustomAttributes(typeof<Microsoft.FSharp.Core.RequireQualifiedAccessAttribute>, false).Length = 0)
-          |> Array.map (fun t ->
-            match t.Name.EndsWith("Module", System.StringComparison.Ordinal) with
-            | true -> t.Name.Substring(0, t.Name.Length - 6)
-            | false -> t.Name)
-          |> Array.distinct
-
-        for ns in rootNamespaces do
-          match openedNamespaces.Add(ns) with
-          | true -> namesToOpen.Add(ns)
-          | false -> ()
-
-        for m in topLevelModules do
-          match openedNamespaces.Add(m) with
-          | true ->
-            namesToOpen.Add(m)
-            moduleNames.Add(m) |> ignore
-          | false -> ()
-
-        loadedAssemblies.Add({
-          Name = asm.GetName().Name
-          Path = project.TargetPath
-          NamespaceCount = rootNamespaces.Length
-          ModuleCount = topLevelModules.Length
-        } : LoadedAssembly)
+          loadedAssemblies.Add({
+            Name = asm.GetName().Name
+            Path = project.TargetPath
+            NamespaceCount = rootNamespaces.Length
+            ModuleCount = topLevelModules.Length
+          } : LoadedAssembly)
       with ex ->
         logger.LogWarning (sprintf "Could not analyze %s: %s" project.TargetPath ex.Message)
     reflectionAlc.Unload()

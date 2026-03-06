@@ -4,6 +4,7 @@ open System
 open System.IO
 open System.Text
 open Microsoft.AspNetCore.Http
+open SageFs.Utils
 
 /// Generate the reload script. Port > 0 connects cross-origin to the worker's
 /// SSE endpoint; port 0 falls back to a same-origin relative path (for tests).
@@ -225,7 +226,9 @@ let createMiddleware (workerPort: int) =
   fun (next: RequestDelegate) ->
     RequestDelegate(fun ctx -> task {
       match ctx.Items.ContainsKey(handledKey) with
-      | true -> do! next.Invoke(ctx)
+      | true ->
+        Log.debug "[DevReload] Skipping %s %s — already handled" ctx.Request.Method ctx.Request.Path.Value
+        do! next.Invoke(ctx)
       | false ->
         ctx.Items[handledKey] <- true
 
@@ -245,6 +248,7 @@ let createMiddleware (workerPort: int) =
 
         match acceptsHtml with
         | false ->
+          Log.debug "[DevReload] Passthrough %s %s — Accept: %s (no HTML)" ctx.Request.Method ctx.Request.Path.Value accept
           do! next.Invoke(ctx)
         | true ->
           // Only strip Accept-Encoding when the request explicitly wants HTML.
@@ -271,12 +275,23 @@ let createMiddleware (workerPort: int) =
             let injected =
               match content.Contains("</body>") with
               | true -> content.Replace("</body>", script + "</body>")
-              | false -> content + script
+              | false ->
+                Log.debug "[DevReload] No </body> tag in %s — appending script" ctx.Request.Path.Value
+                content + script
             let bytes = encoding.GetBytes(injected)
             ctx.Response.ContentLength <- Nullable(int64 bytes.Length)
             ctx.Response.Body <- originalBody
             do! originalBody.WriteAsync(ReadOnlyMemory bytes)
           | false ->
+            match shouldInjectScript ctx with
+            | false ->
+              Log.debug "[DevReload] Skip inject %s %s — content-type: %s, status: %d"
+                ctx.Request.Method ctx.Request.Path.Value
+                (ctx.Response.ContentType |> Option.ofObj |> Option.defaultValue "null")
+                ctx.Response.StatusCode
+            | true ->
+              Log.debug "[DevReload] Skip inject %s — body too large (%dKB > %dKB)"
+                ctx.Request.Path.Value (ms.Length / 1024L) (maxBufferSize / 1024L)
             ms.Position <- 0L
             ctx.Response.Body <- originalBody
             do! ms.CopyToAsync(originalBody)
