@@ -196,6 +196,7 @@ let createMiddleware (workerPort: int) =
         let acceptsHtml =
           let accept = ctx.Request.Headers["Accept"].ToString()
           accept.Contains("text/html", StringComparison.OrdinalIgnoreCase) ||
+          accept.Contains("*/*", StringComparison.Ordinal) ||
           String.IsNullOrEmpty(accept)
 
         match acceptsHtml with

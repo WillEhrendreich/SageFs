@@ -142,11 +142,25 @@ let solutionToFsiArgs (logger: ILogger) (_useAsp: bool) sln =
     failwithf "Not all DLLs are found (%d missing). Please build your project before running REPL" missing.Length
   | false -> ()
 
+  // Flags from project OtherOptions that FSI should inherit for source-level
+  // compatibility (e.g. --checknulls+ from <Nullable>enable</Nullable>).
+  // We explicitly exclude --warnaserror (too strict for REPL) and --optimize
+  // (irrelevant for interactive eval).
+  let fsiSafeFlags =
+    sln.Projects
+    |> Seq.collect _.OtherOptions
+    |> Seq.filter (fun s ->
+      s.StartsWith("--checknulls", System.StringComparison.Ordinal)
+      || s.StartsWith("--nowarn", System.StringComparison.Ordinal)
+      || s.StartsWith("--langversion", System.StringComparison.Ordinal))
+    |> Seq.distinct
+
   [|
     "fsi"
     yield! allDlls |> Seq.map (sprintf "-r:%s")
     yield! sln.LibPaths |> Seq.map (sprintf "--lib:%s")
     yield! sln.OtherArgs
+    yield! fsiSafeFlags
     // Always include framework DLL references from project OtherOptions
     // (e.g. ASP.NET Core, MVC) — harmless if unused, essential if needed
     yield!

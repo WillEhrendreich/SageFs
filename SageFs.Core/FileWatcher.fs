@@ -2,6 +2,7 @@ module SageFs.FileWatcher
 
 open System
 open System.IO
+open SageFs.Utils
 
 /// The kind of file change detected.
 [<RequireQualifiedAccess>]
@@ -104,6 +105,7 @@ let start
         let cs = pendingChanges |> List.rev
         pendingChanges <- []
         cs)
+    Log.info "FileWatcher debounce fired: %d pending changes" changes.Length
     for c in changes do
       Instrumentation.fileWatcherChanges.Add(1L)
       // Create a test_cycle root span so downstream Elm effects and worker calls
@@ -138,6 +140,7 @@ let start
           watcher.Filters.Add(sprintf "*%s" ext)
 
         let handler (kind: FileChangeKind) (e: FileSystemEventArgs) =
+          Log.info "FileWatcher raw event: %s %s" (string kind) e.FullPath
           match shouldTriggerRebuild config e.FullPath with
           | true ->
             let change = {
@@ -157,6 +160,7 @@ let start
         watcher.Deleted.Add(handler FileChangeKind.Deleted)
         watcher.Renamed.Add(fun e -> handler FileChangeKind.Renamed e)
         watcher.EnableRaisingEvents <- true
+        Log.info "FileWatcher started for %s with %d filters: %A" dir watcher.Filters.Count (Seq.toList watcher.Filters)
         Some (watcher :> IDisposable)
       | false ->
         None)
