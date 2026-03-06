@@ -846,7 +846,7 @@
     Tests run as you type — no save needed. Eval code on demand with <code>Alt+Enter</code>.
     Results stream to every editor you use, from a single shared daemon.
   </p>
-  <div class="cmd"><span>$</span> sagefs --proj MyProject.fsproj</div>
+  <div class="cmd"><span>$</span> sagefs</div>
 </div>
 
 <!-- ─── GETTING STARTED ─── -->
@@ -865,8 +865,8 @@
     <div class="gs-step">
       <span class="gs-num">02</span>
       <h3>Run</h3>
-      <p>Point it at your project. The daemon starts, loads dependencies, and opens the TUI.</p>
-      <pre><span>$</span> sagefs --proj MyProject.fsproj</pre>
+      <p>The daemon starts bare and waits for your editor to connect.</p>
+      <pre><span>$</span> sagefs</pre>
     </div>
 
     <div class="gs-step">
@@ -948,7 +948,7 @@
     <div class="editor-card" data-color="cyan">
       <span class="card-icon">🧩</span>
       <h3>Neovim</h3>
-      <span class="card-tech">Lua · 37 modules · 1160 tests</span>
+      <span class="card-tech">Lua · 38 modules · 1142 tests</span>
       <p>
         Two eval modes: tree-sitter auto-detects the enclosing scope in <code>.fs</code> files
         (inferred mode), or use <code>;;</code> delimiters for explicit cell boundaries
@@ -967,7 +967,7 @@
     <div class="editor-card" data-color="green">
       <span class="card-icon">💻</span>
       <h3>VS Code</h3>
-      <span class="card-tech">F# via Fable → JavaScript · 21 modules</span>
+      <span class="card-tech">F# via Fable → JavaScript · 19 modules</span>
       <p>
         Select code, hit <code>Alt+Enter</code>, see colored annotations inline.
         Sidebar panels for hot reload file trees, live test status, type exploration,

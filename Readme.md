@@ -87,7 +87,7 @@ graph TB
     D["<b>SageFs Daemon</b><br/>FSI · File Watcher · MCP · Hot Reload · Dashboard"]
 
     D --- VS["VS Code<br/><i>Fable F#→JS</i>"]
-    D --- NV["Neovim<br/><i>37 Lua modules</i>"]
+    D --- NV["Neovim<br/><i>38 Lua modules</i>"]
     D --- VI["Visual Studio<br/><i>Extensibility SDK</i>"]
     D --- TU["Terminal TUI<br/><i>ANSI renderer</i>"]
     D --- GU["Raylib GUI<br/><i>GPU renderer</i>"]
@@ -239,7 +239,7 @@ Features: Alt+Enter eval, CodeLens, live test decorations, native Test Explorer 
 
 #### Neovim
 
-[**sagefs.nvim**](https://github.com/WillEhrendreich/sagefs.nvim) — 37 Lua modules, 1160 tests, 46 commands.
+[**sagefs.nvim**](https://github.com/WillEhrendreich/sagefs.nvim) — 38 Lua modules, 1142 tests, 46 commands.
 
 ```lua
 -- lazy.nvim

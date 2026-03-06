@@ -351,22 +351,22 @@
 
 <h2 id="quickstart">Quick Start</h2>
 
-<p>Point SageFs at your F# project and start coding:</p>
+<p>Start the daemon — it runs bare and waits for your editor to connect:</p>
 
-<pre><code># Start with a project
+<pre><code># Start the daemon (bare — no project flag needed)
+SageFs
+
+# Or with a specific project
 SageFs --proj path/to/MyProject.fsproj
 
 # Or with a solution
-SageFs --sln path/to/MySolution.slnx
-
-# Or auto-detect from current directory
-SageFs</code></pre>
+SageFs --sln path/to/MySolution.slnx</code></pre>
 
 <p>
-  SageFs launches a <strong>daemon</strong> that loads your project, pre-compiles your dependencies,
-  and opens an interactive session. You'll see a full-screen TUI with an editor pane, output pane,
-  and test status. Hit <code>Alt+Enter</code> to evaluate code, or just save a file —
-  the daemon watches for changes and hot-reloads automatically.
+  SageFs launches a <strong>daemon</strong> that listens for client connections. When your editor
+  (Neovim, VS Code, Visual Studio) creates a session, the daemon auto-discovers your project,
+  pre-compiles dependencies, and starts an interactive session. Hit <code>Alt+Enter</code> to
+  evaluate code, or just save a file — the daemon watches for changes and hot-reloads automatically.
 </p>
 
 <h2 id="modes">Startup Modes</h2>
@@ -377,8 +377,12 @@ SageFs</code></pre>
   <thead><tr><th>Mode</th><th>What It Does</th></tr></thead>
   <tbody>
     <tr>
+      <td><code>SageFs</code></td>
+      <td><strong>Default (bare daemon).</strong> Starts the daemon with no project loaded. Clients (editors, AI agents) create sessions and the daemon auto-discovers projects from their working directory.</td>
+    </tr>
+    <tr>
       <td><code>SageFs --proj X.fsproj</code></td>
-      <td><strong>Default (daemon + TUI).</strong> Starts the daemon if not running, then opens the terminal UI. This is the most common invocation.</td>
+      <td>Start the daemon with a specific project pre-loaded. Useful when auto-discovery isn't desired.</td>
     </tr>
     <tr>
       <td><code>SageFs tui</code></td>
@@ -743,7 +747,7 @@ SageFs</code></pre>
 
 <p>
   The Neovim plugin (<a href="https://github.com/WillEhrendreich/sagefs.nvim"><code>sagefs.nvim</code></a>)
-  is a first-class client with 23 Lua modules and 669 tests. It connects to the running daemon
+  is a first-class client with 38 Lua modules and 1142 tests. It connects to the running daemon
   via SSE and provides:
 </p>
 
