@@ -128,41 +128,40 @@ let start
     |> List.choose (fun dir ->
       match Directory.Exists(dir) with
       | true ->
-        let watcher = new FileSystemWatcher(dir)
-        // Chesterton's fence: IncludeSubdirectories must be true. Real F# projects
-        // always have subdirectories (Handlers/, Models/, etc.). Without this, files
-        // outside the root dir are listed in the hot-reload UI but silently unwatched.
-        // Duplicate events from nested dirs are already handled by path deduplication
-        // in the debounce logic below.
-        watcher.IncludeSubdirectories <- true
-        watcher.NotifyFilter <- NotifyFilters.LastWrite ||| NotifyFilters.FileName
-        for ext in config.Extensions do
-          watcher.Filters.Add(sprintf "*%s" ext)
+        try
+          let watcher = new FileSystemWatcher(dir)
+          watcher.IncludeSubdirectories <- true
+          watcher.NotifyFilter <- NotifyFilters.LastWrite ||| NotifyFilters.FileName
+          for ext in config.Extensions do
+            watcher.Filters.Add(sprintf "*%s" ext)
 
-        let handler (kind: FileChangeKind) (e: FileSystemEventArgs) =
-          Log.info "FileWatcher raw event: %s %s" (string kind) e.FullPath
-          match shouldTriggerRebuild config e.FullPath with
-          | true ->
-            let change = {
-              FilePath = e.FullPath
-              Kind = kind
-              Timestamp = DateTimeOffset.UtcNow
-            }
-            lock lockObj (fun () ->
-              // Deduplicate by path — keep latest change per file
-              pendingChanges <-
-                change :: (pendingChanges |> List.filter (fun c -> c.FilePath <> change.FilePath))
-              timer.Change(config.DebounceMs, Threading.Timeout.Infinite) |> ignore)
-          | false -> ()
+          let handler (kind: FileChangeKind) (e: FileSystemEventArgs) =
+            Log.info "FileWatcher raw event: %s %s" (string kind) e.FullPath
+            match shouldTriggerRebuild config e.FullPath with
+            | true ->
+              let change = {
+                FilePath = e.FullPath
+                Kind = kind
+                Timestamp = DateTimeOffset.UtcNow
+              }
+              lock lockObj (fun () ->
+                pendingChanges <-
+                  change :: (pendingChanges |> List.filter (fun c -> c.FilePath <> change.FilePath))
+                timer.Change(config.DebounceMs, Threading.Timeout.Infinite) |> ignore)
+            | false -> ()
 
-        watcher.Changed.Add(handler FileChangeKind.Changed)
-        watcher.Created.Add(handler FileChangeKind.Created)
-        watcher.Deleted.Add(handler FileChangeKind.Deleted)
-        watcher.Renamed.Add(fun e -> handler FileChangeKind.Renamed e)
-        watcher.EnableRaisingEvents <- true
-        Log.info "FileWatcher started for %s with %d filters: %A" dir watcher.Filters.Count (Seq.toList watcher.Filters)
-        Some (watcher :> IDisposable)
+          watcher.Changed.Add(handler FileChangeKind.Changed)
+          watcher.Created.Add(handler FileChangeKind.Created)
+          watcher.Deleted.Add(handler FileChangeKind.Deleted)
+          watcher.Renamed.Add(fun e -> handler FileChangeKind.Renamed e)
+          watcher.EnableRaisingEvents <- true
+          Log.info "FileWatcher started for %s with %d filters: %A" dir watcher.Filters.Count (Seq.toList watcher.Filters)
+          Some (watcher :> IDisposable)
+        with ex ->
+          Log.warn "[FileWatcher] Cannot watch %s: %s — hot-reload disabled for this directory" dir ex.Message
+          None
       | false ->
+        Log.debug "[FileWatcher] Skipping %s — directory does not exist" dir
         None)
 
   { new IDisposable with

@@ -763,6 +763,51 @@ let e2eSignalPathTests = testSequenced <| testList "DevReload E2E signal path" [
 ]
 
 // ============================================================================
+// FileWatcher resilience tests (priority #8)
+// ============================================================================
+
+let fileWatcherResilienceTests = testList "FileWatcher resilience" [
+  test "start with non-existent directory skips it silently" {
+    let config : FileWatcher.WatchConfig = {
+      Directories = [ @"C:\__nonexistent_dir_sagefs_test_12345__" ]
+      Extensions = [ ".fs" ]
+      DebounceMs = 200
+      ExcludePatterns = []
+    }
+    let mutable callCount = 0
+    use _watcher = FileWatcher.start config (fun _ -> callCount <- callCount + 1)
+    callCount |> Expect.equal "no callbacks triggered" 0
+  }
+
+  test "start with mix of valid and invalid directories watches the valid ones" {
+    let tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
+    Directory.CreateDirectory(tempDir) |> ignore
+    try
+      let config : FileWatcher.WatchConfig = {
+        Directories = [ @"C:\__nonexistent_dir_sagefs_test_12345__"; tempDir ]
+        Extensions = [ ".fs" ]
+        DebounceMs = 200
+        ExcludePatterns = []
+      }
+      use _watcher = FileWatcher.start config (fun _ -> ())
+      true |> Expect.isTrue "watcher started successfully"
+    finally
+      Directory.Delete(tempDir, true)
+  }
+
+  test "start with empty directory list returns valid disposable" {
+    let config : FileWatcher.WatchConfig = {
+      Directories = []
+      Extensions = [ ".fs" ]
+      DebounceMs = 200
+      ExcludePatterns = []
+    }
+    use _watcher = FileWatcher.start config (fun _ -> ())
+    true |> Expect.isTrue "empty watcher is safe"
+  }
+]
+
+// ============================================================================
 // Combined test list
 // ============================================================================
 
@@ -777,4 +822,5 @@ let devReloadTests = testList "DevReload" [
   healthStateTests
   sseHandshakeTests
   e2eSignalPathTests
+  fileWatcherResilienceTests
 ]
