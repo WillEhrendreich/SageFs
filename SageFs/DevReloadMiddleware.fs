@@ -182,6 +182,21 @@ let private shouldInjectScript (ctx: HttpContext) =
   ctx.Response.StatusCode >= 200 &&
   ctx.Response.StatusCode < 300
 
+/// Parse encoding from Content-Type header (e.g. "text/html; charset=iso-8859-1").
+/// Falls back to UTF-8 when charset is missing, empty, or unrecognized.
+let internal parseEncoding (contentType: string) =
+  match String.IsNullOrEmpty(contentType) with
+  | true -> Encoding.UTF8
+  | false ->
+    let parts = contentType.Split(';', StringSplitOptions.TrimEntries)
+    parts
+    |> Array.tryFind (fun p -> p.StartsWith("charset=", StringComparison.OrdinalIgnoreCase))
+    |> Option.bind (fun p ->
+      let charset = p.Substring(8).Trim().Trim('"')
+      try Some (Encoding.GetEncoding(charset))
+      with _ -> None)
+    |> Option.defaultValue Encoding.UTF8
+
 /// Create a middleware that injects the devreload script into HTML responses.
 /// SSE is served by the worker HTTP server — this middleware only does injection.
 let createMiddleware (workerPort: int) =
@@ -193,20 +208,32 @@ let createMiddleware (workerPort: int) =
       | false ->
         ctx.Items[handledKey] <- true
 
+        let accept = ctx.Request.Headers["Accept"].ToString()
+
+        // Body-swap: any request that MIGHT produce HTML
         let acceptsHtml =
-          let accept = ctx.Request.Headers["Accept"].ToString()
           accept.Contains("text/html", StringComparison.OrdinalIgnoreCase) ||
           accept.Contains("*/*", StringComparison.Ordinal) ||
           String.IsNullOrEmpty(accept)
+
+        // Compression stripping: ONLY requests that explicitly want HTML.
+        // Browser navigation sends "text/html,..." — strip compression so body-swap sees raw HTML.
+        // Fetch/XHR with "Accept: */*" for JSON — leave compression intact.
+        let explicitlyWantsHtml =
+          accept.Contains("text/html", StringComparison.OrdinalIgnoreCase)
 
         match acceptsHtml with
         | false ->
           do! next.Invoke(ctx)
         | true ->
-          // Suppress response compression for HTML so body-swap sees raw HTML.
+          // Only strip Accept-Encoding when the request explicitly wants HTML.
           // Without this, ResponseCompression writes gzip bytes to our MemoryStream
           // and the script injection can't find </body> in compressed bytes.
-          ctx.Request.Headers.Remove("Accept-Encoding") |> ignore
+          // API calls with Accept: */* keep their compression untouched.
+          match explicitlyWantsHtml with
+          | true -> ctx.Request.Headers.Remove("Accept-Encoding") |> ignore
+          | false -> ()
+
           use ms = new MemoryStream()
           let originalBody = ctx.Response.Body
           ctx.Response.Body <- ms
@@ -217,13 +244,14 @@ let createMiddleware (workerPort: int) =
 
           match shouldInjectScript ctx && ms.Length < maxBufferSize with
           | true ->
-            use reader = new StreamReader(ms, Encoding.UTF8, leaveOpen = true)
+            let encoding = parseEncoding ctx.Response.ContentType
+            use reader = new StreamReader(ms, encoding, leaveOpen = true)
             let! content = reader.ReadToEndAsync()
             let injected =
               match content.Contains("</body>") with
               | true -> content.Replace("</body>", script + "</body>")
               | false -> content + script
-            let bytes = Encoding.UTF8.GetBytes(injected)
+            let bytes = encoding.GetBytes(injected)
             ctx.Response.ContentLength <- Nullable(int64 bytes.Length)
             ctx.Response.Body <- originalBody
             do! originalBody.WriteAsync(ReadOnlyMemory bytes)

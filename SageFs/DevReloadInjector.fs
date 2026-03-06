@@ -26,7 +26,8 @@ let private isDisabled () =
 /// Try to insert middleware at position 0 in the pipeline via reflection.
 /// DevReload runs as outermost middleware to guarantee it executes before
 /// the implicit endpoint routing. The middleware itself strips Accept-Encoding
-/// on HTML requests so ResponseCompression doesn't interfere with body-swap.
+/// only for explicit text/html requests so ResponseCompression doesn't
+/// interfere with body-swap, while leaving API call compression intact.
 let private tryInsertFirst (appBuilder: IApplicationBuilder) (mw: Func<RequestDelegate, RequestDelegate>) =
   try
     let appType = appBuilder.GetType()
