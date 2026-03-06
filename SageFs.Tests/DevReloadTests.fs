@@ -696,6 +696,73 @@ let sseHandshakeTests = testList "SSE handshake connection indicator" [
 ]
 
 // ============================================================================
+// E2E integration tests — signal path: register → broadcast → receive
+// ============================================================================
+
+let e2eSignalPathTests = testSequenced <| testList "DevReload E2E signal path" [
+  testCase "registerClient + broadcast Reload → reader receives event" <| fun () ->
+    let reader = registerClient "e2e-test-1"
+    broadcastReload ()
+    let mutable received = false
+    match reader.TryRead() with
+    | true, evt ->
+      match evt with
+      | Reload -> received <- true
+      | _ -> ()
+    | _ -> ()
+    unregisterClient "e2e-test-1"
+    received |> Expect.isTrue "should receive Reload event"
+
+  testCase "registerClient + broadcast Compiling → reader receives with filename" <| fun () ->
+    let reader = registerClient "e2e-test-2"
+    broadcastCompiling (Some "App.fs")
+    match reader.TryRead() with
+    | true, Compiling (Some "App.fs") -> ()
+    | true, other -> failwithf "expected Compiling(Some App.fs), got %A" other
+    | false, _ -> failwith "no event received"
+    unregisterClient "e2e-test-2"
+
+  testCase "registerClient + broadcast CompilationFailed → reader receives diagnostics" <| fun () ->
+    let diag = {
+      File = "App.fs"; Line = 10; EndLine = 10; Column = 5; EndColumn = 15
+      Severity = "error"; DiagCode = Some "FS0001"; Message = "Type mismatch"
+    }
+    let reader = registerClient "e2e-test-3"
+    broadcastCompilationFailed "1 error" [diag]
+    match reader.TryRead() with
+    | true, CompilationFailed("1 error", [d]) ->
+      d.File |> Expect.equal "diagnostic file" "App.fs"
+      d.Line |> Expect.equal "diagnostic line" 10
+      d.Message |> Expect.equal "diagnostic message" "Type mismatch"
+    | true, other -> failwithf "expected CompilationFailed, got %A" other
+    | false, _ -> failwith "no event received"
+    unregisterClient "e2e-test-3"
+
+  testCase "multiple clients all receive the same broadcast" <| fun () ->
+    let r1 = registerClient "e2e-multi-1"
+    let r2 = registerClient "e2e-multi-2"
+    let r3 = registerClient "e2e-multi-3"
+    broadcastReload ()
+    let check (r: System.Threading.Channels.ChannelReader<DevReloadEvent>) =
+      match r.TryRead() with
+      | true, Reload -> true
+      | _ -> false
+    let results = [check r1; check r2; check r3]
+    unregisterClient "e2e-multi-1"
+    unregisterClient "e2e-multi-2"
+    unregisterClient "e2e-multi-3"
+    results |> Expect.all "all 3 should receive Reload" id
+
+  testCase "unregistered client does not receive events" <| fun () ->
+    let reader = registerClient "e2e-unreg"
+    unregisterClient "e2e-unreg"
+    broadcastReload ()
+    match reader.TryRead() with
+    | true, Reload -> failwith "should not receive after unregister"
+    | _ -> ()
+]
+
+// ============================================================================
 // Combined test list
 // ============================================================================
 
@@ -709,4 +776,5 @@ let devReloadTests = testList "DevReload" [
   pipelineOrderingTests
   healthStateTests
   sseHandshakeTests
+  e2eSignalPathTests
 ]
