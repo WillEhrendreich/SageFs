@@ -4,6 +4,40 @@ open System
 open System.Collections.Concurrent
 open System.Threading.Channels
 
+/// Health status of the DevReload system. Queryable by any component
+/// that needs to know if hot-reload is operational.
+/// Follows Don Syme's "6-line state machine" pattern: named states with
+/// logging at every transition, no framework needed.
+type DevReloadHealth =
+  | Disabled
+  | PatchPending
+  | PatchFailed of reason: string
+  | Injected
+  | Active of clientCount: int
+  | Degraded of reason: string
+
+module DevReloadHealthTracker =
+  let mutable private currentHealth = Disabled
+  let mutable private onTransition: (DevReloadHealth -> unit) option = None
+
+  let current () = currentHealth
+
+  let setTransitionCallback (cb: DevReloadHealth -> unit) =
+    onTransition <- Some cb
+
+  let clearTransitionCallback () =
+    onTransition <- None
+
+  let transition (newState: DevReloadHealth) =
+    currentHealth <- newState
+    match onTransition with
+    | Some cb -> cb newState
+    | None -> ()
+
+  let reset () =
+    currentHealth <- Disabled
+    onTransition <- None
+
 /// Structured diagnostic for browser error display. Carries source-mapped
 /// line numbers (LineOffset already applied) so the browser shows correct
 /// positions matching the user's source file.
@@ -77,6 +111,7 @@ let broadcastCompilationFailed (errorSummary: string) (diagnostics: DevReloadDia
 let triggerReload () = broadcastReload ()
 
 /// Register a new SSE client. Returns the ChannelReader for reading events.
+/// Also transitions health to Active with current client count.
 let registerClient (id: string) =
   let ch = Channel.CreateUnbounded<DevReloadEvent>()
   let channels = getChannels ()
@@ -85,6 +120,7 @@ let registerClient (id: string) =
   | _ -> ()
   channels.[id] <- ch
   Instrumentation.devReloadConnectedClients.Add(1L)
+  DevReloadHealthTracker.transition (Active channels.Count)
   ch.Reader
 
 /// Unregister a client and close its channel. Idempotent — safe to call
@@ -95,4 +131,8 @@ let unregisterClient (id: string) =
   | true, ch ->
     ch.Writer.TryComplete() |> ignore
     Instrumentation.devReloadConnectedClients.Add(-1L)
+    let remaining = channels.Count
+    match remaining > 0 with
+    | true -> DevReloadHealthTracker.transition (Active remaining)
+    | false -> DevReloadHealthTracker.transition Injected
   | _ -> ()

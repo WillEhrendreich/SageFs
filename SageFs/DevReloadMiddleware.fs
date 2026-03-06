@@ -123,9 +123,30 @@ let reloadScript (workerPort: int) =
     } catch(e) {}
   };
   restoreFormState();
+  let connectionEstablished = false;
   const es = new EventSource('%s');
+  es.onopen = function() {
+    connectionEstablished = true;
+    d.id = 'sagefs-reload-indicator';
+    d.style.cssText = 'position:fixed;top:8px;right:8px;z-index:2147483647;padding:8px 16px;border-radius:8px;font:13px/1.5 system-ui,sans-serif;color:#fff;background:#16a34a;opacity:1;pointer-events:none;transition:opacity .2s;box-shadow:0 2px 12px rgba(0,0,0,.2);max-width:480px;white-space:pre-wrap;word-break:break-word';
+    d.textContent = '✓ SageFs connected';
+    setTimeout(function(){ d.style.opacity = '0'; }, 2000);
+    console.debug('[SageFs] Connected to hot-reload SSE');
+  };
+  d.textContent = '⟳ Connecting to SageFs...';
+  d.style.opacity = '1';
+  const connectionTimeout = setTimeout(function() {
+    if (!connectionEstablished) {
+      d.style.background = '#dc2626';
+      d.style.opacity = '1';
+      d.style.pointerEvents = 'auto';
+      d.textContent = '⚠ Could not connect to SageFs hot-reload.';
+      console.warn('[SageFs] Connection timeout — hot-reload SSE did not connect within 3 seconds');
+    }
+  }, 3000);
   es.onmessage = function(e) {
     clearTimeout(reconnectTimer);
+    clearTimeout(connectionTimeout);
     try {
       const msg = JSON.parse(e.data);
       console.debug('[SageFs]', msg.type, msg);

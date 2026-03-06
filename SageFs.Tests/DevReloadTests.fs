@@ -592,6 +592,110 @@ let pipelineOrderingTests = testList "DevReload.PipelineOrdering" [
 ]
 
 // ============================================================================
+// DevReloadHealth state machine tests
+// ============================================================================
+
+let healthStateTests = testSequenced <| testList "DevReloadHealth state transitions" [
+  testCase "initial state is Disabled" <| fun () ->
+    DevReloadHealthTracker.reset ()
+    DevReloadHealthTracker.current ()
+    |> Expect.equal "initial state" Disabled
+
+  testCase "transition to PatchPending" <| fun () ->
+    DevReloadHealthTracker.reset ()
+    DevReloadHealthTracker.transition PatchPending
+    DevReloadHealthTracker.current ()
+    |> Expect.equal "should be PatchPending" PatchPending
+
+  testCase "transition to PatchFailed with reason" <| fun () ->
+    DevReloadHealthTracker.reset ()
+    DevReloadHealthTracker.transition (PatchFailed "harmony not found")
+    DevReloadHealthTracker.current ()
+    |> Expect.equal "should carry reason" (PatchFailed "harmony not found")
+
+  testCase "transition to Injected" <| fun () ->
+    DevReloadHealthTracker.reset ()
+    DevReloadHealthTracker.transition Injected
+    DevReloadHealthTracker.current ()
+    |> Expect.equal "should be Injected" Injected
+
+  testCase "transition to Active with client count" <| fun () ->
+    DevReloadHealthTracker.reset ()
+    DevReloadHealthTracker.transition (Active 3)
+    DevReloadHealthTracker.current ()
+    |> Expect.equal "should be Active 3" (Active 3)
+
+  testCase "transition to Degraded with reason" <| fun () ->
+    DevReloadHealthTracker.reset ()
+    DevReloadHealthTracker.transition (Degraded "middleware appended")
+    DevReloadHealthTracker.current ()
+    |> Expect.equal "should carry degraded reason" (Degraded "middleware appended")
+
+  testCase "callback fires on transition" <| fun () ->
+    DevReloadHealthTracker.reset ()
+    let mutable captured = None
+    DevReloadHealthTracker.setTransitionCallback (fun s -> captured <- Some s)
+    DevReloadHealthTracker.transition Injected
+    captured |> Expect.equal "callback should fire" (Some Injected)
+    DevReloadHealthTracker.clearTransitionCallback ()
+
+  testCase "reset clears callback" <| fun () ->
+    DevReloadHealthTracker.reset ()
+    let mutable fired = false
+    DevReloadHealthTracker.setTransitionCallback (fun _ -> fired <- true)
+    DevReloadHealthTracker.reset ()
+    DevReloadHealthTracker.transition PatchPending
+    fired |> Expect.isFalse "callback should not fire after reset"
+
+  testCase "DU cases are exhaustive" <| fun () ->
+    let describe h =
+      match h with
+      | Disabled -> "disabled"
+      | PatchPending -> "pending"
+      | PatchFailed r -> sprintf "failed: %s" r
+      | Injected -> "injected"
+      | Active n -> sprintf "active(%d)" n
+      | Degraded r -> sprintf "degraded: %s" r
+    [ Disabled; PatchPending; PatchFailed "x"; Injected; Active 1; Degraded "y" ]
+    |> List.map describe
+    |> Expect.hasLength "six DU cases" 6
+
+  testCase "multiple transitions track latest state" <| fun () ->
+    DevReloadHealthTracker.reset ()
+    DevReloadHealthTracker.transition PatchPending
+    DevReloadHealthTracker.transition Injected
+    DevReloadHealthTracker.transition (Active 2)
+    DevReloadHealthTracker.current ()
+    |> Expect.equal "should be latest" (Active 2)
+]
+
+// ============================================================================
+// SSE handshake + connection indicator tests
+// ============================================================================
+
+let sseHandshakeTests = testList "SSE handshake connection indicator" [
+  testCase "reloadScript contains es.onopen handler" <| fun () ->
+    let script = DevReloadMiddleware.reloadScript 0
+    script |> Expect.stringContains "should have onopen handler" "es.onopen"
+
+  testCase "reloadScript contains connectionTimeout" <| fun () ->
+    let script = DevReloadMiddleware.reloadScript 0
+    script |> Expect.stringContains "should have connection timeout" "connectionTimeout"
+
+  testCase "reloadScript shows Connecting state" <| fun () ->
+    let script = DevReloadMiddleware.reloadScript 0
+    script |> Expect.stringContains "should show Connecting" "Connecting"
+
+  testCase "reloadScript shows Connected state" <| fun () ->
+    let script = DevReloadMiddleware.reloadScript 0
+    script |> Expect.stringContains "should show Connected" "Connected"
+
+  testCase "reloadScript shows Could not connect warning" <| fun () ->
+    let script = DevReloadMiddleware.reloadScript 0
+    script |> Expect.stringContains "should show failure warning" "Could not connect"
+]
+
+// ============================================================================
 // Combined test list
 // ============================================================================
 
@@ -603,4 +707,6 @@ let devReloadTests = testList "DevReload" [
   killSwitchTests
   sseFormatTests
   pipelineOrderingTests
+  healthStateTests
+  sseHandshakeTests
 ]

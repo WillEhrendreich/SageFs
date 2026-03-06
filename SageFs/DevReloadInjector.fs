@@ -55,10 +55,12 @@ let private injectInto (appBuilder: IApplicationBuilder) =
     let mw = Func<RequestDelegate, RequestDelegate>(DevReloadMiddleware.createMiddleware workerPort)
     match tryInsertFirst appBuilder mw with
     | true ->
+      DevReload.DevReloadHealthTracker.transition DevReload.Injected
       Log.info "[DevReload] Auto-injected hot-reload middleware at pipeline head (worker port %d)" workerPort
     | false ->
       appBuilder.Use(mw) |> ignore
-      Log.info "[DevReload] Auto-injected hot-reload middleware (worker port %d, fallback append)" workerPort
+      DevReload.DevReloadHealthTracker.transition (DevReload.Degraded "middleware appended instead of inserted at position 0 — other middleware may short-circuit before DevReload")
+      Log.warn "[DevReload] Auto-injected hot-reload middleware (worker port %d, fallback append — middleware ordering may cause missed injections)" workerPort
 
 /// Harmony prefix: runs before WebApplication.Run()/RunAsync().
 type private RunPrefix() =
@@ -90,8 +92,10 @@ let private patchMethod (harmony: HarmonyLib.Harmony) (targetType: Type) (method
 let install () =
   match isDisabled () with
   | true ->
+    DevReload.DevReloadHealthTracker.transition DevReload.Disabled
     Log.info "[DevReload] Disabled via SAGEFS_DEVRELOAD env var"
   | false ->
+    DevReload.DevReloadHealthTracker.transition DevReload.PatchPending
     let harmony = HarmonyLib.Harmony("sagefs.devreload")
     let tryPatch () =
       try
@@ -128,7 +132,8 @@ let install () =
               Log.info "[DevReload] Lazy patches applied after Microsoft.AspNetCore loaded"
             | false ->
               Interlocked.Exchange(patched, 0) |> ignore // reset so next load can retry
-              Log.warn "[DevReload] Lazy patching failed even after Microsoft.AspNetCore loaded"))
+              DevReload.DevReloadHealthTracker.transition (DevReload.PatchFailed "WebApplication.Run/RunAsync methods not found after Microsoft.AspNetCore loaded")
+              Log.warn "[DevReload] ⚠ Hot-reload middleware could NOT be installed. Browser auto-reload will not work. Ensure the project uses WebApplication.Run() or WebApplication.RunAsync()."))
 
 /// Manual helper for non-WebApplication hosts.
 /// Call from user code: SageFs.DevReloadInjector.injectMiddleware app workerPort
