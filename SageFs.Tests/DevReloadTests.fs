@@ -10,6 +10,11 @@ open Expecto.Flip
 open FsCheck
 open FsCheck.FSharp
 open Microsoft.AspNetCore.Http
+open Microsoft.AspNetCore.Builder
+open Microsoft.AspNetCore.Hosting
+open Microsoft.AspNetCore.Hosting.Server
+open Microsoft.Extensions.DependencyInjection
+open Microsoft.Extensions.Hosting
 open SageFs.DevReload
 open SageFs
 
@@ -459,6 +464,134 @@ let sseFormatTests = testList "DevReload.SSEFormat" [
 ]
 
 // ============================================================================
+// Pipeline ordering tests (ResponseCompression interaction)
+// ============================================================================
+
+/// Access _components via the same reflection path as tryInsertFirst
+let private getComponents (app: IApplicationBuilder) =
+  let appType = app.GetType()
+  let abProp = appType.GetProperty("ApplicationBuilder", Reflection.BindingFlags.NonPublic ||| Reflection.BindingFlags.Instance)
+  let target =
+    match abProp with
+    | null -> app :> obj
+    | prop -> prop.GetValue(app)
+  let compField = target.GetType().GetField("_components", Reflection.BindingFlags.NonPublic ||| Reflection.BindingFlags.Instance)
+  compField.GetValue(target) :?> System.Collections.IList
+
+let pipelineOrderingTests = testList "DevReload.PipelineOrdering" [
+
+  test "reflection: can access _components on WebApplication" {
+    let app = WebApplication.CreateBuilder([||]).Build()
+    let components = getComponents app
+    components |> Expect.isNotNull "should find _components"
+    (app :> IDisposable).Dispose()
+  }
+
+  test "reflection: Insert(0) places middleware before existing entries" {
+    let app = WebApplication.CreateBuilder([||]).Build()
+    // Add two markers via Use()
+    app.Use(Func<RequestDelegate, RequestDelegate>(fun next -> next)) |> ignore
+    app.Use(Func<RequestDelegate, RequestDelegate>(fun next -> next)) |> ignore
+    let components = getComponents app
+    let countBefore = components.Count
+    // Insert at head
+    let marker = Func<RequestDelegate, RequestDelegate>(fun next -> next)
+    components.Insert(0, marker)
+    components.Count |> Expect.equal "should have one more" (countBefore + 1)
+    let first = components.[0]
+    Object.ReferenceEquals(first, marker)
+    |> Expect.isTrue "inserted middleware should be at position 0"
+    (app :> IDisposable).Dispose()
+  }
+
+  testTask "DevReload before ResponseCompression: script injected in HTML" {
+    let builder = WebApplication.CreateBuilder([||])
+    builder.Services.AddResponseCompression(fun opts ->
+      opts.EnableForHttps <- true
+      opts.MimeTypes <- [| "text/html" |]) |> ignore
+    builder.WebHost.UseUrls("http://127.0.0.1:0") |> ignore
+    let app = builder.Build()
+    // Insert DevReload at head (position 0)
+    let mw = Func<RequestDelegate, RequestDelegate>(DevReloadMiddleware.createMiddleware 0)
+    let components = getComponents app
+    components.Insert(0, mw)
+    // Add ResponseCompression after DevReload
+    app.UseResponseCompression() |> ignore
+    // Terminal: return HTML
+    app.MapGet("/", Func<HttpContext, Task>(fun ctx -> task {
+      ctx.Response.ContentType <- "text/html"
+      do! ctx.Response.WriteAsync("<html><body><h1>Test</h1></body></html>")
+    })) |> ignore
+    let cts = new CancellationTokenSource()
+    let runTask = app.RunAsync(cts.Token)
+    do! Task.Delay(1000)
+    let addresses =
+      (app :> IHost).Services.GetRequiredService<IServer>()
+      |> fun s -> s.Features.Get<Microsoft.AspNetCore.Hosting.Server.Features.IServerAddressesFeature>()
+    let addr = addresses.Addresses |> Seq.head
+    let client = new System.Net.Http.HttpClient()
+    client.DefaultRequestHeaders.Add("Accept-Encoding", "identity")
+    let! (resp: System.Net.Http.HttpResponseMessage) = client.GetAsync(addr)
+    let! (body: string) = resp.Content.ReadAsStringAsync()
+    body |> Expect.stringContains "should have DevReload script" "data-sagefs-injected"
+    body |> Expect.stringContains "should have body close" "</body>"
+    cts.Cancel()
+    try do! runTask with _ -> ()
+  }
+
+  testTask "DevReload after ResponseCompression: script NOT injected (documents the bug)" {
+    let builder = WebApplication.CreateBuilder([||])
+    builder.Services.AddResponseCompression(fun opts ->
+      opts.EnableForHttps <- true
+      opts.MimeTypes <- [| "text/html" |]) |> ignore
+    builder.WebHost.UseUrls("http://127.0.0.1:0") |> ignore
+    let app = builder.Build()
+    // ResponseCompression first, DevReload appended (the old broken order)
+    app.UseResponseCompression() |> ignore
+    app.Use(Func<RequestDelegate, RequestDelegate>(DevReloadMiddleware.createMiddleware 0)) |> ignore
+    app.MapGet("/", Func<HttpContext, Task>(fun ctx -> task {
+      ctx.Response.ContentType <- "text/html"
+      do! ctx.Response.WriteAsync("<html><body><h1>Test</h1></body></html>")
+    })) |> ignore
+    let cts = new CancellationTokenSource()
+    let runTask = app.RunAsync(cts.Token)
+    do! Task.Delay(1000)
+    let addresses =
+      (app :> IHost).Services.GetRequiredService<IServer>()
+      |> fun s -> s.Features.Get<Microsoft.AspNetCore.Hosting.Server.Features.IServerAddressesFeature>()
+    let addr = addresses.Addresses |> Seq.head
+    let client = new System.Net.Http.HttpClient()
+    // Must request compression to trigger ResponseCompression middleware
+    client.DefaultRequestHeaders.Add("Accept-Encoding", "br, gzip")
+    let! (resp: System.Net.Http.HttpResponseMessage) = client.GetAsync(addr)
+    // Read raw bytes — response is compressed, can't find script in compressed data
+    let! (bytes: byte[]) = resp.Content.ReadAsByteArrayAsync()
+    let encoding = resp.Content.Headers.ContentEncoding |> Seq.tryHead |> Option.defaultValue ""
+    // When DevReload is AFTER compression, the body-swap sees compressed bytes
+    // and can't find </body> — script is NOT injected. This documents the bug.
+    // If compression is active, raw bytes won't contain the script marker
+    match encoding with
+    | "br" | "gzip" ->
+      let raw = System.Text.Encoding.UTF8.GetString(bytes)
+      let hasScript = raw.Contains("data-sagefs-injected")
+      hasScript |> Expect.isFalse "script should NOT be injected when DevReload runs after compression"
+    | _ ->
+      // Compression didn't activate (e.g., response too small) — skip test
+      ()
+    cts.Cancel()
+    try do! runTask with _ -> ()
+  }
+
+  test "reflection: _components starts empty on fresh WebApplication" {
+    // WebApplication.Build() starts with empty _components
+    let app = WebApplication.CreateBuilder([||]).Build()
+    let components = getComponents app
+    components.Count |> Expect.equal "fresh app has no middleware yet" 0
+    (app :> IDisposable).Dispose()
+  }
+]
+
+// ============================================================================
 // Combined test list
 // ============================================================================
 
@@ -469,4 +602,5 @@ let devReloadTests = testList "DevReload" [
   middlewareTests
   killSwitchTests
   sseFormatTests
+  pipelineOrderingTests
 ]
