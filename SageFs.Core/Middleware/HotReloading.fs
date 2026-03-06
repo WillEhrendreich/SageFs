@@ -18,7 +18,24 @@ let assemblySearchPaths = Collections.Concurrent.ConcurrentDictionary<string, by
 
 let resolveAssembly (args: ResolveEventArgs) =
   let assemblyName = AssemblyName(args.Name)
-  let dllName = assemblyName.Name + ".dll"
+  let name = assemblyName.Name
+
+  // Chesterton's fence: check already-loaded assemblies FIRST, before touching disk.
+  // Assembly.LoadFrom uses the LoadFrom binding context, which can conflict with
+  // assemblies already in the default context — causing FileLoadException even when
+  // the file on disk has the correct version. This happens when Harmony's JIT hook
+  // triggers assembly resolution for assemblies the host already loaded.
+  // Returning the already-loaded instance avoids the context conflict entirely.
+  let alreadyLoaded =
+    AppDomain.CurrentDomain.GetAssemblies()
+    |> Array.tryFind (fun a ->
+      try a.GetName().Name = name with _ -> false)
+
+  match alreadyLoaded with
+  | Some asm -> asm
+  | None ->
+
+  let dllName = name + ".dll"
 
   // Chesterton's fence: inspect assembly version metadata from the file BEFORE loading.
   // Assembly.LoadFrom commits the assembly to the AppDomain permanently — loading all
@@ -46,7 +63,22 @@ let resolveAssembly (args: ResolveEventArgs) =
     | false -> None)
   |> Seq.sortByDescending snd
   |> Seq.tryHead
-  |> Option.map (fun (path, _) -> Assembly.LoadFrom(path))
+  |> Option.map (fun (path, _) ->
+    try Assembly.LoadFrom(path)
+    with :? FileLoadException ->
+      // Chesterton's fence: the native CLR binder rejected LoadFrom because it already
+      // tracks this assembly (from the host's deps.json) at a different version. This
+      // happens when user projects reference newer/older versions of the same packages
+      // as SageFs (e.g., SageFs has OTel 1.14.0, user project has OTel 1.15.0).
+      // Fall back to loading by simple name — the CLR will provide whatever version it
+      // has from its own probing paths, giving automatic version unification.
+      // Reentrancy-safe: the CLR won't re-enter AssemblyResolve for the same assembly.
+      try Assembly.Load(name)
+      with _ ->
+        // Last resort: load from byte array to bypass native binder identity tracking.
+        // This avoids the path-based version check entirely but loses PDB association.
+        try Assembly.Load(File.ReadAllBytes(path))
+        with _ -> null)
   |> Option.defaultValue null
 
 // Chesterton's fence: Interlocked.CompareExchange instead of ref bool.

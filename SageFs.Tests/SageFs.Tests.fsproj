@@ -85,6 +85,7 @@
         <Compile Include="LiveTestingGraphTests.fs" />
         <Compile Include="LiveTestingExecutorTests.fs" />
         <Compile Include="ArgsCleanupTests.fs" />
+        <Compile Include="AssemblyResolverTests.fs" />
         <Compile Include="SseWriterTests.fs" />
         <Compile Include="SseDedupKeyTests.fs" />
         <Compile Include="ThemeTests.fs" />
