@@ -357,7 +357,7 @@ let run (sessionId: string) (port: int) = async {
                     Log.warn "CompilationContext parse failed for %s — file not reloaded: %s"
                       filePath exn.Message
                     DevReload.broadcastCompilationFailed
-                      (sprintf "Parse failed for %s: %s" (IO.Path.GetFileName filePath) exn.Message)
+                      (sprintf "Parse failed for %s: %s" (IO.Path.GetFileName filePath) exn.Message) []
                     return None, compilationState.FileCache
                 }
                 match fileStructure with
@@ -413,7 +413,29 @@ let run (sessionId: string) (port: int) = async {
                   // "Recompiling..." forever — the #1 reported DX issue.
                   let fileName = IO.Path.GetFileName filePath
                   let summary = sprintf "%s: %s" fileName ex.Message
-                  DevReload.broadcastCompilationFailed summary
+                  // Extract structured diagnostics with source-mapped line numbers.
+                  // Chesterton's fence: preprocessed.LineOffset compensates for lines
+                  // added/removed by CompilationContext preprocessing (module wrapper,
+                  // #load directives). Without applying this offset, browser error
+                  // overlay shows FSI-internal line numbers that don't match the user's
+                  // source file — the #1 DX complaint from the expert panel.
+                  let diagnostics =
+                    response.Diagnostics
+                    |> Array.filter (fun d -> d.Severity = Features.Diagnostics.DiagnosticSeverity.Error || d.Severity = Features.Diagnostics.DiagnosticSeverity.Warning)
+                    |> Array.map (fun d ->
+                      ({ File = fileName
+                         Line = Middleware.CompilationContext.mapDiagnosticLine preprocessed.LineOffset d.Range.StartLine
+                         EndLine = Middleware.CompilationContext.mapDiagnosticLine preprocessed.LineOffset d.Range.EndLine
+                         Column = d.Range.StartColumn
+                         EndColumn = d.Range.EndColumn
+                         Severity = Features.Diagnostics.DiagnosticSeverity.label d.Severity
+                         DiagCode =
+                           match d.Subcategory with
+                           | s when String.IsNullOrWhiteSpace s -> None
+                           | s -> Some s
+                         Message = d.Message } : DevReload.DevReloadDiagnostic))
+                    |> Array.toList
+                  DevReload.broadcastCompilationFailed summary diagnostics
                   Log.warn "Reload failed for %s: %s" fileName (ex.Message)
               | FileWatcher.FileChangeAction.SoftReset ->
                 Log.info "Project file changed — soft reset needed"
@@ -429,7 +451,7 @@ let run (sessionId: string) (port: int) = async {
               // throws, we must still close the Compiling→(Reload|CompilationFailed)
               // lifecycle. Without this catch-all, an unhandled exception leaves the
               // browser stuck on "⟳ Recompiling..." with no recovery path.
-              DevReload.broadcastCompilationFailed (sprintf "Internal error: %s" ex.Message)
+              DevReload.broadcastCompilationFailed (sprintf "Internal error: %s" ex.Message) []
               Log.error "File watcher async failed: %s" (ex.ToString())
           finally
             compilationLock.Release() |> ignore

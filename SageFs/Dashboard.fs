@@ -908,8 +908,11 @@ let createEndpoints
           infra.SessionThemes.[workingDir] <- theme
           saveThemes DaemonState.SageFsDir infra.SessionThemes
         | false -> ()
-        ctx.Response.StatusCode <- 200
-        do! ctx.Response.WriteAsJsonAsync({| ok = true |})
+        // Respond with SSE morph — Datastar @post expects SSE, not JSON.
+        // Push updated theme vars so the page re-styles immediately.
+        Response.sseStartResponse ctx |> ignore
+        do! ssePatchNode ctx (renderThemeVars theme)
+        do! ssePatchNode ctx (renderThemePicker theme)
       with ex ->
         ctx.Response.StatusCode <- 400
         do! ctx.Response.WriteAsJsonAsync({| error = ex.Message |})
@@ -990,7 +993,14 @@ let createEndpoints
           let! _ = handler s.Id
           ()
         a.Dispatch (SageFsMsg.Editor EditorAction.ListSessions)
-        do! ctx.Response.WriteAsJsonAsync({| stopped = others.Length |})
+        Response.sseStartResponse ctx |> ignore
+        let resultHtml =
+          Elem.div [ Attr.id DomIds.EvalResult ] [
+            Elem.pre [ Attr.class' "output-line output-info"; Attr.style "margin-top: 0.5rem; white-space: pre-wrap;" ] [
+              Text.raw (sprintf "Stopped %d other session(s)" others.Length)
+            ]
+          ]
+        do! ssePatchNode ctx resultHtml
       })
     | None -> ()
     // Daemon info endpoint for client discovery (replaces daemon.json)

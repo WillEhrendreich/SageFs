@@ -25,7 +25,7 @@ let private genDevReloadEvent =
     |> Gen.map (fun s -> Compiling (Some s))
     Gen.constant Reload
     Gen.elements [ "FS0001: type mismatch"; "FS0010: unexpected"; "FS0039: undefined" ]
-    |> Gen.map CompilationFailed
+    |> Gen.map (fun s -> CompilationFailed(s, []))
   ]
 
 /// Helper to broadcast any DevReloadEvent via the public API
@@ -33,7 +33,7 @@ let private broadcastAny (evt: DevReloadEvent) =
   match evt with
   | Compiling fileName -> broadcastCompiling fileName
   | Reload -> broadcastReload ()
-  | CompilationFailed err -> broadcastCompilationFailed err
+  | CompilationFailed(err, diags) -> broadcastCompilationFailed err diags
 
 let propertyTests = testSequenced <| testList "DevReload.Properties" [
 
@@ -166,26 +166,26 @@ let signalingTests = testSequenced <| testList "DevReload.Signaling" [
 
   testTask "broadcastCompilationFailed delivers error summary" {
     let reader = registerClient "fail-test"
-    broadcastCompilationFailed "FS0001: type mismatch"
+    broadcastCompilationFailed "FS0001: type mismatch" []
     let! ok = reader.WaitToReadAsync(CancellationToken.None).AsTask()
     ok |> Expect.isTrue "should have data"
     let mutable evt = Reload
     reader.TryRead(&evt) |> ignore
-    evt |> Expect.equal "should be CompilationFailed" (CompilationFailed "FS0001: type mismatch")
+    evt |> Expect.equal "should be CompilationFailed" (CompilationFailed("FS0001: type mismatch", []))
     unregisterClient "fail-test"
   }
 
   testTask "compilation lifecycle: Compiling → CompilationFailed unsticks browser" {
     let reader = registerClient "lifecycle-fail"
     broadcastCompiling (Some "Broken.fs")
-    broadcastCompilationFailed "Broken.fs: FS0010: Unexpected symbol"
+    broadcastCompilationFailed "Broken.fs: FS0010: Unexpected symbol" []
     let mutable evt1 = Reload
     let mutable evt2 = Reload
     let! _ = reader.WaitToReadAsync(CancellationToken.None).AsTask()
     reader.TryRead(&evt1) |> ignore
     reader.TryRead(&evt2) |> ignore
     evt1 |> Expect.equal "first should be Compiling" (Compiling (Some "Broken.fs"))
-    evt2 |> Expect.equal "second should be CompilationFailed" (CompilationFailed "Broken.fs: FS0010: Unexpected symbol")
+    evt2 |> Expect.equal "second should be CompilationFailed" (CompilationFailed("Broken.fs: FS0010: Unexpected symbol", []))
     unregisterClient "lifecycle-fail"
   }
 

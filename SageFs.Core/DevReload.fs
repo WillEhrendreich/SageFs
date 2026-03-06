@@ -4,6 +4,20 @@ open System
 open System.Collections.Concurrent
 open System.Threading.Channels
 
+/// Structured diagnostic for browser error display. Carries source-mapped
+/// line numbers (LineOffset already applied) so the browser shows correct
+/// positions matching the user's source file.
+type DevReloadDiagnostic = {
+  File: string
+  Line: int
+  EndLine: int
+  Column: int
+  EndColumn: int
+  Severity: string  // "error" | "warning" | "info" | "hidden"
+  DiagCode: string option  // e.g. "FS0001" — named DiagCode to avoid field collision with EvalRequest.Code
+  Message: string
+}
+
 /// Events that flow to browser clients over the long-lived SSE connection.
 /// The lifecycle is: Idle → Compiling → (Reload | CompilationFailed).
 /// Three cases ensure the browser can never get stuck in "Compiling" state —
@@ -11,7 +25,7 @@ open System.Threading.Channels
 type DevReloadEvent =
   | Compiling of fileName: string option
   | Reload
-  | CompilationFailed of errorSummary: string
+  | CompilationFailed of errorSummary: string * diagnostics: DevReloadDiagnostic list
 
 // Pure broadcaster — no ASP.NET dependency.
 // The ASP.NET middleware lives in SageFs/DevReloadMiddleware.fs.
@@ -54,8 +68,10 @@ let broadcastReload () = broadcast Reload
 /// Signal all browsers that compilation failed — show the error in the browser.
 /// This prevents the "stuck Recompiling..." overlay that occurs when FSI eval
 /// fails without sending any completion event.
-let broadcastCompilationFailed (errorSummary: string) =
-  broadcast (CompilationFailed errorSummary)
+/// Carries structured diagnostics with source-mapped line numbers for rich
+/// error display. The errorSummary is kept for backward-compatible display.
+let broadcastCompilationFailed (errorSummary: string) (diagnostics: DevReloadDiagnostic list) =
+  broadcast (CompilationFailed(errorSummary, diagnostics))
 
 /// Legacy alias — fires a Reload event to all clients.
 let triggerReload () = broadcastReload ()

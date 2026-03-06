@@ -492,9 +492,13 @@ module WorkerHttpTransport =
                     Text.Encoding.UTF8.GetBytes(
                       sprintf """data: {"type":"compiling","file":%s}""" (System.Text.Json.JsonSerializer.Serialize(file)) + "\n\n")
                   | DevReload.DevReloadEvent.Reload -> reloadBytes
-                  | DevReload.DevReloadEvent.CompilationFailed summary ->
+                  | DevReload.DevReloadEvent.CompilationFailed(summary, diagnostics) ->
+                    // Chesterton's fence: send both "error" (legacy string) and "diagnostics"
+                    // (structured array). Browser script checks for diagnostics first and falls
+                    // back to error string — backward compatible with older injected scripts.
+                    let diagJson = System.Text.Json.JsonSerializer.Serialize(diagnostics)
                     Text.Encoding.UTF8.GetBytes(
-                      sprintf """data: {"type":"failed","error":%s}""" (System.Text.Json.JsonSerializer.Serialize(summary)) + "\n\n")
+                      sprintf """data: {"type":"failed","error":%s,"diagnostics":%s}""" (System.Text.Json.JsonSerializer.Serialize(summary)) diagJson + "\n\n")
                 do! ctx.Response.Body.WriteAsync(ReadOnlyMemory bytes)
                 do! ctx.Response.Body.FlushAsync()
             | false ->
