@@ -201,8 +201,7 @@ let assemblySearchPathTests =
     testCase "registerSearchPath extracts directory from DLL path" <| fun () ->
       assemblySearchPaths.Clear()
       registerSearchPath @"C:\Fake\bin\Debug\net10.0\MyProject.dll"
-      assemblySearchPaths
-      |> Seq.contains @"C:\Fake\bin\Debug\net10.0"
+      assemblySearchPaths.ContainsKey @"C:\Fake\bin\Debug\net10.0"
       |> Flip.Expect.isTrue "should register DLL's parent directory"
 
     testCase "registerSearchPath deduplicates same directory" <| fun () ->
@@ -222,15 +221,13 @@ let assemblySearchPathTests =
     testCase "NuGet package path registers correctly" <| fun () ->
       assemblySearchPaths.Clear()
       registerSearchPath @"C:\Users\me\.nuget\packages\opentelemetry\1.15.0\lib\net8.0\OpenTelemetry.dll"
-      assemblySearchPaths
-      |> Seq.contains @"C:\Users\me\.nuget\packages\opentelemetry\1.15.0\lib\net8.0"
+      assemblySearchPaths.ContainsKey @"C:\Users\me\.nuget\packages\opentelemetry\1.15.0\lib\net8.0"
       |> Flip.Expect.isTrue "should register NuGet package directory"
 
     testCase "framework SDK path registers correctly" <| fun () ->
       assemblySearchPaths.Clear()
       registerSearchPath @"C:\Program Files\dotnet\shared\Microsoft.AspNetCore.App\10.0.0\Microsoft.AspNetCore.dll"
-      assemblySearchPaths
-      |> Seq.contains @"C:\Program Files\dotnet\shared\Microsoft.AspNetCore.App\10.0.0"
+      assemblySearchPaths.ContainsKey @"C:\Program Files\dotnet\shared\Microsoft.AspNetCore.App\10.0.0"
       |> Flip.Expect.isTrue "should register framework SDK directory"
   ]
 
@@ -308,7 +305,7 @@ let versionAwareResolutionTests =
       let expectoAsm = typeof<Expecto.TestCode>.Assembly
       let expectoDir = IO.Path.GetDirectoryName(expectoAsm.Location : string)
       registerSearchPath expectoAsm.Location
-      assemblySearchPaths.Contains(expectoDir)
+      assemblySearchPaths.ContainsKey(expectoDir)
       |> Flip.Expect.isTrue "should have registered Expecto directory"
     }
 
@@ -535,6 +532,102 @@ let highestVersionResolutionTests =
     }
   ]
 
+let assemblySearchPathsThreadSafetyTests =
+  testList "assemblySearchPaths thread safety" [
+    test "assemblySearchPaths is ConcurrentDictionary" {
+      // Chesterton's fence: assembly resolve callbacks fire on arbitrary CLR threads.
+      // A plain ResizeArray would corrupt under concurrent access.
+      assemblySearchPaths.GetType().Name
+      |> Flip.Expect.stringContains "should be ConcurrentDictionary" "ConcurrentDictionary"
+    }
+
+    test "ContainsKey works for registered paths" {
+      assemblySearchPaths.Clear()
+      registerSearchPath @"C:\Test\Dir\My.dll"
+      assemblySearchPaths.ContainsKey @"C:\Test\Dir"
+      |> Flip.Expect.isTrue "should find registered directory via ContainsKey"
+    }
+
+    test "TryAdd is idempotent" {
+      assemblySearchPaths.Clear()
+      registerSearchPath @"C:\Same\A.dll"
+      registerSearchPath @"C:\Same\B.dll"
+      assemblySearchPaths.Count
+      |> Flip.Expect.equal "TryAdd should not duplicate same directory" 1
+    }
+  ]
+
+let moduleScoringMaxTests =
+  testList "module scoring uses max not first" [
+    test "best module match wins even if not first in list" {
+      // Simulates LastOpenModules = ["Unrelated"; "MyApp.Handlers"]
+      // For method "handleRequest", "Unrelated" scores 0, "MyApp.Handlers" scores 2.
+      // With Seq.tryHead, we'd get 0. With Seq.fold max 0, we get 2.
+      let modules = [ "Unrelated"; "MyApp.Handlers" ]
+      let existingFullName = "MyApp.Handlers.handleRequest"
+      let newName = "handleRequest"
+      let score =
+        modules
+        |> Seq.map (fun o ->
+          match existingFullName.EndsWith(o + "." + newName, StringComparison.Ordinal) with
+          | true -> 2
+          | false -> 0)
+        |> Seq.fold max 0
+      score |> Flip.Expect.equal "should find best match across all modules" 2
+    }
+
+    test "first module matching does not shadow later better match" {
+      // If tryHead was used, first module's 0 score would win.
+      let modules = [ "A"; "B"; "Target.Module" ]
+      let existingFullName = "Target.Module.doWork"
+      let newName = "doWork"
+      let scoreWithFold =
+        modules
+        |> Seq.map (fun o ->
+          match existingFullName.EndsWith(o + "." + newName, StringComparison.Ordinal) with
+          | true -> 2
+          | false -> 0)
+        |> Seq.fold max 0
+      let scoreWithTryHead =
+        modules
+        |> Seq.map (fun o ->
+          match existingFullName.EndsWith(o + "." + newName, StringComparison.Ordinal) with
+          | true -> 2
+          | false -> 0)
+        |> Seq.tryHead
+        |> Option.defaultValue 0
+      scoreWithFold |> Flip.Expect.equal "fold should find the match" 2
+      scoreWithTryHead |> Flip.Expect.equal "tryHead would miss it (returns first)" 0
+    }
+  ]
+
+let endswithPrefilterTests =
+  testList "EndsWith pre-filter consistency" [
+    test "EndsWith rejects substring-only match" {
+      // "UserHandler.getUsers" contains "getUser" but does not EndsWith "getUser"
+      let fullName = "UserHandler.getUsers"
+      let candidate = "getUser"
+      fullName.Contains(candidate)
+      |> Flip.Expect.isTrue "Contains would match (loose)"
+      fullName.EndsWith(candidate, StringComparison.Ordinal)
+      |> Flip.Expect.isFalse "EndsWith correctly rejects (strict)"
+    }
+
+    test "EndsWith accepts exact suffix match" {
+      let fullName = "MyApp.Handlers.processOrder"
+      let candidate = "processOrder"
+      fullName.EndsWith(candidate, StringComparison.Ordinal)
+      |> Flip.Expect.isTrue "should accept exact suffix"
+    }
+
+    test "EndsWith accepts qualified suffix" {
+      let fullName = "MyApp.Handlers.processOrder"
+      let candidate = "Handlers.processOrder"
+      fullName.EndsWith(candidate, StringComparison.Ordinal)
+      |> Flip.Expect.isTrue "should accept qualified suffix"
+    }
+  ]
+
 [<Tests>]
 let allHotReloadTests =
   testList "Hot Reload Integration" [
@@ -546,10 +639,13 @@ let allHotReloadTests =
     testSequenced (testList "assembly search paths (sequenced)" [
       assemblySearchPathTests
       versionAwareResolutionTests
+      assemblySearchPathsThreadSafetyTests
     ])
     hotReloadCompilationContextTests
     noInliningInjectionTests
     exactMethodMatchingTests
     nonBlockingRunGuardTests
     highestVersionResolutionTests
+    moduleScoringMaxTests
+    endswithPrefilterTests
   ]

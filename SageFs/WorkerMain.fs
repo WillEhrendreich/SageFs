@@ -301,15 +301,20 @@ let run (sessionId: string) (port: int) = async {
           1L,
           System.Collections.Generic.KeyValuePair("file.extension", ext :> obj),
           System.Collections.Generic.KeyValuePair("change.kind", kind :> obj))
-        // Cancel any in-flight eval for this exact file — only latest save matters
+        // Cancel any in-flight eval for this exact file — only latest save matters.
+        // Chesterton's fence: AddOrUpdate is atomic — eliminates the TOCTOU race where
+        // TryGetValue + manual cancel + indexer assignment could interleave with another
+        // thread's update for the same file path.
         let filePath = change.FilePath
         let newCts = new CancellationTokenSource()
-        match perFileCts.TryGetValue(filePath) with
-        | true, oldCts ->
-          try oldCts.Cancel() with _ -> ()
-          oldCts.Dispose()
-        | _ -> ()
-        perFileCts.[filePath] <- newCts
+        perFileCts.AddOrUpdate(
+          filePath,
+          newCts,
+          fun _key oldCts ->
+            try oldCts.Cancel() with _ -> ()
+            oldCts.Dispose()
+            newCts)
+        |> ignore
         let ct = newCts.Token
         Async.Start(async {
           do! compilationLock.WaitAsync(ct) |> Async.AwaitTask

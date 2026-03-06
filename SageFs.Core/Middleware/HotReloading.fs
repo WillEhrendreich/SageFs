@@ -10,40 +10,43 @@ open SageFs.AppState
 open SageFs.DevReload
 open SageFs.Features.LiveTesting
 
-// Assembly resolver to find dependencies in project output directories
-let assemblySearchPaths = ResizeArray<string>()
+// Chesterton's fence: ConcurrentDictionary instead of ResizeArray because
+// assembly resolve callbacks fire on arbitrary CLR threads — a concurrent read
+// during mkReloadingState's writes on a plain List<T> would corrupt the array.
+// Using Keys as the iterable in resolveAssembly gives snapshot-safe enumeration.
+let assemblySearchPaths = Collections.Concurrent.ConcurrentDictionary<string, byte>()
 
 let resolveAssembly (args: ResolveEventArgs) =
   let assemblyName = AssemblyName(args.Name)
   let dllName = assemblyName.Name + ".dll"
 
-  // Chesterton's fence: collect all version-compatible candidates and pick the
-  // highest version. tryPick would return the first-match, which depends on search
-  // path order — non-deterministic when multiple NuGet versions provide the same DLL.
-  // Preferring the highest version satisfies binding redirects and strong-name checks.
-  assemblySearchPaths
+  // Chesterton's fence: inspect assembly version metadata from the file BEFORE loading.
+  // Assembly.LoadFrom commits the assembly to the AppDomain permanently — loading all
+  // candidates then sorting would pollute the AppDomain with N assemblies when only one
+  // is needed. AssemblyName.GetAssemblyName reads PE metadata without loading.
+  assemblySearchPaths.Keys
   |> Seq.choose (fun searchPath ->
     let fullPath = Path.Combine(searchPath, dllName)
-
     match File.Exists(fullPath) with
     | true ->
       try
-        let candidate = Assembly.LoadFrom(fullPath)
+        let candidateName = AssemblyName.GetAssemblyName(fullPath)
         match assemblyName.Version with
-        | null -> Some candidate
+        | null -> Some (fullPath, candidateName.Version)
         | requestedVersion ->
-          match candidate.GetName().Version >= requestedVersion with
-          | true -> Some candidate
+          match candidateName.Version >= requestedVersion with
+          | true -> Some (fullPath, candidateName.Version)
           | false ->
             Log.debug "Assembly %s version %O < requested %O, skipping %s"
-              assemblyName.Name (candidate.GetName().Version) requestedVersion searchPath
+              assemblyName.Name candidateName.Version requestedVersion searchPath
             None
       with ex ->
-        Log.debug "Failed to load assembly from %s: %s" fullPath ex.Message
+        Log.debug "Failed to inspect assembly at %s: %s" fullPath ex.Message
         None
     | false -> None)
-  |> Seq.sortByDescending (fun asm -> asm.GetName().Version)
+  |> Seq.sortByDescending snd
   |> Seq.tryHead
+  |> Option.map (fun (path, _) -> Assembly.LoadFrom(path))
   |> Option.defaultValue null
 
 // Register the assembly resolver once
@@ -58,10 +61,7 @@ let setupAssemblyResolver () =
 
 let registerSearchPath (path: string) =
   let dir = Path.GetDirectoryName(path)
-
-  match assemblySearchPaths.Contains(dir) with
-  | false -> assemblySearchPaths.Add(dir)
-  | true -> ()
+  assemblySearchPaths.TryAdd(dir, 0uy) |> ignore
 
 type Method = {
   MethodInfo: MethodInfo
@@ -252,7 +252,7 @@ let handleNewAsmFromRepl (logger: ILogger) (asm: Assembly) (st: State) =
 
                getParams existingMethod = getParams newMethod
                && existingMethod.MethodInfo.ReturnType = newMethod.MethodInfo.ReturnType
-               && existingMethod.FullName.Contains newMethod.FullName)
+               && existingMethod.FullName.EndsWith(newMethod.FullName, StringComparison.Ordinal))
             // Chesterton's fence: exact qualified-name matching replaces FuzzySharp.
             // Fuzzy string matching for method identity is a heuristic that can match
             // the wrong method (e.g. `getUser` vs `getUsers` have high Fuzz.Ratio).
@@ -267,8 +267,10 @@ let handleNewAsmFromRepl (logger: ILogger) (asm: Assembly) (st: State) =
                      StringComparison.Ordinal) with
                    | true -> 2 // exact match with module prefix
                    | false -> 0)
-                 |> Seq.tryHead
-                 |> Option.defaultValue 0
+                 // Chesterton's fence: Seq.fold max 0 instead of Seq.tryHead.
+                 // tryHead takes the score from the FIRST open module only — if that
+                 // module doesn't match but a later one does, the match is missed.
+                 |> Seq.fold max 0
                // Exact suffix match without module prefix
                let noModuleCandidate =
                  match existingMethod.FullName.EndsWith(newMethod.FullName,
