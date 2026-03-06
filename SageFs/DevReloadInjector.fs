@@ -105,6 +105,7 @@ let install () =
         | t ->
           let r1 = patchMethod harmony t "Run" [| typeof<string> |]
           let r2 = patchMethod harmony t "RunAsync" [| typeof<string> |]
+          Log.info "[DevReload] Patch result: Run=%b RunAsync=%b" r1 r2
           r1 || r2
       with ex ->
         Log.debug "[DevReload] tryPatch probe failed: %s" ex.Message

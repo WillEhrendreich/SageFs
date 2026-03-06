@@ -3,6 +3,7 @@ module SageFs.DevReload
 open System
 open System.Collections.Concurrent
 open System.Threading.Channels
+open SageFs.Utils
 
 /// Health status of the DevReload system. Queryable by any component
 /// that needs to know if hot-reload is operational.
@@ -29,7 +30,9 @@ module DevReloadHealthTracker =
     onTransition <- None
 
   let transition (newState: DevReloadHealth) =
+    let prev = currentHealth
     currentHealth <- newState
+    Log.info "[DevReload] Health: %A → %A" prev newState
     match onTransition with
     | Some cb -> cb newState
     | None -> ()

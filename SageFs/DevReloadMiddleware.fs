@@ -296,7 +296,7 @@ let createMiddleware (workerPort: int) =
                 (ctx.Response.ContentType |> Option.ofObj |> Option.defaultValue "null")
                 ctx.Response.StatusCode
             | true ->
-              Log.debug "[DevReload] Skip inject %s — body too large (%dKB > %dKB)"
+              Log.warn "[DevReload] Skip inject %s — body too large (%dKB > %dKB)"
                 ctx.Request.Path.Value (ms.Length / 1024L) (maxBufferSize / 1024L)
             ms.Position <- 0L
             ctx.Response.Body <- originalBody
