@@ -1,12 +1,66 @@
 module SageFs.Tests.FileWatcherTests
 
+open System
 open Expecto
 open SageFs.FileWatcher
 open System.IO
 
+// ── Debounce Guard ──────────────────────────────────────────────────────
+
+let debounceGuardTests = testList "shouldSuppressRecompile" [
+  test "no prior compile → not suppressed" {
+    let change = { FilePath = "C:\\src\\App.fs"; Kind = FileChangeKind.Changed; Timestamp = DateTimeOffset.UtcNow }
+    shouldSuppressRecompile 500 None change
+    |> Flip.Expect.isFalse "first compile should never be suppressed"
+  }
+  test "same file within guard window → suppressed" {
+    let now = DateTimeOffset.UtcNow
+    let last = Some ("C:\\src\\App.fs", now.AddMilliseconds(-100.0))
+    let change = { FilePath = "C:\\src\\App.fs"; Kind = FileChangeKind.Changed; Timestamp = now }
+    shouldSuppressRecompile 500 last change
+    |> Flip.Expect.isTrue "same file 100ms ago should be suppressed"
+  }
+  test "same file outside guard window → not suppressed" {
+    let now = DateTimeOffset.UtcNow
+    let last = Some ("C:\\src\\App.fs", now.AddMilliseconds(-600.0))
+    let change = { FilePath = "C:\\src\\App.fs"; Kind = FileChangeKind.Changed; Timestamp = now }
+    shouldSuppressRecompile 500 last change
+    |> Flip.Expect.isFalse "same file 600ms ago should not be suppressed"
+  }
+  test "different file within guard window → not suppressed" {
+    let now = DateTimeOffset.UtcNow
+    let last = Some ("C:\\src\\Other.fs", now.AddMilliseconds(-100.0))
+    let change = { FilePath = "C:\\src\\App.fs"; Kind = FileChangeKind.Changed; Timestamp = now }
+    shouldSuppressRecompile 500 last change
+    |> Flip.Expect.isFalse "different file should not be suppressed"
+  }
+  test "case-insensitive path comparison" {
+    let now = DateTimeOffset.UtcNow
+    let last = Some ("C:\\SRC\\app.fs", now.AddMilliseconds(-100.0))
+    let change = { FilePath = "C:\\src\\App.fs"; Kind = FileChangeKind.Changed; Timestamp = now }
+    shouldSuppressRecompile 500 last change
+    |> Flip.Expect.isTrue "case-insensitive match should suppress"
+  }
+  test "exactly at guard boundary → not suppressed" {
+    let now = DateTimeOffset.UtcNow
+    let last = Some ("C:\\src\\App.fs", now.AddMilliseconds(-500.0))
+    let change = { FilePath = "C:\\src\\App.fs"; Kind = FileChangeKind.Changed; Timestamp = now }
+    shouldSuppressRecompile 500 last change
+    |> Flip.Expect.isFalse "exactly at boundary uses strict < so not suppressed"
+  }
+  test "guard of 0ms → never suppressed" {
+    let now = DateTimeOffset.UtcNow
+    let last = Some ("C:\\src\\App.fs", now)
+    let change = { FilePath = "C:\\src\\App.fs"; Kind = FileChangeKind.Changed; Timestamp = now }
+    shouldSuppressRecompile 0 last change
+    |> Flip.Expect.isFalse "guard of 0 should never suppress"
+  }
+]
+
 [<Tests>]
 let fileWatcherTests =
   testList "FileWatcher" [
+    debounceGuardTests
     testList "shouldTriggerRebuild" [
       let config = defaultWatchConfig ["C:\\Code"]
 
