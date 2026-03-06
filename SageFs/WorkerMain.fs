@@ -245,13 +245,17 @@ let run (sessionId: string) (port: int) = async {
             | found -> return found }
         tryRunners 0 (runTests |> Array.toList)
 
-  // Dynamic RunTest from FSI evals (updated on each eval via handleMessage.EvalCode)
-  let mutable latestDynamicRunTest : (Features.LiveTesting.TestCase -> Async<Features.LiveTesting.TestResult>) option =
-    None
+  // Dynamic RunTest from FSI evals (updated on each eval via handleMessage.EvalCode).
+  // Chesterton's fence: ref + Volatile.Read/Interlocked.Exchange instead of mutable.
+  // Writer (file watcher async on ThreadPool) and reader (HTTP handler thread) are
+  // on different threads. Plain mutable has no memory barrier — on ARM64 .NET the
+  // store may not be visible to the reader without volatile semantics.
+  let latestDynamicRunTest : (Features.LiveTesting.TestCase -> Async<Features.LiveTesting.TestResult>) option ref =
+    ref None
 
   // Composed RunTest: try dynamic first (for interactively defined tests), fall back to project
   let getRunTest () =
-    match latestDynamicRunTest with
+    match System.Threading.Volatile.Read(&latestDynamicRunTest.contents) with
     | Some dynamicRt ->
       fun (tc: Features.LiveTesting.TestCase) -> async {
         let! result = dynamicRt tc
@@ -259,7 +263,7 @@ let run (sessionId: string) (port: int) = async {
         | Features.LiveTesting.TestResult.NotRun -> return! projectRunTest tc
         | found -> return found }
     | None -> projectRunTest
-  let setDynamicRunTest v = latestDynamicRunTest <- Some v
+  let setDynamicRunTest v = System.Threading.Interlocked.Exchange(latestDynamicRunTest, Some v) |> ignore
 
   // Start file watcher unless no-watch was set
   let fileWatcher =

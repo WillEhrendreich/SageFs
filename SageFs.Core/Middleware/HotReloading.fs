@@ -49,15 +49,16 @@ let resolveAssembly (args: ResolveEventArgs) =
   |> Option.map (fun (path, _) -> Assembly.LoadFrom(path))
   |> Option.defaultValue null
 
-// Register the assembly resolver once
-let resolverRegistered = ref false
+// Chesterton's fence: Interlocked.CompareExchange instead of ref bool.
+// Assembly resolve callbacks fire on arbitrary CLR threads. A plain ref read/write
+// has a TOCTOU race — two threads could both read 0 before either writes 1,
+// causing double-registration. CompareExchange is atomic.
+let private resolverRegistered = ref 0
 
 let setupAssemblyResolver () =
-  match !resolverRegistered with
-  | false ->
-    resolverRegistered := true
-    AppDomain.CurrentDomain.add_AssemblyResolve (ResolveEventHandler(fun _ args -> resolveAssembly args))
-  | true -> ()
+  match System.Threading.Interlocked.CompareExchange(resolverRegistered, 1, 0) = 0 with
+  | true -> AppDomain.CurrentDomain.add_AssemblyResolve (ResolveEventHandler(fun _ args -> resolveAssembly args))
+  | false -> ()
 
 let registerSearchPath (path: string) =
   let dir = Path.GetDirectoryName(path)
