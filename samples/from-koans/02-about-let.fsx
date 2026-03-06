@@ -43,7 +43,7 @@ let tests = testList "about let" [
     Expect.equal bound __ "x should equal 50"
   }
 
-  test "LetInfersTypesWherePoossible — int" {
+  test "LetInfersTypesWherePossible — int" {
     let n = 50
     Expect.equal (n.GetType()) typeof<int> "n should be an int"
   }
