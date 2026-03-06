@@ -102,6 +102,7 @@
         <Compile Include="LayoutAndInputTests.fs" />
         <Compile Include="PureModulesComprehensiveTests.fs" />
         <Compile Include="CoverageInstrumenterTests.fs" />
+        <Compile Include="EvalDedupTests.fs" />
         <Compile Include="EvalDiffTests.fs" />
         <Compile Include="CellDependencyGraphTests.fs" />
         <Compile Include="BindingExplorerTests.fs" />

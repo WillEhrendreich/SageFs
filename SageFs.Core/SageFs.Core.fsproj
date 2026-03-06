@@ -33,6 +33,7 @@
         <Compile Include="Features\SessionPersistence.fs" />
         <Compile Include="Features\ManifestPersistence.fs" />
         <Compile Include="Features\DaemonPersistence.fs" />
+        <Compile Include="Features\EvalDedup.fs" />
         <Compile Include="Features\EvalDiff.fs" />
         <Compile Include="Features\CellDependencyGraph.fs" />
         <Compile Include="Features\BindingExplorer.fs" />

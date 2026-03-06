@@ -744,6 +744,9 @@ module McpTools =
   let compilationStates =
     Collections.Concurrent.ConcurrentDictionary<string, Middleware.CompilationContext.CompilationState>()
 
+  /// Temporal dedup cache — prevents re-evaluating identical code within 2s window.
+  let evalDedupCache = Features.EvalDedup.DedupCache.defaultCache ()
+
   /// Normalize a path for comparison: trim trailing separators, lowercase on Windows.
   let normalizePath (p: string) =
     let trimmed = p.TrimEnd('/', '\\')
@@ -969,6 +972,15 @@ module McpTools =
       (filePath: string option) (evalMode: string option) (blockStartLine: int option)
       : Task<string> =
     withSession ctx agentName sessionId workingDirectory (fun sid -> task {
+      // Temporal dedup: skip re-evaluation if identical code was just evaluated
+      let now = DateTimeOffset.UtcNow
+      match Features.EvalDedup.DedupCache.tryGet evalDedupCache sid code now with
+      | Some cached ->
+        Log.debug "Eval dedup hit for session %s (code hash %08x)" sid (code.GetHashCode())
+        Instrumentation.fsiEvals.Add(1L)
+        return cached
+      | None ->
+
       let state =
         compilationStates.GetOrAdd(sid, fun _ -> Middleware.CompilationContext.CompilationState.empty)
 
@@ -1021,6 +1033,7 @@ module McpTools =
         | _ -> allOutputs |> List.tryHead |> Option.defaultValue ""
 
       do! EventTracking.trackOutput ctx.Persistence sid (Features.Events.McpAgent agentName) finalOutput
+      Features.EvalDedup.DedupCache.record evalDedupCache sid code finalOutput (DateTimeOffset.UtcNow)
       Instrumentation.succeedSpan span
       return finalOutput
     })
@@ -1163,6 +1176,7 @@ module McpTools =
         match routeResult with
         | Ok (WorkerProtocol.WorkerResponse.ResetResult(_, Ok ())) ->
           compilationStates.TryRemove(sid) |> ignore
+          Features.EvalDedup.DedupCache.clearSession evalDedupCache sid
           notifyElm ctx (
             SageFsEvent.SessionStatusChanged (sid, SessionDisplayStatus.Running))
           "Session reset successfully. All previous definitions have been cleared."
@@ -1199,6 +1213,7 @@ module McpTools =
       match rebuild with
       | true ->
         compilationStates.TryRemove(sid) |> ignore
+        Features.EvalDedup.DedupCache.clearSession evalDedupCache sid
         notifyElm ctx (
           SageFsEvent.WarmupProgress (1, 4, "Building project..."))
         // Fire-and-forget: build + restart happens in background.
@@ -1217,6 +1232,7 @@ module McpTools =
         return "Hard reset initiated — rebuilding project. Use get_fsi_status to check when ready."
       | false ->
         compilationStates.TryRemove(sid) |> ignore
+        Features.EvalDedup.DedupCache.clearSession evalDedupCache sid
         let! routeResult =
           routeToSession ctx sid
             (fun replyId -> WorkerProtocol.WorkerMessage.HardResetSession(false, replyId))
