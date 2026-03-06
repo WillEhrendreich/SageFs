@@ -1,6 +1,7 @@
 module SageFs.Tests.HotReloadTests
 
 open System
+open System.IO
 open Expecto
 open SageFs.FileWatcher
 open SageFs.AppState
@@ -199,35 +200,45 @@ let watchConfigTests =
 let assemblySearchPathTests =
   testList "assembly search paths" [
     testCase "registerSearchPath extracts directory from DLL path" <| fun () ->
-      assemblySearchPaths.Clear()
-      registerSearchPath @"C:\Fake\bin\Debug\net10.0\MyProject.dll"
-      assemblySearchPaths.ContainsKey @"C:\Fake\bin\Debug\net10.0"
+      let dllPath = Path.Combine("extract-test-" + System.Guid.NewGuid().ToString("N"), "bin", "Debug", "net10.0", "MyProject.dll")
+      registerSearchPath dllPath
+      assemblySearchPaths.ContainsKey(Path.GetDirectoryName dllPath)
       |> Flip.Expect.isTrue "should register DLL's parent directory"
 
     testCase "registerSearchPath deduplicates same directory" <| fun () ->
-      assemblySearchPaths.Clear()
-      registerSearchPath @"C:\Fake\bin\MyProject.dll"
-      registerSearchPath @"C:\Fake\bin\OtherProject.dll"
-      assemblySearchPaths.Count
-      |> Flip.Expect.equal "should have only 1 directory" 1
+      let dir = Path.Combine("dedup-test-" + System.Guid.NewGuid().ToString("N"), "bin")
+      registerSearchPath (Path.Combine(dir, "MyProject.dll"))
+      registerSearchPath (Path.Combine(dir, "OtherProject.dll"))
+      // Both DLLs are in the same directory, so only one key should exist
+      assemblySearchPaths.ContainsKey dir
+      |> Flip.Expect.isTrue "directory should be registered"
+      // Verify the directory appears exactly once by counting keys matching our unique prefix
+      assemblySearchPaths.Keys
+      |> Seq.filter (fun k -> k.Contains(dir))
+      |> Seq.length
+      |> Flip.Expect.equal "same directory registered twice should yield 1 entry" 1
 
     testCase "registerSearchPath tracks multiple distinct directories" <| fun () ->
-      assemblySearchPaths.Clear()
-      registerSearchPath @"C:\Dir1\A.dll"
-      registerSearchPath @"C:\Dir2\B.dll"
-      assemblySearchPaths.Count
-      |> Flip.Expect.equal "should have 2 directories" 2
+      let unique = System.Guid.NewGuid().ToString("N")
+      let dir1 = sprintf "dir1-%s" unique
+      let dir2 = sprintf "dir2-%s" unique
+      registerSearchPath (Path.Combine(dir1, "A.dll"))
+      registerSearchPath (Path.Combine(dir2, "B.dll"))
+      assemblySearchPaths.ContainsKey dir1
+      |> Flip.Expect.isTrue "first directory should be registered"
+      assemblySearchPaths.ContainsKey dir2
+      |> Flip.Expect.isTrue "second directory should be registered"
 
     testCase "NuGet package path registers correctly" <| fun () ->
-      assemblySearchPaths.Clear()
-      registerSearchPath @"C:\Users\me\.nuget\packages\opentelemetry\1.15.0\lib\net8.0\OpenTelemetry.dll"
-      assemblySearchPaths.ContainsKey @"C:\Users\me\.nuget\packages\opentelemetry\1.15.0\lib\net8.0"
+      let dllPath = Path.Combine("nuget-test-" + System.Guid.NewGuid().ToString("N"), ".nuget", "packages", "opentelemetry", "1.15.0", "lib", "net8.0", "OpenTelemetry.dll")
+      registerSearchPath dllPath
+      assemblySearchPaths.ContainsKey(Path.GetDirectoryName dllPath)
       |> Flip.Expect.isTrue "should register NuGet package directory"
 
     testCase "framework SDK path registers correctly" <| fun () ->
-      assemblySearchPaths.Clear()
-      registerSearchPath @"C:\Program Files\dotnet\shared\Microsoft.AspNetCore.App\10.0.0\Microsoft.AspNetCore.dll"
-      assemblySearchPaths.ContainsKey @"C:\Program Files\dotnet\shared\Microsoft.AspNetCore.App\10.0.0"
+      let dllPath = Path.Combine("sdk-test-" + System.Guid.NewGuid().ToString("N"), "shared", "Microsoft.AspNetCore.App", "10.0.0", "Microsoft.AspNetCore.dll")
+      registerSearchPath dllPath
+      assemblySearchPaths.ContainsKey(Path.GetDirectoryName dllPath)
       |> Flip.Expect.isTrue "should register framework SDK directory"
   ]
 
@@ -542,17 +553,19 @@ let assemblySearchPathsThreadSafetyTests =
     }
 
     test "ContainsKey works for registered paths" {
-      assemblySearchPaths.Clear()
-      registerSearchPath @"C:\Test\Dir\My.dll"
-      assemblySearchPaths.ContainsKey @"C:\Test\Dir"
+      let dllPath = Path.Combine("containskey-test-" + System.Guid.NewGuid().ToString("N"), "dir", "My.dll")
+      registerSearchPath dllPath
+      assemblySearchPaths.ContainsKey(Path.GetDirectoryName dllPath)
       |> Flip.Expect.isTrue "should find registered directory via ContainsKey"
     }
 
     test "TryAdd is idempotent" {
-      assemblySearchPaths.Clear()
-      registerSearchPath @"C:\Same\A.dll"
-      registerSearchPath @"C:\Same\B.dll"
-      assemblySearchPaths.Count
+      let dir = Path.Combine("idempotent-test-" + System.Guid.NewGuid().ToString("N"), "dir")
+      registerSearchPath (Path.Combine(dir, "A.dll"))
+      registerSearchPath (Path.Combine(dir, "B.dll"))
+      assemblySearchPaths.Keys
+      |> Seq.filter (fun k -> k.Contains(dir))
+      |> Seq.length
       |> Flip.Expect.equal "TryAdd should not duplicate same directory" 1
     }
   ]
