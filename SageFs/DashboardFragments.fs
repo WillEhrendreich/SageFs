@@ -1134,6 +1134,12 @@ let renderBindingsPanel (snapshot: Features.BindingExplorer.BindingScopeSnapshot
                 Elem.span [ Attr.style "color: var(--fg-yellow, #e5c07b); font-size: 0.65rem; white-space: nowrap;" ] [
                   Text.raw (sprintf "→%d" n)
                 ]
+              match b.Value with
+              | None -> ()
+              | Some v ->
+                Elem.span [ Attr.class' "value-display"; Attr.style "color: var(--fg-green, #98c379); font-size: 0.7rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 20em;" ] [
+                  Text.raw (sprintf "= %s" v)
+                ]
             ]
         ]
         match shadowedCount with

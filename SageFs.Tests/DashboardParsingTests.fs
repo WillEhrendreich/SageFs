@@ -642,6 +642,43 @@ let bindingsPanelTests =
   ]
 
 [<Tests>]
+let bindingsValueDisplayTests =
+  let mkBinding name typeSig cellIdx value =
+    { Name = name; TypeSig = typeSig; CellIndex = cellIdx; ShadowedBy = []; ReferencedIn = []; Value = value }
+  let mkScope bindings =
+    let active = bindings |> List.map (fun (b: SageFs.Features.BindingExplorer.BindingInfo) -> (b.Name, b)) |> Map.ofList
+    { Bindings = bindings; ActiveBindings = active; ShadowedBindings = [] }
+  testList "Value display in bindings panel" [
+    testCase "shows value when present" (fun () ->
+      let b = mkBinding "x" "int" 0 (Some "42")
+      let scope = mkScope [b]
+      let html = renderBindingsPanel (Some scope) |> renderNode
+      Expect.isTrue (html.Contains("value-display")) "has value-display class"
+      Expect.isTrue (html.Contains("= 42")) "shows the value")
+
+    testCase "no value element when None" (fun () ->
+      let b = mkBinding "y" "string" 0 None
+      let scope = mkScope [b]
+      let html = renderBindingsPanel (Some scope) |> renderNode
+      Expect.isFalse (html.Contains("value-display")) "no value-display class when value is None")
+
+    testCase "string value shown with quotes" (fun () ->
+      let b = mkBinding "name" "string" 0 (Some "\"hello\"")
+      let scope = mkScope [b]
+      let html = renderBindingsPanel (Some scope) |> renderNode
+      Expect.isTrue (html.Contains("value-display")) "has value-display"
+      Expect.isTrue (html.Contains("= &quot;hello&quot;") || html.Contains("= \"hello\"")) "shows quoted string value")
+
+    testCase "long value is truncated via CSS" (fun () ->
+      let longVal = String.replicate 50 "abc"
+      let b = mkBinding "data" "string" 0 (Some longVal)
+      let scope = mkScope [b]
+      let html = renderBindingsPanel (Some scope) |> renderNode
+      Expect.isTrue (html.Contains("text-overflow: ellipsis")) "has CSS truncation"
+      Expect.isTrue (html.Contains("max-width: 20em")) "has max-width constraint")
+  ]
+
+[<Tests>]
 let dashboardActualParsingTests = testList "Dashboard actual parsing" [
   testList "parseOutputLines" [
     testCase "timestamp + kind line" (fun () ->
