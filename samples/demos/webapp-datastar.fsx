@@ -48,13 +48,13 @@ let todoItemView (todo: TodoItem) =
     Elem.input [
       Attr.type' "checkbox"
       if todo.Completed then Attr.checked'
-      // Datastar: on check → POST /todo/toggle/{id}, merge the response fragment
-      Ds.onInput (sprintf "$post('/todo/toggle/%d')" todo.Id)
+      // Datastar: on change → POST /todo/toggle/{id}, merge the response fragment
+      Ds.onEvent ("change", sprintf "@post('/todo/toggle/%d')" todo.Id)
     ]
     Elem.span [] [ Text.raw todo.Text ]
     Elem.button [
       Attr.class' "delete"
-      Ds.onClick (sprintf "$post('/todo/delete/%d')" todo.Id)
+      Ds.onClick (sprintf "@post('/todo/delete/%d')" todo.Id)
     ] [ Text.raw "✕" ]
   ]
 
@@ -88,13 +88,13 @@ let pageLayout (content: XmlNode list) =
       Elem.p [] [ Text.raw "Edit this file, save it. The page updates. No refresh." ]
       Elem.form [
         // Datastar: on submit → POST /todo/add, replace the #todo-list fragment
-        Ds.onSubmit "$post('/todo/add', {text: $el.querySelector('input').value}); $el.reset()"
+        Ds.onEvent ("submit", "@post('/todo/add'); this.reset()")
       ] [
         Elem.input [ Attr.type' "text"; Attr.name "text"; Attr.placeholder "What needs doing?" ]
         Elem.button [ Attr.type' "submit" ] [ Text.raw "Add" ]
       ]
-      // Datastar polls for updates — the list re-renders when state changes
-      Elem.div [ Ds.onLoad "$get('/todo/list')" ] [
+      // Datastar: on init → fetch the todo list from the server
+      Elem.div [ Ds.onInit (Ds.get "/todo/list") ] [
         todoListView todos
       ]
       yield! content
@@ -128,15 +128,17 @@ let postAddTodo : HttpHandler = fun ctx -> task {
   return! Response.ofHtml (todoListView todos) ctx
 }
 
-let postToggleTodo (id: int) : HttpHandler =
+let postToggleTodo (id: int) : HttpHandler = fun ctx -> task {
   todos <-
     todos |> List.map (fun t ->
       if t.Id = id then { t with Completed = not t.Completed } else t)
-  Response.ofHtml (todoListView todos)
+  return! Response.ofHtml (todoListView todos) ctx
+}
 
-let postDeleteTodo (id: int) : HttpHandler =
+let postDeleteTodo (id: int) : HttpHandler = fun ctx -> task {
   todos <- todos |> List.filter (fun t -> t.Id <> id)
-  Response.ofHtml (todoListView todos)
+  return! Response.ofHtml (todoListView todos) ctx
+}
 
 // ── Routing — no controller registration, no DI setup ──
 let routes = [
@@ -144,8 +146,8 @@ let routes = [
   get  "/todo/list"          getTodoList
   get  "/todo/stats"         getStats
   post "/todo/add"           postAddTodo
-  mapPost "/todo/toggle/{id}" (fun id -> postToggleTodo (int id))
-  mapPost "/todo/delete/{id}" (fun id -> postDeleteTodo (int id))
+  mapPost "/todo/toggle/{id}" (fun r -> r.GetString("id", "0")) (fun id -> postToggleTodo (int id))
+  mapPost "/todo/delete/{id}" (fun r -> r.GetString("id", "0")) (fun id -> postDeleteTodo (int id))
 ]
 
 // ── App bootstrap — the whole server in ~10 lines ──

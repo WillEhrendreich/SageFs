@@ -104,10 +104,11 @@ classify -3   // → "negative" ✓
 classify 4    // → "positive even" ✓
 
 // ── No package.json drama ──
-// npm: 140,000 packages, 3 of them are maintained, node_modules is 800MB
-// F#: NuGet packages, `#r "nuget: PackageName"` in scripts
-//     dotnet tool install for CLI tools
-//     No leftpad incidents.
+// F# scripts reference packages inline — no separate dependency file:
+//   #r "nuget: Newtonsoft.Json"
+//   open Newtonsoft.Json
+// For projects: NuGet via `dotnet add package` — works the same as npm install,
+// but dependency resolution is deterministic and reproducible.
 
 // ── Type inference: better than TypeScript's ──
 // TS: you annotate everything and still get `any` creep

@@ -97,9 +97,9 @@ Red = Blue     // → false ✓
 
 // ── Lifetimes / borrowing: F# doesn't have this ──
 // Pro: zero borrow checker errors. Zero lifetime annotations. Zero 'a 'b 'c soup.
-// Con: GC does the memory management. Pauses exist (though .NET GC is quite good).
-//      For most server-side and tooling work, you won't notice.
-//      If you're writing a game loop, set your GC to Server mode.
+// Con: GC does the memory management. .NET's GC is excellent for server workloads
+//      and tooling — pauses are typically sub-millisecond in Server GC mode.
+//      For latency-critical game loops, pin your allocations or use struct records.
 
 // ── Concurrency: actors instead of Arc<Mutex<T>> ──
 // Rust: Arc::new(Mutex::new(state)) to share mutable state across threads

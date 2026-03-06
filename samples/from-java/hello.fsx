@@ -58,7 +58,7 @@ let safeDivide a b =
 match safeDivide 10 3 with
 | Some v -> printfn "Result: %d" v
 | None   -> printfn "Cannot divide by zero"
-// No NullPointerException.  Ever.
+// No NullPointerException in idiomatic F# code. Pure F# doesn't have null.
 
 // ── Generic methods without the <T extends Comparable<? super T>> noise ──
 // F# type inference handles it:

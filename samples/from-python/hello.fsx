@@ -78,7 +78,7 @@ let safeDivide a b =
 match safeDivide 10 2 with
 | Some result -> printfn "Got %d" result
 | None        -> printfn "Division by zero!"
-// No more AttributeError: 'NoneType' object has no attribute '...'
+// No more AttributeError: 'NoneType' object has no attribute '...' in idiomatic code.
 
 // ── 9. Collections — familiar, but typed ──
 let numbers = [1; 2; 3; 4; 5]      // list  (Python list)

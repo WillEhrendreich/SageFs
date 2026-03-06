@@ -73,15 +73,16 @@ let grouped =
 // In Jupyter you check assumptions manually.
 // In SageFs you write them as tests and they run every time you save:
 
-open Expecto   // #r "nuget: Expecto"
+#r "nuget: Expecto"
+open Expecto
 
 let tests = testList "data invariants" [
   test "all values positive" {
-    data |> List.iter (fun r -> Expect.isTrue "positive" (r.Value > 0.0))
+    data |> List.iter (fun r -> Expect.isTrue (r.Value > 0.0) "value should be positive")
   }
   test "categories are only A or B" {
     data |> List.iter (fun r ->
-      Expect.isTrue "valid category" (r.Category = "A" || r.Category = "B"))
+      Expect.isTrue (r.Category = "A" || r.Category = "B") "valid category")
   }
 ]
 // SageFs runs these on every save.  Gutter turns green.  No runTests() call needed.
