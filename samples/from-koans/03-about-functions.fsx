@@ -2,6 +2,7 @@
 //  🧘  About Functions — SageFs Edition
 //
 //  Original: ChrisMarinos/FSharpKoans — AboutFunctions.fs
+//  Adapted from FSharpKoans by Chris Marinos (MIT). See LICENSE-FSharpKoans.
 //
 //  Now that you know let, you'll use it to define functions.
 //  Functions are first-class values in F#.
@@ -11,6 +12,7 @@
 
 #r "nuget: Expecto"
 open Expecto
+open Expecto.Flip
 
 let inline __<'T> : 'T = failwith "Seek wisdom by filling in the __"
 
@@ -43,28 +45,28 @@ let sayItLikeAnAuctioneer (text: string) =
 let tests = testList "about functions" [
 
   test "CreatingFunctionsWithLet — first call" {
-    Expect.equal (add 2 2) __ "add 2 2 should be 4"
+    (add 2 2) |> Expect.equal "add 2 2 should be 4" __
   }
 
   test "CreatingFunctionsWithLet — second call" {
-    Expect.equal (add 5 2) __ "add 5 2 should be 7"
+    (add 5 2) |> Expect.equal "add 5 2 should be 7" __
   }
 
   test "NestingFunctions" {
     let quadruple x =
       let double x = x * 2
       double (double x)
-    Expect.equal (quadruple 4) __ "quadruple 4 should be 16"
+    (quadruple 4) |> Expect.equal "quadruple 4 should be 16" __
   }
 
   test "AddingTypeAnnotations" {
     let result = sayItLikeAnAuctioneer "going once going twice sold to the lady in red"
-    Expect.equal result __ "spaces should be removed"
+    result |> Expect.equal "spaces should be removed" __
   }
 
   test "VariablesInParentScopeCanBeAccessed" {
     let result = caffeinate "hello there"
-    Expect.equal result __ "should be yelled with exclamation"
+    result |> Expect.equal "should be yelled with exclamation" __
   }
 
 ]

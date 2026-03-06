@@ -2,6 +2,7 @@
 //  🧘  About Asserts — SageFs Edition
 //
 //  Original: ChrisMarinos/FSharpKoans — AboutAsserts.fs
+//  Adapted from FSharpKoans by Chris Marinos (MIT). See LICENSE-FSharpKoans.
 //
 //  The F# Koans taught you with NUnit's AssertEquality.
 //  SageFs uses Expecto — the F# community's testing library.
@@ -12,6 +13,7 @@
 
 #r "nuget: Expecto"
 open Expecto
+open Expecto.Flip
 
 // ── The fill-in-the-blank placeholder ────────────────────────
 // __ can stand in for any type. Replace it with the real value.
@@ -19,11 +21,14 @@ let inline __<'T> : 'T = failwith "Seek wisdom by filling in the __"
 
 // ── What Expecto looks like ───────────────────────────────────
 //
-// Old koan style:
+// Old koan style (NUnit):
 //   AssertEquality (1 + 1) __
 //
-// Expecto style:
-//   Expect.equal actual expected "description"
+// SageFs uses Expecto.Flip — the actual value pipes in last:
+//   actual |> Expect.equal "description" expected
+//
+// Why Flip? It reads like English and works with F# pipelines:
+//   myFunction input |> Expect.equal "should compute" expectedResult
 //
 // SageFs shows ✓/✗ in your gutter as you type.
 // No dotnet run. No terminal scrolling. Just green markers.
@@ -39,22 +44,22 @@ let tests = testList "about asserts" [
   test "AssertExpectation" {
     let expectedValue = 1 + 1
     let actualValue   = __     // ← change this to 2
-    Expect.equal actualValue expectedValue "values should be equal"
+    actualValue |> Expect.equal "values should be equal" expectedValue
   }
 
   // Easy, right? Now fill in the next one.
   test "FillInValues" {
-    Expect.equal (1 + 1) __ "1 + 1 should equal 2"
+    (1 + 1) |> Expect.equal "1 + 1 should equal 2" __
   }
 
   // ── String equality ───────────────────────────────────────
   test "StringEquality" {
-    Expect.equal "hello" __ "strings can be equal too"
+    "hello" |> Expect.equal "strings can be equal too" __
   }
 
   // ── Boolean equality ──────────────────────────────────────
   test "BooleanEquality" {
-    Expect.equal true __ "true is true"
+    true |> Expect.equal "true is true" __
   }
 
 ]
@@ -65,12 +70,13 @@ let tests = testList "about asserts" [
 //                    hover to see "Expected: 2, Actual: failwith..."
 // When a test PASSES: 🟢 gutter marker — you filled it in correctly!
 //
-// Expecto also has many other assertions:
-//   Expect.isTrue      condition "message"
-//   Expect.isFalse     condition "message"
-//   Expect.isNone      optionValue "message"
-//   Expect.isSome      optionValue "message"
-//   Expect.throws      (fun () -> ...) "message"
-//   Expect.stringContains str substr "message"
-//   Expect.floatClose  Accuracy.medium actual expected "message"
+// Expecto.Flip cheat sheet (actual always pipes in last):
+//   actual |> Expect.equal "msg" expected
+//   actual |> Expect.isTrue "msg"
+//   actual |> Expect.isFalse "msg"
+//   actual |> Expect.isNone "msg"
+//   actual |> Expect.isSome "msg"
+//   (fun () -> ...) |> Expect.throws "msg"
+//   actual |> Expect.stringContains "msg" substring
+//   actual |> Expect.floatClose "msg" Accuracy.medium expected
 // ============================================================

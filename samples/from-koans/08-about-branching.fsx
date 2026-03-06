@@ -2,6 +2,7 @@
 //  🧘  About Branching — SageFs Edition
 //
 //  Original: ChrisMarinos/FSharpKoans — AboutBranching.fs
+//  Adapted from FSharpKoans by Chris Marinos (MIT). See LICENSE-FSharpKoans.
 //
 //  In F#, if/else and match are EXPRESSIONS — they return values.
 //  No separate if-statement vs if-expression distinction.
@@ -11,6 +12,7 @@
 
 #r "nuget: Expecto"
 open Expecto
+open Expecto.Flip
 
 let inline __<'T> : 'T = failwith "Seek wisdom by filling in the __"
 
@@ -55,26 +57,26 @@ getDinner ("Sally", "Burger") // → "Sally wants 'em some Burger"
 let tests = testList "about branching" [
 
   test "BasicBranching — even" {
-    Expect.equal (isEven 2) __ "2 is even"
+    (isEven 2) |> Expect.equal "2 is even" __
   }
 
   test "BasicBranching — odd" {
-    Expect.equal (isEven 3) __ "3 is odd"
+    (isEven 3) |> Expect.equal "3 is odd" __
   }
 
   test "IfStatementsReturnValues" {
     let result =
       if 2 = 3 then "something is REALLY wrong"
       else "no problem here"
-    Expect.equal result __ "2 ≠ 3 so we get the else branch"
+    result |> Expect.equal "2 ≠ 3 so we get the else branch" __
   }
 
   test "BranchingWithPatternMatch — apple" {
-    Expect.equal (isApple "apple") __ "apple is an apple"
+    (isApple "apple") |> Expect.equal "apple is an apple" __
   }
 
   test "BranchingWithPatternMatch — not apple" {
-    Expect.equal (isApple "") __ "empty string is not an apple"
+    (isApple "") |> Expect.equal "empty string is not an apple" __
   }
 
   test "TuplesWithIfStatementsGetClumsy" {
@@ -85,16 +87,16 @@ let tests = testList "about branching" [
       else
         sprintf "%s wants 'em some %s" name foodChoice
 
-    Expect.equal (getDinnerClumsy ("Chris", "steak"))    __ "Chris wants steak"
-    Expect.equal (getDinnerClumsy ("Dave", "veggies"))   __ "Dave goes veggie"
+    (getDinnerClumsy ("Chris", "steak")) |> Expect.equal "Chris wants steak" __
+    (getDinnerClumsy ("Dave", "veggies")) |> Expect.equal "Dave goes veggie" __
   }
 
   test "PatternMatchingIsNicer — fish" {
-    Expect.equal (getDinner ("Bob", "fish")) __ "fish = no red meat"
+    (getDinner ("Bob", "fish")) |> Expect.equal "fish = no red meat" __
   }
 
   test "PatternMatchingIsNicer — Burger" {
-    Expect.equal (getDinner ("Sally", "Burger")) __ "Sally gets a Burger"
+    (getDinner ("Sally", "Burger")) |> Expect.equal "Sally gets a Burger" __
   }
 
 ]
@@ -104,4 +106,10 @@ let tests = testList "about branching" [
 // 2. Add a `| "pear" -> true` case to isApple
 // 3. Try omitting the `else` branch — F# will tell you why it's wrong
 // 4. Write a classify function: "fizz" for %3, "buzz" for %5, "fizzbuzz"
+//
+// 💡 SageFs convention: In production F#, prefer `match` over `if/else`.
+//    Pattern matching is more expressive, exhaustive, and composes better.
+//    Notice how getDinnerClumsy (if/else) is harder to read than getDinner
+//    (match)? That's not a coincidence — match scales; if/else doesn't.
+//    As you progress, you'll see pattern matching everywhere in F#.
 // ============================================================

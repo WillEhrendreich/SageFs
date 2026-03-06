@@ -2,6 +2,7 @@
 //  🧘  About Pipelining — SageFs Edition
 //
 //  Original: ChrisMarinos/FSharpKoans — AboutPipelining.fs
+//  Adapted from FSharpKoans by Chris Marinos (MIT). See LICENSE-FSharpKoans.
 //
 //  The |> operator is the heart of F# style.
 //  x |> f   means   f x  — "send x through f"
@@ -12,6 +13,7 @@
 
 #r "nuget: Expecto"
 open Expecto
+open Expecto.Flip
 
 let inline __<'T> : 'T = failwith "Seek wisdom by filling in the __"
 
@@ -55,20 +57,20 @@ let result3 =
 let tests = testList "about pipelining" [
 
   test "SquareEvenNumbers — separate statements" {
-    Expect.equal result1 __ "squares of evens in 0..5"
+    result1 |> Expect.equal "squares of evens in 0..5" __
   }
 
   test "SquareEvenNumbers — nested parens" {
-    Expect.equal result2 __ "same with parens"
+    result2 |> Expect.equal "same with parens" __
   }
 
   test "SquareEvenNumbers — pipeline" {
-    Expect.equal result3 __ "same with |>"
+    result3 |> Expect.equal "same with |>" __
   }
 
   test "AllThreeAreEquivalent" {
-    Expect.equal result1 result2 "separate == nested parens"
-    Expect.equal result2 result3 "nested parens == pipeline"
+    result1 |> Expect.equal "separate == nested parens" result2
+    result2 |> Expect.equal "nested parens == pipeline" result3
   }
 
   test "HowThePipeOperatorIsDefined" {
@@ -78,7 +80,7 @@ let tests = testList "about pipelining" [
       [0..5]
       |> List.filter isEven
       |> List.map square
-    Expect.equal result __ "same result even with redefined |>"
+    result |> Expect.equal "same result even with redefined |>" __
   }
 
   test "PipelineWithAnonymousFunctions" {
@@ -87,15 +89,19 @@ let tests = testList "about pipelining" [
       |> List.filter (fun x -> x % 2 = 0)
       |> List.map (fun x -> x * 3)
       |> List.sum
-    Expect.equal result __ "sum of (even * 3) for 1..10"
+    result |> Expect.equal "sum of (even * 3) for 1..10" __
     // Hint: even numbers in 1..10 are 2,4,6,8,10 → ×3 → 6,12,18,24,30 → sum
   }
 
 ]
 
-// ── Things to try ─────────────────────────────────────────────
-// 1. Alt+Enter `result3` — see [0; 4; 16]
-// 2. Add `|> List.sum` at the end — see 20
+// ── Things to try (SageFs makes this magic) ──────────────────
+// 1. Alt+Enter `result3` — see [0; 4; 16] instantly inline
+// 2. Add `|> List.sum` at the end — see 20 appear in your editor
 // 3. Build a pipeline that finds the 3 largest even squares in 1..20
 // 4. Compare readability: nested parens vs |> for complex transforms
+//
+// 🔥 Try this: highlight the real-world pipeline above (lines 49-53)
+//    and press Alt+Enter. SageFs evaluates the whole pipeline and shows
+//    the result inline. No REPL window, no terminal — just results.
 // ============================================================

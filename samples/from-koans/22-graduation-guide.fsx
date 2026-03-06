@@ -1,6 +1,9 @@
 // ============================================================
-//  🧘 → 🦅  Coming from FSharpKoans? Welcome, graduate.
-//  You already know F#. You proved it 20 exercises at a time.
+//  🧘 → 🦅  Graduation Guide — SageFs Edition
+//
+//  Adapted from FSharpKoans by Chris Marinos (MIT). See LICENSE-FSharpKoans.
+//
+//  Congratulations! You finished 21 koans. You know F#.
 //  Now let's ditch `dotnet watch run` and actually build things.
 //  Alt+Enter any expression. Results appear inline. No terminal.
 // ============================================================
@@ -164,19 +167,20 @@ let safeValue = invalid |> Option.defaultValue 0
 
 #r "nuget: Expecto"
 open Expecto
+open Expecto.Flip
 
 let orderTests = testList "order status" [
     test "pending orders show waiting message" {
         let msg = describeOrder Pending
-        Expect.stringContains msg "Awaiting" "should mention awaiting"
+        msg |> Expect.stringContains "should mention awaiting" "Awaiting"
     }
     test "shipped orders include tracking number" {
         let msg = describeOrder (Shipped "ABC123")
-        Expect.stringContains msg "ABC123" "should contain tracking"
+        msg |> Expect.stringContains "should contain tracking" "ABC123"
     }
     test "cancelled orders explain why" {
         let msg = describeOrder (Cancelled "Out of stock")
-        Expect.stringContains msg "Out of stock" "should contain reason"
+        msg |> Expect.stringContains "should contain reason" "Out of stock"
     }
 ]
 
@@ -190,10 +194,10 @@ let pipelineTests = testList "pipeline exercises" [
             revenueByRegion
             |> List.find (fun (r, _) -> r = "North")
             |> snd
-        Expect.floatClose Accuracy.medium northRevenue 209.96 "north revenue"
+        northRevenue |> Expect.floatClose "north revenue" Accuracy.medium 209.96
     }
     test "top product is Widget" {
-        Expect.equal (fst topProduct) "Widget" "most frequent product"
+        (fst topProduct) |> Expect.equal "most frequent product" "Widget"
     }
 ]
 

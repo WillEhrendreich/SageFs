@@ -2,6 +2,7 @@
 //  🧘  About Strings — SageFs Edition
 //
 //  Original: ChrisMarinos/FSharpKoans — AboutStrings.fs
+//  Adapted from FSharpKoans by Chris Marinos (MIT). See LICENSE-FSharpKoans.
 //
 //  Strings in F# use double quotes. Single chars use single quotes.
 //  F# has string interpolation, formatting, and more.
@@ -11,6 +12,7 @@
 
 #r "nuget: Expecto"
 open Expecto
+open Expecto.Flip
 
 let inline __<'T> : 'T = failwith "Seek wisdom by filling in the __"
 
@@ -49,44 +51,44 @@ let tests = testList "about strings" [
 
   test "StringValue" {
     let s = "hello"
-    Expect.equal s __ "should be hello"
+    s |> Expect.equal "should be hello" __
   }
 
   test "StringConcatenation" {
     let s = "hello " + "world"
-    Expect.equal s __ "concatenation with +"
+    s |> Expect.equal "concatenation with +" __
   }
 
   test "FormattingWithSprintf — int" {
     let s = sprintf "F# turns it to %d!" 11
-    Expect.equal s __ "sprintf with %d"
+    s |> Expect.equal "sprintf with %d" __
   }
 
   test "FormattingWithSprintf — string" {
     let s = sprintf "hello %s" "world"
-    Expect.equal s __ "sprintf with %s"
+    s |> Expect.equal "sprintf with %s" __
   }
 
   test "FormattingAnythingWithPercA" {
     let s = sprintf "Formatting other types is as easy as: %A" (1, 2, 3)
-    Expect.equal s __ "sprintf with %A formats any type"
+    s |> Expect.equal "sprintf with %A formats any type" __
   }
 
   test "StringInterpolation" {
     let lang = "F#"
     let s = $"Hello, {lang}!"
-    Expect.equal s __ "interpolated string"
+    s |> Expect.equal "interpolated string" __
   }
 
   test "ExtractFirstChar" {
     let s = "hello world"
-    Expect.equal s.[0] __ "first char of 'hello world'"
+    s.[0] |> Expect.equal "first char of 'hello world'" __
     // Note: single char literals use single quotes: 'h'
   }
 
   test "ExtractFifthChar" {
     let s = "hello world"
-    Expect.equal s.[4] __ "fifth char (index 4) of 'hello world'"
+    s.[4] |> Expect.equal "fifth char (index 4) of 'hello world'" __
   }
 
   test "ApplyWhatYouLearned" {
@@ -95,8 +97,8 @@ let tests = testList "about strings" [
       __
       // Hint: sprintf "%d doubled is %d, and %d tripled is %d!" x (x*2) x (x*3)
 
-    Expect.equal (getFunFacts 3) "3 doubled is 6, and 3 tripled is 9!"  "fun facts about 3"
-    Expect.equal (getFunFacts 6) "6 doubled is 12, and 6 tripled is 18!" "fun facts about 6"
+    (getFunFacts 3) |> Expect.equal "fun facts about 3" "3 doubled is 6, and 3 tripled is 9!"
+    (getFunFacts 6) |> Expect.equal "fun facts about 6" "6 doubled is 12, and 6 tripled is 18!"
   }
 
 ]

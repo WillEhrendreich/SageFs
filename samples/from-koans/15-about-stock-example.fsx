@@ -2,6 +2,7 @@
 //  🧘  About the Stock Example — SageFs Edition
 //
 //  Original: ChrisMarinos/FSharpKoans — AboutTheStockExample.fs
+//  Adapted from FSharpKoans by Chris Marinos (MIT). See LICENSE-FSharpKoans.
 //
 //  Apply everything you've learned to a real data processing task.
 //  No more condiments and toy examples — this is real CSV parsing.
@@ -14,6 +15,7 @@
 
 #r "nuget: Expecto"
 open Expecto
+open Expecto.Flip
 open System.Globalization
 
 let inline __<'T> : 'T = failwith "Seek wisdom by filling in the __"
@@ -96,20 +98,20 @@ let tests = testList "about the stock example" [
   test "YouGotTheAnswerCorrect" {
     // Replace __ with your pipeline (starting from stockData |> List.tail |> ...):
     let result : string = __
-    Expect.equal result "2012-03-13" "date with biggest open/close swing"
+    result |> Expect.equal "date with biggest open/close swing" "2012-03-13"
   }
 
   // Bonus: verify your parsing helpers work correctly:
   test "SplitCommasWorks" {
     let cols = splitCommas "2012-03-30,32.40,32.41,32.04,32.26,31749400,32.26"
-    Expect.equal cols.[0] "2012-03-30" "first column is date"
-    Expect.equal cols.[1] "32.40"      "second column is open"
-    Expect.equal cols.[4] "32.26"      "fifth column is close"
+    cols.[0] |> Expect.equal "first column is date" "2012-03-30"
+    cols.[1] |> Expect.equal "second column is open" "32.40"
+    cols.[4] |> Expect.equal "fifth column is close" "32.26"
   }
 
   test "ParseDoubleWorks" {
     let value = parseDouble "32.40"
-    Expect.floatClose Accuracy.medium value 32.40 "should parse 32.40"
+    value |> Expect.floatClose "should parse 32.40" Accuracy.medium 32.40
   }
 
 ]

@@ -2,6 +2,7 @@
 //  🧘  About Classes — SageFs Edition
 //
 //  Original: ChrisMarinos/FSharpKoans — AboutClasses.fs
+//  Adapted from FSharpKoans by Chris Marinos (MIT). See LICENSE-FSharpKoans.
 //
 //  F# is a fully object-oriented language too.
 //  Classes work like you'd expect from C# or Java.
@@ -13,6 +14,7 @@
 
 #r "nuget: Expecto"
 open Expecto
+open Expecto.Flip
 
 let inline __<'T> : 'T = failwith "Seek wisdom by filling in the __"
 
@@ -66,35 +68,35 @@ shaun2.Speak()               // → "Hi my name is Shaun of the Dead"
 let tests = testList "about classes" [
 
   test "ClassesCanHaveProperties" {
-    Expect.equal zombie.FavoriteFood __ "zombies like brains"
+    zombie.FavoriteFood |> Expect.equal "zombies like brains" __
   }
 
   test "ClassesCanHaveMethods — matching food" {
-    Expect.equal (zombie.Eat "brains") __ "zombie loves brains"
+    (zombie.Eat "brains") |> Expect.equal "zombie loves brains" __
   }
 
   test "ClassesCanHaveMethods — non-matching food" {
-    Expect.equal (zombie.Eat "chicken") __ "zombie rejects chicken"
+    (zombie.Eat "chicken") |> Expect.equal "zombie rejects chicken" __
   }
 
   test "ClassesCanHaveConstructors" {
-    Expect.equal (shaun.Speak()) __ "person introduces themselves"
+    (shaun.Speak()) |> Expect.equal "person introduces themselves" __
   }
 
   test "ClassesCanHaveLetBindings" {
     // Zombie2.favoriteFood is private — accessible only inside the class
-    Expect.equal (zombie2.Eat "chicken") __ "zombie2 still rejects chicken"
+    (zombie2.Eat "chicken") |> Expect.equal "zombie2 still rejects chicken" __
   }
 
   test "ClassesCanHaveReadWriteProperties — before rename" {
     let p = Person2("Shaun")
-    Expect.equal (p.Speak()) __ "initial name"
+    (p.Speak()) |> Expect.equal "initial name" __
   }
 
   test "ClassesCanHaveReadWriteProperties — after rename" {
     let p = Person2("Shaun")
     p.Name <- "Shaun of the Dead"
-    Expect.equal (p.Speak()) __ "after mutation"
+    (p.Speak()) |> Expect.equal "after mutation" __
   }
 
 ]
@@ -104,4 +106,16 @@ let tests = testList "about classes" [
 // Use Class when:    encapsulation needed, mutable state, .NET interop
 //
 // In practice: reach for record/DU first, class only when needed.
+//
+// 💡 SageFs convention: Immutability by default.
+//    Notice `Person2` uses `mutable` and `<-` assignment. This works,
+//    but in idiomatic F# (and all SageFs code), we prefer:
+//
+//      type Person = { Name: string }
+//      let rename newName person = { person with Name = newName }
+//
+//    The `with` syntax creates a NEW record — the old one never changes.
+//    No mutation, no surprises, no bugs from shared mutable state.
+//    Classes with `mutable` are fine for .NET interop, but records are
+//    the default choice in F# for good reason!
 // ============================================================

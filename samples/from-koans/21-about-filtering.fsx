@@ -2,6 +2,7 @@
 //  🧘  About Filtering — SageFs Edition
 //
 //  Original: ChrisMarinos/FSharpKoans — AboutFiltering.fs
+//  Adapted from FSharpKoans by Chris Marinos (MIT). See LICENSE-FSharpKoans.
 //
 //  Lists can be filtered in several ways:
 //    filter  — keep elements matching a predicate
@@ -15,6 +16,7 @@
 
 #r "nuget: Expecto"
 open Expecto
+open Expecto.Flip
 
 let inline __<'T> : 'T = failwith "Seek wisdom by filling in the __"
 
@@ -59,48 +61,48 @@ let tests = testList "about filtering" [
 
   test "FilteringAList — starting with A" {
     let result = names |> List.filter (fun n -> n.StartsWith("A"))
-    Expect.equal result [ __ ] "names starting with A"
+    result |> Expect.equal "names starting with A" [ __ ]
   }
 
   test "FilteringAList — starting with B" {
     let startsWithB (s: string) = s.StartsWith("B")
     let result = names |> List.filter startsWithB
-    Expect.equal result [ __ ] "names starting with B"
+    result |> Expect.equal "names starting with B" [ __ ]
   }
 
   test "FindingJustOneItem" {
     let result = names |> List.find (fun n -> n = "Bob")
-    Expect.equal result __ "find returns the element itself"
+    result |> Expect.equal "find returns the element itself" __
   }
 
   test "FindingJustOneOrZeroItem — Eve exists" {
     let eve = names |> List.tryFind (fun n -> n = "Eve")
-    Expect.equal eve.IsSome __ "Eve is in the list"
+    eve.IsSome |> Expect.equal "Eve is in the list" __
   }
 
   test "FindingJustOneOrZeroItem — Zelda absent" {
     let zelda = names |> List.tryFind (fun n -> n = "Zelda")
-    Expect.equal zelda.IsSome __ "Zelda is not in the list"
+    zelda.IsSome |> Expect.equal "Zelda is not in the list" __
   }
 
   test "ChoosingItemsFromAList — even numbers" {
     let result = numbers |> List.choose someIfEven
-    Expect.equal result [ __ ] "only even numbers survive choose"
+    result |> Expect.equal "only even numbers survive choose" [ __ ]
   }
 
   test "ChoosingItemsFromAList — option list with id" {
     let result = optNames |> List.choose id
-    Expect.equal result [ __ ] "choose id keeps the Somes"
+    result |> Expect.equal "choose id keeps the Somes" [ __ ]
   }
 
   test "PickingFirstEvenFromRange" {
     let result = [5..10] |> List.pick someIfEven
-    Expect.equal result __ "first even number ≥ 5"
+    result |> Expect.equal "first even number ≥ 5" __
   }
 
   test "PickingFirstSomeFromOptionList" {
     let result = optNames2 |> List.pick id
-    Expect.equal result __ "first Some in the list"
+    result |> Expect.equal "first Some in the list" __
   }
 
 ]

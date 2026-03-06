@@ -2,6 +2,7 @@
 //  🧘  About Tuples — SageFs Edition
 //
 //  Original: ChrisMarinos/FSharpKoans — AboutTuples.fs
+//  Adapted from FSharpKoans by Chris Marinos (MIT). See LICENSE-FSharpKoans.
 //
 //  Tuples are F#'s way to group values together without naming them.
 //  They're lightweight and frequently used for multiple return values.
@@ -11,6 +12,7 @@
 
 #r "nuget: Expecto"
 open Expecto
+open Expecto.Flip
 
 let inline __<'T> : 'T = failwith "Seek wisdom by filling in the __"
 
@@ -45,54 +47,54 @@ let tests = testList "about tuples" [
 
   test "CreatingTuples" {
     let t = ("apple", "dog")
-    Expect.equal t ("apple", __) "second element should be dog"
+    t |> Expect.equal "second element should be dog" ("apple", __)
   }
 
   test "AccessingTupleElements — fst" {
     let t = ("apple", "dog")
-    Expect.equal (fst t) __ "fst should give the first element"
+    (fst t) |> Expect.equal "fst should give the first element" __
   }
 
   test "AccessingTupleElements — snd" {
     let t = ("apple", "dog")
-    Expect.equal (snd t) __ "snd should give the second element"
+    (snd t) |> Expect.equal "snd should give the second element" __
   }
 
   test "AccessingWithPatternMatching — fruit" {
     let (f, _, _) = ("apple", "dog", "Mustang")
-    Expect.equal f __ "first element is the fruit"
+    f |> Expect.equal "first element is the fruit" __
   }
 
   test "AccessingWithPatternMatching — animal" {
     let (_, a, _) = ("apple", "dog", "Mustang")
-    Expect.equal a __ "second element is the animal"
+    a |> Expect.equal "second element is the animal" __
   }
 
   test "AccessingWithPatternMatching — car" {
     let (_, _, c) = ("apple", "dog", "Mustang")
-    Expect.equal c __ "third element is the car"
+    c |> Expect.equal "third element is the car" __
   }
 
   test "IgnoringValuesWithUnderscore" {
     let (_, animal, _) = ("apple", "dog", "Mustang")
-    Expect.equal animal __ "only the animal matters here"
+    animal |> Expect.equal "only the animal matters here" __
   }
 
   test "ReturningMultipleValuesFromAFunction — squared" {
     let (squared, _) = squareAndCube 3.0
-    Expect.equal squared __ "3 squared is 9"
+    squared |> Expect.equal "3 squared is 9" __
   }
 
   test "ReturningMultipleValuesFromAFunction — cubed" {
     let (_, cubed) = squareAndCube 3.0
-    Expect.equal cubed __ "3 cubed is 27"
+    cubed |> Expect.equal "3 cubed is 27" __
   }
 
   test "TheTruthBehindMultipleReturnValues" {
     // squareAndCube doesn't really return two values —
     // it returns ONE value that happens to be a tuple.
     let result = squareAndCube 3.0
-    Expect.equal result __ "should be the tuple (9.0, 27.0)"
+    result |> Expect.equal "should be the tuple (9.0, 27.0)" __
   }
 
 ]

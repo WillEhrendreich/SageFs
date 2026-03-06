@@ -2,6 +2,7 @@
 //  🧘  About Modules — SageFs Edition
 //
 //  Original: ChrisMarinos/FSharpKoans — AboutModules.fs
+//  Adapted from FSharpKoans by Chris Marinos (MIT). See LICENSE-FSharpKoans.
 //
 //  Modules group types, values, and functions together.
 //  They're like namespaces, but can also contain code.
@@ -12,6 +13,7 @@
 
 #r "nuget: Expecto"
 open Expecto
+open Expecto.Flip
 
 let inline __<'T> : 'T = failwith "Seek wisdom by filling in the __"
 
@@ -52,32 +54,32 @@ Mario.Power          // → None
 let tests = testList "about modules" [
 
   test "ModulesCanContainValues — Name" {
-    Expect.equal MushroomKingdom.Mario.Name __ "Mario's name"
+    MushroomKingdom.Mario.Name |> Expect.equal "Mario's name" __
   }
 
   test "ModulesCanContainValues — Occupation" {
-    Expect.equal MushroomKingdom.Mario.Occupation __ "Mario's job"
+    MushroomKingdom.Mario.Occupation |> Expect.equal "Mario's job" __
   }
 
   test "ModulesCanContainFunctions — powerUp" {
-    Expect.equal superMario.Power __ "powered up Mario has a Mushroom"
+    superMario.Power |> Expect.equal "powered up Mario has a Mushroom" __
   }
 
   test "OpenedModulesBringContentsInScope — Name" {
-    Expect.equal Mario.Name __ "opened module: Mario's name"
+    Mario.Name |> Expect.equal "opened module: Mario's name" __
   }
 
   test "OpenedModulesBringContentsInScope — Occupation" {
-    Expect.equal Mario.Occupation __ "opened module: Mario's job"
+    Mario.Occupation |> Expect.equal "opened module: Mario's job" __
   }
 
   test "OpenedModulesBringContentsInScope — Power" {
-    Expect.equal Mario.Power __ "opened module: Mario starts with no power"
+    Mario.Power |> Expect.equal "opened module: Mario starts with no power" __
   }
 
   test "ModuleTypeIsAccessible" {
     // The Character type is defined inside MushroomKingdom
-    Expect.equal (Mario.GetType()) typeof<MushroomKingdom.Character> "type from module"
+    (Mario.GetType()) |> Expect.equal "type from module" typeof<MushroomKingdom.Character>
   }
 
 ]

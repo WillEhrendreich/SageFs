@@ -2,6 +2,7 @@
 //  🧘  About Discriminated Unions — SageFs Edition
 //
 //  Original: ChrisMarinos/FSharpKoans — AboutDiscriminatedUnions.fs
+//  Adapted from FSharpKoans by Chris Marinos (MIT). See LICENSE-FSharpKoans.
 //
 //  Discriminated unions (DUs) are F#'s superpower.
 //  They model "one of these fixed choices" — with or without data.
@@ -13,6 +14,7 @@
 
 #r "nuget: Expecto"
 open Expecto
+open Expecto.Flip
 
 let inline __<'T> : 'T = failwith "Seek wisdom by filling in the __"
 
@@ -67,47 +69,47 @@ area (Rectangle (4.0, 5.0)) // → 20.0
 let tests = testList "about discriminated unions" [
 
   test "DUsCaptureASetOfOptions — Mustard" {
-    Expect.equal (toColor Mustard) __ "Mustard is yellow"
+    (toColor Mustard) |> Expect.equal "Mustard is yellow" __
   }
 
   test "DUsCaptureASetOfOptions — Ketchup" {
-    Expect.equal (toColor Ketchup) __ "Ketchup is red"
+    (toColor Ketchup) |> Expect.equal "Ketchup is red" __
   }
 
   test "DUsCaptureASetOfOptions — Relish" {
-    Expect.equal (toColor Relish) __ "Relish is green"
+    (toColor Relish) |> Expect.equal "Relish is green" __
   }
 
   test "DUCasesCanHaveTypes — Bourbon" {
     let result = saySomething (Bourbon "Maker's Mark")
-    Expect.equal result __ "prefers Bookers"
+    result |> Expect.equal "prefers Bookers" __
   }
 
   test "DUCasesCanHaveTypes — Number 7" {
     let result = saySomething (Number 7)
-    Expect.equal result __ "me too for 7"
+    result |> Expect.equal "me too for 7" __
   }
 
   test "DUCasesCanHaveTypes — Bookers" {
     let result = saySomething (Bourbon "Bookers")
-    Expect.equal result __ "same favorite bourbon"
+    result |> Expect.equal "same favorite bourbon" __
   }
 
   test "DUCasesCanHaveTypes — other number" {
     let result = saySomething (Number 42)
-    Expect.equal result __ "partial to 7"
+    result |> Expect.equal "partial to 7" __
   }
 
   test "ShapeDU — Circle area" {
-    Expect.floatClose Accuracy.medium (area (Circle 3.0)) (System.Math.PI * 9.0) "π*r²"
+    (area (Circle 3.0)) |> Expect.floatClose "π*r²" Accuracy.medium (System.Math.PI * 9.0)
   }
 
   test "ShapeDU — Rectangle area" {
-    Expect.equal (area (Rectangle (4.0, 5.0))) __ "width * height"
+    (area (Rectangle (4.0, 5.0))) |> Expect.equal "width * height" __
   }
 
   test "ShapeDU — Triangle area" {
-    Expect.equal (area (Triangle (6.0, 4.0))) __ "0.5 * base * height"
+    (area (Triangle (6.0, 4.0))) |> Expect.equal "0.5 * base * height" __
   }
 
 ]

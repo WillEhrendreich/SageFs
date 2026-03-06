@@ -2,6 +2,7 @@
 //  🧘  More About Functions — SageFs Edition
 //
 //  Original: ChrisMarinos/FSharpKoans — MoreAboutFunctions.fs
+//  Adapted from FSharpKoans by Chris Marinos (MIT). See LICENSE-FSharpKoans.
 //
 //  F# functions have superpowers: lambdas, currying, partial
 //  application. These make |> pipelines so powerful.
@@ -11,6 +12,7 @@
 
 #r "nuget: Expecto"
 open Expecto
+open Expecto.Flip
 
 let inline __<'T> : 'T = failwith "Seek wisdom by filling in the __"
 
@@ -59,33 +61,33 @@ let tests = testList "more about functions" [
 
   test "DefiningLambdas" {
     let echo = colors |> List.map (fun x -> x + " " + x)
-    Expect.equal echo __ "each color echoed"
+    echo |> Expect.equal "each color echoed" __
   }
 
   test "FunctionsThatReturnFunctions — simple call" {
     let result = add 2 4
-    Expect.equal result __ "add 2 4"
+    result |> Expect.equal "add 2 4" __
   }
 
   test "FunctionsThatReturnFunctions — partial application" {
     let addTen' = add 10
     let result  = addTen' 14
-    Expect.equal result __ "add ten to 14"
+    result |> Expect.equal "add ten to 14" __
   }
 
   test "AutomaticCurrying — unlucky number" {
     let unlucky = addSeven 6
-    Expect.equal unlucky __ "7 + 6"
+    unlucky |> Expect.equal "7 + 6" __
   }
 
   test "AutomaticCurrying — lucky number" {
     let lucky = addSeven 0
-    Expect.equal lucky __ "7 + 0"
+    lucky |> Expect.equal "7 + 0" __
   }
 
   test "NonCurriedTupleForm" {
     let result = addTuple (5, 40)
-    Expect.equal result __ "5 + 40 with tuple args"
+    result |> Expect.equal "5 + 40 with tuple args" __
   }
 
   test "PartialApplicationInPipelines" {
@@ -93,7 +95,7 @@ let tests = testList "more about functions" [
     // This lets you write: List.map square  (not: List.map (fun x -> square x))
     let double  = (*) 2          // partial application of (*)
     let doubles = [1..5] |> List.map double
-    Expect.equal doubles __ "double each of 1..5"
+    doubles |> Expect.equal "double each of 1..5" __
   }
 
 ]

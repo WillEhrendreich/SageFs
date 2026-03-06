@@ -2,6 +2,7 @@
 //  🧘  About Arrays — SageFs Edition
 //
 //  Original: ChrisMarinos/FSharpKoans — AboutArrays.fs
+//  Adapted from FSharpKoans by Chris Marinos (MIT). See LICENSE-FSharpKoans.
 //
 //  Arrays in F# are the standard .NET arrays — mutable, fixed-size,
 //  and fast for random access. Lists are immutable and linked.
@@ -12,6 +13,7 @@
 
 #r "nuget: Expecto"
 open Expecto
+open Expecto.Flip
 
 let inline __<'T> : 'T = failwith "Seek wisdom by filling in the __"
 
@@ -50,39 +52,39 @@ let cubed    = Array.map cube original
 let tests = testList "about arrays" [
 
   test "CreatingArrays — index 0" {
-    Expect.equal fruits.[0] __ "first fruit"
+    fruits.[0] |> Expect.equal "first fruit" __
   }
 
   test "CreatingArrays — index 1" {
-    Expect.equal fruits.[1] __ "second fruit"
+    fruits.[1] |> Expect.equal "second fruit" __
   }
 
   test "CreatingArrays — index 2" {
-    Expect.equal fruits.[2] __ "third fruit"
+    fruits.[2] |> Expect.equal "third fruit" __
   }
 
   test "ArraysAreDotNetArrays" {
     let dotNetType = System.Array.CreateInstance(typeof<string>, 0).GetType()
-    Expect.equal (fruits.GetType()) dotNetType "F# arrays are .NET System.Array"
+    (fruits.GetType()) |> Expect.equal "F# arrays are .NET System.Array" dotNetType
   }
 
   test "ArraysAreMutable" {
     let arr = [| "apple"; "pear" |]
     arr.[1] <- "peach"
-    Expect.equal arr __ "mutation in place"
+    arr |> Expect.equal "mutation in place" __
   }
 
   test "YouCanCreateArraysWithComprehensions" {
     let nums = [| for i in 0..10 do if i % 2 = 0 then yield i |]
-    Expect.equal nums __ "even numbers 0..10 as array"
+    nums |> Expect.equal "even numbers 0..10 as array" __
   }
 
   test "ArrayOperations — original unchanged" {
-    Expect.equal original __ "Array.map doesn't mutate original"
+    original |> Expect.equal "Array.map doesn't mutate original" __
   }
 
   test "ArrayOperations — cubed result" {
-    Expect.equal cubed __ "cubes of 0..5"
+    cubed |> Expect.equal "cubes of 0..5" __
   }
 
 ]

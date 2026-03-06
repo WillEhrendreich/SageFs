@@ -2,6 +2,7 @@
 //  🧘  About Lists — SageFs Edition
 //
 //  Original: ChrisMarinos/FSharpKoans — AboutLists.fs
+//  Adapted from FSharpKoans by Chris Marinos (MIT). See LICENSE-FSharpKoans.
 //
 //  Lists are F#'s primary immutable sequence type.
 //  They're singly-linked and operations return NEW lists.
@@ -11,6 +12,7 @@
 
 #r "nuget: Expecto"
 open Expecto
+open Expecto.Flip
 open System.Collections.Generic
 
 let inline __<'T> : 'T = failwith "Seek wisdom by filling in the __"
@@ -57,84 +59,84 @@ List.partition isOdd [0..5]  // → ([1; 3; 5], [0; 2; 4])
 let tests = testList "about lists" [
 
   test "CreatingLists — Head" {
-    Expect.equal fruits.Head __ "Head is the first element"
+    fruits.Head |> Expect.equal "Head is the first element" __
   }
 
   test "CreatingLists — Tail" {
-    Expect.equal fruits.Tail __ "Tail is everything after Head"
+    fruits.Tail |> Expect.equal "Tail is everything after Head" __
   }
 
   test "CreatingLists — Length" {
-    Expect.equal fruits.Length __ "Length counts the elements"
+    fruits.Length |> Expect.equal "Length counts the elements" __
   }
 
   test "BuildingNewListsWithCons — second" {
-    Expect.equal second __ "prepend pear to first"
+    second |> Expect.equal "prepend pear to first" __
   }
 
   test "BuildingNewListsWithCons — first unchanged" {
     // Cons does NOT modify first — lists are immutable!
-    Expect.equal first __ "first is unchanged"
+    first |> Expect.equal "first is unchanged" __
   }
 
   test "ConcatenatingLists — base unchanged" {
-    Expect.equal base' __ "@ does not mutate base'"
+    base' |> Expect.equal "@ does not mutate base'" __
   }
 
   test "ConcatenatingLists — extended" {
-    Expect.equal extended __ "@ appends peach"
+    extended |> Expect.equal "@ appends peach" __
   }
 
   test "CreatingListsWithRange — Head" {
     let list = [0..4]
-    Expect.equal list.Head __ "first element of [0..4]"
+    list.Head |> Expect.equal "first element of [0..4]" __
   }
 
   test "CreatingListsWithRange — Tail" {
     let list = [0..4]
-    Expect.equal list.Tail __ "tail of [0..4]"
+    list.Tail |> Expect.equal "tail of [0..4]" __
   }
 
   test "CreatingListsWithComprehensions" {
     let list = [for i in 0..4 do yield i]
-    Expect.equal list __ "comprehension 0..4"
+    list |> Expect.equal "comprehension 0..4" __
   }
 
   test "ComprehensionsWithConditions" {
     let evens = [for i in 0..10 do if i % 2 = 0 then yield i]
-    Expect.equal evens __ "even numbers 0..10"
+    evens |> Expect.equal "even numbers 0..10" __
   }
 
   test "TransformingListsWithMap — original unchanged" {
     let original = [0..5]
     let _ = List.map square original
-    Expect.equal original __ "map does not mutate original"
+    original |> Expect.equal "map does not mutate original" __
   }
 
   test "TransformingListsWithMap — result" {
     let result = List.map square [0..5]
-    Expect.equal result __ "squares of 0..5"
+    result |> Expect.equal "squares of 0..5" __
   }
 
   test "FilteringListsWithFilter — original unchanged" {
     let original = [0..5]
     let _ = List.filter isEven original
-    Expect.equal original __ "filter does not mutate original"
+    original |> Expect.equal "filter does not mutate original" __
   }
 
   test "FilteringListsWithFilter — result" {
     let result = List.filter isEven [0..5]
-    Expect.equal result __ "even numbers in 0..5"
+    result |> Expect.equal "even numbers in 0..5" __
   }
 
   test "DividingListsWithPartition — odds" {
     let (odds, _) = List.partition isOdd [0..5]
-    Expect.equal odds __ "odd numbers in 0..5"
+    odds |> Expect.equal "odd numbers in 0..5" __
   }
 
   test "DividingListsWithPartition — evens" {
     let (_, evens) = List.partition isOdd [0..5]
-    Expect.equal evens __ "even numbers from partition"
+    evens |> Expect.equal "even numbers from partition" __
   }
 
 ]

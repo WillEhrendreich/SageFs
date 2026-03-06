@@ -2,6 +2,7 @@
 //  🧘  About Looping — SageFs Edition
 //
 //  Original: ChrisMarinos/FSharpKoans — AboutLooping.fs
+//  Adapted from FSharpKoans by Chris Marinos (MIT). See LICENSE-FSharpKoans.
 //
 //  F# supports imperative for/while loops, but idiomatic F#
 //  prefers List/Seq/Array module functions. Learn both.
@@ -11,6 +12,7 @@
 
 #r "nuget: Expecto"
 open Expecto
+open Expecto.Flip
 
 let inline __<'T> : 'T = failwith "Seek wisdom by filling in the __"
 
@@ -48,21 +50,21 @@ let tests = testList "about looping" [
     let mutable sum = 0
     for value in values do
       sum <- sum + value
-    Expect.equal sum __ "sum of 0..10"
+    sum |> Expect.equal "sum of 0..10" __
   }
 
   test "LoopingWithExpressions — for..to" {
     let mutable sum = 0
     for i = 1 to 5 do
       sum <- sum + i
-    Expect.equal sum __ "sum of 1..5"
+    sum |> Expect.equal "sum of 1..5" __
   }
 
   test "LoopingWithWhile" {
     let mutable s = 1
     while s < 10 do
       s <- s + s
-    Expect.equal s __ "doubling: 1→2→4→8→16, first ≥10"
+    s |> Expect.equal "doubling: 1→2→4→8→16, first ≥10" __
   }
 
   test "FunctionalAlternative — List.sum equals for..in result" {
@@ -71,8 +73,8 @@ let tests = testList "about looping" [
       for i in [0..10] do acc <- acc + i
       acc
     let functionalSum = [0..10] |> List.sum
-    Expect.equal imperativeSum functionalSum "both give the same answer"
-    Expect.equal functionalSum __ "sum of 0..10"
+    imperativeSum |> Expect.equal "both give the same answer" functionalSum
+    functionalSum |> Expect.equal "sum of 0..10" __
   }
 
 ]
@@ -83,6 +85,10 @@ let tests = testList "about looping" [
 // 3. Try `[1..100] |> List.sum` — answer in <1ms, no loop needed
 // 4. Use `for i in [0..2..10] do` — loop with step size
 //
-// NOTE: Use loops when you need side effects (printing, IO).
-//       Use List/Seq/Array functions for transformations.
+// 💡 SageFs convention: Prefer List/Seq/Array functions over loops.
+//    Loops with mutable accumulators are C# thinking. In F#:
+//      [0..10] |> List.sum                              // instead of for + mutable
+//      [0..10] |> List.fold (fun acc x -> acc + x) 0    // explicit fold
+//    Loops are fine for side effects (printing, IO), but data
+//    transformations should use the functional collection functions.
 // ============================================================

@@ -2,6 +2,7 @@
 //  🧘  About .NET Collections — SageFs Edition
 //
 //  Original: ChrisMarinos/FSharpKoans — AboutDotNetCollections.fs
+//  Adapted from FSharpKoans by Chris Marinos (MIT). See LICENSE-FSharpKoans.
 //
 //  F# works seamlessly with .NET's mutable collection types.
 //  Dictionary<K,V>, List<T>, and Seq (IEnumerable<T>) are all
@@ -12,6 +13,7 @@
 
 #r "nuget: Expecto"
 open Expecto
+open Expecto.Flip
 open System.Collections.Generic
 
 let inline __<'T> : 'T = failwith "Seek wisdom by filling in the __"
@@ -56,42 +58,42 @@ Seq.maxBy (fun (s: string) -> s.Length) names    // → "Nicholas" (longest)
 let tests = testList "about dot net collections" [
 
   test "CreatingDotNetLists — index 0" {
-    Expect.equal fruits.[0] __ "first fruit"
+    fruits.[0] |> Expect.equal "first fruit" __
   }
 
   test "CreatingDotNetLists — index 1" {
-    Expect.equal fruits.[1] __ "second fruit"
+    fruits.[1] |> Expect.equal "second fruit" __
   }
 
   test "CreatingDotNetDictionaries — Chris" {
-    Expect.equal addressBook.["Chris"] __ "Chris lives in Ann Arbor"
+    addressBook.["Chris"] |> Expect.equal "Chris lives in Ann Arbor" __
   }
 
   test "CreatingDotNetDictionaries — SkillsMatter" {
-    Expect.equal addressBook.["SkillsMatter"] __ "SkillsMatter is in London"
+    addressBook.["SkillsMatter"] |> Expect.equal "SkillsMatter is in London" __
   }
 
   test "YouUseCombinatorsWithDotNetTypes — length" {
     // We can't test order of verboseBook (Dictionary is unordered).
     // But we CAN test that it has the right number of entries:
-    Expect.equal verboseBook.Length __ "two entries in address book"
+    verboseBook.Length |> Expect.equal "two entries in address book" __
   }
 
   test "SkippingElements" {
     let result = Seq.skip 2 [0..5] |> Seq.toList
-    Expect.equal result __ "skip first 2 from [0..5]"
+    result |> Expect.equal "skip first 2 from [0..5]" __
   }
 
   test "FindingTheMax" {
     let vals = new List<int>()
     vals.Add(11); vals.Add(20); vals.Add(4); vals.Add(2); vals.Add(3)
     let result = Seq.max vals
-    Expect.equal result __ "max of the list"
+    result |> Expect.equal "max of the list" __
   }
 
   test "FindingTheMaxByLength" {
     let result = Seq.maxBy (fun (s: string) -> s.Length) names
-    Expect.equal result __ "longest name"
+    result |> Expect.equal "longest name" __
   }
 
 ]

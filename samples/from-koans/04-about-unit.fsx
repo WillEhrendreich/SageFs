@@ -2,6 +2,7 @@
 //  🧘  About Unit — SageFs Edition
 //
 //  Original: ChrisMarinos/FSharpKoans — AboutUnit.fs
+//  Adapted from FSharpKoans by Chris Marinos (MIT). See LICENSE-FSharpKoans.
 //
 //  The unit type is F#'s equivalent of void, but unit is a real
 //  type with exactly one value: ()
@@ -11,6 +12,7 @@
 
 #r "nuget: Expecto"
 open Expecto
+open Expecto.Flip
 
 let inline __<'T> : 'T = failwith "Seek wisdom by filling in the __"
 
@@ -38,18 +40,18 @@ let tests = testList "about unit" [
 
   test "UnitIsUsedWhenThereIsNoReturnValue" {
     let r = sendData "data"
-    Expect.equal r __ "sendData returns unit"
+    r |> Expect.equal "sendData returns unit" __
     // Hint: what is the only unit value?
   }
 
   test "ParameterlessFunctionsTakeUnit" {
     let r = sayHello ()
-    Expect.equal r __ "sayHello should return 'hello'"
+    r |> Expect.equal "sayHello should return 'hello'" __
   }
 
   test "UnitIsAType" {
     let r = sendData "data"
-    Expect.equal (r.GetType()) typeof<unit> "should be typeof<unit>"
+    (r.GetType()) |> Expect.equal "should be typeof<unit>" typeof<unit>
   }
 
 ]

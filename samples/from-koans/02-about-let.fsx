@@ -2,6 +2,7 @@
 //  🧘  About Let — SageFs Edition
 //
 //  Original: ChrisMarinos/FSharpKoans — AboutLet.fs
+//  Adapted from FSharpKoans by Chris Marinos (MIT). See LICENSE-FSharpKoans.
 //
 //  The let keyword is one of the most fundamental parts of F#.
 //  You'll use it in almost every line of F# code you write.
@@ -11,6 +12,7 @@
 
 #r "nuget: Expecto"
 open Expecto
+open Expecto.Flip
 
 let inline __<'T> : 'T = failwith "Seek wisdom by filling in the __"
 
@@ -40,42 +42,42 @@ let tests = testList "about let" [
 
   test "LetBindsANameToAValue" {
     let bound = 50
-    Expect.equal bound __ "x should equal 50"
+    bound |> Expect.equal "x should equal 50" __
   }
 
   test "LetInfersTypesWherePossible — int" {
     let n = 50
-    Expect.equal (n.GetType()) typeof<int> "n should be an int"
+    (n.GetType()) |> Expect.equal "n should be an int" typeof<int>
   }
 
   test "LetInfersTypes — string" {
     let s = "a string"
-    Expect.equal (s.GetType()) __ "s should be a string"
+    (s.GetType()) |> Expect.equal "s should be a string" __
   }
 
   test "YouCanMakeTypesExplicit — int" {
     let (explicit: int) = 42
-    Expect.equal (explicit.GetType()) __ "should be typeof<int>"
+    (explicit.GetType()) |> Expect.equal "should be typeof<int>" __
   }
 
   test "YouCanMakeTypesExplicit — string" {
     let (explicit: string) = "forty two"
-    Expect.equal (explicit.GetType()) __ "should be typeof<string>"
+    (explicit.GetType()) |> Expect.equal "should be typeof<string>" __
   }
 
   test "FloatsAndIntsAreDifferentTypes" {
     // In F#, int and float are distinct — no implicit conversion.
     let intVal   = 20
     let floatVal = 20.0
-    Expect.equal (intVal.GetType())   typeof<int>   "should be int"
-    Expect.equal (floatVal.GetType()) __ "should be float"
+    (intVal.GetType()) |> Expect.equal "should be int" typeof<int>
+    (floatVal.GetType()) |> Expect.equal "should be float" __
     // NOTE: float in F# is the same as double in C#
   }
 
   test "ModifyingMutableValues" {
     let mutable n = 100
     n <- 200
-    Expect.equal n __ "n should be 200 after reassignment"
+    n |> Expect.equal "n should be 200 after reassignment" __
   }
 
   test "ShadowingAllowsReusingNames" {
@@ -83,7 +85,7 @@ let tests = testList "about let" [
     // Immutable — you cannot do: n <- 100
     // But you can shadow the name:
     let n = 100
-    Expect.equal n __ "n should be the shadowed value 100"
+    n |> Expect.equal "n should be the shadowed value 100" __
   }
 
 ]

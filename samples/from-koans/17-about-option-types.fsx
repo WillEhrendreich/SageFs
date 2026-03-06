@@ -2,6 +2,7 @@
 //  🧘  About Option Types — SageFs Edition
 //
 //  Original: ChrisMarinos/FSharpKoans — AboutOptionTypes.fs
+//  Adapted from FSharpKoans by Chris Marinos (MIT). See LICENSE-FSharpKoans.
 //
 //  Option<'T> represents a value that may or may not exist.
 //  Some 42 means "there IS a value: 42".
@@ -13,6 +14,7 @@
 
 #r "nuget: Expecto"
 open Expecto
+open Expecto.Flip
 
 let inline __<'T> : 'T = failwith "Seek wisdom by filling in the __"
 
@@ -67,53 +69,53 @@ let tests = testList "about option types" [
 
   test "OptionTypesMightContainAValue — IsSome" {
     let v = Some 10
-    Expect.equal v.IsSome __ "Some 10 is Some"
+    v.IsSome |> Expect.equal "Some 10 is Some" __
   }
 
   test "OptionTypesMightContainAValue — IsNone" {
     let v = Some 10
-    Expect.equal v.IsNone __ "Some 10 is not None"
+    v.IsNone |> Expect.equal "Some 10 is not None" __
   }
 
   test "OptionTypesMightContainAValue — Value" {
     let v = Some 10
-    Expect.equal v.Value __ "Value of Some 10"
+    v.Value |> Expect.equal "Value of Some 10" __
   }
 
   test "NoneHasNoValue — IsSome" {
     let v: int option = None
-    Expect.equal v.IsSome __ "None is not Some"
+    v.IsSome |> Expect.equal "None is not Some" __
   }
 
   test "NoneHasNoValue — IsNone" {
     let v: int option = None
-    Expect.equal v.IsNone __ "None is None"
+    v.IsNone |> Expect.equal "None is None" __
   }
 
   test "NoneValueThrows" {
     let v: int option = None
-    Expect.throws (fun () -> v.Value |> ignore) "accessing .Value on None throws"
+    (fun () -> v.Value |> ignore) |> Expect.throws "accessing .Value on None throws"
   }
 
   test "UsingOptionWithPatternMatching — Chrono Trigger" {
-    Expect.equal (getScore chronoTrigger) __ "Chrono Trigger got Great"
+    (getScore chronoTrigger) |> Expect.equal "Chrono Trigger got Great" __
   }
 
   test "UsingOptionWithPatternMatching — Halo unscored" {
-    Expect.equal (getScore halo) __ "Halo has no score"
+    (getScore halo) |> Expect.equal "Halo has no score" __
   }
 
   test "ProjectingValuesFromOptions — Some result" {
-    Expect.equal (decideOn chronoTrigger) __ "score > 3 → play it"
+    (decideOn chronoTrigger) |> Expect.equal "score > 3 → play it" __
   }
 
   test "ProjectingValuesFromOptions — None propagates" {
-    Expect.equal (decideOn halo) __ "no score → None"
+    (decideOn halo) |> Expect.equal "no score → None" __
   }
 
   test "DefaultValueHandlesNone" {
     let result = decideOn halo |> Option.defaultValue "no opinion"
-    Expect.equal result __ "defaultValue provides fallback"
+    result |> Expect.equal "defaultValue provides fallback" __
   }
 
 ]

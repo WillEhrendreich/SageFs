@@ -2,6 +2,7 @@
 //  🧘  About Record Types — SageFs Edition
 //
 //  Original: ChrisMarinos/FSharpKoans — AboutRecordTypes.fs
+//  Adapted from FSharpKoans by Chris Marinos (MIT). See LICENSE-FSharpKoans.
 //
 //  Records are named, immutable product types.
 //  They give you structural equality, ToString, and GetHashCode
@@ -12,6 +13,7 @@
 
 #r "nuget: Expecto"
 open Expecto
+open Expecto.Flip
 
 let inline __<'T> : 'T = failwith "Seek wisdom by filling in the __"
 
@@ -57,49 +59,49 @@ determineSide bowser  // → "bad guy"
 let tests = testList "about record types" [
 
   test "RecordsHaveProperties — Name" {
-    Expect.equal mario.Name __ "mario's name"
+    mario.Name |> Expect.equal "mario's name" __
   }
 
   test "RecordsHaveProperties — Occupation" {
-    Expect.equal mario.Occupation __ "mario's occupation"
+    mario.Occupation |> Expect.equal "mario's occupation" __
   }
 
   test "CreatingFromExistingRecord — mario name unchanged" {
-    Expect.equal mario.Name __ "with update does not change original"
+    mario.Name |> Expect.equal "with update does not change original" __
   }
 
   test "CreatingFromExistingRecord — luigi name" {
-    Expect.equal luigi.Name __ "luigi gets a new name"
+    luigi.Name |> Expect.equal "luigi gets a new name" __
   }
 
   test "CreatingFromExistingRecord — luigi inherits occupation" {
-    Expect.equal luigi.Occupation __ "luigi inherits mario's occupation"
+    luigi.Occupation |> Expect.equal "luigi inherits mario's occupation" __
   }
 
   test "ComparingRecords — same values are equal" {
     let koopaComparison =
       if greenKoopa = redKoopa then "all the koopas are pretty much the same"
       else "maybe one can fly"
-    Expect.equal koopaComparison __ "koopas with same fields are equal"
+    koopaComparison |> Expect.equal "koopas with same fields are equal" __
   }
 
   test "ComparingRecords — different values are not equal" {
     let bowserComparison =
       if bowser = greenKoopa then "the king is a pawn"
       else "he is still kind of a koopa"
-    Expect.equal bowserComparison __ "bowser ≠ koopa"
+    bowserComparison |> Expect.equal "bowser ≠ koopa" __
   }
 
   test "PatternMatchOnRecords — mario is good guy" {
-    Expect.equal (determineSide mario) __ "plumbers are good guys"
+    (determineSide mario) |> Expect.equal "plumbers are good guys" __
   }
 
   test "PatternMatchOnRecords — luigi is good guy" {
-    Expect.equal (determineSide luigi) __ "luigi is also a plumber"
+    (determineSide luigi) |> Expect.equal "luigi is also a plumber" __
   }
 
   test "PatternMatchOnRecords — bowser is bad guy" {
-    Expect.equal (determineSide bowser) __ "kidnapper = bad guy"
+    (determineSide bowser) |> Expect.equal "kidnapper = bad guy" __
   }
 
 ]

@@ -2,6 +2,7 @@
 //  🧘  About the Order of Evaluation — SageFs Edition
 //
 //  Original: ChrisMarinos/FSharpKoans — AboutTheOrderOfEvaluation.fs
+//  Adapted from FSharpKoans by Chris Marinos (MIT). See LICENSE-FSharpKoans.
 //
 //  Sometimes you need to be explicit about evaluation order.
 //  Parentheses and the <| operator are your tools.
@@ -11,6 +12,7 @@
 
 #r "nuget: Expecto"
 open Expecto
+open Expecto.Flip
 
 let inline __<'T> : 'T = failwith "Seek wisdom by filling in the __"
 
@@ -38,19 +40,19 @@ let tests = testList "about the order of evaluation" [
 
   test "SometimesYouNeedParenthesisToGroupThings" {
     let result = add (add 5 8) (add 1 1)
-    Expect.equal result __ "nested adds: (5+8) + (1+1)"
+    result |> Expect.equal "nested adds: (5+8) + (1+1)" __
   }
 
   test "BackwardPipeOperatorHelpsWithGrouping" {
     let result = double <| add 5 8
-    Expect.equal result __ "double the result of add 5 8"
+    result |> Expect.equal "double the result of add 5 8" __
   }
 
   test "ParensAndBackwardPipeAreEquivalent" {
     let withParens  = double (add 3 4)
     let withBwdPipe = double <| add 3 4
-    Expect.equal withParens withBwdPipe "both should give same result"
-    Expect.equal withParens __ "double of (3+4)"
+    withParens |> Expect.equal "both should give same result" withBwdPipe
+    withParens |> Expect.equal "double of (3+4)" __
   }
 
 ]
