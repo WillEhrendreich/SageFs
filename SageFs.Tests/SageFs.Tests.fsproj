@@ -123,6 +123,7 @@
         <Compile Include="EndpointContractTests.fs" />
         <Compile Include="FsiRegressionTests.fs" />
         <Compile Include="HotReloadingPropertyTests.fs" />
+        <Compile Include="DevReloadMiddlewareTests.fs" />
         <Compile Include="Benchmarks.fs" />
         <Compile Include="Program.fs" />
     </ItemGroup>

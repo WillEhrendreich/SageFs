@@ -2,6 +2,7 @@ module SageFs.DevReloadMiddleware
 
 open System
 open System.IO
+open System.Security.Cryptography
 open System.Text
 open Microsoft.AspNetCore.Http
 open SageFs.Utils
@@ -223,6 +224,22 @@ let internal parseEncoding (contentType: string) =
       with _ -> None)
     |> Option.defaultValue Encoding.UTF8
 
+/// Generate a cryptographic nonce for CSP script-src.
+let internal generateNonce () =
+  RandomNumberGenerator.GetBytes(16) |> Convert.ToBase64String
+
+/// Insert nonce="..." attribute into the injected script tag.
+let internal injectScriptNonce (nonce: string) (script: string) =
+  script.Replace("<script ", sprintf "<script nonce=\"%s\" " nonce)
+
+/// Add 'nonce-{value}' to an existing CSP header's script-src directive.
+/// If no script-src exists, appends a new script-src directive with the nonce.
+let internal addNonceToCsp (nonce: string) (cspHeader: string) =
+  let nonceToken = sprintf "'nonce-%s'" nonce
+  match cspHeader.Contains("script-src") with
+  | true -> cspHeader.Replace("script-src", sprintf "script-src %s" nonceToken)
+  | false -> sprintf "%s; script-src %s" cspHeader nonceToken
+
 /// Create a middleware that injects the devreload script into HTML responses.
 /// SSE is served by the worker HTTP server — this middleware only does injection.
 let createMiddleware (workerPort: int) =
@@ -276,12 +293,29 @@ let createMiddleware (workerPort: int) =
             let encoding = parseEncoding ctx.Response.ContentType
             use reader = new StreamReader(ms, encoding, leaveOpen = true)
             let! content = reader.ReadToEndAsync()
+            // CSP nonce: when the response has a Content-Security-Policy header,
+            // generate a per-request nonce, inject it on the script tag, and
+            // add 'nonce-{value}' to the CSP's script-src directive.
+            let hasCsp = ctx.Response.Headers.ContainsKey("Content-Security-Policy")
+            let scriptToInject, nonce =
+              match hasCsp with
+              | true ->
+                let n = generateNonce()
+                injectScriptNonce n script, Some n
+              | false -> script, None
             let injected =
               match content.Contains("</body>") with
-              | true -> content.Replace("</body>", script + "</body>")
+              | true -> content.Replace("</body>", scriptToInject + "</body>")
               | false ->
                 Log.debug "[DevReload] No </body> tag in %s — appending script" ctx.Request.Path.Value
-                content + script
+                content + scriptToInject
+            match nonce with
+            | Some n ->
+              let csp = ctx.Response.Headers["Content-Security-Policy"].ToString()
+              ctx.Response.Headers["Content-Security-Policy"] <-
+                Microsoft.Extensions.Primitives.StringValues (addNonceToCsp n csp)
+              Log.debug "[DevReload] Injected CSP nonce for %s" ctx.Request.Path.Value
+            | None -> ()
             let bytes = encoding.GetBytes(injected)
             // Prevent browser caching so reloads always fetch fresh content
             setNoCacheHeaders ctx

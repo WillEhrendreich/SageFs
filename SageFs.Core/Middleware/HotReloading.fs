@@ -260,7 +260,7 @@ let getReloadingState (st: AppState) =
 
 open HarmonyLib
 
-let detourMethod (method: MethodBase) (replacement: MethodBase) =
+let detourMethod (logger: ILogger) (method: MethodBase) (replacement: MethodBase) =
   try
     typeof<Harmony>.Assembly
     |> _.GetTypes()
@@ -272,13 +272,31 @@ let detourMethod (method: MethodBase) (replacement: MethodBase) =
   with
   | :? TargetInvocationException as ex when
     (ex.InnerException :? PlatformNotSupportedException) ->
-    // MonoMod does not yet support .NET 11+ CoreCLR — skip detour gracefully
-    ()
+    // MonoMod does not yet support .NET 11+ CoreCLR — transition to Degraded
+    let msg = sprintf "Hot-reload detour failed: PlatformNotSupportedException for %s. MonoMod may not support this runtime." method.Name
+    logger.LogWarning msg
+    DevReloadHealthTracker.transition (DevReloadHealth.Degraded "MonoMod PlatformNotSupportedException")
 
 let handleNewAsmFromRepl (logger: ILogger) (asm: Assembly) (st: State) =
   match st.LastAssembly with
   | Some prev when prev = asm -> st, []
   | _ ->
+    let scoreCandidate (newMethod: Method) (existingMethod: Method) =
+      let moduleCandidate =
+        st.LastOpenModules
+        |> Seq.map (fun o ->
+          match existingMethod.FullName.EndsWith(o + "." + newMethod.FullName,
+            StringComparison.Ordinal) with
+          | true -> 2
+          | false -> 0)
+        |> Seq.fold max 0
+      let noModuleCandidate =
+        match existingMethod.FullName.EndsWith(newMethod.FullName,
+          StringComparison.Ordinal) with
+        | true -> 1
+        | false -> 0
+      max moduleCandidate noModuleCandidate
+
     let replacementPairs =
       getAllMethods asm
       |> Seq.choose (fun newMethod ->
@@ -296,33 +314,28 @@ let handleNewAsmFromRepl (logger: ILogger) (asm: Assembly) (st: State) =
             // the wrong method (e.g. `getUser` vs `getUsers` have high Fuzz.Ratio).
             // Instead: prefer exact suffix match with last-opened module prepended,
             // then fall back to exact suffix match on the raw FullName.
-            >> Seq.sortByDescending (fun existingMethod ->
-               // Prefer match with module prefix: "Module.handler" == "Module.handler"
-               let moduleCandidate =
-                 st.LastOpenModules
-                 |> Seq.map (fun o ->
-                   match existingMethod.FullName.EndsWith(o + "." + newMethod.FullName,
-                     StringComparison.Ordinal) with
-                   | true -> 2 // exact match with module prefix
-                   | false -> 0)
-                 // Chesterton's fence: Seq.fold max 0 instead of Seq.tryHead.
-                 // tryHead takes the score from the FIRST open module only — if that
-                 // module doesn't match but a later one does, the match is missed.
-                 |> Seq.fold max 0
-               // Exact suffix match without module prefix
-               let noModuleCandidate =
-                 match existingMethod.FullName.EndsWith(newMethod.FullName,
-                   StringComparison.Ordinal) with
-                 | true -> 1
-                 | false -> 0
-               max moduleCandidate noModuleCandidate)
-            >> Seq.tryHead)
+            >> Seq.sortByDescending (scoreCandidate newMethod)
+            >> fun candidates ->
+              let arr = candidates |> Seq.truncate 2 |> Seq.toArray
+              match arr.Length with
+              | 0 -> None
+              | 1 -> Some arr[0]
+              | _ ->
+                let s0 = scoreCandidate newMethod arr[0]
+                let s1 = scoreCandidate newMethod arr[1]
+                match s0 = s1 with
+                | true ->
+                  logger.LogWarning(
+                    sprintf "Ambiguous hot-reload match for %s: %s and %s both score %d. Picking first — consider qualifying the module name."
+                      newMethod.FullName arr[0].FullName arr[1].FullName s0)
+                | false -> ()
+                Some arr[0])
         |> Option.map (fun oldMethod -> oldMethod, newMethod))
       |> Seq.toList
 
     for methodToReplace, newMethod in replacementPairs do
       logger.LogDebug <| "Updating method " + methodToReplace.FullName
-      detourMethod methodToReplace.MethodInfo newMethod.MethodInfo
+      detourMethod logger methodToReplace.MethodInfo newMethod.MethodInfo
 
     // Merge new assembly's methods into Methods so future evals can patch functions
     // defined in FSI (not in project DLLs). Without this, only project-DLL methods
