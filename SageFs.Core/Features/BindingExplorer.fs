@@ -27,7 +27,8 @@ let parseBinding (fsiLine: string) : (string * string * string option) option =
     | true ->
       let name = rest.Substring(0, colonIdx).Trim()
       let afterColon = rest.Substring(colonIdx + 1).Trim()
-      let eqIdx = afterColon.LastIndexOf('=')
+      // Use first = after colon, not last — values can contain =
+      let eqIdx = afterColon.IndexOf('=')
       match eqIdx > 0 with
       | false -> Some (name, afterColon, None)
       | true ->
