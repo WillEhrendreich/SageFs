@@ -162,6 +162,8 @@ Dashboard:     http://localhost:37750/dashboard  ← live web UI
 
 No project flag needed — the daemon discovers projects when your editor (or an AI agent) creates a session.
 
+> **New to F#?** Jump straight to the [migration guide for your language](#welcome-traveler----pick-your-home-language) and grab a starter sample tailored to where you're coming from. 🐍 Python · 📓 Jupyter · 🔷 C# · ☕ Java · 🟨 JS/TS · 🦀 Rust
+
 <details>
 <summary>Build from source</summary>
 
@@ -504,6 +506,203 @@ SageFs is **daemon-first** — one server, many clients. The daemon starts bare 
 3500+ tests: Expecto unit tests, FsCheck property-based state machine tests, Verify snapshots, binary persistence property tests.
 
 </details>
+
+---
+
+## Welcome, Traveler 👋 — Pick Your Home Language
+
+SageFs isn't just for F# veterans. It's for anyone who's ever thought *"why is development this slow?"* — regardless of what language burned them first. Find your background below, grab your starter sample, and hit Alt+Enter.
+
+> **Quick orientation:** Every sample in [`/samples`](samples/) is a runnable `.fsx` script.
+> Open it in VS Code with the SageFs extension (or `sagefs tui`), hit **Alt+Enter** on any expression, and results appear inline. Instantly.
+
+---
+
+### 🐍 Coming from Python?
+
+You already love interactive development — you live in the REPL. F# gives you the same energy, plus a compiler that catches your bugs before you run anything, blazing-fast pipelines instead of list comprehensions, and a type system that makes refactoring feel like a superpower instead of a minefield.
+
+Pain you're leaving behind: `AttributeError: 'NoneType' object has no attribute 'foo'`, mystery runtime crashes, and the "just run it and see" debugging loop.
+
+**What you'll love immediately:**
+- `|>` pipelines read like Python chains, but faster and type-checked
+- Pattern matching makes `if/elif/elif/elif/else` forests extinct
+- `Option<'T>` means `None` is handled at compile time — no more surprise crashes
+- SageFs = your Jupyter notebook, but in your editor, with live tests and hot reload
+
+**→ [Start here: `samples/from-python/hello.fsx`](samples/from-python/hello.fsx)**
+
+```fsharp
+// From this (Python):
+// result = sum(x**2 for x in range(1, 11) if x % 2 == 0)
+
+// To this (F#):
+let result =
+  [1..10]
+  |> List.filter (fun x -> x % 2 = 0)
+  |> List.map    (fun x -> x * x)
+  |> List.sum
+// Alt+Enter → 220. No running the file. No print(). Just results.
+```
+
+---
+
+### 📓 Coming from Jupyter Notebooks?
+
+You're already living the interactive-first dream. SageFs takes everything you love about notebooks (eval any expression, see results inline, build understanding iteratively) and fixes everything you hate (kernel crashes, "restart and run all", the JSON-blob hell of version control, no type checking, no hot reload into production).
+
+Pain you're leaving behind: "the kernel died", cell execution order mysteries, `git diff` on `.ipynb` showing base64 blobs, and the chasm between notebook exploration and shipped code.
+
+**What you'll love immediately:**
+- Alt+Enter on *any* expression — not just at the end of a cell
+- Your code is a real `.fsx` file that `git diff` shows beautifully
+- Write Expecto tests alongside your analysis — they run on every save
+- When you're ready to ship, your exploration code *is* the production code
+
+**→ [Start here: `samples/from-jupyter/notebook.fsx`](samples/from-jupyter/notebook.fsx)**
+
+```fsharp
+// Your "cell" is any expression. Run it anywhere.
+let data = [1.0; 2.0; 3.0; 4.0; 5.0]
+let mean = data |> List.average     // Alt+Enter → 3.0, right in the gutter
+let std  =
+  data
+  |> List.map (fun x -> (x - mean) ** 2.0)
+  |> List.average
+  |> sqrt                           // Alt+Enter → 1.414...
+```
+
+---
+
+### 🔷 Coming from C#?
+
+You're already home. Same .NET runtime. Same NuGet packages. Same `dotnet` CLI. You just get to stop writing `public class AbstractRepositoryFactoryImpl` and start writing code that says what it means.
+
+Pain you're leaving behind: 50-line classes for 3-line concepts, null reference exceptions at 3am, `dotnet watch` rebuilding for 10 seconds when you fix a typo, and writing the same LINQ query 12 different ways because the extension method didn't exist.
+
+**What you'll love immediately:**
+- Records are immutable value objects with equality built in — one line
+- Discriminated unions make `sealed class + pattern matching` elegant instead of painful
+- `Result<'T, 'TError>` replaces `try/catch` spaghetti for expected failure paths
+- SageFs hot reload patches method pointers at runtime — no rebuild, no restart
+
+**→ [Start here: `samples/from-csharp/hello.fsx`](samples/from-csharp/hello.fsx)**
+
+```fsharp
+// C#: public record Person(string Name, int Age);  // 1 line in modern C#
+// F#: one line too, but with structural equality, hashCode, and copy-with:
+type Person = { Name: string; Age: int }
+
+let alice = { Name = "Alice"; Age = 30 }
+let older  = { alice with Age = 31 }   // alice is unchanged — immutability is the default
+```
+
+---
+
+### ☕ Coming from Java?
+
+Welcome. You've been writing `AbstractSingletonProxyFactoryBean` and we won't judge you — the ecosystem made you do it. But it's time. F# is what Java always wished it could be: expressive, type-safe, concise, and running on a genuinely great runtime (.NET, not JVM — yes, the GC is better).
+
+Pain you're leaving behind: 10 files for one feature, XML everywhere, Spring Boot startup time, `Optional<Optional<List<? extends Comparable<? super T>>>>`, and `NullPointerException` at line 1 of your stack trace.
+
+**What you'll love immediately:**
+- A `Person` record is one line. Getters, equals, hashCode, toString — free.
+- Pattern matching on sealed types, with exhaustiveness checking — the Java 21 feature, but good
+- No `Optional.ofNullable(x).map(f).orElse(null)` — `Option<'T>` is a language citizen
+- Build time: `dotnet build` is fast. SageFs day-to-day: no build at all.
+
+**→ [Start here: `samples/from-java/hello.fsx`](samples/from-java/hello.fsx)**
+
+```fsharp
+// Java: public record Person(String name, int age) {}  +  equals + hashCode + toString
+// F#:
+type Person = { Name: string; Age: int }
+// structural equality: { Name = "Alice"; Age = 30 } = { Name = "Alice"; Age = 30 } → true
+// toString: printfn "%A" { Name = "Alice"; Age = 30 } → { Name = "Alice"; Age = 30 }
+// No Lombok. No Jackson annotations. Just data.
+```
+
+---
+
+### 🟨 Coming from JavaScript / TypeScript?
+
+You've been shipping `undefined is not a function` to production for years, and you've made peace with it. F# offers you something radical: a language where the type system is actually on your side, where `undefined` is not a concept, and where hot reload is so fast it feels like cheating.
+
+Pain you're leaving behind: `node_modules` eating your disk, `any` creep in TypeScript, `undefined` vs `null` vs `""` vs `0` all being falsy, and webpack rebuilds that take longer than your lunch break.
+
+**What you'll love immediately:**
+- `Option<'T>` means "might not exist" — compiler-enforced, no runtime surprise
+- `|>` pipelines are `.filter().map().reduce()` but for *any* function, not just array methods
+- No `this` binding bugs — functions are just functions
+- Fable compiles F# to clean JavaScript — the SageFs VS Code extension is F# all the way down
+
+**→ [Start here: `samples/from-javascript/hello.fsx`](samples/from-javascript/hello.fsx)**
+
+```fsharp
+// JS/TS: type Shape = { kind: "circle"; r: number } | { kind: "rect"; w: number; h: number }
+// F# (compiler checks exhaustiveness — no forgotten cases at runtime):
+type Shape =
+  | Circle    of radius: float
+  | Rectangle of width: float * height: float
+
+let area = function
+  | Circle r          -> System.Math.PI * r * r
+  | Rectangle (w, h) -> w * h
+// Forget the Rectangle case? Warning. Add Triangle without updating area? Warning.
+```
+
+---
+
+### 🦀 Coming from Rust?
+
+You're going to feel right at home. `Option`, `Result`, pattern matching, discriminated unions, immutability by default, zero `null` — F# and Rust share the same design philosophy. The difference is that F# runs on .NET, skips the borrow checker, and gives you hot reload and interactive scripting.
+
+Pain you're leaving behind: borrow checker fights for straightforward code, 45-second compile times for medium projects, no REPL, and having to reach for Python every time you want to explore data.
+
+**What you'll love immediately:**
+- `Option<'T>`, `Result<'T, 'E>`, and exhaustive pattern matching — just like Rust
+- Records and DUs have structural equality by default — no `#[derive(PartialEq)]` needed
+- Hot reload: your running program patches itself on save — impossible in Rust, trivial here
+- `.fsx` scripts give you the interactive exploration story Rust has always lacked
+
+**→ [Start here: `samples/from-rust/hello.fsx`](samples/from-rust/hello.fsx)**
+
+```fsharp
+// Rust: enum Shape { Circle { radius: f64 }, Rectangle { width: f64, height: f64 } }
+// F#:
+type Shape =
+  | Circle    of radius: float
+  | Rectangle of width: float * height: float
+
+// match is exhaustive just like Rust — add a case, get a warning everywhere it's not handled
+let area = function
+  | Circle r          -> System.Math.PI * r * r
+  | Rectangle (w, h) -> w * h
+```
+
+---
+
+### 🎯 Visual Demos
+
+See what SageFs makes possible beyond the REPL:
+
+#### 🌐 Reactive Web App — Falco + Datastar, zero JavaScript
+
+A full CRUD todo app in ~100 lines of F#. Edit a handler, save — the browser updates before you look away. No webpack. No bundler. No framework ceremony.
+
+**→ [`samples/demos/webapp-datastar.fsx`](samples/demos/webapp-datastar.fsx)**
+
+#### 🎨 GPU Window — Raylib Hello World with hot reload
+
+A Raylib window that hot-patches on save. Change the color, the text, the animation — save — it's live in the *running window*. No restart, no flicker.
+
+**→ [`samples/demos/raylib-hello.fsx`](samples/demos/raylib-hello.fsx)**
+
+#### 🕹️ Interactive Game — live-tweakable physics
+
+A playable star-catcher game. Edit `starMaxSpeed`, `playerWidth`, `starColors` in the source file, save, and the changes apply to the *running game* without interrupting play. This is what live development actually feels like.
+
+**→ [`samples/demos/raylib-game.fsx`](samples/demos/raylib-game.fsx)**
 
 ---
 
