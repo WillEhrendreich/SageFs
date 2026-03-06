@@ -359,6 +359,16 @@ let middlewareTests = testList "DevReload.Middleware" [
     script |> Expect.stringContains "should show error text" "msg.error"
     script |> Expect.stringContains "should use red background" "#dc2626"
   }
+
+  testTask "sets Cache-Control no-store on injected HTML responses" {
+    let ctx = DefaultHttpContext()
+    ctx.Request.Path <- PathString("/")
+    ctx.Request.Headers["Accept"] <- "text/html"
+    ctx.Response.Body <- new MemoryStream()
+    do! runMw ctx "text/html" "<html><body><h1>Hello</h1></body></html>"
+    let cacheControl = ctx.Response.Headers["Cache-Control"].ToString()
+    cacheControl |> Expect.equal "should be no-store" "no-store"
+  }
 ]
 
 // ============================================================================

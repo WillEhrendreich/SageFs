@@ -204,6 +204,10 @@ let private shouldInjectScript (ctx: HttpContext) =
   ctx.Response.StatusCode >= 200 &&
   ctx.Response.StatusCode < 300
 
+/// Prevent browser caching so hot reloads always fetch fresh content.
+let private setNoCacheHeaders (ctx: HttpContext) =
+  ctx.Response.Headers["Cache-Control"] <- Microsoft.Extensions.Primitives.StringValues "no-store"
+
 /// Parse encoding from Content-Type header (e.g. "text/html; charset=iso-8859-1").
 /// Falls back to UTF-8 when charset is missing, empty, or unrecognized.
 let internal parseEncoding (contentType: string) =
@@ -279,6 +283,8 @@ let createMiddleware (workerPort: int) =
                 Log.debug "[DevReload] No </body> tag in %s — appending script" ctx.Request.Path.Value
                 content + script
             let bytes = encoding.GetBytes(injected)
+            // Prevent browser caching so reloads always fetch fresh content
+            setNoCacheHeaders ctx
             ctx.Response.ContentLength <- Nullable(int64 bytes.Length)
             ctx.Response.Body <- originalBody
             do! originalBody.WriteAsync(ReadOnlyMemory bytes)
