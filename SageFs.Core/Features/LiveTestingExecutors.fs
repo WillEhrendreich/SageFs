@@ -80,6 +80,28 @@ module AttributeDiscovery =
     | :? ReflectionTypeLoadException -> []
     | :? TypeLoadException -> []
 
+  /// Discover tests with their runner closures retained for execution wiring.
+  /// Each MethodInfo is captured via partial application of the executor's Execute
+  /// function — no MethodInfo stored on TestCase, clean closure.
+  let discoverWithRunner
+    (ae: AttributeTestExecutor)
+    (category: TestCategory)
+    (asm: Assembly)
+    : (TestCase * Async<TestResult>) list =
+    try
+      asm.GetExportedTypes()
+      |> Array.collect (fun t ->
+        t.GetMethods(BindingFlags.Public ||| BindingFlags.Instance ||| BindingFlags.Static)
+        |> Array.filter (hasTestAttribute ae.Description.TestAttributes)
+        |> Array.map (fun mi ->
+          let tc = toTestCase ae.Description.Name category mi
+          let runner = ae.Execute mi
+          (tc, runner)))
+      |> Array.toList
+    with
+    | :? ReflectionTypeLoadException -> []
+    | :? TypeLoadException -> []
+
 // --- Reflection-based execution ---
 
 module ReflectionExecutor =
@@ -100,6 +122,9 @@ module ReflectionExecutor =
         sw.Stop()
         return TestResult.Passed sw.Elapsed
       with
+      | :? MissingMethodException ->
+        sw.Stop()
+        return TestResult.Skipped "Constructor injection not yet supported"
       | :? TargetInvocationException as tie ->
         sw.Stop()
         let inner =
@@ -127,7 +152,7 @@ module BuiltInExecutors =
     TestExecutor.AttributeBased {
       Description = {
         Name = TestFramework.XUnit
-        TestAttributes = ["Fact"; "Theory"]
+        TestAttributes = ["Fact"]
         AssemblyMarker = "xunit.core"
       }
       Execute = ReflectionExecutor.executeMethod
@@ -137,7 +162,7 @@ module BuiltInExecutors =
     TestExecutor.AttributeBased {
       Description = {
         Name = TestFramework.XUnit
-        TestAttributes = ["Fact"; "Theory"]
+        TestAttributes = ["Fact"]
         AssemblyMarker = "xunit.v3.core"
       }
       Execute = ReflectionExecutor.executeMethod
@@ -147,7 +172,7 @@ module BuiltInExecutors =
     TestExecutor.AttributeBased {
       Description = {
         Name = TestFramework.NUnit
-        TestAttributes = ["Test"; "TestCase"; "TestCaseSource"]
+        TestAttributes = ["Test"]
         AssemblyMarker = "nunit.framework"
       }
       Execute = ReflectionExecutor.executeMethod
@@ -157,7 +182,7 @@ module BuiltInExecutors =
     TestExecutor.AttributeBased {
       Description = {
         Name = TestFramework.MSTest
-        TestAttributes = ["TestMethod"; "DataTestMethod"]
+        TestAttributes = ["TestMethod"]
         AssemblyMarker = "Microsoft.VisualStudio.TestPlatform.TestFramework"
       }
       Execute = ReflectionExecutor.executeMethod
@@ -426,6 +451,7 @@ module TestOrchestrator =
     (executors: TestExecutor list)
     (asm: Assembly)
     : DiscoverAllResult =
+    // Custom executors: discovery + execution bundled together
     let customResults =
       executors
       |> List.choose (fun executor ->
@@ -434,25 +460,42 @@ module TestOrchestrator =
           let dr = ce.Discover asm
           Some (ce.Description.Name, dr)
         | _ -> None)
-    let attrTests =
+
+    // Attribute-based: discover with runner closures retained.
+    // Each MethodInfo is captured via partial application — never stored on TestCase.
+    let attrDiscoveries =
       executors
       |> List.collect (fun executor ->
         match executor with
         | TestExecutor.AttributeBased ae ->
-          AttributeDiscovery.discoverInAssembly ae.Description TestCategory.Unit asm
+          AttributeDiscovery.discoverWithRunner ae TestCategory.Unit asm
         | _ -> [])
+
+    let attrTests = attrDiscoveries |> List.map fst
+    // Keyed by TestId — each attr test needs its own runner closure
+    let attrRunMap =
+      attrDiscoveries
+      |> List.map (fun (tc, runner) -> TestId.value tc.Id, runner)
+      |> Map.ofList
+
     let allTests =
       (customResults |> List.collect (fun (_, dr) -> dr.Tests))
       @ attrTests
-    let runTestByFramework =
+
+    // Custom executors keyed by framework (their RunTest has internal dispatch)
+    let customRunMap =
       customResults
       |> List.map (fun (fw, dr) -> fw, dr.RunTest)
       |> Map.ofList
+
     { Tests = allTests
       RunTest = fun testCase ->
-        match Map.tryFind testCase.Framework runTestByFramework with
+        match Map.tryFind testCase.Framework customRunMap with
         | Some runTest -> runTest testCase
-        | None -> async { return TestResult.NotRun } }
+        | None ->
+          match Map.tryFind (TestId.value testCase.Id) attrRunMap with
+          | Some runner -> runner
+          | None -> async { return TestResult.NotRun } }
 
   /// Thread-safe stdout capture: a single TextWriter installed on Console.Out
   /// that routes writes to the current thread's capture StringWriter (if any).

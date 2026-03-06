@@ -131,6 +131,130 @@ let discoverTests = testList "TestOrchestrator.discoverTests" [
   }
 ]
 
+// --- Issue #32 regression tests: AttributeBased executors wired into RunTest ---
+
+/// Synthetic attribute matching xunit's Fact pattern
+[<System.AttributeUsage(System.AttributeTargets.Method)>]
+type SyntheticFactAttribute() = inherit System.Attribute()
+
+/// Test class with a passing and a failing method
+type SyntheticTestClass() =
+  [<SyntheticFact>]
+  member _.PassingTest() = ()
+
+  [<SyntheticFact>]
+  member _.FailingTest() = failwith "intentional failure"
+
+/// Test class that requires constructor DI (no default ctor)
+type NeedsConstructorArg(value: string) =
+  [<SyntheticFact>]
+  member _.SomeTest() = ()
+
+let private syntheticExecutor : TestExecutor =
+  let desc = {
+    Name = TestFramework.Unknown "SyntheticFact"
+    TestAttributes = [ "SyntheticFactAttribute" ]
+    AssemblyMarker = "SageFs.Tests"
+  }
+  TestExecutor.AttributeBased {
+    Description = desc
+    Execute = ReflectionExecutor.executeMethod
+  }
+
+let private syntheticAsm = typeof<SyntheticTestClass>.Assembly
+
+let issue32RegressionTests = testList "Issue #32: attr executors wired into RunTest" [
+  test "totality: every discovered attr test is executable (not NotRun)" {
+    let result = TestOrchestrator.discoverAll [ syntheticExecutor ] syntheticAsm
+    result.Tests
+    |> List.iter (fun tc ->
+      let outcome = result.RunTest tc |> Async.RunSynchronously
+      match outcome with
+      | TestResult.NotRun -> failtestf "Test '%s' returned NotRun — not wired!" tc.FullName
+      | _ -> ())
+  }
+
+  test "passing attr test returns Passed" {
+    let result = TestOrchestrator.discoverAll [ syntheticExecutor ] syntheticAsm
+    let passing =
+      result.Tests
+      |> List.find (fun tc -> tc.FullName.Contains "PassingTest")
+    let outcome = result.RunTest passing |> Async.RunSynchronously
+    match outcome with
+    | TestResult.Passed _ -> ()
+    | other -> failtestf "Expected Passed, got %A" other
+  }
+
+  test "failing attr test returns Failed" {
+    let result = TestOrchestrator.discoverAll [ syntheticExecutor ] syntheticAsm
+    let failing =
+      result.Tests
+      |> List.find (fun tc -> tc.FullName.Contains "FailingTest")
+    let outcome = result.RunTest failing |> Async.RunSynchronously
+    match outcome with
+    | TestResult.Failed _ -> ()
+    | other -> failtestf "Expected Failed, got %A" other
+  }
+
+  test "all discovered test IDs are unique" {
+    let result = TestOrchestrator.discoverAll [ syntheticExecutor ] syntheticAsm
+    let ids = result.Tests |> List.map (fun tc -> TestId.value tc.Id)
+    let uniqueIds = ids |> Set.ofList
+    Set.count uniqueIds |> Expect.equal "all IDs should be unique" (List.length ids)
+  }
+
+  test "constructor DI class returns Skipped, not Failed" {
+    let diExecutor : TestExecutor =
+      let desc = {
+        Name = TestFramework.Unknown "SyntheticDI"
+        TestAttributes = [ "SyntheticFactAttribute" ]
+        AssemblyMarker = "SageFs.Tests"
+      }
+      TestExecutor.AttributeBased {
+        Description = desc
+        Execute = ReflectionExecutor.executeMethod
+      }
+    let result = TestOrchestrator.discoverAll [ diExecutor ] syntheticAsm
+    let diTest =
+      result.Tests
+      |> List.tryFind (fun tc -> tc.FullName.Contains "NeedsConstructorArg")
+    match diTest with
+    | Some tc ->
+      let outcome = result.RunTest tc |> Async.RunSynchronously
+      match outcome with
+      | TestResult.Skipped _ -> ()
+      | other -> failtestf "Expected Skipped for DI class, got %A" other
+    | None -> skiptest "NeedsConstructorArg test not discovered"
+  }
+
+  test "mixed executors: custom + attr dispatch correctly" {
+    let result =
+      TestOrchestrator.discoverAll
+        (syntheticExecutor :: BuiltInExecutors.builtIn)
+        syntheticAsm
+    // Attr tests should be executable
+    let attrTests =
+      result.Tests |> List.filter (fun tc -> tc.Framework = TestFramework.Unknown "SyntheticFact")
+    (List.length attrTests > 0) |> Expect.isTrue "should have synthetic attr tests"
+    attrTests
+    |> List.iter (fun tc ->
+      let outcome = result.RunTest tc |> Async.RunSynchronously
+      match outcome with
+      | TestResult.NotRun -> failtestf "Attr test '%s' returned NotRun in mixed mode" tc.FullName
+      | _ -> ())
+    // Expecto (custom) tests should also be executable
+    let expectoTests =
+      result.Tests |> List.filter (fun tc -> tc.Framework = TestFramework.Expecto)
+    match expectoTests with
+    | [] -> skiptest "No expecto tests found — assembly may not expose them"
+    | first :: _ ->
+      let outcome = result.RunTest first |> Async.RunSynchronously
+      match outcome with
+      | TestResult.NotRun -> failtestf "Expecto test '%s' returned NotRun" first.FullName
+      | _ -> ()
+  }
+]
+
 [<Tests>]
 let allExecutorTests = testList "Provider Executors" [
   executorDescriptionTests
@@ -139,6 +263,7 @@ let allExecutorTests = testList "Provider Executors" [
   reflectionExecutorTests
   discoverAllTests
   discoverTests
+  issue32RegressionTests
 ]
 
 // --- LiveTestingHook tests ---
