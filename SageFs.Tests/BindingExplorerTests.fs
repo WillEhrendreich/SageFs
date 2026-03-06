@@ -195,4 +195,92 @@ let bindingExplorerTests = testList "BindingExplorer" [
       snapshot.ActiveBindings |> Map.isEmpty
       |> Expect.isTrue "should have no active bindings"
   ]
+
+  testList "buildScopeSnapshot properties" [
+    testProperty "latest definition always wins (shadow property)" <|
+      fun (count: uint8) ->
+        let n = max 2 (int count % 10 + 2)
+        let cells =
+          [ for i in 0 .. n - 1 do
+              { CellIndex = i
+                FsiOutput = sprintf "val x : int = %d" i
+                Source = sprintf "let x = %d" i } ]
+        let snapshot = buildScopeSnapshot cells
+        match snapshot.ActiveBindings |> Map.tryFind "x" with
+        | Some b -> b.CellIndex = n - 1
+        | None -> false
+
+    testProperty "shadow count equals definitions minus one" <|
+      fun (count: uint8) ->
+        let n = max 2 (int count % 10 + 2)
+        let cells =
+          [ for i in 0 .. n - 1 do
+              { CellIndex = i
+                FsiOutput = sprintf "val x : int = %d" i
+                Source = sprintf "let x = %d" i } ]
+        let snapshot = buildScopeSnapshot cells
+        let shadowedXs = snapshot.ShadowedBindings |> List.filter (fun b -> b.Name = "x")
+        shadowedXs.Length = n - 1
+
+    testProperty "active binding count never exceeds unique name count" <|
+      fun (nameIdxs: uint8 list) ->
+        let names = [| "a"; "b"; "c"; "d"; "e" |]
+        let indices = nameIdxs |> List.truncate 20
+        match indices with
+        | [] -> true
+        | _ ->
+          let cells =
+            indices |> List.mapi (fun i idx ->
+              let name = names.[int idx % names.Length]
+              { CellIndex = i
+                FsiOutput = sprintf "val %s : int = %d" name i
+                Source = sprintf "let %s = %d" name i })
+          let snapshot = buildScopeSnapshot cells
+          let uniqueNames = indices |> List.map (fun idx -> names.[int idx % names.Length]) |> List.distinct
+          snapshot.ActiveBindings.Count <= uniqueNames.Length
+
+    testCase "multi-binding cell: multiple val lines per output" <| fun () ->
+      let cells = [
+        { CellIndex = 0
+          FsiOutput = "val x : int = 1\nval y : string = \"hi\""
+          Source = "let x = 1\nlet y = \"hi\"" }
+      ]
+      let snapshot = buildScopeSnapshot cells
+      snapshot.ActiveBindings.Count
+      |> Expect.equal "should have 2 active bindings" 2
+      snapshot.ActiveBindings |> Map.containsKey "x"
+      |> Expect.isTrue "x should be active"
+      snapshot.ActiveBindings |> Map.containsKey "y"
+      |> Expect.isTrue "y should be active"
+
+    testCase "reference tracking: binding referenced in multiple cells" <| fun () ->
+      let cells = [
+        { CellIndex = 0; FsiOutput = "val x : int = 1"; Source = "let x = 1" }
+        { CellIndex = 1; FsiOutput = "val y : int = 2"; Source = "let y = x + 1" }
+        { CellIndex = 2; FsiOutput = "val z : int = 3"; Source = "let z = x + y" }
+      ]
+      let snapshot = buildScopeSnapshot cells
+      let xBinding = snapshot.Bindings |> List.find (fun b -> b.Name = "x" && b.CellIndex = 0)
+      xBinding.ReferencedIn |> List.length
+      |> Expect.equal "x referenced in 2 cells" 2
+
+    testProperty "all bindings are either active or shadowed (partition property)" <|
+      fun (steps: uint8 list) ->
+        let names = [| "a"; "b"; "c" |]
+        let indices = steps |> List.truncate 15
+        match indices with
+        | [] -> true
+        | _ ->
+          let cells =
+            indices |> List.mapi (fun i idx ->
+              let name = names.[int idx % names.Length]
+              { CellIndex = i
+                FsiOutput = sprintf "val %s : int = %d" name i
+                Source = sprintf "let %s = %d" name i })
+          let snapshot = buildScopeSnapshot cells
+          let activeCount = snapshot.ActiveBindings.Count
+          let shadowedCount = snapshot.ShadowedBindings.Length
+          let totalBindings = snapshot.Bindings.Length
+          activeCount + shadowedCount = totalBindings
+  ]
 ]
