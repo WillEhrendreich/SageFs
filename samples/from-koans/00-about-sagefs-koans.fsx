@@ -39,7 +39,7 @@
 //  02-about-let             → let bindings and type inference
 //  03-about-functions       → defining and calling functions
 //  04-about-unit            → the unit type (F#'s void)
-//  05-about-order-of-eval   → parentheses and <| operator
+//  05-about-order-of-evaluation → parentheses and <| operator
 //  06-about-tuples          → grouping values with tuples
 //  07-about-strings         → string operations and interpolation
 //  08-about-branching       → if expressions and pattern matching
@@ -48,11 +48,11 @@
 //  11-about-arrays          → .NET arrays
 //  12-about-looping         → for and while loops
 //  13-more-about-functions  → lambdas, currying, partial application
-//  14-about-dot-net-colls   → Dictionary, List<T>, Seq
+//  14-about-dot-net-collections → Dictionary, List<T>, Seq
 //  15-about-stock-example   → apply everything to real data 📊
 //  16-about-record-types    → records (named product types)
 //  17-about-option-types    → Option<'T> (no more null!)
-//  18-about-disc-unions     → discriminated unions (sum types) ⭐
+//  18-about-discriminated-unions → discriminated unions (sum types) ⭐
 //  19-about-modules         → organizing code with modules
 //  20-about-classes         → OOP classes in F#
 //  21-about-filtering       → filter / find / choose / pick
