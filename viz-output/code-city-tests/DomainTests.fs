@@ -464,6 +464,22 @@ let weberDistrictTests =
 let private distanceToPolyEdge (poly: Vec2 list) (px: float32) (pz: float32) : float32 =
   distanceToPoly poly px pz
 
+let private distanceToSeg (ax: float32) (az: float32) (bx: float32) (bz: float32) (px: float32) (pz: float32) : float32 =
+  let dx = bx - ax
+  let dz = bz - az
+  let lenSq = dx * dx + dz * dz
+  let t = if lenSq < 1e-10f then 0.0f else min 1.0f (max 0.0f (((px - ax) * dx + (pz - az) * dz) / lenSq))
+  let nearX = ax + t * dx
+  let nearZ = az + t * dz
+  sqrt ((px - nearX) * (px - nearX) + (pz - nearZ) * (pz - nearZ))
+
+let private mkRoad x1 z1 x2 z2 halfWidth =
+  { FromFunc = ""; ToFunc = ""
+    FromPos = Vector3(x1, halfWidth, z1)
+    ToPos   = Vector3(x2, halfWidth, z2)
+    Weight  = RoadClass.tier Street
+    Color   = Color(65uy, 65uy, 70uy, 255uy) }
+
 let roadFrontageTests =
   testList "Road-primary building placement (packAlongEdges)" [
 
@@ -527,6 +543,151 @@ let roadFrontageTests =
       hasNearTop    |> Expect.isTrue "should have buildings near the top edge"
   ]
 
+let packAlongRoadsTests =
+  testList "Road-primary placement along actual road segments (packAlongRoads)" [
+
+    testCase "produces buildings for a simple cross-road block" <| fun () ->
+      let rect  = { X = 0.0f; Z = 0.0f; W = 20.0f; H = 20.0f }
+      let roads = [ mkRoad 10.0f 0.0f 10.0f 20.0f 0.4f    // vertical at x=10
+                    mkRoad 0.0f  10.0f 20.0f 10.0f 0.4f ]  // horizontal at z=10
+      let funcs = List.init 8 (fun i -> mkFunc (sprintf "f%d" i) "CrossMod")
+      let bldgs = packAlongRoads roads rect funcs Map.empty (Color(70uy, 130uy, 180uy, 255uy)) (Random 42)
+      bldgs |> Expect.isNonEmpty "8 functions on a cross-road block should produce buildings"
+
+    testCase "road-primary invariant: all buildings adjacent to a visible road centerline" <| fun () ->
+      let rect  = { X = 0.0f; Z = 0.0f; W = 20.0f; H = 20.0f }
+      let roads = [ mkRoad 10.0f 0.0f 10.0f 20.0f 0.4f
+                    mkRoad 0.0f  10.0f 20.0f 10.0f 0.4f ]
+      let funcs = List.init 10 (fun i -> mkFunc (sprintf "f%d" i) "RoadMod")
+      let bldgs = packAlongRoads roads rect funcs Map.empty (Color(70uy, 130uy, 180uy, 255uy)) (Random 7)
+      bldgs |> Expect.isNonEmpty "must produce buildings"
+      let maxDist = 1.5f  // setback(0.9) + footprint/2 + small tolerance
+      for b in bldgs do
+        let cx = b.X + b.W / 2.0f
+        let cz = b.Z + b.D / 2.0f
+        let dV = distanceToSeg 10.0f 0.0f  10.0f 20.0f cx cz
+        let dH = distanceToSeg 0.0f  10.0f 20.0f 10.0f cx cz
+        let nearest = min dV dH
+        (nearest, maxDist)
+        |> Expect.isLessThanOrEqual
+             (sprintf "building (%.1f,%.1f) dist=%.2f — not adjacent to any road!" cx cz nearest)
+
+    testCase "all buildings stay within block bounds" <| fun () ->
+      let rect  = { X = 5.0f; Z = 5.0f; W = 20.0f; H = 20.0f }
+      let roads = [ mkRoad 15.0f 5.0f 15.0f 25.0f 0.4f ]
+      let funcs = List.init 6 (fun i -> mkFunc (sprintf "f%d" i) "BoundsMod")
+      let bldgs = packAlongRoads roads rect funcs Map.empty (Color(70uy, 130uy, 180uy, 255uy)) (Random 13)
+      let eps = 1.0f
+      for b in bldgs do
+        (b.X,       rect.X - eps)           |> Expect.isGreaterThanOrEqual "left within bounds"
+        (b.Z,       rect.Z - eps)           |> Expect.isGreaterThanOrEqual "top within bounds"
+        (b.X + b.W, rect.X + rect.W + eps)  |> Expect.isLessThanOrEqual   "right within bounds"
+        (b.Z + b.D, rect.Z + rect.H + eps)  |> Expect.isLessThanOrEqual   "bottom within bounds"
+
+    testCase "empty road list falls back gracefully without crash" <| fun () ->
+      let rect  = { X = 0.0f; Z = 0.0f; W = 10.0f; H = 10.0f }
+      let funcs = List.init 4 (fun i -> mkFunc (sprintf "f%d" i) "FallbackMod")
+      let bldgs = packAlongRoads [] rect funcs Map.empty (Color(70uy, 130uy, 180uy, 255uy)) (Random 1)
+      bldgs |> Expect.isNonEmpty "fallback must still produce buildings when no roads exist"
+
+    testCase "buildings distributed on both sides of a single road" <| fun () ->
+      // A single vertical road with 10 functions should put buildings on BOTH sides
+      let rect  = { X = 0.0f; Z = 0.0f; W = 10.0f; H = 20.0f }
+      let roads = [ mkRoad 5.0f 0.0f 5.0f 20.0f 0.4f ]
+      let funcs = List.init 10 (fun i -> mkFunc (sprintf "f%d" i) "SidesMod")
+      let bldgs = packAlongRoads roads rect funcs Map.empty (Color(70uy, 130uy, 180uy, 255uy)) (Random 99)
+      let leftSide  = bldgs |> List.exists (fun b -> b.X + b.W / 2.0f < 5.0f)
+      let rightSide = bldgs |> List.exists (fun b -> b.X + b.W / 2.0f > 5.0f)
+      leftSide  |> Expect.isTrue "should have buildings left of road"
+      rightSide |> Expect.isTrue "should have buildings right of road"
+  ]
+
+let buildingTypologyTests =
+  testList "Building typology classification and type-aware properties" [
+
+    testCase "classifyBuilding: tiny no-heat function is Shed" <| fun () ->
+      classifyBuilding 5 1 0.0f
+      |> Expect.equal "5-line, 0-heat function should be Shed" Shed
+
+    testCase "classifyBuilding: small low-heat function is Cottage" <| fun () ->
+      classifyBuilding 25 2 0.1f
+      |> Expect.equal "25-line, low-heat function should be Cottage" Cottage
+
+    testCase "classifyBuilding: medium function is Rowhouse" <| fun () ->
+      classifyBuilding 60 3 0.3f
+      |> Expect.equal "60-line, moderate function should be Rowhouse" Rowhouse
+
+    testCase "classifyBuilding: medium with noticeable heat is Commercial" <| fun () ->
+      classifyBuilding 80 5 0.5f
+      |> Expect.equal "80-line, 0.5-heat function should be Commercial" Commercial
+
+    testCase "classifyBuilding: large highly-used function is Tower" <| fun () ->
+      classifyBuilding 400 8 0.7f
+      |> Expect.equal "400-line, 0.7-heat function should be Tower" Tower
+
+    testCase "classifyBuilding: very large or very hot function is Skyscraper" <| fun () ->
+      classifyBuilding 700 12 0.9f
+      |> Expect.equal "700-line, 0.9-heat function should be Skyscraper" Skyscraper
+
+    testCase "classifyBuilding: heat alone can promote to Skyscraper" <| fun () ->
+      classifyBuilding 20 2 0.9f
+      |> Expect.equal "Small but extremely hot function should be Skyscraper" Skyscraper
+
+    testCase "classifyBuilding: line count alone can promote to Skyscraper" <| fun () ->
+      classifyBuilding 700 2 0.0f
+      |> Expect.equal "Very long cold function should be Skyscraper" Skyscraper
+
+    testCase "spacingMultiplier: residential types get more yard space than skyscrapers" <| fun () ->
+      let cottageMult  = BuildingType.spacingMultiplier Cottage
+      let scraperMult  = BuildingType.spacingMultiplier Skyscraper
+      (cottageMult, scraperMult)
+      |> Expect.isGreaterThan "Cottage needs more yard space than Skyscraper"
+
+    testCase "spacingMultiplier: Skyscraper is the most densely packed" <| fun () ->
+      let scraperMult = BuildingType.spacingMultiplier Skyscraper
+      for bt in [| Shed; Cottage; Rowhouse; Commercial; Tower |] do
+        let other = BuildingType.spacingMultiplier bt
+        (other, scraperMult)
+        |> Expect.isGreaterThanOrEqual (sprintf "%A should have more yard space than Skyscraper" bt)
+
+    testProperty "classifyBuilding never throws for any non-negative inputs" <| fun (lc: PositiveInt) (cx: PositiveInt) ->
+      let lineCount  = lc.Get % 10000
+      let complexity = cx.Get % 200
+      let heat       = float32 (lc.Get % 101) / 100.0f
+      let _ = classifyBuilding lineCount complexity heat
+      true
+
+    testCase "buildingHeight: Skyscraper is taller than Shed for same line count" <| fun () ->
+      let shedH    = BuildingType.height Shed        20 0.0f
+      let scraperH = BuildingType.height Skyscraper  20 0.8f
+      (scraperH, shedH)
+      |> Expect.isGreaterThan "Skyscraper height should exceed Shed height"
+
+    testCase "buildingTypeWallColor: each type returns a fully-opaque color" <| fun () ->
+      for bt in [| Shed; Cottage; Rowhouse; Commercial; Tower; Skyscraper |] do
+        let c = BuildingType.wallColor bt "testFunc"
+        c.A |> Expect.equal (sprintf "%A wall color should be opaque" bt) 255uy
+
+    testCase "buildingTypeWallColor: residential warm (R > B) vs skyscraper cool (B >= R)" <| fun () ->
+      let cottageC  = BuildingType.wallColor Cottage  "anyFunc"
+      let scraperC  = BuildingType.wallColor Skyscraper "anyFunc"
+      (int cottageC.R, int cottageC.B)
+      |> Expect.isGreaterThan "Cottage wall should be warm-tinted (R > B)"
+      (int scraperC.B, int scraperC.R)
+      |> Expect.isGreaterThanOrEqual "Skyscraper wall should be cool-tinted (B >= R)"
+
+    testCase "buildings from packAlongRoads have BuildingType field set" <| fun () ->
+      let rect  = { X = 0.0f; Z = 0.0f; W = 20.0f; H = 20.0f }
+      let roads = [ mkRoad 10.0f 0.0f 10.0f 20.0f 0.4f ]
+      let funcs = List.init 6 (fun i -> mkFunc (sprintf "f%d" i) "TypeMod")
+      let bldgs = packAlongRoads roads rect funcs Map.empty (Color(70uy, 130uy, 180uy, 255uy)) (Random 42)
+      bldgs |> Expect.isNonEmpty "should produce buildings"
+      // Each building should have a BuildingType — verify at least one non-Shed exists
+      // (since with 10-line functions and no heat the type is Shed or Cottage)
+      bldgs |> List.forall (fun b -> b.BuildingType = Shed || b.BuildingType = Cottage || b.BuildingType = Rowhouse)
+      |> Expect.isTrue "small test functions should classify as Shed/Cottage/Rowhouse"
+  ]
+
 let allTests =
   testList "CodeCity Domain" [
     colorMathTests
@@ -542,6 +703,8 @@ let allTests =
     organicFactorTests
     weberDistrictTests
     roadFrontageTests
+    packAlongRoadsTests
+    buildingTypologyTests
   ]
 
 [<EntryPoint>]

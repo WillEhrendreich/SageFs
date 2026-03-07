@@ -340,12 +340,19 @@ type CallEdge =
     To: string
     Weight: int }
 
+// ─── Building Typology ───────────────────────────────────────
+// Six discrete types that shape visual appearance and lot spacing.
+// Classification is heat-first (callers dominate perceived importance),
+// then line count.  Drives color palette, height scale, and yard width.
+type BuildingType = Shed | Cottage | Rowhouse | Commercial | Tower | Skyscraper
+
 type FuncBuilding =
   { Func: FuncDef
     Heat: float32         // 0..1 normalized (callers)
     CallerCount: int
     CalleeCount: int
     Complexity: int       // McCabe cyclomatic complexity
+    BuildingType: BuildingType
     X: float32; Z: float32
     W: float32; D: float32
     H: float32
@@ -402,6 +409,73 @@ module RoadClass =
     | 0 -> Avenue | 1 -> Avenue | 2 -> Street | 3 -> Lane | _ -> Alley
   let tier = function
     | Boulevard -> 8 | Avenue -> 6 | Street -> 4 | Lane -> 3 | Alley -> 2
+
+// ─── Building Typology Functions ─────────────────────────────
+
+/// Classify a function by line count, complexity, and caller heat.
+/// Heat [0,1] = normalised caller count; this is the dominant axis —
+/// a tiny but extremely hot function becomes a Skyscraper.
+let classifyBuilding (lineCount: int) (_complexity: int) (heat: float32) : BuildingType =
+  match heat, lineCount with
+  | h, lc when h >= 0.85f || lc >= 600 -> Skyscraper
+  | h, lc when h >= 0.65f || lc >= 300 -> Tower
+  | h, lc when h >= 0.40f || lc >= 100 -> Commercial
+  | h, lc when h >= 0.20f || lc >= 40  -> Rowhouse
+  | h, lc when h >= 0.05f || lc >= 8   -> Cottage
+  | _                                   -> Shed
+
+module BuildingType =
+  /// Yard-spacing multiplier relative to the base road segment spacing.
+  /// > 1 → more yard/garden space; < 1 → denser urban packing.
+  let spacingMultiplier = function
+    | Shed       -> 2.2f   // sparse; open plots between tiny sheds
+    | Cottage    -> 1.8f   // suburban yard feel
+    | Rowhouse   -> 1.0f   // tight urban rows
+    | Commercial -> 1.1f   // slight setback
+    | Tower      -> 0.90f  // office-park density
+    | Skyscraper -> 0.75f  // maximum packing
+
+  /// Characteristic wall color for a building type.
+  /// Uses deterministic hash-jitter so each building gets a unique shade.
+  let wallColor (bt: BuildingType) (funcName: string) : Color =
+    let br, bg, bb =
+      match bt with
+      | Shed       -> 158.0f, 138.0f, 108.0f   // weathered wood / tan
+      | Cottage    -> 210.0f, 175.0f, 140.0f   // warm cream
+      | Rowhouse   -> 163.0f, 108.0f,  82.0f   // brownstone / terracotta
+      | Commercial -> 193.0f, 193.0f, 198.0f   // light stone / concrete
+      | Tower      -> 152.0f, 164.0f, 175.0f   // steel / glass gray-blue
+      | Skyscraper -> 120.0f, 137.0f, 152.0f   // dark reflective glass
+    let jR = hashJitter (funcName + "wr") * 24.0f - 12.0f
+    let jG = hashJitter (funcName + "wg") * 24.0f - 12.0f
+    let jB = hashJitter (funcName + "wb") * 24.0f - 12.0f
+    let clamp v = byte (min 255.0f (max 0.0f v))
+    Color(clamp (br + jR), clamp (bg + jG), clamp (bb + jB), 255uy)
+
+  /// Roof color: residential types use warm clay tones; commercial/tower
+  /// use the district color; skyscraper uses dark glass.
+  let roofColor (bt: BuildingType) (districtColor: Color) : Color =
+    match bt with
+    | Shed       -> Color(88uy,  78uy, 62uy, 255uy)   // dark wood shingles
+    | Cottage    -> Color(168uy, 78uy, 58uy, 255uy)   // terracotta tiles
+    | Rowhouse   -> Color(138uy, 68uy, 52uy, 255uy)   // dark brick
+    | Commercial -> districtColor                      // flat roof, district tint
+    | Tower      -> districtColor                      // flat roof, district tint
+    | Skyscraper -> Color(72uy,  92uy, 112uy, 255uy)  // dark reflective glass top
+
+  /// Type-aware building height.  Heat boosts Tower/Skyscraper above their
+  /// line-count baseline so the hottest functions dominate the skyline.
+  let height (bt: BuildingType) (lineCount: int) (heat: float32) : float32 =
+    let lc = float32 lineCount
+    let h =
+      match bt with
+      | Shed       -> max 1.5f  (MathF.Log(lc + 1.0f) * 1.2f)
+      | Cottage    -> max 2.5f  (MathF.Log(lc + 1.0f) * 2.0f)
+      | Rowhouse   -> max 4.0f  (MathF.Log(lc + 1.0f) * 3.5f)
+      | Commercial -> max 6.0f  (MathF.Log(lc + 1.0f) * 5.0f)
+      | Tower      -> max 8.0f  (MathF.Log(lc + 1.0f) * 6.0f + heat * 10.0f)
+      | Skyscraper -> max 12.0f (MathF.Log(lc + 1.0f) * 6.5f + heat * 15.0f)
+    min 55.0f h
 
 // ─── Git Metadata ────────────────────────────────────────────
 
@@ -1222,22 +1296,18 @@ let packInBlock (poly: Vec2 list) (funcs: FuncDef list) (heatMap: Map<string, fl
             heatMap |> Map.tryFind f.QualifiedName
             |> Option.defaultValue (0.0f, 0, 0)
           let complexity = computeComplexity f.Body
+          let bt = classifyBuilding f.LineCount complexity heat
           let footprint = min (min colW rowH * 0.85f) (max 1.0f (MathF.Log(float32 f.LineCount + 1.0f) * 0.8f + MathF.Log(float32 complexity + 1.0f) * 0.4f))
-          let height = max 1.5f (MathF.Log(float32 f.LineCount + 1.0f) * 5.0f)
-          // Neutral wall color with slight variation
-          let baseGray = 140uy + byte (rng.Next(40))
-          let wallR = baseGray
-          let wallG = baseGray - 5uy + byte (rng.Next(10))
-          let wallB = baseGray - 10uy + byte (rng.Next(15))
           Some { Func = f; Heat = heat; CallerCount = callers; CalleeCount = callees
                  Complexity = complexity
+                 BuildingType = bt
                  X = cx - footprint / 2.0f; Z = cz - footprint / 2.0f
                  W = footprint; D = footprint
-                 H = height
-                 Rotation = rotationJitter f.Name 5.0f
-                 Color = Color(wallR, wallG, wallB, 255uy)
-                 RoofColor = districtColor
-                 District = f.Module })
+                 H = BuildingType.height bt f.LineCount heat
+                 Rotation  = rotationJitter f.Name 5.0f
+                 Color     = BuildingType.wallColor bt f.Name
+                 RoofColor = BuildingType.roofColor bt districtColor
+                 District  = f.Module })
       |> List.choose id
 
 /// Minimum distance from point (px,pz) to the nearest polygon boundary edge.
@@ -1310,22 +1380,21 @@ let packAlongEdges
         if pointInPoly poly px pz then
           let heat, callers, callees =
             heatMap |> Map.tryFind f.QualifiedName |> Option.defaultValue (0.0f, 0, 0)
-          let complexity  = computeComplexity f.Body
-          let fp = max 0.3f (min (spacing * 0.75f) (MathF.Log(float32 f.LineCount + 1.0f) * 0.5f + 0.3f))
-          let height = max 1.5f (MathF.Log(float32 f.LineCount + 1.0f) * 5.0f)
-          let baseGray = 140uy + byte (rng.Next 40)
-          let wallG    = byte (max 0 (int baseGray - 5  + rng.Next 10))
-          let wallB    = byte (max 0 (int baseGray - 10 + rng.Next 15))
-          let jitter   = (rng.NextSingle() - 0.5f) * 4.0f
+          let complexity = computeComplexity f.Body
+          let bt  = classifyBuilding f.LineCount complexity heat
+          let fp  = max 0.3f (min (spacing * 0.75f) (MathF.Log(float32 f.LineCount + 1.0f) * 0.5f + 0.3f))
+          let jitter = (rng.NextSingle() - 0.5f) * 4.0f
           allBuildings.Add {
             Func = f; Heat = heat; CallerCount = callers; CalleeCount = callees
             Complexity = complexity
+            BuildingType = bt
             X = px - fp / 2.0f; Z = pz - fp / 2.0f
-            W = fp; D = fp; H = height
-            Rotation    = roadAngle + jitter
-            Color       = Color(baseGray, wallG, wallB, 255uy)
-            RoofColor   = districtColor
-            District    = f.Module })
+            W = fp; D = fp
+            H = BuildingType.height bt f.LineCount heat
+            Rotation  = roadAngle + jitter
+            Color     = BuildingType.wallColor bt f.Name
+            RoofColor = BuildingType.roofColor bt districtColor
+            District  = f.Module })
 
     // Distribute functions proportionally by edge length
     for ei in 0 .. edges.Length - 1 do
@@ -1383,6 +1452,7 @@ let layoutInGrid
           let heat, callers, callees =
             heatMap |> Map.tryFind f.QualifiedName |> Option.defaultValue (0.0f, 0, 0)
           let complexity = computeComplexity f.Body
+          let bt = classifyBuilding f.LineCount complexity heat
           let coverage = 0.55f + 0.25f * (float32 f.LineCount / float32 globalMaxLineCount) |> min 0.85f
           let bldgW = max 0.3f (cellW * sqrt(coverage))
           let bldgD = max 0.3f (cellH * sqrt(coverage))
@@ -1390,23 +1460,15 @@ let layoutInGrid
           let baseH = 1.2f + 33.8f * MathF.Pow(normComplexity, 0.45f)
           let jitter = 1.0f + (hashJitter f.Name - 0.5f) * 0.2f
           let finalH = baseH * jitter
-          let dr, dg, db = float32 districtColor.R, float32 districtColor.G, float32 districtColor.B
-          let gray = 0.299f * dr + 0.587f * dg + 0.114f * db
-          let desat = 0.25f
-          let lr = gray + desat * (dr - gray)
-          let lg = gray + desat * (dg - gray)
-          let lb = gray + desat * (db - gray)
-          let lightnessShift = 0.75f + (hashJitter (f.Name + "lt")) * 0.30f
-          let wallR = byte (min 255.0f (max 30.0f (lr * lightnessShift)))
-          let wallG = byte (min 255.0f (max 30.0f (lg * lightnessShift)))
-          let wallB = byte (min 255.0f (max 30.0f (lb * lightnessShift)))
           { Func = f; Heat = heat; CallerCount = callers; CalleeCount = callees
             Complexity = complexity
+            BuildingType = bt
             X = cx - bldgW / 2.0f; Z = cz - bldgD / 2.0f
             W = bldgW; D = bldgD; H = finalH
-            Rotation = rotationJitter f.Name 3.0f
-            Color = Color(wallR, wallG, wallB, 255uy)
-            RoofColor = districtColor; District = f.Module })
+            Rotation  = rotationJitter f.Name 3.0f
+            Color     = BuildingType.wallColor bt f.Name
+            RoofColor = BuildingType.roofColor bt districtColor
+            District  = f.Module })
       let alleyColor = Color(60uy, 60uy, 65uy, 255uy)
       // Vertical lane between column c and c+1 (constant X, full block Z span)
       // Half-width packed in Y component for dynamic rendering in buildStaticMesh
@@ -1429,10 +1491,114 @@ let layoutInGrid
                     Weight = RoadClass.tier Alley; Color = alleyColor } ]
       (buildings, vertAlleys @ horizAlleys)
 
+/// Road-primary building placement for Weber districts.
+/// Places buildings on BOTH sides of each road segment with perpendicular setback.
+/// No DCEL face polygon traversal — buildings are placed directly adjacent to visible roads.
+/// Falls back to packAlongEdges on the block perimeter if no internal roads exist.
+let packAlongRoads
+  (roads: Road list)
+  (blockBounds: TRect)
+  (funcs: FuncDef list)
+  (heatMap: Map<string, float32 * int * int>)
+  (districtColor: Color)
+  (rng: Random)
+  : FuncBuilding list =
+  if funcs.IsEmpty then []
+  else
+    // Extract 2D segments; half-width is packed in FromPos.Y by convention
+    let segs =
+      [ for r in roads do
+          let ax = r.FromPos.X
+          let az = r.FromPos.Z
+          let bx = r.ToPos.X
+          let bz = r.ToPos.Z
+          let dx = bx - ax
+          let dz = bz - az
+          let len = sqrt (dx * dx + dz * dz)
+          if len > 0.3f then
+            let hw = r.FromPos.Y
+            yield (ax, az, dx / len, dz / len, len, hw) ]
+
+    if segs.IsEmpty then
+      // No internal Weber roads — fall back to block-perimeter packing
+      let poly =
+        [ Vec2.Create(blockBounds.X,                 blockBounds.Z)
+          Vec2.Create(blockBounds.X + blockBounds.W, blockBounds.Z)
+          Vec2.Create(blockBounds.X + blockBounds.W, blockBounds.Z + blockBounds.H)
+          Vec2.Create(blockBounds.X,                 blockBounds.Z + blockBounds.H) ]
+      packAlongEdges poly funcs heatMap districtColor rng
+    else
+      let totalLen    = segs |> List.sumBy (fun (_,_,_,_,l,_) -> l) |> max 0.001f
+      let sortedFuncs = funcs |> List.sortByDescending (fun f -> f.LineCount)
+      let mutable remaining = sortedFuncs
+      let allBuildings = ResizeArray<FuncBuilding>()
+      let bx0 = blockBounds.X
+      let bx1 = blockBounds.X + blockBounds.W
+      let bz0 = blockBounds.Z
+      let bz1 = blockBounds.Z + blockBounds.H
+      let eps = 0.6f  // small tolerance for near-boundary placements
+
+      let placeSide (chunk: FuncDef list) (ax: float32) (az: float32) (dirX: float32) (dirZ: float32) (segLen: float32) (hw: float32) (sideSign: float32) =
+        // Perpendicular inward from road: left or right of direction vector
+        let perpX = -dirZ * sideSign
+        let perpZ =  dirX * sideSign
+        let setback  = hw + 0.5f                      // clear road surface + sidewalk
+        let spacing  = segLen / float32 (chunk.Length + 1)
+        let roadAngle = MathF.Atan2(dirZ, dirX) * 180.0f / MathF.PI
+        chunk |> List.iteri (fun idx f ->
+          let t  = float32 (idx + 1) * spacing
+          let px = ax + t * dirX + perpX * setback
+          let pz = az + t * dirZ + perpZ * setback
+          if px >= bx0 - eps && px <= bx1 + eps && pz >= bz0 - eps && pz <= bz1 + eps then
+            let heat, callers, callees =
+              heatMap |> Map.tryFind f.QualifiedName |> Option.defaultValue (0.0f, 0, 0)
+            let complexity = computeComplexity f.Body
+            let bt   = classifyBuilding f.LineCount complexity heat
+            let fp   = max 0.3f (min (spacing * 0.8f) (MathF.Log(float32 f.LineCount + 1.0f) * 0.5f + 0.3f))
+            let jitter = (rng.NextSingle() - 0.5f) * 4.0f
+            allBuildings.Add {
+              Func = f; Heat = heat; CallerCount = callers; CalleeCount = callees
+              Complexity = complexity
+              BuildingType = bt
+              X = px - fp / 2.0f; Z = pz - fp / 2.0f
+              W = fp; D = fp
+              H = BuildingType.height bt f.LineCount heat
+              Rotation  = roadAngle + jitter
+              Color     = BuildingType.wallColor bt f.Name
+              RoofColor = BuildingType.roofColor bt districtColor
+              District  = f.Module })
+
+      for (ax, az, dirX, dirZ, segLen, hw) in segs do
+        if not remaining.IsEmpty then
+          let count = max 1 (int (float32 funcs.Length * segLen / totalLen + 0.5f))
+          let take  = min count remaining.Length
+          if take > 0 then
+            let chunk   = remaining |> List.take take
+            remaining  <- remaining |> List.skip take
+            // Split chunk evenly between left side (+1) and right side (−1)
+            let lCount  = (take + 1) / 2
+            placeSide (chunk |> List.take lCount)   ax az dirX dirZ segLen hw  1.0f
+            placeSide (chunk |> List.skip lCount)   ax az dirX dirZ segLen hw -1.0f
+
+      // Overflow spills to the longest segment
+      if not remaining.IsEmpty then
+        let (ax, az, dirX, dirZ, segLen, hw) = segs |> List.maxBy (fun (_,_,_,_,l,_) -> l)
+        placeSide remaining ax az dirX dirZ segLen hw 1.0f
+
+      // Ultimate fallback: if every placement was out-of-bounds, use perimeter packing
+      if allBuildings.Count = 0 then
+        let poly =
+          [ Vec2.Create(blockBounds.X,                 blockBounds.Z)
+            Vec2.Create(blockBounds.X + blockBounds.W, blockBounds.Z)
+            Vec2.Create(blockBounds.X + blockBounds.W, blockBounds.Z + blockBounds.H)
+            Vec2.Create(blockBounds.X,                 blockBounds.Z + blockBounds.H) ]
+        packAlongEdges poly funcs heatMap districtColor rng
+      else
+        allBuildings |> Seq.toList
+
 /// Weber-based organic district layout. Roads grow first (Weber §3 algorithm),
-/// buildings fill the face-polygon parcels that emerge. 
+/// buildings placed road-primary via packAlongRoads — no face polygon traversal.
 /// organic=0 → Manhattan grid; organic=1 → Paris-style curved streets.
-/// Uses boundary edges to keep road growth inside the block rect.
 let layoutWeberDistrict
   (rect: TRect) (funcs: FuncDef list)
   (heatMap: Map<string, float32 * int * int>)
@@ -1440,7 +1606,7 @@ let layoutWeberDistrict
   (globalMaxComplexity: int) (globalMaxLineCount: int)
   (organic: float32) (rng: Random)
   : FuncBuilding list * Road list =
-  ignore (globalMaxComplexity, globalMaxLineCount)  // packInBlock uses its own formula
+  ignore (globalMaxComplexity, globalMaxLineCount)
   if funcs.IsEmpty then ([], [])
   elif rect.W < 1.5f || rect.H < 1.5f then ([], [])
   else
@@ -1461,12 +1627,10 @@ let layoutWeberDistrict
     // Snapshot edge count BEFORE growth (boundary = 4 edges; internal = everything grown after)
     let boundaryEdgeCount = g.EdgeCount
 
-    // Central seed so growth radiates from inside the block
     g.AddNode(Vec2.Create(cx, cz), Street) |> ignore
 
     let isGrid   = organic < 0.4f
     let centers  = [| Vec2.Create(cx, cz) |]
-    // Segment length ≈ √(area / funcCount) × 2, capped for readability
     let baseLen  = sqrt(rect.W * rect.H / float32 (max 3 funcs.Length)) * 2.0f |> max 1.0f |> min 5.0f
     let snapR    = baseLen * 0.45f
     let sMin     = baseLen * 0.25f
@@ -1476,7 +1640,7 @@ let layoutWeberDistrict
     if funcs.Length >= 6 then
       growStreets g centers rng Lane isGrid (baseLen * 0.65f) (snapR * 0.6f) (sMin * 0.6f) (maxEdges / 2) 0.15f
 
-    // Internal roads only — skip the 4 boundary edges (they'd z-fight with perimeter streets)
+    // Internal roads only — exclude boundary edges (they render at district/city level)
     let weberRoads =
       [ for e in g.Edges do
           if EdgeId.value e.Id >= boundaryEdgeCount then
@@ -1489,61 +1653,8 @@ let layoutWeberDistrict
                     Weight  = RoadClass.tier e.Class
                     Color   = Color(65uy, 65uy, 70uy, 255uy) } ]
 
-    // Distribute functions to face parcels proportional to area.
-    // Filter to "live" faces only — when a road splits a face, old face IDs become zombies
-    // (their starting half-edge's Face pointer gets reassigned to the new parcel face).
-    let faceAreas =
-      [ for f in g.Faces do
-          let h = g.H f.HalfEdge
-          if h.Face = Some f.Id then           // live: starting half-edge still belongs here
-            let area = g.FaceArea(f.Id)
-            if area > 0.5f then                // skip degenerate near-zero faces
-              yield (f.Id, area) ]
-      |> List.sortByDescending snd
-
-    if faceAreas.IsEmpty then
-      // No faces detected (graph too sparse) — fall back to whole-rect packing
-      let poly =
-        [ Vec2.Create(rect.X,          rect.Z)
-          Vec2.Create(rect.X + rect.W, rect.Z)
-          Vec2.Create(rect.X + rect.W, rect.Z + rect.H)
-          Vec2.Create(rect.X,          rect.Z + rect.H) ]
-      (packAlongEdges poly funcs heatMap districtColor rng, weberRoads)
-    else
-      let totalArea   = faceAreas |> List.sumBy snd |> max 0.001f
-      let sortedFuncs = funcs |> List.sortByDescending (fun f -> f.LineCount)
-      let mutable remaining = sortedFuncs
-      let allBuildings = ResizeArray<FuncBuilding>()
-
-      for i in 0 .. faceAreas.Length - 1 do
-        let (fid, area) = faceAreas.[i]
-        if not remaining.IsEmpty then
-          let isLast = i = faceAreas.Length - 1
-          let count =
-            if isLast then remaining.Length
-            else max 1 (int (float32 sortedFuncs.Length * area / totalArea + 0.5f))
-          let take = min count remaining.Length
-          if take > 0 then
-            let chunk  = remaining |> List.take take
-            remaining <- remaining |> List.skip take
-            let poly   = g.FacePolygon(fid)
-            allBuildings.AddRange(packAlongEdges poly chunk heatMap districtColor rng)
-
-      // Any leftover functions spill to the largest face
-      if not remaining.IsEmpty then
-        let (fid, _) = faceAreas |> List.head
-        allBuildings.AddRange(packAlongEdges (g.FacePolygon(fid)) remaining heatMap districtColor rng)
-
-      // Safety fallback: if Weber face packing produced nothing, pack into the full block rect
-      if allBuildings.Count = 0 then
-        let fullRect =
-          [ Vec2.Create(rect.X,          rect.Z)
-            Vec2.Create(rect.X + rect.W, rect.Z)
-            Vec2.Create(rect.X + rect.W, rect.Z + rect.H)
-            Vec2.Create(rect.X,          rect.Z + rect.H) ]
-        (packAlongEdges fullRect funcs heatMap districtColor rng, weberRoads)
-      else
-        (allBuildings |> Seq.toList, weberRoads)
+    let buildings = packAlongRoads weberRoads rect funcs heatMap districtColor rng
+    (buildings, weberRoads)
 
 
 let districtPalette =
@@ -2421,10 +2532,18 @@ let drawDistrictLabels2D
       drawUiText sub (bx + 8) (by + 8 + theme.DistrictTitle) theme.DistrictSubtitle (darken district.Color 0.8f)
 
 let drawTooltip (b: FuncBuilding) (mx: int) (my: int) (theme: UiTextTheme) =
+  let typeLabel =
+    match b.BuildingType with
+    | Shed       -> "⌂ Shed"
+    | Cottage    -> "⌂ Cottage"
+    | Rowhouse   -> "⌂ Rowhouse"
+    | Commercial -> "▣ Commercial"
+    | Tower      -> "▲ Tower"
+    | Skyscraper -> "◆ Skyscraper"
   let lines = [|
     sprintf "%s.%s" b.Func.Module b.Func.Name
     sprintf "%s:%d-%d" b.Func.RelPath b.Func.StartLine b.Func.EndLine
-    sprintf "%d lines  ·  heat %.0f%%" b.Func.LineCount (b.Heat * 100.0f)
+    sprintf "%d lines  ·  heat %.0f%%  ·  %s" b.Func.LineCount (b.Heat * 100.0f) typeLabel
     sprintf "%d callers  ·  %d callees" b.CallerCount b.CalleeCount
     sprintf "District: %s" b.District
   |]
@@ -2595,8 +2714,12 @@ let drawSelectionPanel
 
     addLine theme.SelectionTitle (sprintf "Pinned: %s.%s" pinned.Func.Module pinned.Func.Name) selectedBuildingColor
     addLine theme.SelectionBody (sprintf "%s:%d-%d" pinned.Func.RelPath pinned.Func.StartLine pinned.Func.EndLine) (Color(160uy, 160uy, 175uy, 255uy))
-    addLine theme.SelectionBody (sprintf "%d lines  ·  complexity %d  ·  heat %.0f%%"
-      pinned.Func.LineCount pinned.Complexity (pinned.Heat * 100.0f)) (Color(215uy, 215uy, 225uy, 255uy))
+    let typeStr =
+      match pinned.BuildingType with
+      | Shed       -> "Shed" | Cottage    -> "Cottage" | Rowhouse   -> "Rowhouse"
+      | Commercial -> "Commercial" | Tower      -> "Tower" | Skyscraper -> "Skyscraper"
+    addLine theme.SelectionBody (sprintf "%d lines  ·  complexity %d  ·  heat %.0f%%  ·  %s"
+      pinned.Func.LineCount pinned.Complexity (pinned.Heat * 100.0f) typeStr) (Color(215uy, 215uy, 225uy, 255uy))
     addLine theme.SelectionBody (sprintf "%d callers  ·  %d callees  ·  link arcs %s"
       incoming.Length outgoing.Length (if showCallLinks then "visible" else "hidden")) (Color(190uy, 190uy, 200uy, 255uy))
     addLine theme.SelectionTitle "Detected callers" incomingRelationColor

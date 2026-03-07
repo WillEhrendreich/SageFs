@@ -2,7 +2,7 @@
   "name": "sagefs",
   "displayName": "SageFs — Live F# Development",
   "description": "Send F# code to SageFs for instant evaluation, type-checking, and hot reload.",
-  "version": "0.5.649",
+  "version": "0.5.650",
   "publisher": "sagefs",
   "license": "MIT",
   "icon": "icon.png",
@@ -82,6 +82,10 @@
       {
         "command": "sagefs.createSession",
         "title": "SageFs: Create Session"
+      },
+      {
+        "command": "sagefs.configureWarmupAutoOpen",
+        "title": "SageFs: Configure Warmup Auto-Open"
       },
       {
         "command": "sagefs.switchSession",
