@@ -548,6 +548,33 @@ module CoverageBitmap =
         let allLineCov = ILCoverage.computeLineCoverage state
         allLineCov |> Map.tryFind filePath |> Option.defaultValue Map.empty
 
+  /// Compute per-test coverage weights for a set of changed files.
+  /// Weight = popCount(intersect(testBitmap, fileMask)) — how many probes the test
+  /// hits in the changed file(s). Uses file-level granularity (not line-level).
+  let computeCoverageWeights
+    (changedFiles: string list)
+    (maps: InstrumentationMap array)
+    (bitmaps: Map<TestId, CoverageBitmap>)
+    : Map<TestId, int> =
+    match changedFiles with
+    | [] -> Map.empty
+    | _ ->
+      let fileMasks =
+        changedFiles
+        |> List.map (fun fp -> buildFileMask fp maps)
+        |> List.filter (fun m -> m.Count > 0 && popCount m > 0)
+      match fileMasks with
+      | [] -> Map.empty
+      | _ ->
+        bitmaps
+        |> Map.map (fun _ bm ->
+          fileMasks
+          |> List.sumBy (fun mask ->
+            match bm.Count = mask.Count with
+            | true -> popCount (intersect bm mask)
+            | false -> 0))
+        |> Map.filter (fun _ weight -> weight > 0)
+
 /// Per-test coverage info for a specific symbol
 type CoveringTestInfo = {
   TestId: TestId
@@ -1976,6 +2003,27 @@ type TestCycleDecision =
   | TreeSitterOnly
   | FullCycle of affectedTestIds: TestId array
 
+/// Context for test prioritization including coverage weights and flaky classifications.
+type PrioritizationContext = {
+  LastResults: Map<TestId, TestRunResult>
+  /// Coverage weight per test — popCount of intersection between test bitmap and changed-file mask.
+  /// Higher values mean the test covers more probes in the changed file(s).
+  CoverageWeights: Map<TestId, int>
+  /// Flaky classifications per test — used to demote environmentally flaky failures.
+  FlakyClassifications: Map<TestId, FlakyClassification>
+}
+
+module PrioritizationContext =
+  let empty = {
+    LastResults = Map.empty
+    CoverageWeights = Map.empty
+    FlakyClassifications = Map.empty
+  }
+
+  let fromLastResults (lastResults: Map<TestId, TestRunResult>) = {
+    empty with LastResults = lastResults
+  }
+
 module TestPrioritization =
   let durationMs (r: TestResult) =
     match r with
@@ -1984,21 +2032,46 @@ module TestPrioritization =
     | TestResult.Skipped _ -> 0.0
     | TestResult.NotRun -> 0.0
 
+  /// Compute the prioritization tier for a test, accounting for flaky demotion.
+  /// Environmentally flaky failures are demoted from tier 0 to tier 2 (same as passed)
+  /// so they don't steal attention from honest failures.
+  let computeTier
+    (flakyClassifications: Map<TestId, FlakyClassification>)
+    (testId: TestId)
+    (result: TestResult)
+    : int =
+    match result with
+    | TestResult.Failed _ ->
+      match Map.tryFind testId flakyClassifications with
+      | Some (FlakyClassification.Environmental _) -> 2
+      | _ -> 0
+    | TestResult.Passed _ -> 2
+    | TestResult.Skipped _ -> 3
+    | TestResult.NotRun -> 4
+
+  /// Build the lexicographic sort key: (tier, -coverageWeight, durationMs).
+  /// Negated coverage weight ensures higher coverage sorts first within the same tier.
+  let buildSortKey (ctx: PrioritizationContext) (tc: TestCase) : int * int * float =
+    match Map.tryFind tc.Id ctx.LastResults with
+    | Some result ->
+      let tier = computeTier ctx.FlakyClassifications tc.Id result.Result
+      let coverageWeight =
+        -(ctx.CoverageWeights |> Map.tryFind tc.Id |> Option.defaultValue 0)
+      (tier, coverageWeight, durationMs result.Result)
+    | None -> (1, 0, 0.0)
+
+  /// Sort tests: failed → new/unknown → fast-passed → slow-passed → skipped → not-run.
+  /// Within each tier, tests covering more of the changed file run first.
+  /// Within same coverage weight, fastest tests come first.
+  /// Environmentally flaky failures are demoted to the passed tier.
+  let prioritizeWithContext (ctx: PrioritizationContext) (tests: TestCase array) : TestCase array =
+    tests |> Array.sortBy (buildSortKey ctx)
+
+  /// Legacy overload for backward compatibility.
   /// Sort tests: failed → new/unknown → fast-passed → slow-passed → skipped → not-run.
   /// Within each tier, fastest tests come first.
   let prioritize (lastResults: Map<TestId, TestRunResult>) (tests: TestCase array) : TestCase array =
-    tests
-    |> Array.sortBy (fun tc ->
-      match Map.tryFind tc.Id lastResults with
-      | Some result ->
-        let tier =
-          match result.Result with
-          | TestResult.Failed _ -> 0
-          | TestResult.Passed _ -> 2
-          | TestResult.Skipped _ -> 3
-          | TestResult.NotRun -> 4
-        (tier, durationMs result.Result)
-      | None -> (1, 0.0))
+    prioritizeWithContext (PrioritizationContext.fromLastResults lastResults) tests
 
 module TestCycleOrchestrator =
   let decide
@@ -2170,8 +2243,25 @@ module TestCycleEffects =
           state.DiscoveredTests
           |> Array.filter (fun tc -> affectedSet.Contains tc.Id)
         let filtered =
+          let allMaps =
+            instrumentationMaps |> Map.values |> Seq.collect id |> Array.ofSeq
+          let coverageWeights =
+            CoverageBitmap.computeCoverageWeights [changedFilePath] allMaps state.TestCoverageBitmaps
+          let flakyClassifications =
+            affectedTests
+            |> Array.choose (fun tc ->
+              let c = FlakyDetection.classifyFlakiness tc.Id state.FlakyHistory state.LastResults
+              match c with
+              | FlakyClassification.Insufficient | FlakyClassification.Stable -> None
+              | _ -> Some (tc.Id, c))
+            |> Map.ofArray
+          let ctx : PrioritizationContext = {
+            LastResults = state.LastResults
+            CoverageWeights = coverageWeights
+            FlakyClassifications = flakyClassifications
+          }
           PolicyFilter.filterTests state.RunPolicies trigger affectedTests
-          |> TestPrioritization.prioritize state.LastResults
+          |> TestPrioritization.prioritizeWithContext ctx
         match Array.isEmpty filtered with
         | true -> []
         | false ->
