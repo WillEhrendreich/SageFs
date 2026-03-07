@@ -1703,6 +1703,7 @@ module McpTools =
     | TimedOut of passed: int * failed: int * running: int * total: int * failures: FailedTestInfo list * runningNames: string list
     | Disabled
     | NoTestsMatched of totalDiscovered: int
+    | AlreadyRunning
 
   module RunTestsResult =
     let formatFailures (failures: FailedTestInfo list) =
@@ -1753,16 +1754,19 @@ module McpTools =
         "Live testing is disabled. Toggle it on first."
       | NoTestsMatched totalDiscovered ->
         sprintf "No tests matched. Total discovered: %d." totalDiscovered
+      | AlreadyRunning ->
+        "⚠️ A test run is already in progress. Wait for it to complete or check status with get_live_test_status."
 
   let collectResults
     (entries: Features.LiveTesting.TestStatusEntry array)
     (triggeredSet: Set<Features.LiveTesting.TestId>)
     (flakyHistory: Map<Features.LiveTesting.TestId, Features.LiveTesting.ResultWindow>)
-    : int * int * int * FailedTestInfo list * string list =
+    : int * int * int * int * FailedTestInfo list * string list =
     let mutable passed = 0
     let mutable failed = 0
     let mutable running = 0
     let mutable skipped = 0
+    let mutable stale = 0
     let failures = System.Collections.Generic.List<FailedTestInfo>()
     let runningNames = System.Collections.Generic.List<string>()
     for e in entries do
@@ -1796,9 +1800,9 @@ module McpTools =
         | Features.LiveTesting.TestRunStatus.Queued ->
           running <- running + 1
           runningNames.Add (sprintf "%s (queued)" e.DisplayName)
-        | Features.LiveTesting.TestRunStatus.Stale -> skipped <- skipped + 1
+        | Features.LiveTesting.TestRunStatus.Stale -> stale <- stale + 1
       | false -> ()
-    (passed + skipped, failed, running, failures |> Seq.toList, runningNames |> Seq.toList)
+    (passed + skipped, failed, running, stale, failures |> Seq.toList, runningNames |> Seq.toList)
 
   let pollForTestCompletion
     (getModel: unit -> SageFsModel)
@@ -1812,7 +1816,7 @@ module McpTools =
       let entries = model.LiveTesting.TestState.StatusEntries
       let triggeredSet = Set.ofArray triggeredTestIds
       let flakyHistory = model.LiveTesting.TestState.FlakyHistory
-      let (p, f, _, failures, _) = collectResults entries triggeredSet flakyHistory
+      let (p, f, _, _stale, failures, _) = collectResults entries triggeredSet flakyHistory
       Task.FromResult (Completed (p, f, total, failures))
     | false ->
       task {
@@ -1823,8 +1827,8 @@ module McpTools =
           let model = getModel ()
           let entries = model.LiveTesting.TestState.StatusEntries
           let flakyHistory = model.LiveTesting.TestState.FlakyHistory
-          let (p, f, r, failures, _) = collectResults entries triggeredSet flakyHistory
-          match p + f >= total with
+          let (p, f, r, stale, failures, _) = collectResults entries triggeredSet flakyHistory
+          match p + f + stale >= total with
           | true ->
             result <- Some (Completed (p, f, total, failures))
           | false ->
@@ -1835,7 +1839,7 @@ module McpTools =
           let model = getModel ()
           let entries = model.LiveTesting.TestState.StatusEntries
           let flakyHistory = model.LiveTesting.TestState.FlakyHistory
-          let (p, f, r, failures, runningNames) = collectResults entries triggeredSet flakyHistory
+          let (p, f, r, _stale, failures, runningNames) = collectResults entries triggeredSet flakyHistory
           return TimedOut (p, f, r, total, failures, runningNames)
       }
 
@@ -1855,6 +1859,11 @@ module McpTools =
       | true ->
         Task.FromResult (RunTestsResult.format Disabled)
       | false ->
+        // Guard: prevent overlapping test runs (MCP retry can trigger double dispatch)
+        match Features.LiveTesting.TestRunPhase.isAnyRunning state.RunPhases with
+        | true ->
+          Task.FromResult (RunTestsResult.format AlreadyRunning)
+        | false ->
         let category =
           match categoryFilter with
           | Some c ->
