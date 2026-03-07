@@ -9,6 +9,7 @@
         <Compile Include="Args.fs" />
         <Compile Include="Utils.fs" />
         <Compile Include="Timeouts.fs" />
+        <Compile Include="BatchFlusher.fs" />
         <Compile Include="BinaryFormat.fs" />
         <Compile Include="Instrumentation.fs" />
         <Compile Include="FeatureParity.fs" />

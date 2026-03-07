@@ -1285,23 +1285,13 @@ module SageFsEffectHandler =
                     proxy <- deps.GetStreamingTestProxy sid
                   match proxy with
                   | Some streamProxy ->
-                    let resultBuffer = System.Collections.Concurrent.ConcurrentQueue<Features.LiveTesting.TestRunResult>()
-                    let flushBuffer () =
-                      let batch = System.Collections.Generic.List<Features.LiveTesting.TestRunResult>()
-                      let mutable item = Unchecked.defaultof<_>
-                      while resultBuffer.TryDequeue(&item) do
-                        batch.Add(item)
-                      match batch.Count > 0 with
-                      | true ->
-                        Instrumentation.testResultBatchSize.Record(int64 batch.Count)
-                        dispatch (SageFsMsg.Event (SageFsEvent.TestResultsBatch (batch.ToArray())))
-                      | false -> ()
-                    let batchSize = 50
+                    use resultFlusher =
+                      new BatchFlusher<Features.LiveTesting.TestRunResult>(25, 200, fun batch ->
+                        Instrumentation.testResultBatchSize.Record(int64 batch.Length)
+                        dispatch (SageFsMsg.Event (SageFsEvent.TestResultsBatch batch))
+                      )
                     let onResult (result: Features.LiveTesting.TestRunResult) =
-                      resultBuffer.Enqueue(result)
-                      match resultBuffer.Count >= batchSize with
-                      | true -> flushBuffer ()
-                      | false -> ()
+                      resultFlusher.Add(result)
                     let onCoverage (hits: bool array) =
                       let mergedMap = Features.LiveTesting.InstrumentationMap.merge instrumentationMaps
                       match mergedMap.TotalProbes > 0 && hits.Length = mergedMap.TotalProbes with
@@ -1319,7 +1309,7 @@ module SageFsEffectHandler =
                       | false -> ()
                     let parallelism = max 4 (Environment.ProcessorCount / 2)
                     do! streamProxy tests parallelism onResult onCoverage
-                    flushBuffer () // flush any remaining results
+                    // BatchFlusher's Dispose (via 'use') flushes remaining results
                   | None ->
                     let notRunResults =
                       tests |> Array.map (fun tc ->
