@@ -103,6 +103,38 @@ These design decisions exist for specific reasons. Before changing them, underst
 
 ## ⚠️ Known Limitations
 
+### Content Security Policy (CSP)
+
+DevReload injects an inline `<script>` tag into HTML responses. If your app uses a
+strict Content-Security-Policy header, the injected script may be blocked.
+
+**Automatic handling (v0.5.618+):** When DevReload detects a CSP header on the response,
+it automatically:
+1. Generates a cryptographic nonce (`RandomNumberGenerator.GetBytes(16)`)
+2. Adds `nonce="..."` to the injected script tag
+3. Appends `'nonce-...'` to the CSP header's `script-src` directive
+
+This works for most CSP configurations. However, it does **not** work when:
+- CSP is delivered via `<meta http-equiv="Content-Security-Policy">` (only response headers are patched)
+- CSP uses `'strict-dynamic'` without a nonce source (the nonce is added but `strict-dynamic` requires
+  scripts to be loaded by trusted scripts, not injected)
+- A reverse proxy strips or overrides the modified CSP header after middleware runs
+
+**Workarounds for edge cases:**
+```bash
+# Option 1: Disable DevReload entirely
+SAGEFS_DEVRELOAD=0 SageFs --proj MyProject.fsproj
+
+# Option 2: Add SageFs's script hash to your CSP
+# (hash changes each release — not recommended for long-term use)
+
+# Option 3: Use 'unsafe-inline' in development CSP only
+# Most frameworks have env-conditional CSP configuration
+```
+
+**Diagnostic logging:** Set log level to Debug to see `[DevReload] Injected CSP nonce for /path`
+messages confirming nonce injection is working.
+
 ### Project Loading with `--proj`
 When using `SageFs --proj MyProject.fsproj`:
 - SageFs loads **compiled DLLs**, not source code
@@ -147,15 +179,19 @@ SageFs --proj MyProject.fsproj --no-watch
 
 | File | Purpose |
 |------|---------|
-| `SageFs.Core/DevReload.fs` | Pure broadcaster: 3-case DU, Channel-per-client, AppDomain shared state |
-| `SageFs/DevReloadMiddleware.fs` | ASP.NET middleware: SSE endpoint + HTML script injection + error overlay |
+| `SageFs.Core/DevReload.fs` | Pure broadcaster: 4-event DU, Channel-per-client, AppDomain shared state, diagnostic logging |
+| `SageFs/Resources/devreload.js` | Browser-side JS: WCAG AA error panel, smart auto-reload, editor links, ARIA |
+| `SageFs/DevReloadMiddleware.fs` | ASP.NET middleware: body-swap injection, CSP nonce, template placeholders |
 | `SageFs/DevReloadInjector.fs` | Harmony auto-injection: patches WebApplication.Run/RunAsync |
-| `SageFs/WorkerHttpTransport.fs` | SSE endpoint: pre-allocated bytes, hardened exception handling |
-| `SageFs/WorkerMain.fs` | Starts file watcher, routes changes to FSI, wires error path |
-| `SageFs.Core/FileWatcher.fs` | Pure file watching with debounce |
+| `SageFs/WorkerHttpTransport.fs` | SSE endpoint: pre-allocated bytes, diagnostic logging, hardened exception handling |
+| `SageFs/WorkerMain.fs` | Starts file watcher, routes changes to CompilationContext → FSI, wires error path |
+| `SageFs.Core/FileWatcher.fs` | Pure file watching with debounce, diagnostic logging |
 | `SageFs.Core/Middleware/HotReloading.fs` | Harmony method detouring |
+| `SageFs.Core/Middleware/CompilationContext.fs` | File preprocessing, module detection, line offset mapping |
 | `SageFs.Core/ActorCreation.fs` | Registers middleware pipeline |
+| `SageFs.Tests/DevReloadMiddlewareTests.fs` | 40 tests: CSP nonce, encoding, embedded JS, 13 UX features |
 | `SageFs.Tests/DevReloadTests.fs` | 31 tests: 6 FsCheck property + 25 unit (lifecycle, middleware, SSE) |
+| `SageFs.Tests/HotReloadingPropertyTests.fs` | Property-based tests for HotReloading pipeline |
 | `SageFs.Tests/HotReloadTests.fs` | 21 integration tests |
 | `SageFs.Tests/FileWatcherTests.fs` | Pure function tests |
 
