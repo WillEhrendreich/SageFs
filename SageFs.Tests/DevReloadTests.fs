@@ -736,6 +736,7 @@ let e2eSignalPathTests = testSequenced <| testList "DevReload E2E signal path" [
     let diag = {
       File = "App.fs"; Line = 10; EndLine = 10; Column = 5; EndColumn = 15
       Severity = "error"; DiagCode = Some "FS0001"; Message = "Type mismatch"
+      SourceContext = None; SourceContextStartLine = None
     }
     let reader = registerClient "e2e-test-3"
     broadcastCompilationFailed "1 error" [diag]

@@ -433,7 +433,10 @@ let run (sessionId: string) (port: int) = async {
                            match d.Subcategory with
                            | s when String.IsNullOrWhiteSpace s -> None
                            | s -> Some s
-                         Message = d.Message } : DevReload.DevReloadDiagnostic))
+                         Message = d.Message
+                         SourceContext = None
+                         SourceContextStartLine = None } : DevReload.DevReloadDiagnostic)
+                      |> DevReload.DevReloadDiagnostic.addSourceContext)
                     |> Array.toList
                   DevReload.broadcastCompilationFailed summary diagnostics
                   Log.warn "Reload failed for %s: %s" fileName (ex.Message)

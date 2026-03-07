@@ -18,6 +18,22 @@ let private devReloadJsTemplate =
   use reader = new StreamReader(stream, Encoding.UTF8)
   reader.ReadToEnd()
 
+/// Detect the user's editor from SAGEFS_EDITOR or EDITOR env vars
+/// and return the URL pattern for clickable file:line:column links.
+/// Defaults to VS Code scheme.
+let editorUrlPattern () =
+  let editor =
+    match Environment.GetEnvironmentVariable("SAGEFS_EDITOR") with
+    | null | "" -> Environment.GetEnvironmentVariable("EDITOR") |> Option.ofObj |> Option.defaultValue "code"
+    | e -> e
+  let lower = editor.ToLowerInvariant()
+  match lower.Contains("rider") || lower.Contains("jetbrains") with
+  | true -> "jetbrains://rider/navigate/reference?path={file}&line={line}&column={col}"
+  | false ->
+    match lower.Contains("cursor") with
+    | true -> "cursor://file/{file}:{line}:{col}"
+    | false -> "vscode://file/{file}:{line}:{col}"
+
 /// Generate the reload script. Port > 0 connects cross-origin to the worker's
 /// SSE endpoint; port 0 falls back to a same-origin relative path (for tests).
 ///
@@ -42,6 +58,9 @@ let reloadScript (workerPort: int) =
       .Replace("{{RELOAD_RESET_WINDOW_MS}}", string cfg.ReloadCountResetWindowMs)
       .Replace("{{SSE_TIMEOUT_MS}}", string cfg.SseConnectionTimeoutMs)
       .Replace("{{COMPILE_TIMER_MS}}", string cfg.CompileTimerUpdateMs)
+      .Replace("{{AUTO_RELOAD_THRESHOLD_MS}}", string cfg.AutoReloadThresholdMs)
+      .Replace("{{LONG_COMPILE_WARNING_MS}}", string cfg.LongCompileWarningMs)
+      .Replace("{{EDITOR_URL_PATTERN}}", editorUrlPattern())
   sprintf """<script data-sagefs-injected="devreload">%s</script>""" js
 
 let private handledKey = "SageFs.DevReload.Handled"

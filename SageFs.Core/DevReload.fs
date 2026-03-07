@@ -25,6 +25,11 @@ type DevReloadConfig = {
   ReloadGuardThreshold: int
   /// Compile timer update interval in browser (ms). Default: 200
   CompileTimerUpdateMs: int
+  /// If compilation takes longer than this, show "click to reload"
+  /// instead of auto-reloading. Prevents blowing away in-progress work. Default: 3000
+  AutoReloadThresholdMs: int
+  /// Compile timer turns amber after this many ms. Default: 5000
+  LongCompileWarningMs: int
 }
 
 module DevReloadConfig =
@@ -37,6 +42,8 @@ module DevReloadConfig =
     ReloadCountResetWindowMs = 5000
     ReloadGuardThreshold = 3
     CompileTimerUpdateMs = 200
+    AutoReloadThresholdMs = 3000
+    LongCompileWarningMs = 5000
   }
 
 /// Health status of the DevReload system. Queryable by any component
@@ -90,7 +97,29 @@ type DevReloadDiagnostic = {
   Severity: string  // "error" | "warning" | "info" | "hidden"
   DiagCode: string option  // e.g. "FS0001" — named DiagCode to avoid field collision with EvalRequest.Code
   Message: string
+  /// Lines around the error (±1 line context) for browser display.
+  SourceContext: string array option
+  /// 1-based line number of the first line in SourceContext.
+  SourceContextStartLine: int option
 }
+
+module DevReloadDiagnostic =
+  /// Enrich a diagnostic with source code context (±1 line around error).
+  /// Returns the original diagnostic unchanged if the file doesn't exist
+  /// or can't be read.
+  let addSourceContext (diag: DevReloadDiagnostic) =
+    try
+      match System.IO.File.Exists(diag.File) with
+      | false -> diag
+      | true ->
+        let lines = System.IO.File.ReadAllLines(diag.File)
+        let startIdx = max 0 (diag.Line - 2)
+        let endIdx = min (lines.Length - 1) diag.Line
+        let context = lines.[startIdx..endIdx]
+        { diag with
+            SourceContext = Some context
+            SourceContextStartLine = Some (startIdx + 1) }
+    with _ -> diag
 
 /// Events that flow to browser clients over the long-lived SSE connection.
 /// The lifecycle is: Idle → Compiling → (Reload | CompilationFailed).

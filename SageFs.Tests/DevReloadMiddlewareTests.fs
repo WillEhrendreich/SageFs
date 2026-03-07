@@ -3,6 +3,7 @@ module SageFs.Tests.DevReloadMiddlewareTests
 open Expecto
 open Expecto.Flip
 open SageFs.DevReloadMiddleware
+open SageFs.DevReload
 
 // ── CSP Nonce Injection ─────────────────────────────────────────────────
 
@@ -135,6 +136,109 @@ let embeddedJsTests = testList "Embedded JS resource" [
   }
 ]
 
+let uxFeatureTests = testList "UX feature tests" [
+  test "P0-1: WCAG AA contrast — new green, no old green" {
+    let s = reloadScript 0
+    s |> Expect.stringContains "WCAG green" "#15803d"
+    (s.Contains("#16a34a")) |> Expect.isFalse "old green removed"
+  }
+  test "P0-2: ARIA attributes on overlay" {
+    let s = reloadScript 0
+    s |> Expect.stringContains "role attr" "setAttribute('role'"
+    s |> Expect.stringContains "aria-live" "aria-live"
+  }
+  test "P0-3: Smart auto-reload with threshold" {
+    let s = reloadScript 0
+    s |> Expect.stringContains "threshold var" "autoReloadThresholdMs"
+    s |> Expect.stringContains "click to reload" "click to reload"
+  }
+  test "P1-1: Clickable editor links via editorUrlPattern" {
+    let s = reloadScript 0
+    s |> Expect.stringContains "editor URL" "editorUrlPattern"
+  }
+  test "P1-2: Source context rendering" {
+    let s = reloadScript 0
+    s |> Expect.stringContains "sf-src class" "sf-src"
+    s |> Expect.stringContains "SourceContext" "SourceContext"
+  }
+  test "P1-3: Warning banner on successful reload" {
+    let s = reloadScript 0
+    s |> Expect.stringContains "warnings" "msg.warnings"
+  }
+  test "P1-4: Escape key dismisses panel" {
+    let s = reloadScript 0
+    s |> Expect.stringContains "Escape key" "Escape"
+  }
+  test "P1-5: Tab title updated on failure" {
+    let s = reloadScript 0
+    s |> Expect.stringContains "document.title" "document.title"
+  }
+  test "P1-6: Long compile visual escalation" {
+    let s = reloadScript 0
+    s |> Expect.stringContains "long compile" "longCompileWarningMs"
+  }
+  test "P2-1: Consecutive failure counter" {
+    let s = reloadScript 0
+    s |> Expect.stringContains "failureCount" "failureCount"
+    s |> Expect.stringContains "attempt display" "attempt #"
+  }
+  test "P2-2: Focus trap — tabindex on close button" {
+    let s = reloadScript 0
+    s |> Expect.stringContains "tabindex" "tabindex"
+  }
+  test "P2-3: Slide-in animation" {
+    let s = reloadScript 0
+    s |> Expect.stringContains "slide animation" "sagefs-slide"
+  }
+  test "Config defaults include new fields" {
+    let cfg = DevReloadConfig.defaults
+    cfg.AutoReloadThresholdMs |> Expect.equal "auto-reload" 3000
+    cfg.LongCompileWarningMs |> Expect.equal "long compile" 5000
+  }
+  test "Diagnostic SourceContext fields default to None" {
+    let diag : DevReloadDiagnostic = {
+      File = "t.fs"; Line = 1; Column = 1; EndLine = 1; EndColumn = 1
+      Severity = "Error"; DiagCode = None; Message = "m"
+      SourceContext = None; SourceContextStartLine = None
+    }
+    diag.SourceContext |> Expect.isNone "ctx"
+    diag.SourceContextStartLine |> Expect.isNone "ctxLine"
+  }
+  test "addSourceContext enriches from real file" {
+    let tmp = System.IO.Path.GetTempFileName()
+    try
+      System.IO.File.WriteAllLines(tmp, [| "a"; "b"; "c"; "d"; "e" |])
+      let diag = {
+        File = tmp; Line = 3; Column = 1; EndLine = 3; EndColumn = 1
+        Severity = "Error"; DiagCode = None; Message = "m"
+        SourceContext = None; SourceContextStartLine = None
+      }
+      let enriched = DevReloadDiagnostic.addSourceContext diag
+      enriched.SourceContext |> Expect.isSome "has context"
+      enriched.SourceContext.Value |> Expect.hasLength "±1 = 3" 3
+      enriched.SourceContextStartLine.Value |> Expect.equal "starts at 2" 2
+    finally
+      System.IO.File.Delete(tmp)
+  }
+  test "addSourceContext returns original for missing file" {
+    let diag = {
+      File = @"C:\no\such\file.fs"; Line = 1; Column = 1; EndLine = 1; EndColumn = 1
+      Severity = "Error"; DiagCode = None; Message = "m"
+      SourceContext = None; SourceContextStartLine = None
+    }
+    let result = DevReloadDiagnostic.addSourceContext diag
+    result.SourceContext |> Expect.isNone "stays None"
+  }
+  test "editorUrlPattern default returns vscode scheme" {
+    let p = editorUrlPattern ()
+    p |> Expect.stringContains "vscode" "vscode://file/"
+  }
+  test "No raw template placeholders in output" {
+    let s = reloadScript 0
+    (s.Contains("{{")) |> Expect.isFalse "no raw {{}}"
+  }
+]
+
 // ── Combined ────────────────────────────────────────────────────────────
 
 [<Tests>]
@@ -142,4 +246,5 @@ let devReloadMiddlewareTests = testList "DevReloadMiddleware" [
   cspNonceTests
   parseEncodingTests
   embeddedJsTests
+  uxFeatureTests
 ]
