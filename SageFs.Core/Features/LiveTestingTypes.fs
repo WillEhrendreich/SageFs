@@ -869,6 +869,157 @@ module FlakyDetection =
       | Some counterexample -> FlakyClassification.PropertyCounterexample counterexample
       | None -> FlakyClassification.Environmental flipCount
 
+// ── Failure Narratives ─────────────────────────────────────────────────
+// Enriches test failures with temporal context, causal analysis, and
+// property violation details. Separate from TestRunStatus to avoid
+// breaking ~100 pattern matches across the codebase.
+
+/// What changed between the last pass and this failure.
+[<RequireQualifiedAccess>]
+type CausalChange =
+  | SymbolChanged of symbolName: string
+  | FileChanged of filePath: string
+  | Unknown
+
+/// Details about an algebraic property violation (FsCheck).
+type PropertyViolationDetail = {
+  PropertyName: string option
+  ShrunkCounterexample: string
+  AlgebraicCategory: string option
+}
+
+/// Contextual narrative enriching a test failure with
+/// when it last passed, what changed, and property violation details.
+type FailureNarrative = {
+  LastPassedAt: DateTimeOffset option
+  TimeSinceLastPass: TimeSpan option
+  CausalChanges: CausalChange list
+  PropertyViolation: PropertyViolationDetail option
+  Summary: string
+}
+
+module FailureNarrative =
+  let empty = {
+    LastPassedAt = None
+    TimeSinceLastPass = None
+    CausalChanges = []
+    PropertyViolation = None
+    Summary = "Test failed"
+  }
+
+module FailureNarrativeBuilder =
+  let private propertyNamePattern =
+    Regex(@"Property:\s*(.+?)(?:\r?\n|$)", RegexOptions.Compiled)
+
+  let extractPropertyName (failureMsg: string) : string option =
+    match System.String.IsNullOrWhiteSpace failureMsg with
+    | true -> None
+    | false ->
+      let m = propertyNamePattern.Match(failureMsg)
+      match m.Success with
+      | true -> Some (m.Groups.[1].Value.Trim())
+      | false -> None
+
+  let private algebraicKeywords =
+    [ "associat", "associativity"
+      "commutat", "commutativity"
+      "identity", "identity"
+      "idempoten", "idempotence"
+      "distribut", "distributivity"
+      "inverse", "inverse"
+      "absorp", "absorption"
+      "closure", "closure" ]
+
+  let detectAlgebraicCategory (name: string) : string option =
+    let lower = name.ToLowerInvariant()
+    algebraicKeywords
+    |> List.tryPick (fun (prefix, category) ->
+      match lower.Contains(prefix) with
+      | true -> Some category
+      | false -> None)
+
+  let buildPropertyViolation
+    (failureMsg: string)
+    (counterexample: string)
+    : PropertyViolationDetail =
+    let propName = extractPropertyName failureMsg
+    let category = propName |> Option.bind detectAlgebraicCategory
+    { PropertyName = propName
+      ShrunkCounterexample = counterexample
+      AlgebraicCategory = category }
+
+  let buildNarrative
+    (now: DateTimeOffset)
+    (lastPassedResult: TestRunResult option)
+    (changedSymbols: string list)
+    (changedFiles: string list)
+    (flakyClassification: FlakyClassification)
+    (currentFailure: TestFailure)
+    : FailureNarrative =
+    let lastPassedAt = lastPassedResult |> Option.map (fun r -> r.Timestamp)
+    let timeSinceLastPass = lastPassedAt |> Option.map (fun t -> now - t)
+
+    let causalChanges =
+      let symbolChanges = changedSymbols |> List.map CausalChange.SymbolChanged
+      let fileChanges = changedFiles |> List.map CausalChange.FileChanged
+      match symbolChanges @ fileChanges with
+      | [] ->
+        match lastPassedResult with
+        | Some _ -> [ CausalChange.Unknown ]
+        | None -> [ CausalChange.Unknown ]
+      | changes -> changes
+
+    let propertyViolation =
+      match flakyClassification with
+      | FlakyClassification.PropertyCounterexample counterexample ->
+        let failureMsg =
+          match currentFailure with
+          | TestFailure.AssertionFailed msg -> msg
+          | TestFailure.ExceptionThrown (msg, _) -> msg
+          | TestFailure.TimedOut _ -> ""
+        Some (buildPropertyViolation failureMsg counterexample)
+      | _ -> None
+
+    let timePart =
+      match timeSinceLastPass with
+      | Some ts when ts.TotalHours >= 24.0 ->
+        sprintf "was passing %.0f days ago" (ts.TotalDays)
+      | Some ts when ts.TotalHours >= 1.0 ->
+        sprintf "was passing %.0f hours ago" (ts.TotalHours)
+      | Some ts ->
+        sprintf "was passing %.0f minutes ago" (ts.TotalMinutes)
+      | None -> "never passed"
+
+    let changePart =
+      match causalChanges with
+      | [ CausalChange.SymbolChanged name ] ->
+        sprintf " — caused by change to '%s'" name
+      | [ CausalChange.FileChanged path ] ->
+        sprintf " — caused by change to '%s'" (System.IO.Path.GetFileName path)
+      | changes when changes.Length > 1 ->
+        let symbolCount = changes |> List.filter (function CausalChange.SymbolChanged _ -> true | _ -> false) |> List.length
+        let fileCount = changes |> List.filter (function CausalChange.FileChanged _ -> true | _ -> false) |> List.length
+        match symbolCount, fileCount with
+        | s, 0 -> sprintf " — %d symbols changed" s
+        | 0, f -> sprintf " — %d files changed" f
+        | s, f -> sprintf " — %d symbols and %d files changed" s f
+      | _ -> ""
+
+    let propPart =
+      match propertyViolation with
+      | Some pv ->
+        let catStr = pv.AlgebraicCategory |> Option.defaultValue "property"
+        sprintf " [%s violation: %s]" catStr pv.ShrunkCounterexample
+      | None -> ""
+
+    let summary = sprintf "Test %s%s%s" timePart changePart propPart
+
+    { LastPassedAt = lastPassedAt
+      TimeSinceLastPass = timeSinceLastPass
+      CausalChanges = causalChanges
+      PropertyViolation = propertyViolation
+      Summary = summary }
+
 type LiveTestState = {
   SourceLocations: SourceTestLocation array
   DiscoveredTests: TestCase array
@@ -898,6 +1049,8 @@ type LiveTestState = {
   /// Pre-computed test summary — updated in recomputeStatuses to avoid O(n log n) filtering
   /// in the dedup key hot path (was 50-100ms with 3131 tests, now O(1) field read).
   CachedTestSummary: TestSummary
+  /// Enriched failure context for tests that recently transitioned Passed→Failed.
+  FailureNarratives: Map<TestId, FailureNarrative>
 }
 
 module LiveTestState =
@@ -922,6 +1075,7 @@ module LiveTestState =
     TestCoverageBitmaps = Map.empty
     StateVersion = 0L
     CachedTestSummary = { Total = 0; Passed = 0; Failed = 0; Stale = 0; Running = 0; Disabled = 0; Enabled = true }
+    FailureNarratives = Map.empty
   }
 
   /// Filter StatusEntries to only include tests belonging to the given session.
@@ -1601,6 +1755,37 @@ module LiveTesting =
 
   let computeStatusEntries (state: LiveTestState) : TestStatusEntry array =
     computeStatusEntriesWithHistory Map.empty state
+
+  /// Compute failure narratives for tests that transitioned to Failed.
+  /// Only creates narratives for Passed→Failed transitions (new regressions).
+  /// Preserves existing narratives for tests still failing.
+  let computeFailureNarratives
+    (now: System.DateTimeOffset)
+    (changedSymbols: string list)
+    (changedFiles: string list)
+    (previousNarratives: Map<TestId, FailureNarrative>)
+    (state: LiveTestState)
+    : Map<TestId, FailureNarrative> =
+    state.StatusEntries
+    |> Array.fold (fun acc entry ->
+      match entry.Status with
+      | TestRunStatus.Failed (failure, _) ->
+        match Map.containsKey entry.TestId acc with
+        | true -> acc
+        | false ->
+          let lastPassed =
+            match entry.PreviousStatus with
+            | TestRunStatus.Passed _ ->
+              Map.tryFind entry.TestId state.LastResults
+            | _ -> None
+          let flakyClass =
+            FlakyDetection.classifyFlakiness entry.TestId state.FlakyHistory state.LastResults
+          let narrative =
+            FailureNarrativeBuilder.buildNarrative now lastPassed changedSymbols changedFiles flakyClass failure
+          Map.add entry.TestId narrative acc
+      | TestRunStatus.Passed _ ->
+        Map.remove entry.TestId acc
+      | _ -> acc) previousNarratives
 
   let markAffected (testIds: TestId array) (state: LiveTestState) : LiveTestState =
     let affected = testIds |> Set.ofArray |> Set.union state.AffectedTests

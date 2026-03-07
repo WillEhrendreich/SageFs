@@ -237,7 +237,12 @@ module SageFsUpdate =
     let withStatuses = { updated with StatusEntries = Features.LiveTesting.LiveTesting.computeStatusEntriesWithHistory previous updated }
     let summary = Features.LiveTesting.TestSummary.fromStatuses withStatuses.Activation (withStatuses.StatusEntries |> Array.map (fun e -> e.Status))
     let withCache = { withStatuses with StateVersion = lt.TestState.StateVersion + 1L; CachedTestSummary = summary }
-    let withAnnotations = { withCache with CachedEditorAnnotations = Features.LiveTesting.LiveTesting.recomputeEditorAnnotations lt.ActiveFile withCache }
+    let withNarratives =
+      let narratives =
+        Features.LiveTesting.LiveTesting.computeFailureNarratives
+          System.DateTimeOffset.UtcNow lt.ChangedSymbols [] withCache.FailureNarratives withCache
+      { withCache with FailureNarratives = narratives }
+    let withAnnotations = { withNarratives with CachedEditorAnnotations = Features.LiveTesting.LiveTesting.recomputeEditorAnnotations lt.ActiveFile withNarratives }
     { lt with TestState = withAnnotations }
 
   let update (msg: SageFsMsg) (model: SageFsModel) : SageFsModel * SageFsEffect list =

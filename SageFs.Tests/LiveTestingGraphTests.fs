@@ -1921,4 +1921,206 @@ let flakyDetectionTests = testList "FlakyDetection" [
     GutterIcon.toLabel GutterIcon.TestFlaky |> GutterIcon.parseLabel
     |> Expect.equal "roundtrip" (Some GutterIcon.TestFlaky)
   }
+
+  // ── Failure Narratives ──────────────────────────────────────────────
+
+  test "FailureNarrative.empty has sensible defaults" {
+    FailureNarrative.empty.Summary |> Expect.equal "default msg" "Test failed"
+    FailureNarrative.empty.CausalChanges |> Expect.isEmpty "no changes"
+    FailureNarrative.empty.LastPassedAt |> Expect.isNone "no lastPassed"
+    FailureNarrative.empty.PropertyViolation |> Expect.isNone "no violation"
+  }
+
+  test "buildNarrative with last passed time" {
+    let now = DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero)
+    let pass : TestRunResult =
+      { TestId = TestId.TestId "x"; TestName = "t"
+        Result = TestResult.Passed (TimeSpan.FromMilliseconds 50.0)
+        Timestamp = now.AddMinutes(-5.0); Output = None }
+    let n =
+      FailureNarrativeBuilder.buildNarrative now (Some pass) [] []
+        FlakyClassification.Stable (TestFailure.AssertionFailed "bad")
+    n.LastPassedAt |> Expect.isSome "should have lastPassedAt"
+    n.TimeSinceLastPass |> Expect.isSome "should have timeSinceLastPass"
+    (n.TimeSinceLastPass.Value.TotalMinutes, 4.0)
+    |> Expect.isGreaterThan "should be >= 4 min"
+    n.Summary.Contains("minutes ago") |> Expect.isTrue "should mention time"
+  }
+
+  test "buildNarrative for never-passed test" {
+    let now = DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero)
+    let n =
+      FailureNarrativeBuilder.buildNarrative now None [] []
+        FlakyClassification.Stable (TestFailure.AssertionFailed "always fails")
+    n.LastPassedAt |> Expect.isNone "no lastPassedAt"
+    n.TimeSinceLastPass |> Expect.isNone "no timeSinceLastPass"
+    n.Summary.Contains("never passed") |> Expect.isTrue "should say never passed"
+    n.CausalChanges |> Expect.equal "should be Unknown" [ CausalChange.Unknown ]
+  }
+
+  test "buildNarrative with single symbol change" {
+    let now = DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero)
+    let pass : TestRunResult =
+      { TestId = TestId.TestId "x"; TestName = "t"
+        Result = TestResult.Passed (TimeSpan.FromMilliseconds 1.0)
+        Timestamp = now.AddMinutes(-2.0); Output = None }
+    let n =
+      FailureNarrativeBuilder.buildNarrative now (Some pass)
+        [ "MyModule.calculate" ] []
+        FlakyClassification.Stable (TestFailure.AssertionFailed "wrong")
+    n.CausalChanges
+    |> Expect.equal "symbol change" [ CausalChange.SymbolChanged "MyModule.calculate" ]
+    n.Summary.Contains("MyModule.calculate") |> Expect.isTrue "should mention symbol"
+  }
+
+  test "buildNarrative with multiple symbol changes" {
+    let now = DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero)
+    let pass : TestRunResult =
+      { TestId = TestId.TestId "x"; TestName = "t"
+        Result = TestResult.Passed (TimeSpan.FromMilliseconds 1.0)
+        Timestamp = now.AddMinutes(-1.0); Output = None }
+    let n =
+      FailureNarrativeBuilder.buildNarrative now (Some pass)
+        [ "A.foo"; "B.bar"; "C.baz" ] []
+        FlakyClassification.Stable (TestFailure.AssertionFailed "wrong")
+    n.CausalChanges.Length |> Expect.equal "3 changes" 3
+    n.Summary.Contains("3 symbols changed") |> Expect.isTrue "should mention count"
+  }
+
+  test "buildNarrative with file changes when no symbols" {
+    let now = DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero)
+    let pass : TestRunResult =
+      { TestId = TestId.TestId "x"; TestName = "t"
+        Result = TestResult.Passed (TimeSpan.FromMilliseconds 1.0)
+        Timestamp = now.AddMinutes(-1.0); Output = None }
+    let n =
+      FailureNarrativeBuilder.buildNarrative now (Some pass)
+        [] [ "/src/MyModule.fs" ]
+        FlakyClassification.Stable (TestFailure.AssertionFailed "wrong")
+    n.CausalChanges
+    |> Expect.equal "file change" [ CausalChange.FileChanged "/src/MyModule.fs" ]
+    n.Summary.Contains("MyModule.fs") |> Expect.isTrue "should mention file"
+  }
+
+  test "buildNarrative with FsCheck property violation" {
+    let now = DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero)
+    let pass : TestRunResult =
+      { TestId = TestId.TestId "x"; TestName = "t"
+        Result = TestResult.Passed (TimeSpan.FromMilliseconds 1.0)
+        Timestamp = now.AddMinutes(-1.0); Output = None }
+    let n =
+      FailureNarrativeBuilder.buildNarrative now (Some pass) [ "combine" ] []
+        (FlakyClassification.PropertyCounterexample """("", "abc")""")
+        (TestFailure.AssertionFailed
+          "Falsifiable, after 47 tests\nProperty: associativity of combine\nOriginal:\n(\"abc\", \"\", \"xyz\")\nShrunk:\n(\"\", \"abc\")")
+    n.PropertyViolation |> Expect.isSome "should have property violation"
+    let pv = n.PropertyViolation.Value
+    pv.ShrunkCounterexample |> Expect.equal "counterexample" """("", "abc")"""
+    pv.AlgebraicCategory |> Expect.equal "detect associativity" (Some "associativity")
+    n.Summary.Contains("associativity") |> Expect.isTrue "should mention violation"
+  }
+
+  test "buildNarrative no property violation for stable failure" {
+    let now = DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero)
+    let n =
+      FailureNarrativeBuilder.buildNarrative now None [] []
+        FlakyClassification.Stable (TestFailure.AssertionFailed "regular")
+    n.PropertyViolation |> Expect.isNone "no property violation"
+  }
+
+  test "buildNarrative with timeout failure" {
+    let now = DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero)
+    let pass : TestRunResult =
+      { TestId = TestId.TestId "x"; TestName = "t"
+        Result = TestResult.Passed (TimeSpan.FromMilliseconds 1.0)
+        Timestamp = now.AddMinutes(-30.0); Output = None }
+    let n =
+      FailureNarrativeBuilder.buildNarrative now (Some pass)
+        [] [ "/src/Slow.fs" ] FlakyClassification.Stable
+        (TestFailure.TimedOut (TimeSpan.FromSeconds 5.0))
+    n.Summary.Contains("minutes ago") |> Expect.isTrue "should mention time"
+    n.CausalChanges
+    |> Expect.equal "file change" [ CausalChange.FileChanged "/src/Slow.fs" ]
+  }
+
+  test "extractPropertyName from FsCheck message" {
+    let names = [ "associativity of combine"; "identity element"; "commutativity" ]
+    for name in names do
+      let msg = sprintf "Falsifiable, after 10 tests\nProperty: %s\nOriginal:\n42" name
+      FailureNarrativeBuilder.extractPropertyName msg
+      |> Expect.equal (sprintf "extract '%s'" name) (Some name)
+  }
+
+  test "extractPropertyName returns None for non-FsCheck" {
+    FailureNarrativeBuilder.extractPropertyName "expected 42 but got 0"
+    |> Expect.isNone "assertion"
+    FailureNarrativeBuilder.extractPropertyName ""
+    |> Expect.isNone "empty"
+    FailureNarrativeBuilder.extractPropertyName "   "
+    |> Expect.isNone "whitespace"
+  }
+
+  test "detectAlgebraicCategory matches known categories" {
+    let cases = [
+      "associativity of foo", Some "associativity"
+      "commutativity check", Some "commutativity"
+      "identity element", Some "identity"
+      "idempotence of f", Some "idempotence"
+      "distributivity law", Some "distributivity"
+      "inverse property", Some "inverse"
+      "absorption law", Some "absorption"
+      "closure under op", Some "closure"
+      "random property", None
+    ]
+    for name, expected in cases do
+      FailureNarrativeBuilder.detectAlgebraicCategory name
+      |> Expect.equal (sprintf "category for '%s'" name) expected
+  }
+
+  test "buildNarrative is pure — same inputs same output" {
+    let now = DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero)
+    let pass : TestRunResult =
+      { TestId = TestId.TestId "x"; TestName = "t"
+        Result = TestResult.Passed (TimeSpan.FromMilliseconds 1.0)
+        Timestamp = now.AddMinutes(-10.0); Output = None }
+    let n1 = FailureNarrativeBuilder.buildNarrative now (Some pass) [ "A.f" ] [] FlakyClassification.Stable (TestFailure.AssertionFailed "x")
+    let n2 = FailureNarrativeBuilder.buildNarrative now (Some pass) [ "A.f" ] [] FlakyClassification.Stable (TestFailure.AssertionFailed "x")
+    n1.Summary |> Expect.equal "deterministic summary" n2.Summary
+    n1.CausalChanges |> Expect.equal "deterministic changes" n2.CausalChanges
+  }
+
+  test "buildNarrative time bucketing hours" {
+    let now = DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero)
+    let pass : TestRunResult =
+      { TestId = TestId.TestId "x"; TestName = "t"
+        Result = TestResult.Passed (TimeSpan.FromMilliseconds 1.0)
+        Timestamp = now.AddHours(-3.0); Output = None }
+    let n = FailureNarrativeBuilder.buildNarrative now (Some pass) [] [] FlakyClassification.Stable (TestFailure.AssertionFailed "x")
+    n.Summary.Contains("hours ago") |> Expect.isTrue "should say hours"
+  }
+
+  test "buildNarrative time bucketing days" {
+    let now = DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero)
+    let pass : TestRunResult =
+      { TestId = TestId.TestId "x"; TestName = "t"
+        Result = TestResult.Passed (TimeSpan.FromMilliseconds 1.0)
+        Timestamp = now.AddDays(-5.0); Output = None }
+    let n = FailureNarrativeBuilder.buildNarrative now (Some pass) [] [] FlakyClassification.Stable (TestFailure.AssertionFailed "x")
+    n.Summary.Contains("days ago") |> Expect.isTrue "should say days"
+  }
+
+  test "buildNarrative mixed symbol and file changes" {
+    let now = DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero)
+    let pass : TestRunResult =
+      { TestId = TestId.TestId "x"; TestName = "t"
+        Result = TestResult.Passed (TimeSpan.FromMilliseconds 1.0)
+        Timestamp = now.AddMinutes(-1.0); Output = None }
+    let n =
+      FailureNarrativeBuilder.buildNarrative now (Some pass)
+        [ "A.f" ] [ "/x.fs" ] FlakyClassification.Stable
+        (TestFailure.AssertionFailed "x")
+    n.CausalChanges.Length |> Expect.equal "2 changes" 2
+    n.Summary.Contains("1 symbols and 1 files changed")
+    |> Expect.isTrue "should mention both"
+  }
 ]

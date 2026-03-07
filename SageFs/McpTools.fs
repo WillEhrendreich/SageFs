@@ -404,3 +404,14 @@ Accepts full or partial file paths. Uses instrumentation bitmaps when available,
     ) : Task<string> =
         logger.LogDebug("MCP-TOOL: get_file_coverage called, file={File}", file)
         getFileCoverage ctx file |> withEcho "get_file_coverage"
+
+    [<McpServerTool>]
+    [<Description("""Get enriched failure context for a test that recently transitioned Passed→Failed.
+Shows time since last pass, causal changes (which symbols or files changed), property violation details,
+and a human-readable summary narrative. Returns narratives for all matching tests that have them.""")>]
+    member _.explain_test_failure(
+        [<Description("Test name or substring to match against FullName or DisplayName")>]
+        test_name: string
+    ) : Task<string> =
+        logger.LogDebug("MCP-TOOL: explain_test_failure called, test={Test}", test_name)
+        explainTestFailure ctx test_name |> withEcho "explain_test_failure"

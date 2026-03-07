@@ -1760,6 +1760,62 @@ module McpTools =
           return formatFileCoverageResponse annotations testState
     }
 
+  let explainTestFailure (ctx: McpContext) (testName: string) : Task<string> =
+    task {
+      match ctx.GetElmModel with
+      | None -> return "Failure narrative not available — Elm loop not started."
+      | Some getModel ->
+        let model = getModel ()
+        let testState = model.LiveTesting.TestState
+        let matchingTests =
+          testState.DiscoveredTests
+          |> Array.filter (fun tc ->
+            tc.FullName.Contains(testName, StringComparison.OrdinalIgnoreCase)
+            || tc.DisplayName.Contains(testName, StringComparison.OrdinalIgnoreCase))
+        match matchingTests with
+        | [||] -> return sprintf "No test found matching '%s'." testName
+        | tests ->
+          let narratives =
+            tests
+            |> Array.choose (fun tc ->
+              Map.tryFind tc.Id testState.FailureNarratives
+              |> Option.map (fun n ->
+                let changes =
+                  n.CausalChanges |> List.map (fun c ->
+                    match c with
+                    | Features.LiveTesting.CausalChange.SymbolChanged s -> {| Kind = "symbol"; Name = s |}
+                    | Features.LiveTesting.CausalChange.FileChanged f -> {| Kind = "file"; Name = f |}
+                    | Features.LiveTesting.CausalChange.Unknown -> {| Kind = "unknown"; Name = "" |})
+                let propViolation =
+                  n.PropertyViolation |> Option.map (fun pv ->
+                    {| PropertyName = pv.PropertyName
+                       ShrunkCounterexample = pv.ShrunkCounterexample
+                       AlgebraicCategory = pv.AlgebraicCategory |})
+                {| TestId = Features.LiveTesting.TestId.value tc.Id
+                   DisplayName = tc.DisplayName
+                   Summary = n.Summary
+                   LastPassedAt = n.LastPassedAt
+                   TimeSinceLastPass = n.TimeSinceLastPass |> Option.map (fun ts -> ts.TotalSeconds)
+                   CausalChanges = changes
+                   PropertyViolation = propViolation |}))
+          match narratives with
+          | [||] ->
+            let failingCount =
+              tests |> Array.filter (fun tc ->
+                match Map.tryFind tc.Id testState.LastResults with
+                | Some r ->
+                  match r.Result with
+                  | Features.LiveTesting.TestResult.Failed _ -> true
+                  | _ -> false
+                | None -> false) |> Array.length
+            match failingCount with
+            | 0 -> return sprintf "Test(s) matching '%s' are not currently failing — no narrative available." testName
+            | _ -> return sprintf "Test(s) matching '%s' are failing but no narrative was computed (may not have transitioned from passing)." testName
+          | narrs ->
+            let resp = {| MatchCount = narrs.Length; Narratives = narrs |}
+            return JsonSerializer.Serialize(resp, liveTestJsonOpts)
+    }
+
   type FailedTestInfo = {
     Name: string
     Message: string

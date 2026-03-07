@@ -70,6 +70,22 @@ let formatFileAnnotationsEvent (opts: JsonSerializerOptions) (sessionId: string 
   let json = JsonSerializer.Serialize(annotations, opts) |> injectSessionId sessionId
   formatSseEvent "file_annotations" json
 
+/// Format failure narratives as an SSE event string
+let formatFailureNarrativesEvent (opts: JsonSerializerOptions) (sessionId: string option) (narratives: Map<Features.LiveTesting.TestId, Features.LiveTesting.FailureNarrative>) : string =
+  let payload =
+    narratives
+    |> Map.toArray
+    |> Array.map (fun (tid, n) ->
+      {| TestId = Features.LiveTesting.TestId.value tid; LastPassedAt = n.LastPassedAt; TimeSinceLastPass = n.TimeSinceLastPass
+         CausalChanges = n.CausalChanges |> List.map (fun c ->
+           match c with
+           | Features.LiveTesting.CausalChange.SymbolChanged s -> {| Kind = "symbol"; Name = s |}
+           | Features.LiveTesting.CausalChange.FileChanged f -> {| Kind = "file"; Name = f |}
+           | Features.LiveTesting.CausalChange.Unknown -> {| Kind = "unknown"; Name = "" |})
+         PropertyViolation = n.PropertyViolation; Summary = n.Summary |})
+  let json = JsonSerializer.Serialize(payload, opts) |> injectSessionId sessionId
+  formatSseEvent "failure_narratives" json
+
 // ── Bindings snapshot (CQRS: server-side parsing, push via SSE) ──
 
 /// A single FSI binding tracked server-side
