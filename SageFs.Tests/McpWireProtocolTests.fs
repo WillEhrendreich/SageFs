@@ -48,6 +48,7 @@ let mcpToolRegistrationTests = testList "MCP tool registration" [
       "get_available_projects"
       "get_completions"
       "get_elm_state"
+      "get_file_coverage"
       "get_fsi_status"
       "get_live_test_status"
       "get_test_trace"

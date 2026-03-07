@@ -1690,6 +1690,76 @@ module McpTools =
         return JsonSerializer.Serialize(resp, liveTestJsonOpts)
     }
 
+  /// Format file-level coverage annotations as JSON for the get_file_coverage MCP tool.
+  /// Pure function: takes FileAnnotations + LiveTestState, returns JSON string.
+  let formatFileCoverageResponse (annotations: Features.LiveTesting.FileAnnotations) (testState: Features.LiveTesting.LiveTestState) : string =
+    let testNameFor (tid: Features.LiveTesting.TestId) =
+      testState.DiscoveredTests
+      |> Array.tryFind (fun dt -> dt.Id = tid)
+      |> Option.map (fun dt -> dt.DisplayName)
+      |> Option.defaultValue (Features.LiveTesting.TestId.value tid)
+    let lines =
+      annotations.CoverageAnnotations
+      |> Array.map (fun ca ->
+        let covered, testCount, health =
+          match ca.Detail with
+          | Features.LiveTesting.CoverageStatus.Covered (cnt, h) ->
+            true, cnt,
+            (match h with
+             | Features.LiveTesting.CoverageHealth.AllPassing -> "AllPassing"
+             | Features.LiveTesting.CoverageHealth.SomeFailing -> "SomeFailing")
+          | Features.LiveTesting.CoverageStatus.NotCovered -> false, 0, "NotCovered"
+          | Features.LiveTesting.CoverageStatus.Pending -> false, 0, "Pending"
+        let branchStr =
+          match ca.BranchCoverage with
+          | Some Features.LiveTesting.LineCoverage.FullyCovered -> "FullyCovered"
+          | Some (Features.LiveTesting.LineCoverage.PartiallyCovered (c, t)) -> sprintf "Partial(%d/%d)" c t
+          | Some Features.LiveTesting.LineCoverage.NotCovered -> "NotCovered"
+          | None -> "Unknown"
+        let coveringTests = ca.CoveringTestIds |> Array.map testNameFor
+        {| Line = ca.Line; EndLine = ca.EndLine; EndColumn = ca.EndColumn
+           Covered = covered; TestCount = testCount; Health = health
+           CoveringTests = coveringTests; BranchCoverage = branchStr |})
+    let coveredCount = lines |> Array.filter (fun l -> l.Covered) |> Array.length
+    let totalCount = lines.Length
+    let pct =
+      match totalCount with
+      | 0 -> 0.0
+      | n -> System.Math.Round(float coveredCount / float n * 100.0, 1)
+    let resp = {|
+      FilePath = annotations.FilePath
+      Lines = lines
+      Summary = {|
+        CoveredLines = coveredCount
+        TotalLines = totalCount
+        CoveragePercent = pct
+      |}
+    |}
+    JsonSerializer.Serialize(resp, liveTestJsonOpts)
+
+  /// MCP tool: get per-line coverage data for a specific file.
+  /// Resolves partial file paths, then computes line-level coverage from
+  /// instrumentation bitmaps + dep graph fallback.
+  let getFileCoverage (ctx: McpContext) (filePath: string) : Task<string> =
+    task {
+      match ctx.GetElmModel with
+      | None -> return "File coverage not available — Elm loop not started."
+      | Some getModel ->
+        let model = getModel ()
+        let cycleState = model.LiveTesting
+        let testState = cycleState.TestState
+        let resolvedPath =
+          Features.LiveTesting.FileAnnotations.resolveFilePath
+            filePath testState.StatusEntries cycleState.InstrumentationMaps
+        match resolvedPath with
+        | None ->
+          let resp = {| FilePath = filePath; Error = "File not found in test sources or instrumentation maps" |}
+          return JsonSerializer.Serialize(resp, liveTestJsonOpts)
+        | Some fullPath ->
+          let annotations = Features.LiveTesting.FileAnnotations.projectWithCoverage fullPath cycleState
+          return formatFileCoverageResponse annotations testState
+    }
+
   type FailedTestInfo = {
     Name: string
     Message: string
