@@ -2897,6 +2897,126 @@ module FileAnnotations =
       |> Seq.distinct
       |> Seq.tryFind matchesParam
 
+// --- Test Run Explainer (MCP "explain_test_run" / "query_test_coverage") ---
+
+[<RequireQualifiedAccess>]
+type TestTriggerReason =
+  | SymbolCoverage of symbols: string list
+  | NewTest
+  | ExplicitRun
+  | UnknownCoverage
+
+type TestRunExplanation = {
+  TestId: TestId
+  DisplayName: string
+  Reason: TestTriggerReason
+  CoveringSymbols: string list
+  Trigger: RunTrigger
+  DurationMs: float option
+  IsFlaky: bool
+}
+
+type RunCycleExplanation = {
+  ChangedSymbols: string list
+  Trigger: RunTrigger
+  AffectedTests: TestRunExplanation array
+  FilteredOutByPolicy: TestId array
+  TotalDiscovered: int
+}
+
+module TestRunExplainer =
+
+  let private durationMs (r: TestResult) =
+    match r with
+    | TestResult.Passed d -> Some d.TotalMilliseconds
+    | TestResult.Failed (_, d) -> Some d.TotalMilliseconds
+    | TestResult.Skipped _ | TestResult.NotRun -> None
+
+  let explainTest
+    (graph: TestDependencyGraph)
+    (lastResults: Map<TestId, TestRunResult>)
+    (flakyHistory: Map<TestId, ResultWindow>)
+    (changedSymbols: string list)
+    (trigger: RunTrigger)
+    (test: TestCase)
+    : TestRunExplanation =
+    let coveringSymbols =
+      changedSymbols
+      |> List.filter (fun sym ->
+        match Map.tryFind sym graph.TransitiveCoverage with
+        | Some testIds -> testIds |> Array.contains test.Id
+        | None -> false)
+    let reason =
+      match coveringSymbols with
+      | _ :: _ -> TestTriggerReason.SymbolCoverage coveringSymbols
+      | [] ->
+        match Map.tryFind test.Id lastResults with
+        | None -> TestTriggerReason.NewTest
+        | Some _ -> TestTriggerReason.UnknownCoverage
+    let dur =
+      Map.tryFind test.Id lastResults
+      |> Option.bind (fun r -> durationMs r.Result)
+    let isFlaky =
+      match FlakyDetection.assessTest test.Id flakyHistory with
+      | TestStability.Flaky _ -> true
+      | _ -> false
+    { TestId = test.Id
+      DisplayName = test.DisplayName
+      Reason = reason
+      CoveringSymbols = coveringSymbols
+      Trigger = trigger
+      DurationMs = dur
+      IsFlaky = isFlaky }
+
+  let explainSymbolChange
+    (graph: TestDependencyGraph)
+    (discoveredTests: TestCase array)
+    (lastResults: Map<TestId, TestRunResult>)
+    (flakyHistory: Map<TestId, ResultWindow>)
+    (policies: Map<TestCategory, RunPolicy>)
+    (changedSymbols: string list)
+    (trigger: RunTrigger)
+    : RunCycleExplanation =
+    let affectedIds =
+      TestDependencyGraph.findAffected changedSymbols graph |> Set.ofArray
+    let affectedTests =
+      discoveredTests
+      |> Array.filter (fun tc -> affectedIds.Contains tc.Id)
+    let filtered =
+      PolicyFilter.filterTests policies trigger affectedTests
+    let filteredSet = filtered |> Array.map (fun tc -> tc.Id) |> Set.ofArray
+    let filteredOut =
+      affectedTests
+      |> Array.filter (fun tc -> not (filteredSet.Contains tc.Id))
+      |> Array.map (fun tc -> tc.Id)
+    let explanations =
+      filtered
+      |> Array.map (explainTest graph lastResults flakyHistory changedSymbols trigger)
+    { ChangedSymbols = changedSymbols
+      Trigger = trigger
+      AffectedTests = explanations
+      FilteredOutByPolicy = filteredOut
+      TotalDiscovered = discoveredTests.Length }
+
+  let queryTestCoverage
+    (graph: TestDependencyGraph)
+    (discoveredTests: TestCase array)
+    (lastResults: Map<TestId, TestRunResult>)
+    (symbol: string)
+    : CoveringTestInfo array =
+    match Map.tryFind symbol graph.TransitiveCoverage with
+    | None -> [||]
+    | Some testIds ->
+      let testMap = discoveredTests |> Array.map (fun tc -> tc.Id, tc) |> Map.ofArray
+      testIds
+      |> Array.choose (fun tid ->
+        match Map.tryFind tid testMap with
+        | Some tc ->
+          Some { TestId = tid
+                 DisplayName = tc.DisplayName
+                 Result = Map.tryFind tid lastResults |> Option.map (fun r -> r.Result) }
+        | None -> None)
+
 type SessionInvariantViolation = {
   Message: string
   RunPhaseKeys: Set<string>

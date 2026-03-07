@@ -117,17 +117,17 @@ let prioritizationTests = testList "TestPrioritization" [
     sorted.[1].FullName |> Expect.equal "slow second" "slow"
   }
 
-  test "tests without results go last" {
+  test "new tests (no results) run before passed tests" {
     let cases = [| mkTestCase "no.result" TestFramework.Expecto TestCategory.Unit; mkTestCase "has.result" TestFramework.Expecto TestCategory.Unit |]
     let results = Map.ofList [
       mkTestId "has.result" TestFramework.Expecto, mkResult (mkTestId "has.result" TestFramework.Expecto) (TestResult.Passed (ts 10.0))
     ]
     let sorted = TestPrioritization.prioritize results cases
-    sorted.[0].FullName |> Expect.equal "has result first" "has.result"
-    sorted.[1].FullName |> Expect.equal "no result last" "no.result"
+    sorted.[0].FullName |> Expect.equal "new test first for faster feedback" "no.result"
+    sorted.[1].FullName |> Expect.equal "passed test after" "has.result"
   }
 
-  test "full priority: failed > skipped > passed > not-run > unknown" {
+  test "full priority: failed > new > passed > skipped > not-run" {
     let cases = [|
       mkTestCase "passed" TestFramework.Expecto TestCategory.Unit
       mkTestCase "unknown" TestFramework.Expecto TestCategory.Unit
@@ -143,7 +143,7 @@ let prioritizationTests = testList "TestPrioritization" [
     ]
     let sorted = TestPrioritization.prioritize results cases
     sorted |> Array.map (fun tc -> tc.FullName)
-    |> Expect.equal "priority order" [| "failed"; "skipped"; "passed"; "notrun"; "unknown" |]
+    |> Expect.equal "priority order" [| "failed"; "unknown"; "passed"; "skipped"; "notrun" |]
   }
 
   test "empty input returns empty" {

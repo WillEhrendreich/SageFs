@@ -124,6 +124,7 @@
         <Compile Include="FsiRegressionTests.fs" />
         <Compile Include="HotReloadingPropertyTests.fs" />
         <Compile Include="DevReloadMiddlewareTests.fs" />
+        <Compile Include="TestRunExplainerTests.fs" />
         <Compile Include="BatchFlusherTests.fs" />
         <Compile Include="Benchmarks.fs" />
         <Compile Include="Program.fs" />
