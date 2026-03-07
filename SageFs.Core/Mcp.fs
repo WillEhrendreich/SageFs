@@ -1607,6 +1607,79 @@ module McpTools =
       |}
       Task.FromResult (JsonSerializer.Serialize(resp, liveTestJsonOpts))
 
+  let explainTestRun (ctx: McpContext) (testName: string) : Task<string> =
+    task {
+      match ctx.GetElmModel with
+      | None -> return "Explain not available — Elm loop not started."
+      | Some getModel ->
+        let model = getModel ()
+        let graph = model.LiveTesting.DepGraph
+        let testState = model.LiveTesting.TestState
+        let trigger = model.LiveTesting.LastTrigger
+        let changedSymbols = model.LiveTesting.ChangedSymbols
+        let matchingTests =
+          testState.DiscoveredTests
+          |> Array.filter (fun tc ->
+            tc.FullName.Contains(testName, StringComparison.OrdinalIgnoreCase)
+            || tc.DisplayName.Contains(testName, StringComparison.OrdinalIgnoreCase))
+        match matchingTests with
+        | [||] -> return sprintf "No test found matching '%s'. Use get_live_test_status to list tests." testName
+        | tests ->
+          let explanations =
+            tests
+            |> Array.map (Features.LiveTesting.TestRunExplainer.explainTest
+              graph testState.LastResults testState.FlakyHistory changedSymbols trigger)
+          let resp = {|
+            MatchCount = explanations.Length
+            Explanations = explanations |> Array.map (fun e ->
+              let reasonStr =
+                match e.Reason with
+                | Features.LiveTesting.TestTriggerReason.SymbolCoverage syms ->
+                  sprintf "Symbol coverage: %s" (String.concat ", " syms)
+                | Features.LiveTesting.TestTriggerReason.NewTest -> "New test (no prior results)"
+                | Features.LiveTesting.TestTriggerReason.ExplicitRun -> "Explicitly triggered"
+                | Features.LiveTesting.TestTriggerReason.UnknownCoverage -> "Unknown coverage (dep graph fallback)"
+              {| TestId = Features.LiveTesting.TestId.value e.TestId
+                 DisplayName = e.DisplayName
+                 Reason = reasonStr
+                 CoveringSymbols = e.CoveringSymbols
+                 Trigger = sprintf "%A" e.Trigger
+                 DurationMs = e.DurationMs
+                 IsFlaky = e.IsFlaky |})
+            ChangedSymbols = changedSymbols
+          |}
+          return JsonSerializer.Serialize(resp, liveTestJsonOpts)
+    }
+
+  let queryTestCoverage (ctx: McpContext) (symbol: string) : Task<string> =
+    task {
+      match ctx.GetElmModel with
+      | None -> return "Coverage query not available — Elm loop not started."
+      | Some getModel ->
+        let model = getModel ()
+        let graph = model.LiveTesting.DepGraph
+        let testState = model.LiveTesting.TestState
+        let coveringTests =
+          Features.LiveTesting.TestRunExplainer.queryTestCoverage
+            graph testState.DiscoveredTests testState.LastResults symbol
+        let resp = {|
+          Symbol = symbol
+          CoveringTestCount = coveringTests.Length
+          Tests = coveringTests |> Array.map (fun ct ->
+            let resultStr =
+              match ct.Result with
+              | Some (Features.LiveTesting.TestResult.Passed d) -> sprintf "Passed (%.0fms)" d.TotalMilliseconds
+              | Some (Features.LiveTesting.TestResult.Failed (_, d)) -> sprintf "Failed (%.0fms)" d.TotalMilliseconds
+              | Some (Features.LiveTesting.TestResult.Skipped r) -> sprintf "Skipped: %s" r
+              | Some Features.LiveTesting.TestResult.NotRun -> "Not run"
+              | None -> "No result"
+            {| TestId = Features.LiveTesting.TestId.value ct.TestId
+               DisplayName = ct.DisplayName
+               LastResult = resultStr |})
+        |}
+        return JsonSerializer.Serialize(resp, liveTestJsonOpts)
+    }
+
   type FailedTestInfo = {
     Name: string
     Message: string

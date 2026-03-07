@@ -777,11 +777,13 @@ module LiveTestingHook =
             tc.FullName.Contains updated
             || updated.Contains (tc.FullName.Split('.').[0])))
         |> Array.map (fun t -> t.Id)
-      // Conservative fallback: if nothing matched, run everything.
-      // Better to run extra tests than silently miss affected ones.
       match Array.isEmpty matched with
-      | true -> findAllTestIds discoveredTests
-      | false -> matched
+      | true ->
+        LiveTestingInstrumentation.depGraphFallbackTotal.Add(1L)
+        findAllTestIds discoveredTests
+      | false ->
+        LiveTestingInstrumentation.depGraphMatchTotal.Add(1L)
+        matched
 
   /// Main hook: given executors and a freshly loaded assembly,
   /// produce the full result for the Elm loop.

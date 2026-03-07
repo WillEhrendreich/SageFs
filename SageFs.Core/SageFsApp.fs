@@ -815,6 +815,18 @@ module SageFsUpdate =
       let effects, cycle' =
         model.LiveTesting
         |> Features.LiveTesting.LiveTestCycleState.handleFcsResult result
+      // OTEL: track dep graph match vs fallback rate
+      match effects with
+      | [] ->
+        Features.LiveTesting.LiveTestingInstrumentation.depGraphFallbackTotal.Add(1L)
+      | _ ->
+        Features.LiveTesting.LiveTestingInstrumentation.depGraphMatchTotal.Add(1L)
+        let affectedCount =
+          effects |> List.sumBy (fun e ->
+            match e with
+            | Features.LiveTesting.TestCycleEffect.RunAffectedTests (tests, _, _, _, _, _) -> tests.Length
+            | _ -> 0)
+        Features.LiveTesting.LiveTestingInstrumentation.depGraphAffectedCount.Record(affectedCount)
       let mappedEffects = effects |> List.map SageFsEffect.TestCycle
       { model with LiveTesting = cycle' }, mappedEffects
 

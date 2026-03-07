@@ -372,3 +372,24 @@ Use timeout_seconds to wait for results (default 30). Set to 0 for fire-and-forg
         let t = match timeout_seconds <= 0 with | true -> 0 | false -> timeout_seconds
         logger.LogDebug("MCP-TOOL: run_tests called, pattern={Pattern}, category={Category}, timeout={Timeout}", pattern, category, t)
         runTests ctx p c t |> withEcho "run_tests"
+
+    [<McpServerTool>]
+    [<Description("""Explain why a test was selected to run. Shows the trigger reason (symbol coverage, new test, explicit run, or dep graph fallback),
+which changed symbols cover the test, duration from last run, and flaky status.
+Matches by substring on FullName or DisplayName — returns explanations for all matches.""")>]
+    member _.explain_test_run(
+        [<Description("Test name or substring to match against FullName or DisplayName")>]
+        test_name: string
+    ) : Task<string> =
+        logger.LogDebug("MCP-TOOL: explain_test_run called, test={Test}", test_name)
+        explainTestRun ctx test_name |> withEcho "explain_test_run"
+
+    [<McpServerTool>]
+    [<Description("""Query which tests cover a given symbol. Returns all tests that transitively depend on the symbol
+via the dependency graph, along with their last result status. Use to understand test coverage for a specific function or type.""")>]
+    member _.query_test_coverage(
+        [<Description("Fully-qualified symbol name to query coverage for (e.g. 'MyModule.myFunction')")>]
+        symbol: string
+    ) : Task<string> =
+        logger.LogDebug("MCP-TOOL: query_test_coverage called, symbol={Symbol}", symbol)
+        queryTestCoverage ctx symbol |> withEcho "query_test_coverage"

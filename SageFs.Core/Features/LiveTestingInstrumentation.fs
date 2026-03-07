@@ -42,6 +42,14 @@ module LiveTestingInstrumentation =
   let streamResultsEmitted =
     meter.CreateCounter<int64>("sagefs.live_testing.stream_results_emitted_total", description = "Total results emitted via SSE stream")
 
+  // Dep graph decision metrics (panel priority: measure fallback rate)
+  let depGraphMatchTotal =
+    meter.CreateCounter<int64>("sagefs.live_testing.depgraph_match_total", description = "Dep graph found affected tests for changed symbols")
+  let depGraphFallbackTotal =
+    meter.CreateCounter<int64>("sagefs.live_testing.depgraph_fallback_total", description = "Dep graph returned empty — conservative fallback to all tests")
+  let depGraphAffectedCount =
+    meter.CreateHistogram<int>("sagefs.live_testing.depgraph_affected_count", description = "Number of tests affected by a symbol change")
+
   /// Wrap a unit of work with Activity tracing and Stopwatch timing.
   /// Returns the same value as the wrapped function.
   /// When no OTEL collector is attached, cost is ~50ns (null check).
