@@ -5,6 +5,7 @@ open System.IO
 open System.Reflection
 open System.Security.Cryptography
 open System.Text
+open System.Text.RegularExpressions
 
 // --- Assembly Load Diagnostics ---
 
@@ -2538,23 +2539,84 @@ type FileAnnotations = {
 }
 
 module FailurePresentation =
-  let tryParseAssertionDiff (msg: string) =
+  let private cleanValue (s: string) = s.TrimEnd('.', ' ')
+
+  /// Parse "Expected: X / Actual: Y" or NUnit's "Expected: X / But was: Y"
+  let private tryParseLabeledPair (msg: string) =
     let lines =
       msg.Split([| '\n'; '\r' |], StringSplitOptions.RemoveEmptyEntries)
-    let findPrefixed (prefix: string) =
+    let findPrefixed (prefixes: string list) =
       lines
-      |> Array.tryFind (fun l ->
+      |> Array.tryPick (fun l ->
         let t = l.TrimStart()
-        t.StartsWith(prefix + ":", StringComparison.OrdinalIgnoreCase)
-        || t.StartsWith(prefix + " :", StringComparison.OrdinalIgnoreCase))
-      |> Option.map (fun l ->
-        let idx = l.IndexOf(':')
-        match idx >= 0 with
-        | true -> l.Substring(idx + 1).Trim()
-        | false -> l.Trim())
-    match findPrefixed "expected", findPrefixed "actual" with
-    | Some e, Some a -> Some(e, a)
+        prefixes
+        |> List.tryPick (fun prefix ->
+          match t.StartsWith(prefix + ":", StringComparison.OrdinalIgnoreCase)
+                || t.StartsWith(prefix + " :", StringComparison.OrdinalIgnoreCase) with
+          | true ->
+            let idx = t.IndexOf(':')
+            match idx >= 0 with
+            | true -> Some (t.Substring(idx + 1).Trim())
+            | false -> None
+          | false -> None))
+    match findPrefixed ["expected"], findPrefixed ["actual"; "but was"] with
+    | Some e, Some a -> Some (cleanValue e, cleanValue a)
     | _ -> None
+
+  let private comparisonPattern =
+    Regex(
+      @"Expected (?:actual to be |string to contain )(.+?),?\s+(?:but was|was)\s+(.+?)\.?\s*$",
+      RegexOptions.Compiled ||| RegexOptions.Singleline)
+
+  let private lengthPattern =
+    Regex(@"Expected length\s+(\S+),\s*was\s+(\S+?)\.?\s*$", RegexOptions.Compiled)
+
+  let private fsCheckPattern =
+    Regex(
+      @"Falsifiable.*?Original:\s*\n(.+?)(?:\nShrunk:\s*\n(.+?))?$",
+      RegexOptions.Compiled ||| RegexOptions.Singleline)
+
+  /// Parse Expecto comparison prose: "Expected actual to be greater than X, but was Y"
+  let private tryParseComparisonProse (msg: string) =
+    let lines = msg.Split([| '\n'; '\r' |], StringSplitOptions.RemoveEmptyEntries)
+    lines
+    |> Array.tryPick (fun line ->
+      let m = comparisonPattern.Match(line.Trim())
+      match m.Success with
+      | true -> Some (cleanValue m.Groups.[1].Value, cleanValue m.Groups.[2].Value)
+      | false ->
+        let ml = lengthPattern.Match(line.Trim())
+        match ml.Success with
+        | true -> Some (sprintf "length %s" (ml.Groups.[1].Value), cleanValue ml.Groups.[2].Value)
+        | false -> None)
+
+  /// Parse FsCheck "Falsifiable" messages with counterexamples
+  let private tryParseFsCheck (msg: string) =
+    let m = fsCheckPattern.Match(msg)
+    match m.Success with
+    | true ->
+      let original = m.Groups.[1].Value.Trim()
+      let shrunk =
+        match m.Groups.[2].Success with
+        | true -> m.Groups.[2].Value.Trim()
+        | false -> ""
+      match String.IsNullOrEmpty shrunk with
+      | true -> Some (original, "(falsified)")
+      | false -> Some (original, sprintf "(shrunk to %s)" shrunk)
+    | false -> None
+
+  /// Parse assertion diffs from all major .NET test frameworks:
+  /// Expecto, xUnit, NUnit (Expected/But was), FsCheck (Falsifiable)
+  let tryParseAssertionDiff (msg: string) =
+    match String.IsNullOrWhiteSpace msg with
+    | true -> None
+    | false ->
+      match tryParseLabeledPair msg with
+      | Some pair -> Some pair
+      | None ->
+        match tryParseComparisonProse msg with
+        | Some pair -> Some pair
+        | None -> tryParseFsCheck msg
 
   let firstUserFrame (trace: string) =
     let lines =

@@ -346,7 +346,7 @@ let replayCachedTestState (ctx: SseContext) (body: System.IO.Stream) =
         let ltState = model.LiveTesting
         for file in files do
           let fa = FileAnnotations.projectWithCoverage file ltState
-          match fa.TestAnnotations.Length > 0 || fa.CodeLenses.Length > 0 || fa.CoverageAnnotations.Length > 0 with
+          match fa.TestAnnotations.Length > 0 || fa.CodeLenses.Length > 0 || fa.CoverageAnnotations.Length > 0 || fa.InlineFailures.Length > 0 with
           | true ->
             do! SageFs.SseWriter.formatFileAnnotationsEvent ctx.SseJsonOpts (Some activeId) fa
                 |> writeSseFrame body
@@ -563,7 +563,7 @@ let wireModelChangeHandlers
           let allFiles = Array.append files instrFiles
           for file in allFiles do
             let fa = SageFs.Features.LiveTesting.FileAnnotations.projectWithCoverage file model.LiveTesting
-            match fa.TestAnnotations.Length > 0 || fa.CodeLenses.Length > 0 || fa.CoverageAnnotations.Length > 0 with
+            match fa.TestAnnotations.Length > 0 || fa.CodeLenses.Length > 0 || fa.CoverageAnnotations.Length > 0 || fa.InlineFailures.Length > 0 with
             | true ->
               ctx.TestEventBroadcast.Trigger(
                 SageFs.SseWriter.formatFileAnnotationsEvent ctx.SseJsonOpts (Some activeId) fa)
