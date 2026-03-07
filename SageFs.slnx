@@ -8,4 +8,16 @@
   <Project Path="SageFs/SageFs.fsproj" />
   <Project Path="SageFs.Tests/SageFs.Tests.fsproj" />
   <Project Path="SageFs.Gui/SageFs.Gui.fsproj" />
+  <Folder Name="/Samples/">
+    <Project Path="samples/from-koans/SageFs.Samples.Koans/SageFs.Samples.Koans.fsproj" />
+    <Project Path="samples/from-csharp/SageFs.Samples.FromCSharp/SageFs.Samples.FromCSharp.fsproj" />
+    <Project Path="samples/from-python/SageFs.Samples.FromPython/SageFs.Samples.FromPython.fsproj" />
+    <Project Path="samples/from-java/SageFs.Samples.FromJava/SageFs.Samples.FromJava.fsproj" />
+    <Project Path="samples/from-javascript/SageFs.Samples.FromJavaScript/SageFs.Samples.FromJavaScript.fsproj" />
+    <Project Path="samples/from-rust/SageFs.Samples.FromRust/SageFs.Samples.FromRust.fsproj" />
+    <Project Path="samples/from-jupyter/SageFs.Samples.FromJupyter/SageFs.Samples.FromJupyter.fsproj" />
+    <Project Path="samples/demos/SageFs.Samples.RaylibHello/SageFs.Samples.RaylibHello.fsproj" />
+    <Project Path="samples/demos/SageFs.Samples.RaylibGame/SageFs.Samples.RaylibGame.fsproj" />
+    <Project Path="samples/demos/SageFs.Samples.WebappDatastar/SageFs.Samples.WebappDatastar.fsproj" />
+  </Folder>
 </Solution>
