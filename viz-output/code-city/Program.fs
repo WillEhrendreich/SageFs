@@ -362,7 +362,8 @@ type Road =
     FromPos: Vector3
     ToPos: Vector3
     Weight: int
-    Color: Color }
+    Color: Color
+    Organic: float32 }
 
 type District =
   { Name: string
@@ -1572,7 +1573,8 @@ let layoutWeberDistrict
                     FromPos = Vector3(na.Pos.X, hw, na.Pos.Y)
                     ToPos   = Vector3(nb.Pos.X, hw, nb.Pos.Y)
                     Weight  = RoadClass.tier e.Class
-                    Color   = Color(cr, cg, cb, 255uy) } ]
+                    Color   = Color(cr, cg, cb, 255uy)
+                    Organic = organic } ]
 
     let buildings = packAlongRoads weberRoads rect funcs heatMap districtColor rng gitMeta
     (buildings, weberRoads)
@@ -1698,7 +1700,8 @@ let buildCity (repoRoot: string) =
                   FromPos = Vector3(x1, 0.0f, z1)
                   ToPos = Vector3(x2, 0.0f, z2)
                   Weight = RoadClass.tier cls
-                  Color = Color(70uy, 70uy, 75uy, 255uy) })
+                  Color = Color(70uy, 70uy, 75uy, 255uy)
+                  Organic = 0.0f })
   // Project zone edges → Avenues
   for (_, zone) in projectZones do
     addEdge zone.X zone.Z (zone.X + zone.W) zone.Z Avenue
@@ -2134,6 +2137,13 @@ let rayIntersectsBox (ray: Ray) (b: FuncBuilding) : float32 option =
   else None
 
 /// Build GPU mesh: layered luminance (panel Q5) — ground → road → sidewalk → block fill → curbs → buildings
+/// Number of spline segments to use for a road of the given length and organic factor.
+/// organic=0 → 1 segment (straight); organic=1 → 4× more segments (very curved).
+let segmentCountForOrganic (roadLen: float32) (organic: float32) : int =
+  let lengthSegs = max 1 (int (roadLen / 1.5f))
+  let organicMult = max 1 (int (organic * 3.0f + 1.0f))
+  max 1 (lengthSegs * organicMult)
+
 let buildStaticMesh (buildings: FuncBuilding[]) (blocks: ModuleBlock[]) (cityExtent: float32) (alleyRoads: Road list) =
   // Pre-compute compound shapes for all buildings (deterministic from function name)
   let compounds =
@@ -2148,7 +2158,15 @@ let buildStaticMesh (buildings: FuncBuilding[]) (blocks: ModuleBlock[]) (cityExt
   // Vertex counts per layer:
   let groundVerts = 6 + 6    // dark ground + city-wide road surface
   let blockFillVerts = blocks.Length * 6
-  let alleyVerts = alleyRoads.Length * 6   // one flat quad per alley segment
+  // Spline roads: per segment = 12 verts (top+bottom quad strip), bounded by road.Organic
+  let alleyVerts =
+    alleyRoads |> List.sumBy (fun road ->
+      let x1 = road.FromPos.X
+      let z1 = road.FromPos.Z
+      let x2 = road.ToPos.X
+      let z2 = road.ToPos.Z
+      let len = MathF.Sqrt((x2-x1)*(x2-x1) + (z2-z1)*(z2-z1))
+      segmentCountForOrganic len road.Organic * 12)
   let sidewalkVerts = blocks.Length * 24   // 4 strips per block
   let curbVerts = blocks.Length * 144      // 4 thin boxes per block (36 verts each)
   let buildingVerts = totalBuildingCubes * 72 // body (36) + roof (36) per sub-cube
@@ -2192,8 +2210,8 @@ let buildStaticMesh (buildings: FuncBuilding[]) (blocks: ModuleBlock[]) (cityExt
     addQuadToArrays v n c vi bx 0.015f bz bx 0.015f (bz + bh) (bx + bw) 0.015f (bz + bh) (bx + bw) 0.015f bz 0.0f 1.0f 0.0f 30uy 30uy 34uy 255uy
     vi <- vi + 6
 
-  // Layer 2.5: Internal road surfaces — arbitrary-angle perpendicular quads (y=0.020)
-  // Half-width packed in road.FromPos.Y by layoutWeberDistrict / layoutInGrid
+  // Layer 2.5: Internal road surfaces — spline quads for organic roads, straight for grid roads
+  // Half-width packed in road.FromPos.Y by layoutWeberDistrict
   for road in alleyRoads do
     let hw = road.FromPos.Y
     let x1 = road.FromPos.X
@@ -2204,15 +2222,9 @@ let buildStaticMesh (buildings: FuncBuilding[]) (blocks: ModuleBlock[]) (cityExt
     let dz = z2 - z1
     let len = MathF.Sqrt(dx * dx + dz * dz)
     if hw > 0.001f && len > 0.01f then
-      let nx = -dz / len   // perpendicular direction
-      let nz =  dx / len
-      addQuadToArrays v n c vi
-        (x1 + nx * hw) 0.020f (z1 + nz * hw)
-        (x1 - nx * hw) 0.020f (z1 - nz * hw)
-        (x2 - nx * hw) 0.020f (z2 - nz * hw)
-        (x2 + nx * hw) 0.020f (z2 + nz * hw)
-        0.0f 1.0f 0.0f road.Color.R road.Color.G road.Color.B 255uy
-    vi <- vi + 6
+      let segs = segmentCountForOrganic len road.Organic
+      let written = addSplineRoadToArrays v n c vi x1 z1 x2 z2 0.020f 0.003f hw road.Color.R road.Color.G road.Color.B 255uy segs
+      vi <- vi + written
 
   // Layer 3: Sidewalk strips — medium luminance around each block (luminance ~0.20)
   for block in blocks do

@@ -479,7 +479,8 @@ let private mkRoad x1 z1 x2 z2 halfWidth =
     FromPos = Vector3(x1, halfWidth, z1)
     ToPos   = Vector3(x2, halfWidth, z2)
     Weight  = RoadClass.tier Street
-    Color   = Color(65uy, 65uy, 70uy, 255uy) }
+    Color   = Color(65uy, 65uy, 70uy, 255uy)
+    Organic = 0.0f }
 
 let roadFrontageTests =
   testList "Road-primary building placement (packAlongEdges)" [
@@ -800,6 +801,36 @@ let arcFormulaTests =
       shouldRenderLabel (Vector2(800.0f, 1100.0f)) 1600 900 true |> Expect.isFalse "off-screen-bottom should not render"
   ]
 
+let splineSegmentTests =
+  testList "Spline segment count" [
+    testCase "segmentCountForOrganic: minimum 1 segment always" <| fun () ->
+      segmentCountForOrganic 0.0f 0.0f |> Expect.equal "zero length + zero organic = 1" 1
+      // With organic factor, even tiny roads get at least 1 segment (organic multiplier applies)
+      let v = segmentCountForOrganic 0.0f 1.0f
+      (v, 0) |> Expect.isGreaterThan "any organic factor gives at least 1 segment"
+      let v2 = segmentCountForOrganic 0.5f 1.0f
+      (v2, 0) |> Expect.isGreaterThan "short organic road has at least 1 segment"
+
+    testCase "segmentCountForOrganic: more segments for longer roads" <| fun () ->
+      let s1 = segmentCountForOrganic 3.0f 0.5f
+      let s2 = segmentCountForOrganic 6.0f 0.5f
+      let s3 = segmentCountForOrganic 12.0f 0.5f
+      (s2, s1) |> Expect.isGreaterThan "longer road needs more segments"
+      (s3, s2) |> Expect.isGreaterThan "even longer road needs even more"
+
+    testCase "segmentCountForOrganic: more segments for more organic" <| fun () ->
+      let s0 = segmentCountForOrganic 6.0f 0.0f
+      let s5 = segmentCountForOrganic 6.0f 0.5f
+      let s1 = segmentCountForOrganic 6.0f 1.0f
+      (s5, s0) |> Expect.isGreaterThan "organic=0.5 needs more segments than organic=0"
+      (s1, s5) |> Expect.isGreaterThan "organic=1.0 needs most segments"
+
+    testCase "segmentCountForOrganic: pure function (same inputs always same output)" <| fun () ->
+      let a = segmentCountForOrganic 8.0f 0.7f
+      let b = segmentCountForOrganic 8.0f 0.7f
+      a |> Expect.equal "pure function: deterministic" b
+  ]
+
 let allTests =
   testList "CodeCity Domain" [
     colorMathTests
@@ -820,6 +851,7 @@ let allTests =
     gitAgeColorTests
     roadColorTests
     arcFormulaTests
+    splineSegmentTests
   ]
 
 [<EntryPoint>]
