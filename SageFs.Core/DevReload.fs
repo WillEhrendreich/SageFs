@@ -5,6 +5,40 @@ open System.Collections.Concurrent
 open System.Threading.Channels
 open SageFs.Utils
 
+/// Centralized configuration for the DevReload system.
+/// All timing/size constants that were previously scattered across
+/// FileWatcher.fs, DevReloadMiddleware.fs, and the inline JS.
+type DevReloadConfig = {
+  /// FileSystemWatcher debounce delay (ms). Default: 200
+  FileWatcherDebounceMs: int
+  /// FileSystemWatcher internal buffer size (bytes). Default: 65536 (64KB)
+  FileWatcherBufferSizeBytes: int
+  /// Max response body size for script injection (bytes). Default: 10MB
+  MaxBodyBufferSizeBytes: int64
+  /// Double-compilation guard window (ms). Default: 500
+  DoubleCompileGuardMs: int
+  /// Browser SSE connection timeout (ms). Default: 3000
+  SseConnectionTimeoutMs: int
+  /// Reload-bomb reset window (ms). Default: 5000
+  ReloadCountResetWindowMs: int
+  /// Max reloads before pause. Default: 3
+  ReloadGuardThreshold: int
+  /// Compile timer update interval in browser (ms). Default: 200
+  CompileTimerUpdateMs: int
+}
+
+module DevReloadConfig =
+  let defaults = {
+    FileWatcherDebounceMs = 200
+    FileWatcherBufferSizeBytes = 65536
+    MaxBodyBufferSizeBytes = 10L * 1024L * 1024L
+    DoubleCompileGuardMs = 500
+    SseConnectionTimeoutMs = 3000
+    ReloadCountResetWindowMs = 5000
+    ReloadGuardThreshold = 3
+    CompileTimerUpdateMs = 200
+  }
+
 /// Health status of the DevReload system. Queryable by any component
 /// that needs to know if hot-reload is operational.
 /// Follows Don Syme's "6-line state machine" pattern: named states with

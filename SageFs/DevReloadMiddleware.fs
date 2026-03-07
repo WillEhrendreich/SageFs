@@ -196,7 +196,7 @@ let reloadScript (workerPort: int) =
 </script>""" sseUrl
 
 let private handledKey = "SageFs.DevReload.Handled"
-let private maxBufferSize = 10L * 1024L * 1024L // 10MB
+let private maxBufferSize = DevReload.DevReloadConfig.defaults.MaxBodyBufferSizeBytes
 
 let private shouldInjectScript (ctx: HttpContext) =
   let ct = ctx.Response.ContentType

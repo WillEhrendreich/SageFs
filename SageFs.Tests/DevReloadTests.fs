@@ -785,7 +785,7 @@ let fileWatcherResilienceTests = testList "FileWatcher resilience" [
       ExcludePatterns = []
     }
     let mutable callCount = 0
-    use _watcher = FileWatcher.start config (fun _ -> callCount <- callCount + 1)
+    use _watcher = FileWatcher.start config DevReload.DevReloadConfig.defaults (fun _ -> callCount <- callCount + 1)
     callCount |> Expect.equal "no callbacks triggered" 0
   }
 
@@ -799,7 +799,7 @@ let fileWatcherResilienceTests = testList "FileWatcher resilience" [
         DebounceMs = 200
         ExcludePatterns = []
       }
-      use _watcher = FileWatcher.start config (fun _ -> ())
+      use _watcher = FileWatcher.start config DevReload.DevReloadConfig.defaults (fun _ -> ())
       true |> Expect.isTrue "watcher started successfully"
     finally
       Directory.Delete(tempDir, true)
@@ -812,7 +812,7 @@ let fileWatcherResilienceTests = testList "FileWatcher resilience" [
       DebounceMs = 200
       ExcludePatterns = []
     }
-    use _watcher = FileWatcher.start config (fun _ -> ())
+    use _watcher = FileWatcher.start config DevReload.DevReloadConfig.defaults (fun _ -> ())
     true |> Expect.isTrue "empty watcher is safe"
   }
 ]

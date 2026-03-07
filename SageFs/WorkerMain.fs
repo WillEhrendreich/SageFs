@@ -456,7 +456,7 @@ let run (sessionId: string) (port: int) = async {
           finally
             compilationLock.Release() |> ignore
         })
-      Some (FileWatcher.start config onFileChanged)
+      Some (FileWatcher.start config DevReload.DevReloadConfig.defaults onFileChanged)
 
   // Signal readiness over the pipe
   let handler =

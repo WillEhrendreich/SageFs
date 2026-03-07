@@ -107,13 +107,13 @@ let shouldSuppressRecompile
 /// Returns a dispose function that stops all watchers.
 let start
   (config: WatchConfig)
+  (devConfig: DevReload.DevReloadConfig)
   (onRebuildNeeded: FileChange -> unit)
   : IDisposable =
 
   let mutable pendingChanges : FileChange list = []
   let mutable lastCompiled : (string * DateTimeOffset) option = None
   let lockObj = obj()
-  let guardMs = 500
 
   let onTimer _ =
     let changes =
@@ -123,9 +123,9 @@ let start
         cs)
     Log.info "FileWatcher debounce fired: %d pending changes" changes.Length
     for c in changes do
-      match shouldSuppressRecompile guardMs lastCompiled c with
+      match shouldSuppressRecompile devConfig.DoubleCompileGuardMs lastCompiled c with
       | true ->
-        Log.info "FileWatcher suppressed duplicate compile for %s (within %dms guard)" c.FilePath guardMs
+        Log.info "FileWatcher suppressed duplicate compile for %s (within %dms guard)" c.FilePath devConfig.DoubleCompileGuardMs
       | false ->
         Instrumentation.fileWatcherChanges.Add(1L)
         let activity =
@@ -150,7 +150,7 @@ let start
         try
           let watcher = new FileSystemWatcher(dir)
           watcher.IncludeSubdirectories <- true
-          watcher.InternalBufferSize <- 65536 // 64KB — default 8KB overflows on batch saves
+          watcher.InternalBufferSize <- devConfig.FileWatcherBufferSizeBytes
           watcher.NotifyFilter <- NotifyFilters.LastWrite ||| NotifyFilters.FileName
           for ext in config.Extensions do
             watcher.Filters.Add(sprintf "*%s" ext)
