@@ -1398,6 +1398,37 @@ module McpTools =
     o.Converters.Add(JsonFSharpConverter())
     o
 
+  type FailureLocation = {
+    FilePath: string
+    Line: int
+  }
+
+  module FailureLocationParser =
+    let private linePattern =
+      System.Text.RegularExpressions.Regex(
+        @"in\s+(.+?):line\s+(\d+)",
+        System.Text.RegularExpressions.RegexOptions.Compiled)
+
+    let private frameworkPrefixes = [| "Expecto"; "FSharp.Core"; "System."; "Microsoft." |]
+
+    /// Parse the first user-code location from a .NET stack trace.
+    let tryParse (stackTrace: string) : FailureLocation option =
+      match System.String.IsNullOrWhiteSpace stackTrace with
+      | true -> None
+      | false ->
+        stackTrace.Split([| '\n'; '\r' |], System.StringSplitOptions.RemoveEmptyEntries)
+        |> Array.tryPick (fun line ->
+          let m = linePattern.Match(line)
+          match m.Success with
+          | true ->
+            let filePath = m.Groups.[1].Value.Trim()
+            let isFramework =
+              frameworkPrefixes |> Array.exists (fun prefix -> filePath.Contains(prefix))
+            match isFramework with
+            | true -> None
+            | false -> Some { FilePath = filePath; Line = int m.Groups.[2].Value }
+          | false -> None)
+
   let getLiveTestStatus (ctx: McpContext) (fileFilter: string option) : Task<string> =
     task {
       match ctx.GetElmModel with
@@ -1453,7 +1484,13 @@ module McpTools =
                 | Features.LiveTesting.TestFailure.AssertionFailed m -> m
                 | Features.LiveTesting.TestFailure.ExceptionThrown (m, _) -> m
                 | Features.LiveTesting.TestFailure.TimedOut after -> sprintf "Timed out after %dms" (int after.TotalMilliseconds)
-              Some {| Name = e.DisplayName; Message = msg; DurationMs = int duration.TotalMilliseconds |}
+              let location =
+                match failure with
+                | Features.LiveTesting.TestFailure.ExceptionThrown (_, st) ->
+                  FailureLocationParser.tryParse st
+                  |> Option.map (fun fl -> {| File = fl.FilePath; Line = fl.Line |})
+                | _ -> None
+              Some {| Name = e.DisplayName; Message = msg; DurationMs = int duration.TotalMilliseconds; Location = location |}
             | _ -> None)
           |> Array.truncate 20
         match failedTests.Length > 0 with
@@ -1575,6 +1612,7 @@ module McpTools =
     Message: string
     Duration: TimeSpan
     IsFlaky: bool
+    Location: FailureLocation option
   }
 
   type RunTestsResult =
@@ -1593,7 +1631,11 @@ module McpTools =
       | fs ->
         parts.Add (sprintf "\nFailed tests (%d):" fs.Length)
         for f in fs |> List.truncate 10 do
-          parts.Add (sprintf "  ❌ %s (%dms): %s" f.Name (int f.Duration.TotalMilliseconds) f.Message)
+          let loc =
+            match f.Location with
+            | Some l -> sprintf " → %s:%d" l.FilePath l.Line
+            | None -> ""
+          parts.Add (sprintf "  ❌ %s (%dms): %s%s" f.Name (int f.Duration.TotalMilliseconds) f.Message loc)
         match fs.Length > 10 with
         | true -> parts.Add (sprintf "  ... and %d more" (fs.Length - 10))
         | false -> ()
@@ -1652,11 +1694,15 @@ module McpTools =
             | Features.LiveTesting.TestFailure.AssertionFailed m -> m
             | Features.LiveTesting.TestFailure.ExceptionThrown (m, _) -> m
             | Features.LiveTesting.TestFailure.TimedOut after -> sprintf "Timed out after %dms" (int after.TotalMilliseconds)
+          let location =
+            match failure with
+            | Features.LiveTesting.TestFailure.ExceptionThrown (_, st) -> FailureLocationParser.tryParse st
+            | _ -> None
           let isFlaky =
             match Features.LiveTesting.FlakyDetection.assessTest e.TestId flakyHistory with
             | Features.LiveTesting.TestStability.Flaky _ -> true
             | _ -> false
-          failures.Add { Name = e.DisplayName; Message = msg; Duration = duration; IsFlaky = isFlaky }
+          failures.Add { Name = e.DisplayName; Message = msg; Duration = duration; IsFlaky = isFlaky; Location = location }
         | Features.LiveTesting.TestRunStatus.Running ->
           running <- running + 1
           runningNames.Add e.DisplayName
