@@ -157,6 +157,11 @@ let solutionToFsiArgs (logger: ILogger) (_useAsp: bool) sln =
 
   [|
     "fsi"
+    // Disable multi-emit so all submissions share one dynamic assembly.
+    // Without this, each EvalInteraction creates a separate assembly and
+    // types from submission N can't be loaded in submission N+1 — causing
+    // TypeLoadException via MonoMod's JIT hook on cross-submission refs.
+    "--multiemit-"
     yield! allDlls |> Seq.map (sprintf "-r:%s")
     yield! sln.LibPaths |> Seq.map (sprintf "--lib:%s")
     yield! sln.OtherArgs
