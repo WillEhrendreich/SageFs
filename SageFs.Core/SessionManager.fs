@@ -28,6 +28,7 @@ module SessionManager =
     /// Original spawn config — needed for restart.
     Projects: string list
     WorkingDir: string
+    AutoOpenNamespaces: bool
     /// Per-session restart tracking.
     RestartState: RestartPolicy.State
   }
@@ -37,6 +38,7 @@ module SessionManager =
     | CreateSession of
         projects: string list *
         workingDir: string *
+        autoOpenNamespaces: bool *
         AsyncReplyChannel<Result<SessionInfo, SageFsError>>
     | StopSession of
         SessionId *
@@ -141,13 +143,13 @@ module SessionManager =
         StandbyInfo.Warming progress
 
   /// Compute per-session standby info by matching each session to its StandbyKey.
-  let computePerSessionStandby (pool: PoolState) (sessions: Map<SessionId, SessionInfo>) : Map<SessionId, StandbyInfo> =
+  let computePerSessionStandby (pool: PoolState) (sessions: Map<SessionId, ManagedSession>) : Map<SessionId, StandbyInfo> =
     match pool.Enabled with
     | false -> Map.empty
     | true ->
       sessions
-      |> Map.map (fun _id info ->
-        let key = StandbyKey.fromSession info.Projects info.WorkingDirectory
+      |> Map.map (fun _id session ->
+        let key = StandbyKey.fromSession session.Projects session.WorkingDir session.AutoOpenNamespaces
         match Map.tryFind key pool.Standbys with
         | None -> StandbyInfo.NoPool
         | Some s ->
@@ -168,7 +170,7 @@ module SessionManager =
           match ms.WorkerBaseUrl.Length > 0 with
           | true -> Map.add id ms.WorkerBaseUrl acc
           | false -> acc) Map.empty
-      let perSession = computePerSessionStandby state.Pool sessions
+      let perSession = computePerSessionStandby state.Pool state.Sessions
       { Sessions = sessions; StandbyInfo = standby; PerSessionStandby = perSession; WarmupProgress = state.WarmupProgress; WorkerBaseUrls = workerUrls }
 
     /// Project a snapshot directly from ManagerState (computes standby info).
@@ -195,9 +197,10 @@ module SessionManager =
     (sessionId: SessionId)
     (projects: string list)
     (workingDir: string)
+    (autoOpenNamespaces: bool)
     (onExited: int -> int -> unit)
     : Result<Process, SageFsError> =
-    let args, envVars = Args.buildWorkerSpawnConfig sessionId projects false false
+    let args, envVars = Args.buildWorkerSpawnConfig sessionId projects false false autoOpenNamespaces
 
     let psi = ProcessStartInfo()
     psi.FileName <- "sagefs"
@@ -418,13 +421,13 @@ module SessionManager =
         publishSnapshot state
         let! cmd = inbox.Receive()
         match cmd with
-        | SessionCommand.CreateSession(projects, workingDir, reply) ->
+        | SessionCommand.CreateSession(projects, workingDir, autoOpenNamespaces, reply) ->
           let sessionId = Guid.NewGuid().ToString("N").[..7]
           let span = Instrumentation.startSpan Instrumentation.sessionSource "session.create"
                        [("session.id", box sessionId); ("session.projects", box (String.concat "," projects)); ("session.working_dir", box workingDir)]
           let onExited workerPid exitCode =
             inbox.Post(SessionCommand.WorkerExited(sessionId, workerPid, exitCode))
-          match startWorkerProcess sessionId projects workingDir onExited with
+          match startWorkerProcess sessionId projects workingDir autoOpenNamespaces onExited with
           | Ok proc ->
             // Register session immediately with pending proxy — don't block
             let info : SessionInfo = {
@@ -445,6 +448,7 @@ module SessionManager =
               WorkerBaseUrl = ""
               Projects = projects
               WorkingDir = workingDir
+              AutoOpenNamespaces = autoOpenNamespaces
               RestartState = RestartPolicy.emptyState
             }
             let newState = ManagerState.addSession sessionId managed state
@@ -481,7 +485,7 @@ module SessionManager =
                        [("session.id", box id); ("rebuild", box rebuild)]
           match ManagerState.tryGetSession id state with
           | Some session ->
-            let key = StandbyKey.fromSession session.Projects session.WorkingDir
+            let key = StandbyKey.fromSession session.Projects session.WorkingDir session.AutoOpenNamespaces
             let standby = PoolState.getStandby key state.Pool
             match StandbyPool.decideRestart rebuild standby with
             | RestartDecision.SwapStandby readyStandby ->
@@ -512,6 +516,7 @@ module SessionManager =
                 WorkerBaseUrl = ""
                 Projects = session.Projects
                 WorkingDir = session.WorkingDir
+                AutoOpenNamespaces = session.AutoOpenNamespaces
                 RestartState = session.RestartState
               }
               let poolAfterSwap = PoolState.removeStandby key stateAfterStop.Pool
@@ -555,7 +560,7 @@ module SessionManager =
               | Ok _buildMsg ->
               let onExited workerPid exitCode =
                 inbox.Post(SessionCommand.WorkerExited(id, workerPid, exitCode))
-              match startWorkerProcess id session.Projects session.WorkingDir onExited with
+              match startWorkerProcess id session.Projects session.WorkingDir session.AutoOpenNamespaces onExited with
               | Ok proc ->
                 let info : SessionInfo = {
                   Id = id
@@ -575,6 +580,7 @@ module SessionManager =
                   WorkerBaseUrl = ""
                   Projects = session.Projects
                   WorkingDir = session.WorkingDir
+                  AutoOpenNamespaces = session.AutoOpenNamespaces
                   RestartState = session.RestartState
                 }
                 let newState = ManagerState.addSession id restarted stateAfterStop
@@ -647,7 +653,7 @@ module SessionManager =
               { ManagerState.addSession id updated state with
                   WarmupProgress = Map.remove id state.WarmupProgress }
             // Trigger standby warmup for this session's config
-            let key = StandbyKey.fromSession session.Projects session.WorkingDir
+            let key = StandbyKey.fromSession session.Projects session.WorkingDir session.AutoOpenNamespaces
             match state.Pool.Enabled && (PoolState.getStandby key state.Pool |> Option.isNone) with
             | true -> inbox.Post(SessionCommand.WarmStandby key)
             | false -> ()
@@ -787,7 +793,7 @@ module SessionManager =
           | Some session when session.Info.Status = SessionStatus.Restarting ->
             let onExited workerPid exitCode =
               inbox.Post(SessionCommand.WorkerExited(id, workerPid, exitCode))
-            match startWorkerProcess id session.Projects session.WorkingDir onExited with
+            match startWorkerProcess id session.Projects session.WorkingDir session.AutoOpenNamespaces onExited with
             | Ok proc ->
               let restarted =
                 { session with
@@ -862,7 +868,7 @@ module SessionManager =
             let standbyId = sprintf "standby-%s" (Guid.NewGuid().ToString("N").[..7])
             let onExited workerPid _exitCode =
               inbox.Post(SessionCommand.StandbyExited(key, workerPid))
-            match startWorkerProcess standbyId key.Projects key.WorkingDir onExited with
+            match startWorkerProcess standbyId key.Projects key.WorkingDir key.AutoOpenNamespaces onExited with
             | Ok proc ->
               let standby = {
                 Process = proc

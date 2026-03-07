@@ -37,6 +37,7 @@ type ActorArgs = {
   UseAsp: bool
   LoadConfig: Args.ProjectLoadConfig
   IsBare: bool
+  AutoOpenNamespaces: bool
   OnEvent: Features.Events.SageFsEvent -> unit
 }
 
@@ -94,7 +95,7 @@ let createActorImmediate a =
 
   let customData = a.InitFunctions |> Seq.map (fun fn -> fn sln) |> Map.ofSeq
   let appActor, diagnosticsChanged, cancelEval, getSessionState, getEvalStats, getWarmupFailures, getWarmupContext, getStartupConfig, getStatusMessage =
-    mkAppStateActor a.Logger customData a.OutStream a.UseAsp originalSln shadowDir a.OnEvent sln
+    mkAppStateActor a.Logger customData a.OutStream a.UseAsp originalSln shadowDir a.AutoOpenNamespaces a.OnEvent sln
   let projDirs = projectDirectories originalSln
   let hotReloadStateRef = ref HotReloadState.empty
   { Actor = appActor; DiagnosticsChanged = diagnosticsChanged; CancelEval = cancelEval; GetSessionState = getSessionState; GetEvalStats = getEvalStats; GetWarmupFailures = getWarmupFailures; GetWarmupContext = getWarmupContext; GetStartupConfig = getStartupConfig; GetStatusMessage = getStatusMessage; ProjectDirectories = projDirs; HotReloadStateRef = hotReloadStateRef; InstrumentationMaps = instrumentationMaps }
@@ -118,6 +119,7 @@ let mkCommonActorArgs logger useAsp (onEvent: Features.Events.SageFsEvent -> uni
   UseAsp = useAsp
   LoadConfig = loadConfig
   IsBare = isBare
+  AutoOpenNamespaces = true
   OutStream = stdout
   Logger = logger
   OnEvent = onEvent

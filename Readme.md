@@ -446,8 +446,11 @@ Full options: `sagefs --help`
 ```fsharp
 { DirectoryConfig.empty with
     Load = Projects ["src/MyApp.fsproj"; "tests/MyApp.Tests.fsproj"]
+    AutoOpenNamespaces = false
     InitScript = Some "setup.fsx" }
 ```
+
+Set `AutoOpenNamespaces = false` to skip warmup auto-opening of namespaces and modules. Because sessions inherit `.SageFs/config.fsx` from the working directory, this opt-out applies across VS Code, Neovim, Visual Studio, the dashboard, TUI, and GUI session creation flows.
 
 **Startup profile** — `~/.SageFs/init.fsx` auto-loads on every session start.
 

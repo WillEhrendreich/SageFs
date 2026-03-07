@@ -37,6 +37,10 @@ let evaluateTests = testList "DirectoryConfig.evaluate" [
     let config = evalOk """{ DirectoryConfig.empty with DefaultArgs = ["--no-warn:1182"; "--bare"] }"""
     Expect.equal config.DefaultArgs ["--no-warn:1182"; "--bare"] "should parse defaultArgs")
 
+  testCase "loads autoOpenNamespaces override" (fun () ->
+    let config = evalOk """{ DirectoryConfig.empty with AutoOpenNamespaces = false }"""
+    Expect.equal config.AutoOpenNamespaces false "should parse AutoOpenNamespaces")
+
   testCase "loads full config" (fun () ->
     let config = evalOk """
 { DirectoryConfig.empty with
@@ -50,6 +54,7 @@ let evaluateTests = testList "DirectoryConfig.evaluate" [
   testCase "empty expression returns defaults" (fun () ->
     let config = evalOk "DirectoryConfig.empty"
     Expect.equal config DirectoryConfig.empty "should return empty defaults"
+    Expect.equal config.AutoOpenNamespaces true "AutoOpenNamespaces defaults to true"
     Expect.equal config.IsRoot false "IsRoot defaults to false"
     Expect.equal config.SessionName None "SessionName defaults to None")
 

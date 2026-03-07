@@ -1163,71 +1163,82 @@ let renderBindingsPanel (snapshot: Features.BindingExplorer.BindingScopeSnapshot
 
 /// Create the SSE stream handler that pushes Elm state to the browser.
 
-let renderDiscoveredProjects (discovered: DiscoveredProjects) =
-  Elem.div [ Attr.id DomIds.DiscoveredProjects; Attr.style "margin-top: 0.5rem;" ] [
-    match discovered.Solutions.IsEmpty && discovered.Projects.IsEmpty with
-    | true ->
-      Elem.div [ Attr.class' "output-line output-error" ] [
-        Text.raw (sprintf "No .sln/.fsproj found in %s" discovered.WorkingDir)
-      ]
+let private renderDiscoveredProjectsBody (discovered: DiscoveredProjects) = [
+  match discovered.Solutions.IsEmpty && discovered.Projects.IsEmpty with
+  | true ->
+    Elem.div [ Attr.class' "output-line output-error" ] [
+      Text.raw (sprintf "No .sln/.fsproj found in %s" discovered.WorkingDir)
+    ]
+  | false ->
+    Elem.div [ Attr.class' "output-line output-result" ] [
+      Text.raw (sprintf "Found in %s:" discovered.WorkingDir)
+    ]
+    match discovered.Solutions.IsEmpty with
     | false ->
-      Elem.div [ Attr.class' "output-line output-result" ] [
-        Text.raw (sprintf "Found in %s:" discovered.WorkingDir)
-      ]
+      yield! discovered.Solutions |> List.map (fun s ->
+        Elem.div [ Attr.class' "output-line output-info"; Attr.style "padding-left: 1rem;" ] [
+          Text.raw (sprintf "📁 %s (solution)" s)
+        ])
+    | true -> ()
+    yield! discovered.Projects |> List.map (fun p ->
+      Elem.div [ Attr.class' "output-line"; Attr.style "padding-left: 1rem;" ] [
+        Text.raw (sprintf "📄 %s" p)
+      ])
+    Elem.div [ Attr.class' "meta"; Attr.style "margin-top: 4px;" ] [
       match discovered.Solutions.IsEmpty with
       | false ->
-        yield! discovered.Solutions |> List.map (fun s ->
-          Elem.div [ Attr.class' "output-line output-info"; Attr.style "padding-left: 1rem;" ] [
-            Text.raw (sprintf "📁 %s (solution)" s)
-          ])
-      | true -> ()
-      yield! discovered.Projects |> List.map (fun p ->
-        Elem.div [ Attr.class' "output-line"; Attr.style "padding-left: 1rem;" ] [
-          Text.raw (sprintf "📄 %s" p)
-        ])
-      Elem.div [ Attr.class' "meta"; Attr.style "margin-top: 4px;" ] [
-        match discovered.Solutions.IsEmpty with
-        | false ->
-          Text.raw "Will use solution file. Click 'Create Session' to proceed."
-        | true ->
-          Text.raw "Will load all projects. Click 'Create Session' to proceed."
-      ]
+        Text.raw "Will use solution file. Click 'Create Session' to proceed."
+      | true ->
+        Text.raw "Will load all projects. Click 'Create Session' to proceed."
+    ]
+]
+
+let private renderDiscoverConfigNotes (dirConfig: DirectoryConfig option) =
+  match dirConfig with
+  | Some config ->
+    [
+      yield
+        match config.Load with
+        | Solution path ->
+          Elem.div [ Attr.class' "output-line output-info"; Attr.style "margin-bottom: 4px;" ] [
+            Text.raw (sprintf "⚙️ .SageFs/config.fsx: solution %s" path)
+          ]
+        | Projects paths ->
+          Elem.div [ Attr.class' "output-line output-info"; Attr.style "margin-bottom: 4px;" ] [
+            Text.raw (sprintf "⚙️ .SageFs/config.fsx: %s" (String.Join(", ", paths)))
+          ]
+        | NoLoad ->
+          Elem.div [ Attr.class' "output-line meta"; Attr.style "margin-bottom: 4px;" ] [
+            Text.raw "⚙️ .SageFs/config.fsx: no project loading (bare session)"
+          ]
+        | AutoDetect ->
+          Elem.div [ Attr.class' "output-line meta"; Attr.style "margin-bottom: 4px;" ] [
+            Text.raw "⚙️ .SageFs/config.fsx found (auto-detect projects)"
+          ]
+
+      if not config.AutoOpenNamespaces then
+        yield Elem.div [ Attr.class' "output-line meta"; Attr.style "margin-bottom: 4px;" ] [
+          Text.raw "⚙️ .SageFs/config.fsx: warmup auto-open disabled (sessions won't auto-open namespaces/modules)"
+        ]
+    ]
+  | None -> []
+
+let renderDiscoveredProjects (discovered: DiscoveredProjects) =
+  Elem.div [ Attr.id DomIds.DiscoveredProjects; Attr.style "margin-top: 0.5rem;" ] (
+    renderDiscoveredProjectsBody discovered
+  )
+
+let renderDiscoveredProjectsWithConfig (dirConfig: DirectoryConfig option) (discovered: DiscoveredProjects) =
+  Elem.div [ Attr.id DomIds.DiscoveredProjects; Attr.style "margin-top: 0.5rem;" ] [
+    yield! renderDiscoverConfigNotes dirConfig
+    yield! renderDiscoveredProjectsBody discovered
   ]
 
 /// Push discover results for a directory via SSE.
 let pushDiscoverResults (ctx: HttpContext) (dir: string) = task {
   let dirConfig = DirectoryConfig.load dir
   let discovered = discoverProjects dir
-  let configNote =
-    match dirConfig with
-    | Some config ->
-      match config.Load with
-      | Solution path ->
-        Some (Elem.div [ Attr.class' "output-line output-info"; Attr.style "margin-bottom: 4px;" ] [
-          Text.raw (sprintf "⚙️ .SageFs/config.fsx: solution %s" path)
-        ])
-      | Projects paths ->
-        Some (Elem.div [ Attr.class' "output-line output-info"; Attr.style "margin-bottom: 4px;" ] [
-          Text.raw (sprintf "⚙️ .SageFs/config.fsx: %s" (String.Join(", ", paths)))
-        ])
-      | NoLoad ->
-        Some (Elem.div [ Attr.class' "output-line meta"; Attr.style "margin-bottom: 4px;" ] [
-          Text.raw "⚙️ .SageFs/config.fsx: no project loading (bare session)"
-        ])
-      | AutoDetect ->
-        Some (Elem.div [ Attr.class' "output-line meta"; Attr.style "margin-bottom: 4px;" ] [
-          Text.raw "⚙️ .SageFs/config.fsx found (auto-detect projects)"
-        ])
-    | None -> None
-  let mainContent = renderDiscoveredProjects discovered
-  match configNote with
-  | Some note ->
-    let combined = Elem.div [ Attr.id DomIds.DiscoveredProjects; Attr.style "margin-top: 0.5rem;" ] [
-      note; mainContent
-    ]
-    do! ssePatchNode ctx combined
-  | None ->
-    do! ssePatchNode ctx mainContent
+  do! ssePatchNode ctx (renderDiscoveredProjectsWithConfig dirConfig discovered)
 }
 
 /// Helper: render an eval-result error fragment.

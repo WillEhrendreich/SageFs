@@ -8,6 +8,7 @@ open System.Threading
 let createEffectDeps
   (sessionManager: MailboxProcessor<SessionManager.SessionCommand>)
   (readSnapshot: unit -> SessionManager.QuerySnapshot)
+  (autoOpenNamespacesForDirectory: string -> bool)
   : EffectDeps =
   {
     ResolveSession = fun sessionIdOpt ->
@@ -19,10 +20,11 @@ let createEffectDeps
       HttpWorkerClient.proxyFromUrls sessionId (readSnapshot()).WorkerBaseUrls
     CreateSession = fun projects workingDir ->
       async {
+        let autoOpenNamespaces = autoOpenNamespacesForDirectory workingDir
         let! result =
           sessionManager.PostAndAsyncReply(fun reply ->
             SessionManager.SessionCommand.CreateSession(
-              projects, workingDir, reply))
+              projects, workingDir, autoOpenNamespaces, reply))
         return result
       }
     StopSession = fun sessionId ->

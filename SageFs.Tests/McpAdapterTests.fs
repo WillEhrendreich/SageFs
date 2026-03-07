@@ -606,7 +606,7 @@ let jsonFormatVariantTests =
         let cfg : StartupConfig = {
           CommandLineArgs = [||]; LoadedProjects = ["Test.fsproj"]
           WorkingDirectory = "C:\\test"; McpPort = 1234
-          HotReloadEnabled = true; AspireDetected = false
+          HotReloadEnabled = true; AutoOpenNamespaces = true; AspireDetected = false
           StartupProfileLoaded = None; StartupTimestamp = DateTime.UtcNow
         }
         let result = McpAdapter.formatEnhancedStatusJson "x" 0 SessionState.Ready None (Some cfg)
@@ -621,7 +621,7 @@ let jsonFormatVariantTests =
         let cfg : StartupConfig = {
           CommandLineArgs = [||]; LoadedProjects = []
           WorkingDirectory = "C:\\work"; McpPort = 5000
-          HotReloadEnabled = false; AspireDetected = true
+          HotReloadEnabled = false; AutoOpenNamespaces = true; AspireDetected = true
           StartupProfileLoaded = None; StartupTimestamp = DateTime.UtcNow
         }
         let result = McpAdapter.formatEnhancedStatusJson "x" 0 SessionState.Ready None (Some cfg)

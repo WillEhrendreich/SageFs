@@ -142,8 +142,8 @@ let restartDecisionTests = testList "RestartDecision" [
 
 [<Tests>]
 let poolStateTests = testList "PoolState" [
-  let key1 = StandbyKey.fromSession ["a.fsproj"] "C:\\proj1"
-  let key2 = StandbyKey.fromSession ["b.fsproj"] "C:\\proj2"
+  let key1 = StandbyKey.fromSession ["a.fsproj"] "C:\\proj1" true
+  let key2 = StandbyKey.fromSession ["b.fsproj"] "C:\\proj2" true
 
   testCase "empty has no standbys" <| fun _ ->
     PoolState.getStandby key1 PoolState.empty
@@ -197,8 +197,8 @@ let poolStateTests = testList "PoolState" [
     |> Expect.equal "proj2 unaffected" StandbyState.Ready
 
   testCase "project order is normalized" <| fun _ ->
-    let k1 = StandbyKey.fromSession ["b.fsproj"; "a.fsproj"] "C:\\dir"
-    let k2 = StandbyKey.fromSession ["a.fsproj"; "b.fsproj"] "C:\\dir"
+    let k1 = StandbyKey.fromSession ["b.fsproj"; "a.fsproj"] "C:\\dir" true
+    let k2 = StandbyKey.fromSession ["a.fsproj"; "b.fsproj"] "C:\\dir" true
     k1 |> Expect.equal "normalized key" k2
 ]
 
@@ -241,7 +241,7 @@ let standbyBenchmarkTests = testList "StandbyPool benchmarks" [
     Expect.isLessThan "should be sub-microsecond" (usPerOp, 10.0)
 
   testCase "tryConsumeStandby is < 5µs" <| fun _ ->
-    let key = StandbyKey.fromSession ["test.fsproj"] "C:\\test"
+    let key = StandbyKey.fromSession ["test.fsproj"] "C:\\test" true
     let s = makeStandby StandbyState.Ready (Some dummyProxy)
     let state = PoolState.setStandby key s PoolState.empty
     // warmup
@@ -259,7 +259,7 @@ let standbyBenchmarkTests = testList "StandbyPool benchmarks" [
   testCase "invalidateForDir is < 10µs for 5 standbys" <| fun _ ->
     let mutable state = PoolState.empty
     for i in 1..5 do
-      let k = StandbyKey.fromSession [sprintf "proj%d.fsproj" i] "C:\\test"
+      let k = StandbyKey.fromSession [sprintf "proj%d.fsproj" i] "C:\\test" true
       state <- PoolState.setStandby k (makeStandby StandbyState.Ready (Some dummyProxy)) state
     // warmup
     for _ in 1..100 do
@@ -281,7 +281,7 @@ let sseProgressCallbackTests = testList "SSE progress callback" [
     let mutable callCount = 0
     let mgr, _ =
       SessionManager.create cts.Token (fun () -> callCount <- callCount + 1) (fun _ _ _ -> ()) (fun _ _ -> ()) ignore (fun _ _ -> ())
-    let fakeKey = { StandbyKey.Projects = ["test.fsproj"]; WorkingDir = "C:\\fake" }
+    let fakeKey = { StandbyKey.Projects = ["test.fsproj"]; WorkingDir = "C:\\fake"; AutoOpenNamespaces = true }
     mgr.Post(SessionManager.SessionCommand.StandbyProgress(fakeKey, "1/4 test"))
     Thread.Sleep(50)
     Expect.equal "callback should not fire for non-existent standby" 0 callCount

@@ -41,6 +41,7 @@ let mkManagedSession id status =
     WorkerBaseUrl = "http://localhost:0"
     Projects = [ "Test.fsproj" ]
     WorkingDir = "/test"
+    AutoOpenNamespaces = true
     RestartState = RestartPolicy.emptyState
   }
 

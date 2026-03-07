@@ -35,12 +35,14 @@ type WorkerConfig = {
   WorkingDir: string
   IsBare: bool
   NoWatch: bool
+  AutoOpenNamespaces: bool
 }
 
 module WorkerConfig =
   let envVar = "SAGEFS_SESSION_PROJECTS"
   let bareEnvVar = "SAGEFS_BARE_SESSION"
   let noWatchEnvVar = "SAGEFS_NO_WATCH"
+  let autoOpenNamespacesEnvVar = "SAGEFS_AUTO_OPEN_NAMESPACES"
 
   /// Pure core — reads config via an injected env reader.
   let fromEnvironmentWith
@@ -60,12 +62,17 @@ module WorkerConfig =
       match getEnv noWatchEnvVar with
       | "1" | "true" -> true
       | _ -> false
+    let autoOpenNamespaces =
+      match getEnv autoOpenNamespacesEnvVar with
+      | "0" | "false" -> false
+      | _ -> true
     { SessionId = sessionId
       HttpPort = httpPort
       Projects = projects
       WorkingDir = Environment.CurrentDirectory
       IsBare = isBare
-      NoWatch = noWatch }
+      NoWatch = noWatch
+      AutoOpenNamespaces = autoOpenNamespaces }
 
   /// Impure shell — reads from real environment.
   let fromEnvironment sessionId httpPort =
@@ -98,12 +105,14 @@ let buildWorkerSpawnConfig
   (projects: string list)
   (isBare: bool)
   (noWatch: bool)
+  (autoOpenNamespaces: bool)
   : string * (string * string) list =
   let args = sprintf "worker --session-id %s --http-port 0" sessionId
   let envVars = [
     WorkerConfig.envVar, (projects |> String.concat ";")
     if isBare then WorkerConfig.bareEnvVar, "1"
     if noWatch then WorkerConfig.noWatchEnvVar, "1"
+    if not autoOpenNamespaces then WorkerConfig.autoOpenNamespacesEnvVar, "0"
   ]
   args, envVars
 

@@ -27,15 +27,18 @@ type StandbySession = {
 type StandbyKey = {
   Projects: string list
   WorkingDir: string
+  AutoOpenNamespaces: bool
 }
 with
   override x.Equals(obj) =
     match obj with
     | :? StandbyKey as y ->
-      x.Projects = y.Projects && x.WorkingDir = y.WorkingDir
+      x.Projects = y.Projects
+      && x.WorkingDir = y.WorkingDir
+      && x.AutoOpenNamespaces = y.AutoOpenNamespaces
     | _ -> false
   override x.GetHashCode() =
-    hash (x.Projects, x.WorkingDir)
+    hash (x.Projects, x.WorkingDir, x.AutoOpenNamespaces)
   interface IComparable with
     member x.CompareTo(obj) =
       match obj with
@@ -43,12 +46,18 @@ with
         let c = compare x.Projects y.Projects
         match c <> 0 with
         | true -> c
-        | false -> compare x.WorkingDir y.WorkingDir
+        | false ->
+          let dirCompare = compare x.WorkingDir y.WorkingDir
+          match dirCompare <> 0 with
+          | true -> dirCompare
+          | false -> compare x.AutoOpenNamespaces y.AutoOpenNamespaces
       | _ -> 1
 
 module StandbyKey =
-  let fromSession (projects: string list) (workingDir: string) =
-    { Projects = List.sort projects; WorkingDir = workingDir }
+  let fromSession (projects: string list) (workingDir: string) (autoOpenNamespaces: bool) =
+    { Projects = List.sort projects
+      WorkingDir = workingDir
+      AutoOpenNamespaces = autoOpenNamespaces }
 
 /// What should RestartSession do?
 [<RequireQualifiedAccess>]

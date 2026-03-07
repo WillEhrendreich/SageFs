@@ -119,6 +119,23 @@ let dashboardRenderSnapshotTests = testList "Dashboard render snapshots" [
     do! verifyDashboard "dashboard_discoveredProjects" html
   }
 
+  testTask "renderDiscoveredProjectsWithConfig shows auto-open opt-out note" {
+    let discovered : DiscoveredProjects = {
+      WorkingDir = @"C:\Code\MyProj"
+      Solutions = [ "MyProj.sln" ]
+      Projects = [ "MyProj.fsproj"; "Tests.fsproj" ]
+    }
+
+    let dirConfig = {
+      DirectoryConfig.empty with
+        AutoOpenNamespaces = false
+    }
+
+    let html = renderDiscoveredProjectsWithConfig (Some dirConfig) discovered |> renderNode
+    Expect.isTrue (html.Contains ".SageFs/config.fsx") "should mention the config path"
+    Expect.isTrue (html.Contains "warmup auto-open disabled") "should mention the warmup auto-open opt-out"
+  }
+
   testTask "renderDiscoveredProjects empty" {
     let discovered : DiscoveredProjects = {
       WorkingDir = @"C:\Code\Empty"

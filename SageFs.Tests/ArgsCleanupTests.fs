@@ -86,6 +86,16 @@ let workerConfigTests =
       let config = WorkerConfig.fromEnvironmentWith getEnv "test-id" 0
       config.NoWatch |> Expect.isTrue "should disable watch"
 
+    testCase "missing auto-open env var defaults to enabled" <| fun () ->
+      let getEnv = fakeEnv []
+      let config = WorkerConfig.fromEnvironmentWith getEnv "test-id" 0
+      config.AutoOpenNamespaces |> Expect.isTrue "should default to enabled"
+
+    testCase "SAGEFS_AUTO_OPEN_NAMESPACES=0 disables auto-open" <| fun () ->
+      let getEnv = fakeEnv [ WorkerConfig.autoOpenNamespacesEnvVar, "0" ]
+      let config = WorkerConfig.fromEnvironmentWith getEnv "test-id" 0
+      config.AutoOpenNamespaces |> Expect.isFalse "should disable auto-open"
+
     testCase "session id and port pass through" <| fun () ->
       let getEnv = fakeEnv []
       let config = WorkerConfig.fromEnvironmentWith getEnv "abc123" 5050
@@ -100,7 +110,7 @@ let projectLoadConfigTests =
 
     testCase "separates .sln/.slnx from .fsproj" <| fun () ->
       let wc = {
-        SessionId = "x"; HttpPort = 0; IsBare = false; NoWatch = false
+        SessionId = "x"; HttpPort = 0; IsBare = false; NoWatch = false; AutoOpenNamespaces = true
         WorkingDir = "."
         Projects = ["MyApp.fsproj"; "Solution.sln"; "Other.slnx"; "Lib.fsproj"]
       }
@@ -112,7 +122,7 @@ let projectLoadConfigTests =
 
     testCase "empty projects gives empty config" <| fun () ->
       let wc = {
-        SessionId = "x"; HttpPort = 0; IsBare = false; NoWatch = false
+        SessionId = "x"; HttpPort = 0; IsBare = false; NoWatch = false; AutoOpenNamespaces = true
         WorkingDir = "/tmp"; Projects = []
       }
       let plc = ProjectLoadConfig.fromWorkerConfig wc
@@ -127,7 +137,7 @@ let workerSpawnConfigTests =
   testList "worker spawn config" [
 
     testCase "single project sets env var" <| fun () ->
-      let args, envVars = buildWorkerSpawnConfig "sess1" ["MyApp.fsproj"] false false
+      let args, envVars = buildWorkerSpawnConfig "sess1" ["MyApp.fsproj"] false false true
       args |> Expect.stringContains "should have session id" "sess1"
       (args.Contains "--proj")
       |> Expect.isFalse "no --proj in args"
@@ -137,32 +147,41 @@ let workerSpawnConfigTests =
       |> Expect.equal "projects env" (Some "MyApp.fsproj")
 
     testCase "multiple projects semicolon-separated" <| fun () ->
-      let _, envVars = buildWorkerSpawnConfig "s" ["A.fsproj"; "B.sln"] false false
+      let _, envVars = buildWorkerSpawnConfig "s" ["A.fsproj"; "B.sln"] false false true
       envVars
       |> List.tryFind (fun (k, _) -> k = WorkerConfig.envVar)
       |> Option.map snd
       |> Expect.equal "projects" (Some "A.fsproj;B.sln")
 
     testCase "bare session sets SAGEFS_BARE_SESSION" <| fun () ->
-      let _, envVars = buildWorkerSpawnConfig "s" [] true false
+      let _, envVars = buildWorkerSpawnConfig "s" [] true false true
       envVars
       |> List.exists (fun (k, v) -> k = WorkerConfig.bareEnvVar && v = "1")
       |> Expect.isTrue "bare env var set"
 
     testCase "no-watch sets SAGEFS_NO_WATCH" <| fun () ->
-      let _, envVars = buildWorkerSpawnConfig "s" [] false true
+      let _, envVars = buildWorkerSpawnConfig "s" [] false true true
       envVars
       |> List.exists (fun (k, v) -> k = WorkerConfig.noWatchEnvVar && v = "1")
       |> Expect.isTrue "no-watch env var set"
 
+    testCase "auto-open disabled sets SAGEFS_AUTO_OPEN_NAMESPACES" <| fun () ->
+      let _, envVars = buildWorkerSpawnConfig "s" [] false false false
+      envVars
+      |> List.exists (fun (k, v) -> k = WorkerConfig.autoOpenNamespacesEnvVar && v = "0")
+      |> Expect.isTrue "auto-open env var set"
+
     testCase "no bare/no-watch omits those env vars" <| fun () ->
-      let _, envVars = buildWorkerSpawnConfig "s" ["A.fsproj"] false false
+      let _, envVars = buildWorkerSpawnConfig "s" ["A.fsproj"] false false true
       envVars
       |> List.exists (fun (k, _) -> k = WorkerConfig.bareEnvVar)
       |> Expect.isFalse "no bare env var"
       envVars
       |> List.exists (fun (k, _) -> k = WorkerConfig.noWatchEnvVar)
       |> Expect.isFalse "no no-watch env var"
+      envVars
+      |> List.exists (fun (k, _) -> k = WorkerConfig.autoOpenNamespacesEnvVar)
+      |> Expect.isFalse "no auto-open env var"
   ]
 
 [<Tests>]

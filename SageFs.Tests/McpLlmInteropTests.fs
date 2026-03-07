@@ -35,6 +35,7 @@ module StartupConfigTests =
           WorkingDirectory = @"C:\Code\Test"
           McpPort = 8080
           HotReloadEnabled = true
+          AutoOpenNamespaces = true
           AspireDetected = false
           StartupTimestamp = DateTime.UtcNow; StartupProfileLoaded = None
         }
@@ -53,6 +54,7 @@ module StartupConfigTests =
           WorkingDirectory = ""
           McpPort = 0
           HotReloadEnabled = false
+          AutoOpenNamespaces = true
           AspireDetected = false
           StartupTimestamp = DateTime.UtcNow; StartupProfileLoaded = None
         }
@@ -245,6 +247,7 @@ module McpAdapterEnhancementTests =
           WorkingDirectory = @"C:\Test"
           McpPort = 8080
           HotReloadEnabled = true
+          AutoOpenNamespaces = true
           AspireDetected = false
           StartupTimestamp = DateTime.UtcNow; StartupProfileLoaded = None
         }
@@ -263,6 +266,7 @@ module McpAdapterEnhancementTests =
           WorkingDirectory = @"C:\Test"
           McpPort = 8080
           HotReloadEnabled = true
+          AutoOpenNamespaces = true
           AspireDetected = false
           StartupTimestamp = DateTime.UtcNow; StartupProfileLoaded = None
         }
@@ -282,6 +286,7 @@ module McpAdapterEnhancementTests =
           WorkingDirectory = @"C:\Test"
           McpPort = 8080
           HotReloadEnabled = true
+          AutoOpenNamespaces = true
           AspireDetected = false
           StartupTimestamp = DateTime.UtcNow; StartupProfileLoaded = None
         }

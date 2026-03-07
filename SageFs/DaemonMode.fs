@@ -189,9 +189,10 @@ let createSessionOps
   {
     CreateSession = fun projects workingDir ->
       task {
+        let autoOpenNamespaces = DirectoryConfig.autoOpenNamespacesForDirectory workingDir
         let! result =
           sessionManager.PostAndAsyncReply(fun reply ->
-            SessionManager.SessionCommand.CreateSession(projects, workingDir, reply))
+            SessionManager.SessionCommand.CreateSession(projects, workingDir, autoOpenNamespaces, reply))
           |> Async.StartAsTask
         match result with
         | Ok info ->
@@ -889,7 +890,7 @@ let createElmRuntime
         return None
     }
   let effectDeps =
-    { ElmDaemon.createEffectDeps sessionManager readSnapshot with
+    { ElmDaemon.createEffectDeps sessionManager readSnapshot DirectoryConfig.autoOpenNamespacesForDirectory with
         GetWarmupContext = Some getWarmupContextForElm
         GetStreamingTestProxy = fun sid ->
           let snapshot = readSnapshot()

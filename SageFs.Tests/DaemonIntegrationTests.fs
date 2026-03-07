@@ -63,6 +63,7 @@ let managerStateTests =
         WorkerBaseUrl = ""
         Projects = ["Foo.fsproj"]
         WorkingDir = @"C:\test"
+        AutoOpenNamespaces = true
         RestartState = SageFs.RestartPolicy.emptyState
       }
       let state =
@@ -90,6 +91,7 @@ let managerStateTests =
         WorkerBaseUrl = ""
         Projects = []
         WorkingDir = @"C:\test"
+        AutoOpenNamespaces = true
         RestartState = SageFs.RestartPolicy.emptyState
       }
       let state =
@@ -118,6 +120,7 @@ let managerStateTests =
           WorkerBaseUrl = ""
           Projects = []
           WorkingDir = @"C:\test"
+          AutoOpenNamespaces = true
           RestartState = SageFs.RestartPolicy.emptyState }
 
       let state =
@@ -292,7 +295,7 @@ let sessionManagerLifecycleTests =
       let createResult =
         mgr.PostAndAsyncReply(fun reply ->
           SageFs.SessionManager.SessionCommand.CreateSession(
-            [], testProjectDir, reply))
+            [], testProjectDir, true, reply))
         |> Async.RunSynchronously
 
       match createResult with
@@ -360,7 +363,7 @@ let sessionManagerLifecycleTests =
       let createResult =
         mgr.PostAndAsyncReply(fun reply ->
           SageFs.SessionManager.SessionCommand.CreateSession(
-            [], testProjectDir, reply))
+            [], testProjectDir, true, reply))
         |> Async.RunSynchronously
 
       match createResult with
@@ -403,7 +406,7 @@ let sessionManagerLifecycleTests =
       let create () =
         mgr.PostAndAsyncReply(fun reply ->
           SageFs.SessionManager.SessionCommand.CreateSession(
-            [], testProjectDir, reply))
+            [], testProjectDir, true, reply))
         |> Async.RunSynchronously
 
       let result1 = create ()

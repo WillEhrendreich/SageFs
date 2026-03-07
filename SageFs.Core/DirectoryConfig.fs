@@ -21,6 +21,7 @@ type DirectoryConfig = {
   Load: LoadStrategy
   InitScript: string option
   DefaultArgs: string list
+  AutoOpenNamespaces: bool
   Keybindings: KeyMap
   ThemeOverrides: Map<string, byte>
   /// When true, treat this directory as a session root — don't walk up to git/solution root.
@@ -35,6 +36,7 @@ module DirectoryConfig =
     Load = AutoDetect
     InitScript = None
     DefaultArgs = []
+    AutoOpenNamespaces = true
     Keybindings = Map.empty
     ThemeOverrides = Map.empty
     IsRoot = false
@@ -96,3 +98,8 @@ module DirectoryConfig =
         Some empty
     | false ->
       None
+
+  let autoOpenNamespacesForDirectory (workingDir: string) =
+    load workingDir
+    |> Option.map (fun cfg -> cfg.AutoOpenNamespaces)
+    |> Option.defaultValue true

@@ -132,5 +132,33 @@ let tests = testList "Session Creation" [
       DirectoryConfig.evaluate "DirectoryConfig.empty"
       |> Result.map (fun c -> c.Load)
       |> Expect.equal "should default to AutoDetect" (Ok AutoDetect)
+
+    testCase "evaluates AutoOpenNamespaces override" <| fun _ ->
+      DirectoryConfig.evaluate """{ DirectoryConfig.empty with AutoOpenNamespaces = false }"""
+      |> Result.map (fun c -> c.AutoOpenNamespaces)
+      |> Expect.equal "should evaluate AutoOpenNamespaces" (Ok false)
+
+    testCase "AutoOpenNamespaces defaults to true" <| fun _ ->
+      DirectoryConfig.evaluate "DirectoryConfig.empty"
+      |> Result.map (fun c -> c.AutoOpenNamespaces)
+      |> Expect.equal "should default AutoOpenNamespaces to true" (Ok true)
+  ]
+
+  testList "DirectoryConfig.autoOpenNamespacesForDirectory" [
+
+    testCase "reads false from config" <| fun _ ->
+      withTempDir
+        (fun dir ->
+          addConfig dir """{ DirectoryConfig.empty with AutoOpenNamespaces = false }""")
+        (fun dir ->
+          DirectoryConfig.autoOpenNamespacesForDirectory dir
+          |> Expect.isFalse "should use config override")
+
+    testCase "defaults to true when no config exists" <| fun _ ->
+      withTempDir
+        (fun _ -> ())
+        (fun dir ->
+          DirectoryConfig.autoOpenNamespacesForDirectory dir
+          |> Expect.isTrue "should default to true")
   ]
 ]

@@ -180,6 +180,7 @@ let run (sessionId: string) (port: int) = async {
     UseAsp = false
     LoadConfig = loadConfig
     IsBare = workerConfig.IsBare
+    AutoOpenNamespaces = workerConfig.AutoOpenNamespaces
     OnEvent = onEvent
   }
 
