@@ -1645,7 +1645,17 @@ module McpTools =
                  CoveringSymbols = e.CoveringSymbols
                  Trigger = sprintf "%A" e.Trigger
                  DurationMs = e.DurationMs
-                 IsFlaky = e.IsFlaky |})
+                 FlakyClassification =
+                   match e.FlakyClassification with
+                   | Features.LiveTesting.FlakyClassification.Insufficient -> "insufficient"
+                   | Features.LiveTesting.FlakyClassification.Stable -> "stable"
+                   | Features.LiveTesting.FlakyClassification.Environmental n -> sprintf "environmental(%d flips)" n
+                   | Features.LiveTesting.FlakyClassification.PropertyCounterexample ce -> sprintf "property-counterexample: %s" ce
+                 IsFlaky =
+                   match e.FlakyClassification with
+                   | Features.LiveTesting.FlakyClassification.Environmental _ -> true
+                   | Features.LiveTesting.FlakyClassification.PropertyCounterexample _ -> true
+                   | _ -> false |})
             ChangedSymbols = changedSymbols
           |}
           return JsonSerializer.Serialize(resp, liveTestJsonOpts)

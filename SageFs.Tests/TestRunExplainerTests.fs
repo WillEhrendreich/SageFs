@@ -53,7 +53,7 @@ let explainerTests = testList "TestRunExplainer" [
       (TestTriggerReason.SymbolCoverage ["MyModule.add"])
     result.DurationMs
     |> Expect.equal "should have cached duration" (Some 42.0)
-    result.IsFlaky |> Expect.isFalse "should not be flaky"
+    result.FlakyClassification |> Expect.equal "no history = insufficient" FlakyClassification.Insufficient
 
   testCase "explainTest: new test with no prior results" <| fun _ ->
     let graph = mkGraph []
@@ -94,7 +94,9 @@ let explainerTests = testList "TestRunExplainer" [
     let result =
       TestRunExplainer.explainTest
         graph Map.empty flakyHistory ["MyModule.flaky"] RunTrigger.Keystroke tc
-    result.IsFlaky |> Expect.isTrue "should be flagged as flaky"
+    match result.FlakyClassification with
+    | FlakyClassification.Environmental _ -> ()
+    | other -> failtest (sprintf "should be Environmental, got %A" other)
 
   testCase "explainSymbolChange: finds affected tests via dep graph" <| fun _ ->
     let graph =

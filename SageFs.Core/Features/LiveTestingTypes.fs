@@ -758,7 +758,41 @@ module FlakyDefaults =
   let flipThreshold = 2
   let minSamples = 3
 
+/// Distinguishes WHY a test is flaky. FsCheck property tests that intermittently
+/// find counterexamples are NOT "flaky" — they found real bugs via random testing.
+[<RequireQualifiedAccess>]
+type FlakyClassification =
+  /// Not enough samples to classify
+  | Insufficient
+  /// Deterministic — passes or fails consistently
+  | Stable
+  /// Environment-induced flakiness: timing, race conditions, resource contention
+  | Environmental of flipCount: int
+  /// FsCheck property test found intermittent counterexample — this is a real bug,
+  /// not environmental flakiness. Carries the shrunk (or original) counterexample.
+  | PropertyCounterexample of counterexample: string
+
 module FlakyDetection =
+  let private fsCheckClassifyPattern =
+    Regex(
+      @"Falsifiable.*?Original:\s*\n(.+?)(?:\nShrunk:\s*\n(.+?))?$",
+      RegexOptions.Compiled ||| RegexOptions.Singleline)
+
+  /// Extract FsCheck counterexample from a failure message.
+  /// Returns the shrunk counterexample if present, otherwise the original.
+  let isFsCheckFailure (msg: string) : string option =
+    match System.String.IsNullOrWhiteSpace msg with
+    | true -> None
+    | false ->
+      let m = fsCheckClassifyPattern.Match(msg)
+      match m.Success with
+      | true ->
+        let original = m.Groups.[1].Value.Trim()
+        match m.Groups.[2].Success with
+        | true -> Some (m.Groups.[2].Value.Trim())
+        | false -> Some original
+      | false -> None
+
   let outcomeOf (result: TestResult) =
     match result with
     | TestResult.Passed _ -> TestOutcome.Pass
@@ -784,6 +818,29 @@ module FlakyDetection =
     match Map.tryFind testId history with
     | None -> TestStability.Insufficient
     | Some w -> TestStability.assess FlakyDefaults.minSamples FlakyDefaults.flipThreshold w
+
+  /// Classify flakiness with FsCheck awareness. Checks both flip history
+  /// AND last failure message to distinguish environmental from property-based.
+  let classifyFlakiness
+    (testId: TestId)
+    (flakyHistory: Map<TestId, ResultWindow>)
+    (lastResults: Map<TestId, TestRunResult>)
+    : FlakyClassification =
+    match assessTest testId flakyHistory with
+    | TestStability.Insufficient -> FlakyClassification.Insufficient
+    | TestStability.Stable -> FlakyClassification.Stable
+    | TestStability.Flaky flipCount ->
+      // Flaky detected — check if last failure was FsCheck
+      let lastFailureMsg =
+        Map.tryFind testId lastResults
+        |> Option.bind (fun r ->
+          match r.Result with
+          | TestResult.Failed (TestFailure.AssertionFailed msg, _) -> Some msg
+          | TestResult.Failed (TestFailure.ExceptionThrown (msg, _), _) -> Some msg
+          | _ -> None)
+      match lastFailureMsg |> Option.bind isFsCheckFailure with
+      | Some counterexample -> FlakyClassification.PropertyCounterexample counterexample
+      | None -> FlakyClassification.Environmental flipCount
 
 type LiveTestState = {
   SourceLocations: SourceTestLocation array
@@ -2913,7 +2970,7 @@ type TestRunExplanation = {
   CoveringSymbols: string list
   Trigger: RunTrigger
   DurationMs: float option
-  IsFlaky: bool
+  FlakyClassification: FlakyClassification
 }
 
 type RunCycleExplanation = {
@@ -2956,17 +3013,15 @@ module TestRunExplainer =
     let dur =
       Map.tryFind test.Id lastResults
       |> Option.bind (fun r -> durationMs r.Result)
-    let isFlaky =
-      match FlakyDetection.assessTest test.Id flakyHistory with
-      | TestStability.Flaky _ -> true
-      | _ -> false
+    let classification =
+      FlakyDetection.classifyFlakiness test.Id flakyHistory lastResults
     { TestId = test.Id
       DisplayName = test.DisplayName
       Reason = reason
       CoveringSymbols = coveringSymbols
       Trigger = trigger
       DurationMs = dur
-      IsFlaky = isFlaky }
+      FlakyClassification = classification }
 
   let explainSymbolChange
     (graph: TestDependencyGraph)
