@@ -27,6 +27,7 @@
 
     <ItemGroup>
         <EmbeddedResource Include="dashboard.css" />
+        <EmbeddedResource Include="Resources\devreload.js" />
     </ItemGroup>
 
     <ItemGroup>

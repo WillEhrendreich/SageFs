@@ -86,10 +86,60 @@ let parseEncodingTests = testList "parseEncoding" [
   }
 ]
 
+// ── Embedded JS Resource ────────────────────────────────────────────────
+
+let embeddedJsTests = testList "Embedded JS resource" [
+  test "reloadScript contains EventSource with same-origin URL when port 0" {
+    let script = reloadScript 0
+    script |> Expect.stringContains "should have same-origin SSE URL" "new EventSource('/__sagefs__/reload')"
+  }
+  test "reloadScript contains EventSource with cross-origin URL when port > 0" {
+    let script = reloadScript 5050
+    script |> Expect.stringContains "should have cross-origin SSE URL" "new EventSource('http://127.0.0.1:5050/__sagefs__/reload')"
+  }
+  test "reloadScript wraps JS in script tag" {
+    let script = reloadScript 0
+    script |> Expect.stringContains "should have opening script tag" """<script data-sagefs-injected="devreload">"""
+    script |> Expect.stringContains "should have closing script tag" "</script>"
+  }
+  test "reloadScript templates config values from DevReloadConfig.defaults" {
+    let script = reloadScript 0
+    // Verify config values are templated (no raw placeholders remain)
+    script.Contains("{{SSE_URL}}") |> Expect.isFalse "SSE_URL placeholder should be replaced"
+    script.Contains("{{RELOAD_GUARD_THRESHOLD}}") |> Expect.isFalse "threshold placeholder should be replaced"
+    script.Contains("{{RELOAD_RESET_WINDOW_MS}}") |> Expect.isFalse "reset window placeholder should be replaced"
+    script.Contains("{{SSE_TIMEOUT_MS}}") |> Expect.isFalse "timeout placeholder should be replaced"
+    script.Contains("{{COMPILE_TIMER_MS}}") |> Expect.isFalse "timer placeholder should be replaced"
+  }
+  test "reloadScript contains default config numeric values" {
+    let script = reloadScript 0
+    let cfg = SageFs.DevReload.DevReloadConfig.defaults
+    script |> Expect.stringContains "should have reload guard threshold" (sprintf "reloadCount > %d" cfg.ReloadGuardThreshold)
+    script |> Expect.stringContains "should have reset window" (sprintf "}, %d)" cfg.ReloadCountResetWindowMs)
+    script |> Expect.stringContains "should have connection timeout" (sprintf "}, %d)" cfg.SseConnectionTimeoutMs)
+  }
+  test "reloadScript contains IIFE wrapper" {
+    let script = reloadScript 0
+    script |> Expect.stringContains "should have IIFE start" "(function(){"
+    script |> Expect.stringContains "should have IIFE end" "})();"
+  }
+  test "reloadScript contains error panel renderer" {
+    let script = reloadScript 0
+    script |> Expect.stringContains "should have renderErrorPanel" "renderErrorPanel"
+    script |> Expect.stringContains "should have sf-diag class" "sf-diag"
+  }
+  test "reloadScript contains form state preservation" {
+    let script = reloadScript 0
+    script |> Expect.stringContains "should have saveFormState" "saveFormState"
+    script |> Expect.stringContains "should have restoreFormState" "restoreFormState"
+  }
+]
+
 // ── Combined ────────────────────────────────────────────────────────────
 
 [<Tests>]
 let devReloadMiddlewareTests = testList "DevReloadMiddleware" [
   cspNonceTests
   parseEncodingTests
+  embeddedJsTests
 ]
