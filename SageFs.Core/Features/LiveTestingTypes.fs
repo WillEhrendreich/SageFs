@@ -1926,21 +1926,21 @@ module TestPrioritization =
     | TestResult.Skipped _ -> 0.0
     | TestResult.NotRun -> 0.0
 
-  /// Sort tests: failed-first, then fastest-first within same outcome.
-  /// Tests without results go last.
+  /// Sort tests: failed → new/unknown → fast-passed → slow-passed → skipped → not-run.
+  /// Within each tier, fastest tests come first.
   let prioritize (lastResults: Map<TestId, TestRunResult>) (tests: TestCase array) : TestCase array =
     tests
     |> Array.sortBy (fun tc ->
       match Map.tryFind tc.Id lastResults with
       | Some result ->
-        let failedOrder =
+        let tier =
           match result.Result with
           | TestResult.Failed _ -> 0
-          | TestResult.Skipped _ -> 1
           | TestResult.Passed _ -> 2
-          | TestResult.NotRun -> 3
-        (failedOrder, durationMs result.Result)
-      | None -> (4, 0.0))
+          | TestResult.Skipped _ -> 3
+          | TestResult.NotRun -> 4
+        (tier, durationMs result.Result)
+      | None -> (1, 0.0))
 
 module TestCycleOrchestrator =
   let decide
