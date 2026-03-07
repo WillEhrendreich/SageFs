@@ -119,12 +119,6 @@ let hashJitter (name: string) : float32 =
 let rotationJitter (name: string) (maxDeg: float32) : float32 =
   (hashJitter name - 0.5f) * 2.0f * maxDeg
 
-let positionJitter (name: string) (maxOffset: float32) : float32 * float32 =
-  let h = abs (name.GetHashCode())
-  let tx = float32 ((h / 7) % 1000) / 1000.0f
-  let tz = float32 ((h / 13) % 1000) / 1000.0f
-  ((tx - 0.5f) * 2.0f * maxOffset, (tz - 0.5f) * 2.0f * maxOffset)
-
 // ─── Deterministic Hash + RNG ─────────────────────────────────
 
 /// FNV-1a hash — stable across .NET versions (unlike GetHashCode)
@@ -370,12 +364,6 @@ type Road =
     Weight: int
     Color: Color }
 
-type Car =
-  { mutable Road: Road
-    mutable Progress: float32
-    mutable Speed: float32
-    Color: Color }
-
 type District =
   { Name: string
     FuncCount: int
@@ -410,6 +398,17 @@ module RoadClass =
     | 0 -> Avenue | 1 -> Avenue | 2 -> Street | 3 -> Lane | _ -> Alley
   let tier = function
     | Boulevard -> 8 | Avenue -> 6 | Street -> 4 | Lane -> 3 | Alley -> 2
+  /// Road surface color, brightness decreasing from Boulevard (warm stone) → Alley (near-black).
+  /// Encodes the Weber hierarchy visually so growth topology is legible.
+  let color = function
+    | Boulevard -> (180uy, 170uy, 150uy)  // warm stone
+    | Avenue    -> ( 90uy,  90uy,  95uy)  // neutral grey
+    | Street    -> ( 65uy,  65uy,  70uy)  // darker grey
+    | Lane      -> ( 50uy,  50uy,  55uy)  // dim
+    | Alley     -> ( 38uy,  38uy,  42uy)  // near-black
+
+/// Alias for test visibility (DomainTests opens the module-level namespace).
+let roadColorForClass = RoadClass.color
 
 // ─── Building Typology Functions ─────────────────────────────
 
@@ -1269,63 +1268,6 @@ let pointInPoly (poly: Vec2 list) (px: float32) (pz: float32) : bool =
     j <- i
   inside
 
-/// Pack buildings into a block polygon using row packing.
-let packInBlock (poly: Vec2 list) (funcs: FuncDef list) (heatMap: Map<string, float32 * int * int>) (districtColor: Color) (rng: Random) (gitMeta: Map<string, GitMeta>) : FuncBuilding list =
-  if poly.Length < 3 || funcs.IsEmpty then []
-  else
-    let minX = poly |> List.map (fun p -> p.X) |> List.min
-    let maxX = poly |> List.map (fun p -> p.X) |> List.max
-    let minZ = poly |> List.map (fun p -> p.Y) |> List.min
-    let maxZ = poly |> List.map (fun p -> p.Y) |> List.max
-    let blockW = maxX - minX
-    let blockH = maxZ - minZ
-    if blockW < 0.5f || blockH < 0.5f then []
-    else
-      let margin = 0.3f
-      let usableW = blockW - 2.0f * margin
-      let usableH = blockH - 2.0f * margin
-      let n = funcs.Length
-      let avgSize = sqrt(usableW * usableH / float32 n) |> max 0.4f |> min 3.0f
-      let cols = max 1 (int (usableW / avgSize))
-      let rowH = usableH / float32 (max 1 ((n + cols - 1) / cols))
-      let colW = usableW / float32 cols
-
-      funcs |> List.mapi (fun i f ->
-        let row = i / cols
-        let col = i % cols
-        let cx = minX + margin + (float32 col + 0.5f) * colW
-        let cz = minZ + margin + (float32 row + 0.5f) * rowH
-        if not (pointInPoly poly cx cz) then None
-        else
-          let heat, callers, callees =
-            heatMap |> Map.tryFind f.QualifiedName
-            |> Option.defaultValue (0.0f, 0, 0)
-          let complexity = computeComplexity f.Body
-          let bt = classifyBuilding f.LineCount complexity heat
-          let coverageRatio =
-            match bt with
-            | Shed | Cottage -> 0.45f
-            | Rowhouse       -> 0.65f
-            | Commercial | Tower -> 0.80f
-            | Skyscraper     -> 0.90f
-          let footprint = min (min colW rowH * coverageRatio) (max 1.0f (MathF.Log(float32 f.LineCount + 1.0f) * 0.8f + MathF.Log(float32 complexity + 1.0f) * 0.4f))
-          let ageDays =
-            gitMeta |> Map.tryFind f.FilePath
-            |> Option.map (fun m -> float32 (DateTimeOffset.Now - m.LastCommitDate).TotalDays)
-            |> Option.defaultValue 180.0f
-          Some { Func = f; Heat = heat; CallerCount = callers; CalleeCount = callees
-                 Complexity = complexity
-                 BuildingType = bt
-                 GitAgeDays = ageDays
-                 X = cx - footprint / 2.0f; Z = cz - footprint / 2.0f
-                 W = footprint; D = footprint
-                 H = BuildingType.height bt f.LineCount heat
-                 Rotation  = rotationJitter f.Name 5.0f
-                 Color     = BuildingType.wallColor bt f.Name ageDays
-                 RoofColor = BuildingType.roofColor bt districtColor
-                 District  = f.Module })
-      |> List.choose id
-
 /// Minimum distance from point (px,pz) to the nearest polygon boundary edge.
 /// Used to verify road-primary placement: every building should be within lot depth of an edge.
 let distanceToPoly (poly: Vec2 list) (px: float32) (pz: float32) : float32 =
@@ -1450,85 +1392,6 @@ let packAlongEdges
     allBuildings |> Seq.toList
 /// Every building is accessible via an alley — no landlocked buildings.
 /// Returns (buildings, alleyRoads) where alleyRoads are lane-centerline segments.
-let layoutInGrid
-  (rect: TRect) (funcs: FuncDef list)
-  (heatMap: Map<string, float32 * int * int>)
-  (districtColor: Color)
-  (globalMaxComplexity: int) (globalMaxLineCount: int)
-  (gitMeta: Map<string, GitMeta>)
-  : FuncBuilding list * Road list =
-  if funcs.IsEmpty then ([], [])
-  else
-    let n = funcs.Length
-    let usableW = rect.W
-    let usableH = rect.H
-    if usableW < 0.8f || usableH < 0.8f then ([], [])
-    else
-      let aspect = usableW / usableH
-      let cols = max 1 (min n (int (MathF.Ceiling(sqrt(float32 n * aspect)))))
-      let rows = max 1 ((n + cols - 1) / cols)
-      // 75% of usable space for buildings, 25% for lane corridors (proportional to block size)
-      let cellW = usableW * 0.75f / float32 cols
-      let cellH = usableH * 0.75f / float32 rows
-      let laneW = if cols <= 1 then 0.0f else (usableW - cellW * float32 cols) / float32 (cols - 1)
-      let laneH = if rows <= 1 then 0.0f else (usableH - cellH * float32 rows) / float32 (rows - 1)
-      let origX = rect.X
-      let origZ = rect.Z
-      let buildings =
-        funcs |> List.mapi (fun i f ->
-          let row = i / cols
-          let col = i % cols
-          let cellX = origX + float32 col * (cellW + laneW)
-          let cellZ = origZ + float32 row * (cellH + laneH)
-          let cx = cellX + cellW / 2.0f
-          let cz = cellZ + cellH / 2.0f
-          let heat, callers, callees =
-            heatMap |> Map.tryFind f.QualifiedName |> Option.defaultValue (0.0f, 0, 0)
-          let complexity = computeComplexity f.Body
-          let bt = classifyBuilding f.LineCount complexity heat
-          let coverage = 0.55f + 0.25f * (float32 f.LineCount / float32 globalMaxLineCount) |> min 0.85f
-          let bldgW = max 0.3f (cellW * sqrt(coverage))
-          let bldgD = max 0.3f (cellH * sqrt(coverage))
-          let normComplexity = float32 complexity / float32 globalMaxComplexity
-          let baseH = 1.2f + 33.8f * MathF.Pow(normComplexity, 0.45f)
-          let jitter = 1.0f + (hashJitter f.Name - 0.5f) * 0.2f
-          let finalH = baseH * jitter
-          let ageDays =
-            gitMeta |> Map.tryFind f.FilePath
-            |> Option.map (fun m -> float32 (DateTimeOffset.Now - m.LastCommitDate).TotalDays)
-            |> Option.defaultValue 180.0f
-          { Func = f; Heat = heat; CallerCount = callers; CalleeCount = callees
-            Complexity = complexity
-            BuildingType = bt
-            GitAgeDays = ageDays
-            X = cx - bldgW / 2.0f; Z = cz - bldgD / 2.0f
-            W = bldgW; D = bldgD; H = finalH
-            Rotation  = rotationJitter f.Name 3.0f
-            Color     = BuildingType.wallColor bt f.Name ageDays
-            RoofColor = BuildingType.roofColor bt districtColor
-            District  = f.Module })
-      let alleyColor = Color(60uy, 60uy, 65uy, 255uy)
-      // Vertical lane between column c and c+1 (constant X, full block Z span)
-      // Half-width packed in Y component for dynamic rendering in buildStaticMesh
-      let hwV = laneW / 2.0f
-      let hwH = laneH / 2.0f
-      let vertAlleys =
-        [ for c in 0 .. cols - 2 do
-            let ax = origX + float32 (c + 1) * cellW + float32 c * laneW + laneW / 2.0f
-            yield { FromFunc = ""; ToFunc = ""
-                    FromPos = Vector3(ax, hwV, rect.Z)
-                    ToPos = Vector3(ax, hwV, rect.Z + rect.H)
-                    Weight = RoadClass.tier Alley; Color = alleyColor } ]
-      // Horizontal lane between row r and r+1 (constant Z, full block X span)
-      let horizAlleys =
-        [ for r in 0 .. rows - 2 do
-            let az = origZ + float32 (r + 1) * cellH + float32 r * laneH + laneH / 2.0f
-            yield { FromFunc = ""; ToFunc = ""
-                    FromPos = Vector3(rect.X, hwH, az)
-                    ToPos = Vector3(rect.X + rect.W, hwH, az)
-                    Weight = RoadClass.tier Alley; Color = alleyColor } ]
-      (buildings, vertAlleys @ horizAlleys)
-
 /// Road-primary building placement for Weber districts.
 /// Places buildings on BOTH sides of each road segment with perpendicular setback.
 /// No DCEL face polygon traversal — buildings are placed directly adjacent to visible roads.
@@ -1704,11 +1567,12 @@ let layoutWeberDistrict
             let na = g.N e.A
             let nb = g.N e.B
             let hw = e.Width / 2.0f
+            let (cr, cg, cb) = RoadClass.color e.Class
             yield { FromFunc = ""; ToFunc = ""
                     FromPos = Vector3(na.Pos.X, hw, na.Pos.Y)
                     ToPos   = Vector3(nb.Pos.X, hw, nb.Pos.Y)
                     Weight  = RoadClass.tier e.Class
-                    Color   = Color(65uy, 65uy, 70uy, 255uy) } ]
+                    Color   = Color(cr, cg, cb, 255uy) } ]
 
     let buildings = packAlongRoads weberRoads rect funcs heatMap districtColor rng gitMeta
     (buildings, weberRoads)
@@ -2347,7 +2211,7 @@ let buildStaticMesh (buildings: FuncBuilding[]) (blocks: ModuleBlock[]) (cityExt
         (x1 - nx * hw) 0.020f (z1 - nz * hw)
         (x2 - nx * hw) 0.020f (z2 - nz * hw)
         (x2 + nx * hw) 0.020f (z2 + nz * hw)
-        0.0f 1.0f 0.0f 60uy 60uy 65uy 255uy
+        0.0f 1.0f 0.0f road.Color.R road.Color.G road.Color.B 255uy
     vi <- vi + 6
 
   // Layer 3: Sidewalk strips — medium luminance around each block (luminance ~0.20)
@@ -2516,19 +2380,39 @@ let drawBuildingOutline (b: FuncBuilding) (pad: float32) (color: Color) =
   let center = buildingCenter b
   Raylib.DrawCubeWires(center, b.W + pad, b.H + pad, b.D + pad, color)
 
-let drawRelationArc (fromPos: Vector3) (toPos: Vector3) (color: Color) =
+/// Cylinder radius for a relationship arc, scaled by normalized call weight [0,1].
+/// Monotone increasing; bounded [0.02, 0.08] so arcs are visible but not overwhelming.
+let arcRadius (normalizedWeight: float32) : float32 =
+  0.02f + 0.06f * (max 0.0f (min 1.0f normalizedWeight))
+
+/// Arc apex height based on spatial distance and call weight.
+/// Heavier relationships arc higher so they don't visually collide with lighter ones.
+let arcHeight (dist: float32) (normalizedWeight: float32) : float32 =
+  let w = max 0.0f (min 1.0f normalizedWeight)
+  (2.5f + dist * 0.18f) * (1.0f + w * 0.4f)
+
+/// Returns true if a district label at the given screen position should be rendered.
+/// Clips off-screen and behind-camera labels.
+let shouldRenderLabel (screenPos: Vector2) (screenW: int) (screenH: int) (inFront: bool) : bool =
+  inFront
+  && screenPos.X >= -50.0f && screenPos.X <= float32 screenW + 50.0f
+  && screenPos.Y >= -50.0f && screenPos.Y <= float32 screenH + 50.0f
+
+let drawRelationArc (fromPos: Vector3) (toPos: Vector3) (normalizedWeight: float32) (color: Color) =
   let segments = 16
   let dist = Vector3.Distance(fromPos, toPos)
-  let arcHeight = max 2.5f (dist * 0.18f)
+  let apex = arcHeight dist normalizedWeight
+  let radius = arcRadius normalizedWeight
   let pointAt (t: float32) =
     let basePoint: Vector3 = Vector3.Lerp(fromPos, toPos, t)
-    let lift = MathF.Sin(t * MathF.PI) * arcHeight
+    let lift = MathF.Sin(t * MathF.PI) * apex
     Vector3(basePoint.X, basePoint.Y + lift, basePoint.Z)
   let mutable prev = pointAt 0.0f
   for i in 1 .. segments do
     let t = float32 i / float32 segments
     let next = pointAt t
-    Raylib.DrawLine3D(prev, next, color)
+    let mid = Vector3.Lerp(prev, next, 0.5f)
+    Raylib.DrawCylinder(mid, radius, radius, Vector3.Distance(prev, next) * 1.05f, 5, color)
     prev <- next
 
 let drawSelectionOverlay
@@ -2554,13 +2438,18 @@ let drawSelectionOverlay
     if showCallLinks then
       let currentRoof = buildingRoofCenter current
 
+      let maxInWeight = incoming |> List.map (fun r -> r.Weight) |> List.append [1] |> List.max
+      let maxOutWeight = outgoing |> List.map (fun r -> r.Weight) |> List.append [1] |> List.max
+
       incoming
       |> List.iter (fun rel ->
-        drawRelationArc (buildingRoofCenter rel.Building) currentRoof incomingRelationColor)
+        let w = float32 rel.Weight / float32 maxInWeight
+        drawRelationArc (buildingRoofCenter rel.Building) currentRoof w incomingRelationColor)
 
       outgoing
       |> List.iter (fun rel ->
-        drawRelationArc currentRoof (buildingRoofCenter rel.Building) outgoingRelationColor)
+        let w = float32 rel.Weight / float32 maxOutWeight
+        drawRelationArc currentRoof (buildingRoofCenter rel.Building) w outgoingRelationColor)
   | None -> ()
 
   match hovered with
@@ -2579,13 +2468,14 @@ let drawDistrictLabels2D
   (districtRects: (District * Rect2D * (float32 * float32) list) list)
   (camera: Camera3D)
   (theme: UiTextTheme) =
+  let sw = Raylib.GetScreenWidth()
+  let sh = Raylib.GetScreenHeight()
+  let camForward = Vector3.Normalize(camera.Target - camera.Position)
   for (district, rect, _) in districtRects do
     let center3D = Vector3(rect.X + rect.W / 2.0f, 1.0f, rect.Z + rect.D / 2.0f)
+    let inFront = Vector3.Dot(center3D - camera.Position, camForward) > 1.0f
     let screenPos = Raylib.GetWorldToScreen(center3D, camera)
-    if screenPos.X > -50.0f
-       && screenPos.X < float32 (Raylib.GetScreenWidth() + 50)
-       && screenPos.Y > -50.0f
-       && screenPos.Y < float32 (Raylib.GetScreenHeight() + 50) then
+    if shouldRenderLabel screenPos sw sh inFront then
       let label = district.Name
       let sub = sprintf "%d funcs · %d LOC" district.FuncCount district.TotalLines
       let textW = measureUiText label theme.DistrictTitle
@@ -2651,7 +2541,6 @@ let drawHUD
   (buildings: FuncBuilding list)
   (districts: District list)
   (roads: Road list)
-  (cars: Car[])
   (captured: bool)
   (selected: FuncBuilding option)
   (showCallLinks: bool)
@@ -2672,7 +2561,7 @@ let drawHUD
     (sprintf "%d functions  ·  %d LOC  ·  %d districts" totalFuncs totalLOC districts.Length)
     16 46 theme.HudStats (Color(190uy, 190uy, 200uy, 255uy))
   drawUiText
-    (sprintf "%d roads  ·  %d cars" roads.Length cars.Length)
+    (sprintf "%d roads" roads.Length)
     16 68 theme.HudStats (Color(170uy, 170uy, 185uy, 255uy))
 
   let mutable infoY = 92
@@ -3479,7 +3368,13 @@ void main() {
       Raylib.EndMode3D()
 
     // 2D HUD
-    drawHUD buildings districts (sortedRoads |> List.ofArray) [||] mouseCaptured selected showCallLinks uiTextTheme
+    let districtRects =
+      districts |> List.choose (fun d ->
+        blocks |> Array.tryFind (fun b -> b.Module = d.Name)
+        |> Option.map (fun b ->
+          (d, { X = b.Rect.X; Z = b.Rect.Z; W = b.Rect.W; D = b.Rect.H }, [])))
+    drawDistrictLabels2D districtRects camera3D uiTextTheme
+    drawHUD buildings districts (sortedRoads |> List.ofArray) mouseCaptured selected showCallLinks uiTextTheme
     drawLegend districts uiTextTheme
     drawHeatScale uiTextTheme
     drawSelectionPanel selected selectedIncomingAll selectedOutgoingAll showCallLinks uiTextTheme

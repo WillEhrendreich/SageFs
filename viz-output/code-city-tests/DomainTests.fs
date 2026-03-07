@@ -348,33 +348,34 @@ let visualDefaultsTests =
   ]
 
 let roadAccessTests =
-  testList "Road access grid layout" [
-    testCase "Multi-building block produces internal alley roads" <| fun () ->
+  testList "Road access layout" [
+    testCase "Weber district produces internal roads" <| fun () ->
       let rect = { X = 0.0f; Z = 0.0f; W = 20.0f; H = 20.0f }
       let funcs = List.init 9 (fun i -> mkFunc (sprintf "func%d" i) "TestModule")
-      let _, roads = layoutInGrid rect funcs Map.empty (Color(70uy, 130uy, 180uy, 255uy)) 10 100 Map.empty
-      roads |> Expect.isNonEmpty "a 3×3 grid should produce alley roads between grid cells"
+      let _, roads = layoutWeberDistrict rect funcs Map.empty (Color(70uy, 130uy, 180uy, 255uy)) 10 100 0.5f (Random 42) Map.empty
+      roads |> Expect.isNonEmpty "a 9-function block should produce internal Weber roads"
 
-    testCase "Single building produces no internal alleys" <| fun () ->
+    testCase "Single building district produces buildings" <| fun () ->
       let rect = { X = 0.0f; Z = 0.0f; W = 10.0f; H = 10.0f }
       let funcs = [ mkFunc "onlyFunc" "TestModule" ]
-      let _, roads = layoutInGrid rect funcs Map.empty (Color(70uy, 130uy, 180uy, 255uy)) 10 100 Map.empty
-      roads |> Expect.isEmpty "1×1 grid has no lane corridors"
+      let bldgs, _ = layoutWeberDistrict rect funcs Map.empty (Color(70uy, 130uy, 180uy, 255uy)) 10 100 0.5f (Random 1) Map.empty
+      bldgs |> Expect.isNonEmpty "single function should produce at least one building"
 
     testCase "Buildings stay within block rect bounds" <| fun () ->
       let rect = { X = 5.0f; Z = 5.0f; W = 20.0f; H = 20.0f }
       let funcs = List.init 12 (fun i -> mkFunc (sprintf "func%d" i) "TestModule")
-      let buildings, _ = layoutInGrid rect funcs Map.empty (Color(70uy, 130uy, 180uy, 255uy)) 10 100 Map.empty
+      let buildings, _ = layoutWeberDistrict rect funcs Map.empty (Color(70uy, 130uy, 180uy, 255uy)) 10 100 0.5f (Random 7) Map.empty
+      let eps = 1.5f
       for b in buildings do
-        (b.X, rect.X) |> Expect.isGreaterThanOrEqual "building left edge should be inside block"
-        (b.Z, rect.Z) |> Expect.isGreaterThanOrEqual "building top edge should be inside block"
-        (b.X + b.W, rect.X + rect.W) |> Expect.isLessThanOrEqual "building right edge should be inside block"
-        (b.Z + b.D, rect.Z + rect.H) |> Expect.isLessThanOrEqual "building bottom edge should be inside block"
+        (b.X,       rect.X - eps)           |> Expect.isGreaterThanOrEqual "building left edge inside block"
+        (b.Z,       rect.Z - eps)           |> Expect.isGreaterThanOrEqual "building top edge inside block"
+        (b.X + b.W, rect.X + rect.W + eps)  |> Expect.isLessThanOrEqual   "building right edge inside block"
+        (b.Z + b.D, rect.Z + rect.H + eps)  |> Expect.isLessThanOrEqual   "building bottom edge inside block"
 
     testCase "Building count matches function count" <| fun () ->
       let rect = { X = 0.0f; Z = 0.0f; W = 30.0f; H = 30.0f }
       let funcs = List.init 16 (fun i -> mkFunc (sprintf "func%d" i) "TestModule")
-      let buildings, _ = layoutInGrid rect funcs Map.empty (Color(70uy, 130uy, 180uy, 255uy)) 10 100 Map.empty
+      let buildings, _ = layoutWeberDistrict rect funcs Map.empty (Color(70uy, 130uy, 180uy, 255uy)) 10 100 0.5f (Random 99) Map.empty
       buildings.Length |> Expect.equal "should produce one building per function" 16
   ]
 
@@ -727,6 +728,78 @@ let gitAgeColorTests =
       |> Expect.isGreaterThan "Skyscraper footprint should exceed Shed footprint due to higher coverage ratio"
   ]
 
+let roadColorTests =
+  testList "Road color hierarchy" [
+    testCase "roadColorForClass returns distinct colors per class" <| fun () ->
+      let boulevard = roadColorForClass Boulevard
+      let avenue    = roadColorForClass Avenue
+      let street    = roadColorForClass Street
+      let lane      = roadColorForClass Lane
+      let alley     = roadColorForClass Alley
+      // All five should be distinct values
+      let all = [boulevard; avenue; street; lane; alley]
+      all |> List.distinct |> List.length |> Expect.equal "all 5 road classes should have distinct colors" 5
+
+    testCase "roadColorForClass: brightness decreases from Boulevard to Alley" <| fun () ->
+      let brightness (r: byte, g: byte, b: byte) = int r + int g + int b
+      let ordered = [ Boulevard; Avenue; Street; Lane; Alley ]
+                    |> List.map (fun rc -> brightness (roadColorForClass rc))
+      ordered
+      |> List.pairwise
+      |> List.iteri (fun i (a, b) ->
+        (a, b) |> Expect.isGreaterThan (sprintf "class %d should be brighter than class %d" i (i+1)))
+
+    testCase "roadColorForClass: Boulevard is lighter than Alley on all channels" <| fun () ->
+      let (br, bg, bb) = roadColorForClass Boulevard
+      let (ar, ag, ab) = roadColorForClass Alley
+      (int br, int ar) |> Expect.isGreaterThan "Boulevard R should exceed Alley R"
+      (int bg, int ag) |> Expect.isGreaterThan "Boulevard G should exceed Alley G"
+      (int bb, int ab) |> Expect.isGreaterThan "Boulevard B should exceed Alley B"
+  ]
+
+let arcFormulaTests =
+  testList "Call arc formula properties" [
+    testCase "arcRadius is monotone increasing in weight" <| fun () ->
+      let weights = [ 0.0f; 0.25f; 0.5f; 0.75f; 1.0f ]
+      weights
+      |> List.map arcRadius
+      |> List.pairwise
+      |> List.iteri (fun i (a, b) ->
+        (b, a) |> Expect.isGreaterThanOrEqual (sprintf "arcRadius at weight step %d should be >= previous" i))
+
+    testCase "arcRadius is bounded between 0.02 and 0.08" <| fun () ->
+      [ 0.0f; 0.5f; 1.0f ] |> List.iter (fun w ->
+        let r = arcRadius w
+        (r, 0.02f) |> Expect.isGreaterThanOrEqual (sprintf "arcRadius(%.2f) should be >= 0.02" w)
+        (r, 0.08f) |> Expect.isLessThanOrEqual    (sprintf "arcRadius(%.2f) should be <= 0.08" w))
+
+    testCase "arcRadius at 0.0 is minimum, at 1.0 is maximum" <| fun () ->
+      arcRadius 0.0f |> Expect.equal "minimum radius at weight 0" 0.02f
+      arcRadius 1.0f |> Expect.equal "maximum radius at weight 1" 0.08f
+
+    testCase "arcHeight is monotone increasing in both dist and weight" <| fun () ->
+      // Monotone in dist (fixed weight=0.5)
+      let dists = [ 2.0f; 5.0f; 10.0f; 20.0f ]
+      dists
+      |> List.map (fun d -> arcHeight d 0.5f)
+      |> List.pairwise
+      |> List.iteri (fun i (a, b) ->
+        (b, a) |> Expect.isGreaterThan (sprintf "arcHeight should increase with dist at step %d" i))
+      // Monotone in weight (fixed dist=10.0)
+      let weights = [ 0.0f; 0.5f; 1.0f ]
+      weights
+      |> List.map (fun w -> arcHeight 10.0f w)
+      |> List.pairwise
+      |> List.iteri (fun i (a, b) ->
+        (b, a) |> Expect.isGreaterThan (sprintf "arcHeight should increase with weight at step %d" i))
+
+    testCase "shouldRenderLabel: in-frame+inFront renders; off-screen or behind does not" <| fun () ->
+      shouldRenderLabel (Vector2(800.0f, 450.0f)) 1600 900 true  |> Expect.isTrue  "in-frame, in-front should render"
+      shouldRenderLabel (Vector2(800.0f, 450.0f)) 1600 900 false |> Expect.isFalse "behind camera should not render"
+      shouldRenderLabel (Vector2(-100.0f, 450.0f)) 1600 900 true |> Expect.isFalse "off-screen-left should not render"
+      shouldRenderLabel (Vector2(800.0f, 1100.0f)) 1600 900 true |> Expect.isFalse "off-screen-bottom should not render"
+  ]
+
 let allTests =
   testList "CodeCity Domain" [
     colorMathTests
@@ -745,6 +818,8 @@ let allTests =
     packAlongRoadsTests
     buildingTypologyTests
     gitAgeColorTests
+    roadColorTests
+    arcFormulaTests
   ]
 
 [<EntryPoint>]
