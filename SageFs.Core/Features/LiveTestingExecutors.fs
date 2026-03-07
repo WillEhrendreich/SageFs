@@ -169,6 +169,7 @@ module AttributeDiscovery =
 
   let discoverInAssembly
     (desc: AttributeProviderDescription)
+    (theoryAttrNames: string list)
     (category: TestCategory)
     (asm: Assembly)
     : TestCase list =
@@ -177,7 +178,7 @@ module AttributeDiscovery =
       |> Array.collect (fun t ->
         t.GetMethods(BindingFlags.Public ||| BindingFlags.Instance ||| BindingFlags.Static)
         |> Array.filter (hasTestAttribute desc.TestAttributes))
-      |> Array.collect (fun mi -> toTestCases desc.Name category [] mi |> List.toArray)
+      |> Array.collect (fun mi -> toTestCases desc.Name category theoryAttrNames mi |> List.toArray)
       |> Array.toList
     with
     | :? ReflectionTypeLoadException -> []

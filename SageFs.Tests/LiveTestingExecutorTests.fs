@@ -72,7 +72,7 @@ let attributeDiscoveryTests = testList "AttributeDiscovery" [
       AssemblyMarker = "xunit.core"
     }
     let coreAsm = typeof<TestId>.Assembly
-    let discovered = AttributeDiscovery.discoverInAssembly desc TestCategory.Unit coreAsm
+    let discovered = AttributeDiscovery.discoverInAssembly desc [] TestCategory.Unit coreAsm
     List.length discovered |> Expect.equal "should find 0 tests" 0
   }
 ]
