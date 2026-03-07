@@ -157,10 +157,161 @@ let rendererTests =
     )
   ]
 
+let testOrderModel =
+  { TypeName = "OrderState"
+    Cases = [
+      { Name = "Draft"; Fields = [] }
+      { Name = "Submitted"; Fields = [] }
+      { Name = "Approved"; Fields = [("approver", "string")] }
+      { Name = "Rejected"; Fields = [("reason", "string")] }
+    ]
+    Transitions = [
+      { FromState = "Draft"; ToState = "Submitted"; FunctionName = "submit"; IsErrorBranch = false }
+      { FromState = "Submitted"; ToState = "Approved"; FunctionName = "approve"; IsErrorBranch = false }
+      { FromState = "Submitted"; ToState = "Rejected"; FunctionName = "reject"; IsErrorBranch = false }
+    ] }
+
+let gapDetectionTests =
+  testList "GapDetection" [
+    testList "computeAllPossibleTransitions" [
+      testCase "4 states → 16 possible" <| fun () ->
+        GapDetection.computeAllPossibleTransitions ["Draft"; "Submitted"; "Approved"; "Rejected"]
+        |> Expect.hasLength "4×4 = 16" 16
+      testCase "includes self-transitions" <| fun () ->
+        GapDetection.computeAllPossibleTransitions ["A"; "B"]
+        |> Expect.containsAll "self-transitions" [("A", "A"); ("B", "B")]
+      testCase "empty → empty" <| fun () ->
+        GapDetection.computeAllPossibleTransitions []
+        |> Expect.isEmpty "no cases"
+      testCase "single → 1 self" <| fun () ->
+        GapDetection.computeAllPossibleTransitions ["Only"]
+        |> Expect.equal "self" [("Only", "Only")]
+    ]
+
+    testList "detectGaps" [
+      testCase "finds 13 unimplemented" <| fun () ->
+        GapDetection.detectGaps testOrderModel
+        |> Expect.hasLength "16 - 3 = 13 gaps" 13
+      testCase "Draft→Approved is gap" <| fun () ->
+        GapDetection.detectGaps testOrderModel
+        |> List.contains ("Draft", "Approved")
+        |> Expect.isTrue "gap"
+      testCase "Draft→Submitted NOT gap" <| fun () ->
+        GapDetection.detectGaps testOrderModel
+        |> List.contains ("Draft", "Submitted")
+        |> Expect.isFalse "implemented"
+      testCase "no transitions → all gaps" <| fun () ->
+        GapDetection.detectGaps { testOrderModel with Transitions = [] }
+        |> Expect.hasLength "all 16" 16
+      testCase "fully connected → no gaps" <| fun () ->
+        let m = {
+          TypeName = "Bin"
+          Cases = [{ Name = "On"; Fields = [] }; { Name = "Off"; Fields = [] }]
+          Transitions = [
+            { FromState = "On"; ToState = "Off"; FunctionName = "off"; IsErrorBranch = false }
+            { FromState = "Off"; ToState = "On"; FunctionName = "on"; IsErrorBranch = false }
+            { FromState = "On"; ToState = "On"; FunctionName = "noop"; IsErrorBranch = false }
+            { FromState = "Off"; ToState = "Off"; FunctionName = "noop2"; IsErrorBranch = false }
+          ] }
+        GapDetection.detectGaps m |> Expect.isEmpty "no gaps"
+    ]
+
+    testList "annotateWithHealth" [
+      testCase "no coverage → Untested" <| fun () ->
+        let a = GapDetection.annotateWithHealth testOrderModel Map.empty
+        let s = a |> List.find (fun x -> x.FunctionName = Some "submit")
+        s.Health |> Expect.equal "untested" TransitionHealth.Untested
+      testCase "passing coverage → Passing" <| fun () ->
+        let a = GapDetection.annotateWithHealth testOrderModel (Map.ofList [("submit", TransitionHealth.Passing)])
+        let s = a |> List.find (fun x -> x.FunctionName = Some "submit")
+        s.Health |> Expect.equal "passing" TransitionHealth.Passing
+      testCase "failing coverage → Failing" <| fun () ->
+        let a = GapDetection.annotateWithHealth testOrderModel (Map.ofList [("approve", TransitionHealth.Failing)])
+        let s = a |> List.find (fun x -> x.FunctionName = Some "approve")
+        s.Health |> Expect.equal "failing" TransitionHealth.Failing
+      testCase "gaps are NotImplemented" <| fun () ->
+        let a = GapDetection.annotateWithHealth testOrderModel Map.empty
+        a |> List.filter (fun x -> x.Health = TransitionHealth.NotImplemented) |> List.length
+        |> fun n -> (n, 0) |> Expect.isGreaterThan "has gap annotations"
+      testCase "gap FunctionName = None" <| fun () ->
+        let a = GapDetection.annotateWithHealth testOrderModel Map.empty
+        a |> List.filter (fun x -> x.Health = TransitionHealth.NotImplemented)
+        |> List.forall (fun x -> x.FunctionName = None)
+        |> Expect.isTrue "gaps have no function"
+      testCase "total = 16 annotations" <| fun () ->
+        GapDetection.annotateWithHealth testOrderModel Map.empty
+        |> Expect.hasLength "16 possible" 16
+    ]
+
+    testList "properties" [
+      testProperty "possible count = N²" <|
+        fun (count: uint8) ->
+          let n = int count % 8 + 1
+          let names = [ for i in 1..n -> sprintf "S%d" i ]
+          GapDetection.computeAllPossibleTransitions names
+          |> List.length = n * n
+
+      testProperty "gaps + implemented = all possible" <|
+        fun (caseCount: uint8) (transCount: uint8) ->
+          let n = int caseCount % 5 + 2
+          let names = [ for i in 1..n -> sprintf "S%d" i ]
+          let allPossible = GapDetection.computeAllPossibleTransitions names
+          let transMax = int transCount % (n * n) |> min (allPossible.Length)
+          let transitions =
+            allPossible
+            |> List.take transMax
+            |> List.mapi (fun i (f, t) ->
+              { FromState = f; ToState = t; FunctionName = sprintf "fn%d" i; IsErrorBranch = false })
+          let model = { TypeName = "T"; Cases = names |> List.map (fun n -> { Name = n; Fields = [] }); Transitions = transitions }
+          let gaps = GapDetection.detectGaps model
+          let implementedSet = transitions |> List.map (fun t -> (t.FromState, t.ToState)) |> Set.ofList
+          let gapSet = gaps |> Set.ofList
+          Set.intersect implementedSet gapSet |> Set.isEmpty
+          && (Set.count implementedSet + Set.count gapSet = allPossible.Length)
+
+      testProperty "annotation count always equals N²" <|
+        fun (caseCount: uint8) ->
+          let n = int caseCount % 6 + 1
+          let names = [ for i in 1..n -> sprintf "S%d" i ]
+          let model = { TypeName = "T"; Cases = names |> List.map (fun n -> { Name = n; Fields = [] }); Transitions = [] }
+          GapDetection.annotateWithHealth model Map.empty
+          |> List.length = n * n
+
+      testProperty "empty coverage → only NotImplemented or Untested" <|
+        fun (caseCount: uint8) ->
+          let n = int caseCount % 5 + 2
+          let names = [ for i in 1..n -> sprintf "S%d" i ]
+          let allPossible = GapDetection.computeAllPossibleTransitions names
+          let transHalf = allPossible |> List.take (allPossible.Length / 2)
+          let transitions =
+            transHalf |> List.mapi (fun i (f, t) ->
+              { FromState = f; ToState = t; FunctionName = sprintf "fn%d" i; IsErrorBranch = false })
+          let model = { TypeName = "T"; Cases = names |> List.map (fun n -> { Name = n; Fields = [] }); Transitions = transitions }
+          GapDetection.annotateWithHealth model Map.empty
+          |> List.forall (fun a ->
+            match a.Health with
+            | TransitionHealth.NotImplemented | TransitionHealth.Untested -> true
+            | _ -> false)
+
+      testProperty "coverage map overrides health" <|
+        fun (caseCount: uint8) ->
+          let n = int caseCount % 4 + 2
+          let names = [ for i in 1..n -> sprintf "S%d" i ]
+          let transitions = [
+            { FromState = names.[0]; ToState = names.[1]; FunctionName = "fn0"; IsErrorBranch = false }
+          ]
+          let model = { TypeName = "T"; Cases = names |> List.map (fun n -> { Name = n; Fields = [] }); Transitions = transitions }
+          let a = GapDetection.annotateWithHealth model (Map.ofList [("fn0", TransitionHealth.Passing)])
+          let fn0 = a |> List.find (fun x -> x.FunctionName = Some "fn0")
+          fn0.Health = TransitionHealth.Passing
+    ]
+  ]
+
 [<Tests>]
 let domainModelVizTests =
   testList "DomainModelViz" [
     duExtractorTests
     transitionTests
     rendererTests
+    gapDetectionTests
   ]

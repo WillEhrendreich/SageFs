@@ -268,3 +268,66 @@ module StateMachineRenderer =
            {| From = t.FromState; To = t.ToState; Function = t.FunctionName; IsError = t.IsErrorBranch |})
          |> List.toArray
        AsciiDiagram = render model |}
+
+
+/// Health status of a transition in the domain model
+type TransitionHealth =
+  | Passing
+  | Failing
+  | Stale
+  | Untested
+  | NotImplemented
+
+/// A transition annotated with health status from the test/coverage system
+type AnnotatedTransition = {
+  FromState: string
+  ToState: string
+  FunctionName: string option
+  IsErrorBranch: bool
+  Health: TransitionHealth
+}
+
+/// Gap detection and health annotation for state machine models
+module GapDetection =
+
+  /// All possible transitions: cartesian product of case names (N×N)
+  let computeAllPossibleTransitions (caseNames: string list) : (string * string) list =
+    [ for from in caseNames do
+        for to' in caseNames do
+          yield (from, to') ]
+
+  /// Find gaps: possible transitions with no implementing function
+  let detectGaps (model: StateMachineModel) : (string * string) list =
+    let caseNames = model.Cases |> List.map (fun c -> c.Name)
+    let allPossible = computeAllPossibleTransitions caseNames
+    let implemented =
+      model.Transitions
+      |> List.map (fun t -> (t.FromState, t.ToState))
+      |> Set.ofList
+    allPossible
+    |> List.filter (fun pair -> Set.contains pair implemented |> not)
+
+  /// Annotate all possible transitions with health status
+  let annotateWithHealth
+    (model: StateMachineModel)
+    (coverageMap: Map<string, TransitionHealth>)
+    : AnnotatedTransition list =
+    let caseNames = model.Cases |> List.map (fun c -> c.Name)
+    let allPossible = computeAllPossibleTransitions caseNames
+    let transitionLookup =
+      model.Transitions
+      |> List.map (fun t -> ((t.FromState, t.ToState), t))
+      |> Map.ofList
+    allPossible
+    |> List.map (fun (from, to') ->
+      match Map.tryFind (from, to') transitionLookup with
+      | None ->
+        { FromState = from; ToState = to'; FunctionName = None
+          IsErrorBranch = false; Health = NotImplemented }
+      | Some t ->
+        let health =
+          match Map.tryFind t.FunctionName coverageMap with
+          | Some h -> h
+          | None -> Untested
+        { FromState = from; ToState = to'; FunctionName = Some t.FunctionName
+          IsErrorBranch = t.IsErrorBranch; Health = health })
