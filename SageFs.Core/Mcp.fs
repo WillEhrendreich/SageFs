@@ -1303,6 +1303,61 @@ module McpTools =
   let exploreType (ctx: McpContext) (agent: string) (typeName: string) (workingDirectory: string option) : Task<string> =
     exploreQualifiedName ctx agent typeName workingDirectory
 
+  /// MCP tool: visualize a DU type as a state machine diagram.
+  /// Sends F# code to the worker that uses reflection to extract DU cases,
+  /// then renders an ASCII diagram plus JSON data.
+  let visualizeDomainModel (ctx: McpContext) (agent: string) (typeName: string) (workingDirectory: string option) : Task<string> =
+    withSessionWd ctx agent workingDirectory (fun sid -> task {
+      let code =
+        sprintf "let _vizType = typeof<%s>\nmatch Microsoft.FSharp.Reflection.FSharpType.IsUnion(_vizType) with\n| true ->\n  let cases =\n    Microsoft.FSharp.Reflection.FSharpType.GetUnionCases(_vizType)\n    |> Array.map (fun uc ->\n      let fields = uc.GetFields() |> Array.map (fun f -> sprintf \"%%s:%%s\" f.Name f.PropertyType.Name)\n      sprintf \"%%s|%%s\" uc.Name (String.concat \",\" fields))\n  printfn \"DUCASES:%%s\" (String.concat \";\" cases)\n| false -> printfn \"DUCASES:NOT_A_DU\"" typeName
+      let! routeResult =
+        routeToSession ctx sid
+          (fun replyId -> WorkerProtocol.WorkerMessage.EvalCode(code, replyId))
+      return
+        match routeResult with
+        | Ok (WorkerProtocol.WorkerResponse.EvalResult(_, result, _, _)) ->
+          let output =
+            match result with
+            | Ok s -> s
+            | Error e -> sprintf "%A" e
+          let lines = output.Split('\n') |> Array.map (fun s -> s.Trim())
+          let duLine = lines |> Array.tryFind (fun l -> l.StartsWith("DUCASES:"))
+          match duLine with
+          | Some line ->
+            let payload = line.Substring(8)
+            match payload with
+            | "NOT_A_DU" ->
+              sprintf "'%s' is not a discriminated union type." typeName
+            | casesStr ->
+              let cases =
+                casesStr.Split(';')
+                |> Array.toList
+                |> List.choose (fun caseStr ->
+                  match caseStr.Split('|') with
+                  | [| name; fieldsStr |] ->
+                    let fields =
+                      match fieldsStr with
+                      | "" -> []
+                      | fs ->
+                        fs.Split(',')
+                        |> Array.toList
+                        |> List.choose (fun f ->
+                          match f.Split(':') with
+                          | [| fn; ft |] -> Some (fn, ft)
+                          | _ -> None)
+                    Some { Features.DomainModelViz.DUCaseInfo.Name = name; Features.DomainModelViz.DUCaseInfo.Fields = fields }
+                  | _ -> None)
+              let model : Features.DomainModelViz.StateMachineModel =
+                { TypeName = typeName; Cases = cases; Transitions = [] }
+              let data = Features.DomainModelViz.StateMachineRenderer.renderAsData model
+              let opts = JsonSerializerOptions(WriteIndented = true)
+              JsonSerializer.Serialize(data, opts)
+          | None ->
+            sprintf "Could not extract DU cases from '%s'. Output: %s" typeName output
+        | Ok other -> sprintf "Unexpected response: %A" other
+        | Error msg -> sprintf "Error: %s" msg
+    })
+
   // ── Session Management Operations ──────────────────────────────
 
   /// Create a new session and bind it to the requesting agent.

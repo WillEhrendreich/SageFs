@@ -250,6 +250,19 @@ Examples: 'System.String', 'System.Collections.Generic.List', 'Microsoft.FSharp.
         logger.LogDebug("MCP-TOOL: explore_type called: {Type}", typeName)
         exploreType ctx "mcp" typeName wd |> withEcho "explore_type"
 
+    [<McpServerTool>]
+    [<Description("""Visualize a discriminated union type as a state machine diagram. Returns JSON with case names,
+fields, entry/terminal state classification, and an ASCII art diagram. Useful for understanding DU-based
+domain models as state machines. Provide the fully-qualified type name.""")>]
+    member _.visualize_domain_model(
+        [<Description("Fully-qualified DU type name to visualize (e.g. 'MyNamespace.OrderState')")>] typeName: string,
+        [<Description("Working directory of the MCP client.")>]
+        working_directory: string
+    ) : Task<string> =
+        let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
+        logger.LogDebug("MCP-TOOL: visualize_domain_model called: {Type}", typeName)
+        visualizeDomainModel ctx "mcp" typeName wd |> withEcho "visualize_domain_model"
+
     // ── Session Management Tools ──────────────
 
     [<McpServerTool>]

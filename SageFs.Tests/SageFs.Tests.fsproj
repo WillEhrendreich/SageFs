@@ -83,6 +83,7 @@
         <Compile Include="LiveTestingCoverageTests.fs" />
         <Compile Include="LiveTestingElmTests.fs" />
         <Compile Include="LiveTestingGraphTests.fs" />
+        <Compile Include="DomainModelVizTests.fs" />
         <Compile Include="LiveTestingExecutorTests.fs" />
         <Compile Include="ArgsCleanupTests.fs" />
         <Compile Include="AssemblyResolverTests.fs" />
