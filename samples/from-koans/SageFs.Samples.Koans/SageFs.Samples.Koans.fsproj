@@ -1,0 +1,41 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <GenerateProgramFile>false</GenerateProgramFile>
+    <LangVersion>preview</LangVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="AboutAsserts.fs" />
+    <Compile Include="AboutLet.fs" />
+    <Compile Include="AboutFunctions.fs" />
+    <Compile Include="AboutUnit.fs" />
+    <Compile Include="AboutOrderOfEvaluation.fs" />
+    <Compile Include="AboutTuples.fs" />
+    <Compile Include="AboutStrings.fs" />
+    <Compile Include="AboutBranching.fs" />
+    <Compile Include="AboutLists.fs" />
+    <Compile Include="AboutPipelining.fs" />
+    <Compile Include="AboutArrays.fs" />
+    <Compile Include="AboutLooping.fs" />
+    <Compile Include="MoreAboutFunctions.fs" />
+    <Compile Include="AboutDotNetCollections.fs" />
+    <Compile Include="AboutStockExample.fs" />
+    <Compile Include="AboutRecordTypes.fs" />
+    <Compile Include="AboutOptionTypes.fs" />
+    <Compile Include="AboutDiscriminatedUnions.fs" />
+    <Compile Include="AboutModules.fs" />
+    <Compile Include="AboutClasses.fs" />
+    <Compile Include="AboutFiltering.fs" />
+    <Compile Include="GraduationGuide.fs" />
+    <Compile Include="Program.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Expecto" />
+    <PackageReference Include="YoloDev.Expecto.TestSdk" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+  </ItemGroup>
+
+</Project>
