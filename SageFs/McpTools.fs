@@ -335,6 +335,20 @@ Policies: every (on every change), save (on file save only), demand (manual trig
         setRunPolicy ctx category policy |> withEcho "set_run_policy"
 
     [<McpServerTool>]
+    [<Description("""Configure test execution timeouts. Affects both automatic (affected) and explicit test runs.
+Call with no arguments to see current values. Defaults: per-test 5s, global run 120s.""")>]
+    member _.set_test_timeouts(
+        [<Description("Per-test timeout in seconds (default 5). Each individual test is cancelled if it exceeds this.")>]
+        per_test_seconds: float,
+        [<Description("Global run timeout in seconds (default 120). The entire test batch is cancelled if it exceeds this.")>]
+        global_run_seconds: float
+    ) : Task<string> =
+        let pt = match per_test_seconds <= 0.0 with | true -> None | false -> Some per_test_seconds
+        let gr = match global_run_seconds <= 0.0 with | true -> None | false -> Some global_run_seconds
+        logger.LogDebug("MCP-TOOL: set_test_timeouts called: per_test={PerTest}, global={Global}", per_test_seconds, global_run_seconds)
+        setTestTimeouts ctx pt gr |> withEcho "set_test_timeouts"
+
+    [<McpServerTool>]
     [<Description("Get test trace information: enabled state, running status, provider list, run policies, and test summary.")>]
     member _.get_test_trace() : Task<string> =
         logger.LogDebug("MCP-TOOL: get_test_trace called")

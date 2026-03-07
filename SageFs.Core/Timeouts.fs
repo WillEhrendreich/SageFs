@@ -19,9 +19,13 @@ module Timeouts =
   let shutdownHttpClient = TimeSpan.FromSeconds(5.0)
   let sseKeepAlive = TimeSpan.FromHours(24.0)
 
-  // -- Live Testing --
-  let perTestDefault = TimeSpan.FromSeconds(5.0)
-  let globalTestRun = TimeSpan.FromMinutes(2.0)
+  // -- Live Testing (configurable at runtime via MCP) --
+  let mutable private _perTestDefault = TimeSpan.FromSeconds(5.0)
+  let mutable private _globalTestRun = TimeSpan.FromMinutes(2.0)
+  let perTestDefault () = _perTestDefault
+  let globalTestRun () = _globalTestRun
+  let setPerTestTimeout (t: TimeSpan) = _perTestDefault <- t
+  let setGlobalTestRunTimeout (t: TimeSpan) = _globalTestRun <- t
 
   // -- Process Management --
   let buildCompletion = TimeSpan.FromMinutes(10.0)

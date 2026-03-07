@@ -1513,6 +1513,34 @@ module McpTools =
         | _, None -> return sprintf "Unknown policy: %s. Valid: every, save, demand, disabled." policy
     }
 
+  let setTestTimeouts (_ctx: McpContext) (perTestSeconds: float option) (globalRunSeconds: float option) : Task<string> =
+    task {
+      let mutable error = None
+      let parts = System.Collections.Generic.List<string>()
+      match perTestSeconds with
+      | Some s when s > 0.0 ->
+        Timeouts.setPerTestTimeout (TimeSpan.FromSeconds s)
+        parts.Add (sprintf "Per-test timeout: %.1fs" s)
+      | Some s -> error <- Some (sprintf "Invalid per-test timeout: %.1f (must be > 0)" s)
+      | None -> ()
+      match globalRunSeconds with
+      | Some s when s > 0.0 ->
+        Timeouts.setGlobalTestRunTimeout (TimeSpan.FromSeconds s)
+        parts.Add (sprintf "Global run timeout: %.1fs" s)
+      | Some s -> error <- Some (sprintf "Invalid global run timeout: %.1f (must be > 0)" s)
+      | None -> ()
+      match error with
+      | Some e -> return e
+      | None ->
+        match parts.Count with
+        | 0 ->
+          return sprintf "Current timeouts — per-test: %.1fs, global run: %.1fs. Provide per_test_seconds and/or global_run_seconds to change."
+            (Timeouts.perTestDefault().TotalSeconds) (Timeouts.globalTestRun().TotalSeconds)
+        | _ ->
+          parts.Add (sprintf "(effective immediately for next test run)")
+          return parts |> Seq.toList |> String.concat ". "
+    }
+
   let getTestTrace (ctx: McpContext) : Task<string> =
     match ctx.GetElmModel with
     | None -> Task.FromResult "Test trace not available — Elm loop not started."
@@ -1609,6 +1637,7 @@ module McpTools =
     let mutable passed = 0
     let mutable failed = 0
     let mutable running = 0
+    let mutable skipped = 0
     let failures = System.Collections.Generic.List<FailedTestInfo>()
     let runningNames = System.Collections.Generic.List<string>()
     for e in entries do
@@ -1631,9 +1660,16 @@ module McpTools =
         | Features.LiveTesting.TestRunStatus.Running ->
           running <- running + 1
           runningNames.Add e.DisplayName
-        | _ -> ()
+        | Features.LiveTesting.TestRunStatus.Skipped _
+        | Features.LiveTesting.TestRunStatus.PolicyDisabled ->
+          skipped <- skipped + 1
+        | Features.LiveTesting.TestRunStatus.Detected
+        | Features.LiveTesting.TestRunStatus.Queued ->
+          running <- running + 1
+          runningNames.Add (sprintf "%s (queued)" e.DisplayName)
+        | Features.LiveTesting.TestRunStatus.Stale -> skipped <- skipped + 1
       | false -> ()
-    (passed, failed, running, failures |> Seq.toList, runningNames |> Seq.toList)
+    (passed + skipped, failed, running, failures |> Seq.toList, runningNames |> Seq.toList)
 
   let pollForTestCompletion
     (getModel: unit -> SageFsModel)
