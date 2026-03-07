@@ -137,6 +137,18 @@ let discoverTests = testList "TestOrchestrator.discoverTests" [
 [<System.AttributeUsage(System.AttributeTargets.Method)>]
 type SyntheticFactAttribute() = inherit System.Attribute()
 
+/// Synthetic attribute matching xunit's Theory pattern
+[<System.AttributeUsage(System.AttributeTargets.Method)>]
+type SyntheticTheoryAttribute() = inherit System.Attribute()
+
+/// Synthetic attribute matching xunit's InlineData pattern
+[<System.AttributeUsage(System.AttributeTargets.Method, AllowMultiple = true)>]
+type SyntheticInlineDataAttribute(data: obj array) =
+  inherit System.Attribute()
+  new(a: obj) = SyntheticInlineDataAttribute([| a |])
+  new(a: obj, b: obj) = SyntheticInlineDataAttribute([| a; b |])
+  member _.Data : obj array = data
+
 /// Test class with a passing and a failing method
 type SyntheticTestClass() =
   [<SyntheticFact>]
@@ -150,6 +162,22 @@ type NeedsConstructorArg(value: string) =
   [<SyntheticFact>]
   member _.SomeTest() = ()
 
+/// Test class with Theory+InlineData methods (for Issue #38 regression)
+type SyntheticTheoryClass() =
+  [<SyntheticTheory>]
+  [<SyntheticInlineData(1)>]
+  [<SyntheticInlineData(2)>]
+  [<SyntheticInlineData(3)>]
+  member _.ParameterisedTest(x: int) = ()
+
+  [<SyntheticTheory>]
+  [<SyntheticInlineData(1, "a")>]
+  [<SyntheticInlineData(2, "b")>]
+  member _.MultiArgTest(n: int, s: string) = ()
+
+  [<SyntheticTheory>]
+  member _.TheoryWithNoData() = ()
+
 let private syntheticExecutor : TestExecutor =
   let desc = {
     Name = TestFramework.Unknown "SyntheticFact"
@@ -159,6 +187,7 @@ let private syntheticExecutor : TestExecutor =
   TestExecutor.AttributeBased {
     Description = desc
     Execute = ReflectionExecutor.executeMethod
+    TheoryAttributes = []
   }
 
 let private syntheticAsm = typeof<SyntheticTestClass>.Assembly
@@ -213,6 +242,7 @@ let issue32RegressionTests = testList "Issue #32: attr executors wired into RunT
       TestExecutor.AttributeBased {
         Description = desc
         Execute = ReflectionExecutor.executeMethod
+        TheoryAttributes = []
       }
     let result = TestOrchestrator.discoverAll [ diExecutor ] syntheticAsm
     let diTest =
@@ -255,6 +285,89 @@ let issue32RegressionTests = testList "Issue #32: attr executors wired into RunT
   }
 ]
 
+// --- Issue #38 regression tests: Theory+InlineData counts each row as a test ---
+
+let private syntheticTheoryExecutor : TestExecutor =
+  let desc = {
+    Name = TestFramework.XUnit
+    TestAttributes = [ "SyntheticTheory"; "SyntheticFact" ]
+    AssemblyMarker = "SageFs.Tests"
+  }
+  TestExecutor.AttributeBased {
+    Description = desc
+    Execute = ReflectionExecutor.executeMethod
+    TheoryAttributes = [ "SyntheticTheory" ]
+  }
+
+let private theoryAsm = typeof<SyntheticTheoryClass>.Assembly
+
+let issue38RegressionTests = testList "Issue #38: Theory+InlineData rows counted per row" [
+  test "Theory method with 3 InlineData rows produces 3 TestCases" {
+    let result = TestOrchestrator.discoverAll [ syntheticTheoryExecutor ] theoryAsm
+    let parameterised = result.Tests |> List.filter (fun tc -> tc.DisplayName.StartsWith "ParameterisedTest(")
+    parameterised
+    |> List.length
+    |> Expect.equal "should produce 3 test cases from 3 InlineData rows" 3
+  }
+
+  test "Theory method with 2 InlineData rows produces 2 TestCases" {
+    let result = TestOrchestrator.discoverAll [ syntheticTheoryExecutor ] theoryAsm
+    let multiArg = result.Tests |> List.filter (fun tc -> tc.DisplayName.StartsWith "MultiArgTest(")
+    multiArg
+    |> List.length
+    |> Expect.equal "should produce 2 test cases from 2 InlineData rows" 2
+  }
+
+  test "Theory method without InlineData produces 1 TestCase" {
+    let result = TestOrchestrator.discoverAll [ syntheticTheoryExecutor ] theoryAsm
+    let noData = result.Tests |> List.filter (fun tc -> tc.FullName.Contains "TheoryWithNoData")
+    noData
+    |> List.length
+    |> Expect.equal "should produce 1 test case when no InlineData" 1
+  }
+
+  test "Theory TestCase display names include args" {
+    let result = TestOrchestrator.discoverAll [ syntheticTheoryExecutor ] theoryAsm
+    let parameterised = result.Tests |> List.filter (fun tc -> tc.DisplayName.StartsWith "ParameterisedTest(")
+    let displayNames = parameterised |> List.map (fun tc -> tc.DisplayName) |> Set.ofList
+    Set.contains "ParameterisedTest(1)" displayNames |> Expect.isTrue "should include ParameterisedTest(1)"
+    Set.contains "ParameterisedTest(2)" displayNames |> Expect.isTrue "should include ParameterisedTest(2)"
+    Set.contains "ParameterisedTest(3)" displayNames |> Expect.isTrue "should include ParameterisedTest(3)"
+  }
+
+  test "Theory TestCase IDs are unique per row" {
+    let result = TestOrchestrator.discoverAll [ syntheticTheoryExecutor ] theoryAsm
+    let parameterised = result.Tests |> List.filter (fun tc -> tc.DisplayName.StartsWith "ParameterisedTest(")
+    let ids = parameterised |> List.map (fun tc -> TestId.value tc.Id) |> Set.ofList
+    ids |> Set.count |> Expect.equal "all row IDs should be unique" 3
+  }
+
+  test "discoverAll expands Theory rows and all are executable" {
+    let result = TestOrchestrator.discoverAll [ syntheticTheoryExecutor ] theoryAsm
+    let theoryTests = result.Tests |> List.filter (fun tc -> tc.FullName.Contains "ParameterisedTest")
+    theoryTests
+    |> List.length
+    |> Expect.equal "should produce 3 test cases for ParameterisedTest" 3
+    theoryTests
+    |> List.iter (fun tc ->
+      let outcome = result.RunTest tc |> Async.RunSynchronously
+      match outcome with
+      | TestResult.NotRun -> failtestf "Theory test '%s' returned NotRun — not wired!" tc.FullName
+      | _ -> ())
+  }
+
+  test "discoverAll Theory runners pass correct args (passing test)" {
+    let result = TestOrchestrator.discoverAll [ syntheticTheoryExecutor ] theoryAsm
+    let theoryTests = result.Tests |> List.filter (fun tc -> tc.FullName.Contains "ParameterisedTest")
+    theoryTests
+    |> List.iter (fun tc ->
+      let outcome = result.RunTest tc |> Async.RunSynchronously
+      match outcome with
+      | TestResult.Passed _ -> ()
+      | other -> failtestf "Expected Passed for '%s', got %A" tc.FullName other)
+  }
+]
+
 [<Tests>]
 let allExecutorTests = testList "Provider Executors" [
   executorDescriptionTests
@@ -264,6 +377,7 @@ let allExecutorTests = testList "Provider Executors" [
   discoverAllTests
   discoverTests
   issue32RegressionTests
+  issue38RegressionTests
 ]
 
 // --- LiveTestingHook tests ---

@@ -13,6 +13,11 @@ open SageFs.Utils
 type AttributeTestExecutor = {
   Description: AttributeProviderDescription
   Execute: MethodInfo -> Async<TestResult>
+  /// Attribute names (without the "Attribute" suffix) that mark parameterised /
+  /// theory tests. Methods with one of these attributes AND with InlineData
+  /// counterparts are expanded into one TestCase per data row.
+  /// For xunit this is ["Theory"]; for frameworks without data-driven expansion, [].
+  TheoryAttributes: string list
 }
 
 /// Pure result from discovery: tests + how to run them.
@@ -42,71 +47,12 @@ module TestExecutor =
     | TestExecutor.AttributeBased ap -> ProviderDescription.AttributeBased ap.Description
     | TestExecutor.Custom cp -> ProviderDescription.Custom cp.Description
 
-// --- Attribute-based discovery ---
-
-module AttributeDiscovery =
-
-  let hasTestAttribute (attrs: string list) (mi: MethodInfo) : bool =
-    mi.GetCustomAttributes(true)
-    |> Array.exists (fun attr ->
-      let attrName = attr.GetType().Name
-      attrs
-      |> List.exists (fun testAttr ->
-        attrName = testAttr || attrName = sprintf "%sAttribute" testAttr))
-
-  let toTestCase (framework: TestFramework) (category: TestCategory) (mi: MethodInfo) : TestCase =
-    let fullName = sprintf "%s.%s" mi.DeclaringType.FullName mi.Name
-    { Id = TestId.create fullName framework
-      FullName = fullName
-      DisplayName = mi.Name
-      Origin = TestOrigin.ReflectionOnly
-      Labels = []
-      Framework = framework
-      Category = category }
-
-  let discoverInAssembly
-    (desc: AttributeProviderDescription)
-    (category: TestCategory)
-    (asm: Assembly)
-    : TestCase list =
-    try
-      asm.GetExportedTypes()
-      |> Array.collect (fun t ->
-        t.GetMethods(BindingFlags.Public ||| BindingFlags.Instance ||| BindingFlags.Static)
-        |> Array.filter (hasTestAttribute desc.TestAttributes))
-      |> Array.map (toTestCase desc.Name category)
-      |> Array.toList
-    with
-    | :? ReflectionTypeLoadException -> []
-    | :? TypeLoadException -> []
-
-  /// Discover tests with their runner closures retained for execution wiring.
-  /// Each MethodInfo is captured via partial application of the executor's Execute
-  /// function — no MethodInfo stored on TestCase, clean closure.
-  let discoverWithRunner
-    (ae: AttributeTestExecutor)
-    (category: TestCategory)
-    (asm: Assembly)
-    : (TestCase * Async<TestResult>) list =
-    try
-      asm.GetExportedTypes()
-      |> Array.collect (fun t ->
-        t.GetMethods(BindingFlags.Public ||| BindingFlags.Instance ||| BindingFlags.Static)
-        |> Array.filter (hasTestAttribute ae.Description.TestAttributes)
-        |> Array.map (fun mi ->
-          let tc = toTestCase ae.Description.Name category mi
-          let runner = ae.Execute mi
-          (tc, runner)))
-      |> Array.toList
-    with
-    | :? ReflectionTypeLoadException -> []
-    | :? TypeLoadException -> []
-
 // --- Reflection-based execution ---
+// Defined before AttributeDiscovery so discoverWithRunner can reference executeMethodWithArgs.
 
 module ReflectionExecutor =
 
-  let executeMethod (mi: MethodInfo) : Async<TestResult> =
+  let private invokeWith (mi: MethodInfo) (args: obj array) : Async<TestResult> =
     async {
       let sw = Stopwatch.StartNew()
       try
@@ -114,7 +60,7 @@ module ReflectionExecutor =
           match mi.IsStatic with
           | true -> null
           | false -> Activator.CreateInstance(mi.DeclaringType)
-        let result = mi.Invoke(instance, [||])
+        let result = mi.Invoke(instance, args)
         match result with
         | :? Threading.Tasks.Task as task ->
           do! Async.AwaitTask task
@@ -144,6 +90,136 @@ module ReflectionExecutor =
         return TestResult.Failed (TestFailure.ExceptionThrown (ex.Message, ex.StackTrace), sw.Elapsed)
     }
 
+  let executeMethod (mi: MethodInfo) : Async<TestResult> = invokeWith mi [||]
+
+  /// Runs a [Theory] test method with the given [InlineData] arguments.
+  let executeMethodWithArgs (mi: MethodInfo) (args: obj array) : Async<TestResult> = invokeWith mi args
+
+// --- Attribute-based discovery ---
+
+module AttributeDiscovery =
+
+  let hasTestAttribute (attrs: string list) (mi: MethodInfo) : bool =
+    mi.GetCustomAttributes(true)
+    |> Array.exists (fun attr ->
+      let attrName = attr.GetType().Name
+      attrs
+      |> List.exists (fun testAttr ->
+        attrName = testAttr || attrName = sprintf "%sAttribute" testAttr))
+
+  let toTestCase (framework: TestFramework) (category: TestCategory) (mi: MethodInfo) : TestCase =
+    let fullName = sprintf "%s.%s" mi.DeclaringType.FullName mi.Name
+    { Id = TestId.create fullName framework
+      FullName = fullName
+      DisplayName = mi.Name
+      Origin = TestOrigin.ReflectionOnly
+      Labels = []
+      Framework = framework
+      Category = category }
+
+  /// Returns true if the method carries an annotation from the given theory attribute names.
+  /// Checks both bare name and "Attribute"-suffixed form (e.g. "Theory" matches "TheoryAttribute").
+  let private isTheoryMethod (theoryAttrNames: string list) (mi: MethodInfo) : bool =
+    match theoryAttrNames with
+    | [] -> false
+    | names ->
+      mi.GetCustomAttributes(true)
+      |> Array.exists (fun attr ->
+        let name = attr.GetType().Name
+        names |> List.exists (fun ta -> name = ta || name = sprintf "%sAttribute" ta))
+
+  /// Extracts the data rows from every InlineData attribute on the method.
+  /// Matches attributes by "InlineDataAttribute" suffix convention (covers all xunit variants).
+  /// Returns an empty array when there are no InlineData attributes (e.g. MemberData).
+  let private getInlineDataRows (mi: MethodInfo) : obj array array =
+    mi.GetCustomAttributes(true)
+    |> Array.choose (fun attr ->
+      if attr.GetType().Name.EndsWith("InlineDataAttribute") then
+        match attr.GetType().GetProperty("Data") with
+        | null -> None
+        | prop ->
+          match prop.GetValue(attr) with
+          | :? (obj array) as data -> Some data
+          | _ -> None
+      else None)
+
+  /// Creates a TestCase for a single Theory data row. The full name and display
+  /// name include the stringified arguments so each row gets a unique identity.
+  let private toTheoryTestCase (framework: TestFramework) (category: TestCategory) (mi: MethodInfo) (args: obj array) : TestCase =
+    let argsStr = args |> Array.map (fun a -> if a = null then "null" else string a) |> String.concat ", "
+    let fullName = sprintf "%s.%s(%s)" mi.DeclaringType.FullName mi.Name argsStr
+    { Id = TestId.create fullName framework
+      FullName = fullName
+      DisplayName = sprintf "%s(%s)" mi.Name argsStr
+      Origin = TestOrigin.ReflectionOnly
+      Labels = []
+      Framework = framework
+      Category = category }
+
+  /// Expands a single MethodInfo into one or more TestCases.
+  /// Theory methods with InlineData rows produce N cases (one per row);
+  /// all other methods (including Theory without InlineData) produce one case.
+  let toTestCases (framework: TestFramework) (category: TestCategory) (theoryAttrNames: string list) (mi: MethodInfo) : TestCase list =
+    match isTheoryMethod theoryAttrNames mi with
+    | false -> [ toTestCase framework category mi ]
+    | true ->
+      match getInlineDataRows mi with
+      | [||] -> [ toTestCase framework category mi ]
+      | rows -> rows |> Array.map (toTheoryTestCase framework category mi) |> Array.toList
+
+  let discoverInAssembly
+    (desc: AttributeProviderDescription)
+    (category: TestCategory)
+    (asm: Assembly)
+    : TestCase list =
+    try
+      asm.GetExportedTypes()
+      |> Array.collect (fun t ->
+        t.GetMethods(BindingFlags.Public ||| BindingFlags.Instance ||| BindingFlags.Static)
+        |> Array.filter (hasTestAttribute desc.TestAttributes))
+      |> Array.collect (fun mi -> toTestCases desc.Name category [] mi |> List.toArray)
+      |> Array.toList
+    with
+    | :? ReflectionTypeLoadException -> []
+    | :? TypeLoadException -> []
+
+  /// Discover tests with their runner closures retained for execution wiring.
+  /// Theory+InlineData methods are expanded: each data row becomes a separate
+  /// (TestCase * runner) pair whose runner invokes the method with that row's args.
+  /// Theory expansion is triggered by attributes listed in ae.TheoryAttributes.
+  let discoverWithRunner
+    (ae: AttributeTestExecutor)
+    (category: TestCategory)
+    (asm: Assembly)
+    : (TestCase * Async<TestResult>) list =
+    try
+      asm.GetExportedTypes()
+      |> Array.collect (fun t ->
+        t.GetMethods(BindingFlags.Public ||| BindingFlags.Instance ||| BindingFlags.Static)
+        |> Array.filter (hasTestAttribute ae.Description.TestAttributes)
+        |> Array.collect (fun mi ->
+          match isTheoryMethod ae.TheoryAttributes mi with
+          | false ->
+            let tc = toTestCase ae.Description.Name category mi
+            let runner = ae.Execute mi
+            [| (tc, runner) |]
+          | true ->
+            match getInlineDataRows mi with
+            | [||] ->
+              // Theory without InlineData (e.g. MemberData) — one case, no args
+              let tc = toTestCase ae.Description.Name category mi
+              let runner = ae.Execute mi
+              [| (tc, runner) |]
+            | rows ->
+              rows |> Array.map (fun args ->
+                let tc = toTheoryTestCase ae.Description.Name category mi args
+                let runner = ReflectionExecutor.executeMethodWithArgs mi args
+                (tc, runner))))
+      |> Array.toList
+    with
+    | :? ReflectionTypeLoadException -> []
+    | :? TypeLoadException -> []
+
 // --- Built-in framework executors ---
 
 module BuiltInExecutors =
@@ -152,20 +228,22 @@ module BuiltInExecutors =
     TestExecutor.AttributeBased {
       Description = {
         Name = TestFramework.XUnit
-        TestAttributes = ["Fact"]
+        TestAttributes = ["Fact"; "Theory"]
         AssemblyMarker = "xunit.core"
       }
       Execute = ReflectionExecutor.executeMethod
+      TheoryAttributes = ["Theory"]
     }
 
   let xunitV3 : TestExecutor =
     TestExecutor.AttributeBased {
       Description = {
         Name = TestFramework.XUnit
-        TestAttributes = ["Fact"]
+        TestAttributes = ["Fact"; "Theory"]
         AssemblyMarker = "xunit.v3.core"
       }
       Execute = ReflectionExecutor.executeMethod
+      TheoryAttributes = ["Theory"]
     }
 
   let nunit : TestExecutor =
@@ -176,6 +254,7 @@ module BuiltInExecutors =
         AssemblyMarker = "nunit.framework"
       }
       Execute = ReflectionExecutor.executeMethod
+      TheoryAttributes = []
     }
 
   let mstest : TestExecutor =
@@ -186,6 +265,7 @@ module BuiltInExecutors =
         AssemblyMarker = "Microsoft.VisualStudio.TestPlatform.TestFramework"
       }
       Execute = ReflectionExecutor.executeMethod
+      TheoryAttributes = []
     }
 
   let tunit : TestExecutor =
@@ -196,6 +276,7 @@ module BuiltInExecutors =
         AssemblyMarker = "TUnit.Core"
       }
       Execute = ReflectionExecutor.executeMethod
+      TheoryAttributes = []
     }
 
   /// Reflection-based Expecto executor — no compile-time Expecto dependency.
