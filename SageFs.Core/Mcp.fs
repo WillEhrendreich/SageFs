@@ -1426,24 +1426,39 @@ module McpTools =
               | Features.LiveTesting.TestOrigin.ReflectionOnly -> false)
             |> Some
           | None -> None
-        let resp =
-          let enabled = state.Activation = Features.LiveTesting.LiveTestingActivation.Active
-          let bitmapStats =
-            let count = Map.count state.TestCoverageBitmaps
-            match count = 0 with
-            | true -> None
-            | false ->
-              let avgProbes =
-                state.TestCoverageBitmaps
-                |> Map.toSeq
-                |> Seq.map (fun (_, bm) -> Features.LiveTesting.CoverageBitmap.popCount bm)
-                |> Seq.averageBy float
-              Some {| TestsWithCoverage = count; AvgHitProbes = avgProbes |}
-          match tests, bitmapStats with
-          | Some t, Some bs -> {| Enabled = enabled; Summary = summary; Tests = t; CoverageBitmapStats = bs |} |> box
-          | Some t, None -> {| Enabled = enabled; Summary = summary; Tests = t |} |> box
-          | None, Some bs -> {| Enabled = enabled; Summary = summary; CoverageBitmapStats = bs |} |> box
-          | None, None -> {| Enabled = enabled; Summary = summary |} |> box
+        let resp = System.Collections.Generic.Dictionary<string, obj>()
+        resp["Enabled"] <- box (state.Activation = Features.LiveTesting.LiveTestingActivation.Active)
+        resp["Summary"] <- box summary
+        match tests with
+        | Some t -> resp["Tests"] <- box t
+        | None -> ()
+        let bitmapCount = Map.count state.TestCoverageBitmaps
+        match bitmapCount > 0 with
+        | true ->
+          let avgProbes =
+            state.TestCoverageBitmaps
+            |> Map.toSeq
+            |> Seq.map (fun (_, bm) -> Features.LiveTesting.CoverageBitmap.popCount bm)
+            |> Seq.averageBy float
+          resp["CoverageBitmapStats"] <- box {| TestsWithCoverage = bitmapCount; AvgHitProbes = avgProbes |}
+        | false -> ()
+        let failedEntries = match tests with | Some t -> t | None -> sessionEntries
+        let failedTests =
+          failedEntries
+          |> Array.choose (fun e ->
+            match e.Status with
+            | Features.LiveTesting.TestRunStatus.Failed (failure, duration) ->
+              let msg =
+                match failure with
+                | Features.LiveTesting.TestFailure.AssertionFailed m -> m
+                | Features.LiveTesting.TestFailure.ExceptionThrown (m, _) -> m
+                | Features.LiveTesting.TestFailure.TimedOut after -> sprintf "Timed out after %dms" (int after.TotalMilliseconds)
+              Some {| Name = e.DisplayName; Message = msg; DurationMs = int duration.TotalMilliseconds |}
+            | _ -> None)
+          |> Array.truncate 20
+        match failedTests.Length > 0 with
+        | true -> resp["FailedTests"] <- box failedTests
+        | false -> ()
         return JsonSerializer.Serialize(resp, liveTestJsonOpts)
     }
 
@@ -1454,16 +1469,19 @@ module McpTools =
       | Some dispatch ->
         let msg = match enabled with | true -> SageFsMsg.EnableLiveTesting | false -> SageFsMsg.DisableLiveTesting
         dispatch msg
+        // Return the intended state — don't read model immediately because
+        // the Elm loop processes the dispatch asynchronously. Reading now
+        // would return the OLD state before the message is handled.
+        let label = match enabled with | true -> "enabled" | false -> "disabled"
         match ctx.GetElmModel with
         | Some getModel ->
           let state = (getModel ()).LiveTesting.TestState
-          let activationLabel =
-            match state.Activation with
-            | Features.LiveTesting.LiveTestingActivation.Active -> "enabled"
-            | Features.LiveTesting.LiveTestingActivation.Inactive -> "disabled"
-          return sprintf "Live testing %s." activationLabel
+          let discovered = state.DiscoveredTests.Length
+          match discovered > 0 with
+          | true -> return sprintf "Live testing %s. %d tests discovered." label discovered
+          | false -> return sprintf "Live testing %s. No tests discovered yet — tests will be discovered after first eval." label
         | None ->
-          return sprintf "Live testing %s." (match enabled with | true -> "enabled" | false -> "disabled")
+          return sprintf "Live testing %s." label
     }
 
   let setRunPolicy (ctx: McpContext) (category: string) (policy: string) : Task<string> =
@@ -1524,43 +1542,87 @@ module McpTools =
       |}
       Task.FromResult (JsonSerializer.Serialize(resp, liveTestJsonOpts))
 
+  type FailedTestInfo = {
+    Name: string
+    Message: string
+    Duration: TimeSpan
+    IsFlaky: bool
+  }
+
   type RunTestsResult =
-    | Completed of passed: int * failed: int * total: int
-    | TimedOut of passed: int * failed: int * running: int * total: int
+    | Completed of passed: int * failed: int * total: int * failures: FailedTestInfo list
+    | TimedOut of passed: int * failed: int * running: int * total: int * failures: FailedTestInfo list
     | Disabled
     | NoTestsMatched of totalDiscovered: int
 
   module RunTestsResult =
+    let formatFailures (failures: FailedTestInfo list) =
+      let realFailures = failures |> List.filter (fun f -> not f.IsFlaky)
+      let flakyFailures = failures |> List.filter (fun f -> f.IsFlaky)
+      let parts = System.Collections.Generic.List<string>()
+      match realFailures with
+      | [] -> ()
+      | fs ->
+        parts.Add (sprintf "\nFailed tests (%d):" fs.Length)
+        for f in fs |> List.truncate 10 do
+          parts.Add (sprintf "  ❌ %s (%dms): %s" f.Name (int f.Duration.TotalMilliseconds) f.Message)
+        match fs.Length > 10 with
+        | true -> parts.Add (sprintf "  ... and %d more" (fs.Length - 10))
+        | false -> ()
+      match flakyFailures with
+      | [] -> ()
+      | fs ->
+        parts.Add (sprintf "\nFlaky failures (%d — likely noise):" fs.Length)
+        for f in fs |> List.truncate 5 do
+          parts.Add (sprintf "  ⚠ %s (%dms): %s" f.Name (int f.Duration.TotalMilliseconds) f.Message)
+        match fs.Length > 5 with
+        | true -> parts.Add (sprintf "  ... and %d more" (fs.Length - 5))
+        | false -> ()
+      parts |> Seq.toList |> String.concat "\n"
+
     let format result =
       match result with
-      | Completed (p, f, total) ->
+      | Completed (p, f, total, failures) ->
         match f = 0 with
         | true -> sprintf "✅ All %d tests passed." total
-        | false -> sprintf "❌ %d passed, %d failed out of %d tests." p f total
-      | TimedOut (p, f, running, total) ->
-        sprintf "⏱️ Timed out: %d passed, %d failed, %d still running out of %d tests. Use get_live_test_status for updates." p f running total
+        | false -> sprintf "❌ %d passed, %d failed out of %d tests.%s" p f total (formatFailures failures)
+      | TimedOut (p, f, running, total, failures) ->
+        sprintf "⏱️ Timed out: %d passed, %d failed, %d still running out of %d tests. Use get_live_test_status for updates.%s" p f running total (formatFailures failures)
       | Disabled ->
         "Live testing is disabled. Toggle it on first."
       | NoTestsMatched totalDiscovered ->
         sprintf "No tests matched. Total discovered: %d." totalDiscovered
 
-  let countStatuses
+  let collectResults
     (entries: Features.LiveTesting.TestStatusEntry array)
     (triggeredSet: Set<Features.LiveTesting.TestId>)
-    : int * int * int =
+    (flakyHistory: Map<Features.LiveTesting.TestId, Features.LiveTesting.ResultWindow>)
+    : int * int * int * FailedTestInfo list =
     let mutable passed = 0
     let mutable failed = 0
     let mutable running = 0
+    let failures = System.Collections.Generic.List<FailedTestInfo>()
     for e in entries do
       match Set.contains e.TestId triggeredSet with
       | true ->
         match e.Status with
         | Features.LiveTesting.TestRunStatus.Passed _ -> passed <- passed + 1
-        | Features.LiveTesting.TestRunStatus.Failed _ -> failed <- failed + 1
+        | Features.LiveTesting.TestRunStatus.Failed (failure, duration) ->
+          failed <- failed + 1
+          let msg =
+            match failure with
+            | Features.LiveTesting.TestFailure.AssertionFailed m -> m
+            | Features.LiveTesting.TestFailure.ExceptionThrown (m, _) -> m
+            | Features.LiveTesting.TestFailure.TimedOut after -> sprintf "Timed out after %dms" (int after.TotalMilliseconds)
+          let isFlaky =
+            match Features.LiveTesting.FlakyDetection.assessTest e.TestId flakyHistory with
+            | Features.LiveTesting.TestStability.Flaky _ -> true
+            | _ -> false
+          failures.Add { Name = e.DisplayName; Message = msg; Duration = duration; IsFlaky = isFlaky }
         | Features.LiveTesting.TestRunStatus.Running -> running <- running + 1
         | _ -> ()
       | false -> ()
-    (passed, failed, running)
+    (passed, failed, running, failures |> Seq.toList)
 
   let pollForTestCompletion
     (getModel: unit -> SageFsModel)
@@ -1573,8 +1635,9 @@ module McpTools =
       let model = getModel ()
       let entries = model.LiveTesting.TestState.StatusEntries
       let triggeredSet = Set.ofArray triggeredTestIds
-      let (p, f, _) = countStatuses entries triggeredSet
-      Task.FromResult (Completed (p, f, total))
+      let flakyHistory = model.LiveTesting.TestState.FlakyHistory
+      let (p, f, _, failures) = collectResults entries triggeredSet flakyHistory
+      Task.FromResult (Completed (p, f, total, failures))
     | false ->
       task {
         let deadline = DateTime.UtcNow.AddSeconds(float timeoutSeconds)
@@ -1583,10 +1646,11 @@ module McpTools =
         while result.IsNone && DateTime.UtcNow < deadline do
           let model = getModel ()
           let entries = model.LiveTesting.TestState.StatusEntries
-          let (p, f, r) = countStatuses entries triggeredSet
+          let flakyHistory = model.LiveTesting.TestState.FlakyHistory
+          let (p, f, r, failures) = collectResults entries triggeredSet flakyHistory
           match p + f >= total with
           | true ->
-            result <- Some (Completed (p, f, total))
+            result <- Some (Completed (p, f, total, failures))
           | false ->
             do! Task.Delay 200
         match result with
@@ -1594,8 +1658,9 @@ module McpTools =
         | None ->
           let model = getModel ()
           let entries = model.LiveTesting.TestState.StatusEntries
-          let (p, f, r) = countStatuses entries triggeredSet
-          return TimedOut (p, f, r, total)
+          let flakyHistory = model.LiveTesting.TestState.FlakyHistory
+          let (p, f, r, failures) = collectResults entries triggeredSet flakyHistory
+          return TimedOut (p, f, r, total, failures)
       }
 
   let runTests
@@ -1637,7 +1702,7 @@ module McpTools =
           dispatch (SageFsMsg.Event (SageFsEvent.RunTestsRequested tests))
           match timeoutSeconds = 0 with
           | true ->
-            Task.FromResult (sprintf "Triggered %d tests for execution." tests.Length)
+            Task.FromResult (sprintf "Triggered %d tests for execution. Use get_live_test_status to check progress." tests.Length)
           | false ->
             task {
               let! result = pollForTestCompletion getModel testIds timeoutSeconds
