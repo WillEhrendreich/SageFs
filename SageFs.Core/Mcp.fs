@@ -1551,7 +1551,7 @@ module McpTools =
 
   type RunTestsResult =
     | Completed of passed: int * failed: int * total: int * failures: FailedTestInfo list
-    | TimedOut of passed: int * failed: int * running: int * total: int * failures: FailedTestInfo list
+    | TimedOut of passed: int * failed: int * running: int * total: int * failures: FailedTestInfo list * runningNames: string list
     | Disabled
     | NoTestsMatched of totalDiscovered: int
 
@@ -1586,8 +1586,16 @@ module McpTools =
         match f = 0 with
         | true -> sprintf "✅ All %d tests passed." total
         | false -> sprintf "❌ %d passed, %d failed out of %d tests.%s" p f total (formatFailures failures)
-      | TimedOut (p, f, running, total, failures) ->
-        sprintf "⏱️ Timed out: %d passed, %d failed, %d still running out of %d tests. Use get_live_test_status for updates.%s" p f running total (formatFailures failures)
+      | TimedOut (p, f, running, total, failures, runningNames) ->
+        let runningInfo =
+          match runningNames with
+          | [] -> ""
+          | names ->
+            let shown = names |> List.truncate 10
+            let lines = shown |> List.map (sprintf "  ⏳ %s")
+            let extra = match names.Length > 10 with | true -> [sprintf "  ... and %d more" (names.Length - 10)] | false -> []
+            sprintf "\nStill running (%d):\n%s" running (lines @ extra |> String.concat "\n")
+        sprintf "⏱️ Timed out: %d passed, %d failed, %d still running out of %d tests. Use get_live_test_status for updates.%s%s" p f running total (formatFailures failures) runningInfo
       | Disabled ->
         "Live testing is disabled. Toggle it on first."
       | NoTestsMatched totalDiscovered ->
@@ -1597,11 +1605,12 @@ module McpTools =
     (entries: Features.LiveTesting.TestStatusEntry array)
     (triggeredSet: Set<Features.LiveTesting.TestId>)
     (flakyHistory: Map<Features.LiveTesting.TestId, Features.LiveTesting.ResultWindow>)
-    : int * int * int * FailedTestInfo list =
+    : int * int * int * FailedTestInfo list * string list =
     let mutable passed = 0
     let mutable failed = 0
     let mutable running = 0
     let failures = System.Collections.Generic.List<FailedTestInfo>()
+    let runningNames = System.Collections.Generic.List<string>()
     for e in entries do
       match Set.contains e.TestId triggeredSet with
       | true ->
@@ -1619,10 +1628,12 @@ module McpTools =
             | Features.LiveTesting.TestStability.Flaky _ -> true
             | _ -> false
           failures.Add { Name = e.DisplayName; Message = msg; Duration = duration; IsFlaky = isFlaky }
-        | Features.LiveTesting.TestRunStatus.Running -> running <- running + 1
+        | Features.LiveTesting.TestRunStatus.Running ->
+          running <- running + 1
+          runningNames.Add e.DisplayName
         | _ -> ()
       | false -> ()
-    (passed, failed, running, failures |> Seq.toList)
+    (passed, failed, running, failures |> Seq.toList, runningNames |> Seq.toList)
 
   let pollForTestCompletion
     (getModel: unit -> SageFsModel)
@@ -1636,7 +1647,7 @@ module McpTools =
       let entries = model.LiveTesting.TestState.StatusEntries
       let triggeredSet = Set.ofArray triggeredTestIds
       let flakyHistory = model.LiveTesting.TestState.FlakyHistory
-      let (p, f, _, failures) = collectResults entries triggeredSet flakyHistory
+      let (p, f, _, failures, _) = collectResults entries triggeredSet flakyHistory
       Task.FromResult (Completed (p, f, total, failures))
     | false ->
       task {
@@ -1647,7 +1658,7 @@ module McpTools =
           let model = getModel ()
           let entries = model.LiveTesting.TestState.StatusEntries
           let flakyHistory = model.LiveTesting.TestState.FlakyHistory
-          let (p, f, r, failures) = collectResults entries triggeredSet flakyHistory
+          let (p, f, r, failures, _) = collectResults entries triggeredSet flakyHistory
           match p + f >= total with
           | true ->
             result <- Some (Completed (p, f, total, failures))
@@ -1659,8 +1670,8 @@ module McpTools =
           let model = getModel ()
           let entries = model.LiveTesting.TestState.StatusEntries
           let flakyHistory = model.LiveTesting.TestState.FlakyHistory
-          let (p, f, r, failures) = collectResults entries triggeredSet flakyHistory
-          return TimedOut (p, f, r, total, failures)
+          let (p, f, r, failures, runningNames) = collectResults entries triggeredSet flakyHistory
+          return TimedOut (p, f, r, total, failures, runningNames)
       }
 
   let runTests
