@@ -148,7 +148,8 @@ type SubCube =
 
 /// An attachment face on the boundary of existing geometry
 type AttachFace =
-  { FX: float32; FZ: float32
+  { Owner: int
+    FX: float32; FZ: float32
     Dir: FaceDir
     HalfLen: float32 }
 
@@ -179,63 +180,144 @@ let generateCompound (qualName: string) (complexity: int) (lotHW: float32) (lotH
     let cubes = ResizeArray<SubCube>(min complexity 30)
     cubes.Add(core)
 
-    let facesOf (c: SubCube) =
-      [| { FX = c.CX; FZ = c.CZ - c.HD; Dir = FdNorth; HalfLen = c.HW }
-         { FX = c.CX; FZ = c.CZ + c.HD; Dir = FdSouth; HalfLen = c.HW }
-         { FX = c.CX + c.HW; FZ = c.CZ; Dir = FdEast;  HalfLen = c.HD }
-         { FX = c.CX - c.HW; FZ = c.CZ; Dir = FdWest;  HalfLen = c.HD } |]
+    let cubeBounds (cube: SubCube) =
+      (cube.CX - cube.HW, cube.CX + cube.HW, cube.CZ - cube.HD, cube.CZ + cube.HD)
+
+    let overlap1d a0 a1 b0 b1 =
+      min a1 b1 - max a0 b0
+
+    let overlapArea (a: SubCube) (b: SubCube) =
+      let ax0, ax1, az0, az1 = cubeBounds a
+      let bx0, bx1, bz0, bz1 = cubeBounds b
+      let ox = overlap1d ax0 ax1 bx0 bx1
+      let oz = overlap1d az0 az1 bz0 bz1
+      if ox > 0.0001f && oz > 0.0001f then ox * oz else 0.0f
+
+    let facesOf owner (c: SubCube) =
+      [| { Owner = owner; FX = c.CX; FZ = c.CZ - c.HD; Dir = FdNorth; HalfLen = c.HW }
+         { Owner = owner; FX = c.CX; FZ = c.CZ + c.HD; Dir = FdSouth; HalfLen = c.HW }
+         { Owner = owner; FX = c.CX + c.HW; FZ = c.CZ; Dir = FdEast;  HalfLen = c.HD }
+         { Owner = owner; FX = c.CX - c.HW; FZ = c.CZ; Dir = FdWest;  HalfLen = c.HD } |]
 
     let maxExtrusion (f: AttachFace) =
       match f.Dir with
       | FdNorth -> f.FZ + lotHD   | FdSouth -> lotHD - f.FZ
       | FdEast  -> lotHW - f.FX   | FdWest  -> f.FX + lotHW
 
-    let faces = ResizeArray<AttachFace>(32)
-    faces.AddRange(facesOf core)
-
-    let wingBudget = min (complexity - 1) 25
-    for _ in 1 .. wingBudget do
-      // Prune faces with no room
-      let mutable i = faces.Count - 1
-      while i >= 0 do
-        if maxExtrusion faces.[i] < minWing * 2.0f then faces.RemoveAt(i)
-        i <- i - 1
-
-      if faces.Count > 0 then
-        let idx = int (next() % uint32 faces.Count)
-        let face = faces.[idx]
-        let maxExt = maxExtrusion face
-
-        // Wing width: 30-70% of face length
-        let wingHalfLen = face.HalfLen * range 0.30f 0.70f |> max minWing
-        // Wing depth: 20-50% of available extrusion
-        let wingDepth = maxExt * range 0.20f 0.50f |> max (minWing * 2.0f)
-        let wingDepthHalf = wingDepth / 2.0f
-
-        // Offset along the face for variety
-        let slack = max 0.0f (face.HalfLen - wingHalfLen)
-        let offset = range -0.3f 0.3f * slack
-
-        let (wcx, wcz, whw, whd) =
+    let faceBlocked (current: SubCube[]) (face: AttachFace) =
+      let eps = 0.0001f
+      let ownerCube = current.[face.Owner]
+      let ox0, ox1, oz0, oz1 = cubeBounds ownerCube
+      current
+      |> Array.mapi (fun idx cube -> idx, cube)
+      |> Array.exists (fun (idx, cube) ->
+        if idx = face.Owner then false
+        else
+          let cx0, cx1, cz0, cz1 = cubeBounds cube
           match face.Dir with
-          | FdNorth -> (face.FX + offset, face.FZ - wingDepthHalf, wingHalfLen, wingDepthHalf)
-          | FdSouth -> (face.FX + offset, face.FZ + wingDepthHalf, wingHalfLen, wingDepthHalf)
-          | FdEast  -> (face.FX + wingDepthHalf, face.FZ + offset, wingDepthHalf, wingHalfLen)
-          | FdWest  -> (face.FX - wingDepthHalf, face.FZ + offset, wingDepthHalf, wingHalfLen)
+          | FdNorth ->
+            abs (cz1 - oz0) <= eps
+            && overlap1d cx0 cx1 ox0 ox1 >= (ox1 - ox0) - eps
+          | FdSouth ->
+            abs (cz0 - oz1) <= eps
+            && overlap1d cx0 cx1 ox0 ox1 >= (ox1 - ox0) - eps
+          | FdEast ->
+            abs (cx0 - ox1) <= eps
+            && overlap1d cz0 cz1 oz0 oz1 >= (oz1 - oz0) - eps
+          | FdWest ->
+            abs (cx1 - ox0) <= eps
+            && overlap1d cz0 cz1 oz0 oz1 >= (oz1 - oz0) - eps)
 
-        // Clamp to lot bounds
-        let wcx' = wcx |> max (-lotHW + whw) |> min (lotHW - whw)
-        let wcz' = wcz |> max (-lotHD + whd) |> min (lotHD - whd)
+    let exposedFaces (current: SubCube[]) =
+      current
+      |> Array.mapi (fun idx cube -> facesOf idx cube)
+      |> Array.collect id
+      |> Array.filter (fun face ->
+        maxExtrusion face >= minWing * 2.0f
+        && not (faceBlocked current face))
 
-        let heightScale = range 0.55f 1.0f
-        let wing = { CX = wcx'; CZ = wcz'; HW = whw; HD = whd; HeightScale = heightScale }
-        cubes.Add(wing)
+    let envelope (current: SubCube[]) =
+      current
+      |> Array.fold (fun (minX, maxX, minZ, maxZ) cube ->
+        let x0, x1, z0, z1 = cubeBounds cube
+        (min minX x0, max maxX x1, min minZ z0, max maxZ z1))
+        (Single.PositiveInfinity, Single.NegativeInfinity, Single.PositiveInfinity, Single.NegativeInfinity)
 
-        faces.RemoveAt(idx)
-        let newFaces =
-          facesOf wing
-          |> Array.filter (fun f -> f.Dir <> oppositeDir face.Dir)
-        faces.AddRange(newFaces)
+    // Let complexity scale shape growth directly.
+    // Spatial constraints come from face exhaustion, not an arbitrary global cap.
+    let wingBudget = max 0 (complexity - 1)
+    for _ in 1 .. wingBudget do
+      let current = cubes.ToArray()
+      let faces = exposedFaces current
+
+      if faces.Length > 0 then
+        let minX, maxX, minZ, maxZ = envelope current
+        let oldArea = (maxX - minX) * (maxZ - minZ)
+        let sampleCount = min 8 faces.Length
+
+        let candidates =
+          [| for _ in 1 .. sampleCount do
+               let face = faces.[int (next() % uint32 faces.Length)]
+               let maxExt = maxExtrusion face
+
+               let wingHalfLen = face.HalfLen * range 0.30f 0.70f |> max minWing
+               let wingDepth = maxExt * range 0.20f 0.50f |> max (minWing * 2.0f)
+               let wingDepthHalf = wingDepth / 2.0f
+
+               let slack = max 0.0f (face.HalfLen - wingHalfLen)
+               let offset = range -0.3f 0.3f * slack
+
+               let (wcx, wcz, whw, whd) =
+                 match face.Dir with
+                 | FdNorth -> (face.FX + offset, face.FZ - wingDepthHalf, wingHalfLen, wingDepthHalf)
+                 | FdSouth -> (face.FX + offset, face.FZ + wingDepthHalf, wingHalfLen, wingDepthHalf)
+                 | FdEast  -> (face.FX + wingDepthHalf, face.FZ + offset, wingDepthHalf, wingHalfLen)
+                 | FdWest  -> (face.FX - wingDepthHalf, face.FZ + offset, wingDepthHalf, wingHalfLen)
+
+               let wcx' = wcx |> max (-lotHW + whw) |> min (lotHW - whw)
+               let wcz' = wcz |> max (-lotHD + whd) |> min (lotHD - whd)
+               let wing =
+                 { CX = wcx'
+                   CZ = wcz'
+                   HW = whw
+                   HD = whd
+                   HeightScale = range 0.55f 1.0f }
+
+               let area = 4.0f * wing.HW * wing.HD
+               let overlap = current |> Array.sumBy (overlapArea wing)
+               let overlapRatio =
+                 if area <= 0.0001f then 1.0f
+                 else overlap / area
+
+               let wx0, wx1, wz0, wz1 = cubeBounds wing
+               let newMinX = min minX wx0
+               let newMaxX = max maxX wx1
+               let newMinZ = min minZ wz0
+               let newMaxZ = max maxZ wz1
+               let newArea = (newMaxX - newMinX) * (newMaxZ - newMinZ)
+               let bboxExpansion = max 0.0f (newArea - oldArea)
+               let frontierSides =
+                 (if wx0 < minX - 0.001f then 1 else 0)
+                 + (if wx1 > maxX + 0.001f then 1 else 0)
+                 + (if wz0 < minZ - 0.001f then 1 else 0)
+                 + (if wz1 > maxZ + 0.001f then 1 else 0)
+               let fullyInside =
+                 wx0 >= minX && wx1 <= maxX
+                 && wz0 >= minZ && wz1 <= maxZ
+               let novelty = max 0.0f (area - overlap)
+               let score =
+                 novelty * 1.5f
+                 + bboxExpansion * 1.2f
+                 + float32 frontierSides * area * 0.35f
+                 - overlap * 4.0f
+                 - (if fullyInside then area * 1.5f else 0.0f)
+
+               if overlapRatio <= 0.15f then Some (score, wing) else None |]
+          |> Array.choose id
+
+        if candidates.Length > 0 then
+          let _, bestWing = candidates |> Array.maxBy fst
+          cubes.Add(bestWing)
 
     cubes.ToArray()
 
@@ -292,6 +374,10 @@ type District =
     TotalLines: int
     Color: Color }
 
+type RelatedBuilding =
+  { Building: FuncBuilding
+    Weight: int }
+
 type Rect2D =
   { X: float32; Z: float32; W: float32; D: float32 }
 
@@ -317,7 +403,60 @@ module RoadClass =
   let tier = function
     | Boulevard -> 8 | Avenue -> 6 | Street -> 4 | Lane -> 3 | Alley -> 2
 
-// ─── Weber City Types (Weber et al. 2009, typed IDs per panel review) ────
+// ─── Git Metadata ────────────────────────────────────────────
+
+type GitMeta =
+  { CommitCount: int
+    FirstCommitDate: DateTimeOffset
+    LastCommitDate: DateTimeOffset }
+
+module GitMeta =
+  let empty =
+    { CommitCount = 0
+      FirstCommitDate = DateTimeOffset.Now
+      LastCommitDate = DateTimeOffset.Now }
+
+// ─── Git-Driven Organic Growth ───────────────────────────────
+
+/// Parse `git log --follow --format="%H|%aI"` output into GitMeta.
+/// Pure — pass log text from a file or process; no IO happens here.
+let parseGitLog (logOutput: string) : GitMeta =
+  let lines =
+    logOutput.Split('\n')
+    |> Array.filter (fun l -> l.Contains('|'))
+  if lines.Length = 0 then GitMeta.empty
+  else
+    let dates =
+      lines
+      |> Array.choose (fun line ->
+        let idx = line.IndexOf('|')
+        if idx < 0 then None
+        else
+          match DateTimeOffset.TryParse(line.Substring(idx + 1).Trim()) with
+          | true, d -> Some d
+          | _ -> None)
+    { CommitCount = lines.Length
+      FirstCommitDate = if dates.Length > 0 then dates |> Array.min else DateTimeOffset.Now
+      LastCommitDate  = if dates.Length > 0 then dates |> Array.max else DateTimeOffset.Now }
+
+/// Organic growth factor [0..1].
+/// 0 = brand-new regular-grid suburb; 1 = ancient, bustling organic neighbourhood.
+/// Age saturates at 5 years; commit-activity saturates at 100 commits.
+let organicFactor (ageDays: float32) (commitCount: int) : float32 =
+  let ageFactor      = min 1.0f (ageDays / 1825.0f)
+  let activityFactor = min 1.0f (float32 commitCount / 100.0f)
+  min 1.0f (ageFactor * 0.7f + activityFactor * 0.3f)
+
+/// Aggregate organic factor for a district from all its file-level git histories.
+let districtOrganicFactor (today: DateTimeOffset) (metas: GitMeta seq) : float32 =
+  let items = metas |> Seq.toList
+  if items.IsEmpty then 0.0f
+  else
+    let avgAge     = items |> List.averageBy (fun m -> (today - m.FirstCommitDate).TotalDays |> float32)
+    let avgCommits = items |> List.averageBy (fun m -> float32 m.CommitCount) |> int
+    organicFactor avgAge avgCommits
+
+
 
 type NodeId = NodeId of int
 type EdgeId = EdgeId of int
@@ -666,6 +805,31 @@ let scanFunctions (root: string) : FuncDef list =
           yield! walk sub
     }
   walk root |> Seq.toList
+
+/// Run `git log --follow --format="%H|%aI"` for one file and parse the output.
+let getGitMetaForFile (repoRoot: string) (filePath: string) : GitMeta =
+  try
+    let relPath = IO.Path.GetRelativePath(repoRoot, filePath).Replace('\\', '/')
+    let psi = Diagnostics.ProcessStartInfo("git", sprintf "log --follow --format=\"%%H|%%aI\" -- \"%s\"" relPath)
+    psi.WorkingDirectory <- repoRoot
+    psi.RedirectStandardOutput <- true
+    psi.UseShellExecute <- false
+    psi.CreateNoWindow <- true
+    use proc = Diagnostics.Process.Start(psi)
+    let output = proc.StandardOutput.ReadToEnd()
+    proc.WaitForExit()
+    parseGitLog output
+  with _ -> GitMeta.empty
+
+/// Collect git metadata keyed by absolute file path for all distinct source files.
+let scanGitMeta (repoRoot: string) (funcs: FuncDef list) : Map<string, GitMeta> =
+  funcs
+  |> List.map (fun f -> f.FilePath)
+  |> List.distinct
+  |> List.filter (fun p -> p <> "")
+  |> List.map (fun path -> path, getGitMetaForFile repoRoot path)
+  |> Map.ofList
+
 
 // ─── Call Graph Builder ───────────────────────────────────────
 
@@ -1076,7 +1240,312 @@ let packInBlock (poly: Vec2 list) (funcs: FuncDef list) (heatMap: Map<string, fl
                  District = f.Module })
       |> List.choose id
 
-/// District color palette — muted accents for roof/trim
+/// Minimum distance from point (px,pz) to the nearest polygon boundary edge.
+/// Used to verify road-primary placement: every building should be within lot depth of an edge.
+let distanceToPoly (poly: Vec2 list) (px: float32) (pz: float32) : float32 =
+  let n = poly.Length
+  let mutable minDist = Single.MaxValue
+  for i in 0 .. n - 1 do
+    let a = poly.[i]
+    let b = poly.[(i + 1) % n]
+    let dx = b.X - a.X
+    let dz = b.Y - a.Y
+    let lenSq = dx * dx + dz * dz
+    let t =
+      if lenSq < 1e-10f then 0.0f
+      else min 1.0f (max 0.0f (((px - a.X) * dx + (pz - a.Y) * dz) / lenSq))
+    let nearX = a.X + t * dx
+    let nearZ = a.Y + t * dz
+    let dist = sqrt ((px - nearX) * (px - nearX) + (pz - nearZ) * (pz - nearZ))
+    if dist < minDist then minDist <- dist
+  minDist
+
+/// Road-primary building packer (replaces packInBlock for Weber parcels).
+/// Places buildings in a row along each polygon edge, set back by a sidewalk margin.
+/// Every face polygon edge borders a road, so every building gets guaranteed road frontage.
+/// No interior-grid broadcasting — no landlocked buildings.
+let packAlongEdges
+  (poly: Vec2 list)
+  (funcs: FuncDef list)
+  (heatMap: Map<string, float32 * int * int>)
+  (districtColor: Color)
+  (rng: Random)
+  : FuncBuilding list =
+  if poly.Length < 3 || funcs.IsEmpty then []
+  else
+    let n = poly.Length
+    // Pre-compute edge geometry: (startPt, normDirX, normDirZ, length)
+    let edges =
+      [| for i in 0 .. n - 1 ->
+           let a = poly.[i]
+           let b = poly.[(i + 1) % n]
+           let dx = b.X - a.X
+           let dz = b.Y - a.Y
+           let len = sqrt (dx * dx + dz * dz)
+           if len < 1e-6f then (a, 0.0f, 0.0f, 0.0f)
+           else (a, dx / len, dz / len, len) |]
+    let totalLen = edges |> Array.sumBy (fun (_, _, _, l) -> l) |> max 0.001f
+
+    let sortedFuncs = funcs |> List.sortByDescending (fun f -> f.LineCount)
+    let mutable remaining = sortedFuncs
+    let allBuildings = ResizeArray<FuncBuilding>()
+
+    let placeChunk (chunk: FuncDef list) (a: Vec2) (dirX: float32) (dirZ: float32) (edgeLen: float32) =
+      // Determine inward normal (left normal of edge dir for CCW polygon).
+      // Verify by testing midpoint + small step; flip if outside.
+      let nx0 = -dirZ
+      let nz0 = dirX
+      let midX = a.X + dirX * edgeLen * 0.5f
+      let midZ = a.Y + dirZ * edgeLen * 0.5f
+      let (nx, nz) =
+        if pointInPoly poly (midX + nx0 * 0.15f) (midZ + nz0 * 0.15f) then (nx0, nz0)
+        else (-nx0, -nz0)
+      let setback = 0.5f
+      let spacing = edgeLen / float32 (chunk.Length + 1)
+      let roadAngle = MathF.Atan2(dirZ, dirX) * 180.0f / MathF.PI
+      chunk |> List.iteri (fun idx f ->
+        let t  = float32 (idx + 1) * spacing
+        let px = a.X + t * dirX + nx * setback
+        let pz = a.Y + t * dirZ + nz * setback
+        if pointInPoly poly px pz then
+          let heat, callers, callees =
+            heatMap |> Map.tryFind f.QualifiedName |> Option.defaultValue (0.0f, 0, 0)
+          let complexity  = computeComplexity f.Body
+          let fp = max 0.3f (min (spacing * 0.75f) (MathF.Log(float32 f.LineCount + 1.0f) * 0.5f + 0.3f))
+          let height = max 1.5f (MathF.Log(float32 f.LineCount + 1.0f) * 5.0f)
+          let baseGray = 140uy + byte (rng.Next 40)
+          let wallG    = byte (max 0 (int baseGray - 5  + rng.Next 10))
+          let wallB    = byte (max 0 (int baseGray - 10 + rng.Next 15))
+          let jitter   = (rng.NextSingle() - 0.5f) * 4.0f
+          allBuildings.Add {
+            Func = f; Heat = heat; CallerCount = callers; CalleeCount = callees
+            Complexity = complexity
+            X = px - fp / 2.0f; Z = pz - fp / 2.0f
+            W = fp; D = fp; H = height
+            Rotation    = roadAngle + jitter
+            Color       = Color(baseGray, wallG, wallB, 255uy)
+            RoofColor   = districtColor
+            District    = f.Module })
+
+    // Distribute functions proportionally by edge length
+    for ei in 0 .. edges.Length - 1 do
+      let (a, dirX, dirZ, edgeLen) = edges.[ei]
+      if edgeLen >= 0.5f && not remaining.IsEmpty then
+        let isLast = ei = edges.Length - 1
+        let count =
+          if isLast then remaining.Length
+          else max 0 (int (float32 funcs.Length * edgeLen / totalLen + 0.5f))
+        let take = min count remaining.Length
+        if take > 0 then
+          let chunk   = remaining |> List.take take
+          remaining  <- remaining |> List.skip take
+          placeChunk chunk a dirX dirZ edgeLen
+
+    // Any overflow spills to the longest edge
+    if not remaining.IsEmpty then
+      let (a, dirX, dirZ, edgeLen) = edges |> Array.maxBy (fun (_, _, _, l) -> l)
+      if edgeLen >= 0.5f then placeChunk remaining a dirX dirZ edgeLen
+
+    allBuildings |> Seq.toList
+/// Every building is accessible via an alley — no landlocked buildings.
+/// Returns (buildings, alleyRoads) where alleyRoads are lane-centerline segments.
+let layoutInGrid
+  (rect: TRect) (funcs: FuncDef list)
+  (heatMap: Map<string, float32 * int * int>)
+  (districtColor: Color)
+  (globalMaxComplexity: int) (globalMaxLineCount: int)
+  : FuncBuilding list * Road list =
+  if funcs.IsEmpty then ([], [])
+  else
+    let n = funcs.Length
+    let usableW = rect.W
+    let usableH = rect.H
+    if usableW < 0.8f || usableH < 0.8f then ([], [])
+    else
+      let aspect = usableW / usableH
+      let cols = max 1 (min n (int (MathF.Ceiling(sqrt(float32 n * aspect)))))
+      let rows = max 1 ((n + cols - 1) / cols)
+      // 75% of usable space for buildings, 25% for lane corridors (proportional to block size)
+      let cellW = usableW * 0.75f / float32 cols
+      let cellH = usableH * 0.75f / float32 rows
+      let laneW = if cols <= 1 then 0.0f else (usableW - cellW * float32 cols) / float32 (cols - 1)
+      let laneH = if rows <= 1 then 0.0f else (usableH - cellH * float32 rows) / float32 (rows - 1)
+      let origX = rect.X
+      let origZ = rect.Z
+      let buildings =
+        funcs |> List.mapi (fun i f ->
+          let row = i / cols
+          let col = i % cols
+          let cellX = origX + float32 col * (cellW + laneW)
+          let cellZ = origZ + float32 row * (cellH + laneH)
+          let cx = cellX + cellW / 2.0f
+          let cz = cellZ + cellH / 2.0f
+          let heat, callers, callees =
+            heatMap |> Map.tryFind f.QualifiedName |> Option.defaultValue (0.0f, 0, 0)
+          let complexity = computeComplexity f.Body
+          let coverage = 0.55f + 0.25f * (float32 f.LineCount / float32 globalMaxLineCount) |> min 0.85f
+          let bldgW = max 0.3f (cellW * sqrt(coverage))
+          let bldgD = max 0.3f (cellH * sqrt(coverage))
+          let normComplexity = float32 complexity / float32 globalMaxComplexity
+          let baseH = 1.2f + 33.8f * MathF.Pow(normComplexity, 0.45f)
+          let jitter = 1.0f + (hashJitter f.Name - 0.5f) * 0.2f
+          let finalH = baseH * jitter
+          let dr, dg, db = float32 districtColor.R, float32 districtColor.G, float32 districtColor.B
+          let gray = 0.299f * dr + 0.587f * dg + 0.114f * db
+          let desat = 0.25f
+          let lr = gray + desat * (dr - gray)
+          let lg = gray + desat * (dg - gray)
+          let lb = gray + desat * (db - gray)
+          let lightnessShift = 0.75f + (hashJitter (f.Name + "lt")) * 0.30f
+          let wallR = byte (min 255.0f (max 30.0f (lr * lightnessShift)))
+          let wallG = byte (min 255.0f (max 30.0f (lg * lightnessShift)))
+          let wallB = byte (min 255.0f (max 30.0f (lb * lightnessShift)))
+          { Func = f; Heat = heat; CallerCount = callers; CalleeCount = callees
+            Complexity = complexity
+            X = cx - bldgW / 2.0f; Z = cz - bldgD / 2.0f
+            W = bldgW; D = bldgD; H = finalH
+            Rotation = rotationJitter f.Name 3.0f
+            Color = Color(wallR, wallG, wallB, 255uy)
+            RoofColor = districtColor; District = f.Module })
+      let alleyColor = Color(60uy, 60uy, 65uy, 255uy)
+      // Vertical lane between column c and c+1 (constant X, full block Z span)
+      // Half-width packed in Y component for dynamic rendering in buildStaticMesh
+      let hwV = laneW / 2.0f
+      let hwH = laneH / 2.0f
+      let vertAlleys =
+        [ for c in 0 .. cols - 2 do
+            let ax = origX + float32 (c + 1) * cellW + float32 c * laneW + laneW / 2.0f
+            yield { FromFunc = ""; ToFunc = ""
+                    FromPos = Vector3(ax, hwV, rect.Z)
+                    ToPos = Vector3(ax, hwV, rect.Z + rect.H)
+                    Weight = RoadClass.tier Alley; Color = alleyColor } ]
+      // Horizontal lane between row r and r+1 (constant Z, full block X span)
+      let horizAlleys =
+        [ for r in 0 .. rows - 2 do
+            let az = origZ + float32 (r + 1) * cellH + float32 r * laneH + laneH / 2.0f
+            yield { FromFunc = ""; ToFunc = ""
+                    FromPos = Vector3(rect.X, hwH, az)
+                    ToPos = Vector3(rect.X + rect.W, hwH, az)
+                    Weight = RoadClass.tier Alley; Color = alleyColor } ]
+      (buildings, vertAlleys @ horizAlleys)
+
+/// Weber-based organic district layout. Roads grow first (Weber §3 algorithm),
+/// buildings fill the face-polygon parcels that emerge. 
+/// organic=0 → Manhattan grid; organic=1 → Paris-style curved streets.
+/// Uses boundary edges to keep road growth inside the block rect.
+let layoutWeberDistrict
+  (rect: TRect) (funcs: FuncDef list)
+  (heatMap: Map<string, float32 * int * int>)
+  (districtColor: Color)
+  (globalMaxComplexity: int) (globalMaxLineCount: int)
+  (organic: float32) (rng: Random)
+  : FuncBuilding list * Road list =
+  ignore (globalMaxComplexity, globalMaxLineCount)  // packInBlock uses its own formula
+  if funcs.IsEmpty then ([], [])
+  elif rect.W < 1.5f || rect.H < 1.5f then ([], [])
+  else
+    let g = WeberGraph()
+    let cx = rect.X + rect.W / 2.0f
+    let cz = rect.Z + rect.H / 2.0f
+
+    // Seed 4 boundary corners + perimeter edges to contain growth inside the block
+    let cornerIds =
+      [| Vec2.Create(rect.X,          rect.Z)
+         Vec2.Create(rect.X + rect.W, rect.Z)
+         Vec2.Create(rect.X + rect.W, rect.Z + rect.H)
+         Vec2.Create(rect.X,          rect.Z + rect.H) |]
+      |> Array.map (fun p -> g.AddNode(p, Avenue))
+    for i in 0 .. 3 do
+      g.AddEdge(cornerIds.[i], cornerIds.[(i + 1) % 4], Avenue, RoadClass.width Avenue) |> ignore
+
+    // Snapshot edge count BEFORE growth (boundary = 4 edges; internal = everything grown after)
+    let boundaryEdgeCount = g.EdgeCount
+
+    // Central seed so growth radiates from inside the block
+    g.AddNode(Vec2.Create(cx, cz), Street) |> ignore
+
+    let isGrid   = organic < 0.4f
+    let centers  = [| Vec2.Create(cx, cz) |]
+    // Segment length ≈ √(area / funcCount) × 2, capped for readability
+    let baseLen  = sqrt(rect.W * rect.H / float32 (max 3 funcs.Length)) * 2.0f |> max 1.0f |> min 5.0f
+    let snapR    = baseLen * 0.45f
+    let sMin     = baseLen * 0.25f
+    let maxEdges = min 300 (funcs.Length * 8 + 20)
+
+    growStreets g centers rng Street isGrid baseLen snapR sMin maxEdges 0.08f
+    if funcs.Length >= 6 then
+      growStreets g centers rng Lane isGrid (baseLen * 0.65f) (snapR * 0.6f) (sMin * 0.6f) (maxEdges / 2) 0.15f
+
+    // Internal roads only — skip the 4 boundary edges (they'd z-fight with perimeter streets)
+    let weberRoads =
+      [ for e in g.Edges do
+          if EdgeId.value e.Id >= boundaryEdgeCount then
+            let na = g.N e.A
+            let nb = g.N e.B
+            let hw = e.Width / 2.0f
+            yield { FromFunc = ""; ToFunc = ""
+                    FromPos = Vector3(na.Pos.X, hw, na.Pos.Y)
+                    ToPos   = Vector3(nb.Pos.X, hw, nb.Pos.Y)
+                    Weight  = RoadClass.tier e.Class
+                    Color   = Color(65uy, 65uy, 70uy, 255uy) } ]
+
+    // Distribute functions to face parcels proportional to area.
+    // Filter to "live" faces only — when a road splits a face, old face IDs become zombies
+    // (their starting half-edge's Face pointer gets reassigned to the new parcel face).
+    let faceAreas =
+      [ for f in g.Faces do
+          let h = g.H f.HalfEdge
+          if h.Face = Some f.Id then           // live: starting half-edge still belongs here
+            let area = g.FaceArea(f.Id)
+            if area > 0.5f then                // skip degenerate near-zero faces
+              yield (f.Id, area) ]
+      |> List.sortByDescending snd
+
+    if faceAreas.IsEmpty then
+      // No faces detected (graph too sparse) — fall back to whole-rect packing
+      let poly =
+        [ Vec2.Create(rect.X,          rect.Z)
+          Vec2.Create(rect.X + rect.W, rect.Z)
+          Vec2.Create(rect.X + rect.W, rect.Z + rect.H)
+          Vec2.Create(rect.X,          rect.Z + rect.H) ]
+      (packAlongEdges poly funcs heatMap districtColor rng, weberRoads)
+    else
+      let totalArea   = faceAreas |> List.sumBy snd |> max 0.001f
+      let sortedFuncs = funcs |> List.sortByDescending (fun f -> f.LineCount)
+      let mutable remaining = sortedFuncs
+      let allBuildings = ResizeArray<FuncBuilding>()
+
+      for i in 0 .. faceAreas.Length - 1 do
+        let (fid, area) = faceAreas.[i]
+        if not remaining.IsEmpty then
+          let isLast = i = faceAreas.Length - 1
+          let count =
+            if isLast then remaining.Length
+            else max 1 (int (float32 sortedFuncs.Length * area / totalArea + 0.5f))
+          let take = min count remaining.Length
+          if take > 0 then
+            let chunk  = remaining |> List.take take
+            remaining <- remaining |> List.skip take
+            let poly   = g.FacePolygon(fid)
+            allBuildings.AddRange(packAlongEdges poly chunk heatMap districtColor rng)
+
+      // Any leftover functions spill to the largest face
+      if not remaining.IsEmpty then
+        let (fid, _) = faceAreas |> List.head
+        allBuildings.AddRange(packAlongEdges (g.FacePolygon(fid)) remaining heatMap districtColor rng)
+
+      // Safety fallback: if Weber face packing produced nothing, pack into the full block rect
+      if allBuildings.Count = 0 then
+        let fullRect =
+          [ Vec2.Create(rect.X,          rect.Z)
+            Vec2.Create(rect.X + rect.W, rect.Z)
+            Vec2.Create(rect.X + rect.W, rect.Z + rect.H)
+            Vec2.Create(rect.X,          rect.Z + rect.H) ]
+        (packAlongEdges fullRect funcs heatMap districtColor rng, weberRoads)
+      else
+        (allBuildings |> Seq.toList, weberRoads)
+
+
 let districtPalette =
   [| Color(70uy, 130uy, 180uy, 255uy)    // steel blue
      Color(178uy, 102uy, 68uy, 255uy)    // terracotta
@@ -1093,12 +1562,16 @@ let districtPalette =
 
 /// Build the entire city using squarified treemap layout (panel P0 recommendation).
 /// Two-level hierarchy: project zones → module blocks. Modules sorted by call-graph centrality.
+/// Returns city layout plus deduplicated call edges for interactive relationship overlays.
 let buildCity (repoRoot: string) =
   let rng = Random(42)
   let funcs = scanFunctions repoRoot
   let rawEdges = buildCallGraph funcs
   let callEdges = mergeCallEdges rawEdges
   let heatMap = computeHeat funcs callEdges
+  // Gather git history for every source file — drives organic-vs-grid per district
+  let gitMetaByFile = scanGitMeta repoRoot funcs
+  let today = DateTimeOffset.Now
   let projects = funcs |> List.map (fun f -> f.Project) |> List.distinct
   let moduleGroups = funcs |> List.groupBy (fun f -> f.Module)
 
@@ -1148,9 +1621,10 @@ let buildCity (repoRoot: string) =
       allBlocks.Add({ Module = modName; Project = proj; Rect = rect; Color = color })
       colorIdx <- colorIdx + 1
 
-  // Pack buildings into each module block using 3-level treemap
+  // Pack buildings into each module block using grid layout with lane corridors
   let mutable allBuildings = []
   let mutable allDistricts = []
+  let mutable allAlleyRoads = []
 
   // Compute global max complexity for normalized height curve
   let globalMaxComplexity =
@@ -1169,77 +1643,18 @@ let buildCity (repoRoot: string) =
                      Color = block.Color }
     allDistricts <- district :: allDistricts
 
-    let n = modFuncs.Length
-
-    // For large modules (>12 functions), subdivide into sub-blocks with road corridors.
-    // This creates interior roads so buildings in the center aren't landlocked.
-    let subBlocks =
-      if n <= 12 then
-        // Small module: single block, treemap directly
-        [(modFuncs, TRect.inset 0.3f block.Rect)]
-      else
-        // Split into groups of ~10, treemap sub-blocks first to create road gaps
-        let groupSize = max 8 (min 12 (n / (max 2 (n / 10))))
-        let sorted = modFuncs |> List.sortByDescending (fun f -> f.LineCount)
-        let groups =
-          sorted
-          |> List.chunkBySize groupSize
-          |> List.map (fun grp ->
-            let totalWeight = grp |> List.sumBy (fun f -> float32 f.LineCount |> max 3.0f)
-            (grp, totalWeight))
-        // Treemap sub-blocks with road-width gaps between them
-        let subBlockRects =
-          squarifiedTreemap groups (TRect.inset 0.5f block.Rect)
-        subBlockRects |> List.map (fun (grp, subRect) ->
-          (grp, TRect.inset 0.2f subRect))
-
-    // Build individual buildings within each sub-block
-    for (funcs, subRect) in subBlocks do
-      let funcItems =
-        funcs |> List.map (fun f ->
-          (f, float32 f.LineCount |> max 3.0f))
-      let funcLots = squarifiedTreemap funcItems subRect
-
-      let buildings =
-        funcLots |> List.map (fun (f, lot) ->
-          let heat, callers, callees =
-            heatMap |> Map.tryFind f.QualifiedName |> Option.defaultValue (0.0f, 0, 0)
-          let complexity = computeComplexity f.Body
-
-          // Coverage ratio: big functions fill ~80% of lot, small ones ~55%
-          let coverage = 0.55f + 0.25f * (float32 f.LineCount / float32 globalMaxLineCount) |> min 0.85f
-          let bldgW = max 0.4f (lot.W * sqrt(coverage))
-          let bldgD = max 0.4f (lot.H * sqrt(coverage))
-          let cx = lot.X + lot.W / 2.0f
-          let cz = lot.Z + lot.H / 2.0f
-
-          // Height: power curve on complexity, normalized to dataset
-          let normComplexity = float32 complexity / float32 globalMaxComplexity
-          let baseH = 1.2f + 33.8f * MathF.Pow(normComplexity, 0.45f)
-          let jitter = 1.0f + (hashJitter f.Name - 0.5f) * 0.2f // ±10%
-          let finalH = baseH * jitter
-
-          // Wall color: desaturated district accent with per-building lightness variety
-          let dr, dg, db = float32 block.Color.R, float32 block.Color.G, float32 block.Color.B
-          let gray = 0.299f * dr + 0.587f * dg + 0.114f * db
-          let desat = 0.25f
-          let lr = gray + desat * (dr - gray)
-          let lg = gray + desat * (dg - gray)
-          let lb = gray + desat * (db - gray)
-          // Per-building lightness jitter (0.75 to 1.05)
-          let lightnessShift = 0.75f + (hashJitter (f.Name + "lt")) * 0.30f
-          let wallR = byte (min 255.0f (max 30.0f (lr * lightnessShift)))
-          let wallG = byte (min 255.0f (max 30.0f (lg * lightnessShift)))
-          let wallB = byte (min 255.0f (max 30.0f (lb * lightnessShift)))
-
-          { Func = f; Heat = heat; CallerCount = callers; CalleeCount = callees
-            Complexity = complexity
-            X = cx - bldgW / 2.0f; Z = cz - bldgD / 2.0f
-            W = bldgW; D = bldgD; H = finalH
-            Rotation = rotationJitter f.Name 3.0f
-            Color = Color(wallR, wallG, wallB, 255uy)
-            RoofColor = block.Color; District = block.Module })
-      allBuildings <- allBuildings @ buildings
+    // Deterministic per-district RNG — each module always gets the same road layout
+    let districtRng = Random(int (fnvHash block.Module))
+    // Aggregate git history for all files in this module to compute organic factor
+    let fileMetas =
+      modFuncs
+      |> List.map (fun f -> gitMetaByFile |> Map.tryFind f.FilePath |> Option.defaultValue GitMeta.empty)
+    let organic = districtOrganicFactor today fileMetas
+    let bldgs, weberRoads =
+      layoutWeberDistrict block.Rect modFuncs heatMap block.Color globalMaxComplexity globalMaxLineCount organic districtRng
+    allBuildings <- allBuildings @ bldgs
+    allAlleyRoads <- allAlleyRoads @ weberRoads
+    ignore rng  // global rng still here for future use
 
   // Generate roads from treemap boundaries (for HUD display)
   let roadSet = System.Collections.Generic.HashSet<struct(float32 * float32 * float32 * float32)>()
@@ -1269,9 +1684,59 @@ let buildCity (repoRoot: string) =
   let buildings = allBuildings |> List.rev
   let districts = allDistricts |> List.rev
   let blocks = allBlocks.ToArray()
-  printfn "City built: %d buildings, %d districts, %d roads, %d blocks (compound procedural shapes)"
-    buildings.Length districts.Length roads.Count blocks.Length
-  (buildings, districts, roads |> Seq.toList, blocks)
+  printfn "City built: %d buildings, %d districts, %d roads, %d blocks, %d alleys"
+    buildings.Length districts.Length roads.Count blocks.Length allAlleyRoads.Length
+  (buildings, districts, roads |> Seq.toList, blocks, callEdges, allAlleyRoads)
+
+let buildRelationMaps
+  (buildings: FuncBuilding[])
+  (edges: CallEdge list)
+  : Map<string, RelatedBuilding list> * Map<string, RelatedBuilding list> =
+  let buildingByName =
+    buildings
+    |> Array.map (fun b -> b.Func.QualifiedName, b)
+    |> Map.ofArray
+
+  let toRelationMap pairs =
+    pairs
+    |> List.groupBy fst
+    |> List.map (fun (key, rels) ->
+      key,
+      (rels
+       |> List.map snd
+       |> List.sortByDescending (fun rel -> rel.Weight)))
+    |> Map.ofList
+
+  let outgoing =
+    edges
+    |> List.choose (fun edge ->
+      match Map.tryFind edge.To buildingByName with
+      | Some target ->
+        Some (edge.From, { Building = target; Weight = edge.Weight })
+      | None -> None)
+    |> toRelationMap
+
+  let incoming =
+    edges
+    |> List.choose (fun edge ->
+      match Map.tryFind edge.From buildingByName with
+      | Some source ->
+        Some (edge.To, { Building = source; Weight = edge.Weight })
+      | None -> None)
+    |> toRelationMap
+
+  (incoming, outgoing)
+
+let ellipsize (maxChars: int) (text: string) =
+  if text.Length <= maxChars then text
+  elif maxChars <= 3 then text.Substring(0, maxChars)
+  else text.Substring(0, maxChars - 3) + "..."
+
+let buildingCenter (b: FuncBuilding) =
+  Vector3(b.X + b.W / 2.0f, b.H / 2.0f + 0.5f, b.Z + b.D / 2.0f)
+
+let buildingRoofCenter (b: FuncBuilding) =
+  Vector3(b.X + b.W / 2.0f, b.H + 0.2f, b.Z + b.D / 2.0f)
 
 
 // ─── CBool Helper ─────────────────────────────────────────────
@@ -1301,6 +1766,16 @@ module FpsCamera =
             MathF.Sin(cam.Pitch),
             MathF.Cos(cam.Pitch) * MathF.Sin(cam.Yaw))
 
+  let movementVectors (cam: FpsCamera) =
+    let fwd = Vector3.Normalize(forward cam)
+    let lateral = Vector3.Cross(fwd, Vector3.UnitY)
+    let right =
+      if lateral.LengthSquared() > 0.000001f then
+        Vector3.Normalize(lateral)
+      else
+        Vector3(-MathF.Sin(cam.Yaw), 0.0f, MathF.Cos(cam.Yaw))
+    (fwd, right)
+
   let toCamera3D (cam: FpsCamera) =
     let mutable c = Camera3D()
     c.Position <- cam.Position
@@ -1326,14 +1801,12 @@ module FpsCamera =
       cam.MoveSpeed <- max 10.0f (min 500.0f (cam.MoveSpeed + wheel * 10.0f))
 
     // WASD + QE movement
-    let fwd = forward cam
-    let flatFwd = Vector3.Normalize(Vector3(fwd.X, 0.0f, fwd.Z))
-    let right = Vector3.Cross(flatFwd, Vector3.UnitY)
+    let fwd, right = movementVectors cam
     let speed = cam.MoveSpeed * dt
     if rb (Raylib.IsKeyDown(KeyboardKey.W)) then
-      cam.Position <- cam.Position + flatFwd * speed
+      cam.Position <- cam.Position + fwd * speed
     if rb (Raylib.IsKeyDown(KeyboardKey.S)) then
-      cam.Position <- cam.Position - flatFwd * speed
+      cam.Position <- cam.Position - fwd * speed
     if rb (Raylib.IsKeyDown(KeyboardKey.A)) then
       cam.Position <- cam.Position - right * speed
     if rb (Raylib.IsKeyDown(KeyboardKey.D)) then
@@ -1346,9 +1819,9 @@ module FpsCamera =
     if rb (Raylib.IsKeyDown(KeyboardKey.LeftShift)) then
       let boost = speed * 2.0f
       if rb (Raylib.IsKeyDown(KeyboardKey.W)) then
-        cam.Position <- cam.Position + flatFwd * boost
+        cam.Position <- cam.Position + fwd * boost
       if rb (Raylib.IsKeyDown(KeyboardKey.S)) then
-        cam.Position <- cam.Position - flatFwd * boost
+        cam.Position <- cam.Position - fwd * boost
       if rb (Raylib.IsKeyDown(KeyboardKey.A)) then
         cam.Position <- cam.Position - right * boost
       if rb (Raylib.IsKeyDown(KeyboardKey.D)) then
@@ -1629,7 +2102,7 @@ let rayIntersectsBox (ray: Ray) (b: FuncBuilding) : float32 option =
   else None
 
 /// Build GPU mesh: layered luminance (panel Q5) — ground → road → sidewalk → block fill → curbs → buildings
-let buildStaticMesh (buildings: FuncBuilding[]) (blocks: ModuleBlock[]) (cityExtent: float32) =
+let buildStaticMesh (buildings: FuncBuilding[]) (blocks: ModuleBlock[]) (cityExtent: float32) (alleyRoads: Road list) =
   // Pre-compute compound shapes for all buildings (deterministic from function name)
   let compounds =
     buildings |> Array.map (fun b ->
@@ -1643,10 +2116,11 @@ let buildStaticMesh (buildings: FuncBuilding[]) (blocks: ModuleBlock[]) (cityExt
   // Vertex counts per layer:
   let groundVerts = 6 + 6    // dark ground + city-wide road surface
   let blockFillVerts = blocks.Length * 6
+  let alleyVerts = alleyRoads.Length * 6   // one flat quad per alley segment
   let sidewalkVerts = blocks.Length * 24   // 4 strips per block
   let curbVerts = blocks.Length * 144      // 4 thin boxes per block (36 verts each)
   let buildingVerts = totalBuildingCubes * 72 // body (36) + roof (36) per sub-cube
-  let totalVerts = groundVerts + blockFillVerts + sidewalkVerts + curbVerts + buildingVerts
+  let totalVerts = groundVerts + blockFillVerts + alleyVerts + sidewalkVerts + curbVerts + buildingVerts
 
   let mutable mesh = Mesh()
   mesh.VertexCount <- totalVerts
@@ -1684,6 +2158,28 @@ let buildStaticMesh (buildings: FuncBuilding[]) (blocks: ModuleBlock[]) (cityExt
     let bw = r.W - 2.0f * sidewalkW |> max 0.1f
     let bh = r.H - 2.0f * sidewalkW |> max 0.1f
     addQuadToArrays v n c vi bx 0.015f bz bx 0.015f (bz + bh) (bx + bw) 0.015f (bz + bh) (bx + bw) 0.015f bz 0.0f 1.0f 0.0f 30uy 30uy 34uy 255uy
+    vi <- vi + 6
+
+  // Layer 2.5: Internal road surfaces — arbitrary-angle perpendicular quads (y=0.020)
+  // Half-width packed in road.FromPos.Y by layoutWeberDistrict / layoutInGrid
+  for road in alleyRoads do
+    let hw = road.FromPos.Y
+    let x1 = road.FromPos.X
+    let z1 = road.FromPos.Z
+    let x2 = road.ToPos.X
+    let z2 = road.ToPos.Z
+    let dx = x2 - x1
+    let dz = z2 - z1
+    let len = MathF.Sqrt(dx * dx + dz * dz)
+    if hw > 0.001f && len > 0.01f then
+      let nx = -dz / len   // perpendicular direction
+      let nz =  dx / len
+      addQuadToArrays v n c vi
+        (x1 + nx * hw) 0.020f (z1 + nz * hw)
+        (x1 - nx * hw) 0.020f (z1 - nz * hw)
+        (x2 - nx * hw) 0.020f (z2 - nz * hw)
+        (x2 + nx * hw) 0.020f (z2 + nz * hw)
+        0.0f 1.0f 0.0f 60uy 60uy 65uy 255uy
     vi <- vi + 6
 
   // Layer 3: Sidewalk strips — medium luminance around each block (luminance ~0.20)
@@ -1772,9 +2268,138 @@ let heatColor (t: float32) =
     let s = (t - 0.5f) * 2.0f
     Color(byte (240.0f + s * 15.0f), byte (40.0f - s * 30.0f), byte (40.0f - s * 30.0f), 255uy)
 
+type UiTextTheme =
+  { HudTitle: int
+    HudStats: int
+    HudControls: int
+    HudCapture: int
+    LegendTitle: int
+    LegendEntry: int
+    HeatTitle: int
+    HeatLabel: int
+    TooltipTitle: int
+    TooltipBody: int
+    SelectionTitle: int
+    SelectionBody: int
+    SelectionLineHeight: int
+    DistrictTitle: int
+    DistrictSubtitle: int
+    Status: int }
+
+let defaultUiTextTheme =
+  { HudTitle = 24
+    HudStats = 17
+    HudControls = 13
+    HudCapture = 14
+    LegendTitle = 18
+    LegendEntry = 15
+    HeatTitle = 14
+    HeatLabel = 12
+    TooltipTitle = 16
+    TooltipBody = 13
+    SelectionTitle = 17
+    SelectionBody = 13
+    SelectionLineHeight = 20
+    DistrictTitle = 20
+    DistrictSubtitle = 14
+    Status = 13 }
+
+type SsaoSettings =
+  { BufferScale: int
+    Radius: float32
+    Bias: float32
+    Strength: float32 }
+
+let defaultSsaoSettings =
+  { BufferScale = 1
+    Radius = 1.8f
+    Bias = 0.03f
+    Strength = 0.55f }
+
+let ssaoBufferSize (settings: SsaoSettings) (screenW: int) (screenH: int) =
+  let scale = max 1 settings.BufferScale
+  (max 1 (screenW / scale), max 1 (screenH / scale))
+
+let uiTextShadow = Color(0uy, 0uy, 0uy, 210uy)
+
+let measureUiText (text: string) (size: int) =
+  Raylib.MeasureText(text, size)
+
+let drawUiText (text: string) (x: int) (y: int) (size: int) (color: Color) =
+  Raylib.DrawText(text, x + 1, y + 1, size, uiTextShadow)
+  Raylib.DrawText(text, x, y, size, color)
+
+let selectedBuildingColor = Color(255uy, 225uy, 120uy, 255uy)
+let incomingRelationColor = Color(90uy, 180uy, 255uy, 255uy)
+let outgoingRelationColor = Color(255uy, 150uy, 90uy, 255uy)
+
+let drawBuildingOutline (b: FuncBuilding) (pad: float32) (color: Color) =
+  let center = buildingCenter b
+  Raylib.DrawCubeWires(center, b.W + pad, b.H + pad, b.D + pad, color)
+
+let drawRelationArc (fromPos: Vector3) (toPos: Vector3) (color: Color) =
+  let segments = 16
+  let dist = Vector3.Distance(fromPos, toPos)
+  let arcHeight = max 2.5f (dist * 0.18f)
+  let pointAt (t: float32) =
+    let basePoint: Vector3 = Vector3.Lerp(fromPos, toPos, t)
+    let lift = MathF.Sin(t * MathF.PI) * arcHeight
+    Vector3(basePoint.X, basePoint.Y + lift, basePoint.Z)
+  let mutable prev = pointAt 0.0f
+  for i in 1 .. segments do
+    let t = float32 i / float32 segments
+    let next = pointAt t
+    Raylib.DrawLine3D(prev, next, color)
+    prev <- next
+
+let drawSelectionOverlay
+  (hovered: FuncBuilding option)
+  (selected: FuncBuilding option)
+  (incoming: RelatedBuilding list)
+  (outgoing: RelatedBuilding list)
+  (showCallLinks: bool) =
+
+  match selected with
+  | Some current ->
+    drawBuildingOutline current 0.38f selectedBuildingColor
+    drawBuildingOutline current 0.14f Color.White
+
+    incoming
+    |> List.iter (fun rel ->
+      drawBuildingOutline rel.Building 0.18f incomingRelationColor)
+
+    outgoing
+    |> List.iter (fun rel ->
+      drawBuildingOutline rel.Building 0.30f outgoingRelationColor)
+
+    if showCallLinks then
+      let currentRoof = buildingRoofCenter current
+
+      incoming
+      |> List.iter (fun rel ->
+        drawRelationArc (buildingRoofCenter rel.Building) currentRoof incomingRelationColor)
+
+      outgoing
+      |> List.iter (fun rel ->
+        drawRelationArc currentRoof (buildingRoofCenter rel.Building) outgoingRelationColor)
+  | None -> ()
+
+  match hovered with
+  | Some hoveredBuilding ->
+    let hoveredName = hoveredBuilding.Func.QualifiedName
+    let selectedName =
+      selected
+      |> Option.map (fun current -> current.Func.QualifiedName)
+    if selectedName <> Some hoveredName then
+      drawBuildingOutline hoveredBuilding 0.18f (Color(255uy, 255uy, 100uy, 255uy))
+  | None -> ()
+
 // ─── 2D Overlays ──────────────────────────────────────────────
 
-let drawDistrictLabels2D (districtRects: (District * Rect2D * (float32 * float32) list) list) (camera: Camera3D) =
+let drawDistrictLabels2D
+  (districtRects: (District * Rect2D * (float32 * float32) list) list)
+  (camera: Camera3D)
+  (theme: UiTextTheme) =
   for (district, rect, _) in districtRects do
     let center3D = Vector3(rect.X + rect.W / 2.0f, 1.0f, rect.Z + rect.D / 2.0f)
     let screenPos = Raylib.GetWorldToScreen(center3D, camera)
@@ -1784,17 +2409,18 @@ let drawDistrictLabels2D (districtRects: (District * Rect2D * (float32 * float32
        && screenPos.Y < float32 (Raylib.GetScreenHeight() + 50) then
       let label = district.Name
       let sub = sprintf "%d funcs · %d LOC" district.FuncCount district.TotalLines
-      let textW = Raylib.MeasureText(label, 18)
-      let subW = Raylib.MeasureText(sub, 12)
+      let textW = measureUiText label theme.DistrictTitle
+      let subW = measureUiText sub theme.DistrictSubtitle
       let bw = max textW subW + 16
+      let bh = theme.DistrictTitle + theme.DistrictSubtitle + 18
       let bx = int screenPos.X - bw / 2
-      let by = int screenPos.Y - 14
-      Raylib.DrawRectangle(bx, by, bw, 34, Color(10uy, 10uy, 20uy, 180uy))
-      Raylib.DrawRectangleLines(bx, by, bw, 34, darken district.Color 0.6f)
-      Raylib.DrawText(label, bx + 8, by + 2, 18, district.Color)
-      Raylib.DrawText(sub, bx + 8, by + 20, 12, darken district.Color 0.8f)
+      let by = int screenPos.Y - (bh / 2)
+      Raylib.DrawRectangle(bx, by, bw, bh, Color(10uy, 10uy, 20uy, 180uy))
+      Raylib.DrawRectangleLines(bx, by, bw, bh, darken district.Color 0.6f)
+      drawUiText label (bx + 8) (by + 4) theme.DistrictTitle district.Color
+      drawUiText sub (bx + 8) (by + 8 + theme.DistrictTitle) theme.DistrictSubtitle (darken district.Color 0.8f)
 
-let drawTooltip (b: FuncBuilding) (mx: int) (my: int) =
+let drawTooltip (b: FuncBuilding) (mx: int) (my: int) (theme: UiTextTheme) =
   let lines = [|
     sprintf "%s.%s" b.Func.Module b.Func.Name
     sprintf "%s:%d-%d" b.Func.RelPath b.Func.StartLine b.Func.EndLine
@@ -1803,16 +2429,26 @@ let drawTooltip (b: FuncBuilding) (mx: int) (my: int) =
     sprintf "District: %s" b.District
   |]
   let pad = 10
-  let lineH = 20
-  let maxTextW = lines |> Array.map (fun l -> Raylib.MeasureText(l, 14)) |> Array.max
+  let lineHeights =
+    lines
+    |> Array.mapi (fun i _ ->
+      if i = 0 then theme.TooltipTitle + 6
+      else theme.TooltipBody + 5)
+  let maxTextW =
+    lines
+    |> Array.mapi (fun i l ->
+      let size = if i = 0 then theme.TooltipTitle else theme.TooltipBody
+      measureUiText l size)
+    |> Array.max
   let boxW = maxTextW + pad * 2
-  let boxH = lines.Length * lineH + pad * 2
+  let boxH = (lineHeights |> Array.sum) + pad * 2
   let bx = min (mx + 16) (Raylib.GetScreenWidth() - boxW - 10)
   let by = max 10 (my - boxH - 10)
 
   Raylib.DrawRectangle(bx - 1, by - 1, boxW + 2, boxH + 2, b.Color)
   Raylib.DrawRectangle(bx, by, boxW, boxH, Color(12uy, 12uy, 22uy, 240uy))
 
+  let mutable lineY = by + pad
   for i in 0 .. lines.Length - 1 do
     let color =
       match i with
@@ -1820,14 +2456,19 @@ let drawTooltip (b: FuncBuilding) (mx: int) (my: int) =
       | 1 -> Color(140uy, 140uy, 160uy, 255uy)
       | 2 -> heatColor b.Heat
       | _ -> Color(200uy, 200uy, 210uy, 255uy)
-    Raylib.DrawText(lines.[i], bx + pad, by + pad + i * lineH, 14, color)
+    let size = if i = 0 then theme.TooltipTitle else theme.TooltipBody
+    drawUiText lines.[i] (bx + pad) lineY size color
+    lineY <- lineY + lineHeights.[i]
 
 let drawHUD
   (buildings: FuncBuilding list)
   (districts: District list)
   (roads: Road list)
   (cars: Car[])
-  (captured: bool) =
+  (captured: bool)
+  (selected: FuncBuilding option)
+  (showCallLinks: bool)
+  (theme: UiTextTheme) =
 
   let totalFuncs = buildings.Length
   let totalLOC = buildings |> List.sumBy (fun b -> b.Func.LineCount)
@@ -1836,78 +2477,170 @@ let drawHUD
     |> List.sortByDescending (fun b -> b.Heat)
     |> List.tryHead
 
-  Raylib.DrawRectangle(8, 8, 380, 180, Color(8uy, 8uy, 16uy, 210uy))
-  Raylib.DrawRectangleLines(8, 8, 380, 180, Color(77uy, 201uy, 240uy, 80uy))
+  Raylib.DrawRectangle(8, 8, 470, 236, Color(8uy, 8uy, 16uy, 220uy))
+  Raylib.DrawRectangleLines(8, 8, 470, 236, Color(77uy, 201uy, 240uy, 95uy))
 
-  Raylib.DrawText(
-    "SageFs Code City — Function View", 16, 14, 20,
-    Color(77uy, 201uy, 240uy, 255uy))
-  Raylib.DrawText(
-    sprintf "%d functions  ·  %d LOC  ·  %d districts" totalFuncs totalLOC districts.Length,
-    16, 40, 14, Color(180uy, 180uy, 190uy, 255uy))
-  Raylib.DrawText(
-    sprintf "%d roads  ·  %d cars" roads.Length cars.Length,
-    16, 58, 14, Color(160uy, 160uy, 175uy, 255uy))
+  drawUiText "SageFs Code City — Function View" 16 14 theme.HudTitle (Color(77uy, 201uy, 240uy, 255uy))
+  drawUiText
+    (sprintf "%d functions  ·  %d LOC  ·  %d districts" totalFuncs totalLOC districts.Length)
+    16 46 theme.HudStats (Color(190uy, 190uy, 200uy, 255uy))
+  drawUiText
+    (sprintf "%d roads  ·  %d cars" roads.Length cars.Length)
+    16 68 theme.HudStats (Color(170uy, 170uy, 185uy, 255uy))
+
+  let mutable infoY = 92
+
+  match selected with
+  | Some pinned ->
+    drawUiText
+      (sprintf "Pinned: %s" (ellipsize 44 (sprintf "%s.%s" pinned.Func.Module pinned.Func.Name)))
+      16 infoY theme.HudStats selectedBuildingColor
+    infoY <- infoY + theme.HudStats + 6
+  | None -> ()
 
   match hottest with
   | Some h ->
-    Raylib.DrawText(
-      sprintf "Hottest: %s.%s (%d callers)" h.Func.Module h.Func.Name h.CallerCount,
-      16, 78, 14, heatColor h.Heat)
+    drawUiText
+      (sprintf "Hottest: %s.%s (%d callers)" h.Func.Module h.Func.Name h.CallerCount)
+      16 infoY theme.HudStats (heatColor h.Heat)
   | None -> ()
 
-  Raylib.DrawText(
-    "Right-drag: orbit  ·  Scroll: zoom  ·  Mid-drag: pan",
-    16, 104, 11, Color(110uy, 110uy, 130uy, 255uy))
-  Raylib.DrawText(
-    "WASD/QE: move  ·  R: reset  ·  F: focus hottest",
-    16, 120, 11, Color(110uy, 110uy, 130uy, 255uy))
-  Raylib.DrawText(
-    "V: view mode  ·  L: lighting  ·  M: layout  ·  D: diag",
-    16, 136, 11, Color(110uy, 110uy, 130uy, 255uy))
+  let controlsY = infoY + theme.HudStats + 10
+  drawUiText "Right-drag: orbit  ·  Scroll: zoom  ·  Mid-drag: pan"
+    16 controlsY theme.HudControls (Color(130uy, 130uy, 150uy, 255uy))
+  drawUiText "WASD/QE: move  ·  R: reset  ·  F: focus hottest"
+    16 (controlsY + theme.HudControls + 5) theme.HudControls (Color(130uy, 130uy, 150uy, 255uy))
+  drawUiText
+    (sprintf "Left-click: pin  ·  Esc: clear  ·  C: call links %s" (if showCallLinks then "ON" else "OFF"))
+    16 (controlsY + (theme.HudControls + 5) * 2) theme.HudControls
+    (if showCallLinks then outgoingRelationColor else Color(150uy, 150uy, 165uy, 255uy))
+  drawUiText "L: lighting  ·  O: diag  ·  P/B: SSAO/Bloom  ·  Tab: mouse"
+    16 (controlsY + (theme.HudControls + 5) * 3) theme.HudControls (Color(130uy, 130uy, 150uy, 255uy))
   let captureLabel =
     if captured then "TAB: release mouse" else "TAB: capture mouse"
   let captureColor =
     if captured then Color(255uy, 200uy, 60uy, 255uy)
     else Color(100uy, 180uy, 100uy, 255uy)
-  Raylib.DrawText(captureLabel, 16, 152, 12, captureColor)
+  drawUiText captureLabel 16 (controlsY + (theme.HudControls + 5) * 4 + 2) theme.HudCapture captureColor
 
-let drawLegend (districts: District list) =
+let drawLegend (districts: District list) (theme: UiTextTheme) =
   let screenW = Raylib.GetScreenWidth()
-  let panelW = 240
-  let lineH = 24
-  let panelH = 34 + districts.Length * lineH
+  let panelW = 290
+  let lineH = theme.LegendEntry + 10
+  let panelH = theme.LegendTitle + 22 + districts.Length * lineH
   let px = screenW - panelW - 8
   let py = 8
 
   Raylib.DrawRectangle(px, py, panelW, panelH, Color(8uy, 8uy, 16uy, 210uy))
   Raylib.DrawRectangleLines(px, py, panelW, panelH, Color(80uy, 80uy, 100uy, 80uy))
-  Raylib.DrawText("Districts", px + 8, py + 8, 16, Color(200uy, 200uy, 210uy, 255uy))
+  drawUiText "Districts" (px + 8) (py + 8) theme.LegendTitle (Color(200uy, 200uy, 210uy, 255uy))
 
   for i in 0 .. districts.Length - 1 do
     let d = districts.[i]
-    let y = py + 32 + i * lineH
+    let y = py + theme.LegendTitle + 18 + i * lineH
     Raylib.DrawRectangle(px + 8, y + 4, 16, 16, d.Color)
     Raylib.DrawRectangleLines(px + 8, y + 4, 16, 16, darken d.Color 0.6f)
-    Raylib.DrawText(
-      sprintf "%s (%d fn)" d.Name d.FuncCount,
-      px + 30, y + 5, 13, Color(180uy, 180uy, 190uy, 255uy))
+    drawUiText
+      (sprintf "%s (%d fn)" d.Name d.FuncCount)
+      (px + 32) (y + 4) theme.LegendEntry (Color(190uy, 190uy, 200uy, 255uy))
 
 /// Heat scale legend
-let drawHeatScale () =
+let drawHeatScale (theme: UiTextTheme) =
   let screenH = Raylib.GetScreenHeight()
   let px = 8
-  let py = screenH - 60
-  Raylib.DrawRectangle(px, py, 220, 50, Color(8uy, 8uy, 16uy, 210uy))
-  Raylib.DrawRectangleLines(px, py, 220, 50, Color(80uy, 80uy, 100uy, 80uy))
-  Raylib.DrawText("Heat: callers", px + 8, py + 4, 12, Color(160uy, 160uy, 175uy, 255uy))
+  let panelW = 250
+  let panelH = 58
+  let py = screenH - panelH - 8
+  Raylib.DrawRectangle(px, py, panelW, panelH, Color(8uy, 8uy, 16uy, 210uy))
+  Raylib.DrawRectangleLines(px, py, panelW, panelH, Color(80uy, 80uy, 100uy, 80uy))
+  drawUiText "Heat: callers" (px + 8) (py + 5) theme.HeatTitle (Color(170uy, 170uy, 185uy, 255uy))
   // Draw gradient bar
   for i in 0 .. 199 do
     let t = float32 i / 199.0f
     let c = heatColor t
-    Raylib.DrawRectangle(px + 8 + i, py + 22, 1, 16, c)
-  Raylib.DrawText("cold", px + 8, py + 38, 10, Color(40uy, 80uy, 200uy, 255uy))
-  Raylib.DrawText("hot", px + 180, py + 38, 10, Color(255uy, 40uy, 40uy, 255uy))
+    Raylib.DrawRectangle(px + 8 + i, py + 26, 1, 16, c)
+  drawUiText "cold" (px + 8) (py + 42) theme.HeatLabel (Color(40uy, 80uy, 200uy, 255uy))
+  drawUiText "hot" (px + 182) (py + 42) theme.HeatLabel (Color(255uy, 40uy, 40uy, 255uy))
+
+let drawSelectionPanel
+  (selected: FuncBuilding option)
+  (incoming: RelatedBuilding list)
+  (outgoing: RelatedBuilding list)
+  (showCallLinks: bool)
+  (theme: UiTextTheme) =
+
+  let screenW = Raylib.GetScreenWidth()
+  let screenH = Raylib.GetScreenHeight()
+  let panelW = 480
+
+  match selected with
+  | None ->
+    let panelH = 82
+    let px = screenW - panelW - 8
+    let py = screenH - panelH - 8
+    Raylib.DrawRectangle(px, py, panelW, panelH, Color(8uy, 8uy, 16uy, 215uy))
+    Raylib.DrawRectangleLines(px, py, panelW, panelH, Color(70uy, 70uy, 90uy, 120uy))
+    drawUiText "Pinned selection" (px + 12) (py + 10) theme.SelectionTitle selectedBuildingColor
+    drawUiText
+      "Left-click a building to inspect detected callers and callees."
+      (px + 12) (py + 38) theme.SelectionBody (Color(190uy, 190uy, 200uy, 255uy))
+  | Some pinned ->
+    let shownIncoming = incoming |> List.truncate 5
+    let shownOutgoing = outgoing |> List.truncate 5
+    let extraIncoming = max 0 (incoming.Length - shownIncoming.Length)
+    let extraOutgoing = max 0 (outgoing.Length - shownOutgoing.Length)
+
+    let lines = ResizeArray<string * Color * int>()
+    let addLine size text color = lines.Add(text, color, size)
+
+    addLine theme.SelectionTitle (sprintf "Pinned: %s.%s" pinned.Func.Module pinned.Func.Name) selectedBuildingColor
+    addLine theme.SelectionBody (sprintf "%s:%d-%d" pinned.Func.RelPath pinned.Func.StartLine pinned.Func.EndLine) (Color(160uy, 160uy, 175uy, 255uy))
+    addLine theme.SelectionBody (sprintf "%d lines  ·  complexity %d  ·  heat %.0f%%"
+      pinned.Func.LineCount pinned.Complexity (pinned.Heat * 100.0f)) (Color(215uy, 215uy, 225uy, 255uy))
+    addLine theme.SelectionBody (sprintf "%d callers  ·  %d callees  ·  link arcs %s"
+      incoming.Length outgoing.Length (if showCallLinks then "visible" else "hidden")) (Color(190uy, 190uy, 200uy, 255uy))
+    addLine theme.SelectionTitle "Detected callers" incomingRelationColor
+    if shownIncoming.IsEmpty then
+      addLine theme.SelectionBody "  none detected" (Color(145uy, 145uy, 160uy, 255uy))
+    else
+      shownIncoming
+      |> List.iter (fun rel ->
+        addLine theme.SelectionBody
+          (sprintf "  %2dx  %s"
+            rel.Weight
+            (ellipsize 42 (sprintf "%s.%s" rel.Building.Func.Module rel.Building.Func.Name)))
+          (Color(205uy, 225uy, 255uy, 255uy)))
+      if extraIncoming > 0 then
+        addLine theme.SelectionBody (sprintf "  +%d more callers" extraIncoming) (Color(150uy, 190uy, 235uy, 255uy))
+    addLine theme.SelectionTitle "Detected callees" outgoingRelationColor
+    if shownOutgoing.IsEmpty then
+      addLine theme.SelectionBody "  none detected" (Color(145uy, 145uy, 160uy, 255uy))
+    else
+      shownOutgoing
+      |> List.iter (fun rel ->
+        addLine theme.SelectionBody
+          (sprintf "  %2dx  %s"
+            rel.Weight
+            (ellipsize 42 (sprintf "%s.%s" rel.Building.Func.Module rel.Building.Func.Name)))
+          (Color(255uy, 220uy, 200uy, 255uy)))
+      if extraOutgoing > 0 then
+        addLine theme.SelectionBody (sprintf "  +%d more callees" extraOutgoing) (Color(240uy, 185uy, 150uy, 255uy))
+    addLine theme.SelectionBody "Left-click empty space or press Esc to clear selection." (Color(150uy, 150uy, 165uy, 255uy))
+
+    let panelH =
+      20
+      + (lines |> Seq.sumBy (fun (_, _, size) -> size + 5))
+      + 12
+    let px = screenW - panelW - 8
+    let py = screenH - panelH - 8
+
+    Raylib.DrawRectangle(px, py, panelW, panelH, Color(8uy, 8uy, 16uy, 220uy))
+    Raylib.DrawRectangleLines(px, py, panelW, panelH, Color(80uy, 80uy, 100uy, 120uy))
+
+    let mutable y = py + 10
+    for (text, color, size) in lines do
+      drawUiText text (px + 12) y size color
+      y <- y + size + 5
 
 // ─── Main Loop ────────────────────────────────────────────────
 
@@ -1928,8 +2661,10 @@ let main argv =
       else Directory.GetCurrentDirectory()
 
   printfn "Scanning %s..." repoRoot
-  let buildings, districts, roads, blocks = buildCity repoRoot
+  let buildings, districts, roads, blocks, callEdges, alleyRoads = buildCity repoRoot
   let buildingArray = buildings |> List.toArray
+  let incomingRelations, outgoingRelations = buildRelationMaps buildingArray callEdges
+  let maxRenderedRelations = 8
   let sortedRoads = roads |> List.sortByDescending (fun r -> r.Weight) |> List.truncate 500 |> List.toArray
   let hottest = buildings |> List.sortByDescending (fun b -> b.Heat) |> List.tryHead
 
@@ -1952,7 +2687,7 @@ let main argv =
         max (abs (b.X + b.W)) (max (abs b.X) (max (abs (b.Z + b.D)) (abs b.Z))))
       |> Array.max
 
-  let mutable staticMesh = buildStaticMesh buildingArray blocks cityExtent
+  let mutable staticMesh = buildStaticMesh buildingArray blocks cityExtent alleyRoads
 
   // Lighting shader
   let vsSource = """
@@ -2066,8 +2801,9 @@ void main() {
   // ─── SSAO Pipeline ──────────────────────────────────────────────
   let screenW = Raylib.GetScreenWidth()
   let screenH = Raylib.GetScreenHeight()
-  let halfW = screenW / 2
-  let halfH = screenH / 2
+  let aoW, aoH = ssaoBufferSize defaultSsaoSettings screenW screenH
+  let bloomW = max 1 (screenW / 2)
+  let bloomH = max 1 (screenH / 2)
 
   let makeTexture2D (id: uint32) w h (fmt: PixelFormat) =
     let mutable t = Texture2D()
@@ -2103,12 +2839,12 @@ void main() {
     match sceneRTOpt with
     | Some rt -> rt
     | None -> Raylib.LoadRenderTexture(screenW, screenH)
-  let ssaoRT = Raylib.LoadRenderTexture(halfW, halfH)
-  let blurRT = Raylib.LoadRenderTexture(halfW, halfH)
-  let brightRT = Raylib.LoadRenderTexture(halfW, halfH)
-  let bloomHRT = Raylib.LoadRenderTexture(halfW, halfH)
-  let bloomVRT = Raylib.LoadRenderTexture(halfW, halfH)
-  if ssaoAvailable then printfn "SSAO: Pipeline ready (%dx%d scene, %dx%d AO)" screenW screenH halfW halfH
+  let ssaoRT = Raylib.LoadRenderTexture(aoW, aoH)
+  let blurRT = Raylib.LoadRenderTexture(aoW, aoH)
+  let brightRT = Raylib.LoadRenderTexture(bloomW, bloomH)
+  let bloomHRT = Raylib.LoadRenderTexture(bloomW, bloomH)
+  let bloomVRT = Raylib.LoadRenderTexture(bloomW, bloomH)
+  if ssaoAvailable then printfn "SSAO: Pipeline ready (%dx%d scene, %dx%d AO)" screenW screenH aoW aoH
   else printfn "SSAO: Depth texture not supported — SSAO disabled"
 
   // Post-process vertex shader (shared by SSAO, blur, composite)
@@ -2159,8 +2895,8 @@ void main() {
   float ca = cos(angle);
   float sa = sin(angle);
 
-  // Depth-scaled sample radius
-  float pixelRadius = clamp(ssaoRadius * 100.0 / centerLin, 1.0, 50.0);
+  // Depth-scaled sample radius; capped lower to avoid coarse blotches.
+  float pixelRadius = clamp(ssaoRadius * 72.0 / centerLin, 1.0, 28.0);
 
   for (int i = 0; i < 12; i++) {
     vec2 offset = poissonDisk[i];
@@ -2178,7 +2914,7 @@ void main() {
   }
 
   float ao = 1.0 - (occlusion / 12.0);
-  ao = clamp(pow(ao, 1.5), 0.0, 1.0);
+  ao = clamp(pow(ao, 1.25), 0.0, 1.0);
   finalColor = vec4(ao, ao, ao, 1.0);
 }
 """
@@ -2280,14 +3016,14 @@ void main() {
   let ssaoStrengthLoc = Raylib.GetShaderLocation(compositeShader, "ssaoStrength")
 
   // Set static SSAO uniforms
-  let halfTexel = Vector2(1.0f / float32 halfW, 1.0f / float32 halfH)
-  Raylib.SetShaderValue(ssaoShader, ssaoTexelSizeLoc, halfTexel, ShaderUniformDataType.Vec2)
+  let aoTexel = Vector2(1.0f / float32 aoW, 1.0f / float32 aoH)
+  Raylib.SetShaderValue(ssaoShader, ssaoTexelSizeLoc, aoTexel, ShaderUniformDataType.Vec2)
   Raylib.SetShaderValue(ssaoShader, ssaoNearLoc, 1.0f, ShaderUniformDataType.Float)
   Raylib.SetShaderValue(ssaoShader, ssaoFarLoc, 5000.0f, ShaderUniformDataType.Float)
-  Raylib.SetShaderValue(blurShader, blurTexelSizeLoc, halfTexel, ShaderUniformDataType.Vec2)
-  Raylib.SetShaderValue(ssaoShader, ssaoRadiusLoc, 3.0f, ShaderUniformDataType.Float)
-  Raylib.SetShaderValue(ssaoShader, ssaoBiasLoc, 0.025f, ShaderUniformDataType.Float)
-  Raylib.SetShaderValue(compositeShader, ssaoStrengthLoc, 0.8f, ShaderUniformDataType.Float)
+  Raylib.SetShaderValue(blurShader, blurTexelSizeLoc, aoTexel, ShaderUniformDataType.Vec2)
+  Raylib.SetShaderValue(ssaoShader, ssaoRadiusLoc, defaultSsaoSettings.Radius, ShaderUniformDataType.Float)
+  Raylib.SetShaderValue(ssaoShader, ssaoBiasLoc, defaultSsaoSettings.Bias, ShaderUniformDataType.Float)
+  Raylib.SetShaderValue(compositeShader, ssaoStrengthLoc, defaultSsaoSettings.Strength, ShaderUniformDataType.Float)
   printfn "SSAO shader locs: texel=%d radius=%d bias=%d near=%d far=%d aoTex=%d strength=%d"
     ssaoTexelSizeLoc ssaoRadiusLoc ssaoBiasLoc ssaoNearLoc ssaoFarLoc aoTexLoc ssaoStrengthLoc
 
@@ -2312,16 +3048,19 @@ void main() {
   cam.Yaw <- 0.0f
 
   let mutable highlighted : FuncBuilding option = None
+  let mutable selected : FuncBuilding option = None
   let mutable mouseCaptured = false
   let mutable diagnosticMode = false
   let mutable lightingEnabled = true
+  let mutable showCallLinks = true
   let defaultShader = Raylib.LoadMaterialDefault().Shader
+  let uiTextTheme = defaultUiTextTheme
 
   let mutable ssaoEnabled = ssaoAvailable
   let mutable ssaoDebug = false
-  let mutable ssaoRadius = 3.0f
-  let mutable ssaoBias = 0.025f
-  let mutable ssaoStrength = 0.8f
+  let mutable ssaoRadius = defaultSsaoSettings.Radius
+  let mutable ssaoBias = defaultSsaoSettings.Bias
+  let mutable ssaoStrength = defaultSsaoSettings.Strength
   let mutable bloomEnabled = ssaoAvailable
   let mutable bloomThreshold = 0.7f
   let mutable bloomIntensity = 0.35f
@@ -2343,6 +3082,12 @@ void main() {
     if rb (Raylib.IsKeyPressed(KeyboardKey.L)) then
       lightingEnabled <- not lightingEnabled
       material.Shader <- if lightingEnabled then lightShader else defaultShader
+
+    if rb (Raylib.IsKeyPressed(KeyboardKey.C)) then
+      showCallLinks <- not showCallLinks
+
+    if rb (Raylib.IsKeyPressed(KeyboardKey.Escape)) then
+      selected <- None
 
     // SSAO controls: P=cycle(off/on/debug), U/J=radius, I/K=bias
     if rb (Raylib.IsKeyPressed(KeyboardKey.P)) && ssaoAvailable then
@@ -2403,8 +3148,28 @@ void main() {
           bestBuilding <- Some b
         | _ -> ()
       highlighted <- bestBuilding
+      if rb (Raylib.IsMouseButtonPressed(MouseButton.Left)) then
+        match bestBuilding, selected with
+        | Some hoveredBuilding, Some current
+          when current.Func.QualifiedName = hoveredBuilding.Func.QualifiedName ->
+          selected <- None
+        | Some hoveredBuilding, _ ->
+          selected <- Some hoveredBuilding
+        | None, _ ->
+          selected <- None
     else
       highlighted <- None
+
+    let selectedIncomingAll, selectedOutgoingAll =
+      match selected with
+      | Some pinned ->
+        let key = pinned.Func.QualifiedName
+        incomingRelations |> Map.tryFind key |> Option.defaultValue [],
+        outgoingRelations |> Map.tryFind key |> Option.defaultValue []
+      | None -> [], []
+
+    let renderedIncoming = selectedIncomingAll |> List.truncate maxRenderedRelations
+    let renderedOutgoing = selectedOutgoingAll |> List.truncate maxRenderedRelations
 
     Raylib.BeginDrawing()
     Raylib.ClearBackground(Color(30uy, 26uy, 46uy, 255uy))
@@ -2428,25 +3193,17 @@ void main() {
       Raylib.ClearBackground(Color(30uy, 26uy, 46uy, 255uy))
       Raylib.BeginMode3D(camera3D)
       Raylib.DrawMesh(staticMesh, material, Matrix4x4.Identity)
-      match highlighted with
-      | Some b ->
-        let cx = b.X + b.W / 2.0f
-        let cz = b.Z + b.D / 2.0f
-        Raylib.DrawCubeWires(
-          Vector3(cx, b.H / 2.0f + 0.5f, cz),
-          b.W + 0.2f, b.H + 0.2f, b.D + 0.2f,
-          Color(255uy, 255uy, 100uy, 255uy))
-      | None -> ()
+      drawSelectionOverlay highlighted selected renderedIncoming renderedOutgoing showCallLinks
       Raylib.EndMode3D()
       Raylib.EndTextureMode()
 
-      // Pass 2: SSAO — sample depth texture at half resolution
+      // Pass 2: SSAO — sample depth texture at full AO resolution
       Raylib.BeginTextureMode(ssaoRT)
       Raylib.ClearBackground(Color.White)
       Raylib.BeginShaderMode(ssaoShader)
       let srcDepth = Rectangle(0.0f, 0.0f, float32 screenW, float32 -screenH)
-      let dstHalf = Rectangle(0.0f, 0.0f, float32 halfW, float32 halfH)
-      Raylib.DrawTexturePro(sceneRT.Depth, srcDepth, dstHalf, Vector2.Zero, 0.0f, Color.White)
+      let dstAo = Rectangle(0.0f, 0.0f, float32 aoW, float32 aoH)
+      Raylib.DrawTexturePro(sceneRT.Depth, srcDepth, dstAo, Vector2.Zero, 0.0f, Color.White)
       Raylib.EndShaderMode()
       Raylib.EndTextureMode()
 
@@ -2454,8 +3211,8 @@ void main() {
       Raylib.BeginTextureMode(blurRT)
       Raylib.ClearBackground(Color.White)
       Raylib.BeginShaderMode(blurShader)
-      let srcHalf = Rectangle(0.0f, 0.0f, float32 halfW, float32 -halfH)
-      Raylib.DrawTextureRec(ssaoRT.Texture, srcHalf, Vector2.Zero, Color.White)
+      let srcAo = Rectangle(0.0f, 0.0f, float32 aoW, float32 -aoH)
+      Raylib.DrawTextureRec(ssaoRT.Texture, srcAo, Vector2.Zero, Color.White)
       Raylib.EndShaderMode()
       Raylib.EndTextureMode()
 
@@ -2466,36 +3223,36 @@ void main() {
         Raylib.ClearBackground(Color.Black)
         Raylib.BeginShaderMode(brightExtractShader)
         let srcScene = Rectangle(0.0f, 0.0f, float32 screenW, float32 -screenH)
-        let dstHalf = Rectangle(0.0f, 0.0f, float32 halfW, float32 halfH)
-        Raylib.DrawTexturePro(sceneRT.Texture, srcScene, dstHalf, Vector2.Zero, 0.0f, Color.White)
+        let dstBloom = Rectangle(0.0f, 0.0f, float32 bloomW, float32 bloomH)
+        Raylib.DrawTexturePro(sceneRT.Texture, srcScene, dstBloom, Vector2.Zero, 0.0f, Color.White)
         Raylib.EndShaderMode()
         Raylib.EndTextureMode()
 
         // Horizontal Gaussian blur
-        let hDir = Vector2(1.0f / float32 halfW, 0.0f)
+        let hDir = Vector2(1.0f / float32 bloomW, 0.0f)
         Raylib.SetShaderValue(bloomBlurShader, blurDirectionLoc, hDir, ShaderUniformDataType.Vec2)
         Raylib.BeginTextureMode(bloomHRT)
         Raylib.ClearBackground(Color.Black)
         Raylib.BeginShaderMode(bloomBlurShader)
-        let srcBright = Rectangle(0.0f, 0.0f, float32 halfW, float32 -halfH)
+        let srcBright = Rectangle(0.0f, 0.0f, float32 bloomW, float32 -bloomH)
         Raylib.DrawTextureRec(brightRT.Texture, srcBright, Vector2.Zero, Color.White)
         Raylib.EndShaderMode()
         Raylib.EndTextureMode()
 
         // Vertical Gaussian blur
-        let vDir = Vector2(0.0f, 1.0f / float32 halfH)
+        let vDir = Vector2(0.0f, 1.0f / float32 bloomH)
         Raylib.SetShaderValue(bloomBlurShader, blurDirectionLoc, vDir, ShaderUniformDataType.Vec2)
         Raylib.BeginTextureMode(bloomVRT)
         Raylib.ClearBackground(Color.Black)
         Raylib.BeginShaderMode(bloomBlurShader)
-        let srcBloomH = Rectangle(0.0f, 0.0f, float32 halfW, float32 -halfH)
+        let srcBloomH = Rectangle(0.0f, 0.0f, float32 bloomW, float32 -bloomH)
         Raylib.DrawTextureRec(bloomHRT.Texture, srcBloomH, Vector2.Zero, Color.White)
         Raylib.EndShaderMode()
         Raylib.EndTextureMode()
 
       // Final composite: scene × AO + bloom → screen
       if ssaoDebug then
-        let srcAO = Rectangle(0.0f, 0.0f, float32 halfW, float32 -halfH)
+        let srcAO = Rectangle(0.0f, 0.0f, float32 aoW, float32 -aoH)
         let dstFull = Rectangle(0.0f, 0.0f, float32 screenW, float32 screenH)
         Raylib.DrawTexturePro(blurRT.Texture, srcAO, dstFull, Vector2.Zero, 0.0f, Color.White)
       else
@@ -2514,39 +3271,29 @@ void main() {
       // Direct render — no SSAO overhead
       Raylib.BeginMode3D(camera3D)
       Raylib.DrawMesh(staticMesh, material, Matrix4x4.Identity)
-      match highlighted with
-      | Some b ->
-        let cx = b.X + b.W / 2.0f
-        let cz = b.Z + b.D / 2.0f
-        Raylib.DrawCubeWires(
-          Vector3(cx, b.H / 2.0f + 0.5f, cz),
-          b.W + 0.2f, b.H + 0.2f, b.D + 0.2f,
-          Color(255uy, 255uy, 100uy, 255uy))
-      | None -> ()
+      drawSelectionOverlay highlighted selected renderedIncoming renderedOutgoing showCallLinks
       Raylib.EndMode3D()
 
     // 2D HUD
-    drawHUD buildings districts (sortedRoads |> List.ofArray) [||] mouseCaptured
-    drawLegend districts
-    drawHeatScale()
+    drawHUD buildings districts (sortedRoads |> List.ofArray) [||] mouseCaptured selected showCallLinks uiTextTheme
+    drawLegend districts uiTextTheme
+    drawHeatScale uiTextTheme
+    drawSelectionPanel selected selectedIncomingAll selectedOutgoingAll showCallLinks uiTextTheme
 
     // SSAO + Bloom status line
     if ssaoEnabled then
       let ssaoLabel = if ssaoDebug then "SSAO: DEBUG" else "SSAO: ON"
       let bloomLabel = if bloomEnabled then sprintf "BLOOM: ON T=%.2f I=%.2f" bloomThreshold bloomIntensity else "BLOOM: OFF"
-      Raylib.DrawText(sprintf "%s  R=%.1f B=%.3f S=%.1f | %s" ssaoLabel ssaoRadius ssaoBias ssaoStrength bloomLabel,
-        10, screenH - 24, 12, Color.Yellow)
+      drawUiText
+        (sprintf "%s  R=%.1f B=%.3f S=%.2f | %s" ssaoLabel ssaoRadius ssaoBias ssaoStrength bloomLabel)
+        10 (screenH - 26) uiTextTheme.Status Color.Yellow
 
     // Tooltip for highlighted building
     match highlighted with
     | Some b ->
       let mx = int (Raylib.GetMousePosition().X) + 16
       let my = int (Raylib.GetMousePosition().Y)
-      Raylib.DrawRectangle(mx, my, 280, 72, Color(0uy, 0uy, 0uy, 200uy))
-      Raylib.DrawText(sprintf "%s.%s" b.Func.Module b.Func.Name, mx + 4, my + 4, 13, Color.White)
-      Raylib.DrawText(sprintf "%d lines | complexity %d" b.Func.LineCount b.Complexity, mx + 4, my + 22, 11, Color.LightGray)
-      Raylib.DrawText(sprintf "%d callers | %d callees" b.CallerCount b.CalleeCount, mx + 4, my + 38, 11, Color.LightGray)
-      Raylib.DrawText(sprintf "%s" b.Func.RelPath, mx + 4, my + 54, 10, Color.Gray)
+      drawTooltip b mx my uiTextTheme
     | None -> ()
 
     Raylib.EndDrawing()
