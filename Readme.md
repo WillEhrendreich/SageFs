@@ -318,14 +318,13 @@ sagefs connect   # Text REPL connected to running daemon
 3. [Harmony](https://github.com/pardeike/Harmony) patches method pointers at runtime — no restart
 4. SSE pushes a reload signal to connected browsers
 
-Add `SageFs.DevReloadMiddleware` to your Falco/ASP.NET app for automatic browser refresh:
+**Zero config for web apps.** SageFs auto-injects DevReload middleware into your ASP.NET pipeline via [Harmony](https://github.com/pardeike/Harmony) — no code changes needed. Your Falco/ASP.NET app gets browser auto-refresh the moment SageFs is running. If something breaks, an accessible error overlay appears in the browser with source context, editor links, and smart auto-reload when the error is fixed.
 
-```fsharp
-open SageFs.DevReloadMiddleware
-webHost [||] { use_middleware middleware }
-```
+Set `SAGEFS_DEVRELOAD=0` to disable auto-injection if needed.
 
 The VS Code extension gives per-file and per-directory hot reload toggles.
+
+See [HOT_RELOAD_STATUS.md](HOT_RELOAD_STATUS.md) for the full technical deep-dive.
 
 </details>
 
@@ -468,7 +467,7 @@ Full options: `sagefs --help`
 | Stale REPL after code changes | `hard_reset_fsi_session` via MCP or `#hard-reset` in REPL. |
 | Port already in use | `sagefs stop` or `--mcp-port 8080`. |
 | Running in Docker | Set `SAGEFS_BIND_HOST=0.0.0.0`. |
-| Hot reload not working | Ensure `SageFs.DevReloadMiddleware` is in your pipeline. |
+| Hot reload not working | Auto-injected by default. Check `SAGEFS_DEVRELOAD` isn't `0`. Look for `[DevReload]` in daemon logs. |
 | SSE connections dropping | Set proxy timeout ≥ 60s. SageFs sends keepalives every 15s. |
 | Live testing not running | Check `set_live_testing` is enabled and run policies match expectations. |
 | **macOS: SyntaxHighlight init failed** | Tree-sitter native library not yet bundled for macOS/Linux. Syntax highlighting falls back gracefully — all other features work. See [#17](https://github.com/WillEhrendreich/SageFs/issues/17). |
