@@ -352,19 +352,19 @@ let roadAccessTests =
     testCase "Multi-building block produces internal alley roads" <| fun () ->
       let rect = { X = 0.0f; Z = 0.0f; W = 20.0f; H = 20.0f }
       let funcs = List.init 9 (fun i -> mkFunc (sprintf "func%d" i) "TestModule")
-      let _, roads = layoutInGrid rect funcs Map.empty (Color(70uy, 130uy, 180uy, 255uy)) 10 100
+      let _, roads = layoutInGrid rect funcs Map.empty (Color(70uy, 130uy, 180uy, 255uy)) 10 100 Map.empty
       roads |> Expect.isNonEmpty "a 3×3 grid should produce alley roads between grid cells"
 
     testCase "Single building produces no internal alleys" <| fun () ->
       let rect = { X = 0.0f; Z = 0.0f; W = 10.0f; H = 10.0f }
       let funcs = [ mkFunc "onlyFunc" "TestModule" ]
-      let _, roads = layoutInGrid rect funcs Map.empty (Color(70uy, 130uy, 180uy, 255uy)) 10 100
+      let _, roads = layoutInGrid rect funcs Map.empty (Color(70uy, 130uy, 180uy, 255uy)) 10 100 Map.empty
       roads |> Expect.isEmpty "1×1 grid has no lane corridors"
 
     testCase "Buildings stay within block rect bounds" <| fun () ->
       let rect = { X = 5.0f; Z = 5.0f; W = 20.0f; H = 20.0f }
       let funcs = List.init 12 (fun i -> mkFunc (sprintf "func%d" i) "TestModule")
-      let buildings, _ = layoutInGrid rect funcs Map.empty (Color(70uy, 130uy, 180uy, 255uy)) 10 100
+      let buildings, _ = layoutInGrid rect funcs Map.empty (Color(70uy, 130uy, 180uy, 255uy)) 10 100 Map.empty
       for b in buildings do
         (b.X, rect.X) |> Expect.isGreaterThanOrEqual "building left edge should be inside block"
         (b.Z, rect.Z) |> Expect.isGreaterThanOrEqual "building top edge should be inside block"
@@ -374,7 +374,7 @@ let roadAccessTests =
     testCase "Building count matches function count" <| fun () ->
       let rect = { X = 0.0f; Z = 0.0f; W = 30.0f; H = 30.0f }
       let funcs = List.init 16 (fun i -> mkFunc (sprintf "func%d" i) "TestModule")
-      let buildings, _ = layoutInGrid rect funcs Map.empty (Color(70uy, 130uy, 180uy, 255uy)) 10 100
+      let buildings, _ = layoutInGrid rect funcs Map.empty (Color(70uy, 130uy, 180uy, 255uy)) 10 100 Map.empty
       buildings.Length |> Expect.equal "should produce one building per function" 16
   ]
 
@@ -427,21 +427,21 @@ let weberDistrictTests =
       let rect  = { X = 0.0f; Z = 0.0f; W = 40.0f; H = 30.0f }
       let funcs = List.init 12 (fun i -> mkFunc (sprintf "f%d" i) "TestMod")
       let rng   = Random(42)
-      let bldgs, _ = layoutWeberDistrict rect funcs Map.empty (Color(70uy, 130uy, 180uy, 255uy)) 10 100 0.5f rng
+      let bldgs, _ = layoutWeberDistrict rect funcs Map.empty (Color(70uy, 130uy, 180uy, 255uy)) 10 100 0.5f rng Map.empty
       bldgs |> Expect.isNonEmpty "a 12-function district should have buildings"
 
     testCase "organic district produces internal road network" <| fun () ->
       let rect  = { X = 0.0f; Z = 0.0f; W = 50.0f; H = 50.0f }
       let funcs = List.init 20 (fun i -> mkFunc (sprintf "f%d" i) "OrgMod")
       let rng   = Random(7)
-      let _, roads = layoutWeberDistrict rect funcs Map.empty (Color(70uy, 130uy, 180uy, 255uy)) 10 100 1.0f rng
+      let _, roads = layoutWeberDistrict rect funcs Map.empty (Color(70uy, 130uy, 180uy, 255uy)) 10 100 1.0f rng Map.empty
       roads |> Expect.isNonEmpty "organic district should produce internal roads"
 
     testCase "all Weber buildings stay within block bounds (with tolerance)" <| fun () ->
       let rect  = { X = 5.0f; Z = 3.0f; W = 40.0f; H = 35.0f }
       let funcs = List.init 15 (fun i -> mkFunc (sprintf "g%d" i) "BoundsMod")
       let rng   = Random(99)
-      let bldgs, _ = layoutWeberDistrict rect funcs Map.empty (Color(70uy, 130uy, 180uy, 255uy)) 10 100 0.7f rng
+      let bldgs, _ = layoutWeberDistrict rect funcs Map.empty (Color(70uy, 130uy, 180uy, 255uy)) 10 100 0.7f rng Map.empty
       let eps = 1.5f  // packInBlock centers use polygon bounding box; slight overshoot is tolerated
       for b in bldgs do
         (b.X,       rect.X - eps)           |> Expect.isGreaterThanOrEqual "building left edge inside block"
@@ -453,7 +453,7 @@ let weberDistrictTests =
       let rect  = { X = 0.0f; Z = 0.0f; W = 50.0f; H = 50.0f }
       let funcs = List.init 16 (fun i -> mkFunc (sprintf "h%d" i) "GridMod")
       let rng   = Random(42)
-      let _, roads = layoutWeberDistrict rect funcs Map.empty (Color(70uy, 130uy, 180uy, 255uy)) 10 100 0.0f rng
+      let _, roads = layoutWeberDistrict rect funcs Map.empty (Color(70uy, 130uy, 180uy, 255uy)) 10 100 0.0f rng Map.empty
       // In grid mode every segment extends straight from its seed direction — no deviation.
       // Roads may still be at a non-axis angle (seed chooses random initial direction) but
       // all segments from a given node will be collinear (deviation = 0). Verify no crashes.
@@ -499,7 +499,7 @@ let roadFrontageTests =
       let poly = [ Vec2.Create(0.0f, 0.0f); Vec2.Create(12.0f, 0.0f)
                    Vec2.Create(12.0f, 12.0f); Vec2.Create(0.0f, 12.0f) ]
       let funcs = List.init 8 (fun i -> mkFunc (sprintf "f%d" i) "ParkMod")
-      let bldgs = packAlongEdges poly funcs Map.empty (Color(70uy, 130uy, 180uy, 255uy)) (Random 42)
+      let bldgs = packAlongEdges poly funcs Map.empty (Color(70uy, 130uy, 180uy, 255uy)) (Random 42) Map.empty
       bldgs |> Expect.isNonEmpty "8 functions in a 12×12 parcel should produce buildings"
 
     testCase "road-primary invariant: all buildings within lot depth of nearest road edge" <| fun () ->
@@ -508,7 +508,7 @@ let roadFrontageTests =
       let poly = [ Vec2.Create(0.0f, 0.0f); Vec2.Create(10.0f, 0.0f)
                    Vec2.Create(10.0f, 10.0f); Vec2.Create(0.0f, 10.0f) ]
       let funcs = List.init 10 (fun i -> mkFunc (sprintf "f%d" i) "RoadMod")
-      let bldgs = packAlongEdges poly funcs Map.empty (Color(70uy, 130uy, 180uy, 255uy)) (Random 7)
+      let bldgs = packAlongEdges poly funcs Map.empty (Color(70uy, 130uy, 180uy, 255uy)) (Random 7) Map.empty
       bldgs |> Expect.isNonEmpty "must produce some buildings"
       let maxLotDepth = 3.0f
       for b in bldgs do
@@ -523,7 +523,7 @@ let roadFrontageTests =
       let poly = [ Vec2.Create(0.0f, 0.0f); Vec2.Create(8.0f, 0.0f)
                    Vec2.Create(8.0f, 6.0f); Vec2.Create(0.0f, 6.0f) ]
       let funcs = List.init 6 (fun i -> mkFunc (sprintf "f%d" i) "InsideMod")
-      let bldgs = packAlongEdges poly funcs Map.empty (Color(70uy, 130uy, 180uy, 255uy)) (Random 13)
+      let bldgs = packAlongEdges poly funcs Map.empty (Color(70uy, 130uy, 180uy, 255uy)) (Random 13) Map.empty
       for b in bldgs do
         let cx = b.X + b.W / 2.0f
         let cz = b.Z + b.D / 2.0f
@@ -535,7 +535,7 @@ let roadFrontageTests =
       let poly = [ Vec2.Create(0.0f, 0.0f); Vec2.Create(10.0f, 0.0f)
                    Vec2.Create(10.0f, 10.0f); Vec2.Create(0.0f, 10.0f) ]
       let funcs = List.init 12 (fun i -> mkFunc (sprintf "f%d" i) "MultiEdgeMod")
-      let bldgs = packAlongEdges poly funcs Map.empty (Color(70uy, 130uy, 180uy, 255uy)) (Random 99)
+      let bldgs = packAlongEdges poly funcs Map.empty (Color(70uy, 130uy, 180uy, 255uy)) (Random 99) Map.empty
       // Check that buildings appear on both sides of the polygon (not all clumped on one edge)
       let hasNearBottom = bldgs |> List.exists (fun b -> b.Z + b.D / 2.0f < 3.0f)
       let hasNearTop    = bldgs |> List.exists (fun b -> b.Z + b.D / 2.0f > 7.0f)
@@ -551,7 +551,7 @@ let packAlongRoadsTests =
       let roads = [ mkRoad 10.0f 0.0f 10.0f 20.0f 0.4f    // vertical at x=10
                     mkRoad 0.0f  10.0f 20.0f 10.0f 0.4f ]  // horizontal at z=10
       let funcs = List.init 8 (fun i -> mkFunc (sprintf "f%d" i) "CrossMod")
-      let bldgs = packAlongRoads roads rect funcs Map.empty (Color(70uy, 130uy, 180uy, 255uy)) (Random 42)
+      let bldgs = packAlongRoads roads rect funcs Map.empty (Color(70uy, 130uy, 180uy, 255uy)) (Random 42) Map.empty
       bldgs |> Expect.isNonEmpty "8 functions on a cross-road block should produce buildings"
 
     testCase "road-primary invariant: all buildings adjacent to a visible road centerline" <| fun () ->
@@ -559,9 +559,9 @@ let packAlongRoadsTests =
       let roads = [ mkRoad 10.0f 0.0f 10.0f 20.0f 0.4f
                     mkRoad 0.0f  10.0f 20.0f 10.0f 0.4f ]
       let funcs = List.init 10 (fun i -> mkFunc (sprintf "f%d" i) "RoadMod")
-      let bldgs = packAlongRoads roads rect funcs Map.empty (Color(70uy, 130uy, 180uy, 255uy)) (Random 7)
+      let bldgs = packAlongRoads roads rect funcs Map.empty (Color(70uy, 130uy, 180uy, 255uy)) (Random 7) Map.empty
       bldgs |> Expect.isNonEmpty "must produce buildings"
-      let maxDist = 1.5f  // setback(0.9) + footprint/2 + small tolerance
+      let maxDist = 2.0f  // setback(up to 0.9+hw) + half footprint + tolerance
       for b in bldgs do
         let cx = b.X + b.W / 2.0f
         let cz = b.Z + b.D / 2.0f
@@ -576,7 +576,7 @@ let packAlongRoadsTests =
       let rect  = { X = 5.0f; Z = 5.0f; W = 20.0f; H = 20.0f }
       let roads = [ mkRoad 15.0f 5.0f 15.0f 25.0f 0.4f ]
       let funcs = List.init 6 (fun i -> mkFunc (sprintf "f%d" i) "BoundsMod")
-      let bldgs = packAlongRoads roads rect funcs Map.empty (Color(70uy, 130uy, 180uy, 255uy)) (Random 13)
+      let bldgs = packAlongRoads roads rect funcs Map.empty (Color(70uy, 130uy, 180uy, 255uy)) (Random 13) Map.empty
       let eps = 1.0f
       for b in bldgs do
         (b.X,       rect.X - eps)           |> Expect.isGreaterThanOrEqual "left within bounds"
@@ -587,7 +587,7 @@ let packAlongRoadsTests =
     testCase "empty road list falls back gracefully without crash" <| fun () ->
       let rect  = { X = 0.0f; Z = 0.0f; W = 10.0f; H = 10.0f }
       let funcs = List.init 4 (fun i -> mkFunc (sprintf "f%d" i) "FallbackMod")
-      let bldgs = packAlongRoads [] rect funcs Map.empty (Color(70uy, 130uy, 180uy, 255uy)) (Random 1)
+      let bldgs = packAlongRoads [] rect funcs Map.empty (Color(70uy, 130uy, 180uy, 255uy)) (Random 1) Map.empty
       bldgs |> Expect.isNonEmpty "fallback must still produce buildings when no roads exist"
 
     testCase "buildings distributed on both sides of a single road" <| fun () ->
@@ -595,7 +595,7 @@ let packAlongRoadsTests =
       let rect  = { X = 0.0f; Z = 0.0f; W = 10.0f; H = 20.0f }
       let roads = [ mkRoad 5.0f 0.0f 5.0f 20.0f 0.4f ]
       let funcs = List.init 10 (fun i -> mkFunc (sprintf "f%d" i) "SidesMod")
-      let bldgs = packAlongRoads roads rect funcs Map.empty (Color(70uy, 130uy, 180uy, 255uy)) (Random 99)
+      let bldgs = packAlongRoads roads rect funcs Map.empty (Color(70uy, 130uy, 180uy, 255uy)) (Random 99) Map.empty
       let leftSide  = bldgs |> List.exists (fun b -> b.X + b.W / 2.0f < 5.0f)
       let rightSide = bldgs |> List.exists (fun b -> b.X + b.W / 2.0f > 5.0f)
       leftSide  |> Expect.isTrue "should have buildings left of road"
@@ -665,12 +665,12 @@ let buildingTypologyTests =
 
     testCase "buildingTypeWallColor: each type returns a fully-opaque color" <| fun () ->
       for bt in [| Shed; Cottage; Rowhouse; Commercial; Tower; Skyscraper |] do
-        let c = BuildingType.wallColor bt "testFunc"
+        let c = BuildingType.wallColor bt "testFunc" 180.0f
         c.A |> Expect.equal (sprintf "%A wall color should be opaque" bt) 255uy
 
     testCase "buildingTypeWallColor: residential warm (R > B) vs skyscraper cool (B >= R)" <| fun () ->
-      let cottageC  = BuildingType.wallColor Cottage  "anyFunc"
-      let scraperC  = BuildingType.wallColor Skyscraper "anyFunc"
+      let cottageC  = BuildingType.wallColor Cottage   "anyFunc" 180.0f
+      let scraperC  = BuildingType.wallColor Skyscraper "anyFunc" 180.0f
       (int cottageC.R, int cottageC.B)
       |> Expect.isGreaterThan "Cottage wall should be warm-tinted (R > B)"
       (int scraperC.B, int scraperC.R)
@@ -680,12 +680,51 @@ let buildingTypologyTests =
       let rect  = { X = 0.0f; Z = 0.0f; W = 20.0f; H = 20.0f }
       let roads = [ mkRoad 10.0f 0.0f 10.0f 20.0f 0.4f ]
       let funcs = List.init 6 (fun i -> mkFunc (sprintf "f%d" i) "TypeMod")
-      let bldgs = packAlongRoads roads rect funcs Map.empty (Color(70uy, 130uy, 180uy, 255uy)) (Random 42)
+      let bldgs = packAlongRoads roads rect funcs Map.empty (Color(70uy, 130uy, 180uy, 255uy)) (Random 42) Map.empty
       bldgs |> Expect.isNonEmpty "should produce buildings"
       // Each building should have a BuildingType — verify at least one non-Shed exists
       // (since with 10-line functions and no heat the type is Shed or Cottage)
       bldgs |> List.forall (fun b -> b.BuildingType = Shed || b.BuildingType = Cottage || b.BuildingType = Rowhouse)
       |> Expect.isTrue "small test functions should classify as Shed/Cottage/Rowhouse"
+  ]
+
+let gitAgeColorTests =
+  testList "Git age color temperature and lot coverage" [
+
+    testCase "wallColor: freshly committed files are warmer (higher R) than old files" <| fun () ->
+      let freshColor = BuildingType.wallColor Cottage "sameFunc" 0.0f
+      let oldColor   = BuildingType.wallColor Cottage "sameFunc" 730.0f
+      (int freshColor.R, int oldColor.R)
+      |> Expect.isGreaterThan "Fresh files should have more red (warm shift) than old files"
+
+    testCase "wallColor: old files are cooler (higher B) than fresh files" <| fun () ->
+      let freshColor = BuildingType.wallColor Cottage "sameFunc" 0.0f
+      let oldColor   = BuildingType.wallColor Cottage "sameFunc" 730.0f
+      (int oldColor.B, int freshColor.B)
+      |> Expect.isGreaterThan "Old files should have more blue (cool shift) than fresh files"
+
+    testCase "FuncBuilding has GitAgeDays field" <| fun () ->
+      let rect  = { X = 0.0f; Z = 0.0f; W = 20.0f; H = 20.0f }
+      let roads = [ mkRoad 10.0f 0.0f 10.0f 20.0f 0.4f ]
+      let funcs = [ mkFunc "testF" "TestMod" ]
+      let bldgs = packAlongRoads roads rect funcs Map.empty (Color(70uy, 130uy, 180uy, 255uy)) (Random 1) Map.empty
+      bldgs |> Expect.isNonEmpty "should produce at least one building"
+      bldgs |> List.head |> (fun b -> b.GitAgeDays >= 0.0f)
+      |> Expect.isTrue "GitAgeDays field should exist and be non-negative"
+
+    testCase "packAlongRoads: skyscraper buildings have larger footprints than sheds" <| fun () ->
+      let rect = { X = 0.0f; Z = 0.0f; W = 30.0f; H = 30.0f }
+      let roads = [ mkRoad 15.0f 0.0f 15.0f 30.0f 0.4f ]
+      let scraperFuncs = List.init 4 (fun i -> { mkFunc (sprintf "hot%d" i) "HotMod" with LineCount = 700 })
+      let shedFuncs    = List.init 4 (fun i -> { mkFunc (sprintf "tiny%d" i) "TinyMod" with LineCount = 2 })
+      let scraperBldgs = packAlongRoads roads rect scraperFuncs Map.empty (Color(70uy, 130uy, 180uy, 255uy)) (Random 7) Map.empty
+      let shedBldgs    = packAlongRoads roads rect shedFuncs    Map.empty (Color(70uy, 130uy, 180uy, 255uy)) (Random 7) Map.empty
+      scraperBldgs |> Expect.isNonEmpty "skyscraper funcs should produce buildings"
+      shedBldgs    |> Expect.isNonEmpty "shed funcs should produce buildings"
+      let avgScraperW = scraperBldgs |> List.averageBy (fun b -> b.W)
+      let avgShedW    = shedBldgs    |> List.averageBy (fun b -> b.W)
+      (avgScraperW, avgShedW)
+      |> Expect.isGreaterThan "Skyscraper footprint should exceed Shed footprint due to higher coverage ratio"
   ]
 
 let allTests =
@@ -705,6 +744,7 @@ let allTests =
     roadFrontageTests
     packAlongRoadsTests
     buildingTypologyTests
+    gitAgeColorTests
   ]
 
 [<EntryPoint>]

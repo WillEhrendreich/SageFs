@@ -353,6 +353,7 @@ type FuncBuilding =
     CalleeCount: int
     Complexity: int       // McCabe cyclomatic complexity
     BuildingType: BuildingType
+    GitAgeDays: float32
     X: float32; Z: float32
     W: float32; D: float32
     H: float32
@@ -436,8 +437,9 @@ module BuildingType =
     | Skyscraper -> 0.75f  // maximum packing
 
   /// Characteristic wall color for a building type.
-  /// Uses deterministic hash-jitter so each building gets a unique shade.
-  let wallColor (bt: BuildingType) (funcName: string) : Color =
+  /// Uses deterministic hash-jitter for per-building variation, and shifts
+  /// warm (recent commit) vs cool (old commit) based on days since last commit.
+  let wallColor (bt: BuildingType) (funcName: string) (ageDays: float32) : Color =
     let br, bg, bb =
       match bt with
       | Shed       -> 158.0f, 138.0f, 108.0f   // weathered wood / tan
@@ -446,9 +448,12 @@ module BuildingType =
       | Commercial -> 193.0f, 193.0f, 198.0f   // light stone / concrete
       | Tower      -> 152.0f, 164.0f, 175.0f   // steel / glass gray-blue
       | Skyscraper -> 120.0f, 137.0f, 152.0f   // dark reflective glass
-    let jR = hashJitter (funcName + "wr") * 24.0f - 12.0f
+    let ageNorm   = min 1.0f (ageDays / 365.0f)  // 0 = freshly committed, 1 = 1+ year old
+    let warmShift = (1.0f - ageNorm) * 22.0f     // fresh: orange-warm boost on R channel
+    let coolShift = ageNorm * 18.0f               // old: blue-gray boost on B channel
+    let jR = hashJitter (funcName + "wr") * 24.0f - 12.0f + warmShift
     let jG = hashJitter (funcName + "wg") * 24.0f - 12.0f
-    let jB = hashJitter (funcName + "wb") * 24.0f - 12.0f
+    let jB = hashJitter (funcName + "wb") * 24.0f - 12.0f + coolShift
     let clamp v = byte (min 255.0f (max 0.0f v))
     Color(clamp (br + jR), clamp (bg + jG), clamp (bb + jB), 255uy)
 
@@ -1265,7 +1270,7 @@ let pointInPoly (poly: Vec2 list) (px: float32) (pz: float32) : bool =
   inside
 
 /// Pack buildings into a block polygon using row packing.
-let packInBlock (poly: Vec2 list) (funcs: FuncDef list) (heatMap: Map<string, float32 * int * int>) (districtColor: Color) (rng: Random) : FuncBuilding list =
+let packInBlock (poly: Vec2 list) (funcs: FuncDef list) (heatMap: Map<string, float32 * int * int>) (districtColor: Color) (rng: Random) (gitMeta: Map<string, GitMeta>) : FuncBuilding list =
   if poly.Length < 3 || funcs.IsEmpty then []
   else
     let minX = poly |> List.map (fun p -> p.X) |> List.min
@@ -1297,15 +1302,26 @@ let packInBlock (poly: Vec2 list) (funcs: FuncDef list) (heatMap: Map<string, fl
             |> Option.defaultValue (0.0f, 0, 0)
           let complexity = computeComplexity f.Body
           let bt = classifyBuilding f.LineCount complexity heat
-          let footprint = min (min colW rowH * 0.85f) (max 1.0f (MathF.Log(float32 f.LineCount + 1.0f) * 0.8f + MathF.Log(float32 complexity + 1.0f) * 0.4f))
+          let coverageRatio =
+            match bt with
+            | Shed | Cottage -> 0.45f
+            | Rowhouse       -> 0.65f
+            | Commercial | Tower -> 0.80f
+            | Skyscraper     -> 0.90f
+          let footprint = min (min colW rowH * coverageRatio) (max 1.0f (MathF.Log(float32 f.LineCount + 1.0f) * 0.8f + MathF.Log(float32 complexity + 1.0f) * 0.4f))
+          let ageDays =
+            gitMeta |> Map.tryFind f.FilePath
+            |> Option.map (fun m -> float32 (DateTimeOffset.Now - m.LastCommitDate).TotalDays)
+            |> Option.defaultValue 180.0f
           Some { Func = f; Heat = heat; CallerCount = callers; CalleeCount = callees
                  Complexity = complexity
                  BuildingType = bt
+                 GitAgeDays = ageDays
                  X = cx - footprint / 2.0f; Z = cz - footprint / 2.0f
                  W = footprint; D = footprint
                  H = BuildingType.height bt f.LineCount heat
                  Rotation  = rotationJitter f.Name 5.0f
-                 Color     = BuildingType.wallColor bt f.Name
+                 Color     = BuildingType.wallColor bt f.Name ageDays
                  RoofColor = BuildingType.roofColor bt districtColor
                  District  = f.Module })
       |> List.choose id
@@ -1340,6 +1356,7 @@ let packAlongEdges
   (heatMap: Map<string, float32 * int * int>)
   (districtColor: Color)
   (rng: Random)
+  (gitMeta: Map<string, GitMeta>)
   : FuncBuilding list =
   if poly.Length < 3 || funcs.IsEmpty then []
   else
@@ -1370,29 +1387,44 @@ let packAlongEdges
       let (nx, nz) =
         if pointInPoly poly (midX + nx0 * 0.15f) (midZ + nz0 * 0.15f) then (nx0, nz0)
         else (-nx0, -nz0)
-      let setback = 0.5f
       let spacing = edgeLen / float32 (chunk.Length + 1)
       let roadAngle = MathF.Atan2(dirZ, dirX) * 180.0f / MathF.PI
       chunk |> List.iteri (fun idx f ->
+        let heat, callers, callees =
+          heatMap |> Map.tryFind f.QualifiedName |> Option.defaultValue (0.0f, 0, 0)
+        let complexity = computeComplexity f.Body
+        let bt  = classifyBuilding f.LineCount complexity heat
+        let typeSetback =
+          match bt with
+          | Shed | Cottage -> 0.8f
+          | Rowhouse       -> 0.55f
+          | _              -> 0.35f
         let t  = float32 (idx + 1) * spacing
-        let px = a.X + t * dirX + nx * setback
-        let pz = a.Y + t * dirZ + nz * setback
+        let px = a.X + t * dirX + nx * typeSetback
+        let pz = a.Y + t * dirZ + nz * typeSetback
         if pointInPoly poly px pz then
-          let heat, callers, callees =
-            heatMap |> Map.tryFind f.QualifiedName |> Option.defaultValue (0.0f, 0, 0)
-          let complexity = computeComplexity f.Body
-          let bt  = classifyBuilding f.LineCount complexity heat
-          let fp  = max 0.3f (min (spacing * 0.75f) (MathF.Log(float32 f.LineCount + 1.0f) * 0.5f + 0.3f))
+          let coverageRatio =
+            match bt with
+            | Shed | Cottage -> 0.45f
+            | Rowhouse       -> 0.65f
+            | Commercial | Tower -> 0.80f
+            | Skyscraper     -> 0.90f
+          let fp = max 0.3f (min (spacing * coverageRatio) (MathF.Log(float32 f.LineCount + 1.0f) * 0.5f + 0.3f))
+          let ageDays =
+            gitMeta |> Map.tryFind f.FilePath
+            |> Option.map (fun m -> float32 (DateTimeOffset.Now - m.LastCommitDate).TotalDays)
+            |> Option.defaultValue 180.0f
           let jitter = (rng.NextSingle() - 0.5f) * 4.0f
           allBuildings.Add {
             Func = f; Heat = heat; CallerCount = callers; CalleeCount = callees
             Complexity = complexity
             BuildingType = bt
+            GitAgeDays = ageDays
             X = px - fp / 2.0f; Z = pz - fp / 2.0f
             W = fp; D = fp
             H = BuildingType.height bt f.LineCount heat
             Rotation  = roadAngle + jitter
-            Color     = BuildingType.wallColor bt f.Name
+            Color     = BuildingType.wallColor bt f.Name ageDays
             RoofColor = BuildingType.roofColor bt districtColor
             District  = f.Module })
 
@@ -1423,6 +1455,7 @@ let layoutInGrid
   (heatMap: Map<string, float32 * int * int>)
   (districtColor: Color)
   (globalMaxComplexity: int) (globalMaxLineCount: int)
+  (gitMeta: Map<string, GitMeta>)
   : FuncBuilding list * Road list =
   if funcs.IsEmpty then ([], [])
   else
@@ -1460,13 +1493,18 @@ let layoutInGrid
           let baseH = 1.2f + 33.8f * MathF.Pow(normComplexity, 0.45f)
           let jitter = 1.0f + (hashJitter f.Name - 0.5f) * 0.2f
           let finalH = baseH * jitter
+          let ageDays =
+            gitMeta |> Map.tryFind f.FilePath
+            |> Option.map (fun m -> float32 (DateTimeOffset.Now - m.LastCommitDate).TotalDays)
+            |> Option.defaultValue 180.0f
           { Func = f; Heat = heat; CallerCount = callers; CalleeCount = callees
             Complexity = complexity
             BuildingType = bt
+            GitAgeDays = ageDays
             X = cx - bldgW / 2.0f; Z = cz - bldgD / 2.0f
             W = bldgW; D = bldgD; H = finalH
             Rotation  = rotationJitter f.Name 3.0f
-            Color     = BuildingType.wallColor bt f.Name
+            Color     = BuildingType.wallColor bt f.Name ageDays
             RoofColor = BuildingType.roofColor bt districtColor
             District  = f.Module })
       let alleyColor = Color(60uy, 60uy, 65uy, 255uy)
@@ -1502,6 +1540,7 @@ let packAlongRoads
   (heatMap: Map<string, float32 * int * int>)
   (districtColor: Color)
   (rng: Random)
+  (gitMeta: Map<string, GitMeta>)
   : FuncBuilding list =
   if funcs.IsEmpty then []
   else
@@ -1526,7 +1565,7 @@ let packAlongRoads
           Vec2.Create(blockBounds.X + blockBounds.W, blockBounds.Z)
           Vec2.Create(blockBounds.X + blockBounds.W, blockBounds.Z + blockBounds.H)
           Vec2.Create(blockBounds.X,                 blockBounds.Z + blockBounds.H) ]
-      packAlongEdges poly funcs heatMap districtColor rng
+      packAlongEdges poly funcs heatMap districtColor rng gitMeta
     else
       let totalLen    = segs |> List.sumBy (fun (_,_,_,_,l,_) -> l) |> max 0.001f
       let sortedFuncs = funcs |> List.sortByDescending (fun f -> f.LineCount)
@@ -1542,29 +1581,46 @@ let packAlongRoads
         // Perpendicular inward from road: left or right of direction vector
         let perpX = -dirZ * sideSign
         let perpZ =  dirX * sideSign
-        let setback  = hw + 0.5f                      // clear road surface + sidewalk
         let spacing  = segLen / float32 (chunk.Length + 1)
         let roadAngle = MathF.Atan2(dirZ, dirX) * 180.0f / MathF.PI
         chunk |> List.iteri (fun idx f ->
+          let heat, callers, callees =
+            heatMap |> Map.tryFind f.QualifiedName |> Option.defaultValue (0.0f, 0, 0)
+          let complexity = computeComplexity f.Body
+          let bt   = classifyBuilding f.LineCount complexity heat
+          // Per-type setback: residential sits further back (yard/garden); skyscrapers hug the curb
+          let typeSetback =
+            match bt with
+            | Shed | Cottage -> hw + 0.9f
+            | Rowhouse       -> hw + 0.6f
+            | _              -> hw + 0.35f
           let t  = float32 (idx + 1) * spacing
-          let px = ax + t * dirX + perpX * setback
-          let pz = az + t * dirZ + perpZ * setback
+          let px = ax + t * dirX + perpX * typeSetback
+          let pz = az + t * dirZ + perpZ * typeSetback
           if px >= bx0 - eps && px <= bx1 + eps && pz >= bz0 - eps && pz <= bz1 + eps then
-            let heat, callers, callees =
-              heatMap |> Map.tryFind f.QualifiedName |> Option.defaultValue (0.0f, 0, 0)
-            let complexity = computeComplexity f.Body
-            let bt   = classifyBuilding f.LineCount complexity heat
-            let fp   = max 0.3f (min (spacing * 0.8f) (MathF.Log(float32 f.LineCount + 1.0f) * 0.5f + 0.3f))
+            // Coverage ratio: residential = small building in large lot; skyscraper fills the lot
+            let coverageRatio =
+              match bt with
+              | Shed | Cottage -> 0.45f
+              | Rowhouse       -> 0.65f
+              | Commercial | Tower -> 0.80f
+              | Skyscraper     -> 0.90f
+            let fp = max 0.3f (min (spacing * coverageRatio) (MathF.Log(float32 f.LineCount + 1.0f) * 0.5f + 0.3f))
+            let ageDays =
+              gitMeta |> Map.tryFind f.FilePath
+              |> Option.map (fun m -> float32 (DateTimeOffset.Now - m.LastCommitDate).TotalDays)
+              |> Option.defaultValue 180.0f
             let jitter = (rng.NextSingle() - 0.5f) * 4.0f
             allBuildings.Add {
               Func = f; Heat = heat; CallerCount = callers; CalleeCount = callees
               Complexity = complexity
               BuildingType = bt
+              GitAgeDays = ageDays
               X = px - fp / 2.0f; Z = pz - fp / 2.0f
               W = fp; D = fp
               H = BuildingType.height bt f.LineCount heat
               Rotation  = roadAngle + jitter
-              Color     = BuildingType.wallColor bt f.Name
+              Color     = BuildingType.wallColor bt f.Name ageDays
               RoofColor = BuildingType.roofColor bt districtColor
               District  = f.Module })
 
@@ -1592,7 +1648,7 @@ let packAlongRoads
             Vec2.Create(blockBounds.X + blockBounds.W, blockBounds.Z)
             Vec2.Create(blockBounds.X + blockBounds.W, blockBounds.Z + blockBounds.H)
             Vec2.Create(blockBounds.X,                 blockBounds.Z + blockBounds.H) ]
-        packAlongEdges poly funcs heatMap districtColor rng
+        packAlongEdges poly funcs heatMap districtColor rng gitMeta
       else
         allBuildings |> Seq.toList
 
@@ -1605,6 +1661,7 @@ let layoutWeberDistrict
   (districtColor: Color)
   (globalMaxComplexity: int) (globalMaxLineCount: int)
   (organic: float32) (rng: Random)
+  (gitMeta: Map<string, GitMeta>)
   : FuncBuilding list * Road list =
   ignore (globalMaxComplexity, globalMaxLineCount)
   if funcs.IsEmpty then ([], [])
@@ -1653,7 +1710,7 @@ let layoutWeberDistrict
                     Weight  = RoadClass.tier e.Class
                     Color   = Color(65uy, 65uy, 70uy, 255uy) } ]
 
-    let buildings = packAlongRoads weberRoads rect funcs heatMap districtColor rng
+    let buildings = packAlongRoads weberRoads rect funcs heatMap districtColor rng gitMeta
     (buildings, weberRoads)
 
 
@@ -1762,7 +1819,7 @@ let buildCity (repoRoot: string) =
       |> List.map (fun f -> gitMetaByFile |> Map.tryFind f.FilePath |> Option.defaultValue GitMeta.empty)
     let organic = districtOrganicFactor today fileMetas
     let bldgs, weberRoads =
-      layoutWeberDistrict block.Rect modFuncs heatMap block.Color globalMaxComplexity globalMaxLineCount organic districtRng
+      layoutWeberDistrict block.Rect modFuncs heatMap block.Color globalMaxComplexity globalMaxLineCount organic districtRng gitMetaByFile
     allBuildings <- allBuildings @ bldgs
     allAlleyRoads <- allAlleyRoads @ weberRoads
     ignore rng  // global rng still here for future use
@@ -2398,22 +2455,22 @@ type UiTextTheme =
     Status: int }
 
 let defaultUiTextTheme =
-  { HudTitle = 24
-    HudStats = 17
-    HudControls = 13
-    HudCapture = 14
-    LegendTitle = 18
-    LegendEntry = 15
-    HeatTitle = 14
-    HeatLabel = 12
-    TooltipTitle = 16
-    TooltipBody = 13
-    SelectionTitle = 17
-    SelectionBody = 13
-    SelectionLineHeight = 20
-    DistrictTitle = 20
-    DistrictSubtitle = 14
-    Status = 13 }
+  { HudTitle = 28
+    HudStats = 20
+    HudControls = 16
+    HudCapture = 17
+    LegendTitle = 21
+    LegendEntry = 18
+    HeatTitle = 17
+    HeatLabel = 15
+    TooltipTitle = 20
+    TooltipBody = 16
+    SelectionTitle = 20
+    SelectionBody = 16
+    SelectionLineHeight = 24
+    DistrictTitle = 24
+    DistrictSubtitle = 16
+    Status = 16 }
 
 type SsaoSettings =
   { BufferScale: int
@@ -2433,12 +2490,23 @@ let ssaoBufferSize (settings: SsaoSettings) (screenW: int) (screenH: int) =
 
 let uiTextShadow = Color(0uy, 0uy, 0uy, 210uy)
 
+let mutable uiFont: Font = Unchecked.defaultof<Font>
+
 let measureUiText (text: string) (size: int) =
-  Raylib.MeasureText(text, size)
+  if uiFont.BaseSize > 0 then
+    int (Raylib.MeasureTextEx(uiFont, text, float32 size, float32 size * 0.06f).X)
+  else
+    Raylib.MeasureText(text, size)
 
 let drawUiText (text: string) (x: int) (y: int) (size: int) (color: Color) =
-  Raylib.DrawText(text, x + 1, y + 1, size, uiTextShadow)
-  Raylib.DrawText(text, x, y, size, color)
+  if uiFont.BaseSize > 0 then
+    let fsize   = float32 size
+    let spacing = fsize * 0.06f
+    Raylib.DrawTextEx(uiFont, text, Vector2(float32 x + 1.5f, float32 y + 1.5f), fsize, spacing, uiTextShadow)
+    Raylib.DrawTextEx(uiFont, text, Vector2(float32 x, float32 y), fsize, spacing, color)
+  else
+    Raylib.DrawText(text, x + 1, y + 1, size, uiTextShadow)
+    Raylib.DrawText(text, x, y, size, color)
 
 let selectedBuildingColor = Color(255uy, 225uy, 120uy, 255uy)
 let incomingRelationColor = Color(90uy, 180uy, 255uy, 255uy)
@@ -2802,6 +2870,19 @@ let main argv =
   Raylib.InitWindow(1600, 900, "SageFs Code City — Weber Growth")
   Raylib.SetTargetFPS(60)
   Rlgl.SetClipPlanes(1.0, 5000.0)
+
+  // Load a crisp system monospace font for UI text; falls back to Raylib default
+  let tryLoadFont (path: string) =
+    if File.Exists(path) then
+      let f = Raylib.LoadFont(path)
+      if f.BaseSize > 0 then Some f else None
+    else None
+  uiFont <-
+    tryLoadFont @"C:\Windows\Fonts\consola.ttf"
+    |> Option.orElse (tryLoadFont @"C:\Windows\Fonts\cour.ttf")
+    |> Option.orElse (tryLoadFont @"C:\Windows\Fonts\lucon.ttf")
+    |> Option.map (fun f -> Raylib.SetTextureFilter(f.Texture, TextureFilter.Bilinear); f)
+    |> Option.defaultValue (Raylib.GetFontDefault())
 
   let cityExtent =
     if buildingArray.Length = 0 then 100.0f
