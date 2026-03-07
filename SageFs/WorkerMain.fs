@@ -332,6 +332,7 @@ let run (sessionId: string) (port: int) = async {
                   Log.debug "File changed but not in hot-reload watch set: %s (watched: %d files)"
                     (IO.Path.GetFileName filePath) (HotReloadState.watchedCount !result.HotReloadStateRef)
                 | true ->
+                Log.debug "[DevReload] Reloading watched file: %s" (IO.Path.GetFileName filePath)
                 DevReload.broadcastCompiling (Some (IO.Path.GetFileName filePath))
                 // Chesterton's fence: read file and preprocess through CompilationContext
                 // instead of using `#load`. `#load` re-executes the entire file including
@@ -363,6 +364,7 @@ let run (sessionId: string) (port: int) = async {
                 match fileStructure with
                 | None -> () // parse failed — error already broadcast, skip reload
                 | Some _ ->
+                Log.debug "[DevReload] Parse succeeded for %s — preprocessing" (IO.Path.GetFileName filePath)
                 let preprocessed, updatedModules =
                   Middleware.CompilationContext.preprocessForFsi
                     fileStructure
@@ -405,7 +407,7 @@ let run (sessionId: string) (port: int) = async {
                     // is never called. Without this, the browser stays stuck on "⟳ Recompiling..."
                     // forever — violating the Compiling→(Reload|CompilationFailed) contract.
                     DevReload.broadcastReload ()
-                    Log.info "Reloaded %s" fileName
+                    Log.info "Reloaded %s (new types/functions, no methods detouring)" fileName
                 | Error ex ->
                   // Chesterton's fence: broadcastCompilationFailed ensures the browser
                   // overlay transitions from "Recompiling..." to the error message.

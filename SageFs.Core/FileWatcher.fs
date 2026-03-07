@@ -69,12 +69,16 @@ type FileChangeAction =
 let fileChangeAction (change: FileChange) : FileChangeAction =
   let ext = Path.GetExtension(change.FilePath).ToLowerInvariant()
   match change.Kind with
-  | FileChangeKind.Deleted -> FileChangeAction.Ignore
+  | FileChangeKind.Deleted ->
+    Log.debug "[FileWatcher] Ignoring deleted file: %s" (Path.GetFileName change.FilePath)
+    FileChangeAction.Ignore
   | _ ->
     match ext with
     | ".fs" | ".fsx" -> FileChangeAction.Reload change.FilePath
     | ".fsproj" -> FileChangeAction.SoftReset
-    | _ -> FileChangeAction.Ignore
+    | _ ->
+      Log.debug "[FileWatcher] Ignoring %s — extension %s not watched" (Path.GetFileName change.FilePath) ext
+      FileChangeAction.Ignore
 
 /// Pure: decide if a file change should trigger a rebuild.
 let shouldTriggerRebuild (config: WatchConfig) (filePath: string) : bool =

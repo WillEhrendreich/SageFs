@@ -156,10 +156,24 @@ let private getChannels () : ConcurrentDictionary<string, Channel<DevReloadEvent
 // Chesterton's fence: We iterate the ConcurrentDictionary directly rather
 // than snapshotting to a list. ConcurrentDictionary supports concurrent
 // enumeration — the snapshot was unnecessary allocation per broadcast.
+let private eventLabel (evt: DevReloadEvent) =
+  match evt with
+  | Compiling None -> "Compiling"
+  | Compiling (Some f) -> sprintf "Compiling(%s)" f
+  | Reload -> "Reload"
+  | CompilationFailed _ -> "CompilationFailed"
+
 let private broadcast (evt: DevReloadEvent) =
   let channels = getChannels ()
-  for kvp in channels do
-    kvp.Value.Writer.TryWrite(evt) |> ignore
+  let count = channels.Count
+  match count with
+  | 0 -> Log.debug "[DevReload] Broadcast %s — no clients connected" (eventLabel evt)
+  | _ ->
+    Log.debug "[DevReload] Broadcasting %s to %d client(s)" (eventLabel evt) count
+    for kvp in channels do
+      match kvp.Value.Writer.TryWrite(evt) with
+      | true -> ()
+      | false -> Log.warn "[DevReload] TryWrite failed for client %s (channel closed)" kvp.Key
 
 /// Signal all browsers that recompilation has started.
 /// Pass the filename for richer UI: "⟳ Recompiling Handlers.fs..."
@@ -185,11 +199,15 @@ let registerClient (id: string) =
   let ch = Channel.CreateUnbounded<DevReloadEvent>()
   let channels = getChannels ()
   match channels.TryRemove(id) with
-  | true, old -> old.Writer.TryComplete() |> ignore
+  | true, old ->
+    old.Writer.TryComplete() |> ignore
+    Log.debug "[DevReload] Replaced duplicate client %s" id
   | _ -> ()
   channels.[id] <- ch
   Instrumentation.devReloadConnectedClients.Add(1L)
-  DevReloadHealthTracker.transition (Active channels.Count)
+  let count = channels.Count
+  DevReloadHealthTracker.transition (Active count)
+  Log.debug "[DevReload] Client %s connected (now %d)" id count
   ch.Reader
 
 /// Unregister a client and close its channel. Idempotent — safe to call
@@ -201,7 +219,9 @@ let unregisterClient (id: string) =
     ch.Writer.TryComplete() |> ignore
     Instrumentation.devReloadConnectedClients.Add(-1L)
     let remaining = channels.Count
+    Log.debug "[DevReload] Client %s disconnected (now %d)" id remaining
     match remaining > 0 with
     | true -> DevReloadHealthTracker.transition (Active remaining)
     | false -> DevReloadHealthTracker.transition Injected
-  | _ -> ()
+  | _ ->
+    Log.debug "[DevReload] Unregister no-op for unknown client %s" id

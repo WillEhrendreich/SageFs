@@ -454,6 +454,7 @@ module WorkerHttpTransport =
         do! ctx.Response.Body.FlushAsync()
 
         let id = Guid.NewGuid().ToString("N")
+        Log.debug "[SSE] Client %s connecting from %s" id (ctx.Connection.RemoteIpAddress |> Option.ofObj |> Option.map string |> Option.defaultValue "unknown")
 
         do! ctx.Response.Body.WriteAsync(ReadOnlyMemory connectedBytes)
         do! ctx.Response.Body.FlushAsync()
@@ -464,7 +465,9 @@ module WorkerHttpTransport =
         // which caused double-unregister on cancellation. unregisterClient is idempotent
         // (second call is a no-op) but the double-fire is confusing and the IDisposable
         // cleanup is unnecessary when RequestAborted covers all exit paths.
-        use _ = ctx.RequestAborted.Register(fun () -> DevReload.unregisterClient id)
+        use _ = ctx.RequestAborted.Register(fun () ->
+          Log.debug "[SSE] Client %s request aborted" id
+          DevReload.unregisterClient id)
 
         try
           let ct = ctx.RequestAborted
@@ -510,12 +513,12 @@ module WorkerHttpTransport =
         // mid-write, proxies reset connections, or Kestrel's response stream
         // enters an invalid state. Without catching them, the SSE loop dies with
         // a noisy stack trace in the logs.
-        | :? Tasks.TaskCanceledException -> ()
-        | :? OperationCanceledException -> ()
-        | :? IOException -> ()
-        | :? ObjectDisposedException -> ()
-        | :? ArgumentOutOfRangeException -> ()
-        | :? InvalidOperationException -> ()
+        | :? Tasks.TaskCanceledException -> Log.debug "[SSE] Client %s disconnected (task cancelled)" id
+        | :? OperationCanceledException -> Log.debug "[SSE] Client %s disconnected (operation cancelled)" id
+        | :? IOException as ex -> Log.debug "[SSE] Client %s disconnected (IO: %s)" id ex.Message
+        | :? ObjectDisposedException -> Log.debug "[SSE] Client %s disconnected (response disposed)" id
+        | :? ArgumentOutOfRangeException as ex -> Log.debug "[SSE] Client %s write error: %s" id ex.Message
+        | :? InvalidOperationException as ex -> Log.debug "[SSE] Client %s invalid op: %s" id ex.Message
       })) |> ignore
 
       do! app.StartAsync()
