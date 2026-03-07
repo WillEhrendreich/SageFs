@@ -210,6 +210,307 @@ let prioritizationPropertyTests = testList "TestPrioritization properties" [
   )
 ]
 
+// ============================================================
+// Coverage-Weighted + Flaky-Demoted Prioritization Tests
+// ============================================================
+
+let mkFailedResult testId msg dur =
+  mkResult testId (TestResult.Failed (TestFailure.AssertionFailed msg, dur))
+
+let mkPassedResult testId dur =
+  mkResult testId (TestResult.Passed dur)
+
+[<Tests>]
+let coverageWeightedTests = testList "TestPrioritization coverage-weighted" [
+  test "tests covering changed file precede non-covering tests in same tier" {
+    let tc1 = mkTestCase "covers-file" TestFramework.Expecto TestCategory.Unit
+    let tc2 = mkTestCase "no-coverage" TestFramework.Expecto TestCategory.Unit
+    let results = Map.ofList [
+      tc1.Id, mkPassedResult tc1.Id (ts 100.0)
+      tc2.Id, mkPassedResult tc2.Id (ts 50.0)
+    ]
+    let ctx : PrioritizationContext = {
+      LastResults = results
+      CoverageWeights = Map.ofList [ tc1.Id, 5 ]
+      FlakyClassifications = Map.empty
+    }
+    let sorted = TestPrioritization.prioritizeWithContext ctx [| tc2; tc1 |]
+    sorted.[0].FullName
+    |> Expect.equal "covering test first despite being slower" "covers-file"
+    sorted.[1].FullName
+    |> Expect.equal "non-covering test second" "no-coverage"
+  }
+
+  test "higher coverage weight precedes lower within same tier" {
+    let tc1 = mkTestCase "high-coverage" TestFramework.Expecto TestCategory.Unit
+    let tc2 = mkTestCase "low-coverage" TestFramework.Expecto TestCategory.Unit
+    let results = Map.ofList [
+      tc1.Id, mkPassedResult tc1.Id (ts 100.0)
+      tc2.Id, mkPassedResult tc2.Id (ts 50.0)
+    ]
+    let ctx : PrioritizationContext = {
+      LastResults = results
+      CoverageWeights = Map.ofList [ tc1.Id, 10; tc2.Id, 3 ]
+      FlakyClassifications = Map.empty
+    }
+    let sorted = TestPrioritization.prioritizeWithContext ctx [| tc2; tc1 |]
+    sorted.[0].FullName
+    |> Expect.equal "higher coverage first" "high-coverage"
+  }
+
+  test "missing coverage data defaults to weight 0" {
+    let tc1 = mkTestCase "has-coverage" TestFramework.Expecto TestCategory.Unit
+    let tc2 = mkTestCase "no-coverage-data" TestFramework.Expecto TestCategory.Unit
+    let results = Map.ofList [
+      tc1.Id, mkPassedResult tc1.Id (ts 100.0)
+      tc2.Id, mkPassedResult tc2.Id (ts 50.0)
+    ]
+    let ctx : PrioritizationContext = {
+      LastResults = results
+      CoverageWeights = Map.ofList [ tc1.Id, 5 ]
+      FlakyClassifications = Map.empty
+    }
+    let sorted = TestPrioritization.prioritizeWithContext ctx [| tc2; tc1 |]
+    sorted.[0].FullName
+    |> Expect.equal "test with coverage weight runs first" "has-coverage"
+  }
+
+  test "coverage weight does not override tier — failed still before passed with coverage" {
+    let tcFailed = mkTestCase "failed-no-cov" TestFramework.Expecto TestCategory.Unit
+    let tcPassed = mkTestCase "passed-high-cov" TestFramework.Expecto TestCategory.Unit
+    let results = Map.ofList [
+      tcFailed.Id, mkFailedResult tcFailed.Id "bad" (ts 10.0)
+      tcPassed.Id, mkPassedResult tcPassed.Id (ts 10.0)
+    ]
+    let ctx : PrioritizationContext = {
+      LastResults = results
+      CoverageWeights = Map.ofList [ tcPassed.Id, 100 ]
+      FlakyClassifications = Map.empty
+    }
+    let sorted = TestPrioritization.prioritizeWithContext ctx [| tcPassed; tcFailed |]
+    sorted.[0].FullName
+    |> Expect.equal "failed test still first despite no coverage" "failed-no-cov"
+  }
+
+  test "empty coverage weights behaves like legacy prioritize" {
+    let tc1 = mkTestCase "fast-pass" TestFramework.Expecto TestCategory.Unit
+    let tc2 = mkTestCase "slow-pass" TestFramework.Expecto TestCategory.Unit
+    let results = Map.ofList [
+      tc1.Id, mkPassedResult tc1.Id (ts 5.0)
+      tc2.Id, mkPassedResult tc2.Id (ts 500.0)
+    ]
+    let ctx : PrioritizationContext = {
+      LastResults = results
+      CoverageWeights = Map.empty
+      FlakyClassifications = Map.empty
+    }
+    let sorted = TestPrioritization.prioritizeWithContext ctx [| tc2; tc1 |]
+    sorted.[0].FullName |> Expect.equal "fast first" "fast-pass"
+  }
+]
+
+[<Tests>]
+let flakyDemotionTests = testList "TestPrioritization flaky demotion" [
+  test "environmental flaky failure demoted below honest failure" {
+    let tcHonest = mkTestCase "honest-fail" TestFramework.Expecto TestCategory.Unit
+    let tcFlaky = mkTestCase "flaky-fail" TestFramework.Expecto TestCategory.Unit
+    let results = Map.ofList [
+      tcHonest.Id, mkFailedResult tcHonest.Id "real bug" (ts 10.0)
+      tcFlaky.Id, mkFailedResult tcFlaky.Id "timing" (ts 10.0)
+    ]
+    let ctx : PrioritizationContext = {
+      LastResults = results
+      CoverageWeights = Map.empty
+      FlakyClassifications = Map.ofList [
+        tcFlaky.Id, FlakyClassification.Environmental 5
+      ]
+    }
+    let sorted = TestPrioritization.prioritizeWithContext ctx [| tcFlaky; tcHonest |]
+    sorted.[0].FullName
+    |> Expect.equal "honest failure first" "honest-fail"
+  }
+
+  test "property counterexample NOT demoted — stays at tier 0" {
+    let tcProp = mkTestCase "property-fail" TestFramework.Expecto TestCategory.Unit
+    let tcPassed = mkTestCase "passed-test" TestFramework.Expecto TestCategory.Unit
+    let results = Map.ofList [
+      tcProp.Id, mkFailedResult tcProp.Id "FsCheck found counterexample" (ts 10.0)
+      tcPassed.Id, mkPassedResult tcPassed.Id (ts 10.0)
+    ]
+    let ctx : PrioritizationContext = {
+      LastResults = results
+      CoverageWeights = Map.empty
+      FlakyClassifications = Map.ofList [
+        tcProp.Id, FlakyClassification.PropertyCounterexample "input=42"
+      ]
+    }
+    let sorted = TestPrioritization.prioritizeWithContext ctx [| tcPassed; tcProp |]
+    sorted.[0].FullName
+    |> Expect.equal "property counterexample stays at highest priority" "property-fail"
+  }
+
+  test "flaky failure demoted to same tier as passed" {
+    let tcFlaky = mkTestCase "flaky-env" TestFramework.Expecto TestCategory.Unit
+    let tcPassed = mkTestCase "regular-pass" TestFramework.Expecto TestCategory.Unit
+    let results = Map.ofList [
+      tcFlaky.Id, mkFailedResult tcFlaky.Id "timeout" (ts 10.0)
+      tcPassed.Id, mkPassedResult tcPassed.Id (ts 5.0)
+    ]
+    let ctx : PrioritizationContext = {
+      LastResults = results
+      CoverageWeights = Map.empty
+      FlakyClassifications = Map.ofList [
+        tcFlaky.Id, FlakyClassification.Environmental 3
+      ]
+    }
+    let sorted = TestPrioritization.prioritizeWithContext ctx [| tcFlaky; tcPassed |]
+    sorted.[0].FullName
+    |> Expect.equal "faster passed test first (same tier after demotion)" "regular-pass"
+  }
+
+  test "non-flaky classification does not demote" {
+    let tcStable = mkTestCase "stable-fail" TestFramework.Expecto TestCategory.Unit
+    let tcPassed = mkTestCase "passed" TestFramework.Expecto TestCategory.Unit
+    let results = Map.ofList [
+      tcStable.Id, mkFailedResult tcStable.Id "real bug" (ts 10.0)
+      tcPassed.Id, mkPassedResult tcPassed.Id (ts 10.0)
+    ]
+    let ctx : PrioritizationContext = {
+      LastResults = results
+      CoverageWeights = Map.empty
+      FlakyClassifications = Map.ofList [
+        tcStable.Id, FlakyClassification.Stable
+      ]
+    }
+    let sorted = TestPrioritization.prioritizeWithContext ctx [| tcPassed; tcStable |]
+    sorted.[0].FullName
+    |> Expect.equal "stable failure not demoted" "stable-fail"
+  }
+]
+
+[<Tests>]
+let legacyCompatTests = testList "TestPrioritization legacy compat" [
+  test "legacy prioritize gives same results as prioritizeWithContext with empty context" {
+    let cases = [|
+      mkTestCase "passed" TestFramework.Expecto TestCategory.Unit
+      mkTestCase "unknown" TestFramework.Expecto TestCategory.Unit
+      mkTestCase "failed" TestFramework.Expecto TestCategory.Unit
+    |]
+    let results = Map.ofList [
+      (mkTestId "passed" TestFramework.Expecto), mkPassedResult (mkTestId "passed" TestFramework.Expecto) (ts 10.0)
+      (mkTestId "failed" TestFramework.Expecto), mkFailedResult (mkTestId "failed" TestFramework.Expecto) "x" (ts 10.0)
+    ]
+    let legacy = TestPrioritization.prioritize results cases
+    let ctx = PrioritizationContext.fromLastResults results
+    let enhanced = TestPrioritization.prioritizeWithContext ctx cases
+    let legacyOrder = legacy |> Array.map (fun tc -> tc.FullName)
+    let enhancedOrder = enhanced |> Array.map (fun tc -> tc.FullName)
+    enhancedOrder |> Expect.equal "same order as legacy" legacyOrder
+  }
+]
+
+module CoverageWeightedPropertyTestsModule =
+  open FsCheck
+  open FsCheck.FSharp
+
+  type LTResult = SageFs.Features.LiveTesting.TestResult
+
+  [<Tests>]
+  let coverageWeightedPropertyTests = testList "TestPrioritization coverage-weighted properties" [
+    testProperty "coverage-weighted tests precede non-covering in same tier" <| fun () ->
+      let g = gen {
+        let! n = Gen.choose (2, 20)
+        let cases = Array.init n (fun i -> mkTestCase (sprintf "t%d" i) TestFramework.Expecto TestCategory.Unit)
+        let results =
+          cases |> Array.mapi (fun idx tc ->
+            tc.Id, mkPassedResult tc.Id (ts (float (idx + 1) * 10.0))
+          ) |> Map.ofArray
+        let! coveredIdx = Gen.choose (0, n - 1)
+        let! weight = Gen.choose (1, 100)
+        let weights = Map.ofList [ cases.[coveredIdx].Id, weight ]
+        return cases, results, weights, coveredIdx
+      }
+      Prop.forAll (Arb.fromGen g) (fun (cases, results, weights, coveredIdx) ->
+        let ctx : PrioritizationContext = {
+          LastResults = results
+          CoverageWeights = weights
+          FlakyClassifications = Map.empty
+        }
+        let sorted = TestPrioritization.prioritizeWithContext ctx cases
+        let coveredPos = sorted |> Array.findIndex (fun tc -> tc.Id = cases.[coveredIdx].Id)
+        let uncoveredPositions =
+          sorted |> Array.mapi (fun idx tc -> idx, tc)
+          |> Array.filter (fun (_, tc) -> not (Map.containsKey tc.Id weights))
+          |> Array.map fst
+        match uncoveredPositions with
+        | [||] -> true
+        | positions ->
+          let minUncoveredPos = Array.min positions
+          coveredPos < minUncoveredPos
+      )
+
+    testProperty "flaky-environmental never at tier 0" <| fun () ->
+      let g = gen {
+        let! n = Gen.choose (1, 15)
+        let cases = Array.init n (fun i -> mkTestCase (sprintf "t%d" i) TestFramework.Expecto TestCategory.Unit)
+        let results =
+          cases |> Array.map (fun tc ->
+            tc.Id, mkFailedResult tc.Id "flaky" (ts 10.0)
+          ) |> Map.ofArray
+        let! envCount = Gen.choose (1, n)
+        let envClassifications =
+          cases.[0..envCount-1]
+          |> Array.map (fun tc -> tc.Id, FlakyClassification.Environmental 3)
+          |> Map.ofArray
+        return cases, results, envClassifications
+      }
+      Prop.forAll (Arb.fromGen g) (fun (cases, results, flakyMap) ->
+        let ctx : PrioritizationContext = {
+          LastResults = results
+          CoverageWeights = Map.empty
+          FlakyClassifications = flakyMap
+        }
+        TestPrioritization.prioritizeWithContext ctx cases
+        |> Array.forall (fun tc ->
+          match Map.tryFind tc.Id flakyMap with
+          | Some (FlakyClassification.Environmental _) ->
+            match Map.tryFind tc.Id results with
+            | Some runResult ->
+              TestPrioritization.computeTier flakyMap tc.Id runResult.Result > 0
+            | None -> true
+          | _ -> true
+        )
+      )
+
+    testProperty "result count preserved with coverage context" <| fun () ->
+      let g = gen {
+        let! n = Gen.choose (0, 50)
+        let cases = Array.init n (fun i -> mkTestCase (sprintf "t%d" i) TestFramework.Expecto TestCategory.Unit)
+        let! hasCoverage = Gen.elements [true; false]
+        let weights =
+          if hasCoverage then
+            cases |> Array.choose (fun tc ->
+              if abs (tc.FullName.GetHashCode()) % 2 = 0 then Some (tc.Id, abs (tc.FullName.GetHashCode() % 50) + 1)
+              else None
+            ) |> Map.ofArray
+          else Map.empty
+        let results =
+          cases |> Array.map (fun tc ->
+            tc.Id, mkPassedResult tc.Id (ts 10.0)
+          ) |> Map.ofArray
+        return cases, results, weights
+      }
+      Prop.forAll (Arb.fromGen g) (fun (cases, results, weights) ->
+        let ctx : PrioritizationContext = {
+          LastResults = results
+          CoverageWeights = weights
+          FlakyClassifications = Map.empty
+        }
+        let sorted = TestPrioritization.prioritizeWithContext ctx cases
+        sorted.Length = cases.Length
+      )
+  ]
+
 // Assembly Load Diagnostics Tests
 // ============================================================
 

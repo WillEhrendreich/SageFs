@@ -125,6 +125,8 @@
         <Compile Include="HotReloadingPropertyTests.fs" />
         <Compile Include="DevReloadMiddlewareTests.fs" />
         <Compile Include="FlakyClassificationTests.fs" />
+        <Compile Include="Tier0CorrectnessTests.fs" />
+        <Compile Include="FileCoverageTests.fs" />
         <Compile Include="TestRunExplainerTests.fs" />
         <Compile Include="BatchFlusherTests.fs" />
         <Compile Include="Benchmarks.fs" />

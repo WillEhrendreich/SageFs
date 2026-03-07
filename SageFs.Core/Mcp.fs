@@ -1690,6 +1690,76 @@ module McpTools =
         return JsonSerializer.Serialize(resp, liveTestJsonOpts)
     }
 
+  /// Format file-level coverage annotations as JSON for the get_file_coverage MCP tool.
+  /// Pure function: takes FileAnnotations + LiveTestState, returns JSON string.
+  let formatFileCoverageResponse (annotations: Features.LiveTesting.FileAnnotations) (testState: Features.LiveTesting.LiveTestState) : string =
+    let testNameFor (tid: Features.LiveTesting.TestId) =
+      testState.DiscoveredTests
+      |> Array.tryFind (fun dt -> dt.Id = tid)
+      |> Option.map (fun dt -> dt.DisplayName)
+      |> Option.defaultValue (Features.LiveTesting.TestId.value tid)
+    let lines =
+      annotations.CoverageAnnotations
+      |> Array.map (fun ca ->
+        let covered, testCount, health =
+          match ca.Detail with
+          | Features.LiveTesting.CoverageStatus.Covered (cnt, h) ->
+            true, cnt,
+            (match h with
+             | Features.LiveTesting.CoverageHealth.AllPassing -> "AllPassing"
+             | Features.LiveTesting.CoverageHealth.SomeFailing -> "SomeFailing")
+          | Features.LiveTesting.CoverageStatus.NotCovered -> false, 0, "NotCovered"
+          | Features.LiveTesting.CoverageStatus.Pending -> false, 0, "Pending"
+        let branchStr =
+          match ca.BranchCoverage with
+          | Some Features.LiveTesting.LineCoverage.FullyCovered -> "FullyCovered"
+          | Some (Features.LiveTesting.LineCoverage.PartiallyCovered (c, t)) -> sprintf "Partial(%d/%d)" c t
+          | Some Features.LiveTesting.LineCoverage.NotCovered -> "NotCovered"
+          | None -> "Unknown"
+        let coveringTests = ca.CoveringTestIds |> Array.map testNameFor
+        {| Line = ca.Line; EndLine = ca.EndLine; EndColumn = ca.EndColumn
+           Covered = covered; TestCount = testCount; Health = health
+           CoveringTests = coveringTests; BranchCoverage = branchStr |})
+    let coveredCount = lines |> Array.filter (fun l -> l.Covered) |> Array.length
+    let totalCount = lines.Length
+    let pct =
+      match totalCount with
+      | 0 -> 0.0
+      | n -> System.Math.Round(float coveredCount / float n * 100.0, 1)
+    let resp = {|
+      FilePath = annotations.FilePath
+      Lines = lines
+      Summary = {|
+        CoveredLines = coveredCount
+        TotalLines = totalCount
+        CoveragePercent = pct
+      |}
+    |}
+    JsonSerializer.Serialize(resp, liveTestJsonOpts)
+
+  /// MCP tool: get per-line coverage data for a specific file.
+  /// Resolves partial file paths, then computes line-level coverage from
+  /// instrumentation bitmaps + dep graph fallback.
+  let getFileCoverage (ctx: McpContext) (filePath: string) : Task<string> =
+    task {
+      match ctx.GetElmModel with
+      | None -> return "File coverage not available — Elm loop not started."
+      | Some getModel ->
+        let model = getModel ()
+        let cycleState = model.LiveTesting
+        let testState = cycleState.TestState
+        let resolvedPath =
+          Features.LiveTesting.FileAnnotations.resolveFilePath
+            filePath testState.StatusEntries cycleState.InstrumentationMaps
+        match resolvedPath with
+        | None ->
+          let resp = {| FilePath = filePath; Error = "File not found in test sources or instrumentation maps" |}
+          return JsonSerializer.Serialize(resp, liveTestJsonOpts)
+        | Some fullPath ->
+          let annotations = Features.LiveTesting.FileAnnotations.projectWithCoverage fullPath cycleState
+          return formatFileCoverageResponse annotations testState
+    }
+
   type FailedTestInfo = {
     Name: string
     Message: string
@@ -1703,6 +1773,7 @@ module McpTools =
     | TimedOut of passed: int * failed: int * running: int * total: int * failures: FailedTestInfo list * runningNames: string list
     | Disabled
     | NoTestsMatched of totalDiscovered: int
+    | AlreadyRunning
 
   module RunTestsResult =
     let formatFailures (failures: FailedTestInfo list) =
@@ -1753,16 +1824,19 @@ module McpTools =
         "Live testing is disabled. Toggle it on first."
       | NoTestsMatched totalDiscovered ->
         sprintf "No tests matched. Total discovered: %d." totalDiscovered
+      | AlreadyRunning ->
+        "⚠️ A test run is already in progress. Wait for it to complete or check status with get_live_test_status."
 
   let collectResults
     (entries: Features.LiveTesting.TestStatusEntry array)
     (triggeredSet: Set<Features.LiveTesting.TestId>)
     (flakyHistory: Map<Features.LiveTesting.TestId, Features.LiveTesting.ResultWindow>)
-    : int * int * int * FailedTestInfo list * string list =
+    : int * int * int * int * FailedTestInfo list * string list =
     let mutable passed = 0
     let mutable failed = 0
     let mutable running = 0
     let mutable skipped = 0
+    let mutable stale = 0
     let failures = System.Collections.Generic.List<FailedTestInfo>()
     let runningNames = System.Collections.Generic.List<string>()
     for e in entries do
@@ -1796,9 +1870,9 @@ module McpTools =
         | Features.LiveTesting.TestRunStatus.Queued ->
           running <- running + 1
           runningNames.Add (sprintf "%s (queued)" e.DisplayName)
-        | Features.LiveTesting.TestRunStatus.Stale -> skipped <- skipped + 1
+        | Features.LiveTesting.TestRunStatus.Stale -> stale <- stale + 1
       | false -> ()
-    (passed + skipped, failed, running, failures |> Seq.toList, runningNames |> Seq.toList)
+    (passed + skipped, failed, running, stale, failures |> Seq.toList, runningNames |> Seq.toList)
 
   let pollForTestCompletion
     (getModel: unit -> SageFsModel)
@@ -1812,7 +1886,7 @@ module McpTools =
       let entries = model.LiveTesting.TestState.StatusEntries
       let triggeredSet = Set.ofArray triggeredTestIds
       let flakyHistory = model.LiveTesting.TestState.FlakyHistory
-      let (p, f, _, failures, _) = collectResults entries triggeredSet flakyHistory
+      let (p, f, _, _stale, failures, _) = collectResults entries triggeredSet flakyHistory
       Task.FromResult (Completed (p, f, total, failures))
     | false ->
       task {
@@ -1823,8 +1897,8 @@ module McpTools =
           let model = getModel ()
           let entries = model.LiveTesting.TestState.StatusEntries
           let flakyHistory = model.LiveTesting.TestState.FlakyHistory
-          let (p, f, r, failures, _) = collectResults entries triggeredSet flakyHistory
-          match p + f >= total with
+          let (p, f, r, stale, failures, _) = collectResults entries triggeredSet flakyHistory
+          match p + f + stale >= total with
           | true ->
             result <- Some (Completed (p, f, total, failures))
           | false ->
@@ -1835,7 +1909,7 @@ module McpTools =
           let model = getModel ()
           let entries = model.LiveTesting.TestState.StatusEntries
           let flakyHistory = model.LiveTesting.TestState.FlakyHistory
-          let (p, f, r, failures, runningNames) = collectResults entries triggeredSet flakyHistory
+          let (p, f, r, _stale, failures, runningNames) = collectResults entries triggeredSet flakyHistory
           return TimedOut (p, f, r, total, failures, runningNames)
       }
 
@@ -1855,6 +1929,11 @@ module McpTools =
       | true ->
         Task.FromResult (RunTestsResult.format Disabled)
       | false ->
+        // Guard: prevent overlapping test runs (MCP retry can trigger double dispatch)
+        match Features.LiveTesting.TestRunPhase.isAnyRunning state.RunPhases with
+        | true ->
+          Task.FromResult (RunTestsResult.format AlreadyRunning)
+        | false ->
         let category =
           match categoryFilter with
           | Some c ->

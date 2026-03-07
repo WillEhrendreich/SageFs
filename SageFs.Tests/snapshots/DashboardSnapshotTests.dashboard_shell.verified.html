@@ -1,36 +1,14 @@
 ﻿<html><head><title>SageFs Dashboard</title><script>
     (function() {
-      var origFetch = window.fetch, pollTimer = null;
-      function showProblem(text) {
-        var b = document.getElementById('server-status');
-        if (b) { b.className = 'conn-banner conn-disconnected'; b.textContent = text; b.style.display = ''; }
-        startPolling();
-      }
-      function hideBanner() {
-        var b = document.getElementById('server-status');
-        if (b) { b.style.display = 'none'; }
-        stopPolling();
-      }
-      function startPolling() {
-        if (pollTimer) return;
-        pollTimer = setInterval(function() {
-          origFetch('/api/daemon-info').then(function(r) {
-            if (r.ok) hideBanner();
-          }).catch(function() {});
-        }, 2000);
-      }
-      function stopPolling() {
-        if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
-      }
+      var origFetch = window.fetch;
       window.fetch = function(url) {
-        var isStream = typeof url === 'string' && url.indexOf('/dashboard/stream') !== -1;
         var p = origFetch.apply(this, arguments);
-        if (isStream) {
+        if (typeof url === 'string' && url.indexOf('/dashboard/stream') !== -1) {
+          var b = document.getElementById('server-status');
           p.then(function(resp) {
-            if (resp.ok) hideBanner();
-            else showProblem('\u274c Server error (' + resp.status + ')');
+            if (b) { b.style.display = resp.ok ? 'none' : ''; b.textContent = resp.ok ? '' : '\u274c Server error (' + resp.status + ')'; if (!resp.ok) b.className = 'conn-banner conn-disconnected'; }
           }).catch(function() {
-            showProblem('\u274c Server disconnected \u2014 waiting for reconnect...');
+            if (b) { b.className = 'conn-banner conn-disconnected'; b.textContent = '\u274c Server disconnected \u2014 reconnecting...'; b.style.display = ''; }
           });
         }
         return p;

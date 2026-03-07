@@ -393,3 +393,14 @@ via the dependency graph, along with their last result status. Use to understand
     ) : Task<string> =
         logger.LogDebug("MCP-TOOL: query_test_coverage called, symbol={Symbol}", symbol)
         queryTestCoverage ctx symbol |> withEcho "query_test_coverage"
+
+    [<McpServerTool>]
+    [<Description("""Get per-line coverage data for a specific file. Returns JSON with line-level coverage annotations
+including which tests cover each line, coverage health (AllPassing/SomeFailing), and branch coverage detail.
+Accepts full or partial file paths. Uses instrumentation bitmaps when available, falls back to dependency graph synthesis.""")>]
+    member _.get_file_coverage(
+        [<Description("File path to get coverage for. Accepts full path or partial (e.g. 'MyModule.fs')")>]
+        file: string
+    ) : Task<string> =
+        logger.LogDebug("MCP-TOOL: get_file_coverage called, file={File}", file)
+        getFileCoverage ctx file |> withEcho "get_file_coverage"
