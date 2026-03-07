@@ -72,9 +72,6 @@ let main _argv =
     let time = Raylib.GetTime() |> float32
 
     Raylib.BeginDrawing()
-    // IMPORTANT: ClearBackground MUST be called inside BeginDrawing/EndDrawing.
-    // BeginDrawing() sets up the render state but does NOT clear the framebuffer.
-    // Without ClearBackground(), previous frame content persists → smearing artifacts.
     drawFrame time
     Raylib.EndDrawing()
 

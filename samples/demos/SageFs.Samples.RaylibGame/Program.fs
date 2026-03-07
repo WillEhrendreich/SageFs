@@ -155,9 +155,6 @@ let main _argv =
             GameOver = gameOver }
 
     Raylib.BeginDrawing()
-    // ClearBackground is called inside drawGame — required every frame.
-    // BeginDrawing() sets up the render state but does NOT clear the framebuffer.
-    // Skipping it means the previous frame persists beneath the new one.
     drawGame state
     Raylib.EndDrawing()
 
