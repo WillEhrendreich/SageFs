@@ -67,7 +67,8 @@ module SessionDisplay =
   let displayStatus (now: DateTime) (info: SessionInfo) : SessionDisplayStatus =
     match info.Status with
     | SessionStatus.Ready
-    | SessionStatus.Evaluating ->
+    | SessionStatus.Evaluating
+    | SessionStatus.Building _ ->
       match now - info.LastActivity > staleDuration with
       | true -> SessionDisplayStatus.Stale
       | false -> SessionDisplayStatus.Running

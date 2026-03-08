@@ -1128,6 +1128,7 @@ module SageFsEffectHandler =
         | SessionStatus.Ready -> SessionDisplayStatus.Running
         | SessionStatus.Starting -> SessionDisplayStatus.Starting
         | SessionStatus.Evaluating -> SessionDisplayStatus.Running
+        | SessionStatus.Building _ -> SessionDisplayStatus.Running
         | SessionStatus.Faulted -> SessionDisplayStatus.Errored "faulted"
         | SessionStatus.Restarting -> SessionDisplayStatus.Restarting
         | SessionStatus.Stopped -> SessionDisplayStatus.Suspended

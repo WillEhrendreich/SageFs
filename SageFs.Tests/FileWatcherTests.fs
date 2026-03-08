@@ -235,4 +235,39 @@ let fileWatcherTests =
           |> Flip.Expect.equal "should ignore" FileChangeAction.Ignore
       ]
     ]
+
+    // Buffer overflow recovery
+    // When a FileSystemWatcher buffer overflows the Error event fires.
+    // The handler synthesises a .fsproj change so the caller triggers a SoftReset —
+    // the safest recovery when we don't know which specific files changed.
+    testList "buffer overflow recovery" [
+      testCase "synthetic .fsproj overflow change maps to SoftReset" <| fun () ->
+        // The overflow handler creates a change with a .fsproj path.
+        // Verify that fileChangeAction correctly routes it to SoftReset.
+        let overflowChange = {
+          FilePath = @"C:\Code\SomeProject\__overflow_recovery__.fsproj"
+          Kind = FileChangeKind.Changed
+          Timestamp = System.DateTimeOffset.UtcNow
+        }
+        overflowChange
+        |> fileChangeAction
+        |> Flip.Expect.equal "overflow recovery change should trigger SoftReset" FileChangeAction.SoftReset
+
+      testCase "real .fsproj overflow change maps to SoftReset" <| fun () ->
+        // The overflow handler uses the real .fsproj path when found by Directory.GetFiles.
+        let overflowChange = {
+          FilePath = @"C:\Code\SomeProject\SomeProject.fsproj"
+          Kind = FileChangeKind.Changed
+          Timestamp = System.DateTimeOffset.UtcNow
+        }
+        overflowChange
+        |> fileChangeAction
+        |> Flip.Expect.equal "real fsproj overflow should trigger SoftReset" FileChangeAction.SoftReset
+
+      testCase "shouldTriggerRebuild accepts overflow recovery path" <| fun () ->
+        // Ensure the synthetic path passes shouldTriggerRebuild so it reaches the callback.
+        let config = defaultWatchConfig [@"C:\Code\SomeProject"]
+        shouldTriggerRebuild config @"C:\Code\SomeProject\__overflow_recovery__.fsproj"
+        |> Flip.Expect.isTrue "overflow recovery path should pass shouldTriggerRebuild"
+    ]
   ]

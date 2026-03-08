@@ -234,6 +234,34 @@ let workerProtocolTests =
         result |> Expect.equal "should round-trip" resp
     ]
 
+    testList "SessionStatus.Building" [
+      testCase "label renders reason" <| fun () ->
+        SessionStatus.label (SessionStatus.Building "dotnet build")
+        |> Flip.Expect.equal "label should include reason" "Building (dotnet build)"
+
+      testCase "toSessionState maps to Evaluating" <| fun () ->
+        SessionStatus.toSessionState (SessionStatus.Building "compiling")
+        |> Flip.Expect.equal "Building maps to Evaluating" SessionState.Evaluating
+
+      testCase "isAlive returns true" <| fun () ->
+        SessionStatus.isAlive (SessionStatus.Building "compiling")
+        |> Flip.Expect.isTrue "Building session is alive"
+
+      testCase "isOperational returns false" <| fun () ->
+        SessionStatus.isOperational (SessionStatus.Building "compiling")
+        |> Flip.Expect.isFalse "Building session cannot accept new work"
+
+      testCase "parse round-trips Building reason" <| fun () ->
+        let label = SessionStatus.label (SessionStatus.Building "recompiling")
+        SessionStatus.parse label
+        |> Flip.Expect.equal "should round-trip" (Ok (SessionStatus.Building "recompiling"))
+
+      testCase "parse returns Error for unknown status" <| fun () ->
+        match SessionStatus.parse "Teleporting" with
+        | Error _ -> ()
+        | Ok v -> failwithf "Expected Error but got Ok %A" v
+    ]
+
     testList "SessionInfo" [
 
       testCase "displayName uses solution root directory name"

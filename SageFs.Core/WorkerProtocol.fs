@@ -28,6 +28,9 @@ module WorkerProtocol =
     | Starting
     | Ready
     | Evaluating
+    /// Worker is running a dotnet build or similar multi-second compilation step.
+    /// Sets "Building…" status in the UI so the tool doesn't appear hung.
+    | Building of buildReason: string
     | Faulted
     | Restarting
     | Stopped
@@ -37,15 +40,18 @@ module WorkerProtocol =
       | SessionStatus.Starting -> "Starting"
       | SessionStatus.Ready -> "Ready"
       | SessionStatus.Evaluating -> "Evaluating"
+      | SessionStatus.Building reason -> sprintf "Building (%s)" reason
       | SessionStatus.Faulted -> "Faulted"
       | SessionStatus.Restarting -> "Restarting"
       | SessionStatus.Stopped -> "Stopped"
 
     /// Convert to SessionState for affordance checking.
+    /// Building counts as Evaluating — the session is busy but accepting status queries.
     let toSessionState = function
       | SessionStatus.Starting -> SessionState.WarmingUp
       | SessionStatus.Ready -> SessionState.Ready
       | SessionStatus.Evaluating -> SessionState.Evaluating
+      | SessionStatus.Building _ -> SessionState.Evaluating
       | SessionStatus.Faulted -> SessionState.Faulted
       | SessionStatus.Restarting -> SessionState.WarmingUp
       | SessionStatus.Stopped -> SessionState.Faulted
@@ -57,6 +63,9 @@ module WorkerProtocol =
       | "Faulted" -> Result.Ok SessionStatus.Faulted
       | "Restarting" -> Result.Ok SessionStatus.Restarting
       | "Stopped" -> Result.Ok SessionStatus.Stopped
+      | s when s.StartsWith("Building (", StringComparison.Ordinal) ->
+        let reason = s.[10 .. s.Length - 2]
+        Result.Ok (SessionStatus.Building reason)
       | unknown -> Result.Error (sprintf "Unknown session status: '%s'" unknown)
 
     /// Can accept new work?
@@ -67,7 +76,8 @@ module WorkerProtocol =
     /// Alive (not stopped or faulted)?
     let isAlive = function
       | SessionStatus.Starting | SessionStatus.Ready
-      | SessionStatus.Evaluating | SessionStatus.Restarting -> true
+      | SessionStatus.Evaluating | SessionStatus.Building _
+      | SessionStatus.Restarting -> true
       | SessionStatus.Faulted | SessionStatus.Stopped -> false
 
   [<RequireQualifiedAccess>]

@@ -92,7 +92,8 @@ type DaemonInfra = {
   DashboardFetchTimeoutSec: float
 }
 
-/// Fire-and-forget event append — logs errors but doesn't block the caller.
+/// Event append — returns the Task so callers can await on critical paths (e.g. shutdown).
+/// Non-critical callers may discard the Task; it logs errors internally.
 let appendEventsAsync (infra: DaemonInfra) (events: Features.Events.SageFsEvent list) =
   System.Threading.Tasks.Task.Run(fun () ->
     task {
@@ -101,8 +102,8 @@ let appendEventsAsync (infra: DaemonInfra) (events: Features.Events.SageFsEvent 
       | Error err ->
         match err.Contains("duplicate key") || err.Contains("version") with
         | true -> infra.Log.LogDebug("Audit trail append skipped (already exists): {Error}", err)
-        | false -> infra.Log.LogWarning("Fire-and-forget event append failed: {Error}", err)
-    } :> System.Threading.Tasks.Task) |> ignore
+        | false -> infra.Log.LogWarning("Event append failed: {Error}", err)
+    } :> System.Threading.Tasks.Task)
 
 /// Create one-time daemon infrastructure (logger, HTTP client, persistence, CTS).
 let createDaemonInfrastructure () : DaemonInfra =
@@ -415,7 +416,7 @@ let performGracefulShutdown
   (getModel: unit -> SageFsModel)
   (persistence: SageFs.EventStore.EventPersistence)
   (daemonStreamId: string)
-  (appendEventsAsync: Features.Events.SageFsEvent list -> unit)
+  (appendEventsAsync: Features.Events.SageFsEvent list -> System.Threading.Tasks.Task)
   (sessionManager: MailboxProcessor<SessionManager.SessionCommand>)
   =
   // Save test cache for each unique project set
@@ -443,11 +444,17 @@ let performGracefulShutdown
       1L, System.Collections.Generic.KeyValuePair("format", box "sfm1"))
     log.LogWarning("Failed to save session manifest: {Error}", err)
 
-  for info in activeSessions do
-    appendEventsAsync [
-      Features.Events.SageFsEvent.DaemonSessionStopped
-        {| SessionId = info.Id; StoppedAt = DateTimeOffset.UtcNow |}
-    ]
+  // Append shutdown events and await them before stopping workers.
+  // EventStore is currently noop so this completes immediately;
+  // when real persistence is re-enabled the await ensures events are flushed.
+  let appendTasks =
+    activeSessions
+    |> List.map (fun info ->
+      appendEventsAsync [
+        Features.Events.SageFsEvent.DaemonSessionStopped
+          {| SessionId = info.Id; StoppedAt = DateTimeOffset.UtcNow |}
+      ])
+  System.Threading.Tasks.Task.WhenAll(appendTasks).Wait(System.TimeSpan.FromSeconds 5.0) |> ignore
   // Stop all workers with a timeout
   let stopTask =
     sessionManager.PostAndAsyncReply(fun reply ->
@@ -762,7 +769,7 @@ let resumePreviousSessions
       appendEventsAsync [
         Features.Events.SageFsEvent.DaemonSessionStopped
           {| SessionId = staleId; StoppedAt = DateTimeOffset.UtcNow |}
-      ]
+      ] |> ignore
     match prunedCount > 0 with
     | true -> Instrumentation.daemonDuplicatesPruned.Add(int64 prunedCount)
     | false -> ()
@@ -809,7 +816,7 @@ let resumePreviousSessions
         | Ok info ->
           Instrumentation.daemonSessionsResumed.Add(1L)
           // Stop the OLD session ID so it doesn't resurrect on next restart
-          appendEventsAsync [
+          do! appendEventsAsync [
             Features.Events.SageFsEvent.DaemonSessionStopped
               {| SessionId = prev.SessionId; StoppedAt = DateTimeOffset.UtcNow |}
           ]
@@ -995,7 +1002,7 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
       (fun sid -> stateChangedEvent.Trigger (SessionReady sid))
       (fun sid progress -> onWarmupProgressCallback sid progress)
 
-  let sessionOps = createSessionOps sessionManager readSnapshot appendEventsAsync
+  let sessionOps = createSessionOps sessionManager readSnapshot (fun events -> appendEventsAsync events |> ignore)
 
   let noResume = flags.NoResume
 

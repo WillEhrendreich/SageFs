@@ -179,7 +179,26 @@ let start
           watcher.Deleted.Add(handler FileChangeKind.Deleted)
           watcher.Renamed.Add(fun e -> handler FileChangeKind.Renamed e)
           watcher.Error.Add(fun e ->
-            Log.warn "[FileWatcher] Buffer overflow in %s — events may have been lost. Cause: %s" dir (e.GetException().Message))
+            let ex = e.GetException()
+            Log.warn "[FileWatcher] Buffer overflow in %s — events may have been lost. Triggering recovery soft-reset. Cause: %s" dir ex.Message
+            // On buffer overflow we cannot know which files changed, so synthesise a project-level
+            // SoftReset event to bring FSI back in sync with the file system.
+            // We use the real .fsproj path if one exists; a synthetic path otherwise — fileChangeAction
+            // routes any .fsproj change to FileChangeAction.SoftReset regardless of file existence.
+            let recoveryPath =
+              try
+                Directory.GetFiles(dir, "*.fsproj", SearchOption.TopDirectoryOnly)
+                |> Array.tryHead
+                |> Option.defaultValue (Path.Combine(dir, "__overflow_recovery__.fsproj"))
+              with _ -> Path.Combine(dir, "__overflow_recovery__.fsproj")
+            let recoveryChange = {
+              FilePath = recoveryPath
+              Kind = FileChangeKind.Changed
+              Timestamp = DateTimeOffset.UtcNow
+            }
+            lock lockObj (fun () ->
+              pendingChanges <- recoveryChange :: (pendingChanges |> List.filter (fun c -> c.FilePath <> recoveryChange.FilePath))
+              timer.Change(config.DebounceMs, Threading.Timeout.Infinite) |> ignore))
           watcher.EnableRaisingEvents <- true
           Log.info "FileWatcher started for %s with %d filters, buffer=%dKB: %A" dir watcher.Filters.Count (watcher.InternalBufferSize / 1024) (Seq.toList watcher.Filters)
           Some (watcher :> IDisposable)
