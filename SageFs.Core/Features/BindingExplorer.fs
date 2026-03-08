@@ -76,13 +76,14 @@ let buildScopeSnapshot (cells: CellInput list) : BindingScopeSnapshot =
   let withRefs =
     withShadows
     |> List.map (fun binding ->
-      // W6(R9): Use word-boundary regex to avoid false positives from substring matching.
-      // String.Contains("x") would match "maxValue", "hexString", etc.
-      let pattern = @"\b" + Regex.Escape(binding.Name) + @"\b"
+      // W13(R10): Pre-compile regex ONCE per binding, outside the cells inner loop.
+      // Regex.IsMatch(string, string) uses a 15-slot static LRU cache; with >15 bindings
+      // the cache thrashes causing recompilation per match. Compile once here instead.
+      let re = Regex(@"\b" + Regex.Escape(binding.Name) + @"\b")
       let refs =
         cells
         |> List.choose (fun cell ->
-          if cell.CellIndex <> binding.CellIndex && Regex.IsMatch(cell.Source, pattern) then
+          if cell.CellIndex <> binding.CellIndex && re.IsMatch(cell.Source) then
             Some cell.CellIndex
           else None)
       { binding with ReferencedIn = refs })

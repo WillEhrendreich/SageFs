@@ -48,7 +48,11 @@ let percentile (pct: float) (state: TimelineState) : float option =
       state.Entries
       |> List.map (fun e -> float e.DurationMs)
       |> List.sort
-    let idx = int (float (sorted.Length - 1) * pct / 100.0)
+    // W16(R10): Use rounding not truncation. int(0.99) = 0 (wrong for n=2 P99).
+    // Math.Round gives the nearest-rank result; guards clamp against out-of-range pct.
+    let idx =
+      System.Math.Round(float (sorted.Length - 1) * pct / 100.0)
+      |> int |> max 0 |> min (sorted.Length - 1)
     Some sorted.[idx]
 
 type TimelineStats = {

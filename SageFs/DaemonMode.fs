@@ -325,6 +325,41 @@ let buildReplayState (readSnapshot: unit -> SessionManager.QuerySnapshot) (activ
       activeSessions |> List.map (fun s -> s.Id, toRecord s) |> Map.ofList
     Features.Replay.DaemonReplayState.ActiveSessionId = activeSessionId }
 
+/// W10(R10): Shared manifest merge logic used by both periodic save and graceful shutdown.
+/// Loads the existing manifest from disk (if any), preserves previously-stopped sessions
+/// with their original StoppedAt, stamps currently-active sessions with `stampActive`, and
+/// adds new sessions (in live snapshot but not yet in manifest).
+/// `stampActive`: if Some now → stamp active sessions as stopped (shutdown path)
+///                if None → leave active sessions' StoppedAt = None (periodic save path)
+let mergeManifestWithExisting
+  (readSnapshot: unit -> SessionManager.QuerySnapshot)
+  (activeSessionId: string option)
+  (stampActive: DateTimeOffset option) =
+  let activeSessions = SessionManager.QuerySnapshot.allSessions (readSnapshot())
+  let activeSessionIds = activeSessions |> List.map (fun s -> s.Id) |> Set.ofList
+  let existingManifest =
+    match Features.DaemonPersistence.loadManifest DaemonState.SageFsDir with
+    | Ok m -> m
+    | Error _ -> buildReplayState readSnapshot activeSessionId
+  let mergedSessions =
+    existingManifest.Sessions
+    |> Map.map (fun sid (r: Features.Replay.DaemonSessionRecord) ->
+      match activeSessionIds.Contains(sid), stampActive with
+      | true, Some ts -> { r with StoppedAt = Some ts }   // active now → stamp if shutting down
+      | true, None    -> r                                 // active → keep running (periodic)
+      | false, _      -> r)                               // already stopped → preserve original
+  let replayStateBase = buildReplayState readSnapshot activeSessionId
+  let newSessions =
+    replayStateBase.Sessions
+    |> Map.filter (fun sid _ -> not (mergedSessions.ContainsKey(sid)))
+    |> Map.map (fun _ r ->
+      match stampActive with
+      | Some ts -> { r with StoppedAt = Some ts }
+      | None    -> r)
+  { existingManifest with
+      Sessions = Map.fold (fun acc k v -> Map.add k v acc) mergedSessions newSessions
+      ActiveSessionId = activeSessionId }
+
 /// Get session state from CQRS snapshot.
 let getSessionStateFromSnapshot (readSnapshot: unit -> SessionManager.QuerySnapshot) (sid: string) =
   match String.IsNullOrEmpty(sid) with
@@ -482,36 +517,11 @@ let performGracefulShutdown
       log.LogWarning("Failed to save test cache: {Error}", err)
 
   // Persist session manifest for binary-first resume
-  // W4(R9): Load existing manifest first so previously-stopped sessions (with their original
-  // StoppedAt timestamps) are preserved in the 7-day history window.
-  // buildReplayState only sees currently-active sessions; it drops all stopped history.
+  // W4(R9) + W10(R10): Use mergeManifestWithExisting shared helper — loads existing manifest,
+  // preserves stopped sessions' original StoppedAt, stamps active sessions as stopped now.
   let activeSessionId = (getModel()).Sessions.ActiveSessionId |> ActiveSession.sessionId
   let now = DateTimeOffset.UtcNow
-  let activeSessionIds =
-    activeSessions
-    |> List.map (fun s -> s.Id)
-    |> Set.ofList
-  let existingManifest =
-    match Features.DaemonPersistence.loadManifest DaemonState.SageFsDir with
-    | Ok m -> m
-    | Error _ -> buildReplayState readSnapshot activeSessionId  // fallback: no prior manifest
-  // Merge: stamp active sessions as stopped now; preserve stopped sessions' original StoppedAt.
-  let mergedSessions =
-    existingManifest.Sessions
-    |> Map.map (fun sid (r: Features.Replay.DaemonSessionRecord) ->
-      match activeSessionIds.Contains(sid) with
-      | true -> { r with StoppedAt = Some now }   // active now → stopping
-      | false -> r)                                // already stopped → keep original StoppedAt
-  // Add any active sessions not yet in the manifest (new sessions created since last save).
-  let replayStateBase = buildReplayState readSnapshot activeSessionId
-  let newSessions =
-    replayStateBase.Sessions
-    |> Map.filter (fun sid _ -> not (mergedSessions.ContainsKey(sid)))
-    |> Map.map (fun _ r -> { r with StoppedAt = Some now })
-  let replayState =
-    { existingManifest with
-        Sessions = Map.fold (fun acc k v -> Map.add k v acc) mergedSessions newSessions
-        ActiveSessionId = activeSessionId }
+  let replayState = mergeManifestWithExisting readSnapshot activeSessionId (Some now)
   match Features.DaemonPersistence.saveManifest DaemonState.SageFsDir replayState with
   | Ok path -> log.LogInformation("Saved session manifest to {Path}", path)
   | Error err ->
@@ -643,7 +653,10 @@ let periodicCacheSave
         sw.Elapsed.TotalMilliseconds,
         System.Collections.Generic.KeyValuePair("coverage_entries", box (int64 model.LiveTesting.TestState.TestCoverageBitmaps.Count)),
         System.Collections.Generic.KeyValuePair("result_entries", box (int64 model.LiveTesting.TestState.LastResults.Count)))
-      lastSavedGeneration.Value <- gen
+      // W11(R10): Volatile.Write ensures the store is visible across threads.
+      // The one-shot timer prevents concurrent runs, but Volatile is still needed to
+      // ensure the next invocation reads the updated value (not a register-cached copy).
+      System.Threading.Volatile.Write(&lastSavedGeneration.contents, gen)
     | false -> ()
   with ex ->
     Instrumentation.periodicTaskErrors.Add(
@@ -654,7 +667,10 @@ let periodicCacheSave
 let periodicManifestSave (log: ILogger) (readSnapshot: unit -> SessionManager.QuerySnapshot) (getModel: unit -> SageFsModel) =
   try
     let activeSessionId = (getModel()).Sessions.ActiveSessionId |> ActiveSession.sessionId
-    let replayState = buildReplayState readSnapshot activeSessionId
+    // W10(R10): Use mergeManifestWithExisting (same as shutdown) so stopped sessions
+    // are not erased on every 60-second tick. stampActive = None keeps active sessions
+    // with StoppedAt = None (they're still running).
+    let replayState = mergeManifestWithExisting readSnapshot activeSessionId None
     match Features.DaemonPersistence.saveManifest DaemonState.SageFsDir replayState with
     | Ok path -> log.LogDebug("Periodic manifest save to {Path}", path)
     | Error err ->
@@ -841,11 +857,15 @@ let resumePreviousSessions
     let keptIds =
       uniqueByDir |> List.map (fun r -> r.SessionId) |> Set.ofList
     let prunedCount = (Set.difference staleIds keptIds).Count
-    for staleId in Set.difference staleIds keptIds do
-      appendEventsAsync [
-        Features.Events.SageFsEvent.DaemonSessionStopped
-          {| SessionId = staleId; StoppedAt = DateTimeOffset.UtcNow |}
-      ] |> ignore
+    // W14(R10): Collect and await dedup stop-event tasks — matches the shutdown path pattern.
+    // Previously |> ignore discarded the Task; if EventStore gains real persistence,
+    // those stop events for pruned sessions would be silently lost on write failures.
+    let pruneTasks =
+      [ for staleId in Set.difference staleIds keptIds do
+          yield appendEventsAsync [
+            Features.Events.SageFsEvent.DaemonSessionStopped
+              {| SessionId = staleId; StoppedAt = DateTimeOffset.UtcNow |} ] ]
+    System.Threading.Tasks.Task.WhenAll(pruneTasks).Wait(System.TimeSpan.FromSeconds 5.0) |> ignore
     match prunedCount > 0 with
     | true -> Instrumentation.daemonDuplicatesPruned.Add(int64 prunedCount)
     | false -> ()
@@ -1122,7 +1142,8 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
   // Wire warmup progress from SessionManager → Elm model (per-namespace granularity)
   onWarmupProgressCallback <- handleWarmupProgress elmRuntime.Dispatch
 
-  // Shared binding scope snapshot — written by MCP server, read by dashboard
+  // W12(R10): Use Volatile.Read/Write to ensure MCP-thread writes are visible to HTTP-thread
+  // readers without data races. Plain ref cell field access has no memory barrier on ARM.
   let sharedBindingScope : SageFs.Features.BindingExplorer.BindingScopeSnapshot option ref = ref None
 
   // Start MCP server
@@ -1148,12 +1169,26 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
 
   // Periodic test cache save — crash recovery for test results.
   // Fires every 60s, only writes when RunGeneration has advanced since last save.
+  // W11(R10): Use a one-shot timer that reschedules AFTER completion to prevent reentrancy.
+  // A periodic timer with System.Threading.Timer fires on ThreadPool; if the callback takes
+  // >60s, two threads both write to the same .tmp file → corrupt save file.
+  // One-shot semantics: the next tick is scheduled only after the current tick finishes.
   let lastSavedGeneration = ref 0
-  let cacheSaveTimer = new System.Threading.Timer(
-    System.Threading.TimerCallback(fun _ ->
+  let mutable cacheSaveTimerRef : System.Threading.Timer = Unchecked.defaultof<_>
+  let cacheSaveCallback _ =
+    try
       periodicCacheSave log readSnapshot elmRuntime.GetModel lastSavedGeneration
-      periodicManifestSave log readSnapshot elmRuntime.GetModel),
-    null, 60_000, 60_000)
+      periodicManifestSave log readSnapshot elmRuntime.GetModel
+    finally
+      // Reschedule for the next period only after this run finishes — prevents concurrent runs.
+      if not (isNull cacheSaveTimerRef) then
+        cacheSaveTimerRef.Change(60_000, System.Threading.Timeout.Infinite) |> ignore
+  let cacheSaveTimer =
+    let t = new System.Threading.Timer(
+      System.Threading.TimerCallback(cacheSaveCallback),
+      null, 60_000, System.Threading.Timeout.Infinite)
+    cacheSaveTimerRef <- t
+    t
 
   // Live testing file watcher — monitors *.fs and *.fsx changes
   let liveTestWatcher, liveTestDebounceTimer = createLiveTestWatcher workingDir elmRuntime.Dispatch
@@ -1246,7 +1281,7 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
         Features.LiveTesting.LiveTestState.statusEntriesForSession sessionId state
       Features.LiveTesting.TestTreemap.fromStatusEntries entries
     GetSessionBindings = fun sessionId ->
-      match sharedBindingScope.Value with
+      match System.Threading.Volatile.Read(&sharedBindingScope.contents) with
       | Some scope ->
         let activeId =
           SageFs.ActiveSession.sessionId (elmRuntime.GetModel().Sessions.ActiveSessionId)
@@ -1257,7 +1292,7 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
           |> Map.values |> Array.ofSeq
         | false -> [||]
       | None -> [||]
-    GetBindingScopeSnapshot = fun () -> sharedBindingScope.Value
+    GetBindingScopeSnapshot = fun () -> System.Threading.Volatile.Read(&sharedBindingScope.contents)
     GetLiveTestingStatus = fun () ->
       let model = elmRuntime.GetModel()
       let activeId =
@@ -1442,8 +1477,8 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
                   cachedState.TestCoverageBitmaps.Count, cachedState.LastResults.Count)
                 elmRuntime.Dispatch(SageFsMsg.RestoreTestCache cachedState)
                 let (Features.LiveTesting.RunGeneration gen) = cachedState.LastGeneration
-                match gen > lastSavedGeneration.Value with
-                | true -> lastSavedGeneration.Value <- gen
+                match gen > System.Threading.Volatile.Read(&lastSavedGeneration.contents) with
+                | true -> System.Threading.Volatile.Write(&lastSavedGeneration.contents, gen)
                 | false -> ()
               | Error msg -> log.LogDebug("No test cache available: {Reason}", msg)
           with ex ->

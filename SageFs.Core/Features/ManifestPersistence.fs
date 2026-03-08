@@ -141,7 +141,10 @@ module ManifestReader =
       let _sessionCount = br.ReadUInt32()
       let storedCrc = br.ReadUInt32()
 
-      // Verify header CRC
+      // W15(R10): The stored CRC covers the ENTIRE file (header + payload) with bytes [36..39]
+      // zeroed. It is a whole-file integrity check, not a header-only check.
+      // Naming it "header CRC" in the error message is misleading — payload corruption also
+      // triggers this error. Rename to "file integrity CRC".
       let forCrc = Array.copy data
       forCrc.[36] <- 0uy; forCrc.[37] <- 0uy; forCrc.[38] <- 0uy; forCrc.[39] <- 0uy
       let computedCrc = Crc32.computeAll forCrc
@@ -149,7 +152,7 @@ module ManifestReader =
       | false ->
         Instrumentation.persistenceCrcErrors.Add(
           1L, System.Collections.Generic.KeyValuePair("format", box "sfm1"))
-        err (sprintf "Header CRC mismatch: stored=%08x computed=%08x" storedCrc computedCrc)
+        err (sprintf "File integrity CRC mismatch (whole-file check): stored=%08x computed=%08x" storedCrc computedCrc)
       | true ->
 
       let activeSessionId = BinaryPrimitives.readLpStringOption br
