@@ -30,8 +30,10 @@ let sparkline (width: int) (state: TimelineState) : string =
     let bars = [| '▁'; '▂'; '▃'; '▄'; '▅'; '▆'; '▇'; '█' |]
     // Entries are newest-first; truncate to `width` most recent, then reverse for display.
     let durations = state.Entries |> List.map (fun e -> float e.DurationMs)
-    let maxDur = durations |> List.max |> max 1.0
+    // W3(R9): Compute maxDur from the VISIBLE window only (recent), not all 1000 entries.
+    // Using the global max compresses all bars to ▁ if one old outlier had high latency.
     let recent = durations |> List.truncate width |> List.rev
+    let maxDur = (if recent.IsEmpty then [1.0] else recent) |> List.max |> max 1.0
     recent
     |> List.map (fun d ->
       let idx = int (d / maxDur * 7.0) |> min 7 |> max 0

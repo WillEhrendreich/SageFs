@@ -15,6 +15,9 @@ type FeaturePushState = {
   LastBindingScopeSse: string option
   LastEvalTimelineSse: string option
   EvalHistory: EvalHistoryEntry list
+  /// W5(R9): Monotonic cell index counter — never derived from EvalHistory.Length.
+  /// Survives EvalHistory capping without producing duplicate CellIndex values.
+  NextCellIndex: int
   /// Incrementally maintained map of binding name → cell index.
   /// Updated in recordEval to avoid O(n) rebuild on every SSE push.
   KnownBindings: Map<string, int>
@@ -32,14 +35,20 @@ module FeaturePushState =
     LastBindingScopeSse = None
     LastEvalTimelineSse = None
     EvalHistory = []
+    NextCellIndex = 0
     KnownBindings = Map.empty
     CachedScope = None
     CachedTimeline = EvalTimeline.TimelineState.empty
   }
 
+let [<Literal>] MaxEvalHistory = 10_000
+
 let recordEval (code: string) (result: string) (durationMs: int64) (state: FeaturePushState) =
+  // W5(R9): Use NextCellIndex (monotonic counter) not EvalHistory.Length.
+  // EvalHistory.Length decreases when the cap is applied; NextCellIndex never does.
+  let idx = state.NextCellIndex
   let entry = {
-    CellIndex = state.EvalHistory.Length  // length before prepend = 0-based index
+    CellIndex = idx
     Code = code
     Result = result
     DurationMs = durationMs
@@ -56,22 +65,25 @@ let recordEval (code: string) (result: string) (durationMs: int64) (state: Featu
         match nameEnd > 4 with
         | false -> None
         | true -> Some (trimmed.Substring(4, nameEnd - 4), entry.CellIndex))
-    |> Array.fold (fun acc (name, idx) -> Map.add name idx acc) state.KnownBindings
-  // Update cached scope incrementally — rebuild from all history (O(n) once per eval, not per SSE push)
+    |> Array.fold (fun acc (name, cellIdx) -> Map.add name cellIdx acc) state.KnownBindings
+  // W1(R9): Cap EvalHistory at MaxEvalHistory to prevent unbounded O(n) growth.
+  // Prepend is O(1); truncate drops the oldest entries at the tail.
+  let cappedHistory = (entry :: state.EvalHistory) |> List.truncate MaxEvalHistory
+  // Build scope snapshot in chronological order (oldest-first for correct CellIndex ordering).
   let allCellInputs =
-    (entry :: state.EvalHistory)
+    cappedHistory
     |> List.rev
     |> List.map (fun e ->
       let ci: BindingExplorer.CellInput =
         { CellIndex = e.CellIndex; FsiOutput = e.Result; Source = e.Code }
       ci)
   let newScope = BindingExplorer.buildScopeSnapshot allCellInputs
-  // Update cached timeline incrementally — record new entry instead of full fold
   let timelineEntry: EvalTimeline.TimelineEntry =
-    { CellId = entry.CellIndex; StartMs = 0L; DurationMs = durationMs; Status = EvalTimeline.Success }
+    { CellId = idx; StartMs = 0L; DurationMs = durationMs; Status = EvalTimeline.Success }
   let newTimeline = EvalTimeline.TimelineState.record timelineEntry state.CachedTimeline
   { state with
-      EvalHistory = entry :: state.EvalHistory
+      EvalHistory = cappedHistory
+      NextCellIndex = idx + 1
       KnownBindings = newBindings
       CachedScope = Some newScope
       CachedTimeline = newTimeline }

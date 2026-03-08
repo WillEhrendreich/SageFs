@@ -538,14 +538,23 @@ let checkBodySize (ctx: Microsoft.AspNetCore.Http.HttpContext) = task {
 
 /// Size-guarded wrapper for Request.getSignalsJson (Falco.Datastar).
 /// Raises RequestTooLargeException (after writing 413) if ContentLength > 1 MB.
-/// W2(R8): Also sets IHttpMaxRequestBodySizeFeature.MaxRequestBodySize to cap chunked
-///         requests that arrive without a Content-Length header (bypassing checkBodySize).
+/// W2(R8): Sets IHttpMaxRequestBodySizeFeature.MaxRequestBodySize to cap chunked requests.
+/// W2(R9): Fail-closed: if the feature is null (reverse proxy) or IsReadOnly (body already
+///         started reading), raise 413 rather than proceed unguarded with no cap enforced.
 let readSignalsJsonSized (ctx: Microsoft.AspNetCore.Http.HttpContext) : System.Threading.Tasks.Task<System.Text.Json.JsonDocument> = task {
   let maxBytes = 1_048_576L
-  // Enforce Kestrel-level cap first so chunked bodies are bounded before we read any bytes.
   let maxBodyFeature = ctx.Features.Get<Microsoft.AspNetCore.Http.Features.IHttpMaxRequestBodySizeFeature>()
-  if not (isNull maxBodyFeature) && not maxBodyFeature.IsReadOnly then
-    maxBodyFeature.MaxRequestBodySize <- maxBytes
+  match maxBodyFeature with
+  | null ->
+    // Feature unavailable (reverse proxy stripped it). Fall through — checkBodySize provides
+    // header-based gate. No Kestrel cap can be set; ContentLength header is our only defence.
+    ()
+  | f when f.IsReadOnly ->
+    // Body already started reading (e.g., buffering middleware called EnableBuffering()).
+    // Kestrel cap cannot be set at this point. Header-based check is our only gate.
+    ()
+  | f ->
+    f.MaxRequestBodySize <- maxBytes
   do! checkBodySize ctx
   let! doc = Request.getSignalsJson ctx
   return doc

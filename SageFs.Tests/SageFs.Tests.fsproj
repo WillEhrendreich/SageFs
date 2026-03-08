@@ -143,6 +143,7 @@
         <Compile Include="Round6HardeningTests.fs" />
         <Compile Include="Round7HardeningTests.fs" />
         <Compile Include="Round8HardeningTests.fs" />
+        <Compile Include="Round9HardeningTests.fs" />
         <Compile Include="Program.fs" />
     </ItemGroup>
 

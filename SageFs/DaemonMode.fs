@@ -482,16 +482,36 @@ let performGracefulShutdown
       log.LogWarning("Failed to save test cache: {Error}", err)
 
   // Persist session manifest for binary-first resume
+  // W4(R9): Load existing manifest first so previously-stopped sessions (with their original
+  // StoppedAt timestamps) are preserved in the 7-day history window.
+  // buildReplayState only sees currently-active sessions; it drops all stopped history.
   let activeSessionId = (getModel()).Sessions.ActiveSessionId |> ActiveSession.sessionId
   let now = DateTimeOffset.UtcNow
+  let activeSessionIds =
+    activeSessions
+    |> List.map (fun s -> s.Id)
+    |> Set.ofList
+  let existingManifest =
+    match Features.DaemonPersistence.loadManifest DaemonState.SageFsDir with
+    | Ok m -> m
+    | Error _ -> buildReplayState readSnapshot activeSessionId  // fallback: no prior manifest
+  // Merge: stamp active sessions as stopped now; preserve stopped sessions' original StoppedAt.
+  let mergedSessions =
+    existingManifest.Sessions
+    |> Map.map (fun sid (r: Features.Replay.DaemonSessionRecord) ->
+      match activeSessionIds.Contains(sid) with
+      | true -> { r with StoppedAt = Some now }   // active now → stopping
+      | false -> r)                                // already stopped → keep original StoppedAt
+  // Add any active sessions not yet in the manifest (new sessions created since last save).
   let replayStateBase = buildReplayState readSnapshot activeSessionId
-  // Mark all sessions stopped so the manifest doesn't have stale "alive" entries on next start
+  let newSessions =
+    replayStateBase.Sessions
+    |> Map.filter (fun sid _ -> not (mergedSessions.ContainsKey(sid)))
+    |> Map.map (fun _ r -> { r with StoppedAt = Some now })
   let replayState =
-    { replayStateBase with
-        Sessions =
-          replayStateBase.Sessions
-          |> Map.map (fun _ (r: Features.Replay.DaemonSessionRecord) ->
-            { r with StoppedAt = Some now }) }
+    { existingManifest with
+        Sessions = Map.fold (fun acc k v -> Map.add k v acc) mergedSessions newSessions
+        ActiveSessionId = activeSessionId }
   match Features.DaemonPersistence.saveManifest DaemonState.SageFsDir replayState with
   | Ok path -> log.LogInformation("Saved session manifest to {Path}", path)
   | Error err ->
