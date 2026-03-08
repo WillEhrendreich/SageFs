@@ -483,7 +483,15 @@ let performGracefulShutdown
 
   // Persist session manifest for binary-first resume
   let activeSessionId = (getModel()).Sessions.ActiveSessionId |> ActiveSession.sessionId
-  let replayState = buildReplayState readSnapshot activeSessionId
+  let now = DateTimeOffset.UtcNow
+  let replayStateBase = buildReplayState readSnapshot activeSessionId
+  // Mark all sessions stopped so the manifest doesn't have stale "alive" entries on next start
+  let replayState =
+    { replayStateBase with
+        Sessions =
+          replayStateBase.Sessions
+          |> Map.map (fun _ (r: Features.Replay.DaemonSessionRecord) ->
+            { r with StoppedAt = Some now }) }
   match Features.DaemonPersistence.saveManifest DaemonState.SageFsDir replayState with
   | Ok path -> log.LogInformation("Saved session manifest to {Path}", path)
   | Error err ->

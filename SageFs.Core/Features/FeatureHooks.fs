@@ -18,6 +18,10 @@ type FeaturePushState = {
   /// Incrementally maintained map of binding name → cell index.
   /// Updated in recordEval to avoid O(n) rebuild on every SSE push.
   KnownBindings: Map<string, int>
+  /// Cached binding scope snapshot, updated incrementally in recordEval.
+  CachedScope: BindingExplorer.BindingScopeSnapshot option
+  /// Cached timeline state, updated incrementally in recordEval.
+  CachedTimeline: EvalTimeline.TimelineState
 }
 
 module FeaturePushState =
@@ -29,6 +33,8 @@ module FeaturePushState =
     LastEvalTimelineSse = None
     EvalHistory = []
     KnownBindings = Map.empty
+    CachedScope = None
+    CachedTimeline = EvalTimeline.TimelineState.empty
   }
 
 let recordEval (code: string) (result: string) (durationMs: int64) (state: FeaturePushState) =
@@ -51,7 +57,24 @@ let recordEval (code: string) (result: string) (durationMs: int64) (state: Featu
         | false -> None
         | true -> Some (trimmed.Substring(4, nameEnd - 4), entry.CellIndex))
     |> Array.fold (fun acc (name, idx) -> Map.add name idx acc) state.KnownBindings
-  { state with EvalHistory = entry :: state.EvalHistory; KnownBindings = newBindings }
+  // Update cached scope incrementally — rebuild from all history (O(n) once per eval, not per SSE push)
+  let allCellInputs =
+    (entry :: state.EvalHistory)
+    |> List.rev
+    |> List.map (fun e ->
+      let ci: BindingExplorer.CellInput =
+        { CellIndex = e.CellIndex; FsiOutput = e.Result; Source = e.Code }
+      ci)
+  let newScope = BindingExplorer.buildScopeSnapshot allCellInputs
+  // Update cached timeline incrementally — record new entry instead of full fold
+  let timelineEntry: EvalTimeline.TimelineEntry =
+    { CellId = entry.CellIndex; StartMs = 0L; DurationMs = durationMs; Status = EvalTimeline.Success }
+  let newTimeline = EvalTimeline.TimelineState.record timelineEntry state.CachedTimeline
+  { state with
+      EvalHistory = entry :: state.EvalHistory
+      KnownBindings = newBindings
+      CachedScope = Some newScope
+      CachedTimeline = newTimeline }
 
 let computeEvalDiffPush (opts: System.Text.Json.JsonSerializerOptions) (sessionId: string option) (currentOutputText: string) (state: FeaturePushState) =
   let diff = EvalDiff.diffLines (Some state.LastOutputText) (Some currentOutputText)
@@ -85,7 +108,9 @@ let buildScopeFromState (state: FeaturePushState) =
   |> BindingExplorer.buildScopeSnapshot
 
 let computeBindingScopePush (opts: System.Text.Json.JsonSerializerOptions) (sessionId: string option) (state: FeaturePushState) =
-  let snapshot = buildScopeFromState state
+  let snapshot =
+    state.CachedScope
+    |> Option.defaultWith (fun () -> buildScopeFromState state)
   let sseStr = SageFs.SseWriter.formatBindingScopeMapEvent opts sessionId snapshot
   if Some sseStr = state.LastBindingScopeSse then
     { state with LastBindingScopeSse = Some sseStr }, None
@@ -93,16 +118,7 @@ let computeBindingScopePush (opts: System.Text.Json.JsonSerializerOptions) (sess
     { state with LastBindingScopeSse = Some sseStr }, Some sseStr
 
 let computeEvalTimelinePush (opts: System.Text.Json.JsonSerializerOptions) (sessionId: string option) (state: FeaturePushState) =
-  let timelineState =
-    state.EvalHistory
-    |> List.fold (fun (ts: EvalTimeline.TimelineState) (e: EvalHistoryEntry) ->
-      let entry: EvalTimeline.TimelineEntry =
-        { CellId = e.CellIndex
-          StartMs = 0L
-          DurationMs = e.DurationMs
-          Status = EvalTimeline.Success }
-      EvalTimeline.TimelineState.record entry ts) EvalTimeline.TimelineState.empty
-  let stats = EvalTimeline.timelineStats 20 timelineState
+  let stats = EvalTimeline.timelineStats 20 state.CachedTimeline
   let sseStr = SageFs.SseWriter.formatEvalTimelineEvent opts sessionId stats
   if Some sseStr = state.LastEvalTimelineSse then
     { state with LastEvalTimelineSse = Some sseStr }, None

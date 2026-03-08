@@ -276,8 +276,12 @@ module ManifestMapping =
     }
 
   let toReplayState (manifest: DaemonManifestData) : DaemonReplayState =
+    let cutoff = DateTimeOffset.UtcNow.AddDays(-7.0)
     let sessions =
       manifest.Entries
+      |> List.filter (fun (e: ManifestSessionEntry) ->
+        // Prune entries older than 7 days that are already stopped
+        not (e.StoppedAt.IsSome && e.CreatedAt < cutoff))
       |> List.map (fun (e: ManifestSessionEntry) ->
         e.SessionId,
         {

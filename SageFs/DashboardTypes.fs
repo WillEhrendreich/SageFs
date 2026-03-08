@@ -9,6 +9,8 @@ open SageFs
 open SageFs.Utils
 open SageFs.Affordances
 open Falco.Markup
+open Falco.Datastar
+open StarFederation.Datastar.FSharp
 
 /// Shared DOM element IDs — single source of truth for strings that cross
 /// the F#/JS boundary (used in both Attr.id and getElementById calls).
@@ -511,6 +513,36 @@ let resolveSessionProjects (dir: string) (manualProjects: string) =
       | NoLoad -> []
       | AutoDetect -> autoDetectProjects dir
     | _ -> autoDetectProjects dir
+
+/// Raised when a request body exceeds the configured size limit (results in 413 response).
+/// Handlers that use readSignalsJsonSized or checkBodySize should catch this exception
+/// and return without writing a second response — the 413 is already committed.
+exception RequestTooLargeException
+
+/// Write a 413 response body (internal helper).
+let private write413Body (ctx: Microsoft.AspNetCore.Http.HttpContext) = task {
+  ctx.Response.StatusCode <- 413
+  do! ctx.Response.Body.WriteAsync(System.Text.Encoding.UTF8.GetBytes """{"error":"Request body too large"}""")
+}
+
+/// Check body ContentLength and raise RequestTooLargeException (after writing 413) if > 1 MB.
+/// Call before reading the body in any POST handler that doesn't already have a size cap.
+let checkBodySize (ctx: Microsoft.AspNetCore.Http.HttpContext) = task {
+  let maxBytes = 1_048_576L
+  match ctx.Request.ContentLength with
+  | cl when cl.HasValue && cl.Value > maxBytes ->
+    do! write413Body ctx
+    raise RequestTooLargeException
+  | _ -> ()
+}
+
+/// Size-guarded wrapper for Request.getSignalsJson (Falco.Datastar).
+/// Raises RequestTooLargeException (after writing 413) if ContentLength > 1 MB.
+let readSignalsJsonSized (ctx: Microsoft.AspNetCore.Http.HttpContext) : System.Threading.Tasks.Task<System.Text.Json.JsonDocument> = task {
+  do! checkBodySize ctx
+  let! doc = Request.getSignalsJson ctx
+  return doc
+}
 
 /// Helper: extract a signal by camelCase or kebab-case name from JSON signals.
 let getSignalString (doc: System.Text.Json.JsonDocument) (camelCase: string) (kebab: string) =

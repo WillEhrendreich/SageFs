@@ -452,7 +452,7 @@ let createEvalHandler
   : HttpHandler =
   fun ctx -> task {
     try
-      use! doc = Request.getSignalsJson ctx
+      use! doc = readSignalsJsonSized ctx
       let code =
         match doc.RootElement.TryGetProperty("code") with
         | true, prop -> prop.GetString()
@@ -490,19 +490,18 @@ let createEvalHandler
           ]
         do! ssePatchNode ctx resultHtml
     with
+    | :? RequestTooLargeException -> ()  // 413 already written by readSignalsJsonSized
     | :? System.IO.IOException -> ()
     | :? System.ObjectDisposedException -> ()
   }
-
-/// Create the eval-file POST handler (reads file, evals its content).
-/// `getSessionWorkingDir` is called with sessionId to get the session's working directory;
-/// the requested file path is validated to be within that directory (W1: path traversal guard).
 let createEvalFileHandler
   (getSessionWorkingDir: string -> string)
   (evalCode: string -> string -> Threading.Tasks.Task<Result<string, string>>)
   : HttpHandler =
   fun ctx -> task {
     try
+      // W5(R7): 1 MB size cap — eval-file was sending full file content without limit.
+      do! checkBodySize ctx
       use reader = new StreamReader(ctx.Request.Body)
       let! body = reader.ReadToEndAsync()
       use doc = System.Text.Json.JsonDocument.Parse(body)
@@ -516,25 +515,18 @@ let createEvalFileHandler
         | _ -> ""
       // W1: Canonicalize and confirm the requested file is inside the session's working directory.
       // This prevents path traversal attacks like {"path":"C:/Users/.ssh/id_rsa"}.
-      // W2: Also resolve symlinks before containment check — Path.GetFullPath does NOT follow symlinks.
+      // W1(R7): Use ResolveLinkTarget(returnFinalTarget=true) to handle directory symlinks too —
+      // FileInfo.LinkTarget misses directory-level symlinks, enabling bypass via intermediate dirs.
       let workingDir = getSessionWorkingDir sessionId
       let resolveRealPath (p: string) : string =
-        // Walk FileInfo.LinkTarget chain to resolve symlinks; stop at 16 hops to prevent cycles.
-        let mutable current = Path.GetFullPath p
-        let mutable hops = 0
-        let mutable keepGoing = true
-        while keepGoing && hops < 16 do
-          let fi = FileInfo(current)
-          match fi.LinkTarget with
-          | null | "" -> keepGoing <- false
-          | target ->
-            let resolved =
-              match Path.IsPathRooted target with
-              | true -> target
-              | false -> Path.GetFullPath(Path.Combine(Path.GetDirectoryName(current), target))
-            current <- resolved
-            hops <- hops + 1
-        current
+        let full = Path.GetFullPath p
+        let fsi : System.IO.FileSystemInfo =
+          match Directory.Exists(full) with
+          | true -> DirectoryInfo(full) :> System.IO.FileSystemInfo
+          | false -> FileInfo(full) :> System.IO.FileSystemInfo
+        match fsi.ResolveLinkTarget(returnFinalTarget = true) with
+        | null -> full
+        | resolved -> resolved.FullName
       let isContained =
         match String.IsNullOrWhiteSpace filePath || String.IsNullOrWhiteSpace workingDir with
         | true -> false
@@ -562,7 +554,9 @@ let createEvalFileHandler
         | Error err ->
           ctx.Response.StatusCode <- 422
           do! ctx.Response.WriteAsJsonAsync({| success = false; error = err |})
-    with ex ->
+    with
+    | :? RequestTooLargeException -> ()  // 413 already written
+    | ex ->
       ctx.Response.StatusCode <- 500
       do! ctx.Response.WriteAsJsonAsync({| error = ex.Message |})
   }
@@ -571,7 +565,7 @@ let createCompletionsHandler
   : HttpHandler =
   fun ctx -> task {
     try
-      use! doc = Request.getSignalsJson ctx
+      use! doc = readSignalsJsonSized ctx
       let code =
         match doc.RootElement.TryGetProperty(Signals.Code) with
         | true, prop -> prop.GetString()
@@ -598,7 +592,9 @@ let createCompletionsHandler
       | false ->
         let! items = getCompletions sessionId code cursorPos
         do! ssePatchNode ctx (renderCompletionDropdown items cursorPos)
-    with ex ->
+    with
+    | :? RequestTooLargeException -> ()
+    | ex ->
       ctx.Response.StatusCode <- 500
       do! ctx.Response.WriteAsJsonAsync({| error = ex.Message |})
   }
@@ -611,7 +607,7 @@ let createResetHandler
     try
       let! sessionId = task {
         try
-          use! doc = Request.getSignalsJson ctx
+          use! doc = readSignalsJsonSized ctx
           match doc.RootElement.TryGetProperty("sessionId") with
           | true, prop -> return prop.GetString()
           | _ -> return ""
@@ -639,6 +635,7 @@ let createResetHandler
         ]
       do! ssePatchNode ctx clearedOutput
     with
+    | :? RequestTooLargeException -> ()
     | :? System.IO.IOException -> ()
     | :? System.ObjectDisposedException -> ()
   }
@@ -683,24 +680,29 @@ let createClearOutputHandler : HttpHandler =
 /// Create the discover-projects POST handler.
 let createDiscoverHandler : HttpHandler =
   fun ctx -> task {
-    use! doc = Request.getSignalsJson ctx
-    let dir = getSignalString doc "newSessionDir" "new-session-dir"
-    Response.sseStartResponse ctx |> ignore
-    match String.IsNullOrWhiteSpace dir, Directory.Exists dir with
-    | true, _ ->
-      do! ssePatchNode ctx (
-        Elem.div [ Attr.id DomIds.DiscoveredProjects ] [
-          Elem.span [ Attr.class' "output-line output-error" ] [
-            Text.raw "Enter a working directory first"
-          ]])
-    | false, false ->
-      do! ssePatchNode ctx (
-        Elem.div [ Attr.id DomIds.DiscoveredProjects ] [
-          Elem.span [ Attr.class' "output-line output-error" ] [
-            Text.raw (sprintf "Directory not found: %s" dir)
-          ]])
-    | false, true ->
-      do! pushDiscoverResults ctx dir
+    try
+      use! doc = readSignalsJsonSized ctx
+      let dir = getSignalString doc "newSessionDir" "new-session-dir"
+      Response.sseStartResponse ctx |> ignore
+      match String.IsNullOrWhiteSpace dir, Directory.Exists dir with
+      | true, _ ->
+        do! ssePatchNode ctx (
+          Elem.div [ Attr.id DomIds.DiscoveredProjects ] [
+            Elem.span [ Attr.class' "output-line output-error" ] [
+              Text.raw "Enter a working directory first"
+            ]])
+      | false, false ->
+        do! ssePatchNode ctx (
+          Elem.div [ Attr.id DomIds.DiscoveredProjects ] [
+            Elem.span [ Attr.class' "output-line output-error" ] [
+              Text.raw (sprintf "Directory not found: %s" dir)
+            ]])
+      | false, true ->
+        do! pushDiscoverResults ctx dir
+    with
+    | :? RequestTooLargeException -> ()
+    | :? System.IO.IOException -> ()
+    | :? System.ObjectDisposedException -> ()
   }
 
 /// Create the create-session POST handler.
@@ -709,77 +711,87 @@ let createCreateSessionHandler
   (switchSession: (string -> Threading.Tasks.Task<Result<string, string>>) option)
   : HttpHandler =
   fun ctx -> task {
-    use! doc = Request.getSignalsJson ctx
-    let dir = getSignalString doc "newSessionDir" "new-session-dir"
-    let manualProjects = getSignalString doc "manualProjects" "manual-projects"
-    Response.sseStartResponse ctx |> ignore
-    match String.IsNullOrWhiteSpace dir, Directory.Exists dir with
-    | true, _ ->
-      do! ssePatchNode ctx (evalResultError "Working directory is required")
-    | false, false ->
-      do! ssePatchNode ctx (evalResultError (sprintf "Directory not found: %s" dir))
-    | false, true ->
-      let projects = resolveSessionProjects dir manualProjects
-      match projects.IsEmpty with
-      | true ->
-        do! ssePatchNode ctx (evalResultError "No projects found. Enter paths manually or check the directory.")
-      | false ->
-        let! result = createSession projects dir
-        match result with
-        | Ok newSessionId ->
-          // Switch to the new session so the SSE stream picks it up
-          match switchSession with
-          | Some switch -> let! _ = switch newSessionId in ()
-          | None -> ()
-          // Push the new session's ID so the eval form targets it
-          do! Response.ssePatchSignal ctx (SignalPath.sp "sessionId") newSessionId
-          do! ssePatchNode ctx (
-            Elem.div [ Attr.id DomIds.EvalResult ] [
-              Elem.pre [ Attr.class' "output-line output-result"; Attr.style "margin-top: 0.5rem;" ] [
-                Text.raw (sprintf "Session '%s' created. Switched to it." newSessionId)
-              ]
-            ])
-        | Error msg ->
-          do! ssePatchNode ctx (evalResultError (sprintf "Failed: %s" msg))
-        do! ssePatchNode ctx (Elem.div [ Attr.id DomIds.DiscoveredProjects ] [])
+    try
+      use! doc = readSignalsJsonSized ctx
+      let dir = getSignalString doc "newSessionDir" "new-session-dir"
+      let manualProjects = getSignalString doc "manualProjects" "manual-projects"
+      Response.sseStartResponse ctx |> ignore
+      match String.IsNullOrWhiteSpace dir, Directory.Exists dir with
+      | true, _ ->
+        do! ssePatchNode ctx (evalResultError "Working directory is required")
+      | false, false ->
+        do! ssePatchNode ctx (evalResultError (sprintf "Directory not found: %s" dir))
+      | false, true ->
+        let projects = resolveSessionProjects dir manualProjects
+        match projects.IsEmpty with
+        | true ->
+          do! ssePatchNode ctx (evalResultError "No projects found. Enter paths manually or check the directory.")
+        | false ->
+          let! result = createSession projects dir
+          match result with
+          | Ok newSessionId ->
+            // Switch to the new session so the SSE stream picks it up
+            match switchSession with
+            | Some switch -> let! _ = switch newSessionId in ()
+            | None -> ()
+            // Push the new session's ID so the eval form targets it
+            do! Response.ssePatchSignal ctx (SignalPath.sp "sessionId") newSessionId
+            do! ssePatchNode ctx (
+              Elem.div [ Attr.id DomIds.EvalResult ] [
+                Elem.pre [ Attr.class' "output-line output-result"; Attr.style "margin-top: 0.5rem;" ] [
+                  Text.raw (sprintf "Session '%s' created. Switched to it." newSessionId)
+                ]
+              ])
+          | Error msg ->
+            do! ssePatchNode ctx (evalResultError (sprintf "Failed: %s" msg))
+          do! ssePatchNode ctx (Elem.div [ Attr.id DomIds.DiscoveredProjects ] [])
+    with
+    | :? RequestTooLargeException -> ()
+    | :? System.IO.IOException -> ()
+    | :? System.ObjectDisposedException -> ()
   }
 
 let createDisableWarmupAutoOpenHandler : HttpHandler =
   fun ctx -> task {
-    use! doc = Request.getSignalsJson ctx
-    let dir = getSignalString doc "newSessionDir" "new-session-dir"
-    let configResultNode message cssClass =
-      Elem.div [ Attr.id DomIds.EvalResult ] [
-        Elem.pre [ Attr.class' (sprintf "output-line %s" cssClass); Attr.style "margin-top: 0.5rem; white-space: pre-wrap;" ] [
-          Text.raw message
+    try
+      use! doc = readSignalsJsonSized ctx
+      let dir = getSignalString doc "newSessionDir" "new-session-dir"
+      let configResultNode message cssClass =
+        Elem.div [ Attr.id DomIds.EvalResult ] [
+          Elem.pre [ Attr.class' (sprintf "output-line %s" cssClass); Attr.style "margin-top: 0.5rem; white-space: pre-wrap;" ] [
+            Text.raw message
+          ]
         ]
-      ]
-    Response.sseStartResponse ctx |> ignore
-    match String.IsNullOrWhiteSpace dir, Directory.Exists dir with
-    | true, _ ->
-      do! ssePatchNode ctx (evalResultError "Working directory is required")
-    | false, false ->
-      do! ssePatchNode ctx (evalResultError (sprintf "Directory not found: %s" dir))
-    | false, true ->
-      match DirectoryConfig.ensureAutoOpenNamespacesOptOut dir with
-      | Ok (AutoOpenNamespacesOptOutResult.Created path) ->
-        do! ssePatchNode ctx (
-          configResultNode
-            (sprintf "Created %s with AutoOpenNamespaces = false. New sessions from this directory will skip warmup auto-open." path)
-            "output-result")
-      | Ok (AutoOpenNamespacesOptOutResult.AlreadyDisabled path) ->
-        do! ssePatchNode ctx (
-          configResultNode
-            (sprintf "Warmup auto-open is already disabled in %s." path)
-            "output-result")
-      | Ok (AutoOpenNamespacesOptOutResult.RequiresManualEdit path) ->
-        do! ssePatchNode ctx (
-          configResultNode
-            (sprintf "Existing config found at %s. Edit it manually and set AutoOpenNamespaces = false; it was not overwritten." path)
-            "output-error")
-      | Error msg ->
-        do! ssePatchNode ctx (evalResultError msg)
-      do! pushDiscoverResults ctx dir
+      Response.sseStartResponse ctx |> ignore
+      match String.IsNullOrWhiteSpace dir, Directory.Exists dir with
+      | true, _ ->
+        do! ssePatchNode ctx (evalResultError "Working directory is required")
+      | false, false ->
+        do! ssePatchNode ctx (evalResultError (sprintf "Directory not found: %s" dir))
+      | false, true ->
+        match DirectoryConfig.ensureAutoOpenNamespacesOptOut dir with
+        | Ok (AutoOpenNamespacesOptOutResult.Created path) ->
+          do! ssePatchNode ctx (
+            configResultNode
+              (sprintf "Created %s with AutoOpenNamespaces = false. New sessions from this directory will skip warmup auto-open." path)
+              "output-result")
+        | Ok (AutoOpenNamespacesOptOutResult.AlreadyDisabled path) ->
+          do! ssePatchNode ctx (
+            configResultNode
+              (sprintf "Warmup auto-open is already disabled in %s." path)
+              "output-result")
+        | Ok (AutoOpenNamespacesOptOutResult.RequiresManualEdit path) ->
+          do! ssePatchNode ctx (
+            configResultNode
+              (sprintf "Existing config found at %s. Edit it manually and set AutoOpenNamespaces = false; it was not overwritten." path)
+              "output-error")
+        | Error msg ->
+          do! ssePatchNode ctx (evalResultError msg)
+        do! pushDiscoverResults ctx dir
+    with
+    | :? RequestTooLargeException -> ()
+    | :? System.IO.IOException -> ()
+    | :? System.ObjectDisposedException -> ()
   }
 
 /// JSON SSE stream for TUI clients — pushes regions + model summary as JSON.
@@ -901,6 +913,8 @@ let createApiDispatchHandler
   (dispatch: SageFsMsg -> unit)
   : HttpHandler =
   fun ctx -> task {
+    // W5: 1 MB body cap — /api/dispatch was the last POST endpoint without a size limit.
+    do! checkBodySize ctx
     use reader = new StreamReader(ctx.Request.Body)
     let! body = reader.ReadToEndAsync()
     try
@@ -915,7 +929,9 @@ let createApiDispatchHandler
       | None ->
         ctx.Response.StatusCode <- 400
         do! ctx.Response.WriteAsJsonAsync({| error = sprintf "Unknown action: %s" action.action |})
-    with ex ->
+    with
+    | :? RequestTooLargeException -> ()  // 413 already written
+    | ex ->
       ctx.Response.StatusCode <- 400
       do! ctx.Response.WriteAsJsonAsync({| error = ex.Message |})
   }
@@ -946,7 +962,7 @@ let createEndpoints
     yield post "/dashboard/discover-projects" createDiscoverHandler
     yield post "/dashboard/set-theme" (fun ctx -> task {
       try
-        use! doc = Request.getSignalsJson ctx
+        use! doc = readSignalsJsonSized ctx
         let theme =
           match doc.RootElement.TryGetProperty(Signals.Theme) with
           | true, prop -> prop.GetString()
@@ -963,7 +979,9 @@ let createEndpoints
         Response.sseStartResponse ctx |> ignore
         do! ssePatchNode ctx (renderThemeVars theme)
         do! ssePatchNode ctx (renderThemePicker theme)
-      with ex ->
+      with
+      | :? RequestTooLargeException -> ()
+      | ex ->
         ctx.Response.StatusCode <- 400
         do! ctx.Response.WriteAsJsonAsync({| error = ex.Message |})
     })

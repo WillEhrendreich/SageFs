@@ -133,6 +133,10 @@ let createServerCaptureFilter (tracker: McpServerTracker) =
             return appendEvents result
           })))
 
+/// Raised when a request body exceeds the 4 MB hard limit.
+/// withErrorHandling catches this and swallows it (413 already committed).
+exception RequestTooLarge
+
 /// Write a JSON response with the given status code.
 let jsonResponse (ctx: Microsoft.AspNetCore.Http.HttpContext) (statusCode: int) (data: obj) = task {
   ctx.Response.StatusCode <- statusCode
@@ -154,7 +158,8 @@ let readJsonProp (ctx: Microsoft.AspNetCore.Http.HttpContext) (prop: string) = t
   | contentLength when contentLength.HasValue && contentLength.Value > maxBodyBytes ->
     ctx.Response.StatusCode <- 413
     do! ctx.Response.Body.WriteAsync(System.Text.Encoding.UTF8.GetBytes """{"error":"Request body too large"}""")
-    return null
+    raise RequestTooLarge
+    return null  // unreachable — satisfies type checker
   | _ ->
   use reader = new System.IO.StreamReader(ctx.Request.Body)
   let! body = reader.ReadToEndAsync()
@@ -162,7 +167,8 @@ let readJsonProp (ctx: Microsoft.AspNetCore.Http.HttpContext) (prop: string) = t
   | true ->
     ctx.Response.StatusCode <- 413
     do! ctx.Response.Body.WriteAsync(System.Text.Encoding.UTF8.GetBytes """{"error":"Request body too large"}""")
-    return null
+    raise RequestTooLarge
+    return null  // unreachable
   | false ->
   try
     use json = System.Text.Json.JsonDocument.Parse(body)
@@ -186,6 +192,7 @@ let readValidatedSessionId (ctx: Microsoft.AspNetCore.Http.HttpContext) = task {
 let withErrorHandling (ctx: Microsoft.AspNetCore.Http.HttpContext) (handler: unit -> Task) = task {
   try do! handler ()
   with
+  | RequestTooLarge -> ()  // 413 already committed — do not write a second response
   | :? System.Text.Json.JsonException as je ->
     do! jsonResponse ctx 400 {| success = false; error = je.Message |}
   | ex ->
@@ -199,7 +206,8 @@ let readJsonBody (ctx: Microsoft.AspNetCore.Http.HttpContext) = task {
   | contentLength when contentLength.HasValue && contentLength.Value > maxBodyBytes ->
     ctx.Response.StatusCode <- 413
     do! ctx.Response.Body.WriteAsync(System.Text.Encoding.UTF8.GetBytes """{"error":"Request body too large"}""")
-    return System.Text.Json.JsonDocument.Parse("null")
+    raise RequestTooLarge
+    return System.Text.Json.JsonDocument.Parse("null")  // unreachable
   | _ ->
   use reader = new System.IO.StreamReader(ctx.Request.Body)
   let! body = reader.ReadToEndAsync()
@@ -207,7 +215,8 @@ let readJsonBody (ctx: Microsoft.AspNetCore.Http.HttpContext) = task {
   | true ->
     ctx.Response.StatusCode <- 413
     do! ctx.Response.Body.WriteAsync(System.Text.Encoding.UTF8.GetBytes """{"error":"Request body too large"}""")
-    return System.Text.Json.JsonDocument.Parse("null")
+    raise RequestTooLarge
+    return System.Text.Json.JsonDocument.Parse("null")  // unreachable
   | false ->
   return System.Text.Json.JsonDocument.Parse(body)
 }
@@ -877,32 +886,31 @@ let mapExecutionRoutes (app: WebApplication) (rctx: RouteContext) =
   app.MapPost("/load-script", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
     withErrorHandling ctx (fun () -> task {
       use! json = readJsonBody ctx
-      match ctx.Response.StatusCode = 413 with
-      | true -> ()
-      | false ->
       let filePath = json.RootElement.GetProperty("path").GetString()
-      // W1/W2: Containment + symlink check — prevent RCE via arbitrary #load paths.
-      let! sessions = rctx.Config.SessionOps.GetAllSessions()
-      let workingDir =
-        sessions |> List.tryHead |> Option.map (fun s -> s.WorkingDirectory) |> Option.defaultValue ""
+      let sessionIdOpt =
+        match json.RootElement.TryGetProperty("sessionId") with
+        | true, prop -> Option.ofObj (prop.GetString())
+        | _ -> None
+      // W6: Use the requested session's workdir, not just List.tryHead (wrong in multi-session).
+      // W1: resolve both file and directory symlinks via ResolveLinkTarget(returnFinalTarget=true).
+      let! workingDir = task {
+        match sessionIdOpt with
+        | Some sid when sid.Length > 0 ->
+          let! infoOpt = rctx.Config.SessionOps.GetSessionInfo(sid)
+          return infoOpt |> Option.map (fun s -> s.WorkingDirectory) |> Option.defaultValue ""
+        | _ ->
+          let! sessions = rctx.Config.SessionOps.GetAllSessions()
+          return sessions |> List.tryHead |> Option.map (fun s -> s.WorkingDirectory) |> Option.defaultValue ""
+      }
       let resolveRealPath (p: string) : string =
-        let mutable current = System.IO.Path.GetFullPath p
-        let mutable hops = 0
-        let mutable keepGoing = true
-        while keepGoing && hops < 16 do
-          let fi = System.IO.FileInfo(current)
-          match fi.LinkTarget with
-          | null | "" -> keepGoing <- false
-          | target ->
-            let resolved =
-              match System.IO.Path.IsPathRooted target with
-              | true -> target
-              | false ->
-                System.IO.Path.GetFullPath(
-                  System.IO.Path.Combine(System.IO.Path.GetDirectoryName(current), target))
-            current <- resolved
-            hops <- hops + 1
-        current
+        let full = System.IO.Path.GetFullPath p
+        let fsi : System.IO.FileSystemInfo =
+          match System.IO.Directory.Exists(full) with
+          | true -> System.IO.DirectoryInfo(full) :> System.IO.FileSystemInfo
+          | false -> System.IO.FileInfo(full) :> System.IO.FileSystemInfo
+        match fsi.ResolveLinkTarget(returnFinalTarget = true) with
+        | null -> full
+        | resolved -> resolved.FullName
       let isContained =
         match System.String.IsNullOrWhiteSpace filePath || System.String.IsNullOrWhiteSpace workingDir with
         | true -> false

@@ -273,6 +273,7 @@ module SessionManager =
         // Linked CTS fired: per-session startup timeout, NOT daemon shutdown.
         try proc.Kill() with ex2 ->
           Log.warn "[SessionManager] Kill on startup timeout: %s" ex2.Message
+        try proc.Dispose() with :? ObjectDisposedException -> ()
         inbox.Post(
           SessionCommand.WorkerSpawnFailed(
             sessionId,
@@ -284,6 +285,7 @@ module SessionManager =
       | ex ->
         try proc.Kill() with ex2 ->
           Log.warn "[SessionManager] Kill on spawn failure: %s" ex2.Message
+        try proc.Dispose() with :? ObjectDisposedException -> ()
         inbox.Post(
           SessionCommand.WorkerSpawnFailed(
             sessionId, proc.Id,
@@ -739,12 +741,14 @@ module SessionManager =
           return! loop state
 
         | SessionCommand.WorkerSpawnFailed(id, _workerPid, msg) ->
+          Log.warn "[SessionManager] Worker spawn failed for session %s: %s" id msg
           match ManagerState.tryGetSession id state with
           | Some session ->
             let updated =
               { session with
                   Info = { session.Info with Status = SessionStatus.Faulted } }
             let newState = ManagerState.addSession id updated state
+            onSessionReady id  // notify clients of Faulted state change
             return! loop newState
           | None ->
             return! loop state
