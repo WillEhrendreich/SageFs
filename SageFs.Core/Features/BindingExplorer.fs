@@ -60,15 +60,16 @@ let buildScopeSnapshot (cells: CellInput list) : BindingScopeSnapshot =
           ShadowedBy = []
           ReferencedIn = [] })
       |> Array.toList)
+  // W5(R8): Index by name to reduce shadow computation from O(n²) to O(n).
+  // Old: nested List.filter per binding. New: one Map lookup per binding.
+  let byName = allBindings |> List.groupBy (fun b -> b.Name) |> Map.ofList
   let withShadows =
     allBindings
-    |> List.mapi (fun i binding ->
+    |> List.map (fun binding ->
       let shadowedBy =
-        allBindings
-        |> List.filter (fun other ->
-          other.Name = binding.Name
-          && other.CellIndex > binding.CellIndex)
-        |> List.map (fun other -> other.CellIndex)
+        byName |> Map.tryFind binding.Name |> Option.defaultValue []
+        |> List.choose (fun other ->
+          if other.CellIndex > binding.CellIndex then Some other.CellIndex else None)
       { binding with ShadowedBy = shadowedBy })
   let withRefs =
     withShadows

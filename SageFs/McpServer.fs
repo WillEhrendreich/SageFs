@@ -911,21 +911,21 @@ let mapExecutionRoutes (app: WebApplication) (rctx: RouteContext) =
         match fsi.ResolveLinkTarget(returnFinalTarget = true) with
         | null -> full
         | resolved -> resolved.FullName
+      // W1(R8): Hoist canonical before isContained so the SAME value is used for both
+      //         the containment check and the loadFSharpScript call (eliminates TOCTOU).
+      let canonical = resolveRealPath filePath
+      let canonicalDir = resolveRealPath workingDir
       let isContained =
-        match System.String.IsNullOrWhiteSpace filePath || System.String.IsNullOrWhiteSpace workingDir with
-        | true -> false
-        | false ->
-          let canonical = resolveRealPath filePath
-          let canonicalDir = resolveRealPath workingDir
-          canonical.StartsWith(
-            canonicalDir + string System.IO.Path.DirectorySeparatorChar,
-            System.StringComparison.OrdinalIgnoreCase)
-          || canonical.Equals(canonicalDir, System.StringComparison.OrdinalIgnoreCase)
+        not (System.String.IsNullOrWhiteSpace filePath || System.String.IsNullOrWhiteSpace workingDir)
+        && (canonical.StartsWith(
+              canonicalDir + string System.IO.Path.DirectorySeparatorChar,
+              System.StringComparison.OrdinalIgnoreCase)
+            || canonical.Equals(canonicalDir, System.StringComparison.OrdinalIgnoreCase))
       match isContained with
       | false ->
         do! jsonResponse ctx 403 {| success = false; error = "Path is outside the session working directory" |}
       | true ->
-      let! _result = SageFs.McpTools.loadFSharpScript rctx.McpContext "http" filePath None None
+      let! _result = SageFs.McpTools.loadFSharpScript rctx.McpContext "http" canonical None None
       do! jsonResponse ctx 200 {| received = true |}
     }) :> Task
   ) |> ignore

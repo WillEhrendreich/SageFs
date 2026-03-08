@@ -280,8 +280,9 @@ module ManifestMapping =
     let sessions =
       manifest.Entries
       |> List.filter (fun (e: ManifestSessionEntry) ->
-        // Prune entries older than 7 days that are already stopped
-        not (e.StoppedAt.IsSome && e.CreatedAt < cutoff))
+        // W4(R8): Compare against StoppedAt (when stopped), not CreatedAt.
+        // A session stopped recently but created >7 days ago should NOT be pruned yet.
+        not (e.StoppedAt |> Option.exists (fun stoppedAt -> stoppedAt < cutoff)))
       |> List.map (fun (e: ManifestSessionEntry) ->
         e.SessionId,
         {

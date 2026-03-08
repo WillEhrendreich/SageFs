@@ -515,8 +515,9 @@ let createEvalFileHandler
         | _ -> ""
       // W1: Canonicalize and confirm the requested file is inside the session's working directory.
       // This prevents path traversal attacks like {"path":"C:/Users/.ssh/id_rsa"}.
-      // W1(R7): Use ResolveLinkTarget(returnFinalTarget=true) to handle directory symlinks too —
-      // FileInfo.LinkTarget misses directory-level symlinks, enabling bypass via intermediate dirs.
+      // W1(R7): Use ResolveLinkTarget(returnFinalTarget=true) to handle directory symlinks too.
+      // W1(R8): Hoist canonical before isContained check so the SAME value is used for both
+      //         the containment check and the actual read (eliminates TOCTOU/invariant violation).
       let workingDir = getSessionWorkingDir sessionId
       let resolveRealPath (p: string) : string =
         let full = Path.GetFullPath p
@@ -527,22 +528,20 @@ let createEvalFileHandler
         match fsi.ResolveLinkTarget(returnFinalTarget = true) with
         | null -> full
         | resolved -> resolved.FullName
+      let canonical = resolveRealPath filePath
+      let canonicalDir = resolveRealPath workingDir
       let isContained =
-        match String.IsNullOrWhiteSpace filePath || String.IsNullOrWhiteSpace workingDir with
-        | true -> false
-        | false ->
-          let canonical = resolveRealPath filePath
-          let canonicalDir = resolveRealPath workingDir
-          canonical.StartsWith(
-            canonicalDir + string Path.DirectorySeparatorChar,
-            StringComparison.OrdinalIgnoreCase)
-          || canonical.Equals(canonicalDir, StringComparison.OrdinalIgnoreCase)
-      match isContained && File.Exists filePath with
+        not (String.IsNullOrWhiteSpace filePath || String.IsNullOrWhiteSpace workingDir)
+        && (canonical.StartsWith(
+              canonicalDir + string Path.DirectorySeparatorChar,
+              StringComparison.OrdinalIgnoreCase)
+            || canonical.Equals(canonicalDir, StringComparison.OrdinalIgnoreCase))
+      match isContained && File.Exists canonical with
       | false ->
         ctx.Response.StatusCode <- 403
         do! ctx.Response.WriteAsJsonAsync({| error = "File not found or outside session working directory" |})
       | true ->
-        let! code = File.ReadAllTextAsync(filePath)
+        let! code = File.ReadAllTextAsync(canonical)
         let codeWithTerminator =
           let trimmed = code.TrimEnd()
           match trimmed.EndsWith(";;") with

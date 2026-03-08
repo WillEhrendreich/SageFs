@@ -16,16 +16,22 @@ type TimelineState = {
 module TimelineState =
   let empty = { Entries = [] }
 
+  [<Literal>]
+  let MaxEntries = 1000
+
+  // W3(R8): prepend is O(1) (append was O(n)); truncate bounds unbounded growth.
+  // Entries are stored newest-first after this change.
   let record (entry: TimelineEntry) (state: TimelineState) : TimelineState =
-    { state with Entries = state.Entries @ [entry] }
+    { state with Entries = entry :: state.Entries |> List.truncate MaxEntries }
 
 let sparkline (width: int) (state: TimelineState) : string =
   if state.Entries |> List.isEmpty then ""
   else
     let bars = [| '▁'; '▂'; '▃'; '▄'; '▅'; '▆'; '▇'; '█' |]
+    // Entries are newest-first; truncate to `width` most recent, then reverse for display.
     let durations = state.Entries |> List.map (fun e -> float e.DurationMs)
     let maxDur = durations |> List.max |> max 1.0
-    let recent = durations |> List.rev |> List.truncate width |> List.rev
+    let recent = durations |> List.truncate width |> List.rev
     recent
     |> List.map (fun d ->
       let idx = int (d / maxDur * 7.0) |> min 7 |> max 0

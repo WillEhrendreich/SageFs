@@ -538,7 +538,14 @@ let checkBodySize (ctx: Microsoft.AspNetCore.Http.HttpContext) = task {
 
 /// Size-guarded wrapper for Request.getSignalsJson (Falco.Datastar).
 /// Raises RequestTooLargeException (after writing 413) if ContentLength > 1 MB.
+/// W2(R8): Also sets IHttpMaxRequestBodySizeFeature.MaxRequestBodySize to cap chunked
+///         requests that arrive without a Content-Length header (bypassing checkBodySize).
 let readSignalsJsonSized (ctx: Microsoft.AspNetCore.Http.HttpContext) : System.Threading.Tasks.Task<System.Text.Json.JsonDocument> = task {
+  let maxBytes = 1_048_576L
+  // Enforce Kestrel-level cap first so chunked bodies are bounded before we read any bytes.
+  let maxBodyFeature = ctx.Features.Get<Microsoft.AspNetCore.Http.Features.IHttpMaxRequestBodySizeFeature>()
+  if not (isNull maxBodyFeature) && not maxBodyFeature.IsReadOnly then
+    maxBodyFeature.MaxRequestBodySize <- maxBytes
   do! checkBodySize ctx
   let! doc = Request.getSignalsJson ctx
   return doc
