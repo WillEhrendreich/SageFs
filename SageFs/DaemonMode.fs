@@ -179,31 +179,49 @@ let createDaemonInfrastructure () : DaemonInfra =
   }
 
 /// Handle --prune flag: clear the binary manifest and return true if pruned.
-let handlePrune (infra: DaemonInfra) (flags: Args.DaemonFlags) = task {
+/// W28+W31(R13): Parametrized dir/log/checkDaemonRunning for testability.
+let handlePrune (dir: string) (log: ILogger) (checkDaemonRunning: unit -> DaemonInfo option) (flags: Args.DaemonFlags) = task {
   match flags.Prune with
   | true ->
-    match Features.DaemonPersistence.loadManifest DaemonState.SageFsDir with
-    | Ok state ->
-      let aliveSessions = Features.Replay.DaemonReplayState.aliveSessions state
-      match aliveSessions.IsEmpty with
-      | true ->
-        infra.Log.LogInformation("No alive sessions to prune")
-      | false ->
-        let now = DateTimeOffset.UtcNow
-        let pruned =
-          { state with
-              Sessions =
-                state.Sessions
-                |> Map.map (fun _ r ->
-                  match r.StoppedAt with
-                  | Some _ -> r
-                  | None -> { r with StoppedAt = Some now }) }
-        match Features.DaemonPersistence.saveManifest DaemonState.SageFsDir pruned with
-        | Ok _ -> infra.Log.LogInformation("Pruned {Count} session(s) from binary manifest", aliveSessions.Length)
-        | Error msg -> infra.Log.LogWarning("Prune save failed: {Error}", msg)
-    | Error _ ->
-      infra.Log.LogInformation("No binary manifest found — nothing to prune")
-    return true
+    // W28(R13): Refuse to prune if daemon is running — cross-process TOCTOU guard.
+    // A concurrent daemon may write an updated manifest after prune reads but before
+    // prune writes, causing pruned ghost sessions to reappear on next daemon start.
+    match checkDaemonRunning() with
+    | Some info ->
+      log.LogWarning("Cannot prune while daemon is running (PID {Pid}) — stop the daemon first", info.Pid)
+      return false
+    | None ->
+      match Features.DaemonPersistence.loadManifest dir with
+      | Ok state ->
+        let aliveSessions = Features.Replay.DaemonReplayState.aliveSessions state
+        match aliveSessions.IsEmpty with
+        | true ->
+          log.LogInformation("No alive sessions to prune")
+        | false ->
+          let now = DateTimeOffset.UtcNow
+          let pruned =
+            { state with
+                Sessions =
+                  state.Sessions
+                  |> Map.map (fun _ r ->
+                    match r.StoppedAt with
+                    | Some _ -> r
+                    | None -> { r with StoppedAt = Some now }) }
+          match Features.DaemonPersistence.saveManifest dir pruned with
+          | Ok _ -> log.LogInformation("Pruned {Count} session(s) from binary manifest", aliveSessions.Length)
+          | Error msg -> log.LogWarning("Prune save failed: {Error}", msg)
+        return true
+      // W31(R13): Exhaustive match — IoError/CorruptData return false (file exists but unreadable).
+      // Old code: `Error _` catch-all treated IoError/CorruptData identical to NotFound → returned true.
+      | Error Features.ManifestTypes.ManifestLoadError.NotFound ->
+        log.LogInformation("No binary manifest found — nothing to prune")
+        return true
+      | Error (Features.ManifestTypes.ManifestLoadError.IoError err) ->
+        log.LogWarning("Cannot read manifest for prune — leaving untouched: {Error}", err)
+        return false
+      | Error (Features.ManifestTypes.ManifestLoadError.CorruptData err) ->
+        log.LogWarning("Manifest corrupt — prune skipped, manual recovery needed: {Error}", err)
+        return false
   | false -> return false
 }
 
@@ -338,7 +356,7 @@ let mergeManifestWithExisting
   (snapshot: SessionManager.QuerySnapshot)
   (activeSessionId: string option)
   (stampActive: DateTimeOffset option)
-  : Result<Features.Replay.DaemonReplayState, string> =
+  : Result<Features.Replay.DaemonReplayState, Features.ManifestTypes.ManifestLoadError> =
   let activeSessions = SessionManager.QuerySnapshot.allSessions snapshot
   let activeSessionIds = activeSessions |> List.map (fun s -> s.Id) |> Set.ofList
   let existingManifestResult =
@@ -349,11 +367,13 @@ let mergeManifestWithExisting
     | Error (Features.ManifestTypes.ManifestLoadError.IoError err) ->
       // W23(R12): IO errors must NOT fall back to active-only state — that erases history.
       // Return Error so callers skip the write entirely.
+      // W34(R13): Return typed ManifestLoadError (not bare string) so callers can distinguish
+      // transient IoError (retriable) from permanent CorruptData (needs manual recovery).
       log.LogWarning("Cannot read manifest for merge — skipping write to preserve history: {Error}", err)
-      Error err
+      Error (Features.ManifestTypes.ManifestLoadError.IoError err)
     | Error (Features.ManifestTypes.ManifestLoadError.CorruptData err) ->
       log.LogWarning("Manifest data corrupt — skipping write to preserve history: {Error}", err)
-      Error err
+      Error (Features.ManifestTypes.ManifestLoadError.CorruptData err)
   match existingManifestResult with
   | Error err -> Error err
   | Ok existingManifest ->
@@ -564,8 +584,12 @@ let performGracefulShutdown
       Instrumentation.persistenceSaveErrors.Add(
         1L, System.Collections.Generic.KeyValuePair("format", box "sfm1"))
       log.LogWarning("Failed to save session manifest: {Error}", err)
-  | Error err ->
-    log.LogWarning("Shutdown manifest save skipped — cannot read existing manifest to preserve history: {Error}", err)
+  | Error (Features.ManifestTypes.ManifestLoadError.IoError errMsg
+         | Features.ManifestTypes.ManifestLoadError.CorruptData errMsg) ->
+    log.LogWarning("Shutdown manifest save skipped — cannot read existing manifest to preserve history: {Error}", errMsg)
+  | Error Features.ManifestTypes.ManifestLoadError.NotFound ->
+    // mergeManifestWithExisting converts NotFound → Ok; this arm should not be reached
+    log.LogWarning("Shutdown manifest save skipped — unexpected state (NotFound propagated from merge)")
 
   // Stop all workers with a timeout
   let stopTask =
@@ -711,10 +735,14 @@ let periodicManifestSave (log: ILogger) (readSnapshot: unit -> SessionManager.Qu
         Instrumentation.persistenceSaveErrors.Add(
           1L, System.Collections.Generic.KeyValuePair("format", box "sfm1"))
         log.LogWarning("Periodic manifest save failed: {Error}", err)
-    | Error err ->
+    | Error (Features.ManifestTypes.ManifestLoadError.IoError errMsg
+           | Features.ManifestTypes.ManifestLoadError.CorruptData errMsg) ->
       Instrumentation.periodicTaskErrors.Add(
         1L, System.Collections.Generic.KeyValuePair("task", box "manifest_read_error"))
-      log.LogWarning("Periodic manifest save skipped — cannot read existing manifest to preserve history: {Error}", err)
+      log.LogWarning("Periodic manifest save skipped — cannot read existing manifest to preserve history: {Error}", errMsg)
+    | Error Features.ManifestTypes.ManifestLoadError.NotFound ->
+      // mergeManifestWithExisting converts NotFound → Ok; this arm should not be reached
+      log.LogWarning("Periodic manifest save skipped — unexpected state (NotFound propagated from merge)")
   with ex ->
     Instrumentation.periodicTaskErrors.Add(
       1L, System.Collections.Generic.KeyValuePair("task", box "manifest_save"))
@@ -866,12 +894,30 @@ let resumePreviousSessions
       | true -> ()
       Instrumentation.succeedSpan binarySpan
       state
-    | Error binaryErr ->
-      log.LogInformation("No binary manifest ({Error}) — starting fresh", binaryErr)
+    | Error Features.ManifestTypes.ManifestLoadError.NotFound ->
+      // W32(R13): NotFound is an expected first-run condition → Info + succeedSpan.
+      log.LogInformation("No binary manifest found — starting fresh")
       match isNull binarySpan with
       | false -> binarySpan.SetTag("source", "none") |> ignore
       | true -> ()
       Instrumentation.succeedSpan binarySpan
+      Features.Replay.DaemonReplayState.empty
+    | Error (Features.ManifestTypes.ManifestLoadError.IoError err) ->
+      // W32(R13): File EXISTS but can't be read (lock/permissions) → Warning + failSpan.
+      // Old code used LogInformation+succeedSpan for ALL error cases — wrong severity.
+      log.LogWarning("Binary manifest unreadable — starting fresh (HISTORY NOT RESTORED): {Error}", err)
+      match isNull binarySpan with
+      | false -> binarySpan.SetTag("source", "error_io") |> ignore
+      | true -> ()
+      Instrumentation.failSpan binarySpan err
+      Features.Replay.DaemonReplayState.empty
+    | Error (Features.ManifestTypes.ManifestLoadError.CorruptData err) ->
+      // W32(R13): File is permanently corrupt → Error + failSpan.
+      log.LogError("Binary manifest corrupt — starting fresh (HISTORY NOT RESTORED): {Error}", err)
+      match isNull binarySpan with
+      | false -> binarySpan.SetTag("source", "error_corrupt") |> ignore
+      | true -> ()
+      Instrumentation.failSpan binarySpan err
       Features.Replay.DaemonReplayState.empty
 
   let aliveSessions = Features.Replay.DaemonReplayState.aliveSessions daemonState
@@ -1114,7 +1160,7 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
   let appendEventsAsync events = appendEventsAsync infra events
 
   // Handle --prune: mark all alive sessions as stopped and exit
-  let! pruned = handlePrune infra flags
+  let! pruned = handlePrune DaemonState.SageFsDir infra.Log DaemonState.read flags
   match pruned with
   | true -> return ()
   | false -> ()
@@ -1562,8 +1608,13 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
   // and call elmRuntime.Dispatch() after the elm runtime starts shutting down.
   let testCycleTimerDone = new System.Threading.ManualResetEventSlim(false)
   testCycleTimer.Dispose(testCycleTimerDone.WaitHandle) |> ignore
-  testCycleTimerDone.Wait(System.TimeSpan.FromSeconds 1.0) |> ignore
-  testCycleTimerDone.Dispose()
+  // W33(R13): 3s timeout (was 1s) + conditional Dispose to prevent ObjectDisposedException.
+  // If Wait times out, the timer infrastructure may try to signal the disposed WaitHandle,
+  // causing ObjectDisposedException in the timer system. Only Dispose when timer has stopped.
+  let testCycleTimerJoined = testCycleTimerDone.Wait(System.TimeSpan.FromSeconds 3.0)
+  match testCycleTimerJoined with
+  | false -> log.LogWarning("testCycleTimer shutdown wait timed out — callback may still be running")
+  | true -> testCycleTimerDone.Dispose()
   // W18+W19(R11): Use Dispose(WaitHandle) to block until any in-flight cacheSaveCallback
   // completes before performGracefulShutdown writes the manifest. Bare Dispose() returns
   // immediately — the callback could still be running and write its manifest AFTER shutdown
