@@ -1997,6 +1997,7 @@ let private mkStandbyKey wd name =
 let private mkStandbySession state progress =
   { StandbySession.Process = Unchecked.defaultof<_>
     Proxy = None
+    BaseUrl = ""
     State = state
     WarmupProgress = progress
     Projects = ["test"]

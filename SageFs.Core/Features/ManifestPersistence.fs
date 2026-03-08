@@ -176,8 +176,7 @@ module ManifestReader =
         dirEntries
         |> List.map (fun (_, o, _) -> int o)
         |> List.filter (fun o -> o > payloadStart)
-        |> List.tryHead
-        |> Option.defaultValue data.Length
+        |> (fun offsets -> match offsets with | [] -> data.Length | xs -> List.min xs)
       let payload = data.[payloadStart .. payloadEnd - 1]
 
       let payloadCrc = Crc32.computeAll payload

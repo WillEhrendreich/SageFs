@@ -16,6 +16,7 @@ let dummyProxy : SessionProxy =
 let makeStandby state proxyOpt = {
   Process = new Process()
   Proxy = proxyOpt
+  BaseUrl = ""
   State = state
   WarmupProgress = None
   Projects = ["test.fsproj"]

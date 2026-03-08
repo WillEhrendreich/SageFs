@@ -15,6 +15,9 @@ type FeaturePushState = {
   LastBindingScopeSse: string option
   LastEvalTimelineSse: string option
   EvalHistory: EvalHistoryEntry list
+  /// Incrementally maintained map of binding name → cell index.
+  /// Updated in recordEval to avoid O(n) rebuild on every SSE push.
+  KnownBindings: Map<string, int>
 }
 
 module FeaturePushState =
@@ -25,6 +28,7 @@ module FeaturePushState =
     LastBindingScopeSse = None
     LastEvalTimelineSse = None
     EvalHistory = []
+    KnownBindings = Map.empty
   }
 
 let recordEval (code: string) (result: string) (durationMs: int64) (state: FeaturePushState) =
@@ -35,7 +39,19 @@ let recordEval (code: string) (result: string) (durationMs: int64) (state: Featu
     DurationMs = durationMs
     Timestamp = System.DateTimeOffset.UtcNow
   }
-  { state with EvalHistory = entry :: state.EvalHistory }
+  let newBindings =
+    result.Split('\n')
+    |> Array.choose (fun line ->
+      let trimmed = line.Trim()
+      match trimmed.StartsWith("val ") with
+      | false -> None
+      | true ->
+        let nameEnd = trimmed.IndexOfAny([| ':'; ' ' |], 4)
+        match nameEnd > 4 with
+        | false -> None
+        | true -> Some (trimmed.Substring(4, nameEnd - 4), entry.CellIndex))
+    |> Array.fold (fun acc (name, idx) -> Map.add name idx acc) state.KnownBindings
+  { state with EvalHistory = entry :: state.EvalHistory; KnownBindings = newBindings }
 
 let computeEvalDiffPush (opts: System.Text.Json.JsonSerializerOptions) (sessionId: string option) (currentOutputText: string) (state: FeaturePushState) =
   let diff = EvalDiff.diffLines (Some state.LastOutputText) (Some currentOutputText)
@@ -48,19 +64,7 @@ let computeEvalDiffPush (opts: System.Text.Json.JsonSerializerOptions) (sessionI
     { updatedState with LastEvalDiffSse = Some sseStr }, Some sseStr
 
 let computeCellDepsPush (opts: System.Text.Json.JsonSerializerOptions) (sessionId: string option) (state: FeaturePushState) =
-  let knownBindings =
-    state.EvalHistory
-    |> List.collect (fun (e: EvalHistoryEntry) ->
-      e.Result.Split('\n')
-      |> Array.choose (fun line ->
-        let trimmed = line.Trim()
-        if trimmed.StartsWith("val ") then
-          let nameEnd = trimmed.IndexOfAny([| ':'; ' ' |], 4)
-          if nameEnd > 4 then Some (trimmed.Substring(4, nameEnd - 4), e.CellIndex)
-          else None
-        else None)
-      |> Array.toList)
-    |> Map.ofList
+  let knownBindings = state.KnownBindings
   let cells =
     state.EvalHistory
     |> List.map (fun (e: EvalHistoryEntry) ->

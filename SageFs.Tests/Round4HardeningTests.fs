@@ -55,6 +55,7 @@ let dummyProxy : SessionProxy =
 let makeStandby4 state proxyOpt = {
   Process = new System.Diagnostics.Process()
   Proxy = proxyOpt
+  BaseUrl = ""
   State = state
   WarmupProgress = None
   Projects = ["test.fsproj"]

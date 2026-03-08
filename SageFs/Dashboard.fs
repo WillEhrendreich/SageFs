@@ -516,13 +516,31 @@ let createEvalFileHandler
         | _ -> ""
       // W1: Canonicalize and confirm the requested file is inside the session's working directory.
       // This prevents path traversal attacks like {"path":"C:/Users/.ssh/id_rsa"}.
+      // W2: Also resolve symlinks before containment check — Path.GetFullPath does NOT follow symlinks.
       let workingDir = getSessionWorkingDir sessionId
+      let resolveRealPath (p: string) : string =
+        // Walk FileInfo.LinkTarget chain to resolve symlinks; stop at 16 hops to prevent cycles.
+        let mutable current = Path.GetFullPath p
+        let mutable hops = 0
+        let mutable keepGoing = true
+        while keepGoing && hops < 16 do
+          let fi = FileInfo(current)
+          match fi.LinkTarget with
+          | null | "" -> keepGoing <- false
+          | target ->
+            let resolved =
+              match Path.IsPathRooted target with
+              | true -> target
+              | false -> Path.GetFullPath(Path.Combine(Path.GetDirectoryName(current), target))
+            current <- resolved
+            hops <- hops + 1
+        current
       let isContained =
         match String.IsNullOrWhiteSpace filePath || String.IsNullOrWhiteSpace workingDir with
         | true -> false
         | false ->
-          let canonical = Path.GetFullPath filePath
-          let canonicalDir = Path.GetFullPath workingDir
+          let canonical = resolveRealPath filePath
+          let canonicalDir = resolveRealPath workingDir
           canonical.StartsWith(
             canonicalDir + string Path.DirectorySeparatorChar,
             StringComparison.OrdinalIgnoreCase)

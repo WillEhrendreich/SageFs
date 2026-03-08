@@ -61,7 +61,7 @@ module SessionManager =
     | StopAll of AsyncReplyChannel<unit>
     // Standby pool commands
     | WarmStandby of StandbyKey
-    | StandbyReady of StandbyKey * workerPid: int * SessionProxy
+    | StandbyReady of StandbyKey * workerPid: int * baseUrl: string * SessionProxy
     | StandbySpawnFailed of StandbyKey * workerPid: int * string
     | StandbyExited of StandbyKey * workerPid: int
     | StandbyProgress of StandbyKey * progress: string
@@ -400,7 +400,7 @@ module SessionManager =
         match found with
         | Some baseUrl ->
           let proxy = HttpWorkerClient.httpProxy baseUrl
-          inbox.Post(SessionCommand.StandbyReady(key, proc.Id, proxy))
+          inbox.Post(SessionCommand.StandbyReady(key, proc.Id, baseUrl, proxy))
         | None ->
           failwith "Standby worker exited before reporting port"
       with
@@ -554,7 +554,7 @@ module SessionManager =
                   match readyStandby.Proxy with
                   | Some p -> p
                   | None -> failwith "SwapStandby with no proxy"
-                WorkerBaseUrl = ""
+                WorkerBaseUrl = readyStandby.BaseUrl
                 Projects = session.Projects
                 WorkingDir = session.WorkingDir
                 AutoOpenNamespaces = session.AutoOpenNamespaces
@@ -900,6 +900,7 @@ module SessionManager =
               let standby = {
                 Process = proc
                 Proxy = None
+                BaseUrl = ""
                 State = StandbyState.Warming
                 WarmupProgress = None
                 Projects = key.Projects
@@ -915,12 +916,13 @@ module SessionManager =
           | false ->
             return! loop state
 
-        | SessionCommand.StandbyReady(key, _workerPid, proxy) ->
+        | SessionCommand.StandbyReady(key, _workerPid, baseUrl, proxy) ->
           match PoolState.getStandby key state.Pool with
           | Some standby when standby.State = StandbyState.Warming ->
             let ready =
               { standby with
                   Proxy = Some proxy
+                  BaseUrl = baseUrl
                   State = StandbyState.Ready
                   WarmupProgress = None }
             let newPool = PoolState.setStandby key ready state.Pool

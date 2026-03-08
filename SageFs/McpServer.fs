@@ -149,8 +149,21 @@ let rawJsonResponse (ctx: Microsoft.AspNetCore.Http.HttpContext) (json: string) 
 
 /// Read JSON body and extract a string property, with fallback to raw body.
 let readJsonProp (ctx: Microsoft.AspNetCore.Http.HttpContext) (prop: string) = task {
+  let maxBodyBytes = 4_194_304L  // 4 MB hard limit
+  match ctx.Request.ContentLength with
+  | contentLength when contentLength.HasValue && contentLength.Value > maxBodyBytes ->
+    ctx.Response.StatusCode <- 413
+    do! ctx.Response.Body.WriteAsync(System.Text.Encoding.UTF8.GetBytes """{"error":"Request body too large"}""")
+    return null
+  | _ ->
   use reader = new System.IO.StreamReader(ctx.Request.Body)
   let! body = reader.ReadToEndAsync()
+  match int64 (System.Text.Encoding.UTF8.GetByteCount(body)) > maxBodyBytes with
+  | true ->
+    ctx.Response.StatusCode <- 413
+    do! ctx.Response.Body.WriteAsync(System.Text.Encoding.UTF8.GetBytes """{"error":"Request body too large"}""")
+    return null
+  | false ->
   try
     use json = System.Text.Json.JsonDocument.Parse(body)
     match json.RootElement.TryGetProperty(prop) with
@@ -181,8 +194,21 @@ let withErrorHandling (ctx: Microsoft.AspNetCore.Http.HttpContext) (handler: uni
 
 /// Read and parse the request body as a JSON document.
 let readJsonBody (ctx: Microsoft.AspNetCore.Http.HttpContext) = task {
+  let maxBodyBytes = 4_194_304L  // 4 MB hard limit
+  match ctx.Request.ContentLength with
+  | contentLength when contentLength.HasValue && contentLength.Value > maxBodyBytes ->
+    ctx.Response.StatusCode <- 413
+    do! ctx.Response.Body.WriteAsync(System.Text.Encoding.UTF8.GetBytes """{"error":"Request body too large"}""")
+    return System.Text.Json.JsonDocument.Parse("null")
+  | _ ->
   use reader = new System.IO.StreamReader(ctx.Request.Body)
   let! body = reader.ReadToEndAsync()
+  match int64 (System.Text.Encoding.UTF8.GetByteCount(body)) > maxBodyBytes with
+  | true ->
+    ctx.Response.StatusCode <- 413
+    do! ctx.Response.Body.WriteAsync(System.Text.Encoding.UTF8.GetBytes """{"error":"Request body too large"}""")
+    return System.Text.Json.JsonDocument.Parse("null")
+  | false ->
   return System.Text.Json.JsonDocument.Parse(body)
 }
 
@@ -851,7 +877,46 @@ let mapExecutionRoutes (app: WebApplication) (rctx: RouteContext) =
   app.MapPost("/load-script", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
     withErrorHandling ctx (fun () -> task {
       use! json = readJsonBody ctx
+      match ctx.Response.StatusCode = 413 with
+      | true -> ()
+      | false ->
       let filePath = json.RootElement.GetProperty("path").GetString()
+      // W1/W2: Containment + symlink check — prevent RCE via arbitrary #load paths.
+      let! sessions = rctx.Config.SessionOps.GetAllSessions()
+      let workingDir =
+        sessions |> List.tryHead |> Option.map (fun s -> s.WorkingDirectory) |> Option.defaultValue ""
+      let resolveRealPath (p: string) : string =
+        let mutable current = System.IO.Path.GetFullPath p
+        let mutable hops = 0
+        let mutable keepGoing = true
+        while keepGoing && hops < 16 do
+          let fi = System.IO.FileInfo(current)
+          match fi.LinkTarget with
+          | null | "" -> keepGoing <- false
+          | target ->
+            let resolved =
+              match System.IO.Path.IsPathRooted target with
+              | true -> target
+              | false ->
+                System.IO.Path.GetFullPath(
+                  System.IO.Path.Combine(System.IO.Path.GetDirectoryName(current), target))
+            current <- resolved
+            hops <- hops + 1
+        current
+      let isContained =
+        match System.String.IsNullOrWhiteSpace filePath || System.String.IsNullOrWhiteSpace workingDir with
+        | true -> false
+        | false ->
+          let canonical = resolveRealPath filePath
+          let canonicalDir = resolveRealPath workingDir
+          canonical.StartsWith(
+            canonicalDir + string System.IO.Path.DirectorySeparatorChar,
+            System.StringComparison.OrdinalIgnoreCase)
+          || canonical.Equals(canonicalDir, System.StringComparison.OrdinalIgnoreCase)
+      match isContained with
+      | false ->
+        do! jsonResponse ctx 403 {| success = false; error = "Path is outside the session working directory" |}
+      | true ->
       let! _result = SageFs.McpTools.loadFSharpScript rctx.McpContext "http" filePath None None
       do! jsonResponse ctx 200 {| received = true |}
     }) :> Task
@@ -969,18 +1034,18 @@ let mapEventsRoute (app: WebApplication) (rctx: RouteContext) =
         do! replayCachedTestState rctx.SseContext ctx.Response.Body
         match rctx.FsiBindings.Value.Count, SseContext.activeSessionId rctx.SseContext with
         | count, Some sid when count > 0 ->
-          rctx.FsiBindings.Value |> Map.values |> Array.ofSeq
-          |> SageFs.SseWriter.formatBindingsSnapshotEvent rctx.SseContext.SseJsonOpts (Some sid)
-          |> writeSseFrame ctx.Response.Body
-          |> fun t -> t.Wait()
+          let frame =
+            rctx.FsiBindings.Value |> Map.values |> Array.ofSeq
+            |> SageFs.SseWriter.formatBindingsSnapshotEvent rctx.SseContext.SseJsonOpts (Some sid)
+          do! writeSseFrame ctx.Response.Body frame
         | _ -> ()
-        [rctx.FeaturePushState.Value.LastEvalDiffSse
-         rctx.FeaturePushState.Value.LastCellDepsSse
-         rctx.FeaturePushState.Value.LastBindingScopeSse
-         rctx.FeaturePushState.Value.LastEvalTimelineSse]
-        |> List.choose id
-        |> List.iter (fun sse ->
-          writeSseFrame ctx.Response.Body sse |> fun t -> t.Wait())
+        for sse in
+          [rctx.FeaturePushState.Value.LastEvalDiffSse
+           rctx.FeaturePushState.Value.LastCellDepsSse
+           rctx.FeaturePushState.Value.LastBindingScopeSse
+           rctx.FeaturePushState.Value.LastEvalTimelineSse]
+          |> List.choose id do
+          do! writeSseFrame ctx.Response.Body sse
         let stateSource =
           evt |> Observable.map (fun change ->
             change

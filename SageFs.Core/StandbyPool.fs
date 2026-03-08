@@ -15,6 +15,7 @@ type StandbyState =
 type StandbySession = {
   Process: Process
   Proxy: SessionProxy option
+  BaseUrl: string
   State: StandbyState
   WarmupProgress: string option
   Projects: string list

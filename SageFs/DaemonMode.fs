@@ -241,10 +241,13 @@ let createSessionOps
           sessionManager.PostAndAsyncReply(fun reply ->
             SessionManager.SessionCommand.StopSession(sessionId, reply))
           |> Async.StartAsTask
-        appendEvents [
-          Features.Events.SageFsEvent.DaemonSessionStopped
-            {| SessionId = sessionId; StoppedAt = DateTimeOffset.UtcNow |}
-        ]
+        match result with
+        | Ok () ->
+          appendEvents [
+            Features.Events.SageFsEvent.DaemonSessionStopped
+              {| SessionId = sessionId; StoppedAt = DateTimeOffset.UtcNow |}
+          ]
+        | Error _ -> ()
         return
           result
           |> Result.map (fun () ->
@@ -421,8 +424,17 @@ let createHotReloadProxyEndpoints
     proxyToWorker sid workerPath (fun url -> task {
       use timeoutCts = new System.Threading.CancellationTokenSource(5000)
       use linked = System.Threading.CancellationTokenSource.CreateLinkedTokenSource(ctx.RequestAborted, timeoutCts.Token)
+      // Guard against oversized payloads (hot-reload control messages are always < 1 KB)
+      let maxBodyBytes = 1_048_576L  // 1 MB hard limit
+      match ctx.Request.ContentLength with
+      | contentLength when contentLength.HasValue && contentLength.Value > maxBodyBytes ->
+        return (sprintf """{"error":"Request body too large (%d bytes, max 1 MB)"}""" contentLength.Value, 413, false)
+      | _ ->
       use reader = new IO.StreamReader(ctx.Request.Body)
       let! body = reader.ReadToEndAsync(linked.Token)
+      match int64 (System.Text.Encoding.UTF8.GetByteCount(body)) > maxBodyBytes with
+      | true -> return ("""{"error":"Request body too large (max 1 MB)"}""", 413, false)
+      | false ->
       use content = new Net.Http.StringContent(body, Text.Encoding.UTF8, "application/json")
       let! resp = httpClient.PostAsync(url, content, linked.Token)
       let! respBody = resp.Content.ReadAsStringAsync(linked.Token)
@@ -896,8 +908,10 @@ let createElmRuntime
         let snapshot = readSnapshot()
         match Map.tryFind sessionId snapshot.WorkerBaseUrls with
         | Some url when url.Length > 0 ->
+          use timeoutCts = new System.Threading.CancellationTokenSource(System.TimeSpan.FromSeconds(5.0))
+          use linkedCts = System.Threading.CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token)
           let! resp =
-            httpClient.GetStringAsync(sprintf "%s/warmup-context" url)
+            httpClient.GetStringAsync(System.Uri(sprintf "%s/warmup-context" url), linkedCts.Token)
             |> Async.AwaitTask
           let warmup = WorkerProtocol.Serialization.deserialize<WarmupContext> resp
           let sessions = SessionManager.QuerySnapshot.allSessions snapshot
