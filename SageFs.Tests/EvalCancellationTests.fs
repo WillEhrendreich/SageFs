@@ -19,7 +19,7 @@ let evalCancellationTests =
     <| fun _ ->
       let result = createActorResult ()
       Thread.Sleep(50)
-      let cancelled = result.CancelEval()
+      let cancelled = result.CancelEval().GetAwaiter().GetResult()
       cancelled
       |> Expect.isFalse "Should return false when no eval is in progress"
 
@@ -41,7 +41,7 @@ let evalCancellationTests =
       Thread.Sleep(200)
 
       // Cancel via direct function (bypasses mailbox)
-      let cancelled = result.CancelEval()
+      let cancelled = result.CancelEval().GetAwaiter().GetResult()
 
       cancelled
       |> Expect.isTrue "Should return true when eval was cancelled"

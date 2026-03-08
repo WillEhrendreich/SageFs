@@ -45,7 +45,7 @@ type ActorArgs = {
 type ActorResult = {
   Actor: AppActor
   DiagnosticsChanged: IEvent<Features.DiagnosticsStore.T>
-  CancelEval: unit -> bool
+  CancelEval: unit -> System.Threading.Tasks.Task<bool>
   GetSessionState: unit -> SessionState
   GetEvalStats: unit -> Affordances.EvalStats
   GetWarmupFailures: unit -> WarmupFailure list

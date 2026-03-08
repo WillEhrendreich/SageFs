@@ -1164,6 +1164,52 @@ let roadAccessTests =
       buildings.Length |> Expect.equal "should produce one building per function" 16
   ]
 
+let private rectsOverlap (a: TRect) (b: TRect) =
+  a.X < b.X + b.W
+  && b.X < a.X + a.W
+  && a.Z < b.Z + b.H
+  && b.Z < a.Z + a.H
+
+let specDrivenLayoutTests =
+  testList "Spec-driven district planning" [
+    testCase "hierarchical district planner creates major and minor streets plus enough blocks" <| fun () ->
+      let rect = { X = 0.0f; Z = 0.0f; W = 60.0f; H = 40.0f }
+      let roads, blocks = planHierarchicalDistrict rect 9 0.25f (Random 42)
+      roads |> List.exists (fun road -> road.Class = Avenue) |> Expect.isTrue "planner should create at least one major street"
+      roads |> List.exists (fun road -> road.Class = Street) |> Expect.isTrue "planner should create minor streets inside quarters"
+      (blocks.Length, 9) |> Expect.isGreaterThanOrEqual "planner should produce enough street-induced blocks for module demand"
+      blocks
+      |> List.pairwise
+      |> List.exists (fun (a, b) -> rectsOverlap a.Rect b.Rect)
+      |> Expect.isFalse "adjacent planned blocks should not overlap"
+
+    testCase "block subdivision creates frontage lots touching the block boundary" <| fun () ->
+      let block = { X = 5.0f; Z = 7.0f; W = 18.0f; H = 10.0f }
+      let lots = subdivideBlockIntoLots block 5
+      lots |> Expect.hasLength "requested lot count should be produced" 5
+      lots
+      |> List.iter (fun lot ->
+        let touchesBoundary =
+          abs (lot.Rect.X - block.X) < 0.001f
+          || abs ((lot.Rect.X + lot.Rect.W) - (block.X + block.W)) < 0.001f
+          || abs (lot.Rect.Z - block.Z) < 0.001f
+          || abs ((lot.Rect.Z + lot.Rect.H) - (block.Z + block.H)) < 0.001f
+        touchesBoundary |> Expect.isTrue "every lot should keep direct road frontage on the parent block boundary")
+
+    testCase "lot placement keeps one building per function inside its assigned lot envelope" <| fun () ->
+      let lots =
+        subdivideBlockIntoLots { X = 0.0f; Z = 0.0f; W = 20.0f; H = 12.0f } 4
+      let funcs = List.init 4 (fun i -> mkFunc (sprintf "lotFunc%d" i) "LotMod")
+      let buildings = placeBuildingsInLots lots funcs Map.empty (Color(70uy, 130uy, 180uy, 255uy)) (Random 7) Map.empty
+      buildings |> Expect.hasLength "lot placement should yield one building per lot/function" 4
+      List.zip lots buildings
+      |> List.iter (fun (lot, building) ->
+        (building.X, lot.Rect.X) |> Expect.isGreaterThanOrEqual "building left edge inside lot"
+        (building.Z, lot.Rect.Z) |> Expect.isGreaterThanOrEqual "building top edge inside lot"
+        (building.X + building.W, lot.Rect.X + lot.Rect.W) |> Expect.isLessThanOrEqual "building right edge inside lot"
+        (building.Z + building.D, lot.Rect.Z + lot.Rect.H) |> Expect.isLessThanOrEqual "building bottom edge inside lot")
+  ]
+
 let gitMetaTests =
   testList "Git metadata parsing" [
     testCase "empty log produces zero commits" <| fun () ->
@@ -1821,6 +1867,7 @@ let allTests =
     cameraMovementTests
     visualDefaultsTests
     roadAccessTests
+    specDrivenLayoutTests
     gitMetaTests
     organicFactorTests
     weberDistrictTests

@@ -404,6 +404,21 @@ type ModuleBlock =
 
 type RoadClass = Boulevard | Avenue | Street | Lane | Alley
 
+type StreetStatus = Planned | Built
+
+type PlannedStreet =
+  { Segment: TRect
+    Class: RoadClass
+    Status: StreetStatus }
+
+type PlannedBlock =
+  { Rect: TRect
+    Frontage: RoadClass list }
+
+type PlannedLot =
+  { Rect: TRect
+    Frontage: RoadClass }
+
 module RoadClass =
   // Real-world proportional widths (avg building ~1.5 units)
   // Alley ~3m, street ~7m, avenue ~12m, boulevard ~22m relative to ~15m buildings
@@ -425,6 +440,197 @@ module RoadClass =
 
 /// Alias for test visibility (DomainTests opens the module-level namespace).
 let roadColorForClass = RoadClass.color
+
+let private corridorSpans (startPos: float32) (totalSize: float32) (corridors: TRect list) (isVertical: bool) =
+  let boundsEnd = startPos + totalSize
+  let ordered =
+    corridors
+    |> List.map (fun corridor ->
+      let cStart = if isVertical then corridor.X else corridor.Z
+      let cSize = if isVertical then corridor.W else corridor.H
+      (cStart, cStart + cSize))
+    |> List.sortBy fst
+  let spans = ResizeArray<float32 * float32>()
+  let mutable cursor = startPos
+  for (cStart, cEnd) in ordered do
+    let gapEnd = min boundsEnd cStart
+    let gapSize = gapEnd - cursor
+    if gapSize > 0.25f then
+      spans.Add(cursor, gapSize)
+    cursor <- max cursor (min boundsEnd cEnd)
+  let tail = boundsEnd - cursor
+  if tail > 0.25f then
+    spans.Add(cursor, tail)
+  spans |> Seq.toList
+
+let private splitRectByCorridors (rect: TRect) (verticals: TRect list) (horizontals: TRect list) =
+  let xSpans = corridorSpans rect.X rect.W verticals true
+  let zSpans = corridorSpans rect.Z rect.H horizontals false
+  [ for (x, w) in xSpans do
+      for (z, h) in zSpans do
+        if w > 0.25f && h > 0.25f then
+          yield TRect.create x z w h ]
+
+let private jitteredSplitPositions (startPos: float32) (size: float32) (segments: int) (organic: float32) (rng: Random) =
+  if segments <= 1 then []
+  else
+    let nominal = size / float32 segments
+    let jitterLimit = nominal * (0.08f + organic * 0.12f)
+    [ for i in 1 .. segments - 1 ->
+        let basePos = startPos + nominal * float32 i
+        let jitter = (rng.NextSingle() - 0.5f) * 2.0f * jitterLimit
+        let minPos = startPos + nominal * float32 i - nominal * 0.3f
+        let maxPos = startPos + nominal * float32 i + nominal * 0.3f
+        basePos + jitter |> max minPos |> min maxPos ]
+
+let private allocateByWeights total (weights: float32 list) =
+  if total <= 0 || weights.IsEmpty then []
+  else
+    let safeWeights = weights |> List.map (max 0.001f)
+    let sumWeights = safeWeights |> List.sum |> max 0.001f
+    let raw =
+      safeWeights
+      |> List.map (fun weight ->
+        let exact = float32 total * weight / sumWeights
+        let baseCount = int (MathF.Floor exact)
+        (baseCount, exact - float32 baseCount))
+    let baseTotal = raw |> List.sumBy fst
+    let remaining = total - baseTotal
+    let order =
+      raw
+      |> List.mapi (fun idx (_, frac) -> idx, frac)
+      |> List.sortByDescending snd
+      |> List.map fst
+    raw
+    |> List.mapi (fun idx (baseCount, _) ->
+      let extra =
+        order
+        |> List.truncate remaining
+        |> List.contains idx
+      baseCount + if extra then 1 else 0)
+
+let private blockScore (outerRect: TRect) (blockRect: TRect) =
+  let cx = TRect.centerX blockRect
+  let cz = TRect.centerZ blockRect
+  let ox = TRect.centerX outerRect
+  let oz = TRect.centerZ outerRect
+  let dx = cx - ox
+  let dz = cz - oz
+  let dist = sqrt (dx * dx + dz * dz)
+  TRect.area blockRect - dist * 0.35f
+
+let planHierarchicalDistrict (rect: TRect) (moduleDemand: int) (organic: float32) (rng: Random) : PlannedStreet list * PlannedBlock list =
+  if moduleDemand <= 0 || rect.W < 2.0f || rect.H < 2.0f then ([], [])
+  else
+    let majorWidth = max 1.2f (RoadClass.width Avenue * (0.95f + organic * 0.2f))
+    let minorWidth = max 0.7f (RoadClass.width Street * (0.9f + organic * 0.15f))
+    let mutable majorRoads : PlannedStreet list = []
+    let crossAxis =
+      moduleDemand >= 4
+      && rect.W >= majorWidth * 2.0f + 8.0f
+      && rect.H >= majorWidth * 2.0f + 8.0f
+    let verticalMajor =
+      if crossAxis then
+        let mid = rect.X + rect.W / 2.0f + (rng.NextSingle() - 0.5f) * organic * (rect.W * 0.08f)
+        [ { Segment = TRect.create (mid - majorWidth / 2.0f) rect.Z majorWidth rect.H
+            Class = Avenue
+            Status = Built } ]
+      else []
+    let horizontalMajor =
+      if crossAxis then
+        let mid = rect.Z + rect.H / 2.0f + (rng.NextSingle() - 0.5f) * organic * (rect.H * 0.08f)
+        [ { Segment = TRect.create rect.X (mid - majorWidth / 2.0f) rect.W majorWidth
+            Class = Avenue
+            Status = Built } ]
+      else []
+    majorRoads <- verticalMajor @ horizontalMajor
+    let quarterRects =
+      splitRectByCorridors rect (verticalMajor |> List.map _.Segment) (horizontalMajor |> List.map _.Segment)
+    let districts = if quarterRects.IsEmpty then [ rect ] else quarterRects
+    let quarterDemand =
+      districts
+      |> List.map TRect.area
+      |> allocateByWeights moduleDemand
+    let planQuarter (quarterRect: TRect) (targetBlocks: int) =
+      if targetBlocks <= 0 then ([], [])
+      elif targetBlocks = 1 || quarterRect.W < 4.0f || quarterRect.H < 4.0f then
+        ([], [ ({ Rect = quarterRect; Frontage = [ if crossAxis then Avenue else Street ] } : PlannedBlock) ])
+      else
+        let aspect = quarterRect.W / max 0.1f quarterRect.H
+        let cols =
+          max 1 (int (MathF.Ceiling(MathF.Sqrt(float32 targetBlocks * aspect))))
+        let rows =
+          max 1 (int (MathF.Ceiling(float32 targetBlocks / float32 cols)))
+        let verticalCuts = jitteredSplitPositions quarterRect.X quarterRect.W cols organic rng
+        let horizontalCuts = jitteredSplitPositions quarterRect.Z quarterRect.H rows organic rng
+        let verticalRoads =
+          verticalCuts
+          |> List.map (fun cut ->
+            { Segment = TRect.create (cut - minorWidth / 2.0f) quarterRect.Z minorWidth quarterRect.H
+              Class = Street
+              Status = Built })
+        let horizontalRoads =
+          horizontalCuts
+          |> List.map (fun cut ->
+            { Segment = TRect.create quarterRect.X (cut - minorWidth / 2.0f) quarterRect.W minorWidth
+              Class = Street
+              Status = Built })
+        let blocks =
+          splitRectByCorridors quarterRect (verticalRoads |> List.map _.Segment) (horizontalRoads |> List.map _.Segment)
+          |> List.map (fun blockRect ->
+            ({ Rect = blockRect
+               Frontage =
+                 [ if crossAxis then Avenue else Street
+                   if verticalRoads.IsEmpty && horizontalRoads.IsEmpty then Street else Street ] } : PlannedBlock))
+        (verticalRoads @ horizontalRoads, blocks)
+    let quarterPlans =
+      List.zip districts quarterDemand
+      |> List.map (fun (quarterRect, demand) -> planQuarter quarterRect demand)
+    let streets =
+      majorRoads @ (quarterPlans |> List.collect fst)
+    let blocks =
+      quarterPlans
+      |> List.collect snd
+      |> List.sortByDescending (fun block -> blockScore rect block.Rect)
+    streets, blocks
+
+let subdivideBlockIntoLots (blockRect: TRect) (lotCount: int) : PlannedLot list =
+  if lotCount <= 0 || blockRect.W < 0.5f || blockRect.H < 0.5f then []
+  else
+    let splitAlongX = blockRect.W >= blockRect.H
+    [ for i in 0 .. lotCount - 1 do
+        if splitAlongX then
+          let x0 = blockRect.X + blockRect.W * float32 i / float32 lotCount
+          let x1 = blockRect.X + blockRect.W * float32 (i + 1) / float32 lotCount
+          yield { Rect = TRect.create x0 blockRect.Z (x1 - x0) blockRect.H; Frontage = Street }
+        else
+          let z0 = blockRect.Z + blockRect.H * float32 i / float32 lotCount
+          let z1 = blockRect.Z + blockRect.H * float32 (i + 1) / float32 lotCount
+          yield { Rect = TRect.create blockRect.X z0 blockRect.W (z1 - z0); Frontage = Street } ]
+
+let private plannedStreetToRoad (organic: float32) (street: PlannedStreet) =
+  let (cr, cg, cb) = RoadClass.color street.Class
+  let isVertical = street.Segment.H >= street.Segment.W
+  if isVertical then
+    let centerX = TRect.centerX street.Segment
+    let hw = street.Segment.W / 2.0f
+    { FromFunc = ""
+      ToFunc = ""
+      FromPos = Vector3(centerX, hw, street.Segment.Z)
+      ToPos = Vector3(centerX, hw, street.Segment.Z + street.Segment.H)
+      Weight = RoadClass.tier street.Class
+      Color = Color(cr, cg, cb, 255uy)
+      Organic = organic }
+  else
+    let centerZ = TRect.centerZ street.Segment
+    let hw = street.Segment.H / 2.0f
+    { FromFunc = ""
+      ToFunc = ""
+      FromPos = Vector3(street.Segment.X, hw, centerZ)
+      ToPos = Vector3(street.Segment.X + street.Segment.W, hw, centerZ)
+      Weight = RoadClass.tier street.Class
+      Color = Color(cr, cg, cb, 255uy)
+      Organic = organic }
 
 // ─── Building Typology Functions ─────────────────────────────
 
@@ -1811,6 +2017,61 @@ let distanceToPoly (poly: Vec2 list) (px: float32) (pz: float32) : float32 =
 let complexityFootprintFactor (complexity: int) : float32 =
   1.0f + MathF.Log(float32 complexity + 1.0f) * 0.15f
 
+let placeBuildingsInLots
+  (lots: PlannedLot list)
+  (funcs: FuncDef list)
+  (heatMap: Map<string, float32 * int * int>)
+  (districtColor: Color)
+  (rng: Random)
+  (gitMeta: Map<string, GitMeta>)
+  : FuncBuilding list =
+  let pairs = List.zip (lots |> List.truncate funcs.Length) (funcs |> List.sortByDescending (fun f -> f.LineCount))
+  [ for (lot, f) in pairs do
+      let heat, callers, callees =
+        heatMap |> Map.tryFind f.QualifiedName |> Option.defaultValue (0.0f, 0, 0)
+      let complexity = computeComplexity f.Body
+      let bt = classifyBuilding f.LineCount complexity heat
+      let coverage =
+        match bt with
+        | Shed | Cottage -> 0.55f
+        | Rowhouse -> 0.70f
+        | Commercial | Tower -> 0.82f
+        | Skyscraper -> 0.90f
+      let frontageBias =
+        match bt with
+        | Shed | Cottage -> 1.15f
+        | Rowhouse -> 1.0f
+        | _ -> 0.75f
+      let baseMargin = (1.0f - sqrt coverage) * min lot.Rect.W lot.Rect.H * 0.5f
+      let lotMargin = min (min (lot.Rect.W / 4.0f) (lot.Rect.H / 4.0f)) (max 0.05f (baseMargin * frontageBias))
+      let envelope = TRect.inset lotMargin lot.Rect
+      let ageDays =
+        gitMeta |> Map.tryFind f.FilePath
+        |> Option.map (fun m -> float32 (DateTimeOffset.Now - m.LastCommitDate).TotalDays)
+        |> Option.defaultValue 180.0f
+      let rotation =
+        match lot.Rect.W >= lot.Rect.H with
+        | true -> 0.0f
+        | false -> 90.0f
+      let jitter = (rng.NextSingle() - 0.5f) * 3.0f * max 0.25f (1.0f - coverage)
+      yield {
+        Func = f
+        Heat = heat
+        CallerCount = callers
+        CalleeCount = callees
+        Complexity = complexity
+        BuildingType = bt
+        GitAgeDays = ageDays
+        X = envelope.X
+        Z = envelope.Z
+        W = max 0.25f envelope.W
+        D = max 0.25f envelope.H
+        H = BuildingType.height bt f.LineCount heat
+        Rotation = rotation + jitter
+        Color = BuildingType.wallColor bt f.Name ageDays
+        RoofColor = BuildingType.roofColor bt districtColor
+        District = f.Module } ]
+
 /// Road-primary building packer (replaces packInBlock for Weber parcels).
 /// Places buildings in a row along each polygon edge, set back by a sidewalk margin.
 /// Every face polygon edge borders a road, so every building gets guaranteed road frontage.
@@ -2038,9 +2299,8 @@ let packAlongRoads
       else
         allBuildings |> Seq.toList
 
-/// Weber-based organic district layout. Roads grow first (Weber §3 algorithm),
-/// buildings placed road-primary via packAlongRoads — no face polygon traversal.
-/// organic=0 → Manhattan grid; organic=1 → Paris-style curved streets.
+/// Spec-driven district layout: hierarchical streets induce blocks, blocks subdivide into frontage lots,
+/// and buildings are placed inside those lots instead of being broadcast across a pre-shaped rectangle.
 let layoutWeberDistrict
   (rect: TRect) (funcs: FuncDef list)
   (heatMap: Map<string, float32 * int * int>)
@@ -2053,53 +2313,31 @@ let layoutWeberDistrict
   if funcs.IsEmpty then ([], [])
   elif rect.W < 1.5f || rect.H < 1.5f then ([], [])
   else
-    let g = WeberGraph()
-    let cx = rect.X + rect.W / 2.0f
-    let cz = rect.Z + rect.H / 2.0f
-
-    // Seed 4 boundary corners + perimeter edges to contain growth inside the block
-    let cornerIds =
-      [| Vec2.Create(rect.X,          rect.Z)
-         Vec2.Create(rect.X + rect.W, rect.Z)
-         Vec2.Create(rect.X + rect.W, rect.Z + rect.H)
-         Vec2.Create(rect.X,          rect.Z + rect.H) |]
-      |> Array.map (fun p -> g.AddNode(p, Avenue))
-    for i in 0 .. 3 do
-      g.AddEdge(cornerIds.[i], cornerIds.[(i + 1) % 4], Avenue, RoadClass.width Avenue) |> ignore
-
-    // Snapshot edge count BEFORE growth (boundary = 4 edges; internal = everything grown after)
-    let boundaryEdgeCount = g.EdgeCount
-
-    g.AddNode(Vec2.Create(cx, cz), Street) |> ignore
-
-    let isGrid   = organic < 0.4f
-    let centers  = [| Vec2.Create(cx, cz) |]
-    let baseLen  = sqrt(rect.W * rect.H / float32 (max 3 funcs.Length)) * 2.0f |> max 1.0f |> min 5.0f
-    let snapR    = baseLen * 0.45f
-    let sMin     = baseLen * 0.25f
-    let maxEdges = min 300 (funcs.Length * 8 + 20)
-
-    growStreets g centers rng Street isGrid baseLen snapR sMin maxEdges 0.08f
-    if funcs.Length >= 6 then
-      growStreets g centers rng Lane isGrid (baseLen * 0.65f) (snapR * 0.6f) (sMin * 0.6f) (maxEdges / 2) 0.15f
-
-    // Internal roads only — exclude boundary edges (they render at district/city level)
-    let weberRoads =
-      [ for e in g.Edges do
-          if EdgeId.value e.Id >= boundaryEdgeCount then
-            let na = g.N e.A
-            let nb = g.N e.B
-            let hw = e.Width / 2.0f
-            let (cr, cg, cb) = RoadClass.color e.Class
-            yield { FromFunc = ""; ToFunc = ""
-                    FromPos = Vector3(na.Pos.X, hw, na.Pos.Y)
-                    ToPos   = Vector3(nb.Pos.X, hw, nb.Pos.Y)
-                    Weight  = RoadClass.tier e.Class
-                    Color   = Color(cr, cg, cb, 255uy)
-                    Organic = organic } ]
-
-    let buildings = packAlongRoads weberRoads rect funcs heatMap districtColor rng gitMeta
-    (buildings, weberRoads)
+    let blockDemand =
+      max 1 (int (MathF.Ceiling(float32 funcs.Length / 4.0f)))
+    let streets, blocks = planHierarchicalDistrict rect blockDemand organic rng
+    let usableBlocks =
+      match blocks with
+      | [] -> [ ({ Rect = rect; Frontage = [ Street ] } : PlannedBlock) ]
+      | xs -> xs
+    let funcsPerBlock =
+      usableBlocks
+      |> List.map (fun block -> TRect.area block.Rect)
+      |> allocateByWeights funcs.Length
+    let blockAssignments =
+      List.zip usableBlocks funcsPerBlock
+      |> List.filter (fun (_, count) -> count > 0)
+    let sortedFuncs = funcs |> List.sortByDescending (fun f -> f.LineCount)
+    let mutable remaining = sortedFuncs
+    let buildings =
+      [ for (block, count) in blockAssignments do
+          let blockFuncs = remaining |> List.truncate count
+          remaining <- remaining |> List.skip blockFuncs.Length
+          if not blockFuncs.IsEmpty then
+            let lots = subdivideBlockIntoLots block.Rect blockFuncs.Length
+            yield! placeBuildingsInLots lots blockFuncs heatMap districtColor rng gitMeta ]
+    let districtRoads = streets |> List.map (plannedStreetToRoad organic)
+    (buildings, districtRoads)
 
 
 let districtPalette =
@@ -2229,26 +2467,43 @@ let buildCity (repoRoot: string) (projectFile: string option) =
     |> List.sortByDescending snd
   let projectZones = squarifiedTreemap projectItems (TRect.inset (avenueGap / 2.0f) cityRect)
 
-  // Level 2: Module blocks within each project zone
+  // Level 2: Module blocks are assigned from project-scale street-induced blocks
   let streetGap = 1.0f
   let allBlocks = ResizeArray<ModuleBlock>()
+  let mutable allPrimaryRoads = []
   let mutable colorIdx = 0
   for (proj, zone) in projectZones do
     let projModules =
       moduleGroups
       |> List.filter (fun (_, fns) -> fns.[0].Project = proj)
-      // Sort by call-graph centrality descending (panel Q4: hottest modules first → central treemap position)
       |> List.sortByDescending (fun (modName, _) ->
         moduleCentrality |> Map.tryFind modName |> Option.defaultValue 0)
-      |> List.map (fun (name, fns) -> (name, float32 fns.Length))
     let insetZone = TRect.inset (streetGap / 2.0f) zone
-    let moduleRects = squarifiedTreemap projModules insetZone
-    for (modName, rect) in moduleRects do
+    let projectFileMetas =
+      projModules
+      |> List.collect snd
+      |> List.map (fun f -> gitMetaByFile |> Map.tryFind f.FilePath |> Option.defaultValue GitMeta.empty)
+    let projectOrganic = districtOrganicFactor today projectFileMetas
+    let projectRoads, projectBlocks =
+      planHierarchicalDistrict insetZone projModules.Length projectOrganic (Random(int (fnvHash proj)))
+    let assignedRects =
+      match projectBlocks with
+      | [] -> [ insetZone ]
+      | xs ->
+          xs
+          |> List.sortByDescending (fun block -> blockScore insetZone block.Rect)
+          |> List.truncate projModules.Length
+          |> List.map _.Rect
+    let fallbackRects =
+      assignedRects
+      |> List.append (List.init (max 0 (projModules.Length - assignedRects.Length)) (fun _ -> insetZone))
+    allPrimaryRoads <- allPrimaryRoads @ (projectRoads |> List.map (plannedStreetToRoad projectOrganic))
+    for ((modName, _), rect) in List.zip projModules fallbackRects do
       let color = districtPalette.[colorIdx % districtPalette.Length]
       allBlocks.Add({ Module = modName; Project = proj; Rect = rect; Color = color })
       colorIdx <- colorIdx + 1
 
-  // Pack buildings into each module block using grid layout with lane corridors
+  // Pack buildings into each module block using street-induced sub-blocks and frontage lots
   let mutable allBuildings = []
   let mutable allDistricts = []
   let mutable allAlleyRoads = []
@@ -2285,9 +2540,10 @@ let buildCity (repoRoot: string) (projectFile: string option) =
 
   // Inter-district arterial Boulevards at block boundaries, width scaled by call coupling
   let arterials = buildArterialNetwork (allBlocks.ToArray()) callEdges
+  allPrimaryRoads <- allPrimaryRoads @ arterials
   allAlleyRoads <- allAlleyRoads @ arterials
 
-  // Generate roads from treemap boundaries (for HUD display)
+  // Generate roads from project boundaries plus the explicit street hierarchy
   let roadSet = System.Collections.Generic.HashSet<struct(float32 * float32 * float32 * float32)>()
   let roads = ResizeArray<Road>()
   let addEdge x1 z1 x2 z2 cls =
@@ -2305,13 +2561,14 @@ let buildCity (repoRoot: string) (projectFile: string option) =
     addEdge (zone.X + zone.W) zone.Z (zone.X + zone.W) (zone.Z + zone.H) Avenue
     addEdge (zone.X + zone.W) (zone.Z + zone.H) zone.X (zone.Z + zone.H) Avenue
     addEdge zone.X (zone.Z + zone.H) zone.X zone.Z Avenue
-  // Module block edges → Streets
-  for block in allBlocks do
-    let r = block.Rect
-    addEdge r.X r.Z (r.X + r.W) r.Z Street
-    addEdge (r.X + r.W) r.Z (r.X + r.W) (r.Z + r.H) Street
-    addEdge (r.X + r.W) (r.Z + r.H) r.X (r.Z + r.H) Street
-    addEdge r.X (r.Z + r.H) r.X r.Z Street
+  for road in allPrimaryRoads do
+    let cls =
+      match road.Weight with
+      | w when w >= RoadClass.tier Boulevard -> Boulevard
+      | w when w >= RoadClass.tier Avenue -> Avenue
+      | w when w >= RoadClass.tier Street -> Street
+      | _ -> Lane
+    addEdge road.FromPos.X road.FromPos.Z road.ToPos.X road.ToPos.Z cls
 
   let buildings = allBuildings |> List.rev
   let districts = allDistricts |> List.rev

@@ -897,7 +897,8 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
             // Wait briefly for any in-flight eval thread to finish
             match currentEvalThread.Value with
             | Some thread ->
-              match thread.Join(2000) with
+              let! joined = System.Threading.Tasks.Task.Run(fun () -> thread.Join(2000)) |> Async.AwaitTask
+              match joined with
               | false -> logger.LogWarning "⚠️ Eval thread did not exit in time, proceeding with hard reset"
               | true -> ()
               currentEvalThread.Value <- None
@@ -907,7 +908,9 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
             | false ->
               let disposeTask = System.Threading.Tasks.Task.Run(fun () ->
                 (st.Session :> System.IDisposable).Dispose())
-              match disposeTask.Wait(Timeouts.sessionDispose) with
+              let timeoutTask = System.Threading.Tasks.Task.Delay(Timeouts.sessionDispose)
+              let! completed = System.Threading.Tasks.Task.WhenAny(disposeTask, timeoutTask) |> Async.AwaitTask
+              match System.Object.ReferenceEquals(completed, disposeTask) with
               | false -> logger.LogWarning $"⚠️ Session dispose timed out after {Timeouts.sessionDispose.TotalSeconds}s, continuing..."
               | true -> ()
             | true -> ()
@@ -990,7 +993,7 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
                   | false ->
                     try stderrTask.Wait(5000) |> ignore with ex -> logger.LogDebug (sprintf "Build stderr wait failed: %s" ex.Message)
                     proc.ExitCode, String.concat "\n" stderrLines
-                let exitCode, stderr = runBuild ()
+                let! exitCode, stderr = System.Threading.Tasks.Task.Run(fun () -> runBuild()) |> Async.AwaitTask
                 match exitCode <> 0 with
                 | true ->
                   match stderr.Contains("denied") || stderr.Contains("locked") with
@@ -999,8 +1002,8 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
                     GC.Collect()
                     GC.WaitForPendingFinalizers()
                     GC.Collect()
-                    Thread.Sleep(500)
-                    let retryCode, retryErr = runBuild ()
+                    do! Async.Sleep 500
+                    let! retryCode, retryErr = System.Threading.Tasks.Task.Run(fun () -> runBuild()) |> Async.AwaitTask
                     match retryCode <> 0 with
                     | true ->
                       let msg = sprintf "Build failed on retry (exit code %d): %s" retryCode retryErr
@@ -1348,6 +1351,6 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
     | _ -> None
   let cancelCurrentEval () =
     actor.PostAndAsyncReply(fun reply -> CancelEval reply)
-    |> Async.RunSynchronously
+    |> Async.StartAsTask
 
   actor, diagnosticsChangedEvent.Publish, cancelCurrentEval, getSessionState, getEvalStats, getWarmupFailures, getWarmupContext, getStartupConfig, getStatusMessage
