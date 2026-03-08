@@ -14,11 +14,32 @@ let lightConfig = { FsCheckConfig.defaultConfig with maxTest = 100 }
 
 // ── Session / Status ──
 
+/// Adversarial build-reason strings: empty, parens, nested prefix, unicode, random
+let genBuildReason =
+  Gen.oneof [
+    Gen.constant ""
+    Gen.constant "dotnet build"
+    Gen.constant "rebuild"
+    Gen.constant "hot reload"
+    Gen.constant "with (parens)"
+    Gen.constant "Building (nested)"
+    Gen.constant "reason with ) embedded"
+    Gen.constant "日本語 build"
+    (Gen.elements ['a'..'z']
+     |> Gen.listOfLength 20
+     |> Gen.map (fun cs -> System.String(cs |> List.toArray)))
+  ]
+
+/// All SessionStatus cases including Building with adversarial reasons
 let genSessionStatus =
-  Gen.elements [
-    SessionStatus.Starting; SessionStatus.Ready
-    SessionStatus.Evaluating; SessionStatus.Faulted
-    SessionStatus.Restarting; SessionStatus.Stopped
+  Gen.frequency [
+    1, Gen.constant SessionStatus.Starting
+    1, Gen.constant SessionStatus.Ready
+    1, Gen.constant SessionStatus.Evaluating
+    1, Gen.constant SessionStatus.Faulted
+    1, Gen.constant SessionStatus.Restarting
+    1, Gen.constant SessionStatus.Stopped
+    3, genBuildReason |> Gen.map SessionStatus.Building
   ]
 
 // ── Geometry ──

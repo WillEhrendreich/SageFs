@@ -187,84 +187,43 @@ let keyComboTests = testList "KeyCombo" [
 ]
 
 let uiActionTests = testList "UiAction" [
-  testList "tryParse reachability" [
-    let reachableCases = [
-      "Quit", UiAction.Quit
-      "CycleFocus", UiAction.CycleFocus
-      "FocusLeft", UiAction.FocusDir Direction.Left
-      "FocusRight", UiAction.FocusDir Direction.Right
-      "FocusUp", UiAction.FocusDir Direction.Up
-      "FocusDown", UiAction.FocusDir Direction.Down
-      "ScrollUp", UiAction.ScrollUp
-      "ScrollDown", UiAction.ScrollDown
-      "Redraw", UiAction.Redraw
-      "FontSizeUp", UiAction.FontSizeUp
-      "FontSizeDown", UiAction.FontSizeDown
-      "Submit", UiAction.Editor EditorAction.Submit
-      "NewLine", UiAction.Editor EditorAction.NewLine
-      "Cancel", UiAction.Editor EditorAction.Cancel
-      "Undo", UiAction.Editor EditorAction.Undo
-      "Redo", UiAction.Editor EditorAction.Redo
-      "DeleteBackward", UiAction.Editor EditorAction.DeleteBackward
-      "DeleteForward", UiAction.Editor EditorAction.DeleteForward
-      "DeleteWord", UiAction.Editor EditorAction.DeleteWord
-      "DeleteToEndOfLine", UiAction.Editor EditorAction.DeleteToEndOfLine
-      "MoveWordForward", UiAction.Editor EditorAction.MoveWordForward
-      "MoveWordBackward", UiAction.Editor EditorAction.MoveWordBackward
-      "MoveToLineStart", UiAction.Editor EditorAction.MoveToLineStart
-      "MoveToLineEnd", UiAction.Editor EditorAction.MoveToLineEnd
-      "MoveUp", UiAction.Editor (EditorAction.MoveCursor Direction.Up)
-      "MoveDown", UiAction.Editor (EditorAction.MoveCursor Direction.Down)
-      "MoveLeft", UiAction.Editor (EditorAction.MoveCursor Direction.Left)
-      "MoveRight", UiAction.Editor (EditorAction.MoveCursor Direction.Right)
-      "SelectAll", UiAction.Editor EditorAction.SelectAll
-      "SelectWord", UiAction.Editor EditorAction.SelectWord
-      "TriggerCompletion", UiAction.Editor EditorAction.TriggerCompletion
-      "AcceptCompletion", UiAction.Editor EditorAction.AcceptCompletion
-      "DismissCompletion", UiAction.Editor EditorAction.DismissCompletion
-      "NextCompletion", UiAction.Editor EditorAction.NextCompletion
-      "PreviousCompletion", UiAction.Editor EditorAction.PreviousCompletion
-      "HistoryPrevious", UiAction.Editor EditorAction.HistoryPrevious
-      "HistoryNext", UiAction.Editor EditorAction.HistoryNext
-      "ListSessions", UiAction.Editor EditorAction.ListSessions
-      "ToggleSessionPanel", UiAction.Editor EditorAction.ToggleSessionPanel
-      "CreateSession", UiAction.Editor (EditorAction.CreateSession [])
-      "ResetSession", UiAction.Editor EditorAction.ResetSession
-      "HardResetSession", UiAction.Editor EditorAction.HardResetSession
-      "SessionNavUp", UiAction.Editor EditorAction.SessionNavUp
-      "SessionNavDown", UiAction.Editor EditorAction.SessionNavDown
-      "SessionSelect", UiAction.Editor EditorAction.SessionSelect
-      "SessionDelete", UiAction.Editor EditorAction.SessionDelete
-      "SessionStopOthers", UiAction.Editor EditorAction.SessionStopOthers
-      "SessionCycleNext", UiAction.Editor EditorAction.SessionCycleNext
-      "SessionCyclePrev", UiAction.Editor EditorAction.SessionCyclePrev
-      "ClearOutput", UiAction.Editor EditorAction.ClearOutput
-      "PromptConfirm", UiAction.Editor EditorAction.PromptConfirm
-      "PromptCancel", UiAction.Editor EditorAction.PromptCancel
-      "CycleTheme", UiAction.CycleTheme
-      "HotReloadWatchAll", UiAction.HotReloadWatchAll
-      "HotReloadUnwatchAll", UiAction.HotReloadUnwatchAll
-      "EnableLiveTesting", UiAction.EnableLiveTesting
-      "DisableLiveTesting", UiAction.DisableLiveTesting
-      "CycleRunPolicy", UiAction.CycleRunPolicy
-      "ToggleCoverage", UiAction.ToggleCoverage
-      "ResizeHGrow", UiAction.ResizeH 1
-      "ResizeHShrink", UiAction.ResizeH -1
-      "ResizeVGrow", UiAction.ResizeV 1
-      "ResizeVShrink", UiAction.ResizeV -1
-      "ResizeRGrow", UiAction.ResizeR 1
-      "ResizeRShrink", UiAction.ResizeR -1
-      "TogglePane.editor", UiAction.TogglePane "editor"
-      "Layout.wide", UiAction.LayoutPreset "wide"
-    ]
-    for (input, expected) in reachableCases do
+  testList "tryParse reachability (from allFixedEntries)" [
+    for (input, expected) in UiAction.allFixedEntries do
       test (sprintf "parses '%s'" input) {
         UiAction.tryParse input
         |> Expect.equal (sprintf "'%s'" input) (Some expected)
       }
   ]
+  testList "tryParse prefix handlers" [
+    test "TogglePane.editor" {
+      UiAction.tryParse "TogglePane.editor"
+      |> Expect.equal "TogglePane" (Some (UiAction.TogglePane "editor"))
+    }
+    test "Layout.wide" {
+      UiAction.tryParse "Layout.wide"
+      |> Expect.equal "Layout" (Some (UiAction.LayoutPreset "wide"))
+    }
+  ]
   test "unknown returns None" {
     UiAction.tryParse "NotAValidAction" |> Expect.isNone "unknown"
+  }
+  test "every DU case tag is covered by allFixedEntries or prefix handlers" {
+    let allCaseTags =
+      FSharp.Reflection.FSharpType.GetUnionCases(typeof<UiAction>)
+      |> Array.map (fun c -> c.Name)
+      |> Set.ofArray
+    let mapCoveredTags =
+      UiAction.allFixedEntries
+      |> List.map (fun (_, action) ->
+        let case, _ = FSharp.Reflection.FSharpValue.GetUnionFields(action, typeof<UiAction>)
+        case.Name)
+      |> Set.ofList
+    // TogglePane and LayoutPreset are covered by prefix matching
+    let prefixCoveredTags = set [ "TogglePane"; "LayoutPreset" ]
+    let allCovered = Set.union mapCoveredTags prefixCoveredTags
+    let missing = Set.difference allCaseTags allCovered
+    missing |> Set.isEmpty
+    |> Expect.isTrue (sprintf "UiAction DU cases missing from parse: %A" missing)
   }
 ]
 
@@ -353,16 +312,37 @@ let propertyTests = testList "properties" [
       |> SessionStatus.parse
       |> Expect.equal "roundtrip" (Ok status))
 
+  testPropertyWithConfig propConfig "Building with adversarial reasons roundtrips" <|
+    Prop.forAll (Arb.fromGen genBuildReason) (fun reason ->
+      let status = SessionStatus.Building reason
+      SessionStatus.label status
+      |> SessionStatus.parse
+      |> Expect.equal (sprintf "roundtrip for '%s'" reason) (Ok status))
+
   testPropertyWithConfig propConfig "isAlive and isTerminal are complementary" <|
     Prop.forAll (Arb.fromGen genSessionStatus) (fun status ->
       let alive = SessionStatus.isAlive status
       let terminal = match status with SessionStatus.Faulted | SessionStatus.Stopped -> true | _ -> false
       alive |> Expect.notEqual "alive ≠ terminal" terminal)
 
+  testPropertyWithConfig propConfig "isOperational implies isAlive" <|
+    Prop.forAll (Arb.fromGen genSessionStatus) (fun status ->
+      match SessionStatus.isOperational status with
+      | true -> SessionStatus.isAlive status |> Expect.isTrue "operational ⇒ alive"
+      | false -> ())
+
   testPropertyWithConfig propConfig "toSessionState is total — never throws" <|
     Prop.forAll (Arb.fromGen genSessionStatus) (fun status ->
       let _ = SessionStatus.toSessionState status
       true |> Expect.isTrue "no exception")
+
+  testPropertyWithConfig propConfig "parse rejects arbitrary non-status strings" <|
+    fun (NonEmptyString s) ->
+      match SessionStatus.parse s with
+      | Ok _ -> ()
+      | Error msg ->
+        msg.Contains("Unknown", StringComparison.Ordinal)
+        |> Expect.isTrue "error mentions 'Unknown'"
 
   testPropertyWithConfig propConfig "scoreCandidate is non-negative" <|
     fun (NonEmptyString candidate) ->

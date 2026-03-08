@@ -1,6 +1,8 @@
 module SageFs.Tests.ConnectionTrackerTests
 
 open Expecto
+open FsCheck
+open FsCheck.FSharp
 open SageFs
 
 [<Tests>]
@@ -51,7 +53,30 @@ let tests = testList "ConnectionTracker" [
   testCase "empty tracker returns zeros" (fun () ->
     let tracker = ConnectionTracker()
     let counts = tracker.GetCounts("nonexistent")
-    Expect.equal counts.Browsers 0 "zero browsers"
-    Expect.equal counts.McpAgents 0 "zero mcp"
-    Expect.equal counts.Terminals 0 "zero terminals")
+    Expect.equal counts ConnectionCounts.zero "empty = zero")
+
+  testCase "getAllCounts sums all sessions" (fun () ->
+    let tracker = ConnectionTracker()
+    tracker.Register("b1", Browser, "session-1")
+    tracker.Register("m1", McpAgent, "session-2")
+    tracker.Register("t1", Terminal, "session-1")
+    let counts = tracker.GetAllCounts()
+    Expect.equal counts.Browsers 1 "one browser"
+    Expect.equal counts.McpAgents 1 "one mcp"
+    Expect.equal counts.Terminals 1 "one terminal")
+
+  testCase "ConnectionCounts.zero is identity" (fun () ->
+    let zero = ConnectionCounts.zero
+    Expect.equal zero.Browsers 0 "zero browsers"
+    Expect.equal zero.McpAgents 0 "zero mcp"
+    Expect.equal zero.Terminals 0 "zero terminals")
+
+  testCase "ConnectionCounts.ofClients matches manual count" (fun () ->
+    let clients = [
+      { Id = "b1"; Kind = Browser; SessionId = Some "s1"; ConnectedAt = System.DateTime.UtcNow }
+      { Id = "b2"; Kind = Browser; SessionId = Some "s1"; ConnectedAt = System.DateTime.UtcNow }
+      { Id = "m1"; Kind = McpAgent; SessionId = Some "s1"; ConnectedAt = System.DateTime.UtcNow }
+    ]
+    let counts = ConnectionCounts.ofClients clients
+    Expect.equal counts { Browsers = 2; McpAgents = 1; Terminals = 0 } "matches")
 ]

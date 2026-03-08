@@ -236,78 +236,92 @@ module KeyCombo =
     String.Join("+", parts)
 
 module UiAction =
-  /// Parse a string like "Quit", "Submit", "FocusLeft", "Editor.DeleteBackward"
+  /// All fixed string→UiAction pairs. Public for completeness testing.
+  let allFixedEntries : (string * UiAction) list =
+    [ "Quit", UiAction.Quit
+      "CycleFocus", UiAction.CycleFocus
+      "FocusLeft", UiAction.FocusDir Direction.Left
+      "FocusRight", UiAction.FocusDir Direction.Right
+      "FocusUp", UiAction.FocusDir Direction.Up
+      "FocusDown", UiAction.FocusDir Direction.Down
+      "ScrollUp", UiAction.ScrollUp
+      "ScrollDown", UiAction.ScrollDown
+      "Redraw", UiAction.Redraw
+      "FontSizeUp", UiAction.FontSizeUp
+      "FontSizeDown", UiAction.FontSizeDown
+      "Submit", UiAction.Editor EditorAction.Submit
+      "NewLine", UiAction.Editor EditorAction.NewLine
+      "Cancel", UiAction.Editor EditorAction.Cancel
+      "Undo", UiAction.Editor EditorAction.Undo
+      "Redo", UiAction.Editor EditorAction.Redo
+      "DeleteBackward", UiAction.Editor EditorAction.DeleteBackward
+      "DeleteForward", UiAction.Editor EditorAction.DeleteForward
+      "DeleteWord", UiAction.Editor EditorAction.DeleteWord
+      "DeleteToEndOfLine", UiAction.Editor EditorAction.DeleteToEndOfLine
+      "MoveWordForward", UiAction.Editor EditorAction.MoveWordForward
+      "MoveWordBackward", UiAction.Editor EditorAction.MoveWordBackward
+      "MoveToLineStart", UiAction.Editor EditorAction.MoveToLineStart
+      "MoveToLineEnd", UiAction.Editor EditorAction.MoveToLineEnd
+      "MoveUp", UiAction.Editor (EditorAction.MoveCursor Direction.Up)
+      "MoveDown", UiAction.Editor (EditorAction.MoveCursor Direction.Down)
+      "MoveLeft", UiAction.Editor (EditorAction.MoveCursor Direction.Left)
+      "MoveRight", UiAction.Editor (EditorAction.MoveCursor Direction.Right)
+      "SelectAll", UiAction.Editor EditorAction.SelectAll
+      "SelectWord", UiAction.Editor EditorAction.SelectWord
+      "TriggerCompletion", UiAction.Editor EditorAction.TriggerCompletion
+      "AcceptCompletion", UiAction.Editor EditorAction.AcceptCompletion
+      "DismissCompletion", UiAction.Editor EditorAction.DismissCompletion
+      "NextCompletion", UiAction.Editor EditorAction.NextCompletion
+      "PreviousCompletion", UiAction.Editor EditorAction.PreviousCompletion
+      "HistoryPrevious", UiAction.Editor EditorAction.HistoryPrevious
+      "HistoryNext", UiAction.Editor EditorAction.HistoryNext
+      "ListSessions", UiAction.Editor EditorAction.ListSessions
+      "ToggleSessionPanel", UiAction.Editor EditorAction.ToggleSessionPanel
+      "CreateSession", UiAction.Editor (EditorAction.CreateSession [])
+      "ConfigureWarmupAutoOpen", UiAction.Editor EditorAction.ConfigureWarmupAutoOpen
+      "ResetSession", UiAction.Editor EditorAction.ResetSession
+      "HardResetSession", UiAction.Editor EditorAction.HardResetSession
+      "SessionNavUp", UiAction.Editor EditorAction.SessionNavUp
+      "SessionNavDown", UiAction.Editor EditorAction.SessionNavDown
+      "SessionSelect", UiAction.Editor EditorAction.SessionSelect
+      "SessionDelete", UiAction.Editor EditorAction.SessionDelete
+      "SessionStopOthers", UiAction.Editor EditorAction.SessionStopOthers
+      "SessionCycleNext", UiAction.Editor EditorAction.SessionCycleNext
+      "SessionCyclePrev", UiAction.Editor EditorAction.SessionCyclePrev
+      "ClearOutput", UiAction.Editor EditorAction.ClearOutput
+      "PromptConfirm", UiAction.Editor EditorAction.PromptConfirm
+      "PromptCancel", UiAction.Editor EditorAction.PromptCancel
+      "ResizeHGrow", UiAction.ResizeH 1
+      "ResizeHShrink", UiAction.ResizeH -1
+      "ResizeVGrow", UiAction.ResizeV 1
+      "ResizeVShrink", UiAction.ResizeV -1
+      "ResizeRGrow", UiAction.ResizeR 1
+      "ResizeRShrink", UiAction.ResizeR -1
+      "CycleTheme", UiAction.CycleTheme
+      "HotReloadWatchAll", UiAction.HotReloadWatchAll
+      "HotReloadUnwatchAll", UiAction.HotReloadUnwatchAll
+      "EnableLiveTesting", UiAction.EnableLiveTesting
+      "DisableLiveTesting", UiAction.DisableLiveTesting
+      "CycleRunPolicy", UiAction.CycleRunPolicy
+      "ToggleCoverage", UiAction.ToggleCoverage
+    ]
+
+  /// O(1) lookup map built once from allFixedEntries
+  let private parseMap : Map<string, UiAction> =
+    allFixedEntries |> Map.ofList
+
+  /// Parse a string like "Quit", "Submit", "FocusLeft", "TogglePane.editor"
   let tryParse (s: string) : UiAction option =
-    match s.Trim() with
-    | "Quit" -> Some UiAction.Quit
-    | "CycleFocus" -> Some UiAction.CycleFocus
-    | "FocusLeft" -> Some (UiAction.FocusDir Direction.Left)
-    | "FocusRight" -> Some (UiAction.FocusDir Direction.Right)
-    | "FocusUp" -> Some (UiAction.FocusDir Direction.Up)
-    | "FocusDown" -> Some (UiAction.FocusDir Direction.Down)
-    | "ScrollUp" -> Some UiAction.ScrollUp
-    | "ScrollDown" -> Some UiAction.ScrollDown
-    | "Redraw" -> Some UiAction.Redraw
-    | "FontSizeUp" -> Some UiAction.FontSizeUp
-    | "FontSizeDown" -> Some UiAction.FontSizeDown
-    | "Submit" -> Some (UiAction.Editor EditorAction.Submit)
-    | "NewLine" -> Some (UiAction.Editor EditorAction.NewLine)
-    | "Cancel" -> Some (UiAction.Editor EditorAction.Cancel)
-    | "Undo" -> Some (UiAction.Editor EditorAction.Undo)
-    | "Redo" -> Some (UiAction.Editor EditorAction.Redo)
-    | "DeleteBackward" -> Some (UiAction.Editor EditorAction.DeleteBackward)
-    | "DeleteForward" -> Some (UiAction.Editor EditorAction.DeleteForward)
-    | "DeleteWord" -> Some (UiAction.Editor EditorAction.DeleteWord)
-    | "DeleteToEndOfLine" -> Some (UiAction.Editor EditorAction.DeleteToEndOfLine)
-    | "MoveWordForward" -> Some (UiAction.Editor EditorAction.MoveWordForward)
-    | "MoveWordBackward" -> Some (UiAction.Editor EditorAction.MoveWordBackward)
-    | "MoveToLineStart" -> Some (UiAction.Editor EditorAction.MoveToLineStart)
-    | "MoveToLineEnd" -> Some (UiAction.Editor EditorAction.MoveToLineEnd)
-    | "MoveUp" -> Some (UiAction.Editor (EditorAction.MoveCursor Direction.Up))
-    | "MoveDown" -> Some (UiAction.Editor (EditorAction.MoveCursor Direction.Down))
-    | "MoveLeft" -> Some (UiAction.Editor (EditorAction.MoveCursor Direction.Left))
-    | "MoveRight" -> Some (UiAction.Editor (EditorAction.MoveCursor Direction.Right))
-    | "SelectAll" -> Some (UiAction.Editor EditorAction.SelectAll)
-    | "SelectWord" -> Some (UiAction.Editor EditorAction.SelectWord)
-    | "TriggerCompletion" -> Some (UiAction.Editor EditorAction.TriggerCompletion)
-    | "AcceptCompletion" -> Some (UiAction.Editor EditorAction.AcceptCompletion)
-    | "DismissCompletion" -> Some (UiAction.Editor EditorAction.DismissCompletion)
-    | "NextCompletion" -> Some (UiAction.Editor EditorAction.NextCompletion)
-    | "PreviousCompletion" -> Some (UiAction.Editor EditorAction.PreviousCompletion)
-    | "HistoryPrevious" -> Some (UiAction.Editor EditorAction.HistoryPrevious)
-    | "HistoryNext" -> Some (UiAction.Editor EditorAction.HistoryNext)
-    | "ListSessions" -> Some (UiAction.Editor EditorAction.ListSessions)
-    | "ToggleSessionPanel" -> Some (UiAction.Editor EditorAction.ToggleSessionPanel)
-    | "CreateSession" -> Some (UiAction.Editor (EditorAction.CreateSession []))
-    | "ConfigureWarmupAutoOpen" -> Some (UiAction.Editor EditorAction.ConfigureWarmupAutoOpen)
-    | "ResetSession" -> Some (UiAction.Editor EditorAction.ResetSession)
-    | "HardResetSession" -> Some (UiAction.Editor EditorAction.HardResetSession)
-    | "SessionNavUp" -> Some (UiAction.Editor EditorAction.SessionNavUp)
-    | "SessionNavDown" -> Some (UiAction.Editor EditorAction.SessionNavDown)
-    | "SessionSelect" -> Some (UiAction.Editor EditorAction.SessionSelect)
-    | "SessionDelete" -> Some (UiAction.Editor EditorAction.SessionDelete)
-    | "SessionStopOthers" -> Some (UiAction.Editor EditorAction.SessionStopOthers)
-    | "SessionCycleNext" -> Some (UiAction.Editor EditorAction.SessionCycleNext)
-    | "SessionCyclePrev" -> Some (UiAction.Editor EditorAction.SessionCyclePrev)
-    | "ClearOutput" -> Some (UiAction.Editor EditorAction.ClearOutput)
-    | "PromptConfirm" -> Some (UiAction.Editor EditorAction.PromptConfirm)
-    | "PromptCancel" -> Some (UiAction.Editor EditorAction.PromptCancel)
-    | s when s.StartsWith("TogglePane.", System.StringComparison.Ordinal) -> Some (UiAction.TogglePane (s.Substring(11)))
-    | s when s.StartsWith("Layout.", System.StringComparison.Ordinal) -> Some (UiAction.LayoutPreset (s.Substring(7)))
-    | "ResizeHGrow" -> Some (UiAction.ResizeH 1)
-    | "ResizeHShrink" -> Some (UiAction.ResizeH -1)
-    | "ResizeVGrow" -> Some (UiAction.ResizeV 1)
-    | "ResizeVShrink" -> Some (UiAction.ResizeV -1)
-    | "ResizeRGrow" -> Some (UiAction.ResizeR 1)
-    | "ResizeRShrink" -> Some (UiAction.ResizeR -1)
-    | "CycleTheme" -> Some UiAction.CycleTheme
-    | "HotReloadWatchAll" -> Some UiAction.HotReloadWatchAll
-    | "HotReloadUnwatchAll" -> Some UiAction.HotReloadUnwatchAll
-    | "EnableLiveTesting" -> Some UiAction.EnableLiveTesting
-    | "DisableLiveTesting" -> Some UiAction.DisableLiveTesting
-    | "CycleRunPolicy" -> Some UiAction.CycleRunPolicy
-    | "ToggleCoverage" -> Some UiAction.ToggleCoverage
-    | _ -> None
+    let trimmed = s.Trim()
+    match Map.tryFind trimmed parseMap with
+    | Some _ as result -> result
+    | None ->
+      match trimmed with
+      | s when s.StartsWith("TogglePane.", System.StringComparison.Ordinal) ->
+        Some (UiAction.TogglePane (s.Substring(11)))
+      | s when s.StartsWith("Layout.", System.StringComparison.Ordinal) ->
+        Some (UiAction.LayoutPreset (s.Substring(7)))
+      | _ -> None
 
 module KeyMap =
   let hintFor (keyMap: KeyMap) (action: EditorAction) : KeyCombo option =

@@ -384,9 +384,7 @@ let outputDedupTests =
 
 /// Tests for connection count display formatting (Bug #11)
 module ConnectionCountDisplay =
-  type ConnCounts = { Browsers: int; McpAgents: int; Terminals: int }
-
-  let formatConnectionCounts (total: int) (allCounts: ConnCounts) =
+  let formatConnectionCounts (total: int) (allCounts: SageFs.ConnectionCounts) =
     let parts =
       [ if allCounts.Browsers > 0 then sprintf "🌐 %d" allCounts.Browsers
         if allCounts.McpAgents > 0 then sprintf "🤖 %d" allCounts.McpAgents
@@ -397,7 +395,7 @@ module ConnectionCountDisplay =
 [<Tests>]
 let connectionCountTests =
   let fmt = ConnectionCountDisplay.formatConnectionCounts
-  let mk b m t : ConnectionCountDisplay.ConnCounts = { Browsers = b; McpAgents = m; Terminals = t }
+  let mk b m t : SageFs.ConnectionCounts = { Browsers = b; McpAgents = m; Terminals = t }
   testList "Connection count display (Bug #11)" [
     testCase "shows icon breakdown when counts available" (fun () ->
       let label = fmt 3 (mk 1 1 1)

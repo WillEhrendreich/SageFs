@@ -12,6 +12,25 @@ type ConnectedClient = {
   ConnectedAt: DateTime
 }
 
+/// Immutable count of connected clients by kind.
+type ConnectionCounts = {
+  Browsers: int
+  McpAgents: int
+  Terminals: int
+}
+
+module ConnectionCounts =
+  let zero = { Browsers = 0; McpAgents = 0; Terminals = 0 }
+
+  let ofClients (clients: ConnectedClient seq) =
+    clients
+    |> Seq.fold (fun acc c ->
+      match c.Kind with
+      | Browser -> { acc with Browsers = acc.Browsers + 1 }
+      | McpAgent -> { acc with McpAgents = acc.McpAgents + 1 }
+      | Terminal -> { acc with Terminals = acc.Terminals + 1 }
+    ) zero
+
 /// Thread-safe tracker for connected UI clients across sessions.
 type ConnectionTracker() =
   let clients = ConcurrentDictionary<string, ConnectedClient>()
@@ -33,31 +52,17 @@ type ConnectionTracker() =
     |> Seq.filter (fun c -> c.SessionId = Some sessionId)
     |> Seq.toList
 
-  member _.GetCounts(sessionId: string) =
-    let mutable browsers = 0
-    let mutable mcpAgents = 0
-    let mutable terminals = 0
-    for kv in clients do
-      let c = kv.Value
-      match c.SessionId = Some sessionId with
-      | true ->
-        match c.Kind with
-        | Browser -> browsers <- browsers + 1
-        | McpAgent -> mcpAgents <- mcpAgents + 1
-        | Terminal -> terminals <- terminals + 1
-      | false -> ()
-    {| Browsers = browsers; McpAgents = mcpAgents; Terminals = terminals |}
+  /// Snapshot-then-count: takes a point-in-time copy for consistent iteration.
+  member _.GetCounts(sessionId: string) : ConnectionCounts =
+    clients.Values
+    |> Seq.toArray
+    |> Array.filter (fun c -> c.SessionId = Some sessionId)
+    |> ConnectionCounts.ofClients
 
-  member _.GetAllCounts() =
-    let mutable browsers = 0
-    let mutable mcpAgents = 0
-    let mutable terminals = 0
-    for kv in clients do
-      match kv.Value.Kind with
-      | Browser -> browsers <- browsers + 1
-      | McpAgent -> mcpAgents <- mcpAgents + 1
-      | Terminal -> terminals <- terminals + 1
-    {| Browsers = browsers; McpAgents = mcpAgents; Terminals = terminals |}
+  member _.GetAllCounts() : ConnectionCounts =
+    clients.Values
+    |> Seq.toArray
+    |> ConnectionCounts.ofClients
 
   member _.TotalCount = clients.Count
 
