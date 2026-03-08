@@ -111,6 +111,7 @@
         <Compile Include="EvalTimelineTests.fs" />
         <Compile Include="NotebookExportTests.fs" />
         <Compile Include="SseFeatureFormatTests.fs" />
+        <Compile Include="DomainModelSseTests.fs" />
         <Compile Include="FeatureHookTests.fs" />
         <Compile Include="AlgebraicPropertyTests.fs" />
         <Compile Include="EventFoldPropertyTests.fs" />

@@ -224,3 +224,18 @@ let formatEvalTimelineEvent (opts: JsonSerializerOptions) (sessionId: string opt
        Sparkline = stats.Sparkline |}
   let json = JsonSerializer.Serialize(payload, opts) |> injectSessionId sessionId
   formatSseEvent "eval_timeline" json
+
+/// Format annotated domain model transitions as an SSE event string.
+/// Each transition carries health status (Passing/Failing/Stale/Untested/NotImplemented).
+let formatDomainModelEvent (opts: JsonSerializerOptions) (sessionId: string option) (annotations: Features.DomainModelViz.AnnotatedTransition list) : string =
+  let payload =
+    {| Transitions =
+         annotations |> List.map (fun a ->
+           {| FromState = a.FromState
+              ToState = a.ToState
+              FunctionName = a.FunctionName
+              IsErrorBranch = a.IsErrorBranch
+              Health = sprintf "%A" a.Health |})
+         |> List.toArray |}
+  let json = JsonSerializer.Serialize(payload, opts) |> injectSessionId sessionId
+  formatSseEvent "domain_model" json

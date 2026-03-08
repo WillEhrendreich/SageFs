@@ -78,4 +78,43 @@ let sseFeatureFormatTests = testList "SSE Feature Formatters" [
     EvalTimeline.timelineStats 10 EvalTimeline.TimelineState.empty
     |> SageFs.SseWriter.formatEvalTimelineEvent opts None
     |> Expect.stringEnds "timeline should end with \\n\\n" "\n\n"
+
+  testCase "formatDomainModelEvent produces valid SSE with event type" <| fun _ ->
+    let annots : DomainModelViz.AnnotatedTransition list = [
+      { FromState = "Draft"; ToState = "Submitted"
+        FunctionName = Some "submit"; IsErrorBranch = false
+        Health = DomainModelViz.TransitionHealth.Passing }
+    ]
+    let result = SageFs.SseWriter.formatDomainModelEvent opts None annots
+    result |> Expect.stringStarts "event type" "event: domain_model\n"
+
+  testCase "formatDomainModelEvent injects session id" <| fun _ ->
+    let annots : DomainModelViz.AnnotatedTransition list = [
+      { FromState = "A"; ToState = "B"
+        FunctionName = Some "f"; IsErrorBranch = false
+        Health = DomainModelViz.TransitionHealth.Untested }
+    ]
+    let result = SageFs.SseWriter.formatDomainModelEvent opts (Some "s1") annots
+    result |> Expect.stringContains "session id" "s1"
+
+  testCase "formatDomainModelEvent without session id omits it" <| fun _ ->
+    let result = SageFs.SseWriter.formatDomainModelEvent opts None []
+    (result.Contains("SessionId")) |> Expect.isFalse "no session id"
+
+  testCase "formatDomainModelEvent serializes health status" <| fun _ ->
+    let annots : DomainModelViz.AnnotatedTransition list = [
+      { FromState = "A"; ToState = "B"
+        FunctionName = Some "f"; IsErrorBranch = false
+        Health = DomainModelViz.TransitionHealth.Passing }
+      { FromState = "B"; ToState = "C"
+        FunctionName = None; IsErrorBranch = false
+        Health = DomainModelViz.TransitionHealth.NotImplemented }
+    ]
+    let result = SageFs.SseWriter.formatDomainModelEvent opts None annots
+    result |> Expect.stringContains "Passing" "Passing"
+    result |> Expect.stringContains "NotImplemented" "NotImplemented"
+
+  testCase "formatDomainModelEvent ends with double newline" <| fun _ ->
+    SageFs.SseWriter.formatDomainModelEvent opts None []
+    |> Expect.stringEnds "domain_model ends \\n\\n" "\n\n"
 ]
