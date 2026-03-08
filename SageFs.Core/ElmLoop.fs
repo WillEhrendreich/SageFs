@@ -218,6 +218,7 @@ module ElmLoop =
     // Dedicated drain thread — runs outside the thread pool so it's never
     // starved by Kestrel/SSE/effect work saturating the pool.
     // Stops cleanly when the CancellationToken is cancelled.
+    // Disposes the signal after exit so handles are not leaked in tests.
     let drainThread = Thread(fun () ->
       try
         while not ct.IsCancellationRequested do
@@ -226,14 +227,17 @@ module ElmLoop =
           // Drain until queue is truly empty (messages may arrive during processing)
           while not queue.IsEmpty && not ct.IsCancellationRequested do
             drain ()
-      with :? System.OperationCanceledException -> ())
+      with :? System.OperationCanceledException -> ()
+      signal.Dispose())
     drainThread.IsBackground <- true
     drainThread.Name <- "ElmLoop-Drain"
     drainThread.Start()
 
     let dispatch (msg: 'Msg) =
       queue.Enqueue msg
-      signal.Set()
+      // Guard against signal.Set() after disposal when CT is already cancelled
+      if not ct.IsCancellationRequested then
+        try signal.Set() with :? System.ObjectDisposedException -> ()
 
     let regions =
       try program.Render initialModel

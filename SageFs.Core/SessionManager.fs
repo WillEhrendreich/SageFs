@@ -316,14 +316,16 @@ module SessionManager =
       match primaryProject with
       | None -> return Ok "No projects to build"
       | Some projFile ->
-        let psi =
-          ProcessStartInfo(
-            "dotnet",
-            sprintf "build \"%s\" --no-restore --no-incremental" projFile,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            WorkingDirectory = workingDir)
+        let psi = ProcessStartInfo(
+          "dotnet",
+          RedirectStandardOutput = true,
+          RedirectStandardError = true,
+          UseShellExecute = false,
+          WorkingDirectory = workingDir)
+        psi.ArgumentList.Add("build")
+        psi.ArgumentList.Add(projFile)
+        psi.ArgumentList.Add("--no-restore")
+        psi.ArgumentList.Add("--no-incremental")
         let proc = Process.Start(psi)
         let stderrLines = System.Collections.Generic.List<string>()
         let stderrTask =
@@ -354,8 +356,7 @@ module SessionManager =
           proc.Dispose()
           return Error "Build timed out (10 min limit)"
         | false ->
-          try stderrTask.Wait(5000) |> ignore with ex -> Log.warn "[SessionManager] stderr wait: %s" ex.Message
-          try stdoutTask.Wait(5000) |> ignore with ex -> Log.warn "[SessionManager] stdout wait: %s" ex.Message
+          let! _ = System.Threading.Tasks.Task.WhenAll(stderrTask, stdoutTask) |> Async.AwaitTask
           let exitCode = proc.ExitCode
           proc.Dispose()
           match exitCode <> 0 with
@@ -698,8 +699,9 @@ module SessionManager =
                     | SessionStatus.Stopped -> done' <- true
                     | _ -> ()
                   | _ -> ()
-                with _ ->
-                  done' <- true  // Transport error — WorkerExited event handles cleanup
+                with ex ->
+                    Log.warn "[SessionManager] Worker ready poll transport error for %s: %s (%s)" id ex.Message (ex.GetType().Name)
+                    done' <- true  // Transport error — WorkerExited event handles cleanup
             }, ct)
             // Request initial test discovery from the worker
             Async.Start(async {

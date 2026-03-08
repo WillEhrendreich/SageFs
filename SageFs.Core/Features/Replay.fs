@@ -100,7 +100,7 @@ module SessionReplayState =
           Status = Ready
           EvalCount = state.EvalCount + 1
           LastEvalResult = Some e.Result
-          EvalHistory = state.EvalHistory @ [record] }
+          EvalHistory = record :: state.EvalHistory }
       |> withActivity
     | EvalFailed e ->
       { state with
@@ -173,6 +173,7 @@ module SessionReplayState =
         typeSig
         r.Code
     state.EvalHistory
+    |> List.rev
     |> List.mapi formatRecord
     |> String.concat "\n"
     |> sprintf "%s%s" header

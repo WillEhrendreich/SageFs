@@ -110,7 +110,7 @@ type DaemonInfra = {
 /// Event append — returns the Task so callers can await on critical paths (e.g. shutdown).
 /// Non-critical callers may discard the Task; it logs errors internally.
 let appendEventsAsync (infra: DaemonInfra) (events: Features.Events.SageFsEvent list) =
-  System.Threading.Tasks.Task.Run(fun () ->
+  let t = System.Threading.Tasks.Task.Run(fun () ->
     task {
       try
         match! infra.Persistence.AppendEvents infra.DaemonStreamId events with
@@ -122,6 +122,14 @@ let appendEventsAsync (infra: DaemonInfra) (events: Features.Events.SageFsEvent 
       with
       | :? OperationCanceledException -> ()  // shutdown race — safe to swallow
     } :> System.Threading.Tasks.Task)
+  // Ensure fire-and-forget faults are surfaced in the log rather than silently swallowed
+  t.ContinueWith(
+    (fun (task: System.Threading.Tasks.Task) ->
+      if task.IsFaulted then
+        let ex = task.Exception
+        infra.Log.LogError("appendEventsAsync faulted: {Message}", if isNull ex then "unknown" else ex.Message)),
+    System.Threading.Tasks.TaskContinuationOptions.OnlyOnFaulted) |> ignore
+  t
 
 /// Create one-time daemon infrastructure (logger, HTTP client, persistence, CTS).
 let createDaemonInfrastructure () : DaemonInfra =
@@ -303,15 +311,16 @@ let fetchWorkerEndpoint
 }
 
 /// Build DaemonReplayState from active sessions (used in periodic save + shutdown).
-let buildReplayState (readSnapshot: unit -> SessionManager.QuerySnapshot) =
+/// `activeSessionId` must come from the live Elm model (not the snapshot) since the
+/// snapshot has no concept of "which session is currently active".
+let buildReplayState (readSnapshot: unit -> SessionManager.QuerySnapshot) (activeSessionId: string option) =
   let activeSessions = SessionManager.QuerySnapshot.allSessions (readSnapshot())
   let toRecord (s: WorkerProtocol.SessionInfo) : Features.Replay.DaemonSessionRecord =
     { SessionId = s.Id; Projects = s.Projects; WorkingDir = s.WorkingDirectory
       CreatedAt = DateTimeOffset(s.CreatedAt, TimeSpan.Zero); StoppedAt = None }
   { Features.Replay.DaemonReplayState.Sessions =
       activeSessions |> List.map (fun s -> s.Id, toRecord s) |> Map.ofList
-    Features.Replay.DaemonReplayState.ActiveSessionId =
-      activeSessions |> List.tryHead |> Option.map (fun s -> s.Id) }
+    Features.Replay.DaemonReplayState.ActiveSessionId = activeSessionId }
 
 /// Get session state from CQRS snapshot.
 let getSessionStateFromSnapshot (readSnapshot: unit -> SessionManager.QuerySnapshot) (sid: string) =
@@ -461,7 +470,8 @@ let performGracefulShutdown
       log.LogWarning("Failed to save test cache: {Error}", err)
 
   // Persist session manifest for binary-first resume
-  let replayState = buildReplayState readSnapshot
+  let activeSessionId = (getModel()).Sessions.ActiveSessionId |> ActiveSession.sessionId
+  let replayState = buildReplayState readSnapshot activeSessionId
   match Features.DaemonPersistence.saveManifest DaemonState.SageFsDir replayState with
   | Ok path -> log.LogInformation("Saved session manifest to {Path}", path)
   | Error err ->
@@ -601,9 +611,10 @@ let periodicCacheSave
     log.LogWarning("Periodic cache save error: {Error}", ex.Message)
 
 /// Periodic manifest save (binary session resume).
-let periodicManifestSave (log: ILogger) (readSnapshot: unit -> SessionManager.QuerySnapshot) =
+let periodicManifestSave (log: ILogger) (readSnapshot: unit -> SessionManager.QuerySnapshot) (getModel: unit -> SageFsModel) =
   try
-    let replayState = buildReplayState readSnapshot
+    let activeSessionId = (getModel()).Sessions.ActiveSessionId |> ActiveSession.sessionId
+    let replayState = buildReplayState readSnapshot activeSessionId
     match Features.DaemonPersistence.saveManifest DaemonState.SageFsDir replayState with
     | Ok path -> log.LogDebug("Periodic manifest save to {Path}", path)
     | Error err ->
@@ -1099,7 +1110,7 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
   let cacheSaveTimer = new System.Threading.Timer(
     System.Threading.TimerCallback(fun _ ->
       periodicCacheSave log readSnapshot elmRuntime.GetModel lastSavedGeneration
-      periodicManifestSave log readSnapshot),
+      periodicManifestSave log readSnapshot elmRuntime.GetModel),
     null, 60_000, 60_000)
 
   // Live testing file watcher — monitors *.fs and *.fsx changes

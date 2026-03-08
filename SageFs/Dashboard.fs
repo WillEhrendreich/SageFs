@@ -495,7 +495,10 @@ let createEvalHandler
   }
 
 /// Create the eval-file POST handler (reads file, evals its content).
+/// `getSessionWorkingDir` is called with sessionId to get the session's working directory;
+/// the requested file path is validated to be within that directory (W1: path traversal guard).
 let createEvalFileHandler
+  (getSessionWorkingDir: string -> string)
   (evalCode: string -> string -> Threading.Tasks.Task<Result<string, string>>)
   : HttpHandler =
   fun ctx -> task {
@@ -511,11 +514,24 @@ let createEvalFileHandler
         match doc.RootElement.TryGetProperty("sessionId") with
         | true, prop -> prop.GetString()
         | _ -> ""
-      match String.IsNullOrWhiteSpace filePath || not (File.Exists filePath) with
-      | true ->
-        ctx.Response.StatusCode <- 400
-        do! ctx.Response.WriteAsJsonAsync({| error = "File not found or path missing" |})
+      // W1: Canonicalize and confirm the requested file is inside the session's working directory.
+      // This prevents path traversal attacks like {"path":"C:/Users/.ssh/id_rsa"}.
+      let workingDir = getSessionWorkingDir sessionId
+      let isContained =
+        match String.IsNullOrWhiteSpace filePath || String.IsNullOrWhiteSpace workingDir with
+        | true -> false
+        | false ->
+          let canonical = Path.GetFullPath filePath
+          let canonicalDir = Path.GetFullPath workingDir
+          canonical.StartsWith(
+            canonicalDir + string Path.DirectorySeparatorChar,
+            StringComparison.OrdinalIgnoreCase)
+          || canonical.Equals(canonicalDir, StringComparison.OrdinalIgnoreCase)
+      match isContained && File.Exists filePath with
       | false ->
+        ctx.Response.StatusCode <- 403
+        do! ctx.Response.WriteAsJsonAsync({| error = "File not found or outside session working directory" |})
+      | true ->
         let! code = File.ReadAllTextAsync(filePath)
         let codeWithTerminator =
           let trimmed = code.TrimEnd()
@@ -902,7 +918,7 @@ let createEndpoints
     yield get "/dashboard" (FalcoResponse.ofHtml (renderShell infra.Version))
     yield get "/dashboard/stream" (createStreamHandler q infra)
     yield post "/dashboard/eval" (createEvalHandler a.EvalCode)
-    yield post "/dashboard/eval-file" (createEvalFileHandler a.EvalCode)
+    yield post "/dashboard/eval-file" (createEvalFileHandler q.GetSessionWorkingDir a.EvalCode)
     match infra.GetCompletions with
     | Some gc -> yield post "/dashboard/completions" (createCompletionsHandler gc)
     | None -> ()

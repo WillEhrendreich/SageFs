@@ -29,13 +29,13 @@ module FeaturePushState =
 
 let recordEval (code: string) (result: string) (durationMs: int64) (state: FeaturePushState) =
   let entry = {
-    CellIndex = state.EvalHistory.Length
+    CellIndex = state.EvalHistory.Length  // length before prepend = 0-based index
     Code = code
     Result = result
     DurationMs = durationMs
     Timestamp = System.DateTimeOffset.UtcNow
   }
-  { state with EvalHistory = state.EvalHistory @ [entry] }
+  { state with EvalHistory = entry :: state.EvalHistory }
 
 let computeEvalDiffPush (opts: System.Text.Json.JsonSerializerOptions) (sessionId: string option) (currentOutputText: string) (state: FeaturePushState) =
   let diff = EvalDiff.diffLines (Some state.LastOutputText) (Some currentOutputText)

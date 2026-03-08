@@ -139,6 +139,7 @@
         <Compile Include="Benchmarks.fs" />
         <Compile Include="FsiCrossSubmissionTests.fs" />
         <Compile Include="Round4HardeningTests.fs" />
+        <Compile Include="Round5HardeningTests.fs" />
         <Compile Include="Program.fs" />
     </ItemGroup>
 

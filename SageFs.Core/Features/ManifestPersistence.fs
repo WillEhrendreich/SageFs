@@ -82,7 +82,9 @@ module ManifestWriter =
     let padLen = headerSize - pos
     match padLen > 0 with
     | true -> bw.Write(Array.zeroCreate<byte> padLen)
-    | false -> ()
+    | false when padLen = 0 -> ()
+    | false ->
+      invalidOp (sprintf "Manifest header overflow: ActiveSessionId is too long. padLen=%d. Use shorter session IDs (max ~20 chars)." padLen)
 
     // Directory (1 × 16 bytes: tag:u32 + offset:u64 + crc:u32)
     bw.Write(0x53455353u); bw.Write(sessOffset); bw.Write(sessCrc) // SESS

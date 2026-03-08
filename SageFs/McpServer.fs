@@ -93,14 +93,13 @@ type McpServerTracker() =
 /// to tool responses. This ensures the LLM sees events even if the client
 /// doesn't surface MCP notifications directly.
 let createServerCaptureFilter (tracker: McpServerTracker) =
-  let mutable logged = false
+  let mutable logged = 0  // 0 = not logged; use Interlocked to ensure atomicity
   McpRequestFilter<CallToolRequestParams, CallToolResult>(fun next ->
     McpRequestHandler<CallToolRequestParams, CallToolResult>(fun ctx ct ->
       let wasEmpty = tracker.Count = 0
       tracker.Register(ctx.Server)
-      match wasEmpty && not logged with
+      match wasEmpty && System.Threading.Interlocked.CompareExchange(&logged, 1, 0) = 0 with
       | true ->
-        logged <- true
         let logger =
           ctx.Services.GetService(typeof<ILoggerFactory>)
           |> Option.ofObj
