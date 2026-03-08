@@ -9,8 +9,16 @@ open SageFs.AppState
 open SageFs.Utils
 
 module OpenDirective =
+  [<Literal>]
   let openedFileKey = "openedFiles"
   type OpenedFiles = string Set
+
+  let private getOpenedFiles (st: AppState) : OpenedFiles =
+    AppStateCustom.tryGet<OpenedFiles> openedFileKey st
+    |> Option.defaultValue Set.empty
+
+  let private setOpenedFiles (files: OpenedFiles) (st: AppState) : AppState =
+    AppStateCustom.set openedFileKey files st
 
   let openDirectiveMiddleware next (request, st) =
     let openDirectiveLines fileToOpen =
@@ -48,20 +56,11 @@ module OpenDirective =
       | _ -> []
 
     let hasOpenedFile fileName =
-      match st.Custom.TryFind openedFileKey with
-      | None -> false
-      | Some openedFileSet -> openedFileSet :?> OpenedFiles |> Set.contains fileName
+      getOpenedFiles st |> Set.contains fileName
 
     let addOpenedFile st fileName =
-      let changeFn: obj option -> obj option =
-        function
-        | None -> Set.ofList [ fileName ] :> obj |> Some
-        | Some set -> set :?> OpenedFiles |> Set.add fileName :> obj |> Some
-
-      {
-        st with
-            Custom = Map.change openedFileKey changeFn st.Custom
-      }
+      let current = getOpenedFiles st
+      setOpenedFiles (Set.add fileName current) st
 
     match request with
     | { Code = code; Args = args } when args.ContainsKey "fileName" ->

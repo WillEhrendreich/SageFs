@@ -101,6 +101,37 @@ type AppState = {
   HotReloadState: HotReloadState.T
 }
 
+/// Contract documentation for AppState.Custom.
+/// This map is an escape hatch for features that cannot be added to AppState directly
+/// due to circular compilation dependencies. Each feature module owns its key and accessors.
+///
+/// REGISTERED KEYS (update this list when adding a key):
+///   "openedFiles"  | Set<string>         | SageFs.Middleware.Directives.OpenDirective
+///   "hotReload"    | HotReloading.State  | SageFs.Middleware.HotReloading
+///
+/// CONVENTION FOR NEW KEYS:
+///   1. Define [<Literal>] key constant in the owning module.
+///   2. Write typed getCustom / setCustom functions using AppStateCustom.tryGet/set.
+///   3. Add entry to this doc comment.
+///   4. Never write to another module's key.
+module AppStateCustom =
+
+  /// Read a typed value from Custom, returning None if absent.
+  /// Raises InvalidCastException only if the owning module stored the wrong type
+  /// (which is a bug, not a user error — no defensive catch here).
+  let inline tryGet<'T> (key: string) (state: AppState) : 'T option =
+    state.Custom
+    |> Map.tryFind key
+    |> Option.map (fun o -> o :?> 'T)
+
+  /// Write a typed value into Custom.
+  let inline set<'T> (key: string) (value: 'T) (state: AppState) : AppState =
+    { state with Custom = Map.add key (box value) state.Custom }
+
+  /// Remove a key from Custom.
+  let remove (key: string) (state: AppState) : AppState =
+    { state with Custom = Map.remove key state.Custom }
+
 type EvalResponse = {
   EvaluationResult: Result<string, Exception>
   Diagnostics: Diagnostics.Diagnostic array

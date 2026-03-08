@@ -1,6 +1,7 @@
 module SageFs.Tests.WorkerProtocolTests // trigger discovery
 
 open System
+open System.IO
 open Expecto
 open Expecto.Flip
 open SageFs
@@ -296,22 +297,40 @@ let workerProtocolTests =
         SessionInfo.displayName info
         |> Expect.equal "should use working dir name" "MyApp"
 
-      ptestCase "findSolutionRoot finds slnx in ancestor"
+      testCase "findSolutionRoot finds slnx in ancestor"
       <| fun _ ->
-        let result = SessionInfo.findSolutionRoot @"C:\Code\Repos\SageFs\SageFs.Tests"
-        result |> Expect.isSome "should find solution root"
-        result |> Expect.equal "should be repo root" (Some @"C:\Code\Repos\SageFs")
+        let tmp = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName())
+        let subDir = Path.Combine(tmp, "SubProject")
+        Directory.CreateDirectory(subDir) |> ignore
+        File.WriteAllText(Path.Combine(tmp, "MySolution.slnx"), "")
+        try
+          let result = SessionInfo.findSolutionRoot subDir
+          result |> Expect.isSome "should find solution root"
+          result |> Expect.equal "should be parent dir containing slnx" (Some tmp)
+        finally
+          Directory.Delete(tmp, true)
 
-      ptestCase "findGitRoot finds .git in ancestor"
+      testCase "findGitRoot finds .git in ancestor"
       <| fun _ ->
-        let result = SessionInfo.findGitRoot @"C:\Code\Repos\SageFs\SageFs.Core"
-        result |> Expect.isSome "should find git root"
-        result |> Expect.equal "should be repo root" (Some @"C:\Code\Repos\SageFs")
+        let tmp = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName())
+        let subDir = Path.Combine(tmp, "SubDir")
+        Directory.CreateDirectory(subDir) |> ignore
+        Directory.CreateDirectory(Path.Combine(tmp, ".git")) |> ignore
+        try
+          let result = SessionInfo.findGitRoot subDir
+          result |> Expect.isSome "should find git root"
+          result |> Expect.equal "should be parent dir containing .git" (Some tmp)
+        finally
+          Directory.Delete(tmp, true)
 
-      ptestCase "findGitRoot returns None at filesystem root"
+      testCase "findGitRoot returns None at filesystem root"
       <| fun _ ->
-        let result = SessionInfo.findGitRoot @"C:\"
-        result |> Expect.isNone "should not find git root at C:\\"
+        let root = Path.GetPathRoot(Path.GetTempPath())
+        match Directory.Exists(Path.Combine(root, ".git")) with
+        | true -> () // skip: filesystem root has .git (extremely unusual environment)
+        | false ->
+          let result = SessionInfo.findGitRoot root
+          result |> Expect.isNone "should not find git root at filesystem root"
 
       testCase "SessionInfo round-trips through JSON"
       <| fun _ ->

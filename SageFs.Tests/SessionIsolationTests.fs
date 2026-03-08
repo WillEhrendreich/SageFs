@@ -1,5 +1,6 @@
 module SageFs.Tests.SessionIsolationTests
 
+open System
 open Expecto
 open Expecto.Flip
 open SageFs
@@ -41,6 +42,7 @@ module McpSessionIsolation =
                        LastActivity = System.DateTime.UtcNow })
           GetAllSessions = fun () -> System.Threading.Tasks.Task.FromResult([])
           GetStandbyInfo = fun () -> System.Threading.Tasks.Task.FromResult(SageFs.StandbyInfo.NoPool)
+          NotifyWorkerDied = fun _ -> ()
         }
         SessionMap = sessionMap
         McpPort = 0
@@ -136,7 +138,7 @@ module McpSessionIsolation =
             GetSessionInfo = fun _ -> System.Threading.Tasks.Task.FromResult(None)
             GetAllSessions = fun () -> System.Threading.Tasks.Task.FromResult([])
             GetStandbyInfo = fun () -> System.Threading.Tasks.Task.FromResult(SageFs.StandbyInfo.NoPool)
-          }
+            NotifyWorkerDied = fun _ -> () }
           SessionMap = sessionMap
           McpPort = 0
           Dispatch = None
@@ -213,12 +215,15 @@ module SessionResolutionByWorkingDir =
       |> Expect.equal "should return s1" "s1"
     }
 
-    ptest "matches case-insensitively on Windows" {
-      let sessions = [ mkInfo "s1" @"C:\Code\Repos\SageFs" ]
-      let result = resolveSessionByWorkingDir sessions @"c:\code\repos\sagefs"
-      result |> Expect.isSome "case-insensitive match"
-      result.Value.Id
-      |> Expect.equal "should return s1" "s1"
+    test "matches case-insensitively on Windows" {
+      if Environment.OSVersion.Platform <> PlatformID.Win32NT then
+        ()
+      else
+        let sessions = [ mkInfo "s1" @"C:\Code\Repos\SageFs" ]
+        let result = resolveSessionByWorkingDir sessions @"c:\code\repos\sagefs"
+        result |> Expect.isSome "case-insensitive match"
+        result.Value.Id
+        |> Expect.equal "should return s1" "s1"
     }
 
     test "returns first match when multiple sessions share dir" {
@@ -273,7 +278,8 @@ module WorkingDirRoutingPriority =
           GetProxy = fun sid -> Task.FromResult(Map.tryFind sid proxies)
           GetSessionInfo = fun sid -> Task.FromResult(sessions |> List.tryFind (fun s -> s.Id = sid))
           GetAllSessions = fun () -> Task.FromResult(sessions)
-          GetStandbyInfo = fun () -> Task.FromResult(StandbyInfo.NoPool) }
+          GetStandbyInfo = fun () -> Task.FromResult(StandbyInfo.NoPool)
+          NotifyWorkerDied = fun _ -> () }
       SessionMap = sessionMap; McpPort = 0; Dispatch = None
       GetElmModel = None; GetElmRegions = None; GetWarmupContext = None }
 
@@ -348,6 +354,7 @@ module ResetIsolation =
                    CreatedAt = System.DateTime.UtcNow; LastActivity = System.DateTime.UtcNow })
       GetAllSessions = fun () -> System.Threading.Tasks.Task.FromResult([])
       GetStandbyInfo = fun () -> System.Threading.Tasks.Task.FromResult(SageFs.StandbyInfo.NoPool)
+      NotifyWorkerDied = fun _ -> ()
     }
     let ctx =
       { Persistence = SageFs.EventStore.EventPersistence.noop

@@ -211,10 +211,12 @@ let runSseWriteLoop
           do! writeSseFrame body frame
       with
       | :? OperationCanceledException -> ()
-      | :? System.IO.IOException ->
+      | :? System.IO.IOException as ex ->
         SageFs.Instrumentation.sseWriteErrors.Add(1L)
-      | :? ObjectDisposedException ->
+        Log.debug "[SSE] Client disconnected (IOException): %s" ex.Message
+      | :? ObjectDisposedException as ex ->
         SageFs.Instrumentation.sseWriteErrors.Add(1L)
+        Log.debug "[SSE] Client disconnected (ObjectDisposed): %s" ex.Message
     finally
       for sub in subs do sub.Dispose()
   }
@@ -422,7 +424,15 @@ let wireSessionEventSubscription
         }
         |> fun t -> t.ContinueWith(fun (t: Threading.Tasks.Task) ->
           match t.IsFaulted with
-          | true -> Log.error "[SSE] SessionReady push fault: %s" t.Exception.InnerException.Message
+          | true ->
+            let msg =
+              match t.Exception with
+              | null -> "unknown fault"
+              | ae ->
+                ae.Flatten().InnerExceptions
+                |> Seq.map (fun e -> e.Message)
+                |> String.concat "; "
+            Log.error "[SSE] SessionReady push fault: %s" msg
           | false -> ())
         |> ignore
       | _ -> ()) |> ignore

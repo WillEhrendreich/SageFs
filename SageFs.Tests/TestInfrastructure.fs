@@ -63,7 +63,8 @@ let mkTestSessionOps (result: ActorResult) (sessionId: string) : SageFs.SessionM
                Status = SageFs.WorkerProtocol.SessionStatus.Ready
                WorkerPid = None; CreatedAt = System.DateTime.UtcNow; LastActivity = System.DateTime.UtcNow })
     GetAllSessions = fun () -> System.Threading.Tasks.Task.FromResult([])
-    GetStandbyInfo = fun () -> System.Threading.Tasks.Task.FromResult(SageFs.StandbyInfo.NoPool) }
+    GetStandbyInfo = fun () -> System.Threading.Tasks.Task.FromResult(SageFs.StandbyInfo.NoPool)
+    NotifyWorkerDied = fun _ -> () }
 
 /// Create a McpContext backed by the global shared actor
 let sharedCtx () =

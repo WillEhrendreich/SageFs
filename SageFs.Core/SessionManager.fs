@@ -233,6 +233,7 @@ module SessionManager =
   /// Read the worker's stdout until WORKER_PORT is reported, then post
   /// a WorkerReady (or WorkerSpawnFailed) message back to the agent.
   /// Runs completely off the agent loop — never blocks the MailboxProcessor.
+  /// Times out after SageFsConfig.WorkerStartupTimeoutMs if no port is reported.
   let awaitWorkerPort
     (sessionId: SessionId)
     (proc: Process)
@@ -240,10 +241,14 @@ module SessionManager =
     (ct: CancellationToken)
     =
     Async.Start(async {
+      use cts =
+        CancellationTokenSource.CreateLinkedTokenSource(ct)
+      cts.CancelAfter(SageFsConfig.WorkerStartupTimeoutMs)
+      let linkedCt = cts.Token
       try
         let mutable found = None
         while Option.isNone found do
-          let! line = proc.StandardOutput.ReadLineAsync(ct).AsTask() |> Async.AwaitTask
+          let! line = proc.StandardOutput.ReadLineAsync(linkedCt).AsTask() |> Async.AwaitTask
           match isNull line with
           | true ->
             failwith "Worker process exited before reporting port"
@@ -263,8 +268,22 @@ module SessionManager =
           inbox.Post(SessionCommand.WorkerReady(sessionId, proc.Id, baseUrl, proxy))
         | None ->
           failwith "Worker process exited before reporting port"
-      with ex ->
-        try proc.Kill() with ex2 -> Log.warn "[SessionManager] Kill on spawn failure: %s" ex2.Message
+      with
+      | :? OperationCanceledException when not ct.IsCancellationRequested ->
+        // Linked CTS fired: per-session startup timeout, NOT daemon shutdown.
+        try proc.Kill() with ex2 ->
+          Log.warn "[SessionManager] Kill on startup timeout: %s" ex2.Message
+        inbox.Post(
+          SessionCommand.WorkerSpawnFailed(
+            sessionId,
+            proc.Id,
+            sprintf
+              "Worker startup timed out after %dms waiting for WORKER_PORT= \
+               (set SAGEFS_WORKER_STARTUP_TIMEOUT_MS to adjust)"
+              SageFsConfig.WorkerStartupTimeoutMs))
+      | ex ->
+        try proc.Kill() with ex2 ->
+          Log.warn "[SessionManager] Kill on spawn failure: %s" ex2.Message
         inbox.Post(
           SessionCommand.WorkerSpawnFailed(
             sessionId, proc.Id,
@@ -285,7 +304,7 @@ module SessionManager =
       Log.warn "[SessionManager] Graceful shutdown failed: %s" ex.Message
       try session.Process.Kill() with ex2 -> Log.warn "[SessionManager] Force kill failed: %s" ex2.Message
       try session.Process.WaitForExit(2000) |> ignore with ex2 -> Log.warn "[SessionManager] WaitForExit after force kill: %s" ex2.Message
-    session.Process.Dispose()
+    try session.Process.Dispose() with :? ObjectDisposedException -> ()
   }
 
   /// Run `dotnet build` for the primary project.

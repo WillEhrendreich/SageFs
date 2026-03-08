@@ -252,11 +252,17 @@ let hotReloadingInitFunction sln =
          LiveTestInitDone = false
        }
 
+[<Literal>]
+let hotReloadKey = "hotReload"
+
+/// Typed read from AppState.Custom — single cast site for hot-reload state.
 let getReloadingState (st: AppState) =
-  st.Custom
-  |> Map.tryFind "hotReload"
-  |> Option.map (fun reloadStObj -> reloadStObj :?> State)
+  AppStateCustom.tryGet<State> hotReloadKey st
   |> Option.defaultWith (fun () -> mkReloadingState st.Solution)
+
+/// Typed write of hot-reload state into AppState.Custom.
+let setReloadingState (value: State) (st: AppState) : AppState =
+  AppStateCustom.set hotReloadKey value st
 
 open HarmonyLib
 
@@ -627,4 +633,4 @@ let hotReloadingMiddleware next (request, st: AppState) =
       | true -> metadata
 
     { response with Metadata = metadata },
-    { st with Custom = st.Custom.Add("hotReload", reloadingSt) }
+    setReloadingState reloadingSt st

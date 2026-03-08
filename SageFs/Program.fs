@@ -44,16 +44,10 @@ type NewlineNormalizingWriter(inner: TextWriter) =
   override _.Flush() = inner.Flush()
   override _.FlushAsync() = inner.FlushAsync()
 
-/// Parse --mcp-port from args, falling back to env var or default 37749.
+/// Parse --mcp-port from args, falling back to env var or default SageFsConfig.DefaultMcpPort.
 let parseMcpPort (args: string array) =
   let mcpPortIndex = args |> Array.tryFindIndex (fun a -> a = "--mcp-port")
-  let defaultPort =
-    match Environment.GetEnvironmentVariable("SageFs_MCP_PORT") with
-    | s when System.String.IsNullOrEmpty s -> 37749
-    | portStr ->
-      match Int32.TryParse(portStr) with
-      | true, p -> p
-      | _ -> 37749
+  let defaultPort = SageFsConfig.McpPortFromEnv
   match mcpPortIndex with
   | Some i when i + 1 < args.Length ->
     match Int32.TryParse(args.[i + 1]) with

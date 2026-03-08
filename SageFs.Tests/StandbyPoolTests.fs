@@ -45,6 +45,36 @@ let standbyPoolTests = testList "StandbyPool" [
       let existing = makeStandby StandbyState.Warming None
       StandbyPool.shouldWarmStandby SessionStatus.Ready (Some existing) true
       |> Expect.isFalse "already warming"
+
+    testCase "warms when primary Evaluating, no standby, enabled" <| fun _ ->
+      StandbyPool.shouldWarmStandby SessionStatus.Evaluating None true
+      |> Expect.isTrue "should warm during Evaluating — primary is alive"
+
+    testCase "warms when primary Building, no standby, enabled" <| fun _ ->
+      StandbyPool.shouldWarmStandby (SessionStatus.Building "dotnet build") None true
+      |> Expect.isTrue "should warm during Building — primary is alive"
+
+    testCase "does not warm when primary Faulted" <| fun _ ->
+      StandbyPool.shouldWarmStandby SessionStatus.Faulted None true
+      |> Expect.isFalse "Faulted is not a healthy state"
+
+    testCase "does not warm when primary Restarting" <| fun _ ->
+      StandbyPool.shouldWarmStandby SessionStatus.Restarting None true
+      |> Expect.isFalse "Restarting is in-transition"
+
+    testCase "does not warm when primary Stopped" <| fun _ ->
+      StandbyPool.shouldWarmStandby SessionStatus.Stopped None true
+      |> Expect.isFalse "Stopped session should not trigger standby"
+
+    testCase "does not warm when Evaluating but standby already exists" <| fun _ ->
+      let existing = makeStandby StandbyState.Ready (Some dummyProxy)
+      StandbyPool.shouldWarmStandby SessionStatus.Evaluating (Some existing) true
+      |> Expect.isFalse "standby already exists"
+
+    testCase "does not warm when Building but standby already exists" <| fun _ ->
+      let existing = makeStandby StandbyState.Warming None
+      StandbyPool.shouldWarmStandby (SessionStatus.Building "reason") (Some existing) true
+      |> Expect.isFalse "standby already exists"
   ]
 
   testList "canSwap" [

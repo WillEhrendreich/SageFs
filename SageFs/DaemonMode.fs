@@ -18,8 +18,13 @@ open OpenTelemetry.Logs
 /// Send a message through the session proxy with railway error handling.
 /// Centralizes error recovery for IO, pipe, and disposed exceptions.
 /// Wrapped in a daemon.proxy_to_worker span for trace propagation to workers.
+///
+/// onWorkerDied: called synchronously when a pipe break reveals the worker is dead.
+/// Posts SessionCommand to accelerate Faulted transition — closes race window between
+/// pipe failure and process.Exited event firing.
 let proxyToSession
   (getProxy: string -> Threading.Tasks.Task<(WorkerProtocol.WorkerMessage -> Async<WorkerProtocol.WorkerResponse>) option>)
+  (onWorkerDied: string -> unit)
   (sid: string)
   (msg: WorkerProtocol.WorkerMessage)
   : Threading.Tasks.Task<Result<WorkerProtocol.WorkerResponse, SageFsError>> = task {
@@ -57,18 +62,21 @@ let proxyToSession
       Instrumentation.workerRequestErrors.Add(1L)
       Instrumentation.workerRequestDurationMs.Record(sw.Elapsed.TotalMilliseconds)
       Instrumentation.failSpan activity ex.Message
+      onWorkerDied sid
       return Error (SageFsError.WorkerCommunicationFailed(sid, sprintf "Session pipe broken — %s" ex.Message))
     | :? AggregateException as ae when (ae.InnerException :? IO.IOException) ->
       sw.Stop()
       Instrumentation.workerRequestErrors.Add(1L)
       Instrumentation.workerRequestDurationMs.Record(sw.Elapsed.TotalMilliseconds)
       Instrumentation.failSpan activity ae.InnerException.Message
+      onWorkerDied sid
       return Error (SageFsError.WorkerCommunicationFailed(sid, sprintf "Session pipe broken — %s" ae.InnerException.Message))
     | :? ObjectDisposedException as ex ->
       sw.Stop()
       Instrumentation.workerRequestErrors.Add(1L)
       Instrumentation.workerRequestDurationMs.Record(sw.Elapsed.TotalMilliseconds)
       Instrumentation.failSpan activity ex.Message
+      onWorkerDied sid
       return Error (SageFsError.WorkerCommunicationFailed(sid, sprintf "Session pipe closed — %s" ex.Message))
 }
 
@@ -97,12 +105,15 @@ type DaemonInfra = {
 let appendEventsAsync (infra: DaemonInfra) (events: Features.Events.SageFsEvent list) =
   System.Threading.Tasks.Task.Run(fun () ->
     task {
-      match! infra.Persistence.AppendEvents infra.DaemonStreamId events with
-      | Ok () -> ()
-      | Error err ->
-        match err.Contains("duplicate key") || err.Contains("version") with
-        | true -> infra.Log.LogDebug("Audit trail append skipped (already exists): {Error}", err)
-        | false -> infra.Log.LogWarning("Event append failed: {Error}", err)
+      try
+        match! infra.Persistence.AppendEvents infra.DaemonStreamId events with
+        | Ok () -> ()
+        | Error err ->
+          match err.Contains("duplicate key") || err.Contains("version") with
+          | true -> infra.Log.LogDebug("Audit trail append skipped (already exists): {Error}", err)
+          | false -> infra.Log.LogWarning("Event append failed: {Error}", err)
+      with
+      | :? OperationCanceledException -> ()  // shutdown race — safe to swallow
     } :> System.Threading.Tasks.Task)
 
 /// Create one-time daemon infrastructure (logger, HTTP client, persistence, CTS).
@@ -244,6 +255,12 @@ let createSessionOps
       task { return SessionManager.QuerySnapshot.allSessions (readSnapshot()) }
     GetStandbyInfo = fun () ->
       task { return (readSnapshot()).StandbyInfo }
+    NotifyWorkerDied = fun sessionId ->
+      // Post WorkerExited with pid=-1 to accelerate Faulted transition.
+      // The real proc.Exited event will also fire; the stale-event guard
+      // in WorkerExited handler (checks currentPid <> workerPid) prevents double-restart.
+      sessionManager.Post(
+        SessionManager.SessionCommand.WorkerExited(sessionId, -1, -1))
   }
 
 /// Look up worker HTTP base URL for a session from CQRS snapshot.
@@ -1193,7 +1210,7 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
 
   let dashboardActions : DashboardActions = {
     EvalCode = fun sid code -> task {
-      let! result = proxyToSession sessionOps.GetProxy sid (WorkerProtocol.WorkerMessage.EvalCode(code, "dash"))
+      let! result = proxyToSession sessionOps.GetProxy sessionOps.NotifyWorkerDied sid (WorkerProtocol.WorkerMessage.EvalCode(code, "dash"))
       return
         match result with
         | Ok (WorkerProtocol.WorkerResponse.EvalResult(_, Ok msg, diags, _)) ->
@@ -1208,7 +1225,7 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
         | Error e -> Error (SageFsError.describe e)
     }
     ResetSession = fun sid -> task {
-      let! result = proxyToSession sessionOps.GetProxy sid (WorkerProtocol.WorkerMessage.ResetSession "dash")
+      let! result = proxyToSession sessionOps.GetProxy sessionOps.NotifyWorkerDied sid (WorkerProtocol.WorkerMessage.ResetSession "dash")
       return
         match result with
         | Ok (WorkerProtocol.WorkerResponse.ResetResult(_, Ok ())) -> Ok "Session reset successfully"

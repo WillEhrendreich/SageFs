@@ -11,6 +11,7 @@
 
   <ItemGroup>
     <PackageReference Include="FSharp.Core" />
+    <PackageReference Include="FSharp.Compiler.Service" />
     <PackageReference Include="Raylib-cs" />
   </ItemGroup>
 

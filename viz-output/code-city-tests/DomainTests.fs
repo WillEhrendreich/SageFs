@@ -20,10 +20,30 @@ let mkFunc name proj =
     RelPath = ""
     Module = proj
     Project = proj
+    DeclarationStartLine = 1
+    DeclarationStartColumn = 0
     StartLine = 1
     EndLine = 10
     LineCount = 10
-    Body = [||] }
+    Body = [||]
+    CallRefs = []
+    CallSites = [] }
+
+let mkFuncInModule moduleName name callRefs body =
+  { Name = name
+    QualifiedName = sprintf "%s.%s" moduleName name
+    FilePath = ""
+    RelPath = ""
+    Module = moduleName
+    Project = "TestProject"
+    DeclarationStartLine = 1
+    DeclarationStartColumn = 0
+    StartLine = 1
+    EndLine = Array.length body
+    LineCount = Array.length body
+    Body = body
+    CallRefs = callRefs
+    CallSites = [] }
 
 let private withTempFsSource (source: string) run =
   let root = System.IO.Path.Combine(System.IO.Path.GetTempPath(), Guid.NewGuid().ToString("N"))
@@ -32,6 +52,66 @@ let private withTempFsSource (source: string) run =
   System.IO.File.WriteAllText(filePath, source.Replace("\n", Environment.NewLine))
   try
     run root filePath
+  finally
+    if System.IO.Directory.Exists(root) then
+      System.IO.Directory.Delete(root, true)
+
+let private withTempProject (files: (string * string) list) (compileFiles: string list) run =
+  let root = System.IO.Path.Combine(System.IO.Path.GetTempPath(), Guid.NewGuid().ToString("N"))
+  let projectPath = System.IO.Path.Combine(root, "Sample.fsproj")
+  let compileItems =
+    compileFiles
+    |> List.map (fun file -> sprintf """    <Compile Include="%s" />""" file)
+    |> String.concat Environment.NewLine
+  let projectText =
+    sprintf
+      """<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+  <ItemGroup>
+%s
+  </ItemGroup>
+</Project>
+"""
+      compileItems
+
+  System.IO.Directory.CreateDirectory(root) |> ignore
+  System.IO.File.WriteAllText(projectPath, projectText.Replace("\n", Environment.NewLine))
+
+  for (relativePath, source) in files do
+    let filePath = System.IO.Path.Combine(root, relativePath)
+    let parent = System.IO.Path.GetDirectoryName(filePath)
+    if not (String.IsNullOrWhiteSpace(parent)) then
+      System.IO.Directory.CreateDirectory(parent) |> ignore
+    let normalizedSource =
+      match source.StartsWith("\r\n"), source.StartsWith("\n") with
+      | true, _ -> source.Substring(2)
+      | false, true -> source.Substring(1)
+      | _ -> source
+    System.IO.File.WriteAllText(filePath, normalizedSource.Replace("\n", Environment.NewLine))
+
+  let restore =
+    let psi = System.Diagnostics.ProcessStartInfo("dotnet", sprintf "restore \"%s\"" projectPath)
+    psi.WorkingDirectory <- root
+    psi.RedirectStandardOutput <- true
+    psi.RedirectStandardError <- true
+    psi.UseShellExecute <- false
+    psi.CreateNoWindow <- true
+    use proc = System.Diagnostics.Process.Start(psi)
+    let stdout = proc.StandardOutput.ReadToEnd()
+    let stderr = proc.StandardError.ReadToEnd()
+    proc.WaitForExit()
+    proc.ExitCode, stdout, stderr
+
+  match restore with
+  | 0, _, _ -> ()
+  | exitCode, stdout, stderr ->
+      failwithf "dotnet restore failed (%d)\nstdout:\n%s\nstderr:\n%s" exitCode stdout stderr
+
+  try
+    run root projectPath
   finally
     if System.IO.Directory.Exists(root) then
       System.IO.Directory.Delete(root, true)
@@ -191,6 +271,41 @@ let edgeAndHeatTests =
         let result = computeHeat funcs edges
         result
         |> Map.forall (fun _ (heat, _, _) -> heat >= 0.0f && heat <= 1.0f)
+
+    testCase "qualified same-name cross-module call is preserved" <| fun () ->
+      let funcs = [
+        mkFuncInModule "Alpha" "targetCall" ["Beta.targetCall"] [| "let targetCall () = Beta.targetCall()" |]
+        mkFuncInModule "Beta" "targetCall" [] [| "let targetCall () = 42" |]
+      ]
+      let edges = buildCallGraph funcs
+      edges |> Expect.hasLength "qualified call resolves to one callee" 1
+      edges[0].From |> Expect.equal "edge starts at Alpha.targetCall" "Alpha.targetCall"
+      edges[0].To |> Expect.equal "edge targets Beta.targetCall" "Beta.targetCall"
+
+    testCase "ambiguous unqualified call does not fan out" <| fun () ->
+      let funcs = [
+        mkFuncInModule "Caller" "sourceCall" ["targetCall"] [| "let sourceCall () = targetCall()" |]
+        mkFuncInModule "Alpha" "targetCall" [] [| "let targetCall () = 1" |]
+        mkFuncInModule "Beta" "targetCall" [] [| "let targetCall () = 2" |]
+      ]
+      buildCallGraph funcs |> Expect.isEmpty "ambiguous unqualified call should be dropped"
+
+    testCase "unqualified call prefers same-module target when unique" <| fun () ->
+      let funcs = [
+        mkFuncInModule "Alpha" "sourceCall" ["targetCall"] [| "let sourceCall () = targetCall()" |]
+        mkFuncInModule "Alpha" "targetCall" [] [| "let targetCall () = 1" |]
+        mkFuncInModule "Beta" "targetCall" [] [| "let targetCall () = 2" |]
+      ]
+      let edges = buildCallGraph funcs
+      edges |> Expect.hasLength "same-module resolution should yield one edge" 1
+      edges[0].From |> Expect.equal "edge starts at Alpha.sourceCall" "Alpha.sourceCall"
+      edges[0].To |> Expect.equal "edge targets Alpha.targetCall" "Alpha.targetCall"
+
+    testCase "true self-call is filtered by qualified identity" <| fun () ->
+      let funcs = [
+        mkFuncInModule "Alpha" "targetCall" ["targetCall"] [| "let targetCall () = targetCall()" |]
+      ]
+      buildCallGraph funcs |> Expect.isEmpty "self-recursive call should not emit self-edge"
   ]
 
 // Complexity
@@ -231,9 +346,8 @@ module First
 
 let alpha x = x
 
-module Second
-
-let beta x = x
+module Second =
+  let beta x = x
 """
       withTempFsSource source <| fun root filePath ->
         let funcs = extractFunctions root filePath
@@ -241,7 +355,7 @@ let beta x = x
         funcs |> List.find (fun f -> f.Name = "alpha") |> fun f ->
           f.Module |> Expect.equal "alpha stays in First" "First"
         funcs |> List.find (fun f -> f.Name = "beta") |> fun f ->
-          f.Module |> Expect.equal "beta stays in Second" "Second"
+          f.Module |> Expect.equal "beta stays in First.Second" "First.Second"
 
     testCase "earlier functions do not inherit the last module" <| fun () ->
       let source = """
@@ -250,16 +364,15 @@ module First
 let alpha () =
   1
 
-module Second
-
-let beta () =
-  2
+module Second =
+  let beta () =
+    2
 """
       withTempFsSource source <| fun root filePath ->
         let alpha =
           extractFunctions root filePath
           |> List.find (fun f -> f.Name = "alpha")
-        alpha.Module |> Expect.notEqual "alpha should not move to Second" "Second"
+        alpha.Module |> Expect.notEqual "alpha should not move to First.Second" "First.Second"
 
     testCase "module and qualified name stay consistent" <| fun () ->
       let source = """
@@ -268,10 +381,9 @@ module Alpha
 let gamma value =
   value + 1
 
-module Beta
-
-let delta value =
-  value - 1
+module Beta =
+  let delta value =
+    value - 1
 """
       withTempFsSource source <| fun root filePath ->
         let funcs = extractFunctions root filePath
@@ -279,8 +391,8 @@ let delta value =
           f.Module |> Expect.equal "gamma module" "Alpha"
           f.QualifiedName |> Expect.equal "gamma qualified name" "Alpha.gamma"
         funcs |> List.find (fun f -> f.Name = "delta") |> fun f ->
-          f.Module |> Expect.equal "delta module" "Beta"
-          f.QualifiedName |> Expect.equal "delta qualified name" "Beta.delta"
+          f.Module |> Expect.equal "delta module" "Alpha.Beta"
+          f.QualifiedName |> Expect.equal "delta qualified name" "Alpha.Beta.delta"
 
     testCase "single module extraction stays stable" <| fun () ->
       let source = """
@@ -294,6 +406,262 @@ let epsilon value =
         funcs |> Expect.hasLength "one function extracted" 1
         funcs.Head.Module |> Expect.equal "module stays Only" "Only"
         funcs.Head.QualifiedName |> Expect.equal "qualified name stays Only.epsilon" "Only.epsilon"
+
+    testCase "single-line top-level function is extracted" <| fun () ->
+      let source = """
+module Only
+
+let epsilon value = value * 2
+"""
+      withTempFsSource source <| fun root filePath ->
+        let funcs = extractFunctions root filePath
+        funcs |> Expect.hasLength "single-line function should be extracted" 1
+        funcs.Head.Name |> Expect.equal "single-line function name preserved" "epsilon"
+
+    testCase "nested local let is not extracted as top-level function" <| fun () ->
+      let source = """
+module Only
+
+let outer value =
+  let inner x = x + 1
+  inner value
+"""
+      withTempFsSource source <| fun root filePath ->
+        let funcs = extractFunctions root filePath
+        funcs |> List.map (fun f -> f.Name) |> Expect.contains "outer extracted" "outer"
+        funcs |> List.exists (fun f -> f.Name = "inner") |> Expect.isFalse "inner should stay local"
+
+    testCase "type member is excluded from module-level extraction" <| fun () ->
+      let source = """
+module Demo
+
+type Counter() =
+  member _.Increment() = 1
+
+let topLevel () = 42
+"""
+      withTempFsSource source <| fun root filePath ->
+        let funcs = extractFunctions root filePath
+        funcs |> List.map (fun f -> f.Name) |> Expect.contains "top-level let extracted" "topLevel"
+        funcs |> List.exists (fun f -> f.Name = "Increment") |> Expect.isFalse "member should not be a module-level function"
+  ]
+
+let endToEndParsingTests =
+  testList "End-to-end extraction and graph" [
+    testCase "comment mentioning function name does not create call edge" <| fun () ->
+      let source = """
+module Demo
+
+let targetCall value =
+  value + 1
+
+let sourceCall value =
+  // targetCall should not count here
+  value
+"""
+      withTempFsSource source <| fun root filePath ->
+        let funcs = extractFunctions root filePath
+        buildCallGraph funcs |> Expect.isEmpty "comment text should not become a dependency"
+
+    testCase "string literal mentioning function name does not create call edge" <| fun () ->
+      let source = """
+module Demo
+
+let targetCall value =
+  value + 1
+
+let sourceCall value =
+  "targetCall"
+  |> ignore
+  value
+"""
+      withTempFsSource source <| fun root filePath ->
+        let funcs = extractFunctions root filePath
+        buildCallGraph funcs |> Expect.isEmpty "string literal should not become a dependency"
+
+    testCase "qualified same-name call survives extraction and graphing" <| fun () ->
+      let source = """
+module Alpha
+
+let targetCall value =
+  Beta.targetCall value
+
+module Beta =
+  let targetCall value =
+    value + 1
+"""
+      withTempFsSource source <| fun root filePath ->
+        let funcs = extractFunctions root filePath
+        let edges = buildCallGraph funcs |> mergeCallEdges
+        edges |> Expect.hasLength "one qualified edge should remain" 1
+        edges.Head.From |> Expect.equal "from Alpha.targetCall" "Alpha.targetCall"
+        edges.Head.To |> Expect.equal "to Alpha.Beta.targetCall" "Alpha.Beta.targetCall"
+  ]
+
+let projectAwareParsingTests =
+  testList "Project-aware extraction and graph" [
+    testCase "project scan only includes compile items from fsproj" <| fun () ->
+      let files =
+        [
+          "Included.fs", """
+module Sample.Included
+
+let included value =
+  value + 1
+"""
+          "Loose.fs", """
+module Sample.Loose
+
+let loose value =
+  value + 10
+"""
+        ]
+      withTempProject files [ "Included.fs" ] <| fun _ projectPath ->
+        let funcs = scanFunctionsForProject projectPath
+        funcs |> List.map (fun f -> f.Name) |> Expect.contains "included function should be present" "included"
+        funcs |> List.exists (fun f -> f.Name = "loose") |> Expect.isFalse "loose file should be ignored when not in compile items"
+
+    testCase "semantic project graph resolves open-module call to correct same-name target" <| fun () ->
+      let files =
+        [
+          "Alpha.fs", """
+module Sample.Alpha.Helpers
+
+let target value =
+  value + 1
+"""
+          "Beta.fs", """
+module Sample.Beta.Helpers
+
+let target value =
+  value + 2
+"""
+          "Consumer.fs", """
+module Sample.Consumer
+
+open Sample.Beta.Helpers
+
+let caller value =
+  target value
+"""
+        ]
+      withTempProject files [ "Alpha.fs"; "Beta.fs"; "Consumer.fs" ] <| fun _ projectPath ->
+        let funcs = scanFunctionsForProject projectPath
+        let edges = buildSemanticCallGraphForProject projectPath funcs |> mergeCallEdges
+        edges |> Expect.hasLength "semantic resolution should produce one edge" 1
+        edges.Head.From |> Expect.equal "edge starts at Sample.Consumer.caller" "Sample.Consumer.caller"
+        edges.Head.To |> Expect.equal "edge targets opened Sample.Beta.Helpers.target" "Sample.Beta.Helpers.target"
+
+    testCase "semantic project graph resolves module-abbreviation qualified call to aliased target" <| fun () ->
+      let files =
+        [
+          "Alpha.fs", """
+module Sample.Alpha.Helpers
+
+let target value =
+  value + 1
+"""
+          "Beta.fs", """
+module Sample.Beta.Helpers
+
+let target value =
+  value + 2
+"""
+          "Consumer.fs", """
+module Sample.Consumer
+
+module BH = Sample.Beta.Helpers
+
+let caller value =
+  BH.target value
+"""
+        ]
+      withTempProject files [ "Alpha.fs"; "Beta.fs"; "Consumer.fs" ] <| fun _ projectPath ->
+        let funcs = scanFunctionsForProject projectPath
+        let edges = buildSemanticCallGraphForProject projectPath funcs |> mergeCallEdges
+        edges |> Expect.hasLength "alias-qualified call should resolve to one edge" 1
+        edges.Head.From |> Expect.equal "edge starts at Sample.Consumer.caller" "Sample.Consumer.caller"
+        edges.Head.To |> Expect.equal "edge targets aliased Sample.Beta.Helpers.target" "Sample.Beta.Helpers.target"
+
+    testCase "semantic project graph does not resolve opened module function when local let shadows the name" <| fun () ->
+      let files =
+        [
+          "Beta.fs", """
+module Sample.Beta.Helpers
+
+let target value =
+  value + 2
+"""
+          "Consumer.fs", """
+module Sample.Consumer
+
+open Sample.Beta.Helpers
+
+let caller value =
+  let target x =
+    x + 100
+  target value
+"""
+        ]
+      withTempProject files [ "Beta.fs"; "Consumer.fs" ] <| fun _ projectPath ->
+        let funcs = scanFunctionsForProject projectPath
+        let edges = buildSemanticCallGraphForProject projectPath funcs |> mergeCallEdges
+        edges |> Expect.isEmpty "local shadowing should prevent an edge to opened module target"
+
+    testCase "semantic project graph does not resolve opened module function when parameter shadows the name" <| fun () ->
+      let files =
+        [
+          "Beta.fs", """
+module Sample.Beta.Helpers
+
+let target value =
+  value + 2
+"""
+          "Consumer.fs", """
+module Sample.Consumer
+
+open Sample.Beta.Helpers
+
+let caller target value =
+  target value
+"""
+        ]
+      withTempProject files [ "Beta.fs"; "Consumer.fs" ] <| fun _ projectPath ->
+        let funcs = scanFunctionsForProject projectPath
+        let edges = buildSemanticCallGraphForProject projectPath funcs |> mergeCallEdges
+        edges |> Expect.isEmpty "parameter shadowing should prevent an edge to opened module target"
+
+    testCase "semantic project graph resolves alias-qualified call even when another same-name module is opened" <| fun () ->
+      let files =
+        [
+          "Alpha.fs", """
+module Sample.Alpha.Helpers
+
+let target value =
+  value + 1
+"""
+          "Beta.fs", """
+module Sample.Beta.Helpers
+
+let target value =
+  value + 2
+"""
+          "Consumer.fs", """
+module Sample.Consumer
+
+open Sample.Alpha.Helpers
+module BH = Sample.Beta.Helpers
+
+let caller value =
+  BH.target value
+"""
+        ]
+      withTempProject files [ "Alpha.fs"; "Beta.fs"; "Consumer.fs" ] <| fun _ projectPath ->
+        let funcs = scanFunctionsForProject projectPath
+        let edges = buildSemanticCallGraphForProject projectPath funcs |> mergeCallEdges
+        edges |> Expect.hasLength "alias-qualified call should still resolve to one edge" 1
+        edges.Head.From |> Expect.equal "edge starts at Sample.Consumer.caller" "Sample.Consumer.caller"
+        edges.Head.To |> Expect.equal "edge targets Sample.Beta.Helpers.target" "Sample.Beta.Helpers.target"
   ]
 
 // Curved roads
@@ -1113,6 +1481,8 @@ let allTests =
     edgeAndHeatTests
     complexityTests
     functionExtractionTests
+    endToEndParsingTests
+    projectAwareParsingTests
     roadCurveTests
     compoundShapeTests
     cameraMovementTests

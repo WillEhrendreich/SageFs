@@ -4,6 +4,10 @@ open System
 open System.IO
 open System.Numerics
 open System.Text.RegularExpressions
+open FSharp.Compiler.CodeAnalysis
+open FSharp.Compiler.Symbols
+open FSharp.Compiler.Syntax
+open FSharp.Compiler.Text
 open Raylib_cs
 
 #nowarn "3391"
@@ -324,10 +328,21 @@ type FuncDef =
     RelPath: string
     Module: string
     Project: string
+    DeclarationStartLine: int
+    DeclarationStartColumn: int
     StartLine: int
     EndLine: int
     LineCount: int
-    Body: string[] }
+    Body: string[]
+    CallRefs: string list
+    CallSites: CallSite list }
+
+and CallSite =
+  { RefText: string
+    NamePath: string list
+    StartLine: int
+    StartColumn: int
+    EndColumn: int }
 
 type CallEdge =
   { From: string  // QualifiedName
@@ -786,119 +801,313 @@ let excludeDirs =
     "target"
   ]
 
-/// Count leading spaces
-let indentOf (line: string) =
-  let mutable i = 0
-  while i < line.Length && line.[i] = ' ' do i <- i + 1
-  i
+let private fcsChecker = FSharpChecker.Create(keepAssemblyContents = true)
+let private pathEquals (left: string) (right: string) =
+  String.Equals(Path.GetFullPath(left), Path.GetFullPath(right), StringComparison.OrdinalIgnoreCase)
 
-/// Extract MODULE-LEVEL function definitions from an F# file.
-/// Only captures top-level lets (indent ≤ moduleIndent + 2) to avoid
-/// grabbing every local binding inside function bodies.
-type private PendingFunc =
-  { StartLine: int
-    Name: string
-    QualifiedName: string
-    ModuleAtDefinition: string }
+let private moduleMetadata root filePath =
+  let rel = Path.GetRelativePath(root, filePath).Replace('\\', '/')
+  let parts = rel.Split('/')
+  let project = if parts.Length > 1 then parts.[0] else "root"
+  let defaultModuleName = Path.GetFileNameWithoutExtension(filePath)
+  rel, project, defaultModuleName
+
+type ProjectContext =
+  { ProjectFile: string
+    Root: string
+    SourceFiles: string list
+    CompilerArgs: string[] }
+
+let private tryGetJsonProperty (name: string) (element: System.Text.Json.JsonElement) =
+  let mutable value = Unchecked.defaultof<System.Text.Json.JsonElement>
+  if element.TryGetProperty(name, &value) then Some value else None
+
+let private normalizeLangVersion (value: string) =
+  let trimmed = value.Trim()
+  match Int32.TryParse(trimmed) with
+  | true, version when version >= 11 -> "preview"
+  | _ -> trimmed
+
+let private tryLoadProjectContext projectFile =
+  try
+    let normalizedProjectFile = Path.GetFullPath(projectFile)
+    let root = Path.GetDirectoryName(normalizedProjectFile)
+    let psi =
+      Diagnostics.ProcessStartInfo(
+        "dotnet",
+        sprintf "msbuild \"%s\" /t:ResolveReferences \"-getItem:Compile;ReferencePath\" \"-getProperty:OutputType;DefineConstants;LangVersion\"" normalizedProjectFile)
+    psi.WorkingDirectory <- root
+    psi.RedirectStandardOutput <- true
+    psi.RedirectStandardError <- true
+    psi.UseShellExecute <- false
+    psi.CreateNoWindow <- true
+
+    use proc = Diagnostics.Process.Start(psi)
+    let stdout = proc.StandardOutput.ReadToEnd()
+    let stderr = proc.StandardError.ReadToEnd()
+    proc.WaitForExit()
+
+    match proc.ExitCode with
+    | 0 ->
+        let doc = System.Text.Json.JsonDocument.Parse(stdout)
+        let items =
+          tryGetJsonProperty "Items" doc.RootElement
+          |> Option.defaultValue doc.RootElement
+        let properties =
+          tryGetJsonProperty "Properties" doc.RootElement
+          |> Option.defaultValue doc.RootElement
+
+        let compileFiles =
+          match tryGetJsonProperty "Compile" items with
+          | Some compileItems ->
+              compileItems.EnumerateArray()
+              |> Seq.choose (tryGetJsonProperty "FullPath")
+              |> Seq.choose (fun item -> item.GetString() |> Option.ofObj)
+              |> Seq.map Path.GetFullPath
+              |> Seq.toList
+          | None -> []
+
+        let referencePaths =
+          match tryGetJsonProperty "ReferencePath" items with
+          | Some referenceItems ->
+              referenceItems.EnumerateArray()
+              |> Seq.choose (tryGetJsonProperty "FullPath")
+              |> Seq.choose (fun item -> item.GetString() |> Option.ofObj)
+              |> Seq.map Path.GetFullPath
+              |> Seq.distinct
+              |> Seq.toList
+          | None -> []
+
+        let propertyValue name =
+          properties
+          |> tryGetJsonProperty name
+          |> Option.bind (fun value -> value.GetString() |> Option.ofObj)
+          |> Option.defaultValue ""
+
+        let compilerArgs = ResizeArray<string>()
+        compilerArgs.Add "--simpleresolution"
+        compilerArgs.Add "--targetprofile:netcore"
+        compilerArgs.Add(
+          match propertyValue "OutputType" with
+          | value when value.Equals("Exe", StringComparison.OrdinalIgnoreCase) -> "--target:exe"
+          | _ -> "--target:library")
+
+        match propertyValue "LangVersion" with
+        | value when String.IsNullOrWhiteSpace(value) -> ()
+        | value -> compilerArgs.Add("--langversion:" + normalizeLangVersion value)
+
+        match propertyValue "DefineConstants" with
+        | value when String.IsNullOrWhiteSpace(value) -> ()
+        | value ->
+            value.Split(';', StringSplitOptions.RemoveEmptyEntries ||| StringSplitOptions.TrimEntries)
+            |> Array.iter (fun define -> compilerArgs.Add("--define:" + define))
+
+        referencePaths
+        |> List.iter (fun referencePath ->
+          compilerArgs.Add("-r")
+          compilerArgs.Add(referencePath))
+
+        compileFiles
+        |> List.iter compilerArgs.Add
+
+        Some
+          { ProjectFile = normalizedProjectFile
+            Root = root
+            SourceFiles = compileFiles
+            CompilerArgs = compilerArgs.ToArray() }
+    | _ ->
+        let _ = stderr
+        None
+  with _ -> None
+
+let private parsingOptionsFor filePath =
+  let projectOptions =
+    fcsChecker.GetProjectOptionsFromCommandLineArgs(
+      filePath,
+      [|
+        "--targetprofile:netcore"
+        "--noframework"
+        "--langversion:preview"
+        "--target:library"
+        filePath
+      |])
+  fcsChecker.GetParsingOptionsFromProjectOptions(projectOptions) |> fst
+
+let private identText (ident: Ident) = ident.idText
+
+let private longIdentText (idents: Ident list) =
+  idents
+  |> List.map identText
+  |> String.concat "."
+
+let private synLongIdentText (synLongIdent: SynLongIdent) =
+  synLongIdent.LongIdent
+  |> Seq.toList
+  |> longIdentText
+
+let private modulePathText (idents: Ident list) =
+  match idents |> longIdentText with
+  | "" -> ""
+  | text -> text
+
+let private sliceLines (lines: string[]) (startLine: int) (endLine: int) =
+  let startIdx = max 0 (startLine - 1)
+  let endIdx = min (lines.Length - 1) (endLine - 1)
+  match startIdx <= endIdx && startIdx < lines.Length with
+  | true -> lines.[startIdx .. endIdx]
+  | false -> [||]
+
+let rec private tryBindingName pat =
+  match pat with
+  | SynPat.LongIdent(longDotId = synLongIdent) ->
+      synLongIdent.LongIdent
+      |> Seq.tryLast
+      |> Option.map identText
+  | SynPat.Named(SynIdent(ident, _), _, _, _) -> Some (identText ident)
+  | SynPat.Paren(inner, _) -> tryBindingName inner
+  | SynPat.Typed(inner, _, _) -> tryBindingName inner
+  | SynPat.Attrib(inner, _, _) -> tryBindingName inner
+  | _ -> None
+
+let rec private bindingDeclarationRange pat =
+  match pat with
+  | SynPat.LongIdent(longDotId = synLongIdent) ->
+      synLongIdent.LongIdent
+      |> Seq.tryLast
+      |> Option.map (fun ident -> ident.idRange)
+  | SynPat.Named(SynIdent(ident, _), _, _, _) -> Some ident.idRange
+  | SynPat.Paren(inner, _) -> bindingDeclarationRange inner
+  | SynPat.Typed(inner, _, _) -> bindingDeclarationRange inner
+  | SynPat.Attrib(inner, _, _) -> bindingDeclarationRange inner
+  | _ -> None
+
+let private mkCallSite refText namePath (siteRange: range) =
+  { RefText = refText
+    NamePath = namePath
+    StartLine = siteRange.StartLine
+    StartColumn = siteRange.StartColumn
+    EndColumn = siteRange.EndColumn }
+
+let rec private directCallSites expr =
+  match expr with
+  | SynExpr.Ident ident ->
+      [ mkCallSite (identText ident) [ identText ident ] ident.idRange ]
+  | SynExpr.LongIdent(_, synLongIdent, _, _) ->
+      [ mkCallSite
+          (synLongIdentText synLongIdent)
+          (synLongIdent.LongIdent |> Seq.toList |> List.map identText)
+          synLongIdent.Range ]
+  | SynExpr.Paren(inner, _, _, _) -> directCallSites inner
+  | SynExpr.Typed(inner, _, _) -> directCallSites inner
+  | _ -> []
+
+let rec private collectCallSites expr =
+  match expr with
+  | SynExpr.App(_, _, funcExpr, argExpr, _) ->
+      directCallSites funcExpr @ collectCallSites funcExpr @ collectCallSites argExpr
+  | SynExpr.LetOrUse(_, _, _, _, bindings, body, _, _) ->
+      let bindingCalls =
+        bindings
+        |> Seq.toList
+        |> List.collect (fun (SynBinding(expr = expr)) -> collectCallSites expr)
+      bindingCalls @ collectCallSites body
+  | SynExpr.Sequential(_, _, first, second, _, _) ->
+      collectCallSites first @ collectCallSites second
+  | SynExpr.Paren(inner, _, _, _) -> collectCallSites inner
+  | SynExpr.Typed(inner, _, _) -> collectCallSites inner
+  | SynExpr.Lambda(_, _, _, body, _, _, _) -> collectCallSites body
+  | SynExpr.Match(_, inputExpr, clauses, _, _) ->
+      let clauseCalls =
+        clauses
+        |> Seq.toList
+        |> List.collect (fun (SynMatchClause(whenExpr = whenExpr; resultExpr = resultExpr)) ->
+          let guardCalls =
+            whenExpr
+            |> Option.map collectCallSites
+            |> Option.defaultValue []
+          guardCalls @ collectCallSites resultExpr)
+      collectCallSites inputExpr @ clauseCalls
+  | SynExpr.IfThenElse(condition, thenExpr, elseExpr, _, _, _, _) ->
+      collectCallSites condition
+      @ collectCallSites thenExpr
+      @ (elseExpr |> Option.map collectCallSites |> Option.defaultValue [])
+  | _ -> []
+
+let rec private extractModuleDecls rel filePath project defaultModuleName lines modulePath decls =
+  [
+    for decl in decls do
+      match decl with
+      | SynModuleDecl.Let(_, bindings, _) ->
+          for binding in bindings do
+            let (SynBinding(headPat = headPat; expr = expr)) = binding
+            match tryBindingName headPat with
+            | Some name ->
+                let declarationRange =
+                  bindingDeclarationRange headPat
+                  |> Option.defaultValue binding.RangeOfBindingWithRhs
+                let moduleName =
+                  match modulePath with
+                  | "" -> defaultModuleName
+                  | value -> value
+                let qualName = sprintf "%s.%s" moduleName name
+                let bodyLines =
+                  sliceLines lines binding.RangeOfBindingWithRhs.StartLine binding.RangeOfBindingWithRhs.EndLine
+                let callSites = collectCallSites expr
+                yield
+                  { Name = name
+                    QualifiedName = qualName
+                    FilePath = filePath
+                    RelPath = rel
+                    Module = moduleName
+                    Project = project
+                    DeclarationStartLine = declarationRange.StartLine
+                    DeclarationStartColumn = declarationRange.StartColumn
+                    StartLine = binding.RangeOfBindingWithRhs.StartLine
+                    EndLine = binding.RangeOfBindingWithRhs.EndLine
+                    LineCount = bodyLines.Length
+                    Body = bodyLines
+                    CallRefs = callSites |> List.map (fun site -> site.RefText)
+                    CallSites = callSites }
+            | None -> ()
+      | SynModuleDecl.NestedModule(componentInfo, _, nestedDecls, _, _, _) ->
+          let (SynComponentInfo(longId = longId)) = componentInfo
+          let nestedName =
+            longId
+            |> Seq.toList
+            |> modulePathText
+          let nextModulePath =
+            match modulePath, nestedName with
+            | "", nested -> nested
+            | prefix, nested when nested = "" -> prefix
+            | prefix, nested -> sprintf "%s.%s" prefix nested
+          yield! extractModuleDecls rel filePath project defaultModuleName lines nextModulePath nestedDecls
+       | _ -> ()
+   ]
+
+let private extractFunctionsFromParseTree root filePath lines parsedInput =
+  let rel, project, defaultModuleName = moduleMetadata root filePath
+  match parsedInput with
+  | ParsedInput.ImplFile implFile ->
+      implFile.Contents
+      |> Seq.toList
+      |> List.collect (fun moduleOrNamespace ->
+        let (SynModuleOrNamespace(longId = longId; decls = decls)) = moduleOrNamespace
+        let modulePath =
+          longId
+          |> Seq.toList
+          |> modulePathText
+        extractModuleDecls rel filePath project defaultModuleName lines modulePath decls)
+  | _ -> []
 
 let extractFunctions (root: string) (filePath: string) : FuncDef list =
   try
     let lines = File.ReadAllLines(filePath)
-    let rel = Path.GetRelativePath(root, filePath).Replace('\\', '/')
-    let parts = rel.Split('/')
-    let project = if parts.Length > 1 then parts.[0] else "root"
-
-    let mutable currentModule = Path.GetFileNameWithoutExtension(filePath)
-    let mutable moduleIndent = 0
-    let mutable funcs = ResizeArray<PendingFunc>()
-
-    for i in 0 .. lines.Length - 1 do
-      let line = lines.[i]
-      let trimmed = line.TrimStart()
-      let indent = indentOf line
-
-      // Top-level module (no =)
-      if trimmed.StartsWith("module ") && not (trimmed.Contains("=")) then
-        let modName = trimmed.Substring(7).Trim()
-        if modName.Length > 0 && Char.IsUpper(modName.[0]) then
-          currentModule <- modName
-          moduleIndent <- 0
-
-      // Nested module (with =)
-      elif trimmed.StartsWith("module ") && trimmed.Contains("=") then
-        let eqIdx = trimmed.IndexOf('=')
-        let modName = trimmed.Substring(7, eqIdx - 7).Trim()
-        if modName.Length > 0 && Char.IsUpper(modName.[0]) then
-          currentModule <- modName
-          moduleIndent <- indent
-
-      // Only capture let/member at module level (indent within 4 of module base)
-      elif indent <= moduleIndent + 4
-           && (trimmed.StartsWith("let ") || trimmed.StartsWith("member ")) then
-        let isLet = trimmed.StartsWith("let ")
-        let afterLet =
-          if isLet then
-            let rest = trimmed.Substring(4).TrimStart()
-            let mutable r = rest
-            for kw in ["inline "; "private "; "internal "; "rec "; "mutable "] do
-              if r.StartsWith(kw) then r <- r.Substring(kw.Length).TrimStart()
-            r
-          else
-            let rest = trimmed.Substring(7).TrimStart()
-            let dotIdx = rest.IndexOf('.')
-            if dotIdx >= 0 then rest.Substring(dotIdx + 1)
-            else rest
-
-        let nameEnd =
-          afterLet
-          |> Seq.tryFindIndex (fun c ->
-            c = ' ' || c = '(' || c = '=' || c = ':' || c = '<')
-          |> Option.defaultValue afterLet.Length
-        let name = afterLet.Substring(0, nameEnd).Trim()
-
-        // Skip operators, empty, single-char, and common non-function names
-        if name.Length > 2
-           && Char.IsLetter(name.[0])
-           && not (name.Contains("``")) then
-          let qualName = sprintf "%s.%s" currentModule name
-          funcs.Add {
-            StartLine = i
-            Name = name
-            QualifiedName = qualName
-            ModuleAtDefinition = currentModule
-          }
-
-    let funcList = funcs |> Seq.toArray
-    [
-      for fi in 0 .. funcList.Length - 1 do
-        let func = funcList.[fi]
-        let startLine = func.StartLine
-
-        let endLine =
-          if fi + 1 < funcList.Length then
-            let nextStart = funcList.[fi + 1].StartLine
-            let mutable e = nextStart - 1
-            while e > startLine && lines.[e].Trim().Length = 0 do e <- e - 1
-            e
-          else
-            lines.Length - 1
-
-        let bodyLines =
-          if endLine >= startLine then lines.[startLine .. endLine]
-          else [| lines.[startLine] |]
-
-        if bodyLines.Length >= 2 then
-          { Name = func.Name
-            QualifiedName = func.QualifiedName
-            FilePath = filePath
-            RelPath = rel
-            Module = func.ModuleAtDefinition
-            Project = project
-            StartLine = startLine + 1
-            EndLine = endLine + 1
-            LineCount = bodyLines.Length
-            Body = bodyLines }
-    ]
+    let source = String.Join(Environment.NewLine, lines)
+    let parsingOptions = parsingOptionsFor filePath
+    let parseResults =
+      fcsChecker.ParseFile(filePath, SourceText.ofString source, parsingOptions)
+      |> Async.RunSynchronously
+    extractFunctionsFromParseTree root filePath lines parseResults.ParseTree
   with _ -> []
 
 /// Scan all .fs files and extract functions
@@ -910,9 +1119,17 @@ let scanFunctions (root: string) : FuncDef list =
         for f in Directory.EnumerateFiles(dir, "*.fs") do
           yield! extractFunctions root f
         for sub in Directory.EnumerateDirectories(dir) do
-          yield! walk sub
-    }
+         yield! walk sub
+     }
   walk root |> Seq.toList
+
+let scanFunctionsForProject (projectFile: string) : FuncDef list =
+  match tryLoadProjectContext projectFile with
+  | Some projectContext ->
+      projectContext.SourceFiles
+      |> List.collect (extractFunctions projectContext.Root)
+  | None ->
+      scanFunctions (Path.GetDirectoryName(Path.GetFullPath(projectFile)))
 
 /// Run `git log --follow --format="%H|%aI"` for one file and parse the output.
 let getGitMetaForFile (repoRoot: string) (filePath: string) : GitMeta =
@@ -967,58 +1184,157 @@ let commonNames =
     "toString"; "ignore"; "failwith"; "raise"; "sprintf"; "printfn"
   ]
 
-/// Build call graph — only for unique, meaningful function names
+/// Build call graph from AST-derived call references.
 let buildCallGraph (funcs: FuncDef list) : CallEdge list =
-  // Only consider names that are unique enough to be meaningful
-  let nameFreq =
+  let funcsByName =
     funcs
-    |> List.map (fun f -> f.Name)
-    |> List.countBy id
-    |> Map.ofList
-
-  // Eligible names: not in blacklist, appear as definitions ≤ 5 times,
-  // and are at least 4 chars long
-  let eligibleNames =
-    funcs
-    |> List.map (fun f -> f.Name)
-    |> List.distinct
-    |> List.filter (fun name ->
-      name.Length >= 4
-      && not (commonNames.Contains(name))
-      && not (commonNames.Contains(name.ToLowerInvariant()))
-      && (Map.tryFind name nameFreq |> Option.defaultValue 0) <= 5)
-    |> Set.ofList
-
-  let nameToQual =
-    funcs
-    |> List.filter (fun f -> eligibleNames.Contains(f.Name))
     |> List.groupBy (fun f -> f.Name)
-    |> List.map (fun (name, fs) -> name, fs |> List.map (fun f -> f.QualifiedName))
     |> Map.ofList
 
-  // Pre-compile regexes for eligible names
-  let regexes =
-    eligibleNames
-    |> Set.toArray
-    |> Array.map (fun name ->
-      name, Regex(sprintf @"\b%s\b" (Regex.Escape(name)), RegexOptions.Compiled))
+  let resolveUnqualifiedCall (caller: FuncDef) (name: string) : FuncDef option =
+    match Map.tryFind name funcsByName with
+    | None -> None
+    | Some (candidates: FuncDef list) ->
+      let sameModule =
+        candidates
+        |> List.filter (fun (candidate: FuncDef) -> candidate.Module = caller.Module)
+      match sameModule with
+      | [target] when target.QualifiedName <> caller.QualifiedName -> Some target
+      | [_] -> None
+      | _ ->
+        match candidates with
+        | [target] when target.QualifiedName <> caller.QualifiedName -> Some target
+        | _ -> None
+
+  let resolveQualifiedCall (caller: FuncDef) (callRef: string) : FuncDef option =
+    match funcs |> List.tryFind (fun f -> f.QualifiedName = callRef) with
+    | Some target when target.QualifiedName <> caller.QualifiedName -> Some target
+    | Some _ -> None
+    | None ->
+      let suffixMatches =
+        funcs
+        |> List.filter (fun f ->
+          f.QualifiedName <> caller.QualifiedName
+          && f.QualifiedName.EndsWith("." + callRef, StringComparison.Ordinal))
+      let preferred =
+        suffixMatches
+        |> List.filter (fun f ->
+          f.Module = caller.Module
+          || f.Module.StartsWith(caller.Module + ".", StringComparison.Ordinal))
+      match preferred with
+      | [target] -> Some target
+      | _ ->
+        match suffixMatches with
+        | [target] -> Some target
+        | _ -> None
 
   [
     for caller in funcs do
-      let bodyText = String.Join("\n", caller.Body)
-      for (name, regex) in regexes do
-        if name <> caller.Name then
-          let matches = regex.Matches(bodyText)
-          if matches.Count > 0 then
-            match Map.tryFind name nameToQual with
-            | Some qualNames ->
-              for qualName in qualNames do
-                if qualName <> caller.QualifiedName then
-                  { From = caller.QualifiedName
-                    To = qualName
-                    Weight = matches.Count }
+      let callCounts =
+        caller.CallRefs
+        |> List.countBy id
+
+      for (callRef, weight) in callCounts do
+        if callRef.Contains(".") then
+          match resolveQualifiedCall caller callRef with
+          | Some callee ->
+              { From = caller.QualifiedName
+                To = callee.QualifiedName
+                Weight = weight }
+          | None -> ()
+        else
+          match resolveUnqualifiedCall caller callRef with
+          | Some callee ->
+              { From = caller.QualifiedName
+                To = callee.QualifiedName
+                Weight = weight }
             | None -> ()
   ]
+
+let private rangeContainedInFunction (funcDef: FuncDef) (symbolRange: range) =
+  pathEquals funcDef.FilePath symbolRange.FileName
+  && symbolRange.StartLine >= funcDef.StartLine
+  && symbolRange.EndLine <= funcDef.EndLine
+
+let private tryFindFunctionByDeclaration (funcs: FuncDef list) (symbol: FSharpSymbol) =
+  match symbol with
+  | :? FSharpMemberOrFunctionOrValue as memberOrFunction ->
+      let declarationRange = memberOrFunction.DeclarationLocation
+      let exactMatch =
+        funcs
+        |> List.tryFind (fun funcDef ->
+          pathEquals funcDef.FilePath declarationRange.FileName
+          && funcDef.DeclarationStartLine = declarationRange.StartLine
+          && funcDef.DeclarationStartColumn = declarationRange.StartColumn
+          && funcDef.Name = memberOrFunction.DisplayName)
+      match exactMatch with
+      | Some funcDef -> Some funcDef
+      | None ->
+          funcs
+          |> List.tryFind (fun funcDef ->
+            pathEquals funcDef.FilePath declarationRange.FileName
+            && declarationRange.StartLine >= funcDef.StartLine
+            && declarationRange.StartLine <= funcDef.EndLine
+            && funcDef.Name = memberOrFunction.DisplayName)
+  | _ -> None
+
+let buildSemanticCallGraphForProject (projectFile: string) (funcs: FuncDef list) : CallEdge list =
+  match tryLoadProjectContext projectFile with
+  | Some projectContext ->
+      let semanticChecker = FSharpChecker.Create(keepAssemblyContents = true)
+      let projectOptions =
+        semanticChecker.GetProjectOptionsFromCommandLineArgs(projectContext.ProjectFile, projectContext.CompilerArgs)
+      printfn "COMPILERARGS %A" projectContext.CompilerArgs
+      semanticChecker.ParseAndCheckProject(projectOptions) |> Async.RunSynchronously |> ignore
+      let checkResultsByPath =
+        projectContext.SourceFiles
+        |> List.choose (fun filePath ->
+          let sourceText = File.ReadAllText(filePath) |> SourceText.ofString
+          match semanticChecker.ParseAndCheckFileInProject(filePath, 0, sourceText, projectOptions) |> Async.RunSynchronously with
+          | _, FSharpCheckFileAnswer.Succeeded checkResults ->
+              printfn "FILECHECK %s %A" filePath (checkResults.Diagnostics |> Array.map (fun d -> d.Message))
+              Some (Path.GetFullPath(filePath), checkResults)
+          | _ -> None)
+        |> Map.ofList
+      let fileLinesByPath =
+        projectContext.SourceFiles
+        |> List.map (fun filePath -> Path.GetFullPath(filePath), File.ReadAllLines(filePath))
+        |> Map.ofList
+
+      [
+        for caller in funcs do
+          match Map.tryFind (Path.GetFullPath(caller.FilePath)) checkResultsByPath, Map.tryFind (Path.GetFullPath(caller.FilePath)) fileLinesByPath with
+          | Some checkResults, Some fileLines ->
+              for callSite in caller.CallSites do
+                let lineText =
+                  fileLines
+                  |> Array.tryItem (callSite.StartLine - 1)
+                  |> Option.defaultValue ""
+                let tryResolve column =
+                  checkResults.GetSymbolUseAtLocation(callSite.StartLine, column, lineText, callSite.NamePath)
+                printfn "CALLSITE %s %A %d %d-%d %s" caller.QualifiedName callSite.NamePath callSite.StartLine callSite.StartColumn callSite.EndColumn lineText
+                let resolvedSymbolUse =
+                  match tryResolve callSite.EndColumn with
+                  | Some symbolUse -> Some symbolUse
+                  | None -> tryResolve (max callSite.StartColumn (callSite.EndColumn - 1))
+                match resolvedSymbolUse with
+                | Some symbolUse
+                    when symbolUse.IsFromUse
+                         && not symbolUse.IsFromDefinition
+                         && not symbolUse.IsFromOpenStatement
+                         && not symbolUse.IsFromAttribute ->
+                    printfn "RESOLVED %s -> %s" caller.QualifiedName symbolUse.Symbol.FullName
+                    match tryFindFunctionByDeclaration funcs symbolUse.Symbol with
+                    | Some callee when caller.QualifiedName <> callee.QualifiedName ->
+                        { From = caller.QualifiedName
+                          To = callee.QualifiedName
+                          Weight = 1 }
+                    | _ -> ()
+                | _ -> ()
+          | _ -> ()
+      ]
+  | None ->
+      buildCallGraph funcs
 
 /// Deduplicate edges and sum weights
 let deduplicateEdges (edges: CallEdge list) : CallEdge list =
@@ -1697,10 +2013,16 @@ let nightScaleForElevation (elevation: float32) : float32 =
 /// Build the entire city using squarified treemap layout (panel P0 recommendation).
 /// Two-level hierarchy: project zones → module blocks. Modules sorted by call-graph centrality.
 /// Returns city layout plus deduplicated call edges for interactive relationship overlays.
-let buildCity (repoRoot: string) =
+let buildCity (repoRoot: string) (projectFile: string option) =
   let rng = Random(42)
-  let funcs = scanFunctions repoRoot
-  let rawEdges = buildCallGraph funcs
+  let funcs =
+    match projectFile with
+    | Some file -> scanFunctionsForProject file
+    | None -> scanFunctions repoRoot
+  let rawEdges =
+    match projectFile with
+    | Some file -> buildSemanticCallGraphForProject file funcs
+    | None -> buildCallGraph funcs
   let callEdges = mergeCallEdges rawEdges
   let heatMap = computeHeat funcs callEdges
   // Gather git history for every source file — drives organic-vs-grid per district
@@ -2941,13 +3263,36 @@ let tryQuerySageFsRoot (dashboardPort: int) : string option =
     parseDaemonInfoJson json
   with _ -> None
 
+let tryResolveProjectFile (path: string) : string option =
+  let tryFromDirectory dir =
+    if Directory.Exists(dir) then
+      Directory.EnumerateFiles(dir, "*.fsproj")
+      |> Seq.sort
+      |> Seq.toList
+      |> function
+         | [projectFile] -> Some (Path.GetFullPath(projectFile))
+         | _ -> None
+    else None
+
+  match path with
+  | value when String.IsNullOrWhiteSpace(value) -> None
+  | value when File.Exists(value) && Path.GetExtension(value).Equals(".fsproj", StringComparison.OrdinalIgnoreCase) ->
+      Some (Path.GetFullPath(value))
+  | value when Directory.Exists(value) -> tryFromDirectory value
+  | value when File.Exists(value) -> tryFromDirectory (Path.GetDirectoryName(value))
+  | _ -> None
+
 // ─── Main Loop ────────────────────────────────────────────────
 
 [<EntryPoint>]
 let main argv =
+  let explicitPath =
+    argv
+    |> Array.tryHead
+    |> Option.filter (fun path -> not (String.IsNullOrWhiteSpace(path)))
   let repoRoot =
-    match argv |> Array.tryHead with
-    | Some path when not (String.IsNullOrWhiteSpace(path)) ->
+    match explicitPath with
+    | Some path ->
       if File.Exists(path) then Path.GetDirectoryName(path)  // .fsproj/.sln file
       else path
     | _ ->
@@ -2969,10 +3314,14 @@ let main argv =
           else dir <- Directory.GetParent(dir).FullName
         if found then dir else Directory.GetCurrentDirectory()
       resolveRepoRootPure [||] sageFsDir fallback
+  let projectFile =
+    match explicitPath |> Option.bind tryResolveProjectFile with
+    | Some project -> Some project
+    | None -> tryResolveProjectFile repoRoot
 
   let cityName = Path.GetFileName(repoRoot)
   printfn "Scanning %s..." repoRoot
-  let buildings, districts, roads, blocks, callEdges, alleyRoads = buildCity repoRoot
+  let buildings, districts, roads, blocks, callEdges, alleyRoads = buildCity repoRoot projectFile
   let buildingArray = buildings |> List.toArray
   let incomingRelations, outgoingRelations = buildRelationMaps buildingArray callEdges
   let maxRenderedRelations = 8

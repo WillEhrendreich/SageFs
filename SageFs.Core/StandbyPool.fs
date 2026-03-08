@@ -70,13 +70,23 @@ type RestartDecision =
 module StandbyPool =
 
   /// Should we start warming a standby?
+  /// Returns true when the primary is alive and healthy (Ready, Evaluating, or Building)
+  /// and no standby already exists. Building counts as healthy — the session is doing
+  /// useful work and may need fast restart if a build fails catastrophically.
   let shouldWarmStandby
     (primaryStatus: SessionStatus)
     (currentStandby: StandbySession option)
     (enabled: bool) =
-    enabled
-    && primaryStatus = SessionStatus.Ready
-    && currentStandby.IsNone
+    let primaryIsHealthy =
+      match primaryStatus with
+      | SessionStatus.Ready
+      | SessionStatus.Evaluating
+      | SessionStatus.Building _ -> true
+      | SessionStatus.Starting
+      | SessionStatus.Faulted
+      | SessionStatus.Restarting
+      | SessionStatus.Stopped -> false
+    enabled && primaryIsHealthy && currentStandby.IsNone
 
   /// Can we swap the standby instead of cold restart?
   let canSwap (standby: StandbySession option) =

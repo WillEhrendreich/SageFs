@@ -20,6 +20,9 @@ type SessionManagementOps = {
   GetAllSessions: unit -> Task<SessionInfo list>
   /// Get summary of standby pool state for UI display.
   GetStandbyInfo: unit -> Task<StandbyInfo>
+  /// Notify that a worker died unexpectedly (pipe broken mid-request).
+  /// Closes the race window between pipe failure and proc.Exited event firing.
+  NotifyWorkerDied: SessionId -> unit
 }
 
 module SessionManagementOps =
@@ -33,4 +36,5 @@ module SessionManagementOps =
     GetSessionInfo = fun _ -> Task.FromResult(None)
     GetAllSessions = fun () -> Task.FromResult([])
     GetStandbyInfo = fun () -> Task.FromResult(StandbyInfo.NoPool)
+    NotifyWorkerDied = fun _ -> ()
   }

@@ -8,6 +8,7 @@
     <ItemGroup>
         <Compile Include="Args.fs" />
         <Compile Include="Utils.fs" />
+        <Compile Include="SageFsConfig.fs" />
         <Compile Include="Timeouts.fs" />
         <Compile Include="BatchFlusher.fs" />
         <Compile Include="BinaryFormat.fs" />
