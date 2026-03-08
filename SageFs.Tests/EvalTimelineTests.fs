@@ -29,9 +29,11 @@ let evalTimelineTests = testList "EvalTimeline" [
           |> List.mapi (fun i d -> mkEntry i (int64 d.Get))
         let state =
           entries |> List.fold (fun s e -> TimelineState.record e s) TimelineState.empty
+        // Entries are newest-first (prepend order), so CellIds should be descending
         let ids = state.Entries |> List.map (fun e -> e.CellId)
-        ids |> Expect.equal "should preserve insertion order"
-          (List.init ids.Length id))
+        let n = ids.Length
+        ids |> Expect.equal "should preserve newest-first order"
+          (List.init n (fun i -> n - 1 - i)))
   ]
 
   testList "Examples" [

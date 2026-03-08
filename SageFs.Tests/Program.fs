@@ -45,17 +45,24 @@ let main argv =
   let filteredArgv =
     argv |> Array.filter (fun a -> a <> "--all" && a <> "--integration")
 
-  if includeAll then
-    Tests.runTestsInAssemblyWithCLIArgs [] filteredArgv
-  else
-    // Default: exclude [Integration] tests (FSI actor startup is ~8-10s each)
-    // Run with --all or --integration to include them
-    let tests =
-      Impl.testFromThisAssembly ()
-      |> Option.defaultValue (testList "empty" [])
-      |> Test.filter
-        defaultConfig.joinWith.asString
-        (fun z ->
-          let name = defaultConfig.joinWith.format z
-          not (name.Contains "[Integration]"))
-    Tests.runTestsWithCLIArgs [] filteredArgv tests
+  let result =
+    match includeAll with
+    | true ->
+      Tests.runTestsInAssemblyWithCLIArgs [] filteredArgv
+    | false ->
+      // Default: exclude [Integration] tests (FSI actor startup is ~8-10s each)
+      // Run with --all or --integration to include them
+      let tests =
+        Impl.testFromThisAssembly ()
+        |> Option.defaultValue (testList "empty" [])
+        |> Test.filter
+          defaultConfig.joinWith.asString
+          (fun z ->
+            let name = defaultConfig.joinWith.format z
+            not (name.Contains "[Integration]"))
+      Tests.runTestsWithCLIArgs [] filteredArgv tests
+
+  // Force exit: Kestrel ConsoleLifetime and other test infrastructure may leave
+  // foreground threads alive after all tests complete, preventing clean shutdown.
+  Environment.Exit result
+  result

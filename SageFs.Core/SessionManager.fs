@@ -762,7 +762,7 @@ module SessionManager =
             // Also ignore synthetic NotifyWorkerDied events (workerPid = -1) which
             // should not be treated as real process exits.
             match session.Info.WorkerPid with
-            | Some currentPid when currentPid <> workerPid && workerPid >= 0 ->
+            | Some currentPid when currentPid <> workerPid && workerPid > 0 ->
               match isNull span with
               | false -> span.SetTag("stale_event", true) |> ignore
               | true -> ()

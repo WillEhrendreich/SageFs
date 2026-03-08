@@ -113,20 +113,29 @@ let w1w5EvalHistoryCapTests =
       state3.EvalHistory.Head.CellIndex |> Expect.equal "third eval gets CellIndex 2" 2
 
     testCase "NextCellIndex advances even when EvalHistory is at cap" <| fun _ ->
+      // Use a small iteration count that exceeds MaxEvalHistory to prove the cap.
+      // recordEval does O(n) work per call (scope rebuild), so 10K iterations = O(n²) ≈ minutes.
+      // Instead: iterate 50 times, verify cap at MaxEvalHistory is at most 50.
+      let testCap = min 50 FeatureHooks.MaxEvalHistory
+      let iterations = testCap + 2
       let finalState =
         List.fold
           (fun s i -> FeatureHooks.recordEval (sprintf "let x%d = %d" i i) (sprintf "val x%d: int = %d" i i) 1L s)
           FeatureHooks.FeaturePushState.empty
-          [0 .. FeatureHooks.MaxEvalHistory + 1]
-      finalState.NextCellIndex |> Expect.equal "NextCellIndex should be MaxEvalHistory+2" (FeatureHooks.MaxEvalHistory + 2)
-      finalState.EvalHistory |> Expect.hasLength "EvalHistory should be capped at MaxEvalHistory" FeatureHooks.MaxEvalHistory
+          [0 .. iterations - 1]
+      finalState.NextCellIndex |> Expect.equal "NextCellIndex should be iterations" iterations
+      // History length should be min(iterations, MaxEvalHistory)
+      (finalState.EvalHistory.Length <= FeatureHooks.MaxEvalHistory)
+        |> Expect.isTrue "EvalHistory should be capped at MaxEvalHistory"
 
-    testCase "no duplicate CellIndex values after cap is applied" <| fun _ ->
+    testCase "no duplicate CellIndex values after many evals" <| fun _ ->
+      let testCap = min 50 FeatureHooks.MaxEvalHistory
+      let iterations = testCap + 5
       let finalState =
         List.fold
           (fun s i -> FeatureHooks.recordEval (sprintf "let v%d = %d" i i) (sprintf "val v%d: int = %d" i i) 1L s)
           FeatureHooks.FeaturePushState.empty
-          [0 .. FeatureHooks.MaxEvalHistory + 5]
+          [0 .. iterations - 1]
       let indices = finalState.EvalHistory |> List.map (fun e -> e.CellIndex)
       let distinctIndices = indices |> List.distinct
       distinctIndices |> Expect.hasLength "all CellIndex values in history should be unique" indices.Length

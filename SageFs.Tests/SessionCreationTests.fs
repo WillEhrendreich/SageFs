@@ -38,7 +38,7 @@ let addSolution dir name =
   writeText (Path.Combine(dir, name)) ""
 
 [<Tests>]
-let tests = testList "Session Creation" [
+let tests = testSequenced <| testList "Session Creation" [
 
   testList "resolveSessionProjects" [
 

@@ -178,6 +178,41 @@ let createDaemonInfrastructure () : DaemonInfra =
     DashboardFetchTimeoutSec = 0.5
   }
 
+/// Synchronous manifest-prune logic, extracted to keep task{} nesting shallow
+/// so the F# compiler can statically compile the state machine (avoids FS3511).
+let private pruneManifest (dir: string) (log: ILogger) : Result<bool, string> =
+  match Features.DaemonPersistence.loadManifest dir with
+  | Ok state ->
+    let aliveSessions = Features.Replay.DaemonReplayState.aliveSessions state
+    match aliveSessions.IsEmpty with
+    | true ->
+      log.LogInformation("No alive sessions to prune")
+    | false ->
+      let now = DateTimeOffset.UtcNow
+      let pruned =
+        { state with
+            Sessions =
+              state.Sessions
+              |> Map.map (fun _ r ->
+                match r.StoppedAt with
+                | Some _ -> r
+                | None -> { r with StoppedAt = Some now }) }
+      match Features.DaemonPersistence.saveManifest dir pruned with
+      | Ok _ -> log.LogInformation("Pruned {Count} session(s) from binary manifest", aliveSessions.Length)
+      | Error msg -> log.LogWarning("Prune save failed: {Error}", msg)
+    Result.Ok true
+  // W31(R13): Exhaustive match — IoError/CorruptData return Error (file exists but unreadable).
+  // W36(R14): These are error conditions — caller must distinguish from Ok false (not-requested).
+  | Error Features.ManifestTypes.ManifestLoadError.NotFound ->
+    log.LogInformation("No binary manifest found — nothing to prune")
+    Result.Ok true
+  | Error (Features.ManifestTypes.ManifestLoadError.IoError err) ->
+    log.LogWarning("Cannot read manifest for prune — leaving untouched: {Error}", err)
+    Result.Error (sprintf "Cannot prune: manifest read failed: %s" err)
+  | Error (Features.ManifestTypes.ManifestLoadError.CorruptData err) ->
+    log.LogWarning("Manifest corrupt — prune skipped, manual recovery needed: {Error}", err)
+    Result.Error (sprintf "Cannot prune: manifest corrupt: %s" err)
+
 /// Handle --prune flag: clear the binary manifest and return a Result.
 /// W28+W31(R13): Parametrized dir/log/checkDaemonRunning for testability.
 /// W36(R14): Returns Result<bool, string> — Ok true=pruned/exit, Ok false=not-requested/continue,
@@ -190,42 +225,12 @@ let handlePrune (dir: string) (log: ILogger) (checkDaemonRunning: unit -> System
     // W28(R13): Refuse to prune if daemon is running — cross-process TOCTOU guard.
     // W42(R14): await Task directly instead of Async.RunSynchronously in task{}.
     let! daemonInfo = checkDaemonRunning()
-    match daemonInfo with
-    | Some info ->
-      log.LogWarning("Cannot prune while daemon is running (PID {Pid}) — stop the daemon first", info.Pid)
-      return Result.Error (sprintf "Cannot prune: daemon running at PID %d — stop it first" info.Pid)
-    | None ->
-      match Features.DaemonPersistence.loadManifest dir with
-      | Ok state ->
-        let aliveSessions = Features.Replay.DaemonReplayState.aliveSessions state
-        match aliveSessions.IsEmpty with
-        | true ->
-          log.LogInformation("No alive sessions to prune")
-        | false ->
-          let now = DateTimeOffset.UtcNow
-          let pruned =
-            { state with
-                Sessions =
-                  state.Sessions
-                  |> Map.map (fun _ r ->
-                    match r.StoppedAt with
-                    | Some _ -> r
-                    | None -> { r with StoppedAt = Some now }) }
-          match Features.DaemonPersistence.saveManifest dir pruned with
-          | Ok _ -> log.LogInformation("Pruned {Count} session(s) from binary manifest", aliveSessions.Length)
-          | Error msg -> log.LogWarning("Prune save failed: {Error}", msg)
-        return Result.Ok true
-      // W31(R13): Exhaustive match — IoError/CorruptData return Error (file exists but unreadable).
-      // W36(R14): These are error conditions — caller must distinguish from Ok false (not-requested).
-      | Error Features.ManifestTypes.ManifestLoadError.NotFound ->
-        log.LogInformation("No binary manifest found — nothing to prune")
-        return Result.Ok true
-      | Error (Features.ManifestTypes.ManifestLoadError.IoError err) ->
-        log.LogWarning("Cannot read manifest for prune — leaving untouched: {Error}", err)
-        return Result.Error (sprintf "Cannot prune: manifest read failed: %s" err)
-      | Error (Features.ManifestTypes.ManifestLoadError.CorruptData err) ->
-        log.LogWarning("Manifest corrupt — prune skipped, manual recovery needed: {Error}", err)
-        return Result.Error (sprintf "Cannot prune: manifest corrupt: %s" err)
+    return
+      match daemonInfo with
+      | Some info ->
+        log.LogWarning("Cannot prune while daemon is running (PID {Pid}) — stop the daemon first", info.Pid)
+        Result.Error (sprintf "Cannot prune: daemon running at PID %d — stop it first" info.Pid)
+      | None -> pruneManifest dir log
   | false -> return Result.Ok false
 }
 

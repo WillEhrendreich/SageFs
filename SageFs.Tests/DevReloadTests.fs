@@ -547,7 +547,9 @@ let pipelineOrderingTests = testList "DevReload.PipelineOrdering" [
     body |> Expect.stringContains "should have body close" "</body>"
     client.Dispose()
     cts.Cancel()
-    try do! (Task.WhenAny(runTask, Task.Delay(10_000)) :> Task) with _ -> ()
+    do! app.StopAsync(TimeSpan.FromSeconds 5.0)
+    do! (app :> IAsyncDisposable).DisposeAsync().AsTask()
+    try do! runTask with _ -> ()
   }
 
   testTask "DevReload after ResponseCompression: script NOT injected (documents the bug)" {
@@ -591,7 +593,9 @@ let pipelineOrderingTests = testList "DevReload.PipelineOrdering" [
       ()
     client.Dispose()
     cts.Cancel()
-    try do! (Task.WhenAny(runTask, Task.Delay(10_000)) :> Task) with _ -> ()
+    do! app.StopAsync(TimeSpan.FromSeconds 5.0)
+    do! (app :> IAsyncDisposable).DisposeAsync().AsTask()
+    try do! runTask with _ -> ()
   }
 
   test "reflection: _components starts empty on fresh WebApplication" {

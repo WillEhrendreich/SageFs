@@ -12,7 +12,7 @@ let evalOk content =
   | Error msg -> failwithf "Config evaluation failed: %s" msg
 
 [<Tests>]
-let evaluateTests = testList "DirectoryConfig.evaluate" [
+let evaluateTests = testSequenced <| testList "DirectoryConfig.evaluate" [
   testCase "loads solution strategy" (fun () ->
     let config = evalOk """{ DirectoryConfig.empty with Load = Solution "MyApp.sln" }"""
     Expect.equal config.Load (Solution "MyApp.sln") "should parse solution")
@@ -72,7 +72,7 @@ let evaluateTests = testList "DirectoryConfig.evaluate" [
 ]
 
 [<Tests>]
-let loadTests = testList "DirectoryConfig.load" [
+let loadTests = testSequenced <| testList "DirectoryConfig.load" [
   testCase "returns None when no config dir" (fun () ->
     let tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString())
     Directory.CreateDirectory(tempDir) |> ignore
@@ -117,7 +117,7 @@ let loadTests = testList "DirectoryConfig.load" [
 ]
 
 [<Tests>]
-let ensureAutoOpenOptOutTests = testList "DirectoryConfig.ensureAutoOpenNamespacesOptOut" [
+let ensureAutoOpenOptOutTests = testSequenced <| testList "DirectoryConfig.ensureAutoOpenNamespacesOptOut" [
   testCase "creates config when missing" (fun () ->
     let tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString())
     Directory.CreateDirectory(tempDir) |> ignore

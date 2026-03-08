@@ -25,19 +25,19 @@ let stalePidGuardTests =
       isStaleOld 1234 -1 |> Expect.isTrue "OLD guard marks pid=-1 as stale (bug)"
 
     testCase "fixed guard: synthetic pid=-1 is NOT stale" <| fun _ ->
-      let isStaleNew currentPid workerPid = currentPid <> workerPid && workerPid >= 0
+      let isStaleNew currentPid workerPid = currentPid <> workerPid && workerPid > 0
       isStaleNew 1234 -1 |> Expect.isFalse "pid=-1 must pass through guard"
 
     testCase "fixed guard: different real pids remain stale" <| fun _ ->
-      let isStaleNew currentPid workerPid = currentPid <> workerPid && workerPid >= 0
+      let isStaleNew currentPid workerPid = currentPid <> workerPid && workerPid > 0
       isStaleNew 1234 5678 |> Expect.isTrue "different real pids are still stale"
 
     testCase "fixed guard: same pid is not stale" <| fun _ ->
-      let isStaleNew currentPid workerPid = currentPid <> workerPid && workerPid >= 0
+      let isStaleNew currentPid workerPid = currentPid <> workerPid && workerPid > 0
       isStaleNew 1234 1234 |> Expect.isFalse "same pid is not stale"
 
     testCase "fixed guard: pid=0 (invalid) also passes through" <| fun _ ->
-      let isStaleNew currentPid workerPid = currentPid <> workerPid && workerPid >= 0
+      let isStaleNew currentPid workerPid = currentPid <> workerPid && workerPid > 0
       isStaleNew 1234 0 |> Expect.isFalse "pid=0 treated as non-stale (boundary)"
   ]
 
