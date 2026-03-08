@@ -461,7 +461,7 @@ let outer value =
         funcs |> List.map (fun f -> f.Name) |> Expect.contains "outer extracted" "outer"
         funcs |> List.exists (fun f -> f.Name = "inner") |> Expect.isFalse "inner should stay local"
 
-    testCase "type member is excluded from module-level extraction" <| fun () ->
+    testCase "type member is extracted with type-qualified identity" <| fun () ->
       let source = """
 module Demo
 
@@ -472,8 +472,9 @@ let topLevel () = 42
 """
       withTempFsSource source <| fun root filePath ->
         let funcs = extractFunctions root filePath
-        funcs |> List.map (fun f -> f.Name) |> Expect.contains "top-level let extracted" "topLevel"
-        funcs |> List.exists (fun f -> f.Name = "Increment") |> Expect.isFalse "member should not be a module-level function"
+        funcs |> List.map (fun f -> f.QualifiedName) |> Expect.containsAll "top-level let and member should both be extracted"
+          [ "Demo.topLevel"; "Demo.Counter.Increment" ]
+        funcs |> List.exists (fun f -> f.QualifiedName = "Demo.Increment") |> Expect.isFalse "member should not collapse to a module-level function"
   ]
 
 let endToEndParsingTests =
@@ -698,6 +699,111 @@ let caller value =
           [ "Sample.Stages.trim"; "Sample.Stages.parse"; "Sample.Stages.render" ]
         edges |> List.exists (fun edge -> edge.To.Contains("op_Pipe")) |> Expect.isFalse "pipeline should not create operator edges"
 
+    testCase "semantic project graph does not attribute callback lambda body calls to enclosing function" <| fun () ->
+      let files =
+        [
+          "Helpers.fs", """
+module Sample.Helpers
+
+let helper value =
+  value + 1
+"""
+          "Consumer.fs", """
+module Sample.Consumer
+
+open Sample.Helpers
+
+let outer values =
+  values
+  |> List.map (fun value -> helper value)
+  |> ignore
+"""
+        ]
+      withTempProject files [ "Helpers.fs"; "Consumer.fs" ] <| fun _ projectPath ->
+        let funcs = scanFunctionsForProject projectPath
+        let edges = buildSemanticCallGraphForProject projectPath funcs |> mergeCallEdges
+        edges |> Expect.isEmpty "deferred callback lambda bodies should not create direct-call edges for the enclosing function"
+
+    testCase "semantic project graph does not attribute local function body calls to enclosing function" <| fun () ->
+      let files =
+        [
+          "Helpers.fs", """
+module Sample.Helpers
+
+let helper value =
+  value + 1
+"""
+          "Consumer.fs", """
+module Sample.Consumer
+
+open Sample.Helpers
+
+let outer values =
+  let callback value =
+    helper value
+  values
+  |> List.map callback
+  |> ignore
+"""
+        ]
+      withTempProject files [ "Helpers.fs"; "Consumer.fs" ] <| fun _ projectPath ->
+        let funcs = scanFunctionsForProject projectPath
+        let edges = buildSemanticCallGraphForProject projectPath funcs |> mergeCallEdges
+        edges |> Expect.isEmpty "deferred local function bodies should not create direct-call edges for the enclosing function"
+
+    testCase "semantic project graph still counts immediate partial application in let binding as a direct call" <| fun () ->
+      let files =
+        [
+          "Helpers.fs", """
+module Sample.Helpers
+
+let helper seed value =
+  seed + value
+
+let consume _ =
+  ()
+"""
+          "Consumer.fs", """
+module Sample.Consumer
+
+open Sample.Helpers
+
+let outer value =
+  let partial = helper value
+  consume partial
+"""
+        ]
+      withTempProject files [ "Helpers.fs"; "Consumer.fs" ] <| fun _ projectPath ->
+        let funcs = scanFunctionsForProject projectPath
+        let edges = buildSemanticCallGraphForProject projectPath funcs |> mergeCallEdges
+        edges |> Expect.hasLength "immediate partial application should still create a direct-call edge" 2
+        edges |> List.map (fun edge -> edge.To) |> Expect.containsAll "outer should call helper and consume"
+          [ "Sample.Helpers.helper"; "Sample.Helpers.consume" ]
+
+    testCase "semantic project graph counts immediately invoked lambda body calls" <| fun () ->
+      let files =
+        [
+          "Helpers.fs", """
+module Sample.Helpers
+
+let helper value =
+  value + 1
+"""
+          "Consumer.fs", """
+module Sample.Consumer
+
+open Sample.Helpers
+
+let outer value =
+  (fun inner -> helper inner) value
+"""
+        ]
+      withTempProject files [ "Helpers.fs"; "Consumer.fs" ] <| fun _ projectPath ->
+        let funcs = scanFunctionsForProject projectPath
+        let edges = buildSemanticCallGraphForProject projectPath funcs |> mergeCallEdges
+        edges |> Expect.hasLength "immediately invoked lambda should still count its executed call" 1
+        edges.Head.To |> Expect.equal "immediately invoked lambda should still resolve helper" "Sample.Helpers.helper"
+
     testCase "semantic project graph does not resolve opened module function when local let shadows the name" <| fun () ->
       let files =
         [
@@ -777,6 +883,118 @@ let caller value =
         edges |> Expect.hasLength "alias-qualified call should still resolve to one edge" 1
         edges.Head.From |> Expect.equal "edge starts at Sample.Consumer.caller" "Sample.Consumer.caller"
         edges.Head.To |> Expect.equal "edge targets Sample.Beta.Helpers.target" "Sample.Beta.Helpers.target"
+
+    testCase "project scan extracts explicit instance member into function set" <| fun () ->
+      let files =
+        [
+          "Sample.fs", """
+module Sample
+
+let helper x =
+  x + 1
+
+type Counter() =
+  member _.Inc x =
+    helper x
+"""
+        ]
+      withTempProject files [ "Sample.fs" ] <| fun _ projectPath ->
+        let funcs = scanFunctionsForProject projectPath
+        funcs |> List.map (fun func -> func.QualifiedName) |> Expect.contains "instance member should be extracted" "Sample.Counter.Inc"
+
+    testCase "project scan extracts explicit static member into function set" <| fun () ->
+      let files =
+        [
+          "Sample.fs", """
+module Sample
+
+let normalize (x: string) =
+  x.Trim()
+
+type Parser =
+  static member Parse x =
+    normalize x
+"""
+        ]
+      withTempProject files [ "Sample.fs" ] <| fun _ projectPath ->
+        let funcs = scanFunctionsForProject projectPath
+        funcs |> List.map (fun func -> func.QualifiedName) |> Expect.contains "static member should be extracted" "Sample.Parser.Parse"
+
+    testCase "project scan extracts type augmentation member into function set" <| fun () ->
+      let files =
+        [
+          "Sample.fs", """
+module Sample
+
+type Counter() = class end
+
+type Counter with
+  member _.Dec x =
+    x - 1
+"""
+        ]
+      withTempProject files [ "Sample.fs" ] <| fun _ projectPath ->
+        let funcs = scanFunctionsForProject projectPath
+        funcs |> List.map (fun func -> func.QualifiedName) |> Expect.contains "type augmentation member should be extracted" "Sample.Counter.Dec"
+
+    testCase "semantic project graph resolves module function calling instance member" <| fun () ->
+      let files =
+        [
+          "Sample.fs", """
+module Sample
+
+type Counter() =
+  member _.Inc x =
+    x + 1
+
+let useCounter (counter: Counter) =
+  counter.Inc 1
+"""
+        ]
+      withTempProject files [ "Sample.fs" ] <| fun _ projectPath ->
+        let funcs = scanFunctionsForProject projectPath
+        let edges = buildSemanticCallGraphForProject projectPath funcs |> mergeCallEdges
+        edges |> Expect.hasLength "module function should resolve one instance-member edge" 1
+        edges.Head.From |> Expect.equal "edge starts at useCounter" "Sample.useCounter"
+        edges.Head.To |> Expect.equal "edge targets instance member" "Sample.Counter.Inc"
+
+    testCase "semantic project graph resolves member-to-member call on same type" <| fun () ->
+      let files =
+        [
+          "Sample.fs", """
+module Sample
+
+type Counter() =
+  member _.A() =
+    1
+
+  member this.B() =
+    this.A()
+"""
+        ]
+      withTempProject files [ "Sample.fs" ] <| fun _ projectPath ->
+        let funcs = scanFunctionsForProject projectPath
+        let edges = buildSemanticCallGraphForProject projectPath funcs |> mergeCallEdges
+        edges |> Expect.hasLength "member call should resolve one same-type edge" 1
+        edges.Head.From |> Expect.equal "edge starts at member B" "Sample.Counter.B"
+        edges.Head.To |> Expect.equal "edge targets member A" "Sample.Counter.A"
+
+    testCase "project scan does not create callable nodes for property accessors yet" <| fun () ->
+      let files =
+        [
+          "Sample.fs", """
+module Sample
+
+type Counter() =
+  member _.Count = 42
+"""
+        ]
+      withTempProject files [ "Sample.fs" ] <| fun _ projectPath ->
+        let funcs = scanFunctionsForProject projectPath
+        funcs
+        |> List.map (fun func -> func.QualifiedName)
+        |> List.exists (fun qualifiedName -> qualifiedName = "Sample.Counter.Count" || qualifiedName.EndsWith(".get_Count"))
+        |> Expect.isFalse "property accessors should remain excluded in this conservative step"
   ]
 
 // Curved roads

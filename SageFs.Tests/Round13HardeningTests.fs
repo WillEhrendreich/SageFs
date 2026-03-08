@@ -10,7 +10,7 @@ open SageFs.Features.Replay
 open Microsoft.Extensions.Logging.Abstractions
 
 let private nullLog = NullLogger.Instance
-let private noDaemon () : DaemonInfo option = None
+let private noDaemon () = System.Threading.Tasks.Task.FromResult(None : DaemonInfo option)
 let private pruneFlags = { Args.DaemonFlags.defaults with Prune = true }
 let private noPruneFlags = Args.DaemonFlags.defaults
 
@@ -37,7 +37,11 @@ let w31HandlePruneExhaustiveTests =
           SageFs.Server.DaemonMode.handlePrune dir nullLog noDaemon pruneFlags
           |> Async.AwaitTask
           |> Async.RunSynchronously
-        result |> Expect.isFalse "handlePrune with CorruptData manifest should return false — prune did NOT complete"
+        result |> Expect.equal "handlePrune with CorruptData manifest should return Error — prune was blocked" (Result.Error (sprintf "Cannot prune: manifest corrupt: CRC mismatch")) |> ignore
+        // Any Error result is correct — just verify it's not Ok
+        match result with
+        | Result.Error _ -> ()
+        | Result.Ok _ -> failtest "handlePrune with CorruptData should return Error, not Ok"
       finally
         IO.Directory.Delete(dir, true)
 
@@ -48,7 +52,7 @@ let w31HandlePruneExhaustiveTests =
         SageFs.Server.DaemonMode.handlePrune dir nullLog noDaemon pruneFlags
         |> Async.AwaitTask
         |> Async.RunSynchronously
-      result |> Expect.isTrue "handlePrune with NotFound should return true (nothing to prune)"
+      result |> Expect.equal "handlePrune with NotFound should return Ok true (nothing to prune)" (Result.Ok true)
 
     testCase "handlePrune with Prune=false always returns false" <| fun _ ->
       let dir = IO.Path.Combine(IO.Path.GetTempPath(), sprintf "sagefs-r13-%s" (Guid.NewGuid().ToString("N")))
@@ -56,7 +60,7 @@ let w31HandlePruneExhaustiveTests =
         SageFs.Server.DaemonMode.handlePrune dir nullLog noDaemon noPruneFlags
         |> Async.AwaitTask
         |> Async.RunSynchronously
-      result |> Expect.isFalse "handlePrune with Prune=false returns false (no prune attempted)"
+      result |> Expect.equal "handlePrune with Prune=false returns Ok false (no prune attempted)" (Result.Ok false)
 
     testCase "ManifestLoadError: IoError and CorruptData carry error context; NotFound does not" <| fun _ ->
       // Documents that IoError/CorruptData are error conditions (file exists but unreadable)
@@ -89,28 +93,30 @@ let w28DaemonRunningGuardTests =
         SageFs.Server.DaemonMode.handlePrune dir nullLog noDaemon pruneFlags
         |> Async.AwaitTask
         |> Async.RunSynchronously
-      result |> Expect.isTrue "handlePrune should proceed and return true when no daemon is detected"
+      result |> Expect.equal "handlePrune should proceed and return Ok true when no daemon is detected" (Result.Ok true)
 
-    testCase "handlePrune returns false when daemon is running (W28 guard blocks prune)" <| fun _ ->
+    testCase "handlePrune returns Error when daemon is running (W28 guard blocks prune)" <| fun _ ->
       let dir = IO.Path.Combine(IO.Path.GetTempPath(), sprintf "sagefs-r13-%s" (Guid.NewGuid().ToString("N")))
-      let fakeDaemon () : DaemonInfo option =
-        Some { Pid = 12345; Port = 37749; StartedAt = DateTime.UtcNow; WorkingDirectory = "/"; Version = "0.1.0" }
+      let fakeDaemon () =
+        System.Threading.Tasks.Task.FromResult(Some { Pid = 12345; Port = 37749; StartedAt = DateTime.UtcNow; WorkingDirectory = "/"; Version = "0.1.0" } : DaemonInfo option)
       let result =
         SageFs.Server.DaemonMode.handlePrune dir nullLog fakeDaemon pruneFlags
         |> Async.AwaitTask
         |> Async.RunSynchronously
-      result |> Expect.isFalse "handlePrune should return false when daemon is alive (W28 cross-process guard)"
+      match result with
+      | Result.Error _ -> ()
+      | Result.Ok _ -> failtest "handlePrune should return Error when daemon is alive (W28 cross-process guard)"
 
-    testCase "handlePrune with Prune=false ignores daemon check and returns false" <| fun _ ->
+    testCase "handlePrune with Prune=false ignores daemon check and returns Ok false" <| fun _ ->
       // When Prune=false, the daemon check is never consulted
       let dir = IO.Path.Combine(IO.Path.GetTempPath(), sprintf "sagefs-r13-%s" (Guid.NewGuid().ToString("N")))
-      let fakeDaemon () : DaemonInfo option =
-        Some { Pid = 99999; Port = 37749; StartedAt = DateTime.UtcNow; WorkingDirectory = "/"; Version = "0.1.0" }
+      let fakeDaemon () =
+        System.Threading.Tasks.Task.FromResult(Some { Pid = 99999; Port = 37749; StartedAt = DateTime.UtcNow; WorkingDirectory = "/"; Version = "0.1.0" } : DaemonInfo option)
       let result =
         SageFs.Server.DaemonMode.handlePrune dir nullLog fakeDaemon noPruneFlags
         |> Async.AwaitTask
         |> Async.RunSynchronously
-      result |> Expect.isFalse "handlePrune with Prune=false returns false regardless of daemon state"
+      result |> Expect.equal "handlePrune with Prune=false returns Ok false regardless of daemon state" (Result.Ok false)
   ]
 
 // ---------------------------------------------------------------------------

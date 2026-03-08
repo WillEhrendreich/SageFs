@@ -56,3 +56,22 @@ module DaemonPersistence =
   let loadManifest (sageFsDir: string) : Result<Replay.DaemonReplayState, ManifestTypes.ManifestLoadError> =
     ManifestFile.load sageFsDir
     |> Result.map ManifestMapping.toReplayState
+
+  /// W35(R14): Rename a corrupt manifest file to unblock future saves.
+  /// CorruptData is permanent — the file will never become readable again.
+  /// Renaming to daemon.sagefm.corrupt.<ms> lets loadManifest return NotFound,
+  /// so subsequent mergeManifestWithExisting calls can proceed normally.
+  /// Returns true if renamed successfully, false if file does not exist or rename fails.
+  /// NOTE: Only call on CorruptData — do NOT call on IoError (transient lock; file may recover).
+  let renameCorruptManifest (sageFsDir: string) : bool =
+    let path = System.IO.Path.Combine(sageFsDir, "daemon.sagefm")
+    match System.IO.File.Exists(path) with
+    | false -> false
+    | true ->
+      let backupPath =
+        sprintf "%s.corrupt.%d" path (System.DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())
+      try
+        System.IO.File.Move(path, backupPath)
+        true
+      with _ ->
+        false

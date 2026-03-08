@@ -178,18 +178,22 @@ let createDaemonInfrastructure () : DaemonInfra =
     DashboardFetchTimeoutSec = 0.5
   }
 
-/// Handle --prune flag: clear the binary manifest and return true if pruned.
+/// Handle --prune flag: clear the binary manifest and return a Result.
 /// W28+W31(R13): Parametrized dir/log/checkDaemonRunning for testability.
-let handlePrune (dir: string) (log: ILogger) (checkDaemonRunning: unit -> DaemonInfo option) (flags: Args.DaemonFlags) = task {
+/// W36(R14): Returns Result<bool, string> — Ok true=pruned/exit, Ok false=not-requested/continue,
+///           Error msg=prune-was-requested-but-failed → caller exits with error.
+/// W42(R14): checkDaemonRunning: unit -> Task<DaemonInfo option> to avoid Async.RunSynchronously
+///           inside task{} (thread pool starvation risk).
+let handlePrune (dir: string) (log: ILogger) (checkDaemonRunning: unit -> System.Threading.Tasks.Task<DaemonInfo option>) (flags: Args.DaemonFlags) = task {
   match flags.Prune with
   | true ->
     // W28(R13): Refuse to prune if daemon is running — cross-process TOCTOU guard.
-    // A concurrent daemon may write an updated manifest after prune reads but before
-    // prune writes, causing pruned ghost sessions to reappear on next daemon start.
-    match checkDaemonRunning() with
+    // W42(R14): await Task directly instead of Async.RunSynchronously in task{}.
+    let! daemonInfo = checkDaemonRunning()
+    match daemonInfo with
     | Some info ->
       log.LogWarning("Cannot prune while daemon is running (PID {Pid}) — stop the daemon first", info.Pid)
-      return false
+      return Result.Error (sprintf "Cannot prune: daemon running at PID %d — stop it first" info.Pid)
     | None ->
       match Features.DaemonPersistence.loadManifest dir with
       | Ok state ->
@@ -210,19 +214,19 @@ let handlePrune (dir: string) (log: ILogger) (checkDaemonRunning: unit -> Daemon
           match Features.DaemonPersistence.saveManifest dir pruned with
           | Ok _ -> log.LogInformation("Pruned {Count} session(s) from binary manifest", aliveSessions.Length)
           | Error msg -> log.LogWarning("Prune save failed: {Error}", msg)
-        return true
-      // W31(R13): Exhaustive match — IoError/CorruptData return false (file exists but unreadable).
-      // Old code: `Error _` catch-all treated IoError/CorruptData identical to NotFound → returned true.
+        return Result.Ok true
+      // W31(R13): Exhaustive match — IoError/CorruptData return Error (file exists but unreadable).
+      // W36(R14): These are error conditions — caller must distinguish from Ok false (not-requested).
       | Error Features.ManifestTypes.ManifestLoadError.NotFound ->
         log.LogInformation("No binary manifest found — nothing to prune")
-        return true
+        return Result.Ok true
       | Error (Features.ManifestTypes.ManifestLoadError.IoError err) ->
         log.LogWarning("Cannot read manifest for prune — leaving untouched: {Error}", err)
-        return false
+        return Result.Error (sprintf "Cannot prune: manifest read failed: %s" err)
       | Error (Features.ManifestTypes.ManifestLoadError.CorruptData err) ->
         log.LogWarning("Manifest corrupt — prune skipped, manual recovery needed: {Error}", err)
-        return false
-  | false -> return false
+        return Result.Error (sprintf "Cannot prune: manifest corrupt: %s" err)
+  | false -> return Result.Ok false
 }
 
 /// Build SessionManagementOps record from mailbox + snapshot reader.
@@ -351,7 +355,10 @@ let buildReplayState (snapshot: SessionManager.QuerySnapshot) (activeSessionId: 
 /// Takes QuerySnapshot as value (not thunk) to ensure single consistent read.
 /// `stampActive`: if Some now → stamp active sessions as stopped (shutdown path)
 ///                if None → leave active sessions' StoppedAt = None (periodic save path)
+/// W39(R14): Added (dir: string) as first param — previously hardcoded DaemonState.SageFsDir.
+///           Callers pass DaemonState.SageFsDir; tests pass temp dirs for isolation.
 let mergeManifestWithExisting
+  (dir: string)
   (log: Microsoft.Extensions.Logging.ILogger)
   (snapshot: SessionManager.QuerySnapshot)
   (activeSessionId: string option)
@@ -360,7 +367,7 @@ let mergeManifestWithExisting
   let activeSessions = SessionManager.QuerySnapshot.allSessions snapshot
   let activeSessionIds = activeSessions |> List.map (fun s -> s.Id) |> Set.ofList
   let existingManifestResult =
-    match Features.DaemonPersistence.loadManifest DaemonState.SageFsDir with
+    match Features.DaemonPersistence.loadManifest dir with
     | Ok m -> Ok m
     | Error Features.ManifestTypes.ManifestLoadError.NotFound ->
       Ok (buildReplayState snapshot activeSessionId)
@@ -382,8 +389,17 @@ let mergeManifestWithExisting
       |> Map.map (fun sid (r: Features.Replay.DaemonSessionRecord) ->
         match activeSessionIds.Contains(sid), stampActive with
         | true, Some ts -> { r with StoppedAt = Some ts }   // active now → stamp if shutting down
-        | true, None    -> { r with StoppedAt = None }          // active → enforce StoppedAt=None (W20/R11)
-        | false, _      -> r)                               // already stopped → preserve original
+        | true, None    -> { r with StoppedAt = None }      // active → enforce StoppedAt=None (W20/R11)
+        | false, _ ->
+          // W38(R14): Stamp phantom sessions (absent from snapshot with StoppedAt=None).
+          // These sessions crashed/disappeared without a normal stop — they accumulate as
+          // forever-alive entries across restarts. Stamp them so resume logic skips them.
+          // Use shutdown timestamp (stampActive) if shutting down, current time otherwise.
+          match r.StoppedAt with
+          | Some _ -> r  // already explicitly stopped → preserve original timestamp
+          | None ->
+            // Phantom: alive in manifest but absent from running snapshot.
+            { r with StoppedAt = Some (stampActive |> Option.defaultWith (fun () -> DateTimeOffset.UtcNow)) })
     let replayStateBase = buildReplayState snapshot activeSessionId
     let newSessions =
       replayStateBase.Sessions
@@ -540,9 +556,14 @@ let performGracefulShutdown
   // across test-cache saves, event appends, and manifest merge. Multiple readSnapshot()
   // calls during shutdown can observe different state if sessions exit between calls.
   let snapshot = readSnapshot()
+  // W40(R14): Read model ONCE before any async operations to prevent divergence.
+  // The old code called getModel() at line 545 (for testState) and again at line 577
+  // (for activeSessionId) — after the 5s event-append await. A session starting between
+  // those two calls would cause activeSessionId to reference a session absent from snapshot.
+  let model = getModel()
   let activeSessions = SessionManager.QuerySnapshot.allSessions snapshot
   // Save test cache for each unique project set
-  let testState = (getModel()).LiveTesting.TestState
+  let testState = model.LiveTesting.TestState
   let uniqueProjectSets =
     activeSessions
     |> List.map (fun s -> s.Projects)
@@ -574,9 +595,10 @@ let performGracefulShutdown
   // W4(R9) + W10(R10): Use mergeManifestWithExisting shared helper — loads existing manifest,
   // preserves stopped sessions' original StoppedAt, stamps active sessions as stopped now.
   // W23+W25(R12): Skip write on Error — returning active-only state would erase history.
-  let activeSessionId = (getModel()).Sessions.ActiveSessionId |> ActiveSession.sessionId
+  // W40(R14): activeSessionId derived from model read at function entry (not a second getModel call).
+  let activeSessionId = model.Sessions.ActiveSessionId |> ActiveSession.sessionId
   let now = DateTimeOffset.UtcNow
-  match mergeManifestWithExisting log snapshot activeSessionId (Some now) with
+  match mergeManifestWithExisting DaemonState.SageFsDir log snapshot activeSessionId (Some now) with
   | Ok replayState ->
     match Features.DaemonPersistence.saveManifest DaemonState.SageFsDir replayState with
     | Ok path -> log.LogInformation("Saved session manifest to {Path}", path)
@@ -588,8 +610,9 @@ let performGracefulShutdown
          | Features.ManifestTypes.ManifestLoadError.CorruptData errMsg) ->
     log.LogWarning("Shutdown manifest save skipped — cannot read existing manifest to preserve history: {Error}", errMsg)
   | Error Features.ManifestTypes.ManifestLoadError.NotFound ->
-    // mergeManifestWithExisting converts NotFound → Ok; this arm should not be reached
-    log.LogWarning("Shutdown manifest save skipped — unexpected state (NotFound propagated from merge)")
+    // mergeManifestWithExisting converts NotFound → Ok; this arm should not be reached.
+    // W41(R14): Invariant violation → LogError (not LogWarning — this is a programming error).
+    log.LogError("Shutdown manifest save skipped — unexpected state (NotFound propagated from merge)")
 
   // Stop all workers with a timeout
   let stopTask =
@@ -721,13 +744,17 @@ let periodicCacheSave
 /// Periodic manifest save (binary session resume).
 let periodicManifestSave (log: ILogger) (readSnapshot: unit -> SessionManager.QuerySnapshot) (getModel: unit -> SageFsModel) =
   try
-    let activeSessionId = (getModel()).Sessions.ActiveSessionId |> ActiveSession.sessionId
+    // W40(R14): Read model ONCE before snapshot to prevent divergence.
+    // If getModel() were called after readSnapshot(), a session starting/stopping between
+    // the two calls could cause activeSessionId to reference a session absent from snapshot.
+    let model = getModel()
+    let activeSessionId = model.Sessions.ActiveSessionId |> ActiveSession.sessionId
     // W10(R10): Use mergeManifestWithExisting (same as shutdown) so stopped sessions
     // are not erased on every 60-second tick. stampActive = None keeps active sessions
     // with StoppedAt = None (they're still running).
     // W23+W25(R12): Read snapshot once; skip write on Error to preserve history.
     let snapshot = readSnapshot()
-    match mergeManifestWithExisting log snapshot activeSessionId None with
+    match mergeManifestWithExisting DaemonState.SageFsDir log snapshot activeSessionId None with
     | Ok replayState ->
       match Features.DaemonPersistence.saveManifest DaemonState.SageFsDir replayState with
       | Ok path -> log.LogDebug("Periodic manifest save to {Path}", path)
@@ -741,8 +768,9 @@ let periodicManifestSave (log: ILogger) (readSnapshot: unit -> SessionManager.Qu
         1L, System.Collections.Generic.KeyValuePair("task", box "manifest_read_error"))
       log.LogWarning("Periodic manifest save skipped — cannot read existing manifest to preserve history: {Error}", errMsg)
     | Error Features.ManifestTypes.ManifestLoadError.NotFound ->
-      // mergeManifestWithExisting converts NotFound → Ok; this arm should not be reached
-      log.LogWarning("Periodic manifest save skipped — unexpected state (NotFound propagated from merge)")
+      // mergeManifestWithExisting converts NotFound → Ok; this arm should not be reached.
+      // W41(R14): Invariant violation → LogError (not LogWarning — this is a programming error).
+      log.LogError("Periodic manifest save skipped — unexpected state (NotFound propagated from merge)")
   with ex ->
     Instrumentation.periodicTaskErrors.Add(
       1L, System.Collections.Generic.KeyValuePair("task", box "manifest_save"))
@@ -913,7 +941,15 @@ let resumePreviousSessions
       Features.Replay.DaemonReplayState.empty
     | Error (Features.ManifestTypes.ManifestLoadError.CorruptData err) ->
       // W32(R13): File is permanently corrupt → Error + failSpan.
+      // W35(R14): Rename the corrupt file so periodic saves are unblocked for this run.
+      // Without rename: mergeManifestWithExisting reads daemon.sagefm → CorruptData → Error →
+      // skips write → ALL new sessions lost for the daemon's entire lifetime.
+      // IoError is NOT renamed (transient lock; file may recover on its own).
       log.LogError("Binary manifest corrupt — starting fresh (HISTORY NOT RESTORED): {Error}", err)
+      let renamed = Features.DaemonPersistence.renameCorruptManifest DaemonState.SageFsDir
+      match renamed with
+      | true -> log.LogWarning("Corrupt manifest renamed — periodic saves unblocked for this run")
+      | false -> log.LogWarning("Could not rename corrupt manifest — periodic saves may be blocked")
       match isNull binarySpan with
       | false -> binarySpan.SetTag("source", "error_corrupt") |> ignore
       | true -> ()
@@ -1160,10 +1196,15 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
   let appendEventsAsync events = appendEventsAsync infra events
 
   // Handle --prune: mark all alive sessions as stopped and exit
-  let! pruned = handlePrune DaemonState.SageFsDir infra.Log DaemonState.read flags
-  match pruned with
-  | true -> return ()
-  | false -> ()
+  // W36+W42(R14): handlePrune now returns Result<bool,string> and takes Task-returning checkFn.
+  // Ok true = pruned/exit, Ok false = not-requested/continue, Error msg = failed/exit with error.
+  let! pruneResult = handlePrune DaemonState.SageFsDir infra.Log (fun () -> DaemonState.readAsync() |> Async.StartAsTask) flags
+  match pruneResult with
+  | Result.Ok true -> return ()
+  | Result.Ok false -> ()
+  | Result.Error msg ->
+    infra.Log.LogError("Prune failed: {Error}", msg)
+    return ()
 
   use cts = infra.Cts
   // Test discovery callback — set after elmRuntime is created
@@ -1621,10 +1662,15 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
   // stamps StoppedAt, overwriting those stamps and making sessions appear alive on next run.
   let cacheSaveTimerDone = new System.Threading.ManualResetEventSlim(false)
   cacheSaveTimer.Dispose(cacheSaveTimerDone.WaitHandle) |> ignore
-  cacheSaveTimerDone.Wait(System.TimeSpan.FromSeconds 5.0) |> ignore
+  // W37(R14): Only Dispose cacheSaveTimerDone if Wait returned true (callback finished).
+  // If Wait times out (false), the callback is still running and may call Set() later.
+  // Disposing while Set() is in-flight causes ObjectDisposedException (same as W33/R13).
+  let cacheSaveTimerJoined = cacheSaveTimerDone.Wait(System.TimeSpan.FromSeconds 5.0)
   // W24(R12): Dispose ManualResetEventSlim after Wait — accessing .WaitHandle lazily creates
   // a kernel event handle; not calling Dispose() leaks that handle until process exit.
-  cacheSaveTimerDone.Dispose()
+  match cacheSaveTimerJoined with
+  | false -> log.LogWarning("cacheSaveTimer shutdown wait timed out — callback may still be running")
+  | true -> cacheSaveTimerDone.Dispose()
   liveTestDebounceTimer.Dispose()
   liveTestWatcher.EnableRaisingEvents <- false
   liveTestWatcher.Dispose()

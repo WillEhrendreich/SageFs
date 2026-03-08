@@ -967,6 +967,13 @@ let private modulePathText (idents: Ident list) =
   | "" -> ""
   | text -> text
 
+let private qualifyPath prefix suffix =
+  match prefix, suffix with
+  | "", value -> value
+  | value, "" -> value
+  | prefix, value when value.StartsWith(prefix + ".", StringComparison.Ordinal) -> value
+  | prefix, value -> sprintf "%s.%s" prefix value
+
 let private sliceLines (lines: string[]) (startLine: int) (endLine: int) =
   let startIdx = max 0 (startLine - 1)
   let endIdx = min (lines.Length - 1) (endLine - 1)
@@ -1036,6 +1043,20 @@ let private isBackwardPipeOperator name =
   | "<|||" -> true
   | _ -> false
 
+let rec private stripTrivialExprLayers expr =
+  match expr with
+  | SynExpr.Paren(inner, _, _, _) -> stripTrivialExprLayers inner
+  | SynExpr.Typed(inner, _, _) -> stripTrivialExprLayers inner
+  | _ -> expr
+
+let rec private isFunctionBindingPattern pat =
+  match pat with
+  | SynPat.LongIdent(argPats = argPats) -> not argPats.Patterns.IsEmpty
+  | SynPat.Paren(inner, _) -> isFunctionBindingPattern inner
+  | SynPat.Typed(inner, _, _) -> isFunctionBindingPattern inner
+  | SynPat.Attrib(inner, _, _) -> isFunctionBindingPattern inner
+  | _ -> false
+
 let rec private directCallSites expr =
   match expr with
   | SynExpr.Ident ident ->
@@ -1049,30 +1070,37 @@ let rec private directCallSites expr =
   | SynExpr.Typed(inner, _, _) -> directCallSites inner
   | _ -> []
 
+/// Collect only calls that execute in the current evaluation context.
 let rec private collectCallSites expr =
   match expr with
-  | SynExpr.App(_, _, SynExpr.App(_, _, operatorExpr, leftExpr, _), rightExpr, _) ->
-      match tryOperatorName operatorExpr with
-      | Some operatorName when isForwardPipeOperator operatorName ->
-          directCallSites rightExpr @ collectCallSites leftExpr @ collectCallSites rightExpr
-      | Some operatorName when isBackwardPipeOperator operatorName ->
-          directCallSites leftExpr @ collectCallSites leftExpr @ collectCallSites rightExpr
-      | _ ->
-          let innerCalls = directCallSites operatorExpr @ collectCallSites operatorExpr @ collectCallSites leftExpr
-          innerCalls @ collectCallSites rightExpr
   | SynExpr.App(_, _, funcExpr, argExpr, _) ->
-      directCallSites funcExpr @ collectCallSites funcExpr @ collectCallSites argExpr
+      match stripTrivialExprLayers funcExpr with
+      | SynExpr.App(_, _, operatorExpr, leftExpr, _) ->
+          match tryOperatorName operatorExpr with
+          | Some operatorName when isForwardPipeOperator operatorName ->
+              directCallSites argExpr @ collectCallSites leftExpr @ collectCallSites argExpr
+          | Some operatorName when isBackwardPipeOperator operatorName ->
+              directCallSites leftExpr @ collectCallSites leftExpr @ collectCallSites argExpr
+          | _ ->
+              directCallSites funcExpr @ collectCallSites funcExpr @ collectCallSites argExpr
+      | SynExpr.Lambda(_, _, _, body, _, _, _) ->
+          collectCallSites body @ collectCallSites argExpr
+      | _ ->
+          directCallSites funcExpr @ collectCallSites funcExpr @ collectCallSites argExpr
   | SynExpr.LetOrUse(_, _, _, _, bindings, body, _, _) ->
       let bindingCalls =
         bindings
         |> Seq.toList
-        |> List.collect (fun (SynBinding(expr = expr)) -> collectCallSites expr)
+        |> List.collect (fun (SynBinding(headPat = headPat; expr = expr)) ->
+          match isFunctionBindingPattern headPat with
+          | true -> []
+          | false -> collectCallSites expr)
       bindingCalls @ collectCallSites body
   | SynExpr.Sequential(_, _, first, second, _, _) ->
       collectCallSites first @ collectCallSites second
   | SynExpr.Paren(inner, _, _, _) -> collectCallSites inner
   | SynExpr.Typed(inner, _, _) -> collectCallSites inner
-  | SynExpr.Lambda(_, _, _, body, _, _, _) -> collectCallSites body
+  | SynExpr.Lambda _ -> []
   | SynExpr.Match(_, inputExpr, clauses, _, _) ->
       let clauseCalls =
         clauses
@@ -1090,42 +1118,101 @@ let rec private collectCallSites expr =
       @ (elseExpr |> Option.map collectCallSites |> Option.defaultValue [])
   | _ -> []
 
+let private tryExtractFuncDef rel filePath project lines containerPath binding =
+  let (SynBinding(headPat = headPat; expr = expr)) = binding
+  match tryBindingName headPat with
+  | Some name ->
+      let declarationRange =
+        bindingDeclarationRange headPat
+        |> Option.defaultValue binding.RangeOfBindingWithRhs
+      let qualifiedName = qualifyPath containerPath name
+      let bodyLines =
+        sliceLines lines binding.RangeOfBindingWithRhs.StartLine binding.RangeOfBindingWithRhs.EndLine
+      let callSites = collectCallSites expr
+      Some
+        { Name = name
+          QualifiedName = qualifiedName
+          FilePath = filePath
+          RelPath = rel
+          Module = containerPath
+          Project = project
+          DeclarationStartLine = declarationRange.StartLine
+          DeclarationStartColumn = declarationRange.StartColumn
+          StartLine = binding.RangeOfBindingWithRhs.StartLine
+          EndLine = binding.RangeOfBindingWithRhs.EndLine
+          LineCount = bodyLines.Length
+          Body = bodyLines
+          CallRefs = callSites |> List.map (fun site -> site.RefText)
+          CallSites = callSites }
+  | None -> None
+
+let private isSupportedExplicitMemberBinding binding =
+  let (SynBinding(headPat = headPat; valData = SynValData(memberFlags = memberFlags))) = binding
+  match memberFlags with
+  | Some flags when
+      flags.MemberKind.IsPropertyGet
+      || flags.MemberKind.IsPropertySet
+      || flags.MemberKind.IsPropertyGetSet
+      || flags.MemberKind.IsConstructor
+      || flags.MemberKind.IsClassConstructor -> false
+  | _ -> isFunctionBindingPattern headPat
+
+let rec private extractTypeMemberDecls rel filePath project lines typePath memberDecls =
+  [
+    for memberDecl in memberDecls do
+      match memberDecl with
+      | SynMemberDefn.Member(binding, _) ->
+          match isSupportedExplicitMemberBinding binding, tryExtractFuncDef rel filePath project lines typePath binding with
+          | true, Some funcDef -> yield funcDef
+          | _ -> ()
+      | SynMemberDefn.NestedType(typeDefn, _, _) ->
+          yield! extractTypeDefn rel filePath project lines typePath typeDefn
+      | SynMemberDefn.Interface(_, _, members, _) ->
+          match members with
+          | Some nestedMembers -> yield! extractTypeMemberDecls rel filePath project lines typePath (nestedMembers |> Seq.toList)
+          | None -> ()
+      | _ -> ()
+  ]
+
+and private extractTypeDefn rel filePath project lines modulePath typeDefn =
+  let (SynTypeDefn(typeInfo = typeInfo; typeRepr = typeRepr; members = members)) = typeDefn
+  let (SynComponentInfo(longId = longId)) = typeInfo
+  let typeName =
+    longId
+    |> Seq.toList
+    |> modulePathText
+  let typePath = qualifyPath modulePath typeName
+  let objectModelMembers =
+    match typeRepr with
+    | SynTypeDefnRepr.ObjectModel(_, memberDecls, _) -> memberDecls |> Seq.toList
+    | _ -> []
+  let allMemberDecls =
+    objectModelMembers @ (members |> Seq.toList)
+    |> List.distinctBy (fun memberDecl ->
+      let range = memberDecl.Range
+      range.StartLine, range.StartColumn, range.EndLine, range.EndColumn)
+  extractTypeMemberDecls rel filePath project lines typePath allMemberDecls
+
 let rec private extractModuleDecls rel filePath project defaultModuleName lines modulePath decls =
   [
     for decl in decls do
       match decl with
       | SynModuleDecl.Let(_, bindings, _) ->
+          let containerPath =
+            match modulePath with
+            | "" -> defaultModuleName
+            | value -> value
           for binding in bindings do
-            let (SynBinding(headPat = headPat; expr = expr)) = binding
-            match tryBindingName headPat with
-            | Some name ->
-                let declarationRange =
-                  bindingDeclarationRange headPat
-                  |> Option.defaultValue binding.RangeOfBindingWithRhs
-                let moduleName =
-                  match modulePath with
-                  | "" -> defaultModuleName
-                  | value -> value
-                let qualName = sprintf "%s.%s" moduleName name
-                let bodyLines =
-                  sliceLines lines binding.RangeOfBindingWithRhs.StartLine binding.RangeOfBindingWithRhs.EndLine
-                let callSites = collectCallSites expr
-                yield
-                  { Name = name
-                    QualifiedName = qualName
-                    FilePath = filePath
-                    RelPath = rel
-                    Module = moduleName
-                    Project = project
-                    DeclarationStartLine = declarationRange.StartLine
-                    DeclarationStartColumn = declarationRange.StartColumn
-                    StartLine = binding.RangeOfBindingWithRhs.StartLine
-                    EndLine = binding.RangeOfBindingWithRhs.EndLine
-                    LineCount = bodyLines.Length
-                    Body = bodyLines
-                    CallRefs = callSites |> List.map (fun site -> site.RefText)
-                    CallSites = callSites }
+            match tryExtractFuncDef rel filePath project lines containerPath binding with
+            | Some funcDef -> yield funcDef
             | None -> ()
+      | SynModuleDecl.Types(typeDefns, _) ->
+          let containerPath =
+            match modulePath with
+            | "" -> defaultModuleName
+            | value -> value
+          for typeDefn in typeDefns do
+            yield! extractTypeDefn rel filePath project lines containerPath typeDefn
       | SynModuleDecl.NestedModule(componentInfo, _, nestedDecls, _, _, _) ->
           let (SynComponentInfo(longId = longId)) = componentInfo
           let nestedName =
@@ -1133,13 +1220,10 @@ let rec private extractModuleDecls rel filePath project defaultModuleName lines 
             |> Seq.toList
             |> modulePathText
           let nextModulePath =
-            match modulePath, nestedName with
-            | "", nested -> nested
-            | prefix, nested when nested = "" -> prefix
-            | prefix, nested -> sprintf "%s.%s" prefix nested
+            qualifyPath modulePath nestedName
           yield! extractModuleDecls rel filePath project defaultModuleName lines nextModulePath nestedDecls
        | _ -> ()
-   ]
+    ]
 
 let private extractFunctionsFromParseTree root filePath lines parsedInput =
   let rel, project, defaultModuleName = moduleMetadata root filePath
