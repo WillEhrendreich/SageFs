@@ -46,6 +46,7 @@ SageFs diagnostics (type errors, warnings) stream into the native VS Error List 
 | Command | Description |
 |---------|-------------|
 | SageFs: Create Session | Create a new isolated FSI session |
+| SageFs: Configure Warmup Auto-Open | Create or open `.SageFs/config.fsx` and disable warmup namespace auto-open |
 | SageFs: Switch Session | Switch to a different session |
 | SageFs: Stop Session | Stop the active session |
 | SageFs: Reset Session | Soft reset (clear definitions, keep DLLs) |

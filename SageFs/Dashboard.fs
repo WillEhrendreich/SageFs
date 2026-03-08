@@ -710,6 +710,44 @@ let createCreateSessionHandler
         do! ssePatchNode ctx (Elem.div [ Attr.id DomIds.DiscoveredProjects ] [])
   }
 
+let createDisableWarmupAutoOpenHandler : HttpHandler =
+  fun ctx -> task {
+    use! doc = Request.getSignalsJson ctx
+    let dir = getSignalString doc "newSessionDir" "new-session-dir"
+    let configResultNode message cssClass =
+      Elem.div [ Attr.id DomIds.EvalResult ] [
+        Elem.pre [ Attr.class' (sprintf "output-line %s" cssClass); Attr.style "margin-top: 0.5rem; white-space: pre-wrap;" ] [
+          Text.raw message
+        ]
+      ]
+    Response.sseStartResponse ctx |> ignore
+    match String.IsNullOrWhiteSpace dir, Directory.Exists dir with
+    | true, _ ->
+      do! ssePatchNode ctx (evalResultError "Working directory is required")
+    | false, false ->
+      do! ssePatchNode ctx (evalResultError (sprintf "Directory not found: %s" dir))
+    | false, true ->
+      match DirectoryConfig.ensureAutoOpenNamespacesOptOut dir with
+      | Ok (AutoOpenNamespacesOptOutResult.Created path) ->
+        do! ssePatchNode ctx (
+          configResultNode
+            (sprintf "Created %s with AutoOpenNamespaces = false. New sessions from this directory will skip warmup auto-open." path)
+            "output-result")
+      | Ok (AutoOpenNamespacesOptOutResult.AlreadyDisabled path) ->
+        do! ssePatchNode ctx (
+          configResultNode
+            (sprintf "Warmup auto-open is already disabled in %s." path)
+            "output-result")
+      | Ok (AutoOpenNamespacesOptOutResult.RequiresManualEdit path) ->
+        do! ssePatchNode ctx (
+          configResultNode
+            (sprintf "Existing config found at %s. Edit it manually and set AutoOpenNamespaces = false; it was not overwritten." path)
+            "output-error")
+      | Error msg ->
+        do! ssePatchNode ctx (evalResultError msg)
+      do! pushDiscoverResults ctx dir
+  }
+
 /// JSON SSE stream for TUI clients — pushes regions + model summary as JSON.
 let createApiStateHandler
   (q: DashboardQueries)
@@ -950,6 +988,7 @@ let createEndpoints
     | Some handler ->
       yield post "/dashboard/session/create" (createCreateSessionHandler handler a.SwitchSession)
     | None -> ()
+    yield post "/dashboard/config/disable-auto-open" createDisableWarmupAutoOpenHandler
     match a.SwitchSession with
     | Some handler ->
       yield mapPost "/dashboard/session/switch/{id}"

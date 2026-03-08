@@ -1,5 +1,8 @@
 namespace SageFs.VisualStudio.Commands;
 
+using System;
+using System.Diagnostics;
+using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -9,6 +12,48 @@ using Microsoft.VisualStudio.Extensibility.Documents;
 using Microsoft.VisualStudio.Extensibility.Shell;
 
 #pragma warning disable VSEXTPREVIEW_OUTPUTWINDOW
+
+[Flags]
+internal enum WarmupAutoOpenConfigStatus
+{
+  Created = 1,
+  AlreadyDisabled = 2,
+  RequiresManualEdit = 4,
+}
+
+internal static class WarmupAutoOpenConfig
+{
+  private const string Template = "{ DirectoryConfig.empty with\n  AutoOpenNamespaces = false\n}\n";
+
+  public static (WarmupAutoOpenConfigStatus Status, string Path) Ensure(string workingDir)
+  {
+    var path = Path.Combine(workingDir, ".SageFs", "config.fsx");
+    if (!File.Exists(path))
+    {
+      Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+      File.WriteAllText(path, Template);
+      return (WarmupAutoOpenConfigStatus.Created, path);
+    }
+
+    var content = File.ReadAllText(path);
+    return content.Contains("AutoOpenNamespaces = false", StringComparison.Ordinal)
+      || content.Contains("AutoOpenNamespaces=false", StringComparison.Ordinal)
+      ? (WarmupAutoOpenConfigStatus.AlreadyDisabled, path)
+      : (WarmupAutoOpenConfigStatus.RequiresManualEdit, path);
+  }
+
+  public static void TryOpen(string path)
+  {
+    try
+    {
+      Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
+    }
+    catch
+    {
+      // Best-effort: still show the path in the prompt below.
+    }
+  }
+}
 
 [VisualStudioContribution]
 internal class CreateSessionCommand : Command
@@ -26,6 +71,35 @@ internal class CreateSessionCommand : Command
   {
     await client.CreateSessionAsync(ct);
     await Extensibility.Shell().ShowPromptAsync("Session created.", PromptOptions.OK, ct);
+  }
+}
+
+[VisualStudioContribution]
+internal class ConfigureWarmupAutoOpenCommand : Command
+{
+  public override CommandConfiguration CommandConfiguration => new("%SageFs.ConfigureWarmupAutoOpen.DisplayName%")
+  {
+    Placements = [CommandPlacement.KnownPlacements.ExtensionsMenu],
+    Icon = new(ImageMoniker.KnownValues.AddItem, IconSettings.IconAndText),
+  };
+
+  public override async Task ExecuteCommandAsync(IClientContext context, CancellationToken ct)
+  {
+    var workingDir = Directory.GetCurrentDirectory();
+    var (status, path) = WarmupAutoOpenConfig.Ensure(workingDir);
+    WarmupAutoOpenConfig.TryOpen(path);
+
+    var message = status switch
+    {
+      WarmupAutoOpenConfigStatus.Created =>
+        $"Created {path} with AutoOpenNamespaces = false.",
+      WarmupAutoOpenConfigStatus.AlreadyDisabled =>
+        $"Warmup auto-open is already disabled in {path}.",
+      _ =>
+        $"Existing config opened at {path}. Set AutoOpenNamespaces = false; it was not overwritten.",
+    };
+
+    await Extensibility.Shell().ShowPromptAsync(message, PromptOptions.OK, ct);
   }
 }
 

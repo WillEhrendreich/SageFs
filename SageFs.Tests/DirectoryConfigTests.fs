@@ -115,3 +115,55 @@ let loadTests = testList "DirectoryConfig.load" [
     Expect.stringContains path ".SageFs" "contains .SageFs"
     Expect.stringContains path "config.fsx" "contains config.fsx")
 ]
+
+[<Tests>]
+let ensureAutoOpenOptOutTests = testList "DirectoryConfig.ensureAutoOpenNamespacesOptOut" [
+  testCase "creates config when missing" (fun () ->
+    let tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString())
+    Directory.CreateDirectory(tempDir) |> ignore
+    try
+      let result = DirectoryConfig.ensureAutoOpenNamespacesOptOut tempDir
+      match result with
+      | Ok (AutoOpenNamespacesOptOutResult.Created path) ->
+        Expect.equal path (DirectoryConfig.configPath tempDir) "should create config at expected path"
+        Expect.isTrue (File.Exists path) "config file should exist"
+        Expect.stringContains (File.ReadAllText path) "AutoOpenNamespaces = false" "config should disable auto-open"
+      | other ->
+        failtestf "expected Created, got %A" other
+    finally
+      Directory.Delete(tempDir, true))
+
+  testCase "returns already disabled when config already opts out" (fun () ->
+    let tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString())
+    let configDir = Path.Combine(tempDir, ".SageFs")
+    Directory.CreateDirectory(configDir) |> ignore
+    let path = Path.Combine(configDir, "config.fsx")
+    File.WriteAllText(path, """{ DirectoryConfig.empty with AutoOpenNamespaces = false }""")
+    try
+      let result = DirectoryConfig.ensureAutoOpenNamespacesOptOut tempDir
+      match result with
+      | Ok (AutoOpenNamespacesOptOutResult.AlreadyDisabled actualPath) ->
+        Expect.equal actualPath path "should report existing config path"
+      | other ->
+        failtestf "expected AlreadyDisabled, got %A" other
+    finally
+      Directory.Delete(tempDir, true))
+
+  testCase "requires manual edit when config exists without opt-out" (fun () ->
+    let tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString())
+    let configDir = Path.Combine(tempDir, ".SageFs")
+    Directory.CreateDirectory(configDir) |> ignore
+    let path = Path.Combine(configDir, "config.fsx")
+    File.WriteAllText(path, """{ DirectoryConfig.empty with Load = AutoDetect }""")
+    try
+      let original = File.ReadAllText path
+      let result = DirectoryConfig.ensureAutoOpenNamespacesOptOut tempDir
+      match result with
+      | Ok (AutoOpenNamespacesOptOutResult.RequiresManualEdit actualPath) ->
+        Expect.equal actualPath path "should report existing config path"
+        Expect.equal (File.ReadAllText path) original "should not overwrite existing config"
+      | other ->
+        failtestf "expected RequiresManualEdit, got %A" other
+    finally
+      Directory.Delete(tempDir, true))
+]

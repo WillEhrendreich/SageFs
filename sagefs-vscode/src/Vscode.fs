@@ -390,6 +390,10 @@ module Workspace =
   let openTextDocument (content: string) (language: string) =
     _openTextDocument workspaceExports (createObj [ "content" ==> content; "language" ==> language ])
 
+  [<Emit("$0.openTextDocument($1)")>]
+  let _openTextDocumentUri (w: obj) (uri: Uri) : JS.Promise<obj> = jsNative
+  let openTextDocumentUri (uri: Uri) = _openTextDocumentUri workspaceExports uri
+
 // ── Languages API ───────────────────────────────────────────────
 
 [<Import("languages", "vscode")>]

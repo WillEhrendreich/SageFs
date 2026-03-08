@@ -73,6 +73,11 @@ let terminalInputTests = testList "TerminalInput" [
     let result = TerminalInput.mapKey (key '\x00' ConsoleKey.PageDown 0)
     Expect.equal result (Some TerminalCommand.ScrollDown) "PageDown scrolls"
   }
+
+  test "Ctrl+Alt+A configures warmup auto-open opt-out" {
+    let result = TerminalInput.mapKey (key '\x00' ConsoleKey.A 3)
+    Expect.equal result (Some (TerminalCommand.Action EditorAction.ConfigureWarmupAutoOpen)) "Ctrl+Alt+A configures auto-open opt-out"
+  }
 ]
 
 

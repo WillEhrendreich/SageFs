@@ -795,6 +795,12 @@ let indentOf (line: string) =
 /// Extract MODULE-LEVEL function definitions from an F# file.
 /// Only captures top-level lets (indent ≤ moduleIndent + 2) to avoid
 /// grabbing every local binding inside function bodies.
+type private PendingFunc =
+  { StartLine: int
+    Name: string
+    QualifiedName: string
+    ModuleAtDefinition: string }
+
 let extractFunctions (root: string) (filePath: string) : FuncDef list =
   try
     let lines = File.ReadAllLines(filePath)
@@ -804,7 +810,7 @@ let extractFunctions (root: string) (filePath: string) : FuncDef list =
 
     let mutable currentModule = Path.GetFileNameWithoutExtension(filePath)
     let mutable moduleIndent = 0
-    let mutable funcs = ResizeArray<int * string * string * int>()
+    let mutable funcs = ResizeArray<PendingFunc>()
 
     for i in 0 .. lines.Length - 1 do
       let line = lines.[i]
@@ -855,16 +861,22 @@ let extractFunctions (root: string) (filePath: string) : FuncDef list =
            && Char.IsLetter(name.[0])
            && not (name.Contains("``")) then
           let qualName = sprintf "%s.%s" currentModule name
-          funcs.Add(i, name, qualName, indent)
+          funcs.Add {
+            StartLine = i
+            Name = name
+            QualifiedName = qualName
+            ModuleAtDefinition = currentModule
+          }
 
     let funcList = funcs |> Seq.toArray
     [
       for fi in 0 .. funcList.Length - 1 do
-        let startLine, name, qualName, defIndent = funcList.[fi]
+        let func = funcList.[fi]
+        let startLine = func.StartLine
 
         let endLine =
           if fi + 1 < funcList.Length then
-            let nextStart, _, _, _ = funcList.[fi + 1]
+            let nextStart = funcList.[fi + 1].StartLine
             let mutable e = nextStart - 1
             while e > startLine && lines.[e].Trim().Length = 0 do e <- e - 1
             e
@@ -876,11 +888,11 @@ let extractFunctions (root: string) (filePath: string) : FuncDef list =
           else [| lines.[startLine] |]
 
         if bodyLines.Length >= 2 then
-          { Name = name
-            QualifiedName = qualName
+          { Name = func.Name
+            QualifiedName = func.QualifiedName
             FilePath = filePath
             RelPath = rel
-            Module = currentModule
+            Module = func.ModuleAtDefinition
             Project = project
             StartLine = startLine + 1
             EndLine = endLine + 1

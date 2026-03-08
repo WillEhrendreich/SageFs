@@ -171,6 +171,7 @@ type EditorEffect =
   | RequestSessionList
   | RequestSessionSwitch of sessionId: string
   | RequestSessionCreate of projects: string list
+  | RequestConfigureWarmupAutoOpen of workingDir: string
   | RequestSessionStop of sessionId: string
   | RequestReset
   | RequestHardReset
@@ -362,6 +363,8 @@ module EditorUpdate =
               Purpose = PromptPurpose.CreateSessionDir } }, []
       | false ->
         state, [EditorEffect.RequestSessionCreate projects]
+    | EditorAction.ConfigureWarmupAutoOpen ->
+      state, []
     | EditorAction.StopSession id ->
       state, [EditorEffect.RequestSessionStop id]
     | EditorAction.ToggleSessionPanel ->

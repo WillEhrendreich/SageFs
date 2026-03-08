@@ -31,6 +31,12 @@ type DirectoryConfig = {
   SessionName: string option
 }
 
+[<RequireQualifiedAccess>]
+type AutoOpenNamespacesOptOutResult =
+  | Created of path: string
+  | AlreadyDisabled of path: string
+  | RequiresManualEdit of path: string
+
 module DirectoryConfig =
   let empty = {
     Load = AutoDetect
@@ -48,6 +54,12 @@ module DirectoryConfig =
 
   let configPath (workingDir: string) =
     Path.Combine(configDir workingDir, "config.fsx")
+
+  let autoOpenNamespacesOptOutTemplate =
+    """{ DirectoryConfig.empty with
+  AutoOpenNamespaces = false
+}
+"""
 
   /// Evaluate a config.fsx file as F# code, returning a DirectoryConfig.
   /// The config file should contain a DirectoryConfig expression, e.g.:
@@ -103,3 +115,24 @@ module DirectoryConfig =
     load workingDir
     |> Option.map (fun cfg -> cfg.AutoOpenNamespaces)
     |> Option.defaultValue true
+
+  let ensureAutoOpenNamespacesOptOut (workingDir: string) =
+    try
+      let path = configPath workingDir
+      match File.Exists path with
+      | false ->
+        Directory.CreateDirectory(configDir workingDir) |> ignore
+        File.WriteAllText(path, autoOpenNamespacesOptOutTemplate)
+        Ok (AutoOpenNamespacesOptOutResult.Created path)
+      | true ->
+        match load workingDir with
+        | Some cfg when not cfg.AutoOpenNamespaces ->
+          Ok (AutoOpenNamespacesOptOutResult.AlreadyDisabled path)
+        | Some _ ->
+          Ok (AutoOpenNamespacesOptOutResult.RequiresManualEdit path)
+        | None ->
+          Directory.CreateDirectory(configDir workingDir) |> ignore
+          File.WriteAllText(path, autoOpenNamespacesOptOutTemplate)
+          Ok (AutoOpenNamespacesOptOutResult.Created path)
+    with ex ->
+      Error (sprintf "Failed to configure %s: %s" (configPath workingDir) ex.Message)

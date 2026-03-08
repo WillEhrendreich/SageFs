@@ -88,6 +88,11 @@ let screenTests = testList "Screen" [
       Expect.stringContains result "new-session" "should contain new-session hint"
     }
 
+    test "sessions pane shows auto-open-off hint" {
+      let result = StatusHints.build KeyMap.defaults PaneId.Sessions LayoutConfig.defaults.VisiblePanes
+      Expect.stringContains result "auto-open-off" "should contain auto-open-off hint"
+    }
+
     test "output pane shows scroll hint" {
       let result = StatusHints.build KeyMap.defaults PaneId.Output LayoutConfig.defaults.VisiblePanes
       Expect.stringContains result "scroll" "should contain scroll hint"

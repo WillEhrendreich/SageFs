@@ -212,6 +212,37 @@ module SageFsUpdate =
       | true -> Some sessions.[idx].Id
       | false -> None
 
+  let resolveConfigWorkingDirectory (model: SageFsModel) =
+    let tryPromptDir =
+      match model.Editor.Prompt with
+      | Some prompt when prompt.Purpose = PromptPurpose.CreateSessionDir && not (String.IsNullOrWhiteSpace prompt.Input) ->
+        Some prompt.Input
+      | _ -> None
+
+    let trySelectedSessionDir =
+      match model.Editor.SelectedSessionIndex with
+      | Some idx when idx >= 0 && idx < model.Sessions.Sessions.Length ->
+        let dir = model.Sessions.Sessions.[idx].WorkingDirectory
+        match String.IsNullOrWhiteSpace dir with
+        | true -> None
+        | false -> Some dir
+      | _ -> None
+
+    let tryActiveSessionDir =
+      match model.Sessions.ActiveSessionId with
+      | ActiveSession.Viewing sessionId ->
+        model.Sessions.Sessions
+        |> List.tryFind (fun session -> session.Id = sessionId)
+        |> Option.bind (fun session ->
+          match String.IsNullOrWhiteSpace session.WorkingDirectory with
+          | true -> None
+          | false -> Some session.WorkingDirectory)
+      | ActiveSession.AwaitingSession -> None
+
+    [ tryPromptDir; trySelectedSessionDir; tryActiveSessionDir; Some Environment.CurrentDirectory ]
+    |> List.tryPick id
+    |> Option.defaultValue Environment.CurrentDirectory
+
   /// When a prompt is active, remap editor input actions to prompt actions.
   let remapForPrompt (action: EditorAction) (prompt: PromptState option) : EditorAction =
     match prompt with
@@ -302,6 +333,10 @@ module SageFsUpdate =
         model.RecentOutput.Clear(activeId)
         { model with RecentOutput = SessionOutputStore.empty },
         []
+      | EditorAction.ConfigureWarmupAutoOpen ->
+        let workingDir = resolveConfigWorkingDirectory model
+        model,
+        [SageFsEffect.Editor (EditorEffect.RequestConfigureWarmupAutoOpen workingDir)]
       | EditorAction.SessionNavDown | EditorAction.SessionSetIndex _ ->
         let newEditor, effects = EditorUpdate.update action model.Editor
         // Clamp index to session count
@@ -364,6 +399,9 @@ module SageFsUpdate =
           Timestamp = DateTime.UtcNow
           SessionId = sid
         }
+        { model with RecentOutput = SageFsModel.addOutputLine line model.RecentOutput }, []
+
+      | SageFsEvent.OutputEmitted line ->
         { model with RecentOutput = SageFsModel.addOutputLine line model.RecentOutput }, []
 
       | SageFsEvent.CompletionReady items ->
@@ -964,11 +1002,11 @@ module SageFsRender =
             | true -> "\n⏳ Creating session..."
             | false -> ""
           match s.Length > 0 with
-          | true -> sprintf "%s%s\n... ↑↓ nav · Enter switch · Del stop · ^Tab cycle" s creatingLine
+          | true -> sprintf "%s%s\n... ↑↓ nav · Enter switch · Del stop · Ctrl+N new · Ctrl+Alt+A auto-open off · ^Tab cycle" s creatingLine
           | false ->
             match model.CreatingSession with
             | true -> "⏳ Creating session..."
-            | false -> s
+            | false -> "No sessions yet.\nCtrl+N new · Ctrl+Alt+A auto-open off"
       Affordances = []
       Cursor = None
       Completions = None
@@ -1002,6 +1040,8 @@ type EffectDeps = {
   GetStreamingTestProxy: SessionId -> (Features.LiveTesting.TestCase array -> int -> (Features.LiveTesting.TestRunResult -> unit) -> (bool array -> unit) -> Async<unit>) option
   /// Create a new session
   CreateSession: string list -> string -> Async<Result<SessionInfo, SageFsError>>
+  /// Ensure the working directory has warmup auto-open disabled.
+  ConfigureWarmupAutoOpen: string -> Async<Result<OutputLine, string>>
   /// Stop a session
   StopSession: SessionId -> Async<Result<unit, SageFsError>>
   /// List all sessions
@@ -1175,6 +1215,16 @@ module SageFsEffectHandler =
             dispatch (SageFsMsg.Event (
               SageFsEvent.EvalFailed (
                 "", sprintf "Create failed: %s" (SageFsError.describe err))))
+        }
+
+      | EditorEffect.RequestConfigureWarmupAutoOpen workingDir ->
+        async {
+          let! result = deps.ConfigureWarmupAutoOpen workingDir
+          match result with
+          | Ok line ->
+            dispatch (SageFsMsg.Event (SageFsEvent.OutputEmitted line))
+          | Error err ->
+            dispatch (SageFsMsg.Event (SageFsEvent.EvalFailed ("", err)))
         }
 
       | EditorEffect.RequestSessionStop sessionId ->

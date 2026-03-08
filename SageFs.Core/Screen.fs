@@ -86,7 +86,8 @@ module StatusHints =
         [ hint UiAction.ScrollDown "scroll↓" ]
         |> List.choose id
       | PaneId.Sessions ->
-        [ editorHint (EditorAction.CreateSession []) "new-session" ]
+        [ editorHint (EditorAction.CreateSession []) "new-session"
+          editorHint EditorAction.ConfigureWarmupAutoOpen "auto-open-off" ]
         |> List.choose id
     let all = paneHints @ common
     match all.IsEmpty with

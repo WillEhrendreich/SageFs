@@ -116,6 +116,17 @@ let renderSessionStatus (sessionState: string) (sessionId: string) (workingDir: 
       yield! warmupNode
     ]
 
+let private renderDisableWarmupAutoOpenButton (style: string) =
+  Elem.button
+    [ Attr.class' "eval-btn"
+      Attr.style style
+      Ds.indicator Signals.ConfigLoading
+      Ds.attr' ("disabled", "$configLoading")
+      Ds.onClick (Ds.post "/dashboard/config/disable-auto-open") ]
+    [ Elem.span [ Ds.show "$configLoading" ] [ Text.raw "⏳ " ]
+      Elem.span [ Ds.show "!$configLoading" ] [ Text.raw "⚙ " ]
+      Text.raw "Disable Warmup Auto-Open" ]
+
 /// Render eval stats as an HTML fragment.
 let renderEvalStats (stats: EvalStatsView) =
   Elem.div [ Attr.id DomIds.EvalStats; Attr.class' "meta" ] [
@@ -282,6 +293,7 @@ let renderSessionPicker (previous: PreviousSession list) =
                   Elem.span [ Ds.show "!$createLoading" ] [ Text.raw "➕ " ]
                   Text.raw "Create" ]
             ]
+            renderDisableWarmupAutoOpenButton "margin-top: 0.5rem; width: 100%; font-size: 0.8rem;"
             Elem.div [ Attr.id DomIds.DiscoveredProjects ] []
           ]
         ]
@@ -771,6 +783,7 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
                   Elem.span [ Ds.show "!$discoverLoading" ] [ Text.raw "🔍 " ]
                   Text.raw "Discover" ]
             ]
+            renderDisableWarmupAutoOpenButton "margin-top: 0.5rem; width: 100%; font-size: 0.8rem;"
             Elem.div [ Attr.id DomIds.DiscoveredProjects ] []
             Elem.div [ Attr.style "margin-top: 0.5rem;" ] [
               Elem.label [ Attr.class' "meta"; Attr.style "display: block; margin-bottom: 4px;" ] [

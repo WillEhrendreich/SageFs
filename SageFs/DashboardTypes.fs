@@ -53,6 +53,7 @@ module Signals =
   let [<Literal>] EvalLoading = "evalLoading"
   let [<Literal>] DiscoverLoading = "discoverLoading"
   let [<Literal>] CreateLoading = "createLoading"
+  let [<Literal>] ConfigLoading = "configLoading"
   let [<Literal>] TempLoading = "tempLoading"
   let [<Literal>] Theme = "theme"
   let [<Literal>] CursorPos = "cursorPos"
@@ -415,6 +416,7 @@ let parseEditorAction (actionName: string) (value: string option) : EditorAction
   | "listSessions" -> Some EditorAction.ListSessions
   | "switchSession" -> value |> Option.map EditorAction.SwitchSession
   | "createSession" -> value |> Option.map (fun v -> EditorAction.CreateSession [v])
+  | "configureWarmupAutoOpen" -> Some EditorAction.ConfigureWarmupAutoOpen
   | "stopSession" -> value |> Option.map EditorAction.StopSession
   | "historySearch" -> value |> Option.map EditorAction.HistorySearch
   | "resetSession" -> Some EditorAction.ResetSession

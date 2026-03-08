@@ -158,6 +158,7 @@ module DaemonClient =
     | EditorAction.SwitchSession id -> Some ("switchSession", Some id)
     | EditorAction.CreateSession projects ->
       Some ("createSession", Some (String.concat "," projects))
+    | EditorAction.ConfigureWarmupAutoOpen -> Some ("configureWarmupAutoOpen", None)
     | EditorAction.StopSession id -> Some ("stopSession", Some id)
     | EditorAction.HistorySearch s -> Some ("historySearch", Some s)
     | EditorAction.ResetSession -> Some ("resetSession", None)

@@ -16,6 +16,7 @@ module TestDeps =
     mutable SessionListCalls: int
     mutable SessionCreateCalls: (string list * string) list
     mutable SessionStopCalls: string list
+    mutable ConfigureAutoOpenCalls: string list
   }
 
   let createLog () = {
@@ -24,7 +25,17 @@ module TestDeps =
     SessionListCalls = 0
     SessionCreateCalls = []
     SessionStopCalls = []
+    ConfigureAutoOpenCalls = []
   }
+
+  let ensureAutoOpenNoop _ =
+    async {
+      return Result.Ok {
+        Kind = OutputKind.System
+        Text = "Disabled warmup auto-open"
+        Timestamp = DateTime.UtcNow
+        SessionId = "" }
+    }
 
   let singleSession
     (log: CallLog)
@@ -62,6 +73,16 @@ module TestDeps =
           log.SessionCreateCalls <-
             log.SessionCreateCalls @ [projects, dir]
           return Result.Ok sessionInfo
+        }
+      ConfigureWarmupAutoOpen = fun dir ->
+        async {
+          log.ConfigureAutoOpenCalls <-
+            log.ConfigureAutoOpenCalls @ [dir]
+          return Result.Ok {
+            Kind = OutputKind.System
+            Text = sprintf "Disabled warmup auto-open for %s" dir
+            Timestamp = DateTime.UtcNow
+            SessionId = "" }
         }
       StopSession = fun id ->
         async {
@@ -101,6 +122,7 @@ module TestDeps =
       StopSession = fun id ->
         async { return Result.Error (SageFsError.SessionNotFound id) }
       ListSessions = fun () -> async { return [] }
+      ConfigureWarmupAutoOpen = ensureAutoOpenNoop
       GetWarmupContext = None
       TestCycleCancellation = Features.LiveTesting.TestCycleCancellation.create ()
     }
@@ -152,6 +174,24 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
     | SageFsMsg.Event (SageFsEvent.EvalFailed (_, err)) ->
       err |> Expect.stringContains "err" "type mismatch"
     | other -> failtestf "expected EvalFailed, got %A" other
+
+  testCase "RequestConfigureWarmupAutoOpen dispatches output message" <| fun _ ->
+    let log = TestDeps.createLog ()
+    let deps = TestDeps.singleSession log (fun _ ->
+      WorkerResponse.WorkerError (SageFsError.Unexpected (exn "unused")))
+    let mutable dispatched : SageFsMsg list = []
+    SageFsEffectHandler.execute deps
+      (fun m -> dispatched <- m :: dispatched)
+      (SageFsEffect.Editor (EditorEffect.RequestConfigureWarmupAutoOpen @"C:\Code\Repos\TestProject"))
+    |> Async.RunSynchronously
+    log.ConfigureAutoOpenCalls
+    |> Expect.equal "should call config helper" [@"C:\Code\Repos\TestProject"]
+    match dispatched with
+    | [SageFsMsg.Event (SageFsEvent.OutputEmitted line)] ->
+      line.Kind |> Expect.equal "should emit system output" OutputKind.System
+      line.Text |> Expect.stringContains "should describe the opt-out" "Disabled warmup auto-open"
+    | other ->
+      failtestf "expected OutputEmitted, got %A" other
 
   testCase "RequestEval converts worker diagnostics" <| fun _ ->
     let log = TestDeps.createLog ()
@@ -437,6 +477,7 @@ let fullLoopTests = testList "Full ElmLoop + EffectHandler" [
       GetStreamingTestProxy = fun _ -> None
       CreateSession = fun _ _ ->
         async { return Result.Error (SageFsError.NoActiveSessions) }
+      ConfigureWarmupAutoOpen = TestDeps.ensureAutoOpenNoop
       StopSession = fun _ ->
         async { return Result.Error (SageFsError.NoActiveSessions) }
       ListSessions = fun () -> async { return [readySession] }
@@ -464,6 +505,7 @@ let fullLoopTests = testList "Full ElmLoop + EffectHandler" [
       GetStreamingTestProxy = fun _ -> None
       CreateSession = fun _ _ ->
         async { return Result.Error (SageFsError.NoActiveSessions) }
+      ConfigureWarmupAutoOpen = TestDeps.ensureAutoOpenNoop
       StopSession = fun _ ->
         async { return Result.Error (SageFsError.NoActiveSessions) }
       ListSessions = fun () -> async {
@@ -497,6 +539,7 @@ let fullLoopTests = testList "Full ElmLoop + EffectHandler" [
       GetStreamingTestProxy = fun _ -> None
       CreateSession = fun _ _ ->
         async { return Result.Error (SageFsError.NoActiveSessions) }
+      ConfigureWarmupAutoOpen = TestDeps.ensureAutoOpenNoop
       StopSession = fun _ ->
         async { return Result.Error (SageFsError.NoActiveSessions) }
       ListSessions = fun () -> async {

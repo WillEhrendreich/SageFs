@@ -103,6 +103,7 @@ code --install-extension sagefs-*.vsix
 | SageFs: Stop Daemon | — | Stop the SageFs daemon |
 | SageFs: Open Dashboard | — | Open web dashboard in VS Code |
 | SageFs: Create Session | — | Create a new FSI session |
+| SageFs: Configure Warmup Auto-Open | — | Create or open `.SageFs/config.fsx` and disable warmup namespace auto-open |
 | SageFs: Switch Session | — | Switch to a different session |
 | SageFs: Stop Session | — | Stop the active session |
 | SageFs: Reset Session | — | Soft reset (clear definitions) |

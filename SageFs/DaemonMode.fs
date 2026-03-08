@@ -889,8 +889,27 @@ let createElmRuntime
         Log.error "[getWarmupContextForElm] Unexpected: %s (%s)" ex.Message (ex.GetType().Name)
         return None
     }
+  let configureWarmupAutoOpen workingDir =
+    let now = DateTime.UtcNow
+    let mkLine kind text = {
+      Kind = kind
+      Text = text
+      Timestamp = now
+      SessionId = ""
+    }
+
+    match DirectoryConfig.ensureAutoOpenNamespacesOptOut workingDir with
+    | Ok (AutoOpenNamespacesOptOutResult.Created path) ->
+      Ok (mkLine OutputKind.System (sprintf "Disabled warmup auto-open for %s (%s)" workingDir path))
+    | Ok (AutoOpenNamespacesOptOutResult.AlreadyDisabled path) ->
+      Ok (mkLine OutputKind.System (sprintf "Warmup auto-open is already disabled for %s (%s)" workingDir path))
+    | Ok (AutoOpenNamespacesOptOutResult.RequiresManualEdit path) ->
+      Ok (mkLine OutputKind.System (sprintf "Existing config needs manual edit to disable warmup auto-open: %s" path))
+    | Error err ->
+      Error err
+
   let effectDeps =
-    { ElmDaemon.createEffectDeps sessionManager readSnapshot DirectoryConfig.autoOpenNamespacesForDirectory with
+    { ElmDaemon.createEffectDeps sessionManager readSnapshot DirectoryConfig.autoOpenNamespacesForDirectory configureWarmupAutoOpen with
         GetWarmupContext = Some getWarmupContextForElm
         GetStreamingTestProxy = fun sid ->
           let snapshot = readSnapshot()

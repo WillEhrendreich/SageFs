@@ -25,6 +25,17 @@ let mkFunc name proj =
     LineCount = 10
     Body = [||] }
 
+let private withTempFsSource (source: string) run =
+  let root = System.IO.Path.Combine(System.IO.Path.GetTempPath(), Guid.NewGuid().ToString("N"))
+  let filePath = System.IO.Path.Combine(root, "Sample.fs")
+  System.IO.Directory.CreateDirectory(root) |> ignore
+  System.IO.File.WriteAllText(filePath, source.Replace("\n", Environment.NewLine))
+  try
+    run root filePath
+  finally
+    if System.IO.Directory.Exists(root) then
+      System.IO.Directory.Delete(root, true)
+
 let private overlap1d a0 a1 b0 b1 =
   min a1 b1 - max a0 b0
 
@@ -210,6 +221,79 @@ let complexityTests =
           if isNull lines then [||]
           else lines |> Array.map (fun line -> if isNull line then "" else line)
         (computeComplexity safe, 1) |> Expect.isGreaterThanOrEqual "complexity floor is 1"
+  ]
+
+let functionExtractionTests =
+  testList "Function extraction" [
+    testCase "captures module per function across multiple module declarations" <| fun () ->
+      let source = """
+module First
+
+let alpha x = x
+
+module Second
+
+let beta x = x
+"""
+      withTempFsSource source <| fun root filePath ->
+        let funcs = extractFunctions root filePath
+        funcs |> Expect.hasLength "two functions extracted" 2
+        funcs |> List.find (fun f -> f.Name = "alpha") |> fun f ->
+          f.Module |> Expect.equal "alpha stays in First" "First"
+        funcs |> List.find (fun f -> f.Name = "beta") |> fun f ->
+          f.Module |> Expect.equal "beta stays in Second" "Second"
+
+    testCase "earlier functions do not inherit the last module" <| fun () ->
+      let source = """
+module First
+
+let alpha () =
+  1
+
+module Second
+
+let beta () =
+  2
+"""
+      withTempFsSource source <| fun root filePath ->
+        let alpha =
+          extractFunctions root filePath
+          |> List.find (fun f -> f.Name = "alpha")
+        alpha.Module |> Expect.notEqual "alpha should not move to Second" "Second"
+
+    testCase "module and qualified name stay consistent" <| fun () ->
+      let source = """
+module Alpha
+
+let gamma value =
+  value + 1
+
+module Beta
+
+let delta value =
+  value - 1
+"""
+      withTempFsSource source <| fun root filePath ->
+        let funcs = extractFunctions root filePath
+        funcs |> List.find (fun f -> f.Name = "gamma") |> fun f ->
+          f.Module |> Expect.equal "gamma module" "Alpha"
+          f.QualifiedName |> Expect.equal "gamma qualified name" "Alpha.gamma"
+        funcs |> List.find (fun f -> f.Name = "delta") |> fun f ->
+          f.Module |> Expect.equal "delta module" "Beta"
+          f.QualifiedName |> Expect.equal "delta qualified name" "Beta.delta"
+
+    testCase "single module extraction stays stable" <| fun () ->
+      let source = """
+module Only
+
+let epsilon value =
+  value * 2
+"""
+      withTempFsSource source <| fun root filePath ->
+        let funcs = extractFunctions root filePath
+        funcs |> Expect.hasLength "one function extracted" 1
+        funcs.Head.Module |> Expect.equal "module stays Only" "Only"
+        funcs.Head.QualifiedName |> Expect.equal "qualified name stays Only.epsilon" "Only.epsilon"
   ]
 
 // Curved roads
@@ -1028,6 +1112,7 @@ let allTests =
     treemapTests
     edgeAndHeatTests
     complexityTests
+    functionExtractionTests
     roadCurveTests
     compoundShapeTests
     cameraMovementTests

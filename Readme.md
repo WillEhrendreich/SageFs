@@ -452,6 +452,24 @@ Full options: `sagefs --help`
 
 Set `AutoOpenNamespaces = false` to skip warmup auto-opening of namespaces and modules. Because sessions inherit `.SageFs/config.fsx` from the working directory, this opt-out applies across VS Code, Neovim, Visual Studio, the dashboard, TUI, and GUI session creation flows.
 
+Built-in ways to create or edit that config:
+
+- **Dashboard** — enter a working directory, then click **Disable Warmup Auto-Open**
+- **TUI / GUI** — focus the sessions UI and press **Ctrl+Alt+A**
+- **VS Code** — run **SageFs: Configure Warmup Auto-Open**
+- **Visual Studio** — run **SageFs: Configure Warmup Auto-Open**
+- **Neovim** — run `:SageFsConfig`
+
+If `.SageFs/config.fsx` does not exist, these affordances create it with:
+
+```fsharp
+{ DirectoryConfig.empty with
+  AutoOpenNamespaces = false
+}
+```
+
+If the config already exists, SageFs opens or points you at the file instead of overwriting your existing settings.
+
 **Startup profile** — `~/.SageFs/init.fsx` auto-loads on every session start.
 
 **Precedence:** Per-directory config > auto-discovery from working directory.

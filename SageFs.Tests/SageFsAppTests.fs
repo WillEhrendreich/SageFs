@@ -64,6 +64,18 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
     (outputFor "s1" newModel).[0].Kind
     |> Expect.equal "should be Info" OutputKind.Info
 
+  testCase "OutputEmitted adds output line" <| fun _ ->
+    let line = {
+      Kind = OutputKind.System
+      Text = "Disabled warmup auto-open"
+      Timestamp = DateTime.UtcNow
+      SessionId = "" }
+    let newModel, _ =
+      SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.OutputEmitted line)) (SageFsModel.initial())
+    let out = activeOutput newModel
+    out |> Expect.hasLength "should have one output" 1
+    out.[0] |> Expect.equal "should add the emitted line" line
+
   testCase "CompletionReady sets completion menu" <| fun _ ->
     let items = [
       { Label = "toString"; Kind = "method"; Detail = Some "string -> string" }
@@ -86,6 +98,29 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
       SageFsUpdate.update (SageFsMsg.Event event) (SageFsModel.initial())
     newModel.Sessions.Sessions
     |> Expect.hasLength "should have 1 session" 1
+
+  testCase "ConfigureWarmupAutoOpen uses selected session working directory" <| fun _ ->
+    let baseModel = SageFsModel.initial()
+    let snap = {
+      Id = "s1"; Name = None; Projects = ["Test.fsproj"]
+      Status = SessionDisplayStatus.Running
+      LastActivity = DateTime.UtcNow; EvalCount = 0
+      UpSince = DateTime.UtcNow; IsActive = true
+      WorkingDirectory = @"C:\Code\Repos\TestProject" }
+    let model = {
+      baseModel with
+        Editor = { baseModel.Editor with SelectedSessionIndex = Some 0 }
+        Sessions = {
+          baseModel.Sessions with
+            Sessions = [snap]
+            ActiveSessionId = ActiveSession.Viewing "s1" } }
+    let _, effects =
+      SageFsUpdate.update (SageFsMsg.Editor EditorAction.ConfigureWarmupAutoOpen) model
+    match effects with
+    | [SageFsEffect.Editor (EditorEffect.RequestConfigureWarmupAutoOpen dir)] ->
+      dir |> Expect.equal "should use selected session working directory" @"C:\Code\Repos\TestProject"
+    | other ->
+      failtestf "expected RequestConfigureWarmupAutoOpen, got %A" other
 
   testCase "SessionCreated with existing ID should upsert, not duplicate" <| fun _ ->
     let snap = {

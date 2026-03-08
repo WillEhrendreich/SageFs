@@ -251,6 +251,7 @@ type SageFsEvent =
   | EvalCompleted of sessionId: string * output: string * diagnostics: Features.Diagnostics.Diagnostic list
   | EvalFailed of sessionId: string * error: string
   | EvalCancelled of sessionId: string
+  | OutputEmitted of OutputLine
   // ── Session lifecycle ──
   | SessionCreated of SessionSnapshot
   | SessionsRefreshed of SessionSnapshot list

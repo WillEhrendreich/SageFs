@@ -36,6 +36,14 @@ module ElmDaemonTestHelpers =
       GetStreamingTestProxy = fun _ -> None
       CreateSession = fun projects _ ->
         async { return Result.Ok sessionInfo }
+      ConfigureWarmupAutoOpen = fun _ ->
+        async {
+          return Result.Ok {
+            Kind = OutputKind.System
+            Text = "Disabled warmup auto-open"
+            Timestamp = DateTime.UtcNow
+            SessionId = "" }
+        }
       StopSession = fun _ ->
         async { return Result.Ok () }
       ListSessions = fun () ->

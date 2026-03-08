@@ -219,6 +219,7 @@ let actionDispatchTests = testList "action dispatch consistency" [
       EditorAction.SessionCycleNext
       EditorAction.SessionCyclePrev
       EditorAction.CreateSession []
+      EditorAction.ConfigureWarmupAutoOpen
     ]
     for action in sessionActions do
       let result = DaemonClient.actionToApi action
@@ -236,6 +237,7 @@ let actionDispatchTests = testList "action dispatch consistency" [
       EditorAction.ResetSession
       EditorAction.HardResetSession
       EditorAction.CreateSession []
+      EditorAction.ConfigureWarmupAutoOpen
     ]
     for action in actions do
       match DaemonClient.actionToApi action with
@@ -253,6 +255,7 @@ let actionDispatchTests = testList "action dispatch consistency" [
       "SessionNavUp"; "SessionNavDown"; "SessionSelect"; "SessionDelete"
       "SessionCycleNext"; "SessionCyclePrev"
       "ClearOutput"; "ResetSession"; "HardResetSession"; "CreateSession"
+      "ConfigureWarmupAutoOpen"
     ]
     for name in knownPascalActions do
       UiAction.tryParse name

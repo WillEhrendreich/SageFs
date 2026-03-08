@@ -109,9 +109,38 @@ let onProcError (proc: obj) (handler: string -> unit) : unit = jsNative
 [<Emit("$0.on('exit', function(code, signal) { $1(code == null ? -1 : code, signal == null ? '' : signal) })")>]
 let onProcExit (proc: obj) (handler: int -> string -> unit) : unit = jsNative
 
+[<Emit("require('fs').existsSync($0)")>]
+let fileExists (path: string) : bool = jsNative
+
+[<Emit("require('fs').mkdirSync($0, { recursive: true })")>]
+let mkdirRecursive (path: string) : unit = jsNative
+
+[<Emit("require('fs').writeFileSync($0, $1, 'utf8')")>]
+let writeUtf8File (path: string) (content: string) : unit = jsNative
+
+[<Emit("require('fs').readFileSync($0, 'utf8')")>]
+let readUtf8File (path: string) : string = jsNative
+
 let mutable daemonProcess: obj option = None
 let mutable isStarting = false
 let mutable onDaemonReady: (Client.Client -> unit) option = None
+
+let private autoOpenNamespacesOptOutTemplate =
+  """{ DirectoryConfig.empty with
+  AutoOpenNamespaces = false
+}
+"""
+
+type WarmupAutoOpenConfigResult =
+  | Created of string
+  | AlreadyDisabled of string
+  | RequiresManualEdit of string
+
+let private trimTrailingSeparators (path: string) =
+  path.TrimEnd([| '\\'; '/' |])
+
+let private combineWindowsPath (basePath: string) (child: string) =
+  sprintf "%s\\%s" (trimTrailingSeparators basePath) child
 
 // ── Helpers ────────────────────────────────────────────────────
 
@@ -719,6 +748,36 @@ let createSessionCmd () =
         )
     })
 
+let configureWarmupAutoOpenCmd () =
+  promise {
+    match getWorkingDirectory () with
+    | None ->
+      Window.showErrorMessage "Open an F# project or workspace first." [||] |> ignore
+    | Some workDir ->
+      let configDir = combineWindowsPath workDir ".SageFs"
+      let configPath = combineWindowsPath configDir "config.fsx"
+      let result =
+        match fileExists configPath with
+        | false ->
+          mkdirRecursive configDir
+          writeUtf8File configPath autoOpenNamespacesOptOutTemplate
+          Created configPath
+        | true ->
+          let content = readUtf8File configPath
+          match content.Contains("AutoOpenNamespaces = false") || content.Contains("AutoOpenNamespaces=false") with
+          | true -> AlreadyDisabled configPath
+          | false -> RequiresManualEdit configPath
+      let! doc = Workspace.openTextDocumentUri (uriFile configPath)
+      let! _ = Window.showTextDocument doc
+      match result with
+      | Created path ->
+        Window.showInformationMessage (sprintf "Created %s with AutoOpenNamespaces = false." path) [||] |> ignore
+      | AlreadyDisabled path ->
+        Window.showInformationMessage (sprintf "Warmup auto-open is already disabled in %s." path) [||] |> ignore
+      | RequiresManualEdit path ->
+        Window.showWarningMessage (sprintf "Existing config opened at %s. Set AutoOpenNamespaces = false; it was not overwritten." path) [||] |> ignore
+  }
+
 let private formatSessionLabel (s: Client.SessionInfo) =
   let proj =
     match s.projects with
@@ -1115,6 +1174,7 @@ let activate (context: ExtensionContext) =
   reg "sagefs.resetSession" (fun _ -> resetSessionCmd () |> promiseIgnoreLog logToOutput)
   reg "sagefs.hardReset" (fun _ -> hardResetCmd () |> promiseIgnoreLog logToOutput)
   reg "sagefs.createSession" (fun _ -> createSessionCmd () |> promiseIgnoreLog logToOutput)
+  reg "sagefs.configureWarmupAutoOpen" (fun _ -> configureWarmupAutoOpenCmd () |> promiseIgnoreLog logToOutput)
   reg "sagefs.switchSession" (fun _ -> switchSessionCmd () |> promiseIgnoreLog logToOutput)
   reg "sagefs.stopSession" (fun _ -> stopSessionCmd () |> promiseIgnoreLog logToOutput)
 

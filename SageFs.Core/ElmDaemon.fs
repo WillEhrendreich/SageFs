@@ -9,6 +9,7 @@ let createEffectDeps
   (sessionManager: MailboxProcessor<SessionManager.SessionCommand>)
   (readSnapshot: unit -> SessionManager.QuerySnapshot)
   (autoOpenNamespacesForDirectory: string -> bool)
+  (configureWarmupAutoOpen: string -> Result<OutputLine, string>)
   : EffectDeps =
   {
     ResolveSession = fun sessionIdOpt ->
@@ -27,6 +28,8 @@ let createEffectDeps
               projects, workingDir, autoOpenNamespaces, reply))
         return result
       }
+    ConfigureWarmupAutoOpen = fun workingDir ->
+      async { return configureWarmupAutoOpen workingDir }
     StopSession = fun sessionId ->
       async {
         let! result =

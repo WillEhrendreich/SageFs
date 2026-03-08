@@ -31,4 +31,16 @@ otel-*.png
 **/TestResults.junit.xml
 
 BenchmarkDotNet.Artifacts/
-viz-output/
+viz-output/*
+!viz-output/code-city/
+viz-output/code-city/*
+!viz-output/code-city/Program.fs
+!viz-output/code-city/CodeCity.fsproj
+viz-output/code-city/bin/
+viz-output/code-city/obj/
+!viz-output/code-city-tests/
+viz-output/code-city-tests/*
+!viz-output/code-city-tests/CodeCity.Tests.fsproj
+!viz-output/code-city-tests/DomainTests.fs
+viz-output/code-city-tests/bin/
+viz-output/code-city-tests/obj/

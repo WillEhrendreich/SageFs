@@ -107,6 +107,7 @@ and [<RequireQualifiedAccess>] EditorAction =
   | ListSessions
   | SwitchSession of string
   | CreateSession of projects: string list
+  | ConfigureWarmupAutoOpen
   | StopSession of string
   | ToggleSessionPanel
   | ResetSession
@@ -278,6 +279,7 @@ module UiAction =
     | "ListSessions" -> Some (UiAction.Editor EditorAction.ListSessions)
     | "ToggleSessionPanel" -> Some (UiAction.Editor EditorAction.ToggleSessionPanel)
     | "CreateSession" -> Some (UiAction.Editor (EditorAction.CreateSession []))
+    | "ConfigureWarmupAutoOpen" -> Some (UiAction.Editor EditorAction.ConfigureWarmupAutoOpen)
     | "ResetSession" -> Some (UiAction.Editor EditorAction.ResetSession)
     | "HardResetSession" -> Some (UiAction.Editor EditorAction.HardResetSession)
     | "SessionNavUp" -> Some (UiAction.Editor EditorAction.SessionNavUp)
@@ -333,6 +335,7 @@ module KeyMap =
       KeyCombo.ctrl ConsoleKey.OemMinus, UiAction.FontSizeDown
       // Session management
       KeyCombo.ctrl ConsoleKey.N, e (EditorAction.CreateSession [])
+      KeyCombo.ctrlAlt ConsoleKey.A, e EditorAction.ConfigureWarmupAutoOpen
       KeyCombo.ctrlAlt ConsoleKey.S, e EditorAction.ToggleSessionPanel
       KeyCombo.ctrlAlt ConsoleKey.R, e EditorAction.ResetSession
       KeyCombo.ctrlAlt ConsoleKey.H, e EditorAction.HardResetSession

@@ -55,6 +55,14 @@ let SageFsEventTests = testList "SageFsEvent" [
     | SageFsEvent.SessionCreated s -> s.Id |> Expect.equal "id" "s1"
     | _ -> failwith "wrong case"
 
+  testCase "OutputEmitted carries output line" <| fun _ ->
+    let line = { Kind = OutputKind.System; Text = "Disabled warmup auto-open"; Timestamp = now; SessionId = "" }
+    let evt = SageFsEvent.OutputEmitted line
+    match evt with
+    | SageFsEvent.OutputEmitted actual ->
+      actual |> Expect.equal "line" line
+    | _ -> failwith "wrong case"
+
   testCase "FileChanged carries path and action" <| fun _ ->
     let evt = SageFsEvent.FileChanged("src/Main.fs", FileWatchAction.Changed)
     match evt with
