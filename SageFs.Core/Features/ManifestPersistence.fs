@@ -28,6 +28,13 @@ module ManifestTypes =
       CreatedAtMs = 0L
     }
 
+  /// Structured error returned by ManifestFile.load and DaemonPersistence.loadManifest.
+  /// W26(R12): Replaces the stringly-typed "No manifest file found" sentinel.
+  type ManifestLoadError =
+    | NotFound
+    | IoError of string
+    | CorruptData of string
+
 
 /// Writer for .sagefm v1 binary format (daemon session manifest).
 module ManifestWriter =
@@ -243,16 +250,17 @@ module ManifestFile =
       Error (sprintf "Failed to save manifest: %s" ex.Message)
 
   /// Load manifest from .sagefm.
-  let load (sageFsDir: string) : Result<DaemonManifestData, string> =
+  /// W26(R12): Returns ManifestLoadError DU — NotFound for missing file, IoError/CorruptData for failures.
+  let load (sageFsDir: string) : Result<DaemonManifestData, ManifestLoadError> =
     let path = manifestPath sageFsDir
     match File.Exists(path) with
-    | false -> Error "No manifest file found"
+    | false -> Error NotFound
     | true ->
       try
         let bytes = File.ReadAllBytes(path)
-        ManifestReader.read bytes
+        ManifestReader.read bytes |> Result.mapError CorruptData
       with ex ->
-        Error (sprintf "Failed to read manifest: %s" ex.Message)
+        Error (IoError (sprintf "Failed to read manifest: %s" ex.Message))
 
 
 /// Mapping between DaemonReplayState and DaemonManifestData.

@@ -10,9 +10,10 @@ open SageFs.Features.EvalTimeline
 // ---------------------------------------------------------------------------
 // W17 — mergeManifestWithExisting distinguishes "No file" from IO errors
 // ---------------------------------------------------------------------------
-// The specific string check is tested structurally via ManifestReader: a valid
-// file returns Ok, a corrupt file returns Error with a non-"No manifest" message.
-// The "No manifest file found" string is the sentinel used in DaemonMode.fs.
+// W26(R12): The stringly-typed "No manifest file found" sentinel has been replaced by the
+// ManifestLoadError DU (NotFound | IoError | CorruptData). The sentinel-stability test
+// that used to live here has been deleted — it was guarding a design smell.
+// The compiler now enforces exhaustiveness on the DU, making the test redundant.
 
 [<Tests>]
 let w17ManifestErrorDistinctionTests =
@@ -23,37 +24,21 @@ let w17ManifestErrorDistinctionTests =
       match result with
       | Ok _ -> failtest "Expected error for empty manifest"
       | Result.Error msg ->
-        // This error is NOT "No manifest file found" — it's a format/CRC error.
-        // DaemonMode distinguishes these: only "No manifest file found" triggers safe fallback.
+        // This is a format/CRC error — it does NOT map to ManifestLoadError.NotFound.
         let isNotFoundMsg = msg = "No manifest file found"
         isNotFoundMsg |> Expect.isFalse "corrupt file error should not say 'No manifest file found'"
 
-    testCase "loadManifest error message for missing file is the expected sentinel" <| fun _ ->
-      // The sentinel string "No manifest file found" must stay stable because DaemonMode.fs
-      // pattern-matches on it (W17 fix). This test guards against accidental renames.
-      let nonExistentDir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), sprintf "sagefs-test-%s" (System.Guid.NewGuid().ToString("N")))
-      let result = DaemonPersistence.loadManifest nonExistentDir
-      match result with
-      | Ok _ -> failtest "Expected error for nonexistent directory"
-      | Result.Error msg ->
-        msg |> Expect.stringContains "error for missing manifest should contain 'No manifest'" "No manifest"
-
-    testCase "loadManifest for existing but corrupt file returns non-sentinel error" <| fun _ ->
+    testCase "loadManifest for existing but corrupt file returns CorruptData error" <| fun _ ->
       let dir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), sprintf "sagefs-test-%s" (System.Guid.NewGuid().ToString("N")))
       System.IO.Directory.CreateDirectory(dir) |> ignore
       try
-        // Write a junk file with the right name pattern so loadManifest finds it
-        let files = System.IO.Directory.GetFiles(dir, "*.sfm1")
         // Write a corrupt manifest file
-        let fakeManifestPath = System.IO.Path.Combine(dir, "sagefs-session.sfm1")
+        let fakeManifestPath = System.IO.Path.Combine(dir, "daemon.sagefm")
         System.IO.File.WriteAllBytes(fakeManifestPath, Array.create 64 0xFFuy)
         let result = DaemonPersistence.loadManifest dir
         match result with
-        | Ok _ -> failtest "Expected error for corrupt manifest"
-        | Result.Error msg ->
-          // Should NOT be the "no file" sentinel — it should be a CRC/format error
-          let isNotFoundSentinel = msg.Contains("No manifest file found")
-          isNotFoundSentinel |> Expect.isFalse "corrupt file error should not match the not-found sentinel"
+        | Result.Error (SageFs.Features.ManifestTypes.ManifestLoadError.CorruptData _) -> ()
+        | other -> failtest (sprintf "Expected CorruptData, got %A" other)
       finally
         System.IO.Directory.Delete(dir, true)
   ]

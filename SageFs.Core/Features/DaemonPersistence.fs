@@ -52,6 +52,7 @@ module DaemonPersistence =
     ManifestFile.save sageFsDir data
 
   /// Load daemon session manifest from .sagefm binary.
-  let loadManifest (sageFsDir: string) : Result<Replay.DaemonReplayState, string> =
+  /// W26(R12): Returns ManifestLoadError DU instead of stringly-typed error string.
+  let loadManifest (sageFsDir: string) : Result<Replay.DaemonReplayState, ManifestTypes.ManifestLoadError> =
     ManifestFile.load sageFsDir
     |> Result.map ManifestMapping.toReplayState
