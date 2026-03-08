@@ -900,6 +900,70 @@ let gableRoofTests =
       (ny6, 0.0f) |> Expect.isGreaterThan "right slope normal Y must be positive"
   ]
 
+let private mkBlock mod_ proj x z w h =
+  { Module = mod_; Project = proj
+    Rect = TRect.create x z w h
+    Color = Color.White }
+
+let interDistrictRoadTests =
+  testList "inter-district arterial network" [
+    testCase "findAdjacentBlocks finds shared vertical boundary" <| fun () ->
+      let b1 = mkBlock "A" "P" 0.0f 0.0f 5.0f 5.0f
+      let b2 = mkBlock "B" "P" 5.0f 0.0f 5.0f 5.0f
+      findAdjacentBlocks [|b1; b2|] 0.01f
+      |> Expect.hasLength "one adjacent pair" 1
+
+    testCase "findAdjacentBlocks returns empty when gap exists" <| fun () ->
+      let b1 = mkBlock "A" "P" 0.0f 0.0f 5.0f 5.0f
+      let b2 = mkBlock "B" "P" 6.0f 0.0f 5.0f 5.0f
+      findAdjacentBlocks [|b1; b2|] 0.01f
+      |> Expect.isEmpty "gap means not adjacent"
+
+    testCase "findAdjacentBlocks finds horizontal boundary" <| fun () ->
+      let b1 = mkBlock "A" "P" 0.0f 0.0f 5.0f 5.0f
+      let b2 = mkBlock "B" "P" 0.0f 5.0f 5.0f 5.0f
+      findAdjacentBlocks [|b1; b2|] 0.01f
+      |> Expect.hasLength "horizontal boundary found" 1
+
+    testCase "crossDistrictCallCount sums crossing edge weights" <| fun () ->
+      let edges =
+        [ { From = "ModA.foo"; To = "ModB.bar"; Weight = 3 }
+          { From = "ModA.baz"; To = "ModA.qux"; Weight = 5 }
+          { From = "ModC.x"; To = "ModB.y"; Weight = 2 } ]
+      crossDistrictCallCount edges "ModA" "ModB"
+      |> Expect.equal "cross-district weight is 3" 3
+
+    testCase "crossDistrictCallCount is symmetric" <| fun () ->
+      let edges = [ { From = "A.f"; To = "B.g"; Weight = 7 } ]
+      let ab = crossDistrictCallCount edges "A" "B"
+      let ba = crossDistrictCallCount edges "B" "A"
+      ab |> Expect.equal "symmetric" ba
+
+    testCase "buildArterialNetwork halfWidth >= base Boulevard halfWidth" <| fun () ->
+      let b1 = mkBlock "A" "P" 0.0f 0.0f 5.0f 5.0f
+      let b2 = mkBlock "B" "P" 5.0f 0.0f 5.0f 5.0f
+      let roads = buildArterialNetwork [|b1; b2|] []
+      roads |> Expect.hasLength "1 arterial road" 1
+      let hw = roads.[0].FromPos.Y
+      (hw, RoadClass.width Boulevard / 2.0f) |> Expect.isGreaterThanOrEqual "halfWidth >= base"
+  ]
+
+let nightScaleTests =
+  testList "day/night cycle" [
+    testCase "nightScaleForElevation at noon returns 1.0" <| fun () ->
+      nightScaleForElevation 1.0f
+      |> Expect.equal "noon = 1.0" 1.0f
+
+    testCase "nightScaleForElevation at midnight is dim" <| fun () ->
+      let ns = nightScaleForElevation -1.0f
+      (ns, 0.5f) |> Expect.isLessThan "night is dim"
+
+    testCase "nightScaleForElevation is monotone with elevation" <| fun () ->
+      let lo = nightScaleForElevation -0.5f
+      let hi = nightScaleForElevation 0.5f
+      (hi, lo) |> Expect.isGreaterThan "higher sun = higher scale"
+  ]
+
 let allTests =
   testList "CodeCity Domain" [
     colorMathTests
@@ -924,6 +988,8 @@ let allTests =
     buildingTypeAlphaTests
     complexityFootprintTests
     gableRoofTests
+    interDistrictRoadTests
+    nightScaleTests
   ]
 
 [<EntryPoint>]

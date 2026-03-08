@@ -1611,6 +1611,71 @@ let districtPalette =
      Color(120uy, 110uy, 140uy, 255uy)   // dusty violet
      Color(130uy, 150uy, 110uy, 255uy) |] // olive
 
+// ─── Inter-district Arterial Network ────────────────────────────────────────
+// Coupling-weighted Boulevard roads along shared boundaries between adjacent districts.
+// Panels Seemann + Bill + Holden consensus: boundary-midpoint approach, not centroid-to-centroid.
+
+/// Find pairs of adjacent module blocks sharing a boundary edge within eps tolerance.
+let findAdjacentBlocks (blocks: ModuleBlock[]) (eps: float32) : (ModuleBlock * ModuleBlock) list =
+  [ for i in 0 .. blocks.Length - 2 do
+      for j in i + 1 .. blocks.Length - 1 do
+        let r1 = blocks.[i].Rect
+        let r2 = blocks.[j].Rect
+        let zOv = min (r1.Z + r1.H) (r2.Z + r2.H) - max r1.Z r2.Z
+        let xOv = min (r1.X + r1.W) (r2.X + r2.W) - max r1.X r2.X
+        let vb = abs ((r1.X + r1.W) - r2.X) < eps || abs ((r2.X + r2.W) - r1.X) < eps
+        let hb = abs ((r1.Z + r1.H) - r2.Z) < eps || abs ((r2.Z + r2.H) - r1.Z) < eps
+        if vb && zOv > eps then yield blocks.[i], blocks.[j]
+        elif hb && xOv > eps then yield blocks.[i], blocks.[j] ]
+
+/// Count call edges crossing between two named modules (symmetrical).
+let crossDistrictCallCount (callEdges: CallEdge list) (m1: string) (m2: string) : int =
+  let inMod (m: string) (fn: string) = fn.StartsWith(m + ".") || fn = m
+  callEdges
+  |> List.sumBy (fun e ->
+    if (inMod m1 e.From && inMod m2 e.To) || (inMod m2 e.From && inMod m1 e.To)
+    then e.Weight
+    else 0)
+
+/// Build Boulevard roads along shared boundaries between adjacent module blocks.
+/// Road halfWidth (in FromPos.Y) scales logarithmically with cross-district call coupling.
+let buildArterialNetwork (blocks: ModuleBlock[]) (callEdges: CallEdge list) : Road list =
+  let eps = 1.05f  // captures same-project (gap=0) and cross-project (gap≈1.0) adjacency
+  let baseHW = RoadClass.width Boulevard / 2.0f
+  let clrR, clrG, clrB = RoadClass.color Boulevard
+  findAdjacentBlocks blocks eps
+  |> List.map (fun (b1, b2) ->
+    let r1 = b1.Rect
+    let r2 = b2.Rect
+    let coupling = crossDistrictCallCount callEdges b1.Module b2.Module
+    let hw = baseHW * (1.0f + MathF.Log(float32 coupling + 1.0f) * 0.3f)
+    let clr = Color(clrR, clrG, clrB, 255uy)
+    let isVert =
+      abs ((r1.X + r1.W) - r2.X) < eps || abs ((r2.X + r2.W) - r1.X) < eps
+    if isVert then
+      let bx = if abs ((r1.X + r1.W) - r2.X) < eps then r1.X + r1.W else r2.X + r2.W
+      let zLo = max r1.Z r2.Z
+      let zHi = min (r1.Z + r1.H) (r2.Z + r2.H)
+      { FromFunc = b1.Module; ToFunc = b2.Module
+        FromPos = Vector3(bx, hw, zLo)
+        ToPos   = Vector3(bx, hw, zHi)
+        Weight = coupling; Color = clr; Organic = 0.0f }
+    else
+      let bz = if abs ((r1.Z + r1.H) - r2.Z) < eps then r1.Z + r1.H else r2.Z + r2.H
+      let xLo = max r1.X r2.X
+      let xHi = min (r1.X + r1.W) (r2.X + r2.W)
+      { FromFunc = b1.Module; ToFunc = b2.Module
+        FromPos = Vector3(xLo, hw, bz)
+        ToPos   = Vector3(xHi, hw, bz)
+        Weight = coupling; Color = clr; Organic = 0.0f })
+
+// ─── Day/Night Cycle ────────────────────────────────────────────────────────
+
+/// Compute window-lighting night scale from sun elevation.
+/// Elevation 1.0 = noon (scale 1.0 → normal lit bias), -1.0 = midnight (scale 0.2 → more windows lit).
+let nightScaleForElevation (elevation: float32) : float32 =
+  0.2f + 0.8f * ((elevation + 1.0f) / 2.0f)
+
 /// Build the entire city using squarified treemap layout (panel P0 recommendation).
 /// Two-level hierarchy: project zones → module blocks. Modules sorted by call-graph centrality.
 /// Returns city layout plus deduplicated call edges for interactive relationship overlays.
@@ -1706,6 +1771,10 @@ let buildCity (repoRoot: string) =
     allBuildings <- allBuildings @ bldgs
     allAlleyRoads <- allAlleyRoads @ weberRoads
     ignore rng  // global rng still here for future use
+
+  // Inter-district arterial Boulevards at block boundaries, width scaled by call coupling
+  let arterials = buildArterialNetwork (allBlocks.ToArray()) callEdges
+  allAlleyRoads <- allAlleyRoads @ arterials
 
   // Generate roads from treemap boundaries (for HUD display)
   let roadSet = System.Collections.Generic.HashSet<struct(float32 * float32 * float32 * float32)>()
@@ -2513,6 +2582,8 @@ let drawRelationArc (fromPos: Vector3) (toPos: Vector3) (normalizedWeight: float
     let mid = Vector3.Lerp(prev, next, 0.5f)
     Raylib.DrawCylinder(mid, radius, radius, Vector3.Distance(prev, next) * 1.05f, 5, color)
     prev <- next
+  // Arrowhead cone at destination — topRadius=0 makes it a cone pointing upward at toPos
+  Raylib.DrawCylinder(toPos, 0.0f, radius * 2.5f, radius * 4.0f, 8, color)
 
 let drawSelectionOverlay
   (hovered: FuncBuilding option)
@@ -2912,6 +2983,8 @@ uniform vec3 cameraPos;
 uniform vec3 fogColor;
 uniform float fogDensity;
 uniform float time;
+uniform float nightScale;
+uniform float sunElevation;
 void main() {
   // Per-type window grid profiles: [scaleU, scaleV, litBias, borderPct]
   // Index: Shed=0 Cottage=1 Rowhouse=2 Commercial=3 Tower=4 Skyscraper=5
@@ -2961,7 +3034,7 @@ void main() {
     float wy = floor(cell.y);
     float hash = fract(sin(wx * 127.1 + wy * 311.7) * 43758.5453);
     float flicker = sin(time * 0.5 + hash * 6.28) * 0.05;
-    float isLit = step(prof.z + flicker, hash);
+    float isLit = step(prof.z * nightScale + flicker, hash);
     float brd = prof.w;
     float inWindow = step(brd, grid.x) * step(brd, grid.y)
                    * (1.0 - step(1.0 - brd, grid.x)) * (1.0 - step(1.0 - brd, grid.y));
@@ -2980,11 +3053,12 @@ void main() {
     lit += vec3(0.35, 0.28, 0.18) * glow;
   }
 
-  // Atmospheric sky gradient fog
+  // Atmospheric sky gradient fog — shifts from deep night to twilight as sun rises
   vec3 viewDir = normalize(fragPos - cameraPos);
   float upness = max(0.0, viewDir.y);
-  vec3 horizonColor = vec3(0.12, 0.10, 0.18);
-  vec3 zenithColor = vec3(0.02, 0.02, 0.08);
+  float dayT = max(0.0, sunElevation);
+  vec3 horizonColor = mix(vec3(0.03, 0.02, 0.05), vec3(0.20, 0.16, 0.28), dayT);
+  vec3 zenithColor  = mix(vec3(0.01, 0.01, 0.03), vec3(0.05, 0.04, 0.12), dayT);
   vec3 skyGrad = mix(horizonColor, zenithColor, smoothstep(0.0, 0.5, upness));
 
   float dist = length(fragPos - cameraPos);
@@ -3008,6 +3082,10 @@ void main() {
   let fogCol = Vector3(float32 skyColor.R / 255.0f, float32 skyColor.G / 255.0f, float32 skyColor.B / 255.0f)
   Raylib.SetShaderValue(lightShader, fogColorLoc, fogCol, ShaderUniformDataType.Vec3)
   let timeLoc = Raylib.GetShaderLocation(lightShader, "time")
+  let nightScaleLoc = Raylib.GetShaderLocation(lightShader, "nightScale")
+  let sunElevationLoc = Raylib.GetShaderLocation(lightShader, "sunElevation")
+  Raylib.SetShaderValue(lightShader, nightScaleLoc, 1.0f, ShaderUniformDataType.Float)
+  Raylib.SetShaderValue(lightShader, sunElevationLoc, 0.8f, ShaderUniformDataType.Float)
 
   let mutable material = Raylib.LoadMaterialDefault()
   material.Shader <- lightShader
@@ -3109,8 +3187,8 @@ void main() {
   float ca = cos(angle);
   float sa = sin(angle);
 
-  // Depth-scaled sample radius; capped lower to avoid coarse blotches.
-  float pixelRadius = clamp(ssaoRadius * 72.0 / centerLin, 1.0, 28.0);
+  // Depth-scaled sample radius; tighter cap prevents blotchy under-sampled regions.
+  float pixelRadius = clamp(ssaoRadius * 72.0 / centerLin, 1.0, 12.0);
 
   for (int i = 0; i < 12; i++) {
     vec2 offset = poissonDisk[i];
@@ -3124,11 +3202,11 @@ void main() {
     float depthDiff = centerLin - sampleLin;
 
     float rangeCheck = smoothstep(0.0, 1.0, ssaoRadius * 5.0 / (abs(depthDiff) + 0.01));
-    occlusion += step(ssaoBias, depthDiff) * rangeCheck;
+    occlusion += smoothstep(ssaoBias * 0.5, ssaoBias * 2.0, depthDiff) * rangeCheck;
   }
 
   float ao = 1.0 - (occlusion / 12.0);
-  ao = clamp(pow(ao, 1.25), 0.0, 1.0);
+  ao = clamp(pow(ao, 1.08), 0.0, 1.0);
   finalColor = vec4(ao, ao, ao, 1.0);
 }
 """
@@ -3285,6 +3363,18 @@ void main() {
     totalTime <- totalTime + dt
     Raylib.SetShaderValue(lightShader, timeLoc, totalTime, ShaderUniformDataType.Float)
 
+    // Day/night cycle — sun orbits at 0.04 rad/s (full cycle ~157 seconds)
+    let sunAngle = totalTime * 0.04f
+    let sunElev = MathF.Sin(sunAngle)  // -1.0 (night) to 1.0 (noon)
+    let dynSunDir = Vector3.Normalize(Vector3(MathF.Cos(sunAngle) * 0.7f, max 0.08f (sunElev * 0.9f + 0.2f), 0.4f))
+    let ns = nightScaleForElevation sunElev
+    Raylib.SetShaderValue(lightShader, lightDirLoc, dynSunDir, ShaderUniformDataType.Vec3)
+    Raylib.SetShaderValue(lightShader, nightScaleLoc, ns, ShaderUniformDataType.Float)
+    Raylib.SetShaderValue(lightShader, sunElevationLoc, sunElev, ShaderUniformDataType.Float)
+    // Dynamic sky background: deep purple-black at night, slightly warmer at day
+    let sk = int (30.0f + max 0.0f sunElev * 14.0f)
+    let dynSkyColor = Color(byte sk, byte (sk - 4), byte (sk + 16), 255uy)
+
     if rb (Raylib.IsKeyPressed(KeyboardKey.Tab)) then
       mouseCaptured <- not mouseCaptured
       if mouseCaptured then Raylib.DisableCursor()
@@ -3386,7 +3476,7 @@ void main() {
     let renderedOutgoing = selectedOutgoingAll |> List.truncate maxRenderedRelations
 
     Raylib.BeginDrawing()
-    Raylib.ClearBackground(Color(30uy, 26uy, 46uy, 255uy))
+    Raylib.ClearBackground(dynSkyColor)
 
     if diagnosticMode then
       Raylib.BeginMode3D(camera3D)
@@ -3404,7 +3494,7 @@ void main() {
 
       // Pass 1: Scene → sceneRT (with sampleable depth)
       Raylib.BeginTextureMode(sceneRT)
-      Raylib.ClearBackground(Color(30uy, 26uy, 46uy, 255uy))
+      Raylib.ClearBackground(dynSkyColor)
       Raylib.BeginMode3D(camera3D)
       Raylib.DrawMesh(staticMesh, material, Matrix4x4.Identity)
       drawSelectionOverlay highlighted selected renderedIncoming renderedOutgoing showCallLinks
