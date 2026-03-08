@@ -545,8 +545,9 @@ let pipelineOrderingTests = testList "DevReload.PipelineOrdering" [
     let! (body: string) = resp.Content.ReadAsStringAsync()
     body |> Expect.stringContains "should have DevReload script" "data-sagefs-injected"
     body |> Expect.stringContains "should have body close" "</body>"
+    client.Dispose()
     cts.Cancel()
-    try do! runTask with _ -> ()
+    try do! (Task.WhenAny(runTask, Task.Delay(10_000)) :> Task) with _ -> ()
   }
 
   testTask "DevReload after ResponseCompression: script NOT injected (documents the bug)" {
@@ -588,8 +589,9 @@ let pipelineOrderingTests = testList "DevReload.PipelineOrdering" [
     | _ ->
       // Compression didn't activate (e.g., response too small) — skip test
       ()
+    client.Dispose()
     cts.Cancel()
-    try do! runTask with _ -> ()
+    try do! (Task.WhenAny(runTask, Task.Delay(10_000)) :> Task) with _ -> ()
   }
 
   test "reflection: _components starts empty on fresh WebApplication" {

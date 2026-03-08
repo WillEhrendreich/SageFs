@@ -4,6 +4,7 @@ open Expecto
 open Expecto.Flip
 open SageFs
 open SageFs.Utils
+open System.Collections.Concurrent
 open System.Collections.Generic
 
 let waitFor (condition: unit -> bool) (timeoutMs: int) =
@@ -215,7 +216,7 @@ let elmLoopResilienceTests =
 
     // RED: currently only ex.Message is logged, not stack trace
     testCase "Effect throws: stack trace is logged not just message" <| fun _ ->
-      let logged = List<string>()
+      let logged = ConcurrentBag<string>()
       let prevError = Log.logError
       Log.logError <- fun s -> logged.Add(s); prevError s
       try

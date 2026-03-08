@@ -30,7 +30,9 @@ module WorkerHttpTransport =
       member _.DisposeAsync() = app.StopAsync() |> ValueTask
     interface IDisposable with
       member _.Dispose() =
-        app.StopAsync().GetAwaiter().GetResult()
+        use cts = new System.Threading.CancellationTokenSource(System.TimeSpan.FromSeconds(5.0))
+        try app.StopAsync(cts.Token).GetAwaiter().GetResult()
+        with _ -> ()
 
   /// Map WorkerMessage → (httpMethod, path, bodyJson option).
   /// Delegates to HttpWorkerClient in SageFs.Core.
