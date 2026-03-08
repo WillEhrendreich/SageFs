@@ -774,10 +774,16 @@ type WeberGraph() =
 
 let excludeDirs =
   set [
-    "bin"; "obj"; "node_modules"; "mcp-sdk"; "runtimes"; "viz-output"
-    "nupkg"; "mcp-sdk-nupkg"; "coverage-report"; "test-results"
-    "BenchmarkDotNet.Artifacts"; "playwright-report"; ".git"; ".github"
-    "sagefs-vs"; "sagefs-vscode"
+    // Build outputs & tooling
+    "bin"; "obj"; "runtimes"; "nupkg"; "packages"; "vendor"
+    // JS/Node
+    "node_modules"; "dist"; "build"; "out"
+    // CI / test artifacts
+    "coverage-report"; "test-results"; "BenchmarkDotNet.Artifacts"; "playwright-report"
+    // VCS & IDE
+    ".git"; ".github"; ".vs"; ".idea"; "__pycache__"
+    // Rust/Java/other language build dirs
+    "target"
   ]
 
 /// Count leading spaces
@@ -2892,24 +2898,67 @@ let drawSelectionPanel
       drawUiText text (px + 12) y size color
       y <- y + size + 5
 
+// ─── SageFs Integration ───────────────────────────────────────
+
+/// Parse the workingDirectory field from SageFs's /api/daemon-info JSON response.
+let parseDaemonInfoJson (json: string) : string option =
+  try
+    let doc = System.Text.Json.JsonDocument.Parse(json)
+    let wd = doc.RootElement.GetProperty("workingDirectory").GetString()
+    if String.IsNullOrWhiteSpace(wd) then None
+    else Some wd
+  with _ -> None
+
+/// Resolve repo root from CLI args, SageFs query result, and fallback (pure, no IO).
+/// Priority: explicit argv[0] > SageFs working dir > fallback dir.
+let resolveRepoRootPure (argv: string[]) (sageFsDir: string option) (fallbackDir: string) : string =
+  match argv |> Array.tryHead with
+  | Some p when not (String.IsNullOrWhiteSpace(p)) -> p
+  | _ ->
+    match sageFsDir with
+    | Some d -> d
+    | None -> fallbackDir
+
+/// Query the SageFs dashboard HTTP server for the active project's working directory.
+let tryQuerySageFsRoot (dashboardPort: int) : string option =
+  try
+    use client = new System.Net.Http.HttpClient()
+    client.Timeout <- TimeSpan.FromMilliseconds(700.0)
+    let url = sprintf "http://localhost:%d/api/daemon-info" dashboardPort
+    let json = client.GetStringAsync(url).Result
+    parseDaemonInfoJson json
+  with _ -> None
+
 // ─── Main Loop ────────────────────────────────────────────────
 
 [<EntryPoint>]
 let main argv =
   let repoRoot =
     match argv |> Array.tryHead with
-    | Some path -> path
-    | None ->
-      let mutable dir = Directory.GetCurrentDirectory()
-      let mutable found = false
-      while not found && dir.Length > 3 do
-        if Directory.EnumerateFiles(dir, "*.slnx") |> Seq.isEmpty |> not then
-          found <- true
-        else
-          dir <- Directory.GetParent(dir).FullName
-      if found then dir
-      else Directory.GetCurrentDirectory()
+    | Some path when not (String.IsNullOrWhiteSpace(path)) ->
+      if File.Exists(path) then Path.GetDirectoryName(path)  // .fsproj/.sln file
+      else path
+    | _ ->
+      // Auto-detect from SageFs daemon (dashboard port = MCP port + 1)
+      let mcpPort =
+        match Environment.GetEnvironmentVariable("SageFs_MCP_PORT") with
+        | s when String.IsNullOrWhiteSpace(s) -> 37749
+        | s -> match Int32.TryParse(s) with true, p -> p | _ -> 37749
+      let sageFsDir = tryQuerySageFsRoot (mcpPort + 1)
+      // Walk up from CWD for any solution file if SageFs not available
+      let fallback =
+        let mutable dir = Directory.GetCurrentDirectory()
+        let mutable found = false
+        while not found && dir.Length > 3 do
+          let hasSln =
+            Directory.EnumerateFiles(dir, "*.slnx") |> Seq.isEmpty |> not ||
+            Directory.EnumerateFiles(dir, "*.sln") |> Seq.isEmpty |> not
+          if hasSln then found <- true
+          else dir <- Directory.GetParent(dir).FullName
+        if found then dir else Directory.GetCurrentDirectory()
+      resolveRepoRootPure [||] sageFsDir fallback
 
+  let cityName = Path.GetFileName(repoRoot)
   printfn "Scanning %s..." repoRoot
   let buildings, districts, roads, blocks, callEdges, alleyRoads = buildCity repoRoot
   let buildingArray = buildings |> List.toArray
@@ -2926,7 +2975,7 @@ let main argv =
     printfn "WARNING: %d buildings have bad coordinates!" badBuildings.Length
 
   Raylib.SetConfigFlags(ConfigFlags.ResizableWindow ||| ConfigFlags.Msaa4xHint)
-  Raylib.InitWindow(1600, 900, "SageFs Code City — Weber Growth")
+  Raylib.InitWindow(1600, 900, sprintf "%s — Code City" cityName)
   Raylib.SetTargetFPS(60)
   Rlgl.SetClipPlanes(1.0, 5000.0)
 

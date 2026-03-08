@@ -948,6 +948,64 @@ let interDistrictRoadTests =
       (hw, RoadClass.width Boulevard / 2.0f) |> Expect.isGreaterThanOrEqual "halfWidth >= base"
   ]
 
+let parseDaemonInfoJsonTests =
+  testList "parseDaemonInfoJson" [
+    testCase "valid JSON returns workingDirectory" <| fun () ->
+      let json = """{"pid":1234,"version":"0.5.0","startedAt":"2024-01-01T00:00:00Z","workingDirectory":"C:\\Code\\Repos\\SageFs"}"""
+      parseDaemonInfoJson json
+      |> Expect.equal "should parse workingDirectory" (Some @"C:\Code\Repos\SageFs")
+
+    testCase "JSON without workingDirectory returns None" <| fun () ->
+      let json = """{"pid":1234,"version":"0.5.0"}"""
+      parseDaemonInfoJson json
+      |> Expect.isNone "should return None when field missing"
+
+    testCase "invalid JSON returns None" <| fun () ->
+      parseDaemonInfoJson "not valid json"
+      |> Expect.isNone "should return None for invalid JSON"
+
+    testCase "JSON with empty workingDirectory returns None" <| fun () ->
+      let json = """{"workingDirectory":""}"""
+      parseDaemonInfoJson json
+      |> Expect.isNone "should return None for empty path"
+
+    testCase "JSON with whitespace-only workingDirectory returns None" <| fun () ->
+      let json = """{"workingDirectory":"   "}"""
+      parseDaemonInfoJson json
+      |> Expect.isNone "should return None for whitespace-only path"
+  ]
+
+let resolveRepoRootPureTests =
+  testList "resolveRepoRootPure" [
+    testCase "explicit argv path takes priority over SageFs dir" <| fun () ->
+      let argv = [| @"C:\SomeProject" |]
+      let sageFsDir = Some @"C:\SageFs"
+      let fallback = @"C:\Fallback"
+      resolveRepoRootPure argv sageFsDir fallback
+      |> Expect.equal "argv should win" @"C:\SomeProject"
+
+    testCase "SageFs dir used when no argv" <| fun () ->
+      let argv = [||]
+      let sageFsDir = Some @"C:\SageFs"
+      let fallback = @"C:\Fallback"
+      resolveRepoRootPure argv sageFsDir fallback
+      |> Expect.equal "SageFs dir should be used" @"C:\SageFs"
+
+    testCase "fallback used when no argv and no SageFs dir" <| fun () ->
+      let argv = [||]
+      let sageFsDir = None
+      let fallback = @"C:\Fallback"
+      resolveRepoRootPure argv sageFsDir fallback
+      |> Expect.equal "fallback should be used" @"C:\Fallback"
+
+    testCase "empty-string argv falls through to SageFs dir" <| fun () ->
+      let argv = [| "" |]
+      let sageFsDir = Some @"C:\SageFs"
+      let fallback = @"C:\Fallback"
+      resolveRepoRootPure argv sageFsDir fallback
+      |> Expect.equal "empty string should not be used" @"C:\SageFs"
+  ]
+
 let nightScaleTests =
   testList "day/night cycle" [
     testCase "nightScaleForElevation at noon returns 1.0" <| fun () ->
@@ -990,6 +1048,8 @@ let allTests =
     gableRoofTests
     interDistrictRoadTests
     nightScaleTests
+    parseDaemonInfoJsonTests
+    resolveRepoRootPureTests
   ]
 
 [<EntryPoint>]
