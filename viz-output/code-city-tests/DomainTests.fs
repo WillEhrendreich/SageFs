@@ -831,6 +831,75 @@ let splineSegmentTests =
       a |> Expect.equal "pure function: deterministic" b
   ]
 
+let buildingTypeAlphaTests =
+  testList "Building type alpha encoding" [
+    testCase "each type has distinct alpha value" <| fun () ->
+      let types = [Shed; Cottage; Rowhouse; Commercial; Tower; Skyscraper]
+      let alphas = types |> List.map BuildingType.alpha
+      alphas |> List.distinct |> Expect.hasLength "all 6 types must have distinct alpha values" 6
+
+    testCase "all types have alpha in 0..5 for GLSL decode" <| fun () ->
+      let types = [Shed; Cottage; Rowhouse; Commercial; Tower; Skyscraper]
+      types |> List.iter (fun bt ->
+        let a = int (BuildingType.alpha bt)
+        (a, 5) |> Expect.isLessThanOrEqual (sprintf "%A alpha must be <= 5" bt)
+        (a, 0) |> Expect.isGreaterThanOrEqual (sprintf "%A alpha must be >= 0" bt))
+
+    testCase "density ordering Shed=0 through Skyscraper=5" <| fun () ->
+      BuildingType.alpha Shed        |> Expect.equal "Shed=0"        0uy
+      BuildingType.alpha Cottage     |> Expect.equal "Cottage=1"     1uy
+      BuildingType.alpha Rowhouse    |> Expect.equal "Rowhouse=2"    2uy
+      BuildingType.alpha Commercial  |> Expect.equal "Commercial=3"  3uy
+      BuildingType.alpha Tower       |> Expect.equal "Tower=4"       4uy
+      BuildingType.alpha Skyscraper  |> Expect.equal "Skyscraper=5"  5uy
+  ]
+
+let complexityFootprintTests =
+  testList "Complexity footprint factor" [
+    testCase "baseline complexity 0 gives 1.0f" <| fun () ->
+      complexityFootprintFactor 0
+      |> Expect.equal "complexity 0 → no scaling" 1.0f
+
+    testCase "strictly increasing for complexities 0 1 5 10 50" <| fun () ->
+      let vals = [0; 1; 5; 10; 50] |> List.map complexityFootprintFactor
+      vals |> List.pairwise |> List.iteri (fun i (a, b) ->
+        (b, a) |> Expect.isGreaterThan (sprintf "factor must increase at step %d" i))
+
+    testCase "bounded below 2.0f even at complexity 100" <| fun () ->
+      complexityFootprintFactor 100
+      |> fun f -> (f, 2.0f) |> Expect.isLessThan "factor < 2.0 for realistic complexity"
+  ]
+
+let gableRoofTests =
+  testList "Gable roof geometry" [
+    testCase "addGableToArraysArr writes exactly 108 position floats (36 verts)" <| fun () ->
+      let verts, _, _ = addGableToArraysArr 5.0f 2.5f 5.0f 1.0f 0.8f 200uy 180uy 160uy 255uy
+      verts |> Array.length |> Expect.equal "36 verts × 3 floats = 108" 108
+
+    testCase "apex Y is above the eave base Y" <| fun () ->
+      let baseY = 2.5f
+      let verts, _, _ = addGableToArraysArr 5.0f baseY 5.0f 1.2f 0.9f 200uy 180uy 160uy 255uy
+      let maxY = [0 .. 35] |> List.map (fun i -> verts.[i*3+1]) |> List.max
+      (maxY, baseY) |> Expect.isGreaterThan "ridge apex must be above eave"
+
+    testCase "left slope (first 6 verts) has normal X < 0" <| fun () ->
+      let _, norms, _ = addGableToArraysArr 5.0f 2.5f 5.0f 1.0f 0.8f 200uy 180uy 160uy 255uy
+      let nx0 = norms.[0]
+      (nx0, 0.0f) |> Expect.isLessThan "left slope normal X must be negative"
+
+    testCase "right slope (verts 6..11) has normal X > 0" <| fun () ->
+      let _, norms, _ = addGableToArraysArr 5.0f 2.5f 5.0f 1.0f 0.8f 200uy 180uy 160uy 255uy
+      let nx6 = norms.[6*3]
+      (nx6, 0.0f) |> Expect.isGreaterThan "right slope normal X must be positive"
+
+    testCase "gable normals have positive Y component (slopes lean upward)" <| fun () ->
+      let _, norms, _ = addGableToArraysArr 5.0f 2.5f 5.0f 1.0f 0.8f 200uy 180uy 160uy 255uy
+      let ny0 = norms.[0*3+1]
+      let ny6 = norms.[6*3+1]
+      (ny0, 0.0f) |> Expect.isGreaterThan "left slope normal Y must be positive"
+      (ny6, 0.0f) |> Expect.isGreaterThan "right slope normal Y must be positive"
+  ]
+
 let allTests =
   testList "CodeCity Domain" [
     colorMathTests
@@ -852,6 +921,9 @@ let allTests =
     roadColorTests
     arcFormulaTests
     splineSegmentTests
+    buildingTypeAlphaTests
+    complexityFootprintTests
+    gableRoofTests
   ]
 
 [<EntryPoint>]

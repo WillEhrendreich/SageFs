@@ -468,6 +468,17 @@ module BuildingType =
     | Tower      -> districtColor                      // flat roof, district tint
     | Skyscraper -> Color(72uy,  92uy, 112uy, 255uy)  // dark reflective glass top
 
+  /// Alpha byte encoding for GLSL building-type decode (0-5 → Shed..Skyscraper).
+  /// Terrain, roads, and sidewalks keep alpha=255 (not a building type).
+  let alpha (bt: BuildingType) : byte =
+    match bt with
+    | Shed        -> 0uy
+    | Cottage     -> 1uy
+    | Rowhouse    -> 2uy
+    | Commercial  -> 3uy
+    | Tower       -> 4uy
+    | Skyscraper  -> 5uy
+
   /// Type-aware building height.  Heat boosts Tower/Skyscraper above their
   /// line-count baseline so the hottest functions dominate the skyline.
   let height (bt: BuildingType) (lineCount: int) (heat: float32) : float32 =
@@ -1289,6 +1300,12 @@ let distanceToPoly (poly: Vec2 list) (px: float32) (pz: float32) : float32 =
     if dist < minDist then minDist <- dist
   minDist
 
+/// Scale building footprint by cyclomatic complexity.
+/// Returns a multiplier ≥1.0 — more complex functions get slightly larger footprints.
+/// complexity=0 → 1.0f, complexity=10 → ~1.36f, complexity=50 → ~1.58f
+let complexityFootprintFactor (complexity: int) : float32 =
+  1.0f + MathF.Log(float32 complexity + 1.0f) * 0.15f
+
 /// Road-primary building packer (replaces packInBlock for Weber parcels).
 /// Places buildings in a row along each polygon edge, set back by a sidewalk margin.
 /// Every face polygon edge borders a road, so every building gets guaranteed road frontage.
@@ -1352,7 +1369,7 @@ let packAlongEdges
             | Rowhouse       -> 0.65f
             | Commercial | Tower -> 0.80f
             | Skyscraper     -> 0.90f
-          let fp = max 0.3f (min (spacing * coverageRatio) (MathF.Log(float32 f.LineCount + 1.0f) * 0.5f + 0.3f))
+          let fp = max 0.3f (min (spacing * coverageRatio) (MathF.Log(float32 f.LineCount + 1.0f) * 0.5f + 0.3f)) * complexityFootprintFactor complexity
           let ageDays =
             gitMeta |> Map.tryFind f.FilePath
             |> Option.map (fun m -> float32 (DateTimeOffset.Now - m.LastCommitDate).TotalDays)
@@ -1469,7 +1486,7 @@ let packAlongRoads
               | Rowhouse       -> 0.65f
               | Commercial | Tower -> 0.80f
               | Skyscraper     -> 0.90f
-            let fp = max 0.3f (min (spacing * coverageRatio) (MathF.Log(float32 f.LineCount + 1.0f) * 0.5f + 0.3f))
+            let fp = max 0.3f (min (spacing * coverageRatio) (MathF.Log(float32 f.LineCount + 1.0f) * 0.5f + 0.3f)) * complexityFootprintFactor complexity
             let ageDays =
               gitMeta |> Map.tryFind f.FilePath
               |> Option.map (fun m -> float32 (DateTimeOffset.Now - m.LastCommitDate).TotalDays)
@@ -2109,6 +2126,57 @@ let inline addCompoundBody
     off <- off + 36
   off
 
+/// Write a pitched gable roof for a single sub-cube position (always 36 verts).
+/// Faces: left slope, right slope, front gable (degenerate tri), back gable, bottom, ridge cap.
+/// Ridge runs along Z; pitch is in X direction.
+let inline addGableToArrays
+  (verts: Span<float32>) (norms: Span<float32>) (cols: Span<byte>)
+  (vi: int)
+  (cx: float32) (cy: float32) (cz: float32)
+  (hw: float32) (hd: float32)
+  (r: byte) (g: byte) (b: byte) (a: byte) =
+  let apexH = hw * 0.6f
+  let apexY = cy + apexH
+  let slopeLen = MathF.Sqrt(apexH * apexH + hw * hw)
+  let snx = apexH / slopeLen   // right-slope normal X
+  let sny = hw    / slopeLen   // both slopes normal Y
+  // Left slope (normal = left-up)
+  addQuadToArrays verts norms cols vi
+    (cx-hw) cy    (cz-hd)   (cx-hw) cy    (cz+hd)
+    (cx)    apexY (cz+hd)   (cx)    apexY (cz-hd)   (-snx) sny 0.0f r g b a
+  // Right slope (normal = right-up)
+  addQuadToArrays verts norms cols (vi+6)
+    (cx+hw) cy    (cz-hd)   (cx)    apexY (cz-hd)
+    (cx)    apexY (cz+hd)   (cx+hw) cy    (cz+hd)   snx sny 0.0f r g b a
+  // Front gable end (degenerate quad: C=D=apex → renders as one triangle)
+  addQuadToArrays verts norms cols (vi+12)
+    (cx+hw) cy    (cz-hd)   (cx-hw) cy    (cz-hd)
+    (cx)    apexY (cz-hd)   (cx)    apexY (cz-hd)   0.0f 0.0f -1.0f r g b a
+  // Back gable end
+  addQuadToArrays verts norms cols (vi+18)
+    (cx-hw) cy    (cz+hd)   (cx+hw) cy    (cz+hd)
+    (cx)    apexY (cz+hd)   (cx)    apexY (cz+hd)   0.0f 0.0f 1.0f r g b a
+  // Bottom face (underside of roof assembly)
+  addQuadToArrays verts norms cols (vi+24)
+    (cx-hw) cy (cz-hd)   (cx+hw) cy (cz-hd)
+    (cx+hw) cy (cz+hd)   (cx-hw) cy (cz+hd)         0.0f -1.0f 0.0f r g b a
+  // Ridge cap (thin strip along the apex)
+  addQuadToArrays verts norms cols (vi+30)
+    (cx-0.025f) apexY (cz-hd)   (cx+0.025f) apexY (cz-hd)
+    (cx+0.025f) apexY (cz+hd)   (cx-0.025f) apexY (cz+hd)   0.0f 1.0f 0.0f r g b a
+
+/// Array-backed wrapper for addGableToArrays (testing only — no GPU allocation).
+/// Returns (positionFloats, normalFloats, colorBytes) for 36 verts.
+let addGableToArraysArr
+  (cx: float32) (cy: float32) (cz: float32)
+  (hw: float32) (hd: float32)
+  (r: byte) (g: byte) (b: byte) (a: byte) : float32[] * float32[] * byte[] =
+  let v = Array.zeroCreate<float32> (36 * 3)
+  let n = Array.zeroCreate<float32> (36 * 3)
+  let c = Array.zeroCreate<byte>    (36 * 4)
+  addGableToArrays (v.AsSpan()) (n.AsSpan()) (c.AsSpan()) 0 cx cy cz hw hd r g b a
+  v, n, c
+
 /// Write roof caps for a compound building (matching each sub-cube).
 /// Returns the number of vertices written (36 per sub-cube).
 let inline addCompoundRoof
@@ -2266,15 +2334,34 @@ let buildStaticMesh (buildings: FuncBuilding[]) (blocks: ModuleBlock[]) (cityExt
     let cx = b.X + b.W / 2.0f
     let cz = b.Z + b.D / 2.0f
     let bodyH = b.H - 0.08f |> max 0.2f
+    // Encode building type in alpha channel for per-type GLSL window profiles + glass specular
+    let btAlpha = BuildingType.alpha b.BuildingType
     let vertsAdded =
       addCompoundBody v n c vi compound cx cz bodyH
-        b.Color.R b.Color.G b.Color.B 255uy
+        b.Color.R b.Color.G b.Color.B btAlpha
     vi <- vi + vertsAdded
-    // Roof cap — matches compound shape, accent color
+    // Roof: Shed/Cottage get a pitched gable on the main sub-cube; all others use flat slabs
     let roofHH = 0.04f
     let roofVerts =
-      addCompoundRoof v n c vi compound cx cz bodyH roofHH
-        b.RoofColor.R b.RoofColor.G b.RoofColor.B 255uy
+      match b.BuildingType with
+      | Shed | Cottage ->
+        let main = compound.[0]
+        let mainH = bodyH * main.HeightScale
+        let eaveCy = mainH + 0.06f
+        let pad = 0.02f
+        addGableToArrays v n c vi
+          (cx + main.CX) eaveCy (cz + main.CZ)
+          (main.HW + pad) (main.HD + pad)
+          b.RoofColor.R b.RoofColor.G b.RoofColor.B 255uy
+        let wingsVerts =
+          if compound.Length > 1 then
+            addCompoundRoof v n c (vi+36) compound.[1..] cx cz bodyH roofHH
+              b.RoofColor.R b.RoofColor.G b.RoofColor.B 255uy
+          else 0
+        36 + wingsVerts
+      | _ ->
+        addCompoundRoof v n c vi compound cx cz bodyH roofHH
+          b.RoofColor.R b.RoofColor.G b.RoofColor.B 255uy
     vi <- vi + roofVerts
 
   // Trim to actual vertex count
@@ -2826,11 +2913,26 @@ uniform vec3 fogColor;
 uniform float fogDensity;
 uniform float time;
 void main() {
+  // Per-type window grid profiles: [scaleU, scaleV, litBias, borderPct]
+  // Index: Shed=0 Cottage=1 Rowhouse=2 Commercial=3 Tower=4 Skyscraper=5
+  vec4 wp[6];
+  wp[0] = vec4(0.35, 0.25, 0.60, 0.25);
+  wp[1] = vec4(0.55, 0.40, 0.55, 0.20);
+  wp[2] = vec4(0.90, 0.55, 0.50, 0.16);
+  wp[3] = vec4(1.10, 0.70, 0.45, 0.14);
+  wp[4] = vec4(1.80, 1.20, 0.40, 0.08);
+  wp[5] = vec4(2.40, 1.80, 0.35, 0.04);
+
+  // Decode building type from vertex alpha (0-5 = building types, 255 = terrain/road)
+  float rawAlpha = fragColor.a * 255.0;
+  bool isBuilding = rawAlpha < 6.5;
+  int bType = clamp(int(rawAlpha + 0.5), 0, 5);
+
   vec3 n = normalize(fragNormal);
   float diff = max(dot(n, lightDir), 0.0);
   vec3 lit = fragColor.rgb * (ambient + vec3(diff * 0.65));
 
-  // Specular highlights on roofs (catches sunlight, makes skyline readable)
+  // Specular on flat roofs (warm sunlight catch)
   if (abs(n.y) > 0.9) {
     vec3 viewDir = normalize(cameraPos - fragPos);
     vec3 halfVec = normalize(lightDir + viewDir);
@@ -2838,27 +2940,34 @@ void main() {
     lit += vec3(1.0, 0.95, 0.85) * spec * 0.15;
   }
 
-  // Procedural windows on vertical building faces
   float wallness = 1.0 - abs(n.y);
-  if (wallness > 0.5 && fragPos.y > 0.3) {
+
+  // Glass-wall specular on Tower and Skyscraper vertical faces
+  if (wallness > 0.5 && isBuilding && bType >= 4) {
+    vec3 viewDirW = normalize(cameraPos - fragPos);
+    vec3 halfVecW = normalize(lightDir + viewDirW);
+    float specW = pow(max(dot(n, halfVecW), 0.0), 64.0);
+    lit += vec3(0.88, 0.93, 1.0) * specW * 0.10;
+  }
+
+  // Procedural windows with per-type grid profile
+  if (wallness > 0.5 && fragPos.y > 0.3 && isBuilding) {
+    vec4 prof = wp[bType];
     float u = abs(n.x) > abs(n.z) ? fragPos.z : fragPos.x;
     float v = fragPos.y;
-    vec2 cell = vec2(u * 1.25, v * 0.667);
+    vec2 cell = vec2(u * prof.x, v * prof.y);
     vec2 grid = fract(cell);
     float wx = floor(cell.x);
     float wy = floor(cell.y);
     float hash = fract(sin(wx * 127.1 + wy * 311.7) * 43758.5453);
     float flicker = sin(time * 0.5 + hash * 6.28) * 0.05;
-    float isLit = step(0.55 + flicker, hash);
-
-    // Sharp window rectangle
-    float inWindow = step(0.15, grid.x) * step(0.12, grid.y)
-                   * (1.0 - step(0.85, grid.x)) * (1.0 - step(0.82, grid.y));
+    float isLit = step(prof.z + flicker, hash);
+    float brd = prof.w;
+    float inWindow = step(brd, grid.x) * step(brd, grid.y)
+                   * (1.0 - step(1.0 - brd, grid.x)) * (1.0 - step(1.0 - brd, grid.y));
     vec3 windowEmit = vec3(1.0, 0.93, 0.7) * 0.5 * inWindow * isLit;
     float darken = inWindow * (1.0 - isLit) * 0.12;
     lit = lit * (1.0 - darken) + windowEmit;
-
-    // Fake bloom: soft glow bleeding beyond window boundaries
     vec2 windowCenter = vec2(0.5, 0.47);
     float distToCenter = length(grid - windowCenter);
     float glow = isLit * smoothstep(0.7, 0.1, distToCenter) * 0.15;
@@ -2871,7 +2980,7 @@ void main() {
     lit += vec3(0.35, 0.28, 0.18) * glow;
   }
 
-  // Atmospheric sky gradient fog (warm horizon → deep zenith)
+  // Atmospheric sky gradient fog
   vec3 viewDir = normalize(fragPos - cameraPos);
   float upness = max(0.0, viewDir.y);
   vec3 horizonColor = vec3(0.12, 0.10, 0.18);
