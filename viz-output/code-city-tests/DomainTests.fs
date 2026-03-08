@@ -49,7 +49,12 @@ let private withTempFsSource (source: string) run =
   let root = System.IO.Path.Combine(System.IO.Path.GetTempPath(), Guid.NewGuid().ToString("N"))
   let filePath = System.IO.Path.Combine(root, "Sample.fs")
   System.IO.Directory.CreateDirectory(root) |> ignore
-  System.IO.File.WriteAllText(filePath, source.Replace("\n", Environment.NewLine))
+  let normalizedSource =
+    source
+      .Replace("\r\n", "\n")
+      .Replace("\r", "\n")
+      .Replace("\n", Environment.NewLine)
+  System.IO.File.WriteAllText(filePath, normalizedSource)
   try
     run root filePath
   finally
@@ -90,7 +95,14 @@ let private withTempProject (files: (string * string) list) (compileFiles: strin
       | true, _ -> source.Substring(2)
       | false, true -> source.Substring(1)
       | _ -> source
-    System.IO.File.WriteAllText(filePath, normalizedSource.Replace("\n", Environment.NewLine))
+    let sanitizedSource =
+      normalizedSource
+        .Replace("\r\n", "\n")
+        .Replace("\r", "\n")
+      |> Seq.filter (fun ch -> ch = '\r' || ch = '\n' || ch = '\t' || not (Char.IsControl ch))
+      |> Seq.toArray
+      |> String
+    System.IO.File.WriteAllText(filePath, sanitizedSource.Replace("\n", Environment.NewLine))
 
   let restore =
     let psi = System.Diagnostics.ProcessStartInfo("dotnet", sprintf "restore \"%s\"" projectPath)
@@ -109,6 +121,24 @@ let private withTempProject (files: (string * string) list) (compileFiles: strin
   | 0, _, _ -> ()
   | exitCode, stdout, stderr ->
       failwithf "dotnet restore failed (%d)\nstdout:\n%s\nstderr:\n%s" exitCode stdout stderr
+
+  let build =
+    let psi = System.Diagnostics.ProcessStartInfo("dotnet", sprintf "build \"%s\" --no-restore" projectPath)
+    psi.WorkingDirectory <- root
+    psi.RedirectStandardOutput <- true
+    psi.RedirectStandardError <- true
+    psi.UseShellExecute <- false
+    psi.CreateNoWindow <- true
+    use proc = System.Diagnostics.Process.Start(psi)
+    let stdout = proc.StandardOutput.ReadToEnd()
+    let stderr = proc.StandardError.ReadToEnd()
+    proc.WaitForExit()
+    proc.ExitCode, stdout, stderr
+
+  match build with
+  | 0, _, _ -> ()
+  | exitCode, stdout, stderr ->
+      failwithf "dotnet build failed (%d)\nstdout:\n%s\nstderr:\n%s" exitCode stdout stderr
 
   try
     run root projectPath
@@ -582,6 +612,91 @@ let caller value =
         edges |> Expect.hasLength "alias-qualified call should resolve to one edge" 1
         edges.Head.From |> Expect.equal "edge starts at Sample.Consumer.caller" "Sample.Consumer.caller"
         edges.Head.To |> Expect.equal "edge targets aliased Sample.Beta.Helpers.target" "Sample.Beta.Helpers.target"
+
+    testCase "semantic project graph resolves pipeline call to direct callee" <| fun () ->
+      let files =
+        [
+          "Beta.fs", """
+module Sample.Beta.Helpers
+
+let target value =
+  value + 2
+"""
+          "Consumer.fs", """
+module Sample.Consumer
+
+open Sample.Beta.Helpers
+
+let caller value =
+  value |> target
+"""
+        ]
+      withTempProject files [ "Beta.fs"; "Consumer.fs" ] <| fun _ projectPath ->
+        let funcs = scanFunctionsForProject projectPath
+        let edges = buildSemanticCallGraphForProject projectPath funcs |> mergeCallEdges
+        edges |> Expect.hasLength "pipeline should resolve to one direct-call edge" 1
+        edges.Head.From |> Expect.equal "edge starts at Sample.Consumer.caller" "Sample.Consumer.caller"
+        edges.Head.To |> Expect.equal "edge targets Sample.Beta.Helpers.target" "Sample.Beta.Helpers.target"
+
+    testCase "semantic project graph resolves left-application call to direct callee" <| fun () ->
+      let files =
+        [
+          "Beta.fs", """
+module Sample.Beta.Helpers
+
+let target value =
+  value + 2
+"""
+          "Consumer.fs", """
+module Sample.Consumer
+
+open Sample.Beta.Helpers
+
+let caller value =
+  target <| value
+"""
+        ]
+      withTempProject files [ "Beta.fs"; "Consumer.fs" ] <| fun _ projectPath ->
+        let funcs = scanFunctionsForProject projectPath
+        let edges = buildSemanticCallGraphForProject projectPath funcs |> mergeCallEdges
+        edges |> Expect.hasLength "left-application should resolve to one direct-call edge" 1
+        edges.Head.From |> Expect.equal "edge starts at Sample.Consumer.caller" "Sample.Consumer.caller"
+        edges.Head.To |> Expect.equal "edge targets Sample.Beta.Helpers.target" "Sample.Beta.Helpers.target"
+
+    testCase "semantic project graph resolves each stage of a chained pipeline without operator edges" <| fun () ->
+      let files =
+        [
+          "Stages.fs", """
+module Sample.Stages
+
+let trim value =
+  value + 1
+
+let parse value =
+  value + 2
+
+let render value =
+  value + 3
+"""
+          "Consumer.fs", """
+module Sample.Consumer
+
+open Sample.Stages
+
+let caller value =
+  value
+  |> trim
+  |> parse
+  |> render
+"""
+        ]
+      withTempProject files [ "Stages.fs"; "Consumer.fs" ] <| fun _ projectPath ->
+        let funcs = scanFunctionsForProject projectPath
+        let edges = buildSemanticCallGraphForProject projectPath funcs |> mergeCallEdges
+        edges |> Expect.hasLength "chained pipeline should produce one edge per stage" 3
+        edges |> List.map (fun edge -> edge.To) |> Expect.containsAll "pipeline should hit all stages"
+          [ "Sample.Stages.trim"; "Sample.Stages.parse"; "Sample.Stages.render" ]
+        edges |> List.exists (fun edge -> edge.To.Contains("op_Pipe")) |> Expect.isFalse "pipeline should not create operator edges"
 
     testCase "semantic project graph does not resolve opened module function when local let shadows the name" <| fun () ->
       let files =

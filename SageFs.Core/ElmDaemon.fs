@@ -63,9 +63,10 @@ let createProgram
 let start
   (deps: EffectDeps)
   (onModelChanged: SageFsModel -> RenderRegion list -> unit)
+  (ct: System.Threading.CancellationToken)
   : ElmRuntime<SageFsModel, SageFsMsg, RenderRegion> =
   let program = createProgram deps onModelChanged
-  ElmLoop.start program (SageFsModel.initial())
+  ElmLoop.start program (SageFsModel.initial()) ct
 
 /// Dispatch a message and wait for the model to update.
 /// Returns the model state after the dispatch has been processed.

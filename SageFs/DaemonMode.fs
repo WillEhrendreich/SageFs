@@ -224,10 +224,7 @@ let createSessionOps
       }
     ListSessions = fun () ->
       task {
-        let! sessions =
-          sessionManager.PostAndAsyncReply(fun reply ->
-            SessionManager.SessionCommand.ListSessions reply)
-          |> Async.StartAsTask
+        let sessions = SessionManager.QuerySnapshot.allSessions (readSnapshot())
         return SessionOperations.formatSessionList DateTime.UtcNow None sessions
       }
     StopSession = fun sessionId ->
@@ -310,7 +307,7 @@ let buildReplayState (readSnapshot: unit -> SessionManager.QuerySnapshot) =
   let activeSessions = SessionManager.QuerySnapshot.allSessions (readSnapshot())
   let toRecord (s: WorkerProtocol.SessionInfo) : Features.Replay.DaemonSessionRecord =
     { SessionId = s.Id; Projects = s.Projects; WorkingDir = s.WorkingDirectory
-      CreatedAt = DateTimeOffset.UtcNow; StoppedAt = None }
+      CreatedAt = DateTimeOffset(s.CreatedAt, TimeSpan.Zero); StoppedAt = None }
   { Features.Replay.DaemonReplayState.Sessions =
       activeSessions |> List.map (fun s -> s.Id, toRecord s) |> Map.ofList
     Features.Replay.DaemonReplayState.ActiveSessionId =
@@ -406,16 +403,20 @@ let createHotReloadProxyEndpoints
   }
   let proxyGet (sid: string) (workerPath: string) (ctx: HttpContext) =
     proxyToWorker sid workerPath (fun url -> task {
-      let! resp = httpClient.GetStringAsync(url)
+      use timeoutCts = new System.Threading.CancellationTokenSource(5000)
+      use linked = System.Threading.CancellationTokenSource.CreateLinkedTokenSource(ctx.RequestAborted, timeoutCts.Token)
+      let! resp = httpClient.GetStringAsync(url, linked.Token)
       return (resp, 200, false)
     }) ctx
   let proxyPost (sid: string) (workerPath: string) (ctx: HttpContext) =
     proxyToWorker sid workerPath (fun url -> task {
+      use timeoutCts = new System.Threading.CancellationTokenSource(5000)
+      use linked = System.Threading.CancellationTokenSource.CreateLinkedTokenSource(ctx.RequestAborted, timeoutCts.Token)
       use reader = new IO.StreamReader(ctx.Request.Body)
-      let! body = reader.ReadToEndAsync()
+      let! body = reader.ReadToEndAsync(linked.Token)
       use content = new Net.Http.StringContent(body, Text.Encoding.UTF8, "application/json")
-      let! resp = httpClient.PostAsync(url, content)
-      let! respBody = resp.Content.ReadAsStringAsync()
+      let! resp = httpClient.PostAsync(url, content, linked.Token)
+      let! respBody = resp.Content.ReadAsStringAsync(linked.Token)
       return (respBody, int resp.StatusCode, resp.IsSuccessStatusCode)
     }) ctx
   let extractSid = fun (r: RequestData) -> r.GetString("sid", "")
@@ -873,25 +874,22 @@ let createElmRuntime
   (sessionManager: MailboxProcessor<SessionManager.SessionCommand>)
   (readSnapshot: unit -> SessionManager.QuerySnapshot)
   (httpClient: System.Net.Http.HttpClient)
-  (stateChangedEvent: Event<DaemonStateChange>) =
+  (stateChangedEvent: Event<DaemonStateChange>)
+  (ct: System.Threading.CancellationToken) =
   let mutable lastStateJson = ""
   let mutable lastLoggedOutputCount = 0
   let mutable lastLoggedDiagCount = 0
   let getWarmupContextForElm (sessionId: string) : Async<SessionContext option> =
     async {
       try
-        let! managed =
-          sessionManager.PostAndAsyncReply(fun reply ->
-            SessionManager.SessionCommand.GetSession(sessionId, reply))
-        match managed with
-        | Some s when s.WorkerBaseUrl.Length > 0 ->
+        let snapshot = readSnapshot()
+        match Map.tryFind sessionId snapshot.WorkerBaseUrls with
+        | Some url when url.Length > 0 ->
           let! resp =
-            httpClient.GetStringAsync(sprintf "%s/warmup-context" s.WorkerBaseUrl)
+            httpClient.GetStringAsync(sprintf "%s/warmup-context" url)
             |> Async.AwaitTask
           let warmup = WorkerProtocol.Serialization.deserialize<WarmupContext> resp
-          let! sessions =
-            sessionManager.PostAndAsyncReply(fun reply ->
-              SessionManager.SessionCommand.ListSessions reply)
+          let sessions = SessionManager.QuerySnapshot.allSessions snapshot
           let info = sessions |> List.tryFind (fun si -> si.Id = sessionId)
           return Some {
             SessionId = sessionId
@@ -974,7 +972,7 @@ let createElmRuntime
         System.Threading.ThreadPool.QueueUserWorkItem(fun _ ->
           stateChangedEvent.Trigger (ModelChanged (outputCount, diagCount))) |> ignore
       | false -> ()
-    with ex -> Log.error "[elm] State change propagation error: %s (%s)" ex.Message (ex.GetType().Name))
+    with ex -> Log.error "[elm] State change propagation error: %s (%s)" ex.Message (ex.GetType().Name)) ct
 
 /// Run SageFs as a headless daemon.
 /// MCP server + SessionManager + Dashboard — all frontends are clients.
@@ -1037,7 +1035,7 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
     resumePreviousSessions infra sessionOps workingDir onSessionResumed
 
   // Create EffectDeps from SessionManager + start Elm loop
-  let elmRuntime = createElmRuntime sessionManager readSnapshot httpClient stateChangedEvent
+  let elmRuntime = createElmRuntime sessionManager readSnapshot httpClient stateChangedEvent cts.Token
 
   // Create a diagnostics-changed event (aggregated from workers)
   let diagnosticsChanged = Event<Features.DiagnosticsStore.T>()

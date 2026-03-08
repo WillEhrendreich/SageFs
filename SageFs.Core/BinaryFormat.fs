@@ -66,6 +66,10 @@ module BinaryPrimitives =
     match marker with
     | 0xFFFFFFFFu -> None
     | len ->
+      match len > uint32 System.Int32.MaxValue with
+      | true ->
+        invalidOp (sprintf "lp-string-option length %d overflows Int32 (corrupt data)" len)
+      | false ->
       let remaining = br.BaseStream.Length - br.BaseStream.Position
       match int64 len > remaining with
       | true ->

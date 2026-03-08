@@ -904,7 +904,7 @@ let elmIntegrationTests = testList "ElmLoop integration" [
         lastRegions <- regions
         signal.Set()
     }
-    let dispatch = (ElmLoop.start program (SageFsModel.initial())).Dispatch
+    let dispatch = (ElmLoop.start program (SageFsModel.initial()) System.Threading.CancellationToken.None).Dispatch
     signal.Wait(1000) |> ignore; signal.Reset()
     lastRegions |> Expect.hasLength "initial render should have 5 regions" 5
 
@@ -950,7 +950,7 @@ let elmIntegrationTests = testList "ElmLoop integration" [
       OnModelChanged = fun model _ ->
         if model.RecentOutput.GetBuffer("s1").Count > 0 then resultReceived <- true
     }
-    let dispatch = (ElmLoop.start program (SageFsModel.initial())).Dispatch
+    let dispatch = (ElmLoop.start program (SageFsModel.initial()) System.Threading.CancellationToken.None).Dispatch
     dispatch (SageFsMsg.Editor (EditorAction.InsertChar '1'))
     dispatch (SageFsMsg.Editor EditorAction.Submit)
     let deadline = DateTime.UtcNow.AddSeconds 5.0

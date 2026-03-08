@@ -828,6 +828,15 @@ let private normalizeLangVersion (value: string) =
   | true, version when version >= 11 -> "preview"
   | _ -> trimmed
 
+let private normalizeCompilerReferencePath (path: string) =
+  match OperatingSystem.IsWindows(), path.StartsWith(@"C:\Program Files\", StringComparison.OrdinalIgnoreCase) with
+  | true, true ->
+      let candidate = @"C:\PROGRA~1" + path.Substring(@"C:\Program Files".Length)
+      match File.Exists(candidate) with
+      | true -> candidate
+      | false -> path
+  | _ -> path
+
 let private tryLoadProjectContext projectFile =
   try
     let normalizedProjectFile = Path.GetFullPath(projectFile)
@@ -835,7 +844,7 @@ let private tryLoadProjectContext projectFile =
     let psi =
       Diagnostics.ProcessStartInfo(
         "dotnet",
-        sprintf "msbuild \"%s\" /t:ResolveReferences \"-getItem:Compile;ReferencePath\" \"-getProperty:OutputType;DefineConstants;LangVersion\"" normalizedProjectFile)
+        sprintf "msbuild \"%s\" /t:ResolveReferences \"-getItem:Compile;ReferencePath\" \"-getProperty:OutputType;DefineConstants;LangVersion;IntermediateOutputPath;TargetFrameworkMoniker\"" normalizedProjectFile)
     psi.WorkingDirectory <- root
     psi.RedirectStandardOutput <- true
     psi.RedirectStandardError <- true
@@ -885,7 +894,17 @@ let private tryLoadProjectContext projectFile =
           |> Option.defaultValue ""
 
         let compilerArgs = ResizeArray<string>()
+        let intermediateOutputPath = propertyValue "IntermediateOutputPath"
+        let targetFrameworkMoniker = propertyValue "TargetFrameworkMoniker"
+        let generatedSourceFiles =
+          [
+            Path.Combine(root, intermediateOutputPath, Path.GetFileNameWithoutExtension(normalizedProjectFile) + ".AssemblyInfo.fs")
+            Path.Combine(root, intermediateOutputPath, targetFrameworkMoniker + ".AssemblyAttributes.fs")
+          ]
+          |> List.filter File.Exists
         compilerArgs.Add "--simpleresolution"
+        compilerArgs.Add "--noframework"
+        compilerArgs.Add "--nocopyfsharpcore"
         compilerArgs.Add "--targetprofile:netcore"
         compilerArgs.Add(
           match propertyValue "OutputType" with
@@ -903,9 +922,7 @@ let private tryLoadProjectContext projectFile =
             |> Array.iter (fun define -> compilerArgs.Add("--define:" + define))
 
         referencePaths
-        |> List.iter (fun referencePath ->
-          compilerArgs.Add("-r")
-          compilerArgs.Add(referencePath))
+        |> List.iter (fun referencePath -> compilerArgs.Add("-r:" + normalizeCompilerReferencePath referencePath))
 
         compileFiles
         |> List.iter compilerArgs.Add
@@ -913,7 +930,7 @@ let private tryLoadProjectContext projectFile =
         Some
           { ProjectFile = normalizedProjectFile
             Root = root
-            SourceFiles = compileFiles
+            SourceFiles = compileFiles @ generatedSourceFiles
             CompilerArgs = compilerArgs.ToArray() }
     | _ ->
         let _ = stderr
@@ -988,6 +1005,37 @@ let private mkCallSite refText namePath (siteRange: range) =
     StartColumn = siteRange.StartColumn
     EndColumn = siteRange.EndColumn }
 
+let rec private tryOperatorName expr =
+  match expr with
+  | SynExpr.Ident ident -> Some (identText ident)
+  | SynExpr.LongIdent(_, synLongIdent, _, _) ->
+      synLongIdent.LongIdent
+      |> Seq.tryLast
+      |> Option.map identText
+  | SynExpr.Paren(inner, _, _, _) -> tryOperatorName inner
+  | SynExpr.Typed(inner, _, _) -> tryOperatorName inner
+  | _ -> None
+
+let private isForwardPipeOperator name =
+  match name with
+  | "op_PipeRight"
+  | "op_PipeRight2"
+  | "op_PipeRight3"
+  | "|>"
+  | "||>"
+  | "|||>" -> true
+  | _ -> false
+
+let private isBackwardPipeOperator name =
+  match name with
+  | "op_PipeLeft"
+  | "op_PipeLeft2"
+  | "op_PipeLeft3"
+  | "<|"
+  | "<||"
+  | "<|||" -> true
+  | _ -> false
+
 let rec private directCallSites expr =
   match expr with
   | SynExpr.Ident ident ->
@@ -1003,6 +1051,15 @@ let rec private directCallSites expr =
 
 let rec private collectCallSites expr =
   match expr with
+  | SynExpr.App(_, _, SynExpr.App(_, _, operatorExpr, leftExpr, _), rightExpr, _) ->
+      match tryOperatorName operatorExpr with
+      | Some operatorName when isForwardPipeOperator operatorName ->
+          directCallSites rightExpr @ collectCallSites leftExpr @ collectCallSites rightExpr
+      | Some operatorName when isBackwardPipeOperator operatorName ->
+          directCallSites leftExpr @ collectCallSites leftExpr @ collectCallSites rightExpr
+      | _ ->
+          let innerCalls = directCallSites operatorExpr @ collectCallSites operatorExpr @ collectCallSites leftExpr
+          innerCalls @ collectCallSites rightExpr
   | SynExpr.App(_, _, funcExpr, argExpr, _) ->
       directCallSites funcExpr @ collectCallSites funcExpr @ collectCallSites argExpr
   | SynExpr.LetOrUse(_, _, _, _, bindings, body, _, _) ->
@@ -1259,42 +1316,88 @@ let private rangeContainedInFunction (funcDef: FuncDef) (symbolRange: range) =
 let private tryFindFunctionByDeclaration (funcs: FuncDef list) (symbol: FSharpSymbol) =
   match symbol with
   | :? FSharpMemberOrFunctionOrValue as memberOrFunction ->
-      let declarationRange = memberOrFunction.DeclarationLocation
-      let exactMatch =
-        funcs
-        |> List.tryFind (fun funcDef ->
-          pathEquals funcDef.FilePath declarationRange.FileName
-          && funcDef.DeclarationStartLine = declarationRange.StartLine
-          && funcDef.DeclarationStartColumn = declarationRange.StartColumn
-          && funcDef.Name = memberOrFunction.DisplayName)
-      match exactMatch with
-      | Some funcDef -> Some funcDef
-      | None ->
+      let fullNameMatch =
+        match memberOrFunction.FullName with
+        | null | "" -> None
+        | fullName ->
+            funcs
+            |> List.tryFind (fun funcDef -> funcDef.QualifiedName = fullName)
+      let tryByDeclarationLocation () =
+        let declarationRange = memberOrFunction.DeclarationLocation
+        let exactMatch =
           funcs
           |> List.tryFind (fun funcDef ->
             pathEquals funcDef.FilePath declarationRange.FileName
-            && declarationRange.StartLine >= funcDef.StartLine
-            && declarationRange.StartLine <= funcDef.EndLine
+            && funcDef.DeclarationStartLine = declarationRange.StartLine
+            && funcDef.DeclarationStartColumn = declarationRange.StartColumn
             && funcDef.Name = memberOrFunction.DisplayName)
+        match exactMatch with
+        | Some funcDef -> Some funcDef
+        | None ->
+            funcs
+            |> List.tryFind (fun funcDef ->
+              pathEquals funcDef.FilePath declarationRange.FileName
+              && declarationRange.StartLine >= funcDef.StartLine
+              && declarationRange.StartLine <= funcDef.EndLine
+              && funcDef.Name = memberOrFunction.DisplayName)
+      match fullNameMatch with
+      | Some funcDef -> Some funcDef
+      | None ->
+          try
+            tryByDeclarationLocation ()
+          with :? InvalidOperationException ->
+            None
   | _ -> None
+
+let private tryResolveCallSite
+  (checkResults: FSharpCheckFileResults)
+  (lineText: string)
+  (callSite: CallSite)
+  =
+  let tryPrimaryLookup column =
+    checkResults.GetSymbolUseAtLocation(callSite.StartLine, column, lineText, callSite.NamePath)
+
+  let tryFallbackLookup column =
+    checkResults.GetSymbolUsesAtLocation(callSite.StartLine, column, lineText, callSite.NamePath)
+    |> List.tryFind (fun symbolUse -> symbolUse.IsFromUse && not symbolUse.IsFromDefinition)
+
+  [ callSite.EndColumn
+    max callSite.StartColumn (callSite.EndColumn - 1) ]
+  |> List.distinct
+  |> List.tryPick (fun column ->
+    match tryPrimaryLookup column with
+    | Some symbolUse when symbolUse.IsFromUse && not symbolUse.IsFromDefinition -> Some symbolUse.Symbol
+    | _ -> tryFallbackLookup column |> Option.map (fun symbolUse -> symbolUse.Symbol))
 
 let buildSemanticCallGraphForProject (projectFile: string) (funcs: FuncDef list) : CallEdge list =
   match tryLoadProjectContext projectFile with
   | Some projectContext ->
       let semanticChecker = FSharpChecker.Create(keepAssemblyContents = true)
+      let sourceFiles = projectContext.SourceFiles |> List.map Path.GetFullPath
+      let sourceFileSet = sourceFiles |> Set.ofList
+      let otherOptions =
+        projectContext.CompilerArgs
+        |> Array.filter (fun arg ->
+          match Path.IsPathRooted(arg) with
+          | true -> not (sourceFileSet.Contains(Path.GetFullPath(arg)))
+          | false -> true)
+      let baseProjectOptions =
+        semanticChecker.GetProjectOptionsFromCommandLineArgs(projectContext.ProjectFile, otherOptions)
       let projectOptions =
-        semanticChecker.GetProjectOptionsFromCommandLineArgs(projectContext.ProjectFile, projectContext.CompilerArgs)
-      printfn "COMPILERARGS %A" projectContext.CompilerArgs
+        { baseProjectOptions with
+            SourceFiles = sourceFiles |> List.toArray }
       semanticChecker.ParseAndCheckProject(projectOptions) |> Async.RunSynchronously |> ignore
       let checkResultsByPath =
         projectContext.SourceFiles
         |> List.choose (fun filePath ->
-          let sourceText = File.ReadAllText(filePath) |> SourceText.ofString
-          match semanticChecker.ParseAndCheckFileInProject(filePath, 0, sourceText, projectOptions) |> Async.RunSynchronously with
-          | _, FSharpCheckFileAnswer.Succeeded checkResults ->
-              printfn "FILECHECK %s %A" filePath (checkResults.Diagnostics |> Array.map (fun d -> d.Message))
-              Some (Path.GetFullPath(filePath), checkResults)
-          | _ -> None)
+          let fullPath = Path.GetFullPath(filePath)
+          let sourceText = File.ReadAllText(fullPath)
+          let _, checkResults =
+            semanticChecker.GetBackgroundCheckResultsForFileInProject(fullPath, projectOptions, sourceText)
+            |> Async.RunSynchronously
+          match checkResults.Diagnostics |> Array.exists (fun d -> d.Severity = FSharp.Compiler.Diagnostics.FSharpDiagnosticSeverity.Error) with
+          | true -> None
+          | false -> Some (fullPath, checkResults))
         |> Map.ofList
       let fileLinesByPath =
         projectContext.SourceFiles
@@ -1306,31 +1409,15 @@ let buildSemanticCallGraphForProject (projectFile: string) (funcs: FuncDef list)
           match Map.tryFind (Path.GetFullPath(caller.FilePath)) checkResultsByPath, Map.tryFind (Path.GetFullPath(caller.FilePath)) fileLinesByPath with
           | Some checkResults, Some fileLines ->
               for callSite in caller.CallSites do
-                let lineText =
-                  fileLines
-                  |> Array.tryItem (callSite.StartLine - 1)
-                  |> Option.defaultValue ""
-                let tryResolve column =
-                  checkResults.GetSymbolUseAtLocation(callSite.StartLine, column, lineText, callSite.NamePath)
-                printfn "CALLSITE %s %A %d %d-%d %s" caller.QualifiedName callSite.NamePath callSite.StartLine callSite.StartColumn callSite.EndColumn lineText
-                let resolvedSymbolUse =
-                  match tryResolve callSite.EndColumn with
-                  | Some symbolUse -> Some symbolUse
-                  | None -> tryResolve (max callSite.StartColumn (callSite.EndColumn - 1))
-                match resolvedSymbolUse with
-                | Some symbolUse
-                    when symbolUse.IsFromUse
-                         && not symbolUse.IsFromDefinition
-                         && not symbolUse.IsFromOpenStatement
-                         && not symbolUse.IsFromAttribute ->
-                    printfn "RESOLVED %s -> %s" caller.QualifiedName symbolUse.Symbol.FullName
-                    match tryFindFunctionByDeclaration funcs symbolUse.Symbol with
-                    | Some callee when caller.QualifiedName <> callee.QualifiedName ->
-                        { From = caller.QualifiedName
-                          To = callee.QualifiedName
-                          Weight = 1 }
-                    | _ -> ()
-                | _ -> ()
+                let lineIndex = callSite.StartLine - 1
+                if lineIndex >= 0 && lineIndex < fileLines.Length then
+                  let lineText = fileLines.[lineIndex]
+                  match tryResolveCallSite checkResults lineText callSite |> Option.bind (tryFindFunctionByDeclaration funcs) with
+                  | Some callee when caller.QualifiedName <> callee.QualifiedName ->
+                      { From = caller.QualifiedName
+                        To = callee.QualifiedName
+                        Weight = 1 }
+                  | _ -> ()
           | _ -> ()
       ]
   | None ->

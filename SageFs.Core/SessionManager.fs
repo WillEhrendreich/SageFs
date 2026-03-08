@@ -753,8 +753,10 @@ module SessionManager =
           match ManagerState.tryGetSession id state with
           | Some session ->
             // Ignore stale exit events from old workers (e.g., after RestartSession)
+            // Also ignore synthetic NotifyWorkerDied events (workerPid = -1) which
+            // should not be treated as real process exits.
             match session.Info.WorkerPid with
-            | Some currentPid when currentPid <> workerPid ->
+            | Some currentPid when currentPid <> workerPid && workerPid >= 0 ->
               match isNull span with
               | false -> span.SetTag("stale_event", true) |> ignore
               | true -> ()
@@ -870,11 +872,13 @@ module SessionManager =
             return! loop state
 
         | SessionCommand.StopAll reply ->
-          // Graceful shutdown of all sessions and standbys
-          for KeyValue(_, session) in state.Sessions do
-            do! stopWorker session
-          for KeyValue(_, standby) in state.Pool.Standbys do
-            do! stopStandbyWorker standby
+          // Graceful shutdown of all sessions and standbys — run in parallel
+          // to avoid N×5s sequential timeout during shutdown
+          let sessionTasks =
+            [ for KeyValue(_, session) in state.Sessions -> stopWorker session ]
+          let standbyTasks =
+            [ for KeyValue(_, standby) in state.Pool.Standbys -> stopStandbyWorker standby ]
+          do! sessionTasks @ standbyTasks |> Async.Parallel |> Async.Ignore
           reply.Reply(())
           return! loop ManagerState.empty
 
@@ -969,7 +973,7 @@ module SessionManager =
           // Kill and remove standbys matching this working dir
           let toKill =
             state.Pool.Standbys
-            |> Map.filter (fun k _ -> k.WorkingDir = workingDir)
+            |> Map.filter (fun k _ -> System.String.Equals(k.WorkingDir, workingDir, System.StringComparison.OrdinalIgnoreCase))
           for KeyValue(_, standby) in toKill do
             Instrumentation.standbyInvalidations.Add(1L)
             Instrumentation.standbyPoolSize.Add(-1L)
@@ -983,6 +987,11 @@ module SessionManager =
           reply.Reply (computeStandbyInfo state.Pool)
           return! loop state
       }
-      loop ManagerState.empty
+      async {
+        try
+          return! loop ManagerState.empty
+        with ex ->
+          Log.error "[SessionManager] Mailbox died unexpectedly: %s\n%s" ex.Message (if isNull ex.StackTrace then "" else ex.StackTrace)
+      }
     ), cancellationToken = ct)
     (mailbox, fun () -> snapshotRef.Value)

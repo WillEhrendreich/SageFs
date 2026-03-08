@@ -43,6 +43,7 @@ type McpServerTracker() =
     servers.TryRemove(sessionId) |> ignore
 
   /// Broadcast a structured logging notification to all connected MCP clients.
+  /// Sends to all clients in parallel with a 500ms per-send timeout.
   member _.NotifyLogAsync(level: LoggingLevel, logger: string, data: obj) =
     task {
       match servers.IsEmpty with
@@ -52,21 +53,29 @@ type McpServerTracker() =
           let json = JsonSerializer.Serialize(data)
           use doc = JsonDocument.Parse(json)
           doc.RootElement.Clone()
-        let dead = ResizeArray()
         let snapshot = servers |> Seq.map (fun kvp -> kvp.Key, kvp.Value) |> Seq.toArray
-        for key, server in snapshot do
-          try
-            let payload =
-              LoggingMessageNotificationParams(
-                Level = level, Logger = logger, Data = jsonElement)
-            do! server.SendNotificationAsync(
-              NotificationMethods.LoggingMessageNotification, payload)
-          with
-          | :? System.IO.IOException | :? ObjectDisposedException -> dead.Add(key)
-          | ex ->
-            Log.error "[MCP] NotifyLog error for %s: %s" key ex.Message
-            dead.Add(key)
-        for id in dead do servers.TryRemove(id) |> ignore
+        let! results =
+          snapshot
+          |> Array.map (fun (key, server) -> task {
+            use cts = new System.Threading.CancellationTokenSource(500)
+            try
+              let payload =
+                LoggingMessageNotificationParams(
+                  Level = level, Logger = logger, Data = jsonElement)
+              do! server.SendNotificationAsync(
+                NotificationMethods.LoggingMessageNotification, payload,
+                cancellationToken = cts.Token)
+              return None
+            with
+            | :? System.IO.IOException | :? ObjectDisposedException -> return Some key
+            | :? System.OperationCanceledException -> return Some key
+            | ex ->
+              Log.error "[MCP] NotifyLog error for %s: %s" key ex.Message
+              return Some key
+          })
+          |> System.Threading.Tasks.Task.WhenAll
+        for deadId in results |> Array.choose id do
+          servers.TryRemove(deadId) |> ignore
     }
 
   /// Accumulate a structured event for delivery on the next tool response.

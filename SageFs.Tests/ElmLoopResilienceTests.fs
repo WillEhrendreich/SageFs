@@ -34,7 +34,7 @@ let elmLoopResilienceTests =
           async { System.Threading.Interlocked.Increment effCount |> ignore }
         OnModelChanged = fun _ _ -> ()
       }
-      let rt = ElmLoop.start prog 0
+      let rt = ElmLoop.start prog 0 System.Threading.CancellationToken.None
 
       rt.Dispatch 1  // model=1, effect fires
       waitFor (fun () -> effCount.Value >= 1) 2000 |> ignore
@@ -62,7 +62,7 @@ let elmLoopResilienceTests =
           async { System.Threading.Interlocked.Increment effCount |> ignore }
         OnModelChanged = fun _ _ -> ()
       }
-      let rt = ElmLoop.start prog 0
+      let rt = ElmLoop.start prog 0 System.Threading.CancellationToken.None
 
       rt.Dispatch 1  // model=1, regions=[10]
       waitFor (fun () -> effCount.Value >= 1) 2000 |> ignore
@@ -87,7 +87,7 @@ let elmLoopResilienceTests =
         OnModelChanged = fun model _ ->
           if model = 2 then failwith "OnModelChanged boom!"
       }
-      let rt = ElmLoop.start prog 0
+      let rt = ElmLoop.start prog 0 System.Threading.CancellationToken.None
 
       rt.Dispatch 1
       waitFor (fun () -> effCount.Value >= 1) 2000 |> ignore
@@ -114,7 +114,7 @@ let elmLoopResilienceTests =
           }
         OnModelChanged = fun _ _ -> ()
       }
-      let rt = ElmLoop.start prog 0
+      let rt = ElmLoop.start prog 0 System.Threading.CancellationToken.None
 
       rt.Dispatch 1  // effect=1, succeeds
       waitFor (fun () -> effCount.Value >= 1) 2000 |> ignore
@@ -137,7 +137,7 @@ let elmLoopResilienceTests =
         ExecuteEffect = fun _ _ -> async { () }
         OnModelChanged = fun _ _ -> ()
       }
-      let rt = ElmLoop.start prog 0
+      let rt = ElmLoop.start prog 0 System.Threading.CancellationToken.None
 
       rt.GetRegions() |> Expect.equal "empty regions on failed init" []
       rt.GetModel() |> Expect.equal "model still 0" 0
@@ -156,7 +156,7 @@ let elmLoopResilienceTests =
         OnModelChanged = fun model _ ->
           if model = 0 then failwith "Initial OnModelChanged boom!"
       }
-      let rt = ElmLoop.start prog 0
+      let rt = ElmLoop.start prog 0 System.Threading.CancellationToken.None
 
       rt.GetModel() |> Expect.equal "model is 0" 0
       rt.GetRegions() |> Expect.equal "regions rendered despite throw" [0]
@@ -183,7 +183,7 @@ let elmLoopResilienceTests =
         OnModelChanged = fun model _ ->
           if model = 4 then failwith "OnModelChanged boom on 4!"
       }
-      let rt = ElmLoop.start prog 0
+      let rt = ElmLoop.start prog 0 System.Threading.CancellationToken.None
 
       rt.Dispatch 1  // all good, model=1
       waitFor (fun () -> effCount.Value >= 1) 2000 |> ignore
@@ -229,7 +229,7 @@ let elmLoopResilienceTests =
             }
           OnModelChanged = fun _ _ -> ()
         }
-        let rt = ElmLoop.start prog 0
+        let rt = ElmLoop.start prog 0 System.Threading.CancellationToken.None
         rt.Dispatch 1
         waitFor (fun () -> logged |> Seq.exists (fun s -> s.Contains("boom in effect"))) 2000 |> ignore
         let entry = logged |> Seq.find (fun s -> s.Contains("boom in effect"))

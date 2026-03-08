@@ -164,7 +164,7 @@ module PoolState =
     let updated =
       state.Standbys
       |> Map.map (fun key standby ->
-        match key.WorkingDir = workingDir
+        match System.String.Equals(key.WorkingDir, workingDir, System.StringComparison.OrdinalIgnoreCase)
               && StandbyPool.shouldInvalidate (Some standby) with
         | true -> { standby with State = StandbyState.Invalidated }
         | false -> standby)

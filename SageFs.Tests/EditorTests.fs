@@ -345,7 +345,7 @@ let elmLoopTests = testList "ElmLoop" [
       ExecuteEffect = fun _ _ -> async { () }
       OnModelChanged = fun _ regions -> rendered <- regions
     }
-    let _ = (ElmLoop.start program 42).Dispatch
+    let _ = (ElmLoop.start program 42 System.Threading.CancellationToken.None).Dispatch
     rendered |> Expect.equal "should render initial" ["42"]
 
   testCase "dispatch updates model and re-renders" <| fun _ ->
@@ -357,7 +357,7 @@ let elmLoopTests = testList "ElmLoop" [
       ExecuteEffect = fun _ _ -> async { () }
       OnModelChanged = fun _ regions -> rendered <- regions; signal.Set()
     }
-    let dispatch = (ElmLoop.start program 0).Dispatch
+    let dispatch = (ElmLoop.start program 0 System.Threading.CancellationToken.None).Dispatch
     signal.Wait(1000) |> ignore; signal.Reset()
     dispatch 5
     signal.Wait(1000) |> ignore; signal.Reset()

@@ -67,8 +67,10 @@ module ElmLoop =
   /// Uses a dedicated drain thread (not thread pool) to avoid starvation.
   /// Dispatch enqueues + signals; the drain thread wakes, processes all
   /// pending messages, renders ONCE, then sleeps until signalled again.
+  /// Pass a CancellationToken to stop effects and the drain thread on shutdown.
   let start (program: ElmProgram<'Model, 'Msg, 'Effect, 'Region>)
-            (initialModel: 'Model) : ElmRuntime<'Model, 'Msg, 'Region> =
+            (initialModel: 'Model)
+            (ct: System.Threading.CancellationToken) : ElmRuntime<'Model, 'Msg, 'Region> =
     let mutable model = initialModel
     let mutable latestRegions = []
     let lockObj = obj ()
@@ -111,7 +113,7 @@ module ElmLoop =
               effs <- msgEffs @ effs
             with ex ->
               Instrumentation.elmloopErrors.Add(1L, kvp "phase" "update")
-              Log.error "[ElmLoop] Update threw for %s: %s" typeName ex.Message
+              Log.error "[ElmLoop] Update threw for %s: %s\n%s" typeName ex.Message (if isNull ex.StackTrace then "" else ex.StackTrace)
             perMsgSw.Stop()
             Instrumentation.elmloopUpdateMs.Record(perMsgSw.Elapsed.TotalMilliseconds, kvp "msg_type" typeName)
           updateSw.Stop()
@@ -141,7 +143,7 @@ module ElmLoop =
           try program.Render snapshot
           with ex ->
             Instrumentation.elmloopErrors.Add(1L, kvp "phase" "render")
-            Log.error "[ElmLoop] Render threw: %s" ex.Message
+            Log.error "[ElmLoop] Render threw: %s\n%s" ex.Message (if isNull ex.StackTrace then "" else ex.StackTrace)
             lock lockObj (fun () -> latestRegions)
         | false ->
           lock lockObj (fun () -> latestRegions)
@@ -157,7 +159,7 @@ module ElmLoop =
         try program.OnModelChanged snapshot regions
         with ex ->
           Instrumentation.elmloopErrors.Add(1L, kvp "phase" "callback")
-          Log.error "[ElmLoop] OnModelChanged threw: %s" ex.Message
+          Log.error "[ElmLoop] OnModelChanged threw: %s\n%s" ex.Message (if isNull ex.StackTrace then "" else ex.StackTrace)
       | false -> ()
       cbSw.Stop()
       Instrumentation.elmloopCallbackMs.Record(cbSw.Elapsed.TotalMilliseconds, batchTag)
@@ -189,7 +191,7 @@ module ElmLoop =
             Instrumentation.elmloopErrors.Add(1L, kvp "phase" "effect")
             Log.error "[ElmLoop] Effect threw: %s\n%s" ex.Message (if isNull ex.StackTrace then "" else ex.StackTrace)
             Instrumentation.failSpan effectActivity ex.Message
-        })
+        }, ct)
 
       batchSw.Stop()
       let totalMs = batchSw.Elapsed.TotalMilliseconds
@@ -215,13 +217,16 @@ module ElmLoop =
 
     // Dedicated drain thread — runs outside the thread pool so it's never
     // starved by Kestrel/SSE/effect work saturating the pool.
+    // Stops cleanly when the CancellationToken is cancelled.
     let drainThread = Thread(fun () ->
-      while true do
-        signal.Wait()
-        signal.Reset()
-        // Drain until queue is truly empty (messages may arrive during processing)
-        while not queue.IsEmpty do
-          drain ())
+      try
+        while not ct.IsCancellationRequested do
+          signal.Wait(ct)
+          signal.Reset()
+          // Drain until queue is truly empty (messages may arrive during processing)
+          while not queue.IsEmpty && not ct.IsCancellationRequested do
+            drain ()
+      with :? System.OperationCanceledException -> ())
     drainThread.IsBackground <- true
     drainThread.Name <- "ElmLoop-Drain"
     drainThread.Start()
@@ -234,13 +239,13 @@ module ElmLoop =
       try program.Render initialModel
       with ex ->
         Instrumentation.elmloopErrors.Add(1L, System.Collections.Generic.KeyValuePair("phase", "initial_render" :> obj))
-        Log.error "[ElmLoop] Initial Render threw: %s" ex.Message
+        Log.error "[ElmLoop] Initial Render threw: %s\n%s" ex.Message (if isNull ex.StackTrace then "" else ex.StackTrace)
         []
     latestRegions <- regions
     try program.OnModelChanged initialModel regions
     with ex ->
       Instrumentation.elmloopErrors.Add(1L, System.Collections.Generic.KeyValuePair("phase", "initial_callback" :> obj))
-      Log.error "[ElmLoop] Initial OnModelChanged threw: %s" ex.Message
+      Log.error "[ElmLoop] Initial OnModelChanged threw: %s\n%s" ex.Message (if isNull ex.StackTrace then "" else ex.StackTrace)
 
     { Dispatch = dispatch
       GetModel = fun () -> lock lockObj (fun () -> model)
