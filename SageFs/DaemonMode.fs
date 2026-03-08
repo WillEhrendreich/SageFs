@@ -332,6 +332,7 @@ let buildReplayState (readSnapshot: unit -> SessionManager.QuerySnapshot) (activ
 /// `stampActive`: if Some now → stamp active sessions as stopped (shutdown path)
 ///                if None → leave active sessions' StoppedAt = None (periodic save path)
 let mergeManifestWithExisting
+  (log: Microsoft.Extensions.Logging.ILogger)
   (readSnapshot: unit -> SessionManager.QuerySnapshot)
   (activeSessionId: string option)
   (stampActive: DateTimeOffset option) =
@@ -340,13 +341,20 @@ let mergeManifestWithExisting
   let existingManifest =
     match Features.DaemonPersistence.loadManifest DaemonState.SageFsDir with
     | Ok m -> m
-    | Error _ -> buildReplayState readSnapshot activeSessionId
+    | Error "No manifest file found" -> buildReplayState readSnapshot activeSessionId
+    | Error err ->
+      // W17(R11): Distinguish transient IO errors from first-run (no file). On any error
+      // other than "no file", log and fall back to an empty session map so we DO NOT
+      // overwrite existing history with active-only state. The callers will still write
+      // the manifest, but an empty existing-sessions map is safer than silently erasing history.
+      log.LogWarning("Cannot read manifest for merge (history preserved): {Error}", err)
+      buildReplayState readSnapshot activeSessionId
   let mergedSessions =
     existingManifest.Sessions
     |> Map.map (fun sid (r: Features.Replay.DaemonSessionRecord) ->
       match activeSessionIds.Contains(sid), stampActive with
       | true, Some ts -> { r with StoppedAt = Some ts }   // active now → stamp if shutting down
-      | true, None    -> r                                 // active → keep running (periodic)
+      | true, None    -> { r with StoppedAt = None }          // active → enforce StoppedAt=None (W20/R11)
       | false, _      -> r)                               // already stopped → preserve original
   let replayStateBase = buildReplayState readSnapshot activeSessionId
   let newSessions =
@@ -521,7 +529,7 @@ let performGracefulShutdown
   // preserves stopped sessions' original StoppedAt, stamps active sessions as stopped now.
   let activeSessionId = (getModel()).Sessions.ActiveSessionId |> ActiveSession.sessionId
   let now = DateTimeOffset.UtcNow
-  let replayState = mergeManifestWithExisting readSnapshot activeSessionId (Some now)
+  let replayState = mergeManifestWithExisting log readSnapshot activeSessionId (Some now)
   match Features.DaemonPersistence.saveManifest DaemonState.SageFsDir replayState with
   | Ok path -> log.LogInformation("Saved session manifest to {Path}", path)
   | Error err ->
@@ -539,7 +547,10 @@ let performGracefulShutdown
         Features.Events.SageFsEvent.DaemonSessionStopped
           {| SessionId = info.Id; StoppedAt = DateTimeOffset.UtcNow |}
       ])
-  System.Threading.Tasks.Task.WhenAll(appendTasks).Wait(System.TimeSpan.FromSeconds 5.0) |> ignore
+  // W21(R11): Check and log if stop-event append times out — silently discarding false means
+  // ghost sessions could reappear on next restart when EventStore gains real persistence.
+  if not (System.Threading.Tasks.Task.WhenAll(appendTasks).Wait(System.TimeSpan.FromSeconds 5.0)) then
+    log.LogWarning("Shutdown stop-event append timed out after 5s — session stop events may not be durable")
   // Stop all workers with a timeout
   let stopTask =
     sessionManager.PostAndAsyncReply(fun reply ->
@@ -640,10 +651,14 @@ let periodicCacheSave
         |> List.map (fun s -> s.Projects)
         |> List.distinctBy (fun ps ->
           ps |> List.sort |> List.map (fun p -> p.Replace("\\", "/").ToLowerInvariant()) |> String.concat "|")
+      // W22(R11): Track per-project-set success. Only advance lastSavedGeneration if ALL saves
+      // succeed — prevents suppressing a retry when one project set fails.
+      let mutable allSavesSucceeded = true
       for projects in uniqueProjectSets do
         match Features.DaemonPersistence.saveTestCache DaemonState.SageFsDir projects model.LiveTesting.TestState with
         | Ok path -> log.LogDebug("Periodic cache save to {Path} (gen {Gen})", path, gen)
         | Error err ->
+          allSavesSucceeded <- false
           Instrumentation.persistenceSaveErrors.Add(
             1L, System.Collections.Generic.KeyValuePair("format", box "stc1"))
           log.LogWarning("Periodic cache save failed: {Error}", err)
@@ -654,9 +669,9 @@ let periodicCacheSave
         System.Collections.Generic.KeyValuePair("coverage_entries", box (int64 model.LiveTesting.TestState.TestCoverageBitmaps.Count)),
         System.Collections.Generic.KeyValuePair("result_entries", box (int64 model.LiveTesting.TestState.LastResults.Count)))
       // W11(R10): Volatile.Write ensures the store is visible across threads.
-      // The one-shot timer prevents concurrent runs, but Volatile is still needed to
-      // ensure the next invocation reads the updated value (not a register-cached copy).
-      System.Threading.Volatile.Write(&lastSavedGeneration.contents, gen)
+      // W22(R11): Only advance if all project-set saves succeeded — enables retry on next tick.
+      if allSavesSucceeded then
+        System.Threading.Volatile.Write(&lastSavedGeneration.contents, gen)
     | false -> ()
   with ex ->
     Instrumentation.periodicTaskErrors.Add(
@@ -670,7 +685,7 @@ let periodicManifestSave (log: ILogger) (readSnapshot: unit -> SessionManager.Qu
     // W10(R10): Use mergeManifestWithExisting (same as shutdown) so stopped sessions
     // are not erased on every 60-second tick. stampActive = None keeps active sessions
     // with StoppedAt = None (they're still running).
-    let replayState = mergeManifestWithExisting readSnapshot activeSessionId None
+    let replayState = mergeManifestWithExisting log readSnapshot activeSessionId None
     match Features.DaemonPersistence.saveManifest DaemonState.SageFsDir replayState with
     | Ok path -> log.LogDebug("Periodic manifest save to {Path}", path)
     | Error err ->
@@ -865,7 +880,10 @@ let resumePreviousSessions
           yield appendEventsAsync [
             Features.Events.SageFsEvent.DaemonSessionStopped
               {| SessionId = staleId; StoppedAt = DateTimeOffset.UtcNow |} ] ]
-    System.Threading.Tasks.Task.WhenAll(pruneTasks).Wait(System.TimeSpan.FromSeconds 5.0) |> ignore
+    // W21(R11): Check and log if dedup stop-event tasks time out — un-appended stop events
+    // mean pruned sessions reappear as active on next startup, triggering another dedup pass.
+    if not (System.Threading.Tasks.Task.WhenAll(pruneTasks).Wait(5_000)) then
+      log.LogWarning("Dedup stop-event append timed out — ghost sessions may reappear on next startup")
     match prunedCount > 0 with
     | true -> Instrumentation.daemonDuplicatesPruned.Add(int64 prunedCount)
     | false -> ()
@@ -1181,8 +1199,12 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
       periodicManifestSave log readSnapshot elmRuntime.GetModel
     finally
       // Reschedule for the next period only after this run finishes — prevents concurrent runs.
+      // W18(R11): Guard ObjectDisposedException — if Dispose() was called during this callback
+      // (shutdown race), the Change() call throws ODE. The null check guards the startup window
+      // only; the ODE guard handles the shutdown window.
       if not (isNull cacheSaveTimerRef) then
-        cacheSaveTimerRef.Change(60_000, System.Threading.Timeout.Infinite) |> ignore
+        try cacheSaveTimerRef.Change(60_000, System.Threading.Timeout.Infinite) |> ignore
+        with :? System.ObjectDisposedException -> ()
   let cacheSaveTimer =
     let t = new System.Threading.Timer(
       System.Threading.TimerCallback(cacheSaveCallback),
@@ -1507,7 +1529,13 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
 
   // Graceful shutdown: stop test cycle timer, file watcher, and all sessions
   testCycleTimer.Dispose()
-  cacheSaveTimer.Dispose()
+  // W18+W19(R11): Use Dispose(WaitHandle) to block until any in-flight cacheSaveCallback
+  // completes before performGracefulShutdown writes the manifest. Bare Dispose() returns
+  // immediately — the callback could still be running and write its manifest AFTER shutdown
+  // stamps StoppedAt, overwriting those stamps and making sessions appear alive on next run.
+  let cacheSaveTimerDone = new System.Threading.ManualResetEventSlim(false)
+  cacheSaveTimer.Dispose(cacheSaveTimerDone.WaitHandle) |> ignore
+  cacheSaveTimerDone.Wait(System.TimeSpan.FromSeconds 5.0) |> ignore
   liveTestDebounceTimer.Dispose()
   liveTestWatcher.EnableRaisingEvents <- false
   liveTestWatcher.Dispose()
