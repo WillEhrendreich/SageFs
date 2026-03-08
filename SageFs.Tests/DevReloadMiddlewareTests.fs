@@ -281,8 +281,11 @@ let uxFeatureTests = testList "UX feature tests" [
   }
   test "reloadScript does not inject raw < characters from editorUrlPattern" {
     let s = reloadScript 0
-    // editorUrlPattern returns one of three hardcoded URL strings, none containing unescaped HTML
-    s.Contains("</script>") |> Expect.isFalse "must not contain closing script tag"
+    // The outer </script> is the expected wrapper closing tag.
+    // Check that the JS body (content inside the script tags) has no </script> injection.
+    let scriptOpen = """<script data-sagefs-injected="devreload">"""
+    let jsBody = s.[scriptOpen.Length .. s.LastIndexOf("</script>") - 1]
+    jsBody.Contains("</script>") |> Expect.isFalse "JS body must not contain closing script tag"
   }
 ]
 
