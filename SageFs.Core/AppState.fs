@@ -313,11 +313,11 @@ open System.Threading
 /// Creates a fresh FSI session with warm-up: loads startup files and opens namespaces.
 /// The CancellationToken is passed through to FSI EvalInteraction calls so that
 /// warm-up can be cancelled if it takes too long (e.g. a stuck module initializer).
-let createFsiSession (logger: ILogger) (outStream: TextWriter) (useAsp: bool) (sln: Solution) (autoOpenNamespaces: bool) (ct: CancellationToken) (onProgress: (int * int * string) -> unit) =
+let createFsiSession (logger: ILogger) (outStream: TextWriter) (useAsp: bool) (sln: Solution) (autoOpenNamespaces: bool) (hotReload: bool) (ct: CancellationToken) (onProgress: (int * int * string) -> unit) =
   async {
     let sw = System.Diagnostics.Stopwatch.StartNew()
     let fsiConfig = FsiEvaluationSession.GetDefaultConfiguration()
-    let args = solutionToFsiArgs logger useAsp sln
+    let args = solutionToFsiArgs logger useAsp hotReload sln
     let recorder = new TextWriterRecorder(outStream)
 
     logger.LogInfo (sprintf "  Creating FSI session with %d args..." (Array.length args))
@@ -592,7 +592,7 @@ let createFsiSession (logger: ILogger) (outStream: TextWriter) (useAsp: bool) (s
     return fsiSession, recorder, args, failed, warmupCtx
   }
 
-let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStream useAsp (originalSln: Solution) (shadowDir: string option) (autoOpenNamespaces: bool) (onEvent: Events.SageFsEvent -> unit) (sln: Solution) =
+let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStream useAsp (originalSln: Solution) (shadowDir: string option) (autoOpenNamespaces: bool) (hotReload: bool) (onEvent: Events.SageFsEvent -> unit) (sln: Solution) =
   let diagnosticsChangedEvent = Event<Features.DiagnosticsStore.T>()
   let emit evt = try onEvent evt with ex -> logger.LogWarning (sprintf "Event emission failed: %s" ex.Message)
 
@@ -839,7 +839,11 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
               st.StartupConfig
               |> Option.map (fun cfg -> cfg.AutoOpenNamespaces)
               |> Option.defaultValue true
-            let! newSession, newRecorder, _, warmupFailures, warmupCtx = createFsiSession logger outStream useAsp st.Solution autoOpenNamespaces softResetCts.Token onProgress
+            let hotReload =
+              st.StartupConfig
+              |> Option.map (fun cfg -> cfg.HotReloadEnabled)
+              |> Option.defaultValue false
+            let! newSession, newRecorder, _, warmupFailures, warmupCtx = createFsiSession logger outStream useAsp st.Solution autoOpenNamespaces hotReload softResetCts.Token onProgress
             softResetCts.Dispose()
             let newSt = { st with Session = newSession; OutStream = newRecorder; Diagnostics = Features.DiagnosticsStore.empty; WarmupFailures = warmupFailures; WarmupContext = warmupCtx }
             logger.LogInfo "✅ FSI session reset complete"
@@ -1017,9 +1021,13 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
                   st.StartupConfig
                   |> Option.map (fun cfg -> cfg.AutoOpenNamespaces)
                   |> Option.defaultValue true
+                let hotReload =
+                  st.StartupConfig
+                  |> Option.map (fun cfg -> cfg.HotReloadEnabled)
+                  |> Option.defaultValue false
                 try
                   Async.RunSynchronously(
-                    createFsiSession logger outStream useAsp newSln autoOpenNamespaces warmupCts.Token onProgress)
+                    createFsiSession logger outStream useAsp newSln autoOpenNamespaces hotReload warmupCts.Token onProgress)
                   |> Ok
                 with
                 | :? OperationCanceledException as ex -> Error (ex :> exn)
@@ -1102,7 +1110,7 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
           let onProgress (s,t,msg) =
             emit (Events.SageFsEvent.SessionWarmUpProgress {| Step = s; Total = t; Message = msg |})
             publishPhase (Initializing (Some (sprintf "[%d/%d] %s" s t msg))) Affordances.EvalStats.empty
-          let! fsiSession, recorder, args, warmupFailures, warmupCtx = createFsiSession logger outStream useAsp sln autoOpenNamespaces initCts.Token onProgress
+          let! fsiSession, recorder, args, warmupFailures, warmupCtx = createFsiSession logger outStream useAsp sln autoOpenNamespaces hotReload initCts.Token onProgress
           warmupSw.Stop()
           initCts.Dispose()
           
@@ -1148,7 +1156,7 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
               LoadedProjects = sln.Projects |> List.map (fun p -> p.ProjectFileName)
               WorkingDirectory = System.Environment.CurrentDirectory
               McpPort = 0
-              HotReloadEnabled = true
+              HotReloadEnabled = hotReload
               AutoOpenNamespaces = autoOpenNamespaces
               AspireDetected = useAsp
               StartupTimestamp = DateTime.UtcNow

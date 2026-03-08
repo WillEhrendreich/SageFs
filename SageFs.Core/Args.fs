@@ -36,6 +36,11 @@ type WorkerConfig = {
   IsBare: bool
   NoWatch: bool
   AutoOpenNamespaces: bool
+  /// When true, installs the Harmony JIT hook for DevReload browser auto-refresh
+  /// and method detouring. Requires FSI single-assembly mode (--multiemit-).
+  /// WARNING: type redefinition is disabled in single-assembly mode.
+  /// Set via SAGEFS_HOT_RELOAD=1. Default: false.
+  HotReloadEnabled: bool
 }
 
 module WorkerConfig =
@@ -43,6 +48,7 @@ module WorkerConfig =
   let bareEnvVar = "SAGEFS_BARE_SESSION"
   let noWatchEnvVar = "SAGEFS_NO_WATCH"
   let autoOpenNamespacesEnvVar = "SAGEFS_AUTO_OPEN_NAMESPACES"
+  let hotReloadEnvVar = "SAGEFS_HOT_RELOAD"
 
   /// Pure core — reads config via an injected env reader.
   let fromEnvironmentWith
@@ -66,13 +72,18 @@ module WorkerConfig =
       match getEnv autoOpenNamespacesEnvVar with
       | "0" | "false" -> false
       | _ -> true
+    let hotReloadEnabled =
+      match getEnv hotReloadEnvVar with
+      | "1" | "true" -> true
+      | _ -> false
     { SessionId = sessionId
       HttpPort = httpPort
       Projects = projects
       WorkingDir = Environment.CurrentDirectory
       IsBare = isBare
       NoWatch = noWatch
-      AutoOpenNamespaces = autoOpenNamespaces }
+      AutoOpenNamespaces = autoOpenNamespaces
+      HotReloadEnabled = hotReloadEnabled }
 
   /// Impure shell — reads from real environment.
   let fromEnvironment sessionId httpPort =
@@ -106,6 +117,7 @@ let buildWorkerSpawnConfig
   (isBare: bool)
   (noWatch: bool)
   (autoOpenNamespaces: bool)
+  (hotReloadEnabled: bool)
   : string * (string * string) list =
   let args = sprintf "worker --session-id %s --http-port 0" sessionId
   let envVars = [
@@ -113,6 +125,7 @@ let buildWorkerSpawnConfig
     if isBare then WorkerConfig.bareEnvVar, "1"
     if noWatch then WorkerConfig.noWatchEnvVar, "1"
     if not autoOpenNamespaces then WorkerConfig.autoOpenNamespacesEnvVar, "0"
+    if hotReloadEnabled then WorkerConfig.hotReloadEnvVar, "1"
   ]
   args, envVars
 

@@ -182,15 +182,19 @@ let run (sessionId: string) (port: int) = async {
     IsBare = workerConfig.IsBare
     AutoOpenNamespaces = workerConfig.AutoOpenNamespaces
     OnEvent = onEvent
+    HotReloadEnabled = workerConfig.HotReloadEnabled
   }
 
   let! result =
     ActorCreation.createActor actorArgs |> Async.AwaitTask
   let actor = result.Actor
 
-  // Install DevReload Harmony patches before any user code runs.
-  // Safe to call early — prefix is a no-op until setWorkerPort provides the port.
-  DevReloadInjector.install()
+  // Install DevReload Harmony patches only when hot-reload is explicitly enabled.
+  // WARNING: this installs a process-wide JIT hook that requires FSI single-assembly
+  // mode (--multiemit-), which disables type redefinition in the REPL.
+  // Enable with SAGEFS_HOT_RELOAD=1.
+  if workerConfig.HotReloadEnabled then
+    DevReloadInjector.install()
 
   // Two-layer RunTest: project assemblies (stable) + dynamic FSI assemblies (updated per eval).
   // Warm-up evals go through the middleware (which discovers tests and builds a RunTest closure),

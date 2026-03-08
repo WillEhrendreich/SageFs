@@ -68,7 +68,7 @@ module DirectoryConfig =
     try
       let coreAssembly = typeof<DirectoryConfig>.Assembly.Location
       let fsiConfig = FSharp.Compiler.Interactive.Shell.FsiEvaluationSession.GetDefaultConfiguration()
-      let args = [| "fsi.exe"; "--noninteractive"; "--nologo"; "--multiemit-"; "-r"; coreAssembly |]
+      let args = [| "fsi.exe"; "--noninteractive"; "--nologo"; "-r"; coreAssembly |]
       use inStream = new StreamReader(IO.Stream.Null)
       use outStream = new StringWriter()
       use errStream = new StringWriter()

@@ -119,7 +119,7 @@ let isTestProject (proj: ProjectOptions) : bool =
 let discoverTestProjects (projects: ProjectOptions list) : ProjectOptions list =
   projects |> List.filter isTestProject
 
-let solutionToFsiArgs (logger: ILogger) (_useAsp: bool) sln =
+let solutionToFsiArgs (logger: ILogger) (_useAsp: bool) (hotReload: bool) sln =
   let projectDlls = sln.Projects |> Seq.map _.TargetPath
 
   let nugetDlls =
@@ -157,11 +157,10 @@ let solutionToFsiArgs (logger: ILogger) (_useAsp: bool) sln =
 
   [|
     "fsi"
-    // Disable multi-emit so all submissions share one dynamic assembly.
-    // Without this, each EvalInteraction creates a separate assembly and
-    // types from submission N can't be loaded in submission N+1 — causing
-    // TypeLoadException via MonoMod's JIT hook on cross-submission refs.
-    "--multiemit-"
+    // "--multiemit-" disables FSI multi-assembly mode, which prevents type
+    // redefinition in the REPL. Only pass when Harmony/hot-reload is active,
+    // because MonoMod's JIT hook causes TypeLoadException on cross-assembly refs.
+    if hotReload then "--multiemit-"
     yield! allDlls |> Seq.map (sprintf "-r:%s")
     yield! sln.LibPaths |> Seq.map (sprintf "--lib:%s")
     yield! sln.OtherArgs

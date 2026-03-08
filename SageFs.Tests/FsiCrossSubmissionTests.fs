@@ -70,24 +70,34 @@ let allTests =
 
     // ── Unit tests: args correctness ──────────────────────────
     testList "args" [
-      testCase "solutionToFsiArgs includes --multiemit- at position 1" <| fun _ ->
-        let args = solutionToFsiArgs quietLogger false emptySolution
+      testCase "solutionToFsiArgs with hotReload=true includes --multiemit- at position 1" <| fun _ ->
+        let args = solutionToFsiArgs quietLogger false true emptySolution
         args.[0] |> Expect.equal "first arg is fsi" "fsi"
         args.[1] |> Expect.equal "second arg is --multiemit-" "--multiemit-"
 
-      testCase "solutionToFsiArgs always contains --multiemit- regardless of solution content"
+      testCase "solutionToFsiArgs with hotReload=true always contains --multiemit-"
       <| fun _ ->
-        let args = solutionToFsiArgs quietLogger false emptySolution
+        let args = solutionToFsiArgs quietLogger false true emptySolution
         args
         |> Array.exists (fun a -> a = "--multiemit-")
-        |> Expect.isTrue "--multiemit- must be present"
+        |> Expect.isTrue "--multiemit- must be present when hotReload=true"
 
-      testCase "--multiemit- appears exactly once" <| fun _ ->
-        let args = solutionToFsiArgs quietLogger false emptySolution
+      testCase "--multiemit- appears exactly once with hotReload=true" <| fun _ ->
+        let args = solutionToFsiArgs quietLogger false true emptySolution
         args
         |> Array.filter (fun a -> a = "--multiemit-")
         |> Array.length
         |> Expect.equal "exactly one --multiemit-" 1
+
+      testCase "solutionToFsiArgs with hotReload=false omits --multiemit-" <| fun _ ->
+        let args = solutionToFsiArgs quietLogger false false emptySolution
+        args
+        |> Array.exists (fun a -> a = "--multiemit-")
+        |> Expect.isFalse "--multiemit- must be absent when hotReload=false"
+
+      testCase "solutionToFsiArgs with hotReload=false still starts with fsi" <| fun _ ->
+        let args = solutionToFsiArgs quietLogger false false emptySolution
+        args.[0] |> Expect.equal "first arg is fsi" "fsi"
     ]
 
     // ── Integration tests: cross-submission scenarios ─────────
