@@ -869,6 +869,65 @@ module FlakyDetection =
       | Some counterexample -> FlakyClassification.PropertyCounterexample counterexample
       | None -> FlakyClassification.Environmental flipCount
 
+// ── Quarantine ────────────────────────────────────────────────────────
+// Auto-quarantines environmentally flaky tests so they don't block
+// the feedback loop. Manual quarantine is never auto-released.
+
+/// Why a test was quarantined — environmental flakiness is auto-detected,
+/// manual quarantine is human-initiated.
+type QuarantineReason =
+  | EnvironmentalFlaky of flipCount: int * detectedAt: DateTimeOffset
+  | ManualQuarantine of reason: string * at: DateTimeOffset
+
+/// Action to take after evaluating a test's flaky classification.
+[<RequireQualifiedAccess>]
+type QuarantineAction =
+  | DoQuarantine of testId: TestId * reason: QuarantineReason
+  | Release of testId: TestId
+  | NoChange
+
+module QuarantineLogic =
+  /// Evaluate whether a test should be quarantined, released, or left alone.
+  let evaluate
+    (testId: TestId)
+    (classification: FlakyClassification)
+    (quarantined: Map<TestId, QuarantineReason>)
+    (now: DateTimeOffset)
+    : QuarantineAction =
+    match classification, quarantined |> Map.tryFind testId with
+    | FlakyClassification.Environmental flips, None ->
+      QuarantineAction.DoQuarantine (testId, EnvironmentalFlaky (flips, now))
+    | FlakyClassification.Environmental _, Some _ -> QuarantineAction.NoChange
+    | FlakyClassification.Stable, Some (EnvironmentalFlaky _) -> QuarantineAction.Release testId
+    | FlakyClassification.Stable, Some (ManualQuarantine _) -> QuarantineAction.NoChange
+    | FlakyClassification.Stable, None -> QuarantineAction.NoChange
+    | FlakyClassification.PropertyCounterexample _, _ -> QuarantineAction.NoChange
+    | FlakyClassification.Insufficient, _ -> QuarantineAction.NoChange
+
+  /// Apply a quarantine action to the quarantine map.
+  let apply
+    (action: QuarantineAction)
+    (quarantined: Map<TestId, QuarantineReason>)
+    : Map<TestId, QuarantineReason> =
+    match action with
+    | QuarantineAction.DoQuarantine (testId, reason) -> quarantined |> Map.add testId reason
+    | QuarantineAction.Release testId -> quarantined |> Map.remove testId
+    | QuarantineAction.NoChange -> quarantined
+
+  /// Check if a test is currently quarantined.
+  let isQuarantined
+    (testId: TestId)
+    (quarantined: Map<TestId, QuarantineReason>)
+    : bool =
+    quarantined |> Map.containsKey testId
+
+  /// Filter out quarantined tests from an array.
+  let filterQuarantined
+    (quarantined: Map<TestId, QuarantineReason>)
+    (tests: TestCase array)
+    : TestCase array =
+    tests |> Array.filter (fun tc -> quarantined |> Map.containsKey tc.Id |> not)
+
 // ── Failure Narratives ─────────────────────────────────────────────────
 // Enriches test failures with temporal context, causal analysis, and
 // property violation details. Separate from TestRunStatus to avoid

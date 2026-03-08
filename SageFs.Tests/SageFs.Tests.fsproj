@@ -125,6 +125,7 @@
         <Compile Include="FsiRegressionTests.fs" />
         <Compile Include="HotReloadingPropertyTests.fs" />
         <Compile Include="DevReloadMiddlewareTests.fs" />
+        <Compile Include="QuarantineTests.fs" />
         <Compile Include="FlakyClassificationTests.fs" />
         <Compile Include="Tier0CorrectnessTests.fs" />
         <Compile Include="FileCoverageTests.fs" />
