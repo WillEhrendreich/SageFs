@@ -34,11 +34,11 @@ with
     match obj with
     | :? StandbyKey as y ->
       x.Projects = y.Projects
-      && x.WorkingDir = y.WorkingDir
+      && x.WorkingDir.Equals(y.WorkingDir, StringComparison.OrdinalIgnoreCase)
       && x.AutoOpenNamespaces = y.AutoOpenNamespaces
     | _ -> false
   override x.GetHashCode() =
-    hash (x.Projects, x.WorkingDir, x.AutoOpenNamespaces)
+    hash (x.Projects, x.WorkingDir.ToLowerInvariant(), x.AutoOpenNamespaces)
   interface IComparable with
     member x.CompareTo(obj) =
       match obj with
@@ -47,7 +47,7 @@ with
         match c <> 0 with
         | true -> c
         | false ->
-          let dirCompare = compare x.WorkingDir y.WorkingDir
+          let dirCompare = String.Compare(x.WorkingDir, y.WorkingDir, StringComparison.OrdinalIgnoreCase)
           match dirCompare <> 0 with
           | true -> dirCompare
           | false -> compare x.AutoOpenNamespaces y.AutoOpenNamespaces

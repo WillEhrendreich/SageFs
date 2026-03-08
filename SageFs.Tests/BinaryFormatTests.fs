@@ -1342,6 +1342,27 @@ let boundsCheckTests = testList "bounds check" [
       |> Expect.isTrue (sprintf "error mentions bounds: '%s'" msg)
     | Result.Ok _ -> failwith "Should have rejected out-of-bounds offset"
   }
+
+  // W4: readLpString must guard against uint32→int32 overflow (lengths > Int32.MaxValue)
+  test "readLpString rejects length > Int32.MaxValue (overflow guard)" {
+    use ms = new System.IO.MemoryStream()
+    use bw = new System.IO.BinaryWriter(ms)
+    bw.Write(0x80000000u)  // = 2147483648u, overflows to -2147483648 when cast to int32
+    bw.Write([| 0uy |])    // some padding bytes
+    ms.Position <- 0L
+    use br = new System.IO.BinaryReader(ms)
+    let ex =
+      try
+        BinaryPrimitives.readLpString br |> ignore
+        failwith "expected exception was not thrown"
+      with e -> e
+    (ex :? InvalidOperationException)
+    |> Expect.isTrue (sprintf "must throw InvalidOperationException, got %s: %s" (ex.GetType().Name) ex.Message)
+    (ex.Message.ToLowerInvariant().Contains("overflow")
+     || ex.Message.ToLowerInvariant().Contains("exceeds")
+     || ex.Message.ToLowerInvariant().Contains("maximum"))
+    |> Expect.isTrue (sprintf "message must describe the overflow: '%s'" ex.Message)
+  }
 ]
 
 // ─── Version Consistency Tests ───────────────────────────────────

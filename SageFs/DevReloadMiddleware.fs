@@ -34,6 +34,17 @@ let editorUrlPattern () =
     | true -> "cursor://file/{file}:{line}:{col}"
     | false -> "vscode://file/{file}:{line}:{col}"
 
+/// Escape a string for safe embedding in a JavaScript string literal.
+/// Prevents </script> injection and JS string escaping issues.
+let internal jsStringEscape (s: string) =
+  s
+    .Replace("\\", "\\\\")
+    .Replace("\"", "\\\"")
+    .Replace("'", "\\'")
+    .Replace("\r", "\\r")
+    .Replace("\n", "\\n")
+    .Replace("<", "\\x3C")   // prevents </script> injection
+
 /// Generate the reload script. Port > 0 connects cross-origin to the worker's
 /// SSE endpoint; port 0 falls back to a same-origin relative path (for tests).
 ///
@@ -60,7 +71,7 @@ let reloadScript (workerPort: int) =
       .Replace("{{COMPILE_TIMER_MS}}", string cfg.CompileTimerUpdateMs)
       .Replace("{{AUTO_RELOAD_THRESHOLD_MS}}", string cfg.AutoReloadThresholdMs)
       .Replace("{{LONG_COMPILE_WARNING_MS}}", string cfg.LongCompileWarningMs)
-      .Replace("{{EDITOR_URL_PATTERN}}", editorUrlPattern())
+      .Replace("{{EDITOR_URL_PATTERN}}", jsStringEscape (editorUrlPattern()))
   sprintf """<script data-sagefs-injected="devreload">%s</script>""" js
 
 let private handledKey = "SageFs.DevReload.Handled"
@@ -101,11 +112,24 @@ let internal injectScriptNonce (nonce: string) (script: string) =
   script.Replace("<script ", sprintf "<script nonce=\"%s\" " nonce)
 
 /// Add 'nonce-{value}' to an existing CSP header's script-src directive.
+/// Uses directive-level tokenization to avoid corrupting script-src-elem or script-src-attr.
 /// If no script-src exists, appends a new script-src directive with the nonce.
 let internal addNonceToCsp (nonce: string) (cspHeader: string) =
   let nonceToken = sprintf "'nonce-%s'" nonce
-  match cspHeader.Contains("script-src") with
-  | true -> cspHeader.Replace("script-src", sprintf "script-src %s" nonceToken)
+  let directives = cspHeader.Split(';', StringSplitOptions.TrimEntries)
+  let hasScriptSrc =
+    directives |> Array.exists (fun d ->
+      let name = d.Split(' ').[0]
+      name.Equals("script-src", StringComparison.OrdinalIgnoreCase))
+  match hasScriptSrc with
+  | true ->
+    directives
+    |> Array.map (fun d ->
+      let parts = d.Split(' ')
+      match parts.[0].Equals("script-src", StringComparison.OrdinalIgnoreCase) with
+      | true -> sprintf "script-src %s %s" nonceToken (String.concat " " parts.[1..])
+      | false -> d)
+    |> String.concat "; "
   | false -> sprintf "%s; script-src %s" cspHeader nonceToken
 
 /// Create a middleware that injects the devreload script into HTML responses.

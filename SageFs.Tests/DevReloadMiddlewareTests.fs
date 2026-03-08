@@ -56,6 +56,35 @@ let cspNonceTests = testList "CSP nonce injection" [
     result.Contains("default-src 'self'")
     |> Expect.isTrue "should preserve default-src"
   }
+
+  // W3: regression tests — substring replace must not corrupt script-src-elem/script-src-attr
+  test "addNonceToCsp does not corrupt script-src-elem directive" {
+    let csp = "default-src 'self'; script-src 'self'; script-src-elem 'self'"
+    let result = addNonceToCsp "abc123" csp
+    result.Contains("script-src-elem 'nonce-abc123'")
+    |> Expect.isFalse "nonce must NOT be injected into script-src-elem"
+    result.Contains("'nonce-abc123'")
+    |> Expect.isTrue "nonce must still appear in script-src"
+  }
+
+  test "addNonceToCsp does not corrupt script-src-attr directive" {
+    let csp = "default-src 'self'; script-src 'self'; script-src-attr 'none'"
+    let result = addNonceToCsp "test" csp
+    result.Contains("script-src-attr 'nonce-test'")
+    |> Expect.isFalse "nonce must NOT be injected into script-src-attr"
+    result.Contains("script-src-attr 'none'")
+    |> Expect.isTrue "script-src-attr value must be unchanged"
+  }
+
+  test "addNonceToCsp handles all three script-src directives together" {
+    let csp = "default-src 'self'; script-src 'self'; script-src-elem 'self'; script-src-attr 'none'"
+    let result = addNonceToCsp "n99" csp
+    result |> Expect.stringContains "nonce in script-src" "script-src 'nonce-n99' 'self'"
+    (result.Contains("script-src-elem 'nonce-n99'"))
+    |> Expect.isFalse "script-src-elem unchanged"
+    (result.Contains("script-src-attr 'nonce-n99'"))
+    |> Expect.isFalse "script-src-attr unchanged"
+  }
 ]
 
 // ── Encoding Parsing ────────────────────────────────────────────────────
@@ -236,6 +265,24 @@ let uxFeatureTests = testList "UX feature tests" [
   test "No raw template placeholders in output" {
     let s = reloadScript 0
     (s.Contains("{{")) |> Expect.isFalse "no raw {{}}"
+  }
+  // W5: defense-in-depth JS escaping
+  test "jsStringEscape escapes backslash" {
+    jsStringEscape @"C:\path\file.fs" |> Expect.stringContains "escapes backslash" @"C:\\path\\file.fs"
+  }
+  test "jsStringEscape escapes double quote" {
+    jsStringEscape "say \"hi\"" |> Expect.stringContains "escapes dquote" "say \\\"hi\\\""
+  }
+  test "jsStringEscape prevents </script> injection via < escape" {
+    let malicious = "</script><script>alert(1)"
+    let escaped = jsStringEscape malicious
+    escaped.Contains("</script>") |> Expect.isFalse "must not contain </script>"
+    escaped |> Expect.stringContains "contains escaped <" "\\x3C"
+  }
+  test "reloadScript does not inject raw < characters from editorUrlPattern" {
+    let s = reloadScript 0
+    // editorUrlPattern returns one of three hardcoded URL strings, none containing unescaped HTML
+    s.Contains("</script>") |> Expect.isFalse "must not contain closing script tag"
   }
 ]
 

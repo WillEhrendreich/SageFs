@@ -38,8 +38,14 @@ module BinaryPrimitives =
     bw.Write(bytes)
 
   /// Read length-prefixed UTF-8 string with bounds validation.
+  /// Guards against uint32→int32 overflow (lengths > 2GB) and truncated streams.
   let readLpString (br: BinaryReader) : string =
-    let len = br.ReadUInt32() |> int
+    let lenRaw = br.ReadUInt32()
+    match lenRaw > uint32 System.Int32.MaxValue with
+    | true ->
+      invalidOp (sprintf "lp-string length %u exceeds maximum safe string length (Int32.MaxValue)" lenRaw)
+    | false ->
+    let len = int lenRaw
     let remaining = br.BaseStream.Length - br.BaseStream.Position
     match int64 len > remaining with
     | true ->

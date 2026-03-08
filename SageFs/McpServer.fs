@@ -1034,7 +1034,9 @@ let mapStatusRoutes (app: WebApplication) (rctx: RouteContext) =
           (match snap.EvalCount > 0 with | true -> float snap.AvgDurationMs | false -> 0.0),
           float snap.MinDurationMs,
           float snap.MaxDurationMs
-        | _ -> "Unknown", 0, 0.0, 0.0, 0.0
+        | _ ->
+          info |> Option.map (fun i -> SageFs.WorkerProtocol.SessionStatus.label i.Status) |> Option.defaultValue "Unknown",
+          0, 0.0, 0.0, 0.0
       let workingDir =
         info |> Option.map (fun i -> i.WorkingDirectory) |> Option.defaultValue ""
       let projects =

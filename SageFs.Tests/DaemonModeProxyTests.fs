@@ -98,4 +98,32 @@ let proxyTests =
       | Error (SageFsError.SessionNotFound _) -> ()
       | other -> failtest $"Expected SessionNotFound, got {other}"
     }
+
+    // W8: AggregateException wrapping ObjectDisposedException must trigger onWorkerDied
+    testCaseAsync "AggregateException(ObjectDisposedException) triggers onWorkerDied" <| async {
+      let notified = System.Collections.Generic.List<string>()
+      let aggExn = AggregateException(ObjectDisposedException("mock channel"))
+      let getProxy = makeThrowingProxy aggExn
+      let! result =
+        proxyToSession getProxy (fun sid -> notified.Add(sid)) "sess-disposed" pingMsg
+        |> Async.AwaitTask
+      notified.Count |> Expect.equal "onWorkerDied must be called once" 1
+      notified.[0] |> Expect.equal "called with correct session id" "sess-disposed"
+      match result with
+      | Error (SageFsError.WorkerCommunicationFailed _) -> ()
+      | other -> failtest $"Expected WorkerCommunicationFailed, got {other}"
+    }
+
+    testCaseAsync "AggregateException(ObjectDisposedException) returns pipe-closed message" <| async {
+      let aggExn = AggregateException(ObjectDisposedException("proxy socket"))
+      let getProxy = makeThrowingProxy aggExn
+      let! result =
+        proxyToSession getProxy (fun _ -> ()) "sess2" pingMsg
+        |> Async.AwaitTask
+      match result with
+      | Error (SageFsError.WorkerCommunicationFailed(_, msg)) ->
+        (msg.ToLowerInvariant().Contains("closed") || msg.ToLowerInvariant().Contains("proxy socket"))
+        |> Expect.isTrue $"message should describe disposal, got: '{msg}'"
+      | other -> failtest $"Expected WorkerCommunicationFailed, got {other}"
+    }
   ]

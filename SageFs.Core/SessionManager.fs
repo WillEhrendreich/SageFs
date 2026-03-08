@@ -367,6 +367,7 @@ module SessionManager =
 
   /// Await standby worker port discovery — posts StandbyReady or StandbySpawnFailed.
   /// Also captures WARMUP_PROGRESS lines and posts StandbyProgress updates.
+  /// Times out after SageFsConfig.WorkerStartupTimeoutMs if no port is reported.
   let awaitStandbyPort
     (key: StandbyKey)
     (proc: Process)
@@ -374,10 +375,14 @@ module SessionManager =
     (ct: CancellationToken)
     =
     Async.Start(async {
+      use cts =
+        CancellationTokenSource.CreateLinkedTokenSource(ct)
+      cts.CancelAfter(SageFsConfig.WorkerStartupTimeoutMs)
+      let linkedCt = cts.Token
       try
         let mutable found = None
         while Option.isNone found do
-          let! line = proc.StandardOutput.ReadLineAsync(ct).AsTask() |> Async.AwaitTask
+          let! line = proc.StandardOutput.ReadLineAsync(linkedCt).AsTask() |> Async.AwaitTask
           match isNull line with
           | true ->
             failwith "Standby worker exited before reporting port"
@@ -397,8 +402,23 @@ module SessionManager =
           inbox.Post(SessionCommand.StandbyReady(key, proc.Id, proxy))
         | None ->
           failwith "Standby worker exited before reporting port"
-      with ex ->
+      with
+      | :? OperationCanceledException when not ct.IsCancellationRequested ->
+        // Linked CTS fired: per-standby startup timeout, NOT daemon shutdown.
+        try proc.Kill() with ex2 ->
+          Log.warn "[SessionManager] Kill standby on startup timeout: %s" ex2.Message
+        try proc.Dispose() with :? ObjectDisposedException -> ()
+        inbox.Post(
+          SessionCommand.StandbySpawnFailed(
+            key,
+            proc.Id,
+            sprintf
+              "Standby startup timed out after %dms waiting for WORKER_PORT= \
+               (set SAGEFS_WORKER_STARTUP_TIMEOUT_MS to adjust)"
+              SageFsConfig.WorkerStartupTimeoutMs))
+      | ex ->
         try proc.Kill() with ex2 -> Log.warn "[SessionManager] Kill standby on spawn failure: %s" ex2.Message
+        try proc.Dispose() with :? ObjectDisposedException -> ()
         inbox.Post(
           SessionCommand.StandbySpawnFailed(
             key, proc.Id,
@@ -421,6 +441,7 @@ module SessionManager =
     with ex ->
       Log.warn "[SessionManager] Standby shutdown failed: %s" ex.Message
       try standby.Process.Kill() with ex2 -> Log.warn "[SessionManager] Force kill standby: %s" ex2.Message
+    try standby.Process.Dispose() with :? ObjectDisposedException -> ()
   }
 
   /// Create the supervisor MailboxProcessor.
@@ -623,32 +644,11 @@ module SessionManager =
           return! loop state
 
         | SessionCommand.ListSessions reply ->
-          // Refresh status from each alive worker before returning
-          let! updatedState =
-            state.Sessions
-            |> Map.fold (fun stAsync id session ->
-              async {
-                let! st = stAsync
-                match SessionStatus.isAlive session.Info.Status with
-                | true ->
-                  try
-                    let replyId = Guid.NewGuid().ToString("N").[..7]
-                    let! resp = session.Proxy (WorkerMessage.GetStatus replyId)
-                    match resp with
-                    | WorkerResponse.StatusResult(_, snapshot) ->
-                      let updated =
-                        { session with
-                            Info = { session.Info with Status = snapshot.Status } }
-                      return ManagerState.addSession id updated st
-                    | _ -> return st
-                  with ex ->
-                    Log.warn "[SessionManager] Status refresh for %s failed: %s" id ex.Message
-                    return st
-                | false -> return st
-              }
-            ) (async { return state })
-          reply.Reply(ManagerState.allInfos updatedState)
-          return! loop updatedState
+          // Return CQRS snapshot directly — no live HTTP calls inside the mailbox.
+          // Status is kept current by the poll-until-Ready loop on WorkerReady.
+          // Danger: Adding reads inside the mailbox loop causes p99 > 200ms during slow writes.
+          reply.Reply(ManagerState.allInfos state)
+          return! loop state
 
         | SessionCommand.TouchSession id ->
           match ManagerState.tryGetSession id state with
@@ -678,26 +678,28 @@ module SessionManager =
             | false -> ()
             onStandbyProgressChanged ()
             onSessionReady id
-            // Poll worker until it reports Ready, then update snapshot
+            // Poll worker until it reports Ready, then update snapshot.
+            // Uses while loop with CT check to stop cleanly on daemon shutdown
+            // or when the session terminates before becoming Ready.
             Async.Start(async {
               let mutable done' = false
-              for _ in 1..30 do
-                match done' with
-                | true -> ()
-                | false ->
-                  do! Async.Sleep 1000
-                  try
-                    let rid = Guid.NewGuid().ToString("N").[..7]
-                    let! resp = proxy (WorkerMessage.GetStatus rid)
-                    match resp with
-                    | WorkerResponse.StatusResult(_, snapshot) ->
-                      match snapshot.Status with
-                      | SessionStatus.Ready ->
-                        inbox.Post(SessionCommand.UpdateSessionStatus(id, SessionStatus.Ready))
-                        done' <- true
-                      | _ -> ()
+              while not done' && not ct.IsCancellationRequested do
+                do! Async.Sleep 1000
+                try
+                  let rid = Guid.NewGuid().ToString("N").[..7]
+                  let! resp = proxy (WorkerMessage.GetStatus rid)
+                  match resp with
+                  | WorkerResponse.StatusResult(_, snapshot) ->
+                    match snapshot.Status with
+                    | SessionStatus.Ready ->
+                      inbox.Post(SessionCommand.UpdateSessionStatus(id, SessionStatus.Ready))
+                      done' <- true
+                    | SessionStatus.Faulted
+                    | SessionStatus.Stopped -> done' <- true
                     | _ -> ()
-                  with _ -> ()
+                  | _ -> ()
+                with _ ->
+                  done' <- true  // Transport error — WorkerExited event handles cleanup
             }, ct)
             // Request initial test discovery from the worker
             Async.Start(async {

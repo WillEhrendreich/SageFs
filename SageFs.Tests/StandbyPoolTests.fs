@@ -304,6 +304,45 @@ let standbyBenchmarkTests = testList "StandbyPool benchmarks" [
     Expect.isLessThan "should be fast" (usPerOp, 100.0)
 ]
 
+// W9: StandbyKey must use case-insensitive WorkingDir comparison on Windows
+[<Tests>]
+let standbyKeyEqualityTests = testList "StandbyKey case-insensitive equality" [
+
+  testCase "keys with identical working dirs are equal" <| fun _ ->
+    let k1 = StandbyKey.fromSession ["a.fsproj"] @"C:\MyProject" false
+    let k2 = StandbyKey.fromSession ["a.fsproj"] @"C:\MyProject" false
+    k1 |> Expect.equal "identical keys" k2
+
+  testCase "keys with case-differing working dirs are equal (Windows)" <| fun _ ->
+    let k1 = StandbyKey.fromSession ["a.fsproj"] @"C:\MyProject" false
+    let k2 = StandbyKey.fromSession ["a.fsproj"] @"c:\myproject" false
+    k1 |> Expect.equal "case-insensitive working dir" k2
+
+  testCase "case-insensitive keys have equal hash codes" <| fun _ ->
+    let k1 = StandbyKey.fromSession ["a.fsproj"] @"C:\MyProject" false
+    let k2 = StandbyKey.fromSession ["a.fsproj"] @"c:\myproject" false
+    k1.GetHashCode() |> Expect.equal "hash codes must match for equal keys" (k2.GetHashCode())
+
+  testCase "case-insensitive keys map to same slot in Dictionary" <| fun _ ->
+    let k1 = StandbyKey.fromSession ["a.fsproj"] @"C:\MyProject" false
+    let k2 = StandbyKey.fromSession ["a.fsproj"] @"c:\myproject" false
+    let dict = System.Collections.Generic.Dictionary<StandbyKey, int>()
+    dict.[k1] <- 42
+    dict.ContainsKey(k2) |> Expect.isTrue "mixed-case key should find the same slot"
+    dict.[k2] |> Expect.equal "same value" 42
+
+  testCase "case-insensitive keys map to same slot in Map (IComparable)" <| fun _ ->
+    let k1 = StandbyKey.fromSession ["a.fsproj"] @"C:\MyProject" false
+    let k2 = StandbyKey.fromSession ["a.fsproj"] @"c:\myproject" false
+    let m = Map.ofList [(k1, 99)]
+    m |> Map.containsKey k2 |> Expect.isTrue "Map lookup with mixed-case key"
+
+  testCase "keys with different projects are not equal even with same dir" <| fun _ ->
+    let k1 = StandbyKey.fromSession ["a.fsproj"] @"C:\Proj" false
+    let k2 = StandbyKey.fromSession ["b.fsproj"] @"C:\Proj" false
+    k1 |> Expect.notEqual "different projects → different keys" k2
+]
+
 [<Tests>]
 let sseProgressCallbackTests = testList "SSE progress callback" [
   testCase "StandbyProgress for nonexistent key does NOT trigger callback" <| fun _ ->

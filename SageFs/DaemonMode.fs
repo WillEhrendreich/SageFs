@@ -71,6 +71,13 @@ let proxyToSession
       Instrumentation.failSpan activity ae.InnerException.Message
       onWorkerDied sid
       return Error (SageFsError.WorkerCommunicationFailed(sid, sprintf "Session pipe broken — %s" ae.InnerException.Message))
+    | :? AggregateException as ae when (ae.InnerException :? ObjectDisposedException) ->
+      sw.Stop()
+      Instrumentation.workerRequestErrors.Add(1L)
+      Instrumentation.workerRequestDurationMs.Record(sw.Elapsed.TotalMilliseconds)
+      Instrumentation.failSpan activity ae.InnerException.Message
+      onWorkerDied sid
+      return Error (SageFsError.WorkerCommunicationFailed(sid, sprintf "Session pipe closed — %s" ae.InnerException.Message))
     | :? ObjectDisposedException as ex ->
       sw.Stop()
       Instrumentation.workerRequestErrors.Add(1L)
