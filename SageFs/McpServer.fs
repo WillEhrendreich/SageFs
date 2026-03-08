@@ -53,18 +53,19 @@ type McpServerTracker() =
           use doc = JsonDocument.Parse(json)
           doc.RootElement.Clone()
         let dead = ResizeArray()
-        for kvp in servers do
+        let snapshot = servers |> Seq.map (fun kvp -> kvp.Key, kvp.Value) |> Seq.toArray
+        for key, server in snapshot do
           try
             let payload =
               LoggingMessageNotificationParams(
                 Level = level, Logger = logger, Data = jsonElement)
-            do! kvp.Value.SendNotificationAsync(
+            do! server.SendNotificationAsync(
               NotificationMethods.LoggingMessageNotification, payload)
           with
-          | :? System.IO.IOException | :? ObjectDisposedException -> dead.Add(kvp.Key)
+          | :? System.IO.IOException | :? ObjectDisposedException -> dead.Add(key)
           | ex ->
-            Log.error "[MCP] NotifyLog error for %s: %s" kvp.Key ex.Message
-            dead.Add(kvp.Key)
+            Log.error "[MCP] NotifyLog error for %s: %s" key ex.Message
+            dead.Add(key)
         for id in dead do servers.TryRemove(id) |> ignore
     }
 

@@ -3,6 +3,8 @@ module SageFs.Tests.ElmLoopResilienceTests
 open Expecto
 open Expecto.Flip
 open SageFs
+open SageFs.Utils
+open System.Collections.Generic
 
 let waitFor (condition: unit -> bool) (timeoutMs: int) =
   let sw = System.Diagnostics.Stopwatch.StartNew()
@@ -210,4 +212,31 @@ let elmLoopResilienceTests =
       rt.GetModel() |> Expect.equal "d6 model" 5
       // effects: d1(1)+d2(2)+d4(4)+d5(5 fails)+d6(6) = 4 successes
       effCount.Value |> Expect.equal "total effects" 4
+
+    // RED: currently only ex.Message is logged, not stack trace
+    testCase "Effect throws: stack trace is logged not just message" <| fun _ ->
+      let logged = List<string>()
+      let prevError = Log.logError
+      Log.logError <- fun s -> logged.Add(s); prevError s
+      try
+        let prog : ElmProgram<int, int, int, int> = {
+          Update = fun msg model -> model + 1, [1]
+          Render = fun model -> [model]
+          ExecuteEffect = fun _ _ ->
+            async {
+              let inner () = failwith "boom in effect"
+              inner ()  // named frame so stack trace is non-trivial
+            }
+          OnModelChanged = fun _ _ -> ()
+        }
+        let rt = ElmLoop.start prog 0
+        rt.Dispatch 1
+        waitFor (fun () -> logged |> Seq.exists (fun s -> s.Contains("boom in effect"))) 2000 |> ignore
+        let entry = logged |> Seq.find (fun s -> s.Contains("boom in effect"))
+        // Before fix: only "boom in effect" with no stack frames
+        // After fix: stack trace lines like "  at SageFs..." appear in the log entry
+        entry.Contains("at ") |> Expect.isTrue
+          "error log entry must contain stack frames (found no 'at ' — stack trace not logged)"
+      finally
+        Log.logError <- prevError
   ]

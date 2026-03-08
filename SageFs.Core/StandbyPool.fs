@@ -114,8 +114,9 @@ module StandbyPool =
     match rebuild, standby with
     | false, Some s when s.State = StandbyState.Ready && s.Proxy.IsSome ->
       RestartDecision.SwapStandby s
-    | _ ->
-      RestartDecision.ColdRestart
+    | true, _ -> RestartDecision.ColdRestart
+    | false, None -> RestartDecision.ColdRestart
+    | false, Some _ -> RestartDecision.ColdRestart  // Warming, Invalidated, or no proxy
 
 /// Summary of standby pool state for UI display
 type StandbyInfo =

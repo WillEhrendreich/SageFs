@@ -187,7 +187,7 @@ module ElmLoop =
             Instrumentation.succeedSpan effectActivity
           with ex ->
             Instrumentation.elmloopErrors.Add(1L, kvp "phase" "effect")
-            Log.error "[ElmLoop] Effect threw: %s" ex.Message
+            Log.error "[ElmLoop] Effect threw: %s\n%s" ex.Message (if isNull ex.StackTrace then "" else ex.StackTrace)
             Instrumentation.failSpan effectActivity ex.Message
         })
 
