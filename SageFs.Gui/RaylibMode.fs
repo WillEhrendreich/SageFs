@@ -258,35 +258,33 @@ module RaylibMode =
     // Start SSE listener
     use cts = new CancellationTokenSource()
     let _sseTask =
-      System.Threading.Tasks.Task.Run(fun () ->
-        DaemonClient.runSseListener
-          baseUrl
-          (fun event regions ->
-            lock statelock (fun () ->
-              // Detect session switch by working directory change
-              if event.ActiveWorkingDir.Length > 0 && event.ActiveWorkingDir <> lastWorkingDir && lastWorkingDir.Length > 0 then
-                sessionThemes.[lastWorkingDir] <- currentThemeName
-                match sessionThemes.TryGetValue(event.ActiveWorkingDir) with
-                | true, themeName ->
-                  match ThemePresets.tryFind themeName with
-                  | Some theme ->
-                    currentTheme <- theme
-                    currentThemeName <- themeName
-                  | None -> ()
-                | false, _ -> ()
-              if event.ActiveWorkingDir.Length > 0 then
-                lastWorkingDir <- event.ActiveWorkingDir
-              lastSessionId <- event.SessionId
-              lastSessionState <- event.SessionState
-              lastEvalCount <- event.EvalCount
-              lastStandbyLabel <- event.StandbyLabel
-              lastLiveTestingStatus <- event.LiveTestingStatus
-              lastRegions <- regions))
-          (fun _ ->
-            lock statelock (fun () ->
-              lastSessionState <- sprintf "%s (reconnecting...)" lastSessionState))
-          cts.Token
-        |> fun t -> t.Wait())
+      DaemonClient.runSseListener
+        baseUrl
+        (fun event regions ->
+          lock statelock (fun () ->
+            // Detect session switch by working directory change
+            if event.ActiveWorkingDir.Length > 0 && event.ActiveWorkingDir <> lastWorkingDir && lastWorkingDir.Length > 0 then
+              sessionThemes.[lastWorkingDir] <- currentThemeName
+              match sessionThemes.TryGetValue(event.ActiveWorkingDir) with
+              | true, themeName ->
+                match ThemePresets.tryFind themeName with
+                | Some theme ->
+                  currentTheme <- theme
+                  currentThemeName <- themeName
+                | None -> ()
+              | false, _ -> ()
+            if event.ActiveWorkingDir.Length > 0 then
+              lastWorkingDir <- event.ActiveWorkingDir
+            lastSessionId <- event.SessionId
+            lastSessionState <- event.SessionState
+            lastEvalCount <- event.EvalCount
+            lastStandbyLabel <- event.StandbyLabel
+            lastLiveTestingStatus <- event.LiveTestingStatus
+            lastRegions <- regions))
+        (fun _ ->
+          lock statelock (fun () ->
+            lastSessionState <- sprintf "%s (reconnecting...)" lastSessionState))
+        cts.Token
 
     while running && not (windowShouldClose ()) do
 

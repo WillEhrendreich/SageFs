@@ -551,7 +551,7 @@ let performGracefulShutdown
   (daemonStreamId: string)
   (appendEventsAsync: Features.Events.SageFsEvent list -> System.Threading.Tasks.Task)
   (sessionManager: MailboxProcessor<SessionManager.SessionCommand>)
-  =
+  = task {
   // W25(R12): Read snapshot ONCE — pass as value throughout to ensure a consistent view
   // across test-cache saves, event appends, and manifest merge. Multiple readSnapshot()
   // calls during shutdown can observe different state if sessions exit between calls.
@@ -588,8 +588,11 @@ let performGracefulShutdown
       ])
   // W21(R11): Check and log if stop-event append times out — silently discarding false means
   // ghost sessions could reappear on next restart when EventStore gains real persistence.
-  if not (System.Threading.Tasks.Task.WhenAll(appendTasks).Wait(System.TimeSpan.FromSeconds 5.0)) then
-    log.LogWarning("Shutdown stop-event append timed out after 5s — session stop events may not be durable")
+  let whenAll = System.Threading.Tasks.Task.WhenAll(appendTasks)
+  let! append_winner = System.Threading.Tasks.Task.WhenAny(whenAll, System.Threading.Tasks.Task.Delay(System.TimeSpan.FromSeconds 5.0))
+  match System.Object.ReferenceEquals(append_winner, whenAll) with
+  | false -> log.LogWarning("Shutdown stop-event append timed out after 5s — session stop events may not be durable")
+  | true -> ()
 
   // Persist session manifest for binary-first resume
   // W4(R9) + W10(R10): Use mergeManifestWithExisting shared helper — loads existing manifest,
@@ -619,9 +622,11 @@ let performGracefulShutdown
     sessionManager.PostAndAsyncReply(fun reply ->
       SessionManager.SessionCommand.StopAll reply)
     |> Async.StartAsTask
-  match stopTask.Wait(Timeouts.processNormalExit) with
+  let! stop_winner = System.Threading.Tasks.Task.WhenAny(stopTask, System.Threading.Tasks.Task.Delay(Timeouts.processNormalExit))
+  match System.Object.ReferenceEquals(stop_winner, stopTask) with
   | false -> log.LogWarning("StopAll timed out — some workers may not have stopped cleanly")
   | true -> ()
+}
 
 /// Handle test discovery from SessionManager → Elm model.
 /// Scans project source files with tree-sitter, then dispatches
@@ -987,8 +992,11 @@ let resumePreviousSessions
               {| SessionId = staleId; StoppedAt = DateTimeOffset.UtcNow |} ] ]
     // W21(R11): Check and log if dedup stop-event tasks time out — un-appended stop events
     // mean pruned sessions reappear as active on next startup, triggering another dedup pass.
-    if not (System.Threading.Tasks.Task.WhenAll(pruneTasks).Wait(5_000)) then
-      log.LogWarning("Dedup stop-event append timed out — ghost sessions may reappear on next startup")
+    let whenAllPrune = System.Threading.Tasks.Task.WhenAll(pruneTasks)
+    let! prune_winner = System.Threading.Tasks.Task.WhenAny(whenAllPrune, System.Threading.Tasks.Task.Delay(5_000))
+    match System.Object.ReferenceEquals(prune_winner, whenAllPrune) with
+    | false -> log.LogWarning("Dedup stop-event append timed out — ghost sessions may reappear on next startup")
+    | true -> ()
     match prunedCount > 0 with
     | true -> Instrumentation.daemonDuplicatesPruned.Add(int64 prunedCount)
     | false -> ()
@@ -1652,7 +1660,7 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
   // W33(R13): 3s timeout (was 1s) + conditional Dispose to prevent ObjectDisposedException.
   // If Wait times out, the timer infrastructure may try to signal the disposed WaitHandle,
   // causing ObjectDisposedException in the timer system. Only Dispose when timer has stopped.
-  let testCycleTimerJoined = testCycleTimerDone.Wait(System.TimeSpan.FromSeconds 3.0)
+  let! testCycleTimerJoined = System.Threading.Tasks.Task.Run(fun () -> testCycleTimerDone.Wait(System.TimeSpan.FromSeconds 3.0))
   match testCycleTimerJoined with
   | false -> log.LogWarning("testCycleTimer shutdown wait timed out — callback may still be running")
   | true -> testCycleTimerDone.Dispose()
@@ -1665,7 +1673,7 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
   // W37(R14): Only Dispose cacheSaveTimerDone if Wait returned true (callback finished).
   // If Wait times out (false), the callback is still running and may call Set() later.
   // Disposing while Set() is in-flight causes ObjectDisposedException (same as W33/R13).
-  let cacheSaveTimerJoined = cacheSaveTimerDone.Wait(System.TimeSpan.FromSeconds 5.0)
+  let! cacheSaveTimerJoined = System.Threading.Tasks.Task.Run(fun () -> cacheSaveTimerDone.Wait(System.TimeSpan.FromSeconds 5.0))
   // W24(R12): Dispose ManualResetEventSlim after Wait — accessing .WaitHandle lazily creates
   // a kernel event handle; not calling Dispose() leaks that handle until process exit.
   match cacheSaveTimerJoined with
@@ -1675,7 +1683,7 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
   liveTestWatcher.EnableRaisingEvents <- false
   liveTestWatcher.Dispose()
   try
-    performGracefulShutdown log readSnapshot elmRuntime.GetModel persistence daemonStreamId appendEventsAsync sessionManager
+    do! performGracefulShutdown log readSnapshot elmRuntime.GetModel persistence daemonStreamId appendEventsAsync sessionManager
   with ex ->
     log.LogWarning("Shutdown cleanup error: {Error}", ex.Message)
 }
