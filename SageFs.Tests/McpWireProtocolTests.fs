@@ -42,6 +42,7 @@ let mcpToolRegistrationTests = testList "MCP tool registration" [
       "create_session"
       "disable_live_testing"
       "enable_live_testing"
+      "explain_test_failure"
       "explain_test_run"
       "explore_namespace"
       "explore_type"
@@ -65,6 +66,7 @@ let mcpToolRegistrationTests = testList "MCP tool registration" [
       "set_test_timeouts"
       "stop_session"
       "switch_session"
+      "visualize_domain_model"
     ]
     let actual =
       findMcpToolMethods ()

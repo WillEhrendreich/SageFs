@@ -877,7 +877,7 @@ let sageFsRenderTests = testList "SageFsRender" [
         SageFsRender.render model
         |> List.find (fun r -> r.Id = "sessions")
       if count = 0 then
-        sessRegion.Content |> Expect.equal "empty" ""
+        sessRegion.Content |> Expect.stringContains "no-sessions message is shown" "No sessions"
       else
         let lines = sessRegion.Content.Split('\n')
         // count + 1 for the nav hint footer line
