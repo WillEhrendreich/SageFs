@@ -25,14 +25,14 @@ let w1CanonicalPathTests =
     testCase "GetFullPath is idempotent on an already-absolute path" <| fun _ ->
       // resolveRealPath calls Path.GetFullPath(p); verify idempotency
       // (canonical of canonical == canonical — no surprises on re-resolve)
-      let p = @"C:\some\path\file.fsx"
+      let p = Path.Combine(Path.GetTempPath(), "some", "path", "file.fsx")
       let full = Path.GetFullPath p
       let fullAgain = Path.GetFullPath full
       fullAgain |> Expect.equal "GetFullPath is idempotent" full
 
     testCase "containment check: path inside workdir is contained" <| fun _ ->
-      let workdir = @"C:\sessions\s1"
-      let file = @"C:\sessions\s1\src\main.fsx"
+      let workdir = Path.Combine(Path.GetTempPath(), "sessions", "s1")
+      let file = Path.Combine(workdir, "src", "main.fsx")
       let canonical = Path.GetFullPath file
       let canonicalDir = Path.GetFullPath workdir
       let isContained =
@@ -43,8 +43,8 @@ let w1CanonicalPathTests =
       isContained |> Expect.isTrue "file inside workdir is contained"
 
     testCase "containment check: path outside workdir is not contained" <| fun _ ->
-      let workdir = @"C:\sessions\s1"
-      let file = @"C:\sessions\s2\other.fsx"
+      let workdir = Path.Combine(Path.GetTempPath(), "sessions", "s1")
+      let file = Path.Combine(Path.GetTempPath(), "sessions", "s2", "other.fsx")
       let canonical = Path.GetFullPath file
       let canonicalDir = Path.GetFullPath workdir
       let isContained =
@@ -55,10 +55,9 @@ let w1CanonicalPathTests =
       isContained |> Expect.isFalse "file outside workdir is not contained"
 
     testCase "containment check: path traversal attempt is rejected" <| fun _ ->
-      let workdir = @"C:\sessions\s1"
-      // Attempt: C:\sessions\s1\..\..\Windows\System32\config
-      let malicious = @"C:\sessions\s1\..\..\Windows\System32\config"
-      let canonical = Path.GetFullPath malicious  // normalizes to C:\Windows\System32\config
+      let workdir = Path.Combine(Path.GetTempPath(), "sessions", "s1")
+      let malicious = Path.Combine(workdir, "..", "..", "evil", "config")
+      let canonical = Path.GetFullPath malicious
       let canonicalDir = Path.GetFullPath workdir
       let isContained =
         canonical.StartsWith(
