@@ -292,11 +292,11 @@ type McpServerConfig = {
 }
 
 // Create shared MCP context (private — called only by startMcpServer)
-let private mkContext (cfg: McpServerConfig) (stateChangedStr: IEvent<string> option) : McpContext =
+let private mkContext (cfg: McpServerConfig) (stateChangedStr: IEvent<string> option) (featureStateGetter: (unit -> SageFs.Features.FeatureHooks.FeaturePushState) option) : McpContext =
   let dispatch = cfg.ElmRuntime |> Option.map (fun r -> r.Dispatch)
   let getElmModel = cfg.ElmRuntime |> Option.map (fun r -> r.GetModel)
   let getElmRegions = cfg.ElmRuntime |> Option.map (fun r -> r.GetRegions)
-  { Persistence = cfg.Persistence; DiagnosticsChanged = cfg.DiagnosticsChanged; StateChanged = stateChangedStr; SessionOps = cfg.SessionOps; SessionMap = ConcurrentDictionary<string, string>(); McpPort = cfg.Port; Dispatch = dispatch; GetElmModel = getElmModel; GetElmRegions = getElmRegions; GetWarmupContext = cfg.GetWarmupContext }
+  { Persistence = cfg.Persistence; DiagnosticsChanged = cfg.DiagnosticsChanged; StateChanged = stateChangedStr; SessionOps = cfg.SessionOps; SessionMap = ConcurrentDictionary<string, string>(); McpPort = cfg.Port; Dispatch = dispatch; GetElmModel = getElmModel; GetElmRegions = getElmRegions; GetWarmupContext = cfg.GetWarmupContext; GetFeatureState = featureStateGetter }
 
 // ── SSE context: groups immutable dependencies for state change handlers ──
 
@@ -1527,7 +1527,8 @@ let startMcpServer (cfg: McpServerConfig) =
           let bridge = Event<string>()
           evt.Add(DaemonStateChange.toJson >> bridge.Trigger)
           bridge.Publish)
-      let mcpContext = mkContext cfg stateChangedStr
+      let featurePushState = ref SageFs.Features.FeatureHooks.FeaturePushState.empty
+      let mcpContext = mkContext cfg stateChangedStr (Some (fun () -> featurePushState.Value))
       let serverTracker = McpServerTracker()
       let sseJsonOpts = JsonSerializerOptions()
       sseJsonOpts.Converters.Add(System.Text.Json.Serialization.JsonFSharpConverter())
@@ -1540,7 +1541,6 @@ let startMcpServer (cfg: McpServerConfig) =
 
       // Phase 3: Route context + routes
       let fsiBindings = ref (Map.empty: Map<string, SageFs.SseWriter.FsiBinding>)
-      let featurePushState = ref SageFs.Features.FeatureHooks.FeaturePushState.empty
       let lastFeatureOutputCount = ref 0
       let testEventBroadcast = Event<string>()
       let sessionEventBroadcast = Event<string>()

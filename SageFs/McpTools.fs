@@ -765,3 +765,87 @@ WORKFLOW: When run_tests reports a failure, call explain_test_failure with the t
     ) : Task<string> =
         logger.LogDebug("MCP-TOOL: explain_test_failure called, test={Test}", test_name)
         explainTestFailure ctx test_name |> withEcho "explain_test_failure"
+
+    // ── Feature Analysis Tools (P15–P19) ───────────────────────
+
+    [<McpServerTool>]
+    [<Description("""Decompose an F# pipeline expression into individual stages and classify each stage's purity.
+
+INPUT: A pipeline expression using |> operators (e.g., 'xs |> List.filter isEven |> List.map string |> String.concat ","').
+OUTPUT: Numbered stages with purity classification: ● = pure, ⚡ = effectful, ? = unknown.
+
+This is a stateless tool — it analyzes the code string directly without needing an active session.
+Use this to understand complex pipelines before modifying them, or to identify effectful stages that need special handling.""")>]
+    member _.decompose_pipeline(
+        [<Description("F# pipeline expression to decompose (e.g., 'xs |> List.map f |> List.filter g')")>]
+        code: string
+    ) : Task<string> =
+        logger.LogDebug("MCP-TOOL: decompose_pipeline called, code length={Len}", code.Length)
+        decomposePipeline code |> withEcho "decompose_pipeline"
+
+    [<McpServerTool>]
+    [<Description("""Plan a cascade re-evaluation (ripple) for changed cells.
+
+Given a set of cell IDs that have changed, computes the topologically-ordered list of downstream cells
+that need to be re-evaluated. Uses the live dependency graph built from the current session's eval history.
+
+INPUT: Comma-separated cell IDs (integers) that have changed.
+OUTPUT: Ordered list of cells to re-evaluate, with their code snippets and current status.
+
+WORKFLOW: After editing a binding, use this tool to see which cells would be affected before re-evaluating them.""")>]
+    member _.plan_ripple(
+        [<Description("Comma-separated cell IDs that changed (e.g., '0,2,5')")>]
+        changed_cells: string
+    ) : Task<string> =
+        logger.LogDebug("MCP-TOOL: plan_ripple called, cells={Cells}", changed_cells)
+        planRipple ctx changed_cells |> withEcho "plan_ripple"
+
+    [<McpServerTool>]
+    [<Description("""Preview a "what if" scenario: what would change if a binding had a different value?
+
+Identifies the cell that produces the named binding, then plans a ripple of all downstream cells
+that would need re-evaluation. Shows the override and affected cells without actually executing anything.
+
+INPUT: binding_name — the name of the binding to override; new_code — the replacement expression.
+OUTPUT: Override summary, count of affected cells, and the ripple plan.
+
+WORKFLOW: Use this to explore hypothetical changes safely before committing to them.""")>]
+    member _.preview_what_if(
+        [<Description("Name of the binding to override (e.g., 'threshold')")>]
+        binding_name: string,
+        [<Description("New F# expression for the binding (e.g., '0.75')")>]
+        new_code: string
+    ) : Task<string> =
+        logger.LogDebug("MCP-TOOL: preview_what_if called, binding={Name}", binding_name)
+        previewWhatIf ctx binding_name new_code |> withEcho "preview_what_if"
+
+    [<McpServerTool>]
+    [<Description("""Get type-directed suggestions for what to evaluate next.
+
+Analyzes all bindings currently in scope and generates contextually-appropriate suggestions
+based on their types. For example, a list binding gets List.length, List.head, List.sort suggestions;
+an option binding gets Option.defaultValue, Option.map suggestions.
+
+OUTPUT: Ranked suggestions with confidence scores, code snippets, and explanations.
+
+WORKFLOW: When you're not sure what to try next in the REPL, call this for intelligent suggestions.""")>]
+    member _.suggest_next_cell() : Task<string> =
+        logger.LogDebug("MCP-TOOL: suggest_next_cell called")
+        suggestNextCell ctx |> withEcho "suggest_next_cell"
+
+    [<McpServerTool>]
+    [<Description("""Get the session filmstrip — a visual history of all evaluations in the current session.
+
+Shows each evaluation as a "frame" with its index, code snippet, binding count, duration, and test summary.
+Use the optional filter parameter to search for specific frames by label substring.
+
+OUTPUT: Overview statistics followed by individual frame cards.
+
+WORKFLOW: Use to review what happened in a session, find when a binding was introduced, or understand the session timeline.""")>]
+    member _.get_session_filmstrip(
+        [<Description("Optional filter string to search frames by label (case-insensitive substring match)")>]
+        filter: string
+    ) : Task<string> =
+        logger.LogDebug("MCP-TOOL: get_session_filmstrip called, filter={Filter}", filter)
+        let filterOpt = match System.String.IsNullOrWhiteSpace filter with | true -> None | false -> Some filter
+        getSessionFilmstrip ctx filterOpt |> withEcho "get_session_filmstrip"

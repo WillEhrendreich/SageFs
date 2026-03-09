@@ -29,7 +29,8 @@ let private isolatedCtx (sessionId: SageFs.WorkerProtocol.SessionId) =
     Dispatch = None
     GetElmModel = None
     GetElmRegions = None
-    GetWarmupContext = None } : McpContext
+    GetWarmupContext = None
+    GetFeatureState = None } : McpContext
 
 /// Unique ID per test invocation — prevents type name collisions
 /// when --multiemit- puts all types in one assembly across re-runs.

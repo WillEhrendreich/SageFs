@@ -47,7 +47,8 @@ module McpSessionIsolation =
         Dispatch = Some (fun msg -> dispatched.Add(msg))
         GetElmModel = None
         GetElmRegions = None
-        GetWarmupContext = None } : McpContext
+        GetWarmupContext = None
+        GetFeatureState = None } : McpContext
     ctx, dispatched
 
   /// Call switchSession and return result, ignoring event store errors.
@@ -142,7 +143,8 @@ module McpSessionIsolation =
           Dispatch = None
           GetElmModel = None
           GetElmRegions = None
-          GetWarmupContext = None } : McpContext
+          GetWarmupContext = None
+          GetFeatureState = None } : McpContext
 
       let! result = switchSession ctx "test" "ffff0001"
 
@@ -279,7 +281,8 @@ module WorkingDirRoutingPriority =
           GetStandbyInfo = fun () -> Task.FromResult(StandbyInfo.NoPool)
           NotifyWorkerDied = fun _ -> () }
       SessionMap = sessionMap; McpPort = 0; Dispatch = None
-      GetElmModel = None; GetElmRegions = None; GetWarmupContext = None }
+      GetElmModel = None; GetElmRegions = None; GetWarmupContext = None
+      GetFeatureState = None }
 
   let tests = testList "workingDirectory routing priority" [
     testTask "workingDirectory should override cached session" {
@@ -361,7 +364,8 @@ module ResetIsolation =
         Dispatch = None
         GetElmModel = None
         GetElmRegions = None
-        GetWarmupContext = None } : McpContext
+        GetWarmupContext = None
+        GetFeatureState = None } : McpContext
     ctx, restartLog, routedSessions
 
   let tests = testList "[Integration] Reset isolation" [

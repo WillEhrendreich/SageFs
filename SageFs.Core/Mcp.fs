@@ -729,6 +729,8 @@ module McpTools =
     GetElmRegions: (unit -> RenderRegion list) option
     /// Fetch warmup context for a session (daemon mode).
     GetWarmupContext: (string -> Threading.Tasks.Task<WarmupContext option>) option
+    /// Read the current feature push state (eval history, bindings, timeline).
+    GetFeatureState: (unit -> Features.FeatureHooks.FeaturePushState) option
   }
 
   /// Get the active session ID for a specific agent/client.
@@ -2127,4 +2129,174 @@ module McpTools =
       | false ->
         let! result = pollForTestCompletion getModel testIds timeoutSeconds
         return waitNote + RunTestsResult.format result
+    }
+
+  // ── Feature Analysis MCP Tools (P15–P19) ─────────────────────
+
+  /// Build a CellGraph from the current FeaturePushState.
+  let private buildCellGraphFromState (state: Features.FeatureHooks.FeaturePushState) : Features.CellDependencyGraph.CellGraph =
+    let cells =
+      state.EvalHistory
+      |> List.map (fun e ->
+        Features.CellDependencyGraph.analyzeCell state.KnownBindings e.CellIndex e.Code e.Result)
+    Features.CellDependencyGraph.buildGraph cells
+
+  /// Convert BindingScopeSnapshot active bindings to Ghostwriter ScopeBinding list.
+  let private toScopeBindings (snapshot: Features.BindingExplorer.BindingScopeSnapshot) : Features.ScopeBinding list =
+    snapshot.ActiveBindings
+    |> Map.toList
+    |> List.map (fun (_key, info) ->
+      { Features.ScopeBinding.Name = info.Name
+        TypeSig = info.TypeSig
+        Value = info.Value })
+
+  /// Convert EvalHistory to FilmstripEvent list.
+  let private toFilmstripEvents (state: Features.FeatureHooks.FeaturePushState) : Features.FilmstripEvent list =
+    state.EvalHistory
+    |> List.rev
+    |> List.map (fun e ->
+      { Features.FilmstripEvent.Timestamp = e.Timestamp
+        Label = e.Code |> fun c -> match c.Length > 60 with | true -> c.[..57] + "..." | false -> c
+        BindingCount = state.KnownBindings.Count
+        TestSummary = None
+        EvalDurationMs = Some (float e.DurationMs) })
+
+  let decomposePipeline (code: string) : Task<string> =
+    task {
+      let stages = Features.EvalLens.decomposePipeline code
+      match stages with
+      | [] -> return "No pipeline stages found in the provided code."
+      | stages ->
+        let classifications =
+          stages |> List.map (fun s -> s, Features.EvalLens.classifyStage s.Code)
+        return
+          classifications
+          |> List.map (fun (stage, classification) ->
+            let icon =
+              match classification with
+              | Features.Pure -> "●"
+              | Features.Effectful -> "⚡"
+              | Features.Unknown -> "?"
+            sprintf "  %d. %s %s" stage.StageIndex icon (stage.Code.Trim()))
+          |> fun lines ->
+            sprintf "Pipeline decomposition (%d stages):\n%s" stages.Length (String.concat "\n" lines)
+    }
+
+  let planRipple (ctx: McpContext) (changedCellIds: string) : Task<string> =
+    task {
+      match ctx.GetFeatureState with
+      | None -> return "Feature state not available — no active session."
+      | Some getState ->
+        let state = getState ()
+        match state.EvalHistory with
+        | [] -> return "No eval history — evaluate some cells first."
+        | _ ->
+          let graph = buildCellGraphFromState state
+          let cellIds =
+            changedCellIds.Split([| ','; ' ' |], System.StringSplitOptions.RemoveEmptyEntries)
+            |> Array.choose (fun s -> match System.Int32.TryParse(s) with | true, v -> Some v | _ -> None)
+            |> Set.ofArray
+          match cellIds.IsEmpty with
+          | true -> return "No valid cell IDs provided. Use comma-separated integers (e.g., '0,2,5')."
+          | false ->
+            let plan = Features.EvalRipple.planRipple graph cellIds
+            return
+              plan.Steps
+              |> List.map (fun step ->
+                sprintf "  [%d] %s — %s"
+                  step.CellId
+                  (step.Code |> fun c -> match c.Length > 50 with | true -> c.[..47] + "..." | false -> c)
+                  (match step.Status with
+                   | Features.Pending -> "pending"
+                   | Features.Evaluating -> "evaluating"
+                   | Features.Succeeded o -> sprintf "ok: %s" o
+                   | Features.Failed e -> sprintf "FAILED: %s" e
+                   | Features.Skipped r -> sprintf "skipped: %s" r))
+              |> fun lines ->
+                sprintf "Ripple plan (%d steps, %d changed):\n%s"
+                  plan.Steps.Length cellIds.Count (String.concat "\n" lines)
+    }
+
+  let previewWhatIf (ctx: McpContext) (bindingName: string) (newCode: string) : Task<string> =
+    task {
+      match ctx.GetFeatureState with
+      | None -> return "Feature state not available — no active session."
+      | Some getState ->
+        let state = getState ()
+        match state.EvalHistory with
+        | [] -> return "No eval history — evaluate some cells first."
+        | _ ->
+          let graph = buildCellGraphFromState state
+          let scope =
+            state.CachedScope
+            |> Option.defaultWith (fun () -> Features.FeatureHooks.buildScopeFromState state)
+          let existingBinding = scope.ActiveBindings |> Map.tryFind bindingName
+          let original =
+            existingBinding
+            |> Option.map (fun b -> b.Value |> Option.defaultValue "?")
+            |> Option.defaultValue "?"
+          let typeSig =
+            existingBinding
+            |> Option.map (fun b -> b.TypeSig)
+            |> Option.defaultValue "obj"
+          let override' = Features.WhatIf.createOverride bindingName original newCode typeSig
+          let plan = Features.WhatIf.planWhatIf graph override'
+          return
+            [ sprintf "What-If: %s" (Features.WhatIf.formatOverride override')
+              sprintf "Affected cells: %d" plan.AffectedCells.Length
+              yield!
+                plan.RippleSteps
+                |> List.map (fun step ->
+                  sprintf "  [%d] %s" step.CellId
+                    (step.Code |> fun c -> match c.Length > 50 with | true -> c.[..47] + "..." | false -> c)) ]
+            |> String.concat "\n"
+    }
+
+  let suggestNextCell (ctx: McpContext) : Task<string> =
+    task {
+      match ctx.GetFeatureState with
+      | None -> return "Feature state not available — no active session."
+      | Some getState ->
+        let state = getState ()
+        let scope =
+          state.CachedScope
+          |> Option.defaultWith (fun () -> Features.FeatureHooks.buildScopeFromState state)
+        let bindings = toScopeBindings scope
+        match bindings with
+        | [] -> return "No bindings in scope — evaluate some cells first."
+        | _ ->
+          let suggestions = Features.Ghostwriter.suggest bindings
+          match suggestions with
+          | [] -> return "No suggestions available for the current bindings."
+          | _ ->
+            return
+              suggestions
+              |> List.map (fun s ->
+                sprintf "  %.0f%% %s — %s" (s.Confidence * 100.0) s.Code s.Explanation)
+              |> fun lines ->
+                sprintf "Ghostwriter suggestions (%d):\n%s" suggestions.Length (String.concat "\n" lines)
+    }
+
+  let getSessionFilmstrip (ctx: McpContext) (filter: string option) : Task<string> =
+    task {
+      match ctx.GetFeatureState with
+      | None -> return "Feature state not available — no active session."
+      | Some getState ->
+        let state = getState ()
+        let events = toFilmstripEvents state
+        match events with
+        | [] -> return "No eval history — the session filmstrip is empty."
+        | _ ->
+          let frames = Features.SessionFilmstrip.buildFilmstrip events
+          let filtered =
+            match filter with
+            | Some q when q <> "" -> Features.SessionFilmstrip.filterFrames q frames
+            | _ -> frames
+          let overview = Features.SessionFilmstrip.renderOverview filtered
+          let cards =
+            filtered
+            |> List.map Features.SessionFilmstrip.renderFrame
+          return
+            [ overview; ""; yield! cards ]
+            |> String.concat "\n"
     }

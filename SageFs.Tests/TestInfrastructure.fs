@@ -81,7 +81,8 @@ let sharedCtx () =
     Dispatch = None
     GetElmModel = None
     GetElmRegions = None
-    GetWarmupContext = None } : McpContext
+    GetWarmupContext = None
+    GetFeatureState = None } : McpContext
 
 /// Create a McpContext with a custom session ID backed by the global shared actor
 let sharedCtxWith (sessionId: SageFs.WorkerProtocol.SessionId) =
@@ -97,4 +98,5 @@ let sharedCtxWith (sessionId: SageFs.WorkerProtocol.SessionId) =
     Dispatch = None
     GetElmModel = None
     GetElmRegions = None
-    GetWarmupContext = None } : McpContext
+    GetWarmupContext = None
+    GetFeatureState = None } : McpContext
