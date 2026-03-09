@@ -469,6 +469,7 @@ let parseEditorAction (actionName: string) (value: string option) : EditorAction
   | "historySearch" -> value |> Option.map EditorAction.HistorySearch
   | "resetSession" -> Some EditorAction.ResetSession
   | "hardResetSession" -> Some EditorAction.HardResetSession
+  | "smartReset" -> Some EditorAction.SmartReset
   | "sessionNavUp" -> Some EditorAction.SessionNavUp
   | "sessionNavDown" -> Some EditorAction.SessionNavDown
   | "sessionSelect" -> Some EditorAction.SessionSelect

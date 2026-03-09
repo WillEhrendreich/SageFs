@@ -1269,6 +1269,38 @@ module SageFsEffectHandler =
               SageFsEvent.SessionStatusChanged (SessionId.value sid, SessionDisplayStatus.Restarting)))
           })
 
+      | EditorEffect.RequestSmartReset ->
+        withSession deps dispatch None (fun sid proxy ->
+          async {
+            let soft () = task {
+              let replyId = newReplyId ()
+              let! resp = proxy (WorkerMessage.ResetSession replyId) |> Async.StartAsTask
+              match resp with
+              | WorkerResponse.ResetResult (_, Ok ()) -> return Ok ()
+              | WorkerResponse.ResetResult (_, Error e) -> return Error (SageFsError.describe e)
+              | _ -> return Error "unexpected response"
+            }
+            let hard () = task {
+              let replyId = newReplyId ()
+              let! resp = proxy (WorkerMessage.HardResetSession (false, replyId)) |> Async.StartAsTask
+              match resp with
+              | WorkerResponse.HardResetResult (_, Ok msg) -> return Ok msg
+              | WorkerResponse.HardResetResult (_, Error e) -> return Error (SageFsError.describe e)
+              | _ -> return Error "unexpected response"
+            }
+            let! outcome = SmartReset.execute soft hard |> Async.AwaitTask
+            let status =
+              match outcome with
+              | SmartReset.Outcome.SoftResetSucceeded ->
+                SessionDisplayStatus.Starting
+              | SmartReset.Outcome.EscalatedToHardReset _ ->
+                SessionDisplayStatus.Restarting
+              | SmartReset.Outcome.AllResetsFailed _ ->
+                SessionDisplayStatus.Errored "all resets failed"
+            dispatch (SageFsMsg.Event (
+              SageFsEvent.SessionStatusChanged (SessionId.value sid, status)))
+          })
+
     | SageFsEffect.TestCycle testCycleEffect ->
       async {
         match testCycleEffect with

@@ -173,6 +173,7 @@ module DaemonClient =
     | EditorAction.HistorySearch s -> Some ("historySearch", Some s)
     | EditorAction.ResetSession -> Some ("resetSession", None)
     | EditorAction.HardResetSession -> Some ("hardResetSession", None)
+    | EditorAction.SmartReset -> Some ("smartReset", None)
     | EditorAction.SessionNavUp -> Some ("sessionNavUp", None)
     | EditorAction.SessionNavDown -> Some ("sessionNavDown", None)
     | EditorAction.SessionSelect -> Some ("sessionSelect", None)

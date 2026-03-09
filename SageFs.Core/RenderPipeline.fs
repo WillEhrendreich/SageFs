@@ -112,6 +112,7 @@ and [<RequireQualifiedAccess>] EditorAction =
   | ToggleSessionPanel
   | ResetSession
   | HardResetSession
+  | SmartReset
   // Session navigation (when Sessions pane focused)
   | SessionNavUp
   | SessionNavDown
@@ -303,6 +304,7 @@ module UiAction =
       "ConfigureWarmupAutoOpen", UiAction.Editor EditorAction.ConfigureWarmupAutoOpen
       "ResetSession", UiAction.Editor EditorAction.ResetSession
       "HardResetSession", UiAction.Editor EditorAction.HardResetSession
+      "SmartReset", UiAction.Editor EditorAction.SmartReset
       "SessionNavUp", UiAction.Editor EditorAction.SessionNavUp
       "SessionNavDown", UiAction.Editor EditorAction.SessionNavDown
       "SessionSelect", UiAction.Editor EditorAction.SessionSelect
@@ -383,6 +385,7 @@ module KeyMap =
       KeyCombo.ctrlAlt ConsoleKey.S, e EditorAction.ToggleSessionPanel
       KeyCombo.ctrlAlt ConsoleKey.R, e EditorAction.ResetSession
       KeyCombo.ctrlAlt ConsoleKey.H, e EditorAction.HardResetSession
+      KeyCombo.ctrlShift ConsoleKey.R, e EditorAction.SmartReset
       // Quick session cycling
       KeyCombo.ctrl ConsoleKey.Tab, e EditorAction.SessionCycleNext
       KeyCombo.ctrlShift ConsoleKey.Tab, e EditorAction.SessionCyclePrev

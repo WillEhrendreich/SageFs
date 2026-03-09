@@ -175,6 +175,7 @@ type EditorEffect =
   | RequestSessionStop of sessionId: string
   | RequestReset
   | RequestHardReset
+  | RequestSmartReset
 
 /// The full editor state
 type EditorState = {
@@ -373,6 +374,8 @@ module EditorUpdate =
       state, [EditorEffect.RequestReset]
     | EditorAction.HardResetSession ->
       state, [EditorEffect.RequestHardReset]
+    | EditorAction.SmartReset ->
+      state, [EditorEffect.RequestSmartReset]
     | EditorAction.SessionNavUp ->
       let idx =
         match state.SelectedSessionIndex with
