@@ -169,6 +169,7 @@
         <Compile Include="RingBufferTests.fs" />
         <Compile Include="ModelSnapshotTests.fs" />
         <Compile Include="TimeTravelTests.fs" />
+        <Compile Include="JupyterKernelTests.fs" />
         <Compile Include="TracingMiddlewareTests.fs" />
         <Compile Include="ResultExTests.fs" />
         <Compile Include="RenderInstrumentationTests.fs" />

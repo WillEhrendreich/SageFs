@@ -103,6 +103,7 @@
         <Compile Include="Middleware\Tracing.fs" />
         <Compile Include="ActorCreation.fs" />
         <Compile Include="Mcp.fs" />
+        <Compile Include="JupyterKernel.fs" />
     </ItemGroup>
 
     <ItemGroup>
