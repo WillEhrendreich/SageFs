@@ -2389,7 +2389,7 @@ module DebounceChannel =
     | None -> None, ch
     | Some op ->
       let elapsed = toMs (now - op.RequestedAt)
-      match op.Generation < ch.CurrentGeneration, elapsed >= float op.DelayMs with
+      match op.Generation < ch.CurrentGeneration, elapsed >= float op.DelayMs * 1.0<ms> with
       | true, _ ->
         None, { ch with Pending = None }
       | _, true ->
@@ -2738,7 +2738,7 @@ module LiveTestCycleState =
     AdaptiveDebounce.currentFcsDelay s.AdaptiveDebounce
 
   let onKeystroke (content: string) (filePath: string) (now: DateTimeOffset) (s: LiveTestCycleState) =
-    let fcsDelay = int (currentFcsDelay s)
+    let fcsDelay = int (currentFcsDelay s / 1.0<ms>) * 1<ms>
     let db = s.Debounce |> TestCycleDebounce.onKeystroke content filePath fcsDelay now
     // When edits arrive while tests are running, mark phase as edited so in-flight results are stale.
     let ts = { s.TestState with RunPhases = s.TestState.RunPhases |> Map.map (fun _ p -> TestRunPhase.onEdit p) }
