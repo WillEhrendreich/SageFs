@@ -59,7 +59,7 @@ module StatusHints =
 
   /// Build the right-side status bar hints string.
   /// Shows common actions with their configured keybindings.
-  let build (keyMap: KeyMap) (focusedPane: PaneId) (layout: Set<PaneId>) (watchedCount: int) : string =
+  let build (keyMap: KeyMap) (focusedPane: PaneId) (layout: Set<PaneId>) (watchedCount: int) (density: UiDensity) : string =
     let hint action label =
       findShort keyMap action
       |> Option.map (fun k -> sprintf "%s:%s" k label)
@@ -73,28 +73,50 @@ module StatusHints =
       match watchedCount > 0 with
       | true -> hint UiAction.HotReloadUnwatchAll (sprintf "unwatch(%d)" watchedCount)
       | false -> hint UiAction.HotReloadWatchAll "watch-all"
-    let common =
-      [ hint UiAction.Quit "quit"
-        hint UiAction.CycleFocus "focus"
-        hint UiAction.ScrollUp "scroll"
-        editorToggle
-        hotReloadHint ]
-      |> List.choose id
-    let paneHints =
+    let primaryAction =
       match focusedPane with
       | PaneId.Editor ->
-        [ editorHint EditorAction.Submit "eval"
-          editorHint EditorAction.TriggerCompletion "complete"
+        [ editorHint EditorAction.Submit "eval" ] |> List.choose id
+      | PaneId.Sessions ->
+        [ editorHint (EditorAction.CreateSession []) "new-session" ] |> List.choose id
+      | _ -> []
+    let contextHints =
+      match focusedPane with
+      | PaneId.Editor ->
+        [ editorHint EditorAction.TriggerCompletion "complete"
           editorHint EditorAction.Cancel "cancel" ]
         |> List.choose id
       | PaneId.Output | PaneId.Diagnostics | PaneId.Context ->
-        [ hint UiAction.ScrollDown "scroll↓" ]
-        |> List.choose id
+        [ hint UiAction.ScrollDown "scroll↓" ] |> List.choose id
       | PaneId.Sessions ->
-        [ editorHint (EditorAction.CreateSession []) "new-session"
-          editorHint EditorAction.ConfigureWarmupAutoOpen "auto-open-off" ]
+        [ editorHint EditorAction.ConfigureWarmupAutoOpen "auto-open-off" ]
         |> List.choose id
-    let all = paneHints @ common
+    let all =
+      match density with
+      | UiDensity.Minimal ->
+        let essential =
+          [ hint UiAction.Quit "quit" ] |> List.choose id
+        primaryAction @ essential
+      | UiDensity.Normal ->
+        let common =
+          [ hint UiAction.Quit "quit"
+            hint UiAction.CycleFocus "focus"
+            hint UiAction.ScrollUp "scroll"
+            editorToggle
+            hotReloadHint ]
+          |> List.choose id
+        primaryAction @ contextHints @ common
+      | UiDensity.Full ->
+        let common =
+          [ hint UiAction.Quit "quit"
+            hint UiAction.CycleFocus "focus"
+            hint UiAction.ScrollUp "scroll"
+            editorToggle
+            hotReloadHint
+            hint UiAction.CycleTheme "theme"
+            hint UiAction.CycleDensity "density" ]
+          |> List.choose id
+        primaryAction @ contextHints @ common
     match all.IsEmpty with
     | true -> ""
     | false -> sprintf " %s " (String.concat " | " all)

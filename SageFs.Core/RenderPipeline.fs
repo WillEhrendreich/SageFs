@@ -156,6 +156,25 @@ and [<RequireQualifiedAccess>] UiAction =
   | TimeTravelBack
   | TimeTravelForward
   | TimeTravelGoLive
+  | CycleDensity
+
+/// Controls how much information the status bar reveals.
+[<RequireQualifiedAccess>]
+type UiDensity =
+  | Minimal
+  | Normal
+  | Full
+
+module UiDensity =
+  let cycle = function
+    | UiDensity.Minimal -> UiDensity.Normal
+    | UiDensity.Normal  -> UiDensity.Full
+    | UiDensity.Full    -> UiDensity.Minimal
+
+  let label = function
+    | UiDensity.Minimal -> "minimal"
+    | UiDensity.Normal  -> "normal"
+    | UiDensity.Full    -> "full"
 
 /// Maps physical keys to semantic actions
 type KeyMap = Map<KeyCombo, UiAction>
@@ -310,6 +329,7 @@ module UiAction =
       "TimeTravelBack", UiAction.TimeTravelBack
       "TimeTravelForward", UiAction.TimeTravelForward
       "TimeTravelGoLive", UiAction.TimeTravelGoLive
+      "CycleDensity", UiAction.CycleDensity
     ]
 
   /// O(1) lookup map built once from allFixedEntries
@@ -420,6 +440,7 @@ module KeyMap =
       KeyCombo.create ConsoleKey.T (ConsoleModifiers.Control ||| ConsoleModifiers.Alt ||| ConsoleModifiers.Shift), UiAction.DisableLiveTesting
       KeyCombo.ctrlAlt ConsoleKey.P, UiAction.CycleRunPolicy
       KeyCombo.ctrlAlt ConsoleKey.C, UiAction.ToggleCoverage
+      KeyCombo.ctrlAlt ConsoleKey.M, UiAction.CycleDensity
     ] |> Map.ofList
 
   /// Merge user overrides onto defaults (overrides win)

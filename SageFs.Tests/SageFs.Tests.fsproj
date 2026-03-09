@@ -181,6 +181,7 @@
         <Compile Include="TestStatusVocabularyTests.fs" />
         <Compile Include="HotReloadVisibilityTests.fs" />
         <Compile Include="TutorialTests.fs" />
+        <Compile Include="UiDensityTests.fs" />
         <Compile Include="Program.fs" />
     </ItemGroup>
 

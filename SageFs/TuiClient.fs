@@ -56,6 +56,7 @@ let run (daemonInfo: DaemonInfo) = task {
   let mutable lastStandbyLabel = ""
   let mutable lastLiveTestingStatus = ""
   let mutable lastWatchedCount = 0
+  let mutable lastDensity = UiDensity.Normal
   let mutable layoutConfig = LayoutConfig.defaults
   let mutable currentTheme =
     match ThemePresets.tryFind "Kanagawa" with
@@ -97,7 +98,7 @@ let run (daemonInfo: DaemonInfo) = task {
             sprintf " %s %s | evals: %d (avg %.0fms)%s%s%s | %s" sid lastSessionState lastEvalCount lastAvgMs standby liveTesting ttPart (PaneId.displayName focusedPane)
           | false ->
             sprintf " %s %s | evals: %d%s%s%s | %s" sid lastSessionState lastEvalCount standby liveTesting ttPart (PaneId.displayName focusedPane)
-        let statusRight = sprintf " %s | %.1fms |%s" currentThemeName lastFrameMs (StatusHints.build keyMap focusedPane layoutConfig.VisiblePanes lastWatchedCount)
+        let statusRight = sprintf " %s | %.1fms |%s" currentThemeName lastFrameMs (StatusHints.build keyMap focusedPane layoutConfig.VisiblePanes lastWatchedCount lastDensity)
 
         // When viewing history, use historical regions; otherwise use live
         let displayRegions =
@@ -353,6 +354,9 @@ let run (daemonInfo: DaemonInfo) = task {
             render ()
           | Some TerminalCommand.TimeTravelGoLive ->
             timeTravelState <- TimeTravel.goLive timeTravelState
+            render ()
+          | Some TerminalCommand.CycleDensity ->
+            lastDensity <- UiDensity.cycle lastDensity
             render ()
           | Some (TerminalCommand.Action action) ->
             let remappedAction =

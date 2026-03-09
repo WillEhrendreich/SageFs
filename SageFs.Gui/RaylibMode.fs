@@ -69,6 +69,7 @@ module RaylibMode =
     | TimeTravelBack
     | TimeTravelForward
     | TimeTravelGoLive
+    | CycleDensity
 
   /// Convert Raylib KeyboardKey to System.ConsoleKey for KeyMap lookup
   let raylibToConsoleKey (key: KeyboardKey) : System.ConsoleKey option =
@@ -135,6 +136,7 @@ module RaylibMode =
         | Some (UiAction.TimeTravelBack) -> Some TimeTravelBack
         | Some (UiAction.TimeTravelForward) -> Some TimeTravelForward
         | Some (UiAction.TimeTravelGoLive) -> Some TimeTravelGoLive
+        | Some (UiAction.CycleDensity) -> Some CycleDensity
         | Some (UiAction.Editor action) -> Some (Action action)
         | None ->
           // Ctrl+C not in keymap → copy selection
@@ -166,7 +168,8 @@ module RaylibMode =
     (keyMap: KeyMap)
     (layoutConfig: LayoutConfig)
     (theme: ThemeConfig)
-    (themeName: string) =
+    (themeName: string)
+    (density: UiDensity) =
 
     let statusLeft =
       let sid = if sessionId.Length > 8 then sessionId.[..7] else sessionId
@@ -174,7 +177,7 @@ module RaylibMode =
       let liveTesting = if liveTestingStatus.Length > 0 then sprintf " | %s" liveTestingStatus else ""
       let ttPart = match timeTravelStatus with | Some s -> sprintf " | %s" s | None -> ""
       sprintf " %s %s | evals: %d%s%s%s | %s" sid sessionState evalCount standby liveTesting ttPart (PaneId.displayName focusedPane)
-    let statusRight = sprintf " %s | %dpt | %d fps |%s" themeName fontSize currentFps (StatusHints.build keyMap focusedPane layoutConfig.VisiblePanes watchedCount)
+    let statusRight = sprintf " %s | %dpt | %d fps |%s" themeName fontSize currentFps (StatusHints.build keyMap focusedPane layoutConfig.VisiblePanes watchedCount density)
     Screen.drawWith layoutConfig theme grid regions focusedPane scrollOffsets statusLeft statusRight |> ignore
 
   /// Run the Raylib GUI window connected to daemon.
@@ -227,6 +230,7 @@ module RaylibMode =
     let mutable lastStandbyLabel = ""
     let mutable lastLiveTestingStatus = ""
     let mutable lastWatchedCount = 0
+    let mutable lastDensity = UiDensity.Normal
     let mutable lastFps = 0
     // Time-travel: buffer last N region snapshots for keyboard navigation
     let mutable timeTravelState =
@@ -396,6 +400,8 @@ module RaylibMode =
           timeTravelState <- TimeTravel.stepForward timeTravelState
         | TimeTravelGoLive ->
           timeTravelState <- TimeTravel.goLive timeTravelState
+        | CycleDensity ->
+          lastDensity <- UiDensity.cycle lastDensity
         | Action action ->
           // When Sessions pane is focused, remap movement keys to session navigation
           let remappedAction =
@@ -484,7 +490,7 @@ module RaylibMode =
             | None -> regions
         let ttStatus = TimeTravel.formatStatus timeTravelState
 
-        renderRegions grid displayRegions sessionId sessionState evalCount standbyLabel liveTestingStatus watchedCount ttStatus focusedPane scrollOffsets fontSize lastFps keyMap layoutConfig currentTheme currentThemeName
+        renderRegions grid displayRegions sessionId sessionState evalCount standbyLabel liveTestingStatus watchedCount ttStatus focusedPane scrollOffsets fontSize lastFps keyMap layoutConfig currentTheme currentThemeName lastDensity
         lastFps <- fps ()
 
         Raylib.BeginDrawing()

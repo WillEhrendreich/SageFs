@@ -10,21 +10,21 @@ module HotReloadVisibilityTests =
 
   let statusHintTests = testList "StatusHints hot reload visibility" [
     testCase "build with watchedCount=0 shows watch-all hint" <| fun _ ->
-      let result = StatusHints.build KeyMap.defaults PaneId.Editor defaultPanes 0
+      let result = StatusHints.build KeyMap.defaults PaneId.Editor defaultPanes 0 UiDensity.Normal
       result |> Expect.stringContains "should show watch-all" "watch-all"
 
     testCase "build with watchedCount>0 shows unwatch hint with count" <| fun _ ->
-      let result = StatusHints.build KeyMap.defaults PaneId.Editor defaultPanes 5
+      let result = StatusHints.build KeyMap.defaults PaneId.Editor defaultPanes 5 UiDensity.Normal
       result |> Expect.stringContains "should show unwatch" "unwatch"
       result |> Expect.stringContains "should show count" "5"
 
     testCase "build with watchedCount>0 does NOT show watch-all" <| fun _ ->
-      let result = StatusHints.build KeyMap.defaults PaneId.Editor defaultPanes 3
+      let result = StatusHints.build KeyMap.defaults PaneId.Editor defaultPanes 3 UiDensity.Normal
       result.Contains("watch-all")
       |> Expect.isFalse "should not show watch-all when files watched"
 
     testCase "build with watchedCount=0 does NOT show unwatch" <| fun _ ->
-      let result = StatusHints.build KeyMap.defaults PaneId.Editor defaultPanes 0
+      let result = StatusHints.build KeyMap.defaults PaneId.Editor defaultPanes 0 UiDensity.Normal
       result.Contains("unwatch")
       |> Expect.isFalse "should not show unwatch when nothing watched"
 
@@ -37,22 +37,22 @@ module HotReloadVisibilityTests =
       |> Expect.isSome "HotReloadUnwatchAll should have keybinding"
 
     testCase "hot reload hint uses correct keybinding format" <| fun _ ->
-      let result = StatusHints.build KeyMap.defaults PaneId.Output defaultPanes 0
+      let result = StatusHints.build KeyMap.defaults PaneId.Output defaultPanes 0 UiDensity.Normal
       // Ctrl+Alt+W = "^A-W"
       result |> Expect.stringContains "should contain ^A-W" "^A-W"
 
     testCase "hot reload unwatch hint uses correct keybinding format" <| fun _ ->
-      let result = StatusHints.build KeyMap.defaults PaneId.Output defaultPanes 7
+      let result = StatusHints.build KeyMap.defaults PaneId.Output defaultPanes 7 UiDensity.Normal
       // Ctrl+Alt+U = "^A-U"
       result |> Expect.stringContains "should contain ^A-U" "^A-U"
 
     testCase "existing hints still present when hot reload added" <| fun _ ->
-      let result = StatusHints.build KeyMap.defaults PaneId.Editor defaultPanes 0
+      let result = StatusHints.build KeyMap.defaults PaneId.Editor defaultPanes 0 UiDensity.Normal
       result |> Expect.stringContains "quit still present" "quit"
       result |> Expect.stringContains "eval still present" "eval"
 
     testCase "empty keymap still returns empty string" <| fun _ ->
-      let result = StatusHints.build Map.empty PaneId.Editor Set.empty 0
+      let result = StatusHints.build Map.empty PaneId.Editor Set.empty 0 UiDensity.Normal
       result |> Expect.equal "empty hints" ""
   ]
 
