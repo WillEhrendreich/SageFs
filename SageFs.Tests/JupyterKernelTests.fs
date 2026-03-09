@@ -635,4 +635,28 @@ let jupyterKernelTests =
             |> Async.RunSynchronously
           events.Length > 0)
     ]
+
+    testList "CLI parsing" [
+      test "--jupyter parses to Jupyter case" {
+        Program.CliCommand.parse [| "--jupyter"; "conn.json" |]
+        |> Expect.equal "Jupyter" (Program.Jupyter "conn.json")
+      }
+
+      test "--jupyter without file falls back to ShowHelp" {
+        Program.CliCommand.parse [| "--jupyter" |]
+        |> Expect.equal "ShowHelp" Program.ShowHelp
+      }
+
+      test "--jupyter with path preserves full path" {
+        Program.CliCommand.parse [| "--jupyter"; @"C:\tmp\kernel-1234.json" |]
+        |> Expect.equal "full path" (Program.Jupyter @"C:\tmp\kernel-1234.json")
+      }
+
+      test "regular args don't match Jupyter" {
+        Program.CliCommand.parse [| "--proj"; "Foo.fsproj" |]
+        |> function
+           | Program.Daemon _ -> ()
+           | other -> failtest (sprintf "Expected Daemon but got %A" other)
+      }
+    ]
   ]

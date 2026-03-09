@@ -66,6 +66,7 @@ type CliCommand =
   | Tui of remainingArgs: string array
   | Gui of remainingArgs: string array
   | Daemon of args: string array
+  | Jupyter of connectionFile: string
 
 module CliCommand =
   let parse (args: string array) =
@@ -78,6 +79,11 @@ module CliCommand =
     | _ when args.Length > 0 && args.[0] = "worker" -> Worker (args.[1..] |> Array.toList)
     | _ when args.Length > 0 && args.[0] = "tui" -> Tui args
     | _ when args.Length > 0 && args.[0] = "gui" -> Gui args
+    | _ when hasFlag "--jupyter" ->
+      let idx = args |> Array.findIndex (fun a -> a = "--jupyter")
+      match idx + 1 < args.Length with
+      | true -> Jupyter args.[idx + 1]
+      | false -> ShowHelp
     | _ -> Daemon args
 
 /// Start daemon in background, wait for it to be ready.
@@ -143,6 +149,7 @@ let main args =
     printfn "       SageFs --supervised [options]   Start with watchdog auto-restart"
     printfn "       SageFs tui                      Terminal UI client for running daemon"
     printfn "       SageFs gui                      GPU-rendered Raylib GUI client"
+    printfn "       SageFs --jupyter <conn.json>    Run as Jupyter kernel"
     printfn "       SageFs stop                     Stop running daemon"
     printfn "       SageFs status                   Show daemon info"
     printfn "       SageFs worker [options]         Internal: worker process"
@@ -151,6 +158,7 @@ let main args =
     printfn "  --version, -v          Show version information"
     printfn "  --help, -h             Show this help message"
     printfn "  --mcp-port PORT        Set custom MCP server port (default: 37749)"
+    printfn "  --jupyter FILE         Run as Jupyter kernel with given connection file"
     printfn "  --supervised           Run under watchdog supervisor (auto-restart on crash)"
     printfn "  --no-watch             Disable file watching — no automatic #load on changes"
     printfn "  --no-resume            Skip restoring previous sessions on daemon startup"
@@ -183,6 +191,7 @@ let main args =
     printfn "  SageFs --supervised                 Start with auto-restart"
     printfn "  SageFs tui                          Terminal UI (starts daemon if needed)"
     printfn "  SageFs gui                          Raylib GUI (starts daemon if needed)"
+    printfn "  SageFs --jupyter conn.json          Run as Jupyter kernel"
     printfn "  SageFs status                       Show daemon status"
     printfn ""
     0
@@ -311,6 +320,29 @@ let main args =
       | Error err ->
         printfn "Failed to start daemon: %A" err
         1
+
+  | Jupyter connectionFile ->
+    match File.Exists connectionFile with
+    | false ->
+      eprintfn "Connection file not found: %s" connectionFile
+      1
+    | true ->
+      let json = File.ReadAllText connectionFile
+      match JupyterKernel.ConnectionInfo.parse json with
+      | Error msg ->
+        eprintfn "Invalid connection file: %s" msg
+        1
+      | Ok connInfo ->
+        printfn "SageFs Jupyter kernel starting (transport=%s, ip=%s)" connInfo.Transport connInfo.Ip
+        printfn "  Shell:   %d" connInfo.ShellPort
+        printfn "  IOPub:   %d" connInfo.IoPubPort
+        printfn "  Stdin:   %d" connInfo.StdinPort
+        printfn "  Control: %d" connInfo.ControlPort
+        printfn "  HB:      %d" connInfo.HbPort
+        // TODO: Wire ZMQ transport to KernelLifecycle.processMessage
+        // For now, validate connection info and report ready
+        printfn "Kernel ready. Waiting for ZMQ transport implementation..."
+        0
 
   | Daemon _ ->
     match DaemonState.read () with
