@@ -5,6 +5,7 @@ open VerifyExpecto
 open VerifyTests
 open Falco.Markup
 open SageFs
+open SageFs.Features.LiveTesting
 open SageFs.Server.Dashboard
 open SageFs.Server.DashboardTypes
 open SageFs.Server.DashboardFragments
@@ -566,7 +567,141 @@ let railwayVisualizationTests = testList "Railway visualization" [
   ]
 ]
 
+// ── Test filter bar tests ──
 
+let sampleTestEntries = [|
+  { DisplayName = "test A"; FullName = "Ns.test A"; DurationMs = 100.0
+    Status = Features.LiveTesting.TreemapStatus.Passed }
+  { DisplayName = "test B"; FullName = "Ns.test B"; DurationMs = 200.0
+    Status = Features.LiveTesting.TreemapStatus.Failed }
+  { DisplayName = "test C"; FullName = "Ns.test C"; DurationMs = 50.0
+    Status = Features.LiveTesting.TreemapStatus.Passed }
+  { DisplayName = "test D"; FullName = "Ns.test D"; DurationMs = 10.0
+    Status = Features.LiveTesting.TreemapStatus.Running }
+  { DisplayName = "test E"; FullName = "Ns.test E"; DurationMs = 5.0
+    Status = Features.LiveTesting.TreemapStatus.Skipped }
+|]
+
+let testFilterTests = testList "Test filter bar" [
+
+  testList "treemapStatusToFilterValue" [
+    test "Passed maps to 'passed'" {
+      Expect.equal
+        (treemapStatusToFilterValue Features.LiveTesting.TreemapStatus.Passed)
+        "passed" "Passed"
+    }
+    test "Failed maps to 'failed'" {
+      Expect.equal
+        (treemapStatusToFilterValue Features.LiveTesting.TreemapStatus.Failed)
+        "failed" "Failed"
+    }
+    test "Running maps to 'running'" {
+      Expect.equal
+        (treemapStatusToFilterValue Features.LiveTesting.TreemapStatus.Running)
+        "running" "Running"
+    }
+    test "Skipped maps to 'skipped'" {
+      Expect.equal
+        (treemapStatusToFilterValue Features.LiveTesting.TreemapStatus.Skipped)
+        "skipped" "Skipped"
+    }
+    test "Other maps to 'other'" {
+      Expect.equal
+        (treemapStatusToFilterValue Features.LiveTesting.TreemapStatus.Other)
+        "other" "Other"
+    }
+  ]
+
+  testList "renderTestFilterBar" [
+    test "renders filter bar container with test-filter-bar class" {
+      let html = renderTestFilterBar sampleTestEntries |> renderNode
+      Expect.stringContains html "test-filter-bar" "should have container class"
+    }
+
+    test "shows passed count" {
+      let html = renderTestFilterBar sampleTestEntries |> renderNode
+      Expect.stringContains html "✓ 2" "should show 2 passed"
+    }
+
+    test "shows failed count" {
+      let html = renderTestFilterBar sampleTestEntries |> renderNode
+      Expect.stringContains html "✗ 1" "should show 1 failed"
+    }
+
+    test "shows running button when running tests exist" {
+      let html = renderTestFilterBar sampleTestEntries |> renderNode
+      Expect.stringContains html "⟳ 1" "should show 1 running"
+    }
+
+    test "shows skipped button when skipped tests exist" {
+      let html = renderTestFilterBar sampleTestEntries |> renderNode
+      Expect.stringContains html "⊘ 1" "should show 1 skipped"
+    }
+
+    test "hides running button when no running tests" {
+      let entries = sampleTestEntries |> Array.filter (fun e ->
+        e.Status <> Features.LiveTesting.TreemapStatus.Running)
+      let html = renderTestFilterBar entries |> renderNode
+      Expect.isFalse (html.Contains "⟳") "should not show running button"
+    }
+
+    test "hides skipped button when no skipped tests" {
+      let entries = sampleTestEntries |> Array.filter (fun e ->
+        e.Status <> Features.LiveTesting.TreemapStatus.Skipped)
+      let html = renderTestFilterBar entries |> renderNode
+      Expect.isFalse (html.Contains "⊘") "should not show skipped button"
+    }
+
+    test "filter buttons use Datastar show expression" {
+      let html = renderTestFilterBar sampleTestEntries |> renderNode
+      Expect.stringContains html "$testFilter" "should reference testFilter signal"
+    }
+
+    test "click sets testFilter signal to status value" {
+      let html = renderTestFilterBar sampleTestEntries |> renderNode
+      Expect.stringContains html "$testFilter = 'passed'" "should set filter to passed"
+      Expect.stringContains html "$testFilter = 'failed'" "should set filter to failed"
+    }
+
+    test "active button resets filter to all on click" {
+      let html = renderTestFilterBar sampleTestEntries |> renderNode
+      Expect.stringContains html "$testFilter = 'all'" "active button should reset to all"
+    }
+
+    test "active button has test-filter-active class" {
+      let html = renderTestFilterBar sampleTestEntries |> renderNode
+      Expect.stringContains html "test-filter-active" "should have active class"
+    }
+
+    test "renders Filter label" {
+      let html = renderTestFilterBar sampleTestEntries |> renderNode
+      Expect.stringContains html "Filter:" "should have Filter label"
+    }
+  ]
+
+  testList "renderTestTreemap with signal filtering" [
+    test "treemap entries have data-show attribute" {
+      let html = renderTestTreemap sampleTestEntries |> renderNode
+      Expect.stringContains html "data-show" "should have data-show for filtering"
+    }
+
+    test "passed entries show when filter is all or passed" {
+      let html = renderTestTreemap sampleTestEntries |> renderNode
+      Expect.stringContains html "$testFilter === 'all' || $testFilter === 'passed'" "should show for all or passed"
+    }
+
+    test "failed entries show when filter is all or failed" {
+      let html = renderTestTreemap sampleTestEntries |> renderNode
+      Expect.stringContains html "$testFilter === 'all' || $testFilter === 'failed'" "should show for all or failed"
+    }
+  ]
+
+  testList "Signals module" [
+    test "TestFilter signal name is defined" {
+      Expect.equal Signals.TestFilter "testFilter" "should be testFilter"
+    }
+  ]
+]
 [<Tests>]
 let allDashboardSnapshotTests = testList "Dashboard Snapshots" [
   dashboardRenderSnapshotTests
@@ -577,4 +712,5 @@ let allDashboardSnapshotTests = testList "Dashboard Snapshots" [
   standbyBadgeSseTests
   warmupProgressSseTests
   railwayVisualizationTests
+  testFilterTests
 ]

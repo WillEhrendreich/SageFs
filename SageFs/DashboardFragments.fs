@@ -388,6 +388,61 @@ let renderSessionPicker (previous: PreviousSession list) =
 let renderSessionPickerEmpty =
   Elem.div [ Attr.id DomIds.SessionPicker ] []
 
+// ── Test Filter Bar (signal-driven, zero-JS filtering) ──────────────
+
+/// Map TreemapStatus to the signal value used in Ds.show expressions.
+let treemapStatusToFilterValue (status: Features.LiveTesting.TreemapStatus) =
+  match status with
+  | Features.LiveTesting.TreemapStatus.Passed -> "passed"
+  | Features.LiveTesting.TreemapStatus.Failed -> "failed"
+  | Features.LiveTesting.TreemapStatus.Running -> "running"
+  | Features.LiveTesting.TreemapStatus.Skipped -> "skipped"
+  | Features.LiveTesting.TreemapStatus.Other -> "other"
+
+/// Render a filter toggle bar for test status filtering.
+/// Uses Datastar signals: clicking a button sets $testFilter, Ds.show on entries filters display.
+let renderTestFilterBar (entries: Features.LiveTesting.TestTreemapEntry array) : XmlNode =
+  let countByStatus status =
+    entries |> Array.filter (fun e -> e.Status = status) |> Array.length
+  let passedCount = countByStatus Features.LiveTesting.TreemapStatus.Passed
+  let failedCount = countByStatus Features.LiveTesting.TreemapStatus.Failed
+  let runningCount = countByStatus Features.LiveTesting.TreemapStatus.Running
+  let skippedCount = countByStatus Features.LiveTesting.TreemapStatus.Skipped
+  let filterBtn (label: string) (value: string) (count: int) (color: string) =
+    Elem.button
+      [ Attr.class' "test-filter-btn"
+        Ds.onEvent ("click", sprintf "$testFilter = '%s'" value)
+        Ds.show (sprintf "$testFilter !== '%s'" value)
+        Attr.style (sprintf "background:transparent;border:1px solid %s;color:%s;padding:1px 5px;font-size:0.6rem;border-radius:3px;cursor:pointer;margin-right:2px;" color color) ]
+      [ Text.raw (sprintf "%s %d" label count) ]
+  let activeBtn (label: string) (value: string) (count: int) (color: string) =
+    Elem.button
+      [ Attr.class' "test-filter-btn test-filter-active"
+        Ds.onEvent ("click", "$testFilter = 'all'")
+        Ds.show (sprintf "$testFilter === '%s'" value)
+        Attr.style (sprintf "background:%s;color:#fff;padding:1px 5px;font-size:0.6rem;border-radius:3px;cursor:pointer;margin-right:2px;border:1px solid %s;" color color) ]
+      [ Text.raw (sprintf "%s %d ✕" label count) ]
+  Elem.div
+    [ Attr.class' "test-filter-bar"
+      Attr.style "display:flex;align-items:center;gap:2px;margin-bottom:4px;flex-wrap:wrap;" ]
+    [ yield Elem.span
+        [ Attr.style "font-size:0.6rem;color:var(--fg-dim);margin-right:4px;" ]
+        [ Text.raw "Filter:" ]
+      yield filterBtn "✓" "passed" passedCount "var(--fg-green,#27ae60)"
+      yield activeBtn "✓" "passed" passedCount "var(--fg-green,#27ae60)"
+      yield filterBtn "✗" "failed" failedCount "var(--fg-red,#e74c3c)"
+      yield activeBtn "✗" "failed" failedCount "var(--fg-red,#e74c3c)"
+      match runningCount > 0 with
+      | true ->
+        yield filterBtn "⟳" "running" runningCount "var(--fg-blue,#3498db)"
+        yield activeBtn "⟳" "running" runningCount "var(--fg-blue,#3498db)"
+      | false -> ()
+      match skippedCount > 0 with
+      | true ->
+        yield filterBtn "⊘" "skipped" skippedCount "var(--fg-yellow,#f39c12)"
+        yield activeBtn "⊘" "skipped" skippedCount "var(--fg-yellow,#f39c12)"
+      | false -> () ]
+
 // ── Test Treemap (WizTree-style: area = duration) ─────────────────
 
 /// Render a squarified treemap of test results where area = duration.
@@ -415,10 +470,12 @@ let renderTestTreemap (entries: Features.LiveTesting.TestTreemapEntry array) : X
           let title = sprintf "%s — %s" r.Entry.DisplayName durationLabel
           let showLabel = r.W >= 28.0 && r.H >= 14.0
           let showDuration = r.W >= 40.0 && r.H >= 22.0
+          let statusFilter = treemapStatusToFilterValue r.Entry.Status
           Elem.div
             [ Attr.style (sprintf "position:absolute;left:%.1fpx;top:%.1fpx;width:%.1fpx;height:%.1fpx;background:%s;opacity:0.85;border:0.5px solid rgba(0,0,0,0.3);overflow:hidden;box-sizing:border-box;"
                 r.X r.Y r.W r.H bgColor)
-              Attr.title title ]
+              Attr.title title
+              Ds.show (sprintf "$testFilter === 'all' || $testFilter === '%s'" statusFilter) ]
             [ match showLabel with
               | true ->
                 Elem.div [ Attr.style "font-size:0.5rem;color:#fff;padding:1px 2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.1;" ] [
@@ -633,6 +690,7 @@ let renderSessions (sessions: ParsedSession list) (creating: bool) =
                 [ Elem.summary
                     [ Attr.style "cursor:pointer;color:var(--fg-dim);user-select:none;" ]
                     [ Text.raw (sprintf "🧪 %d tests · %s" s.TestTreemapEntries.Length durationLabel) ]
+                  renderTestFilterBar s.TestTreemapEntries
                   renderTestTreemap s.TestTreemapEntries ]
             // Collapsible bound values explorer
             match s.BindingEntries.Length with

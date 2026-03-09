@@ -59,6 +59,7 @@ module Signals =
   let [<Literal>] TempLoading = "tempLoading"
   let [<Literal>] Theme = "theme"
   let [<Literal>] CursorPos = "cursorPos"
+  let [<Literal>] TestFilter = "testFilter"
 
 /// Precomputed syntax-color RGB → CSS class lookup (eliminates 12-branch if/elif chain)
 let syntaxColorLookup =
