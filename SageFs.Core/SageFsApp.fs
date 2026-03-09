@@ -622,7 +622,10 @@ module SageFsUpdate =
             | false -> Features.LiveTesting.SourceMapping.mergeSourceLocations s.SourceLocations disc
           let newSessionMap =
             tests |> Array.fold (fun m tc -> Map.add tc.Id sessionId m) s.TestSessionMap
-          { s with DiscoveredTests = withSourceMap; TestSessionMap = newSessionMap })
+          { s with
+              DiscoveredTests = withSourceMap
+              TestSessionMap = newSessionMap
+              LastDiscoveryTime = System.DateTimeOffset.UtcNow })
         let effects =
           match lt.TestState.Activation = Features.LiveTesting.LiveTestingActivation.Active
                 && not (Array.isEmpty tests) with

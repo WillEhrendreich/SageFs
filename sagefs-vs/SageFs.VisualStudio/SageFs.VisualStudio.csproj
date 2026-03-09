@@ -14,6 +14,17 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Content Include="Assets\icon.png">
+      <IncludeInVSIX>true</IncludeInVSIX>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="Assets\preview.png">
+      <IncludeInVSIX>true</IncludeInVSIX>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\SageFs.VisualStudio.Core\SageFs.VisualStudio.Core.fsproj" />
     <!-- Build the net472 MEF assembly but don't link its types into this net8.0 host. -->
     <ProjectReference Include="..\SageFs.VisualStudio.Editor\SageFs.VisualStudio.Editor.csproj"

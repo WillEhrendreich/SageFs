@@ -2081,9 +2081,25 @@ module McpTools =
         | false -> reloadDone <- true
         | true -> do! Task.Delay 100
       let waitedMs = (DateTime.UtcNow - reloadWaitStart).TotalMilliseconds |> int
+      // Secondary wait: after a hot-reload, TestsDiscovered fires asynchronously and updates
+      // DiscoveredTests. Snapshot the discovery timestamp before waiting, then poll until
+      // it advances — meaning discovery completed and we have fresh test metadata.
+      let discoveryTimeBefore = (getModel ()).LiveTesting.TestState.LastDiscoveryTime
+      let mutable discoveryWaitedMs = 0
+      match waitedMs > 200 with
+      | true ->
+        let discoveryDeadline = DateTime.UtcNow.AddSeconds(3.0)
+        let mutable discoveryDone = false
+        while not discoveryDone && DateTime.UtcNow < discoveryDeadline do
+          let currentDiscovery = (getModel ()).LiveTesting.TestState.LastDiscoveryTime
+          match currentDiscovery > discoveryTimeBefore with
+          | true -> discoveryDone <- true
+          | false -> do! Task.Delay 50
+        discoveryWaitedMs <- (DateTime.UtcNow - reloadWaitStart).TotalMilliseconds |> int
+      | false -> ()
       let waitNote =
         match waitedMs > 200 with
-        | true -> sprintf "⏳ Waited %dms for hot reload to complete.\n" waitedMs
+        | true -> sprintf "⏳ Waited %dms for hot reload + %dms for discovery refresh.\n" waitedMs discoveryWaitedMs
         | false -> ""
       let category =
         match categoryFilter with

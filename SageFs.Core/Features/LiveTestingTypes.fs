@@ -1114,6 +1114,9 @@ type LiveTestState = {
   CachedTestSummary: TestSummary
   /// Enriched failure context for tests that recently transitioned Passed→Failed.
   FailureNarratives: Map<TestId, FailureNarrative>
+  /// Timestamp of the most recent TestsDiscovered event merge. Used by run_tests to detect
+  /// whether discovery completed after a hot-reload before proceeding with stale test list.
+  LastDiscoveryTime: System.DateTimeOffset
 }
 
 module LiveTestState =
@@ -1139,6 +1142,7 @@ module LiveTestState =
     StateVersion = 0L
     CachedTestSummary = { Total = 0; Passed = 0; Failed = 0; Stale = 0; Running = 0; Disabled = 0; Enabled = true }
     FailureNarratives = Map.empty
+    LastDiscoveryTime = System.DateTimeOffset.MinValue
   }
 
   /// Filter StatusEntries to only include tests belonging to the given session.

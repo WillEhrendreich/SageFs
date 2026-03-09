@@ -15,7 +15,23 @@ internal class SageFsExtension : Extension
       version: this.ExtensionAssemblyVersion,
       publisherName: "WillEhrendreich",
       displayName: "SageFs — F# Live Development",
-      description: "Inline eval, session management, and hot-reload for F# via SageFs daemon"),
+      description: """
+        Live F# development environment for Visual Studio. Features:
+        • Real-time test gutter markers (pass/fail/skip indicators)
+        • F# IntelliSense completions powered by the SageFs daemon
+        • TypeExplorer tool window with auto-refresh
+        • Live test status panel with run policy controls
+        • Inline eval adornments and squiggles
+        • Daemon health notifications on startup
+
+        Requires: SageFs CLI (dotnet tool install --global SageFs), VS 2022 17.14+
+        """)
+    {
+      MoreInfo = "https://github.com/WillEhrendreich/SageFs",
+      Icon = @"Assets\icon.png",
+      PreviewImage = @"Assets\preview.png",
+      Tags = ["F#", "fsharp", "repl", "live-coding", "testing", "functional"],
+    },
   };
 
   protected override void InitializeServices(IServiceCollection serviceCollection)

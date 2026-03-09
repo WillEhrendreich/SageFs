@@ -64,6 +64,30 @@ module ReflectionExecutor =
         match result with
         | :? Threading.Tasks.Task as task ->
           do! Async.AwaitTask task
+        | result when result <> null ->
+          let t = result.GetType()
+          match t.Name.StartsWith("Property") with
+          | true ->
+            // FsCheck.Xunit Property<_> — invoke FsCheck.Check.QuickThrowOnFailure via reflection
+            let fsCheckAssembly =
+              System.AppDomain.CurrentDomain.GetAssemblies()
+              |> Array.tryFind (fun a -> a.GetName().Name = "FsCheck")
+            match fsCheckAssembly with
+            | None -> ()
+            | Some asm ->
+              let checkType = asm.GetType("FsCheck.Check")
+              match checkType with
+              | null -> ()
+              | checkT ->
+                let methods = checkT.GetMethods() |> Array.filter (fun m -> m.Name = "QuickThrowOnFailure")
+                let genericArg = t.GetGenericArguments() |> Array.tryHead |> Option.defaultValue typeof<unit>
+                let method = methods |> Array.tryFind (fun m -> m.GetParameters().Length = 1)
+                match method with
+                | None -> ()
+                | Some m ->
+                  let gm = m.MakeGenericMethod([| genericArg |])
+                  gm.Invoke(null, [| result |]) |> ignore
+          | false -> ()
         | _ -> ()
         sw.Stop()
         return TestResult.Passed sw.Elapsed
@@ -401,7 +425,35 @@ module BuiltInExecutors =
               [| asyncComp
                  box (None: int option)
                  box (Some ct: CancellationToken option) |]) |> ignore
-          | _ -> // AsyncFsCheck or unknown — skip
+          | 3 -> // AsyncFsCheck: property is FSharpAsync<bool>
+            ct.ThrowIfCancellationRequested()
+            let propProp = rft.TestCodeObj.GetType().GetProperty("property")
+            match propProp with
+            | null ->
+              sw.Stop()
+              return TestResult.Skipped "AsyncFsCheck: could not reflect 'property' field"
+            | prop ->
+              let asyncBool = prop.GetValue(rft.TestCodeObj)
+              let runMethod =
+                typeof<Microsoft.FSharp.Control.FSharpAsync>.GetMethod(
+                  "RunSynchronously",
+                  [| asyncBool.GetType(); typeof<int option>; typeof<System.Threading.CancellationToken option> |])
+              match runMethod with
+              | null ->
+                sw.Stop()
+                return TestResult.Skipped "AsyncFsCheck: Async.RunSynchronously not found"
+              | rm ->
+                let genericRun = rm.MakeGenericMethod([| typeof<bool> |])
+                let passed =
+                  genericRun.Invoke(null, [|
+                    asyncBool
+                    box (None: int option)
+                    box (Some ct: System.Threading.CancellationToken option)
+                  |]) :?> bool
+                match passed with
+                | false -> raise (System.Exception("FsCheck property returned false"))
+                | true -> ()
+          | _ -> // unknown tag — skip
             ct.ThrowIfCancellationRequested()
           sw.Stop()
           return TestResult.Passed sw.Elapsed
