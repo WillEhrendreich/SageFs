@@ -44,3 +44,5 @@ viz-output/code-city-tests/*
 !viz-output/code-city-tests/DomainTests.fs
 viz-output/code-city-tests/bin/
 viz-output/code-city-tests/obj/
+
+test-output.txt
