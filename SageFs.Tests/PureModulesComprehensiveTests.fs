@@ -1771,6 +1771,7 @@ let uiActionParseTests = testList "UiAction.tryParse" [
       "FontSizeUp"; "FontSizeDown"; "CycleTheme"
       "HotReloadWatchAll"; "HotReloadUnwatchAll"
       "EnableLiveTesting"; "DisableLiveTesting"; "CycleRunPolicy"; "ToggleCoverage"
+      "TimeTravelBack"; "TimeTravelForward"; "TimeTravelGoLive"
     ]
     for a in simpleActions do
       UiAction.tryParse a

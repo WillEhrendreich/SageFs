@@ -66,6 +66,9 @@ module RaylibMode =
     | DisableLiveTesting
     | CycleRunPolicy
     | ToggleCoverage
+    | TimeTravelBack
+    | TimeTravelForward
+    | TimeTravelGoLive
 
   /// Convert Raylib KeyboardKey to System.ConsoleKey for KeyMap lookup
   let raylibToConsoleKey (key: KeyboardKey) : System.ConsoleKey option =
@@ -129,6 +132,9 @@ module RaylibMode =
         | Some (UiAction.DisableLiveTesting) -> Some DisableLiveTesting
         | Some (UiAction.CycleRunPolicy) -> Some CycleRunPolicy
         | Some (UiAction.ToggleCoverage) -> Some ToggleCoverage
+        | Some (UiAction.TimeTravelBack) -> Some TimeTravelBack
+        | Some (UiAction.TimeTravelForward) -> Some TimeTravelForward
+        | Some (UiAction.TimeTravelGoLive) -> Some TimeTravelGoLive
         | Some (UiAction.Editor action) -> Some (Action action)
         | None ->
           // Ctrl+C not in keymap → copy selection
@@ -151,6 +157,7 @@ module RaylibMode =
     (evalCount: int)
     (standbyLabel: string)
     (liveTestingStatus: string)
+    (timeTravelStatus: string option)
     (focusedPane: PaneId)
     (scrollOffsets: Map<PaneId, int>)
     (fontSize: int)
@@ -164,7 +171,8 @@ module RaylibMode =
       let sid = if sessionId.Length > 8 then sessionId.[..7] else sessionId
       let standby = if standbyLabel.Length > 0 then sprintf " | %s" standbyLabel else ""
       let liveTesting = if liveTestingStatus.Length > 0 then sprintf " | %s" liveTestingStatus else ""
-      sprintf " %s %s | evals: %d%s%s | %s" sid sessionState evalCount standby liveTesting (PaneId.displayName focusedPane)
+      let ttPart = match timeTravelStatus with | Some s -> sprintf " | %s" s | None -> ""
+      sprintf " %s %s | evals: %d%s%s%s | %s" sid sessionState evalCount standby liveTesting ttPart (PaneId.displayName focusedPane)
     let statusRight = sprintf " %s | %dpt | %d fps |%s" themeName fontSize currentFps (StatusHints.build keyMap focusedPane layoutConfig.VisiblePanes)
     Screen.drawWith layoutConfig theme grid regions focusedPane scrollOffsets statusLeft statusRight |> ignore
 
@@ -218,6 +226,9 @@ module RaylibMode =
     let mutable lastStandbyLabel = ""
     let mutable lastLiveTestingStatus = ""
     let mutable lastFps = 0
+    // Time-travel: buffer last N region snapshots for keyboard navigation
+    let mutable timeTravelState =
+      TimeTravel.create { ModelSnapshot.Capacity = 200; ModelSnapshot.Enabled = true }
     let mutable focusedPane = PaneId.Output
     let mutable scrollOffsets = Map.empty<PaneId, int>
     let mutable layoutConfig = LayoutConfig.defaults
@@ -280,7 +291,10 @@ module RaylibMode =
             lastEvalCount <- event.EvalCount
             lastStandbyLabel <- event.StandbyLabel
             lastLiveTestingStatus <- event.LiveTestingStatus
-            lastRegions <- regions))
+            lastRegions <- regions
+            // Record region snapshot for time-travel (only in live mode)
+            timeTravelState <-
+              TimeTravel.record event.SessionState 0.0<SageFs.Measures.ms> regions timeTravelState))
         (fun _ ->
           lock statelock (fun () ->
             lastSessionState <- sprintf "%s (reconnecting...)" lastSessionState))
@@ -373,6 +387,12 @@ module RaylibMode =
           DaemonClient.dispatchAction client baseUrl "cycleRunPolicy" None |> ignore
         | ToggleCoverage ->
           DaemonClient.dispatchAction client baseUrl "toggleCoverage" None |> ignore
+        | TimeTravelBack ->
+          timeTravelState <- TimeTravel.stepBack timeTravelState
+        | TimeTravelForward ->
+          timeTravelState <- TimeTravel.stepForward timeTravelState
+        | TimeTravelGoLive ->
+          timeTravelState <- TimeTravel.goLive timeTravelState
         | Action action ->
           // When Sessions pane is focused, remap movement keys to session navigation
           let remappedAction =
@@ -451,7 +471,17 @@ module RaylibMode =
         let regions, sessionId, sessionState, evalCount, standbyLabel, liveTestingStatus =
           lock statelock (fun () -> lastRegions, lastSessionId, lastSessionState, lastEvalCount, lastStandbyLabel, lastLiveTestingStatus)
 
-        renderRegions grid regions sessionId sessionState evalCount standbyLabel liveTestingStatus focusedPane scrollOffsets fontSize lastFps keyMap layoutConfig currentTheme currentThemeName
+        // When viewing history, use historical regions; otherwise use live
+        let displayRegions =
+          match TimeTravel.isLive timeTravelState with
+          | true -> regions
+          | false ->
+            match TimeTravel.currentModel timeTravelState with
+            | Some r -> r
+            | None -> regions
+        let ttStatus = TimeTravel.formatStatus timeTravelState
+
+        renderRegions grid displayRegions sessionId sessionState evalCount standbyLabel liveTestingStatus ttStatus focusedPane scrollOffsets fontSize lastFps keyMap layoutConfig currentTheme currentThemeName
         lastFps <- fps ()
 
         Raylib.BeginDrawing()

@@ -153,6 +153,9 @@ and [<RequireQualifiedAccess>] UiAction =
   | DisableLiveTesting
   | CycleRunPolicy
   | ToggleCoverage
+  | TimeTravelBack
+  | TimeTravelForward
+  | TimeTravelGoLive
 
 /// Maps physical keys to semantic actions
 type KeyMap = Map<KeyCombo, UiAction>
@@ -304,6 +307,9 @@ module UiAction =
       "DisableLiveTesting", UiAction.DisableLiveTesting
       "CycleRunPolicy", UiAction.CycleRunPolicy
       "ToggleCoverage", UiAction.ToggleCoverage
+      "TimeTravelBack", UiAction.TimeTravelBack
+      "TimeTravelForward", UiAction.TimeTravelForward
+      "TimeTravelGoLive", UiAction.TimeTravelGoLive
     ]
 
   /// O(1) lookup map built once from allFixedEntries
@@ -342,6 +348,10 @@ module KeyMap =
       // Scroll
       KeyCombo.alt ConsoleKey.UpArrow, UiAction.ScrollUp
       KeyCombo.alt ConsoleKey.DownArrow, UiAction.ScrollDown
+      // Time-travel
+      KeyCombo.alt ConsoleKey.LeftArrow, UiAction.TimeTravelBack
+      KeyCombo.alt ConsoleKey.RightArrow, UiAction.TimeTravelForward
+      KeyCombo.alt ConsoleKey.Home, UiAction.TimeTravelGoLive
       KeyCombo.plain ConsoleKey.PageUp, UiAction.ScrollUp
       KeyCombo.plain ConsoleKey.PageDown, UiAction.ScrollDown
       // Font size

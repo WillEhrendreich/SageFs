@@ -4,6 +4,7 @@ open System
 open System.Net.Http
 open System.Threading
 open SageFs
+open SageFs.Measures
 open SageFs.Utils
 
 /// Convert an InputEvent (from VT parser) to a TerminalCommand via KeyMap lookup
@@ -76,23 +77,38 @@ let run (daemonInfo: DaemonInfo) = task {
 
   let mutable lastFrameMs = 0.0
 
+  // Time-travel: buffer last N region snapshots for keyboard navigation
+  let mutable timeTravelState =
+    TimeTravel.create { ModelSnapshot.Capacity = 200; ModelSnapshot.Enabled = true }
+
   let render () =
     lock TerminalUIState.consoleLock (fun () ->
       try
         let frameSw = System.Diagnostics.Stopwatch.StartNew()
+        let ttStatus = TimeTravel.formatStatus timeTravelState
         let statusLeft =
           let sid = match lastSessionId.Length > 8 with | true -> lastSessionId.[..7] | false -> lastSessionId
           let standby = match lastStandbyLabel.Length > 0 with | true -> sprintf " | %s" lastStandbyLabel | false -> ""
           let liveTesting = match lastLiveTestingStatus.Length > 0 with | true -> sprintf " | %s" lastLiveTestingStatus | false -> ""
+          let ttPart = match ttStatus with | Some s -> sprintf " | %s" s | None -> ""
           match lastEvalCount > 0 with
           | true ->
-            sprintf " %s %s | evals: %d (avg %.0fms)%s%s | %s" sid lastSessionState lastEvalCount lastAvgMs standby liveTesting (PaneId.displayName focusedPane)
+            sprintf " %s %s | evals: %d (avg %.0fms)%s%s%s | %s" sid lastSessionState lastEvalCount lastAvgMs standby liveTesting ttPart (PaneId.displayName focusedPane)
           | false ->
-            sprintf " %s %s | evals: %d%s%s | %s" sid lastSessionState lastEvalCount standby liveTesting (PaneId.displayName focusedPane)
+            sprintf " %s %s | evals: %d%s%s%s | %s" sid lastSessionState lastEvalCount standby liveTesting ttPart (PaneId.displayName focusedPane)
         let statusRight = sprintf " %s | %.1fms |%s" currentThemeName lastFrameMs (StatusHints.build keyMap focusedPane layoutConfig.VisiblePanes)
 
+        // When viewing history, use historical regions; otherwise use live
+        let displayRegions =
+          match TimeTravel.isLive timeTravelState with
+          | true -> lastRegions
+          | false ->
+            match TimeTravel.currentModel timeTravelState with
+            | Some regions -> regions
+            | None -> lastRegions
+
         let drawSw = System.Diagnostics.Stopwatch.StartNew()
-        let cursorPos = Screen.drawWith layoutConfig currentTheme grid lastRegions focusedPane scrollOffsets statusLeft statusRight
+        let cursorPos = Screen.drawWith layoutConfig currentTheme grid displayRegions focusedPane scrollOffsets statusLeft statusRight
         drawSw.Stop()
         Instrumentation.renderScreenDrawMs.Record(drawSw.Elapsed.TotalMilliseconds)
 
@@ -157,6 +173,9 @@ let run (daemonInfo: DaemonInfo) = task {
         lastStandbyLabel <- event.StandbyLabel
         lastLiveTestingStatus <- event.LiveTestingStatus
         lastRegions <- regions
+        // Record region snapshot for time-travel (only in live mode)
+        timeTravelState <-
+          TimeTravel.record event.SessionState 0.0<SageFs.Measures.ms> regions timeTravelState
         render ())
       (fun _ ->
         lastSessionState <- sprintf "%s (reconnecting...)" lastSessionState
@@ -323,6 +342,15 @@ let run (daemonInfo: DaemonInfo) = task {
             render ()
           | Some TerminalCommand.ToggleCoverage ->
             do! DaemonClient.dispatchAction client baseUrl "toggleCoverage" None |> Async.AwaitTask
+            render ()
+          | Some TerminalCommand.TimeTravelBack ->
+            timeTravelState <- TimeTravel.stepBack timeTravelState
+            render ()
+          | Some TerminalCommand.TimeTravelForward ->
+            timeTravelState <- TimeTravel.stepForward timeTravelState
+            render ()
+          | Some TerminalCommand.TimeTravelGoLive ->
+            timeTravelState <- TimeTravel.goLive timeTravelState
             render ()
           | Some (TerminalCommand.Action action) ->
             let remappedAction =

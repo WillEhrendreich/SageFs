@@ -409,6 +409,9 @@ type TerminalCommand =
   | DisableLiveTesting
   | CycleRunPolicy
   | ToggleCoverage
+  | TimeTravelBack
+  | TimeTravelForward
+  | TimeTravelGoLive
 
 
 /// Map console key presses to terminal commands
@@ -441,6 +444,9 @@ module TerminalInput =
     | Some (UiAction.DisableLiveTesting) -> Some TerminalCommand.DisableLiveTesting
     | Some (UiAction.CycleRunPolicy) -> Some TerminalCommand.CycleRunPolicy
     | Some (UiAction.ToggleCoverage) -> Some TerminalCommand.ToggleCoverage
+    | Some (UiAction.TimeTravelBack) -> Some TerminalCommand.TimeTravelBack
+    | Some (UiAction.TimeTravelForward) -> Some TerminalCommand.TimeTravelForward
+    | Some (UiAction.TimeTravelGoLive) -> Some TerminalCommand.TimeTravelGoLive
     | Some (UiAction.Editor action) -> Some (TerminalCommand.Action action)
     | None ->
       // Fall through to character insertion for printable chars

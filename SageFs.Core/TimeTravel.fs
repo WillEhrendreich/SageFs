@@ -102,7 +102,7 @@ module TimeTravel =
       | 0 -> None
       | n -> Some (sprintf "⏱ %d snapshots" n)
     | Viewing age ->
-      Some (sprintf "⏮ -%d (Alt+→=fwd Esc=live)" age)
+      Some (sprintf "⏮ -%d (Alt+→ fwd | Alt+Home live)" age)
 
   /// Enable or disable snapshot recording.
   let setEnabled (enabled: bool) (state: TimeTravelState<'Model>) : TimeTravelState<'Model> =
