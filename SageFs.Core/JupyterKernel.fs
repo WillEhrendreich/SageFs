@@ -536,3 +536,68 @@ module JupyterKernel =
       let complete = completeHandler proxy
       let isComplete = isCompleteHandler ()
       exec, complete, isComplete
+
+  // ── Kernel Lifecycle ──
+
+  /// Pure kernel lifecycle — manages state transitions and message processing
+  /// without any I/O. The transport layer (ZMQ) is plugged in separately.
+  module KernelLifecycle =
+
+    /// Configuration for a Jupyter kernel instance.
+    type KernelConfig = {
+      ConnectionFile: string
+      SessionProxy: WorkerProtocol.SessionProxy
+    }
+
+    /// Events emitted during kernel lifecycle — consumed by transport layer.
+    type KernelEvent =
+      | SendReply of parentHeader: MessageHeader * content: string
+      | PublishIOPub of msgType: string * content: string
+      | ShutdownRequested of restart: bool
+
+    /// Process a single incoming message, returning events and updated state.
+    let processMessage
+      (exec: ExecuteHandler)
+      (complete: CompleteHandler)
+      (isComplete: IsCompleteHandler)
+      (state: KernelState)
+      (msg: JupyterMessage)
+      : Async<KernelEvent list * KernelState> =
+      async {
+        let! result = Router.route exec complete isComplete state msg
+        let events =
+          (result.IOPub |> List.map (fun pub ->
+            match pub with
+            | IOPubMessage.StatusMessage status ->
+              let statusStr =
+                match status with
+                | KernelStatus.Idle -> "idle"
+                | KernelStatus.Busy -> "busy"
+                | KernelStatus.ShuttingDown -> "shutting_down"
+              PublishIOPub ("status", sprintf """{"execution_state": "%s"}""" statusStr)
+            | IOPubMessage.StreamOutput (name, text) ->
+              PublishIOPub ("stream", sprintf """{"name": "%s", "text": %s}"""
+                (StreamName.toWire name)
+                (JsonSerializer.Serialize text))
+            | IOPubMessage.ExecuteResultMessage (count, data) ->
+              let dataJson = data |> Map.toList |> List.map (fun (k, v) -> sprintf "%s: %s" (JsonSerializer.Serialize k) (JsonSerializer.Serialize v)) |> String.concat ", "
+              PublishIOPub ("execute_result", sprintf """{"execution_count": %d, "data": {%s}, "metadata": {}}""" count dataJson)
+            | IOPubMessage.ErrorOutput (ename, evalue, traceback) ->
+              let tbJson = traceback |> List.map JsonSerializer.Serialize |> String.concat ", "
+              PublishIOPub ("error", sprintf """{"ename": %s, "evalue": %s, "traceback": [%s]}"""
+                (JsonSerializer.Serialize ename) (JsonSerializer.Serialize evalue) tbJson)))
+          @ [ SendReply (msg.Header, result.Reply |> function MessageContent.Raw s -> s | _ -> "{}") ]
+          @ (match result.NewState.Status with
+             | KernelStatus.ShuttingDown -> [ ShutdownRequested result.NewState.RestartOnShutdown ]
+             | _ -> [])
+        return events, result.NewState
+      }
+
+    /// Render a kernelspec JSON file for `jupyter kernelspec install`.
+    let renderKernelSpecJson (spec: KernelSpec) : string =
+      let argvJson = spec.Argv |> List.map JsonSerializer.Serialize |> String.concat ", "
+      let displayJson = JsonSerializer.Serialize spec.DisplayName
+      let langJson = JsonSerializer.Serialize spec.Language
+      let interruptJson = JsonSerializer.Serialize spec.InterruptMode
+      sprintf """{"argv": [%s], "display_name": %s, "language": %s, "interrupt_mode": %s}"""
+        argvJson displayJson langJson interruptJson

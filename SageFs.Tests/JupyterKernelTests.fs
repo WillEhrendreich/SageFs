@@ -568,4 +568,71 @@ let jupyterKernelTests =
         StreamName.toWire StreamName.Stderr |> Expect.equal "stderr" "stderr"
       }
     ]
+
+    testList "KernelLifecycle" [
+      test "processMessage for execute produces IOPub events and reply" {
+        let exec : ExecuteHandler = fun code _ ->
+          async { return Ok { Output = code; MimeType = "text/plain" } }
+        let comp : CompleteHandler = fun _ _ -> async { return { Matches = []; CursorStart = 0; CursorEnd = 0; Status = "ok" } }
+        let isComp : IsCompleteHandler = fun _ -> async { return CompleteStatus.Complete }
+        let msg = mkExecRequest "let x = 42"
+        let events, newState =
+          KernelLifecycle.processMessage exec comp isComp KernelState.initial msg
+          |> Async.RunSynchronously
+        // Should have: PublishIOPub(busy), PublishIOPub(execute_result), PublishIOPub(idle), SendReply
+        events |> List.exists (function KernelLifecycle.PublishIOPub ("status", s) -> s.Contains("busy") | _ -> false)
+        |> Expect.isTrue "has busy status"
+        events |> List.exists (function KernelLifecycle.PublishIOPub ("status", s) -> s.Contains("idle") | _ -> false)
+        |> Expect.isTrue "has idle status"
+        events |> List.exists (function KernelLifecycle.SendReply _ -> true | _ -> false)
+        |> Expect.isTrue "has reply"
+        newState.ExecutionCount |> Expect.equal "count = 1" 1
+      }
+
+      test "processMessage for shutdown emits ShutdownRequested event" {
+        let exec : ExecuteHandler = fun _ _ -> async { return Ok { Output = ""; MimeType = "text/plain" } }
+        let comp : CompleteHandler = fun _ _ -> async { return { Matches = []; CursorStart = 0; CursorEnd = 0; Status = "ok" } }
+        let isComp : IsCompleteHandler = fun _ -> async { return CompleteStatus.Complete }
+        let msg =
+          { Header = mkHeader "shutdown_request"
+            ParentHeader = None; Metadata = Map.empty
+            Content = MessageContent.ShutdownRequest true }
+        let events, newState =
+          KernelLifecycle.processMessage exec comp isComp KernelState.initial msg
+          |> Async.RunSynchronously
+        events |> List.exists (function KernelLifecycle.ShutdownRequested true -> true | _ -> false)
+        |> Expect.isTrue "has shutdown event with restart=true"
+        newState.Status |> Expect.equal "shutting down" KernelStatus.ShuttingDown
+      }
+
+      test "renderKernelSpecJson produces valid JSON" {
+        let spec = KernelSpec.generate "test" "/usr/bin/sagefs"
+        let json = KernelLifecycle.renderKernelSpecJson spec
+        // Should parse as valid JSON
+        let doc = System.Text.Json.JsonDocument.Parse(json)
+        let root = doc.RootElement
+        root.GetProperty("language").GetString() |> Expect.equal "language" "fsharp"
+        root.GetProperty("display_name").GetString() |> Expect.stringContains "display" "F#"
+        let argv = root.GetProperty("argv")
+        (argv.GetArrayLength(), 0) |> Expect.isGreaterThan "has args"
+        let args = [for i in 0..argv.GetArrayLength()-1 -> argv.[i].GetString()]
+        args |> List.exists (fun a -> a.Contains("{connection_file}"))
+        |> Expect.isTrue "argv has {connection_file}"
+      }
+
+      testProperty "processMessage always emits at least one event" <| fun () ->
+        let exec : ExecuteHandler = fun _ _ -> async { return Ok { Output = "ok"; MimeType = "text/plain" } }
+        let comp : CompleteHandler = fun _ _ -> async { return { Matches = []; CursorStart = 0; CursorEnd = 0; Status = "ok" } }
+        let isComp : IsCompleteHandler = fun _ -> async { return CompleteStatus.Complete }
+        let messages = [
+          mkKernelInfoRequest ()
+          mkExecRequest "1+1"
+          mkCompleteRequest "List." 5
+        ]
+        messages |> List.forall (fun msg ->
+          let events, _ =
+            KernelLifecycle.processMessage exec comp isComp KernelState.initial msg
+            |> Async.RunSynchronously
+          events.Length > 0)
+    ]
   ]
