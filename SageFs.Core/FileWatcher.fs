@@ -180,7 +180,7 @@ let start
           watcher.Renamed.Add(fun e -> handler FileChangeKind.Renamed e)
           watcher.Error.Add(fun e ->
             let ex = e.GetException()
-            Log.warn "[FileWatcher] Buffer overflow in %s — events may have been lost. Triggering recovery soft-reset. Cause: %s" dir ex.Message
+            Log.warn "[FileWatcher] Buffer overflow in %s — events may have been lost. Triggering recovery soft-reset. Cause: %s\n%s" dir ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
             // On buffer overflow we cannot know which files changed, so synthesise a project-level
             // SoftReset event to bring FSI back in sync with the file system.
             // We use the real .fsproj path if one exists; a synthetic path otherwise — fileChangeAction
@@ -203,7 +203,7 @@ let start
           Log.info "FileWatcher started for %s with %d filters, buffer=%dKB: %A" dir watcher.Filters.Count (watcher.InternalBufferSize / 1024) (Seq.toList watcher.Filters)
           Some (watcher :> IDisposable)
         with ex ->
-          Log.warn "[FileWatcher] Cannot watch %s: %s — hot-reload disabled for this directory" dir ex.Message
+          Log.warn "[FileWatcher] Cannot watch %s: %s — hot-reload disabled for this directory\n%s" dir ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
           None
       | false ->
         Log.debug "[FileWatcher] Skipping %s — directory does not exist" dir

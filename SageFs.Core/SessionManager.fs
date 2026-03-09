@@ -272,7 +272,7 @@ module SessionManager =
       | :? OperationCanceledException when not ct.IsCancellationRequested ->
         // Linked CTS fired: per-session startup timeout, NOT daemon shutdown.
         try proc.Kill() with ex2 ->
-          Log.warn "[SessionManager] Kill on startup timeout: %s" ex2.Message
+          Log.warn "[SessionManager] Kill on startup timeout: %s\n%s" ex2.Message (ex2.StackTrace |> Option.ofObj |> Option.defaultValue "")
         try proc.Dispose() with :? ObjectDisposedException -> ()
         inbox.Post(
           SessionCommand.WorkerSpawnFailed(
@@ -284,7 +284,7 @@ module SessionManager =
               SageFsConfig.WorkerStartupTimeoutMs))
       | ex ->
         try proc.Kill() with ex2 ->
-          Log.warn "[SessionManager] Kill on spawn failure: %s" ex2.Message
+          Log.warn "[SessionManager] Kill on spawn failure: %s\n%s" ex2.Message (ex2.StackTrace |> Option.ofObj |> Option.defaultValue "")
         try proc.Dispose() with :? ObjectDisposedException -> ()
         inbox.Post(
           SessionCommand.WorkerSpawnFailed(
@@ -299,13 +299,13 @@ module SessionManager =
       let exited = session.Process.WaitForExit(3000)
       match exited with
       | false ->
-        try session.Process.Kill() with ex -> Log.warn "[SessionManager] Kill after timeout: %s" ex.Message
-        try session.Process.WaitForExit(2000) |> ignore with ex -> Log.warn "[SessionManager] WaitForExit after kill: %s" ex.Message
+        try session.Process.Kill() with ex -> Log.warn "[SessionManager] Kill after timeout: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
+        try session.Process.WaitForExit(2000) |> ignore with ex -> Log.warn "[SessionManager] WaitForExit after kill: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
       | true -> ()
     with ex ->
-      Log.warn "[SessionManager] Graceful shutdown failed: %s" ex.Message
-      try session.Process.Kill() with ex2 -> Log.warn "[SessionManager] Force kill failed: %s" ex2.Message
-      try session.Process.WaitForExit(2000) |> ignore with ex2 -> Log.warn "[SessionManager] WaitForExit after force kill: %s" ex2.Message
+      Log.warn "[SessionManager] Graceful shutdown failed: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
+      try session.Process.Kill() with ex2 -> Log.warn "[SessionManager] Force kill failed: %s\n%s" ex2.Message (ex2.StackTrace |> Option.ofObj |> Option.defaultValue "")
+      try session.Process.WaitForExit(2000) |> ignore with ex2 -> Log.warn "[SessionManager] WaitForExit after force kill: %s\n%s" ex2.Message (ex2.StackTrace |> Option.ofObj |> Option.defaultValue "")
     try session.Process.Dispose() with :? ObjectDisposedException -> ()
   }
 
@@ -354,7 +354,7 @@ module SessionManager =
           |> Async.AwaitTask
         match Object.ReferenceEquals(completed, timeoutTask) with
         | true ->
-          try proc.Kill(entireProcessTree = true) with ex -> Log.warn "[SessionManager] Kill build process on timeout: %s" ex.Message
+          try proc.Kill(entireProcessTree = true) with ex -> Log.warn "[SessionManager] Kill build process on timeout: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
           proc.Dispose()
           return Error "Build timed out (10 min limit)"
         | false ->
@@ -409,7 +409,7 @@ module SessionManager =
       | :? OperationCanceledException when not ct.IsCancellationRequested ->
         // Linked CTS fired: per-standby startup timeout, NOT daemon shutdown.
         try proc.Kill() with ex2 ->
-          Log.warn "[SessionManager] Kill standby on startup timeout: %s" ex2.Message
+          Log.warn "[SessionManager] Kill standby on startup timeout: %s\n%s" ex2.Message (ex2.StackTrace |> Option.ofObj |> Option.defaultValue "")
         try proc.Dispose() with :? ObjectDisposedException -> ()
         inbox.Post(
           SessionCommand.StandbySpawnFailed(
@@ -420,7 +420,7 @@ module SessionManager =
                (set SAGEFS_WORKER_STARTUP_TIMEOUT_MS to adjust)"
               SageFsConfig.WorkerStartupTimeoutMs))
       | ex ->
-        try proc.Kill() with ex2 -> Log.warn "[SessionManager] Kill standby on spawn failure: %s" ex2.Message
+        try proc.Kill() with ex2 -> Log.warn "[SessionManager] Kill standby on spawn failure: %s\n%s" ex2.Message (ex2.StackTrace |> Option.ofObj |> Option.defaultValue "")
         try proc.Dispose() with :? ObjectDisposedException -> ()
         inbox.Post(
           SessionCommand.StandbySpawnFailed(
@@ -437,13 +437,13 @@ module SessionManager =
         let exited = standby.Process.WaitForExit(3000)
         match exited with
         | false ->
-          try standby.Process.Kill() with ex -> Log.warn "[SessionManager] Kill standby after timeout: %s" ex.Message
+          try standby.Process.Kill() with ex -> Log.warn "[SessionManager] Kill standby after timeout: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
         | true -> ()
       | None ->
-        try standby.Process.Kill() with ex -> Log.warn "[SessionManager] Kill standby (no proxy): %s" ex.Message
+        try standby.Process.Kill() with ex -> Log.warn "[SessionManager] Kill standby (no proxy): %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
     with ex ->
-      Log.warn "[SessionManager] Standby shutdown failed: %s" ex.Message
-      try standby.Process.Kill() with ex2 -> Log.warn "[SessionManager] Force kill standby: %s" ex2.Message
+      Log.warn "[SessionManager] Standby shutdown failed: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
+      try standby.Process.Kill() with ex2 -> Log.warn "[SessionManager] Force kill standby: %s\n%s" ex2.Message (ex2.StackTrace |> Option.ofObj |> Option.defaultValue "")
     try standby.Process.Dispose() with :? ObjectDisposedException -> ()
   }
 
@@ -702,7 +702,7 @@ module SessionManager =
                     | _ -> ()
                   | _ -> ()
                 with ex ->
-                    Log.warn "[SessionManager] Worker ready poll transport error for %s: %s (%s)" (SessionId.value id) ex.Message (ex.GetType().Name)
+                    Log.warn "[SessionManager] Worker ready poll transport error for %s: %s (%s)\n%s" (SessionId.value id) ex.Message (ex.GetType().Name) (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
                     done' <- true  // Transport error — WorkerExited event handles cleanup
             }, ct)
             // Request initial test discovery from the worker
@@ -716,7 +716,7 @@ module SessionManager =
                 | _ -> ()
               with ex ->
                 Instrumentation.elmloopErrors.Add(1L, System.Collections.Generic.KeyValuePair("phase", "test_discovery" :> obj))
-                Log.error "[SessionManager] Test discovery failed for %s: %s" (SessionId.value id) ex.Message
+                Log.error "[SessionManager] Test discovery failed for %s: %s\n%s" (SessionId.value id) ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
             }, ct)
             // Fetch instrumentation maps from the worker
             Async.Start(async {
@@ -729,7 +729,7 @@ module SessionManager =
                 | _ -> ()
               with ex ->
                 Instrumentation.elmloopErrors.Add(1L, System.Collections.Generic.KeyValuePair("phase", "instrumentation_maps" :> obj))
-                Log.error "[SessionManager] Instrumentation maps fetch failed for %s: %s" (SessionId.value id) ex.Message
+                Log.error "[SessionManager] Instrumentation maps fetch failed for %s: %s\n%s" (SessionId.value id) ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
             }, ct)
             return! loop newState
           | None ->

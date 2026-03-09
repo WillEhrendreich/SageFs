@@ -70,7 +70,7 @@ type McpServerTracker() =
             | :? System.IO.IOException | :? ObjectDisposedException -> return Some key
             | :? System.OperationCanceledException -> return Some key
             | ex ->
-              Log.error "[MCP] NotifyLog error for %s: %s" key ex.Message
+              Log.error "[MCP] NotifyLog error for %s: %s\n%s" key ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
               return Some key
           })
           |> System.Threading.Tasks.Task.WhenAll
@@ -361,7 +361,7 @@ let replaySessionSnapshot (ctx: SseContext) (body: System.IO.Stream) =
         | false -> ()
       with
       | :? System.IO.IOException | :? ObjectDisposedException -> ()
-      | ex -> Log.error "[SSE] Session snapshot replay error: %s" ex.Message
+      | ex -> Log.error "[SSE] Session snapshot replay error: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
     }
   | _ -> task { () }
 
@@ -408,7 +408,7 @@ let replayCachedTestState (ctx: SseContext) (body: System.IO.Stream) =
           | false -> ()
       | false -> ()
     with ex ->
-      Log.error "[SSE] replay error: %s" ex.Message
+      Log.error "[SSE] replay error: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
   })
 
 // ── Session event subscription: push HotReload/SessionReady via SSE ──
@@ -444,7 +444,7 @@ let wireSessionEventSubscription
             | false -> ()
           with
           | :? System.IO.IOException -> ()
-          | ex -> Log.error "[SSE] HotReload push error: %s" ex.Message
+          | ex -> Log.error "[SSE] HotReload push error: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
         }
         |> fun t -> t.ContinueWith(fun (t: Threading.Tasks.Task) ->
           match t.IsFaulted with
@@ -474,7 +474,7 @@ let wireSessionEventSubscription
             | false -> ()
           with
           | :? System.IO.IOException -> ()
-          | ex -> Log.error "[SSE] SessionReady push error: %s" ex.Message
+          | ex -> Log.error "[SSE] SessionReady push error: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
         }
         |> fun t -> t.ContinueWith(fun (t: Threading.Tasks.Task) ->
           match t.IsFaulted with
@@ -562,10 +562,10 @@ let wireModelChangeHandlers
                             Running = summary.Running; Stale = summary.Stale |} |}, ctx.SseJsonOpts)
         with
         | :? System.Text.Json.JsonException as ex ->
-          Log.error "[MCP] Test trace serialization error: %s" ex.Message
+          Log.error "[MCP] Test trace serialization error: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
           ""
         | ex ->
-          Log.error "[MCP] Test trace unexpected error: %s (%s)" ex.Message (ex.GetType().Name)
+          Log.error "[MCP] Test trace unexpected error: %s (%s)\n%s" ex.Message (ex.GetType().Name) (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
           ""
       let state', effects = processTestTraceChange traceJson modelChangeState.Value
       modelChangeState.Value <- state'
@@ -686,13 +686,13 @@ let wireModelChangeHandlers
               LoggingLevel.Info, "sagefs.state", data) |> ignore
           with
           | :? System.Text.Json.JsonException as jex ->
-            Log.warn "[MCP] State notification JSON error (non-fatal): %s" jex.Message
+            Log.warn "[MCP] State notification JSON error (non-fatal): %s\n%s" jex.Message (jex.StackTrace |> Option.ofObj |> Option.defaultValue "")
         | false -> ()
       with
       | :? System.IO.IOException | :? ObjectDisposedException -> ()
       | :? System.Text.Json.JsonException as jex ->
-        Log.warn "[MCP] State change JSON error (non-fatal): %s" jex.Message
-      | ex -> Log.error "[MCP] State change handler error: %s" ex.Message
+        Log.warn "[MCP] State change JSON error (non-fatal): %s\n%s" jex.Message (jex.StackTrace |> Option.ofObj |> Option.defaultValue "")
+      | ex -> Log.error "[MCP] State change handler error: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
     | _ -> ())
 
 
@@ -1209,12 +1209,12 @@ let mapSessionRoutes (app: WebApplication) (rctx: RouteContext) =
               | _ -> return 0, 0.0, "Unknown"
             with
             | :? System.Net.Http.HttpRequestException as ex ->
-              Log.error "[MCP] Session status HTTP error for %s: %s" (SageFs.WorkerProtocol.SessionId.value sess.Id) ex.Message
+              Log.error "[MCP] Session status HTTP error for %s: %s\n%s" (SageFs.WorkerProtocol.SessionId.value sess.Id) ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
               return 0, 0.0, "Error"
             | :? System.Threading.Tasks.TaskCanceledException ->
               return 0, 0.0, "Timeout"
             | ex ->
-              Log.error "[MCP] Session status unexpected error for %s: %s (%s)" (SageFs.WorkerProtocol.SessionId.value sess.Id) ex.Message (ex.GetType().Name)
+              Log.error "[MCP] Session status unexpected error for %s: %s (%s)\n%s" (SageFs.WorkerProtocol.SessionId.value sess.Id) ex.Message (ex.GetType().Name) (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
               return 0, 0.0, "Error"
           | None -> return 0, 0.0, "Disconnected"
         }
@@ -1580,5 +1580,5 @@ let startMcpServer (cfg: McpServerConfig) =
     | :? System.IO.IOException as ex when ex.Message.Contains("address") || ex.Message.Contains("already") ->
       Log.error "Port %d is already in use. Another SageFs instance may be running — try 'sagefs status' or use --mcp-port to pick a different port." cfg.Port
     | ex ->
-      Log.error "MCP server failed to start (%s): %s" (ex.GetType().Name) ex.Message
+      Log.error "MCP server failed to start (%s): %s\n%s" (ex.GetType().Name) ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
   }

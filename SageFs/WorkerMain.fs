@@ -208,7 +208,7 @@ let run (sessionId: string) (port: int) = async {
         a.GetReferencedAssemblies()
         |> Array.exists (fun r -> testFrameworkMarkers |> Array.contains r.Name)
       with ex ->
-        Log.warn "[WorkerMain] Assembly framework check failed for %s: %s" a.FullName ex.Message
+        Log.warn "[WorkerMain] Assembly framework check failed for %s: %s\n%s" a.FullName ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
         false)
   let projectDiscoveryResults =
     testAssemblies
@@ -221,7 +221,7 @@ let run (sessionId: string) (port: int) = async {
         | true -> Some hr
         | false -> None
       with ex ->
-        Log.error "[WorkerMain] LiveTestingHook.afterReload failed for %s: %s" asm.FullName ex.Message
+        Log.error "[WorkerMain] LiveTestingHook.afterReload failed for %s: %s\n%s" asm.FullName ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
         None)
 
   let initialDiscoveredTests =
@@ -327,7 +327,7 @@ let run (sessionId: string) (port: int) = async {
             try oldCts.Cancel()
             with
             | :? ObjectDisposedException -> ()
-            | ex -> Log.warn "[WorkerMain] CTS cancel failed for %s: %s" filePath ex.Message
+            | ex -> Log.warn "[WorkerMain] CTS cancel failed for %s: %s\n%s" filePath ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
             oldCts.Dispose()
             newCts)
         |> ignore
@@ -453,7 +453,7 @@ let run (sessionId: string) (port: int) = async {
                       |> DevReload.DevReloadDiagnostic.addSourceContext)
                     |> Array.toList
                   DevReload.broadcastCompilationFailed summary diagnostics
-                  Log.warn "Reload failed for %s: %s" fileName (ex.Message)
+                  Log.warn "Reload failed for %s: %s\n%s" fileName ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
               | FileWatcher.FileChangeAction.SoftReset ->
                 Log.info "Project file changed — soft reset needed"
                 let! _ = actor.PostAndAsyncReply(fun rc -> ResetSession rc)

@@ -157,7 +157,7 @@ let discoverProjects (workingDir: string) : DiscoveredProjects =
       |> Seq.map (fun p -> Path.GetRelativePath(workingDir, p))
       |> Seq.toList
     with ex ->
-      Log.warn "[Discovery] Project enumeration failed in %s: %s (%s)" workingDir ex.Message (ex.GetType().Name)
+      Log.warn "[Discovery] Project enumeration failed in %s: %s (%s)\n%s" workingDir ex.Message (ex.GetType().Name) (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
       []
   let solutions =
     try
@@ -168,7 +168,7 @@ let discoverProjects (workingDir: string) : DiscoveredProjects =
       |> Seq.map Path.GetFileName
       |> Seq.toList
     with ex ->
-      Log.warn "[Discovery] Project enumeration failed in %s: %s (%s)" workingDir ex.Message (ex.GetType().Name)
+      Log.warn "[Discovery] Project enumeration failed in %s: %s (%s)\n%s" workingDir ex.Message (ex.GetType().Name) (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
       []
   { WorkingDir = workingDir; Solutions = solutions; Projects = projects }
 
@@ -458,7 +458,7 @@ let saveThemes (sageFsDir: string) (themes: Collections.Concurrent.ConcurrentDic
     let dict = themes |> Seq.map (fun kv -> kv.Key, kv.Value) |> dict
     let json = Text.Json.JsonSerializer.Serialize(dict, Text.Json.JsonSerializerOptions(WriteIndented = true))
     File.WriteAllText(path, json)
-  with ex -> Log.warn "Failed to save themes to %s: %s" sageFsDir ex.Message
+  with ex -> Log.warn "Failed to save themes to %s: %s\n%s" sageFsDir ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
 
 /// Load theme preferences from ~/.SageFs/themes.json
 let loadThemes (sageFsDir: string) : Collections.Concurrent.ConcurrentDictionary<string, string> =
@@ -475,7 +475,7 @@ let loadThemes (sageFsDir: string) : Collections.Concurrent.ConcurrentDictionary
           result.[kv.Key] <- kv.Value
       | true -> ()
     | false -> ()
-  with ex -> Log.warn "Failed to load themes from %s: %s" sageFsDir ex.Message
+  with ex -> Log.warn "Failed to load themes from %s: %s\n%s" sageFsDir ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
   result
 
 // ---------------------------------------------------------------------------

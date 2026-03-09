@@ -956,7 +956,7 @@ module McpTools =
               match Array.isEmpty hookResult.AffectedTestIds with
               | false -> notifyElm ctx (SageFsEvent.AffectedTestsComputed hookResult.AffectedTestIds)
               | true -> ()
-            with ex -> Log.warn "Failed to deserialize hook result: %s" ex.Message
+            with ex -> Log.warn "Failed to deserialize hook result: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
           | None -> ()
           match metadata |> Map.tryFind "assemblyLoadErrors" with
           | Some json ->
@@ -966,7 +966,7 @@ module McpTools =
               match List.isEmpty errors with
               | false -> notifyElm ctx (SageFsEvent.AssemblyLoadFailed errors)
               | true -> ()
-            with ex -> Log.warn "Failed to deserialize assembly load errors: %s" ex.Message
+            with ex -> Log.warn "Failed to deserialize assembly load errors: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
           | None -> ()
         | WorkerProtocol.WorkerResponse.EvalResult(_, Error err, _, _) ->
           notifyElm ctx (

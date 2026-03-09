@@ -63,7 +63,7 @@ module TestTreeSitter =
         let query = new Query(lang, queryText)
         Some (lang, query)
       with ex ->
-        Log.error "TestTreeSitter init failed: %s" ex.Message
+        Log.error "TestTreeSitter init failed: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
         None
 
   /// Discover test locations in F# source code.

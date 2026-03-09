@@ -383,7 +383,7 @@ let createStreamHandler
       try
         do! pushState ()
       with ex ->
-        Log.error "[Dashboard SSE] Initial pushState failed: %s" ex.Message
+        Log.error "[Dashboard SSE] Initial pushState failed: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
 
       match infra.StateChanged with
       | Some evt ->
@@ -611,7 +611,7 @@ let createResetHandler
           | true, prop -> return prop.GetString()
           | _ -> return ""
         with ex ->
-          Log.warn "[Dashboard] Session ID extraction from JSON failed: %s" ex.Message
+          Log.warn "[Dashboard] Session ID extraction from JSON failed: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
           return ""
       }
       let! result = resetSession sessionId

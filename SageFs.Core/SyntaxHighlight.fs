@@ -72,7 +72,7 @@ module SyntaxHighlight =
         let query = new Query(lang, queryText)
         Some (lang, query)
       with ex ->
-        Log.error "SyntaxHighlight init failed: %s" ex.Message
+        Log.error "SyntaxHighlight init failed: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
         None
 
   /// Cache of (code + theme keyword color) → per-line ColorSpan arrays.

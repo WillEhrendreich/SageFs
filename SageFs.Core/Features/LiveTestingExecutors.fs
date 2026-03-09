@@ -334,7 +334,7 @@ module BuiltInExecutors =
                 IgnoreExceptionType = expAsm.GetType("Expecto.IgnoreException")
               }
       with ex ->
-        Log.warn "[LiveTesting] Expecto reflection cache build failed for %s: %s" asm.FullName ex.Message
+        Log.warn "[LiveTesting] Expecto reflection cache build failed for %s: %s\n%s" asm.FullName ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
         Instrumentation.liveTestingAssemblyLoadErrors.Add(1L)
         None
 
@@ -442,11 +442,11 @@ module BuiltInExecutors =
                   yield fullName, { TestCodeObj = testCode; Tag = tag } ]
               |> List.toArray
             with ex ->
-              Log.warn "[LiveTesting] buildLookup property %s.%s failed: %s" t.FullName pi.Name ex.Message
+              Log.warn "[LiveTesting] buildLookup property %s.%s failed: %s\n%s" t.FullName pi.Name ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
               [||]))
         |> Map.ofArray
       with ex ->
-        Log.warn "[LiveTesting] buildLookup assembly scan failed for %s: %s" asm.FullName ex.Message
+        Log.warn "[LiveTesting] buildLookup assembly scan failed for %s: %s\n%s" asm.FullName ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
         Instrumentation.liveTestingAssemblyLoadErrors.Add(1L)
         Map.empty
 
@@ -479,7 +479,7 @@ module BuiltInExecutors =
                           Category = CategoryDetection.categorize [] fullName TestFramework.Expecto [||] } ]
               |> List.toArray
             with ex ->
-              Log.warn "[LiveTesting] discoverLeafTests property %s.%s failed: %s" t.FullName pi.Name ex.Message
+              Log.warn "[LiveTesting] discoverLeafTests property %s.%s failed: %s\n%s" t.FullName pi.Name ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
               [||]))
         |> Array.toList
       with

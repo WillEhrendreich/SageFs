@@ -344,7 +344,7 @@ let fetchWorkerEndpoint
       Log.warn "[fetchWorkerEndpoint] Timeout (%.0fs) fetching %s for session %s" timeout path sessionId
       return None
     | :? Net.Http.HttpRequestException as ex ->
-      Log.error "[fetchWorkerEndpoint] HTTP error fetching %s for session %s: %s" path sessionId ex.Message
+      Log.error "[fetchWorkerEndpoint] HTTP error fetching %s for session %s: %s\n%s" path sessionId ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
       return None
     | ex ->
       Log.error "[fetchWorkerEndpoint] Unexpected error fetching %s for session %s: %s" path sessionId (ex.GetType().Name)
@@ -495,10 +495,10 @@ let getEvalStatsFromWorker
     with
     | :? Net.Http.HttpRequestException | :? Threading.Tasks.TaskCanceledException -> return Affordances.EvalStats.empty
     | :? Text.Json.JsonException as ex ->
-      Log.error "[getEvalStats] JSON parse error for %s: %s" sid ex.Message
+      Log.error "[getEvalStats] JSON parse error for %s: %s\n%s" sid ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
       return Affordances.EvalStats.empty
     | ex ->
-      Log.error "[getEvalStats] Unexpected error for %s: %s (%s)" sid ex.Message (ex.GetType().Name)
+      Log.error "[getEvalStats] Unexpected error for %s: %s (%s)\n%s" sid ex.Message (ex.GetType().Name) (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
       return Affordances.EvalStats.empty
   | _ -> return Affordances.EvalStats.empty
 }
@@ -1142,15 +1142,15 @@ let createElmRuntime
         | _ -> return None
       with
       | :? System.IO.IOException as ex ->
-        Log.error "[getWarmupContextForElm] IO error: %s" ex.Message
+        Log.error "[getWarmupContextForElm] IO error: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
         return None
       | :? System.Net.Http.HttpRequestException as ex ->
-        Log.error "[getWarmupContextForElm] HTTP error: %s" ex.Message
+        Log.error "[getWarmupContextForElm] HTTP error: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
         return None
       | :? System.Threading.Tasks.TaskCanceledException ->
         return None
       | ex ->
-        Log.error "[getWarmupContextForElm] Unexpected: %s (%s)" ex.Message (ex.GetType().Name)
+        Log.error "[getWarmupContextForElm] Unexpected: %s (%s)\n%s" ex.Message (ex.GetType().Name) (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
         return None
     }
   let configureWarmupAutoOpen workingDir =
@@ -1207,7 +1207,7 @@ let createElmRuntime
         System.Threading.ThreadPool.QueueUserWorkItem(fun _ ->
           stateChangedEvent.Trigger (ModelChanged (outputCount, diagCount))) |> ignore
       | false -> ()
-    with ex -> Log.error "[elm] State change propagation error: %s (%s)" ex.Message (ex.GetType().Name)) ct
+    with ex -> Log.error "[elm] State change propagation error: %s (%s)\n%s" ex.Message (ex.GetType().Name) (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")) ct
 
 /// Run SageFs as a headless daemon.
 /// MCP server + SessionManager + Dashboard — all frontends are clients.
@@ -1569,7 +1569,7 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
       with
       | :? System.Net.Http.HttpRequestException | :? Threading.Tasks.TaskCanceledException -> return []
       | ex ->
-        Log.error "[getCompletions] Error for session: %s (%s)" ex.Message (ex.GetType().Name)
+        Log.error "[getCompletions] Error for session: %s (%s)\n%s" ex.Message (ex.GetType().Name) (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
         return []
     })
   }

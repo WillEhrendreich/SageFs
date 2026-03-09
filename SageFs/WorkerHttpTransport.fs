@@ -278,7 +278,7 @@ module WorkerHttpTransport =
               System.Diagnostics.Activity.Current
               |> Option.ofObj
               |> Option.iter (fun a -> a.SetTag("error", ex.Message) |> ignore)
-              Log.error "[run-tests-stream] execution error: %s" ex.Message
+              Log.error "[run-tests-stream] execution error: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
           finally
             channel.Writer.TryComplete() |> ignore
         }
