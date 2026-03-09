@@ -252,6 +252,8 @@ Features: Cell eval, inline results, gutter signs, SSE live updates, live test p
 
 Uses the [VisualStudio.Extensibility](https://learn.microsoft.com/en-us/visualstudio/extensibility/visualstudio.extensibility/) SDK with F# core logic. Early development — eval, CodeLens, session management, and diagnostics work. Live testing gutters and advanced features are in progress.
 
+The VS extension includes kill switches for individual features. See the [VS Extension README](sagefs-vs/README.md#kill-switches) for details.
+
 #### AI Agent (MCP)
 
 SageFs exposes 30 MCP tools — from `send_fsharp_code` to `run_tests` to `explore_type`. Any MCP client can connect.

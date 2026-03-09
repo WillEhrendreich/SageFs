@@ -17,6 +17,8 @@ A Visual Studio extension for [SageFs](../Readme.md) — the live F# development
    dotnet tool install --global SageFs
    ```
 3. Open a `.fsx` or `.fs` file — if the daemon isn't running, a notification will appear in the **SageFs Output** channel
+
+> **Important**: SageFs must be installed as a **global** .NET tool (`dotnet tool install --global SageFs`). Local tool installs are not supported by the Visual Studio extension. If `sagefs` is not found in your PATH, the extension will show "⚠ SageFs daemon is not running" in the SageFs Output channel.
 4. Start the daemon: **Extensions → SageFs → Start Daemon**
 5. Completions, gutter markers, and TypeExplorer activate automatically
 
@@ -137,11 +139,31 @@ Communication with SageFs uses the same HTTP + SSE protocol as all other fronten
 
 ## Troubleshooting
 
-**"SageFs not found on PATH"** — Install SageFs: `dotnet tool install --global SageFs`. Make sure the .NET tools directory is on your PATH.
+**"SageFs not found on PATH"** — Install SageFs: `dotnet tool install --global SageFs`. Make sure the .NET tools directory is on your PATH. Local tool installs (`dotnet tool install --local`) are **not** supported; only global installs work with the extension.
 
 **Commands do nothing / no feedback** — Check the SageFs Output window (`View → Output → SageFs`). The extension logs errors there. If the daemon isn't running, start it with "SageFs: Start Daemon".
 
 **Error List not updating** — Verify the SSE connection is active. The extension subscribes to `/events` on the dashboard port (37750). Firewall or proxy issues can block this.
+
+### Kill Switches
+
+If a feature is causing problems, you can disable it by creating an empty file at the specified path. Delete the file to re-enable the feature (a VS reload may be required).
+
+| File | What it disables |
+|------|-----------------|
+| `%LOCALAPPDATA%\SageFs\disable-glyphs.flag` | All gutter test status markers (also acts as a master switch — disables squiggles and inline hints too) |
+| `%LOCALAPPDATA%\SageFs\disable-squiggles.flag` | Error/warning squiggles from diagnostics |
+| `%LOCALAPPDATA%\SageFs\disable-inline-hints.flag` | Inline failure adornments |
+
+To create a kill switch from PowerShell:
+```powershell
+New-Item "$env:LOCALAPPDATA\SageFs\disable-glyphs.flag" -Force
+```
+
+To remove a kill switch:
+```powershell
+Remove-Item "$env:LOCALAPPDATA\SageFs\disable-glyphs.flag"
+```
 
 ## Development
 
