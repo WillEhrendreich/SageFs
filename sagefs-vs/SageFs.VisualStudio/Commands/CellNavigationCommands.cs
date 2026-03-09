@@ -168,8 +168,7 @@ internal static class BlockHelpers
 
     private static bool IsBlankLineBoundary(string text, int pos)
     {
-        // A blank line boundary is \n\n or \n\r\n
-        if (text[pos] != '\n') return false;
+        if (pos >= text.Length || text[pos] != '\n') return false;
         var next = pos + 1;
         if (next < text.Length && text[next] == '\r') next++;
         return next < text.Length && text[next] == '\n';
