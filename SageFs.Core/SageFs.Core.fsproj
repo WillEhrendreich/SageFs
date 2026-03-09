@@ -16,6 +16,7 @@
         <Compile Include="BatchFlusher.fs" />
         <Compile Include="BinaryFormat.fs" />
         <Compile Include="Instrumentation.fs" />
+        <Compile Include="McpToolAudit.fs" />
         <Compile Include="FeatureParity.fs" />
         <Compile Include="EndpointContracts.fs" />
         <Compile Include="ResilientActor.fs" />

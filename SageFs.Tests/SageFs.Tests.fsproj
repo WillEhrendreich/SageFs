@@ -110,6 +110,7 @@
         <Compile Include="DrawAndRectPrimitivesTests.fs" />
         <Compile Include="ThemesGutterAndDiagnosticsTests.fs" />
         <Compile Include="InstrumentationTests.fs" />
+        <Compile Include="McpToolAuditTests.fs" />
         <Compile Include="FeatureParityTests.fs" />
         <Compile Include="LayoutAndInputTests.fs" />
         <Compile Include="PureModulesComprehensiveTests.fs" />

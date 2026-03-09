@@ -10,21 +10,30 @@ open SageFs.Utils
 
 /// Emoji per tool category — printed once as a header, not per-line
 /// Echo MCP tool results to the SageFs console for visibility
+
+/// Global audit tracker for MCP tool usage analysis (synthesis 3.3).
+let auditTracker = SageFs.McpToolAudit.AuditTracker()
+
 let withEcho (toolName: string) (t: Task<string>) : Task<string> =
   task {
     SageFs.Instrumentation.mcpToolInvocations.Add(1L)
+    let sw = System.Diagnostics.Stopwatch.StartNew()
     let span = SageFs.Instrumentation.startSpanWithKind SageFs.Instrumentation.mcpSource "mcp.tool.invoke" System.Diagnostics.ActivityKind.Server
                  ["mcp.tool.name", box toolName; "rpc.system", box "mcp"; "rpc.service", box "sagefs"; "rpc.method", box toolName]
     try
       let! result = t
+      sw.Stop()
       SageFs.Instrumentation.mcpToolSuccesses.Add(1L, System.Collections.Generic.KeyValuePair("mcp.tool.name", box toolName))
+      auditTracker.Record(toolName, sw.Elapsed.TotalMilliseconds, SageFs.McpToolAudit.Success)
       let normalized = result.Replace("\r\n", "\n").Replace("\n", "\r\n")
       Log.info ">> %s" toolName
       Log.debug "%s" normalized
       SageFs.Instrumentation.succeedSpan span
       return result
     with ex ->
+      sw.Stop()
       SageFs.Instrumentation.mcpToolFailures.Add(1L, System.Collections.Generic.KeyValuePair("mcp.tool.name", box toolName))
+      auditTracker.Record(toolName, sw.Elapsed.TotalMilliseconds, SageFs.McpToolAudit.Failure)
       SageFs.Instrumentation.failSpan span ex.Message
       return raise ex
   }
