@@ -163,6 +163,7 @@
         <Compile Include="MeasureTests.fs" />
         <Compile Include="CellGridMonoidTests.fs" />
         <Compile Include="MealyEquivalenceTests.fs" />
+        <Compile Include="EvalPipelineTests.fs" />
         <Compile Include="RenderInstrumentationTests.fs" />
         <Compile Include="ComplianceSuite.fs" />
         <Compile Include="AppStatePropertyTests.fs" />
