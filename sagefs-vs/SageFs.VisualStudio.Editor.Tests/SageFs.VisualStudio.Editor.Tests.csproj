@@ -24,6 +24,8 @@
     <PackageReference Include="Microsoft.VisualStudio.CoreUtility" Version="17.13.226" PrivateAssets="all" />
     <PackageReference Include="Microsoft.VisualStudio.Text.UI.Wpf" Version="17.13.226" PrivateAssets="all" />
     <PackageReference Include="Microsoft.VisualStudio.Text.Data" Version="17.13.226" PrivateAssets="all" />
+    <!-- Needed to load SageFsCompletionSourceProvider from the editor DLL (IAsyncCompletionSourceProvider) -->
+    <PackageReference Include="Microsoft.VisualStudio.Language" Version="17.13.226" PrivateAssets="all" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\SageFs.VisualStudio.Editor\SageFs.VisualStudio.Editor.csproj" />

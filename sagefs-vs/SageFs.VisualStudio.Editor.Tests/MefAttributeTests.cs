@@ -176,6 +176,49 @@ public class MefAttributeTests
     }
   }
 
+  // ── SageFsCompletionSourceProvider attributes ──────────────────────────────
+
+  [Fact]
+  public void CompletionSourceProvider_HasCorrectName()
+  {
+    var attr = typeof(Completions.SageFsCompletionSourceProvider)
+      .GetCustomAttributes(typeof(NameAttribute), inherit: false)
+      .Cast<NameAttribute>()
+      .FirstOrDefault();
+
+    attr.Should().NotBeNull(
+      because: "SageFsCompletionSourceProvider must have [Name] for MEF ordering. " +
+               "Without it, [Order(Before)] has no anchor to sort against.");
+    attr!.Name.Should().Be("SageFs FSI Completions",
+      because: "the name must match the value used in any dependent [Order(After='SageFs FSI Completions')] attributes.");
+  }
+
+  [Fact]
+  public void CompletionSourceProvider_HasContentTypeText()
+  {
+    GetContentTypes(typeof(Completions.SageFsCompletionSourceProvider))
+      .Should().Contain("text",
+        because: "SageFsCompletionSourceProvider uses ContentType('text') to activate for all " +
+                 "text buffers. This is intentional so F# Script files (which inherit from 'text') are covered.");
+  }
+
+  [Fact]
+  public void CompletionSourceProvider_HasOrderBefore()
+  {
+    var attrs = typeof(Completions.SageFsCompletionSourceProvider)
+      .GetCustomAttributes(typeof(OrderAttribute), inherit: false)
+      .Cast<OrderAttribute>()
+      .ToList();
+
+    attrs.Should().NotBeEmpty(
+      because: "SageFsCompletionSourceProvider must declare [Order] to control its position " +
+               "relative to other completion providers. Without it, VS may prefer built-in providers.");
+
+    attrs.Should().Contain(a => a.Before != null,
+      because: "SageFsCompletionSourceProvider should declare Order(Before=...) to run before " +
+               "default providers so SageFs completions appear at the top.");
+  }
+
   // ── Helpers ───────────────────────────────────────────────────────────────
 
   private static List<string> GetContentTypes(Type type) =>

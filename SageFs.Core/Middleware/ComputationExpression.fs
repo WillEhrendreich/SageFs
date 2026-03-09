@@ -245,10 +245,14 @@ let rewriteCompExpr (logger: ILogger) code =
   }
 
 let compExprMiddleware next (request, st: AppState) =
+  let sessionAvailable = not (isNull (box st.Session))
   let compExprFlagEnabled =
-    match st.Session.TryFindBoundValue "_SageFsCompExpr" with
-    | Some fsiBoundValue when fsiBoundValue.Value.ReflectionValue = true -> true
-    | _ -> false
+    match sessionAvailable with
+    | true ->
+      match st.Session.TryFindBoundValue "_SageFsCompExpr" with
+      | Some fsiBoundValue when fsiBoundValue.Value.ReflectionValue = true -> true
+      | _ -> false
+    | false -> false
 
   let shouldRunCompExpr (m: Map<string, obj>) =
     match compExprFlagEnabled, Map.tryFind "simplifyCompExpression" m with

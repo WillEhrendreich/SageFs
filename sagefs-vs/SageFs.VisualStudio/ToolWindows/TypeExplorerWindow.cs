@@ -11,11 +11,13 @@ using Microsoft.VisualStudio.RpcContracts.RemoteUI;
 internal class TypeExplorerWindow : ToolWindow
 {
   private readonly Core.SageFsClient client;
+  private readonly Core.LiveTestingSubscriber subscriber;
   private TypeExplorerData? dataContext;
 
-  public TypeExplorerWindow(Core.SageFsClient client)
+  public TypeExplorerWindow(Core.SageFsClient client, Core.LiveTestingSubscriber subscriber)
   {
     this.client = client;
+    this.subscriber = subscriber;
     this.Title = "SageFs Type Explorer";
   }
 
@@ -26,7 +28,7 @@ internal class TypeExplorerWindow : ToolWindow
 
   public override Task InitializeAsync(CancellationToken ct)
   {
-    dataContext = new TypeExplorerData(Extensibility, client);
+    dataContext = new TypeExplorerData(Extensibility, client, subscriber);
     return Task.CompletedTask;
   }
 

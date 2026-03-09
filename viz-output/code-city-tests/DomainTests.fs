@@ -2102,9 +2102,34 @@ let majorStreetGrowthTests =
       let south = g.AddNode(Vec2.Create(10.0f, 18.0f), Avenue)
       g.AddEdge(mid, north, Avenue, RoadClass.width Avenue) |> ignore
       g.AddEdge(mid, south, Avenue, RoadClass.width Avenue) |> ignore
-      let proposed = expandNode g mid (Random 7) true 6.0f |> Option.get
+      let proposed, _, _ =
+        expandNode g (System.Collections.Generic.Dictionary<int, float32>()) (System.Collections.Generic.Dictionary<int, float32>()) mid (Random 7) true 6.0f
+        |> Option.get
       (abs (proposed.Y - 10.0f), 0.001f) |> Expect.isLessThan "grid growth should stay on the corridor's orthogonal axis"
       (abs (proposed.X - 10.0f), 1.0f) |> Expect.isGreaterThan "valence-two growth should turn left or right"
+
+    paperCase "§3.1" "organic valence-one continuation lengths are not all pegged to the nominal step" <| fun () ->
+      let sampledLengths =
+        [ 1 .. 8 ]
+        |> List.map (fun seed ->
+            let g = WeberGraph()
+            let parent = g.AddNode(Vec2.Create(4.0f, 10.0f), Avenue)
+            let mid = g.AddNode(Vec2.Create(10.0f, 10.0f), Avenue)
+            g.AddEdge(parent, mid, Avenue, RoadClass.width Avenue) |> ignore
+            let proposed, _, _ =
+              expandNode g (System.Collections.Generic.Dictionary<int, float32>()) (System.Collections.Generic.Dictionary<int, float32>()) mid (Random seed) false 10.0f
+              |> Option.get
+            Vec2.distanceTo (g.N mid).Pos proposed)
+
+      let distinctBuckets =
+        sampledLengths
+        |> List.map (fun length -> int (MathF.Round(length * 10.0f)))
+        |> Set.ofList
+        |> Set.count
+
+      (distinctBuckets, 2)
+      |> Expect.isGreaterThanOrEqual
+           "organic continuation should vary its step length instead of stamping every extension at exactly the nominal segment length"
 
     paperCase "§3.1 Fig. 6" "legality adaptation shortens at the first intersection and snaps to nearby nodes" <| fun () ->
       let g = WeberGraph()
@@ -2118,7 +2143,7 @@ let majorStreetGrowthTests =
           edgeId |> Expect.equal "the vertical corridor should be the first crossed edge" (EdgeId 0)
           (abs (pt.X - 10.0f), 0.01f) |> Expect.isLessThan "intersection hit should report the crossing point"
           (abs (pt.Y - 10.0f), 0.01f) |> Expect.isLessThan "intersection hit should preserve the crossing height"
-          (edgeT, 0.5f) |> Expect.equal "crossing should occur halfway along the existing corridor" 0.5f
+          edgeT |> Expect.equal "crossing should occur halfway along the existing corridor" 0.5f
       | other ->
           failtestf "expected an interior edge hit but got %A" other
       let shortened = adaptIntersection g (g.N originNode).Pos (Vec2.Create(20.0f, 10.0f))
@@ -2141,6 +2166,45 @@ let majorStreetGrowthTests =
       |> Seq.forall (fun edge -> edge.A = splitNode || edge.B = splitNode)
       |> Expect.isTrue "both replacement segments should connect to the shared split node"
       (g.N splitNode).Valence |> Expect.equal "split node should have degree two on the rebuilt corridor" 2
+
+    paperCase "§3.1" "organic growth does not stamp every continuation at one fixed run length" <| fun () ->
+      let rect = { X = 0.0f; Z = 0.0f; W = 220.0f; H = 180.0f }
+      let g = WeberGraph()
+      let center = Vec2.Create(TRect.centerX rect, TRect.centerZ rect)
+      g.AddNode(center, Avenue) |> ignore
+      growStreets g [| center |] (Random 123) Avenue false 14.0f 1.2f 4.5f 24 0.006f (Some rect)
+
+      let insideInset (inset: float32) (pt: Vec2) =
+        pt.X >= rect.X + inset
+        && pt.X <= rect.X + rect.W - inset
+        && pt.Y >= rect.Z + inset
+        && pt.Y <= rect.Z + rect.H - inset
+
+      let interiorLengths =
+        g.Edges
+        |> Seq.toList
+        |> List.choose (fun edge ->
+            let a = (g.N edge.A).Pos
+            let b = (g.N edge.B).Pos
+            if insideInset 18.0f a && insideInset 18.0f b then
+              Some (Vec2.distanceTo a b)
+            else
+              None)
+        |> List.filter (fun length -> length >= 6.0f)
+
+      (interiorLengths.Length, 8)
+      |> Expect.isGreaterThanOrEqual
+           "the growth kernel should produce enough interior continuations to judge cadence"
+
+      let bucketCount =
+        interiorLengths
+        |> List.map (fun length -> int (MathF.Round(length / 1.5f)))
+        |> Set.ofList
+        |> Set.count
+
+      (bucketCount, 3)
+      |> Expect.isGreaterThanOrEqual
+           "organic growth should not leave interior continuations trapped in a single metronomic run length"
 
     assumptionCase "pipeline API for §3.1" "major street growth planner exists" <| fun () ->
       hasModuleFunction "planMajorStreetGrowth"
@@ -2894,6 +2958,48 @@ let private roadSpanLength (road: Road) =
   let startPt, endPt = roadEndpoints2d road
   Vec2.distanceTo startPt endPt
 
+let private pointToRoadProjection (road: Road) (pt: Vec2) =
+  let startPt, endPt = roadEndpoints2d road
+  let dx = endPt.X - startPt.X
+  let dy = endPt.Y - startPt.Y
+  let lenSq = dx * dx + dy * dy
+  if lenSq < 1e-6f then
+    0.0f, Vec2.distanceTo pt startPt
+  else
+    let t = ((pt.X - startPt.X) * dx + (pt.Y - startPt.Y) * dy) / lenSq
+    let nearPt = Vec2.Create(startPt.X + dx * t, startPt.Y + dy * t)
+    t, Vec2.distanceTo pt nearPt
+
+let private pointInsideRectInset inset (rect: TRect) (pt: Vec2) =
+  pt.X >= rect.X + inset
+  && pt.X <= rect.X + rect.W - inset
+  && pt.Y >= rect.Z + inset
+  && pt.Y <= rect.Z + rect.H - inset
+
+let private roundedLengthBucketCount bucketSize (lengths: float32 list) =
+  lengths
+  |> List.map (fun length -> int (MathF.Round(length / bucketSize)))
+  |> Set.ofList
+  |> Set.count
+
+let private coefficientOfVariation (values: float32 list) =
+  match values with
+  | [] | [ _ ] -> 0.0f
+  | _ ->
+      let mean = values |> List.average
+      let variance =
+        values
+        |> List.averageBy (fun value ->
+            let delta = value - mean
+            delta * delta)
+      MathF.Sqrt(variance) / mean
+
+type private CorridorSpacingMetric =
+  { CorridorLength: float32
+    AttachmentCount: int
+    GapCv: float32
+    GapRatio: float32 }
+
 let private clusterPoints tolerance (points: Vec2 list) =
   let toleranceSq = tolerance * tolerance
   let clusters = ResizeArray<Vec2 * int>()
@@ -2913,6 +3019,45 @@ let private clusterPoints tolerance (points: Vec2 list) =
   points |> List.iter addPoint
   clusters |> Seq.toList
 
+let private smallestAngleBetweenDirections (a: Vec2) (b: Vec2) =
+  let dot = max -1.0f (min 1.0f (Vec2.dot a b))
+  let angle = MathF.Acos(dot) * 180.0f / MathF.PI
+  min angle (180.0f - angle)
+
+let private junctionMinAngles tolerance (roads: Road list) =
+  let toleranceSq = tolerance * tolerance
+  let junctions =
+    roads
+    |> List.collect (fun road ->
+      let a, b = roadEndpoints2d road
+      [ a; b ])
+    |> clusterPoints tolerance
+    |> List.filter (fun (_, valence) -> valence >= 3)
+    |> List.map fst
+  let incidentDirection anchor road =
+    let startPt, endPt = roadEndpoints2d road
+    if Vec2.distanceToSq anchor startPt <= toleranceSq then
+      Some (Vec2.normalize (Vec2.sub endPt startPt))
+    elif Vec2.distanceToSq anchor endPt <= toleranceSq then
+      Some (Vec2.normalize (Vec2.sub startPt endPt))
+    else
+      None
+  junctions
+  |> List.choose (fun junction ->
+    let directions =
+      roads
+      |> List.choose (incidentDirection junction)
+    match List.length directions >= 3 with
+    | false -> None
+    | true ->
+        [ for i in 0 .. List.length directions - 1 do
+            for j in i + 1 .. List.length directions - 1 do
+              let angle = smallestAngleBetweenDirections directions.[i] directions.[j]
+              if angle > 5.0f then
+                angle ]
+        |> List.sort
+        |> List.tryHead)
+
 let private boundaryMidpointsForRect (rect: TRect) =
   [ Vec2.Create(TRect.centerX rect, rect.Z)
     Vec2.Create(rect.X + rect.W, TRect.centerZ rect)
@@ -2930,6 +3075,285 @@ let private nearestAxisDelta angle =
   [ 0.0f; 90.0f; 180.0f ]
   |> List.map (fun axis -> abs (angle - axis))
   |> List.min
+
+type private DirectedRoadSegment =
+  { Id: int
+    RoadIndex: int
+    StartCluster: int
+    EndCluster: int
+    Heading: Vec2
+    Length: float32 }
+
+type private ThroughChainMetric =
+  { SegmentCount: int
+    TotalLength: float32
+    CumulativeTurn: float32 }
+
+type private ThroughChainDetail =
+  { SegmentIds: int list
+    RoadIndices: int list
+    ClusterPath: int list
+    SegmentLengths: float32 list
+    TotalLength: float32 }
+
+let private clusterRoadEndpoints tolerance (roads: Road list) =
+  let toleranceSq = tolerance * tolerance
+  let clusters = ResizeArray<Vec2 * ResizeArray<int * bool>>()
+
+  let addReference roadIndex isStart point =
+    let mutable matched = None
+    for i in 0 .. clusters.Count - 1 do
+      match matched with
+      | Some _ -> ()
+      | None ->
+          let anchor, _ = clusters.[i]
+          if Vec2.distanceToSq anchor point <= toleranceSq then
+            matched <- Some i
+
+    match matched with
+    | Some idx ->
+        let anchor, refs = clusters.[idx]
+        let count = float32 refs.Count
+        let blended =
+          Vec2.Create(
+            (anchor.X * count + point.X) / (count + 1.0f),
+            (anchor.Y * count + point.Y) / (count + 1.0f))
+        refs.Add(roadIndex, isStart)
+        clusters.[idx] <- blended, refs
+    | None ->
+        let refs = ResizeArray<int * bool>()
+        refs.Add(roadIndex, isStart)
+        clusters.Add(point, refs)
+
+  roads
+  |> List.iteri (fun roadIndex road ->
+      let startPt, endPt = roadEndpoints2d road
+      addReference roadIndex true startPt
+      addReference roadIndex false endPt)
+
+  clusters
+  |> Seq.mapi (fun idx (anchor, refs) -> idx, anchor, refs |> Seq.toList)
+  |> Seq.toList
+
+let private buildDirectedSegments tolerance (roads: Road list) =
+  let toleranceSq = tolerance * tolerance
+  let clusters = clusterRoadEndpoints tolerance roads
+
+  let clusterIdForPoint point =
+    clusters
+    |> List.find (fun (_, anchor, _) -> Vec2.distanceToSq anchor point <= toleranceSq)
+    |> fun (idx, _, _) -> idx
+
+  let directedSegments =
+    roads
+    |> List.mapi (fun roadIndex road ->
+        let startPt, endPt = roadEndpoints2d road
+        let length = Vec2.distanceTo startPt endPt
+        let forwardHeading = Vec2.normalize (Vec2.sub endPt startPt)
+        let backwardHeading = Vec2.normalize (Vec2.sub startPt endPt)
+        let startCluster = clusterIdForPoint startPt
+        let endCluster = clusterIdForPoint endPt
+        [ { Id = roadIndex * 2
+            RoadIndex = roadIndex
+            StartCluster = startCluster
+            EndCluster = endCluster
+            Heading = forwardHeading
+            Length = length }
+          { Id = roadIndex * 2 + 1
+            RoadIndex = roadIndex
+            StartCluster = endCluster
+            EndCluster = startCluster
+            Heading = backwardHeading
+            Length = length } ])
+    |> List.concat
+
+  clusters, directedSegments
+
+let private throughChainMetrics tolerance maxDeflection (roads: Road list) =
+  let _, directedSegments = buildDirectedSegments tolerance roads
+
+  let nextSegments current =
+    directedSegments
+    |> List.filter (fun candidate ->
+        candidate.StartCluster = current.EndCluster
+        && candidate.RoadIndex <> current.RoadIndex)
+    |> List.sortBy (fun candidate -> smallestAngleBetweenDirections current.Heading candidate.Heading)
+
+  let rec walk visited current segmentCount totalLength cumulativeTurn =
+    let candidates =
+      nextSegments current
+      |> List.filter (fun candidate -> not (Set.contains candidate.Id visited))
+    match candidates with
+    | [] ->
+        { SegmentCount = segmentCount
+          TotalLength = totalLength
+          CumulativeTurn = cumulativeTurn }
+    | next :: _ ->
+        let deflection = smallestAngleBetweenDirections current.Heading next.Heading
+        match deflection <= maxDeflection with
+        | false ->
+            { SegmentCount = segmentCount
+              TotalLength = totalLength
+              CumulativeTurn = cumulativeTurn }
+        | true ->
+            walk
+              (Set.add next.Id visited)
+              next
+              (segmentCount + 1)
+              (totalLength + next.Length)
+              (cumulativeTurn + deflection)
+
+  directedSegments
+  |> List.map (fun segment -> walk (Set.singleton segment.Id) segment 1 segment.Length 0.0f)
+
+let private throughChainDetails tolerance maxDeflection (roads: Road list) =
+  let clusters, directedSegments = buildDirectedSegments tolerance roads
+
+  let nextSegments current =
+    directedSegments
+    |> List.filter (fun candidate ->
+        candidate.StartCluster = current.EndCluster
+        && candidate.RoadIndex <> current.RoadIndex)
+    |> List.sortBy (fun candidate -> smallestAngleBetweenDirections current.Heading candidate.Heading)
+
+  let rec walk visited current segmentIds roadIndices clusterPath segmentLengths totalLength =
+    let candidates =
+      nextSegments current
+      |> List.filter (fun candidate -> not (Set.contains candidate.Id visited))
+    match candidates with
+    | [] ->
+        { SegmentIds = segmentIds |> List.rev
+          RoadIndices = roadIndices |> List.rev
+          ClusterPath = clusterPath |> List.rev
+          SegmentLengths = segmentLengths |> List.rev
+          TotalLength = totalLength }
+    | next :: _ ->
+        let deflection = smallestAngleBetweenDirections current.Heading next.Heading
+        if deflection > maxDeflection then
+          { SegmentIds = segmentIds |> List.rev
+            RoadIndices = roadIndices |> List.rev
+            ClusterPath = clusterPath |> List.rev
+            SegmentLengths = segmentLengths |> List.rev
+            TotalLength = totalLength }
+        else
+          walk
+            (Set.add next.Id visited)
+            next
+            (next.Id :: segmentIds)
+            (next.RoadIndex :: roadIndices)
+            (next.EndCluster :: clusterPath)
+            (next.Length :: segmentLengths)
+            (totalLength + next.Length)
+
+  let clusterRoadIndexSet =
+    clusters
+    |> List.map (fun (idx, _, refs) -> idx, (refs |> List.map fst |> Set.ofList))
+    |> Map.ofList
+
+  directedSegments
+  |> List.map (fun segment ->
+      let detail =
+        walk
+          (Set.singleton segment.Id)
+          segment
+          [ segment.Id ]
+          [ segment.RoadIndex ]
+          [ segment.EndCluster; segment.StartCluster ]
+          [ segment.Length ]
+          segment.Length
+      let attachmentDistances =
+        detail.ClusterPath
+        |> List.tail
+        |> List.take (max 0 (List.length detail.ClusterPath - 2))
+        |> List.mapi (fun idx clusterId ->
+            let distanceAlong =
+              detail.SegmentLengths
+              |> List.take (idx + 1)
+              |> List.sum
+            let incidentRoads = Map.find clusterId clusterRoadIndexSet
+            let chainRoads = detail.RoadIndices |> Set.ofList
+            let hasSideAttachment = incidentRoads |> Set.exists (fun roadIndex -> not (Set.contains roadIndex chainRoads))
+            distanceAlong, hasSideAttachment)
+        |> List.choose (fun (distanceAlong, hasSideAttachment) ->
+            if hasSideAttachment then Some distanceAlong else None)
+      detail, attachmentDistances)
+
+let private corridorSpacingMetric tolerance (road: Road) (roads: Road list) =
+  let corridorLength = roadSpanLength road
+  let attachmentParams =
+    roads
+    |> List.filter (fun other -> not (obj.ReferenceEquals(other, road)))
+    |> List.collect (fun other ->
+        let startPt, endPt = roadEndpoints2d other
+        [ startPt; endPt ])
+    |> List.choose (fun pt ->
+        let t, distance = pointToRoadProjection road pt
+        if distance <= tolerance && t >= 0.08f && t <= 0.92f then Some t else None)
+    |> List.sort
+    |> List.fold (fun kept t ->
+        match kept with
+        | head :: _ when abs (t - head) <= 0.035f -> kept
+        | _ -> t :: kept) []
+    |> List.rev
+
+  let gaps =
+    attachmentParams
+    |> List.pairwise
+    |> List.map (fun (a, b) -> (b - a) * corridorLength)
+    |> List.filter (fun gap -> gap > 0.5f)
+
+  match List.length attachmentParams >= 3 && List.length gaps >= 2 with
+  | false -> None
+  | true ->
+      let minGap = gaps |> List.min
+      let maxGap = gaps |> List.max
+      Some
+        { CorridorLength = corridorLength
+          AttachmentCount = List.length attachmentParams
+          GapCv = coefficientOfVariation gaps
+          GapRatio = maxGap / minGap }
+
+let private collectOrganicCorridorSpacingMetrics (rect: TRect) seeds =
+  let funcs = List.init 40 (fun i -> mkFunc (sprintf "spacing%d" i) "OrganicSpacingMod")
+  seeds
+  |> List.collect (fun seed ->
+      let rng = Random(seed)
+      let _, roads =
+        layoutWeberDistrict rect funcs Map.empty (Color(70uy, 130uy, 180uy, 255uy)) 10 100 0.9f rng Map.empty
+      throughChainDetails 0.45f 24.0f roads
+      |> List.choose (fun (detail, attachmentDistances) ->
+          let gaps =
+            attachmentDistances
+            |> List.sort
+            |> List.pairwise
+            |> List.map (fun (a, b) -> b - a)
+            |> List.filter (fun gap -> gap > 0.5f)
+
+          match List.length attachmentDistances >= 3 && List.length gaps >= 2 with
+          | false -> None
+          | true ->
+              let minGap = gaps |> List.min
+              let maxGap = gaps |> List.max
+              Some
+                { CorridorLength = detail.TotalLength
+                  AttachmentCount = List.length attachmentDistances
+                  GapCv = coefficientOfVariation gaps
+                  GapRatio = maxGap / minGap })
+      |> List.filter (fun metric -> metric.CorridorLength >= 20.0f))
+
+let private collectOrganicInteriorRoadLengths (rect: TRect) seeds =
+  let funcs = List.init 36 (fun i -> mkFunc (sprintf "cadence%d" i) "OrganicCadenceMod")
+  seeds
+  |> List.collect (fun seed ->
+      let rng = Random(seed)
+      let _, roads =
+        layoutWeberDistrict rect funcs Map.empty (Color(70uy, 130uy, 180uy, 255uy)) 10 100 0.9f rng Map.empty
+      roads
+      |> List.filter (fun road ->
+          let startPt, endPt = roadEndpoints2d road
+          pointInsideRectInset 2.5f rect startPt && pointInsideRectInset 2.5f rect endPt)
+      |> List.map roadSpanLength
+      |> List.filter (fun length -> length >= 4.5f))
 
 let weberDistrictTests =
   testList "Weber district layout" [
@@ -3013,6 +3437,117 @@ let weberDistrictTests =
       (Vec2.distanceTo midpoint center, min rect.W rect.H * 0.08f)
       |> Expect.isGreaterThan
            "the longest organic corridor should not be centered on the exact middle of the district"
+
+    testCase "organic district avoids laser-straight through corridors across multiple junctions" <| fun () ->
+      let rect  = { X = 0.0f; Z = 0.0f; W = 100.0f; H = 80.0f }
+      let funcs = List.init 28 (fun i -> mkFunc (sprintf "drift%d" i) "OrganicDriftMod")
+      let rng   = Random(123)
+      let _, roads = layoutWeberDistrict rect funcs Map.empty (Color(70uy, 130uy, 180uy, 255uy)) 10 100 0.9f rng Map.empty
+      roads |> Expect.isNonEmpty "organic district should produce roads"
+      let laserStraightChains =
+        throughChainMetrics 0.35f 10.0f roads
+        |> List.filter (fun chain ->
+            chain.SegmentCount >= 3
+            && chain.TotalLength >= 40.0f
+            && chain.CumulativeTurn < 14.0f)
+      laserStraightChains
+      |> Expect.isEmpty "organic districts should not preserve ruler-straight through corridors over long distances"
+
+    testCase "organic district long through corridors accumulate visible heading drift" <| fun () ->
+      let rect  = { X = 0.0f; Z = 0.0f; W = 100.0f; H = 80.0f }
+      let funcs = List.init 28 (fun i -> mkFunc (sprintf "driftTurn%d" i) "OrganicDriftTurnMod")
+      let rng   = Random(123)
+      let _, roads = layoutWeberDistrict rect funcs Map.empty (Color(70uy, 130uy, 180uy, 255uy)) 10 100 0.9f rng Map.empty
+      roads |> Expect.isNonEmpty "organic district should produce roads"
+      let longChainOpt =
+        throughChainMetrics 0.35f 10.0f roads
+        |> List.filter (fun chain -> chain.SegmentCount >= 3 && chain.TotalLength >= 40.0f)
+        |> List.sortByDescending (fun chain -> chain.TotalLength)
+        |> List.tryHead
+      match longChainOpt with
+      | Some chain ->
+          (chain.CumulativeTurn, 14.0f)
+          |> Expect.isGreaterThan "long organic through corridors should accumulate visible heading drift instead of reading as a ruler line"
+      | None -> ()
+
+    testCase "organic district interior road cadence spans multiple length buckets" <| fun () ->
+      let rect  = { X = 0.0f; Z = 0.0f; W = 120.0f; H = 90.0f }
+      let lengths = collectOrganicInteriorRoadLengths rect [ 123; 321; 777 ]
+      (lengths.Length, 12) |> Expect.isGreaterThanOrEqual "organic district should expose enough interior runs to judge cadence"
+      let bucketCount = roundedLengthBucketCount 2.0f lengths
+      (bucketCount, 3) |> Expect.isGreaterThanOrEqual "organic districts should not collapse into a single repeated run length"
+
+    testCase "organic district interior road cadence avoids metronomic uniformity" <| fun () ->
+      let rect  = { X = 0.0f; Z = 0.0f; W = 120.0f; H = 90.0f }
+      let lengths = collectOrganicInteriorRoadLengths rect [ 123; 321; 777 ]
+      (lengths.Length, 12) |> Expect.isGreaterThanOrEqual "organic district should expose enough interior runs to judge cadence"
+      let variation = coefficientOfVariation lengths
+      (variation, 0.12f)
+      |> Expect.isGreaterThan
+           "organic districts should vary interior run lengths enough to avoid a metronomic street cadence"
+
+    testCase "organic district dominant corridors include bursts and breathing room in side-street spacing" <| fun () ->
+      let rect  = { X = 0.0f; Z = 0.0f; W = 140.0f; H = 110.0f }
+      let metrics = collectOrganicCorridorSpacingMetrics rect [ 123; 321; 777 ]
+      metrics |> Expect.isNonEmpty "organic districts should expose at least one corridor with multiple side-street attachments"
+      let strongest = metrics |> List.maxBy (fun metric -> metric.AttachmentCount, metric.CorridorLength)
+      (strongest.GapRatio, 1.6f)
+      |> Expect.isGreaterThan
+           "organic dominant corridors should show both clustered interruptions and wider breathing room instead of ladder-like spacing"
+
+    testCase "organic district dominant corridor junction gaps avoid near-lattice uniformity" <| fun () ->
+      let rect  = { X = 0.0f; Z = 0.0f; W = 140.0f; H = 110.0f }
+      let metrics = collectOrganicCorridorSpacingMetrics rect [ 123; 321; 777 ]
+      metrics |> Expect.isNonEmpty "organic districts should expose at least one corridor with multiple side-street attachments"
+      let strongest = metrics |> List.maxBy (fun metric -> metric.AttachmentCount, metric.CorridorLength)
+      (strongest.GapCv, 0.22f)
+      |> Expect.isGreaterThan
+           "organic dominant corridors should not space side-street attachments like a nearly uniform ladder"
+
+    testCase "organic district does not collapse into two perpendicular road families" <| fun () ->
+      let rect  = { X = 0.0f; Z = 0.0f; W = 100.0f; H = 80.0f }
+      let funcs = List.init 28 (fun i -> mkFunc (sprintf "family%d" i) "OrganicFamilyMod")
+      let rng   = Random(123)
+      let _, roads = layoutWeberDistrict rect funcs Map.empty (Color(70uy, 130uy, 180uy, 255uy)) 10 100 0.9f rng Map.empty
+      roads |> Expect.isNonEmpty "organic district should produce roads"
+      let histogram = orientationHistogram 15.0f roads
+      let topTwoShare =
+        histogram
+        |> List.truncate 2
+        |> List.sumBy snd
+        |> fun topTwo -> float32 topTwo / float32 roads.Length
+      (topTwoShare, 0.72f)
+      |> Expect.isLessThan
+           "organic districts should not be dominated by only two perpendicular corridor families"
+
+    testCase "organic district includes at least one Y-like junction" <| fun () ->
+      let rect  = { X = 0.0f; Z = 0.0f; W = 100.0f; H = 80.0f }
+      let funcs = List.init 28 (fun i -> mkFunc (sprintf "junction%d" i) "OrganicJunctionMod")
+      let rng   = Random(123)
+      let _, roads = layoutWeberDistrict rect funcs Map.empty (Color(70uy, 130uy, 180uy, 255uy)) 10 100 0.9f rng Map.empty
+      roads |> Expect.isNonEmpty "organic district should produce roads"
+      let minAngles = junctionMinAngles 0.35f roads
+      minAngles |> Expect.isNonEmpty "organic districts should produce multi-road junctions"
+      minAngles
+      |> List.exists (fun angle -> angle < 75.0f)
+      |> Expect.isTrue "organic districts should contain at least one junction that reads as a Y instead of a right-angle cross"
+
+    testCase "organic district junctions are not dominated by right angles" <| fun () ->
+      let rect  = { X = 0.0f; Z = 0.0f; W = 100.0f; H = 80.0f }
+      let funcs = List.init 28 (fun i -> mkFunc (sprintf "ortho%d" i) "OrganicOrthoMod")
+      let rng   = Random(123)
+      let _, roads = layoutWeberDistrict rect funcs Map.empty (Color(70uy, 130uy, 180uy, 255uy)) 10 100 0.9f rng Map.empty
+      roads |> Expect.isNonEmpty "organic district should produce roads"
+      let minAngles = junctionMinAngles 0.35f roads
+      minAngles |> Expect.isNonEmpty "organic districts should produce multi-road junctions"
+      let rightAngleShare =
+        minAngles
+        |> List.filter (fun angle -> angle >= 80.0f && angle <= 100.0f)
+        |> List.length
+        |> fun count -> float32 count / float32 minAngles.Length
+      (rightAngleShare, 0.65f)
+      |> Expect.isLessThan
+           "organic districts should not read like a field of right-angle tees and crosses"
 
     testCase "all Weber buildings stay within block bounds (with tolerance)" <| fun () ->
       let rect  = { X = 5.0f; Z = 3.0f; W = 40.0f; H = 35.0f }
@@ -3251,7 +3786,7 @@ let packAlongRoadsTests =
       let roads = [ mkRoad 5.0f 0.0f 5.0f 24.0f 0.4f ]
       let funcs = List.init 12 (fun i -> mkFunc (sprintf "f%d" i) "MonotonicFrontageMod")
       let bldgs = packAlongRoads roads rect funcs Map.empty (Color(70uy, 130uy, 180uy, 255uy)) (Random 11) Map.empty
-      let orderedNoOverlap buildings =
+      let orderedNoOverlap (buildings: FuncBuilding list) =
         buildings
         |> List.sortBy (fun b -> b.Z)
         |> List.pairwise
@@ -3270,7 +3805,7 @@ let packAlongRoadsTests =
       let funcs = List.init 12 (fun i -> mkFunc (sprintf "f%d" i) "SurfaceMod")
       let bldgs = packAlongRoads roads rect funcs Map.empty (Color(70uy, 130uy, 180uy, 255uy)) (Random 17) Map.empty
       let hull = computeBlockSurfaceHull block bldgs roads
-      hull.Length |> Expect.isGreaterThan "surface hull should have enough points to express frontage shape" 4
+      (hull.Length, 4) |> Expect.isGreaterThan "surface hull should have enough points to express frontage shape"
       hullHasNonAxisEdge hull |> Expect.isTrue "surface hull should retain a diagonal edge family from the road"
       for (x, z) in hull do
         (x, rect.X) |> Expect.isGreaterThanOrEqual "hull point should stay within left bound"

@@ -202,6 +202,9 @@ type FeatureEvent =
   | CellGraph of CellGraphInfo
   | BindingScope of BindingScopeInfo
   | Timeline of TimelineStatsInfo
+  /// Fired when the FSI session warmup context snapshot is available.
+  /// TypeExplorer subscribes to this to refresh namespace/assembly data reactively.
+  | WarmupContextSnapshot
 
 /// Change signals — what the tool window adapter needs to update
 [<RequireQualifiedAccess>]

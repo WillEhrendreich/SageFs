@@ -3,6 +3,8 @@ module SageFs.Tests.CompExprSimplifierTests
 open System
 open Expecto
 
+open SageFs
+open SageFs.AppState
 open SageFs.Middleware.ComputationExpression
 open SageFs.Utils
 
@@ -25,6 +27,29 @@ let rewriteExpr = rewriteCompExpr mockLogger >> Async.RunSynchronously
 
 let ofLines (lines: string seq) =
   String.Join(Environment.NewLine, Seq.toArray lines)
+
+let private makeState () : AppState =
+  {
+    Solution = Unchecked.defaultof<_>
+    OriginalSolution = Unchecked.defaultof<_>
+    ShadowDir = None
+    Logger = mockLogger :> ILogger
+    Session = Unchecked.defaultof<_>
+    OutStream = Unchecked.defaultof<_>
+    StartupConfig = None
+    Custom = Map.empty
+    Diagnostics = Unchecked.defaultof<_>
+    WarmupFailures = []
+    WarmupContext = Unchecked.defaultof<_>
+    HotReloadState = Unchecked.defaultof<_>
+  }
+
+let private passThroughNext : MiddlewareNext =
+  fun (request, st) ->
+    ({ EvaluationResult = Ok request.Code
+       Diagnostics = [||]
+       EvaluatedCode = request.Code
+       Metadata = Map.empty }, st)
 
 [<Tests>]
 let tests =
@@ -140,4 +165,26 @@ else
     do (baba).Run()"""
 
       Expect.equal (rewriteExpr code) exp "let bang rewrite"
+  ]
+
+[<Tests>]
+let middlewareGuardTests =
+  testList "comp expr middleware guards" [
+    testCase "null session skips FSI flag lookup" <| fun _ ->
+      let request = { Code = "let x = 1"; Args = Map.empty }
+      let response, _ = compExprMiddleware passThroughNext (request, makeState ())
+      Expect.equal
+        "middleware should pass through unchanged when there is no live session"
+        request.Code
+        response.EvaluatedCode
+
+    testCase "explicit simplify flag still works with null session" <| fun _ ->
+      let request =
+        { Code = "let! a = 10"
+          Args = Map.ofList [ "simplifyCompExpression", box true ] }
+      let response, _ = compExprMiddleware passThroughNext (request, makeState ())
+      Expect.equal
+        "explicit simplify flag should still rewrite the code"
+        (rewriteExpr request.Code)
+        response.EvaluatedCode
   ]

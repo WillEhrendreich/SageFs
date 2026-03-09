@@ -109,6 +109,9 @@ internal sealed class TestGlyphTaggerProvider : ITaggerProvider
         {
             SseConnectionHub.Initialize(url);
             SseConnectionHub.Subscribe("/events", ev => _tracker.ProcessEvent(ev));
+            // Seed glyphs immediately so they appear on startup rather than only after
+            // the next SSE event (e.g. the next test run).
+            InitialStatePoll.FireAndForget(url, _tracker);
         }
     }
 

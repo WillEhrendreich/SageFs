@@ -2,12 +2,30 @@ module SageFs.Tests.SessionResetTests
 
 open Expecto
 open Expecto.Flip
+open System.IO
 open System.Threading
 open SageFs.AppState
 open SageFs.McpTools
+open SageFs.SessionManager
 open SageFs.Features.Events
 open SageFs.Tests.TestInfrastructure
 open SageFs.WorkerProtocol
+
+[<Tests>]
+let sessionManagerBuildPathTests =
+  testList "SessionManager build path resolution" [
+    testCase "relative project path resolves under working directory" <| fun _ ->
+      let workingDir = @"C:\Code\Repos\SageFs\viz-output\code-city"
+      let project = "CodeCity.fsproj"
+      resolveBuildProjectPath workingDir project
+      |> Expect.equal "relative project should resolve under the session working directory" (Path.Combine(workingDir, project))
+
+    testCase "absolute project path is preserved" <| fun _ ->
+      let workingDir = @"C:\Code\Repos\SageFs"
+      let project = @"C:\Code\Repos\SageFs\viz-output\code-city-tests\CodeCity.Tests.fsproj"
+      resolveBuildProjectPath workingDir project
+      |> Expect.equal "absolute project should not be rewritten" project
+  ]
 
 [<Tests>]
 let sessionResetTests =

@@ -587,8 +587,8 @@ type DistrictPlan =
 
 type MajorStreetGrowthPlan =
   { GrowthCenters: Vec2 list
-     MajorStreets: MajorStreet list
-     QuarterRects: TRect list }
+    MajorStreets: MajorStreet list
+    QuarterRects: TRect list }
 
 type SimulationStage =
   | UpdateTrafficSimulationStage
@@ -4091,6 +4091,197 @@ let alignToMajorAxis (origin: Vec2) (proposed: Vec2) : Vec2 =
   if abs delta.X >= abs delta.Y then Vec2.Create(proposed.X, origin.Y)
   else Vec2.Create(origin.X, proposed.Y)
 
+let private normalizeAngleTau angle =
+  let tau = 2.0f * MathF.PI
+  let normalized = angle % tau
+  if normalized < 0.0f then normalized + tau else normalized
+
+let private directionAngle (dir: Vec2) =
+  normalizeAngleTau (MathF.Atan2(dir.Y, dir.X))
+
+let private directionFromAngle angle =
+  Vec2.Create(MathF.Cos(angle), MathF.Sin(angle))
+
+let private directionDeltaDegrees (a: Vec2) (b: Vec2) =
+  let dot =
+    Vec2.dot (Vec2.normalize a) (Vec2.normalize b)
+    |> max -1.0f
+    |> min 1.0f
+  MathF.Acos(dot) * 180.0f / MathF.PI
+
+let private signedDirectionTurnRadians (fromDir: Vec2) (toDir: Vec2) =
+  let a = Vec2.normalize fromDir
+  let b = Vec2.normalize toDir
+  let cross = a.X * b.Y - a.Y * b.X
+  let dot = Vec2.dot a b |> max -1.0f |> min 1.0f
+  MathF.Atan2(cross, dot)
+
+let private tryGetNodeDriftBias (driftBiasByNode: System.Collections.Generic.Dictionary<int, float32>) (nid: NodeId) =
+  match driftBiasByNode.TryGetValue(NodeId.value nid) with
+  | true, bias -> bias
+  | _ -> 0.0f
+
+let private tryGetNodeLengthFactor (lengthFactorByNode: System.Collections.Generic.Dictionary<int, float32>) (nid: NodeId) =
+  match lengthFactorByNode.TryGetValue(NodeId.value nid) with
+  | true, factor when factor > 0.0f -> factor
+  | _ -> 1.0f
+
+let private tryGetNodeBranchDistance (branchDistanceByNode: System.Collections.Generic.Dictionary<int, float32>) (nid: NodeId) =
+  match branchDistanceByNode.TryGetValue(NodeId.value nid) with
+  | true, distance when distance >= 0.0f -> distance
+  | _ -> 0.0f
+
+let private tryGetNodeBranchTargetFactor (branchTargetFactorByNode: System.Collections.Generic.Dictionary<int, float32>) (nid: NodeId) =
+  match branchTargetFactorByNode.TryGetValue(NodeId.value nid) with
+  | true, factor when factor > 0.0f -> factor
+  | _ -> 1.0f
+
+let private clampOrganicLengthFactor factor =
+  factor
+  |> max 0.78f
+  |> min 1.24f
+
+let private clampOrganicBranchTargetFactor factor =
+  factor
+  |> max 0.62f
+  |> min 1.85f
+
+let private sampleOrganicContinuationLength previousFactor (rng: Random) =
+  let seeded = clampOrganicLengthFactor (0.84f + rng.NextSingle() * 0.32f)
+  if abs (previousFactor - 1.0f) < 0.025f then
+    seeded
+  else
+    let carried = clampOrganicLengthFactor (previousFactor + (rng.NextSingle() - 0.5f) * 0.16f)
+    if rng.NextSingle() < 0.76f then carried else seeded
+
+let private sampleOrganicContinuationTurn previousBias (rng: Random) =
+  let previousSign =
+    if previousBias > 0.04f then 1.0f
+    elif previousBias < -0.04f then -1.0f
+    else 0.0f
+  let turnSign =
+    if previousSign = 0.0f then
+      if rng.NextSingle() < 0.5f then -1.0f else 1.0f
+    elif rng.NextSingle() < 0.78f then previousSign
+    else -previousSign
+  let magnitude = (10.0f + rng.NextSingle() * 8.0f) * MathF.PI / 180.0f
+  let jitter = (rng.NextSingle() - 0.5f) * 0.08f
+  turnSign * magnitude + jitter
+
+let private initializeOrganicBranchDistances
+  (g: WeberGraph)
+  (branchDistanceByNode: System.Collections.Generic.Dictionary<int, float32>)
+  (branchTargetFactorByNode: System.Collections.Generic.Dictionary<int, float32>)
+  (segmentLength: float32)
+  (rng: Random)
+  =
+  g.Nodes
+  |> Seq.iter (fun n ->
+      if n.Growth = Unfinished && not (branchDistanceByNode.ContainsKey(NodeId.value n.Id)) then
+        let seeded =
+          segmentLength * (0.55f + rng.NextSingle() * 0.85f)
+        branchDistanceByNode.[NodeId.value n.Id] <- seeded)
+  g.Nodes
+  |> Seq.iter (fun n ->
+      if n.Growth = Unfinished && not (branchTargetFactorByNode.ContainsKey(NodeId.value n.Id)) then
+        let seeded =
+          clampOrganicBranchTargetFactor (0.68f + rng.NextSingle() * 0.95f)
+        branchTargetFactorByNode.[NodeId.value n.Id] <- seeded)
+
+let private sampleOrganicBranchTargetFactor previousFactor (rng: Random) =
+  let seeded = clampOrganicBranchTargetFactor (0.68f + rng.NextSingle() * 0.95f)
+  if abs (previousFactor - 1.0f) < 0.05f then
+    seeded
+  else
+    let carried = clampOrganicBranchTargetFactor (previousFactor + (rng.NextSingle() - 0.5f) * 0.48f)
+    match rng.NextSingle() < 0.62f with
+    | true -> carried
+    | false -> seeded
+
+let private straightCorridorBias (dirs: Vec2 list) =
+  let hasOpposingPair threshold =
+    dirs
+    |> List.exists (fun dirA ->
+        dirs
+        |> List.exists (fun dirB ->
+            not (obj.ReferenceEquals(dirA, dirB))
+            && directionDeltaDegrees dirA (Vec2.negate dirB) <= threshold))
+  match dirs.Length with
+  | 2 when hasOpposingPair 18.0f -> 1.18f
+  | 3 when hasOpposingPair 24.0f -> 1.12f
+  | _ -> 1.0f
+
+let private sampleOrganicNode
+  (g: WeberGraph)
+  (centers: Vec2[])
+  (focus: float32)
+  (rng: Random)
+  (minTier: int)
+  (segmentLength: float32)
+  (branchDistanceByNode: System.Collections.Generic.Dictionary<int, float32>)
+  (branchTargetFactorByNode: System.Collections.Generic.Dictionary<int, float32>)
+  : NodeId option =
+  let candidates = ResizeArray<NodeId>()
+  let weights = ResizeArray<float32>()
+  for n in g.Nodes do
+    if n.Growth = Unfinished && n.Valence < 4 && RoadClass.tier n.Class >= minTier then
+      let minDistSq =
+        centers |> Array.map (fun c -> Vec2.distanceToSq n.Pos c) |> Array.min
+      let baseWeight = exp(-float (focus * minDistSq)) |> float32
+      let spacingBias =
+        match n.Valence with
+        | 0 -> 1.0f
+        | 1 -> 1.08f
+        | 2
+        | 3 ->
+            let branchDistance = tryGetNodeBranchDistance branchDistanceByNode n.Id
+            let targetDistance =
+              segmentLength * tryGetNodeBranchTargetFactor branchTargetFactorByNode n.Id
+              |> max 1.0f
+            let readiness =
+              branchDistance / targetDistance
+              |> max 0.10f
+              |> min 1.65f
+            readiness * straightCorridorBias (g.OutgoingDirs n.Id)
+        | _ -> 0.0f
+      let weight = baseWeight * spacingBias
+      if weight > 0.0f then
+        candidates.Add(n.Id)
+        weights.Add(weight)
+  if candidates.Count = 0 then None
+  else
+    let total = weights |> Seq.sum
+    let mutable r = rng.NextSingle() * total
+    let mutable i = 0
+    while i < weights.Count - 1 && r > weights.[i] do
+      r <- r - weights.[i]
+      i <- i + 1
+    Some candidates.[i]
+
+let private gapDirectedExpansion (dirs: Vec2 list) (rng: Random) =
+  let angles = dirs |> List.map directionAngle |> List.sort
+  let gaps =
+    [ for i in 0 .. angles.Length - 1 do
+        let startAngle = angles.[i]
+        let endAngle =
+          if i < angles.Length - 1 then angles.[i + 1]
+          else angles.[0] + 2.0f * MathF.PI
+        startAngle, endAngle - startAngle ]
+    |> List.sortByDescending snd
+  match gaps with
+  | [] -> None
+  | (startAngle, gapSize) :: remaining ->
+      let nearMaxThreshold = gapSize * 0.9f
+      let candidates =
+        (startAngle, gapSize)
+        :: (remaining |> List.takeWhile (fun (_, candidateGap) -> candidateGap >= nearMaxThreshold))
+      let chosenStart, chosenGap = candidates.[rng.Next(List.length candidates)]
+      let skew = 0.32f + rng.NextSingle() * 0.36f
+      let jitter = (rng.NextSingle() - 0.5f) * min 0.18f (chosenGap * 0.12f)
+      directionFromAngle (chosenStart + chosenGap * skew + jitter)
+      |> Vec2.normalize
+      |> Some
+
 let clipProposalToBounds (rect: TRect) (origin: Vec2) (proposed: Vec2) : Vec2 =
   let clampX value = max rect.X (min (rect.X + rect.W) value)
   let clampZ value = max rect.Z (min (rect.Z + rect.H) value)
@@ -4373,6 +4564,41 @@ let adaptSnapping (g: WeberGraph) (proposed: Vec2) (snapR: float32) (exclude: No
         bestId <- Some n.Id
   bestId
 
+let private chooseOrganicSnapTarget (g: WeberGraph) (originId: NodeId) (origin: Vec2) (proposed: Vec2) (snapR: float32) : NodeId option =
+  let proposedDelta = Vec2.sub proposed origin
+  if Vec2.lengthSq proposedDelta < 1e-6f then
+    None
+  else
+    let proposedDir = Vec2.normalize proposedDelta
+    let existingDirs = g.OutgoingDirs(originId)
+    let headingThreshold = 35.0f
+    let duplicateAngleThreshold = 18.0f
+    let shortArmThreshold = max 2.0f (Vec2.length proposedDelta * 0.55f)
+    g.Nodes
+    |> Seq.choose (fun n ->
+      if n.Id = originId then
+        None
+      else
+        let delta = Vec2.sub n.Pos origin
+        let distSq = Vec2.lengthSq delta
+        if distSq >= snapR * snapR || distSq < 1e-6f then
+          None
+        else
+          let snapDir = Vec2.normalize delta
+          let headingDelta = directionDeltaDegrees proposedDir snapDir
+          let duplicateShortArm =
+            distSq <= shortArmThreshold * shortArmThreshold
+            && existingDirs |> List.exists (fun existingDir -> directionDeltaDegrees snapDir existingDir <= duplicateAngleThreshold)
+          if headingDelta > headingThreshold || duplicateShortArm then
+            None
+          else
+            let dist = sqrt distSq
+            let score = dist + headingDelta * (snapR / 60.0f)
+            Some (score, n.Id))
+    |> Seq.sortBy fst
+    |> Seq.tryHead
+    |> Option.map snd
+
 /// Sample an unfinished node weighted by distance to growth centers.
 /// P(node[i]) ∝ exp(-f · ‖pos - center‖²)  (Paper §3.1)
 let sampleNode (g: WeberGraph) (centers: Vec2[]) (focus: float32) (rng: Random) (minTier: int) : NodeId option =
@@ -4397,46 +4623,91 @@ let sampleNode (g: WeberGraph) (centers: Vec2[]) (focus: float32) (rng: Random) 
 
 /// Expand from a node: generate proposed segment endpoint.
 /// Direction by valence (Paper §3.1, Figure 5), pattern = grid or organic.
-let expandNode (g: WeberGraph) (nid: NodeId) (rng: Random) (isGrid: bool) (length: float32) : Vec2 option =
+let expandNode
+  (g: WeberGraph)
+  (driftBiasByNode: System.Collections.Generic.Dictionary<int, float32>)
+  (lengthFactorByNode: System.Collections.Generic.Dictionary<int, float32>)
+  (nid: NodeId)
+  (rng: Random)
+  (isGrid: bool)
+  (length: float32)
+  : (Vec2 * float32 * float32) option =
   let n = g.N nid
   let dirs = g.OutgoingDirs(nid)
   match n.Valence with
   | 0 ->
     let angle = rng.NextSingle() * MathF.PI * 2.0f
-    Some (Vec2.add n.Pos (Vec2.scale length (Vec2.Create(MathF.Cos(angle), MathF.Sin(angle)))))
+    let lengthFactor =
+      if isGrid then 1.0f
+      else sampleOrganicContinuationLength 1.0f rng
+    Some (Vec2.add n.Pos (Vec2.scale (length * lengthFactor) (Vec2.Create(MathF.Cos(angle), MathF.Sin(angle)))), 0.0f, lengthFactor)
   | 1 ->
-    // Valence 1: expand straight (with organic deviation if not grid)
+    // Valence 1: continue forward with a persistent organic drift rather than ruler-straight extensions.
     let opposite = Vec2.negate dirs.[0]
-    let dev = if isGrid then 0.0f else (rng.NextSingle() - 0.5f) * 0.42f
+    let lengthFactor =
+      if isGrid then 1.0f
+      else sampleOrganicContinuationLength (tryGetNodeLengthFactor lengthFactorByNode nid) rng
+    let dev =
+      if isGrid then 0.0f
+      else sampleOrganicContinuationTurn (tryGetNodeDriftBias driftBiasByNode nid) rng
     let cos = MathF.Cos(dev)
     let sin = MathF.Sin(dev)
     let rotated = Vec2.Create(opposite.X * cos - opposite.Y * sin, opposite.X * sin + opposite.Y * cos)
-    Some (Vec2.add n.Pos (Vec2.scale length rotated))
+    Some (Vec2.add n.Pos (Vec2.scale (length * lengthFactor) rotated), dev, lengthFactor)
   | 2 ->
     // Valence 2: turn left or right
     let dot = dirs |> List.pairwise |> List.tryHead |> Option.map (fun (a, b) -> a.X * b.X + a.Y * b.Y) |> Option.defaultValue 0.0f
-    let baseDir =
+    let referenceDir =
       if dot < -0.85f then dirs.[0]
       else Vec2.negate (Vec2.normalize (Vec2.add dirs.[0] dirs.[1]))
-    let perp =
-      if rng.NextSingle() < 0.5f then Vec2.Create(-baseDir.Y, baseDir.X)
-      else Vec2.Create(baseDir.Y, -baseDir.X)
-    let dev = if isGrid then 0.0f else (rng.NextSingle() - 0.5f) * 0.3f
-    let cos = MathF.Cos(dev)
-    let sin = MathF.Sin(dev)
-    let rotated = Vec2.Create(perp.X * cos - perp.Y * sin, perp.X * sin + perp.Y * cos)
-    Some (Vec2.add n.Pos (Vec2.scale length rotated))
+    let lengthFactor =
+      if isGrid then 1.0f
+      else sampleOrganicContinuationLength (tryGetNodeLengthFactor lengthFactorByNode nid) rng
+    let nextDir =
+      if isGrid then
+        let baseDir = referenceDir
+        let perp =
+          if rng.NextSingle() < 0.5f then Vec2.Create(-baseDir.Y, baseDir.X)
+          else Vec2.Create(baseDir.Y, -baseDir.X)
+        let dev = 0.0f
+        let cos = MathF.Cos(dev)
+        let sin = MathF.Sin(dev)
+        Vec2.Create(perp.X * cos - perp.Y * sin, perp.X * sin + perp.Y * cos)
+      else
+        match gapDirectedExpansion dirs rng with
+        | Some dir -> dir
+        | None ->
+            let baseDir = referenceDir
+            let perp =
+              if rng.NextSingle() < 0.5f then Vec2.Create(-baseDir.Y, baseDir.X)
+              else Vec2.Create(baseDir.Y, -baseDir.X)
+            let dev = (rng.NextSingle() - 0.5f) * 0.3f
+            let cos = MathF.Cos(dev)
+            let sin = MathF.Sin(dev)
+            Vec2.Create(perp.X * cos - perp.Y * sin, perp.X * sin + perp.Y * cos)
+    let driftBias =
+      if isGrid then 0.0f
+      else signedDirectionTurnRadians referenceDir nextDir
+    Some (Vec2.add n.Pos (Vec2.scale (length * lengthFactor) nextDir), driftBias, lengthFactor)
   | 3 ->
     // Valence 3: find largest angular gap, bisect it
-    let angles = dirs |> List.map (fun d -> atan2 d.Y d.X) |> List.sort
-    let gaps =
-      [ for i in 0 .. angles.Length - 1 do
-          let a1 = angles.[i]
-          let a2 = if i < angles.Length - 1 then angles.[i + 1] else angles.[0] + 2.0f * MathF.PI
-          (a2 - a1, a1 + (a2 - a1) / 2.0f) ]
-    let (_, bisect) = gaps |> List.maxBy fst
-    let dir = Vec2.Create(MathF.Cos(bisect), MathF.Sin(bisect))
-    Some (Vec2.add n.Pos (Vec2.scale length dir))
+    let lengthFactor =
+      if isGrid then 1.0f
+      else sampleOrganicContinuationLength (tryGetNodeLengthFactor lengthFactorByNode nid) rng
+    let dir =
+      if isGrid then
+        let angles = dirs |> List.map (fun d -> atan2 d.Y d.X) |> List.sort
+        let gaps =
+          [ for i in 0 .. angles.Length - 1 do
+              let a1 = angles.[i]
+              let a2 = if i < angles.Length - 1 then angles.[i + 1] else angles.[0] + 2.0f * MathF.PI
+              (a2 - a1, a1 + (a2 - a1) / 2.0f) ]
+        let (_, bisect) = gaps |> List.maxBy fst
+        Vec2.Create(MathF.Cos(bisect), MathF.Sin(bisect))
+      else
+        gapDirectedExpansion dirs rng
+        |> Option.defaultValue (Vec2.negate (Vec2.normalize (dirs |> List.reduce Vec2.add)))
+    Some (Vec2.add n.Pos (Vec2.scale (length * lengthFactor) dir), tryGetNodeDriftBias driftBiasByNode nid, lengthFactor)
   | _ -> None // valence >= 4: finished
 
 /// The main Weber street growth loop (Paper §3, Table 2).
@@ -4447,64 +4718,134 @@ let growStreets
   (length: float32) (snapR: float32) (sMin: float32)
   (maxEdges: int) (focus: float32) (bounds: TRect option) =
   let minTier = RoadClass.tier cls
+  let driftBiasByNode = System.Collections.Generic.Dictionary<int, float32>()
+  let lengthFactorByNode = System.Collections.Generic.Dictionary<int, float32>()
+  let branchDistanceByNode = System.Collections.Generic.Dictionary<int, float32>()
+  let branchTargetFactorByNode = System.Collections.Generic.Dictionary<int, float32>()
+  if not isGrid then
+    initializeOrganicBranchDistances g branchDistanceByNode branchTargetFactorByNode length rng
   let mutable added = 0
   let mutable stuck = 0
   while added < maxEdges && stuck < 80 do
-    match sampleNode g centers focus rng minTier with
+    let candidate =
+      if isGrid then sampleNode g centers focus rng minTier
+      else sampleOrganicNode g centers focus rng minTier length branchDistanceByNode branchTargetFactorByNode
+    match candidate with
     | None -> stuck <- stuck + 1
     | Some nid ->
-      match expandNode g nid rng isGrid length with
+      let priorValence = (g.N nid).Valence
+      let parentBranchDistance =
+        if isGrid then 0.0f else tryGetNodeBranchDistance branchDistanceByNode nid
+      let parentBranchTargetFactor =
+        if isGrid then 1.0f else tryGetNodeBranchTargetFactor branchTargetFactorByNode nid
+      match expandNode g driftBiasByNode lengthFactorByNode nid rng isGrid length with
       | None ->
-        g.MarkFinished(nid)
-        stuck <- stuck + 1
-      | Some proposed0 ->
-        let origin = (g.N(nid).Pos)
-        let proposed1 =
-          if isGrid then alignToMajorAxis (g.N(nid).Pos) proposed0
-          else proposed0
-        let proposed =
-          match bounds with
-          | Some rect -> clipProposalToBounds rect (g.N(nid).Pos) proposed1
-          | None -> proposed1
-        // Apply legality tests in sequence (Paper §3.1, Figure 6), but make crossings topologically real.
-        match findClosestIntersection g origin proposed with
-        | HitNode existingId ->
-            let segLen = Vec2.distanceTo origin (g.N existingId).Pos
-            if segLen < sMin then
-              g.MarkFinished(nid)
-              stuck <- stuck + 1
-            else
-              g.AddEdge(nid, existingId, cls, RoadClass.width cls) |> ignore
-              added <- added + 1
-              stuck <- 0
-        | HitEdgeInterior (edgeId, pt, _) ->
-            let segLen = Vec2.distanceTo origin pt
-            if segLen < sMin then
-              g.MarkFinished(nid)
-              stuck <- stuck + 1
-            else
-              let splitNode = g.SplitEdge(edgeId, pt)
-              g.AddEdge(nid, splitNode, cls, RoadClass.width cls) |> ignore
-              added <- added + 1
-              stuck <- 0
-        | NoIntersection ->
-            let p2 = adaptEnlargement g origin proposed
-            let segLen = Vec2.distanceTo origin p2
-            if segLen < sMin then
-              g.MarkFinished(nid)
-              stuck <- stuck + 1
-            else
-              match adaptSnapping g p2 snapR nid with
-              | Some existingId ->
-                // Snap! Creates T-junction or crossroad
+          g.MarkFinished(nid)
+          stuck <- stuck + 1
+      | Some (proposed0, driftBias, lengthFactor) ->
+          let origin = (g.N(nid).Pos)
+          let proposed1 =
+            if isGrid then alignToMajorAxis (g.N(nid).Pos) proposed0
+            else proposed0
+          let proposed =
+            match bounds with
+            | Some rect -> clipProposalToBounds rect (g.N(nid).Pos) proposed1
+            | None -> proposed1
+          // Apply legality tests in sequence (Paper §3.1, Figure 6), but make crossings topologically real.
+          match findClosestIntersection g origin proposed with
+          | HitNode existingId ->
+              let segLen = Vec2.distanceTo origin (g.N existingId).Pos
+              let branchDistance =
+                if isGrid then 0.0f
+                elif priorValence <= 1 then parentBranchDistance + segLen
+                else 0.0f
+              let branchTargetFactor =
+                if isGrid then 1.0f
+                elif priorValence <= 1 then parentBranchTargetFactor
+                else sampleOrganicBranchTargetFactor parentBranchTargetFactor rng
+              if segLen < sMin then
+                g.MarkFinished(nid)
+                stuck <- stuck + 1
+              else
+                if not isGrid then
+                  branchDistanceByNode.[NodeId.value nid] <- branchDistance
+                  branchTargetFactorByNode.[NodeId.value nid] <- branchTargetFactor
+                  branchDistanceByNode.[NodeId.value existingId] <-
+                    max branchDistance (tryGetNodeBranchDistance branchDistanceByNode existingId)
+                  branchTargetFactorByNode.[NodeId.value existingId] <- branchTargetFactor
                 g.AddEdge(nid, existingId, cls, RoadClass.width cls) |> ignore
                 added <- added + 1
                 stuck <- 0
-              | None ->
-                let newId = g.AddNode(p2, cls)
-                g.AddEdge(nid, newId, cls, RoadClass.width cls) |> ignore
+          | HitEdgeInterior (edgeId, pt, _) ->
+              let segLen = Vec2.distanceTo origin pt
+              let branchDistance =
+                if isGrid then 0.0f
+                elif priorValence <= 1 then parentBranchDistance + segLen
+                else 0.0f
+              let branchTargetFactor =
+                if isGrid then 1.0f
+                elif priorValence <= 1 then parentBranchTargetFactor
+                else sampleOrganicBranchTargetFactor parentBranchTargetFactor rng
+              if segLen < sMin then
+                g.MarkFinished(nid)
+                stuck <- stuck + 1
+              else
+                let splitNode = g.SplitEdge(edgeId, pt)
+                if not isGrid && abs driftBias > 0.04f then
+                  driftBiasByNode.[NodeId.value splitNode] <- driftBias
+                if not isGrid then
+                  lengthFactorByNode.[NodeId.value splitNode] <- lengthFactor
+                  branchDistanceByNode.[NodeId.value nid] <- branchDistance
+                  branchTargetFactorByNode.[NodeId.value nid] <- branchTargetFactor
+                  branchDistanceByNode.[NodeId.value splitNode] <-
+                    max branchDistance (tryGetNodeBranchDistance branchDistanceByNode splitNode)
+                  branchTargetFactorByNode.[NodeId.value splitNode] <- branchTargetFactor
+                g.AddEdge(nid, splitNode, cls, RoadClass.width cls) |> ignore
                 added <- added + 1
                 stuck <- 0
+          | NoIntersection ->
+              let p2 = adaptEnlargement g origin proposed
+              let segLen = Vec2.distanceTo origin p2
+              let branchDistance =
+                if isGrid then 0.0f
+                elif priorValence <= 1 then parentBranchDistance + segLen
+                else 0.0f
+              let branchTargetFactor =
+                if isGrid then 1.0f
+                elif priorValence <= 1 then parentBranchTargetFactor
+                else sampleOrganicBranchTargetFactor parentBranchTargetFactor rng
+              if segLen < sMin then
+                g.MarkFinished(nid)
+                stuck <- stuck + 1
+              else
+                let snapTarget =
+                  if isGrid then adaptSnapping g p2 snapR nid
+                  else chooseOrganicSnapTarget g nid origin p2 snapR
+                match snapTarget with
+                | Some existingId ->
+                    // Snap! Creates T-junction or crossroad
+                    if not isGrid then
+                      branchDistanceByNode.[NodeId.value nid] <- branchDistance
+                      branchTargetFactorByNode.[NodeId.value nid] <- branchTargetFactor
+                      branchDistanceByNode.[NodeId.value existingId] <-
+                        max branchDistance (tryGetNodeBranchDistance branchDistanceByNode existingId)
+                      branchTargetFactorByNode.[NodeId.value existingId] <- branchTargetFactor
+                    g.AddEdge(nid, existingId, cls, RoadClass.width cls) |> ignore
+                    added <- added + 1
+                    stuck <- 0
+                | None ->
+                    let newId = g.AddNode(p2, cls)
+                    if not isGrid && abs driftBias > 0.04f then
+                      driftBiasByNode.[NodeId.value newId] <- driftBias
+                    if not isGrid then
+                      lengthFactorByNode.[NodeId.value newId] <- lengthFactor
+                      branchDistanceByNode.[NodeId.value nid] <- branchDistance
+                      branchTargetFactorByNode.[NodeId.value nid] <- branchTargetFactor
+                      branchDistanceByNode.[NodeId.value newId] <- branchDistance
+                      branchTargetFactorByNode.[NodeId.value newId] <- branchTargetFactor
+                    g.AddEdge(nid, newId, cls, RoadClass.width cls) |> ignore
+                    added <- added + 1
+                    stuck <- 0
 
 let private buildMajorStreetGrowth (rect: TRect) (moduleDemand: int) (organic: float32) (rng: Random) =
   if rect.W < 8.0f || rect.H < 8.0f || moduleDemand <= 0 then
@@ -4524,13 +4865,23 @@ let private buildMajorStreetGrowth (rect: TRect) (moduleDemand: int) (organic: f
       | true -> seedGridMajorStreetGrowthGraph rect
       | false -> seedOrganicMajorStreetGrowthGraph rect rng
     growStreets g centers rng Avenue isGrid segmentLength snapRadius minSegmentLength maxEdges focus (Some rect)
+    if not isGrid then
+      let streetLength = max 3.8f (segmentLength * 0.68f)
+      let streetSnapRadius = max 1.35f (streetLength * 0.52f)
+      let streetMinSegmentLength = max 1.2f (streetLength * 0.34f)
+      let streetEdges = max 4 (moduleDemand + 1)
+      let streetFocus = focus * 1.18f
+      growStreets g centers rng Street false streetLength streetSnapRadius streetMinSegmentLength streetEdges streetFocus (Some rect)
 
     let majorStreets =
       g.Edges
       |> Seq.filter (fun edge ->
-        let a = (g.N edge.A).Pos
-        let b = (g.N edge.B).Pos
-        not (isBoundaryPoint rect a && isBoundaryPoint rect b))
+          if edge.Class <> Avenue then
+            false
+          else
+            let a = (g.N edge.A).Pos
+            let b = (g.N edge.B).Pos
+            not (isBoundaryPoint rect a && isBoundaryPoint rect b))
       |> Seq.map (fun edge -> MajorStreet.planned (edgeToCorridorRect g edge))
       |> Seq.filter (fun street -> street.Segment.W > 0.5f && street.Segment.H > 0.5f)
       |> Seq.toList
@@ -4759,32 +5110,41 @@ let private frontageBaseDepth roadClass =
 let private frontageSetback roadClass buildingType =
   let roadOffset =
     match roadClass with
-    | Boulevard -> 0.95f
-    | Avenue -> 0.72f
-    | Street -> 0.55f
-    | Lane -> 0.42f
-    | Alley -> 0.32f
+    | Boulevard -> 0.58f
+    | Avenue -> 0.46f
+    | Street -> 0.34f
+    | Lane -> 0.24f
+    | Alley -> 0.18f
   let typeOffset =
     match buildingType with
-    | Shed | Cottage -> 0.18f
-    | Rowhouse -> 0.10f
-    | Commercial -> 0.02f
+    | Shed | Cottage -> 0.12f
+    | Rowhouse -> 0.08f
+    | Commercial -> 0.04f
     | Tower -> 0.0f
-    | Skyscraper -> -0.05f
+    | Skyscraper -> -0.03f
   max 0.18f (roadOffset + typeOffset)
+
+/// Scale building footprint by cyclomatic complexity.
+/// Returns a multiplier >= 1.0 so more complex functions read slightly larger.
+let complexityFootprintFactor (complexity: int) : float32 =
+  1.0f + MathF.Log(float32 complexity + 1.0f) * 0.15f
 
 let private frontageFootprint roadClass buildingType parcelWidth complexity =
   let baseWidth, depthScale =
     match buildingType with
-    | Shed -> max 0.45f (parcelWidth * 0.55f), 0.68f
-    | Cottage -> max 0.55f (parcelWidth * 0.62f), 0.88f
-    | Rowhouse -> max 0.42f (parcelWidth * 0.46f), 1.18f
-    | Commercial -> max 0.70f (parcelWidth * 0.78f), 0.96f
-    | Tower -> max 0.78f (parcelWidth * 0.72f), 1.08f
-    | Skyscraper -> max 0.90f (parcelWidth * 0.82f), 1.20f
-  let complexityScale = complexityFootprintFactor complexity |> min 1.25f
-  let widthAlongRoad = baseWidth * complexityScale
-  let depth = max 0.55f (frontageBaseDepth roadClass * depthScale * min 1.20f complexityScale)
+    | Shed -> max 0.58f (parcelWidth * 0.78f), 0.54f
+    | Cottage -> max 0.72f (parcelWidth * 0.84f), 0.62f
+    | Rowhouse -> max 0.70f (parcelWidth * 0.80f), 0.72f
+    | Commercial -> max 0.82f (parcelWidth * 0.86f), 0.76f
+    | Tower -> max 0.90f (parcelWidth * 0.84f), 0.82f
+    | Skyscraper -> max 0.98f (parcelWidth * 0.88f), 0.88f
+  let complexityScale = complexityFootprintFactor complexity |> min 1.18f
+  let widthAlongRoad =
+    min (parcelWidth * 0.96f) (baseWidth * complexityScale)
+    |> max 0.55f
+  let depth =
+    min (parcelWidth * 0.72f) (frontageBaseDepth roadClass * depthScale * min 1.08f complexityScale)
+    |> max 0.45f
   widthAlongRoad, depth
 
 let private orientedBounds width depth angleDegrees =
@@ -4909,12 +5269,6 @@ let distanceToPoly (poly: Vec2 list) (px: float32) (pz: float32) : float32 =
     let dist = sqrt ((px - nearX) * (px - nearX) + (pz - nearZ) * (pz - nearZ))
     if dist < minDist then minDist <- dist
   minDist
-
-/// Scale building footprint by cyclomatic complexity.
-/// Returns a multiplier ≥1.0 — more complex functions get slightly larger footprints.
-/// complexity=0 → 1.0f, complexity=10 → ~1.36f, complexity=50 → ~1.58f
-let complexityFootprintFactor (complexity: int) : float32 =
-  1.0f + MathF.Log(float32 complexity + 1.0f) * 0.15f
 
 let placeBuildingsInLots
   (lots: PlannedLot list)
@@ -6208,12 +6562,12 @@ let buildStaticMesh (buildings: FuncBuilding[]) (blocks: ModuleBlock[]) (cityExt
 
       )
 
-  let hullEdgeCount hull =
+  let hullEdgeCount (hull: (float32 * float32) list) =
     match hull.Length < 2 with
     | true -> 0
     | false -> hull.Length
 
-  let hullFillVerts hull =
+  let hullFillVerts (hull: (float32 * float32) list) =
     max 0 (hull.Length - 2) * 6
 
   // Vertex counts per layer:

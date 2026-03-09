@@ -7,6 +7,29 @@ open SageFs.FileWatcher
 open SageFs.AppState
 open SageFs.Middleware.HotReloading
 
+let private makeState () : AppState =
+  {
+    Solution = Unchecked.defaultof<_>
+    OriginalSolution = Unchecked.defaultof<_>
+    ShadowDir = None
+    Logger = Unchecked.defaultof<_>
+    Session = Unchecked.defaultof<_>
+    OutStream = Unchecked.defaultof<_>
+    StartupConfig = None
+    Custom = Map.empty
+    Diagnostics = Unchecked.defaultof<_>
+    WarmupFailures = []
+    WarmupContext = Unchecked.defaultof<_>
+    HotReloadState = Unchecked.defaultof<_>
+  }
+
+let private passThroughNext : MiddlewareNext =
+  fun (request, st) ->
+    ({ EvaluationResult = Ok "ok"
+       Diagnostics = [||]
+       EvaluatedCode = request.Code
+       Metadata = Map.empty }, st)
+
 /// Tests that LoadScript EvalRequests carry the correct hot reload flag,
 /// ensuring the Harmony method-detouring middleware fires on file reloads.
 let hotReloadArgTests =
@@ -190,6 +213,15 @@ let watchConfigTests =
           System.IO.Path.DirectorySeparatorChar
       shouldTriggerRebuild config binPath
       |> Flip.Expect.isFalse "should reject bin path"
+  ]
+
+let middlewareGuardTests =
+  testList "hot reload middleware guards" [
+    testCase "null session skips flag lookup and post-eval bookkeeping" <| fun () ->
+      let request = { Code = "let x = 1"; Args = Map.empty }
+      let response, _ = hotReloadingMiddleware passThroughNext (request, makeState ())
+      response.EvaluatedCode
+      |> Flip.Expect.equal "middleware should still forward the injected request without crashing" (injectNoInlining request.Code)
   ]
 
 /// Tests that mkReloadingState registers NuGet package directories
@@ -649,6 +681,7 @@ let allHotReloadTests =
     noWatchFlagTests
     reloadToDetourCycleTests
     watchConfigTests
+    middlewareGuardTests
     testSequenced (testList "assembly search paths (sequenced)" [
       assemblySearchPathTests
       versionAwareResolutionTests

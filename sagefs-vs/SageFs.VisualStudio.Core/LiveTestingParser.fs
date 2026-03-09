@@ -271,5 +271,6 @@ module LiveTestingParser =
       | "cell_dependencies" -> Some (FeatureEvent.CellGraph (parseCellGraph root))
       | "binding_scope_map" -> Some (FeatureEvent.BindingScope (parseBindingScope root))
       | "eval_timeline" -> Some (FeatureEvent.Timeline (parseTimeline root))
+      | "warmup_context_snapshot" -> Some FeatureEvent.WarmupContextSnapshot
       | _ -> None
     with _ -> None

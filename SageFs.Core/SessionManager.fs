@@ -2,6 +2,7 @@ namespace SageFs
 
 open System
 open System.Diagnostics
+open System.IO
 open System.Threading
 open SageFs.WorkerProtocol
 open SageFs.Utils
@@ -312,12 +313,18 @@ module SessionManager =
   /// Run `dotnet build` for the primary project.
   /// Called from the daemon process (worker is already stopped).
   /// Async so we don't block the MailboxProcessor during build.
+  let resolveBuildProjectPath (workingDir: string) (projFile: string) =
+    match Path.IsPathRooted projFile with
+    | true -> projFile
+    | false -> Path.Combine(workingDir, projFile)
+
   let runBuildAsync (projects: string list) (workingDir: string) : Async<Result<string, string>> =
     async {
       let primaryProject = projects |> List.tryHead
       match primaryProject with
       | None -> return Ok "No projects to build"
       | Some projFile ->
+        let buildProject = resolveBuildProjectPath workingDir projFile
         let psi = ProcessStartInfo(
           "dotnet",
           RedirectStandardOutput = true,
@@ -325,7 +332,7 @@ module SessionManager =
           UseShellExecute = false,
           WorkingDirectory = workingDir)
         psi.ArgumentList.Add("build")
-        psi.ArgumentList.Add(projFile)
+        psi.ArgumentList.Add(buildProject)
         psi.ArgumentList.Add("--no-restore")
         psi.ArgumentList.Add("--no-incremental")
         let proc = Process.Start(psi)
