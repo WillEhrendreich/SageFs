@@ -10,7 +10,7 @@ open System.Threading
 type BatchFlusher<'T>(maxBatchSize: int, flushIntervalMs: int, onFlush: 'T array -> unit) =
   let buffer = ConcurrentQueue<'T>()
   let flushLock = obj()
-  let mutable disposed = false
+  let mutable disposed = 0 // Interlocked: 0=active, 1=disposed
 
   let doFlush () =
     lock flushLock (fun () ->
@@ -31,13 +31,13 @@ type BatchFlusher<'T>(maxBatchSize: int, flushIntervalMs: int, onFlush: 'T array
     | false -> None
 
   member _.Add(item: 'T) =
-    match disposed with
-    | true -> ()
-    | false ->
+    match Volatile.Read(&disposed) with
+    | 0 ->
       buffer.Enqueue(item)
       match buffer.Count >= maxBatchSize with
       | true -> doFlush()
       | false -> ()
+    | _ -> ()
 
   member _.Flush() = doFlush()
 
@@ -45,11 +45,10 @@ type BatchFlusher<'T>(maxBatchSize: int, flushIntervalMs: int, onFlush: 'T array
 
   interface IDisposable with
     member _.Dispose() =
-      match disposed with
-      | true -> ()
-      | false ->
-        disposed <- true
+      match Interlocked.Exchange(&disposed, 1) with
+      | 0 ->
         match timer with
         | Some t -> t.Dispose()
         | None -> ()
         doFlush()
+      | _ -> () // already disposed
