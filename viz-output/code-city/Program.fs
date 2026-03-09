@@ -4240,9 +4240,14 @@ let private sampleOrganicNode
               |> max 1.0f
             let readiness =
               branchDistance / targetDistance
-              |> max 0.10f
-              |> min 1.65f
-            readiness * straightCorridorBias (g.OutgoingDirs n.Id)
+              |> max 0.0f
+              |> min 2.0f
+            let spacingBias =
+              if readiness < 0.92f then
+                0.02f + readiness * readiness * 0.08f
+              else
+                min 2.4f (0.45f + (readiness - 0.92f) * 2.8f)
+            spacingBias * straightCorridorBias (g.OutgoingDirs n.Id)
         | _ -> 0.0f
       let weight = baseWeight * spacingBias
       if weight > 0.0f then
@@ -4738,6 +4743,7 @@ let growStreets
         if isGrid then 0.0f else tryGetNodeBranchDistance branchDistanceByNode nid
       let parentBranchTargetFactor =
         if isGrid then 1.0f else tryGetNodeBranchTargetFactor branchTargetFactorByNode nid
+      let isContinuation = priorValence <= 1
       match expandNode g driftBiasByNode lengthFactorByNode nid rng isGrid length with
       | None ->
           g.MarkFinished(nid)
@@ -4757,11 +4763,11 @@ let growStreets
               let segLen = Vec2.distanceTo origin (g.N existingId).Pos
               let branchDistance =
                 if isGrid then 0.0f
-                elif priorValence <= 1 then parentBranchDistance + segLen
+                elif isContinuation then parentBranchDistance + segLen
                 else 0.0f
               let branchTargetFactor =
                 if isGrid then 1.0f
-                elif priorValence <= 1 then parentBranchTargetFactor
+                elif isContinuation then parentBranchTargetFactor
                 else sampleOrganicBranchTargetFactor parentBranchTargetFactor rng
               if segLen < sMin then
                 g.MarkFinished(nid)
@@ -4770,9 +4776,9 @@ let growStreets
                 if not isGrid then
                   branchDistanceByNode.[NodeId.value nid] <- branchDistance
                   branchTargetFactorByNode.[NodeId.value nid] <- branchTargetFactor
-                  branchDistanceByNode.[NodeId.value existingId] <-
-                    max branchDistance (tryGetNodeBranchDistance branchDistanceByNode existingId)
-                  branchTargetFactorByNode.[NodeId.value existingId] <- branchTargetFactor
+                  branchDistanceByNode.[NodeId.value existingId] <- 0.0f
+                  branchTargetFactorByNode.[NodeId.value existingId] <-
+                    sampleOrganicBranchTargetFactor branchTargetFactor rng
                 g.AddEdge(nid, existingId, cls, RoadClass.width cls) |> ignore
                 added <- added + 1
                 stuck <- 0
@@ -4780,11 +4786,11 @@ let growStreets
               let segLen = Vec2.distanceTo origin pt
               let branchDistance =
                 if isGrid then 0.0f
-                elif priorValence <= 1 then parentBranchDistance + segLen
+                elif isContinuation then parentBranchDistance + segLen
                 else 0.0f
               let branchTargetFactor =
                 if isGrid then 1.0f
-                elif priorValence <= 1 then parentBranchTargetFactor
+                elif isContinuation then parentBranchTargetFactor
                 else sampleOrganicBranchTargetFactor parentBranchTargetFactor rng
               if segLen < sMin then
                 g.MarkFinished(nid)
@@ -4797,9 +4803,9 @@ let growStreets
                   lengthFactorByNode.[NodeId.value splitNode] <- lengthFactor
                   branchDistanceByNode.[NodeId.value nid] <- branchDistance
                   branchTargetFactorByNode.[NodeId.value nid] <- branchTargetFactor
-                  branchDistanceByNode.[NodeId.value splitNode] <-
-                    max branchDistance (tryGetNodeBranchDistance branchDistanceByNode splitNode)
-                  branchTargetFactorByNode.[NodeId.value splitNode] <- branchTargetFactor
+                  branchDistanceByNode.[NodeId.value splitNode] <- 0.0f
+                  branchTargetFactorByNode.[NodeId.value splitNode] <-
+                    sampleOrganicBranchTargetFactor branchTargetFactor rng
                 g.AddEdge(nid, splitNode, cls, RoadClass.width cls) |> ignore
                 added <- added + 1
                 stuck <- 0
@@ -4808,11 +4814,11 @@ let growStreets
               let segLen = Vec2.distanceTo origin p2
               let branchDistance =
                 if isGrid then 0.0f
-                elif priorValence <= 1 then parentBranchDistance + segLen
+                elif isContinuation then parentBranchDistance + segLen
                 else 0.0f
               let branchTargetFactor =
                 if isGrid then 1.0f
-                elif priorValence <= 1 then parentBranchTargetFactor
+                elif isContinuation then parentBranchTargetFactor
                 else sampleOrganicBranchTargetFactor parentBranchTargetFactor rng
               if segLen < sMin then
                 g.MarkFinished(nid)
@@ -4827,9 +4833,9 @@ let growStreets
                     if not isGrid then
                       branchDistanceByNode.[NodeId.value nid] <- branchDistance
                       branchTargetFactorByNode.[NodeId.value nid] <- branchTargetFactor
-                      branchDistanceByNode.[NodeId.value existingId] <-
-                        max branchDistance (tryGetNodeBranchDistance branchDistanceByNode existingId)
-                      branchTargetFactorByNode.[NodeId.value existingId] <- branchTargetFactor
+                      branchDistanceByNode.[NodeId.value existingId] <- 0.0f
+                      branchTargetFactorByNode.[NodeId.value existingId] <-
+                        sampleOrganicBranchTargetFactor branchTargetFactor rng
                     g.AddEdge(nid, existingId, cls, RoadClass.width cls) |> ignore
                     added <- added + 1
                     stuck <- 0
@@ -5618,8 +5624,14 @@ let layoutWeberDistrict
       max 1 (int (MathF.Ceiling(float32 funcs.Length / 4.0f)))
     let growthPlan, grownRoads = buildMajorStreetGrowth rect blockDemand organic rng
     let districtRoads = canonicalizeRoads grownRoads
+    let frontageRoads =
+      districtRoads
+      |> List.filter (fun road -> road.Weight >= RoadClass.tier Avenue)
+      |> function
+        | [] -> districtRoads
+        | arterialRoads -> arterialRoads
     let buildings =
-      packAlongRoads districtRoads rect funcs heatMap districtColor rng gitMeta
+      packAlongRoads frontageRoads rect funcs heatMap districtColor rng gitMeta
     (buildings, districtRoads)
 
 

@@ -22,5 +22,8 @@
     <Compile Include="GlyphProjectionTests.fs" />
     <Compile Include="LiveTestingParserTests.fs" />
     <Compile Include="TestTreeViewModelTests.fs" />
+    <Compile Include="JsonParsersTests.fs" />
+    <Compile Include="EvalServiceTests.fs" />
+    <Compile Include="LiveTestingFormatTests.fs" />
   </ItemGroup>
 </Project>
