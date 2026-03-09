@@ -188,9 +188,10 @@ module AttributeDiscovery =
   /// Theory+InlineData methods are expanded: each data row becomes a separate
   /// (TestCase * runner) pair whose runner invokes the method with that row's args.
   /// Theory expansion is triggered by attributes listed in ae.TheoryAttributes.
+  /// categoryFn is called per-method to derive the correct TestCategory (e.g. Property vs Unit).
   let discoverWithRunner
     (ae: AttributeTestExecutor)
-    (category: TestCategory)
+    (categoryFn: MethodInfo -> TestCategory)
     (asm: Assembly)
     : (TestCase * Async<TestResult>) list =
     try
@@ -199,6 +200,7 @@ module AttributeDiscovery =
         t.GetMethods(BindingFlags.Public ||| BindingFlags.Instance ||| BindingFlags.Static)
         |> Array.filter (hasTestAttribute ae.Description.TestAttributes)
         |> Array.collect (fun mi ->
+          let category = categoryFn mi
           match isTheoryMethod ae.TheoryAttributes mi with
           | false ->
             let tc = toTestCase ae.Description.Name category mi
@@ -229,7 +231,7 @@ module BuiltInExecutors =
     TestExecutor.AttributeBased {
       Description = {
         Name = TestFramework.XUnit
-        TestAttributes = ["Fact"; "Theory"]
+        TestAttributes = ["Fact"; "Theory"; "Property"]
         AssemblyMarker = "xunit.core"
       }
       Execute = ReflectionExecutor.executeMethod
@@ -240,7 +242,7 @@ module BuiltInExecutors =
     TestExecutor.AttributeBased {
       Description = {
         Name = TestFramework.XUnit
-        TestAttributes = ["Fact"; "Theory"]
+        TestAttributes = ["Fact"; "Theory"; "Property"]
         AssemblyMarker = "xunit.v3.core"
       }
       Execute = ReflectionExecutor.executeMethod
@@ -545,12 +547,22 @@ module TestOrchestrator =
 
     // Attribute-based: discover with runner closures retained.
     // Each MethodInfo is captured via partial application — never stored on TestCase.
+    // [<Property>] (FsCheck.Xunit) is assigned TestCategory.Property; all others get Unit.
+    let attrMethodCategory (mi: MethodInfo) : TestCategory =
+      let isProperty =
+        mi.GetCustomAttributes(true)
+        |> Array.exists (fun attr ->
+          let n = attr.GetType().Name
+          n = "PropertyAttribute" || n = "Property")
+      match isProperty with
+      | true -> TestCategory.Property
+      | false -> TestCategory.Unit
     let attrDiscoveries =
       executors
       |> List.collect (fun executor ->
         match executor with
         | TestExecutor.AttributeBased ae ->
-          AttributeDiscovery.discoverWithRunner ae TestCategory.Unit asm
+          AttributeDiscovery.discoverWithRunner ae attrMethodCategory asm
         | _ -> [])
 
     let attrTests = attrDiscoveries |> List.map fst

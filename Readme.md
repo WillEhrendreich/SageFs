@@ -254,7 +254,7 @@ Uses the [VisualStudio.Extensibility](https://learn.microsoft.com/en-us/visualst
 
 #### AI Agent (MCP)
 
-SageFs exposes 24 MCP tools — from `send_fsharp_code` to `run_tests` to `explore_type`. Any MCP client can connect.
+SageFs exposes 30 MCP tools — from `send_fsharp_code` to `run_tests` to `explore_type`. Any MCP client can connect.
 
 **Streamable HTTP** (recommended — auto-reconnects, no session drops):
 ```json
@@ -383,7 +383,7 @@ Design: length-prefixed strings, section headers with byte-count envelopes, vers
 | Tool | Description |
 |:---|:---|
 | `send_fsharp_code` | Execute F# code. Each `;;` is a transaction boundary. |
-| `check_fsharp_code` | Type-check without executing. Returns diagnostics. |
+| `check_fsharp_code` | Type-check a snippet without executing. Code is checked in the current FSI session context — prior `send_fsharp_code` definitions are in scope, but namespaces must be explicitly opened. "Not defined" errors usually mean a missing `open`, not a real bug. |
 | `get_completions` | Code completions at cursor position. |
 | `cancel_eval` | Cancel a running evaluation. |
 | `load_fsharp_script` | Load `.fsx` with partial progress. |
@@ -403,9 +403,15 @@ Design: length-prefixed strings, section headers with byte-count envelopes, vers
 | `enable_live_testing` | Turn on live unit testing. |
 | `disable_live_testing` | Turn off live unit testing. |
 | `get_live_test_status` | Test state with optional file filter. |
-| `run_tests` | Run tests by pattern or category. |
+| `run_tests` | Run tests by pattern or category. Waits up to 15s for hot reload to complete first. |
 | `set_run_policy` | Auto-run policy per category (every/save/demand/disabled). |
+| `set_test_timeouts` | Configure per-test and global run timeouts. |
 | `get_test_trace` | Test cycle timing waterfall. |
+| `explain_test_run` | Why a test was selected to run — trigger reason, changed symbols, flaky status. |
+| `explain_test_failure` | Enriched failure context for a test that recently went Passed→Failed. |
+| `query_test_coverage` | Which tests transitively cover a given symbol via the dependency graph. |
+| `get_file_coverage` | Per-line coverage data for a file — bitmap + dependency graph synthesis. |
+| `visualize_domain_model` | Visualize a discriminated union type as a state machine diagram. |
 
 </details>
 
@@ -490,7 +496,7 @@ If the config already exists, SageFs opens or points you at the file instead of 
 | Running in Docker | Set `SAGEFS_BIND_HOST=0.0.0.0`. |
 | Hot reload not working | Auto-injected by default. Check `SAGEFS_DEVRELOAD` isn't `0`. Look for `[DevReload]` in daemon logs. |
 | SSE connections dropping | Set proxy timeout ≥ 60s. SageFs sends keepalives every 15s. |
-| Live testing not running | Check `set_live_testing` is enabled and run policies match expectations. |
+| Live testing not running | Check `enable_live_testing` has been called and run policies match expectations. |
 | **macOS: SyntaxHighlight init failed** | Tree-sitter native library not yet bundled for macOS/Linux. Syntax highlighting falls back gracefully — all other features work. See [#17](https://github.com/WillEhrendreich/SageFs/issues/17). |
 | **macOS: VS Code "cannot read properties of undefined"** | Fixed in v0.5.414+. Update the extension. If daemon can't start, the extension now degrades gracefully instead of crashing. See [#18](https://github.com/WillEhrendreich/SageFs/issues/18). |
 | Logs? | Daemon console for real-time. OTEL export for structured traces/metrics. |

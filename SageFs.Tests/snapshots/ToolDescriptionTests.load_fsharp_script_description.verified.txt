@@ -7,5 +7,10 @@ WHEN TO USE vs send_fsharp_code:
 BEHAVIOR:
 - The file is split at ';;' boundaries and each block is evaluated in order.
 - If block N fails, blocks N+1 and beyond are still attempted (unless they depend on failed definitions).
-- '#r nuget:' directives in the file are handled as a special case and submitted alone.
+- '#r nuget:' directives in the file are handled as a special case and submitted alone before other blocks.
+- '#load "other.fsx"' directives inside the script recursively load the referenced file through the same mechanism.
 - Returns a summary of how many blocks succeeded and how many failed, with error details for failures.
+
+PATH:
+- filePath should be an absolute path. Relative paths are resolved against the session's working directory.
+- The file must exist on disk at call time — it is read, not streamed.

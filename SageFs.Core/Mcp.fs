@@ -2047,47 +2047,67 @@ module McpTools =
     (categoryFilter: string option)
     (timeoutSeconds: int)
     : Task<string> =
-    match ctx.GetElmModel, ctx.Dispatch with
-    | None, _ -> Task.FromResult (RunTestsResult.format Disabled)
-    | _, None -> Task.FromResult (RunTestsResult.format Disabled)
-    | Some getModel, Some dispatch ->
+    task {
+      match ctx.GetElmModel, ctx.Dispatch with
+      | None, _ -> return RunTestsResult.format Disabled
+      | _, None -> return RunTestsResult.format Disabled
+      | Some getModel, Some dispatch ->
       let model = getModel ()
       let state = model.LiveTesting.TestState
       match state.Activation = Features.LiveTesting.LiveTestingActivation.Inactive with
-      | true ->
-        Task.FromResult (RunTestsResult.format Disabled)
+      | true -> return RunTestsResult.format Disabled
       | false ->
-        // Guard: prevent overlapping test runs (MCP retry can trigger double dispatch)
-        match Features.LiveTesting.TestRunPhase.isAnyRunning state.RunPhases with
-        | true ->
-          Task.FromResult (RunTestsResult.format AlreadyRunning)
-        | false ->
-        let category =
-          match categoryFilter with
-          | Some c ->
-            match c.ToLowerInvariant() with
-            | "unit" -> Some Features.LiveTesting.TestCategory.Unit
-            | "integration" -> Some Features.LiveTesting.TestCategory.Integration
-            | "browser" -> Some Features.LiveTesting.TestCategory.Browser
-            | "benchmark" -> Some Features.LiveTesting.TestCategory.Benchmark
-            | "architecture" -> Some Features.LiveTesting.TestCategory.Architecture
-            | "property" -> Some Features.LiveTesting.TestCategory.Property
-            | other -> Some (Features.LiveTesting.TestCategory.Custom other)
-          | None -> None
-        let tests =
-          Features.LiveTesting.LiveTestCycleState.filterTestsForExplicitRun
-            state.DiscoveredTests None patternFilter category
-        match Array.isEmpty tests with
-        | true ->
-          Task.FromResult (RunTestsResult.format (NoTestsMatched state.DiscoveredTests.Length))
-        | false ->
-          let testIds = tests |> Array.map (fun tc -> tc.Id)
-          dispatch (SageFsMsg.Event (SageFsEvent.RunTestsRequested tests))
-          match timeoutSeconds = 0 with
-          | true ->
-            Task.FromResult (sprintf "Triggered %d tests for execution. Use get_live_test_status to check progress." tests.Length)
-          | false ->
-            task {
-              let! result = pollForTestCompletion getModel testIds timeoutSeconds
-              return RunTestsResult.format result
-            }
+      // Guard: prevent overlapping test runs (MCP retry can trigger double dispatch)
+      match Features.LiveTesting.TestRunPhase.isAnyRunning state.RunPhases with
+      | true -> return RunTestsResult.format AlreadyRunning
+      | false ->
+      // Wait for any in-progress hot reload to complete before running tests.
+      // If run_tests is called immediately after saving a .fs file, the session may still
+      // be reloading the changed assembly — running tests now would yield stale results.
+      let reloadWaitStart = DateTime.UtcNow
+      let reloadDeadline = reloadWaitStart.AddSeconds(15.0)
+      let mutable reloadDone = false
+      while not reloadDone && DateTime.UtcNow < reloadDeadline do
+        let! sessions = ctx.SessionOps.GetAllSessions()
+        let anyBusy =
+          sessions
+          |> List.exists (fun s ->
+            match s.Status with
+            | WorkerProtocol.SessionStatus.Evaluating
+            | WorkerProtocol.SessionStatus.Building _ -> true
+            | _ -> false)
+        match anyBusy with
+        | false -> reloadDone <- true
+        | true -> do! Task.Delay 100
+      let waitedMs = (DateTime.UtcNow - reloadWaitStart).TotalMilliseconds |> int
+      let waitNote =
+        match waitedMs > 200 with
+        | true -> sprintf "⏳ Waited %dms for hot reload to complete.\n" waitedMs
+        | false -> ""
+      let category =
+        match categoryFilter with
+        | Some c ->
+          match c.ToLowerInvariant() with
+          | "unit" -> Some Features.LiveTesting.TestCategory.Unit
+          | "integration" -> Some Features.LiveTesting.TestCategory.Integration
+          | "browser" -> Some Features.LiveTesting.TestCategory.Browser
+          | "benchmark" -> Some Features.LiveTesting.TestCategory.Benchmark
+          | "architecture" -> Some Features.LiveTesting.TestCategory.Architecture
+          | "property" -> Some Features.LiveTesting.TestCategory.Property
+          | other -> Some (Features.LiveTesting.TestCategory.Custom other)
+        | None -> None
+      let tests =
+        Features.LiveTesting.LiveTestCycleState.filterTestsForExplicitRun
+          state.DiscoveredTests None patternFilter category
+      match Array.isEmpty tests with
+      | true -> return waitNote + RunTestsResult.format (NoTestsMatched state.DiscoveredTests.Length)
+      | false ->
+      let testIds = tests |> Array.map (fun tc -> tc.Id)
+      dispatch (SageFsMsg.Event (SageFsEvent.RunTestsRequested tests))
+      match timeoutSeconds = 0 with
+      | true ->
+        return sprintf "%sTriggered %d tests for execution. Use get_live_test_status to check progress." waitNote tests.Length
+      | false ->
+        let! result = pollForTestCompletion getModel testIds timeoutSeconds
+        return waitNote + RunTestsResult.format result
+    }

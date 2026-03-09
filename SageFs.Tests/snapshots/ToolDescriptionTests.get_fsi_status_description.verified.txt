@@ -2,12 +2,12 @@
 
 WHEN TO USE:
 - First thing to call when setting up a new session — confirms what projects are loaded and what features are enabled.
-- After hard_reset_fsi_session with rebuild=true to poll until status shows 'Ready' (the reset is async).
+- After hard_reset_fsi_session with rebuild=true, poll this until Status shows 'Ready' (the reset is async, typically 10-60s).
 - When you get unexpected 'type not defined' errors — check that the expected project is loaded and the session is warmed up.
 - To discover the active session ID needed for routing commands when multiple sessions exist.
 
 KEY FIELDS IN OUTPUT:
-- Status: Ready | Evaluating | Building — if not Ready, wait before submitting code.
-- LoadedProjects: list of .fsproj files loaded into this session.
-- Affordances: which MCP tools are active/available (e.g., live testing may not be enabled for all sessions).
-- SessionId: use this with switch_session if you need to route to a specific session.
+- Status: Ready | Evaluating | Building — ONLY submit code when status is 'Ready'. If 'Evaluating', a previous send_fsharp_code is still running (use cancel_eval if stuck). If 'Building', a hard_reset rebuild is in progress.
+- LoadedProjects: list of .fsproj files loaded into this session — if empty, no project is loaded and only BCL types are available.
+- Affordances: which MCP tools are active for this session (e.g., live testing affordances are absent in sessions without test projects).
+- SessionId: the stable ID for this session. Pass to switch_session if auto-routing is selecting the wrong session.
