@@ -6,6 +6,7 @@ open System.Text.Json
 open Expecto
 open Expecto.Flip
 open FsCheck
+open SageFs
 open SageFs.JupyterKernel
 
 // ── Helpers ──
@@ -379,5 +380,192 @@ let jupyterKernelTests =
       testProperty "HMAC signature is exactly 64 hex chars for non-empty key" <| fun (NonEmptyString key) ->
         let sig' = WireProtocol.sign key "h" "p" "m" "c"
         sig'.Length = 64 && sig' |> Seq.forall (fun c -> Char.IsAsciiHexDigitLower c || Char.IsDigit c)
+    ]
+
+    testList "FsiBridge" [
+
+      testList "executeHandler" [
+        test "successful eval maps to Jupyter Ok" {
+          let mockProxy : WorkerProtocol.SessionProxy = fun msg ->
+            async {
+              match msg with
+              | WorkerProtocol.WorkerMessage.EvalCode (code, replyId) ->
+                return WorkerProtocol.WorkerResponse.EvalResult(
+                  replyId, Ok "42", [], Map.empty)
+              | _ -> return failwith "unexpected message"
+            }
+          let handler = FsiBridge.executeHandler mockProxy
+          let result = handler "1 + 41" false |> Async.RunSynchronously
+          match result with
+          | Ok output ->
+            output.Output |> Expect.equal "output" "42"
+            output.MimeType |> Expect.equal "mime" "text/plain"
+          | Error _ -> failtest "expected Ok"
+        }
+
+        test "eval error maps to Jupyter Error with diagnostics as traceback" {
+          let diag : WorkerProtocol.WorkerDiagnostic = {
+            Severity = SageFs.Features.Diagnostics.DiagnosticSeverity.Error
+            Message = "type mismatch"
+            StartLine = 1; StartColumn = 5; EndLine = 1; EndColumn = 10
+          }
+          let mockProxy : WorkerProtocol.SessionProxy = fun msg ->
+            async {
+              match msg with
+              | WorkerProtocol.WorkerMessage.EvalCode (_, replyId) ->
+                return WorkerProtocol.WorkerResponse.EvalResult(
+                  replyId, Error (SageFsError.EvalFailed "type mismatch"), [diag], Map.empty)
+              | _ -> return failwith "unexpected"
+            }
+          let handler = FsiBridge.executeHandler mockProxy
+          let result = handler "bad" false |> Async.RunSynchronously
+          match result with
+          | Error err ->
+            err.Ename |> Expect.equal "ename" "FSharpError"
+            err.Traceback |> Expect.isNonEmpty "has traceback"
+            err.Traceback |> List.head |> Expect.stringContains "has location" "(1,5)"
+          | Ok _ -> failtest "expected Error"
+        }
+
+        test "WorkerError maps to Jupyter Error" {
+          let mockProxy : WorkerProtocol.SessionProxy = fun _msg ->
+            async { return WorkerProtocol.WorkerResponse.WorkerError(SageFsError.PipeClosed) }
+          let handler = FsiBridge.executeHandler mockProxy
+          let result = handler "code" false |> Async.RunSynchronously
+          match result with
+          | Error err -> err.Ename |> Expect.equal "ename" "WorkerError"
+          | Ok _ -> failtest "expected Error"
+        }
+      ]
+
+      testList "completeHandler" [
+        test "maps worker completions to Jupyter format" {
+          let mockProxy : WorkerProtocol.SessionProxy = fun msg ->
+            async {
+              match msg with
+              | WorkerProtocol.WorkerMessage.GetCompletions (_, _, replyId) ->
+                return WorkerProtocol.WorkerResponse.CompletionResult(replyId, ["map"; "filter"; "fold"])
+              | _ -> return failwith "unexpected"
+            }
+          let handler = FsiBridge.completeHandler mockProxy
+          let result = handler "List." 5 |> Async.RunSynchronously
+          result.Matches |> Expect.hasLength "3 matches" 3
+          result.Status |> Expect.equal "status" "ok"
+        }
+
+        test "unexpected response returns empty matches" {
+          let mockProxy : WorkerProtocol.SessionProxy = fun _msg ->
+            async { return WorkerProtocol.WorkerResponse.WorkerReady }
+          let handler = FsiBridge.completeHandler mockProxy
+          let result = handler "x" 1 |> Async.RunSynchronously
+          result.Matches |> Expect.isEmpty "empty"
+        }
+      ]
+
+      testList "isCompleteHandler" [
+        test "code ending with ;; is complete" {
+          let handler = FsiBridge.isCompleteHandler ()
+          let result = handler "let x = 42;;" |> Async.RunSynchronously
+          result |> Expect.equal "complete" CompleteStatus.Complete
+        }
+        test "code ending with = is incomplete" {
+          let handler = FsiBridge.isCompleteHandler ()
+          let result = handler "let f x =" |> Async.RunSynchronously
+          match result with
+          | CompleteStatus.Incomplete indent ->
+            indent |> Expect.equal "indent" "  "
+          | _ -> failtest "expected Incomplete"
+        }
+        test "regular code is unknown" {
+          let handler = FsiBridge.isCompleteHandler ()
+          let result = handler "let x = 42" |> Async.RunSynchronously
+          result |> Expect.equal "unknown" CompleteStatus.Unknown
+        }
+      ]
+
+      testList "fromProxy" [
+        test "returns all three handlers" {
+          let mockProxy : WorkerProtocol.SessionProxy = fun _msg ->
+            async { return WorkerProtocol.WorkerResponse.WorkerReady }
+          let exec, complete, isComplete = FsiBridge.fromProxy mockProxy
+          // Just verify they're callable (types check)
+          exec "code" false |> ignore
+          complete "code" 0 |> ignore
+          isComplete "code" |> ignore
+        }
+      ]
+    ]
+
+    testList "Router" [
+      test "KernelInfoRequest route produces IOPub status messages" {
+        let exec : ExecuteHandler = fun _ _ -> async { return Ok { Output = ""; MimeType = "text/plain" } }
+        let comp : CompleteHandler = fun _ _ -> async { return { Matches = []; CursorStart = 0; CursorEnd = 0; Status = "ok" } }
+        let isComp : IsCompleteHandler = fun _ -> async { return CompleteStatus.Complete }
+        let msg = mkKernelInfoRequest ()
+        let result = Router.route exec comp isComp KernelState.initial msg |> Async.RunSynchronously
+        result.IOPub |> Expect.hasLength "2 IOPub messages" 2
+        result.IOPub |> List.head |> Expect.equal "busy" (IOPubMessage.StatusMessage KernelStatus.Busy)
+        result.IOPub |> List.last |> Expect.equal "idle" (IOPubMessage.StatusMessage KernelStatus.Idle)
+        result.NewState.Status |> Expect.equal "state unchanged" KernelStatus.Idle
+      }
+
+      test "ExecuteRequest route transitions state and produces IOPub" {
+        let exec : ExecuteHandler = fun code _ ->
+          async { return Ok { Output = code; MimeType = "text/plain" } }
+        let comp : CompleteHandler = fun _ _ -> async { return { Matches = []; CursorStart = 0; CursorEnd = 0; Status = "ok" } }
+        let isComp : IsCompleteHandler = fun _ -> async { return CompleteStatus.Complete }
+        let msg = mkExecRequest "let x = 42"
+        let result = Router.route exec comp isComp KernelState.initial msg |> Async.RunSynchronously
+        // Should have Busy, ExecuteResult, Idle
+        result.IOPub |> Expect.hasLength "3 IOPub messages" 3
+        result.IOPub |> List.head |> Expect.equal "busy" (IOPubMessage.StatusMessage KernelStatus.Busy)
+        result.IOPub |> List.last |> Expect.equal "idle" (IOPubMessage.StatusMessage KernelStatus.Idle)
+        result.NewState.ExecutionCount |> Expect.equal "count = 1" 1
+        result.NewState.Status |> Expect.equal "back to idle" KernelStatus.Idle
+      }
+
+      test "failed ExecuteRequest produces ErrorOutput IOPub" {
+        let exec : ExecuteHandler = fun _ _ ->
+          async { return Error { Ename = "CompileError"; Evalue = "FS0001"; Traceback = ["error at line 1"] } }
+        let comp : CompleteHandler = fun _ _ -> async { return { Matches = []; CursorStart = 0; CursorEnd = 0; Status = "ok" } }
+        let isComp : IsCompleteHandler = fun _ -> async { return CompleteStatus.Complete }
+        let msg = mkExecRequest "bad code"
+        let result = Router.route exec comp isComp KernelState.initial msg |> Async.RunSynchronously
+        let hasError = result.IOPub |> List.exists (function IOPubMessage.ErrorOutput _ -> true | _ -> false)
+        hasError |> Expect.isTrue "should have error IOPub"
+      }
+
+      test "ShutdownRequest transitions to ShuttingDown" {
+        let exec : ExecuteHandler = fun _ _ -> async { return Ok { Output = ""; MimeType = "text/plain" } }
+        let comp : CompleteHandler = fun _ _ -> async { return { Matches = []; CursorStart = 0; CursorEnd = 0; Status = "ok" } }
+        let isComp : IsCompleteHandler = fun _ -> async { return CompleteStatus.Complete }
+        let msg =
+          { Header = mkHeader "shutdown_request"
+            ParentHeader = None
+            Metadata = Map.empty
+            Content = MessageContent.ShutdownRequest false }
+        let result = Router.route exec comp isComp KernelState.initial msg |> Async.RunSynchronously
+        result.NewState.Status |> Expect.equal "shutting down" KernelStatus.ShuttingDown
+      }
+
+      testProperty "Router always returns IOPub list starting with Busy (for known message types)" <| fun () ->
+        let exec : ExecuteHandler = fun _ _ -> async { return Ok { Output = "ok"; MimeType = "text/plain" } }
+        let comp : CompleteHandler = fun _ _ -> async { return { Matches = []; CursorStart = 0; CursorEnd = 0; Status = "ok" } }
+        let isComp : IsCompleteHandler = fun _ -> async { return CompleteStatus.Complete }
+        let messages = [
+          mkKernelInfoRequest ()
+          mkExecRequest "1+1"
+          mkCompleteRequest "List." 5
+        ]
+        messages |> List.forall (fun msg ->
+          let result = Router.route exec comp isComp KernelState.initial msg |> Async.RunSynchronously
+          result.IOPub |> List.head = IOPubMessage.StatusMessage KernelStatus.Busy)
+    ]
+
+    testList "IOPub types" [
+      test "StreamName roundtrips" {
+        StreamName.toWire StreamName.Stdout |> Expect.equal "stdout" "stdout"
+        StreamName.toWire StreamName.Stderr |> Expect.equal "stderr" "stderr"
+      }
     ]
   ]

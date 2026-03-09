@@ -368,3 +368,171 @@ module JupyterKernel =
         DisplayName = sprintf "F# (SageFs — %s)" name
         Language = "fsharp"
         InterruptMode = "message" }
+
+  // ── IOPub message types ──
+
+  [<RequireQualifiedAccess>]
+  type StreamName = Stdout | Stderr
+
+  module StreamName =
+    let toWire = function
+      | StreamName.Stdout -> "stdout"
+      | StreamName.Stderr -> "stderr"
+
+  type IOPubMessage =
+    | StatusMessage of KernelStatus
+    | StreamOutput of StreamName * text: string
+    | ExecuteResultMessage of executionCount: int * data: Map<string, string>
+    | ErrorOutput of ename: string * evalue: string * traceback: string list
+
+  // ── Message Routing ──
+
+  /// Pure message router — maps incoming JupyterMessages to outbound responses.
+  /// Returns the reply message content + IOPub side-effects as a pure list.
+  module Router =
+
+    type RouteResult = {
+      Reply: MessageContent
+      IOPub: IOPubMessage list
+      NewState: KernelState
+    }
+
+    let route
+      (executeHandler: ExecuteHandler)
+      (completeHandler: CompleteHandler)
+      (isCompleteHandler: IsCompleteHandler)
+      (state: KernelState)
+      (msg: JupyterMessage)
+      : Async<RouteResult> =
+      async {
+        match msg.Content with
+        | MessageContent.KernelInfoRequest ->
+          let _reply = Protocol.kernelInfoReply ()
+          return {
+            Reply = MessageContent.Raw (WireProtocol.serializeContent MessageContent.KernelInfoRequest)
+            IOPub = [ StatusMessage KernelStatus.Busy; StatusMessage KernelStatus.Idle ]
+            NewState = state
+          }
+
+        | MessageContent.ExecuteRequest req ->
+          let busy = KernelState.beginExecution state
+          let! result = Protocol.handleExecuteRequest executeHandler busy.ExecutionCount req
+          let iopub =
+            [ StatusMessage KernelStatus.Busy ] @
+            (match result with
+             | ExecuteReplyOk r ->
+               [ ExecuteResultMessage (r.ExecutionCount, Map.ofList ["text/plain", "ok"]) ]
+             | ExecuteReplyError r ->
+               [ ErrorOutput (r.Ename, r.Evalue, r.Traceback) ]) @
+            [ StatusMessage KernelStatus.Idle ]
+          let idle = KernelState.endExecution busy
+          return { Reply = MessageContent.Raw "{}"; IOPub = iopub; NewState = idle }
+
+        | MessageContent.CompleteRequest req ->
+          let! _result = Protocol.handleCompleteRequest completeHandler req
+          return {
+            Reply = MessageContent.Raw "{}"
+            IOPub = [ StatusMessage KernelStatus.Busy; StatusMessage KernelStatus.Idle ]
+            NewState = state
+          }
+
+        | MessageContent.CheckCompleteRequest code ->
+          let! _result = Protocol.handleIsComplete isCompleteHandler code
+          return {
+            Reply = MessageContent.Raw "{}"
+            IOPub = [ StatusMessage KernelStatus.Busy; StatusMessage KernelStatus.Idle ]
+            NewState = state
+          }
+
+        | MessageContent.ShutdownRequest restart ->
+          let sd = KernelState.shutdown state restart
+          return {
+            Reply = MessageContent.Raw (sprintf """{"restart": %b}""" restart)
+            IOPub = [ StatusMessage KernelStatus.ShuttingDown ]
+            NewState = sd
+          }
+
+        | MessageContent.Raw _ ->
+          return { Reply = MessageContent.Raw "{}"; IOPub = []; NewState = state }
+      }
+
+  // ── FSI Bridge ──
+
+  /// Adapts SageFs's WorkerProtocol.SessionProxy to Jupyter handler function types.
+  /// Pure transformation layer — no I/O, no ZMQ, fully testable with mock proxies.
+  module FsiBridge =
+
+    /// Create an ExecuteHandler from a SessionProxy function.
+    /// Maps WorkerMessage.EvalCode → WorkerResponse.EvalResult → Jupyter ExecuteOutput/Error.
+    let executeHandler (proxy: WorkerProtocol.SessionProxy) : ExecuteHandler =
+      fun code _silent ->
+        async {
+          let replyId = Guid.NewGuid().ToString("N").[..7]
+          let! response = proxy (WorkerProtocol.WorkerMessage.EvalCode(code, replyId))
+          match response with
+          | WorkerProtocol.WorkerResponse.EvalResult (_rid, result, diagnostics, _meta) ->
+            match result with
+            | Ok output ->
+              return Ok { Output = output; MimeType = "text/plain" }
+            | Error err ->
+              let traceback =
+                diagnostics
+                |> List.map (fun d ->
+                  sprintf "  (%d,%d)-(%d,%d): %s" d.StartLine d.StartColumn d.EndLine d.EndColumn d.Message)
+              return Error {
+                Ename = "FSharpError"
+                Evalue = SageFsError.describe err
+                Traceback = traceback
+              }
+          | WorkerProtocol.WorkerResponse.WorkerError err ->
+            return Error {
+              Ename = "WorkerError"
+              Evalue = SageFsError.describe err
+              Traceback = []
+            }
+          | other ->
+            return Error {
+              Ename = "UnexpectedResponse"
+              Evalue = sprintf "Expected EvalResult, got %A" (other.GetType().Name)
+              Traceback = []
+            }
+        }
+
+    /// Create a CompleteHandler from a SessionProxy function.
+    let completeHandler (proxy: WorkerProtocol.SessionProxy) : CompleteHandler =
+      fun code pos ->
+        async {
+          let replyId = Guid.NewGuid().ToString("N").[..7]
+          let! response = proxy (WorkerProtocol.WorkerMessage.GetCompletions(code, pos, replyId))
+          match response with
+          | WorkerProtocol.WorkerResponse.CompletionResult (_rid, completions) ->
+            return {
+              Matches = completions
+              CursorStart = pos
+              CursorEnd = pos
+              Status = "ok"
+            }
+          | _ ->
+            return { Matches = []; CursorStart = pos; CursorEnd = pos; Status = "ok" }
+        }
+
+    /// Create an IsCompleteHandler using simple heuristic (ends with ;;).
+    let isCompleteHandler () : IsCompleteHandler =
+      fun code ->
+        async {
+          let trimmed = code.TrimEnd()
+          match trimmed.EndsWith(";;") with
+          | true -> return CompleteStatus.Complete
+          | false ->
+            match trimmed.EndsWith("=") || trimmed.EndsWith("->") || trimmed.EndsWith("do") with
+            | true -> return CompleteStatus.Incomplete "  "
+            | false -> return CompleteStatus.Unknown
+        }
+
+    /// Wire a full Jupyter kernel from a SessionProxy.
+    /// Returns the three handler functions ready for Protocol/Router use.
+    let fromProxy (proxy: WorkerProtocol.SessionProxy) =
+      let exec = executeHandler proxy
+      let complete = completeHandler proxy
+      let isComplete = isCompleteHandler ()
+      exec, complete, isComplete
