@@ -192,6 +192,18 @@ let formatEvalDiffEvent (opts: JsonSerializerOptions) (sessionId: string option)
   let json = JsonSerializer.Serialize(payload, opts) |> injectSessionId sessionId
   formatSseEvent "eval_diff" json
 
+/// Format an eval result as an SSE event for inline decorations.
+/// Emitted after each /exec call with filePath and blockStartLine populated.
+let formatEvalResultEvent (opts: JsonSerializerOptions) (sessionId: string option) (filePath: string) (blockStartLine: int) (output: string) (success: bool) : string =
+  let json =
+    JsonSerializer.Serialize(
+      {| filePath = filePath
+         blockStartLine = blockStartLine
+         output = output
+         success = success |}, opts)
+    |> injectSessionId sessionId
+  formatSseEvent "eval_result" json
+
 /// Format a cell dependency graph as an SSE event string
 let formatCellDependenciesEvent (opts: JsonSerializerOptions) (sessionId: string option) (graph: Features.CellDependencyGraph.CellGraph) : string =
   let payload =

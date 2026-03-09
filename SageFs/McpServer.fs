@@ -860,6 +860,13 @@ let mapExecutionRoutes (app: WebApplication) (rctx: RouteContext) =
       let! result = SageFs.McpTools.sendFSharpCode rctx.McpContext "cli-integrated" code SageFs.McpTools.OutputFormat.Text None wd filePath evalMode blockStartLine
       sw.Stop()
       rctx.FeaturePushState.Value <- SageFs.Features.FeatureHooks.recordEval code result sw.ElapsedMilliseconds rctx.FeaturePushState.Value
+      // Emit eval_result SSE for inline decorations in editor plugins
+      match filePath, blockStartLine with
+      | Some fp, Some bsl when not (System.String.IsNullOrEmpty(fp)) ->
+        let sid = SseContext.activeSessionId rctx.SseContext
+        let sseStr = SageFs.SseWriter.formatEvalResultEvent rctx.SseContext.SseJsonOpts sid fp bsl result true
+        rctx.SseContext.TestEventBroadcast.Trigger(sseStr)
+      | _ -> ()
       do! jsonResponse ctx 200 {| success = true; result = result |}
     }) :> Task
   ) |> ignore
