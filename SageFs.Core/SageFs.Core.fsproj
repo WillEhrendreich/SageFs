@@ -49,6 +49,7 @@
         <Compile Include="Features\MessageJournal.fs" />
         <Compile Include="Features\TestNarration.fs" />
         <Compile Include="Features\DaemonHealth.fs" />
+        <Compile Include="Features\ScratchPad.fs" />
         <Compile Include="Features\BindingExplorer.fs" />
         <Compile Include="Features\DomainModelViz.fs" />
         <Compile Include="Features\EvalTimeline.fs" />
