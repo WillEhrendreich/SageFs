@@ -320,7 +320,9 @@ module CoverageInstrumenter =
               Some(hitsField.GetValue(null) :?> bool array)
             | false -> None
           | false -> None
-        with _ -> None)
+        with ex ->
+          Log.warn "[CoverageInstrumenter] discoverAndCollectHits failed for %s: %s" (asm.GetName().Name) ex.Message
+          None)
     match allHits.Length = 0 with
     | true -> None
     | false -> Some(Array.concat allHits)
@@ -342,7 +344,9 @@ module CoverageInstrumenter =
             | false -> ()
           | false -> ()
         | false -> ()
-      with _ -> ()
+      with ex ->
+        Log.warn "[CoverageInstrumenter] discoverAndResetHits failed for %s: %s" (asm.GetName().Name) ex.Message
+        ()
 
   /// Track consecutive instrumentation failures for circuit breaker.
   let mutable private consecutiveFailures = 0

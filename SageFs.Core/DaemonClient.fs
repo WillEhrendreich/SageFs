@@ -89,7 +89,9 @@ module DaemonClient =
                            Features.LiveTesting.LineAnnotation.Icon = icon
                            Features.LiveTesting.LineAnnotation.Tooltip = tooltip }
                   | None -> None
-                with _ -> None)
+                with ex ->
+                  Utils.Log.warn "[DaemonClient] LineAnnotation parse failed: %s" ex.Message
+                  None)
               |> Seq.toArray
             | _ -> [||]
           { Id = id; Content = content; Cursor = cursor; Completions = completions; LineAnnotations = lineAnnotations })
@@ -120,7 +122,9 @@ module DaemonClient =
         LiveTestingStatus = liveTestingStatus
         Regions = regions
       }
-    with _ -> None
+    with ex ->
+      Utils.Log.warn "[DaemonClient] parseStateEvent failed: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
+      None
 
   /// Map an EditorAction to a (name, value) pair for the dispatch API.
   let actionToApi (action: EditorAction) : (string * string option) option =
@@ -190,7 +194,9 @@ module DaemonClient =
     try
       let! resp = client.PostAsync(sprintf "%s/api/dispatch" baseUrl, content)
       resp.EnsureSuccessStatusCode() |> ignore
-    with _ -> ()
+    with ex ->
+      Utils.Log.warn "[DaemonClient] dispatchAction '%s' failed: %s" actionName ex.Message
+      ()
   }
 
   /// Dispatch an EditorAction to the daemon (convenience wrapper).

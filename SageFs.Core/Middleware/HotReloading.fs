@@ -58,7 +58,7 @@ let resolveAssembly (args: ResolveEventArgs) =
               assemblyName.Name candidateName.Version requestedVersion searchPath
             None
       with ex ->
-        Log.debug "Failed to inspect assembly at %s: %s" fullPath ex.Message
+        Log.warn "Failed to inspect assembly at %s: %s" fullPath ex.Message
         None
     | false -> None)
   |> Seq.sortByDescending snd

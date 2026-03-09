@@ -108,7 +108,7 @@ let install () =
           Log.info "[DevReload] Patch result: Run=%b RunAsync=%b" r1 r2
           r1 || r2
       with ex ->
-        Log.debug "[DevReload] tryPatch probe failed: %s" ex.Message
+        Log.warn "[DevReload] tryPatch probe failed: %s" ex.Message
         false
     // Try immediate patching first
     match tryPatch () with

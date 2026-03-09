@@ -88,7 +88,7 @@ module DaemonState =
           }
         | false -> return None
     with ex ->
-      Utils.Log.debug "[DaemonState] MCP status probe failed on port %d: %s" mcpPort ex.Message
+      Utils.Log.warn "[DaemonState] MCP status probe failed on port %d: %s" mcpPort ex.Message
       try
         let! fallbackResp =
           httpClient.GetAsync(sprintf "http://localhost:%d/dashboard" dashboardPort)
@@ -104,7 +104,7 @@ module DaemonState =
           }
         | false -> return None
       with ex2 ->
-        Utils.Log.debug "[DaemonState] Dashboard fallback also failed on port %d: %s" dashboardPort ex2.Message
+        Utils.Log.warn "[DaemonState] Dashboard fallback also failed on port %d: %s" dashboardPort ex2.Message
         return None
   }
 
@@ -131,7 +131,7 @@ module DaemonState =
         |> Async.AwaitTask
       return resp.IsSuccessStatusCode
     with ex ->
-      Utils.Log.debug "[DaemonState] Shutdown request to port %d failed: %s" mcpPort ex.Message
+      Utils.Log.warn "[DaemonState] Shutdown request to port %d failed: %s" mcpPort ex.Message
       return false
   }
 

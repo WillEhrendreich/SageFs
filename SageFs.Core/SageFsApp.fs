@@ -1301,7 +1301,9 @@ module SageFsEffectHandler =
             async {
               let code =
                 try System.IO.File.ReadAllText(filePath)
-                with _ -> ""
+                with ex ->
+                  Utils.Log.warn "[SageFsApp] File read failed: %s" ex.Message
+                  ""
               match code <> "" with
               | true ->
                 let replyId = newReplyId ()

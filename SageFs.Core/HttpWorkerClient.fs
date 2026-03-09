@@ -190,7 +190,9 @@ module HttpWorkerClient =
                         let hitsArr = doc.RootElement.GetProperty("hits")
                         let hits = [| for i in 0 .. hitsArr.GetArrayLength() - 1 -> hitsArr.[i].GetBoolean() |]
                         onCoverage hits
-                      with _ -> ()
+                      with ex ->
+                        Utils.Log.warn "[HttpWorkerClient] Coverage data parse failed: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
+                        ()
                     | false ->
                       match json <> "{}" with
                       | true ->

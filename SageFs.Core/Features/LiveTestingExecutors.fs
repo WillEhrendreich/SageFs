@@ -799,7 +799,9 @@ module LiveTestingHook =
         asm.GetReferencedAssemblies()
         |> Array.map (fun a -> a.Name)
         |> Set.ofArray
-      with _ -> Set.empty
+      with ex ->
+        Log.warn "[LiveTesting] GetReferencedAssemblies failed for %s: %s" (asm.GetName().Name) ex.Message
+        Set.empty
     executors
     |> List.choose (fun executor ->
       match executor with
@@ -823,7 +825,9 @@ module LiveTestingHook =
         asm.GetReferencedAssemblies()
         |> Array.map (fun a -> a.Name)
         |> Set.ofArray
-      with _ -> Set.empty
+      with ex ->
+        Log.warn "[LiveTesting] GetReferencedAssemblies failed for %s: %s" (asm.GetName().Name) ex.Message
+        Set.empty
     let matchingExecutors =
       executors
       |> List.filter (fun executor ->

@@ -73,5 +73,6 @@ module DaemonPersistence =
       try
         System.IO.File.Move(path, backupPath)
         true
-      with _ ->
+      with ex ->
+        SageFs.Utils.Log.warn "[DaemonPersistence] Failed to rename corrupt manifest: %s" ex.Message
         false
