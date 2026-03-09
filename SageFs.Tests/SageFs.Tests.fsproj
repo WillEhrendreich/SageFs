@@ -184,6 +184,7 @@
         <Compile Include="UiDensityTests.fs" />
         <Compile Include="SmartResetTests.fs" />
         <Compile Include="EvalProvenanceTests.fs" />
+        <Compile Include="PipelineFlameTests.fs" />
         <Compile Include="Program.fs" />
     </ItemGroup>
 

@@ -70,6 +70,7 @@
         <Compile Include="SessionManager.fs" />
         <Compile Include="SessionOperations.fs" />
         <Compile Include="RenderPipeline.fs" />
+        <Compile Include="PipelineFlame.fs" />
         <Compile Include="CellGrid.fs" />
         <Compile Include="Theme.fs" />
         <Compile Include="ThemePresets.fs" />
