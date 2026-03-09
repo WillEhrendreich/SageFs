@@ -164,6 +164,7 @@
         <Compile Include="CellGridMonoidTests.fs" />
         <Compile Include="MealyEquivalenceTests.fs" />
         <Compile Include="RenderInstrumentationTests.fs" />
+        <Compile Include="ComplianceSuite.fs" />
         <Compile Include="AppStatePropertyTests.fs" />
         <Compile Include="EditorPropertyTests.fs" />
         <Compile Include="ArchitectureTests.fs" />

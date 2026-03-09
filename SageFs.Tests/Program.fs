@@ -42,10 +42,18 @@ let main argv =
   let includeAll =
     argv |> Array.exists (fun a -> a = "--all" || a = "--integration")
 
+  let complianceOnly =
+    argv |> Array.exists (fun a -> a = "--compliance")
+
   let filteredArgv =
-    argv |> Array.filter (fun a -> a <> "--all" && a <> "--integration")
+    argv |> Array.filter (fun a -> a <> "--all" && a <> "--integration" && a <> "--compliance")
 
   let result =
+    match complianceOnly with
+    | true ->
+      // Run only the compliance suite (behavioral contracts)
+      Tests.runTestsWithCLIArgs [] filteredArgv SageFs.Tests.ComplianceSuite.complianceSuite
+    | false ->
     match includeAll with
     | true ->
       Tests.runTestsInAssemblyWithCLIArgs [] filteredArgv
