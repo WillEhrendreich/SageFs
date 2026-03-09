@@ -72,6 +72,17 @@
 
         <StackPanel Visibility="{Binding RunPolicySectionVisible, Converter={x:Static vs:Converters.BoolToVisibilityConverter}}"
                     Margin="0,0,0,8">
+          <!-- Current policies read-only summary -->
+          <TextBlock Text="Current policies:"
+                     FontFamily="Cascadia Code,Consolas,Courier New"
+                     FontSize="10"
+                     Foreground="Gray"
+                     Margin="0,0,0,2" />
+          <TextBlock Text="{Binding CurrentPoliciesText}"
+                     FontFamily="Cascadia Code,Consolas,Courier New"
+                     FontSize="10"
+                     TextWrapping="Wrap"
+                     Margin="0,0,0,8" />
           <TextBlock Text="Category:"
                      FontFamily="Cascadia Code,Consolas,Courier New"
                      FontSize="11"

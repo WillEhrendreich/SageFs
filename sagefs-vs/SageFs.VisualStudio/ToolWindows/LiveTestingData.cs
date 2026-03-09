@@ -28,6 +28,7 @@ internal class LiveTestingData : NotifyPropertyChangedObject, IDisposable
   private string selectedCategory = "Unit";
   private string selectedPolicy = "On every change";
   private bool runPolicySectionVisible;
+  private string currentPoliciesText = "";
 
   public LiveTestingData(
     VisualStudioExtensibility extensibility,
@@ -119,10 +120,21 @@ internal class LiveTestingData : NotifyPropertyChangedObject, IDisposable
   }
 
   [DataMember]
+  public string CurrentPoliciesText
+  {
+    get => currentPoliciesText;
+    set => SetProperty(ref currentPoliciesText, value);
+  }
+
+  [DataMember]
   public string SelectedCategory
   {
     get => selectedCategory;
-    set => SetProperty(ref selectedCategory, value);
+    set
+    {
+      if (SetProperty(ref selectedCategory, value))
+        SyncSelectedPolicyFromState();
+    }
   }
 
   [DataMember]
@@ -165,6 +177,7 @@ internal class LiveTestingData : NotifyPropertyChangedObject, IDisposable
     if (state.LastSummary != null)
       OnSummaryChanged(null, state.LastSummary.Value);
 
+    UpdatePoliciesFromState(state);
     UpdateTestResults();
   }
 
@@ -173,6 +186,32 @@ internal class LiveTestingData : NotifyPropertyChangedObject, IDisposable
     if (lastState == null) return;
     TestResultsText = Core.TestTreeViewModel.formatGroupedOutput(
       currentFilter, searchQuery, lastState);
+  }
+
+  private void SyncSelectedPolicyFromState()
+  {
+    if (lastState == null) return;
+    var catDu = Core.TestCategory.All
+      .FirstOrDefault(c => Core.TestCategory.DisplayName(c) == selectedCategory);
+    var policy = lastState.Policies.TryFind(catDu);
+    if (Microsoft.FSharp.Core.OptionModule.IsSome(policy))
+      SelectedPolicy = Core.RunPolicy.DisplayName(policy.Value);
+  }
+
+  private void UpdatePoliciesFromState(Core.LiveTestState state)
+  {
+    if (state.Policies.IsEmpty) return;
+    var lines = Core.TestCategory.All
+      .Select(cat =>
+      {
+        var pol = state.Policies.TryFind(cat);
+        var polLabel = Microsoft.FSharp.Core.OptionModule.IsSome(pol)
+          ? Core.RunPolicy.DisplayName(pol.Value)
+          : "—";
+        return $"  {Core.TestCategory.DisplayName(cat),-16}: {polLabel}";
+      });
+    CurrentPoliciesText = string.Join("\n", lines);
+    SyncSelectedPolicyFromState();
   }
 
   private async Task RefreshAsync(object? parameter, CancellationToken ct)
