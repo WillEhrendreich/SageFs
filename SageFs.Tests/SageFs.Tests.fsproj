@@ -194,6 +194,7 @@
         <Compile Include="EvalRippleTests.fs" />
         <Compile Include="EvalLensTests.fs" />
         <Compile Include="WhatIfTests.fs" />
+        <Compile Include="GhostwriterTests.fs" />
         <Compile Include="Program.fs" />
     </ItemGroup>
 

@@ -53,6 +53,7 @@
         <Compile Include="Features\EvalRipple.fs" />
         <Compile Include="Features\EvalLens.fs" />
         <Compile Include="Features\WhatIf.fs" />
+        <Compile Include="Features\Ghostwriter.fs" />
         <Compile Include="Features\BindingExplorer.fs" />
         <Compile Include="Features\DomainModelViz.fs" />
         <Compile Include="Features\EvalTimeline.fs" />
