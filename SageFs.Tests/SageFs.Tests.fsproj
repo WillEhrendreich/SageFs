@@ -44,6 +44,7 @@
         <Compile Include="SessionDisplayTests.fs" />
         <Compile Include="SageFsEventTests.fs" />
         <Compile Include="SageFsAppTests.fs" />
+        <Compile Include="SageFsUpdatePropertyTests.fs" />
         <Compile Include="SageFsEffectHandlerTests.fs" />
         <Compile Include="ElmLoopResilienceTests.fs" />
         <Compile Include="ElmLoopMsgLabelTests.fs" />
@@ -136,6 +137,7 @@
         <Compile Include="FileCoverageTests.fs" />
         <Compile Include="TestRunExplainerTests.fs" />
         <Compile Include="BatchFlusherTests.fs" />
+        <Compile Include="BatchFlusherPropertyTests.fs" />
         <Compile Include="Benchmarks.fs" />
         <Compile Include="FsiCrossSubmissionTests.fs" />
         <Compile Include="Round4HardeningTests.fs" />
