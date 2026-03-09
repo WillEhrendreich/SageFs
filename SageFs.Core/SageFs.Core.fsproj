@@ -10,6 +10,7 @@
         <Compile Include="Measures.fs" />
         <Compile Include="RingBuffer.fs" />
         <Compile Include="ModelSnapshot.fs" />
+        <Compile Include="TimeTravel.fs" />
         <Compile Include="Utils.fs" />
         <Compile Include="SageFsConfig.fs" />
         <Compile Include="Timeouts.fs" />
