@@ -1,4 +1,4 @@
-namespace SageFs.VisualStudio.Core
+﻿namespace SageFs.VisualStudio.Core
 
 open System
 

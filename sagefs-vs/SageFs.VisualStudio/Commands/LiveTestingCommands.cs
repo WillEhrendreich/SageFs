@@ -1,5 +1,6 @@
 namespace SageFs.VisualStudio.Commands;
 
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.VisualStudio.Extensibility;
@@ -112,6 +113,13 @@ internal class SetRunPolicyCommand : Command
   private readonly Core.SageFsClient client;
   private OutputChannel? output;
 
+  private static readonly string[] Categories =
+    Core.TestCategory.All.Select(c => c.ToApiString()).ToArray();
+  private static readonly string[] PolicyLabels =
+    Core.RunPolicy.All.Select(p => Core.RunPolicy.DisplayName(p)).ToArray();
+
+  private int catIndex;
+
   public SetRunPolicyCommand(Core.SageFsClient client) => this.client = client;
 
   public override CommandConfiguration CommandConfiguration => new("%SageFs.SetRunPolicy.DisplayName%")
@@ -128,19 +136,13 @@ internal class SetRunPolicyCommand : Command
 
   public override async Task ExecuteCommandAsync(IClientContext context, CancellationToken ct)
   {
-    // Cycle through categories: unit → integration → browser → benchmark → architecture → property
-    string[] categories = ["unit", "integration", "browser", "benchmark", "architecture", "property"];
-    string[] policies = ["every", "save", "demand", "disabled"];
+    var cat = Categories[catIndex % Categories.Length];
+    await client.SetRunPolicyAsync(cat, "every", ct);
 
     if (output is not null)
-    {
-      await output.WriteLineAsync("── Run Policies ──");
-      foreach (var cat in categories)
-      {
-        await client.SetRunPolicyAsync(cat, "every", ct);
-      }
-      await output.WriteLineAsync("Set all categories to 'every' (OnEveryChange)");
-    }
+      await output.WriteLineAsync($"⚙ {cat}: On every change — open Live Testing window to configure all policies");
+
+    catIndex = (catIndex + 1) % Categories.Length;
   }
 }
 

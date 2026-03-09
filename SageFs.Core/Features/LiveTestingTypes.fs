@@ -6,6 +6,7 @@ open System.Reflection
 open System.Security.Cryptography
 open System.Text
 open System.Text.RegularExpressions
+open SageFs.Measures
 
 // --- Assembly Load Diagnostics ---
 
@@ -2360,7 +2361,7 @@ module TestCycleOrchestrator =
 type DebouncedOp<'a> = {
   Payload: 'a
   RequestedAt: DateTimeOffset
-  DelayMs: int
+  DelayMs: int<ms>
   Generation: int64
 }
 
@@ -2377,7 +2378,7 @@ module DebounceChannel =
     LastCompleted = None
   }
 
-  let submit (payload: 'a) (delayMs: int) (now: DateTimeOffset) (ch: DebounceChannel<'a>) =
+  let submit (payload: 'a) (delayMs: int<ms>) (now: DateTimeOffset) (ch: DebounceChannel<'a>) =
     let gen = ch.CurrentGeneration + 1L
     { ch with
         CurrentGeneration = gen
@@ -2387,7 +2388,7 @@ module DebounceChannel =
     match ch.Pending with
     | None -> None, ch
     | Some op ->
-      let elapsed = (now - op.RequestedAt).TotalMilliseconds
+      let elapsed = toMs (now - op.RequestedAt)
       match op.Generation < ch.CurrentGeneration, elapsed >= float op.DelayMs with
       | true, _ ->
         None, { ch with Pending = None }
@@ -2412,16 +2413,16 @@ module TestCycleDebounce =
     Fcs = DebounceChannel.empty
   }
 
-  let treeSitterDelayMs = 50
+  let treeSitterDelayMs = 50<ms>
 
-  let onKeystroke (content: string) (filePath: string) (fcsDelay: int) (now: DateTimeOffset) (db: TestCycleDebounce) =
+  let onKeystroke (content: string) (filePath: string) (fcsDelay: int<ms>) (now: DateTimeOffset) (db: TestCycleDebounce) =
     { db with
         TreeSitter = db.TreeSitter |> DebounceChannel.submit content treeSitterDelayMs now
         Fcs = db.Fcs |> DebounceChannel.submit filePath fcsDelay now }
 
   let onFileSave (filePath: string) (now: DateTimeOffset) (db: TestCycleDebounce) =
     { db with
-        Fcs = db.Fcs |> DebounceChannel.submit filePath 50 now }
+        Fcs = db.Fcs |> DebounceChannel.submit filePath 50<ms> now }
 
   let tick (now: DateTimeOffset) (db: TestCycleDebounce) =
     let tsPayload, tsChannel = DebounceChannel.tryFire now db.TreeSitter
@@ -2533,18 +2534,18 @@ module TestCycleEffects =
 
 /// Adaptive debounce configuration.
 type AdaptiveDebounceConfig = {
-  BaseTreeSitterMs: float
-  BaseFcsMs: float
-  MaxFcsMs: float
+  BaseTreeSitterMs: float<ms>
+  BaseFcsMs: float<ms>
+  MaxFcsMs: float<ms>
   BackoffMultiplier: float
   ResetAfterSuccessCount: int
 }
 
 module AdaptiveDebounceConfig =
   let defaults = {
-    BaseTreeSitterMs = 50.0
-    BaseFcsMs = 300.0
-    MaxFcsMs = 2000.0
+    BaseTreeSitterMs = 50.0<ms>
+    BaseFcsMs = 300.0<ms>
+    MaxFcsMs = 2000.0<ms>
     BackoffMultiplier = 1.5
     ResetAfterSuccessCount = 3
   }
@@ -2554,7 +2555,7 @@ type AdaptiveDebounce = {
   Config: AdaptiveDebounceConfig
   ConsecutiveFcsCancels: int
   ConsecutiveFcsSuccesses: int
-  CurrentFcsDelayMs: float
+  CurrentFcsDelayMs: float<ms>
 }
 
 module AdaptiveDebounce =

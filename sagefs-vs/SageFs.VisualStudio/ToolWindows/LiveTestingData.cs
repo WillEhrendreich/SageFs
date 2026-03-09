@@ -1,6 +1,7 @@
 namespace SageFs.VisualStudio.ToolWindows;
 
 using System;
+using System.Linq;
 using System.Runtime.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
@@ -23,6 +24,11 @@ internal class LiveTestingData : NotifyPropertyChangedObject, IDisposable
   private Core.TestStatusFilter currentFilter = Core.TestStatusFilter.All;
   private string searchQuery = "";
 
+  // Run policy section
+  private string selectedCategory = "Unit";
+  private string selectedPolicy = "On every change";
+  private bool runPolicySectionVisible;
+
   public LiveTestingData(
     VisualStudioExtensibility extensibility,
     Core.SageFsClient client,
@@ -36,6 +42,8 @@ internal class LiveTestingData : NotifyPropertyChangedObject, IDisposable
     this.RunAllCommand = new AsyncCommand(this.RunAllAsync);
     this.CycleFilterCommand = new AsyncCommand(this.CycleFilterAsync);
     this.ClearSearchCommand = new AsyncCommand(this.ClearSearchAsync);
+    this.ApplyRunPolicyCommand = new AsyncCommand(this.ApplyRunPolicyAsync);
+    this.ToggleRunPolicySectionCommand = new AsyncCommand(this.ToggleRunPolicySectionAsync);
 
     subscriber.StateChanged += OnStateChanged;
     subscriber.SummaryChanged += OnSummaryChanged;
@@ -48,6 +56,14 @@ internal class LiveTestingData : NotifyPropertyChangedObject, IDisposable
   [DataMember] public IAsyncCommand RunAllCommand { get; }
   [DataMember] public IAsyncCommand CycleFilterCommand { get; }
   [DataMember] public IAsyncCommand ClearSearchCommand { get; }
+  [DataMember] public IAsyncCommand ApplyRunPolicyCommand { get; }
+  [DataMember] public IAsyncCommand ToggleRunPolicySectionCommand { get; }
+
+  // Category and policy display lists (labels shown in ComboBoxes)
+  [DataMember] public string[] CategoryLabels { get; } =
+    Core.TestCategory.All.Select(c => Core.TestCategory.DisplayName(c)).ToArray();
+  [DataMember] public string[] PolicyLabels { get; } =
+    Core.RunPolicy.All.Select(p => Core.RunPolicy.DisplayName(p)).ToArray();
 
   [DataMember]
   public string EnabledStatus
@@ -100,6 +116,27 @@ internal class LiveTestingData : NotifyPropertyChangedObject, IDisposable
       if (SetProperty(ref searchQuery, value))
         UpdateTestResults();
     }
+  }
+
+  [DataMember]
+  public string SelectedCategory
+  {
+    get => selectedCategory;
+    set => SetProperty(ref selectedCategory, value);
+  }
+
+  [DataMember]
+  public string SelectedPolicy
+  {
+    get => selectedPolicy;
+    set => SetProperty(ref selectedPolicy, value);
+  }
+
+  [DataMember]
+  public bool RunPolicySectionVisible
+  {
+    get => runPolicySectionVisible;
+    set => SetProperty(ref runPolicySectionVisible, value);
   }
 
   private void OnStateChanged(object? sender, Core.LiveTestState state)
@@ -202,6 +239,27 @@ internal class LiveTestingData : NotifyPropertyChangedObject, IDisposable
   {
     SearchQuery = "";
     return Task.CompletedTask;
+  }
+
+  private Task ToggleRunPolicySectionAsync(object? parameter, CancellationToken ct)
+  {
+    RunPolicySectionVisible = !RunPolicySectionVisible;
+    return Task.CompletedTask;
+  }
+
+  private async Task ApplyRunPolicyAsync(object? parameter, CancellationToken ct)
+  {
+    try
+    {
+      // Convert display name → DU → API string via typed overload
+      var catDu = Core.TestCategory.All
+        .FirstOrDefault(c => Core.TestCategory.DisplayName(c) == SelectedCategory);
+      var polDu = Core.RunPolicy.All
+        .FirstOrDefault(p => Core.RunPolicy.DisplayName(p) == SelectedPolicy);
+      await client.SetRunPolicyAsync(catDu, polDu, ct);
+      SummaryText = $"⚙ {SelectedCategory}: {SelectedPolicy}";
+    }
+    catch { /* best effort */ }
   }
 
   public void Dispose()

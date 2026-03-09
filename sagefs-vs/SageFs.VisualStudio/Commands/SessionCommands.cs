@@ -59,6 +59,8 @@ internal static class WarmupAutoOpenConfig
 internal class CreateSessionCommand : Command
 {
   private readonly Core.SageFsClient client;
+  private OutputChannel? output;
+
   public CreateSessionCommand(Core.SageFsClient client) => this.client = client;
 
   public override CommandConfiguration CommandConfiguration => new("%SageFs.CreateSession.DisplayName%")
@@ -67,21 +69,36 @@ internal class CreateSessionCommand : Command
     Icon = new(ImageMoniker.KnownValues.AddItem, IconSettings.IconAndText),
   };
 
+  public override async Task InitializeAsync(CancellationToken ct)
+  {
+    output = await Extensibility.Views().Output.CreateOutputChannelAsync("SageFs", ct);
+    await base.InitializeAsync(ct);
+  }
+
   public override async Task ExecuteCommandAsync(IClientContext context, CancellationToken ct)
   {
     await client.CreateSessionAsync(ct);
-    await Extensibility.Shell().ShowPromptAsync("Session created.", PromptOptions.OK, ct);
+    if (output is not null)
+      await output.WriteLineAsync("✓ Session created.");
   }
 }
 
 [VisualStudioContribution]
 internal class ConfigureWarmupAutoOpenCommand : Command
 {
+  private OutputChannel? output;
+
   public override CommandConfiguration CommandConfiguration => new("%SageFs.ConfigureWarmupAutoOpen.DisplayName%")
   {
     Placements = [CommandPlacement.KnownPlacements.ExtensionsMenu],
     Icon = new(ImageMoniker.KnownValues.AddItem, IconSettings.IconAndText),
   };
+
+  public override async Task InitializeAsync(CancellationToken ct)
+  {
+    output = await Extensibility.Views().Output.CreateOutputChannelAsync("SageFs", ct);
+    await base.InitializeAsync(ct);
+  }
 
   public override async Task ExecuteCommandAsync(IClientContext context, CancellationToken ct)
   {
@@ -92,14 +109,15 @@ internal class ConfigureWarmupAutoOpenCommand : Command
     var message = status switch
     {
       WarmupAutoOpenConfigStatus.Created =>
-        $"Created {path} with AutoOpenNamespaces = false.",
+        $"✓ Created {path} — AutoOpenNamespaces = false",
       WarmupAutoOpenConfigStatus.AlreadyDisabled =>
-        $"Warmup auto-open is already disabled in {path}.",
+        $"○ Warmup auto-open already disabled in {path}",
       _ =>
-        $"Existing config opened at {path}. Set AutoOpenNamespaces = false; it was not overwritten.",
+        $"↗ Opened {path} — set AutoOpenNamespaces = false to disable (file not overwritten)",
     };
 
-    await Extensibility.Shell().ShowPromptAsync(message, PromptOptions.OK, ct);
+    if (output is not null)
+      await output.WriteLineAsync(message);
   }
 }
 
@@ -129,8 +147,8 @@ internal class SwitchSessionCommand : Command
     var choicesList = choices.ToList();
     if (choicesList.Count == 0)
     {
-      await Extensibility.Shell().ShowPromptAsync(
-        "No sessions available. Start SageFs first.", PromptOptions.OK, ct);
+      if (output is not null)
+        await output.WriteLineAsync("○ No sessions available. Start SageFs first.");
       return;
     }
 
@@ -158,15 +176,8 @@ internal class SwitchSessionCommand : Command
     if (confirmed)
     {
       var ok = await client.SwitchToSessionAsync(switchTo.Item2, ct);
-      if (!ok)
-      {
-        await Extensibility.Shell().ShowPromptAsync(
-          $"Failed to switch session.", PromptOptions.OK, ct);
-      }
-      else if (output is not null)
-      {
-        await output.WriteLineAsync($"✓ Switched to {switchTo.Item1}");
-      }
+      if (output is not null)
+        await output.WriteLineAsync(ok ? $"✓ Switched to {switchTo.Item1}" : "✗ Failed to switch session.");
     }
   }
 }
@@ -221,8 +232,8 @@ internal class StopSessionCommand : Command
     var choicesList = choices.ToList();
     if (choicesList.Count == 0)
     {
-      await Extensibility.Shell().ShowPromptAsync(
-        "No sessions available.", PromptOptions.OK, ct);
+      if (output is not null)
+        await output.WriteLineAsync("○ No sessions available.");
       return;
     }
 
@@ -242,15 +253,8 @@ internal class StopSessionCommand : Command
     if (confirmed)
     {
       var ok = await client.StopSessionAsync(target.Item2, ct);
-      if (!ok)
-      {
-        await Extensibility.Shell().ShowPromptAsync(
-          "Failed to stop session.", PromptOptions.OK, ct);
-      }
-      else if (output is not null)
-      {
-        await output.WriteLineAsync($"✗ Stopped {target.Item1}");
-      }
+      if (output is not null)
+        await output.WriteLineAsync(ok ? $"✗ Stopped {target.Item1}" : "✗ Failed to stop session.");
     }
   }
 }

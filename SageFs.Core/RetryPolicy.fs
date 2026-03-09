@@ -1,18 +1,19 @@
 module SageFs.RetryPolicy
 
 open System
+open SageFs.Measures
 
 type RetryConfig = {
   MaxRetries: int
-  BaseDelayMs: int
+  BaseDelayMs: int<ms>
 }
 
 type RetryOutcome =
   | Success
-  | RetryAfter of delayMs: int
+  | RetryAfter of delayMs: int<ms>
   | GiveUp of exn
 
-let defaults = { MaxRetries = 3; BaseDelayMs = 50 }
+let defaults = { MaxRetries = 3; BaseDelayMs = 50<ms> }
 
 /// Classify whether an exception is a retryable version conflict.
 /// With Marten removed, this currently always returns false — retained
@@ -20,12 +21,12 @@ let defaults = { MaxRetries = 3; BaseDelayMs = 50 }
 let isVersionConflict (_ex: exn) : bool = false
 
 /// Calculate backoff with jitter: base * (attempt + 1) ± 50%
-let backoffMs (config: RetryConfig) (attempt: int) : int =
+let backoffMs (config: RetryConfig) (attempt: int) : int<ms> =
   let baseDelay = config.BaseDelayMs * (attempt + 1)
   let jitterRange = baseDelay / 2
-  match jitterRange = 0 with
+  match jitterRange = 0<ms> with
   | true -> baseDelay
-  | false -> baseDelay - jitterRange + System.Random.Shared.Next(jitterRange * 2)
+  | false -> baseDelay - jitterRange + System.Random.Shared.Next(int jitterRange * 2) * 1<ms>
 
 /// Whether more retries are available
 let shouldRetry (config: RetryConfig) (attempt: int) : bool =

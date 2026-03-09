@@ -249,7 +249,11 @@ open System.Text.RegularExpressions
 // Pre-compiled regex patterns for cleanStdout (avoids recompilation per call)
 let reAnsiCursorReset = Regex(@"\x1b\[\d+D", RegexOptions.Compiled)
 let reAnsiCursorVis = Regex(@"\x1b\[\?25[hl]", RegexOptions.Compiled)
-let reAnsiEscape = Regex(@"\x1b\[[0-9;]*[a-zA-Z]|\x1b\].*?\x07", RegexOptions.Compiled)
+// Full CSI coverage: params are 0x20-0x3F, final byte is 0x40-0x7E.
+// This handles standard AND private CSI sequences (e.g. ESC[?25h, ESC[!p, ESC[>4m)
+// plus OSC sequences (ESC]...BEL) and bare 2-char ESC sequences (e.g. ESC=, ESC>).
+let reAnsiEscape =
+  Regex(@"\x1b\[[\x20-\x3f]*[\x40-\x7e]|\x1b\].*?\x07|\x1b[^\[]", RegexOptions.Compiled)
 let reProgressBar = Regex(@"^\d+/\d+\s*\|", RegexOptions.Compiled)
 let reExpectoTimestamp = Regex(@"^\[\d{2}:\d{2}:\d{2}\s+\w{3}\]\s*", RegexOptions.Compiled)
 let reExpectoSuffix = Regex(@"\s*<Expecto>\s*$", RegexOptions.Compiled)
@@ -260,7 +264,9 @@ let reExpectoSummary = Regex(@"EXPECTO!\s+(\d+)\s+tests?\s+run\s+in\s+(\S+)\s+fo
 let stripAnsi (s: string) =
   let s = reAnsiCursorReset.Replace(s, "\n")
   let s = reAnsiCursorVis.Replace(s, "")
-  reAnsiEscape.Replace(s, "")
+  let s = reAnsiEscape.Replace(s, "")
+  // Safety pass: remove any residual ESC chars from truncated or non-standard sequences.
+  if s.IndexOf('\x1b') >= 0 then s.Replace("\x1b", "") else s
 
 /// Reformat Expecto summary line into readable multi-line output.
 let reformatExpectoSummary (line: string) =

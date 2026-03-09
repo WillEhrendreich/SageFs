@@ -536,6 +536,10 @@ type SageFsClient() =
     with _ -> return ()
   }
 
+  /// Set run policy using strongly-typed DUs.
+  member this.SetRunPolicyAsync(category: TestCategory, policy: RunPolicy, ct: CancellationToken) : Task<unit> =
+    this.SetRunPolicyAsync(category.ToApiString(), policy.ToApiString(), ct)
+
   /// Get recent FSI events.
   member this.GetRecentEventsAsync(count: int, ct: CancellationToken) = task {
     try

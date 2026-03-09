@@ -7,7 +7,6 @@ using System.Threading.Tasks;
 using Microsoft.VisualStudio.Extensibility;
 using Microsoft.VisualStudio.Extensibility.Commands;
 using Microsoft.VisualStudio.Extensibility.Documents;
-using Microsoft.VisualStudio.Extensibility.Shell;
 
 #pragma warning disable VSEXTPREVIEW_OUTPUTWINDOW
 
@@ -66,9 +65,8 @@ internal class StartDaemonCommand : Command
 
     if (target is null)
     {
-      await Extensibility.Shell().ShowPromptAsync(
-        "No F# projects found in the workspace. Open a folder with .fsproj files first.",
-        PromptOptions.OK, ct);
+      if (output is not null)
+        await output.WriteLineAsync("✗ No F# projects found. Open a folder with .fsproj files first.");
       return;
     }
 
@@ -83,8 +81,8 @@ internal class StartDaemonCommand : Command
     }
     else
     {
-      await Extensibility.Shell().ShowPromptAsync(
-        $"Failed: {result.ErrorValue}", PromptOptions.OK, ct);
+      if (output is not null)
+        await output.WriteLineAsync($"✗ Failed to start daemon: {result.ErrorValue}");
     }
   }
 }

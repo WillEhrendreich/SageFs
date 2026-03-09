@@ -59,6 +59,44 @@
                    FontSize="11"
                    TextWrapping="Wrap"
                    Margin="0,0,0,8" />
+
+        <!-- Run Policy section (collapsible) -->
+        <DockPanel Margin="0,8,0,0">
+          <Button Content="⚙ Run Policies"
+                  Command="{Binding ToggleRunPolicySectionCommand}"
+                  DockPanel.Dock="Left"
+                  MinHeight="22" MinWidth="110"
+                  FontSize="11"
+                  Margin="0,0,0,4" />
+        </DockPanel>
+
+        <StackPanel Visibility="{Binding RunPolicySectionVisible, Converter={x:Static vs:Converters.BoolToVisibilityConverter}}"
+                    Margin="0,0,0,8">
+          <TextBlock Text="Category:"
+                     FontFamily="Cascadia Code,Consolas,Courier New"
+                     FontSize="11"
+                     Margin="0,0,0,2" />
+          <ComboBox ItemsSource="{Binding CategoryLabels}"
+                    SelectedItem="{Binding SelectedCategory, Mode=TwoWay}"
+                    MinHeight="24"
+                    FontFamily="Cascadia Code,Consolas,Courier New"
+                    FontSize="11"
+                    Margin="0,0,0,6" />
+          <TextBlock Text="Policy:"
+                     FontFamily="Cascadia Code,Consolas,Courier New"
+                     FontSize="11"
+                     Margin="0,0,0,2" />
+          <ComboBox ItemsSource="{Binding PolicyLabels}"
+                    SelectedItem="{Binding SelectedPolicy, Mode=TwoWay}"
+                    MinHeight="24"
+                    FontFamily="Cascadia Code,Consolas,Courier New"
+                    FontSize="11"
+                    Margin="0,0,0,6" />
+          <Button Content="Apply"
+                  Command="{Binding ApplyRunPolicyCommand}"
+                  MinHeight="24" MinWidth="70"
+                  FontSize="11" />
+        </StackPanel>
       </StackPanel>
     </ScrollViewer>
   </Border>

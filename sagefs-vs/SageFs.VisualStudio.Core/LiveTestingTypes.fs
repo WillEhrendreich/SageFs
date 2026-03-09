@@ -92,6 +92,29 @@ type RunPolicy =
   | OnDemand
   | Disabled
 
+  member this.ToApiString() =
+    match this with
+    | EveryKeystroke -> "every"
+    | OnSave -> "save"
+    | OnDemand -> "demand"
+    | Disabled -> "disabled"
+
+  static member All = [ EveryKeystroke; OnSave; OnDemand; Disabled ]
+
+  static member DisplayName(p: RunPolicy) =
+    match p with
+    | EveryKeystroke -> "On every change"
+    | OnSave -> "On save"
+    | OnDemand -> "On demand only"
+    | Disabled -> "Disabled"
+
+  static member OfApiString(s: string) =
+    match s with
+    | "every" -> EveryKeystroke
+    | "save" -> OnSave
+    | "demand" -> OnDemand
+    | _ -> Disabled
+
 /// Test category — determines default run policy
 [<RequireQualifiedAccess>]
 type TestCategory =
@@ -101,6 +124,35 @@ type TestCategory =
   | Benchmark
   | Architecture
   | Property
+
+  member this.ToApiString() =
+    match this with
+    | Unit -> "unit"
+    | Integration -> "integration"
+    | Browser -> "browser"
+    | Benchmark -> "benchmark"
+    | Architecture -> "architecture"
+    | Property -> "property"
+
+  static member All = [ Unit; Integration; Browser; Benchmark; Architecture; Property ]
+
+  static member DisplayName(cat: TestCategory) =
+    match cat with
+    | Unit -> "Unit"
+    | Integration -> "Integration"
+    | Browser -> "Browser"
+    | Benchmark -> "Benchmark"
+    | Architecture -> "Architecture"
+    | Property -> "Property"
+
+  static member OfApiString(s: string) =
+    match s with
+    | "unit" -> Unit
+    | "integration" -> Integration
+    | "browser" -> Browser
+    | "benchmark" -> Benchmark
+    | "architecture" -> Architecture
+    | _ -> Property
 
 /// Coverage health — whether all covering tests pass
 [<RequireQualifiedAccess>]
