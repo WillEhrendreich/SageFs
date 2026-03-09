@@ -205,10 +205,9 @@ internal static class SharedAnnotationTracker
         var url = PortConfig.TryGetDaemonUrl();
         if (url != null)
         {
-            var sseClient = new SseClient();
+            SseConnectionHub.Initialize(url);
             // file_annotations come through the main /events SSE stream
-            sseClient.EventReceived += (_, ev) => tracker.ProcessEvent(ev);
-            sseClient.Start(url, "/events");
+            SseConnectionHub.Subscribe("/events", ev => tracker.ProcessEvent(ev));
         }
 
         return tracker;

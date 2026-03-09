@@ -127,10 +127,9 @@ internal sealed class SquiggleTaggerProvider : ITaggerProvider
         var url = PortConfig.TryGetDaemonUrl();
         if (url != null)
         {
-            var sseClient = new SseClient();
-            sseClient.EventReceived += (_, ev) => _tracker.ProcessEvent(ev);
+            SseConnectionHub.Initialize(url);
             // /diagnostics is its own SSE endpoint, separate from /events
-            sseClient.Start(url, "/diagnostics");
+            SseConnectionHub.Subscribe("/diagnostics", ev => _tracker.ProcessEvent(ev));
         }
     }
 
