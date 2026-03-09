@@ -189,6 +189,7 @@
         <Compile Include="SessionScribeTests.fs" />
         <Compile Include="MessageJournalTests.fs" />
         <Compile Include="TestNarrationTests.fs" />
+        <Compile Include="DaemonHealthTests.fs" />
         <Compile Include="Program.fs" />
     </ItemGroup>
 
