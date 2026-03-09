@@ -167,6 +167,7 @@
         <Compile Include="RingBufferTests.fs" />
         <Compile Include="ModelSnapshotTests.fs" />
         <Compile Include="TracingMiddlewareTests.fs" />
+        <Compile Include="ResultExTests.fs" />
         <Compile Include="RenderInstrumentationTests.fs" />
         <Compile Include="ComplianceSuite.fs" />
         <Compile Include="AppStatePropertyTests.fs" />

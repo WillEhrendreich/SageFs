@@ -52,6 +52,7 @@
         <Compile Include="FsiRewrite.fs" />
         <Compile Include="SessionState.fs" />
         <Compile Include="SageFsError.fs" />
+        <Compile Include="ResultEx.fs" />
         <Compile Include="EvalPipeline.fs" />
         <Compile Include="Affordances.fs" />
         <Compile Include="WorkerProtocol.fs" />
