@@ -479,7 +479,7 @@ SageFs --sln path/to/MySolution.slnx</code></pre>
 <p>Source: <a href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/Mcp.fs"><code>SageFs.Core/Mcp.fs</code></a>,
   <a href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/Affordances.fs"><code>SageFs.Core/Affordances.fs</code></a></p>
 
-<h2 id="mcp-tools">MCP Tool Reference</h2>
+<h2 id="mcp-tools">MCP Tool Reference <span style="font-size:0.7em;font-weight:400;color:var(--text-dim)">(30 tools)</span></h2>
 
 <table>
   <thead><tr><th>Tool</th><th>Description</th></tr></thead>
@@ -490,7 +490,7 @@ SageFs --sln path/to/MySolution.slnx</code></pre>
     </tr>
     <tr>
       <td><code>check_fsharp_code</code></td>
-      <td>Type-check code without executing it. Returns compiler diagnostics (errors, warnings) — the AI equivalent of "does this compile?"</td>
+      <td>Type-check a code snippet against the <em>current FSI session state</em> without executing it. Returns compiler diagnostics. <strong>Note:</strong> runs in the active session context — <code>open</code> statements from prior <code>send_fsharp_code</code> calls are in scope, but project namespaces are not automatically opened. "Type X is not defined" means a missing <code>open</code>, not a real bug.</td>
     </tr>
     <tr>
       <td><code>load_fsharp_script</code></td>
@@ -510,7 +510,7 @@ SageFs --sln path/to/MySolution.slnx</code></pre>
     </tr>
     <tr>
       <td><code>run_tests</code></td>
-      <td>Execute tests by name pattern, category, or run all. Returns structured pass/fail results with timing data.</td>
+      <td>Execute tests by name pattern, category (<code>unit</code> / <code>integration</code> / <code>property</code> / <code>browser</code> / <code>benchmark</code> / <code>architecture</code>), or run all. Waits up to 15 s for any in-progress hot reload to complete before running, so results always reflect the latest code. Default timeout: 30 s.</td>
     </tr>
     <tr>
       <td><code>get_live_test_status</code></td>
@@ -546,7 +546,7 @@ SageFs --sln path/to/MySolution.slnx</code></pre>
     </tr>
     <tr>
       <td><code>set_run_policy</code></td>
-      <td>Set when tests in a category auto-run. Categories: unit, integration, browser, benchmark, architecture, property. Policies: every, save, demand, disabled.</td>
+      <td>Control when a test category auto-runs. <strong>every</strong> — on every hot reload that touches covered symbols (default for <code>unit</code>). <strong>save</strong> — only on explicit file save. <strong>demand</strong> — never automatic, only via <code>run_tests</code> (default for <code>integration</code>/<code>browser</code>). <strong>disabled</strong> — excluded even from <code>run_tests</code>.</td>
     </tr>
     <tr>
       <td><code>enable_live_testing</code></td>
@@ -580,6 +580,30 @@ SageFs --sln path/to/MySolution.slnx</code></pre>
       <td><code>get_elm_state</code></td>
       <td>Get the current Elm model rendered as regions — shows editor content, output, diagnostics, sessions.</td>
     </tr>
+    <tr>
+      <td><code>visualize_domain_model</code></td>
+      <td>Visualize a discriminated union type as a state machine diagram. Provide a fully-qualified DU type name (e.g., <code>MyNamespace.OrderState</code>). Returns ASCII art diagram plus case names, fields, and entry/terminal state classification.</td>
+    </tr>
+    <tr>
+      <td><code>set_test_timeouts</code></td>
+      <td>Configure per-test and global-run timeout limits. Affects both automatic and explicit test runs. Call with no arguments to see current values. Defaults: 5 s per test, 120 s total run.</td>
+    </tr>
+    <tr>
+      <td><code>explain_test_run</code></td>
+      <td>Explain why a specific test was selected to run. Shows trigger reason (SymbolCoverage, NewTest, ExplicitRun, or DepGraphFallback), which changed symbols cover it, duration from last run, and flaky status. Substring match on test name.</td>
+    </tr>
+    <tr>
+      <td><code>query_test_coverage</code></td>
+      <td>Return all tests that transitively cover a given symbol, with their last result status. Symbol must be fully-qualified (e.g., <code>MyModule.myFunction</code>). Useful before refactoring: see which tests protect this code path.</td>
+    </tr>
+    <tr>
+      <td><code>get_file_coverage</code></td>
+      <td>Per-line coverage data for a source file. Each line shows which tests cover it and its health: <strong>AllPassing</strong> (all covering tests pass), <strong>SomeFailing</strong> (at least one covering test is failing), or <strong>NoData</strong> (no tests found). Accepts full path or partial filename.</td>
+    </tr>
+    <tr>
+      <td><code>explain_test_failure</code></td>
+      <td>Enriched failure context for a test that recently transitioned Passed→Failed. Shows time since last pass, causal changes (which symbols/files changed between the last passing and first failing run), and property violation counterexamples for FsCheck tests.</td>
+    </tr>
   </tbody>
 </table>
 
@@ -603,7 +627,7 @@ SageFs --sln path/to/MySolution.slnx</code></pre>
     </tr>
     <tr>
       <td><strong>Ready</strong></td>
-      <td><code>send_fsharp_code</code>, <code>load_fsharp_script</code>, <code>check_fsharp_code</code>, <code>get_completions</code>, <code>reset_fsi_session</code>, <code>hard_reset_fsi_session</code>, <code>cancel_eval</code>, <code>get_fsi_status</code>, <code>get_startup_info</code>, <code>get_recent_fsi_events</code></td>
+      <td><code>send_fsharp_code</code>, <code>load_fsharp_script</code>, <code>check_fsharp_code</code>, <code>get_completions</code>, <code>reset_fsi_session</code>, <code>hard_reset_fsi_session</code>, <code>cancel_eval</code>, <code>get_fsi_status</code>, <code>get_startup_info</code>, <code>get_recent_fsi_events</code>, <code>explore_namespace</code>, <code>explore_type</code>, <code>visualize_domain_model</code>, <code>run_tests</code>, <code>get_live_test_status</code>, <code>get_test_trace</code>, <code>set_run_policy</code>, <code>set_test_timeouts</code>, <code>enable_live_testing</code>, <code>disable_live_testing</code>, <code>explain_test_run</code>, <code>explain_test_failure</code>, <code>query_test_coverage</code>, <code>get_file_coverage</code>, <code>get_available_projects</code>, <code>create_session</code>, <code>list_sessions</code>, <code>switch_session</code>, <code>stop_session</code>, <code>get_elm_state</code></td>
     </tr>
     <tr>
       <td><strong>Evaluating</strong></td>

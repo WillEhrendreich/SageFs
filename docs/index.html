@@ -948,7 +948,7 @@
     <div class="editor-card" data-color="cyan">
       <span class="card-icon">🧩</span>
       <h3>Neovim</h3>
-      <span class="card-tech">Lua · 38 modules · 1142 tests</span>
+      <span class="card-tech">Lua · 40 modules · 1197 tests</span>
       <p>
         Two eval modes: tree-sitter auto-detects the enclosing scope in <code>.fs</code> files
         (inferred mode), or use <code>;;</code> delimiters for explicit cell boundaries
@@ -967,7 +967,7 @@
     <div class="editor-card" data-color="green">
       <span class="card-icon">💻</span>
       <h3>VS Code</h3>
-      <span class="card-tech">F# via Fable → JavaScript · 19 modules</span>
+      <span class="card-tech">F# via Fable → JavaScript · 21 modules</span>
       <p>
         Select code, hit <code>Alt+Enter</code>, see colored annotations inline.
         Sidebar panels for hot reload file trees, live test status, type exploration,
@@ -1249,6 +1249,7 @@
     SageFs exposes the Model Context Protocol (MCP) — the same protocol that powers
     Claude Desktop and GitHub Copilot tool use. AI agents don't just generate code.
     They execute it, type-check it, run tests, and iterate — against your real project.
+    30 tools. Zero boilerplate.
   </div>
 
   <div class="ai-tools">
@@ -1258,11 +1259,11 @@
     </div>
     <div class="ai-tool">
       <div class="tool-name">check_fsharp_code</div>
-      <div class="tool-desc">Type-check code without running it. Catches errors before execution — the AI equivalent of "does this compile?"</div>
+      <div class="tool-desc">Type-check a snippet against the current FSI session without executing it. Returns compiler diagnostics. Uses live session context — prior <code>open</code> statements are in scope.</div>
     </div>
     <div class="ai-tool">
       <div class="tool-name">run_tests</div>
-      <div class="tool-desc">Execute tests by name, category, or pattern. Get structured pass/fail results back — not just console output.</div>
+      <div class="tool-desc">Execute tests by name, category, or pattern. Waits for any in-progress hot reload to finish first — results always reflect the latest code. Supports <code>unit</code>, <code>integration</code>, <code>property</code>, <code>browser</code>, and more.</div>
     </div>
     <div class="ai-tool">
       <div class="tool-name">get_completions</div>
@@ -1283,6 +1284,14 @@
     <div class="ai-tool">
       <div class="tool-name">get_test_trace</div>
       <div class="tool-desc">Diagnose slow test runs. See enabled providers, run policies, and per-test timing to find bottlenecks.</div>
+    </div>
+    <div class="ai-tool">
+      <div class="tool-name">explain_test_failure</div>
+      <div class="tool-desc">Enriched failure context for a test that just broke. Shows <em>exactly which symbols changed</em> between the last passing and first failing run, plus FsCheck counterexamples.</div>
+    </div>
+    <div class="ai-tool">
+      <div class="tool-name">query_test_coverage</div>
+      <div class="tool-desc">Find every test that transitively covers a given symbol. Know what to run before refactoring — and what you might break.</div>
     </div>
   </div>
 </section>
@@ -1438,7 +1447,7 @@
       <div class="stat-label">Days to build</div>
     </a>
     <a class="stat" href="https://github.com/WillEhrendreich/SageFs/commits/master" target="_blank">
-      <div class="stat-num">790+</div>
+      <div class="stat-num">938+</div>
       <div class="stat-label">Commits</div>
     </a>
   </div>

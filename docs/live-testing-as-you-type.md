@@ -13,7 +13,7 @@ VS Enterprise's Live Unit Testing triggers on unsaved edits — same as us. The 
 | **Mechanism** | ProjFS workspace → MSBuild → IL instrumentation → test run | Extract scope → type-check snippet → FSI eval → test run |
 | **Broken code** | Dead — must compile to instrument | Tree-sitter/LSP works mid-keystroke |
 | **Scope** | Rebuilds impacted projects | Single function definition |
-| **Frameworks** | xUnit, NUnit, MSTest | + Expecto, TUnit, extensible |
+| **Frameworks** | xUnit, NUnit, MSTest | + Expecto, TUnit, extensible; FsCheck `[<Property>]` tests are discovered and shown in the live panel |
 | **Editors** | Visual Studio only | Neovim, VS Code, Visual Studio, TUI, GUI |
 | **Platform** | Windows only (ProjFS) | Cross-platform (.NET) |
 | **Cost** | ~$250/month Enterprise license | Free, MIT |
