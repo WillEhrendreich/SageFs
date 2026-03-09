@@ -215,7 +215,7 @@ let createStreamHandler
     // Resolve initial session: first available session (observer behavior — don't create)
     let! sessions = q.GetAllSessions ()
     let mutable currentSessionId =
-      sessions |> List.tryHead |> Option.map (fun s -> s.Id) |> Option.defaultValue ""
+      sessions |> List.tryHead |> Option.map (fun s -> WorkerProtocol.SessionId.value s.Id) |> Option.defaultValue ""
     infra.ConnectionTracker |> Option.iter (fun t -> t.Register(clientId, Browser, currentSessionId))
     let mutable lastSessionId = ""
     let mutable lastWorkingDir = ""
@@ -806,7 +806,7 @@ let createApiStateHandler
 
     // Each SSE connection tracks its own session via query param
     let! sessions = q.GetAllSessions ()
-    let defaultSid = sessions |> List.tryHead |> Option.map (fun s -> s.Id) |> Option.defaultValue ""
+    let defaultSid = sessions |> List.tryHead |> Option.map (fun s -> WorkerProtocol.SessionId.value s.Id) |> Option.defaultValue ""
     let connSessionId =
       match ctx.Request.Query.TryGetValue("sessionId") with
       | true, v when v.Count > 0 && not (String.IsNullOrEmpty(v.[0])) -> v.[0]
@@ -1056,9 +1056,9 @@ let createEndpoints
         let activeId = q.GetActiveSessionId ()
         let others =
           sessions
-          |> List.filter (fun (s: WorkerProtocol.SessionInfo) -> s.Id <> activeId)
+          |> List.filter (fun (s: WorkerProtocol.SessionInfo) -> WorkerProtocol.SessionId.value s.Id <> activeId)
         for s in others do
-          let! _ = handler s.Id
+          let! _ = handler (WorkerProtocol.SessionId.value s.Id)
           ()
         a.Dispatch (SageFsMsg.Editor EditorAction.ListSessions)
         Response.sseStartResponse ctx |> ignore

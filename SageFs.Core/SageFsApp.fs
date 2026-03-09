@@ -209,7 +209,7 @@ module SageFsUpdate =
     | Some idx ->
       let sessions = model.Sessions.Sessions
       match idx >= 0 && idx < sessions.Length with
-      | true -> Some sessions.[idx].Id
+      | true -> Some (SessionId.value sessions.[idx].Id)
       | false -> None
 
   let resolveConfigWorkingDirectory (model: SageFsModel) =
@@ -300,7 +300,7 @@ module SageFsUpdate =
         let others =
           model.Sessions.Sessions
           |> List.filter (fun s -> Some s.Id <> activeId)
-          |> List.map (fun s -> SageFsEffect.Editor (EditorEffect.RequestSessionStop s.Id))
+          |> List.map (fun s -> SageFsEffect.Editor (EditorEffect.RequestSessionStop (SessionId.value s.Id)))
         model, others
       | EditorAction.SessionCycleNext ->
         let count = model.Sessions.Sessions.Length
@@ -312,7 +312,7 @@ module SageFsUpdate =
           let sid = model.Sessions.Sessions.[nextIdx].Id
           let newEditor = { model.Editor with SelectedSessionIndex = Some nextIdx }
           { model with Editor = newEditor },
-          [SageFsEffect.Editor (EditorEffect.RequestSessionSwitch sid)]
+          [SageFsEffect.Editor (EditorEffect.RequestSessionSwitch (SessionId.value sid))]
       | EditorAction.SessionCyclePrev ->
         let count = model.Sessions.Sessions.Length
         match count <= 1 with
@@ -323,12 +323,12 @@ module SageFsUpdate =
           let sid = model.Sessions.Sessions.[prevIdx].Id
           let newEditor = { model.Editor with SelectedSessionIndex = Some prevIdx }
           { model with Editor = newEditor },
-          [SageFsEffect.Editor (EditorEffect.RequestSessionSwitch sid)]
+          [SageFsEffect.Editor (EditorEffect.RequestSessionSwitch (SessionId.value sid))]
       | EditorAction.ClearOutput ->
         // Clear active session's buffer; new store instance for ref inequality (triggers render)
         let activeId =
           match model.Sessions.ActiveSessionId with
-          | ActiveSession.Viewing sid -> sid
+          | ActiveSession.Viewing sid -> SessionId.value sid
           | ActiveSession.AwaitingSession -> ""
         model.RecentOutput.Clear(activeId)
         { model with RecentOutput = SessionOutputStore.empty },
@@ -463,11 +463,14 @@ module SageFsUpdate =
                 Sessions =
                   model.Sessions.Sessions
                   |> List.map (fun s ->
-                    match s.Id = sessionId with
+                    match SessionId.value s.Id = sessionId with
                     | true -> { s with Status = status }
                     | false -> s) } }, []
 
-      | SageFsEvent.SessionSwitched (_, toId) ->
+      | SageFsEvent.SessionSwitched (_, toIdStr) ->
+        match SessionId.validate toIdStr with
+        | Error _ -> model, []
+        | Ok toId ->
         { model with
             SessionContext = None
             Sessions = {
@@ -481,8 +484,11 @@ module SageFsUpdate =
       | SageFsEvent.SessionStopped sessionId ->
         let remaining =
           model.Sessions.Sessions
-          |> List.filter (fun s -> s.Id <> sessionId)
-        let wasActive = ActiveSession.isViewing sessionId model.Sessions.ActiveSessionId
+          |> List.filter (fun s -> SessionId.value s.Id <> sessionId)
+        let wasActive =
+          match model.Sessions.ActiveSessionId with
+          | ActiveSession.Viewing id -> SessionId.value id = sessionId
+          | ActiveSession.AwaitingSession -> false
         let newActive =
           match wasActive with
           | true ->
@@ -515,14 +521,14 @@ module SageFsUpdate =
                 Sessions =
                   model.Sessions.Sessions
                   |> List.map (fun s ->
-                    match s.Id = sessionId with
+                    match SessionId.value s.Id = sessionId with
                     | true -> { s with Status = SessionDisplayStatus.Stale }
                     | false -> s) } }, []
 
       | SageFsEvent.FileChanged _ -> model, []
 
       | SageFsEvent.FileReloaded (path, _, result) ->
-        let activeId = ActiveSession.sessionId model.Sessions.ActiveSessionId |> Option.defaultValue ""
+        let activeId = ActiveSession.sessionId model.Sessions.ActiveSessionId |> Option.map SessionId.value |> Option.defaultValue ""
         let line =
           match result with
           | Ok msg ->
@@ -538,7 +544,7 @@ module SageFsUpdate =
         { model with RecentOutput = SageFsModel.addOutputLine line model.RecentOutput }, []
 
       | SageFsEvent.WarmupProgress(step, total, msg) ->
-        let activeId = ActiveSession.sessionId model.Sessions.ActiveSessionId |> Option.defaultValue ""
+        let activeId = ActiveSession.sessionId model.Sessions.ActiveSessionId |> Option.map SessionId.value |> Option.defaultValue ""
         let line = {
           Kind = OutputKind.Info
           Text = sprintf "⏳ [%d/%d] %s" step total msg
@@ -547,7 +553,7 @@ module SageFsUpdate =
         { model with RecentOutput = SageFsModel.addOutputLine line model.RecentOutput }, []
 
       | SageFsEvent.WarmupCompleted (_, failures) ->
-        let activeId = ActiveSession.sessionId model.Sessions.ActiveSessionId |> Option.defaultValue ""
+        let activeId = ActiveSession.sessionId model.Sessions.ActiveSessionId |> Option.map SessionId.value |> Option.defaultValue ""
         match failures.IsEmpty with
         | true ->
           let line = {
@@ -921,7 +927,7 @@ module SageFsRender =
 
     let activeSessionId =
       match model.Sessions.ActiveSessionId with
-      | ActiveSession.Viewing sid -> sid
+      | ActiveSession.Viewing sid -> SessionId.value sid
       | ActiveSession.AwaitingSession -> ""
     let outputRegion =
       let buf = model.RecentOutput.GetActiveBuffer(model.Sessions.ActiveSessionId)
@@ -994,7 +1000,7 @@ module SageFsRender =
             | diff when diff.TotalMinutes < 60.0 -> sprintf " last:%dm ago" (int diff.TotalMinutes)
             | diff when diff.TotalHours < 24.0 -> sprintf " last:%dh ago" (int diff.TotalHours)
             | _ -> sprintf " last:%dd ago" (int diff.TotalDays)
-          sprintf "%s %s [%s]%s%s%s%s%s%s" selected s.Id statusLabel active projects evals uptime dir lastAct)
+          sprintf "%s %s [%s]%s%s%s%s%s%s" selected (SessionId.value s.Id) statusLabel active projects evals uptime dir lastAct)
         |> String.concat "\n"
         |> fun s ->
           let creatingLine =
@@ -1077,16 +1083,16 @@ module SageFsEffectHandler =
           Severity = d.Severity
         })
       SageFsMsg.Event (
-        SageFsEvent.EvalCompleted (sessionId, output, diagnostics))
+        SageFsEvent.EvalCompleted (SessionId.value sessionId, output, diagnostics))
     | WorkerResponse.EvalResult (_, Error err, _, _) ->
       SageFsMsg.Event (
-        SageFsEvent.EvalFailed (sessionId, SageFsError.describe err))
+        SageFsEvent.EvalFailed (SessionId.value sessionId, SageFsError.describe err))
     | WorkerResponse.EvalCancelled _ ->
-      SageFsMsg.Event (SageFsEvent.EvalCancelled sessionId)
+      SageFsMsg.Event (SageFsEvent.EvalCancelled (SessionId.value sessionId))
     | other ->
       SageFsMsg.Event (
         SageFsEvent.EvalFailed (
-          sessionId, sprintf "Unexpected response: %A" other))
+          SessionId.value sessionId, sprintf "Unexpected response: %A" other))
 
   let completionResponseToMsg
     (response: WorkerResponse) : SageFsMsg =
@@ -1113,7 +1119,7 @@ module SageFsEffectHandler =
         | None ->
           dispatch (SageFsMsg.Event (
             SageFsEvent.EvalFailed (
-              id, sprintf "No proxy for session %s" id)))
+              SessionId.value id, sprintf "No proxy for session %s" (SessionId.value id))))
       | Error err ->
         dispatch (SageFsMsg.Event (
           SageFsEvent.EvalFailed ("", SageFsError.describe err)))
@@ -1211,7 +1217,7 @@ module SageFsEffectHandler =
             dispatch (SageFsMsg.Event (
               SageFsEvent.SessionCreated (sessionInfoToSnapshot info)))
             dispatch (SageFsMsg.Event (
-              SageFsEvent.SessionSwitched (None, info.Id)))
+              SageFsEvent.SessionSwitched (None, SessionId.value info.Id)))
           | Error err ->
             dispatch (SageFsMsg.Event (
               SageFsEvent.EvalFailed (
@@ -1228,18 +1234,21 @@ module SageFsEffectHandler =
             dispatch (SageFsMsg.Event (SageFsEvent.EvalFailed ("", err)))
         }
 
-      | EditorEffect.RequestSessionStop sessionId ->
+      | EditorEffect.RequestSessionStop sessionIdStr ->
         async {
-          let! result = deps.StopSession sessionId
-          match result with
-          | Ok () ->
-            dispatch (SageFsMsg.Event (
-              SageFsEvent.SessionStopped sessionId))
-          | Error err ->
-            dispatch (SageFsMsg.Event (
-              SageFsEvent.EvalFailed (
-                sessionId,
-                sprintf "Stop failed: %s" (SageFsError.describe err))))
+          match SessionId.validate sessionIdStr with
+          | Error _ -> ()
+          | Ok sessionId ->
+            let! result = deps.StopSession sessionId
+            match result with
+            | Ok () ->
+              dispatch (SageFsMsg.Event (
+                SageFsEvent.SessionStopped sessionIdStr))
+            | Error err ->
+              dispatch (SageFsMsg.Event (
+                SageFsEvent.EvalFailed (
+                  sessionIdStr,
+                  sprintf "Stop failed: %s" (SageFsError.describe err))))
         }
 
       | EditorEffect.RequestReset ->
@@ -1248,7 +1257,7 @@ module SageFsEffectHandler =
             let replyId = newReplyId ()
             let! _ = proxy (WorkerMessage.ResetSession replyId)
             dispatch (SageFsMsg.Event (
-              SageFsEvent.SessionStatusChanged (sid, SessionDisplayStatus.Starting)))
+              SageFsEvent.SessionStatusChanged (SessionId.value sid, SessionDisplayStatus.Starting)))
           })
 
       | EditorEffect.RequestHardReset ->
@@ -1257,7 +1266,7 @@ module SageFsEffectHandler =
             let replyId = newReplyId ()
             let! _ = proxy (WorkerMessage.HardResetSession (false, replyId))
             dispatch (SageFsMsg.Event (
-              SageFsEvent.SessionStatusChanged (sid, SessionDisplayStatus.Restarting)))
+              SageFsEvent.SessionStatusChanged (SessionId.value sid, SessionDisplayStatus.Restarting)))
           })
 
     | SageFsEffect.TestCycle testCycleEffect ->
@@ -1338,7 +1347,8 @@ module SageFsEffectHandler =
                   "SageFs.LiveTesting.TestExecution")
               let sw = System.Diagnostics.Stopwatch.StartNew()
               try
-                match deps.ResolveSession targetSession with
+                let targetSid = targetSession |> Option.bind (fun s -> match SessionId.validate s with Ok sid -> Some sid | Error _ -> None)
+                match deps.ResolveSession targetSid with
                 | Ok resolution ->
                   let sid = SessionOperations.sessionId resolution
                   // Retry proxy lookup — worker URL may not be registered yet at startup
@@ -1456,7 +1466,7 @@ module SseDedupKey =
       model.Diagnostics |> Map.values |> Seq.sumBy List.length
     sb.Append(diagCount).Append('|') |> ignore
     sb.Append(model.Sessions.Sessions.Length).Append('|') |> ignore
-    let activeSessionId = ActiveSession.sessionId model.Sessions.ActiveSessionId |> Option.defaultValue ""
+    let activeSessionId = ActiveSession.sessionId model.Sessions.ActiveSessionId |> Option.map SessionId.value |> Option.defaultValue ""
     sb.Append(activeSessionId).Append('|') |> ignore
     for s in model.Sessions.Sessions do
       sb.Append(s.Id).Append(':').Append(string s.Status).Append(';') |> ignore

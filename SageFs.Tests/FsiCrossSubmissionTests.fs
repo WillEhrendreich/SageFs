@@ -16,10 +16,10 @@ let private dedicatedActor = lazy(
 )
 
 /// Create an McpContext backed by the dedicated actor with a custom session ID.
-let private isolatedCtx sessionId =
+let private isolatedCtx (sessionId: SageFs.WorkerProtocol.SessionId) =
   let result = dedicatedActor.Value
   let sessionMap = ConcurrentDictionary<string, string>()
-  sessionMap.["test"] <- sessionId
+  sessionMap.["test"] <- SageFs.WorkerProtocol.SessionId.value sessionId
   { Persistence = SageFs.EventStore.EventPersistence.noop
     DiagnosticsChanged = result.DiagnosticsChanged
     StateChanged = None
@@ -40,7 +40,7 @@ let private nextUid () =
 /// Uses a dedicated isolated actor to avoid contention with other tests.
 let private evalPair code1 code2 =
   let uid = nextUid ()
-  let ctx = isolatedCtx (sprintf "xsub-%s" uid)
+  let ctx = isolatedCtx (SageFs.WorkerProtocol.SessionId.newId())
   let r1 =
     sendFSharpCode ctx "test" code1 OutputFormat.Text None None None None None
     |> Async.AwaitTask |> Async.RunSynchronously

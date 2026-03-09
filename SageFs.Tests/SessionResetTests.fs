@@ -7,6 +7,7 @@ open SageFs.AppState
 open SageFs.McpTools
 open SageFs.Features.Events
 open SageFs.Tests.TestInfrastructure
+open SageFs.WorkerProtocol
 
 [<Tests>]
 let sessionResetTests =
@@ -15,7 +16,7 @@ let sessionResetTests =
     testCase "eval → reset → value is gone"
     <| fun _ ->
       task {
-        let ctx = sharedCtxWith "reset-test"
+        let ctx = sharedCtxWith (SessionId.newId())
 
         // Define a value
         let! defineResult = sendFSharpCode ctx "test" "let resetTestVal = 99;;" OutputFormat.Text None None None None None
@@ -44,7 +45,7 @@ let sessionResetTests =
     testCase "reset → eval 1+1 succeeds (session works)"
     <| fun _ ->
       task {
-        let ctx = sharedCtxWith "reset-works"
+        let ctx = sharedCtxWith (SessionId.newId())
 
         let! resetResult = resetSession ctx "test" None None
         resetResult
@@ -64,7 +65,7 @@ let sessionResetTests =
     testCase "reset returns success message"
     <| fun _ ->
       task {
-        let ctx = sharedCtxWith "reset-msg"
+        let ctx = sharedCtxWith (SessionId.newId())
 
         let! result = resetSession ctx "test" None None
         let isSuccess =

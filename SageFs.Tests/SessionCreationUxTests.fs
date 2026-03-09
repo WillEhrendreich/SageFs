@@ -4,6 +4,7 @@ open System
 open Expecto
 open Expecto.Flip
 open SageFs
+open SageFs.Tests.SharedGenerators
 
 let mkSnap id = {
   SessionSnapshot.Id = id
@@ -48,7 +49,7 @@ let creatingSessionGuardTests = testList "CreatingSession guard" [
     let model = { (SageFsModel.initial()) with CreatingSession = true }
     let model', _ =
       SageFsUpdate.update
-        (SageFsMsg.Event (SageFsEvent.SessionCreated (mkSnap "test-123")))
+        (SageFsMsg.Event (SageFsEvent.SessionCreated (mkSnap (testSessionId "aa001230"))))
         model
     model'.CreatingSession
     |> Expect.isFalse "should be false after SessionCreated"

@@ -112,16 +112,16 @@ module SessionDisplay =
   /// Build affordances for a session card
   let sessionAffordances (keyMap: KeyMap) (snap: SessionSnapshot) : Affordance list =
     [ yield
-        { Action = EditorAction.SwitchSession snap.Id
+        { Action = EditorAction.SwitchSession (SessionId.value snap.Id)
           Label = "Switch"
-          KeyHint = KeyMap.hintFor keyMap (EditorAction.SwitchSession snap.Id)
+          KeyHint = KeyMap.hintFor keyMap (EditorAction.SwitchSession (SessionId.value snap.Id))
           Enabled = not snap.IsActive }
       match snap.Status = SessionDisplayStatus.Stale || not snap.IsActive with
       | true ->
         yield
-          { Action = EditorAction.StopSession snap.Id
+          { Action = EditorAction.StopSession (SessionId.value snap.Id)
             Label = "Stop"
-            KeyHint = KeyMap.hintFor keyMap (EditorAction.StopSession snap.Id)
+            KeyHint = KeyMap.hintFor keyMap (EditorAction.StopSession (SessionId.value snap.Id))
             Enabled = true }
       | false -> ()
       match snap.Status with

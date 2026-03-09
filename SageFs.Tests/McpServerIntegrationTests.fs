@@ -8,6 +8,7 @@ open SageFs.AppState
 open SageFs.Features.Events
 open SageFs.McpTools
 open SageFs.Tests.TestInfrastructure
+open SageFs.WorkerProtocol
 
 // Integration tests for MCP server functionality
 // Tests that MCP tools can interact with SageFs actor
@@ -21,9 +22,9 @@ let tests =
     <| fun _ ->
       task {
         printfn "Testing sendFSharpCode tool..."
-        let ctx = sharedCtxWith "test-session"
+        let ctx = sharedCtxWith (SessionId.newId())
 
-        let! result = sendFSharpCode ctx "test-agent" "let x = 42" OutputFormat.Text None None None None None
+        let! result = sendFSharpCode ctx "test-agent" "let x = 42"OutputFormat.Text None None None None None
 
         printfn "Result: %s" result
         Expect.stringContains result "val x" "Should execute successfully"
@@ -39,7 +40,7 @@ let tests =
     <| fun _ ->
       task {
         printfn "Testing event tracking..."
-        let ctx = sharedCtxWith "collab-session"
+        let ctx = sharedCtxWith (SessionId.newId())
 
         // MCP tool executes code
         let! _ = sendFSharpCode ctx "claude" "let aiValue = 100" OutputFormat.Text None None None None None
@@ -62,7 +63,7 @@ let tests =
     <| fun _ ->
       task {
         printfn "Testing getRecentEvents tool..."
-        let ctx = sharedCtxWith "test-session"
+        let ctx = sharedCtxWith (SessionId.newId())
 
         // Generate some events
         let! _ = sendFSharpCode ctx "agent1" "let a = 1" OutputFormat.Text None None None None None
@@ -83,7 +84,7 @@ let tests =
     <| fun _ ->
       task {
         printfn "Testing getStatus tool..."
-        let ctx = sharedCtxWith "status-session"
+        let ctx = sharedCtxWith (SessionId.newId())
 
         let! result = getStatus ctx "test" None None
 
@@ -101,7 +102,7 @@ let tests =
       task {
         printfn "Testing loadFSharpScript tool..."
         let actor = globalActorResult.Value.Actor
-        let ctx = sharedCtxWith "test-session"
+        let ctx = sharedCtxWith (SessionId.newId())
 
         // Create a temp script file
         let tempFile = System.IO.Path.GetTempFileName()
@@ -144,7 +145,7 @@ let tests =
     <| fun _ ->
       task {
         printfn "Testing multi-agent collaboration..."
-        let ctx = sharedCtxWith "collab-session"
+        let ctx = sharedCtxWith (SessionId.newId())
 
         // Agent 1 defines something
         let! result1 = sendFSharpCode ctx "agent1" "let sharedData = [1; 2; 3]" OutputFormat.Text None None None None None
@@ -173,7 +174,7 @@ let tests =
       task {
         printfn "Testing console+MCP collaboration..."
         let actor = globalActorResult.Value.Actor
-        let ctx = sharedCtxWith "mixed-session"
+        let ctx = sharedCtxWith (SessionId.newId())
 
         // Simulate console user input
         do! SageFs.EventTracking.trackInput ctx.Persistence ctx.SessionMap.["test"] Console "let userValue = 42"
@@ -207,7 +208,7 @@ let tests =
     <| fun _ ->
       task {
         printfn "Testing sendFSharpCode with compilation error..."
-        let ctx = sharedCtxWith "error-session"
+        let ctx = sharedCtxWith (SessionId.newId())
 
         let! result = sendFSharpCode ctx "test-agent" "let x = invalid syntax" OutputFormat.Text None None None None None
 
@@ -226,7 +227,7 @@ let tests =
     <| fun _ ->
       task {
         printfn "Testing sendFSharpCode with runtime error..."
-        let ctx = sharedCtxWith "runtime-error-session"
+        let ctx = sharedCtxWith (SessionId.newId())
 
         let! result = sendFSharpCode ctx "test-agent" "1 / 0" OutputFormat.Text None None None None None
 
@@ -243,9 +244,9 @@ let tests =
     <| fun _ ->
       task {
         printfn "Testing loadFSharpScript with non-existent file..."
-        let ctx = sharedCtxWith "test-session"
+        let ctx = sharedCtxWith (SessionId.newId())
 
-        let! result = loadFSharpScript ctx "test-agent" "C:\\nonexistent\\file.fsx" None None
+        let! result = loadFSharpScript ctx "test-agent" "C:\\nonexistent\\file.fsx"None None
 
         printfn "Non-existent file result: %s" result
         Expect.stringContains result "Error" "Should return error for non-existent file"
@@ -259,7 +260,7 @@ let tests =
     <| fun _ ->
       task {
         printfn "Testing loadFSharpScript with partial failures..."
-        let ctx = sharedCtxWith "test-session"
+        let ctx = sharedCtxWith (SessionId.newId())
 
         // Create script with one good and one bad statement
         let tempFile = System.IO.Path.GetTempFileName()
@@ -288,9 +289,9 @@ let tests =
     testCase "sendFSharpCode with Json format returns structured JSON"
     <| fun _ ->
       task {
-        let ctx = sharedCtxWith "test-session"
+        let ctx = sharedCtxWith (SessionId.newId())
 
-        let! result = sendFSharpCode ctx "test-agent" "let jsonTestVal = 42;;" OutputFormat.Json None None None None None
+        let! result = sendFSharpCode ctx "test-agent" "let jsonTestVal = 42;;"OutputFormat.Json None None None None None
 
         let doc = System.Text.Json.JsonDocument.Parse(result)
         let root = doc.RootElement
@@ -303,9 +304,9 @@ let tests =
     testCase "sendFSharpCode with Json format returns error structure on failure"
     <| fun _ ->
       task {
-        let ctx = sharedCtxWith "test-session"
+        let ctx = sharedCtxWith (SessionId.newId())
 
-        let! result = sendFSharpCode ctx "test-agent" "let x: int = \"not an int\";;" OutputFormat.Json None None None None None
+        let! result = sendFSharpCode ctx "test-agent" "let x: int = \"not an int\";;"OutputFormat.Json None None None None None
 
         let doc = System.Text.Json.JsonDocument.Parse(result)
         let root = doc.RootElement
@@ -318,9 +319,9 @@ let tests =
     testCase "sendFSharpCode with Json format returns array for multiple statements"
     <| fun _ ->
       task {
-        let ctx = sharedCtxWith "test-session"
+        let ctx = sharedCtxWith (SessionId.newId())
 
-        let! result = sendFSharpCode ctx "test-agent" "let a1 = 1;;\nlet b1 = 2;;" OutputFormat.Json None None None None None
+        let! result = sendFSharpCode ctx "test-agent" "let a1 = 1;;\nlet b1 = 2;;"OutputFormat.Json None None None None None
 
         let doc = System.Text.Json.JsonDocument.Parse(result)
         let root = doc.RootElement

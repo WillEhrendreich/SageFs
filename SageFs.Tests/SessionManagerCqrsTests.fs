@@ -9,6 +9,7 @@ open Expecto.Flip
 open SageFs
 open SageFs.WorkerProtocol
 open SageFs.SessionManager
+open SageFs.Tests.SharedGenerators
 
 // See SessionManager.fs module header for the CQRS rationale.
 // Problem: MailboxProcessor reads block behind writes — p99 > 200ms during slow commands.
@@ -16,7 +17,7 @@ open SageFs.SessionManager
 
 // ── Test helpers ──────────────────────────────────────────────
 
-let mkSessionInfo id status =
+let mkSessionInfo (id: SessionId) status =
   {
     Id = id
     Name = None
@@ -29,7 +30,7 @@ let mkSessionInfo id status =
     WorkerPid = None
   }
 
-let mkManagedSession id status =
+let mkManagedSession (id: SessionId) status =
   let proxy : SessionProxy =
     fun _ -> async {
       return WorkerResponse.WorkerError (SageFsError.WorkerSpawnFailed "test")
@@ -182,12 +183,14 @@ let querySnapshotTests = testList "QuerySnapshot projection" [
   }
 
   test "fromState projects multiple sessions" {
-    let s1 = mkManagedSession "a" SessionStatus.Ready
-    let s2 = mkManagedSession "b" SessionStatus.Starting
+    let idA = testSessionId "aa000001"
+    let idB = testSessionId "bb000001"
+    let s1 = mkManagedSession idA SessionStatus.Ready
+    let s2 = mkManagedSession idB SessionStatus.Starting
     let state =
       ManagerState.empty
-      |> ManagerState.addSession "a" s1
-      |> ManagerState.addSession "b" s2
+      |> ManagerState.addSession idA s1
+      |> ManagerState.addSession idB s2
     let snap = QuerySnapshot.fromState state (StandbyInfo.Warming "building")
 
     snap.Sessions |> Map.count |> Expect.equal "two sessions" 2
@@ -195,11 +198,12 @@ let querySnapshotTests = testList "QuerySnapshot projection" [
   }
 
   test "tryGetSession returns existing session info" {
-    let s = mkManagedSession "x" SessionStatus.Ready
-    let state = ManagerState.empty |> ManagerState.addSession "x" s
+    let idX = testSessionId "ee000001"
+    let s = mkManagedSession idX SessionStatus.Ready
+    let state = ManagerState.empty |> ManagerState.addSession idX s
     let snap = QuerySnapshot.fromState state StandbyInfo.NoPool
 
-    let result = QuerySnapshot.tryGetSession "x" snap
+    let result = QuerySnapshot.tryGetSession idX snap
     result |> Expect.isSome "should find session"
     (result |> Option.get).Status
     |> Expect.equal "status is Ready" SessionStatus.Ready
@@ -207,17 +211,19 @@ let querySnapshotTests = testList "QuerySnapshot projection" [
 
   test "tryGetSession returns None for missing session" {
     let snap = QuerySnapshot.fromState ManagerState.empty StandbyInfo.NoPool
-    QuerySnapshot.tryGetSession "nonexistent" snap
+    QuerySnapshot.tryGetSession (testSessionId "dead0001") snap
     |> Expect.isNone "missing session returns None"
   }
 
   test "allSessions returns all session infos" {
-    let s1 = mkManagedSession "a" SessionStatus.Ready
-    let s2 = mkManagedSession "b" SessionStatus.Starting
+    let idA = testSessionId "aa000002"
+    let idB = testSessionId "bb000002"
+    let s1 = mkManagedSession idA SessionStatus.Ready
+    let s2 = mkManagedSession idB SessionStatus.Starting
     let state =
       ManagerState.empty
-      |> ManagerState.addSession "a" s1
-      |> ManagerState.addSession "b" s2
+      |> ManagerState.addSession idA s1
+      |> ManagerState.addSession idB s2
     let snap = QuerySnapshot.fromState state StandbyInfo.NoPool
 
     let all = QuerySnapshot.allSessions snap
@@ -225,17 +231,19 @@ let querySnapshotTests = testList "QuerySnapshot projection" [
   }
 
   test "snapshot is immutable — adding to state doesn't affect existing snapshot" {
-    let s1 = mkManagedSession "a" SessionStatus.Ready
-    let state1 = ManagerState.empty |> ManagerState.addSession "a" s1
+    let idA = testSessionId "aa000003"
+    let idB = testSessionId "bb000003"
+    let s1 = mkManagedSession idA SessionStatus.Ready
+    let state1 = ManagerState.empty |> ManagerState.addSession idA s1
     let snap1 = QuerySnapshot.fromState state1 StandbyInfo.NoPool
 
     // Add another session to state
-    let s2 = mkManagedSession "b" SessionStatus.Starting
-    let state2 = state1 |> ManagerState.addSession "b" s2
+    let s2 = mkManagedSession idB SessionStatus.Starting
+    let state2 = state1 |> ManagerState.addSession idB s2
     let snap2 = QuerySnapshot.fromState state2 StandbyInfo.NoPool
 
     // snap1 should NOT see session "b"
-    QuerySnapshot.tryGetSession "b" snap1
+    QuerySnapshot.tryGetSession idB snap1
     |> Expect.isNone "old snapshot doesn't see new session"
 
     // snap2 should see both
@@ -243,20 +251,22 @@ let querySnapshotTests = testList "QuerySnapshot projection" [
   }
 
   test "snapshot reflects removal in new snapshot" {
-    let s1 = mkManagedSession "a" SessionStatus.Ready
-    let s2 = mkManagedSession "b" SessionStatus.Starting
+    let idA = testSessionId "aa000004"
+    let idB = testSessionId "bb000004"
+    let s1 = mkManagedSession idA SessionStatus.Ready
+    let s2 = mkManagedSession idB SessionStatus.Starting
     let state =
       ManagerState.empty
-      |> ManagerState.addSession "a" s1
-      |> ManagerState.addSession "b" s2
+      |> ManagerState.addSession idA s1
+      |> ManagerState.addSession idB s2
     let snap1 = QuerySnapshot.fromState state StandbyInfo.NoPool
 
-    let state2 = state |> ManagerState.removeSession "a"
+    let state2 = state |> ManagerState.removeSession idA
     let snap2 = QuerySnapshot.fromState state2 StandbyInfo.NoPool
 
     snap1.Sessions |> Map.count |> Expect.equal "old snapshot still has 2" 2
     snap2.Sessions |> Map.count |> Expect.equal "new snapshot has 1" 1
-    QuerySnapshot.tryGetSession "a" snap2
+    QuerySnapshot.tryGetSession idA snap2
     |> Expect.isNone "removed session not in new snapshot"
   }
 ]
@@ -265,13 +275,14 @@ let querySnapshotTests = testList "QuerySnapshot projection" [
 
 let warmupProgressTests = testList "Warmup progress in QuerySnapshot" [
   test "fromManagerState propagates warmup progress" {
+    let idS1 = testSessionId "aa000010"
     let state = {
       ManagerState.empty with
-        WarmupProgress = Map.ofList [ "s1", "2/4 Scanned 12 files" ]
+        WarmupProgress = Map.ofList [ idS1, "2/4 Scanned 12 files" ]
     }
     let snap = QuerySnapshot.fromManagerState state
     snap.WarmupProgress
-    |> Map.tryFind "s1"
+    |> Map.tryFind idS1
     |> Expect.isSome "should have warmup progress for s1"
   }
 
@@ -283,31 +294,34 @@ let warmupProgressTests = testList "Warmup progress in QuerySnapshot" [
   }
 
   test "warmup progress cleared when session removed" {
+    let idS1 = testSessionId "aa000011"
     let state = {
       ManagerState.empty with
-        WarmupProgress = Map.ofList [ "s1", "2/4 Scanned 12 files" ]
+        WarmupProgress = Map.ofList [ idS1, "2/4 Scanned 12 files" ]
     }
-    let afterRemove = ManagerState.removeSession "s1" state
+    let afterRemove = ManagerState.removeSession idS1 state
     let snap = QuerySnapshot.fromManagerState afterRemove
     snap.WarmupProgress
-    |> Map.containsKey "s1"
+    |> Map.containsKey idS1
     |> Expect.isFalse "should not have warmup progress after session removed"
   }
 
   test "warmup progress for multiple sessions" {
+    let idS1 = testSessionId "aa000012"
+    let idS2 = testSessionId "bb000012"
     let state = {
       ManagerState.empty with
         WarmupProgress = Map.ofList [
-          "s1", "1/4 FSI session created"
-          "s2", "3/4 Opening namespaces"
+          idS1, "1/4 FSI session created"
+          idS2, "3/4 Opening namespaces"
         ]
     }
     let snap = QuerySnapshot.fromManagerState state
     snap.WarmupProgress |> Map.count
     |> Expect.equal "should have 2 entries" 2
-    snap.WarmupProgress |> Map.find "s1"
+    snap.WarmupProgress |> Map.find idS1
     |> Expect.equal "s1 progress" "1/4 FSI session created"
-    snap.WarmupProgress |> Map.find "s2"
+    snap.WarmupProgress |> Map.find idS2
     |> Expect.equal "s2 progress" "3/4 Opening namespaces"
   }
 
@@ -323,16 +337,18 @@ let warmupProgressTests = testList "Warmup progress in QuerySnapshot" [
 let workerBaseUrlTests = testList "WorkerBaseUrls in QuerySnapshot" [
 
   test "fromState projects WorkerBaseUrls from managed sessions" {
-    let s1 = { mkManagedSession "s1" SessionStatus.Ready with WorkerBaseUrl = "http://localhost:5001" }
-    let s2 = { mkManagedSession "s2" SessionStatus.Starting with WorkerBaseUrl = "http://localhost:5002" }
+    let idS1 = testSessionId "aa000020"
+    let idS2 = testSessionId "bb000020"
+    let s1 = { mkManagedSession idS1 SessionStatus.Ready with WorkerBaseUrl = "http://localhost:5001" }
+    let s2 = { mkManagedSession idS2 SessionStatus.Starting with WorkerBaseUrl = "http://localhost:5002" }
     let state =
       ManagerState.empty
-      |> ManagerState.addSession "s1" s1
-      |> ManagerState.addSession "s2" s2
+      |> ManagerState.addSession idS1 s1
+      |> ManagerState.addSession idS2 s2
     let snap = QuerySnapshot.fromState state StandbyInfo.NoPool
     snap.WorkerBaseUrls |> Map.count |> Expect.equal "should have 2 URLs" 2
-    snap.WorkerBaseUrls |> Map.find "s1" |> Expect.equal "s1 URL" "http://localhost:5001"
-    snap.WorkerBaseUrls |> Map.find "s2" |> Expect.equal "s2 URL" "http://localhost:5002"
+    snap.WorkerBaseUrls |> Map.find idS1 |> Expect.equal "s1 URL" "http://localhost:5001"
+    snap.WorkerBaseUrls |> Map.find idS2 |> Expect.equal "s2 URL" "http://localhost:5002"
   }
 
   test "empty state has empty WorkerBaseUrls" {
@@ -341,14 +357,15 @@ let workerBaseUrlTests = testList "WorkerBaseUrls in QuerySnapshot" [
   }
 
   test "WorkerBaseUrls updates when session removed" {
-    let s1 = { mkManagedSession "s1" SessionStatus.Ready with WorkerBaseUrl = "http://localhost:5001" }
-    let state = ManagerState.empty |> ManagerState.addSession "s1" s1
+    let idS1 = testSessionId "aa000021"
+    let s1 = { mkManagedSession idS1 SessionStatus.Ready with WorkerBaseUrl = "http://localhost:5001" }
+    let state = ManagerState.empty |> ManagerState.addSession idS1 s1
     let snap1 = QuerySnapshot.fromState state StandbyInfo.NoPool
-    snap1.WorkerBaseUrls |> Map.containsKey "s1" |> Expect.isTrue "should have s1"
+    snap1.WorkerBaseUrls |> Map.containsKey idS1 |> Expect.isTrue "should have s1"
 
-    let state2 = state |> ManagerState.removeSession "s1"
+    let state2 = state |> ManagerState.removeSession idS1
     let snap2 = QuerySnapshot.fromState state2 StandbyInfo.NoPool
-    snap2.WorkerBaseUrls |> Map.containsKey "s1" |> Expect.isFalse "should not have s1 after removal"
+    snap2.WorkerBaseUrls |> Map.containsKey idS1 |> Expect.isFalse "should not have s1 after removal"
   }
 
   test "QuerySnapshot.empty has empty WorkerBaseUrls" {
@@ -361,10 +378,11 @@ let workerBaseUrlTests = testList "WorkerBaseUrls in QuerySnapshot" [
 let snapshotDashboardTests = testList "Snapshot dashboard helpers" [
 
   test "getSessionState from snapshot returns correct state" {
-    let s1 = mkManagedSession "s1" SessionStatus.Ready
-    let state = ManagerState.empty |> ManagerState.addSession "s1" s1
+    let idS1 = testSessionId "aa000030"
+    let s1 = mkManagedSession idS1 SessionStatus.Ready
+    let state = ManagerState.empty |> ManagerState.addSession idS1 s1
     let snap = QuerySnapshot.fromState state StandbyInfo.NoPool
-    let info = QuerySnapshot.tryGetSession "s1" snap
+    let info = QuerySnapshot.tryGetSession idS1 snap
     let sessionState =
       info
       |> Option.map (fun i -> SessionStatus.toSessionState i.Status)
@@ -373,34 +391,37 @@ let snapshotDashboardTests = testList "Snapshot dashboard helpers" [
   }
 
   test "getSessionWorkingDir from snapshot returns correct dir" {
-    let s1 = { mkManagedSession "s1" SessionStatus.Ready with
-                 Info = { (mkSessionInfo "s1" SessionStatus.Ready) with WorkingDirectory = "/my/project" } }
-    let state = ManagerState.empty |> ManagerState.addSession "s1" s1
+    let idS1 = testSessionId "aa000031"
+    let s1 = { mkManagedSession idS1 SessionStatus.Ready with
+                 Info = { (mkSessionInfo idS1 SessionStatus.Ready) with WorkingDirectory = "/my/project" } }
+    let state = ManagerState.empty |> ManagerState.addSession idS1 s1
     let snap = QuerySnapshot.fromState state StandbyInfo.NoPool
     let dir =
-      QuerySnapshot.tryGetSession "s1" snap
+      QuerySnapshot.tryGetSession idS1 snap
       |> Option.map (fun i -> i.WorkingDirectory)
       |> Option.defaultValue ""
     dir |> Expect.equal "should be /my/project" "/my/project"
   }
 
   test "getStatusMsg from snapshot returns warmup progress" {
+    let idS1 = testSessionId "aa000032"
     let state = {
       ManagerState.empty with
-        WarmupProgress = Map.ofList [ "s1", "2/4 Loading assemblies" ]
+        WarmupProgress = Map.ofList [ idS1, "2/4 Loading assemblies" ]
     }
     let snap = QuerySnapshot.fromManagerState state
-    let msg = snap.WarmupProgress |> Map.tryFind "s1"
+    let msg = snap.WarmupProgress |> Map.tryFind idS1
     msg |> Expect.equal "should have warmup msg" (Some "2/4 Loading assemblies")
   }
 
   test "snapshot read is non-blocking (performance)" {
-    let s1 = mkManagedSession "s1" SessionStatus.Ready
-    let state = ManagerState.empty |> ManagerState.addSession "s1" s1
+    let idS1 = testSessionId "aa000033"
+    let s1 = mkManagedSession idS1 SessionStatus.Ready
+    let state = ManagerState.empty |> ManagerState.addSession idS1 s1
     let snap = QuerySnapshot.fromState state StandbyInfo.NoPool
     let sw = Stopwatch.StartNew()
     for _ in 1..1000 do
-      QuerySnapshot.tryGetSession "s1" snap |> ignore
+      QuerySnapshot.tryGetSession idS1 snap |> ignore
     sw.Stop()
     (sw.ElapsedMilliseconds, 50L)
     |> Expect.isLessThan "1000 snapshot reads < 50ms — CQRS scalability (see SessionManager.fs header)"

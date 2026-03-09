@@ -188,6 +188,13 @@ let readValidatedSessionId (ctx: Microsoft.AspNetCore.Http.HttpContext) = task {
     return None
 }
 
+/// Convert a known-good string to SessionId, throwing on invalid format.
+/// Use only for strings that have already been validated or originate from SessionId.value round-trips.
+let private toSessionId (s: string) =
+  match SageFs.WorkerProtocol.SessionId.validate s with
+  | Ok sid -> sid
+  | Error _ -> failwithf "invalid session ID: %s" s
+
 /// Wrap an async handler with try/catch and JSON error response.
 let withErrorHandling (ctx: Microsoft.AspNetCore.Http.HttpContext) (handler: unit -> Task) = task {
   try do! handler ()
@@ -310,7 +317,8 @@ module SseContext =
   let activeSessionId (ctx: SseContext) =
     ctx.GetElmModel
     |> Option.bind (fun gm ->
-      SageFs.ActiveSession.sessionId (gm().Sessions.ActiveSessionId))
+      SageFs.ActiveSession.sessionId (gm().Sessions.ActiveSessionId)
+      |> Option.map SageFs.WorkerProtocol.SessionId.value)
 
   let withModel (ctx: SseContext) (f: SageFs.SageFsModel -> unit) =
     ctx.GetElmModel |> Option.iter (fun getModel -> f (getModel()))
@@ -331,6 +339,7 @@ let replaySessionSnapshot (ctx: SseContext) (body: System.IO.Stream) =
         let activeId =
           let model = getModel()
           SageFs.ActiveSession.sessionId model.Sessions.ActiveSessionId
+          |> Option.map SageFs.WorkerProtocol.SessionId.value
           |> Option.defaultValue ""
         match activeId.Length > 0 with
         | true ->
@@ -419,6 +428,7 @@ let wireSessionEventSubscription
             let activeId =
               let model = getModel()
               SageFs.ActiveSession.sessionId model.Sessions.ActiveSessionId
+              |> Option.map SageFs.WorkerProtocol.SessionId.value
               |> Option.defaultValue ""
             match activeId.Length > 0 with
             | true ->
@@ -897,7 +907,7 @@ let mapExecutionRoutes (app: WebApplication) (rctx: RouteContext) =
       let! workingDir = task {
         match sessionIdOpt with
         | Some sid when sid.Length > 0 ->
-          let! infoOpt = rctx.Config.SessionOps.GetSessionInfo(sid)
+          let! infoOpt = rctx.Config.SessionOps.GetSessionInfo(toSessionId sid)
           return infoOpt |> Option.map (fun s -> s.WorkingDirectory) |> Option.defaultValue ""
         | _ ->
           let! sessions = rctx.Config.SessionOps.GetAllSessions()
@@ -1087,16 +1097,26 @@ let mapStatusRoutes (app: WebApplication) (rctx: RouteContext) =
         | true, v when v.Count > 0 && not (String.IsNullOrWhiteSpace(v.[0])) -> return v.[0]
         | _ ->
           let! sessions = rctx.Config.SessionOps.GetAllSessions()
-          return sessions |> List.tryHead |> Option.map (fun s -> s.Id) |> Option.defaultValue ""
+          return sessions |> List.tryHead |> Option.map (fun s -> SageFs.WorkerProtocol.SessionId.value s.Id) |> Option.defaultValue ""
       }
-      let! info = rctx.Config.SessionOps.GetSessionInfo sid
+      let sidTyped =
+        match SageFs.WorkerProtocol.SessionId.validate sid with
+        | Ok s -> Some s
+        | Error _ -> None
+      let! info =
+        match sidTyped with
+        | Some s -> rctx.Config.SessionOps.GetSessionInfo s
+        | None -> Task.FromResult None
       let! statusResult =
         task {
-          let! proxy = rctx.Config.SessionOps.GetProxy sid
-          match proxy with
-          | Some send ->
-            let! resp = send (SageFs.WorkerProtocol.WorkerMessage.GetStatus "api") |> Async.StartAsTask
-            return Some resp
+          match sidTyped with
+          | Some s ->
+            let! proxy = rctx.Config.SessionOps.GetProxy s
+            match proxy with
+            | Some send ->
+              let! resp = send (SageFs.WorkerProtocol.WorkerMessage.GetStatus "api") |> Async.StartAsTask
+              return Some resp
+            | None -> return None
           | None -> return None
         }
       let elmRegions =
@@ -1189,17 +1209,17 @@ let mapSessionRoutes (app: WebApplication) (rctx: RouteContext) =
               | _ -> return 0, 0.0, "Unknown"
             with
             | :? System.Net.Http.HttpRequestException as ex ->
-              Log.error "[MCP] Session status HTTP error for %s: %s" sess.Id ex.Message
+              Log.error "[MCP] Session status HTTP error for %s: %s" (SageFs.WorkerProtocol.SessionId.value sess.Id) ex.Message
               return 0, 0.0, "Error"
             | :? System.Threading.Tasks.TaskCanceledException ->
               return 0, 0.0, "Timeout"
             | ex ->
-              Log.error "[MCP] Session status unexpected error for %s: %s (%s)" sess.Id ex.Message (ex.GetType().Name)
+              Log.error "[MCP] Session status unexpected error for %s: %s (%s)" (SageFs.WorkerProtocol.SessionId.value sess.Id) ex.Message (ex.GetType().Name)
               return 0, 0.0, "Error"
           | None -> return 0, 0.0, "Disconnected"
         }
         results.Add(
-          {| id = sess.Id
+          {| id = SageFs.WorkerProtocol.SessionId.value sess.Id
              status = status
              projects = sess.Projects
              workingDirectory = sess.WorkingDirectory
@@ -1214,23 +1234,24 @@ let mapSessionRoutes (app: WebApplication) (rctx: RouteContext) =
       match sidOpt with
       | None -> () // 400 already sent
       | Some sid ->
+        let sidStr = SageFs.WorkerProtocol.SessionId.value sid
         let! info = rctx.Config.SessionOps.GetSessionInfo sid
         match info with
         | Some _ ->
-          SageFs.McpTools.setActiveSessionId rctx.McpContext "cli-integrated" sid
-          SageFs.McpTools.setActiveSessionId rctx.McpContext "http" sid
+          SageFs.McpTools.setActiveSessionId rctx.McpContext "cli-integrated" sidStr
+          SageFs.McpTools.setActiveSessionId rctx.McpContext "http" sidStr
           match rctx.Dispatch with
           | Some d ->
-            d (SageFs.SageFsMsg.Event (SageFs.SageFsEvent.SessionSwitched (None, sid)))
+            d (SageFs.SageFsMsg.Event (SageFs.SageFsEvent.SessionSwitched (None, sidStr)))
             d (SageFs.SageFsMsg.Editor SageFs.EditorAction.ListSessions)
           | None -> ()
           let! _ = rctx.McpContext.Persistence.AppendEvents "daemon-sessions" [
             SageFs.Features.Events.SageFsEvent.DaemonSessionSwitched
-              {| FromId = None; ToId = sid; SwitchedAt = System.DateTimeOffset.UtcNow |}
+              {| FromId = None; ToId = sidStr; SwitchedAt = System.DateTimeOffset.UtcNow |}
           ]
-          do! jsonResponse ctx 200 {| success = true; sessionId = sid |}
+          do! jsonResponse ctx 200 {| success = true; sessionId = sidStr |}
         | None ->
-          do! jsonResponse ctx 404 {| success = false; error = sprintf "Session '%s' not found" sid |}
+          do! jsonResponse ctx 404 {| success = false; error = sprintf "Session '%s' not found" sidStr |}
     }) :> Task
   ) |> ignore
   app.MapPost("/api/sessions/create", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
@@ -1278,7 +1299,7 @@ let mapSessionRoutes (app: WebApplication) (rctx: RouteContext) =
       match sidOpt with
       | None -> () // 400 already sent
       | Some sid ->
-        let! result = rctx.Config.SessionOps.StopSession sid
+        let! result = rctx.Config.SessionOps.StopSession (SageFs.WorkerProtocol.SessionId.value sid)
         match rctx.Dispatch with
         | Some d -> d (SageFs.SageFsMsg.Editor SageFs.EditorAction.ListSessions)
         | None -> ()
@@ -1458,7 +1479,7 @@ let mapAnalysisRoutes (app: WebApplication) (rctx: RouteContext) =
       | Error msg ->
         do! jsonResponse ctx 400 {| success = false; error = msg |}
       | Ok sid ->
-        let! events = rctx.McpContext.Persistence.FetchStream sid
+        let! events = rctx.McpContext.Persistence.FetchStream (SageFs.WorkerProtocol.SessionId.value sid)
         let replayState =
           events
           |> SageFs.Features.Replay.SessionReplayState.replayStream

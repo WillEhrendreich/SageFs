@@ -7,6 +7,7 @@ open Expecto.Flip
 open SageFs
 open SageFs.WorkerProtocol
 open SageFs.Features.Diagnostics
+open SageFs.Tests.SharedGenerators
 
 /// Test helpers for ElmDaemon
 module ElmDaemonTestHelpers =
@@ -14,8 +15,9 @@ module ElmDaemonTestHelpers =
   /// Create mock EffectDeps with a configurable worker proxy
   let mockDeps
     (handler: WorkerMessage -> WorkerResponse) : EffectDeps =
+    let testSid = testSessionId "deadbeef"
     let sessionInfo : SessionInfo = {
-      Id = "test-session"
+      Id = testSid
       Name = None
       Projects = ["Test.fsproj"]
       WorkingDirectory = "."
@@ -30,9 +32,9 @@ module ElmDaemonTestHelpers =
     {
       ResolveSession = fun _ ->
         Result.Ok (
-          SessionOperations.SessionResolution.DefaultSingle "test-session")
+          SessionOperations.SessionResolution.DefaultSingle testSid)
       GetProxy = fun id ->
-        if id = "test-session" then Some proxy else None
+        if id = testSid then Some proxy else None
       GetStreamingTestProxy = fun _ -> None
       CreateSession = fun projects _ ->
         async { return Result.Ok sessionInfo }

@@ -68,6 +68,21 @@ let genCell =
     return Cell.create ch fg bg attrs
   }
 
+// ── Test SessionId helpers ──
+
+/// Create a SessionId for testing from a known-valid 8-char hex string.
+let testSessionId (hex: string) =
+  match SessionId.validate hex with
+  | Ok sid -> sid
+  | Error e -> failwithf "test bug: invalid session ID '%s': %s" hex e
+
+/// FsCheck generator for valid SessionIds.
+let genSessionId =
+  gen {
+    let! chars = Gen.listOfLength 8 (Gen.elements (['0'..'9'] @ ['a'..'f']))
+    return testSessionId (System.String(chars |> List.toArray))
+  }
+
 // ── Colors ──
 
 let genHexColor =

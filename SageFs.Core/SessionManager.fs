@@ -200,7 +200,7 @@ module SessionManager =
     (autoOpenNamespaces: bool)
     (onExited: int -> int -> unit)
     : Result<Process, SageFsError> =
-    let args, envVars = Args.buildWorkerSpawnConfig sessionId projects false false autoOpenNamespaces false
+    let args, envVars = Args.buildWorkerSpawnConfig (SessionId.value sessionId) projects false false autoOpenNamespaces false
 
     let psi = ProcessStartInfo()
     psi.FileName <- "sagefs"
@@ -211,7 +211,7 @@ module SessionManager =
     psi.RedirectStandardOutput <- true
 
     // Propagate OTel env vars so workers export to the same collector
-    for (key, value) in Instrumentation.workerOtelEnvVars sessionId do
+    for (key, value) in Instrumentation.workerOtelEnvVars (SessionId.value sessionId) do
       psi.Environment.[key] <- value
 
     // Propagate session config as env vars (replaces --sln/--proj CLI args)
@@ -465,7 +465,7 @@ module SessionManager =
         let! cmd = inbox.Receive()
         match cmd with
         | SessionCommand.CreateSession(projects, workingDir, autoOpenNamespaces, reply) ->
-          let sessionId = Guid.NewGuid().ToString("N").[..7]
+          let sessionId = SessionId.newId()
           let span = Instrumentation.startSpan Instrumentation.sessionSource "session.create"
                        [("session.id", box sessionId); ("session.projects", box (String.concat "," projects)); ("session.working_dir", box workingDir)]
           let onExited workerPid exitCode =
@@ -519,8 +519,8 @@ module SessionManager =
             Instrumentation.succeedSpan span
             return! loop newState
           | None ->
-            reply.Reply(Error (SageFsError.SessionNotFound id))
-            Instrumentation.failSpan span (sprintf "Session %s not found" id)
+            reply.Reply(Error (SageFsError.SessionNotFound (SessionId.value id)))
+            Instrumentation.failSpan span (sprintf "Session %s not found" (SessionId.value id))
             return! loop state
 
         | SessionCommand.RestartSession(id, rebuild, reply) ->
@@ -638,8 +638,8 @@ module SessionManager =
                 Instrumentation.failSpan span (sprintf "%A" err)
                 return! loop stateAfterStop
           | None ->
-            reply.Reply(Error (SageFsError.SessionNotFound id))
-            Instrumentation.failSpan span (sprintf "Session %s not found" id)
+            reply.Reply(Error (SageFsError.SessionNotFound (SessionId.value id)))
+            Instrumentation.failSpan span (sprintf "Session %s not found" (SessionId.value id))
             return! loop state
 
         | SessionCommand.GetSession(id, reply) ->
@@ -702,7 +702,7 @@ module SessionManager =
                     | _ -> ()
                   | _ -> ()
                 with ex ->
-                    Log.warn "[SessionManager] Worker ready poll transport error for %s: %s (%s)" id ex.Message (ex.GetType().Name)
+                    Log.warn "[SessionManager] Worker ready poll transport error for %s: %s (%s)" (SessionId.value id) ex.Message (ex.GetType().Name)
                     done' <- true  // Transport error — WorkerExited event handles cleanup
             }, ct)
             // Request initial test discovery from the worker
@@ -716,7 +716,7 @@ module SessionManager =
                 | _ -> ()
               with ex ->
                 Instrumentation.elmloopErrors.Add(1L, System.Collections.Generic.KeyValuePair("phase", "test_discovery" :> obj))
-                Log.error "[SessionManager] Test discovery failed for %s: %s" id ex.Message
+                Log.error "[SessionManager] Test discovery failed for %s: %s" (SessionId.value id) ex.Message
             }, ct)
             // Fetch instrumentation maps from the worker
             Async.Start(async {
@@ -729,7 +729,7 @@ module SessionManager =
                 | _ -> ()
               with ex ->
                 Instrumentation.elmloopErrors.Add(1L, System.Collections.Generic.KeyValuePair("phase", "instrumentation_maps" :> obj))
-                Log.error "[SessionManager] Instrumentation maps fetch failed for %s: %s" id ex.Message
+                Log.error "[SessionManager] Instrumentation maps fetch failed for %s: %s" (SessionId.value id) ex.Message
             }, ct)
             return! loop newState
           | None ->
@@ -741,7 +741,7 @@ module SessionManager =
           return! loop state
 
         | SessionCommand.WorkerSpawnFailed(id, _workerPid, msg) ->
-          Log.warn "[SessionManager] Worker spawn failed for session %s: %s" id msg
+          Log.warn "[SessionManager] Worker spawn failed for session %s: %s" (SessionId.value id) msg
           match ManagerState.tryGetSession id state with
           | Some session ->
             let updated =
@@ -896,7 +896,7 @@ module SessionManager =
                 && (PoolState.getStandby key state.Pool |> Option.isNone) with
           | true ->
             // Generate a temporary session ID for the standby worker
-            let standbyId = sprintf "standby-%s" (Guid.NewGuid().ToString("N").[..7])
+            let standbyId = SessionId.newId()
             let onExited workerPid _exitCode =
               inbox.Post(SessionCommand.StandbyExited(key, workerPid))
             match startWorkerProcess standbyId key.Projects key.WorkingDir key.AutoOpenNamespaces onExited with

@@ -7,6 +7,7 @@ open SageFs
 open SageFs.WarmUp
 open SageFs.WorkerProtocol
 open SageFs.Features.Diagnostics
+open SageFs.Tests.SharedGenerators
 
 module TestDeps =
 
@@ -15,7 +16,7 @@ module TestDeps =
     mutable CompletionCalls: (string * string * int) list
     mutable SessionListCalls: int
     mutable SessionCreateCalls: (string list * string) list
-    mutable SessionStopCalls: string list
+    mutable SessionStopCalls: SessionId list
     mutable ConfigureAutoOpenCalls: string list
   }
 
@@ -41,7 +42,7 @@ module TestDeps =
     (log: CallLog)
     (handler: WorkerMessage -> WorkerResponse) : EffectDeps =
     let sessionInfo : SessionInfo = {
-      Id = "test-session"
+      Id = testSessionId "a1b2c3d4"
       Name = None
       Projects = ["Test.fsproj"]
       WorkingDirectory = "."
@@ -64,9 +65,9 @@ module TestDeps =
     {
       ResolveSession = fun _ ->
         Result.Ok (
-          SessionOperations.SessionResolution.DefaultSingle "test-session")
+          SessionOperations.SessionResolution.DefaultSingle (testSessionId "a1b2c3d4"))
       GetProxy = fun id ->
-        if id = "test-session" then Some proxy else None
+        if id = testSessionId "a1b2c3d4" then Some proxy else None
       GetStreamingTestProxy = fun _ -> None
       CreateSession = fun projects dir ->
         async {
@@ -107,7 +108,7 @@ module TestDeps =
       CreateSession = fun projects dir ->
         async {
           let info : SessionInfo = {
-            Id = "new-session"
+            Id = testSessionId "b2c3d4e5"
             Name = None
             Projects = projects
             WorkingDirectory = dir
@@ -120,7 +121,7 @@ module TestDeps =
           return Result.Ok info
         }
       StopSession = fun id ->
-        async { return Result.Error (SageFsError.SessionNotFound id) }
+        async { return Result.Error (SageFsError.SessionNotFound (SessionId.value id)) }
       ListSessions = fun () -> async { return [] }
       ConfigureWarmupAutoOpen = ensureAutoOpenNoop
       GetWarmupContext = None
@@ -150,7 +151,7 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
     |> Expect.equal "code" "let x = 42"
     match dispatched.[0] with
     | SageFsMsg.Event (SageFsEvent.EvalCompleted (sid, output, _)) ->
-      sid |> Expect.equal "session" "test-session"
+      sid |> Expect.equal "session" "a1b2c3d4"
       output |> Expect.equal "output" "val x = 42"
     | other -> failtestf "expected EvalCompleted, got %A" other
 
@@ -264,7 +265,7 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
     match dispatched.[0] with
     | SageFsMsg.Event (SageFsEvent.SessionsRefreshed snaps) ->
       snaps |> Expect.hasLength "one session" 1
-      snaps.[0].Id |> Expect.equal "id" "test-session"
+      snaps.[0].Id |> Expect.equal "id" (testSessionId "a1b2c3d4")
     | other -> failtestf "expected SessionsRefreshed, got %A" other
 
   testCase "RequestSessionSwitch dispatches switch" <| fun _ ->
@@ -306,12 +307,12 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
     let mutable dispatched : SageFsMsg list = []
     SageFsEffectHandler.execute deps
       (fun m -> dispatched <- m :: dispatched)
-      (SageFsEffect.Editor (EditorEffect.RequestSessionStop "s1"))
+      (SageFsEffect.Editor (EditorEffect.RequestSessionStop "00000001"))
     |> Async.RunSynchronously
-    log.SessionStopCalls |> Expect.equal "called" ["s1"]
+    log.SessionStopCalls |> Expect.equal "called" [testSessionId "00000001"]
     match dispatched.[0] with
     | SageFsMsg.Event (SageFsEvent.SessionStopped sid) ->
-      sid |> Expect.equal "id" "s1"
+      sid |> Expect.equal "id" "00000001"
     | other -> failtestf "expected SessionStopped, got %A" other
 
   testCase "RequestSessionStop failure dispatches error" <| fun _ ->
@@ -319,13 +320,13 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
       TestDeps.noSessions () with
         StopSession = fun _ ->
           async {
-            return Result.Error (SageFsError.SessionNotFound "s1")
+            return Result.Error (SageFsError.SessionNotFound "00000001")
           }
     }
     let mutable dispatched : SageFsMsg list = []
     SageFsEffectHandler.execute deps
       (fun m -> dispatched <- m :: dispatched)
-      (SageFsEffect.Editor (EditorEffect.RequestSessionStop "s1"))
+      (SageFsEffect.Editor (EditorEffect.RequestSessionStop "00000001"))
     |> Async.RunSynchronously
     match dispatched.[0] with
     | SageFsMsg.Event (SageFsEvent.EvalFailed (_, err)) ->
@@ -378,7 +379,7 @@ let fullLoopTests = testList "Full ElmLoop + EffectHandler" [
       | None -> false
       | Some m ->
         let active = m.RecentOutput.GetActiveBuffer(m.Sessions.ActiveSessionId)
-        let testSess = m.RecentOutput.GetBuffer("test-session")
+        let testSess = m.RecentOutput.GetBuffer("a1b2c3d4")
         active |> Seq.exists (fun o -> o.Text.Contains "val it = 42")
         || testSess |> Seq.exists (fun o -> o.Text.Contains "val it = 42")
     while not (hasResult()) && sw2.ElapsedMilliseconds < 2000L do
@@ -410,7 +411,7 @@ let fullLoopTests = testList "Full ElmLoop + EffectHandler" [
     lastModel.Value.Sessions.Sessions
     |> Expect.hasLength "1 session" 1
     dispatch (SageFsMsg.Editor
-      (EditorAction.StopSession "test-session"))
+      (EditorAction.StopSession "a1b2c3d4"))
     let sw2 = System.Diagnostics.Stopwatch.StartNew()
     while lastModel.Value.Sessions.Sessions.Length > 0
           && sw2.ElapsedMilliseconds < 2000L do
@@ -450,7 +451,7 @@ let fullLoopTests = testList "Full ElmLoop + EffectHandler" [
     let mutable dispatched : SageFsMsg list = []
     let dispatch msg = dispatched <- dispatched @ [msg]
     let readySession : SessionInfo = {
-      Id = "s1"; Name = None; Projects = ["Proj.fsproj"]
+      Id = testSessionId "00000001"; Name = None; Projects = ["Proj.fsproj"]
       WorkingDirectory = "/code"; SolutionRoot = None
       CreatedAt = DateTime.UtcNow; LastActivity = DateTime.UtcNow
       Status = SessionStatus.Ready; WorkerPid = Some 42
@@ -463,9 +464,9 @@ let fullLoopTests = testList "Full ElmLoop + EffectHandler" [
       FailedOpens = []; PhaseTiming = { ScanSourceFilesMs = 0L; ScanAssembliesMs = 0L; OpenNamespacesMs = 0L; TotalMs = 500L }
       SourceFilesScanned = 2; StartedAt = DateTimeOffset.UtcNow
     }
-    let getWarmupCtx (sid: string) = async {
+    let getWarmupCtx (sid: SessionId) = async {
       return Some {
-        SessionId = sid; ProjectNames = ["Proj.fsproj"]
+        SessionId = SessionId.value sid; ProjectNames = ["Proj.fsproj"]
         WorkingDir = "/code"; Status = "Ready"
         Warmup = warmup; FileStatuses = []
       }
@@ -490,7 +491,7 @@ let fullLoopTests = testList "Full ElmLoop + EffectHandler" [
     |> List.exists (fun m ->
       match m with
       | SageFsMsg.Event (SageFsEvent.WarmupContextUpdated ctx) ->
-        ctx.SessionId = "s1"
+        ctx.SessionId = "00000001"
       | _ -> false)
     |> Expect.isTrue "Should dispatch WarmupContextUpdated for Ready session"
   }
@@ -509,7 +510,7 @@ let fullLoopTests = testList "Full ElmLoop + EffectHandler" [
       StopSession = fun _ ->
         async { return Result.Error (SageFsError.NoActiveSessions) }
       ListSessions = fun () -> async {
-        return [{ Id = "s2"; Name = None; Projects = ["T.fsproj"]
+        return [{ Id = testSessionId "00000002"; Name = None; Projects = ["T.fsproj"]
                   WorkingDirectory = "."; SolutionRoot = None
                   CreatedAt = DateTime.UtcNow; LastActivity = DateTime.UtcNow
                   Status = SessionStatus.Ready; WorkerPid = Some 1 }]
@@ -543,7 +544,7 @@ let fullLoopTests = testList "Full ElmLoop + EffectHandler" [
       StopSession = fun _ ->
         async { return Result.Error (SageFsError.NoActiveSessions) }
       ListSessions = fun () -> async {
-        return [{ Id = "s3"; Name = None; Projects = ["T.fsproj"]
+        return [{ Id = testSessionId "00000003"; Name = None; Projects = ["T.fsproj"]
                   WorkingDirectory = "."; SolutionRoot = None
                   CreatedAt = DateTime.UtcNow; LastActivity = DateTime.UtcNow
                   Status = SessionStatus.Starting; WorkerPid = None }]

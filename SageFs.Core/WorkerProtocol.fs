@@ -7,10 +7,35 @@ open System.Text.Json.Serialization
 
 module WorkerProtocol =
 
-  type SessionId = string
+  /// Session identifier — opaque single-case DU enforcing validated 8-char hex format.
+  /// Construct via SessionId.newId() or SessionId.validate; extract via SessionId.value.
+  [<Struct; CustomComparison; CustomEquality>]
+  type SessionId = private SessionId of string
+    with
+    override x.ToString() = let (SessionId s) = x in s
+    override x.GetHashCode() = let (SessionId s) = x in s.GetHashCode()
+    override x.Equals(obj) =
+      match obj with
+      | :? SessionId as other -> let (SessionId a) = x in let (SessionId b) = other in a = b
+      | _ -> false
+    interface IComparable with
+      member x.CompareTo(obj) =
+        match obj with
+        | :? SessionId as other -> let (SessionId a) = x in let (SessionId b) = other in String.Compare(a, b, StringComparison.Ordinal)
+        | _ -> invalidArg "obj" "not a SessionId"
+    interface IComparable<SessionId> with
+      member x.CompareTo(other) = let (SessionId a) = x in let (SessionId b) = other in String.Compare(a, b, StringComparison.Ordinal)
+    interface IEquatable<SessionId> with
+      member x.Equals(other) = let (SessionId a) = x in let (SessionId b) = other in a = b
 
   module SessionId =
     let validPattern = System.Text.RegularExpressions.Regex(@"^[0-9a-f]{8}$", System.Text.RegularExpressions.RegexOptions.Compiled)
+
+    /// Extract the raw string value from a SessionId.
+    let value (SessionId s) = s
+
+    /// Generate a new random SessionId (8-char lowercase hex).
+    let newId () = SessionId (Guid.NewGuid().ToString("N").[..7])
 
     /// Validate a session ID from an untrusted source (HTTP, MCP).
     /// Session IDs are 8-char lowercase hex strings (truncated GUID).
@@ -19,7 +44,7 @@ module WorkerProtocol =
       | true -> Error "session ID is empty"
       | false ->
         match validPattern.IsMatch(raw) with
-        | true -> Ok raw
+        | true -> Ok (SessionId raw)
         | false -> Error (sprintf "invalid session ID format: '%s'" raw)
 
   /// Lifecycle state of a managed session — no stringly-typed matching.

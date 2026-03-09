@@ -2081,11 +2081,11 @@ let managerStateTests = testList "ManagerState" [
     ManagerState.empty.Sessions |> Expect.isEmpty "no sessions"
   }
   test "empty tryGetSession returns None" {
-    ManagerState.empty |> ManagerState.tryGetSession "nonexistent"
+    ManagerState.empty |> ManagerState.tryGetSession (SageFs.WorkerProtocol.SessionId.newId())
     |> Expect.isNone "no session"
   }
   test "removeSession on empty is safe" {
-    let result = ManagerState.empty |> ManagerState.removeSession "x"
+    let result = ManagerState.empty |> ManagerState.removeSession (SageFs.WorkerProtocol.SessionId.newId())
     result.Sessions |> Expect.isEmpty "still empty"
   }
   test "empty pool is enabled by default" {

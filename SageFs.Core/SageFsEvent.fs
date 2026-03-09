@@ -201,7 +201,7 @@ type SessionOutputStore(bufferCapacity: int) =
   /// Get the buffer for the active session (resolves ActiveSession DU).
   member this.GetActiveBuffer(active: ActiveSession) =
     match active with
-    | ActiveSession.Viewing sid -> this.GetBuffer(sid)
+    | ActiveSession.Viewing sid -> this.GetBuffer(WorkerProtocol.SessionId.value sid)
     | ActiveSession.AwaitingSession -> staging
 
   /// Clear a specific session's buffer.

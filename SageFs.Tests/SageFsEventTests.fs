@@ -5,6 +5,7 @@ open Expecto
 open Expecto.Flip
 open FsCheck
 open SageFs
+open SageFs.Tests.SharedGenerators
 
 let now = DateTime(2026, 2, 14, 12, 0, 0)
 
@@ -45,14 +46,15 @@ let SageFsEventTests = testList "SageFsEvent" [
     | _ -> failwith "wrong case"
 
   testCase "SessionCreated carries snapshot" <| fun _ ->
+    let s1 = testSessionId "aa000001"
     let snap = {
-      Id = "s1"; Name = None; Projects = ["Test.fsproj"]
+      Id = s1; Name = None; Projects = ["Test.fsproj"]
       Status = SessionDisplayStatus.Running
       LastActivity = now; EvalCount = 0
       UpSince = now; IsActive = true; WorkingDirectory = "" }
     let evt = SageFsEvent.SessionCreated snap
     match evt with
-    | SageFsEvent.SessionCreated s -> s.Id |> Expect.equal "id" "s1"
+    | SageFsEvent.SessionCreated s -> s.Id |> Expect.equal "id" s1
     | _ -> failwith "wrong case"
 
   testCase "OutputEmitted carries output line" <| fun _ ->
@@ -97,7 +99,7 @@ let SageFsViewTests = testList "SageFsView" [
       Buffer = ValidatedBuffer.empty
       CompletionMenu = None
       ActiveSession = {
-        Id = "s1"; Name = None; Projects = ["Test.fsproj"]
+        Id = testSessionId "aa000001"; Name = None; Projects = ["Test.fsproj"]
         Status = SessionDisplayStatus.Running
         LastActivity = now; EvalCount = 0
         UpSince = now; IsActive = true; WorkingDirectory = "" }
@@ -118,7 +120,7 @@ let SageFsViewTests = testList "SageFsView" [
       Buffer = ValidatedBuffer.empty
       CompletionMenu = None
       ActiveSession = {
-        Id = "s1"; Name = None; Projects = []; Status = SessionDisplayStatus.Running
+        Id = testSessionId "aa000001"; Name = None; Projects = []; Status = SessionDisplayStatus.Running
         LastActivity = now; EvalCount = 1; UpSince = now; IsActive = true; WorkingDirectory = "" }
       RecentOutput = lines
       Diagnostics = []
@@ -132,7 +134,7 @@ let SageFsViewTests = testList "SageFsView" [
       Buffer = ValidatedBuffer.empty
       CompletionMenu = None
       ActiveSession = {
-        Id = "s1"; Name = None; Projects = []; Status = SessionDisplayStatus.Running
+        Id = testSessionId "aa000001"; Name = None; Projects = []; Status = SessionDisplayStatus.Running
         LastActivity = now; EvalCount = 0; UpSince = now; IsActive = true; WorkingDirectory = "" }
       RecentOutput = []
       Diagnostics = []

@@ -7,6 +7,7 @@ open Expecto.Flip
 open SageFs
 open SageFs.WorkerProtocol
 open SageFs.Features.LiveTesting
+open SageFs.Tests.SharedGenerators
 
 let roundTrip<'T> (value: 'T) =
   let json = Serialization.serialize value
@@ -268,7 +269,7 @@ let workerProtocolTests =
       testCase "displayName uses solution root directory name"
       <| fun _ ->
         let info = {
-          Id = "session-abc"
+          Id = testSessionId "abc0abc1"
           Name = None
           Projects = ["Tests.fsproj"]
           WorkingDirectory = @"C:\Code\Repos\SageFs\SageFs.Tests"
@@ -284,7 +285,7 @@ let workerProtocolTests =
       testCase "displayName falls back to working directory name"
       <| fun _ ->
         let info = {
-          Id = "session-def"
+          Id = testSessionId "def0def1"
           Name = None
           Projects = ["App.fsproj"]
           WorkingDirectory = @"C:\Code\MyApp"
@@ -335,7 +336,7 @@ let workerProtocolTests =
       testCase "SessionInfo round-trips through JSON"
       <| fun _ ->
         let info = {
-          Id = "session-xyz"
+          Id = testSessionId "ab0cde0f"
           Name = None
           Projects = ["A.fsproj"; "B.fsproj"]
           WorkingDirectory = @"C:\Code\Repos\Test"

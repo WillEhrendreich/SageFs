@@ -9,6 +9,7 @@ open Expecto.Flip
 open SageFs
 open SageFs.Server
 open SageFs.WorkerProtocol
+open SageFs.Tests.SharedGenerators
 
 // ─── Helpers ───────────────────────────────────────────────────────
 
@@ -45,8 +46,9 @@ let managerStateTests =
       |> Expect.equal "no sessions" 0
 
     testCase "addSession then tryGetSession finds it" <| fun _ ->
+      let sid = testSessionId "aaaa0001"
       let info : SessionInfo = {
-        Id = "test-1"
+        Id = sid
         Name = None
         Projects = ["Foo.fsproj"]
         WorkingDirectory = @"C:\test"
@@ -68,13 +70,14 @@ let managerStateTests =
       }
       let state =
         SageFs.SessionManager.ManagerState.empty
-        |> SageFs.SessionManager.ManagerState.addSession "test-1" session
-      SageFs.SessionManager.ManagerState.tryGetSession "test-1" state
+        |> SageFs.SessionManager.ManagerState.addSession sid session
+      SageFs.SessionManager.ManagerState.tryGetSession sid state
       |> Expect.isSome "should find session"
 
     testCase "removeSession then tryGetSession returns None" <| fun _ ->
+      let sid = testSessionId "aaaa0002"
       let info : SessionInfo = {
-        Id = "test-2"
+        Id = sid
         Name = None
         Projects = []
         WorkingDirectory = @"C:\test"
@@ -96,15 +99,15 @@ let managerStateTests =
       }
       let state =
         SageFs.SessionManager.ManagerState.empty
-        |> SageFs.SessionManager.ManagerState.addSession "test-2" session
-        |> SageFs.SessionManager.ManagerState.removeSession "test-2"
-      SageFs.SessionManager.ManagerState.tryGetSession "test-2" state
+        |> SageFs.SessionManager.ManagerState.addSession sid session
+        |> SageFs.SessionManager.ManagerState.removeSession sid
+      SageFs.SessionManager.ManagerState.tryGetSession sid state
       |> Expect.isNone "should not find removed session"
 
     testCase "allInfos returns all session infos" <| fun _ ->
-      let mkSession id : SageFs.SessionManager.ManagedSession =
+      let mkSession (sid: SessionId) : SageFs.SessionManager.ManagedSession =
         let info : SessionInfo = {
-          Id = id
+          Id = sid
           Name = None
           Projects = []
           WorkingDirectory = @"C:\test"
@@ -123,11 +126,14 @@ let managerStateTests =
           AutoOpenNamespaces = true
           RestartState = SageFs.RestartPolicy.emptyState }
 
+      let sidA = testSessionId "aa000011"
+      let sidB = testSessionId "bb000011"
+      let sidC = testSessionId "cc000011"
       let state =
         SageFs.SessionManager.ManagerState.empty
-        |> SageFs.SessionManager.ManagerState.addSession "a" (mkSession "a")
-        |> SageFs.SessionManager.ManagerState.addSession "b" (mkSession "b")
-        |> SageFs.SessionManager.ManagerState.addSession "c" (mkSession "c")
+        |> SageFs.SessionManager.ManagerState.addSession sidA (mkSession sidA)
+        |> SageFs.SessionManager.ManagerState.addSession sidB (mkSession sidB)
+        |> SageFs.SessionManager.ManagerState.addSession sidC (mkSession sidC)
 
       SageFs.SessionManager.ManagerState.allInfos state
       |> List.length
@@ -302,7 +308,7 @@ let sessionManagerLifecycleTests =
       | Error err -> failwithf "create failed: %s" (SageFsError.describe err)
       | Ok info ->
       try
-        info.Id
+        SessionId.value info.Id
         |> Expect.isNotNull "has session id"
         info.WorkerPid
         |> Expect.isSome "has worker PID"

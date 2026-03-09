@@ -52,7 +52,7 @@ let w4SpawnFailedNotificationTests =
         Microsoft.FSharp.Reflection.FSharpType.GetUnionCases(typeof<SageFs.SessionManager.SessionCommand>)
       let c = cases |> Array.find (fun c -> c.Name = "WorkerSpawnFailed")
       let fields = c.GetFields()
-      fields.[0].PropertyType |> Expect.equal "first field is string (id)" typeof<string>
+      fields.[0].PropertyType |> Expect.equal "first field is SessionId" typeof<WorkerProtocol.SessionId>
       fields.[1].PropertyType |> Expect.equal "second field is int (workerPid)" typeof<int>
       fields.[2].PropertyType |> Expect.equal "third field is string (msg)" typeof<string>
 

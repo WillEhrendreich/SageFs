@@ -6,12 +6,13 @@ open Expecto.Flip
 open SageFs
 open SageFs.WorkerProtocol
 open SageFs.SessionOperations
+open SageFs.Tests.SharedGenerators
 
-let mkSession id lastActive (status: SessionStatus) : SessionInfo = {
+let mkSession (id: SessionId) lastActive (status: SessionStatus) : SessionInfo = {
   Id = id
   Name = None
   Projects = ["Test.fsproj"]
-  WorkingDirectory = sprintf @"C:\%s" id
+  WorkingDirectory = sprintf @"C:\%s" (SessionId.value id)
   SolutionRoot = None
   CreatedAt = DateTime(2026, 1, 1)
   LastActivity = lastActive
@@ -27,77 +28,90 @@ let resolveSessionTests = testList "resolveSession" [
   }
 
   test "single session, no explicit id, returns DefaultSingle" {
-    let s = mkSession "s1" DateTime.UtcNow SessionStatus.Ready
+    let s1 = testSessionId "aa000001"
+    let s = mkSession s1 DateTime.UtcNow SessionStatus.Ready
     resolveSession None [s]
     |> Expect.equal "should default to single"
-      (Result.Ok (SessionResolution.DefaultSingle "s1"))
+      (Result.Ok (SessionResolution.DefaultSingle s1))
   }
 
   test "explicit id found returns Resolved" {
-    let s = mkSession "s1" DateTime.UtcNow SessionStatus.Ready
-    resolveSession (Some "s1") [s]
+    let s1 = testSessionId "aa000001"
+    let s = mkSession s1 DateTime.UtcNow SessionStatus.Ready
+    resolveSession (Some s1) [s]
     |> Expect.equal "should resolve"
-      (Result.Ok (SessionResolution.Resolved "s1"))
+      (Result.Ok (SessionResolution.Resolved s1))
   }
 
   test "explicit id not found returns SessionNotFound" {
-    let s = mkSession "s1" DateTime.UtcNow SessionStatus.Ready
-    resolveSession (Some "nope") [s]
+    let s1 = testSessionId "aa000001"
+    let nope = testSessionId "cc000001"
+    let s = mkSession s1 DateTime.UtcNow SessionStatus.Ready
+    resolveSession (Some nope) [s]
     |> Expect.equal "should error"
-      (Result.Error (SageFsError.SessionNotFound "nope"))
+      (Result.Error (SageFsError.SessionNotFound (SessionId.value nope)))
   }
 
   test "multiple sessions, no explicit id, returns most recently active" {
-    let old = mkSession "old" (DateTime(2026, 1, 1)) SessionStatus.Ready
-    let recent = mkSession "recent" (DateTime(2026, 2, 1)) SessionStatus.Ready
+    let oldId = testSessionId "bb000001"
+    let recentId = testSessionId "bb000002"
+    let old = mkSession oldId (DateTime(2026, 1, 1)) SessionStatus.Ready
+    let recent = mkSession recentId (DateTime(2026, 2, 1)) SessionStatus.Ready
     resolveSession None [old; recent]
     |> Expect.equal "should pick most recent"
-      (Result.Ok (SessionResolution.DefaultMostRecent "recent"))
+      (Result.Ok (SessionResolution.DefaultMostRecent recentId))
   }
 
   test "multiple sessions, no explicit id, order-independent" {
-    let old = mkSession "old" (DateTime(2026, 1, 1)) SessionStatus.Ready
-    let recent = mkSession "recent" (DateTime(2026, 2, 1)) SessionStatus.Ready
+    let oldId = testSessionId "bb000001"
+    let recentId = testSessionId "bb000002"
+    let old = mkSession oldId (DateTime(2026, 1, 1)) SessionStatus.Ready
+    let recent = mkSession recentId (DateTime(2026, 2, 1)) SessionStatus.Ready
     resolveSession None [recent; old]
     |> Expect.equal "should still pick most recent"
-      (Result.Ok (SessionResolution.DefaultMostRecent "recent"))
+      (Result.Ok (SessionResolution.DefaultMostRecent recentId))
   }
 
   test "explicit id with multiple sessions resolves correctly" {
-    let s1 = mkSession "s1" (DateTime(2026, 1, 1)) SessionStatus.Ready
-    let s2 = mkSession "s2" (DateTime(2026, 2, 1)) SessionStatus.Ready
-    resolveSession (Some "s1") [s1; s2]
+    let s1Id = testSessionId "aa000001"
+    let s2Id = testSessionId "aa000002"
+    let s1 = mkSession s1Id (DateTime(2026, 1, 1)) SessionStatus.Ready
+    let s2 = mkSession s2Id (DateTime(2026, 2, 1)) SessionStatus.Ready
+    resolveSession (Some s1Id) [s1; s2]
     |> Expect.equal "should resolve explicit"
-      (Result.Ok (SessionResolution.Resolved "s1"))
+      (Result.Ok (SessionResolution.Resolved s1Id))
   }
 ]
 
 let sessionIdExtractionTests = testList "sessionId extraction" [
   test "extracts from Resolved" {
-    sessionId (SessionResolution.Resolved "abc")
-    |> Expect.equal "id" "abc"
+    let abc = testSessionId "aabbccdd"
+    sessionId (SessionResolution.Resolved abc)
+    |> Expect.equal "id" abc
   }
   test "extracts from DefaultSingle" {
-    sessionId (SessionResolution.DefaultSingle "def")
-    |> Expect.equal "id" "def"
+    let def' = testSessionId "ddeeff00"
+    sessionId (SessionResolution.DefaultSingle def')
+    |> Expect.equal "id" def'
   }
   test "extracts from DefaultMostRecent" {
-    sessionId (SessionResolution.DefaultMostRecent "ghi")
-    |> Expect.equal "id" "ghi"
+    let ghi = testSessionId "aabb0011"
+    sessionId (SessionResolution.DefaultMostRecent ghi)
+    |> Expect.equal "id" ghi
   }
 ]
 
 let describeResolutionTests = testList "describeResolution" [
   test "Resolved includes (explicit)" {
-    describeResolution (SessionResolution.Resolved "abc")
+    describeResolution (SessionResolution.Resolved (testSessionId "aabbccdd"))
     |> Expect.stringContains "has explicit" "(explicit)"
   }
   test "DefaultSingle includes (only session)" {
-    describeResolution (SessionResolution.DefaultSingle "abc")
+    describeResolution (SessionResolution.DefaultSingle (testSessionId "aabbccdd"))
     |> Expect.stringContains "has only" "(only session)"
   }
   test "DefaultMostRecent includes (most recently active)" {
-    describeResolution (SessionResolution.DefaultMostRecent "abc")
+    describeResolution (SessionResolution.DefaultMostRecent (testSessionId "aabbccdd"))
     |> Expect.stringContains "has recent" "(most recently active)"
   }
 ]
@@ -129,11 +143,11 @@ let describeErrorTests = testList "SageFsError.describe (session errors)" [
 
 let now = DateTime(2026, 2, 14, 12, 0, 0)
 
-let mkSessionWithPid id lastActive (status: SessionStatus) pid : SessionInfo = {
+let mkSessionWithPid (id: SessionId) lastActive (status: SessionStatus) pid : SessionInfo = {
   Id = id
   Name = None
   Projects = ["Test.fsproj"]
-  WorkingDirectory = sprintf @"C:\Code\%s" id
+  WorkingDirectory = sprintf @"C:\Code\%s" (SessionId.value id)
   SolutionRoot = None
   CreatedAt = DateTime(2026, 2, 14, 10, 0, 0)
   LastActivity = lastActive
@@ -143,31 +157,36 @@ let mkSessionWithPid id lastActive (status: SessionStatus) pid : SessionInfo = {
 
 let formatSessionInfoTests = testList "formatSessionInfo" [
   test "includes all fields" {
-    let s = mkSessionWithPid "abc123" (now.AddMinutes(-2.0)) SessionStatus.Ready (Some 1234)
+    let sid = testSessionId "abc12300"
+    let s = mkSessionWithPid sid (now.AddMinutes(-2.0)) SessionStatus.Ready (Some 1234)
     let output = formatSessionInfo now None s
-    Expect.stringContains "has id" "abc123" output
+    Expect.stringContains "has id" "abc12300" output
     Expect.stringContains "has state" "Ready" output
     Expect.stringContains "has PID" "PID 1234" output
     Expect.stringContains "has project" "Test.fsproj" output
     Expect.stringContains "has last active" "2 min ago" output
   }
   test "handles missing PID" {
-    let s = mkSessionWithPid "abc123" now SessionStatus.Starting None
+    let sid = testSessionId "abc12300"
+    let s = mkSessionWithPid sid now SessionStatus.Starting None
     let output = formatSessionInfo now None s
     Expect.stringContains "has no PID" "(no PID)" output
   }
   test "just now for recent activity" {
-    let s = mkSessionWithPid "x" (now.AddSeconds(-30.0)) SessionStatus.Ready (Some 1)
+    let sid = testSessionId "dd000001"
+    let s = mkSessionWithPid sid (now.AddSeconds(-30.0)) SessionStatus.Ready (Some 1)
     let output = formatSessionInfo now None s
     Expect.stringContains "says just now" "just now" output
   }
   test "hours ago" {
-    let s = mkSessionWithPid "x" (now.AddHours(-3.0)) SessionStatus.Ready (Some 1)
+    let sid = testSessionId "dd000001"
+    let s = mkSessionWithPid sid (now.AddHours(-3.0)) SessionStatus.Ready (Some 1)
     let output = formatSessionInfo now None s
     Expect.stringContains "says hr ago" "3 hr ago" output
   }
   test "days ago" {
-    let s = mkSessionWithPid "x" (now.AddDays(-2.0)) SessionStatus.Ready (Some 1)
+    let sid = testSessionId "dd000001"
+    let s = mkSessionWithPid sid (now.AddDays(-2.0)) SessionStatus.Ready (Some 1)
     let output = formatSessionInfo now None s
     Expect.stringContains "says days ago" "2 days ago" output
   }
@@ -179,18 +198,21 @@ let formatSessionListTests = testList "formatSessionList" [
     |> Expect.equal "empty message" "No active sessions."
   }
   test "single session" {
-    let s = mkSessionWithPid "s1" (now.AddMinutes(-1.0)) SessionStatus.Ready (Some 100)
+    let s1Id = testSessionId "aa000001"
+    let s = mkSessionWithPid s1Id (now.AddMinutes(-1.0)) SessionStatus.Ready (Some 100)
     let output = formatSessionList now None [s]
     Expect.stringContains "has count" "1 active session(s)" output
-    Expect.stringContains "has s1" "s1" output
+    Expect.stringContains "has s1" (SessionId.value s1Id) output
   }
   test "multiple sessions" {
-    let s1 = mkSessionWithPid "s1" (now.AddMinutes(-1.0)) SessionStatus.Ready (Some 100)
-    let s2 = mkSessionWithPid "s2" (now.AddMinutes(-5.0)) SessionStatus.Evaluating (Some 200)
+    let s1Id = testSessionId "aa000001"
+    let s2Id = testSessionId "aa000002"
+    let s1 = mkSessionWithPid s1Id (now.AddMinutes(-1.0)) SessionStatus.Ready (Some 100)
+    let s2 = mkSessionWithPid s2Id (now.AddMinutes(-5.0)) SessionStatus.Evaluating (Some 200)
     let output = formatSessionList now None [s1; s2]
     Expect.stringContains "has count" "2 active session(s)" output
-    Expect.stringContains "has s1" "s1" output
-    Expect.stringContains "has s2" "s2" output
+    Expect.stringContains "has s1" (SessionId.value s1Id) output
+    Expect.stringContains "has s2" (SessionId.value s2Id) output
   }
 ]
 

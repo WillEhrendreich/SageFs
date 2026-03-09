@@ -87,6 +87,13 @@ let proxyToSession
       return Error (SageFsError.WorkerCommunicationFailed(sid, sprintf "Session pipe closed — %s" ex.Message))
 }
 
+/// Convert a known-good session ID string to SessionId.
+/// Only use for strings that originated from a valid SessionId.
+let private toSessionId (s: string) =
+  match WorkerProtocol.SessionId.validate s with
+  | Ok sid -> sid
+  | Error msg -> failwithf "Invalid session ID '%s': %s" s msg
+
 // ---------------------------------------------------------------------------
 // DaemonInfra — lifetime group 1: one-time daemon infrastructure
 // ---------------------------------------------------------------------------
@@ -252,9 +259,9 @@ let createSessionOps
         | Ok info ->
           appendEvents [
             Features.Events.SageFsEvent.DaemonSessionCreated
-              {| SessionId = info.Id; Projects = projects; WorkingDir = workingDir; CreatedAt = DateTimeOffset.UtcNow |}
+              {| SessionId = WorkerProtocol.SessionId.value info.Id; Projects = projects; WorkingDir = workingDir; CreatedAt = DateTimeOffset.UtcNow |}
           ]
-          return Ok info.Id
+          return Ok (WorkerProtocol.SessionId.value info.Id)
         | Error e -> return Error e
       }
     ListSessions = fun () ->
@@ -266,7 +273,7 @@ let createSessionOps
       task {
         let! result =
           sessionManager.PostAndAsyncReply(fun reply ->
-            SessionManager.SessionCommand.StopSession(sessionId, reply))
+            SessionManager.SessionCommand.StopSession(toSessionId sessionId, reply))
           |> Async.StartAsTask
         match result with
         | Ok () ->
@@ -290,7 +297,9 @@ let createSessionOps
       }
     GetProxy = fun sessionId ->
       let snapshot = readSnapshot()
-      task { return HttpWorkerClient.proxyFromUrls sessionId snapshot.WorkerBaseUrls }
+      let sidStr = WorkerProtocol.SessionId.value sessionId
+      let urlMap = snapshot.WorkerBaseUrls |> Map.fold (fun acc k v -> Map.add (WorkerProtocol.SessionId.value k) v acc) Map.empty
+      task { return HttpWorkerClient.proxyFromUrls sidStr urlMap }
     GetSessionInfo = fun sessionId ->
       task { return SessionManager.QuerySnapshot.tryGetSession sessionId (readSnapshot()) }
     GetAllSessions = fun () ->
@@ -308,9 +317,12 @@ let createSessionOps
 /// Look up worker HTTP base URL for a session from CQRS snapshot.
 let getWorkerBaseUrl (readSnapshot: unit -> SessionManager.QuerySnapshot) (sid: string) =
   let snapshot = readSnapshot()
-  match Map.tryFind sid snapshot.WorkerBaseUrls with
-  | Some url when url.Length > 0 -> Some url
-  | _ -> None
+  match WorkerProtocol.SessionId.validate sid with
+  | Error _ -> None
+  | Ok sidTyped ->
+    match Map.tryFind sidTyped snapshot.WorkerBaseUrls with
+    | Some url when url.Length > 0 -> Some url
+    | _ -> None
 
 /// Fetch JSON from a worker endpoint with timeout, returning None on failure.
 let fetchWorkerEndpoint
@@ -346,10 +358,10 @@ let fetchWorkerEndpoint
 let buildReplayState (snapshot: SessionManager.QuerySnapshot) (activeSessionId: string option) =
   let activeSessions = SessionManager.QuerySnapshot.allSessions snapshot
   let toRecord (s: WorkerProtocol.SessionInfo) : Features.Replay.DaemonSessionRecord =
-    { SessionId = s.Id; Projects = s.Projects; WorkingDir = s.WorkingDirectory
+    { SessionId = WorkerProtocol.SessionId.value s.Id; Projects = s.Projects; WorkingDir = s.WorkingDirectory
       CreatedAt = DateTimeOffset(s.CreatedAt, TimeSpan.Zero); StoppedAt = None }
   { Features.Replay.DaemonReplayState.Sessions =
-      activeSessions |> List.map (fun s -> s.Id, toRecord s) |> Map.ofList
+      activeSessions |> List.map (fun s -> WorkerProtocol.SessionId.value s.Id, toRecord s) |> Map.ofList
     Features.Replay.DaemonReplayState.ActiveSessionId = activeSessionId }
 
 /// W10(R10): Shared manifest merge logic used by both periodic save and graceful shutdown.
@@ -370,7 +382,7 @@ let mergeManifestWithExisting
   (stampActive: DateTimeOffset option)
   : Result<Features.Replay.DaemonReplayState, Features.ManifestTypes.ManifestLoadError> =
   let activeSessions = SessionManager.QuerySnapshot.allSessions snapshot
-  let activeSessionIds = activeSessions |> List.map (fun s -> s.Id) |> Set.ofList
+  let activeSessionIds = activeSessions |> List.map (fun s -> WorkerProtocol.SessionId.value s.Id) |> Set.ofList
   let existingManifestResult =
     match Features.DaemonPersistence.loadManifest dir with
     | Ok m -> Ok m
@@ -423,20 +435,28 @@ let getSessionStateFromSnapshot (readSnapshot: unit -> SessionManager.QuerySnaps
   | true -> SessionState.Uninitialized
   | false ->
     let snapshot = readSnapshot()
-    match SessionManager.QuerySnapshot.tryGetSession sid snapshot with
-    | Some info -> WorkerProtocol.SessionStatus.toSessionState info.Status
-    | None -> SessionState.Uninitialized
+    match WorkerProtocol.SessionId.validate sid with
+    | Error _ -> SessionState.Uninitialized
+    | Ok sidTyped ->
+      match SessionManager.QuerySnapshot.tryGetSession sidTyped snapshot with
+      | Some info -> WorkerProtocol.SessionStatus.toSessionState info.Status
+      | None -> SessionState.Uninitialized
 
 /// Get working directory for a session from CQRS snapshot.
 let getSessionWorkingDirFromSnapshot (readSnapshot: unit -> SessionManager.QuerySnapshot) (sid: string) =
   let snapshot = readSnapshot()
-  match SessionManager.QuerySnapshot.tryGetSession sid snapshot with
-  | Some info -> info.WorkingDirectory
-  | None -> ""
+  match WorkerProtocol.SessionId.validate sid with
+  | Error _ -> ""
+  | Ok sidTyped ->
+    match SessionManager.QuerySnapshot.tryGetSession sidTyped snapshot with
+    | Some info -> info.WorkingDirectory
+    | None -> ""
 
 /// Get warmup status message for a session.
 let getStatusMsgFromSnapshot (readSnapshot: unit -> SessionManager.QuerySnapshot) (sid: string) =
-  readSnapshot().WarmupProgress |> Map.tryFind sid
+  match WorkerProtocol.SessionId.validate sid with
+  | Ok sidTyped -> readSnapshot().WarmupProgress |> Map.tryFind sidTyped
+  | Error _ -> None
 
 /// Fetch eval stats from worker HTTP endpoint.
 let getEvalStatsFromWorker
@@ -444,7 +464,10 @@ let getEvalStatsFromWorker
   (readSnapshot: unit -> SessionManager.QuerySnapshot)
   (sid: string) = task {
   let snapshot = readSnapshot()
-  match Map.tryFind sid snapshot.WorkerBaseUrls with
+  match WorkerProtocol.SessionId.validate sid with
+  | Error _ -> return Affordances.EvalStats.empty
+  | Ok sidTyped ->
+  match Map.tryFind sidTyped snapshot.WorkerBaseUrls with
   | Some baseUrl when baseUrl.Length > 0 ->
     try
       use cts = new Threading.CancellationTokenSource(Timeouts.healthCheck)
@@ -589,9 +612,9 @@ let performGracefulShutdown
     |> List.map (fun info ->
       appendEventsAsync [
         Features.Events.SageFsEvent.DaemonSessionStopped
-          {| SessionId = info.Id; StoppedAt = DateTimeOffset.UtcNow |}
+          {| SessionId = WorkerProtocol.SessionId.value info.Id; StoppedAt = DateTimeOffset.UtcNow |}
       ])
-  // W21(R11): Check and log if stop-event append times out — silently discarding false means
+  // W21(R11): Check and log if stop-event append times out— silently discarding false means
   // ghost sessions could reappear on next restart when EventStore gains real persistence.
   let whenAll = System.Threading.Tasks.Task.WhenAll(appendTasks)
   let! append_winner = System.Threading.Tasks.Task.WhenAny(whenAll, System.Threading.Tasks.Task.Delay(System.TimeSpan.FromSeconds 5.0))
@@ -604,7 +627,7 @@ let performGracefulShutdown
   // preserves stopped sessions' original StoppedAt, stamps active sessions as stopped now.
   // W23+W25(R12): Skip write on Error — returning active-only state would erase history.
   // W40(R14): activeSessionId derived from model read at function entry (not a second getModel call).
-  let activeSessionId = model.Sessions.ActiveSessionId |> ActiveSession.sessionId
+  let activeSessionId = model.Sessions.ActiveSessionId |> ActiveSession.sessionId |> Option.map WorkerProtocol.SessionId.value
   let now = DateTimeOffset.UtcNow
   match mergeManifestWithExisting DaemonState.SageFsDir log snapshot activeSessionId (Some now) with
   | Ok replayState ->
@@ -641,7 +664,7 @@ let handleTestDiscovery
   (workingDir: string)
   (log: ILogger)
   (dispatch: SageFsMsg -> unit)
-  (sid: string)
+  (sid: WorkerProtocol.SessionId)
   (tests: Features.LiveTesting.TestCase array)
   (providers: Features.LiveTesting.ProviderDescription list) =
   let sessionInfo = SessionManager.QuerySnapshot.tryGetSession sid (readSnapshot())
@@ -681,10 +704,10 @@ let handleTestDiscovery
         | false -> Array.empty)
     | false -> Array.empty
   match Array.isEmpty locations with
-  | false -> dispatch (SageFsMsg.Event (SageFsEvent.TestLocationsDetected (sid, locations)))
+  | false -> dispatch (SageFsMsg.Event (SageFsEvent.TestLocationsDetected (WorkerProtocol.SessionId.value sid, locations)))
   | true -> ()
   match Array.isEmpty tests with
-  | false -> dispatch (SageFsMsg.Event (SageFsEvent.TestsDiscovered (sid, tests)))
+  | false -> dispatch (SageFsMsg.Event (SageFsEvent.TestsDiscovered (WorkerProtocol.SessionId.value sid, tests)))
   | true -> ()
   match List.isEmpty providers with
   | false -> dispatch (SageFsMsg.Event (SageFsEvent.ProvidersDetected providers))
@@ -758,8 +781,8 @@ let periodicManifestSave (log: ILogger) (readSnapshot: unit -> SessionManager.Qu
     // If getModel() were called after readSnapshot(), a session starting/stopping between
     // the two calls could cause activeSessionId to reference a session absent from snapshot.
     let model = getModel()
-    let activeSessionId = model.Sessions.ActiveSessionId |> ActiveSession.sessionId
-    // W10(R10): Use mergeManifestWithExisting (same as shutdown) so stopped sessions
+    let activeSessionId = model.Sessions.ActiveSessionId |> ActiveSession.sessionId |> Option.map WorkerProtocol.SessionId.value
+    // W10(R10): Use mergeManifestWithExisting(same as shutdown) so stopped sessions
     // are not erased on every 60-second tick. stampActive = None keeps active sessions
     // with StoppedAt = None (they're still running).
     // W23+W25(R12): Read snapshot once; skip write on Error to preserve history.
@@ -842,7 +865,7 @@ let getPreviousSessions
   let activeSessions =
     SessionManager.QuerySnapshot.allSessions snapshot
     |> List.map (fun (info: WorkerProtocol.SessionInfo) ->
-      { PreviousSession.Id = info.Id
+      { PreviousSession.Id = WorkerProtocol.SessionId.value info.Id
         PreviousSession.WorkingDir = info.WorkingDirectory
         PreviousSession.Projects = info.Projects
         PreviousSession.LastSeen = info.LastActivity })
@@ -1090,7 +1113,10 @@ let createElmRuntime
     async {
       try
         let snapshot = readSnapshot()
-        match Map.tryFind sessionId snapshot.WorkerBaseUrls with
+        match WorkerProtocol.SessionId.validate sessionId with
+        | Error _ -> return None
+        | Ok sidTyped ->
+        match Map.tryFind sidTyped snapshot.WorkerBaseUrls with
         | Some url when url.Length > 0 ->
           use timeoutCts = new System.Threading.CancellationTokenSource(System.TimeSpan.FromSeconds(5.0))
           use linkedCts = System.Threading.CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token)
@@ -1099,7 +1125,7 @@ let createElmRuntime
             |> Async.AwaitTask
           let warmup = WorkerProtocol.Serialization.deserialize<WarmupContext> resp
           let sessions = SessionManager.QuerySnapshot.allSessions snapshot
-          let info = sessions |> List.tryFind (fun si -> si.Id = sessionId)
+          let info = sessions |> List.tryFind (fun si -> WorkerProtocol.SessionId.value si.Id = sessionId)
           return Some {
             SessionId = sessionId
             ProjectNames =
@@ -1148,7 +1174,7 @@ let createElmRuntime
 
   let effectDeps =
     { ElmDaemon.createEffectDeps sessionManager readSnapshot DirectoryConfig.autoOpenNamespacesForDirectory configureWarmupAutoOpen with
-        GetWarmupContext = Some getWarmupContextForElm
+        GetWarmupContext = Some (fun sid -> getWarmupContextForElm (WorkerProtocol.SessionId.value sid))
         GetStreamingTestProxy = fun sid ->
           let snapshot = readSnapshot()
           match Map.tryFind sid snapshot.WorkerBaseUrls with
@@ -1235,10 +1261,13 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
       (fun () -> stateChangedEvent.Trigger StandbyProgress)
       (fun sid tests providers -> onTestDiscoveryCallback sid tests providers)
       (fun sid maps -> onInstrumentationMapsCallback sid maps)
-      (fun sid -> stateChangedEvent.Trigger (SessionReady sid))
-      (fun sid progress -> onWarmupProgressCallback sid progress)
+      (fun sid -> stateChangedEvent.Trigger (SessionReady (WorkerProtocol.SessionId.value sid)))
+      (fun sid progress -> onWarmupProgressCallback (WorkerProtocol.SessionId.value sid) progress)
 
   let sessionOps = createSessionOps sessionManager readSnapshot (fun events -> appendEventsAsync events |> ignore)
+  // String-to-SessionId adapters for proxyToSession (which takes string callbacks)
+  let getProxyStr s = sessionOps.GetProxy (toSessionId s)
+  let notifyWorkerDiedStr s = sessionOps.NotifyWorkerDied (toSessionId s)
 
   let noResume = flags.NoResume
 
@@ -1278,7 +1307,7 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
 
   // Wire instrumentation maps from SessionManager → Elm model
   onInstrumentationMapsCallback <- fun sid maps ->
-    elmRuntime.Dispatch(SageFsMsg.Event (SageFsEvent.InstrumentationMapsReady (sid, maps)))
+    elmRuntime.Dispatch(SageFsMsg.Event (SageFsEvent.InstrumentationMapsReady (WorkerProtocol.SessionId.value sid, maps)))
 
   // Wire warmup progress from SessionManager → Elm model (per-namespace granularity)
   onWarmupProgressCallback <- handleWarmupProgress elmRuntime.Dispatch
@@ -1363,14 +1392,16 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
     GetSessionWorkingDir = getSessionWorkingDir
     GetActiveSessionId = fun () ->
       let model = elmRuntime.GetModel()
-      ActiveSession.sessionId model.Sessions.ActiveSessionId |> Option.defaultValue ""
+      ActiveSession.sessionId model.Sessions.ActiveSessionId |> Option.map WorkerProtocol.SessionId.value |> Option.defaultValue ""
     GetElmRegions = fun () -> elmRuntime.GetRegions() |> Some
     GetPreviousSessions = fun () ->
       getPreviousSessions readSnapshot persistence daemonStreamId
     GetAllSessions = fun () -> task { return SessionManager.QuerySnapshot.allSessions (readSnapshot()) }
     GetStandbyInfo = sessionOps.GetStandbyInfo
     GetSessionStandbyInfo = fun sessionId ->
-      (readSnapshot()).PerSessionStandby |> Map.tryFind sessionId |> Option.defaultValue StandbyInfo.NoPool
+      match WorkerProtocol.SessionId.validate sessionId with
+      | Ok sidTyped -> (readSnapshot()).PerSessionStandby |> Map.tryFind sidTyped |> Option.defaultValue StandbyInfo.NoPool
+      | Error _ -> StandbyInfo.NoPool
     GetHotReloadState = fun sessionId ->
       fetchWorkerEndpoint sessionId "/hotreload" dashboardFetchTimeoutSec (fun resp ->
         use doc = Text.Json.JsonDocument.Parse(resp)
@@ -1388,7 +1419,10 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
         (WorkerProtocol.Serialization.deserialize<WarmupContext>)
     GetWarmupProgress = fun sessionId ->
       let snapshot = readSnapshot()
-      match Map.tryFind sessionId snapshot.WarmupProgress with
+      match WorkerProtocol.SessionId.validate sessionId with
+      | Error _ -> ""
+      | Ok sidTyped ->
+      match Map.tryFind sidTyped snapshot.WarmupProgress with
       | Some progress -> progress
       | None -> ""
     GetSessionTestSummary = fun sessionId ->
@@ -1436,7 +1470,7 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
       | Some scope ->
         let activeId =
           SageFs.ActiveSession.sessionId (elmRuntime.GetModel().Sessions.ActiveSessionId)
-          |> Option.defaultValue ""
+          |> Option.map WorkerProtocol.SessionId.value |> Option.defaultValue ""
         match activeId = sessionId with
         | true ->
           scope.ActiveBindings
@@ -1448,13 +1482,13 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
       let model = elmRuntime.GetModel()
       let activeId =
         SageFs.ActiveSession.sessionId model.Sessions.ActiveSessionId
-        |> Option.defaultValue ""
+        |> Option.map WorkerProtocol.SessionId.value |> Option.defaultValue ""
       SageFs.Features.LiveTesting.LiveTestCycleState.liveTestingStatusBarForSession activeId model.LiveTesting
   }
 
   let dashboardActions : DashboardActions = {
     EvalCode = fun sid code -> task {
-      let! result = proxyToSession sessionOps.GetProxy sessionOps.NotifyWorkerDied sid (WorkerProtocol.WorkerMessage.EvalCode(code, "dash"))
+      let! result = proxyToSession getProxyStr notifyWorkerDiedStr sid (WorkerProtocol.WorkerMessage.EvalCode(code, "dash"))
       return
         match result with
         | Ok (WorkerProtocol.WorkerResponse.EvalResult(_, Ok msg, diags, _)) ->
@@ -1469,7 +1503,7 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
         | Error e -> Error (SageFsError.describe e)
     }
     ResetSession = fun sid -> task {
-      let! result = proxyToSession sessionOps.GetProxy sessionOps.NotifyWorkerDied sid (WorkerProtocol.WorkerMessage.ResetSession "dash")
+      let! result = proxyToSession getProxyStr notifyWorkerDiedStr sid (WorkerProtocol.WorkerMessage.ResetSession "dash")
       return
         match result with
         | Ok (WorkerProtocol.WorkerResponse.ResetResult(_, Ok ())) -> Ok "Session reset successfully"
@@ -1481,7 +1515,7 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
       match sid with
       | null | "" -> return Error (SageFsError.describe (SageFsError.SessionNotFound ""))
       | _ ->
-        let! result = sessionOps.RestartSession sid true
+        let! result = sessionOps.RestartSession (toSessionId sid) true
         return
           result
           |> Result.map (sprintf "Hard reset: %s")
@@ -1515,7 +1549,7 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
       | true -> return []
       | false ->
       try
-        let! proxy = sessionOps.GetProxy sessionId
+        let! proxy = sessionOps.GetProxy (toSessionId sessionId)
         match proxy with
         | Some send ->
           let replyId = sprintf "dash-comp-%d" (System.Random.Shared.Next())

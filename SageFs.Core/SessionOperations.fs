@@ -35,7 +35,7 @@ module SessionOperations =
     | Some id ->
       match sessions |> List.exists (fun s -> s.Id = id) with
       | true -> Result.Ok (SessionResolution.Resolved id)
-      | false -> Result.Error (SageFsError.SessionNotFound id)
+      | false -> Result.Error (SageFsError.SessionNotFound (SessionId.value id))
     | None ->
       match sessions with
       | [] ->
@@ -60,11 +60,11 @@ module SessionOperations =
   let describeResolution (resolution: SessionResolution) : string =
     match resolution with
     | SessionResolution.Resolved id ->
-      sprintf "session %s (explicit)" id
+      sprintf "session %s (explicit)" (SessionId.value id)
     | SessionResolution.DefaultSingle id ->
-      sprintf "session %s (only session)" id
+      sprintf "session %s (only session)" (SessionId.value id)
     | SessionResolution.DefaultMostRecent id ->
-      sprintf "session %s (most recently active)" id
+      sprintf "session %s (most recently active)" (SessionId.value id)
 
   // ── Occupancy tracking ─────────────────────────────────────────
 
@@ -154,7 +154,7 @@ module SessionOperations =
       | Some occs -> sprintf "  Occupancy: %s" (SessionOccupancy.format occs)
       | None -> ""
     sprintf "%s  %s  %s  %s  %s\n  Started: %s  Last active: %s  Projects: %s%s"
-      info.Id name info.WorkingDirectory (SessionStatus.label info.Status) pid
+      (SessionId.value info.Id) name info.WorkingDirectory (SessionStatus.label info.Status) pid
       (info.CreatedAt.ToString("yyyy-MM-dd HH:mm"))
       lastActive
       projects
@@ -167,7 +167,7 @@ module SessionOperations =
     | sessions ->
       sessions
       |> List.map (fun info ->
-        let occ = occupancyMap |> Option.map (fun m -> m |> Map.tryFind info.Id |> Option.defaultValue [])
+        let occ = occupancyMap |> Option.map (fun m -> m |> Map.tryFind (SessionId.value info.Id) |> Option.defaultValue [])
         formatSessionInfo now occ info)
       |> String.concat "\n\n"
       |> sprintf "%d active session(s):\n\n%s" sessions.Length

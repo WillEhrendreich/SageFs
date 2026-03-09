@@ -48,7 +48,7 @@ let mkProxy (result: ActorResult) : SageFs.WorkerProtocol.SessionProxy =
     SageFs.Server.WorkerMain.handleMessage result.Actor result.GetSessionState result.GetEvalStats result.GetStatusMessage (fun () -> SageFs.Features.LiveTesting.LiveTestHookResult.noOp) (fun _ -> ()) (fun () -> [||], []) msg
 
 /// Create a test SessionManagementOps that routes to the global actor
-let mkTestSessionOps (result: ActorResult) (sessionId: string) : SageFs.SessionManagementOps =
+let mkTestSessionOps (result: ActorResult) (sessionId: SageFs.WorkerProtocol.SessionId) : SageFs.SessionManagementOps =
   let proxy = mkProxy result
   { CreateSession = fun _ _ -> System.Threading.Tasks.Task.FromResult(Ok "test-session")
     ListSessions = fun () -> System.Threading.Tasks.Task.FromResult("No sessions")
@@ -69,9 +69,9 @@ let mkTestSessionOps (result: ActorResult) (sessionId: string) : SageFs.SessionM
 /// Create a McpContext backed by the global shared actor
 let sharedCtx () =
   let result = globalActorResult.Value
-  let sessionId = sprintf "session-%s" (System.Guid.NewGuid().ToString("N").[..7])
+  let sessionId = SageFs.WorkerProtocol.SessionId.newId()
   let sessionMap = ConcurrentDictionary<string, string>()
-  sessionMap.["test"] <- sessionId
+  sessionMap.["test"] <- SageFs.WorkerProtocol.SessionId.value sessionId
   { Persistence = SageFs.EventStore.EventPersistence.noop
     DiagnosticsChanged = result.DiagnosticsChanged
     StateChanged = None
@@ -84,10 +84,10 @@ let sharedCtx () =
     GetWarmupContext = None } : McpContext
 
 /// Create a McpContext with a custom session ID backed by the global shared actor
-let sharedCtxWith sessionId =
+let sharedCtxWith (sessionId: SageFs.WorkerProtocol.SessionId) =
   let result = globalActorResult.Value
   let sessionMap = ConcurrentDictionary<string, string>()
-  sessionMap.["test"] <- sessionId
+  sessionMap.["test"] <- SageFs.WorkerProtocol.SessionId.value sessionId
   { Persistence = SageFs.EventStore.EventPersistence.noop
     DiagnosticsChanged = result.DiagnosticsChanged
     StateChanged = None

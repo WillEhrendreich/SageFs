@@ -747,6 +747,13 @@ module McpTools =
   /// Temporal dedup cache — prevents re-evaluating identical code within 2s window.
   let evalDedupCache = Features.EvalDedup.DedupCache.defaultCache ()
 
+  /// Convert a resolved session ID string to SessionId for SessionOps calls.
+  /// Pre-condition: sid came from resolveSessionId or session lookup (already valid format).
+  let private toSessionId (sid: string) =
+    match WorkerProtocol.SessionId.validate sid with
+    | Ok id -> id
+    | Error e -> failwithf "Invalid resolved session ID '%s': %s" sid e
+
   /// Normalize a path for comparison: trim trailing separators, lowercase on Windows.
   let normalizePath (p: string) =
     let trimmed = p.TrimEnd('/', '\\')
@@ -774,20 +781,23 @@ module McpTools =
     (msg: WorkerProtocol.SessionId -> WorkerProtocol.WorkerMessage)
     : Task<Result<WorkerProtocol.WorkerResponse, string>> =
     task {
-      let! proxy = ctx.SessionOps.GetProxy sessionId
-      match proxy with
-      | None ->
-        let! info = ctx.SessionOps.GetSessionInfo sessionId
-        match info with
-        | Some i when i.Status = WorkerProtocol.SessionStatus.Starting
-                   || i.Status = WorkerProtocol.SessionStatus.Restarting ->
-          return Result.Error (sprintf "Session '%s' is still warming up (%s). Please wait and retry." sessionId (WorkerProtocol.SessionStatus.label i.Status))
-        | _ ->
-          return Result.Error (sprintf "Session '%s' not found" sessionId)
-      | Some send ->
-        let replyId = Guid.NewGuid().ToString("N").[..7]
-        let! response = send (msg replyId) |> Async.StartAsTask
-        return Result.Ok response
+      match WorkerProtocol.SessionId.validate sessionId with
+      | Error e -> return Error (sprintf "Invalid session ID: %s" e)
+      | Ok validId ->
+        let! proxy = ctx.SessionOps.GetProxy validId
+        match proxy with
+        | None ->
+          let! info = ctx.SessionOps.GetSessionInfo validId
+          match info with
+          | Some i when i.Status = WorkerProtocol.SessionStatus.Starting
+                     || i.Status = WorkerProtocol.SessionStatus.Restarting ->
+            return Result.Error (sprintf "Session '%s' is still warming up (%s). Please wait and retry." sessionId (WorkerProtocol.SessionStatus.label i.Status))
+          | _ ->
+            return Result.Error (sprintf "Session '%s' not found" sessionId)
+        | Some send ->
+          let replyId = WorkerProtocol.SessionId.newId()
+          let! response = send (msg replyId) |> Async.StartAsTask
+          return Result.Ok response
     }
 
   /// Route to the active session or the specified session.
@@ -806,8 +816,9 @@ module McpTools =
               let! sessions = ctx.SessionOps.GetAllSessions()
               match resolveSessionByWorkingDir sessions wd with
               | Some matched ->
-                setActiveSessionId ctx agent matched.Id
-                return matched.Id
+                let matchedId = WorkerProtocol.SessionId.value matched.Id
+                setActiveSessionId ctx agent matchedId
+                return matchedId
               | None ->
                 // No match for this directory — fall back to cached
                 return activeSessionId ctx agent
@@ -816,12 +827,13 @@ module McpTools =
             task { return activeSessionId ctx agent }
         match candidate <> "" with
         | true ->
-          let! proxy = ctx.SessionOps.GetProxy candidate
+          let validCandidate = toSessionId candidate
+          let! proxy = ctx.SessionOps.GetProxy validCandidate
           match proxy with
           | Some _ -> return Ok candidate
           | None ->
             // Proxy not available — check if session is still starting up
-            let! info = ctx.SessionOps.GetSessionInfo candidate
+            let! info = ctx.SessionOps.GetSessionInfo validCandidate
             match info with
             | Some i when i.Status = WorkerProtocol.SessionStatus.Starting
                        || i.Status = WorkerProtocol.SessionStatus.Restarting ->
@@ -854,7 +866,7 @@ module McpTools =
     task {
       let! routeResult =
         routeToSession ctx sessionId
-          (fun replyId -> WorkerProtocol.WorkerMessage.GetStatus replyId)
+          (fun replyId -> WorkerProtocol.WorkerMessage.GetStatus (WorkerProtocol.SessionId.value replyId))
       return
         match routeResult with
         | Ok (WorkerProtocol.WorkerResponse.StatusResult(_, snapshot)) ->
@@ -917,7 +929,7 @@ module McpTools =
     notifyElm ctx (SageFsEvent.EvalStarted (sid, statement))
     let! routeResult =
       routeToSession ctx sid
-        (fun replyId -> WorkerProtocol.WorkerMessage.EvalCode(statement, replyId))
+        (fun replyId -> WorkerProtocol.WorkerMessage.EvalCode(statement, WorkerProtocol.SessionId.value replyId))
     return
       match routeResult with
       | Ok rawResponse ->
@@ -1049,10 +1061,10 @@ module McpTools =
       let! eventCount = EventTracking.getEventCount ctx.Persistence sid
       let! routeResult =
         routeToSession ctx sid
-          (fun replyId -> WorkerProtocol.WorkerMessage.GetStatus replyId)
+          (fun replyId -> WorkerProtocol.WorkerMessage.GetStatus (WorkerProtocol.SessionId.value replyId))
       match routeResult with
       | Ok (WorkerProtocol.WorkerResponse.StatusResult(_, snapshot)) ->
-        let! info = ctx.SessionOps.GetSessionInfo sid
+        let! info = ctx.SessionOps.GetSessionInfo (toSessionId sid)
         match info with
         | Some sessionInfo ->
           return McpAdapter.formatProxyStatus sid eventCount snapshot sessionInfo ctx.McpPort
@@ -1067,7 +1079,7 @@ module McpTools =
 
   let getStartupInfo (ctx: McpContext) (agent: string) (workingDirectory: string option) : Task<string> =
     withSessionWd ctx agent workingDirectory (fun sid -> task {
-      let! info = ctx.SessionOps.GetSessionInfo sid
+      let! info = ctx.SessionOps.GetSessionInfo (toSessionId sid)
       match info with
       | Some sessionInfo ->
         let header =
@@ -1106,7 +1118,7 @@ module McpTools =
 
   let getStartupInfoJson (ctx: McpContext) (agent: string) (workingDirectory: string option) : Task<string> =
     withSessionWd ctx agent workingDirectory (fun sid -> task {
-      let! info = ctx.SessionOps.GetSessionInfo sid
+      let! info = ctx.SessionOps.GetSessionInfo (toSessionId sid)
       match info with
       | Some sessionInfo ->
         return
@@ -1122,7 +1134,7 @@ module McpTools =
 
   let getAvailableProjects (ctx: McpContext) (agent: string) (workingDirectory: string option) : Task<string> =
     withSessionWd ctx agent workingDirectory (fun sid -> task {
-      let! info = ctx.SessionOps.GetSessionInfo sid
+      let! info = ctx.SessionOps.GetSessionInfo (toSessionId sid)
       let workingDir =
         match info with
         | Some sessionInfo -> sessionInfo.WorkingDirectory
@@ -1155,7 +1167,7 @@ module McpTools =
     withSession ctx agentName sessionId workingDirectory (fun sid -> task {
       let! routeResult =
         routeToSession ctx sid
-          (fun replyId -> WorkerProtocol.WorkerMessage.LoadScript(filePath, replyId))
+          (fun replyId -> WorkerProtocol.WorkerMessage.LoadScript(filePath, WorkerProtocol.SessionId.value replyId))
       return
         match routeResult with
         | Ok (WorkerProtocol.WorkerResponse.ScriptLoaded(_, Ok msg)) -> msg
@@ -1171,7 +1183,7 @@ module McpTools =
     withSession ctx agent sessionId workingDirectory (fun sid -> task {
       let! routeResult =
         routeToSession ctx sid
-          (fun replyId -> WorkerProtocol.WorkerMessage.ResetSession replyId)
+          (fun replyId -> WorkerProtocol.WorkerMessage.ResetSession (WorkerProtocol.SessionId.value replyId))
       return
         match routeResult with
         | Ok (WorkerProtocol.WorkerResponse.ResetResult(_, Ok ())) ->
@@ -1190,7 +1202,7 @@ module McpTools =
     withSession ctx agent sessionId workingDirectory (fun sid -> task {
       let! routeResult =
         routeToSession ctx sid
-          (fun replyId -> WorkerProtocol.WorkerMessage.CheckCode(code, replyId))
+          (fun replyId -> WorkerProtocol.WorkerMessage.CheckCode(code, WorkerProtocol.SessionId.value replyId))
       return
         match routeResult with
         | Ok (WorkerProtocol.WorkerResponse.CheckResult(_, diags)) ->
@@ -1220,7 +1232,7 @@ module McpTools =
         // Return immediately so MCP tool call doesn't time out (~30s build).
         // Client polls get_fsi_status or list_sessions to check completion.
         task {
-          let! result = ctx.SessionOps.RestartSession sid true
+          let! result = ctx.SessionOps.RestartSession (toSessionId sid) true
           match result with
           | Ok msg ->
             notifyElm ctx (
@@ -1235,7 +1247,7 @@ module McpTools =
         Features.EvalDedup.DedupCache.clearSession evalDedupCache sid
         let! routeResult =
           routeToSession ctx sid
-            (fun replyId -> WorkerProtocol.WorkerMessage.HardResetSession(false, replyId))
+            (fun replyId -> WorkerProtocol.WorkerMessage.HardResetSession(false, WorkerProtocol.SessionId.value replyId))
         return
           match routeResult with
           | Ok (WorkerProtocol.WorkerResponse.HardResetResult(_, Ok msg)) -> msg
@@ -1265,7 +1277,7 @@ module McpTools =
     withSessionWd ctx agent workingDirectory (fun sid -> task {
       let! routeResult =
         routeToSession ctx sid
-          (fun replyId -> WorkerProtocol.WorkerMessage.GetCompletions(code, cursorPosition, replyId))
+          (fun replyId -> WorkerProtocol.WorkerMessage.GetCompletions(code, cursorPosition, WorkerProtocol.SessionId.value replyId))
       return
         match routeResult with
         | Ok (WorkerProtocol.WorkerResponse.CompletionResult(_, completions)) ->
@@ -1282,7 +1294,7 @@ module McpTools =
       let cursor = code.Length
       let! routeResult =
         routeToSession ctx sid
-          (fun replyId -> WorkerProtocol.WorkerMessage.GetCompletions(code, cursor, replyId))
+          (fun replyId -> WorkerProtocol.WorkerMessage.GetCompletions(code, cursor, WorkerProtocol.SessionId.value replyId))
       return
         match routeResult with
         | Ok (WorkerProtocol.WorkerResponse.CompletionResult(_, completions)) ->
@@ -1312,7 +1324,7 @@ module McpTools =
         sprintf "let _vizType = typeof<%s>\nmatch Microsoft.FSharp.Reflection.FSharpType.IsUnion(_vizType) with\n| true ->\n  let cases =\n    Microsoft.FSharp.Reflection.FSharpType.GetUnionCases(_vizType)\n    |> Array.map (fun uc ->\n      let fields = uc.GetFields() |> Array.map (fun f -> sprintf \"%%s:%%s\" f.Name f.PropertyType.Name)\n      sprintf \"%%s|%%s\" uc.Name (String.concat \",\" fields))\n  printfn \"DUCASES:%%s\" (String.concat \";\" cases)\n| false -> printfn \"DUCASES:NOT_A_DU\"" typeName
       let! routeResult =
         routeToSession ctx sid
-          (fun replyId -> WorkerProtocol.WorkerMessage.EvalCode(code, replyId))
+          (fun replyId -> WorkerProtocol.WorkerMessage.EvalCode(code, WorkerProtocol.SessionId.value replyId))
       return
         match routeResult with
         | Ok (WorkerProtocol.WorkerResponse.EvalResult(_, result, _, _)) ->
@@ -1380,7 +1392,7 @@ module McpTools =
       let occupancyMap =
         sessions
         |> List.map (fun s ->
-          s.Id, SessionOperations.SessionOccupancy.forSession ctx.SessionMap s.Id)
+          WorkerProtocol.SessionId.value s.Id, SessionOperations.SessionOccupancy.forSession ctx.SessionMap (WorkerProtocol.SessionId.value s.Id))
         |> Map.ofList
       return SessionOperations.formatSessionList System.DateTime.UtcNow (Some occupancyMap) sessions
     }
@@ -1398,19 +1410,22 @@ module McpTools =
   /// Switch the active session for a specific agent. Validates the target exists.
   let switchSession (ctx: McpContext) (agent: string) (sessionId: string) : Task<string> =
     task {
-      let! info = ctx.SessionOps.GetSessionInfo sessionId
-      match info with
-      | Some _ ->
-        let prev = activeSessionId ctx agent
-        setActiveSessionId ctx agent sessionId
-        // Persist switch to daemon stream
-        let! _ = ctx.Persistence.AppendEvents "daemon-sessions" [
-          Features.Events.SageFsEvent.DaemonSessionSwitched
-            {| FromId = Some prev; ToId = sessionId; SwitchedAt = DateTimeOffset.UtcNow |}
-        ]
-        return sprintf "Switched to session '%s'" sessionId
-      | None ->
-        return sprintf "Error: Session '%s' not found" sessionId
+      match WorkerProtocol.SessionId.validate sessionId with
+      | Error e -> return sprintf "Error: invalid session ID: %s" e
+      | Ok validId ->
+        let! info = ctx.SessionOps.GetSessionInfo validId
+        match info with
+        | Some _ ->
+          let prev = activeSessionId ctx agent
+          setActiveSessionId ctx agent sessionId
+          // Persist switch to daemon stream
+          let! _ = ctx.Persistence.AppendEvents "daemon-sessions" [
+            Features.Events.SageFsEvent.DaemonSessionSwitched
+              {| FromId = Some prev; ToId = sessionId; SwitchedAt = DateTimeOffset.UtcNow |}
+          ]
+          return sprintf "Switched to session '%s'" sessionId
+        | None ->
+          return sprintf "Error: Session '%s' not found" sessionId
     }
 
   // ── Elm State Query ──────────────────────────────────────────────
@@ -1493,6 +1508,7 @@ module McpTools =
         let state = model.LiveTesting.TestState
         let activeId =
           ActiveSession.sessionId model.Sessions.ActiveSessionId
+          |> Option.map WorkerProtocol.SessionId.value
           |> Option.defaultValue ""
         let sessionEntries =
           Features.LiveTesting.LiveTestState.statusEntriesForSession activeId state
@@ -1641,6 +1657,7 @@ module McpTools =
       let state = model.LiveTesting.TestState
       let activeId =
         ActiveSession.sessionId model.Sessions.ActiveSessionId
+        |> Option.map WorkerProtocol.SessionId.value
         |> Option.defaultValue ""
       let sessionEntries =
         Features.LiveTesting.LiveTestState.statusEntriesForSession activeId state

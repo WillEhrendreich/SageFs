@@ -61,7 +61,9 @@ let sessionIdTests = testList "SessionId" [
     test "valid ID roundtrips through Result" {
       let sid = "deadbeef"
       match SessionId.validate sid with
-      | Ok validated -> validated |> Expect.equal "should roundtrip" sid
+      | Ok validated ->
+        let expected = match SessionId.validate sid with | Ok s -> s | Error e -> failwith e
+        validated |> Expect.equal "should roundtrip" expected
       | Error e -> failwith e
     }
   ]

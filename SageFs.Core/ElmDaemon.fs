@@ -18,7 +18,9 @@ let createEffectDeps
       SessionOperations.resolveSession sessionIdOpt sessions
     GetProxy = fun sessionId ->
       // CQRS read path — lock-free snapshot, no mailbox blocking
-      HttpWorkerClient.proxyFromUrls sessionId (readSnapshot()).WorkerBaseUrls
+      let snap = readSnapshot()
+      let urls = snap.WorkerBaseUrls |> Map.toSeq |> Seq.map (fun (k, v) -> WorkerProtocol.SessionId.value k, v) |> Map.ofSeq
+      HttpWorkerClient.proxyFromUrls (WorkerProtocol.SessionId.value sessionId) urls
     CreateSession = fun projects workingDir ->
       async {
         let autoOpenNamespaces = autoOpenNamespacesForDirectory workingDir
