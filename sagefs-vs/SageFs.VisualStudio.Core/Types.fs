@@ -1,4 +1,4 @@
-﻿namespace SageFs.VisualStudio.Core
+namespace SageFs.VisualStudio.Core
 
 open System
 
@@ -131,3 +131,15 @@ type NotebookCellInfo =
     Output: string option
     Deps: int list
     Bindings: string list }
+
+/// A single code completion item returned by the /dashboard/completions endpoint.
+/// Spike analysis (Sprint 8 Task D): The endpoint accepts code and cursor_position
+/// and POSTs to the dashboard server. Based on the API contract, it appears to route
+/// through the active FSI session for context-aware completions, but does not accept
+/// a session ID explicitly — it relies on the active session from the daemon.
+/// TODO: Sprint 9 — verify session-awareness with integration test, then implement IAsyncCompletionSourceProvider.
+type CompletionItem =
+  { Label: string
+    Kind: string
+    InsertText: string
+    Description: string option }

@@ -571,9 +571,14 @@ type SageFsClient() =
         match items with
         | Some arr ->
           [| for el in arr.EnumerateArray() ->
-               {| Label = tryStr el "label" ""
-                  Kind = tryStr el "kind" "Variable"
-                  InsertText = tryStr el "insertText" "" |} |]
+               { Label = tryStr el "label" ""
+                 Kind = tryStr el "kind" "Variable"
+                 InsertText = tryStr el "insertText" ""
+                 Description =
+                   let mutable v = Unchecked.defaultof<JsonElement>
+                   if el.TryGetProperty("description", &v) && v.ValueKind = JsonValueKind.String
+                   then Some (v.GetString())
+                   else None } |]
         | None -> [||]
     with _ ->
       return [||]

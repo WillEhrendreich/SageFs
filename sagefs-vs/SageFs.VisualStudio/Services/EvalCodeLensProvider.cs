@@ -52,11 +52,33 @@ internal class EvalCodeLensProvider : ExtensionPart, ICodeLensProvider
         || codeElement.Kind == CodeElementKind.KnownValues.Type
         || codeElement.Kind == CodeElementKind.KnownValues.Module)
     {
+      var isTest = IsTestElement(codeElement);
       return Task.FromResult<CodeLens?>(
-        new EvalCodeLens(codeElement, client, cancellation));
+        new EvalCodeLens(codeElement, client, cancellation, isTest));
     }
 
     return Task.FromResult<CodeLens?>(null);
+  }
+
+  /// <summary>
+  /// Returns true if this code element looks like a test function, triggering the
+  /// "▶ Run Test" label instead of "▶ Eval". Checks element kind and description text
+  /// for common F# test patterns (Expecto testCase/testList, xUnit [Fact]/[Theory]).
+  /// </summary>
+  private static bool IsTestElement(CodeElement el)
+  {
+    if (el.Kind != CodeElementKind.KnownValues.Function &&
+        el.Kind != CodeElementKind.KnownValues.Method)
+      return false;
+
+    var desc = el.Description ?? "";
+    return desc.Contains("testCase ")
+        || desc.Contains("testProperty ")
+        || desc.Contains("testList ")
+        || desc.Contains("[Fact]")
+        || desc.Contains("[Test]")
+        || desc.Contains("[Theory]")
+        || desc.Contains("[Property]");
   }
 }
 
@@ -69,17 +91,20 @@ internal class EvalCodeLens : InvokableCodeLens
   private readonly CodeElement codeElement;
   private readonly Core.SageFsClient client;
   private readonly Core.EvalCancellation cancellation;
+  private readonly bool isTest;
   private string lastResult = "";
   private bool isRunning = false;
 
   public EvalCodeLens(
     CodeElement codeElement,
     Core.SageFsClient client,
-    Core.EvalCancellation cancellation)
+    Core.EvalCancellation cancellation,
+    bool isTest = false)
   {
-    this.codeElement = codeElement;
-    this.client = client;
+    this.codeElement  = codeElement;
+    this.client       = client;
     this.cancellation = cancellation;
+    this.isTest       = isTest;
   }
 
   public override void Dispose() { }
@@ -87,10 +112,11 @@ internal class EvalCodeLens : InvokableCodeLens
   public override Task<CodeLensLabel> GetLabelAsync(
     CodeElementContext codeElementContext, CancellationToken token)
   {
+    var actionLabel = isTest ? "▶ Run Test" : "▶ Eval";
     var text = isRunning
       ? $"⟳ Evaluating {codeElement.Description}…"
       : string.IsNullOrEmpty(lastResult)
-        ? $"▶ Eval {codeElement.Description}"
+        ? $"{actionLabel} {codeElement.Description}"
         : $"✓ {lastResult}";
 
     var tooltip = isRunning

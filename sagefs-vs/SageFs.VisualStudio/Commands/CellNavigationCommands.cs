@@ -95,15 +95,82 @@ internal static class BlockHelpers
     }
 
     /// <summary>
-    /// True if <paramref name="pos"/> is at the start of a blank-line boundary —
-    /// i.e., a newline followed immediately by another newline (empty line).
+    /// Returns all non-empty blocks in document order, for both semicolon mode
+    /// and blank-line mode. Empty and whitespace-only blocks are filtered out.
     /// </summary>
+    public static System.Collections.Generic.List<string> FindAllBlocks(string text)
+    {
+        var result = new System.Collections.Generic.List<string>();
+        if (string.IsNullOrEmpty(text)) return result;
+
+        if (DetectBlockMode(text) == BlockMode.SemicolonMode)
+            CollectSemicolonBlocks(text, result);
+        else
+            CollectBlankLineBlocks(text, result);
+
+        return result;
+    }
+
+    private static void CollectSemicolonBlocks(string text, System.Collections.Generic.List<string> result)
+    {
+        var pos = 0;
+        while (pos < text.Length)
+        {
+            var endSemi = -1;
+            for (var i = pos; i < text.Length - 1; i++)
+            {
+                if (text[i] == ';' && text[i + 1] == ';') { endSemi = i; break; }
+            }
+
+            string block;
+            int nextPos;
+            if (endSemi >= 0)
+            {
+                block   = text[pos..(endSemi + 2)].Trim();
+                nextPos = endSemi + 2;
+            }
+            else
+            {
+                block   = text[pos..].Trim();
+                nextPos = text.Length;
+            }
+
+            var stripped = block.TrimEnd(';').Trim();
+            if (!string.IsNullOrWhiteSpace(stripped))
+                result.Add(block);
+
+            pos = nextPos;
+            while (pos < text.Length && (text[pos] == '\r' || text[pos] == '\n'))
+                pos++;
+        }
+    }
+
+    private static void CollectBlankLineBlocks(string text, System.Collections.Generic.List<string> result)
+    {
+        var pos = 0;
+        while (pos < text.Length)
+        {
+            var end = text.Length;
+            for (var i = pos; i < text.Length - 1; i++)
+            {
+                if (IsBlankLineBoundary(text, i)) { end = i; break; }
+            }
+
+            var block = text[pos..end].Trim();
+            if (!string.IsNullOrWhiteSpace(block))
+                result.Add(block);
+
+            pos = end + 1;
+            while (pos < text.Length && (text[pos] == '\r' || text[pos] == '\n'))
+                pos++;
+        }
+    }
+
     private static bool IsBlankLineBoundary(string text, int pos)
     {
-        if (pos >= text.Length) return false;
+        // A blank line boundary is \n\n or \n\r\n
         if (text[pos] != '\n') return false;
         var next = pos + 1;
-        // Skip \r so CRLF pairs work
         if (next < text.Length && text[next] == '\r') next++;
         return next < text.Length && text[next] == '\n';
     }

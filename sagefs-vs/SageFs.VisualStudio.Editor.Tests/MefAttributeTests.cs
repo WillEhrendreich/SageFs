@@ -94,6 +94,7 @@ public class MefAttributeTests
   [Theory]
   [InlineData(typeof(InlineFailureAdornmentListener))]
   [InlineData(typeof(InlineEvalAdornmentListener))]
+  [InlineData(typeof(CellHighlightAdornmentListener))]
   public void AdornmentListeners_ExportedAsWpfTextViewCreationListener(Type listenerType)
   {
     GetExportContractTypes(listenerType)
@@ -105,6 +106,7 @@ public class MefAttributeTests
   [Theory]
   [InlineData(typeof(InlineFailureAdornmentListener))]
   [InlineData(typeof(InlineEvalAdornmentListener))]
+  [InlineData(typeof(CellHighlightAdornmentListener))]
   public void AdornmentListeners_HaveContentTypeFSharp(Type listenerType)
   {
     GetContentTypes(listenerType)
@@ -116,6 +118,7 @@ public class MefAttributeTests
   [Theory]
   [InlineData(typeof(InlineFailureAdornmentListener))]
   [InlineData(typeof(InlineEvalAdornmentListener))]
+  [InlineData(typeof(CellHighlightAdornmentListener))]
   public void AdornmentListeners_HaveContentTypeFSharpScript(Type listenerType)
   {
     GetContentTypes(listenerType)

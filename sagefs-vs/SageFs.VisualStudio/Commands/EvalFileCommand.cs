@@ -13,9 +13,14 @@ using Microsoft.VisualStudio.Extensibility.Editor;
 internal class EvalFileCommand : Command
 {
   private readonly Core.SageFsClient client;
+  private readonly Core.EvalCancellation cancellation;
   private OutputChannel? output;
 
-  public EvalFileCommand(Core.SageFsClient client) => this.client = client;
+  public EvalFileCommand(Core.SageFsClient client, Core.EvalCancellation cancellation)
+  {
+    this.client       = client;
+    this.cancellation = cancellation;
+  }
 
   public override CommandConfiguration CommandConfiguration => new("%SageFs.EvalFile.DisplayName%")
   {
@@ -36,31 +41,64 @@ internal class EvalFileCommand : Command
     using var textView = await context.GetActiveTextViewAsync(ct);
     if (textView is null) return;
 
-    var code = textView.Document.Text.CopyToString();
+    var text     = textView.Document.Text.CopyToString();
     var filePath = textView.Document.Uri.LocalPath;
+    var blocks   = BlockHelpers.FindAllBlocks(text);
 
-    if (output is not null)
+    if (blocks.Count == 0)
     {
-      await output.WriteLineAsync($"▶ Evaluating file ({code.Length} chars)...");
+      if (output is not null)
+        await output.WriteLineAsync("○ No blocks found in file");
+      return;
     }
 
-    var result = await client.EvalWithContextAsync(code, filePath, "file", 0, ct);
     if (output is not null)
+      await output.WriteLineAsync($"▶ Evaluating {blocks.Count} block(s) in {System.IO.Path.GetFileName(filePath)}…");
+
+    using var linked = System.Threading.CancellationTokenSource.CreateLinkedTokenSource(
+      ct, cancellation.StartNew());
+
+    var evaluated = 0;
+    try
     {
-      if (result.ExitCode == 0)
+      for (var i = 0; i < blocks.Count; i++)
       {
-        await output.WriteLineAsync($"✓ {result.Output}");
+        linked.Token.ThrowIfCancellationRequested();
+
+        if (output is not null)
+          await output.WriteLineAsync($"  Evaluating block {i + 1}/{blocks.Count}…");
+
+        var result = await client.EvalWithContextAsync(blocks[i], filePath, "block", 0, linked.Token);
+        evaluated++;
+
+        if (result.ExitCode != 0)
+        {
+          if (output is not null)
+          {
+            await output.WriteLineAsync($"✗ Stopped at block {i + 1}: Exit {result.ExitCode}");
+            if (!string.IsNullOrEmpty(result.Output))
+              await output.WriteLineAsync($"  {result.Output.Trim()}");
+            foreach (var diag in result.Diagnostics)
+              await output.WriteLineAsync($"  ⚠ {diag}");
+            await output.WriteLineAsync("───────────────────────────────────────");
+          }
+          return;
+        }
       }
-      else
+
+      if (output is not null)
       {
-        await output.WriteLineAsync($"✗ Exit code {result.ExitCode}");
-        if (!string.IsNullOrEmpty(result.Output))
-          await output.WriteLineAsync(result.Output);
-        foreach (var diag in result.Diagnostics)
-          await output.WriteLineAsync($"  ⚠ {diag}");
+        await output.WriteLineAsync($"✓ Evaluated {evaluated}/{blocks.Count} blocks");
+        await output.WriteLineAsync("───────────────────────────────────────");
       }
-      await output.WriteLineAsync("───────────────────────────────────────");
     }
+    catch (OperationCanceledException)
+    {
+      if (output is not null)
+        await output.WriteLineAsync($"⊘ Cancelled after {evaluated}/{blocks.Count} blocks");
+    }
+    finally { cancellation.Done(); }
   }
 }
 #pragma warning restore VSEXTPREVIEW_OUTPUTWINDOW
+
