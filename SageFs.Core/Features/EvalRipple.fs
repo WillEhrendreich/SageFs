@@ -1,6 +1,6 @@
 namespace SageFs.Features
 
-open SageFs.Features
+open SageFs.Features.CellDependencyGraph
 
 /// Status of a single step in a ripple re-evaluation plan.
 type RippleStatus =
@@ -25,13 +25,13 @@ type RipplePlan = {
 
 module EvalRipple =
 
-  /// Topological sort of cell IDs using DFS post-order.
+  /// Topological sort of cell IDs using DFS post-order over dependency edges.
   let private toposort (graph: CellGraph) (cellIds: CellId list) : CellId list =
-    let adj =
+    let depAdj =
       graph.Edges
       |> List.fold (fun (acc: Map<CellId, CellId list>) (producer, consumer) ->
-        let existing = acc |> Map.tryFind producer |> Option.defaultValue []
-        acc |> Map.add producer (consumer :: existing)) Map.empty
+        let existing = acc |> Map.tryFind consumer |> Option.defaultValue []
+        acc |> Map.add consumer (producer :: existing)) Map.empty
     let cellSet = set cellIds
     let mutable visited = Set.empty
     let mutable result = []
@@ -41,7 +41,7 @@ module EvalRipple =
       | false ->
         visited <- visited |> Set.add id
         let deps =
-          adj
+          depAdj
           |> Map.tryFind id
           |> Option.defaultValue []
           |> List.filter (fun d -> cellSet |> Set.contains d)

@@ -3,6 +3,7 @@ module SageFs.Tests.EvalRippleTests
 open Expecto
 open Expecto.Flip
 open SageFs.Features
+open SageFs.Features.CellDependencyGraph
 open SageFs.Features.EvalRipple
 
 // Helper to build a simple graph for testing
