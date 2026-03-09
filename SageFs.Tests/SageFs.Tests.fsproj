@@ -192,6 +192,7 @@
         <Compile Include="DaemonHealthTests.fs" />
         <Compile Include="ScratchPadTests.fs" />
         <Compile Include="EvalRippleTests.fs" />
+        <Compile Include="EvalLensTests.fs" />
         <Compile Include="Program.fs" />
     </ItemGroup>
 
