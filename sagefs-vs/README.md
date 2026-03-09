@@ -1,18 +1,26 @@
 # SageFs — Visual Studio Extension
 
-A Visual Studio extension for [SageFs](../Readme.md) — the live F# development server. Evaluate F# code, see inline results via CodeLens, stream diagnostics into the Error List, manage sessions, and control hot reload — all from within Visual Studio.
-
-> **⚠️ Early Development.** Core evaluation, CodeLens, session management, and hot reload work. Live testing gutter markers, coverage, and several advanced features are not yet implemented. See [Current Limitations](#current-limitations) below.
+A Visual Studio extension for [SageFs](../Readme.md) — the live F# development server. Evaluate F# code, see inline results, stream diagnostics into the Error List, get completions, manage sessions, control hot reload, and monitor live test status — all from within Visual Studio.
 
 ## Requirements
 
 - Visual Studio 2022 17.14+ (the extension uses the [new out-of-process Extensibility SDK](https://learn.microsoft.com/en-us/visualstudio/extensibility/visualstudio.extensibility/))
-- [SageFs](../Readme.md) installed as a .NET global tool (`dotnet tool install --global SageFs`)
-- An F# project in your solution
+- .NET SDK 10.0+
+- SageFs CLI: `dotnet tool install --global SageFs`
+- Windows only (amd64 or arm64)
 
-## Installing
+## Quick Start
 
-The VS extension is **not published on the VS Marketplace** yet. Build and install from source:
+1. Install the VSIX (build from source or download from Releases)
+2. Install the SageFs CLI:
+   ```bash
+   dotnet tool install --global SageFs
+   ```
+3. Open a `.fsx` or `.fs` file — if the daemon isn't running, a notification will appear in the **SageFs Output** channel
+4. Start the daemon: **Extensions → SageFs → Start Daemon**
+5. Completions, gutter markers, and TypeExplorer activate automatically
+
+## Installing from Source
 
 ```bash
 cd sagefs-vs/SageFs.VisualStudio
@@ -23,6 +31,24 @@ Then load the extension in Visual Studio's experimental instance, or install the
 
 ## Features
 
+| Feature | Status |
+|---------|--------|
+| Code evaluation (selection, file, block) | ✅ |
+| Inline eval adornments | ✅ |
+| CodeLens ("▶ Eval" per function/type/module) | ✅ |
+| Error/warning squiggles (Error List integration) | ✅ |
+| F# completions (working_directory context, 14 kind mappings) | ✅ |
+| Gutter test status markers (populated on startup) | ✅ |
+| TypeExplorer (auto-refreshes on session warmup) | ✅ |
+| Live test status panel with Run Policy picker | ✅ |
+| Daemon health check on startup (Output channel notification) | ✅ |
+| Session management (create, switch, reset, hard reset) | ✅ |
+| Hot reload file watching | ✅ |
+| Coverage gutter signs | ❌ Not yet implemented |
+| Themes | ❌ VS SDK doesn't expose color contribution API |
+| Call graph viewer | ❌ Available in VS Code and Neovim |
+| History browser | ❌ Available in VS Code and Neovim |
+
 ### Code Evaluation
 
 | Command | Keybinding | Description |
@@ -31,15 +57,23 @@ Then load the extension in Visual Studio's experimental instance, or install the
 | SageFs: Evaluate File | `Shift+Alt+Enter` | Evaluate the entire file |
 | SageFs: Evaluate Code Block | `Ctrl+Alt+Enter` | Evaluate the `;;`-delimited block at cursor |
 
-Results appear in the **SageFs Output** window.
+Results appear inline as adornments and in the **SageFs Output** window.
 
 ### CodeLens
 
 "▶ Eval" buttons appear above every F# function, type, and module. Click to evaluate. Live test CodeLens shows test status when live testing is enabled.
 
+### Completions
+
+F# completions are powered by SageFs's FSI session. The extension passes `working_directory` context and maps all 14 completion kind variants to their native VS equivalents. Completions have a 3-second timeout to keep the IDE responsive.
+
 ### Error List Integration
 
 SageFs diagnostics (type errors, warnings) stream into the native VS Error List via SSE — real-time feedback as you code.
+
+### Gutter Test Status Markers
+
+Pass/fail/stale icons appear in the editor margin next to each test. Markers are seeded from daemon state on extension load (`InitialStatePoll`) so the gutter is populated immediately, even before the next test run.
 
 ### Session Management
 
@@ -61,6 +95,8 @@ SageFs diagnostics (type errors, warnings) stream into the native VS Error List 
 | SageFs: Stop Daemon | Stop the running daemon |
 | SageFs: Open Dashboard | Open the web dashboard in your browser |
 
+On extension load, a startup health check writes the daemon status to the **SageFs Output** channel so you know immediately whether the daemon is reachable.
+
 ### Hot Reload
 
 | Command | Description |
@@ -77,16 +113,18 @@ SageFs diagnostics (type errors, warnings) stream into the native VS Error List 
 |---------|-------------|
 | SageFs: Enable/Disable Live Testing | Toggle the live test pipeline |
 | SageFs: Run All Tests | Execute all tests now |
-| SageFs: Set Run Policy | Configure which test categories auto-run (currently sets all to "every change") |
+| SageFs: Set Run Policy | Configure which test categories auto-run |
 | SageFs: Live Testing Dashboard | Open a tool window with test summary and results |
 | SageFs: Show Recent Events | Display recent pipeline events |
+
+The **Set Run Policy** command opens an interactive picker. Select a category and policy, then click **Apply** to update the daemon.
 
 ### Tool Windows
 
 - **Session Context** — Connection status, loaded assemblies, opened namespaces, warmup details
 - **Hot Reload Files** — Project files with watch status
-- **Live Testing** — Test summary, toggle, run-all, and results text
-- **Type Explorer** — Browse .NET types and namespaces
+- **Live Testing** — Test summary, toggle, run-all, per-category run policy, and results text
+- **Type Explorer** — Browse .NET types and namespaces; auto-refreshes when a new FSI session warms up
 
 ## Architecture
 
@@ -96,23 +134,6 @@ The extension uses a two-layer architecture:
 - **`SageFs.VisualStudio.Core`** (F#) — All HTTP client logic, daemon management, SSE subscriptions, and domain types. This is where the real work happens.
 
 Communication with SageFs uses the same HTTP + SSE protocol as all other frontends. The daemon runs on port 37749 (MCP) and 37750 (dashboard/API) by default.
-
-## Current Limitations
-
-These features exist in VS Code and/or Neovim but are **not yet implemented** in the VS extension:
-
-| Feature | Status | Notes |
-|---------|--------|-------|
-| Live test gutter markers | ❌ Not implemented | Server data ready, VS margin glyphs pending |
-| Coverage gutter signs | ❌ Not implemented | Server data ready, VS margin glyphs pending |
-| Test panel with per-test results | ⚠️ Basic | Shows text summary, no per-test navigation |
-| Test policy picker | ⚠️ Hardcoded | Sets all categories to "every change", no interactive picker |
-| Code completion | ❌ Not implemented | HTTP client ready, VS SDK doesn't expose completion API yet |
-| Themes | ❌ Not implemented | VS SDK doesn't expose color contribution API yet |
-| Inline result decorations | ❌ Not implemented | Results go to Output window, not inline adornments |
-| Status dashboard | ❌ Not implemented | Use the web dashboard at `localhost:37750/dashboard` |
-| Call graph viewer | ❌ Not implemented | Available via VS Code and Neovim |
-| History browser | ❌ Not implemented | Available via VS Code and Neovim |
 
 ## Troubleshooting
 
