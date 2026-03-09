@@ -162,6 +162,7 @@
         <Compile Include="StructAuditTests.fs" />
         <Compile Include="MeasureTests.fs" />
         <Compile Include="CellGridMonoidTests.fs" />
+        <Compile Include="MealyEquivalenceTests.fs" />
         <Compile Include="AppStatePropertyTests.fs" />
         <Compile Include="EditorPropertyTests.fs" />
         <Compile Include="ArchitectureTests.fs" />
