@@ -113,7 +113,16 @@ internal sealed class TestStateTracker
 
             if (changed) StateChanged?.Invoke(this, EventArgs.Empty);
         }
-        catch { }
+        catch (JsonException ex)
+        {
+            System.Diagnostics.Debug.WriteLine(
+                $"[TestStateTracker] JSON parse error in test_results_batch: {ex.Message}");
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine(
+                $"[TestStateTracker] Unexpected error processing test_results_batch: {ex.GetType().Name}: {ex.Message}");
+        }
     }
 
     private static string? ExtractTestId(JsonElement el)

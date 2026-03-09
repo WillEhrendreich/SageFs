@@ -44,7 +44,7 @@ internal sealed class TestGlyphTagger : ITagger<TestStatusGlyphTag>, IDisposable
         // Calling it from a background SSE thread causes mysterious editor crashes.
         var snapshot = _buffer.CurrentSnapshot;
         var span = new SnapshotSpan(snapshot, 0, snapshot.Length);
-        Application.Current?.Dispatcher.BeginInvoke(
+        _ = Application.Current?.Dispatcher.BeginInvoke(
             DispatcherPriority.Normal,
             (Action)(() => TagsChanged?.Invoke(this, new SnapshotSpanEventArgs(span))));
     }

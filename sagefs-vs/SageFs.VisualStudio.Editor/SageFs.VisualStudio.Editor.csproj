@@ -20,6 +20,11 @@
     <PackageReference Include="System.Text.Json" Version="8.0.5" />
   </ItemGroup>
   <ItemGroup>
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleTo">
+      <_Parameter1>SageFs.VisualStudio.Editor.Tests</_Parameter1>
+    </AssemblyAttribute>
+  </ItemGroup>
+  <ItemGroup>
     <!-- WPF framework assemblies (not available as NuGet on net472; must be referenced directly) -->
     <Reference Include="PresentationCore" />
     <Reference Include="PresentationFramework" />
