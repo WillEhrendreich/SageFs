@@ -1,10 +1,12 @@
 namespace SageFs.VisualStudio.Options;
 
 using System.ComponentModel;
-using Microsoft.VisualStudio.Shell;
 
+/// <summary>
+/// SageFs configuration. Stored in VS user settings via the VS Extensibility SDK settings API.
+/// </summary>
 [System.Runtime.InteropServices.Guid("b2d3f4a5-c6e7-4d8f-9a0b-1c2d3e4f5a6b")]
-public sealed class SageFsOptions : DialogPage
+public sealed class SageFsOptions
 {
     [Category("Connection")]
     [DisplayName("Daemon URL")]
@@ -36,3 +38,4 @@ public sealed class SageFsOptions : DialogPage
     [Description("Show test coverage CodeLens badges")]
     public bool CodeLensEnabled { get; set; } = true;
 }
+

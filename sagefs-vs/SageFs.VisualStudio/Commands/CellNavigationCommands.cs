@@ -366,6 +366,7 @@ internal class EvalAndAdvanceCommand : Command
 
   private static string FindBlockAroundCursor(string text, int cursorOffset) =>
     BlockHelpers.FindBlockAroundCursor(text, cursorOffset);
+}
 
 #pragma warning restore VSEXTPREVIEW_OUTPUTWINDOW
 
