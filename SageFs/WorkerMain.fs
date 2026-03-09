@@ -207,7 +207,9 @@ let run (sessionId: string) (port: int) = async {
       try
         a.GetReferencedAssemblies()
         |> Array.exists (fun r -> testFrameworkMarkers |> Array.contains r.Name)
-      with _ -> false)
+      with ex ->
+        Log.warn "[WorkerMain] Assembly framework check failed for %s: %s" a.FullName ex.Message
+        false)
   let projectDiscoveryResults =
     testAssemblies
     |> Array.choose (fun asm ->
@@ -218,7 +220,9 @@ let run (sessionId: string) (port: int) = async {
         match hr.DiscoveredTests.Length > 0 with
         | true -> Some hr
         | false -> None
-      with _ -> None)
+      with ex ->
+        Log.error "[WorkerMain] LiveTestingHook.afterReload failed for %s: %s" asm.FullName ex.Message
+        None)
 
   let initialDiscoveredTests =
     projectDiscoveryResults |> Array.collect (fun r -> r.DiscoveredTests)
@@ -320,7 +324,10 @@ let run (sessionId: string) (port: int) = async {
           filePath,
           newCts,
           fun _key oldCts ->
-            try oldCts.Cancel() with _ -> ()
+            try oldCts.Cancel()
+            with
+            | :? ObjectDisposedException -> ()
+            | ex -> Log.warn "[WorkerMain] CTS cancel failed for %s: %s" filePath ex.Message
             oldCts.Dispose()
             newCts)
         |> ignore

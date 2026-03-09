@@ -610,7 +610,9 @@ let createResetHandler
           match doc.RootElement.TryGetProperty("sessionId") with
           | true, prop -> return prop.GetString()
           | _ -> return ""
-        with _ -> return ""
+        with ex ->
+          Log.warn "[Dashboard] Session ID extraction from JSON failed: %s" ex.Message
+          return ""
       }
       let! result = resetSession sessionId
       Response.sseStartResponse ctx |> ignore

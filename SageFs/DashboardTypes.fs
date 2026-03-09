@@ -156,7 +156,9 @@ let discoverProjects (workingDir: string) : DiscoveredProjects =
       Directory.EnumerateFiles(workingDir, "*.fsproj", SearchOption.AllDirectories)
       |> Seq.map (fun p -> Path.GetRelativePath(workingDir, p))
       |> Seq.toList
-    with _ -> []
+    with ex ->
+      Log.warn "[Discovery] Project enumeration failed in %s: %s (%s)" workingDir ex.Message (ex.GetType().Name)
+      []
   let solutions =
     try
       Directory.EnumerateFiles(workingDir)
@@ -165,7 +167,9 @@ let discoverProjects (workingDir: string) : DiscoveredProjects =
         ext = ".sln" || ext = ".slnx")
       |> Seq.map Path.GetFileName
       |> Seq.toList
-    with _ -> []
+    with ex ->
+      Log.warn "[Discovery] Project enumeration failed in %s: %s (%s)" workingDir ex.Message (ex.GetType().Name)
+      []
   { WorkingDir = workingDir; Solutions = solutions; Projects = projects }
 
 type ParsedSession = {
