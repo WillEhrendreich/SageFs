@@ -2,6 +2,7 @@ module SageFs.ActorCreation
 
 
 open SageFs.Middleware
+open SageFs.Middleware.Tracing
 open SageFs.ProjectLoading
 open SageFs.AppState
 
@@ -95,8 +96,23 @@ let createActorImmediate a =
   AspireSetup.configureAspireIfNeeded a.Logger sln
 
   let customData = a.InitFunctions |> Seq.map (fun fn -> fn sln) |> Map.ofSeq
+  let tracedBuild: AppState.PipelineBuildFn =
+    fun middleware evalFn ->
+      let namedMiddleware =
+        Tracing.namedCommonMiddleware
+        |> List.map (fun nm -> nm.Name, nm.Middleware)
+        |> Map.ofList
+      let named =
+        middleware
+        |> List.map (fun mw ->
+          let name =
+            namedMiddleware
+            |> Map.tryFindKey (fun _ v -> obj.ReferenceEquals(v, mw))
+            |> Option.defaultValue "Unknown"
+          { Tracing.NamedMiddleware.Name = name; Middleware = mw })
+      Tracing.buildTracedPipeline named "CoreEval" evalFn
   let appActor, diagnosticsChanged, cancelEval, getSessionState, getEvalStats, getWarmupFailures, getWarmupContext, getStartupConfig, getStatusMessage =
-    mkAppStateActor a.Logger customData a.OutStream a.UseAsp originalSln shadowDir a.AutoOpenNamespaces a.HotReloadEnabled a.OnEvent sln
+    mkAppStateActor a.Logger customData a.OutStream a.UseAsp originalSln shadowDir a.AutoOpenNamespaces a.HotReloadEnabled a.OnEvent tracedBuild sln
   let projDirs = projectDirectories originalSln
   let hotReloadStateRef = ref HotReloadState.empty
   { Actor = appActor; DiagnosticsChanged = diagnosticsChanged; CancelEval = cancelEval; GetSessionState = getSessionState; GetEvalStats = getEvalStats; GetWarmupFailures = getWarmupFailures; GetWarmupContext = getWarmupContext; GetStartupConfig = getStartupConfig; GetStatusMessage = getStatusMessage; ProjectDirectories = projDirs; HotReloadStateRef = hotReloadStateRef; InstrumentationMaps = instrumentationMaps }

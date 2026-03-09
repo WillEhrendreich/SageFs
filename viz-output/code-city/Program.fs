@@ -406,18 +406,415 @@ type RoadClass = Boulevard | Avenue | Street | Lane | Alley
 
 type StreetStatus = Planned | Built
 
-type PlannedStreet =
-  { Segment: TRect
-    Class: RoadClass
-    Status: StreetStatus }
+type StreetId = StreetId of int
+
+module StreetId =
+  let value (StreetId value) = value
+
+type StreetTraffic =
+  { Volume: float32
+    MaxVolume: float32 }
+
+type ResidentTrip =
+  { StartStreet: StreetId
+    EndStreet: StreetId
+    Volume: float32
+    Route: StreetId list }
+
+type PathError =
+  | UnknownStreet of StreetId
+  | NoRouteBetweenStreets of StreetId * StreetId
+
+type TripError =
+  | MissingStreet of StreetId
+  | NegativeTrafficAfterRemoval of StreetId
+
+type MajorStreet =
+  { Id: StreetId
+    Segment: TRect
+    Status: StreetStatus
+    Residents: float32
+    Traffic: StreetTraffic }
+
+type MinorStreet =
+  { Id: StreetId
+    Segment: TRect
+    Status: StreetStatus
+    QuarterRect: TRect
+    Residents: float32
+    Traffic: StreetTraffic }
+
+type FrontageEdge = North | South | East | West
+
+type LandUseType =
+  | ResidentialUse
+  | CommercialUse
+  | IndustrialUse
+  | ParkUse
+  | CivicUse
+  | MixedUseZone
+
+type BuildingEnvelope =
+  { Rect: TRect
+    Area: float32
+    FrontageEdge: FrontageEdge
+    FrontSetback: float32
+    SideSetback: float32
+    BackSetback: float32
+    NFloors: float32 }
+
+type LotEconomics =
+  { Price: float32
+    FloorSpace: float32
+    Residents: float32 }
+
+type ValuationCurve =
+  | Step
+  | LinearUp
+  | LinearDown
+  | GainUp
+  | GainDown
+
+type LotMetric =
+  | LotArea
+  | FrontageAccess
+  | TrafficVolume
+  | SameUseCluster
+  | NeighborInfluence of LandUseType
+
+type LandUseValuation =
+  { Metric: LotMetric
+    Curve: ValuationCurve
+    Min: float32
+    Max: float32
+    Weight: float32 }
+
+type LandUseDefinition =
+  { LandUseType: LandUseType
+    Valuations: LandUseValuation list }
+
+type LandUseGoal =
+  { LandUseType: LandUseType
+    TargetPercent: float32 }
+
+type BuildingSubstitutionFactor =
+  { Curve: ValuationCurve
+    Min: float32
+    Max: float32
+    Weight: float32 }
+
+type BuildingSubstitutionConfig =
+  { AgeFactor: BuildingSubstitutionFactor
+    PriceGapFactor: BuildingSubstitutionFactor
+    Seed: int }
+
+type BuildingSubstitutionStats =
+  { EvaluatedLots: int
+    ReplacedLots: int
+    RetainedLots: int
+    MeanProbability: float32 }
+
+type LandUseCadence =
+  { StepYears: float32
+    ReevaluationYears: float32
+    ElapsedSinceLastEvaluationYears: float32 }
+
+type LandUseSimulationConfig =
+  { Goals: LandUseGoal list
+    Definitions: LandUseDefinition list
+    AveragePricePerSqm: float32
+    GlobalWeight: float32
+    LocalWeight: float32
+    GoalScale: float32
+    AttemptsFraction: float32
+    RejectedDeltaThreshold: float32
+    Seed: int
+    Cadence: LandUseCadence }
+
+type LandUseUpdateStats =
+  { EvaluatedLots: int
+    Attempts: int
+    Accepted: int
+    Rejected: int
+    SkippedByCadence: bool
+    GlobalValueBefore: float32
+    GlobalValueAfter: float32 }
+
+type LandUseSubdivisionRule =
+  { MaxLotArea: float32
+    MinWidthLengthRatio: float32
+    RetryOffsets: float32 list }
+
+type BlockSubdivisionStats =
+  { EvaluatedRects: int
+    AcceptedSplits: int
+    RejectedCandidates: int
+    StreetEdgeRetries: int
+    NonStreetEdgeFallbacks: int
+    TerminalLots: int
+    MaxDepth: int }
 
 type PlannedBlock =
   { Rect: TRect
-    Frontage: RoadClass list }
-
-type PlannedLot =
+    QuarterRect: TRect
+    LandUseType: LandUseType
+    LandUseValue: float32
+    StreetFacingEdges: FrontageEdge list
+    Lots: PlannedLot list }
+and PlannedLot =
   { Rect: TRect
-    Frontage: RoadClass }
+    FrontageEdge: FrontageEdge
+    BlockRect: TRect
+    LandUseType: LandUseType
+    LandUseValue: float32
+    Envelope: BuildingEnvelope option
+    FrontingStreetStatus: StreetStatus
+    Price: float32
+    FloorSpace: float32
+    Residents: float32
+    BuildingAgeYears: float32 }
+
+type QuarterPlan =
+  { Rect: TRect
+    MinorStreets: MinorStreet list
+    Blocks: PlannedBlock list
+    LandUseType: LandUseType
+    LandUseValue: float32 }
+
+type DistrictPlan =
+  { MajorStreets: MajorStreet list
+    Quarters: QuarterPlan list }
+
+type MajorStreetGrowthPlan =
+  { GrowthCenters: Vec2 list
+     MajorStreets: MajorStreet list
+     QuarterRects: TRect list }
+
+type SimulationStage =
+  | UpdateTrafficSimulationStage
+  | PromotePlannedStreetsStage
+  | UpdateLandUseSimulationStage
+
+type StageSnapshot =
+  { Stage: SimulationStage
+    Plan: DistrictPlan }
+
+type SimulationTrace =
+  { Seed: int option
+    Initial: DistrictPlan
+    Stages: StageSnapshot list
+    Final: DistrictPlan }
+
+type SimulationTimelineConfig =
+  { Steps: int
+    StepYears: float32
+    LandUseReevaluationYears: float32
+    PromotionLagSteps: int
+    BuildingSubstitution: BuildingSubstitutionConfig option }
+
+type CanonicalMajorStreet =
+  { StreetId: StreetId
+    StreetRect: TRect
+    StreetStatus: StreetStatus
+    StreetResidents: float32
+    StreetTrafficVolume: float32
+    StreetMaxVolume: float32 }
+
+type CanonicalMinorStreet =
+  { StreetId: StreetId
+    StreetRect: TRect
+    StreetStatus: StreetStatus
+    StreetResidents: float32
+    StreetTrafficVolume: float32
+    StreetMaxVolume: float32 }
+
+type CanonicalLot =
+  { LotRect: TRect
+    LotFrontageEdge: FrontageEdge
+    LotLandUseType: LandUseType
+    LotLandUseValue: float32
+    LotFrontingStreetStatus: StreetStatus
+    LotResidents: float32 }
+
+type CanonicalBlock =
+  { BlockRect: TRect
+    BlockLandUseType: LandUseType
+    BlockLandUseValue: float32
+    CanonicalLots: CanonicalLot list }
+
+type CanonicalQuarter =
+  { QuarterRect: TRect
+    QuarterLandUseType: LandUseType
+    QuarterLandUseValue: float32
+    CanonicalMinorStreets: CanonicalMinorStreet list
+    CanonicalBlocks: CanonicalBlock list }
+
+type CanonicalDistrictPlan =
+  { CanonicalMajorStreets: CanonicalMajorStreet list
+    CanonicalQuarters: CanonicalQuarter list }
+
+type CanonicalStageSnapshot =
+  { CanonicalStage: SimulationStage
+    CanonicalPlan: CanonicalDistrictPlan }
+
+type CanonicalSimulationTrace =
+  { TraceSeed: int option
+    InitialPlan: CanonicalDistrictPlan
+    StagePlans: CanonicalStageSnapshot list
+    FinalPlan: CanonicalDistrictPlan }
+
+type SimulationStageDelta =
+  { TrafficUpdatedStreetCount: int
+    TotalTrafficVolumeDelta: float32
+    PromotedMajorStreetCount: int
+    PromotedMinorStreetCount: int
+    QuarterLandUseChangedCount: int
+    BlockLandUseChangedCount: int
+    TotalBlockLandUseValueDelta: float32
+    LotLandUseChangedCount: int
+    TotalLotLandUseValueDelta: float32
+    ReplacedLotCount: int }
+
+type TimelineStepSnapshot =
+  { StepIndex: int
+    ElapsedYears: float32
+    Plan: DistrictPlan
+    LandUseStats: LandUseUpdateStats
+    BuildingSubstitutionStats: BuildingSubstitutionStats
+    Delta: SimulationStageDelta }
+
+type SimulationTimeline =
+  { Seed: int option
+    Initial: DistrictPlan
+    Steps: TimelineStepSnapshot list
+    Final: DistrictPlan }
+
+type InstrumentedStageSnapshot =
+  { Stage: SimulationStage
+    Plan: DistrictPlan
+    Elapsed: TimeSpan
+    Delta: SimulationStageDelta }
+
+type InstrumentedSimulationTrace =
+  { Seed: int option
+    Initial: DistrictPlan
+    Stages: InstrumentedStageSnapshot list
+    Final: DistrictPlan
+    TotalElapsed: TimeSpan }
+
+type SimulationStageBenchmark =
+  { Stage: SimulationStage
+    Iterations: int
+    MinElapsed: TimeSpan
+    MedianElapsed: TimeSpan
+    MaxElapsed: TimeSpan
+    LastObservedDelta: SimulationStageDelta }
+
+type SimulationBenchmarkSummary =
+  { WarmupIterations: int
+    MeasuredIterations: int
+    StageBenchmarks: SimulationStageBenchmark list
+    TotalMinElapsed: TimeSpan
+    TotalMedianElapsed: TimeSpan
+    TotalMaxElapsed: TimeSpan
+    CanonicalResult: CanonicalSimulationTrace }
+
+type BenchmarkFixtureSize =
+  | Tiny
+  | Medium
+  | Target
+
+type SimulationBenchmarkBudget =
+  { ReferenceLabel: string
+    TargetMedianElapsed: TimeSpan }
+
+type SimulationBenchmarkBudgetStatus =
+  | NotEvaluated
+  | WithinReference
+  | OverReference of TimeSpan
+
+type SimulationBenchmarkCounters =
+  { PathComputations: int
+    TripsGenerated: int
+    SplitCandidatesTried: int
+    ResultStreetCount: int
+    ResultBlockCount: int
+    ResultLotCount: int }
+
+type SimulationBenchmarkCase =
+  { Name: string
+    Size: BenchmarkFixtureSize
+    Seed: int
+    Initial: DistrictPlan
+    Budget: SimulationBenchmarkBudget option }
+
+type SimulationBenchmarkCaseSummary =
+  { Case: SimulationBenchmarkCase
+    Summary: SimulationBenchmarkSummary
+    Counters: SimulationBenchmarkCounters
+    BudgetStatus: SimulationBenchmarkBudgetStatus }
+
+module MajorStreet =
+  let private emptyTraffic = { Volume = 0.0f; MaxVolume = 0.0f }
+  let planned segment =
+    { Id = StreetId 0
+      Segment = segment
+      Status = Planned
+      Residents = 0.0f
+      Traffic = emptyTraffic }
+  let built segment =
+    { Id = StreetId 0
+      Segment = segment
+      Status = Built
+      Residents = 0.0f
+      Traffic = emptyTraffic }
+
+module MinorStreet =
+  let planned quarterRect segment =
+    { Id = StreetId 0
+      Segment = segment
+      Status = Planned
+      QuarterRect = quarterRect
+      Residents = 0.0f
+      Traffic = { Volume = 0.0f; MaxVolume = 0.0f } }
+  let built quarterRect segment =
+    { Id = StreetId 0
+      Segment = segment
+      Status = Built
+      QuarterRect = quarterRect
+      Residents = 0.0f
+      Traffic = { Volume = 0.0f; MaxVolume = 0.0f } }
+
+module PlannedBlock =
+  let create quarterRect rect =
+    { Rect = rect
+      QuarterRect = quarterRect
+      LandUseType = ResidentialUse
+      LandUseValue = 0.5f
+      StreetFacingEdges = [ North; South; West; East ]
+      Lots = [] }
+
+module PlannedLot =
+  let create blockRect frontageEdge rect =
+    { Rect = rect
+      FrontageEdge = frontageEdge
+      BlockRect = blockRect
+      LandUseType = ResidentialUse
+      LandUseValue = 0.5f
+      Envelope = None
+      FrontingStreetStatus = Planned
+      Price = 0.0f
+      FloorSpace = 0.0f
+      Residents = 0.0f
+      BuildingAgeYears = 0.0f }
+
+module QuarterPlan =
+  let create rect minorStreets blocks =
+    { Rect = rect
+      MinorStreets = minorStreets
+      Blocks = blocks
+      LandUseType = ResidentialUse
+      LandUseValue = 0.5f }
 
 module RoadClass =
   // Real-world proportional widths (avg building ~1.5 units)
@@ -437,6 +834,75 @@ module RoadClass =
     | Street    -> ( 65uy,  65uy,  70uy)  // darker grey
     | Lane      -> ( 50uy,  50uy,  55uy)  // dim
     | Alley     -> ( 38uy,  38uy,  42uy)  // near-black
+
+let streetWidthFromTraffic (trafficVolume: float32) =
+  1.0f + MathF.Sqrt(max 0.0f trafficVolume) * 0.3f
+
+let streetMaxVolumeFromTraffic (trafficVolume: float32) =
+  streetWidthFromTraffic trafficVolume * 6.0f
+
+let private normalizeStreetTraffic (traffic: StreetTraffic) =
+  let clampedVolume = max 0.0f traffic.Volume
+  let maxVolume =
+    match traffic.MaxVolume > 0.0f with
+    | true -> traffic.MaxVolume
+    | false -> streetMaxVolumeFromTraffic clampedVolume
+  { Volume = clampedVolume
+    MaxVolume = maxVolume }
+
+let indexStreetNetwork (plan: DistrictPlan) : DistrictPlan =
+  let existingIds =
+    (plan.MajorStreets |> List.map _.Id)
+    @ (plan.Quarters |> List.collect (fun quarter -> quarter.MinorStreets |> List.map _.Id))
+    |> List.filter (fun streetId -> StreetId.value streetId > 0)
+    |> Set.ofList
+
+  let nextFreshId =
+    let mutable nextId =
+      existingIds
+      |> Seq.map StreetId.value
+      |> Seq.append [ 0 ]
+      |> Seq.max
+      |> fun currentMax -> currentMax + 1
+    fun () ->
+      let fresh = StreetId nextId
+      nextId <- nextId + 1
+      fresh
+
+  let assignId used streetId =
+    match StreetId.value streetId > 0 && not (Set.contains streetId used) with
+    | true -> streetId, Set.add streetId used
+    | false ->
+        let fresh = nextFreshId()
+        fresh, Set.add fresh used
+
+  let usedAfterMajors, majorStreets =
+    ((Set.empty, []), plan.MajorStreets)
+    ||> List.fold (fun (used, streets) street ->
+      let streetId, nextUsed = assignId used street.Id
+      let indexed =
+        { street with
+            Id = streetId
+            Traffic = normalizeStreetTraffic street.Traffic }
+      nextUsed, streets @ [ indexed ])
+
+  let _, quarters =
+    ((usedAfterMajors, []), plan.Quarters)
+    ||> List.fold (fun (used, quarters) quarter ->
+      let nextUsed, minorStreets =
+        ((used, []), quarter.MinorStreets)
+        ||> List.fold (fun (innerUsed, streets) street ->
+          let streetId, updatedUsed = assignId innerUsed street.Id
+          let indexed =
+            { street with
+                Id = streetId
+                Traffic = normalizeStreetTraffic street.Traffic }
+          updatedUsed, streets @ [ indexed ])
+      nextUsed, quarters @ [ { quarter with MinorStreets = minorStreets } ])
+
+  { plan with
+      MajorStreets = majorStreets
+      Quarters = quarters }
 
 /// Alias for test visibility (DomainTests opens the module-level namespace).
 let roadColorForClass = RoadClass.color
@@ -470,6 +936,12 @@ let private splitRectByCorridors (rect: TRect) (verticals: TRect list) (horizont
       for (z, h) in zSpans do
         if w > 0.25f && h > 0.25f then
           yield TRect.create x z w h ]
+
+let private rectsOverlap (a: TRect) (b: TRect) =
+  a.X < b.X + b.W
+  && b.X < a.X + a.W
+  && a.Z < b.Z + b.H
+  && b.Z < a.Z + a.H
 
 let private jitteredSplitPositions (startPos: float32) (size: float32) (segments: int) (organic: float32) (rng: Random) =
   if segments <= 1 then []
@@ -519,12 +991,216 @@ let private blockScore (outerRect: TRect) (blockRect: TRect) =
   let dist = sqrt (dx * dx + dz * dz)
   TRect.area blockRect - dist * 0.35f
 
-let planHierarchicalDistrict (rect: TRect) (moduleDemand: int) (organic: float32) (rng: Random) : PlannedStreet list * PlannedBlock list =
-  if moduleDemand <= 0 || rect.W < 2.0f || rect.H < 2.0f then ([], [])
+let private districtBlocks (plan: DistrictPlan) =
+  plan.Quarters |> List.collect (fun quarter -> quarter.Blocks)
+
+let private districtMinorStreets (plan: DistrictPlan) =
+  plan.Quarters |> List.collect (fun quarter -> quarter.MinorStreets)
+
+let private clamp01f value =
+  value |> max 0.0f |> min 1.0f
+
+let private rectCompactness (rect: TRect) =
+  let longest = max rect.W rect.H
+  match longest <= 0.0f with
+  | true -> 0.0f
+  | false -> min rect.W rect.H / longest
+
+let private landUseSuitability (landUseType: LandUseType) (rect: TRect) (organic: float32) =
+  let compactness = rectCompactness rect
+  let areaScore = clamp01f (TRect.area rect / 600.0f)
+  match landUseType with
+  | ResidentialUse -> clamp01f (0.35f + compactness * 0.35f + organic * 0.30f)
+  | CommercialUse -> clamp01f (0.30f + compactness * 0.40f + (1.0f - organic) * 0.20f + areaScore * 0.10f)
+  | IndustrialUse -> clamp01f (0.30f + areaScore * 0.45f + (1.0f - compactness) * 0.25f)
+  | ParkUse -> clamp01f (0.20f + organic * 0.45f + areaScore * 0.35f)
+  | CivicUse -> clamp01f (0.25f + compactness * 0.30f + areaScore * 0.20f + organic * 0.25f)
+  | MixedUseZone -> clamp01f (0.35f + compactness * 0.30f + areaScore * 0.15f + organic * 0.20f)
+
+let private dominantLandUse (rect: TRect) (organic: float32) =
+  [ ResidentialUse; CommercialUse; IndustrialUse; ParkUse; CivicUse; MixedUseZone ]
+  |> List.map (fun landUseType -> landUseType, landUseSuitability landUseType rect organic)
+  |> List.maxBy snd
+
+let evaluateLotLandUseValue (lot: PlannedLot) =
+  let frontageBonus =
+    match lot.FrontingStreetStatus with
+    | Planned -> 0.05f
+    | Built -> 0.18f
+  landUseSuitability lot.LandUseType lot.Rect lot.LandUseValue
+  + frontageBonus
+  |> clamp01f
+
+let private economyMarginForLandUse landUseType =
+  match landUseType with
+  | ResidentialUse -> 0.70f
+  | CommercialUse -> 0.82f
+  | IndustrialUse -> 0.68f
+  | ParkUse -> 0.12f
+  | CivicUse -> 0.50f
+  | MixedUseZone -> 0.76f
+
+let private residentDensityForLandUse landUseType =
+  match landUseType with
+  | ResidentialUse -> 0.085f
+  | CommercialUse -> 0.020f
+  | IndustrialUse -> 0.008f
+  | ParkUse -> 0.002f
+  | CivicUse -> 0.010f
+  | MixedUseZone -> 0.040f
+
+let private zeroLotEconomics =
+  { Price = 0.0f
+    FloorSpace = 0.0f
+    Residents = 0.0f }
+
+let private frontSetbackForLandUse landUseType =
+  match landUseType with
+  | ResidentialUse -> 0.45f
+  | CommercialUse
+  | MixedUseZone -> 0.25f
+  | IndustrialUse -> 0.35f
+  | ParkUse
+  | CivicUse -> 0.60f
+
+let private sideSetbackForLandUse landUseType =
+  match landUseType with
+  | ResidentialUse
+  | CivicUse -> 0.20f
+  | CommercialUse
+  | MixedUseZone -> 0.12f
+  | IndustrialUse -> 0.18f
+  | ParkUse -> 0.30f
+
+let private backSetbackForLandUse landUseType =
+  match landUseType with
+  | ResidentialUse
+  | CivicUse -> 0.28f
+  | CommercialUse
+  | MixedUseZone -> 0.20f
+  | IndustrialUse -> 0.24f
+  | ParkUse -> 0.36f
+
+let private buildEnvelopeForFrontage (frontageEdge: FrontageEdge) (lot: PlannedLot) =
+  let frontSetback = frontSetbackForLandUse lot.LandUseType
+  let sideSetback = sideSetbackForLandUse lot.LandUseType
+  let backSetback = backSetbackForLandUse lot.LandUseType
+  let envelopeRect =
+    match frontageEdge with
+    | North ->
+        TRect.create
+          (lot.Rect.X + sideSetback)
+          (lot.Rect.Z + frontSetback)
+          (lot.Rect.W - sideSetback * 2.0f)
+          (lot.Rect.H - frontSetback - backSetback)
+    | South ->
+        TRect.create
+          (lot.Rect.X + sideSetback)
+          (lot.Rect.Z + backSetback)
+          (lot.Rect.W - sideSetback * 2.0f)
+          (lot.Rect.H - frontSetback - backSetback)
+    | West ->
+        TRect.create
+          (lot.Rect.X + frontSetback)
+          (lot.Rect.Z + sideSetback)
+          (lot.Rect.W - frontSetback - backSetback)
+          (lot.Rect.H - sideSetback * 2.0f)
+    | East ->
+        TRect.create
+          (lot.Rect.X + backSetback)
+          (lot.Rect.Z + sideSetback)
+          (lot.Rect.W - frontSetback - backSetback)
+          (lot.Rect.H - sideSetback * 2.0f)
+  match envelopeRect.W <= 0.0f || envelopeRect.H <= 0.0f with
+  | true -> None
+  | false ->
+      let area = TRect.area envelopeRect
+      let nFloors =
+        match area <= 0.0f with
+        | true -> 0.0f
+        | false -> lot.FloorSpace / area
+      Some
+        { Rect = envelopeRect
+          Area = area
+          FrontageEdge = frontageEdge
+          FrontSetback = frontSetback
+          SideSetback = sideSetback
+          BackSetback = backSetback
+          NFloors = nFloors }
+
+let computeBuildingEnvelope (lot: PlannedLot) =
+  match lot.FrontingStreetStatus with
+  | Planned -> None
+  | Built -> buildEnvelopeForFrontage lot.FrontageEdge lot
+
+let computeLotEconomics avgPricePerSqm meanLotLandUseValue (lot: PlannedLot) =
+  let area = TRect.area lot.Rect
+  match area <= 0.0f || avgPricePerSqm <= 0.0f || meanLotLandUseValue <= 0.0f || lot.LandUseValue <= 0.0f with
+  | true -> zeroLotEconomics
+  | false ->
+      let relativeValue = lot.LandUseValue / meanLotLandUseValue
+      let price = area * avgPricePerSqm * relativeValue
+      let floorSpace = price * economyMarginForLandUse lot.LandUseType
+      let residents = floorSpace * residentDensityForLandUse lot.LandUseType
+      { Price = price
+        FloorSpace = floorSpace
+        Residents = residents }
+
+let private withLotDerivedState (lot: PlannedLot) =
+  let landUseValue = evaluateLotLandUseValue lot
+  let economics =
+    computeLotEconomics 100.0f landUseValue { lot with LandUseValue = landUseValue }
+  let enriched =
+    { lot with
+        LandUseValue = landUseValue
+        Price = economics.Price
+        FloorSpace = economics.FloorSpace
+        Residents = economics.Residents }
+  { enriched with Envelope = computeBuildingEnvelope enriched }
+
+module Scenario =
+  let rectangularBlock quarterRect rect landUseType landUseValue : PlannedBlock =
+    PlannedBlock.create quarterRect rect
+    |> fun block ->
+      { block with
+          LandUseType = landUseType
+          LandUseValue = landUseValue }
+
+  let rectangularLot blockRect rect frontageEdge streetStatus landUseType landUseValue : PlannedLot =
+    PlannedLot.create blockRect frontageEdge rect
+    |> fun lot ->
+      { lot with
+          LandUseType = landUseType
+          LandUseValue = landUseValue
+          FrontingStreetStatus = streetStatus }
+    |> withLotDerivedState
+
+  let singleQuarter rect : DistrictPlan =
+    let block = rectangularBlock rect rect ResidentialUse 0.5f
+    { MajorStreets = []
+      Quarters = [ QuarterPlan.create rect [] [ block ] ] }
+    |> indexStreetNetwork
+
+  let singlePlannedMajorStreet segment : DistrictPlan =
+    { MajorStreets = [ MajorStreet.planned segment ]
+      Quarters = [] }
+    |> indexStreetNetwork
+
+  let singleBuiltMinorStreet quarterRect segment : DistrictPlan =
+    let block = rectangularBlock quarterRect quarterRect ResidentialUse 0.5f
+    let quarter =
+      QuarterPlan.create quarterRect [ MinorStreet.built quarterRect segment ] [ block ]
+    { MajorStreets = []
+      Quarters = [ quarter ] }
+    |> indexStreetNetwork
+
+let planHierarchicalDistrict (rect: TRect) (moduleDemand: int) (organic: float32) (rng: Random) : DistrictPlan =
+  if moduleDemand <= 0 || rect.W < 2.0f || rect.H < 2.0f then
+    { MajorStreets = []
+      Quarters = [] }
   else
     let majorWidth = max 1.2f (RoadClass.width Avenue * (0.95f + organic * 0.2f))
     let minorWidth = max 0.7f (RoadClass.width Street * (0.9f + organic * 0.15f))
-    let mutable majorRoads : PlannedStreet list = []
     let crossAxis =
       moduleDemand >= 4
       && rect.W >= majorWidth * 2.0f + 8.0f
@@ -532,18 +1208,14 @@ let planHierarchicalDistrict (rect: TRect) (moduleDemand: int) (organic: float32
     let verticalMajor =
       if crossAxis then
         let mid = rect.X + rect.W / 2.0f + (rng.NextSingle() - 0.5f) * organic * (rect.W * 0.08f)
-        [ { Segment = TRect.create (mid - majorWidth / 2.0f) rect.Z majorWidth rect.H
-            Class = Avenue
-            Status = Built } ]
+        [ MajorStreet.planned (TRect.create (mid - majorWidth / 2.0f) rect.Z majorWidth rect.H) ]
       else []
     let horizontalMajor =
       if crossAxis then
         let mid = rect.Z + rect.H / 2.0f + (rng.NextSingle() - 0.5f) * organic * (rect.H * 0.08f)
-        [ { Segment = TRect.create rect.X (mid - majorWidth / 2.0f) rect.W majorWidth
-            Class = Avenue
-            Status = Built } ]
+        [ MajorStreet.planned (TRect.create rect.X (mid - majorWidth / 2.0f) rect.W majorWidth) ]
       else []
-    majorRoads <- verticalMajor @ horizontalMajor
+    let majorRoads = verticalMajor @ horizontalMajor
     let quarterRects =
       splitRectByCorridors rect (verticalMajor |> List.map _.Segment) (horizontalMajor |> List.map _.Segment)
     let districts = if quarterRects.IsEmpty then [ rect ] else quarterRects
@@ -551,11 +1223,24 @@ let planHierarchicalDistrict (rect: TRect) (moduleDemand: int) (organic: float32
       districts
       |> List.map TRect.area
       |> allocateByWeights moduleDemand
-    let planQuarter (quarterRect: TRect) (targetBlocks: int) =
-      if targetBlocks <= 0 then ([], [])
+    let planQuarter (quarterRect: TRect) (targetBlocks: int) : QuarterPlan option =
+      if targetBlocks <= 0 then None
       elif targetBlocks = 1 || quarterRect.W < 4.0f || quarterRect.H < 4.0f then
-        ([], [ ({ Rect = quarterRect; Frontage = [ if crossAxis then Avenue else Street ] } : PlannedBlock) ])
+        let landUseType, landUseValue = dominantLandUse quarterRect organic
+        let block =
+          PlannedBlock.create quarterRect quarterRect
+          |> fun planned ->
+            { planned with
+                LandUseType = landUseType
+                LandUseValue = landUseValue }
+        Some
+          (QuarterPlan.create quarterRect [] [ block ]
+           |> fun quarter ->
+             { quarter with
+                 LandUseType = landUseType
+                 LandUseValue = landUseValue })
       else
+        let quarterLandUseType, quarterLandUseValue = dominantLandUse quarterRect organic
         let aspect = quarterRect.W / max 0.1f quarterRect.H
         let cols =
           max 1 (int (MathF.Ceiling(MathF.Sqrt(float32 targetBlocks * aspect))))
@@ -565,71 +1250,1623 @@ let planHierarchicalDistrict (rect: TRect) (moduleDemand: int) (organic: float32
         let horizontalCuts = jitteredSplitPositions quarterRect.Z quarterRect.H rows organic rng
         let verticalRoads =
           verticalCuts
-          |> List.map (fun cut ->
-            { Segment = TRect.create (cut - minorWidth / 2.0f) quarterRect.Z minorWidth quarterRect.H
-              Class = Street
-              Status = Built })
+          |> List.map (fun cut -> MinorStreet.planned quarterRect (TRect.create (cut - minorWidth / 2.0f) quarterRect.Z minorWidth quarterRect.H))
         let horizontalRoads =
           horizontalCuts
-          |> List.map (fun cut ->
-            { Segment = TRect.create quarterRect.X (cut - minorWidth / 2.0f) quarterRect.W minorWidth
-              Class = Street
-              Status = Built })
+          |> List.map (fun cut -> MinorStreet.planned quarterRect (TRect.create quarterRect.X (cut - minorWidth / 2.0f) quarterRect.W minorWidth))
         let blocks =
           splitRectByCorridors quarterRect (verticalRoads |> List.map _.Segment) (horizontalRoads |> List.map _.Segment)
           |> List.map (fun blockRect ->
-            ({ Rect = blockRect
-               Frontage =
-                 [ if crossAxis then Avenue else Street
-                   if verticalRoads.IsEmpty && horizontalRoads.IsEmpty then Street else Street ] } : PlannedBlock))
-        (verticalRoads @ horizontalRoads, blocks)
-    let quarterPlans =
+            let blockLandUseType, blockLandUseValue =
+              dominantLandUse blockRect ((quarterLandUseValue + organic) * 0.5f |> clamp01f)
+            PlannedBlock.create quarterRect blockRect
+            |> fun block ->
+              { block with
+                  LandUseType = blockLandUseType
+                  LandUseValue = blockLandUseValue })
+        Some
+          (QuarterPlan.create quarterRect (verticalRoads @ horizontalRoads) blocks
+           |> fun quarter ->
+             { quarter with
+                 LandUseType = quarterLandUseType
+                 LandUseValue = quarterLandUseValue })
+    let quarters =
       List.zip districts quarterDemand
-      |> List.map (fun (quarterRect, demand) -> planQuarter quarterRect demand)
-    let streets =
-      majorRoads @ (quarterPlans |> List.collect fst)
-    let blocks =
-      quarterPlans
-      |> List.collect snd
-      |> List.sortByDescending (fun block -> blockScore rect block.Rect)
-    streets, blocks
+      |> List.choose (fun (quarterRect, demand) -> planQuarter quarterRect demand)
+    { MajorStreets = majorRoads
+      Quarters =
+        quarters
+        |> List.sortByDescending (fun quarter -> quarter.Blocks |> List.sumBy (fun block -> blockScore rect block.Rect)) }
+    |> indexStreetNetwork
 
-let subdivideBlockIntoLots (blockRect: TRect) (lotCount: int) : PlannedLot list =
+let planHierarchicalDistrictFromSeed seed rect moduleDemand organic =
+  planHierarchicalDistrict rect moduleDemand organic (Random seed)
+
+let benchmarkDistrictForSize size seed =
+  match size with
+  | Tiny ->
+      planHierarchicalDistrictFromSeed seed (TRect.create 0.0f 0.0f 32.0f 32.0f) 6 0.20f
+  | Medium ->
+      planHierarchicalDistrictFromSeed seed (TRect.create 0.0f 0.0f 64.0f 64.0f) 14 0.30f
+  | Target ->
+      planHierarchicalDistrictFromSeed seed (TRect.create 0.0f 0.0f 96.0f 96.0f) 24 0.35f
+
+let benchmarkDistrict seed =
+  benchmarkDistrictForSize Target seed
+
+let private simulationStages =
+  [ UpdateTrafficSimulationStage
+    PromotePlannedStreetsStage
+    UpdateLandUseSimulationStage ]
+
+let subdivisionRuleForLandUse landUseType =
+  match landUseType with
+  | ResidentialUse ->
+      { MaxLotArea = 120.0f
+        MinWidthLengthRatio = 0.35f
+        RetryOffsets = [ 0.5f; 0.4f; 0.6f; 0.33f; 0.67f ] }
+  | CommercialUse ->
+      { MaxLotArea = 180.0f
+        MinWidthLengthRatio = 0.28f
+        RetryOffsets = [ 0.5f; 0.45f; 0.55f; 0.35f; 0.65f ] }
+  | IndustrialUse ->
+      { MaxLotArea = 400.0f
+        MinWidthLengthRatio = 0.18f
+        RetryOffsets = [ 0.5f; 0.4f; 0.6f ] }
+  | ParkUse ->
+      { MaxLotArea = Single.PositiveInfinity
+        MinWidthLengthRatio = 0.0f
+        RetryOffsets = [ 0.5f ] }
+  | CivicUse ->
+      { MaxLotArea = 260.0f
+        MinWidthLengthRatio = 0.24f
+        RetryOffsets = [ 0.5f; 0.4f; 0.6f ] }
+  | MixedUseZone ->
+      { MaxLotArea = 150.0f
+        MinWidthLengthRatio = 0.30f
+        RetryOffsets = [ 0.5f; 0.45f; 0.55f; 0.35f; 0.65f ] }
+
+let private frontageEdgePreference edge =
+  match edge with
+  | North -> 0
+  | South -> 1
+  | West -> 2
+  | East -> 3
+
+let private frontageEdgeLength (rect: TRect) edge =
+  match edge with
+  | North
+  | South -> rect.W
+  | West
+  | East -> rect.H
+
+let private normalizedStreetFacingEdges (block: PlannedBlock) =
+  let edges =
+    match block.StreetFacingEdges |> List.distinct with
+    | [] -> [ North; South; West; East ]
+    | xs -> xs
+  edges
+  |> List.sortBy (fun edge -> -frontageEdgeLength block.Rect edge, frontageEdgePreference edge)
+
+let selectLongestStreetFacingEdge (block: PlannedBlock) =
+  normalizedStreetFacingEdges block |> List.tryHead
+
+let private orthogonalSplitRects edge offset (rect: TRect) =
+  let clampedOffset = offset |> max 0.2f |> min 0.8f
+  match edge with
+  | North
+  | South ->
+      let splitWidth = rect.W * clampedOffset
+      let remainderWidth = rect.W - splitWidth
+      match splitWidth > 0.1f, remainderWidth > 0.1f with
+      | true, true ->
+          Some (
+            TRect.create rect.X rect.Z splitWidth rect.H,
+            TRect.create (rect.X + splitWidth) rect.Z remainderWidth rect.H)
+      | _ -> None
+  | West
+  | East ->
+      let splitHeight = rect.H * clampedOffset
+      let remainderHeight = rect.H - splitHeight
+      match splitHeight > 0.1f, remainderHeight > 0.1f with
+      | true, true ->
+          Some (
+            TRect.create rect.X rect.Z rect.W splitHeight,
+            TRect.create rect.X (rect.Z + splitHeight) rect.W remainderHeight)
+      | _ -> None
+
+let private rectWidthLengthRatio (rect: TRect) =
+  let longest = max rect.W rect.H
+  match longest <= 0.0f with
+  | true -> 0.0f
+  | false -> min rect.W rect.H / longest
+
+let private makeLot (block: PlannedBlock) (frontageEdge: FrontageEdge) (rect: TRect) : PlannedLot =
+  PlannedLot.create block.Rect frontageEdge rect
+  |> fun lot ->
+    { lot with
+        LandUseType = block.LandUseType
+        LandUseValue = block.LandUseValue
+        FrontingStreetStatus = Planned }
+  |> withLotDerivedState
+
+let private zeroSubdivisionStats =
+  { EvaluatedRects = 0
+    AcceptedSplits = 0
+    RejectedCandidates = 0
+    StreetEdgeRetries = 0
+    NonStreetEdgeFallbacks = 0
+    TerminalLots = 0
+    MaxDepth = 0 }
+
+let subdivideBlockByLandUseWithStats (block: PlannedBlock) =
+  let rule = subdivisionRuleForLandUse block.LandUseType
+  let frontageEdge =
+    selectLongestStreetFacingEdge block |> Option.defaultValue North
+  let streetEdges = normalizedStreetFacingEdges block
+  let fallbackEdges =
+    [ North; South; West; East ]
+    |> List.except streetEdges
+    |> List.sortBy (fun edge -> -frontageEdgeLength block.Rect edge, frontageEdgePreference edge)
+
+  let rec subdivide depth stats rect =
+    let stats =
+      { stats with
+          EvaluatedRects = stats.EvaluatedRects + 1
+          MaxDepth = max stats.MaxDepth depth }
+    let canTerminate =
+      TRect.area rect <= rule.MaxLotArea
+      || rect.W <= 1.0f
+      || rect.H <= 1.0f
+      || depth >= 12
+    match canTerminate with
+    | true ->
+        [ makeLot block frontageEdge rect ],
+        { stats with TerminalLots = stats.TerminalLots + 1 }
+    | false ->
+        let rec tryCandidates isStreetEdge attemptStats edges =
+          match edges with
+          | [] -> None, attemptStats
+          | edge :: remainingEdges ->
+              let rec tryOffsets currentStats offsets =
+                match offsets with
+                | [] -> tryCandidates isStreetEdge currentStats remainingEdges
+                | offset :: remainingOffsets ->
+                    match orthogonalSplitRects edge offset rect with
+                    | Some (a, b)
+                      when rectWidthLengthRatio a >= rule.MinWidthLengthRatio
+                           && rectWidthLengthRatio b >= rule.MinWidthLengthRatio ->
+                        Some (a, b),
+                        { currentStats with AcceptedSplits = currentStats.AcceptedSplits + 1 }
+                    | _ ->
+                        tryOffsets
+                          { currentStats with
+                              RejectedCandidates = currentStats.RejectedCandidates + 1
+                              StreetEdgeRetries =
+                                currentStats.StreetEdgeRetries + (if isStreetEdge then 1 else 0) }
+                          remainingOffsets
+              tryOffsets attemptStats rule.RetryOffsets
+
+        let splitResult, streetStats = tryCandidates true stats streetEdges
+        match splitResult with
+        | Some (firstRect, secondRect) ->
+            let firstLots, firstStats = subdivide (depth + 1) streetStats firstRect
+            let secondLots, secondStats = subdivide (depth + 1) firstStats secondRect
+            firstLots @ secondLots, secondStats
+        | None ->
+            let fallbackResult, fallbackStats = tryCandidates false streetStats fallbackEdges
+            match fallbackResult with
+            | Some (firstRect, secondRect) ->
+                let fallbackStats =
+                  { fallbackStats with
+                      NonStreetEdgeFallbacks = fallbackStats.NonStreetEdgeFallbacks + 1 }
+                let firstLots, firstStats = subdivide (depth + 1) fallbackStats firstRect
+                let secondLots, secondStats = subdivide (depth + 1) firstStats secondRect
+                firstLots @ secondLots, secondStats
+            | None ->
+                [ makeLot block frontageEdge rect ],
+                { fallbackStats with TerminalLots = fallbackStats.TerminalLots + 1 }
+
+  subdivide 0 zeroSubdivisionStats block.Rect
+
+let subdivideBlockIntoLots (block: PlannedBlock) (lotCount: int) : PlannedLot list =
+  let blockRect = block.Rect
   if lotCount <= 0 || blockRect.W < 0.5f || blockRect.H < 0.5f then []
   else
     let splitAlongX = blockRect.W >= blockRect.H
+    let frontageEdge =
+      selectLongestStreetFacingEdge block
+      |> Option.defaultValue (if splitAlongX then North else West)
     [ for i in 0 .. lotCount - 1 do
         if splitAlongX then
           let x0 = blockRect.X + blockRect.W * float32 i / float32 lotCount
           let x1 = blockRect.X + blockRect.W * float32 (i + 1) / float32 lotCount
-          yield { Rect = TRect.create x0 blockRect.Z (x1 - x0) blockRect.H; Frontage = Street }
+          yield makeLot block frontageEdge (TRect.create x0 blockRect.Z (x1 - x0) blockRect.H)
         else
           let z0 = blockRect.Z + blockRect.H * float32 i / float32 lotCount
           let z1 = blockRect.Z + blockRect.H * float32 (i + 1) / float32 lotCount
-          yield { Rect = TRect.create blockRect.X z0 blockRect.W (z1 - z0); Frontage = Street } ]
+          yield makeLot block frontageEdge (TRect.create blockRect.X z0 blockRect.W (z1 - z0)) ]
 
-let private plannedStreetToRoad (organic: float32) (street: PlannedStreet) =
-  let (cr, cg, cb) = RoadClass.color street.Class
-  let isVertical = street.Segment.H >= street.Segment.W
+let subdivideBlockByLandUse (block: PlannedBlock) =
+  subdivideBlockByLandUseWithStats block |> fst
+
+type private StreetView =
+  { Id: StreetId
+    Segment: TRect
+    Status: StreetStatus
+    Residents: float32
+    Traffic: StreetTraffic }
+
+let private streetLength (segment: TRect) =
+  max segment.W segment.H
+
+let private allStreetViews (plan: DistrictPlan) =
+  [ yield! plan.MajorStreets |> List.map (fun street ->
+      { Id = street.Id
+        Segment = street.Segment
+        Status = street.Status
+        Residents = street.Residents
+        Traffic = street.Traffic })
+    yield! plan.Quarters |> List.collect (fun quarter ->
+      quarter.MinorStreets
+      |> List.map (fun street ->
+        { Id = street.Id
+          Segment = street.Segment
+          Status = street.Status
+          Residents = street.Residents
+          Traffic = street.Traffic })) ]
+
+let private tryFindStreetView streetId (plan: DistrictPlan) =
+  allStreetViews plan |> List.tryFind (fun street -> street.Id = streetId)
+
+let private rectsTouchOrOverlap (a: TRect) (b: TRect) =
+  let eps = 0.01f
+  not (
+    a.X > b.X + b.W + eps
+    || b.X > a.X + a.W + eps
+    || a.Z > b.Z + b.H + eps
+    || b.Z > a.Z + a.H + eps)
+
+let private overlapLength a0 a1 b0 b1 =
+  max 0.0f (min a1 b1 - max a0 b0)
+
+let private streetTouchesLotFrontage (frontageEdge: FrontageEdge) (streetSegment: TRect) (lot: PlannedLot) =
+  let eps = 0.05f
+  match frontageEdge with
+  | North ->
+      overlapLength streetSegment.X (streetSegment.X + streetSegment.W) lot.Rect.X (lot.Rect.X + lot.Rect.W) > eps
+      && streetSegment.Z <= lot.Rect.Z + eps
+      && streetSegment.Z + streetSegment.H >= lot.Rect.Z - eps
+  | South ->
+      let south = lot.Rect.Z + lot.Rect.H
+      overlapLength streetSegment.X (streetSegment.X + streetSegment.W) lot.Rect.X (lot.Rect.X + lot.Rect.W) > eps
+      && streetSegment.Z <= south + eps
+      && streetSegment.Z + streetSegment.H >= south - eps
+  | West ->
+      overlapLength streetSegment.Z (streetSegment.Z + streetSegment.H) lot.Rect.Z (lot.Rect.Z + lot.Rect.H) > eps
+      && streetSegment.X <= lot.Rect.X + eps
+      && streetSegment.X + streetSegment.W >= lot.Rect.X - eps
+  | East ->
+      let east = lot.Rect.X + lot.Rect.W
+      overlapLength streetSegment.Z (streetSegment.Z + streetSegment.H) lot.Rect.Z (lot.Rect.Z + lot.Rect.H) > eps
+      && streetSegment.X <= east + eps
+      && streetSegment.X + streetSegment.W >= east - eps
+
+let private builtStreetFrontagesInPlan (plan: DistrictPlan) (lot: PlannedLot) =
+  allStreetViews plan
+  |> List.filter (fun street -> street.Status = Built)
+  |> List.collect (fun street ->
+    [ North; South; West; East ]
+    |> List.choose (fun frontageEdge ->
+      match streetTouchesLotFrontage frontageEdge street.Segment lot with
+      | true -> Some (frontageEdge, street.Traffic.Volume)
+      | false -> None))
+
+let private preferredBuiltFrontageInPlan (plan: DistrictPlan) (lot: PlannedLot) =
+  builtStreetFrontagesInPlan plan lot
+  |> List.sortBy (fun (frontageEdge, trafficVolume) -> -trafficVolume, frontageEdgePreference frontageEdge)
+  |> List.tryHead
+  |> Option.map fst
+
+let computeBuildingEnvelopeInPlan (plan: DistrictPlan) (lot: PlannedLot) =
+  preferredBuiltFrontageInPlan plan lot
+  |> Option.bind (fun frontageEdge -> buildEnvelopeForFrontage frontageEdge lot)
+
+let private mapMajorStreetById streetId updater (plan: DistrictPlan) =
+  { plan with
+      MajorStreets =
+        plan.MajorStreets
+        |> List.map (fun street ->
+          match street.Id = streetId with
+          | true -> updater street
+          | false -> street) }
+
+let private mapMinorStreetById streetId updater (plan: DistrictPlan) =
+  { plan with
+      Quarters =
+        plan.Quarters
+        |> List.map (fun quarter ->
+          { quarter with
+              MinorStreets =
+                quarter.MinorStreets
+                |> List.map (fun street ->
+                  match street.Id = streetId with
+                  | true -> updater street
+                  | false -> street) }) }
+
+let private planHasExplicitStreetResidents (plan: DistrictPlan) =
+  allStreetViews plan |> List.exists (fun street -> street.Residents > 0.0f)
+
+let private blockResidentEstimate (block: PlannedBlock) =
+  let residentsPerArea =
+    match block.LandUseType with
+    | ResidentialUse -> 0.070f
+    | MixedUseZone -> 0.045f
+    | CivicUse -> 0.015f
+    | CommercialUse -> 0.020f
+    | IndustrialUse -> 0.012f
+    | ParkUse -> 0.004f
+  TRect.area block.Rect * residentsPerArea * (0.7f + block.LandUseValue * 0.8f)
+
+let private withDerivedStreetResidents (plan: DistrictPlan) =
+  let indexedPlan = indexStreetNetwork plan
+  match planHasExplicitStreetResidents indexedPlan with
+  | true -> indexedPlan
+  | false ->
+      let updateMajorResidents (street: MajorStreet) =
+        let touchingBlocks =
+          indexedPlan.Quarters
+          |> List.collect _.Blocks
+          |> List.filter (fun block -> rectsTouchOrOverlap block.Rect street.Segment)
+        let residents =
+          touchingBlocks
+          |> List.sumBy blockResidentEstimate
+          |> (*) 0.6f
+        { street with Residents = residents }
+      let updateQuarterResidents (quarter: QuarterPlan) =
+        { quarter with
+            MinorStreets =
+              quarter.MinorStreets
+              |> List.map (fun street ->
+                let touchingBlocks =
+                  quarter.Blocks
+                  |> List.filter (fun block -> rectsTouchOrOverlap block.Rect street.Segment)
+                let residents =
+                  match touchingBlocks with
+                  | [] ->
+                      quarter.Blocks
+                      |> List.sumBy blockResidentEstimate
+                      |> fun total -> total / max 1.0f (float32 quarter.MinorStreets.Length)
+                  | xs -> xs |> List.sumBy blockResidentEstimate
+                { street with Residents = residents }) }
+      { indexedPlan with
+          MajorStreets = indexedPlan.MajorStreets |> List.map updateMajorResidents
+          Quarters = indexedPlan.Quarters |> List.map updateQuarterResidents }
+
+let private buildStreetAdjacency (plan: DistrictPlan) =
+  let streets = allStreetViews plan
+  streets
+  |> List.map (fun street ->
+    let neighbors =
+      streets
+      |> List.choose (fun candidate ->
+        match candidate.Id = street.Id || not (rectsTouchOrOverlap street.Segment candidate.Segment) with
+        | true -> None
+        | false -> Some candidate.Id)
+    street.Id, neighbors)
+  |> Map.ofList
+
+let shortestStreetPath (plan: DistrictPlan) (startStreet: StreetId) (endStreet: StreetId) : Result<StreetId list, PathError> =
+  let indexedPlan = indexStreetNetwork plan
+  let streets = allStreetViews indexedPlan
+  let streetMap = streets |> List.map (fun street -> street.Id, street) |> Map.ofList
+  match Map.containsKey startStreet streetMap, Map.containsKey endStreet streetMap with
+  | false, _ -> Error (UnknownStreet startStreet)
+  | _, false -> Error (UnknownStreet endStreet)
+  | true, true when startStreet = endStreet -> Ok [ startStreet ]
+  | true, true ->
+      let adjacency = buildStreetAdjacency indexedPlan
+      let infinity = Single.PositiveInfinity
+      let rec loop (unvisited: Set<StreetId>) (distances: Map<StreetId, float32>) (previous: Map<StreetId, StreetId>) =
+        match Set.isEmpty unvisited with
+        | true -> distances, previous
+        | false ->
+            let current =
+              unvisited
+              |> Seq.minBy (fun streetId -> distances |> Map.tryFind streetId |> Option.defaultValue infinity)
+            let currentDistance = distances |> Map.tryFind current |> Option.defaultValue infinity
+            match Single.IsPositiveInfinity currentDistance || current = endStreet with
+            | true -> distances, previous
+            | false ->
+                let nextDistances, nextPrevious =
+                  adjacency
+                  |> Map.tryFind current
+                  |> Option.defaultValue []
+                  |> List.fold (fun (stateDistances, statePrevious) neighbor ->
+                    match Set.contains neighbor unvisited with
+                    | false -> stateDistances, statePrevious
+                    | true ->
+                        let candidateDistance =
+                          currentDistance
+                          + (streetMap |> Map.find neighbor |> fun street -> streetLength street.Segment)
+                        let knownDistance = stateDistances |> Map.tryFind neighbor |> Option.defaultValue infinity
+                        match candidateDistance < knownDistance with
+                        | true ->
+                            stateDistances |> Map.add neighbor candidateDistance,
+                            statePrevious |> Map.add neighbor current
+                        | false -> stateDistances, statePrevious)
+                    (distances, previous)
+                loop (Set.remove current unvisited) nextDistances nextPrevious
+      let initialDistances =
+        streets
+        |> List.fold (fun state street ->
+          let distance =
+            match street.Id = startStreet with
+            | true -> 0.0f
+            | false -> infinity
+          state |> Map.add street.Id distance) Map.empty
+      let distances, previous = loop (streets |> List.map _.Id |> Set.ofList) initialDistances Map.empty
+      match distances |> Map.tryFind endStreet |> Option.defaultValue infinity |> Single.IsPositiveInfinity with
+      | true -> Error (NoRouteBetweenStreets (startStreet, endStreet))
+      | false ->
+          let rec rebuild route current =
+            match current = startStreet, previous |> Map.tryFind current with
+            | true, _ -> current :: route
+            | false, Some prior -> rebuild (current :: route) prior
+            | false, None -> route
+          Ok (rebuild [] endStreet)
+
+let applyResidentTrip (trip: ResidentTrip) (plan: DistrictPlan) : Result<DistrictPlan, TripError> =
+  let indexedPlan = indexStreetNetwork plan
+  trip.Route
+  |> List.fold (fun state streetId ->
+    match state with
+    | Error _ -> state
+    | Ok current ->
+        match tryFindStreetView streetId current with
+        | None -> Error (MissingStreet streetId)
+        | Some _ ->
+            let updateTraffic (traffic: StreetTraffic) =
+              let nextVolume = traffic.Volume + trip.Volume
+              { Volume = nextVolume
+                MaxVolume = streetMaxVolumeFromTraffic nextVolume }
+            let nextPlan =
+              current
+              |> mapMajorStreetById streetId (fun street -> { street with Traffic = updateTraffic street.Traffic })
+              |> mapMinorStreetById streetId (fun street -> { street with Traffic = updateTraffic street.Traffic })
+            Ok nextPlan)
+    (Ok indexedPlan)
+
+let removeResidentTrip (trip: ResidentTrip) (plan: DistrictPlan) : Result<DistrictPlan, TripError> =
+  let indexedPlan = indexStreetNetwork plan
+  trip.Route
+  |> List.fold (fun state streetId ->
+    match state with
+    | Error _ -> state
+    | Ok current ->
+        match tryFindStreetView streetId current with
+        | None -> Error (MissingStreet streetId)
+        | Some street when street.Traffic.Volume < trip.Volume -> Error (NegativeTrafficAfterRemoval streetId)
+        | Some _ ->
+            let updateTraffic (traffic: StreetTraffic) =
+              let nextVolume = max 0.0f (traffic.Volume - trip.Volume)
+              { Volume = nextVolume
+                MaxVolume = streetMaxVolumeFromTraffic nextVolume }
+            let nextPlan =
+              current
+              |> mapMajorStreetById streetId (fun street -> { street with Traffic = updateTraffic street.Traffic })
+              |> mapMinorStreetById streetId (fun street -> { street with Traffic = updateTraffic street.Traffic })
+            Ok nextPlan)
+    (Ok indexedPlan)
+
+let generateResidentTrips (plan: DistrictPlan) : ResidentTrip list =
+  let residentPlan = withDerivedStreetResidents plan
+  let streets =
+    allStreetViews residentPlan
+    |> List.filter (fun street -> street.Residents > 0.0f)
+  let routeDistance route =
+    route
+    |> List.sumBy (fun streetId ->
+      residentPlan
+      |> tryFindStreetView streetId
+      |> Option.map (fun street -> streetLength street.Segment)
+      |> Option.defaultValue 0.0f)
+  let tripVolume residents =
+    max 1.0f (MathF.Ceiling(residents * 0.25f))
+  streets
+  |> List.map (fun origin ->
+    let reachableTargets =
+      streets
+      |> List.filter (fun candidate -> candidate.Id <> origin.Id)
+      |> List.choose (fun candidate ->
+        match shortestStreetPath residentPlan origin.Id candidate.Id with
+        | Ok route ->
+            let distance = max 1.0f (routeDistance route)
+            let attraction = candidate.Residents / (distance * distance)
+            Some (candidate.Id, route, attraction)
+        | Error _ -> None)
+    match reachableTargets with
+    | [] ->
+        { StartStreet = origin.Id
+          EndStreet = origin.Id
+          Volume = tripVolume origin.Residents
+          Route = [ origin.Id ] }
+    | candidates ->
+        let destinationId, route, _ =
+          candidates
+          |> List.maxBy (fun (destinationId, _, attraction) -> attraction, StreetId.value destinationId)
+        { StartStreet = origin.Id
+          EndStreet = destinationId
+          Volume = tripVolume origin.Residents
+          Route = route })
+
+let updateTrafficSimulation (plan: DistrictPlan) : DistrictPlan =
+  let residentPlan = withDerivedStreetResidents plan
+  let zeroTraffic =
+    { residentPlan with
+        MajorStreets =
+          residentPlan.MajorStreets
+          |> List.map (fun street ->
+            { street with
+                Traffic =
+                  { Volume = 0.0f
+                    MaxVolume = streetMaxVolumeFromTraffic 0.0f } })
+        Quarters =
+          residentPlan.Quarters
+          |> List.map (fun quarter ->
+            { quarter with
+                MinorStreets =
+                  quarter.MinorStreets
+                  |> List.map (fun street ->
+                    { street with
+                        Traffic =
+                          { Volume = 0.0f
+                            MaxVolume = streetMaxVolumeFromTraffic 0.0f } }) }) }
+  generateResidentTrips residentPlan
+  |> List.fold (fun current trip ->
+     match applyResidentTrip trip current with
+     | Ok nextPlan -> nextPlan
+     | Error error -> invalidOp (sprintf "Failed to apply generated trip %A due to %A" trip error))
+     zeroTraffic
+
+let private streetPromotionThreshold = 8.0f
+
+let private promoteQualifiedStreetsWithLag promotionLagSteps (priorQualifications: Map<StreetId, int>) (plan: DistrictPlan) =
+  let indexedPlan = indexStreetNetwork plan
+  let requiredSteps = max 1 promotionLagSteps
+  let nextStatuses, nextQualifications =
+    allStreetViews indexedPlan
+    |> List.fold (fun (statusMap, qualificationMap) street ->
+      match street.Status with
+      | Built ->
+          Map.add street.Id Built statusMap,
+          qualificationMap
+      | Planned when street.Traffic.Volume >= streetPromotionThreshold ->
+          let streak =
+            (priorQualifications |> Map.tryFind street.Id |> Option.defaultValue 0) + 1
+          match streak >= requiredSteps with
+          | true ->
+              Map.add street.Id Built statusMap,
+              qualificationMap
+          | false ->
+              Map.add street.Id Planned statusMap,
+              Map.add street.Id streak qualificationMap
+      | Planned ->
+          Map.add street.Id Planned statusMap,
+          qualificationMap)
+      (Map.empty, Map.empty)
+  let promoteMajor (street: MajorStreet) =
+    { street with
+        Status = nextStatuses |> Map.tryFind street.Id |> Option.defaultValue street.Status }
+  let promoteMinor (street: MinorStreet) =
+    { street with
+        Status = nextStatuses |> Map.tryFind street.Id |> Option.defaultValue street.Status }
+  let promotedQuarters =
+    indexedPlan.Quarters
+    |> List.map (fun quarter ->
+      { quarter with
+          MinorStreets = quarter.MinorStreets |> List.map promoteMinor })
+  { indexedPlan with
+      MajorStreets = indexedPlan.MajorStreets |> List.map promoteMajor
+      Quarters = promotedQuarters },
+  nextQualifications
+
+let promotePlannedStreets (plan: DistrictPlan) : DistrictPlan =
+  promoteQualifiedStreetsWithLag 1 Map.empty plan
+  |> fst
+
+let applyValuationCurve curve minValue maxValue value =
+  let span = max 0.0001f (maxValue - minValue)
+  let normalized = clamp01f ((value - minValue) / span)
+  match curve with
+  | Step ->
+      match normalized >= 0.5f with
+      | true -> 1.0f
+      | false -> 0.0f
+  | LinearUp -> normalized
+  | LinearDown -> 1.0f - normalized
+  | GainUp -> normalized * normalized
+  | GainDown -> 1.0f - normalized * normalized
+
+let private evaluateBuildingSubstitutionFactor (factor: BuildingSubstitutionFactor) value =
+  applyValuationCurve factor.Curve factor.Min factor.Max value
+  * max 0.0f factor.Weight
+
+let computeBuildingSubstitutionProbability (config: BuildingSubstitutionConfig) buildingAgeYears currentPrice potentialPrice =
+  let agePressure =
+    evaluateBuildingSubstitutionFactor config.AgeFactor (max 0.0f buildingAgeYears)
+  let priceGapPressure =
+    max 0.0f (potentialPrice - currentPrice)
+    |> evaluateBuildingSubstitutionFactor config.PriceGapFactor
+  clamp01f (agePressure + priceGapPressure)
+
+let applyBuildingSubstitution stepYears roll probability (potential: LotEconomics) (current: PlannedLot) =
+  match roll < probability with
+  | true ->
+      { current with
+          Price = potential.Price
+          FloorSpace = potential.FloorSpace
+          Residents = potential.Residents
+          BuildingAgeYears = 0.0f }
+  | false ->
+      { current with
+          BuildingAgeYears = max 0.0f current.BuildingAgeYears + max 0.0f stepYears }
+
+let computeGlobalLandUseValue (goals: LandUseGoal list) goalScale (lots: PlannedLot list) =
+  let totalArea =
+    lots
+    |> List.sumBy (fun lot -> TRect.area lot.Rect)
+  match totalArea <= 0.0f || goals.IsEmpty with
+  | true -> 0.0f
+  | false ->
+      let safeScale = max 0.0001f goalScale
+      goals
+      |> List.sumBy (fun goal ->
+        let percent =
+          lots
+          |> List.filter (fun lot -> lot.LandUseType = goal.LandUseType)
+          |> List.sumBy (fun lot -> TRect.area lot.Rect)
+          |> fun area -> area / totalArea
+        let delta = (percent - goal.TargetPercent) / safeScale
+        delta * delta)
+      |> (*) -1.0f
+
+let ensureBlockLotsForLandUseSimulation (block: PlannedBlock) =
+  match block.Lots with
+  | [] ->
+      let frontageEdge =
+        selectLongestStreetFacingEdge block |> Option.defaultValue North
+      let lot =
+        PlannedLot.create block.Rect frontageEdge block.Rect
+        |> fun seeded ->
+          { seeded with
+              LandUseType = block.LandUseType
+              LandUseValue = block.LandUseValue }
+      { block with Lots = [ lot ] }
+  | _ -> block
+
+let private landUseBlockLots (plan: DistrictPlan) =
+  plan.Quarters
+  |> List.collect (fun quarter -> quarter.Blocks)
+  |> List.collect _.Lots
+
+let private lotContextStatuses (plan: DistrictPlan) (lot: PlannedLot) =
+  allStreetViews plan
+  |> List.filter (fun street -> rectsTouchOrOverlap street.Segment lot.BlockRect || rectsTouchOrOverlap street.Segment lot.Rect)
+  |> List.map _.Status
+
+let private inferLotFrontageStatus (plan: DistrictPlan) (lot: PlannedLot) =
+  let statuses = lotContextStatuses plan lot
+  match statuses |> List.exists ((=) Built), statuses |> List.exists ((=) Planned) with
+  | true, _ -> Built
+  | false, true -> Planned
+  | false, false -> lot.FrontingStreetStatus
+
+let private lotMetricValue (plan: DistrictPlan) (lot: PlannedLot) candidateType metric =
+  let sameBlockLots =
+    plan.Quarters
+    |> List.collect _.Blocks
+    |> List.tryFind (fun block -> block.Rect = lot.BlockRect)
+    |> Option.map _.Lots
+    |> Option.defaultValue []
+  let sameQuarterLots =
+    plan.Quarters
+    |> List.tryFind (fun quarter -> quarter.Blocks |> List.exists (fun block -> block.Rect = lot.BlockRect))
+    |> Option.map (fun quarter -> quarter.Blocks |> List.collect _.Lots)
+    |> Option.defaultValue sameBlockLots
+  let touchingTraffic =
+    allStreetViews plan
+    |> List.filter (fun street -> rectsTouchOrOverlap street.Segment lot.BlockRect || rectsTouchOrOverlap street.Segment lot.Rect)
+    |> List.map (fun street -> street.Traffic.Volume)
+  let ratioBy selector (items: PlannedLot list) =
+    match items with
+    | [] -> 0.0f
+    | xs ->
+        let total = xs |> List.length |> float32
+        let matching = xs |> List.filter selector |> List.length |> float32
+        matching / max 1.0f total
+  match metric with
+  | LotArea -> TRect.area lot.Rect
+  | FrontageAccess ->
+      match inferLotFrontageStatus plan lot with
+      | Built -> 1.0f
+      | Planned -> 0.0f
+  | TrafficVolume -> touchingTraffic |> List.fold max 0.0f
+  | SameUseCluster -> ratioBy (fun peer -> peer.LandUseType = candidateType) sameBlockLots
+  | NeighborInfluence landUseType -> ratioBy (fun peer -> peer.LandUseType = landUseType) sameQuarterLots
+
+let evaluateLocalLotLandUseValue (definitions: LandUseDefinition list) (plan: DistrictPlan) (lot: PlannedLot) candidateType =
+  match definitions |> List.tryFind (fun definition -> definition.LandUseType = candidateType) with
+  | None -> evaluateLotLandUseValue { lot with LandUseType = candidateType }
+  | Some definition ->
+      let weights =
+        definition.Valuations
+        |> List.sumBy (fun valuation -> max 0.0f valuation.Weight)
+      match definition.Valuations.IsEmpty || weights <= 0.0f with
+      | true -> 0.0f
+      | false ->
+          definition.Valuations
+          |> List.sumBy (fun valuation ->
+            let weight = max 0.0f valuation.Weight / weights
+            let metricValue = lotMetricValue plan lot candidateType valuation.Metric
+            let bounded = applyValuationCurve valuation.Curve valuation.Min valuation.Max metricValue
+            bounded * weight)
+          |> clamp01f
+
+let private weightedLandUseSummary areaSelector valueSelector items =
+  let weighted =
+    items
+    |> List.groupBy (fun (landUseType, _, _) -> landUseType)
+    |> List.map (fun (landUseType, entries) ->
+      let totalArea = entries |> List.sumBy areaSelector
+      let weightedValue =
+        match totalArea <= 0.0f with
+        | true -> 0.0f
+        | false ->
+            entries
+            |> List.sumBy (fun entry -> areaSelector entry * valueSelector entry)
+            |> fun total -> total / totalArea
+      landUseType, totalArea, weightedValue)
+  match weighted with
+  | [] -> ResidentialUse, 0.0f
+  | xs ->
+      xs
+      |> List.maxBy (fun (landUseType, totalArea, weightedValue) -> totalArea, weightedValue, landUseType)
+      |> fun (landUseType, _, weightedValue) -> landUseType, weightedValue
+
+let recomputeBlockDominantLandUse (block: PlannedBlock) =
+  let normalized = ensureBlockLotsForLandUseSimulation block
+  let entries =
+    normalized.Lots
+    |> List.map (fun lot -> lot.LandUseType, TRect.area lot.Rect, lot.LandUseValue)
+  let landUseType, landUseValue = weightedLandUseSummary (fun (_, area, _) -> area) (fun (_, _, value) -> value) entries
+  { normalized with
+      LandUseType = landUseType
+      LandUseValue = landUseValue }
+
+let recomputeQuarterDominantLandUse (quarter: QuarterPlan) =
+  let entries =
+    quarter.Blocks
+    |> List.map (fun block -> block.LandUseType, TRect.area block.Rect, block.LandUseValue)
+  let landUseType, landUseValue = weightedLandUseSummary (fun (_, area, _) -> area) (fun (_, _, value) -> value) entries
+  { quarter with
+      LandUseType = landUseType
+      LandUseValue = landUseValue }
+
+let private allLotKeys (plan: DistrictPlan) =
+  let rectKey (rect: TRect) = rect.X, rect.Z, rect.W, rect.H
+  plan.Quarters
+  |> List.collect (fun quarter -> quarter.Blocks)
+  |> List.collect _.Lots
+  |> List.map (fun lot -> rectKey lot.BlockRect, rectKey lot.Rect, lot.FrontageEdge)
+  |> List.sort
+
+let private meanLotLandUseValue (lots: PlannedLot list) =
+  match lots with
+  | [] -> 0.0f
+  | xs -> xs |> List.averageBy (fun lot -> max 0.0f lot.LandUseValue)
+
+let private mutateLotLandUse targetKey candidateType (plan: DistrictPlan) =
+  let rectKey (rect: TRect) = rect.X, rect.Z, rect.W, rect.H
+  let updateLot (lot: PlannedLot) =
+    match (rectKey lot.BlockRect, rectKey lot.Rect, lot.FrontageEdge) = targetKey with
+    | true -> { lot with LandUseType = candidateType }
+    | false -> lot
+  { plan with
+      Quarters =
+        plan.Quarters
+        |> List.map (fun quarter ->
+          { quarter with
+              Blocks =
+                quarter.Blocks
+                |> List.map (fun (block: PlannedBlock) ->
+                  { block with Lots = block.Lots |> List.map updateLot }) }) }
+
+let private refreshLandUsePlan (config: LandUseSimulationConfig) (plan: DistrictPlan) =
+  let withLots =
+    { plan with
+        Quarters =
+          plan.Quarters
+          |> List.map (fun quarter ->
+            { quarter with
+                Blocks = quarter.Blocks |> List.map ensureBlockLotsForLandUseSimulation }) }
+  let repricedInput =
+    { withLots with
+        Quarters =
+          withLots.Quarters
+          |> List.map (fun quarter ->
+            let refreshedBlocks =
+              quarter.Blocks
+              |> List.map (fun block ->
+                let refreshedLots =
+                  block.Lots
+                  |> List.map (fun lot ->
+                    let seeded =
+                      { lot with FrontingStreetStatus = inferLotFrontageStatus withLots lot }
+                    let landUseValue =
+                      evaluateLocalLotLandUseValue config.Definitions withLots seeded seeded.LandUseType
+                    { seeded with LandUseValue = landUseValue })
+                { block with Lots = refreshedLots })
+            { quarter with Blocks = refreshedBlocks }) }
+  let sharedMeanLandUseValue =
+    repricedInput
+    |> landUseBlockLots
+    |> meanLotLandUseValue
+  let refreshedQuarters =
+    repricedInput.Quarters
+    |> List.map (fun quarter ->
+      let refreshedBlocks =
+        quarter.Blocks
+        |> List.map (fun block ->
+          let refreshedLots =
+            block.Lots
+            |> List.map (fun lot ->
+              let economics =
+                computeLotEconomics config.AveragePricePerSqm sharedMeanLandUseValue lot
+              let enriched =
+                { lot with
+                    Price = economics.Price
+                    FloorSpace = economics.FloorSpace
+                    Residents = economics.Residents }
+              { enriched with Envelope = computeBuildingEnvelopeInPlan repricedInput enriched })
+          { block with Lots = refreshedLots }
+          |> recomputeBlockDominantLandUse)
+      { quarter with Blocks = refreshedBlocks }
+      |> recomputeQuarterDominantLandUse)
+  { repricedInput with Quarters = refreshedQuarters }
+
+let private planLandUseScore (config: LandUseSimulationConfig) (plan: DistrictPlan) =
+  let lots = landUseBlockLots plan
+  let globalValue = computeGlobalLandUseValue config.Goals config.GoalScale lots
+  let localValue =
+    let totalArea = lots |> List.sumBy (fun lot -> TRect.area lot.Rect)
+    match totalArea <= 0.0f with
+    | true -> 0.0f
+    | false ->
+        lots
+        |> List.sumBy (fun lot -> TRect.area lot.Rect * lot.LandUseValue)
+        |> fun weighted -> weighted / totalArea
+  config.GlobalWeight * globalValue + config.LocalWeight * localValue, globalValue
+
+let private availableLandUseTypes (config: LandUseSimulationConfig) (plan: DistrictPlan) =
+  (config.Definitions |> List.map _.LandUseType)
+  @ (config.Goals |> List.map _.LandUseType)
+  @ (landUseBlockLots plan |> List.map _.LandUseType)
+  |> List.distinct
+
+let private defaultLandUseSimulationConfig =
+  { Goals =
+      [ { LandUseType = ResidentialUse; TargetPercent = 0.45f }
+        { LandUseType = CommercialUse; TargetPercent = 0.15f }
+        { LandUseType = IndustrialUse; TargetPercent = 0.10f }
+        { LandUseType = ParkUse; TargetPercent = 0.10f }
+        { LandUseType = CivicUse; TargetPercent = 0.05f }
+        { LandUseType = MixedUseZone; TargetPercent = 0.15f } ]
+    Definitions =
+      [ { LandUseType = ResidentialUse
+          Valuations =
+            [ { Metric = LotArea; Curve = LinearUp; Min = 0.0f; Max = 120.0f; Weight = 0.35f }
+              { Metric = FrontageAccess; Curve = LinearUp; Min = 0.0f; Max = 1.0f; Weight = 0.30f }
+              { Metric = NeighborInfluence ResidentialUse; Curve = LinearUp; Min = 0.0f; Max = 1.0f; Weight = 0.35f } ] }
+        { LandUseType = CommercialUse
+          Valuations =
+            [ { Metric = FrontageAccess; Curve = LinearUp; Min = 0.0f; Max = 1.0f; Weight = 0.30f }
+              { Metric = TrafficVolume; Curve = LinearUp; Min = 0.0f; Max = 16.0f; Weight = 0.40f }
+              { Metric = NeighborInfluence CommercialUse; Curve = LinearUp; Min = 0.0f; Max = 1.0f; Weight = 0.30f } ] }
+        { LandUseType = IndustrialUse
+          Valuations =
+            [ { Metric = LotArea; Curve = LinearUp; Min = 0.0f; Max = 240.0f; Weight = 0.55f }
+              { Metric = TrafficVolume; Curve = LinearUp; Min = 0.0f; Max = 12.0f; Weight = 0.25f }
+              { Metric = FrontageAccess; Curve = LinearUp; Min = 0.0f; Max = 1.0f; Weight = 0.20f } ] }
+        { LandUseType = ParkUse
+          Valuations =
+            [ { Metric = LotArea; Curve = LinearUp; Min = 0.0f; Max = 180.0f; Weight = 0.50f }
+              { Metric = FrontageAccess; Curve = LinearDown; Min = 0.0f; Max = 1.0f; Weight = 0.20f }
+              { Metric = NeighborInfluence ParkUse; Curve = LinearUp; Min = 0.0f; Max = 1.0f; Weight = 0.30f } ] }
+        { LandUseType = CivicUse
+          Valuations =
+            [ { Metric = LotArea; Curve = LinearUp; Min = 0.0f; Max = 160.0f; Weight = 0.40f }
+              { Metric = FrontageAccess; Curve = LinearUp; Min = 0.0f; Max = 1.0f; Weight = 0.30f }
+              { Metric = TrafficVolume; Curve = LinearUp; Min = 0.0f; Max = 12.0f; Weight = 0.30f } ] }
+        { LandUseType = MixedUseZone
+          Valuations =
+            [ { Metric = FrontageAccess; Curve = LinearUp; Min = 0.0f; Max = 1.0f; Weight = 0.30f }
+              { Metric = TrafficVolume; Curve = LinearUp; Min = 0.0f; Max = 14.0f; Weight = 0.35f }
+              { Metric = SameUseCluster; Curve = LinearDown; Min = 0.0f; Max = 1.0f; Weight = 0.35f } ] } ]
+    AveragePricePerSqm = 100.0f
+    GlobalWeight = 0.65f
+    LocalWeight = 0.35f
+    GoalScale = 1.0f
+    AttemptsFraction = 0.5f
+    RejectedDeltaThreshold = 0.15f
+    Seed = 42
+    Cadence =
+      { StepYears = 1.0f
+        ReevaluationYears = 1.0f
+        ElapsedSinceLastEvaluationYears = 1.0f } }
+
+let private defaultBuildingSubstitutionConfig =
+  { AgeFactor =
+      { Curve = LinearUp
+        Min = 0.0f
+        Max = 40.0f
+        Weight = 0.35f }
+    PriceGapFactor =
+      { Curve = LinearUp
+        Min = 0.0f
+        Max = 100.0f
+        Weight = 0.65f }
+    Seed = 42 }
+
+let updateLandUseSimulationWith (config: LandUseSimulationConfig) (plan: DistrictPlan) : DistrictPlan * LandUseUpdateStats =
+  match config.Cadence.ElapsedSinceLastEvaluationYears < config.Cadence.ReevaluationYears with
+  | true ->
+      plan,
+      { EvaluatedLots = 0
+        Attempts = 0
+        Accepted = 0
+        Rejected = 0
+        SkippedByCadence = true
+        GlobalValueBefore = 0.0f
+        GlobalValueAfter = 0.0f }
+  | false ->
+      let initialPlan = plan |> indexStreetNetwork |> refreshLandUsePlan config
+      let initialScore, initialGlobal = planLandUseScore config initialPlan
+      let lotKeys = allLotKeys initialPlan
+      let availableTypes = availableLandUseTypes config initialPlan
+      let lotCount = lotKeys.Length
+      let attempts =
+        match lotCount <= 0 with
+        | true -> 0
+        | false ->
+            MathF.Ceiling(float32 lotCount * max 0.0f config.AttemptsFraction)
+            |> int
+            |> max 1
+            |> min lotCount
+      let rng = Random(config.Seed)
+      let finalPlan, accepted, rejected, finalScore, finalGlobal =
+        ((initialPlan, 0, 0, initialScore, initialGlobal), [ 0 .. attempts - 1 ])
+        ||> List.fold (fun (currentPlan, accepted, rejected, currentScore, currentGlobal) _ ->
+          match lotCount <= 0 with
+          | true -> currentPlan, accepted, rejected, currentScore, currentGlobal
+          | false ->
+              let lotIndex = rng.Next(lotCount)
+              let targetKey = lotKeys.[lotIndex]
+              let currentLot =
+                currentPlan.Quarters
+                |> List.collect _.Blocks
+                |> List.collect _.Lots
+                |> List.find (fun lot ->
+                  let rectKey (rect: TRect) = rect.X, rect.Z, rect.W, rect.H
+                  (rectKey lot.BlockRect, rectKey lot.Rect, lot.FrontageEdge) = targetKey)
+              let candidateTypes =
+                availableTypes
+                |> List.filter (fun landUseType -> landUseType <> currentLot.LandUseType)
+              match candidateTypes with
+              | [] -> currentPlan, accepted, rejected, currentScore, currentGlobal
+              | xs ->
+                  let candidateType = xs.[rng.Next(xs.Length)]
+                  let candidatePlan =
+                    currentPlan
+                    |> mutateLotLandUse targetKey candidateType
+                    |> refreshLandUsePlan config
+                  let candidateScore, candidateGlobal = planLandUseScore config candidatePlan
+                  let delta = candidateScore - currentScore
+                  let accept =
+                    match delta >= 0.0f with
+                    | true -> true
+                    | false ->
+                        let loss = -delta
+                        let threshold = max 0.0001f config.RejectedDeltaThreshold
+                        loss < threshold
+                        && float32 (rng.NextDouble()) < 1.0f - (loss / threshold)
+                  match accept with
+                  | true -> candidatePlan, accepted + 1, rejected, candidateScore, candidateGlobal
+                  | false -> currentPlan, accepted, rejected + 1, currentScore, currentGlobal)
+      finalPlan,
+      { EvaluatedLots = lotCount
+        Attempts = attempts
+        Accepted = accepted
+        Rejected = rejected
+        SkippedByCadence = false
+        GlobalValueBefore = initialGlobal
+        GlobalValueAfter = finalGlobal }
+
+let updateLandUseSimulation (plan: DistrictPlan) : DistrictPlan =
+  updateLandUseSimulationWith defaultLandUseSimulationConfig plan
+  |> fst
+
+let private floatHash32 (value: float32) =
+  BitConverter.SingleToInt32Bits value
+
+let private stableSubstitutionRoll seed stepIndex (lot: PlannedLot) =
+  let mutable hash = 17
+  let inline mix value =
+    hash <- (hash * 31) + value
+  mix seed
+  mix stepIndex
+  mix (floatHash32 lot.BlockRect.X)
+  mix (floatHash32 lot.BlockRect.Z)
+  mix (floatHash32 lot.BlockRect.W)
+  mix (floatHash32 lot.BlockRect.H)
+  mix (floatHash32 lot.Rect.X)
+  mix (floatHash32 lot.Rect.Z)
+  mix (floatHash32 lot.Rect.W)
+  mix (floatHash32 lot.Rect.H)
+  mix (match lot.FrontageEdge with | North -> 1 | South -> 2 | East -> 3 | West -> 4)
+  let normalized = float32 (uint32 hash &&& 0x00FFFFFFu) / float32 0x01000000u
+  clamp01f normalized
+
+let updateBuildingSubstitutionWith (config: BuildingSubstitutionConfig) stepIndex stepYears (currentPlan: DistrictPlan) (potentialPlan: DistrictPlan) : DistrictPlan * BuildingSubstitutionStats =
+  let rectKey (rect: TRect) = rect.X, rect.Z, rect.W, rect.H
+  let substitutionLotKey (lot: PlannedLot) =
+    rectKey lot.BlockRect, rectKey lot.Rect, lot.FrontageEdge
+  let currentLots =
+    currentPlan.Quarters
+    |> List.collect _.Blocks
+    |> List.collect _.Lots
+    |> List.map (fun lot -> substitutionLotKey lot, lot)
+    |> Map.ofList
+  let mutable evaluatedLots = 0
+  let mutable replacedLots = 0
+  let mutable retainedLots = 0
+  let mutable totalProbability = 0.0f
+  let updatedQuarters =
+    potentialPlan.Quarters
+    |> List.map (fun quarter ->
+      let updatedBlocks =
+        quarter.Blocks
+        |> List.map (fun block ->
+          let updatedLots =
+            block.Lots
+            |> List.map (fun potentialLot ->
+              match currentLots |> Map.tryFind (substitutionLotKey potentialLot) with
+              | None -> potentialLot
+              | Some currentLot ->
+                  let probability =
+                    computeBuildingSubstitutionProbability config currentLot.BuildingAgeYears currentLot.Price potentialLot.Price
+                  let roll = stableSubstitutionRoll config.Seed stepIndex potentialLot
+                  let updatedEconomics =
+                    applyBuildingSubstitution stepYears roll probability
+                      { Price = potentialLot.Price
+                        FloorSpace = potentialLot.FloorSpace
+                        Residents = potentialLot.Residents }
+                      currentLot
+                  let replaced = roll < probability
+                  evaluatedLots <- evaluatedLots + 1
+                  totalProbability <- totalProbability + probability
+                  match replaced with
+                  | true -> replacedLots <- replacedLots + 1
+                  | false -> retainedLots <- retainedLots + 1
+                  { potentialLot with
+                      Price = updatedEconomics.Price
+                      FloorSpace = updatedEconomics.FloorSpace
+                      Residents = updatedEconomics.Residents
+                      BuildingAgeYears = updatedEconomics.BuildingAgeYears
+                      Envelope =
+                        match replaced with
+                        | true -> potentialLot.Envelope
+                        | false -> currentLot.Envelope })
+          { block with Lots = updatedLots })
+      { quarter with Blocks = updatedBlocks })
+  let meanProbability =
+    match evaluatedLots <= 0 with
+    | true -> 0.0f
+    | false -> totalProbability / float32 evaluatedLots
+  { potentialPlan with Quarters = updatedQuarters },
+  { EvaluatedLots = evaluatedLots
+    ReplacedLots = replacedLots
+    RetainedLots = retainedLots
+    MeanProbability = meanProbability }
+
+let updateBuildingSubstitution stepIndex stepYears currentPlan potentialPlan =
+  updateBuildingSubstitutionWith defaultBuildingSubstitutionConfig stepIndex stepYears currentPlan potentialPlan
+  |> fst
+
+let simulateUrbanStep (plan: DistrictPlan) : DistrictPlan =
+  plan
+  |> updateTrafficSimulation
+  |> promotePlannedStreets
+  |> updateLandUseSimulation
+
+let runSimulationStage stage (plan: DistrictPlan) : DistrictPlan =
+  match stage with
+  | UpdateTrafficSimulationStage -> updateTrafficSimulation plan
+  | PromotePlannedStreetsStage -> promotePlannedStreets plan
+  | UpdateLandUseSimulationStage -> updateLandUseSimulation plan
+
+let private countBuiltMajorStreets (plan: DistrictPlan) =
+  plan.MajorStreets
+  |> List.filter (fun street -> street.Status = Built)
+  |> List.length
+
+let private countBuiltMinorStreets (plan: DistrictPlan) =
+  plan.Quarters
+  |> List.collect _.MinorStreets
+  |> List.filter (fun street -> street.Status = Built)
+  |> List.length
+
+let private planRectKey (rect: TRect) =
+  rect.X, rect.Z, rect.W, rect.H
+
+let private quarterMap (plan: DistrictPlan) =
+  plan.Quarters
+  |> List.map (fun quarter -> planRectKey quarter.Rect, quarter)
+  |> Map.ofList
+
+let private blockMap (plan: DistrictPlan) =
+  plan.Quarters
+  |> List.collect _.Blocks
+  |> List.map (fun block -> planRectKey block.Rect, block)
+  |> Map.ofList
+
+let private lotKey (lot: PlannedLot) =
+  planRectKey lot.BlockRect, planRectKey lot.Rect, lot.FrontageEdge
+
+let private lotMap (plan: DistrictPlan) =
+  plan.Quarters
+  |> List.collect _.Blocks
+  |> List.collect _.Lots
+  |> List.map (fun lot -> lotKey lot, lot)
+  |> Map.ofList
+
+let private streetMap (plan: DistrictPlan) =
+  allStreetViews plan
+  |> List.map (fun street -> street.Id, street)
+  |> Map.ofList
+
+let summarizeSimulationStageDelta (beforePlan: DistrictPlan) (afterPlan: DistrictPlan) : SimulationStageDelta =
+  let beforeQuarterMap = quarterMap beforePlan
+  let beforeBlockMap = blockMap beforePlan
+  let beforeLotMap = lotMap beforePlan
+  let beforeStreetMap = streetMap beforePlan
+  let trafficUpdatedStreetCount, totalTrafficVolumeDelta =
+    allStreetViews afterPlan
+    |> List.fold (fun (changedCount, totalDelta) street ->
+      match beforeStreetMap |> Map.tryFind street.Id with
+      | Some beforeStreet ->
+          let volumeDelta = abs (beforeStreet.Traffic.Volume - street.Traffic.Volume)
+          let changed =
+            volumeDelta > 1e-5f
+            || abs (beforeStreet.Traffic.MaxVolume - street.Traffic.MaxVolume) > 1e-5f
+          (changedCount + (if changed then 1 else 0), totalDelta + volumeDelta)
+      | None ->
+          (changedCount + 1, totalDelta + abs street.Traffic.Volume))
+      (0, 0.0f)
+  let promotedMajorStreetCount = max 0 (countBuiltMajorStreets afterPlan - countBuiltMajorStreets beforePlan)
+  let promotedMinorStreetCount = max 0 (countBuiltMinorStreets afterPlan - countBuiltMinorStreets beforePlan)
+  let quarterLandUseChangedCount =
+    afterPlan.Quarters
+    |> List.sumBy (fun quarter ->
+      match beforeQuarterMap |> Map.tryFind (planRectKey quarter.Rect) with
+      | Some beforeQuarter when beforeQuarter.LandUseType <> quarter.LandUseType
+                           || abs (beforeQuarter.LandUseValue - quarter.LandUseValue) > 1e-5f -> 1
+      | _ -> 0)
+  let blockLandUseChangedCount, totalBlockLandUseValueDelta =
+    afterPlan.Quarters
+    |> List.collect _.Blocks
+    |> List.fold (fun (changedCount, totalDelta) block ->
+      match beforeBlockMap |> Map.tryFind (planRectKey block.Rect) with
+      | Some beforeBlock ->
+          let valueDelta = abs (beforeBlock.LandUseValue - block.LandUseValue)
+          let changed =
+            beforeBlock.LandUseType <> block.LandUseType
+            || valueDelta > 1e-5f
+          (changedCount + (if changed then 1 else 0), totalDelta + valueDelta)
+      | None ->
+          (changedCount + 1, totalDelta + abs block.LandUseValue))
+      (0, 0.0f)
+  let lotLandUseChangedCount, totalLotLandUseValueDelta =
+    afterPlan.Quarters
+    |> List.collect _.Blocks
+    |> List.collect _.Lots
+    |> List.fold (fun (changedCount, totalDelta) lot ->
+      match beforeLotMap |> Map.tryFind (lotKey lot) with
+      | Some beforeLot ->
+          let valueDelta = abs (beforeLot.LandUseValue - lot.LandUseValue)
+          let changed =
+            beforeLot.LandUseType <> lot.LandUseType
+            || beforeLot.FrontingStreetStatus <> lot.FrontingStreetStatus
+            || valueDelta > 1e-5f
+          (changedCount + (if changed then 1 else 0), totalDelta + valueDelta)
+      | None ->
+          (changedCount + 1, totalDelta + abs lot.LandUseValue))
+      (0, 0.0f)
+  { TrafficUpdatedStreetCount = trafficUpdatedStreetCount
+    TotalTrafficVolumeDelta = totalTrafficVolumeDelta
+    PromotedMajorStreetCount = promotedMajorStreetCount
+    PromotedMinorStreetCount = promotedMinorStreetCount
+    QuarterLandUseChangedCount = quarterLandUseChangedCount
+    BlockLandUseChangedCount = blockLandUseChangedCount
+    TotalBlockLandUseValueDelta = totalBlockLandUseValueDelta
+    LotLandUseChangedCount = lotLandUseChangedCount
+    TotalLotLandUseValueDelta = totalLotLandUseValueDelta
+    ReplacedLotCount = 0 }
+
+type SimulationTimelineState =
+  { Plan: DistrictPlan
+    ElapsedYears: float32
+    LandUseElapsedYears: float32
+    PromotionQualificationSteps: Map<StreetId, int> }
+
+let simulateUrbanTimelineWith (landUseConfig: LandUseSimulationConfig) (config: SimulationTimelineConfig) seed (initial: DistrictPlan) : SimulationTimeline =
+  if config.Steps < 0 then
+    invalidArg "config.Steps" "Simulation timeline steps must be non-negative."
+  if config.StepYears <= 0.0f then
+    invalidArg "config.StepYears" "Simulation timeline step years must be positive."
+  if config.LandUseReevaluationYears < 0.0f then
+    invalidArg "config.LandUseReevaluationYears" "Simulation timeline reevaluation years cannot be negative."
+  if config.PromotionLagSteps <= 0 then
+    invalidArg "config.PromotionLagSteps" "Simulation timeline promotion lag must be at least one step."
+
+  let landUseConfigFor elapsedSinceLastEvaluationYears =
+    { landUseConfig with
+        Cadence =
+          { StepYears = config.StepYears
+            ReevaluationYears = config.LandUseReevaluationYears
+            ElapsedSinceLastEvaluationYears = elapsedSinceLastEvaluationYears } }
+
+  let nextLandUseElapsedYears elapsedSinceLastEvaluationYears (stats: LandUseUpdateStats) =
+    match stats.SkippedByCadence, config.LandUseReevaluationYears <= 0.0f with
+    | true, _ -> elapsedSinceLastEvaluationYears
+    | false, true -> 0.0f
+    | false, false ->
+        let rec subtractHorizon remainingYears =
+          match remainingYears >= config.LandUseReevaluationYears with
+          | true -> subtractHorizon (remainingYears - config.LandUseReevaluationYears)
+          | false -> remainingYears
+        subtractHorizon elapsedSinceLastEvaluationYears
+
+  let initialState =
+    { Plan = initial |> indexStreetNetwork
+      ElapsedYears = 0.0f
+      LandUseElapsedYears = 0.0f
+      PromotionQualificationSteps = Map.empty }
+
+  let snapshotsRev, finalState =
+    (([], initialState), [ 1 .. config.Steps ])
+    ||> List.fold (fun (snapshots, state) stepIndex ->
+      let trafficUpdated = updateTrafficSimulation state.Plan
+      let promotedPlan, promotionQualifications =
+        promoteQualifiedStreetsWithLag config.PromotionLagSteps state.PromotionQualificationSteps trafficUpdated
+      let elapsedYears = state.ElapsedYears + config.StepYears
+      let landUseElapsedYears = state.LandUseElapsedYears + config.StepYears
+      let potentialPlan, landUseStats =
+        promotedPlan
+        |> updateLandUseSimulationWith (landUseConfigFor landUseElapsedYears)
+      let nextPlan, substitutionStats =
+        match config.BuildingSubstitution with
+        | Some substitutionConfig ->
+            updateBuildingSubstitutionWith substitutionConfig stepIndex config.StepYears promotedPlan potentialPlan
+        | None ->
+            potentialPlan,
+            { EvaluatedLots = 0
+              ReplacedLots = 0
+              RetainedLots = 0
+              MeanProbability = 0.0f }
+      let indexedNextPlan = nextPlan |> indexStreetNetwork
+      let delta =
+        { summarizeSimulationStageDelta state.Plan indexedNextPlan with
+            ReplacedLotCount = substitutionStats.ReplacedLots }
+      let snapshot =
+        { StepIndex = stepIndex
+          ElapsedYears = elapsedYears
+          Plan = indexedNextPlan
+          LandUseStats = landUseStats
+          BuildingSubstitutionStats = substitutionStats
+          Delta = delta }
+      let nextState =
+        { Plan = indexedNextPlan
+          ElapsedYears = elapsedYears
+          LandUseElapsedYears = nextLandUseElapsedYears landUseElapsedYears landUseStats
+          PromotionQualificationSteps = promotionQualifications }
+      snapshot :: snapshots,
+      nextState)
+
+  { Seed = seed
+    Initial = initialState.Plan
+    Steps = snapshotsRev |> List.rev
+    Final = finalState.Plan }
+
+let simulateUrbanTimeline (config: SimulationTimelineConfig) seed (initial: DistrictPlan) : SimulationTimeline =
+  simulateUrbanTimelineWith defaultLandUseSimulationConfig config seed initial
+
+let stepWithTrace seed initial : SimulationTrace =
+  let snapshots, finalPlan =
+    (([], initial), simulationStages)
+    ||> List.fold (fun (snapshots, plan) stage ->
+      let nextPlan = runSimulationStage stage plan
+      let snapshot =
+        { Stage = stage
+          Plan = nextPlan }
+      (snapshots @ [ snapshot ], nextPlan))
+  { Seed = seed
+    Initial = initial
+    Stages = snapshots
+    Final = finalPlan }
+
+let stepWithInstrumentation seed initial : InstrumentedSimulationTrace =
+  let snapshots, finalPlan, totalElapsed =
+    (([], initial, TimeSpan.Zero), simulationStages)
+    ||> List.fold (fun (snapshots, plan, totalElapsed) stage ->
+      let stopwatch = System.Diagnostics.Stopwatch.StartNew()
+      let nextPlan = runSimulationStage stage plan
+      stopwatch.Stop()
+      let delta = summarizeSimulationStageDelta plan nextPlan
+      let snapshot =
+        { Stage = stage
+          Plan = nextPlan
+          Elapsed = stopwatch.Elapsed
+          Delta = delta }
+      (snapshots @ [ snapshot ], nextPlan, totalElapsed + stopwatch.Elapsed))
+  { Seed = seed
+    Initial = initial
+    Stages = snapshots
+    Final = finalPlan
+    TotalElapsed = totalElapsed }
+
+let private rectSortKey (rect: TRect) =
+  rect.X, rect.Z, rect.W, rect.H
+
+let canonicalizeDistrictPlan (plan: DistrictPlan) : CanonicalDistrictPlan =
+  let normalizeMajorStreetIds (streets: CanonicalMajorStreet list) =
+    streets
+    |> List.sortBy (fun street ->
+      street.StreetStatus,
+      rectSortKey street.StreetRect,
+      street.StreetResidents,
+      street.StreetTrafficVolume,
+      street.StreetMaxVolume)
+    |> List.mapi (fun index street -> { street with StreetId = StreetId index })
+
+  let normalizeMinorStreetIds (streets: CanonicalMinorStreet list) =
+    streets
+    |> List.sortBy (fun street ->
+      street.StreetStatus,
+      rectSortKey street.StreetRect,
+      street.StreetResidents,
+      street.StreetTrafficVolume,
+      street.StreetMaxVolume)
+    |> List.mapi (fun index street -> { street with StreetId = StreetId index })
+
+  let canonicalMajorStreet (street: MajorStreet) : CanonicalMajorStreet =
+    { StreetId = street.Id
+      StreetRect = street.Segment
+      StreetStatus = street.Status
+      StreetResidents = street.Residents
+      StreetTrafficVolume = street.Traffic.Volume
+      StreetMaxVolume = street.Traffic.MaxVolume }
+  let canonicalMinorStreet (street: MinorStreet) : CanonicalMinorStreet =
+    { StreetId = street.Id
+      StreetRect = street.Segment
+      StreetStatus = street.Status
+      StreetResidents = street.Residents
+      StreetTrafficVolume = street.Traffic.Volume
+      StreetMaxVolume = street.Traffic.MaxVolume }
+  let canonicalLot (lot: PlannedLot) : CanonicalLot =
+    { LotRect = lot.Rect
+      LotFrontageEdge = lot.FrontageEdge
+      LotLandUseType = lot.LandUseType
+      LotLandUseValue = lot.LandUseValue
+      LotFrontingStreetStatus = lot.FrontingStreetStatus
+      LotResidents = lot.Residents }
+  let canonicalBlock (block: PlannedBlock) : CanonicalBlock =
+    { BlockRect = block.Rect
+      BlockLandUseType = block.LandUseType
+      BlockLandUseValue = block.LandUseValue
+      CanonicalLots =
+        block.Lots
+        |> List.map canonicalLot
+        |> List.sortBy (fun lot ->
+          rectSortKey lot.LotRect,
+          lot.LotFrontageEdge,
+          lot.LotLandUseType,
+          lot.LotLandUseValue,
+          lot.LotFrontingStreetStatus,
+          lot.LotResidents) }
+  let canonicalQuarter (quarter: QuarterPlan) : CanonicalQuarter =
+    { QuarterRect = quarter.Rect
+      QuarterLandUseType = quarter.LandUseType
+      QuarterLandUseValue = quarter.LandUseValue
+      CanonicalMinorStreets =
+        quarter.MinorStreets
+        |> List.map canonicalMinorStreet
+        |> normalizeMinorStreetIds
+      CanonicalBlocks =
+        quarter.Blocks
+        |> List.map canonicalBlock
+        |> List.sortBy (fun block -> block.BlockLandUseType, rectSortKey block.BlockRect, block.BlockLandUseValue) }
+  { CanonicalMajorStreets =
+      plan.MajorStreets
+      |> List.map canonicalMajorStreet
+      |> normalizeMajorStreetIds
+    CanonicalQuarters =
+      plan.Quarters
+      |> List.map canonicalQuarter
+      |> List.sortBy (fun quarter -> rectSortKey quarter.QuarterRect, quarter.QuarterLandUseType, quarter.QuarterLandUseValue) }
+
+let canonicalizeSimulationTrace (trace: SimulationTrace) : CanonicalSimulationTrace =
+  { TraceSeed = trace.Seed
+    InitialPlan = canonicalizeDistrictPlan trace.Initial
+    StagePlans =
+      trace.Stages
+      |> List.map (fun snapshot ->
+        { CanonicalStage = snapshot.Stage
+          CanonicalPlan = canonicalizeDistrictPlan snapshot.Plan })
+    FinalPlan = canonicalizeDistrictPlan trace.Final }
+
+let private medianTimeSpan (durations: TimeSpan list) =
+  let orderedTicks =
+    durations
+    |> List.map _.Ticks
+    |> List.sort
+  match orderedTicks with
+  | [] -> TimeSpan.Zero
+  | xs ->
+      let mid = xs.Length / 2
+      match xs.Length % 2 = 0 with
+      | true -> TimeSpan.FromTicks((xs.[mid - 1] + xs.[mid]) / 2L)
+      | false -> TimeSpan.FromTicks(xs.[mid])
+
+let private asSimulationTrace (trace: InstrumentedSimulationTrace) : SimulationTrace =
+  { Seed = trace.Seed
+    Initial = trace.Initial
+    Stages =
+      trace.Stages
+      |> List.map (fun snapshot ->
+        { Stage = snapshot.Stage
+          Plan = snapshot.Plan })
+    Final = trace.Final }
+
+let benchmarkSimulationStep warmupIterations measuredIterations seed initial : SimulationBenchmarkSummary =
+  match warmupIterations < 0 with
+  | true -> invalidArg (nameof warmupIterations) "warmupIterations must be non-negative"
+  | false -> ()
+  match measuredIterations <= 0 with
+  | true -> invalidArg (nameof measuredIterations) "measuredIterations must be positive"
+  | false -> ()
+
+  let runBenchmarkIteration () = stepWithInstrumentation seed initial
+
+  for _ in 1 .. warmupIterations do
+    runBenchmarkIteration () |> ignore
+
+  let measuredRuns =
+    [ for _ in 1 .. measuredIterations -> runBenchmarkIteration () ]
+
+  let canonicalResult =
+    measuredRuns.Head
+    |> asSimulationTrace
+    |> canonicalizeSimulationTrace
+
+  measuredRuns
+  |> List.iter (fun trace ->
+    let candidate = trace |> asSimulationTrace |> canonicalizeSimulationTrace
+    if candidate <> canonicalResult then
+      invalidOp "Benchmark runs produced inconsistent canonical results")
+
+  let stageBenchmarks =
+    simulationStages
+    |> List.map (fun stage ->
+      let stageRuns =
+        measuredRuns
+        |> List.map (fun trace ->
+          trace.Stages
+          |> List.find (fun snapshot -> snapshot.Stage = stage))
+      let durations = stageRuns |> List.map _.Elapsed
+      { Stage = stage
+        Iterations = measuredIterations
+        MinElapsed = durations |> List.min
+        MedianElapsed = medianTimeSpan durations
+        MaxElapsed = durations |> List.max
+        LastObservedDelta = stageRuns |> List.last |> _.Delta })
+
+  let totalDurations = measuredRuns |> List.map _.TotalElapsed
+  { WarmupIterations = warmupIterations
+    MeasuredIterations = measuredIterations
+    StageBenchmarks = stageBenchmarks
+    TotalMinElapsed = totalDurations |> List.min
+    TotalMedianElapsed = medianTimeSpan totalDurations
+    TotalMaxElapsed = totalDurations |> List.max
+    CanonicalResult = canonicalResult }
+
+let evaluateBenchmarkBudget budget (summary: SimulationBenchmarkSummary) =
+  match budget with
+  | None -> NotEvaluated
+  | Some target when summary.TotalMedianElapsed <= target.TargetMedianElapsed -> WithinReference
+  | Some target -> OverReference (summary.TotalMedianElapsed - target.TargetMedianElapsed)
+
+let private benchmarkCountersFor initial final =
+  let indexedInitial = initial |> indexStreetNetwork
+  let indexedFinal = final |> indexStreetNetwork
+  let tripsGenerated =
+    generateResidentTrips indexedInitial
+    |> List.length
+  let residentStreetCount =
+    withDerivedStreetResidents indexedInitial
+    |> allStreetViews
+    |> List.filter (fun street -> street.Residents > 0.0f)
+    |> List.length
+  let splitCandidatesTried =
+    indexedInitial.Quarters
+    |> List.collect _.Blocks
+    |> List.sumBy (fun block ->
+      let _, stats = subdivideBlockByLandUseWithStats block
+      stats.AcceptedSplits + stats.RejectedCandidates)
+  { PathComputations = residentStreetCount * max 0 (residentStreetCount - 1)
+    TripsGenerated = tripsGenerated
+    SplitCandidatesTried = splitCandidatesTried
+    ResultStreetCount = allStreetViews indexedFinal |> List.length
+    ResultBlockCount =
+      indexedFinal.Quarters
+      |> List.sumBy (fun quarter -> quarter.Blocks.Length)
+    ResultLotCount =
+      indexedFinal.Quarters
+      |> List.sumBy (fun quarter ->
+        quarter.Blocks
+        |> List.sumBy (fun block -> block.Lots.Length)) }
+
+let benchmarkSimulationCases warmupIterations measuredIterations (cases: SimulationBenchmarkCase list) =
+  cases
+  |> List.map (fun benchmarkCase ->
+    let summary =
+      benchmarkSimulationStep warmupIterations measuredIterations (Some benchmarkCase.Seed) benchmarkCase.Initial
+    let finalPlan = simulateUrbanStep benchmarkCase.Initial
+    let counters = benchmarkCountersFor benchmarkCase.Initial finalPlan
+    { Case = benchmarkCase
+      Summary = summary
+      Counters = counters
+      BudgetStatus = evaluateBenchmarkBudget benchmarkCase.Budget summary })
+
+let private corridorToRoad (organic: float32) (roadClass: RoadClass) (status: StreetStatus) (segment: TRect) =
+  let (cr, cg, cb) = RoadClass.color roadClass
+  let alpha, tint =
+    match status with
+    | Planned -> 192uy, 18
+    | Built -> 255uy, 0
+  let inline channel value =
+    let lifted = int value + tint
+    byte (min 255 lifted)
+  let isVertical = segment.H >= segment.W
   if isVertical then
-    let centerX = TRect.centerX street.Segment
-    let hw = street.Segment.W / 2.0f
+    let centerX = TRect.centerX segment
+    let hw = segment.W / 2.0f
     { FromFunc = ""
       ToFunc = ""
-      FromPos = Vector3(centerX, hw, street.Segment.Z)
-      ToPos = Vector3(centerX, hw, street.Segment.Z + street.Segment.H)
-      Weight = RoadClass.tier street.Class
-      Color = Color(cr, cg, cb, 255uy)
+      FromPos = Vector3(centerX, hw, segment.Z)
+      ToPos = Vector3(centerX, hw, segment.Z + segment.H)
+      Weight = RoadClass.tier roadClass
+      Color = Color(channel cr, channel cg, channel cb, alpha)
       Organic = organic }
   else
-    let centerZ = TRect.centerZ street.Segment
-    let hw = street.Segment.H / 2.0f
+    let centerZ = TRect.centerZ segment
+    let hw = segment.H / 2.0f
     { FromFunc = ""
       ToFunc = ""
-      FromPos = Vector3(street.Segment.X, hw, centerZ)
-      ToPos = Vector3(street.Segment.X + street.Segment.W, hw, centerZ)
-      Weight = RoadClass.tier street.Class
-      Color = Color(cr, cg, cb, 255uy)
+      FromPos = Vector3(segment.X, hw, centerZ)
+      ToPos = Vector3(segment.X + segment.W, hw, centerZ)
+      Weight = RoadClass.tier roadClass
+      Color = Color(channel cr, channel cg, channel cb, alpha)
       Organic = organic }
 
 // ─── Building Typology Functions ─────────────────────────────
@@ -825,6 +3062,41 @@ type WeberGraph() =
 
   member _.MarkFinished(NodeId i) =
     ns.[i] <- { ns.[i] with Growth = Finished }
+
+  member private _.ResetTopology() =
+    es.Clear()
+    hs.Clear()
+    fs.Clear()
+    outs.Clear()
+    for i in 0 .. ns.Count - 1 do
+      let node = ns.[i]
+      ns.[i] <- { node with Valence = 0 }
+      outs.Add(ResizeArray())
+
+  member private this.RebuildTopology(edgeSpecs: (NodeId * NodeId * RoadClass * float32) list) =
+    this.ResetTopology()
+    for (a, b, cls, width) in edgeSpecs do
+      this.AddEdge(a, b, cls, width) |> ignore
+
+  member this.SplitEdge(edgeId: EdgeId, point: Vec2) =
+    let edge = es.[EdgeId.value edgeId]
+    let startPos = ns.[NodeId.value edge.A].Pos
+    let endPos = ns.[NodeId.value edge.B].Pos
+    let endpointSnapSq = 0.05f * 0.05f
+    if Vec2.distanceToSq point startPos <= endpointSnapSq then edge.A
+    elif Vec2.distanceToSq point endPos <= endpointSnapSq then edge.B
+    else
+      let splitNode = this.AddNode(point, edge.Class)
+      let retainedEdges =
+        es
+        |> Seq.filter (fun existing -> existing.Id <> edgeId)
+        |> Seq.map (fun existing -> existing.A, existing.B, existing.Class, existing.Width)
+        |> Seq.toList
+      this.RebuildTopology (
+        retainedEdges
+        @ [ edge.A, splitNode, edge.Class, edge.Width
+            splitNode, edge.B, edge.Class, edge.Width ])
+      splitNode
 
   member _.OutgoingDirs(nid: NodeId) : Vec2 list =
     let n = ns.[NodeId.value nid]
@@ -1814,6 +4086,126 @@ let subdivideSpline p0 p1 p2 p3 (segments: int) : (float32 * float32) list =
       catmullRom p0 p1 p2 p3 t ]
 // ─── Weber Street Expansion Algorithm (Paper §3) ────────────
 
+let alignToMajorAxis (origin: Vec2) (proposed: Vec2) : Vec2 =
+  let delta = Vec2.sub proposed origin
+  if abs delta.X >= abs delta.Y then Vec2.Create(proposed.X, origin.Y)
+  else Vec2.Create(origin.X, proposed.Y)
+
+let clipProposalToBounds (rect: TRect) (origin: Vec2) (proposed: Vec2) : Vec2 =
+  let clampX value = max rect.X (min (rect.X + rect.W) value)
+  let clampZ value = max rect.Z (min (rect.Z + rect.H) value)
+  if abs (proposed.X - origin.X) < 0.001f then
+    Vec2.Create(clampX origin.X, clampZ proposed.Y)
+  elif abs (proposed.Y - origin.Y) < 0.001f then
+    Vec2.Create(clampX proposed.X, clampZ origin.Y)
+  else
+    Vec2.Create(clampX proposed.X, clampZ proposed.Y)
+
+let private rectContainsVec2 (rect: TRect) (pt: Vec2) =
+  pt.X >= rect.X - 0.001f
+  && pt.X <= rect.X + rect.W + 0.001f
+  && pt.Y >= rect.Z - 0.001f
+  && pt.Y <= rect.Z + rect.H + 0.001f
+
+let private rectBoundaryMidpoints (rect: TRect) =
+  let left = rect.X
+  let right = rect.X + rect.W
+  let top = rect.Z
+  let bottom = rect.Z + rect.H
+  [|
+    Vec2.Create(rect.X + rect.W / 2.0f, top)
+    Vec2.Create(right, rect.Z + rect.H / 2.0f)
+    Vec2.Create(rect.X + rect.W / 2.0f, bottom)
+    Vec2.Create(left, rect.Z + rect.H / 2.0f)
+  |]
+
+let private isBoundaryPoint (rect: TRect) (pt: Vec2) =
+  let left = abs (pt.X - rect.X) < 0.01f
+  let right = abs (pt.X - (rect.X + rect.W)) < 0.01f
+  let top = abs (pt.Y - rect.Z) < 0.01f
+  let bottom = abs (pt.Y - (rect.Z + rect.H)) < 0.01f
+  left || right || top || bottom
+
+let private edgeToCorridorRect (g: WeberGraph) (edge: WEdge) =
+  let a = (g.N edge.A).Pos
+  let b = (g.N edge.B).Pos
+  let dx = b.X - a.X
+  let dz = b.Y - a.Y
+  if abs dx >= abs dz then
+    let x = min a.X b.X
+    let z = min a.Y b.Y - edge.Width / 2.0f
+    TRect.create x z (abs dx) edge.Width
+  else
+    let x = min a.X b.X - edge.Width / 2.0f
+    let z = min a.Y b.Y
+    TRect.create x z edge.Width (abs dz)
+
+let private faceToQuarterRect (rect: TRect) (poly: Vec2 list) =
+  if poly.Length < 3 then None
+  else
+    let xs = poly |> List.map (fun pt -> pt.X)
+    let zs = poly |> List.map (fun pt -> pt.Y)
+    let minX = xs |> List.min
+    let maxX = xs |> List.max
+    let minZ = zs |> List.min
+    let maxZ = zs |> List.max
+    let quarter = TRect.create minX minZ (maxX - minX) (maxZ - minZ)
+    let validVertices = poly |> List.forall (rectContainsVec2 rect)
+    if validVertices && quarter.W > 1.5f && quarter.H > 1.5f then Some quarter else None
+
+let private quarterRectKey (rect: TRect) =
+  let round1 value = MathF.Round(value, 1, MidpointRounding.AwayFromZero)
+  round1 rect.X, round1 rect.Z, round1 rect.W, round1 rect.H
+
+let private seedMajorStreetGrowthGraph (rect: TRect) =
+  let g = WeberGraph()
+  let left = rect.X
+  let right = rect.X + rect.W
+  let top = rect.Z
+  let bottom = rect.Z + rect.H
+  let center = Vec2.Create(TRect.centerX rect, TRect.centerZ rect)
+  let northMid, eastMid, southMid, westMid =
+    let mids = rectBoundaryMidpoints rect
+    mids.[0], mids.[1], mids.[2], mids.[3]
+
+  let topLeft = g.AddNode(Vec2.Create(left, top), Avenue)
+  let topMid = g.AddNode(northMid, Avenue)
+  let topRight = g.AddNode(Vec2.Create(right, top), Avenue)
+  let rightMid = g.AddNode(eastMid, Avenue)
+  let bottomRight = g.AddNode(Vec2.Create(right, bottom), Avenue)
+  let bottomMid = g.AddNode(southMid, Avenue)
+  let bottomLeft = g.AddNode(Vec2.Create(left, bottom), Avenue)
+  let leftMid = g.AddNode(westMid, Avenue)
+
+  let ringNodes = [ topLeft; topMid; topRight; rightMid; bottomRight; bottomMid; bottomLeft; leftMid ]
+  ringNodes
+  |> List.pairwise
+  |> List.iter (fun (a, b) -> g.AddEdge(a, b, Avenue, RoadClass.width Avenue) |> ignore)
+  g.AddEdge(leftMid, topLeft, Avenue, RoadClass.width Avenue) |> ignore
+
+  let centerId = g.AddNode(center, Avenue)
+  let armNodes =
+    [ northMid; eastMid; southMid; westMid ]
+    |> List.map (fun boundary ->
+      let armPos =
+        Vec2.Create(
+          center.X + (boundary.X - center.X) * 0.55f,
+          center.Y + (boundary.Y - center.Y) * 0.55f)
+      let armId = g.AddNode(armPos, Avenue)
+      g.AddEdge(centerId, armId, Avenue, RoadClass.width Avenue) |> ignore
+      let boundaryId =
+        [ topMid; rightMid; bottomMid; leftMid ]
+        |> List.find (fun nid ->
+          let pos = (g.N nid).Pos
+          abs (pos.X - boundary.X) < 0.01f && abs (pos.Y - boundary.Y) < 0.01f)
+      g.AddEdge(armId, boundaryId, Avenue, RoadClass.width Avenue) |> ignore
+      armId)
+
+  [ topLeft; topMid; topRight; rightMid; bottomRight; bottomMid; bottomLeft; leftMid ]
+  |> List.iter g.MarkFinished
+
+  g, centerId, armNodes, [| center |]
+
 /// Line segment intersection. Returns intersection point and parameter t along (a→b).
 let segIntersect (a: Vec2) (b: Vec2) (c: Vec2) (d: Vec2) : (Vec2 * float32) option =
   let dx = b.X - a.X
@@ -1830,18 +4222,39 @@ let segIntersect (a: Vec2) (b: Vec2) (c: Vec2) (d: Vec2) : (Vec2 * float32) opti
     else None
 
 /// Test 1 — Intersection: shorten segment to first intersection with existing edges.
-let adaptIntersection (g: WeberGraph) (origin: Vec2) (proposed: Vec2) : Vec2 =
-  let mutable best = proposed
+type IntersectionHit =
+  | NoIntersection
+  | HitNode of NodeId
+  | HitEdgeInterior of EdgeId * Vec2 * float32
+
+/// Test 1 — Intersection: classify the first hit against the existing planar graph.
+let findClosestIntersection (g: WeberGraph) (origin: Vec2) (proposed: Vec2) : IntersectionHit =
+  let mutable bestHit = NoIntersection
   let mutable bestT = 1.0f
+  let endpointSnapSq = 0.05f * 0.05f
   for e in g.Edges do
     let ea = (g.N e.A).Pos
     let eb = (g.N e.B).Pos
     match segIntersect origin proposed ea eb with
     | Some (pt, t) when t < bestT ->
-      bestT <- t
-      best <- pt
+        let edgeDelta = Vec2.sub eb ea
+        let edgeLenSq = Vec2.lengthSq edgeDelta
+        let edgeT =
+          if edgeLenSq < 1e-6f then 0.0f
+          else Vec2.dot (Vec2.sub pt ea) edgeDelta / edgeLenSq
+        bestT <- t
+        bestHit <-
+          if Vec2.distanceToSq pt ea <= endpointSnapSq then HitNode e.A
+          elif Vec2.distanceToSq pt eb <= endpointSnapSq then HitNode e.B
+          else HitEdgeInterior (e.Id, pt, edgeT)
     | _ -> ()
-  best
+  bestHit
+
+let adaptIntersection (g: WeberGraph) (origin: Vec2) (proposed: Vec2) : Vec2 =
+  match findClosestIntersection g origin proposed with
+  | NoIntersection -> proposed
+  | HitNode nodeId -> (g.N nodeId).Pos
+  | HitEdgeInterior (_, pt, _) -> pt
 
 /// Test 2 — Enlargement: extend by 1.5× to detect near-miss intersections.
 let adaptEnlargement (g: WeberGraph) (origin: Vec2) (proposed: Vec2) : Vec2 =
@@ -1915,11 +4328,13 @@ let expandNode (g: WeberGraph) (nid: NodeId) (rng: Random) (isGrid: bool) (lengt
     Some (Vec2.add n.Pos (Vec2.scale length rotated))
   | 2 ->
     // Valence 2: turn left or right
-    let avg = Vec2.normalize (Vec2.add dirs.[0] dirs.[1])
-    let outDir = Vec2.negate avg
+    let dot = dirs |> List.pairwise |> List.tryHead |> Option.map (fun (a, b) -> a.X * b.X + a.Y * b.Y) |> Option.defaultValue 0.0f
+    let baseDir =
+      if dot < -0.85f then dirs.[0]
+      else Vec2.negate (Vec2.normalize (Vec2.add dirs.[0] dirs.[1]))
     let perp =
-      if rng.NextSingle() < 0.5f then Vec2.Create(-outDir.Y, outDir.X)
-      else Vec2.Create(outDir.Y, -outDir.X)
+      if rng.NextSingle() < 0.5f then Vec2.Create(-baseDir.Y, baseDir.X)
+      else Vec2.Create(baseDir.Y, -baseDir.X)
     let dev = if isGrid then 0.0f else (rng.NextSingle() - 0.5f) * 0.3f
     let cos = MathF.Cos(dev)
     let sin = MathF.Sin(dev)
@@ -1944,7 +4359,7 @@ let growStreets
   (g: WeberGraph) (centers: Vec2[]) (rng: Random)
   (cls: RoadClass) (isGrid: bool)
   (length: float32) (snapR: float32) (sMin: float32)
-  (maxEdges: int) (focus: float32) =
+  (maxEdges: int) (focus: float32) (bounds: TRect option) =
   let minTier = RoadClass.tier cls
   let mutable added = 0
   let mutable stuck = 0
@@ -1956,26 +4371,421 @@ let growStreets
       | None ->
         g.MarkFinished(nid)
         stuck <- stuck + 1
-      | Some proposed ->
-        // Apply 3 legality tests in sequence (Paper §3.1, Figure 6)
-        let p1 = adaptIntersection g (g.N(nid).Pos) proposed
-        let p2 = adaptEnlargement g (g.N(nid).Pos) p1
-        let segLen = Vec2.distanceTo (g.N(nid).Pos) p2
-        if segLen < sMin then
-          g.MarkFinished(nid)
-          stuck <- stuck + 1
+      | Some proposed0 ->
+        let origin = (g.N(nid).Pos)
+        let proposed1 =
+          if isGrid then alignToMajorAxis (g.N(nid).Pos) proposed0
+          else proposed0
+        let proposed =
+          match bounds with
+          | Some rect -> clipProposalToBounds rect (g.N(nid).Pos) proposed1
+          | None -> proposed1
+        // Apply legality tests in sequence (Paper §3.1, Figure 6), but make crossings topologically real.
+        match findClosestIntersection g origin proposed with
+        | HitNode existingId ->
+            let segLen = Vec2.distanceTo origin (g.N existingId).Pos
+            if segLen < sMin then
+              g.MarkFinished(nid)
+              stuck <- stuck + 1
+            else
+              g.AddEdge(nid, existingId, cls, RoadClass.width cls) |> ignore
+              added <- added + 1
+              stuck <- 0
+        | HitEdgeInterior (edgeId, pt, _) ->
+            let segLen = Vec2.distanceTo origin pt
+            if segLen < sMin then
+              g.MarkFinished(nid)
+              stuck <- stuck + 1
+            else
+              let splitNode = g.SplitEdge(edgeId, pt)
+              g.AddEdge(nid, splitNode, cls, RoadClass.width cls) |> ignore
+              added <- added + 1
+              stuck <- 0
+        | NoIntersection ->
+            let p2 = adaptEnlargement g origin proposed
+            let segLen = Vec2.distanceTo origin p2
+            if segLen < sMin then
+              g.MarkFinished(nid)
+              stuck <- stuck + 1
+            else
+              match adaptSnapping g p2 snapR nid with
+              | Some existingId ->
+                // Snap! Creates T-junction or crossroad
+                g.AddEdge(nid, existingId, cls, RoadClass.width cls) |> ignore
+                added <- added + 1
+                stuck <- 0
+              | None ->
+                let newId = g.AddNode(p2, cls)
+                g.AddEdge(nid, newId, cls, RoadClass.width cls) |> ignore
+                added <- added + 1
+                stuck <- 0
+
+let private buildMajorStreetGrowth (rect: TRect) (moduleDemand: int) (organic: float32) (rng: Random) =
+  if rect.W < 8.0f || rect.H < 8.0f || moduleDemand <= 0 then
+    { GrowthCenters = [ Vec2.Create(TRect.centerX rect, TRect.centerZ rect) ]
+      MajorStreets = []
+      QuarterRects = [] },
+    []
+  else
+    let g, _, _, centers = seedMajorStreetGrowthGraph rect
+    let segmentLength = max 4.0f (min rect.W rect.H / 5.0f)
+    let snapRadius = max 1.5f (segmentLength * 0.45f)
+    let minSegmentLength = max 1.5f (segmentLength * 0.35f)
+    let focus = max 0.0025f (0.01f * (1.0f - organic * 0.6f))
+    let maxEdges = max 2 (moduleDemand + 2)
+    let isGrid = organic < 0.35f
+    growStreets g centers rng Avenue isGrid segmentLength snapRadius minSegmentLength maxEdges focus (Some rect)
+
+    let majorStreets =
+      g.Edges
+      |> Seq.filter (fun edge ->
+        let a = (g.N edge.A).Pos
+        let b = (g.N edge.B).Pos
+        not (isBoundaryPoint rect a && isBoundaryPoint rect b))
+      |> Seq.map (fun edge -> MajorStreet.planned (edgeToCorridorRect g edge))
+      |> Seq.filter (fun street -> street.Segment.W > 0.5f && street.Segment.H > 0.5f)
+      |> Seq.toList
+
+    let roads =
+      let roadColor roadClass status =
+        let (cr, cg, cb) = RoadClass.color roadClass
+        let alpha, tint =
+          match status with
+          | Planned -> 192uy, 18
+          | Built -> 255uy, 0
+        let inline channel value =
+          let lifted = int value + tint
+          byte (min 255 lifted)
+        Color(channel cr, channel cg, channel cb, alpha)
+
+      g.Edges
+      |> Seq.filter (fun edge ->
+        let a = (g.N edge.A).Pos
+        let b = (g.N edge.B).Pos
+        not (isBoundaryPoint rect a && isBoundaryPoint rect b))
+      |> Seq.map (fun edge ->
+        let a = (g.N edge.A).Pos
+        let b = (g.N edge.B).Pos
+        { FromFunc = ""
+          ToFunc = ""
+          FromPos = Vector3(a.X, edge.Width / 2.0f, a.Y)
+          ToPos = Vector3(b.X, edge.Width / 2.0f, b.Y)
+          Weight = RoadClass.tier edge.Class
+          Color = roadColor edge.Class Planned
+          Organic = organic })
+      |> Seq.toList
+
+    let quarterRects =
+      g.Faces
+      |> Seq.choose (fun face -> g.FacePolygon(face.Id) |> faceToQuarterRect rect)
+      |> Seq.distinctBy quarterRectKey
+      |> Seq.sortByDescending TRect.area
+      |> Seq.fold (fun kept next ->
+        if kept |> List.exists (fun existing -> rectsOverlap existing next) then kept
+        else kept @ [ next ]) []
+
+    { GrowthCenters = centers |> Array.toList
+      MajorStreets = majorStreets
+      QuarterRects = quarterRects },
+    roads
+
+let planMajorStreetGrowth (rect: TRect) (moduleDemand: int) (organic: float32) (rng: Random) : MajorStreetGrowthPlan =
+  buildMajorStreetGrowth rect moduleDemand organic rng |> fst
+
+let private roadEndpoints (road: Road) =
+  Vec2.Create(road.FromPos.X, road.FromPos.Z), Vec2.Create(road.ToPos.X, road.ToPos.Z)
+
+let private roadLength (road: Road) =
+  let a, b = roadEndpoints road
+  Vec2.distanceTo a b
+
+let private pointLineDistance (origin: Vec2) (dir: Vec2) (point: Vec2) =
+  abs ((point.X - origin.X) * dir.Y - (point.Y - origin.Y) * dir.X)
+
+let private collinearRoads tolerance (a: Road) (b: Road) =
+  let a0, a1 = roadEndpoints a
+  let b0, b1 = roadEndpoints b
+  let dirA = Vec2.normalize (Vec2.sub a1 a0)
+  let dirB = Vec2.normalize (Vec2.sub b1 b0)
+  match Vec2.lengthSq dirA < 1e-4f || Vec2.lengthSq dirB < 1e-4f with
+  | true -> false
+  | false ->
+      let cross = abs (dirA.X * dirB.Y - dirA.Y * dirB.X)
+      let lineTolerance = tolerance + max a.FromPos.Y b.FromPos.Y
+      cross <= 0.035f
+      && pointLineDistance a0 dirA b0 <= lineTolerance
+      && pointLineDistance a0 dirA b1 <= lineTolerance
+
+let private roadProjectionInterval (dir: Vec2) (road: Road) =
+  let a, b = roadEndpoints road
+  let pa = Vec2.dot a dir
+  let pb = Vec2.dot b dir
+  min pa pb, max pa pb
+
+let private roadsCanMerge (a: Road) (b: Road) =
+  match collinearRoads 0.15f a b with
+  | false -> false
+  | true ->
+      let a0, a1 = roadEndpoints a
+      let dir = Vec2.normalize (Vec2.sub a1 a0)
+      let aMin, aMax = roadProjectionInterval dir a
+      let bMin, bMax = roadProjectionInterval dir b
+      let gap = max aMin bMin - min aMax bMax
+      gap <= 0.4f
+
+let private mergeRoadPair (a: Road) (b: Road) =
+  let points =
+    let a0, a1 = roadEndpoints a
+    let b0, b1 = roadEndpoints b
+    [| a0; a1; b0; b1 |]
+
+  let mutable bestA = points.[0]
+  let mutable bestB = points.[1]
+  let mutable bestDist = Vec2.distanceToSq bestA bestB
+
+  for i in 0 .. points.Length - 1 do
+    for j in i + 1 .. points.Length - 1 do
+      let dist = Vec2.distanceToSq points.[i] points.[j]
+      if dist > bestDist then
+        bestDist <- dist
+        bestA <- points.[i]
+        bestB <- points.[j]
+
+  let startPt, endPt =
+    match bestA.X < bestB.X || (abs (bestA.X - bestB.X) < 0.001f && bestA.Y <= bestB.Y) with
+    | true -> bestA, bestB
+    | false -> bestB, bestA
+
+  let color =
+    match a.Weight >= b.Weight with
+    | true -> a.Color
+    | false -> b.Color
+
+  { FromFunc = a.FromFunc
+    ToFunc = a.ToFunc
+    FromPos = Vector3(startPt.X, max a.FromPos.Y b.FromPos.Y, startPt.Y)
+    ToPos = Vector3(endPt.X, max a.ToPos.Y b.ToPos.Y, endPt.Y)
+    Weight = max a.Weight b.Weight
+    Color = color
+    Organic = max a.Organic b.Organic }
+
+let canonicalizeRoads (roads: Road list) =
+  let ordered =
+    roads
+    |> List.filter (fun road -> roadLength road > 0.1f)
+    |> List.sortByDescending roadLength
+
+  let merged = ResizeArray<Road>()
+
+  for road in ordered do
+    let mutable current = road
+    let mutable searchIndex = 0
+    let mutable keepSearching = true
+
+    while keepSearching && searchIndex < merged.Count do
+      match roadsCanMerge current merged.[searchIndex] with
+      | true ->
+          current <- mergeRoadPair current merged.[searchIndex]
+          merged.RemoveAt(searchIndex)
+          searchIndex <- 0
+      | false ->
+          searchIndex <- searchIndex + 1
+
+      keepSearching <- searchIndex < merged.Count
+
+    merged.Add current
+
+  merged
+  |> Seq.toList
+  |> List.sortBy (fun road ->
+    let a, b = roadEndpoints road
+    min a.X b.X, min a.Y b.Y, max a.X b.X, max a.Y b.Y)
+
+type private FrontageStrip =
+  { Start: Vec2
+    Dir: Vec2
+    Normal: Vec2
+    Length: float32
+    HalfWidth: float32
+    RoadClass: RoadClass }
+
+let private roadClassForWeight weight =
+  match weight with
+  | w when w >= RoadClass.tier Boulevard -> Boulevard
+  | w when w >= RoadClass.tier Avenue -> Avenue
+  | w when w >= RoadClass.tier Street -> Street
+  | w when w >= RoadClass.tier Lane -> Lane
+  | _ -> Alley
+
+let private clipSegmentToRect (rect: TRect) (startPt: Vec2) (endPt: Vec2) : (Vec2 * Vec2) option =
+  let dx = endPt.X - startPt.X
+  let dz = endPt.Y - startPt.Y
+  let mutable t0 = 0.0f
+  let mutable t1 = 1.0f
+
+  let inline update p q =
+    if abs p < 1e-6f then
+      q >= 0.0f
+    else
+      let r = q / p
+      if p < 0.0f then
+        if r > t1 then false
         else
-          match adaptSnapping g p2 snapR nid with
-          | Some existingId ->
-            // Snap! Creates T-junction or crossroad
-            g.AddEdge(nid, existingId, cls, RoadClass.width cls) |> ignore
-            added <- added + 1
-            stuck <- 0
-          | None ->
-            let newId = g.AddNode(p2, cls)
-            g.AddEdge(nid, newId, cls, RoadClass.width cls) |> ignore
-            added <- added + 1
-            stuck <- 0
+          if r > t0 then t0 <- r
+          true
+      else
+        if r < t0 then false
+        else
+          if r < t1 then t1 <- r
+          true
+
+  if update -dx (startPt.X - rect.X)
+     && update dx (rect.X + rect.W - startPt.X)
+     && update -dz (startPt.Y - rect.Z)
+     && update dz (rect.Z + rect.H - startPt.Y) then
+    let clippedStart = Vec2.Create(startPt.X + dx * t0, startPt.Y + dz * t0)
+    let clippedEnd = Vec2.Create(startPt.X + dx * t1, startPt.Y + dz * t1)
+    Some (clippedStart, clippedEnd)
+  else
+    None
+
+let private frontageWeight roadClass length =
+  let multiplier =
+    match roadClass with
+    | Boulevard -> 1.75f
+    | Avenue -> 1.40f
+    | Street -> 1.0f
+    | Lane -> 0.78f
+    | Alley -> 0.60f
+  length * multiplier
+
+let private frontageBaseDepth roadClass =
+  match roadClass with
+  | Boulevard -> 2.8f
+  | Avenue -> 2.4f
+  | Street -> 1.9f
+  | Lane -> 1.5f
+  | Alley -> 1.15f
+
+let private frontageSetback roadClass buildingType =
+  let roadOffset =
+    match roadClass with
+    | Boulevard -> 0.95f
+    | Avenue -> 0.72f
+    | Street -> 0.55f
+    | Lane -> 0.42f
+    | Alley -> 0.32f
+  let typeOffset =
+    match buildingType with
+    | Shed | Cottage -> 0.18f
+    | Rowhouse -> 0.10f
+    | Commercial -> 0.02f
+    | Tower -> 0.0f
+    | Skyscraper -> -0.05f
+  max 0.18f (roadOffset + typeOffset)
+
+let private frontageFootprint roadClass buildingType parcelWidth complexity =
+  let baseWidth, depthScale =
+    match buildingType with
+    | Shed -> max 0.45f (parcelWidth * 0.55f), 0.68f
+    | Cottage -> max 0.55f (parcelWidth * 0.62f), 0.88f
+    | Rowhouse -> max 0.42f (parcelWidth * 0.46f), 1.18f
+    | Commercial -> max 0.70f (parcelWidth * 0.78f), 0.96f
+    | Tower -> max 0.78f (parcelWidth * 0.72f), 1.08f
+    | Skyscraper -> max 0.90f (parcelWidth * 0.82f), 1.20f
+  let complexityScale = complexityFootprintFactor complexity |> min 1.25f
+  let widthAlongRoad = baseWidth * complexityScale
+  let depth = max 0.55f (frontageBaseDepth roadClass * depthScale * min 1.20f complexityScale)
+  widthAlongRoad, depth
+
+let private orientedBounds width depth angleDegrees =
+  let angleRadians = angleDegrees * MathF.PI / 180.0f
+  let c = abs (MathF.Cos angleRadians)
+  let s = abs (MathF.Sin angleRadians)
+  width * c + depth * s, width * s + depth * c
+
+let private clampPointToRect (rect: TRect) (x: float32, z: float32) =
+  let maxX = rect.X + rect.W
+  let maxZ = rect.Z + rect.H
+  min maxX (max rect.X x), min maxZ (max rect.Z z)
+
+let private uniqueHullPoints (points: (float32 * float32) list) =
+  points
+  |> List.distinctBy (fun (x, z) -> MathF.Round(x * 100.0f), MathF.Round(z * 100.0f))
+
+let private cross2D (ox: float32, oz: float32) (ax: float32, az: float32) (bx: float32, bz: float32) =
+  (ax - ox) * (bz - oz) - (az - oz) * (bx - ox)
+
+let private convexHull (points: (float32 * float32) list) =
+  let sorted =
+    points
+    |> uniqueHullPoints
+    |> List.sortBy id
+
+  match sorted with
+  | [] | [_] | [_; _] -> sorted
+  | _ ->
+      let buildHalf ordered =
+        let hull = ResizeArray<float32 * float32>()
+        for point in ordered do
+          while hull.Count >= 2 &&
+                cross2D hull.[hull.Count - 2] hull.[hull.Count - 1] point <= 0.0f do
+            hull.RemoveAt(hull.Count - 1)
+          hull.Add point
+        hull |> Seq.toList
+
+      let lower = buildHalf sorted
+      let upper = buildHalf (sorted |> List.rev)
+      (lower |> List.take (lower.Length - 1))
+      @ (upper |> List.take (upper.Length - 1))
+
+let private roadSurfaceRibbonPoints (rect: TRect) (road: Road) =
+  let startPt = Vec2.Create(road.FromPos.X, road.FromPos.Z)
+  let endPt = Vec2.Create(road.ToPos.X, road.ToPos.Z)
+  match clipSegmentToRect rect startPt endPt with
+  | Some (clippedStart, clippedEnd) ->
+      let delta = Vec2.sub clippedEnd clippedStart
+      let len = Vec2.length delta
+      if len <= 0.5f then []
+      else
+        let dir = Vec2.normalize delta
+        let normal = Vec2.Create(-dir.Y, dir.X)
+        let pad = max 0.55f (max road.FromPos.Y road.ToPos.Y + 0.45f)
+        let samples = max 2 (int (MathF.Ceiling(len / 6.0f)))
+        [ for idx in 0 .. samples do
+            let t = float32 idx / float32 samples
+            let along = Vec2.add clippedStart (Vec2.scale (t * len) dir)
+            let left = Vec2.add along (Vec2.scale pad normal)
+            let right = Vec2.add along (Vec2.scale -pad normal)
+            yield clampPointToRect rect (left.X, left.Y)
+            yield clampPointToRect rect (right.X, right.Y) ]
+  | None -> []
+
+let private buildingSurfacePoints (rect: TRect) (building: FuncBuilding) =
+  [ clampPointToRect rect (building.X, building.Z)
+    clampPointToRect rect (building.X + building.W, building.Z)
+    clampPointToRect rect (building.X + building.W, building.Z + building.D)
+    clampPointToRect rect (building.X, building.Z + building.D)
+    clampPointToRect rect (building.X + building.W / 2.0f, building.Z + building.D / 2.0f) ]
+
+let computeBlockSurfaceHull (block: ModuleBlock) (blockBuildings: FuncBuilding list) (roads: Road list) =
+  let fallback =
+    let inset = TRect.inset 0.8f block.Rect
+    [ inset.X, inset.Z
+      inset.X + inset.W, inset.Z
+      inset.X + inset.W, inset.Z + inset.H
+      inset.X, inset.Z + inset.H ]
+
+  let points =
+    (roads |> List.collect (roadSurfaceRibbonPoints block.Rect))
+    @ (blockBuildings |> List.collect (buildingSurfacePoints block.Rect))
+    |> uniqueHullPoints
+
+  match points.Length >= 3 with
+  | false -> fallback
+  | true ->
+      let hull = convexHull points
+      if hull.Length >= 3 then hull else fallback
 
 /// Point-in-polygon test (ray casting)
 let pointInPoly (poly: Vec2 list) (px: float32) (pz: float32) : bool =
@@ -2025,7 +4835,12 @@ let placeBuildingsInLots
   (rng: Random)
   (gitMeta: Map<string, GitMeta>)
   : FuncBuilding list =
-  let pairs = List.zip (lots |> List.truncate funcs.Length) (funcs |> List.sortByDescending (fun f -> f.LineCount))
+  let assignedLots = lots |> List.truncate funcs.Length
+  let assignedFuncs =
+    funcs
+    |> List.sortByDescending (fun f -> f.LineCount)
+    |> List.truncate assignedLots.Length
+  let pairs = List.zip assignedLots assignedFuncs
   [ for (lot, f) in pairs do
       let heat, callers, callees =
         heatMap |> Map.tryFind f.QualifiedName |> Option.defaultValue (0.0f, 0, 0)
@@ -2044,15 +4859,51 @@ let placeBuildingsInLots
         | _ -> 0.75f
       let baseMargin = (1.0f - sqrt coverage) * min lot.Rect.W lot.Rect.H * 0.5f
       let lotMargin = min (min (lot.Rect.W / 4.0f) (lot.Rect.H / 4.0f)) (max 0.05f (baseMargin * frontageBias))
-      let envelope = TRect.inset lotMargin lot.Rect
+      let frontageDepthScale =
+        match bt with
+        | Shed | Cottage -> 0.55f
+        | Rowhouse -> 0.72f
+        | Commercial | Tower -> 0.84f
+        | Skyscraper -> 0.92f
+      let frontageSetback = lotMargin * 0.5f
+      let bodyDepth = max 0.25f (lot.Rect.H * frontageDepthScale - frontageSetback)
+      let bodyWidth = max 0.25f (lot.Rect.W * frontageDepthScale - frontageSetback)
+      let envelope =
+        match lot.FrontageEdge with
+        | North ->
+            TRect.create
+              (lot.Rect.X + lotMargin)
+              (lot.Rect.Z + frontageSetback)
+              (max 0.25f (lot.Rect.W - lotMargin * 2.0f))
+              (min (max 0.25f bodyDepth) (max 0.25f (lot.Rect.H - frontageSetback - lotMargin)))
+        | South ->
+            let h = min (max 0.25f bodyDepth) (max 0.25f (lot.Rect.H - frontageSetback - lotMargin))
+            TRect.create
+              (lot.Rect.X + lotMargin)
+              (lot.Rect.Z + lot.Rect.H - frontageSetback - h)
+              (max 0.25f (lot.Rect.W - lotMargin * 2.0f))
+              h
+        | West ->
+            TRect.create
+              (lot.Rect.X + frontageSetback)
+              (lot.Rect.Z + lotMargin)
+              (min (max 0.25f bodyWidth) (max 0.25f (lot.Rect.W - frontageSetback - lotMargin)))
+              (max 0.25f (lot.Rect.H - lotMargin * 2.0f))
+        | East ->
+            let w = min (max 0.25f bodyWidth) (max 0.25f (lot.Rect.W - frontageSetback - lotMargin))
+            TRect.create
+              (lot.Rect.X + lot.Rect.W - frontageSetback - w)
+              (lot.Rect.Z + lotMargin)
+              w
+              (max 0.25f (lot.Rect.H - lotMargin * 2.0f))
       let ageDays =
         gitMeta |> Map.tryFind f.FilePath
         |> Option.map (fun m -> float32 (DateTimeOffset.Now - m.LastCommitDate).TotalDays)
         |> Option.defaultValue 180.0f
       let rotation =
-        match lot.Rect.W >= lot.Rect.H with
-        | true -> 0.0f
-        | false -> 90.0f
+        match lot.FrontageEdge with
+        | North | South -> 0.0f
+        | East | West -> 90.0f
       let jitter = (rng.NextSingle() - 0.5f) * 3.0f * max 0.25f (1.0f - coverage)
       yield {
         Func = f
@@ -2191,21 +5042,34 @@ let packAlongRoads
   : FuncBuilding list =
   if funcs.IsEmpty then []
   else
-    // Extract 2D segments; half-width is packed in FromPos.Y by convention
-    let segs =
-      [ for r in roads do
-          let ax = r.FromPos.X
-          let az = r.FromPos.Z
-          let bx = r.ToPos.X
-          let bz = r.ToPos.Z
-          let dx = bx - ax
-          let dz = bz - az
-          let len = sqrt (dx * dx + dz * dz)
-          if len > 0.3f then
-            let hw = r.FromPos.Y
-            yield (ax, az, dx / len, dz / len, len, hw) ]
+    let frontages =
+      [ for road in roads do
+          let startPt = Vec2.Create(road.FromPos.X, road.FromPos.Z)
+          let endPt = Vec2.Create(road.ToPos.X, road.ToPos.Z)
+          match clipSegmentToRect blockBounds startPt endPt with
+          | Some (clippedStart, clippedEnd) ->
+              let delta = Vec2.sub clippedEnd clippedStart
+              let len = Vec2.length delta
+              if len > 0.9f then
+                let dir = Vec2.normalize delta
+                let leftNormal = Vec2.Create(-dir.Y, dir.X)
+                let roadClass = roadClassForWeight road.Weight
+                let halfWidth = max road.FromPos.Y road.ToPos.Y
+                yield { Start = clippedStart
+                        Dir = dir
+                        Normal = leftNormal
+                        Length = len
+                        HalfWidth = halfWidth
+                        RoadClass = roadClass }
+                yield { Start = clippedStart
+                        Dir = dir
+                        Normal = Vec2.negate leftNormal
+                        Length = len
+                        HalfWidth = halfWidth
+                        RoadClass = roadClass }
+          | None -> () ]
 
-    if segs.IsEmpty then
+    if frontages.IsEmpty then
       // No internal Weber roads — fall back to block-perimeter packing
       let poly =
         [ Vec2.Create(blockBounds.X,                 blockBounds.Z)
@@ -2214,7 +5078,13 @@ let packAlongRoads
           Vec2.Create(blockBounds.X,                 blockBounds.Z + blockBounds.H) ]
       packAlongEdges poly funcs heatMap districtColor rng gitMeta
     else
-      let totalLen    = segs |> List.sumBy (fun (_,_,_,_,l,_) -> l) |> max 0.001f
+      let sortedFrontages =
+        frontages
+        |> List.sortByDescending (fun frontage -> frontageWeight frontage.RoadClass frontage.Length)
+      let frontageCounts =
+        sortedFrontages
+        |> List.map (fun frontage -> frontageWeight frontage.RoadClass frontage.Length)
+        |> allocateByWeights funcs.Length
       let sortedFuncs = funcs |> List.sortByDescending (fun f -> f.LineCount)
       let mutable remaining = sortedFuncs
       let allBuildings = ResizeArray<FuncBuilding>()
@@ -2224,69 +5094,57 @@ let packAlongRoads
       let bz1 = blockBounds.Z + blockBounds.H
       let eps = 0.6f  // small tolerance for near-boundary placements
 
-      let placeSide (chunk: FuncDef list) (ax: float32) (az: float32) (dirX: float32) (dirZ: float32) (segLen: float32) (hw: float32) (sideSign: float32) =
-        // Perpendicular inward from road: left or right of direction vector
-        let perpX = -dirZ * sideSign
-        let perpZ =  dirX * sideSign
-        let spacing  = segLen / float32 (chunk.Length + 1)
-        let roadAngle = MathF.Atan2(dirZ, dirX) * 180.0f / MathF.PI
+      let placeFrontage (frontage: FrontageStrip) (chunk: FuncDef list) =
+        let spacing = frontage.Length / float32 (chunk.Length + 1)
+        let roadAngle = MathF.Atan2(frontage.Dir.Y, frontage.Dir.X) * 180.0f / MathF.PI
+        let parcelGap = min 0.75f (max 0.18f (spacing * 0.18f))
         chunk |> List.iteri (fun idx f ->
           let heat, callers, callees =
             heatMap |> Map.tryFind f.QualifiedName |> Option.defaultValue (0.0f, 0, 0)
           let complexity = computeComplexity f.Body
-          let bt   = classifyBuilding f.LineCount complexity heat
-          // Per-type setback: residential sits further back (yard/garden); skyscrapers hug the curb
-          let typeSetback =
-            match bt with
-            | Shed | Cottage -> hw + 0.9f
-            | Rowhouse       -> hw + 0.6f
-            | _              -> hw + 0.35f
-          let t  = float32 (idx + 1) * spacing
-          let px = ax + t * dirX + perpX * typeSetback
-          let pz = az + t * dirZ + perpZ * typeSetback
-          if px >= bx0 - eps && px <= bx1 + eps && pz >= bz0 - eps && pz <= bz1 + eps then
-            // Coverage ratio: residential = small building in large lot; skyscraper fills the lot
-            let coverageRatio =
-              match bt with
-              | Shed | Cottage -> 0.45f
-              | Rowhouse       -> 0.65f
-              | Commercial | Tower -> 0.80f
-              | Skyscraper     -> 0.90f
-            let fp = max 0.3f (min (spacing * coverageRatio) (MathF.Log(float32 f.LineCount + 1.0f) * 0.5f + 0.3f)) * complexityFootprintFactor complexity
+          let bt = classifyBuilding f.LineCount complexity heat
+          let parcelWidth = max 0.70f (spacing - parcelGap)
+          let widthAlongRoad, depth = frontageFootprint frontage.RoadClass bt parcelWidth complexity
+          let setback = frontage.HalfWidth + frontageSetback frontage.RoadClass bt
+          let alongJitter = (rng.NextSingle() - 0.5f) * parcelGap * 0.35f
+          let centerAlong = float32 (idx + 1) * spacing + alongJitter
+          let center =
+            let alongPoint = Vec2.add frontage.Start (Vec2.scale centerAlong frontage.Dir)
+            Vec2.add alongPoint (Vec2.scale (setback + depth / 2.0f) frontage.Normal)
+          let worldW, worldD = orientedBounds widthAlongRoad depth roadAngle
+          let px = center.X - worldW / 2.0f
+          let pz = center.Y - worldD / 2.0f
+          if px >= bx0 - eps && px + worldW <= bx1 + eps && pz >= bz0 - eps && pz + worldD <= bz1 + eps then
             let ageDays =
               gitMeta |> Map.tryFind f.FilePath
               |> Option.map (fun m -> float32 (DateTimeOffset.Now - m.LastCommitDate).TotalDays)
               |> Option.defaultValue 180.0f
-            let jitter = (rng.NextSingle() - 0.5f) * 4.0f
+            let jitter = (rng.NextSingle() - 0.5f) * 2.0f
             allBuildings.Add {
               Func = f; Heat = heat; CallerCount = callers; CalleeCount = callees
               Complexity = complexity
               BuildingType = bt
               GitAgeDays = ageDays
-              X = px - fp / 2.0f; Z = pz - fp / 2.0f
-              W = fp; D = fp
+              X = px; Z = pz
+              W = worldW; D = worldD
               H = BuildingType.height bt f.LineCount heat
               Rotation  = roadAngle + jitter
               Color     = BuildingType.wallColor bt f.Name ageDays
               RoofColor = BuildingType.roofColor bt districtColor
               District  = f.Module })
 
-      for (ax, az, dirX, dirZ, segLen, hw) in segs do
+      for (frontage, count) in List.zip sortedFrontages frontageCounts do
         if not remaining.IsEmpty then
-          let count = max 1 (int (float32 funcs.Length * segLen / totalLen + 0.5f))
-          let take  = min count remaining.Length
-          if take > 0 then
-            let chunk   = remaining |> List.take take
-            remaining  <- remaining |> List.skip take
-            // Split chunk evenly between left side (+1) and right side (−1)
-            let lCount  = (take + 1) / 2
-            placeSide (chunk |> List.take lCount)   ax az dirX dirZ segLen hw  1.0f
-            placeSide (chunk |> List.skip lCount)   ax az dirX dirZ segLen hw -1.0f
+          let take = min count remaining.Length
+          if take > 0 && frontage.Length > 0.9f then
+            let chunk = remaining |> List.take take
+            remaining <- remaining |> List.skip take
+            placeFrontage frontage chunk
 
-      // Overflow spills to the longest segment
+      // Overflow spills to the strongest frontage corridor.
       if not remaining.IsEmpty then
-        let (ax, az, dirX, dirZ, segLen, hw) = segs |> List.maxBy (fun (_,_,_,_,l,_) -> l)
-        placeSide remaining ax az dirX dirZ segLen hw 1.0f
+        let strongestFrontage = sortedFrontages |> List.head
+        placeFrontage strongestFrontage remaining
 
       // Ultimate fallback: if every placement was out-of-bounds, use perimeter packing
       if allBuildings.Count = 0 then
@@ -2315,28 +5173,10 @@ let layoutWeberDistrict
   else
     let blockDemand =
       max 1 (int (MathF.Ceiling(float32 funcs.Length / 4.0f)))
-    let streets, blocks = planHierarchicalDistrict rect blockDemand organic rng
-    let usableBlocks =
-      match blocks with
-      | [] -> [ ({ Rect = rect; Frontage = [ Street ] } : PlannedBlock) ]
-      | xs -> xs
-    let funcsPerBlock =
-      usableBlocks
-      |> List.map (fun block -> TRect.area block.Rect)
-      |> allocateByWeights funcs.Length
-    let blockAssignments =
-      List.zip usableBlocks funcsPerBlock
-      |> List.filter (fun (_, count) -> count > 0)
-    let sortedFuncs = funcs |> List.sortByDescending (fun f -> f.LineCount)
-    let mutable remaining = sortedFuncs
+    let growthPlan, grownRoads = buildMajorStreetGrowth rect blockDemand organic rng
+    let districtRoads = canonicalizeRoads grownRoads
     let buildings =
-      [ for (block, count) in blockAssignments do
-          let blockFuncs = remaining |> List.truncate count
-          remaining <- remaining |> List.skip blockFuncs.Length
-          if not blockFuncs.IsEmpty then
-            let lots = subdivideBlockIntoLots block.Rect blockFuncs.Length
-            yield! placeBuildingsInLots lots blockFuncs heatMap districtColor rng gitMeta ]
-    let districtRoads = streets |> List.map (plannedStreetToRoad organic)
+      packAlongRoads districtRoads rect funcs heatMap districtColor rng gitMeta
     (buildings, districtRoads)
 
 
@@ -2412,6 +5252,19 @@ let buildArterialNetwork (blocks: ModuleBlock[]) (callEdges: CallEdge list) : Ro
         ToPos   = Vector3(xHi, hw, bz)
         Weight = coupling; Color = clr; Organic = 0.0f })
 
+let buildVisibleRoadNetwork (_projectZones: ('a * TRect) list) (primaryRoads: Road list) : Road list =
+  let seen = System.Collections.Generic.HashSet<struct(float32 * float32 * float32 * float32 * int)>()
+  primaryRoads
+  |> List.filter (fun road ->
+    let key =
+      struct (
+        min road.FromPos.X road.ToPos.X,
+        min road.FromPos.Z road.ToPos.Z,
+        max road.FromPos.X road.ToPos.X,
+        max road.FromPos.Z road.ToPos.Z,
+        road.Weight)
+    seen.Add(key))
+
 // ─── Day/Night Cycle ────────────────────────────────────────────────────────
 
 /// Compute window-lighting night scale from sun elevation.
@@ -2484,20 +5337,21 @@ let buildCity (repoRoot: string) (projectFile: string option) =
       |> List.collect snd
       |> List.map (fun f -> gitMetaByFile |> Map.tryFind f.FilePath |> Option.defaultValue GitMeta.empty)
     let projectOrganic = districtOrganicFactor today projectFileMetas
-    let projectRoads, projectBlocks =
-      planHierarchicalDistrict insetZone projModules.Length projectOrganic (Random(int (fnvHash proj)))
+    let projectPlan, projectRoads =
+      buildMajorStreetGrowth insetZone projModules.Length projectOrganic (Random(int (fnvHash proj)))
     let assignedRects =
-      match projectBlocks with
+      match projectPlan.QuarterRects with
       | [] -> [ insetZone ]
       | xs ->
           xs
-          |> List.sortByDescending (fun block -> blockScore insetZone block.Rect)
+          |> List.sortByDescending (blockScore insetZone)
           |> List.truncate projModules.Length
-          |> List.map _.Rect
     let fallbackRects =
       assignedRects
       |> List.append (List.init (max 0 (projModules.Length - assignedRects.Length)) (fun _ -> insetZone))
-    allPrimaryRoads <- allPrimaryRoads @ (projectRoads |> List.map (plannedStreetToRoad projectOrganic))
+    allPrimaryRoads <-
+      allPrimaryRoads
+      @ projectRoads
     for ((modName, _), rect) in List.zip projModules fallbackRects do
       let color = districtPalette.[colorIdx % districtPalette.Length]
       allBlocks.Add({ Module = modName; Project = proj; Rect = rect; Color = color })
@@ -2540,42 +5394,16 @@ let buildCity (repoRoot: string) (projectFile: string option) =
 
   // Inter-district arterial Boulevards at block boundaries, width scaled by call coupling
   let arterials = buildArterialNetwork (allBlocks.ToArray()) callEdges
-  allPrimaryRoads <- allPrimaryRoads @ arterials
-  allAlleyRoads <- allAlleyRoads @ arterials
-
-  // Generate roads from project boundaries plus the explicit street hierarchy
-  let roadSet = System.Collections.Generic.HashSet<struct(float32 * float32 * float32 * float32)>()
-  let roads = ResizeArray<Road>()
-  let addEdge x1 z1 x2 z2 cls =
-    let key = struct(min x1 x2, min z1 z2, max x1 x2, max z1 z2)
-    if roadSet.Add(key) then
-      roads.Add({ FromFunc = ""; ToFunc = ""
-                  FromPos = Vector3(x1, 0.0f, z1)
-                  ToPos = Vector3(x2, 0.0f, z2)
-                  Weight = RoadClass.tier cls
-                  Color = Color(70uy, 70uy, 75uy, 255uy)
-                  Organic = 0.0f })
-  // Project zone edges → Avenues
-  for (_, zone) in projectZones do
-    addEdge zone.X zone.Z (zone.X + zone.W) zone.Z Avenue
-    addEdge (zone.X + zone.W) zone.Z (zone.X + zone.W) (zone.Z + zone.H) Avenue
-    addEdge (zone.X + zone.W) (zone.Z + zone.H) zone.X (zone.Z + zone.H) Avenue
-    addEdge zone.X (zone.Z + zone.H) zone.X zone.Z Avenue
-  for road in allPrimaryRoads do
-    let cls =
-      match road.Weight with
-      | w when w >= RoadClass.tier Boulevard -> Boulevard
-      | w when w >= RoadClass.tier Avenue -> Avenue
-      | w when w >= RoadClass.tier Street -> Street
-      | _ -> Lane
-    addEdge road.FromPos.X road.FromPos.Z road.ToPos.X road.ToPos.Z cls
+  let primaryRoads = canonicalizeRoads (allPrimaryRoads @ arterials)
+  let alleyRoads = canonicalizeRoads (allAlleyRoads @ arterials)
+  let roads = buildVisibleRoadNetwork projectZones primaryRoads
 
   let buildings = allBuildings |> List.rev
   let districts = allDistricts |> List.rev
   let blocks = allBlocks.ToArray()
   printfn "City built: %d buildings, %d districts, %d roads, %d blocks, %d alleys"
-    buildings.Length districts.Length roads.Count blocks.Length allAlleyRoads.Length
-  (buildings, districts, roads |> Seq.toList, blocks, callEdges, allAlleyRoads)
+    buildings.Length districts.Length roads.Length blocks.Length alleyRoads.Length
+  (buildings, districts, roads, blocks, callEdges, alleyRoads)
 
 let buildRelationMaps
   (buildings: FuncBuilding[])
@@ -2586,7 +5414,7 @@ let buildRelationMaps
     |> Array.map (fun b -> b.Func.QualifiedName, b)
     |> Map.ofArray
 
-  let toRelationMap pairs =
+  let toRelationMap (pairs: (string * RelatedBuilding) list) =
     pairs
     |> List.groupBy fst
     |> List.map (fun (key, rels) ->
@@ -2747,6 +5575,46 @@ let inline addQuadToArrays
   setV verts (vi+4) cx cy cz; setN norms (vi+4) nx ny nz; setC cols (vi+4) r g b a
   setV verts (vi+5) dx dy dz; setN norms (vi+5) nx ny nz; setC cols (vi+5) r g b a
 
+let private rotationSinCos (rotationDegrees: float32) =
+  let radians = rotationDegrees * MathF.PI / 180.0f
+  MathF.Cos radians, MathF.Sin radians
+
+let inline private rotateOffsetXZ (cosA: float32) (sinA: float32) (x: float32) (z: float32) =
+  x * cosA - z * sinA, x * sinA + z * cosA
+
+let inline private rotatePointXZ (cx: float32) (cz: float32) (cosA: float32) (sinA: float32) (x: float32) (z: float32) =
+  let dx = x - cx
+  let dz = z - cz
+  let rx, rz = rotateOffsetXZ cosA sinA dx dz
+  cx + rx, cz + rz
+
+let inline private rotateNormalXZ (cosA: float32) (sinA: float32) (nx: float32) (nz: float32) =
+  rotateOffsetXZ cosA sinA nx nz
+
+let private addRotatedQuadToArrays
+  (verts: Span<float32>) (norms: Span<float32>) (cols: Span<byte>)
+  (vi: int)
+  (centerX: float32) (centerZ: float32)
+  (cosA: float32) (sinA: float32)
+  (ax: float32) (ay: float32) (az: float32)
+  (bx: float32) (by: float32) (bz: float32)
+  (cx: float32) (cy: float32) (cz: float32)
+  (dx: float32) (dy: float32) (dz: float32)
+  (nx: float32) (ny: float32) (nz: float32)
+  (r: byte) (g: byte) (b: byte) (a: byte) =
+  let ax', az' = rotatePointXZ centerX centerZ cosA sinA ax az
+  let bx', bz' = rotatePointXZ centerX centerZ cosA sinA bx bz
+  let cx', cz' = rotatePointXZ centerX centerZ cosA sinA cx cz
+  let dx', dz' = rotatePointXZ centerX centerZ cosA sinA dx dz
+  let nx', nz' = rotateNormalXZ cosA sinA nx nz
+  addQuadToArrays verts norms cols vi
+    ax' ay az'
+    bx' by bz'
+    cx' cy cz'
+    dx' dy dz'
+    nx' ny nz'
+    r g b a
+
 /// Add a cube (6 faces × 6 verts = 36 verts) to mesh arrays.
 let inline addCubeToArrays
   (verts: Span<float32>) (norms: Span<float32>) (cols: Span<byte>)
@@ -2771,6 +5639,76 @@ let inline addCubeToArrays
   addQuadToArrays verts norms cols (vi+24) x1 y0 z1 x1 y0 z0 x1 y1 z0 x1 y1 z1 1.0f 0.0f 0.0f r g b a
   // -X left
   addQuadToArrays verts norms cols (vi+30) x0 y0 z0 x0 y0 z1 x0 y1 z1 x0 y1 z0 -1.0f 0.0f 0.0f r g b a
+
+let private addOrientedCubeToArraysWithRotation
+  (verts: Span<float32>) (norms: Span<float32>) (cols: Span<byte>)
+  (vi: int) (cx: float32) (cy: float32) (cz: float32)
+  (hw: float32) (hh: float32) (hd: float32)
+  (cosA: float32) (sinA: float32)
+  (r: byte) (g: byte) (b: byte) (a: byte) =
+  let x0 = cx - hw
+  let x1 = cx + hw
+  let y0 = cy - hh
+  let y1 = cy + hh
+  let z0 = cz - hd
+  let z1 = cz + hd
+  addRotatedQuadToArrays verts norms cols vi
+    cx cz cosA sinA
+    x0 y1 z0
+    x0 y1 z1
+    x1 y1 z1
+    x1 y1 z0
+    0.0f 1.0f 0.0f
+    r g b a
+  addRotatedQuadToArrays verts norms cols (vi+6)
+    cx cz cosA sinA
+    x0 y0 z0
+    x1 y0 z0
+    x1 y0 z1
+    x0 y0 z1
+    0.0f -1.0f 0.0f
+    r g b a
+  addRotatedQuadToArrays verts norms cols (vi+12)
+    cx cz cosA sinA
+    x0 y0 z1
+    x1 y0 z1
+    x1 y1 z1
+    x0 y1 z1
+    0.0f 0.0f 1.0f
+    r g b a
+  addRotatedQuadToArrays verts norms cols (vi+18)
+    cx cz cosA sinA
+    x1 y0 z0
+    x0 y0 z0
+    x0 y1 z0
+    x1 y1 z0
+    0.0f 0.0f -1.0f
+    r g b a
+  addRotatedQuadToArrays verts norms cols (vi+24)
+    cx cz cosA sinA
+    x1 y0 z1
+    x1 y0 z0
+    x1 y1 z0
+    x1 y1 z1
+    1.0f 0.0f 0.0f
+    r g b a
+  addRotatedQuadToArrays verts norms cols (vi+30)
+    cx cz cosA sinA
+    x0 y0 z0
+    x0 y0 z1
+    x0 y1 z1
+    x0 y1 z0
+    -1.0f 0.0f 0.0f
+    r g b a
+
+let addOrientedCubeToArrays
+  (verts: Span<float32>) (norms: Span<float32>) (cols: Span<byte>)
+  (vi: int) (cx: float32) (cy: float32) (cz: float32)
+  (hw: float32) (hh: float32) (hd: float32)
+  (rotationDegrees: float32)
+  (r: byte) (g: byte) (b: byte) (a: byte) =
+  let cosA, sinA = rotationSinCos rotationDegrees
+  addOrientedCubeToArraysWithRotation verts norms cols vi cx cy cz hw hh hd cosA sinA r g b a
 
 /// Catmull-Rom control points for a road segment.
 let roadControlPoints
@@ -2888,6 +5826,17 @@ let addCubeToArraysArr
   let c = cols.AsSpan()
   addCubeToArrays v n c vi cx cy cz hw hh hd r g b a
 
+let addOrientedCubeToArraysArr
+  (cx: float32) (cy: float32) (cz: float32)
+  (hw: float32) (hh: float32) (hd: float32)
+  (rotationDegrees: float32)
+  (r: byte) (g: byte) (b: byte) (a: byte) : float32[] * float32[] * byte[] =
+  let v = Array.zeroCreate<float32> (36 * 3)
+  let n = Array.zeroCreate<float32> (36 * 3)
+  let c = Array.zeroCreate<byte>    (36 * 4)
+  addOrientedCubeToArrays (v.AsSpan()) (n.AsSpan()) (c.AsSpan()) 0 cx cy cz hw hh hd rotationDegrees r g b a
+  v, n, c
+
 let addRoadQuadToArraysArr
   (verts: float32[]) (norms: float32[]) (cols: byte[])
   (vi: int)
@@ -2948,59 +5897,133 @@ let addHullSlabToArrays
 /// Write body sub-cubes for a compound building. Each SubCube gets its own height.
 /// cx, cz = building center (world coords); baseH = base building height.
 /// Returns the number of vertices written (36 per sub-cube).
-let inline addCompoundBody
+let addCompoundBody
   (verts: Span<float32>) (norms: Span<float32>) (cols: Span<byte>)
   (vi: int) (cubes: SubCube[])
   (cx: float32) (cz: float32) (baseH: float32)
+  (cosA: float32) (sinA: float32)
   (r: byte) (g: byte) (b: byte) (a: byte) : int =
   let mutable off = 0
   for cube in cubes do
     let h = baseH * cube.HeightScale
     let cy = h / 2.0f + 0.02f
     let hh = h / 2.0f
-    addCubeToArrays verts norms cols (vi + off)
-      (cx + cube.CX) cy (cz + cube.CZ) cube.HW hh cube.HD r g b a
+    let offX, offZ = rotateOffsetXZ cosA sinA cube.CX cube.CZ
+    addOrientedCubeToArraysWithRotation verts norms cols (vi + off)
+      (cx + offX) cy (cz + offZ) cube.HW hh cube.HD cosA sinA r g b a
     off <- off + 36
   off
 
 /// Write a pitched gable roof for a single sub-cube position (always 36 verts).
 /// Faces: left slope, right slope, front gable (degenerate tri), back gable, bottom, ridge cap.
 /// Ridge runs along Z; pitch is in X direction.
-let inline addGableToArrays
+let addGableToArrays
   (verts: Span<float32>) (norms: Span<float32>) (cols: Span<byte>)
   (vi: int)
   (cx: float32) (cy: float32) (cz: float32)
   (hw: float32) (hd: float32)
+  (r: byte) (g: byte) (b: byte) (a: byte) =
+  let cosA, sinA = rotationSinCos 0.0f
+  let apexH = hw * 0.6f
+  let apexY = cy + apexH
+  let slopeLen = MathF.Sqrt(apexH * apexH + hw * hw)
+  let snx = apexH / slopeLen   // right-slope normal X
+  let sny = hw    / slopeLen   // both slopes normal Y
+  addRotatedQuadToArrays verts norms cols (vi + 0)
+    cx cz cosA sinA
+    (cx-hw) cy    (cz-hd)   (cx-hw) cy    (cz+hd)
+    (cx)    apexY (cz+hd)   (cx)    apexY (cz-hd)
+    (-snx) sny 0.0f
+    r g b a
+  addRotatedQuadToArrays verts norms cols (vi + 6)
+    cx cz cosA sinA
+    (cx+hw) cy    (cz-hd)   (cx)    apexY (cz-hd)
+    (cx)    apexY (cz+hd)   (cx+hw) cy    (cz+hd)
+    snx sny 0.0f
+    r g b a
+  addRotatedQuadToArrays verts norms cols (vi + 12)
+    cx cz cosA sinA
+    (cx+hw) cy    (cz-hd)   (cx-hw) cy    (cz-hd)
+    (cx)    apexY (cz-hd)   (cx)    apexY (cz-hd)
+    0.0f 0.0f -1.0f
+    r g b a
+  addRotatedQuadToArrays verts norms cols (vi + 18)
+    cx cz cosA sinA
+    (cx-hw) cy    (cz+hd)   (cx+hw) cy    (cz+hd)
+    (cx)    apexY (cz+hd)   (cx)    apexY (cz+hd)
+    0.0f 0.0f 1.0f
+    r g b a
+  addRotatedQuadToArrays verts norms cols (vi + 24)
+    cx cz cosA sinA
+    (cx-hw) cy (cz-hd)   (cx+hw) cy (cz-hd)
+    (cx+hw) cy (cz+hd)   (cx-hw) cy (cz+hd)
+    0.0f -1.0f 0.0f
+    r g b a
+  addRotatedQuadToArrays verts norms cols (vi + 30)
+    cx cz cosA sinA
+    (cx-0.025f) apexY (cz-hd)   (cx+0.025f) apexY (cz-hd)
+    (cx+0.025f) apexY (cz+hd)   (cx-0.025f) apexY (cz+hd)
+    0.0f 1.0f 0.0f
+    r g b a
+
+let private addOrientedGableToArraysWithRotation
+  (verts: Span<float32>) (norms: Span<float32>) (cols: Span<byte>)
+  (vi: int)
+  (cx: float32) (cy: float32) (cz: float32)
+  (hw: float32) (hd: float32)
+  (cosA: float32) (sinA: float32)
   (r: byte) (g: byte) (b: byte) (a: byte) =
   let apexH = hw * 0.6f
   let apexY = cy + apexH
   let slopeLen = MathF.Sqrt(apexH * apexH + hw * hw)
   let snx = apexH / slopeLen   // right-slope normal X
   let sny = hw    / slopeLen   // both slopes normal Y
-  // Left slope (normal = left-up)
-  addQuadToArrays verts norms cols vi
+  addRotatedQuadToArrays verts norms cols (vi + 0)
+    cx cz cosA sinA
     (cx-hw) cy    (cz-hd)   (cx-hw) cy    (cz+hd)
-    (cx)    apexY (cz+hd)   (cx)    apexY (cz-hd)   (-snx) sny 0.0f r g b a
-  // Right slope (normal = right-up)
-  addQuadToArrays verts norms cols (vi+6)
+    (cx)    apexY (cz+hd)   (cx)    apexY (cz-hd)
+    (-snx) sny 0.0f
+    r g b a
+  addRotatedQuadToArrays verts norms cols (vi + 6)
+    cx cz cosA sinA
     (cx+hw) cy    (cz-hd)   (cx)    apexY (cz-hd)
-    (cx)    apexY (cz+hd)   (cx+hw) cy    (cz+hd)   snx sny 0.0f r g b a
-  // Front gable end (degenerate quad: C=D=apex → renders as one triangle)
-  addQuadToArrays verts norms cols (vi+12)
+    (cx)    apexY (cz+hd)   (cx+hw) cy    (cz+hd)
+    snx sny 0.0f
+    r g b a
+  addRotatedQuadToArrays verts norms cols (vi + 12)
+    cx cz cosA sinA
     (cx+hw) cy    (cz-hd)   (cx-hw) cy    (cz-hd)
-    (cx)    apexY (cz-hd)   (cx)    apexY (cz-hd)   0.0f 0.0f -1.0f r g b a
-  // Back gable end
-  addQuadToArrays verts norms cols (vi+18)
+    (cx)    apexY (cz-hd)   (cx)    apexY (cz-hd)
+    0.0f 0.0f -1.0f
+    r g b a
+  addRotatedQuadToArrays verts norms cols (vi + 18)
+    cx cz cosA sinA
     (cx-hw) cy    (cz+hd)   (cx+hw) cy    (cz+hd)
-    (cx)    apexY (cz+hd)   (cx)    apexY (cz+hd)   0.0f 0.0f 1.0f r g b a
-  // Bottom face (underside of roof assembly)
-  addQuadToArrays verts norms cols (vi+24)
+    (cx)    apexY (cz+hd)   (cx)    apexY (cz+hd)
+    0.0f 0.0f 1.0f
+    r g b a
+  addRotatedQuadToArrays verts norms cols (vi + 24)
+    cx cz cosA sinA
     (cx-hw) cy (cz-hd)   (cx+hw) cy (cz-hd)
-    (cx+hw) cy (cz+hd)   (cx-hw) cy (cz+hd)         0.0f -1.0f 0.0f r g b a
-  // Ridge cap (thin strip along the apex)
-  addQuadToArrays verts norms cols (vi+30)
+    (cx+hw) cy (cz+hd)   (cx-hw) cy (cz+hd)
+    0.0f -1.0f 0.0f
+    r g b a
+  addRotatedQuadToArrays verts norms cols (vi + 30)
+    cx cz cosA sinA
     (cx-0.025f) apexY (cz-hd)   (cx+0.025f) apexY (cz-hd)
-    (cx+0.025f) apexY (cz+hd)   (cx-0.025f) apexY (cz+hd)   0.0f 1.0f 0.0f r g b a
+    (cx+0.025f) apexY (cz+hd)   (cx-0.025f) apexY (cz+hd)
+    0.0f 1.0f 0.0f
+    r g b a
+
+let addOrientedGableToArrays
+  (verts: Span<float32>) (norms: Span<float32>) (cols: Span<byte>)
+  (vi: int)
+  (cx: float32) (cy: float32) (cz: float32)
+  (hw: float32) (hd: float32)
+  (rotationDegrees: float32)
+  (r: byte) (g: byte) (b: byte) (a: byte) =
+  let cosA, sinA = rotationSinCos rotationDegrees
+  addOrientedGableToArraysWithRotation verts norms cols vi cx cy cz hw hd cosA sinA r g b a
 
 /// Array-backed wrapper for addGableToArrays (testing only — no GPU allocation).
 /// Returns (positionFloats, normalFloats, colorBytes) for 36 verts.
@@ -3014,21 +6037,34 @@ let addGableToArraysArr
   addGableToArrays (v.AsSpan()) (n.AsSpan()) (c.AsSpan()) 0 cx cy cz hw hd r g b a
   v, n, c
 
+let addOrientedGableToArraysArr
+  (cx: float32) (cy: float32) (cz: float32)
+  (hw: float32) (hd: float32)
+  (rotationDegrees: float32)
+  (r: byte) (g: byte) (b: byte) (a: byte) : float32[] * float32[] * byte[] =
+  let v = Array.zeroCreate<float32> (36 * 3)
+  let n = Array.zeroCreate<float32> (36 * 3)
+  let c = Array.zeroCreate<byte>    (36 * 4)
+  addOrientedGableToArrays (v.AsSpan()) (n.AsSpan()) (c.AsSpan()) 0 cx cy cz hw hd rotationDegrees r g b a
+  v, n, c
+
 /// Write roof caps for a compound building (matching each sub-cube).
 /// Returns the number of vertices written (36 per sub-cube).
-let inline addCompoundRoof
+let addCompoundRoof
   (verts: Span<float32>) (norms: Span<float32>) (cols: Span<byte>)
   (vi: int) (cubes: SubCube[])
   (cx: float32) (cz: float32) (baseH: float32) (roofHH: float32)
+  (cosA: float32) (sinA: float32)
   (r: byte) (g: byte) (b: byte) (a: byte) : int =
   let pad = 0.02f
   let mutable off = 0
   for cube in cubes do
     let h = baseH * cube.HeightScale
     let roofY = h + 0.06f
-    addCubeToArrays verts norms cols (vi + off)
-      (cx + cube.CX) roofY (cz + cube.CZ)
-      (cube.HW + pad) roofHH (cube.HD + pad) r g b a
+    let offX, offZ = rotateOffsetXZ cosA sinA cube.CX cube.CZ
+    addOrientedCubeToArraysWithRotation verts norms cols (vi + off)
+      (cx + offX) roofY (cz + offZ)
+      (cube.HW + pad) roofHH (cube.HD + pad) cosA sinA r g b a
     off <- off + 36
   off
 
@@ -3060,9 +6096,40 @@ let buildStaticMesh (buildings: FuncBuilding[]) (blocks: ModuleBlock[]) (cityExt
   printfn "Compound shapes: %d total cubes (avg %.1f, max %d per building), %d verts"
     totalBuildingCubes avgCubes maxCubes (totalBuildingCubes * 72)
 
+  let buildingsByDistrict =
+    buildings
+    |> Array.groupBy _.District
+    |> Map.ofArray
+
+  let blockSurfaceHulls =
+    blocks
+    |> Array.map (fun block ->
+      let blockBuildings =
+        buildingsByDistrict
+        |> Map.tryFind block.Module
+        |> Option.defaultValue [||]
+        |> Array.toList
+      let localRoads =
+        alleyRoads
+        |> List.filter (fun road ->
+          let startPt = Vec2.Create(road.FromPos.X, road.FromPos.Z)
+          let endPt = Vec2.Create(road.ToPos.X, road.ToPos.Z)
+          clipSegmentToRect block.Rect startPt endPt |> Option.isSome)
+      block, computeBlockSurfaceHull block blockBuildings localRoads
+
+      )
+
+  let hullEdgeCount hull =
+    match hull.Length < 2 with
+    | true -> 0
+    | false -> hull.Length
+
+  let hullFillVerts hull =
+    max 0 (hull.Length - 2) * 6
+
   // Vertex counts per layer:
   let groundVerts = 6 + 6    // dark ground + city-wide road surface
-  let blockFillVerts = blocks.Length * 6
+  let blockFillVerts = blockSurfaceHulls |> Array.sumBy (fun (_, hull) -> hullFillVerts hull)
   // Spline roads: per segment = 12 verts (top+bottom quad strip), bounded by road.Organic
   let alleyVerts =
     alleyRoads |> List.sumBy (fun road ->
@@ -3072,8 +6139,8 @@ let buildStaticMesh (buildings: FuncBuilding[]) (blocks: ModuleBlock[]) (cityExt
       let z2 = road.ToPos.Z
       let len = MathF.Sqrt((x2-x1)*(x2-x1) + (z2-z1)*(z2-z1))
       segmentCountForOrganic len road.Organic * 12)
-  let sidewalkVerts = blocks.Length * 24   // 4 strips per block
-  let curbVerts = blocks.Length * 144      // 4 thin boxes per block (36 verts each)
+  let sidewalkVerts = blockSurfaceHulls |> Array.sumBy (fun (_, hull) -> hullEdgeCount hull * 12)
+  let curbVerts = blockSurfaceHulls |> Array.sumBy (fun (_, hull) -> hullEdgeCount hull * 36)
   let buildingVerts = totalBuildingCubes * 72 // body (36) + roof (36) per sub-cube
   let totalVerts = groundVerts + blockFillVerts + alleyVerts + sidewalkVerts + curbVerts + buildingVerts
 
@@ -3105,15 +6172,10 @@ let buildStaticMesh (buildings: FuncBuilding[]) (blocks: ModuleBlock[]) (cityExt
   let curbH = 0.08f
   let curbW = 0.05f
 
-  // Layer 2: Block fill — darker lots where buildings sit (luminance ~0.13)
-  for block in blocks do
-    let r = block.Rect
-    let bx = r.X + sidewalkW
-    let bz = r.Z + sidewalkW
-    let bw = r.W - 2.0f * sidewalkW |> max 0.1f
-    let bh = r.H - 2.0f * sidewalkW |> max 0.1f
-    addQuadToArrays v n c vi bx 0.015f bz bx 0.015f (bz + bh) (bx + bw) 0.015f (bz + bh) (bx + bw) 0.015f bz 0.0f 1.0f 0.0f 30uy 30uy 34uy 255uy
-    vi <- vi + 6
+  // Layer 2: Block fill — road/frontage-derived hulls instead of rectangular module slabs
+  for (_, hull) in blockSurfaceHulls do
+    let written = addHullSlabToArrays v n c vi hull 0.015f 0.004f 30uy 30uy 34uy 255uy
+    vi <- vi + written
 
   // Layer 2.5: Internal road surfaces — spline quads for organic roads, straight for grid roads
   // Half-width packed in road.FromPos.Y by layoutWeberDistrict
@@ -3131,38 +6193,32 @@ let buildStaticMesh (buildings: FuncBuilding[]) (blocks: ModuleBlock[]) (cityExt
       let written = addSplineRoadToArrays v n c vi x1 z1 x2 z2 0.020f 0.003f hw road.Color.R road.Color.G road.Color.B 255uy segs
       vi <- vi + written
 
-  // Layer 3: Sidewalk strips — medium luminance around each block (luminance ~0.20)
-  for block in blocks do
-    let r = block.Rect
-    let sw = sidewalkW
-    // Top strip
-    addQuadToArrays v n c vi r.X 0.01f r.Z r.X 0.01f (r.Z + sw) (r.X + r.W) 0.01f (r.Z + sw) (r.X + r.W) 0.01f r.Z 0.0f 1.0f 0.0f 48uy 48uy 52uy 255uy
-    vi <- vi + 6
-    // Bottom strip
-    addQuadToArrays v n c vi r.X 0.01f (r.Z + r.H - sw) r.X 0.01f (r.Z + r.H) (r.X + r.W) 0.01f (r.Z + r.H) (r.X + r.W) 0.01f (r.Z + r.H - sw) 0.0f 1.0f 0.0f 48uy 48uy 52uy 255uy
-    vi <- vi + 6
-    // Left strip
-    addQuadToArrays v n c vi r.X 0.01f (r.Z + sw) r.X 0.01f (r.Z + r.H - sw) (r.X + sw) 0.01f (r.Z + r.H - sw) (r.X + sw) 0.01f (r.Z + sw) 0.0f 1.0f 0.0f 48uy 48uy 52uy 255uy
-    vi <- vi + 6
-    // Right strip
-    addQuadToArrays v n c vi (r.X + r.W - sw) 0.01f (r.Z + sw) (r.X + r.W - sw) 0.01f (r.Z + r.H - sw) (r.X + r.W) 0.01f (r.Z + r.H - sw) (r.X + r.W) 0.01f (r.Z + sw) 0.0f 1.0f 0.0f 48uy 48uy 52uy 255uy
-    vi <- vi + 6
+  // Layer 3: Sidewalk strips — narrow ribbons following the frontage-derived hull
+  for (_, hull) in blockSurfaceHulls do
+    if hull.Length >= 2 then
+      for i in 0 .. hull.Length - 1 do
+        let x1, z1 = hull.[i]
+        let x2, z2 = hull.[(i + 1) % hull.Length]
+        let written = addRoadQuadToArrays v n c vi x1 z1 x2 z2 0.01f 0.002f (sidewalkW / 2.0f) 48uy 48uy 52uy 255uy
+        vi <- vi + written
 
-  // Layer 4: Curb geometry — thin raised strips at block edges (creates shadow lines)
-  for block in blocks do
-    let r = block.Rect
-    // Top curb (along Z = r.Z)
-    addCubeToArrays v n c vi (r.X + r.W / 2.0f) (curbH / 2.0f) r.Z (r.W / 2.0f) (curbH / 2.0f) (curbW / 2.0f) 42uy 42uy 46uy 255uy
-    vi <- vi + 36
-    // Bottom curb (along Z = r.Z + r.H)
-    addCubeToArrays v n c vi (r.X + r.W / 2.0f) (curbH / 2.0f) (r.Z + r.H) (r.W / 2.0f) (curbH / 2.0f) (curbW / 2.0f) 42uy 42uy 46uy 255uy
-    vi <- vi + 36
-    // Left curb (along X = r.X)
-    addCubeToArrays v n c vi r.X (curbH / 2.0f) (r.Z + r.H / 2.0f) (curbW / 2.0f) (curbH / 2.0f) (r.H / 2.0f) 42uy 42uy 46uy 255uy
-    vi <- vi + 36
-    // Right curb (along X = r.X + r.W)
-    addCubeToArrays v n c vi (r.X + r.W) (curbH / 2.0f) (r.Z + r.H / 2.0f) (curbW / 2.0f) (curbH / 2.0f) (r.H / 2.0f) 42uy 42uy 46uy 255uy
-    vi <- vi + 36
+  // Layer 4: Curb geometry — thin raised strips tracing the same frontage-derived hull
+  for (_, hull) in blockSurfaceHulls do
+    if hull.Length >= 2 then
+      for i in 0 .. hull.Length - 1 do
+        let x1, z1 = hull.[i]
+        let x2, z2 = hull.[(i + 1) % hull.Length]
+        let dx = x2 - x1
+        let dz = z2 - z1
+        let len = MathF.Sqrt(dx * dx + dz * dz)
+        if len > 0.05f then
+          let angle = MathF.Atan2(dz, dx) * 180.0f / MathF.PI
+          addOrientedCubeToArrays v n c vi
+            ((x1 + x2) / 2.0f) (curbH / 2.0f) ((z1 + z2) / 2.0f)
+            (len / 2.0f) (curbH / 2.0f) (curbW / 2.0f)
+            angle
+            42uy 42uy 46uy 255uy
+          vi <- vi + 36
 
   // Layer 5: Buildings — procedural compound body + shape-matching roof cap
   for i in 0 .. buildings.Length - 1 do
@@ -3170,11 +6226,12 @@ let buildStaticMesh (buildings: FuncBuilding[]) (blocks: ModuleBlock[]) (cityExt
     let compound = compounds.[i]
     let cx = b.X + b.W / 2.0f
     let cz = b.Z + b.D / 2.0f
+    let cosA, sinA = rotationSinCos b.Rotation
     let bodyH = b.H - 0.08f |> max 0.2f
     // Encode building type in alpha channel for per-type GLSL window profiles + glass specular
     let btAlpha = BuildingType.alpha b.BuildingType
     let vertsAdded =
-      addCompoundBody v n c vi compound cx cz bodyH
+      addCompoundBody v n c vi compound cx cz bodyH cosA sinA
         b.Color.R b.Color.G b.Color.B btAlpha
     vi <- vi + vertsAdded
     // Roof: Shed/Cottage get a pitched gable on the main sub-cube; all others use flat slabs
@@ -3186,18 +6243,19 @@ let buildStaticMesh (buildings: FuncBuilding[]) (blocks: ModuleBlock[]) (cityExt
         let mainH = bodyH * main.HeightScale
         let eaveCy = mainH + 0.06f
         let pad = 0.02f
-        addGableToArrays v n c vi
-          (cx + main.CX) eaveCy (cz + main.CZ)
-          (main.HW + pad) (main.HD + pad)
+        let mainOffX, mainOffZ = rotateOffsetXZ cosA sinA main.CX main.CZ
+        addOrientedGableToArraysWithRotation v n c vi
+          (cx + mainOffX) eaveCy (cz + mainOffZ)
+          (main.HW + pad) (main.HD + pad) cosA sinA
           b.RoofColor.R b.RoofColor.G b.RoofColor.B 255uy
         let wingsVerts =
           if compound.Length > 1 then
-            addCompoundRoof v n c (vi+36) compound.[1..] cx cz bodyH roofHH
+            addCompoundRoof v n c (vi+36) compound.[1..] cx cz bodyH roofHH cosA sinA
               b.RoofColor.R b.RoofColor.G b.RoofColor.B 255uy
           else 0
         36 + wingsVerts
       | _ ->
-        addCompoundRoof v n c vi compound cx cz bodyH roofHH
+        addCompoundRoof v n c vi compound cx cz bodyH roofHH cosA sinA
           b.RoofColor.R b.RoofColor.G b.RoofColor.B 255uy
     vi <- vi + roofVerts
 
@@ -3254,6 +6312,30 @@ type UiTextTheme =
     DistrictSubtitle: int
     Status: int }
 
+type ScreenRect =
+  { X: int
+    Y: int
+    W: int
+    H: int }
+
+type DistrictLabelStyle =
+  | CompactDistrictLabel
+  | DetailedDistrictLabel
+
+type DistrictLabelCandidate =
+  { District: District
+    ScreenPos: Vector2
+    ProjectedArea: float32
+    CameraDistance: float32 }
+
+type DistrictLabelPlacement =
+  { District: District
+    Bounds: ScreenRect
+    Style: DistrictLabelStyle
+    Title: string
+    Subtitle: string option
+    Priority: float32 }
+
 let defaultUiTextTheme =
   { HudTitle = 28
     HudStats = 20
@@ -3271,6 +6353,125 @@ let defaultUiTextTheme =
     DistrictTitle = 24
     DistrictSubtitle = 16
     Status = 16 }
+
+let compactUiTextTheme (theme: UiTextTheme) =
+  { theme with
+      HudTitle = 22
+      HudStats = 16
+      HudControls = 13
+      HudCapture = 14
+      LegendTitle = 17
+      LegendEntry = 14
+      HeatTitle = 15
+      HeatLabel = 12
+      TooltipTitle = 18
+      TooltipBody = 14
+      SelectionTitle = 18
+      SelectionBody = 14
+      SelectionLineHeight = 20
+      DistrictTitle = 18
+      DistrictSubtitle = 14
+      Status = 13 }
+
+let estimateUiTextWidth (size: int) (text: string) =
+  match String.IsNullOrWhiteSpace text with
+  | true -> 0
+  | false -> int (MathF.Ceiling(float32 text.Length * float32 size * 0.58f))
+
+let private screenRectOverlaps padding (a: ScreenRect) (b: ScreenRect) =
+  not (
+    a.X + a.W + padding <= b.X
+    || b.X + b.W + padding <= a.X
+    || a.Y + a.H + padding <= b.Y
+    || b.Y + b.H + padding <= a.Y)
+
+let maxDistrictLabelCount screenW screenH =
+  let area = screenW * screenH
+  if area >= 2560 * 1440 then 14
+  elif area >= 1920 * 1080 then 12
+  else 9
+
+let summarizeLegendDistricts maxEntries (districts: District list) =
+  let visible =
+    districts
+    |> List.sortByDescending (fun district -> district.FuncCount, district.TotalLines, district.Name)
+    |> List.truncate (max 0 maxEntries)
+  let hiddenCount = max 0 (districts.Length - visible.Length)
+  visible, hiddenCount
+
+let private districtLabelStyle (candidate: DistrictLabelCandidate) =
+  if candidate.ProjectedArea >= 65000.0f && candidate.CameraDistance <= 260.0f then DetailedDistrictLabel
+  else CompactDistrictLabel
+
+let private districtLabelPriority screenW screenH (candidate: DistrictLabelCandidate) =
+  let viewportCenter = Vector2(float32 screenW * 0.5f, float32 screenH * 0.5f)
+  let diagonal = max 1.0f (viewportCenter.Length())
+  let centerBias =
+    1.0f - min 1.0f (Vector2.Distance(candidate.ScreenPos, viewportCenter) / diagonal)
+  candidate.ProjectedArea
+  + float32 candidate.District.FuncCount * 220.0f
+  + float32 candidate.District.TotalLines * 0.09f
+  + centerBias * 6000.0f
+  - candidate.CameraDistance * 18.0f
+
+let planDistrictLabelPlacements screenW screenH (theme: UiTextTheme) (candidates: DistrictLabelCandidate list) =
+  let placementFor candidate =
+    let style = districtLabelStyle candidate
+    let title = candidate.District.Name
+    let subtitle =
+      match style with
+      | DetailedDistrictLabel -> Some (sprintf "%d funcs · %d LOC" candidate.District.FuncCount candidate.District.TotalLines)
+      | CompactDistrictLabel -> None
+    let titleSize =
+      match style with
+      | DetailedDistrictLabel -> theme.DistrictTitle
+      | CompactDistrictLabel -> theme.DistrictSubtitle
+    let titleWidth = estimateUiTextWidth titleSize title
+    let subtitleWidth =
+      subtitle
+      |> Option.map (estimateUiTextWidth theme.DistrictSubtitle)
+      |> Option.defaultValue 0
+    let width =
+      match subtitle with
+      | Some _ -> max titleWidth subtitleWidth + 18
+      | None -> titleWidth + 16
+    let height =
+      match subtitle with
+      | Some _ -> theme.DistrictTitle + theme.DistrictSubtitle + 14
+      | None -> theme.DistrictSubtitle + 10
+    { District = candidate.District
+      Bounds =
+        { X = int candidate.ScreenPos.X - width / 2
+          Y = int candidate.ScreenPos.Y - height / 2
+          W = width
+          H = height }
+      Style = style
+      Title = title
+      Subtitle = subtitle
+      Priority = districtLabelPriority screenW screenH candidate }
+
+  let maxLabels = maxDistrictLabelCount screenW screenH
+  let eligible =
+    candidates
+    |> List.filter (fun candidate ->
+      candidate.ProjectedArea >= 3000.0f
+      && candidate.CameraDistance <= 900.0f)
+    |> List.map placementFor
+    |> List.sortByDescending _.Priority
+
+  let rec choose (accepted: DistrictLabelPlacement list) remaining =
+    match List.length accepted >= maxLabels, remaining with
+    | true, _
+    | _, [] -> List.rev accepted
+    | false, next :: rest ->
+        let overlaps =
+          accepted
+          |> List.exists (fun acceptedPlacement -> screenRectOverlaps 10 next.Bounds acceptedPlacement.Bounds)
+        match overlaps with
+        | true -> choose accepted rest
+        | false -> choose (next :: accepted) rest
+
+  choose [] eligible
 
 type SsaoSettings =
   { BufferScale: int
@@ -3409,23 +6610,50 @@ let drawDistrictLabels2D
   let sw = Raylib.GetScreenWidth()
   let sh = Raylib.GetScreenHeight()
   let camForward = Vector3.Normalize(camera.Target - camera.Position)
-  for (district, rect, _) in districtRects do
-    let center3D = Vector3(rect.X + rect.W / 2.0f, 1.0f, rect.Z + rect.D / 2.0f)
-    let inFront = Vector3.Dot(center3D - camera.Position, camForward) > 1.0f
-    let screenPos = Raylib.GetWorldToScreen(center3D, camera)
-    if shouldRenderLabel screenPos sw sh inFront then
-      let label = district.Name
-      let sub = sprintf "%d funcs · %d LOC" district.FuncCount district.TotalLines
-      let textW = measureUiText label theme.DistrictTitle
-      let subW = measureUiText sub theme.DistrictSubtitle
-      let bw = max textW subW + 16
-      let bh = theme.DistrictTitle + theme.DistrictSubtitle + 18
-      let bx = int screenPos.X - bw / 2
-      let by = int screenPos.Y - (bh / 2)
-      Raylib.DrawRectangle(bx, by, bw, bh, Color(10uy, 10uy, 20uy, 180uy))
-      Raylib.DrawRectangleLines(bx, by, bw, bh, darken district.Color 0.6f)
-      drawUiText label (bx + 8) (by + 4) theme.DistrictTitle district.Color
-      drawUiText sub (bx + 8) (by + 8 + theme.DistrictTitle) theme.DistrictSubtitle (darken district.Color 0.8f)
+  let projectedArea (rect: Rect2D) =
+    let corners =
+      [ Vector3(rect.X, 1.0f, rect.Z)
+        Vector3(rect.X + rect.W, 1.0f, rect.Z)
+        Vector3(rect.X, 1.0f, rect.Z + rect.D)
+        Vector3(rect.X + rect.W, 1.0f, rect.Z + rect.D) ]
+      |> List.map (fun corner -> Raylib.GetWorldToScreen(corner, camera))
+    let xs = corners |> List.map _.X
+    let ys = corners |> List.map _.Y
+    let width = (xs |> List.max) - (xs |> List.min)
+    let height = (ys |> List.max) - (ys |> List.min)
+    max 0.0f width * max 0.0f height
+
+  let candidates =
+    districtRects
+    |> List.choose (fun (district, rect, _) ->
+      let center3D = Vector3(rect.X + rect.W / 2.0f, 1.0f, rect.Z + rect.D / 2.0f)
+      let inFront = Vector3.Dot(center3D - camera.Position, camForward) > 1.0f
+      let screenPos = Raylib.GetWorldToScreen(center3D, camera)
+      if shouldRenderLabel screenPos sw sh inFront then
+        Some
+          { District = district
+            ScreenPos = screenPos
+            ProjectedArea = projectedArea rect
+            CameraDistance = Vector3.Distance(center3D, camera.Position) }
+      else None)
+
+  for placement in planDistrictLabelPlacements sw sh theme candidates do
+    let bx = placement.Bounds.X
+    let by = placement.Bounds.Y
+    let bw = placement.Bounds.W
+    let bh = placement.Bounds.H
+    match placement.Style with
+    | CompactDistrictLabel ->
+        Raylib.DrawRectangle(bx, by, bw, bh, Color(8uy, 8uy, 16uy, 125uy))
+        Raylib.DrawRectangle(bx, by, 4, bh, placement.District.Color)
+        drawUiText placement.Title (bx + 9) (by + 4) theme.DistrictSubtitle placement.District.Color
+    | DetailedDistrictLabel ->
+        Raylib.DrawRectangle(bx, by, bw, bh, Color(8uy, 8uy, 16uy, 145uy))
+        Raylib.DrawRectangle(bx, by, 4, bh, placement.District.Color)
+        drawUiText placement.Title (bx + 10) (by + 4) theme.DistrictTitle placement.District.Color
+        placement.Subtitle
+        |> Option.iter (fun subtitle ->
+          drawUiText subtitle (bx + 10) (by + 6 + theme.DistrictTitle) theme.DistrictSubtitle (darken placement.District.Color 0.82f))
 
 let drawTooltip (b: FuncBuilding) (mx: int) (my: int) (theme: UiTextTheme) =
   let typeLabel =
@@ -3491,8 +6719,10 @@ let drawHUD
     |> List.sortByDescending (fun b -> b.Heat)
     |> List.tryHead
 
-  Raylib.DrawRectangle(8, 8, 470, 236, Color(8uy, 8uy, 16uy, 220uy))
-  Raylib.DrawRectangleLines(8, 8, 470, 236, Color(77uy, 201uy, 240uy, 95uy))
+  let panelW = 430
+  let panelH = 154
+  Raylib.DrawRectangle(8, 8, panelW, panelH, Color(8uy, 8uy, 16uy, 185uy))
+  Raylib.DrawRectangleLines(8, 8, panelW, panelH, Color(77uy, 201uy, 240uy, 70uy))
 
   drawUiText "SageFs Code City — Function View" 16 14 theme.HudTitle (Color(77uy, 201uy, 240uy, 255uy))
   drawUiText
@@ -3520,43 +6750,46 @@ let drawHUD
   | None -> ()
 
   let controlsY = infoY + theme.HudStats + 10
-  drawUiText "Right-drag: orbit  ·  Scroll: zoom  ·  Mid-drag: pan"
+  drawUiText "Right-drag orbit  ·  Scroll zoom  ·  Mid-drag pan"
     16 controlsY theme.HudControls (Color(130uy, 130uy, 150uy, 255uy))
-  drawUiText "WASD/QE: move  ·  R: reset  ·  F: focus hottest"
+  drawUiText "WASD/QE move  ·  R reset  ·  F focus hottest"
     16 (controlsY + theme.HudControls + 5) theme.HudControls (Color(130uy, 130uy, 150uy, 255uy))
   drawUiText
-    (sprintf "Left-click: pin  ·  Esc: clear  ·  C: call links %s" (if showCallLinks then "ON" else "OFF"))
+    (sprintf "Click pin  ·  Esc clear  ·  C links %s  ·  Tab mouse" (if showCallLinks then "ON" else "OFF"))
     16 (controlsY + (theme.HudControls + 5) * 2) theme.HudControls
     (if showCallLinks then outgoingRelationColor else Color(150uy, 150uy, 165uy, 255uy))
-  drawUiText "L: lighting  ·  O: diag  ·  P/B: SSAO/Bloom  ·  Tab: mouse"
-    16 (controlsY + (theme.HudControls + 5) * 3) theme.HudControls (Color(130uy, 130uy, 150uy, 255uy))
   let captureLabel =
-    if captured then "TAB: release mouse" else "TAB: capture mouse"
+    if captured then "Mouse captured" else "Mouse free"
   let captureColor =
     if captured then Color(255uy, 200uy, 60uy, 255uy)
     else Color(100uy, 180uy, 100uy, 255uy)
-  drawUiText captureLabel 16 (controlsY + (theme.HudControls + 5) * 4 + 2) theme.HudCapture captureColor
+  drawUiText captureLabel 16 (controlsY + (theme.HudControls + 5) * 3 + 1) theme.HudCapture captureColor
 
 let drawLegend (districts: District list) (theme: UiTextTheme) =
   let screenW = Raylib.GetScreenWidth()
-  let panelW = 290
-  let lineH = theme.LegendEntry + 10
-  let panelH = theme.LegendTitle + 22 + districts.Length * lineH
+  let summary, hiddenCount = summarizeLegendDistricts 5 districts
+  let panelW = 260
+  let lineH = theme.LegendEntry + 7
+  let extraRows = if hiddenCount > 0 then 1 else 0
+  let panelH = theme.LegendTitle + 18 + (summary.Length + extraRows) * lineH + 10
   let px = screenW - panelW - 8
   let py = 8
 
-  Raylib.DrawRectangle(px, py, panelW, panelH, Color(8uy, 8uy, 16uy, 210uy))
-  Raylib.DrawRectangleLines(px, py, panelW, panelH, Color(80uy, 80uy, 100uy, 80uy))
-  drawUiText "Districts" (px + 8) (py + 8) theme.LegendTitle (Color(200uy, 200uy, 210uy, 255uy))
+  Raylib.DrawRectangle(px, py, panelW, panelH, Color(8uy, 8uy, 16uy, 170uy))
+  Raylib.DrawRectangleLines(px, py, panelW, panelH, Color(80uy, 80uy, 100uy, 60uy))
+  drawUiText "Districts (top 5)" (px + 8) (py + 8) theme.LegendTitle (Color(200uy, 200uy, 210uy, 255uy))
 
-  for i in 0 .. districts.Length - 1 do
-    let d = districts.[i]
-    let y = py + theme.LegendTitle + 18 + i * lineH
-    Raylib.DrawRectangle(px + 8, y + 4, 16, 16, d.Color)
-    Raylib.DrawRectangleLines(px + 8, y + 4, 16, 16, darken d.Color 0.6f)
+  for i in 0 .. summary.Length - 1 do
+    let d = summary.[i]
+    let y = py + theme.LegendTitle + 14 + i * lineH
+    Raylib.DrawRectangle(px + 8, y + 3, 14, 14, d.Color)
     drawUiText
-      (sprintf "%s (%d fn)" d.Name d.FuncCount)
-      (px + 32) (y + 4) theme.LegendEntry (Color(190uy, 190uy, 200uy, 255uy))
+      (sprintf "%s (%d)" (ellipsize 18 d.Name) d.FuncCount)
+      (px + 28) (y + 2) theme.LegendEntry (Color(190uy, 190uy, 200uy, 255uy))
+
+  if hiddenCount > 0 then
+    let y = py + theme.LegendTitle + 14 + summary.Length * lineH
+    drawUiText (sprintf "+%d more districts" hiddenCount) (px + 8) (y + 2) theme.LegendEntry (Color(150uy, 150uy, 165uy, 255uy))
 
 /// Heat scale legend
 let drawHeatScale (theme: UiTextTheme) =
@@ -4184,7 +7417,7 @@ void main() {
   let mutable lightingEnabled = true
   let mutable showCallLinks = true
   let defaultShader = Raylib.LoadMaterialDefault().Shader
-  let uiTextTheme = defaultUiTextTheme
+  let uiTextTheme = compactUiTextTheme defaultUiTextTheme
 
   let mutable ssaoEnabled = ssaoAvailable
   let mutable ssaoDebug = false

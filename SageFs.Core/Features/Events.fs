@@ -48,6 +48,7 @@ type SageFsEvent =
   | EvalRequested of evalRequested: {| Code: string; Source: EventSource |}
   | EvalCompleted of evalCompleted: {| Code: string; Result: string; TypeSignature: string option; Duration: TimeSpan |}
   | EvalFailed of evalFailed: {| Code: string; Error: string; Diagnostics: DiagnosticEvent list |}
+  | EvalTraced of evalTraced: {| Code: string; Stages: (string * float) list; TotalMs: float |}
 
   // Diagnostics
   | DiagnosticsChecked of diagChecked: {| Code: string; Diagnostics: DiagnosticEvent list; Source: EventSource |}

@@ -45,6 +45,12 @@ let mkFuncInModule moduleName name callRefs body =
     CallRefs = callRefs
     CallSites = [] }
 
+let private mkDistrict name funcCount totalLines color =
+  { Name = name
+    FuncCount = funcCount
+    TotalLines = totalLines
+    Color = color }
+
 let private withTempFsSource (source: string) run =
   let root = System.IO.Path.Combine(System.IO.Path.GetTempPath(), Guid.NewGuid().ToString("N"))
   let filePath = System.IO.Path.Combine(root, "Sample.fs")
@@ -1130,6 +1136,24 @@ let visualDefaultsTests =
       (defaultUiTextTheme.HudControls, 13) |> Expect.isGreaterThanOrEqual "HUD controls should be readable"
       (defaultUiTextTheme.TooltipBody, 13) |> Expect.isGreaterThanOrEqual "Tooltips should be readable"
       (defaultUiTextTheme.SelectionBody, 13) |> Expect.isGreaterThanOrEqual "Selection panel text should be readable"
+
+    testCase "compact UI theme quiets chrome without becoming tiny" <| fun () ->
+      let compact = compactUiTextTheme defaultUiTextTheme
+      (compact.HudTitle, defaultUiTextTheme.HudTitle) |> Expect.isLessThan "compact HUD title should be smaller"
+      (compact.HudStats, defaultUiTextTheme.HudStats) |> Expect.isLessThan "compact HUD stats should be smaller"
+      (compact.HudStats, 14) |> Expect.isGreaterThanOrEqual "compact HUD stats should stay readable"
+      (compact.LegendEntry, 12) |> Expect.isGreaterThanOrEqual "legend text should stay readable"
+
+    testCase "legend summary shows busiest districts first and tracks hidden count" <| fun () ->
+      let districts =
+        [ mkDistrict "utilities" 8 110 Color.Blue
+          mkDistrict "api" 20 300 Color.Red
+          mkDistrict "storage" 12 260 Color.Green
+          mkDistrict "ui" 15 200 Color.Orange
+          mkDistrict "tests" 5 500 Color.Purple ]
+      let visible, hidden = summarizeLegendDistricts 3 districts
+      visible |> List.map _.Name |> Expect.equal "top entries should be sorted by function count first" ["api"; "ui"; "storage"]
+      hidden |> Expect.equal "remaining districts should be counted" 2
   ]
 
 let roadAccessTests =
@@ -1170,35 +1194,1034 @@ let private rectsOverlap (a: TRect) (b: TRect) =
   && a.Z < b.Z + b.H
   && b.Z < a.Z + a.H
 
+let private hasRecordField<'T> (name: string) =
+  typeof<'T>.GetProperty(name) <> null
+
+let private hasModuleFunction (name: string) =
+  let moduleType = typeof<TRect>.Assembly.GetType("CodeCity")
+  not (isNull moduleType) && not (isNull (moduleType.GetMethod(name)))
+
+let private paperCase citation name body =
+  testCase (sprintf "[paper %s] %s" citation name) body
+
+let private paperProperty citation name body =
+  testPropertyWithConfig cfg (sprintf "[paper %s] %s" citation name) body
+
+let private assumptionCase citation name body =
+  testCase (sprintf "[assumption %s] %s" citation name) body
+
+let private assumptionProperty citation name body =
+  testPropertyWithConfig cfg (sprintf "[assumption %s] %s" citation name) body
+
+let private naturalismCase citation name body =
+  testCase (sprintf "[naturalism %s] %s" citation name) body
+
+let private randomDistrictRect (PositiveInt rawW) (PositiveInt rawH) =
+  let w = float32 (10 + rawW % 90)
+  let h = float32 (10 + rawH % 90)
+  { X = 0.0f; Z = 0.0f; W = w; H = h }
+
+let private unwrapOk message = function
+  | Ok value -> value
+  | Error error -> failtestf "%s: %A" message error
+
+let private seedMajorGrowthTestGraph (rect: TRect) =
+  let g = WeberGraph()
+  let topLeft = g.AddNode(Vec2.Create(rect.X, rect.Z), Avenue)
+  let topMid = g.AddNode(Vec2.Create(rect.X + rect.W / 2.0f, rect.Z), Avenue)
+  let topRight = g.AddNode(Vec2.Create(rect.X + rect.W, rect.Z), Avenue)
+  let rightMid = g.AddNode(Vec2.Create(rect.X + rect.W, rect.Z + rect.H / 2.0f), Avenue)
+  let bottomRight = g.AddNode(Vec2.Create(rect.X + rect.W, rect.Z + rect.H), Avenue)
+  let bottomMid = g.AddNode(Vec2.Create(rect.X + rect.W / 2.0f, rect.Z + rect.H), Avenue)
+  let bottomLeft = g.AddNode(Vec2.Create(rect.X, rect.Z + rect.H), Avenue)
+  let leftMid = g.AddNode(Vec2.Create(rect.X, rect.Z + rect.H / 2.0f), Avenue)
+  [ topLeft, topMid
+    topMid, topRight
+    topRight, rightMid
+    rightMid, bottomRight
+    bottomRight, bottomMid
+    bottomMid, bottomLeft
+    bottomLeft, leftMid
+    leftMid, topLeft ]
+  |> List.iter (fun (a, b) -> g.AddEdge(a, b, Avenue, RoadClass.width Avenue) |> ignore)
+
+  let center = g.AddNode(Vec2.Create(TRect.centerX rect, TRect.centerZ rect), Avenue)
+  let northArm = g.AddNode(Vec2.Create(TRect.centerX rect, rect.Z + rect.H * 0.225f), Avenue)
+  let southArm = g.AddNode(Vec2.Create(TRect.centerX rect, rect.Z + rect.H * 0.775f), Avenue)
+  let eastArm = g.AddNode(Vec2.Create(rect.X + rect.W * 0.775f, TRect.centerZ rect), Avenue)
+  let westArm = g.AddNode(Vec2.Create(rect.X + rect.W * 0.225f, TRect.centerZ rect), Avenue)
+  [ center, northArm; northArm, topMid
+    center, southArm; southArm, bottomMid
+    center, eastArm; eastArm, rightMid
+    center, westArm; westArm, leftMid ]
+  |> List.iter (fun (a, b) -> g.AddEdge(a, b, Avenue, RoadClass.width Avenue) |> ignore)
+
+  [ topLeft; topMid; topRight; rightMid; bottomRight; bottomMid; bottomLeft; leftMid ]
+  |> List.iter g.MarkFinished
+
+  g, [| Vec2.Create(TRect.centerX rect, TRect.centerZ rect) |]
+
+let private allStreetIds (plan: DistrictPlan) =
+  (plan.MajorStreets |> List.map _.Id)
+  @ (plan.Quarters |> List.collect (fun quarter -> quarter.MinorStreets |> List.map _.Id))
+
+let private tryFindStreetTraffic streetId (plan: DistrictPlan) =
+  plan.MajorStreets
+  |> List.tryFind (fun street -> street.Id = streetId)
+  |> Option.map (fun street -> street.Traffic)
+  |> Option.orElseWith (fun () ->
+    plan.Quarters
+    |> List.collect _.MinorStreets
+    |> List.tryFind (fun street -> street.Id = streetId)
+    |> Option.map (fun street -> street.Traffic))
+
+let private phase4Lot (rect: TRect) frontageEdge streetStatus landUseType landUseValue =
+  PlannedLot.create rect frontageEdge rect
+  |> fun lot ->
+    { lot with
+        Rect = rect
+        BlockRect = rect
+        FrontingStreetStatus = streetStatus
+        LandUseType = landUseType
+        LandUseValue = landUseValue }
+
+let private phase4Definitions =
+  [ { LandUseType = ResidentialUse
+      Valuations =
+        [ { Metric = LotArea; Curve = LinearUp; Min = 0.0f; Max = 100.0f; Weight = 1.0f } ] }
+    { LandUseType = ParkUse
+      Valuations =
+        [ { Metric = LotArea; Curve = LinearDown; Min = 0.0f; Max = 100.0f; Weight = 1.0f } ] } ]
+
+let private phase4Goals =
+  [ { LandUseType = ResidentialUse; TargetPercent = 1.0f }
+    { LandUseType = ParkUse; TargetPercent = 0.0f } ]
+
+let private phase4Config seed elapsed reevaluation attempts rejectedDeltaThreshold =
+  { Goals = phase4Goals
+    Definitions = phase4Definitions
+    AveragePricePerSqm = 100.0f
+    GlobalWeight = 1.0f
+    LocalWeight = 0.0f
+    GoalScale = 1.0f
+    AttemptsFraction = attempts
+    RejectedDeltaThreshold = rejectedDeltaThreshold
+    Seed = seed
+    Cadence =
+      { StepYears = 1.0f
+        ReevaluationYears = reevaluation
+        ElapsedSinceLastEvaluationYears = elapsed } }
+
+let private phase5Block (rect: TRect) landUseType landUseValue streetFacingEdges =
+  { Scenario.rectangularBlock rect rect landUseType landUseValue with
+      StreetFacingEdges = streetFacingEdges }
+
+let private containsRect (outerRect: TRect) (innerRect: TRect) =
+  innerRect.X >= outerRect.X
+  && innerRect.Z >= outerRect.Z
+  && innerRect.X + innerRect.W <= outerRect.X + outerRect.W
+  && innerRect.Z + innerRect.H <= outerRect.Z + outerRect.H
+
+let private phase6Lot (rect: TRect) landUseType landUseValue =
+  PlannedLot.create rect North rect
+  |> fun lot ->
+    { lot with
+        Rect = rect
+        BlockRect = rect
+        FrontingStreetStatus = Built
+        LandUseType = landUseType
+        LandUseValue = landUseValue }
+
+let private phase7MinorStreet quarterRect status traffic segment =
+  let seeded =
+    match status with
+    | Built -> MinorStreet.built quarterRect segment
+    | Planned -> MinorStreet.planned quarterRect segment
+  { seeded with
+      Traffic =
+        { Volume = traffic
+          MaxVolume = streetMaxVolumeFromTraffic traffic } }
+
+let private phase7Plan (lot: PlannedLot) (streets: MinorStreet list) =
+  let block =
+    { Scenario.rectangularBlock lot.BlockRect lot.BlockRect lot.LandUseType lot.LandUseValue with
+        Lots = [ lot ] }
+  { MajorStreets = []
+    Quarters = [ QuarterPlan.create lot.BlockRect streets [ block ] ] }
+  |> indexStreetNetwork
+
+let private phase8TimelineConfig steps stepYears reevaluationYears promotionLagSteps : SimulationTimelineConfig =
+  { Steps = steps
+    StepYears = stepYears
+    LandUseReevaluationYears = reevaluationYears
+    PromotionLagSteps = promotionLagSteps
+    BuildingSubstitution = None }
+
+let private phase11TimelineConfig substitution steps stepYears reevaluationYears promotionLagSteps : SimulationTimelineConfig =
+  { Steps = steps
+    StepYears = stepYears
+    LandUseReevaluationYears = reevaluationYears
+    PromotionLagSteps = promotionLagSteps
+    BuildingSubstitution = substitution }
+
+let private phase11StableLandUseConfig seed elapsed reevaluation =
+  { Goals = [ { LandUseType = ResidentialUse; TargetPercent = 1.0f } ]
+    Definitions =
+      [ { LandUseType = ResidentialUse
+          Valuations =
+            [ { Metric = LotArea; Curve = LinearUp; Min = 0.0f; Max = 100.0f; Weight = 1.0f } ] } ]
+    AveragePricePerSqm = 100.0f
+    GlobalWeight = 1.0f
+    LocalWeight = 0.0f
+    GoalScale = 1.0f
+    AttemptsFraction = 0.0f
+    RejectedDeltaThreshold = 0.1f
+    Seed = seed
+    Cadence =
+      { StepYears = 1.0f
+        ReevaluationYears = reevaluation
+        ElapsedSinceLastEvaluationYears = elapsed } }
+
+let private phase10SubstitutionConfig =
+  { AgeFactor = { Curve = LinearUp; Min = 0.0f; Max = 40.0f; Weight = 0.35f }
+    PriceGapFactor = { Curve = LinearUp; Min = 0.0f; Max = 100.0f; Weight = 0.65f }
+    Seed = 7 }
+
+let private phase10Lot blockRect rect ageYears price floorSpace residents =
+  { phase6Lot rect ResidentialUse 0.6f with
+      BlockRect = blockRect
+      BuildingAgeYears = ageYears
+      Price = price
+      FloorSpace = floorSpace
+      Residents = residents }
+
+let private phase10Plan (quarterRect: TRect) (lots: PlannedLot list) =
+  let block =
+    { Scenario.rectangularBlock quarterRect quarterRect ResidentialUse 0.6f with
+        Lots = lots }
+  { MajorStreets = []
+    Quarters = [ QuarterPlan.create quarterRect [] [ block ] ] }
+  |> indexStreetNetwork
+
+let private chainTrafficPlan () =
+  let quarterRect = { X = 0.0f; Z = 0.0f; W = 10.0f; H = 10.0f }
+  let block = Scenario.rectangularBlock quarterRect quarterRect ResidentialUse 0.6f
+  let plannedMinor =
+    { Id = StreetId 2
+      Segment = { X = 4.0f; Z = 0.0f; W = 1.0f; H = 10.0f }
+      Status = Planned
+      QuarterRect = quarterRect
+      Residents = 0.0f
+      Traffic = { Volume = 0.0f; MaxVolume = 0.0f } }
+  let builtMinor =
+    { Id = StreetId 3
+      Segment = { X = 0.0f; Z = 8.0f; W = 10.0f; H = 1.0f }
+      Status = Built
+      QuarterRect = quarterRect
+      Residents = 7.0f
+      Traffic = { Volume = 0.0f; MaxVolume = 0.0f } }
+  let quarter = QuarterPlan.create quarterRect [ plannedMinor; builtMinor ] [ block ]
+  let district : DistrictPlan =
+    { MajorStreets =
+        [ { Id = StreetId 1
+            Segment = { X = 0.0f; Z = 4.0f; W = 10.0f; H = 1.0f }
+            Status = Built
+            Residents = 3.0f
+            Traffic = { Volume = 0.0f; MaxVolume = 0.0f } } ]
+      Quarters = [ quarter ] }
+  district
+  |> indexStreetNetwork
+
+let trafficSimulationTests =
+  testList "Traffic and promotion" [
+    paperCase "§3.2" "shortest path uses connected street segments on a tiny graph" <| fun () ->
+      let plan = chainTrafficPlan ()
+      let startStreet = plan.MajorStreets.Head.Id
+      let endStreet = plan.Quarters.Head.MinorStreets |> List.last |> fun street -> street.Id
+      shortestStreetPath plan startStreet endStreet
+      |> Expect.equal "route should traverse the only connecting planned street"
+           (Ok [ startStreet; StreetId 2; endStreet ])
+
+    paperCase "§3.2" "disconnected streets report no route" <| fun () ->
+      let plan =
+        let district : DistrictPlan =
+          { MajorStreets =
+              [ { Id = StreetId 10
+                  Segment = { X = 0.0f; Z = 0.0f; W = 8.0f; H = 1.0f }
+                  Status = Built
+                  Residents = 1.0f
+                  Traffic = { Volume = 0.0f; MaxVolume = 0.0f } }
+                { Id = StreetId 11
+                  Segment = { X = 30.0f; Z = 0.0f; W = 8.0f; H = 1.0f }
+                  Status = Built
+                  Residents = 1.0f
+                  Traffic = { Volume = 0.0f; MaxVolume = 0.0f } } ]
+            Quarters = [] }
+        district
+        |> indexStreetNetwork
+      shortestStreetPath plan (StreetId 10) (StreetId 11)
+      |> Expect.equal "disconnected street segments should not fabricate a path"
+           (Error (NoRouteBetweenStreets (StreetId 10, StreetId 11)))
+
+    paperCase "§3.2" "applying and removing a trip updates every street on its route" <| fun () ->
+      let plan = chainTrafficPlan ()
+      let trip =
+        { StartStreet = StreetId 1
+          EndStreet = StreetId 3
+          Volume = 2.0f
+          Route = [ StreetId 1; StreetId 2; StreetId 3 ] }
+      let applied = applyResidentTrip trip plan |> unwrapOk "trip application should succeed"
+      trip.Route
+      |> List.iter (fun streetId ->
+        applied
+        |> tryFindStreetTraffic streetId
+        |> Option.map _.Volume
+        |> Expect.equal (sprintf "street %A should receive the trip volume" streetId) (Some 2.0f))
+      let removed = removeResidentTrip trip applied |> unwrapOk "trip removal should succeed"
+      trip.Route
+      |> List.iter (fun streetId ->
+        removed
+        |> tryFindStreetTraffic streetId
+        |> Option.map _.Volume
+        |> Expect.equal (sprintf "street %A should return to zero after trip removal" streetId) (Some 0.0f))
+
+    paperCase "§3.2" "planned streets participate in trip routing and traffic accumulation" <| fun () ->
+      let plan = chainTrafficPlan ()
+      let trips = generateResidentTrips plan
+      trips |> Expect.isNonEmpty "resident-bearing streets should generate trips"
+      trips
+      |> List.exists (fun trip -> trip.Route |> List.contains (StreetId 2))
+      |> Expect.isTrue "generated trips should be allowed to use planned streets"
+      let updated = updateTrafficSimulation plan
+      updated
+      |> tryFindStreetTraffic (StreetId 2)
+      |> Option.map _.Volume
+      |> Option.defaultValue 0.0f
+      |> fun volume -> (volume, 0.0f) |> Expect.isGreaterThan "planned connector should accumulate traffic when used by trips"
+
+    paperCase "§3.2" "traffic threshold rather than raw geometry promotes planned streets to built" <| fun () ->
+      let quarterRect = { X = 0.0f; Z = 0.0f; W = 20.0f; H = 20.0f }
+      let block = Scenario.rectangularBlock quarterRect quarterRect ResidentialUse 0.6f
+      let before =
+        let district : DistrictPlan =
+          { MajorStreets =
+              [ { Id = StreetId 20
+                  Segment = { X = 0.0f; Z = 0.0f; W = 2.0f; H = 30.0f }
+                  Status = Planned
+                  Residents = 0.0f
+                  Traffic = { Volume = 12.0f; MaxVolume = 0.0f } }
+                { Id = StreetId 21
+                  Segment = { X = 4.0f; Z = 0.0f; W = 2.0f; H = 40.0f }
+                  Status = Planned
+                  Residents = 0.0f
+                  Traffic = { Volume = 1.0f; MaxVolume = 0.0f } } ]
+            Quarters = [ QuarterPlan.create quarterRect [] [ block ] ] }
+        district
+        |> indexStreetNetwork
+      let promoted = promotePlannedStreets before
+      promoted.MajorStreets |> List.find (fun street -> street.Id = StreetId 20) |> fun street -> street.Status
+      |> Expect.equal "traffic-qualified planned street should become built" Built
+      promoted.MajorStreets |> List.find (fun street -> street.Id = StreetId 21) |> fun street -> street.Status
+      |> Expect.equal "low-traffic street should remain planned even if geometrically long" Planned
+
+    paperProperty "§3.2" "re-running traffic-based promotion without traffic changes is idempotent" <|
+      fun () ->
+        let once = chainTrafficPlan () |> updateTrafficSimulation |> promotePlannedStreets
+        let twice = promotePlannedStreets once
+        once = twice
+
+    paperProperty "§3.2" "shortest paths remain connected on a simple chain with varying street lengths" <|
+      fun (PositiveInt rawA) (PositiveInt rawB) (PositiveInt rawC) ->
+        let aLen = float32 (4 + rawA % 12)
+        let bLen = float32 (4 + rawB % 12)
+        let cLen = float32 (4 + rawC % 12)
+        let quarterRect = { X = 0.0f; Z = 0.0f; W = max aLen cLen; H = max bLen cLen + 6.0f }
+        let block = Scenario.rectangularBlock quarterRect quarterRect ResidentialUse 0.5f
+        let middle =
+          { Id = StreetId 32
+            Segment = { X = min 4.0f (aLen - 1.0f); Z = 0.0f; W = 1.0f; H = bLen + 4.0f }
+            Status = Planned
+            QuarterRect = quarterRect
+            Residents = 0.0f
+            Traffic = { Volume = 0.0f; MaxVolume = 0.0f } }
+        let endStreet =
+          { Id = StreetId 33
+            Segment = { X = 0.0f; Z = min (bLen + 2.0f) (quarterRect.H - 1.0f); W = cLen; H = 1.0f }
+            Status = Built
+            QuarterRect = quarterRect
+            Residents = 1.0f
+            Traffic = { Volume = 0.0f; MaxVolume = 0.0f } }
+        let quarter = QuarterPlan.create quarterRect [ middle; endStreet ] [ block ]
+        let plan =
+          let district : DistrictPlan =
+            { MajorStreets =
+                [ { Id = StreetId 31
+                    Segment = { X = 0.0f; Z = 4.0f; W = aLen; H = 1.0f }
+                    Status = Built
+                    Residents = 1.0f
+                    Traffic = { Volume = 0.0f; MaxVolume = 0.0f } } ]
+              Quarters = [ quarter ] }
+          district
+          |> indexStreetNetwork
+        shortestStreetPath plan (StreetId 31) (StreetId 33)
+        |> Expect.equal "the simple chain should always yield a connected route"
+             (Ok [ StreetId 31; StreetId 32; StreetId 33 ])
+
+    naturalismCase "traffic-derived street metrics" "street width and max volume are monotone in traffic" <| fun () ->
+      let lowWidth = streetWidthFromTraffic 1.0f
+      let highWidth = streetWidthFromTraffic 12.0f
+      let lowMaxVolume = streetMaxVolumeFromTraffic 1.0f
+      let highMaxVolume = streetMaxVolumeFromTraffic 12.0f
+      (highWidth, lowWidth) |> Expect.isGreaterThan "more traffic should imply a larger temporary width"
+      (highMaxVolume, lowMaxVolume) |> Expect.isGreaterThan "more traffic should imply a higher maximum volume"
+  ]
+
+let landUseDynamicsTests =
+  testList "Land-use dynamics" [
+    paperCase "§4.1 Eq. (2)-(3)" "global land-use value is zero when area percentages match goals" <| fun () ->
+      let lots =
+        [ phase4Lot { X = 0.0f; Z = 0.0f; W = 10.0f; H = 1.0f } North Built ResidentialUse 0.5f
+          phase4Lot { X = 0.0f; Z = 1.0f; W = 10.0f; H = 1.0f } South Built ParkUse 0.5f ]
+      computeGlobalLandUseValue
+        [ { LandUseType = ResidentialUse; TargetPercent = 0.5f }
+          { LandUseType = ParkUse; TargetPercent = 0.5f } ]
+        1.0f
+        lots
+      |> Expect.equal "perfect target matching should have zero global penalty" 0.0f
+
+    paperCase "§4.1 Eq. (2)-(3)" "global land-use value is area weighted rather than count weighted" <| fun () ->
+      let lots =
+        [ phase4Lot { X = 0.0f; Z = 0.0f; W = 90.0f; H = 1.0f } North Built ResidentialUse 0.5f
+          phase4Lot { X = 0.0f; Z = 1.0f; W = 10.0f; H = 1.0f } South Built ParkUse 0.5f ]
+      let actual =
+        computeGlobalLandUseValue
+          [ { LandUseType = ResidentialUse; TargetPercent = 0.5f }
+            { LandUseType = ParkUse; TargetPercent = 0.5f } ]
+          1.0f
+          lots
+      (abs (actual - -0.32f) < 1e-5f)
+      |> Expect.isTrue "global land-use value should use area percentages from equations (2)-(3)"
+
+    paperCase "§4.3 Eq. (4)" "valuation curves stay inside the unit interval and preserve their shape" <| fun () ->
+      let samples =
+        [ Step, -10.0f, 0.0f
+          Step, 50.0f, 1.0f
+          LinearUp, 25.0f, 0.25f
+          LinearDown, 25.0f, 0.75f
+          GainUp, 50.0f, 0.25f
+          GainDown, 50.0f, 0.75f ]
+      samples
+      |> List.iter (fun (curve, value, expected) ->
+        let actual = applyValuationCurve curve 0.0f 100.0f value
+        (abs (actual - expected) < 1e-5f)
+        |> Expect.isTrue (sprintf "%A at %f should match the expected bounded valuation" curve value)
+        (actual >= 0.0f && actual <= 1.0f)
+        |> Expect.isTrue (sprintf "%A should stay in the unit interval" curve))
+
+    paperCase "§4.3 Eq. (4)" "local land-use value uses a convex combination of bounded valuation functions" <| fun () ->
+      let rect = { X = 0.0f; Z = 0.0f; W = 50.0f; H = 1.0f }
+      let lot = phase4Lot rect North Built ResidentialUse 0.5f
+      let definitions =
+        [ { LandUseType = ResidentialUse
+            Valuations =
+              [ { Metric = LotArea; Curve = LinearUp; Min = 0.0f; Max = 100.0f; Weight = 1.0f }
+                { Metric = FrontageAccess; Curve = LinearUp; Min = 0.0f; Max = 1.0f; Weight = 3.0f } ] } ]
+      let plan = Scenario.singleQuarter rect
+      let actual = evaluateLocalLotLandUseValue definitions plan lot ResidentialUse
+      (abs (actual - 0.875f) < 1e-5f)
+      |> Expect.isTrue "local value should normalize weights into a convex combination"
+
+    paperCase "§4.1" "blocks persist lots and dominant land use from area-weighted lot majorities" <| fun () ->
+      let rect = { X = 0.0f; Z = 0.0f; W = 20.0f; H = 10.0f }
+      let block =
+        { PlannedBlock.create rect rect with
+            Lots =
+              [ phase4Lot { X = 0.0f; Z = 0.0f; W = 20.0f; H = 1.0f } North Built ResidentialUse 0.6f
+                phase4Lot { X = 0.0f; Z = 1.0f; W = 10.0f; H = 1.0f } North Built ResidentialUse 0.9f
+                phase4Lot { X = 0.0f; Z = 2.0f; W = 15.0f; H = 1.0f } North Built ParkUse 0.2f ] }
+      let recomputed = recomputeBlockDominantLandUse block
+      recomputed.LandUseType |> Expect.equal "residential lots cover the most area" ResidentialUse
+      (abs (recomputed.LandUseValue - 0.7f) < 1e-5f)
+      |> Expect.isTrue "block value should be the area-weighted average of dominant lots"
+
+    paperCase "§4.1" "quarters derive their dominant land use from area-weighted blocks" <| fun () ->
+      let quarterRect = { X = 0.0f; Z = 0.0f; W = 40.0f; H = 20.0f }
+      let blockA =
+        { Scenario.rectangularBlock quarterRect { X = 0.0f; Z = 0.0f; W = 30.0f; H = 20.0f } ResidentialUse 0.7f with
+            Lots = [ phase4Lot { X = 0.0f; Z = 0.0f; W = 30.0f; H = 20.0f } North Built ResidentialUse 0.7f ] }
+      let blockB =
+        { Scenario.rectangularBlock quarterRect { X = 30.0f; Z = 0.0f; W = 10.0f; H = 20.0f } ParkUse 0.9f with
+            Lots = [ phase4Lot { X = 30.0f; Z = 0.0f; W = 10.0f; H = 20.0f } North Built ParkUse 0.9f ] }
+      let quarter = QuarterPlan.create quarterRect [] [ blockA; blockB ]
+      let recomputed = recomputeQuarterDominantLandUse quarter
+      recomputed.LandUseType |> Expect.equal "the larger residential block should dominate the quarter" ResidentialUse
+      (abs (recomputed.LandUseValue - 0.7f) < 1e-5f)
+      |> Expect.isTrue "quarter value should be the area-weighted average of dominant blocks"
+
+    paperCase "§4.1" "land-use updates bootstrap singleton lots when blocks do not yet carry subdivisions" <| fun () ->
+      let rect = { X = 0.0f; Z = 0.0f; W = 24.0f; H = 12.0f }
+      let block = Scenario.rectangularBlock rect rect ParkUse 0.2f
+      let bootstrapped = ensureBlockLotsForLandUseSimulation block
+      bootstrapped.Lots |> Expect.hasLength "phase 4 should bootstrap one synthetic lot per unsplit block" 1
+      bootstrapped.Lots.Head.Rect |> Expect.equal "bootstrapped lot should cover the full block" rect
+
+    paperCase "§4.2" "improving land-use candidates are accepted deterministically" <| fun () ->
+      let rect = { X = 0.0f; Z = 0.0f; W = 10.0f; H = 10.0f }
+      let block =
+        { Scenario.rectangularBlock rect rect ParkUse 0.2f with
+            Lots = [ phase4Lot rect North Built ParkUse 0.2f ] }
+      let quarter =
+        QuarterPlan.create rect [ MinorStreet.built rect { X = 4.5f; Z = 0.0f; W = 1.0f; H = 10.0f } ] [ block ]
+      let plan = { MajorStreets = []; Quarters = [ quarter ] } |> indexStreetNetwork
+      let updated, stats = updateLandUseSimulationWith (phase4Config 7 1.0f 1.0f 1.0f 0.25f) plan
+      updated.Quarters.Head.Blocks.Head.Lots.Head.LandUseType
+      |> Expect.equal "the only improving candidate should be accepted" ResidentialUse
+      stats.Accepted |> Expect.equal "accepted attempt count should be reported" 1
+      (stats.GlobalValueAfter, stats.GlobalValueBefore)
+      |> Expect.isGreaterThan "accepted improvements should raise the global score"
+
+    paperCase "§4.2" "worse land-use candidates are rejected when they exceed the rejection threshold" <| fun () ->
+      let rect = { X = 0.0f; Z = 0.0f; W = 10.0f; H = 10.0f }
+      let block =
+        { Scenario.rectangularBlock rect rect ResidentialUse 0.8f with
+            Lots = [ phase4Lot rect North Built ResidentialUse 0.8f ] }
+      let plan =
+        { MajorStreets = []
+          Quarters = [ QuarterPlan.create rect [] [ block ] ] }
+      let updated, stats = updateLandUseSimulationWith (phase4Config 7 1.0f 1.0f 1.0f 0.05f) plan
+      updated.Quarters.Head.Blocks.Head.Lots.Head.LandUseType
+      |> Expect.equal "the only worse candidate should be rejected" ResidentialUse
+      stats.Accepted |> Expect.equal "no worse candidate should be accepted here" 0
+      stats.Rejected |> Expect.equal "rejected attempt count should be reported" 1
+
+    paperCase "§4.2" "reevaluation cadence can skip land-use updates entirely" <| fun () ->
+      let rect = { X = 0.0f; Z = 0.0f; W = 12.0f; H = 12.0f }
+      let before = Scenario.singleQuarter rect
+      let after, stats = updateLandUseSimulationWith (phase4Config 11 0.5f 10.0f 1.0f 0.25f) before
+      after |> Expect.equal "when cadence is not due the land-use plan should remain unchanged" before
+      stats.SkippedByCadence |> Expect.isTrue "cadence skip should be surfaced explicitly"
+      stats.Attempts |> Expect.equal "skipped updates should not attempt mutations" 0
+
+    paperCase "§4.2" "due reevaluation cycles report attempts and accepted lots in update stats" <| fun () ->
+      let rect = { X = 0.0f; Z = 0.0f; W = 10.0f; H = 10.0f }
+      let block =
+        { Scenario.rectangularBlock rect rect ParkUse 0.2f with
+            Lots = [ phase4Lot rect North Built ParkUse 0.2f ] }
+      let plan =
+        { MajorStreets = []
+          Quarters = [ QuarterPlan.create rect [] [ block ] ] }
+      let _, stats = updateLandUseSimulationWith (phase4Config 13 1.0f 1.0f 1.0f 0.25f) plan
+      stats.SkippedByCadence |> Expect.isFalse "due reevaluations should run"
+      (stats.Attempts, 0) |> Expect.isGreaterThan "due reevaluations should attempt lot mutations"
+
+    naturalismCase "land-use instrumentation" "stage deltas count changed lots and total lot value movement" <| fun () ->
+      let rect = { X = 0.0f; Z = 0.0f; W = 10.0f; H = 10.0f }
+      let beforeLot = phase4Lot rect North Built ParkUse 0.2f
+      let afterLot = { beforeLot with LandUseType = ResidentialUse; LandUseValue = 0.8f }
+      let beforeBlock =
+        { Scenario.rectangularBlock rect rect ParkUse 0.2f with
+            Lots = [ beforeLot ] }
+      let afterBlock =
+        { beforeBlock with
+            LandUseType = ResidentialUse
+            LandUseValue = 0.8f
+            Lots = [ afterLot ] }
+      let before =
+        { MajorStreets = []
+          Quarters = [ QuarterPlan.create rect [] [ beforeBlock ] ] }
+      let after =
+        { MajorStreets = []
+          Quarters =
+            [ { QuarterPlan.create rect [] [ afterBlock ] with
+                  LandUseType = ResidentialUse
+                  LandUseValue = 0.8f } ] }
+      let delta = summarizeSimulationStageDelta before after
+      delta.LotLandUseChangedCount |> Expect.equal "lot relabels should be counted in stage deltas" 1
+      (delta.TotalLotLandUseValueDelta, 0.0f) |> Expect.isGreaterThan "lot value delta should capture changed suitability"
+
+    paperProperty "§4.1 Eq. (2)-(4)" "global land-use value is always non-positive" <|
+      fun (PositiveInt rawResidential) (PositiveInt rawPark) ->
+        let residentialWidth = float32 (1 + rawResidential % 50)
+        let parkWidth = float32 (1 + rawPark % 50)
+        let lots =
+          [ phase4Lot { X = 0.0f; Z = 0.0f; W = residentialWidth; H = 1.0f } North Built ResidentialUse 0.5f
+            phase4Lot { X = 0.0f; Z = 1.0f; W = parkWidth; H = 1.0f } South Built ParkUse 0.5f ]
+        computeGlobalLandUseValue
+          [ { LandUseType = ResidentialUse; TargetPercent = 0.5f }
+            { LandUseType = ParkUse; TargetPercent = 0.5f } ]
+          1.0f
+          lots <= 0.0f
+
+    paperProperty "§4.3 Eq. (4)" "local land-use value remains inside the unit interval" <|
+      fun (PositiveInt rawWidth) ->
+        let width = float32 (1 + rawWidth % 100)
+        let rect = { X = 0.0f; Z = 0.0f; W = width; H = 1.0f }
+        let lot = phase4Lot rect North Built ResidentialUse 0.5f
+        let value = evaluateLocalLotLandUseValue phase4Definitions (Scenario.singleQuarter rect) lot ResidentialUse
+        value >= 0.0f && value <= 1.0f
+  ]
+
+let economyModelTests =
+  testList "Economy model" [
+    paperCase "§5.2 Eq. (9)" "lot price uses area average price and relative land-use value" <| fun () ->
+      let rect = { X = 0.0f; Z = 0.0f; W = 20.0f; H = 10.0f }
+      let economics = computeLotEconomics 100.0f 0.30f (phase6Lot rect ResidentialUse 0.60f)
+      (abs (economics.Price - 40000.0f) < 1e-3f)
+      |> Expect.isTrue "price should follow equation (9) using area * avgprice * luv / meanLuv"
+
+    paperCase "§5.2 Eq. (9)" "relative land-use value scales price proportionally" <| fun () ->
+      let rect = { X = 0.0f; Z = 0.0f; W = 20.0f; H = 10.0f }
+      let low = computeLotEconomics 100.0f 0.30f (phase6Lot rect ResidentialUse 0.30f)
+      let high = computeLotEconomics 100.0f 0.30f (phase6Lot rect ResidentialUse 0.60f)
+      (abs ((high.Price / low.Price) - 2.0f) < 1e-3f)
+      |> Expect.isTrue "doubling land-use value relative to the mean should double price"
+
+    paperCase "§5.2 Eq. (9)-(10)" "zero mean land-use value collapses economics safely" <| fun () ->
+      let rect = { X = 0.0f; Z = 0.0f; W = 20.0f; H = 10.0f }
+      let economics = computeLotEconomics 100.0f 0.0f (phase6Lot rect ResidentialUse 0.60f)
+      economics.Price |> Expect.equal "zero mean land-use value should avoid division blowups" 0.0f
+      economics.FloorSpace |> Expect.equal "zero mean land-use value should eliminate profitable floorspace" 0.0f
+      economics.Residents |> Expect.equal "zero mean land-use value should eliminate residents/activity" 0.0f
+
+    paperCase "§5.2 Eq. (10)" "floor space is derived from price via the land-use margin" <| fun () ->
+      let rect = { X = 0.0f; Z = 0.0f; W = 20.0f; H = 10.0f }
+      let economics = computeLotEconomics 100.0f 0.30f (phase6Lot rect CommercialUse 0.60f)
+      (abs (economics.FloorSpace - economics.Price * 0.82f) < 1e-3f)
+      |> Expect.isTrue "commercial floor space should be price multiplied by the configured margin"
+
+    paperCase "§5.2" "commercial and industrial lots contribute positive activity" <| fun () ->
+      let rect = { X = 0.0f; Z = 0.0f; W = 20.0f; H = 10.0f }
+      let commercial = computeLotEconomics 100.0f 0.30f (phase6Lot rect CommercialUse 0.60f)
+      let industrial = computeLotEconomics 100.0f 0.30f (phase6Lot rect IndustrialUse 0.60f)
+      (commercial.Residents, 0.0f) |> Expect.isGreaterThan "commercial lots should contribute non-zero residents-equivalent demand"
+      (industrial.Residents, 0.0f) |> Expect.isGreaterThan "industrial lots should contribute non-zero residents-equivalent demand"
+
+    naturalismCase "economy intensity ordering" "park lots stay lower intensity than residential lots under the same market conditions" <| fun () ->
+      let rect = { X = 0.0f; Z = 0.0f; W = 20.0f; H = 10.0f }
+      let park = computeLotEconomics 100.0f 0.30f (phase6Lot rect ParkUse 0.60f)
+      let residential = computeLotEconomics 100.0f 0.30f (phase6Lot rect ResidentialUse 0.60f)
+      (residential.FloorSpace, park.FloorSpace) |> Expect.isGreaterThan "parks should remain lower floor-space intensity than residential lots"
+      (residential.Residents, park.Residents) |> Expect.isGreaterThan "parks should remain lower occupancy than residential lots"
+
+    paperProperty "§5.2 Eq. (9)-(10)" "economy outputs remain non-negative" <|
+      fun (NonNegativeInt rawAvgPrice) (NonNegativeInt rawMean) (PositiveInt rawW) (PositiveInt rawH) ->
+        let rect =
+          { X = 0.0f
+            Z = 0.0f
+            W = float32 (1 + rawW % 40)
+            H = float32 (1 + rawH % 40) }
+        let avgPrice = float32 (rawAvgPrice % 200)
+        let meanLuv = float32 (rawMean % 100) / 100.0f
+        let economics = computeLotEconomics avgPrice meanLuv (phase6Lot rect MixedUseZone 0.75f)
+        economics.Price >= 0.0f
+        && economics.FloorSpace >= 0.0f
+        && economics.Residents >= 0.0f
+
+    paperProperty "§5.2 Eq. (9)-(10)" "doubling lot area doubles price floor space and residents" <|
+      fun (PositiveInt rawW) (PositiveInt rawH) ->
+        let width = float32 (1 + rawW % 20)
+        let height = float32 (1 + rawH % 20)
+        let small = phase6Lot { X = 0.0f; Z = 0.0f; W = width; H = height } ResidentialUse 0.60f
+        let large = phase6Lot { X = 0.0f; Z = 0.0f; W = width * 2.0f; H = height } ResidentialUse 0.60f
+        let smallEconomics = computeLotEconomics 100.0f 0.30f small
+        let largeEconomics = computeLotEconomics 100.0f 0.30f large
+        abs (largeEconomics.Price - smallEconomics.Price * 2.0f) < 1e-3f
+        && abs (largeEconomics.FloorSpace - smallEconomics.FloorSpace * 2.0f) < 1e-3f
+        && abs (largeEconomics.Residents - smallEconomics.Residents * 2.0f) < 1e-3f
+  ]
+
+let zoningEnvelopeTests =
+  testList "Zoning envelopes" [
+    paperCase "§5.3" "lots with only planned frontages do not produce envelopes" <| fun () ->
+      let rect = { X = 0.0f; Z = 0.0f; W = 10.0f; H = 10.0f }
+      let lot = { phase6Lot rect ResidentialUse 0.6f with FloorSpace = 177.984f }
+      let plan =
+        phase7Plan lot [
+          phase7MinorStreet rect Planned 12.0f { X = 0.0f; Z = -1.0f; W = 10.0f; H = 1.0f }
+          phase7MinorStreet rect Planned 30.0f { X = 10.0f; Z = 0.0f; W = 1.0f; H = 10.0f }
+        ]
+      computeBuildingEnvelopeInPlan plan lot
+      |> Expect.isNone "planned streets should not yet produce a buildable envelope"
+
+    paperCase "§5.3" "highest-traffic built frontage wins on corner lots" <| fun () ->
+      let rect = { X = 0.0f; Z = 0.0f; W = 10.0f; H = 10.0f }
+      let lot = { phase6Lot rect ResidentialUse 0.6f with FloorSpace = 177.984f }
+      let plan =
+        phase7Plan lot [
+          phase7MinorStreet rect Built 12.0f { X = 0.0f; Z = -1.0f; W = 10.0f; H = 1.0f }
+          phase7MinorStreet rect Built 30.0f { X = 10.0f; Z = 0.0f; W = 1.0f; H = 10.0f }
+        ]
+      let envelope = computeBuildingEnvelopeInPlan plan lot |> Option.defaultWith (fun () -> failtest "expected a corner-lot envelope")
+      envelope.FrontageEdge |> Expect.equal "the east frontage should win because it carries more built traffic" East
+
+    paperCase "§5.3" "planned high-traffic frontages do not beat built frontages" <| fun () ->
+      let rect = { X = 0.0f; Z = 0.0f; W = 10.0f; H = 10.0f }
+      let lot = { phase6Lot rect ResidentialUse 0.6f with FloorSpace = 177.984f }
+      let plan =
+        phase7Plan lot [
+          phase7MinorStreet rect Built 10.0f { X = 0.0f; Z = -1.0f; W = 10.0f; H = 1.0f }
+          phase7MinorStreet rect Planned 100.0f { X = 10.0f; Z = 0.0f; W = 1.0f; H = 10.0f }
+        ]
+      let envelope = computeBuildingEnvelopeInPlan plan lot |> Option.defaultWith (fun () -> failtest "expected a built-frontage envelope")
+      envelope.FrontageEdge |> Expect.equal "planned traffic should not override the only built frontage" North
+
+    paperCase "§5.3 Eq. (11)" "floor counts derive from floorspace divided by envelope area" <| fun () ->
+      let rect = { X = 0.0f; Z = 0.0f; W = 10.0f; H = 10.0f }
+      let lot = { phase6Lot rect ResidentialUse 0.6f with FloorSpace = 177.984f }
+      let plan =
+        phase7Plan lot [
+          phase7MinorStreet rect Built 12.0f { X = 0.0f; Z = -1.0f; W = 10.0f; H = 1.0f }
+        ]
+      let envelope = computeBuildingEnvelopeInPlan plan lot |> Option.defaultWith (fun () -> failtest "expected a built-frontage envelope")
+      (abs (envelope.Area - 88.992f) < 1e-3f) |> Expect.isTrue "residential setbacks should yield the expected envelope area"
+      (abs (envelope.NFloors - 2.0f) < 1e-3f) |> Expect.isTrue "nFloors should follow equation (11)"
+
+    paperCase "§5.3" "degenerate setbacks return no envelope instead of a fake sliver" <| fun () ->
+      let rect = { X = 0.0f; Z = 0.0f; W = 0.3f; H = 0.3f }
+      let lot = { phase6Lot rect ResidentialUse 0.6f with FloorSpace = 20.0f }
+      let plan =
+        phase7Plan lot [
+          phase7MinorStreet rect Built 12.0f { X = 0.0f; Z = -1.0f; W = 0.3f; H = 1.0f }
+        ]
+      computeBuildingEnvelopeInPlan plan lot
+      |> Expect.isNone "if setbacks consume the lot the envelope should be absent"
+
+    paperCase "§5.3" "land-use updates recompute contextual envelopes using the winning built frontage" <| fun () ->
+      let rect = { X = 0.0f; Z = 0.0f; W = 10.0f; H = 10.0f }
+      let lot = phase6Lot rect ResidentialUse 0.6f
+      let plan =
+        phase7Plan lot [
+          phase7MinorStreet rect Built 8.0f { X = 0.0f; Z = -1.0f; W = 10.0f; H = 1.0f }
+          phase7MinorStreet rect Built 18.0f { X = 10.0f; Z = 0.0f; W = 1.0f; H = 10.0f }
+        ]
+      let config : LandUseSimulationConfig =
+        { Goals = [ { LandUseType = ResidentialUse; TargetPercent = 1.0f } ]
+          Definitions =
+            [ { LandUseType = ResidentialUse
+                Valuations = [ { Metric = LotArea; Curve = LinearUp; Min = 0.0f; Max = 100.0f; Weight = 1.0f } ] } ]
+          AveragePricePerSqm = 100.0f
+          GlobalWeight = 1.0f
+          LocalWeight = 0.0f
+          GoalScale = 1.0f
+          AttemptsFraction = 1.0f
+          RejectedDeltaThreshold = 0.1f
+          Seed = 7
+          Cadence = { StepYears = 1.0f; ReevaluationYears = 1.0f; ElapsedSinceLastEvaluationYears = 1.0f } }
+      let updated, _ = updateLandUseSimulationWith config plan
+      let updatedLot = updated.Quarters.Head.Blocks.Head.Lots.Head
+      let envelope = updatedLot.Envelope |> Option.defaultWith (fun () -> failtest "expected envelope to be recomputed during land-use refresh")
+      envelope.FrontageEdge |> Expect.equal "the east frontage should win once contextual zoning is wired through the update pipeline" East
+      (envelope.NFloors, 0.0f) |> Expect.isGreaterThan "economy-derived floorspace should produce positive floor counts"
+
+    paperProperty "§5.3" "generated envelopes stay inside their lots" <|
+      fun (PositiveInt rawW) (PositiveInt rawH) ->
+        let rect = { X = 0.0f; Z = 0.0f; W = float32 (3 + rawW % 30); H = float32 (3 + rawH % 30) }
+        let lot = { phase6Lot rect MixedUseZone 0.6f with FloorSpace = 200.0f }
+        let plan =
+          phase7Plan lot [
+            phase7MinorStreet rect Built 14.0f { X = 0.0f; Z = -1.0f; W = rect.W; H = 1.0f }
+          ]
+        match computeBuildingEnvelopeInPlan plan lot with
+        | None -> true
+        | Some envelope -> containsRect rect envelope.Rect && envelope.Area <= TRect.area rect
+
+    paperProperty "§5.3 Eq. (11)" "floor counts increase monotonically with floorspace" <|
+      fun (PositiveInt rawFloorSpace) ->
+        let rect = { X = 0.0f; Z = 0.0f; W = 10.0f; H = 10.0f }
+        let lowFloorSpace = float32 (1 + rawFloorSpace % 200)
+        let highFloorSpace = lowFloorSpace + 50.0f
+        let lowLot = { phase6Lot rect ResidentialUse 0.6f with FloorSpace = lowFloorSpace }
+        let highLot = { phase6Lot rect ResidentialUse 0.6f with FloorSpace = highFloorSpace }
+        let plan =
+          phase7Plan lowLot [
+            phase7MinorStreet rect Built 12.0f { X = 0.0f; Z = -1.0f; W = 10.0f; H = 1.0f }
+          ]
+        match computeBuildingEnvelopeInPlan plan lowLot, computeBuildingEnvelopeInPlan plan highLot with
+        | Some lowEnvelope, Some highEnvelope -> highEnvelope.NFloors > lowEnvelope.NFloors
+        | _ -> false
+  ]
+
+let buildingSubstitutionTests =
+  testList "Building substitution" [
+    paperCase "§5.4" "substitution probability combines age and positive price discrepancy" <| fun () ->
+      let probability =
+        computeBuildingSubstitutionProbability phase10SubstitutionConfig 20.0f 100.0f 150.0f
+      abs (probability - 0.5f) < 1e-4f
+      |> Expect.isTrue "age and positive price gap should sum into the substitution probability"
+
+    paperCase "§5.4" "negative price discrepancy is clamped to zero" <| fun () ->
+      computeBuildingSubstitutionProbability phase10SubstitutionConfig 0.0f 120.0f 80.0f
+      |> Expect.equal "redevelopment pressure should not increase when the potential building is worth less" 0.0f
+
+    paperCase "§5.4" "replacement occurs when the deterministic roll is below probability" <| fun () ->
+      let blockRect = { X = 0.0f; Z = 0.0f; W = 10.0f; H = 10.0f }
+      let current = phase10Lot blockRect blockRect 20.0f 100.0f 40.0f 16.0f
+      let replaced =
+        applyBuildingSubstitution 1.0f 0.49f 0.5f { Price = 150.0f; FloorSpace = 80.0f; Residents = 32.0f } current
+      replaced.Price |> Expect.equal "replacement should adopt the potential price" 150.0f
+      replaced.FloorSpace |> Expect.equal "replacement should adopt the potential floor space" 80.0f
+      replaced.Residents |> Expect.equal "replacement should adopt the potential resident count" 32.0f
+      replaced.BuildingAgeYears |> Expect.equal "replacement should reset building age" 0.0f
+
+    paperCase "§5.4" "no replacement preserves the existing building and increments age" <| fun () ->
+      let blockRect = { X = 0.0f; Z = 0.0f; W = 10.0f; H = 10.0f }
+      let current = phase10Lot blockRect blockRect 20.0f 100.0f 40.0f 16.0f
+      let retained =
+        applyBuildingSubstitution 1.0f 0.51f 0.5f { Price = 150.0f; FloorSpace = 80.0f; Residents = 32.0f } current
+      retained.Price |> Expect.equal "retained building should keep its current price" 100.0f
+      retained.FloorSpace |> Expect.equal "retained building should keep its current floor space" 40.0f
+      retained.Residents |> Expect.equal "retained building should keep its current resident count" 16.0f
+      retained.BuildingAgeYears |> Expect.equal "retained building should age by the simulation step" 21.0f
+
+    paperCase "§5.4" "plan-level substitution is deterministic for the same seed and step index" <| fun () ->
+      let quarterRect = { X = 0.0f; Z = 0.0f; W = 20.0f; H = 10.0f }
+      let current =
+        phase10Plan quarterRect
+          [ phase10Lot quarterRect { X = 0.0f; Z = 0.0f; W = 10.0f; H = 10.0f } 12.0f 80.0f 30.0f 12.0f
+            phase10Lot quarterRect { X = 10.0f; Z = 0.0f; W = 10.0f; H = 10.0f } 7.0f 110.0f 44.0f 18.0f ]
+      let redevelopment =
+        phase10Plan quarterRect
+          [ phase10Lot quarterRect { X = 0.0f; Z = 0.0f; W = 10.0f; H = 10.0f } 0.0f 140.0f 75.0f 30.0f
+            phase10Lot quarterRect { X = 10.0f; Z = 0.0f; W = 10.0f; H = 10.0f } 0.0f 112.0f 45.0f 18.5f ]
+      let firstPlan, firstStats = updateBuildingSubstitutionWith phase10SubstitutionConfig 3 1.0f current redevelopment
+      let secondPlan, secondStats = updateBuildingSubstitutionWith phase10SubstitutionConfig 3 1.0f current redevelopment
+      firstPlan |> Expect.equal "the same seed and step index should replay the same substitutions" secondPlan
+      firstStats |> Expect.equal "deterministic substitution should also replay its stats" secondStats
+
+    naturalismCase "§5.4 redevelopment ordering" "older underbuilt lots redevelop before newer near-par lots" <| fun () ->
+      let quarterRect = { X = 0.0f; Z = 0.0f; W = 20.0f; H = 10.0f }
+      let current =
+        phase10Plan quarterRect
+          [ phase10Lot quarterRect { X = 0.0f; Z = 0.0f; W = 10.0f; H = 10.0f } 40.0f 50.0f 30.0f 12.0f
+            phase10Lot quarterRect { X = 10.0f; Z = 0.0f; W = 10.0f; H = 10.0f } 0.0f 150.0f 90.0f 36.0f ]
+      let redevelopment =
+        phase10Plan quarterRect
+          [ phase10Lot quarterRect { X = 0.0f; Z = 0.0f; W = 10.0f; H = 10.0f } 0.0f 150.0f 90.0f 36.0f
+            phase10Lot quarterRect { X = 10.0f; Z = 0.0f; W = 10.0f; H = 10.0f } 0.0f 150.0f 90.0f 36.0f ]
+      let updated, stats = updateBuildingSubstitutionWith phase10SubstitutionConfig 1 1.0f current redevelopment
+      let lots = updated.Quarters.Head.Blocks.Head.Lots
+      lots.[0].Price |> Expect.equal "the older underbuilt lot should redevelop into the higher-value building" 150.0f
+      lots.[0].BuildingAgeYears |> Expect.equal "redevelopment should reset the replaced lot's age" 0.0f
+      lots.[1].Price |> Expect.equal "the newer near-par lot should keep its existing building" 150.0f
+      lots.[1].BuildingAgeYears |> Expect.equal "the retained lot should simply age by one year" 1.0f
+      stats.ReplacedLots |> Expect.equal "exactly one lot should redevelop in this fixture" 1
+  ]
+
+let subdivisionFidelityTests =
+  testList "Land-use subdivision" [
+    paperCase "§5.1" "subdivision rules differ by land use" <| fun () ->
+      let residential = subdivisionRuleForLandUse ResidentialUse
+      let industrial = subdivisionRuleForLandUse IndustrialUse
+      residential.MaxLotArea |> Expect.equal "residential max lot area should be pinned for TDD" 120.0f
+      industrial.MaxLotArea |> Expect.equal "industrial max lot area should be pinned for TDD" 400.0f
+      (industrial.MaxLotArea, residential.MaxLotArea) |> Expect.isGreaterThan "industrial lots should be allowed to grow larger than residential ones"
+      (residential.MinWidthLengthRatio, industrial.MinWidthLengthRatio) |> Expect.isGreaterThan "residential frontage ratios should be stricter than industrial ones"
+
+    paperCase "§5.1" "longest street-facing edge selection is deterministic" <| fun () ->
+      let wideBlock = phase5Block { X = 0.0f; Z = 0.0f; W = 30.0f; H = 12.0f } ResidentialUse 0.5f [ North; West ]
+      let squareBlock = phase5Block { X = 0.0f; Z = 0.0f; W = 12.0f; H = 12.0f } ResidentialUse 0.5f [ North; West ]
+      selectLongestStreetFacingEdge wideBlock |> Expect.equal "wider north edge should dominate west edge" (Some North)
+      selectLongestStreetFacingEdge squareBlock |> Expect.equal "tie-break should remain deterministic" (Some North)
+
+    paperCase "§5.1" "subdivision splits orthogonally to the selected street-facing edge" <| fun () ->
+      let block = phase5Block { X = 0.0f; Z = 0.0f; W = 20.0f; H = 12.0f } ResidentialUse 0.5f [ North ]
+      let lots, stats = subdivideBlockByLandUseWithStats block
+      lots |> Expect.hasLength "a 20x12 residential block should split once at the midpoint" 2
+      lots |> List.iter (fun lot -> lot.FrontageEdge |> Expect.equal "orthogonal splitting should preserve the selected frontage edge" North)
+      lots |> List.map (fun lot -> lot.Rect) |> Expect.contains "the first child should occupy the west half" { X = 0.0f; Z = 0.0f; W = 10.0f; H = 12.0f }
+      lots |> List.map (fun lot -> lot.Rect) |> Expect.contains "the second child should occupy the east half" { X = 10.0f; Z = 0.0f; W = 10.0f; H = 12.0f }
+      stats.AcceptedSplits |> Expect.equal "one successful split should be counted" 1
+
+    paperCase "§5.1" "blocks already below the land-use max area remain single lots" <| fun () ->
+      let block = phase5Block { X = 0.0f; Z = 0.0f; W = 10.0f; H = 10.0f } ResidentialUse 0.5f [ North ]
+      let lots = subdivideBlockByLandUse block
+      lots |> Expect.hasLength "sub-threshold residential blocks should not subdivide" 1
+      lots.Head.Rect |> Expect.equal "terminal lot should match the source block" block.Rect
+
+    paperCase "§5.1" "residential subdivision yields more smaller lots than industrial subdivision on the same block" <| fun () ->
+      let rect = { X = 0.0f; Z = 0.0f; W = 40.0f; H = 20.0f }
+      let residentialLots = subdivideBlockByLandUse (phase5Block rect ResidentialUse 0.5f [ North ])
+      let industrialLots = subdivideBlockByLandUse (phase5Block rect IndustrialUse 0.5f [ North ])
+      (residentialLots.Length, industrialLots.Length) |> Expect.isGreaterThan "residential blocks should subdivide more aggressively"
+      let residentialMaxArea = residentialLots |> List.maxBy (fun lot -> TRect.area lot.Rect) |> fun lot -> TRect.area lot.Rect
+      let industrialMaxArea = industrialLots |> List.maxBy (fun lot -> TRect.area lot.Rect) |> fun lot -> TRect.area lot.Rect
+      (industrialMaxArea, residentialMaxArea) |> Expect.isGreaterThan "industrial lots should remain larger on the same parent block"
+
+    paperCase "§5.1" "retry logic falls back from an invalid street-facing edge to a non-street edge" <| fun () ->
+      let block = phase5Block { X = 0.0f; Z = 0.0f; W = 18.0f; H = 10.0f } ResidentialUse 0.5f [ East ]
+      let lots, stats = subdivideBlockByLandUseWithStats block
+      lots |> Expect.hasLength "fallback should still recover a valid split" 2
+      lots |> List.map (fun lot -> lot.Rect) |> Expect.contains "fallback should split vertically into equal halves" { X = 0.0f; Z = 0.0f; W = 9.0f; H = 10.0f }
+      lots |> List.map (fun lot -> lot.Rect) |> Expect.contains "fallback should split vertically into equal halves" { X = 9.0f; Z = 0.0f; W = 9.0f; H = 10.0f }
+      lots |> List.iter (fun lot -> lot.FrontageEdge |> Expect.equal "lots should keep their primary frontage even after fallback" East)
+      (stats.StreetEdgeRetries, 0) |> Expect.isGreaterThan "street-edge retries should be recorded before fallback"
+      stats.NonStreetEdgeFallbacks |> Expect.equal "one non-street fallback should be recorded" 1
+
+    paperProperty "§5.1" "subdivision preserves total area and keeps lots inside the parent block" <|
+      fun (PositiveInt rawW) (PositiveInt rawH) ->
+        let rect = { X = 0.0f; Z = 0.0f; W = float32 (12 + rawW % 60); H = float32 (12 + rawH % 60) }
+        let block = phase5Block rect MixedUseZone 0.5f [ North ]
+        let lots = subdivideBlockByLandUse block
+        let areaPreserved = abs ((lots |> List.sumBy (fun lot -> TRect.area lot.Rect)) - TRect.area rect) < 1e-3f
+        let allInside = lots |> List.forall (fun lot -> containsRect rect lot.Rect)
+        areaPreserved && allInside
+
+    paperProperty "§5.1" "subdivided lots never overlap and always keep positive area" <|
+      fun (PositiveInt rawW) (PositiveInt rawH) ->
+        let rect = { X = 0.0f; Z = 0.0f; W = float32 (12 + rawW % 50); H = float32 (12 + rawH % 50) }
+        let block = phase5Block rect ResidentialUse 0.5f [ North; East ]
+        let lots = subdivideBlockByLandUse block
+        let allPositive =
+          lots |> List.forall (fun lot -> lot.Rect.W > 0.0f && lot.Rect.H > 0.0f && TRect.area lot.Rect > 0.0f)
+        let noOverlaps =
+          lots
+          |> List.indexed
+          |> List.allPairs (lots |> List.indexed)
+          |> List.forall (fun ((i, a), (j, b)) -> i >= j || not (rectsOverlap a.Rect b.Rect))
+        allPositive && noOverlaps
+  ]
+
+let majorStreetGrowthTests =
+  testList "Major street growth" [
+    paperCase "§3.1" "growth-center sampling prefers nodes near the active center" <| fun () ->
+      let g = WeberGraph()
+      let nearId = g.AddNode(Vec2.Create(0.0f, 0.0f), Avenue)
+      let farId = g.AddNode(Vec2.Create(30.0f, 0.0f), Avenue)
+      let rng = Random 42
+      let picks =
+        [ for _ in 1 .. 200 ->
+            sampleNode g [| Vec2.Create(0.0f, 0.0f) |] 0.08f rng (RoadClass.tier Avenue) ]
+      let nearCount = picks |> List.filter ((=) (Some nearId)) |> List.length
+      let farCount = picks |> List.filter ((=) (Some farId)) |> List.length
+      (nearCount, farCount) |> Expect.isGreaterThan "near-center nodes should be selected more often than far-away nodes"
+
+    paperCase "§3.1 Fig. 5" "valence-two nodes branch orthogonally from straight corridors" <| fun () ->
+      let g = WeberGraph()
+      let north = g.AddNode(Vec2.Create(10.0f, 2.0f), Avenue)
+      let mid = g.AddNode(Vec2.Create(10.0f, 10.0f), Avenue)
+      let south = g.AddNode(Vec2.Create(10.0f, 18.0f), Avenue)
+      g.AddEdge(mid, north, Avenue, RoadClass.width Avenue) |> ignore
+      g.AddEdge(mid, south, Avenue, RoadClass.width Avenue) |> ignore
+      let proposed = expandNode g mid (Random 7) true 6.0f |> Option.get
+      (abs (proposed.Y - 10.0f), 0.001f) |> Expect.isLessThan "grid growth should stay on the corridor's orthogonal axis"
+      (abs (proposed.X - 10.0f), 1.0f) |> Expect.isGreaterThan "valence-two growth should turn left or right"
+
+    paperCase "§3.1 Fig. 6" "legality adaptation shortens at the first intersection and snaps to nearby nodes" <| fun () ->
+      let g = WeberGraph()
+      let a = g.AddNode(Vec2.Create(10.0f, 0.0f), Avenue)
+      let b = g.AddNode(Vec2.Create(10.0f, 20.0f), Avenue)
+      let snapNode = g.AddNode(Vec2.Create(12.0f, 10.0f), Avenue)
+      let originNode = g.AddNode(Vec2.Create(0.0f, 10.0f), Avenue)
+      g.AddEdge(a, b, Avenue, RoadClass.width Avenue) |> ignore
+      match findClosestIntersection g (g.N originNode).Pos (Vec2.Create(20.0f, 10.0f)) with
+      | HitEdgeInterior (edgeId, pt, edgeT) ->
+          edgeId |> Expect.equal "the vertical corridor should be the first crossed edge" (EdgeId 0)
+          (abs (pt.X - 10.0f), 0.01f) |> Expect.isLessThan "intersection hit should report the crossing point"
+          (abs (pt.Y - 10.0f), 0.01f) |> Expect.isLessThan "intersection hit should preserve the crossing height"
+          (edgeT, 0.5f) |> Expect.equal "crossing should occur halfway along the existing corridor" 0.5f
+      | other ->
+          failtestf "expected an interior edge hit but got %A" other
+      let shortened = adaptIntersection g (g.N originNode).Pos (Vec2.Create(20.0f, 10.0f))
+      (abs (shortened.X - 10.0f), 0.01f) |> Expect.isLessThan "intersection adaptation should stop at the first crossing"
+      (abs (shortened.Y - 10.0f), 0.01f) |> Expect.isLessThan "intersection adaptation should preserve the intended axis"
+      let snapped = adaptSnapping g (Vec2.Create(12.2f, 10.1f)) 1.0f originNode
+      snapped |> Expect.equal "snapping should reuse existing nearby nodes" (Some snapNode)
+
+    paperCase "§3.1 Fig. 6" "splitting a crossed edge creates a shared node and replaces the original corridor" <| fun () ->
+      let g = WeberGraph()
+      let a = g.AddNode(Vec2.Create(10.0f, 0.0f), Avenue)
+      let b = g.AddNode(Vec2.Create(10.0f, 20.0f), Avenue)
+      g.AddEdge(a, b, Avenue, RoadClass.width Avenue) |> ignore
+      let splitNode = g.SplitEdge(EdgeId 0, Vec2.Create(10.0f, 12.0f))
+      let splitPos = (g.N splitNode).Pos
+      (abs (splitPos.X - 10.0f), 0.01f) |> Expect.isLessThan "split node should sit on the original corridor"
+      (abs (splitPos.Y - 12.0f), 0.01f) |> Expect.isLessThan "split node should sit at the requested crossing point"
+      g.Edges |> Seq.toList |> Expect.hasLength "the original corridor should be replaced by two segments" 2
+      g.Edges
+      |> Seq.forall (fun edge -> edge.A = splitNode || edge.B = splitNode)
+      |> Expect.isTrue "both replacement segments should connect to the shared split node"
+      (g.N splitNode).Valence |> Expect.equal "split node should have degree two on the rebuilt corridor" 2
+
+    assumptionCase "pipeline API for §3.1" "major street growth planner exists" <| fun () ->
+      hasModuleFunction "planMajorStreetGrowth"
+      |> Expect.isTrue "phase 2 needs an explicit major street growth planner"
+
+    naturalismCase "major-cycle quarters" "major street growth produces planned avenues and quarter rectangles" <| fun () ->
+      let rect = { X = 0.0f; Z = 0.0f; W = 60.0f; H = 40.0f }
+      let growth = planMajorStreetGrowth rect 12 0.2f (Random 42)
+      growth.MajorStreets |> Expect.isNonEmpty "major growth should emit planned avenues"
+      growth.MajorStreets |> List.forall (fun street -> street.Status = Planned) |> Expect.isTrue "major growth should keep streets planned before traffic promotion"
+      growth.QuarterRects |> Expect.isNonEmpty "closed major cycles should induce quarter rectangles"
+      growth.QuarterRects
+      |> List.iter (fun quarter ->
+        (quarter.X, rect.X) |> Expect.isGreaterThanOrEqual "quarter should stay within district bounds"
+        (quarter.Z, rect.Z) |> Expect.isGreaterThanOrEqual "quarter should stay within district bounds"
+        (quarter.X + quarter.W, rect.X + rect.W) |> Expect.isLessThanOrEqual "quarter should stay within district bounds"
+        (quarter.Z + quarter.H, rect.Z + rect.H) |> Expect.isLessThanOrEqual "quarter should stay within district bounds")
+
+    paperProperty "§3.1" "grown major street graphs keep valid node references and remain inside the district" <|
+      fun (PositiveInt rawDemand) rawOrganic rawW rawH ->
+        let rect = randomDistrictRect rawW rawH
+        let demand = 2 + rawDemand % 12
+        let organic = abs rawOrganic % 100 |> float32 |> fun n -> n / 100.0f
+        let g, centers = seedMajorGrowthTestGraph rect
+        let edgeBudget = max 2 demand
+        let segmentLength = max 4.0f (min rect.W rect.H / 5.0f)
+        growStreets g centers (Random 42) Avenue true segmentLength (segmentLength * 0.45f) (segmentLength * 0.35f) edgeBudget 0.01f (Some rect)
+        g.Edges
+        |> Seq.iter (fun edge ->
+          NodeId.value edge.A < g.NodeCount |> Expect.isTrue "edge start should reference an existing node"
+          NodeId.value edge.B < g.NodeCount |> Expect.isTrue "edge end should reference an existing node"
+          let a = (g.N edge.A).Pos
+          let b = (g.N edge.B).Pos
+          (rect.X - 0.01f <= a.X && a.X <= rect.X + rect.W + 0.01f && rect.Z - 0.01f <= a.Y && a.Y <= rect.Z + rect.H + 0.01f)
+          |> Expect.isTrue "edge start should remain within bounds"
+          (rect.X - 0.01f <= b.X && b.X <= rect.X + rect.W + 0.01f && rect.Z - 0.01f <= b.Y && b.Y <= rect.Z + rect.H + 0.01f)
+          |> Expect.isTrue "edge end should remain within bounds")
+  ]
+
 let specDrivenLayoutTests =
   testList "Spec-driven district planning" [
     testCase "hierarchical district planner creates major and minor streets plus enough blocks" <| fun () ->
       let rect = { X = 0.0f; Z = 0.0f; W = 60.0f; H = 40.0f }
-      let roads, blocks = planHierarchicalDistrict rect 9 0.25f (Random 42)
-      roads |> List.exists (fun road -> road.Class = Avenue) |> Expect.isTrue "planner should create at least one major street"
-      roads |> List.exists (fun road -> road.Class = Street) |> Expect.isTrue "planner should create minor streets inside quarters"
+      let plan = planHierarchicalDistrict rect 9 0.25f (Random 42)
+      let blocks = plan.Quarters |> List.collect (fun quarter -> quarter.Blocks)
+      plan.MajorStreets |> Expect.isNonEmpty "planner should create at least one major street"
+      plan.Quarters |> List.exists (fun quarter -> not quarter.MinorStreets.IsEmpty) |> Expect.isTrue "planner should create minor streets inside quarters"
       (blocks.Length, 9) |> Expect.isGreaterThanOrEqual "planner should produce enough street-induced blocks for module demand"
       blocks
       |> List.pairwise
       |> List.exists (fun (a, b) -> rectsOverlap a.Rect b.Rect)
       |> Expect.isFalse "adjacent planned blocks should not overlap"
 
+    testCase "quarters own their minor streets and blocks" <| fun () ->
+      let rect = { X = 0.0f; Z = 0.0f; W = 60.0f; H = 40.0f }
+      let plan = planHierarchicalDistrict rect 9 0.25f (Random 42)
+      plan.Quarters
+      |> List.iter (fun quarter ->
+        quarter.MinorStreets
+        |> List.iter (fun street -> street.QuarterRect |> Expect.equal "minor street should belong to its parent quarter" quarter.Rect)
+        quarter.Blocks
+        |> List.iter (fun block -> block.QuarterRect |> Expect.equal "block should belong to its parent quarter" quarter.Rect))
+
     testCase "block subdivision creates frontage lots touching the block boundary" <| fun () ->
-      let block = { X = 5.0f; Z = 7.0f; W = 18.0f; H = 10.0f }
+      let block = PlannedBlock.create { X = 5.0f; Z = 7.0f; W = 18.0f; H = 10.0f } { X = 5.0f; Z = 7.0f; W = 18.0f; H = 10.0f }
       let lots = subdivideBlockIntoLots block 5
       lots |> Expect.hasLength "requested lot count should be produced" 5
       lots
       |> List.iter (fun lot ->
         let touchesBoundary =
-          abs (lot.Rect.X - block.X) < 0.001f
-          || abs ((lot.Rect.X + lot.Rect.W) - (block.X + block.W)) < 0.001f
-          || abs (lot.Rect.Z - block.Z) < 0.001f
-          || abs ((lot.Rect.Z + lot.Rect.H) - (block.Z + block.H)) < 0.001f
-        touchesBoundary |> Expect.isTrue "every lot should keep direct road frontage on the parent block boundary")
+          abs (lot.Rect.X - block.Rect.X) < 0.001f
+          || abs ((lot.Rect.X + lot.Rect.W) - (block.Rect.X + block.Rect.W)) < 0.001f
+          || abs (lot.Rect.Z - block.Rect.Z) < 0.001f
+          || abs ((lot.Rect.Z + lot.Rect.H) - (block.Rect.Z + block.Rect.H)) < 0.001f
+        touchesBoundary |> Expect.isTrue "every lot should keep direct road frontage on the parent block boundary"
+        lot.BlockRect |> Expect.equal "lot should remember its parent block" block.Rect)
+      lots |> List.forall (fun lot -> lot.FrontageEdge = North) |> Expect.isTrue "wide block frontage should be encoded explicitly"
 
     testCase "lot placement keeps one building per function inside its assigned lot envelope" <| fun () ->
       let lots =
-        subdivideBlockIntoLots { X = 0.0f; Z = 0.0f; W = 20.0f; H = 12.0f } 4
+        subdivideBlockIntoLots (PlannedBlock.create { X = 0.0f; Z = 0.0f; W = 20.0f; H = 12.0f } { X = 0.0f; Z = 0.0f; W = 20.0f; H = 12.0f }) 4
       let funcs = List.init 4 (fun i -> mkFunc (sprintf "lotFunc%d" i) "LotMod")
       let buildings = placeBuildingsInLots lots funcs Map.empty (Color(70uy, 130uy, 180uy, 255uy)) (Random 7) Map.empty
       buildings |> Expect.hasLength "lot placement should yield one building per lot/function" 4
@@ -1208,6 +2231,568 @@ let specDrivenLayoutTests =
         (building.Z, lot.Rect.Z) |> Expect.isGreaterThanOrEqual "building top edge inside lot"
         (building.X + building.W, lot.Rect.X + lot.Rect.W) |> Expect.isLessThanOrEqual "building right edge inside lot"
         (building.Z + building.D, lot.Rect.Z + lot.Rect.H) |> Expect.isLessThanOrEqual "building bottom edge inside lot")
+  ]
+
+// Proof-layer legend:
+// - [paper ...] direct claims traceable to urbanSimulation.md sections / figures / equations.
+// - [assumption ...] explicit API/model choices we are making to implement the paper in this codebase.
+// - [naturalism ...] derived morphology regressions that help guard believable output, but are not paper-fidelity proof.
+
+let urbanSimulationPaperComplianceTests =
+  testList "urbanSimulation paper compliance" [
+    paperCase "§2.2, §3.2, Fig. 3" "newly grown major streets stay planned until traffic promotes them" <| fun () ->
+      let rect = { X = 0.0f; Z = 0.0f; W = 60.0f; H = 40.0f }
+      let plan = planHierarchicalDistrict rect 9 0.25f (Random 42)
+      plan.MajorStreets
+      |> List.exists (fun street -> street.Status = Planned)
+      |> Expect.isTrue "urbanSimulation.md requires planned major streets before they become built"
+
+    paperProperty "§2.2, §3.2, Fig. 3" "generated streets remain planned before traffic promotion" <|
+      fun (PositiveInt rawDemand) rawOrganic rawW rawH ->
+        let rect = randomDistrictRect rawW rawH
+        let demand = 1 + rawDemand % 24
+        let organic = abs rawOrganic % 100 |> float32 |> fun n -> n / 100.0f
+        let plan = planHierarchicalDistrict rect demand organic (Random 42)
+        let allStatuses =
+          (plan.MajorStreets |> List.map (fun street -> street.Status))
+          @ (plan.Quarters |> List.collect (fun quarter -> quarter.MinorStreets |> List.map (fun street -> street.Status)))
+        allStatuses |> List.forall ((=) Planned)
+  ]
+
+let urbanSimulationAssumptionTests =
+  testList "urbanSimulation assumptions" [
+    assumptionCase "model surface for §2.2 + §4.1" "quarters carry land use classification and value" <| fun () ->
+      hasRecordField<QuarterPlan> "LandUseType" |> Expect.isTrue "quarters should record their dominant land use type"
+      hasRecordField<QuarterPlan> "LandUseValue" |> Expect.isTrue "quarters should record land use suitability/value"
+
+    assumptionCase "model surface for §2.2 + §4.1" "blocks carry land use classification and value" <| fun () ->
+      hasRecordField<PlannedBlock> "LandUseType" |> Expect.isTrue "blocks should record land use type"
+      hasRecordField<PlannedBlock> "LandUseValue" |> Expect.isTrue "blocks should record land use suitability/value"
+      hasRecordField<PlannedBlock> "Lots" |> Expect.isTrue "blocks should persist their current lot state for land-use simulation"
+      hasRecordField<PlannedBlock> "StreetFacingEdges" |> Expect.isTrue "blocks should persist the street-facing edges that drive subdivision fidelity"
+
+    assumptionCase "model surface for §2.1 + §4.1 + §5.3" "lots carry land use and zoning envelope data" <| fun () ->
+      hasRecordField<PlannedLot> "LandUseType" |> Expect.isTrue "lots should record land use type"
+      hasRecordField<PlannedLot> "LandUseValue" |> Expect.isTrue "lots should record land use suitability/value"
+      hasRecordField<PlannedLot> "Envelope" |> Expect.isTrue "lots should expose the zoning-derived building envelope"
+      hasRecordField<PlannedLot> "FrontingStreetStatus" |> Expect.isTrue "lots should know whether their frontage street is planned or built"
+
+    assumptionCase "pipeline API for §2.2 + §3.2" "traffic promotion step exists" <| fun () ->
+      hasModuleFunction "promotePlannedStreets"
+      |> Expect.isTrue "traffic simulation should promote planned streets to built streets when thresholds are met"
+
+    assumptionCase "pipeline API for §3.2" "traffic update and routing steps exist" <| fun () ->
+      hasModuleFunction "updateTrafficSimulation"
+      |> Expect.isTrue "traffic should be recomputed in an explicit simulation stage"
+      hasModuleFunction "shortestStreetPath"
+      |> Expect.isTrue "traffic simulation needs explicit shortest-path routing over street segments"
+      hasModuleFunction "generateResidentTrips"
+      |> Expect.isTrue "traffic simulation should expose resident-derived trip generation"
+      hasModuleFunction "applyResidentTrip"
+      |> Expect.isTrue "traffic simulation should expose trip application"
+      hasModuleFunction "removeResidentTrip"
+      |> Expect.isTrue "traffic simulation should expose trip removal"
+
+    assumptionCase "model surface for §3.2" "streets carry ids residents and traffic state" <| fun () ->
+      hasRecordField<MajorStreet> "Id" |> Expect.isTrue "major streets should carry a stable street id"
+      hasRecordField<MajorStreet> "Residents" |> Expect.isTrue "major streets should expose resident demand"
+      hasRecordField<MajorStreet> "Traffic" |> Expect.isTrue "major streets should carry traffic state"
+      hasRecordField<MinorStreet> "Id" |> Expect.isTrue "minor streets should carry a stable street id"
+      hasRecordField<MinorStreet> "Residents" |> Expect.isTrue "minor streets should expose resident demand"
+      hasRecordField<MinorStreet> "Traffic" |> Expect.isTrue "minor streets should carry traffic state"
+
+    assumptionCase "pipeline API for §2.2" "time-stepped urban simulation entrypoint exists" <| fun () ->
+      hasModuleFunction "simulateUrbanStep"
+      |> Expect.isTrue "the full urbanSimulation pipeline should advance in explicit time steps"
+
+    assumptionCase "pipeline API for §4.1-§4.3" "land use update step exists" <| fun () ->
+      hasModuleFunction "updateLandUseSimulation"
+      |> Expect.isTrue "land use reevaluation should exist as a distinct simulation step"
+      hasModuleFunction "updateLandUseSimulationWith"
+      |> Expect.isTrue "phase 4 land-use reevaluation should expose a configurable deterministic update entrypoint"
+      hasModuleFunction "computeGlobalLandUseValue"
+      |> Expect.isTrue "phase 4 should expose the global land-use penalty from equations (2)-(3)"
+      hasModuleFunction "evaluateLocalLotLandUseValue"
+      |> Expect.isTrue "phase 4 should expose the local lot valuation from equation (4)"
+
+    assumptionCase "pipeline API for §5.1" "lot subdivision uses land-use-specific thresholds" <| fun () ->
+      hasModuleFunction "subdivideBlockByLandUse"
+      |> Expect.isTrue "lot subdivision should depend on block land use as described in section 5.1"
+      hasModuleFunction "subdivideBlockByLandUseWithStats"
+      |> Expect.isTrue "phase 5 should expose deterministic subdivision stats for regression coverage"
+      hasModuleFunction "subdivisionRuleForLandUse"
+      |> Expect.isTrue "phase 5 should expose the public land-use subdivision rules"
+      hasModuleFunction "selectLongestStreetFacingEdge"
+      |> Expect.isTrue "phase 5 should expose frontage-edge selection so tests can pin deterministic behavior"
+
+    assumptionCase "model surface for §5.2 Eq. (9)-(10)" "economy model computes lot price floorspace and residents" <| fun () ->
+      hasRecordField<PlannedLot> "Price" |> Expect.isTrue "lots should carry economy-model price"
+      hasRecordField<PlannedLot> "FloorSpace" |> Expect.isTrue "lots should carry required floorspace"
+      hasRecordField<PlannedLot> "Residents" |> Expect.isTrue "lots should carry estimated residents"
+
+    assumptionCase "pipeline API for §5.3 Eq. (11)" "building envelope generation step exists" <| fun () ->
+      hasModuleFunction "computeBuildingEnvelope"
+      |> Expect.isTrue "building envelope generation should be a distinct zoning step"
+
+    assumptionCase "pipeline API for phase 8 orchestration" "time-stepped simulation surface exists" <| fun () ->
+      hasModuleFunction "simulateUrbanTimeline"
+      |> Expect.isTrue "phase 8 should expose a public multi-step timeline runner"
+      hasModuleFunction "simulateUrbanTimelineWith"
+      |> Expect.isTrue "phase 8 should expose a configurable multi-step timeline runner"
+      hasRecordField<SimulationTimelineConfig> "BuildingSubstitution"
+      |> Expect.isTrue "timeline config should be able to opt into time-aware building substitution"
+      hasRecordField<TimelineStepSnapshot> "BuildingSubstitutionStats"
+      |> Expect.isTrue "timeline snapshots should expose substitution observability"
+
+    assumptionCase "pipeline API for phase 9 benchmarking" "benchmark case and budget surfaces exist" <| fun () ->
+      hasModuleFunction "benchmarkDistrictForSize"
+      |> Expect.isTrue "phase 9 should expose named benchmark fixture sizes"
+      hasModuleFunction "benchmarkSimulationCases"
+      |> Expect.isTrue "phase 9 should expose a public multi-case benchmark runner"
+      hasModuleFunction "evaluateBenchmarkBudget"
+      |> Expect.isTrue "phase 9 should expose pure budget evaluation separate from timing capture"
+
+    assumptionCase "pipeline API for §5.4 building substitution" "substitution surfaces exist" <| fun () ->
+      hasRecordField<PlannedLot> "BuildingAgeYears"
+      |> Expect.isTrue "building substitution needs persistent building age on each lot"
+      hasModuleFunction "computeBuildingSubstitutionProbability"
+      |> Expect.isTrue "phase 10 should expose pure substitution probability scoring"
+      hasModuleFunction "updateBuildingSubstitutionWith"
+      |> Expect.isTrue "phase 10 should expose deterministic plan-level building substitution"
+
+    assumptionProperty "named valuation API for §4.3 Eq. (4)" "land use valuation functions are exposed on the [0,1] range" <|
+      fun (_: NonNegativeInt) ->
+        hasModuleFunction "evaluateLotLandUseValue"
+
+    assumptionProperty "named economy API for §5.2 Eq. (9)-(10)" "economy model exposes positive residents and floorspace outputs" <|
+      fun (_: PositiveInt) ->
+        hasModuleFunction "computeLotEconomics"
+  ]
+
+let urbanSimulationNaturalismRegressionTests =
+  testList "urbanSimulation naturalism regressions" [
+    naturalismCase "morphology guard on street-induced districts" "planned street-induced blocks do not overlap" <| fun () ->
+      let rect = { X = 0.0f; Z = 0.0f; W = 60.0f; H = 40.0f }
+      let plan = planHierarchicalDistrict rect 9 0.25f (Random 42)
+      let blocks = plan.Quarters |> List.collect (fun quarter -> quarter.Blocks)
+      blocks
+      |> List.pairwise
+      |> List.exists (fun (a, b) -> rectsOverlap a.Rect b.Rect)
+      |> Expect.isFalse "street-induced blocks should not overlap"
+
+    naturalismCase "frontage-lot regression" "block subdivision keeps every lot touching the parent block boundary" <| fun () ->
+      let block = PlannedBlock.create { X = 5.0f; Z = 7.0f; W = 18.0f; H = 10.0f } { X = 5.0f; Z = 7.0f; W = 18.0f; H = 10.0f }
+      let lots = subdivideBlockIntoLots block 5
+      lots
+      |> List.iter (fun lot ->
+        let touchesBoundary =
+          abs (lot.Rect.X - block.Rect.X) < 0.001f
+          || abs ((lot.Rect.X + lot.Rect.W) - (block.Rect.X + block.Rect.W)) < 0.001f
+          || abs (lot.Rect.Z - block.Rect.Z) < 0.001f
+          || abs ((lot.Rect.Z + lot.Rect.H) - (block.Rect.Z + block.Rect.H)) < 0.001f
+        touchesBoundary |> Expect.isTrue "every lot should keep direct frontage on the parent boundary")
+
+    naturalismCase "envelope-placement regression" "building footprints stay within their assigned lot envelopes" <| fun () ->
+      let lots =
+        subdivideBlockIntoLots (PlannedBlock.create { X = 0.0f; Z = 0.0f; W = 20.0f; H = 12.0f } { X = 0.0f; Z = 0.0f; W = 20.0f; H = 12.0f }) 4
+      let funcs = List.init 4 (fun i -> mkFunc (sprintf "lotFunc%d" i) "LotMod")
+      let buildings = placeBuildingsInLots lots funcs Map.empty (Color(70uy, 130uy, 180uy, 255uy)) (Random 7) Map.empty
+      List.zip lots buildings
+      |> List.iter (fun (lot, building) ->
+        (building.X, lot.Rect.X) |> Expect.isGreaterThanOrEqual "building left edge inside lot"
+        (building.Z, lot.Rect.Z) |> Expect.isGreaterThanOrEqual "building top edge inside lot"
+        (building.X + building.W, lot.Rect.X + lot.Rect.W) |> Expect.isLessThanOrEqual "building right edge inside lot"
+        (building.Z + building.D, lot.Rect.Z + lot.Rect.H) |> Expect.isLessThanOrEqual "building bottom edge inside lot")
+  ]
+
+let urbanSimulationProofLayerTests =
+  testList "urbanSimulation proof layer" [
+    urbanSimulationPaperComplianceTests
+    urbanSimulationAssumptionTests
+    urbanSimulationNaturalismRegressionTests
+  ]
+
+let simulationTraceTests =
+  testList "urbanSimulation trace harness" [
+    testCase "seeded planner replays deterministically" <| fun () ->
+      let rect = { X = 0.0f; Z = 0.0f; W = 60.0f; H = 40.0f }
+      let first = planHierarchicalDistrictFromSeed 42 rect 9 0.25f
+      let second = planHierarchicalDistrictFromSeed 42 rect 9 0.25f
+      first |> Expect.equal "same seed should replay the same district plan" second
+
+    testCase "runSimulationStage mirrors the public stage functions" <| fun () ->
+      let initial = Scenario.singlePlannedMajorStreet { X = 8.0f; Z = 0.0f; W = 4.0f; H = 32.0f }
+      let trafficUpdated = runSimulationStage UpdateTrafficSimulationStage initial
+      trafficUpdated |> Expect.equal "stage runner should delegate to updateTrafficSimulation" (updateTrafficSimulation initial)
+
+    testCase "stepWithTrace exposes stage order and direct outputs" <| fun () ->
+      let rect = { X = 0.0f; Z = 0.0f; W = 60.0f; H = 40.0f }
+      let initial = planHierarchicalDistrictFromSeed 42 rect 9 0.25f
+      let trafficUpdated = updateTrafficSimulation initial
+      let promoted = promotePlannedStreets trafficUpdated
+      let updated = updateLandUseSimulation promoted
+      let trace = stepWithTrace (Some 42) initial
+      trace.Seed |> Expect.equal "trace should carry the replay seed" (Some 42)
+      trace.Initial |> Expect.equal "trace should preserve the initial plan" initial
+      trace.Stages |> List.map _.Stage
+      |> Expect.equal "trace should expose the current simulation stages in order" [ UpdateTrafficSimulationStage; PromotePlannedStreetsStage; UpdateLandUseSimulationStage ]
+      trace.Stages.[0].Plan |> Expect.equal "first stage snapshot should match direct traffic output" trafficUpdated
+      trace.Stages.[1].Plan |> Expect.equal "second stage snapshot should match direct promotion output" promoted
+      trace.Stages.[2].Plan |> Expect.equal "third stage snapshot should match direct land-use update output" updated
+      trace.Final |> Expect.equal "trace final should match simulateUrbanStep" (simulateUrbanStep initial)
+
+    testCase "canonicalized traces ignore incidental collection ordering" <| fun () ->
+      let quarterRect = { X = 0.0f; Z = 0.0f; W = 24.0f; H = 18.0f }
+      let blockA = Scenario.rectangularBlock quarterRect { X = 0.0f; Z = 0.0f; W = 12.0f; H = 18.0f } ResidentialUse 0.7f
+      let blockB = Scenario.rectangularBlock quarterRect { X = 12.0f; Z = 0.0f; W = 12.0f; H = 18.0f } CommercialUse 0.8f
+      let minorA = MinorStreet.planned quarterRect { X = 12.0f; Z = 0.0f; W = 1.0f; H = 18.0f }
+      let minorB = MinorStreet.built quarterRect { X = 0.0f; Z = 9.0f; W = 24.0f; H = 1.0f }
+      let quarter =
+        QuarterPlan.create quarterRect [ minorA; minorB ] [ blockA; blockB ]
+        |> fun q -> { q with LandUseType = MixedUseZone; LandUseValue = 0.75f }
+      let planA =
+        { MajorStreets = [ MajorStreet.planned { X = 11.5f; Z = 0.0f; W = 1.0f; H = 18.0f } ]
+          Quarters = [ quarter ] }
+      let planB =
+        { MajorStreets = List.rev planA.MajorStreets
+          Quarters =
+            [ { quarter with
+                  MinorStreets = List.rev quarter.MinorStreets
+                  Blocks = List.rev quarter.Blocks } ] }
+      let traceA = stepWithTrace None planA |> canonicalizeSimulationTrace
+      let traceB = stepWithTrace None planB |> canonicalizeSimulationTrace
+      traceA |> Expect.equal "canonicalized traces should compare by stable content, not incidental ordering" traceB
+
+    testCase "scenario builders create minimal trustworthy fixtures" <| fun () ->
+      let rect = { X = 0.0f; Z = 0.0f; W = 20.0f; H = 12.0f }
+      let singleQuarter = Scenario.singleQuarter rect
+      singleQuarter.MajorStreets |> Expect.isEmpty "singleQuarter should not invent major streets"
+      singleQuarter.Quarters |> Expect.hasLength "singleQuarter should create exactly one quarter" 1
+      let block = Scenario.rectangularBlock rect rect CivicUse 0.6f
+      block.LandUseType |> Expect.equal "builder should stamp the requested land use" CivicUse
+      let lot =
+        Scenario.rectangularLot rect rect North Built MixedUseZone 0.9f
+      lot.FrontingStreetStatus |> Expect.equal "lot builder should preserve requested street status" Built
+      lot.Envelope |> Expect.isSome "built lot builder should derive an envelope"
+      let major = Scenario.singlePlannedMajorStreet { X = 2.0f; Z = 0.0f; W = 2.0f; H = 12.0f }
+      major.MajorStreets |> Expect.hasLength "single planned major street builder should create exactly one street" 1
+      let minor = Scenario.singleBuiltMinorStreet rect { X = 0.0f; Z = 4.0f; W = 20.0f; H = 1.0f }
+      minor.Quarters |> List.collect _.MinorStreets |> List.map _.Status
+      |> Expect.equal "single built minor street builder should preserve built status" [ Built ]
+  ]
+
+let simulationTimelineTests =
+  testList "urbanSimulation timeline" [
+    testCase "one-step cadence and one-step promotion match repeated simulateUrbanStep" <| fun () ->
+      let initial = benchmarkDistrict 17
+      let config = phase8TimelineConfig 3 1.0f 1.0f 1
+      let timeline = simulateUrbanTimeline config (Some 17) initial
+      let manual =
+        initial
+        |> simulateUrbanStep
+        |> simulateUrbanStep
+        |> simulateUrbanStep
+      timeline.Steps |> List.length |> Expect.equal "timeline should record each simulated step" 3
+      timeline.Steps |> List.map _.ElapsedYears
+      |> Expect.equal "elapsed years should accumulate monotonically" [ 1.0f; 2.0f; 3.0f ]
+      canonicalizeDistrictPlan timeline.Final
+      |> Expect.equal "default timeline orchestration should preserve the manual step semantics"
+           (canonicalizeDistrictPlan manual)
+
+    testCase "land use reevaluation only runs when the cadence horizon is reached" <| fun () ->
+      let initial = benchmarkDistrict 17
+      let config = phase8TimelineConfig 3 1.0f 2.0f 1
+      let timeline = simulateUrbanTimeline config (Some 17) initial
+      timeline.Steps |> List.map (fun step -> step.LandUseStats.SkippedByCadence)
+      |> Expect.equal "cadence should skip the first and third years while evaluating the second"
+           [ true; false; true ]
+
+    testCase "planned street promotion is delayed until a street qualifies for the required number of steps" <| fun () ->
+      let seeded = Scenario.singlePlannedMajorStreet { X = 8.0f; Z = 0.0f; W = 4.0f; H = 32.0f }
+      let initial =
+        { seeded with
+            MajorStreets =
+              [ { seeded.MajorStreets.Head with
+                    Residents = 40.0f } ] }
+      let config = phase8TimelineConfig 2 1.0f 10.0f 2
+      let timeline = simulateUrbanTimeline config None initial
+      timeline.Steps.[0].Plan.MajorStreets.Head.Status
+      |> Expect.equal "one qualifying step should not yet build the street" Planned
+      timeline.Steps.[1].Plan.MajorStreets.Head.Status
+      |> Expect.equal "the second qualifying step should build the street" Built
+
+    testCase "delayed street builds delay frontage envelopes until the built step arrives" <| fun () ->
+      let rect = { X = 0.0f; Z = 0.0f; W = 10.0f; H = 10.0f }
+      let lot = phase6Lot rect ResidentialUse 0.6f
+      let initial =
+        phase7Plan lot [
+          { phase7MinorStreet rect Planned 0.0f { X = 0.0f; Z = -1.0f; W = 10.0f; H = 1.0f } with
+              Residents = 40.0f }
+        ]
+      let config = phase8TimelineConfig 2 1.0f 1.0f 2
+      let timeline = simulateUrbanTimeline config None initial
+      let firstStepLot = timeline.Steps.[0].Plan.Quarters.Head.Blocks.Head.Lots.Head
+      let secondStepLot = timeline.Steps.[1].Plan.Quarters.Head.Blocks.Head.Lots.Head
+      timeline.Steps.[0].Plan.Quarters.Head.MinorStreets.Head.Status
+      |> Expect.equal "the frontage street should still be planned after one qualifying year" Planned
+      firstStepLot.FrontingStreetStatus
+      |> Expect.equal "fronting status should remain planned before promotion" Planned
+      firstStepLot.Envelope
+      |> Expect.isNone "planned frontage should not yet produce a buildable envelope"
+      timeline.Steps.[1].Plan.Quarters.Head.MinorStreets.Head.Status
+      |> Expect.equal "the frontage street should build on the second qualifying year" Built
+      secondStepLot.FrontingStreetStatus
+      |> Expect.equal "fronting status should become built once promotion lands" Built
+      secondStepLot.Envelope
+      |> Expect.isSome "built frontage should allow a contextual building envelope"
+
+    testCase "timeline ages retained buildings when substitution probability is zero" <| fun () ->
+      let quarterRect = { X = 0.0f; Z = 0.0f; W = 10.0f; H = 10.0f }
+      let initial =
+        phase10Plan quarterRect [
+          phase10Lot quarterRect quarterRect 10.0f 100.0f 40.0f 16.0f
+        ]
+      let landUseConfig = phase11StableLandUseConfig 17 0.0f 10.0f
+      let substitution =
+        Some
+          { phase10SubstitutionConfig with
+              AgeFactor = { phase10SubstitutionConfig.AgeFactor with Weight = 0.0f }
+              PriceGapFactor = { phase10SubstitutionConfig.PriceGapFactor with Weight = 0.0f } }
+      let config = phase11TimelineConfig substitution 1 5.0f 10.0f 1
+      let timeline = simulateUrbanTimelineWith landUseConfig config None initial
+      let finalLot = timeline.Final.Quarters.Head.Blocks.Head.Lots.Head
+      finalLot.BuildingAgeYears
+      |> Expect.equal "retained buildings should age by the step years inside the timeline" 15.0f
+      timeline.Steps.Head.BuildingSubstitutionStats.EvaluatedLots
+      |> Expect.equal "the timeline should evaluate substitution for the retained lot" 1
+      timeline.Steps.Head.BuildingSubstitutionStats.ReplacedLots
+      |> Expect.equal "zero probability should retain the existing building" 0
+      timeline.Steps.Head.BuildingSubstitutionStats.RetainedLots
+      |> Expect.equal "zero probability should count the lot as retained" 1
+      timeline.Steps.Head.Delta.ReplacedLotCount
+      |> Expect.equal "delta should report no replacements for a retained step" 0
+
+    testCase "timeline replacement copies the refreshed potential lot and exposes substitution stats" <| fun () ->
+      let quarterRect = { X = 0.0f; Z = 0.0f; W = 10.0f; H = 10.0f }
+      let initial =
+        phase10Plan quarterRect [
+          { phase10Lot quarterRect quarterRect 25.0f 50.0f 10.0f 2.0f with
+              Envelope = None }
+        ]
+      let landUseConfig = phase11StableLandUseConfig 17 0.0f 1.0f
+      let substitution =
+        Some
+          { phase10SubstitutionConfig with
+              AgeFactor = { Curve = LinearUp; Min = 0.0f; Max = 1.0f; Weight = 1.0f }
+              PriceGapFactor = { phase10SubstitutionConfig.PriceGapFactor with Weight = 0.0f } }
+      let config = phase11TimelineConfig substitution 1 1.0f 1.0f 1
+      let expectedPotential =
+        updateLandUseSimulationWith
+          { landUseConfig with
+              Cadence = { landUseConfig.Cadence with ElapsedSinceLastEvaluationYears = 1.0f } }
+          initial
+        |> fst
+        |> fun plan -> plan.Quarters.Head.Blocks.Head.Lots.Head
+      let timeline = simulateUrbanTimelineWith landUseConfig config None initial
+      let step = timeline.Steps.Head
+      let finalLot = step.Plan.Quarters.Head.Blocks.Head.Lots.Head
+      finalLot.Price |> Expect.equal "replacement should adopt the refreshed potential price" expectedPotential.Price
+      finalLot.FloorSpace |> Expect.equal "replacement should adopt the refreshed potential floor space" expectedPotential.FloorSpace
+      finalLot.Residents |> Expect.equal "replacement should adopt the refreshed potential residents" expectedPotential.Residents
+      finalLot.Envelope |> Expect.equal "replacement should adopt the refreshed potential envelope" expectedPotential.Envelope
+      finalLot.BuildingAgeYears |> Expect.equal "replacement should reset building age in the timed pipeline" 0.0f
+      step.BuildingSubstitutionStats.EvaluatedLots
+      |> Expect.equal "the timed pipeline should report the evaluated lot" 1
+      step.BuildingSubstitutionStats.ReplacedLots
+      |> Expect.equal "forced replacement should report exactly one redevelopment" 1
+      step.BuildingSubstitutionStats.RetainedLots
+      |> Expect.equal "forced replacement should retain no lots in this fixture" 0
+      step.Delta.ReplacedLotCount
+      |> Expect.equal "timeline deltas should expose replacement counts" 1
+
+    testCase "timeline accumulates building age across retained steps and resets it on replacement" <| fun () ->
+      let quarterRect = { X = 0.0f; Z = 0.0f; W = 10.0f; H = 10.0f }
+      let initial =
+        phase10Plan quarterRect [
+          phase10Lot quarterRect quarterRect 0.0f 100.0f 40.0f 16.0f
+        ]
+      let landUseConfig = phase11StableLandUseConfig 17 0.0f 100.0f
+      let substitution =
+        Some
+          { phase10SubstitutionConfig with
+              AgeFactor = { Curve = Step; Min = 0.0f; Max = 20.0f; Weight = 1.0f }
+              PriceGapFactor = { phase10SubstitutionConfig.PriceGapFactor with Weight = 0.0f } }
+      let config = phase11TimelineConfig substitution 3 5.0f 100.0f 1
+      let timeline = simulateUrbanTimelineWith landUseConfig config None initial
+      let ages =
+        timeline.Steps
+        |> List.map (fun step -> step.Plan.Quarters.Head.Blocks.Head.Lots.Head.BuildingAgeYears)
+      ages
+      |> Expect.equal "retained years should accumulate until the replacement step resets age" [ 5.0f; 10.0f; 0.0f ]
+      timeline.Steps |> List.map (fun step -> step.BuildingSubstitutionStats.ReplacedLots)
+      |> Expect.equal "only the third step should trigger replacement in this age-threshold fixture" [ 0; 0; 1 ]
+  ]
+
+let simulationBenchmarkTests =
+  let asPlainTrace (trace: InstrumentedSimulationTrace) =
+    { Seed = trace.Seed
+      Initial = trace.Initial
+      Stages =
+        trace.Stages
+        |> List.map (fun snapshot ->
+          { Stage = snapshot.Stage
+            Plan = snapshot.Plan })
+      Final = trace.Final }
+
+  testList "urbanSimulation benchmark harness" [
+    testCase "instrumented trace preserves canonical simulation behavior" <| fun () ->
+      let initial = benchmarkDistrict 42
+      let plain = stepWithTrace (Some 42) initial |> canonicalizeSimulationTrace
+      let instrumented = stepWithInstrumentation (Some 42) initial |> asPlainTrace |> canonicalizeSimulationTrace
+      instrumented |> Expect.equal "instrumentation should not change the resulting simulation trace" plain
+
+    testCase "promotion delta counts only streets that actually flipped to built" <| fun () ->
+      let largeQuarterRect = { X = 0.0f; Z = 0.0f; W = 16.0f; H = 10.0f }
+      let smallQuarterRect = { X = 20.0f; Z = 0.0f; W = 8.0f; H = 8.0f }
+      let largeBlock = Scenario.rectangularBlock largeQuarterRect largeQuarterRect ResidentialUse 0.5f
+      let smallBlock = Scenario.rectangularBlock smallQuarterRect smallQuarterRect ResidentialUse 0.5f
+      let before =
+        { MajorStreets =
+            [ { MajorStreet.planned { X = 0.0f; Z = 0.0f; W = 3.0f; H = 24.0f } with Traffic = { Volume = 12.0f; MaxVolume = 0.0f } }
+              { MajorStreet.planned { X = 30.0f; Z = 0.0f; W = 3.0f; H = 10.0f } with Traffic = { Volume = 1.0f; MaxVolume = 0.0f } } ]
+          Quarters =
+            [ QuarterPlan.create largeQuarterRect [ { MinorStreet.planned largeQuarterRect { X = 7.5f; Z = 0.0f; W = 1.0f; H = 10.0f } with Traffic = { Volume = 12.0f; MaxVolume = 0.0f } } ] [ largeBlock ]
+              QuarterPlan.create smallQuarterRect [ { MinorStreet.planned smallQuarterRect { X = 23.5f; Z = 0.0f; W = 1.0f; H = 8.0f } with Traffic = { Volume = 1.0f; MaxVolume = 0.0f } } ] [ smallBlock ] ] }
+      let after = promotePlannedStreets before
+      let delta = summarizeSimulationStageDelta before after
+      delta.PromotedMajorStreetCount |> Expect.equal "only the long planned major street should promote" 1
+      delta.PromotedMinorStreetCount |> Expect.equal "only the large-quarter minor street should promote" 1
+      delta.QuarterLandUseChangedCount |> Expect.equal "promotion alone should not relabel quarters" 0
+      delta.BlockLandUseChangedCount |> Expect.equal "promotion alone should not relabel blocks" 0
+
+    testCase "land use delta reports changed quarters blocks and total value movement" <| fun () ->
+      let quarterRect = { X = 0.0f; Z = 0.0f; W = 20.0f; H = 20.0f }
+      let beforeBlock =
+        Scenario.rectangularBlock quarterRect quarterRect ParkUse 0.1f
+      let beforeQuarter =
+        QuarterPlan.create quarterRect [ MinorStreet.built quarterRect { X = 9.5f; Z = 0.0f; W = 1.0f; H = 20.0f } ] [ beforeBlock ]
+        |> fun quarter ->
+          { quarter with
+              LandUseType = ParkUse
+              LandUseValue = 0.1f }
+      let before =
+        { MajorStreets = []
+          Quarters = [ beforeQuarter ] }
+      let after = updateLandUseSimulation before
+      let delta = summarizeSimulationStageDelta before after
+      delta.QuarterLandUseChangedCount |> Expect.equal "quarter relabel should be counted" 1
+      delta.BlockLandUseChangedCount |> Expect.equal "block relabel should be counted" 1
+      (delta.TotalBlockLandUseValueDelta, 0.0f) |> Expect.isGreaterThan "value delta should capture the block's new suitability"
+
+    testCase "benchmark summary reuses canonical result and excludes warmup from measured counts" <| fun () ->
+      let initial = benchmarkDistrict 42
+      let summary = benchmarkSimulationStep 2 3 (Some 42) initial
+      summary.WarmupIterations |> Expect.equal "warmup iteration count should be reported" 2
+      summary.MeasuredIterations |> Expect.equal "measured iteration count should be reported" 3
+      summary.StageBenchmarks |> List.map _.Stage
+      |> Expect.equal "each public stage should receive a benchmark row" [ UpdateTrafficSimulationStage; PromotePlannedStreetsStage; UpdateLandUseSimulationStage ]
+      summary.StageBenchmarks |> List.iter (fun stage ->
+        stage.Iterations |> Expect.equal "measured iteration count should flow into each stage benchmark" 3
+        stage.MinElapsed >= TimeSpan.Zero |> Expect.isTrue "minimum elapsed time should be non-negative"
+        stage.MaxElapsed >= stage.MinElapsed |> Expect.isTrue "maximum elapsed should dominate minimum")
+      summary.CanonicalResult
+      |> Expect.equal "benchmark should preserve the canonical step result"
+           (stepWithTrace (Some 42) initial |> canonicalizeSimulationTrace)
+
+    testCase "benchmarkSimulationCases returns named summaries in input order" <| fun () ->
+      let cases =
+        [ { Name = "tiny"
+            Size = Tiny
+            Seed = 11
+            Initial = benchmarkDistrictForSize Tiny 11
+            Budget = None }
+          { Name = "medium"
+            Size = Medium
+            Seed = 13
+            Initial = benchmarkDistrictForSize Medium 13
+            Budget = None }
+          { Name = "target"
+            Size = Target
+            Seed = 17
+            Initial = benchmarkDistrictForSize Target 17
+            Budget = None } ]
+      let summaries = benchmarkSimulationCases 0 1 cases
+      summaries |> List.map (fun summary -> summary.Case.Name, summary.Case.Size)
+      |> Expect.equal "multi-case benchmarks should preserve scenario ordering"
+           [ "tiny", Tiny; "medium", Medium; "target", Target ]
+
+    testCase "benchmarkSimulationCases includes workload counters and result counts" <| fun () ->
+      let cases =
+        [ { Name = "tiny"
+            Size = Tiny
+            Seed = 19
+            Initial = benchmarkDistrictForSize Tiny 19
+            Budget = None } ]
+      let summary = benchmarkSimulationCases 0 1 cases |> List.exactlyOne
+      (summary.Counters.TripsGenerated, 0)
+      |> Expect.isGreaterThan "benchmark counters should expose generated trips"
+      summary.Counters.PathComputations
+      |> Expect.equal "traffic workload should count one path computation for each ordered resident pair"
+           (summary.Counters.TripsGenerated * max 0 (summary.Counters.TripsGenerated - 1))
+      (summary.Counters.SplitCandidatesTried, 0)
+      |> Expect.isGreaterThan "subdivision workload should expose tried split candidates"
+      (summary.Counters.ResultStreetCount, 0)
+      |> Expect.isGreaterThan "final plan should report resulting street count"
+      (summary.Counters.ResultBlockCount, 0)
+      |> Expect.isGreaterThan "final plan should report resulting block count"
+      (summary.Counters.ResultLotCount, 0)
+      |> Expect.isGreaterThan "final plan should report resulting lot count"
+
+    testCase "evaluateBenchmarkBudget classifies summaries purely" <| fun () ->
+      let canonical = stepWithTrace (Some 7) (benchmarkDistrict 7) |> canonicalizeSimulationTrace
+      let summaryWithMedian median =
+        { WarmupIterations = 0
+          MeasuredIterations = 1
+          StageBenchmarks = []
+          TotalMinElapsed = median
+          TotalMedianElapsed = median
+          TotalMaxElapsed = median
+          CanonicalResult = canonical }
+      evaluateBenchmarkBudget None (summaryWithMedian (TimeSpan.FromMilliseconds 10.0))
+      |> Expect.equal "missing budgets should report that no reference target was evaluated" NotEvaluated
+      evaluateBenchmarkBudget
+        (Some
+          { ReferenceLabel = "paper target"
+            TargetMedianElapsed = TimeSpan.FromMilliseconds 20.0 })
+        (summaryWithMedian (TimeSpan.FromMilliseconds 10.0))
+      |> Expect.equal "summaries below the target median should be marked within reference" WithinReference
+      evaluateBenchmarkBudget
+        (Some
+          { ReferenceLabel = "paper target"
+            TargetMedianElapsed = TimeSpan.FromMilliseconds 5.0 })
+        (summaryWithMedian (TimeSpan.FromMilliseconds 10.0))
+      |> Expect.equal "summaries above the target median should report advisory overage"
+           (OverReference (TimeSpan.FromMilliseconds 5.0))
+
+    testCase "benchmarkSimulationCases reports budget status without throwing" <| fun () ->
+      let cases =
+        [ { Name = "tiny-over-budget"
+            Size = Tiny
+            Seed = 23
+            Initial = benchmarkDistrictForSize Tiny 23
+            Budget =
+              Some
+                { ReferenceLabel = "impossibly fast"
+                  TargetMedianElapsed = TimeSpan.FromTicks 1L } } ]
+      let summary = benchmarkSimulationCases 0 1 cases |> List.exactlyOne
+      match summary.BudgetStatus with
+      | OverReference _ -> ()
+      | other -> failtestf "expected advisory over-budget classification, got %A" other
+
+    testCase "benchmark harness rejects invalid iteration counts" <| fun () ->
+      let initial = benchmarkDistrict 42
+      Expect.throwsT<ArgumentException> "negative warmup should be rejected" (fun () -> benchmarkSimulationStep -1 1 (Some 42) initial |> ignore)
+      Expect.throwsT<ArgumentException> "non-positive measured iterations should be rejected" (fun () -> benchmarkSimulationStep 0 0 (Some 42) initial |> ignore)
   ]
 
 let gitMetaTests =
@@ -1253,6 +2838,54 @@ let organicFactorTests =
       (old, young) |> Expect.isGreaterThan "1000-day-old code should be more organic than 30-day-old"
   ]
 
+let private roadOrientationDegrees (road: Road) =
+  let dx = road.ToPos.X - road.FromPos.X
+  let dz = road.ToPos.Z - road.FromPos.Z
+  let angle = MathF.Atan2(dz, dx) * 180.0f / MathF.PI
+  let normalized =
+    match angle < 0.0f with
+    | true -> angle + 180.0f
+    | false -> angle
+  match normalized >= 180.0f with
+  | true -> normalized - 180.0f
+  | false -> normalized
+
+let private roadOrientationBucket bucketSize road =
+  int (MathF.Floor((roadOrientationDegrees road + bucketSize / 2.0f) / bucketSize))
+
+let private orientationHistogram bucketSize roads =
+  roads
+  |> List.groupBy (roadOrientationBucket bucketSize)
+  |> List.map (fun (bucket, groupedRoads) -> bucket, groupedRoads.Length)
+  |> List.sortByDescending snd
+
+let private axisAlignedBucket bucketSize bucket =
+  let angle = float32 bucket * bucketSize
+  let nearestAxis =
+    [ 0.0f; 90.0f; 180.0f ]
+    |> List.map (fun axis -> abs (angle - axis))
+    |> List.min
+  nearestAxis <= bucketSize
+
+let private nearestRoadDistance (roads: Road list) (x: float32) (z: float32) =
+  let pointDistance road =
+    let ax = road.FromPos.X
+    let az = road.FromPos.Z
+    let bx = road.ToPos.X
+    let bz = road.ToPos.Z
+    let dx = bx - ax
+    let dz = bz - az
+    let lenSq = dx * dx + dz * dz
+    let t =
+      match lenSq < 1e-10f with
+      | true -> 0.0f
+      | false -> min 1.0f (max 0.0f (((x - ax) * dx + (z - az) * dz) / lenSq))
+    let nearX = ax + t * dx
+    let nearZ = az + t * dz
+    sqrt ((x - nearX) * (x - nearX) + (z - nearZ) * (z - nearZ))
+
+  roads |> List.map pointDistance |> List.min
+
 let weberDistrictTests =
   testList "Weber district layout" [
     testCase "layout produces non-empty buildings for non-trivial block" <| fun () ->
@@ -1268,6 +2901,18 @@ let weberDistrictTests =
       let rng   = Random(7)
       let _, roads = layoutWeberDistrict rect funcs Map.empty (Color(70uy, 130uy, 180uy, 255uy)) 10 100 1.0f rng Map.empty
       roads |> Expect.isNonEmpty "organic district should produce internal roads"
+
+    testCase "organic district road network mixes orientations while retaining a corridor family" <| fun () ->
+      let rect  = { X = 0.0f; Z = 0.0f; W = 60.0f; H = 50.0f }
+      let funcs = List.init 24 (fun i -> mkFunc (sprintf "o%d" i) "OrganicMixMod")
+      let rng   = Random(17)
+      let _, roads = layoutWeberDistrict rect funcs Map.empty (Color(70uy, 130uy, 180uy, 255uy)) 10 100 1.0f rng Map.empty
+      roads |> Expect.isNonEmpty "organic district should produce roads"
+      let histogram = orientationHistogram 15.0f roads
+      (histogram.Length, 3) |> Expect.isGreaterThanOrEqual "organic streets should span at least three orientation families"
+      let dominantBucket, dominantCount = histogram |> List.head
+      (dominantCount, 2) |> Expect.isGreaterThanOrEqual "organic layout should still keep a repeated corridor direction"
+      axisAlignedBucket 15.0f dominantBucket |> Expect.isFalse "dominant corridor should not collapse back to a pure axis-aligned grid"
 
     testCase "all Weber buildings stay within block bounds (with tolerance)" <| fun () ->
       let rect  = { X = 5.0f; Z = 3.0f; W = 40.0f; H = 35.0f }
@@ -1290,6 +2935,21 @@ let weberDistrictTests =
       // Roads may still be at a non-axis angle (seed chooses random initial direction) but
       // all segments from a given node will be collinear (deviation = 0). Verify no crashes.
       roads |> List.length |> (fun c -> (c, 0) |> Expect.isGreaterThan "grid mode produces some roads")
+
+    testCase "live Weber layout keeps building centers adjacent to district roads" <| fun () ->
+      let rect  = { X = 0.0f; Z = 0.0f; W = 55.0f; H = 45.0f }
+      let funcs = List.init 22 (fun i -> mkFunc (sprintf "r%d" i) "RoadFrontMod")
+      let rng   = Random(23)
+      let buildings, roads = layoutWeberDistrict rect funcs Map.empty (Color(70uy, 130uy, 180uy, 255uy)) 10 100 0.9f rng Map.empty
+      buildings |> Expect.isNonEmpty "live layout should produce buildings"
+      roads |> Expect.isNonEmpty "live layout should produce roads"
+      for building in buildings do
+        let cx = building.X + building.W / 2.0f
+        let cz = building.Z + building.D / 2.0f
+        let nearest = nearestRoadDistance roads cx cz
+        (nearest, 2.5f)
+        |> Expect.isLessThanOrEqual
+             (sprintf "building center (%.1f,%.1f) dist=%.2f drifted too far from any road frontage" cx cz nearest)
   ]
 
 /// Distance from (px, pz) to the nearest point on any polygon edge.
@@ -1312,6 +2972,24 @@ let private mkRoad x1 z1 x2 z2 halfWidth =
     Weight  = RoadClass.tier Street
     Color   = Color(65uy, 65uy, 70uy, 255uy)
     Organic = 0.0f }
+
+let private hullHasNonAxisEdge (hull: (float32 * float32) list) =
+  if hull.Length < 2 then false
+  else
+    [ for i in 0 .. hull.Length - 1 do
+        let x1, z1 = hull.[i]
+        let x2, z2 = hull.[(i + 1) % hull.Length]
+        let dx = x2 - x1
+        let dz = z2 - z1
+        let len = sqrt (dx * dx + dz * dz)
+        if len > 0.05f then
+          let angle = abs (MathF.Atan2(dz, dx) * 180.0f / MathF.PI)
+          let nearestAxis =
+            [ 0.0f; 90.0f; 180.0f ]
+            |> List.map (fun axis -> abs (angle - axis))
+            |> List.min
+          yield nearestAxis > 10.0f ]
+    |> List.exists id
 
 let roadFrontageTests =
   testList "Road-primary building placement (packAlongEdges)" [
@@ -1379,6 +3057,27 @@ let roadFrontageTests =
 let packAlongRoadsTests =
   testList "Road-primary placement along actual road segments (packAlongRoads)" [
 
+    testCase "canonicalizeRoads merges duplicate and overlapping collinear segments" <| fun () ->
+      let roads =
+        [ mkRoad 0.0f 0.0f 10.0f 0.0f 0.4f
+          mkRoad 10.0f 0.0f 0.0f 0.0f 0.4f
+          mkRoad 4.0f 0.0f 14.0f 0.0f 0.4f ]
+      let canonical = canonicalizeRoads roads
+      canonical |> List.length |> Expect.equal "duplicate and overlapping roads should collapse to one corridor" 1
+      let merged = canonical |> List.head
+      (abs merged.FromPos.X, 0.05f) |> Expect.isLessThanOrEqual "merged road should start at the earliest x"
+      (abs (merged.ToPos.X - 14.0f), 0.05f) |> Expect.isLessThanOrEqual "merged road should extend to the furthest x"
+
+    testCase "canonicalizeRoads preserves T-junction branches while merging the main corridor" <| fun () ->
+      let roads =
+        [ mkRoad 0.0f 0.0f 8.0f 0.0f 0.4f
+          mkRoad 8.0f 0.0f 16.0f 0.0f 0.4f
+          mkRoad 8.0f 0.0f 8.0f 6.0f 0.4f ]
+      let canonical = canonicalizeRoads roads
+      canonical |> List.length |> Expect.equal "mainline should merge but the T branch must remain" 2
+      canonical |> List.exists (fun road -> abs (road.FromPos.X - road.ToPos.X) < 0.05f)
+      |> Expect.isTrue "branch road should remain vertical after canonicalization"
+
     testCase "produces buildings for a simple cross-road block" <| fun () ->
       let rect  = { X = 0.0f; Z = 0.0f; W = 20.0f; H = 20.0f }
       let roads = [ mkRoad 10.0f 0.0f 10.0f 20.0f 0.4f    // vertical at x=10
@@ -1433,6 +3132,51 @@ let packAlongRoadsTests =
       let rightSide = bldgs |> List.exists (fun b -> b.X + b.W / 2.0f > 5.0f)
       leftSide  |> Expect.isTrue "should have buildings left of road"
       rightSide |> Expect.isTrue "should have buildings right of road"
+
+    testCase "single-road frontage placement produces elongated parcels instead of square pads" <| fun () ->
+      let rect  = { X = 0.0f; Z = 0.0f; W = 10.0f; H = 24.0f }
+      let roads = [ mkRoad 5.0f 0.0f 5.0f 24.0f 0.4f ]
+      let funcs = List.init 12 (fun i -> mkFunc (sprintf "f%d" i) "FrontageFormMod")
+      let bldgs = packAlongRoads roads rect funcs Map.empty (Color(70uy, 130uy, 180uy, 255uy)) (Random 5) Map.empty
+      bldgs |> Expect.isNonEmpty "frontage planner should produce buildings"
+      let elongatedCount =
+        bldgs
+        |> List.filter (fun b -> b.D > b.W * 1.10f)
+        |> List.length
+      (elongatedCount, bldgs.Length / 2)
+      |> Expect.isGreaterThanOrEqual "most buildings on a vertical road should stretch along the street corridor"
+
+    testCase "single-road frontage ordering is monotonic on each side without parcel overlap" <| fun () ->
+      let rect  = { X = 0.0f; Z = 0.0f; W = 10.0f; H = 24.0f }
+      let roads = [ mkRoad 5.0f 0.0f 5.0f 24.0f 0.4f ]
+      let funcs = List.init 12 (fun i -> mkFunc (sprintf "f%d" i) "MonotonicFrontageMod")
+      let bldgs = packAlongRoads roads rect funcs Map.empty (Color(70uy, 130uy, 180uy, 255uy)) (Random 11) Map.empty
+      let orderedNoOverlap buildings =
+        buildings
+        |> List.sortBy (fun b -> b.Z)
+        |> List.pairwise
+        |> List.forall (fun (prevB, nextB) -> prevB.Z + prevB.D <= nextB.Z + 0.25f)
+      let leftSide = bldgs |> List.filter (fun b -> b.X + b.W / 2.0f < 5.0f)
+      let rightSide = bldgs |> List.filter (fun b -> b.X + b.W / 2.0f > 5.0f)
+      leftSide.Length > 1 |> Expect.isTrue "need multiple left-side buildings to verify ordering"
+      rightSide.Length > 1 |> Expect.isTrue "need multiple right-side buildings to verify ordering"
+      orderedNoOverlap leftSide |> Expect.isTrue "left frontage parcels should keep monotonic order"
+      orderedNoOverlap rightSide |> Expect.isTrue "right frontage parcels should keep monotonic order"
+
+    testCase "computeBlockSurfaceHull follows diagonal frontage rather than reverting to a module rectangle" <| fun () ->
+      let rect  = { X = 0.0f; Z = 0.0f; W = 14.0f; H = 24.0f }
+      let block = { Module = "SurfaceMod"; Project = "SurfaceProj"; Rect = rect; Color = Color.White }
+      let roads = [ mkRoad 2.0f 1.0f 12.0f 23.0f 0.4f ]
+      let funcs = List.init 12 (fun i -> mkFunc (sprintf "f%d" i) "SurfaceMod")
+      let bldgs = packAlongRoads roads rect funcs Map.empty (Color(70uy, 130uy, 180uy, 255uy)) (Random 17) Map.empty
+      let hull = computeBlockSurfaceHull block bldgs roads
+      hull.Length |> Expect.isGreaterThan "surface hull should have enough points to express frontage shape" 4
+      hullHasNonAxisEdge hull |> Expect.isTrue "surface hull should retain a diagonal edge family from the road"
+      for (x, z) in hull do
+        (x, rect.X) |> Expect.isGreaterThanOrEqual "hull point should stay within left bound"
+        (x, rect.X + rect.W) |> Expect.isLessThanOrEqual "hull point should stay within right bound"
+        (z, rect.Z) |> Expect.isGreaterThanOrEqual "hull point should stay within top bound"
+        (z, rect.Z + rect.H) |> Expect.isLessThanOrEqual "hull point should stay within bottom bound"
   ]
 
 let buildingTypologyTests =
@@ -1662,6 +3406,50 @@ let splineSegmentTests =
       a |> Expect.equal "pure function: deterministic" b
   ]
 
+let districtOverlayPlanningTests =
+  testList "District overlay planning" [
+    testCase "label planner keeps the highest-priority district when labels overlap" <| fun () ->
+      let theme = compactUiTextTheme defaultUiTextTheme
+      let winner = mkDistrict "core-domain" 40 900 Color.Red
+      let loser = mkDistrict "misc" 4 60 Color.Blue
+      let placements =
+        [ { District = loser
+            ScreenPos = Vector2(402.0f, 300.0f)
+            ProjectedArea = 8000.0f
+            CameraDistance = 250.0f }
+          { District = winner
+            ScreenPos = Vector2(400.0f, 300.0f)
+            ProjectedArea = 90000.0f
+            CameraDistance = 120.0f } ]
+        |> planDistrictLabelPlacements 1600 900 theme
+      placements |> List.map _.District.Name |> Expect.equal "larger, hotter district should survive overlap" ["core-domain"]
+
+    testCase "label planner enforces a screen-density budget" <| fun () ->
+      let theme = compactUiTextTheme defaultUiTextTheme
+      let placements =
+        [ for i in 0 .. 15 ->
+            { District = mkDistrict (sprintf "district-%02d" i) (20 - i) (400 - i * 5) Color.Gold
+              ScreenPos = Vector2(120.0f + float32 (i * 130), 180.0f + float32 ((i % 2) * 120))
+              ProjectedArea = 18000.0f + float32 i
+              CameraDistance = 180.0f + float32 i } ]
+        |> planDistrictLabelPlacements 1600 900 theme
+      placements |> List.length |> Expect.equal "planner should cap labels for 1080p screens" (maxDistrictLabelCount 1600 900)
+
+    testCase "large nearby districts get detailed labels while distant ones stay compact" <| fun () ->
+      let theme = compactUiTextTheme defaultUiTextTheme
+      let placements =
+        [ { District = mkDistrict "city-core" 30 700 Color.Red
+            ScreenPos = Vector2(300.0f, 250.0f)
+            ProjectedArea = 90000.0f
+            CameraDistance = 140.0f }
+          { District = mkDistrict "outer-ring" 10 180 Color.Blue
+            ScreenPos = Vector2(620.0f, 250.0f)
+            ProjectedArea = 9000.0f
+            CameraDistance = 480.0f } ]
+        |> planDistrictLabelPlacements 1600 900 theme
+      placements |> List.map _.Style |> Expect.equal "LOD should keep only the important label detailed" [DetailedDistrictLabel; CompactDistrictLabel]
+  ]
+
 let buildingTypeAlphaTests =
   testList "Building type alpha encoding" [
     testCase "each type has distinct alpha value" <| fun () ->
@@ -1731,6 +3519,25 @@ let gableRoofTests =
       (ny6, 0.0f) |> Expect.isGreaterThan "right slope normal Y must be positive"
   ]
 
+let orientedBuildingGeometryTests =
+  testList "Oriented building mesh geometry" [
+    testCase "oriented cube swaps plan extents at 90 degrees" <| fun () ->
+      let verts, _, _ = addOrientedCubeToArraysArr 5.0f 2.0f 5.0f 1.0f 0.5f 2.0f 90.0f 180uy 180uy 180uy 255uy
+      let xs = [ for i in 0 .. 35 -> verts.[i * 3] ]
+      let zs = [ for i in 0 .. 35 -> verts.[i * 3 + 2] ]
+      let width = (xs |> List.max) - (xs |> List.min)
+      let depth = (zs |> List.max) - (zs |> List.min)
+      (abs (width - 4.0f), 0.05f) |> Expect.isLessThanOrEqual "90° rotation should expose the former depth along X"
+      (abs (depth - 2.0f), 0.05f) |> Expect.isLessThanOrEqual "90° rotation should expose the former width along Z"
+
+    testCase "oriented gable rotates slope normals with the building heading" <| fun () ->
+      let _, norms, _ = addOrientedGableToArraysArr 5.0f 2.5f 5.0f 1.0f 0.8f 90.0f 200uy 180uy 160uy 255uy
+      let nx0 = norms.[0]
+      let nz0 = norms.[2]
+      (abs nx0, 0.05f) |> Expect.isLessThanOrEqual "rotated slope should no longer point strongly along X"
+      (nz0, -0.1f) |> Expect.isLessThan "90° rotation should swing the first slope normal toward -Z"
+  ]
+
 let private mkBlock mod_ proj x z w h =
   { Module = mod_; Project = proj
     Rect = TRect.create x z w h
@@ -1777,6 +3584,20 @@ let interDistrictRoadTests =
       roads |> Expect.hasLength "1 arterial road" 1
       let hw = roads.[0].FromPos.Y
       (hw, RoadClass.width Boulevard / 2.0f) |> Expect.isGreaterThanOrEqual "halfWidth >= base"
+  ]
+
+let visibleRoadNetworkTests =
+  testList "visible road network" [
+    testCase "project-zone scaffolding is not rendered as a visible road" <| fun () ->
+      let zones = [ "ProjectA", TRect.create 0.0f 0.0f 20.0f 20.0f ]
+      buildVisibleRoadNetwork zones []
+      |> Expect.isEmpty "visible roads should come from explicit street growth, not treemap borders"
+
+    testCase "explicit primary roads survive visible road composition" <| fun () ->
+      let zones = [ "ProjectA", TRect.create 0.0f 0.0f 20.0f 20.0f ]
+      let roads = [ mkRoad 0.0f 10.0f 20.0f 10.0f 0.4f ]
+      buildVisibleRoadNetwork zones roads
+      |> Expect.equal "visible road composition should preserve explicit primary roads" roads
   ]
 
 let parseDaemonInfoJsonTests =
@@ -1867,7 +3688,18 @@ let allTests =
     cameraMovementTests
     visualDefaultsTests
     roadAccessTests
+    trafficSimulationTests
+    landUseDynamicsTests
+    economyModelTests
+    zoningEnvelopeTests
+    buildingSubstitutionTests
+    subdivisionFidelityTests
+    majorStreetGrowthTests
     specDrivenLayoutTests
+    urbanSimulationProofLayerTests
+    simulationTraceTests
+    simulationTimelineTests
+    simulationBenchmarkTests
     gitMetaTests
     organicFactorTests
     weberDistrictTests
@@ -1878,10 +3710,13 @@ let allTests =
     roadColorTests
     arcFormulaTests
     splineSegmentTests
+    districtOverlayPlanningTests
     buildingTypeAlphaTests
     complexityFootprintTests
     gableRoofTests
+    orientedBuildingGeometryTests
     interDistrictRoadTests
+    visibleRoadNetworkTests
     nightScaleTests
     parseDaemonInfoJsonTests
     resolveRepoRootPureTests

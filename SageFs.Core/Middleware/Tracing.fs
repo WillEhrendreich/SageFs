@@ -100,3 +100,14 @@ let namedCommonMiddleware: NamedMiddleware list = [
   { Name = "NonBlockingRun"; Middleware = NonBlockingRun.nonBlockingRunMiddleware }
   { Name = "HotReload"; Middleware = HotReloading.hotReloadingMiddleware }
 ]
+
+/// Build the full traced pipeline including the error wrapper middleware.
+/// This is the production-ready replacement for `buildPipeline (wrapErrorMiddleware :: middleware) evalFn`.
+let buildProductionTracedPipeline
+  (wrapError: Middleware)
+  (middleware: NamedMiddleware list)
+  (evalFn: MiddlewareNext)
+  : MiddlewareNext =
+  let allNamed =
+    { Name = "ErrorWrapper"; Middleware = wrapError } :: middleware
+  buildTracedPipeline allNamed "CoreEval" evalFn

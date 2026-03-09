@@ -629,7 +629,11 @@ let createFsiSession (logger: ILogger) (outStream: TextWriter) (useAsp: bool) (s
     return fsiSession, recorder, args, failed, warmupCtx
   }
 
-let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStream useAsp (originalSln: Solution) (shadowDir: string option) (autoOpenNamespaces: bool) (hotReload: bool) (onEvent: Events.SageFsEvent -> unit) (sln: Solution) =
+/// Pipeline builder: takes middleware list + core eval function, returns composed pipeline.
+/// Default is `buildPipeline`. Tracing module provides an instrumented alternative.
+type PipelineBuildFn = Middleware list -> MiddlewareNext -> MiddlewareNext
+
+let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStream useAsp (originalSln: Solution) (shadowDir: string option) (autoOpenNamespaces: bool) (hotReload: bool) (onEvent: Events.SageFsEvent -> unit) (pipelineBuildFn: PipelineBuildFn) (sln: Solution) =
   let diagnosticsChangedEvent = Event<Features.DiagnosticsStore.T>()
   let emit evt = try onEvent evt with ex -> logger.LogWarning (sprintf "Event emission failed: %s" ex.Message)
 
@@ -794,7 +798,7 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
           publishSnapshot st Evaluating evalStats
           let sw = System.Diagnostics.Stopwatch.StartNew()
           emit (Events.EvalRequested {| Code = request.Code; Source = Events.System |})
-          let pipeline = buildPipeline (wrapErrorMiddleware :: middleware) (evalFn cts.Token)
+          let pipeline = pipelineBuildFn (wrapErrorMiddleware :: middleware) (evalFn cts.Token)
           // Run eval on a dedicated thread so the actor stays responsive
           // to CancelEval, HardReset, etc. while the eval is in progress.
           let evalThread = Thread(fun () ->
@@ -831,6 +835,16 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
                 Error = ex.Message
                 Diagnostics = res.Diagnostics |> Array.toList |> List.map Events.DiagnosticEvent.fromDiagnostic
               |})
+            // Emit trace if pipeline instrumentation produced one
+            match res.Metadata |> Map.tryFind "pipelineTrace" with
+            | Some traceObj ->
+              match traceObj with
+              | :? EvalPipeline.PipelineTrace<string> as trace ->
+                let stages = trace.Stages |> List.map (fun s -> s.Name, float s.ElapsedMs)
+                let totalMs = stages |> List.sumBy snd
+                emit (Events.EvalTraced {| Code = code; Stages = stages; TotalMs = totalMs |})
+              | _ -> ()
+            | None -> ()
             reply.Reply res
             return! loop newSt middleware sessionState'' evalStats'
           | Error ex ->

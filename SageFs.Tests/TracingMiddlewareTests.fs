@@ -219,4 +219,54 @@ let tracingMiddlewareTests =
         t2.Stages |> Expect.hasLength "second has 2 stages" 2
       }
     ]
+
+    testList "buildProductionTracedPipeline" [
+      test "includes ErrorWrapper as first named stage" {
+        let errorWrapper: Middleware = fun next (req, st) -> next (req, st)
+        let pipeline =
+          buildProductionTracedPipeline
+            errorWrapper
+            [ namedUpper ]
+            passThroughEval
+        let (response, _) = pipeline (dummyRequest "x", Unchecked.defaultof<_>)
+        let trace = tryGetTrace response |> Option.get
+        let names = trace.Stages |> List.map (fun s -> s.Name)
+        names |> Expect.hasLength "3 stages" 3
+        names |> List.head |> Expect.equal "first is ErrorWrapper" "ErrorWrapper"
+      }
+
+      test "wrapError middleware catches exceptions" {
+        let throwingEval: MiddlewareNext =
+          fun _ -> failwith "kaboom"
+        let errorWrapper: Middleware =
+          fun next (req, st) ->
+            try next (req, st)
+            with _ ->
+              (failResponse req.Code (System.Exception "caught"), st)
+        let pipeline =
+          buildProductionTracedPipeline
+            errorWrapper
+            []
+            throwingEval
+        let (response, _) = pipeline (dummyRequest "x", Unchecked.defaultof<_>)
+        match response.EvaluationResult with
+        | Error ex -> ex.Message |> Expect.equal "caught" "caught"
+        | Ok _ -> failtest "expected error"
+      }
+
+      test "all stages get timing" {
+        let errorWrapper: Middleware = fun next (req, st) -> next (req, st)
+        let pipeline =
+          buildProductionTracedPipeline
+            errorWrapper
+            [ namedUpper; namedPrefix ]
+            passThroughEval
+        let (response, _) = pipeline (dummyRequest "x", Unchecked.defaultof<_>)
+        let trace = tryGetTrace response |> Option.get
+        trace.Stages
+        |> List.iter (fun s ->
+          (rawMsf s.ElapsedMs, 0.0)
+          |> Expect.isGreaterThanOrEqual "non-negative timing")
+      }
+    ]
   ]

@@ -679,6 +679,7 @@ module EventTracking =
       | DaemonSessionCreated e -> "daemon", sprintf "session %s created" e.SessionId
       | DaemonSessionStopped e -> "daemon", sprintf "session %s stopped" e.SessionId
       | DaemonSessionSwitched e -> "daemon", sprintf "switched to %s" e.ToId
+      | EvalTraced e -> "eval", sprintf "%d stages, %.1fms total" e.Stages.Length e.TotalMs
     (ts.UtcDateTime, source, content)
 
   /// Get recent events from the session stream

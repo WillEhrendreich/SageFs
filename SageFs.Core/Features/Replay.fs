@@ -119,6 +119,8 @@ module SessionReplayState =
     | ScriptLoadFailed _ -> state |> withActivity
     | McpInputReceived _ -> state |> withActivity
     | McpOutputSent _ -> state |> withActivity
+    // Tracing is observational only — doesn't affect replay state
+    | EvalTraced _ -> state
     // Daemon-level events are not relevant to per-session replay
     | DaemonSessionCreated _ -> state
     | DaemonSessionStopped _ -> state
