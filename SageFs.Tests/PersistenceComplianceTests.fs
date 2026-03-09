@@ -4,6 +4,7 @@ open System
 open Expecto
 open Expecto.Flip
 open SageFs.Features
+open SageFs.Features.LiveTesting
 
 /// Persistence compliance tests define behavioral contracts that BOTH
 /// the current binary format (.sagefm/.sagefs/.sagetc) and any future
@@ -237,6 +238,92 @@ let corruptionTests = testList "Corruption resilience contracts" [
     | other -> failwithf "expected NotFound after rename, got: %A" other)
 ]
 
+// ── 6. Test cache contracts ──
+
+let private sampleTestState () : LiveTestState =
+  let testId = TestId.TestId "SageFs.Tests.SampleTest"
+  let result : TestRunResult =
+    { TestId = testId
+      TestName = "SampleTest"
+      Result = TestResult.Passed (TimeSpan.FromMilliseconds(42.0))
+      Timestamp = DateTimeOffset(2025, 3, 1, 12, 0, 0, TimeSpan.Zero)
+      Output = Some "val x: int = 42" }
+  let bitmap : CoverageBitmap =
+    { Bits = [| 0b1010_1010UL; 0b1111_0000UL |]
+      Count = 12 }
+  { LiveTestState.empty with
+      LastResults = Map.ofList [ testId, result ]
+      TestCoverageBitmaps = Map.ofList [ testId, bitmap ] }
+
+let testCacheTests = testList "Test cache contracts" [
+
+  testCase "empty test state roundtrips"
+  <| fun _ -> withTempDir (fun dir ->
+    let projects = [ "App.fsproj" ]
+    DaemonPersistence.saveTestCache dir projects LiveTestState.empty |> ignore
+    match DaemonPersistence.loadTestCache dir projects with
+    | Ok s ->
+      s.LastResults |> Map.isEmpty |> Expect.isTrue "no results"
+      s.TestCoverageBitmaps |> Map.isEmpty |> Expect.isTrue "no bitmaps"
+    | Error e -> failwithf "empty cache roundtrip failed: %s" e)
+
+  testCase "test results roundtrip (lossy on name/timestamp)"
+  <| fun _ -> withTempDir (fun dir ->
+    let projects = [ "App.fsproj" ]
+    let state = sampleTestState ()
+    DaemonPersistence.saveTestCache dir projects state |> ignore
+    match DaemonPersistence.loadTestCache dir projects with
+    | Ok s ->
+      let testId = TestId.TestId "SageFs.Tests.SampleTest"
+      s.LastResults |> Map.containsKey testId
+      |> Expect.isTrue "test result preserved"
+      match s.LastResults.[testId].Result with
+      | TestResult.Passed d ->
+        (d.TotalMilliseconds, 0.0)
+        |> Expect.isGreaterThan "duration preserved"
+      | other -> failwithf "expected Passed, got: %A" other
+    | Error e -> failwithf "result roundtrip failed: %s" e)
+
+  testCase "coverage bitmaps roundtrip"
+  <| fun _ -> withTempDir (fun dir ->
+    let projects = [ "App.fsproj" ]
+    let state = sampleTestState ()
+    DaemonPersistence.saveTestCache dir projects state |> ignore
+    match DaemonPersistence.loadTestCache dir projects with
+    | Ok s ->
+      let testId = TestId.TestId "SageFs.Tests.SampleTest"
+      s.TestCoverageBitmaps |> Map.containsKey testId
+      |> Expect.isTrue "bitmap preserved"
+      let bm = s.TestCoverageBitmaps.[testId]
+      bm.Bits.[0] |> Expect.equal "first word" 0b1010_1010UL
+      bm.Bits.[1] |> Expect.equal "second word" 0b1111_0000UL
+      // Count may be derived from Bits.Length * 64 (lossy)
+      (bm.Count, 0) |> Expect.isGreaterThan "probe count positive"
+    | Error e -> failwithf "bitmap roundtrip failed: %s" e)
+
+  testCase "different project hashes are independent"
+  <| fun _ -> withTempDir (fun dir ->
+    let projA = [ "A.fsproj" ]
+    let projB = [ "B.fsproj" ]
+    let stateA = sampleTestState ()
+    DaemonPersistence.saveTestCache dir projA stateA |> ignore
+    DaemonPersistence.saveTestCache dir projB LiveTestState.empty |> ignore
+    match DaemonPersistence.loadTestCache dir projA with
+    | Ok s ->
+      s.LastResults |> Map.isEmpty |> Expect.isFalse "A has results"
+    | Error e -> failwithf "load A failed: %s" e
+    match DaemonPersistence.loadTestCache dir projB with
+    | Ok s ->
+      s.LastResults |> Map.isEmpty |> Expect.isTrue "B is empty"
+    | Error e -> failwithf "load B failed: %s" e)
+
+  testCase "loading nonexistent cache returns Error"
+  <| fun _ -> withTempDir (fun dir ->
+    match DaemonPersistence.loadTestCache dir [ "NoSuch.fsproj" ] with
+    | Ok _ -> failwith "should not find cache"
+    | Error _ -> ())
+]
+
 [<Tests>]
 let allPersistenceComplianceTests = testList "Persistence Compliance (synthesis 4.2)" [
   roundtripTests
@@ -244,4 +331,5 @@ let allPersistenceComplianceTests = testList "Persistence Compliance (synthesis 
   idempotencyTests
   missingDataTests
   corruptionTests
+  testCacheTests
 ]
