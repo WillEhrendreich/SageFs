@@ -24,6 +24,12 @@ module Cell =
   let empty = { Char = ' '; Fg = 0x00FFFFFFu; Bg = 0u; Attrs = CellAttrs.None }
   let create ch fg bg attrs = { Char = ch; Fg = fg; Bg = bg; Attrs = attrs }
 
+  /// Monoid combine: if the overlay cell is non-empty, use it; otherwise keep the base.
+  let inline overlay (base': Cell) (over: Cell) =
+    match over = empty with
+    | true -> base'
+    | false -> over
+
 /// A rectangle in the grid. Smart constructor clamps to non-negative.
 [<Struct>]
 type Rect = {
@@ -122,6 +128,15 @@ module CellGrid =
 
   let clone (grid: CellGrid) : CellGrid =
     { Cells = Array.copy grid.Cells; Rows = grid.Rows; Cols = grid.Cols }
+
+  /// Pointwise monoid overlay: produce a new grid where each cell is
+  /// Cell.overlay base[i] over[i]. Grids must have same dimensions.
+  let overlay (base': CellGrid) (over: CellGrid) : CellGrid =
+    let result = clone base'
+    let len = min base'.Cells.Length over.Cells.Length
+    for i in 0 .. len - 1 do
+      result.Cells.[i] <- Cell.overlay base'.Cells.[i] over.Cells.[i]
+    result
 
   let writeString (grid: CellGrid) row col fg bg attrs (s: string) =
     let maxCol = grid.Cols
