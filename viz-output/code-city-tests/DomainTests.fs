@@ -2886,6 +2886,51 @@ let private nearestRoadDistance (roads: Road list) (x: float32) (z: float32) =
 
   roads |> List.map pointDistance |> List.min
 
+let private roadEndpoints2d (road: Road) =
+  Vec2.Create(road.FromPos.X, road.FromPos.Z),
+  Vec2.Create(road.ToPos.X, road.ToPos.Z)
+
+let private roadSpanLength (road: Road) =
+  let startPt, endPt = roadEndpoints2d road
+  Vec2.distanceTo startPt endPt
+
+let private clusterPoints tolerance (points: Vec2 list) =
+  let toleranceSq = tolerance * tolerance
+  let clusters = ResizeArray<Vec2 * int>()
+  let addPoint point =
+    let mutable matched = false
+    for i in 0 .. clusters.Count - 1 do
+      match matched with
+      | true -> ()
+      | false ->
+          let anchor, count = clusters.[i]
+          if Vec2.distanceToSq anchor point <= toleranceSq then
+            clusters.[i] <- anchor, count + 1
+            matched <- true
+    match matched with
+    | true -> ()
+    | false -> clusters.Add(point, 1)
+  points |> List.iter addPoint
+  clusters |> Seq.toList
+
+let private boundaryMidpointsForRect (rect: TRect) =
+  [ Vec2.Create(TRect.centerX rect, rect.Z)
+    Vec2.Create(rect.X + rect.W, TRect.centerZ rect)
+    Vec2.Create(TRect.centerX rect, rect.Z + rect.H)
+    Vec2.Create(rect.X, TRect.centerZ rect) ]
+
+let private pointOnRectBoundary (rect: TRect) (pt: Vec2) =
+  let eps = 0.05f
+  abs (pt.X - rect.X) <= eps
+  || abs (pt.X - (rect.X + rect.W)) <= eps
+  || abs (pt.Y - rect.Z) <= eps
+  || abs (pt.Y - (rect.Z + rect.H)) <= eps
+
+let private nearestAxisDelta angle =
+  [ 0.0f; 90.0f; 180.0f ]
+  |> List.map (fun axis -> abs (angle - axis))
+  |> List.min
+
 let weberDistrictTests =
   testList "Weber district layout" [
     testCase "layout produces non-empty buildings for non-trivial block" <| fun () ->
@@ -2913,6 +2958,61 @@ let weberDistrictTests =
       let dominantBucket, dominantCount = histogram |> List.head
       (dominantCount, 2) |> Expect.isGreaterThanOrEqual "organic layout should still keep a repeated corridor direction"
       axisAlignedBucket 15.0f dominantBucket |> Expect.isFalse "dominant corridor should not collapse back to a pure axis-aligned grid"
+
+    testCase "organic district avoids a centered four-way hub" <| fun () ->
+      let rect  = { X = 0.0f; Z = 0.0f; W = 100.0f; H = 80.0f }
+      let funcs = List.init 28 (fun i -> mkFunc (sprintf "hub%d" i) "OrganicHubMod")
+      let rng   = Random(123)
+      let _, roads = layoutWeberDistrict rect funcs Map.empty (Color(70uy, 130uy, 180uy, 255uy)) 10 100 0.9f rng Map.empty
+      roads |> Expect.isNonEmpty "organic district should produce roads"
+      let center = Vec2.Create(TRect.centerX rect, TRect.centerZ rect)
+      let hasCenteredHub =
+        roads
+        |> List.collect (fun road ->
+          let a, b = roadEndpoints2d road
+          [ a; b ])
+        |> clusterPoints 0.35f
+        |> List.exists (fun (pt, valence) ->
+          Vec2.distanceTo pt center <= min rect.W rect.H * 0.10f
+          && valence >= 4)
+      hasCenteredHub |> Expect.isFalse "organic districts should not seed a four-way hub at the rectangle center"
+
+    testCase "organic district boundary portals avoid exact cardinal midpoints" <| fun () ->
+      let rect  = { X = 0.0f; Z = 0.0f; W = 100.0f; H = 80.0f }
+      let funcs = List.init 28 (fun i -> mkFunc (sprintf "portal%d" i) "OrganicPortalMod")
+      let rng   = Random(123)
+      let _, roads = layoutWeberDistrict rect funcs Map.empty (Color(70uy, 130uy, 180uy, 255uy)) 10 100 0.9f rng Map.empty
+      roads |> Expect.isNonEmpty "organic district should produce roads"
+      let boundaryEndpoints =
+        roads
+        |> List.collect (fun road ->
+          let a, b = roadEndpoints2d road
+          [ a; b ])
+        |> List.filter (pointOnRectBoundary rect)
+        |> clusterPoints 0.35f
+        |> List.map fst
+      boundaryEndpoints |> Expect.isNonEmpty "organic districts should still connect to the district boundary"
+      let midpointHits =
+        boundaryEndpoints
+        |> List.filter (fun pt ->
+          boundaryMidpointsForRect rect
+          |> List.exists (fun midpoint -> Vec2.distanceTo pt midpoint <= 0.35f))
+      midpointHits |> Expect.isEmpty "organic districts should not anchor portals at the exact cardinal midpoints"
+
+    testCase "organic district longest corridor is oblique and off-center" <| fun () ->
+      let rect  = { X = 0.0f; Z = 0.0f; W = 100.0f; H = 80.0f }
+      let funcs = List.init 28 (fun i -> mkFunc (sprintf "spine%d" i) "OrganicSpineMod")
+      let rng   = Random(123)
+      let _, roads = layoutWeberDistrict rect funcs Map.empty (Color(70uy, 130uy, 180uy, 255uy)) 10 100 0.9f rng Map.empty
+      let longest = roads |> List.maxBy roadSpanLength
+      let angle = roadOrientationDegrees longest
+      (nearestAxisDelta angle, 12.0f) |> Expect.isGreaterThan "the longest organic corridor should not fall back to a cardinal axis"
+      let startPt, endPt = roadEndpoints2d longest
+      let midpoint = Vec2.Create((startPt.X + endPt.X) / 2.0f, (startPt.Y + endPt.Y) / 2.0f)
+      let center = Vec2.Create(TRect.centerX rect, TRect.centerZ rect)
+      (Vec2.distanceTo midpoint center, min rect.W rect.H * 0.08f)
+      |> Expect.isGreaterThan
+           "the longest organic corridor should not be centered on the exact middle of the district"
 
     testCase "all Weber buildings stay within block bounds (with tolerance)" <| fun () ->
       let rect  = { X = 5.0f; Z = 3.0f; W = 40.0f; H = 35.0f }

@@ -142,3 +142,54 @@ internal sealed class InlineEvalResultTracker
     private static string Normalize(string p) =>
         string.IsNullOrEmpty(p) ? string.Empty : p.Replace('/', '\\').ToLowerInvariant();
 }
+
+// ── Shared tracker singleton (connects SSE eval_result events to all views) ──
+
+/// <summary>
+/// Holds the single <see cref="InlineEvalResultTracker"/> instance shared across all views.
+/// Subscribes to daemon eval_result SSE events and updates the tracker.
+/// </summary>
+internal static class SharedEvalResultTracker
+{
+    private static readonly Lazy<InlineEvalResultTracker> _instance =
+        new Lazy<InlineEvalResultTracker>(CreateTracker);
+
+    public static InlineEvalResultTracker Instance => _instance.Value;
+
+    private static InlineEvalResultTracker CreateTracker()
+    {
+        var tracker = new InlineEvalResultTracker();
+
+        var url = PortConfig.TryGetDaemonUrl();
+        if (url != null)
+        {
+            SseConnectionHub.Initialize(url);
+            SseConnectionHub.Subscribe("/events", ev => ProcessEvalResultEvent(tracker, ev));
+        }
+
+        return tracker;
+    }
+
+    private static void ProcessEvalResultEvent(InlineEvalResultTracker tracker, SseEvent ev)
+    {
+        if (ev.Type != "eval_result") return;
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(ev.Data);
+            var root = doc.RootElement;
+            if (!root.TryGetProperty("filePath", out var fp)) return;
+            if (!root.TryGetProperty("blockStartLine", out var bsl)) return;
+            if (!root.TryGetProperty("output", out var output)) return;
+            var filePath = fp.GetString();
+            var line = bsl.GetInt32();
+            var result = output.GetString() ?? "";
+            if (string.IsNullOrEmpty(filePath)) return;
+            const int MaxDisplayLength = 80;
+            var display = result.Length > MaxDisplayLength
+                ? result.Substring(0, MaxDisplayLength - 3) + "..."
+                : result;
+            tracker.SetResult(filePath!, line, display);
+        }
+        catch { /* parse errors are non-fatal */ }
+    }
+}

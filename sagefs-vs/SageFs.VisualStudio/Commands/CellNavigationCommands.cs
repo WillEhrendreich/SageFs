@@ -10,6 +10,105 @@ using Microsoft.VisualStudio.Extensibility.Editor;
 
 #pragma warning disable VSEXTPREVIEW_OUTPUTWINDOW
 
+// ── Block detection mode ──────────────────────────────────────────────────────
+
+internal enum BlockMode { SemicolonMode, BlankLineMode }
+
+// ── Shared block helpers ──────────────────────────────────────────────────────
+
+internal static class BlockHelpers
+{
+    /// <summary>
+    /// Returns <see cref="BlockMode.SemicolonMode"/> if the text contains any <c>;;</c>,
+    /// otherwise <see cref="BlockMode.BlankLineMode"/>.
+    /// </summary>
+    public static BlockMode DetectBlockMode(string text)
+    {
+        for (var i = 0; i < text.Length - 1; i++)
+        {
+            if (text[i] == ';' && text[i + 1] == ';')
+                return BlockMode.SemicolonMode;
+        }
+        return BlockMode.BlankLineMode;
+    }
+
+    /// <summary>
+    /// Finds the code block surrounding <paramref name="cursorOffset"/>, respecting
+    /// the detected <see cref="BlockMode"/> of the file.
+    /// </summary>
+    public static string FindBlockAroundCursor(string text, int cursorOffset)
+    {
+        if (string.IsNullOrEmpty(text)) return "";
+        return DetectBlockMode(text) switch
+        {
+            BlockMode.SemicolonMode => FindBlockBySemicolon(text, cursorOffset),
+            _                       => FindBlockByBlankLines(text, cursorOffset),
+        };
+    }
+
+    private static string FindBlockBySemicolon(string text, int cursorOffset)
+    {
+        var blockStart = 0;
+        for (var i = Math.Min(cursorOffset, text.Length - 1); i >= 1; i--)
+        {
+            if (text[i] == ';' && text[i - 1] == ';')
+            {
+                blockStart = i + 1;
+                while (blockStart < text.Length && (text[blockStart] == '\r' || text[blockStart] == '\n'))
+                    blockStart++;
+                break;
+            }
+        }
+        var blockEnd = text.Length;
+        for (var i = cursorOffset; i < text.Length - 1; i++)
+        {
+            if (text[i] == ';' && text[i + 1] == ';') { blockEnd = i + 2; break; }
+        }
+        if (blockStart >= blockEnd) return "";
+        return text[blockStart..blockEnd].Trim();
+    }
+
+    private static string FindBlockByBlankLines(string text, int cursorOffset)
+    {
+        // Scan backward: stop at a blank line (two consecutive newlines) or start of file
+        var blockStart = 0;
+        for (var i = Math.Min(cursorOffset, text.Length - 1); i >= 1; i--)
+        {
+            if (IsBlankLineBoundary(text, i))
+            {
+                blockStart = i + 1;
+                while (blockStart < text.Length && (text[blockStart] == '\r' || text[blockStart] == '\n'))
+                    blockStart++;
+                break;
+            }
+        }
+
+        // Scan forward: stop at a blank line or end of file
+        var blockEnd = text.Length;
+        for (var i = cursorOffset; i < text.Length - 1; i++)
+        {
+            if (IsBlankLineBoundary(text, i)) { blockEnd = i; break; }
+        }
+
+        if (blockStart >= blockEnd) return "";
+        return text[blockStart..blockEnd].Trim();
+    }
+
+    /// <summary>
+    /// True if <paramref name="pos"/> is at the start of a blank-line boundary —
+    /// i.e., a newline followed immediately by another newline (empty line).
+    /// </summary>
+    private static bool IsBlankLineBoundary(string text, int pos)
+    {
+        if (pos >= text.Length) return false;
+        if (text[pos] != '\n') return false;
+        var next = pos + 1;
+        // Skip \r so CRLF pairs work
+        if (next < text.Length && text[next] == '\r') next++;
+        return next < text.Length && text[next] == '\n';
+    }
+}
+
 /// <summary>
 /// Evaluates the next ;; delimited block after the cursor and reports the result.
 /// Use repeatedly to step through an .fsx file block-by-block (Ctrl+Alt+]).
@@ -265,29 +364,8 @@ internal class EvalAndAdvanceCommand : Command
     finally { cancellation.Done(); }
   }
 
-  private static string FindBlockAroundCursor(string text, int cursorOffset)
-  {
-    if (string.IsNullOrEmpty(text)) return "";
-    var blockStart = 0;
-    for (var i = Math.Min(cursorOffset, text.Length - 1); i >= 1; i--)
-    {
-      if (text[i] == ';' && text[i - 1] == ';')
-      {
-        blockStart = i + 1;
-        while (blockStart < text.Length && (text[blockStart] == '\r' || text[blockStart] == '\n'))
-          blockStart++;
-        break;
-      }
-    }
-    var blockEnd = text.Length;
-    for (var i = cursorOffset; i < text.Length - 1; i++)
-    {
-      if (text[i] == ';' && text[i + 1] == ';') { blockEnd = i + 2; break; }
-    }
-    if (blockStart >= blockEnd) return "";
-    return text[blockStart..blockEnd].Trim();
-  }
-}
+  private static string FindBlockAroundCursor(string text, int cursorOffset) =>
+    BlockHelpers.FindBlockAroundCursor(text, cursorOffset);
 
 #pragma warning restore VSEXTPREVIEW_OUTPUTWINDOW
 

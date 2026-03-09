@@ -81,40 +81,8 @@ internal class EvalRangeCommand : Command
   }
 
   /// <summary>
-  /// Finds the ;; delimited code block surrounding the cursor position.
-  /// Scans backwards and forwards from cursor to find ;; boundaries.
+  /// Finds the code block surrounding the cursor, supporting both ;; and blank-line delimiters.
   /// </summary>
-  private static string FindBlockAroundCursor(string text, int cursorOffset)
-  {
-    if (string.IsNullOrEmpty(text)) return "";
-
-    // Find the start: scan backwards for ;; or beginning of file
-    var blockStart = 0;
-    for (var i = Math.Min(cursorOffset, text.Length - 1); i >= 1; i--)
-    {
-      if (text[i] == ';' && text[i - 1] == ';')
-      {
-        // Found ;;, block starts after it (skip whitespace)
-        blockStart = i + 1;
-        while (blockStart < text.Length && (text[blockStart] == '\r' || text[blockStart] == '\n'))
-          blockStart++;
-        break;
-      }
-    }
-
-    // Find the end: scan forward for ;; or end of file
-    var blockEnd = text.Length;
-    for (var i = cursorOffset; i < text.Length - 1; i++)
-    {
-      if (text[i] == ';' && text[i + 1] == ';')
-      {
-        blockEnd = i + 2; // Include the ;;
-        break;
-      }
-    }
-
-    if (blockStart >= blockEnd) return "";
-    return text[blockStart..blockEnd].Trim();
-  }
-}
+  private static string FindBlockAroundCursor(string text, int cursorOffset) =>
+    BlockHelpers.FindBlockAroundCursor(text, cursorOffset);
 #pragma warning restore VSEXTPREVIEW_OUTPUTWINDOW

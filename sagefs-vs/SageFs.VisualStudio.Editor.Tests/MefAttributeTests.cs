@@ -89,32 +89,38 @@ public class MefAttributeTests
         because: "TestGlyphFactoryProvider must match .fsx files — VS does not walk base-type chain for glyph factory exports.");
   }
 
-  // ── IWpfTextViewCreationListener export ──────────────────────────────────
+  // ── IWpfTextViewCreationListener exports ─────────────────────────────────
 
-  [Fact]
-  public void InlineFailureAdornmentListener_ExportedAsWpfTextViewCreationListener()
+  [Theory]
+  [InlineData(typeof(InlineFailureAdornmentListener))]
+  [InlineData(typeof(InlineEvalAdornmentListener))]
+  public void AdornmentListeners_ExportedAsWpfTextViewCreationListener(Type listenerType)
   {
-    GetExportContractTypes(typeof(InlineFailureAdornmentListener))
+    GetExportContractTypes(listenerType)
       .Should().Contain(typeof(IWpfTextViewCreationListener),
-        because: "InlineFailureAdornmentListener must be exported as IWpfTextViewCreationListener " +
+        because: $"{listenerType.Name} must be exported as IWpfTextViewCreationListener " +
                  "for VS to call TextViewCreated and create the adornment manager.");
   }
 
-  [Fact]
-  public void InlineFailureAdornmentListener_HasContentTypeFSharp()
+  [Theory]
+  [InlineData(typeof(InlineFailureAdornmentListener))]
+  [InlineData(typeof(InlineEvalAdornmentListener))]
+  public void AdornmentListeners_HaveContentTypeFSharp(Type listenerType)
   {
-    GetContentTypes(typeof(InlineFailureAdornmentListener))
+    GetContentTypes(listenerType)
       .Should().Contain("F#",
-        because: "InlineFailureAdornmentListener must compose with .fs files. " +
-                 "Without [ContentType(\"F#\")], inline failure adornments never render.");
+        because: $"{listenerType.Name} must compose with .fs files. " +
+                 "Without [ContentType(\"F#\")], adornments never render.");
   }
 
-  [Fact]
-  public void InlineFailureAdornmentListener_HasContentTypeFSharpScript()
+  [Theory]
+  [InlineData(typeof(InlineFailureAdornmentListener))]
+  [InlineData(typeof(InlineEvalAdornmentListener))]
+  public void AdornmentListeners_HaveContentTypeFSharpScript(Type listenerType)
   {
-    GetContentTypes(typeof(InlineFailureAdornmentListener))
+    GetContentTypes(listenerType)
       .Should().Contain("F# Script",
-        because: "InlineFailureAdornmentListener must compose with .fsx files. " +
+        because: $"{listenerType.Name} must compose with .fsx files. " +
                  "VS does not walk base-type chain for IWpfTextViewCreationListener exports.");
   }
 

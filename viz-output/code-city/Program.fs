@@ -4126,6 +4126,39 @@ let private isBoundaryPoint (rect: TRect) (pt: Vec2) =
   let bottom = abs (pt.Y - (rect.Z + rect.H)) < 0.01f
   left || right || top || bottom
 
+let private lerpVec2 (a: Vec2) (b: Vec2) t =
+  Vec2.Create(
+    a.X + (b.X - a.X) * t,
+    a.Y + (b.Y - a.Y) * t)
+
+let private clampVec2ToRect (rect: TRect) (pt: Vec2) =
+  Vec2.Create(
+    max rect.X (min (rect.X + rect.W) pt.X),
+    max rect.Z (min (rect.Z + rect.H) pt.Y))
+
+let private lineRectIntersections (rect: TRect) (origin: Vec2) (dir: Vec2) =
+  let eps = 0.001f
+  let duplicateToleranceSq = 0.05f * 0.05f
+  let intersections = ResizeArray<float32 * Vec2>()
+  let addCandidate t =
+    let pt = clampVec2ToRect rect (Vec2.add origin (Vec2.scale t dir))
+    if rectContainsVec2 rect pt then
+      let alreadySeen =
+        intersections
+        |> Seq.exists (fun (_, existing) -> Vec2.distanceToSq existing pt <= duplicateToleranceSq)
+      if not alreadySeen then
+        intersections.Add(t, pt)
+  if abs dir.X > eps then
+    addCandidate ((rect.X - origin.X) / dir.X)
+    addCandidate (((rect.X + rect.W) - origin.X) / dir.X)
+  if abs dir.Y > eps then
+    addCandidate ((rect.Z - origin.Y) / dir.Y)
+    addCandidate (((rect.Z + rect.H) - origin.Y) / dir.Y)
+  intersections
+  |> Seq.sortBy fst
+  |> Seq.map snd
+  |> Seq.toList
+
 let private edgeToCorridorRect (g: WeberGraph) (edge: WEdge) =
   let a = (g.N edge.A).Pos
   let b = (g.N edge.B).Pos
@@ -4157,7 +4190,7 @@ let private quarterRectKey (rect: TRect) =
   let round1 value = MathF.Round(value, 1, MidpointRounding.AwayFromZero)
   round1 rect.X, round1 rect.Z, round1 rect.W, round1 rect.H
 
-let private seedMajorStreetGrowthGraph (rect: TRect) =
+let private seedGridMajorStreetGrowthGraph (rect: TRect) =
   let g = WeberGraph()
   let left = rect.X
   let right = rect.X + rect.W
@@ -4184,27 +4217,80 @@ let private seedMajorStreetGrowthGraph (rect: TRect) =
   g.AddEdge(leftMid, topLeft, Avenue, RoadClass.width Avenue) |> ignore
 
   let centerId = g.AddNode(center, Avenue)
-  let armNodes =
-    [ northMid; eastMid; southMid; westMid ]
-    |> List.map (fun boundary ->
-      let armPos =
-        Vec2.Create(
-          center.X + (boundary.X - center.X) * 0.55f,
-          center.Y + (boundary.Y - center.Y) * 0.55f)
-      let armId = g.AddNode(armPos, Avenue)
-      g.AddEdge(centerId, armId, Avenue, RoadClass.width Avenue) |> ignore
-      let boundaryId =
-        [ topMid; rightMid; bottomMid; leftMid ]
-        |> List.find (fun nid ->
-          let pos = (g.N nid).Pos
-          abs (pos.X - boundary.X) < 0.01f && abs (pos.Y - boundary.Y) < 0.01f)
-      g.AddEdge(armId, boundaryId, Avenue, RoadClass.width Avenue) |> ignore
-      armId)
+  [ northMid; eastMid; southMid; westMid ]
+  |> List.iter (fun boundary ->
+    let armPos =
+      Vec2.Create(
+        center.X + (boundary.X - center.X) * 0.55f,
+        center.Y + (boundary.Y - center.Y) * 0.55f)
+    let armId = g.AddNode(armPos, Avenue)
+    g.AddEdge(centerId, armId, Avenue, RoadClass.width Avenue) |> ignore
+    let boundaryId =
+      [ topMid; rightMid; bottomMid; leftMid ]
+      |> List.find (fun nid ->
+        let pos = (g.N nid).Pos
+        abs (pos.X - boundary.X) < 0.01f && abs (pos.Y - boundary.Y) < 0.01f)
+    g.AddEdge(armId, boundaryId, Avenue, RoadClass.width Avenue) |> ignore)
 
   [ topLeft; topMid; topRight; rightMid; bottomRight; bottomMid; bottomLeft; leftMid ]
   |> List.iter g.MarkFinished
 
-  g, centerId, armNodes, [| center |]
+  g, [| center |]
+
+let private seedOrganicMajorStreetGrowthGraph (rect: TRect) (rng: Random) =
+  let g = WeberGraph()
+  let center = Vec2.Create(TRect.centerX rect, TRect.centerZ rect)
+  let interiorRect = TRect.inset (min rect.W rect.H * 0.12f) rect
+  let xSign = if rng.NextSingle() < 0.5f then -1.0f else 1.0f
+  let ySign = if rng.NextSingle() < 0.5f then -1.0f else 1.0f
+  let anchor =
+    Vec2.Create(
+      center.X + rect.W * (0.10f + rng.NextSingle() * 0.10f) * xSign,
+      center.Y + rect.H * (0.08f + rng.NextSingle() * 0.10f) * ySign)
+    |> clampVec2ToRect interiorRect
+  let baseAngle = (18.0f + rng.NextSingle() * 54.0f) * MathF.PI / 180.0f
+  let angle =
+    match rng.Next(4) with
+    | 0 -> baseAngle
+    | 1 -> MathF.PI - baseAngle
+    | 2 -> -baseAngle
+    | _ -> baseAngle - MathF.PI
+  let dir = Vec2.Create(MathF.Cos(angle), MathF.Sin(angle)) |> Vec2.normalize
+  let perp = Vec2.Create(-dir.Y, dir.X)
+  match lineRectIntersections rect anchor dir with
+  | portalStart :: remaining ->
+      let portalEnd = remaining |> List.tryLast |> Option.defaultValue portalStart
+      let span = Vec2.distanceTo portalStart portalEnd
+      if span < 6.0f then
+        seedGridMajorStreetGrowthGraph rect
+      else
+        let spineStartPos = lerpVec2 portalStart portalEnd (0.26f + rng.NextSingle() * 0.08f)
+        let spineEndPos = lerpVec2 portalStart portalEnd (0.62f + rng.NextSingle() * 0.10f)
+        let flankDepth = min rect.W rect.H * (0.10f + rng.NextSingle() * 0.05f)
+        let flankLead = span * (0.06f + rng.NextSingle() * 0.04f)
+        let flankA =
+          Vec2.add spineStartPos (Vec2.add (Vec2.scale flankLead dir) (Vec2.scale flankDepth perp))
+          |> clampVec2ToRect interiorRect
+        let flankB =
+          Vec2.add spineEndPos (Vec2.add (Vec2.scale -flankLead dir) (Vec2.scale (-flankDepth * 0.85f) perp))
+          |> clampVec2ToRect interiorRect
+        let portalStartId = g.AddNode(portalStart, Avenue)
+        let spineStartId = g.AddNode(spineStartPos, Avenue)
+        let flankAId = g.AddNode(flankA, Avenue)
+        let spineEndId = g.AddNode(spineEndPos, Avenue)
+        let portalEndId = g.AddNode(portalEnd, Avenue)
+        let flankBId = g.AddNode(flankB, Avenue)
+        g.AddEdge(portalStartId, spineStartId, Avenue, RoadClass.width Avenue) |> ignore
+        g.AddEdge(spineStartId, flankAId, Avenue, RoadClass.width Avenue) |> ignore
+        g.AddEdge(flankAId, spineEndId, Avenue, RoadClass.width Avenue) |> ignore
+        g.AddEdge(spineEndId, portalEndId, Avenue, RoadClass.width Avenue) |> ignore
+        g.AddEdge(spineEndId, flankBId, Avenue, RoadClass.width Avenue) |> ignore
+        g.AddEdge(flankBId, spineStartId, Avenue, RoadClass.width Avenue) |> ignore
+        g.MarkFinished(portalStartId)
+        g.MarkFinished(portalEndId)
+        g, [| spineStartPos; spineEndPos; flankA; flankB |]
+  | _ ->
+      seedGridMajorStreetGrowthGraph rect
 
 /// Line segment intersection. Returns intersection point and parameter t along (a→b).
 let segIntersect (a: Vec2) (b: Vec2) (c: Vec2) (d: Vec2) : (Vec2 * float32) option =
@@ -4427,13 +4513,16 @@ let private buildMajorStreetGrowth (rect: TRect) (moduleDemand: int) (organic: f
       QuarterRects = [] },
     []
   else
-    let g, _, _, centers = seedMajorStreetGrowthGraph rect
     let segmentLength = max 4.0f (min rect.W rect.H / 5.0f)
     let snapRadius = max 1.5f (segmentLength * 0.45f)
     let minSegmentLength = max 1.5f (segmentLength * 0.35f)
     let focus = max 0.0025f (0.01f * (1.0f - organic * 0.6f))
     let maxEdges = max 2 (moduleDemand + 2)
     let isGrid = organic < 0.35f
+    let g, centers =
+      match isGrid with
+      | true -> seedGridMajorStreetGrowthGraph rect
+      | false -> seedOrganicMajorStreetGrowthGraph rect rng
     growStreets g centers rng Avenue isGrid segmentLength snapRadius minSegmentLength maxEdges focus (Some rect)
 
     let majorStreets =
