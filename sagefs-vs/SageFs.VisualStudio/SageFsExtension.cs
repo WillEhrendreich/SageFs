@@ -25,7 +25,7 @@ internal class SageFsExtension : Extension
     // Write the daemon URL so the in-process MEF assembly (SageFs.VisualStudio.Editor)
     // can discover it without a direct project reference across TFM boundaries.
     // Uses %LOCALAPPDATA%\SageFs\daemon.json — survives session across VS restarts.
-    const int daemonPort = 37749;
+    int daemonPort = Core.Constants.DefaultMcpPort;
     var daemonUrl = $"http://localhost:{daemonPort}";
     var sageFsDir = System.IO.Path.Combine(
         System.Environment.GetFolderPath(System.Environment.SpecialFolder.LocalApplicationData),

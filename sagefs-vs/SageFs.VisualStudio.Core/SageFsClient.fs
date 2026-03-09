@@ -165,8 +165,8 @@ module FeatureParsers =
 /// HTTP client for communicating with the SageFs daemon.
 /// Registered as a singleton via DI in the extension entry point.
 type SageFsClient() =
-  let mutable mcpPort = 37749
-  let mutable dashboardPort = 37750
+  let mutable mcpPort = Constants.DefaultMcpPort
+  let mutable dashboardPort = Constants.DefaultDashboardPort
   let handler = new HttpClientHandler(AutomaticDecompression = System.Net.DecompressionMethods.All)
   let http = new HttpClient(handler)
 
