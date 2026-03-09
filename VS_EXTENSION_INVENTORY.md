@@ -635,4 +635,75 @@ Core Logic (F#)
 
 ---
 
-**Report Generated:** 2026-03-09 01:13:15
+## 10. MEF GLYPH SPIKE — `SageFs.VisualStudio.Editor` (net472)
+
+**Status:** ✅ Skeleton built, expert-panel corrections applied, builds 0 errors
+
+### What it does
+
+Renders colored WPF `Ellipse` glyphs in the VS editor gutter for each test line in F# files:
+
+| Color | Meaning |
+|-------|---------|
+| 🟢 Green | Test passed |
+| 🔴 Red | Test failed |
+| 🟡 Amber | Test running |
+| ⚫ Gray | Test detected / not yet run |
+
+### Architecture
+
+```
+SseClient (net472)          — background SSE subscriber (75s timeout, Accept: text/event-stream)
+  → TestStateTracker        — thread-safe ConcurrentDictionary[(filePath,line) → TestStatus]
+    → TestGlyphTagger       — ITagger<TestStatusGlyphTag> per ITextBuffer
+      → TestGlyphFactory    — IGlyphFactory, draws Ellipse(10x10px) WPF elements
+```
+
+### Key Design Decisions (from Expert Panel)
+
+1. **`PrivateAssets="all"` on all VS SDK NuGet refs** — prevents type-identity crashes from double-loading
+2. **`TagsChanged` on UI thread** — raises via `Application.Current?.Dispatcher.BeginInvoke(...)` — missing this causes mysterious editor crashes
+3. **`HttpClient.Timeout = 75s`** (NOT `InfiniteTimeSpan`) — prevents zombie connections
+4. **`Accept: text/event-stream` header** — required for SSE; some servers return JSON without it
+5. **`test_results_batch` JSON format** — entries use `TestId.Fields[0]`, `Origin.Case/Fields`, `Status.Case` (matches `LiveTestingParser.fs`)
+6. **`GlyphSpikeGuard`** — create `%LOCALAPPDATA%\SageFs\disable-glyphs.flag` to disable at runtime
+
+### Kill Switches (3 layers)
+
+1. **Build gate:** `$(EnableGlyphSpike)=true` must be set to include the MEF project reference
+2. **Runtime flag:** `%LOCALAPPDATA%\SageFs\disable-glyphs.flag` (check in `TestGlyphTaggerProvider`)
+3. **Clean boundary:** all spike code isolated in `SageFs.VisualStudio.Editor\` — delete the folder and remove the project reference to fully revert
+
+### Port Discovery
+
+- Written by: `SageFsExtension.InitializeServices` → `%LOCALAPPDATA%\SageFs\daemon.json`
+  ```json
+  {"Url":"http://localhost:37749"}
+  ```
+- Read by: `PortConfig.TryGetDaemonUrl()` in the net472 MEF assembly
+
+### Day 1 Empirical Validation Required
+
+- Does `ExtensionType="VisualStudio.Extensibility"` block MEF loading? Check `%LOCALAPPDATA%\Microsoft\VisualStudio\17.0_xxx\ComponentModelCache\` for errors
+- Does VS MEF host discover DLLs from `CopyMefAssemblyToOutput` build target?
+- Is `ContentType("F#")` the correct content type string VS uses for F# files? (may be `"FSharp"`)
+
+### Files
+
+| File | Purpose |
+|------|---------|
+| `SageFs.VisualStudio.Editor.csproj` | net472, opts out of central pkgs, `PrivateAssets="all"` |
+| `PortConfig.cs` | Reads `%LOCALAPPDATA%\SageFs\daemon.json`; `GlyphSpikeGuard` kill switch |
+| `SseClient.cs` | Background SSE subscriber, exponential-backoff reconnect |
+| `TestStateTracker.cs` | Thread-safe state; processes `test_results_batch` events |
+| `TestGlyphTagger.cs` | `ITaggerProvider` + `IGlyphFactoryProvider`; UI-thread `TagsChanged` |
+
+### GlyphProjection.fs (SageFs.VisualStudio.Core)
+
+Pure F# module for projecting `TestOutcome` → `GlyphStatus`. Used by the MEF assembly indirectly (the MEF project can't reference net8.0-windows8.0, so the logic is mirrored in `TestStateTracker.cs`).
+
+**24 unit tests, all passing.**
+
+---
+
+**Report Updated:** Sprint 3 complete (v0.5.704)
