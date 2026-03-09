@@ -16,6 +16,8 @@ internal class LiveTestingData : NotifyPropertyChangedObject, IDisposable
   private readonly Core.LiveTestingSubscriber subscriber;
 
   private string enabledStatus = "⟳ Checking...";
+  private string connectionStatus = "⟳ Connecting to daemon...";
+  private bool connectionStatusReceived;
   private string summaryText = "";
   private string testResultsText = "";
   private string recentEventsText = "";
@@ -65,6 +67,13 @@ internal class LiveTestingData : NotifyPropertyChangedObject, IDisposable
     Core.TestCategory.All.Select(c => Core.TestCategory.DisplayName(c)).ToArray();
   [DataMember] public string[] PolicyLabels { get; } =
     Core.RunPolicy.All.Select(p => Core.RunPolicy.DisplayName(p)).ToArray();
+
+  [DataMember]
+  public string ConnectionStatus
+  {
+    get => connectionStatus;
+    set => SetProperty(ref connectionStatus, value);
+  }
 
   [DataMember]
   public string EnabledStatus
@@ -153,6 +162,11 @@ internal class LiveTestingData : NotifyPropertyChangedObject, IDisposable
 
   private void OnStateChanged(object? sender, Core.LiveTestState state)
   {
+    if (!connectionStatusReceived)
+    {
+      connectionStatusReceived = true;
+      ConnectionStatus = "● Daemon connected";
+    }
     UpdateFromState(state);
   }
 

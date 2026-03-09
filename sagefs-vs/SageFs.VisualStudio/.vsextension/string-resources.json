@@ -32,5 +32,6 @@
   "SageFs.NextBlock.DisplayName": "SageFs: Move to Next ;; Block",
   "SageFs.PrevBlock.DisplayName": "SageFs: Move to Previous ;; Block",
   "SageFs.EvalAndAdvance.DisplayName": "SageFs: Evaluate Block and Advance",
-  "SageFs.LoadScript.DisplayName": "SageFs: Load Script File"
+  "SageFs.LoadScript.DisplayName": "SageFs: Load Script File",
+  "SageFs.RunTestAtCursor.DisplayName": "SageFs: Run Test at Cursor"
 }

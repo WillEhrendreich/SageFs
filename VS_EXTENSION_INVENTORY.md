@@ -281,20 +281,29 @@
 
 ---
 
-### 3.5 Live Testing Commands (3)
+### 3.5 Live Testing Commands (4)
 
 #### **LiveTestingCommand** (Toggle)
 - **Shortcut:** None
 - **Behavior:** Toggles live testing on/off
-- **API:** \client.EnableLiveTestingAsync(ct)\ / \client.DisableLiveTestingAsync(ct)\
+- **API:** `client.EnableLiveTestingAsync(ct)` / `client.DisableLiveTestingAsync(ct)`
 - **Output:** "✓ Live testing enabled" or "○ Live testing disabled"
 - **Status:** ✓ REAL
 
 #### **RunTestsCommand**
 - **Shortcut:** None
 - **Behavior:** Executes all tests
-- **API:** \client.RunTestsAsync("", ct)\
+- **API:** `client.RunTestsAsync("", ct)`
 - **Output:** "▶ Running all tests..."
+- **Status:** ✓ REAL
+
+#### **RunTestAtCursorCommand** *(Sprint 6)*
+- **Shortcut:** Shift+Alt+T
+- **Behavior:** Finds the test function at or above the cursor line and runs it
+- **Algorithm:** `TestsForFile(filePath).Where(t => t.Line <= cursorLine).OrderByDescending(t.Line).First()` — Seemann's algorithm: finds the test *containing* the cursor rather than the one *after* it
+- **API:** `subscriber.TestsForFile(filePath)` → `client.RunTestsAsync(test.FullName, ct)` 
+- **Output:** "▶ Running [DisplayName] at line N…" or "⊘ No test found at or above line N"
+- **Result delivery:** Via SSE → inline adornments + glyph margin (no polling needed)
 - **Status:** ✓ REAL
 
 #### **SetRunPolicyCommand**
@@ -307,7 +316,7 @@
 #### **ShowRecentEventsCommand**
 - **Shortcut:** None
 - **Behavior:** Fetches last 30 events from daemon
-- **API:** \client.GetRecentEventsAsync(30, ct)\
+- **API:** `client.GetRecentEventsAsync(30, ct)`
 - **Output:** JSON-formatted event list
 - **Status:** ✓ REAL
 

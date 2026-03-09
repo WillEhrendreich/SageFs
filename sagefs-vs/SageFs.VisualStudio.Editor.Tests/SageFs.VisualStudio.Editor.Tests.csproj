@@ -7,12 +7,23 @@
     <Nullable>enable</Nullable>
     <!-- opts out of central package management like the Editor project -->
     <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
+    <!-- NU1603 = "requested X but resolved to newer Y" — benign for VS SDK transitive deps.
+         The Editor project suppresses these via TreatWarningsAsErrors=false; test project
+         keeps TreatWarningsAsErrors=true but explicitly opts out of the VS SDK resolution noise. -->
+    <NoWarn>$(NoWarn);NU1603</NoWarn>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
     <PackageReference Include="xunit" Version="2.9.3" />
     <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" PrivateAssets="all" />
     <PackageReference Include="FluentAssertions" Version="6.12.1" />
+    <!-- VS SDK types needed for ContentTypeAttribute, ITaggerProvider, IWpfTextViewCreationListener.
+         PrivateAssets="all" in the Editor project means these do NOT flow transitively.
+         Tests must reference them directly so reflection-based MEF attribute tests compile.
+         Versions bumped to 17.13.226 — the version that NuGet actually resolves to on this machine. -->
+    <PackageReference Include="Microsoft.VisualStudio.CoreUtility" Version="17.13.226" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.VisualStudio.Text.UI.Wpf" Version="17.13.226" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.VisualStudio.Text.Data" Version="17.13.226" PrivateAssets="all" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\SageFs.VisualStudio.Editor\SageFs.VisualStudio.Editor.csproj" />

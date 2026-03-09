@@ -4,8 +4,15 @@
   <Border Padding="8">
     <ScrollViewer VerticalScrollBarVisibility="Auto">
       <StackPanel>
-        <!-- Toolbar: Toggle + Run All + Filter + Refresh -->
+        <!-- Toolbar: Toggle + Run All + Filter + Refresh + Connection Status -->
         <DockPanel Margin="0,0,0,8">
+          <TextBlock Text="{Binding ConnectionStatus}"
+                     DockPanel.Dock="Right"
+                     VerticalAlignment="Center"
+                     FontFamily="Cascadia Code,Consolas,Courier New"
+                     FontSize="10"
+                     Foreground="Gray"
+                     Margin="8,0,0,0" />
           <StackPanel Orientation="Horizontal" DockPanel.Dock="Left">
             <Button Content="{Binding EnabledStatus}"
                     Command="{Binding ToggleCommand}"
