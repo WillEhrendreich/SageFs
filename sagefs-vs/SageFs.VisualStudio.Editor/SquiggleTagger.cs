@@ -112,6 +112,7 @@ internal sealed class SquiggleTagger : ITagger<SageFsErrorTag>, IDisposable
 /// </summary>
 [Export(typeof(ITaggerProvider))]
 [ContentType("F#")]
+[ContentType("F# Script")] // .fsx files — VS does NOT walk the base-type chain for MEF tagger exports
 [TagType(typeof(SageFsErrorTag))]
 internal sealed class SquiggleTaggerProvider : ITaggerProvider
 {
@@ -122,7 +123,7 @@ internal sealed class SquiggleTaggerProvider : ITaggerProvider
     {
         _tracker = new DiagnosticStateTracker();
 
-        if (GlyphSpikeGuard.IsDisabled) return;
+        if (!SageFsFeatureFlags.SquigglesEnabled) return;
 
         var url = PortConfig.TryGetDaemonUrl();
         if (url != null)

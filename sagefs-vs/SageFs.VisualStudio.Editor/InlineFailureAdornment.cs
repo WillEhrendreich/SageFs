@@ -33,6 +33,7 @@ internal static class SageFsAdornmentLayer
 /// </summary>
 [Export(typeof(IWpfTextViewCreationListener))]
 [ContentType("F#")]
+[ContentType("F# Script")] // .fsx files — VS does NOT walk the base-type chain for MEF exports
 [TextViewRole(PredefinedTextViewRoles.Document)]
 internal sealed class InlineFailureAdornmentListener : IWpfTextViewCreationListener
 {
@@ -49,7 +50,7 @@ internal sealed class InlineFailureAdornmentListener : IWpfTextViewCreationListe
 
     public void TextViewCreated(IWpfTextView textView)
     {
-        if (GlyphSpikeGuard.IsDisabled) return;
+        if (!SageFsFeatureFlags.InlineHintsEnabled) return;
 
         // Attach manager: it manages its own lifetime via Closed event
         _ = new InlineFailureAdornmentManager(textView, _tracker, TextDocumentFactory);
@@ -110,8 +111,16 @@ internal sealed class InlineFailureAdornmentManager : IDisposable
             (Action)RenderAdornments);
     }
 
-    private void OnLayoutChanged(object? sender, TextViewLayoutChangedEventArgs e) =>
+    private void OnLayoutChanged(object? sender, TextViewLayoutChangedEventArgs e)
+    {
+        // Guard: skip if no lines actually changed position or content.
+        // LayoutChanged fires on every scroll, resize, and virtual-space change —
+        // without this guard we rebuild all adornments on every scroll tick.
+        if (e.NewOrReformattedLines.Count == 0 && e.TranslatedLines.Count == 0)
+            return;
+
         RenderAdornments();
+    }
 
     private void RenderAdornments()
     {
@@ -123,13 +132,16 @@ internal sealed class InlineFailureAdornmentManager : IDisposable
 
         var snapshot = _view.TextSnapshot;
 
+        // Resolve editor font metrics once per render pass (cheaper than per-line)
+        var fontFamily = TryGetEditorFontFamily() ?? new FontFamily("Consolas, Courier New");
+        var fontSize   = TryGetEditorFontSize() * 0.9; // slightly smaller than code
+
         foreach (var line in _view.TextViewLines)
         {
-            var lineNum = snapshot.GetLineNumberFromPosition(line.Start) + 1; // 1-based
+            var lineNum  = snapshot.GetLineNumberFromPosition(line.Start) + 1; // 1-based
             var failures = _tracker.GetFailuresForLine(filePath, lineNum);
             if (failures.Count == 0) continue;
 
-            // Build inline text: "⊘ test1 — Expected: X  Actual: Y  |  ⊘ test2 — ..."
             var parts = new List<string>(failures.Count);
             foreach (var f in failures)
                 parts.Add(f.ToInlineText());
@@ -137,28 +149,52 @@ internal sealed class InlineFailureAdornmentManager : IDisposable
 
             var block = new TextBlock
             {
-                Text             = displayText,
-                Foreground       = FailureBrush,
-                FontFamily       = new FontFamily("Consolas, Courier New"),
-                FontSize         = 11,
-                FontStyle        = FontStyles.Italic,
-                Padding          = new Thickness(8, 0, 4, 0),
+                Text              = displayText,
+                Foreground        = FailureBrush,
+                FontFamily        = fontFamily,
+                FontSize          = fontSize,
+                FontStyle         = FontStyles.Italic,
+                Padding           = new Thickness(8, 0, 4, 0),
                 VerticalAlignment = VerticalAlignment.Center,
-                Opacity          = 0.85,
+                Opacity           = 0.85,
             };
 
-            // Position at right of line, vertically centered
-            var top = line.Top + (line.Height - 14) / 2;
+            // Measure so we can center vertically using actual height
+            block.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+            var top = line.Top + (line.Height - block.DesiredSize.Height) / 2.0;
+
             Canvas.SetLeft(block, line.Right);
             Canvas.SetTop(block,  top);
 
             _layer.AddAdornment(
                 AdornmentPositioningBehavior.TextRelative,
                 new SnapshotSpan(line.Start, 0),
-                tag:      null,
-                adornment: block,
+                tag:             null,
+                adornment:       block,
                 removedCallback: null);
         }
+    }
+
+    private FontFamily? TryGetEditorFontFamily()
+    {
+        try
+        {
+            var props = _view.FormattedLineSource?.DefaultTextProperties;
+            return props?.Typeface.FontFamily;
+        }
+        catch { return null; }
+    }
+
+    private double TryGetEditorFontSize()
+    {
+        try
+        {
+            var props = _view.FormattedLineSource?.DefaultTextProperties;
+            if (props != null && props.FontRenderingEmSize > 4)
+                return props.FontRenderingEmSize;
+        }
+        catch { }
+        return 12.0; // safe fallback
     }
 
     private string? TryGetFilePath()
@@ -200,7 +236,7 @@ internal static class SharedAnnotationTracker
     {
         var tracker = new FileAnnotationTracker();
 
-        if (GlyphSpikeGuard.IsDisabled) return tracker;
+        if (!SageFsFeatureFlags.InlineHintsEnabled) return tracker;
 
         var url = PortConfig.TryGetDaemonUrl();
         if (url != null)

@@ -89,6 +89,7 @@ internal sealed class TestGlyphTagger : ITagger<TestStatusGlyphTag>, IDisposable
 
 [Export(typeof(ITaggerProvider))]
 [ContentType("F#")]
+[ContentType("F# Script")] // .fsx files — VS does NOT walk the base-type chain for MEF tagger exports
 [TagType(typeof(TestStatusGlyphTag))]
 internal sealed class TestGlyphTaggerProvider : ITaggerProvider
 {
@@ -100,7 +101,7 @@ internal sealed class TestGlyphTaggerProvider : ITaggerProvider
         _tracker = new TestStateTracker();
 
         // Runtime kill switch: create %LOCALAPPDATA%\SageFs\disable-glyphs.flag to disable
-        if (GlyphSpikeGuard.IsDisabled) return;
+        if (!SageFsFeatureFlags.GlyphsEnabled) return;
 
         var url = PortConfig.TryGetDaemonUrl();
         if (url != null)
@@ -121,6 +122,7 @@ internal sealed class TestGlyphTaggerProvider : ITaggerProvider
 [Export(typeof(IGlyphFactoryProvider))]
 [Name("SageFsTestGlyphs")]
 [ContentType("F#")]
+[ContentType("F# Script")] // .fsx files
 [TagType(typeof(TestStatusGlyphTag))]
 [Order(After = "VsTextMarker")]
 internal sealed class TestGlyphFactoryProvider : IGlyphFactoryProvider
