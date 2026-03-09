@@ -2,7 +2,7 @@
   "name": "sagefs",
   "displayName": "SageFs — Live F# Development",
   "description": "Send F# code to SageFs for instant evaluation, type-checking, and hot reload.",
-  "version": "0.5.694",
+  "version": "0.5.695",
   "publisher": "sagefs",
   "license": "MIT",
   "icon": "icon.png",

@@ -159,6 +159,7 @@
         <Compile Include="Round12HardeningTests.fs" />
         <Compile Include="Round13HardeningTests.fs" />
         <Compile Include="Round14HardeningTests.fs" />
+        <Compile Include="StructAuditTests.fs" />
         <Compile Include="AppStatePropertyTests.fs" />
         <Compile Include="EditorPropertyTests.fs" />
         <Compile Include="ArchitectureTests.fs" />

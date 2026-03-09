@@ -85,7 +85,7 @@ module LiveTestingDefaults =
 
 // --- Stable Test Identity ---
 
-[<RequireQualifiedAccess>]
+[<Struct; RequireQualifiedAccess>]
 type TestId = TestId of string
 
 module TestId =
@@ -647,12 +647,14 @@ module RunGeneration =
   let next (RunGeneration n) = RunGeneration (n + 1)
   let value (RunGeneration n) = n
 
+[<Struct>]
 type TestRunPhase =
   | Idle
   | Running of generation: RunGeneration
   | RunningButEdited of generation: RunGeneration
 
 /// Why did results arrive the way they did?
+[<Struct>]
 type ResultFreshness =
   | Fresh
   | StaleCodeEdited
