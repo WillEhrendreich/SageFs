@@ -8,6 +8,7 @@
     <ItemGroup>
         <Compile Include="Args.fs" />
         <Compile Include="Measures.fs" />
+        <Compile Include="RingBuffer.fs" />
         <Compile Include="Utils.fs" />
         <Compile Include="SageFsConfig.fs" />
         <Compile Include="Timeouts.fs" />
