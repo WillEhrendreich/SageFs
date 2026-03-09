@@ -4,17 +4,29 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.VisualStudio.Extensibility;
 using Microsoft.VisualStudio.Extensibility.Editor;
+using Microsoft.Extensions.DependencyInjection;
 
 #pragma warning disable VSEXTPREVIEW_CODELENS
 #pragma warning disable VSEXTPREVIEW_OUTPUTWINDOW
 
 /// <summary>
 /// Provides "▶ Eval" CodeLens on F# functions and methods.
-/// Clicking evaluates the code element's body via SageFs daemon.
+/// Clicking evaluates the code element's body via the injected SageFsClient singleton.
+/// The client is registered as a singleton in SageFsExtension.cs — this provider never
+/// creates its own HttpClient, avoiding socket exhaustion under heavy editing.
 /// </summary>
 [VisualStudioContribution]
 internal class EvalCodeLensProvider : ExtensionPart, ICodeLensProvider
 {
+  private readonly Core.SageFsClient client;
+  private readonly Core.EvalCancellation cancellation;
+
+  public EvalCodeLensProvider(Core.SageFsClient client, Core.EvalCancellation cancellation)
+  {
+    this.client = client;
+    this.cancellation = cancellation;
+  }
+
   public TextViewExtensionConfiguration TextViewExtensionConfiguration => new()
   {
     AppliesTo =
@@ -41,7 +53,7 @@ internal class EvalCodeLensProvider : ExtensionPart, ICodeLensProvider
         || codeElement.Kind == CodeElementKind.KnownValues.Module)
     {
       return Task.FromResult<CodeLens?>(
-        new EvalCodeLens(codeElement, Extensibility));
+        new EvalCodeLens(codeElement, client, cancellation));
     }
 
     return Task.FromResult<CodeLens?>(null);
@@ -50,17 +62,24 @@ internal class EvalCodeLensProvider : ExtensionPart, ICodeLensProvider
 
 /// <summary>
 /// An invokable CodeLens that evaluates the code element in SageFs.
+/// Uses the shared SageFsClient singleton and EvalCancellation for cooperative cancellation.
 /// </summary>
 internal class EvalCodeLens : InvokableCodeLens
 {
   private readonly CodeElement codeElement;
-  private readonly VisualStudioExtensibility extensibility;
+  private readonly Core.SageFsClient client;
+  private readonly Core.EvalCancellation cancellation;
   private string lastResult = "";
+  private bool isRunning = false;
 
-  public EvalCodeLens(CodeElement codeElement, VisualStudioExtensibility extensibility)
+  public EvalCodeLens(
+    CodeElement codeElement,
+    Core.SageFsClient client,
+    Core.EvalCancellation cancellation)
   {
     this.codeElement = codeElement;
-    this.extensibility = extensibility;
+    this.client = client;
+    this.cancellation = cancellation;
   }
 
   public override void Dispose() { }
@@ -68,15 +87,17 @@ internal class EvalCodeLens : InvokableCodeLens
   public override Task<CodeLensLabel> GetLabelAsync(
     CodeElementContext codeElementContext, CancellationToken token)
   {
-    var text = string.IsNullOrEmpty(lastResult)
-      ? $"▶ Eval {codeElement.Description}"
-      : $"✓ {lastResult}";
+    var text = isRunning
+      ? $"⟳ Evaluating {codeElement.Description}…"
+      : string.IsNullOrEmpty(lastResult)
+        ? $"▶ Eval {codeElement.Description}"
+        : $"✓ {lastResult}";
 
-    return Task.FromResult(new CodeLensLabel
-    {
-      Text = text,
-      Tooltip = "Evaluate this code element in SageFs",
-    });
+    var tooltip = isRunning
+      ? "Evaluating — press Ctrl+Alt+C to cancel"
+      : "Evaluate this code element in SageFs (Ctrl+Alt+Enter for block eval)";
+
+    return Task.FromResult(new CodeLensLabel { Text = text, Tooltip = tooltip });
   }
 
   public override async Task ExecuteAsync(
@@ -86,20 +107,35 @@ internal class EvalCodeLens : InvokableCodeLens
   {
     var range = codeElementContext.Range;
     var code = range.CopyToString();
-
     if (string.IsNullOrWhiteSpace(code)) return;
 
-    // Append ;; if not present
     if (!code.TrimEnd().EndsWith(";;"))
       code += ";;";
 
-    var client = new Core.SageFsClient();
-    var result = await client.EvalAsync(code, cancelToken);
-    lastResult = result.ExitCode == 0
-      ? (result.Output.Length > 60 ? result.Output[..60] + "…" : result.Output)
-      : $"✗ Exit {result.ExitCode}";
+    // Register with the shared cancellation so Ctrl+Alt+C can abort this eval.
+    // Also link to the VS-provided cancelToken so VS can cancel us on shutdown.
+    using var linked = System.Threading.CancellationTokenSource.CreateLinkedTokenSource(
+      cancelToken, cancellation.StartNew());
 
+    isRunning = true;
     Invalidate();
+    try
+    {
+      var result = await client.EvalAsync(code, linked.Token);
+      lastResult = result.ExitCode == 0
+        ? (result.Output.Length > 60 ? result.Output[..60] + "…" : result.Output)
+        : $"✗ Exit {result.ExitCode}";
+    }
+    catch (System.OperationCanceledException)
+    {
+      lastResult = "⊘ Cancelled";
+    }
+    finally
+    {
+      isRunning = false;
+      cancellation.Done();
+      Invalidate();
+    }
   }
 }
 

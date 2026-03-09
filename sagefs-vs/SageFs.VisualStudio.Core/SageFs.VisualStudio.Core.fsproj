@@ -12,5 +12,6 @@
     <Compile Include="DaemonManager.fs" />
     <Compile Include="SageFsClient.fs" />
     <Compile Include="DiagnosticsSubscriber.fs" />
+    <Compile Include="EvalService.fs" />
   </ItemGroup>
 </Project>

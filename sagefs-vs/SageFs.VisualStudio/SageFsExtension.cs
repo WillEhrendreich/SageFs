@@ -22,6 +22,7 @@ internal class SageFsExtension : Extension
   {
     base.InitializeServices(serviceCollection);
     serviceCollection.AddSingleton<Core.SageFsClient>();
+    serviceCollection.AddSingleton<Core.EvalCancellation>();
     serviceCollection.AddSingleton<Core.LiveTestingSubscriber>(sp =>
     {
       var sub = new Core.LiveTestingSubscriber(37749);

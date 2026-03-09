@@ -27,5 +27,10 @@
   "SageFs.ShowLiveTesting.DisplayName": "SageFs: Live Testing Dashboard",
   "SageFs.ShowTypeExplorer.DisplayName": "SageFs: Type Explorer",
   "SageFs.ShowHotReload.DisplayName": "SageFs: Hot Reload Files",
-  "SageFs.SetRunPolicy.DisplayName": "SageFs: Set Run Policy"
+  "SageFs.SetRunPolicy.DisplayName": "SageFs: Set Run Policy",
+  "SageFs.CancelEval.DisplayName": "SageFs: Cancel Evaluation",
+  "SageFs.NextBlock.DisplayName": "SageFs: Move to Next ;; Block",
+  "SageFs.PrevBlock.DisplayName": "SageFs: Move to Previous ;; Block",
+  "SageFs.EvalAndAdvance.DisplayName": "SageFs: Evaluate Block and Advance",
+  "SageFs.LoadScript.DisplayName": "SageFs: Load Script File"
 }
