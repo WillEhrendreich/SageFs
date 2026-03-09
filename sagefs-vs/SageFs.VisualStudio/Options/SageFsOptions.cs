@@ -55,5 +55,17 @@ public sealed class SageFsOptions
     [DisplayName("Density Mode")]
     [Description("Controls which adornments are visible: Full, Normal, or Minimal")]
     public DensityMode DensityMode { get; set; } = DensityMode.Normal;
+
+    /// <summary>
+    /// Parses the TCP port from a URL such as "http://localhost:37749".
+    /// Returns <c>null</c> if the URL is invalid or has no explicit port.
+    /// </summary>
+    public static int? ParsePort(string? url)
+    {
+        if (string.IsNullOrWhiteSpace(url)) return null;
+        return System.Uri.TryCreate(url, System.UriKind.Absolute, out var uri) && uri.Port > 0
+            ? uri.Port
+            : (int?)null;
+    }
 }
 

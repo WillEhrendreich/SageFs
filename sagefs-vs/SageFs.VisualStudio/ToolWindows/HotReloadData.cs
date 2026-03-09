@@ -104,7 +104,11 @@ internal class HotReloadData : NotifyPropertyChangedObject
       await client.WatchAllAsync(sessionId, ct);
       await RefreshAsync(null, ct);
     }
-    catch { /* best effort */ }
+    catch (Exception ex)
+    {
+      System.Diagnostics.Debug.WriteLine(
+        $"[SageFs] {nameof(HotReloadData)}.WatchAll: {ex.GetType().Name}: {ex.Message}");
+    }
   }
 
   private async Task UnwatchAllAsync(object? parameter, CancellationToken ct)
@@ -116,7 +120,11 @@ internal class HotReloadData : NotifyPropertyChangedObject
       await client.UnwatchAllAsync(sessionId, ct);
       await RefreshAsync(null, ct);
     }
-    catch { /* best effort */ }
+    catch (Exception ex)
+    {
+      System.Diagnostics.Debug.WriteLine(
+        $"[SageFs] {nameof(HotReloadData)}.UnwatchAll: {ex.GetType().Name}: {ex.Message}");
+    }
   }
 
   private async Task ReloadAsync(object? parameter, CancellationToken ct)
@@ -129,6 +137,10 @@ internal class HotReloadData : NotifyPropertyChangedObject
       await client.RefreshHotReloadAsync(sessionId, ct);
       await RefreshAsync(null, ct);
     }
-    catch { /* best effort */ }
+    catch (Exception ex)
+    {
+      System.Diagnostics.Debug.WriteLine(
+        $"[SageFs] {nameof(HotReloadData)}.Reload: {ex.GetType().Name}: {ex.Message}");
+    }
   }
 }

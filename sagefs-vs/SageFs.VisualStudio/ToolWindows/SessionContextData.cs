@@ -144,7 +144,11 @@ internal class SessionContextData : NotifyPropertyChangedObject, IDisposable
       var alive = await client.PingAsync(ct);
       ConnectionStatus = alive ? "● Connected" : "○ Offline";
     }
-    catch { /* best effort */ }
+    catch (Exception ex)
+    {
+      System.Diagnostics.Debug.WriteLine(
+        $"[SageFs] {nameof(SessionContextData)}.Ping: {ex.GetType().Name}: {ex.Message}");
+    }
   }
 
   private void OnSessionStateChanged(object? sender, Core.SessionStreamState s)
@@ -235,7 +239,11 @@ internal class SessionContextData : NotifyPropertyChangedObject, IDisposable
         HotReloadInfo = "Hot reload not available";
       }
     }
-    catch { /* best effort — SSE will retry */ }
+    catch (Exception ex)
+    {
+      System.Diagnostics.Debug.WriteLine(
+        $"[SageFs] {nameof(SessionContextData)}.FetchSessionDetails: {ex.GetType().Name}: {ex.Message}");
+    }
   }
 
   public void Dispose()

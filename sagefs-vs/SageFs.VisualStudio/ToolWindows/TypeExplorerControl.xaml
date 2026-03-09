@@ -22,6 +22,14 @@
                    FontSize="12" />
         </DockPanel>
 
+        <!-- Status message (daemon not running, etc.) -->
+        <TextBlock Text="{Binding StatusMessage}"
+                   FontFamily="Cascadia Code,Consolas,Courier New"
+                   FontSize="11"
+                   Foreground="Orange"
+                   TextWrapping="Wrap"
+                   Margin="0,0,0,8" />
+
         <!-- Namespaces -->
         <TextBlock Text="{Binding NamespacesText}"
                    FontFamily="Cascadia Code,Consolas,Courier New"

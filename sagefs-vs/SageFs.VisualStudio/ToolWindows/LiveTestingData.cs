@@ -267,7 +267,11 @@ internal class LiveTestingData : NotifyPropertyChangedObject, IDisposable
       IsEnabled = !IsEnabled;
       EnabledStatus = IsEnabled ? "● Live Testing ON" : "○ Live Testing OFF";
     }
-    catch { /* best effort */ }
+    catch (Exception ex)
+    {
+      System.Diagnostics.Debug.WriteLine(
+        $"[SageFs] {nameof(LiveTestingData)}.Toggle: {ex.GetType().Name}: {ex.Message}");
+    }
   }
 
   private async Task RunAllAsync(object? parameter, CancellationToken ct)
@@ -277,7 +281,11 @@ internal class LiveTestingData : NotifyPropertyChangedObject, IDisposable
       SummaryText = "⟳ Running all tests...";
       await client.RunTestsAsync("", ct);
     }
-    catch { /* best effort */ }
+    catch (Exception ex)
+    {
+      System.Diagnostics.Debug.WriteLine(
+        $"[SageFs] {nameof(LiveTestingData)}.RunAll: {ex.GetType().Name}: {ex.Message}");
+    }
   }
 
   private Task CycleFilterAsync(object? parameter, CancellationToken ct)
@@ -312,7 +320,11 @@ internal class LiveTestingData : NotifyPropertyChangedObject, IDisposable
       await client.SetRunPolicyAsync(catDu, polDu, ct);
       SummaryText = $"⚙ {SelectedCategory}: {SelectedPolicy}";
     }
-    catch { /* best effort */ }
+    catch (Exception ex)
+    {
+      System.Diagnostics.Debug.WriteLine(
+        $"[SageFs] {nameof(LiveTestingData)}.ApplyRunPolicy: {ex.GetType().Name}: {ex.Message}");
+    }
   }
 
   public void Dispose()

@@ -18,6 +18,7 @@ internal class TypeExplorerData : NotifyPropertyChangedObject, IDisposable
   private string namespacesText = "Loading...";
   private string typesText = "";
   private string searchQuery = "";
+  private string statusMessage = "";
 
   public TypeExplorerData(VisualStudioExtensibility extensibility, Core.SageFsClient client,
     Core.LiveTestingSubscriber? subscriber = null)
@@ -58,6 +59,21 @@ internal class TypeExplorerData : NotifyPropertyChangedObject, IDisposable
     set => SetProperty(ref searchQuery, value);
   }
 
+  [DataMember]
+  public string StatusMessage
+  {
+    get => statusMessage;
+    set => SetProperty(ref statusMessage, value);
+  }
+
+  // ── Daemon guard ──────────────────────────────────────────────────────────
+
+  /// <summary>
+  /// Returns true when the refresh should be skipped because the daemon is unreachable.
+  /// Exposed as a pure static method for testability.
+  /// </summary>
+  internal static bool ShouldSkipRefresh(bool daemonReachable) => !daemonReachable;
+
   // ── SSE subscription ──────────────────────────────────────────────────────
 
   /// <summary>
@@ -83,6 +99,18 @@ internal class TypeExplorerData : NotifyPropertyChangedObject, IDisposable
   {
     try
     {
+      using var pingSts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+      pingSts.CancelAfter(TimeSpan.FromSeconds(2));
+      var reachable = await client.PingAsync(pingSts.Token);
+      if (ShouldSkipRefresh(reachable))
+      {
+        StatusMessage = "⚠ SageFs daemon not running";
+        NamespacesText = "";
+        TypesText = "";
+        return;
+      }
+      StatusMessage = "";
+
       var sessions = (await client.GetSessionsAsync(ct)).ToList();
       if (sessions.Count == 0)
       {
@@ -129,6 +157,16 @@ internal class TypeExplorerData : NotifyPropertyChangedObject, IDisposable
 
     try
     {
+      using var pingSts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+      pingSts.CancelAfter(TimeSpan.FromSeconds(2));
+      var reachable = await client.PingAsync(pingSts.Token);
+      if (ShouldSkipRefresh(reachable))
+      {
+        StatusMessage = "⚠ SageFs daemon not running";
+        return;
+      }
+      StatusMessage = "";
+
       var sessions = (await client.GetSessionsAsync(ct)).ToList();
       if (sessions.Count == 0)
       {

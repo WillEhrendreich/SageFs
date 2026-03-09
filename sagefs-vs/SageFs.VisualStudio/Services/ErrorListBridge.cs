@@ -90,9 +90,10 @@ internal class ErrorListBridge : IDisposable
       {
         await reporter.ReportDiagnosticsAsync(batch, CancellationToken.None);
       }
-      catch
+      catch (Exception ex)
       {
-        // Best effort — don't crash if VS isn't ready
+        System.Diagnostics.Debug.WriteLine(
+          $"[SageFs] {nameof(ErrorListBridge)}: diagnostics flush error: {ex.GetType().Name}: {ex.Message}");
       }
     }
   }

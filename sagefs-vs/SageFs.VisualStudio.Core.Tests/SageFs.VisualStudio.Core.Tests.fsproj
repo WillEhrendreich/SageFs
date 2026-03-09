@@ -25,5 +25,6 @@
     <Compile Include="JsonParsersTests.fs" />
     <Compile Include="EvalServiceTests.fs" />
     <Compile Include="LiveTestingFormatTests.fs" />
+    <Compile Include="TypeExplorerGuardTests.fs" />
   </ItemGroup>
 </Project>

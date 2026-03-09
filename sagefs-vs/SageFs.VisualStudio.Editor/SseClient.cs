@@ -69,7 +69,11 @@ internal sealed class SseClient : IDisposable
                 }
             }
             catch (OperationCanceledException) { return; }
-            catch { /* swallow and reconnect */ }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine(
+                    $"[SageFs] {nameof(SseClient)}: SSE reconnect error: {ex.GetType().Name}: {ex.Message}");
+            }
 
             try { await Task.Delay(delay, ct); }
             catch (OperationCanceledException) { return; }

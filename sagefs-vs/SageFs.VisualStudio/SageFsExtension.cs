@@ -2,6 +2,7 @@
 // All real logic lives in SageFs.VisualStudio.Core (F#).
 namespace SageFs.VisualStudio;
 
+using System;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.VisualStudio.Extensibility;
 
@@ -38,20 +39,29 @@ internal class SageFsExtension : Extension
   {
     base.InitializeServices(serviceCollection);
 
-    // Write the daemon URL so the in-process MEF assembly (SageFs.VisualStudio.Editor)
-    // can discover it without a direct project reference across TFM boundaries.
-    // Uses %LOCALAPPDATA%\SageFs\daemon.json — survives session across VS restarts.
-    int daemonPort = Core.Constants.DefaultMcpPort;
+    // Determine the daemon URL. Prefer any URL already written to daemon.json (e.g., from
+    // a previous OptionsApplier run or manual edit), falling back to the compiled default.
+    var existingUrl = TryReadDaemonUrl();
+    var options = new Options.SageFsOptions
+    {
+      DaemonUrl = existingUrl ?? $"http://localhost:{Core.Constants.DefaultMcpPort}"
+    };
+    int daemonPort = Options.SageFsOptions.ParsePort(options.DaemonUrl) ?? Core.Constants.DefaultMcpPort;
     var daemonUrl = $"http://localhost:{daemonPort}";
-    var sageFsDir = System.IO.Path.Combine(
-        System.Environment.GetFolderPath(System.Environment.SpecialFolder.LocalApplicationData),
-        "SageFs");
-    System.IO.Directory.CreateDirectory(sageFsDir);
-    System.IO.File.WriteAllText(
-        System.IO.Path.Combine(sageFsDir, "daemon.json"),
-        $"{{\"Url\":\"{daemonUrl}\"}}");
 
-    serviceCollection.AddSingleton<Core.SageFsClient>();
+    // Write daemon.json so the in-process MEF assembly (SageFs.VisualStudio.Editor)
+    // can discover the URL without a direct project reference across TFM boundaries.
+    // Uses %LOCALAPPDATA%\SageFs\daemon.json — survives session across VS restarts.
+    WriteDaemonJson(daemonUrl);
+
+    serviceCollection.AddSingleton(options);
+    serviceCollection.AddSingleton<Core.SageFsClient>(sp =>
+    {
+      var client = new Core.SageFsClient();
+      client.McpPort = daemonPort;
+      client.DashboardPort = daemonPort + 1;
+      return client;
+    });
     serviceCollection.AddSingleton<Core.EvalCancellation>();
     serviceCollection.AddSingleton<Core.LiveTestingSubscriber>(sp =>
     {
@@ -70,4 +80,46 @@ internal class SageFsExtension : Extension
     // constructor-injected SageFsClient and fires a 2-second delayed ping in InitializeAsync,
     // writing the result ("✓ connected" / "⚠ not running") to the SageFs output channel.
   }
+
+  /// <summary>
+  /// Reads the daemon URL from a previously written daemon.json, or returns <c>null</c>.
+  /// Allows a custom DaemonUrl (set via Tools → Options → SageFs and persisted by
+  /// <see cref="Options.OptionsApplier"/>) to survive across VS restarts.
+  /// </summary>
+  internal static string? TryReadDaemonUrl()
+  {
+    try
+    {
+      var path = System.IO.Path.Combine(
+        System.Environment.GetFolderPath(System.Environment.SpecialFolder.LocalApplicationData),
+        "SageFs", "daemon.json");
+      if (!System.IO.File.Exists(path)) return null;
+      var json = System.IO.File.ReadAllText(path);
+      const string marker = "\"Url\":\"";
+      var start = json.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+      if (start < 0) return null;
+      start += marker.Length;
+      var end = json.IndexOf('"', start);
+      if (end < 0) return null;
+      var url = json.Substring(start, end - start);
+      return string.IsNullOrEmpty(url) ? null : url;
+    }
+    catch
+    {
+      return null;
+    }
+  }
+
+  /// <summary>Writes the daemon URL to %LOCALAPPDATA%\SageFs\daemon.json.</summary>
+  internal static void WriteDaemonJson(string url)
+  {
+    var sageFsDir = System.IO.Path.Combine(
+      System.Environment.GetFolderPath(System.Environment.SpecialFolder.LocalApplicationData),
+      "SageFs");
+    System.IO.Directory.CreateDirectory(sageFsDir);
+    System.IO.File.WriteAllText(
+      System.IO.Path.Combine(sageFsDir, "daemon.json"),
+      $"{{\"Url\":\"{url}\"}}");
+  }
 }
+

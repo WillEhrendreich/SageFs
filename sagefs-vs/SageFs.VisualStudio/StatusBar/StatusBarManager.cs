@@ -65,6 +65,17 @@ internal class StatusBarManager : ExtensionPart
 
     var text = FormatStatusBarText(connected, passingTests, latencyMs);
     _ = _output?.WriteLineAsync(text);
+    _ = TryUpdateVsStatusBarAsync(text);
+  }
+
+  private Task TryUpdateVsStatusBarAsync(string text)
+  {
+    // VS Extensibility SDK 17.14 does not expose a StatusBar property on ShellExtensibility.
+    // The native VS status bar update is skipped; connection state is surfaced via the
+    // SageFs output channel (see UpdateConnectionState above).
+    // TODO: add IVsStatusbar interop when Microsoft.VisualStudio.Shell.Interop reference is available.
+    System.Diagnostics.Debug.WriteLine($"[SageFs] {nameof(StatusBarManager)}: {text}");
+    return Task.CompletedTask;
   }
 
   /// <summary>
