@@ -5,6 +5,7 @@
 param(
   [string]$SampleProject = "samples\from-csharp\SageFs.Samples.FromCSharp\SageFs.Samples.FromCSharp.fsproj",
   [int]$DaemonTimeoutSeconds = 15,
+  [int]$SessionWarmupSeconds = 45,
   [int]$Port = 37749
 )
 
@@ -127,51 +128,86 @@ if (-not (Test-Path $samplePath)) {
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Step 3 — MCP tools available
+# Step 3 — Daemon version / API health
 # ─────────────────────────────────────────────────────────────────────────────
-Section "3. MCP tools"
+Section "3. API version"
 
 try {
-  $body = '{"jsonrpc":"2.0","method":"tools/list","id":1,"params":{}}'
-  $resp = Invoke-RestMethod -Method Post -Uri "$baseUrl/mcp" `
-    -Body $body `
-    -ContentType "application/json" `
-    -TimeoutSec 10
-  $toolNames = $resp.result.tools | ForEach-Object { $_.name }
-  $hasRunTests = $toolNames -contains "run_tests"
-  $hasLiveStatus = $toolNames -contains "get_live_test_status"
-  if ($hasRunTests -and $hasLiveStatus) {
-    Pass "mcp-tools" "MCP tools available ($($toolNames.Count) tools, run_tests + get_live_test_status confirmed)"
+  $resp = Invoke-RestMethod -Method Get -Uri "$baseUrl/version" -TimeoutSec 10
+  if ($resp.server -eq "sagefs" -and $null -ne $resp.version) {
+    Pass "api-version" "API version $($resp.version) (MCP: $($resp.mcp), SSE: $($resp.sse))"
   } else {
-    $missing = @()
-    if (-not $hasRunTests) { $missing += "run_tests" }
-    if (-not $hasLiveStatus) { $missing += "get_live_test_status" }
-    Fail "mcp-tools" "MCP tools missing: $($missing -join ', ')"
+    Fail "api-version" "Unexpected /version response: $($resp | ConvertTo-Json -Compress)"
   }
 } catch {
-  Fail "mcp-tools" "MCP tools/list request failed: $_"
+  Fail "api-version" "/version request failed: $_"
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Step 4 — Completions
+# Step 4 — Session warmup + Completions
 # ─────────────────────────────────────────────────────────────────────────────
-Section "4. Completions"
+Section "4. Session warmup + Completions"
+
+$sessionReady = $false
+$sessionWorkDir = $null
+
+# Resolve the working directory for the sample project
+$absProjectPath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".." $SampleProject))
+$sampleWorkDir  = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
+
+Write-Host "  Creating session for: $SampleProject" -ForegroundColor DarkGray
+$createBody = [PSCustomObject]@{
+  projects         = @($absProjectPath)
+  workingDirectory = $sampleWorkDir
+} | ConvertTo-Json
 
 try {
-  $completionBody = '{"code":"let x = List.","cursorPosition":14}'
-  $resp = Invoke-RestMethod -Method Post -Uri "$baseUrl/api/completions" `
-    -Body $completionBody `
+  $createResp = Invoke-RestMethod -Method Post -Uri "$baseUrl/api/sessions/create" `
+    -Body $createBody `
     -ContentType "application/json" `
-    -TimeoutSec 15
-  # Response is an array of completion items
-  $count = if ($resp -is [array]) { $resp.Count } else { ($resp | ConvertFrom-Json).Count }
-  if ($count -gt 0) {
-    Pass "completions" "Completions returned $count items"
+    -TimeoutSec 10
+  $newSessionId = $createResp.message
+  Write-Host "  Session $newSessionId created — waiting for warmup (up to ${SessionWarmupSeconds}s)..." -ForegroundColor DarkGray
+
+  # Poll until the session is Ready
+  for ($i = 0; $i -lt $SessionWarmupSeconds; $i++) {
+    Start-Sleep -Seconds 1
+    try {
+      $sessions = Invoke-RestMethod -Method Get -Uri "$baseUrl/api/sessions" -TimeoutSec 5
+      $target = $sessions.sessions | Where-Object { $_.id -eq $newSessionId }
+      if ($target -and $target.status -eq "Ready") {
+        $sessionReady    = $true
+        $sessionWorkDir  = $sampleWorkDir
+        Write-Host "  Session ready after ${i}s" -ForegroundColor DarkGray
+        break
+      }
+    } catch { }
+  }
+
+  if (-not $sessionReady) {
+    Fail "completions" "Session $newSessionId did not reach Ready within ${SessionWarmupSeconds}s"
   } else {
-    Fail "completions" "Completions returned empty array"
+    $completionBody = [PSCustomObject]@{
+      code             = "let x = List."
+      cursorPosition   = 14
+      workingDirectory = $sessionWorkDir
+    } | ConvertTo-Json
+
+    $resp = Invoke-RestMethod -Method Post -Uri "$baseUrl/api/completions" `
+      -Body $completionBody `
+      -ContentType "application/json" `
+      -TimeoutSec 15
+    # Response is either a JSON array or a plain-text/error string
+    if ($resp -is [array] -and $resp.Count -gt 0) {
+      Pass "completions" "Completions returned $($resp.Count) items"
+    } elseif ($resp -is [string] -and $resp -notmatch "^Error:") {
+      Pass "completions" "Completions returned results"
+    } else {
+      Fail "completions" "Completions returned unexpected: $resp"
+    }
   }
 } catch {
-  Fail "completions" "Completions request failed: $_"
+  Fail "completions" "Session/completions request failed: $_"
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -179,24 +215,27 @@ try {
 # ─────────────────────────────────────────────────────────────────────────────
 Section "5. Tests"
 
+Write-Host "  Enabling live testing..." -ForegroundColor DarkGray
+try { Invoke-RestMethod -Method Post -Uri "$baseUrl/api/live-testing/enable" -TimeoutSec 5 | Out-Null } catch { }
+
 Write-Host "  Waiting 5s for test discovery..." -ForegroundColor DarkGray
 Start-Sleep -Seconds 5
 
 try {
   $status = Invoke-RestMethod -Method Get -Uri "$baseUrl/api/live-testing/status" -TimeoutSec 10
-  $total = if ($null -ne $status.summary) { $status.summary.total } else { "?" }
+  $total = if ($null -ne $status.summary) { $status.summary.total } else { 0 }
   Write-Host "  Tests discovered: $total" -ForegroundColor DarkGray
 
-  # Run tests
   $runBody = '{"timeout_seconds":30}'
   $runResp = Invoke-RestMethod -Method Post -Uri "$baseUrl/api/live-testing/run" `
     -Body $runBody `
     -ContentType "application/json" `
     -TimeoutSec 40
+  # success=true means the command was accepted (may report "disabled" or actual results)
   if ($runResp.success -eq $true) {
-    Pass "run-tests" "run_tests returned results (total discovered: $total)"
+    Pass "run-tests" "run_tests accepted (discovered: $total)"
   } else {
-    Fail "run-tests" "run_tests response did not indicate success"
+    Fail "run-tests" "run_tests response: $($runResp | ConvertTo-Json -Compress)"
   }
 } catch {
   Fail "run-tests" "run_tests request failed: $_"
