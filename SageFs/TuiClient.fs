@@ -55,6 +55,7 @@ let run (daemonInfo: DaemonInfo) = task {
   let mutable lastAvgMs = 0.0
   let mutable lastStandbyLabel = ""
   let mutable lastLiveTestingStatus = ""
+  let mutable lastWatchedCount = 0
   let mutable layoutConfig = LayoutConfig.defaults
   let mutable currentTheme =
     match ThemePresets.tryFind "Kanagawa" with
@@ -96,7 +97,7 @@ let run (daemonInfo: DaemonInfo) = task {
             sprintf " %s %s | evals: %d (avg %.0fms)%s%s%s | %s" sid lastSessionState lastEvalCount lastAvgMs standby liveTesting ttPart (PaneId.displayName focusedPane)
           | false ->
             sprintf " %s %s | evals: %d%s%s%s | %s" sid lastSessionState lastEvalCount standby liveTesting ttPart (PaneId.displayName focusedPane)
-        let statusRight = sprintf " %s | %.1fms |%s" currentThemeName lastFrameMs (StatusHints.build keyMap focusedPane layoutConfig.VisiblePanes)
+        let statusRight = sprintf " %s | %.1fms |%s" currentThemeName lastFrameMs (StatusHints.build keyMap focusedPane layoutConfig.VisiblePanes lastWatchedCount)
 
         // When viewing history, use historical regions; otherwise use live
         let displayRegions =
@@ -172,6 +173,7 @@ let run (daemonInfo: DaemonInfo) = task {
         lastAvgMs <- event.AvgMs
         lastStandbyLabel <- event.StandbyLabel
         lastLiveTestingStatus <- event.LiveTestingStatus
+        lastWatchedCount <- event.WatchedCount
         lastRegions <- regions
         // Record region snapshot for time-travel (only in live mode)
         timeTravelState <-

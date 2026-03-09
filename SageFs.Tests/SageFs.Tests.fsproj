@@ -179,6 +179,7 @@
         <Compile Include="EditorPropertyTests.fs" />
         <Compile Include="ArchitectureTests.fs" />
         <Compile Include="TestStatusVocabularyTests.fs" />
+        <Compile Include="HotReloadVisibilityTests.fs" />
         <Compile Include="Program.fs" />
     </ItemGroup>
 

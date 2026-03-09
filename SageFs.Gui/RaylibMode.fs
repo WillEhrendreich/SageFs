@@ -157,6 +157,7 @@ module RaylibMode =
     (evalCount: int)
     (standbyLabel: string)
     (liveTestingStatus: string)
+    (watchedCount: int)
     (timeTravelStatus: string option)
     (focusedPane: PaneId)
     (scrollOffsets: Map<PaneId, int>)
@@ -173,7 +174,7 @@ module RaylibMode =
       let liveTesting = if liveTestingStatus.Length > 0 then sprintf " | %s" liveTestingStatus else ""
       let ttPart = match timeTravelStatus with | Some s -> sprintf " | %s" s | None -> ""
       sprintf " %s %s | evals: %d%s%s%s | %s" sid sessionState evalCount standby liveTesting ttPart (PaneId.displayName focusedPane)
-    let statusRight = sprintf " %s | %dpt | %d fps |%s" themeName fontSize currentFps (StatusHints.build keyMap focusedPane layoutConfig.VisiblePanes)
+    let statusRight = sprintf " %s | %dpt | %d fps |%s" themeName fontSize currentFps (StatusHints.build keyMap focusedPane layoutConfig.VisiblePanes watchedCount)
     Screen.drawWith layoutConfig theme grid regions focusedPane scrollOffsets statusLeft statusRight |> ignore
 
   /// Run the Raylib GUI window connected to daemon.
@@ -225,6 +226,7 @@ module RaylibMode =
     let mutable lastEvalCount = 0
     let mutable lastStandbyLabel = ""
     let mutable lastLiveTestingStatus = ""
+    let mutable lastWatchedCount = 0
     let mutable lastFps = 0
     // Time-travel: buffer last N region snapshots for keyboard navigation
     let mutable timeTravelState =
@@ -291,6 +293,7 @@ module RaylibMode =
             lastEvalCount <- event.EvalCount
             lastStandbyLabel <- event.StandbyLabel
             lastLiveTestingStatus <- event.LiveTestingStatus
+            lastWatchedCount <- event.WatchedCount
             lastRegions <- regions
             // Record region snapshot for time-travel (only in live mode)
             timeTravelState <-
@@ -468,8 +471,8 @@ module RaylibMode =
 
       if running then
         // Render
-        let regions, sessionId, sessionState, evalCount, standbyLabel, liveTestingStatus =
-          lock statelock (fun () -> lastRegions, lastSessionId, lastSessionState, lastEvalCount, lastStandbyLabel, lastLiveTestingStatus)
+        let regions, sessionId, sessionState, evalCount, standbyLabel, liveTestingStatus, watchedCount =
+          lock statelock (fun () -> lastRegions, lastSessionId, lastSessionState, lastEvalCount, lastStandbyLabel, lastLiveTestingStatus, lastWatchedCount)
 
         // When viewing history, use historical regions; otherwise use live
         let displayRegions =
@@ -481,7 +484,7 @@ module RaylibMode =
             | None -> regions
         let ttStatus = TimeTravel.formatStatus timeTravelState
 
-        renderRegions grid displayRegions sessionId sessionState evalCount standbyLabel liveTestingStatus ttStatus focusedPane scrollOffsets fontSize lastFps keyMap layoutConfig currentTheme currentThemeName
+        renderRegions grid displayRegions sessionId sessionState evalCount standbyLabel liveTestingStatus watchedCount ttStatus focusedPane scrollOffsets fontSize lastFps keyMap layoutConfig currentTheme currentThemeName
         lastFps <- fps ()
 
         Raylib.BeginDrawing()

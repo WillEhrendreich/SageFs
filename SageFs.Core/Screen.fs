@@ -59,7 +59,7 @@ module StatusHints =
 
   /// Build the right-side status bar hints string.
   /// Shows common actions with their configured keybindings.
-  let build (keyMap: KeyMap) (focusedPane: PaneId) (layout: Set<PaneId>) : string =
+  let build (keyMap: KeyMap) (focusedPane: PaneId) (layout: Set<PaneId>) (watchedCount: int) : string =
     let hint action label =
       findShort keyMap action
       |> Option.map (fun k -> sprintf "%s:%s" k label)
@@ -69,11 +69,16 @@ module StatusHints =
       match layout.Contains PaneId.Editor with
       | true -> hint (UiAction.TogglePane "Editor") "hide-editor"
       | false -> hint (UiAction.TogglePane "Editor") "show-editor"
+    let hotReloadHint =
+      match watchedCount > 0 with
+      | true -> hint UiAction.HotReloadUnwatchAll (sprintf "unwatch(%d)" watchedCount)
+      | false -> hint UiAction.HotReloadWatchAll "watch-all"
     let common =
       [ hint UiAction.Quit "quit"
         hint UiAction.CycleFocus "focus"
         hint UiAction.ScrollUp "scroll"
-        editorToggle ]
+        editorToggle
+        hotReloadHint ]
       |> List.choose id
     let paneHints =
       match focusedPane with

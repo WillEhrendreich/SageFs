@@ -33,6 +33,7 @@ type StateEvent = {
   ActiveWorkingDir: string
   StandbyLabel: string
   LiveTestingStatus: string
+  WatchedCount: int
   Regions: DaemonRegionData list
 }
 
@@ -112,6 +113,10 @@ module DaemonClient =
         match root.TryGetProperty("liveTestingStatus") with
         | true, el -> el.GetString()
         | _ -> ""
+      let watchedCount =
+        match root.TryGetProperty("watchedCount") with
+        | true, el -> el.GetInt32()
+        | _ -> 0
       Some {
         SessionId = sessionId
         SessionState = sessionState
@@ -120,6 +125,7 @@ module DaemonClient =
         ActiveWorkingDir = activeWorkingDir
         StandbyLabel = standbyLabel
         LiveTestingStatus = liveTestingStatus
+        WatchedCount = watchedCount
         Regions = regions
       }
     with ex ->
