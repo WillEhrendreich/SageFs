@@ -659,4 +659,72 @@ let jupyterKernelTests =
            | other -> failtest (sprintf "Expected Daemon but got %A" other)
       }
     ]
+
+    testList "ZMQ transport framing" [
+      test "parseFrames rejects message without delimiter" {
+        let msg = NetMQ.NetMQMessage()
+        msg.Append("no-delimiter")
+        msg.Append("garbage")
+        match JupyterTransport.parseFrames "" msg with
+        | Error e -> e |> Expect.stringContains "has error" "delimiter"
+        | Ok _ -> failtest "should fail without delimiter"
+      }
+
+      test "parseFrames accepts well-formed message" {
+        let key = ""
+        let header = mkHeader "execute_request"
+        let headerJson = WireProtocol.serializeHeader header
+        let parentJson = "{}"
+        let metadataJson = "{}"
+        let contentJson = """{"code": "1+1", "silent": false, "store_history": true, "allow_stdin": false}"""
+        let hmac = WireProtocol.sign key headerJson parentJson metadataJson contentJson
+        let msg = NetMQ.NetMQMessage()
+        msg.Append("identity1")
+        msg.Append("<IDS|MSG>")
+        msg.Append(hmac)
+        msg.Append(headerJson)
+        msg.Append(parentJson)
+        msg.Append(metadataJson)
+        msg.Append(contentJson)
+        match JupyterTransport.parseFrames key msg with
+        | Error e -> failtest (sprintf "parseFrames failed: %s" e)
+        | Ok (ids, jupyterMsg) ->
+          ids.Length |> Expect.equal "one identity" 1
+          jupyterMsg.Header.MsgType |> Expect.equal "msg type" "execute_request"
+          match jupyterMsg.Content with
+          | MessageContent.ExecuteRequest r -> r.Code |> Expect.equal "code" "1+1"
+          | _ -> failtest "expected ExecuteRequest"
+      }
+
+      test "parseFrames rejects bad HMAC" {
+        let key = "secret-key"
+        let header = mkHeader "kernel_info_request"
+        let headerJson = WireProtocol.serializeHeader header
+        let msg = NetMQ.NetMQMessage()
+        msg.Append("<IDS|MSG>")
+        msg.Append("bad-hmac")
+        msg.Append(headerJson)
+        msg.Append("{}")
+        msg.Append("{}")
+        msg.Append("{}")
+        match JupyterTransport.parseFrames key msg with
+        | Error e -> e |> Expect.stringContains "hmac error" "HMAC"
+        | Ok _ -> failtest "should fail with bad HMAC"
+      }
+
+      test "buildReplyFrames produces correct frame structure" {
+        let parentHeader = mkHeader "execute_request"
+        let frames = JupyterTransport.buildReplyFrames "" [ "id1"B ] parentHeader "execute_reply" """{"status":"ok"}"""
+        // identity + delimiter + hmac + header + parent + metadata + content = 7
+        (frames.FrameCount, 6) |> Expect.isGreaterThan "at least 7 frames"
+        frames.[1].ConvertToString() |> Expect.equal "delimiter" "<IDS|MSG>"
+      }
+
+      test "buildIOPubFrames uses msg_type as topic" {
+        let parentHeader = mkHeader "execute_request"
+        let frames = JupyterTransport.buildIOPubFrames "" parentHeader "stream" """{"name":"stdout","text":"hello"}"""
+        frames.[0].ConvertToString() |> Expect.equal "topic = msg_type" "stream"
+        frames.[1].ConvertToString() |> Expect.equal "delimiter" "<IDS|MSG>"
+      }
+    ]
   ]

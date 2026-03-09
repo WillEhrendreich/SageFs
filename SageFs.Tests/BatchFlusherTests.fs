@@ -50,8 +50,11 @@ let batchFlusherTests = testList "BatchFlusher" [
     let flushed = ResizeArray<int array>()
     use flusher = new BatchFlusher<int>(100, 100, fun batch -> flushed.Add(batch))
     flusher.Add(7)
-    Thread.Sleep(250)
-    (flushed.Count, 1) |> Expect.isGreaterThanOrEqual "timer flushed at least once"
+    // Poll up to 3 seconds (CI has ~10× variance vs dev machine under ThreadPool pressure)
+    let deadline = System.Diagnostics.Stopwatch.GetTimestamp() + System.Diagnostics.Stopwatch.Frequency * 3L
+    while flushed.Count = 0 && System.Diagnostics.Stopwatch.GetTimestamp() < deadline do
+      Thread.Sleep(20)
+    (flushed.Count, 1) |> Expect.isGreaterThanOrEqual "timer flushed at least once within 3s"
     flushed.[0] |> Expect.sequenceEqual "contains the item" [|7|]
   }
 

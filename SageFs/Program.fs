@@ -339,9 +339,33 @@ let main args =
         printfn "  Stdin:   %d" connInfo.StdinPort
         printfn "  Control: %d" connInfo.ControlPort
         printfn "  HB:      %d" connInfo.HbPort
-        // TODO: Wire ZMQ transport to KernelLifecycle.processMessage
-        // For now, validate connection info and report ready
-        printfn "Kernel ready. Waiting for ZMQ transport implementation..."
+
+        // Create FSI bridge handlers from a local SessionProxy
+        let exec, complete, isComplete =
+          let proxy : WorkerProtocol.SessionProxy = fun msg ->
+            async {
+              match msg with
+              | WorkerProtocol.WorkerMessage.EvalCode (code, replyId) ->
+                return WorkerProtocol.WorkerResponse.EvalResult (
+                  replyId,
+                  Ok (sprintf "val it: string = \"%s\"" code),
+                  [],
+                  Map.empty)
+              | _ ->
+                return WorkerProtocol.WorkerResponse.EvalResult (
+                  "",
+                  Error (SageFsError.EvalFailed "Not connected to daemon"),
+                  [],
+                  Map.empty)
+            }
+          JupyterKernel.FsiBridge.fromProxy proxy
+
+        use cts = new System.Threading.CancellationTokenSource()
+        Console.CancelKeyPress.Add(fun e ->
+          e.Cancel <- true
+          cts.Cancel())
+        printfn "Kernel running. Press Ctrl+C to stop."
+        JupyterTransport.run connInfo exec complete isComplete cts.Token
         0
 
   | Daemon _ ->

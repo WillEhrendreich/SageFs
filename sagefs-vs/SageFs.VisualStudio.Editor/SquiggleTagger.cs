@@ -114,6 +114,7 @@ internal sealed class SquiggleTagger : ITagger<SageFsErrorTag>, IDisposable
 [ContentType("F#")]
 [ContentType("F# Script")] // .fsx files — VS does NOT walk the base-type chain for MEF tagger exports
 [TagType(typeof(SageFsErrorTag))]
+[PartCreationPolicy(CreationPolicy.Shared)] // one instance per VS process; avoids duplicate SSE subscriptions
 internal sealed class SquiggleTaggerProvider : ITaggerProvider
 {
     private readonly DiagnosticStateTracker _tracker;

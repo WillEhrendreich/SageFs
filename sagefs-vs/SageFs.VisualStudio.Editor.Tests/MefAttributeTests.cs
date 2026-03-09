@@ -118,6 +118,32 @@ public class MefAttributeTests
                  "VS does not walk base-type chain for IWpfTextViewCreationListener exports.");
   }
 
+  // ── PartCreationPolicy: tagger providers must be Shared ──────────────────
+
+  /// <summary>
+  /// Without [PartCreationPolicy(CreationPolicy.Shared)], MEF may create multiple
+  /// instances of a tagger provider — one per view. Each instance would independently
+  /// subscribe to the SSE stream, causing duplicate events and memory leaks.
+  /// </summary>
+  [Theory]
+  [InlineData(typeof(TestGlyphTaggerProvider))]
+  [InlineData(typeof(SquiggleTaggerProvider))]
+  public void TaggerProviders_AreShared(Type providerType)
+  {
+    var attr = providerType
+      .GetCustomAttributes(typeof(PartCreationPolicyAttribute), inherit: false)
+      .Cast<PartCreationPolicyAttribute>()
+      .FirstOrDefault();
+
+    attr.Should().NotBeNull(
+      because: $"{providerType.Name} must declare [PartCreationPolicy(CreationPolicy.Shared)]. " +
+               "Without it, MEF may create multiple provider instances (one per view), " +
+               "each subscribing independently to the SSE stream — causing duplicate events.");
+    attr!.CreationPolicy.Should().Be(CreationPolicy.Shared,
+      because: $"{providerType.Name} holds a shared state tracker and SSE subscription. " +
+               "NonShared would create a new instance (and new subscription) per text view.");
+  }
+
   // ── Permanent regression: content type completeness ──────────────────────
 
   [Fact]

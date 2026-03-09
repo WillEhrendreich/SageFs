@@ -46,6 +46,7 @@
         <Compile Include="TuiClient.fs" />
         <Compile Include="DaemonMode.fs" />
         <Compile Include="WatchdogRunner.fs" />
+        <Compile Include="JupyterTransport.fs" />
         <Compile Include="Program.fs" />
         <None Include="..\Readme.md">
           <Pack>true</Pack>
@@ -73,6 +74,7 @@
         <PackageReference Include="FSharp.SystemTextJson" />
         <PackageReference Include="ModelContextProtocol" />
         <PackageReference Include="ModelContextProtocol.AspNetCore" />
+        <PackageReference Include="NetMQ" />
         <FrameworkReference Include="Microsoft.AspNetCore.App" />
     </ItemGroup>
 

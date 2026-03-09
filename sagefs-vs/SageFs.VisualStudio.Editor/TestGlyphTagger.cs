@@ -91,6 +91,7 @@ internal sealed class TestGlyphTagger : ITagger<TestStatusGlyphTag>, IDisposable
 [ContentType("F#")]
 [ContentType("F# Script")] // .fsx files — VS does NOT walk the base-type chain for MEF tagger exports
 [TagType(typeof(TestStatusGlyphTag))]
+[PartCreationPolicy(CreationPolicy.Shared)] // one instance per VS process; avoids duplicate SSE subscriptions
 internal sealed class TestGlyphTaggerProvider : ITaggerProvider
 {
     private readonly TestStateTracker _tracker;
@@ -125,6 +126,7 @@ internal sealed class TestGlyphTaggerProvider : ITaggerProvider
 [ContentType("F# Script")] // .fsx files
 [TagType(typeof(TestStatusGlyphTag))]
 [Order(After = "VsTextMarker")]
+[PartCreationPolicy(CreationPolicy.Shared)]
 internal sealed class TestGlyphFactoryProvider : IGlyphFactoryProvider
 {
     public IGlyphFactory GetGlyphFactory(IWpfTextView view, IWpfTextViewMargin margin) =>
