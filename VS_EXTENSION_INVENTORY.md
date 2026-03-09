@@ -299,15 +299,10 @@
 
 #### **SetRunPolicyCommand**
 - **Shortcut:** None
-- **Behavior:** **Sets all test categories to 'every' (OnEveryChange)**
-- **Code:**
-  \\\csharp
-  string[] categories = ["unit", "integration", "browser", "benchmark", "architecture", "property"];
-  foreach (var cat in categories)
-    await client.SetRunPolicyAsync(cat, "every", ct);
-  \\\
-- **Issue:** Only sets to "every", ignores the 4 policies mentioned in comment (every/save/demand/disabled)
-- **Status:** ⚠️ **PLACEHOLDER/INCOMPLETE** — Should cycle through policies, currently hardcoded to "every"
+- **Behavior:** ✓ **Reads current daemon state and cycles ALL categories to the next policy in sequence**
+- **Policy cycle:** `every → save → demand → disabled → every`
+- **Code:** Reads `LiveTestingSubscriber.CurrentState.Policies` (FSharpMap), calls `Task.WhenAll` over all 6 categories
+- **Status:** ✓ **REAL & FUNCTIONAL** (fixed in Sprint 4)
 
 #### **ShowRecentEventsCommand**
 - **Shortcut:** None
@@ -530,22 +525,28 @@
 3. **Session Management (6):** Create, switch, reset, hard-reset, stop sessions
 4. **Hot Reload Commands (5):** Toggle, watch-all, unwatch-all, refresh, directory-level control
 5. **Live Testing UI:** Comprehensive dashboard with filtering, search, status display
-6. **Daemon Lifecycle (3):** Auto-discovery, start/stop, dashboard launch
-7. **Cancellation Support:** Cooperative eval abort (Ctrl+Alt+C)
-8. **Error List Bridge:** Diagnostics forwarding to VS Error List
-9. **SageFsClient.fs:** Comprehensive HTTP API with proper error handling, JSON parsing, model types
+6. **SetRunPolicyCommand:** Cycles all 6 categories through every→save→demand→disabled (fixed Sprint 4)
+7. **Daemon Lifecycle (3):** Auto-discovery, start/stop, dashboard launch
+8. **Cancellation Support:** Cooperative eval abort (Ctrl+Alt+C)
+9. **Error List Bridge:** Diagnostics forwarding to VS Error List
+10. **SageFsClient.fs:** Comprehensive HTTP API with proper error handling, JSON parsing, model types
+11. **MEF Editor Assembly (net472):** Glyphs, squiggles, inline failure adornments (Sprints 4-5)
 
 ### ⚠️ PLACEHOLDER / INCOMPLETE
 
-1. **SetRunPolicyCommand:** Only sets all policies to "every" — comment mentions 4 policies (every/save/demand/disabled) but no cycling logic
-2. **SwitchSessionCommand:** Simplified to OK/Cancel (switches to second session) — should ideally be a multi-choice dialog
-3. **Type Explorer Search:** Basic \.Contains()\ — no fuzzy matching or advanced filtering
-4. **ClearResults Command:** Registered in string-resources but not found in Commands/ — removed?
+1. **SwitchSessionCommand:** Simplified to OK/Cancel (switches to second session) — should ideally be a multi-choice dialog
+2. **Type Explorer Search:** Basic `.Contains()` — no fuzzy matching or advanced filtering
 
 ### ⚠️ STUB / NOP
 
-1. **StartDaemonAsync** in SageFsClient.fs — currently a no-op (\eturn ()\). Daemon lifecycle is handled in DaemonCommands.cs via \Core.DaemonManager\ (F#).
+1. **StartDaemonAsync** in SageFsClient.fs — currently a no-op (`return ()`). Daemon lifecycle is handled in DaemonCommands.cs via `Core.DaemonManager` (F#).
 
+### 🔮 FUTURE (Sprint 6+)
+
+1. **CodeLens provider** — `file_annotations.CodeLenses` already emits `{Line, Label, Command: RunTest|DebugTest|ShowHistory}` — wire `ICodeLensProvider` for '▶ Run | 🐛 Debug | 📜 History' above test functions
+2. **Inline eval adornments** — show `// => result` right of eval lines (like Rider), dims to 35% opacity on edit, clears on re-eval
+3. **Session management panel** — Sessions tool window: list FSI sessions, start/kill, show eval counts
+4. **Status bar indicator** — 'SageFs ● connected' in VS status bar via `IVsStatusbar`
 ---
 
 ## 7. KEYBOARD SHORTCUTS
@@ -635,13 +636,16 @@ Core Logic (F#)
 
 ---
 
-## 10. MEF GLYPH SPIKE — `SageFs.VisualStudio.Editor` (net472)
+## 10. MEF EDITOR ASSEMBLY — `SageFs.VisualStudio.Editor` (net472)
 
-**Status:** ✅ Skeleton built, expert-panel corrections applied, builds 0 errors
+**Status:** ✅ Fully implemented through Sprint 5. 39/39 unit tests passing.
 
 ### What it does
 
-Renders colored WPF `Ellipse` glyphs in the VS editor gutter for each test line in F# files:
+Three interconnected features rendering live test data directly in the VS editor:
+
+#### A. Margin Glyphs (TestGlyphTagger)
+Colored WPF `Ellipse` glyphs in the gutter per test function line:
 
 | Color | Meaning |
 |-------|---------|
@@ -650,29 +654,61 @@ Renders colored WPF `Ellipse` glyphs in the VS editor gutter for each test line 
 | 🟡 Amber | Test running |
 | ⚫ Gray | Test detected / not yet run |
 
+#### B. Squiggles (SquiggleTagger) — Option C
+Roslyn-style squiggles under F# code with daemon-reported diagnostics:
+- Red squiggles = errors, yellow = warnings, dotted = hints
+- Tooltip shows the diagnostic message
+- Source: `/diagnostics` SSE endpoint
+
+#### C. Inline Failure Adornments (InlineFailureAdornmentManager) — Option D
+Right-aligned text adornments on failing test lines:
+```
+let myTest () =  ⊘ myTest — Expected: 42  Actual: 0
+```
+- Italic, translucent red, matches editor font family and size
+- Shows all failures for the line joined with `|`
+- Source: `file_annotations` events from `/events` SSE
+
 ### Architecture
 
 ```
-SseClient (net472)          — background SSE subscriber (75s timeout, Accept: text/event-stream)
-  → TestStateTracker        — thread-safe ConcurrentDictionary[(filePath,line) → TestStatus]
-    → TestGlyphTagger       — ITagger<TestStatusGlyphTag> per ITextBuffer
-      → TestGlyphFactory    — IGlyphFactory, draws Ellipse(10x10px) WPF elements
+SseConnectionHub                     — deduplicates SSE connections (2 total: /events, /diagnostics)
+  │
+  ├─ /events ─────────────────────────────────────────────────────────────┐
+  │    ├─ TestStateTracker           — ConcurrentDict[(filePath,line) → TestStatus]
+  │    │    → TestGlyphTagger        — ITagger<TestStatusGlyphTag> per ITextBuffer
+  │    │    → TestGlyphFactory       — IGlyphFactory, draws Ellipse(10x10px) WPF elements
+  │    │
+  │    └─ FileAnnotationTracker      — ConcurrentDict[(filePath,line) → InlineFailureDisplay list]
+  │         → InlineFailureAdornmentManager  — IWpfTextViewCreationListener per F# view
+  │
+  └─ /diagnostics ──────────────────────────────────────────────────────────┐
+       └─ DiagnosticStateTracker     — volatile List<DiagnosticEntry> per session
+            → SquiggleTagger         — ITagger<SageFsErrorTag> per ITextBuffer
 ```
 
-### Key Design Decisions (from Expert Panel)
+### Key Design Decisions
 
 1. **`PrivateAssets="all"` on all VS SDK NuGet refs** — prevents type-identity crashes from double-loading
-2. **`TagsChanged` on UI thread** — raises via `Application.Current?.Dispatcher.BeginInvoke(...)` — missing this causes mysterious editor crashes
+2. **`TagsChanged` on UI thread** — `Application.Current?.Dispatcher.BeginInvoke(...)` — missing this causes mysterious editor crashes
 3. **`HttpClient.Timeout = 75s`** (NOT `InfiniteTimeSpan`) — prevents zombie connections
-4. **`Accept: text/event-stream` header** — required for SSE; some servers return JSON without it
-5. **`test_results_batch` JSON format** — entries use `TestId.Fields[0]`, `Origin.Case/Fields`, `Status.Case` (matches `LiveTestingParser.fs`)
-6. **`GlyphSpikeGuard`** — create `%LOCALAPPDATA%\SageFs\disable-glyphs.flag` to disable at runtime
+4. **`[ContentType("F#")]` + `[ContentType("F# Script")]`** on ALL MEF exports — VS does NOT walk the base-type chain for tagger/factory/listener exports; `.fsx` needs an explicit second attribute
+5. **`SseConnectionHub`** — static per-endpoint multiplexer; at most 2 HTTP SSE connections total
+6. **`SageFsFeatureFlags`** — per-feature runtime disable flags in `%LOCALAPPDATA%\SageFs\`:
+   - `disable-glyphs.flag` — all features (legacy, from GlyphSpikeGuard)
+   - `disable-squiggles.flag` — squiggles only
+   - `disable-inline-hints.flag` — inline adornments only
+7. **LayoutChanged guard** — `InlineFailureAdornmentManager` skips full redraw when `NewOrReformattedLines.Count == 0 && TranslatedLines.Count == 0`; prevents per-scroll-tick WPF churn
+8. **Editor font metrics** — adornments read `FormattedLineSource.DefaultTextProperties` for font family/size; renders at 90% of editor font size, italic
+9. **Vertical centering** — uses `block.DesiredSize.Height` after `Measure()` instead of magic constant
 
-### Kill Switches (3 layers)
+### Kill Switches (4 layers)
 
 1. **Build gate:** `$(EnableGlyphSpike)=true` must be set to include the MEF project reference
-2. **Runtime flag:** `%LOCALAPPDATA%\SageFs\disable-glyphs.flag` (check in `TestGlyphTaggerProvider`)
-3. **Clean boundary:** all spike code isolated in `SageFs.VisualStudio.Editor\` — delete the folder and remove the project reference to fully revert
+2. **Runtime — all off:** `%LOCALAPPDATA%\SageFs\disable-glyphs.flag`
+3. **Runtime — squiggles off:** `%LOCALAPPDATA%\SageFs\disable-squiggles.flag`
+4. **Runtime — adornments off:** `%LOCALAPPDATA%\SageFs\disable-inline-hints.flag`
+5. **Clean boundary:** all spike code isolated in `SageFs.VisualStudio.Editor\` — delete folder + remove project ref to fully revert
 
 ### Port Discovery
 
@@ -682,28 +718,36 @@ SseClient (net472)          — background SSE subscriber (75s timeout, Accept: 
   ```
 - Read by: `PortConfig.TryGetDaemonUrl()` in the net472 MEF assembly
 
-### Day 1 Empirical Validation Required
-
-- Does `ExtensionType="VisualStudio.Extensibility"` block MEF loading? Check `%LOCALAPPDATA%\Microsoft\VisualStudio\17.0_xxx\ComponentModelCache\` for errors
-- Does VS MEF host discover DLLs from `CopyMefAssemblyToOutput` build target?
-- Is `ContentType("F#")` the correct content type string VS uses for F# files? (may be `"FSharp"`)
-
 ### Files
 
 | File | Purpose |
 |------|---------|
 | `SageFs.VisualStudio.Editor.csproj` | net472, opts out of central pkgs, `PrivateAssets="all"` |
-| `PortConfig.cs` | Reads `%LOCALAPPDATA%\SageFs\daemon.json`; `GlyphSpikeGuard` kill switch |
+| `PortConfig.cs` | Reads daemon.json; `GlyphSpikeGuard` kill switch |
+| `SageFsFeatureFlags.cs` | Per-feature runtime disable flags |
 | `SseClient.cs` | Background SSE subscriber, exponential-backoff reconnect |
-| `TestStateTracker.cs` | Thread-safe state; processes `test_results_batch` events |
+| `SseConnectionHub.cs` | Static per-endpoint SSE connection multiplexer |
+| `TestStateTracker.cs` | Processes `test_results_batch` events |
 | `TestGlyphTagger.cs` | `ITaggerProvider` + `IGlyphFactoryProvider`; UI-thread `TagsChanged` |
+| `DiagnosticStateTracker.cs` | Processes `/diagnostics` SSE events |
+| `SquiggleTagger.cs` | `ITaggerProvider` for error squiggles |
+| `FileAnnotationTracker.cs` | Processes `file_annotations` events |
+| `InlineFailureAdornment.cs` | `IWpfTextViewCreationListener` + adornment manager |
 
-### GlyphProjection.fs (SageFs.VisualStudio.Core)
+### Day 1 Empirical Validation Still Required
 
-Pure F# module for projecting `TestOutcome` → `GlyphStatus`. Used by the MEF assembly indirectly (the MEF project can't reference net8.0-windows8.0, so the logic is mirrored in `TestStateTracker.cs`).
+- ContentType `"F#"` confirmed correct per Don Syme / Ionide source; `"F# Script"` added for `.fsx`
+- Does `ExtensionType="VisualStudio.Extensibility"` block MEF loading? Check `%LOCALAPPDATA%\Microsoft\VisualStudio\17.0_xxx\ComponentModelCache\`
+- Does VS MEF host discover DLLs from `CopyMefAssemblyToOutput` build target?
 
-**24 unit tests, all passing.**
+### Test Coverage
+
+`SageFs.VisualStudio.Editor.Tests` (net472 xUnit, 39 tests):
+- `TestStateTrackerTests` (20) — all daemon JSON shapes
+- `PortConfigTests` (1) — smoke test
+- `DiagnosticStateTrackerTests` (8) — /diagnostics parsing
+- `FileAnnotationTrackerTests` (9) — file_annotations parsing, path normalization
 
 ---
 
-**Report Updated:** Sprint 3 complete (v0.5.704)
+**Report Updated:** Sprint 5 complete (v0.5.716)
