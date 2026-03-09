@@ -767,6 +767,98 @@ let testFilterTests = testList "Test filter bar" [
     }
   ]
 ]
+
+let datastarComplianceTests = testList "Datastar compliance (synthesis 5.4)" [
+
+  test "shell initializes SSE stream via data-init" {
+    let html = renderShell "0.0.0" |> renderNode
+    Expect.stringContains html "data-init" "must have data-init for SSE"
+    Expect.stringContains html "/dashboard/stream" "must target stream endpoint"
+  }
+
+  test "shell loads Datastar CDN script" {
+    let html = renderShell "0.0.0" |> renderNode
+    Expect.stringContains html "datastar" "must include datastar CDN"
+  }
+
+  test "all Signals are initialized in shell via data-signals" {
+    let html = renderShell "0.0.0" |> renderNode
+    // Datastar renders signal names kebab-case: helpVisible → help-visible
+    let expectedSignalAttrs =
+      [ "data-signals:help-visible"; "data-signals:sidebar-open"; "data-signals:session-id"
+        "data-signals:code"; "data-signals:new-session-dir"; "data-signals:manual-projects"
+        "data-signals:theme"; "data-signals:cursor-pos"; "data-signals:test-filter" ]
+    for attr in expectedSignalAttrs do
+      Expect.stringContains html attr (sprintf "signal attr '%s' must be initialized" attr)
+  }
+
+  test "main div has correct DOM ID" {
+    let html = renderShell "0.0.0" |> renderNode
+    Expect.stringContains html (sprintf "id=\"%s\"" DomIds.Main) "must have main div"
+  }
+
+  test "server-status div has correct DOM ID" {
+    let html = renderShell "0.0.0" |> renderNode
+    Expect.stringContains html (sprintf "id=\"%s\"" DomIds.ServerStatus) "must have server-status div"
+  }
+
+  test "renderMainContent includes key DOM IDs" {
+    let snap = {
+      DashboardSnapshot.Version = "0.0.0"
+      SessionState = "ready"; SessionId = "test-id"; WorkingDir = @"C:\Code"
+      WarmupProgress = ""; EvalStats = { Count = 0; AvgMs = 0.0; MinMs = 0.0; MaxMs = 0.0 }
+      ThemeName = "default"; ConnectionLabel = None
+      HotReloadPanel = Elem.div [] []; SessionContextPanel = Elem.div [] []
+      OutputPanel = Elem.div [] []
+      SessionsPanel = Elem.div [] []; SessionPicker = Elem.div [] []
+      ThemePicker = Elem.div [] []; ThemeVars = Elem.div [] []
+      BindingsPanel = Elem.div [] []
+    }
+    let html = renderMainContent snap |> renderNode
+    let mustHaveIds =
+      [ DomIds.Main; DomIds.SessionStatus; DomIds.EvalStats
+        DomIds.EditorArea; DomIds.EvaluateSection; DomIds.EvalTextarea ]
+    for domId in mustHaveIds do
+      Expect.stringContains html (sprintf "id=\"%s\"" domId)
+        (sprintf "main content must have id='%s'" domId)
+  }
+
+  test "SSE format: events end with double newline" {
+    let evt = SageFs.SseWriter.formatSseEvent "test" "data"
+    Expect.isTrue (evt.Length > 0) "non-empty"
+    Expect.isTrue (evt.EndsWith("\n\n")) "must end with \\n\\n"
+  }
+
+  test "SSE format: retry hint is spec-compliant" {
+    let retry = SageFs.SseWriter.formatRetryHint 3000
+    Expect.equal retry "retry: 3000\n\n" "retry format"
+  }
+
+  test "shell has no React/Vue/Angular framework references" {
+    let html = renderShell "0.0.0" |> renderNode
+    let banned = [ "react"; "vue"; "angular"; "svelte"; "htmx"; "alpine" ]
+    let lower = html.ToLowerInvariant()
+    for framework in banned do
+      Expect.isFalse (lower.Contains(framework)) (sprintf "must not reference %s" framework)
+  }
+
+  test "morph target: renderMainContent wraps in div#main" {
+    let snap = {
+      DashboardSnapshot.Version = "0.0.0"
+      SessionState = "ready"; SessionId = "t"; WorkingDir = "C:\\"
+      WarmupProgress = ""; EvalStats = { Count = 0; AvgMs = 0.0; MinMs = 0.0; MaxMs = 0.0 }
+      ThemeName = "default"; ConnectionLabel = None
+      HotReloadPanel = Elem.div [] []; SessionContextPanel = Elem.div [] []
+      OutputPanel = Elem.div [] []
+      SessionsPanel = Elem.div [] []; SessionPicker = Elem.div [] []
+      ThemePicker = Elem.div [] []; ThemeVars = Elem.div [] []
+      BindingsPanel = Elem.div [] []
+    }
+    let html = renderMainContent snap |> renderNode
+    Expect.isTrue (html.StartsWith("<div id=\"main\"")) "must start with div#main"
+  }
+]
+
 [<Tests>]
 let allDashboardSnapshotTests = testList "Dashboard Snapshots" [
   dashboardRenderSnapshotTests
@@ -779,4 +871,5 @@ let allDashboardSnapshotTests = testList "Dashboard Snapshots" [
   zeroJsBadgeTests
   railwayVisualizationTests
   testFilterTests
+  datastarComplianceTests
 ]
