@@ -161,6 +161,7 @@
         <Compile Include="Round12HardeningTests.fs" />
         <Compile Include="Round13HardeningTests.fs" />
         <Compile Include="Round14HardeningTests.fs" />
+        <Compile Include="Round15HardeningTests.fs" />
         <Compile Include="StructAuditTests.fs" />
         <Compile Include="MeasureTests.fs" />
         <Compile Include="CellGridMonoidTests.fs" />

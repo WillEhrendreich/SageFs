@@ -430,19 +430,17 @@ module BuiltInExecutors =
             let propProp = rft.TestCodeObj.GetType().GetProperty("property")
             match propProp with
             | null ->
-              sw.Stop()
-              return TestResult.Skipped "AsyncFsCheck: could not reflect 'property' field"
+              raise (System.InvalidOperationException("AsyncFsCheck: could not reflect 'property' field"))
             | prop ->
               let asyncBool = prop.GetValue(rft.TestCodeObj)
               let runMethod =
-                typeof<Microsoft.FSharp.Control.FSharpAsync>.GetMethod(
-                  "RunSynchronously",
-                  [| asyncBool.GetType(); typeof<int option>; typeof<System.Threading.CancellationToken option> |])
+                typeof<Async>.GetMethods()
+                |> Array.tryFind (fun m ->
+                  m.Name = "RunSynchronously" && m.GetParameters().Length = 3)
               match runMethod with
-              | null ->
-                sw.Stop()
-                return TestResult.Skipped "AsyncFsCheck: Async.RunSynchronously not found"
-              | rm ->
+              | None ->
+                raise (System.InvalidOperationException("AsyncFsCheck: Async.RunSynchronously not found"))
+              | Some rm ->
                 let genericRun = rm.MakeGenericMethod([| typeof<bool> |])
                 let passed =
                   genericRun.Invoke(null, [|
