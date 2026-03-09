@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net472</TargetFramework>
+    <RootNamespace>SageFs.VisualStudio.Editor</RootNamespace>
+    <AssemblyName>SageFs.VisualStudio.Editor</AssemblyName>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
+    <!-- net472 does not support TreatWarningsAsErrors cleanly with nullable refs — suppress the inherited setting -->
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- VS Editor MEF packages — version-pinned; this project opts out of central package management -->
+    <PackageReference Include="Microsoft.VisualStudio.Text.UI.Wpf" Version="17.12.40595.6" />
+    <PackageReference Include="Microsoft.VisualStudio.Text.UI" Version="17.12.40595.6" />
+    <PackageReference Include="Microsoft.VisualStudio.CoreUtility" Version="17.12.40595.6" />
+    <PackageReference Include="Microsoft.VisualStudio.Text.Data" Version="17.12.40595.6" />
+    <PackageReference Include="System.Text.Json" Version="8.0.5" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- WPF framework assemblies (not available as NuGet on net472; must be referenced directly) -->
+    <Reference Include="PresentationCore" />
+    <Reference Include="PresentationFramework" />
+    <Reference Include="WindowsBase" />
+    <!-- HttpClient on net472 -->
+    <Reference Include="System.Net.Http" />
+  </ItemGroup>
+</Project>

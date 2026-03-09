@@ -15,5 +15,24 @@
 
   <ItemGroup>
     <ProjectReference Include="..\SageFs.VisualStudio.Core\SageFs.VisualStudio.Core.fsproj" />
+    <!-- Build the net472 MEF assembly but don't link its types into this net8.0 host. -->
+    <ProjectReference Include="..\SageFs.VisualStudio.Editor\SageFs.VisualStudio.Editor.csproj"
+                      ReferenceOutputAssembly="false"
+                      SkipGetTargetFrameworkProperties="true" />
   </ItemGroup>
+
+  <!--
+    Copy the net472 MEF DLL to the extension output directory so the VSIX package picks it up.
+    VS MEF host scans all DLLs in the extension directory for exports.
+  -->
+  <Target Name="CopyMefAssemblyToOutput" AfterTargets="Build">
+    <PropertyGroup>
+      <_MefDll>$(MSBuildThisFileDirectory)..\SageFs.VisualStudio.Editor\bin\$(Configuration)\net472\SageFs.VisualStudio.Editor.dll</_MefDll>
+    </PropertyGroup>
+    <Copy SourceFiles="$(_MefDll)"
+          DestinationFolder="$(OutputPath)"
+          SkipUnchangedFiles="true"
+          Condition="Exists('$(_MefDll)')" />
+  </Target>
+
 </Project>
