@@ -5,6 +5,8 @@ open System.IO
 open System.Text.Json
 open System.Text.Json.Serialization
 
+/// Cross-boundary protocol types shared between daemon and worker processes.
+/// This module defines the wire contract — changes here affect all editor integrations.
 module WorkerProtocol =
 
   /// Session identifier — opaque single-case DU enforcing validated 8-char hex format.
@@ -28,7 +30,9 @@ module WorkerProtocol =
     interface IEquatable<SessionId> with
       member x.Equals(other) = let (SessionId a) = x in let (SessionId b) = other in a = b
 
+  /// Operations on SessionId values.
   module SessionId =
+    /// Compiled regex pattern matching valid session IDs: exactly 8 lowercase hex chars.
     let validPattern = System.Text.RegularExpressions.Regex(@"^[0-9a-f]{8}$", System.Text.RegularExpressions.RegexOptions.Compiled)
 
     /// Extract the raw string value from a SessionId.
@@ -60,7 +64,9 @@ module WorkerProtocol =
     | Restarting
     | Stopped
 
+  /// Conversion and parsing utilities for SessionStatus.
   module SessionStatus =
+    /// Convert a SessionStatus to its human-readable label string.
     let label = function
       | SessionStatus.Starting -> "Starting"
       | SessionStatus.Ready -> "Ready"
@@ -81,6 +87,7 @@ module WorkerProtocol =
       | SessionStatus.Restarting -> SessionState.WarmingUp
       | SessionStatus.Stopped -> SessionState.Faulted
 
+    /// Parse a status label back into a SessionStatus. Handles "Building (reason)" format.
     let parse = function
       | "Starting" -> Result.Ok SessionStatus.Starting
       | "Ready" -> Result.Ok SessionStatus.Ready
@@ -105,6 +112,7 @@ module WorkerProtocol =
       | SessionStatus.Restarting -> true
       | SessionStatus.Faulted | SessionStatus.Stopped -> false
 
+  /// All messages the daemon can send to a worker process.
   [<RequireQualifiedAccess>]
   type WorkerMessage =
     | EvalCode of code: string * replyId: string
@@ -121,6 +129,7 @@ module WorkerProtocol =
     | GetInstrumentationMaps of replyId: string
     | Shutdown
 
+  /// F# compiler diagnostic serialized for worker→daemon transport.
   type WorkerDiagnostic = {
     Severity: Features.Diagnostics.DiagnosticSeverity
     Message: string
@@ -130,7 +139,9 @@ module WorkerProtocol =
     EndColumn: int
   }
 
+  /// Conversion from wire-format WorkerDiagnostic to domain Diagnostic.
   module WorkerDiagnostic =
+    /// Convert a WorkerDiagnostic to the rich Features.Diagnostics.Diagnostic type.
     let toDiagnostic (wd: WorkerDiagnostic) : Features.Diagnostics.Diagnostic =
       { Message = wd.Message
         Subcategory = ""
@@ -138,6 +149,7 @@ module WorkerProtocol =
                   EndLine = wd.EndLine; EndColumn = wd.EndColumn }
         Severity = wd.Severity }
 
+  /// Point-in-time snapshot of worker session health and performance metrics.
   type WorkerStatusSnapshot = {
     Status: SessionStatus
     StatusMessage: string option
@@ -155,13 +167,17 @@ module WorkerProtocol =
     Line: int
   }
 
+  /// Conversion between wire-format WorkerSymbolRef and domain SymbolReference.
   module WorkerSymbolRef =
+    /// Convert a domain SymbolReference to the wire-friendly WorkerSymbolRef format.
     let fromDomain (sr: Features.LiveTesting.SymbolReference) : WorkerSymbolRef =
       { SymbolFullName = sr.SymbolFullName
         IsFromDefinition = sr.UseKind = Features.LiveTesting.SymbolUseKind.Definition
         FilePath = sr.FilePath
         Line = sr.Line }
 
+    /// Convert a wire-friendly WorkerSymbolRef back to the domain SymbolReference.
+    /// Definition/Reference distinction is encoded as a bool on the wire.
     let toDomain (ws: WorkerSymbolRef) : Features.LiveTesting.SymbolReference =
       { SymbolFullName = ws.SymbolFullName
         UseKind =
@@ -172,6 +188,7 @@ module WorkerProtocol =
         FilePath = ws.FilePath
         Line = ws.Line }
 
+  /// All responses a worker process can send back to the daemon.
   [<RequireQualifiedAccess>]
   type WorkerResponse =
     | EvalResult of replyId: string * result: Result<string, SageFsError> * diagnostics: WorkerDiagnostic list * metadata: Map<string, string>
@@ -194,6 +211,7 @@ module WorkerProtocol =
   /// Same signature works for named pipes, HTTP, or in-process.
   type SessionProxy = WorkerMessage -> Async<WorkerResponse>
 
+  /// Metadata for a managed session — displayed in dashboard, stored in persistence.
   type SessionInfo = {
     Id: SessionId
     Name: string option
@@ -206,6 +224,7 @@ module WorkerProtocol =
     WorkerPid: int option
   }
 
+  /// Utilities for deriving display-friendly paths from session metadata.
   module SessionInfo =
     /// Walk up from dir looking for .git directory.
     let findGitRoot (startDir: string) : string option =
@@ -219,6 +238,7 @@ module WorkerProtocol =
           | false -> walk parent
       walk startDir
 
+    /// Walk up from workingDir to find the nearest directory containing .sln or .slnx.
     let findSolutionRoot (workingDir: string) =
       let rec walk (dir: string) =
         let parent = Path.GetDirectoryName dir
@@ -235,6 +255,7 @@ module WorkerProtocol =
           | false -> walk parent
       walk workingDir
 
+    /// Extract a short display name: last path segment of solution root or working dir.
     let displayName (info: SessionInfo) =
       let getLastSegment (path: string) =
         let normalized = path.TrimEnd('/', '\\').Replace('\\', '/')
@@ -243,7 +264,9 @@ module WorkerProtocol =
       | Some root -> getLastSegment root
       | None -> getLastSegment info.WorkingDirectory
 
+  /// JSON serialization configured for F# discriminated unions (adjacent tag encoding).
   module Serialization =
+    /// Pre-configured JsonSerializerOptions with camelCase and F# union support.
     let jsonOptions =
       let opts = JsonSerializerOptions(PropertyNamingPolicy = JsonNamingPolicy.CamelCase)
       opts.Converters.Add(
@@ -255,8 +278,10 @@ module WorkerProtocol =
       )
       opts
 
+    /// Serialize a value to JSON string using the configured options.
     let serialize<'T> (value: 'T) =
       JsonSerializer.Serialize(value, jsonOptions)
 
+    /// Deserialize a JSON string to a typed value using the configured options.
     let deserialize<'T> (json: string) =
       JsonSerializer.Deserialize<'T>(json, jsonOptions)
