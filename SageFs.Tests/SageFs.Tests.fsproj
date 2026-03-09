@@ -25,13 +25,16 @@
         <Compile Include="SnapshotTests.fs" />
         <Compile Include="ToolDescriptionTests.fs" />
         <Compile Include="SessionResetTests.fs" />
+        <Compile Include="ShadowCopyTests.fs" />
         <Compile Include="StandbyPoolTests.fs" />
         <Compile Include="DiagnosticsToolTests.fs" />
         <Compile Include="DiagnosticsStoreTests.fs" />
+        <Compile Include="ActorCreationTests.fs" />
         <Compile Include="ActorEventEmissionTests.fs" />
         <Compile Include="EvalCancellationTests.fs" />
         <Compile Include="ActorSplitTests.fs" />
         <Compile Include="AffordanceTests.fs" />
+        <Compile Include="AffordancesPropertyTests.fs" />
         <Compile Include="WorkerProtocolTests.fs" />
         <Compile Include="DaemonStateTests.fs" />
         <Compile Include="DaemonIntegrationTests.fs" />
@@ -48,6 +51,7 @@
         <Compile Include="SageFsEffectHandlerTests.fs" />
         <Compile Include="ElmLoopResilienceTests.fs" />
         <Compile Include="ElmLoopMsgLabelTests.fs" />
+        <Compile Include="ElmLoopStateMachineTests.fs" />
         <Compile Include="DashboardParsingTests.fs" />
         <Compile Include="DirectoryConfigTests.fs" />
         <Compile Include="ConnectionTrackerTests.fs" />
@@ -77,6 +81,7 @@
         <Compile Include="SyntaxHighlightTests.fs" />
         <Compile Include="VtInputParserTests.fs" />
         <Compile Include="PluginContractTests.fs" />
+        <Compile Include="ProjectLoadingTests.fs" />
         <Compile Include="McpWireProtocolTests.fs" />
         <Compile Include="HttpApiIntegrationTests.fs" />
         <Compile Include="WarmupContextTests.fs" />
@@ -124,6 +129,7 @@
         <Compile Include="McpStateHandlerTests.fs" />
         <Compile Include="CompilationContextTests.fs" />
         <Compile Include="SageFsErrorClassificationTests.fs" />
+        <Compile Include="SageFsErrorPropertyTests.fs" />
         <Compile Include="ResultCeTests.fs" />
         <Compile Include="SessionIdTests.fs" />
         <Compile Include="EndpointContractTests.fs" />
