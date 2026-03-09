@@ -1,0 +1,167 @@
+# SageFs Implementation Patterns — Quick Reference
+
+## 7 CORE PATTERNS TO REPLICATE
+
+### 1. IMMUTABLE AGGREGATES + RING BUFFERS
+Example: MessageJournal.fs
+- Immutable record with single Buffer field
+- Record function returns new state (never mutates)
+- Ring buffer prevents O(n) growth
+- Cap at constant: MessageJournal=100 entries, EvalTimeline=1000, EvalHistory=10k
+
+### 2. STRUCT VALUE TYPES FOR PERF-CRITICAL DATA
+Example: EvalProvenance.fs
+- [<Struct>] on types used in hot paths (UI annotations)
+- Keep fields small and serializable
+- Combine with DU for expressiveness (Staleness = Fresh | StaleUpstream)
+- Zero-copy passes to rendering pipelines
+
+### 3. FEATURE HOOKS DEDUP PATTERN
+Example: FeatureHooks.fs
+- Aggregate all feature state in one record
+- Store last-sent value (string, option)
+- Compute new state
+- If unchanged: return (updatedState, None)
+- If changed: return (updatedState, Some newSSE)
+- Client only updates when Some
+
+### 4. PURE COMPUTATION LAYERS
+Example: EvalProvenance, CellDependencyGraph
+- Input: immutable data + parameters
+- Output: new immutable data
+- No side effects, no dependencies on time/random
+- Tests: feed inputs → assert outputs (deterministic)
+
+### 5. EVENT SOURCING WITH SOURCE TRACKING
+Example: Events.fs + EventStore
+- Every event tagged with EventSource (Console | McpAgent | FileSync | System)
+- Immutable append-only stream (PostgreSQL via Marten)
+- Enables: audit trail, replay, causality tracking
+- Integration: onEvent callback emits to stream after state update
+
+### 6. AFFORDANCE-DRIVEN AVAILABILITY
+Example: Affordances.fs
+- SessionState machine (5 states)
+- availableTools: SessionState → string list (pure)
+- Check before tool call: if not available → error with suggestions
+- UI renders only available tools
+
+### 7. INCREMENTAL SSE DIFFS
+Example: SseWriter + FeatureHooks
+- Each feature tracks LastXxxSse: string option
+- Compute new SSE string
+- Compare: if changed → push; else → skip
+- Saves tokens + reduces client updates
+
+---
+
+## QUICK INTEGRATION CHECKLIST FOR NEW FEATURE
+
+□ Create Features/FeatureName.fs with:
+  □ Type definitions (records/DUs)
+  □ Pure computation module
+  □ Cap growth (ring buffer or List.truncate)
+
+□ Create Tests/FeatureNameTests.fs with:
+  □ Type structure tests
+  □ Pure function tests
+  □ Edge case tests (capacity, empty, etc.)
+  □ Property tests (if applicable)
+
+□ Integrate into SageFs:
+  □ Add state field to FeaturePushState (if UI feature)
+  □ Add feature event to SageFsEvent DU (if event-sourced)
+  □ Add tool to availableTools if MCP-exposed
+  □ Implement MCP tool handler if user-facing
+  □ Add SSE push logic if real-time UI
+
+□ Documentation:
+  □ Module comments explaining semantics
+  □ Test comments explaining invariants
+  □ CHANGELOG entry
+
+---
+
+## 28 FEATURES AT A GLANCE
+
+DOMAIN ANALYSIS:
+  • CellDependencyGraph — Build directed graphs (analyzeCell → buildGraph → transitiveStale)
+  • EvalProvenance — Staleness tracking (Fresh | StaleUpstream)
+  • EvalTimeline — Performance timeline with P50/P95/P99
+  • EvalDiff — Line diffs (Unchanged | Added | Removed | Modified)
+
+TESTING:
+  • LiveTestingTypes, LiveTestingInstrumentation, LiveTestingExecutors — Test pipeline
+  • TestNarration — Convert results to emoji + causal narrative
+  • TestCachePersistence, TestTreeSitter — Test infrastructure
+
+UI/INTROSPECTION:
+  • BindingExplorer — Extract types from FSI output
+  • AutoCompletion — Suggest completions
+  • DomainModelViz — Visualize domain models
+  • Diagnostics, DiagnosticsStore — Aggregated diagnostics
+
+STATE:
+  • MessageJournal — Ring-buffer audit log
+  • Events — Global event DU (26+ cases, EventSource tracking)
+  • SessionPersistence, SessionScribe, DaemonPersistence — State/audit snapshots
+  • FeatureHooks — Feature aggregation + SSE dedup
+
+EXPORT/REPLAY:
+  • ManifestPersistence — Project manifest save/load
+  • NotebookExport — Jupyter notebook export
+  • ScratchPad — Ephemeral notebook
+  • Replay — Replay recorded evals
+
+HEALTH:
+  • DaemonHealth — Health monitoring
+  • EvalDedup — Caching
+
+---
+
+## KEY FILES TO REFERENCE
+
+✅ Pattern Examples:
+  • SageFs.Core/Features/MessageJournal.fs — Immutable aggregate + ring buffer
+  • SageFs.Core/Features/EvalProvenance.fs — Struct + DU + pure computation
+  • SageFs.Core/Features/FeatureHooks.fs — Feature aggregation + SSE dedup
+  • SageFs.Core/Features/Events.fs — Event sourcing architecture
+  • SageFs.Core/Affordances.fs — State machine + availability
+
+✅ Integration Hooks:
+  • SageFs.Core/Mcp.fs (lines 400-600) — MCP tool registration
+  • SageFs.Core/McpStateHandlers.fs — Tool implementations
+  • SageFs.Core/ElmLoop.fs — Actor event loop
+  • SageFs.Core/AppState.fs — Global session state
+
+✅ Test Examples:
+  • SageFs.Tests/MessageJournalTests.fs — Immutable aggregate testing
+  • SageFs.Tests/EvalProvenanceTests.fs — Property + annotation testing
+  • SageFs.Tests/TestNarrationTests.fs — Narrative generation testing
+
+---
+
+## RECOMMENDED NEXT FEATURES
+
+Based on patterns observed:
+
+1. **Symbol Usage Analyzer** — Track where bindings are used (similar to EvalProvenance but for consumption)
+   - Pattern: CellDependencyGraph + forward reachability
+   - UI: Highlight cells using symbol
+   - Test: Verify consumption chains
+
+2. **Test Failure Replay** — Re-run failed test with history of changes
+   - Pattern: Event sourcing + Replay.fs model
+   - UI: Show diffs since last pass
+   - MCP: expose_test_history tool
+
+3. **Cell Execution Cache** — Skip re-run if deps unchanged
+   - Pattern: MessageJournal (track last result hash per cell)
+   - Integration: FeatureHooks (add CachedCellResults)
+   - Test: Verify cache invalidation on dep change
+
+4. **Performance Profiler** — Aggregate EvalTimeline stats per symbol
+   - Pattern: EvalProvenance + EvalTimeline
+   - Struct: PerfSample { symbol: string; p99Ms: float; callCount: int }
+   - UI: Show hot symbols with sparkline (like EvalTimeline)
+

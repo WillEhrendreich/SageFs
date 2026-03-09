@@ -11,6 +11,11 @@ namespace SageFs.VisualStudio.Editor.Tests;
 /// be referenced from net472 tests, these tests validate the specification by
 /// re-implementing the pure string-array block-detection logic locally.
 /// If the production implementation diverges, that's a bug in the production code.
+///
+/// Smart-eval contract (Alt+Enter via EvalSelectionCommand):
+///   - selection non-empty → eval the selection
+///   - selection empty     → delegate to FindBlock and eval that block
+/// EvalBlockCommand retains its Extensions-menu entry but has no keybinding.
 /// </summary>
 public sealed class EvalBlockCommandTests
 {

@@ -21,7 +21,7 @@ internal class EvalBlockCommand : Command
     {
         Placements = [CommandPlacement.KnownPlacements.ExtensionsMenu],
         Icon = new(ImageMoniker.KnownValues.PlayStepGroup, IconSettings.IconAndText),
-        Shortcuts = [new CommandShortcutConfiguration(ModifierKey.ControlLeftAlt, Key.Enter)],
+        Shortcuts = [],
         VisibleWhen = ActivationConstraint.ClientContext(ClientContextKey.Shell.ActiveEditorContentType, ".+"),
     };
 

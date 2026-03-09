@@ -47,7 +47,13 @@ internal class EvalSelectionCommand : Command
     }
     else
     {
-      code = textView.Document.Text.CopyToString();
+      var allText = textView.Document.Text.CopyToString();
+      var lines = allText.Split('\n');
+      var cursorLine = textView.Selection.ActivePosition.GetContainingLine().LineNumber; // 0-based
+      var (blockStart, blockEnd) = EvalBlockCommand.FindBlock(lines, cursorLine);
+      var blockLines = lines[blockStart..(blockEnd + 1)];
+      code = string.Join("\n", blockLines);
+      startLine = blockStart + 1; // 0-based → 1-based
     }
 
     if (output is not null)

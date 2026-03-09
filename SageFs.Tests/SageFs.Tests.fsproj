@@ -191,6 +191,7 @@
         <Compile Include="TestNarrationTests.fs" />
         <Compile Include="DaemonHealthTests.fs" />
         <Compile Include="ScratchPadTests.fs" />
+        <Compile Include="EvalRippleTests.fs" />
         <Compile Include="Program.fs" />
     </ItemGroup>
 

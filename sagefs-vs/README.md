@@ -53,9 +53,9 @@ Then load the extension in Visual Studio's experimental instance, or install the
 
 | Command | Keybinding | Description |
 |---------|-----------|-------------|
-| SageFs: Evaluate Selection | `Alt+Enter` | Evaluate selected code |
+| SageFs: Evaluate Selection | `Alt+Enter` | Evaluate selected text, or the block around the cursor if nothing is selected |
 | SageFs: Evaluate File | `Shift+Alt+Enter` | Evaluate the entire file |
-| SageFs: Evaluate Code Block | `Ctrl+Alt+Enter` | Evaluate the `;;`-delimited block at cursor |
+| SageFs: Evaluate Code Block | *(no keybinding)* | Evaluate the block around the cursor (accessible via Extensions menu) |
 
 Results appear inline as adornments and in the **SageFs Output** window.
 
