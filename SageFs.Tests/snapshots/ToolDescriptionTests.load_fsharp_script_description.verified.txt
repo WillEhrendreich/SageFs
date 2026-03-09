@@ -1,1 +1,11 @@
-﻿Load and execute an F# script file (.fsx). The file is parsed into individual statements and each is sent to FSI separately, so partial progress is preserved if a statement fails.
+﻿Load and execute an F# script file (.fsx). The file is parsed into individual statements and each statement is sent to the FSI session separately, so partial progress is preserved if one statement fails.
+
+WHEN TO USE vs send_fsharp_code:
+- Use load_fsharp_script when you have a complete .fsx file on disk that sets up state, runs a scenario, or installs packages via #r directives.
+- Use send_fsharp_code when you are writing/iterating on small code snippets interactively.
+
+BEHAVIOR:
+- The file is split at ';;' boundaries and each block is evaluated in order.
+- If block N fails, blocks N+1 and beyond are still attempted (unless they depend on failed definitions).
+- '#r nuget:' directives in the file are handled as a special case and submitted alone.
+- Returns a summary of how many blocks succeeded and how many failed, with error details for failures.

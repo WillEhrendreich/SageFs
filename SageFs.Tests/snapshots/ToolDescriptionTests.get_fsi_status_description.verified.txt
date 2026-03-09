@@ -1,1 +1,13 @@
 ﻿Get the current FSI session status: startup configuration, loaded projects, session statistics, and available capabilities. Use to verify session health or discover what is loaded.
+
+WHEN TO USE:
+- First thing to call when setting up a new session — confirms what projects are loaded and what features are enabled.
+- After hard_reset_fsi_session with rebuild=true to poll until status shows 'Ready' (the reset is async).
+- When you get unexpected 'type not defined' errors — check that the expected project is loaded and the session is warmed up.
+- To discover the active session ID needed for routing commands when multiple sessions exist.
+
+KEY FIELDS IN OUTPUT:
+- Status: Ready | Evaluating | Building — if not Ready, wait before submitting code.
+- LoadedProjects: list of .fsproj files loaded into this session.
+- Affordances: which MCP tools are active/available (e.g., live testing may not be enabled for all sessions).
+- SessionId: use this with switch_session if you need to route to a specific session.
