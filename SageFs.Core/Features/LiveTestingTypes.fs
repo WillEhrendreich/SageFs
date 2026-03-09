@@ -1196,6 +1196,36 @@ module GutterIcon =
     | "NotCovered" -> Some GutterIcon.NotCovered
     | _ -> None
 
+  let toEmoji = function
+    | GutterIcon.TestDiscovered -> "◆"
+    | GutterIcon.TestPassed -> "✅"
+    | GutterIcon.TestFailed -> "❌"
+    | GutterIcon.TestRunning -> "⏳"
+    | GutterIcon.TestSkipped -> "⏭️"
+    | GutterIcon.TestFlaky -> "🔀"
+    | GutterIcon.Covered -> "🟢"
+    | GutterIcon.NotCovered -> "⚪"
+
+  let toStatusText = function
+    | GutterIcon.TestDiscovered -> "discovered"
+    | GutterIcon.TestPassed -> "passed"
+    | GutterIcon.TestFailed -> "failed"
+    | GutterIcon.TestRunning -> "running"
+    | GutterIcon.TestSkipped -> "skipped"
+    | GutterIcon.TestFlaky -> "flaky"
+    | GutterIcon.Covered -> "covered"
+    | GutterIcon.NotCovered -> "not covered"
+
+  let toAnsiColor = function
+    | GutterIcon.TestDiscovered -> "\x1b[33m"   // yellow
+    | GutterIcon.TestPassed -> "\x1b[32m"       // green
+    | GutterIcon.TestFailed -> "\x1b[31m"       // red
+    | GutterIcon.TestRunning -> "\x1b[36m"      // cyan
+    | GutterIcon.TestSkipped -> "\x1b[90m"      // dim gray
+    | GutterIcon.TestFlaky -> "\x1b[33m"        // yellow (same as discovered — warning tone)
+    | GutterIcon.Covered -> "\x1b[32m"          // green
+    | GutterIcon.NotCovered -> "\x1b[90m"       // dim gray
+
 module StatusToGutter =
   let fromTestStatus (status: TestRunStatus) : GutterIcon =
     match status with
