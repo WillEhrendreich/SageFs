@@ -21,6 +21,7 @@ let complianceSuite = testList "[Compliance] Behavioral contracts" [
   testList "Protocol surface" [
     McpWireProtocolTests.sessionEventSerializationTests
     EndpointContractTests.endpointContractTests
+    EventExhaustivenessTests.eventExhaustivenessTests
   ]
 
   testList "Plugin output contracts" [
@@ -54,6 +55,7 @@ let complianceSuite = testList "[Compliance] Behavioral contracts" [
     EventFoldPropertyTests.evalHistoryTests
     EventFoldPropertyTests.emptyStreamTests
     EventFoldPropertyTests.sessionEventRoundtripTests
+    ResultExTests.resultExTests
   ]
 
   testList "Error handling contracts" [

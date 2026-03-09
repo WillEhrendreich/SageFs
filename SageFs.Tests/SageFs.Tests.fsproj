@@ -169,6 +169,7 @@
         <Compile Include="TracingMiddlewareTests.fs" />
         <Compile Include="ResultExTests.fs" />
         <Compile Include="RenderInstrumentationTests.fs" />
+        <Compile Include="EventExhaustivenessTests.fs" />
         <Compile Include="ComplianceSuite.fs" />
         <Compile Include="AppStatePropertyTests.fs" />
         <Compile Include="EditorPropertyTests.fs" />
