@@ -618,6 +618,7 @@ type GutterIcon =
   | TestFlaky
   | Covered
   | NotCovered
+  | CellStale
 
 [<Struct>]
 type LineAnnotation = {
@@ -1164,6 +1165,7 @@ module GutterIcon =
     | GutterIcon.TestFlaky -> '\u2248'
     | GutterIcon.Covered -> '\u258E'
     | GutterIcon.NotCovered -> '\u00B7'
+    | GutterIcon.CellStale -> '\u26A0'
 
   let toColorIndex = function
     | GutterIcon.TestDiscovered -> 33uy
@@ -1174,6 +1176,7 @@ module GutterIcon =
     | GutterIcon.TestFlaky -> 214uy
     | GutterIcon.Covered -> 34uy
     | GutterIcon.NotCovered -> 160uy
+    | GutterIcon.CellStale -> 214uy
 
   let toLabel = function
     | GutterIcon.TestDiscovered -> "TestDiscovered"
@@ -1184,6 +1187,7 @@ module GutterIcon =
     | GutterIcon.TestFlaky -> "TestFlaky"
     | GutterIcon.Covered -> "Covered"
     | GutterIcon.NotCovered -> "NotCovered"
+    | GutterIcon.CellStale -> "CellStale"
 
   let parseLabel = function
     | "TestDiscovered" -> Some GutterIcon.TestDiscovered
@@ -1194,6 +1198,7 @@ module GutterIcon =
     | "TestFlaky" -> Some GutterIcon.TestFlaky
     | "Covered" -> Some GutterIcon.Covered
     | "NotCovered" -> Some GutterIcon.NotCovered
+    | "CellStale" -> Some GutterIcon.CellStale
     | _ -> None
 
   let toEmoji = function
@@ -1205,6 +1210,7 @@ module GutterIcon =
     | GutterIcon.TestFlaky -> "🔀"
     | GutterIcon.Covered -> "🟢"
     | GutterIcon.NotCovered -> "⚪"
+    | GutterIcon.CellStale -> "⚠️"
 
   let toStatusText = function
     | GutterIcon.TestDiscovered -> "discovered"
@@ -1215,6 +1221,7 @@ module GutterIcon =
     | GutterIcon.TestFlaky -> "flaky"
     | GutterIcon.Covered -> "covered"
     | GutterIcon.NotCovered -> "not covered"
+    | GutterIcon.CellStale -> "stale"
 
   let toAnsiColor = function
     | GutterIcon.TestDiscovered -> "\x1b[33m"   // yellow
@@ -1225,6 +1232,7 @@ module GutterIcon =
     | GutterIcon.TestFlaky -> "\x1b[33m"        // yellow (same as discovered — warning tone)
     | GutterIcon.Covered -> "\x1b[32m"          // green
     | GutterIcon.NotCovered -> "\x1b[90m"       // dim gray
+    | GutterIcon.CellStale -> "\x1b[33m"        // yellow (stale = warning)
 
 module StatusToGutter =
   let fromTestStatus (status: TestRunStatus) : GutterIcon =

@@ -24,6 +24,7 @@ module GutterRender =
     | GutterIcon.TestFlaky -> Theme.hexToRgb theme.ColorWarn
     | GutterIcon.Covered -> Theme.hexToRgb theme.ColorPass
     | GutterIcon.NotCovered -> Theme.hexToRgb theme.FgDim
+    | GutterIcon.CellStale -> Theme.hexToRgb theme.ColorWarn
 
 /// Generate context-sensitive status bar hints from the active KeyMap.
 module StatusHints =
