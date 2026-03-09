@@ -180,6 +180,7 @@
         <Compile Include="ArchitectureTests.fs" />
         <Compile Include="TestStatusVocabularyTests.fs" />
         <Compile Include="HotReloadVisibilityTests.fs" />
+        <Compile Include="TutorialTests.fs" />
         <Compile Include="Program.fs" />
     </ItemGroup>
 
