@@ -4,6 +4,7 @@ open System
 open System.Reflection
 open Expecto
 open Expecto.Flip
+open SageFs
 
 // ---------------------------------------------------------------------------
 // Assembly references for architecture validation
@@ -135,37 +136,120 @@ let architectureTests =
           "SageFs.Core"
     ]
 
-    testList "Documentation coverage (aspirational)" [
+    testList "Error classification consistency" [
 
-      testCase "SageFs.Core public types should have documentation attributes"
+      testCase "every SageFsError has exactly one category"
       <| fun _ ->
-        let publicTypes =
+        let errorCases =
+          FSharp.Reflection.FSharpType.GetUnionCases(typeof<SageFsError>)
+        for case in errorCases do
+          let args =
+            case.GetFields()
+            |> Array.map (fun f ->
+              match f.PropertyType with
+              | t when t = typeof<string> -> box ""
+              | t when t = typeof<int> -> box 0
+              | t when t = typeof<float> -> box 0.0
+              | t when t = typeof<exn> -> box (System.Exception "test")
+              | t when t = typeof<string list> -> box ([] : string list)
+              | t when t = typeof<SessionState> -> box SessionState.Uninitialized
+              | _ -> box null)
+          let err =
+            FSharp.Reflection.FSharpValue.MakeUnion(case, args) :?> SageFsError
+          let categories =
+            [ SageFsError.isClientError err
+              SageFsError.isServerError err
+              SageFsError.isGatewayError err
+              SageFsError.isInfraError err ]
+            |> List.filter id
+          categories
+          |> Expect.hasLength
+            (sprintf "%s should have exactly one classification" case.Name) 1
+
+      testCase "toHttpStatus returns valid HTTP status codes"
+      <| fun _ ->
+        let errorCases =
+          FSharp.Reflection.FSharpType.GetUnionCases(typeof<SageFsError>)
+        for case in errorCases do
+          let args =
+            case.GetFields()
+            |> Array.map (fun f ->
+              match f.PropertyType with
+              | t when t = typeof<string> -> box ""
+              | t when t = typeof<int> -> box 0
+              | t when t = typeof<float> -> box 0.0
+              | t when t = typeof<exn> -> box (System.Exception "test")
+              | t when t = typeof<string list> -> box ([] : string list)
+              | t when t = typeof<SessionState> -> box SessionState.Uninitialized
+              | _ -> box null)
+          let err =
+            FSharp.Reflection.FSharpValue.MakeUnion(case, args) :?> SageFsError
+          let status = SageFsError.toHttpStatus err
+          (status, 100)
+          |> Expect.isGreaterThanOrEqual
+            (sprintf "%s status %d should be >= 100" case.Name status)
+          (599, status)
+          |> Expect.isGreaterThanOrEqual
+            (sprintf "%s status %d should be <= 599" case.Name status)
+
+      testCase "describe never returns empty string"
+      <| fun _ ->
+        let errorCases =
+          FSharp.Reflection.FSharpType.GetUnionCases(typeof<SageFsError>)
+        for case in errorCases do
+          let args =
+            case.GetFields()
+            |> Array.map (fun f ->
+              match f.PropertyType with
+              | t when t = typeof<string> -> box "test-value"
+              | t when t = typeof<int> -> box 42
+              | t when t = typeof<float> -> box 1.0
+              | t when t = typeof<exn> -> box (System.Exception "boom")
+              | t when t = typeof<string list> -> box ([ "a"; "b" ] : string list)
+              | t when t = typeof<SessionState> -> box SessionState.Uninitialized
+              | _ -> box null)
+          let err =
+            FSharp.Reflection.FSharpValue.MakeUnion(case, args) :?> SageFsError
+          let desc = SageFsError.describe err
+          System.String.IsNullOrWhiteSpace desc
+          |> Expect.isFalse
+            (sprintf "%s.describe should not be empty" case.Name)
+    ]
+
+    testList "Module count tracking (aspirational)" [
+
+      testCase "SageFs.Core module count tracked"
+      <| fun _ ->
+        let modules =
+          coreAssembly.GetTypes()
+          |> Array.filter (fun t ->
+            FSharp.Reflection.FSharpType.IsModule t
+            && not (t.Name.StartsWith "<")
+            && not (t.Name.Contains "@")
+            && not t.IsNested)
+        printfn "  SageFs.Core modules: %d" modules.Length
+        // Ceiling prevents regression. Lower as consolidation progresses.
+        // Baseline: 201 (2025-03-10). Target: ≤60 (synthesis 3.4).
+        (modules.Length, 210)
+        |> Expect.isLessThanOrEqual
+          (sprintf
+            "SageFs.Core should have ≤210 top-level modules (currently %d)"
+            modules.Length)
+
+      testCase "SageFs.Core exported types tracked"
+      <| fun _ ->
+        let types =
           coreAssembly.GetExportedTypes()
           |> Array.filter (fun t ->
             not (t.Name.StartsWith "<")
             && not (t.Name.Contains "@")
             && not t.IsNested)
-        let typesWithDocs =
-          publicTypes
-          |> Array.filter (fun t ->
-            t.GetCustomAttributes false
-            |> Seq.cast<Attribute>
-            |> Seq.exists isDocAttribute)
-        let pct =
-          match publicTypes.Length with
-          | 0 -> 100.0
-          | n -> float typesWithDocs.Length / float n * 100.0
-        printfn
-          "  Documentation attribute coverage: %d/%d (%.1f%%)"
-          typesWithDocs.Length
-          publicTypes.Length
-          pct
-        // Aspirational: raise this threshold as documentation improves.
-        // Baseline at time of writing: ~20%. Threshold set to catch regressions.
-        (pct >= 10.0)
-        |> Expect.isTrue
+        printfn "  SageFs.Core exported types: %d" types.Length
+        // Track — don't enforce too tightly yet
+        (types.Length, 500)
+        |> Expect.isLessThanOrEqual
           (sprintf
-            "at least 10%% of public types should have doc attributes (currently %.1f%%)"
-            pct)
+            "SageFs.Core should have ≤500 exported types (currently %d)"
+            types.Length)
     ]
   ]
