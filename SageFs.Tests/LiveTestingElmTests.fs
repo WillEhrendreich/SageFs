@@ -7,6 +7,7 @@ open Expecto.Flip
 open SageFs
 open SageFs.Features.LiveTesting
 open SageFs.Tests.LiveTestingTestHelpers
+open SageFs.Measures
 
 // ── Elm Integration Tests ──
 
@@ -678,7 +679,7 @@ let adaptiveDebounceWiringTests = testList "adaptive debounce wiring" [
     let s1 = s0 |> LiveTestCycleState.onFcsCanceled
     let s2 = s1 |> LiveTestCycleState.onFcsCanceled
     let s3 = s2 |> LiveTestCycleState.onFcsCanceled
-    let expectedDelay = int (300.0 * 1.5 * 1.5 * 1.5)
+    let expectedDelay = LanguagePrimitives.Int32WithMeasure<ms> (int (300.0 * 1.5 * 1.5 * 1.5))
     let s4 = s3 |> LiveTestCycleState.onKeystroke "let x = 1" "Test.fs" now
     match s4.Debounce.Fcs.Pending with
     | Some p ->
@@ -691,7 +692,7 @@ let adaptiveDebounceWiringTests = testList "adaptive debounce wiring" [
     let s = LiveTestCycleState.empty |> LiveTestCycleState.onKeystroke "x" "f.fs" now
     match s.Debounce.Fcs.Pending with
     | Some p ->
-      p.DelayMs |> Expect.equal "base FCS delay" 300
+      p.DelayMs |> Expect.equal "base FCS delay" 300<ms>
     | None -> failtest "FCS debounce should have a pending entry"
   }
 
@@ -700,7 +701,7 @@ let adaptiveDebounceWiringTests = testList "adaptive debounce wiring" [
     let s0 = LiveTestCycleState.empty
     // Cancel to raise delay
     let s1 = s0 |> LiveTestCycleState.onFcsCanceled
-    (LiveTestCycleState.currentFcsDelay s1, 300.0)
+    (LiveTestCycleState.currentFcsDelay s1, 300.0<ms>)
     |> Expect.isGreaterThan "delay raised"
     // Reset via consecutive successes
     let mutable s = s1
@@ -710,7 +711,7 @@ let adaptiveDebounceWiringTests = testList "adaptive debounce wiring" [
     let s2 = s |> LiveTestCycleState.onKeystroke "x" "f.fs" now
     match s2.Debounce.Fcs.Pending with
     | Some p ->
-      p.DelayMs |> Expect.equal "delay reset to base after successes" 300
+      p.DelayMs |> Expect.equal "delay reset to base after successes" 300<ms>
     | None -> failtest "FCS debounce should have pending"
   }
 ]

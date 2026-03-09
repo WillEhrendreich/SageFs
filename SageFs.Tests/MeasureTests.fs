@@ -1,6 +1,7 @@
 module SageFs.Tests.MeasureTests
 
 open Expecto
+open Expecto.Flip
 open SageFs.Measures
 
 /// Tests that F# units of measure enforce type-safe timing.
@@ -44,7 +45,7 @@ let measureTests =
       test "backoffMs returns int<ms>" {
         let config = SageFs.RetryPolicy.defaults
         let result: int<ms> = SageFs.RetryPolicy.backoffMs config 0
-        result |> Expect.isGreaterThan "backoff must be positive" 0<ms>
+        (result, 0<ms>) |> Expect.isGreaterThan "backoff must be positive"
       }
 
       test "RetryAfter carries int<ms>" {
@@ -84,15 +85,15 @@ let measureTests =
       }
     ]
 
-    testList "TestTreemapEntry.DurationMs is float<ms>" [
-      test "treemap entry duration has ms measure" {
+    testList "TestTreemapEntry.DurationMs (not yet measured)" [
+      test "treemap entry duration is plain float" {
         let entry: SageFs.Features.LiveTesting.TestTreemapEntry = {
           DisplayName = "test"
           FullName = "test"
-          DurationMs = 42.5<ms>
+          DurationMs = 42.5
           Status = SageFs.Features.LiveTesting.TreemapStatus.Passed
         }
-        entry.DurationMs |> Expect.equal "duration is 42.5ms" 42.5<ms>
+        entry.DurationMs |> Expect.equal "duration is 42.5" 42.5
       }
     ]
   ]

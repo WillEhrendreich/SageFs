@@ -6,6 +6,7 @@ open Expecto.Flip
 open FsCheck
 open SageFs.RetryPolicy
 open SageFs.Tests.SharedGenerators
+open SageFs.Measures
 
 let retryPolicyTests =
   testList "RetryPolicy" [
@@ -23,33 +24,33 @@ let retryPolicyTests =
         shouldRetry defaults 10 |> Expect.isFalse "attempt 10 should not allow retry"
       }
       test "custom config with higher max" {
-        let config = { MaxRetries = 5; BaseDelayMs = 100 }
+        let config = { MaxRetries = 5; BaseDelayMs = 100<ms> }
         shouldRetry config 4 |> Expect.isTrue "attempt 4 with max 5 should allow"
       }
     ]
     testList "backoffMs" [
       test "attempt 0 gives base delay range" {
-        let config = { MaxRetries = 3; BaseDelayMs = 100 }
+        let config = { MaxRetries = 3; BaseDelayMs = 100<ms> }
         let delay = backoffMs config 0
-        (delay, 50) |> Expect.isGreaterThanOrEqual "should be at least 50"
-        (delay, 150) |> Expect.isLessThan "should be less than 150"
+        (delay, 50<ms>) |> Expect.isGreaterThanOrEqual "should be at least 50"
+        (delay, 150<ms>) |> Expect.isLessThan "should be less than 150"
       }
       test "attempt 1 gives higher delay range" {
-        let config = { MaxRetries = 3; BaseDelayMs = 100 }
+        let config = { MaxRetries = 3; BaseDelayMs = 100<ms> }
         let delay = backoffMs config 1
-        (delay, 100) |> Expect.isGreaterThanOrEqual "should be at least 100"
-        (delay, 300) |> Expect.isLessThan "should be less than 300"
+        (delay, 100<ms>) |> Expect.isGreaterThanOrEqual "should be at least 100"
+        (delay, 300<ms>) |> Expect.isLessThan "should be less than 300"
       }
       test "attempt 2 gives even higher delay range" {
-        let config = { MaxRetries = 3; BaseDelayMs = 100 }
+        let config = { MaxRetries = 3; BaseDelayMs = 100<ms> }
         let delay = backoffMs config 2
-        (delay, 150) |> Expect.isGreaterThanOrEqual "should be at least 150"
-        (delay, 450) |> Expect.isLessThan "should be less than 450"
+        (delay, 150<ms>) |> Expect.isGreaterThanOrEqual "should be at least 150"
+        (delay, 450<ms>) |> Expect.isLessThan "should be less than 450"
       }
       test "zero jitter range returns base delay" {
-        let config = { MaxRetries = 3; BaseDelayMs = 1 }
+        let config = { MaxRetries = 3; BaseDelayMs = 1<ms> }
         let delay = backoffMs config 0
-        delay |> Expect.equal "should return exact base delay with no jitter" 1
+        delay |> Expect.equal "should return exact base delay with no jitter" 1<ms>
       }
     ]
     testList "isVersionConflict" [
@@ -87,20 +88,20 @@ let retryPolicyTests =
 
       testPropertyWithConfig propConfig "attempt < MaxRetries always allowed" <|
         fun (NonNegativeInt raw) ->
-          let config = { MaxRetries = 5; BaseDelayMs = 100 }
+          let config = { MaxRetries = 5; BaseDelayMs = 100<ms> }
           let attempt = raw % config.MaxRetries
           shouldRetry config attempt |> Expect.isTrue "below max"
 
       testPropertyWithConfig propConfig "attempt >= MaxRetries never allowed" <|
         fun (NonNegativeInt extra) ->
-          let config = { MaxRetries = 3; BaseDelayMs = 100 }
+          let config = { MaxRetries = 3; BaseDelayMs = 100<ms> }
           shouldRetry config (config.MaxRetries + extra)
           |> Expect.isFalse "at or above max"
 
       testPropertyWithConfig propConfig "backoffMs is always positive" <|
         fun (NonNegativeInt attempt) ->
           let delay = backoffMs defaults attempt
-          (delay, 0) |> Expect.isGreaterThan "positive"
+          (delay, 0<ms>) |> Expect.isGreaterThan "positive"
 
       testPropertyWithConfig propConfig "non-version-conflict always gives up" <|
         fun (NonNegativeInt attempt) ->

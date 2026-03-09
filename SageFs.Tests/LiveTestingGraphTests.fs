@@ -7,6 +7,7 @@ open Expecto.Flip
 open SageFs
 open SageFs.Features.LiveTesting
 open SageFs.Tests.LiveTestingTestHelpers
+open SageFs.Measures
 
 [<Tests>]
 let affectedTestCycleTests = testList "affected-test cycle" [
@@ -772,18 +773,18 @@ let compositionTests = testList "compositionTests" [
 
   test "FCS cancel increases delay, successes reset it" {
     let ad0 = AdaptiveDebounce.createDefault ()
-    ad0.CurrentFcsDelayMs |> Expect.equal "initial delay is 300" 300.0
+    ad0.CurrentFcsDelayMs |> Expect.equal "initial delay is 300" 300.0<ms>
     let ad1 = ad0 |> AdaptiveDebounce.onFcsCanceled
-    ad1.CurrentFcsDelayMs |> Expect.equal "after 1 cancel: 450" 450.0
+    ad1.CurrentFcsDelayMs |> Expect.equal "after 1 cancel: 450" 450.0<ms>
     ad1.ConsecutiveFcsCancels |> Expect.equal "1 cancel" 1
     let ad2 = ad1 |> AdaptiveDebounce.onFcsCanceled
-    ad2.CurrentFcsDelayMs |> Expect.equal "after 2 cancels: 675" 675.0
+    ad2.CurrentFcsDelayMs |> Expect.equal "after 2 cancels: 675" 675.0<ms>
     let ad3 = ad2 |> AdaptiveDebounce.onFcsCompleted
     ad3.ConsecutiveFcsSuccesses |> Expect.equal "1 success" 1
-    ad3.CurrentFcsDelayMs |> Expect.equal "delay stays at 675" 675.0
+    ad3.CurrentFcsDelayMs |> Expect.equal "delay stays at 675" 675.0<ms>
     let ad4 = ad3 |> AdaptiveDebounce.onFcsCompleted
     let ad5 = ad4 |> AdaptiveDebounce.onFcsCompleted
-    ad5.CurrentFcsDelayMs |> Expect.equal "reset to 300" 300.0
+    ad5.CurrentFcsDelayMs |> Expect.equal "reset to 300" 300.0<ms>
     ad5.ConsecutiveFcsCancels |> Expect.equal "cancels reset" 0
     ad5.ConsecutiveFcsSuccesses |> Expect.equal "successes reset" 0
   }

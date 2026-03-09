@@ -7,6 +7,7 @@ open Expecto.Flip
 open SageFs
 open SageFs.Features.LiveTesting
 open SageFs.Tests.LiveTestingTestHelpers
+open SageFs.Measures
 
 // --- TestCycleTiming Tests (RED — stub returns 0.0) ---
 
@@ -367,22 +368,22 @@ let debounceChannelTests = testList "DebounceChannel" [
   }
 
   test "submit creates pending op" {
-    let ch = DebounceChannel.empty<string> |> DebounceChannel.submit "hello" 50 t0
+    let ch = DebounceChannel.empty<string> |> DebounceChannel.submit "hello" 50<ms> t0
     ch.Pending |> Expect.isSome "has pending"
     ch.CurrentGeneration |> Expect.equal "gen 1" 1L
     ch.Pending.Value.Payload |> Expect.equal "payload" "hello"
-    ch.Pending.Value.DelayMs |> Expect.equal "delay" 50
+    ch.Pending.Value.DelayMs |> Expect.equal "delay" 50<ms>
   }
 
   test "tryFire before delay returns None" {
-    let ch = DebounceChannel.empty<string> |> DebounceChannel.submit "hello" 50 t0
+    let ch = DebounceChannel.empty<string> |> DebounceChannel.submit "hello" 50<ms> t0
     let result, ch' = DebounceChannel.tryFire (t0.AddMilliseconds 30.0) ch
     result |> Expect.isNone "not ready yet"
     ch'.Pending |> Expect.isSome "still pending"
   }
 
   test "tryFire after delay returns payload" {
-    let ch = DebounceChannel.empty<string> |> DebounceChannel.submit "hello" 50 t0
+    let ch = DebounceChannel.empty<string> |> DebounceChannel.submit "hello" 50<ms> t0
     let result, ch' = DebounceChannel.tryFire (t0.AddMilliseconds 51.0) ch
     result |> Expect.isSome "ready"
     result.Value |> Expect.equal "payload" "hello"
@@ -393,8 +394,8 @@ let debounceChannelTests = testList "DebounceChannel" [
   test "newer submit supersedes older pending" {
     let ch =
       DebounceChannel.empty<string>
-      |> DebounceChannel.submit "first" 50 t0
-      |> DebounceChannel.submit "second" 50 (t0.AddMilliseconds 20.0)
+      |> DebounceChannel.submit "first" 50<ms> t0
+      |> DebounceChannel.submit "second" 50<ms> (t0.AddMilliseconds 20.0)
     ch.CurrentGeneration |> Expect.equal "gen 2" 2L
     ch.Pending.Value.Payload |> Expect.equal "latest payload" "second"
   }
@@ -402,9 +403,9 @@ let debounceChannelTests = testList "DebounceChannel" [
   test "stale op is discarded on tryFire" {
     let ch =
       DebounceChannel.empty<string>
-      |> DebounceChannel.submit "first" 50 t0
-    let ch2 = ch |> DebounceChannel.submit "second" 50 (t0.AddMilliseconds 20.0)
-    let staleOp = { Payload = "first"; RequestedAt = t0; DelayMs = 50; Generation = 1L }
+      |> DebounceChannel.submit "first" 50<ms> t0
+    let ch2 = ch |> DebounceChannel.submit "second" 50<ms> (t0.AddMilliseconds 20.0)
+    let staleOp = { Payload = "first"; RequestedAt = t0; DelayMs = 50<ms>; Generation = 1L }
     let ch3 = { ch2 with Pending = Some staleOp }
     let result, ch4 = DebounceChannel.tryFire (t0.AddMilliseconds 60.0) ch3
     result |> Expect.isNone "stale, discarded"
@@ -414,8 +415,8 @@ let debounceChannelTests = testList "DebounceChannel" [
   test "isStale detects superseded pending" {
     let ch =
       DebounceChannel.empty<string>
-      |> DebounceChannel.submit "first" 50 t0
-    let staleOp = { Payload = "first"; RequestedAt = t0; DelayMs = 50; Generation = 0L }
+      |> DebounceChannel.submit "first" 50<ms> t0
+    let staleOp = { Payload = "first"; RequestedAt = t0; DelayMs = 50<ms>; Generation = 0L }
     let ch2 = { ch with Pending = Some staleOp }
     DebounceChannel.isStale ch2 |> Expect.isTrue "should be stale"
   }
@@ -426,7 +427,7 @@ let debounceChannelTests = testList "DebounceChannel" [
   }
 
   test "exact delay boundary fires" {
-    let ch = DebounceChannel.empty<string> |> DebounceChannel.submit "hello" 50 t0
+    let ch = DebounceChannel.empty<string> |> DebounceChannel.submit "hello" 50<ms> t0
     let result, _ = DebounceChannel.tryFire (t0.AddMilliseconds 50.0) ch
     result |> Expect.isSome "fires at exact boundary"
   }
@@ -439,31 +440,31 @@ let debounceChannelTests = testList "DebounceChannel" [
 [<Tests>]
 let debounceChannelPropertyTests = testList "DebounceChannel properties" [
   testProperty "tryFire always fires after delay has elapsed" (fun (payload: string) (delayMs: FsCheck.PositiveInt) ->
-    let delay = delayMs.Get % 10000 + 1
+    let delay = LanguagePrimitives.Int32WithMeasure<ms> (delayMs.Get % 10000 + 1)
     let t0 = DateTimeOffset.UtcNow
     let ch = DebounceChannel.empty<string> |> DebounceChannel.submit payload delay t0
-    let tFire = t0.AddMilliseconds(float delay + 1.0)
+    let tFire = t0.AddMilliseconds(float (rawMs delay) + 1.0)
     let result, _ = DebounceChannel.tryFire tFire ch
     result = Some payload
   )
 
   testProperty "tryFire never fires before delay elapses" (fun (payload: string) (delayMs: FsCheck.PositiveInt) ->
-    let delay = (delayMs.Get % 10000) + 2
+    let delay = LanguagePrimitives.Int32WithMeasure<ms> ((delayMs.Get % 10000) + 2)
     let t0 = DateTimeOffset.UtcNow
     let ch = DebounceChannel.empty<string> |> DebounceChannel.submit payload delay t0
-    let tEarly = t0.AddMilliseconds(float (delay - 2))
+    let tEarly = t0.AddMilliseconds(float (rawMs delay - 2))
     let result, _ = DebounceChannel.tryFire tEarly ch
     result = None
   )
 
   testProperty "newer submission supersedes older" (fun (p1: string) (p2: string) (delayMs: FsCheck.PositiveInt) ->
-    let delay = delayMs.Get % 10000 + 1
+    let delay = LanguagePrimitives.Int32WithMeasure<ms> (delayMs.Get % 10000 + 1)
     let t0 = DateTimeOffset.UtcNow
     let ch =
       DebounceChannel.empty<string>
       |> DebounceChannel.submit p1 delay t0
       |> DebounceChannel.submit p2 delay (t0.AddMilliseconds 10.0)
-    let tFire = t0.AddMilliseconds(float delay + 100.0)
+    let tFire = t0.AddMilliseconds(float (rawMs delay) + 100.0)
     let result, _ = DebounceChannel.tryFire tFire ch
     result = Some p2
   )
@@ -537,22 +538,22 @@ let TestCycleDebounceTests = testList "TestCycleDebounce" [
   }
 
   test "onKeystroke submits to both channels" {
-    let db = TestCycleDebounce.empty |> TestCycleDebounce.onKeystroke "code" "file.fs" 300 t0
+    let db = TestCycleDebounce.empty |> TestCycleDebounce.onKeystroke "code" "file.fs" 300<ms> t0
     db.TreeSitter.Pending |> Expect.isSome "tree-sitter pending"
     db.Fcs.Pending |> Expect.isSome "fcs pending"
-    db.TreeSitter.Pending.Value.DelayMs |> Expect.equal "ts delay" 50
-    db.Fcs.Pending.Value.DelayMs |> Expect.equal "fcs delay" 300
+    db.TreeSitter.Pending.Value.DelayMs |> Expect.equal "ts delay" 50<ms>
+    db.Fcs.Pending.Value.DelayMs |> Expect.equal "fcs delay" 300<ms>
   }
 
   test "tree-sitter fires before FCS" {
-    let db = TestCycleDebounce.empty |> TestCycleDebounce.onKeystroke "code" "file.fs" 300 t0
+    let db = TestCycleDebounce.empty |> TestCycleDebounce.onKeystroke "code" "file.fs" 300<ms> t0
     let (tsResult, fcsResult), _ = TestCycleDebounce.tick (t0.AddMilliseconds 51.0) db
     tsResult |> Expect.isSome "tree-sitter fires"
     fcsResult |> Expect.isNone "fcs not yet"
   }
 
   test "both fire after 300ms" {
-    let db = TestCycleDebounce.empty |> TestCycleDebounce.onKeystroke "code" "file.fs" 300 t0
+    let db = TestCycleDebounce.empty |> TestCycleDebounce.onKeystroke "code" "file.fs" 300<ms> t0
     let (tsResult, fcsResult), _ = TestCycleDebounce.tick (t0.AddMilliseconds 301.0) db
     tsResult |> Expect.isSome "tree-sitter fires"
     fcsResult |> Expect.isSome "fcs fires"
@@ -561,9 +562,9 @@ let TestCycleDebounceTests = testList "TestCycleDebounce" [
   test "rapid keystrokes cancel previous debounce" {
     let db =
       TestCycleDebounce.empty
-      |> TestCycleDebounce.onKeystroke "v1" "file.fs" 300 t0
-      |> TestCycleDebounce.onKeystroke "v2" "file.fs" 300 (t0.AddMilliseconds 30.0)
-      |> TestCycleDebounce.onKeystroke "v3" "file.fs" 300 (t0.AddMilliseconds 60.0)
+      |> TestCycleDebounce.onKeystroke "v1" "file.fs" 300<ms> t0
+      |> TestCycleDebounce.onKeystroke "v2" "file.fs" 300<ms> (t0.AddMilliseconds 30.0)
+      |> TestCycleDebounce.onKeystroke "v3" "file.fs" 300<ms> (t0.AddMilliseconds 60.0)
     let (tsResult, _), _ = TestCycleDebounce.tick (t0.AddMilliseconds 111.0) db
     tsResult |> Expect.isSome "fires for latest"
     tsResult.Value |> Expect.equal "latest content" "v3"
@@ -572,15 +573,15 @@ let TestCycleDebounceTests = testList "TestCycleDebounce" [
   test "onFileSave uses short FCS delay" {
     let db =
       TestCycleDebounce.empty
-      |> TestCycleDebounce.onKeystroke "code" "file.fs" 300 t0
+      |> TestCycleDebounce.onKeystroke "code" "file.fs" 300<ms> t0
       |> TestCycleDebounce.onFileSave "file.fs" (t0.AddMilliseconds 100.0)
-    db.Fcs.Pending.Value.DelayMs |> Expect.equal "save uses short delay" 50
+    db.Fcs.Pending.Value.DelayMs |> Expect.equal "save uses short delay" 50<ms>
     let (_, fcsResult), _ = TestCycleDebounce.tick (t0.AddMilliseconds 151.0) db
     fcsResult |> Expect.isSome "fcs fires soon after save"
   }
 
   test "tick clears fired ops" {
-    let db = TestCycleDebounce.empty |> TestCycleDebounce.onKeystroke "code" "file.fs" 300 t0
+    let db = TestCycleDebounce.empty |> TestCycleDebounce.onKeystroke "code" "file.fs" 300<ms> t0
     let _, db' = TestCycleDebounce.tick (t0.AddMilliseconds 301.0) db
     db'.TreeSitter.Pending |> Expect.isNone "ts cleared"
     db'.Fcs.Pending |> Expect.isNone "fcs cleared"
@@ -802,12 +803,12 @@ let cycleStateTests = testList "LiveTestCycleState" [
         Debounce = {
           TreeSitter = {
             CurrentGeneration = 1L
-            Pending = Some { Payload = "let x = 1"; RequestedAt = t0; DelayMs = 50; Generation = 1L }
+            Pending = Some { Payload = "let x = 1"; RequestedAt = t0; DelayMs = 50<ms>; Generation = 1L }
             LastCompleted = None
           }
           Fcs = {
             CurrentGeneration = 1L
-            Pending = Some { Payload = "File.fs"; RequestedAt = t0; DelayMs = 300; Generation = 1L }
+            Pending = Some { Payload = "File.fs"; RequestedAt = t0; DelayMs = 300<ms>; Generation = 1L }
             LastCompleted = None
           }
         }
@@ -1114,12 +1115,12 @@ let TestCycleCancellationTests = testList "TestCycleCancellation" [
 let adaptiveDebounceTests = testList "AdaptiveDebounce" [
   test "initial delay matches base config" {
     let ad = AdaptiveDebounce.createDefault()
-    AdaptiveDebounce.currentFcsDelay ad |> Expect.equal "base delay" 300.0
+    AdaptiveDebounce.currentFcsDelay ad |> Expect.equal "base delay" 300.0<ms>
   }
 
   test "single cancel increases delay by multiplier" {
     let ad = AdaptiveDebounce.createDefault() |> AdaptiveDebounce.onFcsCanceled
-    AdaptiveDebounce.currentFcsDelay ad |> Expect.equal "450ms after one cancel" 450.0
+    AdaptiveDebounce.currentFcsDelay ad |> Expect.equal "450ms after one cancel" 450.0<ms>
   }
 
   test "three consecutive cancels compound the backoff" {
@@ -1128,7 +1129,7 @@ let adaptiveDebounceTests = testList "AdaptiveDebounce" [
       |> AdaptiveDebounce.onFcsCanceled
       |> AdaptiveDebounce.onFcsCanceled
       |> AdaptiveDebounce.onFcsCanceled
-    AdaptiveDebounce.currentFcsDelay ad |> Expect.equal "compounded" 1012.5
+    AdaptiveDebounce.currentFcsDelay ad |> Expect.equal "compounded" 1012.5<ms>
   }
 
   test "backoff caps at MaxFcsMs" {
@@ -1140,7 +1141,7 @@ let adaptiveDebounceTests = testList "AdaptiveDebounce" [
       |> AdaptiveDebounce.onFcsCanceled
       |> AdaptiveDebounce.onFcsCanceled
       |> AdaptiveDebounce.onFcsCanceled
-    AdaptiveDebounce.currentFcsDelay ad |> Expect.equal "capped at 2000" 2000.0
+    AdaptiveDebounce.currentFcsDelay ad |> Expect.equal "capped at 2000" 2000.0<ms>
   }
 
   test "single success after cancel resets cancel count but not delay" {
@@ -1150,7 +1151,7 @@ let adaptiveDebounceTests = testList "AdaptiveDebounce" [
       |> AdaptiveDebounce.onFcsCompleted
     ad.ConsecutiveFcsCancels |> Expect.equal "cancels reset" 0
     ad.ConsecutiveFcsSuccesses |> Expect.equal "one success" 1
-    AdaptiveDebounce.currentFcsDelay ad |> Expect.equal "still elevated" 450.0
+    AdaptiveDebounce.currentFcsDelay ad |> Expect.equal "still elevated" 450.0<ms>
   }
 
   test "three consecutive successes reset delay to base" {
@@ -1161,7 +1162,7 @@ let adaptiveDebounceTests = testList "AdaptiveDebounce" [
       |> AdaptiveDebounce.onFcsCompleted
       |> AdaptiveDebounce.onFcsCompleted
       |> AdaptiveDebounce.onFcsCompleted
-    AdaptiveDebounce.currentFcsDelay ad |> Expect.equal "reset to base" 300.0
+    AdaptiveDebounce.currentFcsDelay ad |> Expect.equal "reset to base" 300.0<ms>
     ad.ConsecutiveFcsSuccesses |> Expect.equal "successes reset" 0
   }
 
@@ -1172,7 +1173,7 @@ let adaptiveDebounceTests = testList "AdaptiveDebounce" [
       |> AdaptiveDebounce.onFcsCompleted
       |> AdaptiveDebounce.onFcsCompleted
       |> AdaptiveDebounce.onFcsCanceled
-    AdaptiveDebounce.currentFcsDelay ad |> Expect.equal "backoff from 450" 675.0
+    AdaptiveDebounce.currentFcsDelay ad |> Expect.equal "backoff from 450" 675.0<ms>
     ad.ConsecutiveFcsSuccesses |> Expect.equal "successes reset" 0
   }
 
