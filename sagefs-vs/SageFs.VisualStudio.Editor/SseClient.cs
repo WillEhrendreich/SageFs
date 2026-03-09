@@ -26,12 +26,12 @@ internal sealed class SseClient : IDisposable
 
     public event EventHandler<SseEvent>? EventReceived;
 
-    public void Start(string baseUrl)
+    public void Start(string baseUrl, string endpoint = "/events")
     {
-        _ = Task.Run(() => LoopAsync(baseUrl, _cts.Token));
+        _ = Task.Run(() => LoopAsync(baseUrl, endpoint, _cts.Token));
     }
 
-    private async Task LoopAsync(string baseUrl, CancellationToken ct)
+    private async Task LoopAsync(string baseUrl, string endpoint, CancellationToken ct)
     {
         var delay = TimeSpan.FromSeconds(1);
         while (!ct.IsCancellationRequested)
@@ -39,7 +39,7 @@ internal sealed class SseClient : IDisposable
             try
             {
                 using var response = await _http.GetAsync(
-                    baseUrl.TrimEnd('/') + "/events",
+                    baseUrl.TrimEnd('/') + endpoint,
                     HttpCompletionOption.ResponseHeadersRead, ct);
                 response.EnsureSuccessStatusCode();
                 delay = TimeSpan.FromSeconds(1);

@@ -105,9 +105,12 @@ internal sealed class TestGlyphTaggerProvider : ITaggerProvider
         var url = PortConfig.TryGetDaemonUrl();
         if (url != null)
         {
+            // NOTE: We create our own SseClient here rather than sharing with InlineFailureAdornment
+            // because each tagger provider has an independent lifetime.
+            // Both subscribe to /events; the daemon fans out to all connected clients.
             var sseClient = new SseClient();
             sseClient.EventReceived += (_, ev) => _tracker.ProcessEvent(ev);
-            sseClient.Start(url);
+            sseClient.Start(url, "/events");
         }
     }
 
