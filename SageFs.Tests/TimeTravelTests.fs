@@ -295,4 +295,104 @@ let timeTravelTests =
         snapshotCount final >= 0
       )
     ]
+
+    testList "key bindings" [
+      test "Alt+Left maps to TimeTravelBack" {
+        let combo = KeyCombo.alt System.ConsoleKey.LeftArrow
+        KeyMap.defaults |> Map.tryFind combo
+        |> Expect.equal "Alt+Left → TimeTravelBack" (Some UiAction.TimeTravelBack)
+      }
+      test "Alt+Right maps to TimeTravelForward" {
+        let combo = KeyCombo.alt System.ConsoleKey.RightArrow
+        KeyMap.defaults |> Map.tryFind combo
+        |> Expect.equal "Alt+Right → TimeTravelForward" (Some UiAction.TimeTravelForward)
+      }
+      test "Alt+Home maps to TimeTravelGoLive" {
+        let combo = KeyCombo.alt System.ConsoleKey.Home
+        KeyMap.defaults |> Map.tryFind combo
+        |> Expect.equal "Alt+Home → TimeTravelGoLive" (Some UiAction.TimeTravelGoLive)
+      }
+    ]
+
+    testList "UiAction parse" [
+      test "TimeTravelBack parses" {
+        UiAction.tryParse "TimeTravelBack"
+        |> Expect.isSome "should parse TimeTravelBack"
+      }
+      test "TimeTravelForward parses" {
+        UiAction.tryParse "TimeTravelForward"
+        |> Expect.isSome "should parse TimeTravelForward"
+      }
+      test "TimeTravelGoLive parses" {
+        UiAction.tryParse "TimeTravelGoLive"
+        |> Expect.isSome "should parse TimeTravelGoLive"
+      }
+    ]
+
+    testList "TerminalInput mapping" [
+      test "Alt+Left → TerminalCommand.TimeTravelBack" {
+        let ki = System.ConsoleKeyInfo('\000', System.ConsoleKey.LeftArrow, false, true, false)
+        TerminalInput.mapKeyWith KeyMap.defaults ki
+        |> Expect.equal "maps to TimeTravelBack" (Some TerminalCommand.TimeTravelBack)
+      }
+      test "Alt+Right → TerminalCommand.TimeTravelForward" {
+        let ki = System.ConsoleKeyInfo('\000', System.ConsoleKey.RightArrow, false, true, false)
+        TerminalInput.mapKeyWith KeyMap.defaults ki
+        |> Expect.equal "maps to TimeTravelForward" (Some TerminalCommand.TimeTravelForward)
+      }
+      test "Alt+Home → TerminalCommand.TimeTravelGoLive" {
+        let ki = System.ConsoleKeyInfo('\000', System.ConsoleKey.Home, false, true, false)
+        TerminalInput.mapKeyWith KeyMap.defaults ki
+        |> Expect.equal "maps to TimeTravelGoLive" (Some TerminalCommand.TimeTravelGoLive)
+      }
+    ]
+
+    testList "RenderRegion time-travel" [
+      test "record and navigate RenderRegion snapshots" {
+        let mkRegion i : RenderRegion list =
+          [{ Id = "output"; Flags = RegionFlags.None; Content = sprintf "frame %d" i
+             Affordances = []; Cursor = None; Completions = None
+             LineAnnotations = [||] }]
+        let st =
+          create { ModelSnapshot.Capacity = 10; ModelSnapshot.Enabled = true }
+          |> record "ev1" 0.0<ms> (mkRegion 1)
+          |> record "ev2" 0.0<ms> (mkRegion 2)
+          |> record "ev3" 0.0<ms> (mkRegion 3)
+        match currentModel st with
+        | Some regions ->
+          regions |> List.head |> fun r -> r.Content
+          |> Expect.equal "should be frame 3" "frame 3"
+        | None -> failtest "expected Some"
+        let back = stepBack st
+        match currentModel back with
+        | Some regions ->
+          regions |> List.head |> fun r -> r.Content
+          |> Expect.equal "should be frame 2" "frame 2"
+        | None -> failtest "expected Some"
+      }
+
+      test "formatStatus shows navigation hint when viewing" {
+        let st =
+          create { ModelSnapshot.Capacity = 10; ModelSnapshot.Enabled = true }
+          |> record "ev1" 0.0<ms> "a"
+          |> record "ev2" 0.0<ms> "b"
+          |> stepBack
+        match formatStatus st with
+        | Some s ->
+          s |> Expect.stringContains "should contain age" "⏮"
+          s |> Expect.stringContains "should contain nav hint" "Alt+→"
+        | None -> failtest "expected Some"
+      }
+
+      test "formatStatus shows snapshot count when live" {
+        let st =
+          create { ModelSnapshot.Capacity = 10; ModelSnapshot.Enabled = true }
+          |> record "ev1" 0.0<ms> "a"
+          |> record "ev2" 0.0<ms> "b"
+        match formatStatus st with
+        | Some s ->
+          s |> Expect.stringContains "should contain count" "2 snapshots"
+        | None -> failtest "expected Some"
+      }
+    ]
   ]
