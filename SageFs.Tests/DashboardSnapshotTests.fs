@@ -859,6 +859,70 @@ let datastarComplianceTests = testList "Datastar compliance (synthesis 5.4)" [
   }
 ]
 
+let snapshotCompletenessTests = testList "Snapshot field completeness (synthesis 3.1)" [
+
+  let mkSnap version sessionId workingDir state =
+    { DashboardSnapshot.Version = version
+      SessionState = state; SessionId = sessionId; WorkingDir = workingDir
+      WarmupProgress = ""; EvalStats = { Count = 7; AvgMs = 42.0; MinMs = 1.0; MaxMs = 100.0 }
+      ThemeName = "monokai"; ConnectionLabel = Some "🌐 2 🤖 1"
+      HotReloadPanel = Elem.div [] []; SessionContextPanel = Elem.div [] []
+      OutputPanel = Elem.div [] []
+      SessionsPanel = Elem.div [] []; SessionPicker = Elem.div [] []
+      ThemePicker = Elem.div [] []; ThemeVars = Elem.div [] []
+      BindingsPanel = Elem.div [] [] }
+
+  test "Version appears in rendered output" {
+    let html = mkSnap "1.2.3" "s1" "C:\\" "ready" |> renderMainContent |> renderNode
+    Expect.stringContains html "1.2.3" "version should appear"
+  }
+
+  test "SessionId appears in rendered output" {
+    let html = mkSnap "0.0.0" "my-session-42" "C:\\" "ready" |> renderMainContent |> renderNode
+    Expect.stringContains html "my-session-42" "sessionId should appear"
+  }
+
+  test "WorkingDir appears in rendered output" {
+    let html = mkSnap "0.0.0" "s1" @"C:\MyProject\Src" "ready" |> renderMainContent |> renderNode
+    Expect.stringContains html @"C:\MyProject\Src" "working dir should appear"
+  }
+
+  test "SessionState appears in rendered output" {
+    let html = mkSnap "0.0.0" "s1" "C:\\" "faulted" |> renderMainContent |> renderNode
+    Expect.stringContains html "faulted" "session state should appear"
+  }
+
+  test "EvalStats count appears in rendered output" {
+    let html = mkSnap "0.0.0" "s1" "C:\\" "ready" |> renderMainContent |> renderNode
+    Expect.stringContains html "7 evals" "eval count should appear"
+  }
+
+  test "EvalStats avg appears in rendered output" {
+    let html = mkSnap "0.0.0" "s1" "C:\\" "ready" |> renderMainContent |> renderNode
+    Expect.stringContains html "42" "avg ms should appear"
+  }
+
+  test "ConnectionLabel appears in rendered output" {
+    let html = mkSnap "0.0.0" "s1" "C:\\" "ready" |> renderMainContent |> renderNode
+    Expect.stringContains html "🌐 2" "connection label should appear"
+  }
+
+  test "ThemeName appears in theme picker" {
+    let snap =
+      { (mkSnap "0.0.0" "s1" "C:\\" "ready") with
+          ThemePicker = Elem.div [] [ Text.raw "Theme: monokai" ] }
+    let html = renderMainContent snap |> renderNode
+    Expect.stringContains html "monokai" "theme name should appear"
+  }
+
+  test "rendered output always wraps in div#main" {
+    let snap = mkSnap "0.0.0" "s1" "C:\\" "ready"
+    let html = renderMainContent snap |> renderNode
+    Expect.isTrue (html.StartsWith "<div id=\"main\"") "must start with div#main"
+    Expect.isTrue (html.EndsWith "</div>") "must end with closing div"
+  }
+]
+
 [<Tests>]
 let allDashboardSnapshotTests = testList "Dashboard Snapshots" [
   dashboardRenderSnapshotTests
@@ -872,4 +936,5 @@ let allDashboardSnapshotTests = testList "Dashboard Snapshots" [
   railwayVisualizationTests
   testFilterTests
   datastarComplianceTests
+  snapshotCompletenessTests
 ]
