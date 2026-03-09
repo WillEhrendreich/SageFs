@@ -427,6 +427,145 @@ let warmupProgressSseTests = testList "Standby warmup progress SSE" [
   }
 ]
 
+// ── Railway visualization tests ──
+
+let railwayVisualizationTests = testList "Railway visualization" [
+
+  testList "PipelineRailwayView.fromStages" [
+    test "builds stages with StageSuccess outcomes" {
+      let stages = [ ("Parse", 12.0); ("TypeCheck", 45.0); ("Execute", 363.0) ]
+      let view = PipelineRailwayView.fromStages stages 420.0
+      Expect.equal view.Stages.Length 3 "should have 3 stages"
+      Expect.equal view.TotalMs 420.0 "total"
+      Expect.isTrue
+        (view.Stages |> List.forall (fun s ->
+          match s.Outcome with StageSuccess -> true | _ -> false))
+        "all stages should be success"
+    }
+
+    test "empty stages list produces empty railway" {
+      let view = PipelineRailwayView.fromStages [] 0.0
+      Expect.isEmpty view.Stages "should be empty"
+      Expect.equal view.TotalMs 0.0 "total"
+    }
+
+    test "stage names are preserved" {
+      let stages = [ ("Parse", 10.0); ("Execute", 20.0) ]
+      let view = PipelineRailwayView.fromStages stages 30.0
+      Expect.equal
+        (view.Stages |> List.map (fun s -> s.Name))
+        [ "Parse"; "Execute" ]
+        "names"
+    }
+
+    test "stage durations are preserved" {
+      let stages = [ ("Parse", 12.5); ("TypeCheck", 45.7) ]
+      let view = PipelineRailwayView.fromStages stages 58.2
+      Expect.equal
+        (view.Stages |> List.map (fun s -> s.DurationMs))
+        [ 12.5; 45.7 ]
+        "durations"
+    }
+  ]
+
+  testList "PipelineRailwayView.fromStagesWithFailure" [
+    test "marks the failed stage with StageFailure" {
+      let stages = [ ("Parse", 12.0); ("TypeCheck", 45.0); ("Execute", 0.0) ]
+      let view = PipelineRailwayView.fromStagesWithFailure stages 57.0 "Execute" "Runtime error"
+      match view.Stages |> List.tryFind (fun s -> s.Name = "Execute") with
+      | Some s ->
+        match s.Outcome with
+        | StageFailure err -> Expect.equal err "Runtime error" "error msg"
+        | StageSuccess -> failtest "Execute should be StageFailure"
+      | None -> failtest "Execute stage missing"
+    }
+
+    test "non-failed stages remain StageSuccess" {
+      let stages = [ ("Parse", 12.0); ("TypeCheck", 45.0); ("Execute", 0.0) ]
+      let view = PipelineRailwayView.fromStagesWithFailure stages 57.0 "Execute" "err"
+      match view.Stages |> List.tryFind (fun s -> s.Name = "Parse") with
+      | Some s ->
+        match s.Outcome with
+        | StageSuccess -> ()
+        | StageFailure _ -> failtest "Parse should be StageSuccess"
+      | None -> failtest "Parse stage missing"
+    }
+  ]
+
+  testList "renderRailway" [
+    test "renders success stages with checkmarks" {
+      let railway = PipelineRailwayView.fromStages [ ("Parse", 12.0); ("TypeCheck", 45.0); ("Execute", 363.0) ] 420.0
+      let html = renderRailway railway |> renderNode
+      Expect.stringContains html "Parse ✓" "should show Parse checkmark"
+      Expect.stringContains html "TypeCheck ✓" "should show TypeCheck checkmark"
+      Expect.stringContains html "Execute ✓" "should show Execute checkmark"
+    }
+
+    test "renders stage durations in brackets" {
+      let railway = PipelineRailwayView.fromStages [ ("Parse", 12.0); ("Execute", 363.0) ] 375.0
+      let html = renderRailway railway |> renderNode
+      Expect.stringContains html "[12ms]" "should show Parse duration"
+      Expect.stringContains html "[363ms]" "should show Execute duration"
+    }
+
+    test "renders arrows between stages" {
+      let railway = PipelineRailwayView.fromStages [ ("Parse", 12.0); ("Execute", 363.0) ] 375.0
+      let html = renderRailway railway |> renderNode
+      Expect.stringContains html "→" "should have arrow separator"
+    }
+
+    test "renders total duration" {
+      let railway = PipelineRailwayView.fromStages [ ("Parse", 12.0) ] 420.0
+      let html = renderRailway railway |> renderNode
+      Expect.stringContains html "[420ms total]" "should show total"
+    }
+
+    test "renders empty pipeline as 'No pipeline stages'" {
+      let html = renderRailway PipelineRailwayView.empty |> renderNode
+      Expect.stringContains html "No pipeline stages" "should show empty message"
+    }
+
+    test "renders failure stage with cross mark" {
+      let railway = PipelineRailwayView.fromStagesWithFailure [ ("Parse", 12.0); ("Execute", 0.0) ] 12.0 "Execute" "boom"
+      let html = renderRailway railway |> renderNode
+      Expect.stringContains html "Execute ✗" "should show failure cross"
+    }
+
+    test "success stage has stage-success CSS class" {
+      let railway = PipelineRailwayView.fromStages [ ("Parse", 12.0) ] 12.0
+      let html = renderRailway railway |> renderNode
+      Expect.stringContains html "stage-success" "should have success class"
+    }
+
+    test "failure stage has stage-failure CSS class" {
+      let railway = PipelineRailwayView.fromStagesWithFailure [ ("Parse", 0.0) ] 0.0 "Parse" "err"
+      let html = renderRailway railway |> renderNode
+      Expect.stringContains html "stage-failure" "should have failure class"
+    }
+
+    test "pipeline-railway CSS class on container" {
+      let railway = PipelineRailwayView.fromStages [ ("Parse", 1.0) ] 1.0
+      let html = renderRailway railway |> renderNode
+      Expect.stringContains html "pipeline-railway" "should have container class"
+    }
+
+    test "single stage has no arrows" {
+      let railway = PipelineRailwayView.fromStages [ ("Parse", 1.0) ] 1.0
+      let html = renderRailway railway |> renderNode
+      let arrowCount = html.Split("→").Length - 1
+      Expect.equal arrowCount 0 "should have no arrows for single stage"
+    }
+
+    test "N stages produce N-1 arrows" {
+      let stages = [ ("A", 1.0); ("B", 2.0); ("C", 3.0); ("D", 4.0) ]
+      let railway = PipelineRailwayView.fromStages stages 10.0
+      let html = renderRailway railway |> renderNode
+      let arrowCount = html.Split("→").Length - 1
+      Expect.equal arrowCount 3 "should have 3 arrows for 4 stages"
+    }
+  ]
+]
+
 
 [<Tests>]
 let allDashboardSnapshotTests = testList "Dashboard Snapshots" [
@@ -437,4 +576,5 @@ let allDashboardSnapshotTests = testList "Dashboard Snapshots" [
   shellStructureTests
   standbyBadgeSseTests
   warmupProgressSseTests
+  railwayVisualizationTests
 ]

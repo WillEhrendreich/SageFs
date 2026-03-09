@@ -133,6 +133,42 @@ let renderEvalStats (stats: EvalStatsView) =
     Text.raw (sprintf "%d evals · avg %.0fms · min %.0fms · max %.0fms" stats.Count stats.AvgMs stats.MinMs stats.MaxMs)
   ]
 
+/// Render a pipeline stage badge for the railway visualization.
+let private renderStage (stage: PipelineStageView) =
+  let (icon, cssClass) =
+    match stage.Outcome with
+    | StageSuccess -> ("✓", "stage-success")
+    | StageFailure _ -> ("✗", "stage-failure")
+  Elem.span [ Attr.class' (sprintf "pipeline-stage %s" cssClass) ] [
+    Text.raw (sprintf "%s %s" stage.Name icon)
+    Elem.span [ Attr.class' "stage-duration" ] [
+      Text.raw (sprintf " [%.0fms]" stage.DurationMs)
+    ]
+  ]
+
+/// Render the arrow connector between pipeline stages.
+let private renderArrow () =
+  Elem.span [ Attr.class' "pipeline-arrow" ] [ Text.raw " → " ]
+
+/// Render the eval pipeline as a railway visualization.
+/// Shows: Parse ✓ [12ms] → TypeCheck ✓ [45ms] → Execute ✓ [363ms] [420ms total]
+let renderRailway (railway: PipelineRailwayView) =
+  Elem.div [ Attr.class' "pipeline-railway" ] [
+    match railway.Stages with
+    | [] ->
+      yield Elem.span [ Attr.class' "meta" ] [ Text.raw "No pipeline stages" ]
+    | stages ->
+      yield! stages
+        |> List.mapi (fun i stage ->
+          match i = 0 with
+          | true -> [ renderStage stage ]
+          | false -> [ renderArrow (); renderStage stage ])
+        |> List.concat
+      yield Elem.span [ Attr.class' "pipeline-total" ] [
+        Text.raw (sprintf " [%.0fms total]" railway.TotalMs)
+      ]
+  ]
+
 /// Map a tree-sitter capture name to the CSS class suffix.
 let captureToCssClass (capture: string) =
   match capture with

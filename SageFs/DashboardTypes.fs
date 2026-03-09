@@ -143,6 +143,47 @@ type EvalStatsView = {
   MaxMs: float
 }
 
+/// Pipeline stage outcome — success or failure with an error message.
+[<Struct>]
+type StageOutcome =
+  | StageSuccess
+  | StageFailure of error: string
+
+/// A single eval pipeline stage for railway visualization.
+[<Struct>]
+type PipelineStageView = {
+  Name: string
+  DurationMs: float
+  Outcome: StageOutcome
+}
+
+/// Railway visualization view model — the complete eval pipeline trace.
+type PipelineRailwayView = {
+  Stages: PipelineStageView list
+  TotalMs: float
+}
+
+module PipelineRailwayView =
+  /// Build from the raw (name * durationMs) list emitted by EvalTraced events.
+  let fromStages (stages: (string * float) list) (totalMs: float) : PipelineRailwayView =
+    { Stages =
+        stages
+        |> List.map (fun (name, ms) ->
+          { Name = name; DurationMs = ms; Outcome = StageSuccess })
+      TotalMs = totalMs }
+
+  /// Build from stages where the last stage failed.
+  let fromStagesWithFailure (stages: (string * float) list) (totalMs: float) (failedStage: string) (error: string) : PipelineRailwayView =
+    { Stages =
+        stages
+        |> List.map (fun (name, ms) ->
+          match name = failedStage with
+          | true -> { Name = name; DurationMs = ms; Outcome = StageFailure error }
+          | false -> { Name = name; DurationMs = ms; Outcome = StageSuccess })
+      TotalMs = totalMs }
+
+  let empty : PipelineRailwayView = { Stages = []; TotalMs = 0.0 }
+
 /// Discover .fsproj and .sln/.slnx files in a directory.
 type DiscoveredProjects = {
   WorkingDir: string
