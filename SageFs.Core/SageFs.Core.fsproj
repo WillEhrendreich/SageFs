@@ -97,6 +97,7 @@
         <Compile Include="Middleware\CompilationContext.fs" />
         <Compile Include="Middleware\NonBlockingRun.fs" />
         <Compile Include="Middleware\HotReloading.fs" />
+        <Compile Include="Middleware\Tracing.fs" />
         <Compile Include="ActorCreation.fs" />
         <Compile Include="Mcp.fs" />
     </ItemGroup>
