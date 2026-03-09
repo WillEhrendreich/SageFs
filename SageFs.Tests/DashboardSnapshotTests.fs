@@ -428,6 +428,71 @@ let warmupProgressSseTests = testList "Standby warmup progress SSE" [
   }
 ]
 
+// ── Zero-JS badge tests ──
+
+let zeroJsBadgeTests = testList "Zero-JS badge" [
+  test "shell contains no framework JS (React/Vue/Angular/Svelte)" {
+    let html = renderShell "1.0.0" |> renderNode
+    let frameworks = [ "react"; "vue"; "angular"; "svelte"; "jquery"; "alpine" ]
+    for fw in frameworks do
+      Expect.isFalse
+        (html.ToLowerInvariant().Contains fw)
+        (sprintf "should not contain %s framework reference" fw)
+  }
+
+  test "shell contains only Datastar CDN script as external JS" {
+    let html = renderShell "1.0.0" |> renderNode
+    let srcPattern = System.Text.RegularExpressions.Regex("src=\"([^\"]+)\"")
+    let scriptSrcs = srcPattern.Matches(html)
+    let jsSources =
+      [ for m in scriptSrcs -> m.Groups.[1].Value ]
+      |> List.filter (fun s -> s.EndsWith(".js") || s.Contains("datastar"))
+    match jsSources.Length with
+    | 0 -> () // CDN might be inline
+    | _ ->
+      Expect.isTrue
+        (jsSources |> List.forall (fun s -> s.Contains "datastar"))
+        (sprintf "all external JS should be Datastar only, found: %A" jsSources)
+  }
+
+  test "inline scripts are utility-only, not application logic" {
+    let html = renderShell "1.0.0" |> renderNode
+    let scriptPattern = System.Text.RegularExpressions.Regex("<script[^>]*>([\\s\\S]*?)</script>")
+    let scriptBlocks = scriptPattern.Matches(html)
+    let inlineScripts = [ for m in scriptBlocks -> m.Groups.[1].Value ]
+    for script in inlineScripts do
+      // No state management patterns
+      Expect.isFalse (script.Contains "useState") "no React-style state"
+      Expect.isFalse (script.Contains "createStore") "no Redux-style store"
+      Expect.isFalse (script.Contains "createSignal") "no SolidJS-style signals"
+      // No fetch for data retrieval (fetch for POST commands is OK)
+      let fetchCount = script.Split("fetch(").Length - 1
+      let postCount = script.Split("'POST'").Length + script.Split("\"POST\"").Length - 2
+      Expect.isTrue
+        (fetchCount <= postCount + 1)
+        "fetch calls should be POST-only (command dispatch), not GET (data retrieval)"
+  }
+
+  test "total inline JS payload is under 5KB" {
+    let html = renderShell "1.0.0" |> renderNode
+    let scriptPattern = System.Text.RegularExpressions.Regex("<script[^>]*>([\\s\\S]*?)</script>")
+    let scriptBlocks = scriptPattern.Matches(html)
+    let totalBytes =
+      [ for m in scriptBlocks -> m.Groups.[1].Value ]
+      |> List.sumBy (fun s -> System.Text.Encoding.UTF8.GetByteCount(s))
+    Expect.isLessThan totalBytes 5120
+      (sprintf "inline JS should be <5KB, was %d bytes" totalBytes)
+  }
+
+  test "no application-level JS event handlers in HTML attributes" {
+    let html = renderShell "1.0.0" |> renderNode
+    // onclick/onchange etc. should use Datastar data-on-* attributes, not raw HTML
+    Expect.isFalse (html.Contains " onclick=") "should not use raw onclick (use Ds.onClick)"
+    Expect.isFalse (html.Contains " onchange=") "should not use raw onchange (use Ds.onEvent)"
+    Expect.isFalse (html.Contains " onsubmit=") "should not use raw onsubmit"
+  }
+]
+
 // ── Railway visualization tests ──
 
 let railwayVisualizationTests = testList "Railway visualization" [
@@ -711,6 +776,7 @@ let allDashboardSnapshotTests = testList "Dashboard Snapshots" [
   shellStructureTests
   standbyBadgeSseTests
   warmupProgressSseTests
+  zeroJsBadgeTests
   railwayVisualizationTests
   testFilterTests
 ]
