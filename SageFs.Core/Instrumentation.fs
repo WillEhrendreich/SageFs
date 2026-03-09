@@ -19,6 +19,7 @@ module Instrumentation =
   let testCycleMeter = new Meter("SageFs.TestCycle")
   let mcpMeter = new Meter("SageFs.Mcp")
   let daemonMeter = new Meter("SageFs.Daemon")
+  let renderMeter = new Meter("SageFs.RenderPipeline")
 
   // Daemon startup timing
   let startupDurationMs =
@@ -106,6 +107,22 @@ module Instrumentation =
     testCycleMeter.CreateHistogram<float>("sagefs.elmloop.total_dispatch_ms", "ms", "Total end-to-end dispatch duration")
   let elmloopQueueDepth =
     testCycleMeter.CreateUpDownCounter<int64>("sagefs.elmloop.queue_depth", description = "Number of dispatches waiting for the lock")
+
+  // Render pipeline per-stage instrumentation
+  let renderScreenDrawMs =
+    renderMeter.CreateHistogram<float>("sagefs.render.screen_draw_ms", "ms", "Screen.drawWith duration (model → CellGrid)")
+  let renderEmitMs =
+    renderMeter.CreateHistogram<float>("sagefs.render.emit_ms", "ms", "AnsiEmitter emit/emitDiff duration (CellGrid → escape codes)")
+  let renderConsoleWriteMs =
+    renderMeter.CreateHistogram<float>("sagefs.render.console_write_ms", "ms", "Console.Write duration (escape codes → terminal)")
+  let renderFrameTotalMs =
+    renderMeter.CreateHistogram<float>("sagefs.render.frame_total_ms", "ms", "Total frame duration end-to-end")
+  let renderDiffCellCount =
+    renderMeter.CreateHistogram<int64>("sagefs.render.diff_cell_count", description = "Number of cells changed per diff emit frame")
+  let renderFullEmitCount =
+    renderMeter.CreateCounter<int64>("sagefs.render.full_emit_total", description = "Frames that used full emit (no diff)")
+  let renderDiffEmitCount =
+    renderMeter.CreateCounter<int64>("sagefs.render.diff_emit_total", description = "Frames that used diff emit")
 
   // P1: LiveTesting additions
   let liveTestingDiscoveryMs =

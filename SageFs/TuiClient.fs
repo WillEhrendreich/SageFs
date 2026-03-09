@@ -79,7 +79,7 @@ let run (daemonInfo: DaemonInfo) = task {
   let render () =
     lock TerminalUIState.consoleLock (fun () ->
       try
-        let sw = System.Diagnostics.Stopwatch.StartNew()
+        let frameSw = System.Diagnostics.Stopwatch.StartNew()
         let statusLeft =
           let sid = match lastSessionId.Length > 8 with | true -> lastSessionId.[..7] | false -> lastSessionId
           let standby = match lastStandbyLabel.Length > 0 with | true -> sprintf " | %s" lastStandbyLabel | false -> ""
@@ -90,21 +90,41 @@ let run (daemonInfo: DaemonInfo) = task {
           | false ->
             sprintf " %s %s | evals: %d%s%s | %s" sid lastSessionState lastEvalCount standby liveTesting (PaneId.displayName focusedPane)
         let statusRight = sprintf " %s | %.1fms |%s" currentThemeName lastFrameMs (StatusHints.build keyMap focusedPane layoutConfig.VisiblePanes)
+
+        let drawSw = System.Diagnostics.Stopwatch.StartNew()
         let cursorPos = Screen.drawWith layoutConfig currentTheme grid lastRegions focusedPane scrollOffsets statusLeft statusRight
+        drawSw.Stop()
+        Instrumentation.renderScreenDrawMs.Record(drawSw.Elapsed.TotalMilliseconds)
+
         let cursorRow, cursorCol =
           match cursorPos with
           | Some (r, c) -> r, c
           | None -> 0, 0
+
+        let emitSw = System.Diagnostics.Stopwatch.StartNew()
         let output =
           match prevGrid with
-          | None -> AnsiEmitter.emit grid cursorRow cursorCol
-          | Some prev -> AnsiEmitter.emitDiff prev grid cursorRow cursorCol
+          | None ->
+            Instrumentation.renderFullEmitCount.Add(1L)
+            AnsiEmitter.emit grid cursorRow cursorCol
+          | Some prev ->
+            Instrumentation.renderDiffEmitCount.Add(1L)
+            AnsiEmitter.emitDiff prev grid cursorRow cursorCol
+        emitSw.Stop()
+        Instrumentation.renderEmitMs.Record(emitSw.Elapsed.TotalMilliseconds)
+
+        let writeSw = System.Diagnostics.Stopwatch.StartNew()
         match output.Length > 0 with
         | true -> Console.Write(output)
         | false -> ()
+        writeSw.Stop()
+        Instrumentation.renderConsoleWriteMs.Record(writeSw.Elapsed.TotalMilliseconds)
+
         prevGrid <- Some (CellGrid.clone grid)
-        sw.Stop()
-        lastFrameMs <- sw.Elapsed.TotalMilliseconds
+        frameSw.Stop()
+        let frameMs = frameSw.Elapsed.TotalMilliseconds
+        Instrumentation.renderFrameTotalMs.Record(frameMs)
+        lastFrameMs <- frameMs
       with _ -> ())
 
   // Initial render
