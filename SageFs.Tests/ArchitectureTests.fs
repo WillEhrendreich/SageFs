@@ -252,4 +252,111 @@ let architectureTests =
             "SageFs.Core should have ≤500 exported types (currently %d)"
             types.Length)
     ]
+
+    testList "Module audit (synthesis 3.4)" [
+
+      testCase "CLI assembly (SageFs) module count tracked"
+      <| fun _ ->
+        let modules =
+          cliAssembly.GetTypes()
+          |> Array.filter (fun t ->
+            FSharp.Reflection.FSharpType.IsModule t
+            && not (t.Name.StartsWith "<")
+            && not (t.Name.Contains "@")
+            && not t.IsNested)
+        printfn "  SageFs CLI modules: %d" modules.Length
+        // Track CLI module count too
+        (modules.Length, 50)
+        |> Expect.isLessThanOrEqual
+          (sprintf
+            "SageFs CLI should have ≤50 top-level modules (currently %d)"
+            modules.Length)
+
+      testCase "modules with zero public functions identified"
+      <| fun _ ->
+        let modules =
+          coreAssembly.GetTypes()
+          |> Array.filter (fun t ->
+            FSharp.Reflection.FSharpType.IsModule t
+            && not (t.Name.StartsWith "<")
+            && not (t.Name.Contains "@")
+            && not t.IsNested)
+        let emptyModules =
+          modules
+          |> Array.filter (fun m ->
+            let publicMethods =
+              m.GetMethods(BindingFlags.Public ||| BindingFlags.Static ||| BindingFlags.DeclaredOnly)
+              |> Array.filter (fun mi ->
+                not (mi.Name.StartsWith "get_")
+                && not (mi.Name.StartsWith "set_")
+                && not (mi.Name.StartsWith "<")
+                && not (mi.IsSpecialName))
+            let publicProps =
+              m.GetProperties(BindingFlags.Public ||| BindingFlags.Static ||| BindingFlags.DeclaredOnly)
+            publicMethods.Length = 0 && publicProps.Length = 0)
+        match emptyModules.Length with
+        | 0 -> ()
+        | n ->
+          printfn "  Modules with zero public API:"
+          emptyModules |> Array.iter (fun m -> printfn "    - %s" m.FullName)
+          // These are candidates for removal or consolidation
+          (n, 15)
+          |> Expect.isLessThanOrEqual
+            (sprintf "should have ≤15 empty modules (found %d)" n)
+
+      testCase "modules with only type definitions tracked"
+      <| fun _ ->
+        // Modules that only contain types (no functions) are "type-bag" modules
+        // These might be better as namespaces
+        let modules =
+          coreAssembly.GetTypes()
+          |> Array.filter (fun t ->
+            FSharp.Reflection.FSharpType.IsModule t
+            && not (t.Name.StartsWith "<")
+            && not (t.Name.Contains "@")
+            && not t.IsNested)
+        let typeBagModules =
+          modules
+          |> Array.filter (fun m ->
+            let publicMethods =
+              m.GetMethods(BindingFlags.Public ||| BindingFlags.Static ||| BindingFlags.DeclaredOnly)
+              |> Array.filter (fun mi ->
+                not (mi.Name.StartsWith "get_")
+                && not (mi.Name.StartsWith "set_")
+                && not (mi.Name.StartsWith "<")
+                && not (mi.IsSpecialName))
+            let nestedTypes = m.GetNestedTypes() |> Array.length
+            publicMethods.Length = 0 && nestedTypes > 0)
+        printfn "  Type-bag modules (types only, no functions): %d" typeBagModules.Length
+        typeBagModules |> Array.iter (fun m -> printfn "    - %s" m.FullName)
+        // Track — these are candidates for namespace conversion
+        (typeBagModules.Length, 30)
+        |> Expect.isLessThanOrEqual
+          (sprintf "should have ≤30 type-bag modules (found %d)" typeBagModules.Length)
+
+      testCase "combined module+type count doesn't grow"
+      <| fun _ ->
+        let coreModules =
+          coreAssembly.GetTypes()
+          |> Array.filter (fun t ->
+            FSharp.Reflection.FSharpType.IsModule t
+            && not (t.Name.StartsWith "<")
+            && not (t.Name.Contains "@")
+            && not t.IsNested)
+          |> Array.length
+        let cliModules =
+          cliAssembly.GetTypes()
+          |> Array.filter (fun t ->
+            FSharp.Reflection.FSharpType.IsModule t
+            && not (t.Name.StartsWith "<")
+            && not (t.Name.Contains "@")
+            && not t.IsNested)
+          |> Array.length
+        let total = coreModules + cliModules
+        printfn "  Total modules (Core + CLI): %d" total
+        // Combined ceiling — should only go DOWN
+        (total, 250)
+        |> Expect.isLessThanOrEqual
+          (sprintf "combined module count should be ≤250 (currently %d)" total)
+    ]
   ]
