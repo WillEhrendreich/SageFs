@@ -49,5 +49,9 @@ internal class SageFsExtension : Extension
       sub.Start();
       return sub;
     });
+
+    // Daemon startup health check: StatusBarManager (ExtensionPart) handles this via
+    // constructor-injected SageFsClient and fires a 2-second delayed ping in InitializeAsync,
+    // writing the result ("✓ connected" / "⚠ not running") to the SageFs output channel.
   }
 }

@@ -161,6 +161,12 @@ jobs:
     - name: Build Visual Studio extension
       run: dotnet build sagefs-vs/SageFs.VisualStudio/SageFs.VisualStudio.csproj -c Release
 
+    - name: Run VS extension Editor tests
+      run: dotnet test sagefs-vs/SageFs.VisualStudio.Editor.Tests/SageFs.VisualStudio.Editor.Tests.csproj --nologo --logger "console;verbosity=minimal"
+
+    - name: Run VS extension Core tests
+      run: dotnet test sagefs-vs/SageFs.VisualStudio.Core.Tests/SageFs.VisualStudio.Core.Tests.fsproj --nologo --logger "console;verbosity=minimal"
+
   publish:
     needs: [build, extensions, vs-extension, benchmarks]
     runs-on: windows-latest

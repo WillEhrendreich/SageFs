@@ -1,0 +1,716 @@
+# SageFs Domain Model Type Algebra - Comprehensive Deep Dive
+
+## 1. DISCRIMINATED UNIONS (DUs) IN SageFs.Core
+
+### Editor Layer (RenderPipeline.fs)
+**EditorAction** (26 cases) - Every possible user action:
+  • InsertChar of char
+  • DeleteBackward, DeleteForward, DeleteWord, DeleteToEndOfLine
+  • MoveCursor of Direction
+  • SetCursorPosition of line * col
+  • MoveWordForward, MoveWordBackward, MoveToLineStart, MoveToLineEnd
+  • SelectAll, SelectWord
+  • TriggerCompletion, AcceptCompletion, DismissCompletion
+  • NextCompletion, PreviousCompletion
+  • HistoryPrevious, HistoryNext, HistorySearch of string
+  • NewLine, Submit, Cancel, Undo, Redo
+  • SwitchMode of EditMode
+  • ListSessions, SwitchSession of string, CreateSession of projects
+  • ConfigureWarmupAutoOpen, StopSession of string, ToggleSessionPanel
+  • ResetSession, HardResetSession, SmartReset
+  • SessionNavUp, SessionNavDown, SessionSelect, SessionDelete, SessionStopOthers
+  • SessionSetIndex of int, SessionCycleNext, SessionCyclePrev
+  • ClearOutput, PromptChar of char, PromptBackspace, PromptConfirm, PromptCancel
+
+**Direction** - Cursor movement: Up | Down | Left | Right
+
+**HistoryDirection** - Temporal navigation: Previous | Next
+
+**EditMode** - Vi-style modes: Normal | Insert | Visual
+
+**UiAction** (superset of EditorAction for UI renderers):
+  • Editor of EditorAction (wraps editor actions)
+  • Quit, CycleFocus, FocusDir of Direction, ScrollUp, ScrollDown, Redraw
+  • FontSizeUp, FontSizeDown, TogglePane of string, LayoutPreset of string
+  • ResizeH of int, ResizeV of int, ResizeR of int
+  • CycleTheme, HotReloadWatchAll, HotReloadUnwatchAll
+  • EnableLiveTesting, DisableLiveTesting, CycleRunPolicy
+  • ToggleCoverage, TimeTravelBack, TimeTravelForward, TimeTravelGoLive
+  • CycleDensity
+
+**UiDensity** - Status bar information levels: Minimal | Normal | Full
+  • cycle: Minimal → Normal → Full → Minimal
+  • label: "minimal" | "normal" | "full"
+
+**RegionFlags** - [<Flags>] None | Clickable | Scrollable | Focusable | DrawBorder | LiveUpdate | Collapsible | Draggable
+
+### Editor State (Editor.fs)
+**BufferError** - Buffer construction errors:
+  • EmptyLines
+  • CursorOutOfBounds of cursor * lineCount * maxCol
+
+**EditorEffect** - Side effects as data (never executed, described):
+  • RequestCompletion of text * cursor
+  • RequestEval of code
+  • RequestHistory of direction
+  • RequestSessionList
+  • RequestSessionSwitch of sessionId
+  • RequestSessionCreate of projects
+  • RequestConfigureWarmupAutoOpen of workingDir
+  • RequestSessionStop of sessionId
+  • RequestReset, RequestHardReset, RequestSmartReset
+
+**PromptPurpose** - Inline prompt types: CreateSessionDir
+
+### Session Layer (SessionState.fs)
+**SessionState** - Lifecycle states (determines tool availability):
+  • Uninitialized, WarmingUp, Ready, Evaluating, Faulted
+
+### Display Layer (SessionDisplay.fs)
+**SessionDisplayStatus** - What user sees:
+  • Running, Starting, Errored of reason, Suspended, Stale, Restarting
+
+**ActiveSession** - Focus state:
+  • AwaitingSession (no session yet)
+  • Viewing of SessionId (actively viewing)
+
+**WatchStatus** - File watcher status:
+  • Active of watchedFiles
+  • Paused, Disabled
+
+### Event System (SageFsEvent.fs)
+**SageFsEvent** - All state-changing events:
+  • EvalStarted of sessionId * code
+  • EvalCompleted of sessionId * output * diagnostics
+  • EvalFailed of sessionId * error
+  • EvalCancelled of sessionId
+  • OutputEmitted of OutputLine
+  • SessionCreated of SessionSnapshot
+  • SessionsRefreshed of SessionSnapshot list
+  • SessionStatusChanged of sessionId * status
+  • SessionSwitched of fromId option * toId
+  • SessionStopped of sessionId
+  • SessionStale of sessionId * inactiveDuration
+  • FileChanged of path * action
+  • FileReloaded of path * duration * result
+  • CompletionReady of items
+  • DiagnosticsUpdated of sessionId * diagnostics
+  • WarmupProgress, WarmupCompleted, WarmupContextUpdated
+  • TestLocationsDetected, TestsDiscovered, TestRunStarted, TestResultsBatch, TestRunCompleted
+  • LiveTestingEnabled, LiveTestingDisabled
+  • AffectedTestsComputed, CoverageUpdated, CoverageBitmapCollected
+  • RunPolicyChanged, ProvidersDetected, TestCycleTimingRecorded
+  • RunTestsRequested, AssemblyLoadFailed, InstrumentationMapsReady
+
+**FileWatchAction** - File system events: Changed | Created | Deleted | Renamed
+
+**OutputKind** - REPL output types: Result | Error | Info | System
+
+### Worker Protocol (WorkerProtocol.fs)
+**SessionStatus** - Internal worker state:
+  • Starting, Ready, Evaluating
+  • Building of buildReason (multi-second compilation)
+  • Faulted, Restarting, Stopped
+
+**WorkerMessage** - Daemon → Worker protocol:
+  • EvalCode of code * replyId
+  • CheckCode of code * replyId
+  • TypeCheckWithSymbols of code * filePath * replyId
+  • GetCompletions of code * cursorPos * replyId
+  • CancelEval
+  • LoadScript of filePath * replyId
+  • ResetSession of replyId
+  • HardResetSession of rebuild * replyId
+  • GetStatus of replyId
+  • RunTests of tests * maxParallelism * replyId
+  • GetTestDiscovery, GetInstrumentationMaps, Shutdown
+
+### Error System (SageFsError.fs)
+**SageFsError** - Unified error type (47 cases):
+  • ToolNotAvailable of toolName * currentState * availableTools
+  • SessionNotFound of sessionId
+  • NoActiveSessions, AmbiguousSessions of descriptions
+  • SessionCreationFailed, SessionStopFailed, SessionSwitchFailed (reasons)
+  • WorkerCommunicationFailed, WorkerSpawnFailed, WorkerTimeout, WorkerHttpError
+  • PipeClosed
+  • EvalFailed, ResetFailed, HardResetFailed
+  • ScriptLoadFailed, CheckFailed, CompletionFailed, CancelFailed
+  • WarmupOpenFailed, WarmupContextFailed
+  • HotReloadFailed, HotReloadStateError
+  • RestartLimitExceeded of restartCount * windowMinutes
+  • DaemonStartFailed, DaemonNotRunning
+  • PortInUse of port
+  • SseConnectionError, JsonParseError, Unexpected of exn
+
+  Module helpers: describe, toLogLevel, toHttpStatus, isClientError, isServerError, isGatewayError, isInfraError
+
+### Eval Pipeline (EvalPipeline.fs)
+**StageOutcome** - Pipeline stage result: Succeeded | Failed of SageFsError
+
+### Restart Policy (RestartPolicy.fs)
+**Decision** - Restart supervisor decisions:
+  • Restart of delay
+  • GiveUp of SageFsError
+
+### Smart Reset (SmartReset.fs)
+**SmartReset.Outcome** - One-button reset escalation:
+  • SoftResetSucceeded
+  • EscalatedToHardReset of message
+  • AllResetsFailed of softError * hardError
+
+### Live Testing (Features/LiveTestingTypes.fs)
+
+**AssemblyLoadError** - Assembly loading diagnostics:
+  • FileNotFound of path * message
+  • LoadFailed of path * message
+  • BadImage of path * message
+
+**TestFramework** - Framework detection:
+  • Expecto, XUnit, NUnit, MSTest, TUnit
+  • Unknown of string
+
+**TestCategory** - Test categorization:
+  • Unit, Integration, Browser, Benchmark, Architecture, Property
+  • Custom of string
+
+**RunPolicy** - When tests execute:
+  • OnEveryChange, OnSaveOnly, OnDemand, Disabled
+
+**RunTrigger** - What triggered a run:
+  • Keystroke, FileSave, ExplicitRun
+
+**TestOrigin** - Where test was discovered:
+  • SourceMapped of file * line
+  • ReflectionOnly
+
+**TestFailure** - How a test failed:
+  • AssertionFailed of message
+  • ExceptionThrown of message * stackTrace
+  • TimedOut of after
+
+**TestResult** - Final test outcome:
+  • Passed of duration
+  • Failed of failure * duration
+  • Skipped of reason
+  • NotRun
+
+**RunHistory** - Test execution history:
+  • NeverRun
+  • PreviousRun of duration
+
+**TestRunStatus** - UI-level test lifecycle (8 states):
+  • Detected, Queued, Running
+  • Passed of duration, Failed of failure * duration
+  • Skipped of reason
+  • Stale, PolicyDisabled
+
+**ProviderDescription** - Test provider configuration:
+  • AttributeBased of AttributeProviderDescription
+  • Custom of CustomProviderDescription
+
+**SymbolUseKind** - FCS symbol usage:
+  • Definition, Reference
+
+**CoverageHealth** - Coverage quality:
+  • AllPassing, SomeFailing
+
+**CoverageStatus** - Line coverage state:
+  • Covered of testCount * health
+  • NotCovered, Pending
+
+**LineCoverage** - IL-level branch coverage:
+  • FullyCovered
+  • PartiallyCovered of covered * total
+  • NotCovered
+
+**CoverageDetail** - Symbol coverage details:
+  • NotCovered, Pending
+  • Covered of tests (array of CoveringTestInfo)
+
+**GutterIcon** - Gutter visual indicators (8 types):
+  • TestDiscovered, TestPassed, TestFailed, TestRunning
+  • TestSkipped, TestFlaky
+  • Covered, NotCovered
+  Module: toSymbol (Unicode), toFileMarker, toString, toAnsiColor, toEmoji
+  Module: fromTestStatus, fromCoverageStatus
+
+**TestCycleDepth** - Instrumentation depth:
+  • TreeSitterOnly of treeSitter
+  • ThroughFcs of treeSitter * fcs
+  • ThroughExecution of treeSitter * fcs * execution
+
+**LiveTestingActivation** - Feature toggle: Active | Inactive
+
+**CoverageVisibility** - UI toggle: Shown | Hidden
+
+**TestOutcome** - Binary result for flaky detection: Pass | Fail
+
+**TestRunPhase** - Run generation tracking:
+  • Idle
+  • Running of generation
+  • RunningButEdited of generation
+
+**ResultFreshness** - Why results arrived:
+  • Fresh, StaleCodeEdited, StaleWrongGeneration
+
+### Hot Reload (Middleware/HotReloading.fs)
+**Event** - Hot reload events (check file for details)
+
+---
+
+## 2. RECORD TYPES IN SageFs.Core
+
+### Render Pipeline Records
+**KeyCombo** - { Key: ConsoleKey; Modifiers: ConsoleModifiers; Char: char option }
+
+**RegionCursor** - { Line: int; Col: int }
+
+**RenderRegion** - {
+    Id: string
+    Flags: RegionFlags
+    Content: string
+    Affordances: Affordance list
+    Cursor: RegionCursor option
+    Completions: CompletionOverlay option
+    LineAnnotations: LineAnnotation array
+}
+
+**CompletionOverlay** - { Items: string list; SelectedIndex: int }
+
+**Affordance** - {
+    Action: EditorAction
+    Label: string
+    KeyHint: KeyCombo option
+    Enabled: bool
+}
+
+### Editor Records
+**CursorPosition** - { Line: int; Column: int }
+
+**Selection** - { Start: CursorPosition; End: CursorPosition }
+
+**CompletionItem** - { Label: string; Kind: string; Detail: string option }
+
+**CompletionMenu** - {
+    Items: CompletionItem list
+    SelectedIndex: int
+    FilterText: string
+}
+
+**HistoryState** - { Entries: string list; Position: int; Draft: string }
+
+**PromptState** - {
+    Label: string
+    Input: string
+    Purpose: PromptPurpose
+}
+
+**ValidatedBuffer** - { Lines: string list; Cursor: CursorPosition }
+  Invariants: never empty, cursor always in bounds
+
+**EditorState** (full state) - {
+    Buffer: ValidatedBuffer
+    Selection: Selection option
+    CompletionMenu: CompletionMenu option
+    History: HistoryState
+    Mode: EditMode
+    SessionPanelVisible: bool
+    SelectedSessionIndex: int option
+    Prompt: PromptState option
+}
+
+### Session Records
+**SessionSnapshot** - {
+    Id: SessionId
+    Name: string option
+    Projects: string list
+    Status: SessionDisplayStatus
+    LastActivity: DateTime
+    EvalCount: int
+    UpSince: DateTime
+    IsActive: bool
+    WorkingDirectory: string
+}
+
+**SessionRegistryView** - {
+    Sessions: SessionSnapshot list
+    ActiveSessionId: ActiveSession
+    TotalEvals: int
+    WatchStatus: WatchStatus option
+    Standby: StandbyInfo
+}
+
+### Output Records
+**OutputLine** - {
+    Kind: OutputKind
+    Text: string
+    Timestamp: DateTime
+    SessionId: string
+}
+
+**SageFsView** - {
+    Buffer: ValidatedBuffer
+    CompletionMenu: CompletionMenu option
+    ActiveSession: SessionSnapshot
+    RecentOutput: OutputLine list
+    Diagnostics: Diagnostic list
+    WatchStatus: WatchStatus option
+}
+
+### Restart Policy Records (RestartPolicy.fs)
+**RestartPolicy.Policy** - {
+    MaxRestarts: int
+    BackoffBase: TimeSpan
+    BackoffMax: TimeSpan
+    ResetWindow: TimeSpan
+}
+
+**RestartPolicy.State** - {
+    RestartCount: int
+    LastRestartAt: DateTime option
+    WindowStart: DateTime option
+}
+
+### Live Testing Records
+
+**TestId** - [<Struct>] single-case DU wrapping string
+
+**SourceTestLocation** - {
+    AttributeName: string
+    FunctionName: string
+    FilePath: string
+    Line: int
+    Column: int
+}
+
+**TestCase** - {
+    Id: TestId
+    FullName: string
+    DisplayName: string
+    Origin: TestOrigin
+    Labels: string list
+    Framework: TestFramework
+    Category: TestCategory
+}
+
+**TestRunResult** - {
+    TestId: TestId
+    TestName: string
+    Result: TestResult
+    Timestamp: DateTimeOffset
+    Output: string option
+}
+
+**TestStatusEntry** - {
+    TestId: TestId
+    DisplayName: string
+    FullName: string
+    Origin: TestOrigin
+    Framework: TestFramework
+    Category: TestCategory
+    CurrentPolicy: RunPolicy
+    Status: TestRunStatus
+    PreviousStatus: TestRunStatus
+}
+
+**AssemblyInfo** - {
+    Name: string
+    Location: string
+    ReferencedAssemblies: AssemblyName array
+}
+
+**CoverageAnnotation** - {
+    Symbol: string
+    FilePath: string
+    DefinitionLine: int
+    Status: CoverageStatus
+}
+
+**SequencePoint** - {
+    File: string
+    Line: int
+    Column: int
+    EndLine: int
+    EndColumn: int
+    BranchId: int
+}
+
+**CoverageState** - { Slots: SequencePoint array; Hits: bool array }
+
+**InstrumentationMap** - {
+    Slots: SequencePoint array
+    TotalProbes: int
+    TrackerTypeName: string
+    HitsFieldName: string
+}
+
+**TestDependencyGraph** - {
+    SymbolToTests: Map<string, TestId array>
+    TransitiveCoverage: Map<string, TestId array>
+    PerFileIndex: Map<string, Map<string, TestId array>>
+    SourceVersion: int
+}
+
+**LineAnnotation** - [<Struct>] {
+    Line: int
+    Icon: GutterIcon
+    Tooltip: string
+}
+
+**TestSummary** - {
+    Total: int
+    Passed: int
+    Failed: int
+    Stale: int
+    Running: int
+    Disabled: int
+    Enabled: bool
+}
+
+**RunGeneration** - [<Struct>] single-case DU wrapping int
+
+**TestCycleTiming** - {
+    Depth: TestCycleDepth
+    TotalTests: int
+    AffectedTests: int
+    Trigger: RunTrigger
+    Timestamp: DateTimeOffset
+}
+
+**ResultWindow** - {
+    Outcomes: TestOutcome array
+    WriteIndex: int
+    Count: int
+    WindowSize: int
+}
+
+**CoveringTestInfo** - {
+    TestId: TestId
+    DisplayName: string
+    Result: TestResult option
+}
+
+**CoverageBitmap** - {
+    Bits: uint64 array
+    Count: int
+}
+
+### Worker Protocol Records
+**WorkerDiagnostic** - {
+    Severity: DiagnosticSeverity
+    Message: string
+    StartLine, StartColumn, EndLine, EndColumn: int
+}
+
+### Events Records
+**EventSource** - Console | McpAgent of name | FileSync of name | System
+
+**DiagnosticEvent** - {
+    Message: string
+    Severity: DiagnosticSeverity
+    StartLine, StartColumn, EndLine, EndColumn: int
+}
+
+**CompletionItemEvent** - {
+    Label: string
+    Kind: string
+    Detail: string option
+}
+
+**EventMetadata** - {
+    Source: EventSource
+    CorrelationId: Guid option
+}
+
+---
+
+## 3. TYPE HIERARCHY & CONNECTIONS
+
+### Action Flow
+  EditorAction
+    ↓ (processed by)
+  EditorState.update
+    ↓ (produces)
+  EditorEffect list
+    ↓ (interpreted as)
+  SageFsEvent
+    ↓ (triggers state change)
+  ElmLoop update
+
+### Error Flow
+  All operations return: Result<'T, SageFsError>
+  SageFsError has classification:
+    - isClientError (4xx - bad request)
+    - isServerError (5xx - internal failure)
+    - isGatewayError (502/504 - worker unreachable)
+    - isInfraError (409 - system conflict)
+  Mapped to HTTP status codes via toHttpStatus
+
+### Session Lifecycle
+  SessionState (capability model):
+    Uninitialized → WarmingUp → Ready → Evaluating ↔ Ready
+                                    ↘ Faulted
+  SessionStatus (internal detail):
+    Starting → Ready → Evaluating/Building ↔ Ready
+                ↘ Faulted / Restarting ↘ Stopped
+  SessionDisplayStatus (UI):
+    Running, Starting, Errored, Suspended, Stale, Restarting
+
+### Test Execution Phases
+  RunPolicy (policy per category) → RunTrigger (what fired) → TestRunStatus (UI state)
+  TestRunPhase (generation tracking):
+    Idle ↔ Running(gen) or RunningButEdited(gen)
+  ResultFreshness classifies results: Fresh | StaleCodeEdited | StaleWrongGeneration
+
+### Live Testing State Machine
+  LiveTestingActivation.Active/Inactive
+    ↓
+  TestRunPhase (generation-based)
+    ↓
+  TestRunStatus per test
+    ↓
+  GutterIcon for rendering
+
+### UiDensity Cycling
+  Minimal → Normal → Full → Minimal
+
+---
+
+## 4. SIGNAL/EVENT TYPES FOR INTER-COMPONENT COMMUNICATION
+
+### Primary Event Bus: SageFsEvent
+  Driving all Elm loop updates. Routes to:
+  - Editor state
+  - Session registry
+  - Output buffer
+  - Live testing state
+  - Diagnostics store
+
+### Worker Protocol Messages
+  WorkerMessage (daemon → worker):
+    - EvalCode, CheckCode, TypeCheckWithSymbols
+    - GetCompletions, LoadScript
+    - RunTests, GetTestDiscovery, GetInstrumentationMaps
+    - ResetSession, HardResetSession
+    - CancelEval, GetStatus, Shutdown
+
+### Pub/Sub Events (Features/Events.fs)
+  SageFsEvent (serializable for event sourcing):
+    - SessionStarted, SessionWarmUpCompleted, SessionReady, SessionFaulted
+    - EvalRequested, EvalCompleted, EvalFailed, EvalTraced
+    - DiagnosticsChecked, DiagnosticsCleared
+    - ScriptLoaded, ScriptLoadFailed
+    - McpInputReceived, McpOutputSent
+    - DaemonSessionCreated, DaemonSessionStopped, DaemonSessionSwitched
+
+### File System Events
+  FileWatchAction: Changed | Created | Deleted | Renamed
+
+### Hot Reload Events (Middleware/HotReloading.fs)
+  Event type (specific structure in file)
+
+### Device/Input Events (TerminalUI.fs)
+  MouseEvent, InputEvent
+
+### Callback Pattern (DaemonClient.fs)
+  StateCallback: StateEvent → RenderRegion list → unit
+
+### Push Notifications (McpPushNotifications.fs)
+  PushEvent, AccumulatedEvent, EventAccumulator
+
+### Jupyter Kernel Events (JupyterKernel.fs)
+  KernelEvent (within IOPubMessage)
+  MessageType, MessageHeader, MessageContent
+
+---
+
+## 5. KEY TYPE PATTERNS
+
+### Single-Case DUs (Refinement Types)
+  SessionId (8-char hex string validation)
+  TestId (SHA256-based stable identity)
+  RunGeneration (versioning for test runs)
+
+### Flags Enums
+  RegionFlags: [<Flags>] with composition
+
+### Result-Based Error Handling
+  All domain functions: Result<'T, SageFsError>
+  Comprehensive error classification via module helpers
+
+### State Machines
+  SessionState (capability model - 5 states)
+  SessionStatus (worker detail - 7 states)
+  SessionDisplayStatus (UI rendering - 6 states)
+  TestRunPhase (generation-based idle/running tracking)
+  LiveTestingActivation (binary active/inactive)
+
+### Circular Buffers
+  OutputRingBuffer (zero-allocation O(1) add)
+  ResultWindow (flaky detection sliding window)
+  CoverageBitmap (packed uint64 array)
+
+### Staged Computation
+  EditorUpdate.update: returns new state + effect list
+  EvalPipeline: tracks stage names, elapsed times, outcomes
+  SmartReset: soft → hard escalation
+
+### Version Tracking
+  RunGeneration (monotonically increasing)
+  OutputRingBuffer.Version (on every mutation)
+  CoverageState (instrumentation generation)
+
+---
+
+## 6. TYPE SERIALIZATION & WIRE CONTRACTS
+
+### WorkerProtocol - Daemon ↔ Worker
+  Defined in WorkerProtocol.fs
+  Core types must be JSON-serializable:
+    SessionId (8-char hex string)
+    WorkerMessage (union with data)
+    WorkerResponse (inferred from usage)
+    WorkerDiagnostic (flattened diagnostic)
+    Features.LiveTesting types
+
+### SageFsEvent (Features/Events.fs) - Event Sourcing
+  Serializable event log format:
+    SessionStarted, SessionWarmUpCompleted, EvalCompleted, etc.
+    Used for replay, audit, and daemon persistence
+
+### JSON Serialization Points
+  MCP protocol endpoints
+  HTTP API responses
+  Event store persistence
+  UI state snapshots
+
+---
+
+## Summary: The Type Algebra
+
+SageFs uses a **pure algebraic** type system:
+
+1. **Actions** (EditorAction, UiAction) → immutable user intent
+2. **Effects** (EditorEffect, SageFsEvent) → side-effect descriptions
+3. **State** (EditorState, SessionState, LiveTestState) → immutable snapshots
+4. **Errors** (SageFsError) → unified result type with classification
+5. **Events** (SageFsEvent) → domain events for state transitions
+
+**Message Flow**:
+  User Input → EditorAction → EditorEffect → SageFsEvent → State Update → Render
+
+**Error Flow**:
+  Any operation: Result<'T, SageFsError>
+  Classification: isClientError | isServerError | isGatewayError | isInfraError
+  HTTP mapping: toHttpStatus
+
+**Session Lifecycle**:
+  Three-level abstraction:
+    - SessionState (capability model)
+    - SessionStatus (worker state)
+    - SessionDisplayStatus (UI model)
+
+**Test Execution**:
+  RunPolicy × RunTrigger → TestRunStatus → GutterIcon
+  Generation-based phase tracking prevents race conditions
+

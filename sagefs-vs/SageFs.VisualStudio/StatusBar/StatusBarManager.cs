@@ -12,19 +12,46 @@ using Microsoft.VisualStudio.Extensibility.Documents;
 /// Subscribes to daemon connection state and formats status bar text using
 /// <see cref="FormatStatusBarText"/>. The same pure formatting logic exists in
 /// <c>SageFs.VisualStudio.Editor.StatusBarText</c> (net472) for unit-test coverage.
+/// On initialization, performs a one-time daemon health check and reports the result
+/// to the SageFs output channel.
 /// </summary>
 [VisualStudioContribution]
 internal class StatusBarManager : ExtensionPart
 {
+  private readonly Core.SageFsClient _client;
   private bool _connected;
   private int _passingTests;
   private int _latencyMs;
   private OutputChannel? _output;
 
+  public StatusBarManager(Core.SageFsClient client) => _client = client;
+
   protected override async Task InitializeAsync(CancellationToken ct)
   {
     _output = await Extensibility.Views().Output.CreateOutputChannelAsync("SageFs", ct);
     await base.InitializeAsync(ct);
+    // Fire-and-forget: wait for VS to settle, then report daemon status.
+    _ = Task.Run(() => RunStartupHealthCheckAsync(), CancellationToken.None);
+  }
+
+  private async Task RunStartupHealthCheckAsync()
+  {
+    try
+    {
+      await Task.Delay(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
+      var alive = await _client.PingAsync(CancellationToken.None).ConfigureAwait(false);
+      if (_output is not null)
+      {
+        var msg = alive
+          ? "✓ SageFs daemon connected."
+          : "⚠ SageFs daemon is not running. Use Extensions → SageFs → Start Daemon to start it.";
+        await _output.WriteLineAsync(msg);
+      }
+    }
+    catch (Exception ex)
+    {
+      System.Diagnostics.Debug.WriteLine($"[SageFs] Startup health check failed: {ex.Message}");
+    }
   }
 
   /// <summary>

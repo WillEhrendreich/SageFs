@@ -553,11 +553,15 @@ type SageFsClient() =
 
   // ── Completions ──────────────────────────────────────────
 
-  member this.GetCompletionsAsync(code: string, cursorPosition: int, ct: CancellationToken) = task {
+  member this.GetCompletionsAsync(code: string, cursorPosition: int, workingDirectory: string, ct: CancellationToken) = task {
     try
       let json =
-        sprintf """{"code":%s,"cursor_position":%d,"working_directory":""}"""
-          (JsonSerializer.Serialize code) cursorPosition
+        if String.IsNullOrEmpty workingDirectory then
+          sprintf """{"code":%s,"cursor_position":%d}"""
+            (JsonSerializer.Serialize code) cursorPosition
+        else
+          sprintf """{"code":%s,"cursor_position":%d,"working_directory":%s}"""
+            (JsonSerializer.Serialize code) cursorPosition (JsonSerializer.Serialize workingDirectory)
       let content = new StringContent(json, Encoding.UTF8, "application/json")
       let! resp =
         http.PostAsync(

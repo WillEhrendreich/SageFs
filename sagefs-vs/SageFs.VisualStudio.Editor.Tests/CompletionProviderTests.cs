@@ -1,5 +1,7 @@
 using FluentAssertions;
 using SageFs.VisualStudio.Editor.Completions;
+using System;
+using System.Threading;
 using Xunit;
 
 namespace SageFs.VisualStudio.Editor.Tests;
@@ -101,5 +103,84 @@ public sealed class CompletionProviderTests
     {
         SageFsCompletionSource.WindowHalfSize.Should().Be(1024,
             because: "2048-char window (2 × 1024) balances completeness vs request payload size");
+    }
+
+    // ── BuildRequestBody ─────────────────────────────────────────────────────
+
+    [Fact]
+    public void BuildRequestBody_WithWorkingDirectory_IncludesField()
+    {
+        var body = SageFsCompletionSource.BuildRequestBody("let x = 1", 9, @"C:\projects\myapp");
+
+        body.Should().Contain("\"working_directory\"",
+            because: "working_directory must be present when a file path is available");
+        body.Should().Contain(@"C:\\projects\\myapp",
+            because: "the serialized path should appear in the JSON body");
+        body.Should().Contain("\"cursor_position\":9",
+            because: "cursor position must always be present");
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    public void BuildRequestBody_WithoutWorkingDirectory_OmitsField(string? workingDir)
+    {
+        var body = SageFsCompletionSource.BuildRequestBody("let x = 1", 5, workingDir);
+
+        body.Should().NotContain("working_directory",
+            because: "working_directory must be omitted when the file path is unknown");
+        body.Should().Contain("\"cursor_position\":5",
+            because: "cursor position must always be present");
+    }
+
+    // ── ComposeLinkedTimeout ──────────────────────────────────────────────────
+
+    [Fact]
+    public void ComposeLinkedTimeout_ReturnsDistinctLinkedAndTimeoutSources()
+    {
+        using var outer = new CancellationTokenSource();
+        var (linked, timeout) = SageFsCompletionSource.ComposeLinkedTimeout(
+            outer.Token, TimeSpan.FromSeconds(30));
+        using (linked)
+        using (timeout)
+        {
+            linked.Should().NotBeSameAs(timeout,
+                because: "linked and timeout are independent CancellationTokenSources");
+            linked.Token.CanBeCanceled.Should().BeTrue(
+                because: "the linked token must be cancellable");
+        }
+    }
+
+    [Fact]
+    public void ComposeLinkedTimeout_OuterCancelPropagatesIntoLinked()
+    {
+        using var outer = new CancellationTokenSource();
+        var (linked, timeout) = SageFsCompletionSource.ComposeLinkedTimeout(
+            outer.Token, TimeSpan.FromSeconds(30));
+        using (linked)
+        using (timeout)
+        {
+            outer.Cancel();
+            linked.Token.IsCancellationRequested.Should().BeTrue(
+                because: "cancelling the outer token must cancel the linked token");
+        }
+    }
+
+    [Fact]
+    public void ComposeLinkedTimeout_TimeoutCancelPropagatesIntoLinked()
+    {
+        using var outer = new CancellationTokenSource();
+        var (linked, timeout) = SageFsCompletionSource.ComposeLinkedTimeout(
+            outer.Token, TimeSpan.FromMilliseconds(50));
+        using (linked)
+        using (timeout)
+        {
+            // Wait slightly longer than the timeout window
+            Thread.Sleep(200);
+            timeout.Token.IsCancellationRequested.Should().BeTrue(
+                because: "the timeout source must self-cancel after the duration elapses");
+            linked.Token.IsCancellationRequested.Should().BeTrue(
+                because: "the linked token must cancel when the timeout fires");
+        }
     }
 }

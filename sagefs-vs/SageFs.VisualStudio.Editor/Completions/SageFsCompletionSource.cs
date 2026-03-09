@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.ComponentModel.Composition;
+using System.IO;
 using System.Net.Http;
 using System.Text;
 using System.Text.Json;
@@ -26,6 +27,9 @@ internal sealed class SageFsCompletionSourceProvider : IAsyncCompletionSourcePro
     private readonly string? _baseUrl;
     private readonly HttpClient _http;
 
+    [Import]
+    internal ITextDocumentFactoryService? TextDocumentFactoryService { get; set; }
+
     [ImportingConstructor]
     public SageFsCompletionSourceProvider()
     {
@@ -36,7 +40,14 @@ internal sealed class SageFsCompletionSourceProvider : IAsyncCompletionSourcePro
     public IAsyncCompletionSource? GetOrCreate(ITextView textView)
     {
         if (_baseUrl == null) return null;
-        return new SageFsCompletionSource(_http, _baseUrl);
+        string? workingDir = null;
+        if (TextDocumentFactoryService is { } factory &&
+            factory.TryGetTextDocument(textView.TextBuffer, out var doc) &&
+            doc?.FilePath is { } filePath)
+        {
+            workingDir = Path.GetDirectoryName(filePath);
+        }
+        return new SageFsCompletionSource(_http, _baseUrl, workingDir);
     }
 }
 
@@ -49,11 +60,13 @@ internal sealed class SageFsCompletionSource : IAsyncCompletionSource
 
     private readonly HttpClient _http;
     private readonly string _baseUrl;
+    private readonly string? _workingDirectory;
 
-    public SageFsCompletionSource(HttpClient http, string baseUrl)
+    public SageFsCompletionSource(HttpClient http, string baseUrl, string? workingDirectory = null)
     {
         _http = http;
         _baseUrl = baseUrl;
+        _workingDirectory = workingDirectory;
     }
 
     // ── InitializeCompletion ─────────────────────────────────────────────────
@@ -91,6 +104,8 @@ internal sealed class SageFsCompletionSource : IAsyncCompletionSource
         if (cancellationToken.IsCancellationRequested)
             return CompletionContext.Empty;
 
+        CancellationTokenSource? timeoutCts = null;
+        CancellationTokenSource? linkedCts = null;
         try
         {
             var snapshot = triggerLocation.Snapshot;
@@ -101,18 +116,15 @@ internal sealed class SageFsCompletionSource : IAsyncCompletionSource
             var end = Math.Min(fullText.Length, start + 2 * WindowHalfSize);
             var window = fullText.Substring(start, end - start);
 
-            var requestBody = JsonSerializer.Serialize(new
-            {
-                code = window,
-                cursor_position = cursorInWindow,
-                working_directory = ""
-            });
-
+            var requestBody = BuildRequestBody(window, cursorInWindow, _workingDirectory);
             var content = new StringContent(requestBody, Encoding.UTF8, "application/json");
+
+            (linkedCts, timeoutCts) = ComposeLinkedTimeout(cancellationToken, TimeSpan.FromSeconds(3));
+
             var response = await _http.PostAsync(
                 _baseUrl.TrimEnd('/') + "/dashboard/completions",
                 content,
-                cancellationToken).ConfigureAwait(false);
+                linkedCts.Token).ConfigureAwait(false);
 
             var body = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
             var items = ParseCompletionItems(body, this);
@@ -120,6 +132,11 @@ internal sealed class SageFsCompletionSource : IAsyncCompletionSource
             return items.Length > 0
                 ? new CompletionContext(items)
                 : CompletionContext.Empty;
+        }
+        catch (OperationCanceledException) when (timeoutCts?.IsCancellationRequested == true)
+        {
+            // 3-second timeout fired — return empty silently
+            return CompletionContext.Empty;
         }
         catch (HttpRequestException) { return CompletionContext.Empty; }
         catch (TaskCanceledException) { return CompletionContext.Empty; }
@@ -129,6 +146,11 @@ internal sealed class SageFsCompletionSource : IAsyncCompletionSource
             System.Diagnostics.Debug.WriteLine(
                 $"[SageFsCompletionSource] Error fetching completions: {ex.GetType().Name}: {ex.Message}");
             return CompletionContext.Empty;
+        }
+        finally
+        {
+            linkedCts?.Dispose();
+            timeoutCts?.Dispose();
         }
     }
 
@@ -159,6 +181,35 @@ internal sealed class SageFsCompletionSource : IAsyncCompletionSource
         var start = Math.Max(0, cursor - WindowHalfSize);
         var cursorInWindow = cursor - start;
         return (start, cursorInWindow);
+    }
+
+    /// <summary>
+    /// Builds the JSON request body for the completions endpoint.
+    /// Omits <c>working_directory</c> when it is null or empty.
+    /// </summary>
+    internal static string BuildRequestBody(string code, int cursorPosition, string? workingDirectory)
+    {
+        if (string.IsNullOrEmpty(workingDirectory))
+            return JsonSerializer.Serialize(new { code, cursor_position = cursorPosition });
+        return JsonSerializer.Serialize(new
+        {
+            code,
+            cursor_position = cursorPosition,
+            working_directory = workingDirectory,
+        });
+    }
+
+    /// <summary>
+    /// Creates a linked <see cref="CancellationTokenSource"/> that fires when either
+    /// <paramref name="outer"/> is cancelled or <paramref name="timeoutDuration"/> elapses.
+    /// Both returned sources must be disposed by the caller.
+    /// </summary>
+    internal static (CancellationTokenSource linked, CancellationTokenSource timeout)
+        ComposeLinkedTimeout(CancellationToken outer, TimeSpan timeoutDuration)
+    {
+        var timeoutCts = new CancellationTokenSource(timeoutDuration);
+        var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(outer, timeoutCts.Token);
+        return (linkedCts, timeoutCts);
     }
 
     /// <summary>
