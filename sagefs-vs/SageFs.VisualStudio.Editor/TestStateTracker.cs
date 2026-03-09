@@ -22,11 +22,10 @@ internal sealed class TestStateTracker
     {
         switch (ev.Type)
         {
-            case "tests_discovered":
-                ProcessTestsDiscovered(ev.Data);
-                break;
-            case "test_result_batch":
-                ProcessTestResultBatch(ev.Data);
+            // test_results_batch contains both location (Origin) and outcome (Status) per entry.
+            // A single event replaces both tests_discovered + test_result_batch in one shot.
+            case "test_results_batch":
+                ProcessResultsBatch(ev.Data);
                 break;
             case "session_reset":
             case "session_hard_reset":
@@ -37,65 +36,98 @@ internal sealed class TestStateTracker
         }
     }
 
-    private void ProcessTestsDiscovered(string json)
+    /// <summary>
+    /// Parses the daemon's test_results_batch event.
+    /// JSON shape (mirrors SageFs.VisualStudio.Core.LiveTestingParser):
+    /// {
+    ///   "Entries": [{
+    ///     "TestId":  { "Fields": ["test-id"] },
+    ///     "Origin":  { "Case": "SourceMapped", "Fields": ["path/to/File.fs", 42] },
+    ///     "Status":  { "Case": "Passed", "Fields": ["00:00:00.045"] }
+    ///   }],
+    ///   "Freshness": "Fresh"
+    /// }
+    /// </summary>
+    private void ProcessResultsBatch(string json)
     {
         try
         {
             using var doc = JsonDocument.Parse(json);
-            if (!doc.RootElement.TryGetProperty("tests", out var tests)) return;
-            foreach (var test in tests.EnumerateArray())
+            var root = doc.RootElement;
+            if (!root.TryGetProperty("Entries", out var entries)) return;
+
+            var changed = false;
+            foreach (var entry in entries.EnumerateArray())
             {
-                if (!test.TryGetProperty("id", out var idEl)) continue;
-                var id = idEl.GetString();
+                // ── extract test ID ──────────────────────────────────────────
+                if (!entry.TryGetProperty("TestId", out var testIdEl)) continue;
+                var id = ExtractTestId(testIdEl);
                 if (id == null) continue;
 
+                // ── extract file path + line from Origin ─────────────────────
                 string? filePath = null;
                 int line = 0;
-                if (test.TryGetProperty("filePath", out var fp)) filePath = fp.GetString();
-                if (test.TryGetProperty("line", out var ln)) line = ln.GetInt32();
+                if (entry.TryGetProperty("Origin", out var origin) &&
+                    origin.TryGetProperty("Case", out var originCase) &&
+                    originCase.GetString() == "SourceMapped" &&
+                    origin.TryGetProperty("Fields", out var originFields) &&
+                    originFields.ValueKind == JsonValueKind.Array &&
+                    originFields.GetArrayLength() >= 2)
+                {
+                    if (originFields[0].ValueKind == JsonValueKind.String)
+                        filePath = originFields[0].GetString();
+                    if (originFields[1].ValueKind == JsonValueKind.Number)
+                        line = originFields[1].GetInt32();
+                }
 
+                // Record location (even if Status is missing — test was at least discovered)
                 if (filePath != null && line > 0)
                 {
                     var normalized = NormalizePath(filePath);
                     _testLocations[id] = (normalized, line);
                     _lineStatus.TryAdd((normalized, line), TestStatus.NotRun);
                 }
+
+                // ── extract outcome from Status ──────────────────────────────
+                if (entry.TryGetProperty("Status", out var status) &&
+                    status.TryGetProperty("Case", out var statusCase))
+                {
+                    var outcome = statusCase.GetString() switch
+                    {
+                        "Passed"        => TestStatus.Passed,
+                        "Failed"        => TestStatus.Failed,
+                        "Running"       => TestStatus.Running,
+                        "Stale"         => TestStatus.NotRun,
+                        "Skipped"       => TestStatus.NotRun,
+                        "PolicyDisabled"=> TestStatus.NotRun,
+                        _               => (TestStatus?)null
+                    };
+
+                    if (outcome.HasValue && _testLocations.TryGetValue(id, out var loc))
+                    {
+                        _lineStatus[loc] = outcome.Value;
+                        changed = true;
+                    }
+                }
             }
-            StateChanged?.Invoke(this, EventArgs.Empty);
+
+            if (changed) StateChanged?.Invoke(this, EventArgs.Empty);
         }
         catch { }
     }
 
-    private void ProcessTestResultBatch(string json)
+    private static string? ExtractTestId(JsonElement el)
     {
-        try
-        {
-            using var doc = JsonDocument.Parse(json);
-            if (!doc.RootElement.TryGetProperty("results", out var results)) return;
-            var changed = false;
-            foreach (var result in results.EnumerateArray())
-            {
-                if (!result.TryGetProperty("testId", out var idEl)) continue;
-                var id = idEl.GetString();
-                if (id == null || !_testLocations.TryGetValue(id, out var loc)) continue;
-
-                var status = TestStatus.NotRun;
-                if (result.TryGetProperty("outcome", out var outcome))
-                {
-                    status = outcome.GetString() switch
-                    {
-                        "Passed"  => TestStatus.Passed,
-                        "Failed"  => TestStatus.Failed,
-                        "Running" => TestStatus.Running,
-                        _         => TestStatus.NotRun
-                    };
-                }
-                _lineStatus[loc] = status;
-                changed = true;
-            }
-            if (changed) StateChanged?.Invoke(this, EventArgs.Empty);
-        }
-        catch { }
+        // Shape: {"Fields": ["the-id"]}
+        if (el.TryGetProperty("Fields", out var fields) &&
+            fields.ValueKind == JsonValueKind.Array &&
+            fields.GetArrayLength() >= 1 &&
+            fields[0].ValueKind == JsonValueKind.String)
+            return fields[0].GetString();
+        // Fallback: bare string
+        if (el.ValueKind == JsonValueKind.String)
+            return el.GetString();
+        return null;
     }
 
     public TestStatus GetStatusForLine(string filePath, int lineNumber)

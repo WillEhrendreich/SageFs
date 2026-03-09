@@ -5,6 +5,8 @@
     <IsPackable>false</IsPackable>
   </PropertyGroup>
   <ItemGroup>
+    <!-- Explicit FSharp.Core ensures 10.x wins over FsUnit.xUnit's bundled 5.0.2 (netstandard2.0) -->
+    <PackageReference Include="FSharp.Core" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
     <PackageReference Include="xunit" />
     <PackageReference Include="xunit.runner.visualstudio" PrivateAssets="all" />
@@ -17,6 +19,7 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="LiveTestStateTests.fs" />
+    <Compile Include="GlyphProjectionTests.fs" />
     <Compile Include="LiveTestingParserTests.fs" />
     <Compile Include="TestTreeViewModelTests.fs" />
   </ItemGroup>

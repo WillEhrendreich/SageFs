@@ -261,7 +261,7 @@ let ``formatToolWindowLine with stale but no failures returns warning severity``
 let ``formatToolWindowLine with all passed shows passed count in text`` () =
   let s = { Total = 5; Passed = 5; Failed = 0; Running = 0; Stale = 0; Disabled = 0 }
   let text, _ = TestSummary.formatToolWindowLine s
-  text |> should contain "5 passed"
+  text |> should haveSubstring "5 passed"
 
 [<Fact>]
 let ``formatToolWindowLine with no results shows just total`` () =
@@ -273,8 +273,8 @@ let ``formatToolWindowLine with no results shows just total`` () =
 let ``formatToolWindowLine mixed summary shows both failed and stale in text`` () =
   let s = { Total = 5; Passed = 2; Failed = 2; Running = 0; Stale = 1; Disabled = 0 }
   let text, _ = TestSummary.formatToolWindowLine s
-  text |> should contain "failed"
-  text |> should contain "stale"
+  text |> should haveSubstring "failed"
+  text |> should haveSubstring "stale"
 
 // -- LiveTestState.summary -------------------------------------------------
 

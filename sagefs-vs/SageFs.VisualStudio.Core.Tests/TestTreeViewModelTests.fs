@@ -40,7 +40,7 @@ let ``formatTestLabel with passed result returns check icon and duration`` () =
 let ``formatTestLabel with failed result starts with cross icon and message`` () =
   let label = LiveTestingSubscriber.formatTestLabel(sampleInfo, Some failedResult)
   label |> should startWith "✗ Failed: "
-  label |> should contain "expected 1 but got 2"
+  label |> should haveSubstring "expected 1 but got 2"
 
 [<Fact>]
 let ``formatTestLabel with no result returns not-run label`` () =
@@ -63,7 +63,7 @@ let ``formatTestLabel with long failure message truncates at 50 chars`` () =
   let longFailed = mkResult "rx" (TestOutcome.Failed(longMsg, None)) None
   let label = LiveTestingSubscriber.formatTestLabel(sampleInfo, Some longFailed)
   // "✗ Failed: " + 50 chars + "…"
-  label |> should contain "…"
+  label |> should haveSubstring "…"
   let msgPart = label.Substring("✗ Failed: ".Length)
   msgPart.Length |> should equal 51  // 50 chars + "…"
 
@@ -72,26 +72,26 @@ let ``formatTestLabel with failure message of exactly 50 chars is not truncated`
   let exactMsg = System.String('x', 50)
   let exactFailed = mkResult "rx" (TestOutcome.Failed(exactMsg, None)) None
   let label = LiveTestingSubscriber.formatTestLabel(sampleInfo, Some exactFailed)
-  label |> should not' (contain "…")
+  label |> should not' (haveSubstring "…")
 
 // -- LiveTestingSubscriber.formatTestTooltip -------------------------------
 
 [<Fact>]
 let ``formatTestTooltip with passed result contains test name and Passed status`` () =
   let tooltip = LiveTestingSubscriber.formatTestTooltip(sampleInfo, Some passedResult)
-  tooltip |> should contain sampleInfo.DisplayName
-  tooltip |> should contain "Passed"
+  tooltip |> should haveSubstring sampleInfo.DisplayName
+  tooltip |> should haveSubstring "Passed"
 
 [<Fact>]
 let ``formatTestTooltip with failed result contains Failed status`` () =
   let tooltip = LiveTestingSubscriber.formatTestTooltip(sampleInfo, Some failedResult)
-  tooltip |> should contain "Failed"
+  tooltip |> should haveSubstring "Failed"
 
 [<Fact>]
 let ``formatTestTooltip with no result returns Not Run`` () =
   let tooltip = LiveTestingSubscriber.formatTestTooltip(sampleInfo, None)
-  tooltip |> should contain "Not Run"
-  tooltip |> should contain sampleInfo.DisplayName
+  tooltip |> should haveSubstring "Not Run"
+  tooltip |> should haveSubstring sampleInfo.DisplayName
 
 [<Fact>]
 let ``formatTestTooltip with stale and StaleCodeEdited freshness mentions code edited`` () =
@@ -101,7 +101,7 @@ let ``formatTestTooltip with stale and StaleCodeEdited freshness mentions code e
       Some staleResult,
       ResultFreshness.StaleCodeEdited
     )
-  tooltip |> should contain "code edited"
+  tooltip |> should haveSubstring "code edited"
 
 // -- TestTreeViewModel.filterGroups ----------------------------------------
 
@@ -302,8 +302,8 @@ let ``formatGroupedOutput with tests and no filter returns group headers and tes
   let info = mkInfo "id-1" "my test" (Some "File.fs") (Some 1)
   let state = { LiveTestState.empty with Tests = Map.ofList [ (info.Id, info) ] }
   let output = TestTreeViewModel.formatGroupedOutput TestStatusFilter.All "" state
-  output |> should contain "File.fs"
-  output |> should contain "my test"
+  output |> should haveSubstring "File.fs"
+  output |> should haveSubstring "my test"
 
 [<Fact>]
 let ``formatGroupedOutput with filter that matches nothing returns no-match message`` () =
@@ -315,4 +315,4 @@ let ``formatGroupedOutput with filter that matches nothing returns no-match mess
       Results = Map.ofList [ (result.Id, result) ]
   }
   let output = TestTreeViewModel.formatGroupedOutput TestStatusFilter.FailedOnly "" state
-  output |> should contain "Failed"
+  output |> should haveSubstring "Failed"

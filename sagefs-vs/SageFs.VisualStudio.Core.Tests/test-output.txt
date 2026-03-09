@@ -1,0 +1,817 @@
+Build started 3/9/2026 2:09:31 AM.
+Test run for C:\Code\Repos\SageFs\sagefs-vs\SageFs.VisualStudio.Core.Tests\bin\Debug\net8.0-windows8.0\SageFs.VisualStudio.Core.Tests.dll (.NETCoreApp,Version=v8.0)
+A total of 1 test files matched the specified pattern.
+[xUnit.net 00:00:00.00] xUnit.net VSTest Adapter v2.4.5+1caef2f33e (64-bit .NET 8.0.23)
+[xUnit.net 00:00:00.31]   Discovering: SageFs.VisualStudio.Core.Tests
+[xUnit.net 00:00:00.35]   Discovered:  SageFs.VisualStudio.Core.Tests
+[xUnit.net 00:00:00.35]   Starting:    SageFs.VisualStudio.Core.Tests
+[xUnit.net 00:00:00.40]       System.TypeLoadException : Could not load type 'Microsoft.FSharp.Core.CompilerServices.ListCollector`1' from assembly 'FSharp.Core, Version=5.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.
+[xUnit.net 00:00:00.40]     SageFs.VisualStudio.Core.Tests.LiveTestStateTests.formatToolWindowLine with stale but no failures returns warning severity [FAIL]
+[xUnit.net 00:00:00.41]       Stack Trace:
+[xUnit.net 00:00:00.41]            at SageFs.VisualStudio.Core.TestSummaryModule.formatToolWindowLine(TestSummary s)
+[xUnit.net 00:00:00.41]         C:\Code\Repos\SageFs\sagefs-vs\SageFs.VisualStudio.Core.Tests\LiveTestStateTests.fs(257,0): at SageFs.VisualStudio.Core.Tests.LiveTestStateTests.formatToolWindowLine with stale but no failures returns warning severity()
+[xUnit.net 00:00:00.41]            at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+[xUnit.net 00:00:00.41]            at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+[xUnit.net 00:00:00.42]     SageFs.VisualStudio.Core.Tests.LiveTestingParserTests.parseSseEvent test_results_batch stale result has Stale outcome [FAIL]
+[xUnit.net 00:00:00.42]     SageFs.VisualStudio.Core.Tests.TestTreeViewModelTests.formatTestTooltip with failed result contains Failed status [FAIL]
+[xUnit.net 00:00:00.42]       System.Exception : unexpected result []
+[xUnit.net 00:00:00.42]       Stack Trace:
+[xUnit.net 00:00:00.42]         C:\Code\Repos\SageFs\sagefs-vs\SageFs.VisualStudio.Core.Tests\LiveTestingParserTests.fs(135,0): at SageFs.VisualStudio.Core.Tests.LiveTestingParserTests.parseSseEvent test_results_batch stale result has Stale outcome()
+[xUnit.net 00:00:00.42]            at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+[xUnit.net 00:00:00.42]            at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+[xUnit.net 00:00:00.42]       System.InvalidCastException : Unable to cast object of type 'System.Char' to type 'System.String'.
+[xUnit.net 00:00:00.42]       Stack Trace:
+[xUnit.net 00:00:00.42]         D:\workspace\_work\1\s\src\fsharp\FSharp.Core\prim-types.fs(644,0): at Microsoft.FSharp.Core.LanguagePrimitives.IntrinsicFunctions.UnboxGeneric[T](Object source)
+[xUnit.net 00:00:00.42]         D:\workspace\_work\1\s\src\fsharp\FSharp.Core\seqcore.fs(26,0): at Microsoft.FSharp.Collections.IEnumerator.cast@25.System.Collections.Generic.IEnumerator<'T>.get_Current()
+[xUnit.net 00:00:00.42]         D:\workspace\_work\1\s\src\fsharp\FSharp.Core\seq.fs(532,0): at Microsoft.FSharp.Collections.SeqModule.Exists[T](FSharpFunc`2 predicate, IEnumerable`1 source)
+[xUnit.net 00:00:00.42]            at FsUnit.CustomMatchers.contain@191.Invoke(Object delegateArg0)
+[xUnit.net 00:00:00.42]            at NHamcrest.Core.CustomMatcher`1.Matches(T item)
+[xUnit.net 00:00:00.42]            at FsUnit.Xunit.Assert.That.Static[a](a actual, IMatcher`1 matcher)
+[xUnit.net 00:00:00.42]         C:\Code\Repos\SageFs\sagefs-vs\SageFs.VisualStudio.Core.Tests\TestTreeViewModelTests.fs(88,0): at SageFs.VisualStudio.Core.Tests.TestTreeViewModelTests.formatTestTooltip with failed result contains Failed status()
+[xUnit.net 00:00:00.42]            at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+[xUnit.net 00:00:00.42]            at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+  Failed SageFs.VisualStudio.Core.Tests.LiveTestStateTests.formatToolWindowLine with stale but no failures returns warning severity [1 ms]
+  Error Message:
+   System.TypeLoadException : Could not load type 'Microsoft.FSharp.Core.CompilerServices.ListCollector`1' from assembly 'FSharp.Core, Version=5.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.
+  Stack Trace:
+     at SageFs.VisualStudio.Core.TestSummaryModule.formatToolWindowLine(TestSummary s)
+   at SageFs.VisualStudio.Core.Tests.LiveTestStateTests.formatToolWindowLine with stale but no failures returns warning severity() in C:\Code\Repos\SageFs\sagefs-vs\SageFs.VisualStudio.Core.Tests\LiveTestStateTests.fs:line 257
+   at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+   at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+  Passed SageFs.VisualStudio.Core.Tests.LiveTestingParserTests.parseSseEvent test_summary with empty JSON returns SummaryUpdated with all zeros [26 ms]
+  Failed SageFs.VisualStudio.Core.Tests.LiveTestingParserTests.parseSseEvent test_results_batch stale result has Stale outcome [3 ms]
+  Error Message:
+   System.Exception : unexpected result []
+  Stack Trace:
+     at SageFs.VisualStudio.Core.Tests.LiveTestingParserTests.parseSseEvent test_results_batch stale result has Stale outcome() in C:\Code\Repos\SageFs\sagefs-vs\SageFs.VisualStudio.Core.Tests\LiveTestingParserTests.fs:line 135
+   at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+   at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+  Failed SageFs.VisualStudio.Core.Tests.TestTreeViewModelTests.formatTestTooltip with failed result contains Failed status [26 ms]
+  Error Message:
+   System.InvalidCastException : Unable to cast object of type 'System.Char' to type 'System.String'.
+  Stack Trace:
+     at Microsoft.FSharp.Core.LanguagePrimitives.IntrinsicFunctions.UnboxGeneric[T](Object source) in D:\workspace\_work\1\s\src\fsharp\FSharp.Core\prim-types.fs:line 644
+   at Microsoft.FSharp.Collections.IEnumerator.cast@25.System.Collections.Generic.IEnumerator<'T>.get_Current() in D:\workspace\_work\1\s\src\fsharp\FSharp.Core\seqcore.fs:line 26
+   at Microsoft.FSharp.Collections.SeqModule.Exists[T](FSharpFunc`2 predicate, IEnumerable`1 source) in D:\workspace\_work\1\s\src\fsharp\FSharp.Core\seq.fs:line 532
+   at FsUnit.CustomMatchers.contain@191.Invoke(Object delegateArg0)
+   at NHamcrest.Core.CustomMatcher`1.Matches(T item)
+   at FsUnit.Xunit.Assert.That.Static[a](a actual, IMatcher`1 matcher)
+   at SageFs.VisualStudio.Core.Tests.TestTreeViewModelTests.formatTestTooltip with failed result contains Failed status() in C:\Code\Repos\SageFs\sagefs-vs\SageFs.VisualStudio.Core.Tests\TestTreeViewModelTests.fs:line 88
+   at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+   at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+  Passed SageFs.VisualStudio.Core.Tests.LiveTestStateTests.empty state has Fresh freshness [21 ms]
+  Passed SageFs.VisualStudio.Core.Tests.GlyphProjectionTests.classify Passed returns GlyphPassed [30 ms]
+[xUnit.net 00:00:00.45]     SageFs.VisualStudio.Core.Tests.LiveTestStateTests.update SummaryUpdated returns SummaryChanged change [FAIL]
+[xUnit.net 00:00:00.45]       System.TypeLoadException : Could not load type 'Microsoft.FSharp.Core.CompilerServices.ListCollector`1' from assembly 'FSharp.Core, Version=5.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.
+[xUnit.net 00:00:00.45]       Stack Trace:
+[xUnit.net 00:00:00.45]            at SageFs.VisualStudio.Core.LiveTestStateModule.update(LiveTestEvent event, LiveTestState state)
+[xUnit.net 00:00:00.45]         C:\Code\Repos\SageFs\sagefs-vs\SageFs.VisualStudio.Core.Tests\LiveTestStateTests.fs(167,0): at SageFs.VisualStudio.Core.Tests.LiveTestStateTests.update SummaryUpdated returns SummaryChanged change()
+[xUnit.net 00:00:00.45]            at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+[xUnit.net 00:00:00.45]            at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+[xUnit.net 00:00:00.45]     SageFs.VisualStudio.Core.Tests.LiveTestStateTests.update TestResultBatch returns TestsUpdated change [FAIL]
+[xUnit.net 00:00:00.45]       System.TypeLoadException : Could not load type 'Microsoft.FSharp.Core.CompilerServices.ListCollector`1' from assembly 'FSharp.Core, Version=5.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.
+[xUnit.net 00:00:00.45]       Stack Trace:
+[xUnit.net 00:00:00.45]            at SageFs.VisualStudio.Core.LiveTestStateModule.update(LiveTestEvent event, LiveTestState state)
+[xUnit.net 00:00:00.45]         C:\Code\Repos\SageFs\sagefs-vs\SageFs.VisualStudio.Core.Tests\LiveTestStateTests.fs(116,0): at SageFs.VisualStudio.Core.Tests.LiveTestStateTests.update TestResultBatch returns TestsUpdated change()
+[xUnit.net 00:00:00.45]            at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+[xUnit.net 00:00:00.45]            at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+[xUnit.net 00:00:00.45]     SageFs.VisualStudio.Core.Tests.LiveTestStateTests.formatToolWindowLine with no results shows just total [FAIL]
+[xUnit.net 00:00:00.45]       System.TypeLoadException : Could not load type 'Microsoft.FSharp.Core.CompilerServices.ListCollector`1' from assembly 'FSharp.Core, Version=5.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.
+[xUnit.net 00:00:00.45]       Stack Trace:
+[xUnit.net 00:00:00.45]            at SageFs.VisualStudio.Core.TestSummaryModule.formatToolWindowLine(TestSummary s)
+[xUnit.net 00:00:00.45]         C:\Code\Repos\SageFs\sagefs-vs\SageFs.VisualStudio.Core.Tests\LiveTestStateTests.fs(269,0): at SageFs.VisualStudio.Core.Tests.LiveTestStateTests.formatToolWindowLine with no results shows just total()
+[xUnit.net 00:00:00.45]            at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+[xUnit.net 00:00:00.45]            at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+  Failed SageFs.VisualStudio.Core.Tests.LiveTestStateTests.update SummaryUpdated returns SummaryChanged change [< 1 ms]
+  Error Message:
+   System.TypeLoadException : Could not load type 'Microsoft.FSharp.Core.CompilerServices.ListCollector`1' from assembly 'FSharp.Core, Version=5.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.
+  Stack Trace:
+     at SageFs.VisualStudio.Core.LiveTestStateModule.update(LiveTestEvent event, LiveTestState state)
+   at SageFs.VisualStudio.Core.Tests.LiveTestStateTests.update SummaryUpdated returns SummaryChanged change() in C:\Code\Repos\SageFs\sagefs-vs\SageFs.VisualStudio.Core.Tests\LiveTestStateTests.fs:line 167
+   at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+   at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+  Passed SageFs.VisualStudio.Core.Tests.GlyphProjectionTests.classify Errored returns GlyphFailed [< 1 ms]
+  Passed SageFs.VisualStudio.Core.Tests.GlyphProjectionTests.classify Detected returns GlyphNotRun [< 1 ms]
+  Failed SageFs.VisualStudio.Core.Tests.LiveTestStateTests.update TestResultBatch returns TestsUpdated change [< 1 ms]
+  Error Message:
+   System.TypeLoadException : Could not load type 'Microsoft.FSharp.Core.CompilerServices.ListCollector`1' from assembly 'FSharp.Core, Version=5.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.
+  Stack Trace:
+     at SageFs.VisualStudio.Core.LiveTestStateModule.update(LiveTestEvent event, LiveTestState state)
+   at SageFs.VisualStudio.Core.Tests.LiveTestStateTests.update TestResultBatch returns TestsUpdated change() in C:\Code\Repos\SageFs\sagefs-vs\SageFs.VisualStudio.Core.Tests\LiveTestStateTests.fs:line 116
+   at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+   at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+  Failed SageFs.VisualStudio.Core.Tests.LiveTestStateTests.formatToolWindowLine with no results shows just total [< 1 ms]
+  Error Message:
+   System.TypeLoadException : Could not load type 'Microsoft.FSharp.Core.CompilerServices.ListCollector`1' from assembly 'FSharp.Core, Version=5.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.
+  Stack Trace:
+     at SageFs.VisualStudio.Core.TestSummaryModule.formatToolWindowLine(TestSummary s)
+   at SageFs.VisualStudio.Core.Tests.LiveTestStateTests.formatToolWindowLine with no results shows just total() in C:\Code\Repos\SageFs\sagefs-vs\SageFs.VisualStudio.Core.Tests\LiveTestStateTests.fs:line 269
+   at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+   at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+  Passed SageFs.VisualStudio.Core.Tests.LiveTestingParserTests.parseSseEvent with empty event type returns empty list [1 ms]
+  Passed SageFs.VisualStudio.Core.Tests.LiveTestStateTests.empty state has no running tests [1 ms]
+[xUnit.net 00:00:00.45]     SageFs.VisualStudio.Core.Tests.LiveTestStateTests.formatToolWindowLine with all passed shows passed count in text [FAIL]
+[xUnit.net 00:00:00.45]       System.TypeLoadException : Could not load type 'Microsoft.FSharp.Core.CompilerServices.ListCollector`1' from assembly 'FSharp.Core, Version=5.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.
+[xUnit.net 00:00:00.45]       Stack Trace:
+[xUnit.net 00:00:00.45]            at SageFs.VisualStudio.Core.TestSummaryModule.formatToolWindowLine(TestSummary s)
+[xUnit.net 00:00:00.45]         C:\Code\Repos\SageFs\sagefs-vs\SageFs.VisualStudio.Core.Tests\LiveTestStateTests.fs(263,0): at SageFs.VisualStudio.Core.Tests.LiveTestStateTests.formatToolWindowLine with all passed shows passed count in text()
+[xUnit.net 00:00:00.45]            at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+[xUnit.net 00:00:00.45]            at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+[xUnit.net 00:00:00.45]     SageFs.VisualStudio.Core.Tests.TestTreeViewModelTests.formatTestLabel with failure message of exactly 50 chars is not truncated [FAIL]
+[xUnit.net 00:00:00.45]       System.InvalidCastException : Unable to cast object of type 'System.Char' to type 'System.String'.
+[xUnit.net 00:00:00.45]       Stack Trace:
+[xUnit.net 00:00:00.45]         D:\workspace\_work\1\s\src\fsharp\FSharp.Core\prim-types.fs(644,0): at Microsoft.FSharp.Core.LanguagePrimitives.IntrinsicFunctions.UnboxGeneric[T](Object source)
+[xUnit.net 00:00:00.45]         D:\workspace\_work\1\s\src\fsharp\FSharp.Core\seqcore.fs(26,0): at Microsoft.FSharp.Collections.IEnumerator.cast@25.System.Collections.Generic.IEnumerator<'T>.get_Current()
+[xUnit.net 00:00:00.45]         D:\workspace\_work\1\s\src\fsharp\FSharp.Core\seq.fs(532,0): at Microsoft.FSharp.Collections.SeqModule.Exists[T](FSharpFunc`2 predicate, IEnumerable`1 source)
+[xUnit.net 00:00:00.45]            at FsUnit.CustomMatchers.contain@191.Invoke(Object delegateArg0)
+[xUnit.net 00:00:00.45]            at NHamcrest.Core.CustomMatcher`1.Matches(T item)
+[xUnit.net 00:00:00.45]            at NHamcrest.Core.IsNotMatcher`1.Matches(T arg)
+[xUnit.net 00:00:00.45]            at FsUnit.Xunit.Assert.That.Static[a](a actual, IMatcher`1 matcher)
+[xUnit.net 00:00:00.45]         C:\Code\Repos\SageFs\sagefs-vs\SageFs.VisualStudio.Core.Tests\TestTreeViewModelTests.fs(75,0): at SageFs.VisualStudio.Core.Tests.TestTreeViewModelTests.formatTestLabel with failure message of exactly 50 chars is not truncated()
+[xUnit.net 00:00:00.45]            at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+[xUnit.net 00:00:00.45]            at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+  Passed SageFs.VisualStudio.Core.Tests.TestTreeViewModelTests.searchGroups with empty query returns all groups unchanged [4 ms]
+  Failed SageFs.VisualStudio.Core.Tests.LiveTestStateTests.formatToolWindowLine with all passed shows passed count in text [< 1 ms]
+  Error Message:
+   System.TypeLoadException : Could not load type 'Microsoft.FSharp.Core.CompilerServices.ListCollector`1' from assembly 'FSharp.Core, Version=5.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.
+  Stack Trace:
+     at SageFs.VisualStudio.Core.TestSummaryModule.formatToolWindowLine(TestSummary s)
+   at SageFs.VisualStudio.Core.Tests.LiveTestStateTests.formatToolWindowLine with all passed shows passed count in text() in C:\Code\Repos\SageFs\sagefs-vs\SageFs.VisualStudio.Core.Tests\LiveTestStateTests.fs:line 263
+   at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+   at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+  Failed SageFs.VisualStudio.Core.Tests.TestTreeViewModelTests.formatTestLabel with failure message of exactly 50 chars is not truncated [2 ms]
+  Error Message:
+   System.InvalidCastException : Unable to cast object of type 'System.Char' to type 'System.String'.
+  Stack Trace:
+     at Microsoft.FSharp.Core.LanguagePrimitives.IntrinsicFunctions.UnboxGeneric[T](Object source) in D:\workspace\_work\1\s\src\fsharp\FSharp.Core\prim-types.fs:line 644
+   at Microsoft.FSharp.Collections.IEnumerator.cast@25.System.Collections.Generic.IEnumerator<'T>.get_Current() in D:\workspace\_work\1\s\src\fsharp\FSharp.Core\seqcore.fs:line 26
+   at Microsoft.FSharp.Collections.SeqModule.Exists[T](FSharpFunc`2 predicate, IEnumerable`1 source) in D:\workspace\_work\1\s\src\fsharp\FSharp.Core\seq.fs:line 532
+   at FsUnit.CustomMatchers.contain@191.Invoke(Object delegateArg0)
+   at NHamcrest.Core.CustomMatcher`1.Matches(T item)
+   at NHamcrest.Core.IsNotMatcher`1.Matches(T arg)
+   at FsUnit.Xunit.Assert.That.Static[a](a actual, IMatcher`1 matcher)
+   at SageFs.VisualStudio.Core.Tests.TestTreeViewModelTests.formatTestLabel with failure message of exactly 50 chars is not truncated() in C:\Code\Repos\SageFs\sagefs-vs\SageFs.VisualStudio.Core.Tests\TestTreeViewModelTests.fs:line 75
+   at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+   at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+  Passed SageFs.VisualStudio.Core.Tests.GlyphProjectionTests.forFile returns empty for empty state [5 ms]
+  Passed SageFs.VisualStudio.Core.Tests.LiveTestingParserTests.parseDurationToMs returns correct milliseconds for valid timespan strings(input: "00:00:00.045", expected: 45) [8 ms]
+  Passed SageFs.VisualStudio.Core.Tests.LiveTestingParserTests.parseDurationToMs returns correct milliseconds for valid timespan strings(input: "00:01:30.500", expected: 90500) [< 1 ms]
+[xUnit.net 00:00:00.45]     SageFs.VisualStudio.Core.Tests.LiveTestStateTests.update TestResultBatch adds result to Results map [FAIL]
+[xUnit.net 00:00:00.45]       System.TypeLoadException : Could not load type 'Microsoft.FSharp.Core.CompilerServices.ListCollector`1' from assembly 'FSharp.Core, Version=5.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.
+[xUnit.net 00:00:00.45]       Stack Trace:
+[xUnit.net 00:00:00.45]            at SageFs.VisualStudio.Core.LiveTestStateModule.update(LiveTestEvent event, LiveTestState state)
+[xUnit.net 00:00:00.45]         C:\Code\Repos\SageFs\sagefs-vs\SageFs.VisualStudio.Core.Tests\LiveTestStateTests.fs(107,0): at SageFs.VisualStudio.Core.Tests.LiveTestStateTests.update TestResultBatch adds result to Results map()
+[xUnit.net 00:00:00.45]            at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+[xUnit.net 00:00:00.45]            at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+[xUnit.net 00:00:00.45]     SageFs.VisualStudio.Core.Tests.LiveTestingParserTests.parseSseEvent test_results_batch skipped result has Skipped outcome [FAIL]
+[xUnit.net 00:00:00.45]       System.Exception : unexpected result []
+[xUnit.net 00:00:00.45]       Stack Trace:
+[xUnit.net 00:00:00.45]         C:\Code\Repos\SageFs\sagefs-vs\SageFs.VisualStudio.Core.Tests\LiveTestingParserTests.fs(128,0): at SageFs.VisualStudio.Core.Tests.LiveTestingParserTests.parseSseEvent test_results_batch skipped result has Skipped outcome()
+[xUnit.net 00:00:00.45]            at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+[xUnit.net 00:00:00.45]            at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+  Passed SageFs.VisualStudio.Core.Tests.LiveTestingParserTests.parseDurationToMs returns correct milliseconds for valid timespan strings(input: "01:00:00.000", expected: 3600000) [< 1 ms]
+  Passed SageFs.VisualStudio.Core.Tests.LiveTestingParserTests.parseDurationToMs returns correct milliseconds for valid timespan strings(input: "00:00:01.000", expected: 1000) [< 1 ms]
+  Passed SageFs.VisualStudio.Core.Tests.LiveTestStateTests.testsForFile returns only tests matching the given file path [8 ms]
+  Passed SageFs.VisualStudio.Core.Tests.LiveTestingParserTests.parseSseEvent test_summary with invalid JSON returns empty list [2 ms]
+  Failed SageFs.VisualStudio.Core.Tests.LiveTestStateTests.update TestResultBatch adds result to Results map [< 1 ms]
+  Error Message:
+   System.TypeLoadException : Could not load type 'Microsoft.FSharp.Core.CompilerServices.ListCollector`1' from assembly 'FSharp.Core, Version=5.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.
+  Stack Trace:
+     at SageFs.VisualStudio.Core.LiveTestStateModule.update(LiveTestEvent event, LiveTestState state)
+   at SageFs.VisualStudio.Core.Tests.LiveTestStateTests.update TestResultBatch adds result to Results map() in C:\Code\Repos\SageFs\sagefs-vs\SageFs.VisualStudio.Core.Tests\LiveTestStateTests.fs:line 107
+   at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+   at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+  Passed SageFs.VisualStudio.Core.Tests.GlyphProjectionTests.allEntries includes tests from multiple files [6 ms]
+  Failed SageFs.VisualStudio.Core.Tests.LiveTestingParserTests.parseSseEvent test_results_batch skipped result has Skipped outcome [< 1 ms]
+  Error Message:
+   System.Exception : unexpected result []
+  Stack Trace:
+     at SageFs.VisualStudio.Core.Tests.LiveTestingParserTests.parseSseEvent test_results_batch skipped result has Skipped outcome() in C:\Code\Repos\SageFs\sagefs-vs\SageFs.VisualStudio.Core.Tests\LiveTestingParserTests.fs:line 128
+   at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+   at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+[xUnit.net 00:00:00.45]     SageFs.VisualStudio.Core.Tests.LiveTestStateTests.update TestResultBatch with stale freshness returns ResultsStale change [FAIL]
+[xUnit.net 00:00:00.45]       System.TypeLoadException : Could not load type 'Microsoft.FSharp.Core.CompilerServices.ListCollector`1' from assembly 'FSharp.Core, Version=5.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.
+[xUnit.net 00:00:00.45]       Stack Trace:
+[xUnit.net 00:00:00.45]            at SageFs.VisualStudio.Core.LiveTestStateModule.update(LiveTestEvent event, LiveTestState state)
+[xUnit.net 00:00:00.45]         C:\Code\Repos\SageFs\sagefs-vs\SageFs.VisualStudio.Core.Tests\LiveTestStateTests.fs(137,0): at SageFs.VisualStudio.Core.Tests.LiveTestStateTests.update TestResultBatch with stale freshness returns ResultsStale change()
+[xUnit.net 00:00:00.45]            at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+[xUnit.net 00:00:00.45]            at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+[xUnit.net 00:00:00.45]     SageFs.VisualStudio.Core.Tests.LiveTestingParserTests.parseSseEvent test_results_batch passed result has correct test ID [FAIL]
+[xUnit.net 00:00:00.45]       System.Exception : unexpected result []
+[xUnit.net 00:00:00.45]       Stack Trace:
+[xUnit.net 00:00:00.45]         C:\Code\Repos\SageFs\sagefs-vs\SageFs.VisualStudio.Core.Tests\LiveTestingParserTests.fs(102,0): at SageFs.VisualStudio.Core.Tests.LiveTestingParserTests.parseSseEvent test_results_batch passed result has correct test ID()
+[xUnit.net 00:00:00.45]            at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+[xUnit.net 00:00:00.45]            at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+[xUnit.net 00:00:00.46]     SageFs.VisualStudio.Core.Tests.LiveTestingParserTests.parseSseEvent test_results_batch with string Fresh freshness returns Fresh [FAIL]
+[xUnit.net 00:00:00.46]       System.Exception : unexpected result []
+[xUnit.net 00:00:00.46]       Stack Trace:
+[xUnit.net 00:00:00.46]         C:\Code\Repos\SageFs\sagefs-vs\SageFs.VisualStudio.Core.Tests\LiveTestingParserTests.fs(179,0): at SageFs.VisualStudio.Core.Tests.LiveTestingParserTests.parseSseEvent test_results_batch with string Fresh freshness returns Fresh()
+[xUnit.net 00:00:00.46]            at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+[xUnit.net 00:00:00.46]            at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+[xUnit.net 00:00:00.46]     SageFs.VisualStudio.Core.Tests.LiveTestingParserTests.parseSseEvent test_results_batch with StaleWrongGeneration freshness parses correctly [FAIL]
+[xUnit.net 00:00:00.46]       System.Exception : unexpected result []
+[xUnit.net 00:00:00.46]       Stack Trace:
+[xUnit.net 00:00:00.46]         C:\Code\Repos\SageFs\sagefs-vs\SageFs.VisualStudio.Core.Tests\LiveTestingParserTests.fs(149,0): at SageFs.VisualStudio.Core.Tests.LiveTestingParserTests.parseSseEvent test_results_batch with StaleWrongGeneration freshness parses correctly()
+[xUnit.net 00:00:00.46]            at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+[xUnit.net 00:00:00.46]            at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+  Failed SageFs.VisualStudio.Core.Tests.LiveTestStateTests.update TestResultBatch with stale freshness returns ResultsStale change [< 1 ms]
+  Error Message:
+   System.TypeLoadException : Could not load type 'Microsoft.FSharp.Core.CompilerServices.ListCollector`1' from assembly 'FSharp.Core, Version=5.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.
+  Stack Trace:
+     at SageFs.VisualStudio.Core.LiveTestStateModule.update(LiveTestEvent event, LiveTestState state)
+   at SageFs.VisualStudio.Core.Tests.LiveTestStateTests.update TestResultBatch with stale freshness returns ResultsStale change() in C:\Code\Repos\SageFs\sagefs-vs\SageFs.VisualStudio.Core.Tests\LiveTestStateTests.fs:line 137
+   at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+   at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+  Failed SageFs.VisualStudio.Core.Tests.LiveTestingParserTests.parseSseEvent test_results_batch passed result has correct test ID [< 1 ms]
+  Error Message:
+   System.Exception : unexpected result []
+  Stack Trace:
+     at SageFs.VisualStudio.Core.Tests.LiveTestingParserTests.parseSseEvent test_results_batch passed result has correct test ID() in C:\Code\Repos\SageFs\sagefs-vs\SageFs.VisualStudio.Core.Tests\LiveTestingParserTests.fs:line 102
+   at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+   at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+  Passed SageFs.VisualStudio.Core.Tests.GlyphProjectionTests.forFile excludes tests from other files [1 ms]
+  Passed SageFs.VisualStudio.Core.Tests.GlyphProjectionTests.classify Skipped returns GlyphNotRun [< 1 ms]
+  Failed SageFs.VisualStudio.Core.Tests.LiveTestingParserTests.parseSseEvent test_results_batch with string Fresh freshness returns Fresh [< 1 ms]
+  Error Message:
+   System.Exception : unexpected result []
+  Stack Trace:
+     at SageFs.VisualStudio.Core.Tests.LiveTestingParserTests.parseSseEvent test_results_batch with string Fresh freshness returns Fresh() in C:\Code\Repos\SageFs\sagefs-vs\SageFs.VisualStudio.Core.Tests\LiveTestingParserTests.fs:line 179
+   at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+   at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+  Failed SageFs.VisualStudio.Core.Tests.LiveTestingParserTests.parseSseEvent test_results_batch with StaleWrongGeneration freshness parses correctly [< 1 ms]
+  Error Message:
+   System.Exception : unexpected result []
+  Stack Trace:
+     at SageFs.VisualStudio.Core.Tests.LiveTestingParserTests.parseSseEvent test_results_batch with StaleWrongGeneration freshness parses correctly() in C:\Code\Repos\SageFs\sagefs-vs\SageFs.VisualStudio.Core.Tests\LiveTestingParserTests.fs:line 149
+   at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+   at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+  Passed SageFs.VisualStudio.Core.Tests.LiveTestStateTests.summary computes passed count from Results when LastSummary is None [2 ms]
+[xUnit.net 00:00:00.46]     SageFs.VisualStudio.Core.Tests.LiveTestingParserTests.parseSseEvent test_results_batch passed result has Passed outcome with duration [FAIL]
+[xUnit.net 00:00:00.46]       System.Exception : unexpected result []
+[xUnit.net 00:00:00.46]       Stack Trace:
+[xUnit.net 00:00:00.46]         C:\Code\Repos\SageFs\sagefs-vs\SageFs.VisualStudio.Core.Tests\LiveTestingParserTests.fs(95,0): at SageFs.VisualStudio.Core.Tests.LiveTestingParserTests.parseSseEvent test_results_batch passed result has Passed outcome with duration()
+[xUnit.net 00:00:00.46]            at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+[xUnit.net 00:00:00.46]            at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+[xUnit.net 00:00:00.46]     SageFs.VisualStudio.Core.Tests.LiveTestStateTests.formatToolWindowLine with failures returns error severity [FAIL]
+[xUnit.net 00:00:00.46]       System.TypeLoadException : Could not load type 'Microsoft.FSharp.Core.CompilerServices.ListCollector`1' from assembly 'FSharp.Core, Version=5.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.
+[xUnit.net 00:00:00.46]       Stack Trace:
+[xUnit.net 00:00:00.46]            at SageFs.VisualStudio.Core.TestSummaryModule.formatToolWindowLine(TestSummary s)
+[xUnit.net 00:00:00.46]         C:\Code\Repos\SageFs\sagefs-vs\SageFs.VisualStudio.Core.Tests\LiveTestStateTests.fs(251,0): at SageFs.VisualStudio.Core.Tests.LiveTestStateTests.formatToolWindowLine with failures returns error severity()
+[xUnit.net 00:00:00.46]            at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+[xUnit.net 00:00:00.46]            at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+[xUnit.net 00:00:00.46]     SageFs.VisualStudio.Core.Tests.TestTreeViewModelTests.formatTestLabel with long failure message truncates at 50 chars [FAIL]
+[xUnit.net 00:00:00.46]       System.InvalidCastException : Unable to cast object of type 'System.Char' to type 'System.String'.
+[xUnit.net 00:00:00.46]       Stack Trace:
+[xUnit.net 00:00:00.46]         D:\workspace\_work\1\s\src\fsharp\FSharp.Core\prim-types.fs(644,0): at Microsoft.FSharp.Core.LanguagePrimitives.IntrinsicFunctions.UnboxGeneric[T](Object source)
+[xUnit.net 00:00:00.46]         D:\workspace\_work\1\s\src\fsharp\FSharp.Core\seqcore.fs(26,0): at Microsoft.FSharp.Collections.IEnumerator.cast@25.System.Collections.Generic.IEnumerator<'T>.get_Current()
+[xUnit.net 00:00:00.46]         D:\workspace\_work\1\s\src\fsharp\FSharp.Core\seq.fs(532,0): at Microsoft.FSharp.Collections.SeqModule.Exists[T](FSharpFunc`2 predicate, IEnumerable`1 source)
+[xUnit.net 00:00:00.46]            at FsUnit.CustomMatchers.contain@191.Invoke(Object delegateArg0)
+[xUnit.net 00:00:00.46]            at NHamcrest.Core.CustomMatcher`1.Matches(T item)
+[xUnit.net 00:00:00.46]            at FsUnit.Xunit.Assert.That.Static[a](a actual, IMatcher`1 matcher)
+[xUnit.net 00:00:00.46]         C:\Code\Repos\SageFs\sagefs-vs\SageFs.VisualStudio.Core.Tests\TestTreeViewModelTests.fs(66,0): at SageFs.VisualStudio.Core.Tests.TestTreeViewModelTests.formatTestLabel with long failure message truncates at 50 chars()
+[xUnit.net 00:00:00.46]            at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+[xUnit.net 00:00:00.46]            at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+[xUnit.net 00:00:00.46]     SageFs.VisualStudio.Core.Tests.LiveTestingParserTests.parseSseEvent test_results_batch with StaleCodeEdited freshness parses correctly [FAIL]
+[xUnit.net 00:00:00.46]       System.Exception : unexpected result []
+[xUnit.net 00:00:00.46]       Stack Trace:
+[xUnit.net 00:00:00.46]         C:\Code\Repos\SageFs\sagefs-vs\SageFs.VisualStudio.Core.Tests\LiveTestingParserTests.fs(142,0): at SageFs.VisualStudio.Core.Tests.LiveTestingParserTests.parseSseEvent test_results_batch with StaleCodeEdited freshness parses correctly()
+[xUnit.net 00:00:00.46]            at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+[xUnit.net 00:00:00.46]            at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+  Failed SageFs.VisualStudio.Core.Tests.LiveTestingParserTests.parseSseEvent test_results_batch passed result has Passed outcome with duration [< 1 ms]
+  Error Message:
+   System.Exception : unexpected result []
+  Stack Trace:
+     at SageFs.VisualStudio.Core.Tests.LiveTestingParserTests.parseSseEvent test_results_batch passed result has Passed outcome with duration() in C:\Code\Repos\SageFs\sagefs-vs\SageFs.VisualStudio.Core.Tests\LiveTestingParserTests.fs:line 95
+   at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+   at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+  Passed SageFs.VisualStudio.Core.Tests.LiveTestStateTests.empty state has no policies [< 1 ms]
+  Passed SageFs.VisualStudio.Core.Tests.TestTreeViewModelTests.groupByFile puts both tests in same group for same file [10 ms]
+  Passed SageFs.VisualStudio.Core.Tests.LiveTestingParserTests.parseSseEvent test_results_batch with invalid JSON returns empty list [< 1 ms]
+  Failed SageFs.VisualStudio.Core.Tests.LiveTestStateTests.formatToolWindowLine with failures returns error severity [< 1 ms]
+  Error Message:
+   System.TypeLoadException : Could not load type 'Microsoft.FSharp.Core.CompilerServices.ListCollector`1' from assembly 'FSharp.Core, Version=5.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.
+  Stack Trace:
+     at SageFs.VisualStudio.Core.TestSummaryModule.formatToolWindowLine(TestSummary s)
+   at SageFs.VisualStudio.Core.Tests.LiveTestStateTests.formatToolWindowLine with failures returns error severity() in C:\Code\Repos\SageFs\sagefs-vs\SageFs.VisualStudio.Core.Tests\LiveTestStateTests.fs:line 251
+   at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+   at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+  Failed SageFs.VisualStudio.Core.Tests.TestTreeViewModelTests.formatTestLabel with long failure message truncates at 50 chars [< 1 ms]
+  Error Message:
+   System.InvalidCastException : Unable to cast object of type 'System.Char' to type 'System.String'.
+  Stack Trace:
+     at Microsoft.FSharp.Core.LanguagePrimitives.IntrinsicFunctions.UnboxGeneric[T](Object source) in D:\workspace\_work\1\s\src\fsharp\FSharp.Core\prim-types.fs:line 644
+   at Microsoft.FSharp.Collections.IEnumerator.cast@25.System.Collections.Generic.IEnumerator<'T>.get_Current() in D:\workspace\_work\1\s\src\fsharp\FSharp.Core\seqcore.fs:line 26
+   at Microsoft.FSharp.Collections.SeqModule.Exists[T](FSharpFunc`2 predicate, IEnumerable`1 source) in D:\workspace\_work\1\s\src\fsharp\FSharp.Core\seq.fs:line 532
+   at FsUnit.CustomMatchers.contain@191.Invoke(Object delegateArg0)
+   at NHamcrest.Core.CustomMatcher`1.Matches(T item)
+   at FsUnit.Xunit.Assert.That.Static[a](a actual, IMatcher`1 matcher)
+   at SageFs.VisualStudio.Core.Tests.TestTreeViewModelTests.formatTestLabel with long failure message truncates at 50 chars() in C:\Code\Repos\SageFs\sagefs-vs\SageFs.VisualStudio.Core.Tests\TestTreeViewModelTests.fs:line 66
+   at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+   at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+  Failed SageFs.VisualStudio.Core.Tests.LiveTestingParserTests.parseSseEvent test_results_batch with StaleCodeEdited freshness parses correctly [< 1 ms]
+  Error Message:
+   System.Exception : unexpected result []
+  Stack Trace:
+     at SageFs.VisualStudio.Core.Tests.LiveTestingParserTests.parseSseEvent test_results_batch with StaleCodeEdited freshness parses correctly() in C:\Code\Repos\SageFs\sagefs-vs\SageFs.VisualStudio.Core.Tests\LiveTestingParserTests.fs:line 142
+   at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+   at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+[xUnit.net 00:00:00.46]     SageFs.VisualStudio.Core.Tests.LiveTestStateTests.multiple events applied sequentially produce correct cumulative state [FAIL]
+[xUnit.net 00:00:00.46]       System.TypeLoadException : Could not load type 'Microsoft.FSharp.Core.CompilerServices.ListCollector`1' from assembly 'FSharp.Core, Version=5.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.
+[xUnit.net 00:00:00.46]       Stack Trace:
+[xUnit.net 00:00:00.46]            at SageFs.VisualStudio.Core.LiveTestStateModule.update(LiveTestEvent event, LiveTestState state)
+[xUnit.net 00:00:00.46]         C:\Code\Repos\SageFs\sagefs-vs\SageFs.VisualStudio.Core.Tests\LiveTestStateTests.fs(196,0): at SageFs.VisualStudio.Core.Tests.LiveTestStateTests.multiple events applied sequentially produce correct cumulative state()
+[xUnit.net 00:00:00.46]            at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+[xUnit.net 00:00:00.46]            at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+[xUnit.net 00:00:00.46]     SageFs.VisualStudio.Core.Tests.LiveTestStateTests.update LiveTestingDisabled returns EnabledChanged Off change [FAIL]
+[xUnit.net 00:00:00.46]       System.TypeLoadException : Could not load type 'Microsoft.FSharp.Core.CompilerServices.ListCollector`1' from assembly 'FSharp.Core, Version=5.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.
+[xUnit.net 00:00:00.46]       Stack Trace:
+[xUnit.net 00:00:00.46]            at SageFs.VisualStudio.Core.LiveTestStateModule.update(LiveTestEvent event, LiveTestState state)
+[xUnit.net 00:00:00.46]         C:\Code\Repos\SageFs\sagefs-vs\SageFs.VisualStudio.Core.Tests\LiveTestStateTests.fs(75,0): at SageFs.VisualStudio.Core.Tests.LiveTestStateTests.update LiveTestingDisabled returns EnabledChanged Off change()
+[xUnit.net 00:00:00.46]            at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+[xUnit.net 00:00:00.46]            at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+[xUnit.net 00:00:00.46]     SageFs.VisualStudio.Core.Tests.LiveTestingParserTests.parseSseEvent test_results_batch failed result has Failed outcome with message [FAIL]
+[xUnit.net 00:00:00.46]       System.Exception : unexpected result []
+[xUnit.net 00:00:00.46]       Stack Trace:
+[xUnit.net 00:00:00.46]         C:\Code\Repos\SageFs\sagefs-vs\SageFs.VisualStudio.Core.Tests\LiveTestingParserTests.fs(119,0): at SageFs.VisualStudio.Core.Tests.LiveTestingParserTests.parseSseEvent test_results_batch failed result has Failed outcome with message()
+[xUnit.net 00:00:00.46]            at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+[xUnit.net 00:00:00.46]            at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+[xUnit.net 00:00:00.46]     SageFs.VisualStudio.Core.Tests.LiveTestStateTests.update TestsDiscovered adds test to Tests map [FAIL]
+[xUnit.net 00:00:00.46]       System.TypeLoadException : Could not load type 'Microsoft.FSharp.Core.CompilerServices.ListCollector`1' from assembly 'FSharp.Core, Version=5.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.
+[xUnit.net 00:00:00.46]       Stack Trace:
+[xUnit.net 00:00:00.46]            at SageFs.VisualStudio.Core.LiveTestStateModule.update(LiveTestEvent event, LiveTestState state)
+[xUnit.net 00:00:00.46]         C:\Code\Repos\SageFs\sagefs-vs\SageFs.VisualStudio.Core.Tests\LiveTestStateTests.fs(83,0): at SageFs.VisualStudio.Core.Tests.LiveTestStateTests.update TestsDiscovered adds test to Tests map()
+[xUnit.net 00:00:00.46]            at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+[xUnit.net 00:00:00.46]            at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+  Failed SageFs.VisualStudio.Core.Tests.LiveTestStateTests.multiple events applied sequentially produce correct cumulative state [< 1 ms]
+  Error Message:
+   System.TypeLoadException : Could not load type 'Microsoft.FSharp.Core.CompilerServices.ListCollector`1' from assembly 'FSharp.Core, Version=5.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.
+  Stack Trace:
+     at SageFs.VisualStudio.Core.LiveTestStateModule.update(LiveTestEvent event, LiveTestState state)
+   at SageFs.VisualStudio.Core.Tests.LiveTestStateTests.multiple events applied sequentially produce correct cumulative state() in C:\Code\Repos\SageFs\sagefs-vs\SageFs.VisualStudio.Core.Tests\LiveTestStateTests.fs:line 196
+   at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+   at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+  Passed SageFs.VisualStudio.Core.Tests.LiveTestingParserTests.parseSseEvent test_results_batch with missing Entries returns empty list [< 1 ms]
+  Failed SageFs.VisualStudio.Core.Tests.LiveTestStateTests.update LiveTestingDisabled returns EnabledChanged Off change [< 1 ms]
+  Error Message:
+   System.TypeLoadException : Could not load type 'Microsoft.FSharp.Core.CompilerServices.ListCollector`1' from assembly 'FSharp.Core, Version=5.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.
+  Stack Trace:
+     at SageFs.VisualStudio.Core.LiveTestStateModule.update(LiveTestEvent event, LiveTestState state)
+   at SageFs.VisualStudio.Core.Tests.LiveTestStateTests.update LiveTestingDisabled returns EnabledChanged Off change() in C:\Code\Repos\SageFs\sagefs-vs\SageFs.VisualStudio.Core.Tests\LiveTestStateTests.fs:line 75
+   at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+   at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+  Failed SageFs.VisualStudio.Core.Tests.LiveTestingParserTests.parseSseEvent test_results_batch failed result has Failed outcome with message [< 1 ms]
+  Error Message:
+   System.Exception : unexpected result []
+  Stack Trace:
+     at SageFs.VisualStudio.Core.Tests.LiveTestingParserTests.parseSseEvent test_results_batch failed result has Failed outcome with message() in C:\Code\Repos\SageFs\sagefs-vs\SageFs.VisualStudio.Core.Tests\LiveTestingParserTests.fs:line 119
+   at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+   at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+  Passed SageFs.VisualStudio.Core.Tests.LiveTestStateTests.empty state has Enabled Off [< 1 ms]
+  Failed SageFs.VisualStudio.Core.Tests.LiveTestStateTests.update TestsDiscovered adds test to Tests map [< 1 ms]
+  Error Message:
+   System.TypeLoadException : Could not load type 'Microsoft.FSharp.Core.CompilerServices.ListCollector`1' from assembly 'FSharp.Core, Version=5.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.
+  Stack Trace:
+     at SageFs.VisualStudio.Core.LiveTestStateModule.update(LiveTestEvent event, LiveTestState state)
+   at SageFs.VisualStudio.Core.Tests.LiveTestStateTests.update TestsDiscovered adds test to Tests map() in C:\Code\Repos\SageFs\sagefs-vs\SageFs.VisualStudio.Core.Tests\LiveTestStateTests.fs:line 83
+   at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+   at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+  Passed SageFs.VisualStudio.Core.Tests.LiveTestingParserTests.parseSseEvent test_summary with valid JSON returns SummaryUpdated with correct fields [1 ms]
+  Passed SageFs.VisualStudio.Core.Tests.LiveTestingParserTests.parseDurationToMs returns None for invalid string [< 1 ms]
+[xUnit.net 00:00:00.46]     SageFs.VisualStudio.Core.Tests.LiveTestStateTests.update TestResultBatch removes completed IDs from RunningTests [FAIL]
+[xUnit.net 00:00:00.46]       System.TypeLoadException : Could not load type 'Microsoft.FSharp.Core.CompilerServices.ListCollector`1' from assembly 'FSharp.Core, Version=5.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.
+[xUnit.net 00:00:00.46]       Stack Trace:
+[xUnit.net 00:00:00.46]            at SageFs.VisualStudio.Core.LiveTestStateModule.update(LiveTestEvent event, LiveTestState state)
+[xUnit.net 00:00:00.46]         C:\Code\Repos\SageFs\sagefs-vs\SageFs.VisualStudio.Core.Tests\LiveTestStateTests.fs(150,0): at SageFs.VisualStudio.Core.Tests.LiveTestStateTests.update TestResultBatch removes completed IDs from RunningTests()
+[xUnit.net 00:00:00.46]            at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+[xUnit.net 00:00:00.46]            at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+[xUnit.net 00:00:00.46]     SageFs.VisualStudio.Core.Tests.LiveTestingParserTests.parseSseEvent test_results_batch passed result has source file and line from Origin [FAIL]
+[xUnit.net 00:00:00.46]       System.Exception : unexpected result []
+[xUnit.net 00:00:00.46]       Stack Trace:
+[xUnit.net 00:00:00.46]         C:\Code\Repos\SageFs\sagefs-vs\SageFs.VisualStudio.Core.Tests\LiveTestingParserTests.fs(110,0): at SageFs.VisualStudio.Core.Tests.LiveTestingParserTests.parseSseEvent test_results_batch passed result has source file and line from Origin()
+[xUnit.net 00:00:00.46]            at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+[xUnit.net 00:00:00.46]            at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+[xUnit.net 00:00:00.46]     SageFs.VisualStudio.Core.Tests.TestTreeViewModelTests.formatTestTooltip with no result returns Not Run [FAIL]
+[xUnit.net 00:00:00.46]       System.InvalidCastException : Unable to cast object of type 'System.Char' to type 'System.String'.
+[xUnit.net 00:00:00.46]       Stack Trace:
+[xUnit.net 00:00:00.46]         D:\workspace\_work\1\s\src\fsharp\FSharp.Core\prim-types.fs(644,0): at Microsoft.FSharp.Core.LanguagePrimitives.IntrinsicFunctions.UnboxGeneric[T](Object source)
+[xUnit.net 00:00:00.46]         D:\workspace\_work\1\s\src\fsharp\FSharp.Core\seqcore.fs(26,0): at Microsoft.FSharp.Collections.IEnumerator.cast@25.System.Collections.Generic.IEnumerator<'T>.get_Current()
+[xUnit.net 00:00:00.46]         D:\workspace\_work\1\s\src\fsharp\FSharp.Core\seq.fs(532,0): at Microsoft.FSharp.Collections.SeqModule.Exists[T](FSharpFunc`2 predicate, IEnumerable`1 source)
+[xUnit.net 00:00:00.46]            at FsUnit.CustomMatchers.contain@191.Invoke(Object delegateArg0)
+[xUnit.net 00:00:00.46]            at NHamcrest.Core.CustomMatcher`1.Matches(T item)
+[xUnit.net 00:00:00.46]            at FsUnit.Xunit.Assert.That.Static[a](a actual, IMatcher`1 matcher)
+[xUnit.net 00:00:00.46]         C:\Code\Repos\SageFs\sagefs-vs\SageFs.VisualStudio.Core.Tests\TestTreeViewModelTests.fs(93,0): at SageFs.VisualStudio.Core.Tests.TestTreeViewModelTests.formatTestTooltip with no result returns Not Run()
+[xUnit.net 00:00:00.46]            at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+[xUnit.net 00:00:00.46]            at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+[xUnit.net 00:00:00.46]     SageFs.VisualStudio.Core.Tests.LiveTestingParserTests.parseSseEvent test_results_batch with string StaleCodeEdited freshness returns StaleCodeEdited [FAIL]
+[xUnit.net 00:00:00.46]       System.Exception : unexpected result []
+[xUnit.net 00:00:00.46]       Stack Trace:
+[xUnit.net 00:00:00.46]         C:\Code\Repos\SageFs\sagefs-vs\SageFs.VisualStudio.Core.Tests\LiveTestingParserTests.fs(188,0): at SageFs.VisualStudio.Core.Tests.LiveTestingParserTests.parseSseEvent test_results_batch with string StaleCodeEdited freshness returns StaleCodeEdited()
+[xUnit.net 00:00:00.46]            at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+[xUnit.net 00:00:00.46]            at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+  Passed SageFs.VisualStudio.Core.Tests.TestTreeViewModelTests.formatGroupHeader with no results shows 0 of N passed [3 ms]
+  Passed SageFs.VisualStudio.Core.Tests.LiveTestingParserTests.parseSseEvent with unknown event type returns empty list [< 1 ms]
+  Failed SageFs.VisualStudio.Core.Tests.LiveTestStateTests.update TestResultBatch removes completed IDs from RunningTests [1 ms]
+  Error Message:
+   System.TypeLoadException : Could not load type 'Microsoft.FSharp.Core.CompilerServices.ListCollector`1' from assembly 'FSharp.Core, Version=5.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.
+  Stack Trace:
+     at SageFs.VisualStudio.Core.LiveTestStateModule.update(LiveTestEvent event, LiveTestState state)
+   at SageFs.VisualStudio.Core.Tests.LiveTestStateTests.update TestResultBatch removes completed IDs from RunningTests() in C:\Code\Repos\SageFs\sagefs-vs\SageFs.VisualStudio.Core.Tests\LiveTestStateTests.fs:line 150
+   at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+   at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+  Passed SageFs.VisualStudio.Core.Tests.LiveTestStateTests.empty state has no tests [< 1 ms]
+  Failed SageFs.VisualStudio.Core.Tests.LiveTestingParserTests.parseSseEvent test_results_batch passed result has source file and line from Origin [< 1 ms]
+  Error Message:
+   System.Exception : unexpected result []
+  Stack Trace:
+     at SageFs.VisualStudio.Core.Tests.LiveTestingParserTests.parseSseEvent test_results_batch passed result has source file and line from Origin() in C:\Code\Repos\SageFs\sagefs-vs\SageFs.VisualStudio.Core.Tests\LiveTestingParserTests.fs:line 110
+   at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+   at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+  Failed SageFs.VisualStudio.Core.Tests.TestTreeViewModelTests.formatTestTooltip with no result returns Not Run [< 1 ms]
+  Error Message:
+   System.InvalidCastException : Unable to cast object of type 'System.Char' to type 'System.String'.
+  Stack Trace:
+     at Microsoft.FSharp.Core.LanguagePrimitives.IntrinsicFunctions.UnboxGeneric[T](Object source) in D:\workspace\_work\1\s\src\fsharp\FSharp.Core\prim-types.fs:line 644
+   at Microsoft.FSharp.Collections.IEnumerator.cast@25.System.Collections.Generic.IEnumerator<'T>.get_Current() in D:\workspace\_work\1\s\src\fsharp\FSharp.Core\seqcore.fs:line 26
+   at Microsoft.FSharp.Collections.SeqModule.Exists[T](FSharpFunc`2 predicate, IEnumerable`1 source) in D:\workspace\_work\1\s\src\fsharp\FSharp.Core\seq.fs:line 532
+   at FsUnit.CustomMatchers.contain@191.Invoke(Object delegateArg0)
+   at NHamcrest.Core.CustomMatcher`1.Matches(T item)
+   at FsUnit.Xunit.Assert.That.Static[a](a actual, IMatcher`1 matcher)
+   at SageFs.VisualStudio.Core.Tests.TestTreeViewModelTests.formatTestTooltip with no result returns Not Run() in C:\Code\Repos\SageFs\sagefs-vs\SageFs.VisualStudio.Core.Tests\TestTreeViewModelTests.fs:line 93
+   at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+   at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+  Failed SageFs.VisualStudio.Core.Tests.LiveTestingParserTests.parseSseEvent test_results_batch with string StaleCodeEdited freshness returns StaleCodeEdited [< 1 ms]
+  Error Message:
+   System.Exception : unexpected result []
+  Stack Trace:
+     at SageFs.VisualStudio.Core.Tests.LiveTestingParserTests.parseSseEvent test_results_batch with string StaleCodeEdited freshness returns StaleCodeEdited() in C:\Code\Repos\SageFs\sagefs-vs\SageFs.VisualStudio.Core.Tests\LiveTestingParserTests.fs:line 188
+   at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+   at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+[xUnit.net 00:00:00.46]     SageFs.VisualStudio.Core.Tests.LiveTestingParserTests.parseSseEvent test_results_batch valid JSON returns TestsDiscovered and TestResultBatch [FAIL]
+[xUnit.net 00:00:00.46]       FsUnit.Xunit+MatchException : Exception of type 'FsUnit.Xunit+MatchException' was thrown.
+[xUnit.net 00:00:00.46]       Expected: Equals 2
+[xUnit.net 00:00:00.46]       Actual:   0
+[xUnit.net 00:00:00.46]       Stack Trace:
+[xUnit.net 00:00:00.46]            at FsUnit.Xunit.Assert.That.Static[a](a actual, IMatcher`1 matcher)
+[xUnit.net 00:00:00.46]         C:\Code\Repos\SageFs\sagefs-vs\SageFs.VisualStudio.Core.Tests\LiveTestingParserTests.fs(80,0): at SageFs.VisualStudio.Core.Tests.LiveTestingParserTests.parseSseEvent test_results_batch valid JSON returns TestsDiscovered and TestResultBatch()
+[xUnit.net 00:00:00.46]            at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+[xUnit.net 00:00:00.46]            at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+  Passed SageFs.VisualStudio.Core.Tests.TestTreeViewModelTests.searchGroups with whitespace-only query returns all groups unchanged [< 1 ms]
+  Passed SageFs.VisualStudio.Core.Tests.LiveTestingParserTests.parseDurationToMs returns None for empty string [< 1 ms]
+  Passed SageFs.VisualStudio.Core.Tests.TestTreeViewModelTests.groupByFile groups tests by file path returning one group per file [< 1 ms]
+  Passed SageFs.VisualStudio.Core.Tests.GlyphProjectionTests.allEntries sorts by filePath then line [9 ms]
+  Passed SageFs.VisualStudio.Core.Tests.GlyphProjectionTests.forFile excludes tests with no FilePath [< 1 ms]
+  Failed SageFs.VisualStudio.Core.Tests.LiveTestingParserTests.parseSseEvent test_results_batch valid JSON returns TestsDiscovered and TestResultBatch [1 ms]
+  Error Message:
+   FsUnit.Xunit+MatchException : Exception of type 'FsUnit.Xunit+MatchException' was thrown.
+Expected: Equals 2
+Actual:   0
+  Stack Trace:
+     at FsUnit.Xunit.Assert.That.Static[a](a actual, IMatcher`1 matcher)
+   at SageFs.VisualStudio.Core.Tests.LiveTestingParserTests.parseSseEvent test_results_batch valid JSON returns TestsDiscovered and TestResultBatch() in C:\Code\Repos\SageFs\sagefs-vs\SageFs.VisualStudio.Core.Tests\LiveTestingParserTests.fs:line 80
+   at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+   at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+  Passed SageFs.VisualStudio.Core.Tests.GlyphProjectionTests.classify Failed returns GlyphFailed [< 1 ms]
+  Passed SageFs.VisualStudio.Core.Tests.GlyphProjectionTests.classify Stale returns GlyphStale [< 1 ms]
+[xUnit.net 00:00:00.46]     SageFs.VisualStudio.Core.Tests.TestTreeViewModelTests.formatGroupedOutput with tests and no filter returns group headers and test lines [FAIL]
+[xUnit.net 00:00:00.46]       System.InvalidCastException : Unable to cast object of type 'System.Char' to type 'System.String'.
+[xUnit.net 00:00:00.46]       Stack Trace:
+[xUnit.net 00:00:00.46]         D:\workspace\_work\1\s\src\fsharp\FSharp.Core\prim-types.fs(644,0): at Microsoft.FSharp.Core.LanguagePrimitives.IntrinsicFunctions.UnboxGeneric[T](Object source)
+[xUnit.net 00:00:00.46]         D:\workspace\_work\1\s\src\fsharp\FSharp.Core\seqcore.fs(26,0): at Microsoft.FSharp.Collections.IEnumerator.cast@25.System.Collections.Generic.IEnumerator<'T>.get_Current()
+[xUnit.net 00:00:00.46]         D:\workspace\_work\1\s\src\fsharp\FSharp.Core\seq.fs(532,0): at Microsoft.FSharp.Collections.SeqModule.Exists[T](FSharpFunc`2 predicate, IEnumerable`1 source)
+[xUnit.net 00:00:00.46]            at FsUnit.CustomMatchers.contain@191.Invoke(Object delegateArg0)
+[xUnit.net 00:00:00.46]            at NHamcrest.Core.CustomMatcher`1.Matches(T item)
+[xUnit.net 00:00:00.46]            at FsUnit.Xunit.Assert.That.Static[a](a actual, IMatcher`1 matcher)
+[xUnit.net 00:00:00.46]         C:\Code\Repos\SageFs\sagefs-vs\SageFs.VisualStudio.Core.Tests\TestTreeViewModelTests.fs(305,0): at SageFs.VisualStudio.Core.Tests.TestTreeViewModelTests.formatGroupedOutput with tests and no filter returns group headers and test lines()
+[xUnit.net 00:00:00.46]            at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+[xUnit.net 00:00:00.46]            at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+  Failed SageFs.VisualStudio.Core.Tests.TestTreeViewModelTests.formatGroupedOutput with tests and no filter returns group headers and test lines [2 ms]
+  Error Message:
+   System.InvalidCastException : Unable to cast object of type 'System.Char' to type 'System.String'.
+  Stack Trace:
+     at Microsoft.FSharp.Core.LanguagePrimitives.IntrinsicFunctions.UnboxGeneric[T](Object source) in D:\workspace\_work\1\s\src\fsharp\FSharp.Core\prim-types.fs:line 644
+   at Microsoft.FSharp.Collections.IEnumerator.cast@25.System.Collections.Generic.IEnumerator<'T>.get_Current() in D:\workspace\_work\1\s\src\fsharp\FSharp.Core\seqcore.fs:line 26
+   at Microsoft.FSharp.Collections.SeqModule.Exists[T](FSharpFunc`2 predicate, IEnumerable`1 source) in D:\workspace\_work\1\s\src\fsharp\FSharp.Core\seq.fs:line 532
+   at FsUnit.CustomMatchers.contain@191.Invoke(Object delegateArg0)
+   at NHamcrest.Core.CustomMatcher`1.Matches(T item)
+   at FsUnit.Xunit.Assert.That.Static[a](a actual, IMatcher`1 matcher)
+   at SageFs.VisualStudio.Core.Tests.TestTreeViewModelTests.formatGroupedOutput with tests and no filter returns group headers and test lines() in C:\Code\Repos\SageFs\sagefs-vs\SageFs.VisualStudio.Core.Tests\TestTreeViewModelTests.fs:line 305
+   at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+   at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+  Passed SageFs.VisualStudio.Core.Tests.GlyphProjectionTests.classify PolicyDisabled returns GlyphNotRun [< 1 ms]
+  Passed SageFs.VisualStudio.Core.Tests.TestTreeViewModelTests.nextFilter cycles through all filters and returns to All [< 1 ms]
+  Passed SageFs.VisualStudio.Core.Tests.GlyphProjectionTests.classify Running returns GlyphRunning [< 1 ms]
+  Passed SageFs.VisualStudio.Core.Tests.GlyphProjectionTests.forFile excludes tests with no Line [< 1 ms]
+  Passed SageFs.VisualStudio.Core.Tests.TestTreeViewModelTests.formatTestLabel with stale result returns stale indicator [< 1 ms]
+  Passed SageFs.VisualStudio.Core.Tests.GlyphProjectionTests.forFile is case-insensitive [< 1 ms]
+  Passed SageFs.VisualStudio.Core.Tests.GlyphProjectionTests.allEntries excludes tests with no location [< 1 ms]
+[xUnit.net 00:00:00.47]     SageFs.VisualStudio.Core.Tests.TestTreeViewModelTests.formatTestTooltip with stale and StaleCodeEdited freshness mentions code edited [FAIL]
+[xUnit.net 00:00:00.47]       System.InvalidCastException : Unable to cast object of type 'System.Char' to type 'System.String'.
+[xUnit.net 00:00:00.47]       Stack Trace:
+[xUnit.net 00:00:00.47]         D:\workspace\_work\1\s\src\fsharp\FSharp.Core\prim-types.fs(644,0): at Microsoft.FSharp.Core.LanguagePrimitives.IntrinsicFunctions.UnboxGeneric[T](Object source)
+[xUnit.net 00:00:00.47]         D:\workspace\_work\1\s\src\fsharp\FSharp.Core\seqcore.fs(26,0): at Microsoft.FSharp.Collections.IEnumerator.cast@25.System.Collections.Generic.IEnumerator<'T>.get_Current()
+[xUnit.net 00:00:00.47]         D:\workspace\_work\1\s\src\fsharp\FSharp.Core\seq.fs(532,0): at Microsoft.FSharp.Collections.SeqModule.Exists[T](FSharpFunc`2 predicate, IEnumerable`1 source)
+[xUnit.net 00:00:00.47]            at FsUnit.CustomMatchers.contain@191.Invoke(Object delegateArg0)
+[xUnit.net 00:00:00.47]            at NHamcrest.Core.CustomMatcher`1.Matches(T item)
+[xUnit.net 00:00:00.47]            at FsUnit.Xunit.Assert.That.Static[a](a actual, IMatcher`1 matcher)
+[xUnit.net 00:00:00.47]         C:\Code\Repos\SageFs\sagefs-vs\SageFs.VisualStudio.Core.Tests\TestTreeViewModelTests.fs(104,0): at SageFs.VisualStudio.Core.Tests.TestTreeViewModelTests.formatTestTooltip with stale and StaleCodeEdited freshness mentions code edited()
+[xUnit.net 00:00:00.47]            at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+[xUnit.net 00:00:00.47]            at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+  Passed SageFs.VisualStudio.Core.Tests.TestTreeViewModelTests.formatTestLabel with passed result returns check icon and duration [< 1 ms]
+  Failed SageFs.VisualStudio.Core.Tests.TestTreeViewModelTests.formatTestTooltip with stale and StaleCodeEdited freshness mentions code edited [< 1 ms]
+  Error Message:
+   System.InvalidCastException : Unable to cast object of type 'System.Char' to type 'System.String'.
+  Stack Trace:
+     at Microsoft.FSharp.Core.LanguagePrimitives.IntrinsicFunctions.UnboxGeneric[T](Object source) in D:\workspace\_work\1\s\src\fsharp\FSharp.Core\prim-types.fs:line 644
+   at Microsoft.FSharp.Collections.IEnumerator.cast@25.System.Collections.Generic.IEnumerator<'T>.get_Current() in D:\workspace\_work\1\s\src\fsharp\FSharp.Core\seqcore.fs:line 26
+   at Microsoft.FSharp.Collections.SeqModule.Exists[T](FSharpFunc`2 predicate, IEnumerable`1 source) in D:\workspace\_work\1\s\src\fsharp\FSharp.Core\seq.fs:line 532
+   at FsUnit.CustomMatchers.contain@191.Invoke(Object delegateArg0)
+   at NHamcrest.Core.CustomMatcher`1.Matches(T item)
+   at FsUnit.Xunit.Assert.That.Static[a](a actual, IMatcher`1 matcher)
+   at SageFs.VisualStudio.Core.Tests.TestTreeViewModelTests.formatTestTooltip with stale and StaleCodeEdited freshness mentions code edited() in C:\Code\Repos\SageFs\sagefs-vs\SageFs.VisualStudio.Core.Tests\TestTreeViewModelTests.fs:line 104
+   at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+   at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+  Passed SageFs.VisualStudio.Core.Tests.TestTreeViewModelTests.filterGroups All keeps all groups unchanged [< 1 ms]
+  Passed SageFs.VisualStudio.Core.Tests.GlyphProjectionTests.forFile uses actual result outcome when present [1 ms]
+  Passed SageFs.VisualStudio.Core.Tests.GlyphProjectionTests.allEntries returns empty for empty state [< 1 ms]
+  Passed SageFs.VisualStudio.Core.Tests.TestTreeViewModelTests.filterGroups FailedOnly keeps only groups containing failed tests [1 ms]
+  Passed SageFs.VisualStudio.Core.Tests.LiveTestStateTests.resultFor returns Some result when test ID exists [9 ms]
+[xUnit.net 00:00:00.47]     SageFs.VisualStudio.Core.Tests.LiveTestStateTests.update RunPolicyChanged returns PolicyUpdated change [FAIL]
+[xUnit.net 00:00:00.47]       System.TypeLoadException : Could not load type 'Microsoft.FSharp.Core.CompilerServices.ListCollector`1' from assembly 'FSharp.Core, Version=5.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.
+[xUnit.net 00:00:00.47]       Stack Trace:
+[xUnit.net 00:00:00.47]            at SageFs.VisualStudio.Core.LiveTestStateModule.update(LiveTestEvent event, LiveTestState state)
+[xUnit.net 00:00:00.47]         C:\Code\Repos\SageFs\sagefs-vs\SageFs.VisualStudio.Core.Tests\LiveTestStateTests.fs(183,0): at SageFs.VisualStudio.Core.Tests.LiveTestStateTests.update RunPolicyChanged returns PolicyUpdated change()
+[xUnit.net 00:00:00.47]            at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+[xUnit.net 00:00:00.47]            at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+  Passed SageFs.VisualStudio.Core.Tests.GlyphProjectionTests.forFile uses Detected outcome when no result exists [< 1 ms]
+  Passed SageFs.VisualStudio.Core.Tests.TestTreeViewModelTests.searchGroups returns empty when no tests match query [< 1 ms]
+  Passed SageFs.VisualStudio.Core.Tests.LiveTestStateTests.summary computes failed count from Results when LastSummary is None [< 1 ms]
+  Passed SageFs.VisualStudio.Core.Tests.TestTreeViewModelTests.formatTestLabel with no result returns not-run label [< 1 ms]
+  Passed SageFs.VisualStudio.Core.Tests.GlyphProjectionTests.forFile returns entry for matching file [< 1 ms]
+  Passed SageFs.VisualStudio.Core.Tests.TestTreeViewModelTests.nextFilter PassedOnly returns All completing the cycle [< 1 ms]
+  Failed SageFs.VisualStudio.Core.Tests.LiveTestStateTests.update RunPolicyChanged returns PolicyUpdated change [< 1 ms]
+  Error Message:
+   System.TypeLoadException : Could not load type 'Microsoft.FSharp.Core.CompilerServices.ListCollector`1' from assembly 'FSharp.Core, Version=5.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.
+  Stack Trace:
+     at SageFs.VisualStudio.Core.LiveTestStateModule.update(LiveTestEvent event, LiveTestState state)
+   at SageFs.VisualStudio.Core.Tests.LiveTestStateTests.update RunPolicyChanged returns PolicyUpdated change() in C:\Code\Repos\SageFs\sagefs-vs\SageFs.VisualStudio.Core.Tests\LiveTestStateTests.fs:line 183
+   at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+   at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+[xUnit.net 00:00:00.47]     SageFs.VisualStudio.Core.Tests.LiveTestStateTests.update RunPolicyChanged adds policy to Policies map [FAIL]
+[xUnit.net 00:00:00.47]       System.TypeLoadException : Could not load type 'Microsoft.FSharp.Core.CompilerServices.ListCollector`1' from assembly 'FSharp.Core, Version=5.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.
+[xUnit.net 00:00:00.47]       Stack Trace:
+[xUnit.net 00:00:00.47]            at SageFs.VisualStudio.Core.LiveTestStateModule.update(LiveTestEvent event, LiveTestState state)
+[xUnit.net 00:00:00.47]         C:\Code\Repos\SageFs\sagefs-vs\SageFs.VisualStudio.Core.Tests\LiveTestStateTests.fs(174,0): at SageFs.VisualStudio.Core.Tests.LiveTestStateTests.update RunPolicyChanged adds policy to Policies map()
+[xUnit.net 00:00:00.47]            at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+[xUnit.net 00:00:00.47]            at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+[xUnit.net 00:00:00.47]     SageFs.VisualStudio.Core.Tests.LiveTestStateTests.update LiveTestingDisabled sets Enabled Off [FAIL]
+[xUnit.net 00:00:00.47]       System.TypeLoadException : Could not load type 'Microsoft.FSharp.Core.CompilerServices.ListCollector`1' from assembly 'FSharp.Core, Version=5.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.
+[xUnit.net 00:00:00.47]       Stack Trace:
+[xUnit.net 00:00:00.47]            at SageFs.VisualStudio.Core.LiveTestStateModule.update(LiveTestEvent event, LiveTestState state)
+[xUnit.net 00:00:00.47]         C:\Code\Repos\SageFs\sagefs-vs\SageFs.VisualStudio.Core.Tests\LiveTestStateTests.fs(69,0): at SageFs.VisualStudio.Core.Tests.LiveTestStateTests.update LiveTestingDisabled sets Enabled Off()
+[xUnit.net 00:00:00.47]            at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+[xUnit.net 00:00:00.47]            at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+[xUnit.net 00:00:00.47]     SageFs.VisualStudio.Core.Tests.LiveTestStateTests.update LiveTestingEnabled sets Enabled On [FAIL]
+[xUnit.net 00:00:00.47]       System.TypeLoadException : Could not load type 'Microsoft.FSharp.Core.CompilerServices.ListCollector`1' from assembly 'FSharp.Core, Version=5.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.
+[xUnit.net 00:00:00.47]       Stack Trace:
+[xUnit.net 00:00:00.47]            at SageFs.VisualStudio.Core.LiveTestStateModule.update(LiveTestEvent event, LiveTestState state)
+[xUnit.net 00:00:00.47]         C:\Code\Repos\SageFs\sagefs-vs\SageFs.VisualStudio.Core.Tests\LiveTestStateTests.fs(58,0): at SageFs.VisualStudio.Core.Tests.LiveTestStateTests.update LiveTestingEnabled sets Enabled On()
+[xUnit.net 00:00:00.47]            at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+[xUnit.net 00:00:00.47]            at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+[xUnit.net 00:00:00.47]     SageFs.VisualStudio.Core.Tests.LiveTestStateTests.update LiveTestingEnabled returns EnabledChanged On change [FAIL]
+[xUnit.net 00:00:00.47]       System.TypeLoadException : Could not load type 'Microsoft.FSharp.Core.CompilerServices.ListCollector`1' from assembly 'FSharp.Core, Version=5.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.
+[xUnit.net 00:00:00.47]       Stack Trace:
+[xUnit.net 00:00:00.47]            at SageFs.VisualStudio.Core.LiveTestStateModule.update(LiveTestEvent event, LiveTestState state)
+[xUnit.net 00:00:00.47]         C:\Code\Repos\SageFs\sagefs-vs\SageFs.VisualStudio.Core.Tests\LiveTestStateTests.fs(63,0): at SageFs.VisualStudio.Core.Tests.LiveTestStateTests.update LiveTestingEnabled returns EnabledChanged On change()
+[xUnit.net 00:00:00.47]            at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+[xUnit.net 00:00:00.47]            at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+  Passed SageFs.VisualStudio.Core.Tests.TestTreeViewModelTests.searchGroups case-insensitive match on DisplayName [< 1 ms]
+  Failed SageFs.VisualStudio.Core.Tests.LiveTestStateTests.update RunPolicyChanged adds policy to Policies map [< 1 ms]
+  Error Message:
+   System.TypeLoadException : Could not load type 'Microsoft.FSharp.Core.CompilerServices.ListCollector`1' from assembly 'FSharp.Core, Version=5.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.
+  Stack Trace:
+     at SageFs.VisualStudio.Core.LiveTestStateModule.update(LiveTestEvent event, LiveTestState state)
+   at SageFs.VisualStudio.Core.Tests.LiveTestStateTests.update RunPolicyChanged adds policy to Policies map() in C:\Code\Repos\SageFs\sagefs-vs\SageFs.VisualStudio.Core.Tests\LiveTestStateTests.fs:line 174
+   at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+   at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+  Failed SageFs.VisualStudio.Core.Tests.LiveTestStateTests.update LiveTestingDisabled sets Enabled Off [< 1 ms]
+  Error Message:
+   System.TypeLoadException : Could not load type 'Microsoft.FSharp.Core.CompilerServices.ListCollector`1' from assembly 'FSharp.Core, Version=5.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.
+  Stack Trace:
+     at SageFs.VisualStudio.Core.LiveTestStateModule.update(LiveTestEvent event, LiveTestState state)
+   at SageFs.VisualStudio.Core.Tests.LiveTestStateTests.update LiveTestingDisabled sets Enabled Off() in C:\Code\Repos\SageFs\sagefs-vs\SageFs.VisualStudio.Core.Tests\LiveTestStateTests.fs:line 69
+   at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+   at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+  Passed SageFs.VisualStudio.Core.Tests.TestTreeViewModelTests.formatGroupHeader with all passed shows check icon and 3 of 3 passed [< 1 ms]
+  Passed SageFs.VisualStudio.Core.Tests.LiveTestStateTests.empty state has no last summary [< 1 ms]
+  Failed SageFs.VisualStudio.Core.Tests.LiveTestStateTests.update LiveTestingEnabled sets Enabled On [< 1 ms]
+  Error Message:
+   System.TypeLoadException : Could not load type 'Microsoft.FSharp.Core.CompilerServices.ListCollector`1' from assembly 'FSharp.Core, Version=5.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.
+  Stack Trace:
+     at SageFs.VisualStudio.Core.LiveTestStateModule.update(LiveTestEvent event, LiveTestState state)
+   at SageFs.VisualStudio.Core.Tests.LiveTestStateTests.update LiveTestingEnabled sets Enabled On() in C:\Code\Repos\SageFs\sagefs-vs\SageFs.VisualStudio.Core.Tests\LiveTestStateTests.fs:line 58
+   at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+   at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+  Passed SageFs.VisualStudio.Core.Tests.LiveTestStateTests.testsForFile returns empty list when no tests match the file [< 1 ms]
+  Failed SageFs.VisualStudio.Core.Tests.LiveTestStateTests.update LiveTestingEnabled returns EnabledChanged On change [< 1 ms]
+  Error Message:
+   System.TypeLoadException : Could not load type 'Microsoft.FSharp.Core.CompilerServices.ListCollector`1' from assembly 'FSharp.Core, Version=5.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.
+  Stack Trace:
+     at SageFs.VisualStudio.Core.LiveTestStateModule.update(LiveTestEvent event, LiveTestState state)
+   at SageFs.VisualStudio.Core.Tests.LiveTestStateTests.update LiveTestingEnabled returns EnabledChanged On change() in C:\Code\Repos\SageFs\sagefs-vs\SageFs.VisualStudio.Core.Tests\LiveTestStateTests.fs:line 63
+   at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+   at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+[xUnit.net 00:00:00.47]     SageFs.VisualStudio.Core.Tests.TestTreeViewModelTests.formatGroupedOutput with filter that matches nothing returns no-match message [FAIL]
+[xUnit.net 00:00:00.47]       System.InvalidCastException : Unable to cast object of type 'System.Char' to type 'System.String'.
+[xUnit.net 00:00:00.47]       Stack Trace:
+[xUnit.net 00:00:00.47]         D:\workspace\_work\1\s\src\fsharp\FSharp.Core\prim-types.fs(644,0): at Microsoft.FSharp.Core.LanguagePrimitives.IntrinsicFunctions.UnboxGeneric[T](Object source)
+[xUnit.net 00:00:00.47]         D:\workspace\_work\1\s\src\fsharp\FSharp.Core\seqcore.fs(26,0): at Microsoft.FSharp.Collections.IEnumerator.cast@25.System.Collections.Generic.IEnumerator<'T>.get_Current()
+[xUnit.net 00:00:00.47]         D:\workspace\_work\1\s\src\fsharp\FSharp.Core\seq.fs(532,0): at Microsoft.FSharp.Collections.SeqModule.Exists[T](FSharpFunc`2 predicate, IEnumerable`1 source)
+[xUnit.net 00:00:00.47]            at FsUnit.CustomMatchers.contain@191.Invoke(Object delegateArg0)
+[xUnit.net 00:00:00.47]            at NHamcrest.Core.CustomMatcher`1.Matches(T item)
+[xUnit.net 00:00:00.47]            at FsUnit.Xunit.Assert.That.Static[a](a actual, IMatcher`1 matcher)
+[xUnit.net 00:00:00.47]         C:\Code\Repos\SageFs\sagefs-vs\SageFs.VisualStudio.Core.Tests\TestTreeViewModelTests.fs(318,0): at SageFs.VisualStudio.Core.Tests.TestTreeViewModelTests.formatGroupedOutput with filter that matches nothing returns no-match message()
+[xUnit.net 00:00:00.47]            at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+[xUnit.net 00:00:00.47]            at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+[xUnit.net 00:00:00.47]     SageFs.VisualStudio.Core.Tests.LiveTestStateTests.update TestsDiscovered preserves existing tests [FAIL]
+[xUnit.net 00:00:00.47]       System.TypeLoadException : Could not load type 'Microsoft.FSharp.Core.CompilerServices.ListCollector`1' from assembly 'FSharp.Core, Version=5.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.
+[xUnit.net 00:00:00.47]       Stack Trace:
+[xUnit.net 00:00:00.47]            at SageFs.VisualStudio.Core.LiveTestStateModule.update(LiveTestEvent event, LiveTestState state)
+[xUnit.net 00:00:00.47]         C:\Code\Repos\SageFs\sagefs-vs\SageFs.VisualStudio.Core.Tests\LiveTestStateTests.fs(99,0): at SageFs.VisualStudio.Core.Tests.LiveTestStateTests.update TestsDiscovered preserves existing tests()
+[xUnit.net 00:00:00.47]            at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+[xUnit.net 00:00:00.47]            at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+[xUnit.net 00:00:00.47]     SageFs.VisualStudio.Core.Tests.LiveTestStateTests.formatToolWindowLine with all passed returns info severity [FAIL]
+[xUnit.net 00:00:00.47]       System.TypeLoadException : Could not load type 'Microsoft.FSharp.Core.CompilerServices.ListCollector`1' from assembly 'FSharp.Core, Version=5.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.
+[xUnit.net 00:00:00.47]       Stack Trace:
+[xUnit.net 00:00:00.47]            at SageFs.VisualStudio.Core.TestSummaryModule.formatToolWindowLine(TestSummary s)
+[xUnit.net 00:00:00.47]         C:\Code\Repos\SageFs\sagefs-vs\SageFs.VisualStudio.Core.Tests\LiveTestStateTests.fs(245,0): at SageFs.VisualStudio.Core.Tests.LiveTestStateTests.formatToolWindowLine with all passed returns info severity()
+[xUnit.net 00:00:00.47]            at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+[xUnit.net 00:00:00.47]            at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+  Passed SageFs.VisualStudio.Core.Tests.GlyphProjectionTests.forFile sorts entries by line ascending [2 ms]
+  Failed SageFs.VisualStudio.Core.Tests.TestTreeViewModelTests.formatGroupedOutput with filter that matches nothing returns no-match message [1 ms]
+  Error Message:
+   System.InvalidCastException : Unable to cast object of type 'System.Char' to type 'System.String'.
+  Stack Trace:
+     at Microsoft.FSharp.Core.LanguagePrimitives.IntrinsicFunctions.UnboxGeneric[T](Object source) in D:\workspace\_work\1\s\src\fsharp\FSharp.Core\prim-types.fs:line 644
+   at Microsoft.FSharp.Collections.IEnumerator.cast@25.System.Collections.Generic.IEnumerator<'T>.get_Current() in D:\workspace\_work\1\s\src\fsharp\FSharp.Core\seqcore.fs:line 26
+   at Microsoft.FSharp.Collections.SeqModule.Exists[T](FSharpFunc`2 predicate, IEnumerable`1 source) in D:\workspace\_work\1\s\src\fsharp\FSharp.Core\seq.fs:line 532
+   at FsUnit.CustomMatchers.contain@191.Invoke(Object delegateArg0)
+   at NHamcrest.Core.CustomMatcher`1.Matches(T item)
+   at FsUnit.Xunit.Assert.That.Static[a](a actual, IMatcher`1 matcher)
+   at SageFs.VisualStudio.Core.Tests.TestTreeViewModelTests.formatGroupedOutput with filter that matches nothing returns no-match message() in C:\Code\Repos\SageFs\sagefs-vs\SageFs.VisualStudio.Core.Tests\TestTreeViewModelTests.fs:line 318
+   at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+   at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+  Passed SageFs.VisualStudio.Core.Tests.LiveTestStateTests.empty state has no results [< 1 ms]
+  Passed SageFs.VisualStudio.Core.Tests.TestTreeViewModelTests.filterGroups FailedOnly removes passing tests from mixed group [< 1 ms]
+  Failed SageFs.VisualStudio.Core.Tests.LiveTestStateTests.update TestsDiscovered preserves existing tests [< 1 ms]
+  Error Message:
+   System.TypeLoadException : Could not load type 'Microsoft.FSharp.Core.CompilerServices.ListCollector`1' from assembly 'FSharp.Core, Version=5.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.
+  Stack Trace:
+     at SageFs.VisualStudio.Core.LiveTestStateModule.update(LiveTestEvent event, LiveTestState state)
+   at SageFs.VisualStudio.Core.Tests.LiveTestStateTests.update TestsDiscovered preserves existing tests() in C:\Code\Repos\SageFs\sagefs-vs\SageFs.VisualStudio.Core.Tests\LiveTestStateTests.fs:line 99
+   at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+   at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+  Passed SageFs.VisualStudio.Core.Tests.TestTreeViewModelTests.nextFilter FailedOnly returns RunningOnly [< 1 ms]
+  Failed SageFs.VisualStudio.Core.Tests.LiveTestStateTests.formatToolWindowLine with all passed returns info severity [< 1 ms]
+  Error Message:
+   System.TypeLoadException : Could not load type 'Microsoft.FSharp.Core.CompilerServices.ListCollector`1' from assembly 'FSharp.Core, Version=5.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.
+  Stack Trace:
+     at SageFs.VisualStudio.Core.TestSummaryModule.formatToolWindowLine(TestSummary s)
+   at SageFs.VisualStudio.Core.Tests.LiveTestStateTests.formatToolWindowLine with all passed returns info severity() in C:\Code\Repos\SageFs\sagefs-vs\SageFs.VisualStudio.Core.Tests\LiveTestStateTests.fs:line 245
+   at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+   at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+  Passed SageFs.VisualStudio.Core.Tests.TestTreeViewModelTests.formatTestLabel with running result returns running indicator [< 1 ms]
+[xUnit.net 00:00:00.47]     SageFs.VisualStudio.Core.Tests.TestTreeViewModelTests.formatTestTooltip with passed result contains test name and Passed status [FAIL]
+[xUnit.net 00:00:00.47]       System.InvalidCastException : Unable to cast object of type 'System.Char' to type 'System.String'.
+[xUnit.net 00:00:00.47]       Stack Trace:
+[xUnit.net 00:00:00.47]         D:\workspace\_work\1\s\src\fsharp\FSharp.Core\prim-types.fs(644,0): at Microsoft.FSharp.Core.LanguagePrimitives.IntrinsicFunctions.UnboxGeneric[T](Object source)
+[xUnit.net 00:00:00.47]         D:\workspace\_work\1\s\src\fsharp\FSharp.Core\seqcore.fs(26,0): at Microsoft.FSharp.Collections.IEnumerator.cast@25.System.Collections.Generic.IEnumerator<'T>.get_Current()
+[xUnit.net 00:00:00.47]         D:\workspace\_work\1\s\src\fsharp\FSharp.Core\seq.fs(532,0): at Microsoft.FSharp.Collections.SeqModule.Exists[T](FSharpFunc`2 predicate, IEnumerable`1 source)
+[xUnit.net 00:00:00.47]            at FsUnit.CustomMatchers.contain@191.Invoke(Object delegateArg0)
+[xUnit.net 00:00:00.47]            at NHamcrest.Core.CustomMatcher`1.Matches(T item)
+[xUnit.net 00:00:00.47]            at FsUnit.Xunit.Assert.That.Static[a](a actual, IMatcher`1 matcher)
+[xUnit.net 00:00:00.47]         C:\Code\Repos\SageFs\sagefs-vs\SageFs.VisualStudio.Core.Tests\TestTreeViewModelTests.fs(82,0): at SageFs.VisualStudio.Core.Tests.TestTreeViewModelTests.formatTestTooltip with passed result contains test name and Passed status()
+[xUnit.net 00:00:00.47]            at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+[xUnit.net 00:00:00.47]            at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+[xUnit.net 00:00:00.47]     SageFs.VisualStudio.Core.Tests.LiveTestStateTests.formatToolWindowLine mixed summary shows both failed and stale in text [FAIL]
+[xUnit.net 00:00:00.47]       System.TypeLoadException : Could not load type 'Microsoft.FSharp.Core.CompilerServices.ListCollector`1' from assembly 'FSharp.Core, Version=5.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.
+[xUnit.net 00:00:00.47]       Stack Trace:
+[xUnit.net 00:00:00.47]            at SageFs.VisualStudio.Core.TestSummaryModule.formatToolWindowLine(TestSummary s)
+[xUnit.net 00:00:00.47]         C:\Code\Repos\SageFs\sagefs-vs\SageFs.VisualStudio.Core.Tests\LiveTestStateTests.fs(275,0): at SageFs.VisualStudio.Core.Tests.LiveTestStateTests.formatToolWindowLine mixed summary shows both failed and stale in text()
+[xUnit.net 00:00:00.47]            at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+[xUnit.net 00:00:00.47]            at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+[xUnit.net 00:00:00.47]     SageFs.VisualStudio.Core.Tests.LiveTestStateTests.update TestsDiscovered returns TestsDiscovered change with correct count [FAIL]
+[xUnit.net 00:00:00.47]       System.TypeLoadException : Could not load type 'Microsoft.FSharp.Core.CompilerServices.ListCollector`1' from assembly 'FSharp.Core, Version=5.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.
+[xUnit.net 00:00:00.47]       Stack Trace:
+[xUnit.net 00:00:00.47]            at SageFs.VisualStudio.Core.LiveTestStateModule.update(LiveTestEvent event, LiveTestState state)
+[xUnit.net 00:00:00.47]         C:\Code\Repos\SageFs\sagefs-vs\SageFs.VisualStudio.Core.Tests\LiveTestStateTests.fs(89,0): at SageFs.VisualStudio.Core.Tests.LiveTestStateTests.update TestsDiscovered returns TestsDiscovered change with correct count()
+[xUnit.net 00:00:00.47]            at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+[xUnit.net 00:00:00.47]            at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+[xUnit.net 00:00:00.47]     SageFs.VisualStudio.Core.Tests.LiveTestStateTests.update SummaryUpdated sets LastSummary [FAIL]
+[xUnit.net 00:00:00.47]       System.TypeLoadException : Could not load type 'Microsoft.FSharp.Core.CompilerServices.ListCollector`1' from assembly 'FSharp.Core, Version=5.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.
+[xUnit.net 00:00:00.47]       Stack Trace:
+[xUnit.net 00:00:00.47]            at SageFs.VisualStudio.Core.LiveTestStateModule.update(LiveTestEvent event, LiveTestState state)
+[xUnit.net 00:00:00.47]         C:\Code\Repos\SageFs\sagefs-vs\SageFs.VisualStudio.Core.Tests\LiveTestStateTests.fs(161,0): at SageFs.VisualStudio.Core.Tests.LiveTestStateTests.update SummaryUpdated sets LastSummary()
+[xUnit.net 00:00:00.47]            at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+[xUnit.net 00:00:00.47]            at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+[xUnit.net 00:00:00.47]     SageFs.VisualStudio.Core.Tests.LiveTestStateTests.update TestResultBatch with unknown test ID does not throw KeyNotFoundException [FAIL]
+[xUnit.net 00:00:00.47]       System.TypeLoadException : Could not load type 'Microsoft.FSharp.Core.CompilerServices.ListCollector`1' from assembly 'FSharp.Core, Version=5.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.
+[xUnit.net 00:00:00.47]       Stack Trace:
+[xUnit.net 00:00:00.47]            at SageFs.VisualStudio.Core.LiveTestStateModule.update(LiveTestEvent event, LiveTestState state)
+[xUnit.net 00:00:00.47]         C:\Code\Repos\SageFs\sagefs-vs\SageFs.VisualStudio.Core.Tests\LiveTestStateTests.fs(128,0): at SageFs.VisualStudio.Core.Tests.LiveTestStateTests.update TestResultBatch with unknown test ID does not throw KeyNotFoundException()
+[xUnit.net 00:00:00.47]            at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+[xUnit.net 00:00:00.47]            at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+[xUnit.net 00:00:00.47]     SageFs.VisualStudio.Core.Tests.TestTreeViewModelTests.formatTestLabel with failed result starts with cross icon and message [FAIL]
+[xUnit.net 00:00:00.47]       System.InvalidCastException : Unable to cast object of type 'System.Char' to type 'System.String'.
+[xUnit.net 00:00:00.47]       Stack Trace:
+[xUnit.net 00:00:00.47]         D:\workspace\_work\1\s\src\fsharp\FSharp.Core\prim-types.fs(644,0): at Microsoft.FSharp.Core.LanguagePrimitives.IntrinsicFunctions.UnboxGeneric[T](Object source)
+[xUnit.net 00:00:00.47]         D:\workspace\_work\1\s\src\fsharp\FSharp.Core\seqcore.fs(26,0): at Microsoft.FSharp.Collections.IEnumerator.cast@25.System.Collections.Generic.IEnumerator<'T>.get_Current()
+[xUnit.net 00:00:00.47]         D:\workspace\_work\1\s\src\fsharp\FSharp.Core\seq.fs(532,0): at Microsoft.FSharp.Collections.SeqModule.Exists[T](FSharpFunc`2 predicate, IEnumerable`1 source)
+[xUnit.net 00:00:00.47]            at FsUnit.CustomMatchers.contain@191.Invoke(Object delegateArg0)
+[xUnit.net 00:00:00.47]            at NHamcrest.Core.CustomMatcher`1.Matches(T item)
+[xUnit.net 00:00:00.47]            at FsUnit.Xunit.Assert.That.Static[a](a actual, IMatcher`1 matcher)
+[xUnit.net 00:00:00.47]         C:\Code\Repos\SageFs\sagefs-vs\SageFs.VisualStudio.Core.Tests\TestTreeViewModelTests.fs(43,0): at SageFs.VisualStudio.Core.Tests.TestTreeViewModelTests.formatTestLabel with failed result starts with cross icon and message()
+[xUnit.net 00:00:00.47]            at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+[xUnit.net 00:00:00.47]            at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+  Passed SageFs.VisualStudio.Core.Tests.LiveTestStateTests.summary returns LastSummary when it is set [< 1 ms]
+  Failed SageFs.VisualStudio.Core.Tests.TestTreeViewModelTests.formatTestTooltip with passed result contains test name and Passed status [< 1 ms]
+  Error Message:
+   System.InvalidCastException : Unable to cast object of type 'System.Char' to type 'System.String'.
+  Stack Trace:
+     at Microsoft.FSharp.Core.LanguagePrimitives.IntrinsicFunctions.UnboxGeneric[T](Object source) in D:\workspace\_work\1\s\src\fsharp\FSharp.Core\prim-types.fs:line 644
+   at Microsoft.FSharp.Collections.IEnumerator.cast@25.System.Collections.Generic.IEnumerator<'T>.get_Current() in D:\workspace\_work\1\s\src\fsharp\FSharp.Core\seqcore.fs:line 26
+   at Microsoft.FSharp.Collections.SeqModule.Exists[T](FSharpFunc`2 predicate, IEnumerable`1 source) in D:\workspace\_work\1\s\src\fsharp\FSharp.Core\seq.fs:line 532
+   at FsUnit.CustomMatchers.contain@191.Invoke(Object delegateArg0)
+   at NHamcrest.Core.CustomMatcher`1.Matches(T item)
+   at FsUnit.Xunit.Assert.That.Static[a](a actual, IMatcher`1 matcher)
+   at SageFs.VisualStudio.Core.Tests.TestTreeViewModelTests.formatTestTooltip with passed result contains test name and Passed status() in C:\Code\Repos\SageFs\sagefs-vs\SageFs.VisualStudio.Core.Tests\TestTreeViewModelTests.fs:line 82
+   at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+   at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+  Failed SageFs.VisualStudio.Core.Tests.LiveTestStateTests.formatToolWindowLine mixed summary shows both failed and stale in text [< 1 ms]
+  Error Message:
+   System.TypeLoadException : Could not load type 'Microsoft.FSharp.Core.CompilerServices.ListCollector`1' from assembly 'FSharp.Core, Version=5.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.
+  Stack Trace:
+     at SageFs.VisualStudio.Core.TestSummaryModule.formatToolWindowLine(TestSummary s)
+   at SageFs.VisualStudio.Core.Tests.LiveTestStateTests.formatToolWindowLine mixed summary shows both failed and stale in text() in C:\Code\Repos\SageFs\sagefs-vs\SageFs.VisualStudio.Core.Tests\LiveTestStateTests.fs:line 275
+   at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+   at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+  Failed SageFs.VisualStudio.Core.Tests.LiveTestStateTests.update TestsDiscovered returns TestsDiscovered change with correct count [< 1 ms]
+  Error Message:
+   System.TypeLoadException : Could not load type 'Microsoft.FSharp.Core.CompilerServices.ListCollector`1' from assembly 'FSharp.Core, Version=5.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.
+  Stack Trace:
+     at SageFs.VisualStudio.Core.LiveTestStateModule.update(LiveTestEvent event, LiveTestState state)
+   at SageFs.VisualStudio.Core.Tests.LiveTestStateTests.update TestsDiscovered returns TestsDiscovered change with correct count() in C:\Code\Repos\SageFs\sagefs-vs\SageFs.VisualStudio.Core.Tests\LiveTestStateTests.fs:line 89
+   at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+   at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+  Failed SageFs.VisualStudio.Core.Tests.LiveTestStateTests.update SummaryUpdated sets LastSummary [< 1 ms]
+  Error Message:
+   System.TypeLoadException : Could not load type 'Microsoft.FSharp.Core.CompilerServices.ListCollector`1' from assembly 'FSharp.Core, Version=5.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.
+  Stack Trace:
+     at SageFs.VisualStudio.Core.LiveTestStateModule.update(LiveTestEvent event, LiveTestState state)
+   at SageFs.VisualStudio.Core.Tests.LiveTestStateTests.update SummaryUpdated sets LastSummary() in C:\Code\Repos\SageFs\sagefs-vs\SageFs.VisualStudio.Core.Tests\LiveTestStateTests.fs:line 161
+   at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+   at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+  Passed SageFs.VisualStudio.Core.Tests.LiveTestStateTests.resultFor returns None for unknown test ID without throwing [< 1 ms]
+  Failed SageFs.VisualStudio.Core.Tests.LiveTestStateTests.update TestResultBatch with unknown test ID does not throw KeyNotFoundException [< 1 ms]
+  Error Message:
+   System.TypeLoadException : Could not load type 'Microsoft.FSharp.Core.CompilerServices.ListCollector`1' from assembly 'FSharp.Core, Version=5.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.
+  Stack Trace:
+     at SageFs.VisualStudio.Core.LiveTestStateModule.update(LiveTestEvent event, LiveTestState state)
+   at SageFs.VisualStudio.Core.Tests.LiveTestStateTests.update TestResultBatch with unknown test ID does not throw KeyNotFoundException() in C:\Code\Repos\SageFs\sagefs-vs\SageFs.VisualStudio.Core.Tests\LiveTestStateTests.fs:line 128
+   at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+   at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+  Failed SageFs.VisualStudio.Core.Tests.TestTreeViewModelTests.formatTestLabel with failed result starts with cross icon and message [3 ms]
+  Error Message:
+   System.InvalidCastException : Unable to cast object of type 'System.Char' to type 'System.String'.
+  Stack Trace:
+     at Microsoft.FSharp.Core.LanguagePrimitives.IntrinsicFunctions.UnboxGeneric[T](Object source) in D:\workspace\_work\1\s\src\fsharp\FSharp.Core\prim-types.fs:line 644
+   at Microsoft.FSharp.Collections.IEnumerator.cast@25.System.Collections.Generic.IEnumerator<'T>.get_Current() in D:\workspace\_work\1\s\src\fsharp\FSharp.Core\seqcore.fs:line 26
+   at Microsoft.FSharp.Collections.SeqModule.Exists[T](FSharpFunc`2 predicate, IEnumerable`1 source) in D:\workspace\_work\1\s\src\fsharp\FSharp.Core\seq.fs:line 532
+   at FsUnit.CustomMatchers.contain@191.Invoke(Object delegateArg0)
+   at NHamcrest.Core.CustomMatcher`1.Matches(T item)
+   at FsUnit.Xunit.Assert.That.Static[a](a actual, IMatcher`1 matcher)
+   at SageFs.VisualStudio.Core.Tests.TestTreeViewModelTests.formatTestLabel with failed result starts with cross icon and message() in C:\Code\Repos\SageFs\sagefs-vs\SageFs.VisualStudio.Core.Tests\TestTreeViewModelTests.fs:line 43
+   at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+   at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+  Passed SageFs.VisualStudio.Core.Tests.TestTreeViewModelTests.groupByFile includes result alongside test info [< 1 ms]
+[xUnit.net 00:00:00.47]   Finished:    SageFs.VisualStudio.Core.Tests
+  Passed SageFs.VisualStudio.Core.Tests.TestTreeViewModelTests.searchGroups removes groups where no tests match [< 1 ms]
+  Passed SageFs.VisualStudio.Core.Tests.TestTreeViewModelTests.formatGroupedOutput with empty state returns no-tests-discovered message [< 1 ms]
+  Passed SageFs.VisualStudio.Core.Tests.TestTreeViewModelTests.formatGroupHeader with some failed shows cross icon and failed count [3 ms]
+  Passed SageFs.VisualStudio.Core.Tests.TestTreeViewModelTests.filterGroups PassedOnly keeps only groups containing passed tests [< 1 ms]
+  Passed SageFs.VisualStudio.Core.Tests.TestTreeViewModelTests.nextFilter All returns FailedOnly [< 1 ms]
+
+Test Run Failed.
+Total tests: 115
+     Passed: 72
+     Failed: 43
+ Total time: 0.9089 Seconds
+     1>Project "C:\Code\Repos\SageFs\sagefs-vs\SageFs.VisualStudio.Core.Tests\SageFs.VisualStudio.Core.Tests.fsproj" on node 1 (VSTest target(s)).
+     1>_VSTestConsole:
+         MSB4181: The "VSTestTask" task returned false but did not log an error.
+     1>Done Building Project "C:\Code\Repos\SageFs\sagefs-vs\SageFs.VisualStudio.Core.Tests\SageFs.VisualStudio.Core.Tests.fsproj" (VSTest target(s)) -- FAILED.
+
+Build FAILED.
+    0 Warning(s)
+    0 Error(s)
+
+Time Elapsed 00:00:01.46

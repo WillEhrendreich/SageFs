@@ -5,6 +5,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Shapes;
+using System.Windows.Threading;
 using Microsoft.VisualStudio.Text;
 using Microsoft.VisualStudio.Text.Editor;
 using Microsoft.VisualStudio.Text.Formatting;
@@ -39,9 +40,13 @@ internal sealed class TestGlyphTagger : ITagger<TestStatusGlyphTag>, IDisposable
 
     private void OnStateChanged(object? sender, EventArgs e)
     {
+        // CRITICAL: TagsChanged MUST be raised on the UI thread.
+        // Calling it from a background SSE thread causes mysterious editor crashes.
         var snapshot = _buffer.CurrentSnapshot;
-        TagsChanged?.Invoke(this, new SnapshotSpanEventArgs(
-            new SnapshotSpan(snapshot, 0, snapshot.Length)));
+        var span = new SnapshotSpan(snapshot, 0, snapshot.Length);
+        Application.Current?.Dispatcher.BeginInvoke(
+            DispatcherPriority.Normal,
+            (Action)(() => TagsChanged?.Invoke(this, new SnapshotSpanEventArgs(span))));
     }
 
     public IEnumerable<ITagSpan<TestStatusGlyphTag>> GetTags(NormalizedSnapshotSpanCollection spans)
@@ -93,6 +98,10 @@ internal sealed class TestGlyphTaggerProvider : ITaggerProvider
     public TestGlyphTaggerProvider()
     {
         _tracker = new TestStateTracker();
+
+        // Runtime kill switch: create %LOCALAPPDATA%\SageFs\disable-glyphs.flag to disable
+        if (GlyphSpikeGuard.IsDisabled) return;
+
         var url = PortConfig.TryGetDaemonUrl();
         if (url != null)
         {

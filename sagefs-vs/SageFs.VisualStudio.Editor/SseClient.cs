@@ -13,8 +13,16 @@ namespace SageFs.VisualStudio.Editor;
 /// </summary>
 internal sealed class SseClient : IDisposable
 {
-    private readonly HttpClient _http = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
+    private readonly HttpClient _http;
     private readonly CancellationTokenSource _cts = new CancellationTokenSource();
+
+    public SseClient()
+    {
+        _http = new HttpClient { Timeout = TimeSpan.FromSeconds(75) };
+        // Required header for SSE streams — without this, some servers return JSON instead
+        _http.DefaultRequestHeaders.Add("Accept", "text/event-stream");
+        _http.DefaultRequestHeaders.Add("Cache-Control", "no-cache");
+    }
 
     public event EventHandler<SseEvent>? EventReceived;
 
