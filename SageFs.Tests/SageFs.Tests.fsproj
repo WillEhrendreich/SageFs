@@ -20,6 +20,7 @@
         <Compile Include="McpLlmInteropTests.fs" />
         <Compile Include="SharedSageFsFixture.fs" />
         <Compile Include="SharedGenerators.fs" />
+        <Compile Include="McpFormatterPropertyTests.fs" />
         <Compile Include="CompExprSimplifierTests.fs" />
         <Compile Include="MethodPatcherTests.fs" />
         <Compile Include="SnapshotTests.fs" />
@@ -158,6 +159,9 @@
         <Compile Include="Round12HardeningTests.fs" />
         <Compile Include="Round13HardeningTests.fs" />
         <Compile Include="Round14HardeningTests.fs" />
+        <Compile Include="AppStatePropertyTests.fs" />
+        <Compile Include="EditorPropertyTests.fs" />
+        <Compile Include="ArchitectureTests.fs" />
         <Compile Include="Program.fs" />
     </ItemGroup>
 
