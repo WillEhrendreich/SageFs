@@ -29,6 +29,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `LiveTestHookResultDto.fromResult` introduced to separate serializable DTO from the function-bearing domain type
 - `ValidatedBuffer` type no longer uses `private` constructor (enables REPL construction for testing)
 
+## [0.6.0] - 2026-03-10
+
+### Added
+
+#### Core Daemon
+- `LastDiscoveryTime` timestamp in `LiveTestState` for reliable discovery-complete detection after assembly reload
+
+#### Visual Studio Extension
+- FSI IntelliSense completions — `IAsyncCompletionSourceProvider` MEF export with `working_directory` context, 14 completion-kind mappings, and a 3-second request timeout
+- Gutter test-status markers seeded on startup via `InitialStatePoll` — glyphs now populate immediately on VS load, not only after the first SSE event
+- TypeExplorer auto-refresh on `WarmupContextSnapshot` SSE event; daemon reachability guard shows "⚠ not running" instead of hanging indefinitely
+- `Alt+Enter` smart eval — evaluates the current selection if one exists, or the block around the cursor otherwise
+- `EvalBlockCommand` accessible via the Extensions menu
+- Startup health check writes daemon status to the SageFs Output channel on VS load
+- VSIX Marketplace metadata — icon, preview image, description, and tags
+- CI now runs both test suites (`net472` + `net8.0`) on every push
+- `SageFsOptions.DaemonUrl` is now configurable and live (was previously dead code)
+
+#### Neovim Plugin
+- VHS screenshot/GIF infrastructure — 11 tape scripts with a CI auto-regeneration workflow
+- vimdoc expanded to 37 keymaps (was 6 stubs); all 29 SSE autocmd events documented
+
+### Fixed
+
+#### Core Daemon
+- `run_tests` hot-reload timing race — now waits for test-discovery refresh after assembly reload, not just FSI idle state; eliminates stale results when `run_tests` is called immediately after editing a test
+- Expecto `testProperty` (AsyncFsCheck, tag 3) was silently reported as "Passed" without FsCheck running; now correctly executes `FSharpAsync<bool>` property tests
+- FsCheck.Xunit `[<Property>]` methods returning `Property<T>` were silently passing without FsCheck running; now routes through `FsCheck.Check.QuickThrowOnFailure`
+
+#### Visual Studio Extension
+- Completions `working_directory` was an empty string; now correctly passed from the active document path
+- No HTTP timeout on completions requests; now enforced at 3 seconds
+- TypeExplorer hung indefinitely if the daemon was not running
+- 8 bare `catch` blocks across the extension now log to `Debug.WriteLine`
+- Port configuration wired end-to-end (Tools → Options → SageFs → Daemon URL)
+
+#### Neovim Plugin
+- `eval_result` SSE event was silently dropped; now dispatches to the `SageFsEvalResult` autocmd
+- `density` config valid values corrected in documentation
+
 ## [0.5.19] - 2026-02-20
 
 ### Added

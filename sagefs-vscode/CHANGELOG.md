@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.0
+
+### New Features
+- No VS Code-specific feature additions in this sprint
+
+### Bug Fixes
+- (Neovim) `eval_result` SSE event was silently dropped; now dispatches to the `SageFsEvalResult` autocmd (Neovim plugin fix, no VS Code change required)
+
 ## 0.5.461
 
 ### Bug Fixes
