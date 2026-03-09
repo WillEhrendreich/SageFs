@@ -46,6 +46,7 @@
         <Compile Include="Features\CellDependencyGraph.fs" />
         <Compile Include="Features\EvalProvenance.fs" />
         <Compile Include="Features\SessionScribe.fs" />
+        <Compile Include="Features\MessageJournal.fs" />
         <Compile Include="Features\BindingExplorer.fs" />
         <Compile Include="Features\DomainModelViz.fs" />
         <Compile Include="Features\EvalTimeline.fs" />
