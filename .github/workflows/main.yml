@@ -92,6 +92,46 @@ jobs:
         npm ci
         npm run compile
 
+  benchmarks:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+
+    steps:
+    - uses: actions/checkout@v5
+
+    - name: Checkout forked MCP SDK
+      uses: actions/checkout@v5
+      with:
+        repository: WillEhrendreich/ModelContextProtocolSdk
+        path: mcp-sdk
+
+    - name: Install Dotnet
+      uses: actions/setup-dotnet@v5
+      with:
+        dotnet-version: |
+          10.0.x
+        dotnet-quality: preview
+
+    - name: Build forked MCP SDK packages
+      run: |
+        dotnet pack mcp-sdk/src/ModelContextProtocol.Core -o mcp-sdk-nupkg -c Release
+        dotnet pack mcp-sdk/src/ModelContextProtocol -o mcp-sdk-nupkg -c Release
+        dotnet pack mcp-sdk/src/ModelContextProtocol.AspNetCore -o mcp-sdk-nupkg -c Release
+
+    - name: Run benchmarks
+      run: dotnet run -c Release --project SageFs.Tests -- --benchmark --filter "*" --exporters json
+      timeout-minutes: 15
+
+    - name: Check regression thresholds
+      run: dotnet fsi scripts/check-benchmarks.fsx BenchmarkDotNet.Artifacts/results
+
+    - name: Upload benchmark artifacts
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: benchmark-results
+        path: BenchmarkDotNet.Artifacts/results/
+
   vs-extension:
     runs-on: windows-latest
 
@@ -122,7 +162,7 @@ jobs:
       run: dotnet build sagefs-vs/SageFs.VisualStudio/SageFs.VisualStudio.csproj -c Release
 
   publish:
-    needs: [build, extensions, vs-extension]
+    needs: [build, extensions, vs-extension, benchmarks]
     runs-on: windows-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/master'
     permissions:

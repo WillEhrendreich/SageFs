@@ -58,6 +58,28 @@ Benchmark baselines recorded with BenchmarkDotNet v0.15.8, InProcess emit toolch
 
 **Takeaway**: SSE formatting is sub-microsecond. Even at 60fps SSE push rate (16.7ms budget), formatting is <0.01% of frame time.
 
+## CellGrid Overlay (Monoid Composition)
+
+| Method | Rows | Cols | Mean | Allocated |
+|--------|------|------|------|-----------|
+| Overlay | 60 | 200 | *pending* | *pending* |
+| Overlay | 60 | 400 | *pending* | *pending* |
+| Overlay | 120 | 200 | *pending* | *pending* |
+| Overlay | 120 | 400 | *pending* | *pending* |
+
+**Note**: Benchmarks added in this cycle. Run locally with `--filter "*Overlay*"` to populate.
+
+## AnsiEmitter Diff Throughput
+
+| Method | Rows | Cols | Mean | Allocated | Ratio |
+|--------|------|------|------|-----------|-------|
+| FullEmit | 60 | 200 | *pending* | *pending* | 1.00 |
+| DiffEmit | 60 | 200 | *pending* | *pending* | *pending* |
+| FullEmit | 120 | 200 | *pending* | *pending* | 1.00 |
+| DiffEmit | 120 | 200 | *pending* | *pending* | *pending* |
+
+**Note**: Benchmarks added in this cycle. DiffEmit with 5% cell changes should be significantly faster than FullEmit. Run locally with `--filter "*AnsiEmit*"` to populate.
+
 ---
 
 ## How to Re-run
