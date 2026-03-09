@@ -29,5 +29,11 @@ internal class SageFsExtension : Extension
       sub.Start();
       return sub;
     });
+    serviceCollection.AddSingleton<Core.SessionSubscriber>(sp =>
+    {
+      var sub = new Core.SessionSubscriber(37749);
+      sub.Start();
+      return sub;
+    });
   }
 }

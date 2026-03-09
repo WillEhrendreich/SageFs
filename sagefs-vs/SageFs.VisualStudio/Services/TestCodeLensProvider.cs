@@ -2,6 +2,7 @@ namespace SageFs.VisualStudio.Services;
 
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.FSharp.Control;
 using Microsoft.FSharp.Core;
 using Microsoft.VisualStudio.Extensibility;
 using Microsoft.VisualStudio.Extensibility.Editor;
@@ -46,7 +47,7 @@ internal class TestCodeLensProvider : ExtensionPart, ICodeLensProvider
         || codeElement.Kind == CodeElementKind.KnownValues.Method)
     {
       return Task.FromResult<CodeLens?>(
-        new TestStatusCodeLens(codeElement, subscriber));
+        new TestStatusCodeLens(subscriber));
     }
 
     return Task.FromResult<CodeLens?>(null);
@@ -56,38 +57,55 @@ internal class TestCodeLensProvider : ExtensionPart, ICodeLensProvider
 /// <summary>
 /// Displays live test result status above test functions.
 /// Updates in real-time from SSE subscription.
+/// Subscribes once to StateChanged in the constructor and calls Invalidate()
+/// so VS re-requests the label whenever test results arrive.
 /// </summary>
 internal class TestStatusCodeLens : CodeLens
 {
-  private readonly CodeElement codeElement;
   private readonly Core.LiveTestingSubscriber subscriber;
+  private readonly FSharpHandler<Core.LiveTestState> stateChangedHandler;
 
-  public TestStatusCodeLens(
-    CodeElement codeElement,
-    Core.LiveTestingSubscriber subscriber)
+  public TestStatusCodeLens(Core.LiveTestingSubscriber subscriber)
   {
-    this.codeElement = codeElement;
     this.subscriber = subscriber;
-    subscriber.StateChanged += (_, _) => Invalidate();
+    stateChangedHandler = (_, _) => Invalidate();
+    subscriber.StateChanged += stateChangedHandler;
   }
 
-  public override void Dispose() { }
+  public override void Dispose()
+  {
+    subscriber.StateChanged -= stateChangedHandler;
+  }
 
   public override Task<CodeLensLabel> GetLabelAsync(
     CodeElementContext codeElementContext, CancellationToken token)
   {
     var state = subscriber.CurrentState;
-    // Match by code element description (function/method name)
-    var name = codeElement.Description ?? "";
-    var result = Core.LiveTestingSubscriber.findTestByName(state, name);
-    if (result == null)
+    var range = codeElementContext.Range;
+    var doc = range.Document;
+
+    // Convert character offset to 1-based line number.
+    // GetLineNumberFromPosition returns a 0-based index; test frameworks
+    // (Expecto, NUnit) and the SageFs daemon use 1-based source locations.
+    var filePath = doc.Uri.LocalPath;
+    var line = doc.GetLineNumberFromPosition(range.Start.Offset) + 1;
+
+    var found = Core.LiveTestingSubscriber.findTestAtLine(state, filePath, line);
+    if (found.IsValueNone)
     {
-      return Task.FromResult(new CodeLensLabel { Text = "", Tooltip = "" });
+      return Task.FromResult(new CodeLensLabel
+      {
+        Text = "● SageFs",
+        Tooltip = "SageFs — waiting for test discovery",
+      });
     }
 
-    var (info, testResult) = result.Value;
+    var pair = found.Value;
+    var info = pair.Item1;
+    var testResult = pair.Item2;
     var text = Core.LiveTestingSubscriber.formatTestLabel(info, testResult);
-    var tooltip = Core.LiveTestingSubscriber.formatTestTooltip(info, testResult, FSharpOption<Core.ResultFreshness>.None);
+    var tooltip = Core.LiveTestingSubscriber.formatTestTooltip(
+      info, testResult, FSharpOption<Core.ResultFreshness>.None);
 
     return Task.FromResult(new CodeLensLabel
     {

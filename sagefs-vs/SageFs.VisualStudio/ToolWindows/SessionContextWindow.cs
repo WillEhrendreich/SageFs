@@ -11,11 +11,13 @@ using Microsoft.VisualStudio.RpcContracts.RemoteUI;
 internal class SessionContextWindow : ToolWindow
 {
   private readonly Core.SageFsClient client;
+  private readonly Core.SessionSubscriber subscriber;
   private SessionContextData? dataContext;
 
-  public SessionContextWindow(Core.SageFsClient client)
+  public SessionContextWindow(Core.SageFsClient client, Core.SessionSubscriber subscriber)
   {
     this.client = client;
+    this.subscriber = subscriber;
     this.Title = "SageFs Session Context";
   }
 
@@ -26,7 +28,7 @@ internal class SessionContextWindow : ToolWindow
 
   public override Task InitializeAsync(CancellationToken ct)
   {
-    dataContext = new SessionContextData(Extensibility, client);
+    dataContext = new SessionContextData(Extensibility, client, subscriber);
     return Task.CompletedTask;
   }
 
