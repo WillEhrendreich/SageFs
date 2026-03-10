@@ -43,21 +43,43 @@ type EvalRequest = {
 /// Wraps SageFsClient with cancellation, UI-thread assertion, and lifecycle management.
 /// Must only be called from the UI thread (VS command infrastructure guarantees this
 /// for commands; callers from other threads must marshal first).
-type EvalService(client: SageFsClient) =
+type EvalService(client: SageFsClient, ?liveTestingSubscriber: LiveTestingSubscriber) =
   let cancellation = new EvalCancellation()
+  let mutable connectionLostDuringEval = false
+
+  do
+    match liveTestingSubscriber with
+    | Some sub ->
+      sub.ConnectionLost.Add(fun () ->
+        match cancellation.IsEvaluating with
+        | true -> connectionLostDuringEval <- true
+        | false -> ())
+      sub.ConnectionRestored.Add(fun () ->
+        connectionLostDuringEval <- false)
+    | None -> ()
 
   member _.CancelPending() = cancellation.Cancel()
 
   member _.EvalAsync(request: EvalRequest, ct: System.Threading.CancellationToken) = task {
+    connectionLostDuringEval <- false
     let tok = cancellation.StartNew()
     use linked = System.Threading.CancellationTokenSource.CreateLinkedTokenSource(tok, ct)
     try
       let! result = client.EvalWithContextAsync(request.Code, request.FilePath, request.EvalMode, request.BlockStartLine, linked.Token)
       cancellation.Done()
-      return result
+      match connectionLostDuringEval with
+      | true ->
+        connectionLostDuringEval <- false
+        return { Output = "⚠ Evaluation completed but daemon connection was lost during execution. Results may be incomplete."; Diagnostics = result.Diagnostics; ExitCode = result.ExitCode }
+      | false -> return result
     with ex ->
       cancellation.Done()
-      return { Output = ex.Message; Diagnostics = []; ExitCode = 1 }
+      match connectionLostDuringEval with
+      | true ->
+        connectionLostDuringEval <- false
+        return { Output = "⚠ Evaluation interrupted: daemon connection lost"; Diagnostics = []; ExitCode = 1 }
+      | false ->
+        return { Output = ex.Message; Diagnostics = []; ExitCode = 1 }
   }
 
   interface System.IDisposable with

@@ -42,7 +42,8 @@ module DaemonManager =
     with _ -> None
 
   /// Start the SageFs daemon with a project or solution.
-  /// Returns Error if daemon is already running or SageFs is not found.
+  /// Returns Error with message if daemon is already running or SageFs is not found.
+  /// On success returns Ok with the process (caller can read stderr).
   let startDaemon (projectOrSln: string) =
     if isDaemonRunning defaultMcpPort then
       Error "SageFs daemon is already running"
@@ -60,10 +61,12 @@ module DaemonManager =
           ProcessStartInfo(
             exe,
             sprintf "%s \"%s\"" flag projectOrSln,
-            UseShellExecute = true)
+            UseShellExecute = false,
+            RedirectStandardError = true,
+            CreateNoWindow = true)
         try
           let proc = Process.Start(psi)
-          Ok proc.Id
+          Ok proc
         with ex ->
           Error (sprintf "Failed to start SageFs: %s" ex.Message)
 
@@ -85,12 +88,27 @@ module DaemonManager =
           ProcessStartInfo(
             exe,
             sprintf "%s \"%s\" --mcp-port %d" flag projectOrSln mcpPort,
-            UseShellExecute = true)
+            UseShellExecute = false,
+            RedirectStandardError = true,
+            CreateNoWindow = true)
         try
           let proc = Process.Start(psi)
-          Ok proc.Id
+          Ok proc
         with ex ->
           Error (sprintf "Failed to start SageFs: %s" ex.Message)
+
+  /// Read captured stderr from a daemon process (non-blocking snapshot).
+  let readStderr (proc: Process) =
+    try
+      if proc.HasExited then
+        proc.StandardError.ReadToEnd()
+      else
+        // Non-blocking: read whatever is available
+        let sb = System.Text.StringBuilder()
+        while proc.StandardError.Peek() >= 0 do
+          sb.Append(char (proc.StandardError.Read())) |> ignore
+        sb.ToString()
+    with _ -> ""
 
   /// Open the SageFs dashboard in the default browser.
   let openDashboard (port: int) =

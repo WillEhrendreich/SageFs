@@ -45,6 +45,44 @@ internal sealed class InfoBarService : IDisposable
   }
 
   /// <summary>
+  /// Show "Daemon failed to start" notification with captured stderr output.
+  /// </summary>
+  public async Task ShowDaemonStartupFailedAsync(string reason, string stderr = "", CancellationToken ct = default)
+  {
+    var ch = await GetOutputAsync(ct);
+    if (ch is null) return;
+    await ch.WriteLineAsync("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    await ch.WriteLineAsync($"✗ SageFs daemon failed to start: {reason}");
+    if (!string.IsNullOrWhiteSpace(stderr))
+    {
+      await ch.WriteLineAsync("");
+      await ch.WriteLineAsync("Daemon output:");
+      // Limit to first 1000 chars to avoid flooding the output channel
+      var snippet = stderr.Length > 1000 ? stderr[..1000] + "…" : stderr;
+      await ch.WriteLineAsync(snippet);
+    }
+    await ch.WriteLineAsync("");
+    await ch.WriteLineAsync("  → Use  Extensions → SageFs: Start Daemon  to retry.");
+    await ch.WriteLineAsync("  → Run 'SageFs --proj YourProject.fsproj' from a terminal for detailed output.");
+    await ch.WriteLineAsync("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+  }
+
+  /// <summary>
+  /// Show "Evaluation interrupted" notification when SSE drops during an in-flight eval.
+  /// </summary>
+  public async Task ShowEvalInterruptedAsync(CancellationToken ct = default)
+  {
+    var ch = await GetOutputAsync(ct);
+    if (ch is null) return;
+    await ch.WriteLineAsync("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    await ch.WriteLineAsync("⚠ Evaluation interrupted: daemon connection lost.");
+    await ch.WriteLineAsync("  → The daemon may have crashed or been restarted.");
+    await ch.WriteLineAsync("  → SSE subscriptions will auto-reconnect when the daemon is available.");
+    await ch.WriteLineAsync("  → If the daemon crashed, use  Extensions → SageFs: Start Daemon  to restart.");
+    await ch.WriteLineAsync("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+  }
+
+  /// <summary>
   /// Show "Daemon not running" notification with guidance to start it.
   /// </summary>
   public async Task ShowDaemonNotRunningAsync(CancellationToken ct = default)

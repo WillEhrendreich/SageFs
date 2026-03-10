@@ -12,11 +12,14 @@ type LiveTestingSubscriber(port: int) =
   let http = new HttpClient(handler)
   let mutable cts: CancellationTokenSource option = None
   let mutable state = LiveTestState.empty
+  let mutable connected = false
   let stateChanged = Event<LiveTestState>()
   let summaryChanged = Event<TestSummary>()
   let changeEmitted = Event<LiveTestChange>()
   let featureReceived = Event<FeatureEvent>()
   let narrativesReceived = Event<FailureNarrative array>()
+  let connectionLost = Event<unit>()
+  let connectionRestored = Event<unit>()
 
   /// Fires when test state changes (discovery, results, toggle)
   [<CLIEvent>]
@@ -38,6 +41,17 @@ type LiveTestingSubscriber(port: int) =
   [<CLIEvent>]
   member _.NarrativesReceived = narrativesReceived.Publish
 
+  /// Fires when the SSE connection drops (for eval watchdog)
+  [<CLIEvent>]
+  member _.ConnectionLost = connectionLost.Publish
+
+  /// Fires when the SSE connection is restored after a drop
+  [<CLIEvent>]
+  member _.ConnectionRestored = connectionRestored.Publish
+
+  /// Whether the SSE stream is currently connected
+  member _.IsConnected = connected
+
   member _.State = state
 
   /// C#-friendly property for current state
@@ -56,6 +70,11 @@ type LiveTestingSubscriber(port: int) =
         use! stream = resp.Content.ReadAsStreamAsync(newCts.Token)
         use reader = new IO.StreamReader(stream)
         retryDelay <- 1000
+        match connected with
+        | false ->
+          connected <- true
+          connectionRestored.Trigger()
+        | true -> ()
         let mutable currentEvent = "message"
         while not (reader.EndOfStream || newCts.Token.IsCancellationRequested) do
           let! line = reader.ReadLineAsync(newCts.Token)
@@ -92,6 +111,11 @@ type LiveTestingSubscriber(port: int) =
       with
       | :? OperationCanceledException -> ()
       | _ ->
+        match connected with
+        | true ->
+          connected <- false
+          connectionLost.Trigger()
+        | false -> ()
         retryDelay <- min (retryDelay * 2) 30000
         do! Task.Delay(retryDelay, newCts.Token)
         if not newCts.Token.IsCancellationRequested then

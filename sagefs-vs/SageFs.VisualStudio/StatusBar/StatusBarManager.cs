@@ -194,6 +194,8 @@ internal class StatusBarManager : ExtensionPart
         return;
       }
 
+      var daemonProc = startResult.ResultValue;
+
       _daemonStatus = "Connecting";
       PushStatusBar();
 
@@ -220,9 +222,20 @@ internal class StatusBarManager : ExtensionPart
       PushStatusBar();
 
       if (_output is not null)
-        await _output.WriteLineAsync(started
-          ? $"✓ SageFs daemon auto-started (PID: {startResult.ResultValue})"
-          : "✗ SageFs daemon started but not reachable after 10s — check output for errors.");
+      {
+        if (started)
+        {
+          await _output.WriteLineAsync($"✓ SageFs daemon auto-started (PID: {daemonProc.Id})");
+        }
+        else
+        {
+          var stderr = Core.DaemonManager.readStderr(daemonProc);
+          var msg = string.IsNullOrWhiteSpace(stderr)
+            ? "✗ SageFs daemon started but not reachable after 10s — check output for errors."
+            : $"✗ SageFs daemon started but not reachable after 10s.\n\nDaemon output:\n{(stderr.Length > 500 ? stderr[..500] + "…" : stderr)}";
+          await _output.WriteLineAsync(msg);
+        }
+      }
     }
     catch (Exception ex)
     {
