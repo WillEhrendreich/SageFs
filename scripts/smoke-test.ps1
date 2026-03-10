@@ -257,6 +257,26 @@ try {
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Step 5b — mark-all-stale
+# ─────────────────────────────────────────────────────────────────────────────
+Section "5b. mark-all-stale"
+
+try {
+  $staleResp = Invoke-WebRequest -Method Post -Uri "$baseUrl/api/live-testing/mark-all-stale" `
+    -Body "{}" `
+    -ContentType "application/json" `
+    -TimeoutSec 10 `
+    -UseBasicParsing
+  if ($staleResp.StatusCode -eq 202) {
+    Pass "mark-all-stale" "POST /api/live-testing/mark-all-stale returned 202 Accepted"
+  } else {
+    Fail "mark-all-stale" "Expected 202, got $($staleResp.StatusCode)"
+  }
+} catch {
+  Fail "mark-all-stale" "mark-all-stale request failed: $_"
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Step 6 — Cleanup
 # ─────────────────────────────────────────────────────────────────────────────
 Section "6. Cleanup"
