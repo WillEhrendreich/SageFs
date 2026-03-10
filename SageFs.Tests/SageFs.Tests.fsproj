@@ -197,6 +197,9 @@
         <Compile Include="GhostwriterTests.fs" />
         <Compile Include="SessionFilmstripTests.fs" />
         <Compile Include="DiagnosticianTests.fs" />
+        <Compile Include="CoverageIntelTests.fs" />
+        <Compile Include="ImpactForecastTests.fs" />
+        <Compile Include="ActionPrioritizerTests.fs" />
         <Compile Include="Program.fs" />
     </ItemGroup>
 
