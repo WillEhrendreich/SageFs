@@ -104,7 +104,7 @@ let checkFsprojTests =
         File.WriteAllText(Path.Combine(dir, "App.fsproj"), "<Project/>")
         let r = EnvCheck.checkFsproj dir
         r.Status |> Expect.equal "should be Pass" EnvCheck.Status.Pass
-        r.Detail |> Expect.stringContains "found" "detail should mention found"
+        r.Detail |> Expect.stringContains "detail should mention found" "found"
       finally
         Directory.Delete(dir, true)
     }

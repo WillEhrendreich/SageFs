@@ -1261,6 +1261,25 @@ let private hasModuleFunction (name: string) =
   let moduleType = typeof<TRect>.Assembly.GetType("CodeCity")
   not (isNull moduleType) && not (isNull (moduleType.GetMethod(name)))
 
+let private invokePrivateStatic<'T> methodName (args: obj[]) =
+  let moduleType = typeof<TRect>.Assembly.GetType("CodeCity")
+  let flags = System.Reflection.BindingFlags.NonPublic ||| System.Reflection.BindingFlags.Static
+  let methodInfo = moduleType.GetMethod(methodName, flags)
+  if isNull methodInfo then
+    failtestf "expected private method %s to exist on CodeCity" methodName
+  methodInfo.Invoke(null, args) :?> 'T
+
+let private formsLongitudinalSplitEdgeBypassViaReflection
+  (g: WeberGraph)
+  (originId: NodeId)
+  (origin: Vec2)
+  (target: Vec2)
+  (splitEdgeId: EdgeId)
+  =
+  invokePrivateStatic<bool>
+    "formsLongitudinalSplitEdgeBypass"
+    [| box g; box originId; box origin; box target; box splitEdgeId |]
+
 let private paperCase citation name body =
   testCase (sprintf "[paper %s] %s" citation name) body
 
@@ -2226,6 +2245,36 @@ let majorStreetGrowthTests =
       |> Seq.forall (fun edge -> edge.A = splitNode || edge.B = splitNode)
       |> Expect.isTrue "both replacement segments should connect to the shared split node"
       (g.N splitNode).Valence |> Expect.equal "split node should have degree two on the rebuilt corridor" 2
+
+    paperCase "§3.1 Fig. 6" "longitudinal split-edge bypasses are rejected before they become zipper seams" <| fun () ->
+      let g = WeberGraph()
+      let a = g.AddNode(Vec2.Create(0.0f, 0.0f), Avenue)
+      let b = g.AddNode(Vec2.Create(10.0f, 0.0f), Avenue)
+      let c = g.AddNode(Vec2.Create(20.0f, 0.0f), Avenue)
+      let d = g.AddNode(Vec2.Create(30.0f, 0.0f), Avenue)
+      let feederStart = g.AddNode(Vec2.Create(0.0f, 0.8f), Avenue)
+      let origin = g.AddNode(Vec2.Create(10.0f, 0.8f), Avenue)
+      g.AddEdge(a, b, Avenue, RoadClass.width Avenue) |> ignore
+      g.AddEdge(b, c, Avenue, RoadClass.width Avenue) |> ignore
+      g.AddEdge(c, d, Avenue, RoadClass.width Avenue) |> ignore
+      g.AddEdge(feederStart, origin, Avenue, RoadClass.width Avenue) |> ignore
+      formsLongitudinalSplitEdgeBypassViaReflection g origin (g.N origin).Pos (Vec2.Create(18.0f, 0.0f)) (EdgeId 1)
+      |> Expect.isTrue "valence-one continuations should reject tight near-parallel interior hits on long corridors"
+
+    paperCase "§3.1 Fig. 6" "transverse split-edge tees stay legal when they are not zipper-like bypasses" <| fun () ->
+      let g = WeberGraph()
+      let a = g.AddNode(Vec2.Create(0.0f, 0.0f), Avenue)
+      let b = g.AddNode(Vec2.Create(10.0f, 0.0f), Avenue)
+      let c = g.AddNode(Vec2.Create(20.0f, 0.0f), Avenue)
+      let d = g.AddNode(Vec2.Create(30.0f, 0.0f), Avenue)
+      let feederStart = g.AddNode(Vec2.Create(15.0f, -12.0f), Avenue)
+      let origin = g.AddNode(Vec2.Create(15.0f, -4.0f), Avenue)
+      g.AddEdge(a, b, Avenue, RoadClass.width Avenue) |> ignore
+      g.AddEdge(b, c, Avenue, RoadClass.width Avenue) |> ignore
+      g.AddEdge(c, d, Avenue, RoadClass.width Avenue) |> ignore
+      g.AddEdge(feederStart, origin, Avenue, RoadClass.width Avenue) |> ignore
+      formsLongitudinalSplitEdgeBypassViaReflection g origin (g.N origin).Pos (Vec2.Create(15.0f, 0.0f)) (EdgeId 1)
+      |> Expect.isFalse "ordinary transverse tees should stay available to keep corridor density healthy"
 
     paperCase "§3.1" "organic growth does not stamp every continuation at one fixed run length" <| fun () ->
       let rect = { X = 0.0f; Z = 0.0f; W = 220.0f; H = 180.0f }
@@ -3805,14 +3854,19 @@ let private collectOrganicOpposedTeePairMetrics (rect: TRect) seeds =
                 anchor.Y
                 refs.Length
                 (refs |> List.map fst |> List.distinct |> List.sort))
-      let chainMetrics =
+      let allChains =
         throughChainDetails tolerance 18.0f canonicalRoads
         |> List.map fst
-        |> List.filter (fun detail ->
-            detail.SegmentLengths.Length >= 3
-            && detail.TotalLength >= 24.0f)
         |> List.distinctBy (fun detail -> detail.RoadIndices |> Set.ofList)
-        |> List.choose (fun detail ->
+      let seg3Chains =
+        allChains
+        |> List.filter (fun detail -> detail.SegmentLengths.Length >= 3)
+      let longChains =
+        seg3Chains
+        |> List.filter (fun detail -> detail.TotalLength >= 24.0f)
+      let chainSideSamples =
+        longChains
+        |> List.map (fun detail ->
             let chainRoadSet = detail.RoadIndices |> Set.ofList
             let clusterPath = detail.ClusterPath |> List.toArray
             let segmentLengths = detail.SegmentLengths |> List.toArray
@@ -3873,7 +3927,26 @@ let private collectOrganicOpposedTeePairMetrics (rect: TRect) seeds =
                       |> List.distinct
                     for side in sideValues do
                       yield distanceAlong, side ]
-            if sideSamples.Length < 4 then
+            if emitZipCanon then
+              printfn
+                "zipchain-detail roads=%A len=%.2f segments=%d sides=%d"
+                (detail.RoadIndices |> List.sort)
+                detail.TotalLength
+                detail.SegmentLengths.Length
+                sideSamples.Length
+            detail, sideSamples)
+      if emitZipCanon then
+        printfn
+          "zipchain-pipeline seed=%d total=%d seg3=%d len24=%d measurable=%d"
+          seed
+          allChains.Length
+          seg3Chains.Length
+          longChains.Length
+          (chainSideSamples |> List.filter (fun (_, sideSamples) -> sideSamples.Length >= 3) |> List.length)
+      let chainMetrics =
+        chainSideSamples
+        |> List.choose (fun (_, sideSamples) ->
+            if sideSamples.Length < 3 then
               None
             else
               let uniquePositions =

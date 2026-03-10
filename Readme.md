@@ -9,7 +9,7 @@ A live F# engine — hot reload, live testing, AI-native — for every editor, f
 [![NuGet](https://img.shields.io/nuget/v/SageFs?style=flat-square&logo=nuget&color=004880)](https://www.nuget.org/packages/SageFs/)
 [![.NET 10](https://img.shields.io/badge/.NET-10.0-512BD4?style=flat-square&logo=dotnet)](https://dotnet.microsoft.com)
 [![License: MIT](https://img.shields.io/badge/license-MIT-22c55e?style=flat-square)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-3500+-22c55e?style=flat-square)]()
+[![Tests](https://img.shields.io/badge/tests-4000+-22c55e?style=flat-square)]()
 [![Save → Green](https://img.shields.io/badge/save→green-<500ms-f59e0b?style=flat-square)]()
 
 </div>
@@ -97,7 +97,15 @@ Tests are auto-categorized (Unit, Integration, Browser, Property, Benchmark) wit
 dotnet tool install --global SageFs
 ```
 
-### 2. Start the daemon
+### 2. Check your environment (optional)
+
+```bash
+sagefs check
+```
+
+Validates .NET SDK, FSI, project files, port availability, and daemon state. Actionable hints on every failure. Skip this if you've used SageFs before.
+
+### 3. Start the daemon
 
 ```bash
 sagefs --proj YourProject.fsproj
@@ -107,7 +115,7 @@ SageFs opens an interactive terminal. Your editor connects automatically.
 
 > No project? Just run `sagefs` with no arguments — the daemon starts bare and waits for clients. Your editor will create sessions on demand.
 
-### 3. Connect your editor
+### 4. Connect your editor
 
 **VS Code** — Install the extension from [Releases](https://github.com/WillEhrendreich/SageFs/releases), open an F# file, press `Alt+Enter` on any expression. Result appears inline in < 500ms.
 
@@ -117,12 +125,12 @@ SageFs opens an interactive terminal. Your editor connects automatically.
 
 **Terminal only** — `sagefs tui` for the built-in terminal UI (powered by [SageTUI](https://github.com/WillEhrendreich/sagetui) Elm Architecture), or `sagefs gui` for the Raylib GPU window. Use `sagefs tui --legacy-tui` for the classic imperative renderer.
 
-### 4. Enable live testing
+### 5. Enable live testing
 
 Save any file → tests run automatically → green/red gutter markers appear.
 No configuration needed — SageFs discovers Expecto tests and runs them on every save.
 
-### 5. What you'll see
+### 6. What you'll see
 
 - **Gutter markers**: ✓ green (passing), ✗ red (failing), ○ gray (no coverage)
 - **Inline results**: Expression values appear to the right of your code

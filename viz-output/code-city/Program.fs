@@ -4667,6 +4667,41 @@ let private effectiveCorridorInterval (g: WeberGraph) (originId: NodeId) (origin
       | None -> target
     startPoint, endPoint
 
+let private formsLongitudinalSplitEdgeBypass (g: WeberGraph) (originId: NodeId) (origin: Vec2) (target: Vec2) (splitEdgeId: EdgeId) =
+  let connectDelta = Vec2.sub target origin
+  if Vec2.lengthSq connectDelta < 8.0f * 8.0f then
+    false
+  else
+    let splitEdge = g.E splitEdgeId
+    let splitStart = (g.N splitEdge.A).Pos
+    let splitEnd = (g.N splitEdge.B).Pos
+    let splitDelta = Vec2.sub splitEnd splitStart
+    let splitLengthSq = Vec2.lengthSq splitDelta
+    if splitLengthSq <= 1e-5f then
+      false
+    else
+      match tryGetCorridorAxis (g.OutgoingDirs originId) with
+      | Some originAxis ->
+          let connectAxis = Vec2.normalize connectDelta
+          let splitAxis = Vec2.normalize splitDelta
+          let splitCorridorStart, splitCorridorEnd =
+            effectiveCorridorInterval g splitEdge.A splitStart splitEnd (Some splitEdge.B)
+          let splitCorridorLength = Vec2.distanceTo splitCorridorStart splitCorridorEnd
+          let lateral =
+            abs ((origin.X - splitStart.X) * splitAxis.Y - (origin.Y - splitStart.Y) * splitAxis.X)
+          let overlap = projectionOverlap splitAxis origin target splitCorridorStart splitCorridorEnd
+          let hitProgress = Vec2.dot (Vec2.sub target splitStart) splitDelta / splitLengthSq
+          (g.N originId).Valence = 1
+          && splitCorridorLength >= 24.0f
+          && parallelHeadingDeltaDegrees originAxis connectAxis <= 18.0f
+          && parallelHeadingDeltaDegrees splitAxis connectAxis <= 20.0f
+          && lateral >= 0.35f
+          && lateral <= 2.25f
+          && overlap >= 8.0f
+          && hitProgress >= 0.12f
+          && hitProgress <= 0.88f
+      | None -> false
+
 let private parallelCorridorTurnPressure (g: WeberGraph) (nid: NodeId) axis =
   let origin = (g.N nid).Pos
   let perp = Vec2.Create(-axis.Y, axis.X)
@@ -5440,6 +5475,8 @@ let growStreets
               let splitEdgeLengthSq = Vec2.lengthSq splitEdgeDelta
               if segLen < sMin then
                 g.MarkFinished(nid)
+                stuck <- stuck + 1
+              elif not isGrid && formsLongitudinalSplitEdgeBypass g nid origin pt edgeId then
                 stuck <- stuck + 1
               elif not isGrid && formsParallelCorridorTripleBand g nid origin pt None then
                 g.MarkFinished(nid)

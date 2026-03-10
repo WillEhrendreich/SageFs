@@ -67,6 +67,7 @@ available in your editor and discover features you might not know about.
 | Feature | VS Code | Neovim | Visual Studio | TUI | Raylib GUI |
 |:--------|:-------:|:------:|:-------------:|:---:|:----------:|
 | Health check command | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Environment pre-flight (`sagefs check`) | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Daemon status in status bar | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Session count in status bar | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Actionable error notifications | ✅ | ✅ | ✅ | ✅ | ✅ |

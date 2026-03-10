@@ -7,67 +7,92 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+_No unreleased changes._
+
+## [0.8.0] - 2026-03-10
+
+> **What's New in 0.8**: This release focuses on **resilience**, **editor parity**, and the
+> **SageTUI migration**. The daemon now catches its own crashes, errors are typed and actionable
+> across all editors, and the terminal UI is rebuilt on a functional Elm Architecture. Every
+> editor gained test source-jump (F12 on a failing test → its source) and failure narratives
+> (why a test broke, what changed, when it last passed).
+
+### Highlights
+
+- 🏗️ **SageTUI migration** — Terminal UI rebuilt on [SageTUI](https://github.com/WillEhrendreich/sagetui)'s Elm Architecture. `sagefs tui` is now purely functional: `init/update/view/subscribe` with SIMD cell diff. Use `--legacy-tui` for the old renderer.
+- 🩺 **`sagefs check`** — New pre-flight command validates .NET SDK, FSI, project files, port availability, and daemon state before first run. Actionable hints on every failure.
+- 🛡️ **Typed errors everywhere** — `SageFsError.toJson` with 30 exhaustive error cases. All editors show structured errors with contextual rescue actions ("Retry", "Open Settings", "Switch Project").
+- ⏱️ **Warmup progress** — 5-phase SSE events (`resolving` → `restoring` → `compiling` → `loading` → `ready`) so editors can show real progress bars instead of spinners.
+- 🐛 **Eval watchdog** — Detects silent daemon crashes across VS Code, Visual Studio, TUI, and Raylib GUI. No more "it just stopped working" with no feedback.
+- 🔗 **Test source-jump** — F12 / `<CR>` / Go-to-Definition on a test navigates to its source file and line. Works in all 6 frontends.
+- 📖 **Failure narratives** — When a test breaks, see what changed (symbols, files), when it last passed, and a human-readable summary. In every editor.
+
 ### Added
-- `GET /api/health` now returns structured JSON: `{ version, apiVersion, features[], status, healthy }` — clients should check `apiVersion` before using coverage-intel and impact-forecast features
-- `apiVersion: 1` — protocol version exposed on `/health` (mirrors `/version`); used by VS Code, Visual Studio, and Neovim clients for capability checks
-- `getFeatures()` helper in VS Code extension client — returns daemon feature list from health response
-- `GetHealthAsync()` in Visual Studio extension client — parses `apiVersion` and `features[]` from `/health` response
-- Neovim `health_check` stores `api_version` and `features` in `M.state` after successful connection
-- `TestSourceLocation` type + `TestSourceResolver` module for test→file/line resolution
-- `PaneId.Tests` discriminated union case + Tests pane renderer (TUI + Raylib GUI)
-- `TogglePane of PaneId` type-safety sweep across UiAction/TerminalCommand/RaylibMode
-- BenchmarkDotNet ActionPrioritizer benchmark suite
-- FsCheck property tests for CoverageIntel
-- 20 unit tests for Tests pane renderer (TestsPaneTests.fs)
-- 3 new MCP tools — `list_tests` (query tests by pattern/file), `get_cell_dependencies` (staleness-annotated dependency graph), `discover_features` (context-aware feature suggestions)
-- 3 new feature modules — `TestDiscovery`, `CellDependenciesReport`, `FeatureDiscovery`
-- VS Code — `file_annotations` SSE handler with coverage gutter bars (green/red/gray `│`) and inline failure decorations (`⊘ testName — Expected: x Actual: y`)
-- VS Code — `failure_narratives` SSE handler enriching test failure messages with Summary/CausalChanges
-- Visual Studio — `CoverageGlyphTagger` MEF pipeline (tag + tagger + provider + factory) rendering 3×16px colored bars in editor gutter
-- Visual Studio — `TestStateTracker` with `ProcessSourceLocations`/`GetSourceLocation` for test→source navigation
-- Visual Studio — `failure_narratives` SSE processing for inline failure context enrichment
-- Neovim — Telescope `<CR>` now jumps to test source location (falls back to run), `<C-g>` explicit source-jump
-- Neovim — `<C-d>` floating window showing failure narrative (Summary, TimeSinceLastPass, CausalChanges)
-- Neovim — SSE handlers for `test_source_locations` and `failure_narratives` events
-- **SageTUI migration** — Terminal UI rebuilt on SageTUI's Elm Architecture (`Program<Model,Msg>` with `init/update/view/subscribe`), replacing ~457 lines of imperative mutable code with ~736 lines of purely functional TEA
-  - `SageTuiClient.fs` — full TEA client: Model (~22 immutable fields), Msg (~30 cases), CustomSub for SSE, Keys.bindWithMods for keyboard, MouseSub, FrameTimingsSub
-  - SageTUI handles terminal setup (alt screen, raw mode, mouse protocol) — `TerminalMode.setupRawMode()` no longer needed for the new client
-  - Theme bridging: `hexToColor` converts SageFs `ThemeConfig` hex strings → SageTUI `Color.Rgb`
-  - Old TuiClient preserved as `--legacy-tui` fallback: `sagefs tui` (new default) vs `sagefs tui --legacy-tui` (old imperative)
+
+#### CLI
+- `sagefs check` — environment pre-flight command (SDK, FSI, ports, project, daemon)
+
+#### Daemon
 - Global error middleware replacing 23 per-endpoint `try/catch` wrappers with centralized `SageFsError` handling
-- `ValidTimeout` DU for type-safe timeout validation with environment variable overrides
-- Eval watchdog ported to VS Code, Visual Studio, TUI, and Raylib GUI clients
+- `ValidTimeout` DU for type-safe timeout validation with environment variable overrides (`SAGEFS_EVAL_TIMEOUT_MS`, `SAGEFS_TEST_TIMEOUT_MS`)
 - 5-phase warmup progress SSE events for real-time session initialization feedback
 - `SageFsError.toJson` with 30 exhaustive typed error cases for structured error responses
-- Contextual rescue actions in VS Code, Neovim, and Visual Studio error notifications
-- Walkthrough onboarding in VS Code with 5 interactive steps
-- Daemon stderr capture and eval watchdog for detecting silent daemon failures
+- Daemon stderr capture for detecting silent FSI process failures
 - Multi-project picker for workspaces with multiple .fsproj files
-
-### Added
-- Composed multi-provider test execution — `RunTest` closures from multiple providers (FSI hook + project-level) are chained with fallthrough semantics so the first provider that can run a test wins
-- `TestRunCompleted` event for signaling the end of a test run batch
-- `GetTestDiscovery` worker message and `InitialTestDiscovery` worker response for on-demand test discovery without a full eval cycle
-- Test discovery callback wiring in DaemonMode — worker discoveries flow into the Elm model via `TestsDiscovered` and `ProvidersDetected` events
+- `GET /api/health` returns structured JSON: `{ version, apiVersion, features[], status, healthy }`
+- `TestSourceLocation` type + `TestSourceResolver` module for test→file/line resolution
+- `PaneId.Tests` discriminated union case + Tests pane renderer (TUI + Raylib GUI)
+- Composed multi-provider test execution with fallthrough semantics
+- `TestRunCompleted` event for signaling end of a test run batch
+- On-demand test discovery via `GetTestDiscovery` / `InitialTestDiscovery` without full eval cycle
 - Streaming test proxy endpoint forwarded from daemon to worker
-- OTel standby pool metrics: `sagefs.standby.pool_size`, `sagefs.standby.warmup_ms`, `sagefs.standby.invalidations_total`, `sagefs.standby.age_at_swap_ms`
-- OTel file watcher counter: `sagefs.filewatcher.changes_total`
-- OTel exemplar filter set to `TraceBased` on both MCP and worker metric pipelines
+- 3 new MCP tools — `list_tests`, `get_cell_dependencies`, `discover_features`
+- OTel standby pool metrics, file watcher counter, `TraceBased` exemplar filter
+
+#### Terminal UI
+- **SageTUI migration** — `SageTuiClient.fs` with Model (~22 fields), Msg (~30 cases), CustomSub for SSE, Keys.bindWithMods, MouseSub, FrameTimingsSub
+- Theme bridging: `hexToColor` converts `ThemeConfig` hex strings → SageTUI `Color.Rgb`
+- `--legacy-tui` fallback preserves the old imperative renderer
+
+#### VS Code
+- `sagefs.nextFailingTest` / `sagefs.prevFailingTest` commands with `Alt+Shift+]` / `Alt+Shift+[` keybindings
+- `file_annotations` SSE handler with coverage gutter bars and inline failure decorations
+- `failure_narratives` SSE handler enriching test failure messages
+- Eval watchdog with configurable timeout
+- Contextual rescue actions in error notifications
+- Walkthrough onboarding with 5 interactive steps
+- `getFeatures()` helper for daemon capability checks
+
+#### Visual Studio
+- Next/Prev failing test navigation commands (`Alt+Shift+]` / `Alt+Shift+[`)
+- `CoverageGlyphTagger` MEF pipeline rendering colored bars in editor gutter
+- `TestStateTracker` with `ProcessSourceLocations` / `GetSourceLocation` for test→source navigation
+- `failure_narratives` SSE processing for inline failure context enrichment
+- Eval watchdog ported from VS Code
+- `GetHealthAsync()` for `apiVersion` and `features[]` capability checks
+
+#### Neovim
+- Telescope `<CR>` jumps to test source location (falls back to run), `<C-g>` explicit source-jump
+- `<C-d>` floating window showing failure narrative (Summary, TimeSinceLastPass, CausalChanges)
+- SSE handlers for `test_source_locations` and `failure_narratives` events
+- F# snippets (9 entries: `testlist`, `testcase`, `testprop`, `expeq`, `;;`, `matchresult`, `pipemap`, `runtests`)
+
+#### Raylib GUI
+- Test source-jump via `JumpToTest` pipeline (shared with TUI)
+- Eval watchdog with crash detection
 
 ### Fixed
-- MCP `escapeJson` now uses `StringBuilder` and correctly handles `\b`, `\f`, and all control characters below `\u0020` (previously only handled `\\`, `"`, `\n`, `\r`, `\t`)
-- FSI `rewriteInlineUseStatements` preserves indentation correctly via `Substring` instead of `String.Replace`, which could corrupt lines containing the substring "use " in non-keyword positions
-- `TestSourceLocations` SSE event was computed but never emitted — added `formatTestSourceLocationsEvent` in SseWriter.fs + broadcast trigger in McpServer.fs
+- MCP `escapeJson` handles `\b`, `\f`, and all control characters below `\u0020` (previously only `\\`, `"`, `\n`, `\r`, `\t`)
+- FSI `rewriteInlineUseStatements` preserves indentation via `Substring` instead of `String.Replace`
+- `TestSourceLocations` SSE event was computed but never emitted — wired `formatTestSourceLocationsEvent` + broadcast trigger
+- Dashboard no-baseline test failures filtered from failing test list
 
 ### Changed
-- ~40 `private` modifiers removed across Core, Tests, VS Code extension, Visual Studio extension, and GUI projects to enable REPL-based interactive testing via SageFs sessions
-- Test discovery API changed: `TestOrchestrator.discoverTests` → `TestOrchestrator.discoverAll` returning a composite result with `RunTest` closure
-- `LiveTestingHook.discoverTests` returns a composite result instead of a raw `TestCase` array
-- `SessionManager.create` takes an additional `onTestDiscovery` callback parameter
-- `LiveTestHookResultDto.fromResult` introduced to separate serializable DTO from the function-bearing domain type
-- `ValidatedBuffer` type no longer uses `private` constructor (enables REPL construction for testing)
-- `sagefs tui` now launches SageTUI-based Elm Architecture client by default (previously launched imperative CellGrid-based TUI)
-- TUI rendering pipeline changed: SageTUI `Element` tree → SIMD cell diff → terminal, replacing `CellGrid.rent` → `Screen.drawWith` → `AnsiEmitter.emit`
+- `sagefs tui` now launches SageTUI-based Elm Architecture client by default
+- TUI rendering pipeline: SageTUI `Element` tree → SIMD cell diff → terminal
+- ~40 `private` modifiers removed to enable REPL-based interactive testing
+- Test discovery API: `TestOrchestrator.discoverTests` → `TestOrchestrator.discoverAll` with `RunTest` closure
+- `ValidatedBuffer` no longer uses `private` constructor
 
 ## [0.7.0] - 2026-03-10
 
