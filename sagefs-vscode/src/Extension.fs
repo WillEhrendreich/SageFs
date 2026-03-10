@@ -45,6 +45,13 @@ let mutable wasRunning = false
 let mutable crashPromptShown = false
 let mutable staleDebounceTimer: obj option = None
 
+// Daemon stderr capture for startup failure diagnostics
+let mutable daemonStderr = ""
+
+// Eval watchdog: tracks whether an eval is in flight for SSE disconnect detection
+let mutable evalInFlight = false
+let mutable evalWatchdogTimer: obj option = None
+
 // File annotation decorations (coverage gutters + inline failures)
 let mutable private covPassingDecoType: TextEditorDecorationType option = None
 let mutable private covFailingDecoType: TextEditorDecorationType option = None
@@ -303,23 +310,42 @@ let getWorkingDirectory () =
   | Some fs when fs.Length > 0 -> Some fs.[0].uri.fsPath
   | _ -> None
 
+let mutable activeProjectPath: string option = None
+
+let scanForProjects () =
+  promise {
+    let! slnFiles = Workspace.findFiles "**/*.{sln,slnx}" "**/node_modules/**" 5
+    let! projFiles = Workspace.findFiles "**/*.fsproj" "**/node_modules/**" 10
+    let solutions = slnFiles |> Array.map (fun f -> Workspace.asRelativePath f)
+    let projects = projFiles |> Array.map (fun f -> Workspace.asRelativePath f)
+    return Array.append solutions projects
+  }
+
+let persistProjectChoice (projectPath: string) =
+  let config = Workspace.getConfiguration "sagefs"
+  config.update("projectPath", box projectPath, 1.) |> ignore
+  activeProjectPath <- Some projectPath
+
 let findProject () =
   promise {
     let config = Workspace.getConfiguration "sagefs"
     let configured = config.get("projectPath", "")
     match configured with
-    | c when c <> "" -> return Some c
+    | c when c <> "" ->
+      activeProjectPath <- Some c
+      return Some c
     | _ ->
-      let! slnFiles = Workspace.findFiles "**/*.{sln,slnx}" "**/node_modules/**" 5
-      let! projFiles = Workspace.findFiles "**/*.fsproj" "**/node_modules/**" 10
-      let solutions = slnFiles |> Array.map (fun f -> Workspace.asRelativePath f)
-      let projects = projFiles |> Array.map (fun f -> Workspace.asRelativePath f)
-      let all = Array.append solutions projects
+      let! all = scanForProjects ()
       match all with
       | [||] -> return None
-      | [| single |] -> return Some single
+      | [| single |] ->
+        activeProjectPath <- Some single
+        return Some single
       | _ ->
         let! picked = Window.showQuickPick all "Select a solution or project for SageFs"
+        match picked with
+        | Some p -> persistProjectChoice p
+        | None -> ()
         return picked
   }
 
@@ -505,8 +531,27 @@ let refreshStatus () =
                   | false -> p.Split([|'/'; '\\'|]) |> Array.last |> stripExt |> Some)
                 |> String.concat ","
                 |> fun s -> match s with "" -> "session" | x -> x
+            let projFile =
+              match activeProjectPath with
+              | Some p -> p.Split([|'/'; '\\'|]) |> Array.last
+              | None ->
+                match s.projects with
+                | [||] -> ""
+                | ps ->
+                  ps
+                  |> Array.choose (fun p ->
+                    match jsIsNullOrUndefined (box p) with
+                    | true -> None
+                    | false -> p.Split([|'/'; '\\'|]) |> Array.last |> Some)
+                  |> Array.tryHead |> Option.defaultValue ""
+            let sessionCount = sessions.Length
             let evalLabel = match s.evalCount with 0 -> "" | n -> sprintf " [%d]" n
             sb.text <- sprintf "$(zap) SageFs: %s%s%s%s" projLabel evalLabel supervised restarts
+            let tooltipText =
+              match projFile with
+              | "" -> sprintf "SageFs — %d session(s) — click for session menu" sessionCount
+              | f -> sprintf "SageFs: %s — %d session(s) — click for session menu" f sessionCount
+            sb.tooltip <- Some tooltipText
           | None ->
             activeSessionId <- None
             sb.text <- sprintf "$(zap) SageFs: ready (no session)%s%s" supervised restarts
@@ -572,6 +617,7 @@ let rec startDaemon () =
         let out = getOutput ()
         out.show true
         out.appendLine (sprintf "Starting SageFs daemon with %s..." proj)
+        daemonStderr <- ""
         let workDir = getWorkingDirectory () |> Option.defaultValue "."
         let ext =
           let i = proj.LastIndexOf('.')
@@ -585,6 +631,7 @@ let rec startDaemon () =
         ])
         onProcError proc (fun msg ->
           out.appendLine (sprintf "[SageFs spawn error] %s" msg)
+          daemonStderr <- daemonStderr + msg + "\n"
           isStarting <- false
           let sb = getStatusBar ()
           sb.text <- "$(error) SageFs: spawn failed"
@@ -594,7 +641,9 @@ let rec startDaemon () =
           isStarting <- false
         )
         let stderr = procStderr proc
-        stderr |> tryOfObj |> Option.iter (fun s -> onData s (fun chunk -> out.appendLine chunk))
+        stderr |> tryOfObj |> Option.iter (fun s -> onData s (fun chunk ->
+          out.appendLine chunk
+          daemonStderr <- daemonStderr + chunk + "\n"))
         let stdout = procStdout proc
         stdout |> tryOfObj |> Option.iter (fun s -> onData s (fun chunk -> out.appendLine chunk))
         unref proc
@@ -619,12 +668,16 @@ let rec startDaemon () =
               elif attempts > 120 then
                 intervalId |> Option.iter jsClearInterval
                 isStarting <- false
-                out.appendLine "Timed out waiting for SageFs daemon after 120s."
+                let stderrSnippet =
+                  match daemonStderr.Trim() with
+                  | "" -> ""
+                  | s -> sprintf "\n\nDaemon output:\n%s" (if s.Length > 500 then s.Substring(0, 500) + "…" else s)
+                out.appendLine (sprintf "Timed out waiting for SageFs daemon after 120s.%s" stderrSnippet)
                 out.show false
-                let! choice = Window.showErrorMessage "SageFs daemon failed to start after 120s." [| "Retry"; "Show Output"; "Check Installation" |]
+                let! choice = Window.showErrorMessage (sprintf "SageFs daemon failed to start after 120s.%s" stderrSnippet) [| "Retry"; "Show Full Output"; "Check Installation" |]
                 match choice with
                 | Some "Retry" -> Commands.executeCommand "sagefs.restart" |> ignore
-                | Some "Show Output" -> showOutputPanel ()
+                | Some "Show Full Output" -> showOutputPanel ()
                 | Some "Check Installation" -> checkInstallation ()
                 | _ -> ()
                 sb.text <- "$(error) SageFs: offline"
@@ -716,20 +769,25 @@ let waitForSessionReady () : JS.Promise<bool> =
 let evalCore (code: string) (filePath: string option) (evalMode: string option) (blockStartLine: int option) : JS.Promise<EvalResult> =
   promise {
     try
+      evalInFlight <- true
       match client with
-      | None -> return EvalConnectionError "SageFs not activated"
+      | None ->
+        evalInFlight <- false
+        return EvalConnectionError "SageFs not activated"
       | Some c ->
       let! ready = Client.isReady c
       if not ready then
         (getOutput()).appendLine "Session not ready, waiting for warmup..."
         let! becameReady = waitForSessionReady ()
         if not becameReady then
+          evalInFlight <- false
           return EvalError "Session did not become ready in time. Check the dashboard for status."
         else
           (getOutput()).appendLine "Session ready, evaluating..."
           let workDir = getWorkingDirectory ()
           let startTime = performanceNow ()
           let! result = Client.evalCode code workDir filePath evalMode blockStartLine c
+          evalInFlight <- false
           let elapsed = performanceNow () - startTime
           match result with
           | Client.Failed errMsg -> return EvalError errMsg
@@ -739,12 +797,14 @@ let evalCore (code: string) (filePath: string option) (evalMode: string option) 
         let workDir = getWorkingDirectory ()
         let startTime = performanceNow ()
         let! result = Client.evalCode code workDir filePath evalMode blockStartLine c
+        evalInFlight <- false
         let elapsed = performanceNow () - startTime
         match result with
         | Client.Failed errMsg -> return EvalError errMsg
         | Client.Succeeded msg ->
           return EvalOk (msg |> Option.defaultValue "", elapsed)
     with err ->
+      evalInFlight <- false
       return EvalConnectionError (string err)
   }
 
@@ -1174,6 +1234,25 @@ let stopDaemon () =
   Window.showInformationMessage "SageFs: stop the daemon from its terminal or use `sagefs stop`." [||] |> ignore
   refreshStatus ()
 
+let switchProject () =
+  promise {
+    let! all = scanForProjects ()
+    match all with
+    | [||] ->
+      Window.showWarningMessage "No .fsproj or .sln files found in workspace." [||] |> ignore
+    | _ ->
+      let! picked = Window.showQuickPick all "Switch SageFs to a different project"
+      match picked with
+      | Some p ->
+        persistProjectChoice p
+        let out = getOutput ()
+        out.appendLine (sprintf "Switching to project: %s" p)
+        stopDaemon ()
+        do! sleep 1000
+        do! startDaemon ()
+      | None -> ()
+  }
+
 let openDashboard () =
   match client with
   | None -> ()
@@ -1439,6 +1518,7 @@ let activate (context: ExtensionContext) =
       do! startDaemon ()
     } |> promiseIgnoreLog logToOutput)
   reg "sagefs.openDashboard" (fun _ -> openDashboard ())
+  reg "sagefs.switchProject" (fun _ -> switchProject () |> promiseIgnoreLog logToOutput)
   reg "sagefs.checkHealth" (fun _ -> checkHealth () |> promiseIgnoreLog logToOutput)
   reg "sagefs.sessionMenu" (fun _ -> sessionMenu () |> promiseIgnoreLog logToOutput)
   reg "sagefs.resetSession" (fun _ -> resetSessionCmd () |> promiseIgnoreLog logToOutput)
@@ -1733,6 +1813,9 @@ let activate (context: ExtensionContext) =
     }
     let reconnectHandler = Some (fun () ->
       c.log "SSE reconnected — refreshing status..."
+      // Cancel eval watchdog timer on reconnect
+      evalWatchdogTimer |> Option.iter jsClearTimeout
+      evalWatchdogTimer <- None
       match statusBarItem with
       | Some sb ->
         sb.text <- "$(check) SageFs: connected"
@@ -1749,6 +1832,32 @@ let activate (context: ExtensionContext) =
         sb.backgroundColor <- Some (newThemeColor "statusBarItem.warningBackground")
         sb.show ()
       | None -> ()
+      // Eval watchdog: if an eval is in flight, fire a synthetic error after 5s
+      match evalInFlight with
+      | true ->
+        evalWatchdogTimer |> Option.iter jsClearTimeout
+        evalWatchdogTimer <- Some (jsSetTimeout (fun () ->
+          match evalInFlight with
+          | true ->
+            evalInFlight <- false
+            evalWatchdogTimer <- None
+            let out = getOutput ()
+            out.appendLine "⚠ Evaluation interrupted: daemon connection lost"
+            out.show true
+            match Window.getActiveTextEditor () with
+            | Some ed -> InlineDeco.showInlineDiagnostic ed "⚠ Evaluation interrupted: daemon connection lost" None
+            | None -> ()
+            Window.showWarningMessage "Evaluation interrupted: SageFs daemon connection lost." [| "Reconnect"; "Show Output" |]
+            |> Promise.map (fun choice ->
+              match choice with
+              | Some "Reconnect" -> Commands.executeCommand "sagefs.reconnect" |> promiseIgnoreLog (fun msg -> (getOutput()).appendLine msg)
+              | Some "Show Output" -> showOutputPanel ()
+              | _ -> ())
+            |> promiseIgnore
+          | false ->
+            evalWatchdogTimer <- None
+        ) 5000)
+      | false -> ()
     )
     let sseLogger = Some (fun (msg: string) -> (getOutput()).appendLine (sprintf "[SSE] %s" msg))
     let listener = LiveTest.start c.mcpPort liveTestCallbacks reconnectHandler disconnectHandler sseLogger

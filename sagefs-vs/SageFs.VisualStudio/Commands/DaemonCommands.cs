@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using Microsoft.VisualStudio.Extensibility;
 using Microsoft.VisualStudio.Extensibility.Commands;
 using Microsoft.VisualStudio.Extensibility.Documents;
+using Microsoft.VisualStudio.Extensibility.Shell;
 using SageFs.VisualStudio.Services;
 
 #pragma warning disable VSEXTPREVIEW_OUTPUTWINDOW
@@ -49,24 +50,51 @@ internal class StartDaemonCommand : Command
       return;
     }
 
-    var targetResult = Core.DaemonTargetFinder.findTarget(solutionDir);
+    var scanResult = Core.DaemonTargetFinder.findTargetWithCandidates(solutionDir);
 
-    if (!targetResult.IsOk)
+    string target;
+    if (scanResult.IsNoTargets)
     {
+      var noTargets = (Core.DaemonTargetFinder.TargetScanResult.NoTargets)scanResult;
       if (output is not null)
-        await output.WriteLineAsync($"✗ {targetResult.ErrorValue}");
+        await output.WriteLineAsync($"✗ {noTargets.message}");
       return;
     }
+    else if (scanResult.IsSingleTarget)
+    {
+      target = ((Core.DaemonTargetFinder.TargetScanResult.SingleTarget)scanResult).Item;
+    }
+    else
+    {
+      // Multiple targets found — prompt user to confirm default choice
+      var multi = (Core.DaemonTargetFinder.TargetScanResult.MultipleTargets)scanResult;
+      var chosen = multi.chosen;
+      var all = multi.all;
 
-    var target = targetResult.ResultValue;
+      if (output is not null)
+      {
+        await output.WriteLineAsync($"Multiple F# projects found ({all.Length}):");
+        for (int i = 0; i < all.Length; i++)
+          await output.WriteLineAsync($"  [{i + 1}] {Path.GetFileName(all[i])}");
+      }
+
+      var defaultName = Path.GetFileName(chosen);
+      var confirmed = await Extensibility.Shell().ShowPromptAsync(
+        $"Multiple projects found. Start SageFs with {defaultName}?",
+        PromptOptions.OKCancel, ct);
+      if (!confirmed) return;
+      target = chosen;
+    }
+
     if (output is not null)
       await output.WriteLineAsync($"▶ Starting SageFs with: {Path.GetFileName(target)}");
 
     var result = Core.DaemonManager.startDaemon(target);
     if (result.IsOk)
     {
+      var proc = result.ResultValue;
       if (output is not null)
-        await output.WriteLineAsync($"✓ SageFs daemon started (PID: {result.ResultValue})");
+        await output.WriteLineAsync($"✓ SageFs daemon started (PID: {proc.Id})");
     }
     else
     {

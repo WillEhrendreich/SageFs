@@ -105,3 +105,38 @@ let ``Nonexistent directory returns Error with descriptive message`` () =
   finally
     Directory.Delete(dir, true)
 
+[<Fact>]
+let ``findTargetWithCandidates single project returns SingleTarget`` () =
+  let dir = createTempDir ()
+  try
+    let expected = createFile dir ["MyApp.fsproj"]
+    match DaemonTargetFinder.findTargetWithCandidates dir with
+    | DaemonTargetFinder.SingleTarget path -> Assert.Equal(expected, path)
+    | other -> Assert.Fail($"Expected SingleTarget but got: {other}")
+  finally
+    Directory.Delete(dir, true)
+
+[<Fact>]
+let ``findTargetWithCandidates multiple projects returns MultipleTargets`` () =
+  let dir = createTempDir ()
+  try
+    createFile dir ["Alpha.fsproj"] |> ignore
+    createFile dir ["sub"; "Beta.fsproj"] |> ignore
+    match DaemonTargetFinder.findTargetWithCandidates dir with
+    | DaemonTargetFinder.MultipleTargets (chosen, all) ->
+      Assert.EndsWith(".fsproj", chosen)
+      Assert.Equal(2, all.Length)
+    | other -> Assert.Fail($"Expected MultipleTargets but got: {other}")
+  finally
+    Directory.Delete(dir, true)
+
+[<Fact>]
+let ``findTargetWithCandidates no projects returns NoTargets`` () =
+  let dir = createTempDir ()
+  try
+    match DaemonTargetFinder.findTargetWithCandidates dir with
+    | DaemonTargetFinder.NoTargets msg -> Assert.Contains("No F# projects found", msg)
+    | other -> Assert.Fail($"Expected NoTargets but got: {other}")
+  finally
+    Directory.Delete(dir, true)
+

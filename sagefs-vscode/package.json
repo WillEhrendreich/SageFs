@@ -2,7 +2,7 @@
   "name": "sagefs",
   "displayName": "SageFs — Live F# Development",
   "description": "Send F# code to SageFs for instant evaluation, type-checking, and hot reload.",
-  "version": "0.6.51",
+  "version": "0.6.52",
   "publisher": "sagefs",
   "license": "MIT",
   "icon": "icon.png",
@@ -70,6 +70,11 @@
       {
         "command": "sagefs.openDashboard",
         "title": "SageFs: Open Dashboard"
+      },
+      {
+        "command": "sagefs.switchProject",
+        "title": "SageFs: Switch Project",
+        "icon": "$(folder-library)"
       },
       {
         "command": "sagefs.resetSession",
@@ -528,7 +533,7 @@
           {
             "id": "sagefs.openProject",
             "title": "Open an F# Project",
-            "description": "Open a folder containing a ``.fsproj`` or ``.sln`` file. SageFs will automatically detect it.",
+            "description": "Open a folder containing a ``.fsproj`` or ``.sln`` file. SageFs will automatically detect it.\n\nFor workspaces with multiple projects, SageFs will ask which one to use. You can switch later with **SageFs: Switch Project** from the command palette.",
             "media": {
               "image": "$(folder-opened)",
               "altText": "Folder opened icon"
