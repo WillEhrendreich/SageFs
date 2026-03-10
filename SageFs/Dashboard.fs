@@ -249,6 +249,11 @@ let createStreamHandler
       // Build eval stats view model with sparkline from EvalTimeline
       let timelineStats = q.GetEvalTimeline()
       let evalStatsView = EvalStatsView.fromStats stats timelineStats
+      // Build daemon health panel
+      let daemonHealthPanel =
+        match q.GetDaemonHealth() with
+        | Some snap -> renderDaemonHealth (DaemonHealthView.fromSnapshot snap)
+        | None -> Elem.div [ Attr.id DomIds.DaemonHealth; Attr.class' "meta" ] []
       // Resolve theme
       let themeName =
         match resolveThemePush infra.SessionThemes currentSessionId workingDir lastSessionId lastWorkingDir with
@@ -359,6 +364,7 @@ let createStreamHandler
         WorkingDir = workingDir
         WarmupProgress = q.GetWarmupProgress currentSessionId
         EvalStats = evalStatsView
+        DaemonHealth = daemonHealthPanel
         ThemeName = themeName
         ConnectionLabel = connectionLabel
         HotReloadPanel = hrPanel

@@ -1,0 +1,149 @@
+SAGEFS DAEMON HEALTH PANEL - COMPLETE GUIDE
+═════════════════════════════════════════════
+
+GENERATED REFERENCE FILES (in C:\Code\Repos\SageFs\)
+────────────────────────────────────────────────────
+1. DAEMON_HEALTH_QUICK_REF.md - START HERE FOR IMPLEMENTATION
+2. DAEMON_HEALTH_EXPLORATION.md - REFERENCE FOR UNDERSTANDING
+3. DAEMON_HEALTH_SUMMARY.txt - THIS FILE
+
+WHAT YOU DISCOVERED
+───────────────────────────────────────────────────
+1. DaemonHealth.fs has complete API:
+   • 5 types: SessionHealthStatus, OverallHealth, SessionHealthSummary, 
+     LiveTestHealthSummary, HealthSnapshot
+   • 7 functions: overallStatus, healthEmoji, healthLabel, 
+     sessionStatusLabel, sessionStatusEmoji, formatUptime, formatSummary
+
+2. SseWriter.fs provides formatters:
+   • formatSseEvent: Core SSE formatter
+   • injectSessionId: Add SessionId to JSON
+   • Pattern: jsonSerialize → injectSessionId → formatSseEvent
+
+3. DashboardFragments.fs pattern:
+   • renderEvalStats (131-145): 15 lines, inline rendering
+   • renderMainContent (743-800): Where new render goes
+
+4. Dashboard.fs integration:
+   • pushState queries GetEvalTimeline (sync, line 250)
+   • Creates view model combining stats (line 251)
+   • Adds to DashboardSnapshot (line 355-372)
+   • Pushes one SSE morph (line 373)
+
+5. DashboardTypes.fs defines:
+   • DomIds: Shared DOM element IDs
+   • EvalStatsView: Template for DaemonHealthView
+   • DashboardQueries: Where to add GetDaemonHealth
+   • DashboardSnapshot: Where to add DaemonHealth field
+
+WHAT YOU NEED TO CREATE
+───────────────────────────────────────────────────
+8 Changes across 3 files (~82 lines of code):
+
+1. DashboardTypes.fs, Line ~45
+   Add DomIds constant: let [<Literal>] DaemonHealth = "daemon-health"
+
+2. DashboardTypes.fs, Line ~167
+   Add DaemonHealthView type and fromSnapshot module function (25 lines)
+
+3. DashboardTypes.fs, Line ~402
+   Add GetDaemonHealth to DashboardQueries (2 lines)
+
+4. DashboardTypes.fs, Line ~444
+   Add DaemonHealth field to DashboardSnapshot (1 line)
+
+5. DashboardFragments.fs, Line ~146
+   Create renderDaemonHealth function (18 lines)
+
+6. DashboardFragments.fs, Line ~760
+   Call renderDaemonHealth in renderMainContent (1 line)
+
+7. Dashboard.fs, Line ~252
+   Query GetDaemonHealth and create view model (2 lines)
+
+8. Dashboard.fs, Line ~372
+   Add DaemonHealth to DashboardSnapshot construction (1 line)
+
+Optional: SseWriter.fs, Line ~289
+   Add formatDaemonHealthEvent function (30 lines)
+
+IMPLEMENTATION ORDER
+───────────────────────────────────────────────────
+1. DashboardTypes.fs (defines types)
+2. Dashboard.fs (queries and data)
+3. DashboardFragments.fs (rendering)
+4. SseWriter.fs (optional event formatting)
+
+KEY FILES & LINE NUMBERS
+───────────────────────────────────────────────────
+DaemonHealth.fs
+  C:\Code\Repos\SageFs\SageFs.Core\Features\DaemonHealth.fs
+  Types: 6-47, Functions: 49-127
+
+SseWriter.fs
+  C:\Code\Repos\SageFs\SageFs.Core\SseWriter.fs
+  formatSseEvent: 15-21
+  injectSessionId: 49-56
+  formatEvalTimelineEvent (pattern): 246-255
+
+DashboardFragments.fs
+  C:\Code\Repos\SageFs\SageFs\DashboardFragments.fs
+  renderEvalStats (pattern): 131-145
+  renderMainContent (integration): 743-800
+
+Dashboard.fs
+  C:\Code\Repos\SageFs\SageFs\Dashboard.fs
+  pushState: 225-373
+  GetEvalTimeline: 250-251
+  DashboardSnapshot construction: 355-372
+
+DashboardTypes.fs
+  C:\Code\Repos\SageFs\SageFs\DashboardTypes.fs
+  DomIds: 17-44
+  EvalStatsView (template): 140-166
+  DashboardQueries: 380-402
+  DashboardSnapshot: 427-444
+
+ARCHITECTURE PATTERNS
+───────────────────────────────────────────────────
+Pattern 1: Query + View Model
+  In pushState: Get data from query, transform to view model
+  let timelineStats = q.GetEvalTimeline()
+  let evalStatsView = EvalStatsView.fromStats stats timelineStats
+
+Pattern 2: View Model Definition
+  Combines domain data into render-friendly format
+  Has specific fields needed for UI display
+
+Pattern 3: Rendering Function
+  Takes view model, renders to XmlNode
+  Single root <div> with id from DomIds
+  Text.raw with sprintf for formatting
+
+Pattern 4: SSE Event Formatting
+  Create payload → serialize → inject SessionId → formatSseEvent
+  Returns formatted SSE string with newlines
+
+Pattern 5: Atomic Snapshot
+  Build complete DashboardSnapshot once
+  Render to single <div id="main">
+  Send one SSE morph
+  Datastar diffs on client
+
+TOTAL EFFORT
+───────────────────────────────────────────────────
+Files modified: 3-4
+Changes: 8 (+ 1 optional)
+Lines of code: ~82
+Complexity: LOW (all proven patterns)
+Risk: LOW (isolated, tested patterns)
+Time estimate: 30-45 minutes
+
+NEXT STEPS
+───────────────────────────────────────────────────
+1. Open DAEMON_HEALTH_QUICK_REF.md
+2. Follow the 8 changes in order
+3. Compile and test
+4. (Optional) Add SSE event formatter
+
+You have all the information needed!

@@ -127,6 +127,37 @@ let private renderDisableWarmupAutoOpenButton (style: string) =
       Elem.span [ Ds.show "!$configLoading" ] [ Text.raw "⚙ " ]
       Text.raw "Disable Warmup Auto-Open" ]
 
+/// Render daemon health as an HTML panel — shows status, uptime, memory, sessions, and tests.
+let renderDaemonHealth (view: DaemonHealthView) =
+  let emoji = Features.DaemonHealth.healthEmoji view.OverallHealth
+  let label = Features.DaemonHealth.healthLabel view.OverallHealth
+  Elem.div [ Attr.id DomIds.DaemonHealth; Attr.class' "meta" ] [
+    Elem.span [ Attr.style "font-weight: bold;" ] [
+      Text.raw (sprintf "%s %s · SageFs %s · up %s · %dMB"
+        emoji label view.Version view.UptimeLabel view.MemoryMB)
+    ]
+    match view.SessionSummaries with
+    | [] -> ()
+    | summaries ->
+      Elem.span [ Attr.class' "session-health-list"; Attr.style "margin-left: 0.5rem;" ] [
+        Text.raw (
+          summaries
+          |> List.map (fun s ->
+            sprintf "%s %s [%s] %d evals"
+              (Features.DaemonHealth.sessionStatusEmoji s.Status)
+              s.ProjectName
+              (Features.DaemonHealth.sessionStatusLabel s.Status)
+              s.EvalCount)
+          |> String.concat " · ")
+      ]
+    match view.TestsPassed, view.TestsFailed with
+    | Some passed, Some failed ->
+      Elem.span [ Attr.class' "tests-health meta"; Attr.style "margin-left: 0.5rem;" ] [
+        Text.raw (sprintf "🧪 %d✓ %d✗" passed failed)
+      ]
+    | _ -> ()
+  ]
+
 /// Render eval stats as an HTML fragment — includes sparkline and P50/P95 latency.
 let renderEvalStats (stats: EvalStatsView) =
   Elem.div [ Attr.id DomIds.EvalStats; Attr.class' "meta" ] [
@@ -766,6 +797,8 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
           []
       ]
     ]
+    // Daemon health bar — version, uptime, memory, session health
+    snap.DaemonHealth
     // Main app layout: output+eval on left, sidebar on right
     Elem.div [ Attr.class' "app-layout" ] [
       Elem.div [ Attr.class' "main-area" ] [

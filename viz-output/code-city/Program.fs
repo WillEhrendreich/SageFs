@@ -4292,6 +4292,16 @@ let private rotateDirectionRadians (dir: Vec2) radians =
   let sinA = MathF.Sin(radians)
   Vec2.Create(dir.X * cosA - dir.Y * sinA, dir.X * sinA + dir.Y * cosA)
 
+let private reflectDirectionAcrossAxis axis dir =
+  let axisDir = Vec2.normalize axis
+  let perp = Vec2.Create(-axisDir.Y, axisDir.X)
+  let parallelComponent = Vec2.dot dir axisDir
+  let lateral = Vec2.dot dir perp
+  Vec2.add
+    (Vec2.scale parallelComponent axisDir)
+    (Vec2.scale (-lateral) perp)
+  |> Vec2.normalize
+
 let private collinearNeighborInDirection (g: WeberGraph) (nid: NodeId) axis =
   g.Edges
   |> Seq.choose (fun edge ->
@@ -4370,6 +4380,52 @@ let private parallelCorridorTurnPressure (g: WeberGraph) (nid: NodeId) axis =
               Some (lateralSign * longitudinalWeight * lateralWeight))
   |> Seq.toList
 
+let private nearbyCorridorSidePreference (g: WeberGraph) (nid: NodeId) axis =
+  let origin = (g.N nid).Pos
+  let perp = Vec2.Create(-axis.Y, axis.X)
+  let maxLongitudinal = 28.0f
+  let minLongitudinal = 3.0f
+  let maxLateral = 4.0f
+  let weightedPreference =
+    g.Nodes
+    |> Seq.choose (fun other ->
+        if other.Id = nid then
+          None
+        else
+          match tryGetCorridorAxis (g.OutgoingDirs other.Id) with
+          | Some otherAxis when directionDeltaDegrees axis otherAxis <= 12.0f ->
+              let delta = Vec2.sub other.Pos origin
+              let longitudinal = abs (Vec2.dot delta axis)
+              let lateral = abs (Vec2.dot delta perp)
+              if longitudinal < minLongitudinal || longitudinal > maxLongitudinal || lateral > maxLateral then
+                None
+              else
+                let sideSigns =
+                  g.OutgoingDirs other.Id
+                  |> List.choose (fun dir ->
+                      if parallelHeadingDeltaDegrees axis dir <= 24.0f then
+                        None
+                      else
+                        let branchLateral = Vec2.dot dir perp
+                        if abs branchLateral < 0.12f then
+                          None
+                        else
+                          Some (if branchLateral < 0.0f then -1.0f else 1.0f))
+                  |> List.distinct
+                match sideSigns with
+                | [ side ] ->
+                    let weight = 1.0f / (1.0f + longitudinal * 0.18f)
+                    Some (side * weight)
+                | _ -> None
+          | _ -> None)
+    |> Seq.sum
+  if abs weightedPreference < 0.12f then
+    None
+  elif weightedPreference < 0.0f then
+    Some -1.0f
+  else
+    Some 1.0f
+
 let private crowdAwareContinuationTurn (g: WeberGraph) (nid: NodeId) (forwardDir: Vec2) baseTurn previousBias (rng: Random) =
   let baseDir = rotateDirectionRadians forwardDir baseTurn |> Vec2.normalize
   let pressures = parallelCorridorTurnPressure g nid baseDir
@@ -4390,9 +4446,23 @@ let private crowdAwareContinuationTurn (g: WeberGraph) (nid: NodeId) (forwardDir
     baseTurn + turnAwaySign * extraTurn
 
 let private crowdAwareBranchDirection (g: WeberGraph) (nid: NodeId) (baseDir: Vec2) previousBias (rng: Random) =
-  let pressures = parallelCorridorTurnPressure g nid baseDir
+  let corridorAxis = tryGetCorridorAxis (g.OutgoingDirs nid)
+  let corridorSidePreference =
+    corridorAxis
+    |> Option.bind (nearbyCorridorSidePreference g nid)
+  let adjustedBaseDir =
+    match corridorAxis, corridorSidePreference with
+    | Some axis, Some preferredSide ->
+        let perp = Vec2.Create(-axis.Y, axis.X)
+        let baseSide = Vec2.dot baseDir perp
+        if abs baseSide > 0.08f && baseSide * preferredSide < 0.0f then
+          reflectDirectionAcrossAxis axis baseDir
+        else
+          baseDir
+    | _ -> baseDir
+  let pressures = parallelCorridorTurnPressure g nid adjustedBaseDir
   if pressures.IsEmpty then
-    baseDir
+    adjustedBaseDir
   else
     let pressure = pressures |> List.sum
     let turnAwaySign =
@@ -4400,14 +4470,15 @@ let private crowdAwareBranchDirection (g: WeberGraph) (nid: NodeId) (baseDir: Ve
         if pressure < 0.0f then 1.0f else -1.0f
       elif previousBias > 0.04f then
         if previousBias > 0.0f then 1.0f else -1.0f
-      elif rng.NextSingle() < 0.5f then
-        -1.0f
       else
-        1.0f
+        match corridorSidePreference with
+        | Some preferredSide -> preferredSide
+        | None when rng.NextSingle() < 0.5f -> -1.0f
+        | None -> 1.0f
     let extraTurnDegrees =
       if pressures.Length >= 2 then 12.0f + rng.NextSingle() * 10.0f
       else 8.0f + rng.NextSingle() * 8.0f
-    rotateDirectionRadians baseDir (turnAwaySign * extraTurnDegrees * MathF.PI / 180.0f)
+    rotateDirectionRadians adjustedBaseDir (turnAwaySign * extraTurnDegrees * MathF.PI / 180.0f)
     |> Vec2.normalize
 
 let private formsParallelCorridorTripleBand (g: WeberGraph) (originId: NodeId) (origin: Vec2) (target: Vec2) (targetNodeId: NodeId option) =

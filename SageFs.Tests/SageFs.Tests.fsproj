@@ -205,6 +205,7 @@
         <Compile Include="CellDependenciesReportTests.fs" />
         <Compile Include="FeatureDiscoveryTests.fs" />
         <Compile Include="DashboardSparklineTests.fs" />
+        <Compile Include="DashboardHealthTests.fs" />
         <Compile Include="MarkAllStaleTests.fs" />
         <Compile Include="TestsPaneTests.fs" />
         <Compile Include="Program.fs" />

@@ -3476,6 +3476,19 @@ type private ProjectBlockMorphologyMetric =
     RegularClusterAreaShare: float32
     BlockCount: int }
 
+type private NeighborhoodBearingMetric =
+  { Seed: int
+    GlobalDominantLengthShare: float32
+    WindowAgreementShare: float32
+    AverageWindowDominantLengthShare: float32
+    WindowCount: int }
+
+type private OpposedTeePairMetric =
+  { Seed: int
+    OpposedPairShare: float32
+    EligibleChainCount: int
+    SideJunctionCount: int }
+
 let private blockRectAspectRatio (rect: TRect) =
   let shortest = max 0.1f (min rect.W rect.H)
   let longest = max rect.W rect.H
@@ -3569,6 +3582,231 @@ let private collectOrganicThroughChainGeometries (rect: TRect) seeds =
       |> List.filter (fun chain ->
           chain.SegmentCount >= 3
           && chain.TotalLength >= 24.0f))
+
+let private roadMidpoint2d (road: Road) =
+  let startPt, endPt = roadEndpoints2d road
+  Vec2.Create(
+    (startPt.X + endPt.X) / 2.0f,
+    (startPt.Y + endPt.Y) / 2.0f)
+
+let private lengthWeightedOrientationHistogram bucketSize roads =
+  roads
+  |> List.groupBy (roadOrientationBucket bucketSize)
+  |> List.map (fun (bucket, groupedRoads) -> bucket, groupedRoads |> List.sumBy roadSpanLength)
+  |> List.sortByDescending snd
+
+let private windowIndexForPoint divisions (rect: TRect) (pt: Vec2) =
+  if pt.X < rect.X || pt.X > rect.X + rect.W || pt.Y < rect.Z || pt.Y > rect.Z + rect.H then
+    None
+  else
+    let xNorm =
+      ((pt.X - rect.X) / rect.W)
+      |> max 0.0f
+      |> min 0.9999f
+    let yNorm =
+      ((pt.Y - rect.Z) / rect.H)
+      |> max 0.0f
+      |> min 0.9999f
+    Some (int (MathF.Floor(xNorm * float32 divisions)), int (MathF.Floor(yNorm * float32 divisions)))
+
+let private collectOrganicNeighborhoodBearingMetrics (rect: TRect) seeds =
+  let funcs = List.init 40 (fun i -> mkFunc (sprintf "bearing%d" i) "OrganicBearingMod")
+  seeds
+  |> List.choose (fun seed ->
+      let rng = Random(seed)
+      let _, roads =
+        layoutWeberDistrict rect funcs Map.empty (Color(70uy, 130uy, 180uy, 255uy)) 10 100 0.9f rng Map.empty
+      let canonicalRoads =
+        roads
+        |> canonicalizeRoads
+        |> List.filter (fun road -> roadSpanLength road >= 8.0f)
+      let chains =
+        throughChainGeometries 0.45f 18.0f canonicalRoads
+        |> List.filter (fun chain ->
+            chain.SegmentCount >= 3
+            && chain.TotalLength >= 24.0f)
+      let corridorRoadIndices =
+        chains
+        |> List.collect (fun chain -> chain.RoadIndexSet |> Set.toList)
+        |> Set.ofList
+      let corridorRoads =
+        canonicalRoads
+        |> List.mapi (fun roadIndex road -> roadIndex, road)
+        |> List.choose (fun (roadIndex, road) ->
+            if Set.contains roadIndex corridorRoadIndices then Some road else None)
+      let totalCorridorLength = corridorRoads |> List.sumBy roadSpanLength
+      match totalCorridorLength > 0.0f, lengthWeightedOrientationHistogram 15.0f corridorRoads with
+      | false, _
+      | _, [] -> None
+      | true, (globalDominantBucket, globalDominantLength) :: _ ->
+          let occupiedWindows =
+            corridorRoads
+            |> List.choose (fun road ->
+                roadMidpoint2d road
+                |> windowIndexForPoint 3 rect
+                |> Option.map (fun window -> window, road))
+            |> List.groupBy fst
+            |> List.choose (fun (_, groupedRoads) ->
+                let windowRoads = groupedRoads |> List.map snd
+                let windowRoadLength = windowRoads |> List.sumBy roadSpanLength
+                if windowRoadLength < 16.0f then
+                  None
+                else
+                  match lengthWeightedOrientationHistogram 15.0f windowRoads with
+                  | [] -> None
+                  | (dominantBucket, dominantLength) :: _ ->
+                      Some (dominantBucket, dominantLength / windowRoadLength))
+          if occupiedWindows.Length < 3 then
+            None
+          else
+            let averageWindowDominantLengthShare =
+              occupiedWindows |> List.averageBy snd
+            let windowAgreementShare =
+              occupiedWindows
+              |> List.filter (fun (bucket, _) -> bucket = globalDominantBucket)
+              |> List.length
+              |> fun count -> float32 count / float32 occupiedWindows.Length
+            Some
+              { Seed = seed
+                GlobalDominantLengthShare = globalDominantLength / totalCorridorLength
+                WindowAgreementShare = windowAgreementShare
+                AverageWindowDominantLengthShare = averageWindowDominantLengthShare
+                WindowCount = occupiedWindows.Length })
+
+let private greedyOpposedPairCount tolerance (samples: (float32 * int) list) =
+  let left =
+    samples
+    |> List.filter (fun (_, side) -> side < 0)
+    |> List.map fst
+    |> List.sort
+    |> ResizeArray
+  let right =
+    samples
+    |> List.filter (fun (_, side) -> side > 0)
+    |> List.map fst
+    |> List.sort
+    |> ResizeArray
+  let mutable leftIndex = 0
+  let mutable rightIndex = 0
+  let mutable pairs = 0
+  while leftIndex < left.Count && rightIndex < right.Count do
+    let delta = left.[leftIndex] - right.[rightIndex]
+    if abs delta <= tolerance then
+      pairs <- pairs + 1
+      leftIndex <- leftIndex + 1
+      rightIndex <- rightIndex + 1
+    elif delta < 0.0f then
+      leftIndex <- leftIndex + 1
+    else
+      rightIndex <- rightIndex + 1
+  pairs
+
+let private collectOrganicOpposedTeePairMetrics (rect: TRect) seeds =
+  let funcs = List.init 40 (fun i -> mkFunc (sprintf "zipper%d" i) "OrganicZipperMod")
+  let tolerance = 0.45f
+  let toleranceSq = tolerance * tolerance
+  seeds
+  |> List.choose (fun seed ->
+      let rng = Random(seed)
+      let _, roads =
+        layoutWeberDistrict rect funcs Map.empty (Color(70uy, 130uy, 180uy, 255uy)) 10 100 0.9f rng Map.empty
+      let canonicalRoads = canonicalizeRoads roads
+      let clusters, _ = buildDirectedSegments tolerance canonicalRoads
+      let clusterAnchors =
+        clusters
+        |> List.map (fun (clusterId, anchor, _) -> clusterId, anchor)
+        |> Map.ofList
+      let clusterRefs =
+        clusters
+        |> List.map (fun (clusterId, _, refs) -> clusterId, refs)
+        |> Map.ofList
+      let chainMetrics =
+        throughChainDetails tolerance 18.0f canonicalRoads
+        |> List.map fst
+        |> List.filter (fun detail ->
+            detail.SegmentLengths.Length >= 3
+            && detail.TotalLength >= 24.0f)
+        |> List.distinctBy (fun detail -> detail.RoadIndices |> Set.ofList)
+        |> List.choose (fun detail ->
+            let chainRoadSet = detail.RoadIndices |> Set.ofList
+            let clusterPath = detail.ClusterPath |> List.toArray
+            let segmentLengths = detail.SegmentLengths |> List.toArray
+            let sideSamples =
+              [ for pathIndex in 1 .. clusterPath.Length - 2 do
+                  let clusterId = clusterPath.[pathIndex]
+                  let anchor = Map.find clusterId clusterAnchors
+                  let prevAnchor = Map.find clusterPath.[pathIndex - 1] clusterAnchors
+                  let nextAnchor = Map.find clusterPath.[pathIndex + 1] clusterAnchors
+                  let axisDelta = Vec2.sub nextAnchor prevAnchor
+                  if Vec2.lengthSq axisDelta > 0.01f then
+                    let axis = Vec2.normalize axisDelta
+                    let perp = Vec2.Create(-axis.Y, axis.X)
+                    let distanceAlong =
+                      segmentLengths
+                      |> Array.take pathIndex
+                      |> Array.sum
+                    let sideValues =
+                      Map.find clusterId clusterRefs
+                      |> List.map fst
+                      |> List.distinct
+                      |> List.choose (fun roadIndex ->
+                          if Set.contains roadIndex chainRoadSet then
+                            None
+                          else
+                            let road = canonicalRoads.[roadIndex]
+                            let startPt, endPt = roadEndpoints2d road
+                            let branchDelta =
+                              if Vec2.distanceToSq anchor startPt <= toleranceSq then
+                                Vec2.sub endPt startPt
+                              elif Vec2.distanceToSq anchor endPt <= toleranceSq then
+                                Vec2.sub startPt endPt
+                              else
+                                Vec2.sub (roadMidpoint2d road) anchor
+                            if Vec2.lengthSq branchDelta <= 0.01f then
+                              None
+                            else
+                              let branchDir = Vec2.normalize branchDelta
+                              let branchAngle = smallestAngleBetweenDirections axis branchDir
+                              if branchAngle < 45.0f || branchAngle > 135.0f then
+                                None
+                              else
+                                let lateral = Vec2.dot branchDelta perp
+                                if abs lateral < 0.5f then
+                                  None
+                                else
+                                  Some (if lateral < 0.0f then -1 else 1))
+                      |> List.distinct
+                    for side in sideValues do
+                      yield distanceAlong, side ]
+            if sideSamples.Length < 4 then
+              None
+            else
+              let uniquePositions =
+                sideSamples
+                |> List.map fst
+                |> List.distinct
+                |> List.sort
+              let meanSpacing =
+                match uniquePositions with
+                | _ :: _ :: _ ->
+                    uniquePositions
+                    |> List.pairwise
+                    |> List.map (fun (a, b) -> b - a)
+                    |> List.average
+                | _ -> 10.0f
+              let pairTolerance = max 2.0f (meanSpacing * 0.2f)
+              let pairedCount = greedyOpposedPairCount pairTolerance sideSamples
+              Some (pairedCount, sideSamples.Length))
+      if chainMetrics.IsEmpty then
+        None
+      else
+        let totalSideJunctions = chainMetrics |> List.sumBy snd
+        let totalPairedJunctions = chainMetrics |> List.sumBy (fun (pairedCount, _) -> pairedCount * 2)
+        Some
+          { Seed = seed
+            OpposedPairShare = float32 totalPairedJunctions / float32 totalSideJunctions
+            EligibleChainCount = chainMetrics.Length
+            SideJunctionCount = totalSideJunctions })
 
 let weberDistrictTests =
   testList "Weber district layout" [
@@ -3789,6 +4027,65 @@ let weberDistrictTests =
       (maxCompanions, 1)
       |> Expect.isLessThanOrEqual
            (sprintf "organic districts should not form triple-lane bands of long near-parallel corridors. top=%s" topOffenderSummary)
+
+    testCase "organic district citywide dominant heading family does not monopolize corridor length" <| fun () ->
+      let rect  = { X = 0.0f; Z = 0.0f; W = 140.0f; H = 110.0f }
+      let metrics = collectOrganicNeighborhoodBearingMetrics rect [ 123; 321; 777 ]
+      (metrics.Length, 2) |> Expect.isGreaterThanOrEqual "organic districts should expose enough occupied neighborhoods to judge citywide grain"
+      let averageGlobalDominantShare = metrics |> List.averageBy _.GlobalDominantLengthShare
+      let summary =
+        metrics
+        |> List.map (fun metric ->
+            sprintf
+              "%d:global=%.3f agree=%.3f local=%.3f windows=%d"
+              metric.Seed
+              metric.GlobalDominantLengthShare
+              metric.WindowAgreementShare
+              metric.AverageWindowDominantLengthShare
+              metric.WindowCount)
+        |> String.concat " | "
+      (averageGlobalDominantShare, 0.30f)
+      |> Expect.isLessThan
+           (sprintf "organic districts should not let one heading family monopolize most corridor length across the whole map. %s" summary)
+
+    testCase "organic district neighborhoods do not all inherit the same dominant heading family" <| fun () ->
+      let rect  = { X = 0.0f; Z = 0.0f; W = 140.0f; H = 110.0f }
+      let metrics = collectOrganicNeighborhoodBearingMetrics rect [ 123; 321; 777 ]
+      (metrics.Length, 2) |> Expect.isGreaterThanOrEqual "organic districts should expose enough occupied neighborhoods to judge neighborhood grain"
+      let averageAgreementShare = metrics |> List.averageBy _.WindowAgreementShare
+      let summary =
+        metrics
+        |> List.map (fun metric ->
+            sprintf
+              "%d:agree=%.3f global=%.3f local=%.3f windows=%d"
+              metric.Seed
+              metric.WindowAgreementShare
+              metric.GlobalDominantLengthShare
+              metric.AverageWindowDominantLengthShare
+              metric.WindowCount)
+        |> String.concat " | "
+      (averageAgreementShare, 0.55f)
+      |> Expect.isLessThan
+           (sprintf "organic districts should let neighborhoods keep local grain without all inheriting the same dominant heading family. %s" summary)
+
+    testCase "organic district long through corridors do not form zipper-rung tee pairings" <| fun () ->
+      let rect  = { X = 0.0f; Z = 0.0f; W = 140.0f; H = 110.0f }
+      let metrics = collectOrganicOpposedTeePairMetrics rect [ 123; 321; 777 ]
+      (metrics.Length, 1) |> Expect.isGreaterThanOrEqual "organic districts should expose enough long corridors with side streets to judge bilateral rung pairing"
+      let averageOpposedPairShare = metrics |> List.averageBy _.OpposedPairShare
+      let summary =
+        metrics
+        |> List.map (fun metric ->
+            sprintf
+              "%d:pair=%.3f chains=%d sides=%d"
+              metric.Seed
+              metric.OpposedPairShare
+              metric.EligibleChainCount
+              metric.SideJunctionCount)
+        |> String.concat " | "
+      (averageOpposedPairShare, 0.28f)
+      |> Expect.isLessThan
+           (sprintf "organic districts should not let long corridors read like hidden zipper-rung cross streets. %s" summary)
 
     testCase "organic district does not collapse into two perpendicular road families" <| fun () ->
       let rect  = { X = 0.0f; Z = 0.0f; W = 100.0f; H = 80.0f }

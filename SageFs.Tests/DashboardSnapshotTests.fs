@@ -286,8 +286,7 @@ let shellStructureTests = testList "shell structure (replaces browser existence 
     OutputPanel = Elem.div [] []
     SessionsPanel = Elem.div [] []; SessionPicker = Elem.div [] []
     ThemePicker = Elem.div [] []; ThemeVars = Elem.div [] []
-    BindingsPanel = Elem.div [] []
-  }
+    BindingsPanel = Elem.div [] []; DaemonHealth = Elem.div [] [] }
 
   test "renderMainContent shows version" {
     let html = renderMainContent (mkSnap "1.2.3") |> renderNode
@@ -812,8 +811,7 @@ let datastarComplianceTests = testList "Datastar compliance (synthesis 5.4)" [
       OutputPanel = Elem.div [] []
       SessionsPanel = Elem.div [] []; SessionPicker = Elem.div [] []
       ThemePicker = Elem.div [] []; ThemeVars = Elem.div [] []
-      BindingsPanel = Elem.div [] []
-    }
+      BindingsPanel = Elem.div [] []; DaemonHealth = Elem.div [] [] }
     let html = renderMainContent snap |> renderNode
     let mustHaveIds =
       [ DomIds.Main; DomIds.SessionStatus; DomIds.EvalStats
@@ -852,8 +850,7 @@ let datastarComplianceTests = testList "Datastar compliance (synthesis 5.4)" [
       OutputPanel = Elem.div [] []
       SessionsPanel = Elem.div [] []; SessionPicker = Elem.div [] []
       ThemePicker = Elem.div [] []; ThemeVars = Elem.div [] []
-      BindingsPanel = Elem.div [] []
-    }
+      BindingsPanel = Elem.div [] []; DaemonHealth = Elem.div [] [] }
     let html = renderMainContent snap |> renderNode
     Expect.isTrue (html.StartsWith("<div id=\"main\""))"must start with div#main"
   }
@@ -870,7 +867,7 @@ let snapshotCompletenessTests = testList "Snapshot field completeness (synthesis
       OutputPanel = Elem.div [] []
       SessionsPanel = Elem.div [] []; SessionPicker = Elem.div [] []
       ThemePicker = Elem.div [] []; ThemeVars = Elem.div [] []
-      BindingsPanel = Elem.div [] [] }
+      BindingsPanel = Elem.div [] []; DaemonHealth = Elem.div [] [] }
 
   test "Version appears in rendered output" {
     let html = mkSnap "1.2.3" "s1" "C:\\" "ready" |> renderMainContent |> renderNode

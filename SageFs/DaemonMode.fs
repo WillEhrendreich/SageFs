@@ -1216,6 +1216,7 @@ let createElmRuntime
 /// Every session is a worker sub-process managed by SessionManager.
 let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
   let startupSw = System.Diagnostics.Stopwatch.StartNew()
+  let daemonStartTime = System.DateTimeOffset.UtcNow
   let startupSpan =
     Instrumentation.startSpan Instrumentation.daemonSource "sagefs.daemon.startup" [
       "daemon.port", box mcpPort
@@ -1495,6 +1496,50 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
     GetEvalTimeline = fun () ->
       let state = System.Threading.Volatile.Read(&sharedFeatureState.contents)
       SageFs.Features.EvalTimeline.timelineStats 20 state.CachedTimeline
+    GetDaemonHealth = fun () ->
+      let model = elmRuntime.GetModel()
+      let sessions =
+        model.Sessions.Sessions
+        |> List.map (fun s ->
+          let healthStatus : SageFs.Features.SessionHealthStatus =
+            match s.Status with
+            | SessionDisplayStatus.Running -> SageFs.Features.SessionHealthStatus.Ready
+            | SessionDisplayStatus.Starting -> SageFs.Features.SessionHealthStatus.WarmingUp
+            | SessionDisplayStatus.Restarting -> SageFs.Features.SessionHealthStatus.WarmingUp
+            | SessionDisplayStatus.Errored _ -> SageFs.Features.SessionHealthStatus.Faulted
+            | SessionDisplayStatus.Suspended -> SageFs.Features.SessionHealthStatus.Stopped
+            | SessionDisplayStatus.Stale -> SageFs.Features.SessionHealthStatus.Stopped
+          let projectName =
+            match s.Projects with
+            | p :: _ -> System.IO.Path.GetFileName p
+            | [] -> s.Name |> Option.defaultValue (WorkerProtocol.SessionId.value s.Id)
+          ({ SessionId = WorkerProtocol.SessionId.value s.Id
+             ProjectName = projectName
+             Status = healthStatus
+             EvalCount = s.EvalCount
+             LastActivity = System.DateTimeOffset(s.LastActivity, System.TimeSpan.Zero) }
+           : SageFs.Features.SessionHealthSummary))
+      let testingSummary =
+        let ts = model.LiveTesting.TestState
+        let entries = SageFs.Features.LiveTesting.LiveTestState.statusEntriesForSession "" ts
+        match entries.Length with
+        | 0 -> None
+        | _ ->
+          let summary = SageFs.Features.LiveTesting.TestSummary.fromStatuses ts.Activation (entries |> Array.map (fun e -> e.Status))
+          Some ({ TotalTests = summary.Total
+                  Passed = summary.Passed
+                  Failed = summary.Failed
+                  Running = summary.Running }
+                : SageFs.Features.LiveTestHealthSummary)
+      let memoryMB = int (System.GC.GetTotalMemory(false) / 1_048_576L)
+      Some ({ DaemonPid = System.Diagnostics.Process.GetCurrentProcess().Id
+              DaemonPort = mcpPort
+              Uptime = System.DateTimeOffset.UtcNow - daemonStartTime
+              Version = version
+              SessionSummaries = sessions
+              LiveTestingSummary = testingSummary
+              MemoryMB = memoryMB }
+            : SageFs.Features.HealthSnapshot)
   }
 
   let dashboardActions : DashboardActions = {

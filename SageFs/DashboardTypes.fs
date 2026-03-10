@@ -42,6 +42,7 @@ module DomIds =
   let [<Literal>] Sidebar = "sidebar"
   let [<Literal>] SidebarResize = "sidebar-resize"
   let [<Literal>] BindingsPanel = "bindings-panel"
+  let [<Literal>] DaemonHealth = "daemon-health"
 
 /// Datastar signal names — shared between Ds.signal init and Ds.bind/Ds.show refs.
 [<RequireQualifiedAccess>]
@@ -164,6 +165,39 @@ module EvalStatsView =
       Sparkline = timelineStats.Sparkline
       P50Ms = timelineStats.P50Ms
       P95Ms = timelineStats.P95Ms }
+
+/// Daemon health view model — pre-computed for rendering.
+type DaemonHealthView = {
+  Version: string
+  MemoryMB: int
+  UptimeLabel: string
+  OverallHealth: Features.OverallHealth
+  SessionCount: int
+  /// Per-session summaries for the health panel rows.
+  SessionSummaries: Features.SessionHealthSummary list
+  /// Total tests passing, if live testing is active.
+  TestsPassed: int option
+  /// Total tests failing, if live testing is active.
+  TestsFailed: int option
+}
+
+module DaemonHealthView =
+  /// Build a DaemonHealthView from a raw HealthSnapshot.
+  let fromSnapshot (snap: Features.HealthSnapshot) : DaemonHealthView =
+    let overallHealth = Features.DaemonHealth.overallStatus snap
+    let uptimeLabel = Features.DaemonHealth.formatUptime snap.Uptime
+    let (testsPassed, testsFailed) =
+      match snap.LiveTestingSummary with
+      | Some lt -> (Some lt.Passed, Some lt.Failed)
+      | None -> (None, None)
+    { Version = snap.Version
+      MemoryMB = snap.MemoryMB
+      UptimeLabel = uptimeLabel
+      OverallHealth = overallHealth
+      SessionCount = snap.SessionSummaries.Length
+      SessionSummaries = snap.SessionSummaries
+      TestsPassed = testsPassed
+      TestsFailed = testsFailed }
 
 /// Pipeline stage outcome — success or failure with an error message.
 [<Struct>]
@@ -399,6 +433,8 @@ type DashboardQueries = {
   GetLiveTestingStatus: unit -> string
   /// Read current EvalTimeline stats from the shared feature push state.
   GetEvalTimeline: unit -> Features.EvalTimeline.TimelineStats
+  /// Read current daemon health snapshot from the shared feature push state.
+  GetDaemonHealth: unit -> Features.HealthSnapshot option
 }
 
 /// Commands that mutate session state.
@@ -431,6 +467,7 @@ type DashboardSnapshot = {
   WorkingDir: string
   WarmupProgress: string
   EvalStats: EvalStatsView
+  DaemonHealth: XmlNode
   ThemeName: string
   ConnectionLabel: string option
   HotReloadPanel: XmlNode
