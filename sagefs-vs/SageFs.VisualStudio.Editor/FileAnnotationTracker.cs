@@ -39,7 +39,12 @@ internal sealed class FileAnnotationTracker
     private readonly ConcurrentDictionary<string, Dictionary<int, List<InlineFailureDisplay>>>
         _byFile = new ConcurrentDictionary<string, Dictionary<int, List<InlineFailureDisplay>>>(StringComparer.OrdinalIgnoreCase);
 
+    // Per-file: line → coverage health
+    private readonly ConcurrentDictionary<string, Dictionary<int, CoverageHealth>>
+        _coverageByFile = new ConcurrentDictionary<string, Dictionary<int, CoverageHealth>>(StringComparer.OrdinalIgnoreCase);
+
     public event EventHandler<string>? FileAnnotationsUpdated; // arg = normalized filePath
+    public event EventHandler<string>? CoverageUpdated;        // arg = normalized filePath
 
     public void ProcessEvent(SseEvent ev)
     {
@@ -83,6 +88,28 @@ internal sealed class FileAnnotationTracker
 
             _byFile[filePath] = lineMap;
             FileAnnotationsUpdated?.Invoke(this, filePath);
+
+            // ── Coverage annotations ─────────────────────────────────────
+            if (root.TryGetProperty("CoverageAnnotations", out var coverageAnns))
+            {
+                var coverageMap = new Dictionary<int, CoverageHealth>();
+                foreach (var ann in coverageAnns.EnumerateArray())
+                {
+                    int covLine = ann.TryGetProperty("Line", out var covLineEl) ? covLineEl.GetInt32() : -1;
+                    var healthStr = ann.TryGetProperty("Health", out var hEl) ? hEl.GetString() : null;
+                    if (covLine > 0)
+                    {
+                        coverageMap[covLine] = healthStr switch
+                        {
+                            "AllPassing" => CoverageHealth.AllPassing,
+                            "SomeFailing" => CoverageHealth.SomeFailing,
+                            _ => CoverageHealth.NoCoverage
+                        };
+                    }
+                }
+                _coverageByFile[filePath] = coverageMap;
+                CoverageUpdated?.Invoke(this, filePath);
+            }
         }
         catch (JsonException ex)
         {
@@ -131,6 +158,17 @@ internal sealed class FileAnnotationTracker
 
     public bool HasAnyForFile(string filePath) =>
         _byFile.TryGetValue(NormalizePath(filePath), out var m) && m.Count > 0;
+
+    public CoverageHealth GetCoverageForLine(string filePath, int line)
+    {
+        var key = NormalizePath(filePath);
+        return _coverageByFile.TryGetValue(key, out var map) && map.TryGetValue(line, out var health)
+            ? health
+            : CoverageHealth.NoCoverage;
+    }
+
+    public bool HasAnyCoverageForFile(string filePath) =>
+        _coverageByFile.TryGetValue(NormalizePath(filePath), out var m) && m.Count > 0;
 
     private static string NormalizePath(string path) =>
         path.Replace('/', '\\').ToLowerInvariant();

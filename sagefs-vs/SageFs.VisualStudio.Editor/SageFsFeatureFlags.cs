@@ -31,4 +31,8 @@ internal static class SageFsFeatureFlags
 
     /// <summary>Margin glyphs (green/red/amber circles) per test function line.</summary>
     public static bool GlyphsEnabled => !GlyphSpikeGuard.IsDisabled;
+
+    /// <summary>Coverage gutter glyphs (colored bars) from file_annotations coverage data.</summary>
+    public static bool CoverageGlyphsEnabled => !File.Exists(Path.Combine(_dir, "disable-coverage-glyphs.flag"))
+                                              && !GlyphSpikeGuard.IsDisabled;
 }
