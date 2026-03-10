@@ -540,6 +540,22 @@ type SageFsClient(http: HttpClient) =
       return Error "Could not reach SageFs daemon."
   }
 
+  /// Get structured health info from the daemon's /health endpoint.
+  /// Returns Ok(apiVersion, features) on success, Error(...) if unreachable.
+  member this.GetHealthAsync(ct: CancellationToken) : Task<Result<int * string list, string>> = task {
+    try
+      let! body = http.GetStringAsync(sprintf "%s/health" this.BaseUrl, ct)
+      use doc = JsonDocument.Parse(body)
+      let apiVer = tryInt doc.RootElement "apiVersion" -1
+      let features =
+        match tryArr doc.RootElement "features" with
+        | Some arr -> [ for el in arr.EnumerateArray() do if el.ValueKind = JsonValueKind.String then yield el.GetString() ]
+        | None -> []
+      return Ok (apiVer, features)
+    with _ ->
+      return Error "Could not reach SageFs daemon."
+  }
+
   /// Check that the daemon's apiVersion matches ExpectedApiVersion.
   /// Returns Ok() when compatible, Error(message) when mismatched or unreachable.
   member this.CheckVersionAsync(ct: CancellationToken) : Task<Result<unit, string>> = task {

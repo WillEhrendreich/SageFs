@@ -23,7 +23,9 @@ module ApiOutcome =
 type SageFsStatus =
   { connected: bool
     healthy: bool option
-    status: string option }
+    status: string option
+    apiVersion: int option
+    features: string list }
 
 type SystemStatus =
   { supervised: bool
@@ -195,14 +197,20 @@ let getStatus (c: Client) =
       match resp.statusCode with
       | 200 ->
         let parsed = jsonParse resp.body
+        let features =
+          fieldArray "features" parsed
+          |> Option.map (Array.choose tryCastString >> Array.toList)
+          |> Option.defaultValue []
         return
           { connected = true
             healthy = fieldBool "healthy" parsed |> Option.orElse (Some false)
-            status = fieldString "status" parsed }
+            status = fieldString "status" parsed
+            apiVersion = fieldInt "apiVersion" parsed
+            features = features }
       | _ ->
-        return { connected = true; healthy = Some false; status = Some "no session" }
+        return { connected = true; healthy = Some false; status = Some "no session"; apiVersion = None; features = [] }
     with _ ->
-      return { connected = false; healthy = None; status = None }
+      return { connected = false; healthy = None; status = None; apiVersion = None; features = [] }
   }
 
 let isReady (c: Client) =
@@ -211,6 +219,13 @@ let isReady (c: Client) =
     match s.connected, s.status with
     | true, (Some "Ready" | Some "Evaluating") -> return true
     | _ -> return false
+  }
+
+/// Returns the features list from the daemon health endpoint, or empty list if unreachable.
+let getFeatures (c: Client) =
+  promise {
+    let! s = getStatus c
+    return s.features
   }
 
 let evalCode (code: string) (workingDirectory: string option) (filePath: string option) (evalMode: string option) (blockStartLine: int option) (c: Client) =

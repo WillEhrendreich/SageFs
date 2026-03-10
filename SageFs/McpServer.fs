@@ -1030,7 +1030,18 @@ let mapHealthRoutes (app: WebApplication) (rctx: RouteContext) =
           | None -> return "starting"
       }
       let healthy = sessionStatus = "Ready" || sessionStatus = "Evaluating"
-      do! jsonResponse ctx 200 {| healthy = healthy; status = sessionStatus |}
+      let asm = System.Reflection.Assembly.GetExecutingAssembly()
+      let version =
+        asm.GetName().Version
+        |> Option.ofObj
+        |> Option.map (fun v -> v.ToString())
+        |> Option.defaultValue "unknown"
+      do! jsonResponse ctx 200
+            {| healthy = healthy
+               status = sessionStatus
+               version = version
+               apiVersion = SageFs.EndpointContracts.apiVersion
+               features = [ "live-testing"; "coverage-intel"; "impact-forecast"; "action-prioritizer"; "mark-all-stale"; "time-travel" ] |}
     }) :> Task
   ) |> ignore
   app.MapGet("/diag/threadpool", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->

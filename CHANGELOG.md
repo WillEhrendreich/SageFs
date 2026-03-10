@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `GET /api/health` now returns structured JSON: `{ version, apiVersion, features[], status, healthy }` — clients should check `apiVersion` before using coverage-intel and impact-forecast features
+- `apiVersion: 1` — protocol version exposed on `/health` (mirrors `/version`); used by VS Code, Visual Studio, and Neovim clients for capability checks
+- `getFeatures()` helper in VS Code extension client — returns daemon feature list from health response
+- `GetHealthAsync()` in Visual Studio extension client — parses `apiVersion` and `features[]` from `/health` response
+- Neovim `health_check` stores `api_version` and `features` in `M.state` after successful connection
+
+### Added
 - Composed multi-provider test execution — `RunTest` closures from multiple providers (FSI hook + project-level) are chained with fallthrough semantics so the first provider that can run a test wins
 - `TestRunCompleted` event for signaling the end of a test run batch
 - `GetTestDiscovery` worker message and `InitialTestDiscovery` worker response for on-demand test discovery without a full eval cycle
