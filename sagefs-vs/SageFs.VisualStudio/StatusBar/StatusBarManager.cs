@@ -30,6 +30,7 @@ internal class StatusBarManager : ExtensionPart
   private int _failedTests;
   private int _sessionCount;
   private string _daemonStatus = "Stopped";
+  private string? _warmupMessage;
   private OutputChannel? _output;
   private InfoBarService? _infoBar;
   private Timer? _vitalsTimer;
@@ -76,13 +77,29 @@ internal class StatusBarManager : ExtensionPart
     if (state.IsFaulted)
     {
       _daemonStatus = "Faulted";
+      _warmupMessage = null;
       var sessionName = Microsoft.FSharp.Core.OptionModule.DefaultValue("unknown", state.ActiveSessionId);
       _ = _infoBar?.ShowWarmupFailedAsync(sessionName);
     }
     else if (state.IsReady)
     {
       _daemonStatus = "Running";
+      _warmupMessage = null;
       _connected = true;
+    }
+    else if (state.WarmupProgress is not null)
+    {
+      _daemonStatus = "Connecting";
+      var wp = state.WarmupProgress.Value;
+      _warmupMessage = wp.Total <= 5
+        ? wp.Step switch
+          {
+            1 => "Creating FSI...",
+            2 => "Scanning sources...",
+            3 => "Loading assemblies...",
+            _ => "Finalizing...",
+          }
+        : $"Opening namespaces ({wp.Step}/{wp.Total})...";
     }
     else
     {
@@ -309,7 +326,7 @@ internal class StatusBarManager : ExtensionPart
 
   private void PushStatusBar()
   {
-    var text = FormatStatusBarText(_daemonStatus, _sessionCount, _passingTests, _failedTests);
+    var text = FormatStatusBarText(_daemonStatus, _sessionCount, _passingTests, _failedTests, _warmupMessage);
     _ = TryUpdateVsStatusBarAsync(text);
   }
 
@@ -331,7 +348,7 @@ internal class StatusBarManager : ExtensionPart
   /// Both implementations must remain in sync for the basic connected/disconnected case.
   /// </summary>
   public static string FormatStatusBarText(
-    string daemonStatus, int sessionCount, int passingTests, int failedTests)
+    string daemonStatus, int sessionCount, int passingTests, int failedTests, string? warmupMessage = null)
   {
     var icon = daemonStatus switch
     {
@@ -339,6 +356,8 @@ internal class StatusBarManager : ExtensionPart
       "Connecting" => "⟳",
       _ => "○",
     };
+    if (daemonStatus == "Connecting" && warmupMessage is not null)
+      return $"{icon} SageFs {warmupMessage}";
     var sessions = sessionCount > 0 ? $"  {sessionCount} session{(sessionCount != 1 ? "s" : "")}" : "";
     var tests = (passingTests > 0 || failedTests > 0)
       ? $"  ✓ {passingTests} / ✗ {failedTests}"

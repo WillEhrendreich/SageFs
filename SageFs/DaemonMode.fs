@@ -713,8 +713,8 @@ let handleTestDiscovery
   | false -> dispatch (SageFsMsg.Event (SageFsEvent.ProvidersDetected providers))
   | true -> ()
 
-/// Parse warmup progress string ("step/total msg") and dispatch to Elm.
-let handleWarmupProgress (dispatch: SageFsMsg -> unit) (_sid: string) (progress: string) =
+/// Parse warmup progress string ("step/total msg") into structured fields.
+let tryParseWarmupProgress (progress: string) =
   match progress.IndexOf('/') with
   | slashIdx when slashIdx > 0 ->
     match progress.IndexOf(' ', slashIdx) with
@@ -722,11 +722,17 @@ let handleWarmupProgress (dispatch: SageFsMsg -> unit) (_sid: string) (progress:
       match System.Int32.TryParse(progress.[..slashIdx-1]),
             System.Int32.TryParse(progress.[slashIdx+1..spaceIdx-1]) with
       | (true, step), (true, total) ->
-        let msg = progress.[spaceIdx+1..]
-        dispatch (SageFsMsg.Event (SageFsEvent.WarmupProgress (step, total, msg)))
-      | _ -> ()
-    | _ -> ()
-  | _ -> ()
+        Some (step, total, progress.[spaceIdx+1..])
+      | _ -> None
+    | _ -> None
+  | _ -> None
+
+/// Parse warmup progress string ("step/total msg") and dispatch to Elm.
+let handleWarmupProgress (dispatch: SageFsMsg -> unit) (_sid: string) (progress: string) =
+  match tryParseWarmupProgress progress with
+  | Some (step, total, msg) ->
+    dispatch (SageFsMsg.Event (SageFsEvent.WarmupProgress (step, total, msg)))
+  | None -> ()
 
 /// Periodic cache + manifest save callback.
 /// Only writes when RunGeneration has advanced since last save.
@@ -1313,8 +1319,13 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
   onInstrumentationMapsCallback <- fun sid maps ->
     elmRuntime.Dispatch(SageFsMsg.Event (SageFsEvent.InstrumentationMapsReady (WorkerProtocol.SessionId.value sid, maps)))
 
-  // Wire warmup progress from SessionManager → Elm model (per-namespace granularity)
-  onWarmupProgressCallback <- handleWarmupProgress elmRuntime.Dispatch
+  // Wire warmup progress from SessionManager → Elm model + SSE broadcast
+  onWarmupProgressCallback <- fun sid progress ->
+    handleWarmupProgress elmRuntime.Dispatch sid progress
+    match tryParseWarmupProgress progress with
+    | Some (step, total, msg) ->
+      stateChangedEvent.Trigger(WarmupProgress(sid, step, total, msg))
+    | None -> ()
 
   // W12(R10): Use Volatile.Read/Write to ensure MCP-thread writes are visible to HTTP-thread
   // readers without data races. Plain ref cell field access has no memory barrier on ARM.

@@ -498,6 +498,9 @@ let wireSessionEventSubscription
             Log.error "[SSE] SessionReady push fault: %s" msg
           | false -> ())
         |> ignore
+      | DaemonStateChange.WarmupProgress(sid, step, total, msg) ->
+        let sseFrame = SageFs.SseWriter.formatWarmupProgressEvent ctx.SseJsonOpts (Some sid) step total msg
+        ctx.SessionEventBroadcast.Trigger(sseFrame)
       | DaemonStateChange.FileReloaded path ->
         ctx.ServerTracker.AccumulateEvent(PushEvent.FileReloaded path)
       | DaemonStateChange.SessionFaulted (_sid, error) ->
@@ -1025,9 +1028,9 @@ let mapHealthRoutes (app: WebApplication) (rctx: RouteContext) =
   app.MapGet("/health", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
     withErrorHandling ctx (fun () -> task {
       let! allSessions = rctx.Config.SessionOps.GetAllSessions()
-      let! sessionStatus = task {
+      let! sessionResult = task {
         match allSessions |> Seq.tryHead with
-        | None -> return "no session"
+        | None -> return Ok "no session"
         | Some sess ->
           let! proxy = rctx.Config.SessionOps.GetProxy sess.Id
           match proxy with
@@ -1036,15 +1039,19 @@ let mapHealthRoutes (app: WebApplication) (rctx: RouteContext) =
               let! resp = send (SageFs.WorkerProtocol.WorkerMessage.GetStatus "health") |> Async.StartAsTask
               match resp with
               | SageFs.WorkerProtocol.WorkerResponse.StatusResult(_, snap) ->
-                return SageFs.WorkerProtocol.SessionStatus.label snap.Status
-              | _ -> return "unknown"
+                return Ok (SageFs.WorkerProtocol.SessionStatus.label snap.Status)
+              | _ -> return Ok "unknown"
             with
-            | :? OperationCanceledException -> return "cancelled"
+            | :? OperationCanceledException -> return Ok "cancelled"
             | ex ->
               Log.debug "[MCP] health check error for session: %s" ex.Message
-              return "error"
-          | None -> return "starting"
+              return Error (SageFs.SageFsError.WorkerCommunicationFailed(string sess.Id, ex.Message))
+          | None -> return Ok "starting"
       }
+      let sessionStatus, errorJson =
+        match sessionResult with
+        | Ok status -> status, (null :> obj)
+        | Error err -> "error", (SageFs.SageFsError.toJson err :> obj)
       let healthy = sessionStatus = "Ready" || sessionStatus = "Evaluating"
       let asm = System.Reflection.Assembly.GetExecutingAssembly()
       let version =
@@ -1055,6 +1062,7 @@ let mapHealthRoutes (app: WebApplication) (rctx: RouteContext) =
       do! jsonResponse ctx 200
             {| healthy = healthy
                status = sessionStatus
+               error = errorJson
                version = version
                apiVersion = SageFs.EndpointContracts.apiVersion
                features = [ "live-testing"; "coverage-intel"; "impact-forecast"; "action-prioritizer"; "mark-all-stale"; "time-travel" ] |}

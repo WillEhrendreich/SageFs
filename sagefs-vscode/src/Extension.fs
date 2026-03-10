@@ -55,6 +55,10 @@ let mutable daemonStderr = ""
 let mutable evalId = 0
 let mutable evalWatchdogTimer: obj option = None
 
+// Warmup progress state: tracks phase-by-phase warmup for status bar
+let mutable warmupPhase: string option = None
+let mutable warmupDetail: string option = None
+
 // File annotation decorations (coverage gutters + inline failures)
 let mutable private covPassingDecoType: TextEditorDecorationType option = None
 let mutable private covFailingDecoType: TextEditorDecorationType option = None
@@ -564,6 +568,8 @@ let refreshStatus () =
           | n -> n
         match status.status with
         | Some "Ready" | Some "Evaluating" ->
+          warmupPhase <- None
+          warmupDetail <- None
           let! sessions = Client.listSessions c
           let session =
             match activeSessionId with
@@ -614,10 +620,39 @@ let refreshStatus () =
           Sessions.setSession c activeId
           TypeExpl.setClient (Some c)
         | Some "Starting" | Some "Restarting" ->
-          sb.text <- "$(loading~spin) SageFs: warming up..."
+          match warmupPhase with
+          | Some phase ->
+            let phaseLabel =
+              match phase with
+              | "creating_fsi" -> "Creating FSI..."
+              | "scanning_sources" -> "Scanning sources..."
+              | "loading_assemblies" -> "Loading assemblies..."
+              | "opening_namespaces" ->
+                match warmupDetail with
+                | Some d -> sprintf "Opening namespaces (%s)" d
+                | None -> "Opening namespaces..."
+              | "finalizing" -> "Finalizing..."
+              | _ -> "Warming up..."
+            sb.text <- sprintf "$(loading~spin) SageFs: %s" phaseLabel
+          | None ->
+            sb.text <- "$(loading~spin) SageFs: warming up..."
           sb.backgroundColor <- None
-        | Some "Faulted" | Some "Stopped" ->
-          sb.text <- "$(error) SageFs: session error"
+        | Some "Faulted" | Some "Stopped" | Some "error" ->
+          match status.error with
+          | Some err ->
+            sb.text <- "$(error) SageFs: session error"
+            sb.tooltip <- Some err.message
+            let! choice =
+              Window.showErrorMessage
+                err.message
+                [| err.suggestedAction; "Show Output" |]
+            match choice with
+            | Some action when action = err.suggestedAction ->
+              (getOutput()).appendLine (sprintf "[SageFs] Suggested action: %s" err.suggestedAction)
+            | Some "Show Output" -> showOutputPanel ()
+            | _ -> ()
+          | None ->
+            sb.text <- "$(error) SageFs: session error"
           sb.backgroundColor <-
             Some (newThemeColor "statusBarItem.errorBackground")
         | Some "no session" ->
@@ -1864,6 +1899,19 @@ let activate (context: ExtensionContext) =
       OnFileAnnotations = fun data ->
         handleFileAnnotations data
       OnFailureNarratives = fun _narratives -> ()
+      OnWarmupProgress = fun step total message _progress phase ->
+        warmupPhase <- Some phase
+        let detail =
+          match total > 5 with
+          | true -> Some (sprintf "%d/%d" step total)
+          | false -> None
+        warmupDetail <- detail
+        refreshStatus ()
+        match phase with
+        | "finalizing" ->
+          warmupPhase <- None
+          warmupDetail <- None
+        | _ -> ()
     }
     let reconnectHandler = Some (fun () ->
       c.log "SSE reconnected — refreshing status..."
@@ -1964,10 +2012,13 @@ let activate (context: ExtensionContext) =
         | Result.Ok () -> connectToRunningDaemon c
         | Result.Error msg ->
           (getOutput()).appendLine (sprintf "[SageFs] Version mismatch: %s" msg)
-          let! choice = Window.showErrorMessage msg [| "Show Output"; "Check Installation" |]
+          let! choice = Window.showErrorMessage msg [| "Update Now"; "Show Output"; "Ignore" |]
           match choice with
+          | Some "Update Now" ->
+            let term = Window.createTerminal "SageFs Update"
+            terminalShow term
+            terminalSendText term "dotnet tool update --global SageFs"
           | Some "Show Output" -> showOutputPanel ()
-          | Some "Check Installation" -> checkInstallation ()
           | _ -> ()
     } |> promiseIgnoreLog logToOutput
 

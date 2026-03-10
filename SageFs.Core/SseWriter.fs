@@ -55,6 +55,35 @@ let injectSessionId (sessionId: string option) (json: string) : string =
       sprintf """{"SessionId":"%s",%s""" sid (json.Substring(1))
     | false -> json
 
+// ── Warmup progress SSE event ──
+
+/// Derive a human-readable warmup phase from step/total context.
+/// Total <= 5 means main warmup phases (FSI creation, scanning, assembly load, finalize).
+/// Total > 5 means per-namespace open phase.
+let private deriveWarmupPhase (step: int) (total: int) =
+  match total <= 5 with
+  | true ->
+    match step with
+    | 1 -> "creating_fsi"
+    | 2 -> "scanning_sources"
+    | 3 -> "loading_assemblies"
+    | _ -> "finalizing"
+  | false -> "opening_namespaces"
+
+/// Format a warmup progress event as an SSE event string.
+/// Emitted during session warmup so editor plugins can show phase-by-phase progress.
+let formatWarmupProgressEvent (opts: JsonSerializerOptions) (sessionId: string option) (step: int) (total: int) (message: string) : string =
+  let progress =
+    match total with
+    | 0 -> 0.0
+    | t -> System.Math.Round(float step / float t, 3)
+  let phase = deriveWarmupPhase step total
+  let json =
+    JsonSerializer.Serialize(
+      {| Step = step; Total = total; Message = message; Progress = progress; Phase = phase |}, opts)
+    |> injectSessionId sessionId
+  formatSseEvent "warmup_progress" json
+
 /// Format a TestSummary as an SSE event string
 let formatTestSummaryEvent (opts: JsonSerializerOptions) (sessionId: string option) (summary: Features.LiveTesting.TestSummary) : string =
   let json = JsonSerializer.Serialize(summary, opts) |> injectSessionId sessionId

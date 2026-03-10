@@ -138,7 +138,7 @@ type SessionSubscriber(port: int) =
         let duration = tryTimeSpan root "Duration"
         let errors = tryStrArr root "Errors"
         Some (SessionWarmupCompleted {| Duration = duration; Errors = errors |})
-      | "session_warmup_progress" ->
+      | "session_warmup_progress" | "warmup_progress" ->
         let step = tryInt root "Step" 0
         let total = tryInt root "Total" 0
         let message = tryStr root "Message" ""

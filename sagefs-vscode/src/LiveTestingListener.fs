@@ -174,6 +174,7 @@ type LiveTestingCallbacks = {
   OnSourceLocationsUpdate: obj array -> unit
   OnFileAnnotations: obj -> unit
   OnFailureNarratives: VscFailureNarrative array -> unit
+  OnWarmupProgress: int -> int -> string -> float -> string -> unit
 }
 
 type LiveTestingListener = {
@@ -269,6 +270,13 @@ let start (port: int) (callbacks: LiveTestingCallbacks) (onReconnect: (unit -> u
           narratives |> Array.fold (fun m n -> Map.add n.TestId n m) state.FailureNarratives
         state <- { state with FailureNarratives = narrativeMap }
         callbacks.OnFailureNarratives narratives
+      | "warmup_progress" ->
+        let step = fieldInt "Step" data |> Option.defaultValue 0
+        let total = fieldInt "Total" data |> Option.defaultValue 0
+        let message = fieldString "Message" data |> Option.defaultValue ""
+        let progress = fieldFloat "Progress" data |> Option.defaultValue 0.0
+        let phase = fieldString "Phase" data |> Option.defaultValue ""
+        callbacks.OnWarmupProgress step total message progress phase
       | _ ->
         ())
 

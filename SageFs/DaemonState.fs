@@ -9,6 +9,7 @@ type DaemonStateChange =
   | FileReloaded of path: string
   | SessionFaulted of sessionId: string * error: string
   | ModelChanged of outputCount: int * diagCount: int
+  | WarmupProgress of sessionId: string * step: int * total: int * message: string
 
 module DaemonStateChange =
   /// Serialize to JSON for SSE wire format. Single source of truth — used by bridge and SSE stream.
@@ -20,6 +21,8 @@ module DaemonStateChange =
     | FileReloaded path -> sprintf """{"fileReloaded":"%s"}""" (path.Replace("\\", "\\\\"))
     | SessionFaulted (sid, err) -> sprintf """{"sessionFaulted":"%s","error":"%s"}""" sid (err.Replace("\"", "\\\""))
     | StandbyProgress -> """{"standbyProgress":true}"""
+    | WarmupProgress (sid, step, total, _msg) ->
+      sprintf """{"warmupProgress":true,"sessionId":"%s","step":%d,"total":%d}""" sid step total
 
 module DaemonInfo =
   let version =
