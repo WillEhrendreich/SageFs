@@ -44,6 +44,7 @@
         <Compile Include="ConsoleInput.fs" />
         <Compile Include="TerminalMode.fs" />
         <Compile Include="TuiClient.fs" />
+        <Compile Include="SageTuiClient.fs" />
         <Compile Include="DaemonMode.fs" />
         <Compile Include="WatchdogRunner.fs" />
         <Compile Include="JupyterTransport.fs" />
@@ -58,6 +59,7 @@
     <ItemGroup>
         <ProjectReference Include="..\SageFs.Core\SageFs.Core.fsproj" />
         <ProjectReference Include="..\SageFs.Gui\SageFs.Gui.fsproj" />
+        <ProjectReference Include="..\..\sagetui\SageTUI.Library.fsproj" />
     </ItemGroup>
 
     <ItemGroup>

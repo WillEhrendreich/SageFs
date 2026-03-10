@@ -148,6 +148,7 @@ let main args =
     printfn "Usage: SageFs [options]                Start daemon (default mode)"
     printfn "       SageFs --supervised [options]   Start with watchdog auto-restart"
     printfn "       SageFs tui                      Terminal UI client for running daemon"
+    printfn "       SageFs tui --legacy-tui         Terminal UI (imperative fallback)"
     printfn "       SageFs gui                      GPU-rendered Raylib GUI client"
     printfn "       SageFs --jupyter <conn.json>    Run as Jupyter kernel"
     printfn "       SageFs stop                     Stop running daemon"
@@ -279,23 +280,27 @@ let main args =
     |> Async.RunSynchronously
     0
 
-  | Tui _ ->
+  | Tui tuiArgs ->
+    let useLegacy = tuiArgs |> Array.exists (fun a -> a = "--legacy-tui")
+    let runTui (info: DaemonInfo) =
+      match useLegacy with
+      | true ->
+        TuiClient.run info
+        |> _.GetAwaiter() |> _.GetResult()
+      | false ->
+        SageTuiClient.run info
     match DaemonState.read () with
-    | Some info ->
-      TuiClient.run info
-      |> _.GetAwaiter() |> _.GetResult()
+    | Some info -> runTui info
     | None ->
       printfn "No SageFs daemon running. Starting one..."
       let daemonArgs =
         args.[1..]
-        |> Array.filter (fun a -> a <> "tui")
+        |> Array.filter (fun a -> a <> "tui" && a <> "--legacy-tui")
         |> String.concat " "
       match startDaemonInBackground daemonArgs with
       | Ok () ->
         match DaemonState.read () with
-        | Some info ->
-          TuiClient.run info
-          |> _.GetAwaiter() |> _.GetResult()
+        | Some info -> runTui info
         | None ->
           printfn "Daemon started but connection failed."
           1
@@ -372,7 +377,6 @@ let main args =
     match DaemonState.read () with
     | Some info ->
       printfn "SageFs daemon already running (PID %d, port %d). Launching TUI..." info.Pid info.Port
-      TuiClient.run info
-      |> _.GetAwaiter() |> _.GetResult()
+      SageTuiClient.run info
     | None ->
       runDaemon args
