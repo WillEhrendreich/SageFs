@@ -280,15 +280,15 @@ Every frontend connects to the same daemon. Open several at once — they all se
 | Session management | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Code completion | ✅ | ✅ | ¹ | ✅ | ✅ | ✅ | ✅ |
 | CodeLens | ✅ | ✅ | ✅ | — | — | — | — |
-| **Live test gutters** | ✅ | ✅ | ¹ | ✅ | ¹ | — | — |
-| **Coverage gutters** | ✅ | ✅ | ✅ | ✅ | ¹ | — | — |
-| **Failure narratives** | ✅ | ✅ | ✅ | — | — | — | ✅ |
+| **Live test gutters** | ✅ | ✅ | ¹ | ✅ | ✅ | — | — |
+| **Coverage gutters** | ✅ | ✅ | ✅ | ✅ | ✅ | — | — |
+| **Failure narratives** | ✅ | ✅ | ✅ | ✅ | ✅ | — | ✅ |
 | **Test source-jump** | ✅ | ✅ | ✅ | — | — | — | — |
-| Test panel | ✅ | ✅ | — | — | — | — | — |
+| Test panel | ✅ | ✅ | — | ✅ | ✅ | — | — |
 | Test policy controls | ✅ | ✅ | — | — | — | — | ✅ |
-| Type explorer | ✅ | ✅ | — | — | — | — | ✅ |
+| Type explorer | ✅ | ✅ | — | — | ¹ | — | ✅ |
 | Call graph | ✅ | ✅ | — | — | — | — | — |
-| History browser | ✅ | ✅ | — | — | — | — | — |
+| History browser | ✅ | ✅ | — | ✅ | ✅ | — | — |
 | Test trace | ✅ | ✅ | — | — | — | — | ✅ |
 
 > ¹ Server-side data ready. Editor UI integration pending (VS SDK limitations or work-in-progress).
@@ -620,7 +620,7 @@ If the config already exists, SageFs opens or points you at the file instead of 
 
 📖 **[Full Troubleshooting Guide →](docs/TROUBLESHOOTING.md)** — covers first-run issues, runtime problems, platform-specific fixes, and diagnostic tools.
 
-📊 **[Feature Matrix →](docs/FEATURE_MATRIX.md)** — compare features across VS Code, Neovim, Visual Studio, and TUI.
+📊 **[Feature Matrix →](docs/FEATURE_MATRIX.md)** — compare features across VS Code, Neovim, Visual Studio, TUI, and Raylib GUI.
 
 <details>
 <summary><strong>⚙️ FSI Quirks & Rewrites</strong></summary>

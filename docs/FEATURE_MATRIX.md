@@ -1,6 +1,6 @@
 # SageFs Feature Matrix
 
-Cross-editor comparison of SageFs features. Use this to understand what's
+Cross-editor comparison of SageFs features across all six frontends. Use this to understand what's
 available in your editor and discover features you might not know about.
 
 > **Legend**: ✅ Supported | 🔜 Planned | ❌ Not applicable | ➖ N/A for this editor
@@ -9,93 +9,102 @@ available in your editor and discover features you might not know about.
 
 ## Core Evaluation
 
-| Feature | VS Code | Neovim | Visual Studio | TUI |
-|:--------|:-------:|:------:|:-------------:|:---:|
-| Evaluate selection (`Alt+Enter`) | ✅ | ✅ | ✅ | ✅ |
-| Evaluate current cell | ✅ | ✅ | ✅ | ✅ |
-| Evaluate file | ✅ | ✅ | ✅ | ✅ |
-| Load .fsx script | ✅ | ✅ | ✅ | ✅ |
-| Inline results | ✅ | ✅ | ✅ | ✅ |
-| Eval history / timeline | ✅ | ✅ | 🔜 | ✅ |
-| Cancel running eval | ✅ | ✅ | ✅ | ✅ |
+| Feature | VS Code | Neovim | Visual Studio | TUI | Raylib GUI |
+|:--------|:-------:|:------:|:-------------:|:---:|:----------:|
+| Evaluate selection (`Alt+Enter`) | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Evaluate current cell | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Evaluate file | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Load .fsx script | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Inline results | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Eval history / timeline | ✅ | ✅ | 🔜 | ✅ | ✅ |
+| Cancel running eval | ✅ | ✅ | ✅ | ✅ | ✅ |
 
 ## Session Management
 
-| Feature | VS Code | Neovim | Visual Studio | TUI |
-|:--------|:-------:|:------:|:-------------:|:---:|
-| Create session | ✅ | ✅ | ✅ | ✅ |
-| Switch session | ✅ | ✅ | ✅ | ✅ |
-| Soft reset (clear definitions) | ✅ | ✅ | ✅ | ✅ |
-| Hard reset (rebuild + reload) | ✅ | ✅ | ✅ | ✅ |
-| Export session as .fsx | ✅ | ✅ | 🔜 | ✅ |
-| Session picker (multi-session) | ✅ | ✅ | ✅ | ✅ |
+| Feature | VS Code | Neovim | Visual Studio | TUI | Raylib GUI |
+|:--------|:-------:|:------:|:-------------:|:---:|:----------:|
+| Create session | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Switch session | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Soft reset (clear definitions) | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Hard reset (rebuild + reload) | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Export session as .fsx | ✅ | ✅ | 🔜 | ✅ | ✅ |
+| Session picker (multi-session) | ✅ | ✅ | ✅ | ✅ | ✅ |
 
 ## Live Testing
 
-| Feature | VS Code | Neovim | Visual Studio | TUI |
-|:--------|:-------:|:------:|:-------------:|:---:|
-| Auto-discover tests | ✅ | ✅ | ✅ | ✅ |
-| Run affected tests on save | ✅ | ✅ | ✅ | ✅ |
-| Test gutter markers (pass/fail) | ✅ | ✅ | ✅ | ✅ |
-| Test results panel | ✅ | ✅ | ✅ | ✅ |
-| Failure narratives | ✅ | ✅ | ✅ | ✅ |
-| Causal change tracking | ✅ | ✅ | ✅ | ✅ |
-| Run policy configuration | ✅ | ✅ | 🔜 | ✅ |
-| Property-based test detail | ✅ | ✅ | ✅ | ✅ |
-| Coverage gutter signs | ✅ | ✅ | 🔜 | ➖ |
+| Feature | VS Code | Neovim | Visual Studio | TUI | Raylib GUI |
+|:--------|:-------:|:------:|:-------------:|:---:|:----------:|
+| Auto-discover tests | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Run affected tests on save | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Test gutter markers (pass/fail) | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Test results panel | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Failure narratives | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Causal change tracking | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Run policy configuration | ✅ | ✅ | 🔜 | ✅ | ✅ |
+| Property-based test detail | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Coverage gutter signs | ✅ | ✅ | 🔜 | ✅ | ✅ |
 
 ## Code Intelligence
 
-| Feature | VS Code | Neovim | Visual Studio | TUI |
-|:--------|:-------:|:------:|:-------------:|:---:|
-| Type Explorer tree | ✅ | ✅ | ✅ | ✅ |
-| Namespace exploration | ✅ | ✅ | ✅ | ✅ |
-| Code completions | ✅ | ✅ | 🔜 | ✅ |
-| Dependency graph | ✅ | ✅ | 🔜 | ✅ |
-| Test coverage query | ✅ | ✅ | ✅ | ✅ |
+| Feature | VS Code | Neovim | Visual Studio | TUI | Raylib GUI |
+|:--------|:-------:|:------:|:-------------:|:---:|:----------:|
+| Type Explorer tree | ✅ | ✅ | ✅ | ✅ | ¹ |
+| Namespace exploration | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Code completions | ✅ | ✅ | 🔜 | ✅ | ✅ |
+| Dependency graph | ✅ | ✅ | 🔜 | ✅ | ✅ |
+| Test coverage query | ✅ | ✅ | ✅ | ✅ | ✅ |
 
 ## Hot Reload & File Watching
 
-| Feature | VS Code | Neovim | Visual Studio | TUI |
-|:--------|:-------:|:------:|:-------------:|:---:|
-| Auto-reload on .fs save | ✅ | ✅ | ✅ | ✅ |
-| Hot reload status indicator | ✅ | ✅ | ✅ | ✅ |
-| DevReload browser refresh | ✅ | ✅ | ✅ | ✅ |
+| Feature | VS Code | Neovim | Visual Studio | TUI | Raylib GUI |
+|:--------|:-------:|:------:|:-------------:|:---:|:----------:|
+| Auto-reload on .fs save | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Hot reload status indicator | ✅ | ✅ | ✅ | ✅ | ✅ |
+| DevReload browser refresh | ✅ | ✅ | ✅ | ✅ | ✅ |
 
 ## Diagnostics & Health
 
-| Feature | VS Code | Neovim | Visual Studio | TUI |
-|:--------|:-------:|:------:|:-------------:|:---:|
-| Health check command | ✅ | ✅ | ✅ | ✅ |
-| Daemon status in status bar | ✅ | ✅ | ✅ | ✅ |
-| Session count in status bar | ✅ | ✅ | ✅ | ✅ |
-| Actionable error notifications | ✅ | ✅ | ✅ | ✅ |
-| Output channel / logs | ✅ | ✅ | ✅ | ✅ |
-| OpenTelemetry export | ✅ | ✅ | ✅ | ✅ |
-| Warmup progress display | ✅ | ✅ | ✅ | ✅ |
-| Typed error display (`SageFsError`) | ✅ | ✅ | ✅ | ✅ |
-| Eval watchdog (crash detection) | ✅ | ✅ | ✅ | ✅ |
-| Version gate (API compat check) | ✅ | ➖ | 🔜 | ➖ |
-| Daemon stderr capture | ✅ | ➖ | ✅ | ➖ |
+| Feature | VS Code | Neovim | Visual Studio | TUI | Raylib GUI |
+|:--------|:-------:|:------:|:-------------:|:---:|:----------:|
+| Health check command | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Daemon status in status bar | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Session count in status bar | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Actionable error notifications | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Output channel / logs | ✅ | ✅ | ✅ | ✅ | ✅ |
+| OpenTelemetry export | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Warmup progress display | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Typed error display (`SageFsError`) | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Eval watchdog (crash detection) | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Version gate (API compat check) | ✅ | ➖ | 🔜 | ➖ | ➖ |
+| Daemon stderr capture | ✅ | ➖ | ✅ | ➖ | ➖ |
 
 ## Onboarding
 
-| Feature | VS Code | Neovim | Visual Studio | TUI |
-|:--------|:-------:|:------:|:-------------:|:---:|
-| Getting Started walkthrough | ✅ | ➖ | 🔜 | ➖ |
-| Welcome message (first run) | ✅ | ✅ | ✅ | ✅ |
-| Empty-state guidance | ✅ | ✅ | ✅ | ✅ |
-| Snippets | ✅ | 🔜 | ❌ | ❌ |
+| Feature | VS Code | Neovim | Visual Studio | TUI | Raylib GUI |
+|:--------|:-------:|:------:|:-------------:|:---:|:----------:|
+| Getting Started walkthrough | ✅ | ➖ | 🔜 | ➖ | ➖ |
+| Welcome message (first run) | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Empty-state guidance | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Snippets | ✅ | 🔜 | ❌ | ❌ | ❌ |
 
 ## Editor Integration
 
-| Feature | VS Code | Neovim | Visual Studio | TUI |
-|:--------|:-------:|:------:|:-------------:|:---:|
-| CodeLens (test results above functions) | ✅ | ❌ | ✅ | ❌ |
-| Inline failure annotations | ✅ | ✅ | ✅ | ✅ |
-| Telescope/fuzzy finder integration | ❌ | ✅ | ❌ | ❌ |
-| Statusline component | ✅ | ✅ | ✅ | ✅ |
-| Syntax highlighting (Tree-sitter) | ❌ | ✅ | ❌ | ✅ |
+| Feature | VS Code | Neovim | Visual Studio | TUI | Raylib GUI |
+|:--------|:-------:|:------:|:-------------:|:---:|:----------:|
+| CodeLens (test results above functions) | ✅ | ❌ | ✅ | ❌ | ❌ |
+| Inline failure annotations | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Telescope/fuzzy finder integration | ❌ | ✅ | ❌ | ❌ | ❌ |
+| Statusline component | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Syntax highlighting (Tree-sitter) | ❌ | ✅ | ❌ | ✅ | ✅ |
+| Time-travel (history snapshots) | ❌ | ❌ | ❌ | ✅ | ✅ |
+| Failing test navigation | ✅ | ✅ | ❌ | ✅ | ✅ |
+| Mouse support (click/drag/scroll) | ❌ | ✅ | ❌ | ✅ | ✅ |
+| Text selection + copy | ❌ | ✅ | ❌ | ❌ | ✅ |
+| Layout presets | ❌ | ❌ | ❌ | ✅ | ✅ |
+| Display density modes | ❌ | ❌ | ❌ | ✅ | ✅ |
+| Font size zoom | ❌ | ❌ | ❌ | ❌ | ✅ |
+
+> ¹ Completion popup available; dedicated Type Explorer pane not yet implemented.
 
 ---
 
