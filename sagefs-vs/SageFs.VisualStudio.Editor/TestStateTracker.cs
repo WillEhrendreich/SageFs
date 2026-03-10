@@ -15,8 +15,11 @@ internal sealed class TestStateTracker
     private readonly ConcurrentDictionary<(string, int), TestStatus> _lineStatus = new ConcurrentDictionary<(string, int), TestStatus>();
     // Maps testId → (filePath, line) for join with TestResultBatch
     private readonly ConcurrentDictionary<string, (string FilePath, int Line)> _testLocations = new ConcurrentDictionary<string, (string FilePath, int Line)>();
+    // Maps testName → source location for test→source navigation
+    private readonly ConcurrentDictionary<string, TestSourceLocation> _sourceLocations = new ConcurrentDictionary<string, TestSourceLocation>(StringComparer.OrdinalIgnoreCase);
 
     public event EventHandler? StateChanged;
+    public event EventHandler? SourceLocationsChanged;
 
     public void ProcessEvent(SseEvent ev)
     {
@@ -27,10 +30,14 @@ internal sealed class TestStateTracker
             case "test_results_batch":
                 ProcessResultsBatch(ev.Data);
                 break;
+            case "test_source_locations":
+                ProcessSourceLocations(ev.Data);
+                break;
             case "session_reset":
             case "session_hard_reset":
                 _lineStatus.Clear();
                 _testLocations.Clear();
+                _sourceLocations.Clear();
                 StateChanged?.Invoke(this, EventArgs.Empty);
                 break;
         }
@@ -139,6 +146,48 @@ internal sealed class TestStateTracker
         return null;
     }
 
+    /// <summary>
+    /// Parses the daemon's test_source_locations event.
+    /// JSON shape: { "Locations": [{ "TestName": "...", "FilePath": "...", "StartLine": 10, "EndLine": 15 }] }
+    /// </summary>
+    private void ProcessSourceLocations(string json)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+            if (!root.TryGetProperty("Locations", out var locations)) return;
+
+            var changed = false;
+            foreach (var loc in locations.EnumerateArray())
+            {
+                var testName = loc.TryGetProperty("TestName", out var tn) ? tn.GetString() ?? "" : "";
+                var filePath = loc.TryGetProperty("FilePath", out var fp) ? fp.GetString() ?? "" : "";
+                var startLine = loc.TryGetProperty("StartLine", out var sl) ? sl.GetInt32() : 0;
+                var endLine = loc.TryGetProperty("EndLine", out var el) ? el.GetInt32() : 0;
+
+                if (!string.IsNullOrEmpty(testName) && !string.IsNullOrEmpty(filePath) && startLine > 0)
+                {
+                    _sourceLocations[testName] = new TestSourceLocation(
+                        testName, NormalizePath(filePath), startLine, endLine);
+                    changed = true;
+                }
+            }
+
+            if (changed) SourceLocationsChanged?.Invoke(this, EventArgs.Empty);
+        }
+        catch (JsonException ex)
+        {
+            System.Diagnostics.Debug.WriteLine(
+                $"[TestStateTracker] JSON parse error in test_source_locations: {ex.Message}");
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine(
+                $"[TestStateTracker] Unexpected error processing test_source_locations: {ex.GetType().Name}: {ex.Message}");
+        }
+    }
+
     public TestStatus GetStatusForLine(string filePath, int lineNumber)
     {
         var normalized = NormalizePath(filePath);
@@ -153,8 +202,35 @@ internal sealed class TestStateTracker
             yield return (kvp.Key, kvp.Value);
     }
 
+    /// <summary>
+    /// Returns the source location for a test by name, or null if not found.
+    /// Used for test→source navigation (e.g. from CodeLens or tool window).
+    /// </summary>
+    public TestSourceLocation? GetSourceLocation(string testName) =>
+        _sourceLocations.TryGetValue(testName, out var loc) ? loc : null;
+
+    /// <summary>Returns all known test source locations.</summary>
+    public IEnumerable<TestSourceLocation> GetAllSourceLocations() => _sourceLocations.Values;
+
     private static string NormalizePath(string path) =>
         path.Replace('/', '\\').ToLowerInvariant();
 }
 
 public enum TestStatus { Unknown, NotRun, Running, Passed, Failed }
+
+/// <summary>Source location for a test, used for test→source navigation.</summary>
+internal sealed class TestSourceLocation
+{
+    public string TestName { get; }
+    public string FilePath { get; }
+    public int StartLine { get; }
+    public int EndLine { get; }
+
+    public TestSourceLocation(string testName, string filePath, int startLine, int endLine)
+    {
+        TestName = testName;
+        FilePath = filePath;
+        StartLine = startLine;
+        EndLine = endLine;
+    }
+}

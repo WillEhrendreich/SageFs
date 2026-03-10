@@ -161,6 +161,17 @@ module LiveTestingParser =
         LiveTestEvent.TestResultBatch (testResults, freshness) ]
     | _ -> []
 
+  let parseTestSourceLocations (root: JsonElement) : TestSourceLocation array =
+    match getProp root "Locations" with
+    | Some arr when arr.ValueKind = JsonValueKind.Array ->
+      [| for loc in arr.EnumerateArray() do
+          let testName = tryStr loc "TestName" ""
+          let filePath = tryStr loc "FilePath" ""
+          let startLine = tryInt loc "StartLine" 0
+          let endLine = tryInt loc "EndLine" 0
+          yield { TestName = testName; FilePath = filePath; StartLine = startLine; EndLine = endLine } |]
+    | _ -> [||]
+
   let parseSseEvent (eventType: string) (json: string) : LiveTestEvent list =
     try
       use doc = JsonDocument.Parse(json)
@@ -168,6 +179,7 @@ module LiveTestingParser =
       match eventType with
       | "test_summary" -> [ LiveTestEvent.SummaryUpdated (parseSummary root) ]
       | "test_results_batch" -> parseResultsBatch root
+      | "test_source_locations" -> [ LiveTestEvent.TestSourceLocationsReceived (parseTestSourceLocations root) ]
       | _ -> []
     with _ -> []
 

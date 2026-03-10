@@ -184,6 +184,14 @@ type CoverageLineAnnotation = {
   BranchCoverage: LineCoverage option
 }
 
+/// Source location for a test (for test→source navigation)
+type TestSourceLocation = {
+  TestName: string
+  FilePath: string
+  StartLine: int
+  EndLine: int
+}
+
 /// SSE events from the SageFs server
 [<RequireQualifiedAccess>]
 type LiveTestEvent =
@@ -194,6 +202,7 @@ type LiveTestEvent =
   | LiveTestingDisabled
   | SummaryUpdated of summary: TestSummary
   | RunPolicyChanged of category: TestCategory * policy: RunPolicy
+  | TestSourceLocationsReceived of locations: TestSourceLocation array
 
 /// SSE feature events from the SageFs server
 [<RequireQualifiedAccess>]
@@ -215,6 +224,7 @@ type LiveTestChange =
   | SummaryChanged of TestSummary
   | ResultsStale of ResultFreshness
   | PolicyUpdated of TestCategory * RunPolicy
+  | SourceLocationsUpdated of TestSourceLocation array
 
 /// Aggregate live testing state
 type LiveTestState = {
@@ -225,6 +235,7 @@ type LiveTestState = {
   LastSummary: TestSummary option
   Freshness: ResultFreshness
   Policies: Map<TestCategory, RunPolicy>
+  SourceLocations: Map<string, TestSourceLocation>
 }
 
 [<RequireQualifiedAccess>]
@@ -237,6 +248,7 @@ module LiveTestState =
     LastSummary = None
     Freshness = ResultFreshness.Fresh
     Policies = Map.empty
+    SourceLocations = Map.empty
   }
 
   /// Pure fold returning (state, changes) — imperative subscriber becomes thin adapter
@@ -284,6 +296,12 @@ module LiveTestState =
     | LiveTestEvent.RunPolicyChanged (cat, pol) ->
       { state with Policies = Map.add cat pol state.Policies },
       [ LiveTestChange.PolicyUpdated (cat, pol) ]
+
+    | LiveTestEvent.TestSourceLocationsReceived locations ->
+      let newLocs =
+        locations |> Array.fold (fun m loc -> Map.add loc.TestName loc m) state.SourceLocations
+      { state with SourceLocations = newLocs },
+      [ LiveTestChange.SourceLocationsUpdated locations ]
 
   let summary (state: LiveTestState) =
     match state.LastSummary with
