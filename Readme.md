@@ -283,7 +283,7 @@ Every frontend connects to the same daemon. Open several at once — they all se
 | **Live test gutters** | ✅ | ✅ | ✅ | ✅ | ✅ | — | — |
 | **Coverage gutters** | ✅ | ✅ | ✅ | ✅ | ✅ | — | — |
 | **Failure narratives** | ✅ | ✅ | ✅ | ✅ | ✅ | — | ✅ |
-| **Test source-jump** | ✅ | ✅ | ✅ | — | — | — | — |
+| **Test source-jump** | ✅ | ✅ | ✅ | ✅ | ✅ | — | — |
 | Test panel | ✅ | ✅ | ✅ | ✅ | ✅ | — | — |
 | Test policy controls | ✅ | ✅ | ✅ | — | — | — | ✅ |
 | Type explorer | ✅ | ✅ | — | — | ¹ | — | ✅ |

@@ -85,7 +85,7 @@ available in your editor and discover features you might not know about.
 | Getting Started walkthrough | ✅ | ➖ | 🔜 | ➖ | ➖ |
 | Welcome message (first run) | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Empty-state guidance | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Snippets | ✅ | 🔜 | ❌ | ❌ | ❌ |
+| Snippets | ✅ | ✅ | ❌ | ❌ | ❌ |
 
 ## Editor Integration
 
@@ -97,7 +97,7 @@ available in your editor and discover features you might not know about.
 | Statusline component | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Syntax highlighting (Tree-sitter) | ❌ | ✅ | ❌ | ✅ | ✅ |
 | Time-travel (history snapshots) | ❌ | ❌ | ❌ | ✅ | ✅ |
-| Failing test navigation | ❌ | ✅ | ❌ | ✅ | ✅ |
+| Failing test navigation | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Mouse support (click/drag/scroll) | ❌ | ✅ | ❌ | ✅ | ✅ |
 | Text selection + copy | ❌ | ✅ | ❌ | ❌ | ✅ |
 | Layout presets | ❌ | ❌ | ❌ | ✅ | ✅ |
