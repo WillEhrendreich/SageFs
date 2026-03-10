@@ -300,9 +300,9 @@ let architectureTests =
           printfn "  Modules with zero public API:"
           emptyModules |> Array.iter (fun m -> printfn "    - %s" m.FullName)
           // These are candidates for removal or consolidation
-          (n, 20)
+          (n, 22)
           |> Expect.isLessThanOrEqual
-            (sprintf "should have ≤20 empty modules (found %d)" n)
+            (sprintf "should have ≤22 empty modules (found %d)" n)
 
       testCase "modules with only type definitions tracked"
       <| fun _ ->

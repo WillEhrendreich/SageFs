@@ -83,23 +83,23 @@ let truncateTests = testList "TestsPane.truncate" [
 let buildContentTests = testList "TestsPane.buildContent" [
   test "empty entries shows placeholder" {
     let content = TestsPane.buildContent 80 [||]
-    content |> Expect.stringContains "No tests discovered" "placeholder present"
+    content |> Expect.stringContains "placeholder present" "No tests"
   }
   test "passed entry contains pass icon" {
     let content = TestsPane.buildContent 80 [| passEntry "MyTest" |]
-    content |> Expect.stringContains (string '\u25CF') "pass icon present"
+    content |> Expect.stringContains "pass icon present" (string '\u25CF')
   }
   test "failed entry contains fail icon" {
     let content = TestsPane.buildContent 80 [| failEntry "MyTest" |]
-    content |> Expect.stringContains (string '\u2717') "fail icon present"
+    content |> Expect.stringContains "fail icon present" (string '\u2717')
   }
   test "running entry contains running icon" {
     let content = TestsPane.buildContent 80 [| runEntry "MyTest" |]
-    content |> Expect.stringContains (string '\u27F3') "running icon present"
+    content |> Expect.stringContains "running icon present" (string '\u27F3')
   }
   test "stale entry contains stale icon" {
     let content = TestsPane.buildContent 80 [| staleEntry "MyTest" |]
-    content |> Expect.stringContains (string '\u25CC') "stale icon present"
+    content |> Expect.stringContains "stale icon present" (string '\u25CC')
   }
   test "multiple entries produce multiple lines" {
     let entries = [| passEntry "A"; failEntry "B"; staleEntry "C" |]
@@ -109,18 +109,18 @@ let buildContentTests = testList "TestsPane.buildContent" [
   }
   test "test name appears in content" {
     let content = TestsPane.buildContent 80 [| passEntry "MyUnique/Test" |]
-    content |> Expect.stringContains "MyUnique" "name present"
+    content |> Expect.stringContains "name present" "MyUnique"
   }
   test "duration appears for passed test" {
     let content = TestsPane.buildContent 80 [| passEntry "T" |]
-    content |> Expect.stringContains "42ms" "duration present"
+    content |> Expect.stringContains "duration present" "42ms"
   }
   test "long test name is truncated to fit pane" {
     let longName = System.String.Concat(Array.replicate 200 "x")
     let content = TestsPane.buildContent 40 [| passEntry longName |]
     let line = content.Split('\n').[0]
     (line.Length <= 40) |> Expect.isTrue "line width bounded"
-    line |> Expect.stringContains (string '\u2026') "ellipsis present"
+    line |> Expect.stringContains "ellipsis present" (string '\u2026')
   }
 ]
 
@@ -142,8 +142,8 @@ let renderContentTests = testList "TestsPane.renderContent" [
     let lines = TestsPane.buildContent 40 entries |> fun s -> s.Split('\n')
     TestsPane.renderContent inner lines -1 0 Theme.defaults
     let text = CellGrid.toText grid
-    text |> Expect.stringContains (string '\u25CF') "pass icon in grid"
-    text |> Expect.stringContains (string '\u2717') "fail icon in grid"
+    text |> Expect.stringContains "pass icon in grid" (string '\u25CF')
+    text |> Expect.stringContains "fail icon in grid" (string '\u2717')
   }
 
   test "cursor row has selection background" {
@@ -176,6 +176,6 @@ let renderContentTests = testList "TestsPane.renderContent" [
     let visibleLines = lines |> Array.skip 1 |> Array.truncate 3
     TestsPane.renderContent inner visibleLines -1 1 Theme.defaults
     let text = CellGrid.toText grid
-    text |> Expect.stringContains (string '\u2717') "fail icon visible after scroll"
+    text |> Expect.stringContains "fail icon visible after scroll" (string '\u2717')
   }
 ]

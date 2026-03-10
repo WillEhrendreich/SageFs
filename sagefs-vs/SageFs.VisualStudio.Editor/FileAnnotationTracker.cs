@@ -81,8 +81,18 @@ internal sealed class FileAnnotationTracker
                     var line = lineEl.GetInt32();
                     var testName = f.TryGetProperty("TestName", out var tn)
                         ? tn.GetString() ?? "" : "";
-                    var testId = f.TryGetProperty("TestId", out var tidEl)
-                        ? tidEl.GetString() ?? "" : "";
+                    var testId = "";
+                    if (f.TryGetProperty("TestId", out var tidEl))
+                    {
+                        testId = tidEl.ValueKind == JsonValueKind.String
+                            ? (tidEl.GetString() ?? "")
+                            : tidEl.ValueKind == JsonValueKind.Object
+                              && tidEl.TryGetProperty("Fields", out var tidFields)
+                              && tidFields.ValueKind == JsonValueKind.Array
+                              && tidFields.GetArrayLength() > 0
+                                ? (tidFields[0].GetString() ?? "")
+                                : "";
+                    }
                     var presentation = ParseFailurePresentation(f);
 
                     if (!lineMap.TryGetValue(line, out var list))
