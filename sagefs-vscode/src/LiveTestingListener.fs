@@ -175,6 +175,9 @@ type LiveTestingCallbacks = {
   OnFileAnnotations: obj -> unit
   OnFailureNarratives: VscFailureNarrative array -> unit
   OnWarmupProgress: int -> int -> string -> float -> string -> unit
+  OnWarmupCompleted: string -> unit
+  OnFileReloaded: string -> unit
+  OnSessionFaulted: string -> unit
 }
 
 type LiveTestingListener = {
@@ -277,6 +280,15 @@ let start (port: int) (callbacks: LiveTestingCallbacks) (onReconnect: (unit -> u
         let progress = fieldFloat "Progress" data |> Option.defaultValue 0.0
         let phase = fieldString "Phase" data |> Option.defaultValue ""
         callbacks.OnWarmupProgress step total message progress phase
+      | "warmup_completed" ->
+        let projectName = fieldString "ProjectName" data |> Option.defaultValue "project"
+        callbacks.OnWarmupCompleted projectName
+      | "file_reloaded" ->
+        let filePath = fieldString "FilePath" data |> Option.orElse (fieldString "filePath" data) |> Option.defaultValue ""
+        callbacks.OnFileReloaded filePath
+      | "session_faulted" ->
+        let reason = fieldString "Reason" data |> Option.orElse (fieldString "reason" data) |> Option.defaultValue "unknown error"
+        callbacks.OnSessionFaulted reason
       | _ ->
         ())
 

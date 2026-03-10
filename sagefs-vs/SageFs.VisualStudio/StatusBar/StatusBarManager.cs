@@ -79,7 +79,7 @@ internal class StatusBarManager : ExtensionPart
       _daemonStatus = "Faulted";
       _warmupMessage = null;
       var sessionName = Microsoft.FSharp.Core.OptionModule.DefaultValue("unknown", state.ActiveSessionId);
-      _ = _infoBar?.ShowWarmupFailedAsync(sessionName);
+      _ = ShowFaultedWithTypedErrorAsync(sessionName);
     }
     else if (state.IsReady)
     {
@@ -106,6 +106,29 @@ internal class StatusBarManager : ExtensionPart
       _daemonStatus = "Connecting";
     }
     PushStatusBar();
+  }
+
+  /// Fetch typed error from /health and show it, falling back to generic warmup-failed message.
+  private async Task ShowFaultedWithTypedErrorAsync(string sessionName)
+  {
+    try
+    {
+      using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+      var healthError = await _client.GetHealthErrorAsync(cts.Token).ConfigureAwait(false);
+      if (healthError != null)
+      {
+        var err = healthError.Value;
+        _ = _infoBar?.ShowTypedErrorAsync(err.Case, err.Message, err.SuggestedAction);
+      }
+      else
+      {
+        _ = _infoBar?.ShowWarmupFailedAsync(sessionName);
+      }
+    }
+    catch
+    {
+      _ = _infoBar?.ShowWarmupFailedAsync(sessionName);
+    }
   }
 
   // ── Periodic vitals refresh ─────────────────────────────────────────────

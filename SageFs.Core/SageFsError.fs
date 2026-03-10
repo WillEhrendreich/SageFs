@@ -1,6 +1,7 @@
 namespace SageFs
 
 open Microsoft.Extensions.Logging
+open Microsoft.FSharp.Reflection
 
 /// Unified error type for the entire SageFs system.
 /// Every Result<..., SageFsError> across all layers uses this single DU.
@@ -315,3 +316,52 @@ module SageFsError =
     | SageFsError.DaemonStartFailed _
     | SageFsError.SseConnectionError _
     | SageFsError.Unexpected _ -> false
+
+  /// Actionable suggestion for each error case.
+  let suggestedAction = function
+    | SageFsError.ToolNotAvailable _ -> "Wait for session to reach Ready state"
+    | SageFsError.SessionNotFound _ -> "Run list_sessions to see available sessions"
+    | SageFsError.NoActiveSessions -> "Run create_session to start one"
+    | SageFsError.AmbiguousSessions _ -> "Specify a sessionId explicitly"
+    | SageFsError.SessionCreationFailed _ -> "Check the project path and run 'dotnet build'"
+    | SageFsError.SessionStopFailed _ -> "Try hard_reset_fsi_session"
+    | SageFsError.SessionSwitchFailed _ -> "Run list_sessions to check available sessions"
+    | SageFsError.WorkerCommunicationFailed _ -> "Run hard_reset_fsi_session"
+    | SageFsError.WorkerSpawnFailed _ -> "Check .NET SDK installation with 'dotnet --info'"
+    | SageFsError.WorkerTimeout _ -> "Retry or run hard_reset_fsi_session"
+    | SageFsError.WorkerHttpError _ -> "Run hard_reset_fsi_session"
+    | SageFsError.PipeClosed -> "Run hard_reset_fsi_session"
+    | SageFsError.EvalFailed _ -> "Fix the code and resubmit"
+    | SageFsError.ResetFailed _ -> "Run hard_reset_fsi_session"
+    | SageFsError.HardResetFailed _ -> "Check that the project builds with 'dotnet build'"
+    | SageFsError.ScriptLoadFailed _ -> "Check file exists and has valid F# syntax"
+    | SageFsError.CheckFailed _ -> "Fix the code and resubmit"
+    | SageFsError.CompletionFailed _ -> "Retry or run reset_fsi_session"
+    | SageFsError.CancelFailed _ -> "Retry or run hard_reset_fsi_session"
+    | SageFsError.WarmupOpenFailed _ -> "Check that the namespace exists in the project"
+    | SageFsError.WarmupContextFailed _ -> "Run hard_reset_fsi_session"
+    | SageFsError.HotReloadFailed _ -> "Check the file for syntax errors"
+    | SageFsError.HotReloadStateError _ -> "Run hard_reset_fsi_session"
+    | SageFsError.RestartLimitExceeded _ -> "Check the log file and restart SageFs"
+    | SageFsError.DaemonStartFailed _ -> "Check port availability and .NET SDK"
+    | SageFsError.DaemonNotRunning -> "Start SageFs with 'sagefs --proj <your.fsproj>'"
+    | SageFsError.PortInUse _ -> "Stop the other process or use --mcp-port"
+    | SageFsError.SseConnectionError _ -> "Check daemon is running and retry"
+    | SageFsError.JsonParseError _ -> "Check request payload format"
+    | SageFsError.Unexpected _ -> "Check the SageFs log for details"
+
+  /// Serialize a SageFsError to a JSON-friendly anonymous record.
+  /// Returns { case, fields, message, suggestedAction }.
+  let toJson (err: SageFsError) =
+    let info, values = FSharpValue.GetUnionFields(err, typeof<SageFsError>)
+    let fieldInfos = info.GetFields()
+    let fieldMap = System.Collections.Generic.Dictionary<string, obj>()
+    Array.zip fieldInfos values
+    |> Array.iter (fun (fi, v) ->
+      match v with
+      | :? exn as ex -> fieldMap.[fi.Name] <- box ex.Message
+      | _ -> fieldMap.[fi.Name] <- v)
+    {| case = info.Name
+       fields = fieldMap :> System.Collections.Generic.IDictionary<string, obj>
+       message = describe err
+       suggestedAction = suggestedAction err |}

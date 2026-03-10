@@ -1795,6 +1795,58 @@ let activate (context: ExtensionContext) =
               let! _ = Window.showTextDocument doc
               ()
       }) |> promiseIgnoreLog logToOutput)
+
+  reg "sagefs.explainTestFailure" (fun args ->
+    promise {
+      let requestedId =
+        try
+          match args with
+          | null -> None
+          | _ ->
+            let arr = args :?> obj array
+            match arr.Length with
+            | 0 -> None
+            | _ -> arr.[0] |> tryCastString
+        with _ -> None
+      let narratives = TestLens.narrativeState
+      let failedWithNarrative =
+        narratives
+        |> Map.toArray
+        |> Array.filter (fun (_, n) -> n.Summary <> "")
+      match failedWithNarrative with
+      | [||] ->
+        Window.showInformationMessage "No failure narratives available yet. Run tests with live testing enabled." [||] |> ignore
+      | _ ->
+        let items =
+          failedWithNarrative |> Array.map (fun (id, n) ->
+            let label =
+              match requestedId with
+              | Some rid when rid = id -> sprintf "★ %s" n.Summary
+              | _ -> n.Summary
+            label, n)
+        let labels = items |> Array.map fst
+        let! labelOpt = Window.showQuickPick labels "Select failed test to explain"
+        match labelOpt with
+        | None -> ()
+        | Some label ->
+          match items |> Array.tryFind (fun (l, _) -> l = label) with
+          | None -> ()
+          | Some (_, n) ->
+            let out = getOutput ()
+            out.show true
+            out.appendLine ""
+            out.appendLine (sprintf "═══ Why failed: %s ═══" n.TestId)
+            out.appendLine (sprintf "  Summary  : %s" n.Summary)
+            out.appendLine (sprintf "  Since    : %s" n.TimeSinceLastPass)
+            match n.CausalChanges with
+            | [||] -> out.appendLine "  Causes   : (no changes detected)"
+            | changes ->
+              out.appendLine "  Causes   :"
+              changes |> Array.iter (fun c ->
+                out.appendLine (sprintf "    • [%s] %s" c.Kind c.Name))
+            out.appendLine ""
+    } |> promiseIgnoreLog logToOutput)
+
   let lensProvider = Lens.create ()
   context.subscriptions.Add (Languages.registerCodeLensProvider "fsharp" lensProvider)
   let testLensProvider = TestLens.create ()
@@ -1898,7 +1950,10 @@ let activate (context: ExtensionContext) =
         adapter.UpdateSourceLocations locations
       OnFileAnnotations = fun data ->
         handleFileAnnotations data
-      OnFailureNarratives = fun _narratives -> ()
+      OnFailureNarratives = fun narratives ->
+        let narrativeMap = narratives |> Array.fold (fun m n -> Map.add n.TestId n m) Map.empty
+        TestLens.updateNarratives narrativeMap
+        testAdapter |> Option.iter (fun a -> a.RefreshNarratives())
       OnWarmupProgress = fun step total message _progress phase ->
         warmupPhase <- Some phase
         let detail =
@@ -1912,6 +1967,27 @@ let activate (context: ExtensionContext) =
           warmupPhase <- None
           warmupDetail <- None
         | _ -> ()
+      OnWarmupCompleted = fun projectName ->
+        Window.showInformationMessage
+          (sprintf "SageFs: warmup complete for %s — session ready" projectName)
+          [||]
+        |> ignore
+      OnFileReloaded = fun filePath ->
+        let shortName =
+          let parts = filePath.Split([| '/'; '\\' |])
+          if parts.Length > 0 then parts.[parts.Length - 1] else filePath
+        (getOutput()).appendLine (sprintf "[SageFs] File reloaded: %s" shortName)
+      OnSessionFaulted = fun reason ->
+        promise {
+          let! choice =
+            Window.showWarningMessage
+              (sprintf "SageFs session faulted: %s. Use Restart Session to recover." reason)
+              [| "Restart Session"; "Show Output" |]
+          match choice with
+          | Some "Restart Session" -> Commands.executeCommand "sagefs.restart" |> ignore
+          | Some "Show Output" -> showOutputPanel ()
+          | _ -> ()
+        } |> promiseIgnore
     }
     let reconnectHandler = Some (fun () ->
       c.log "SSE reconnected — refreshing status..."

@@ -8,6 +8,9 @@ open Vscode
 /// Updated by LiveTestingListener callbacks.
 let mutable testState : LiveTestingTypes.VscLiveTestState = LiveTestingTypes.VscLiveTestState.empty
 
+/// Mutable state: failure narratives by test id.
+let mutable narrativeState : Map<string, LiveTestingTypes.VscFailureNarrative> = Map.empty
+
 /// Event emitter to signal CodeLens refresh
 let changeEmitter = newEventEmitter<obj> ()
 
@@ -17,6 +20,11 @@ let refresh () = changeEmitter.fire (null)
 /// Update state and refresh
 let updateState (state: LiveTestingTypes.VscLiveTestState) =
   testState <- state
+  refresh ()
+
+/// Update narrative state and refresh CodeLens
+let updateNarratives (narratives: Map<string, LiveTestingTypes.VscFailureNarrative>) =
+  narrativeState <- narratives
   refresh ()
 
 /// Format a test result as a CodeLens title
@@ -73,6 +81,25 @@ let create () =
             "tooltip" ==> tooltip
           ]
           lenses.Add(newCodeLens range cmd)
+          // Add "Why failed?" lens for failed tests with a narrative
+          match result with
+          | Some r ->
+            match r.Outcome with
+            | LiveTestingTypes.VscTestOutcome.Failed _
+            | LiveTestingTypes.VscTestOutcome.Errored _ ->
+              let testIdStr = LiveTestingTypes.VscTestId.value t.Id
+              match Map.tryFind testIdStr narrativeState with
+              | Some n when n.Summary <> "" ->
+                let whyCmd = createObj [
+                  "title" ==> "🔍 Why failed?"
+                  "command" ==> "sagefs.explainTestFailure"
+                  "tooltip" ==> sprintf "Explain failure: %s" n.Summary
+                  "arguments" ==> [| testIdStr |]
+                ]
+                lenses.Add(newCodeLens range whyCmd)
+              | _ -> ()
+            | _ -> ()
+          | None -> ()
         | None -> ()
       lenses.ToArray()
   ]

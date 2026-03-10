@@ -162,6 +162,13 @@ module FeatureParsers =
       Deps = deps
       Bindings = bindings }
 
+/// Typed error from the /health endpoint's error field.
+type HealthError = {
+  Case: string
+  Message: string
+  SuggestedAction: string
+}
+
 /// HTTP client for communicating with the SageFs daemon.
 /// Registered as a singleton via DI in the extension entry point.
 type SageFsClient(http: HttpClient) =
@@ -554,6 +561,24 @@ type SageFsClient(http: HttpClient) =
       return Ok (apiVer, features)
     with _ ->
       return Error "Could not reach SageFs daemon."
+  }
+
+  /// Get the typed error from the /health endpoint, if any.
+  /// Returns Some HealthError when the daemon reports an error, None when healthy or unreachable.
+  member this.GetHealthErrorAsync(ct: CancellationToken) : Task<HealthError option> = task {
+    try
+      let! body = http.GetStringAsync(sprintf "%s/health" this.BaseUrl, ct)
+      use doc = JsonDocument.Parse(body)
+      match getProp doc.RootElement "error" with
+      | Some errEl when errEl.ValueKind = JsonValueKind.Object ->
+        return Some {
+          Case = tryStr errEl "case" "Unknown"
+          Message = tryStr errEl "message" ""
+          SuggestedAction = tryStr errEl "suggestedAction" ""
+        }
+      | _ -> return None
+    with _ ->
+      return None
   }
 
   /// Check that the daemon's apiVersion matches ExpectedApiVersion.

@@ -124,6 +124,20 @@ internal sealed class InfoBarService : IDisposable
     await ch.WriteLineAsync("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
   }
 
+  /// <summary>
+  /// Show a typed daemon error with its message and suggested action from the /health endpoint.
+  /// </summary>
+  public async Task ShowTypedErrorAsync(string errorCase, string message, string suggestedAction, CancellationToken ct = default)
+  {
+    var ch = await GetOutputAsync(ct);
+    if (ch is null) return;
+    await ch.WriteLineAsync("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    await ch.WriteLineAsync($"✗ [{errorCase}] {message}");
+    if (!string.IsNullOrWhiteSpace(suggestedAction))
+      await ch.WriteLineAsync($"  → {suggestedAction}");
+    await ch.WriteLineAsync("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+  }
+
   public void Dispose()
   {
     if (disposed) return;

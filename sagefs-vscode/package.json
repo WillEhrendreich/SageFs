@@ -2,7 +2,7 @@
   "name": "sagefs",
   "displayName": "SageFs — Live F# Development",
   "description": "Send F# code to SageFs for instant evaluation, type-checking, and hot reload.",
-  "version": "0.6.59",
+  "version": "0.6.60",
   "publisher": "sagefs",
   "license": "MIT",
   "icon": "icon.png",
@@ -167,6 +167,10 @@
       {
         "command": "sagefs.showTestTrace",
         "title": "SageFs: Show Test Trace"
+      },
+      {
+        "command": "sagefs.explainTestFailure",
+        "title": "SageFs: Explain Test Failure"
       },
       {
         "command": "sagefs.exportSession",

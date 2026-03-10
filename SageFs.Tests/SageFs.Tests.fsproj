@@ -133,6 +133,7 @@
         <Compile Include="McpStateHandlerTests.fs" />
         <Compile Include="CompilationContextTests.fs" />
         <Compile Include="SageFsErrorClassificationTests.fs" />
+        <Compile Include="SageFsErrorJsonTests.fs" />
         <Compile Include="SageFsErrorPropertyTests.fs" />
         <Compile Include="ResultCeTests.fs" />
         <Compile Include="SessionIdTests.fs" />

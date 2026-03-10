@@ -20,12 +20,18 @@ module ApiOutcome =
   let isOk = function Succeeded _ -> true | Failed _ -> false
   let messageOrDefault fallback = function Succeeded (Some m) -> m | Succeeded None -> fallback | Failed e -> e
 
+type HealthError =
+  { case: string
+    message: string
+    suggestedAction: string }
+
 type SageFsStatus =
   { connected: bool
     healthy: bool option
     status: string option
     apiVersion: int option
-    features: string list }
+    features: string list
+    error: HealthError option }
 
 type SystemStatus =
   { supervised: bool
@@ -190,6 +196,16 @@ let isRunning (c: Client) =
       return false
   }
 
+let parseHealthError (parsed: obj) : HealthError option =
+  let errObj = fieldObj "error" parsed
+  match errObj with
+  | None -> None
+  | Some e ->
+    Some
+      { case = fieldString "case" e |> Option.defaultValue "Unknown"
+        message = fieldString "message" e |> Option.defaultValue ""
+        suggestedAction = fieldString "suggestedAction" e |> Option.defaultValue "" }
+
 let getStatus (c: Client) =
   promise {
     try
@@ -206,11 +222,12 @@ let getStatus (c: Client) =
             healthy = fieldBool "healthy" parsed |> Option.orElse (Some false)
             status = fieldString "status" parsed
             apiVersion = fieldInt "apiVersion" parsed
-            features = features }
+            features = features
+            error = parseHealthError parsed }
       | _ ->
-        return { connected = true; healthy = Some false; status = Some "no session"; apiVersion = None; features = [] }
+        return { connected = true; healthy = Some false; status = Some "no session"; apiVersion = None; features = []; error = None }
     with _ ->
-      return { connected = false; healthy = None; status = None; apiVersion = None; features = [] }
+      return { connected = false; healthy = None; status = None; apiVersion = None; features = []; error = None }
   }
 
 let isReady (c: Client) =

@@ -17,6 +17,7 @@ let [<Literal>] private EndRunDebounceMs = 2000
 type TestAdapter = {
   Controller: TestController
   Refresh: VscStateChange list -> unit
+  RefreshNarratives: unit -> unit
   UpdateSourceLocations: obj array -> unit
   Reset: unit -> unit
   Dispose: unit -> unit
@@ -31,6 +32,7 @@ let create
   let testItemMap = System.Collections.Generic.Dictionary<string, TestItem>()
   let mutable activeRun: TestRun option = None
   let mutable endRunTimer: obj option = None
+  let mutable lastResults: VscTestResult array = [||]
 
   let endActiveRun () =
     endRunTimer |> Option.iter jsClearTimeout
@@ -74,6 +76,7 @@ let create
       item
 
   let applyResults (results: VscTestResult array) =
+    lastResults <- results
     let run = getOrCreateRun ()
     let narratives = getNarratives ()
     for result in results do
@@ -173,6 +176,10 @@ let create
 
   { Controller = controller
     Refresh = refresh
+    RefreshNarratives = fun () ->
+      match lastResults with
+      | [||] -> ()
+      | results -> applyResults results
     UpdateSourceLocations = updateSourceLocations
     Reset = fun () ->
       endActiveRun ()
