@@ -196,6 +196,8 @@ let private toSessionId (s: string) =
   | Error _ -> failwithf "invalid session ID: %s" s
 
 /// Wrap an async handler with try/catch and JSON error response.
+/// Kept for backward compatibility — the global errorHandlingMiddleware now provides
+/// this protection for all routes, so per-endpoint wrapping is no longer needed.
 let withErrorHandling (ctx: Microsoft.AspNetCore.Http.HttpContext) (handler: unit -> Task) = task {
   try do! handler ()
   with
@@ -204,6 +206,25 @@ let withErrorHandling (ctx: Microsoft.AspNetCore.Http.HttpContext) (handler: uni
     do! jsonResponse ctx 400 {| success = false; error = je.Message |}
   | ex ->
     do! jsonResponse ctx 500 {| success = false; error = ex.Message |}
+}
+
+/// Global error-handling middleware — catches unhandled exceptions from all endpoints.
+/// Replaces per-endpoint withErrorHandling wrapping.  For SSE/streaming responses that
+/// have already started writing, the middleware skips the JSON error response (can't
+/// change Content-Type or status after headers are sent).
+let errorHandlingMiddleware (ctx: Microsoft.AspNetCore.Http.HttpContext) (next: Func<Task>) = task {
+  try
+    do! next.Invoke()
+  with
+  | RequestTooLarge -> ()  // 413 already committed — do not write a second response
+  | :? System.Text.Json.JsonException as je ->
+    match ctx.Response.HasStarted with
+    | true -> ()  // SSE or streaming response already committed
+    | false -> do! jsonResponse ctx 400 {| success = false; error = je.Message |}
+  | ex ->
+    match ctx.Response.HasStarted with
+    | true -> ()  // SSE or streaming response already committed
+    | false -> do! jsonResponse ctx 500 {| success = false; error = ex.Message |}
 }
 
 /// Read and parse the request body as a JSON document.
@@ -762,6 +783,8 @@ let wireModelChangeHandlers
       | :? System.Text.Json.JsonException as jex ->
         Log.warn "[MCP] State change JSON error (non-fatal): %s\n%s" jex.Message (jex.StackTrace |> Option.ofObj |> Option.defaultValue "")
       | ex -> Log.error "[MCP] State change handler error: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
+    | DaemonStateChange.SystemAlarm (phase, msg) ->
+      ctx.ServerTracker.AccumulateEvent(PushEvent.SystemAlarm (phase, msg))
     | _ -> ())
 
 
@@ -906,7 +929,7 @@ let logStartup (app: WebApplication) (port: int) (logPath: string) (otelConfigur
 
 let mapExecutionRoutes (app: WebApplication) (rctx: RouteContext) =
   app.MapPost("/exec", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
-    withErrorHandling ctx (fun () -> task {
+    task {
       use! json = readJsonBody ctx
       let code = json.RootElement.GetProperty("code").GetString()
       let wd =
@@ -944,16 +967,16 @@ let mapExecutionRoutes (app: WebApplication) (rctx: RouteContext) =
         rctx.SseContext.TestEventBroadcast.Trigger(sseStr)
       | _ -> ()
       do! jsonResponse ctx 200 {| success = true; result = result |}
-    }) :> Task
+    } :> Task
   ) |> ignore
   app.MapPost("/reset", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
-    withErrorHandling ctx (fun () -> task {
+    task {
       let! result = SageFs.McpTools.resetSession rctx.McpContext "http" None None
       do! jsonResponse ctx 200 {| success = not (result.Contains("Error")); message = result |}
-    }) :> Task
+    } :> Task
   ) |> ignore
   app.MapPost("/hard-reset", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
-    withErrorHandling ctx (fun () -> task {
+    task {
       use! json = readJsonBody ctx
       let rebuild =
         try
@@ -963,22 +986,26 @@ let mapExecutionRoutes (app: WebApplication) (rctx: RouteContext) =
         with :? System.Text.Json.JsonException -> false
       let! result = SageFs.McpTools.hardResetSession rctx.McpContext "http" rebuild None None
       do! jsonResponse ctx 200 {| success = not (result.Contains("Error")); message = result |}
-    }) :> Task
+    } :> Task
   ) |> ignore
   app.MapPost("/cancel", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
-    withErrorHandling ctx (fun () -> task {
-      let! _result = SageFs.McpTools.cancelEval rctx.McpContext "http" None
-      do! jsonResponse ctx 200 {| received = true |}
-    }) :> Task
+    task {
+      let! result = SageFs.McpTools.cancelEval rctx.McpContext "http" None
+      match result.StartsWith("Error") with
+      | true -> do! jsonResponse ctx 500 {| received = false; error = result |}
+      | false -> do! jsonResponse ctx 200 {| received = true; message = result |}
+    } :> Task
   ) |> ignore
   app.MapPost("/api/cancel-eval", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
-    withErrorHandling ctx (fun () -> task {
-      let! _result = SageFs.McpTools.cancelEval rctx.McpContext "http" None
-      do! jsonResponse ctx 200 {| received = true |}
-    }) :> Task
+    task {
+      let! result = SageFs.McpTools.cancelEval rctx.McpContext "http" None
+      match result.StartsWith("Error") with
+      | true -> do! jsonResponse ctx 500 {| received = false; error = result |}
+      | false -> do! jsonResponse ctx 200 {| received = true; message = result |}
+    } :> Task
   ) |> ignore
   app.MapPost("/load-script", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
-    withErrorHandling ctx (fun () -> task {
+    task {
       use! json = readJsonBody ctx
       let filePath = json.RootElement.GetProperty("path").GetString()
       let sessionIdOpt =
@@ -1019,14 +1046,16 @@ let mapExecutionRoutes (app: WebApplication) (rctx: RouteContext) =
       | false ->
         do! jsonResponse ctx 403 {| success = false; error = "Path is outside the session working directory" |}
       | true ->
-      let! _result = SageFs.McpTools.loadFSharpScript rctx.McpContext "http" canonical None None
-      do! jsonResponse ctx 200 {| received = true |}
-    }) :> Task
+      let! result = SageFs.McpTools.loadFSharpScript rctx.McpContext "http" canonical None None
+      match result.StartsWith("Error") with
+      | true -> do! jsonResponse ctx 500 {| received = false; error = result |}
+      | false -> do! jsonResponse ctx 200 {| received = true; message = result |}
+    } :> Task
   ) |> ignore
 
 let mapHealthRoutes (app: WebApplication) (rctx: RouteContext) =
   app.MapGet("/health", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
-    withErrorHandling ctx (fun () -> task {
+    task {
       let! allSessions = rctx.Config.SessionOps.GetAllSessions()
       let! sessionResult = task {
         match allSessions |> Seq.tryHead with
@@ -1066,7 +1095,7 @@ let mapHealthRoutes (app: WebApplication) (rctx: RouteContext) =
                version = version
                apiVersion = SageFs.EndpointContracts.apiVersion
                features = [ "live-testing"; "coverage-intel"; "impact-forecast"; "action-prioritizer"; "mark-all-stale"; "time-travel" ] |}
-    }) :> Task
+    } :> Task
   ) |> ignore
   app.MapGet("/diag/threadpool", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
     task {
@@ -1114,11 +1143,11 @@ let mapHealthRoutes (app: WebApplication) (rctx: RouteContext) =
 
 let mapDiagnosticsRoutes (app: WebApplication) (rctx: RouteContext) =
   app.MapPost("/diagnostics", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
-    withErrorHandling ctx (fun () -> task {
+    task {
       let! code = readJsonProp ctx "code"
       let! _ = SageFs.McpTools.checkFSharpCode rctx.McpContext "http" code None None
       do! jsonResponse ctx 202 {| accepted = true |}
-    }) :> Task
+    } :> Task
   ) |> ignore
   app.MapGet("/diagnostics", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
     task {
@@ -1190,7 +1219,7 @@ let mapEventsRoute (app: WebApplication) (rctx: RouteContext) =
 
 let mapStatusRoutes (app: WebApplication) (rctx: RouteContext) =
   app.MapGet("/api/status", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
-    withErrorHandling ctx (fun () -> task {
+    task {
       let! sid = task {
         match ctx.Request.Query.TryGetValue("sessionId") with
         | true, v when v.Count > 0 && not (String.IsNullOrWhiteSpace(v.[0])) -> return v.[0]
@@ -1262,10 +1291,10 @@ let mapStatusRoutes (app: WebApplication) (rctx: RouteContext) =
              use proc = System.Diagnostics.Process.GetCurrentProcess()
              (DateTime.UtcNow - proc.StartTime.ToUniversalTime()).TotalSeconds |}
       do! jsonResponse ctx 200 data
-    }) :> Task
+    } :> Task
   ) |> ignore
   app.MapGet("/api/system/status", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
-    withErrorHandling ctx (fun () -> task {
+    task {
       let supervised =
         Environment.GetEnvironmentVariable("SAGEFS_SUPERVISED")
         |> Option.ofObj |> Option.map (fun s -> s = "1") |> Option.defaultValue false
@@ -1287,12 +1316,12 @@ let mapStatusRoutes (app: WebApplication) (rctx: RouteContext) =
            mcpPort = rctx.Config.Port
            dashboardPort = rctx.Config.Port + 1 |}
       do! jsonResponse ctx 200 data
-    }) :> Task
+    } :> Task
   ) |> ignore
 
 let mapSessionRoutes (app: WebApplication) (rctx: RouteContext) =
   app.MapGet("/api/sessions", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
-    withErrorHandling ctx (fun () -> task {
+    task {
       let! allSessions = rctx.Config.SessionOps.GetAllSessions()
       let results = System.Collections.Generic.List<obj>()
       for sess in allSessions do
@@ -1325,10 +1354,10 @@ let mapSessionRoutes (app: WebApplication) (rctx: RouteContext) =
              evalCount = evalCount
              avgDurationMs = avgMs |} :> obj)
       do! jsonResponse ctx 200 {| sessions = results |}
-    }) :> Task
+    } :> Task
   ) |> ignore
   app.MapPost("/api/sessions/switch", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
-    withErrorHandling ctx (fun () -> task {
+    task {
       let! sidOpt = readValidatedSessionId ctx
       match sidOpt with
       | None -> () // 400 already sent
@@ -1351,10 +1380,10 @@ let mapSessionRoutes (app: WebApplication) (rctx: RouteContext) =
           do! jsonResponse ctx 200 {| success = true; sessionId = sidStr |}
         | None ->
           do! jsonResponse ctx 404 {| success = false; error = sprintf "Session '%s' not found" sidStr |}
-    }) :> Task
+    } :> Task
   ) |> ignore
   app.MapPost("/api/sessions/create", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
-    withErrorHandling ctx (fun () -> task {
+    task {
       use! doc = readJsonBody ctx
       let root = doc.RootElement
       let workingDir =
@@ -1390,10 +1419,10 @@ let mapSessionRoutes (app: WebApplication) (rctx: RouteContext) =
         do! jsonResponse ctx 200 {| success = true; message = msg |}
       | Error err ->
         do! jsonResponse ctx 400 {| success = false; error = SageFs.SageFsError.describe err |}
-    }) :> Task
+    } :> Task
   ) |> ignore
   app.MapPost("/api/sessions/stop", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
-    withErrorHandling ctx (fun () -> task {
+    task {
       let! sidOpt = readValidatedSessionId ctx
       match sidOpt with
       | None -> () // 400 already sent
@@ -1405,33 +1434,33 @@ let mapSessionRoutes (app: WebApplication) (rctx: RouteContext) =
         match result with
         | Ok msg -> do! jsonResponse ctx 200 {| success = true; message = msg |}
         | Error err -> do! jsonResponse ctx 400 {| success = false; error = SageFs.SageFsError.describe err |}
-    }) :> Task
+    } :> Task
   ) |> ignore
 
 let mapLiveTestingRoutes (app: WebApplication) (rctx: RouteContext) =
   app.MapPost("/api/live-testing/enable", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
-    withErrorHandling ctx (fun () -> task {
+    task {
       let! result = SageFs.McpTools.setLiveTesting rctx.McpContext true
       do! jsonResponse ctx 200 {| success = true; message = result; activation = "active" |}
-    }) :> Task
+    } :> Task
   ) |> ignore
   app.MapPost("/api/live-testing/disable", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
-    withErrorHandling ctx (fun () -> task {
+    task {
       let! result = SageFs.McpTools.setLiveTesting rctx.McpContext false
       do! jsonResponse ctx 200 {| success = true; message = result; activation = "inactive" |}
-    }) :> Task
+    } :> Task
   ) |> ignore
   app.MapPost("/api/live-testing/policy", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
-    withErrorHandling ctx (fun () -> task {
+    task {
       use! json = readJsonBody ctx
       let category = json.RootElement.GetProperty("category").GetString()
       let policy = json.RootElement.GetProperty("policy").GetString()
       let! result = SageFs.McpTools.setRunPolicy rctx.McpContext category policy
       do! jsonResponse ctx 200 {| success = true; message = result |}
-    }) :> Task
+    } :> Task
   ) |> ignore
   app.MapGet("/api/live-testing/file-annotations", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
-    withErrorHandling ctx (fun () -> task {
+    task {
       let fileParam = ctx.Request.Query.["file"].ToString()
       match rctx.SseContext.GetElmModel with
       | None -> do! jsonResponse ctx 503 {| error = "Elm loop not started" |}
@@ -1448,10 +1477,10 @@ let mapLiveTestingRoutes (app: WebApplication) (rctx: RouteContext) =
           let fa = FileAnnotations.empty fileParam
           let json = System.Text.Json.JsonSerializer.Serialize(fa, rctx.SseContext.SseJsonOpts)
           do! jsonResponse ctx 200 json
-    }) :> Task
+    } :> Task
   ) |> ignore
   app.MapGet("/api/live-testing/status", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
-    withErrorHandling ctx (fun () -> task {
+    task {
       let fileParam =
         let fp = ctx.Request.Query.["file"].ToString()
         match System.String.IsNullOrWhiteSpace fp with
@@ -1459,10 +1488,10 @@ let mapLiveTestingRoutes (app: WebApplication) (rctx: RouteContext) =
         | false -> Some fp
       let! result = SageFs.McpTools.getLiveTestStatus rctx.McpContext fileParam
       do! rawJsonResponse ctx result
-    }) :> Task
+    } :> Task
   ) |> ignore
   app.MapPost("/api/live-testing/run", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
-    withErrorHandling ctx (fun () -> task {
+    task {
       use! json = readJsonBody ctx
       let pattern =
         match json.RootElement.TryGetProperty("pattern") with
@@ -1492,37 +1521,37 @@ let mapLiveTestingRoutes (app: WebApplication) (rctx: RouteContext) =
         | r when r.Contains("Error") || r.Contains("error") -> false, None
         | _ -> true, None
       do! jsonResponse ctx 200 {| success = success; reason = reason; message = result |}
-    }) :> Task
+    } :> Task
   ) |> ignore
   app.MapGet("/api/live-testing/test-trace", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
-    withErrorHandling ctx (fun () -> task {
+    task {
       let! result = SageFs.McpTools.getTestTrace rctx.McpContext
       do! rawJsonResponse ctx result
-    }) :> Task
+    } :> Task
   ) |> ignore
   app.MapPost("/api/live-testing/mark-all-stale", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
-    withErrorHandling ctx (fun () -> task {
+    task {
       let! result = SageFs.McpTools.markAllTestsStale rctx.McpContext
       do! jsonResponse ctx 202 {| message = result |}
-    }) :> Task
+    } :> Task
   ) |> ignore
 
 let mapAnalysisRoutes (app: WebApplication) (rctx: RouteContext) =
   app.MapPost("/api/explore", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
-    withErrorHandling ctx (fun () -> task {
+    task {
       let! name = readJsonProp ctx "name"
       let! result = SageFs.McpTools.exploreNamespace rctx.McpContext "http" name None
       do! rawJsonResponse ctx result
-    }) :> Task
+    } :> Task
   ) |> ignore
   app.MapPost("/api/completions", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
-    withErrorHandling ctx (fun () -> task {
+    task {
       use! json = readJsonBody ctx
       let code = json.RootElement.GetProperty("code").GetString()
       let cursor = json.RootElement.GetProperty("cursorPosition").GetInt32()
       let! result = SageFs.McpTools.getCompletions rctx.McpContext "http" code cursor None
       do! rawJsonResponse ctx result
-    }) :> Task
+    } :> Task
   ) |> ignore
   app.MapGet("/api/dependency-graph", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
     let symbol =
@@ -1584,7 +1613,7 @@ let mapAnalysisRoutes (app: WebApplication) (rctx: RouteContext) =
     } :> Task
   ) |> ignore
   app.MapGet("/api/sessions/{sid}/export-fsx", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
-    withErrorHandling ctx (fun () -> task {
+    task {
       let raw = ctx.Request.RouteValues.["sid"] |> string
       match SageFs.WorkerProtocol.SessionId.validate raw with
       | Error msg ->
@@ -1600,7 +1629,7 @@ let mapAnalysisRoutes (app: WebApplication) (rctx: RouteContext) =
         | _ ->
           let fsx = SageFs.Features.Replay.SessionReplayState.exportAsFsx replayState
           do! jsonResponse ctx 200 {| content = fsx; evalCount = replayState.EvalHistory.Length |}
-    }) :> Task
+    } :> Task
   ) |> ignore
 
 let startMcpServer (cfg: McpServerConfig) =
@@ -1642,6 +1671,8 @@ let startMcpServer (cfg: McpServerConfig) =
       let app = builder.Build()
       wireCoreLogs app
       app.UseResponseCompression() |> ignore
+      app.Use(Func<Microsoft.AspNetCore.Http.HttpContext, Func<Task>, Task>(fun ctx next ->
+        errorHandlingMiddleware ctx next :> Task)) |> ignore
       app.MapMcp() |> ignore
 
       // Phase 3: Route context + routes
