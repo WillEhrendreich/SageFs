@@ -244,6 +244,9 @@ let onProcError (proc: obj) (handler: string -> unit) : unit = jsNative
 [<Emit("$0.on('exit', function(code, signal) { $1(code == null ? -1 : code, signal == null ? '' : signal) })")>]
 let onProcExit (proc: obj) (handler: int -> string -> unit) : unit = jsNative
 
+[<Emit("new Promise(function(resolve, reject) { require('child_process').execFile($0, $1, function(err, stdout, stderr) { if (err) reject(err); else resolve(stdout) }) })")>]
+let execFileAsync (cmd: string) (args: string array) : JS.Promise<string> = jsNative
+
 [<Emit("require('fs').existsSync($0)")>]
 let fileExists (path: string) : bool = jsNative
 
@@ -358,6 +361,35 @@ let getCodeBlock (editor: TextEditor) =
   let startLine, endLine = getBlockBounds doc curLine
   let range = newRange startLine 0 endLine (int (doc.lineAt(float endLine).text.Length))
   doc.getTextRange range, startLine, endLine
+
+// ── Recovery Actions ───────────────────────────────────────────
+
+let showOutputPanel () =
+  (getOutput()).show true
+
+let browseForProject () =
+  promise {
+    let filters = createObj [ "F# Projects" ==> [| "fsproj"; "sln"; "slnx" |] ]
+    let! uris = Window.showOpenDialog filters false "Select Project"
+    match uris with
+    | Some arr when arr.Length > 0 ->
+      let uri = arr.[0]
+      let config = Workspace.getConfiguration "sagefs"
+      do! config.update ("projectPath", uri.fsPath, 1.0)
+      Commands.executeCommand "sagefs.start" |> ignore
+    | _ -> ()
+  }
+
+let openWorkspace () =
+  Commands.executeCommand "vscode.openFolder" |> ignore
+
+let checkInstallation () =
+  let term = Window.createTerminal "SageFs Version Check"
+  terminalShow term
+  terminalSendText term "sagefs --version"
+
+let openQuickFile () =
+  Commands.executeCommand "workbench.action.quickOpen" |> ignore
 
 // ── Status ─────────────────────────────────────────────────────
 
@@ -515,7 +547,11 @@ let rec startDaemon () =
     match client with
     | None ->
       isStarting <- false
-      Window.showErrorMessage "SageFs not activated." [||] |> ignore
+      let! choice = Window.showErrorMessage "SageFs not activated." [| "Retry"; "Show Output" |]
+      match choice with
+      | Some "Retry" -> Commands.executeCommand "sagefs.start" |> ignore
+      | Some "Show Output" -> showOutputPanel ()
+      | _ -> ()
     | Some c ->
     let! running = Client.isRunning c
     match running with
@@ -527,7 +563,11 @@ let rec startDaemon () =
       match projPath with
       | None ->
         isStarting <- false
-        Window.showErrorMessage "No .fsproj or .sln found. Open an F# project first." [||] |> ignore
+        let! choice = Window.showErrorMessage "No .fsproj or .sln found. Open an F# project first." [| "Browse for Project"; "Open Workspace" |]
+        match choice with
+        | Some "Browse for Project" -> browseForProject () |> promiseIgnoreLog (fun msg -> (getOutput()).appendLine msg)
+        | Some "Open Workspace" -> openWorkspace ()
+        | _ -> ()
       | Some proj ->
         let out = getOutput ()
         out.show true
@@ -581,7 +621,12 @@ let rec startDaemon () =
                 isStarting <- false
                 out.appendLine "Timed out waiting for SageFs daemon after 120s."
                 out.show false
-                Window.showErrorMessage "SageFs daemon failed to start after 120s. Check Output panel." [||] |> ignore
+                let! choice = Window.showErrorMessage "SageFs daemon failed to start after 120s." [| "Retry"; "Show Output"; "Check Installation" |]
+                match choice with
+                | Some "Retry" -> Commands.executeCommand "sagefs.restart" |> ignore
+                | Some "Show Output" -> showOutputPanel ()
+                | Some "Check Installation" -> checkInstallation ()
+                | _ -> ()
                 sb.text <- "$(error) SageFs: offline"
             } |> promiseIgnoreLog (fun msg -> out.appendLine msg)
           ) 1000
@@ -608,7 +653,12 @@ and ensureRunning () =
           ready <- r
           attempts <- attempts + 1
         if not ready then
-          Window.showErrorMessage "SageFs didn't start in time." [||] |> ignore
+          let! choice = Window.showErrorMessage "SageFs didn't start in time." [| "Retry"; "Show Output"; "Check Installation" |]
+          match choice with
+          | Some "Retry" -> Commands.executeCommand "sagefs.restart" |> ignore
+          | Some "Show Output" -> showOutputPanel ()
+          | Some "Check Installation" -> checkInstallation ()
+          | _ -> ()
         return ready
       | _ ->
         return false
@@ -733,7 +783,10 @@ let evalSelection () =
   promise {
     match Window.getActiveTextEditor () with
     | None ->
-      Window.showWarningMessage "No active editor." [||] |> ignore
+      let! choice = Window.showWarningMessage "No active editor." [| "Open File" |]
+      match choice with
+      | Some "Open File" -> openQuickFile ()
+      | _ -> ()
     | Some ed ->
       let! ok = ensureRunning ()
       match ok, getEvalCode ed with
@@ -820,7 +873,11 @@ let resetSessionCmd () =
 let evalAllBlocks () =
   promise {
     match Window.getActiveTextEditor () with
-    | None -> Window.showWarningMessage "No active editor." [||] |> ignore
+    | None ->
+      let! choice = Window.showWarningMessage "No active editor." [| "Open File" |]
+      match choice with
+      | Some "Open File" -> openQuickFile ()
+      | _ -> ()
     | Some ed ->
       let! ok = ensureRunning ()
       match ok with
@@ -892,7 +949,11 @@ let createSessionCmd () =
       let! projPath = findProject ()
       match projPath with
       | None ->
-        Window.showErrorMessage "No .fsproj or .sln found. Open an F# project first." [||] |> ignore
+        let! choice = Window.showErrorMessage "No .fsproj or .sln found. Open an F# project first." [| "Browse for Project"; "Open Workspace" |]
+        match choice with
+        | Some "Browse for Project" -> browseForProject () |> promiseIgnoreLog (fun msg -> (getOutput()).appendLine msg)
+        | Some "Open Workspace" -> openWorkspace ()
+        | _ -> ()
       | Some proj ->
         let workDir = getWorkingDirectory () |> Option.defaultValue "."
         do! Window.withProgress ProgressLocation.Notification "SageFs: Creating session..." (fun _p _t ->
@@ -902,7 +963,11 @@ let createSessionCmd () =
             | Client.Succeeded _ ->
               Window.showInformationMessage (sprintf "SageFs: Session created for %s" proj) [||] |> ignore
             | Client.Failed err ->
-              Window.showErrorMessage (sprintf "SageFs: %s" err) [||] |> ignore
+              let! choice = Window.showErrorMessage (sprintf "SageFs: %s" err) [| "Show Output"; "Retry" |]
+              match choice with
+              | Some "Show Output" -> showOutputPanel ()
+              | Some "Retry" -> Commands.executeCommand "sagefs.createSession" |> ignore
+              | _ -> ()
             refreshStatus ()
           }
         )
@@ -912,7 +977,11 @@ let configureWarmupAutoOpenCmd () =
   promise {
     match getWorkingDirectory () with
     | None ->
-      Window.showErrorMessage "Open an F# project or workspace first." [||] |> ignore
+      let! choice = Window.showErrorMessage "Open an F# project or workspace first." [| "Browse for Project"; "Open Workspace" |]
+      match choice with
+      | Some "Browse for Project" -> browseForProject () |> promiseIgnoreLog (fun msg -> (getOutput()).appendLine msg)
+      | Some "Open Workspace" -> openWorkspace ()
+      | _ -> ()
     | Some workDir ->
       let configDir = combineWindowsPath workDir ".SageFs"
       let configPath = combineWindowsPath configDir "config.fsx"
@@ -951,7 +1020,11 @@ let sessionPickCommand (prompt: string) (action: Client.SessionInfo -> Client.Cl
       let! sessions = Client.listSessions c
       match sessions with
       | [||] ->
-        Window.showInformationMessage "No sessions available." [||] |> ignore
+        let! choice = Window.showInformationMessage "No sessions available." [| "Create Session"; "Start Daemon" |]
+        match choice with
+        | Some "Create Session" -> Commands.executeCommand "sagefs.createSession" |> ignore
+        | Some "Start Daemon" -> Commands.executeCommand "sagefs.start" |> ignore
+        | _ -> ()
       | _ ->
         let items = sessions |> Array.map formatSessionLabel
         let! picked = Window.showQuickPick items prompt
@@ -966,7 +1039,11 @@ let sessionPickCommand (prompt: string) (action: Client.SessionInfo -> Client.Cl
               onSuccess sess
               Window.showInformationMessage (result |> Client.ApiOutcome.messageOrDefault prompt) [||] |> ignore
             | Client.Failed err ->
-              Window.showErrorMessage (sprintf "Failed: %s" err) [||] |> ignore
+              let! choice = Window.showErrorMessage (sprintf "Failed: %s" err) [| "Show Diagnostics"; "Show Output" |]
+              match choice with
+              | Some "Show Diagnostics" -> showOutputPanel ()
+              | Some "Show Output" -> showOutputPanel ()
+              | _ -> ()
             refreshStatus ()
           | None -> ()
         | None -> ()
@@ -990,7 +1067,11 @@ let sessionMenu () =
   promise {
     match client with
     | None ->
-      Window.showWarningMessage "SageFs is not connected." [||] |> ignore
+      let! choice = Window.showWarningMessage "SageFs is not connected." [| "Start SageFs"; "Show Output" |]
+      match choice with
+      | Some "Start SageFs" -> Commands.executeCommand "sagefs.start" |> ignore
+      | Some "Show Output" -> showOutputPanel ()
+      | _ -> ()
     | Some c ->
       let! status = Client.getStatus c
       let items = ResizeArray<string>()
@@ -1123,7 +1204,10 @@ let evalAdvance () =
   promise {
     match Window.getActiveTextEditor () with
     | None ->
-      Window.showWarningMessage "No active editor." [||] |> ignore
+      let! choice = Window.showWarningMessage "No active editor." [| "Open File" |]
+      match choice with
+      | Some "Open File" -> openQuickFile ()
+      | _ -> ()
     | Some ed ->
       let! ok = ensureRunning ()
       match ok, getEvalCode ed with
@@ -1208,9 +1292,16 @@ let loadScriptCmd () =
           let name = ed.document.fileName.Split([|'/'; '\\'|]) |> Array.last
           Window.showInformationMessage (sprintf "Script loaded: %s" name) [||] |> ignore
         | Client.Failed err ->
-          Window.showErrorMessage err [||] |> ignore
+          let! choice = Window.showErrorMessage err [| "Show Diagnostics"; "Show Output" |]
+          match choice with
+          | Some "Show Diagnostics" -> showOutputPanel ()
+          | Some "Show Output" -> showOutputPanel ()
+          | _ -> ()
       | _ ->
-        Window.showWarningMessage "Open an .fsx file to load it as a script." [||] |> ignore
+        let! choice = Window.showWarningMessage "Open an .fsx file to load it as a script." [| "Open File" |]
+        match choice with
+        | Some "Open File" -> openQuickFile ()
+        | _ -> ()
     })
 
 let promptAutoStart () =
@@ -1227,6 +1318,19 @@ let promptAutoStart () =
       | Some "Start SageFs" -> do! startDaemon ()
       | Some "Open Dashboard" -> openDashboard ()
       | _ -> ()
+  }
+
+let checkHealth () =
+  promise {
+    try
+      let! version = execFileAsync "sagefs" [| "--version" |]
+      let trimmed = version.Trim()
+      Window.showInformationMessage (sprintf "SageFs CLI found: %s" trimmed) [||] |> ignore
+    with _ ->
+      Window.showErrorMessage
+        "SageFs CLI not found. Install it with: dotnet tool install --global SageFs"
+        [||]
+      |> ignore
   }
 
 let hijackIonideSendToFsi (subs: ResizeArray<Disposable>) =
@@ -1335,6 +1439,7 @@ let activate (context: ExtensionContext) =
       do! startDaemon ()
     } |> promiseIgnoreLog logToOutput)
   reg "sagefs.openDashboard" (fun _ -> openDashboard ())
+  reg "sagefs.checkHealth" (fun _ -> checkHealth () |> promiseIgnoreLog logToOutput)
   reg "sagefs.sessionMenu" (fun _ -> sessionMenu () |> promiseIgnoreLog logToOutput)
   reg "sagefs.resetSession" (fun _ -> resetSessionCmd () |> promiseIgnoreLog logToOutput)
   reg "sagefs.hardReset" (fun _ -> hardResetCmd () |> promiseIgnoreLog logToOutput)
@@ -1413,7 +1518,12 @@ let activate (context: ExtensionContext) =
           match lines with
           | [||] -> Window.showInformationMessage "No recent events" [||] |> ignore
           | _ -> Window.showQuickPick lines "Recent SageFs events" |> promiseIgnoreLog logToOutput
-        | None -> Window.showWarningMessage "Could not fetch events" [||] |> ignore
+        | None ->
+          let! choice = Window.showWarningMessage "Could not fetch events" [| "Start SageFs"; "Show Output" |]
+          match choice with
+          | Some "Start SageFs" -> Commands.executeCommand "sagefs.start" |> ignore
+          | Some "Show Output" -> showOutputPanel ()
+          | _ -> ()
       }) |> promiseIgnoreLog logToOutput)
   reg "sagefs.showCallGraph" (fun _ ->
     withClient (fun c ->
@@ -1421,7 +1531,11 @@ let activate (context: ExtensionContext) =
         let! overviewOpt = Client.getDependencyGraph "" c
         match overviewOpt with
         | None ->
-          Window.showWarningMessage "Could not fetch dependency graph" [||] |> ignore
+          let! choice = Window.showWarningMessage "Could not fetch dependency graph" [| "Start SageFs"; "Show Output" |]
+          match choice with
+          | Some "Start SageFs" -> Commands.executeCommand "sagefs.start" |> ignore
+          | Some "Show Output" -> showOutputPanel ()
+          | _ -> ()
         | Some body ->
           let parsed = jsonParse body
           let total = fieldInt "TotalSymbols" parsed |> Option.defaultValue 0
@@ -1435,7 +1549,11 @@ let activate (context: ExtensionContext) =
               let! detailOpt = Client.getDependencyGraph (sym.Trim()) c
               match detailOpt with
               | None ->
-                Window.showWarningMessage "Could not fetch graph" [||] |> ignore
+                let! choice = Window.showWarningMessage "Could not fetch graph" [| "Start SageFs"; "Show Output" |]
+                match choice with
+                | Some "Start SageFs" -> Commands.executeCommand "sagefs.start" |> ignore
+                | Some "Show Output" -> showOutputPanel ()
+                | _ -> ()
               | Some detail ->
                 let parsed2 = jsonParse detail
                 let tests = fieldArray "Tests" parsed2 |> Option.defaultValue [||]
@@ -1487,12 +1605,19 @@ let activate (context: ExtensionContext) =
       promise {
         match activeSessionId with
         | None ->
-          Window.showInformationMessage "No active session" [||] |> ignore
+          let! choice = Window.showInformationMessage "No active session" [| "Create Session"; "Start Daemon" |]
+          match choice with
+          | Some "Create Session" -> Commands.executeCommand "sagefs.createSession" |> ignore
+          | Some "Start Daemon" -> Commands.executeCommand "sagefs.start" |> ignore
+          | _ -> ()
         | Some sid ->
           let! result = Client.exportSessionAsFsx sid c
           match result with
           | None ->
-            Window.showErrorMessage "Failed to export session" [||] |> ignore
+            let! choice = Window.showErrorMessage "Failed to export session" [| "Show Output" |]
+            match choice with
+            | Some "Show Output" -> showOutputPanel ()
+            | _ -> ()
           | Some r ->
             match r.evalCount with
             | 0 -> Window.showInformationMessage "No evaluations to export" [||] |> ignore
@@ -1676,7 +1801,11 @@ let activate (context: ExtensionContext) =
         | Result.Ok () -> connectToRunningDaemon c
         | Result.Error msg ->
           (getOutput()).appendLine (sprintf "[SageFs] Version mismatch: %s" msg)
-          Window.showErrorMessage msg [||] |> ignore
+          let! choice = Window.showErrorMessage msg [| "Show Output"; "Check Installation" |]
+          match choice with
+          | Some "Show Output" -> showOutputPanel ()
+          | Some "Check Installation" -> checkInstallation ()
+          | _ -> ()
     } |> promiseIgnoreLog logToOutput
 
   // Wire up daemon-ready callback for startDaemon lifecycle

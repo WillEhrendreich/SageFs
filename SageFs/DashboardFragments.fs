@@ -807,6 +807,31 @@ let renderSessions (sessions: ParsedSession list) (creating: bool) =
 
 
 
+/// Render current FSI diagnostics as a live panel with emoji severity icons and a count badge.
+let renderCurrentDiagnostics (diags: Diagnostic list) =
+  let errorCount = diags |> List.filter (fun d -> d.Severity = DiagError) |> List.length
+  let warnCount = diags |> List.filter (fun d -> d.Severity = DiagWarning) |> List.length
+  Elem.div [ Attr.id DomIds.DiagnosticsPanel; Attr.class' "diagnostics-panel" ] [
+    match diags.IsEmpty with
+    | true ->
+      Elem.span [ Attr.class' "meta no-diags" ] [ Text.raw "✅ No diagnostics" ]
+    | false ->
+      Elem.span [ Attr.class' "diag-count-badge"; Attr.style "font-weight: bold; margin-right: 0.5rem;" ] [
+        match errorCount, warnCount with
+        | e, 0 -> Text.raw (sprintf "🔴 %d error%s" e (if e = 1 then "" else "s"))
+        | 0, w -> Text.raw (sprintf "⚠️ %d warning%s" w (if w = 1 then "" else "s"))
+        | e, w -> Text.raw (sprintf "🔴 %d error%s · ⚠️ %d warning%s" e (if e = 1 then "" else "s") w (if w = 1 then "" else "s"))
+      ]
+      yield! diags |> List.map (fun diag ->
+        let icon = match diag.Severity with DiagError -> "🔴" | DiagWarning -> "⚠️"
+        Elem.div [ Attr.class' (sprintf "diag %s" (DiagSeverity.toCssClass diag.Severity)) ] [
+          Elem.span [ Attr.class' "diag-icon" ] [ Text.raw icon ]
+          if diag.Line > 0 || diag.Col > 0 then
+            Elem.span [ Attr.class' "diag-loc" ] [ Text.raw (sprintf " L%d:%d " diag.Line diag.Col) ]
+          Elem.span [ Attr.class' "diag-msg" ] [ Text.raw diag.Message ]
+        ])
+  ]
+
 /// Render the full dynamic content of the dashboard as a single <div id="main">.
 /// This is the ONLY thing pushed via SSE on every state change.
 /// Implements "immediate mode HTML" — the server renders the complete page from
@@ -842,6 +867,8 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
     snap.DaemonHealth
     // Failure narratives panel — recent test failures with context
     snap.FailureNarrativesPanel
+    // Diagnostics panel — live FSI compile errors and warnings
+    snap.DiagnosticsPanel
     // Main app layout: output+eval on left, sidebar on right
     Elem.div [ Attr.class' "app-layout" ] [
       Elem.div [ Attr.class' "main-area" ] [

@@ -333,6 +333,25 @@ module Window =
   let _showTextDocument (w: obj) (doc: obj) : JS.Promise<obj> = jsNative
   let showTextDocument (doc: obj) = _showTextDocument windowExports doc
 
+  [<Emit("$0.showOpenDialog($1)")>]
+  let _showOpenDialog (w: obj) (opts: obj) : JS.Promise<Uri array option> = jsNative
+  let showOpenDialog (filters: obj) (canSelectMany: bool) (title: string) =
+    _showOpenDialog windowExports (createObj [
+      "filters" ==> filters
+      "canSelectMany" ==> canSelectMany
+      "openLabel" ==> title
+    ])
+
+  [<Emit("$0.createTerminal($1)")>]
+  let _createTerminal (w: obj) (name: string) : obj = jsNative
+  let createTerminal (name: string) = _createTerminal windowExports name
+
+[<Emit("$0.show()")>]
+let terminalShow (t: obj) : unit = jsNative
+
+[<Emit("$0.sendText($1)")>]
+let terminalSendText (t: obj) (text: string) : unit = jsNative
+
 // ── Commands API ────────────────────────────────────────────────
 
 [<Import("commands", "vscode")>]

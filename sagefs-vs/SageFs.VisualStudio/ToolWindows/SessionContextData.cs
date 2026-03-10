@@ -128,8 +128,10 @@ internal class SessionContextData : NotifyPropertyChangedObject, IDisposable
     }
     catch (Exception ex)
     {
+      System.Diagnostics.Debug.WriteLine(
+        $"[SageFs] {nameof(SessionContextData)}.Refresh: {ex.GetType().Name}: {ex.Message}");
       ConnectionStatus = "✗ Error";
-      SessionInfo = $"Error: {ex.Message}";
+      SessionInfo = "⚠ Unable to load session information.\nClick '↻ Refresh' to retry, or check that the SageFs daemon is running.";
     }
     finally
     {

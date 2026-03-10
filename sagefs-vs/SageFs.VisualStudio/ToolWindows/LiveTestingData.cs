@@ -251,8 +251,10 @@ internal class LiveTestingData : NotifyPropertyChangedObject, IDisposable
     }
     catch (Exception ex)
     {
+      System.Diagnostics.Debug.WriteLine(
+        $"[SageFs] {nameof(LiveTestingData)}.Refresh: {ex.GetType().Name}: {ex.Message}");
       EnabledStatus = "✗ Error";
-      SummaryText = $"Error: {ex.Message}";
+      SummaryText = "⚠ Unable to load test status.\nClick '↻' to retry, or check that the SageFs daemon is running.";
     }
   }
 

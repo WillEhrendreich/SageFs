@@ -91,7 +91,10 @@ internal class HotReloadData : NotifyPropertyChangedObject
     }
     catch (Exception ex)
     {
-      FilesText = $"Error: {ex.Message}";
+      System.Diagnostics.Debug.WriteLine(
+        $"[SageFs] {nameof(HotReloadData)}.Refresh: {ex.GetType().Name}: {ex.Message}");
+      FilesText = "⚠ Unable to load hot reload state.";
+      SummaryText = "Click '↻' to retry, or check that the SageFs daemon is running.";
     }
   }
 

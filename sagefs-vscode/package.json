@@ -2,7 +2,7 @@
   "name": "sagefs",
   "displayName": "SageFs — Live F# Development",
   "description": "Send F# code to SageFs for instant evaluation, type-checking, and hot reload.",
-  "version": "0.6.48",
+  "version": "0.6.49",
   "publisher": "sagefs",
   "license": "MIT",
   "icon": "icon.png",
@@ -216,6 +216,11 @@
       {
         "command": "sagefs.loadScript",
         "title": "SageFs: Load Current Script"
+      },
+      {
+        "command": "sagefs.checkHealth",
+        "title": "SageFs: Check Health",
+        "icon": "$(heart)"
       }
     ],
     "keybindings": [
@@ -500,6 +505,89 @@
       {
         "language": "fsharp",
         "path": "./snippets/fsharp.json"
+      }
+    ],
+    "walkthroughs": [
+      {
+        "id": "sagefs.getStarted",
+        "title": "Get Started with SageFs",
+        "description": "Your first 60 seconds with SageFs — live F# development in VS Code.",
+        "steps": [
+          {
+            "id": "sagefs.installCli",
+            "title": "Install the SageFs CLI",
+            "description": "SageFs needs its CLI tool installed. Run ``dotnet tool install --global SageFs`` in your terminal.\n\n[Check Installation](command:sagefs.checkHealth)",
+            "media": {
+              "image": "$(terminal)",
+              "altText": "Terminal icon"
+            },
+            "completionEvents": [
+              "onCommand:sagefs.checkHealth"
+            ]
+          },
+          {
+            "id": "sagefs.openProject",
+            "title": "Open an F# Project",
+            "description": "Open a folder containing a ``.fsproj`` or ``.sln`` file. SageFs will automatically detect it.",
+            "media": {
+              "image": "$(folder-opened)",
+              "altText": "Folder opened icon"
+            },
+            "completionEvents": [
+              "onLanguage:fsharp"
+            ]
+          },
+          {
+            "id": "sagefs.startDaemon",
+            "title": "Start the SageFs Daemon",
+            "description": "Click the SageFs icon in the status bar or run **SageFs: Start Daemon** from the command palette.\n\n[Start SageFs](command:sagefs.start)",
+            "media": {
+              "image": "$(rocket)",
+              "altText": "Rocket icon"
+            },
+            "completionEvents": [
+              "onCommand:sagefs.start"
+            ]
+          },
+          {
+            "id": "sagefs.evalFirst",
+            "title": "Evaluate Your First Expression",
+            "description": "Select some F# code and press ``Ctrl+Enter`` (or ``Cmd+Enter`` on Mac) to evaluate it. Results appear inline!",
+            "media": {
+              "image": "$(play)",
+              "altText": "Play icon"
+            },
+            "completionEvents": [
+              "onCommand:sagefs.eval"
+            ]
+          },
+          {
+            "id": "sagefs.liveTesting",
+            "title": "Explore Live Testing",
+            "description": "SageFs automatically discovers and runs your tests. Check the Tests view in the SageFs sidebar for live results.\n\n[Enable Live Testing](command:sagefs.enableLiveTesting)",
+            "media": {
+              "image": "$(testing-run-icon)",
+              "altText": "Testing icon"
+            },
+            "completionEvents": [
+              "onCommand:sagefs.enableLiveTesting"
+            ]
+          }
+        ]
+      }
+    ],
+    "viewsWelcome": [
+      {
+        "view": "sagefs-sessions",
+        "contents": "No SageFs sessions yet.\n[Start SageFs](command:sagefs.start)\n\nOpen an F# project and start SageFs to begin."
+      },
+      {
+        "view": "sagefs-hotReload",
+        "contents": "No files watched yet.\n[Start SageFs](command:sagefs.start)\n\nSageFs automatically discovers F# files for hot reload when the daemon is running."
+      },
+      {
+        "view": "sagefs-sessionContext",
+        "contents": "No session context yet.\n[Start SageFs](command:sagefs.start)\n\nSession context shows bindings and types from your active FSI session."
       }
     ]
   },

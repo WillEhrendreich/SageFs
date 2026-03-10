@@ -1549,6 +1549,12 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
         testState.DiscoveredTests
         |> Array.tryFind (fun tc -> tc.Id = testId)
         |> Option.map (fun tc -> tc.DisplayName, narrative))
+    GetCurrentDiagnostics = fun () ->
+      let model = elmRuntime.GetModel()
+      model.Diagnostics
+      |> Features.DiagnosticsStore.allFlat
+      |> List.map Diagnostic.fromFeatureDiag
+      |> List.sortBy (fun d -> match d.Severity with DiagError -> 0 | DiagWarning -> 1)
   }
 
   let dashboardActions : DashboardActions = {

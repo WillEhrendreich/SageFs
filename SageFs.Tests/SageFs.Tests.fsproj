@@ -207,6 +207,7 @@
         <Compile Include="DashboardSparklineTests.fs" />
         <Compile Include="DashboardHealthTests.fs" />
         <Compile Include="DashboardFailureNarrativesTests.fs" />
+        <Compile Include="DashboardDiagnosticsTests.fs" />
         <Compile Include="MarkAllStaleTests.fs" />
         <Compile Include="TestsPaneTests.fs" />
         <Compile Include="Program.fs" />

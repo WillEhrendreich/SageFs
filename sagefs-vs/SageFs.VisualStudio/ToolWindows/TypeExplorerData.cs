@@ -143,7 +143,10 @@ internal class TypeExplorerData : NotifyPropertyChangedObject, IDisposable
     }
     catch (Exception ex)
     {
-      NamespacesText = $"Error: {ex.Message}";
+      System.Diagnostics.Debug.WriteLine(
+        $"[SageFs] {nameof(TypeExplorerData)}.Refresh: {ex.GetType().Name}: {ex.Message}");
+      NamespacesText = "⚠ Unable to load type information.";
+      StatusMessage = "Could not reach the SageFs daemon. Click '↻' to retry, or check that the daemon is running.";
     }
   }
 
@@ -200,7 +203,10 @@ internal class TypeExplorerData : NotifyPropertyChangedObject, IDisposable
     }
     catch (Exception ex)
     {
-      NamespacesText = $"Error: {ex.Message}";
+      System.Diagnostics.Debug.WriteLine(
+        $"[SageFs] {nameof(TypeExplorerData)}.Search: {ex.GetType().Name}: {ex.Message}");
+      NamespacesText = "⚠ Search failed.";
+      StatusMessage = "Could not reach the SageFs daemon. Click '↻' to retry, or check that the daemon is running.";
     }
   }
 }

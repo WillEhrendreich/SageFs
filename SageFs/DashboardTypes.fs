@@ -139,6 +139,17 @@ type Diagnostic = {
   Col: int
 }
 
+module Diagnostic =
+  /// Convert a core Features.Diagnostics.Diagnostic to a dashboard Diagnostic.
+  let fromFeatureDiag (d: Features.Diagnostics.Diagnostic) : Diagnostic =
+    { Severity =
+        match d.Severity with
+        | Features.Diagnostics.DiagnosticSeverity.Error -> DiagError
+        | _ -> DiagWarning
+      Message = d.Message
+      Line = d.Range.StartLine
+      Col = d.Range.StartColumn }
+
 /// Eval statistics view model — pre-computed for rendering.
 type EvalStatsView = {
   Count: int
@@ -483,6 +494,8 @@ type DashboardQueries = {
   GetDaemonHealth: unit -> Features.HealthSnapshot option
   /// Read current failure narratives from live test state — (testName, narrative) pairs.
   GetFailureNarratives: unit -> (string * Features.LiveTesting.FailureNarrative) list
+  /// Read current FSI diagnostics (errors/warnings) from the diagnostics store.
+  GetCurrentDiagnostics: unit -> Diagnostic list
 }
 
 /// Commands that mutate session state.
@@ -517,6 +530,7 @@ type DashboardSnapshot = {
   EvalStats: EvalStatsView
   DaemonHealth: XmlNode
   FailureNarrativesPanel: XmlNode
+  DiagnosticsPanel: XmlNode
   ThemeName: string
   ConnectionLabel: string option
   HotReloadPanel: XmlNode
