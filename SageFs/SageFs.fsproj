@@ -48,6 +48,7 @@
         <Compile Include="DaemonMode.fs" />
         <Compile Include="WatchdogRunner.fs" />
         <Compile Include="JupyterTransport.fs" />
+        <Compile Include="EnvCheck.fs" />
         <Compile Include="Program.fs" />
         <None Include="..\Readme.md">
           <Pack>true</Pack>

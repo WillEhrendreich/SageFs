@@ -62,6 +62,7 @@ type CliCommand =
   | ShowVersion
   | Stop
   | Status
+  | Check
   | Worker of workerArgs: string list
   | Tui of remainingArgs: string array
   | Gui of remainingArgs: string array
@@ -76,6 +77,7 @@ module CliCommand =
     | _ when hasFlag "--version" || hasFlag "-v" -> ShowVersion
     | _ when args.Length > 0 && args.[0] = "stop" -> Stop
     | _ when args.Length > 0 && args.[0] = "status" -> Status
+    | _ when args.Length > 0 && args.[0] = "check" -> Check
     | _ when args.Length > 0 && args.[0] = "worker" -> Worker (args.[1..] |> Array.toList)
     | _ when args.Length > 0 && args.[0] = "tui" -> Tui args
     | _ when args.Length > 0 && args.[0] = "gui" -> Gui args
@@ -146,6 +148,7 @@ let main args =
     printfn "SageFs - F# Interactive daemon with MCP, hot reloading, and live dashboard"
     printfn ""
     printfn "Usage: SageFs [options]                Start daemon (default mode)"
+    printfn "       SageFs check                    Check environment before first run"
     printfn "       SageFs --supervised [options]   Start with watchdog auto-restart"
     printfn "       SageFs tui                      Terminal UI client for running daemon"
     printfn "       SageFs tui --legacy-tui         Terminal UI (imperative fallback)"
@@ -194,6 +197,7 @@ let main args =
     printfn "  SageFs gui                          Raylib GUI (starts daemon if needed)"
     printfn "  SageFs --jupyter conn.json          Run as Jupyter kernel"
     printfn "  SageFs status                       Show daemon status"
+    printfn "  SageFs check                        Check environment before first run"
     printfn ""
     0
 
@@ -254,6 +258,16 @@ let main args =
     | None ->
       printfn "No daemon running"
       1
+
+  | Check ->
+    let mcpPort  = parseMcpPort args
+    let dashPort = mcpPort + 1
+    let dir      = Environment.CurrentDirectory
+    let results  = EnvCheck.runAll dir mcpPort dashPort
+    let failures = EnvCheck.print results
+    match failures with
+    | 0 -> 0
+    | _ -> 1
 
   | Worker workerArgs ->
     let sessionId =
