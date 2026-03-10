@@ -127,10 +127,21 @@ let private renderDisableWarmupAutoOpenButton (style: string) =
       Elem.span [ Ds.show "!$configLoading" ] [ Text.raw "⚙ " ]
       Text.raw "Disable Warmup Auto-Open" ]
 
-/// Render eval stats as an HTML fragment.
+/// Render eval stats as an HTML fragment — includes sparkline and P50/P95 latency.
 let renderEvalStats (stats: EvalStatsView) =
   Elem.div [ Attr.id DomIds.EvalStats; Attr.class' "meta" ] [
     Text.raw (sprintf "%d evals · avg %.0fms · min %.0fms · max %.0fms" stats.Count stats.AvgMs stats.MinMs stats.MaxMs)
+    match stats.Sparkline with
+    | "" -> ()
+    | sparkline ->
+      Elem.span [ Attr.class' "eval-sparkline"; Attr.title "Recent eval latency (oldest → newest)" ] [
+        Text.raw (sprintf " %s" sparkline)
+      ]
+      Elem.span [ Attr.class' "eval-percentiles meta" ] [
+        Text.raw (sprintf " · P50 %s · P95 %s"
+          (stats.P50Ms |> Option.map (sprintf "%.0fms") |> Option.defaultValue "—")
+          (stats.P95Ms |> Option.map (sprintf "%.0fms") |> Option.defaultValue "—"))
+      ]
   ]
 
 /// Render a pipeline stage badge for the railway visualization.

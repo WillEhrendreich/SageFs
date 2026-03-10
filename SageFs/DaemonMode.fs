@@ -1318,6 +1318,8 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
   // W12(R10): Use Volatile.Read/Write to ensure MCP-thread writes are visible to HTTP-thread
   // readers without data races. Plain ref cell field access has no memory barrier on ARM.
   let sharedBindingScope : SageFs.Features.BindingExplorer.BindingScopeSnapshot option ref = ref None
+  // Shared feature push state — gives Dashboard access to EvalTimeline sparkline data.
+  let sharedFeatureState : SageFs.Features.FeatureHooks.FeaturePushState ref = ref SageFs.Features.FeatureHooks.FeaturePushState.empty
 
   // Start MCP server
   let mcpTask =
@@ -1331,6 +1333,7 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
       GetWarmupContext = Some getWarmupContextForMcp
       GetHotReloadState = Some getHotReloadStateForMcp
       SharedBindingScope = sharedBindingScope
+      SharedFeatureState = Some sharedFeatureState
     }
 
   // Test cycle tick timer — drives debounce channels for live testing (200ms interval)
@@ -1489,6 +1492,9 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
         SageFs.ActiveSession.sessionId model.Sessions.ActiveSessionId
         |> Option.map WorkerProtocol.SessionId.value |> Option.defaultValue ""
       SageFs.Features.LiveTesting.LiveTestCycleState.liveTestingStatusBarForSession activeId model.LiveTesting
+    GetEvalTimeline = fun () ->
+      let state = System.Threading.Volatile.Read(&sharedFeatureState.contents)
+      SageFs.Features.EvalTimeline.timelineStats 20 state.CachedTimeline
   }
 
   let dashboardActions : DashboardActions = {

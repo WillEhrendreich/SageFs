@@ -34,7 +34,7 @@ let dashboardRenderSnapshotTests = testList "Dashboard render snapshots" [
   }
 
   testTask "renderEvalStats" {
-    let html = renderEvalStats { Count = 42; AvgMs = 123.4; MinMs = 5.0; MaxMs = 1045.0 } |> renderNode
+    let html = renderEvalStats { Count = 42; AvgMs = 123.4; MinMs = 5.0; MaxMs = 1045.0; Sparkline = ""; P50Ms = None; P95Ms = None } |> renderNode
     do! verifyDashboard "dashboard_evalStats" html
   }
 
@@ -185,7 +185,7 @@ let edgeCaseSnapshotTests = testList "edge case snapshots" [
   }
 
   testTask "renderEvalStats zero evals" {
-    let html = renderEvalStats { Count = 0; AvgMs = 0.0; MinMs = 0.0; MaxMs = 0.0 } |> renderNode
+    let html = renderEvalStats { Count = 0; AvgMs = 0.0; MinMs = 0.0; MaxMs = 0.0; Sparkline = ""; P50Ms = None; P95Ms = None } |> renderNode
     do! verifyDashboard "dashboard_evalStats_zero" html
   }
 
@@ -280,7 +280,7 @@ let shellStructureTests = testList "shell structure (replaces browser existence 
   let mkSnap version = {
     DashboardSnapshot.Version = version
     SessionState = "ready"; SessionId = "test-id"; WorkingDir = @"C:\Code"
-    WarmupProgress = ""; EvalStats = { Count = 0; AvgMs = 0.0; MinMs = 0.0; MaxMs = 0.0 }
+    WarmupProgress = ""; EvalStats = { Count = 0; AvgMs = 0.0; MinMs = 0.0; MaxMs = 0.0; Sparkline = ""; P50Ms = None; P95Ms = None }
     ThemeName = "default"; ConnectionLabel = None
     HotReloadPanel = Elem.div [] []; SessionContextPanel = Elem.div [] []
     OutputPanel = Elem.div [] []
@@ -806,7 +806,7 @@ let datastarComplianceTests = testList "Datastar compliance (synthesis 5.4)" [
     let snap = {
       DashboardSnapshot.Version = "0.0.0"
       SessionState = "ready"; SessionId = "test-id"; WorkingDir = @"C:\Code"
-      WarmupProgress = ""; EvalStats = { Count = 0; AvgMs = 0.0; MinMs = 0.0; MaxMs = 0.0 }
+      WarmupProgress = ""; EvalStats = { Count = 0; AvgMs = 0.0; MinMs = 0.0; MaxMs = 0.0; Sparkline = ""; P50Ms = None; P95Ms = None }
       ThemeName = "default"; ConnectionLabel = None
       HotReloadPanel = Elem.div [] []; SessionContextPanel = Elem.div [] []
       OutputPanel = Elem.div [] []
@@ -846,7 +846,7 @@ let datastarComplianceTests = testList "Datastar compliance (synthesis 5.4)" [
     let snap = {
       DashboardSnapshot.Version = "0.0.0"
       SessionState = "ready"; SessionId = "t"; WorkingDir = "C:\\"
-      WarmupProgress = ""; EvalStats = { Count = 0; AvgMs = 0.0; MinMs = 0.0; MaxMs = 0.0 }
+      WarmupProgress = ""; EvalStats = { Count = 0; AvgMs = 0.0; MinMs = 0.0; MaxMs = 0.0; Sparkline = ""; P50Ms = None; P95Ms = None }
       ThemeName = "default"; ConnectionLabel = None
       HotReloadPanel = Elem.div [] []; SessionContextPanel = Elem.div [] []
       OutputPanel = Elem.div [] []
@@ -855,7 +855,7 @@ let datastarComplianceTests = testList "Datastar compliance (synthesis 5.4)" [
       BindingsPanel = Elem.div [] []
     }
     let html = renderMainContent snap |> renderNode
-    Expect.isTrue (html.StartsWith("<div id=\"main\"")) "must start with div#main"
+    Expect.isTrue (html.StartsWith("<div id=\"main\""))"must start with div#main"
   }
 ]
 
@@ -864,7 +864,7 @@ let snapshotCompletenessTests = testList "Snapshot field completeness (synthesis
   let mkSnap version sessionId workingDir state =
     { DashboardSnapshot.Version = version
       SessionState = state; SessionId = sessionId; WorkingDir = workingDir
-      WarmupProgress = ""; EvalStats = { Count = 7; AvgMs = 42.0; MinMs = 1.0; MaxMs = 100.0 }
+      WarmupProgress = ""; EvalStats = { Count = 7; AvgMs = 42.0; MinMs = 1.0; MaxMs = 100.0; Sparkline = ""; P50Ms = None; P95Ms = None }
       ThemeName = "monokai"; ConnectionLabel = Some "🌐 2 🤖 1"
       HotReloadPanel = Elem.div [] []; SessionContextPanel = Elem.div [] []
       OutputPanel = Elem.div [] []

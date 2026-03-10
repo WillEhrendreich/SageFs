@@ -246,10 +246,9 @@ let createStreamHandler
       let wCtx = wCtxTask.Result
       // Push sessionId signal so eval form can include it
       do! Response.ssePatchSignal ctx (SignalPath.sp "sessionId") currentSessionId
-      let avgMs =
-        match stats.EvalCount > 0 with
-        | true -> stats.TotalDuration.TotalMilliseconds / float stats.EvalCount
-        | false -> 0.0
+      // Build eval stats view model with sparkline from EvalTimeline
+      let timelineStats = q.GetEvalTimeline()
+      let evalStatsView = EvalStatsView.fromStats stats timelineStats
       // Resolve theme
       let themeName =
         match resolveThemePush infra.SessionThemes currentSessionId workingDir lastSessionId lastWorkingDir with
@@ -359,11 +358,7 @@ let createStreamHandler
         SessionId = currentSessionId
         WorkingDir = workingDir
         WarmupProgress = q.GetWarmupProgress currentSessionId
-        EvalStats =
-          { Count = stats.EvalCount
-            AvgMs = avgMs
-            MinMs = stats.MinDuration.TotalMilliseconds
-            MaxMs = stats.MaxDuration.TotalMilliseconds }
+        EvalStats = evalStatsView
         ThemeName = themeName
         ConnectionLabel = connectionLabel
         HotReloadPanel = hrPanel

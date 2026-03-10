@@ -289,6 +289,9 @@ type McpServerConfig = {
   GetWarmupContext: (string -> Task<SageFs.WarmupContext option>) option
   GetHotReloadState: (string -> Task<string list option>) option
   SharedBindingScope: SageFs.Features.BindingExplorer.BindingScopeSnapshot option ref
+  /// Shared feature push state ref — exposed so consumers (e.g. Dashboard) can read EvalTimeline.
+  /// If None, startMcpServer creates a private ref that is inaccessible externally.
+  SharedFeatureState: SageFs.Features.FeatureHooks.FeaturePushState ref option
 }
 
 // Create shared MCP context (private — called only by startMcpServer)
@@ -1615,7 +1618,8 @@ let startMcpServer (cfg: McpServerConfig) =
           let bridge = Event<string>()
           evt.Add(DaemonStateChange.toJson >> bridge.Trigger)
           bridge.Publish)
-      let featurePushState = ref SageFs.Features.FeatureHooks.FeaturePushState.empty
+      let featurePushState =
+        cfg.SharedFeatureState |> Option.defaultWith (fun () -> ref SageFs.Features.FeatureHooks.FeaturePushState.empty)
       let mcpContext = mkContext cfg stateChangedStr (Some (fun () -> featurePushState.Value))
       let serverTracker = McpServerTracker()
       let sseJsonOpts = JsonSerializerOptions()

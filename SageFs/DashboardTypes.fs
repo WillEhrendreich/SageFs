@@ -142,7 +142,28 @@ type EvalStatsView = {
   AvgMs: float
   MinMs: float
   MaxMs: float
+  /// Unicode sparkline of recent eval durations (e.g. "▁▂▃▄█"). Empty when no evals.
+  Sparkline: string
+  /// P50 latency in ms (median). None when no evals.
+  P50Ms: float option
+  /// P95 latency in ms. None when fewer than 2 evals.
+  P95Ms: float option
 }
+
+module EvalStatsView =
+  /// Combine raw EvalStats with EvalTimeline stats into a unified view model.
+  let fromStats (evalStats: SageFs.Affordances.EvalStats) (timelineStats: SageFs.Features.EvalTimeline.TimelineStats) : EvalStatsView =
+    let avg =
+      match evalStats.EvalCount > 0 with
+      | true -> evalStats.TotalDuration.TotalMilliseconds / float evalStats.EvalCount
+      | false -> 0.0
+    { Count = evalStats.EvalCount
+      AvgMs = avg
+      MinMs = evalStats.MinDuration.TotalMilliseconds
+      MaxMs = evalStats.MaxDuration.TotalMilliseconds
+      Sparkline = timelineStats.Sparkline
+      P50Ms = timelineStats.P50Ms
+      P95Ms = timelineStats.P95Ms }
 
 /// Pipeline stage outcome — success or failure with an error message.
 [<Struct>]
@@ -376,6 +397,8 @@ type DashboardQueries = {
   GetSessionBindings: string -> Features.BindingExplorer.BindingInfo array
   GetBindingScopeSnapshot: unit -> Features.BindingExplorer.BindingScopeSnapshot option
   GetLiveTestingStatus: unit -> string
+  /// Read current EvalTimeline stats from the shared feature push state.
+  GetEvalTimeline: unit -> Features.EvalTimeline.TimelineStats
 }
 
 /// Commands that mutate session state.
