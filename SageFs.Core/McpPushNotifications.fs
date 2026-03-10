@@ -25,6 +25,8 @@ type PushEvent =
   | TestResultsBatch of payload: TestResultsBatchPayload
   /// File annotations — per-file inline feedback (test status, coverage, CodeLens, failures).
   | FileAnnotationsUpdated of annotations: FileAnnotations
+  /// Diagnosis report ready — composed analysis of failures, staleness, suggestions, performance.
+  | DiagnosisReady of report: SageFs.Features.Diagnostician.DiagnosticReport
 
 /// Whether an event REPLACES the previous instance of the same kind
 /// (state/set semantics) or ACCUMULATES alongside it (delta/list semantics).
@@ -42,6 +44,7 @@ module PushEvent =
     | PushEvent.TestSummaryChanged _ -> MergeStrategy.Replace
     | PushEvent.TestResultsBatch _ -> MergeStrategy.Replace
     | PushEvent.FileAnnotationsUpdated _ -> MergeStrategy.Replace
+    | PushEvent.DiagnosisReady _ -> MergeStrategy.Replace
 
   /// Discriminator tag used for Replace dedup.
   let tag = function
@@ -53,6 +56,7 @@ module PushEvent =
     | PushEvent.TestSummaryChanged _ -> 5
     | PushEvent.TestResultsBatch _ -> 6
     | PushEvent.FileAnnotationsUpdated _ -> 7
+    | PushEvent.DiagnosisReady _ -> 8
 
   /// Format a single event for LLM consumption — actionable, concise.
   let formatForLlm = function
@@ -85,6 +89,14 @@ module PushEvent =
     | PushEvent.FileAnnotationsUpdated ann ->
       sprintf "📝 file annotations for %s (%d tests, %d lenses, %d failures)"
         (IO.Path.GetFileName ann.FilePath) ann.TestAnnotations.Length ann.CodeLenses.Length ann.InlineFailures.Length
+    | PushEvent.DiagnosisReady report ->
+      let severityIcon =
+        match report.Severity with
+        | SageFs.Features.Diagnostician.DiagnosticSeverity.Critical -> "🔴"
+        | SageFs.Features.Diagnostician.DiagnosticSeverity.Warning -> "🟡"
+        | SageFs.Features.Diagnostician.DiagnosticSeverity.Info -> "🟢"
+      sprintf "%s diagnosis: %d failure(s), %d affected cell(s), %d suggestion(s)"
+        severityIcon report.Failures.Length report.AffectedCells.Length report.SuggestedFixes.Length
 
 type AccumulatedEvent = {
   Timestamp: DateTimeOffset

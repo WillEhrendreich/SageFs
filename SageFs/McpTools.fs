@@ -784,6 +784,27 @@ Use this to understand complex pipelines before modifying them, or to identify e
         decomposePipeline code |> withEcho "decompose_pipeline"
 
     [<McpServerTool>]
+    [<Description("""Run a full diagnostic analysis of the current session.
+
+Composes 6 feature modules into one coherent report: test failure narratives, cell dependency graph,
+eval provenance (staleness), ripple re-evaluation plan, Ghostwriter suggestions, and performance timeline.
+
+OUTPUT: A diagnostic report with:
+- All currently failing tests with causal change analysis (which symbols/files caused the failure)
+- Which cells are affected and their staleness (Fresh vs StaleUpstream)
+- A topological ripple plan showing the re-evaluation order
+- Ranked code suggestions from Ghostwriter based on current scope
+- Performance context with sparkline and P50/P95 percentiles
+- Severity classification: Info (no issues), Warning (perf anomaly), Critical (test failures)
+- A ≤10 line human-readable summary
+
+WORKFLOW: Call this after a test fails to get a complete picture of what happened, why, and what to do next.
+This replaces calling explain_test_failure + plan_ripple + get_eval_timeline + suggest_next_cell separately.""")>]
+    member _.diagnose() : Task<string> =
+        logger.LogDebug("MCP-TOOL: diagnose called")
+        diagnose ctx |> withEcho "diagnose"
+
+    [<McpServerTool>]
     [<Description("""Plan a cascade re-evaluation (ripple) for changed cells.
 
 Given a set of cell IDs that have changed, computes the topologically-ordered list of downstream cells

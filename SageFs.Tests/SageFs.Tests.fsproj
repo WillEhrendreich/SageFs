@@ -196,6 +196,7 @@
         <Compile Include="WhatIfTests.fs" />
         <Compile Include="GhostwriterTests.fs" />
         <Compile Include="SessionFilmstripTests.fs" />
+        <Compile Include="DiagnosticianTests.fs" />
         <Compile Include="Program.fs" />
     </ItemGroup>
 

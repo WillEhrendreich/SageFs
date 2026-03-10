@@ -669,6 +669,50 @@ let wireModelChangeHandlers
         |> List.iter ctx.TestEventBroadcast.Trigger)
     | false -> ()
 
+  /// After test results + features push, check if any test transitions
+  /// warrant an auto-diagnosis. Only fires when run is complete and there
+  /// are failure narratives (Passed→Failed transitions).
+  let handleDiagnosisPush () =
+    SseContext.withModel ctx (fun model ->
+      let lt = model.LiveTesting.TestState
+      let isRunComplete = not (TestRunPhase.isAnyRunning lt.RunPhases)
+      match isRunComplete && not lt.FailureNarratives.IsEmpty with
+      | true ->
+        let state = featurePushState.Value
+        let graph =
+          let cells =
+            state.EvalHistory
+            |> List.map (fun e ->
+              SageFs.Features.CellDependencyGraph.analyzeCell state.KnownBindings e.CellIndex e.Code e.Result)
+          SageFs.Features.CellDependencyGraph.buildGraph cells
+        let failuresWithNarratives =
+          lt.DiscoveredTests
+          |> Array.choose (fun tc ->
+            Map.tryFind tc.Id lt.FailureNarratives
+            |> Option.map (fun n -> (tc.Id, tc.DisplayName, n)))
+          |> Array.toList
+        let scopeBindings =
+          match state.CachedScope with
+          | Some snapshot ->
+            snapshot.ActiveBindings
+            |> Map.toList
+            |> List.map (fun (_key, info) ->
+              { SageFs.Features.ScopeBinding.Name = info.Name
+                SageFs.Features.ScopeBinding.TypeSig = info.TypeSig
+                SageFs.Features.ScopeBinding.Value = info.Value })
+          | None -> []
+        let report =
+          SageFs.Features.Diagnostician.Diagnostician.compose
+            graph failuresWithNarratives scopeBindings state.CachedTimeline
+        ctx.ServerTracker.AccumulateEvent(PushEvent.DiagnosisReady report)
+        let activeId = SseContext.activeSessionId ctx |> Option.defaultValue ""
+        match activeId.Length > 0 with
+        | true ->
+          ctx.TestEventBroadcast.Trigger(
+            SageFs.SseWriter.formatDiagnosisReadyEvent ctx.SseJsonOpts (Some activeId) report)
+        | false -> ()
+      | false -> ())
+
   stateChanged.Subscribe(fun change ->
     match change with
     | DaemonStateChange.ModelChanged (outputCount, diagCount) ->
@@ -680,6 +724,7 @@ let wireModelChangeHandlers
         handleTestTraceChange ()
         handleTestSummaryChange ()
         handleFeaturePush outputCount
+        handleDiagnosisPush ()
         match ctx.ServerTracker.Count > 0 with
         | true ->
           try

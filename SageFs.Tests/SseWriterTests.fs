@@ -304,6 +304,7 @@ let protocolSnapshotTests = testList "Protocol Snapshots" [
       let fa : FileAnnotations = {
         FilePath = "src/Foo.fs"; TestAnnotations = [||]
         CoverageAnnotations = [||]; InlineFailures = [||]; CodeLenses = [||]
+        PerformanceAnnotations = [||]
       }
       let root = serAndParse fa
       let mutable v = Unchecked.defaultof<JsonElement>
@@ -460,6 +461,7 @@ let sessionScopingTests = testList "SSE Session Scoping" [
       let fa : FileAnnotations = {
         FilePath = "src/Foo.fs"; TestAnnotations = [||]
         CoverageAnnotations = [||]; InlineFailures = [||]; CodeLenses = [||]
+        PerformanceAnnotations = [||]
       }
       let result = formatFileAnnotationsEvent productionSseOpts (Some "sess-abc") fa
       let data = extractSseData result |> Option.get

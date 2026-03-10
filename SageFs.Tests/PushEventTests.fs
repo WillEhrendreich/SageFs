@@ -16,7 +16,10 @@ let private emptyBatch =
 
 let private emptyAnnotations =
   { FilePath = ""; TestAnnotations = [||]; CoverageAnnotations = [||]
-    InlineFailures = [||]; CodeLenses = [||] }
+    InlineFailures = [||]; CodeLenses = [||]; PerformanceAnnotations = [||] }
+
+let private emptyDiagnosis =
+  SageFs.Features.Diagnostician.DiagnosticReport.empty
 
 let private allPushEvents = [
   PushEvent.DiagnosticsChanged []
@@ -27,6 +30,7 @@ let private allPushEvents = [
   PushEvent.TestSummaryChanged emptySummary
   PushEvent.TestResultsBatch emptyBatch
   PushEvent.FileAnnotationsUpdated emptyAnnotations
+  PushEvent.DiagnosisReady emptyDiagnosis
 ]
 
 [<Tests>]
@@ -34,9 +38,9 @@ let pushEventTagTests = testList "PushEvent.tag" [
   testCase "all variants have unique tags" (fun () ->
     let tags = allPushEvents |> List.map PushEvent.tag
     tags |> List.distinct |> Expect.hasLength "all unique" allPushEvents.Length)
-  testCase "tags are sequential 0..7" (fun () ->
+  testCase "tags are sequential 0..8" (fun () ->
     let tags = allPushEvents |> List.map PushEvent.tag
-    tags |> Expect.equal "sequential" [0;1;2;3;4;5;6;7])
+    tags |> Expect.equal "sequential" [0;1;2;3;4;5;6;7;8])
 ]
 
 [<Tests>]
@@ -83,4 +87,21 @@ let pushEventFormatForLlmTests = testList "PushEvent.formatForLlm" [
     let s = { emptySummary with Total = 100; Passed = 95; Failed = 5 }
     PushEvent.formatForLlm (PushEvent.TestSummaryChanged s)
     |> Expect.stringContains "total" "100 total")
+  testCase "diagnosis ready shows severity and counts" (fun () ->
+    let tid = SageFs.Features.LiveTesting.TestId.create "some.test" SageFs.Features.LiveTesting.TestFramework.Expecto
+    let report =
+      { emptyDiagnosis with
+          Severity = SageFs.Features.Diagnostician.DiagnosticSeverity.Critical
+          Failures = [
+            { SageFs.Features.Diagnostician.DiagnosedFailure.TestId = tid
+              TestName = "my test"
+              CausalCells = [0]
+              Staleness = Map.ofList [(0, SageFs.Features.EvalProvenance.Staleness.StaleUpstream [0])]
+              Narrative = { Summary = "broke"; LastPassedAt = None; TimeSinceLastPass = None
+                            CausalChanges = []; PropertyViolation = None } }
+          ]
+          AffectedCells = [(0, SageFs.Features.EvalProvenance.Staleness.Fresh)] }
+    let result = PushEvent.formatForLlm (PushEvent.DiagnosisReady report)
+    result |> Expect.stringContains "has failure count" "1 failure"
+    result |> Expect.stringContains "has severity icon" "🔴")
 ]

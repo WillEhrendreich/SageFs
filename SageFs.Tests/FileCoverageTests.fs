@@ -12,7 +12,7 @@ let private mkCovAnn line endLine endCol status testIds branchCov : CoverageLine
 
 let private mkFileAnns path covAnns : FileAnnotations =
   { FilePath = path; TestAnnotations = [||]; CoverageAnnotations = covAnns
-    InlineFailures = [||]; CodeLenses = [||] }
+    InlineFailures = [||]; CodeLenses = [||]; PerformanceAnnotations = [||] }
 
 [<Tests>]
 let tests =

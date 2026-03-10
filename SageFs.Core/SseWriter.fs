@@ -251,3 +251,21 @@ let formatDomainModelEvent (opts: JsonSerializerOptions) (sessionId: string opti
          |> List.toArray |}
   let json = JsonSerializer.Serialize(payload, opts) |> injectSessionId sessionId
   formatSseEvent "domain_model" json
+
+/// Format a DiagnosticReport as an SSE event string.
+let formatDiagnosisReadyEvent (opts: JsonSerializerOptions) (sessionId: string option) (report: Features.Diagnostician.DiagnosticReport) : string =
+  let payload =
+    {| Severity = sprintf "%A" report.Severity
+       FailureCount = report.Failures.Length
+       AffectedCells = report.AffectedCells
+       SuggestionCount = report.SuggestedFixes.Length
+       TopSuggestions =
+         report.SuggestedFixes
+         |> List.truncate 3
+         |> List.map (fun s -> {| Code = s.Code; Explanation = s.Explanation; Confidence = s.Confidence |})
+       Performance =
+         report.PerformanceContext
+         |> Option.map (fun s -> {| Sparkline = s.Sparkline; P50Ms = s.P50Ms; P95Ms = s.P95Ms |})
+       Summary = report.Summary |}
+  let json = JsonSerializer.Serialize(payload, opts) |> injectSessionId sessionId
+  formatSseEvent "diagnosis_ready" json

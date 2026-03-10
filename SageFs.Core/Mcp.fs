@@ -1835,6 +1835,23 @@ module McpTools =
           return formatFileCoverageResponse annotations testState
     }
 
+  /// Build a CellGraph from the current FeaturePushState.
+  let private buildCellGraphFromState (state: Features.FeatureHooks.FeaturePushState) : Features.CellDependencyGraph.CellGraph =
+    let cells =
+      state.EvalHistory
+      |> List.map (fun e ->
+        Features.CellDependencyGraph.analyzeCell state.KnownBindings e.CellIndex e.Code e.Result)
+    Features.CellDependencyGraph.buildGraph cells
+
+  /// Convert BindingScopeSnapshot active bindings to Ghostwriter ScopeBinding list.
+  let private toScopeBindings (snapshot: Features.BindingExplorer.BindingScopeSnapshot) : Features.ScopeBinding list =
+    snapshot.ActiveBindings
+    |> Map.toList
+    |> List.map (fun (_key, info) ->
+      { Features.ScopeBinding.Name = info.Name
+        TypeSig = info.TypeSig
+        Value = info.Value })
+
   let explainTestFailure (ctx: McpContext) (testName: string) : Task<string> =
     task {
       match ctx.GetElmModel with
@@ -1887,7 +1904,38 @@ module McpTools =
             | 0 -> return sprintf "Test(s) matching '%s' are not currently failing — no narrative available." testName
             | _ -> return sprintf "Test(s) matching '%s' are failing but no narrative was computed (may not have transitioned from passing)." testName
           | narrs ->
-            let resp = {| MatchCount = narrs.Length; Narratives = narrs |}
+            // Enrich with diagnostic report if feature state is available
+            let diagnostics =
+              match ctx.GetFeatureState with
+              | Some getState ->
+                let state = getState ()
+                let graph = buildCellGraphFromState state
+                let failuresForDiag =
+                  tests
+                  |> Array.choose (fun tc ->
+                    Map.tryFind tc.Id testState.FailureNarratives
+                    |> Option.map (fun n -> (tc.Id, tc.DisplayName, n)))
+                  |> Array.toList
+                let scopeBindings =
+                  match state.CachedScope with
+                  | Some snapshot -> toScopeBindings snapshot
+                  | None -> []
+                let report =
+                  Features.Diagnostician.Diagnostician.compose
+                    graph failuresForDiag scopeBindings state.CachedTimeline
+                Some {| Severity = report.Severity.ToString()
+                        AffectedCells = report.AffectedCells
+                        SuggestionCount = report.SuggestedFixes.Length
+                        TopSuggestions =
+                          report.SuggestedFixes
+                          |> List.truncate 3
+                          |> List.map (fun s -> {| Code = s.Code; Explanation = s.Explanation |})
+                        Performance =
+                          report.PerformanceContext
+                          |> Option.map (fun s -> {| Sparkline = s.Sparkline; P50Ms = s.P50Ms; P95Ms = s.P95Ms |})
+                        Summary = report.Summary |}
+              | None -> None
+            let resp = {| MatchCount = narrs.Length; Narratives = narrs; Diagnostics = diagnostics |}
             return JsonSerializer.Serialize(resp, liveTestJsonOpts)
     }
 
@@ -2132,23 +2180,6 @@ module McpTools =
     }
 
   // ── Feature Analysis MCP Tools (P15–P19) ─────────────────────
-
-  /// Build a CellGraph from the current FeaturePushState.
-  let private buildCellGraphFromState (state: Features.FeatureHooks.FeaturePushState) : Features.CellDependencyGraph.CellGraph =
-    let cells =
-      state.EvalHistory
-      |> List.map (fun e ->
-        Features.CellDependencyGraph.analyzeCell state.KnownBindings e.CellIndex e.Code e.Result)
-    Features.CellDependencyGraph.buildGraph cells
-
-  /// Convert BindingScopeSnapshot active bindings to Ghostwriter ScopeBinding list.
-  let private toScopeBindings (snapshot: Features.BindingExplorer.BindingScopeSnapshot) : Features.ScopeBinding list =
-    snapshot.ActiveBindings
-    |> Map.toList
-    |> List.map (fun (_key, info) ->
-      { Features.ScopeBinding.Name = info.Name
-        TypeSig = info.TypeSig
-        Value = info.Value })
 
   /// Convert EvalHistory to FilmstripEvent list.
   let private toFilmstripEvents (state: Features.FeatureHooks.FeaturePushState) : Features.FilmstripEvent list =
@@ -2524,4 +2555,92 @@ module McpTools =
           let lines = Features.EvalDiff.diffLines oldOutput newOutput
           let summary = Features.EvalDiff.summarize lines
           return Features.EvalDiff.formatSummary summary
+    }
+
+  /// Compose a full diagnostic report: joins test failures, cell graph,
+  /// provenance, ripple plan, suggestions, and performance context.
+  let diagnose (ctx: McpContext) : Task<string> =
+    task {
+      match ctx.GetElmModel, ctx.GetFeatureState with
+      | None, _ -> return "Diagnosis not available — Elm loop not started."
+      | _, None -> return "Diagnosis not available — no active session."
+      | Some getModel, Some getState ->
+        let model = getModel ()
+        let state = getState ()
+
+        let graph = buildCellGraphFromState state
+
+        // Collect all failing tests with their narratives
+        let testState = model.LiveTesting.TestState
+        let failuresWithNarratives =
+          testState.DiscoveredTests
+          |> Array.choose (fun tc ->
+            match Map.tryFind tc.Id testState.LastResults with
+            | Some r ->
+              match r.Result with
+              | Features.LiveTesting.TestResult.Failed _ ->
+                let narrative =
+                  match Map.tryFind tc.Id testState.FailureNarratives with
+                  | Some n -> n
+                  | None ->
+                    { Features.LiveTesting.FailureNarrative.LastPassedAt = None
+                      TimeSinceLastPass = None
+                      CausalChanges = []
+                      PropertyViolation = None
+                      Summary = "No narrative available" }
+                Some (tc.Id, tc.DisplayName, narrative)
+              | _ -> None
+            | None -> None)
+          |> Array.toList
+
+        // Get scope bindings for Ghostwriter suggestions
+        let scopeBindings =
+          match state.CachedScope with
+          | Some snapshot -> toScopeBindings snapshot
+          | None -> []
+
+        let report =
+          Features.Diagnostician.Diagnostician.compose
+            graph
+            failuresWithNarratives
+            scopeBindings
+            state.CachedTimeline
+
+        // Format as both structured JSON and human summary
+        let jsonData =
+          {| FailureCount = report.Failures.Length
+             Severity = report.Severity.ToString()
+             AffectedCellCount = report.AffectedCells.Length
+             RippleStepCount =
+               match report.RipplePlan with
+               | Some p -> p.Steps.Length
+               | None -> 0
+             SuggestionCount = report.SuggestedFixes.Length
+             Failures =
+               report.Failures
+               |> List.map (fun f ->
+                 {| TestName = f.TestName
+                    CausalCells = f.CausalCells
+                    CausalChanges =
+                      f.Narrative.CausalChanges
+                      |> List.map (fun c ->
+                        match c with
+                        | Features.LiveTesting.CausalChange.SymbolChanged s -> {| Kind = "symbol"; Name = s |}
+                        | Features.LiveTesting.CausalChange.FileChanged p -> {| Kind = "file"; Name = p |}
+                        | Features.LiveTesting.CausalChange.Unknown -> {| Kind = "unknown"; Name = "" |})
+                    PropertyViolation =
+                      f.Narrative.PropertyViolation
+                      |> Option.map (fun pv ->
+                        {| PropertyName = pv.PropertyName
+                           ShrunkCounterexample = pv.ShrunkCounterexample
+                           AlgebraicCategory = pv.AlgebraicCategory |}) |})
+             Suggestions =
+               report.SuggestedFixes
+               |> List.truncate 5
+               |> List.map (fun s ->
+                 {| Code = s.Code; Explanation = s.Explanation; Confidence = s.Confidence |})
+             Performance = report.PerformanceContext |> Option.map (fun s -> {| Sparkline = s.Sparkline; P50Ms = s.P50Ms; P95Ms = s.P95Ms |})
+             Summary = report.Summary |}
+
+        return JsonSerializer.Serialize(jsonData, liveTestJsonOpts)
     }

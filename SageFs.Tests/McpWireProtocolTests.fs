@@ -41,6 +41,7 @@ let mcpToolRegistrationTests = testList "MCP tool registration" [
       "check_fsharp_code"
       "create_session"
       "decompose_pipeline"
+      "diagnose"
       "disable_live_testing"
       "enable_live_testing"
       "explain_test_failure"

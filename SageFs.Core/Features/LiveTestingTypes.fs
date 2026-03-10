@@ -2966,12 +2966,29 @@ type TestCodeLens = {
   Command: CodeLensCommand
 }
 
+/// Per-cell eval performance annotation for editor gutter sparklines.
+type PerformanceAnnotation = {
+  /// Line in the source file where the ;; boundary begins.
+  Line: int
+  /// Cell index in the eval session.
+  CellIndex: int
+  /// Recent eval durations in ms (most recent last), up to 10 entries.
+  DurationsMs: float list
+  /// Sparkline string (Unicode block chars) for gutter display.
+  Sparkline: string
+  /// P50 of recent durations.
+  P50Ms: float
+  /// P95 of recent durations.
+  P95Ms: float
+}
+
 type FileAnnotations = {
   FilePath: string
   TestAnnotations: TestLineAnnotation array
   CoverageAnnotations: CoverageLineAnnotation array
   InlineFailures: InlineFailure array
   CodeLenses: TestCodeLens array
+  PerformanceAnnotations: PerformanceAnnotation array
 }
 
 module FailurePresentation =
@@ -3138,7 +3155,8 @@ module FileAnnotations =
       TestAnnotations = [||]
       CoverageAnnotations = [||]
       InlineFailures = [||]
-      CodeLenses = [||] }
+      CodeLenses = [||]
+      PerformanceAnnotations = [||] }
 
   let statusPriority = function
     | TestRunStatus.Failed _ -> 0
@@ -3239,7 +3257,8 @@ module FileAnnotations =
       TestAnnotations = testAnnotations
       CoverageAnnotations = coverageAnnotations
       InlineFailures = inlineFailures
-      CodeLenses = codeLenses }
+      CodeLenses = codeLenses
+      PerformanceAnnotations = [||] }
 
   /// Synthesize coverage annotations from dep graph + analysis cache when
   /// no explicit CoverageUpdated events have been dispatched.
