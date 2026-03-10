@@ -73,6 +73,7 @@ module RaylibMode =
     | NextFailingTest
     | PrevFailingTest
     | JumpToTest
+    | MarkAllStale
 
   /// Convert Raylib KeyboardKey to System.ConsoleKey for KeyMap lookup
   let raylibToConsoleKey (key: KeyboardKey) : System.ConsoleKey option =
@@ -144,6 +145,7 @@ module RaylibMode =
         | Some (UiAction.NextFailingTest) -> Some NextFailingTest
         | Some (UiAction.PrevFailingTest) -> Some PrevFailingTest
         | Some (UiAction.JumpToTest) -> Some JumpToTest
+        | Some (UiAction.MarkAllStale) -> Some MarkAllStale
         | Some (UiAction.Editor action) -> Some (Action action)
         | None ->
           // Ctrl+C not in keymap → copy selection
@@ -449,6 +451,8 @@ module RaylibMode =
           match JumpToTest.getSelectedTestLocation lastRegions scrollOff with
           | Some (file, line) -> JumpToTest.openInEditor file line
           | None -> ()
+        | MarkAllStale ->
+          client.PostAsync(sprintf "%s/api/live-testing/mark-all-stale" baseUrl, new System.Net.Http.StringContent("{}", System.Text.Encoding.UTF8, "application/json")) |> ignore
         | Action action ->
           // When Sessions pane is focused, remap movement keys to session navigation
           let remappedAction =

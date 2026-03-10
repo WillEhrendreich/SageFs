@@ -161,6 +161,7 @@ and [<RequireQualifiedAccess>] UiAction =
   | JumpToTest
   | NextFailingTest
   | PrevFailingTest
+  | MarkAllStale
 
 /// Controls how much information the status bar reveals.
 [<RequireQualifiedAccess>]
@@ -336,6 +337,9 @@ module UiAction =
       "TimeTravelGoLive", UiAction.TimeTravelGoLive
       "CycleDensity", UiAction.CycleDensity
       "JumpToTest", UiAction.JumpToTest
+      "NextFailingTest", UiAction.NextFailingTest
+      "PrevFailingTest", UiAction.PrevFailingTest
+      "MarkAllStale", UiAction.MarkAllStale
     ]
 
   /// O(1) lookup map built once from allFixedEntries
@@ -453,6 +457,8 @@ module KeyMap =
       // Failing test navigation
       KeyCombo.alt ConsoleKey.N, UiAction.NextFailingTest
       KeyCombo.alt ConsoleKey.P, UiAction.PrevFailingTest
+      // Mark all test results stale
+      KeyCombo.ctrlShift ConsoleKey.S, UiAction.MarkAllStale
     ] |> Map.ofList
 
   /// Merge user overrides onto defaults (overrides win)

@@ -39,6 +39,7 @@ let mcpToolRegistrationTests = testList "MCP tool registration" [
     let expected = set [
       "cancel_eval"
       "check_fsharp_code"
+      "coverage_intel"
       "create_session"
       "decompose_pipeline"
       "diagnose"
@@ -64,6 +65,7 @@ let mcpToolRegistrationTests = testList "MCP tool registration" [
       "get_recent_fsi_events"
       "get_startup_info"
       "hard_reset_fsi_session"
+      "impact_forecast"
       "list_sessions"
       "load_fsharp_script"
       "manage_scratch_pad"
@@ -76,6 +78,7 @@ let mcpToolRegistrationTests = testList "MCP tool registration" [
       "set_run_policy"
       "set_test_timeouts"
       "stop_session"
+      "suggest_next_action"
       "suggest_next_cell"
       "switch_session"
       "visualize_domain_model"

@@ -145,6 +145,7 @@ type SageFsMsg =
   | FileContentChanged of filePath: string * content: string
   | FcsTypeCheckCompleted of Features.LiveTesting.FcsTypeCheckResult
   | RestoreTestCache of Features.LiveTesting.LiveTestState
+  | MarkAllTestsStale
 
 /// Side effects the Elm loop can request.
 /// Wraps EditorEffect and TestCycleEffect for async execution.
@@ -889,6 +890,12 @@ module SageFsUpdate =
             LastResults = cachedState.LastResults
             LastGeneration = cachedState.LastGeneration })
       { model with LiveTesting = lt }, []
+
+    | SageFsMsg.MarkAllTestsStale ->
+      let lt = model.LiveTesting
+      let allTestIds = lt.TestState.DiscoveredTests |> Array.map (fun t -> t.Id) |> Set.ofArray
+      let lt' = recomputeStatuses lt (fun s -> { s with AffectedTests = Set.union s.AffectedTests allTestIds })
+      { model with LiveTesting = lt' }, []
 
   let updateWithInvariant (msg: SageFsMsg) (model: SageFsModel) : SageFsModel * SageFsEffect list =
     let model', effects = update msg model

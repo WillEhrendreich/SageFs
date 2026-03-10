@@ -402,6 +402,12 @@ let run (daemonInfo: DaemonInfo) = task {
             match JumpToTest.getSelectedTestLocation lastRegions scrollOff with
             | Some (file, line) -> JumpToTest.openInEditor file line
             | None -> ()
+          | Some TerminalCommand.MarkAllStale ->
+            try
+              let! _ = client.PostAsync(sprintf "%s/api/live-testing/mark-all-stale" baseUrl, new StringContent("{}", System.Text.Encoding.UTF8, "application/json"))
+              ()
+            with _ -> ()
+            render ()
           | Some (TerminalCommand.Action action) ->
             let remappedAction =
               match focusedPane = PaneId.Sessions with

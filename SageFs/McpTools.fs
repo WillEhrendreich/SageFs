@@ -805,6 +805,67 @@ This replaces calling explain_test_failure + plan_ripple + get_eval_timeline + s
         diagnose ctx |> withEcho "diagnose"
 
     [<McpServerTool>]
+    [<Description("""Analyze test coverage quality — find blind spots, correlate failures, assess diagnostic power.
+
+Composes failure narratives + IL instrumentation bitmaps + test dependency graph into per-failure coverage intelligence.
+
+OUTPUT: Per-failing-test analysis with:
+- Coverage verdict: WellCovered (>80% branches hit), PartialBlindSpot (40-80%), or DiagnosticBlindSpot (<40%)
+- Branch coverage percentage and uncovered branch locations
+- Causal symbols that changed before the failure
+- Correlated failures (other tests covering the same code paths)
+- Blind spot details: files, lines, and branch IDs with zero coverage
+
+WORKFLOW: Call after test failures to understand whether your tests actually cover the code that broke.
+Complements 'diagnose' (which tells you what failed) by telling you how well your tests can detect the failure.""")>]
+    member _.coverage_intel() : Task<string> =
+        logger.LogDebug("MCP-TOOL: coverage_intel called")
+        coverageIntel ctx |> withEcho "coverage_intel"
+
+    [<McpServerTool>]
+    [<Description("""Forecast performance impact for evaluated cells — detect regressions, measure downstream blast radius.
+
+Analyzes eval timeline statistics (P50/P95), cell dependency graph, and duration trends to predict whether
+a cell's performance trajectory is healthy, needs investigation, or requires refactoring.
+
+INPUT (optional): cellId — analyze a specific cell. If omitted, analyzes all cells in the dependency graph.
+
+OUTPUT: Per-cell analysis with:
+- P50/P95 latency percentiles
+- Duration trend slope (positive = getting slower)
+- Downstream cell count (blast radius of a regression)
+- Recommendation: Acceptable, Investigate, or Refactor
+- Regression causes: DependencyGrowth (downstream >15 cells), LatencySpike (P95 >2000ms), Unknown
+
+WORKFLOW: Call periodically or after slow evaluations to catch regressions before they compound.
+Pairs with 'suggest_next_action' which folds impact data into a prioritized action queue.""")>]
+    member _.impact_forecast([<Description("Optional cell ID to analyze. Omit to analyze all cells.")>] cellId: int) : Task<string> =
+        logger.LogDebug("MCP-TOOL: impact_forecast called for cell {cellId}", cellId)
+        let cellOpt = match cellId with | 0 -> None | n -> Some n
+        impactForecast ctx cellOpt |> withEcho "impact_forecast"
+
+    [<McpServerTool>]
+    [<Description("""Get a prioritized action queue — the intelligent "what should I do next?" recommendation.
+
+Composes coverage intelligence + impact forecasts + stale cell detection into a ranked queue of actions,
+sorted by priority (lowest number = most urgent). Also computes a session health grade.
+
+OUTPUT:
+- Session health grade: Healthy, NeedsAttention (with reason), or Critical (with reason)
+- Ranked action list (top 10) with:
+  - Kind: InvestigateFailure, WriteTest, InvestigatePerformance, ReEvaluateCell, RunTests
+  - Priority score (lower = more urgent): failures at 10, blind spots at 30, perf at 50, stale at 70, tests at 90
+  - Human-readable reason explaining why this action matters
+- Aggregate counts: total failures, blind spots, regressions
+
+WORKFLOW: This is the top-level intelligence tool — call it when you want ONE answer about what to do next.
+It internally calls coverage_intel and impact_forecast, so you don't need to call those separately.
+Replaces manual triage of test results, coverage, and performance data.""")>]
+    member _.suggest_next_action() : Task<string> =
+        logger.LogDebug("MCP-TOOL: suggest_next_action called")
+        suggestNextAction ctx |> withEcho "suggest_next_action"
+
+    [<McpServerTool>]
     [<Description("""Plan a cascade re-evaluation (ripple) for changed cells.
 
 Given a set of cell IDs that have changed, computes the topologically-ordered list of downstream cells

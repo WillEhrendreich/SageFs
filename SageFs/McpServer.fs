@@ -1465,6 +1465,13 @@ let mapLiveTestingRoutes (app: WebApplication) (rctx: RouteContext) =
       do! rawJsonResponse ctx result
     }) :> Task
   ) |> ignore
+  app.MapPost("/api/live-testing/mark-all-stale", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
+    withErrorHandling ctx (fun () -> task {
+      let! result = SageFs.McpTools.markAllTestsStale rctx.McpContext
+      ctx.Response.StatusCode <- 202
+      do! jsonResponse ctx 202 {| message = result |}
+    }) :> Task
+  ) |> ignore
 
 let mapAnalysisRoutes (app: WebApplication) (rctx: RouteContext) =
   app.MapPost("/api/explore", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->

@@ -1624,7 +1624,21 @@ module McpTools =
         | _, None -> return sprintf "Unknown policy: %s. Valid: every, save, demand, disabled." policy
     }
 
-  let setTestTimeouts (_ctx: McpContext) (perTestSeconds: float option) (globalRunSeconds: float option) : Task<string> =
+  let markAllTestsStale (ctx: McpContext) : Task<string> =
+    task {
+      match ctx.Dispatch with
+      | None -> return "Cannot mark tests stale — Elm loop not started."
+      | Some dispatch ->
+        dispatch SageFsMsg.MarkAllTestsStale
+        match ctx.GetElmModel with
+        | Some getModel ->
+          let count = (getModel ()).LiveTesting.TestState.DiscoveredTests.Length
+          return sprintf "All %d test results marked stale." count
+        | None ->
+          return "All test results marked stale."
+    }
+
+  let setTestTimeouts(_ctx: McpContext) (perTestSeconds: float option) (globalRunSeconds: float option) : Task<string> =
     task {
       let mutable error = None
       let parts = System.Collections.Generic.List<string>()
@@ -1852,6 +1866,30 @@ module McpTools =
         TypeSig = info.TypeSig
         Value = info.Value })
 
+  /// Convert a CoverageVerdict to its JSON string representation.
+  let private verdictString (v: Features.CoverageIntel.CoverageVerdict) =
+    match v with
+    | Features.CoverageIntel.WellCovered -> "WellCovered"
+    | Features.CoverageIntel.PartialBlindSpot -> "PartialBlindSpot"
+    | Features.CoverageIntel.DiagnosticBlindSpot -> "DiagnosticBlindSpot"
+
+  /// Convert a CoverageIntelReport to a JSON-serializable anonymous record.
+  let toCoverageIntelJson (report: Features.CoverageIntel.CoverageIntelReport) =
+    {| CoveragePercent = report.CoveragePercent
+       CoveredBranches = report.CoveredBranches
+       TotalBranches = report.TotalBranches
+       Verdict = verdictString report.Verdict
+       BlindSpots =
+         report.BlindSpots |> List.map (fun g ->
+           {| FilePath = g.FilePath
+              Line = g.Line
+              EndLine = g.EndLine
+              BranchId = g.BranchId
+              NearestCoveredLine = g.NearestCoveredLine |})
+       CorrelatedFailures =
+         report.CorrelatedFailures |> List.map Features.LiveTesting.TestId.value
+       Summary = Features.CoverageIntel.CoverageIntel.summarize report |}
+
   let explainTestFailure (ctx: McpContext) (testName: string) : Task<string> =
     task {
       match ctx.GetElmModel with
@@ -1859,6 +1897,14 @@ module McpTools =
       | Some getModel ->
         let model = getModel ()
         let testState = model.LiveTesting.TestState
+        let allMaps =
+          model.LiveTesting.InstrumentationMaps
+          |> Map.values
+          |> Seq.collect id
+          |> Array.ofSeq
+        let bitmaps = testState.TestCoverageBitmaps
+        let depGraph = model.LiveTesting.DepGraph
+        let hasMaps = allMaps.Length > 0
         let matchingTests =
           testState.DiscoveredTests
           |> Array.filter (fun tc ->
@@ -1883,13 +1929,28 @@ module McpTools =
                     {| PropertyName = pv.PropertyName
                        ShrunkCounterexample = pv.ShrunkCounterexample
                        AlgebraicCategory = pv.AlgebraicCategory |})
+                let coverageIntel =
+                  match hasMaps with
+                  | false -> None
+                  | true ->
+                    let causalFiles =
+                      n.CausalChanges
+                      |> List.choose (fun c ->
+                        match c with
+                        | Features.LiveTesting.CausalChange.FileChanged f -> Some f
+                        | _ -> None)
+                    let report =
+                      Features.CoverageIntel.CoverageIntel.composeForFailure
+                        tc.Id tc.DisplayName n causalFiles allMaps bitmaps depGraph
+                    Some (toCoverageIntelJson report)
                 {| TestId = Features.LiveTesting.TestId.value tc.Id
                    DisplayName = tc.DisplayName
                    Summary = n.Summary
                    LastPassedAt = n.LastPassedAt
                    TimeSinceLastPass = n.TimeSinceLastPass |> Option.map (fun ts -> ts.TotalSeconds)
                    CausalChanges = changes
-                   PropertyViolation = propViolation |}))
+                   PropertyViolation = propViolation
+                   CoverageIntel = coverageIntel |}))
           match narratives with
           | [||] ->
             let failingCount =
@@ -2641,6 +2702,196 @@ module McpTools =
                  {| Code = s.Code; Explanation = s.Explanation; Confidence = s.Confidence |})
              Performance = report.PerformanceContext |> Option.map (fun s -> {| Sparkline = s.Sparkline; P50Ms = s.P50Ms; P95Ms = s.P95Ms |})
              Summary = report.Summary |}
+
+        return JsonSerializer.Serialize(jsonData, liveTestJsonOpts)
+    }
+
+  /// Coverage intelligence: joins failure narratives + coverage bitmaps + dep graph
+  /// into blind spot analysis and correlated failure discovery.
+  let coverageIntel (ctx: McpContext) : Task<string> =
+    task {
+      match ctx.GetElmModel with
+      | None -> return "Coverage intel not available — Elm loop not started."
+      | Some getModel ->
+        let model = getModel ()
+        let cycleState = model.LiveTesting
+        let testState = cycleState.TestState
+
+        let failuresWithNarratives =
+          testState.DiscoveredTests
+          |> Array.choose (fun tc ->
+            match Map.tryFind tc.Id testState.LastResults with
+            | Some r ->
+              match r.Result with
+              | Features.LiveTesting.TestResult.Failed _ ->
+                let narrative =
+                  match Map.tryFind tc.Id testState.FailureNarratives with
+                  | Some n -> n
+                  | None ->
+                    { Features.LiveTesting.FailureNarrative.LastPassedAt = None
+                      TimeSinceLastPass = None
+                      CausalChanges = []
+                      PropertyViolation = None
+                      Summary = "No narrative available" }
+                Some (tc.Id, tc.DisplayName, narrative)
+              | _ -> None
+            | None -> None)
+          |> Array.toList
+
+        let allMaps =
+          cycleState.InstrumentationMaps
+          |> Map.values |> Seq.collect id |> Seq.toArray
+
+        let causalFileResolver (symbols: string list) =
+          symbols
+          |> List.collect (fun sym ->
+            cycleState.DepGraph.PerFileIndex
+            |> Map.toList
+            |> List.choose (fun (file, symMap) ->
+              match Map.containsKey sym symMap with
+              | true -> Some file
+              | false -> None))
+          |> List.distinct
+
+        let reports =
+          Features.CoverageIntel.CoverageIntel.compose
+            failuresWithNarratives causalFileResolver allMaps
+            testState.TestCoverageBitmaps cycleState.DepGraph
+
+        let jsonData =
+          reports |> List.map (fun r ->
+            {| TestId = r.TestId
+               TestName = r.TestName
+               Verdict = r.Verdict.ToString()
+               CoveragePercent = r.CoveragePercent
+               CoveredBranches = r.CoveredBranches
+               TotalBranches = r.TotalBranches
+               CausalSymbols = r.CausalSymbols
+               BlindSpots = r.BlindSpots |> List.map (fun g ->
+                 {| File = g.FilePath; Line = g.Line; Branch = g.BranchId |})
+               CorrelatedFailures = r.CorrelatedFailures |> List.map string
+               Summary = Features.CoverageIntel.CoverageIntel.summarize r |})
+
+        return JsonSerializer.Serialize(jsonData, liveTestJsonOpts)
+    }
+
+  /// Impact forecast: joins eval timeline + cell dependency graph + performance data
+  /// into regression detection and downstream impact analysis.
+  let impactForecast (ctx: McpContext) (cellIdOpt: int option) : Task<string> =
+    task {
+      match ctx.GetElmModel, ctx.GetFeatureState with
+      | None, _ -> return "Impact forecast not available — Elm loop not started."
+      | _, None -> return "Impact forecast not available — no active session."
+      | Some getModel, Some getState ->
+        let model = getModel ()
+        let state = getState ()
+        let graph = buildCellGraphFromState state
+
+        let targetCells =
+          match cellIdOpt with
+          | Some cid -> [ cid ]
+          | None -> graph.Cells |> Map.toList |> List.map fst
+
+        let reports =
+          targetCells
+          |> List.map (fun cellId ->
+            let downstream = Features.CellDependencyGraph.transitiveStale graph cellId
+            let timeline = state.CachedTimeline
+            let timelineStats =
+              Features.EvalTimeline.timelineStats 20 state.CachedTimeline
+            let durations =
+              timeline.Entries
+              |> List.filter (fun e -> e.CellId = cellId)
+              |> List.map (fun e -> float e.DurationMs)
+              |> List.rev |> List.truncate 10
+            let p50 = timelineStats.P50Ms |> Option.defaultValue 0.0
+            let p95 = timelineStats.P95Ms |> Option.defaultValue 0.0
+            Features.ImpactForecast.ImpactForecast.analyzeCell cellId p50 p95 durations downstream)
+
+        let jsonData =
+          reports |> List.map (fun r ->
+            {| CellId = r.CellId
+               P50Ms = r.P50Ms
+               P95Ms = r.P95Ms
+               DurationTrend = r.DurationTrendMs
+               DownstreamCellCount = r.DownstreamCellCount
+               Recommendation = r.Recommendation.ToString()
+               RegressionCauses = r.RegressionCauses |> List.map (fun c -> c.ToString())
+               Summary = Features.ImpactForecast.ImpactForecast.summarize r |})
+
+        return JsonSerializer.Serialize(jsonData, liveTestJsonOpts)
+    }
+
+  /// Action prioritizer: merges all intelligence into a ranked "what to do next" queue.
+  let suggestNextAction (ctx: McpContext) : Task<string> =
+    task {
+      match ctx.GetElmModel, ctx.GetFeatureState with
+      | None, _ -> return "Action suggestions not available — Elm loop not started."
+      | _, None -> return "Action suggestions not available — no active session."
+      | Some getModel, Some getState ->
+        let model = getModel ()
+        let state = getState ()
+
+        let cycleState = model.LiveTesting
+        let testState = cycleState.TestState
+
+        // Build coverage intel reports
+        let failuresWithNarratives =
+          testState.DiscoveredTests
+          |> Array.choose (fun tc ->
+            match Map.tryFind tc.Id testState.LastResults with
+            | Some r ->
+              match r.Result with
+              | Features.LiveTesting.TestResult.Failed _ ->
+                let narrative =
+                  match Map.tryFind tc.Id testState.FailureNarratives with
+                  | Some n -> n
+                  | None ->
+                    { Features.LiveTesting.FailureNarrative.LastPassedAt = None
+                      TimeSinceLastPass = None; CausalChanges = []; PropertyViolation = None
+                      Summary = "No narrative available" }
+                Some (tc.Id, tc.DisplayName, narrative)
+              | _ -> None
+            | None -> None)
+          |> Array.toList
+
+        let allMaps =
+          cycleState.InstrumentationMaps
+          |> Map.values |> Seq.collect id |> Seq.toArray
+
+        let coverageReports =
+          Features.CoverageIntel.CoverageIntel.compose
+            failuresWithNarratives
+            (fun _ -> [])
+            allMaps testState.TestCoverageBitmaps cycleState.DepGraph
+
+        // Build impact forecast reports
+        let graph = buildCellGraphFromState state
+        let impactReports =
+          graph.Cells |> Map.toList |> List.map (fun (cellId, _) ->
+            let downstream = Features.CellDependencyGraph.transitiveStale graph cellId
+            let stats = Features.EvalTimeline.timelineStats 20 state.CachedTimeline
+            let p50 = stats.P50Ms |> Option.defaultValue 0.0
+            let p95 = stats.P95Ms |> Option.defaultValue 0.0
+            Features.ImpactForecast.ImpactForecast.analyzeCell cellId p50 p95 [] downstream)
+
+        // Stale cells: any cell in the graph (all are candidates for the action queue)
+        let staleCellIds = graph.Cells |> Map.toList |> List.map fst
+
+        let report =
+          Features.ActionPrioritizer.ActionPrioritizer.compose
+            coverageReports impactReports staleCellIds
+
+        let jsonData =
+          {| HealthGrade = report.HealthGrade.ToString()
+             TotalFailures = report.TotalFailures
+             TotalBlindSpots = report.TotalBlindSpots
+             TotalRegressions = report.TotalRegressions
+             Actions = report.Actions |> List.truncate 10 |> List.map (fun a ->
+               {| Kind = a.Kind.ToString()
+                  Priority = a.Priority
+                  Reason = a.Reason |})
+             Summary = Features.ActionPrioritizer.ActionPrioritizer.summarize report |}
 
         return JsonSerializer.Serialize(jsonData, liveTestJsonOpts)
     }

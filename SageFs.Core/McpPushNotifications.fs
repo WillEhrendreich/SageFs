@@ -27,6 +27,10 @@ type PushEvent =
   | FileAnnotationsUpdated of annotations: FileAnnotations
   /// Diagnosis report ready — composed analysis of failures, staleness, suggestions, performance.
   | DiagnosisReady of report: SageFs.Features.Diagnostician.DiagnosticReport
+  /// Impact alert — a cell's performance or downstream impact crossed a threshold.
+  | ImpactAlert of report: SageFs.Features.ImpactForecast.ImpactForecastReport
+  /// Prioritized action queue ready — ranked "what to do next" for the session.
+  | ActionQueueReady of report: SageFs.Features.ActionPrioritizer.ActionQueueReport
 
 /// Whether an event REPLACES the previous instance of the same kind
 /// (state/set semantics) or ACCUMULATES alongside it (delta/list semantics).
@@ -45,6 +49,8 @@ module PushEvent =
     | PushEvent.TestResultsBatch _ -> MergeStrategy.Replace
     | PushEvent.FileAnnotationsUpdated _ -> MergeStrategy.Replace
     | PushEvent.DiagnosisReady _ -> MergeStrategy.Replace
+    | PushEvent.ImpactAlert _ -> MergeStrategy.Replace
+    | PushEvent.ActionQueueReady _ -> MergeStrategy.Replace
 
   /// Discriminator tag used for Replace dedup.
   let tag = function
@@ -57,6 +63,8 @@ module PushEvent =
     | PushEvent.TestResultsBatch _ -> 6
     | PushEvent.FileAnnotationsUpdated _ -> 7
     | PushEvent.DiagnosisReady _ -> 8
+    | PushEvent.ImpactAlert _ -> 9
+    | PushEvent.ActionQueueReady _ -> 10
 
   /// Format a single event for LLM consumption — actionable, concise.
   let formatForLlm = function
@@ -97,6 +105,22 @@ module PushEvent =
         | SageFs.Features.Diagnostician.DiagnosticSeverity.Info -> "🟢"
       sprintf "%s diagnosis: %d failure(s), %d affected cell(s), %d suggestion(s)"
         severityIcon report.Failures.Length report.AffectedCells.Length report.SuggestedFixes.Length
+    | PushEvent.ImpactAlert report ->
+      let icon =
+        match report.Recommendation with
+        | SageFs.Features.ImpactForecast.ImpactRecommendation.Refactor -> "🔴"
+        | SageFs.Features.ImpactForecast.ImpactRecommendation.Investigate -> "⚠️"
+        | SageFs.Features.ImpactForecast.ImpactRecommendation.Acceptable -> "✅"
+      sprintf "%s impact: cell %d — P95=%.0fms, %d downstream"
+        icon report.CellId report.P95Ms report.DownstreamCellCount
+    | PushEvent.ActionQueueReady report ->
+      let icon =
+        match report.HealthGrade with
+        | SageFs.Features.ActionPrioritizer.SessionHealthGrade.Critical _ -> "🔴"
+        | SageFs.Features.ActionPrioritizer.SessionHealthGrade.NeedsAttention _ -> "⚠️"
+        | SageFs.Features.ActionPrioritizer.SessionHealthGrade.Healthy -> "✅"
+      sprintf "%s action queue: %d action(s), %d failure(s), %d blind spot(s)"
+        icon report.Actions.Length report.TotalFailures report.TotalBlindSpots
 
 type AccumulatedEvent = {
   Timestamp: DateTimeOffset
