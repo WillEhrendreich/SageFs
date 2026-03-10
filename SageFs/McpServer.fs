@@ -906,6 +906,13 @@ let mapExecutionRoutes (app: WebApplication) (rctx: RouteContext) =
         match json.RootElement.TryGetProperty("block_start_line") with
         | true, prop -> Some (prop.GetInt32())
         | false, _ -> None
+      // Notify editor plugins that eval is starting so they can mark decorations stale
+      match filePath, blockStartLine with
+      | Some fp, Some bsl when not (System.String.IsNullOrEmpty(fp)) ->
+        let sid = SseContext.activeSessionId rctx.SseContext
+        let startedStr = SageFs.SseWriter.formatEvalStartedEvent rctx.SseContext.SseJsonOpts sid fp bsl
+        rctx.SseContext.TestEventBroadcast.Trigger(startedStr)
+      | _ -> ()
       let sw = System.Diagnostics.Stopwatch.StartNew()
       let! result = SageFs.McpTools.sendFSharpCode rctx.McpContext "cli-integrated" code SageFs.McpTools.OutputFormat.Text None wd filePath evalMode blockStartLine
       sw.Stop()
@@ -914,7 +921,7 @@ let mapExecutionRoutes (app: WebApplication) (rctx: RouteContext) =
       match filePath, blockStartLine with
       | Some fp, Some bsl when not (System.String.IsNullOrEmpty(fp)) ->
         let sid = SseContext.activeSessionId rctx.SseContext
-        let sseStr = SageFs.SseWriter.formatEvalResultEvent rctx.SseContext.SseJsonOpts sid fp bsl result true
+        let sseStr = SageFs.SseWriter.formatEvalResultEvent rctx.SseContext.SseJsonOpts sid fp bsl result true (sw.ElapsedMilliseconds |> float)
         rctx.SseContext.TestEventBroadcast.Trigger(sseStr)
       | _ -> ()
       do! jsonResponse ctx 200 {| success = true; result = result |}

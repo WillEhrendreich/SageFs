@@ -192,15 +192,26 @@ let formatEvalDiffEvent (opts: JsonSerializerOptions) (sessionId: string option)
   let json = JsonSerializer.Serialize(payload, opts) |> injectSessionId sessionId
   formatSseEvent "eval_diff" json
 
+/// Format an eval started notification as an SSE event.
+/// Emitted at the start of each /exec call so editor plugins can mark decorations stale.
+let formatEvalStartedEvent (opts: JsonSerializerOptions) (sessionId: string option) (filePath: string) (blockStartLine: int) : string =
+  let json =
+    JsonSerializer.Serialize(
+      {| filePath = filePath
+         blockStartLine = blockStartLine |}, opts)
+    |> injectSessionId sessionId
+  formatSseEvent "eval_started" json
+
 /// Format an eval result as an SSE event for inline decorations.
-/// Emitted after each /exec call with filePath and blockStartLine populated.
-let formatEvalResultEvent (opts: JsonSerializerOptions) (sessionId: string option) (filePath: string) (blockStartLine: int) (output: string) (success: bool) : string =
+/// Emitted after each /exec call with filePath, blockStartLine, and durationMs populated.
+let formatEvalResultEvent (opts: JsonSerializerOptions) (sessionId: string option) (filePath: string) (blockStartLine: int) (output: string) (success: bool) (durationMs: float) : string =
   let json =
     JsonSerializer.Serialize(
       {| filePath = filePath
          blockStartLine = blockStartLine
          output = output
-         success = success |}, opts)
+         success = success
+         durationMs = durationMs |}, opts)
     |> injectSessionId sessionId
   formatSseEvent "eval_result" json
 
