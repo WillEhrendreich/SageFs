@@ -216,6 +216,8 @@
         <Compile Include="TestsPaneTests.fs" />
         <Compile Include="TimeoutsTests.fs" />
         <Compile Include="EnvCheckTests.fs" />
+        <Compile Include="FsiOutputParserTests.fs" />
+        <Compile Include="SseSerializationBenchmarks.fs" />
         <Compile Include="Program.fs" />
     </ItemGroup>
 
