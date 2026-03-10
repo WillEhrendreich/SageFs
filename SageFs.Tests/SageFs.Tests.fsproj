@@ -200,6 +200,7 @@
         <Compile Include="CoverageIntelTests.fs" />
         <Compile Include="ImpactForecastTests.fs" />
         <Compile Include="ActionPrioritizerTests.fs" />
+        <Compile Include="MarkAllStaleTests.fs" />
         <Compile Include="Program.fs" />
     </ItemGroup>
 
