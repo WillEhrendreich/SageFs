@@ -6,6 +6,7 @@ open Vscode
 
 open SageFs.Vscode.LiveTestingTypes
 open SageFs.Vscode.JsHelpers
+open SageFs.Vscode.SafeInterop
 
 module Client = SageFs.Vscode.SageFsClient
 
@@ -16,12 +17,14 @@ let [<Literal>] private EndRunDebounceMs = 2000
 type TestAdapter = {
   Controller: TestController
   Refresh: VscStateChange list -> unit
+  UpdateSourceLocations: obj array -> unit
   Reset: unit -> unit
   Dispose: unit -> unit
 }
 
 let create
   (getClient: unit -> Client.Client option)
+  (getNarratives: unit -> Map<string, VscFailureNarrative>)
   : TestAdapter =
 
   let controller = Tests.createTestController "sagefs" "SageFs Live Tests"
@@ -72,6 +75,7 @@ let create
 
   let applyResults (results: VscTestResult array) =
     let run = getOrCreateRun ()
+    let narratives = getNarratives ()
     for result in results do
       let id = VscTestId.value result.Id
       match testItemMap.TryGetValue(id) with
@@ -81,14 +85,22 @@ let create
         | VscTestOutcome.Passed ->
           run.passed(item, durationMs)
         | VscTestOutcome.Failed msg ->
-          let message = newTestMessage msg
+          let enrichedMsg =
+            match Map.tryFind id narratives with
+            | Some n when n.Summary <> "" -> sprintf "%s\nℹ️ %s" msg n.Summary
+            | _ -> msg
+          let message = newTestMessage enrichedMsg
           run.failed(item, message, durationMs)
         | VscTestOutcome.Skipped _ ->
           run.skipped item
         | VscTestOutcome.Running ->
           run.started item
         | VscTestOutcome.Errored msg ->
-          let message = newTestMessage msg
+          let enrichedMsg =
+            match Map.tryFind id narratives with
+            | Some n when n.Summary <> "" -> sprintf "%s\nℹ️ %s" msg n.Summary
+            | _ -> msg
+          let message = newTestMessage enrichedMsg
           run.failed(item, message, durationMs)
         | VscTestOutcome.Stale ->
           run.skipped item
@@ -120,6 +132,27 @@ let create
       (fun req token -> runHandler req token),
       true)
 
+  let updateSourceLocations (locations: obj array) =
+    for loc in locations do
+      let testName = fieldString "TestName" loc |> Option.defaultValue ""
+      let filePath = fieldString "FilePath" loc
+      let startLine = fieldInt "StartLine" loc
+      match testName with
+      | "" -> ()
+      | _ ->
+        let matchingItem =
+          testItemMap
+          |> Seq.tryFind (fun kvp ->
+            kvp.Key = testName || kvp.Value.label = testName)
+          |> Option.map (fun kvp -> kvp.Value)
+        match matchingItem, filePath with
+        | Some item, Some fp ->
+          item.uri <- Some (uriFile fp)
+          match startLine with
+          | Some line -> item.range <- Some (newRange (line - 1) 0 (line - 1) 0)
+          | None -> ()
+        | _ -> ()
+
   let refresh (changes: VscStateChange list) =
     for change in changes do
       match change with
@@ -140,6 +173,7 @@ let create
 
   { Controller = controller
     Refresh = refresh
+    UpdateSourceLocations = updateSourceLocations
     Reset = fun () ->
       endActiveRun ()
       testItemMap.Clear ()

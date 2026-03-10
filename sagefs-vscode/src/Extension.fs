@@ -1373,7 +1373,10 @@ let activate (context: ExtensionContext) =
     let diagLogger = Some (fun (msg: string) -> (getOutput()).appendLine (sprintf "[Diagnostics SSE] %s" msg))
     diagnosticsDisposable <- Some (Diag.start c.mcpPort dc diagLogger)
     // TestController for VS Code Test Explorer
-    let adapter = TestCtrl.create (fun () -> client)
+    let adapter = TestCtrl.create (fun () -> client) (fun () ->
+      liveTestListener
+      |> Option.map (fun l -> (l.State ()).FailureNarratives)
+      |> Option.defaultValue Map.empty)
     testAdapter <- Some adapter
     // Initialize inline test decorations
     TestDeco.initialize ()
@@ -1424,6 +1427,11 @@ let activate (context: ExtensionContext) =
         |> Option.iter (fun ed ->
           InlineDeco.markDecorationsStale ed
           InlineDeco.showEvalInProgress ed line)
+      OnSourceLocationsUpdate = fun locations ->
+        adapter.UpdateSourceLocations locations
+      OnFileAnnotations = fun data ->
+        handleFileAnnotations data
+      OnFailureNarratives = fun _narratives -> ()
     }
     let reconnectHandler = Some (fun () ->
       c.log "SSE reconnected — refreshing status..."

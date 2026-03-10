@@ -133,6 +133,33 @@ let parseResultsBatch (data: obj) : VscLiveTestEvent list =
       VscLiveTestEvent.TestResultBatch (testResults, freshness) ])
   |> Option.defaultValue []
 
+/// Parse a single CausalChange object from server JSON
+let parseCausalChange (obj: obj) : VscCausalChange =
+  { Kind = fieldString "Kind" obj |> Option.orElse (fieldString "kind" obj) |> Option.defaultValue ""
+    Name = fieldString "Name" obj |> Option.orElse (fieldString "name" obj) |> Option.defaultValue "" }
+
+/// Parse a single FailureNarrative from server JSON
+let parseFailureNarrative (obj: obj) : VscFailureNarrative =
+  let testId =
+    fieldString "TestId" obj
+    |> Option.orElse (fieldString "testId" obj)
+    |> Option.defaultValue ""
+  let changes =
+    fieldArray "CausalChanges" obj
+    |> Option.orElse (fieldArray "causalChanges" obj)
+    |> Option.defaultValue [||]
+    |> Array.map parseCausalChange
+  { TestId = testId
+    Summary = fieldString "Summary" obj |> Option.orElse (fieldString "summary" obj) |> Option.defaultValue ""
+    TimeSinceLastPass = fieldString "TimeSinceLastPass" obj |> Option.orElse (fieldString "timeSinceLastPass" obj) |> Option.defaultValue ""
+    CausalChanges = changes }
+
+/// Parse failure_narratives SSE event (JSON array of narratives)
+let parseFailureNarratives (data: obj) : VscFailureNarrative array =
+  tryCastArray data
+  |> Option.defaultValue [||]
+  |> Array.map parseFailureNarrative
+
 // ── Listener lifecycle ───────────────────────────────────────
 
 type LiveTestingCallbacks = {
@@ -144,6 +171,9 @@ type LiveTestingCallbacks = {
   OnFeatureEvent: FeatureCallbacks option
   OnEvalResult: string -> int -> string -> float -> unit
   OnEvalStarted: string -> int -> unit
+  OnSourceLocationsUpdate: obj array -> unit
+  OnFileAnnotations: obj -> unit
+  OnFailureNarratives: VscFailureNarrative array -> unit
 }
 
 type LiveTestingListener = {
@@ -228,6 +258,17 @@ let start (port: int) (callbacks: LiveTestingCallbacks) (onReconnect: (unit -> u
         match filePath with
         | "" -> ()
         | fp -> callbacks.OnEvalResult fp bsl output durationMs
+      | "test_source_locations" ->
+        let locations = fieldArray "Locations" data |> Option.defaultValue [||]
+        callbacks.OnSourceLocationsUpdate locations
+      | "file_annotations" ->
+        callbacks.OnFileAnnotations data
+      | "failure_narratives" ->
+        let narratives = parseFailureNarratives data
+        let narrativeMap =
+          narratives |> Array.fold (fun m n -> Map.add n.TestId n m) state.FailureNarratives
+        state <- { state with FailureNarratives = narrativeMap }
+        callbacks.OnFailureNarratives narratives
       | _ ->
         ())
 

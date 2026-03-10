@@ -160,6 +160,20 @@ type VscStateChange =
   | CoverageRefreshed of Map<string, VscFileCoverage>
   | SummaryChanged of VscTestSummary
 
+/// A causal change that may have caused a test failure
+type VscCausalChange = {
+  Kind: string
+  Name: string
+}
+
+/// Enriched failure narrative for a test that transitioned Passed→Failed
+type VscFailureNarrative = {
+  TestId: string
+  Summary: string
+  TimeSinceLastPass: string
+  CausalChanges: VscCausalChange array
+}
+
 /// Aggregate live testing state — pure data, no functions
 type VscLiveTestState = {
   Tests: Map<VscTestId, VscTestInfo>
@@ -170,6 +184,7 @@ type VscLiveTestState = {
   Enabled: VscLiveTestingEnabled
   LastTiming: (float * float * float) option
   Freshness: VscResultFreshness
+  FailureNarratives: Map<string, VscFailureNarrative>
 }
 
 module VscLiveTestState =
@@ -182,6 +197,7 @@ module VscLiveTestState =
     Enabled = VscLiveTestingEnabled.LiveTestingOff
     LastTiming = None
     Freshness = VscResultFreshness.Fresh
+    FailureNarratives = Map.empty
   }
 
   /// Pure fold: event → state → (new state * changes for UI)
@@ -272,3 +288,7 @@ module VscLiveTestState =
   /// Look up a specific test result
   let resultFor (testId: VscTestId) (state: VscLiveTestState) : VscTestResult option =
     Map.tryFind testId state.Results
+
+  /// Look up a failure narrative by test ID string
+  let narrativeFor (testIdStr: string) (state: VscLiveTestState) : VscFailureNarrative option =
+    Map.tryFind testIdStr state.FailureNarratives
