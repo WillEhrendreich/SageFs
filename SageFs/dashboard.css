@@ -470,6 +470,54 @@ h1 {
   50% { opacity: 0.6; }
 }
 
+/* ── Alarm Banner ─────────────────────────────────────────────── */
+
+.alarm-banner {
+  background: color-mix(in srgb, var(--fg-red, #e06c75) 12%, var(--bg-panel, #1e1e2e));
+  border-left: 3px solid var(--fg-red, #e06c75);
+  padding: 0.5rem 1rem;
+  margin: 0.5rem 0;
+  border-radius: 0 4px 4px 0;
+}
+
+.alarm-banner-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.alarm-title {
+  font-weight: bold;
+  color: var(--fg-red, #e06c75);
+}
+
+.alarm-dismiss {
+  margin-left: auto;
+  background: transparent;
+  border: 1px solid var(--fg-red, #e06c75);
+  color: var(--fg-red, #e06c75);
+  cursor: pointer;
+  padding: 2px 8px;
+  border-radius: 3px;
+  font-size: 0.8rem;
+  transition: background 0.2s;
+}
+
+.alarm-dismiss:hover {
+  background: color-mix(in srgb, var(--fg-red, #e06c75) 20%, transparent);
+}
+
+.alarm-entry {
+  margin: 0.25rem 0 0 1.5rem;
+  font-size: 0.85rem;
+  color: var(--fg-default);
+}
+
+.alarm-phase {
+  color: var(--fg-yellow, #e5c07b);
+  font-weight: 500;
+}
+
 /* ── Theme Picker ─────────────────────────────────────────────── */
 
 .theme-select {

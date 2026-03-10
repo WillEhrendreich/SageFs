@@ -222,6 +222,9 @@ let createStreamHandler
     let mutable lastOutputHash = 0
     let mutable lastThemeName = defaultThemeName
 
+    // Per-connection alarm buffer — populated from shared infra buffer each push
+    // (the shared buffer is the source of truth; we read it on every render)
+
     let pushState () = task {
       // === FULL-PAGE MORPH: "The Tao of Datastar" ===
       // Build a complete DashboardSnapshot from current state, render it all
@@ -317,6 +320,8 @@ let createStreamHandler
         | false -> renderSessionContextEmpty
       // Build bindings explorer panel
       let bindingsPanel = renderBindingsPanel (q.GetBindingScopeSnapshot ())
+      // Build alarm panel from shared buffer
+      let alarmPanel = renderAlarmBanner (infra.SystemAlarmBuffer.Value)
       // Build output + sessions from Elm regions
       let! outputPanel, sessionsPanel, sessionPicker = task {
         match q.GetElmRegions () with
@@ -372,6 +377,7 @@ let createStreamHandler
         WorkingDir = workingDir
         WarmupProgress = q.GetWarmupProgress currentSessionId
         EvalStats = evalStatsView
+        AlarmPanel = alarmPanel
         DaemonHealth = daemonHealthPanel
         FailureNarrativesPanel = failureNarrativesPanel
         DiagnosticsPanel = diagnosticsPanel
@@ -976,6 +982,13 @@ let createEndpoints
     yield post "/dashboard/hard-reset" (createResetHandler a.HardResetSession)
     yield post "/dashboard/clear-output" createClearOutputHandler
     yield post "/dashboard/discover-projects" createDiscoverHandler
+    // Dismiss all system alarms — clears the shared buffer and re-triggers SSE push.
+    yield post "/dashboard/dismiss-alarm" (fun ctx -> task {
+      infra.SystemAlarmBuffer.Value <- []
+      infra.TriggerStateChange |> Option.iter (fun trigger -> trigger ())
+      Response.sseStartResponse ctx |> ignore
+      do! ssePatchNode ctx (renderAlarmBanner [])
+    })
     yield post "/dashboard/set-theme" (fun ctx -> task {
       try
         use! doc = readSignalsJsonSized ctx

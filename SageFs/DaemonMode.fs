@@ -1649,6 +1649,18 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
     StateChanged = Some stateChangedEvent.Publish
     ConnectionTracker = Some connectionTracker
     SessionThemes = sessionThemes
+    SystemAlarmBuffer =
+      // Intercept SystemAlarm events and prepend to the buffer (max 3, newest-first).
+      let buf : SageFs.Server.DashboardTypes.SystemAlarmEntry list ref = ref []
+      stateChangedEvent.Publish.Add(fun change ->
+        match change with
+        | SystemAlarm (phase, msg) ->
+          let entry : SageFs.Server.DashboardTypes.SystemAlarmEntry =
+            { Phase = phase; Message = msg; Timestamp = System.DateTimeOffset.UtcNow }
+          buf.Value <- (entry :: buf.Value) |> List.truncate 3
+        | _ -> ())
+      buf
+    TriggerStateChange = Some (fun () -> stateChangedEvent.Trigger (ModelChanged (0, 0)))
     GetCompletions = Some (fun (sessionId: string) (code: string) (cursorPos: int) -> task {
       match String.IsNullOrEmpty(sessionId) with
       | true -> return []

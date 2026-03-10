@@ -46,6 +46,7 @@ module DomIds =
   let [<Literal>] BindingsPanel = "bindings-panel"
   let [<Literal>] DaemonHealth = "daemon-health"
   let [<Literal>] FailureNarratives = "failure-narratives"
+  let [<Literal>] AlarmBanner = "alarm-banner"
 
 /// Datastar signal names — shared between Ds.signal init and Ds.bind/Ds.show refs.
 [<RequireQualifiedAccess>]
@@ -480,6 +481,13 @@ let overrideSessionStatuses
       | SessionState.Uninitialized -> "stopped"
     { s with Status = liveStatus; StatusMessage = getStatusMsg s.Id })
 
+/// A single system alarm entry — phase name, exception message, and when it fired.
+type SystemAlarmEntry = {
+  Phase: string
+  Message: string
+  Timestamp: DateTimeOffset
+}
+
 /// State queries — always-present read accessors for dashboard rendering.
 type DashboardQueries = {
   GetSessionState: string -> SessionState
@@ -532,6 +540,11 @@ type DashboardInfra = {
   ConnectionTracker: ConnectionTracker option
   SessionThemes: Collections.Concurrent.ConcurrentDictionary<string, string>
   GetCompletions: (string -> string -> int -> Threading.Tasks.Task<Features.AutoCompletion.CompletionItem list>) option
+  /// Shared alarm buffer — populated when ElmLoop fires OnSystemAlarm.
+  /// Shared across all SSE connections; first-dismiss clears for all.
+  SystemAlarmBuffer: SystemAlarmEntry list ref
+  /// Triggers a state-change push on all connected SSE streams (used by dismiss route).
+  TriggerStateChange: (unit -> unit) option
 }
 
 /// Complete snapshot of all dashboard state needed for a single full-page render.
@@ -543,6 +556,7 @@ type DashboardSnapshot = {
   WorkingDir: string
   WarmupProgress: string
   EvalStats: EvalStatsView
+  AlarmPanel: XmlNode
   DaemonHealth: XmlNode
   FailureNarrativesPanel: XmlNode
   DiagnosticsPanel: XmlNode

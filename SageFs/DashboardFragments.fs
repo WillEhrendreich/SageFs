@@ -116,6 +116,39 @@ let renderSessionStatus (sessionState: string) (sessionId: string) (workingDir: 
       yield! warmupNode
     ]
 
+/// Render system alarm banner — visible when ElmLoop throws at any catch site.
+/// Empty list renders a hidden placeholder so Datastar can morph it away.
+let renderAlarmBanner (alarms: SystemAlarmEntry list) =
+  match alarms with
+  | [] ->
+    Elem.div [ Attr.id DomIds.AlarmBanner; Attr.style "display:none;" ] []
+  | _ ->
+    let alarmEntries =
+      alarms |> List.map (fun alarm ->
+        Elem.div [ Attr.class' "alarm-entry" ] [
+          Elem.span [ Attr.class' "alarm-phase meta" ] [
+            Text.raw (sprintf "[%s]" alarm.Phase)
+          ]
+          Elem.span [ Attr.class' "alarm-message" ] [
+            Text.raw (sprintf " %s" alarm.Message)
+          ]
+          Elem.span [ Attr.class' "alarm-ts meta" ] [
+            Text.raw (sprintf " @ %s" (alarm.Timestamp.ToLocalTime().ToString("HH:mm:ss")))
+          ]
+        ])
+    Elem.div [ Attr.id DomIds.AlarmBanner; Attr.class' "alarm-banner" ] [
+      yield Elem.div [ Attr.class' "alarm-banner-header" ] [
+        Elem.span [ Attr.class' "alarm-icon" ] [ Text.raw "🚨" ]
+        Elem.span [ Attr.class' "alarm-title" ] [ Text.raw " System Alarm" ]
+        Elem.button
+          [ Attr.class' "alarm-dismiss"
+            Attr.title "Dismiss all alarms"
+            Ds.onClick (Ds.post "/dashboard/dismiss-alarm") ]
+          [ Text.raw "✕ dismiss" ]
+      ]
+      yield! alarmEntries
+    ]
+
 let private renderDisableWarmupAutoOpenButton (style: string) =
   Elem.button
     [ Attr.class' "eval-btn"
@@ -887,6 +920,8 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
     ]
     // Daemon health bar — version, uptime, memory, session health
     snap.DaemonHealth
+    // System alarm banner — visible when ElmLoop throws; dismiss clears all
+    snap.AlarmPanel
     // Failure narratives panel — recent test failures with context
     snap.FailureNarrativesPanel
     // Diagnostics panel — live FSI compile errors and warnings
