@@ -101,6 +101,74 @@ Use hard reset to pick up source file changes:
 - SageFs sends keepalive pings every 15 seconds
 - Corporate proxies may need explicit WebSocket/SSE passthrough configuration
 
+### Eval watchdog — detecting daemon crash during eval
+
+All editors (VS Code, Neovim, Visual Studio, TUI) now include an **eval
+watchdog**. If the daemon becomes unresponsive during an evaluation:
+
+1. A timer starts when you send an eval command
+2. If no response arrives within the timeout, the editor shows a notification:
+   *"Evaluation interrupted — daemon may have crashed"*
+3. The notification offers **Restart Daemon** and **Show Output** actions
+
+The watchdog uses a monotonic generation ID to prevent race conditions — if you
+start a new eval before the watchdog fires, the old timer is silently cancelled.
+
+**If you see phantom "interrupted" dialogs**, update to v0.6.50+ which includes
+the monotonic ID fix.
+
+---
+
+## Environment Variable Overrides
+
+All timeout values can be overridden via environment variables. Set them before
+starting SageFs (or in your shell profile).
+
+| Variable | Default | Description |
+|:---------|:--------|:------------|
+| `SAGEFS_WARMUP_INACTIVITY_SECONDS` | `30` | Max seconds of inactivity during warmup before declaring failure |
+| `SAGEFS_WARMUP_MAX_MINUTES` | `10` | Absolute max warmup duration |
+| `SAGEFS_PER_TEST_TIMEOUT_SECONDS` | `5` | Per-test timeout (also configurable at runtime via MCP `set_test_timeouts`) |
+| `SAGEFS_BUILD_TIMEOUT_MINUTES` | `10` | Max time for `dotnet build` during hard reset |
+| `SAGEFS_WORKER_HTTP_READ_SECONDS` | `30` | HTTP read timeout for daemon→worker communication |
+| `SAGEFS_WORKER_STARTUP_TIMEOUT_MS` | `120000` | Worker process startup timeout (milliseconds) |
+| `SAGEFS_BIND_HOST` | `127.0.0.1` | Bind address (set to `0.0.0.0` for Docker) |
+| `SAGEFS_MCP_PORT` | `37749` | MCP server port |
+
+**Example** — slow CI machine with large project:
+
+```bash
+export SAGEFS_WARMUP_MAX_MINUTES=20
+export SAGEFS_BUILD_TIMEOUT_MINUTES=15
+export SAGEFS_PER_TEST_TIMEOUT_SECONDS=15
+sagefs --proj MyBigProject.Tests/MyBigProject.Tests.fsproj
+```
+
+The `ValidTimeout` type enforces a 1s–10min range. Values outside this range
+are silently ignored and the default is used.
+
+---
+
+## Warmup Progress Phases
+
+During session warmup, SageFs emits `warmup_progress` SSE events. Your editor's
+status bar shows which phase is active:
+
+| Phase | Status Bar Text | What's happening |
+|:------|:---------------|:-----------------|
+| `creating_fsi` | Creating FSI... | Spawning the F# Interactive process |
+| `scanning_sources` | Scanning sources... | Reading project source files |
+| `loading_assemblies` | Loading assemblies... | Loading referenced NuGet/project assemblies |
+| `opening_namespaces` | Opening namespaces (N/M)... | Auto-opening project namespaces in FSI |
+| `finalizing` | Finalizing... | Final validation, session ready |
+
+Each event includes `{Step, Total, Progress, Phase, Message}`. The `Progress`
+field is a 0.0–1.0 float for progress bars.
+
+**If warmup stalls**: Check the daemon console window for compilation errors or
+missing packages. Increase `SAGEFS_WARMUP_INACTIVITY_SECONDS` if your project
+has slow NuGet restores.
+
 ---
 
 ## Platform-Specific Issues

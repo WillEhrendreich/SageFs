@@ -1,225 +1,115 @@
 # SageFs Weaknesses and Gaps Analysis
 
-A comprehensive review of SageFs identifying UX gaps, error handling issues, configuration discoverability problems, and resilience weaknesses.
+A comprehensive review of SageFs identifying UX gaps, error handling issues,
+configuration discoverability problems, and resilience weaknesses.
+Updated after Sprints 20–23 (v0.6.x).
 
-## 1. ERROR MESSAGES WITHOUT ACTIONABLE GUIDANCE
+---
 
-### VS Code Extension
+## Resolved in v0.6–v0.7 (Sprints 20–23)
 
-**File:** sagefs-vscode/src/Extension.fs (lines 624, 656, 813)
+Items previously listed as critical gaps that have been addressed:
 
-#### Error 1: "SageFs daemon failed to start after 120s"
-`
-showErrorMessage "SageFs daemon failed to start after 120s." 
-    [| "Retry"; "Show Output"; "Check Installation" |]
-`
-GAPS:
-- No indication of WHY it failed (missing dotnet SDK? Wrong .NET version? .fsproj not found?)
-- "Check Installation" button does NOTHING (no guidance provided)
-- User must infer from raw output logs
-- No link to troubleshooting docs
+| # | Original Gap | Resolution | Sprint |
+|---|-------------|-----------|--------|
+| 1 | Error dialogs with no actionable guidance | Actionable error dialogs shipped for all editors; `SageFsError.suggestedAction()` provides recovery text for all 49 error cases | S20 |
+| 2 | No docs/troubleshooting links | TROUBLESHOOTING.md created; error dialogs link to docs | S21 |
+| 3 | Timeouts hardcoded, not configurable | 6 env var overrides (`SAGEFS_WARMUP_*`, `SAGEFS_PER_TEST_*`, `SAGEFS_BUILD_*`); `ValidTimeout` DU enforces 1s–10min range; per-test timeout runtime-configurable via MCP | S22–23 |
+| 4 | No progress indication during warmup | 5-phase warmup progress SSE events (`creating_fsi` → `scanning_sources` → `loading_assemblies` → `opening_namespaces` → `finalizing`); status bar in all editors | S22 |
+| 5 | Mid-eval crash loses result silently | Eval watchdog detects daemon crash during eval (VS Code S21, Neovim S21, VS S23, TUI S23); monotonic ID prevents phantom interruption dialogs | S21–23 |
+| 6 | No version compatibility check | Version gate: VS Code checks `apiVersion` on `/health`; mismatch shows actionable update instructions | S22 |
+| 7 | Auto-picks wrong project silently | `DaemonTargetFinder` deterministic priority: `.slnx` > `.sln` > test `.fsproj` > first alphabetically; Neovim `:SageFsSwitchProject` for manual override | S21 |
+| 8 | No health check command | Health check in all editors; `/api/health` returns typed `SageFsError` with `toJson()` including `suggestedAction` | S20–22 |
+| 9 | Daemon stderr not captured | VS Code and VS capture daemon stderr on startup; shown in timeout error dialog | S21 |
+| 10 | No error middleware | `wrapErrorMiddleware` catches eval pipeline exceptions; converts to safe `EvalResponse` | S23 |
+| 11 | `isClientError` misclassified errors | Bug fixed — correctly distinguishes 4xx client errors from server/gateway errors | S22 |
 
-#### Error 2: "Cannot reach SageFs daemon"
-`
-showErrorMessage "Cannot reach SageFs daemon. Is it running?" 
-    [| "Show Output"; "Restart" |]
-`
-GAPS:
-- Assumes user knows what "running" means
-- No option to check daemon health/status
-- If daemon crashed mid-eval, no hint about recovery
-- No indication daemon may have crashed (vs. slow startup)
+---
 
-#### Error 3: "SageFs not activated"
-`
-showErrorMessage "SageFs not activated." [| "Retry"; "Show Output" |]
-`
-GAPS:
-- Does NOT explain what "activated" means
-- No hint that opening an F# project is required
-- No suggestion to check if .fsproj exists
+## REMAINING WEAKNESSES
 
-### VS Extension
+### 1. SSE RECONNECTION GAPS
 
-**File:** sagefs-vs/SageFs.VisualStudio/Commands/DaemonCommands.cs
+**SSE stream does not replay missed events.** When an SSE connection drops and
+reconnects, events emitted during the disconnection window are lost. No
+`Last-Event-Id` / replay mechanism exists.
 
-#### Error 4: "No solution is open"
-`
-await output.WriteLineAsync("✗ No solution is open. Open a solution first, then start the daemon.");
-`
-GAPS:
-- Written ONLY to output channel (hidden by default)
-- No pop-up notification shown
-- User must actively check output pane to see error
+**Impact**: Test results or eval responses emitted while the editor is
+disconnected never appear. The user must re-trigger the action.
 
-#### Error 5: DaemonTargetFinder error
-From DaemonTargetFinder.fs: "No F# projects found. Open a folder with .fsproj files first."
-GAPS:
-- Only in output pane
-- No UI notification
-- Multi-project solutions: silently picks first test project or first alphabetically
-- User never offered choice
+**Workaround**: Poll `/api/live-testing/status` or `/api/health` after
+reconnection to resync state.
 
-### General Pattern
-NONE of these messages offer:
-- Links to docs/troubleshooting
-- Automatic diagnostic capture (dotnet version, SDK info)
-- Recommended next steps (only passive button list)
-- Copy-paste commands to try
-- Links to dashboard/logs
+**VS Extension SSE errors still only in Debug output.** The VS extension's
+`SseClient.cs` logs reconnection errors to `System.Diagnostics.Debug.WriteLine`
+— invisible unless a debugger is attached. VS Code and Neovim have better
+reconnection UX.
 
+### 2. VS EXTENSION FEATURE PARITY
 
-## 2. TIMEOUT/RETRY PATTERNS AND SLOW MACHINE HANDLING
+The Visual Studio extension still lags behind VS Code and Neovim:
 
-### Timeout Values
+| Feature | VS Code | Neovim | Visual Studio |
+|---------|:-------:|:------:|:-------------:|
+| Eval history / timeline | ✅ | ✅ | 🔜 |
+| Export session as .fsx | ✅ | ✅ | 🔜 |
+| Run policy configuration | ✅ | ✅ | 🔜 |
+| Coverage gutter signs | ✅ | ✅ | 🔜 |
+| Code completions | ✅ | ✅ | 🔜 |
+| Dependency graph view | ✅ | ✅ | 🔜 |
+| Version gate | ✅ | ➖ | 🔜 |
+| Getting Started walkthrough | ✅ | ➖ | 🔜 |
+| Settings UI | ✅ | ✅ | ❌ |
 
-**sagefs-vscode/src/Extension.fs:**
-- Line 619: ttempts > 120 → 120 seconds max for daemon startup (1s polling)
-- Line 707: ttempts < 30 → 60 seconds max for session warmup (2s polling)
+### 3. CONFIGURATION DISCOVERABILITY
 
-**SageFs/Program.fs:**
-- TimeSpan.FromSeconds(3.0) → 3s HTTP timeout (will fail on slow machines with 30s startup)
+**VS Code — still missing:**
+- No JSON schema file for settings (no IDE autocomplete for `sagefs.*`)
+- No `sagefs.daemonStartupTimeout` setting (must use env var)
+- No `sagefs.hotReloadEnabled` toggle (always on)
+- No `sagefs.testCategoryPolicy` setting
 
-**sagefs-vs/SageFs.VisualStudio.Editor/SseClient.cs:**
-- Timeout = TimeSpan.FromSeconds(75) → 75s HTTP timeout
-- Backoff: 1s, 2s, 4s, 8s, 16s, 30s (exponential with cap)
+**VS Extension — NO Settings UI.** All configuration requires env vars.
 
-### Problems
-1. **Not configurable** — Users on slow machines cannot adjust timeouts
-2. **No progress indication** — During 120s wait, only timestamp shown
-3. **Silent failures** — Error shown AFTER 2 minutes of waiting
-4. **No cancellation** — User cannot interrupt wait
-5. **No health check** — Cannot distinguish "stuck" from "just slow"
-6. **Binary retry** — Only "Retry" (from start) or nothing
+**Env var documentation gap:** The 6 timeout env vars exist in the code but are
+only documented in TROUBLESHOOTING.md, not in `sagefs --help` or editor
+settings descriptions.
 
-### Missing Features
-- No sagefs.daemonStartupTimeout config
-- No verbose startup logging option
-- No "Check daemon status" command (fast ping)
+### 4. INSTALLATION & ONBOARDING
 
+- No `sagefs --check-environment` diagnostic command
+- No `.fsproj` validation on startup (empty folder fails silently)
+- First-time warmup (30–60s) documented in TROUBLESHOOTING.md but still
+  surprises non-VS-Code users — walkthrough is VS Code only
+- Neovim has no Getting Started walkthrough equivalent
 
-## 3. CONFIGURATION DISCOVERABILITY
+### 5. RAYLIB GUI GAPS
 
-### VS Code Settings (package.json)
+- Raylib GUI connects to an existing daemon but cannot spawn one — user must
+  start daemon separately via CLI or editor
+- No keybinding reference within the GUI window
+- No settings/preferences UI
 
-**Exists:**
-- mcpPort (default 37749)
-- dashboardPort (default 37750)
-- autoStart (default true)
-- projectPath (empty)
-- logLevel (error/info/debug)
-- inlineResultTimeout (30000ms)
-- cellHighlight (true)
-- density (full/normal/minimal)
-- typeExplorerRoot (empty)
+---
 
-**MISSING:**
-- No JSON schema file (no IDE autocomplete)
-- No enum descriptions for logLevel
-- No sagefs.daemonStartupTimeout (hardcoded 120s)
-- No sagefs.enableSessionWarmupLogging
-- No sagefs.hotReloadEnabled (always on)
-- No sagefs.testCategoryPolicy
-
-**Environment variables exist but undocumented:**
-- SageFs_MCP_PORT
-- SAGEFS_BIND_HOST
-
-### VS Extension
-**NO Settings UI found** — All configuration is hardcoded.
-
-
-## 4. DAEMON CRASH MID-EVAL: ERROR RECOVERY PATH
-
-### SSE Reconnection (sagefs-vs/SageFs.VisualStudio.Editor/SseClient.cs)
-
-`csharp
-catch (Exception ex) {
-    System.Diagnostics.Debug.WriteLine(
-        $"[SageFs] SSE reconnect error: {ex.GetType().Name}: {ex.Message}");
-}
-`
-
-GAPS:
-- Exception ONLY logged to Debug output (not user-facing)
-- If daemon crashes during eval, UI hangs silently
-- No partial recovery tracking (eval result lost)
-- Reconnect just retries stream, doesn't verify daemon responsive
-- Timing ambiguous (network issue vs. daemon crash?)
-
-### What Happens When Daemon Crashes Mid-Eval
-1. Daemon crashes
-2. SSE stream ends
-3. SseClient catches exception, logs to Debug only
-4. Starts exponential backoff (1s, 2s, ... 30s)
-5. UI shows NO feedback (user assumes still evaluating)
-6. Eval result NEVER appears (no timeout shown)
-7. After 30s backoff, reconnects
-8. Old eval command times out server-side, stale state
-
-
-## 5. FIRST PROJECT DETECTION AND MULTI-PROJECT SOLUTIONS
-
-### DaemonTargetFinder Logic (sagefs-vs/SageFs.VisualStudio.Core/DaemonTargetFinder.fs)
-
-With 10+ .fsproj files:
-1. Looks for one with "Test" in name
-2. If not found, picks fsproj.[0] (first alphabetically)
-3. User NEVER sees the choice
-4. If alphabetically first is wrong, user must manually set sagefs.projectPath
-
-### Problems
-- Silent selection with no prompt
-- Heuristic is fragile (misses Suite.fsproj, Specs.fsproj, E2E.fsproj)
-- No persistence (repicks on every workspace open)
-- No workspace setting to save choice
-
-### Scenario: 15-project solution
-Alphabetically first is probably Benchmarks.fsproj. User starts daemon and all evals run against benchmark code, not the app.
-
-**Result: User confused why evals run against wrong project.**
-
-
-## 6. INSTALLATION VERIFICATION: END-TO-END
-
-### Documented Prerequisites
-File: Readme.md (line 75)
-`
-**Prerequisites:** [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0). That's it.
-`
-
-### Gaps
-1. No version info (what if user has .NET 6? Too old?)
-2. No installation verification tool
-3. No sagefs --check-environment diagnostic
-4. No .fsproj validation (user can open empty folder, fails silently)
-5. No version compatibility check (if CLI version 0.5 + extension 0.6, no warning until error)
-6. Warmup requirements undocumented (30-120s first session) — users expect instant startup
-7. No progress during warmup
-8. VS Extension has no Settings page
-
-
-## CRITICAL GAPS SUMMARY
+## CURRENT GAPS SUMMARY
 
 | Category | Issue | Severity |
 |----------|-------|----------|
-| Error Messages | 7 dialogs with no actionable guidance | HIGH |
-| Error Messages | No docs/troubleshooting links | HIGH |
-| Timeouts | Hardcoded 120s, not configurable | MEDIUM |
-| Timeouts | No progress indication | MEDIUM |
-| Timeouts | 3s HTTP timeout fails on slow machines | MEDIUM |
-| Configuration | No JSON schema | LOW |
-| Configuration | VS 2022 has NO Settings UI | HIGH |
-| Resilience | SSE errors only in Debug output | HIGH |
-| Resilience | Mid-eval crash loses result silently | CRITICAL |
-| Project Detection | Auto-picks wrong project silently | HIGH |
-| Installation | No verification tool | MEDIUM |
-| Installation | No version compatibility check | MEDIUM |
+| Resilience | SSE reconnect doesn’t replay missed events | HIGH |
+| Resilience | VS SSE reconnect errors only in Debug output | MEDIUM |
+| Feature Parity | VS extension missing 9 features vs. VS Code | HIGH |
+| Configuration | No JSON schema for VS Code settings | LOW |
+| Configuration | VS extension has no Settings UI | MEDIUM |
+| Configuration | Env var timeouts not in `--help` output | LOW |
+| Onboarding | No `--check-environment` diagnostic | MEDIUM |
+| Onboarding | First-time warmup surprise (non-VS-Code editors) | MEDIUM |
+| Raylib GUI | Cannot spawn daemon; no in-app keybinding help | LOW |
 
 ## TOP 5 RECOMMENDATIONS
 
-1. Add health check command showing version, .NET info, daemon status
-2. Improve error dialogs: add docs links, specific next steps, diagnostic info
-3. Make timeouts configurable with UI slider
-4. Show dialog for multi-project solutions
-5. Show notification on SSE disconnect with "Restart Daemon" button
+1. ~~Add health check command~~ ✅ Done — all editors
+2. ~~Improve error dialogs~~ ✅ Done — `SageFsError.suggestedAction()` covers 49 cases
+3. ~~Make timeouts configurable~~ ✅ Done — 6 env vars + `ValidTimeout` DU
+4. Implement SSE `Last-Event-Id` replay to prevent lost events on reconnect
+5. Close VS extension feature gap (eval history, coverage gutters, settings UI)

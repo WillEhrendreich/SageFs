@@ -72,6 +72,11 @@ available in your editor and discover features you might not know about.
 | Actionable error notifications | ✅ | ✅ | ✅ | ✅ |
 | Output channel / logs | ✅ | ✅ | ✅ | ✅ |
 | OpenTelemetry export | ✅ | ✅ | ✅ | ✅ |
+| Warmup progress display | ✅ | ✅ | ✅ | ✅ |
+| Typed error display (`SageFsError`) | ✅ | ✅ | ✅ | ✅ |
+| Eval watchdog (crash detection) | ✅ | ✅ | ✅ | ✅ |
+| Version gate (API compat check) | ✅ | ➖ | 🔜 | ➖ |
+| Daemon stderr capture | ✅ | ➖ | ✅ | ➖ |
 
 ## Onboarding
 
