@@ -278,14 +278,12 @@ type FailureNarrativesPanelView = {
 
 module FailureNarrativesPanelView =
   /// Build from a list of (testName, FailureNarrative) pairs.
-  /// Filters out entries with no diagnostic context and caps display at 10.
+  /// Caps display at 10; all failures are shown (diagnostic context is optional).
   let fromNarratives (pairs: (string * Features.LiveTesting.FailureNarrative) list) : FailureNarrativesPanelView =
     let all = pairs |> List.map (fun (name, narr) -> FailureNarrativeEntry.fromNarrative name narr)
-    let meaningful = all |> List.filter FailureNarrativeEntry.isMeaningful
-    let suppressed = all.Length - meaningful.Length
-    { Entries = meaningful |> List.truncate 10
+    { Entries = all |> List.truncate 10
       TotalFailureCount = all.Length
-      SuppressedCount = suppressed }
+      SuppressedCount = 0 }
 
 /// Pipeline stage outcome — success or failure with an error message.
 [<Struct>]

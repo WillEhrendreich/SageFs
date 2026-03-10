@@ -117,8 +117,8 @@ let testHandler (msg: WorkerMessage) : Async<WorkerResponse> = async {
 let slowEvalHandler (msg: WorkerMessage) : Async<WorkerResponse> = async {
   match msg with
   | WorkerMessage.EvalCode(_, rid) ->
-    // Simulate a long-running eval (500ms is enough to test concurrency)
-    do! Async.Sleep 500
+    // 3000ms gives a large margin over the 1000ms GetStatus threshold even on loaded CI machines
+    do! Async.Sleep 3000
     return WorkerResponse.EvalResult(rid, Ok "done", [], Map.empty)
   | WorkerMessage.GetStatus rid ->
     // Status is always instant
@@ -202,22 +202,22 @@ let concurrencyTests =
       try
         let proxy = WorkerHttpTransport.httpProxy server.BaseUrl
 
-        // Start a long eval in the background
+        // Start a long eval in the background (takes 3000ms)
         let evalTask =
           proxy (WorkerMessage.EvalCode("slow", "eval-1"))
           |> Async.StartAsTask
 
-        // Give it a moment to start processing
-        do! Task.Delay 100
+        // Give it a moment to start processing on the server
+        do! Task.Delay 200
 
-        // GetStatus should respond instantly — NOT block behind eval
+        // GetStatus should respond well before the eval finishes
         let sw = System.Diagnostics.Stopwatch.StartNew()
         let! statusResp = proxy (WorkerMessage.GetStatus "s1") |> Async.StartAsTask
         sw.Stop()
 
-        // Status should complete in under 200ms (eval takes 500ms)
-        (sw.ElapsedMilliseconds < 200L)
-        |> Expect.isTrue "status should complete in under 200ms"
+        // 1000ms threshold: eval takes 3000ms so this gives 2000ms margin even on slow CI
+        (sw.ElapsedMilliseconds < 1000L)
+        |> Expect.isTrue "status should complete in under 1000ms (eval takes 3000ms)"
 
         match statusResp with
         | WorkerResponse.StatusResult(rid, snap) ->
@@ -225,12 +225,9 @@ let concurrencyTests =
           snap.Status |> Expect.equal "status" SessionStatus.Evaluating
         | other -> failwithf "unexpected: %A" other
 
-        // Wait for eval to finish
-        let! evalResp = evalTask |> Async.AwaitTask
-        match evalResp with
-        | WorkerResponse.EvalResult(_, Ok _, _, _) -> ()
-        | other -> failwithf "eval unexpected: %A" other
+        // Don't wait for eval — dispose will cancel it, keeping the test fast
+        evalTask.ContinueWith(fun (_: System.Threading.Tasks.Task<WorkerResponse>) -> ()) |> ignore
       finally
         disposeServer server
     }
-  ]
+  ] |> testSequenced

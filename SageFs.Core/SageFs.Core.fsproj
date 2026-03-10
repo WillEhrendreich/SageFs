@@ -56,6 +56,7 @@
         <Compile Include="Features\WhatIf.fs" />
         <Compile Include="Features\Ghostwriter.fs" />
         <Compile Include="Features\SessionFilmstrip.fs" />
+        <Compile Include="Features\FsiOutputParser.fs" />
         <Compile Include="Features\BindingExplorer.fs" />
         <Compile Include="Features\DomainModelViz.fs" />
         <Compile Include="Features\EvalTimeline.fs" />

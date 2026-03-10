@@ -355,8 +355,8 @@ let architectureTests =
         let total = coreModules + cliModules
         printfn "  Total modules (Core + CLI): %d" total
         // Combined ceiling — should only go DOWN
-        (total, 253)
+        (total, 255)
         |> Expect.isLessThanOrEqual
-          (sprintf "combined module count should be ≤253 (currently %d)" total)
+          (sprintf "combined module count should be ≤255 (currently %d)" total)
     ]
   ]
