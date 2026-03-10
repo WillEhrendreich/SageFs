@@ -14,6 +14,7 @@ let getInlineTimeout () =
 
 let mutable blockDecorations: Map<int, TextEditorDecorationType> = Map.empty
 let mutable staleDecorations: Map<int, TextEditorDecorationType> = Map.empty
+let mutable private evalInProgressDecorations: Map<int, TextEditorDecorationType> = Map.empty
 
 // ── Cell highlight ─────────────────────────────────────────────
 
@@ -87,6 +88,35 @@ let clearAllDecorations () =
   blockDecorations <- Map.empty
   staleDecorations |> Map.iter (fun _ deco -> deco.dispose () |> ignore)
   staleDecorations <- Map.empty
+  evalInProgressDecorations |> Map.iter (fun _ deco -> deco.dispose () |> ignore)
+  evalInProgressDecorations <- Map.empty
+
+/// Show an "⏳ evaluating…" ghost-text suffix at the end of the given (0-based) line.
+/// Uses a separate decoration type from result/stale markers so it can be cleared independently.
+let showEvalInProgress (editor: TextEditor) (line: int) : unit =
+  match Map.tryFind line evalInProgressDecorations with
+  | Some existing ->
+    existing.dispose () |> ignore
+    evalInProgressDecorations <- Map.remove line evalInProgressDecorations
+  | None -> ()
+  let opts = createObj [
+    "after" ==> createObj [
+      "contentText" ==> "  // ⏳ evaluating…"
+      "color" ==> newThemeColor "sagefs.staleForeground"
+      "fontStyle" ==> "italic"
+    ]
+  ]
+  let deco = Window.createTextEditorDecorationType opts
+  let lineText = editor.document.lineAt(float line).text
+  let endCol = lineText.Length
+  let range = newRange line endCol line endCol
+  editor.setDecorations(deco, ResizeArray [| box range |])
+  evalInProgressDecorations <- Map.add line deco evalInProgressDecorations
+
+/// Remove all "evaluating" decorations (call when eval_result arrives).
+let clearEvalInProgress (_editor: TextEditor) : unit =
+  evalInProgressDecorations |> Map.iter (fun _ deco -> deco.dispose () |> ignore)
+  evalInProgressDecorations <- Map.empty
 
 let markDecorationsStale (editor: TextEditor) =
   let lines = blockDecorations |> Map.toList |> List.map fst

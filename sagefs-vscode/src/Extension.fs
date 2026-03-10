@@ -1415,11 +1415,15 @@ let activate (context: ExtensionContext) =
         Window.getVisibleTextEditors ()
         |> Array.tryFind (fun ed -> ed.document.fileName = filePath)
         |> Option.iter (fun ed ->
+          InlineDeco.clearEvalInProgress ed
           InlineDeco.showInlineResult ed output (Some durationMs) (Some line))
-      OnEvalStarted = fun filePath _blockStartLine ->
+      OnEvalStarted = fun filePath blockStartLine ->
+        let line = blockStartLine - 1
         Window.getVisibleTextEditors ()
         |> Array.tryFind (fun ed -> ed.document.fileName = filePath)
-        |> Option.iter InlineDeco.markDecorationsStale
+        |> Option.iter (fun ed ->
+          InlineDeco.markDecorationsStale ed
+          InlineDeco.showEvalInProgress ed line)
     }
     let reconnectHandler = Some (fun () ->
       c.log "SSE reconnected — refreshing status..."
