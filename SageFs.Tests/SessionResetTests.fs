@@ -21,8 +21,8 @@ let sessionManagerBuildPathTests =
       |> Expect.equal "relative project should resolve under the session working directory" (Path.Combine(workingDir, project))
 
     testCase "absolute project path is preserved" <| fun _ ->
-      let workingDir = @"C:\Code\Repos\SageFs"
-      let project = @"C:\Code\Repos\SageFs\viz-output\code-city-tests\CodeCity.Tests.fsproj"
+      let workingDir = Path.GetTempPath()
+      let project = Path.Combine(Path.GetTempPath(), "code-city-tests", "CodeCity.Tests.fsproj")
       resolveBuildProjectPath workingDir project
       |> Expect.equal "absolute project should not be rewritten" project
   ]
