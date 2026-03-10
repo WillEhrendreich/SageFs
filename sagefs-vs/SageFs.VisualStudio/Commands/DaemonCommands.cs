@@ -1,7 +1,6 @@
 namespace SageFs.VisualStudio.Commands;
 
 using System.IO;
-using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.VisualStudio.Extensibility;
@@ -41,35 +40,18 @@ internal class StartDaemonCommand : Command
       return;
     }
 
-    // Try to find F# projects in the solution directory
+    // Directory.GetCurrentDirectory() reflects the open solution/folder.
     var solutionDir = Directory.GetCurrentDirectory();
-    var fsproj = Directory.GetFiles(solutionDir, "*.fsproj", SearchOption.AllDirectories)
-      .Where(f => !f.Contains("\\bin\\") && !f.Contains("\\obj\\"))
-      .ToArray();
-    var slnx = Directory.GetFiles(solutionDir, "*.slnx", SearchOption.TopDirectoryOnly);
-    var sln = Directory.GetFiles(solutionDir, "*.sln", SearchOption.TopDirectoryOnly);
+    var targetResult = Core.DaemonTargetFinder.findTarget(solutionDir);
 
-    string? target = null;
-    if (slnx.Length > 0)
-      target = slnx[0];
-    else if (sln.Length > 0)
-      target = sln[0];
-    else if (fsproj.Length == 1)
-      target = fsproj[0];
-    else if (fsproj.Length > 1)
-    {
-      // Prefer test projects
-      var testProj = fsproj.FirstOrDefault(f => f.Contains("Test", System.StringComparison.OrdinalIgnoreCase));
-      target = testProj ?? fsproj[0];
-    }
-
-    if (target is null)
+    if (!targetResult.IsOk)
     {
       if (output is not null)
-        await output.WriteLineAsync("✗ No F# projects found. Open a folder with .fsproj files first.");
+        await output.WriteLineAsync($"✗ {targetResult.ErrorValue}");
       return;
     }
 
+    var target = targetResult.ResultValue;
     if (output is not null)
       await output.WriteLineAsync($"▶ Starting SageFs with: {Path.GetFileName(target)}");
 

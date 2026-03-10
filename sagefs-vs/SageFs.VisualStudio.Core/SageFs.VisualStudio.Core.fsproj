@@ -13,6 +13,7 @@
     <Compile Include="LiveTestingSubscriber.fs" />
     <Compile Include="SessionSubscriber.fs" />
     <Compile Include="DaemonManager.fs" />
+    <Compile Include="DaemonTargetFinder.fs" />
     <Compile Include="SageFsClient.fs" />
     <Compile Include="DiagnosticsSubscriber.fs" />
     <Compile Include="EvalService.fs" />

@@ -18,6 +18,7 @@
     <ProjectReference Include="..\SageFs.VisualStudio.Core\SageFs.VisualStudio.Core.fsproj" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="DaemonTargetFinderTests.fs" />
     <Compile Include="LiveTestStateTests.fs" />
     <Compile Include="GlyphProjectionTests.fs" />
     <Compile Include="LiveTestingParserTests.fs" />
