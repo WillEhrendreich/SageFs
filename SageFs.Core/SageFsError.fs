@@ -192,7 +192,6 @@ module SageFsError =
     | SageFsError.AmbiguousSessions _ -> true
     | SageFsError.JsonParseError _ -> true
     | SageFsError.ToolNotAvailable _ -> true
-    | SageFsError.ToolNotAvailable _
     | SageFsError.SessionCreationFailed _
     | SageFsError.SessionStopFailed _
     | SageFsError.SessionSwitchFailed _

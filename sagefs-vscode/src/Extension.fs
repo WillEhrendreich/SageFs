@@ -48,8 +48,11 @@ let mutable staleDebounceTimer: obj option = None
 // Daemon stderr capture for startup failure diagnostics
 let mutable daemonStderr = ""
 
-// Eval watchdog: tracks whether an eval is in flight for SSE disconnect detection
-let mutable evalInFlight = false
+// Eval watchdog: monotonic ID tracks which eval is in flight.
+// 0 = idle; >0 = eval in flight (generation counter).
+// Prevents phantom "evaluation interrupted" dialogs when a new eval
+// starts within the 5-second watchdog window of a previous eval.
+let mutable evalId = 0
 let mutable evalWatchdogTimer: obj option = None
 
 // File annotation decorations (coverage gutters + inline failures)
@@ -817,11 +820,12 @@ let waitForSessionReady () : JS.Promise<bool> =
 
 let evalCore (code: string) (filePath: string option) (evalMode: string option) (blockStartLine: int option) : JS.Promise<EvalResult> =
   promise {
+    evalId <- evalId + 1
+    let myId = evalId
     try
-      evalInFlight <- true
       match client with
       | None ->
-        evalInFlight <- false
+        if evalId = myId then evalId <- 0
         return EvalConnectionError "SageFs not activated"
       | Some c ->
       let! ready = Client.isReady c
@@ -829,14 +833,14 @@ let evalCore (code: string) (filePath: string option) (evalMode: string option) 
         (getOutput()).appendLine "Session not ready, waiting for warmup..."
         let! becameReady = waitForSessionReady ()
         if not becameReady then
-          evalInFlight <- false
+          if evalId = myId then evalId <- 0
           return EvalError "Session did not become ready in time. Check the dashboard for status."
         else
           (getOutput()).appendLine "Session ready, evaluating..."
           let workDir = getWorkingDirectory ()
           let startTime = performanceNow ()
           let! result = Client.evalCode code workDir filePath evalMode blockStartLine c
-          evalInFlight <- false
+          if evalId = myId then evalId <- 0
           let elapsed = performanceNow () - startTime
           match result with
           | Client.Failed errMsg -> return EvalError errMsg
@@ -846,14 +850,14 @@ let evalCore (code: string) (filePath: string option) (evalMode: string option) 
         let workDir = getWorkingDirectory ()
         let startTime = performanceNow ()
         let! result = Client.evalCode code workDir filePath evalMode blockStartLine c
-        evalInFlight <- false
+        if evalId = myId then evalId <- 0
         let elapsed = performanceNow () - startTime
         match result with
         | Client.Failed errMsg -> return EvalError errMsg
         | Client.Succeeded msg ->
           return EvalOk (msg |> Option.defaultValue "", elapsed)
     with err ->
-      evalInFlight <- false
+      if evalId = myId then evalId <- 0
       return EvalConnectionError (string err)
   }
 
@@ -1883,13 +1887,14 @@ let activate (context: ExtensionContext) =
         sb.show ()
       | None -> ()
       // Eval watchdog: if an eval is in flight, fire a synthetic error after 5s
-      match evalInFlight with
-      | true ->
+      match evalId with
+      | 0 -> ()
+      | activeEvalId ->
         evalWatchdogTimer |> Option.iter jsClearTimeout
         evalWatchdogTimer <- Some (jsSetTimeout (fun () ->
-          match evalInFlight with
+          match evalId = activeEvalId with
           | true ->
-            evalInFlight <- false
+            evalId <- 0
             evalWatchdogTimer <- None
             let out = getOutput ()
             out.appendLine "⚠ Evaluation interrupted: daemon connection lost"
@@ -1907,7 +1912,6 @@ let activate (context: ExtensionContext) =
           | false ->
             evalWatchdogTimer <- None
         ) 5000)
-      | false -> ()
     )
     let sseLogger = Some (fun (msg: string) -> (getOutput()).appendLine (sprintf "[SSE] %s" msg))
     let listener = LiveTest.start c.mcpPort liveTestCallbacks reconnectHandler disconnectHandler sseLogger
