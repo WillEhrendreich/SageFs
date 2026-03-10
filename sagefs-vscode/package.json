@@ -2,7 +2,7 @@
   "name": "sagefs",
   "displayName": "SageFs — Live F# Development",
   "description": "Send F# code to SageFs for instant evaluation, type-checking, and hot reload.",
-  "version": "0.6.70",
+  "version": "0.6.71",
   "publisher": "sagefs",
   "license": "MIT",
   "icon": "icon.png",
@@ -173,6 +173,10 @@
         "title": "SageFs: Explain Test Failure"
       },
       {
+        "command": "sagefs.suggestRepair",
+        "title": "SageFs: Suggest Repair for Failed Test"
+      },
+      {
         "command": "sagefs.exportSession",
         "title": "SageFs: Export Session as .fsx"
       },
@@ -235,6 +239,14 @@
         "command": "sagefs.openGettingStarted",
         "title": "SageFs: Open Getting Started Sample",
         "icon": "$(mortar-board)"
+      },
+      {
+        "command": "sagefs.nextFailingTest",
+        "title": "SageFs: Next Failing Test"
+      },
+      {
+        "command": "sagefs.prevFailingTest",
+        "title": "SageFs: Previous Failing Test"
       }
     ],
     "keybindings": [
@@ -272,6 +284,16 @@
         "command": "sagefs.prevBlock",
         "key": "ctrl+up",
         "when": "editorTextFocus && editorLangId == fsharp"
+      },
+      {
+        "command": "sagefs.nextFailingTest",
+        "key": "alt+shift+]",
+        "when": "sagefs:daemonRunning"
+      },
+      {
+        "command": "sagefs.prevFailingTest",
+        "key": "alt+shift+[",
+        "when": "sagefs:daemonRunning"
       }
     ],
     "configuration": {

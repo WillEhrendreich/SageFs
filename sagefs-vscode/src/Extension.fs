@@ -1847,6 +1847,113 @@ let activate (context: ExtensionContext) =
             out.appendLine ""
     } |> promiseIgnoreLog logToOutput)
 
+  reg "sagefs.suggestRepair" (fun args ->
+    promise {
+      let requestedId =
+        try
+          match args with
+          | null -> None
+          | _ ->
+            let arr = args :?> obj array
+            match arr.Length with
+            | 0 -> None
+            | _ -> arr.[0] |> tryCastString
+        with _ -> None
+      let diagEntries =
+        TestLens.diagnosisState
+        |> Map.toArray
+        |> Array.filter (fun (_, symbols) -> symbols.Length > 0)
+      match diagEntries with
+      | [||] ->
+        Window.showInformationMessage
+          "No repair suggestions yet. Run tests with live testing enabled to generate diagnosis." [||]
+        |> ignore
+      | _ ->
+        let items =
+          diagEntries |> Array.map (fun (testName, symbols) ->
+            let sym = symbols |> String.concat ", "
+            let label =
+              match requestedId with
+              | Some rid when (testName.Contains rid) -> sprintf "★ %s" testName
+              | _ -> testName
+            sprintf "%s  ←  %s changed" label sym, testName, symbols)
+        let labels = items |> Array.map (fun (l, _, _) -> l)
+        let! labelOpt = Window.showQuickPick labels "Select test to repair"
+        match labelOpt with
+        | None -> ()
+        | Some label ->
+          match items |> Array.tryFind (fun (l, _, _) -> l = label) with
+          | None -> ()
+          | Some (_, testName, symbols) ->
+            let out = getOutput ()
+            out.show true
+            out.appendLine ""
+            out.appendLine (sprintf "═══ Repair Suggestion: %s ═══" testName)
+            out.appendLine (sprintf "  Caused by: %s" (String.concat ", " symbols))
+            out.appendLine ""
+            out.appendLine "  Suggested actions:"
+            out.appendLine "    1. Check the changed symbols above for unintended mutations"
+            out.appendLine "    2. Use sagefs-explain_test_failure in MCP for full narrative"
+            out.appendLine "    3. Use sagefs-preview_what_if to explore hypothetical fixes"
+            out.appendLine "    4. Eval the corrected code and watch live tests go green"
+            out.appendLine ""
+            Window.showInformationMessage
+              (sprintf "Repair guidance for '%s' written to output." testName)
+              [||]
+            |> ignore
+    } |> promiseIgnoreLog logToOutput)
+
+  // ── Failing test navigation ────────────────────────────────────
+  let mutable failingTestIndex = 0
+
+  let getFailingTests () =
+    match liveTestListener with
+    | None -> [||]
+    | Some l ->
+      let st = l.State ()
+      st.Results
+      |> Map.toArray
+      |> Array.choose (fun (tid, r) ->
+        match r.Outcome with
+        | VscTestOutcome.Failed _ | VscTestOutcome.Errored _ ->
+          Map.tryFind tid st.Tests
+          |> Option.bind (fun info ->
+            match info.FilePath, info.Line with
+            | Some fp, Some ln -> Some (info, fp, ln)
+            | _ -> None)
+        | _ -> None)
+      |> Array.sortBy (fun (info, fp, ln) -> fp, ln)
+
+  let navigateToFailingTest (delta: int) =
+    promise {
+      let tests = getFailingTests ()
+      match tests.Length with
+      | 0 ->
+        Window.showInformationMessage "No failing tests with source locations" [||] |> ignore
+      | count ->
+        failingTestIndex <- (failingTestIndex + delta) % count
+        match failingTestIndex < 0 with
+        | true -> failingTestIndex <- failingTestIndex + count
+        | false -> ()
+        let (info, filePath, line) = tests.[failingTestIndex]
+        let uri = uriFile filePath
+        let! doc = Workspace.openTextDocumentUri uri
+        let! ed = Window.showTextDocument doc
+        let pos = newPosition (line - 1) 0
+        let sel = newSelection pos pos
+        setEditorSelection (ed :?> TextEditor) sel
+        revealEditorRange (ed :?> TextEditor) (newRange (line - 1) 0 (line - 1) 0)
+        Window.showInformationMessage
+          (sprintf "Failing test %d/%d: %s" (failingTestIndex + 1) count info.DisplayName)
+          [||]
+        |> ignore
+    }
+
+  reg "sagefs.nextFailingTest" (fun _ ->
+    navigateToFailingTest 1 |> promiseIgnoreLog logToOutput)
+  reg "sagefs.prevFailingTest" (fun _ ->
+    navigateToFailingTest -1 |> promiseIgnoreLog logToOutput)
+
   let lensProvider = Lens.create ()
   context.subscriptions.Add (Languages.registerCodeLensProvider "fsharp" lensProvider)
   let testLensProvider = TestLens.create ()
@@ -1996,6 +2103,20 @@ let activate (context: ExtensionContext) =
         let severity = fieldString "Severity" data |> Option.defaultValue "unknown"
         let summary = fieldString "Summary" data |> Option.defaultValue ""
         (getOutput()).appendLine (sprintf "[SageFs Diagnostics] %s: %s" severity summary)
+        // Parse per-failure causal symbols and feed them into the repair CodeLens
+        let failures : LiveTestingTypes.VscDiagnosisFailure array =
+          try
+            let arr = data?failures :?> obj array
+            arr |> Array.map (fun f ->
+              { LiveTestingTypes.VscDiagnosisFailure.TestName =
+                  (try f?testName :?> string with _ -> "")
+                CausalSymbols =
+                  try f?causalSymbols :?> string array
+                  with _ -> [||] })
+          with _ -> [||]
+        match failures.Length with
+        | 0 -> ()
+        | _ -> TestLens.updateDiagnosis failures
     }
     let reconnectHandler = Some (fun () ->
       c.log "SSE reconnected — refreshing status..."
