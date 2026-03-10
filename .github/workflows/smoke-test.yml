@@ -1,0 +1,38 @@
+name: Smoke Test
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [master]
+    paths:
+      - 'scripts/smoke-test.ps1'
+      - 'samples/from-csharp/**'
+      - 'SageFs/**'
+      - 'SageFs.Core/**'
+
+jobs:
+  smoke:
+    name: End-to-end smoke test
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+          dotnet-quality: 'preview'
+
+      - name: Build and pack SageFs tool
+        run: |
+          dotnet build --nologo -c Release
+          dotnet pack SageFs -o nupkg --nologo -c Release
+
+      - name: Install SageFs global tool
+        run: dotnet tool install --global SageFs --add-source nupkg --no-cache
+
+      - name: Run smoke test
+        shell: pwsh
+        run: scripts/smoke-test.ps1
+        timeout-minutes: 10

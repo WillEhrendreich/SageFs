@@ -26,6 +26,8 @@
     <PackageReference Include="Microsoft.VisualStudio.Text.Data" Version="17.13.226" PrivateAssets="all" />
     <!-- Needed to load SageFsCompletionSourceProvider from the editor DLL (IAsyncCompletionSourceProvider) -->
     <PackageReference Include="Microsoft.VisualStudio.Language" Version="17.13.226" PrivateAssets="all" />
+    <!-- Needed to compile StatusBarServiceTests which references Shell types via the Editor assembly. -->
+    <PackageReference Include="Microsoft.VisualStudio.Shell.15.0" Version="17.12.40595.6" PrivateAssets="all" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\SageFs.VisualStudio.Editor\SageFs.VisualStudio.Editor.csproj" />

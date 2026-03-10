@@ -122,10 +122,12 @@ internal class StatusBarManager : ExtensionPart
 
   private Task TryUpdateVsStatusBarAsync(string text)
   {
-    // VS Extensibility SDK 17.14 does not expose a StatusBar property on ShellExtensibility.
-    // The native VS status bar update is skipped; connection state is surfaced via the
-    // SageFs output channel (see UpdateConnectionState above).
-    // TODO: add IVsStatusbar interop when Microsoft.VisualStudio.Shell.Interop reference is available.
+    // The MEF layer (net472) exports IStatusBarService which calls IVsStatusbar directly.
+    // In VS 2022's dual-runtime model the SDK (net8.0) and MEF (net472) components run in
+    // separate CLR instances, so StatusBarBridge.SetText is wired for future unified-hosting
+    // scenarios. The MEF-side StatusBarBridge.Current (set by StatusBarService) handles the
+    // actual IVsStatusbar calls within the net472 layer.
+    StatusBarBridge.SetText?.Invoke(text);
     System.Diagnostics.Debug.WriteLine($"[SageFs] {nameof(StatusBarManager)}: {text}");
     return Task.CompletedTask;
   }

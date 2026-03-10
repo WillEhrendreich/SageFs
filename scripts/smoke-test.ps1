@@ -28,6 +28,11 @@ function Fail([string]$step, [string]$msg) {
   $results[$step] = "FAIL"
 }
 
+function Warn([string]$step, [string]$msg) {
+  Write-Host "  ⚠ $msg" -ForegroundColor Yellow
+  $results[$step] = "WARN"
+}
+
 function Section([string]$title) {
   Write-Host ""
   Write-Host "── $title" -ForegroundColor Cyan
@@ -218,24 +223,34 @@ Section "5. Tests"
 Write-Host "  Enabling live testing..." -ForegroundColor DarkGray
 try { Invoke-RestMethod -Method Post -Uri "$baseUrl/api/live-testing/enable" -TimeoutSec 5 | Out-Null } catch { }
 
-Write-Host "  Waiting 5s for test discovery..." -ForegroundColor DarkGray
-Start-Sleep -Seconds 5
+# Poll for test discovery (up to 30s)
+$discovered = 0
+$discoveryElapsed = 0
+for ($i = 0; $i -lt 15; $i++) {
+  Start-Sleep -Seconds 2
+  $discoveryElapsed += 2
+  try {
+    $st = Invoke-RestMethod -Method Get -Uri "$baseUrl/api/live-testing/status" -TimeoutSec 5
+    $discovered = if ($null -ne $st.summary) { $st.summary.total } else { 0 }
+    if ($discovered -gt 0) { break }
+  } catch { }
+}
+Write-Host "  Tests discovered: $discovered (after ${discoveryElapsed}s)" -ForegroundColor DarkGray
+
+if ($discovered -eq 0) {
+  Warn "tests-discovery" "0 tests discovered after ${discoveryElapsed}s — session may still be warming up"
+}
 
 try {
-  $status = Invoke-RestMethod -Method Get -Uri "$baseUrl/api/live-testing/status" -TimeoutSec 10
-  $total = if ($null -ne $status.summary) { $status.summary.total } else { 0 }
-  Write-Host "  Tests discovered: $total" -ForegroundColor DarkGray
-
   $runBody = '{"timeout_seconds":30}'
   $runResp = Invoke-RestMethod -Method Post -Uri "$baseUrl/api/live-testing/run" `
     -Body $runBody `
     -ContentType "application/json" `
     -TimeoutSec 40
   if ($runResp.success -eq $true) {
-    Pass "run-tests" "run_tests succeeded (discovered: $total)"
+    Pass "run-tests" "run_tests accepted (discovered: $discovered)"
   } else {
-    $reasonStr = if ($runResp.reason) { " reason=$($runResp.reason)" } else { "" }
-    Fail "run-tests" "run_tests returned success=false$reasonStr`: $($runResp.message)"
+    Fail "run-tests" "run_tests response: $($runResp | ConvertTo-Json -Compress)"
   }
 } catch {
   Fail "run-tests" "run_tests request failed: $_"
@@ -258,10 +273,11 @@ Write-Host ""
 Write-Host "── Summary" -ForegroundColor Cyan
 $anyFail = $false
 foreach ($k in $results.Keys) {
-  $icon  = if ($results[$k] -eq "PASS") { "✓" } else { "✗" }
-  $color = if ($results[$k] -eq "PASS") { "Green" } else { "Red" }
+  $result = $results[$k]
+  $icon  = switch ($result) { "PASS" { "✓" } "WARN" { "⚠" } default { "✗" } }
+  $color = switch ($result) { "PASS" { "Green" } "WARN" { "Yellow" } default { "Red" } }
   Write-Host "  $icon $k" -ForegroundColor $color
-  if ($results[$k] -ne "PASS") { $anyFail = $true }
+  if ($result -eq "FAIL") { $anyFail = $true }
 }
 Write-Host ""
 if ($anyFail) {
