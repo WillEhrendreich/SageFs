@@ -807,6 +807,28 @@ let renderSessions (sessions: ParsedSession list) (creating: bool) =
 
 
 
+/// Render session eval history as a visual filmstrip — one card per recent eval.
+let renderSessionFilmstrip (entries: FilmstripEntry list) =
+  Elem.div [ Attr.id DomIds.FilmstripPanel; Attr.class' "filmstrip-panel" ] [
+    match entries with
+    | [] ->
+      Elem.span [ Attr.class' "meta no-history" ] [ Text.raw "No history" ]
+    | _ ->
+      yield! entries |> List.map (fun e ->
+        let icon = match e.Outcome with EvalSuccess -> "✓" | EvalError -> "✗" | EvalCancelled -> "⊘"
+        let speedCls =
+          match e.DurationMs with
+          | ms when ms < 100L -> "eval-fast"
+          | ms when ms <= 500L -> "eval-medium"
+          | _ -> "eval-slow"
+        Elem.div [ Attr.class' (sprintf "filmstrip-frame %s" speedCls) ] [
+          Elem.span [ Attr.class' "frame-index" ] [ Text.raw (sprintf "#%d" e.Index) ]
+          Elem.span [ Attr.class' "frame-icon" ] [ Text.raw icon ]
+          Elem.span [ Attr.class' "frame-label" ] [ Text.raw e.Label ]
+          Elem.span [ Attr.class' "frame-duration" ] [ Text.raw (sprintf " %dms" e.DurationMs) ]
+        ])
+  ]
+
 /// Render current FSI diagnostics as a live panel with emoji severity icons and a count badge.
 let renderCurrentDiagnostics (diags: Diagnostic list) =
   let errorCount = diags |> List.filter (fun d -> d.Severity = DiagError) |> List.length
@@ -869,6 +891,8 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
     snap.FailureNarrativesPanel
     // Diagnostics panel — live FSI compile errors and warnings
     snap.DiagnosticsPanel
+    // Session filmstrip — recent eval history as visual timeline
+    snap.FilmstripPanel
     // Main app layout: output+eval on left, sidebar on right
     Elem.div [ Attr.class' "app-layout" ] [
       Elem.div [ Attr.class' "main-area" ] [

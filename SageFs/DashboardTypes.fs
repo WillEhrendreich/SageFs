@@ -28,6 +28,7 @@ module DomIds =
   let [<Literal>] SessionPicker = "session-picker"
   let [<Literal>] SessionContext = "session-context"
   let [<Literal>] DiagnosticsPanel = "diagnostics-panel"
+  let [<Literal>] FilmstripPanel = "filmstrip-panel"
   let [<Literal>] DiscoveredProjects = "discovered-projects"
   let [<Literal>] HotReloadPanel = "hot-reload-panel"
   let [<Literal>] TestTrace = "test-trace"
@@ -149,6 +150,18 @@ module Diagnostic =
       Message = d.Message
       Line = d.Range.StartLine
       Col = d.Range.StartColumn }
+
+/// Outcome of a single FSI evaluation.
+type EvalOutcome = EvalSuccess | EvalError | EvalCancelled
+
+/// View model for a single filmstrip frame — one eval in the session history.
+type FilmstripEntry = {
+  Index: int
+  Label: string
+  DurationMs: int64
+  Outcome: EvalOutcome
+  Timestamp: System.DateTimeOffset
+}
 
 /// Eval statistics view model — pre-computed for rendering.
 type EvalStatsView = {
@@ -496,6 +509,8 @@ type DashboardQueries = {
   GetFailureNarratives: unit -> (string * Features.LiveTesting.FailureNarrative) list
   /// Read current FSI diagnostics (errors/warnings) from the diagnostics store.
   GetCurrentDiagnostics: unit -> Diagnostic list
+  /// Read recent eval filmstrip entries from the eval history — newest-last, capped at 20.
+  GetFilmstripEntries: unit -> FilmstripEntry list
 }
 
 /// Commands that mutate session state.
@@ -531,6 +546,7 @@ type DashboardSnapshot = {
   DaemonHealth: XmlNode
   FailureNarrativesPanel: XmlNode
   DiagnosticsPanel: XmlNode
+  FilmstripPanel: XmlNode
   ThemeName: string
   ConnectionLabel: string option
   HotReloadPanel: XmlNode

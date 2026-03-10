@@ -1555,6 +1555,25 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
       |> Features.DiagnosticsStore.allFlat
       |> List.map Diagnostic.fromFeatureDiag
       |> List.sortBy (fun d -> match d.Severity with DiagError -> 0 | DiagWarning -> 1)
+    GetFilmstripEntries = fun () ->
+      let state = System.Threading.Volatile.Read(&sharedFeatureState.contents)
+      state.EvalHistory
+      |> List.rev
+      |> List.truncate 20
+      |> List.map (fun entry ->
+        let outcome =
+          match entry.Result with
+          | r when r.Contains("Operation was cancelled") -> EvalCancelled
+          | r when r.Contains("error FS") || r.Contains("; error") || r.StartsWith("error") -> EvalError
+          | _ -> EvalSuccess
+        let label =
+          let first = entry.Code.Split('\n') |> Array.tryHead |> Option.defaultValue ""
+          if first.Length > 60 then first.[..59] else first
+        { Index = entry.CellIndex
+          Label = label
+          DurationMs = entry.DurationMs
+          Outcome = outcome
+          Timestamp = entry.Timestamp })
   }
 
   let dashboardActions : DashboardActions = {

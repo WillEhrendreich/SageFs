@@ -1,0 +1,457 @@
+╔════════════════════════════════════════════════════════════════════════════╗
+║                   SAGEFS EXPLORATION - FINAL SUMMARY                      ║
+╚════════════════════════════════════════════════════════════════════════════╝
+
+📋 NEW USER JOURNEY (End-to-End)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+INSTALL (30 seconds)
+  $ dotnet tool install --global SageFs
+
+START DAEMON
+  $ sagefs
+  → MCP server running on port 37749
+  → Dashboard at http://localhost:37750/dashboard
+
+CONNECT EDITOR
+  VS Code:        Install extension → sagefs-<version>.vsix
+  Neovim:         Add "WillEhrendreich/sagefs.nvim" to plugin manager
+  Visual Studio:  Install VSIX from releases
+  Terminal:       sagefs tui (TUI) or sagefs gui (Raylib)
+
+FIRST EVAL (< 5 minutes)
+  1. Open .fsx file in editor
+  2. Type: let result = 2 + 2
+  3. Press Alt+Enter
+  4. See: result = 4 (appears inline in ~500ms)
+
+RUN TESTS
+  1. Create test.fs with Expecto tests
+  2. Save file
+  3. Watch gutter markers: ✓ (pass) / ✗ (fail) / ○ (no coverage)
+
+DAILY WORKFLOW
+  Morning:  sagefs --proj MyProject.fsproj
+  Edit:     Alt+Enter for expressions
+  Save:     Tests run automatically (< 500ms)
+  Review:   Hover on red markers for Expected vs Actual
+  Commit:   All tests green ✓
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🏗️  ARCHITECTURE TIERS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Tier 1: ELM PROGRAM (Pure, Testable, Replay-able)
+  ├─ Update:  Msg → Model → Model * Effect list
+  ├─ Render:  Model → RenderRegion list
+  ├─ File:    SageFs.Core/ElmDaemon.fs
+  └─ No I/O:  All side effects via Effect dispatch
+
+Tier 2: EFFECT HANDLER (Async)
+  ├─ Execute side effects (session ops, worker comm)
+  ├─ Dispatch results back to Elm loop
+  ├─ File:    SageFs.Core/SageFsEffectHandler.fs
+  └─ Pattern: (Msg → unit) → Effect → Async<unit>
+
+Tier 3: WORKER PROCESS (Isolated)
+  ├─ One per session (separate OS process)
+  ├─ FSI instance + hot reload + file watch
+  ├─ Live test execution + coverage tracking
+  ├─ File:    SageFs/WorkerMain.fs
+  └─ Comm:    Named pipes + HTTP
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🚀 DAEMON STARTUP SEQUENCE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. SageFs/Program.fs:139-378
+   ├─ Parse CLI command
+   ├─ Route to appropriate handler (daemon/tui/gui/worker/jupyter)
+   └─ Default: Daemon mode
+
+2. DaemonMode.run(mcpPort, flags)
+   ├─ Create SessionManager (MailboxProcessor actor)
+   ├─ Create CQRS snapshot reader
+   └─ Pass to ElmDaemon.start
+
+3. ElmDaemon.start(deps, onModelChanged)
+   ├─ Create Elm program
+   ├─ Wire effect handler
+   └─ Return: ElmRuntime<Model, Msg, Region>
+
+4. ElmLoop.start(program, initialModel, cancellationToken)
+   ├─ Dedicated drain thread (not thread pool)
+   ├─ ConcurrentQueue<Msg> for dispatch
+   ├─ ManualResetEventSlim for signaling
+   ├─ Phase 1: Drain all queued messages
+   ├─ Phase 2: Run Update (pure)
+   ├─ Phase 3: Execute Effects (async)
+   ├─ Phase 4: Render (once per batch)
+   └─ Return: ElmRuntime with Dispatch/GetModel/GetRegions
+
+5. Message Loop (continuous)
+   ├─ Listeners dispatch UI actions
+   ├─ Effects return results as new messages
+   ├─ Worker SSE events broadcast to clients
+   └─ File watcher triggers reload/soft-reset
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🛠️  MCP SERVER (33 Tools - Organized by Use Case)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+CODE EVALUATION (5 tools)
+  send_fsharp_code       → Evaluate F# code string
+  send_fsharp_code_file  → Evaluate from file path
+  eval_select            → Eval selected region (editor integration)
+  check_code             → Type-check without eval
+  get_completions        → IntelliSense/autocomplete
+
+SESSION MANAGEMENT (6 tools)
+  create_session         → New FSI session
+  list_sessions          → All active sessions
+  set_session            → Switch to session
+  stop_session           → Shutdown session
+  get_session_info       → Session details (state, project, etc)
+  reset_fsi_session      → Soft reset (purge bindings, reload)
+
+LIVE TESTING (7 tools)
+  run_tests              → Execute tests (all or by pattern)
+  list_tests             → Enumerate test cases
+  get_live_test_status   → Current test state (pass/fail counts)
+  get_file_coverage      → Per-line IL coverage
+  explain_test_run       → Why test ran (affected by what changes)
+  explain_test_failure   → Why test failed (causal analysis)
+  get_cell_dependencies  → Staleness-annotated dependency graph
+
+DIAGNOSTICS & ANALYSIS (7 tools)
+  get_diagnostics        → Compiler errors (FS####)
+  discover_features      → Context-aware feature suggestions
+  get_dependency_graph   → Test→symbol mapping for impact analysis
+  get_type_info          → Type at cursor position
+  get_call_graph         → Call tree for function
+  get_binding_explorer   → FSI bindings + their types
+  get_eval_timeline      → History of evaluations (time-travel)
+
+INFRASTRUCTURE (8 tools)
+  get_daemon_health      → Uptime, memory, sessions, tests
+  get_version            → Daemon + API version
+  get_system_status      → Process memory/CPU
+  get_feature_flags      → Feature matrix (what's enabled)
+  get_api_version        → Protocol version for client compatibility
+  hot_reload_toggle      → Enable/disable per file or directory
+  subscribe_events       → Open SSE connection for live updates
+  subscribe_to_stream    → Open Streamable HTTP for tools
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📡 SSE EVENT BROADCAST (Real-Time Updates)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+TEST LIFECYCLE
+  event: test_summary
+  data: {Total, Passed, Failed, Running, Stale, Disabled}
+  → Updates every time test status changes
+
+  event: test_results_batch
+  data: {Entries[], Summary, Freshness, Generation}
+  → Individual test results + batch progress %
+
+  event: file_annotations
+  data: {FileAnnotations[]} 
+  → Per-line coverage (green/red/gray bars)
+
+  event: failure_narratives
+  data: {TestId, LastPassedAt, TimeSinceLastPass, CausalChanges, Summary}
+  → CausalChanges: [{Kind: "symbol"|"file", Name}]
+  → Helps user understand why test broke
+
+EVALUATION EVENTS
+  event: eval_started
+  data: {filePath, blockStartLine}
+  → Evaluation began
+
+  event: eval_completed
+  data: {result, diagnostics, metadata}
+  → Result ready (< 500ms)
+
+  event: eval_diff
+  data: {previousValue, newValue}
+  → What changed from last eval
+
+SYSTEM EVENTS
+  event: warmup_progress
+  data: {currentStep, totalSteps}
+  → Project loading progress
+
+  event: diagnostics_update
+  data: {diagnostics[]}
+  → Compiler errors in real-time
+
+  event: bindings_snapshot
+  data: {Bindings[]}
+  → FSI bindings list + types
+
+Format: Single-line data field per SSE spec
+  event: <type>\n
+  data: <json>\n
+  \n
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+💾 BINARY PERSISTENCE (.sagefs Session Format)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Format: .sagefs v3 (Magic: "SFS3")
+
+Layout:
+  ┌─────────────────────────┐
+  │ Header (64 bytes)       │ Magic + version + CRC
+  ├─────────────────────────┤
+  │ Section Directory       │ Tag → Offset/Size map
+  ├─────────────────────────┤
+  │ Section: META           │ Session metadata strings
+  │ Section: INPT           │ Interactions + pools
+  │ Section: REFS           │ Assembly references
+  │ Section: PROF (opt)     │ Profiling data
+  │ Section: BIND (opt)     │ Runtime bindings
+  └─────────────────────────┘
+
+String Encoding:
+  lp-string:        u32(length) + u8[length]
+  lp-string-option: 0xFFFFFFFF (None) | lp-string (Some)
+
+Design Rationale:
+  ✓ One format for disk + wire (no transcode overhead)
+  ✓ Binary from day one (4-8× faster than JSON)
+  ✓ Section-based extensibility (unknown sections skipped)
+  ✓ CRC-32 at two levels (header + per-section)
+  ✓ Schema compiled into reader (no inline metadata)
+  ✓ Validate early, trust late (check CRCs on open)
+  ✓ Human-inspectable (xxd shows magic, size, structure)
+
+Performance: 30-100ms to read, 50-200ms to write (depends on interaction count)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🔥 HOT RELOAD (No Restart, No Rebuild)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Timeline:
+  1. FileWatcher detects .fs change
+     └─ 500ms debounce (configurable)
+  
+  2. Emit "Compiling..." via SSE
+     └─ Browser shows overlay
+  
+  3. Send #load to FSI
+     └─ hotReload=true in Args
+  
+  4. FSI generates new assembly
+     └─ Returns dynamic types
+  
+  5. Harmony method patching
+     └─ Fuzzy-match methods
+     └─ Patch method pointers at runtime
+     └─ No restart, no restart
+  
+  6. Broadcast "Reload" via SSE
+     └─ Browser green flash + auto-refresh
+  
+  7. Next HTTP request uses new code
+     └─ Instant (no manual F5)
+
+On Error:
+  ├─ FSI returns FS#### diagnostics
+  ├─ Broadcast "CompilationFailed"
+  ├─ Browser shows red error overlay
+  └─ Pauses reload (no thrashing)
+
+Safety Features:
+  • Infinite-reload guard (sessionStorage counter >3 in 5s → pause)
+  • Error overlay (red panel with source context)
+  • Idempotent injection (data-sagefs-injected prevents dupes)
+  • Kill switch (SAGEFS_DEVRELOAD=0)
+  • SSE retry (retry: 1000ms auto-reconnects)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+⚡ LIVE TESTING (3-Speed Feedback Pipeline)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Speed 1: ~50ms (Tree-Sitter Detection)
+  → Scan .fs file for test attributes
+  → Works on broken/incomplete code
+  → Emit immediate gutter markers
+  → Result: ✓/✗/● markers appear before you save
+
+Speed 2: ~350ms (F# Compiler Service)
+  → Type-check file
+  → Extract symbol uses (FullName, UseKind)
+  → Build dependency graph (symbol → test mapping)
+  → Compute affected tests
+  → Result: Know which tests matter for this change
+
+Speed 3: ~500ms (Affected-Test Execution)
+  → Run only impacted tests (not all)
+  → IL-level coverage tracking
+  → Failure analysis + causal narration
+  → Emit SSE events (test_results_batch, failure_narratives)
+  → Result: ✓/✗ + Expected vs Actual + reason for failure
+
+Test Categorization & Run Policies:
+  Unit       → OnEveryChange    (run during editing)
+  Integration → OnSaveOnly       (run on file save)
+  Browser    → OnDemand         (manual trigger)
+  Property   → OnEveryChange    (FsCheck fuzzing)
+  Benchmark  → OnDemand
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📊 FAILURE NARRATIVES (Why Did This Test Break?)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Flakiness Detection:
+  → Track last 10 outcomes in circular buffer
+  → Count flip events (pass↔fail)
+  → Insufficient: <3 samples
+  → Stable: ≤2 flips in 10 runs
+  → Environmental: ≥2 flips (auto-quarantine)
+  → PropertyCounterexample: FsCheck shrunk case
+
+Causal Analysis:
+  → Diff symbols between last pass and current failure
+  → Map changed symbols to test coverage
+  → Generate human-readable narrative
+
+Data Structure:
+  type FailureNarrative = {
+    LastPassedAt: DateTimeOffset         // When it last passed
+    TimeSinceLastPass: TimeSpan           // How long broken
+    CausalChanges: CausalChange list      // What probably caused it
+    PropertyViolation: string option      // FsCheck counterexample
+    Summary: string                       // Human summary
+  }
+
+  type CausalChange =
+    | SymbolChanged of string     // Function/type changed
+    | FileChanged of string       // File changed
+    | Unknown                     // Can't determine
+
+Example:
+  Test: should_add_two_numbers (FAILED)
+  LastPassedAt: 2026-03-02T14:30:00Z
+  TimeSinceLastPass: 2h 15m
+  CausalChanges: [SymbolChanged "mathLib", FileChanged "math.fs"]
+  Summary: "Test started failing after mathLib was refactored. 
+            Check the recent changes in math.fs"
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🛡️ ERROR HANDLING (39 Unified Error Cases)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Unified Type: type SageFsError = 
+
+Session Errors:
+  | SessionNotFound of sessionId
+  | NoActiveSessions
+  | SessionCreationFailed of reason
+  
+Worker Errors:
+  | WorkerCommunicationFailed of sessionId * reason
+  | WorkerSpawnFailed of reason
+  | WorkerTimeout of sessionId * operation * timeoutSec
+  
+Eval Errors:
+  | EvalFailed of reason
+  | ResetFailed of reason
+  | HotReloadFailed of path * reason
+  
+Infrastructure:
+  | DaemonStartFailed of reason
+  | PortInUse of port
+  | SseConnectionError of reason
+  | Unexpected of exn
+
+Pattern: Result<'T, SageFsError> everywhere
+  → Compiler enforces exhaustive matching
+  → No bare catches
+  → User-facing message via SageFsError.describe()
+
+Auto-Recovery:
+  → Standby pool swaps for instant recovery
+  → Watchdog auto-restart with exponential backoff
+  → Partial feature availability on errors
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🧪 TEST COVERAGE (207 Files, 3500+ Tests)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Test Categories:
+  Daemon              (5 files)   - Uptime, health, recovery
+  LiveTesting         (7 files)   - Test discovery + execution
+  HotReload           (8 files)   - File watch + browser refresh
+  Persistence         (3 files)   - Binary format round-trip
+  Integration         (4 files)   - E2E workflows
+  Property-Based      (12 files)  - FsCheck fuzzing
+  Hardening           (13 files)  - Edge cases + stress
+  Other               (155 files) - Architecture, utils, types
+
+Run Commands:
+  dotnet run              → All except [Integration] (~3min)
+  dotnet run -- --all     → Includes [Integration] (~8min per FSI)
+  dotnet run -- --compliance    → Behavioral contracts only
+  dotnet run -- --benchmark     → BenchmarkDotNet suite
+
+Framework: Expecto + FsCheck + BenchmarkDotNet
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📚 LEARNING RESOURCES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+For New F# Developers:
+  samples/from-koans/           22 exercises, 162 tests
+  samples/from-python/          Functional programming
+  samples/from-csharp/          Type systems, LINQ→pipes
+  samples/from-java/            OOP→FP concepts
+  samples/from-javascript/      Async/await, higher-order
+  samples/from-rust/            Ownership, unions
+
+For Contributors:
+  docs/binary-format-spec.md    Complete wire format (v3)
+  docs/live-testing-as-you-type.md  3-speed pipeline
+  docs/session-isolation.md     Multi-project design
+  CODE_REFERENCE.md             6 design patterns
+  LIVE_TESTING_GUIDE.md         Test pipeline details
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+✅ SUMMARY
+
+SageFs is production-ready with:
+  ✓ Comprehensive error handling (39 cases, exhaustive matching)
+  ✓ Extensive test coverage (207 files, 3500+ tests)
+  ✓ Clean architecture (Elm program, pure updates)
+  ✓ Lock-free concurrency (CQRS snapshots)
+  ✓ Hot reload without restart
+  ✓ Sub-500ms feedback on save
+  ✓ AI-native (MCP, 33 tools)
+  ✓ Multi-editor support (6+ clients simultaneously)
+  ✓ Binary persistence (4-8× faster than JSON)
+  ✓ Free and MIT licensed
+
+For new users:
+  1. Install: 30 seconds
+  2. Start: sagefs
+  3. Connect: Alt+Enter in your editor
+  4. Tests: Automatic on save
+  5. Results: In gutter within 500ms
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Full exploration saved to: SAGEFS_EXPLORATION_COMPLETE.md (396 lines)

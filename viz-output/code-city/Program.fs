@@ -4235,6 +4235,24 @@ let private tryGetCorridorAxis (dirs: Vec2 list) =
       | 3 -> tryGetOpposingAxis 24.0f
       | _ -> None
 
+let private tryGetStructuralCorridorAxis (dirs: Vec2 list) =
+  let opposingPairs =
+    dirs
+    |> List.indexed
+    |> List.collect (fun (index, dirA) ->
+        dirs
+        |> List.skip (index + 1)
+        |> List.choose (fun dirB ->
+            let delta = directionDeltaDegrees dirA (Vec2.negate dirB)
+            if delta <= 24.0f then
+              Some (delta, Vec2.normalize (Vec2.sub dirA dirB))
+            else
+              None))
+    |> List.sortBy fst
+  opposingPairs
+  |> List.tryHead
+  |> Option.map snd
+
 let private parallelCorridorCrowdingBias (g: WeberGraph) (nid: NodeId) (dirs: Vec2 list) =
   match tryGetCorridorAxis dirs with
   | None -> 1.0f
@@ -4497,23 +4515,23 @@ let private formsParallelCorridorTripleBand (g: WeberGraph) (originId: NodeId) (
     let nearbyBandCount =
       g.Edges
       |> Seq.choose (fun edge ->
-          let a = (g.N edge.A).Pos
-          let b = (g.N edge.B).Pos
-          let edgeDelta = Vec2.sub b a
-          let edgeLengthSq = Vec2.lengthSq edgeDelta
-          if edgeLengthSq < 10.0f * 10.0f then
-            None
-          else
-            let edgeAxis = Vec2.normalize edgeDelta
-            let lateral = Vec2.dot (Vec2.sub (Vec2.Create((a.X + b.X) / 2.0f, (a.Y + b.Y) / 2.0f)) midpoint) perp
-            let overlap = projectionOverlap axis effectiveOrigin effectiveTarget a b
-            if parallelHeadingDeltaDegrees axis edgeAxis <= 12.0f
-               && abs lateral >= 5.0f
-               && abs lateral <= 18.0f
-               && overlap >= 12.0f then
-              Some (int (MathF.Round(lateral / 4.0f)))
+            let a = (g.N edge.A).Pos
+            let b = (g.N edge.B).Pos
+            let edgeDelta = Vec2.sub b a
+            let edgeLengthSq = Vec2.lengthSq edgeDelta
+            if edgeLengthSq < 10.0f * 10.0f then
+              None
             else
-              None)
+              let edgeAxis = Vec2.normalize edgeDelta
+              let lateral = Vec2.dot (Vec2.sub (Vec2.Create((a.X + b.X) / 2.0f, (a.Y + b.Y) / 2.0f)) midpoint) perp
+              let overlap = projectionOverlap axis effectiveOrigin effectiveTarget a b
+              if parallelHeadingDeltaDegrees axis edgeAxis <= 12.0f
+                 && abs lateral >= 5.0f
+                 && abs lateral <= 18.0f
+                 && overlap >= 12.0f then
+                Some (int (MathF.Round(lateral / 4.0f)))
+              else
+                None)
       |> Set.ofSeq
       |> Set.count
     nearbyBandCount >= 2
@@ -4890,6 +4908,7 @@ let private chooseOrganicSnapTarget (g: WeberGraph) (originId: NodeId) (origin: 
   else
     let proposedDir = Vec2.normalize proposedDelta
     let existingDirs = g.OutgoingDirs(originId)
+    let originAxis = tryGetStructuralCorridorAxis existingDirs
     let headingThreshold = 35.0f
     let duplicateAngleThreshold = 18.0f
     let shortArmThreshold = max 2.0f (Vec2.length proposedDelta * 0.55f)
@@ -4905,10 +4924,17 @@ let private chooseOrganicSnapTarget (g: WeberGraph) (originId: NodeId) (origin: 
         else
           let snapDir = Vec2.normalize delta
           let headingDelta = directionDeltaDegrees proposedDir snapDir
+          let targetAxis = tryGetStructuralCorridorAxis (g.OutgoingDirs n.Id)
           let duplicateShortArm =
             distSq <= shortArmThreshold * shortArmThreshold
             && existingDirs |> List.exists (fun existingDir -> directionDeltaDegrees snapDir existingDir <= duplicateAngleThreshold)
-          if headingDelta > headingThreshold || duplicateShortArm then
+          let longitudinalBypass =
+            match originAxis, targetAxis with
+            | Some axisA, Some axisB ->
+                parallelHeadingDeltaDegrees axisA axisB <= 22.0f
+                && parallelHeadingDeltaDegrees axisA snapDir < 45.0f
+            | _ -> false
+          if headingDelta > headingThreshold || duplicateShortArm || longitudinalBypass then
             None
           else
             let dist = sqrt distSq

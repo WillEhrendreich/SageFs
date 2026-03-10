@@ -152,7 +152,7 @@ let diagnosticsPanelSnapshotTests =
         WarmupProgress = ""; ThemeName = "default"; ConnectionLabel = None
         EvalStats = { Count = 0; AvgMs = 0.0; MinMs = 0.0; MaxMs = 0.0; Sparkline = ""; P50Ms = None; P95Ms = None }
         DaemonHealth = Elem.div [] []; FailureNarrativesPanel = Elem.div [] []
-        DiagnosticsPanel = Elem.div [] []
+        DiagnosticsPanel = Elem.div [] []; FilmstripPanel = Elem.div [] []
         HotReloadPanel = Elem.div [] []; SessionContextPanel = Elem.div [] []
         OutputPanel = Elem.div [] []; SessionsPanel = Elem.div [] []
         SessionPicker = Elem.div [] []; ThemePicker = Elem.div [] []
@@ -168,7 +168,7 @@ let diagnosticsPanelSnapshotTests =
         WarmupProgress = ""; ThemeName = "default"; ConnectionLabel = None
         EvalStats = { Count = 0; AvgMs = 0.0; MinMs = 0.0; MaxMs = 0.0; Sparkline = ""; P50Ms = None; P95Ms = None }
         DaemonHealth = Elem.div [] []; FailureNarrativesPanel = Elem.div [] []
-        DiagnosticsPanel = renderCurrentDiagnostics []
+        DiagnosticsPanel = renderCurrentDiagnostics []; FilmstripPanel = Elem.div [] []
         HotReloadPanel = Elem.div [] []; SessionContextPanel = Elem.div [] []
         OutputPanel = Elem.div [] []; SessionsPanel = Elem.div [] []
         SessionPicker = Elem.div [] []; ThemePicker = Elem.div [] []

@@ -260,6 +260,8 @@ let createStreamHandler
         renderFailureNarratives (FailureNarrativesPanelView.fromNarratives pairs)
       // Build diagnostics panel
       let diagnosticsPanel = renderCurrentDiagnostics (q.GetCurrentDiagnostics())
+      // Build session filmstrip panel
+      let filmstripPanel = renderSessionFilmstrip (q.GetFilmstripEntries())
       // Resolve theme
       let themeName =
         match resolveThemePush infra.SessionThemes currentSessionId workingDir lastSessionId lastWorkingDir with
@@ -373,6 +375,7 @@ let createStreamHandler
         DaemonHealth = daemonHealthPanel
         FailureNarrativesPanel = failureNarrativesPanel
         DiagnosticsPanel = diagnosticsPanel
+        FilmstripPanel = filmstripPanel
         ThemeName = themeName
         ConnectionLabel = connectionLabel
         HotReloadPanel = hrPanel
