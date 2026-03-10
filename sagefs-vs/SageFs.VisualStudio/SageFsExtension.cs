@@ -62,12 +62,18 @@ internal class SageFsExtension : Extension
       client.DashboardPort = daemonPort + 1;
       return client;
     });
-    serviceCollection.AddSingleton<Core.EvalCancellation>();
     serviceCollection.AddSingleton<Core.LiveTestingSubscriber>(sp =>
     {
       var sub = new Core.LiveTestingSubscriber(daemonPort);
       sub.Start();
       return sub;
+    });
+    serviceCollection.AddSingleton<Core.EvalCancellation>(sp =>
+    {
+      var cancel = new Core.EvalCancellation();
+      var testSub = sp.GetRequiredService<Core.LiveTestingSubscriber>();
+      Core.EvalCancellation.Wire(cancel, testSub);
+      return cancel;
     });
     serviceCollection.AddSingleton<Core.SessionSubscriber>(sp =>
     {

@@ -17,9 +17,14 @@ using Microsoft.VisualStudio.Extensibility.Editor;
 internal class EvalRangeCommand : Command
 {
   private readonly Core.SageFsClient client;
+  private readonly Core.EvalCancellation cancellation;
   private OutputChannel? output;
 
-  public EvalRangeCommand(Core.SageFsClient client) => this.client = client;
+  public EvalRangeCommand(Core.SageFsClient client, Core.EvalCancellation cancellation)
+  {
+    this.client = client;
+    this.cancellation = cancellation;
+  }
 
   public override CommandConfiguration CommandConfiguration => new("%SageFs.EvalRange.DisplayName%")
   {
@@ -61,23 +66,29 @@ internal class EvalRangeCommand : Command
     if (output is not null)
       await output.WriteLineAsync($"▶ Evaluating block ({code.Length} chars)...");
 
-    var result = await client.EvalWithContextAsync(code, filePath, "block", startLine, ct);
-    if (output is not null)
+    using var linked = System.Threading.CancellationTokenSource.CreateLinkedTokenSource(
+      cancellation.StartNew(), ct);
+    try
     {
-      if (result.ExitCode == 0)
+      var result = await client.EvalWithContextAsync(code, filePath, "block", startLine, linked.Token);
+      if (output is not null)
       {
-        await output.WriteLineAsync($"✓ {result.Output}");
+        if (result.ExitCode == 0)
+        {
+          await output.WriteLineAsync($"✓ {result.Output}");
+        }
+        else
+        {
+          await output.WriteLineAsync($"✗ Exit code {result.ExitCode}");
+          if (!string.IsNullOrEmpty(result.Output))
+            await output.WriteLineAsync(result.Output);
+          foreach (var diag in result.Diagnostics)
+            await output.WriteLineAsync($"  ⚠ {diag}");
+        }
+        await output.WriteLineAsync("───────────────────────────────────────");
       }
-      else
-      {
-        await output.WriteLineAsync($"✗ Exit code {result.ExitCode}");
-        if (!string.IsNullOrEmpty(result.Output))
-          await output.WriteLineAsync(result.Output);
-        foreach (var diag in result.Diagnostics)
-          await output.WriteLineAsync($"  ⚠ {diag}");
-      }
-      await output.WriteLineAsync("───────────────────────────────────────");
     }
+    finally { cancellation.Done(); }
   }
 
   /// <summary>

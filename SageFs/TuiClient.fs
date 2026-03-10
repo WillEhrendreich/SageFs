@@ -57,6 +57,9 @@ let run (daemonInfo: DaemonInfo) = task {
   let mutable lastLiveTestingStatus = ""
   let mutable lastWatchedCount = 0
   let mutable lastDensity = UiDensity.Normal
+  // Eval watchdog: tracks whether the daemon was evaluating when SSE disconnected.
+  // If so, the reconnecting message is enhanced to mention the interrupted eval.
+  let mutable evalInterruptedOnDisconnect = false
   let mutable layoutConfig = LayoutConfig.defaults
   let mutable currentTheme =
     match ThemePresets.tryFind "Kanagawa" with
@@ -186,6 +189,7 @@ let run (daemonInfo: DaemonInfo) = task {
     DaemonClient.runSseListener
       baseUrl
       (fun event regions ->
+        evalInterruptedOnDisconnect <- false
         match event.ActiveWorkingDir.Length > 0 && event.ActiveWorkingDir <> lastWorkingDir && lastWorkingDir.Length > 0 with
         | true ->
           sessionThemes.[lastWorkingDir] <- currentThemeName
@@ -214,7 +218,15 @@ let run (daemonInfo: DaemonInfo) = task {
           TimeTravel.record event.SessionState 0.0<SageFs.Measures.ms> regions timeTravelState
         render ())
       (fun _ ->
-        lastSessionState <- sprintf "%s (reconnecting...)" lastSessionState
+        let wasEvaluating =
+          lastSessionState.Contains("Evaluating", StringComparison.OrdinalIgnoreCase)
+          || lastSessionState.Contains("evaluating", StringComparison.OrdinalIgnoreCase)
+        match wasEvaluating with
+        | true ->
+          evalInterruptedOnDisconnect <- true
+          lastSessionState <- "⚠ Eval interrupted — daemon disconnected (reconnecting...)"
+        | false ->
+          lastSessionState <- sprintf "%s (reconnecting...)" lastSessionState
         render ())
       cts.Token
 

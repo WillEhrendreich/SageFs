@@ -241,6 +241,8 @@ module RaylibMode =
     let mutable lastWatchedCount = 0
     let mutable lastDensity = UiDensity.Normal
     let mutable lastFps = 0
+    // Eval watchdog: tracks whether the daemon was evaluating when SSE disconnected.
+    let mutable evalInterruptedOnDisconnect = false
     // Time-travel: buffer last N region snapshots for keyboard navigation
     let mutable timeTravelState =
       TimeTravel.create { ModelSnapshot.Capacity = 200; ModelSnapshot.Enabled = true }
@@ -291,6 +293,7 @@ module RaylibMode =
         baseUrl
         (fun event regions ->
           lock statelock (fun () ->
+            evalInterruptedOnDisconnect <- false
             // Detect session switch by working directory change
             if event.ActiveWorkingDir.Length > 0 && event.ActiveWorkingDir <> lastWorkingDir && lastWorkingDir.Length > 0 then
               sessionThemes.[lastWorkingDir] <- currentThemeName
@@ -316,7 +319,15 @@ module RaylibMode =
               TimeTravel.record event.SessionState 0.0<SageFs.Measures.ms> regions timeTravelState))
         (fun _ ->
           lock statelock (fun () ->
-            lastSessionState <- sprintf "%s (reconnecting...)" lastSessionState))
+            let wasEvaluating =
+              lastSessionState.Contains("Evaluating", StringComparison.OrdinalIgnoreCase)
+              || lastSessionState.Contains("evaluating", StringComparison.OrdinalIgnoreCase)
+            match wasEvaluating with
+            | true ->
+              evalInterruptedOnDisconnect <- true
+              lastSessionState <- "⚠ Eval lost — daemon disconnected (reconnecting...)"
+            | false ->
+              lastSessionState <- sprintf "%s (reconnecting...)" lastSessionState))
         cts.Token
 
     let navigateFailingTests (delta: int) =

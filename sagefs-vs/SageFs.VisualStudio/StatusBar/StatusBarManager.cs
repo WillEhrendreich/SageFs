@@ -25,6 +25,7 @@ internal class StatusBarManager : ExtensionPart
   private readonly Core.SageFsClient _client;
   private readonly Core.LiveTestingSubscriber _testSubscriber;
   private readonly Core.SessionSubscriber _sessionSubscriber;
+  private readonly Core.EvalCancellation _evalCancellation;
   private bool _connected;
   private int _passingTests;
   private int _failedTests;
@@ -38,11 +39,13 @@ internal class StatusBarManager : ExtensionPart
   public StatusBarManager(
     Core.SageFsClient client,
     Core.LiveTestingSubscriber testSubscriber,
-    Core.SessionSubscriber sessionSubscriber)
+    Core.SessionSubscriber sessionSubscriber,
+    Core.EvalCancellation evalCancellation)
   {
     _client = client;
     _testSubscriber = testSubscriber;
     _sessionSubscriber = sessionSubscriber;
+    _evalCancellation = evalCancellation;
   }
 
   protected override async Task InitializeAsync(CancellationToken ct)
@@ -54,6 +57,9 @@ internal class StatusBarManager : ExtensionPart
     // Subscribe to SSE events for live status bar updates
     _testSubscriber.SummaryChanged += OnTestSummaryChanged;
     _sessionSubscriber.StateChanged += OnSessionStateChanged;
+
+    // Subscribe to eval watchdog — fires when SSE disconnects during in-flight eval
+    _evalCancellation.EvalInterrupted += OnEvalInterrupted;
 
     // Periodic vitals refresh (session count requires an API call)
     _vitalsTimer = new Timer(_ => _ = RefreshVitalsAsync(), null,
@@ -69,6 +75,13 @@ internal class StatusBarManager : ExtensionPart
   {
     _passingTests = summary.Passed;
     _failedTests = summary.Failed;
+    PushStatusBar();
+  }
+
+  private void OnEvalInterrupted(object? sender, Microsoft.FSharp.Core.Unit args)
+  {
+    _ = _infoBar?.ShowEvalInterruptedAsync();
+    _daemonStatus = "Stopped";
     PushStatusBar();
   }
 
@@ -152,7 +165,12 @@ internal class StatusBarManager : ExtensionPart
       {
         _sessionCount = 0;
         if (wasConnected)
-          _ = _infoBar?.ShowDaemonDisconnectedAsync();
+        {
+          if (_evalCancellation.IsEvaluating)
+            _ = _infoBar?.ShowEvalInterruptedAsync();
+          else
+            _ = _infoBar?.ShowDaemonDisconnectedAsync();
+        }
       }
 
       PushStatusBar();
