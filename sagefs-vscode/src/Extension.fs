@@ -19,6 +19,7 @@ module TypeExpl = SageFs.Vscode.TypeExplorerProvider
 module TestDeco = SageFs.Vscode.TestDecorations
 module TestLens = SageFs.Vscode.TestCodeLensProvider
 module InlineDeco = SageFs.Vscode.InlineDecorations
+module FileAnno = SageFs.Vscode.FileAnnotationsListener
 
 open SageFs.Vscode.LiveTestingTypes
 
@@ -41,6 +42,13 @@ let mutable typeExplorer: TypeExpl.TypeExplorer option = None
 let mutable wasRunning = false
 let mutable crashPromptShown = false
 let mutable staleDebounceTimer: obj option = None
+
+// File annotation decorations (coverage gutters + inline failures)
+let mutable private covPassingDecoType: TextEditorDecorationType option = None
+let mutable private covFailingDecoType: TextEditorDecorationType option = None
+let mutable private covNoneDecoType: TextEditorDecorationType option = None
+let mutable private inlineFailureDecoTypes: Map<string, TextEditorDecorationType> = Map.empty
+let mutable private fileAnnotationsCache: Map<string, FileAnno.FileAnnotations> = Map.empty
 
 // Density preset: controls visual annotation verbosity
 type Density = Full | Normal | Minimal
@@ -79,6 +87,131 @@ let cycleDensity () =
 
 // FSI bindings and test trace — maintained by SSE events (server-side CQRS)
 // No client-side parsing; server pushes snapshots via SSE bindings_snapshot/test_trace events
+
+// ── File Annotation Decorations (coverage gutters + inline failures) ──
+
+let initFileAnnotationDecoTypes () =
+  covPassingDecoType <- Some (
+    Window.createTextEditorDecorationType (
+      createObj [
+        "isWholeLine" ==> false
+        "gutterIconPath" ==> ""
+        "overviewRulerColor" ==> newThemeColor "testing.iconPassed"
+        "overviewRulerLane" ==> 1
+        "before" ==> createObj [
+          "contentText" ==> "│"
+          "color" ==> newThemeColor "testing.iconPassed"
+          "margin" ==> "0 0.3em 0 0"
+        ]
+      ]))
+  covFailingDecoType <- Some (
+    Window.createTextEditorDecorationType (
+      createObj [
+        "isWholeLine" ==> false
+        "overviewRulerColor" ==> newThemeColor "testing.iconFailed"
+        "overviewRulerLane" ==> 1
+        "before" ==> createObj [
+          "contentText" ==> "│"
+          "color" ==> newThemeColor "testing.iconFailed"
+          "margin" ==> "0 0.3em 0 0"
+        ]
+      ]))
+  covNoneDecoType <- Some (
+    Window.createTextEditorDecorationType (
+      createObj [
+        "isWholeLine" ==> false
+        "before" ==> createObj [
+          "contentText" ==> "│"
+          "color" ==> newThemeColor "disabledForeground"
+          "margin" ==> "0 0.3em 0 0"
+        ]
+      ]))
+
+let disposeFileAnnotationDecoTypes () =
+  covPassingDecoType |> Option.iter (fun d -> d.dispose ())
+  covFailingDecoType |> Option.iter (fun d -> d.dispose ())
+  covNoneDecoType |> Option.iter (fun d -> d.dispose ())
+  covPassingDecoType <- None
+  covFailingDecoType <- None
+  covNoneDecoType <- None
+  inlineFailureDecoTypes |> Map.iter (fun _ d -> d.dispose ())
+  inlineFailureDecoTypes <- Map.empty
+  fileAnnotationsCache <- Map.empty
+
+let applyFileAnnotationsToEditor (editor: TextEditor) =
+  let filePath = editor.document.fileName
+  match Map.tryFind filePath fileAnnotationsCache with
+  | None ->
+    covPassingDecoType |> Option.iter (fun dt -> editor.setDecorations(dt, ResizeArray<obj>()))
+    covFailingDecoType |> Option.iter (fun dt -> editor.setDecorations(dt, ResizeArray<obj>()))
+    covNoneDecoType |> Option.iter (fun dt -> editor.setDecorations(dt, ResizeArray<obj>()))
+  | Some annotations ->
+    let passRanges = ResizeArray<obj>()
+    let failRanges = ResizeArray<obj>()
+    let noneRanges = ResizeArray<obj>()
+    for ann in annotations.CoverageAnnotations do
+      let range = newRange (ann.Line - 1) 0 (ann.Line - 1) 0
+      let decoObj =
+        createObj [
+          "range" ==> range
+          "hoverMessage" ==>
+            (match ann.Health with
+             | FileAnno.CoverageHealth.AllPassing -> "Coverage: all tests passing"
+             | FileAnno.CoverageHealth.SomeFailing -> "Coverage: some tests failing"
+             | FileAnno.CoverageHealth.NoCoverage -> "No coverage")
+        ]
+      match ann.Health with
+      | FileAnno.CoverageHealth.AllPassing -> passRanges.Add decoObj
+      | FileAnno.CoverageHealth.SomeFailing -> failRanges.Add decoObj
+      | FileAnno.CoverageHealth.NoCoverage -> noneRanges.Add decoObj
+    covPassingDecoType |> Option.iter (fun dt -> editor.setDecorations(dt, passRanges))
+    covFailingDecoType |> Option.iter (fun dt -> editor.setDecorations(dt, failRanges))
+    covNoneDecoType |> Option.iter (fun dt -> editor.setDecorations(dt, noneRanges))
+    // Dispose old inline failure decorations for this file
+    match Map.tryFind filePath inlineFailureDecoTypes with
+    | Some old -> old.dispose ()
+    | None -> ()
+    // Apply inline failure decorations
+    match annotations.InlineFailures with
+    | [] ->
+      inlineFailureDecoTypes <- Map.remove filePath inlineFailureDecoTypes
+    | failures ->
+      let deco = Window.createTextEditorDecorationType (
+        createObj [
+          "after" ==> createObj [
+            "color" ==> newThemeColor "testing.iconFailed"
+            "fontStyle" ==> "italic"
+            "margin" ==> "0 0 0 1.5em"
+          ]
+        ])
+      let ranges = ResizeArray<obj>()
+      for f in failures do
+        let line = f.Line - 1
+        let text =
+          match f.Presentation with
+          | "" -> sprintf "⊘ %s" f.TestName
+          | p -> sprintf "⊘ %s — %s" f.TestName p
+        let range = newRange line 0 line 0
+        ranges.Add (createObj [
+          "range" ==> range
+          "renderOptions" ==> createObj [
+            "after" ==> createObj [ "contentText" ==> text ]
+          ]
+        ])
+      editor.setDecorations(deco, ranges)
+      inlineFailureDecoTypes <- Map.add filePath deco inlineFailureDecoTypes
+
+let applyFileAnnotationsToAllEditors () =
+  let editors = Window.getVisibleTextEditors ()
+  for editor in editors do
+    applyFileAnnotationsToEditor editor
+
+let handleFileAnnotations (data: obj) =
+  match FileAnno.parseFileAnnotations data with
+  | None -> ()
+  | Some annotations ->
+    fileAnnotationsCache <- Map.add annotations.FilePath annotations fileAnnotationsCache
+    applyFileAnnotationsToAllEditors ()
 
 // ── JS Interop ─────────────────────────────────────────────────
 
@@ -1368,6 +1501,7 @@ let activate (context: ExtensionContext) =
     testAdapter <- None
     diagnosticsDisposable |> Option.iter (fun d -> d.dispose () |> ignore)
     diagnosticsDisposable <- None
+    fileAnnotationsCache <- Map.empty
     c.log "connectToRunningDaemon: establishing fresh SSE connections..."
     // Establish fresh connection resources
     let diagLogger = Some (fun (msg: string) -> (getOutput()).appendLine (sprintf "[Diagnostics SSE] %s" msg))
@@ -1380,6 +1514,7 @@ let activate (context: ExtensionContext) =
     testAdapter <- Some adapter
     // Initialize inline test decorations
     TestDeco.initialize ()
+    initFileAnnotationDecoTypes ()
     // Live testing listener — handles test_summary, test_results_batch, and state events
     let refreshAllDecorations () =
       liveTestListener
@@ -1388,6 +1523,7 @@ let activate (context: ExtensionContext) =
       |> fun state ->
         TestDeco.applyToAllEditors state
         TestDeco.applyCoverageToAllEditors state
+        applyFileAnnotationsToAllEditors ()
         state
     let liveTestCallbacks: LiveTest.LiveTestingCallbacks = {
       OnStateChange = fun changes ->
@@ -1591,4 +1727,5 @@ let deactivate () =
   HotReload.stopAutoRefresh ()
   SessionCtx.stopAutoRefresh ()
   TestDeco.dispose ()
+  disposeFileAnnotationDecoTypes ()
   InlineDeco.clearAllDecorations ()

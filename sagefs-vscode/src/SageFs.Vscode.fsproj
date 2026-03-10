@@ -9,6 +9,7 @@
     <Compile Include="JsHelpers.fs" />
     <Compile Include="LiveTestingTypes.fs" />
     <Compile Include="FeatureTypes.fs" />
+    <Compile Include="FileAnnotationsListener.fs" />
     <Compile Include="LiveTestingListener.fs" />
     <Compile Include="SageFsClient.fs" />
     <Compile Include="DiagnosticsListener.fs" />
