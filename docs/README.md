@@ -22,6 +22,7 @@
 - **[Troubleshooting](TROUBLESHOOTING.md)** — Common issues and fixes
 
 ## For Contributors
+- **[Architecture Decision Records](architecture-decisions.md)** — Why SSE-only CQRS, SageTUI migration, binary persistence, typed errors, dual renderer, MCP, no interfaces
 - **[Code Reference](../CODE_REFERENCE.md)** — 6 key design patterns with examples
 - **[Contributing Guide](../CONTRIBUTING.md)** — Development workflow, testing, PRs
 - **[Live Testing Guide](../LIVE_TESTING_GUIDE.md)** — Implementation details of the test pipeline
