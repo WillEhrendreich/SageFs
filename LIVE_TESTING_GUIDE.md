@@ -235,3 +235,34 @@ To build on top of SageFs live testing:
    → Example: Generate HTML reports, integrations with issue tracking
 
 ================================================================================
+
+## SSE Event Formats
+
+Wire formats for live-testing SSE events consumed by editor integrations.
+
+### test_source_locations
+
+```
+event: test_source_locations
+data: {"SessionId":"<id>", "Locations": [{"CellId":int, "TestName":"string", "FilePath":"string", "StartLine":int, "EndLine":int}]}
+```
+
+### file_annotations
+
+```
+event: file_annotations
+data: {"SessionId":"<id>", "Annotations": {"<filePath>": {"CoverageAnnotations": [{"Line":int, "Health":"AllPassing|SomeFailing|NoCoverage", "Tests":["testName"]}], "InlineFailures": [{"Line":int, "TestName":"string", "Presentation":"AssertionDiff|ExceptionMessage|Timeout|RawMessage", "Details":{...}}]}}}
+```
+
+### failure_narratives
+
+```
+event: failure_narratives
+data: {"SessionId":"<id>", "Narratives": [{"TestId":"string", "TestName":"string", "Summary":"string", "TimeSinceLastPass":"string", "CausalChanges":[{"Symbol":"string", "File":"string"}], "PropertyViolation":null|{...}}]}
+```
+
+## Editor Integrations
+
+- **VS Code**: `FileAnnotationsListener.fs` parses file_annotations. `Extension.fs` renders coverage gutter decorations + inline failures. `TestControllerAdapter.fs` enriches test items with failure narratives.
+- **Visual Studio**: `CoverageGlyphTagger.cs` (MEF pipeline for gutter glyphs). `FileAnnotationTracker.cs` caches coverage + failure data. `TestStateTracker.cs` stores source locations for navigation.
+- **Neovim**: `testing.lua` caches source_locations and failure_narratives. `telescope_picker.lua` jumps to source on `<CR>`. `commands.lua` shows narrative floating window on `<C-d>`.

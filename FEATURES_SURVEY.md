@@ -2,7 +2,7 @@
 
 ## Summary
 
-Total Feature Modules: **30** in SageFs.Core/Features/
+Total Feature Modules: **33** in SageFs.Core/Features/
 Plus **2** root-level SageFs.Core modules with feature characteristics
 
 ---
@@ -305,7 +305,7 @@ Plus **2** root-level SageFs.Core modules with feature characteristics
 
 ## WIRING SUMMARY
 
-### MCP-Wired Features (42 methods across 16 modules):
+### MCP-Wired Features (45 methods across 19 modules):
 1. **send_fsharp_code** → EvalPipeline
 2. **load_fsharp_script** → EvalPipeline
 3. **get_recent_fsi_events** → Replay
@@ -348,6 +348,9 @@ Plus **2** root-level SageFs.Core modules with feature characteristics
 40. **get_eval_timeline** → **EvalTimeline** ✅
 41. **manage_scratch_pad** → **ScratchPad** ✅
 42. **get_eval_diff** → **EvalDiff** ✅
+43. **list_tests** → **TestDiscovery** ✅
+44. **get_cell_dependencies** → **CellDependenciesReport** ✅
+45. **discover_features** → **FeatureDiscovery** ✅
 
 ### SSE-Emitting Features:
 1. **BindingExplorer** → formatBindingScopeMapEvent
@@ -359,7 +362,8 @@ Plus **2** root-level SageFs.Core modules with feature characteristics
 7. **TestNarration** → (embedded in formatFailureNarrativesEvent)
 8. **Diagnostician** → formatDiagnosisReadyEvent
 9. **SessionEvents** → formatSessionSseEvent
-10. **FeatureHooks** → (orchestrates above emissions)
+10. **TestDiscovery** → formatTestSourceLocationsEvent
+11. **FeatureHooks** → (orchestrates above emissions)
 
 ### Dark/Pure-Logic-Only (Unexposed):
 1. **AutoCompletion** (exposed via explore_type/explore_namespace)
@@ -383,11 +387,11 @@ Plus **2** root-level SageFs.Core modules with feature characteristics
 
 | Category | Count |
 |----------|-------|
-| Total Feature Modules | 32 |
-| MCP-Wired (direct or indirect) | 16 |
-| SSE-Emitting | 9 |
-| LIT (MCP + SSE) | 8 |
-| LIT (MCP only) | 8 |
+| Total Feature Modules | 35 |
+| MCP-Wired (direct or indirect) | 19 |
+| SSE-Emitting | 10 |
+| LIT (MCP + SSE) | 9 |
+| LIT (MCP only) | 10 |
 | LIT (SSE only) | 1 |
 | DARK (pure/unexposed) | 14 |
 | With Tests | 24 |
@@ -409,5 +413,5 @@ Plus **2** root-level SageFs.Core modules with feature characteristics
 4. **Test Coverage**: 24/32 modules have tests. Notable gaps: AutoCompletion (covered in integration test), DaemonPersistence, Diagnostics, LiveTestingExecutors, LiveTestingInstrumentation, SessionPersistence, TestCachePersistence (likely I/O testing happens elsewhere).
 
 5. **Wiring Entry Points**:
-   - MCP: **McpTools.fs** (42 methods)
+   - MCP: **McpTools.fs** (45 methods)
    - SSE: **McpServer.fs** (orchestrates pushes) + **FeatureHooks.fs** (coordinates emissions)

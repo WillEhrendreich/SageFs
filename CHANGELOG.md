@@ -13,6 +13,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `getFeatures()` helper in VS Code extension client — returns daemon feature list from health response
 - `GetHealthAsync()` in Visual Studio extension client — parses `apiVersion` and `features[]` from `/health` response
 - Neovim `health_check` stores `api_version` and `features` in `M.state` after successful connection
+- `TestSourceLocation` type + `TestSourceResolver` module for test→file/line resolution
+- `PaneId.Tests` discriminated union case + Tests pane renderer (TUI + Raylib GUI)
+- `TogglePane of PaneId` type-safety sweep across UiAction/TerminalCommand/RaylibMode
+- BenchmarkDotNet ActionPrioritizer benchmark suite
+- FsCheck property tests for CoverageIntel
+- 20 unit tests for Tests pane renderer (TestsPaneTests.fs)
+- 3 new MCP tools — `list_tests` (query tests by pattern/file), `get_cell_dependencies` (staleness-annotated dependency graph), `discover_features` (context-aware feature suggestions)
+- 3 new feature modules — `TestDiscovery`, `CellDependenciesReport`, `FeatureDiscovery`
+- VS Code — `file_annotations` SSE handler with coverage gutter bars (green/red/gray `│`) and inline failure decorations (`⊘ testName — Expected: x Actual: y`)
+- VS Code — `failure_narratives` SSE handler enriching test failure messages with Summary/CausalChanges
+- Visual Studio — `CoverageGlyphTagger` MEF pipeline (tag + tagger + provider + factory) rendering 3×16px colored bars in editor gutter
+- Visual Studio — `TestStateTracker` with `ProcessSourceLocations`/`GetSourceLocation` for test→source navigation
+- Visual Studio — `failure_narratives` SSE processing for inline failure context enrichment
+- Neovim — Telescope `<CR>` now jumps to test source location (falls back to run), `<C-g>` explicit source-jump
+- Neovim — `<C-d>` floating window showing failure narrative (Summary, TimeSinceLastPass, CausalChanges)
+- Neovim — SSE handlers for `test_source_locations` and `failure_narratives` events
 
 ### Added
 - Composed multi-provider test execution — `RunTest` closures from multiple providers (FSI hook + project-level) are chained with fallthrough semantics so the first provider that can run a test wins
@@ -27,6 +43,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - MCP `escapeJson` now uses `StringBuilder` and correctly handles `\b`, `\f`, and all control characters below `\u0020` (previously only handled `\\`, `"`, `\n`, `\r`, `\t`)
 - FSI `rewriteInlineUseStatements` preserves indentation correctly via `Substring` instead of `String.Replace`, which could corrupt lines containing the substring "use " in non-keyword positions
+- `TestSourceLocations` SSE event was computed but never emitted — added `formatTestSourceLocationsEvent` in SseWriter.fs + broadcast trigger in McpServer.fs
 
 ### Changed
 - ~40 `private` modifiers removed across Core, Tests, VS Code extension, Visual Studio extension, and GUI projects to enable REPL-based interactive testing via SageFs sessions

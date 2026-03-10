@@ -214,7 +214,9 @@ Every frontend connects to the same daemon. Open several at once — they all se
 | Code completion | ✅ | ✅ | ¹ | ✅ | ✅ | ✅ | ✅ |
 | CodeLens | ✅ | ✅ | ✅ | — | — | — | — |
 | **Live test gutters** | ✅ | ✅ | ¹ | ✅ | ¹ | — | — |
-| **Coverage gutters** | ¹ | ✅ | ¹ | ✅ | ¹ | — | — |
+| **Coverage gutters** | ✅ | ✅ | ✅ | ✅ | ¹ | — | — |
+| **Failure narratives** | ✅ | ✅ | ✅ | — | — | — | ✅ |
+| **Test source-jump** | ✅ | ✅ | ✅ | — | — | — | — |
 | Test panel | ✅ | ✅ | — | — | — | — | — |
 | Test policy controls | ✅ | ✅ | — | — | — | — | ✅ |
 | Type explorer | ✅ | ✅ | — | — | — | — | ✅ |
@@ -235,7 +237,7 @@ The extension is distributed as a `.vsix` from [GitHub Releases](https://github.
 code --install-extension sagefs-<version>.vsix
 ```
 
-Features: Alt+Enter eval, CodeLens, live test decorations, native Test Explorer integration, hot reload sidebar, session context, type explorer, call graph, event history, dashboard webview, status bar, auto-start, and Ionide command hijacking.
+Features: Alt+Enter eval, CodeLens, live test decorations, native Test Explorer integration, hot reload sidebar, session context, type explorer, call graph, event history, dashboard webview, status bar, auto-start, Ionide command hijacking, coverage gutter bars, inline failure decorations, failure narrative enrichment, and test source-jump.
 
 #### Neovim
 
@@ -246,17 +248,17 @@ Features: Alt+Enter eval, CodeLens, live test decorations, native Test Explorer 
 { "WillEhrendreich/sagefs.nvim", ft = { "fsharp" }, opts = { port = 37749, auto_connect = true } }
 ```
 
-Features: Cell eval, inline results, gutter signs, SSE live updates, live test panel, coverage panel with per-file breakdown, type explorer, call graph, history browser, session export to `.fsx`, code completion, branch coverage gutters, filterable test panel, display density presets, and combined statusline component.
+Features: Cell eval, inline results, gutter signs, SSE live updates, live test panel, coverage panel with per-file breakdown, type explorer, call graph, history browser, session export to `.fsx`, code completion, branch coverage gutters, filterable test panel, display density presets, combined statusline component, Telescope source-jump (`<CR>`), failure narrative floating window (`<C-d>`), and SSE-driven test state caching.
 
 #### Visual Studio
 
-Uses the [VisualStudio.Extensibility](https://learn.microsoft.com/en-us/visualstudio/extensibility/visualstudio.extensibility/) SDK with F# core logic. Early development — eval, CodeLens, session management, and diagnostics work. Live testing gutters and advanced features are in progress.
+Uses the [VisualStudio.Extensibility](https://learn.microsoft.com/en-us/visualstudio/extensibility/visualstudio.extensibility/) SDK with F# core logic. Eval, CodeLens, session management, diagnostics, coverage gutter glyphs (CoverageGlyphTagger), test source-jump via TestStateTracker, and inline failure narrative context.
 
 The VS extension includes kill switches for individual features. See the [VS Extension README](sagefs-vs/README.md#kill-switches) for details.
 
 #### AI Agent (MCP)
 
-SageFs exposes 30 MCP tools — from `send_fsharp_code` to `run_tests` to `explore_type`. Any MCP client can connect.
+SageFs exposes 33 MCP tools — from `send_fsharp_code` to `run_tests` to `discover_features`. Any MCP client can connect.
 
 **Streamable HTTP** (recommended — auto-reconnects, no session drops):
 ```json
@@ -414,6 +416,24 @@ Design: length-prefixed strings, section headers with byte-count envelopes, vers
 | `query_test_coverage` | Which tests transitively cover a given symbol via the dependency graph. |
 | `get_file_coverage` | Per-line coverage data for a file — bitmap + dependency graph synthesis. |
 | `visualize_domain_model` | Visualize a discriminated union type as a state machine diagram. |
+| `list_tests` | List all discovered tests, optionally filtered by pattern or file path. Returns grouped-by-file results with source locations. |
+| `get_cell_dependencies` | Expose the cell dependency graph with staleness annotations. Shows which cells are stale and why. |
+| `discover_features` | Context-aware feature discovery. Ranks available SageFs features by relevance to current session state. |
+
+</details>
+
+<details>
+<summary><strong>📡 SSE Events Reference</strong></summary>
+
+<br />
+
+All connected editors receive these events via the SSE stream. Events are tagged with `SessionId` for multi-session isolation.
+
+| Event | Description |
+|:---|:---|
+| `test_source_locations` | Maps test names to file paths and line ranges for source navigation. |
+| `file_annotations` | Per-file coverage health (AllPassing/SomeFailing/NoCoverage) and inline failure details. |
+| `failure_narratives` | Enriched test failure context with causal analysis — which symbols/files changed, time since last pass. |
 
 </details>
 
