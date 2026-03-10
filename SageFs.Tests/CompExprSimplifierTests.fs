@@ -174,9 +174,9 @@ let middlewareGuardTests =
       let request = { Code = "let x = 1"; Args = Map.empty }
       let response, _ = compExprMiddleware passThroughNext (request, makeState ())
       Expect.equal
-        "middleware should pass through unchanged when there is no live session"
-        request.Code
         response.EvaluatedCode
+        request.Code
+        "middleware should pass through unchanged when there is no live session"
 
     testCase "explicit simplify flag still works with null session" <| fun _ ->
       let request =
@@ -184,7 +184,7 @@ let middlewareGuardTests =
           Args = Map.ofList [ "simplifyCompExpression", box true ] }
       let response, _ = compExprMiddleware passThroughNext (request, makeState ())
       Expect.equal
-        "explicit simplify flag should still rewrite the code"
-        (rewriteExpr request.Code)
         response.EvaluatedCode
+        (rewriteExpr request.Code)
+        "explicit simplify flag should still rewrite the code"
   ]
