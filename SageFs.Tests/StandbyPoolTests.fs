@@ -350,7 +350,7 @@ let sseProgressCallbackTests = testList "SSE progress callback" [
     use cts = new CancellationTokenSource(5000)
     let mutable callCount = 0
     let mgr, _ =
-      SessionManager.create cts.Token (fun () -> callCount <- callCount + 1) (fun _ _ _ -> ()) (fun _ _ -> ()) ignore (fun _ _ -> ())
+      SessionManager.create cts.Token (fun () -> callCount <- callCount + 1) (fun _ _ _ -> ()) (fun _ _ -> ()) ignore (fun _ _ -> ()) (fun _ _ -> ())
     let fakeKey = { StandbyKey.Projects = ["test.fsproj"]; WorkingDir = "C:\\fake"; AutoOpenNamespaces = true }
     mgr.Post(SessionManager.SessionCommand.StandbyProgress(fakeKey, "1/4 test"))
     Thread.Sleep(50)
@@ -360,7 +360,7 @@ let sseProgressCallbackTests = testList "SSE progress callback" [
     use cts = new CancellationTokenSource(5000)
     let mutable callCount = 0
     let _mgr, _ =
-      SessionManager.create cts.Token (fun () -> callCount <- callCount + 1) (fun _ _ _ -> ()) (fun _ _ -> ()) ignore (fun _ _ -> ())
+      SessionManager.create cts.Token (fun () -> callCount <- callCount + 1) (fun _ _ _ -> ()) (fun _ _ -> ()) ignore (fun _ _ -> ()) (fun _ _ -> ())
     Thread.Sleep(50)
     Expect.equal "callback should not fire on creation alone" 0 callCount
 ]

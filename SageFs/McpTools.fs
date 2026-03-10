@@ -849,3 +849,113 @@ WORKFLOW: Use to review what happened in a session, find when a binding was intr
         logger.LogDebug("MCP-TOOL: get_session_filmstrip called, filter={Filter}", filter)
         let filterOpt = match System.String.IsNullOrWhiteSpace filter with | true -> None | false -> Some filter
         getSessionFilmstrip ctx filterOpt |> withEcho "get_session_filmstrip"
+
+    // ── Phase 1b: Orphaned module MCP tools ──
+
+    [<McpServerTool>]
+    [<Description("""Export the current session as a notebook-style .fsx file with cell metadata.
+
+Each cell preserves its code, output, index, and dependencies as structured comments.
+The exported format can be re-imported with importNotebook.
+
+OUTPUT: A complete .fsx file string with cell boundaries and metadata.
+
+WORKFLOW: Use this to save your interactive session as a portable, re-runnable notebook.""")>]
+    member _.export_notebook(
+        [<Description("Optional project name for the notebook header (defaults to 'SageFs Session')")>]
+        project_name: string
+    ) : Task<string> =
+        logger.LogDebug("MCP-TOOL: export_notebook called, project={Name}", project_name)
+        let nameOpt = match System.String.IsNullOrWhiteSpace project_name with | true -> None | false -> Some project_name
+        exportNotebook ctx nameOpt |> withEcho "export_notebook"
+
+    [<McpServerTool>]
+    [<Description("""Export the current session as a clean, topologically-sorted .fsx transcript.
+
+Uses the cell dependency graph to order cells so that dependencies come before dependents.
+Deduplicates cells and strips metadata — the result is a minimal, runnable .fsx script.
+
+OUTPUT: A clean .fsx file string ready to run with `dotnet fsi`.
+
+WORKFLOW: Use this to extract a clean, reproducible script from an exploratory session.""")>]
+    member _.export_session_transcript(
+        [<Description("Optional project name for the transcript header (defaults to 'SageFs Session')")>]
+        project_name: string
+    ) : Task<string> =
+        logger.LogDebug("MCP-TOOL: export_session_transcript called, project={Name}", project_name)
+        let nameOpt = match System.String.IsNullOrWhiteSpace project_name with | true -> None | false -> Some project_name
+        exportSessionTranscript ctx nameOpt |> withEcho "export_session_transcript"
+
+    [<McpServerTool>]
+    [<Description("""Get the message journal — a structured audit log of eval events.
+
+Synthesizes journal entries from eval history, classifying successful evals as Info
+and failed evals as Error. Supports filtering by minimum severity level and source.
+
+OUTPUT: Journal summary statistics followed by timestamped, level-tagged entries.
+
+WORKFLOW: Use this for observability — review what happened, filter to errors only, or trace eval activity.""")>]
+    member _.get_message_journal(
+        [<Description("Minimum severity level to include: 'debug', 'info', 'warn', or 'error' (defaults to all)")>]
+        min_level: string,
+        [<Description("Optional source filter — only show entries from matching sources (case-insensitive)")>]
+        source: string
+    ) : Task<string> =
+        logger.LogDebug("MCP-TOOL: get_message_journal called, level={Level}, source={Source}", min_level, source)
+        let levelOpt = match System.String.IsNullOrWhiteSpace min_level with | true -> None | false -> Some min_level
+        let sourceOpt = match System.String.IsNullOrWhiteSpace source with | true -> None | false -> Some source
+        getMessageJournal ctx levelOpt sourceOpt |> withEcho "get_message_journal"
+
+    [<McpServerTool>]
+    [<Description("""Get eval timeline with performance sparkline and percentile statistics.
+
+Shows a visual sparkline of recent eval durations, plus P50/P95/P99 and mean latency.
+Also lists the most recent evaluations with their cell IDs, status icons, and durations.
+
+OUTPUT: Sparkline visualization, percentile statistics, and recent eval entries.
+
+WORKFLOW: Use this to monitor eval performance trends and identify slow cells.""")>]
+    member _.get_eval_timeline(
+        [<Description("Width of the sparkline in characters (defaults to 20)")>]
+        sparkline_width: int
+    ) : Task<string> =
+        logger.LogDebug("MCP-TOOL: get_eval_timeline called, width={Width}", sparkline_width)
+        let widthOpt = match sparkline_width with | 0 -> None | w -> Some w
+        getEvalTimeline ctx widthOpt |> withEcho "get_eval_timeline"
+
+    [<McpServerTool>]
+    [<Description("""Manage the session scratch pad — view, export, or promote ephemeral code snippets.
+
+Actions:
+- 'list': Show all snippets with their IDs, code, and results
+- 'export': Export all snippets as a .fsx script
+- 'promote': Extract only the successfully evaluated snippets as clean code
+
+The scratch pad is built from the current session's eval history.
+
+OUTPUT: Depends on action — list of snippets, .fsx script, or promoted code.
+
+WORKFLOW: Use 'list' to review snippets, 'export' for a full dump, 'promote' to keep only working code.""")>]
+    member _.manage_scratch_pad(
+        [<Description("Action to perform: 'list', 'export', or 'promote'")>]
+        action: string
+    ) : Task<string> =
+        logger.LogDebug("MCP-TOOL: manage_scratch_pad called, action={Action}", action)
+        manageScratchPad ctx action None None |> withEcho "manage_scratch_pad"
+
+    [<McpServerTool>]
+    [<Description("""Get a diff between recent eval outputs — before vs after comparison.
+
+Compares the two most recent eval outputs (or outputs for a specific cell) and shows
+a line-by-line diff with added/removed/modified/unchanged classifications.
+
+OUTPUT: Diff summary with counts of changes and line-by-line breakdown.
+
+WORKFLOW: Use after re-evaluating a cell to see exactly what changed in the output.""")>]
+    member _.get_eval_diff(
+        [<Description("Optional cell index to diff (defaults to comparing the two most recent evals)")>]
+        cell_index: int
+    ) : Task<string> =
+        logger.LogDebug("MCP-TOOL: get_eval_diff called, cellIndex={Idx}", cell_index)
+        let idxOpt = match cell_index with | 0 -> None | i -> Some i
+        getEvalDiff ctx idxOpt |> withEcho "get_eval_diff"

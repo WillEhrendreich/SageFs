@@ -3024,13 +3024,17 @@ let private smallestAngleBetweenDirections (a: Vec2) (b: Vec2) =
   let angle = MathF.Acos(dot) * 180.0f / MathF.PI
   min angle (180.0f - angle)
 
-let private junctionMinAngles tolerance (roads: Road list) =
+let private fullAngleBetweenDirections (a: Vec2) (b: Vec2) =
+  let dot = max -1.0f (min 1.0f (Vec2.dot a b))
+  MathF.Acos(dot) * 180.0f / MathF.PI
+
+let private junctionDirectionSets tolerance (roads: Road list) =
   let toleranceSq = tolerance * tolerance
   let junctions =
     roads
     |> List.collect (fun road ->
-      let a, b = roadEndpoints2d road
-      [ a; b ])
+        let a, b = roadEndpoints2d road
+        [ a; b ])
     |> clusterPoints tolerance
     |> List.filter (fun (_, valence) -> valence >= 3)
     |> List.map fst
@@ -3044,19 +3048,55 @@ let private junctionMinAngles tolerance (roads: Road list) =
       None
   junctions
   |> List.choose (fun junction ->
-    let directions =
-      roads
-      |> List.choose (incidentDirection junction)
-    match List.length directions >= 3 with
-    | false -> None
-    | true ->
-        [ for i in 0 .. List.length directions - 1 do
-            for j in i + 1 .. List.length directions - 1 do
-              let angle = smallestAngleBetweenDirections directions.[i] directions.[j]
-              if angle > 5.0f then
-                angle ]
-        |> List.sort
-        |> List.tryHead)
+      let directions =
+        roads
+        |> List.choose (incidentDirection junction)
+      match List.length directions >= 3 with
+      | false -> None
+      | true -> Some directions)
+
+let private junctionMinAngles tolerance (roads: Road list) =
+  junctionDirectionSets tolerance roads
+  |> List.choose (fun directions ->
+      [ for i in 0 .. List.length directions - 1 do
+          for j in i + 1 .. List.length directions - 1 do
+            let angle = smallestAngleBetweenDirections directions.[i] directions.[j]
+            if angle > 5.0f then
+              angle ]
+      |> List.sort
+      |> List.tryHead)
+
+let private junctionAnglePairs tolerance (roads: Road list) =
+  junctionDirectionSets tolerance roads
+  |> List.collect (fun directions ->
+      [ for i in 0 .. List.length directions - 1 do
+          for j in i + 1 .. List.length directions - 1 do
+            let angle = smallestAngleBetweenDirections directions.[i] directions.[j]
+            if angle > 5.0f then
+              angle ])
+
+let private throughJunctionPerpendicularDeviations tolerance (roads: Road list) =
+  junctionDirectionSets tolerance roads
+  |> List.collect (fun directions ->
+      let indexedDirections = directions |> List.indexed
+      let pairAngles =
+        [ for i in 0 .. indexedDirections.Length - 1 do
+            for j in i + 1 .. indexedDirections.Length - 1 do
+              let _, a = indexedDirections.[i]
+              let _, b = indexedDirections.[j]
+              let fullAngle = fullAngleBetweenDirections a b
+              (fst indexedDirections.[i], fst indexedDirections.[j], a, fullAngle) ]
+      match pairAngles |> List.sortBy (fun (_, _, _, fullAngle) -> abs (180.0f - fullAngle)) with
+      | [] -> []
+      | (throughA, throughB, axisDir, axisAngle) :: _ when abs (180.0f - axisAngle) <= 18.0f ->
+          indexedDirections
+          |> List.choose (fun (index, dir) ->
+              if index = throughA || index = throughB then
+                None
+              else
+                let branchAngle = smallestAngleBetweenDirections axisDir dir
+                Some (abs (90.0f - branchAngle)))
+      | _ -> [])
 
 let private boundaryMidpointsForRect (rect: TRect) =
   [ Vec2.Create(TRect.centerX rect, rect.Z)
@@ -3095,6 +3135,15 @@ type private ThroughChainDetail =
     ClusterPath: int list
     SegmentLengths: float32 list
     TotalLength: float32 }
+
+type private ThroughChainGeometry =
+  { RoadIndexSet: Set<int>
+    SegmentCount: int
+    TotalLength: float32
+    StartPoint: Vec2
+    EndPoint: Vec2
+    Midpoint: Vec2
+    Heading: Vec2 }
 
 let private clusterRoadEndpoints tolerance (roads: Road list) =
   let toleranceSq = tolerance * tolerance
@@ -3278,6 +3327,72 @@ let private throughChainDetails tolerance maxDeflection (roads: Road list) =
             if hasSideAttachment then Some distanceAlong else None)
       detail, attachmentDistances)
 
+let private directionOrientationDegrees (dir: Vec2) =
+  let angle = MathF.Atan2(dir.Y, dir.X) * 180.0f / MathF.PI
+  match angle < 0.0f with
+  | true -> angle + 180.0f
+  | false -> angle
+
+let private directionOrientationBucket bucketSize (dir: Vec2) =
+  int (MathF.Floor((directionOrientationDegrees dir + bucketSize / 2.0f) / bucketSize))
+
+let private throughChainGeometries tolerance maxDeflection (roads: Road list) =
+  let clusters, _ = buildDirectedSegments tolerance roads
+  let clusterAnchors =
+    clusters
+    |> List.map (fun (idx, anchor, _) -> idx, anchor)
+    |> Map.ofList
+
+  throughChainDetails tolerance maxDeflection roads
+  |> List.choose (fun (detail, _) ->
+      match detail.ClusterPath with
+      | [] -> None
+      | startCluster :: _ ->
+          let endCluster = detail.ClusterPath |> List.last
+          let startPoint = Map.find startCluster clusterAnchors
+          let endPoint = Map.find endCluster clusterAnchors
+          let heading = Vec2.sub endPoint startPoint
+          match Vec2.lengthSq heading > 0.01f with
+          | false -> None
+          | true ->
+              let normalized = Vec2.normalize heading
+              let midpoint =
+                Vec2.Create(
+                  (startPoint.X + endPoint.X) / 2.0f,
+                  (startPoint.Y + endPoint.Y) / 2.0f)
+              Some
+                { RoadIndexSet = detail.RoadIndices |> Set.ofList
+                  SegmentCount = detail.SegmentLengths.Length
+                  TotalLength = detail.TotalLength
+                  StartPoint = startPoint
+                  EndPoint = endPoint
+                  Midpoint = midpoint
+                  Heading = normalized })
+
+let private chainProjectionOverlap (dir: Vec2) (a: ThroughChainGeometry) (b: ThroughChainGeometry) =
+  let interval startPt endPt =
+    let p0 = Vec2.dot startPt dir
+    let p1 = Vec2.dot endPt dir
+    min p0 p1, max p0 p1
+
+  let a0, a1 = interval a.StartPoint a.EndPoint
+  let b0, b1 = interval b.StartPoint b.EndPoint
+  max 0.0f (min a1 b1 - max a0 b0)
+
+let private chainLateralSeparation (dir: Vec2) (a: ThroughChainGeometry) (b: ThroughChainGeometry) =
+  let perp = Vec2.Create(-dir.Y, dir.X)
+  abs (Vec2.dot (Vec2.sub b.Midpoint a.Midpoint) perp)
+
+let private countParallelChainCompanions (chains: ThroughChainGeometry list) (target: ThroughChainGeometry) =
+  chains
+  |> List.filter (fun other -> other.RoadIndexSet <> target.RoadIndexSet)
+  |> List.filter (fun other ->
+      smallestAngleBetweenDirections target.Heading other.Heading <= 12.0f
+      && chainLateralSeparation target.Heading target other >= 5.0f
+      && chainLateralSeparation target.Heading target other <= 18.0f
+      && chainProjectionOverlap target.Heading target other >= 16.0f)
+  |> List.length
+
 let private corridorSpacingMetric tolerance (road: Road) (roads: Road list) =
   let corridorLength = roadSpanLength road
   let attachmentParams =
@@ -3354,6 +3469,106 @@ let private collectOrganicInteriorRoadLengths (rect: TRect) seeds =
           pointInsideRectInset 2.5f rect startPt && pointInsideRectInset 2.5f rect endPt)
       |> List.map roadSpanLength
       |> List.filter (fun length -> length >= 4.5f))
+
+type private ProjectBlockMorphologyMetric =
+  { AspectCv: float32
+    DominantBinShare: float32
+    RegularClusterAreaShare: float32
+    BlockCount: int }
+
+let private blockRectAspectRatio (rect: TRect) =
+  let shortest = max 0.1f (min rect.W rect.H)
+  let longest = max rect.W rect.H
+  longest / shortest
+
+let private aspectRatioBucket (bucketSize: float32) ratio =
+  int (MathF.Floor(ratio / bucketSize))
+
+let private rectsShareBoundary (eps: float32) (a: TRect) (b: TRect) =
+  let xOverlap = min (a.X + a.W) (b.X + b.W) - max a.X b.X
+  let zOverlap = min (a.Z + a.H) (b.Z + b.H) - max a.Z b.Z
+  let verticalTouch =
+    abs ((a.X + a.W) - b.X) <= eps
+    || abs ((b.X + b.W) - a.X) <= eps
+  let horizontalTouch =
+    abs ((a.Z + a.H) - b.Z) <= eps
+    || abs ((b.Z + b.H) - a.Z) <= eps
+  (verticalTouch && zOverlap > eps)
+  || (horizontalTouch && xOverlap > eps)
+
+let private largestRegularBlockClusterAreaShare (rects: TRect list) =
+  match rects with
+  | [] -> 0.0f
+  | _ ->
+      let rectArray = rects |> List.toArray
+      let aspectArray = rectArray |> Array.map blockRectAspectRatio
+      let totalArea = rectArray |> Array.sumBy TRect.area |> max 0.001f
+      let visited = Array.create rectArray.Length false
+      let similarAspect left right =
+        let hi = max aspectArray.[left] aspectArray.[right]
+        let lo = max 0.1f (min aspectArray.[left] aspectArray.[right])
+        hi / lo <= 1.15f
+      let mutable strongestShare = 0.0f
+
+      for idx in 0 .. rectArray.Length - 1 do
+        if not visited.[idx] then
+          let queue = Queue<int>()
+          let cluster = ResizeArray<int>()
+          visited.[idx] <- true
+          queue.Enqueue(idx)
+
+          while queue.Count > 0 do
+            let current = queue.Dequeue()
+            cluster.Add(current)
+
+            for candidate in 0 .. rectArray.Length - 1 do
+              if not visited.[candidate]
+                 && rectsShareBoundary 0.35f rectArray.[current] rectArray.[candidate]
+                 && similarAspect current candidate then
+                visited.[candidate] <- true
+                queue.Enqueue(candidate)
+
+          if cluster.Count >= 3 then
+            let share =
+              cluster
+              |> Seq.sumBy (fun clusterIdx -> TRect.area rectArray.[clusterIdx])
+              |> fun area -> area / totalArea
+            strongestShare <- max strongestShare share
+
+      strongestShare
+
+let private collectOrganicProjectBlockMetrics (rect: TRect) seeds =
+  let moduleWeights =
+    [ for i in 0 .. 8 ->
+        sprintf "ProjectBlock%d" i, float32 (9 - i) ]
+
+  seeds
+  |> List.map (fun seed ->
+      let blocks =
+        planProjectModuleBlocks rect moduleWeights 0.9f (Random seed)
+        |> List.map snd
+      let aspectRatios = blocks |> List.map blockRectAspectRatio
+      let dominantBinShare =
+        aspectRatios
+        |> List.countBy (aspectRatioBucket 0.5f)
+        |> List.maxBy snd
+        |> fun (_, count) -> float32 count / float32 aspectRatios.Length
+      { AspectCv = coefficientOfVariation aspectRatios
+        DominantBinShare = dominantBinShare
+        RegularClusterAreaShare = largestRegularBlockClusterAreaShare blocks
+        BlockCount = blocks.Length })
+
+let private collectOrganicThroughChainGeometries (rect: TRect) seeds =
+  let funcs = List.init 40 (fun i -> mkFunc (sprintf "band%d" i) "OrganicBandMod")
+  seeds
+  |> List.collect (fun seed ->
+      let rng = Random(seed)
+      let _, roads =
+        layoutWeberDistrict rect funcs Map.empty (Color(70uy, 130uy, 180uy, 255uy)) 10 100 0.9f rng Map.empty
+      throughChainGeometries 0.45f 18.0f roads
+      |> List.filter (fun chain ->
+          chain.SegmentCount >= 3
+          && chain.TotalLength >= 24.0f))
 
 let weberDistrictTests =
   testList "Weber district layout" [
@@ -3504,6 +3719,77 @@ let weberDistrictTests =
       |> Expect.isGreaterThan
            "organic dominant corridors should not space side-street attachments like a nearly uniform ladder"
 
+    testCase "organic project module blocks span multiple aspect-ratio families" <| fun () ->
+      let rect  = { X = 0.0f; Z = 0.0f; W = 140.0f; H = 110.0f }
+      let metrics = collectOrganicProjectBlockMetrics rect [ 123; 321; 777 ]
+      metrics |> Expect.isNonEmpty "organic project planning should emit module blocks"
+      let averageCv = metrics |> List.averageBy _.AspectCv
+      (averageCv, 0.24f)
+      |> Expect.isGreaterThan
+           "organic project blocks should not collapse into one repeated rectangle proportion"
+
+    testCase "organic project module blocks avoid one dominant repeated aspect bin" <| fun () ->
+      let rect  = { X = 0.0f; Z = 0.0f; W = 140.0f; H = 110.0f }
+      let metrics = collectOrganicProjectBlockMetrics rect [ 123; 321; 777 ]
+      metrics |> Expect.isNonEmpty "organic project planning should emit module blocks"
+      let averageDominantShare = metrics |> List.averageBy _.DominantBinShare
+      (averageDominantShare, 0.56f)
+      |> Expect.isLessThan
+           "organic project blocks should not let one aspect bucket dominate the visible district mosaic"
+
+    testCase "organic project module blocks avoid large contiguous regular superblock clusters" <| fun () ->
+      let rect  = { X = 0.0f; Z = 0.0f; W = 140.0f; H = 110.0f }
+      let metrics = collectOrganicProjectBlockMetrics rect [ 123; 321; 777 ]
+      metrics |> Expect.isNonEmpty "organic project planning should emit module blocks"
+      let averageRegularShare = metrics |> List.averageBy _.RegularClusterAreaShare
+      (averageRegularShare, 0.48f)
+      |> Expect.isLessThan
+           "organic project blocks should not leave most of a project trapped in one contiguous cluster of near-identical rectangles"
+
+    testCase "organic district long through-chains do not collapse into one heading family" <| fun () ->
+      let rect  = { X = 0.0f; Z = 0.0f; W = 140.0f; H = 110.0f }
+      let chains = collectOrganicThroughChainGeometries rect [ 123; 321; 777 ]
+      (chains.Length, 8) |> Expect.isGreaterThanOrEqual "organic districts should expose enough long chains to judge corridor families"
+      let dominantShare =
+        chains
+        |> List.countBy (fun chain -> directionOrientationBucket 15.0f chain.Heading)
+        |> List.maxBy snd
+        |> fun (_, count) -> float32 count / float32 chains.Length
+      (dominantShare, 0.50f)
+      |> Expect.isLessThan
+           "organic districts should not concentrate most long corridors into one near-parallel heading family"
+
+    testCase "organic district avoids triple bands of long near-parallel corridors" <| fun () ->
+      let rect  = { X = 0.0f; Z = 0.0f; W = 140.0f; H = 110.0f }
+      let chains = collectOrganicThroughChainGeometries rect [ 123; 321; 777 ]
+      (chains.Length, 8) |> Expect.isGreaterThanOrEqual "organic districts should expose enough long chains to judge corridor banding"
+      let offendingChains =
+        chains
+        |> List.map (fun chain ->
+            let companions = countParallelChainCompanions chains chain
+            companions,
+            sprintf
+              "heading=%.1f len=%.1f start=(%.1f,%.1f) end=(%.1f,%.1f)"
+              (directionOrientationDegrees chain.Heading)
+              chain.TotalLength
+              chain.StartPoint.X
+              chain.StartPoint.Y
+              chain.EndPoint.X
+              chain.EndPoint.Y)
+        |> List.sortByDescending fst
+      let maxCompanions =
+        offendingChains
+        |> List.map fst
+        |> List.max
+      let topOffenderSummary =
+        offendingChains
+        |> List.truncate 3
+        |> List.map (fun (companions, summary) -> sprintf "%d:%s" companions summary)
+        |> String.concat " | "
+      (maxCompanions, 1)
+      |> Expect.isLessThanOrEqual
+           (sprintf "organic districts should not form triple-lane bands of long near-parallel corridors. top=%s" topOffenderSummary)
+
     testCase "organic district does not collapse into two perpendicular road families" <| fun () ->
       let rect  = { X = 0.0f; Z = 0.0f; W = 100.0f; H = 80.0f }
       let funcs = List.init 28 (fun i -> mkFunc (sprintf "family%d" i) "OrganicFamilyMod")
@@ -3548,6 +3834,48 @@ let weberDistrictTests =
       (rightAngleShare, 0.65f)
       |> Expect.isLessThan
            "organic districts should not read like a field of right-angle tees and crosses"
+
+    testCase "organic district junction angle pairs do not pile up in the right-angle bucket" <| fun () ->
+      let rect = { X = 0.0f; Z = 0.0f; W = 120.0f; H = 90.0f }
+      let anglePairs =
+        [ 123; 321; 777 ]
+        |> List.collect (fun seed ->
+            let funcs = List.init 28 (fun i -> mkFunc (sprintf "orthoPair%d_%d" seed i) "OrganicOrthoPairMod")
+            let _, roads = layoutWeberDistrict rect funcs Map.empty (Color(70uy, 130uy, 180uy, 255uy)) 10 100 0.9f (Random seed) Map.empty
+            junctionAnglePairs 0.35f roads)
+      (anglePairs.Length, 24)
+      |> Expect.isGreaterThanOrEqual
+           "organic districts should expose enough junction-angle pairs to judge orthogonal dominance"
+      let nearRightPairs =
+        anglePairs
+        |> List.filter (fun angle -> angle >= 84.0f && angle <= 96.0f)
+      let nearRightShare = float32 nearRightPairs.Length / float32 anglePairs.Length
+      (nearRightShare, 0.20f)
+      |> Expect.isLessThan
+           (sprintf "organic junction geometry should not be dominated by crisp right-angle pairs. share=%.2f count=%d sample=%A"
+              nearRightShare
+              anglePairs.Length
+              (nearRightPairs |> List.truncate 6))
+
+    testCase "organic district through-junction branches often miss perfect perpendicular" <| fun () ->
+      let rect = { X = 0.0f; Z = 0.0f; W = 120.0f; H = 90.0f }
+      let deviations =
+        [ 123; 321; 777 ]
+        |> List.collect (fun seed ->
+            let funcs = List.init 28 (fun i -> mkFunc (sprintf "orthoSkew%d_%d" seed i) "OrganicOrthoSkewMod")
+            let _, roads = layoutWeberDistrict rect funcs Map.empty (Color(70uy, 130uy, 180uy, 255uy)) 10 100 0.9f (Random seed) Map.empty
+            throughJunctionPerpendicularDeviations 0.35f roads)
+      deviations |> Expect.isNonEmpty "organic districts should expose through-junction branches to judge tee orthogonality"
+      let visiblySkewed =
+        deviations
+        |> List.filter (fun deviation -> deviation >= 8.0f)
+      let visiblySkewedShare = float32 visiblySkewed.Length / float32 deviations.Length
+      (visiblySkewedShare, 0.60f)
+      |> Expect.isGreaterThan
+           (sprintf "organic through-junction branches should often skew away from exact perpendicular. share=%.2f count=%d sample=%A"
+              visiblySkewedShare
+              deviations.Length
+              (deviations |> List.sortDescending |> List.truncate 6))
 
     testCase "all Weber buildings stay within block bounds (with tolerance)" <| fun () ->
       let rect  = { X = 5.0f; Z = 3.0f; W = 40.0f; H = 35.0f }

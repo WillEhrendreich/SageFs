@@ -462,7 +462,8 @@ module SessionManager =
     (onTestDiscovery: SessionId -> Features.LiveTesting.TestCase array -> Features.LiveTesting.ProviderDescription list -> unit)
     (onInstrumentationMaps: SessionId -> Features.LiveTesting.InstrumentationMap array -> unit)
     (onSessionReady: SessionId -> unit)
-    (onWarmupProgress: SessionId -> string -> unit) =
+    (onWarmupProgress: SessionId -> string -> unit)
+    (onSessionFaulted: SessionId -> string -> unit) =
     let snapshotRef = ref QuerySnapshot.empty
     let mailbox = MailboxProcessor<SessionCommand>.Start((fun inbox ->
       let publishSnapshot (state: ManagerState) =
@@ -756,6 +757,7 @@ module SessionManager =
                   Info = { session.Info with Status = SessionStatus.Faulted } }
             let newState = ManagerState.addSession id updated state
             onSessionReady id  // notify clients of Faulted state change
+            onSessionFaulted id msg
             return! loop newState
           | None ->
             return! loop state
@@ -798,6 +800,7 @@ module SessionManager =
               | true -> ()
               Instrumentation.activeSessions.Add(-1L)
               Instrumentation.succeedSpan span
+              onSessionFaulted id (sprintf "Worker process exited with code %d (abandoned after max retries)" exitCode)
               let newState = ManagerState.removeSession id state
               return! loop newState
             | SessionLifecycle.ExitOutcome.RestartAfter(delay, newRestartState) ->

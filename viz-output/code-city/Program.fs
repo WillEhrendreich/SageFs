@@ -991,6 +991,11 @@ let private blockScore (outerRect: TRect) (blockRect: TRect) =
   let dist = sqrt (dx * dx + dz * dz)
   TRect.area blockRect - dist * 0.35f
 
+let private rectAspectRatio (rect: TRect) =
+  let shortest = max 0.1f (min rect.W rect.H)
+  let longest = max rect.W rect.H
+  longest / shortest
+
 let private districtBlocks (plan: DistrictPlan) =
   plan.Quarters |> List.collect (fun quarter -> quarter.Blocks)
 
@@ -4207,9 +4212,240 @@ let private straightCorridorBias (dirs: Vec2 list) =
             not (obj.ReferenceEquals(dirA, dirB))
             && directionDeltaDegrees dirA (Vec2.negate dirB) <= threshold))
   match dirs.Length with
-  | 2 when hasOpposingPair 18.0f -> 1.18f
-  | 3 when hasOpposingPair 24.0f -> 1.12f
+  | 2 when hasOpposingPair 18.0f -> 0.58f
+  | 3 when hasOpposingPair 24.0f -> 0.72f
   | _ -> 1.0f
+
+let private tryGetCorridorAxis (dirs: Vec2 list) =
+  let tryGetOpposingAxis threshold =
+    dirs
+    |> List.tryPick (fun dirA ->
+        dirs
+        |> List.tryPick (fun dirB ->
+            match obj.ReferenceEquals(dirA, dirB) with
+            | true -> None
+            | false when directionDeltaDegrees dirA (Vec2.negate dirB) <= threshold ->
+                Some (Vec2.normalize (Vec2.sub dirA dirB))
+            | false -> None))
+  match dirs with
+  | [ dir ] -> Some dir
+  | _ ->
+      match dirs.Length with
+      | 2 -> tryGetOpposingAxis 18.0f
+      | 3 -> tryGetOpposingAxis 24.0f
+      | _ -> None
+
+let private parallelCorridorCrowdingBias (g: WeberGraph) (nid: NodeId) (dirs: Vec2 list) =
+  match tryGetCorridorAxis dirs with
+  | None -> 1.0f
+  | Some axis ->
+      let origin = (g.N nid).Pos
+      let perp = Vec2.Create(-axis.Y, axis.X)
+      let maxLongitudinal = 24.0f
+      let maxLateral = 18.0f
+      let minLateral = 5.0f
+      let maxRangeSq = maxLongitudinal * maxLongitudinal + maxLateral * maxLateral
+      let nearbyBandCount =
+        g.Nodes
+        |> Seq.choose (fun other ->
+            match other.Id = nid with
+            | true -> None
+            | false ->
+                let delta = Vec2.sub other.Pos origin
+                match Vec2.lengthSq delta <= maxRangeSq with
+                | false -> None
+                | true ->
+                    let lateral = Vec2.dot delta perp
+                    let longitudinal = abs (Vec2.dot delta axis)
+                    match abs lateral >= minLateral && abs lateral <= maxLateral && longitudinal <= maxLongitudinal with
+                    | false -> None
+                    | true ->
+                        match tryGetCorridorAxis (g.OutgoingDirs other.Id) with
+                        | Some otherAxis when directionDeltaDegrees axis otherAxis <= 12.0f ->
+                            Some (int (MathF.Round(lateral / 4.0f)))
+                        | _ -> None)
+        |> Set.ofSeq
+        |> Set.count
+      match nearbyBandCount with
+      | 0 -> 1.0f
+      | 1 -> 0.84f
+      | 2 -> 0.52f
+      | _ -> 0.28f
+
+let private parallelHeadingDeltaDegrees axis other =
+  min
+    (directionDeltaDegrees axis other)
+    (directionDeltaDegrees axis (Vec2.negate other))
+
+let private projectionInterval axis startPt endPt =
+  let p0 = Vec2.dot startPt axis
+  let p1 = Vec2.dot endPt axis
+  min p0 p1, max p0 p1
+
+let private projectionOverlap axis startA endA startB endB =
+  let a0, a1 = projectionInterval axis startA endA
+  let b0, b1 = projectionInterval axis startB endB
+  max 0.0f (min a1 b1 - max a0 b0)
+
+let private rotateDirectionRadians (dir: Vec2) radians =
+  let cosA = MathF.Cos(radians)
+  let sinA = MathF.Sin(radians)
+  Vec2.Create(dir.X * cosA - dir.Y * sinA, dir.X * sinA + dir.Y * cosA)
+
+let private collinearNeighborInDirection (g: WeberGraph) (nid: NodeId) axis =
+  g.Edges
+  |> Seq.choose (fun edge ->
+      if edge.A = nid then Some edge.B
+      elif edge.B = nid then Some edge.A
+      else None)
+  |> Seq.choose (fun otherId ->
+      let delta = Vec2.sub (g.N otherId).Pos (g.N nid).Pos
+      if Vec2.lengthSq delta <= 1e-5f then
+        None
+      else
+        let dir = Vec2.normalize delta
+        if directionDeltaDegrees axis dir <= 12.0f then Some otherId else None)
+  |> Seq.distinct
+  |> Seq.toList
+
+let private extendCorridorEndpoint (g: WeberGraph) (startId: NodeId) axis =
+  let rec loop previous current =
+    let nextAligned =
+      collinearNeighborInDirection g current axis
+      |> List.filter (fun nextId -> Some nextId <> previous)
+    match nextAligned with
+    | [ nextId ] -> loop (Some current) nextId
+    | _ -> (g.N current).Pos
+  loop None startId
+
+let private effectiveCorridorInterval (g: WeberGraph) (originId: NodeId) (origin: Vec2) (target: Vec2) (targetNodeId: NodeId option) =
+  let delta = Vec2.sub target origin
+  if Vec2.lengthSq delta <= 1e-5f then
+    origin, target
+  else
+    let axis = Vec2.normalize delta
+    let startPoint =
+      match collinearNeighborInDirection g originId (Vec2.negate axis) with
+      | [] -> origin
+      | _ -> extendCorridorEndpoint g originId (Vec2.negate axis)
+    let endPoint =
+      match targetNodeId with
+      | Some tid ->
+          match collinearNeighborInDirection g tid axis with
+          | [] -> target
+          | _ -> extendCorridorEndpoint g tid axis
+      | None -> target
+    startPoint, endPoint
+
+let private parallelCorridorTurnPressure (g: WeberGraph) (nid: NodeId) axis =
+  let origin = (g.N nid).Pos
+  let perp = Vec2.Create(-axis.Y, axis.X)
+  let maxLongitudinal = 24.0f
+  let maxLateral = 18.0f
+  g.Edges
+  |> Seq.choose (fun edge ->
+      if edge.A = nid || edge.B = nid then
+        None
+      else
+        let a = (g.N edge.A).Pos
+        let b = (g.N edge.B).Pos
+        let edgeDelta = Vec2.sub b a
+        if Vec2.lengthSq edgeDelta <= 10.0f * 10.0f then
+          None
+        else
+          let edgeAxis = Vec2.normalize edgeDelta
+          if parallelHeadingDeltaDegrees axis edgeAxis > 12.0f then
+            None
+          else
+            let midpoint = Vec2.Create((a.X + b.X) / 2.0f, (a.Y + b.Y) / 2.0f)
+            let offset = Vec2.sub midpoint origin
+            let longitudinal = abs (Vec2.dot offset axis)
+            let lateral = Vec2.dot offset perp
+            if longitudinal > maxLongitudinal || abs lateral < 5.0f || abs lateral > maxLateral then
+              None
+            else
+              let lateralSign = if lateral < 0.0f then -1.0f else 1.0f
+              let longitudinalWeight = 1.0f - longitudinal / maxLongitudinal
+              let lateralWeight = 1.0f - abs lateral / maxLateral
+              Some (lateralSign * longitudinalWeight * lateralWeight))
+  |> Seq.toList
+
+let private crowdAwareContinuationTurn (g: WeberGraph) (nid: NodeId) (forwardDir: Vec2) baseTurn previousBias (rng: Random) =
+  let baseDir = rotateDirectionRadians forwardDir baseTurn |> Vec2.normalize
+  let pressures = parallelCorridorTurnPressure g nid baseDir
+  if pressures.Length < 2 then
+    baseTurn
+  else
+    let pressure = pressures |> List.sum
+    let turnAwaySign =
+      if abs pressure > 0.08f then
+        if pressure < 0.0f then 1.0f else -1.0f
+      elif previousBias > 0.04f then
+        if previousBias > 0.0f then 1.0f else -1.0f
+      elif rng.NextSingle() < 0.5f then
+        -1.0f
+      else
+        1.0f
+    let extraTurn = (8.0f + rng.NextSingle() * 8.0f) * MathF.PI / 180.0f
+    baseTurn + turnAwaySign * extraTurn
+
+let private crowdAwareBranchDirection (g: WeberGraph) (nid: NodeId) (baseDir: Vec2) previousBias (rng: Random) =
+  let pressures = parallelCorridorTurnPressure g nid baseDir
+  if pressures.IsEmpty then
+    baseDir
+  else
+    let pressure = pressures |> List.sum
+    let turnAwaySign =
+      if abs pressure > 0.04f then
+        if pressure < 0.0f then 1.0f else -1.0f
+      elif previousBias > 0.04f then
+        if previousBias > 0.0f then 1.0f else -1.0f
+      elif rng.NextSingle() < 0.5f then
+        -1.0f
+      else
+        1.0f
+    let extraTurnDegrees =
+      if pressures.Length >= 2 then 12.0f + rng.NextSingle() * 10.0f
+      else 8.0f + rng.NextSingle() * 8.0f
+    rotateDirectionRadians baseDir (turnAwaySign * extraTurnDegrees * MathF.PI / 180.0f)
+    |> Vec2.normalize
+
+let private formsParallelCorridorTripleBand (g: WeberGraph) (originId: NodeId) (origin: Vec2) (target: Vec2) (targetNodeId: NodeId option) =
+  let effectiveOrigin, effectiveTarget = effectiveCorridorInterval g originId origin target targetNodeId
+  let delta = Vec2.sub effectiveTarget effectiveOrigin
+  let lengthSq = Vec2.lengthSq delta
+  if lengthSq < 12.0f * 12.0f then
+    false
+  else
+    let axis = Vec2.normalize delta
+    let perp = Vec2.Create(-axis.Y, axis.X)
+    let midpoint =
+      Vec2.Create(
+        (effectiveOrigin.X + effectiveTarget.X) / 2.0f,
+        (effectiveOrigin.Y + effectiveTarget.Y) / 2.0f)
+    let nearbyBandCount =
+      g.Edges
+      |> Seq.choose (fun edge ->
+          let a = (g.N edge.A).Pos
+          let b = (g.N edge.B).Pos
+          let edgeDelta = Vec2.sub b a
+          let edgeLengthSq = Vec2.lengthSq edgeDelta
+          if edgeLengthSq < 10.0f * 10.0f then
+            None
+          else
+            let edgeAxis = Vec2.normalize edgeDelta
+            let lateral = Vec2.dot (Vec2.sub (Vec2.Create((a.X + b.X) / 2.0f, (a.Y + b.Y) / 2.0f)) midpoint) perp
+            let overlap = projectionOverlap axis effectiveOrigin effectiveTarget a b
+            if parallelHeadingDeltaDegrees axis edgeAxis <= 12.0f
+               && abs lateral >= 5.0f
+               && abs lateral <= 18.0f
+               && overlap >= 12.0f then
+              Some (int (MathF.Round(lateral / 4.0f)))
+            else
+              None)
+      |> Set.ofSeq
+      |> Set.count
+    nearbyBandCount >= 2
 
 let private sampleOrganicNode
   (g: WeberGraph)
@@ -4225,13 +4461,14 @@ let private sampleOrganicNode
   let weights = ResizeArray<float32>()
   for n in g.Nodes do
     if n.Growth = Unfinished && n.Valence < 4 && RoadClass.tier n.Class >= minTier then
+      let dirs = g.OutgoingDirs n.Id
       let minDistSq =
         centers |> Array.map (fun c -> Vec2.distanceToSq n.Pos c) |> Array.min
       let baseWeight = exp(-float (focus * minDistSq)) |> float32
       let spacingBias =
         match n.Valence with
         | 0 -> 1.0f
-        | 1 -> 1.08f
+        | 1 -> 1.08f * parallelCorridorCrowdingBias g n.Id dirs
         | 2
         | 3 ->
             let branchDistance = tryGetNodeBranchDistance branchDistanceByNode n.Id
@@ -4247,7 +4484,7 @@ let private sampleOrganicNode
                 0.02f + readiness * readiness * 0.08f
               else
                 min 2.4f (0.45f + (readiness - 0.92f) * 2.8f)
-            spacingBias * straightCorridorBias (g.OutgoingDirs n.Id)
+            spacingBias * straightCorridorBias dirs * parallelCorridorCrowdingBias g n.Id dirs
         | _ -> 0.0f
       let weight = baseWeight * spacingBias
       if weight > 0.0f then
@@ -4462,29 +4699,35 @@ let private seedOrganicMajorStreetGrowthGraph (rect: TRect) (rng: Random) =
       else
         let spineStartPos = lerpVec2 portalStart portalEnd (0.26f + rng.NextSingle() * 0.08f)
         let spineEndPos = lerpVec2 portalStart portalEnd (0.62f + rng.NextSingle() * 0.10f)
-        let flankDepth = min rect.W rect.H * (0.10f + rng.NextSingle() * 0.05f)
-        let flankLead = span * (0.06f + rng.NextSingle() * 0.04f)
+        let bendDepth = min rect.W rect.H * (0.08f + rng.NextSingle() * 0.04f)
+        let bendT = 0.42f + rng.NextSingle() * 0.16f
+        let bendPos =
+          Vec2.add (lerpVec2 spineStartPos spineEndPos bendT) (Vec2.scale bendDepth perp)
+          |> clampVec2ToRect interiorRect
+        let flankDepth = min rect.W rect.H * (0.11f + rng.NextSingle() * 0.05f)
+        let flankLead = span * (0.05f + rng.NextSingle() * 0.05f)
         let flankA =
-          Vec2.add spineStartPos (Vec2.add (Vec2.scale flankLead dir) (Vec2.scale flankDepth perp))
+          Vec2.add bendPos (Vec2.add (Vec2.scale flankLead dir) (Vec2.scale (flankDepth * 0.78f) perp))
           |> clampVec2ToRect interiorRect
         let flankB =
-          Vec2.add spineEndPos (Vec2.add (Vec2.scale -flankLead dir) (Vec2.scale (-flankDepth * 0.85f) perp))
+          Vec2.add spineStartPos (Vec2.add (Vec2.scale (-flankLead * 0.65f) dir) (Vec2.scale (-flankDepth * 0.92f) perp))
           |> clampVec2ToRect interiorRect
         let portalStartId = g.AddNode(portalStart, Avenue)
         let spineStartId = g.AddNode(spineStartPos, Avenue)
+        let bendId = g.AddNode(bendPos, Avenue)
         let flankAId = g.AddNode(flankA, Avenue)
         let spineEndId = g.AddNode(spineEndPos, Avenue)
         let portalEndId = g.AddNode(portalEnd, Avenue)
         let flankBId = g.AddNode(flankB, Avenue)
         g.AddEdge(portalStartId, spineStartId, Avenue, RoadClass.width Avenue) |> ignore
-        g.AddEdge(spineStartId, flankAId, Avenue, RoadClass.width Avenue) |> ignore
-        g.AddEdge(flankAId, spineEndId, Avenue, RoadClass.width Avenue) |> ignore
+        g.AddEdge(spineStartId, bendId, Avenue, RoadClass.width Avenue) |> ignore
+        g.AddEdge(bendId, spineEndId, Avenue, RoadClass.width Avenue) |> ignore
         g.AddEdge(spineEndId, portalEndId, Avenue, RoadClass.width Avenue) |> ignore
-        g.AddEdge(spineEndId, flankBId, Avenue, RoadClass.width Avenue) |> ignore
-        g.AddEdge(flankBId, spineStartId, Avenue, RoadClass.width Avenue) |> ignore
+        g.AddEdge(bendId, flankAId, Avenue, RoadClass.width Avenue) |> ignore
+        g.AddEdge(spineStartId, flankBId, Avenue, RoadClass.width Avenue) |> ignore
         g.MarkFinished(portalStartId)
         g.MarkFinished(portalEndId)
-        g, [| spineStartPos; spineEndPos; flankA; flankB |]
+        g, [| spineStartPos; bendPos; spineEndPos; flankA |]
   | _ ->
       seedGridMajorStreetGrowthGraph rect
 
@@ -4654,10 +4897,11 @@ let expandNode
       else sampleOrganicContinuationLength (tryGetNodeLengthFactor lengthFactorByNode nid) rng
     let dev =
       if isGrid then 0.0f
-      else sampleOrganicContinuationTurn (tryGetNodeDriftBias driftBiasByNode nid) rng
-    let cos = MathF.Cos(dev)
-    let sin = MathF.Sin(dev)
-    let rotated = Vec2.Create(opposite.X * cos - opposite.Y * sin, opposite.X * sin + opposite.Y * cos)
+      else
+        let previousBias = tryGetNodeDriftBias driftBiasByNode nid
+        let baseTurn = sampleOrganicContinuationTurn previousBias rng
+        crowdAwareContinuationTurn g nid opposite baseTurn previousBias rng
+    let rotated = rotateDirectionRadians opposite dev |> Vec2.normalize
     Some (Vec2.add n.Pos (Vec2.scale (length * lengthFactor) rotated), dev, lengthFactor)
   | 2 ->
     // Valence 2: turn left or right
@@ -4679,8 +4923,9 @@ let expandNode
         let sin = MathF.Sin(dev)
         Vec2.Create(perp.X * cos - perp.Y * sin, perp.X * sin + perp.Y * cos)
       else
+        let previousBias = tryGetNodeDriftBias driftBiasByNode nid
         match gapDirectedExpansion dirs rng with
-        | Some dir -> dir
+        | Some dir -> crowdAwareBranchDirection g nid dir previousBias rng
         | None ->
             let baseDir = referenceDir
             let perp =
@@ -4690,6 +4935,8 @@ let expandNode
             let cos = MathF.Cos(dev)
             let sin = MathF.Sin(dev)
             Vec2.Create(perp.X * cos - perp.Y * sin, perp.X * sin + perp.Y * cos)
+            |> Vec2.normalize
+            |> fun dir -> crowdAwareBranchDirection g nid dir previousBias rng
     let driftBias =
       if isGrid then 0.0f
       else signedDirectionTurnRadians referenceDir nextDir
@@ -4710,8 +4957,10 @@ let expandNode
         let (_, bisect) = gaps |> List.maxBy fst
         Vec2.Create(MathF.Cos(bisect), MathF.Sin(bisect))
       else
+        let previousBias = tryGetNodeDriftBias driftBiasByNode nid
         gapDirectedExpansion dirs rng
         |> Option.defaultValue (Vec2.negate (Vec2.normalize (dirs |> List.reduce Vec2.add)))
+        |> fun nextDir -> crowdAwareBranchDirection g nid nextDir previousBias rng
     Some (Vec2.add n.Pos (Vec2.scale (length * lengthFactor) dir), tryGetNodeDriftBias driftBiasByNode nid, lengthFactor)
   | _ -> None // valence >= 4: finished
 
@@ -4772,6 +5021,9 @@ let growStreets
               if segLen < sMin then
                 g.MarkFinished(nid)
                 stuck <- stuck + 1
+              elif not isGrid && formsParallelCorridorTripleBand g nid origin (g.N existingId).Pos (Some existingId) then
+                g.MarkFinished(nid)
+                stuck <- stuck + 1
               else
                 if not isGrid then
                   branchDistanceByNode.[NodeId.value nid] <- branchDistance
@@ -4793,6 +5045,9 @@ let growStreets
                 elif isContinuation then parentBranchTargetFactor
                 else sampleOrganicBranchTargetFactor parentBranchTargetFactor rng
               if segLen < sMin then
+                g.MarkFinished(nid)
+                stuck <- stuck + 1
+              elif not isGrid && formsParallelCorridorTripleBand g nid origin pt None then
                 g.MarkFinished(nid)
                 stuck <- stuck + 1
               else
@@ -4830,28 +5085,37 @@ let growStreets
                 match snapTarget with
                 | Some existingId ->
                     // Snap! Creates T-junction or crossroad
-                    if not isGrid then
-                      branchDistanceByNode.[NodeId.value nid] <- branchDistance
-                      branchTargetFactorByNode.[NodeId.value nid] <- branchTargetFactor
-                      branchDistanceByNode.[NodeId.value existingId] <- 0.0f
-                      branchTargetFactorByNode.[NodeId.value existingId] <-
-                        sampleOrganicBranchTargetFactor branchTargetFactor rng
-                    g.AddEdge(nid, existingId, cls, RoadClass.width cls) |> ignore
-                    added <- added + 1
-                    stuck <- 0
+                    if not isGrid && formsParallelCorridorTripleBand g nid origin (g.N existingId).Pos (Some existingId) then
+                      g.MarkFinished(nid)
+                      stuck <- stuck + 1
+                    else
+                      if not isGrid then
+                        branchDistanceByNode.[NodeId.value nid] <- branchDistance
+                        branchTargetFactorByNode.[NodeId.value nid] <- branchTargetFactor
+                        branchDistanceByNode.[NodeId.value existingId] <- 0.0f
+                        branchTargetFactorByNode.[NodeId.value existingId] <-
+                          sampleOrganicBranchTargetFactor branchTargetFactor rng
+                      g.AddEdge(nid, existingId, cls, RoadClass.width cls) |> ignore
+                      added <- added + 1
+                      stuck <- 0
                 | None ->
-                    let newId = g.AddNode(p2, cls)
-                    if not isGrid && abs driftBias > 0.04f then
-                      driftBiasByNode.[NodeId.value newId] <- driftBias
-                    if not isGrid then
-                      lengthFactorByNode.[NodeId.value newId] <- lengthFactor
+                    if not isGrid && formsParallelCorridorTripleBand g nid origin p2 None then
+                      g.MarkFinished(nid)
+                      stuck <- stuck + 1
+                    else
                       branchDistanceByNode.[NodeId.value nid] <- branchDistance
-                      branchTargetFactorByNode.[NodeId.value nid] <- branchTargetFactor
-                      branchDistanceByNode.[NodeId.value newId] <- branchDistance
-                      branchTargetFactorByNode.[NodeId.value newId] <- branchTargetFactor
-                    g.AddEdge(nid, newId, cls, RoadClass.width cls) |> ignore
-                    added <- added + 1
-                    stuck <- 0
+                      let newId = g.AddNode(p2, cls)
+                      if not isGrid && abs driftBias > 0.04f then
+                        driftBiasByNode.[NodeId.value newId] <- driftBias
+                      if not isGrid then
+                        lengthFactorByNode.[NodeId.value newId] <- lengthFactor
+                        branchDistanceByNode.[NodeId.value nid] <- branchDistance
+                        branchTargetFactorByNode.[NodeId.value nid] <- branchTargetFactor
+                        branchDistanceByNode.[NodeId.value newId] <- branchDistance
+                        branchTargetFactorByNode.[NodeId.value newId] <- branchTargetFactor
+                      g.AddEdge(nid, newId, cls, RoadClass.width cls) |> ignore
+                      added <- added + 1
+                      stuck <- 0
 
 let private buildMajorStreetGrowth (rect: TRect) (moduleDemand: int) (organic: float32) (rng: Random) =
   if rect.W < 8.0f || rect.H < 8.0f || moduleDemand <= 0 then
@@ -4937,6 +5201,147 @@ let private buildMajorStreetGrowth (rect: TRect) (moduleDemand: int) (organic: f
 
 let planMajorStreetGrowth (rect: TRect) (moduleDemand: int) (organic: float32) (rng: Random) : MajorStreetGrowthPlan =
   buildMajorStreetGrowth rect moduleDemand organic rng |> fst
+
+let private splitProjectModuleWeights (moduleWeights: (string * float32) list) =
+  match moduleWeights |> List.toArray with
+  | [||] -> [], []
+  | [| single |] -> [ single ], []
+  | items ->
+      let totalWeight = items |> Array.sumBy snd |> max 0.001f
+      let targetWeight = totalWeight / 2.0f
+      let mutable bestIndex = 1
+      let mutable runningWeight = 0.0f
+      let mutable bestDistance = Single.MaxValue
+
+      for idx in 1 .. items.Length - 1 do
+        runningWeight <- runningWeight + snd items.[idx - 1]
+        let distance = abs (runningWeight - targetWeight)
+        if distance < bestDistance then
+          bestDistance <- distance
+          bestIndex <- idx
+
+      items |> Array.take bestIndex |> Array.toList,
+      items |> Array.skip bestIndex |> Array.toList
+
+let private chooseProjectSplitIsVertical (rect: TRect) (organic: float32) (rng: Random) =
+  match rect.W <= 2.2f, rect.H <= 2.2f with
+  | true, true -> rect.W >= rect.H
+  | true, false -> false
+  | false, true -> true
+  | false, false ->
+      let aspect = rect.W / max 0.1f rect.H
+      match aspect >= 1.35f, aspect <= 0.74f with
+      | true, _ -> true
+      | _, true -> false
+      | _ ->
+          let widthBias =
+            match rect.W >= rect.H with
+            | true -> 0.12f
+            | false -> -0.12f
+          rng.NextSingle() < clamp01f (0.5f + widthBias + (organic - 0.5f) * 0.08f)
+
+let private splitProjectRectByRatio (rect: TRect) (isVertical: bool) (cutRatio: float32) =
+  let ratio = cutRatio |> max 0.24f |> min 0.76f
+  match isVertical with
+  | true ->
+      let cut = rect.W * ratio
+      TRect.create rect.X rect.Z cut rect.H,
+      TRect.create (rect.X + cut) rect.Z (max 0.1f (rect.W - cut)) rect.H
+  | false ->
+      let cut = rect.H * ratio
+      TRect.create rect.X rect.Z rect.W cut,
+      TRect.create rect.X (rect.Z + cut) rect.W (max 0.1f (rect.H - cut))
+
+let rec private splitProjectCarrierRect
+  (rect: TRect)
+  (moduleWeights: (string * float32) list)
+  (organic: float32)
+  (rng: Random)
+  : (string * TRect) list =
+  match moduleWeights with
+  | [] -> []
+  | [ moduleName, _ ] -> [ moduleName, rect ]
+  | _ ->
+      let leftModules, rightModules = splitProjectModuleWeights moduleWeights
+      match leftModules, rightModules with
+      | [], _
+      | _, [] ->
+          let moduleName, _ = moduleWeights.Head
+          let tail = moduleWeights.Tail
+          let primaryRect, overflowRect =
+            splitProjectRectByRatio rect (chooseProjectSplitIsVertical rect organic rng) 0.42f
+          (moduleName, primaryRect)
+          :: splitProjectCarrierRect overflowRect tail organic rng
+      | _ ->
+          let leftWeight = leftModules |> List.sumBy snd
+          let totalWeight = moduleWeights |> List.sumBy snd |> max 0.001f
+          let jitter = (rng.NextSingle() - 0.5f) * (0.10f + organic * 0.10f)
+          let cutRatio = leftWeight / totalWeight + jitter
+          let leftRect, rightRect =
+            splitProjectRectByRatio rect (chooseProjectSplitIsVertical rect organic rng) cutRatio
+          splitProjectCarrierRect leftRect leftModules organic rng
+          @ splitProjectCarrierRect rightRect rightModules organic rng
+
+let private assignProjectModuleBlocks
+  (zone: TRect)
+  (quarterRects: TRect list)
+  (moduleWeights: (string * float32) list)
+  (organic: float32)
+  (rng: Random)
+  : (string * TRect) list =
+  match moduleWeights with
+  | [] -> []
+  | _ ->
+      let carrierRects =
+        match quarterRects |> List.sortByDescending TRect.area with
+        | [] -> [ zone ]
+        | rects -> rects
+
+      let moduleCount = moduleWeights.Length
+      let faceCounts =
+        carrierRects
+        |> List.map TRect.area
+        |> allocateByWeights moduleCount
+
+      let rec assign
+        (remainingModules: (string * float32) list)
+        (remainingFaces: (TRect * int) list)
+        (planned: (string * TRect) list)
+        =
+        match remainingFaces with
+        | [] -> planned
+        | (faceRect, slotCount) :: rest ->
+            let takeCount = min slotCount remainingModules.Length
+            let chunk = remainingModules |> List.take takeCount
+            let tail = remainingModules |> List.skip takeCount
+            let facePlan =
+              match takeCount with
+              | 0 -> []
+              | 1 ->
+                  match chunk with
+                  | [ moduleName, _ ] -> [ moduleName, faceRect ]
+                  | _ -> []
+              | _ -> splitProjectCarrierRect faceRect chunk organic rng
+            assign tail rest (planned @ facePlan)
+
+      let assigned =
+        assign moduleWeights (List.zip carrierRects faceCounts) []
+
+      match assigned.Length = moduleCount with
+      | true -> assigned
+      | false -> splitProjectCarrierRect zone moduleWeights organic rng
+
+let planProjectModuleBlocks
+  (zone: TRect)
+  (moduleWeights: (string * float32) list)
+  (organic: float32)
+  (rng: Random)
+  : (string * TRect) list =
+  match moduleWeights with
+  | [] -> []
+  | _ ->
+      let growth = planMajorStreetGrowth zone moduleWeights.Length organic rng
+      assignProjectModuleBlocks zone growth.QuarterRects moduleWeights organic rng
 
 let private roadEndpoints (road: Road) =
   Vec2.Create(road.FromPos.X, road.FromPos.Z), Vec2.Create(road.ToPos.X, road.ToPos.Z)
@@ -5792,22 +6197,21 @@ let buildCity (repoRoot: string) (projectFile: string option) =
       |> List.collect snd
       |> List.map (fun f -> gitMetaByFile |> Map.tryFind f.FilePath |> Option.defaultValue GitMeta.empty)
     let projectOrganic = districtOrganicFactor today projectFileMetas
+    let projectSeed = int (fnvHash proj)
     let projectPlan, projectRoads =
-      buildMajorStreetGrowth insetZone projModules.Length projectOrganic (Random(int (fnvHash proj)))
-    let assignedRects =
-      match projectPlan.QuarterRects with
-      | [] -> [ insetZone ]
-      | xs ->
-          xs
-          |> List.sortByDescending (blockScore insetZone)
-          |> List.truncate projModules.Length
-    let fallbackRects =
-      assignedRects
-      |> List.append (List.init (max 0 (projModules.Length - assignedRects.Length)) (fun _ -> insetZone))
+      buildMajorStreetGrowth insetZone projModules.Length projectOrganic (Random projectSeed)
+    let assignedBlocks =
+      assignProjectModuleBlocks
+        insetZone
+        projectPlan.QuarterRects
+        (projModules |> List.map (fun (modName, fns) -> modName, float32 fns.Length))
+        projectOrganic
+        (Random(int (fnvHash (proj + "::blocks"))))
+      |> List.sortByDescending (fun (_, rect) -> blockScore insetZone rect)
     allPrimaryRoads <-
       allPrimaryRoads
       @ projectRoads
-    for ((modName, _), rect) in List.zip projModules fallbackRects do
+    for (modName, rect) in assignedBlocks do
       let color = districtPalette.[colorIdx % districtPalette.Length]
       allBlocks.Add({ Module = modName; Project = proj; Rect = rect; Color = color })
       colorIdx <- colorIdx + 1

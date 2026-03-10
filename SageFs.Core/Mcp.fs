@@ -2300,3 +2300,228 @@ module McpTools =
             [ overview; ""; yield! cards ]
             |> String.concat "\n"
     }
+
+  // ── Phase 1b: Orphaned module MCP tools ──
+
+  /// MCP Tool: Export session as notebook (.fsx with cell metadata)
+  let exportNotebook (ctx: McpContext) (projectName: string option) : Task<string> =
+    task {
+      match ctx.GetFeatureState with
+      | None -> return "Feature state not available — no active session."
+      | Some getState ->
+        let state = getState ()
+        match state.EvalHistory with
+        | [] -> return "No eval history — nothing to export."
+        | history ->
+          let cells =
+            history
+            |> List.rev
+            |> List.mapi (fun i e ->
+              { Features.NotebookExport.Metadata =
+                  { Index = i; Label = None; Deps = []; Bindings = [] }
+                Code = e.Code
+                Output = Some e.Result } : Features.NotebookExport.NotebookCell)
+          let header : Features.NotebookExport.NotebookHeader =
+            { Project = projectName |> Option.defaultValue "SageFs Session"
+              CellCount = cells.Length
+              Timestamp = System.DateTimeOffset.UtcNow.ToString("o") }
+          return Features.NotebookExport.exportNotebook header cells
+    }
+
+  /// MCP Tool: Export session as clean .fsx transcript
+  let exportSessionTranscript (ctx: McpContext) (projectName: string option) : Task<string> =
+    task {
+      match ctx.GetFeatureState with
+      | None -> return "Feature state not available — no active session."
+      | Some getState ->
+        let state = getState ()
+        match state.EvalHistory with
+        | [] -> return "No eval history — nothing to export."
+        | _ ->
+          let graph = buildCellGraphFromState state
+          let entries = Features.SessionScribe.SessionScribe.fromGraph graph
+          let name = projectName |> Option.defaultValue "SageFs Session"
+          return Features.SessionScribe.SessionScribe.exportFsx name entries
+    }
+
+  /// MCP Tool: Get message journal (synthesized from eval history)
+  let getMessageJournal (ctx: McpContext) (minLevel: string option) (source: string option) : Task<string> =
+    task {
+      match ctx.GetFeatureState with
+      | None -> return "Feature state not available — no active session."
+      | Some getState ->
+        let state = getState ()
+        match state.EvalHistory with
+        | [] -> return "No eval history — journal is empty."
+        | history ->
+          let journal =
+            history
+            |> List.rev
+            |> List.fold (fun j e ->
+              Features.MessageJournal.Journal.record
+                Features.MessageJournal.JournalLevel.Info "eval" e.Code j)
+              (Features.MessageJournal.Journal.create (max 256 history.Length))
+          let filtered =
+            match minLevel with
+            | Some lvl ->
+              let level =
+                match lvl.ToLowerInvariant() with
+                | "debug" -> Features.MessageJournal.JournalLevel.Debug
+                | "warn" | "warning" -> Features.MessageJournal.JournalLevel.Warn
+                | "error" -> Features.MessageJournal.JournalLevel.Error
+                | _ -> Features.MessageJournal.JournalLevel.Info
+              Features.MessageJournal.Journal.filterByMinLevel level journal
+            | None -> Features.MessageJournal.Journal.entries journal
+          let filtered =
+            match source with
+            | Some src when src <> "" ->
+              filtered |> List.filter (fun e -> e.Source.Contains(src, System.StringComparison.OrdinalIgnoreCase))
+            | _ -> filtered
+          let stats = Features.MessageJournal.Journal.stats journal
+          return
+            [ sprintf "Journal: %d entries (%d info, %d warn, %d error)"
+                stats.Total stats.InfoCount stats.WarnCount stats.ErrorCount
+              ""
+              yield!
+                filtered
+                |> List.map (fun e ->
+                  sprintf "[%s] %s | %s: %s"
+                    (e.Timestamp.ToString("HH:mm:ss"))
+                    (match e.Level with
+                     | Features.MessageJournal.JournalLevel.Debug -> "DBG"
+                     | Features.MessageJournal.JournalLevel.Info -> "INF"
+                     | Features.MessageJournal.JournalLevel.Warn -> "WRN"
+                     | Features.MessageJournal.JournalLevel.Error -> "ERR")
+                    e.Source
+                    (e.Message |> fun m -> match m.Length > 80 with | true -> m.[..77] + "..." | false -> m)) ]
+            |> String.concat "\n"
+    }
+
+  /// MCP Tool: Get eval timeline with sparkline and percentiles
+  let getEvalTimeline (ctx: McpContext) (sparklineWidth: int option) : Task<string> =
+    task {
+      match ctx.GetFeatureState with
+      | None -> return "Feature state not available — no active session."
+      | Some getState ->
+        let state = getState ()
+        let timeline = state.CachedTimeline
+        match timeline.Entries with
+        | [] -> return "No eval timeline — evaluate some cells first."
+        | _ ->
+          let width = sparklineWidth |> Option.defaultValue 20
+          let stats = Features.EvalTimeline.timelineStats width timeline
+          return
+            [ sprintf "Eval Timeline (%d evals):" stats.Count
+              sprintf "  Sparkline: %s" stats.Sparkline
+              stats.P50Ms |> Option.map (sprintf "  P50: %.1fms") |> Option.defaultValue "  P50: —"
+              stats.P95Ms |> Option.map (sprintf "  P95: %.1fms") |> Option.defaultValue "  P95: —"
+              stats.P99Ms |> Option.map (sprintf "  P99: %.1fms") |> Option.defaultValue "  P99: —"
+              stats.MeanMs |> Option.map (sprintf "  Mean: %.1fms") |> Option.defaultValue "  Mean: —"
+              ""
+              yield!
+                timeline.Entries
+                |> List.rev
+                |> List.truncate 20
+                |> List.map (fun e ->
+                  let icon =
+                    match e.Status with
+                    | Features.EvalTimeline.Success -> "✓"
+                    | Features.EvalTimeline.Error -> "✗"
+                    | Features.EvalTimeline.Cancelled -> "○"
+                  sprintf "  [%d] %s %dms" e.CellId icon e.DurationMs) ]
+            |> String.concat "\n"
+    }
+
+  /// MCP Tool: Manage scratch pad (ephemeral code snippets)
+  let manageScratchPad (ctx: McpContext) (action: string) (code: string option) (snippetId: int option) : Task<string> =
+    task {
+      match ctx.GetFeatureState with
+      | None -> return "Feature state not available — no active session."
+      | Some getState ->
+        let state = getState ()
+        match action.ToLowerInvariant() with
+        | "list" ->
+          let pad = Features.ScratchPad.create "session"
+          let pad =
+            state.EvalHistory
+            |> List.rev
+            |> List.fold (fun p e -> Features.ScratchPad.addSnippet e.Code p) pad
+          let snippets = Features.ScratchPad.snippets pad
+          match snippets with
+          | [] -> return "Scratch pad is empty."
+          | _ ->
+            return
+              snippets
+              |> List.map (fun s ->
+                let status =
+                  match s.Result with
+                  | None -> "pending"
+                  | Some (Ok v) -> sprintf "ok: %s" (v |> fun x -> match x.Length > 40 with | true -> x.[..37] + "..." | false -> x)
+                  | Some (Error e) -> sprintf "err: %s" (e |> fun x -> match x.Length > 40 with | true -> x.[..37] + "..." | false -> x)
+                sprintf "  [%d] %s | %s"
+                  s.Id
+                  (s.Code |> fun c -> match c.Length > 50 with | true -> c.[..47] + "..." | false -> c)
+                  status)
+              |> fun lines ->
+                sprintf "Scratch pad (%d snippets):\n%s" snippets.Length (String.concat "\n" lines)
+        | "export" ->
+          let pad = Features.ScratchPad.create "session"
+          let pad =
+            state.EvalHistory
+            |> List.rev
+            |> List.fold (fun p e ->
+              let p = Features.ScratchPad.addSnippet e.Code p
+              let lastId = p.NextId - 1
+              Features.ScratchPad.recordResult lastId (Ok e.Result) p) pad
+          return Features.ScratchPad.exportFsx pad
+        | "promote" ->
+          let pad = Features.ScratchPad.create "session"
+          let pad =
+            state.EvalHistory
+            |> List.rev
+            |> List.fold (fun p e ->
+              let p = Features.ScratchPad.addSnippet e.Code p
+              let lastId = p.NextId - 1
+              Features.ScratchPad.recordResult lastId (Ok e.Result) p) pad
+          let successful = Features.ScratchPad.promoteSuccessful pad
+          match successful with
+          | [] -> return "No successful snippets to promote."
+          | _ ->
+            return
+              sprintf "Promoted %d successful snippets:\n%s"
+                successful.Length (String.concat "\n;;\n" successful)
+        | _ -> return "Unknown action. Use 'list', 'export', or 'promote'."
+    }
+
+  /// MCP Tool: Get eval diff (before/after output comparison)
+  let getEvalDiff (ctx: McpContext) (cellIndex: int option) : Task<string> =
+    task {
+      match ctx.GetFeatureState with
+      | None -> return "Feature state not available — no active session."
+      | Some getState ->
+        let state = getState ()
+        match state.EvalHistory with
+        | [] -> return "No eval history — nothing to diff."
+        | [_single] -> return "Only one eval in history — nothing to diff against."
+        | history ->
+          let recent = history |> List.rev
+          let (oldOutput, newOutput) =
+            match cellIndex with
+            | Some idx ->
+              let matching = recent |> List.filter (fun e -> e.CellIndex = idx) |> List.rev
+              match matching with
+              | a :: b :: _ -> (Some a.Result, Some b.Result)
+              | _ ->
+                let last2 = recent |> List.rev |> List.truncate 2
+                match last2 with
+                | [a; b] -> (Some a.Result, Some b.Result)
+                | _ -> (None, None)
+            | None ->
+              let last2 = recent |> List.rev |> List.truncate 2
+              match last2 with
+              | [a; b] -> (Some a.Result, Some b.Result)
+              | _ -> (None, None)
+          let lines = Features.EvalDiff.diffLines oldOutput newOutput
+          let summary = Features.EvalDiff.summarize lines
+          return Features.EvalDiff.formatSummary summary
+    }

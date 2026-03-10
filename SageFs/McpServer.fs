@@ -452,6 +452,7 @@ let wireSessionEventSubscription
           | false -> ())
         |> ignore
       | DaemonStateChange.SessionReady sid ->
+        ctx.ServerTracker.AccumulateEvent(PushEvent.WarmupCompleted)
         task {
           try
             match sid.Length > 0 with
@@ -489,6 +490,10 @@ let wireSessionEventSubscription
             Log.error "[SSE] SessionReady push fault: %s" msg
           | false -> ())
         |> ignore
+      | DaemonStateChange.FileReloaded path ->
+        ctx.ServerTracker.AccumulateEvent(PushEvent.FileReloaded path)
+      | DaemonStateChange.SessionFaulted (_sid, error) ->
+        ctx.ServerTracker.AccumulateEvent(PushEvent.SessionFaulted error)
       | _ -> ()) |> ignore
   | _ -> ()
 

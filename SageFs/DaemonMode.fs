@@ -813,7 +813,8 @@ let periodicManifestSave (log: ILogger) (readSnapshot: unit -> SessionManager.Qu
 /// Returns (watcher, debounceTimer) — caller must dispose both.
 let createLiveTestWatcher
   (workingDir: string)
-  (dispatch: SageFsMsg -> unit) =
+  (dispatch: SageFsMsg -> unit)
+  (onFileReloaded: string -> unit) =
   let mutable pendingPaths : Set<string> = Set.empty
   let watcherLock = obj()
   let debounceCallback _ =
@@ -829,6 +830,7 @@ let createLiveTestWatcher
         | true ->
           let content = System.IO.File.ReadAllText(path)
           dispatch (SageFsMsg.FileContentChanged(path, content))
+          onFileReloaded path
         | false -> ()
       with
       | :? System.IO.IOException -> ()
@@ -1263,6 +1265,7 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
       (fun sid maps -> onInstrumentationMapsCallback sid maps)
       (fun sid -> stateChangedEvent.Trigger (SessionReady (WorkerProtocol.SessionId.value sid)))
       (fun sid progress -> onWarmupProgressCallback (WorkerProtocol.SessionId.value sid) progress)
+      (fun sid error -> stateChangedEvent.Trigger (SessionFaulted (WorkerProtocol.SessionId.value sid, error)))
 
   let sessionOps = createSessionOps sessionManager readSnapshot (fun events -> appendEventsAsync events |> ignore)
   // String-to-SessionId adapters for proxyToSession (which takes string callbacks)
@@ -1371,7 +1374,9 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
     t
 
   // Live testing file watcher — monitors *.fs and *.fsx changes
-  let liveTestWatcher, liveTestDebounceTimer = createLiveTestWatcher workingDir elmRuntime.Dispatch
+  let liveTestWatcher, liveTestDebounceTimer =
+    createLiveTestWatcher workingDir elmRuntime.Dispatch
+      (fun path -> stateChangedEvent.Trigger (FileReloaded path))
 
   // Start dashboard web server on MCP port + 1
   let dashboardPort = mcpPort + 1
