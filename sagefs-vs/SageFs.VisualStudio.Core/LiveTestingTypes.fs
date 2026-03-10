@@ -226,6 +226,20 @@ type LiveTestChange =
   | PolicyUpdated of TestCategory * RunPolicy
   | SourceLocationsUpdated of TestSourceLocation array
 
+/// A causal change that may have caused a test failure
+type CausalChange = {
+  Kind: string
+  Name: string
+}
+
+/// Enriched failure narrative for a test that transitioned Passed→Failed
+type FailureNarrative = {
+  TestId: string
+  Summary: string
+  TimeSinceLastPass: string
+  CausalChanges: CausalChange array
+}
+
 /// Aggregate live testing state
 type LiveTestState = {
   Tests: Map<TestId, TestInfo>
@@ -236,6 +250,7 @@ type LiveTestState = {
   Freshness: ResultFreshness
   Policies: Map<TestCategory, RunPolicy>
   SourceLocations: Map<string, TestSourceLocation>
+  FailureNarratives: Map<string, FailureNarrative>
 }
 
 [<RequireQualifiedAccess>]
@@ -249,6 +264,7 @@ module LiveTestState =
     Freshness = ResultFreshness.Fresh
     Policies = Map.empty
     SourceLocations = Map.empty
+    FailureNarratives = Map.empty
   }
 
   /// Pure fold returning (state, changes) — imperative subscriber becomes thin adapter
@@ -338,6 +354,9 @@ module LiveTestState =
 
   let resultFor (testId: TestId) (state: LiveTestState) =
     Map.tryFind testId state.Results
+
+  let narrativeFor (testIdStr: string) (state: LiveTestState) =
+    Map.tryFind testIdStr state.FailureNarratives
 
   let isEnabled (state: LiveTestState) =
     match state.Enabled with
@@ -477,7 +496,7 @@ module TestTreeViewModel =
     else
       sprintf "✓ %s (%d/%d passed)" fileName passed total
 
-  /// Format a single test line
+  /// Format a single test line, optionally enriched with failure narrative
   let formatTestLine (info: TestInfo) (result: TestResult option) =
     let icon =
       match result with
@@ -489,6 +508,18 @@ module TestTreeViewModel =
       | None -> ""
     if duration = "" then sprintf "%s %s" icon info.DisplayName
     else sprintf "%s %s %s" icon info.DisplayName duration
+
+  /// Format a single test line with narrative context when available
+  let formatTestLineWithNarrative (info: TestInfo) (result: TestResult option) (narratives: Map<string, FailureNarrative>) =
+    let baseLine = formatTestLine info result
+    let isFailed =
+      match result with
+      | Some { Outcome = TestOutcome.Failed _ }
+      | Some { Outcome = TestOutcome.Errored _ } -> true
+      | _ -> false
+    match isFailed, Map.tryFind (TestId.value info.Id) narratives with
+    | true, Some n when n.Summary <> "" -> sprintf "%s  ℹ️ %s" baseLine n.Summary
+    | _ -> baseLine
 
   /// Filter label for button text
   let filterLabel (filter: TestStatusFilter) =
@@ -527,6 +558,6 @@ module TestTreeViewModel =
           sb.AppendLine(formatGroupHeader group) |> ignore
           let sorted = sortTests group.Tests
           for (info, result) in sorted do
-            sb.Append("  ").AppendLine(formatTestLine info result) |> ignore
+            sb.Append("  ").AppendLine(formatTestLineWithNarrative info result state.FailureNarratives) |> ignore
           sb.AppendLine() |> ignore
         sb.ToString().TrimEnd()

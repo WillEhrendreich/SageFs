@@ -63,6 +63,9 @@
         <Compile Include="Features\CoverageIntel.fs" />
         <Compile Include="Features\ImpactForecast.fs" />
         <Compile Include="Features\ActionPrioritizer.fs" />
+        <Compile Include="Features\TestDiscovery.fs" />
+        <Compile Include="Features\CellDependenciesReport.fs" />
+        <Compile Include="Features\FeatureDiscovery.fs" />
         <Compile Include="Features\Diagnostician.fs" />
         <Compile Include="RetryPolicy.fs" />
         <Compile Include="SseWriter.fs" />

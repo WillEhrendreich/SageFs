@@ -43,6 +43,10 @@ internal sealed class FileAnnotationTracker
     private readonly ConcurrentDictionary<string, Dictionary<int, CoverageHealth>>
         _coverageByFile = new ConcurrentDictionary<string, Dictionary<int, CoverageHealth>>(StringComparer.OrdinalIgnoreCase);
 
+    // Failure narratives keyed by TestId
+    private readonly ConcurrentDictionary<string, FailureNarrativeEntry>
+        _narratives = new ConcurrentDictionary<string, FailureNarrativeEntry>(StringComparer.Ordinal);
+
     public event EventHandler<string>? FileAnnotationsUpdated; // arg = normalized filePath
     public event EventHandler<string>? CoverageUpdated;        // arg = normalized filePath
 

@@ -2895,3 +2895,107 @@ module McpTools =
 
         return JsonSerializer.Serialize(jsonData, liveTestJsonOpts)
     }
+
+  /// List all discovered tests, optionally filtered by pattern or file path.
+  let listTests (ctx: McpContext) (patternOpt: string option) (fileOpt: string option) : Task<string> =
+    task {
+      match ctx.GetElmModel, ctx.GetFeatureState with
+      | None, _ -> return "Test list not available — Elm loop not started."
+      | _, None -> return "Test list not available — no active session."
+      | Some getModel, Some getState ->
+        let model = getModel ()
+        let state = getState ()
+        let graph = buildCellGraphFromState state
+        let locations =
+          model.LiveTesting.TestState.DiscoveredTests
+          |> Array.toList
+          |> Features.TestSourceResolver.resolveTestLocations graph
+        let query : Features.TestDiscovery.TestDiscoveryQuery = {
+          Pattern    = patternOpt |> Option.filter (fun s -> s.Length > 0)
+          FilePath   = fileOpt |> Option.filter (fun s -> s.Length > 0)
+          MaxResults = 200
+        }
+        let result = Features.TestDiscovery.TestDiscovery.applyQuery query locations
+        let jsonData =
+          {| TotalCount    = result.TotalCount
+             Returned      = result.Tests.Length
+             FilterApplied = result.FilterApplied
+             Summary       = Features.TestDiscovery.TestDiscovery.summarize result
+             GroupedByFile = result.GroupedByFile |> List.map (fun (file, tests) ->
+               {| File  = file
+                  Tests = tests |> List.map (fun t ->
+                    {| TestName  = t.TestName
+                       StartLine = t.StartLine
+                       EndLine   = t.EndLine |}) |}) |}
+        return JsonSerializer.Serialize(jsonData, liveTestJsonOpts)
+    }
+
+  /// Expose the cell dependency graph with staleness annotations.
+  let getCellDependencies (ctx: McpContext) : Task<string> =
+    task {
+      match ctx.GetFeatureState with
+      | None -> return "Cell dependency graph not available — no active session."
+      | Some getState ->
+        let state = getState ()
+        let graph = buildCellGraphFromState state
+        // Pass empty changed set — graph structure and wiring is always useful.
+        // Callers can use plan_ripple with a specific cell to see staleness impact.
+        let report = Features.CellDependenciesReport.CellDependenciesReport.compose graph Set.empty
+        let jsonData =
+          {| TotalCells    = report.TotalCells
+             TotalStale    = report.TotalStale
+             TotalEdges    = report.TotalEdges
+             StaleCellIds  = report.StaleCellIds
+             Summary       = report.Summary
+             Nodes         = report.Nodes |> List.map (fun n ->
+               {| Id            = n.Id
+                  Produces      = n.Produces
+                  Consumes      = n.Consumes
+                  DownstreamIds = n.DownstreamIds
+                  UpstreamIds   = n.UpstreamIds
+                  IsStale       = n.IsStale
+                  StaleCauses   = n.StaleCauses |}) |}
+        return JsonSerializer.Serialize(jsonData, liveTestJsonOpts)
+    }
+
+  /// Discover and rank SageFs features relevant to the current session state.
+  let discoverFeatures (ctx: McpContext) (topicOpt: string option) : Task<string> =
+    task {
+      let discoveryCtx =
+        match ctx.GetElmModel, ctx.GetFeatureState with
+        | None, _ | _, None -> Features.FeatureDiscovery.FeatureDiscovery.emptyContext
+        | Some getModel, Some getState ->
+          let model = getModel ()
+          let state = getState ()
+          let testState = model.LiveTesting.TestState
+          let failingCount =
+            testState.LastResults
+            |> Map.values
+            |> Seq.filter (fun r ->
+              match r.Result with
+              | Features.LiveTesting.TestResult.Failed _ -> true
+              | _ -> false)
+            |> Seq.length
+          {
+            Features.FeatureDiscovery.DiscoveryContext.HasFailingTests = failingCount > 0
+            FailingTestCount = failingCount
+            HasStaleCells    = false
+            StaleCellCount   = 0
+            TotalEvals       = state.EvalHistory.Length
+            HasTests         = testState.DiscoveredTests.Length > 0
+            TotalTests       = testState.DiscoveredTests.Length
+            RequestedTopic   = topicOpt |> Option.filter (fun s -> s.Length > 0)
+          }
+      let report = Features.FeatureDiscovery.FeatureDiscovery.discover discoveryCtx
+      let jsonData =
+        {| ContextSummary     = report.ContextSummary
+           TotalKnownFeatures = report.TotalKnownFeatures
+           Returned           = report.Suggestions.Length
+           Suggestions        = report.Suggestions |> List.map (fun s ->
+             {| ToolName          = s.ToolName
+                ShortDescription  = s.ShortDescription
+                ExampleUsage      = s.ExampleUsage
+                WhyNow            = s.WhyNow
+                Relevance         = s.Relevance.ToString() |}) |}
+      return JsonSerializer.Serialize(jsonData, liveTestJsonOpts)
+    }

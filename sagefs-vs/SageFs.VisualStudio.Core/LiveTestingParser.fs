@@ -274,6 +274,26 @@ module LiveTestingParser =
       MeanMs = tryFloat root "MeanMs"
       Sparkline = tryStr root "Sparkline" "" }
 
+  let parseFailureNarratives (json: string) : FailureNarrative array =
+    try
+      use doc = JsonDocument.Parse(json)
+      let root = doc.RootElement
+      match root.ValueKind with
+      | JsonValueKind.Array ->
+        [| for item in root.EnumerateArray() do
+            let testId = tryStr item "TestId" ""
+            let summary = tryStr item "Summary" ""
+            let timeSince = tryStr item "TimeSinceLastPass" ""
+            let changes =
+              match getProp item "CausalChanges" with
+              | Some arr when arr.ValueKind = JsonValueKind.Array ->
+                [| for c in arr.EnumerateArray() do
+                    yield { Kind = tryStr c "Kind" ""; Name = tryStr c "Name" "" } |]
+              | _ -> [||]
+            yield { TestId = testId; Summary = summary; TimeSinceLastPass = timeSince; CausalChanges = changes } |]
+      | _ -> [||]
+    with _ -> [||]
+
   let parseFeatureSseEvent (eventType: string) (json: string) : FeatureEvent option =
     try
       use doc = JsonDocument.Parse(json)

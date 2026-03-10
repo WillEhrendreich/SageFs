@@ -1041,3 +1041,58 @@ WORKFLOW: Use after re-evaluating a cell to see exactly what changed in the outp
         logger.LogDebug("MCP-TOOL: get_eval_diff called, cellIndex={Idx}", cell_index)
         let idxOpt = match cell_index with | 0 -> None | i -> Some i
         getEvalDiff ctx idxOpt |> withEcho "get_eval_diff"
+
+    [<McpServerTool>]
+    [<Description("""List all discovered tests in the current session, optionally filtered by name pattern or file path.
+
+Returned data includes total count, grouping by source file, and per-test line numbers for editor navigation.
+
+Parameters:
+- pattern: substring filter on test name (empty = all tests)
+- file_path: filter by source file path (empty = all files)
+
+OUTPUT: JSON with TotalCount, Returned, FilterApplied, Summary, and GroupedByFile with StartLine/EndLine for each test.
+
+WORKFLOW: Use this before run_tests to discover what tests exist, or to build a filtered test run.""")>]
+    member _.list_tests(
+        [<Description("Optional substring filter on test name (empty for all tests)")>]
+        pattern: string,
+        [<Description("Optional file path filter (empty for all files)")>]
+        file_path: string
+    ) : Task<string> =
+        logger.LogDebug("MCP-TOOL: list_tests called, pattern={Pattern}, file={File}", pattern, file_path)
+        let patOpt = match pattern with | "" | null -> None | s -> Some s
+        let fileOpt = match file_path with | "" | null -> None | s -> Some s
+        listTests ctx patOpt fileOpt |> withEcho "list_tests"
+
+    [<McpServerTool>]
+    [<Description("""Get the cell dependency graph annotated with staleness information.
+
+Shows which cells are stale (their dependencies changed but they haven't re-evaluated), what each cell produces/consumes, and the full upstream/downstream wiring.
+
+OUTPUT: JSON with TotalCells, TotalStale, TotalEdges, StaleCellIds, Summary, and per-node details (Produces, Consumes, UpstreamIds, DownstreamIds, IsStale, StaleCauses).
+
+WORKFLOW: After editing code, use this to understand the ripple impact before deciding which cells to re-evaluate. Pair with plan_ripple for the full re-eval plan.""")>]
+    member _.get_cell_dependencies() : Task<string> =
+        logger.LogDebug("MCP-TOOL: get_cell_dependencies called")
+        getCellDependencies ctx |> withEcho "get_cell_dependencies"
+
+    [<McpServerTool>]
+    [<Description("""Discover and rank all SageFs features by relevance to your current session state.
+
+Acts as a built-in "tour guide" — analyzes your session context (failing tests, stale cells, eval count, discovered tests) and surfaces the most useful features first.
+
+Parameters:
+- topic: optional focus keyword (e.g. "testing", "performance", "export") to narrow suggestions
+
+OUTPUT: JSON with ContextSummary, TotalKnownFeatures, Returned count, and Suggestions ranked Essential > Recommended > Optional. Each suggestion includes ToolName, ShortDescription, ExampleUsage, and WhyNow explanation.
+
+WORKFLOW: Call this at the start of a session to see what to do next, or any time you feel lost.""")>]
+    member _.discover_features(
+        [<Description("Optional topic keyword to focus suggestions (e.g. 'testing', 'performance', 'export'). Empty for all features.")>]
+        topic: string
+    ) : Task<string> =
+        logger.LogDebug("MCP-TOOL: discover_features called, topic={Topic}", topic)
+        let topicOpt = match topic with | "" | null -> None | s -> Some s
+        discoverFeatures ctx topicOpt |> withEcho "discover_features"
+

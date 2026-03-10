@@ -16,6 +16,7 @@ type LiveTestingSubscriber(port: int) =
   let summaryChanged = Event<TestSummary>()
   let changeEmitted = Event<LiveTestChange>()
   let featureReceived = Event<FeatureEvent>()
+  let narrativesReceived = Event<FailureNarrative array>()
 
   /// Fires when test state changes (discovery, results, toggle)
   [<CLIEvent>]
@@ -32,6 +33,10 @@ type LiveTestingSubscriber(port: int) =
   /// Fires when a feature event (eval_diff, cell_dependencies, etc.) arrives
   [<CLIEvent>]
   member _.FeatureReceived = featureReceived.Publish
+
+  /// Fires when failure narratives arrive
+  [<CLIEvent>]
+  member _.NarrativesReceived = narrativesReceived.Publish
 
   member _.State = state
 
@@ -73,6 +78,14 @@ type LiveTestingSubscriber(port: int) =
               match LiveTestingParser.parseFeatureSseEvent currentEvent json with
               | Some fe -> featureReceived.Trigger(fe)
               | None -> ()
+              if currentEvent = "failure_narratives" then
+                let narratives = LiveTestingParser.parseFailureNarratives json
+                if narratives.Length > 0 then
+                  let newMap =
+                    narratives |> Array.fold (fun m n -> Map.add n.TestId n m) state.FailureNarratives
+                  state <- { state with FailureNarratives = newMap }
+                  narrativesReceived.Trigger(narratives)
+                  stateChanged.Trigger(state)
               currentEvent <- "message"
             elif line.Trim() = "" then
               currentEvent <- "message"
@@ -154,8 +167,8 @@ type LiveTestingSubscriber(port: int) =
       | TestOutcome.PolicyDisabled -> "⊘ Disabled"
     | None -> "● Not Run"
 
-  /// Format a tooltip with full test details. Optionally enriched with freshness context.
-  static member formatTestTooltip(info: TestInfo, result: TestResult option, ?freshness: ResultFreshness) : string =
+  /// Format a tooltip with full test details. Optionally enriched with freshness and narrative context.
+  static member formatTestTooltip(info: TestInfo, result: TestResult option, ?freshness: ResultFreshness, ?narrative: FailureNarrative) : string =
     match result with
     | Some r ->
       let status =
@@ -180,5 +193,9 @@ type LiveTestingSubscriber(port: int) =
         match r.Output with
         | Some o when o.Length > 0 -> sprintf "\n%s" o
         | _ -> ""
-      sprintf "%s — %s%s%s" info.DisplayName status duration output
+      let narrativeText =
+        match narrative with
+        | Some n when n.Summary <> "" -> sprintf "\nℹ️ %s" n.Summary
+        | _ -> ""
+      sprintf "%s — %s%s%s%s" info.DisplayName status duration output narrativeText
     | None -> sprintf "%s — Not Run" info.DisplayName
