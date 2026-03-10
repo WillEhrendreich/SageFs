@@ -38,21 +38,26 @@ type EvalBoundaryKind =
 module BindingValue =
 
   /// Produces a compact ghost-text string for inline editor decoration.
-  /// e.g.  "→ 42  int"  or  "→ <fn>  int -> string"  or  "→ [1; 2; …]  int list"
+  /// e.g.  "→ 42  int"  or  "→ <fn>  int -> string"  or  "→ [1; 2; …]  int list  ⟨truncated⟩"
   let toGhostText (bv: BindingValue) : string =
     let displayVal =
       match bv.IsFunctionValue with
       | true  -> "<fn>"
       | false ->
-        match bv.IsTruncated with
-        | true  ->
-          // Replace trailing "...]" with "…]" if present, else just append "…"
-          let d = bv.DisplayValue
-          match d.EndsWith("...]") || d.EndsWith("...}") with
-          | true  -> d.[..d.Length - 5] + "…" + string d.[d.Length - 1]
-          | false -> d.TrimEnd('.') + "…"
-        | false -> bv.DisplayValue
-    sprintf "→ %s  %s" displayVal bv.TypeSig
+        match bv.DisplayValue with
+        | "<null>" -> "null"
+        | d ->
+          match bv.IsTruncated with
+          | true  ->
+            // Replace trailing "...]" with "…]" if present, else just append "…"
+            match d.EndsWith("...]") || d.EndsWith("...}") with
+            | true  -> d.[..d.Length - 5] + "…" + string d.[d.Length - 1]
+            | false -> d.TrimEnd('.') + "…"
+          | false -> d
+    let base_ = sprintf "→ %s  %s" displayVal bv.TypeSig
+    match bv.IsTruncated with
+    | true  -> base_ + "  ⟨truncated⟩"
+    | false -> base_
 
 // ── EvalBoundaryKind helpers ──────────────────────────────────────────────────
 

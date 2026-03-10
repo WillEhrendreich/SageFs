@@ -199,9 +199,19 @@ let accumulateBindings
     Map.add name { Name = name; TypeSig = typeSig; Value = value; ShadowCount = count } acc
   ) existing
 
-/// Format a bindings snapshot as an SSE event string
-let formatBindingsSnapshotEvent (opts: JsonSerializerOptions) (sessionId: string option) (bindings: FsiBinding array) : string =
-  let json = JsonSerializer.Serialize({| Bindings = bindings |}, opts) |> injectSessionId sessionId
+/// Format a bindings snapshot as an SSE event string.
+/// Includes both the legacy FsiBinding array (for backward compat) and rich BindingValue records.
+let formatBindingsSnapshotEvent
+  (opts: JsonSerializerOptions)
+  (sessionId: string option)
+  (bindingValues: Features.FsiOutputParser.BindingValue list)
+  (bindings: FsiBinding array)
+  : string =
+  let json =
+    JsonSerializer.Serialize(
+      {| Bindings = bindings; BindingValues = bindingValues |},
+      opts)
+    |> injectSessionId sessionId
   formatSseEvent "bindings_snapshot" json
 
 /// Format a test trace as an SSE event string

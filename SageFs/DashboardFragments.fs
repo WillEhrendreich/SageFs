@@ -210,11 +210,11 @@ let renderDaemonHealth (view: DaemonHealthView) =
   ]
 
 /// Render failure narratives as a dashboard panel — shows recent test failures with context.
+/// Silent when there are no failures — absence of red is the signal.
 let renderFailureNarratives (view: FailureNarrativesPanelView) =
   Elem.div [ Attr.id DomIds.FailureNarratives; Attr.class' "failure-narratives-panel" ] [
     match view.TotalFailureCount with
-    | 0 ->
-      Elem.span [ Attr.class' "meta no-failures" ] [ Text.raw "✅ no recent failures" ]
+    | 0 -> ()
     | total ->
       let badgeText =
         match view.SuppressedCount with
@@ -869,35 +869,50 @@ let renderSessions (sessions: ParsedSession list) (creating: bool) =
 
 
 /// Render session eval history as a visual filmstrip — one card per recent eval.
+/// Collapsed by default; the summary line shows count + recent outcome icons at a glance.
 let renderSessionFilmstrip (entries: FilmstripEntry list) =
   Elem.div [ Attr.id DomIds.FilmstripPanel; Attr.class' "filmstrip-panel" ] [
     match entries with
-    | [] ->
-      Elem.span [ Attr.class' "meta no-history" ] [ Text.raw "No history" ]
+    | [] -> ()
     | _ ->
-      yield! entries |> List.map (fun e ->
-        let icon = match e.Outcome with EvalSuccess -> "✓" | EvalError -> "✗" | EvalCancelled -> "⊘"
-        let speedCls =
-          match e.DurationMs with
-          | ms when ms < 100L -> "eval-fast"
-          | ms when ms <= 500L -> "eval-medium"
-          | _ -> "eval-slow"
-        Elem.div [ Attr.class' (sprintf "filmstrip-frame %s" speedCls) ] [
-          Elem.span [ Attr.class' "frame-index" ] [ Text.raw (sprintf "#%d" e.Index) ]
-          Elem.span [ Attr.class' "frame-icon" ] [ Text.raw icon ]
-          Elem.span [ Attr.class' "frame-label" ] [ Text.raw e.Label ]
-          Elem.span [ Attr.class' "frame-duration" ] [ Text.raw (sprintf " %dms" e.DurationMs) ]
-        ])
+      let recentIcons =
+        entries
+        |> List.rev
+        |> List.truncate 5
+        |> List.rev
+        |> List.map (fun e ->
+          match e.Outcome with EvalSuccess -> "✓" | EvalError -> "✗" | EvalCancelled -> "⊘")
+        |> String.concat ""
+      Elem.details [] [
+        Elem.summary [ Attr.style "cursor: pointer; font-size: 0.75rem; color: var(--fg-dim); user-select: none;" ] [
+          Text.raw (sprintf "⏱ %d evals  %s" entries.Length recentIcons)
+        ]
+        Elem.div [ Attr.class' "filmstrip-frames" ] [
+          yield! entries |> List.map (fun e ->
+            let icon = match e.Outcome with EvalSuccess -> "✓" | EvalError -> "✗" | EvalCancelled -> "⊘"
+            let speedCls =
+              match e.DurationMs with
+              | ms when ms < 100L -> "eval-fast"
+              | ms when ms <= 500L -> "eval-medium"
+              | _ -> "eval-slow"
+            Elem.div [ Attr.class' (sprintf "filmstrip-frame %s" speedCls) ] [
+              Elem.span [ Attr.class' "frame-index" ] [ Text.raw (sprintf "#%d" e.Index) ]
+              Elem.span [ Attr.class' "frame-icon" ] [ Text.raw icon ]
+              Elem.span [ Attr.class' "frame-label" ] [ Text.raw e.Label ]
+              Elem.span [ Attr.class' "frame-duration" ] [ Text.raw (sprintf " %dms" e.DurationMs) ]
+            ])
+        ]
+      ]
   ]
 
 /// Render current FSI diagnostics as a live panel with emoji severity icons and a count badge.
+/// Silent when there are no diagnostics — clean state needs no confirmation.
 let renderCurrentDiagnostics (diags: Diagnostic list) =
   let errorCount = diags |> List.filter (fun d -> d.Severity = DiagError) |> List.length
   let warnCount = diags |> List.filter (fun d -> d.Severity = DiagWarning) |> List.length
   Elem.div [ Attr.id DomIds.DiagnosticsPanel; Attr.class' "diagnostics-panel" ] [
     match diags.IsEmpty with
-    | true ->
-      Elem.span [ Attr.class' "meta no-diags" ] [ Text.raw "✅ No diagnostics" ]
+    | true -> ()
     | false ->
       Elem.span [ Attr.class' "diag-count-badge"; Attr.style "font-weight: bold; margin-right: 0.5rem;" ] [
         match errorCount, warnCount with
@@ -1199,39 +1214,44 @@ let renderHotReloadPanel (sessionId: string) (files: {| path: string; watched: b
           Attr.create "onclick" (sprintf "fetch('/api/sessions/%s/hotreload/unwatch-all',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})" sessionId) ]
         [ Text.raw "Unwatch All" ]
     ]
-    Elem.div [ Attr.style "max-height: 200px; overflow-y: auto; font-size: 0.75rem;" ] [
-      yield! grouped |> List.collect (fun (dir, dirFiles) ->
-        let dirLabel =
-          match dir.Length > 40 with
-          | true -> "..." + dir.[dir.Length - 37..]
-          | false -> dir
-        let dirWatchedCount = dirFiles |> List.filter (fun f -> f.watched) |> List.length
-        let allWatched = dirWatchedCount = List.length dirFiles
-        let dirIcon = match allWatched, dirWatchedCount > 0 with | true, _ -> "●" | false, true -> "◐" | false, false -> "○"
-        let dirColor = match allWatched || dirWatchedCount > 0 with | true -> "var(--fg-blue, #7aa2f7)" | false -> "var(--fg-dim, #565f89)"
-        let dirAction = match allWatched with | true -> "unwatch-directory" | false -> "watch-directory"
-        let dirKey = "directory"
-        [
-          Elem.div
-            [ Attr.style "font-weight: 600; margin-top: 4px; opacity: 0.8; font-size: 0.7rem; cursor: pointer; display: flex; align-items: center; gap: 4px;"
-              Attr.create "onclick" (sprintf "fetch('/api/sessions/%s/hotreload/%s',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({%s:'%s'})})" sessionId dirAction dirKey (dir.Replace("\\", "\\\\"))) ]
-            [ Elem.span [ Attr.style (sprintf "color: %s;" dirColor) ] [ Text.raw dirIcon ]
-              Text.raw (sprintf "📁 %s (%d/%d)" dirLabel dirWatchedCount (List.length dirFiles)) ]
-          yield! dirFiles |> List.map (fun f ->
-            let fileName =
-              let n = f.path.Replace('\\', '/')
-              match n.LastIndexOf('/') with
-              | -1 -> n
-              | idx -> n.[idx + 1..]
-            let icon = match f.watched with | true -> "●" | false -> "○"
-            let color = match f.watched with | true -> "var(--fg-blue, #7aa2f7)" | false -> "var(--fg-dim, #565f89)"
+    Elem.details [] [
+      Elem.summary [ Attr.style "cursor: pointer; font-size: 0.75rem; color: var(--fg-dim); user-select: none;" ] [
+        Text.raw (sprintf "📁 %d files" total)
+      ]
+      Elem.div [ Attr.style "max-height: 200px; overflow-y: auto; font-size: 0.75rem;" ] [
+        yield! grouped |> List.collect (fun (dir, dirFiles) ->
+          let dirLabel =
+            match dir.Length > 40 with
+            | true -> "..." + dir.[dir.Length - 37..]
+            | false -> dir
+          let dirWatchedCount = dirFiles |> List.filter (fun f -> f.watched) |> List.length
+          let allWatched = dirWatchedCount = List.length dirFiles
+          let dirIcon = match allWatched, dirWatchedCount > 0 with | true, _ -> "●" | false, true -> "◐" | false, false -> "○"
+          let dirColor = match allWatched || dirWatchedCount > 0 with | true -> "var(--fg-blue, #7aa2f7)" | false -> "var(--fg-dim, #565f89)"
+          let dirAction = match allWatched with | true -> "unwatch-directory" | false -> "watch-directory"
+          let dirKey = "directory"
+          [
             Elem.div
-              [ Attr.style "cursor: pointer; padding: 1px 4px; display: flex; align-items: center; gap: 4px;"
-                Attr.create "onclick" (sprintf "fetch('/api/sessions/%s/hotreload/toggle',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:'%s'})})" sessionId (f.path.Replace("\\", "\\\\"))) ]
-              [ Elem.span [ Attr.style (sprintf "color: %s; font-size: 0.8rem;" color) ] [ Text.raw icon ]
-                Elem.span [ Attr.style (match f.watched with | true -> "opacity: 1" | false -> "opacity: 0.6") ] [ Text.raw fileName ] ]
-          )
-        ])
+              [ Attr.style "font-weight: 600; margin-top: 4px; opacity: 0.8; font-size: 0.7rem; cursor: pointer; display: flex; align-items: center; gap: 4px;"
+                Attr.create "onclick" (sprintf "fetch('/api/sessions/%s/hotreload/%s',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({%s:'%s'})})" sessionId dirAction dirKey (dir.Replace("\\", "\\\\"))) ]
+              [ Elem.span [ Attr.style (sprintf "color: %s;" dirColor) ] [ Text.raw dirIcon ]
+                Text.raw (sprintf "📁 %s (%d/%d)" dirLabel dirWatchedCount (List.length dirFiles)) ]
+            yield! dirFiles |> List.map (fun f ->
+              let fileName =
+                let n = f.path.Replace('\\', '/')
+                match n.LastIndexOf('/') with
+                | -1 -> n
+                | idx -> n.[idx + 1..]
+              let icon = match f.watched with | true -> "●" | false -> "○"
+              let color = match f.watched with | true -> "var(--fg-blue, #7aa2f7)" | false -> "var(--fg-dim, #565f89)"
+              Elem.div
+                [ Attr.style "cursor: pointer; padding: 1px 4px; display: flex; align-items: center; gap: 4px;"
+                  Attr.create "onclick" (sprintf "fetch('/api/sessions/%s/hotreload/toggle',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:'%s'})})" sessionId (f.path.Replace("\\", "\\\\"))) ]
+                [ Elem.span [ Attr.style (sprintf "color: %s; font-size: 0.8rem;" color) ] [ Text.raw icon ]
+                  Elem.span [ Attr.style (match f.watched with | true -> "opacity: 1" | false -> "opacity: 0.6") ] [ Text.raw fileName ] ]
+            )
+          ])
+      ]
     ]
   ]
 
@@ -1415,58 +1435,62 @@ let renderBindingsPanel (snapshot: Features.BindingExplorer.BindingScopeSnapshot
   let shadowedCount =
     snapshot |> Option.map (fun s -> s.ShadowedBindings.Length) |> Option.defaultValue 0
   Elem.div [ Attr.id DomIds.BindingsPanel; Attr.class' "panel" ] [
-    Elem.h2 [] [ Text.raw (sprintf "Bindings (%d)" activeCount) ]
-    match snapshot with
-    | None ->
-      Elem.div [ Attr.class' "meta" ] [ Text.raw "No bindings yet — evaluate some code" ]
-    | Some scope ->
-      match scope.ActiveBindings.Count with
-      | 0 ->
-        Elem.div [ Attr.class' "meta" ] [ Text.raw "No active bindings" ]
-      | _ ->
-        Elem.div [ Attr.style "font-size: 0.75rem;" ] [
-          for KeyValue(_, b) in scope.ActiveBindings do
-            Elem.div [ Attr.style "display: flex; align-items: baseline; gap: 0.5em; padding: 2px 0; border-bottom: 1px solid var(--border, #333);" ] [
-              Elem.code [ Attr.style "color: var(--fg-cyan, #56b6c2); font-weight: bold; white-space: nowrap;" ] [
-                Text.raw b.Name
-              ]
-              Elem.span [ Attr.style "color: var(--fg-dim, #666); font-size: 0.7rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" ] [
-                Text.raw b.TypeSig
-              ]
-              Elem.span [ Attr.style "color: var(--fg-dim, #555); font-size: 0.65rem; white-space: nowrap;" ] [
-                Text.raw (sprintf "cell %d" b.CellIndex)
-              ]
-              match b.ReferencedIn.Length with
-              | 0 -> ()
-              | n ->
-                Elem.span [ Attr.style "color: var(--fg-yellow, #e5c07b); font-size: 0.65rem; white-space: nowrap;" ] [
-                  Text.raw (sprintf "→%d" n)
-                ]
-              match b.Value with
-              | None -> ()
-              | Some v ->
-                Elem.span [ Attr.class' "value-display"; Attr.style "color: var(--fg-green, #98c379); font-size: 0.7rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 20em;" ] [
-                  Text.raw (sprintf "= %s" v)
-                ]
-            ]
-        ]
-        match shadowedCount with
-        | 0 -> ()
+    Elem.details [] [
+      Elem.summary [ Attr.style "cursor: pointer; font-weight: bold; font-size: 0.9rem; user-select: none;" ] [
+        Text.raw (sprintf "📦 Bindings (%d)" activeCount)
+      ]
+      match snapshot with
+      | None ->
+        Elem.div [ Attr.class' "meta" ] [ Text.raw "No bindings yet — evaluate some code" ]
+      | Some scope ->
+        match scope.ActiveBindings.Count with
+        | 0 ->
+          Elem.div [ Attr.class' "meta" ] [ Text.raw "No active bindings" ]
         | _ ->
-          Elem.details [ Attr.style "margin-top: 0.5em;" ] [
-            Elem.summary [ Attr.style "font-size: 0.7rem; cursor: pointer; color: var(--fg-dim, #666);" ] [
-              Text.raw (sprintf "👻 %d shadowed" shadowedCount)
-            ]
-            Elem.div [ Attr.style "font-size: 0.7rem; opacity: 0.6;" ] [
-              for b in scope.ShadowedBindings do
-                Elem.div [ Attr.style "padding: 1px 0;" ] [
-                  Elem.code [] [ Text.raw b.Name ]
-                  Elem.span [ Attr.style "color: var(--fg-dim, #555); margin-left: 0.3em;" ] [
-                    Text.raw (sprintf ": %s (cell %d)" b.TypeSig b.CellIndex)
-                  ]
+          Elem.div [ Attr.style "font-size: 0.75rem;" ] [
+            for KeyValue(_, b) in scope.ActiveBindings do
+              Elem.div [ Attr.style "display: flex; align-items: baseline; gap: 0.5em; padding: 2px 0; border-bottom: 1px solid var(--border, #333);" ] [
+                Elem.code [ Attr.style "color: var(--fg-cyan, #56b6c2); font-weight: bold; white-space: nowrap;" ] [
+                  Text.raw b.Name
                 ]
-            ]
+                Elem.span [ Attr.style "color: var(--fg-dim, #666); font-size: 0.7rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" ] [
+                  Text.raw b.TypeSig
+                ]
+                Elem.span [ Attr.style "color: var(--fg-dim, #555); font-size: 0.65rem; white-space: nowrap;" ] [
+                  Text.raw (sprintf "cell %d" b.CellIndex)
+                ]
+                match b.ReferencedIn.Length with
+                | 0 -> ()
+                | n ->
+                  Elem.span [ Attr.style "color: var(--fg-yellow, #e5c07b); font-size: 0.65rem; white-space: nowrap;" ] [
+                    Text.raw (sprintf "→%d" n)
+                  ]
+                match b.Value with
+                | None -> ()
+                | Some v ->
+                  Elem.span [ Attr.class' "value-display"; Attr.style "color: var(--fg-green, #98c379); font-size: 0.7rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 20em;" ] [
+                    Text.raw (sprintf "= %s" v)
+                  ]
+              ]
           ]
+          match shadowedCount with
+          | 0 -> ()
+          | _ ->
+            Elem.details [ Attr.style "margin-top: 0.5em;" ] [
+              Elem.summary [ Attr.style "font-size: 0.7rem; cursor: pointer; color: var(--fg-dim, #666);" ] [
+                Text.raw (sprintf "👻 %d shadowed" shadowedCount)
+              ]
+              Elem.div [ Attr.style "font-size: 0.7rem; opacity: 0.6;" ] [
+                for b in scope.ShadowedBindings do
+                  Elem.div [ Attr.style "padding: 1px 0;" ] [
+                    Elem.code [] [ Text.raw b.Name ]
+                    Elem.span [ Attr.style "color: var(--fg-dim, #555); margin-left: 0.3em;" ] [
+                      Text.raw (sprintf ": %s (cell %d)" b.TypeSig b.CellIndex)
+                    ]
+                  ]
+              ]
+            ]
+    ]
   ]
 
 /// Create the SSE stream handler that pushes Elm state to the browser.

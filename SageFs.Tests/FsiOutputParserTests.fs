@@ -2,6 +2,7 @@ module SageFs.Tests.FsiOutputParserTests
 
 open Expecto
 open Expecto.Flip
+open System.Text.Json
 open SageFs.Features.FsiOutputParser
 
 // ── parseFsiVal ───────────────────────────────────────────────────────────────
@@ -165,6 +166,27 @@ let ghostTextTests =
       text |> Expect.stringContains "unicode ellipsis" "…"
     }
 
+    test "truncated value ghost text includes ⟨truncated⟩ suffix" {
+      let bv : BindingValue = {
+        Name = "xs"; TypeSig = "int list"; DisplayValue = "[1; 2; ...]"
+        IsTruncated = true; IsFunctionValue = false
+        CellIndex = 0; EvalDurationMs = 2.0
+      }
+      let text = BindingValue.toGhostText bv
+      text |> Expect.stringContains "truncated suffix" "⟨truncated⟩"
+    }
+
+    test "null interop value renders null not <null>" {
+      let bv : BindingValue = {
+        Name = "obj"; TypeSig = "SomeType"; DisplayValue = "<null>"
+        IsTruncated = false; IsFunctionValue = false
+        CellIndex = 0; EvalDurationMs = 0.0
+      }
+      let text = BindingValue.toGhostText bv
+      text |> Expect.stringContains "null shown" "null"
+      text.Contains("<null>") |> Expect.isFalse "no angle-bracket null in ghost text"
+    }
+
     test "unit value shows neutral indicator" {
       let bv : BindingValue = {
         Name = "it"; TypeSig = "unit"; DisplayValue = "()"
@@ -173,6 +195,43 @@ let ghostTextTests =
       }
       let text = BindingValue.toGhostText bv
       text |> Expect.stringContains "unit shown" "()"
+    }
+  ]
+
+// ── BindingValue JSON contract (Seemann's parity requirement) ─────────────────
+
+let bindingValueContractTests =
+  testList "BindingValue.jsonContract" [
+
+    test "BindingValue round-trips through JSON serialization without field loss" {
+      let opts = JsonSerializerOptions(PropertyNamingPolicy = JsonNamingPolicy.CamelCase)
+      let bv : BindingValue = {
+        Name = "answer"; TypeSig = "int"; DisplayValue = "42"
+        IsTruncated = false; IsFunctionValue = false
+        CellIndex = 3; EvalDurationMs = 12.5
+      }
+      let json = JsonSerializer.Serialize(bv, opts)
+      let rt = JsonSerializer.Deserialize<BindingValue>(json, opts)
+      rt.Name          |> Expect.equal "Name"          bv.Name
+      rt.TypeSig       |> Expect.equal "TypeSig"       bv.TypeSig
+      rt.DisplayValue  |> Expect.equal "DisplayValue"  bv.DisplayValue
+      rt.IsTruncated   |> Expect.equal "IsTruncated"   bv.IsTruncated
+      rt.IsFunctionValue |> Expect.equal "IsFunctionValue" bv.IsFunctionValue
+      rt.CellIndex     |> Expect.equal "CellIndex"     bv.CellIndex
+      rt.EvalDurationMs |> Expect.equal "EvalDurationMs" bv.EvalDurationMs
+    }
+
+    test "bindings_snapshot payload JSON contains BindingValues array key" {
+      let opts = JsonSerializerOptions(PropertyNamingPolicy = JsonNamingPolicy.CamelCase)
+      let bv : BindingValue = {
+        Name = "x"; TypeSig = "int"; DisplayValue = "1"
+        IsTruncated = false; IsFunctionValue = false
+        CellIndex = 0; EvalDurationMs = 0.0
+      }
+      let payload = {| BindingValues = [ bv ] |}
+      let json = JsonSerializer.Serialize(payload, opts)
+      json |> Expect.stringContains "has BindingValues key" "bindingValues"
+      json |> Expect.stringContains "value in payload" "\"x\""
     }
   ]
 
@@ -286,5 +345,6 @@ let allFsiParserTests =
     parseFsiValTests
     parseFsiBatchTests
     ghostTextTests
+    bindingValueContractTests
     evalBoundaryKindTests
   ]

@@ -562,20 +562,24 @@ let wireModelChangeHandlers
       modelChangeState.Value <- { modelChangeState.Value with LastOutputCount = outputCount }
       SseContext.withModel ctx (fun model ->
         let sid = SseContext.activeSessionId ctx |> Option.defaultValue ""
-        let newBindings =
+        let rawOutput =
           model.RecentOutput.GetBuffer(sid).FilterToList(fun o ->
             o.Kind = SageFs.OutputKind.Result)
           |> List.rev
           |> List.map (fun o -> o.Text)
           |> String.concat "\n"
+        let newBindings =
+          rawOutput
           |> SageFs.SseWriter.parseBindingsFromOutput
           |> SageFs.SseWriter.accumulateBindings Map.empty
+        let bindingValues =
+          SageFs.Features.FsiOutputParser.parseFsiBatch rawOutput
         match newBindings <> fsiBindings.Value with
         | true ->
           fsiBindings.Value <- newBindings
           fsiBindings.Value
           |> Map.values |> Array.ofSeq
-          |> SageFs.SseWriter.formatBindingsSnapshotEvent ctx.SseJsonOpts (Some sid)
+          |> SageFs.SseWriter.formatBindingsSnapshotEvent ctx.SseJsonOpts (Some sid) bindingValues
           |> ctx.TestEventBroadcast.Trigger
         | false -> ())
     | false -> ()
@@ -1183,7 +1187,7 @@ let mapEventsRoute (app: WebApplication) (rctx: RouteContext) =
         | count, Some sid when count > 0 ->
           let frame =
             rctx.FsiBindings.Value |> Map.values |> Array.ofSeq
-            |> SageFs.SseWriter.formatBindingsSnapshotEvent rctx.SseContext.SseJsonOpts (Some sid)
+            |> SageFs.SseWriter.formatBindingsSnapshotEvent rctx.SseContext.SseJsonOpts (Some sid) []
           do! writeSseFrame ctx.Response.Body frame
         | _ -> ()
         for sse in
