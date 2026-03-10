@@ -1456,8 +1456,21 @@ let activate (context: ExtensionContext) =
       with _ -> ()
     } |> promiseIgnoreLog logToOutput
 
+  let checkAndConnect (c: Client.Client) =
+    promise {
+      let! sysOpt = Client.getSystemStatus c
+      match sysOpt with
+      | None -> connectToRunningDaemon c
+      | Some sys ->
+        match Client.checkVersion sys with
+        | Result.Ok () -> connectToRunningDaemon c
+        | Result.Error msg ->
+          (getOutput()).appendLine (sprintf "[SageFs] Version mismatch: %s" msg)
+          Window.showErrorMessage msg [||] |> ignore
+    } |> promiseIgnoreLog logToOutput
+
   // Wire up daemon-ready callback for startDaemon lifecycle
-  onDaemonReady <- Some connectToRunningDaemon
+  onDaemonReady <- Some checkAndConnect
 
   // Single health check: connect to running daemon OR auto-start
   let autoStart = config.get("autoStart", true)
@@ -1474,7 +1487,7 @@ let activate (context: ExtensionContext) =
       | true ->
         out.appendLine "Daemon found, connecting SSE streams..."
         try
-          connectToRunningDaemon c
+          checkAndConnect c
         with ex ->
           out.appendLine (sprintf "SSE connection error: %s" (string ex))
           match statusBarItem with

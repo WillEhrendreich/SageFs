@@ -28,7 +28,8 @@ type SageFsStatus =
 type SystemStatus =
   { supervised: bool
     restartCount: int
-    version: string }
+    version: string
+    apiVersion: int }
 
 type HotReloadFile =
   { path: string
@@ -254,7 +255,15 @@ let stopSession (sessionId: string) (c: Client) =
 let parseSystemStatus (parsed: obj) =
   { supervised = fieldBool "supervised" parsed |> Option.defaultValue false
     restartCount = fieldInt "restartCount" parsed |> Option.defaultValue 0
-    version = fieldString "version" parsed |> Option.defaultValue "?" }
+    version = fieldString "version" parsed |> Option.defaultValue "?"
+    apiVersion = fieldInt "apiVersion" parsed |> Option.defaultValue 0 }
+
+let [<Literal>] expectedApiVersion = 1
+
+let checkVersion (status: SystemStatus) : Result<unit, string> =
+  match status.apiVersion with
+  | v when v = expectedApiVersion -> Ok ()
+  | v -> Error $"SageFs daemon apiVersion={v} is incompatible with this extension (requires apiVersion={expectedApiVersion}). Run 'dotnet tool update --global SageFs' then reload VS Code."
 
 let getSystemStatus (c: Client) =
   getJson "getSystemStatus" "/api/system/status" 3000 parseSystemStatus c
