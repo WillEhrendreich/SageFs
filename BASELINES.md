@@ -82,6 +82,21 @@ Benchmark baselines recorded with BenchmarkDotNet v0.15.8, InProcess emit toolch
 
 ---
 
+## ActionPrioritizer.compose (Sprint 17 baseline)
+
+| TestCount | Mean | Allocated |
+|-----------|------|-----------|
+| 50        | TBD  | TBD       |
+| 200       | TBD  | TBD       |
+| 500       | TBD  | TBD       |
+| 1000      | TBD  | TBD       |
+
+**Note**: Benchmarks added in Sprint 17. Run locally with `--filter "*ActionPrioritizer*"` to populate.
+
+Regression threshold: >10ms at 500 tests requires investigation before shipping new MCP tooling that calls `compose`.
+
+---
+
 ## How to Re-run
 
 ```bash

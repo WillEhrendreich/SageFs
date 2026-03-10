@@ -9,6 +9,10 @@ open BenchmarkDotNet.Toolchains.InProcess.Emit
 open SageFs
 open SageFs.Features
 open SageFs.Features.ManifestTypes
+open SageFs.Features.LiveTesting
+open SageFs.Features.CoverageIntel
+open SageFs.Features.ImpactForecast
+open SageFs.Features.ActionPrioritizer
 
 // 1. CellGrid allocation: create (heap) vs rent (ArrayPool)
 type CellGridAllocation() =
@@ -161,6 +165,54 @@ type AnsiEmitDiff() =
   member _.DiffEmit() =
     AnsiEmitter.emitDiff prev curr 0 0
 
+// 8. ActionPrioritizer.compose throughput
+[<MemoryDiagnoser>]
+type ActionPrioritizerBenchmarks() =
+  let mutable coverageReports : CoverageIntelReport list = []
+  let mutable impactReports   : ImpactForecastReport list = []
+  let mutable staleCells      : int list = []
+
+  [<Params(50, 200, 500, 1000)>]
+  member val TestCount = 0 with get, set
+
+  [<GlobalSetup>]
+  member this.Setup() =
+    coverageReports <-
+      List.init this.TestCount (fun i ->
+        let verdict =
+          match i % 3 with
+          | 0 -> DiagnosticBlindSpot
+          | 1 -> PartialBlindSpot
+          | _ -> WellCovered
+        let blindSpotCount =
+          match verdict with
+          | WellCovered -> 0
+          | _ -> i % 4
+        { CoverageIntelReport.empty (TestId.TestId (sprintf "test-%d" i)) (sprintf "Test %d" i) with
+            Verdict = verdict
+            BlindSpots =
+              List.init blindSpotCount (fun j ->
+                { FilePath = sprintf "src%d.fs" (i % 5)
+                  Line = 10 + j * 10
+                  EndLine = 10 + j * 10
+                  BranchId = j
+                  NearestCoveredLine = None }) })
+    impactReports <-
+      List.init (this.TestCount / 10) (fun i ->
+        { ImpactForecastReport.empty i with
+            Recommendation =
+              match i % 3 with
+              | 0 -> ImpactRecommendation.Refactor
+              | 1 -> ImpactRecommendation.Investigate
+              | _ -> ImpactRecommendation.Acceptable
+            P95Ms = float (i * 100 + 100)
+            DownstreamCellCount = i % 20 })
+    staleCells <- List.init (this.TestCount / 20) id
+
+  [<Benchmark>]
+  member _.Compose() =
+    ActionPrioritizer.compose coverageReports impactReports staleCells
+
 module BenchmarkRunner =
   let run (argv: string[]) =
     let config =
@@ -179,6 +231,7 @@ module BenchmarkRunner =
          typeof<ErrorDescribe>
          typeof<SseFormatting>
          typeof<CellGridOverlay>
-         typeof<AnsiEmitDiff> |]
+         typeof<AnsiEmitDiff>
+         typeof<ActionPrioritizerBenchmarks> |]
     BenchmarkSwitcher.FromTypes(types).Run(argv, config) |> ignore
     0

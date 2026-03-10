@@ -418,3 +418,45 @@ let propertyTests =
       report.CoveragePercent
       |> Expect.equal "percent matches formula" expected
   ]
+
+// ── FsCheck property tests ────────────────────────────────────
+
+[<Tests>]
+let fsCheckPropertyTests = testList "CoverageIntel FsCheck properties" [
+
+  testProperty "compose: result count equals failure count" <| fun (names: string list) ->
+    let distinct = names |> List.distinct |> List.truncate 20
+    let failures =
+      distinct |> List.map (fun n -> mkTestId n, n, mkNarrative [] "")
+    let results =
+      CoverageIntel.compose failures (fun _ -> []) [||] emptyBitmaps emptyDepGraph
+    results |> Expect.hasLength "one report per failure" distinct.Length
+
+  testProperty "classifyVerdict: any percent in [80,100] → WellCovered" <| fun (n: int) ->
+    let p = float (abs (n % 21)) + 80.0
+    CoverageIntel.classifyVerdict p
+    |> Expect.equal "≥80 → WellCovered" WellCovered
+
+  testProperty "classifyVerdict: any percent in [0,39] → DiagnosticBlindSpot" <| fun (n: int) ->
+    let p = float (abs (n % 40))
+    CoverageIntel.classifyVerdict p
+    |> Expect.equal "<40 → DiagnosticBlindSpot" DiagnosticBlindSpot
+
+  testProperty "findCorrelatedTests: result contains no duplicates" <| fun (symbols: string list) ->
+    let distinct = symbols |> List.distinct |> List.truncate 10
+    let depGraph =
+      mkDepGraph [] (distinct |> List.map (fun s -> s, [| mkTestId "other" |]))
+    let result = CoverageIntel.findCorrelatedTests distinct depGraph (mkTestId "self")
+    result |> List.distinct
+    |> Expect.equal "no duplicates in correlated failures" result
+
+  testProperty "compose is deterministic: same inputs → same test names" <| fun (n: int) ->
+    let count = abs (n % 10) + 1
+    let failures =
+      List.init count (fun i ->
+        mkTestId (sprintf "t%d" i), sprintf "test %d" i, mkNarrative [] "")
+    let run () =
+      CoverageIntel.compose failures (fun _ -> []) [||] emptyBitmaps emptyDepGraph
+      |> List.map (fun r -> r.TestName)
+    run () |> Expect.equal "deterministic across runs" (run ())
+]
