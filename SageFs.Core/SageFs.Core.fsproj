@@ -59,6 +59,9 @@
         <Compile Include="Features\DomainModelViz.fs" />
         <Compile Include="Features\EvalTimeline.fs" />
         <Compile Include="Features\NotebookExport.fs" />
+        <Compile Include="Features\CoverageIntel.fs" />
+        <Compile Include="Features\ImpactForecast.fs" />
+        <Compile Include="Features\ActionPrioritizer.fs" />
         <Compile Include="Features\Diagnostician.fs" />
         <Compile Include="RetryPolicy.fs" />
         <Compile Include="SseWriter.fs" />
@@ -98,6 +101,7 @@
         <Compile Include="SageFsApp.fs" />
     <Compile Include="ElmDaemon.fs" />
         <Compile Include="TerminalUI.fs" />
+        <Compile Include="JumpToTest.fs" />
         <Compile Include="Screen.fs" />
         <Compile Include="DirectoryConfig.fs" />
         <Compile Include="ConnectionTracker.fs" />

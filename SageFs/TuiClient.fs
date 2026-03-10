@@ -83,6 +83,10 @@ let run (daemonInfo: DaemonInfo) = task {
   let mutable timeTravelState =
     TimeTravel.create { ModelSnapshot.Capacity = 200; ModelSnapshot.Enabled = true }
 
+  // Failing test navigation
+  let mutable failingTestIdx = -1
+  let mutable failingNavHint = ""
+
   let render () =
     lock TerminalUIState.consoleLock (fun () ->
       try
@@ -93,11 +97,12 @@ let run (daemonInfo: DaemonInfo) = task {
           let standby = match lastStandbyLabel.Length > 0 with | true -> sprintf " | %s" lastStandbyLabel | false -> ""
           let liveTesting = match lastLiveTestingStatus.Length > 0 with | true -> sprintf " | %s" lastLiveTestingStatus | false -> ""
           let ttPart = match ttStatus with | Some s -> sprintf " | %s" s | None -> ""
+          let failNav = match failingNavHint.Length > 0 with | true -> sprintf " | %s" failingNavHint | false -> ""
           match lastEvalCount > 0 with
           | true ->
-            sprintf " %s %s | evals: %d (avg %.0fms)%s%s%s | %s" sid lastSessionState lastEvalCount lastAvgMs standby liveTesting ttPart (PaneId.displayName focusedPane)
+            sprintf " %s %s | evals: %d (avg %.0fms)%s%s%s%s | %s" sid lastSessionState lastEvalCount lastAvgMs standby liveTesting ttPart failNav (PaneId.displayName focusedPane)
           | false ->
-            sprintf " %s %s | evals: %d%s%s%s | %s" sid lastSessionState lastEvalCount standby liveTesting ttPart (PaneId.displayName focusedPane)
+            sprintf " %s %s | evals: %d%s%s%s%s | %s" sid lastSessionState lastEvalCount standby liveTesting ttPart failNav (PaneId.displayName focusedPane)
         let statusRight = sprintf " %s | %.1fms |%s" currentThemeName lastFrameMs (StatusHints.build keyMap focusedPane layoutConfig.VisiblePanes lastWatchedCount lastDensity)
 
         // When viewing history, use historical regions; otherwise use live
@@ -147,6 +152,34 @@ let run (daemonInfo: DaemonInfo) = task {
 
   // Initial render
   render ()
+
+  let navigateFailingTests (delta: int) =
+    let failing =
+      lastRegions
+      |> List.toArray
+      |> Array.collect (fun r ->
+        r.LineAnnotations
+        |> Array.filter (fun a -> a.Icon = Features.LiveTesting.GutterIcon.TestFailed)
+        |> Array.map (fun a -> a.Line))
+      |> Array.sort
+      |> Array.distinct
+    match failing.Length with
+    | 0 -> failingNavHint <- ""
+    | total ->
+      let newIdx =
+        match failingTestIdx < 0 with
+        | true -> match delta > 0 with | true -> 0 | false -> total - 1
+        | false -> (failingTestIdx + delta + total) % total
+      failingTestIdx <- newIdx
+      let targetLine = failing.[newIdx]
+      failingNavHint <- sprintf "↯%d/%d" (newIdx + 1) total
+      let totalLines =
+        lastRegions
+        |> List.tryFind (fun r -> r.Id = "editor")
+        |> Option.map (fun r -> r.Content.Split('\n').Length)
+        |> Option.defaultValue 100
+      let approxHeight = max 1 (gridRows - 4)
+      scrollOffsets <- scrollOffsets |> Map.add PaneId.Editor (max 0 (totalLines - approxHeight - targetLine + 3))
 
   // Start SSE listener in background using shared DaemonClient
   let sseTask =
@@ -358,6 +391,17 @@ let run (daemonInfo: DaemonInfo) = task {
           | Some TerminalCommand.CycleDensity ->
             lastDensity <- UiDensity.cycle lastDensity
             render ()
+          | Some TerminalCommand.NextFailingTest ->
+            navigateFailingTests 1
+            render ()
+          | Some TerminalCommand.PrevFailingTest ->
+            navigateFailingTests (-1)
+            render ()
+          | Some TerminalCommand.JumpToTest ->
+            let scrollOff = scrollOffsets |> Map.tryFind focusedPane |> Option.defaultValue 0
+            match JumpToTest.getSelectedTestLocation lastRegions scrollOff with
+            | Some (file, line) -> JumpToTest.openInEditor file line
+            | None -> ()
           | Some (TerminalCommand.Action action) ->
             let remappedAction =
               match focusedPane = PaneId.Sessions with

@@ -70,6 +70,9 @@ module RaylibMode =
     | TimeTravelForward
     | TimeTravelGoLive
     | CycleDensity
+    | NextFailingTest
+    | PrevFailingTest
+    | JumpToTest
 
   /// Convert Raylib KeyboardKey to System.ConsoleKey for KeyMap lookup
   let raylibToConsoleKey (key: KeyboardKey) : System.ConsoleKey option =
@@ -88,6 +91,7 @@ module RaylibMode =
     | KeyboardKey.End -> Some System.ConsoleKey.End
     | KeyboardKey.PageUp -> Some System.ConsoleKey.PageUp
     | KeyboardKey.PageDown -> Some System.ConsoleKey.PageDown
+    | KeyboardKey.F12 -> Some System.ConsoleKey.F12
     | KeyboardKey.Equal -> Some System.ConsoleKey.OemPlus
     | KeyboardKey.Minus -> Some System.ConsoleKey.OemMinus
     | k when k >= KeyboardKey.A && k <= KeyboardKey.Z ->
@@ -137,6 +141,9 @@ module RaylibMode =
         | Some (UiAction.TimeTravelForward) -> Some TimeTravelForward
         | Some (UiAction.TimeTravelGoLive) -> Some TimeTravelGoLive
         | Some (UiAction.CycleDensity) -> Some CycleDensity
+        | Some (UiAction.NextFailingTest) -> Some NextFailingTest
+        | Some (UiAction.PrevFailingTest) -> Some PrevFailingTest
+        | Some (UiAction.JumpToTest) -> Some JumpToTest
         | Some (UiAction.Editor action) -> Some (Action action)
         | None ->
           // Ctrl+C not in keymap → copy selection
@@ -250,6 +257,9 @@ module RaylibMode =
     let mutable selStart : (int * int) option = None
     let mutable selEnd : (int * int) option = None
     let mutable selecting = false
+    // Failing test navigation
+    let mutable failingTestIdx = -1
+    let mutable failingNavHint = ""
 
     // Init window
     let mutable gridCols = 120
@@ -306,6 +316,36 @@ module RaylibMode =
           lock statelock (fun () ->
             lastSessionState <- sprintf "%s (reconnecting...)" lastSessionState))
         cts.Token
+
+    let navigateFailingTests (delta: int) =
+      let failing =
+        lock statelock (fun () ->
+          lastRegions
+          |> List.toArray
+          |> Array.collect (fun r ->
+            r.LineAnnotations
+            |> Array.filter (fun a -> a.Icon = Features.LiveTesting.GutterIcon.TestFailed)
+            |> Array.map (fun a -> a.Line))
+          |> Array.sort
+          |> Array.distinct)
+      match failing.Length with
+      | 0 -> failingNavHint <- ""
+      | total ->
+        let newIdx =
+          match failingTestIdx < 0 with
+          | true -> match delta > 0 with | true -> 0 | false -> total - 1
+          | false -> (failingTestIdx + delta + total) % total
+        failingTestIdx <- newIdx
+        let targetLine = failing.[newIdx]
+        failingNavHint <- sprintf "↯%d/%d" (newIdx + 1) total
+        let totalLines =
+          lock statelock (fun () ->
+            lastRegions
+            |> List.tryFind (fun r -> r.Id = "editor")
+            |> Option.map (fun r -> r.Content.Split('\n').Length)
+            |> Option.defaultValue 100)
+        let approxHeight = max 1 (gridRows - 4)
+        scrollOffsets <- scrollOffsets |> Map.add PaneId.Editor (max 0 (totalLines - approxHeight - targetLine + 3))
 
     while running && not (windowShouldClose ()) do
 
@@ -402,6 +442,13 @@ module RaylibMode =
           timeTravelState <- TimeTravel.goLive timeTravelState
         | CycleDensity ->
           lastDensity <- UiDensity.cycle lastDensity
+        | NextFailingTest -> navigateFailingTests 1
+        | PrevFailingTest -> navigateFailingTests (-1)
+        | JumpToTest ->
+          let scrollOff = scrollOffsets |> Map.tryFind focusedPane |> Option.defaultValue 0
+          match JumpToTest.getSelectedTestLocation lastRegions scrollOff with
+          | Some (file, line) -> JumpToTest.openInEditor file line
+          | None -> ()
         | Action action ->
           // When Sessions pane is focused, remap movement keys to session navigation
           let remappedAction =
@@ -489,8 +536,12 @@ module RaylibMode =
             | Some r -> r
             | None -> regions
         let ttStatus = TimeTravel.formatStatus timeTravelState
+        let liveTestingWithNav =
+          match failingNavHint.Length > 0 with
+          | true -> sprintf "%s %s" liveTestingStatus failingNavHint
+          | false -> liveTestingStatus
 
-        renderRegions grid displayRegions sessionId sessionState evalCount standbyLabel liveTestingStatus watchedCount ttStatus focusedPane scrollOffsets fontSize lastFps keyMap layoutConfig currentTheme currentThemeName lastDensity
+        renderRegions grid displayRegions sessionId sessionState evalCount standbyLabel liveTestingWithNav watchedCount ttStatus focusedPane scrollOffsets fontSize lastFps keyMap layoutConfig currentTheme currentThemeName lastDensity
         lastFps <- fps ()
 
         Raylib.BeginDrawing()

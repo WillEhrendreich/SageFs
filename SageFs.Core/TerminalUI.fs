@@ -413,6 +413,9 @@ type TerminalCommand =
   | TimeTravelForward
   | TimeTravelGoLive
   | CycleDensity
+  | NextFailingTest
+  | PrevFailingTest
+  | JumpToTest
 
 
 /// Map console key presses to terminal commands
@@ -449,6 +452,9 @@ module TerminalInput =
     | Some (UiAction.TimeTravelForward) -> Some TerminalCommand.TimeTravelForward
     | Some (UiAction.TimeTravelGoLive) -> Some TerminalCommand.TimeTravelGoLive
     | Some (UiAction.CycleDensity) -> Some TerminalCommand.CycleDensity
+    | Some (UiAction.NextFailingTest) -> Some TerminalCommand.NextFailingTest
+    | Some (UiAction.PrevFailingTest) -> Some TerminalCommand.PrevFailingTest
+    | Some (UiAction.JumpToTest) -> Some TerminalCommand.JumpToTest
     | Some (UiAction.Editor action) -> Some (TerminalCommand.Action action)
     | None ->
       // Fall through to character insertion for printable chars
