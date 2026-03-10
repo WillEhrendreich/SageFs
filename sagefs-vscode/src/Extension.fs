@@ -1988,6 +1988,14 @@ let activate (context: ExtensionContext) =
           | Some "Show Output" -> showOutputPanel ()
           | _ -> ()
         } |> promiseIgnore
+      OnDomainModel = fun _data ->
+        // Domain model visualization data — available via sagefs.visualize_domain_model MCP tool.
+        // Future: render in a dedicated webview panel.
+        ()
+      OnDiagnosisReady = fun data ->
+        let severity = fieldString "Severity" data |> Option.defaultValue "unknown"
+        let summary = fieldString "Summary" data |> Option.defaultValue ""
+        (getOutput()).appendLine (sprintf "[SageFs Diagnostics] %s: %s" severity summary)
     }
     let reconnectHandler = Some (fun () ->
       c.log "SSE reconnected — refreshing status..."

@@ -1096,3 +1096,26 @@ WORKFLOW: Call this at the start of a session to see what to do next, or any tim
         let topicOpt = match topic with | "" | null -> None | s -> Some s
         discoverFeatures ctx topicOpt |> withEcho "discover_features"
 
+    [<McpServerTool>]
+    [<Description("""Given a failing test, compose explain_test_failure → extract causal symbol → preview ripple into a single repair plan.
+
+V1 does NOT suggest a new value for the binding — it surfaces the causal symbol, its current code, and the ripple of cells that would re-evaluate on any change. The developer supplies the new value.
+
+Steps performed automatically:
+1. Find the failure narrative for the test (which symbols/files changed, when it last passed)
+2. Extract the top causal symbol from CausalChanges
+3. Look up the symbol's current binding value and type in the session
+4. Build a what-if ripple plan for that symbol (how many downstream cells re-evaluate)
+5. Return a structured suggestion: "Change X — call preview_what_if to test your fix"
+
+INPUT: test_name — substring to match against test FullName or DisplayName.
+OUTPUT: JSON with TestName, Summary, TimeSinceLastPass, CausalChanges, PrimarySymbol, RipplePlan (Symbol, CurrentCode, TypeSig, AffectedCellCount, RippleSteps), and Suggestion.
+
+WORKFLOW: When run_tests shows a failure, call suggest_repair with the test name. Read PrimarySymbol and RipplePlan. Call preview_what_if with your candidate fix before applying it.""")>]
+    member _.suggest_repair(
+        [<Description("Test name or substring to match against FullName or DisplayName")>]
+        test_name: string
+    ) : Task<string> =
+        logger.LogDebug("MCP-TOOL: suggest_repair called, test={Test}", test_name)
+        suggestRepair ctx test_name |> withEcho "suggest_repair"
+

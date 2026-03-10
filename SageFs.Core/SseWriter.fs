@@ -315,3 +315,28 @@ let formatDiagnosisReadyEvent (opts: JsonSerializerOptions) (sessionId: string o
        Summary = report.Summary |}
   let json = JsonSerializer.Serialize(payload, opts) |> injectSessionId sessionId
   formatSseEvent "diagnosis_ready" json
+
+// ── Authoritative SSE event type registry ──────────────────────────────────────────
+
+/// Authoritative list of all SSE event type names emitted by SseWriter formatters.
+/// Every event type emitted by the daemon that originates from SseWriter must appear here.
+/// The `"state"` event (DaemonStateChange) and `"session"` event (SessionEvents) are
+/// tracked separately in DaemonStateChange.sseEventType and SessionEvents.sessionEventType.
+let allSseEventTypes : string list = [
+  "warmup_progress"
+  "test_summary"
+  "test_results_batch"
+  "file_annotations"
+  "failure_narratives"
+  "test_source_locations"
+  "bindings_snapshot"
+  "test_trace"
+  "eval_diff"
+  "eval_started"
+  "eval_result"
+  "cell_dependencies"
+  "binding_scope_map"
+  "eval_timeline"
+  "domain_model"
+  "diagnosis_ready"
+]

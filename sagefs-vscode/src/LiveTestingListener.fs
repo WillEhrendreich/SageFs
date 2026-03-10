@@ -178,6 +178,8 @@ type LiveTestingCallbacks = {
   OnWarmupCompleted: string -> unit
   OnFileReloaded: string -> unit
   OnSessionFaulted: string -> unit
+  OnDomainModel: obj -> unit
+  OnDiagnosisReady: obj -> unit
 }
 
 type LiveTestingListener = {
@@ -289,6 +291,10 @@ let start (port: int) (callbacks: LiveTestingCallbacks) (onReconnect: (unit -> u
       | "session_faulted" ->
         let reason = fieldString "Reason" data |> Option.orElse (fieldString "reason" data) |> Option.defaultValue "unknown error"
         callbacks.OnSessionFaulted reason
+      | "domain_model" ->
+        callbacks.OnDomainModel data
+      | "diagnosis_ready" ->
+        callbacks.OnDiagnosisReady data
       | _ ->
         ())
 

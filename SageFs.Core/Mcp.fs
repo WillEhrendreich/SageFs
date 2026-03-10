@@ -2999,3 +2999,104 @@ module McpTools =
                 Relevance         = s.Relevance.ToString() |}) |}
       return JsonSerializer.Serialize(jsonData, liveTestJsonOpts)
     }
+
+  /// suggest_repair: compose explain_test_failure → extract causal symbol → preview_what_if
+  /// V1: surfaces the causal symbol + current binding + ripple plan without suggesting a new value.
+  let suggestRepair (ctx: McpContext) (testName: string) : Task<string> =
+    task {
+      match ctx.GetElmModel, ctx.GetFeatureState with
+      | None, _ | _, None ->
+        return "suggest_repair requires an active session with live testing. Start SageFs with a test project first."
+      | Some getModel, Some getState ->
+        let model = getModel ()
+        let testState = model.LiveTesting.TestState
+        let state = getState ()
+        let matchingTests =
+          testState.DiscoveredTests
+          |> Array.filter (fun tc ->
+            tc.FullName.Contains(testName, StringComparison.OrdinalIgnoreCase)
+            || tc.DisplayName.Contains(testName, StringComparison.OrdinalIgnoreCase))
+        match matchingTests with
+        | [||] ->
+          return sprintf "No test found matching '%s'. Use run_tests to see available tests." testName
+        | tests ->
+          let narrativeOpt =
+            tests |> Array.tryPick (fun tc -> Map.tryFind tc.Id testState.FailureNarratives)
+          match narrativeOpt with
+          | None ->
+            let testNames = tests |> Array.map (fun tc -> tc.DisplayName) |> String.concat ", "
+            return
+              sprintf
+                "No failure narrative for '%s' (%s). The test may not have transitioned Passed→Failed recently, or live testing may not be running. Call run_tests to trigger a run, then retry."
+                testName testNames
+          | Some narrative ->
+            let allChanges =
+              narrative.CausalChanges
+              |> List.map (fun c ->
+                match c with
+                | Features.LiveTesting.CausalChange.SymbolChanged s -> {| Kind = "symbol"; Name = s |}
+                | Features.LiveTesting.CausalChange.FileChanged f   -> {| Kind = "file";   Name = f |}
+                | Features.LiveTesting.CausalChange.Unknown         -> {| Kind = "unknown"; Name = "" |})
+            let primarySymbol =
+              narrative.CausalChanges
+              |> List.tryPick (fun c ->
+                match c with
+                | Features.LiveTesting.CausalChange.SymbolChanged s -> Some s
+                | _ -> None)
+            // Build ripple plan for primary symbol if it's in session bindings
+            let ripplePlanOpt =
+              match primarySymbol, state.EvalHistory with
+              | None, _ | _, [] -> None
+              | Some sym, _ ->
+                let graph = buildCellGraphFromState state
+                let scope =
+                  state.CachedScope
+                  |> Option.defaultWith (fun () -> Features.FeatureHooks.buildScopeFromState state)
+                match scope.ActiveBindings |> Map.tryFind sym with
+                | None -> None
+                | Some binding ->
+                  let currentCode = binding.Value |> Option.defaultValue "?"
+                  let typeSig = binding.TypeSig
+                  let override' = Features.WhatIf.createOverride sym currentCode "<your-fix>" typeSig
+                  let plan = Features.WhatIf.planWhatIf graph override'
+                  let steps =
+                    plan.RippleSteps
+                    |> List.map (fun step ->
+                      {| CellId = step.CellId
+                         Code = step.Code |> fun c -> if c.Length > 60 then c.[..57] + "..." else c
+                         Status =
+                           match step.Status with
+                           | Features.Pending     -> "pending"
+                           | Features.Evaluating  -> "evaluating"
+                           | Features.Succeeded _ -> "succeeded"
+                           | Features.Failed _    -> "failed"
+                           | Features.Skipped _   -> "skipped" |})
+                  Some {| Symbol = sym; CurrentCode = currentCode; TypeSig = typeSig; AffectedCellCount = plan.AffectedCells.Length; RippleSteps = steps |}
+            let timeSince =
+              narrative.TimeSinceLastPass
+              |> Option.map (fun ts -> sprintf "%.0fs" ts.TotalSeconds)
+              |> Option.defaultValue "unknown"
+            let suggestion =
+              match primarySymbol, ripplePlanOpt with
+              | None, _ ->
+                sprintf
+                  "This test broke ~%s ago. No symbol-level causal changes were detected — review the file changes above and check recent edits manually."
+                  timeSince
+              | Some sym, None ->
+                sprintf
+                  "'%s' is the likely cause, but it's not in the current session bindings. Re-evaluate the cell that defines '%s', then retry suggest_repair."
+                  sym sym
+              | Some sym, Some plan ->
+                sprintf
+                  "'%s' (%s) is the likely cause. Call `preview_what_if \"%s\" \"<new-value>\"` to preview the ripple before applying. %d cells downstream will re-evaluate."
+                  sym plan.TypeSig sym plan.AffectedCellCount
+            let jsonData =
+              {| TestName      = testName
+                 Summary       = narrative.Summary
+                 TimeSinceLastPass = timeSince
+                 CausalChanges = allChanges
+                 PrimarySymbol = primarySymbol |> Option.toObj
+                 RipplePlan    = ripplePlanOpt |> Option.toObj
+                 Suggestion    = suggestion |}
+            return JsonSerializer.Serialize(jsonData, liveTestJsonOpts)
+    }

@@ -122,10 +122,18 @@ let applyToEditor (state: VscLiveTestState) (editor: TextEditor) =
             | None -> sprintf "✓ %s" test.DisplayName
           passedRanges.Add(decorationRange line durationText)
         | VscTestOutcome.Failed msg ->
-          let text = sprintf "✗ %s: %s" test.DisplayName msg
+          let causalText =
+            VscLiveTestState.narrativeFor (VscTestId.value test.Id) state
+            |> Option.map renderNarrativeText
+            |> Option.defaultValue ""
+          let text = sprintf "✗ %s: %s%s" test.DisplayName msg causalText
           failedRanges.Add(decorationRange line text)
         | VscTestOutcome.Errored msg ->
-          let text = sprintf "✗ %s: %s" test.DisplayName msg
+          let causalText =
+            VscLiveTestState.narrativeFor (VscTestId.value test.Id) state
+            |> Option.map renderNarrativeText
+            |> Option.defaultValue ""
+          let text = sprintf "✗ %s: %s%s" test.DisplayName msg causalText
           failedRanges.Add(decorationRange line text)
         | VscTestOutcome.Running ->
           runningRanges.Add(decorationRange line (sprintf "● Running: %s" test.DisplayName))

@@ -292,3 +292,21 @@ module VscLiveTestState =
   /// Look up a failure narrative by test ID string
   let narrativeFor (testIdStr: string) (state: VscLiveTestState) : VscFailureNarrative option =
     Map.tryFind testIdStr state.FailureNarratives
+
+/// Format causal context from a failure narrative into a short inline suffix string.
+/// Returns "" when narrative has nothing worth displaying.
+/// Examples:
+///   "— because validateToken changed (12m ago)"
+///   "— validateToken signature changed (unknown)"
+///   "— Test started failing after module reload"
+let renderNarrativeText (n: VscFailureNarrative) : string =
+  let symbols =
+    n.CausalChanges
+    |> Array.filter (fun c -> c.Kind = "symbol")
+    |> Array.map (fun c -> c.Name)
+    |> String.concat ", "
+  match symbols, n.TimeSinceLastPass with
+  | "", "" -> sprintf " — %s" n.Summary
+  | "", t  -> sprintf " — %s (%s ago)" n.Summary t
+  | s, ""  -> sprintf " — because %s changed" s
+  | s, t   -> sprintf " — because %s changed (%s ago)" s t

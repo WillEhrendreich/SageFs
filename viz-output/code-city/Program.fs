@@ -367,6 +367,7 @@ type FuncBuilding =
     W: float32; D: float32
     H: float32
     Rotation: float32     // degrees, for organic jitter
+    TerrainY: float32
     Color: Color
     RoofColor: Color
     District: string }
@@ -376,6 +377,7 @@ type Road =
     ToFunc: string
     FromPos: Vector3
     ToPos: Vector3
+    HalfWidth: float32
     Weight: int
     Color: Color
     Organic: float32 }
@@ -394,7 +396,118 @@ type Rect2D =
   { X: float32; Z: float32; W: float32; D: float32 }
 
 type ModuleBlock =
-  { Module: string; Project: string; Rect: TRect; Color: Color }
+  { Module: string; Project: string; Rect: TRect; Color: Color; TerrainY: float32 }
+
+type TerrainAnchor =
+  { X: float32
+    Z: float32
+    Height: float32
+    Weight: float32 }
+
+let private moduleNameFromQualifiedName (qualifiedName: string) =
+  let lastDot = qualifiedName.LastIndexOf('.')
+  if lastDot <= 0 then qualifiedName
+  else qualifiedName.Substring(0, lastDot)
+
+let computeModuleTerrainScores (funcs: FuncDef list) (callEdges: CallEdge list) : Map<string, float32> =
+  let modules = funcs |> List.map _.Module |> List.distinct
+  let moduleCount = modules.Length
+  let qualifiedToModule =
+    funcs
+    |> List.map (fun f -> f.QualifiedName, f.Module)
+    |> Map.ofList
+  let edgeModule qualifiedName =
+    qualifiedToModule
+    |> Map.tryFind qualifiedName
+    |> Option.defaultWith (fun () -> moduleNameFromQualifiedName qualifiedName)
+
+  let emptyStats =
+    modules
+    |> List.map (fun moduleName -> moduleName, (0, 0, Set.empty<string>))
+    |> Map.ofList
+
+  let stats =
+    callEdges
+    |> List.fold
+      (fun acc edge ->
+        let fromModule = edgeModule edge.From
+        let toModule = edgeModule edge.To
+        if fromModule = toModule then
+          acc
+          |> Map.change fromModule (fun existing ->
+            let internalWeight, externalWeight, partners =
+              existing |> Option.defaultValue (0, 0, Set.empty)
+            Some (internalWeight + edge.Weight, externalWeight, partners))
+        else
+          acc
+          |> Map.change fromModule (fun existing ->
+            let internalWeight, externalWeight, partners =
+              existing |> Option.defaultValue (0, 0, Set.empty)
+            Some (internalWeight, externalWeight + edge.Weight, partners |> Set.add toModule))
+          |> Map.change toModule (fun existing ->
+            let internalWeight, externalWeight, partners =
+              existing |> Option.defaultValue (0, 0, Set.empty)
+            Some (internalWeight, externalWeight + edge.Weight, partners |> Set.add fromModule)))
+      emptyStats
+
+  stats
+  |> Map.map (fun _ (internalWeight, externalWeight, partners) ->
+    let totalWeight = float32 (internalWeight + externalWeight)
+    match totalWeight <= 0.0f with
+    | true -> 0.0f
+    | false ->
+        let boundaryRatio = float32 externalWeight / totalWeight
+        let activity = 1.0f - MathF.Exp(-totalWeight / 12.0f)
+        let partnerRatio =
+          match moduleCount <= 1 with
+          | true -> 0.0f
+          | false -> float32 partners.Count / float32 (moduleCount - 1)
+        min 1.0f (boundaryRatio * (0.4f + 0.6f * activity) + partnerRatio * 0.2f))
+
+let terrainHeightForScore (score: float32) =
+  let clamped = max 0.0f (min 1.0f score)
+  0.25f + clamped * 3.25f
+
+let buildSemanticTerrainAnchors (blocks: ModuleBlock[]) (cityExtent: float32) : TerrainAnchor[] =
+  let extent = max 10.0f cityExtent
+  let perimeter =
+    [| (-extent, -extent); (0.0f, -extent); (extent, -extent); (extent, 0.0f)
+       (extent, extent); (0.0f, extent); (-extent, extent); (-extent, 0.0f) |]
+    |> Array.map (fun (x, z) ->
+      { X = x
+        Z = z
+        Height = 0.0f
+        Weight = 1.35f })
+  let blockAnchors =
+    blocks
+    |> Array.map (fun block ->
+      let areaWeight = 1.0f + MathF.Sqrt(max 0.1f (TRect.area block.Rect)) * 0.08f
+      { X = TRect.centerX block.Rect
+        Z = TRect.centerZ block.Rect
+        Height = block.TerrainY
+        Weight = areaWeight })
+  Array.append blockAnchors perimeter
+
+let sampleSemanticTerrainHeight (anchors: TerrainAnchor[]) (x: float32) (z: float32) : float32 =
+  if anchors.Length = 0 then 0.0f
+  else
+    let mutable immediate = None
+    let mutable weightedHeight = 0.0f
+    let mutable totalWeight = 0.0f
+    for anchor in anchors do
+      let dx = x - anchor.X
+      let dz = z - anchor.Z
+      let distSq = dx * dx + dz * dz
+      if distSq < 0.0025f then
+        immediate <- Some anchor.Height
+      else
+        let influence = anchor.Weight / (0.5f + distSq)
+        weightedHeight <- weightedHeight + anchor.Height * influence
+        totalWeight <- totalWeight + influence
+    match immediate with
+    | Some height -> height
+    | None when totalWeight > 0.0f -> weightedHeight / totalWeight
+    | None -> 0.0f
 
 // ─── Connected Road Graph Types ──────────────────────────────
 // Roads are a proper graph: nodes (intersections) + edges (road segments).
@@ -2858,8 +2971,9 @@ let private corridorToRoad (organic: float32) (roadClass: RoadClass) (status: St
     let hw = segment.W / 2.0f
     { FromFunc = ""
       ToFunc = ""
-      FromPos = Vector3(centerX, hw, segment.Z)
-      ToPos = Vector3(centerX, hw, segment.Z + segment.H)
+      FromPos = Vector3(centerX, 0.0f, segment.Z)
+      ToPos = Vector3(centerX, 0.0f, segment.Z + segment.H)
+      HalfWidth = hw
       Weight = RoadClass.tier roadClass
       Color = Color(channel cr, channel cg, channel cb, alpha)
       Organic = organic }
@@ -2868,8 +2982,9 @@ let private corridorToRoad (organic: float32) (roadClass: RoadClass) (status: St
     let hw = segment.H / 2.0f
     { FromFunc = ""
       ToFunc = ""
-      FromPos = Vector3(segment.X, hw, centerZ)
-      ToPos = Vector3(segment.X + segment.W, hw, centerZ)
+      FromPos = Vector3(segment.X, 0.0f, centerZ)
+      ToPos = Vector3(segment.X + segment.W, 0.0f, centerZ)
+      HalfWidth = hw
       Weight = RoadClass.tier roadClass
       Color = Color(channel cr, channel cg, channel cb, alpha)
       Organic = organic }
@@ -5252,8 +5367,9 @@ let private buildMajorStreetGrowth (rect: TRect) (moduleDemand: int) (organic: f
         let b = (g.N edge.B).Pos
         { FromFunc = ""
           ToFunc = ""
-          FromPos = Vector3(a.X, edge.Width / 2.0f, a.Y)
-          ToPos = Vector3(b.X, edge.Width / 2.0f, b.Y)
+          FromPos = Vector3(a.X, 0.0f, a.Y)
+          ToPos = Vector3(b.X, 0.0f, b.Y)
+          HalfWidth = edge.Width / 2.0f
           Weight = RoadClass.tier edge.Class
           Color = roadColor edge.Class Planned
           Organic = organic })
@@ -5436,7 +5552,7 @@ let private collinearRoads tolerance (a: Road) (b: Road) =
   | true -> false
   | false ->
       let cross = abs (dirA.X * dirB.Y - dirA.Y * dirB.X)
-      let lineTolerance = tolerance + max a.FromPos.Y b.FromPos.Y
+      let lineTolerance = tolerance + max a.HalfWidth b.HalfWidth
       cross <= 0.035f
       && pointLineDistance a0 dirA b0 <= lineTolerance
       && pointLineDistance a0 dirA b1 <= lineTolerance
@@ -5490,6 +5606,7 @@ let private mergeRoadPair (a: Road) (b: Road) =
     ToFunc = a.ToFunc
     FromPos = Vector3(startPt.X, max a.FromPos.Y b.FromPos.Y, startPt.Y)
     ToPos = Vector3(endPt.X, max a.ToPos.Y b.ToPos.Y, endPt.Y)
+    HalfWidth = max a.HalfWidth b.HalfWidth
     Weight = max a.Weight b.Weight
     Color = color
     Organic = max a.Organic b.Organic }
@@ -5905,7 +6022,7 @@ let private roadSurfaceRibbonPoints (rect: TRect) (road: Road) =
       else
         let dir = Vec2.normalize delta
         let normal = Vec2.Create(-dir.Y, dir.X)
-        let pad = max 0.55f (max road.FromPos.Y road.ToPos.Y + 0.45f)
+        let pad = max 0.55f (road.HalfWidth + 0.45f)
         let samples = max 2 (int (MathF.Ceiling(len / 6.0f)))
         [ for idx in 0 .. samples do
             let t = float32 idx / float32 samples
@@ -6070,6 +6187,7 @@ let placeBuildingsInLots
         Rotation = rotation + jitter
         Color = BuildingType.wallColor bt f.Name ageDays
         RoofColor = BuildingType.roofColor bt districtColor
+        TerrainY = 0.0f
         District = f.Module } ]
 
 /// Road-primary building packer (replaces packInBlock for Weber parcels).
@@ -6152,6 +6270,7 @@ let packAlongEdges
             Rotation  = roadAngle + jitter
             Color     = BuildingType.wallColor bt f.Name ageDays
             RoofColor = BuildingType.roofColor bt districtColor
+            TerrainY = 0.0f
             District  = f.Module })
 
     // Distribute functions proportionally by edge length
@@ -6203,7 +6322,7 @@ let packAlongRoads
                 let dir = Vec2.normalize delta
                 let leftNormal = Vec2.Create(-dir.Y, dir.X)
                 let roadClass = roadClassForWeight road.Weight
-                let halfWidth = max road.FromPos.Y road.ToPos.Y
+                let halfWidth = road.HalfWidth
                 yield { Start = clippedStart
                         Dir = dir
                         Normal = leftNormal
@@ -6280,6 +6399,7 @@ let packAlongRoads
               Rotation  = roadAngle + jitter
               Color     = BuildingType.wallColor bt f.Name ageDays
               RoofColor = BuildingType.roofColor bt districtColor
+              TerrainY = 0.0f
               District  = f.Module })
 
       for (frontage, count) in List.zip sortedFrontages frontageCounts do
@@ -6380,7 +6500,7 @@ let crossDistrictCallCount (callEdges: CallEdge list) (m1: string) (m2: string) 
     else 0)
 
 /// Build Boulevard roads along shared boundaries between adjacent module blocks.
-/// Road halfWidth (in FromPos.Y) scales logarithmically with cross-district call coupling.
+/// Road halfWidth scales logarithmically with cross-district call coupling.
 let buildArterialNetwork (blocks: ModuleBlock[]) (callEdges: CallEdge list) : Road list =
   let eps = 1.05f  // captures same-project (gap=0) and cross-project (gap≈1.0) adjacency
   let baseHW = RoadClass.width Boulevard / 2.0f
@@ -6398,17 +6518,21 @@ let buildArterialNetwork (blocks: ModuleBlock[]) (callEdges: CallEdge list) : Ro
       let bx = if abs ((r1.X + r1.W) - r2.X) < eps then r1.X + r1.W else r2.X + r2.W
       let zLo = max r1.Z r2.Z
       let zHi = min (r1.Z + r1.H) (r2.Z + r2.H)
+      let terrainY = (b1.TerrainY + b2.TerrainY) / 2.0f
       { FromFunc = b1.Module; ToFunc = b2.Module
-        FromPos = Vector3(bx, hw, zLo)
-        ToPos   = Vector3(bx, hw, zHi)
+        FromPos = Vector3(bx, terrainY, zLo)
+        ToPos   = Vector3(bx, terrainY, zHi)
+        HalfWidth = hw
         Weight = coupling; Color = clr; Organic = 0.0f }
     else
       let bz = if abs ((r1.Z + r1.H) - r2.Z) < eps then r1.Z + r1.H else r2.Z + r2.H
       let xLo = max r1.X r2.X
       let xHi = min (r1.X + r1.W) (r2.X + r2.W)
+      let terrainY = (b1.TerrainY + b2.TerrainY) / 2.0f
       { FromFunc = b1.Module; ToFunc = b2.Module
-        FromPos = Vector3(xLo, hw, bz)
-        ToPos   = Vector3(xHi, hw, bz)
+        FromPos = Vector3(xLo, terrainY, bz)
+        ToPos   = Vector3(xHi, terrainY, bz)
+        HalfWidth = hw
         Weight = coupling; Color = clr; Organic = 0.0f })
 
 let buildVisibleRoadNetwork (_projectZones: ('a * TRect) list) (primaryRoads: Road list) : Road list =
@@ -6460,6 +6584,9 @@ let buildCity (repoRoot: string) (projectFile: string option) =
       parts |> Array.take (max 1 (parts.Length - 1)) |> String.concat ".")
     |> List.map (fun (m, edges) -> (m, edges |> List.sumBy (fun e -> e.Weight)))
     |> Map.ofList
+  let moduleTerrainHeights =
+    computeModuleTerrainScores funcs callEdges
+    |> Map.map (fun _ score -> terrainHeightForScore score)
 
   // City dimensions — target ~55% building density, 30% roads
   let avgFootprint = 2.0f
@@ -6512,13 +6639,27 @@ let buildCity (repoRoot: string) (projectFile: string option) =
       @ projectRoads
     for (modName, rect) in assignedBlocks do
       let color = districtPalette.[colorIdx % districtPalette.Length]
-      allBlocks.Add({ Module = modName; Project = proj; Rect = rect; Color = color })
+      let terrainY =
+        moduleTerrainHeights
+        |> Map.tryFind modName
+        |> Option.defaultValue (terrainHeightForScore 0.0f)
+      allBlocks.Add({ Module = modName; Project = proj; Rect = rect; Color = color; TerrainY = terrainY })
       colorIdx <- colorIdx + 1
 
   // Pack buildings into each module block using street-induced sub-blocks and frontage lots
   let mutable allBuildings = []
   let mutable allDistricts = []
   let mutable allAlleyRoads = []
+  let blockArray = allBlocks.ToArray()
+  let terrainAnchors = buildSemanticTerrainAnchors blockArray halfCity
+  let terrainHeightAt x z = sampleSemanticTerrainHeight terrainAnchors x z
+  let applyRoadTerrain (road: Road) =
+    let midX = (road.FromPos.X + road.ToPos.X) / 2.0f
+    let midZ = (road.FromPos.Z + road.ToPos.Z) / 2.0f
+    let terrainY = terrainHeightAt midX midZ
+    { road with
+        FromPos = Vector3(road.FromPos.X, terrainY, road.FromPos.Z)
+        ToPos = Vector3(road.ToPos.X, terrainY, road.ToPos.Z) }
 
   // Compute global max complexity for normalized height curve
   let globalMaxComplexity =
@@ -6530,7 +6671,7 @@ let buildCity (repoRoot: string) (projectFile: string option) =
     |> List.map (fun f -> f.LineCount)
     |> List.max |> max 1
 
-  for block in allBlocks do
+  for block in blockArray do
     let modFuncs = moduleGroups |> List.find (fun (m, _) -> m = block.Module) |> snd
     let district = { Name = block.Module; FuncCount = modFuncs.Length
                      TotalLines = modFuncs |> List.sumBy (fun f -> f.LineCount)
@@ -6546,19 +6687,25 @@ let buildCity (repoRoot: string) (projectFile: string option) =
     let organic = districtOrganicFactor today fileMetas
     let bldgs, weberRoads =
       layoutWeberDistrict block.Rect modFuncs heatMap block.Color globalMaxComplexity globalMaxLineCount organic districtRng gitMetaByFile
-    allBuildings <- allBuildings @ bldgs
+    let terrainBuildings =
+      bldgs
+      |> List.map (fun building ->
+        let cx = building.X + building.W / 2.0f
+        let cz = building.Z + building.D / 2.0f
+        { building with TerrainY = terrainHeightAt cx cz })
+    allBuildings <- allBuildings @ terrainBuildings
     allAlleyRoads <- allAlleyRoads @ weberRoads
     ignore rng  // global rng still here for future use
 
   // Inter-district arterial Boulevards at block boundaries, width scaled by call coupling
-  let arterials = buildArterialNetwork (allBlocks.ToArray()) callEdges
-  let primaryRoads = canonicalizeRoads (allPrimaryRoads @ arterials)
-  let alleyRoads = canonicalizeRoads (allAlleyRoads @ arterials)
+  let arterials = buildArterialNetwork blockArray callEdges
+  let primaryRoads = canonicalizeRoads ((allPrimaryRoads |> List.map applyRoadTerrain) @ arterials)
+  let alleyRoads = canonicalizeRoads ((allAlleyRoads |> List.map applyRoadTerrain) @ arterials)
   let roads = buildVisibleRoadNetwork projectZones primaryRoads
 
   let buildings = allBuildings |> List.rev
   let districts = allDistricts |> List.rev
-  let blocks = allBlocks.ToArray()
+  let blocks = blockArray
   printfn "City built: %d buildings, %d districts, %d roads, %d blocks, %d alleys"
     buildings.Length districts.Length roads.Length blocks.Length alleyRoads.Length
   (buildings, districts, roads, blocks, callEdges, alleyRoads)
@@ -6608,10 +6755,10 @@ let ellipsize (maxChars: int) (text: string) =
   else text.Substring(0, maxChars - 3) + "..."
 
 let buildingCenter (b: FuncBuilding) =
-  Vector3(b.X + b.W / 2.0f, b.H / 2.0f + 0.5f, b.Z + b.D / 2.0f)
+  Vector3(b.X + b.W / 2.0f, b.TerrainY + b.H / 2.0f + 0.5f, b.Z + b.D / 2.0f)
 
 let buildingRoofCenter (b: FuncBuilding) =
-  Vector3(b.X + b.W / 2.0f, b.H + 0.2f, b.Z + b.D / 2.0f)
+  Vector3(b.X + b.W / 2.0f, b.TerrainY + b.H + 0.2f, b.Z + b.D / 2.0f)
 
 
 // ─── CBool Helper ─────────────────────────────────────────────
@@ -6732,6 +6879,39 @@ let inline addQuadToArrays
   setV verts (vi+3) ax ay az; setN norms (vi+3) nx ny nz; setC cols (vi+3) r g b a
   setV verts (vi+4) cx cy cz; setN norms (vi+4) nx ny nz; setC cols (vi+4) r g b a
   setV verts (vi+5) dx dy dz; setN norms (vi+5) nx ny nz; setC cols (vi+5) r g b a
+
+let private quadNormal
+  (ax: float32) (ay: float32) (az: float32)
+  (bx: float32) (by: float32) (bz: float32)
+  (cx: float32) (cy: float32) (cz: float32)
+  (dx: float32) (dy: float32) (dz: float32) =
+  let a = Vector3(ax, ay, az)
+  let b = Vector3(bx, by, bz)
+  let c = Vector3(cx, cy, cz)
+  let d = Vector3(dx, dy, dz)
+  let combined = Vector3.Cross(b - a, c - a) + Vector3.Cross(c - a, d - a)
+  match combined.LengthSquared() < 1e-6f with
+  | true -> 0.0f, 1.0f, 0.0f
+  | false ->
+      let normal = Vector3.Normalize(combined)
+      normal.X, normal.Y, normal.Z
+
+let addTerrainQuadToArrays
+  (verts: Span<float32>) (norms: Span<float32>) (cols: Span<byte>)
+  (vi: int)
+  (ax: float32) (ay: float32) (az: float32)
+  (bx: float32) (by: float32) (bz: float32)
+  (cx: float32) (cy: float32) (cz: float32)
+  (dx: float32) (dy: float32) (dz: float32)
+  (r: byte) (g: byte) (b: byte) (a: byte) =
+  let nx, ny, nz = quadNormal ax ay az bx by bz cx cy cz dx dy dz
+  addQuadToArrays verts norms cols vi
+    ax ay az
+    bx by bz
+    cx cy cz
+    dx dy dz
+    nx ny nz
+    r g b a
 
 let private rotationSinCos (rotationDegrees: float32) =
   let radians = rotationDegrees * MathF.PI / 180.0f
@@ -7058,13 +7238,13 @@ let addHullSlabToArrays
 let addCompoundBody
   (verts: Span<float32>) (norms: Span<float32>) (cols: Span<byte>)
   (vi: int) (cubes: SubCube[])
-  (cx: float32) (cz: float32) (baseH: float32)
+  (cx: float32) (baseY: float32) (cz: float32) (baseH: float32)
   (cosA: float32) (sinA: float32)
   (r: byte) (g: byte) (b: byte) (a: byte) : int =
   let mutable off = 0
   for cube in cubes do
     let h = baseH * cube.HeightScale
-    let cy = h / 2.0f + 0.02f
+    let cy = baseY + h / 2.0f + 0.02f
     let hh = h / 2.0f
     let offX, offZ = rotateOffsetXZ cosA sinA cube.CX cube.CZ
     addOrientedCubeToArraysWithRotation verts norms cols (vi + off)
@@ -7211,14 +7391,14 @@ let addOrientedGableToArraysArr
 let addCompoundRoof
   (verts: Span<float32>) (norms: Span<float32>) (cols: Span<byte>)
   (vi: int) (cubes: SubCube[])
-  (cx: float32) (cz: float32) (baseH: float32) (roofHH: float32)
+  (cx: float32) (baseY: float32) (cz: float32) (baseH: float32) (roofHH: float32)
   (cosA: float32) (sinA: float32)
   (r: byte) (g: byte) (b: byte) (a: byte) : int =
   let pad = 0.02f
   let mutable off = 0
   for cube in cubes do
     let h = baseH * cube.HeightScale
-    let roofY = h + 0.06f
+    let roofY = baseY + h + 0.06f
     let offX, offZ = rotateOffsetXZ cosA sinA cube.CX cube.CZ
     addOrientedCubeToArraysWithRotation verts norms cols (vi + off)
       (cx + offX) roofY (cz + offZ)
@@ -7228,8 +7408,8 @@ let addCompoundRoof
 
 /// Ray-box intersection test for mouse picking
 let rayIntersectsBox (ray: Ray) (b: FuncBuilding) : float32 option =
-  let bmin = Vector3(b.X, 0.5f, b.Z)
-  let bmax = Vector3(b.X + b.W, 0.5f + b.H, b.Z + b.D)
+  let bmin = Vector3(b.X, b.TerrainY, b.Z)
+  let bmax = Vector3(b.X + b.W, b.TerrainY + b.H + 0.2f, b.Z + b.D)
   let bb = BoundingBox(bmin, bmax)
   let collision = Raylib.GetRayCollisionBox(ray, bb)
   if CBool.op_Implicit(collision.Hit) then Some collision.Distance
@@ -7276,6 +7456,11 @@ let buildStaticMesh (buildings: FuncBuilding[]) (blocks: ModuleBlock[]) (cityExt
       block, computeBlockSurfaceHull block blockBuildings localRoads
 
       )
+  let terrainExtent = cityExtent * 1.2f |> max 120.0f
+  let terrainAnchors = buildSemanticTerrainAnchors blocks terrainExtent
+  let terrainCellsPerAxis = max 24 (min 72 (int (terrainExtent / 6.0f)))
+  let terrainStep = (terrainExtent * 2.0f) / float32 terrainCellsPerAxis
+  let terrainHeight x z = sampleSemanticTerrainHeight terrainAnchors x z
 
   let hullEdgeCount (hull: (float32 * float32) list) =
     match hull.Length < 2 with
@@ -7286,7 +7471,7 @@ let buildStaticMesh (buildings: FuncBuilding[]) (blocks: ModuleBlock[]) (cityExt
     max 0 (hull.Length - 2) * 6
 
   // Vertex counts per layer:
-  let groundVerts = 6 + 6    // dark ground + city-wide road surface
+  let groundVerts = 6 + terrainCellsPerAxis * terrainCellsPerAxis * 6
   let blockFillVerts = blockSurfaceHulls |> Array.sumBy (fun (_, hull) -> hullFillVerts hull)
   // Spline roads: per segment = 12 verts (top+bottom quad strip), bounded by road.Organic
   let alleyVerts =
@@ -7316,29 +7501,37 @@ let buildStaticMesh (buildings: FuncBuilding[]) (blocks: ModuleBlock[]) (cityExt
   let mutable vi = 0
 
   // Layer 0: Ground plane — very dark base, visible at city edges (luminance ~0.08)
-  let gs = cityExtent * 1.5f |> max 200.0f
-  addQuadToArrays v n c vi (-gs) -0.01f (-gs) (-gs) -0.01f gs gs -0.01f gs gs -0.01f (-gs) 0.0f 1.0f 0.0f 20uy 20uy 24uy 255uy
+  let gs = terrainExtent * 1.15f
+  addQuadToArrays v n c vi (-gs) -1.2f (-gs) (-gs) -1.2f gs gs -1.2f gs gs -1.2f (-gs) 0.0f 1.0f 0.0f 20uy 20uy 24uy 255uy
   vi <- vi + 6
 
-  // Layer 1: Road surface — lightest ground, covering full city extent (luminance ~0.28)
-  // The gaps between treemap cells naturally become visible roads
-  let rs = cityExtent * 1.1f |> max 150.0f
-  addQuadToArrays v n c vi (-rs) 0.005f (-rs) (-rs) 0.005f rs rs 0.005f rs rs 0.005f (-rs) 0.0f 1.0f 0.0f 65uy 65uy 70uy 255uy
-  vi <- vi + 6
+  // Layer 1: Semantic terrain surface — sampled from module coupling anchors.
+  for tz in 0 .. terrainCellsPerAxis - 1 do
+    for tx in 0 .. terrainCellsPerAxis - 1 do
+      let x0 = -terrainExtent + float32 tx * terrainStep
+      let x1 = x0 + terrainStep
+      let z0 = -terrainExtent + float32 tz * terrainStep
+      let z1 = z0 + terrainStep
+      addTerrainQuadToArrays v n c vi
+        x0 (terrainHeight x0 z0) z0
+        x1 (terrainHeight x1 z0) z0
+        x1 (terrainHeight x1 z1) z1
+        x0 (terrainHeight x0 z1) z1
+        58uy 58uy 64uy 255uy
+      vi <- vi + 6
 
   let sidewalkW = 0.3f
   let curbH = 0.08f
   let curbW = 0.05f
 
   // Layer 2: Block fill — road/frontage-derived hulls instead of rectangular module slabs
-  for (_, hull) in blockSurfaceHulls do
-    let written = addHullSlabToArrays v n c vi hull 0.015f 0.004f 30uy 30uy 34uy 255uy
+  for (block, hull) in blockSurfaceHulls do
+    let written = addHullSlabToArrays v n c vi hull (block.TerrainY + 0.015f) 0.004f 30uy 30uy 34uy 255uy
     vi <- vi + written
 
   // Layer 2.5: Internal road surfaces — spline quads for organic roads, straight for grid roads
-  // Half-width packed in road.FromPos.Y by layoutWeberDistrict
   for road in alleyRoads do
-    let hw = road.FromPos.Y
+    let hw = road.HalfWidth
     let x1 = road.FromPos.X
     let z1 = road.FromPos.Z
     let x2 = road.ToPos.X
@@ -7348,20 +7541,21 @@ let buildStaticMesh (buildings: FuncBuilding[]) (blocks: ModuleBlock[]) (cityExt
     let len = MathF.Sqrt(dx * dx + dz * dz)
     if hw > 0.001f && len > 0.01f then
       let segs = segmentCountForOrganic len road.Organic
-      let written = addSplineRoadToArrays v n c vi x1 z1 x2 z2 0.020f 0.003f hw road.Color.R road.Color.G road.Color.B 255uy segs
+      let roadY = (road.FromPos.Y + road.ToPos.Y) / 2.0f + 0.020f
+      let written = addSplineRoadToArrays v n c vi x1 z1 x2 z2 roadY 0.003f hw road.Color.R road.Color.G road.Color.B 255uy segs
       vi <- vi + written
 
   // Layer 3: Sidewalk strips — narrow ribbons following the frontage-derived hull
-  for (_, hull) in blockSurfaceHulls do
+  for (block, hull) in blockSurfaceHulls do
     if hull.Length >= 2 then
       for i in 0 .. hull.Length - 1 do
         let x1, z1 = hull.[i]
         let x2, z2 = hull.[(i + 1) % hull.Length]
-        let written = addRoadQuadToArrays v n c vi x1 z1 x2 z2 0.01f 0.002f (sidewalkW / 2.0f) 48uy 48uy 52uy 255uy
+        let written = addRoadQuadToArrays v n c vi x1 z1 x2 z2 (block.TerrainY + 0.01f) 0.002f (sidewalkW / 2.0f) 48uy 48uy 52uy 255uy
         vi <- vi + written
 
   // Layer 4: Curb geometry — thin raised strips tracing the same frontage-derived hull
-  for (_, hull) in blockSurfaceHulls do
+  for (block, hull) in blockSurfaceHulls do
     if hull.Length >= 2 then
       for i in 0 .. hull.Length - 1 do
         let x1, z1 = hull.[i]
@@ -7372,7 +7566,7 @@ let buildStaticMesh (buildings: FuncBuilding[]) (blocks: ModuleBlock[]) (cityExt
         if len > 0.05f then
           let angle = MathF.Atan2(dz, dx) * 180.0f / MathF.PI
           addOrientedCubeToArrays v n c vi
-            ((x1 + x2) / 2.0f) (curbH / 2.0f) ((z1 + z2) / 2.0f)
+            ((x1 + x2) / 2.0f) (block.TerrainY + curbH / 2.0f) ((z1 + z2) / 2.0f)
             (len / 2.0f) (curbH / 2.0f) (curbW / 2.0f)
             angle
             42uy 42uy 46uy 255uy
@@ -7389,7 +7583,7 @@ let buildStaticMesh (buildings: FuncBuilding[]) (blocks: ModuleBlock[]) (cityExt
     // Encode building type in alpha channel for per-type GLSL window profiles + glass specular
     let btAlpha = BuildingType.alpha b.BuildingType
     let vertsAdded =
-      addCompoundBody v n c vi compound cx cz bodyH cosA sinA
+      addCompoundBody v n c vi compound cx b.TerrainY cz bodyH cosA sinA
         b.Color.R b.Color.G b.Color.B btAlpha
     vi <- vi + vertsAdded
     // Roof: Shed/Cottage get a pitched gable on the main sub-cube; all others use flat slabs
@@ -7399,7 +7593,7 @@ let buildStaticMesh (buildings: FuncBuilding[]) (blocks: ModuleBlock[]) (cityExt
       | Shed | Cottage ->
         let main = compound.[0]
         let mainH = bodyH * main.HeightScale
-        let eaveCy = mainH + 0.06f
+        let eaveCy = b.TerrainY + mainH + 0.06f
         let pad = 0.02f
         let mainOffX, mainOffZ = rotateOffsetXZ cosA sinA main.CX main.CZ
         addOrientedGableToArraysWithRotation v n c vi
@@ -7408,12 +7602,12 @@ let buildStaticMesh (buildings: FuncBuilding[]) (blocks: ModuleBlock[]) (cityExt
           b.RoofColor.R b.RoofColor.G b.RoofColor.B 255uy
         let wingsVerts =
           if compound.Length > 1 then
-            addCompoundRoof v n c (vi+36) compound.[1..] cx cz bodyH roofHH cosA sinA
+            addCompoundRoof v n c (vi+36) compound.[1..] cx b.TerrainY cz bodyH roofHH cosA sinA
               b.RoofColor.R b.RoofColor.G b.RoofColor.B 255uy
           else 0
         36 + wingsVerts
       | _ ->
-        addCompoundRoof v n c vi compound cx cz bodyH roofHH cosA sinA
+        addCompoundRoof v n c vi compound cx b.TerrainY cz bodyH roofHH cosA sinA
           b.RoofColor.R b.RoofColor.G b.RoofColor.B 255uy
     vi <- vi + roofVerts
 

@@ -4262,8 +4262,9 @@ let private distanceToSeg (ax: float32) (az: float32) (bx: float32) (bz: float32
 
 let private mkRoad x1 z1 x2 z2 halfWidth =
   { FromFunc = ""; ToFunc = ""
-    FromPos = Vector3(x1, halfWidth, z1)
-    ToPos   = Vector3(x2, halfWidth, z2)
+    FromPos = Vector3(x1, 0.0f, z1)
+    ToPos   = Vector3(x2, 0.0f, z2)
+    HalfWidth = halfWidth
     Weight  = RoadClass.tier Street
     Color   = Color(65uy, 65uy, 70uy, 255uy)
     Organic = 0.0f }
@@ -4460,7 +4461,7 @@ let packAlongRoadsTests =
 
     testCase "computeBlockSurfaceHull follows diagonal frontage rather than reverting to a module rectangle" <| fun () ->
       let rect  = { X = 0.0f; Z = 0.0f; W = 14.0f; H = 24.0f }
-      let block = { Module = "SurfaceMod"; Project = "SurfaceProj"; Rect = rect; Color = Color.White }
+      let block = { Module = "SurfaceMod"; Project = "SurfaceProj"; Rect = rect; Color = Color.White; TerrainY = 0.0f }
       let roads = [ mkRoad 2.0f 1.0f 12.0f 23.0f 0.4f ]
       let funcs = List.init 12 (fun i -> mkFunc (sprintf "f%d" i) "SurfaceMod")
       let bldgs = packAlongRoads roads rect funcs Map.empty (Color(70uy, 130uy, 180uy, 255uy)) (Random 17) Map.empty
@@ -4836,7 +4837,8 @@ let orientedBuildingGeometryTests =
 let private mkBlock mod_ proj x z w h =
   { Module = mod_; Project = proj
     Rect = TRect.create x z w h
-    Color = Color.White }
+    Color = Color.White
+    TerrainY = 0.0f }
 
 let interDistrictRoadTests =
   testList "inter-district arterial network" [
@@ -4877,8 +4879,55 @@ let interDistrictRoadTests =
       let b2 = mkBlock "B" "P" 5.0f 0.0f 5.0f 5.0f
       let roads = buildArterialNetwork [|b1; b2|] []
       roads |> Expect.hasLength "1 arterial road" 1
-      let hw = roads.[0].FromPos.Y
+      let hw = roads.[0].HalfWidth
       (hw, RoadClass.width Boulevard / 2.0f) |> Expect.isGreaterThanOrEqual "halfWidth >= base"
+  ]
+
+let semanticTerrainTests =
+  testList "semantic terrain" [
+    testCase "computeModuleTerrainScores favors cross-module pressure over cohesive internals" <| fun () ->
+      let funcs =
+        [ mkFuncInModule "Core" "coreA" [] [| "let x = 1" |]
+          mkFuncInModule "Core" "coreB" [] [| "let y = 2" |]
+          mkFuncInModule "Api" "apiA" [] [| "let z = 3" |]
+          mkFuncInModule "Api" "apiB" [] [| "let q = 4" |]
+          mkFuncInModule "Utility" "utilA" [] [| "let u = 5" |]
+          mkFuncInModule "Utility" "utilB" [] [| "let v = 6" |] ]
+      let edges =
+        [ { From = "Core.coreA"; To = "Core.coreB"; Weight = 6 }
+          { From = "Core.coreB"; To = "Api.apiA"; Weight = 9 }
+          { From = "Api.apiA"; To = "Core.coreA"; Weight = 7 }
+          { From = "Api.apiB"; To = "Core.coreB"; Weight = 5 }
+          { From = "Utility.utilA"; To = "Utility.utilB"; Weight = 8 }
+          { From = "Utility.utilB"; To = "Utility.utilA"; Weight = 6 } ]
+      let scores = computeModuleTerrainScores funcs edges
+      let core = scores |> Map.find "Core"
+      let api = scores |> Map.find "Api"
+      let utility = scores |> Map.find "Utility"
+      (core, utility) |> Expect.isGreaterThan "cross-module pressure should lift Core above cohesive Utility"
+      (api, utility) |> Expect.isGreaterThan "cross-module pressure should lift Api above cohesive Utility"
+      (core, 1.0f) |> Expect.isLessThanOrEqual "terrain scores should stay normalized"
+      (utility, 0.0f) |> Expect.isGreaterThanOrEqual "terrain scores should stay normalized"
+
+    testCase "buildSemanticTerrainAnchors adds perimeter falloff controls" <| fun () ->
+      let blocks =
+        [| { Module = "Low"; Project = "P"; Rect = TRect.create -12.0f -4.0f 8.0f 8.0f; Color = Color.White; TerrainY = 0.25f }
+           { Module = "High"; Project = "P"; Rect = TRect.create 4.0f -4.0f 8.0f 8.0f; Color = Color.White; TerrainY = 2.5f } |]
+      let anchors = buildSemanticTerrainAnchors blocks 18.0f
+      anchors.Length |> Expect.equal "block anchors + 8 perimeter controls" (blocks.Length + 8)
+
+    testCase "sampleSemanticTerrainHeight preserves module contrast and decays toward the boundary" <| fun () ->
+      let blocks =
+        [| { Module = "Low"; Project = "P"; Rect = TRect.create -12.0f -4.0f 8.0f 8.0f; Color = Color.White; TerrainY = 0.25f }
+           { Module = "High"; Project = "P"; Rect = TRect.create 4.0f -4.0f 8.0f 8.0f; Color = Color.White; TerrainY = 2.5f } |]
+      let anchors = buildSemanticTerrainAnchors blocks 18.0f
+      let low = sampleSemanticTerrainHeight anchors -8.0f 0.0f
+      let mid = sampleSemanticTerrainHeight anchors 0.0f 0.0f
+      let high = sampleSemanticTerrainHeight anchors 8.0f 0.0f
+      let edge = sampleSemanticTerrainHeight anchors 18.0f 0.0f
+      (high, low + 1.0f) |> Expect.isGreaterThan "high-pressure module should produce a visibly taller local terrain sample"
+      (mid, low) |> Expect.isGreaterThan "midpoint should interpolate upward from the lower basin"
+      (high, edge) |> Expect.isGreaterThan "perimeter controls should pull terrain back down near the city edge"
   ]
 
 let visibleRoadNetworkTests =
@@ -5011,6 +5060,7 @@ let allTests =
     gableRoofTests
     orientedBuildingGeometryTests
     interDistrictRoadTests
+    semanticTerrainTests
     visibleRoadNetworkTests
     nightScaleTests
     parseDaemonInfoJsonTests

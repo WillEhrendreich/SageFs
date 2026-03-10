@@ -13,6 +13,8 @@ type DaemonStateChange =
   | SystemAlarm of phase: string * message: string
 
 module DaemonStateChange =
+  /// SSE event type name for DaemonStateChange events.
+  let sseEventType = "state"
   /// Serialize to JSON for SSE wire format. Single source of truth — used by bridge and SSE stream.
   let toJson = function
     | ModelChanged (outputCount, diagCount) ->

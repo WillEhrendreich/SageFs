@@ -81,7 +81,7 @@ let create () =
             "tooltip" ==> tooltip
           ]
           lenses.Add(newCodeLens range cmd)
-          // Add "Why failed?" lens for failed tests with a narrative
+          // Add inline narrative lens for failed tests — shows causal context without clicking
           match result with
           | Some r ->
             match r.Outcome with
@@ -90,10 +90,23 @@ let create () =
               let testIdStr = LiveTestingTypes.VscTestId.value t.Id
               match Map.tryFind testIdStr narrativeState with
               | Some n when n.Summary <> "" ->
+                let symbols =
+                  n.CausalChanges
+                  |> Array.filter (fun c -> c.Kind = "symbol")
+                  |> Array.map (fun c -> c.Name)
+                  |> String.concat ", "
+                let titleText =
+                  match symbols with
+                  | "" -> sprintf "🔍 %s" n.Summary
+                  | s  -> sprintf "🔍 because %s changed (%s ago)" s n.TimeSinceLastPass
+                let tooltipText =
+                  match symbols with
+                  | "" -> n.Summary
+                  | s  -> sprintf "%s\nChanged: %s\nSince: %s ago" n.Summary s n.TimeSinceLastPass
                 let whyCmd = createObj [
-                  "title" ==> "🔍 Why failed?"
+                  "title" ==> titleText
                   "command" ==> "sagefs.explainTestFailure"
-                  "tooltip" ==> sprintf "Explain failure: %s" n.Summary
+                  "tooltip" ==> tooltipText
                   "arguments" ==> [| testIdStr |]
                 ]
                 lenses.Add(newCodeLens range whyCmd)
