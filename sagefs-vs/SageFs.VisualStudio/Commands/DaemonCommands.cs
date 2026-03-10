@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using Microsoft.VisualStudio.Extensibility;
 using Microsoft.VisualStudio.Extensibility.Commands;
 using Microsoft.VisualStudio.Extensibility.Documents;
+using SageFs.VisualStudio.Services;
 
 #pragma warning disable VSEXTPREVIEW_OUTPUTWINDOW
 
@@ -40,8 +41,14 @@ internal class StartDaemonCommand : Command
       return;
     }
 
-    // Directory.GetCurrentDirectory() reflects the open solution/folder.
-    var solutionDir = Directory.GetCurrentDirectory();
+    var solutionDir = await SolutionDirectory.GetAsync(Extensibility, ct);
+    if (solutionDir is null)
+    {
+      if (output is not null)
+        await output.WriteLineAsync("✗ No solution is open. Open a solution first, then start the daemon.");
+      return;
+    }
+
     var targetResult = Core.DaemonTargetFinder.findTarget(solutionDir);
 
     if (!targetResult.IsOk)

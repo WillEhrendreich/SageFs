@@ -10,6 +10,7 @@ using Microsoft.VisualStudio.Extensibility;
 using Microsoft.VisualStudio.Extensibility.Commands;
 using Microsoft.VisualStudio.Extensibility.Documents;
 using Microsoft.VisualStudio.Extensibility.Shell;
+using SageFs.VisualStudio.Services;
 
 #pragma warning disable VSEXTPREVIEW_OUTPUTWINDOW
 
@@ -102,7 +103,14 @@ internal class ConfigureWarmupAutoOpenCommand : Command
 
   public override async Task ExecuteCommandAsync(IClientContext context, CancellationToken ct)
   {
-    var workingDir = Directory.GetCurrentDirectory();
+    var workingDir = await SolutionDirectory.GetAsync(Extensibility, ct);
+    if (workingDir is null)
+    {
+      if (output is not null)
+        await output.WriteLineAsync("✗ No solution is open. Open a solution first.");
+      return;
+    }
+
     var (status, path) = WarmupAutoOpenConfig.Ensure(workingDir);
     WarmupAutoOpenConfig.TryOpen(path);
 

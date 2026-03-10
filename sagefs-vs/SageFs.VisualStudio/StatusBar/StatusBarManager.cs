@@ -6,6 +6,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.VisualStudio.Extensibility;
 using Microsoft.VisualStudio.Extensibility.Documents;
+using SageFs.VisualStudio.Services;
 
 #pragma warning disable VSEXTPREVIEW_OUTPUTWINDOW
 
@@ -53,9 +54,14 @@ internal class StatusBarManager : ExtensionPart
       if (_output is not null)
         await _output.WriteLineAsync("⏳ SageFs daemon not running — attempting auto-start...");
 
-      // VS Extensibility SDK 17.14 does not expose a synchronous solution-path API on
-      // ExtensionPart; Directory.GetCurrentDirectory() reflects the open solution/folder.
-      var solutionDir = GetSolutionDirectory();
+      var solutionDir = await SolutionDirectory.GetAsync(Extensibility, CancellationToken.None).ConfigureAwait(false);
+      if (solutionDir is null)
+      {
+        if (_output is not null)
+          await _output.WriteLineAsync("⚠ Auto-start skipped: no solution is open.");
+        return;
+      }
+
       var targetResult = Core.DaemonTargetFinder.findTarget(solutionDir);
 
       if (!targetResult.IsOk)
@@ -97,14 +103,6 @@ internal class StatusBarManager : ExtensionPart
       System.Diagnostics.Debug.WriteLine($"[SageFs] Startup health check failed: {ex.Message}");
     }
   }
-
-  /// <summary>
-  /// Returns the directory to search for SageFs startup targets.
-  /// VS Extensibility SDK 17.14 does not expose a synchronous solution-path API on
-  /// <see cref="ExtensionPart"/>, so we fall back to the process working directory which
-  /// VS sets to the solution/folder root on open.
-  /// </summary>
-  private static string GetSolutionDirectory() => Directory.GetCurrentDirectory();
 
   /// <summary>
   /// Called by the SSE subscription or health poll when connection state changes.

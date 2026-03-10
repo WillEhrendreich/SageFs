@@ -91,7 +91,12 @@ let ``Single .fsproj returns it`` () =
     Directory.Delete(dir, true)
 
 [<Fact>]
-let ``Slnx takes priority over sln`` () =
+let ``Nonexistent directory returns Error with descriptive message`` () =
+  let dir = Path.Combine(Path.GetTempPath(), "sagefs-nonexistent-" + Path.GetRandomFileName())
+  // Ensure the directory truly does not exist
+  if Directory.Exists(dir) then Directory.Delete(dir, true)
+  DaemonTargetFinder.findTarget dir |> assertError "Directory not found"
+
   let dir = createTempDir ()
   try
     createFile dir ["Solution.sln"] |> ignore
