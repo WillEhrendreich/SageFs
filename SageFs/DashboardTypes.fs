@@ -246,29 +246,46 @@ module FailureNarrativeEntry =
     | Some ts when ts.TotalMinutes < 60.0 -> Some (sprintf "%d minutes ago" (int ts.TotalMinutes))
     | Some ts -> Some (sprintf "%d hours ago" (int ts.TotalHours))
 
-  let private formatCausalChange (cc: Features.LiveTesting.CausalChange) : string =
+  // Unknown produces no label — keeps CausalLabels structurally empty for no-data entries
+  let private formatCausalChange (cc: Features.LiveTesting.CausalChange) : string option =
     match cc with
-    | Features.LiveTesting.CausalChange.SymbolChanged sym -> sprintf "symbol: %s" sym
-    | Features.LiveTesting.CausalChange.FileChanged (file: string) -> sprintf "file: %s" (System.IO.Path.GetFileName file)
-    | Features.LiveTesting.CausalChange.Unknown -> "unknown change"
+    | Features.LiveTesting.CausalChange.SymbolChanged sym -> Some (sprintf "symbol: %s" sym)
+    | Features.LiveTesting.CausalChange.FileChanged (file: string) -> Some (sprintf "file: %s" (System.IO.Path.GetFileName file))
+    | Features.LiveTesting.CausalChange.Unknown -> None
 
   /// Build a FailureNarrativeEntry from a test name and its FailureNarrative.
   let fromNarrative (testName: string) (narrative: Features.LiveTesting.FailureNarrative) : FailureNarrativeEntry =
     { TestName = testName
       Summary = narrative.Summary
       TimeSinceLabel = formatTimeSince narrative.TimeSinceLastPass
-      CausalLabels = narrative.CausalChanges |> List.map formatCausalChange
+      CausalLabels = narrative.CausalChanges |> List.choose formatCausalChange
       HasPropertyViolation = narrative.PropertyViolation.IsSome }
+
+  /// True when this entry has actual diagnostic context worth showing.
+  /// Entries with no time-since, no causal context, and no property violation are noise.
+  let isMeaningful (entry: FailureNarrativeEntry) =
+    entry.TimeSinceLabel.IsSome || not entry.CausalLabels.IsEmpty || entry.HasPropertyViolation
 
 /// View model for the failure narratives dashboard panel.
 type FailureNarrativesPanelView = {
+  /// Entries with actual diagnostic context — capped at 10 for display.
   Entries: FailureNarrativeEntry list
+  /// Total failures across all tests (including suppressed no-baseline entries).
+  TotalFailureCount: int
+  /// Number of failures suppressed due to having no diagnostic context.
+  SuppressedCount: int
 }
 
 module FailureNarrativesPanelView =
   /// Build from a list of (testName, FailureNarrative) pairs.
+  /// Filters out entries with no diagnostic context and caps display at 10.
   let fromNarratives (pairs: (string * Features.LiveTesting.FailureNarrative) list) : FailureNarrativesPanelView =
-    { Entries = pairs |> List.map (fun (name, narr) -> FailureNarrativeEntry.fromNarrative name narr) }
+    let all = pairs |> List.map (fun (name, narr) -> FailureNarrativeEntry.fromNarrative name narr)
+    let meaningful = all |> List.filter FailureNarrativeEntry.isMeaningful
+    let suppressed = all.Length - meaningful.Length
+    { Entries = meaningful |> List.truncate 10
+      TotalFailureCount = all.Length
+      SuppressedCount = suppressed }
 
 /// Pipeline stage outcome — success or failure with an error message.
 [<Struct>]
@@ -519,6 +536,8 @@ type DashboardQueries = {
   GetCurrentDiagnostics: unit -> Diagnostic list
   /// Read recent eval filmstrip entries from the eval history — newest-last, capped at 20.
   GetFilmstripEntries: unit -> FilmstripEntry list
+  /// Read resolved test source locations from the Elm model.
+  GetTestSourceLocations: unit -> Features.LiveTesting.TestSourceLocation list
 }
 
 /// Commands that mutate session state.

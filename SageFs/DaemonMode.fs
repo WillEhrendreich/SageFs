@@ -1589,6 +1589,9 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
           DurationMs = entry.DurationMs
           Outcome = outcome
           Timestamp = entry.Timestamp })
+    GetTestSourceLocations = fun () ->
+      let model = elmRuntime.GetModel()
+      model.ResolvedSourceLocations
   }
 
   let dashboardActions : DashboardActions = {

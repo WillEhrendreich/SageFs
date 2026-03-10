@@ -48,6 +48,7 @@ let run (daemonInfo: DaemonInfo) = task {
   let mutable scrollOffsets = Map.empty<PaneId, int>
   let mutable prevGrid : CellGrid option = None
   let mutable lastRegions : RenderRegion list = []
+  let mutable testSourceLocations = Map.empty<string, string * int>
   let mutable lastSessionState = "Connecting..."
   let mutable lastSessionId = ""
   let mutable lastWorkingDir = ""
@@ -89,6 +90,8 @@ let run (daemonInfo: DaemonInfo) = task {
   // Failing test navigation
   let mutable failingTestIdx = -1
   let mutable failingNavHint = ""
+  // Test source locations for jump-to-source (F12)
+  let mutable testSourceLocations = Map.empty<string, string * int>
 
   let render () =
     lock TerminalUIState.consoleLock (fun () ->
@@ -213,6 +216,9 @@ let run (daemonInfo: DaemonInfo) = task {
         lastLiveTestingStatus <- event.LiveTestingStatus
         lastWatchedCount <- event.WatchedCount
         lastRegions <- regions
+        match event.TestSourceLocations.IsEmpty with
+        | true -> ()
+        | false -> testSourceLocations <- event.TestSourceLocations
         // Record region snapshot for time-travel (only in live mode)
         timeTravelState <-
           TimeTravel.record event.SessionState 0.0<SageFs.Measures.ms> regions timeTravelState
@@ -408,7 +414,7 @@ let run (daemonInfo: DaemonInfo) = task {
             render ()
           | Some TerminalCommand.JumpToTest ->
             let scrollOff = scrollOffsets |> Map.tryFind focusedPane |> Option.defaultValue 0
-            match JumpToTest.getSelectedTestLocation lastRegions scrollOff with
+            match JumpToTest.getSelectedTestLocation lastRegions focusedPane scrollOff testSourceLocations with
             | Some (file, line) -> JumpToTest.openInEditor file line
             | None -> ()
           | Some TerminalCommand.MarkAllStale ->

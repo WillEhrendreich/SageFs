@@ -35,6 +35,8 @@ type StateEvent = {
   LiveTestingStatus: string
   WatchedCount: int
   Regions: DaemonRegionData list
+  /// Test name → (filePath, startLine) for jump-to-source (F12).
+  TestSourceLocations: Map<string, string * int>
 }
 
 /// Shared daemon client logic for both TUI and GUI.
@@ -117,6 +119,19 @@ module DaemonClient =
         match root.TryGetProperty("watchedCount") with
         | true, el -> el.GetInt32()
         | _ -> 0
+      let testSourceLocations =
+        match root.TryGetProperty("testSourceLocations") with
+        | true, el when el.ValueKind = JsonValueKind.Array ->
+          el.EnumerateArray()
+          |> Seq.choose (fun loc ->
+            try
+              let name = loc.GetProperty("testName").GetString()
+              let file = loc.GetProperty("filePath").GetString()
+              let line = loc.GetProperty("startLine").GetInt32()
+              Some (name, (file, line))
+            with _ -> None)
+          |> Map.ofSeq
+        | _ -> Map.empty
       Some {
         SessionId = sessionId
         SessionState = sessionState
@@ -127,6 +142,7 @@ module DaemonClient =
         LiveTestingStatus = liveTestingStatus
         WatchedCount = watchedCount
         Regions = regions
+        TestSourceLocations = testSourceLocations
       }
     with ex ->
       Utils.Log.warn "[DaemonClient] parseStateEvent failed: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")

@@ -858,6 +858,10 @@ let createApiStateHandler
       let liveTestingStatus = q.GetLiveTestingStatus ()
       let! hrState = q.GetHotReloadState activeSid
       let watchedCount = hrState |> Option.map (fun hr -> hr.watchedCount) |> Option.defaultValue 0
+      let testSourceLocations =
+        q.GetTestSourceLocations()
+        |> List.map (fun l ->
+          {| testName = l.TestName; filePath = l.FilePath; startLine = l.StartLine |})
       let payload =
         System.Text.Json.JsonSerializer.Serialize(
           {| sessionId = activeSid
@@ -868,7 +872,8 @@ let createApiStateHandler
              standbyLabel = StandbyInfo.label standby
              liveTestingStatus = liveTestingStatus
              watchedCount = watchedCount
-             regions = regions |})
+             regions = regions
+             testSourceLocations = testSourceLocations |})
       do! ctx.Response.WriteAsync(sprintf "data: %s\n\n" payload)
       do! ctx.Response.Body.FlushAsync()
     }

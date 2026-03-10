@@ -264,6 +264,8 @@ module RaylibMode =
     // Failing test navigation
     let mutable failingTestIdx = -1
     let mutable failingNavHint = ""
+    // Test source locations for jump-to-source (F12)
+    let mutable testSourceLocations = Map.empty<string, string * int>
 
     // Init window
     let mutable gridCols = 120
@@ -314,6 +316,9 @@ module RaylibMode =
             lastLiveTestingStatus <- event.LiveTestingStatus
             lastWatchedCount <- event.WatchedCount
             lastRegions <- regions
+            match event.TestSourceLocations.IsEmpty with
+            | true -> ()
+            | false -> testSourceLocations <- event.TestSourceLocations
             // Record region snapshot for time-travel (only in live mode)
             timeTravelState <-
               TimeTravel.record event.SessionState 0.0<SageFs.Measures.ms> regions timeTravelState))
@@ -456,7 +461,7 @@ module RaylibMode =
         | PrevFailingTest -> navigateFailingTests (-1)
         | JumpToTest ->
           let scrollOff = scrollOffsets |> Map.tryFind focusedPane |> Option.defaultValue 0
-          match JumpToTest.getSelectedTestLocation lastRegions scrollOff with
+          match JumpToTest.getSelectedTestLocation lastRegions focusedPane scrollOff testSourceLocations with
           | Some (file, line) -> JumpToTest.openInEditor file line
           | None -> ()
         | MarkAllStale ->

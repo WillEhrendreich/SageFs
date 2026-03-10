@@ -56,6 +56,7 @@ type Model = {
   BaseUrl: string
   KeyMap: SageFsKeyMap
   HttpClient: HttpClient
+  TestSourceLocations: Map<string, string * int>
 }
 
 // ── TEA Messages ──
@@ -139,7 +140,8 @@ let init (daemonInfo: DaemonInfo) (keyMap: SageFsKeyMap) () : Model * Cmd<Msg> =
     FrameMs = 0.0
     BaseUrl = baseUrl
     KeyMap = keyMap
-    HttpClient = client },
+    HttpClient = client
+    TestSourceLocations = Map.empty },
   Cmd.none
 
 // ── Helpers ──
@@ -234,6 +236,10 @@ let update (msg: Msg) (model: Model) : Model * Cmd<Msg> =
         SessionThemes = sessionThemes
         Theme = theme
         ThemeName = themeName
+        TestSourceLocations =
+          match event.TestSourceLocations.IsEmpty with
+          | true -> model.TestSourceLocations
+          | false -> event.TestSourceLocations
         TimeTravel = tt }, Cmd.none
 
   | Quit -> model, Cmd.quit
@@ -304,7 +310,7 @@ let update (msg: Msg) (model: Model) : Model * Cmd<Msg> =
 
   | JumpToTest ->
     let scrollOff = model.ScrollOffsets |> Map.tryFind model.FocusedPane |> Option.defaultValue 0
-    match JumpToTest.getSelectedTestLocation model.Regions scrollOff with
+    match JumpToTest.getSelectedTestLocation model.Regions model.FocusedPane scrollOff model.TestSourceLocations with
     | Some (file, line) -> JumpToTest.openInEditor file line; model, Cmd.none
     | None -> model, Cmd.none
 
@@ -731,6 +737,7 @@ let run (daemonInfo: DaemonInfo) =
       Update = update
       View = view
       Subscribe = subscribe keyMap baseUrl
+      OnError = None
     }
     App.run program
     0
