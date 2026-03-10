@@ -1398,7 +1398,13 @@ let mapLiveTestingRoutes (app: WebApplication) (rctx: RouteContext) =
         | true, v -> match v.TryGetInt32() with true, i -> i | _ -> 30
         | false, _ -> 30
       let! result = SageFs.McpTools.runTests rctx.McpContext pattern category timeout
-      do! jsonResponse ctx 200 {| success = true; message = result |}
+      let success, reason =
+        match result with
+        | r when r.Contains("disabled") -> false, Some "live_testing_disabled"
+        | r when r.Contains("No active") -> false, Some "no_session"
+        | r when r.Contains("Error") || r.Contains("error") -> false, None
+        | _ -> true, None
+      do! jsonResponse ctx 200 {| success = success; reason = reason; message = result |}
     }) :> Task
   ) |> ignore
   app.MapGet("/api/live-testing/test-trace", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->

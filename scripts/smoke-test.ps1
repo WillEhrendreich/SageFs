@@ -231,11 +231,11 @@ try {
     -Body $runBody `
     -ContentType "application/json" `
     -TimeoutSec 40
-  # success=true means the command was accepted (may report "disabled" or actual results)
   if ($runResp.success -eq $true) {
-    Pass "run-tests" "run_tests accepted (discovered: $total)"
+    Pass "run-tests" "run_tests succeeded (discovered: $total)"
   } else {
-    Fail "run-tests" "run_tests response: $($runResp | ConvertTo-Json -Compress)"
+    $reasonStr = if ($runResp.reason) { " reason=$($runResp.reason)" } else { "" }
+    Fail "run-tests" "run_tests returned success=false$reasonStr`: $($runResp.message)"
   }
 } catch {
   Fail "run-tests" "run_tests request failed: $_"

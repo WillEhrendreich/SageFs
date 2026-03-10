@@ -2052,8 +2052,8 @@ module McpTools =
     : Task<string> =
     task {
       match ctx.GetElmModel, ctx.Dispatch with
-      | None, _ -> return RunTestsResult.format Disabled
-      | _, None -> return RunTestsResult.format Disabled
+      | None, _ -> return "No active SageFs session. Start a session first."
+      | _, None -> return "No active SageFs session. Start a session first."
       | Some getModel, Some dispatch ->
       let model = getModel ()
       let state = model.LiveTesting.TestState

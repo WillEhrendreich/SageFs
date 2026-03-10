@@ -164,11 +164,16 @@ module FeatureParsers =
 
 /// HTTP client for communicating with the SageFs daemon.
 /// Registered as a singleton via DI in the extension entry point.
-type SageFsClient() =
+type SageFsClient(http: HttpClient) =
   let mutable mcpPort = Constants.DefaultMcpPort
   let mutable dashboardPort = Constants.DefaultDashboardPort
-  let handler = new HttpClientHandler(AutomaticDecompression = System.Net.DecompressionMethods.All)
-  let http = new HttpClient(handler)
+
+  new() =
+    let handler = new HttpClientHandler(AutomaticDecompression = System.Net.DecompressionMethods.All)
+    new SageFsClient(new HttpClient(handler))
+
+  new(testHandler: HttpMessageHandler) =
+    new SageFsClient(new HttpClient(testHandler))
 
   member _.McpPort
     with get () = mcpPort
@@ -522,6 +527,31 @@ type SageFsClient() =
           new StringContent(json, Encoding.UTF8, "application/json"), ct)
       return ()
     with _ -> return ()
+  }
+
+  /// Get the apiVersion integer from the daemon's /version endpoint.
+  /// Returns Ok(apiVersion) on success, Error(...) if the daemon is unreachable.
+  member this.GetVersionAsync(ct: CancellationToken) : Task<Result<int, string>> = task {
+    try
+      let! body = http.GetStringAsync(sprintf "%s/version" this.BaseUrl, ct)
+      use doc = JsonDocument.Parse(body)
+      return Ok (tryInt doc.RootElement "apiVersion" -1)
+    with _ ->
+      return Error "Could not reach SageFs daemon."
+  }
+
+  /// Check that the daemon's apiVersion matches ExpectedApiVersion.
+  /// Returns Ok() when compatible, Error(message) when mismatched or unreachable.
+  member this.CheckVersionAsync(ct: CancellationToken) : Task<Result<unit, string>> = task {
+    let! versionResult = this.GetVersionAsync(ct)
+    return
+      match versionResult with
+      | Error e -> Error e
+      | Ok apiVersion ->
+        match apiVersion = Constants.ExpectedApiVersion with
+        | true -> Ok ()
+        | false ->
+          Error (sprintf "SageFs daemon version incompatible. Expected apiVersion=%d, got apiVersion=%d. Run 'dotnet tool update --global SageFs' then restart Visual Studio." Constants.ExpectedApiVersion apiVersion)
   }
 
   /// Set run policy for a test category.

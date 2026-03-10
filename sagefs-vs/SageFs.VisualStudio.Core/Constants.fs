@@ -11,3 +11,7 @@ module Constants =
 
   /// Default port for the SageFs HTTP dashboard / REST API (McpPort + 1).
   let DefaultDashboardPort = DefaultMcpPort + 1
+
+  /// Expected apiVersion from the /version endpoint.
+  /// Used by CheckVersionAsync to detect incompatible daemon builds.
+  let ExpectedApiVersion = 1
