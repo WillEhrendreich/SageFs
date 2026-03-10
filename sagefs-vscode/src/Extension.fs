@@ -417,6 +417,55 @@ let checkInstallation () =
 let openQuickFile () =
   Commands.executeCommand "workbench.action.quickOpen" |> ignore
 
+let openGettingStarted () =
+  promise {
+    let content =
+      "// ── SageFs Getting Started ─────────────────────────────────\n"
+      + "// Welcome! Select each expression and press Alt+Enter (Ctrl+Enter on Mac)\n"
+      + "// to evaluate it. Results appear inline, right next to your code.\n"
+      + "\n"
+      + "// ── Step 1: Simple expressions ──\n"
+      + "1 + 1;;\n"
+      + "\n"
+      + "\"Hello from SageFs!\";;\n"
+      + "\n"
+      + "// ── Step 2: Let bindings ──\n"
+      + "let greeting = \"Welcome to live F# development\";;\n"
+      + "greeting.ToUpper();;\n"
+      + "\n"
+      + "// ── Step 3: Functions and pipelines ──\n"
+      + "let square x = x * x;;\n"
+      + "square 7;;\n"
+      + "\n"
+      + "[1..10] |> List.filter (fun n -> n % 2 = 0) |> List.map square;;\n"
+      + "\n"
+      + "// ── Step 4: Records and pattern matching ──\n"
+      + "type Shape =\n"
+      + "  | Circle of radius: float\n"
+      + "  | Rectangle of width: float * height: float;;\n"
+      + "\n"
+      + "let area shape =\n"
+      + "  match shape with\n"
+      + "  | Circle r -> System.Math.PI * r * r\n"
+      + "  | Rectangle (w, h) -> w * h;;\n"
+      + "\n"
+      + "area (Circle 5.0);;\n"
+      + "area (Rectangle (3.0, 4.0));;\n"
+      + "\n"
+      + "// ── Step 5: Try editing! ──\n"
+      + "// Change the values above and re-evaluate. SageFs keeps your session\n"
+      + "// alive — previous definitions stay available.\n"
+      + "//\n"
+      + "// Next steps:\n"
+      + "//   • Save an .fs file to trigger hot reload + live test updates\n"
+      + "//   • Check the SageFs sidebar for test results and sessions\n"
+      + "//   • Try 'SageFs: Show Call Graph' from the command palette\n"
+      + "//   • Explore samples/ in the SageFs repo for more examples\n"
+    let! doc = Workspace.openTextDocument content "fsharp"
+    let! _ = Window.showTextDocument doc
+    return ()
+  }
+
 // ── Status ─────────────────────────────────────────────────────
 
 let updateTestStatusBar (summary: VscTestSummary) =
@@ -1520,6 +1569,7 @@ let activate (context: ExtensionContext) =
   reg "sagefs.openDashboard" (fun _ -> openDashboard ())
   reg "sagefs.switchProject" (fun _ -> switchProject () |> promiseIgnoreLog logToOutput)
   reg "sagefs.checkHealth" (fun _ -> checkHealth () |> promiseIgnoreLog logToOutput)
+  reg "sagefs.openGettingStarted" (fun _ -> openGettingStarted () |> promiseIgnoreLog logToOutput)
   reg "sagefs.sessionMenu" (fun _ -> sessionMenu () |> promiseIgnoreLog logToOutput)
   reg "sagefs.resetSession" (fun _ -> resetSessionCmd () |> promiseIgnoreLog logToOutput)
   reg "sagefs.hardReset" (fun _ -> hardResetCmd () |> promiseIgnoreLog logToOutput)

@@ -2,7 +2,7 @@
   "name": "sagefs",
   "displayName": "SageFs — Live F# Development",
   "description": "Send F# code to SageFs for instant evaluation, type-checking, and hot reload.",
-  "version": "0.6.54",
+  "version": "0.6.55",
   "publisher": "sagefs",
   "license": "MIT",
   "icon": "icon.png",
@@ -226,6 +226,11 @@
         "command": "sagefs.checkHealth",
         "title": "SageFs: Check Health",
         "icon": "$(heart)"
+      },
+      {
+        "command": "sagefs.openGettingStarted",
+        "title": "SageFs: Open Getting Started Sample",
+        "icon": "$(mortar-board)"
       }
     ],
     "keybindings": [
@@ -557,7 +562,7 @@
           {
             "id": "sagefs.evalFirst",
             "title": "Evaluate Your First Expression",
-            "description": "Select some F# code and press ``Ctrl+Enter`` (or ``Cmd+Enter`` on Mac) to evaluate it. Results appear inline!",
+            "description": "Select some F# code and press ``Ctrl+Enter`` (or ``Cmd+Enter`` on Mac) to evaluate it. Results appear inline!\n\nDon't have an F# file handy? Open our interactive tutorial:\n\n[Open Getting Started Sample](command:sagefs.openGettingStarted)",
             "media": {
               "image": "$(play)",
               "altText": "Play icon"
