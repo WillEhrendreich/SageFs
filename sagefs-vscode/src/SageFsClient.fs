@@ -184,7 +184,7 @@ let dashPostOutcome (ctx: string) (path: string) (body: string) (timeout: int) (
 let isRunning (c: Client) =
   promise {
     try
-      let! resp = httpGet c "/health" 3000
+      let! resp = httpGet c "/health" 15000
       return resp.statusCode = 200
     with _ ->
       return false
@@ -193,7 +193,7 @@ let isRunning (c: Client) =
 let getStatus (c: Client) =
   promise {
     try
-      let! resp = httpGet c "/health" 3000
+      let! resp = httpGet c "/health" 15000
       match resp.statusCode with
       | 200 ->
         let parsed = jsonParse resp.body
@@ -281,7 +281,7 @@ let checkVersion (status: SystemStatus) : Result<unit, string> =
   | v -> Error $"SageFs daemon apiVersion={v} is incompatible with this extension (requires apiVersion={expectedApiVersion}). Run 'dotnet tool update --global SageFs' then reload VS Code."
 
 let getSystemStatus (c: Client) =
-  getJson "getSystemStatus" "/api/system/status" 3000 parseSystemStatus c
+  getJson "getSystemStatus" "/api/system/status" 15000 parseSystemStatus c
 
 let parseHotReloadState (parsed: obj) =
   let files =
