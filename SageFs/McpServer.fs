@@ -725,6 +725,14 @@ let wireModelChangeHandlers
         handleTestSummaryChange ()
         handleFeaturePush outputCount
         handleDiagnosisPush ()
+        // Push resolved test source locations for editor jump-to-source
+        SseContext.withModel ctx (fun model ->
+          match model.ResolvedSourceLocations with
+          | [] -> ()
+          | locs ->
+            ctx.ServerTracker.AccumulateEvent(PushEvent.TestSourceLocations locs)
+            ctx.TestEventBroadcast.Trigger(
+              SageFs.SseWriter.formatTestSourceLocationsEvent ctx.SseJsonOpts (SseContext.activeSessionId ctx) locs))
         match ctx.ServerTracker.Count > 0 with
         | true ->
           try

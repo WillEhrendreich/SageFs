@@ -86,6 +86,12 @@ let formatFailureNarrativesEvent (opts: JsonSerializerOptions) (sessionId: strin
   let json = JsonSerializer.Serialize(payload, opts) |> injectSessionId sessionId
   formatSseEvent "failure_narratives" json
 
+/// Format TestSourceLocations as an SSE event string
+let formatTestSourceLocationsEvent (opts: JsonSerializerOptions) (sessionId: string option) (locations: Features.LiveTesting.TestSourceLocation list) : string =
+  let payload = {| Locations = locations |}
+  let json = JsonSerializer.Serialize(payload, opts) |> injectSessionId sessionId
+  formatSseEvent "test_source_locations" json
+
 // ── Bindings snapshot (CQRS: server-side parsing, push via SSE) ──
 
 /// A single FSI binding tracked server-side
