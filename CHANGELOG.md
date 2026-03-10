@@ -29,6 +29,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `LiveTestHookResultDto.fromResult` introduced to separate serializable DTO from the function-bearing domain type
 - `ValidatedBuffer` type no longer uses `private` constructor (enables REPL construction for testing)
 
+## [0.7.0] - 2026-03-10
+
+### Added
+
+#### Core Daemon
+- `/api/live-testing/run` now returns `{success: bool, reason: string option, message: string}` — `success` reflects the actual outcome; `reason` is `"live_testing_disabled"` or `"no_session"` when applicable (previously hardcoded `success: true`)
+
+#### Visual Studio Extension
+- Daemon auto-start on VS activation — `DaemonTargetFinder` scans for `.slnx` → `.sln` → `.fsproj` and starts the daemon automatically when VS opens; polls up to 10s for readiness
+- `IVsStatusbar` MEF interop — `StatusBarBridge` wires the net472 MEF `StatusBarService` to the net8.0 SDK `StatusBarManager`; the VS status bar now shows real connection and test-pass state
+- `CheckVersionAsync` — hard stop with actionable error message if daemon `apiVersion` mismatches extension expectations; message includes exact versions and `dotnet tool update` instructions
+
+#### Infrastructure
+- `smoke-test.yml` CI workflow — runs end-to-end smoke test on `windows-latest` on every push to master affecting `SageFs/`, `SageFs.Core/`, or `scripts/smoke-test.ps1`
+- `smoke-test.ps1` — 30-second test-discovery poll loop with `WARN` vs `FAIL` distinction; 0 tests after timeout is a warning, not a pipeline failure
+
+### Fixed
+
+#### Visual Studio Extension
+- `DaemonTargetFinder` deterministic project selection: `.slnx` > `.sln` > test `.fsproj` > first `.fsproj` alphabetically — no more silent wrong-project guessing
+- `StartDaemonCommand` now delegates to `DaemonTargetFinder` instead of duplicated inline logic (~20 lines removed)
+
 ## [0.6.0] - 2026-03-10
 
 ### Added
