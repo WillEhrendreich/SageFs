@@ -68,6 +68,54 @@ Tests are auto-categorized (Unit, Integration, Browser, Property, Benchmark) wit
 
 ---
 
+## ⚡ First 5 Minutes
+
+### 1. Install SageFs (30 seconds)
+
+**Prerequisites:** [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0). That's it.
+
+```bash
+dotnet tool install --global SageFs
+```
+
+### 2. Start the daemon
+
+```bash
+sagefs --proj YourProject.fsproj
+```
+
+SageFs opens an interactive terminal. Your editor connects automatically.
+
+> No project? Just run `sagefs` with no arguments — the daemon starts bare and waits for clients. Your editor will create sessions on demand.
+
+### 3. Connect your editor
+
+**VS Code** — Install the extension from [Releases](https://github.com/WillEhrendreich/SageFs/releases), open an F# file, press `Alt+Enter` on any expression. Result appears inline in < 500ms.
+
+**Neovim** — Add `"WillEhrendreich/sagefs.nvim"` to your plugin manager. Press `Alt+Enter` to evaluate. See [Neovim setup](https://github.com/WillEhrendreich/sagefs.nvim).
+
+**Visual Studio 2022** — Install the VSIX from [Releases](https://github.com/WillEhrendreich/SageFs/releases). Press `Alt+Enter`. The daemon starts automatically.
+
+**Terminal only** — `sagefs tui` for the built-in terminal UI, or `sagefs gui` for the Raylib GPU window.
+
+### 4. Enable live testing
+
+Save any file → tests run automatically → green/red gutter markers appear.
+No configuration needed — SageFs discovers Expecto tests and runs them on every save.
+
+### 5. What you'll see
+
+- **Gutter markers**: ✓ green (passing), ✗ red (failing), ○ gray (no coverage)
+- **Inline results**: Expression values appear to the right of your code
+- **Coverage bars**: Colored bars in the gutter show which lines are covered by tests
+- **Failure details**: Hover over red markers to see Expected vs Actual diffs
+
+> 💡 **Tip**: Press `Ctrl+Shift+S` to mark all tests stale and re-run everything.
+
+📚 **[Full Documentation](docs/README.md)** — Guides, deep dives, technical reference, and contributor docs.
+
+---
+
 ## Three Things That Change Everything
 
 ### ⚡ Hot Reload — Save and It's Live
@@ -307,6 +355,40 @@ sagefs connect   # Text REPL connected to running daemon
 ```
 
 </details>
+
+---
+
+## ⌨️ Keybindings Across Editors
+
+| Action | VS Code | Visual Studio | Neovim |
+|--------|---------|---------------|--------|
+| Evaluate selection/cell | `Alt+Enter` | `Alt+Enter` | `<M-CR>` |
+| Evaluate entire file | `Alt+Shift+Enter` | `Shift+Alt+Enter` | `<leader>rf` |
+| Clear inline results | Command Palette | — | `<leader>rc` |
+| Run all tests | Command Palette | Command Palette | `<leader>rT` |
+| Toggle test panel | `Ctrl+Shift+T` | View → SageFs Tests | `:SageFsTests` |
+| Jump to test source | Click test in explorer | — | `<CR>` in telescope |
+| Show failure narrative | Hover on red marker | Hover on red marker | `<C-d>` in test panel |
+| Mark all stale | `Ctrl+Shift+S` | `Ctrl+Shift+S` | `<leader>rS` |
+| Session picker | Command Palette | Command Palette | `<leader>rs` |
+
+> **Full keybinding references**: [VS Code](sagefs-vscode/README.md) · [Visual Studio](sagefs-vs/README.md) · [Neovim](https://github.com/WillEhrendreich/sagefs.nvim#keymaps)
+
+---
+
+## 🎨 Understanding the Gutter Icons
+
+| Icon | Meaning |
+|------|---------|
+| ✓ (green) | Test passing — this code is covered by at least one passing test |
+| ✗ (red) | Test failing — a test covering this code has failed |
+| ○ (gray) | No coverage — no test exercises this line |
+| │ (green bar) | Coverage healthy — all tests covering this line pass |
+| │ (red bar) | Coverage degraded — some tests covering this line are failing |
+| │ (gray bar) | Not covered — no test reaches this line |
+| ⊘ | Inline failure — shows the test name and Expected/Actual diff |
+
+> 💡 **Hover** over any gutter icon for details. In Neovim, press `<C-d>` on a failing test for the full failure narrative.
 
 ---
 

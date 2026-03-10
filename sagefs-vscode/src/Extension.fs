@@ -1608,10 +1608,25 @@ let activate (context: ExtensionContext) =
     }
     let reconnectHandler = Some (fun () ->
       c.log "SSE reconnected — refreshing status..."
+      match statusBarItem with
+      | Some sb ->
+        sb.text <- "$(check) SageFs: connected"
+        sb.backgroundColor <- None
+        sb.show ()
+      | None -> ()
       refreshStatus ()
     )
+    let disconnectHandler = Some (fun () ->
+      c.log "SSE disconnected — reconnecting..."
+      match statusBarItem with
+      | Some sb ->
+        sb.text <- "$(sync~spin) SageFs: reconnecting..."
+        sb.backgroundColor <- Some (newThemeColor "statusBarItem.warningBackground")
+        sb.show ()
+      | None -> ()
+    )
     let sseLogger = Some (fun (msg: string) -> (getOutput()).appendLine (sprintf "[SSE] %s" msg))
-    let listener = LiveTest.start c.mcpPort liveTestCallbacks reconnectHandler sseLogger
+    let listener = LiveTest.start c.mcpPort liveTestCallbacks reconnectHandler disconnectHandler sseLogger
     liveTestListener <- Some listener
     c.log "connectToRunningDaemon: SSE streams established."
     sseDisposable <- Some {

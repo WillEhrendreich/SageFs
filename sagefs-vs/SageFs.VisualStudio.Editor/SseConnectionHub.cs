@@ -63,10 +63,21 @@ internal static class SseConnectionHub
             conn.EnsureStarted(url);
     }
 
+    /// <summary>
+    /// Subscribe to reconnection attempts for an SSE endpoint.
+    /// The handler fires each time the connection drops and a reconnect is attempted.
+    /// </summary>
+    public static void SubscribeReconnecting(string endpoint, Action handler)
+    {
+        var conn = _connections.GetOrAdd(endpoint, ep => new EndpointConnection(ep));
+        conn.AddReconnectSubscriber(handler);
+    }
+
     private sealed class EndpointConnection
     {
         private readonly string _endpoint;
         private readonly List<Action<SseEvent>> _subscribers = new List<Action<SseEvent>>();
+        private readonly List<Action> _reconnectSubscribers = new List<Action>();
         private readonly object _lock = new object();
         private SseClient? _client;
 
@@ -77,6 +88,11 @@ internal static class SseConnectionHub
             lock (_lock) { _subscribers.Add(handler); }
         }
 
+        public void AddReconnectSubscriber(Action handler)
+        {
+            lock (_lock) { _reconnectSubscribers.Add(handler); }
+        }
+
         public void EnsureStarted(string baseUrl)
         {
             lock (_lock)
@@ -84,6 +100,7 @@ internal static class SseConnectionHub
                 if (_client != null) return;
                 _client = new SseClient();
                 _client.EventReceived += Dispatch;
+                _client.Reconnecting += DispatchReconnecting;
                 _client.Start(baseUrl, _endpoint);
             }
         }
@@ -95,6 +112,7 @@ internal static class SseConnectionHub
                 _client?.Dispose();
                 _client = new SseClient();
                 _client.EventReceived += Dispatch;
+                _client.Reconnecting += DispatchReconnecting;
                 _client.Start(baseUrl, _endpoint);
             }
         }
@@ -110,6 +128,21 @@ internal static class SseConnectionHub
                 {
                     System.Diagnostics.Debug.WriteLine(
                         $"[SseConnectionHub] Subscriber threw on {_endpoint}: {ex.Message}");
+                }
+            }
+        }
+
+        private void DispatchReconnecting(object? sender, EventArgs _)
+        {
+            List<Action> snapshot;
+            lock (_lock) { snapshot = new List<Action>(_reconnectSubscribers); }
+            foreach (var h in snapshot)
+            {
+                try { h(); }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine(
+                        $"[SseConnectionHub] Reconnect subscriber threw on {_endpoint}: {ex.Message}");
                 }
             }
         }

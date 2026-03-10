@@ -3,7 +3,7 @@
 const http = require('http');
 const zlib = require('zlib');
 
-function createSseSubscriber(url, onMessage, onReconnect, logger) {
+function createSseSubscriber(url, onMessage, onReconnect, logger, onDisconnect) {
   const log = logger || ((msg) => console.log('[SageFs SSE]', msg));
   let req;
   let buffer = '';
@@ -23,6 +23,7 @@ function createSseSubscriber(url, onMessage, onReconnect, logger) {
 
   const reconnect = () => {
     if (inactivityTimer) clearTimeout(inactivityTimer);
+    if (onDisconnect) { try { onDisconnect(); } catch (e) { log(`onDisconnect error: ${e.message || e}`); } }
     retryDelay = Math.min(retryDelay * 2, maxDelay);
     const jitter = retryDelay * 0.3 * Math.random();
     const delaySec = ((retryDelay + jitter) / 1000).toFixed(1);

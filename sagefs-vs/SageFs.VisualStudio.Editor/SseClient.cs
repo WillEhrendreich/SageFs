@@ -25,6 +25,7 @@ internal sealed class SseClient : IDisposable
     }
 
     public event EventHandler<SseEvent>? EventReceived;
+    public event EventHandler? Reconnecting;
 
     public void Start(string baseUrl, string endpoint = "/events")
     {
@@ -34,10 +35,15 @@ internal sealed class SseClient : IDisposable
     private async Task LoopAsync(string baseUrl, string endpoint, CancellationToken ct)
     {
         var delay = TimeSpan.FromSeconds(1);
+        var firstConnect = true;
         while (!ct.IsCancellationRequested)
         {
             try
             {
+                if (!firstConnect)
+                    Reconnecting?.Invoke(this, EventArgs.Empty);
+                firstConnect = false;
+
                 using var response = await _http.GetAsync(
                     baseUrl.TrimEnd('/') + endpoint,
                     HttpCompletionOption.ResponseHeadersRead, ct);

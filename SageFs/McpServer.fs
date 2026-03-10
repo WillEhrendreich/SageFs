@@ -245,12 +245,17 @@ let runSseWriteLoop
   (sources: IObservable<string> list)
   (heartbeatMs: int) =
   task {
-    let opts = BoundedChannelOptions(128, FullMode = BoundedChannelFullMode.DropOldest)
+    let opts = BoundedChannelOptions(512, FullMode = BoundedChannelFullMode.DropOldest)
     let ch = Channel.CreateBounded<string>(opts)
     let subs = ResizeArray<IDisposable>()
     try
       for src in sources do
-        src.Subscribe(fun frame -> ch.Writer.TryWrite(frame) |> ignore)
+        src.Subscribe(fun frame ->
+          match ch.Writer.TryWrite(frame) with
+          | true -> ()
+          | false ->
+            SageFs.Instrumentation.sseEventsDropped.Add(1L)
+            Log.debug "[SSE] Event dropped (buffer full)")
         |> subs.Add
       use _heartbeat =
         new Timer((fun _ -> ch.Writer.TryWrite(": keepalive\n\n") |> ignore), null, heartbeatMs, heartbeatMs)

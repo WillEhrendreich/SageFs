@@ -195,6 +195,8 @@ module Instrumentation =
   // P2: RED metric gaps — SSE
   let sseWriteErrors =
     mcpMeter.CreateCounter<int64>("sagefs.sse.write_errors_total", description = "Total SSE write errors")
+  let sseEventsDropped =
+    mcpMeter.CreateCounter<int64>("sagefs.sse.events_dropped_total", description = "Total SSE events dropped due to full buffer")
   let sseConnectionDurationMs =
     mcpMeter.CreateHistogram<float>("sagefs.sse.connection_duration_ms", "ms", "SSE connection lifetime duration")
   let sseFrameBytes =

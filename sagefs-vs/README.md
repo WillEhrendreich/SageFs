@@ -9,18 +9,17 @@ A Visual Studio extension for [SageFs](../Readme.md) — the live F# development
 - SageFs CLI: `dotnet tool install --global SageFs`
 - Windows only (amd64 or arm64)
 
-## Quick Start
+## ⚡ Quick Start
 
-1. Install the VSIX (build from source or download from Releases)
-2. Install the SageFs CLI:
-   ```bash
-   dotnet tool install --global SageFs
-   ```
-3. Open a `.fsx` or `.fs` file — if the daemon isn't running, a notification will appear in the **SageFs Output** channel
+1. **Install SageFs CLI**: `dotnet tool install --global SageFs`
+2. **Install the VSIX**: Download from [Releases](https://github.com/WillEhrendreich/SageFs/releases) → double-click to install
+3. **Open an F# project** in Visual Studio 2022
+4. **Press `Alt+Enter`** on any expression — the daemon starts automatically
+5. **Save a file** — tests run, gutter markers appear
+
+The extension connects to the SageFs daemon automatically. No configuration needed.
 
 > **Important**: SageFs must be installed as a **global** .NET tool (`dotnet tool install --global SageFs`). Local tool installs are not supported by the Visual Studio extension. If `sagefs` is not found in your PATH, the extension will show "⚠ SageFs daemon is not running" in the SageFs Output channel.
-4. Start the daemon: **Extensions → SageFs → Start Daemon**
-5. Completions, gutter markers, and TypeExplorer activate automatically
 
 ## Installing from Source
 
@@ -46,10 +45,22 @@ Then load the extension in Visual Studio's experimental instance, or install the
 | Daemon health check on startup (Output channel notification) | ✅ |
 | Session management (create, switch, reset, hard reset) | ✅ |
 | Hot reload file watching | ✅ |
-| Coverage gutter signs | ❌ Not yet implemented |
+| Coverage gutter signs | ✅ CoverageGlyphTagger renders green/red/gray bars |
+| Test source navigation | ✅ TestStateTracker maps test names to file/line |
+| Failure narratives | ✅ Inline failure adornments enriched with causal analysis |
 | Themes | ❌ VS SDK doesn't expose color contribution API |
 | Call graph viewer | ❌ Available in VS Code and Neovim |
 | History browser | ❌ Available in VS Code and Neovim |
+
+## ⌨️ Keybindings
+
+| Action | Binding |
+|--------|---------|
+| Evaluate selection | `Alt+Enter` |
+| Evaluate file | `Shift+Alt+Enter` |
+| Toggle live testing | Command: SageFs Enable/Disable Live Testing |
+| Mark all stale | `Ctrl+Shift+S` |
+| Open test panel | View → Other Windows → SageFs Live Tests |
 
 ### Code Evaluation
 
@@ -128,6 +139,34 @@ The **Set Run Policy** command opens an interactive picker. Select a category an
 - **Live Testing** — Test summary, toggle, run-all, per-category run policy, and results text
 - **Type Explorer** — Browse .NET types and namespaces; auto-refreshes when a new FSI session warms up
 
+## 🎨 Understanding What You See
+
+### Gutter Glyphs (left margin)
+
+| Glyph | Color | Meaning |
+|-------|-------|---------|
+| ● | Green | Test passing |
+| ● | Red | Test failing |
+| █ (bar) | Green | Coverage healthy — all tests pass |
+| █ (bar) | Red | Coverage degraded — some tests failing |
+| █ (bar) | Gray | No test coverage |
+
+### Inline Adornments
+
+| What you see | Meaning |
+|-------------|---------|
+| Gray text after expression | Evaluation result |
+| Red text with `⊘` | Test failure with Expected/Actual diff |
+| Narrative tooltip on hover | Failure context: what changed, time since last pass |
+
+### Status Bar
+
+| Item | Meaning |
+|------|---------|
+| `SageFs: Connected` | Daemon running, SSE stream active |
+| `SageFs: Disconnected` | Connection lost — will retry |
+| `Tests: 42 ✓ 2 ✗` | Test summary |
+
 ## Architecture
 
 The extension uses a two-layer architecture:
@@ -137,13 +176,31 @@ The extension uses a two-layer architecture:
 
 Communication with SageFs uses the same HTTP + SSE protocol as all other frontends. The daemon runs on port 37749 (MCP) and 37750 (dashboard/API) by default.
 
-## Troubleshooting
+## 🔧 Troubleshooting
 
-**"SageFs not found on PATH"** — Install SageFs: `dotnet tool install --global SageFs`. Make sure the .NET tools directory is on your PATH. Local tool installs (`dotnet tool install --local`) are **not** supported; only global installs work with the extension.
+### Extension not loading
 
-**Commands do nothing / no feedback** — Check the SageFs Output window (`View → Output → SageFs`). The extension logs errors there. If the daemon isn't running, start it with "SageFs: Start Daemon".
+- Requires Visual Studio 2022 17.14+ and .NET 8.0+
+- Check Extensions → Manage Extensions → SageFs is enabled
+- Look in Output → SageFs for error messages
 
-**Error List not updating** — Verify the SSE connection is active. The extension subscribes to `/events` on the dashboard port (37750). Firewall or proxy issues can block this.
+### SageFs not found on PATH
+
+Install SageFs: `dotnet tool install --global SageFs`. Make sure the .NET tools directory is on your PATH. Local tool installs (`dotnet tool install --local`) are **not** supported; only global installs work with the extension.
+
+### Commands do nothing / no feedback
+
+Check the SageFs Output window (`View → Output → SageFs`). The extension logs errors there. If the daemon isn't running, start it with "SageFs: Start Daemon".
+
+### Error List not updating
+
+Verify the SSE connection is active. The extension subscribes to `/events` on the dashboard port (37750). Firewall or proxy issues can block this.
+
+### No gutter markers
+
+1. Ensure SageFs daemon is running (check status bar)
+2. Ensure your project has Expecto tests
+3. Try: Extensions → SageFs → Mark All Tests Stale
 
 ### Kill Switches
 
@@ -154,6 +211,9 @@ If a feature is causing problems, you can disable it by creating an empty file a
 | `%LOCALAPPDATA%\SageFs\disable-glyphs.flag` | All gutter test status markers (also acts as a master switch — disables squiggles and inline hints too) |
 | `%LOCALAPPDATA%\SageFs\disable-squiggles.flag` | Error/warning squiggles from diagnostics |
 | `%LOCALAPPDATA%\SageFs\disable-inline-hints.flag` | Inline failure adornments |
+| `.sagefs/disable-inline-hints.flag` | Disables inline eval adornments (per-solution) |
+| `.sagefs/disable-test-glyphs.flag` | Disables test gutter markers (per-solution) |
+| `.sagefs/disable-coverage-glyphs.flag` | Disables coverage gutter bars (per-solution) |
 
 To create a kill switch from PowerShell:
 ```powershell

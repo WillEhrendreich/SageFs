@@ -46,7 +46,9 @@ internal class StatusBarManager : ExtensionPart
       {
         if (_output is not null)
           await _output.WriteLineAsync("✓ SageFs daemon connected.");
-        // TODO: call CheckVersionAsync here when wired (separate task)
+        var versionResult = await _client.CheckVersionAsync(CancellationToken.None).ConfigureAwait(false);
+        if (versionResult.IsError && _output is not null)
+          await _output.WriteLineAsync($"⚠ {versionResult.ErrorValue}");
         return;
       }
 
@@ -114,6 +116,17 @@ internal class StatusBarManager : ExtensionPart
     _latencyMs    = latencyMs;
 
     var text = FormatStatusBarText(connected, passingTests, latencyMs);
+    _ = _output?.WriteLineAsync(text);
+    _ = TryUpdateVsStatusBarAsync(text);
+  }
+
+  /// <summary>
+  /// Called when the SSE connection drops and reconnection is in progress.
+  /// Shows a transient "reconnecting" state in the status bar.
+  /// </summary>
+  public void SetReconnecting()
+  {
+    var text = "⟳ SageFs: reconnecting...";
     _ = _output?.WriteLineAsync(text);
     _ = TryUpdateVsStatusBarAsync(text);
   }
