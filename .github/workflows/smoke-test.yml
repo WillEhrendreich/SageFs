@@ -5,6 +5,7 @@ on:
   push:
     branches: [master]
     paths:
+      - '.github/workflows/smoke-test.yml'
       - 'scripts/smoke-test.ps1'
       - 'samples/from-csharp/**'
       - 'SageFs/**'
