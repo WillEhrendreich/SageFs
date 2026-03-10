@@ -278,17 +278,17 @@ Every frontend connects to the same daemon. Open several at once — they all se
 | Live diagnostics (SSE) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Hot reload toggle | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — |
 | Session management | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Code completion | ✅ | ✅ | ¹ | ✅ | ✅ | ✅ | ✅ |
+| Code completion | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | CodeLens | ✅ | ✅ | ✅ | — | — | — | — |
-| **Live test gutters** | ✅ | ✅ | ¹ | ✅ | ✅ | — | — |
+| **Live test gutters** | ✅ | ✅ | ✅ | ✅ | ✅ | — | — |
 | **Coverage gutters** | ✅ | ✅ | ✅ | ✅ | ✅ | — | — |
 | **Failure narratives** | ✅ | ✅ | ✅ | ✅ | ✅ | — | ✅ |
 | **Test source-jump** | ✅ | ✅ | ✅ | — | — | — | — |
-| Test panel | ✅ | ✅ | — | ✅ | ✅ | — | — |
-| Test policy controls | ✅ | ✅ | — | — | — | — | ✅ |
+| Test panel | ✅ | ✅ | ✅ | ✅ | ✅ | — | — |
+| Test policy controls | ✅ | ✅ | ✅ | — | — | — | ✅ |
 | Type explorer | ✅ | ✅ | — | — | ¹ | — | ✅ |
-| Call graph | ✅ | ✅ | — | — | — | — | — |
-| History browser | ✅ | ✅ | — | ✅ | ✅ | — | — |
+| Call graph | ✅ | ✅ | ✅ | — | — | — | — |
+| History browser | ✅ | ✅ | ✅ | ✅ | ✅ | — | — |
 | Test trace | ✅ | ✅ | — | — | — | — | ✅ |
 
 > ¹ Server-side data ready. Editor UI integration pending (VS SDK limitations or work-in-progress).

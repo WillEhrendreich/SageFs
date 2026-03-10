@@ -16,7 +16,7 @@ available in your editor and discover features you might not know about.
 | Evaluate file | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Load .fsx script | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Inline results | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Eval history / timeline | ✅ | ✅ | 🔜 | ✅ | ✅ |
+| Eval history / timeline | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Cancel running eval | ✅ | ✅ | ✅ | ✅ | ✅ |
 
 ## Session Management
@@ -27,7 +27,7 @@ available in your editor and discover features you might not know about.
 | Switch session | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Soft reset (clear definitions) | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Hard reset (rebuild + reload) | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Export session as .fsx | ✅ | ✅ | 🔜 | ✅ | ✅ |
+| Export session as .fsx | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Session picker (multi-session) | ✅ | ✅ | ✅ | ✅ | ✅ |
 
 ## Live Testing
@@ -40,9 +40,9 @@ available in your editor and discover features you might not know about.
 | Test results panel | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Failure narratives | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Causal change tracking | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Run policy configuration | ✅ | ✅ | 🔜 | ✅ | ✅ |
+| Run policy configuration | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Property-based test detail | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Coverage gutter signs | ✅ | ✅ | 🔜 | ✅ | ✅ |
+| Coverage gutter signs | ✅ | ✅ | ✅ | ✅ | ✅ |
 
 ## Code Intelligence
 
@@ -50,8 +50,8 @@ available in your editor and discover features you might not know about.
 |:--------|:-------:|:------:|:-------------:|:---:|:----------:|
 | Type Explorer tree | ✅ | ✅ | ✅ | ✅ | ¹ |
 | Namespace exploration | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Code completions | ✅ | ✅ | 🔜 | ✅ | ✅ |
-| Dependency graph | ✅ | ✅ | 🔜 | ✅ | ✅ |
+| Code completions | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Dependency graph | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Test coverage query | ✅ | ✅ | ✅ | ✅ | ✅ |
 
 ## Hot Reload & File Watching
@@ -75,7 +75,7 @@ available in your editor and discover features you might not know about.
 | Warmup progress display | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Typed error display (`SageFsError`) | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Eval watchdog (crash detection) | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Version gate (API compat check) | ✅ | ➖ | 🔜 | ➖ | ➖ |
+| Version gate (API compat check) | ✅ | ➖ | ✅ | ➖ | ➖ |
 | Daemon stderr capture | ✅ | ➖ | ✅ | ➖ | ➖ |
 
 ## Onboarding
@@ -91,13 +91,13 @@ available in your editor and discover features you might not know about.
 
 | Feature | VS Code | Neovim | Visual Studio | TUI | Raylib GUI |
 |:--------|:-------:|:------:|:-------------:|:---:|:----------:|
-| CodeLens (test results above functions) | ✅ | ❌ | ✅ | ❌ | ❌ |
+| CodeLens (test results above functions) | ✅ | ✅ | ✅ | ❌ | ❌ |
 | Inline failure annotations | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Telescope/fuzzy finder integration | ❌ | ✅ | ❌ | ❌ | ❌ |
 | Statusline component | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Syntax highlighting (Tree-sitter) | ❌ | ✅ | ❌ | ✅ | ✅ |
 | Time-travel (history snapshots) | ❌ | ❌ | ❌ | ✅ | ✅ |
-| Failing test navigation | ✅ | ✅ | ❌ | ✅ | ✅ |
+| Failing test navigation | ❌ | ✅ | ❌ | ✅ | ✅ |
 | Mouse support (click/drag/scroll) | ❌ | ✅ | ❌ | ✅ | ✅ |
 | Text selection + copy | ❌ | ✅ | ❌ | ❌ | ✅ |
 | Layout presets | ❌ | ❌ | ❌ | ✅ | ✅ |
