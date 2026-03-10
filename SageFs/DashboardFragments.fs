@@ -158,6 +158,47 @@ let renderDaemonHealth (view: DaemonHealthView) =
     | _ -> ()
   ]
 
+/// Render failure narratives as a dashboard panel — shows recent test failures with context.
+let renderFailureNarratives (view: FailureNarrativesPanelView) =
+  Elem.div [ Attr.id DomIds.FailureNarratives; Attr.class' "failure-narratives-panel" ] [
+    match view.Entries with
+    | [] ->
+      Elem.span [ Attr.class' "meta no-failures" ] [ Text.raw "✅ no recent failures" ]
+    | entries ->
+      Elem.span [ Attr.class' "failure-count-badge"; Attr.style "font-weight: bold; margin-right: 0.5rem;" ] [
+        Text.raw (sprintf "🔴 %d failure%s" entries.Length (if entries.Length = 1 then "" else "s"))
+      ]
+      for entry in entries do
+        Elem.div [ Attr.class' "narrative-entry"; Attr.style "margin-top: 0.25rem;" ] [
+          Elem.span [ Attr.class' "narrative-test-name"; Attr.style "font-weight: bold;" ] [
+            Text.raw (
+              let shortName =
+                let parts = entry.TestName.Split('.')
+                if parts.Length > 1 then parts.[parts.Length - 1] else entry.TestName
+              sprintf "🔴 %s" shortName)
+          ]
+          match entry.TimeSinceLabel with
+          | Some label ->
+            Elem.span [ Attr.class' "meta narrative-timing"; Attr.style "margin-left: 0.5rem;" ] [
+              Text.raw (sprintf "was passing %s" label)
+            ]
+          | None -> ()
+          Elem.span [ Attr.class' "narrative-summary"; Attr.style "margin-left: 0.5rem;" ] [
+            Text.raw entry.Summary
+          ]
+          match entry.CausalLabels with
+          | [] -> ()
+          | labels ->
+            Elem.span [ Attr.class' "meta narrative-causal"; Attr.style "margin-left: 0.5rem;" ] [
+              Text.raw (sprintf "→ %s" (labels |> String.concat ", "))
+            ]
+          if entry.HasPropertyViolation then
+            Elem.span [ Attr.class' "meta narrative-property"; Attr.style "margin-left: 0.5rem;" ] [
+              Text.raw "⚡ property violation"
+            ]
+        ]
+  ]
+
 /// Render eval stats as an HTML fragment — includes sparkline and P50/P95 latency.
 let renderEvalStats (stats: EvalStatsView) =
   Elem.div [ Attr.id DomIds.EvalStats; Attr.class' "meta" ] [
@@ -799,6 +840,8 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
     ]
     // Daemon health bar — version, uptime, memory, session health
     snap.DaemonHealth
+    // Failure narratives panel — recent test failures with context
+    snap.FailureNarrativesPanel
     // Main app layout: output+eval on left, sidebar on right
     Elem.div [ Attr.class' "app-layout" ] [
       Elem.div [ Attr.class' "main-area" ] [

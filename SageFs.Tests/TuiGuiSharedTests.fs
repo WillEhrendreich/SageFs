@@ -134,11 +134,11 @@ let focusNavigationTests = testList "focus navigation" [
     Expect.equal visited.Count PaneId.all.Length "should visit all panes"
   }
 
-  test "tab wraps around from Editor back to Output" {
-    // Output -> Sessions -> Diagnostics -> Editor -> Output
+  test "tab wraps around from Editor back to Tests" {
+    // Output -> Sessions -> Context -> Diagnostics -> Editor -> Tests -> Output
     let mutable current = PaneId.Editor
     current <- PaneId.next current
-    Expect.equal current PaneId.Output "should wrap to Output"
+    Expect.equal current PaneId.Tests "should wrap to Tests"
   }
 
   test "navigate right from Output reaches Sessions" {
@@ -183,17 +183,18 @@ let focusNavigationTests = testList "focus navigation" [
       Expect.notEqual result PaneId.Sessions "hidden pane should not be navigable"
   }
 
-  test "PaneId.next skips nothing - cycles all 5" {
+  test "PaneId.next skips nothing - cycles all 6" {
     let sequence = [
       PaneId.next PaneId.Output      // Sessions
       PaneId.next PaneId.Sessions    // Context
       PaneId.next PaneId.Context     // Diagnostics
       PaneId.next PaneId.Diagnostics // Editor
-      PaneId.next PaneId.Editor      // Output
+      PaneId.next PaneId.Editor      // Tests
+      PaneId.next PaneId.Tests       // Output
     ]
     Expect.equal sequence
-      [ PaneId.Sessions; PaneId.Context; PaneId.Diagnostics; PaneId.Editor; PaneId.Output ]
-      "next should cycle Output->Sessions->Context->Diag->Editor->Output"
+      [ PaneId.Sessions; PaneId.Context; PaneId.Diagnostics; PaneId.Editor; PaneId.Tests; PaneId.Output ]
+      "next should cycle Output->Sessions->Context->Diag->Editor->Tests->Output"
   }
 ]
 

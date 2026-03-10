@@ -1540,6 +1540,15 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
               LiveTestingSummary = testingSummary
               MemoryMB = memoryMB }
             : SageFs.Features.HealthSnapshot)
+    GetFailureNarratives = fun () ->
+      let model = elmRuntime.GetModel()
+      let testState = model.LiveTesting.TestState
+      testState.FailureNarratives
+      |> Map.toList
+      |> List.choose (fun (testId, narrative) ->
+        testState.DiscoveredTests
+        |> Array.tryFind (fun tc -> tc.Id = testId)
+        |> Option.map (fun tc -> tc.DisplayName, narrative))
   }
 
   let dashboardActions : DashboardActions = {

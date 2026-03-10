@@ -254,6 +254,10 @@ let createStreamHandler
         match q.GetDaemonHealth() with
         | Some snap -> renderDaemonHealth (DaemonHealthView.fromSnapshot snap)
         | None -> Elem.div [ Attr.id DomIds.DaemonHealth; Attr.class' "meta" ] []
+      // Build failure narratives panel
+      let failureNarrativesPanel =
+        let pairs = q.GetFailureNarratives()
+        renderFailureNarratives (FailureNarrativesPanelView.fromNarratives pairs)
       // Resolve theme
       let themeName =
         match resolveThemePush infra.SessionThemes currentSessionId workingDir lastSessionId lastWorkingDir with
@@ -365,6 +369,7 @@ let createStreamHandler
         WarmupProgress = q.GetWarmupProgress currentSessionId
         EvalStats = evalStatsView
         DaemonHealth = daemonHealthPanel
+        FailureNarrativesPanel = failureNarrativesPanel
         ThemeName = themeName
         ConnectionLabel = connectionLabel
         HotReloadPanel = hrPanel

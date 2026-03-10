@@ -104,9 +104,9 @@ let paneIdTests = testList "PaneId" [
     Expect.equal current PaneId.Output "should cycle back to start"
   }
 
-  test "next from Editor wraps to Output" {
+  test "next from Editor wraps to Tests" {
     let result = PaneId.next PaneId.Editor
-    Expect.equal result PaneId.Output "Editor -> Output"
+    Expect.equal result PaneId.Tests "Editor -> Tests"
   }
 
   test "displayName returns human-readable names" {

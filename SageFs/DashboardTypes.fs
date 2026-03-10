@@ -8,6 +8,7 @@ open System.Text.RegularExpressions
 open SageFs
 open SageFs.Utils
 open SageFs.Affordances
+open SageFs.Features.LiveTesting
 open Falco.Markup
 open Falco.Datastar
 open StarFederation.Datastar.FSharp
@@ -43,6 +44,7 @@ module DomIds =
   let [<Literal>] SidebarResize = "sidebar-resize"
   let [<Literal>] BindingsPanel = "bindings-panel"
   let [<Literal>] DaemonHealth = "daemon-health"
+  let [<Literal>] FailureNarratives = "failure-narratives"
 
 /// Datastar signal names — shared between Ds.signal init and Ds.bind/Ds.show refs.
 [<RequireQualifiedAccess>]
@@ -198,6 +200,50 @@ module DaemonHealthView =
       SessionSummaries = snap.SessionSummaries
       TestsPassed = testsPassed
       TestsFailed = testsFailed }
+
+/// A single failure narrative entry for the dashboard panel.
+type FailureNarrativeEntry = {
+  TestName: string
+  Summary: string
+  /// Formatted time since the test last passed (e.g. "5 minutes ago"), if known.
+  TimeSinceLabel: string option
+  /// Human-readable causal change labels (e.g. "symbol: Foo.bar", "file: Baz.fs").
+  CausalLabels: string list
+  HasPropertyViolation: bool
+}
+
+module FailureNarrativeEntry =
+  /// Format a TimeSpan into a human-readable "ago" label.
+  let formatTimeSince (ts: TimeSpan option) : string option =
+    match ts with
+    | None -> None
+    | Some ts when ts.TotalSeconds < 60.0 -> Some "just now"
+    | Some ts when ts.TotalMinutes < 60.0 -> Some (sprintf "%d minutes ago" (int ts.TotalMinutes))
+    | Some ts -> Some (sprintf "%d hours ago" (int ts.TotalHours))
+
+  let private formatCausalChange (cc: Features.LiveTesting.CausalChange) : string =
+    match cc with
+    | Features.LiveTesting.CausalChange.SymbolChanged sym -> sprintf "symbol: %s" sym
+    | Features.LiveTesting.CausalChange.FileChanged (file: string) -> sprintf "file: %s" (System.IO.Path.GetFileName file)
+    | Features.LiveTesting.CausalChange.Unknown -> "unknown change"
+
+  /// Build a FailureNarrativeEntry from a test name and its FailureNarrative.
+  let fromNarrative (testName: string) (narrative: Features.LiveTesting.FailureNarrative) : FailureNarrativeEntry =
+    { TestName = testName
+      Summary = narrative.Summary
+      TimeSinceLabel = formatTimeSince narrative.TimeSinceLastPass
+      CausalLabels = narrative.CausalChanges |> List.map formatCausalChange
+      HasPropertyViolation = narrative.PropertyViolation.IsSome }
+
+/// View model for the failure narratives dashboard panel.
+type FailureNarrativesPanelView = {
+  Entries: FailureNarrativeEntry list
+}
+
+module FailureNarrativesPanelView =
+  /// Build from a list of (testName, FailureNarrative) pairs.
+  let fromNarratives (pairs: (string * Features.LiveTesting.FailureNarrative) list) : FailureNarrativesPanelView =
+    { Entries = pairs |> List.map (fun (name, narr) -> FailureNarrativeEntry.fromNarrative name narr) }
 
 /// Pipeline stage outcome — success or failure with an error message.
 [<Struct>]
@@ -435,6 +481,8 @@ type DashboardQueries = {
   GetEvalTimeline: unit -> Features.EvalTimeline.TimelineStats
   /// Read current daemon health snapshot from the shared feature push state.
   GetDaemonHealth: unit -> Features.HealthSnapshot option
+  /// Read current failure narratives from live test state — (testName, narrative) pairs.
+  GetFailureNarratives: unit -> (string * Features.LiveTesting.FailureNarrative) list
 }
 
 /// Commands that mutate session state.
@@ -468,6 +516,7 @@ type DashboardSnapshot = {
   WarmupProgress: string
   EvalStats: EvalStatsView
   DaemonHealth: XmlNode
+  FailureNarrativesPanel: XmlNode
   ThemeName: string
   ConnectionLabel: string option
   HotReloadPanel: XmlNode
