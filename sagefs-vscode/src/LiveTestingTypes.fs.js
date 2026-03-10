@@ -6,6 +6,7 @@ import { FSharpSet__get_Count, difference, ofArray, empty as empty_1 } from "./f
 import { map, fold } from "./fable_modules/fable-library-js.4.29.0/Array.js";
 import { choose, singleton } from "./fable_modules/fable-library-js.4.29.0/List.js";
 import { empty as empty_2, singleton as singleton_1, append, delay, toList } from "./fable_modules/fable-library-js.4.29.0/Seq.js";
+import { printf, toText, join } from "./fable_modules/fable-library-js.4.29.0/String.js";
 
 export class VscTestOutcome extends Union {
     constructor(tag, fields) {
@@ -290,8 +291,46 @@ export function VscStateChange_$reflection() {
     return union_type("SageFs.Vscode.LiveTestingTypes.VscStateChange", [], VscStateChange, () => [[["Item", array_type(VscTestInfo_$reflection())]], [["Item", array_type(VscTestId_$reflection())]], [["Item", array_type(VscTestResult_$reflection())]], [["Item", VscResultFreshness_$reflection()]], [["Item", VscLiveTestingEnabled_$reflection()]], [["Item1", VscTestCategory_$reflection()], ["Item2", VscRunPolicy_$reflection()]], [["treeSitterMs", float64_type], ["fcsMs", float64_type], ["executionMs", float64_type]], [["Item", class_type("Microsoft.FSharp.Collections.FSharpMap`2", [string_type, VscFileCoverage_$reflection()])]], [["Item", VscTestSummary_$reflection()]]]);
 }
 
+export class VscCausalChange extends Record {
+    constructor(Kind, Name) {
+        super();
+        this.Kind = Kind;
+        this.Name = Name;
+    }
+}
+
+export function VscCausalChange_$reflection() {
+    return record_type("SageFs.Vscode.LiveTestingTypes.VscCausalChange", [], VscCausalChange, () => [["Kind", string_type], ["Name", string_type]]);
+}
+
+export class VscFailureNarrative extends Record {
+    constructor(TestId, Summary, TimeSinceLastPass, CausalChanges) {
+        super();
+        this.TestId = TestId;
+        this.Summary = Summary;
+        this.TimeSinceLastPass = TimeSinceLastPass;
+        this.CausalChanges = CausalChanges;
+    }
+}
+
+export function VscFailureNarrative_$reflection() {
+    return record_type("SageFs.Vscode.LiveTestingTypes.VscFailureNarrative", [], VscFailureNarrative, () => [["TestId", string_type], ["Summary", string_type], ["TimeSinceLastPass", string_type], ["CausalChanges", array_type(VscCausalChange_$reflection())]]);
+}
+
+export class VscDiagnosisFailure extends Record {
+    constructor(TestName, CausalSymbols) {
+        super();
+        this.TestName = TestName;
+        this.CausalSymbols = CausalSymbols;
+    }
+}
+
+export function VscDiagnosisFailure_$reflection() {
+    return record_type("SageFs.Vscode.LiveTestingTypes.VscDiagnosisFailure", [], VscDiagnosisFailure, () => [["TestName", string_type], ["CausalSymbols", array_type(string_type)]]);
+}
+
 export class VscLiveTestState extends Record {
-    constructor(Tests, Results, Coverage, RunningTests, Policies, Enabled, LastTiming, Freshness) {
+    constructor(Tests, Results, Coverage, RunningTests, Policies, Enabled, LastTiming, Freshness, FailureNarratives) {
         super();
         this.Tests = Tests;
         this.Results = Results;
@@ -301,11 +340,12 @@ export class VscLiveTestState extends Record {
         this.Enabled = Enabled;
         this.LastTiming = LastTiming;
         this.Freshness = Freshness;
+        this.FailureNarratives = FailureNarratives;
     }
 }
 
 export function VscLiveTestState_$reflection() {
-    return record_type("SageFs.Vscode.LiveTestingTypes.VscLiveTestState", [], VscLiveTestState, () => [["Tests", class_type("Microsoft.FSharp.Collections.FSharpMap`2", [VscTestId_$reflection(), VscTestInfo_$reflection()])], ["Results", class_type("Microsoft.FSharp.Collections.FSharpMap`2", [VscTestId_$reflection(), VscTestResult_$reflection()])], ["Coverage", class_type("Microsoft.FSharp.Collections.FSharpMap`2", [string_type, VscFileCoverage_$reflection()])], ["RunningTests", class_type("Microsoft.FSharp.Collections.FSharpSet`1", [VscTestId_$reflection()])], ["Policies", class_type("Microsoft.FSharp.Collections.FSharpMap`2", [VscTestCategory_$reflection(), VscRunPolicy_$reflection()])], ["Enabled", VscLiveTestingEnabled_$reflection()], ["LastTiming", option_type(tuple_type(float64_type, float64_type, float64_type))], ["Freshness", VscResultFreshness_$reflection()]]);
+    return record_type("SageFs.Vscode.LiveTestingTypes.VscLiveTestState", [], VscLiveTestState, () => [["Tests", class_type("Microsoft.FSharp.Collections.FSharpMap`2", [VscTestId_$reflection(), VscTestInfo_$reflection()])], ["Results", class_type("Microsoft.FSharp.Collections.FSharpMap`2", [VscTestId_$reflection(), VscTestResult_$reflection()])], ["Coverage", class_type("Microsoft.FSharp.Collections.FSharpMap`2", [string_type, VscFileCoverage_$reflection()])], ["RunningTests", class_type("Microsoft.FSharp.Collections.FSharpSet`1", [VscTestId_$reflection()])], ["Policies", class_type("Microsoft.FSharp.Collections.FSharpMap`2", [VscTestCategory_$reflection(), VscRunPolicy_$reflection()])], ["Enabled", VscLiveTestingEnabled_$reflection()], ["LastTiming", option_type(tuple_type(float64_type, float64_type, float64_type))], ["Freshness", VscResultFreshness_$reflection()], ["FailureNarratives", class_type("Microsoft.FSharp.Collections.FSharpMap`2", [string_type, VscFailureNarrative_$reflection()])]]);
 }
 
 export const VscLiveTestStateModule_empty = new VscLiveTestState(empty({
@@ -318,7 +358,9 @@ export const VscLiveTestStateModule_empty = new VscLiveTestState(empty({
     Compare: compare,
 }), empty({
     Compare: compare,
-}), new VscLiveTestingEnabled(1, []), undefined, new VscResultFreshness(0, []));
+}), new VscLiveTestingEnabled(1, []), undefined, new VscResultFreshness(0, []), empty({
+    Compare: comparePrimitives,
+}));
 
 /**
  * Pure fold: event → state → (new state * changes for UI)
@@ -330,14 +372,14 @@ export function VscLiveTestStateModule_update(event, state) {
             const running = ofArray(ids, {
                 Compare: compare,
             });
-            return [new VscLiveTestState(state.Tests, fold((m_1, id) => add(id, new VscTestResult(id, new VscTestOutcome(3, []), undefined, undefined), m_1), state.Results, ids), state.Coverage, running, state.Policies, state.Enabled, state.LastTiming, new VscResultFreshness(0, [])), singleton(new VscStateChange(1, [ids]))];
+            return [new VscLiveTestState(state.Tests, fold((m_1, id) => add(id, new VscTestResult(id, new VscTestOutcome(3, []), undefined, undefined), m_1), state.Results, ids), state.Coverage, running, state.Policies, state.Enabled, state.LastTiming, new VscResultFreshness(0, []), state.FailureNarratives), singleton(new VscStateChange(1, [ids]))];
         }
         case 2: {
             const results_1 = event.fields[0];
             const freshness = event.fields[1];
             return [new VscLiveTestState(state.Tests, fold((m_2, r) => add(r.Id, r, m_2), state.Results, results_1), state.Coverage, difference(state.RunningTests, ofArray(map((r_1) => r_1.Id, results_1), {
                 Compare: compare,
-            })), state.Policies, state.Enabled, state.LastTiming, freshness), toList(delay(() => append(singleton_1(new VscStateChange(2, [results_1])), delay(() => {
+            })), state.Policies, state.Enabled, state.LastTiming, freshness, state.FailureNarratives), toList(delay(() => append(singleton_1(new VscStateChange(2, [results_1])), delay(() => {
                 if (freshness.tag === 0) {
                     return empty_2();
                 }
@@ -347,27 +389,27 @@ export function VscLiveTestStateModule_update(event, state) {
             }))))];
         }
         case 3:
-            return [new VscLiveTestState(state.Tests, state.Results, state.Coverage, state.RunningTests, state.Policies, new VscLiveTestingEnabled(0, []), state.LastTiming, state.Freshness), singleton(new VscStateChange(4, [new VscLiveTestingEnabled(0, [])]))];
+            return [new VscLiveTestState(state.Tests, state.Results, state.Coverage, state.RunningTests, state.Policies, new VscLiveTestingEnabled(0, []), state.LastTiming, state.Freshness, state.FailureNarratives), singleton(new VscStateChange(4, [new VscLiveTestingEnabled(0, [])]))];
         case 4:
-            return [new VscLiveTestState(state.Tests, state.Results, state.Coverage, state.RunningTests, state.Policies, new VscLiveTestingEnabled(1, []), state.LastTiming, state.Freshness), singleton(new VscStateChange(4, [new VscLiveTestingEnabled(1, [])]))];
+            return [new VscLiveTestState(state.Tests, state.Results, state.Coverage, state.RunningTests, state.Policies, new VscLiveTestingEnabled(1, []), state.LastTiming, state.Freshness, state.FailureNarratives), singleton(new VscStateChange(4, [new VscLiveTestingEnabled(1, [])]))];
         case 5: {
             const pol = event.fields[1];
             const cat = event.fields[0];
-            return [new VscLiveTestState(state.Tests, state.Results, state.Coverage, state.RunningTests, add(cat, pol, state.Policies), state.Enabled, state.LastTiming, state.Freshness), singleton(new VscStateChange(5, [cat, pol]))];
+            return [new VscLiveTestState(state.Tests, state.Results, state.Coverage, state.RunningTests, add(cat, pol, state.Policies), state.Enabled, state.LastTiming, state.Freshness, state.FailureNarratives), singleton(new VscStateChange(5, [cat, pol]))];
         }
         case 6: {
             const ts = event.fields[0];
             const fcs = event.fields[1];
             const exec = event.fields[2];
-            return [new VscLiveTestState(state.Tests, state.Results, state.Coverage, state.RunningTests, state.Policies, state.Enabled, [ts, fcs, exec], state.Freshness), singleton(new VscStateChange(6, [ts, fcs, exec]))];
+            return [new VscLiveTestState(state.Tests, state.Results, state.Coverage, state.RunningTests, state.Policies, state.Enabled, [ts, fcs, exec], state.Freshness, state.FailureNarratives), singleton(new VscStateChange(6, [ts, fcs, exec]))];
         }
         case 7: {
             const cov = event.fields[0];
-            return [new VscLiveTestState(state.Tests, state.Results, cov, state.RunningTests, state.Policies, state.Enabled, state.LastTiming, state.Freshness), singleton(new VscStateChange(7, [cov]))];
+            return [new VscLiveTestState(state.Tests, state.Results, cov, state.RunningTests, state.Policies, state.Enabled, state.LastTiming, state.Freshness, state.FailureNarratives), singleton(new VscStateChange(7, [cov]))];
         }
         default: {
             const tests = event.fields[0];
-            return [new VscLiveTestState(fold((m, t) => add(t.Id, t, m), state.Tests, tests), state.Results, state.Coverage, state.RunningTests, state.Policies, state.Enabled, state.LastTiming, state.Freshness), singleton(new VscStateChange(0, [tests]))];
+            return [new VscLiveTestState(fold((m, t) => add(t.Id, t, m), state.Tests, tests), state.Results, state.Coverage, state.RunningTests, state.Policies, state.Enabled, state.LastTiming, state.Freshness, state.FailureNarratives), singleton(new VscStateChange(0, [tests]))];
         }
     }
 }
@@ -444,5 +486,39 @@ export function VscLiveTestStateModule_testsForFile(filePath, state) {
  */
 export function VscLiveTestStateModule_resultFor(testId, state) {
     return tryFind(testId, state.Results);
+}
+
+/**
+ * Look up a failure narrative by test ID string
+ */
+export function VscLiveTestStateModule_narrativeFor(testIdStr, state) {
+    return tryFind(testIdStr, state.FailureNarratives);
+}
+
+/**
+ * Format causal context from a failure narrative into a short inline suffix string.
+ * Returns "" when narrative has nothing worth displaying.
+ * Examples:
+ * "— because validateToken changed (12m ago)"
+ * "— validateToken signature changed (unknown)"
+ * "— Test started failing after module reload"
+ */
+export function renderNarrativeText(n) {
+    const symbols = join(", ", map((c_1) => c_1.Name, n.CausalChanges.filter((c) => (c.Kind === "symbol"))));
+    const matchValue = n.TimeSinceLastPass;
+    if (symbols === "") {
+        if (matchValue === "") {
+            return toText(printf(" — %s"))(n.Summary);
+        }
+        else {
+            return toText(printf(" — %s (%s ago)"))(n.Summary)(matchValue);
+        }
+    }
+    else if (matchValue === "") {
+        return toText(printf(" — because %s changed"))(symbols);
+    }
+    else {
+        return toText(printf(" — because %s changed (%s ago)"))(symbols)(matchValue);
+    }
 }
 

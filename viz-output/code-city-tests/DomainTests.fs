@@ -45,6 +45,31 @@ let mkFuncInModule moduleName name callRefs body =
     CallRefs = callRefs
     CallSites = [] }
 
+let private mkSampleBuilding name buildingType lineCount heat callers callees complexity ageDays commitCount terrainY =
+  let func =
+    { mkFunc name "TestMod" with
+        QualifiedName = sprintf "TestMod.%s" name
+        LineCount = lineCount
+        EndLine = lineCount }
+  { Func = func
+    Heat = heat
+    CallerCount = callers
+    CalleeCount = callees
+    Complexity = complexity
+    BuildingType = buildingType
+    GitAgeDays = ageDays
+    GitCommitCount = commitCount
+    X = 0.0f
+    Z = 0.0f
+    W = 4.0f
+    D = 4.0f
+    H = BuildingType.height buildingType lineCount heat
+    Rotation = 0.0f
+    TerrainY = terrainY
+    Color = Color.White
+    RoofColor = Color(80uy, 80uy, 90uy, 255uy)
+    District = "TestMod" }
+
 let private mkDistrict name funcCount totalLines color =
   { Name = name
     FuncCount = funcCount
@@ -1096,6 +1121,41 @@ let compoundShapeTests =
         let fill = footprintFillRatio 1.0f cubes
         (fill <= 0.72)
         |> Expect.isTrue (sprintf "%s should stay porous, got fill ratio %.3f" seed fill)
+  ]
+
+let typedMassingTests =
+  testList "Typed building massing" [
+    testCase "shed massing stays a single simple volume" <| fun () ->
+      let cubes = generateTypedCompound "Test.shed" Shed 18 10.0f 8.0f
+      cubes |> Expect.hasLength "sheds should stay legible as a single authored mass" 1
+
+    testCase "typed massing remains deterministic" <| fun () ->
+      let left = generateTypedCompound "Test.tower" Tower 42 12.0f 10.0f
+      let right = generateTypedCompound "Test.tower" Tower 42 12.0f 10.0f
+      left |> Expect.equal "typed massing should stay deterministic" right
+
+    testCase "rowhouse massing prefers a linear footprint" <| fun () ->
+      let cubes = generateTypedCompound "Test.row" Rowhouse 30 14.0f 5.5f
+      let minX, maxX, minZ, maxZ =
+        cubes
+        |> Array.fold (fun (minX, maxX, minZ, maxZ) cube ->
+            (min minX (cube.CX - cube.HW),
+             max maxX (cube.CX + cube.HW),
+             min minZ (cube.CZ - cube.HD),
+             max maxZ (cube.CZ + cube.HD)))
+            (Single.PositiveInfinity, Single.NegativeInfinity, Single.PositiveInfinity, Single.NegativeInfinity)
+      let aspect = (maxX - minX) / max 0.1f (maxZ - minZ)
+      (aspect, 1.7f) |> Expect.isGreaterThan "rowhouses should read as elongated streetwall masses"
+
+    testCase "skyscraper massing creates a tall shaft over a broader podium" <| fun () ->
+      let cubes = generateTypedCompound "Test.scraper" Skyscraper 50 12.0f 12.0f
+      (cubes.Length, 2) |> Expect.isGreaterThanOrEqual "skyscraper should have at least a podium and shaft"
+      let tallest = cubes |> Array.maxBy _.HeightScale
+      let broadest = cubes |> Array.maxBy (fun cube -> cube.HW * cube.HD)
+      (broadest.HW * broadest.HD, tallest.HW * tallest.HD)
+      |> Expect.isGreaterThan "podium footprint should exceed shaft footprint"
+      (tallest.HeightScale, broadest.HeightScale)
+      |> Expect.isGreaterThan "shaft should rise above the podium"
   ]
 
 let cameraMovementTests =
@@ -4930,6 +4990,88 @@ let semanticTerrainTests =
       (high, edge) |> Expect.isGreaterThan "perimeter controls should pull terrain back down near the city edge"
   ]
 
+let repeatedSideConnectorTests =
+  testList "repeated side connector pruning" [
+    testCase "near-parallel bypass linking two successive corridor anchors is flagged" <| fun () ->
+      let roads =
+        [ mkRoad 0.0f 0.0f 10.0f 0.0f 0.4f
+          mkRoad 10.0f 0.0f 20.0f 0.0f 0.4f
+          mkRoad 20.0f 0.0f 30.0f 0.0f 0.4f
+          mkRoad 10.2f 0.30f 19.8f 0.30f 0.4f ]
+      repeatedSideConnectorRoadIndices roads
+      |> Set.contains 3
+      |> Expect.isTrue "split-edge style bypass should be identified for pruning"
+
+    testCase "single-anchor side spur is preserved" <| fun () ->
+      let roads =
+        [ mkRoad 0.0f 0.0f 10.0f 0.0f 0.4f
+          mkRoad 10.0f 0.0f 20.0f 0.0f 0.4f
+          mkRoad 20.0f 0.0f 30.0f 0.0f 0.4f
+          mkRoad 10.0f 0.0f 10.4f 3.0f 0.4f ]
+      repeatedSideConnectorRoadIndices roads
+      |> Expect.isEmpty "single-anchor spur should not be treated as a zipper-style repeated bypass"
+  ]
+
+let codeHealthMetricTests =
+  testList "code health metrics" [
+    testCase "packAlongRoads carries git commit counts into buildings" <| fun () ->
+      let rect = { X = 0.0f; Z = 0.0f; W = 20.0f; H = 20.0f }
+      let roads = [ mkRoad 10.0f 0.0f 10.0f 20.0f 0.4f ]
+      let funcs = [ { mkFunc "metricF" "MetricMod" with FilePath = "MetricMod.fs" } ]
+      let gitMeta =
+        Map.ofList [
+          "MetricMod.fs",
+            { CommitCount = 17
+              FirstCommitDate = DateTimeOffset.Now.AddDays(-200.0)
+              LastCommitDate = DateTimeOffset.Now.AddDays(-2.0) } ]
+      let building =
+        packAlongRoads roads rect funcs Map.empty (Color(70uy, 130uy, 180uy, 255uy)) (Random 1) gitMeta
+        |> List.head
+      building.GitCommitCount |> Expect.equal "git commit count should survive into building metrics" 17
+
+    testCase "computeCodeHealthSignals favors heavily connected hot code over calm code" <| fun () ->
+      let hot =
+        mkSampleBuilding "hot" Tower 180 0.92f 28 16 14 14.0f 32 1.0f
+      let calm =
+        mkSampleBuilding "calm" Cottage 40 0.10f 1 1 2 240.0f 2 0.2f
+      let hotSignals = computeCodeHealthSignals hot
+      let calmSignals = computeCodeHealthSignals calm
+      (hotSignals.BlastRadius, calmSignals.BlastRadius)
+      |> Expect.isGreaterThan "hot connected code should have larger blast radius"
+      (hotSignals.RiskScore, calmSignals.RiskScore)
+      |> Expect.isGreaterThan "hot connected code should read as riskier overall"
+
+    testCase "computeCodeHealthSignals raises churn pressure for recent frequently touched code" <| fun () ->
+      let active =
+        mkSampleBuilding "active" Commercial 90 0.45f 6 4 8 6.0f 40 0.6f
+      let dormant =
+        mkSampleBuilding "dormant" Commercial 90 0.45f 6 4 8 500.0f 1 0.6f
+      let activeSignals = computeCodeHealthSignals active
+      let dormantSignals = computeCodeHealthSignals dormant
+      (activeSignals.ChurnPressure, dormantSignals.ChurnPressure)
+      |> Expect.isGreaterThan "recent high-commit code should register higher churn pressure"
+  ]
+
+let terrainOverlaySummaryTests =
+  testList "terrain overlay summary" [
+    testCase "empty terrain summary returns none" <| fun () ->
+      summarizeTerrainOverlay []
+      |> Expect.isNone "no buildings means no terrain overlay summary"
+
+    testCase "terrain summary captures relief range and band counts" <| fun () ->
+      let buildings =
+        [ mkSampleBuilding "basin" Cottage 30 0.1f 1 1 2 180.0f 4 0.2f
+          mkSampleBuilding "shelf" Rowhouse 80 0.3f 3 2 4 120.0f 9 1.0f
+          mkSampleBuilding "ridge" Tower 180 0.8f 10 6 12 30.0f 21 2.4f ]
+      let summary =
+        summarizeTerrainOverlay buildings
+        |> Option.defaultWith (fun () -> failtest "expected terrain summary")
+      summary.MinHeight |> Expect.equal "minimum terrain should reflect basin floor" 0.2f
+      summary.MaxHeight |> Expect.equal "maximum terrain should reflect ridge crest" 2.4f
+      (summary.BasinCount, summary.ShelfCount, summary.RidgeCount)
+      |> Expect.equal "one building should land in each relief band" (1, 1, 1)
+  ]
+
 let visibleRoadNetworkTests =
   testList "visible road network" [
     testCase "project-zone scaffolding is not rendered as a visible road" <| fun () ->
@@ -5029,6 +5171,7 @@ let allTests =
     projectAwareParsingTests
     roadCurveTests
     compoundShapeTests
+    typedMassingTests
     cameraMovementTests
     visualDefaultsTests
     roadAccessTests
@@ -5055,12 +5198,15 @@ let allTests =
     arcFormulaTests
     splineSegmentTests
     districtOverlayPlanningTests
+    terrainOverlaySummaryTests
     buildingTypeAlphaTests
     complexityFootprintTests
     gableRoofTests
     orientedBuildingGeometryTests
     interDistrictRoadTests
     semanticTerrainTests
+    repeatedSideConnectorTests
+    codeHealthMetricTests
     visibleRoadNetworkTests
     nightScaleTests
     parseDaemonInfoJsonTests

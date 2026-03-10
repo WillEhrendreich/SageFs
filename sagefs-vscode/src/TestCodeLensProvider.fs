@@ -11,6 +11,10 @@ let mutable testState : LiveTestingTypes.VscLiveTestState = LiveTestingTypes.Vsc
 /// Mutable state: failure narratives by test id.
 let mutable narrativeState : Map<string, LiveTestingTypes.VscFailureNarrative> = Map.empty
 
+/// Mutable state: diagnosis failures by test full name, from diagnosis_ready events.
+/// Maps test full name → causal symbols that caused the failure.
+let mutable diagnosisState : Map<string, string array> = Map.empty
+
 /// Event emitter to signal CodeLens refresh
 let changeEmitter = newEventEmitter<obj> ()
 
@@ -25,6 +29,15 @@ let updateState (state: LiveTestingTypes.VscLiveTestState) =
 /// Update narrative state and refresh CodeLens
 let updateNarratives (narratives: Map<string, LiveTestingTypes.VscFailureNarrative>) =
   narrativeState <- narratives
+  refresh ()
+
+/// Update diagnosis state and refresh CodeLens.
+/// Call this when a diagnosis_ready SSE event arrives with per-failure causal symbols.
+let updateDiagnosis (failures: LiveTestingTypes.VscDiagnosisFailure array) =
+  diagnosisState <-
+    failures
+    |> Array.map (fun f -> f.TestName, f.CausalSymbols)
+    |> Map.ofArray
   refresh ()
 
 /// Format a test result as a CodeLens title
@@ -113,6 +126,18 @@ let create () =
               | _ -> ()
             | _ -> ()
           | None -> ()
+          // Repair CodeLens: shown when diagnosis_ready provides causal symbols for this test
+          match Map.tryFind t.FullName diagnosisState with
+          | Some symbols when symbols.Length > 0 ->
+            let sym = symbols |> String.concat ", "
+            let repairCmd = createObj [
+              "title" ==> sprintf "✦ %s changed → suggest repair" sym
+              "command" ==> "sagefs.suggestRepair"
+              "tooltip" ==> sprintf "Auto-repair: %s\nCaused by: %s" t.DisplayName sym
+              "arguments" ==> [| LiveTestingTypes.VscTestId.value t.Id |]
+            ]
+            lenses.Add(newCodeLens range repairCmd)
+          | _ -> ()
         | None -> ()
       lenses.ToArray()
   ]

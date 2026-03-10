@@ -1,9 +1,10 @@
-import { PromiseBuilder__For_1565554B, PromiseBuilder__Delay_62FBFDE1, PromiseBuilder__Run_212F1D4B } from "./fable_modules/Fable.Promise.3.2.0/Promise.fs.js";
+import { PromiseBuilder__Delay_62FBFDE1, PromiseBuilder__Run_212F1D4B } from "./fable_modules/Fable.Promise.3.2.0/Promise.fs.js";
 import { promise } from "./fable_modules/Fable.Promise.3.2.0/PromiseImpl.fs.js";
-import { rangeDouble } from "./fable_modules/fable-library-js.4.29.0/Range.js";
-import { map, item as item_1 } from "./fable_modules/fable-library-js.4.29.0/Array.js";
 import { getCompletions } from "./SageFsClient.fs.js";
+import { map } from "./fable_modules/fable-library-js.4.29.0/Array.js";
 import { newCompletionItem } from "./Vscode.fs.js";
+import { iterate } from "./fable_modules/fable-library-js.4.29.0/Seq.js";
+import { toArray } from "./fable_modules/fable-library-js.4.29.0/Option.js";
 
 export function kindToVscode(kind) {
     switch (kind) {
@@ -41,19 +42,15 @@ export function create(getClient, getWorkDir) {
             if (matchValue != null) {
                 const c = matchValue;
                 const text = doc.getText();
-                const lines = text.split("\n");
-                let offset = 0;
-                return PromiseBuilder__For_1565554B(promise, rangeDouble(0, 1, ~~pos.line - 1), (_arg) => {
-                    offset = (((offset + item_1(_arg, lines).length) + 1) | 0);
-                    return Promise.resolve();
-                }).then(() => PromiseBuilder__Delay_62FBFDE1(promise, () => {
-                    offset = ((offset + ~~pos.character) | 0);
-                    return getCompletions(text, offset, getWorkDir(), c).then((_arg_1) => (Promise.resolve(map((item) => {
-                        const ci = newCompletionItem(item.label, kindToVscode(item.kind));
-                        ci.insertText = item.insertText;
-                        return ci;
-                    }, _arg_1))));
-                }));
+                const offset = ~~doc.offsetAt(pos) | 0;
+                return getCompletions(text, offset, getWorkDir(), c).then((_arg) => (Promise.resolve(map((item) => {
+                    const ci = newCompletionItem(item.label, kindToVscode(item.kind));
+                    ci.insertText = item.insertText;
+                    iterate((d) => {
+                        ci.detail = d;
+                    }, toArray(item.detail));
+                    return ci;
+                }, _arg))));
             }
             else {
                 return Promise.resolve([]);

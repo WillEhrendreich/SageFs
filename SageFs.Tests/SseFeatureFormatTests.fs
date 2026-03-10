@@ -117,4 +117,56 @@ let sseFeatureFormatTests = testList "SSE Feature Formatters" [
   testCase "formatDomainModelEvent ends with double newline" <| fun _ ->
     SageFs.SseWriter.formatDomainModelEvent opts None []
     |> Expect.stringEnds "domain_model ends \\n\\n" "\n\n"
+
+]
+
+// ── DiagnosisReady per-failure payload helpers ─────────────────────────────────
+let private buildFailure (testName: string) (symbols: string list) : Diagnostician.DiagnosedFailure = {
+  TestId = LiveTesting.TestId.TestId testName
+  TestName = testName
+  Narrative = {
+    LastPassedAt = None
+    TimeSinceLastPass = None
+    CausalChanges = symbols |> List.map LiveTesting.CausalChange.SymbolChanged
+    PropertyViolation = None
+    Summary = sprintf "%s changed" (String.concat ", " symbols)
+  }
+  CausalCells = []
+  Staleness = Map.empty
+}
+
+[<Tests>]
+let sseDiagnosisReadyTests = testList "SSE DiagnosisReady formatter" [
+
+  testCase "formatDiagnosisReadyEvent includes failures array key" <| fun _ ->
+    let result = SageFs.SseWriter.formatDiagnosisReadyEvent opts None Diagnostician.DiagnosticReport.empty
+    result |> Expect.stringContains "should contain failures key" "failures"
+
+  testCase "formatDiagnosisReadyEvent includes per-failure test name" <| fun _ ->
+    let report = { Diagnostician.DiagnosticReport.empty with
+                     Failures = [ buildFailure "MyModule.shouldBoundaryCheck" ["threshold"] ] }
+    let result = SageFs.SseWriter.formatDiagnosisReadyEvent opts (Some "s1") report
+    result |> Expect.stringContains "should contain test name" "MyModule.shouldBoundaryCheck"
+
+  testCase "formatDiagnosisReadyEvent includes causal symbols per failure" <| fun _ ->
+    let report = { Diagnostician.DiagnosticReport.empty with
+                     Failures = [ buildFailure "SomeTest" ["alpha"; "beta"] ] }
+    let result = SageFs.SseWriter.formatDiagnosisReadyEvent opts None report
+    result |> Expect.stringContains "should contain first symbol" "alpha"
+    result |> Expect.stringContains "should contain second symbol" "beta"
+
+  testCase "formatDiagnosisReadyEvent fileChanged excluded from causalSymbols" <| fun _ ->
+    let failure = {
+      buildFailure "SomeTest" [] with
+        Narrative = { (buildFailure "SomeTest" []).Narrative with
+                        CausalChanges = [ LiveTesting.CausalChange.FileChanged "/foo/bar.fs"
+                                          LiveTesting.CausalChange.SymbolChanged "myFn" ] } }
+    let report = { Diagnostician.DiagnosticReport.empty with Failures = [failure] }
+    let result = SageFs.SseWriter.formatDiagnosisReadyEvent opts None report
+    result |> Expect.stringContains "symbol survives" "myFn"
+    (result.Contains("foo/bar.fs")) |> Expect.isFalse "file path excluded from causalSymbols"
+
+  testCase "formatDiagnosisReadyEvent ends with double newline" <| fun _ ->
+    SageFs.SseWriter.formatDiagnosisReadyEvent opts None Diagnostician.DiagnosticReport.empty
+    |> Expect.stringEnds "diagnosis_ready ends \\n\\n" "\n\n"
 ]

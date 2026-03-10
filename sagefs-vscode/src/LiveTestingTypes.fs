@@ -174,6 +174,14 @@ type VscFailureNarrative = {
   CausalChanges: VscCausalChange array
 }
 
+/// Per-failure diagnosis from the diagnosis_ready SSE event.
+/// Carries the test name and the symbols that caused this failure,
+/// so clients can render repair CodeLens without additional round-trips.
+type VscDiagnosisFailure = {
+  TestName: string
+  CausalSymbols: string array
+}
+
 /// Aggregate live testing state — pure data, no functions
 type VscLiveTestState = {
   Tests: Map<VscTestId, VscTestInfo>

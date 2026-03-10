@@ -1,9 +1,9 @@
 import { stringHash, disposeSafe, getEnumerator, createAtom } from "./fable_modules/fable-library-js.4.29.0/Util.js";
 import { newDiagnostic, uriFile, Window_getVisibleTextEditors, newRange, Languages_createDiagnosticCollection, newThemeColor, Window_createTextEditorDecorationType } from "./Vscode.fs.js";
-import { VscLiveTestStateModule_resultFor, VscLiveTestStateModule_testsForFile } from "./LiveTestingTypes.fs.js";
+import { VscTestIdModule_value, VscLiveTestStateModule_narrativeFor, renderNarrativeText, VscLiveTestStateModule_resultFor, VscLiveTestStateModule_testsForFile } from "./LiveTestingTypes.fs.js";
 import { printf, toText } from "./fable_modules/fable-library-js.4.29.0/String.js";
+import { toArray, map, defaultArg } from "./fable_modules/fable-library-js.4.29.0/Option.js";
 import { iterate } from "./fable_modules/fable-library-js.4.29.0/Seq.js";
-import { toArray } from "./fable_modules/fable-library-js.4.29.0/Option.js";
 import { toList, tryFind } from "./fable_modules/fable-library-js.4.29.0/Map.js";
 import { item } from "./fable_modules/fable-library-js.4.29.0/Array.js";
 import { List_groupBy } from "./fable_modules/fable-library-js.4.29.0/Seq2.js";
@@ -119,12 +119,14 @@ export function applyToEditor(state, editor) {
                     const matchValue_1 = r.Outcome;
                     switch (matchValue_1.tag) {
                         case 1: {
-                            const text = toText(printf("✗ %s: %s"))(test.DisplayName)(matchValue_1.fields[0]);
+                            const causalText = defaultArg(map(renderNarrativeText, VscLiveTestStateModule_narrativeFor(VscTestIdModule_value(test.Id), state)), "");
+                            const text = toText(printf("✗ %s: %s%s"))(test.DisplayName)(matchValue_1.fields[0])(causalText);
                             void (failedRanges.push(decorationRange(line, text)));
                             break;
                         }
                         case 4: {
-                            const text_1 = toText(printf("✗ %s: %s"))(test.DisplayName)(matchValue_1.fields[0]);
+                            const causalText_1 = defaultArg(map(renderNarrativeText, VscLiveTestStateModule_narrativeFor(VscTestIdModule_value(test.Id), state)), "");
+                            const text_1 = toText(printf("✗ %s: %s%s"))(test.DisplayName)(matchValue_1.fields[0])(causalText_1);
                             void (failedRanges.push(decorationRange(line, text_1)));
                             break;
                         }

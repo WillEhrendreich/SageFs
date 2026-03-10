@@ -299,7 +299,14 @@ let formatDomainModelEvent (opts: JsonSerializerOptions) (sessionId: string opti
   formatSseEvent "domain_model" json
 
 /// Format a DiagnosticReport as an SSE event string.
+/// Includes per-failure testName + causalSymbols so clients can render repair CodeLens.
 let formatDiagnosisReadyEvent (opts: JsonSerializerOptions) (sessionId: string option) (report: Features.Diagnostician.DiagnosticReport) : string =
+  let extractCausalSymbols (changes: Features.LiveTesting.CausalChange list) =
+    changes
+    |> List.choose (function
+      | Features.LiveTesting.CausalChange.SymbolChanged s -> Some s
+      | _ -> None)
+    |> List.toArray
   let payload =
     {| Severity = sprintf "%A" report.Severity
        FailureCount = report.Failures.Length
@@ -309,6 +316,12 @@ let formatDiagnosisReadyEvent (opts: JsonSerializerOptions) (sessionId: string o
          report.SuggestedFixes
          |> List.truncate 3
          |> List.map (fun s -> {| Code = s.Code; Explanation = s.Explanation; Confidence = s.Confidence |})
+       Failures =
+         report.Failures
+         |> List.map (fun f ->
+           {| TestName = f.TestName
+              CausalSymbols = extractCausalSymbols f.Narrative.CausalChanges |})
+         |> List.toArray
        Performance =
          report.PerformanceContext
          |> Option.map (fun s -> {| Sparkline = s.Sparkline; P50Ms = s.P50Ms; P95Ms = s.P95Ms |})

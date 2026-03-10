@@ -1,9 +1,9 @@
 import { Record } from "./fable_modules/fable-library-js.4.29.0/Types.js";
 import { record_type, array_type, bool_type, string_type } from "./fable_modules/fable-library-js.4.29.0/Reflection.js";
-import { equalArrays, comparePrimitives, stringHash, defaultOf, createAtom } from "./fable_modules/fable-library-js.4.29.0/Util.js";
+import { equals, defaultOf, equalArrays, comparePrimitives, stringHash, createAtom } from "./fable_modules/fable-library-js.4.29.0/Util.js";
 import { printf, toText, substring, replace } from "./fable_modules/fable-library-js.4.29.0/String.js";
-import { Commands_registerCommand, Window_createTreeView, newEventEmitter, newThemeColor, newTreeItem } from "./Vscode.fs.js";
-import { item as item_1, equalsWith, map, sortBy } from "./fable_modules/fable-library-js.4.29.0/Array.js";
+import { Commands_registerCommand, Window_createTreeView, newEventEmitter, newThemeIcon, newTreeItem } from "./Vscode.fs.js";
+import { item as item_2, equalsWith, map, sortBy } from "./fable_modules/fable-library-js.4.29.0/Array.js";
 import { Array_groupBy } from "./fable_modules/fable-library-js.4.29.0/Seq2.js";
 import { PromiseBuilder__Delay_62FBFDE1, PromiseBuilder__Run_212F1D4B } from "./fable_modules/Fable.Promise.3.2.0/Promise.fs.js";
 import { some, defaultArg, value as value_2 } from "./fable_modules/fable-library-js.4.29.0/Option.js";
@@ -38,34 +38,36 @@ export let treeView = createAtom(undefined);
 
 export let autoRefreshTimer = createAtom(undefined);
 
+export let isLoading = createAtom(false);
+
 export function getDirectory(path) {
-    if (path === defaultOf()) {
+    if ((path == null)) {
         return "";
     }
     else {
         const normalized = replace(path, "\\", "/");
-        const matchValue = normalized.lastIndexOf("/") | 0;
-        if (matchValue === -1) {
+        const matchValue_1 = normalized.lastIndexOf("/") | 0;
+        if (matchValue_1 === -1) {
             return "";
         }
         else {
-            return substring(normalized, 0, matchValue);
+            return substring(normalized, 0, matchValue_1);
         }
     }
 }
 
 export function getFileName(path) {
-    if (path === defaultOf()) {
+    if ((path == null)) {
         return "";
     }
     else {
         const normalized = replace(path, "\\", "/");
-        const matchValue = normalized.lastIndexOf("/") | 0;
-        if (matchValue === -1) {
+        const matchValue_1 = normalized.lastIndexOf("/") | 0;
+        if (matchValue_1 === -1) {
             return normalized;
         }
         else {
-            return substring(normalized, matchValue + 1);
+            return substring(normalized, matchValue_1 + 1);
         }
     }
 }
@@ -74,7 +76,7 @@ export function createDirItem(dirPath, childCount, watchedCount) {
     const item = newTreeItem((dirPath === "") ? "(root)" : dirPath, 2);
     item.contextValue = "directory";
     item.description = toText(printf("%d/%d watched"))(watchedCount)(childCount);
-    item.iconPath = newThemeColor("symbolIcon.folderForeground");
+    item.iconPath = newThemeIcon("folder");
     item.command = {
         command: "sagefs.hotReloadToggleDirectory",
         title: "Toggle Directory",
@@ -94,7 +96,7 @@ export function createFileItem(file) {
         title: "Toggle Hot Reload",
         arguments: [file.path],
     };
-    item.iconPath = newThemeColor(patternInput[2]);
+    item.iconPath = (file.watched ? newThemeIcon("eye") : newThemeIcon("eye-closed"));
     return item;
 }
 
@@ -123,15 +125,19 @@ export function getChildren(element) {
                 return Promise.resolve([]);
             }
         }
+        else if (isLoading()) {
+            const item = newTreeItem("$(loading~spin) Loading...", 0);
+            return Promise.resolve([item]);
+        }
         else {
             const groups = groupByDirectory(cachedFiles());
             if (!equalsWith(equalArrays, groups, defaultOf()) && (groups.length === 0)) {
-                const item = newTreeItem("No session active", 0);
-                item.description = "Start a session to manage hot reload";
-                return Promise.resolve([item]);
+                const item_1 = newTreeItem("No session active", 0);
+                item_1.description = "Start a session to manage hot reload";
+                return Promise.resolve([item_1]);
             }
             else if (!equalsWith(equalArrays, groups, defaultOf()) && (groups.length === 1)) {
-                const files = item_1(0, groups)[1];
+                const files = item_2(0, groups)[1];
                 return Promise.resolve(map(createFileItem, files));
             }
             else {
@@ -158,7 +164,7 @@ export function createProvider() {
         onDidChangeTreeData: emitter.event,
         getChildren: (el) => {
             let x;
-            return getChildren((x = el, (x == null) ? undefined : some(x)));
+            return getChildren((x = el, ((x == null)) ? undefined : some(x)));
         },
         getTreeItem: getTreeItem,
     };
@@ -167,7 +173,7 @@ export function createProvider() {
 export function refresh() {
     const matchValue = currentClient();
     const matchValue_1 = currentSessionId();
-    let matchResult, c, sid;
+    let matchResult, c, sid, c_1, sid_1;
     if (matchValue != null) {
         if (matchValue_1 != null) {
             matchResult = 0;
@@ -176,23 +182,36 @@ export function refresh() {
         }
         else {
             matchResult = 1;
+            c_1 = matchValue;
+            sid_1 = matchValue_1;
         }
     }
     else {
         matchResult = 1;
+        c_1 = matchValue;
+        sid_1 = matchValue_1;
     }
     switch (matchResult) {
         case 0: {
+            c.log(toText(printf("[hotreload] refresh: sessionId=%s"))(sid));
+            isLoading(true);
+            if (refreshEmitter() == null) {
+            }
+            else {
+                const e = refreshEmitter();
+                e.fire(defaultOf());
+            }
             promiseIgnore(PromiseBuilder__Run_212F1D4B(promise, PromiseBuilder__Delay_62FBFDE1(promise, () => (getHotReloadState(sid, c).then((_arg) => {
-                let s;
+                let s, arg_1;
                 const state = _arg;
-                return ((state == null) ? ((cachedFiles([]), Promise.resolve())) : ((s = state, (cachedFiles(s.files), Promise.resolve())))).then(() => PromiseBuilder__Delay_62FBFDE1(promise, () => {
+                return ((state == null) ? ((c.log("[hotreload] getHotReloadState returned None"), (cachedFiles([]), Promise.resolve()))) : ((s = state, (c.log((arg_1 = (s.files.length | 0), toText(printf("[hotreload] got %d files"))(arg_1))), (cachedFiles(s.files), Promise.resolve()))))).then(() => PromiseBuilder__Delay_62FBFDE1(promise, () => {
+                    isLoading(false);
                     if (refreshEmitter() == null) {
                         return Promise.resolve();
                     }
                     else {
-                        const e = refreshEmitter();
-                        e.fire(defaultOf());
+                        const e_1 = refreshEmitter();
+                        e_1.fire(defaultOf());
                         return Promise.resolve();
                     }
                 }));
@@ -200,12 +219,13 @@ export function refresh() {
             break;
         }
         case 1: {
+            isLoading(false);
             cachedFiles([]);
             if (refreshEmitter() == null) {
             }
             else {
-                const e_1 = refreshEmitter();
-                e_1.fire(defaultOf());
+                const e_2 = refreshEmitter();
+                e_2.fire(defaultOf());
             }
             break;
         }
@@ -213,8 +233,31 @@ export function refresh() {
 }
 
 export function setSession(c, sessionId) {
-    currentClient(c);
-    currentSessionId(sessionId);
+    if (equals(currentSessionId(), sessionId)) {
+        currentClient(c);
+    }
+    else {
+        currentClient(c);
+        currentSessionId(sessionId);
+        if (autoRefreshTimer() == null) {
+        }
+        else {
+            const t = value_2(autoRefreshTimer());
+            clearInterval(t);
+            autoRefreshTimer(undefined);
+        }
+        if (sessionId == null) {
+        }
+        else {
+            autoRefreshTimer(some(setInterval((() => {
+                refresh();
+            }), 30000)));
+        }
+        refresh();
+    }
+}
+
+export function stopAutoRefresh() {
     if (autoRefreshTimer() == null) {
     }
     else {
@@ -222,14 +265,6 @@ export function setSession(c, sessionId) {
         clearInterval(t);
         autoRefreshTimer(undefined);
     }
-    if (sessionId == null) {
-    }
-    else {
-        autoRefreshTimer(some(setInterval((() => {
-            refresh();
-        }), 5000)));
-    }
-    refresh();
 }
 
 export function register(ctx) {

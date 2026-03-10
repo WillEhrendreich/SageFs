@@ -17,6 +17,12 @@ export function Window_onDidChangeActiveTextEditor(handler) {
     return window$.onDidChangeActiveTextEditor(handler);
 }
 
+export function Window_onDidChangeTextEditorSelection(handler) {
+    return window$.onDidChangeTextEditorSelection((e) => {
+        handler(e.textEditor);
+    });
+}
+
 export function Window_createOutputChannel(name) {
     return window$.createOutputChannel(name);
 }
@@ -72,6 +78,18 @@ export function Window_showTextDocument(doc) {
     return window$.showTextDocument(doc);
 }
 
+export function Window_showOpenDialog(filters, canSelectMany, title) {
+    return window$.showOpenDialog({
+        filters: filters,
+        canSelectMany: canSelectMany,
+        openLabel: title,
+    });
+}
+
+export function Window_createTerminal(name) {
+    return window$.createTerminal(name);
+}
+
 export function Commands_registerCommand(command, handler) {
     return commands.registerCommand(command, handler);
 }
@@ -117,6 +135,10 @@ export function Workspace_openTextDocument(content, language) {
         content: content,
         language: language,
     });
+}
+
+export function Workspace_openTextDocumentUri(uri) {
+    return workspace.openTextDocument(uri);
 }
 
 export function Languages_registerCodeLensProvider(language, provider) {

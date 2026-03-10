@@ -164,24 +164,42 @@ let private renderDisableWarmupAutoOpenButton (style: string) =
 let renderDaemonHealth (view: DaemonHealthView) =
   let emoji = Features.DaemonHealth.healthEmoji view.OverallHealth
   let label = Features.DaemonHealth.healthLabel view.OverallHealth
+  let isNominal (s: Features.SessionHealthSummary) =
+    match s.Status with
+    | Features.SessionHealthStatus.Ready
+    | Features.SessionHealthStatus.Evaluating
+    | Features.SessionHealthStatus.WarmingUp -> true
+    | Features.SessionHealthStatus.Faulted
+    | Features.SessionHealthStatus.Stopped -> false
+  let sessionSummaryText (summaries: Features.SessionHealthSummary list) =
+    match summaries with
+    | [] -> None
+    | [s] ->
+      Some (sprintf "%s %s [%s]"
+        (Features.DaemonHealth.sessionStatusEmoji s.Status)
+        s.ProjectName
+        (Features.DaemonHealth.sessionStatusLabel s.Status))
+    | _ when summaries.Length <= 3 ->
+      Some (summaries
+        |> List.map (fun s -> sprintf "%s %s" (Features.DaemonHealth.sessionStatusEmoji s.Status) s.ProjectName)
+        |> String.concat " · ")
+    | _ ->
+      let degraded = summaries |> List.filter (not << isNominal)
+      match degraded with
+      | [] -> Some (sprintf "📦 %d sessions · all ready" summaries.Length)
+      | problems ->
+        let names = problems |> List.map (fun s -> s.ProjectName) |> String.concat ", "
+        Some (sprintf "⚠️ %d sessions · %d degraded: %s" summaries.Length problems.Length names)
   Elem.div [ Attr.id DomIds.DaemonHealth; Attr.class' "meta" ] [
     Elem.span [ Attr.style "font-weight: bold;" ] [
       Text.raw (sprintf "%s %s · SageFs %s · up %s · %dMB"
         emoji label view.Version view.UptimeLabel view.MemoryMB)
     ]
-    match view.SessionSummaries with
-    | [] -> ()
-    | summaries ->
+    match sessionSummaryText view.SessionSummaries with
+    | None -> ()
+    | Some txt ->
       Elem.span [ Attr.class' "session-health-list"; Attr.style "margin-left: 0.5rem;" ] [
-        Text.raw (
-          summaries
-          |> List.map (fun s ->
-            sprintf "%s %s [%s] %d evals"
-              (Features.DaemonHealth.sessionStatusEmoji s.Status)
-              s.ProjectName
-              (Features.DaemonHealth.sessionStatusLabel s.Status)
-              s.EvalCount)
-          |> String.concat " · ")
+        Text.raw txt
       ]
     match view.TestsPassed, view.TestsFailed with
     | Some passed, Some failed ->
@@ -194,14 +212,24 @@ let renderDaemonHealth (view: DaemonHealthView) =
 /// Render failure narratives as a dashboard panel — shows recent test failures with context.
 let renderFailureNarratives (view: FailureNarrativesPanelView) =
   Elem.div [ Attr.id DomIds.FailureNarratives; Attr.class' "failure-narratives-panel" ] [
-    match view.Entries with
-    | [] ->
+    match view.TotalFailureCount with
+    | 0 ->
       Elem.span [ Attr.class' "meta no-failures" ] [ Text.raw "✅ no recent failures" ]
-    | entries ->
+    | total ->
+      let badgeText =
+        match view.SuppressedCount with
+        | 0 when view.Entries.Length < total ->
+          sprintf "🔴 %d failure%s · showing top %d" total (if total = 1 then "" else "s") view.Entries.Length
+        | 0 ->
+          sprintf "🔴 %d failure%s" total (if total = 1 then "" else "s")
+        | suppressed when view.Entries.IsEmpty ->
+          sprintf "🔴 %d failure%s · %d have no baseline yet" total (if total = 1 then "" else "s") suppressed
+        | suppressed ->
+          sprintf "🔴 %d failure%s · %d with context · %d no baseline" total (if total = 1 then "" else "s") view.Entries.Length suppressed
       Elem.span [ Attr.class' "failure-count-badge"; Attr.style "font-weight: bold; margin-right: 0.5rem;" ] [
-        Text.raw (sprintf "🔴 %d failure%s" entries.Length (if entries.Length = 1 then "" else "s"))
+        Text.raw badgeText
       ]
-      for entry in entries do
+      for entry in view.Entries do
         Elem.div [ Attr.class' "narrative-entry"; Attr.style "margin-top: 0.25rem;" ] [
           Elem.span [ Attr.class' "narrative-test-name"; Attr.style "font-weight: bold;" ] [
             Text.raw (

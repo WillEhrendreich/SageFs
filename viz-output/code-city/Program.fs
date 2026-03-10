@@ -363,6 +363,7 @@ type FuncBuilding =
     Complexity: int       // McCabe cyclomatic complexity
     BuildingType: BuildingType
     GitAgeDays: float32
+    GitCommitCount: int
     X: float32; Z: float32
     W: float32; D: float32
     H: float32
@@ -3070,6 +3071,210 @@ module BuildingType =
       | Tower      -> max 8.0f  (MathF.Log(lc + 1.0f) * 6.0f + heat * 10.0f)
       | Skyscraper -> max 12.0f (MathF.Log(lc + 1.0f) * 6.5f + heat * 15.0f)
     min 55.0f h
+
+type BuildingMassingProfile =
+  { MaxCubeCount: int
+    MinHeightScale: float32
+    MaxHeightScale: float32
+    Linear: bool
+    PerpendicularCompression: float32
+    PodiumRatio: float32 option
+    ShaftRatio: float32 option
+    ShaftHeightScale: float32 option }
+
+module BuildingMassingProfile =
+  let ofType = function
+    | Shed ->
+        { MaxCubeCount = 1
+          MinHeightScale = 0.55f
+          MaxHeightScale = 0.72f
+          Linear = false
+          PerpendicularCompression = 1.0f
+          PodiumRatio = None
+          ShaftRatio = None
+          ShaftHeightScale = None }
+    | Cottage ->
+        { MaxCubeCount = 2
+          MinHeightScale = 0.62f
+          MaxHeightScale = 0.85f
+          Linear = false
+          PerpendicularCompression = 0.94f
+          PodiumRatio = None
+          ShaftRatio = None
+          ShaftHeightScale = None }
+    | Rowhouse ->
+        { MaxCubeCount = 4
+          MinHeightScale = 0.72f
+          MaxHeightScale = 0.96f
+          Linear = true
+          PerpendicularCompression = 0.62f
+          PodiumRatio = None
+          ShaftRatio = None
+          ShaftHeightScale = None }
+    | Commercial ->
+        { MaxCubeCount = 5
+          MinHeightScale = 0.68f
+          MaxHeightScale = 0.92f
+          Linear = false
+          PerpendicularCompression = 0.90f
+          PodiumRatio = Some 1.04f
+          ShaftRatio = None
+          ShaftHeightScale = None }
+    | Tower ->
+        { MaxCubeCount = 4
+          MinHeightScale = 0.58f
+          MaxHeightScale = 0.84f
+          Linear = false
+          PerpendicularCompression = 0.82f
+          PodiumRatio = Some 1.08f
+          ShaftRatio = Some 0.58f
+          ShaftHeightScale = Some 1.06f }
+    | Skyscraper ->
+        { MaxCubeCount = 3
+          MinHeightScale = 0.52f
+          MaxHeightScale = 0.78f
+          Linear = false
+          PerpendicularCompression = 0.76f
+          PodiumRatio = Some 1.12f
+          ShaftRatio = Some 0.46f
+          ShaftHeightScale = Some 1.14f }
+
+let generateTypedCompound (qualName: string) (buildingType: BuildingType) (complexity: int) (lotHW: float32) (lotHD: float32) : SubCube[] =
+  let baseCompound = generateCompound qualName complexity lotHW lotHD
+  let profile = BuildingMassingProfile.ofType buildingType
+  let dominantAxisIsX = lotHW >= lotHD
+  let capCount =
+    match buildingType with
+    | Shed
+    | Cottage -> min profile.MaxCubeCount (max 1 complexity)
+    | _ -> profile.MaxCubeCount
+  let boundedCube cube =
+    { cube with
+        HW = cube.HW |> max 0.12f |> min lotHW
+        HD = cube.HD |> max 0.12f |> min lotHD }
+  let restyledBase =
+    baseCompound
+    |> Array.sortByDescending (fun cube -> cube.HW * cube.HD)
+    |> Array.truncate capCount
+    |> Array.mapi (fun idx cube ->
+        let compressed =
+          match profile.Linear, dominantAxisIsX with
+          | true, true -> { cube with HD = cube.HD * profile.PerpendicularCompression }
+          | true, false -> { cube with HW = cube.HW * profile.PerpendicularCompression }
+          | false, true when buildingType = Tower || buildingType = Skyscraper ->
+              { cube with HD = cube.HD * profile.PerpendicularCompression }
+          | false, false when buildingType = Tower || buildingType = Skyscraper ->
+              { cube with HW = cube.HW * profile.PerpendicularCompression }
+          | _ -> cube
+        let clampedHeight =
+          if idx = 0 then
+            compressed.HeightScale |> max profile.MaxHeightScale |> min 1.0f
+          else
+            compressed.HeightScale |> max profile.MinHeightScale |> min profile.MaxHeightScale
+        { compressed with HeightScale = clampedHeight }
+        |> boundedCube)
+  match restyledBase.Length with
+  | 0 -> [||]
+  | _ ->
+      let primary = restyledBase.[0]
+      let others = restyledBase |> Array.skip 1
+      let podiumAndShaft =
+        match profile.PodiumRatio, profile.ShaftRatio, profile.ShaftHeightScale with
+        | Some podiumRatio, Some shaftRatio, Some shaftHeight ->
+            let podium =
+              { primary with
+                  HW = primary.HW * podiumRatio |> min lotHW
+                  HD = primary.HD * podiumRatio |> min lotHD
+                  HeightScale = primary.HeightScale |> min 0.72f }
+              |> boundedCube
+            let shaft =
+              { primary with
+                  HW = primary.HW * shaftRatio |> max 0.12f
+                  HD = primary.HD * shaftRatio |> max 0.12f
+                  HeightScale = shaftHeight }
+              |> boundedCube
+            [| podium; shaft |]
+        | Some podiumRatio, None, None ->
+            let podium =
+              { primary with
+                  HW = primary.HW * podiumRatio |> min lotHW
+                  HD = primary.HD * podiumRatio |> min lotHD
+                  HeightScale = primary.HeightScale |> min profile.MaxHeightScale }
+              |> boundedCube
+            [| podium |]
+        | _ -> [| primary |]
+      Array.append podiumAndShaft others
+
+type CodeHealthSignals =
+  { BlastRadius: float32
+    ChurnPressure: float32
+    RiskScore: float32 }
+
+let private logNormalized scale value =
+  let denom = MathF.Log(scale + 1.0f)
+  match denom <= 0.0001f with
+  | true -> 0.0f
+  | false ->
+      value
+      |> max 0.0f
+      |> fun v -> MathF.Log(v + 1.0f) / denom
+      |> min 1.0f
+
+let computeCodeHealthSignals (building: FuncBuilding) =
+  let callerPressure = logNormalized 40.0f (float32 building.CallerCount)
+  let calleePressure = logNormalized 40.0f (float32 building.CalleeCount)
+  let complexityPressure = logNormalized 24.0f (float32 building.Complexity)
+  let commitPressure = logNormalized 60.0f (float32 building.GitCommitCount)
+  let recencyPressure = 1.0f - min 1.0f (building.GitAgeDays / 365.0f)
+  let blastRadius =
+    building.Heat * 0.55f
+    + callerPressure * 0.30f
+    + calleePressure * 0.15f
+    |> min 1.0f
+  let churnPressure =
+    commitPressure * 0.45f
+    + recencyPressure * 0.25f
+    + complexityPressure * 0.30f
+    |> min 1.0f
+  { BlastRadius = blastRadius
+    ChurnPressure = churnPressure
+    RiskScore = min 1.0f (blastRadius * 0.58f + churnPressure * 0.42f) }
+
+type TerrainOverlaySummary =
+  { MinHeight: float32
+    AvgHeight: float32
+    MaxHeight: float32
+    BasinCount: int
+    ShelfCount: int
+    RidgeCount: int }
+
+let summarizeTerrainOverlay (buildings: FuncBuilding list) =
+  match buildings with
+  | [] -> None
+  | _ ->
+      let heights = buildings |> List.map _.TerrainY
+      let minHeight = heights |> List.min
+      let maxHeight = heights |> List.max
+      let avgHeight = heights |> List.average
+      let range = max 0.001f (maxHeight - minHeight)
+      let basinCount, shelfCount, ridgeCount =
+        heights
+        |> List.fold (fun (basins, shelves, ridges) height ->
+            let normalized = (height - minHeight) / range
+            if normalized < 0.33f then
+              basins + 1, shelves, ridges
+            elif normalized < 0.66f then
+              basins, shelves + 1, ridges
+            else
+              basins, shelves, ridges + 1)
+            (0, 0, 0)
+      Some
+        { MinHeight = minHeight
+          AvgHeight = avgHeight
+          MaxHeight = maxHeight
+          BasinCount = basinCount
+          ShelfCount = shelfCount
+          RidgeCount = ridgeCount }
 
 // ─── Git Metadata ────────────────────────────────────────────
 
@@ -5779,7 +5984,7 @@ let private throughCanonicalRoadChains tolerance maxDeflection (roads: Road list
 
   clusters, details
 
-let private pruneRepeatedSideConnectorRoads (roads: Road list) =
+let repeatedSideConnectorRoadIndices (roads: Road list) =
   let tolerance = 0.45f
   let toleranceSq = tolerance * tolerance
   let clusters, details = throughCanonicalRoadChains tolerance 18.0f roads
@@ -5798,71 +6003,108 @@ let private pruneRepeatedSideConnectorRoads (roads: Road list) =
         && detail.TotalLength >= 24.0f)
     |> List.distinctBy (fun detail -> detail.RoadIndices |> Set.ofList)
   if eligibleDetails.IsEmpty then
-    roads
+    Set.empty
   else
-    let chainRoads =
-      eligibleDetails
-      |> List.collect _.RoadIndices
-      |> Set.ofList
-    let repeatedSideRoads =
-      eligibleDetails
-      |> List.collect (fun detail ->
-          let chainRoadSet = detail.RoadIndices |> Set.ofList
-          let clusterPath = detail.ClusterPath |> List.toArray
-          [ for pathIndex in 1 .. clusterPath.Length - 2 do
-              let clusterId = clusterPath.[pathIndex]
-              let anchor = Map.find clusterId clusterAnchors
-              let prevAnchor = Map.find clusterPath.[pathIndex - 1] clusterAnchors
-              let nextAnchor = Map.find clusterPath.[pathIndex + 1] clusterAnchors
-              let axisDelta = Vec2.sub nextAnchor prevAnchor
-              if Vec2.lengthSq axisDelta > 0.01f then
-                let axis = Vec2.normalize axisDelta
-                let perp = Vec2.Create(-axis.Y, axis.X)
-                yield!
-                  Map.find clusterId clusterRefs
-                  |> List.map fst
-                  |> List.distinct
-                  |> List.choose (fun roadIndex ->
-                      if Set.contains roadIndex chainRoadSet then
+    eligibleDetails
+    |> List.collect (fun detail ->
+        let chainRoadSet = detail.RoadIndices |> Set.ofList
+        let clusterPath = detail.ClusterPath |> List.toArray
+        [ for pathIndex in 1 .. clusterPath.Length - 2 do
+            let clusterId = clusterPath.[pathIndex]
+            let anchor = Map.find clusterId clusterAnchors
+            let prevAnchor = Map.find clusterPath.[pathIndex - 1] clusterAnchors
+            let nextAnchor = Map.find clusterPath.[pathIndex + 1] clusterAnchors
+            let axisDelta = Vec2.sub nextAnchor prevAnchor
+            if Vec2.lengthSq axisDelta > 0.01f then
+              let axis = Vec2.normalize axisDelta
+              let perp = Vec2.Create(-axis.Y, axis.X)
+              yield!
+                Map.find clusterId clusterRefs
+                |> List.map fst
+                |> List.distinct
+                |> List.choose (fun roadIndex ->
+                    if Set.contains roadIndex chainRoadSet then
+                      None
+                    else
+                      let road = roads.[roadIndex]
+                      let startPt, endPt = roadEndpoints road
+                      let midpoint = Vec2.scale 0.5f (Vec2.add startPt endPt)
+                      let branchDelta =
+                        if Vec2.distanceToSq anchor startPt <= toleranceSq then
+                          Vec2.sub endPt startPt
+                        elif Vec2.distanceToSq anchor endPt <= toleranceSq then
+                          Vec2.sub startPt endPt
+                        else
+                          Vec2.sub midpoint anchor
+                      if Vec2.lengthSq branchDelta <= 0.01f then
                         None
                       else
-                        let road = roads.[roadIndex]
-                        let startPt, endPt = roadEndpoints road
-                        let branchDelta =
-                          if Vec2.distanceToSq anchor startPt <= toleranceSq then
-                            Vec2.sub endPt startPt
-                          elif Vec2.distanceToSq anchor endPt <= toleranceSq then
-                            Vec2.sub startPt endPt
-                          else
-                            Vec2.sub (Vec2.scale 0.5f (Vec2.add startPt endPt)) anchor
-                        if Vec2.lengthSq branchDelta <= 0.01f then
-                          None
+                        let branchDir = Vec2.normalize branchDelta
+                        let branchAngle = parallelHeadingDeltaDegrees axis branchDir
+                        let signedLateral = Vec2.dot branchDelta perp
+                        let signedMidpointOffset = Vec2.dot (Vec2.sub midpoint anchor) perp
+                        let lateral = abs signedLateral
+                        let midpointOffset = abs signedMidpointOffset
+                        if branchAngle <= 35.0f && midpointOffset >= 0.15f then
+                          let side = if signedMidpointOffset < 0.0f then -1 else 1
+                          Some (roadIndex, clusterId, true, side)
+                        elif branchAngle >= 45.0f && branchAngle <= 90.0f && lateral >= 0.5f then
+                          let side = if signedLateral < 0.0f then -1 else 1
+                          Some (roadIndex, clusterId, false, side)
                         else
-                          let branchDir = Vec2.normalize branchDelta
-                          let branchAngle = parallelHeadingDeltaDegrees axis branchDir
-                          let lateral = Vec2.dot branchDelta perp
-                          if branchAngle >= 45.0f && branchAngle <= 90.0f && abs lateral >= 0.5f then
-                            Some (roadIndex, clusterId)
-                          else
-                            None) ] )
-      |> List.groupBy fst
-      |> List.choose (fun (roadIndex, entries) ->
-          let distinctClusters =
-            entries
-            |> List.map snd
-            |> Set.ofList
-          if Set.count distinctClusters >= 2 && not (Set.contains roadIndex chainRoads) then
-            Some roadIndex
-          else
-            None)
-      |> Set.ofList
-    if repeatedSideRoads.IsEmpty then
-      roads
-    else
-      roads
-      |> List.mapi (fun roadIndex road -> roadIndex, road)
-      |> List.choose (fun (roadIndex, road) ->
-          if Set.contains roadIndex repeatedSideRoads then None else Some road)
+                          None) ] )
+    |> List.groupBy (fun (roadIndex, _, _, _) -> roadIndex)
+    |> List.choose (fun (roadIndex, entries) ->
+        let parallelClusters =
+          entries
+          |> List.choose (fun (_, clusterId, isParallel, _) ->
+              if isParallel then Some clusterId else None)
+          |> Set.ofList
+        let transverseClusters =
+          entries
+          |> List.choose (fun (_, clusterId, isParallel, _) ->
+              if isParallel then None else Some clusterId)
+          |> Set.ofList
+        let transverseSides =
+          entries
+          |> List.choose (fun (_, _, isParallel, side) ->
+              if isParallel then None else Some side)
+          |> Set.ofList
+        if Set.count parallelClusters >= 2
+           || (Set.count transverseClusters >= 2 && Set.count transverseSides >= 2) then
+          Some roadIndex
+        else
+          None)
+    |> Set.ofList
+
+let pruneRepeatedSideConnectorRoads (roads: Road list) =
+  let repeatedSideRoads = repeatedSideConnectorRoadIndices roads
+  if repeatedSideRoads.IsEmpty then
+    roads
+  else
+    let bentSegments roadIndex (road: Road) =
+      let startPt, endPt = roadEndpoints road
+      let delta = Vec2.sub endPt startPt
+      if Vec2.lengthSq delta <= 0.01f then
+        [ road ]
+      else
+        let dir = Vec2.normalize delta
+        let perp = Vec2.Create(-dir.Y, dir.X)
+        let bendSign = if (road.FromPos.X + road.FromPos.Z) <= (road.ToPos.X + road.ToPos.Z) then 1.0f else -1.0f
+        let leadLength = min 6.0f (Vec2.distanceTo startPt endPt * 0.3f)
+        let lead = Vec2.scale (bendSign * leadLength) perp
+        let pivotA = Vec2.add startPt lead
+        let pivotB = Vec2.add endPt lead
+        let toV3 (point: Vec2) = Vector3(point.X, (road.FromPos.Y + road.ToPos.Y) * 0.5f, point.Y)
+        let pivotA3 = toV3 pivotA
+        let pivotB3 = toV3 pivotB
+        [ { road with ToPos = pivotA3 }
+          { road with FromPos = pivotA3; ToPos = pivotB3 }
+          { road with FromPos = pivotB3 } ]
+    roads
+    |> List.mapi (fun roadIndex road -> roadIndex, road)
+    |> List.collect (fun (roadIndex, road) ->
+        if Set.contains roadIndex repeatedSideRoads then bentSegments roadIndex road else [ road ])
 
 type private FrontageStrip =
   { Start: Vec2
@@ -6166,6 +6408,8 @@ let placeBuildingsInLots
         gitMeta |> Map.tryFind f.FilePath
         |> Option.map (fun m -> float32 (DateTimeOffset.Now - m.LastCommitDate).TotalDays)
         |> Option.defaultValue 180.0f
+      let commitCount =
+        gitMeta |> Map.tryFind f.FilePath |> Option.map _.CommitCount |> Option.defaultValue 0
       let rotation =
         match lot.FrontageEdge with
         | North | South -> 0.0f
@@ -6179,6 +6423,7 @@ let placeBuildingsInLots
         Complexity = complexity
         BuildingType = bt
         GitAgeDays = ageDays
+        GitCommitCount = commitCount
         X = envelope.X
         Z = envelope.Z
         W = max 0.25f envelope.W
@@ -6258,12 +6503,15 @@ let packAlongEdges
             gitMeta |> Map.tryFind f.FilePath
             |> Option.map (fun m -> float32 (DateTimeOffset.Now - m.LastCommitDate).TotalDays)
             |> Option.defaultValue 180.0f
+          let commitCount =
+            gitMeta |> Map.tryFind f.FilePath |> Option.map _.CommitCount |> Option.defaultValue 0
           let jitter = (rng.NextSingle() - 0.5f) * 4.0f
           allBuildings.Add {
             Func = f; Heat = heat; CallerCount = callers; CalleeCount = callees
             Complexity = complexity
             BuildingType = bt
             GitAgeDays = ageDays
+            GitCommitCount = commitCount
             X = px - fp / 2.0f; Z = pz - fp / 2.0f
             W = fp; D = fp
             H = BuildingType.height bt f.LineCount heat
@@ -6387,12 +6635,15 @@ let packAlongRoads
               gitMeta |> Map.tryFind f.FilePath
               |> Option.map (fun m -> float32 (DateTimeOffset.Now - m.LastCommitDate).TotalDays)
               |> Option.defaultValue 180.0f
+            let commitCount =
+              gitMeta |> Map.tryFind f.FilePath |> Option.map _.CommitCount |> Option.defaultValue 0
             let jitter = (rng.NextSingle() - 0.5f) * 2.0f
             allBuildings.Add {
               Func = f; Heat = heat; CallerCount = callers; CalleeCount = callees
               Complexity = complexity
               BuildingType = bt
               GitAgeDays = ageDays
+              GitCommitCount = commitCount
               X = px; Z = pz
               W = worldW; D = worldD
               H = BuildingType.height bt f.LineCount heat
@@ -7427,7 +7678,7 @@ let buildStaticMesh (buildings: FuncBuilding[]) (blocks: ModuleBlock[]) (cityExt
   // Pre-compute compound shapes for all buildings (deterministic from function name)
   let compounds =
     buildings |> Array.map (fun b ->
-      generateCompound b.Func.QualifiedName b.Complexity (b.W / 2.0f) (b.D / 2.0f))
+      generateTypedCompound b.Func.QualifiedName b.BuildingType b.Complexity (b.W / 2.0f) (b.D / 2.0f))
   let totalBuildingCubes = compounds |> Array.sumBy (fun c -> c.Length)
   let maxCubes = compounds |> Array.map (fun c -> c.Length) |> Array.max
   let avgCubes = float totalBuildingCubes / float buildings.Length
@@ -8008,6 +8259,7 @@ let drawDistrictLabels2D
           drawUiText subtitle (bx + 10) (by + 6 + theme.DistrictTitle) theme.DistrictSubtitle (darken placement.District.Color 0.82f))
 
 let drawTooltip (b: FuncBuilding) (mx: int) (my: int) (theme: UiTextTheme) =
+  let health = computeCodeHealthSignals b
   let typeLabel =
     match b.BuildingType with
     | Shed       -> "⌂ Shed"
@@ -8021,6 +8273,7 @@ let drawTooltip (b: FuncBuilding) (mx: int) (my: int) (theme: UiTextTheme) =
     sprintf "%s:%d-%d" b.Func.RelPath b.Func.StartLine b.Func.EndLine
     sprintf "%d lines  ·  heat %.0f%%  ·  %s" b.Func.LineCount (b.Heat * 100.0f) typeLabel
     sprintf "%d callers  ·  %d callees" b.CallerCount b.CalleeCount
+    sprintf "risk %.0f%%  ·  blast %.0f%%  ·  churn %.0f%%" (health.RiskScore * 100.0f) (health.BlastRadius * 100.0f) (health.ChurnPressure * 100.0f)
     sprintf "District: %s" b.District
   |]
   let pad = 10
@@ -8161,6 +8414,24 @@ let drawHeatScale (theme: UiTextTheme) =
   drawUiText "cold" (px + 8) (py + 42) theme.HeatLabel (Color(40uy, 80uy, 200uy, 255uy))
   drawUiText "hot" (px + 182) (py + 42) theme.HeatLabel (Color(255uy, 40uy, 40uy, 255uy))
 
+let drawTerrainScale (buildings: FuncBuilding list) (theme: UiTextTheme) =
+  summarizeTerrainOverlay buildings
+  |> Option.iter (fun summary ->
+      let screenH = Raylib.GetScreenHeight()
+      let px = 8
+      let panelW = 284
+      let panelH = 84
+      let py = screenH - panelH - 74
+      Raylib.DrawRectangle(px, py, panelW, panelH, Color(8uy, 8uy, 16uy, 210uy))
+      Raylib.DrawRectangleLines(px, py, panelW, panelH, Color(80uy, 80uy, 100uy, 80uy))
+      drawUiText "Terrain relief" (px + 8) (py + 5) theme.HeatTitle (Color(165uy, 210uy, 180uy, 255uy))
+      drawUiText
+        (sprintf "min %.2f  ·  avg %.2f  ·  max %.2f" summary.MinHeight summary.AvgHeight summary.MaxHeight)
+        (px + 8) (py + 28) theme.HeatLabel (Color(180uy, 190uy, 195uy, 255uy))
+      drawUiText
+        (sprintf "basins %d  ·  shelves %d  ·  ridges %d" summary.BasinCount summary.ShelfCount summary.RidgeCount)
+        (px + 8) (py + 49) theme.HeatLabel (Color(155uy, 170uy, 185uy, 255uy)))
+
 let drawSelectionPanel
   (selected: FuncBuilding option)
   (incoming: RelatedBuilding list)
@@ -8200,6 +8471,13 @@ let drawSelectionPanel
       | Commercial -> "Commercial" | Tower      -> "Tower" | Skyscraper -> "Skyscraper"
     addLine theme.SelectionBody (sprintf "%d lines  ·  complexity %d  ·  heat %.0f%%  ·  %s"
       pinned.Func.LineCount pinned.Complexity (pinned.Heat * 100.0f) typeStr) (Color(215uy, 215uy, 225uy, 255uy))
+    let health = computeCodeHealthSignals pinned
+    addLine theme.SelectionBody
+      (sprintf "risk %.0f%%  ·  blast %.0f%%  ·  churn %.0f%%"
+        (health.RiskScore * 100.0f)
+        (health.BlastRadius * 100.0f)
+        (health.ChurnPressure * 100.0f))
+      (heatColor health.RiskScore)
     addLine theme.SelectionBody (sprintf "%d callers  ·  %d callees  ·  link arcs %s"
       incoming.Length outgoing.Length (if showCallLinks then "visible" else "hidden")) (Color(190uy, 190uy, 200uy, 255uy))
     addLine theme.SelectionTitle "Detected callers" incomingRelationColor
@@ -9010,6 +9288,7 @@ void main() {
     drawDistrictLabels2D districtRects camera3D uiTextTheme
     drawHUD buildings districts (sortedRoads |> List.ofArray) mouseCaptured selected showCallLinks uiTextTheme
     drawLegend districts uiTextTheme
+    drawTerrainScale buildings uiTextTheme
     drawHeatScale uiTextTheme
     drawSelectionPanel selected selectedIncomingAll selectedOutgoingAll showCallLinks uiTextTheme
 

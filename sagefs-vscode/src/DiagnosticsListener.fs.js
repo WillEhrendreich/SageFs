@@ -1,4 +1,4 @@
-import { subscribeSse } from "./JsHelpers.fs.js";
+import { subscribeSseWithLogger } from "./JsHelpers.fs.js";
 import { printf, toText } from "./fable_modules/fable-library-js.4.29.0/String.js";
 import { iterate } from "./fable_modules/fable-library-js.4.29.0/Seq.js";
 import { item } from "./fable_modules/fable-library-js.4.29.0/Array.js";
@@ -9,8 +9,8 @@ import { max } from "./fable_modules/fable-library-js.4.29.0/Double.js";
 import { getItemFromDict } from "./fable_modules/fable-library-js.4.29.0/MapUtil.js";
 import { disposeSafe, getEnumerator } from "./fable_modules/fable-library-js.4.29.0/Util.js";
 
-export function start(port, dc) {
-    return subscribeSse(toText(printf("http://localhost:%d/diagnostics"))(port), (data) => {
+export function start(port, dc, log) {
+    return subscribeSseWithLogger(toText(printf("http://localhost:%d/diagnostics"))(port), (data) => {
         iterate((diagnostics) => {
             const byFile = new Map([]);
             for (let idx = 0; idx <= (diagnostics.length - 1); idx++) {
@@ -40,6 +40,6 @@ export function start(port, dc) {
                 disposeSafe(enumerator);
             }
         }, toArray(fieldArray("diagnostics", data)));
-    });
+    }, log);
 }
 

@@ -5,7 +5,7 @@ import { toString } from "./fable_modules/fable-library-js.4.29.0/Types.js";
 
 export const tryCastString = (x_1) => {
     const x_2 = x_1;
-    if (x_2 == null) {
+    if ((x_2 == null)) {
         return undefined;
     }
     else {
@@ -16,7 +16,7 @@ export const tryCastString = (x_1) => {
 
 export const tryCastInt = (x_1) => {
     const x_2 = x_1;
-    if (x_2 == null) {
+    if ((x_2 == null)) {
         return undefined;
     }
     else {
@@ -27,7 +27,7 @@ export const tryCastInt = (x_1) => {
 
 export const tryCastFloat = (x_1) => {
     const x_2 = x_1;
-    if (x_2 == null) {
+    if ((x_2 == null)) {
         return undefined;
     }
     else {
@@ -38,7 +38,7 @@ export const tryCastFloat = (x_1) => {
 
 export const tryCastBool = (x_1) => {
     const x_2 = x_1;
-    if (x_2 == null) {
+    if ((x_2 == null)) {
         return undefined;
     }
     else {
@@ -49,7 +49,7 @@ export const tryCastBool = (x_1) => {
 
 export const tryCastArray = (x_1) => {
     const x_2 = x_1;
-    if (x_2 == null) {
+    if ((x_2 == null)) {
         return undefined;
     }
     else {
@@ -67,12 +67,12 @@ export function tryCastIntArray(x) {
 }
 
 function rawField(name, obj) {
-    if (obj == null) {
+    if ((obj == null)) {
         return undefined;
     }
     else {
         const v = obj[name];
-        if (v == null) {
+        if ((v == null)) {
             return undefined;
         }
         else {
@@ -132,7 +132,7 @@ export function fieldIntArray(name, obj) {
 
 export function duCase(du) {
     let x_1;
-    return orElse(fieldString("Case", du), (x_1 = du, (x_1 == null) ? undefined : toString(x_1)));
+    return orElse(fieldString("Case", du), (x_1 = du, ((x_1 == null)) ? undefined : toString(x_1)));
 }
 
 export function duFieldsArray(du) {

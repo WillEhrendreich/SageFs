@@ -5,7 +5,7 @@ import { PromiseBuilder__Delay_62FBFDE1, PromiseBuilder__Run_212F1D4B } from "./
 import { some, defaultArg, value as value_2 } from "./fable_modules/fable-library-js.4.29.0/Option.js";
 import { fieldString } from "./SafeInterop.fs.js";
 import { promise } from "./fable_modules/Fable.Promise.3.2.0/PromiseImpl.fs.js";
-import { item as item_1, map, equalsWith } from "./fable_modules/fable-library-js.4.29.0/Array.js";
+import { item as item_2, map, equalsWith } from "./fable_modules/fable-library-js.4.29.0/Array.js";
 import { promiseIgnore } from "./JsHelpers.fs.js";
 import { getWarmupContext } from "./SageFsClient.fs.js";
 
@@ -18,6 +18,8 @@ export let cachedContext = createAtom(undefined);
 export let refreshEmitter = createAtom(undefined);
 
 export let autoRefreshTimer = createAtom(undefined);
+
+export let isLoading = createAtom(false);
 
 export function sectionItem(label, desc, icon) {
     const item = newTreeItem(label, 2);
@@ -40,7 +42,7 @@ export function summaryItem(ctx) {
     let desc;
     const arg = ctx.AssembliesLoaded.length | 0;
     desc = toText(printf("%d assemblies | %d namespaces | %dms"))(arg)(nsCount)(ctx.WarmupDurationMs);
-    const item = newTreeItem("Session Warmup", 2);
+    const item = newTreeItem("Session Context", 2);
     item.description = desc;
     item.iconPath = newThemeIcon("symbol-event");
     item.contextValue = "summary";
@@ -81,7 +83,7 @@ export function getChildren(element) {
                         return (label === "Assemblies") ? (Promise.resolve(map((a) => leafItem(a.Name, toText(printf("%d ns, %d mod"))(a.NamespaceCount)(a.ModuleCount), "library"), wc_1.AssembliesLoaded))) : ((label === "Namespaces") ? (Promise.resolve(map((b) => {
                             const kind = b.IsModule ? "module" : "namespace";
                             return leafItem(b.Name, toText(printf("%s via %s"))(kind)(b.Source), "symbol-namespace");
-                        }, wc_1.NamespacesOpened))) : ((label === "Failed Opens") ? (Promise.resolve(map((pair) => leafItem((pair.length === 0) ? "?" : item_1(0, pair), (pair.length > 1) ? item_1(1, pair) : "unknown", "error"), wc_1.FailedOpens))) : (Promise.resolve([]))));
+                        }, wc_1.NamespacesOpened))) : ((label === "Failed Opens") ? (Promise.resolve(map((pair) => leafItem((pair.length === 0) ? "?" : item_2(0, pair), (pair.length > 1) ? item_2(1, pair) : "unknown", "error"), wc_1.FailedOpens))) : (Promise.resolve([]))));
                     }
                     else {
                         return Promise.resolve([]);
@@ -91,14 +93,18 @@ export function getChildren(element) {
                     return Promise.resolve([]);
             }
         }
+        else if (isLoading()) {
+            const item = newTreeItem("$(loading~spin) Loading...", 0);
+            return Promise.resolve([item]);
+        }
         else if (cachedContext() != null) {
             const ctx = cachedContext();
             return Promise.resolve([summaryItem(ctx)]);
         }
         else {
-            const item = newTreeItem("No session context", 0);
-            item.description = "Waiting for session...";
-            return Promise.resolve([item]);
+            const item_1 = newTreeItem("No session context", 0);
+            item_1.description = "Waiting for session...";
+            return Promise.resolve([item_1]);
         }
     }));
 }
@@ -114,7 +120,7 @@ export function createProvider() {
         onDidChangeTreeData: emitter.event,
         getChildren: (el) => {
             let x;
-            return getChildren((x = el, (x == null) ? undefined : some(x)));
+            return getChildren((x = el, ((x == null)) ? undefined : some(x)));
         },
         getTreeItem: getTreeItem,
     };
@@ -139,26 +145,35 @@ export function refresh() {
     }
     switch (matchResult) {
         case 0: {
+            isLoading(true);
+            if (refreshEmitter() == null) {
+            }
+            else {
+                const e = refreshEmitter();
+                e.fire(defaultOf());
+            }
             promiseIgnore(PromiseBuilder__Run_212F1D4B(promise, PromiseBuilder__Delay_62FBFDE1(promise, () => (getWarmupContext(sid, c).then((_arg) => {
                 cachedContext(_arg);
+                isLoading(false);
                 if (refreshEmitter() == null) {
                     return Promise.resolve();
                 }
                 else {
-                    const e = refreshEmitter();
-                    e.fire(defaultOf());
+                    const e_1 = refreshEmitter();
+                    e_1.fire(defaultOf());
                     return Promise.resolve();
                 }
             })))));
             break;
         }
         case 1: {
+            isLoading(false);
             cachedContext(undefined);
             if (refreshEmitter() == null) {
             }
             else {
-                const e_1 = refreshEmitter();
-                e_1.fire(defaultOf());
+                const e_2 = refreshEmitter();
+                e_2.fire(defaultOf());
             }
             break;
         }
@@ -166,8 +181,31 @@ export function refresh() {
 }
 
 export function setSession(c, sessionId) {
-    currentClient(c);
-    currentSessionId(sessionId);
+    if (equals(currentSessionId(), sessionId)) {
+        currentClient(c);
+    }
+    else {
+        currentClient(c);
+        currentSessionId(sessionId);
+        if (autoRefreshTimer() == null) {
+        }
+        else {
+            const t = value_2(autoRefreshTimer());
+            clearInterval(t);
+            autoRefreshTimer(undefined);
+        }
+        if (sessionId == null) {
+        }
+        else {
+            autoRefreshTimer(some(setInterval((() => {
+                refresh();
+            }), 30000)));
+        }
+        refresh();
+    }
+}
+
+export function stopAutoRefresh() {
     if (autoRefreshTimer() == null) {
     }
     else {
@@ -175,14 +213,6 @@ export function setSession(c, sessionId) {
         clearInterval(t);
         autoRefreshTimer(undefined);
     }
-    if (sessionId == null) {
-    }
-    else {
-        autoRefreshTimer(some(setInterval((() => {
-            refresh();
-        }), 10000)));
-    }
-    refresh();
 }
 
 export function register(ctx) {

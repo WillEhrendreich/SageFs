@@ -1,9 +1,16 @@
+import { newRange, newThemeColor, Window_createTextEditorDecorationType, Workspace_getConfiguration } from "./Vscode.fs.js";
 import { disposeSafe, getEnumerator, comparePrimitives, createAtom } from "./fable_modules/fable-library-js.4.29.0/Util.js";
-import { add, containsKey, toList, iterate, remove, tryFind, empty } from "./fable_modules/fable-library-js.4.29.0/Map.js";
+import { containsKey, toList, add, iterate as iterate_1, remove, tryFind, empty } from "./fable_modules/fable-library-js.4.29.0/Map.js";
+import { iterate } from "./fable_modules/fable-library-js.4.29.0/Seq.js";
+import { defaultArgWith, toArray } from "./fable_modules/fable-library-js.4.29.0/Option.js";
 import { join, printf, toText } from "./fable_modules/fable-library-js.4.29.0/String.js";
 import { map } from "./fable_modules/fable-library-js.4.29.0/List.js";
-import { newRange, newThemeColor, Window_createTextEditorDecorationType } from "./Vscode.fs.js";
 import { item } from "./fable_modules/fable-library-js.4.29.0/Array.js";
+
+export function getInlineTimeout() {
+    const config = Workspace_getConfiguration("sagefs");
+    return config.get("inlineResultTimeout", 30000) | 0;
+}
 
 export let blockDecorations = createAtom(empty({
     Compare: comparePrimitives,
@@ -12,6 +19,58 @@ export let blockDecorations = createAtom(empty({
 export let staleDecorations = createAtom(empty({
     Compare: comparePrimitives,
 }));
+
+let evalInProgressDecorations = empty({
+    Compare: comparePrimitives,
+});
+
+let cellHighlightDeco = undefined;
+
+const cellBorderDeco = Window_createTextEditorDecorationType({
+    borderWidth: "1px 0 0 0",
+    borderStyle: "solid",
+    borderColor: newThemeColor("sagefs.cellBorderColor"),
+    isWholeLine: true,
+});
+
+/**
+ * Update the cell highlight to show the block the cursor is in.
+ * Call on cursor change. startLine/endLine are the block bounds.
+ */
+export function updateCellHighlight(editor, startLine, endLine) {
+    const config = Workspace_getConfiguration("sagefs");
+    const enabled = config.get("cellHighlight", true);
+    if (enabled) {
+        iterate((d_1) => {
+            const value_1 = d_1.dispose();
+        }, toArray(cellHighlightDeco));
+        const deco = Window_createTextEditorDecorationType({
+            backgroundColor: newThemeColor("sagefs.cellHighlightBackground"),
+            isWholeLine: true,
+        });
+        const ranges = [];
+        for (let i = startLine; i <= endLine; i++) {
+            void (ranges.push(newRange(i, 0, i, 0)));
+        }
+        editor.setDecorations(deco, ranges);
+        cellHighlightDeco = deco;
+        editor.setDecorations(cellBorderDeco, [newRange(startLine, 0, startLine, 0)]);
+    }
+    else {
+        iterate((d) => {
+            const value = d.dispose();
+        }, toArray(cellHighlightDeco));
+        cellHighlightDeco = undefined;
+        editor.setDecorations(cellBorderDeco, []);
+    }
+}
+
+export function clearCellHighlight() {
+    iterate((d) => {
+        const value = d.dispose();
+    }, toArray(cellHighlightDeco));
+    cellHighlightDeco = undefined;
+}
 
 export function formatDuration(ms) {
     if (ms < 1000) {
@@ -43,19 +102,75 @@ export function clearBlockDecoration(line) {
     }
 }
 
+export function autoClearAfter(line) {
+    const ms = getInlineTimeout() | 0;
+    if (ms === 0) {
+    }
+    else {
+        setTimeout((() => {
+            clearBlockDecoration(line);
+        }), ms);
+    }
+}
+
 export function clearAllDecorations() {
-    iterate((_arg, deco) => {
+    iterate_1((_arg, deco) => {
         const value = deco.dispose();
     }, blockDecorations());
     blockDecorations(empty({
         Compare: comparePrimitives,
     }));
-    iterate((_arg_1, deco_1) => {
+    iterate_1((_arg_1, deco_1) => {
         const value_1 = deco_1.dispose();
     }, staleDecorations());
     staleDecorations(empty({
         Compare: comparePrimitives,
     }));
+    iterate_1((_arg_2, deco_2) => {
+        const value_2 = deco_2.dispose();
+    }, evalInProgressDecorations);
+    evalInProgressDecorations = empty({
+        Compare: comparePrimitives,
+    });
+}
+
+/**
+ * Show an "⏳ evaluating…" ghost-text suffix at the end of the given (0-based) line.
+ * Uses a separate decoration type from result/stale markers so it can be cleared independently.
+ */
+export function showEvalInProgress(editor, line) {
+    const matchValue = tryFind(line, evalInProgressDecorations);
+    if (matchValue == null) {
+    }
+    else {
+        const existing = matchValue;
+        const value = existing.dispose();
+        evalInProgressDecorations = remove(line, evalInProgressDecorations);
+    }
+    const deco = Window_createTextEditorDecorationType({
+        after: {
+            contentText: "  // ⏳ evaluating…",
+            color: newThemeColor("sagefs.staleForeground"),
+            fontStyle: "italic",
+        },
+    });
+    const lineText = editor.document.lineAt(line).text;
+    const endCol = lineText.length | 0;
+    const range = newRange(line, endCol, line, endCol);
+    editor.setDecorations(deco, [range]);
+    evalInProgressDecorations = add(line, deco, evalInProgressDecorations);
+}
+
+/**
+ * Remove all "evaluating" decorations (call when eval_result arrives).
+ */
+export function clearEvalInProgress(_editor) {
+    iterate_1((_arg, deco) => {
+        const value = deco.dispose();
+    }, evalInProgressDecorations);
+    evalInProgressDecorations = empty({
+        Compare: comparePrimitives,
+    });
 }
 
 export function markDecorationsStale(editor) {
@@ -101,13 +216,31 @@ function getEditorLine(editor) {
     }
 }
 
-export function showInlineResult(editor, text, durationMs) {
+/**
+ * Flash-highlight a range of lines briefly to indicate eval started.
+ */
+export function flashEvalRange(editor, startLine, endLine) {
+    const deco = Window_createTextEditorDecorationType({
+        backgroundColor: newThemeColor("sagefs.evalFlashBackground"),
+        isWholeLine: true,
+    });
+    const ranges = [];
+    for (let i = startLine; i <= endLine; i++) {
+        void (ranges.push(newRange(i, 0, i, 0)));
+    }
+    editor.setDecorations(deco, ranges);
+    setTimeout((() => {
+        const value = deco.dispose();
+    }), 300);
+}
+
+export function showInlineResult(editor, text, durationMs, atLine) {
     let matchValue_1, n, summary;
     const trimmed = text.trim();
     if (trimmed === "") {
     }
     else {
-        const line = getEditorLine(editor) | 0;
+        const line = defaultArgWith(atLine, () => getEditorLine(editor)) | 0;
         clearBlockDecoration(line);
         const lines = trimmed.split("\n");
         const firstLine = (lines.length === 0) ? "" : item(0, lines);
@@ -131,20 +264,18 @@ export function showInlineResult(editor, text, durationMs) {
         const range = newRange(line, endCol, line, endCol);
         editor.setDecorations(deco, [range]);
         blockDecorations(add(line, deco, blockDecorations()));
-        setTimeout((() => {
-            clearBlockDecoration(line);
-        }), 30000);
+        autoClearAfter(line);
     }
 }
 
-export function showInlineDiagnostic(editor, text) {
+export function showInlineDiagnostic(editor, text, atLine) {
     let firstLine;
     const parts = text.split("\n");
     firstLine = ((parts.length === 0) ? "" : item(0, parts).trim());
     if (firstLine === "") {
     }
     else {
-        const line = getEditorLine(editor) | 0;
+        const line = defaultArgWith(atLine, () => getEditorLine(editor)) | 0;
         clearBlockDecoration(line);
         const deco = Window_createTextEditorDecorationType({
             after: {
@@ -158,9 +289,7 @@ export function showInlineDiagnostic(editor, text) {
         const range = newRange(line, endCol, line, endCol);
         editor.setDecorations(deco, [range]);
         blockDecorations(add(line, deco, blockDecorations()));
-        setTimeout((() => {
-            clearBlockDecoration(line);
-        }), 30000);
+        autoClearAfter(line);
     }
 }
 

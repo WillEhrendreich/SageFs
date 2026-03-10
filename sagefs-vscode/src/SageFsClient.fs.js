@@ -1,11 +1,15 @@
 import { toString, Record, Union } from "./fable_modules/fable-library-js.4.29.0/Types.js";
-import { array_type, int32_type, record_type, bool_type, union_type, option_type, string_type } from "./fable_modules/fable-library-js.4.29.0/Reflection.js";
-import { printf, toText } from "./fable_modules/fable-library-js.4.29.0/String.js";
-import { map as map_1, some, orElse, defaultArg } from "./fable_modules/fable-library-js.4.29.0/Option.js";
-import { tryCastStringArray, fieldArray, fieldInt, fieldStringArray, fieldString, fieldBool } from "./SafeInterop.fs.js";
+import { lambda_type, unit_type, array_type, list_type, int32_type, bool_type, record_type, union_type, option_type, string_type } from "./fable_modules/fable-library-js.4.29.0/Reflection.js";
+import { substring, printf, toText } from "./fable_modules/fable-library-js.4.29.0/String.js";
+import { httpPost as httpPost_1, httpGet as httpGet_1 } from "./http-helpers.js";
+import { map, value as value_14, some, orElse, defaultArg } from "./fable_modules/fable-library-js.4.29.0/Option.js";
+import { tryCastStringArray, fieldStringArray, fieldInt, fieldArray, tryCastString, fieldObj, fieldString, fieldBool } from "./SafeInterop.fs.js";
 import { PromiseBuilder__Delay_62FBFDE1, PromiseBuilder__Run_212F1D4B } from "./fable_modules/Fable.Promise.3.2.0/Promise.fs.js";
 import { promise } from "./fable_modules/Fable.Promise.3.2.0/PromiseImpl.fs.js";
-import { choose, map } from "./fable_modules/fable-library-js.4.29.0/Array.js";
+import { min } from "./fable_modules/fable-library-js.4.29.0/Double.js";
+import { empty, ofArray } from "./fable_modules/fable-library-js.4.29.0/List.js";
+import { map as map_1, choose } from "./fable_modules/fable-library-js.4.29.0/Array.js";
+import { FSharpResult$2 } from "./fable_modules/fable-library-js.4.29.0/Result.js";
 
 export class ApiOutcome extends Union {
     constructor(tag, fields) {
@@ -62,30 +66,47 @@ export function ApiOutcomeModule_messageOrDefault(fallback, _arg) {
     }
 }
 
+export class HealthError extends Record {
+    constructor(case$, message, suggestedAction) {
+        super();
+        this.case = case$;
+        this.message = message;
+        this.suggestedAction = suggestedAction;
+    }
+}
+
+export function HealthError_$reflection() {
+    return record_type("SageFs.Vscode.SageFsClient.HealthError", [], HealthError, () => [["case", string_type], ["message", string_type], ["suggestedAction", string_type]]);
+}
+
 export class SageFsStatus extends Record {
-    constructor(connected, healthy, status) {
+    constructor(connected, healthy, status, apiVersion, features, error) {
         super();
         this.connected = connected;
         this.healthy = healthy;
         this.status = status;
+        this.apiVersion = apiVersion;
+        this.features = features;
+        this.error = error;
     }
 }
 
 export function SageFsStatus_$reflection() {
-    return record_type("SageFs.Vscode.SageFsClient.SageFsStatus", [], SageFsStatus, () => [["connected", bool_type], ["healthy", option_type(bool_type)], ["status", option_type(string_type)]]);
+    return record_type("SageFs.Vscode.SageFsClient.SageFsStatus", [], SageFsStatus, () => [["connected", bool_type], ["healthy", option_type(bool_type)], ["status", option_type(string_type)], ["apiVersion", option_type(int32_type)], ["features", list_type(string_type)], ["error", option_type(HealthError_$reflection())]]);
 }
 
 export class SystemStatus extends Record {
-    constructor(supervised, restartCount, version) {
+    constructor(supervised, restartCount, version, apiVersion) {
         super();
         this.supervised = supervised;
         this.restartCount = (restartCount | 0);
         this.version = version;
+        this.apiVersion = (apiVersion | 0);
     }
 }
 
 export function SystemStatus_$reflection() {
-    return record_type("SageFs.Vscode.SageFsClient.SystemStatus", [], SystemStatus, () => [["supervised", bool_type], ["restartCount", int32_type], ["version", string_type]]);
+    return record_type("SageFs.Vscode.SageFsClient.SystemStatus", [], SystemStatus, () => [["supervised", bool_type], ["restartCount", int32_type], ["version", string_type], ["apiVersion", int32_type]]);
 }
 
 export class HotReloadFile extends Record {
@@ -171,19 +192,20 @@ export function WarmupContextInfo_$reflection() {
 }
 
 export class Client extends Record {
-    constructor(mcpPort, dashboardPort) {
+    constructor(mcpPort, dashboardPort, log) {
         super();
         this.mcpPort = (mcpPort | 0);
         this.dashboardPort = (dashboardPort | 0);
+        this.log = log;
     }
 }
 
 export function Client_$reflection() {
-    return record_type("SageFs.Vscode.SageFsClient.Client", [], Client, () => [["mcpPort", int32_type], ["dashboardPort", int32_type]]);
+    return record_type("SageFs.Vscode.SageFsClient.Client", [], Client, () => [["mcpPort", int32_type], ["dashboardPort", int32_type], ["log", lambda_type(string_type, unit_type)]]);
 }
 
-export function create(mcpPort, dashboardPort) {
-    return new Client(mcpPort, dashboardPort);
+export function create(mcpPort, dashboardPort, log) {
+    return new Client(mcpPort, dashboardPort, log);
 }
 
 export function baseUrl(c) {
@@ -203,22 +225,22 @@ export function updatePorts(mcpPort, dashboardPort, c) {
 
 export function httpGet(c, path, timeout) {
     let arg;
-    return new Promise((resolve, reject) => { const http = require('http'); const req = http.get(((arg = baseUrl(c), toText(printf("%s%s"))(arg)(path))), { timeout: timeout }, (res) => { let data = ''; res.on('data', (chunk) => data += chunk); res.on('end', () => resolve({ statusCode: res.statusCode || 0, body: data })); }); req.on('error', reject); req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); }); });
+    return httpGet_1((arg = baseUrl(c), toText(printf("%s%s"))(arg)(path)), timeout);
 }
 
 export function httpPost(c, path, body, timeout) {
     let arg;
-    return new Promise((resolve, reject) => { const http = require('http'); const url = new URL((arg = baseUrl(c), toText(printf("%s%s"))(arg)(path))); const req = http.request({ hostname: url.hostname, port: url.port, path: url.pathname, method: 'POST', headers: { 'Content-Type': 'application/json' }, timeout: timeout }, (res) => { let data = ''; res.on('data', (chunk) => data += chunk); res.on('end', () => resolve({ statusCode: res.statusCode || 0, body: data })); }); req.on('error', reject); req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); }); req.write(body); req.end(); });
+    return httpPost_1((arg = baseUrl(c), toText(printf("%s%s"))(arg)(path)), body, timeout);
 }
 
 export function dashHttpGet(c, path, timeout) {
     let arg;
-    return new Promise((resolve, reject) => { const http = require('http'); const req = http.get(((arg = (c.dashboardPort | 0), toText(printf("http://localhost:%d%s"))(arg)(path))), { timeout: timeout }, (res) => { let data = ''; res.on('data', (chunk) => data += chunk); res.on('end', () => resolve({ statusCode: res.statusCode || 0, body: data })); }); req.on('error', reject); req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); }); });
+    return httpGet_1((arg = (c.dashboardPort | 0), toText(printf("http://localhost:%d%s"))(arg)(path)), timeout);
 }
 
 export function dashHttpPost(c, path, body, timeout) {
     let arg;
-    return new Promise((resolve, reject) => { const http = require('http'); const url = new URL((arg = (c.dashboardPort | 0), toText(printf("http://localhost:%d%s"))(arg)(path))); const req = http.request({ hostname: url.hostname, port: url.port, path: url.pathname, method: 'POST', headers: { 'Content-Type': 'application/json' }, timeout: timeout }, (res) => { let data = ''; res.on('data', (chunk) => data += chunk); res.on('end', () => resolve({ statusCode: res.statusCode || 0, body: data })); }); req.on('error', reject); req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); }); req.write(body); req.end(); });
+    return httpPost_1((arg = (c.dashboardPort | 0), toText(printf("http://localhost:%d%s"))(arg)(path)), body, timeout);
 }
 
 export function parseOutcome(parsed) {
@@ -234,7 +256,12 @@ export function parseOutcome(parsed) {
  * POST a command, parse the standard { success, message/result, error } response.
  */
 export function postCommand(c, path, body, timeout) {
-    return PromiseBuilder__Run_212F1D4B(promise, PromiseBuilder__Delay_62FBFDE1(promise, () => (PromiseBuilder__Delay_62FBFDE1(promise, () => (httpPost(c, path, body, timeout).then((_arg) => (Promise.resolve(parseOutcome(JSON.parse(_arg.body))))))).catch((_arg_1) => (Promise.resolve(new ApiOutcome(1, [toString(_arg_1)])))))));
+    return PromiseBuilder__Run_212F1D4B(promise, PromiseBuilder__Delay_62FBFDE1(promise, () => (PromiseBuilder__Delay_62FBFDE1(promise, () => (httpPost(c, path, body, timeout).then((_arg) => {
+        let s, arg_1;
+        const resp = _arg;
+        const matchValue = resp.statusCode | 0;
+        return ((s = (matchValue | 0), (s >= 200) && (s < 300))) ? (Promise.resolve(parseOutcome(JSON.parse(resp.body)))) : (Promise.resolve(new ApiOutcome(1, [(arg_1 = substring(resp.body, 0, min(200, resp.body.length)), toText(printf("HTTP %d: %s"))(matchValue)(arg_1))])));
+    }))).catch((_arg_1) => (Promise.resolve(new ApiOutcome(1, [toString(_arg_1)])))))));
 }
 
 /**
@@ -245,7 +272,7 @@ export function getJson(ctx, path, timeout, parse, c) {
         const resp = _arg;
         return (resp.statusCode === 200) ? (Promise.resolve(some(parse(JSON.parse(resp.body))))) : (Promise.resolve(undefined));
     }))).catch((_arg_1) => {
-        console.warn('[SageFs]', ctx, _arg_1);
+        c.log(toText(printf("[warn] %s: %O"))(ctx)(_arg_1));
         return Promise.resolve(undefined);
     }))));
 }
@@ -258,7 +285,7 @@ export function getRaw(ctx, path, timeout, c) {
         const resp = _arg;
         return (resp.statusCode === 200) ? (Promise.resolve(resp.body)) : (Promise.resolve(undefined));
     }))).catch((_arg_1) => {
-        console.warn('[SageFs]', ctx, _arg_1);
+        c.log(toText(printf("[warn] %s: %O"))(ctx)(_arg_1));
         return Promise.resolve(undefined);
     }))));
 }
@@ -271,7 +298,7 @@ export function dashGetJson(ctx, path, timeout, parse, c) {
         const resp = _arg;
         return (resp.statusCode === 200) ? (Promise.resolve(some(parse(JSON.parse(resp.body))))) : (Promise.resolve(undefined));
     }))).catch((_arg_1) => {
-        console.warn('[SageFs]', ctx, _arg_1);
+        c.log(toText(printf("[warn] %s: %O"))(ctx)(_arg_1));
         return Promise.resolve(undefined);
     }))));
 }
@@ -291,26 +318,84 @@ export function dashPostOutcome(ctx, path, body, timeout, c) {
 }
 
 export function isRunning(c) {
-    return PromiseBuilder__Run_212F1D4B(promise, PromiseBuilder__Delay_62FBFDE1(promise, () => (PromiseBuilder__Delay_62FBFDE1(promise, () => (httpGet(c, "/health", 3000).then((_arg) => (Promise.resolve(_arg.statusCode > 0))))).catch((_arg_1) => (Promise.resolve(false))))));
+    return PromiseBuilder__Run_212F1D4B(promise, PromiseBuilder__Delay_62FBFDE1(promise, () => (PromiseBuilder__Delay_62FBFDE1(promise, () => (httpGet(c, "/health", 15000).then((_arg) => (Promise.resolve(_arg.statusCode === 200))))).catch((_arg_1) => (Promise.resolve(false))))));
+}
+
+export function parseHealthError(parsed) {
+    const errObj = fieldObj("error")(parsed);
+    if (errObj != null) {
+        const e = value_14(errObj);
+        return new HealthError(defaultArg(fieldString("case", e), "Unknown"), defaultArg(fieldString("message", e), ""), defaultArg(fieldString("suggestedAction", e), ""));
+    }
+    else {
+        return undefined;
+    }
 }
 
 export function getStatus(c) {
-    return PromiseBuilder__Run_212F1D4B(promise, PromiseBuilder__Delay_62FBFDE1(promise, () => (PromiseBuilder__Delay_62FBFDE1(promise, () => (httpGet(c, "/health", 3000).then((_arg) => {
+    return PromiseBuilder__Run_212F1D4B(promise, PromiseBuilder__Delay_62FBFDE1(promise, () => (PromiseBuilder__Delay_62FBFDE1(promise, () => (httpGet(c, "/health", 15000).then((_arg) => {
         const resp = _arg;
         if (resp.statusCode === 200) {
             const parsed = JSON.parse(resp.body);
-            return Promise.resolve(new SageFsStatus(true, orElse(fieldBool("healthy", parsed), false), fieldString("status", parsed)));
+            const features = defaultArg(map((arg) => ofArray(choose(tryCastString, arg)), fieldArray("features", parsed)), empty());
+            return Promise.resolve(new SageFsStatus(true, orElse(fieldBool("healthy", parsed), false), fieldString("status", parsed), fieldInt("apiVersion", parsed), features, parseHealthError(parsed)));
         }
         else {
-            return Promise.resolve(new SageFsStatus(true, false, "no session"));
+            return Promise.resolve(new SageFsStatus(true, false, "no session", undefined, empty(), undefined));
         }
-    }))).catch((_arg_1) => (Promise.resolve(new SageFsStatus(false, undefined, undefined)))))));
+    }))).catch((_arg_1) => (Promise.resolve(new SageFsStatus(false, undefined, undefined, undefined, empty(), undefined)))))));
 }
 
-export function evalCode(code, workingDirectory, c) {
+export function isReady(c) {
+    return PromiseBuilder__Run_212F1D4B(promise, PromiseBuilder__Delay_62FBFDE1(promise, () => (getStatus(c).then((_arg) => {
+        const s = _arg;
+        const matchValue_1 = s.status;
+        let matchResult;
+        if (s.connected) {
+            if (matchValue_1 != null) {
+                switch (matchValue_1) {
+                    case "Ready":
+                    case "Evaluating": {
+                        matchResult = 0;
+                        break;
+                    }
+                    default:
+                        matchResult = 1;
+                }
+            }
+            else {
+                matchResult = 1;
+            }
+        }
+        else {
+            matchResult = 1;
+        }
+        switch (matchResult) {
+            case 0:
+                return Promise.resolve(true);
+            default:
+                return Promise.resolve(false);
+        }
+    }))));
+}
+
+/**
+ * Returns the features list from the daemon health endpoint, or empty list if unreachable.
+ */
+export function getFeatures(c) {
+    return PromiseBuilder__Run_212F1D4B(promise, PromiseBuilder__Delay_62FBFDE1(promise, () => (getStatus(c).then((_arg) => (Promise.resolve(_arg.features))))));
+}
+
+export function evalCode(code, workingDirectory, filePath, evalMode, blockStartLine, c) {
     const wd = defaultArg(workingDirectory, "");
+    const fp = defaultArg(filePath, "");
+    const em = defaultArg(evalMode, "");
+    const bsl = defaultArg(blockStartLine, 0) | 0;
     return postCommand(c, "/exec", JSON.stringify({
+        block_start_line: bsl,
         code: code,
+        eval_mode: em,
+        file_path: fp,
         working_directory: wd,
     }), 30000);
 }
@@ -326,7 +411,7 @@ export function hardReset(rebuild, c) {
 }
 
 export function parseSessions(parsed) {
-    return map((s) => (new SessionInfo(defaultArg(fieldString("id", s), ""), undefined, defaultArg(fieldString("workingDirectory", s), ""), defaultArg(fieldString("status", s), "unknown"), defaultArg(fieldStringArray("projects", s), []), defaultArg(fieldInt("evalCount", s), 0))), defaultArg(fieldArray("sessions", parsed), []));
+    return map_1((s) => (new SessionInfo(defaultArg(fieldString("id", s), ""), undefined, defaultArg(fieldString("workingDirectory", s), ""), defaultArg(fieldString("status", s), "unknown"), defaultArg(fieldStringArray("projects", s), []), defaultArg(fieldInt("evalCount", s), 0))), defaultArg(fieldArray("sessions", parsed), []));
 }
 
 export function listSessions(c) {
@@ -353,15 +438,25 @@ export function stopSession(sessionId, c) {
 }
 
 export function parseSystemStatus(parsed) {
-    return new SystemStatus(defaultArg(fieldBool("supervised", parsed), false), defaultArg(fieldInt("restartCount", parsed), 0), defaultArg(fieldString("version", parsed), "?"));
+    return new SystemStatus(defaultArg(fieldBool("supervised", parsed), false), defaultArg(fieldInt("restartCount", parsed), 0), defaultArg(fieldString("version", parsed), "?"), defaultArg(fieldInt("apiVersion", parsed), 0));
+}
+
+export function checkVersion(status) {
+    const matchValue = status.apiVersion | 0;
+    if (matchValue === 1) {
+        return new FSharpResult$2(0, [undefined]);
+    }
+    else {
+        return new FSharpResult$2(1, [`SageFs daemon apiVersion=${matchValue} is incompatible with this extension (requires apiVersion=${1}). Run 'dotnet tool update --global SageFs' then reload VS Code.`]);
+    }
 }
 
 export function getSystemStatus(c) {
-    return getJson("getSystemStatus", "/api/system/status", 3000, parseSystemStatus, c);
+    return getJson("getSystemStatus", "/api/system/status", 15000, parseSystemStatus, c);
 }
 
 export function parseHotReloadState(parsed) {
-    return new HotReloadState(defaultArg(map_1((rawFiles) => choose((f) => map_1((p) => (new HotReloadFile(p, defaultArg(fieldBool("watched", f), false))), fieldString("path", f)), rawFiles), fieldArray("files", parsed)), []), defaultArg(fieldInt("watchedCount", parsed), 0));
+    return new HotReloadState(defaultArg(map((rawFiles) => choose((f) => map((p) => (new HotReloadFile(p, defaultArg(fieldBool("watched", f), false))), fieldString("path", f)), rawFiles), fieldArray("files", parsed)), []), defaultArg(fieldInt("watchedCount", parsed), 0));
 }
 
 export function getHotReloadState(sessionId, c) {
@@ -395,10 +490,12 @@ export function unwatchDirectoryHotReload(sessionId, directory, c) {
 }
 
 export function parseWarmupContext(parsed) {
-    const assemblies = map((a) => (new LoadedAssemblyInfo(defaultArg(fieldString("Name", a), ""), defaultArg(fieldString("Path", a), ""), defaultArg(fieldInt("NamespaceCount", a), 0), defaultArg(fieldInt("ModuleCount", a), 0))), defaultArg(fieldArray("AssembliesLoaded", parsed), []));
-    const opened = map((b) => (new OpenedBindingInfo(defaultArg(fieldString("Name", b), ""), defaultArg(fieldBool("IsModule", b), false), defaultArg(fieldString("Source", b), ""))), defaultArg(fieldArray("NamespacesOpened", parsed), []));
-    const failed = map((f) => defaultArg(tryCastStringArray(f), []), defaultArg(fieldArray("FailedOpens", parsed), []));
-    return new WarmupContextInfo(defaultArg(fieldInt("SourceFilesScanned", parsed), 0), assemblies, opened, failed, defaultArg(fieldInt("WarmupDurationMs", parsed), 0));
+    const assemblies = map_1((a) => (new LoadedAssemblyInfo(defaultArg(fieldString("name", a), ""), defaultArg(fieldString("path", a), ""), defaultArg(fieldInt("namespaceCount", a), 0), defaultArg(fieldInt("moduleCount", a), 0))), defaultArg(fieldArray("assembliesLoaded", parsed), []));
+    const opened = map_1((b) => (new OpenedBindingInfo(defaultArg(fieldString("name", b), ""), defaultArg(fieldBool("isModule", b), false), defaultArg(fieldString("source", b), ""))), defaultArg(fieldArray("namespacesOpened", parsed), []));
+    const failed = map_1((f) => defaultArg(tryCastStringArray(f), []), defaultArg(fieldArray("failedOpens", parsed), []));
+    const timing = fieldObj("phaseTiming")(parsed);
+    const totalMs = ((timing != null) ? defaultArg(fieldInt("totalMs", value_14(timing)), 0) : defaultArg(fieldInt("warmupDurationMs", parsed), 0)) | 0;
+    return new WarmupContextInfo(defaultArg(fieldInt("sourceFilesScanned", parsed), 0), assemblies, opened, failed, totalMs);
 }
 
 export function getWarmupContext(sessionId, c) {
@@ -406,16 +503,17 @@ export function getWarmupContext(sessionId, c) {
 }
 
 export class CompletionResult extends Record {
-    constructor(label, kind, insertText) {
+    constructor(label, kind, insertText, detail) {
         super();
         this.label = label;
         this.kind = kind;
         this.insertText = insertText;
+        this.detail = detail;
     }
 }
 
 export function CompletionResult_$reflection() {
-    return record_type("SageFs.Vscode.SageFsClient.CompletionResult", [], CompletionResult, () => [["label", string_type], ["kind", string_type], ["insertText", string_type]]);
+    return record_type("SageFs.Vscode.SageFsClient.CompletionResult", [], CompletionResult, () => [["label", string_type], ["kind", string_type], ["insertText", string_type], ["detail", option_type(string_type)]]);
 }
 
 export function getCompletions(code, cursorPosition, workingDirectory, c) {
@@ -429,14 +527,14 @@ export function getCompletions(code, cursorPosition, workingDirectory, c) {
             const resp = _arg;
             if (resp.statusCode === 200) {
                 const items = defaultArg(fieldArray("completions", JSON.parse(resp.body)), []);
-                return Promise.resolve(map((item) => (new CompletionResult(defaultArg(fieldString("label", item), ""), defaultArg(fieldString("kind", item), ""), defaultArg(fieldString("insertText", item), ""))), items));
+                return Promise.resolve(map_1((item) => (new CompletionResult(defaultArg(fieldString("label", item), ""), defaultArg(fieldString("kind", item), ""), defaultArg(fieldString("insertText", item), ""), fieldString("detail", item))), items));
             }
             else {
                 return Promise.resolve([]);
             }
         });
     }).catch((_arg_1) => {
-        console.warn('[SageFs]', "getCompletions", _arg_1);
+        c.log(toText(printf("[warn] getCompletions: %O"))(_arg_1));
         return Promise.resolve([]);
     }))));
 }
@@ -470,7 +568,35 @@ export function explore(name, c) {
         const resp = _arg;
         return (resp.statusCode === 200) ? (Promise.resolve(resp.body)) : (Promise.resolve(undefined));
     }))).catch((_arg_1) => {
-        console.warn('[SageFs]', "explore", _arg_1);
+        c.log(toText(printf("[warn] explore: %O"))(_arg_1));
+        return Promise.resolve(undefined);
+    }))));
+}
+
+/**
+ * Call /dashboard/completions with "Name." to get structured JSON:
+ * { completions: [{ label, kind, insertText, detail? }], count }
+ */
+export function exploreCompletions(qualifiedName, sessionId, c) {
+    return PromiseBuilder__Run_212F1D4B(promise, PromiseBuilder__Delay_62FBFDE1(promise, () => (PromiseBuilder__Delay_62FBFDE1(promise, () => {
+        const code = toText(printf("%s."))(qualifiedName);
+        const body = JSON.stringify({
+            code: code,
+            cursorPos: code.length,
+            sessionId: sessionId,
+        });
+        return dashHttpPost(c, "/dashboard/completions", body, 10000).then((_arg) => {
+            const resp = _arg;
+            if (resp.statusCode === 200) {
+                return Promise.resolve(resp.body);
+            }
+            else {
+                c.log(toText(printf("[warn] exploreCompletions %s: status %d"))(qualifiedName)(resp.statusCode));
+                return Promise.resolve(undefined);
+            }
+        });
+    }).catch((_arg_1) => {
+        c.log(toText(printf("[warn] exploreCompletions: %O"))(_arg_1));
         return Promise.resolve(undefined);
     }))));
 }
