@@ -13,11 +13,13 @@
 - **[Hot Reload](../HOT_RELOAD_STATUS.md)** — Method patching + browser refresh architecture
 
 ## Technical Reference
+- **[Feature Matrix](FEATURE_MATRIX.md)** — Cross-editor feature comparison + architecture notes
 - **[Binary Format Spec](binary-format-spec.md)** — `.sagefm` and `.sagetc` persistence format
 - **[Binary Format Benchmarks](binary-format-benchmarks.md)** — Serialization performance data
 - **[System Architecture](architecture-graph.html)** — Component interaction diagram
 - **[SSE Events Reference](../Readme.md#-sse-events-reference)** — Wire format for all SSE events
 - **[MCP Tools Reference](../Readme.md#-mcp-tools-33-tools)** — Full tool catalog
+- **[Troubleshooting](TROUBLESHOOTING.md)** — Common issues and fixes
 
 ## For Contributors
 - **[Code Reference](../CODE_REFERENCE.md)** — 6 key design patterns with examples

@@ -115,7 +115,7 @@ SageFs opens an interactive terminal. Your editor connects automatically.
 
 **Visual Studio 2022** — Install the VSIX from [Releases](https://github.com/WillEhrendreich/SageFs/releases). Press `Alt+Enter`. The daemon starts automatically.
 
-**Terminal only** — `sagefs tui` for the built-in terminal UI, or `sagefs gui` for the Raylib GPU window.
+**Terminal only** — `sagefs tui` for the built-in terminal UI (powered by [SageTUI](https://github.com/WillEhrendreich/sagetui) Elm Architecture), or `sagefs gui` for the Raylib GPU window. Use `sagefs tui --legacy-tui` for the classic imperative renderer.
 
 ### 4. Enable live testing
 
@@ -156,7 +156,7 @@ graph TB
     D --- VS["VS Code<br/><i>Fable F#→JS</i>"]
     D --- NV["Neovim<br/><i>38 Lua modules</i>"]
     D --- VI["Visual Studio<br/><i>Extensibility SDK</i>"]
-    D --- TU["Terminal TUI<br/><i>ANSI renderer</i>"]
+    D --- TU["Terminal TUI<br/><i>SageTUI / Elm</i>"]
     D --- GU["Raylib GUI<br/><i>GPU renderer</i>"]
     D --- WB["Web Dashboard<br/><i>Falco.Datastar</i>"]
     D --- AI["AI Agents<br/><i>MCP protocol</i>"]
@@ -367,8 +367,9 @@ Works with GitHub Copilot (CLI & VS Code), Claude Code, Claude Desktop, OpenCode
 #### TUI / GUI / Web Dashboard / REPL
 
 ```bash
-sagefs tui       # Multi-pane terminal UI with tree-sitter highlighting
-sagefs gui       # GPU-rendered Raylib window (same layout as TUI)
+sagefs tui                # SageTUI Elm Architecture terminal UI
+sagefs tui --legacy-tui   # Classic imperative CellGrid renderer (fallback)
+sagefs gui                # GPU-rendered Raylib window
 sagefs connect   # Text REPL connected to running daemon
 # Dashboard auto-starts at http://localhost:37750/dashboard
 ```
@@ -547,6 +548,7 @@ All connected editors receive these events via the SSE stream. Events are tagged
 Usage: sagefs [options]                Start daemon (bare, waits for clients)
        sagefs --supervised [options]   Start with watchdog auto-restart
        sagefs tui                      Terminal UI (starts daemon if needed)
+       sagefs tui --legacy-tui         Terminal UI (imperative fallback)
        sagefs gui                      GPU GUI via Raylib (starts daemon if needed)
        sagefs stop                     Stop running daemon
        sagefs status                   Show daemon info
@@ -638,7 +640,7 @@ Rewrite logic: [`SageFs.Core/FsiRewrite.fs`](SageFs.Core/FsiRewrite.fs) (~25 lin
 
 <br />
 
-SageFs is **daemon-first** — one server, many clients. The daemon starts bare and creates sessions on demand. Each session is an **isolated worker sub-process** (Erlang-style fault isolation) with its own FSI, project, and file watcher. The TUI and Raylib GUI share the same `Cell[,]` grid rendering abstraction — same keybindings, same layout, different backends.
+SageFs is **daemon-first** — one server, many clients. The daemon starts bare and creates sessions on demand. Each session is an **isolated worker sub-process** (Erlang-style fault isolation) with its own FSI, project, and file watcher. The TUI uses SageTUI's Elm Architecture (`Program<Model,Msg>` with SIMD cell diff), while the Raylib GUI uses the `Cell[,]` grid abstraction — both share the same keybindings via `KeyMap` and connect to the daemon via SSE.
 
 ```
                 ┌───────────────┐

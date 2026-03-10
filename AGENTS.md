@@ -48,9 +48,9 @@ SageFs is an F# live development environment — a REPL-powered tool with editor
 ## Project Structure
 
 ```
-SageFs.Core/       — Shared types, rendering abstraction, Elm model
-SageFs/            — CLI tool (TUI client + daemon)
-SageFs.Gui/        — Raylib GUI client
+SageFs.Core/       — Shared types, rendering abstraction, KeyMap, Theme
+SageFs/            — CLI tool, daemon, SageTUI client (SageTuiClient.fs) + legacy TUI (TuiClient.fs)
+SageFs.Gui/        — Raylib GUI client (Cell[,] grid renderer)
 SageFs.Tests/      — Expecto test project
 sagefs-vscode/     — VS Code extension (Fable F#→JS)
 sagefs-vs/         — Visual Studio extension (C# + F#)
@@ -69,7 +69,8 @@ dotnet pack SageFs -o nupkg  # Package the CLI tool
 
 ## Architecture Principles
 
-- **Dual-renderer**: TUI and Raylib GUI share the same `Cell[,]` grid abstraction
+- **TUI via SageTUI**: Terminal UI uses [SageTUI](https://github.com/WillEhrendreich/sagetui) Elm Architecture (`Program<Model,Msg>` with `init/update/view/subscribe`), SIMD cell diff, zero-GC rendering. Classic `CellGrid` imperative renderer available as `--legacy-tui` fallback.
+- **Raylib GUI**: GPU-rendered client uses `Cell[,]` grid abstraction with `RaylibEmitter`
 - **Binary persistence**: Session/test state via CRC-validated binary manifest (.sagefm)
 - **CQRS**: Separate read/write models
 - **Vertical slices**: Features as single files for locality of behavior

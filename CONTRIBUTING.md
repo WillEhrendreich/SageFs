@@ -56,19 +56,20 @@ Now `sagefs` on your PATH is your locally-built version.
 # Point SageFs at any F# project
 sagefs --proj SageFs.Tests/SageFs.Tests.fsproj
 
-# Or use the TUI, GUI, or dashboard
-sagefs tui
-sagefs gui
+# Or use the TUI (SageTUI Elm Architecture), GUI, or dashboard
+sagefs tui                # New SageTUI-based terminal UI (default)
+sagefs tui --legacy-tui   # Classic imperative CellGrid renderer
+sagefs gui                # GPU-rendered Raylib window
 # Dashboard auto-opens at http://localhost:37750/dashboard
 ```
 
 ## Project Structure
 
 ```
-SageFs.Core/       — Shared types, rendering abstraction, Elm model (start here!)
-SageFs/            — CLI tool, daemon, TUI client
+SageFs.Core/       — Shared types, rendering abstraction, KeyMap, Theme (start here!)
+SageFs/            — CLI tool, daemon, SageTUI client (SageTuiClient.fs) + legacy TUI (TuiClient.fs)
 SageFs.Gui/        — Raylib GPU-rendered GUI client
-SageFs.Tests/      — Expecto test project (2900+ tests)
+SageFs.Tests/      — Expecto test project (3500+ tests)
 sagefs-vscode/     — VS Code extension (F# via Fable → JavaScript)
 sagefs-vs/         — Visual Studio extension (C# shim + F# core)
 docs/              — GitHub Pages documentation site
@@ -77,8 +78,9 @@ docs/              — GitHub Pages documentation site
 The Neovim plugin lives in a separate repo: [sagefs.nvim](https://github.com/WillEhrendreich/sagefs.nvim).
 
 **Good starting points for reading code:**
-- `SageFs.Core/TerminalUI.fs` — the `Cell`, `CellGrid`, `Draw`, and `Theme` types that both TUI and GUI share
-- `SageFs.Core/RenderPipeline.fs` — how the Elm model becomes screen output
+- `SageFs/SageTuiClient.fs` — the SageTUI Elm Architecture TUI client (Model/Msg/init/update/view/subscribe)
+- `SageFs.Core/RenderPipeline.fs` — PaneId, EditorAction, KeyCombo, UiAction, RenderRegion types
+- `SageFs.Core/TerminalUI.fs` — `Cell`, `CellGrid`, `Draw`, `Theme` types (used by Raylib GUI + legacy TUI)
 - `SageFs.Tests/` — the test project shows how every module is exercised
 
 ## Debugging SageFs

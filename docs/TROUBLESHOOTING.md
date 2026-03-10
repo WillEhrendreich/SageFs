@@ -73,6 +73,22 @@ The active project is shown in the status bar.
 - **Long-running eval**: Some evaluations genuinely take time (large
   compilations, network calls). Check the daemon console for progress.
 
+### TUI rendering issues / display corruption
+
+The TUI was rebuilt on the SageTUI Elm Architecture in v0.7.x. If you experience
+rendering problems:
+
+1. **Try the legacy renderer**: `sagefs tui --legacy-tui` — this uses the classic
+   imperative CellGrid renderer and may work better in terminals with limited
+   capabilities.
+2. **Check terminal compatibility**: SageTUI requires a terminal that supports:
+   - Alternate screen buffer (xterm)
+   - SGR mouse protocol (1006)
+   - 256-color or truecolor
+   - Most modern terminals work: Windows Terminal, iTerm2, Alacritty, Kitty, WezTerm
+3. **Resize issues**: If the layout breaks after resize, press the configured
+   Redraw key (default: `Ctrl+L`).
+
 ### Stale REPL after code changes
 
 Use hard reset to pick up source file changes:

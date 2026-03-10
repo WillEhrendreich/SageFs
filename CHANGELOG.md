@@ -29,6 +29,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Neovim — Telescope `<CR>` now jumps to test source location (falls back to run), `<C-g>` explicit source-jump
 - Neovim — `<C-d>` floating window showing failure narrative (Summary, TimeSinceLastPass, CausalChanges)
 - Neovim — SSE handlers for `test_source_locations` and `failure_narratives` events
+- **SageTUI migration** — Terminal UI rebuilt on SageTUI's Elm Architecture (`Program<Model,Msg>` with `init/update/view/subscribe`), replacing ~457 lines of imperative mutable code with ~736 lines of purely functional TEA
+  - `SageTuiClient.fs` — full TEA client: Model (~22 immutable fields), Msg (~30 cases), CustomSub for SSE, Keys.bindWithMods for keyboard, MouseSub, FrameTimingsSub
+  - SageTUI handles terminal setup (alt screen, raw mode, mouse protocol) — `TerminalMode.setupRawMode()` no longer needed for the new client
+  - Theme bridging: `hexToColor` converts SageFs `ThemeConfig` hex strings → SageTUI `Color.Rgb`
+  - Old TuiClient preserved as `--legacy-tui` fallback: `sagefs tui` (new default) vs `sagefs tui --legacy-tui` (old imperative)
+- Global error middleware replacing 23 per-endpoint `try/catch` wrappers with centralized `SageFsError` handling
+- `ValidTimeout` DU for type-safe timeout validation with environment variable overrides
+- Eval watchdog ported to VS Code, Visual Studio, TUI, and Raylib GUI clients
+- 5-phase warmup progress SSE events for real-time session initialization feedback
+- `SageFsError.toJson` with 30 exhaustive typed error cases for structured error responses
+- Contextual rescue actions in VS Code, Neovim, and Visual Studio error notifications
+- Walkthrough onboarding in VS Code with 5 interactive steps
+- Daemon stderr capture and eval watchdog for detecting silent daemon failures
+- Multi-project picker for workspaces with multiple .fsproj files
 
 ### Added
 - Composed multi-provider test execution — `RunTest` closures from multiple providers (FSI hook + project-level) are chained with fallthrough semantics so the first provider that can run a test wins
@@ -52,6 +66,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `SessionManager.create` takes an additional `onTestDiscovery` callback parameter
 - `LiveTestHookResultDto.fromResult` introduced to separate serializable DTO from the function-bearing domain type
 - `ValidatedBuffer` type no longer uses `private` constructor (enables REPL construction for testing)
+- `sagefs tui` now launches SageTUI-based Elm Architecture client by default (previously launched imperative CellGrid-based TUI)
+- TUI rendering pipeline changed: SageTUI `Element` tree → SIMD cell diff → terminal, replacing `CellGrid.rent` → `Screen.drawWith` → `AnsiEmitter.emit`
 
 ## [0.7.0] - 2026-03-10
 

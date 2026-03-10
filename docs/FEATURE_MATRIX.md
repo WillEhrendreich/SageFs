@@ -130,3 +130,16 @@ All 33+ MCP tools are available regardless of editor choice:
 - `get_file_coverage` — Line-level coverage data
 - `visualize_domain_model` — DU as state machine diagram
 - ...and more (see MCP tool documentation)
+
+## Architecture Notes
+
+| Client | Rendering Engine | Terminal Setup | Frame Loop |
+|:-------|:----------------|:---------------|:-----------|
+| **TUI** (default) | SageTUI Elm Architecture (`Program<Model,Msg>`) | SageTUI handles alt screen, raw mode, mouse | `App.run` with SIMD cell diff |
+| **TUI** (`--legacy-tui`) | Imperative `CellGrid` → `AnsiEmitter` | `TerminalMode.setupRawMode()` | Manual `CellGrid.rent` → `Screen.drawWith` → `Console.Write` |
+| **Raylib GUI** | `Cell[,]` grid → `RaylibEmitter` draw calls | N/A (GPU window) | Raylib frame loop with `BeginDrawing`/`EndDrawing` |
+| **Web Dashboard** | Falco.Datastar SSE → HTML | N/A (browser) | Server-push via SSE |
+
+All clients share the same daemon SSE subscription for real-time state updates,
+the same `KeyMap` for keybinding configuration, and the same `ThemeConfig` for
+color theming.
