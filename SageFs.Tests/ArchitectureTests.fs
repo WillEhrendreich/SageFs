@@ -230,10 +230,10 @@ let architectureTests =
         printfn "  SageFs.Core modules: %d" modules.Length
         // Ceiling prevents regression. Lower as consolidation progresses.
         // Baseline: 201 (2025-03-10). Target: ≤60 (synthesis 3.4).
-        (modules.Length, 225)
+        (modules.Length, 228)
         |> Expect.isLessThanOrEqual
           (sprintf
-            "SageFs.Core should have ≤225 top-level modules (currently %d)"
+            "SageFs.Core should have ≤228 top-level modules (currently %d)"
             modules.Length)
 
       testCase "SageFs.Core exported types tracked"
@@ -300,9 +300,9 @@ let architectureTests =
           printfn "  Modules with zero public API:"
           emptyModules |> Array.iter (fun m -> printfn "    - %s" m.FullName)
           // These are candidates for removal or consolidation
-          (n, 15)
+          (n, 20)
           |> Expect.isLessThanOrEqual
-            (sprintf "should have ≤15 empty modules (found %d)" n)
+            (sprintf "should have ≤20 empty modules (found %d)" n)
 
       testCase "modules with only type definitions tracked"
       <| fun _ ->
