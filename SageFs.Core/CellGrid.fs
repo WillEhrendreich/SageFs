@@ -30,49 +30,6 @@ module Cell =
     | true -> base'
     | false -> over
 
-/// A rectangle in the grid. Smart constructor clamps to non-negative.
-[<Struct>]
-type Rect = {
-  Row: int
-  Col: int
-  Width: int
-  Height: int
-}
-
-module Rect =
-  let create row col width height =
-    { Row = max 0 row
-      Col = max 0 col
-      Width = max 0 width
-      Height = max 0 height }
-
-  let isEmpty r = r.Width <= 0 || r.Height <= 0
-  let right r = r.Col + r.Width
-  let bottom r = r.Row + r.Height
-
-  let inset margin r =
-    create (r.Row + margin) (r.Col + margin) (r.Width - margin * 2) (r.Height - margin * 2)
-
-  let splitH (topH: int) (r: Rect) =
-    let topH = topH |> max 0 |> min r.Height
-    let top = create r.Row r.Col r.Width topH
-    let bot = create (r.Row + topH) r.Col r.Width (r.Height - topH)
-    top, bot
-
-  let splitV (leftW: int) (r: Rect) =
-    let leftW = leftW |> max 0 |> min r.Width
-    let left = create r.Row r.Col leftW r.Height
-    let right = create r.Row (r.Col + leftW) (r.Width - leftW) r.Height
-    left, right
-
-  let splitHProp (frac: float) (r: Rect) =
-    let topH = int (float r.Height * frac)
-    splitH topH r
-
-  let splitVProp (frac: float) (r: Rect) =
-    let leftW = int (float r.Width * frac)
-    splitV leftW r
-
 /// The cell grid — wraps a 1D array with row/col dimensions for cache-friendly operations.
 /// Uses Array.Fill for bulk clears/fills (7× faster than per-cell Array2D loops).
 type CellGrid = {

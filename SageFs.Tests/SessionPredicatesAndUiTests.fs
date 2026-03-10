@@ -197,7 +197,7 @@ let uiActionTests = testList "UiAction" [
   testList "tryParse prefix handlers" [
     test "TogglePane.editor" {
       UiAction.tryParse "TogglePane.editor"
-      |> Expect.equal "TogglePane" (Some (UiAction.TogglePane "editor"))
+      |> Expect.equal "TogglePane" (Some (UiAction.TogglePane PaneId.Editor))
     }
     test "Layout.wide" {
       UiAction.tryParse "Layout.wide"

@@ -280,7 +280,7 @@ let uiActionParseTests = testList "UiAction.tryParse" [
     UiAction.tryParse "ResizeVShrink" |> Expect.equal "vshrink" (Some (UiAction.ResizeV -1))
   }
   test "parses TogglePane prefix" {
-    UiAction.tryParse "TogglePane.Editor" |> Expect.equal "toggle editor" (Some (UiAction.TogglePane "Editor"))
+    UiAction.tryParse "TogglePane.Editor" |> Expect.equal "toggle editor" (Some (UiAction.TogglePane PaneId.Editor))
   }
   test "parses Layout prefix" {
     UiAction.tryParse "Layout.Default" |> Expect.equal "layout default" (Some (UiAction.LayoutPreset "Default"))

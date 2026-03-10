@@ -2,6 +2,49 @@ namespace SageFs
 
 open System
 
+/// A rectangle in the grid. Smart constructor clamps to non-negative.
+[<Struct>]
+type Rect = {
+  Row: int
+  Col: int
+  Width: int
+  Height: int
+}
+
+module Rect =
+  let create row col width height =
+    { Row = max 0 row
+      Col = max 0 col
+      Width = max 0 width
+      Height = max 0 height }
+
+  let isEmpty r = r.Width <= 0 || r.Height <= 0
+  let right r = r.Col + r.Width
+  let bottom r = r.Row + r.Height
+
+  let inset margin r =
+    create (r.Row + margin) (r.Col + margin) (r.Width - margin * 2) (r.Height - margin * 2)
+
+  let splitH (topH: int) (r: Rect) =
+    let topH = topH |> max 0 |> min r.Height
+    let top = create r.Row r.Col r.Width topH
+    let bot = create (r.Row + topH) r.Col r.Width (r.Height - topH)
+    top, bot
+
+  let splitV (leftW: int) (r: Rect) =
+    let leftW = leftW |> max 0 |> min r.Width
+    let left = create r.Row r.Col leftW r.Height
+    let right = create r.Row (r.Col + leftW) (r.Width - leftW) r.Height
+    left, right
+
+  let splitHProp (frac: float) (r: Rect) =
+    let topH = int (float r.Height * frac)
+    splitH topH r
+
+  let splitVProp (frac: float) (r: Rect) =
+    let leftW = int (float r.Width * frac)
+    splitV leftW r
+
 /// Flags controlling how a render region behaves
 [<Flags>]
 type RegionFlags =
@@ -55,6 +98,15 @@ and [<RequireQualifiedAccess>] Direction =
   | Down
   | Left
   | Right
+
+/// Strongly-typed pane identifier — eliminates stringly-typed region matching
+and [<RequireQualifiedAccess>] PaneId =
+  | Output
+  | Sessions
+  | Diagnostics
+  | Editor
+  | Context
+  | Tests
 
 /// Direction for history navigation
 and [<RequireQualifiedAccess>] HistoryDirection =
@@ -142,7 +194,7 @@ and [<RequireQualifiedAccess>] UiAction =
   | Redraw
   | FontSizeUp
   | FontSizeDown
-  | TogglePane of string
+  | TogglePane of PaneId
   | LayoutPreset of string
   | ResizeH of int
   | ResizeV of int
@@ -180,6 +232,97 @@ module UiDensity =
     | UiDensity.Minimal -> "minimal"
     | UiDensity.Normal  -> "normal"
     | UiDensity.Full    -> "full"
+
+module PaneId =
+  let all = [| PaneId.Output; PaneId.Sessions; PaneId.Context; PaneId.Diagnostics; PaneId.Editor; PaneId.Tests |]
+
+  let toRegionId = function
+    | PaneId.Output -> "output"
+    | PaneId.Sessions -> "sessions"
+    | PaneId.Diagnostics -> "diagnostics"
+    | PaneId.Editor -> "editor"
+    | PaneId.Context -> "context"
+    | PaneId.Tests -> "tests"
+
+  let fromRegionId = function
+    | "output" -> Some PaneId.Output
+    | "sessions" -> Some PaneId.Sessions
+    | "diagnostics" -> Some PaneId.Diagnostics
+    | "editor" -> Some PaneId.Editor
+    | "context" -> Some PaneId.Context
+    | "tests" -> Some PaneId.Tests
+    | _ -> None
+
+  let next (current: PaneId) : PaneId =
+    let idx = all |> Array.findIndex ((=) current)
+    all.[(idx + 1) % all.Length]
+
+  let nextVisible (visible: Set<PaneId>) (current: PaneId) : PaneId =
+    match visible.IsEmpty with
+    | true -> current
+    | false ->
+      let visibleArr = all |> Array.filter visible.Contains
+      match visibleArr.Length = 0 with
+      | true -> current
+      | false ->
+        match visibleArr |> Array.tryFindIndex ((=) current) with
+        | Some idx -> visibleArr.[(idx + 1) % visibleArr.Length]
+        | None -> visibleArr.[0]
+
+  let firstVisible (visible: Set<PaneId>) : PaneId =
+    all
+    |> Array.tryFind visible.Contains
+    |> Option.defaultValue PaneId.Output
+
+  let navigate (direction: Direction) (current: PaneId) (paneRects: (PaneId * Rect) list) : PaneId =
+    let currentRect =
+      paneRects |> List.tryFind (fun (id, _) -> id = current) |> Option.map snd
+    match currentRect with
+    | None -> current
+    | Some cr ->
+      let centerRow = cr.Row + cr.Height / 2
+      let centerCol = cr.Col + cr.Width / 2
+      let candidates =
+        paneRects
+        |> List.filter (fun (id, r) ->
+          match id = current with
+          | true -> false
+          | false ->
+            let cRow = r.Row + r.Height / 2
+            let cCol = r.Col + r.Width / 2
+            match direction with
+            | Direction.Left  -> cCol < centerCol
+            | Direction.Right -> cCol > centerCol
+            | Direction.Up    -> cRow < centerRow
+            | Direction.Down  -> cRow > centerRow)
+      match candidates with
+      | [] -> current
+      | _ ->
+        candidates
+        |> List.minBy (fun (_, r) ->
+          let cRow = r.Row + r.Height / 2
+          let cCol = r.Col + r.Width / 2
+          let dr = cRow - centerRow
+          let dc = cCol - centerCol
+          dr * dr + dc * dc)
+        |> fst
+
+  let displayName = function
+    | PaneId.Output -> "Output"
+    | PaneId.Sessions -> "Sessions"
+    | PaneId.Diagnostics -> "Diagnostics"
+    | PaneId.Editor -> "Editor"
+    | PaneId.Context -> "Context"
+    | PaneId.Tests -> "Tests"
+
+  let tryParse = function
+    | "Output" | "output" -> Some PaneId.Output
+    | "Sessions" | "sessions" -> Some PaneId.Sessions
+    | "Diagnostics" | "diagnostics" -> Some PaneId.Diagnostics
+    | "Editor" | "editor" -> Some PaneId.Editor
+    | "Context" | "context" -> Some PaneId.Context
+    | "Tests" | "tests" -> Some PaneId.Tests
+    | _ -> None
 
 /// Maps physical keys to semantic actions
 type KeyMap = Map<KeyCombo, UiAction>
@@ -354,7 +497,8 @@ module UiAction =
     | None ->
       match trimmed with
       | s when s.StartsWith("TogglePane.", System.StringComparison.Ordinal) ->
-        Some (UiAction.TogglePane (s.Substring(11)))
+        PaneId.tryParse (s.Substring(11))
+        |> Option.map UiAction.TogglePane
       | s when s.StartsWith("Layout.", System.StringComparison.Ordinal) ->
         Some (UiAction.LayoutPreset (s.Substring(7)))
       | _ -> None
@@ -431,9 +575,10 @@ module KeyMap =
       KeyCombo.ctrlAlt ConsoleKey.D2, UiAction.LayoutPreset "focus"
       KeyCombo.ctrlAlt ConsoleKey.D3, UiAction.LayoutPreset "minimal"
       // Pane toggle
-      KeyCombo.ctrlAlt ConsoleKey.O, UiAction.TogglePane "Output"
-      KeyCombo.ctrlAlt ConsoleKey.E, UiAction.TogglePane "Editor"
-      KeyCombo.ctrlAlt ConsoleKey.D, UiAction.TogglePane "Diagnostics"
+      KeyCombo.ctrlAlt ConsoleKey.O, UiAction.TogglePane PaneId.Output
+      KeyCombo.ctrlAlt ConsoleKey.E, UiAction.TogglePane PaneId.Editor
+      KeyCombo.ctrlAlt ConsoleKey.D, UiAction.TogglePane PaneId.Diagnostics
+      KeyCombo.ctrlShift ConsoleKey.T, UiAction.TogglePane PaneId.Tests
       // Pane resize
       KeyCombo.ctrlAlt ConsoleKey.LeftArrow, UiAction.ResizeH -1
       KeyCombo.ctrlAlt ConsoleKey.RightArrow, UiAction.ResizeH 1

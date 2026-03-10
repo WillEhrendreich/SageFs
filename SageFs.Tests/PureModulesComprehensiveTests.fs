@@ -1746,7 +1746,7 @@ let uiActionParseTests = testList "UiAction.tryParse" [
   }
   test "TogglePane with suffix" {
     UiAction.tryParse "TogglePane.Output"
-    |> Expect.equal "parses" (Some (UiAction.TogglePane "Output"))
+    |> Expect.equal "parses" (Some (UiAction.TogglePane PaneId.Output))
   }
   test "LayoutPreset with suffix" {
     UiAction.tryParse "Layout.focus"

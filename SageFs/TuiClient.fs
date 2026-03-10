@@ -315,15 +315,12 @@ let run (daemonInfo: DaemonInfo) = task {
             let cur = scrollOffsets |> Map.tryFind focusedPane |> Option.defaultValue 0
             scrollOffsets <- scrollOffsets |> Map.add focusedPane (max 0 (cur - 3))
             render ()
-          | Some (TerminalCommand.TogglePane paneName) ->
-            match PaneId.tryParse paneName with
-            | Some pid ->
-              layoutConfig <- LayoutConfig.togglePane pid layoutConfig
-              match layoutConfig.VisiblePanes.Contains focusedPane with
-              | false -> focusedPane <- PaneId.firstVisible layoutConfig.VisiblePanes
-              | true -> ()
-              render ()
-            | None -> ()
+          | Some (TerminalCommand.TogglePane pid) ->
+            layoutConfig <- LayoutConfig.togglePane pid layoutConfig
+            match layoutConfig.VisiblePanes.Contains focusedPane with
+            | false -> focusedPane <- PaneId.firstVisible layoutConfig.VisiblePanes
+            | true -> ()
+            render ()
           | Some (TerminalCommand.LayoutPreset presetName) ->
             layoutConfig <-
               match presetName with

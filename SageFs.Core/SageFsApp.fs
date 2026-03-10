@@ -167,6 +167,8 @@ type SageFsModel = {
   LiveTesting: Features.LiveTesting.LiveTestCycleState
   /// Accumulates test results from batches for the summary on TestRunCompleted.
   PendingTestResults: Features.LiveTesting.TestRunResult list
+  /// Latest resolved test source locations — populated after each discovery pass.
+  ResolvedSourceLocations: Features.LiveTesting.TestSourceLocation list
 }
 
 module SageFsModel =
@@ -190,6 +192,7 @@ module SageFsModel =
     SessionContext = None
     LiveTesting = Features.LiveTesting.LiveTestCycleState.empty
     PendingTestResults = []
+    ResolvedSourceLocations = []
   }
 
   /// Add a single output line, routing to the correct session buffer.
@@ -638,7 +641,13 @@ module SageFsUpdate =
               incomingIds Features.LiveTesting.RunTrigger.FileSave (Some sessionId) lt
             |> List.map SageFsEffect.TestCycle
           | false -> []
-        { model with LiveTesting = lt }, effects
+        let locs =
+          let emptyGraph : Features.CellDependencyGraph.CellGraph = { Cells = Map.empty; Edges = [] }
+          Features.TestSourceResolver.resolveTestLocations emptyGraph (Array.toList tests)
+        { model with LiveTesting = lt; ResolvedSourceLocations = locs }, effects
+
+      | SageFsEvent.TestSourceLocations locations ->
+        { model with ResolvedSourceLocations = locations }, []
 
       | SageFsEvent.TestRunStarted (testIds, sessionId) ->
         let lt = recomputeStatuses model.LiveTesting (fun s ->
@@ -1042,7 +1051,17 @@ module SageFsRender =
       LineAnnotations = [||]
     }
 
-    [ editorRegion; outputRegion; diagnosticsRegion; sessionsRegion; contextRegion ]
+    let testsRegion = {
+      Id = "tests"
+      Flags = RegionFlags.Scrollable ||| RegionFlags.LiveUpdate
+      Content = TestsPane.buildContent 80 model.LiveTesting.TestState.StatusEntries
+      Affordances = []
+      Cursor = None
+      Completions = None
+      LineAnnotations = [||]
+    }
+
+    [ editorRegion; outputRegion; diagnosticsRegion; sessionsRegion; contextRegion; testsRegion ]
 
 /// Dependencies the effect handler needs — injected, not hard-coded.
 /// This is the seam between pure Elm and impure infrastructure.

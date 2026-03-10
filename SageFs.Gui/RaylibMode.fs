@@ -53,7 +53,7 @@ module RaylibMode =
     | FontSizeUp
     | FontSizeDown
     | Action of EditorAction
-    | TogglePane of string
+    | TogglePane of PaneId
     | LayoutPreset of string
     | ResizeH of int
     | ResizeV of int
@@ -385,13 +385,10 @@ module RaylibMode =
         | FontSizeDown ->
           fontSize <- max minFontSize (fontSize - 2)
           reloadFont ()
-        | TogglePane paneName ->
-          match PaneId.tryParse paneName with
-          | Some pid ->
-            layoutConfig <- LayoutConfig.togglePane pid layoutConfig
-            if not (layoutConfig.VisiblePanes.Contains focusedPane) then
-              focusedPane <- PaneId.firstVisible layoutConfig.VisiblePanes
-          | None -> ()
+        | TogglePane pid ->
+          layoutConfig <- LayoutConfig.togglePane pid layoutConfig
+          if not (layoutConfig.VisiblePanes.Contains focusedPane) then
+            focusedPane <- PaneId.firstVisible layoutConfig.VisiblePanes
         | LayoutPreset presetName ->
           layoutConfig <-
             match presetName with

@@ -208,107 +208,6 @@ type InputEvent =
   | MouseEvent of MouseEvent
 
 
-/// Strongly-typed pane identifier — eliminates stringly-typed region matching
-[<RequireQualifiedAccess>]
-type PaneId =
-  | Output
-  | Sessions
-  | Diagnostics
-  | Editor
-  | Context
-
-module PaneId =
-  let all = [| PaneId.Output; PaneId.Sessions; PaneId.Context; PaneId.Diagnostics; PaneId.Editor |]
-
-  let toRegionId = function
-    | PaneId.Output -> "output"
-    | PaneId.Sessions -> "sessions"
-    | PaneId.Diagnostics -> "diagnostics"
-    | PaneId.Editor -> "editor"
-    | PaneId.Context -> "context"
-
-  let fromRegionId = function
-    | "output" -> Some PaneId.Output
-    | "sessions" -> Some PaneId.Sessions
-    | "diagnostics" -> Some PaneId.Diagnostics
-    | "editor" -> Some PaneId.Editor
-    | "context" -> Some PaneId.Context
-    | _ -> None
-
-  let next (current: PaneId) : PaneId =
-    let idx = all |> Array.findIndex ((=) current)
-    all.[(idx + 1) % all.Length]
-
-  /// Cycle to next pane that is in the visible set
-  let nextVisible (visible: Set<PaneId>) (current: PaneId) : PaneId =
-    match visible.IsEmpty with
-    | true -> current
-    | false ->
-      let visibleArr = all |> Array.filter visible.Contains
-      match visibleArr.Length = 0 with
-      | true -> current
-      | false ->
-        match visibleArr |> Array.tryFindIndex ((=) current) with
-        | Some idx -> visibleArr.[(idx + 1) % visibleArr.Length]
-        | None -> visibleArr.[0]
-
-  /// First visible pane in canonical order, defaults to Output
-  let firstVisible (visible: Set<PaneId>) : PaneId =
-    all
-    |> Array.tryFind visible.Contains
-    |> Option.defaultValue PaneId.Output
-
-  /// Navigate to the nearest pane in the given direction based on layout positions.
-  /// Returns the current pane if no neighbor exists in that direction.
-  let navigate (direction: Direction) (current: PaneId) (paneRects: (PaneId * Rect) list) : PaneId =
-    let currentRect =
-      paneRects |> List.tryFind (fun (id, _) -> id = current) |> Option.map snd
-    match currentRect with
-    | None -> current
-    | Some cr ->
-      let centerRow = cr.Row + cr.Height / 2
-      let centerCol = cr.Col + cr.Width / 2
-      let candidates =
-        paneRects
-        |> List.filter (fun (id, r) ->
-          match id = current with
-          | true -> false
-          | false ->
-            let cRow = r.Row + r.Height / 2
-            let cCol = r.Col + r.Width / 2
-            match direction with
-            | Direction.Left  -> cCol < centerCol
-            | Direction.Right -> cCol > centerCol
-            | Direction.Up    -> cRow < centerRow
-            | Direction.Down  -> cRow > centerRow)
-      match candidates with
-      | [] -> current
-      | _ ->
-        candidates
-        |> List.minBy (fun (_, r) ->
-          let cRow = r.Row + r.Height / 2
-          let cCol = r.Col + r.Width / 2
-          let dr = cRow - centerRow
-          let dc = cCol - centerCol
-          dr * dr + dc * dc)
-        |> fst
-
-  let displayName = function
-    | PaneId.Output -> "Output"
-    | PaneId.Sessions -> "Sessions"
-    | PaneId.Diagnostics -> "Diagnostics"
-    | PaneId.Editor -> "Editor"
-    | PaneId.Context -> "Context"
-
-  let tryParse = function
-    | "Output" | "output" -> Some PaneId.Output
-    | "Sessions" | "sessions" -> Some PaneId.Sessions
-    | "Diagnostics" | "diagnostics" -> Some PaneId.Diagnostics
-    | "Editor" | "editor" -> Some PaneId.Editor
-    | "Context" | "context" -> Some PaneId.Context
-    | _ -> None
-
-
 /// Frame diffing — only redraw rows that changed between frames
 module FrameDiff =
   /// Split a rendered frame into (row, content) pairs based on moveTo commands.
@@ -397,7 +296,7 @@ type TerminalCommand =
   | ScrollDown
   | Redraw
   | Quit
-  | TogglePane of string
+  | TogglePane of PaneId
   | LayoutPreset of string
   | ResizeH of int
   | ResizeV of int

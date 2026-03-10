@@ -44,6 +44,7 @@
         <Compile Include="Features\EvalDedup.fs" />
         <Compile Include="Features\EvalDiff.fs" />
         <Compile Include="Features\CellDependencyGraph.fs" />
+        <Compile Include="Features\TestSourceResolver.fs" />
         <Compile Include="Features\EvalProvenance.fs" />
         <Compile Include="Features\SessionScribe.fs" />
         <Compile Include="Features\MessageJournal.fs" />
@@ -98,6 +99,7 @@
         <Compile Include="SessionDisplay.fs" />
         <Compile Include="WarmupContext.fs" />
         <Compile Include="SageFsEvent.fs" />
+        <Compile Include="TestsPane.fs" />
         <Compile Include="SageFsApp.fs" />
     <Compile Include="ElmDaemon.fs" />
         <Compile Include="TerminalUI.fs" />

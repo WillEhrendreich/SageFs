@@ -68,8 +68,8 @@ module StatusHints =
       hint (UiAction.Editor action) label
     let editorToggle =
       match layout.Contains PaneId.Editor with
-      | true -> hint (UiAction.TogglePane "Editor") "hide-editor"
-      | false -> hint (UiAction.TogglePane "Editor") "show-editor"
+      | true -> hint (UiAction.TogglePane PaneId.Editor) "hide-editor"
+      | false -> hint (UiAction.TogglePane PaneId.Editor) "show-editor"
     let hotReloadHint =
       match watchedCount > 0 with
       | true -> hint UiAction.HotReloadUnwatchAll (sprintf "unwatch(%d)" watchedCount)
@@ -87,7 +87,7 @@ module StatusHints =
         [ editorHint EditorAction.TriggerCompletion "complete"
           editorHint EditorAction.Cancel "cancel" ]
         |> List.choose id
-      | PaneId.Output | PaneId.Diagnostics | PaneId.Context ->
+      | PaneId.Output | PaneId.Diagnostics | PaneId.Context | PaneId.Tests ->
         [ hint UiAction.ScrollDown "scroll↓" ] |> List.choose id
       | PaneId.Sessions ->
         [ editorHint EditorAction.ConfigureWarmupAutoOpen "auto-open-off" ]
@@ -185,7 +185,7 @@ module Screen =
     let hasLeft =
       cfg.VisiblePanes.Contains PaneId.Output || cfg.VisiblePanes.Contains PaneId.Editor
     let hasRight =
-      cfg.VisiblePanes.Contains PaneId.Sessions || cfg.VisiblePanes.Contains PaneId.Diagnostics || cfg.VisiblePanes.Contains PaneId.Context
+      cfg.VisiblePanes.Contains PaneId.Sessions || cfg.VisiblePanes.Contains PaneId.Diagnostics || cfg.VisiblePanes.Contains PaneId.Context || cfg.VisiblePanes.Contains PaneId.Tests
     let panes = ResizeArray<PaneId * Rect>()
     match hasLeft, hasRight with
     | true, true ->
@@ -203,7 +203,7 @@ module Screen =
       | false, false -> ()
       // Right column — split evenly among visible right-column panes
       let rightPanes =
-        [PaneId.Sessions; PaneId.Context; PaneId.Diagnostics]
+        [PaneId.Sessions; PaneId.Context; PaneId.Diagnostics; PaneId.Tests]
         |> List.filter cfg.VisiblePanes.Contains
       match rightPanes with
       | [single] -> panes.Add(single, right)
@@ -232,7 +232,7 @@ module Screen =
       | false, false -> ()
     | false, true ->
       let rightPanes =
-        [PaneId.Sessions; PaneId.Context; PaneId.Diagnostics]
+        [PaneId.Sessions; PaneId.Context; PaneId.Diagnostics; PaneId.Tests]
         |> List.filter cfg.VisiblePanes.Contains
       match rightPanes with
       | [single] -> panes.Add(single, contentArea)
@@ -312,22 +312,29 @@ module Screen =
           | false -> [||]
         let spanOffset = skip
 
-        visibleLines |> Array.iteri (fun row line ->
-          let lineIdx = spanOffset + row
-          // Draw gutter icon if annotations exist
-          match gw > 0 with
-          | true ->
-            match Map.tryFind lineIdx annotationLookup with
-            | Some ann ->
-              let iconFg = GutterRender.iconFgColor theme ann.Icon
-              Draw.text inner row 0 iconFg bg CellAttrs.None (sprintf "%c " (GutterIcon.toChar ann.Icon))
-            | None ->
-              Draw.text inner row 0 (Theme.hexToRgb theme.FgDim) bg CellAttrs.None "  "
-          | false -> ()
-          // Draw text content offset by gutter width
-          match shouldHighlight && lineIdx < allSpans.Length && allSpans.[lineIdx].Length > 0 with
-          | true -> Draw.textHighlighted inner row gw fg bg CellAttrs.None allSpans.[lineIdx] line
-          | false -> Draw.text inner row gw fg bg CellAttrs.None line)
+        // For the Tests pane, use TestsPane.renderContent for per-row coloring.
+        // For all other panes, use the standard text/highlight renderer.
+        match paneId = PaneId.Tests with
+        | true ->
+          let cursorIdx = region.Cursor |> Option.map (fun c -> c.Line) |> Option.defaultValue -1
+          TestsPane.renderContent inner visibleLines cursorIdx skip theme
+        | false ->
+          visibleLines |> Array.iteri (fun row line ->
+            let lineIdx = spanOffset + row
+            // Draw gutter icon if annotations exist
+            match gw > 0 with
+            | true ->
+              match Map.tryFind lineIdx annotationLookup with
+              | Some ann ->
+                let iconFg = GutterRender.iconFgColor theme ann.Icon
+                Draw.text inner row 0 iconFg bg CellAttrs.None (sprintf "%c " (GutterIcon.toChar ann.Icon))
+              | None ->
+                Draw.text inner row 0 (Theme.hexToRgb theme.FgDim) bg CellAttrs.None "  "
+            | false -> ()
+            // Draw text content offset by gutter width
+            match shouldHighlight && lineIdx < allSpans.Length && allSpans.[lineIdx].Length > 0 with
+            | true -> Draw.textHighlighted inner row gw fg bg CellAttrs.None allSpans.[lineIdx] line
+            | false -> Draw.text inner row gw fg bg CellAttrs.None line)
 
         // Scroll indicators
         match skip > 0 with
