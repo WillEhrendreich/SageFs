@@ -586,26 +586,20 @@ If the config already exists, SageFs opens or points you at the file instead of 
 
 </details>
 
-<details>
-<summary><strong>❓ Troubleshooting</strong></summary>
+### ❓ Troubleshooting
 
-<br />
+**Quick start:** Run your editor's health check first (VS Code: `Ctrl+Shift+P` → "SageFs: Check Health" · Neovim: `:checkhealth sagefs`).
 
-| Problem | Fix |
+| Problem | Quick Fix |
 |:---|:---|
-| "SageFs daemon not found" | Ensure daemon is running. `sagefs status` to check. |
-| "Session is still starting up" | Wait for ready message. Standby pool speeds subsequent resets. |
-| Stale REPL after code changes | `hard_reset_fsi_session` via MCP or `#hard-reset` in REPL. |
-| Port already in use | `sagefs stop` or `--mcp-port 8080`. |
-| Running in Docker | Set `SAGEFS_BIND_HOST=0.0.0.0`. |
-| Hot reload not working | Auto-injected by default. Check `SAGEFS_DEVRELOAD` isn't `0`. Look for `[DevReload]` in daemon logs. |
-| SSE connections dropping | Set proxy timeout ≥ 60s. SageFs sends keepalives every 15s. |
-| Live testing not running | Check `enable_live_testing` has been called and run policies match expectations. |
-| **macOS: SyntaxHighlight init failed** | Tree-sitter native library not yet bundled for macOS/Linux. Syntax highlighting falls back gracefully — all other features work. See [#17](https://github.com/WillEhrendreich/SageFs/issues/17). |
-| **macOS: VS Code "cannot read properties of undefined"** | Fixed in v0.5.414+. Update the extension. If daemon can't start, the extension now degrades gracefully instead of crashing. See [#18](https://github.com/WillEhrendreich/SageFs/issues/18). |
-| Logs? | Daemon console for real-time. OTEL export for structured traces/metrics. |
+| "SageFs daemon not found" | `dotnet tool install --global SageFs`, then `sagefs status` |
+| Port already in use | `sagefs stop` or `--mcp-port 8080` |
+| Wrong project selected | "SageFs: Switch Project" in command palette |
+| Stale REPL after code changes | Hard reset via command palette or `#hard-reset` in REPL |
 
-</details>
+📖 **[Full Troubleshooting Guide →](docs/TROUBLESHOOTING.md)** — covers first-run issues, runtime problems, platform-specific fixes, and diagnostic tools.
+
+📊 **[Feature Matrix →](docs/FEATURE_MATRIX.md)** — compare features across VS Code, Neovim, Visual Studio, and TUI.
 
 <details>
 <summary><strong>⚙️ FSI Quirks & Rewrites</strong></summary>
