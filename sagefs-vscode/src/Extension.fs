@@ -1410,6 +1410,16 @@ let activate (context: ExtensionContext) =
       OnBindingsUpdate = fun _ -> ()
       OnTestTraceUpdate = fun _ -> ()
       OnFeatureEvent = None
+      OnEvalResult = fun filePath blockStartLine output durationMs ->
+        let line = blockStartLine - 1 // server is 1-based, VS Code is 0-based
+        Window.getVisibleTextEditors ()
+        |> Array.tryFind (fun ed -> ed.document.fileName = filePath)
+        |> Option.iter (fun ed ->
+          InlineDeco.showInlineResult ed output (Some durationMs) (Some line))
+      OnEvalStarted = fun filePath _blockStartLine ->
+        Window.getVisibleTextEditors ()
+        |> Array.tryFind (fun ed -> ed.document.fileName = filePath)
+        |> Option.iter InlineDeco.markDecorationsStale
     }
     let reconnectHandler = Some (fun () ->
       c.log "SSE reconnected — refreshing status..."

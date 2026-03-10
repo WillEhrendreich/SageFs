@@ -142,6 +142,8 @@ type LiveTestingCallbacks = {
   OnBindingsUpdate: obj array -> unit
   OnTestTraceUpdate: obj -> unit
   OnFeatureEvent: FeatureCallbacks option
+  OnEvalResult: string -> int -> string -> float -> unit
+  OnEvalStarted: string -> int -> unit
 }
 
 type LiveTestingListener = {
@@ -212,6 +214,20 @@ let start (port: int) (callbacks: LiveTestingCallbacks) (onReconnect: (unit -> u
               OnTimeline = fun t -> featureCallbacks.OnTimeline t; custom.OnTimeline t }
           | None -> featureCallbacks
         processFeatureEvent eventType data merged
+      | "eval_started" ->
+        let filePath = fieldString "filePath" data |> Option.defaultValue ""
+        let bsl = fieldInt "blockStartLine" data |> Option.defaultValue 0
+        match filePath with
+        | "" -> ()
+        | fp -> callbacks.OnEvalStarted fp bsl
+      | "eval_result" ->
+        let filePath = fieldString "filePath" data |> Option.defaultValue ""
+        let bsl = fieldInt "blockStartLine" data |> Option.defaultValue 0
+        let output = fieldString "output" data |> Option.defaultValue ""
+        let durationMs = fieldFloat "durationMs" data |> Option.defaultValue 0.0
+        match filePath with
+        | "" -> ()
+        | fp -> callbacks.OnEvalResult fp bsl output durationMs
       | _ ->
         ())
 
