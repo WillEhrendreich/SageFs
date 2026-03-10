@@ -31,6 +31,8 @@ type PushEvent =
   | ImpactAlert of report: SageFs.Features.ImpactForecast.ImpactForecastReport
   /// Prioritized action queue ready — ranked "what to do next" for the session.
   | ActionQueueReady of report: SageFs.Features.ActionPrioritizer.ActionQueueReport
+  /// Resolved test source locations — maps test names to file paths and line numbers.
+  | TestSourceLocations of locations: Features.LiveTesting.TestSourceLocation list
 
 /// Whether an event REPLACES the previous instance of the same kind
 /// (state/set semantics) or ACCUMULATES alongside it (delta/list semantics).
@@ -51,6 +53,7 @@ module PushEvent =
     | PushEvent.DiagnosisReady _ -> MergeStrategy.Replace
     | PushEvent.ImpactAlert _ -> MergeStrategy.Replace
     | PushEvent.ActionQueueReady _ -> MergeStrategy.Replace
+    | PushEvent.TestSourceLocations _ -> MergeStrategy.Replace
 
   /// Discriminator tag used for Replace dedup.
   let tag = function
@@ -65,6 +68,7 @@ module PushEvent =
     | PushEvent.DiagnosisReady _ -> 8
     | PushEvent.ImpactAlert _ -> 9
     | PushEvent.ActionQueueReady _ -> 10
+    | PushEvent.TestSourceLocations _ -> 11
 
   /// Format a single event for LLM consumption — actionable, concise.
   let formatForLlm = function
@@ -121,6 +125,8 @@ module PushEvent =
         | SageFs.Features.ActionPrioritizer.SessionHealthGrade.Healthy -> "✅"
       sprintf "%s action queue: %d action(s), %d failure(s), %d blind spot(s)"
         icon report.Actions.Length report.TotalFailures report.TotalBlindSpots
+    | PushEvent.TestSourceLocations locs ->
+      sprintf "📍 source locations: %d test(s) resolved" locs.Length
 
 type AccumulatedEvent = {
   Timestamp: DateTimeOffset

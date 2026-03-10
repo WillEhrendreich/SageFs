@@ -286,6 +286,7 @@ type SageFsEvent =
   | RunTestsRequested of tests: Features.LiveTesting.TestCase array
   | AssemblyLoadFailed of errors: Features.LiveTesting.AssemblyLoadError list
   | InstrumentationMapsReady of sessionId: string * maps: Features.LiveTesting.InstrumentationMap array
+  | TestSourceLocations of locations: Features.LiveTesting.TestSourceLocation list
 
 /// The complete view state for any SageFs frontend.
 /// Pure data — renderers read this to produce UI.

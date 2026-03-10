@@ -627,6 +627,16 @@ type LineAnnotation = {
   Tooltip: string
 }
 
+/// Source location of a test within a source file and REPL cell.
+/// Used by editor integrations to navigate to test definitions.
+type TestSourceLocation = {
+  CellId:    int
+  TestName:  string
+  FilePath:  string
+  StartLine: int
+  EndLine:   int
+}
+
 // --- Test Summary ---
 
 type TestSummary = {
