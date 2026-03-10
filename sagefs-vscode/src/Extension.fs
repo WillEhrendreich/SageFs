@@ -22,6 +22,7 @@ module InlineDeco = SageFs.Vscode.InlineDecorations
 module FileAnno = SageFs.Vscode.FileAnnotationsListener
 
 open SageFs.Vscode.LiveTestingTypes
+open SageFs.Vscode.FeatureTypes
 
 // ── Mutable state ──────────────────────────────────────────────
 
@@ -29,6 +30,7 @@ let mutable client: Client.Client option = None
 let mutable outputChannel: OutputChannel option = None
 let mutable statusBarItem: StatusBarItem option = None
 let mutable testStatusBarItem: StatusBarItem option = None
+let mutable evalPerfStatusBar: StatusBarItem option = None
 let mutable diagnosticsDisposable: Disposable option = None
 let mutable sseDisposable: Disposable option = None
 let mutable diagnosticCollection: DiagnosticCollection option = None
@@ -380,6 +382,31 @@ let updateTestStatusBar (summary: VscTestSummary) =
     sb.text <- text
     sb.backgroundColor <- bg
     sb.show ()
+
+let updateEvalPerfBar (stats: VscTimelineStats) =
+  match evalPerfStatusBar with
+  | None -> ()
+  | Some sb ->
+    let text = formatSparklineStatus stats
+    match text with
+    | "" -> sb.hide ()
+    | t ->
+      let bg =
+        match stats.P50Ms with
+        | Some ms when ms > 500.0 -> Some (newThemeColor "statusBarItem.errorBackground")
+        | Some ms when ms > 100.0 -> Some (newThemeColor "statusBarItem.warningBackground")
+        | _ -> None
+      sb.text <- t
+      sb.backgroundColor <- bg
+      sb.tooltip <- Some (
+        [ sprintf "Eval Performance Timeline (%d evals)" stats.Count
+          stats.P50Ms |> Option.map (sprintf "P50: %.1f ms") |> Option.defaultValue ""
+          stats.P95Ms |> Option.map (sprintf "P95: %.1f ms") |> Option.defaultValue ""
+          stats.P99Ms |> Option.map (sprintf "P99: %.1f ms") |> Option.defaultValue ""
+          stats.MeanMs |> Option.map (sprintf "Mean: %.1f ms") |> Option.defaultValue "" ]
+        |> List.filter (fun s -> s <> "")
+        |> String.concat "\n")
+      sb.show ()
 
 let refreshStatus () =
   promise {
@@ -1248,6 +1275,11 @@ let activate (context: ExtensionContext) =
   testStatusBarItem <- Some tsb
   context.subscriptions.Add (tsb :> obj :?> Disposable)
 
+  let esb = Window.createStatusBarItem StatusBarAlignment.Left 48.
+  esb.tooltip <- Some "SageFs eval performance"
+  evalPerfStatusBar <- Some esb
+  context.subscriptions.Add (esb :> obj :?> Disposable)
+
   let dc = Languages.createDiagnosticCollection "sagefs"
   diagnosticCollection <- Some dc
   context.subscriptions.Add (dc :> obj :?> Disposable)
@@ -1548,7 +1580,12 @@ let activate (context: ExtensionContext) =
       OnStatusRefresh = fun () -> refreshStatus ()
       OnBindingsUpdate = fun _ -> ()
       OnTestTraceUpdate = fun _ -> ()
-      OnFeatureEvent = None
+      OnFeatureEvent = Some {
+        OnEvalDiff = fun _ -> ()
+        OnCellGraph = fun _ -> ()
+        OnBindingScope = fun _ -> ()
+        OnTimeline = fun stats -> updateEvalPerfBar stats
+      }
       OnEvalResult = fun filePath blockStartLine output durationMs ->
         let line = blockStartLine - 1 // server is 1-based, VS Code is 0-based
         Window.getVisibleTextEditors ()
