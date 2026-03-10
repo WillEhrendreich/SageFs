@@ -52,8 +52,10 @@ internal sealed class FileAnnotationTracker
 
     public void ProcessEvent(SseEvent ev)
     {
-        if (ev.Type != "file_annotations") return;
-        ProcessFileAnnotations(ev.Data);
+        if (ev.Type == "file_annotations")
+            ProcessFileAnnotations(ev.Data);
+        else if (ev.Type == "failure_narratives")
+            ProcessFailureNarratives(ev.Data);
     }
 
     private void ProcessFileAnnotations(string json)
@@ -79,6 +81,8 @@ internal sealed class FileAnnotationTracker
                     var line = lineEl.GetInt32();
                     var testName = f.TryGetProperty("TestName", out var tn)
                         ? tn.GetString() ?? "" : "";
+                    var testId = f.TryGetProperty("TestId", out var tidEl)
+                        ? tidEl.GetString() ?? "" : "";
                     var presentation = ParseFailurePresentation(f);
 
                     if (!lineMap.TryGetValue(line, out var list))
@@ -86,7 +90,7 @@ internal sealed class FileAnnotationTracker
                         list = new List<InlineFailureDisplay>();
                         lineMap[line] = list;
                     }
-                    list.Add(new InlineFailureDisplay(testName, presentation));
+                    list.Add(new InlineFailureDisplay(testName, presentation, testId));
                 }
             }
 
@@ -174,6 +178,37 @@ internal sealed class FileAnnotationTracker
     public bool HasAnyCoverageForFile(string filePath) =>
         _coverageByFile.TryGetValue(NormalizePath(filePath), out var m) && m.Count > 0;
 
+    /// <summary>Look up a failure narrative by test display name.</summary>
+    public FailureNarrativeEntry? GetNarrativeForTest(string testName)
+    {
+        return _narratives.TryGetValue(testName, out var n) ? n : null;
+    }
+
+    private void ProcessFailureNarratives(string json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return;
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            if (doc.RootElement.ValueKind != JsonValueKind.Array) return;
+
+            foreach (var item in doc.RootElement.EnumerateArray())
+            {
+                var testId = item.TryGetProperty("TestId", out var tid) ? tid.GetString() ?? "" : "";
+                var summary = item.TryGetProperty("Summary", out var s) ? s.GetString() ?? "" : "";
+                var timeSince = item.TryGetProperty("TimeSinceLastPass", out var ts) ? ts.GetString() ?? "" : "";
+
+                if (!string.IsNullOrEmpty(testId))
+                    _narratives[testId] = new FailureNarrativeEntry(testId, summary, timeSince);
+            }
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine(
+                $"[FileAnnotationTracker] failure_narratives parse error: {ex.Message}");
+        }
+    }
+
     private static string NormalizePath(string path) =>
         path.Replace('/', '\\').ToLowerInvariant();
 }
@@ -182,11 +217,13 @@ internal readonly struct InlineFailureDisplay
 {
     public readonly string TestName;
     public readonly string Presentation;
+    public readonly string TestId;
 
-    public InlineFailureDisplay(string testName, string presentation)
+    public InlineFailureDisplay(string testName, string presentation, string testId = "")
     {
         TestName = testName;
         Presentation = presentation;
+        TestId = testId;
     }
 
     /// <summary>One-line inline text, e.g. "⊘ myTest — Expected: 1  Actual: 2"</summary>
@@ -194,4 +231,27 @@ internal readonly struct InlineFailureDisplay
         string.IsNullOrEmpty(Presentation)
             ? $"⊘ {TestName}"
             : $"⊘ {TestName} — {Presentation}";
+
+    /// <summary>One-line inline text enriched with narrative context when available.</summary>
+    public string ToInlineText(FailureNarrativeEntry? narrative)
+    {
+        var baseText = ToInlineText();
+        if (narrative == null || string.IsNullOrEmpty(narrative.Value.Summary))
+            return baseText;
+        return $"{baseText}  ℹ️ {narrative.Value.Summary}";
+    }
+}
+
+internal readonly struct FailureNarrativeEntry
+{
+    public readonly string TestId;
+    public readonly string Summary;
+    public readonly string TimeSinceLastPass;
+
+    public FailureNarrativeEntry(string testId, string summary, string timeSinceLastPass)
+    {
+        TestId = testId;
+        Summary = summary;
+        TimeSinceLastPass = timeSinceLastPass;
+    }
 }

@@ -144,7 +144,12 @@ internal sealed class InlineFailureAdornmentManager : IDisposable
 
             var parts = new List<string>(failures.Count);
             foreach (var f in failures)
-                parts.Add(f.ToInlineText());
+            {
+                var narrative = !string.IsNullOrEmpty(f.TestId)
+                    ? _tracker.GetNarrativeForTest(f.TestId)
+                    : null;
+                parts.Add(f.ToInlineText(narrative));
+            }
             var displayText = string.Join("  |  ", parts);
 
             var block = new TextBlock
