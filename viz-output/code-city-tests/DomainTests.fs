@@ -3745,11 +3745,11 @@ let private collectOrganicOpposedTeePairMetrics (rect: TRect) seeds =
                       segmentLengths
                       |> Array.take pathIndex
                       |> Array.sum
-                    let sideValues =
-                      Map.find clusterId clusterRefs
-                      |> List.map fst
-                      |> List.distinct
-                      |> List.choose (fun roadIndex ->
+                     let sideValues =
+                       Map.find clusterId clusterRefs
+                       |> List.map fst
+                       |> List.distinct
+                       |> List.choose (fun roadIndex ->
                           if Set.contains roadIndex chainRoadSet then
                             None
                           else
@@ -3775,9 +3775,11 @@ let private collectOrganicOpposedTeePairMetrics (rect: TRect) seeds =
                                   None
                                 else
                                   Some (if lateral < 0.0f then -1 else 1))
-                      |> List.distinct
-                    for side in sideValues do
-                      yield distanceAlong, side ]
+                       |> List.distinct
+                     if sideValues.Length > 1 then
+                       printfn "zipdiag seed=%d cluster=%d pathIndex=%d distance=%.2f sides=%A" seed clusterId pathIndex distanceAlong sideValues
+                     for side in sideValues do
+                       yield distanceAlong, side ]
             if sideSamples.Length < 4 then
               None
             else
@@ -4985,3 +4987,5 @@ let allTests =
 [<EntryPoint>]
 let main argv =
   Expecto.Tests.runTestsWithCLIArgs [] argv allTests
+
+

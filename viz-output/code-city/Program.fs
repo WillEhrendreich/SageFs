@@ -4450,17 +4450,8 @@ let private crowdAwareBranchDirection (g: WeberGraph) (nid: NodeId) (baseDir: Ve
   let corridorSidePreference =
     corridorAxis
     |> Option.bind (nearbyCorridorSidePreference g nid)
-  // Keep branch-side choice coherent when a corridor has no established nearby signal yet.
-  let effectiveSidePreference =
-    match corridorAxis, corridorSidePreference with
-    | Some _, Some _ -> corridorSidePreference
-    | Some _, None ->
-        let pos = (g.N nid).Pos
-        let phase = pos.X * 0.031f + pos.Y * 0.019f
-        if MathF.Sin(phase) < 0.0f then Some -1.0f else Some 1.0f
-    | None, _ -> corridorSidePreference
   let adjustedBaseDir =
-    match corridorAxis, effectiveSidePreference with
+    match corridorAxis, corridorSidePreference with
     | Some axis, Some preferredSide ->
         let perp = Vec2.Create(-axis.Y, axis.X)
         let baseSide = Vec2.dot baseDir perp
@@ -4480,7 +4471,7 @@ let private crowdAwareBranchDirection (g: WeberGraph) (nid: NodeId) (baseDir: Ve
       elif previousBias > 0.04f then
         if previousBias > 0.0f then 1.0f else -1.0f
       else
-        match effectiveSidePreference with
+        match corridorSidePreference with
         | Some preferredSide -> preferredSide
         | None when rng.NextSingle() < 0.5f -> -1.0f
         | None -> 1.0f
