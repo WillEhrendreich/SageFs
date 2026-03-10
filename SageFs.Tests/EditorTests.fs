@@ -344,6 +344,7 @@ let elmLoopTests = testList "ElmLoop" [
       Render = fun model -> [sprintf "%d" model]
       ExecuteEffect = fun _ _ -> async { () }
       OnModelChanged = fun _ regions -> rendered <- regions
+      OnSystemAlarm = fun _ _ -> ()
     }
     let _ = (ElmLoop.start program 42 System.Threading.CancellationToken.None).Dispatch
     rendered |> Expect.equal "should render initial" ["42"]
@@ -356,6 +357,7 @@ let elmLoopTests = testList "ElmLoop" [
       Render = fun model -> [sprintf "%d" model]
       ExecuteEffect = fun _ _ -> async { () }
       OnModelChanged = fun _ regions -> rendered <- regions; signal.Set()
+      OnSystemAlarm = fun _ _ -> ()
     }
     let dispatch = (ElmLoop.start program 0 System.Threading.CancellationToken.None).Dispatch
     signal.Wait(1000) |> ignore; signal.Reset()

@@ -33,6 +33,8 @@ type PushEvent =
   | ActionQueueReady of report: SageFs.Features.ActionPrioritizer.ActionQueueReport
   /// Resolved test source locations — maps test names to file paths and line numbers.
   | TestSourceLocations of locations: Features.LiveTesting.TestSourceLocation list
+  /// Elm loop exception — surfaced from a catch site inside the Elm dispatch loop.
+  | SystemAlarm of phase: string * message: string
 
 /// Whether an event REPLACES the previous instance of the same kind
 /// (state/set semantics) or ACCUMULATES alongside it (delta/list semantics).
@@ -54,6 +56,7 @@ module PushEvent =
     | PushEvent.ImpactAlert _ -> MergeStrategy.Replace
     | PushEvent.ActionQueueReady _ -> MergeStrategy.Replace
     | PushEvent.TestSourceLocations _ -> MergeStrategy.Replace
+    | PushEvent.SystemAlarm _ -> MergeStrategy.Replace
 
   /// Discriminator tag used for Replace dedup.
   let tag = function
@@ -69,6 +72,7 @@ module PushEvent =
     | PushEvent.ImpactAlert _ -> 9
     | PushEvent.ActionQueueReady _ -> 10
     | PushEvent.TestSourceLocations _ -> 11
+    | PushEvent.SystemAlarm _ -> 12
 
   /// Format a single event for LLM consumption — actionable, concise.
   let formatForLlm = function
@@ -127,6 +131,8 @@ module PushEvent =
         icon report.Actions.Length report.TotalFailures report.TotalBlindSpots
     | PushEvent.TestSourceLocations locs ->
       sprintf "📍 source locations: %d test(s) resolved" locs.Length
+    | PushEvent.SystemAlarm (phase, msg) ->
+      sprintf "🚨 system alarm [%s]: %s" phase msg
 
 type AccumulatedEvent = {
   Timestamp: DateTimeOffset

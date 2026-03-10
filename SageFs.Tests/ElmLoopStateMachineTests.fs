@@ -36,7 +36,8 @@ let makeTestProgram (onModelChanged: TestModel -> TestRegion list -> unit) =
         do! Async.Sleep 10
         dispatch msg
     }
-    OnModelChanged = onModelChanged }
+    OnModelChanged = onModelChanged
+    OnSystemAlarm = fun _ _ -> () }
 
 [<Tests>]
 let elmLoopStateMachineTests =
@@ -164,7 +165,8 @@ let elmLoopStateMachineTests =
               do! Async.Sleep 10
               dispatch msg
           }
-          OnModelChanged = fun _ _ -> () }
+          OnModelChanged = fun _ _ -> ()
+          OnSystemAlarm = fun _ _ -> () }
       let rt = ElmLoop.start prog initialModel cts.Token
 
       rt.Dispatch (TriggerEffect "async")

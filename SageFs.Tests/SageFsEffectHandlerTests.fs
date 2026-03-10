@@ -364,6 +364,7 @@ let fullLoopTests = testList "Full ElmLoop + EffectHandler" [
       OnModelChanged = fun model regions ->
         lastModel <- Some model
         lastRegions <- regions
+      OnSystemAlarm = fun _ _ -> ()
     }
     let dispatch = (ElmLoop.start program (SageFsModel.initial()) System.Threading.CancellationToken.None).Dispatch
     dispatch (SageFsMsg.Editor (EditorAction.InsertChar '4'))
@@ -400,6 +401,7 @@ let fullLoopTests = testList "Full ElmLoop + EffectHandler" [
       Render = SageFsRender.render
       ExecuteEffect = SageFsEffectHandler.execute deps
       OnModelChanged = fun model _ -> lastModel <- Some model
+      OnSystemAlarm = fun _ _ -> ()
     }
     let dispatch = (ElmLoop.start program (SageFsModel.initial()) System.Threading.CancellationToken.None).Dispatch
     dispatch (SageFsMsg.Editor
@@ -435,6 +437,7 @@ let fullLoopTests = testList "Full ElmLoop + EffectHandler" [
       Render = SageFsRender.render
       ExecuteEffect = SageFsEffectHandler.execute deps
       OnModelChanged = fun model _ -> lastModel <- Some model
+      OnSystemAlarm = fun _ _ -> ()
     }
     let dispatch = (ElmLoop.start program (SageFsModel.initial()) System.Threading.CancellationToken.None).Dispatch
     dispatch (SageFsMsg.Editor EditorAction.TriggerCompletion)

@@ -10,6 +10,7 @@ type DaemonStateChange =
   | SessionFaulted of sessionId: string * error: string
   | ModelChanged of outputCount: int * diagCount: int
   | WarmupProgress of sessionId: string * step: int * total: int * message: string
+  | SystemAlarm of phase: string * message: string
 
 module DaemonStateChange =
   /// Serialize to JSON for SSE wire format. Single source of truth — used by bridge and SSE stream.
@@ -23,6 +24,8 @@ module DaemonStateChange =
     | StandbyProgress -> """{"standbyProgress":true}"""
     | WarmupProgress (sid, step, total, _msg) ->
       sprintf """{"warmupProgress":true,"sessionId":"%s","step":%d,"total":%d}""" sid step total
+    | SystemAlarm (phase, msg) ->
+      sprintf """{"systemAlarm":true,"phase":"%s","message":"%s"}""" phase (msg.Replace("\"", "\\\""))
 
 module DaemonInfo =
   let version =

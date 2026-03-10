@@ -4235,24 +4235,6 @@ let private tryGetCorridorAxis (dirs: Vec2 list) =
       | 3 -> tryGetOpposingAxis 24.0f
       | _ -> None
 
-let private tryGetStructuralCorridorAxis (dirs: Vec2 list) =
-  let opposingPairs =
-    dirs
-    |> List.indexed
-    |> List.collect (fun (index, dirA) ->
-        dirs
-        |> List.skip (index + 1)
-        |> List.choose (fun dirB ->
-            let delta = directionDeltaDegrees dirA (Vec2.negate dirB)
-            if delta <= 24.0f then
-              Some (delta, Vec2.normalize (Vec2.sub dirA dirB))
-            else
-              None))
-    |> List.sortBy fst
-  opposingPairs
-  |> List.tryHead
-  |> Option.map snd
-
 let private parallelCorridorCrowdingBias (g: WeberGraph) (nid: NodeId) (dirs: Vec2 list) =
   match tryGetCorridorAxis dirs with
   | None -> 1.0f
@@ -4908,7 +4890,6 @@ let private chooseOrganicSnapTarget (g: WeberGraph) (originId: NodeId) (origin: 
   else
     let proposedDir = Vec2.normalize proposedDelta
     let existingDirs = g.OutgoingDirs(originId)
-    let originAxis = tryGetStructuralCorridorAxis existingDirs
     let headingThreshold = 35.0f
     let duplicateAngleThreshold = 18.0f
     let shortArmThreshold = max 2.0f (Vec2.length proposedDelta * 0.55f)
@@ -4924,17 +4905,10 @@ let private chooseOrganicSnapTarget (g: WeberGraph) (originId: NodeId) (origin: 
         else
           let snapDir = Vec2.normalize delta
           let headingDelta = directionDeltaDegrees proposedDir snapDir
-          let targetAxis = tryGetStructuralCorridorAxis (g.OutgoingDirs n.Id)
           let duplicateShortArm =
             distSq <= shortArmThreshold * shortArmThreshold
             && existingDirs |> List.exists (fun existingDir -> directionDeltaDegrees snapDir existingDir <= duplicateAngleThreshold)
-          let longitudinalBypass =
-            match originAxis, targetAxis with
-            | Some axisA, Some axisB ->
-                parallelHeadingDeltaDegrees axisA axisB <= 22.0f
-                && parallelHeadingDeltaDegrees axisA snapDir < 45.0f
-            | _ -> false
-          if headingDelta > headingThreshold || duplicateShortArm || longitudinalBypass then
+          if headingDelta > headingThreshold || duplicateShortArm then
             None
           else
             let dist = sqrt distSq
@@ -5141,6 +5115,9 @@ let growStreets
                 if isGrid then 1.0f
                 elif isContinuation then parentBranchTargetFactor
                 else sampleOrganicBranchTargetFactor parentBranchTargetFactor rng
+              let splitEdge = g.E edgeId
+              let splitEdgeDelta = Vec2.sub (g.N splitEdge.B).Pos (g.N splitEdge.A).Pos
+              let splitEdgeLengthSq = Vec2.lengthSq splitEdgeDelta
               if segLen < sMin then
                 g.MarkFinished(nid)
                 stuck <- stuck + 1
@@ -5548,6 +5525,227 @@ let canonicalizeRoads (roads: Road list) =
   |> List.sortBy (fun road ->
     let a, b = roadEndpoints road
     min a.X b.X, min a.Y b.Y, max a.X b.X, max a.Y b.Y)
+
+type private DirectedRoadSegment =
+  { Id: int
+    RoadIndex: int
+    StartCluster: int
+    EndCluster: int
+    Heading: Vec2
+    Length: float32 }
+
+type private ThroughChainDetail =
+  { RoadIndices: int list
+    ClusterPath: int list
+    SegmentLengths: float32 list
+    TotalLength: float32 }
+
+let private clusterRoadEndpoints tolerance (roads: Road list) =
+  let toleranceSq = tolerance * tolerance
+  let clusters = ResizeArray<Vec2 * ResizeArray<int * bool>>()
+
+  let addReference roadIndex isStart point =
+    let mutable matched = None
+    for i in 0 .. clusters.Count - 1 do
+      match matched with
+      | Some _ -> ()
+      | None ->
+          let anchor, _ = clusters.[i]
+          if Vec2.distanceToSq anchor point <= toleranceSq then
+            matched <- Some i
+
+    match matched with
+    | Some idx ->
+        let anchor, refs = clusters.[idx]
+        let count = float32 refs.Count
+        let blended =
+          Vec2.Create(
+            (anchor.X * count + point.X) / (count + 1.0f),
+            (anchor.Y * count + point.Y) / (count + 1.0f))
+        refs.Add(roadIndex, isStart)
+        clusters.[idx] <- blended, refs
+    | None ->
+        let refs = ResizeArray<int * bool>()
+        refs.Add(roadIndex, isStart)
+        clusters.Add(point, refs)
+
+  roads
+  |> List.iteri (fun roadIndex road ->
+      let startPt, endPt = roadEndpoints road
+      addReference roadIndex true startPt
+      addReference roadIndex false endPt)
+
+  clusters
+  |> Seq.mapi (fun idx (anchor, refs) -> idx, anchor, refs |> Seq.toList)
+  |> Seq.toList
+
+let private buildDirectedRoadSegments tolerance (roads: Road list) =
+  let toleranceSq = tolerance * tolerance
+  let clusters = clusterRoadEndpoints tolerance roads
+
+  let clusterIdForPoint point =
+    clusters
+    |> List.find (fun (_, anchor, _) -> Vec2.distanceToSq anchor point <= toleranceSq)
+    |> fun (idx, _, _) -> idx
+
+  let directedSegments =
+    roads
+    |> List.mapi (fun roadIndex road ->
+        let startPt, endPt = roadEndpoints road
+        let length = Vec2.distanceTo startPt endPt
+        let forwardHeading = Vec2.normalize (Vec2.sub endPt startPt)
+        let backwardHeading = Vec2.normalize (Vec2.sub startPt endPt)
+        let startCluster = clusterIdForPoint startPt
+        let endCluster = clusterIdForPoint endPt
+        [ { Id = roadIndex * 2
+            RoadIndex = roadIndex
+            StartCluster = startCluster
+            EndCluster = endCluster
+            Heading = forwardHeading
+            Length = length }
+          { Id = roadIndex * 2 + 1
+            RoadIndex = roadIndex
+            StartCluster = endCluster
+            EndCluster = startCluster
+            Heading = backwardHeading
+            Length = length } ])
+    |> List.concat
+
+  clusters, directedSegments
+
+let private throughCanonicalRoadChains tolerance maxDeflection (roads: Road list) =
+  let clusters, directedSegments = buildDirectedRoadSegments tolerance roads
+
+  let nextSegments current =
+    directedSegments
+    |> List.filter (fun candidate ->
+        candidate.StartCluster = current.EndCluster
+        && candidate.RoadIndex <> current.RoadIndex)
+    |> List.sortBy (fun candidate -> parallelHeadingDeltaDegrees current.Heading candidate.Heading)
+
+  let rec walk visited current roadIndices clusterPath segmentLengths totalLength =
+    let candidates =
+      nextSegments current
+      |> List.filter (fun candidate -> not (Set.contains candidate.Id visited))
+    match candidates with
+    | [] ->
+        { RoadIndices = roadIndices |> List.rev
+          ClusterPath = clusterPath |> List.rev
+          SegmentLengths = segmentLengths |> List.rev
+          TotalLength = totalLength }
+    | next :: _ ->
+        let deflection = parallelHeadingDeltaDegrees current.Heading next.Heading
+        if deflection > maxDeflection then
+          { RoadIndices = roadIndices |> List.rev
+            ClusterPath = clusterPath |> List.rev
+            SegmentLengths = segmentLengths |> List.rev
+            TotalLength = totalLength }
+        else
+          walk
+            (Set.add next.Id visited)
+            next
+            (next.RoadIndex :: roadIndices)
+            (next.EndCluster :: clusterPath)
+            (next.Length :: segmentLengths)
+            (totalLength + next.Length)
+
+  let details =
+    directedSegments
+    |> List.map (fun segment ->
+        walk
+          (Set.singleton segment.Id)
+          segment
+          [ segment.RoadIndex ]
+          [ segment.EndCluster; segment.StartCluster ]
+          [ segment.Length ]
+          segment.Length)
+
+  clusters, details
+
+let private pruneRepeatedSideConnectorRoads (roads: Road list) =
+  let tolerance = 0.45f
+  let toleranceSq = tolerance * tolerance
+  let clusters, details = throughCanonicalRoadChains tolerance 18.0f roads
+  let clusterAnchors =
+    clusters
+    |> List.map (fun (clusterId, anchor, _) -> clusterId, anchor)
+    |> Map.ofList
+  let clusterRefs =
+    clusters
+    |> List.map (fun (clusterId, _, refs) -> clusterId, refs)
+    |> Map.ofList
+  let eligibleDetails =
+    details
+    |> List.filter (fun detail ->
+        detail.SegmentLengths.Length >= 3
+        && detail.TotalLength >= 24.0f)
+    |> List.distinctBy (fun detail -> detail.RoadIndices |> Set.ofList)
+  if eligibleDetails.IsEmpty then
+    roads
+  else
+    let chainRoads =
+      eligibleDetails
+      |> List.collect _.RoadIndices
+      |> Set.ofList
+    let repeatedSideRoads =
+      eligibleDetails
+      |> List.collect (fun detail ->
+          let chainRoadSet = detail.RoadIndices |> Set.ofList
+          let clusterPath = detail.ClusterPath |> List.toArray
+          [ for pathIndex in 1 .. clusterPath.Length - 2 do
+              let clusterId = clusterPath.[pathIndex]
+              let anchor = Map.find clusterId clusterAnchors
+              let prevAnchor = Map.find clusterPath.[pathIndex - 1] clusterAnchors
+              let nextAnchor = Map.find clusterPath.[pathIndex + 1] clusterAnchors
+              let axisDelta = Vec2.sub nextAnchor prevAnchor
+              if Vec2.lengthSq axisDelta > 0.01f then
+                let axis = Vec2.normalize axisDelta
+                let perp = Vec2.Create(-axis.Y, axis.X)
+                yield!
+                  Map.find clusterId clusterRefs
+                  |> List.map fst
+                  |> List.distinct
+                  |> List.choose (fun roadIndex ->
+                      if Set.contains roadIndex chainRoadSet then
+                        None
+                      else
+                        let road = roads.[roadIndex]
+                        let startPt, endPt = roadEndpoints road
+                        let branchDelta =
+                          if Vec2.distanceToSq anchor startPt <= toleranceSq then
+                            Vec2.sub endPt startPt
+                          elif Vec2.distanceToSq anchor endPt <= toleranceSq then
+                            Vec2.sub startPt endPt
+                          else
+                            Vec2.sub (Vec2.scale 0.5f (Vec2.add startPt endPt)) anchor
+                        if Vec2.lengthSq branchDelta <= 0.01f then
+                          None
+                        else
+                          let branchDir = Vec2.normalize branchDelta
+                          let branchAngle = parallelHeadingDeltaDegrees axis branchDir
+                          let lateral = Vec2.dot branchDelta perp
+                          if branchAngle >= 45.0f && branchAngle <= 90.0f && abs lateral >= 0.5f then
+                            Some (roadIndex, clusterId)
+                          else
+                            None) ] )
+      |> List.groupBy fst
+      |> List.choose (fun (roadIndex, entries) ->
+          let distinctClusters =
+            entries
+            |> List.map snd
+            |> Set.ofList
+          if Set.count distinctClusters >= 2 && not (Set.contains roadIndex chainRoads) then
+            Some roadIndex
+          else
+            None)
+      |> Set.ofList
+    if repeatedSideRoads.IsEmpty then
+      roads
+    else
+      roads
+      |> List.mapi (fun roadIndex road -> roadIndex, road)
+      |> List.choose (fun (roadIndex, road) ->
+          if Set.contains roadIndex repeatedSideRoads then None else Some road)
 
 type private FrontageStrip =
   { Start: Vec2
@@ -6125,7 +6323,11 @@ let layoutWeberDistrict
     let blockDemand =
       max 1 (int (MathF.Ceiling(float32 funcs.Length / 4.0f)))
     let growthPlan, grownRoads = buildMajorStreetGrowth rect blockDemand organic rng
-    let districtRoads = canonicalizeRoads grownRoads
+    let districtRoads =
+      grownRoads
+      |> canonicalizeRoads
+      |> fun roads ->
+          if organic > 0.5f then pruneRepeatedSideConnectorRoads roads else roads
     let frontageRoads =
       districtRoads
       |> List.filter (fun road -> road.Weight >= RoadClass.tier Avenue)

@@ -50,24 +50,28 @@ let createEffectDeps
 
 /// Create an ElmProgram wired to real SageFs components.
 /// The OnModelChanged callback is injected to allow different frontends.
+/// The onSystemAlarm callback surfaces Elm loop exceptions to the caller.
 let createProgram
   (deps: EffectDeps)
   (onModelChanged: SageFsModel -> RenderRegion list -> unit)
+  (onSystemAlarm: string -> string -> unit)
   : ElmProgram<SageFsModel, SageFsMsg, SageFsEffect, RenderRegion> =
   {
     Update = SageFsUpdate.updateWithInvariant
     Render = SageFsRender.render
     ExecuteEffect = SageFsEffectHandler.execute deps
     OnModelChanged = onModelChanged
+    OnSystemAlarm = onSystemAlarm
   }
 
 /// Start the Elm loop with initial model and return the runtime.
 let start
   (deps: EffectDeps)
   (onModelChanged: SageFsModel -> RenderRegion list -> unit)
+  (onSystemAlarm: string -> string -> unit)
   (ct: System.Threading.CancellationToken)
   : ElmRuntime<SageFsModel, SageFsMsg, RenderRegion> =
-  let program = createProgram deps onModelChanged
+  let program = createProgram deps onModelChanged onSystemAlarm
   ElmLoop.start program (SageFsModel.initial()) ct
 
 /// Dispatch a message and wait for the model to update.

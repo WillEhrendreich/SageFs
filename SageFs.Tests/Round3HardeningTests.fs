@@ -90,6 +90,7 @@ let elmLoopCancellationTests =
             effectCancelled.TrySetResult(()) |> ignore
         }
         OnModelChanged = fun _ _ -> ()
+        OnSystemAlarm = fun _ _ -> ()
       }
 
       let runtime = ElmLoop.start program 0 cts.Token
@@ -116,6 +117,7 @@ let elmLoopCancellationTests =
         Render = fun _ -> []
         ExecuteEffect = fun _ _ -> async { () }
         OnModelChanged = fun _ _ -> ()
+        OnSystemAlarm = fun _ _ -> ()
       }
 
       let runtime = ElmLoop.start program 0 cts.Token
@@ -148,6 +150,7 @@ let elmLoopEffectErrorTests =
           raise (InvalidOperationException("test-exception-from-effect"))
         }
         OnModelChanged = fun _ _ -> ()
+        OnSystemAlarm = fun _ _ -> ()
       }
 
       let runtime = ElmLoop.start program 0 cts.Token

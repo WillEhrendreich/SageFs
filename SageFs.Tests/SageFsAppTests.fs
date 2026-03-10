@@ -904,6 +904,7 @@ let elmIntegrationTests = testList "ElmLoop integration" [
         lastModel <- Some model
         lastRegions <- regions
         signal.Set()
+      OnSystemAlarm = fun _ _ -> ()
     }
     let dispatch = (ElmLoop.start program (SageFsModel.initial()) System.Threading.CancellationToken.None).Dispatch
     signal.Wait(1000) |> ignore; signal.Reset()
@@ -950,6 +951,7 @@ let elmIntegrationTests = testList "ElmLoop integration" [
         }
       OnModelChanged = fun model _ ->
         if model.RecentOutput.GetBuffer("s1").Count > 0 then resultReceived <- true
+      OnSystemAlarm = fun _ _ -> ()
     }
     let dispatch = (ElmLoop.start program (SageFsModel.initial()) System.Threading.CancellationToken.None).Dispatch
     dispatch (SageFsMsg.Editor (EditorAction.InsertChar '1'))

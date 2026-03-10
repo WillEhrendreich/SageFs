@@ -1215,7 +1215,11 @@ let createElmRuntime
         System.Threading.ThreadPool.QueueUserWorkItem(fun _ ->
           stateChangedEvent.Trigger (ModelChanged (outputCount, diagCount))) |> ignore
       | false -> ()
-    with ex -> Log.error "[elm] State change propagation error: %s (%s)\n%s" ex.Message (ex.GetType().Name) (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")) ct
+    with ex -> Log.error "[elm] State change propagation error: %s (%s)\n%s" ex.Message (ex.GetType().Name) (ex.StackTrace |> Option.ofObj |> Option.defaultValue ""))
+    (fun phase msg ->
+      Log.warn "[elm] 🚨 System alarm [%s]: %s" phase msg
+      stateChangedEvent.Trigger (SystemAlarm (phase, msg)))
+    ct
 
 /// Run SageFs as a headless daemon.
 /// MCP server + SessionManager + Dashboard — all frontends are clients.

@@ -21,6 +21,12 @@ let private emptyAnnotations =
 let private emptyDiagnosis =
   SageFs.Features.Diagnostician.DiagnosticReport.empty
 
+let private emptyImpact =
+  SageFs.Features.ImpactForecast.ImpactForecastReport.empty 0
+
+let private emptyActionQueue =
+  SageFs.Features.ActionPrioritizer.ActionQueueReport.empty
+
 let private allPushEvents = [
   PushEvent.DiagnosticsChanged []
   PushEvent.StateChanged (0, 0)
@@ -31,6 +37,10 @@ let private allPushEvents = [
   PushEvent.TestResultsBatch emptyBatch
   PushEvent.FileAnnotationsUpdated emptyAnnotations
   PushEvent.DiagnosisReady emptyDiagnosis
+  PushEvent.ImpactAlert emptyImpact
+  PushEvent.ActionQueueReady emptyActionQueue
+  PushEvent.TestSourceLocations []
+  PushEvent.SystemAlarm ("update", "boom")
 ]
 
 [<Tests>]
@@ -38,9 +48,9 @@ let pushEventTagTests = testList "PushEvent.tag" [
   testCase "all variants have unique tags" (fun () ->
     let tags = allPushEvents |> List.map PushEvent.tag
     tags |> List.distinct |> Expect.hasLength "all unique" allPushEvents.Length)
-  testCase "tags are sequential 0..8" (fun () ->
+  testCase "tags are sequential 0..12" (fun () ->
     let tags = allPushEvents |> List.map PushEvent.tag
-    tags |> Expect.equal "sequential" [0;1;2;3;4;5;6;7;8])
+    tags |> Expect.equal "sequential" [0;1;2;3;4;5;6;7;8;9;10;11;12])
 ]
 
 [<Tests>]

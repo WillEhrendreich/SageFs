@@ -85,7 +85,7 @@ let elmDaemonTests =
           ElmDaemonTestHelpers.mockDeps (fun _ ->
             WorkerResponse.EvalResult ("r", Ok "done", [], Map.empty))
         let tracker = ElmDaemonTestHelpers.ModelTracker()
-        let program = ElmDaemon.createProgram deps tracker.OnModelChanged
+        let program = ElmDaemon.createProgram deps tracker.OnModelChanged (fun _ _ -> ())
 
         // Verify update produces a model and effects list
         let msg =
@@ -106,7 +106,7 @@ let elmDaemonTests =
           ElmDaemonTestHelpers.mockDeps (fun _ ->
             WorkerResponse.EvalResult ("r", Ok "done", [], Map.empty))
         let tracker = ElmDaemonTestHelpers.ModelTracker()
-        let program = ElmDaemon.createProgram deps tracker.OnModelChanged
+        let program = ElmDaemon.createProgram deps tracker.OnModelChanged (fun _ _ -> ())
 
         let model = (SageFsModel.initial())
         let msg =
@@ -124,9 +124,9 @@ let elmDaemonTests =
           ElmDaemonTestHelpers.mockDeps (fun _ ->
             WorkerResponse.EvalResult ("r", Ok "done", [], Map.empty))
         let tracker = ElmDaemonTestHelpers.ModelTracker()
-        let program = ElmDaemon.createProgram deps tracker.OnModelChanged
+        let program = ElmDaemon.createProgram deps tracker.OnModelChanged (fun _ _ -> ())
 
-        let regions = program.Render (SageFsModel.initial())
+        let regions = program.Render(SageFsModel.initial())
 
         regions
         |> List.isEmpty
@@ -141,7 +141,7 @@ let elmDaemonTests =
             WorkerResponse.EvalResult ("r", Ok "done", [], Map.empty))
         let tracker = ElmDaemonTestHelpers.ModelTracker()
         let runtime =
-          ElmDaemon.start deps tracker.OnModelChanged System.Threading.CancellationToken.None
+          ElmDaemon.start deps tracker.OnModelChanged (fun _ _ -> ()) System.Threading.CancellationToken.None
 
         // dispatch is a function — calling it should not throw
         runtime.Dispatch (
@@ -156,7 +156,7 @@ let elmDaemonTests =
             WorkerResponse.EvalResult ("r", Ok "done", [], Map.empty))
         let tracker = ElmDaemonTestHelpers.ModelTracker()
         let _runtime =
-          ElmDaemon.start deps tracker.OnModelChanged System.Threading.CancellationToken.None
+          ElmDaemon.start deps tracker.OnModelChanged (fun _ _ -> ()) System.Threading.CancellationToken.None
 
         tracker.Models
         |> List.isEmpty
@@ -169,7 +169,7 @@ let elmDaemonTests =
             WorkerResponse.EvalResult ("r", Ok "done", [], Map.empty))
         let tracker = ElmDaemonTestHelpers.ModelTracker()
         let runtime =
-          ElmDaemon.start deps tracker.OnModelChanged System.Threading.CancellationToken.None
+          ElmDaemon.start deps tracker.OnModelChanged (fun _ _ -> ()) System.Threading.CancellationToken.None
 
         // consume initial render signal
         tracker.WaitForUpdate 500
@@ -201,7 +201,7 @@ let elmDaemonTests =
               WorkerResponse.WorkerError SageFsError.NoActiveSessions)
         let tracker = ElmDaemonTestHelpers.ModelTracker()
         let runtime =
-          ElmDaemon.start deps tracker.OnModelChanged System.Threading.CancellationToken.None
+          ElmDaemon.start deps tracker.OnModelChanged (fun _ _ -> ()) System.Threading.CancellationToken.None
 
         // Editor.SubmitLine produces an EditorEffect.RequestEval
         runtime.Dispatch (
@@ -222,7 +222,7 @@ let elmDaemonTests =
             WorkerResponse.EvalResult ("r", Ok "done", [], Map.empty))
         let tracker = ElmDaemonTestHelpers.ModelTracker()
         let runtime =
-          ElmDaemon.start deps tracker.OnModelChanged System.Threading.CancellationToken.None
+          ElmDaemon.start deps tracker.OnModelChanged (fun _ _ -> ()) System.Threading.CancellationToken.None
 
         let model = runtime.GetModel()
         model.RecentOutput.GetActiveBuffer(model.Sessions.ActiveSessionId)
@@ -236,7 +236,7 @@ let elmDaemonTests =
             WorkerResponse.EvalResult ("r", Ok "done", [], Map.empty))
         let tracker = ElmDaemonTestHelpers.ModelTracker()
         let runtime =
-          ElmDaemon.start deps tracker.OnModelChanged System.Threading.CancellationToken.None
+          ElmDaemon.start deps tracker.OnModelChanged (fun _ _ -> ()) System.Threading.CancellationToken.None
 
         let regions = runtime.GetRegions()
         regions
@@ -252,7 +252,7 @@ let elmDaemonTests =
             WorkerResponse.EvalResult ("r", Ok "done", [], Map.empty))
         let tracker = ElmDaemonTestHelpers.ModelTracker()
         let runtime =
-          ElmDaemon.start deps tracker.OnModelChanged System.Threading.CancellationToken.None
+          ElmDaemon.start deps tracker.OnModelChanged (fun _ _ -> ()) System.Threading.CancellationToken.None
 
         // consume initial render signal
         tracker.WaitForUpdate 500

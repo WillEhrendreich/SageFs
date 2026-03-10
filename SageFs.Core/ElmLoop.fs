@@ -24,6 +24,10 @@ type ElmProgram<'Model, 'Msg, 'Effect, 'Region> = {
   Render: Render<'Model, 'Region>
   ExecuteEffect: EffectHandler<'Msg, 'Effect>
   OnModelChanged: 'Model -> 'Region list -> unit
+  /// Called whenever an exception is caught inside the Elm loop.
+  /// phase: "update" | "render" | "callback" | "effect" | "initial_render" | "initial_callback"
+  /// message: exception message
+  OnSystemAlarm: string -> string -> unit
 }
 
 /// The running Elm loop — dispatch messages and read current state.
@@ -114,6 +118,7 @@ module ElmLoop =
             with ex ->
               Instrumentation.elmloopErrors.Add(1L, kvp "phase" "update")
               Log.error "[ElmLoop] Update threw for %s: %s\n%s" typeName ex.Message (if isNull ex.StackTrace then "" else ex.StackTrace)
+              try program.OnSystemAlarm "update" ex.Message with _ -> ()
             perMsgSw.Stop()
             Instrumentation.elmloopUpdateMs.Record(perMsgSw.Elapsed.TotalMilliseconds, kvp "msg_type" typeName)
           updateSw.Stop()
@@ -144,6 +149,7 @@ module ElmLoop =
           with ex ->
             Instrumentation.elmloopErrors.Add(1L, kvp "phase" "render")
             Log.error "[ElmLoop] Render threw: %s\n%s" ex.Message (if isNull ex.StackTrace then "" else ex.StackTrace)
+            try program.OnSystemAlarm "render" ex.Message with _ -> ()
             lock lockObj (fun () -> latestRegions)
         | false ->
           lock lockObj (fun () -> latestRegions)
@@ -160,6 +166,7 @@ module ElmLoop =
         with ex ->
           Instrumentation.elmloopErrors.Add(1L, kvp "phase" "callback")
           Log.error "[ElmLoop] OnModelChanged threw: %s\n%s" ex.Message (if isNull ex.StackTrace then "" else ex.StackTrace)
+          try program.OnSystemAlarm "callback" ex.Message with _ -> ()
       | false -> ()
       cbSw.Stop()
       Instrumentation.elmloopCallbackMs.Record(cbSw.Elapsed.TotalMilliseconds, batchTag)
@@ -190,6 +197,7 @@ module ElmLoop =
           with ex ->
             Instrumentation.elmloopErrors.Add(1L, kvp "phase" "effect")
             Log.error "[ElmLoop] Effect threw: %s\n%s" ex.Message (if isNull ex.StackTrace then "" else ex.StackTrace)
+            try program.OnSystemAlarm "effect" ex.Message with _ -> ()
             Instrumentation.failSpan effectActivity ex.Message
         }, ct)
 
@@ -244,12 +252,14 @@ module ElmLoop =
       with ex ->
         Instrumentation.elmloopErrors.Add(1L, System.Collections.Generic.KeyValuePair("phase", "initial_render" :> obj))
         Log.error "[ElmLoop] Initial Render threw: %s\n%s" ex.Message (if isNull ex.StackTrace then "" else ex.StackTrace)
+        try program.OnSystemAlarm "initial_render" ex.Message with _ -> ()
         []
     latestRegions <- regions
     try program.OnModelChanged initialModel regions
     with ex ->
       Instrumentation.elmloopErrors.Add(1L, System.Collections.Generic.KeyValuePair("phase", "initial_callback" :> obj))
       Log.error "[ElmLoop] Initial OnModelChanged threw: %s\n%s" ex.Message (if isNull ex.StackTrace then "" else ex.StackTrace)
+      try program.OnSystemAlarm "initial_callback" ex.Message with _ -> ()
 
     { Dispatch = dispatch
       GetModel = fun () -> lock lockObj (fun () -> model)

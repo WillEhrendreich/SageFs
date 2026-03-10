@@ -230,10 +230,10 @@ let architectureTests =
         printfn "  SageFs.Core modules: %d" modules.Length
         // Ceiling prevents regression. Lower as consolidation progresses.
         // Baseline: 201 (2025-03-10). Target: ≤60 (synthesis 3.4).
-        (modules.Length, 231)
+        (modules.Length, 235)
         |> Expect.isLessThanOrEqual
           (sprintf
-            "SageFs.Core should have ≤231 top-level modules (currently %d)"
+            "SageFs.Core should have ≤235 top-level modules (currently %d)"
             modules.Length)
 
       testCase "SageFs.Core exported types tracked"

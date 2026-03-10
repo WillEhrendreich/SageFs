@@ -34,6 +34,7 @@ let elmLoopResilienceTests =
         ExecuteEffect = fun _ _ ->
           async { System.Threading.Interlocked.Increment effCount |> ignore }
         OnModelChanged = fun _ _ -> ()
+        OnSystemAlarm = fun _ _ -> ()
       }
       let rt = ElmLoop.start prog 0 System.Threading.CancellationToken.None
 
@@ -62,6 +63,7 @@ let elmLoopResilienceTests =
         ExecuteEffect = fun _ _ ->
           async { System.Threading.Interlocked.Increment effCount |> ignore }
         OnModelChanged = fun _ _ -> ()
+        OnSystemAlarm = fun _ _ -> ()
       }
       let rt = ElmLoop.start prog 0 System.Threading.CancellationToken.None
 
@@ -87,6 +89,7 @@ let elmLoopResilienceTests =
           async { System.Threading.Interlocked.Increment effCount |> ignore }
         OnModelChanged = fun model _ ->
           if model = 2 then failwith "OnModelChanged boom!"
+        OnSystemAlarm = fun _ _ -> ()
       }
       let rt = ElmLoop.start prog 0 System.Threading.CancellationToken.None
 
@@ -114,6 +117,7 @@ let elmLoopResilienceTests =
             System.Threading.Interlocked.Increment effCount |> ignore
           }
         OnModelChanged = fun _ _ -> ()
+        OnSystemAlarm = fun _ _ -> ()
       }
       let rt = ElmLoop.start prog 0 System.Threading.CancellationToken.None
 
@@ -137,10 +141,11 @@ let elmLoopResilienceTests =
           [model * 10]
         ExecuteEffect = fun _ _ -> async { () }
         OnModelChanged = fun _ _ -> ()
+        OnSystemAlarm = fun _ _ -> ()
       }
       let rt = ElmLoop.start prog 0 System.Threading.CancellationToken.None
 
-      rt.GetRegions() |> Expect.equal "empty regions on failed init" []
+      rt.GetRegions()|> Expect.equal "empty regions on failed init" []
       rt.GetModel() |> Expect.equal "model still 0" 0
 
       rt.Dispatch 1  // Render succeeds now
@@ -156,6 +161,7 @@ let elmLoopResilienceTests =
           async { System.Threading.Interlocked.Increment effCount |> ignore }
         OnModelChanged = fun model _ ->
           if model = 0 then failwith "Initial OnModelChanged boom!"
+        OnSystemAlarm = fun _ _ -> ()
       }
       let rt = ElmLoop.start prog 0 System.Threading.CancellationToken.None
 
@@ -183,6 +189,7 @@ let elmLoopResilienceTests =
           }
         OnModelChanged = fun model _ ->
           if model = 4 then failwith "OnModelChanged boom on 4!"
+        OnSystemAlarm = fun _ _ -> ()
       }
       let rt = ElmLoop.start prog 0 System.Threading.CancellationToken.None
 
@@ -229,6 +236,7 @@ let elmLoopResilienceTests =
               inner ()  // named frame so stack trace is non-trivial
             }
           OnModelChanged = fun _ _ -> ()
+          OnSystemAlarm = fun _ _ -> ()
         }
         let rt = ElmLoop.start prog 0 System.Threading.CancellationToken.None
         rt.Dispatch 1
@@ -240,4 +248,109 @@ let elmLoopResilienceTests =
           "error log entry must contain stack frames (found no 'at ' — stack trace not logged)"
       finally
         Log.logError <- prevError
+  ]
+
+// ---------------------------------------------------------------------------
+// 4. OnSystemAlarm — exceptions in the Elm loop surface to the caller
+// ---------------------------------------------------------------------------
+
+[<Tests>]
+let elmLoopAlarmTests =
+  testList "ElmLoop.OnSystemAlarm" [
+
+    testCase "Update throws: OnSystemAlarm is called with 'update' phase" <| fun _ ->
+      let alarms = System.Collections.Generic.List<string * string>()
+      let prog : ElmProgram<int, int, int, int> = {
+        Update = fun _msg _model -> failwith "update-alarm-test"; 0, []
+        Render = fun model -> [model]
+        ExecuteEffect = fun _ _ -> async { () }
+        OnModelChanged = fun _ _ -> ()
+        OnSystemAlarm = fun phase msg -> alarms.Add(phase, msg)
+      }
+      let rt = ElmLoop.start prog 0 System.Threading.CancellationToken.None
+      rt.Dispatch 1
+      waitFor (fun () -> alarms.Count > 0) 2000 |> ignore
+      (alarms.Count, 0) |> Expect.isGreaterThan "alarm should fire"
+      let (phase, msg) = alarms.[0]
+      phase |> Expect.equal "phase should be 'update'" "update"
+      msg |> Expect.stringContains "message should contain exception text" "update-alarm-test"
+
+    testCase "Render throws: OnSystemAlarm is called with 'render' phase" <| fun _ ->
+      let alarms = System.Collections.Generic.List<string * string>()
+      let prog : ElmProgram<int, int, int, int> = {
+        Update = fun msg model -> model + msg, []
+        Render = fun _model -> failwith "render-alarm-test"; []
+        ExecuteEffect = fun _ _ -> async { () }
+        OnModelChanged = fun _ _ -> ()
+        OnSystemAlarm = fun phase msg -> alarms.Add(phase, msg)
+      }
+      let rt = ElmLoop.start prog 0 System.Threading.CancellationToken.None
+      // Initial render fires immediately; wait for alarm
+      waitFor (fun () -> alarms.Count > 0) 2000 |> ignore
+      (alarms.Count, 0) |> Expect.isGreaterThan "alarm should fire on initial render"
+      let (phase, _) = alarms.[0]
+      phase |> Expect.equal "phase should be 'initial_render' or 'render'" "initial_render"
+
+    testCase "OnModelChanged throws: OnSystemAlarm is called with 'callback' phase" <| fun _ ->
+      let alarms = System.Collections.Generic.List<string * string>()
+      let prog : ElmProgram<int, int, int, int> = {
+        Update = fun msg model -> model + msg, []
+        Render = fun model -> [model]
+        ExecuteEffect = fun _ _ -> async { () }
+        OnModelChanged = fun _model _ -> failwith "callback-alarm-test"
+        OnSystemAlarm = fun phase msg -> alarms.Add(phase, msg)
+      }
+      let rt = ElmLoop.start prog 0 System.Threading.CancellationToken.None
+      // Initial OnModelChanged fires immediately
+      waitFor (fun () -> alarms.Count > 0) 2000 |> ignore
+      (alarms.Count, 0) |> Expect.isGreaterThan "alarm should fire"
+      let (phase, msg) = alarms.[0]
+      phase |> Expect.equal "phase should be 'initial_callback' or 'callback'" "initial_callback"
+      msg |> Expect.stringContains "message should contain exception text" "callback-alarm-test"
+
+    testCase "Effect throws: OnSystemAlarm is called with 'effect' phase" <| fun _ ->
+      let alarms = System.Collections.Generic.List<string * string>()
+      let effSignal = new System.Threading.ManualResetEventSlim(false)
+      let prog : ElmProgram<int, int, int, int> = {
+        Update = fun msg model -> model + msg, [1]
+        Render = fun model -> [model]
+        ExecuteEffect = fun _ _ ->
+          async {
+            effSignal.Set()
+            failwith "effect-alarm-test"
+          }
+        OnModelChanged = fun _ _ -> ()
+        OnSystemAlarm = fun phase msg -> alarms.Add(phase, msg)
+      }
+      let rt = ElmLoop.start prog 0 System.Threading.CancellationToken.None
+      rt.Dispatch 1
+      effSignal.Wait(2000) |> ignore
+      waitFor (fun () -> alarms |> Seq.exists (fun (p, _) -> p = "effect")) 2000 |> ignore
+      let effectAlarms = alarms |> Seq.filter (fun (p, _) -> p = "effect") |> Seq.toList
+      (effectAlarms.Length, 0) |> Expect.isGreaterThan "effect alarm should fire"
+      let (_, msg) = effectAlarms.[0]
+      msg |> Expect.stringContains "message should contain exception text" "effect-alarm-test"
+
+    testCase "Loop resilience preserved: alarm fires AND loop continues after update throw" <| fun _ ->
+      let alarms = System.Collections.Generic.List<string * string>()
+      let effCount = ref 0
+      let prog : ElmProgram<int, int, int, int> = {
+        Update = fun msg model ->
+          if msg = 1 then failwith "alarm-resilience-test"
+          model + 1, [1]
+        Render = fun model -> [model]
+        ExecuteEffect = fun _ _ ->
+          async { System.Threading.Interlocked.Increment effCount |> ignore }
+        OnModelChanged = fun _ _ -> ()
+        OnSystemAlarm = fun phase msg -> alarms.Add(phase, msg)
+      }
+      let rt = ElmLoop.start prog 0 System.Threading.CancellationToken.None
+      rt.Dispatch 1  // throws → alarm
+      waitFor (fun () -> alarms.Count > 0) 2000 |> ignore
+      (alarms.Count, 0) |> Expect.isGreaterThan "alarm fired"
+      // Loop must still be alive — dispatch 2 should succeed
+      rt.Dispatch 2
+      waitFor (fun () -> effCount.Value >= 1) 2000 |> ignore
+      rt.GetModel() |> Expect.equal "model updated after alarm" 1
+      (effCount.Value, 0) |> Expect.isGreaterThan "effect ran after alarm"
   ]

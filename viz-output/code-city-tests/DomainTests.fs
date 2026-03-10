@@ -3712,6 +3712,9 @@ let private collectOrganicOpposedTeePairMetrics (rect: TRect) seeds =
         layoutWeberDistrict rect funcs Map.empty (Color(70uy, 130uy, 180uy, 255uy)) 10 100 0.9f rng Map.empty
       let canonicalRoads = canonicalizeRoads roads
       let clusters, _ = buildDirectedSegments tolerance canonicalRoads
+      let emitZipCanon =
+        seed = 777
+        && Environment.GetEnvironmentVariable("CODECITY_ZIPCANON") = "1"
       let clusterAnchors =
         clusters
         |> List.map (fun (clusterId, anchor, _) -> clusterId, anchor)
@@ -3720,6 +3723,28 @@ let private collectOrganicOpposedTeePairMetrics (rect: TRect) seeds =
         clusters
         |> List.map (fun (clusterId, _, refs) -> clusterId, refs)
         |> Map.ofList
+      if emitZipCanon then
+        canonicalRoads
+        |> List.iteri (fun roadIndex road ->
+            let startPt, endPt = roadEndpoints2d road
+            printfn
+              "ziproad %d: (%.2f,%.2f)->(%.2f,%.2f) len=%.2f"
+              roadIndex
+              startPt.X
+              startPt.Y
+              endPt.X
+              endPt.Y
+              (Vec2.distanceTo startPt endPt))
+        clusters
+        |> List.iter (fun (clusterId, anchor, refs) ->
+            if refs.Length >= 3 then
+              printfn
+                "zipcluster-summary cluster=%d anchor=(%.2f,%.2f) valence=%d roads=%A"
+                clusterId
+                anchor.X
+                anchor.Y
+                refs.Length
+                (refs |> List.map fst |> List.distinct |> List.sort))
       let chainMetrics =
         throughChainDetails tolerance 18.0f canonicalRoads
         |> List.map fst
@@ -3745,7 +3770,7 @@ let private collectOrganicOpposedTeePairMetrics (rect: TRect) seeds =
                       segmentLengths
                       |> Array.take pathIndex
                       |> Array.sum
-                    let sideValues =
+                    let sideEntries =
                       Map.find clusterId clusterRefs
                       |> List.map fst
                       |> List.distinct
@@ -3774,7 +3799,17 @@ let private collectOrganicOpposedTeePairMetrics (rect: TRect) seeds =
                                 if abs lateral < 0.5f then
                                   None
                                 else
-                                  Some (if lateral < 0.0f then -1 else 1))
+                                  Some (roadIndex, if lateral < 0.0f then -1 else 1))
+                    if emitZipCanon && not sideEntries.IsEmpty then
+                      printfn
+                        "zipcluster-detail cluster=%d dist=%.2f chain=%A entries=%A"
+                        clusterId
+                        distanceAlong
+                        (detail.RoadIndices |> List.sort)
+                        sideEntries
+                    let sideValues =
+                      sideEntries
+                      |> List.map snd
                       |> List.distinct
                     for side in sideValues do
                       yield distanceAlong, side ]
