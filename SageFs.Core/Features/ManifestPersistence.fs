@@ -35,6 +35,10 @@ module ManifestTypes =
     | IoError of string
     | CorruptData of string
 
+  /// Indicates whether manifest data was loaded from the primary file or backup.
+  [<RequireQualifiedAccess>]
+  type ManifestSource = Primary | Backup
+
 
 /// Writer for .sagefm v1 binary format (daemon session manifest).
 module ManifestWriter =
@@ -237,30 +241,60 @@ module ManifestFile =
     Path.Combine(sageFsDir, "daemon.sagefm")
 
   /// Save manifest to .sagefm with atomic write.
+  /// Creates a .bak backup of the current manifest before overwriting.
   let save (sageFsDir: string) (data: DaemonManifestData) : Result<string, string> =
     try
       Directory.CreateDirectory(sageFsDir) |> ignore
       let path = manifestPath sageFsDir
       let tmpPath = path + ".tmp"
+      let bakPath = path + ".bak"
       let bytes = ManifestWriter.write data
       File.WriteAllBytes(tmpPath, bytes)
+      // Best-effort backup — don't fail the save if .bak creation fails
+      match File.Exists(path) with
+      | true ->
+        try File.Copy(path, bakPath, overwrite = true)
+        with _ -> ()
+      | false -> ()
       File.Move(tmpPath, path, overwrite = true)
       Ok path
     with ex ->
       Error (sprintf "Failed to save manifest: %s" ex.Message)
 
-  /// Load manifest from .sagefm.
-  /// W26(R12): Returns ManifestLoadError DU — NotFound for missing file, IoError/CorruptData for failures.
-  let load (sageFsDir: string) : Result<DaemonManifestData, ManifestLoadError> =
+  /// Load manifest from .sagefm, falling back to .sagefm.bak if primary is corrupt/missing.
+  /// Returns the loaded data paired with the source (Primary or Backup).
+  let load (sageFsDir: string) : Result<DaemonManifestData * ManifestSource, ManifestLoadError> =
     let path = manifestPath sageFsDir
-    match File.Exists(path) with
-    | false -> Error NotFound
-    | true ->
-      try
-        let bytes = File.ReadAllBytes(path)
-        ManifestReader.read bytes |> Result.mapError CorruptData
-      with ex ->
-        Error (IoError (sprintf "Failed to read manifest: %s" ex.Message))
+    let bakPath = path + ".bak"
+    let tryReadFile (filePath: string) =
+      match File.Exists(filePath) with
+      | false -> None
+      | true ->
+        try
+          let bytes = File.ReadAllBytes(filePath)
+          match ManifestReader.read bytes with
+          | Ok data -> Some (Ok data)
+          | Error msg -> Some (Error (CorruptData msg))
+        with ex ->
+          Some (Error (IoError (sprintf "Failed to read manifest: %s" ex.Message)))
+    match tryReadFile path with
+    | Some (Ok data) -> Ok (data, ManifestSource.Primary)
+    | primaryResult ->
+      // Primary failed or missing — try backup
+      match tryReadFile bakPath with
+      | Some (Ok data) ->
+        Utils.Log.warn "[ManifestPersistence] Primary manifest corrupt or missing, recovered from backup"
+        Ok (data, ManifestSource.Backup)
+      | Some (Error backupErr) ->
+        // Backup also failed — return the primary error if it exists, else the backup error
+        match primaryResult with
+        | Some (Error primaryErr) -> Error primaryErr
+        | _ -> Error backupErr
+      | None ->
+        // No backup — return primary error or NotFound
+        match primaryResult with
+        | Some (Error primaryErr) -> Error primaryErr
+        | _ -> Error NotFound
 
 
 /// Mapping between DaemonReplayState and DaemonManifestData.

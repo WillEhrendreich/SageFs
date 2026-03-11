@@ -220,10 +220,13 @@
         <Compile Include="TimeoutsTests.fs" />
         <Compile Include="EnvCheckTests.fs" />
         <Compile Include="FsiOutputParserTests.fs" />
+        <Compile Include="SseReplayTests.fs" />
         <Compile Include="SseSerializationBenchmarks.fs" />
         <Compile Include="SsePropertyTests.fs" />
         <Compile Include="SseContractComplianceTests.fs" />
         <Compile Include="SageTuiAllocationBenchmarks.fs" />
+        <Compile Include="ManifestBackupRecoveryTests.fs" />
+        <Compile Include="WorkerLivenessTests.fs" />
         <Compile Include="Program.fs" />
     </ItemGroup>
 

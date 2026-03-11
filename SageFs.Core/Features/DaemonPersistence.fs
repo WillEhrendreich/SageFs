@@ -53,9 +53,10 @@ module DaemonPersistence =
 
   /// Load daemon session manifest from .sagefm binary.
   /// W26(R12): Returns ManifestLoadError DU instead of stringly-typed error string.
+  /// Strips ManifestSource — backup fallback is logged inside ManifestFile.load.
   let loadManifest (sageFsDir: string) : Result<Replay.DaemonReplayState, ManifestTypes.ManifestLoadError> =
     ManifestFile.load sageFsDir
-    |> Result.map ManifestMapping.toReplayState
+    |> Result.map (fun (data, _source) -> ManifestMapping.toReplayState data)
 
   /// W35(R14): Rename a corrupt manifest file to unblock future saves.
   /// CorruptData is permanent — the file will never become readable again.
