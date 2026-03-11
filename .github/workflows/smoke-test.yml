@@ -47,5 +47,5 @@ jobs:
 
       - name: Run smoke test
         shell: pwsh
-        run: scripts/smoke-test.ps1
+        run: scripts/smoke-test.ps1 -SessionWarmupSeconds 120
         timeout-minutes: 10
