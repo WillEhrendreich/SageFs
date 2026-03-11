@@ -20,8 +20,11 @@ module AnsiCodes =
   let leaveAltScreen = sprintf "%s?1049l" esc
 
   // SGR mouse tracking (cross-platform, works in Windows Terminal/iTerm2/Linux)
-  let enableMouse = sprintf "%s?1002h%s?1006h" esc esc   // button-event + SGR extended
-  let disableMouse = sprintf "%s?1002l%s?1006l" esc esc
+  // ?1000h = any-event (required for wheel events in many terminals)
+  // ?1002h = button-event tracking
+  // ?1006h = SGR extended encoding (large coordinates + wheel)
+  let enableMouse = sprintf "%s?1000h%s?1002h%s?1006h" esc esc esc
+  let disableMouse = sprintf "%s?1006l%s?1002l%s?1000l" esc esc esc
 
   let moveTo row col = sprintf "%s%d;%dH" esc row col
   let moveUp n = sprintf "%s%dA" esc n
@@ -82,6 +85,9 @@ module AnsiCodes =
   /// Try to enable Windows VT100 processing for ANSI escape support.
   /// Returns true if VT100 is available.
   let enableVT100 () =
+    // Always set UTF-8 first — this must happen regardless of whether
+    // the Windows VT100 P/Invoke succeeds or fails.
+    Console.OutputEncoding <- Text.Encoding.UTF8
     match RuntimeInformation.IsOSPlatform(OSPlatform.Windows) with
     | true ->
       try
@@ -116,13 +122,9 @@ module AnsiCodes =
             fn.Invoke(handle, newMode) |> ignore
           | false -> ()
         | false -> ()
-        Console.OutputEncoding <- Text.Encoding.UTF8
         true
       with _ -> false
-    | false ->
-      // Unix terminals generally support VT100 natively
-      Console.OutputEncoding <- Text.Encoding.UTF8
-      true
+    | false -> true
 
   let mutable savedInputMode = 0u
 

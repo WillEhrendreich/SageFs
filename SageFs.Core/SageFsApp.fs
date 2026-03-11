@@ -1027,7 +1027,7 @@ module SageFsRender =
             | true -> "\n⏳ Creating session..."
             | false -> ""
           match s.Length > 0 with
-          | true -> sprintf "%s%s\n... ↑↓ nav · Enter switch · Del stop · Ctrl+N new · Ctrl+Alt+A auto-open off · ^Tab cycle" s creatingLine
+          | true -> sprintf "%s%s\n↑↓ nav  ↵ switch  Del stop  ^N new" s creatingLine
           | false ->
             match model.CreatingSession with
             | true -> "⏳ Creating session..."
