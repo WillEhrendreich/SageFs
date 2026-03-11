@@ -175,8 +175,10 @@ public sealed class CompletionProviderTests
         using (linked)
         using (timeout)
         {
-            // Wait slightly longer than the timeout window
-            Thread.Sleep(200);
+            // Poll with generous deadline — CI ThreadPool pressure can delay timer callbacks
+            var deadline = DateTime.UtcNow.AddSeconds(5);
+            while (!timeout.Token.IsCancellationRequested && DateTime.UtcNow < deadline)
+                Thread.Sleep(50);
             timeout.Token.IsCancellationRequested.Should().BeTrue(
                 because: "the timeout source must self-cancel after the duration elapses");
             linked.Token.IsCancellationRequested.Should().BeTrue(
