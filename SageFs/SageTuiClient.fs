@@ -770,5 +770,5 @@ let run (daemonInfo: DaemonInfo) =
       Subscribe = subscribe keyMap baseUrl
       OnError = CrashOnError
     }
-    App.run program
+    App.run (program |> Program.withDebugger DebuggerConfig.defaults)
     0
