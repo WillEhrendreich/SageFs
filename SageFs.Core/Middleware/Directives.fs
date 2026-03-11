@@ -11,14 +11,19 @@ open SageFs.Utils
 module OpenDirective =
   [<Literal>]
   let openedFileKey = "openedFiles"
-  type OpenedFiles = string Set
 
-  let private getOpenedFiles (st: AppState) : OpenedFiles =
-    AppStateCustom.tryGet<OpenedFiles> openedFileKey st
+  type OpenedFiles = { Files: Set<string> }
+    with
+    static member empty = { Files = Set.empty }
+    static member ofSet (s: Set<string>) = { Files = s }
+
+  let private getOpenedFiles (st: AppState) : Set<string> =
+    AppStateCustom.tryGetFeature<OpenedFiles> openedFileKey st
+    |> Option.map (fun o -> o.Files)
     |> Option.defaultValue Set.empty
 
-  let private setOpenedFiles (files: OpenedFiles) (st: AppState) : AppState =
-    AppStateCustom.set openedFileKey files st
+  let private setOpenedFiles (files: Set<string>) (st: AppState) : AppState =
+    AppStateCustom.set openedFileKey (OpenedFiles.ofSet files) st
 
   let openDirectiveMiddleware next (request, st) =
     let openDirectiveLines fileToOpen =

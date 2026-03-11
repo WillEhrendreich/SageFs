@@ -32,7 +32,7 @@ let projectDirectories (sln: Solution) : string list =
 
 type ActorArgs = {
   Middleware: AppState.Middleware list
-  InitFunctions: (Solution -> string * objnull) list
+  InitFunctions: (Solution -> string * obj) list
   Logger: Utils.ILogger
   OutStream: TextWriter
   UseAsp: bool

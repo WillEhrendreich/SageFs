@@ -106,19 +106,26 @@ type AppState = {
 /// due to circular compilation dependencies. Each feature module owns its key and accessors.
 ///
 /// REGISTERED KEYS (update this list when adding a key):
-///   "openedFiles"  | Set<string>         | SageFs.Middleware.Directives.OpenDirective
-///   "hotReload"    | HotReloading.State  | SageFs.Middleware.HotReloading
+///   "openedFiles"  | OpenDirective.OpenedFiles  | SageFs.Middleware.Directives.OpenDirective
+///   "hotReload"    | HotReloading.State          | SageFs.Middleware.HotReloading
 ///
 /// CONVENTION FOR NEW KEYS:
 ///   1. Define [<Literal>] key constant in the owning module.
-///   2. Write typed getCustom / setCustom functions using AppStateCustom.tryGet/set.
-///   3. Add entry to this doc comment.
-///   4. Never write to another module's key.
+///   2. Define the state as a plain record.
+///   3. Write typed getCustom / setCustom functions using AppStateCustom.tryGetFeature/set.
+///   4. Add entry to this doc comment.
+///   5. Never write to another module's key.
 module AppStateCustom =
 
-  /// Read a typed value from Custom, returning None if absent.
-  /// Raises InvalidCastException only if the owning module stored the wrong type
-  /// (which is a bug, not a user error — no defensive catch here).
+  /// Read a typed feature value from Custom.
+  /// Returns None if absent or if the stored value is a different type.
+  let inline tryGetFeature<'T> (key: string) (state: AppState) : 'T option =
+    match state.Custom |> Map.tryFind key with
+    | Some (:? 'T as v) -> Some v
+    | _ -> None
+
+  /// Read a typed value from Custom.
+  /// Returns None if absent; raises InvalidCastException if type is wrong.
   let inline tryGet<'T> (key: string) (state: AppState) : 'T option =
     state.Custom
     |> Map.tryFind key

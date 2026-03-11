@@ -235,29 +235,28 @@ let mkReloadingState (sln: SageFs.ProjectLoading.Solution) =
     LiveTestInitDone = false
   }
 
-let hotReloadingInitFunction sln =
+let hotReloadingInitFunction (sln: SageFs.ProjectLoading.Solution) : string * obj =
   try
-    "hotReload", box <| mkReloadingState sln
+    "hotReload", box (mkReloadingState sln)
   with ex ->
     Log.logWarn $"HotReloading initialization failed: %s{ex.Message}"
 
     "hotReload",
-    box
-    <| {
-         Methods = Map.empty
-         LastOpenModules = []
-         LastAssembly = None
-         ProjectAssemblies = []
-         AssemblyLoadErrors = []
-         LiveTestInitDone = false
-       }
+    box {
+      Methods = Map.empty
+      LastOpenModules = []
+      LastAssembly = None
+      ProjectAssemblies = []
+      AssemblyLoadErrors = []
+      LiveTestInitDone = false
+    }
 
 [<Literal>]
 let hotReloadKey = "hotReload"
 
 /// Typed read from AppState.Custom — single cast site for hot-reload state.
 let getReloadingState (st: AppState) =
-  AppStateCustom.tryGet<State> hotReloadKey st
+  AppStateCustom.tryGetFeature<State> hotReloadKey st
   |> Option.defaultWith (fun () -> mkReloadingState st.Solution)
 
 /// Typed write of hot-reload state into AppState.Custom.
