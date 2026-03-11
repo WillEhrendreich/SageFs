@@ -25,6 +25,12 @@ jobs:
           repository: WillEhrendreich/ModelContextProtocolSdk
           path: mcp-sdk
 
+      - name: Checkout SageTUI
+        uses: actions/checkout@v5
+        with:
+          repository: WillEhrendreich/SageTUI
+          path: sagetui
+
       - name: Setup .NET 10
         uses: actions/setup-dotnet@v5
         with:
@@ -36,6 +42,9 @@ jobs:
           dotnet pack mcp-sdk/src/ModelContextProtocol.Core -o mcp-sdk-nupkg -c Release
           dotnet pack mcp-sdk/src/ModelContextProtocol -o mcp-sdk-nupkg -c Release
           dotnet pack mcp-sdk/src/ModelContextProtocol.AspNetCore -o mcp-sdk-nupkg -c Release
+
+      - name: Pack SageTUI
+        run: dotnet pack sagetui/SageTUI.Library.fsproj -o nupkg -c Release
 
       - name: Build and pack SageFs tool
         run: |
