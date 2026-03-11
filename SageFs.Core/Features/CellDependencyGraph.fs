@@ -1,5 +1,8 @@
 module SageFs.Features.CellDependencyGraph
 
+open System.Text.RegularExpressions
+open System.Collections.Generic
+
 type CellId = int
 
 type CellInfo = {
@@ -13,6 +16,11 @@ type CellGraph = {
   Cells: Map<CellId, CellInfo>
   Edges: (CellId * CellId) list
 }
+
+/// Returns true if `name` appears as a whole identifier in `source`
+/// (not as a substring of a longer word/qualified name).
+let private containsIdentifier (name: string) (source: string) =
+  Regex.IsMatch(source, @"(?<![.\w])" + Regex.Escape(name) + @"(?![.\w])")
 
 let analyzeCell (knownBindings: Map<string, CellId>) (cellId: CellId) (source: string) (fsiOutput: string) : CellInfo =
   let produces =
@@ -29,7 +37,7 @@ let analyzeCell (knownBindings: Map<string, CellId>) (cellId: CellId) (source: s
     knownBindings
     |> Map.toList
     |> List.choose (fun (name, producerCellId) ->
-      if producerCellId <> cellId && source.Contains(name) then Some name
+      if producerCellId <> cellId && containsIdentifier name source then Some name
       else None)
   { Id = cellId; Source = source; Produces = produces; Consumes = consumes }
 
@@ -56,20 +64,17 @@ let transitiveStale (graph: CellGraph) (changedCellId: CellId) : CellId list =
     |> List.groupBy fst
     |> List.map (fun (k, vs) -> (k, vs |> List.map snd))
     |> Map.ofList
-  let rec bfs visited queue =
-    match queue with
-    | [] -> visited |> Set.toList
-    | current :: rest ->
-      if Set.contains current visited then
-        bfs visited rest
-      else
-        let neighbors =
-          adjacency
-          |> Map.tryFind current
-          |> Option.defaultValue []
-          |> List.filter (fun n -> not (Set.contains n visited))
-        bfs (Set.add current visited) (rest @ neighbors)
-  let directDependents =
-    adjacency |> Map.tryFind changedCellId |> Option.defaultValue []
-  bfs Set.empty directDependents
-  |> List.filter (fun id -> id <> changedCellId)
+  let queue = Queue<CellId>()
+  adjacency
+  |> Map.tryFind changedCellId
+  |> Option.defaultValue []
+  |> List.iter queue.Enqueue
+  let visited = System.Collections.Generic.HashSet<CellId>()
+  while queue.Count > 0 do
+    let current = queue.Dequeue()
+    if visited.Add(current) then
+      adjacency
+      |> Map.tryFind current
+      |> Option.defaultValue []
+      |> List.iter (fun n -> if not (visited.Contains n) then queue.Enqueue n)
+  visited |> Seq.filter (fun id -> id <> changedCellId) |> Seq.toList

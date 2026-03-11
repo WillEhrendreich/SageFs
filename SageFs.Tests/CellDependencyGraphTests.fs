@@ -59,6 +59,26 @@ let cellDepGraphTests = testList "CellDependencyGraph" [
       let known = Map.ofList [("x", 0)]
       let cell = analyzeCell known 0 "let x = x + 1" "val x : int = 2"
       cell.Consumes |> Expect.isEmpty "should not self-reference"
+
+    testCase "does not false-positive on prefix substring — 'x' must not match 'xs'" <| fun () ->
+      let known = Map.ofList [("x", 0)]
+      let cell = analyzeCell known 1 "let xs = [1;2;3]" "val xs : int list = [1; 2; 3]"
+      cell.Consumes |> Expect.isEmpty "x should not match inside xs"
+
+    testCase "does not false-positive on suffix substring — 'map' must not match 'mapping'" <| fun () ->
+      let known = Map.ofList [("map", 0)]
+      let cell = analyzeCell known 1 "let result = mapping |> List.length" "val result : int = 3"
+      cell.Consumes |> Expect.isEmpty "map should not match inside mapping"
+
+    testCase "does not false-positive single-char name inside qualified identifier — 'n' must not match 'String.length'" <| fun () ->
+      let known = Map.ofList [("n", 0)]
+      let cell = analyzeCell known 1 "let result = String.length \"hello\"" "val result : int = 5"
+      cell.Consumes |> Expect.isEmpty "n should not match inside length or String"
+
+    testCase "does match genuine word-boundary usage" <| fun () ->
+      let known = Map.ofList [("xs", 0); ("n", 1)]
+      let cell = analyzeCell known 2 "let result = xs |> List.take n" "val result : int list = []"
+      cell.Consumes |> List.sort |> Expect.equal "should consume xs and n" ["n"; "xs"]
   ]
 
   testList "buildGraph" [
@@ -109,5 +129,24 @@ let cellDepGraphTests = testList "CellDependencyGraph" [
       let graph = buildGraph cells
       transitiveStale graph 0
       |> Expect.isEmpty "isolated cell has no dependents"
+
+    testCase "wide fan-out graph: all downstream nodes found exactly once" <| fun () ->
+      // 0 → [1..9] → all depend on 0 — result must be exactly [1..9], no duplicates
+      let cells =
+        { Id = 0; Source = ""; Produces = ["root"]; Consumes = [] }
+        :: [ for i in 1..9 ->
+               { Id = i; Source = ""; Produces = [sprintf "v%d" i]; Consumes = ["root"] } ]
+      let graph = buildGraph cells
+      let stale = transitiveStale graph 0
+      stale |> List.sort |> Expect.equal "all 9 downstream" [1;2;3;4;5;6;7;8;9]
+
+    testCase "does not include the changed cell itself in stale set" <| fun () ->
+      let cells = [
+        { Id = 0; Source = ""; Produces = ["a"]; Consumes = [] }
+        { Id = 1; Source = ""; Produces = ["b"]; Consumes = ["a"] }
+      ]
+      let graph = buildGraph cells
+      let stale = transitiveStale graph 0
+      stale |> List.contains 0 |> Expect.isFalse "changed cell not in stale set"
   ]
 ]
