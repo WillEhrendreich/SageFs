@@ -20,6 +20,9 @@ type BindingValue = {
   CellIndex: int
   /// How long the eval took, in ms (0.0 if unknown)
   EvalDurationMs: float
+  /// 1-based line number within the evaluated block; 0 = unknown.
+  /// Used by editor extensions to place inline decorations on the correct source line.
+  SourceLine: int
 }
 
 /// What kind of code was evaluated — derived from the SUBMITTED code, not FSI output.
@@ -94,7 +97,8 @@ let private findEqAtDepthZero (s: string) : int =
 
 /// Parse a single FSI output line of the form `val [mutable] name : typeSig = value`.
 /// Returns `None` for any line that is not a `val` binding declaration.
-let parseFsiVal (line: string) : BindingValue option =
+/// `lineNum` is the 1-based position within the FSI output block (0 = unknown).
+let parseFsiValAtLine (lineNum: int) (line: string) : BindingValue option =
   let trimmed = line.Trim()
   match trimmed.StartsWith("val ") with
   | false -> None
@@ -131,15 +135,21 @@ let parseFsiVal (line: string) : BindingValue option =
           IsFunctionValue = isFun
           CellIndex     = 0
           EvalDurationMs = 0.0
+          SourceLine    = lineNum
         }
 
+/// Parse a single FSI output line (SourceLine = 0, use parseFsiValAtLine for line-aware parsing).
+let parseFsiVal (line: string) : BindingValue option = parseFsiValAtLine 0 line
+
 /// Parse every `val …` line from a block of multiline FSI output.
+/// Each `BindingValue` receives a 1-based `SourceLine` indicating its position in the output block.
 let parseFsiBatch (fsiOutput: string) : BindingValue list =
   match String.IsNullOrWhiteSpace fsiOutput with
   | true -> []
   | false ->
     fsiOutput.Split('\n')
-    |> Array.choose parseFsiVal
+    |> Array.mapi (fun i line -> parseFsiValAtLine (i + 1) line)
+    |> Array.choose id
     |> Array.toList
 
 // ── Boundary kind detection from submitted code ───────────────────────────────

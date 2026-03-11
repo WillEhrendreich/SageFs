@@ -737,7 +737,7 @@ let run (daemonInfo: DaemonInfo) =
       Update = update
       View = view
       Subscribe = subscribe keyMap baseUrl
-      OnError = None
+      OnError = CrashOnError
     }
     App.run program
     0

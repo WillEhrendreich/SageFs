@@ -182,10 +182,10 @@ let renderFailureNarrativesTests =
       html |> Expect.stringContains "should have narrative-entry class" "narrative-entry"
     }
 
-    test "empty view shows no-failures message" {
+    test "empty view renders no content (silent when empty)" {
       let view = FailureNarrativesPanelView.fromNarratives []
       let html = renderFailureNarratives view |> renderToString
-      html |> Expect.stringContains "should show no-failures message" "no recent"
+      html.Contains("no recent") |> Expect.isFalse "should NOT show no-failures message when empty (progressive disclosure)"
     }
 
   ]

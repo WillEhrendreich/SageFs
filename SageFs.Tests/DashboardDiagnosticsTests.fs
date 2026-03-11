@@ -84,9 +84,9 @@ let renderCurrentDiagnosticsTests =
       Expect.stringContains html DomIds.DiagnosticsPanel "should have diagnostics-panel id"
     }
 
-    test "empty list shows no-diagnostics message" {
+    test "empty list renders no content (silent when empty)" {
       let html = renderCurrentDiagnostics [] |> renderToString
-      Expect.stringContains html "No diagnostics" "should show no diagnostics message"
+      Expect.isFalse (html.Contains("No diagnostics")) "should NOT show no-diagnostics message when empty (progressive disclosure)"
     }
 
     test "error diagnostic renders error CSS class" {

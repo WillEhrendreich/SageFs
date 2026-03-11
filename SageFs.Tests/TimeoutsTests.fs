@@ -44,7 +44,7 @@ let timeoutsTests = testList "Timeouts" [
       | Error e -> failtestf "unexpected error: %s" e
   ]
 
-  testList "Thread-safe mutable timeouts" [
+  testSequenced <| testList "Thread-safe mutable timeouts" [
     testCase "setPerTestTimeout rejects invalid value" <| fun _ ->
       let before = Timeouts.perTestDefault ()
       Timeouts.setPerTestTimeout (TimeSpan.FromMilliseconds(100.0))

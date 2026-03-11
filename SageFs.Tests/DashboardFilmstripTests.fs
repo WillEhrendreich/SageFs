@@ -25,9 +25,9 @@ let filmstripRenderTests =
       Expect.stringContains html DomIds.FilmstripPanel "should have filmstrip-panel id"
     }
 
-    test "empty list shows No history message" {
+    test "empty list renders no content (silent when empty)" {
       let html = renderSessionFilmstrip [] |> render
-      Expect.stringContains html "No history" "should show No history message"
+      Expect.isFalse (html.Contains("No history")) "should NOT show No history message when empty (progressive disclosure)"
     }
 
     test "success entry renders success icon" {
