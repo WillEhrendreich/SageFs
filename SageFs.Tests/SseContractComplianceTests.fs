@@ -166,9 +166,9 @@ let sseContractComplianceTests = testList "SSE contract compliance" [
   // ── Group 1: Registry exhaustiveness ──
 
   testList "registry exhaustiveness" [
-    testCase "allSseEventTypes has exactly 16 items" <| fun () ->
+    testCase "allSseEventTypes has exactly 17 items" <| fun () ->
       allSseEventTypes |> List.length
-      |> Expect.equal "should have exactly 16 event types" 16
+      |> Expect.equal "should have exactly 17 event types" 17
 
     testCase "allSseEventTypes has no duplicates" <| fun () ->
       let distinct = allSseEventTypes |> List.distinct
@@ -187,7 +187,7 @@ let sseContractComplianceTests = testList "SSE contract compliance" [
           m.Name.Substring("format".Length, m.Name.Length - "format".Length - "Event".Length)
           |> toSnakeCase)
       (formatMethods |> Array.length, 0)
-      |> Expect.isGreaterThan "should find at least 16 format functions"
+      |> Expect.isGreaterThan "should find at least 17 format functions"
       for derivedName in formatMethods do
         allSseEventTypes |> List.contains derivedName
         |> Expect.isTrue (sprintf "'%s' derived from formatter should exist in registry" derivedName)

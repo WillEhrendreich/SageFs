@@ -1157,6 +1157,8 @@ module LiveTestState =
 
   /// Filter StatusEntries to only include tests belonging to the given session.
   /// When sessionId is empty or no session map entries exist, returns all entries (backwards compat).
+  /// When sessionId is provided and TestSessionMap is populated, tests with no session attribution
+  /// are excluded (not leaked) — they belong to an untracked path and should not bleed across sessions.
   let statusEntriesForSession (sessionId: string) (state: LiveTestState) : TestStatusEntry array =
     match System.String.IsNullOrEmpty sessionId || Map.isEmpty state.TestSessionMap with
     | true -> state.StatusEntries
@@ -1165,7 +1167,7 @@ module LiveTestState =
       |> Array.filter (fun e ->
         match Map.tryFind e.TestId state.TestSessionMap with
         | Some sid -> sid = sessionId
-        | None -> true)
+        | None -> false)
 
 // --- Gutter Rendering Pure Functions ---
 

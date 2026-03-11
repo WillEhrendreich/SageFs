@@ -54,6 +54,9 @@ module TRect =
       H = max 0.1f (r.H - 2.0f * mh) }
   let centerX r = r.X + r.W / 2.0f
   let centerZ r = r.Z + r.H / 2.0f
+  let containsPoint x z r =
+    x >= r.X && x <= r.X + r.W
+    && z >= r.Z && z <= r.Z + r.H
 
 /// Squarified treemap layout (Bruls, Huizing, van Wijk 2000).
 /// Places weighted items into a bounding rectangle with near-square aspect ratios.
@@ -511,6 +514,27 @@ let sampleSemanticTerrainHeight (anchors: TerrainAnchor[]) (x: float32) (z: floa
     | Some height -> height
     | None when totalWeight > 0.0f -> weightedHeight / totalWeight
     | None -> 0.0f
+
+let groundedTerrainHeightForPoint (blocks: ModuleBlock[]) (anchors: TerrainAnchor[]) (x: float32) (z: float32) : float32 =
+  let containingBlocks =
+    blocks
+    |> Array.filter (fun block -> TRect.containsPoint x z block.Rect)
+  match containingBlocks with
+  | [| block |] -> block.TerrainY
+  | _ -> sampleSemanticTerrainHeight anchors x z
+
+let groundRoadToTerrain (blocks: ModuleBlock[]) (anchors: TerrainAnchor[]) (road: Road) : Road =
+  let midX = (road.FromPos.X + road.ToPos.X) / 2.0f
+  let midZ = (road.FromPos.Z + road.ToPos.Z) / 2.0f
+  let terrainY = groundedTerrainHeightForPoint blocks anchors midX midZ
+  { road with
+      FromPos = Vector3(road.FromPos.X, terrainY, road.FromPos.Z)
+      ToPos = Vector3(road.ToPos.X, terrainY, road.ToPos.Z) }
+
+let groundBuildingToTerrain (blocks: ModuleBlock[]) (anchors: TerrainAnchor[]) (building: FuncBuilding) : FuncBuilding =
+  let centerX = building.X + building.W / 2.0f
+  let centerZ = building.Z + building.D / 2.0f
+  { building with TerrainY = groundedTerrainHeightForPoint blocks anchors centerX centerZ }
 
 // ─── Connected Road Graph Types ──────────────────────────────
 // Roads are a proper graph: nodes (intersections) + edges (road segments).
@@ -3664,88 +3688,95 @@ let applyHistoryAccretions
     && cube.CX + cube.HW <= lotHW
     && cube.CZ - cube.HD >= -lotHD
     && cube.CZ + cube.HD <= lotHD
+  let cubeFootprint (cube: SubCube) = cube.HW * cube.HD
 
   if profile.AccretionCount <= 0 || cubes.Length = 0 then
     cubes
   else
     let primary = cubes |> Array.maxBy (fun cube -> cube.HW * cube.HD)
+    let maxAddedFootprint =
+      cubes
+      |> Array.sumBy cubeFootprint
+      |> fun footprint -> footprint * 0.25f
     let faceOrder = [| FdNorth; FdEast; FdSouth; FdWest |]
     let scaleRange, heightFactor =
       match profile.Style with
       | Organic -> (0.24f, 0.40f), 0.52f
       | Patched -> (0.16f, 0.28f), 0.46f
       | Extended -> (0.30f, 0.44f), 0.58f
-    let additions =
-      [|
-        for i in 0 .. profile.AccretionCount - 1 do
-          let mutable accepted = None
-          let baseHash = fnvHash (sprintf "%s|accretion|%d" qualName i)
-          let baseIndex = int (baseHash % uint32 faceOrder.Length)
-          let mutable attempt = 0
-          while accepted.IsNone && attempt < faceOrder.Length do
-            let face = faceOrder.[(baseIndex + attempt) % faceOrder.Length]
-            let hashI = fnvHash (sprintf "%s|accretion|%d|%d" qualName i attempt)
-            let ratio01 bits =
-              float32 bits / float32 0xFFFFu
-            let scaleBits = hashI &&& 0xFFFFu
-            let offsetBits = (hashI >>> 8) &&& 0xFFFFu
-            let heightBits = (hashI >>> 16) &&& 0xFFFFu
-            let scale =
-              fst scaleRange + ratio01 scaleBits * (snd scaleRange - fst scaleRange)
-            let hw =
-              max 0.12f (primary.HW * scale)
-            let hd =
-              max 0.12f (primary.HD * scale)
-            let lateralLimit =
-              match face with
-              | FdNorth | FdSouth ->
-                max 0.0f ((primary.HW - hw) * 0.72f)
-              | FdEast | FdWest ->
-                max 0.0f ((primary.HD - hd) * 0.72f)
-            let lateral =
-              if lateralLimit <= 0.0001f then 0.0f
-              else (ratio01 offsetBits - 0.5f) * 2.0f * lateralLimit
-            let heightScale =
-              let styleBase =
-                match profile.Style with
-                | Organic -> 0.62f
-                | Patched -> 0.48f
-                | Extended -> 0.68f
-              min 0.92f (max 0.18f (primary.HeightScale * (styleBase + profile.EraShift * 0.12f + ratio01 heightBits * heightFactor * 0.1f)))
-            let candidate =
-              match face with
-              | FdNorth ->
-                { CX = primary.CX + lateral
-                  CZ = primary.CZ - primary.HD - hd
-                  HW = hw
-                  HD = hd
-                  HeightScale = heightScale }
-              | FdSouth ->
-                { CX = primary.CX + lateral
-                  CZ = primary.CZ + primary.HD + hd
-                  HW = hw
-                  HD = hd
-                  HeightScale = heightScale }
-              | FdEast ->
-                { CX = primary.CX + primary.HW + hw
-                  CZ = primary.CZ + lateral
-                  HW = hw
-                  HD = hd
-                  HeightScale = heightScale }
-              | FdWest ->
-                { CX = primary.CX - primary.HW - hw
-                  CZ = primary.CZ + lateral
-                  HW = hw
-                  HD = hd
-                  HeightScale = heightScale }
-            match cubeWithinLot candidate with
-            | true -> accepted <- Some candidate
-            | false -> attempt <- attempt + 1
-          match accepted with
-          | Some cube -> yield cube
-          | None -> ()
-      |]
-    Array.append cubes additions
+    let additions = ResizeArray<SubCube>()
+    let mutable addedFootprint = 0.0f
+    for i in 0 .. profile.AccretionCount - 1 do
+      let mutable accepted = None
+      let baseHash = fnvHash (sprintf "%s|accretion|%d" qualName i)
+      let baseIndex = int (baseHash % uint32 faceOrder.Length)
+      let mutable attempt = 0
+      while accepted.IsNone && attempt < faceOrder.Length do
+        let face = faceOrder.[(baseIndex + attempt) % faceOrder.Length]
+        let hashI = fnvHash (sprintf "%s|accretion|%d|%d" qualName i attempt)
+        let ratio01 bits =
+          float32 bits / float32 0xFFFFu
+        let scaleBits = hashI &&& 0xFFFFu
+        let offsetBits = (hashI >>> 8) &&& 0xFFFFu
+        let heightBits = (hashI >>> 16) &&& 0xFFFFu
+        let scale =
+          fst scaleRange + ratio01 scaleBits * (snd scaleRange - fst scaleRange)
+        let hw =
+          max 0.12f (primary.HW * scale)
+        let hd =
+          max 0.12f (primary.HD * scale)
+        let lateralLimit =
+          match face with
+          | FdNorth | FdSouth ->
+            max 0.0f ((primary.HW - hw) * 0.72f)
+          | FdEast | FdWest ->
+            max 0.0f ((primary.HD - hd) * 0.72f)
+        let lateral =
+          if lateralLimit <= 0.0001f then 0.0f
+          else (ratio01 offsetBits - 0.5f) * 2.0f * lateralLimit
+        let heightScale =
+          let styleBase =
+            match profile.Style with
+            | Organic -> 0.62f
+            | Patched -> 0.48f
+            | Extended -> 0.68f
+          min 0.92f (max 0.18f (primary.HeightScale * (styleBase + profile.EraShift * 0.12f + ratio01 heightBits * heightFactor * 0.1f)))
+        let candidate =
+          match face with
+          | FdNorth ->
+            { CX = primary.CX + lateral
+              CZ = primary.CZ - primary.HD - hd
+              HW = hw
+              HD = hd
+              HeightScale = heightScale }
+          | FdSouth ->
+            { CX = primary.CX + lateral
+              CZ = primary.CZ + primary.HD + hd
+              HW = hw
+              HD = hd
+              HeightScale = heightScale }
+          | FdEast ->
+            { CX = primary.CX + primary.HW + hw
+              CZ = primary.CZ + lateral
+              HW = hw
+              HD = hd
+              HeightScale = heightScale }
+          | FdWest ->
+            { CX = primary.CX - primary.HW - hw
+              CZ = primary.CZ + lateral
+              HW = hw
+              HD = hd
+              HeightScale = heightScale }
+        match cubeWithinLot candidate, addedFootprint + cubeFootprint candidate <= maxAddedFootprint with
+        | true, true -> accepted <- Some candidate
+        | true, false
+        | false, _ -> attempt <- attempt + 1
+      match accepted with
+      | Some cube ->
+          additions.Add(cube)
+          addedFootprint <- addedFootprint + cubeFootprint cube
+      | None -> ()
+    Array.append cubes (additions.ToArray())
 
 let compoundForBuilding (building: FuncBuilding) : SubCube[] =
   let family = currentMassingFamily building
@@ -6593,7 +6624,8 @@ type private FrontageStrip =
     Normal: Vec2
     Length: float32
     HalfWidth: float32
-    RoadClass: RoadClass }
+    RoadClass: RoadClass
+    Road: Road }
 
 let private roadClassForWeight weight =
   match weight with
@@ -6698,6 +6730,48 @@ let private orientedBounds width depth angleDegrees =
   let c = abs (MathF.Cos angleRadians)
   let s = abs (MathF.Sin angleRadians)
   width * c + depth * s, width * s + depth * c
+
+let private buildingFootprintRect (building: FuncBuilding) =
+  TRect.create building.X building.Z building.W building.D
+
+let private rectsOverlapWithEps eps (a: TRect) (b: TRect) =
+  a.X < b.X + b.W - eps
+  && a.X + a.W > b.X + eps
+  && a.Z < b.Z + b.H - eps
+  && a.Z + a.H > b.Z + eps
+
+let private roadIntersectsRect clearance (road: Road) (rect: TRect) =
+  let expanded =
+    TRect.create
+      (rect.X - clearance)
+      (rect.Z - clearance)
+      (rect.W + clearance * 2.0f)
+      (rect.H + clearance * 2.0f)
+  let startPt = Vec2.Create(road.FromPos.X, road.FromPos.Z)
+  let endPt = Vec2.Create(road.ToPos.X, road.ToPos.Z)
+  clipSegmentToRect expanded startPt endPt |> Option.isSome
+
+let private sameRoad (left: Road) (right: Road) =
+  left.FromPos = right.FromPos
+  && left.ToPos = right.ToPos
+  && abs (left.HalfWidth - right.HalfWidth) < 1e-4f
+  && left.Weight = right.Weight
+
+let private canAcceptFrontageBuilding
+  (roads: Road list)
+  (servingRoad: Road)
+  (accepted: ResizeArray<FuncBuilding>)
+  (candidate: FuncBuilding) =
+  let candidateRect = buildingFootprintRect candidate
+  let overlapsAccepted =
+    accepted
+    |> Seq.exists (fun existing -> rectsOverlapWithEps 0.08f candidateRect (buildingFootprintRect existing))
+  let overlapsRoadSurface =
+    roads
+    |> List.exists (fun road ->
+      not (sameRoad road servingRoad)
+      && roadIntersectsRect (road.HalfWidth + 0.04f) road candidateRect)
+  not overlapsAccepted && not overlapsRoadSurface
 
 let private clampPointToRect (rect: TRect) (x: float32, z: float32) =
   let maxX = rect.X + rect.W
@@ -7051,13 +7125,15 @@ let packAlongRoads
                         Normal = leftNormal
                         Length = len
                         HalfWidth = halfWidth
-                        RoadClass = roadClass }
+                        RoadClass = roadClass
+                        Road = road }
                 yield { Start = clippedStart
                         Dir = dir
                         Normal = Vec2.negate leftNormal
                         Length = len
                         HalfWidth = halfWidth
-                        RoadClass = roadClass }
+                        RoadClass = roadClass
+                        Road = road }
           | None -> () ]
 
     if frontages.IsEmpty then
@@ -7089,6 +7165,7 @@ let packAlongRoads
         let spacing = frontage.Length / float32 (chunk.Length + 1)
         let roadAngle = MathF.Atan2(frontage.Dir.Y, frontage.Dir.X) * 180.0f / MathF.PI
         let parcelGap = min 0.75f (max 0.18f (spacing * 0.18f))
+        let rejected = ResizeArray<FuncDef>()
         chunk |> List.iteri (fun idx f ->
           let heat, callers, callees =
             heatMap |> Map.tryFind f.QualifiedName |> Option.defaultValue (0.0f, 0, 0)
@@ -7108,7 +7185,7 @@ let packAlongRoads
           if px >= bx0 - eps && px + worldW <= bx1 + eps && pz >= bz0 - eps && pz + worldD <= bz1 + eps then
             let ageDays, meta = currentGitMetrics gitMeta f.FilePath
             let jitter = (rng.NextSingle() - 0.5f) * 2.0f
-            allBuildings.Add {
+            let candidate = {
               Func = f; Heat = heat; CallerCount = callers; CalleeCount = callees
               Complexity = complexity
               BuildingType = bt
@@ -7123,7 +7200,14 @@ let packAlongRoads
               Color     = BuildingType.wallColor bt f.Name ageDays
               RoofColor = BuildingType.roofColor bt districtColor
               TerrainY = 0.0f
-              District  = f.Module })
+              District  = f.Module }
+            if canAcceptFrontageBuilding roads frontage.Road allBuildings candidate then
+              allBuildings.Add candidate
+            else
+              rejected.Add f
+          else
+            rejected.Add f)
+        rejected |> Seq.toList
 
       for (frontage, count) in List.zip sortedFrontages frontageCounts do
         if not remaining.IsEmpty then
@@ -7131,12 +7215,24 @@ let packAlongRoads
           if take > 0 && frontage.Length > 0.9f then
             let chunk = remaining |> List.take take
             remaining <- remaining |> List.skip take
-            placeFrontage frontage chunk
+            let rejected = placeFrontage frontage chunk
+            remaining <- remaining @ rejected
 
-      // Overflow spills to the strongest frontage corridor.
-      if not remaining.IsEmpty then
-        let strongestFrontage = sortedFrontages |> List.head
-        placeFrontage strongestFrontage remaining
+      let rec retryRemaining passes queue =
+        match passes, queue with
+        | _, [] -> []
+        | 0, _ -> queue
+        | _ ->
+          let retried =
+            (queue, sortedFrontages)
+            ||> List.fold (fun pending frontage ->
+              match pending with
+              | [] -> []
+              | _ -> placeFrontage frontage pending)
+          if retried.Length < queue.Length then retryRemaining (passes - 1) retried
+          else retried
+
+      remaining <- retryRemaining 2 remaining
 
       // Ultimate fallback: if every placement was out-of-bounds, use perimeter packing
       if allBuildings.Count = 0 then
@@ -7171,14 +7267,8 @@ let layoutWeberDistrict
       |> canonicalizeRoads
       |> fun roads ->
           if organic > 0.5f then pruneRepeatedSideConnectorRoads roads else roads
-    let frontageRoads =
-      districtRoads
-      |> List.filter (fun road -> road.Weight >= RoadClass.tier Avenue)
-      |> function
-        | [] -> districtRoads
-        | arterialRoads -> arterialRoads
     let buildings =
-      packAlongRoads frontageRoads rect funcs heatMap districtColor rng gitMeta
+      packAlongRoads districtRoads rect funcs heatMap districtColor rng gitMeta
     (buildings, districtRoads)
 
 
@@ -7375,14 +7465,8 @@ let buildCity (repoRoot: string) (projectFile: string option) =
   let mutable allAlleyRoads = []
   let blockArray = allBlocks.ToArray()
   let terrainAnchors = buildSemanticTerrainAnchors blockArray halfCity
-  let terrainHeightAt x z = sampleSemanticTerrainHeight terrainAnchors x z
-  let applyRoadTerrain (road: Road) =
-    let midX = (road.FromPos.X + road.ToPos.X) / 2.0f
-    let midZ = (road.FromPos.Z + road.ToPos.Z) / 2.0f
-    let terrainY = terrainHeightAt midX midZ
-    { road with
-        FromPos = Vector3(road.FromPos.X, terrainY, road.FromPos.Z)
-        ToPos = Vector3(road.ToPos.X, terrainY, road.ToPos.Z) }
+  let terrainHeightAt x z = groundedTerrainHeightForPoint blockArray terrainAnchors x z
+  let applyRoadTerrain (road: Road) = groundRoadToTerrain blockArray terrainAnchors road
 
   // Compute global max complexity for normalized height curve
   let globalMaxComplexity =
@@ -7412,10 +7496,7 @@ let buildCity (repoRoot: string) (projectFile: string option) =
       layoutWeberDistrict block.Rect modFuncs heatMap block.Color globalMaxComplexity globalMaxLineCount organic districtRng gitMetaByFile
     let terrainBuildings =
       bldgs
-      |> List.map (fun building ->
-        let cx = building.X + building.W / 2.0f
-        let cz = building.Z + building.D / 2.0f
-        { building with TerrainY = terrainHeightAt cx cz })
+      |> List.map (groundBuildingToTerrain blockArray terrainAnchors)
     allBuildings <- allBuildings @ terrainBuildings
     allAlleyRoads <- allAlleyRoads @ weberRoads
     ignore rng  // global rng still here for future use
@@ -7432,6 +7513,94 @@ let buildCity (repoRoot: string) (projectFile: string option) =
   printfn "City built: %d buildings, %d districts, %d roads, %d blocks, %d alleys"
     buildings.Length districts.Length roads.Length blocks.Length alleyRoads.Length
   (buildings, districts, roads, blocks, callEdges, alleyRoads)
+
+let private syntheticSingleFileFuncs (filePath: string) =
+  let fileName = Path.GetFileNameWithoutExtension(filePath)
+  let moduleName = if String.IsNullOrWhiteSpace(fileName) then "SingleFileDemo" else fileName
+  let mkBody lineCount seed =
+    Array.init lineCount (fun idx ->
+      match idx % 4 with
+      | 0 -> sprintf "let value%d = %d" seed idx
+      | 1 -> sprintf "let next%d x = x + %d" seed (idx + 1)
+      | 2 -> sprintf "let active%d = next%d value%d" seed seed seed
+      | _ -> sprintf "let final%d = active%d" seed seed)
+  let mkFunc name callRefs lineCount =
+    { Name = name
+      QualifiedName = sprintf "%s.%s" moduleName name
+      FilePath = filePath
+      RelPath = Path.GetFileName(filePath)
+      Module = moduleName
+      Project = moduleName
+      DeclarationStartLine = 1
+      DeclarationStartColumn = 0
+      StartLine = 1
+      EndLine = lineCount
+      LineCount = lineCount
+      Body = mkBody lineCount (abs (int (fnvHash name)))
+      CallRefs = callRefs
+      CallSites = [] }
+  [
+    mkFunc "loadConfig" [] 18
+    mkFunc "parseArgs" [] 26
+    mkFunc "buildModel" [ sprintf "%s.loadConfig" moduleName; sprintf "%s.parseArgs" moduleName ] 74
+    mkFunc "computeHeat" [ sprintf "%s.buildModel" moduleName ] 112
+    mkFunc "layoutRoads" [ sprintf "%s.computeHeat" moduleName ] 148
+    mkFunc "placeBuildings" [ sprintf "%s.layoutRoads" moduleName ] 168
+    mkFunc "renderFrame" [ sprintf "%s.placeBuildings" moduleName ] 132
+    mkFunc "writeReport" [ sprintf "%s.buildModel" moduleName; sprintf "%s.renderFrame" moduleName ] 54
+  ]
+
+let buildSingleFileShowcase (repoRoot: string) (filePath: string) =
+  let extractedFuncs =
+    extractFunctions repoRoot filePath
+    |> List.sortByDescending (fun funcDef -> funcDef.LineCount, List.length funcDef.CallRefs)
+    |> List.truncate 10
+    |> List.sortBy (fun funcDef -> funcDef.DeclarationStartLine, funcDef.Name)
+  let funcs =
+    match extractedFuncs with
+    | [] -> syntheticSingleFileFuncs filePath
+    | _ -> extractedFuncs
+  let rawEdges = buildCallGraph funcs
+  let callEdges = mergeCallEdges rawEdges
+  let heatMap = computeHeat funcs callEdges
+  let gitMetaByFile = scanGitMeta repoRoot funcs
+  let blockRect = TRect.create -12.0f -18.0f 24.0f 36.0f
+  let moduleName =
+    funcs
+    |> List.tryHead
+    |> Option.map _.Module
+    |> Option.defaultValue (Path.GetFileNameWithoutExtension(filePath))
+  let districtColor = districtPalette.[1]
+  let district =
+    { Name = moduleName
+      FuncCount = funcs.Length
+      TotalLines = funcs |> List.sumBy _.LineCount
+      Color = districtColor }
+  let block =
+    { Module = moduleName
+      Project = moduleName
+      Rect = blockRect
+      Color = districtColor
+      TerrainY = 0.0f }
+  let roadColor =
+    let r, g, b = roadColorForClass Avenue
+    Color(r, g, b, 255uy)
+  let roads =
+    [
+      { FromFunc = moduleName
+        ToFunc = moduleName
+        FromPos = Vector3(0.0f, 0.0f, -18.0f)
+        ToPos = Vector3(0.0f, 0.0f, 18.0f)
+        HalfWidth = RoadClass.width Avenue * 0.5f
+        Weight = RoadClass.tier Avenue
+        Color = roadColor
+        Organic = 0.0f }
+    ]
+    |> canonicalizeRoads
+  let buildings =
+    packAlongRoads roads blockRect funcs heatMap districtColor (Random(int (fnvHash moduleName))) gitMetaByFile
+    |> List.map (fun building -> { building with TerrainY = 0.0f })
+  (buildings, [ district ], roads, [| block |], callEdges, roads)
 
 let buildRelationMaps
   (buildings: FuncBuilding[])
@@ -9060,6 +9229,13 @@ let tryResolveProjectFile (path: string) : string option =
   | value when File.Exists(value) -> tryFromDirectory (Path.GetDirectoryName(value))
   | _ -> None
 
+let tryResolveSourceFile (path: string) : string option =
+  match path with
+  | value when String.IsNullOrWhiteSpace(value) -> None
+  | value when File.Exists(value) && Path.GetExtension(value).Equals(".fs", StringComparison.OrdinalIgnoreCase) ->
+      Some (Path.GetFullPath(value))
+  | _ -> None
+
 // ─── Main Loop ────────────────────────────────────────────────
 
 [<EntryPoint>]
@@ -9068,6 +9244,7 @@ let main argv =
     argv
     |> Array.tryHead
     |> Option.filter (fun path -> not (String.IsNullOrWhiteSpace(path)))
+  let sourceFile = explicitPath |> Option.bind tryResolveSourceFile
   let repoRoot =
     match explicitPath with
     | Some path ->
@@ -9097,9 +9274,15 @@ let main argv =
     | Some project -> Some project
     | None -> tryResolveProjectFile repoRoot
 
-  let cityName = Path.GetFileName(repoRoot)
+  let cityName =
+    match sourceFile with
+    | Some filePath -> sprintf "%s (single-file showcase)" (Path.GetFileNameWithoutExtension(filePath))
+    | None -> Path.GetFileName(repoRoot)
   printfn "Scanning %s..." repoRoot
-  let buildings, districts, roads, blocks, callEdges, alleyRoads = buildCity repoRoot projectFile
+  let buildings, districts, roads, blocks, callEdges, alleyRoads =
+    match sourceFile with
+    | Some filePath -> buildSingleFileShowcase repoRoot filePath
+    | None -> buildCity repoRoot projectFile
   let buildingArray = buildings |> List.toArray
   let incomingRelations, outgoingRelations = buildRelationMaps buildingArray callEdges
   let maxRenderedRelations = 8

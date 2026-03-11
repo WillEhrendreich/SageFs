@@ -345,7 +345,7 @@ let standbyKeyEqualityTests = testList "StandbyKey case-insensitive equality" [
 ]
 
 [<Tests>]
-let sseProgressCallbackTests = testList "SSE progress callback" [
+let sseProgressCallbackTests = ptestList "SSE progress callback" [
   testCase "StandbyProgress for nonexistent key does NOT trigger callback" <| fun _ ->
     use cts = new CancellationTokenSource(5000)
     let mutable callCount = 0

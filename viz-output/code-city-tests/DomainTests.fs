@@ -1243,6 +1243,20 @@ let historyAccretionTests =
       |> Expect.isTrue "accretion cubes should stay inside the lot envelope"
       compoundConnected first
       |> Expect.isTrue "accretion cubes should stay attached to the main compound"
+
+    testCase "max extended history keeps accretions subordinate to the authored footprint" <| fun () ->
+      let profile =
+        accretionProfileFromGit 140 2 0.05f 1825.0f
+      let baseCubes =
+        [| { CX = 0.0f; CZ = 0.0f; HW = 1.4f; HD = 1.0f; HeightScale = 0.9f } |]
+      let accreted = applyHistoryAccretions profile "TestMod.extreme1" 5.0f 5.0f baseCubes
+      let baseArea = baseCubes |> Array.sumBy (fun cube -> cube.HW * cube.HD)
+      let addedArea =
+        accreted
+        |> Array.skip baseCubes.Length
+        |> Array.sumBy (fun cube -> cube.HW * cube.HD)
+      (addedArea / baseArea, 0.25f)
+      |> Expect.isLessThanOrEqual "history should read as a subordinate layer, not outweigh the authored family footprint"
   ]
 
 let cameraMovementTests =
@@ -4566,6 +4580,57 @@ let private mkRoad x1 z1 x2 z2 halfWidth =
     Color   = Color(65uy, 65uy, 70uy, 255uy)
     Organic = 0.0f }
 
+let private buildingsOverlap (left: FuncBuilding) (right: FuncBuilding) =
+  left.X < right.X + right.W
+  && left.X + left.W > right.X
+  && left.Z < right.Z + right.D
+  && left.Z + left.D > right.Z
+
+let private buildingIntersectsRoad (building: FuncBuilding) (road: Road) =
+  let expanded =
+    TRect.create
+      (building.X - road.HalfWidth)
+      (building.Z - road.HalfWidth)
+      (building.W + road.HalfWidth * 2.0f)
+      (building.D + road.HalfWidth * 2.0f)
+  let x0 = expanded.X
+  let x1 = expanded.X + expanded.W
+  let z0 = expanded.Z
+  let z1 = expanded.Z + expanded.H
+  let ax = road.FromPos.X
+  let az = road.FromPos.Z
+  let bx = road.ToPos.X
+  let bz = road.ToPos.Z
+  let pointInRect x z =
+    x >= x0 && x <= x1 && z >= z0 && z <= z1
+  let cross ax az bx bz cx cz =
+    (bx - ax) * (cz - az) - (bz - az) * (cx - ax)
+  let onSegment ax az bx bz px pz =
+    px >= min ax bx - 1e-4f
+    && px <= max ax bx + 1e-4f
+    && pz >= min az bz - 1e-4f
+    && pz <= max az bz + 1e-4f
+  let segmentsIntersect ax az bx bz cx cz dx dz =
+    let abC = cross ax az bx bz cx cz
+    let abD = cross ax az bx bz dx dz
+    let cdA = cross cx cz dx dz ax az
+    let cdB = cross cx cz dx dz bx bz
+    let hasProperIntersection =
+      (abC > 0.0f && abD < 0.0f || abC < 0.0f && abD > 0.0f)
+      && (cdA > 0.0f && cdB < 0.0f || cdA < 0.0f && cdB > 0.0f)
+    let hasCollinearTouch =
+      (abs abC < 1e-4f && onSegment ax az bx bz cx cz)
+      || (abs abD < 1e-4f && onSegment ax az bx bz dx dz)
+      || (abs cdA < 1e-4f && onSegment cx cz dx dz ax az)
+      || (abs cdB < 1e-4f && onSegment cx cz dx dz bx bz)
+    hasProperIntersection || hasCollinearTouch
+  pointInRect ax az
+  || pointInRect bx bz
+  || segmentsIntersect ax az bx bz x0 z0 x1 z0
+  || segmentsIntersect ax az bx bz x1 z0 x1 z1
+  || segmentsIntersect ax az bx bz x1 z1 x0 z1
+  || segmentsIntersect ax az bx bz x0 z1 x0 z0
+
 let private hullHasNonAxisEdge (hull: (float32 * float32) list) =
   if hull.Length < 2 then false
   else
@@ -4755,6 +4820,21 @@ let packAlongRoadsTests =
       rightSide.Length > 1 |> Expect.isTrue "need multiple right-side buildings to verify ordering"
       orderedNoOverlap leftSide |> Expect.isTrue "left frontage parcels should keep monotonic order"
       orderedNoOverlap rightSide |> Expect.isTrue "right frontage parcels should keep monotonic order"
+
+    testCase "frontage placement rejects overlapping buildings and road-surface collisions" <| fun () ->
+      let rect  = { X = -12.0f; Z = -18.0f; W = 24.0f; H = 36.0f }
+      let roads = [ mkRoad 0.0f -18.0f 0.0f 18.0f 0.8f ]
+      let funcs = List.init 14 (fun i -> { mkFunc (sprintf "f%d" i) "CollisionFreeMod" with LineCount = 140 - i * 4 })
+      let bldgs = packAlongRoads roads rect funcs Map.empty (Color(70uy, 130uy, 180uy, 255uy)) (Random 23) Map.empty
+      bldgs |> Expect.isNonEmpty "collision-safe frontage planner should still place some buildings"
+      bldgs
+      |> List.allPairs bldgs
+      |> List.filter (fun (left, right) -> left.Func.QualifiedName <> right.Func.QualifiedName)
+      |> List.exists (fun (left, right) -> buildingsOverlap left right)
+      |> Expect.isFalse "accepted frontage buildings should never overlap"
+      bldgs
+      |> List.exists (fun building -> roads |> List.exists (buildingIntersectsRoad building))
+      |> Expect.isFalse "accepted frontage buildings should stay off the road surface"
 
     testCase "computeBlockSurfaceHull follows diagonal frontage rather than reverting to a module rectangle" <| fun () ->
       let rect  = { X = 0.0f; Z = 0.0f; W = 14.0f; H = 24.0f }
@@ -5225,6 +5305,50 @@ let semanticTerrainTests =
       (high, low + 1.0f) |> Expect.isGreaterThan "high-pressure module should produce a visibly taller local terrain sample"
       (mid, low) |> Expect.isGreaterThan "midpoint should interpolate upward from the lower basin"
       (high, edge) |> Expect.isGreaterThan "perimeter controls should pull terrain back down near the city edge"
+
+    testCase "groundedTerrainHeightForPoint keeps block interiors on their authored plateaus" <| fun () ->
+      let blocks =
+        [| { Module = "Low"; Project = "P"; Rect = TRect.create -12.0f -4.0f 8.0f 8.0f; Color = Color.White; TerrainY = 0.25f }
+           { Module = "High"; Project = "P"; Rect = TRect.create 4.0f -4.0f 8.0f 8.0f; Color = Color.White; TerrainY = 2.5f } |]
+      let anchors = buildSemanticTerrainAnchors blocks 18.0f
+      let rawInside = sampleSemanticTerrainHeight anchors 4.5f 0.0f
+      (rawInside, 2.35f) |> Expect.isLessThan "the free terrain field should sag near the block edge before grounding"
+      groundedTerrainHeightForPoint blocks anchors 4.5f 0.0f
+      |> Expect.equal "points inside a module block should stay on the block's plateau" blocks.[1].TerrainY
+      let outside = groundedTerrainHeightForPoint blocks anchors 18.0f 0.0f
+      let edge = sampleSemanticTerrainHeight anchors 18.0f 0.0f
+      abs (outside - edge) < 1e-4f
+      |> Expect.isTrue "points outside module blocks should keep following the semantic terrain field"
+
+    testCase "groundBuildingToTerrain keeps buildings coplanar with their parent block slab" <| fun () ->
+      let blocks =
+        [| { Module = "Low"; Project = "P"; Rect = TRect.create -12.0f -4.0f 8.0f 8.0f; Color = Color.White; TerrainY = 0.25f }
+           { Module = "High"; Project = "P"; Rect = TRect.create 4.0f -4.0f 8.0f 8.0f; Color = Color.White; TerrainY = 2.5f } |]
+      let anchors = buildSemanticTerrainAnchors blocks 18.0f
+      let building =
+        { mkSampleBuilding "grounded" Commercial 120 0.4f 8 3 12 20.0f 5 0.0f with
+            X = 4.0f
+            Z = -1.0f
+            W = 2.0f
+            D = 2.0f }
+      let grounded = groundBuildingToTerrain blocks anchors building
+      grounded.TerrainY |> Expect.equal "building base should align with its module block surface" blocks.[1].TerrainY
+      let raw = sampleSemanticTerrainHeight anchors (grounded.X + grounded.W / 2.0f) (grounded.Z + grounded.D / 2.0f)
+      (abs (raw - grounded.TerrainY), 0.15f)
+      |> Expect.isGreaterThan "without grounding, the building would visibly drift off the block slab"
+
+    testCase "groundRoadToTerrain keeps internal block roads on the same plateau as sidewalks" <| fun () ->
+      let blocks =
+        [| { Module = "Low"; Project = "P"; Rect = TRect.create -12.0f -4.0f 8.0f 8.0f; Color = Color.White; TerrainY = 0.25f }
+           { Module = "High"; Project = "P"; Rect = TRect.create 4.0f -4.0f 8.0f 8.0f; Color = Color.White; TerrainY = 2.5f } |]
+      let anchors = buildSemanticTerrainAnchors blocks 18.0f
+      let road = mkRoad 4.5f -2.0f 4.5f 2.0f 0.4f
+      let grounded = groundRoadToTerrain blocks anchors road
+      grounded.FromPos.Y |> Expect.equal "road start should align with the parent block surface" blocks.[1].TerrainY
+      grounded.ToPos.Y |> Expect.equal "road end should align with the parent block surface" blocks.[1].TerrainY
+      let raw = sampleSemanticTerrainHeight anchors 4.5f 0.0f
+      (abs (raw - grounded.FromPos.Y), 0.15f)
+      |> Expect.isGreaterThan "without grounding, the road would visibly drift away from the sidewalk plateau"
   ]
 
 let repeatedSideConnectorTests =
@@ -5559,6 +5683,32 @@ let buildingLegibilityTests =
           let distance = colorDistancePerceptual leftWorn rightWorn
           (distance, 12.0f)
           |> Expect.isGreaterThanOrEqual (sprintf "%A and %A should remain visually distinct even at max wear" leftType rightType))
+
+    testCase "max-history rowhouse keeps the authored family footprint dominant" <| fun () ->
+      let building =
+        mkSampleBuilding "history-extreme" Rowhouse 80 0.5f 10 8 12 150.0f 120 0.0f
+        |> fun sample ->
+            { sample with
+                W = 10.0f
+                D = 6.0f
+                GitAuthorCount = 2
+                GitBugFixRatio = 0.05f }
+      let authored =
+        generateTypedCompoundForFamily
+          building.Func.QualifiedName
+          building.BuildingType
+          (currentMassingFamily building)
+          building.Complexity
+          (building.W / 2.0f)
+          (building.D / 2.0f)
+      let accreted = compoundForBuilding building
+      let authoredArea = authored |> Array.sumBy (fun cube -> cube.HW * cube.HD)
+      let addedArea =
+        accreted
+        |> Array.skip authored.Length
+        |> Array.sumBy (fun cube -> cube.HW * cube.HD)
+      (addedArea / authoredArea, 0.25f)
+      |> Expect.isLessThanOrEqual "history extremes should not overpower the readable rowhouse family silhouette"
   ]
 
 let terrainOverlaySummaryTests =
@@ -5653,6 +5803,48 @@ let resolveRepoRootPureTests =
       |> Expect.equal "empty string should not be used" @"C:\SageFs"
   ]
 
+let sourceFileShowcaseTests =
+  testList "single-file showcase" [
+    testCase "tryResolveSourceFile recognizes .fs source files only" <| fun () ->
+      withTempFsSource "module Sample\nlet a () = 1" <| fun _ filePath ->
+        tryResolveSourceFile filePath
+        |> Expect.equal "real .fs file should resolve" (Some filePath)
+        tryResolveSourceFile (filePath + ".txt")
+        |> Expect.isNone "non-.fs path should not resolve as a showcase source file"
+
+    testCase "buildSingleFileShowcase produces a tiny clean city from one file" <| fun () ->
+      let source =
+        """
+module TinyCity
+
+let loadConfig () = 1
+let parseArgs value = value + 1
+let buildModel () = loadConfig () + parseArgs 4
+let computeHeat value = buildModel () + value
+let layoutRoads value = computeHeat value + 1
+let placeBuildings value = layoutRoads value + 2
+let renderFrame value = placeBuildings value + 3
+let writeReport () = renderFrame 1 |> ignore
+"""
+      withTempFsSource source <| fun root filePath ->
+        let buildings, districts, roads, blocks, callEdges, alleyRoads =
+          buildSingleFileShowcase root filePath
+        districts |> Expect.hasLength "single-file showcase should use one district" 1
+        blocks.Length |> Expect.equal "single-file showcase should use one block" 1
+        roads.Length |> Expect.equal "single-file showcase should keep the road layout tiny" 1
+        alleyRoads.Length |> Expect.equal "showcase alley surface should mirror the visible showcase road" 1
+        buildings |> Expect.isNonEmpty "single-file showcase should place buildings"
+        callEdges |> Expect.isNonEmpty "single-file showcase should preserve local call relationships"
+        buildings
+        |> List.allPairs buildings
+        |> List.filter (fun (left, right) -> left.Func.QualifiedName <> right.Func.QualifiedName)
+        |> List.exists (fun (left, right) -> buildingsOverlap left right)
+        |> Expect.isFalse "showcase buildings should never overlap"
+        buildings
+        |> List.exists (fun building -> roads |> List.exists (buildingIntersectsRoad building))
+        |> Expect.isFalse "showcase buildings should stay clear of the showcase road"
+  ]
+
 let nightScaleTests =
   testList "day/night cycle" [
     testCase "nightScaleForElevation at noon returns 1.0" <| fun () ->
@@ -5726,6 +5918,7 @@ let allTests =
     nightScaleTests
     parseDaemonInfoJsonTests
     resolveRepoRootPureTests
+    sourceFileShowcaseTests
   ]
 
 [<EntryPoint>]

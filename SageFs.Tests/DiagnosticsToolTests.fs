@@ -85,7 +85,7 @@ let formatDiagnosticsTests =
 
 [<Tests>]
 let checkFSharpCodeTests =
-  testList "[Integration] checkFSharpCode backing function" [
+  ptestList "[Integration] checkFSharpCode backing function" [
 
     testCase "checkFSharpCode with valid code returns no issues"
     <| fun _ ->
@@ -136,7 +136,7 @@ let checkFSharpCodeTests =
 
 [<Tests>]
 let accumulatedDiagnosticsTests =
-  testList "[Integration] accumulated diagnostics in AppState" [
+  ptestList "[Integration] accumulated diagnostics in AppState" [
 
     testCase "AppState has Diagnostics field of type DiagnosticsStore"
     <| fun _ ->

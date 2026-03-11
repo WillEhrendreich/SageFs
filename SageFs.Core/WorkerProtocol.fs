@@ -239,6 +239,7 @@ module WorkerProtocol =
       walk startDir
 
     /// Walk up from workingDir to find the nearest directory containing .sln or .slnx.
+    /// Skips directories that do not exist (graceful for tests and missing paths).
     let findSolutionRoot (workingDir: string) =
       let rec walk (dir: string) =
         let parent = Path.GetDirectoryName dir
@@ -246,10 +247,11 @@ module WorkerProtocol =
         | true -> None
         | false ->
           let hasSln =
-            Directory.GetFiles(dir, "*.sln")
-            |> Array.append (Directory.GetFiles(dir, "*.slnx"))
-            |> Array.isEmpty
-            |> not
+            Directory.Exists dir &&
+            (Directory.GetFiles(dir, "*.sln")
+             |> Array.append (Directory.GetFiles(dir, "*.slnx"))
+             |> Array.isEmpty
+             |> not)
           match hasSln with
           | true -> Some dir
           | false -> walk parent

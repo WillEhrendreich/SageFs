@@ -1502,17 +1502,24 @@ module McpTools =
             | false -> Some { FilePath = filePath; Line = int m.Groups.[2].Value }
           | false -> None)
 
-  let getLiveTestStatus (ctx: McpContext) (fileFilter: string option) : Task<string> =
+  let getLiveTestStatus (ctx: McpContext) (agentName: string) (fileFilter: string option) : Task<string> =
     task {
       match ctx.GetElmModel with
       | None -> return "Live testing not available — Elm loop not started."
       | Some getModel ->
         let model = getModel ()
         let state = model.LiveTesting.TestState
+        // Prefer per-client session from SessionMap; fall back to global active session.
+        // This prevents session A's tests from bleeding into session B's view when the
+        // daemon-global active session differs from the calling client's current session.
         let activeId =
-          ActiveSession.sessionId model.Sessions.ActiveSessionId
-          |> Option.map WorkerProtocol.SessionId.value
-          |> Option.defaultValue ""
+          let perClient = activeSessionId ctx agentName
+          match perClient <> "" with
+          | true -> perClient
+          | false ->
+            ActiveSession.sessionId model.Sessions.ActiveSessionId
+            |> Option.map WorkerProtocol.SessionId.value
+            |> Option.defaultValue ""
         let sessionEntries =
           Features.LiveTesting.LiveTestState.statusEntriesForSession activeId state
         let summary =

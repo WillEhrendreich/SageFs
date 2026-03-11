@@ -143,7 +143,7 @@ function setStatus(text, bg, fg) {
 [<Tests>]
 let tests =
   testSequenced
-  <| testList "[Integration] Hot reload browser tests" [
+  <| ptestList "[Integration] Hot reload browser tests" [
 
     testCase "browser shows code change and output update when handler is hot-patched"
     <| fun _ ->

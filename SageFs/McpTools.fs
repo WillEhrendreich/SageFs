@@ -511,11 +511,14 @@ STATUS VALUES per test:
 - NotRun: test has been discovered but never run.""")>]
     member _.get_live_test_status(
         [<Description("Optional file path to filter tests by source file.")>]
-        file: string
+        file: string,
+        [<Description("Your agent or model name (same value you use for send_fsharp_code). Enables per-session test filtering so you only see tests for YOUR session, not all sessions on the daemon.")>]
+        agentName: string
     ) : Task<string> =
         let filter = match System.String.IsNullOrWhiteSpace file with | true -> None | false -> Some file
-        logger.LogDebug("MCP-TOOL: get_live_test_status called, file={File}", file)
-        getLiveTestStatus ctx filter |> withEcho "get_live_test_status"
+        let agent = match System.String.IsNullOrWhiteSpace agentName with | true -> "claude" | false -> agentName
+        logger.LogDebug("MCP-TOOL: get_live_test_status called, file={File}, agent={Agent}", file, agent)
+        getLiveTestStatus ctx agent filter |> withEcho "get_live_test_status"
 
     [<McpServerTool>]
     [<Description("""Enable live testing. When enabled, tests automatically re-run after each hot reload whenever the code they depend on changes.

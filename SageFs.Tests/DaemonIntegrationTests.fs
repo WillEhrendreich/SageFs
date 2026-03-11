@@ -144,7 +144,7 @@ let managerStateTests =
 
 [<Tests>]
 let daemonCliTests =
-  testList "[Integration] Daemon CLI subcommands" [
+  ptestList "[Integration] Daemon CLI subcommands" [
 
     testCase "SageFs status returns 1 when no daemon running" <| fun _ ->
       let psi = ProcessStartInfo()
@@ -198,7 +198,7 @@ let daemonCliTests =
 
 [<Tests>]
 let daemonLifecycleTests =
-  testList "[Integration] Daemon lifecycle" [
+  ptestList "[Integration] Daemon lifecycle" [
 
     testCase "start daemon, check status, stop" <| fun _ ->
       // Start daemon in background with a unique port to avoid conflicts
@@ -292,7 +292,7 @@ let cleanupSession
 
 [<Tests>]
 let sessionManagerLifecycleTests =
-  testList "[Integration] SessionManager lifecycle" [
+  ptestList "[Integration] SessionManager lifecycle" [
 
     testCase "create session, eval code, stop session" <| fun _ ->
       use cts = new CancellationTokenSource(120_000)

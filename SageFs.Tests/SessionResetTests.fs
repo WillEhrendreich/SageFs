@@ -29,7 +29,7 @@ let sessionManagerBuildPathTests =
 
 [<Tests>]
 let sessionResetTests =
-  testSequenced <| testList "[Integration] Session reset" [
+  testSequenced <| ptestList "[Integration] Session reset" [
 
     testCase "eval → reset → value is gone"
     <| fun _ ->
@@ -98,7 +98,7 @@ let sessionResetTests =
 
 [<Tests>]
 let resetPushbackTests =
-  testList "[Integration] Reset pushback warnings" [
+  ptestList "[Integration] Reset pushback warnings" [
 
     ptestCase "hard reset on healthy session includes warning"
     <| fun _ ->

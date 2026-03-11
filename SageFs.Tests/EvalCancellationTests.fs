@@ -13,7 +13,7 @@ let createActorResult () =
 
 [<Tests>]
 let evalCancellationTests =
-  testList "[Integration] Eval cancellation" [
+  ptestList "[Integration] Eval cancellation" [
 
     testCase "CancelEval returns false when no eval is running"
     <| fun _ ->

@@ -15,6 +15,12 @@ type private Harness = {
   Cancellation: CancellationTokenSource
 }
 
+type private RuntimeHarness = {
+  Runtime: SessionManagerRuntime
+  GetBuildCalls: unit -> int
+  GetStartCalls: unit -> int
+}
+
 let private pendingProxyLooksPending (proxy: SessionProxy) =
   match proxy (WorkerMessage.GetStatus "pending") |> Async.RunSynchronously with
   | WorkerResponse.WorkerError (SageFsError.WorkerSpawnFailed _) -> true
@@ -27,19 +33,24 @@ let private mkRuntime
   let mutable startCalls = 0
 
   {
-    StartWorkerProcess =
-      fun _ _ _ _ _ ->
-        startCalls <- startCalls + 1
-        startWorker startCalls
-    AwaitWorkerPort = fun _ _ _ _ -> ()
-    AwaitStandbyPort = fun _ _ _ _ -> ()
-    StopWorker = fun _ -> async { return () }
-    StopStandbyWorker = fun _ -> async { return () }
-    RunBuildAsync =
-      fun _ _ -> async {
-        buildCalls <- buildCalls + 1
-        return runBuild buildCalls
+    Runtime =
+      {
+        StartWorkerProcess =
+          fun _ _ _ _ _ ->
+            startCalls <- startCalls + 1
+            startWorker startCalls
+        AwaitWorkerPort = fun _ _ _ _ -> ()
+        AwaitStandbyPort = fun _ _ _ _ -> ()
+        StopWorker = fun _ -> async { return () }
+        StopStandbyWorker = fun _ -> async { return () }
+        RunBuildAsync =
+          fun _ _ -> async {
+            buildCalls <- buildCalls + 1
+            return runBuild buildCalls
+          }
       }
+    GetBuildCalls = fun () -> buildCalls
+    GetStartCalls = fun () -> startCalls
   }
 
 let private withHarness runtime run =
@@ -92,7 +103,7 @@ let sessionManagerRestartTombstoneTests =
           (fun _ -> Error "build boom")
           (fun _ -> Ok(Process.GetCurrentProcess()))
 
-      withHarness runtime <| fun harness ->
+      withHarness runtime.Runtime <| fun harness ->
         let info = createSession harness
 
         match harness.Mailbox.PostAndReply(fun reply -> SessionCommand.RestartSession(info.Id, true, reply)) with
@@ -126,7 +137,7 @@ let sessionManagerRestartTombstoneTests =
             | 1 -> Ok(Process.GetCurrentProcess())
             | _ -> Error(SageFsError.WorkerSpawnFailed "spawn boom"))
 
-      withHarness runtime <| fun harness ->
+      withHarness runtime.Runtime <| fun harness ->
         let info = createSession harness
 
         match harness.Mailbox.PostAndReply(fun reply -> SessionCommand.RestartSession(info.Id, true, reply)) with
@@ -152,7 +163,7 @@ let sessionManagerRestartTombstoneTests =
           (fun _ -> Error "build boom")
           (fun _ -> Ok(Process.GetCurrentProcess()))
 
-      withHarness runtime <| fun harness ->
+      withHarness runtime.Runtime <| fun harness ->
         let info = createSession harness
         let originalPid =
           info.WorkerPid
@@ -162,6 +173,8 @@ let sessionManagerRestartTombstoneTests =
         |> ignore
 
         harness.Mailbox.Post(SessionCommand.WorkerExited(info.Id, originalPid, 1))
+        harness.Mailbox.PostAndReply(fun reply -> SessionCommand.GetSession(info.Id, reply))
+        |> ignore
 
         let snapshot = harness.ReadSnapshot()
         QuerySnapshot.tryGetSession info.Id snapshot
@@ -178,7 +191,7 @@ let sessionManagerRestartTombstoneTests =
             | _ -> Ok "build ok")
           (fun _ -> Ok(Process.GetCurrentProcess()))
 
-      withHarness runtime <| fun harness ->
+      withHarness runtime.Runtime <| fun harness ->
         let info = createSession harness
 
         harness.Mailbox.PostAndReply(fun reply -> SessionCommand.RestartSession(info.Id, true, reply))
@@ -199,4 +212,30 @@ let sessionManagerRestartTombstoneTests =
         |> Expect.isSome "successful retry should register a new worker pid"
         pendingProxyLooksPending session.Proxy
         |> Expect.isTrue "successful retry should go back through the startup proxy until worker ready"
+
+    testCase "scheduled crash recovery uses the injected runtime instead of spawning a real worker" <| fun _ ->
+      let runtime =
+        mkRuntime
+          (fun _ -> Ok "build ok")
+          (fun call ->
+            match call with
+            | 1 -> Ok(Process.GetCurrentProcess())
+            | _ -> Error(SageFsError.WorkerSpawnFailed "scheduled restart boom"))
+
+      withHarness runtime.Runtime <| fun harness ->
+        let info = createSession harness
+        let originalPid =
+          info.WorkerPid
+          |> Option.defaultWith (fun () -> failtest "expected worker pid")
+
+        harness.Mailbox.Post(SessionCommand.WorkerExited(info.Id, originalPid, 1))
+        harness.Mailbox.PostAndReply(fun reply -> SessionCommand.GetSession(info.Id, reply))
+        |> Option.map (fun session -> session.Info.Status)
+        |> Expect.equal "worker exit should move the session into restarting state" (Some SessionStatus.Restarting)
+
+        harness.Mailbox.Post(SessionCommand.ScheduleRestart info.Id)
+
+        let session = getManagedSession harness info.Id
+        session.Info.Status |> Expect.equal "failed scheduled restart keeps the session registered" SessionStatus.Restarting
+        runtime.GetStartCalls() |> Expect.equal "all worker spawn attempts should flow through the injected runtime" 2
   ]

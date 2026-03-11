@@ -873,7 +873,7 @@ module SessionManager =
           | Some session when session.Info.Status = SessionStatus.Restarting ->
             let onExited workerPid exitCode =
               inbox.Post(SessionCommand.WorkerExited(id, workerPid, exitCode))
-            match startWorkerProcess id session.Projects session.WorkingDir session.AutoOpenNamespaces onExited with
+            match runtime.StartWorkerProcess id session.Projects session.WorkingDir session.AutoOpenNamespaces onExited with
             | Ok proc ->
               let restarted =
                 { session with
@@ -885,7 +885,7 @@ module SessionManager =
                           WorkerPid = Some proc.Id
                           LastActivity = DateTime.UtcNow } }
               let newState = ManagerState.addSession id restarted state
-              awaitWorkerPort id proc inbox ct
+              runtime.AwaitWorkerPort id proc inbox ct
               match isNull recoverySpan with
               | false -> recoverySpan.SetTag("recovery.outcome", "restarted") |> ignore
               | true -> ()

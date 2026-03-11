@@ -64,7 +64,7 @@ module McpSessionIsolation =
         return Error (ex.Message)
     }
 
-  let tests = testSequenced <| testList "[Integration] MCP session isolation" [
+  let tests = testSequenced <| ptestList "[Integration] MCP session isolation" [
 
     testTask "switchSession updates only the given context's SessionMap for that agent" {
       let ctx1, _ = ctxWithTracking "aaaaaa01"
@@ -434,10 +434,103 @@ module ResetIsolation =
     }
   ]
 
+/// Pure unit tests for LiveTestState.statusEntriesForSession — no daemon, no FSI, no I/O.
+/// These define the session-isolation contract at the state layer.
+module LiveTestStateIsolation =
+  open SageFs.Features.LiveTesting
+
+  let private mkEntry (tid: string) : TestStatusEntry =
+    { TestId = TestId.TestId tid
+      DisplayName = tid
+      FullName = tid
+      Origin = TestOrigin.ReflectionOnly
+      Framework = TestFramework.Expecto
+      Category = TestCategory.Unit
+      CurrentPolicy = RunPolicy.OnEveryChange
+      Status = TestRunStatus.Passed System.TimeSpan.Zero
+      PreviousStatus = TestRunStatus.Detected }
+
+  let private mkState (entries: TestStatusEntry array) (sessionMap: Map<TestId, string>) =
+    { LiveTestState.empty with
+        StatusEntries = entries
+        TestSessionMap = sessionMap }
+
+  let tests = testList "LiveTestState session result isolation" [
+
+    test "session-A tests are NOT visible to session-B" {
+      let entryA = mkEntry "testA"
+      let entryB = mkEntry "testB"
+      let state =
+        mkState
+          [| entryA; entryB |]
+          (Map.ofList [ TestId.TestId "testA", "session-A"
+                        TestId.TestId "testB", "session-B" ])
+      let visibleToB = LiveTestState.statusEntriesForSession "session-B" state
+      visibleToB |> Array.map (fun e -> e.DisplayName)
+      |> Expect.equal "session-B sees only testB" [| "testB" |]
+    }
+
+    test "session-B tests are NOT visible to session-A" {
+      let entryA = mkEntry "testA"
+      let entryB = mkEntry "testB"
+      let state =
+        mkState
+          [| entryA; entryB |]
+          (Map.ofList [ TestId.TestId "testA", "session-A"
+                        TestId.TestId "testB", "session-B" ])
+      let visibleToA = LiveTestState.statusEntriesForSession "session-A" state
+      visibleToA |> Array.map (fun e -> e.DisplayName)
+      |> Expect.equal "session-A sees only testA" [| "testA" |]
+    }
+
+    test "unattributed tests do NOT leak when a session map exists" {
+      // Tests with NO entry in TestSessionMap must NOT bleed into another session's view.
+      // (This was the bug: | None -> true caused unattributed tests to appear everywhere.)
+      let attributed = mkEntry "attributed"
+      let unattributed = mkEntry "ghost"
+      let state =
+        mkState
+          [| attributed; unattributed |]
+          (Map.ofList [ TestId.TestId "attributed", "session-A" ])
+      let visibleToA = LiveTestState.statusEntriesForSession "session-A" state
+      visibleToA |> Array.map (fun e -> e.DisplayName)
+      |> Expect.equal "ghost test must not appear in session-A" [| "attributed" |]
+    }
+
+    test "empty sessionId returns ALL entries (bare-session backward compat)" {
+      let e1 = mkEntry "t1"
+      let e2 = mkEntry "t2"
+      let state =
+        mkState [| e1; e2 |] (Map.ofList [ TestId.TestId "t1", "s1"; TestId.TestId "t2", "s2" ])
+      let all = LiveTestState.statusEntriesForSession "" state
+      all.Length
+      |> Expect.equal "empty sessionId returns all entries" 2
+    }
+
+    test "empty TestSessionMap returns ALL entries (single-session backward compat)" {
+      let e1 = mkEntry "t1"
+      let e2 = mkEntry "t2"
+      let state = mkState [| e1; e2 |] Map.empty
+      let all = LiveTestState.statusEntriesForSession "any-session" state
+      all.Length
+      |> Expect.equal "empty TestSessionMap returns all entries" 2
+    }
+
+    test "session-C sees zero tests when it has none" {
+      let e1 = mkEntry "t1"
+      let state =
+        mkState [| e1 |] (Map.ofList [ TestId.TestId "t1", "session-A" ])
+      let visibleToC = LiveTestState.statusEntriesForSession "session-C" state
+      visibleToC.Length
+      |> Expect.equal "session-C sees no tests" 0
+    }
+  ]
+
 [<Tests>]
 let sessionIsolationTests = testList "Session Isolation" [
   McpSessionIsolation.tests
   SessionResolutionByWorkingDir.tests
   WorkingDirRoutingPriority.tests
   ResetIsolation.tests
+  LiveTestStateIsolation.tests
 ]

@@ -1539,7 +1539,7 @@ let mapLiveTestingRoutes (app: WebApplication) (rctx: RouteContext) =
         match System.String.IsNullOrWhiteSpace fp with
         | true -> None
         | false -> Some fp
-      let! result = SageFs.McpTools.getLiveTestStatus rctx.McpContext fileParam
+      let! result = SageFs.McpTools.getLiveTestStatus rctx.McpContext "http" fileParam
       do! rawJsonResponse ctx result
     } :> Task
   ) |> ignore

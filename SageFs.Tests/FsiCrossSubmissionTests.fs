@@ -106,7 +106,7 @@ let allTests =
     // in a subsequent eval — the core behavior --multiemit- enables.
     // Assertions check for error ABSENCE only (not output format).
     testList "[Integration] type sharing" [
-      testCase "record type from eval 1 can be instantiated in eval 2" <| fun _ ->
+      ptestCase "record type from eval 1 can be instantiated in eval 2" <| fun _ ->
         let uid = nextUid ()
         let typeName = sprintf "Rec_%s" uid
         let r1, r2 = evalPair
@@ -152,7 +152,7 @@ let allTests =
 
     // ── Property tests: parameterized cross-submission ────────
     testList "[Integration] properties" [
-      testPropertyWithConfig propCfg
+      ptestPropertyWithConfig propCfg
         "record with N fields (1-8) survives cross-submission"
       <| fun (fieldCount: PositiveInt) ->
         let n = min fieldCount.Get 8
