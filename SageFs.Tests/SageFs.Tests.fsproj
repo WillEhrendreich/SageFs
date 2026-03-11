@@ -218,6 +218,8 @@
         <Compile Include="EnvCheckTests.fs" />
         <Compile Include="FsiOutputParserTests.fs" />
         <Compile Include="SseSerializationBenchmarks.fs" />
+        <Compile Include="SsePropertyTests.fs" />
+        <Compile Include="SageTuiAllocationBenchmarks.fs" />
         <Compile Include="Program.fs" />
     </ItemGroup>
 

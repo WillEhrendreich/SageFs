@@ -12,6 +12,10 @@ open SageFs.Features.CellDependencyGraph
 open SageFs.Features.BindingExplorer
 open SageFs.Features.EvalTimeline
 open SageFs.Features.DomainModelViz
+open SageFs.Features.Diagnostician
+open SageFs.Features.FsiOutputParser
+open SageFs.Features.EvalProvenance
+open SageFs.Features.Ghostwriter
 
 // ── JSON options matching daemon configuration ──
 
@@ -157,6 +161,44 @@ let private mkAnnotatedTransitions () : AnnotatedTransition list =
           | 1 -> TransitionHealth.Failing
           | _ -> TransitionHealth.Stale } ]
 
+let private mkBindingValues () : BindingValue list =
+  [ for i in 1 .. 10 do
+      { Name = sprintf "val%d" i
+        TypeSig = "int -> string"
+        DisplayValue = sprintf "%d" (i * 42)
+        IsTruncated = i % 3 = 0
+        IsFunctionValue = i % 5 = 0
+        CellIndex = i
+        EvalDurationMs = float i * 1.5
+        SourceLine = i } ]
+
+let private mkFsiBindings () : FsiBinding array =
+  [| for i in 1 .. 10 do
+       { Name = sprintf "binding%d" i
+         TypeSig = sprintf "int list"
+         Value = match i % 2 with 0 -> Some (sprintf "[%d]" i) | _ -> None
+         ShadowCount = match i % 4 with 0 -> 1 | _ -> 0 } |]
+
+let private mkDiagnosticReport () : DiagnosticReport =
+  { Failures =
+      [ { TestId = TestId.TestId "diag-test-1"
+          TestName = "should compute tax"
+          Narrative =
+            { LastPassedAt = Some (DateTimeOffset.UtcNow.AddMinutes -10.0)
+              TimeSinceLastPass = Some (TimeSpan.FromMinutes 5.0)
+              CausalChanges = [ CausalChange.SymbolChanged "computeTax"; CausalChange.FileChanged "Tax.fs" ]
+              PropertyViolation = None
+              Summary = "Expected 42 but got 41" }
+          CausalCells = [ 0; 1 ]
+          Staleness = Map.ofList [ 0, Staleness.Fresh ] } ]
+    AffectedCells = [ 0, Staleness.Fresh ]
+    RipplePlan = None
+    SuggestedFixes =
+      [ { Code = "let tax = amount * 0.10m"; Explanation = "Fix tax rate"; Confidence = 0.85 } ]
+    PerformanceContext = Some (mkTimelineStats ())
+    Severity = DiagnosticSeverity.Warning
+    Summary = "1 failure in Tax module" }
+
 // ── Measurement helpers ──
 
 let private measureNs (iterations: int) (f: unit -> 'a) : float =
@@ -236,6 +278,22 @@ let sseSerializationBenchmarks = testList "SSE serialization benchmarks" [
       let bytes = measureBytes (fun () ->
         formatDomainModelEvent jsonOpts (Some "sess-1") (mkAnnotatedTransitions ()))
       (bytes, 4096) |> Expect.isLessThan "domain model should be under 4KB"
+
+    testCase "bindings_snapshot 10 bindings" <| fun () ->
+      let bytes = measureBytes (fun () ->
+        formatBindingsSnapshotEvent jsonOpts (Some "sess-1") (mkBindingValues ()) (mkFsiBindings ()))
+      (bytes, 8192) |> Expect.isLessThan "bindings snapshot should be under 8KB"
+
+    testCase "test_trace pre-serialized" <| fun () ->
+      let traceJson = """{"enabled":true,"providers":["Expecto"],"summary":{"total":100,"passed":95}}"""
+      let bytes = measureBytes (fun () ->
+        formatTestTraceEvent (Some "sess-1") traceJson)
+      (bytes, 1024) |> Expect.isLessThan "test trace should be under 1KB"
+
+    testCase "diagnosis_ready report" <| fun () ->
+      let bytes = measureBytes (fun () ->
+        formatDiagnosisReadyEvent jsonOpts (Some "sess-1") (mkDiagnosticReport ()))
+      (bytes, 8192) |> Expect.isLessThan "diagnosis should be under 8KB"
   ]
 
   // Thresholds are FSI-compatible (interpreter adds ~5-20x overhead vs compiled).
@@ -300,6 +358,25 @@ let sseSerializationBenchmarks = testList "SSE serialization benchmarks" [
       let nsPerOp = measureNs 5000 (fun () ->
         formatDomainModelEvent jsonOpts (Some "sess-1") transitions)
       (nsPerOp, 10_000_000.0) |> Expect.isLessThan "domain_model should serialize under 10ms"
+
+    testCase "bindings_snapshot under 500μs" <| fun () ->
+      let vals = mkBindingValues ()
+      let bindings = mkFsiBindings ()
+      let nsPerOp = measureNs 5000 (fun () ->
+        formatBindingsSnapshotEvent jsonOpts (Some "sess-1") vals bindings)
+      (nsPerOp, 500_000.0) |> Expect.isLessThan "bindings_snapshot should serialize under 500μs"
+
+    testCase "test_trace under 50μs" <| fun () ->
+      let traceJson = """{"enabled":true,"providers":["Expecto"],"summary":{"total":100}}"""
+      let nsPerOp = measureNs 10000 (fun () ->
+        formatTestTraceEvent (Some "sess-1") traceJson)
+      (nsPerOp, 50_000.0) |> Expect.isLessThan "test_trace should serialize under 50μs"
+
+    testCase "diagnosis_ready under 5ms" <| fun () ->
+      let report = mkDiagnosticReport ()
+      let nsPerOp = measureNs 1000 (fun () ->
+        formatDiagnosisReadyEvent jsonOpts (Some "sess-1") report)
+      (nsPerOp, 5_000_000.0) |> Expect.isLessThan "diagnosis_ready should serialize under 5ms"
   ]
 
   testList "format correctness" [
@@ -318,6 +395,9 @@ let sseSerializationBenchmarks = testList "SSE serialization benchmarks" [
         formatFailureNarrativesEvent jsonOpts None (mkFailureNarratives ())
         formatTestSourceLocationsEvent jsonOpts None (mkTestSourceLocations ())
         formatDomainModelEvent jsonOpts None (mkAnnotatedTransitions ())
+        formatBindingsSnapshotEvent jsonOpts None (mkBindingValues ()) (mkFsiBindings ())
+        formatTestTraceEvent None """{"enabled":true}"""
+        formatDiagnosisReadyEvent jsonOpts None (mkDiagnosticReport ())
       ]
       for evt in events do
         evt |> Expect.stringStarts "should start with event:" "event: "
