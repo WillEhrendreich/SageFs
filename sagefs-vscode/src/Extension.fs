@@ -546,6 +546,7 @@ let refreshStatus () =
         sb.backgroundColor <- None
         sb.show ()
         activeSessionId <- None
+        liveTestListener |> Option.iter (fun l -> l.SetSessionFilter None)
         HotReload.setSession c None
         SessionCtx.setSession c None
         Sessions.setSession c None
@@ -578,6 +579,7 @@ let refreshStatus () =
           match session with
           | Some s ->
             activeSessionId <- Some s.id
+            liveTestListener |> Option.iter (fun l -> l.SetSessionFilter (Some s.id))
             let projLabel =
               match s.projects with
               | [||] -> "session"
@@ -612,6 +614,7 @@ let refreshStatus () =
             sb.tooltip <- Some tooltipText
           | None ->
             activeSessionId <- None
+            liveTestListener |> Option.iter (fun l -> l.SetSessionFilter None)
             sb.text <- sprintf "$(zap) SageFs: ready (no session)%s%s" supervised restarts
           sb.backgroundColor <- None
           let activeId = activeSessionId

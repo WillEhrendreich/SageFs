@@ -192,6 +192,9 @@ type LiveTestingListener = {
   CellGraph: unit -> VscCellGraph option
   BindingScope: unit -> VscBindingScopeSnapshot option
   Timeline: unit -> VscTimelineStats option
+  /// Update the session filter — only events tagged with this session ID will be processed.
+  /// Pass None to disable filtering (accept all sessions, e.g. before first warmup).
+  SetSessionFilter: string option -> unit
   Dispose: unit -> unit
 }
 
@@ -206,6 +209,9 @@ let start (port: int) (callbacks: LiveTestingCallbacks) (onReconnect: (unit -> u
   // Track last known (filePath, blockStartLine) from eval_result so bindings_snapshot
   // can fall back to it when the server doesn't yet emit blockStartLine in the snapshot.
   let mutable lastKnownBsl: (string * int) option = None
+  // Session filter: only process events tagged with this session ID.
+  // None = no filter (pass all events — used before first warmup completes).
+  let mutable sessionFilter: string option = None
   let url = sprintf "http://localhost:%d/events" port
 
   let featureCallbacks =
@@ -214,8 +220,27 @@ let start (port: int) (callbacks: LiveTestingCallbacks) (onReconnect: (unit -> u
       OnBindingScope = fun s -> bindingScope <- Some s
       OnTimeline = fun t -> timeline <- Some t }
 
+  /// Session-scoped events carry a SessionId field injected by the server.
+  /// When a filter is set, skip events whose SessionId doesn't match.
+  let passesSessionFilter (data: obj) =
+    match sessionFilter with
+    | None -> true
+    | Some expected ->
+      match fieldString "SessionId" data with
+      | Some sid -> sid = expected
+      | None -> true  // No SessionId in event — backward compat: always pass through
+
+  // Events that are NOT session-scoped — always process regardless of sessionFilter.
+  let isSessionAgnosticEvent (eventType: string) =
+    match eventType with
+    | "state" | "session" | "domain_model" | "warmup_completed" -> true
+    | _ -> false
+
   let processEvent (eventType: string) (data: obj) =
     tryHandleEvent eventType (fun () ->
+      // Skip session-scoped events that don't match the active session filter.
+      if not (isSessionAgnosticEvent eventType) && not (passesSessionFilter data) then () else
+
       match eventType with
       | "test_summary" ->
         let summary = parseSummary data
@@ -232,7 +257,16 @@ let start (port: int) (callbacks: LiveTestingCallbacks) (onReconnect: (unit -> u
       | "state" ->
         callbacks.OnStatusRefresh ()
       | "session" ->
-        ()
+        // Auto-detect the active session from warmup/activation events.
+        // The server injects sessionId (lowercase) inside "session" type events.
+        let subtype = fieldString "type" data |> Option.defaultValue ""
+        match subtype with
+        | "warmup_context_snapshot" | "session_activated" ->
+          match fieldString "sessionId" data with
+          | Some sid when sid <> "" ->
+            sessionFilter <- Some sid
+          | _ -> ()
+        | _ -> ()
       | "bindings_snapshot" ->
         fieldArray "Bindings" data
         |> Option.iter (fun arr ->
@@ -326,11 +360,13 @@ let start (port: int) (callbacks: LiveTestingCallbacks) (onReconnect: (unit -> u
     | Some reconnectFn, Some logger ->
       subscribeTypedSseWithReconnect url processEvent (fun () ->
         state <- VscLiveTestState.empty
+        sessionFilter <- None  // Re-open filter; will be re-set by next warmup_context_snapshot
         reconnectFn ()
       ) disconnectFn logger
     | Some reconnectFn, None ->
       subscribeTypedSseWithReconnect url processEvent (fun () ->
         state <- VscLiveTestState.empty
+        sessionFilter <- None  // Re-open filter; will be re-set by next warmup_context_snapshot
         reconnectFn ()
       ) disconnectFn (fun msg -> try printfn "[SageFs SSE] %s" msg with _ -> ())
     | _ -> subscribeTypedSse url processEvent
@@ -343,4 +379,5 @@ let start (port: int) (callbacks: LiveTestingCallbacks) (onReconnect: (unit -> u
     CellGraph = fun () -> cellGraph
     BindingScope = fun () -> bindingScope
     Timeline = fun () -> timeline
+    SetSessionFilter = fun sid -> sessionFilter <- sid
     Dispose = fun () -> disposable.dispose () |> ignore }

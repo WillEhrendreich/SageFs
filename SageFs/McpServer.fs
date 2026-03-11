@@ -648,8 +648,10 @@ let wireModelChangeHandlers
             | false -> SageFs.Features.LiveTesting.ResultFreshness.Fresh
           let payload =
             let completion =
+              let sessionDiscoveredCount =
+                lt.TestSessionMap |> Map.filter (fun _ sid -> sid = activeId) |> Map.count
               SageFs.Features.LiveTesting.TestResultsBatchPayload.deriveCompletion
-                freshness lt.DiscoveredTests.Length sessionEntries.Length
+                freshness sessionDiscoveredCount sessionEntries.Length
             SageFs.Features.LiveTesting.TestResultsBatchPayload.create
               lt.LastGeneration freshness completion lt.Activation sessionEntries
           ctx.ServerTracker.AccumulateEvent(
