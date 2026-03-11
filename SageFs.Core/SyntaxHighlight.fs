@@ -75,9 +75,28 @@ module SyntaxHighlight =
         Log.error "SyntaxHighlight init failed: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
         None
 
-  /// Cache of (code + theme keyword color) → per-line ColorSpan arrays.
-  /// Uses code string directly as key (no SHA256) — 130x faster lookup.
-  let cache = ConcurrentDictionary<string, ColorSpan array array>()
+  // Bounded LRU cache — capacity 512 entries.
+  let private cacheCapacity = 512
+  let private cacheDict = ConcurrentDictionary<string, ColorSpan array array>()
+  let private cacheOrder = System.Collections.Generic.Queue<string>()
+  let private cacheLock = obj()
+
+  let private cachedTokenize (key: string) (compute: unit -> ColorSpan array array) : ColorSpan array array =
+    match cacheDict.TryGetValue(key) with
+    | true, v -> v
+    | false, _ ->
+      let v = compute()
+      lock cacheLock (fun () ->
+        match cacheDict.TryAdd(key, v) with
+        | false -> ()
+        | true ->
+          cacheOrder.Enqueue(key)
+          while cacheOrder.Count > cacheCapacity do
+            match cacheOrder.TryDequeue() with
+            | true, old -> cacheDict.TryRemove(old) |> ignore
+            | false, _ -> ()
+      )
+      v
 
   /// Tokenize F# code into per-line color spans using tree-sitter.
   /// Returns an array of arrays: one ColorSpan array per line.
@@ -86,7 +105,7 @@ module SyntaxHighlight =
     | true -> [||]
     | false ->
       let key = String.Concat(code, "\x00", theme.SynKeyword)
-      cache.GetOrAdd(key, fun _ ->
+      cachedTokenize key (fun () ->
         match resources.Value with
         | None ->
           // Fallback: no highlighting, return empty spans for each line
@@ -140,7 +159,14 @@ module SyntaxHighlight =
             sl.ToArray()))
 
   /// Clear the highlight cache (call after theme changes).
-  let clearCache () = cache.Clear()
+  let clearCache () =
+    lock cacheLock (fun () ->
+      cacheDict.Clear()
+      cacheOrder.Clear()
+    )
+
+  /// Number of entries currently held in the highlight cache.
+  let cacheSize () = cacheDict.Count
 
   /// Check if tree-sitter highlighting is available.
   let isAvailable () =

@@ -118,7 +118,8 @@ h1 {
   flex-shrink: 0;
   transition: background 0.15s;
 
-  &:hover, &.dragging {
+  &:hover,
+  &.dragging {
     background: var(--border-focus);
   }
 }
@@ -200,10 +201,21 @@ h1 {
   line-height: 1.5;
 }
 
-.output-result { color: var(--fg-green); }
-.output-error { color: var(--fg-red); }
-.output-info { color: var(--fg-blue); }
-.output-system { color: var(--fg-dim); }
+.output-result {
+  color: var(--fg-green);
+}
+
+.output-error {
+  color: var(--fg-red);
+}
+
+.output-info {
+  color: var(--fg-blue);
+}
+
+.output-system {
+  color: var(--fg-dim);
+}
 
 /* ── Eval Area ────────────────────────────────────────────────── */
 
@@ -256,9 +268,18 @@ h1 {
   margin-top: 0.5rem;
   transition: opacity 0.15s;
 
-  &:hover { opacity: 0.85; }
-  &:active { opacity: 0.7; }
-  &:disabled { opacity: 0.5; cursor: not-allowed; }
+  &:hover {
+    opacity: 0.85;
+  }
+
+  &:active {
+    opacity: 0.7;
+  }
+
+  &:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
 }
 
 /* ── Editor ───────────────────────────────────────────────────── */
@@ -278,7 +299,7 @@ h1 {
     display: none;
   }
 
-  &:not(:empty) ~ #editor-area {
+  &:not(:empty)~#editor-area {
     display: none;
   }
 }
@@ -377,9 +398,20 @@ h1 {
   font-weight: bold;
 }
 
-.status-ready { background: var(--fg-green); color: var(--bg-default); }
-.status-warming { background: var(--fg-yellow); color: var(--bg-default); }
-.status-faulted { background: var(--fg-red); color: white; }
+.status-ready {
+  background: var(--fg-green);
+  color: var(--bg-default);
+}
+
+.status-warming {
+  background: var(--fg-yellow);
+  color: var(--bg-default);
+}
+
+.status-faulted {
+  background: var(--fg-red);
+  color: white;
+}
 
 /* ── Session Controls ─────────────────────────────────────────── */
 
@@ -421,8 +453,13 @@ h1 {
   line-height: 1.5;
 }
 
-.diag-error { color: var(--fg-red); }
-.diag-warning { color: var(--fg-yellow); }
+.diag-error {
+  color: var(--fg-red);
+}
+
+.diag-warning {
+  color: var(--fg-yellow);
+}
 
 .diag-location {
   font-family: monospace;
@@ -461,13 +498,32 @@ h1 {
   flex-shrink: 0;
 }
 
-.conn-connected { background: var(--fg-green); color: var(--bg-default); }
-.conn-disconnected { background: var(--fg-red); color: white; animation: pulse 1.5s infinite; }
-.conn-reconnecting { background: var(--fg-yellow); color: var(--bg-default); }
+.conn-connected {
+  background: var(--fg-green);
+  color: var(--bg-default);
+}
+
+.conn-disconnected {
+  background: var(--fg-red);
+  color: white;
+  animation: pulse 1.5s infinite;
+}
+
+.conn-reconnecting {
+  background: var(--fg-yellow);
+  color: var(--bg-default);
+}
 
 @keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.6; }
+
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.6;
+  }
 }
 
 /* ── Alarm Banner ─────────────────────────────────────────────── */
@@ -539,20 +595,62 @@ h1 {
 
 /* ── Syntax Highlighting ──────────────────────────────────────── */
 
-.syn-keyword { color: var(--syn-keyword); }
-.syn-string { color: var(--syn-string); }
-.syn-comment { color: var(--syn-comment); font-style: italic; }
-.syn-number { color: var(--syn-number); }
-.syn-operator { color: var(--syn-operator); }
-.syn-type { color: var(--syn-type); }
-.syn-function { color: var(--syn-function); }
-.syn-variable { color: var(--syn-variable); }
-.syn-punctuation { color: var(--syn-punctuation); }
-.syn-constant { color: var(--syn-constant); }
-.syn-module { color: var(--syn-module); }
-.syn-attribute { color: var(--syn-attribute); }
-.syn-directive { color: var(--syn-directive); }
-.syn-property { color: var(--syn-property); }
+.syn-keyword {
+  color: var(--syn-keyword);
+}
+
+.syn-string {
+  color: var(--syn-string);
+}
+
+.syn-comment {
+  color: var(--syn-comment);
+  font-style: italic;
+}
+
+.syn-number {
+  color: var(--syn-number);
+}
+
+.syn-operator {
+  color: var(--syn-operator);
+}
+
+.syn-type {
+  color: var(--syn-type);
+}
+
+.syn-function {
+  color: var(--syn-function);
+}
+
+.syn-variable {
+  color: var(--syn-variable);
+}
+
+.syn-punctuation {
+  color: var(--syn-punctuation);
+}
+
+.syn-constant {
+  color: var(--syn-constant);
+}
+
+.syn-module {
+  color: var(--syn-module);
+}
+
+.syn-attribute {
+  color: var(--syn-attribute);
+}
+
+.syn-directive {
+  color: var(--syn-directive);
+}
+
+.syn-property {
+  color: var(--syn-property);
+}
 
 /* ── Responsive ───────────────────────────────────────────────── */
 
@@ -604,7 +702,7 @@ h1 {
 }
 
 .diag-code {
-  background: rgba(0,0,0,0.1);
+  background: rgba(0, 0, 0, 0.1);
   padding: 0.1em 0.3em;
   border-radius: 2px;
   font-size: 0.65rem;
@@ -622,7 +720,7 @@ h1 {
 /* Progress bar track */
 .progress-track {
   height: 8px;
-  background: rgba(0,0,0,0.1);
+  background: rgba(0, 0, 0, 0.1);
   border-radius: 4px;
   overflow: hidden;
 }
@@ -633,4 +731,37 @@ h1 {
   background: var(--bg-selection);
   border-radius: 2px;
   overflow: hidden;
+}
+
+/* ── Minimal Mode (expandedDashboard signal) ──────────────────── */
+
+/* Expanded-only panels are hidden by default (minimal mode) */
+.expanded-only {
+  display: none;
+}
+
+/* When #main has .expanded class (signal true), show expanded-only panels */
+#main.expanded .expanded-only {
+  display: block;
+}
+
+/* Floating expand/collapse toggle button */
+.expand-toggle-btn {
+  position: fixed;
+  bottom: 1rem;
+  right: 1rem;
+  z-index: 1000;
+  background: var(--bg-focus, #2a2a2a);
+  color: var(--fg-dim, #888);
+  border: 1px solid var(--border-normal, #333);
+  border-radius: 4px;
+  padding: 4px 10px;
+  font-size: 0.75rem;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.expand-toggle-btn:hover {
+  background: var(--bg-selection, #3a3a3a);
+  color: var(--fg-default, #ccc);
 }

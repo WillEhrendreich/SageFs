@@ -168,9 +168,10 @@ let tests = testList "Dashboard browser tests" [
   })
 
   playwrightTest "diagnostics panel has log-box class" (fun page -> task {
-    let diagPanel = page.Locator("#diagnostics-panel")
-    do! PlaywrightExpect.isVisibleAsync diagPanel "visible"
-    let! cls = diagPanel.GetAttributeAsync("class")
+    // Diagnostics panel is in expanded-only mode (hidden by default in minimal mode).
+    // Check the class via JS evaluation rather than visibility.
+    let! cls = page.EvaluateAsync<string>(
+      "() => { var el = document.querySelector('#diagnostics-panel'); return el ? el.className : ''; }")
     Expect.isTrue (cls.Contains("log-box")) "log-box class"
   })
 
@@ -340,12 +341,13 @@ let tests = testList "Dashboard browser tests" [
   })
 
   playwrightTest "diagnostics panel shows no diagnostics" (fun page -> task {
-    let diagHeading =
-      page.GetByRole(
-        AriaRole.Heading, PageGetByRoleOptions(Name = "Diagnostics"))
-    do! PlaywrightExpect.isVisibleAsync diagHeading "Diagnostics heading"
-    let noDiag = page.GetByText("No diagnostics")
-    do! PlaywrightExpect.isVisibleAsync noDiag "empty diagnostics message"
+    // Diagnostics panel is inside expanded-only section (minimal mode).
+    // Check the text content via JS evaluation rather than visibility.
+    do! PlaywrightExpect.waitForSSE 10_000 page
+    let! panelText = page.EvaluateAsync<string>(
+      "() => { var el = document.querySelector('#diagnostics-panel'); return el ? el.textContent : ''; }")
+    Expect.isTrue (panelText <> null && panelText.Contains("No diagnostics"))
+      "diagnostics panel should contain 'No diagnostics'"
   })
 
   // --- Connection banner: disconnect-only design ---

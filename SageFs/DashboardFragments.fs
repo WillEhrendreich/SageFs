@@ -944,7 +944,7 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
       ]
     | None ->
       Elem.div [ Attr.id DomIds.ConnectionCounts; Attr.class' "meta"; Attr.style "font-size: 0.75rem; margin-top: 4px;" ] []
-  Elem.div [ Attr.id DomIds.Main ] [
+  Elem.div [ Attr.id DomIds.Main; Ds.class' ("expanded", sprintf "$%s" Signals.ExpandedDashboard) ] [
     // Theme CSS variables — morphed with every push so theme changes propagate
     snap.ThemeVars
     // App header — version, status, stats, theme, sidebar toggle
@@ -963,14 +963,13 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
     ]
     // Daemon health bar — version, uptime, memory, session health
     snap.DaemonHealth
-    // System alarm banner — visible when ElmLoop throws; dismiss clears all
-    snap.AlarmPanel
-    // Failure narratives panel — recent test failures with context
-    snap.FailureNarrativesPanel
-    // Diagnostics panel — live FSI compile errors and warnings
-    snap.DiagnosticsPanel
-    // Session filmstrip — recent eval history as visual timeline
-    snap.FilmstripPanel
+    // Expanded-only panels: alarm, failure narratives, diagnostics, filmstrip
+    Elem.div [ Attr.class' "expanded-only" ] [
+      snap.AlarmPanel
+      snap.FailureNarrativesPanel
+      snap.DiagnosticsPanel
+      snap.FilmstripPanel
+    ]
     // Main app layout: output+eval on left, sidebar on right
     Elem.div [ Attr.class' "app-layout" ] [
       Elem.div [ Attr.class' "main-area" ] [
@@ -1065,11 +1064,12 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
             connectionNode
             snap.SessionsPanel
           ]
-          // Dynamic sidebar panels — rendered from current state
-          snap.HotReloadPanel
-          snap.BindingsPanel
-          snap.SessionContextPanel
-          // Create Session — at the bottom
+          // Dynamic sidebar panels — expanded-only (hot reload, bindings, session context)
+          Elem.div [ Attr.class' "expanded-only" ] [
+            snap.HotReloadPanel
+            snap.BindingsPanel
+            snap.SessionContextPanel
+          ]
           Elem.div [ Attr.class' "panel" ] [
             Elem.h2 [] [ Text.raw "New Session" ]
             Elem.div [] [
@@ -1117,6 +1117,12 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
         ]
       ]
     ]
+    // Floating expand/collapse toggle — always visible, bottom-right corner
+    Elem.button
+      [ Attr.class' "expand-toggle-btn"
+        Ds.onEvent ("click", sprintf "$%s = !$%s" Signals.ExpandedDashboard Signals.ExpandedDashboard)
+        Ds.text (sprintf "$%s ? '✕ collapse' : '⋯ expand'" Signals.ExpandedDashboard) ]
+      []
   ]
 
 let renderRegionForSse (getSessionState: string -> SessionState) (getStatusMsg: string -> string option) (getSessionStandbyInfo: string -> StandbyInfo) (region: RenderRegion) =

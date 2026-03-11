@@ -1283,6 +1283,48 @@ let cameraMovementTests =
 
       abs right.Y < 0.0001f |> Expect.isTrue "strafe should stay level on the ground plane"
       abs (right.Length() - 1.0f) < 0.0001f |> Expect.isTrue "strafe vector should stay normalized"
+
+    testCase "review presets frame off-origin geometry and produce distinct angles" <| fun () ->
+      let tower =
+        { mkSampleBuilding "tower1" Tower 120 0.9f 8 3 10 180.0f 24 0.0f with
+            X = 124.0f
+            Z = 82.0f
+            W = 10.0f
+            D = 10.0f
+            H = 28.0f }
+      let rowhouse =
+        { mkSampleBuilding "row1" Rowhouse 40 0.4f 3 1 4 90.0f 6 0.0f with
+            X = 142.0f
+            Z = 94.0f
+            W = 14.0f
+            D = 7.0f
+            H = 9.0f }
+      let road =
+        { FromFunc = "TestMod.a"
+          ToFunc = "TestMod.b"
+          FromPos = Vector3(118.0f, 0.0f, 88.0f)
+          ToPos = Vector3(158.0f, 0.0f, 88.0f)
+          HalfWidth = 0.8f
+          Weight = 4
+          Color = Color.Gray
+          Organic = 0.35f }
+      let buildings = [| tower; rowhouse |]
+      let bounds = sceneGeometryBounds buildings [ road ]
+      (TRect.centerX bounds, 120.0f) |> Expect.isGreaterThan "bounds should follow the off-origin neighborhood"
+      (TRect.centerZ bounds, 80.0f) |> Expect.isGreaterThan "bounds should follow the off-origin neighborhood"
+
+      let overview = reviewCameraPose Overview buildings [ road ]
+      let oblique = reviewCameraPose Oblique buildings [ road ]
+      let lowSide = reviewCameraPose StreetLevel buildings [ road ]
+
+      overview.Label |> Expect.equal "overview label should be stable" "Overview"
+      oblique.Label |> Expect.equal "oblique label should be stable" "Oblique"
+      lowSide.Label |> Expect.equal "street-level label should be stable" "Low side"
+
+      ((overview.Position - oblique.Position).Length(), 5.0f)
+      |> Expect.isGreaterThan "overview and oblique should not collapse to the same capture"
+      (lowSide.Position.Y, overview.Position.Y)
+      |> Expect.isLessThan "low side should stay lower than overview"
   ]
 
 let visualDefaultsTests =
@@ -4587,12 +4629,13 @@ let private buildingsOverlap (left: FuncBuilding) (right: FuncBuilding) =
   && left.Z + left.D > right.Z
 
 let private buildingIntersectsRoad (building: FuncBuilding) (road: Road) =
+  let halfWidth = roadSurfaceHalfWidth road
   let expanded =
     TRect.create
-      (building.X - road.HalfWidth)
-      (building.Z - road.HalfWidth)
-      (building.W + road.HalfWidth * 2.0f)
-      (building.D + road.HalfWidth * 2.0f)
+      (building.X - halfWidth)
+      (building.Z - halfWidth)
+      (building.W + halfWidth * 2.0f)
+      (building.D + halfWidth * 2.0f)
   let x0 = expanded.X
   let x1 = expanded.X + expanded.W
   let z0 = expanded.Z
@@ -4751,7 +4794,7 @@ let packAlongRoadsTests =
       let funcs = List.init 10 (fun i -> mkFunc (sprintf "f%d" i) "RoadMod")
       let bldgs = packAlongRoads roads rect funcs Map.empty (Color(70uy, 130uy, 180uy, 255uy)) (Random 7) Map.empty
       bldgs |> Expect.isNonEmpty "must produce buildings"
-      let maxDist = 2.0f  // setback(up to 0.9+hw) + half footprint + tolerance
+      let maxDist = 2.6f  // rendered road ribbon + pedestrian reserve + half footprint
       for b in bldgs do
         let cx = b.X + b.W / 2.0f
         let cz = b.Z + b.D / 2.0f
@@ -4879,13 +4922,17 @@ let buildingTypologyTests =
       classifyBuilding 700 12 0.9f
       |> Expect.equal "700-line, 0.9-heat function should be Skyscraper" Skyscraper
 
-    testCase "classifyBuilding: heat alone can promote to Skyscraper" <| fun () ->
+    testCase "classifyBuilding: tiny hot functions top out below Skyscraper" <| fun () ->
       classifyBuilding 20 2 0.9f
-      |> Expect.equal "Small but extremely hot function should be Skyscraper" Skyscraper
+      |> Expect.equal "Small but extremely hot function should read as a commercial anchor, not a supertall" Commercial
 
     testCase "classifyBuilding: line count alone can promote to Skyscraper" <| fun () ->
       classifyBuilding 700 2 0.0f
       |> Expect.equal "Very long cold function should be Skyscraper" Skyscraper
+
+    testCase "classifyBuilding: very hot mid-size functions can still become Tower" <| fun () ->
+      classifyBuilding 120 8 0.9f
+      |> Expect.equal "Sufficiently large and hot functions should still read as towers" Tower
 
     testCase "spacingMultiplier: residential types get more yard space than skyscrapers" <| fun () ->
       let cottageMult  = BuildingType.spacingMultiplier Cottage
@@ -4975,6 +5022,22 @@ let gitAgeColorTests =
       let avgShedW    = shedBldgs    |> List.averageBy (fun b -> b.W)
       (avgScraperW, avgShedW)
       |> Expect.isGreaterThan "Skyscraper footprint should exceed Shed footprint due to higher coverage ratio"
+
+    testCase "packAlongRoads: tiny hot functions do not become supertall needles" <| fun () ->
+      let rect = { X = 0.0f; Z = 0.0f; W = 24.0f; H = 24.0f }
+      let roads = [ mkRoad 12.0f 0.0f 12.0f 24.0f 0.4f ]
+      let tinyHotFuncs =
+        [ { mkFunc "hotA" "TinyHot" with LineCount = 20 }
+          { mkFunc "hotB" "TinyHot" with LineCount = 22 } ]
+      let heatMap =
+        tinyHotFuncs
+        |> List.map (fun f -> f.QualifiedName, (0.92f, 16, 2))
+        |> Map.ofList
+      let bldgs = packAlongRoads roads rect tinyHotFuncs heatMap (Color(70uy, 130uy, 180uy, 255uy)) (Random 9) Map.empty
+      bldgs |> Expect.isNonEmpty "tiny hot funcs should still produce buildings"
+      bldgs
+      |> List.forall (fun b -> b.BuildingType <> Skyscraper && b.H <= 18.0f)
+      |> Expect.isTrue "tiny hot functions should not render as impossible needle towers"
   ]
 
 let roadColorTests =
@@ -5831,8 +5894,8 @@ let writeReport () = renderFrame 1 |> ignore
           buildSingleFileShowcase root filePath
         districts |> Expect.hasLength "single-file showcase should use one district" 1
         blocks.Length |> Expect.equal "single-file showcase should use one block" 1
-        roads.Length |> Expect.equal "single-file showcase should keep the road layout tiny" 1
-        alleyRoads.Length |> Expect.equal "showcase alley surface should mirror the visible showcase road" 1
+        (roads.Length, 1) |> Expect.isGreaterThan "single-file showcase should reuse the real growth layout instead of a single hardcoded road"
+        alleyRoads.Length |> Expect.equal "showcase alley surface should mirror the visible showcase roads" roads.Length
         buildings |> Expect.isNonEmpty "single-file showcase should place buildings"
         callEdges |> Expect.isNonEmpty "single-file showcase should preserve local call relationships"
         buildings

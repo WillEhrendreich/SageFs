@@ -388,6 +388,17 @@ type Road =
     Color: Color
     Organic: float32 }
 
+type ReviewCameraPreset =
+  | Overview
+  | Oblique
+  | StreetLevel
+
+type ReviewCameraPose =
+  { Label: string
+    Position: Vector3
+    Yaw: float32
+    Pitch: float32 }
+
 type District =
   { Name: string
     FuncCount: int
@@ -3051,16 +3062,16 @@ let private corridorToRoad (organic: float32) (roadClass: RoadClass) (status: St
 // ─── Building Typology Functions ─────────────────────────────
 
 /// Classify a function by line count, complexity, and caller heat.
-/// Heat [0,1] = normalised caller count; this is the dominant axis —
-/// a tiny but extremely hot function becomes a Skyscraper.
+/// Heat [0,1] = normalised caller count, but tiny functions should not
+/// leap straight into supertall typologies just because they're central.
 let classifyBuilding (lineCount: int) (_complexity: int) (heat: float32) : BuildingType =
   match heat, lineCount with
-  | h, lc when h >= 0.85f || lc >= 600 -> Skyscraper
-  | h, lc when h >= 0.65f || lc >= 300 -> Tower
-  | h, lc when h >= 0.40f || lc >= 100 -> Commercial
-  | h, lc when h >= 0.20f || lc >= 40  -> Rowhouse
-  | h, lc when h >= 0.05f || lc >= 8   -> Cottage
-  | _                                   -> Shed
+  | h, lc when lc >= 600 || (h >= 0.90f && lc >= 180) -> Skyscraper
+  | h, lc when lc >= 300 || (h >= 0.78f && lc >= 80) -> Tower
+  | h, lc when lc >= 100 || h >= 0.50f -> Commercial
+  | h, lc when lc >= 40 || h >= 0.22f -> Rowhouse
+  | h, lc when lc >= 8 || h >= 0.05f -> Cottage
+  | _ -> Shed
 
 module BuildingType =
   /// Yard-spacing multiplier relative to the base road segment spacing.
@@ -3126,9 +3137,9 @@ module BuildingType =
       | Cottage    -> max 2.5f  (MathF.Log(lc + 1.0f) * 2.0f)
       | Rowhouse   -> max 4.0f  (MathF.Log(lc + 1.0f) * 3.5f)
       | Commercial -> max 6.0f  (MathF.Log(lc + 1.0f) * 5.0f)
-      | Tower      -> max 8.0f  (MathF.Log(lc + 1.0f) * 6.0f + heat * 10.0f)
-      | Skyscraper -> max 12.0f (MathF.Log(lc + 1.0f) * 6.5f + heat * 15.0f)
-    min 55.0f h
+      | Tower      -> max 8.0f  (MathF.Log(lc + 1.0f) * 5.4f + heat * 7.0f)
+      | Skyscraper -> max 12.0f (MathF.Log(lc + 1.0f) * 5.8f + heat * 9.0f)
+    min 42.0f h
 
 type BuildingMassingProfile =
   { MaxCubeCount: int
@@ -3210,8 +3221,8 @@ module BuildingMassingProfile =
           MinHeightScale = 0.68f
           MaxHeightScale = 0.92f
           Linear = false
-          PerpendicularCompression = 0.90f
-          PodiumRatio = Some 1.04f
+          PerpendicularCompression = 0.96f
+          PodiumRatio = Some 1.12f
           ShaftRatio = None
           ShaftHeightScale = None
           CrownRatio = None
@@ -3221,10 +3232,10 @@ module BuildingMassingProfile =
           MinHeightScale = 0.58f
           MaxHeightScale = 0.84f
           Linear = false
-          PerpendicularCompression = 0.82f
-          PodiumRatio = Some 1.08f
-          ShaftRatio = Some 0.58f
-          ShaftHeightScale = Some 1.06f
+          PerpendicularCompression = 0.92f
+          PodiumRatio = Some 1.18f
+          ShaftRatio = Some 0.70f
+          ShaftHeightScale = Some 1.0f
           CrownRatio = None
           CrownHeightScale = None }
     | TaperedTower ->
@@ -3232,12 +3243,12 @@ module BuildingMassingProfile =
           MinHeightScale = 0.52f
           MaxHeightScale = 0.78f
           Linear = false
-          PerpendicularCompression = 0.76f
-          PodiumRatio = Some 1.12f
-          ShaftRatio = Some 0.46f
-          ShaftHeightScale = Some 1.04f
-          CrownRatio = Some 0.28f
-          CrownHeightScale = Some 1.16f }
+          PerpendicularCompression = 0.88f
+          PodiumRatio = Some 1.22f
+          ShaftRatio = Some 0.64f
+          ShaftHeightScale = Some 0.98f
+          CrownRatio = Some 0.42f
+          CrownHeightScale = Some 1.08f }
 
 let generateTypedCompoundForFamily
   (qualName: string)
@@ -6714,14 +6725,14 @@ let private frontageFootprint roadClass buildingType parcelWidth complexity =
     | Cottage -> max 0.72f (parcelWidth * 0.84f), 0.62f
     | Rowhouse -> max 0.70f (parcelWidth * 0.80f), 0.72f
     | Commercial -> max 0.82f (parcelWidth * 0.86f), 0.76f
-    | Tower -> max 0.90f (parcelWidth * 0.84f), 0.82f
-    | Skyscraper -> max 0.98f (parcelWidth * 0.88f), 0.88f
+    | Tower -> max 1.20f (parcelWidth * 0.92f), 0.92f
+    | Skyscraper -> max 1.45f (parcelWidth * 0.98f), 1.04f
   let complexityScale = complexityFootprintFactor complexity |> min 1.18f
   let widthAlongRoad =
     min (parcelWidth * 0.96f) (baseWidth * complexityScale)
     |> max 0.55f
   let depth =
-    min (parcelWidth * 0.72f) (frontageBaseDepth roadClass * depthScale * min 1.08f complexityScale)
+    min (parcelWidth * 0.84f) (frontageBaseDepth roadClass * depthScale * min 1.10f complexityScale)
     |> max 0.45f
   widthAlongRoad, depth
 
@@ -6757,6 +6768,9 @@ let private sameRoad (left: Road) (right: Road) =
   && abs (left.HalfWidth - right.HalfWidth) < 1e-4f
   && left.Weight = right.Weight
 
+let roadSurfaceHalfWidth (road: Road) =
+  max 0.55f (road.HalfWidth + 0.45f)
+
 let private canAcceptFrontageBuilding
   (roads: Road list)
   (servingRoad: Road)
@@ -6769,8 +6783,7 @@ let private canAcceptFrontageBuilding
   let overlapsRoadSurface =
     roads
     |> List.exists (fun road ->
-      not (sameRoad road servingRoad)
-      && roadIntersectsRect (road.HalfWidth + 0.04f) road candidateRect)
+      roadIntersectsRect (roadSurfaceHalfWidth road + 0.08f) road candidateRect)
   not overlapsAccepted && not overlapsRoadSurface
 
 let private clampPointToRect (rect: TRect) (x: float32, z: float32) =
@@ -6819,7 +6832,7 @@ let private roadSurfaceRibbonPoints (rect: TRect) (road: Road) =
       else
         let dir = Vec2.normalize delta
         let normal = Vec2.Create(-dir.Y, dir.X)
-        let pad = max 0.55f (road.HalfWidth + 0.45f)
+        let pad = roadSurfaceHalfWidth road
         let samples = max 2 (int (MathF.Ceiling(len / 6.0f)))
         [ for idx in 0 .. samples do
             let t = float32 idx / float32 samples
@@ -7119,7 +7132,7 @@ let packAlongRoads
                 let dir = Vec2.normalize delta
                 let leftNormal = Vec2.Create(-dir.Y, dir.X)
                 let roadClass = roadClassForWeight road.Weight
-                let halfWidth = road.HalfWidth
+                let halfWidth = roadSurfaceHalfWidth road
                 yield { Start = clippedStart
                         Dir = dir
                         Normal = leftNormal
@@ -7571,6 +7584,16 @@ let buildSingleFileShowcase (repoRoot: string) (filePath: string) =
     |> Option.map _.Module
     |> Option.defaultValue (Path.GetFileNameWithoutExtension(filePath))
   let districtColor = districtPalette.[1]
+  let globalMaxComplexity =
+    funcs
+    |> List.map (fun funcDef -> computeComplexity funcDef.Body)
+    |> List.max
+    |> max 1
+  let globalMaxLineCount =
+    funcs
+    |> List.map _.LineCount
+    |> List.max
+    |> max 1
   let district =
     { Name = moduleName
       FuncCount = funcs.Length
@@ -7582,23 +7605,24 @@ let buildSingleFileShowcase (repoRoot: string) (filePath: string) =
       Rect = blockRect
       Color = districtColor
       TerrainY = 0.0f }
-  let roadColor =
-    let r, g, b = roadColorForClass Avenue
-    Color(r, g, b, 255uy)
-  let roads =
-    [
-      { FromFunc = moduleName
-        ToFunc = moduleName
-        FromPos = Vector3(0.0f, 0.0f, -18.0f)
-        ToPos = Vector3(0.0f, 0.0f, 18.0f)
-        HalfWidth = RoadClass.width Avenue * 0.5f
-        Weight = RoadClass.tier Avenue
-        Color = roadColor
-        Organic = 0.0f }
-    ]
-    |> canonicalizeRoads
+  let districtRng = Random(int (fnvHash moduleName))
+  let fileMetas =
+    funcs
+    |> List.map (fun f -> gitMetaByFile |> Map.tryFind f.FilePath |> Option.defaultValue GitMeta.empty)
+  let organic = districtOrganicFactor DateTimeOffset.Now fileMetas
+  let rawBuildings, roads =
+    layoutWeberDistrict
+      blockRect
+      funcs
+      heatMap
+      districtColor
+      globalMaxComplexity
+      globalMaxLineCount
+      organic
+      districtRng
+      gitMetaByFile
   let buildings =
-    packAlongRoads roads blockRect funcs heatMap districtColor (Random(int (fnvHash moduleName))) gitMetaByFile
+    rawBuildings
     |> List.map (fun building -> { building with TerrainY = 0.0f })
   (buildings, [ district ], roads, [| block |], callEdges, roads)
 
@@ -7699,6 +7723,11 @@ module FpsCamera =
     c.Projection <- CameraProjection.Perspective
     c
 
+  let applyPose (cam: FpsCamera) (pose: ReviewCameraPose) =
+    cam.Position <- pose.Position
+    cam.Yaw <- pose.Yaw
+    cam.Pitch <- pose.Pitch
+
   let update (cam: FpsCamera) (captured: bool) =
     let dt = Raylib.GetFrameTime()
 
@@ -7740,6 +7769,85 @@ module FpsCamera =
         cam.Position <- cam.Position - right * boost
       if rb (Raylib.IsKeyDown(KeyboardKey.D)) then
         cam.Position <- cam.Position + right * boost
+
+let sceneGeometryBounds (buildings: FuncBuilding[]) (roads: Road list) =
+  let buildingPoints =
+    buildings
+    |> Array.collect (fun building ->
+      [| building.X, building.Z
+         building.X + building.W, building.Z
+         building.X + building.W, building.Z + building.D
+         building.X, building.Z + building.D
+         building.X + building.W * 0.5f, building.Z + building.D * 0.5f |])
+    |> Array.toList
+
+  let roadPoints =
+    roads
+    |> List.collect (fun road ->
+      let pad = roadSurfaceHalfWidth road
+      let dx = road.ToPos.X - road.FromPos.X
+      let dz = road.ToPos.Z - road.FromPos.Z
+      let len = MathF.Sqrt(dx * dx + dz * dz)
+      if len <= 0.0001f then
+        [ road.FromPos.X - pad, road.FromPos.Z - pad
+          road.FromPos.X + pad, road.FromPos.Z + pad ]
+      else
+        let nx = -dz / len
+        let nz = dx / len
+        [ road.FromPos.X + nx * pad, road.FromPos.Z + nz * pad
+          road.FromPos.X - nx * pad, road.FromPos.Z - nz * pad
+          road.ToPos.X + nx * pad, road.ToPos.Z + nz * pad
+          road.ToPos.X - nx * pad, road.ToPos.Z - nz * pad ])
+
+  let points = buildingPoints @ roadPoints
+
+  match points with
+  | [] -> TRect.create -12.0f -12.0f 24.0f 24.0f
+  | first :: rest ->
+      let minX, maxX, minZ, maxZ =
+        rest
+        |> List.fold (fun (minX, maxX, minZ, maxZ) (x, z) ->
+          min minX x, max maxX x, min minZ z, max maxZ z)
+             ((fst first), (fst first), (snd first), (snd first))
+      let spanX = max 8.0f (maxX - minX)
+      let spanZ = max 8.0f (maxZ - minZ)
+      let pad = max 3.0f (max spanX spanZ * 0.14f)
+      TRect.create (minX - pad) (minZ - pad) (spanX + pad * 2.0f) (spanZ + pad * 2.0f)
+
+let reviewCameraPose (preset: ReviewCameraPreset) (buildings: FuncBuilding[]) (roads: Road list) =
+  let bounds = sceneGeometryBounds buildings roads
+  let centerX = TRect.centerX bounds
+  let centerZ = TRect.centerZ bounds
+  let span = max bounds.W bounds.H
+  let focusY =
+    buildings
+    |> Array.map (fun building -> building.TerrainY + building.H * 0.35f)
+    |> Array.append [| 2.5f |]
+    |> Array.max
+
+  let mkPose label (position: Vector3) (target: Vector3) =
+    let direction = Vector3.Normalize(target - position)
+    { Label = label
+      Position = position
+      Yaw = MathF.Atan2(direction.Z, direction.X)
+      Pitch = MathF.Asin(direction.Y) }
+
+  match preset with
+  | Overview ->
+      mkPose
+        "Overview"
+        (Vector3(centerX - span * 0.72f, max 18.0f (span * 1.05f), centerZ + span * 0.68f))
+        (Vector3(centerX, focusY, centerZ))
+  | Oblique ->
+      mkPose
+        "Oblique"
+        (Vector3(centerX + span * 0.96f, max 11.0f (span * 0.56f), centerZ + span * 0.34f))
+        (Vector3(centerX, max 2.0f (focusY * 0.9f), centerZ))
+  | StreetLevel ->
+      mkPose
+        "Low side"
+        (Vector3(centerX - span * 0.92f, max 3.2f (focusY * 0.34f), centerZ - span * 0.18f))
+        (Vector3(centerX + span * 0.18f, max 2.4f (focusY * 0.72f), centerZ + span * 0.08f))
 
 // ─── GPU Mesh-Based Rendering ────────────────────────────────
 // ALL static geometry (ground, districts, roads, buildings) is baked into GPU meshes at startup.
@@ -8965,6 +9073,7 @@ let drawHUD
   (captured: bool)
   (selected: FuncBuilding option)
   (showCallLinks: bool)
+  (reviewLabel: string)
   (theme: UiTextTheme) =
 
   let totalFuncs = buildings.Length
@@ -9007,14 +9116,15 @@ let drawHUD
   let controlsY = infoY + theme.HudStats + 10
   drawUiText "Right-drag orbit  ·  Scroll zoom  ·  Mid-drag pan"
     16 controlsY theme.HudControls (Color(130uy, 130uy, 150uy, 255uy))
-  drawUiText "WASD/QE move  ·  R reset  ·  F focus hottest"
+  drawUiText "WASD/QE move  ·  R overview  ·  V cycle  ·  F focus hottest"
     16 (controlsY + theme.HudControls + 5) theme.HudControls (Color(130uy, 130uy, 150uy, 255uy))
   drawUiText
     (sprintf "Click pin  ·  Esc clear  ·  C links %s  ·  Tab mouse" (if showCallLinks then "ON" else "OFF"))
     16 (controlsY + (theme.HudControls + 5) * 2) theme.HudControls
     (if showCallLinks then outgoingRelationColor else Color(150uy, 150uy, 165uy, 255uy))
   let captureLabel =
-    if captured then "Mouse captured" else "Mouse free"
+    if captured then sprintf "Mouse captured  ·  Review %s" reviewLabel
+    else sprintf "Mouse free  ·  Review %s" reviewLabel
   let captureColor =
     if captured then Color(255uy, 200uy, 60uy, 255uy)
     else Color(100uy, 180uy, 100uy, 255uy)
@@ -9287,6 +9397,7 @@ let main argv =
   let incomingRelations, outgoingRelations = buildRelationMaps buildingArray callEdges
   let maxRenderedRelations = 8
   let sortedRoads = roads |> List.sortByDescending (fun r -> r.Weight) |> List.truncate 500 |> List.toArray
+  let reviewRoads = sortedRoads |> List.ofArray
   let hottest = buildings |> List.sortByDescending (fun b -> b.Heat) |> List.tryHead
 
   // Validate coordinates
@@ -9706,9 +9817,20 @@ void main() {
   Raylib.SetShaderValue(compositeShader, bloomIntensityLoc, 0.35f, ShaderUniformDataType.Float)
   printfn "Bloom: Pipeline ready (threshold=0.7 knee=0.5 intensity=0.35)"
 
-  let cam = FpsCamera.create (Vector3(0.0f, cityExtent * 0.8f, cityExtent * 0.3f))
-  cam.Pitch <- -1.2f
-  cam.Yaw <- 0.0f
+  let cam = FpsCamera.create Vector3.Zero
+  let reviewPresets = [| Overview; Oblique; StreetLevel |]
+  let mutable currentReviewPresetIndex = 0
+  let mutable currentReviewLabel = "Overview"
+  let applyReviewPreset presetIndex =
+    let preset = reviewPresets.[presetIndex]
+    let pose = reviewCameraPose preset buildingArray reviewRoads
+    FpsCamera.applyPose cam pose
+    currentReviewPresetIndex <- presetIndex
+    currentReviewLabel <- pose.Label
+  let cycleReviewPreset () =
+    let nextIndex = (currentReviewPresetIndex + 1) % reviewPresets.Length
+    applyReviewPreset nextIndex
+  applyReviewPreset 0
 
   let mutable highlighted : FuncBuilding option = None
   let mutable selected : FuncBuilding option = None
@@ -9793,9 +9915,10 @@ void main() {
     FpsCamera.update cam mouseCaptured
 
     if rb (Raylib.IsKeyPressed(KeyboardKey.R)) then
-      cam.Position <- Vector3(0.0f, cityExtent * 0.8f, cityExtent * 0.3f)
-      cam.Yaw <- 0.0f
-      cam.Pitch <- -1.2f
+      applyReviewPreset 0
+
+    if rb (Raylib.IsKeyPressed(KeyboardKey.V)) then
+      cycleReviewPreset ()
 
     if rb (Raylib.IsKeyPressed(KeyboardKey.F)) then
       match hottest with
@@ -9956,7 +10079,7 @@ void main() {
         |> Option.map (fun b ->
           (d, { X = b.Rect.X; Z = b.Rect.Z; W = b.Rect.W; D = b.Rect.H }, [])))
     drawDistrictLabels2D districtRects camera3D uiTextTheme
-    drawHUD buildings districts (sortedRoads |> List.ofArray) mouseCaptured selected showCallLinks uiTextTheme
+    drawHUD buildings districts reviewRoads mouseCaptured selected showCallLinks currentReviewLabel uiTextTheme
     drawLegend districts uiTextTheme
     drawTerrainScale buildings uiTextTheme
     drawHeatScale uiTextTheme

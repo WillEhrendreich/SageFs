@@ -115,7 +115,7 @@ let run (daemonInfo: DaemonInfo) = task {
                 | None -> ""
               "⟳", sprintf "Evaluating%s" elapsed
             | "WarmingUp" -> "⟳", "WarmingUp"
-            | s when s.StartsWith("Faulted") -> "✗", "FAULTED — ^R restart"
+            | s when s.StartsWith("Faulted") -> "✗", "FAULTED — Ctrl+R to hard reset"
             | "Uninitialized" | "Connecting..." -> "·", lastSessionState
             | _ -> "⟳", lastSessionState
           let stateStr = sprintf "%s %s" stateIcon stateLabel
@@ -476,12 +476,16 @@ let run (daemonInfo: DaemonInfo) = task {
               | false -> action
             do! DaemonClient.dispatch client baseUrl remappedAction
           | None ->
-            match ch with
-            | c when c >= ' ' && c <= '~' ->
-              do! DaemonClient.dispatch client baseUrl (EditorAction.InsertChar ch)
-            | c when c > '\x7f' ->
-              do! DaemonClient.dispatch client baseUrl (EditorAction.InsertChar ch)
-            | _ -> ()
+            match mods.HasFlag(ConsoleModifiers.Control), key with
+            | true, ConsoleKey.R ->
+              do! DaemonClient.dispatch client baseUrl EditorAction.HardResetSession
+            | _ ->
+              match ch with
+              | c when c >= ' ' && c <= '~' ->
+                do! DaemonClient.dispatch client baseUrl (EditorAction.InsertChar ch)
+              | c when c > '\x7f' ->
+                do! DaemonClient.dispatch client baseUrl (EditorAction.InsertChar ch)
+              | _ -> ()
 
         | None -> ()
 

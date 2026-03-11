@@ -104,6 +104,19 @@ type Msg =
   // Frame timing
   | FrameTiming of SageTUI.FrameTimings
 
+// ── UX Hint Helpers ──
+
+/// Returns the recovery hint text for a faulted session, or None if not faulted.
+let faultedRecoveryHint (sessionState: string) : string option =
+  match sessionState with
+  | s when s.StartsWith("Faulted") ->
+    Some "⚠ Session faulted — press Ctrl+R to hard reset, or run sagefs check"
+  | _ -> None
+
+/// Returns true when the first-run evangelical hint should be displayed.
+let shouldShowEvangelicalHint (sessionState: string) (evalCount: int) : bool =
+  sessionState = "Ready" && evalCount = 0
+
 // ── Init ──
 
 let init (daemonInfo: DaemonInfo) (keyMap: SageFsKeyMap) () : Model * Cmd<Msg> =
@@ -461,14 +474,18 @@ let private renderStatusBar (model: Model) : Element =
   let ttStatus = TimeTravel.formatStatus model.TimeTravel
   let ttPart = match ttStatus with | Some s -> sprintf " │ %s" s | None -> ""
   let failNav = match model.FailingNav.Hint.Length > 0 with | true -> sprintf " │ %s" model.FailingNav.Hint | false -> ""
+  let faultHint =
+    match faultedRecoveryHint model.SessionState with
+    | Some hint -> sprintf " │ %s" hint
+    | None -> ""
   let leftStatus =
     match model.EvalCount > 0 with
     | true ->
-      sprintf " %s %s │ evals: %d (avg %.0fms)%s%s%s%s │ %s"
-        sid model.SessionState model.EvalCount model.AvgMs standby liveTesting ttPart failNav (PaneId.displayName model.FocusedPane)
+      sprintf " %s %s │ evals: %d (avg %.0fms)%s%s%s%s%s │ %s"
+        sid model.SessionState model.EvalCount model.AvgMs standby liveTesting ttPart failNav faultHint (PaneId.displayName model.FocusedPane)
     | false ->
-      sprintf " %s %s │ evals: %d%s%s%s%s │ %s"
-        sid model.SessionState model.EvalCount standby liveTesting ttPart failNav (PaneId.displayName model.FocusedPane)
+      sprintf " %s %s │ evals: %d%s%s%s%s%s │ %s"
+        sid model.SessionState model.EvalCount standby liveTesting ttPart failNav faultHint (PaneId.displayName model.FocusedPane)
   let rightStatus =
     sprintf " %s │ %.1fms │%s"
       model.ThemeName model.FrameMs (StatusHints.build model.KeyMap model.FocusedPane model.Layout.VisiblePanes model.WatchedCount model.Density)
@@ -511,7 +528,19 @@ let view (model: Model) : Element =
   // Build pane elements
   let outputPane =
     match model.Layout.VisiblePanes.Contains PaneId.Output with
-    | true -> renderContentPane model.Theme "Output" (findRegion "output" displayRegions) (scrollFor PaneId.Output) (isFocused PaneId.Output)
+    | true ->
+      let contentPane = renderContentPane model.Theme "Output" (findRegion "output" displayRegions) (scrollFor PaneId.Output) (isFocused PaneId.Output)
+      match shouldShowEvangelicalHint model.SessionState model.EvalCount with
+      | true ->
+        El.column [
+          contentPane |> El.fill
+          El.row [
+            El.text " ✨ Ready! Try: " |> El.fg (hexToColor model.Theme.FgYellow)
+            El.text "[1..10] |> List.sum;;" |> El.fg (hexToColor model.Theme.FgDefault) |> El.bold
+            El.text "  (submit code to dismiss)" |> El.fg (hexToColor model.Theme.FgDim)
+          ] |> El.bg (hexToColor model.Theme.BgStatus)
+        ]
+      | false -> contentPane
     | false -> El.empty
 
   let editorPane =
@@ -661,6 +690,7 @@ let private keyBindings (keyMap: SageFsKeyMap) : Sub<Msg> =
   Keys.bindWithMods bindings
 
 /// Fallback subscription for printable characters not captured by keymap bindings.
+/// Also handles Ctrl+R (DC2 = '\x12') as a hard-reset shortcut.
 let private charFallback : Sub<Msg> =
   KeySub (fun (key, _mods) ->
     match key with
@@ -668,9 +698,10 @@ let private charFallback : Sub<Msg> =
       match r.IsBmp with
       | true ->
         let ch = char (r.Value)
-        match ch >= ' ' with
-        | true -> Some (InsertChar ch)
-        | false -> None
+        match ch with
+        | '\x12' -> Some (DispatchAction EditorAction.HardResetSession) // Ctrl+R
+        | c when c >= ' ' -> Some (InsertChar c)
+        | _ -> None
       | false -> None
     | _ -> None)
 

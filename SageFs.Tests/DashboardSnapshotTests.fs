@@ -331,6 +331,36 @@ let shellStructureTests = testList "shell structure (replaces browser existence 
     let tag = html.Substring(bannerStart, tagEnd - bannerStart)
     Expect.isFalse (tag.Contains("data-show")) "banner must not use data-show"
   }
+
+  // ── Minimal mode (Task 1) ──────────────────────────────────────
+  test "renderShell has expandedDashboard signal" {
+    let html = renderShell "0.0.0" |> renderNode
+    // Datastar renders signal names as kebab-case in attributes (expandedDashboard → expanded-dashboard)
+    Expect.stringContains html "expanded-dashboard" "shell has expanded-dashboard signal attribute"
+  }
+
+  test "renderMainContent has expanded-only sections" {
+    let html = renderMainContent (mkSnap "0.0.0") |> renderNode
+    Expect.stringContains html "expanded-only" "main content has expanded-only class"
+  }
+
+  test "renderMainContent has expand toggle button" {
+    let html = renderMainContent (mkSnap "0.0.0") |> renderNode
+    Expect.stringContains html "expandedDashboard = !$expandedDashboard" "has expand toggle onclick"
+  }
+
+  test "renderMainContent expand toggle button has class expand-toggle-btn" {
+    let html = renderMainContent (mkSnap "0.0.0") |> renderNode
+    Expect.stringContains html "expand-toggle-btn" "has expand-toggle-btn CSS class"
+  }
+
+  // ── SSE full-state push on connect (Task 2) ───────────────────
+  test "SSE full-state push: shell connects to stream endpoint" {
+    // createStreamHandler calls pushState() immediately on connect (initial pushState in try/catch).
+    // This test verifies the shell wires up the SSE stream that triggers the initial state push.
+    let html = renderShell "0.0.0" |> renderNode
+    Expect.stringContains html "/dashboard/stream" "shell connects to SSE stream endpoint for initial push"
+  }
 ]
 
 let standbyBadgeSseTests = testList "SSE standby badge" [

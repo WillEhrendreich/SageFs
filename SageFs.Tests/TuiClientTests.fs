@@ -98,8 +98,65 @@ let daemonRegionDataTests = testList "DaemonRegionData" [
   }
 ]
 
+let faultedHintTests = testList "faultedRecoveryHint" [
+  test "returns Some hint for Faulted state" {
+    let result = SageFs.Server.SageTuiClient.faultedRecoveryHint "Faulted"
+    Expect.isSome result "should return hint for Faulted"
+    Expect.stringContains result.Value "Ctrl+R" "hint mentions Ctrl+R"
+    Expect.stringContains result.Value "sagefs check" "hint mentions sagefs check"
+  }
+
+  test "returns Some hint for Faulted with detail text" {
+    let result = SageFs.Server.SageTuiClient.faultedRecoveryHint "Faulted: warmup failed"
+    Expect.isSome result "should match Faulted with additional detail"
+  }
+
+  test "returns None when Ready" {
+    let result = SageFs.Server.SageTuiClient.faultedRecoveryHint "Ready"
+    Expect.isNone result "no hint when session is Ready"
+  }
+
+  test "returns None when WarmingUp" {
+    let result = SageFs.Server.SageTuiClient.faultedRecoveryHint "WarmingUp"
+    Expect.isNone result "no hint when WarmingUp"
+  }
+
+  test "returns None when Evaluating" {
+    let result = SageFs.Server.SageTuiClient.faultedRecoveryHint "Evaluating"
+    Expect.isNone result "no hint when Evaluating"
+  }
+]
+
+let evangelicalHintTests = testList "shouldShowEvangelicalHint" [
+  test "shown when Ready and EvalCount is 0" {
+    Expect.isTrue (SageFs.Server.SageTuiClient.shouldShowEvangelicalHint "Ready" 0) "should show hint on first Ready with no evals"
+  }
+
+  test "not shown when EvalCount is 1" {
+    Expect.isFalse (SageFs.Server.SageTuiClient.shouldShowEvangelicalHint "Ready" 1) "hint gone after first eval"
+  }
+
+  test "not shown when EvalCount is greater than 1" {
+    Expect.isFalse (SageFs.Server.SageTuiClient.shouldShowEvangelicalHint "Ready" 5) "hint gone when many evals done"
+  }
+
+  test "not shown when WarmingUp with EvalCount 0" {
+    Expect.isFalse (SageFs.Server.SageTuiClient.shouldShowEvangelicalHint "WarmingUp" 0) "hint only shown when Ready"
+  }
+
+  test "not shown when Faulted" {
+    Expect.isFalse (SageFs.Server.SageTuiClient.shouldShowEvangelicalHint "Faulted" 0) "no hint when session is Faulted"
+  }
+
+  test "not shown when Connecting" {
+    Expect.isFalse (SageFs.Server.SageTuiClient.shouldShowEvangelicalHint "Connecting..." 0) "no hint while connecting"
+  }
+]
+
 [<Tests>]
 let allTuiClientTests = testList "TuiClient" [
   parseStateEventTests
   daemonRegionDataTests
+  faultedHintTests
+  evangelicalHintTests
 ]
