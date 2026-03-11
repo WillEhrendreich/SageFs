@@ -1,20 +1,12 @@
 module SageFs.Tests.AppStateCustomTests
 
 open Expecto
-open Expecto.Flip
 open SageFs
 open SageFs.AppState
+open SageFs.Middleware.Directives.OpenDirective
 
-// ---------------------------------------------------------------------------
-// Test-local IFeatureState types for unit tests.
-// ---------------------------------------------------------------------------
-type IntState = { Value: int } with interface IFeatureState
-type StringState = { Value: string } with interface IFeatureState
-type SetState = { Files: Set<string> } with interface IFeatureState
+let private mkFiles names = OpenedFiles.ofSet (Set.ofList names)
 
-// ---------------------------------------------------------------------------
-// Minimal AppState stub — only Custom field matters for these tests.
-// ---------------------------------------------------------------------------
 let private makeState customMap : AppState =
   {
     Solution = Unchecked.defaultof<_>
@@ -37,94 +29,77 @@ let appStateCustomTests =
 
     testCase "tryGetFeature returns None when key absent" <| fun _ ->
       let state = makeState Map.empty
-      AppStateCustom.tryGetFeature<IntState> "missing" state
-      |> Expect.isNone "absent key should be None"
+      Expect.isNone (AppStateCustom.tryGetFeature<OpenedFiles> "missing" state) "absent key should be None"
 
-    testCase "set then tryGetFeature round-trips IFeatureState value" <| fun _ ->
+    testCase "set then tryGetFeature round-trips value" <| fun _ ->
       let state = makeState Map.empty
-      let updated = AppStateCustom.set "myKey" { IntState.Value = 42 } state
-      AppStateCustom.tryGetFeature<IntState> "myKey" updated
-      |> Expect.equal "should round-trip" (Some { Value = 42 })
+      let files = mkFiles ["a.fs"; "b.fs"]
+      let updated = AppStateCustom.set "myKey" files state
+      Expect.equal (AppStateCustom.tryGetFeature<OpenedFiles> "myKey" updated) (Some files) "should round-trip"
 
-    testCase "set then tryGetFeature round-trips string-wrapped value" <| fun _ ->
+    testCase "set then tryGetFeature round-trips empty set" <| fun _ ->
       let state = makeState Map.empty
-      let updated = AppStateCustom.set "strKey" { StringState.Value = "hello" } state
-      AppStateCustom.tryGetFeature<StringState> "strKey" updated
-      |> Expect.equal "should round-trip string" (Some { Value = "hello" })
+      let updated = AppStateCustom.set "k" OpenedFiles.empty state
+      Expect.equal (AppStateCustom.tryGetFeature<OpenedFiles> "k" updated) (Some OpenedFiles.empty) "should round-trip empty"
 
-    testCase "set then tryGetFeature round-trips Set-wrapped value" <| fun _ ->
+    testCase "set then tryGetFeature round-trips multi-file set" <| fun _ ->
       let state = makeState Map.empty
-      let files = Set.ofList ["a.fs"; "b.fs"]
-      let updated = AppStateCustom.set "files" { SetState.Files = files } state
-      AppStateCustom.tryGetFeature<SetState> "files" updated
-      |> Option.map (fun s -> s.Files)
-      |> Expect.equal "should round-trip set" (Some files)
+      let files = mkFiles ["a.fs"; "b.fs"; "c.fs"]
+      let updated = AppStateCustom.set "files" files state
+      let result = AppStateCustom.tryGetFeature<OpenedFiles> "files" updated |> Option.map (fun s -> s.Files)
+      Expect.equal result (Some (Set.ofList ["a.fs"; "b.fs"; "c.fs"])) "should round-trip set"
 
     testCase "set overwrites previous value" <| fun _ ->
       let state = makeState Map.empty
-      let s1 = AppStateCustom.set "k" { IntState.Value = 1 } state
-      let s2 = AppStateCustom.set "k" { IntState.Value = 2 } s1
-      AppStateCustom.tryGetFeature<IntState> "k" s2
-      |> Expect.equal "should be updated value" (Some { Value = 2 })
+      let s1 = AppStateCustom.set "k" (mkFiles ["old.fs"]) state
+      let s2 = AppStateCustom.set "k" (mkFiles ["new.fs"]) s1
+      let result = AppStateCustom.tryGetFeature<OpenedFiles> "k" s2 |> Option.map (fun s -> s.Files)
+      Expect.equal result (Some (Set.singleton "new.fs")) "should be updated value"
 
     testCase "remove eliminates key" <| fun _ ->
       let state = makeState Map.empty
-      let s1 = AppStateCustom.set "k" { StringState.Value = "v" } state
+      let s1 = AppStateCustom.set "k" (mkFiles ["x.fs"]) state
       let s2 = AppStateCustom.remove "k" s1
-      AppStateCustom.tryGetFeature<StringState> "k" s2
-      |> Expect.isNone "removed key should be absent"
+      Expect.isNone (AppStateCustom.tryGetFeature<OpenedFiles> "k" s2) "removed key should be absent"
 
     testCase "remove on absent key is a no-op" <| fun _ ->
       let state = makeState Map.empty
       let s2 = AppStateCustom.remove "nonexistent" state
-      s2.Custom
-      |> Expect.equal "map should be unchanged" Map.empty
+      Expect.equal s2.Custom (Map.empty<string, obj>) "map should be unchanged"
 
     testCase "multiple keys coexist" <| fun _ ->
       let state = makeState Map.empty
       let s =
         state
-        |> AppStateCustom.set "age" { IntState.Value = 42 }
-        |> AppStateCustom.set "name" { StringState.Value = "alice" }
-      AppStateCustom.tryGetFeature<IntState> "age" s
-      |> Expect.equal "age should be 42" (Some { Value = 42 })
-      AppStateCustom.tryGetFeature<StringState> "name" s
-      |> Expect.equal "name should be alice" (Some { Value = "alice" })
+        |> AppStateCustom.set "sources" (mkFiles ["a.fs"])
+        |> AppStateCustom.set "tests" (mkFiles ["b.fs"])
+      let srcResult = AppStateCustom.tryGetFeature<OpenedFiles> "sources" s |> Option.map (fun s -> s.Files)
+      let tstResult = AppStateCustom.tryGetFeature<OpenedFiles> "tests" s |> Option.map (fun s -> s.Files)
+      Expect.equal srcResult (Some (Set.singleton "a.fs")) "sources key preserved"
+      Expect.equal tstResult (Some (Set.singleton "b.fs")) "tests key preserved"
 
     testCase "set preserves other keys" <| fun _ ->
       let state = makeState Map.empty
-      let s1 = AppStateCustom.set "a" { IntState.Value = 1 } state
-      let s2 = AppStateCustom.set "b" { IntState.Value = 2 } s1
-      AppStateCustom.tryGetFeature<IntState> "a" s2
-      |> Expect.equal "key a should be preserved" (Some { Value = 1 })
+      let s1 = AppStateCustom.set "a" (mkFiles ["a.fs"]) state
+      let s2 = AppStateCustom.set "b" (mkFiles ["b.fs"]) s1
+      let result = AppStateCustom.tryGetFeature<OpenedFiles> "a" s2 |> Option.map (fun s -> s.Files)
+      Expect.equal result (Some (Set.singleton "a.fs")) "key a should be preserved"
 
     testCase "openedFiles key constant matches contract doc" <| fun _ ->
-      SageFs.Middleware.Directives.OpenDirective.openedFileKey
-      |> Expect.equal "key must match contract" "openedFiles"
+      Expect.equal openedFileKey "openedFiles" "key must match contract"
 
-    testCase "set accepts any typed value including feature records" <| fun _ ->
-      // AppStateCustom.set stores any value as obj — typed retrieval uses dynamic cast.
-      // This test verifies that a feature record round-trips via tryGetFeature.
+    testCase "feature record round-trips via tryGetFeature" <| fun _ ->
       let state = makeState Map.empty
-      let files = SageFs.Middleware.Directives.OpenDirective.OpenedFiles.ofSet (Set.ofList ["a.fs"])
-      let updated = AppStateCustom.set SageFs.Middleware.Directives.OpenDirective.openedFileKey files state
-      AppStateCustom.tryGetFeature<SageFs.Middleware.Directives.OpenDirective.OpenedFiles>
-        SageFs.Middleware.Directives.OpenDirective.openedFileKey updated
-      |> Option.map (fun s -> s.Files)
-      |> Expect.equal "IFeatureState round-trips via typed accessor" (Some (Set.ofList ["a.fs"]))
-
-    testCase "tryGetFeature returns None for absent key" <| fun _ ->
-      let state = makeState Map.empty
-      AppStateCustom.tryGetFeature<SageFs.Middleware.Directives.OpenDirective.OpenedFiles>
-        "missing" state
-      |> Expect.isNone "absent key returns None"
+      let files = mkFiles ["a.fs"]
+      let updated = AppStateCustom.set openedFileKey files state
+      let result = AppStateCustom.tryGetFeature<OpenedFiles> openedFileKey updated |> Option.map (fun s -> s.Files)
+      Expect.equal result (Some (Set.singleton "a.fs")) "round-trips via typed accessor"
 
     testCase "tryGetFeature returns None for wrong type" <| fun _ ->
       let state = makeState Map.empty
-      let files = SageFs.Middleware.Directives.OpenDirective.OpenedFiles.ofSet Set.empty
-      let updated = AppStateCustom.set SageFs.Middleware.Directives.OpenDirective.openedFileKey files state
-      // Try to read with wrong feature type — must return None, not throw
-      AppStateCustom.tryGetFeature<SageFs.Middleware.HotReloading.State>
-        SageFs.Middleware.Directives.OpenDirective.openedFileKey updated
-      |> Expect.isNone "wrong type returns None"
+      let files = mkFiles []
+      let updated = AppStateCustom.set openedFileKey files state
+      Expect.isNone
+        (AppStateCustom.tryGetFeature<SageFs.Middleware.HotReloading.State> openedFileKey updated)
+        "wrong type returns None"
   ]
