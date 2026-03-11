@@ -61,6 +61,7 @@ let run (daemonInfo: DaemonInfo) = task {
   // Eval watchdog: tracks whether the daemon was evaluating when SSE disconnected.
   // If so, the reconnecting message is enhanced to mention the interrupted eval.
   let mutable evalInterruptedOnDisconnect = false
+  let mutable lastEvalStartTime : DateTime option = None
   let mutable layoutConfig = LayoutConfig.defaults
   let mutable currentTheme =
     match ThemePresets.tryFind "Kanagawa" with
@@ -104,11 +105,25 @@ let run (daemonInfo: DaemonInfo) = task {
           let liveTesting = match lastLiveTestingStatus.Length > 0 with | true -> sprintf " | %s" lastLiveTestingStatus | false -> ""
           let ttPart = match ttStatus with | Some s -> sprintf " | %s" s | None -> ""
           let failNav = match failingNavHint.Length > 0 with | true -> sprintf " | %s" failingNavHint | false -> ""
+          let stateIcon, stateLabel =
+            match lastSessionState with
+            | "Ready" -> "⬤", "Ready"
+            | s when s.StartsWith("Evaluating") ->
+              let elapsed =
+                match lastEvalStartTime with
+                | Some t -> sprintf " (%dms)" (int (DateTime.UtcNow - t).TotalMilliseconds)
+                | None -> ""
+              "⟳", sprintf "Evaluating%s" elapsed
+            | "WarmingUp" -> "⟳", "WarmingUp"
+            | s when s.StartsWith("Faulted") -> "✗", "FAULTED — ^R restart"
+            | "Uninitialized" | "Connecting..." -> "·", lastSessionState
+            | _ -> "⟳", lastSessionState
+          let stateStr = sprintf "%s %s" stateIcon stateLabel
           match lastEvalCount > 0 with
           | true ->
-            sprintf " %s %s | evals: %d (avg %.0fms)%s%s%s%s | %s" sid lastSessionState lastEvalCount lastAvgMs standby liveTesting ttPart failNav (PaneId.displayName focusedPane)
+            sprintf " %s %s | evals: %d (avg %.0fms)%s%s%s%s | %s" sid stateStr lastEvalCount lastAvgMs standby liveTesting ttPart failNav (PaneId.displayName focusedPane)
           | false ->
-            sprintf " %s %s | evals: %d%s%s%s%s | %s" sid lastSessionState lastEvalCount standby liveTesting ttPart failNav (PaneId.displayName focusedPane)
+            sprintf " %s %s | evals: %d%s%s%s%s | %s" sid stateStr lastEvalCount standby liveTesting ttPart failNav (PaneId.displayName focusedPane)
         let statusRight = sprintf " %s | %.1fms |%s" currentThemeName lastFrameMs (StatusHints.build keyMap focusedPane layoutConfig.VisiblePanes lastWatchedCount lastDensity)
 
         // When viewing history, use historical regions; otherwise use live
@@ -121,7 +136,13 @@ let run (daemonInfo: DaemonInfo) = task {
             | None -> lastRegions
 
         let drawSw = System.Diagnostics.Stopwatch.StartNew()
-        let cursorPos = Screen.drawWith layoutConfig currentTheme grid displayRegions focusedPane scrollOffsets statusLeft statusRight
+        let statusTheme =
+          match lastSessionState with
+          | s when s.StartsWith("Faulted") -> { currentTheme with BgStatus = "#4a1515" }
+          | s when s.StartsWith("Evaluating") -> { currentTheme with BgStatus = "#2d2000" }
+          | "WarmingUp" -> { currentTheme with BgStatus = "#002430" }
+          | _ -> currentTheme
+        let cursorPos = Screen.drawWith layoutConfig statusTheme grid displayRegions focusedPane scrollOffsets statusLeft statusRight
         drawSw.Stop()
         Instrumentation.renderScreenDrawMs.Record(drawSw.Elapsed.TotalMilliseconds)
 
@@ -158,6 +179,17 @@ let run (daemonInfo: DaemonInfo) = task {
 
   // Initial render
   render ()
+
+  // Periodic refresh while evaluating — keeps the elapsed-ms counter live
+  let _evalTimerLoop =
+    System.Threading.Tasks.Task.Run(fun () ->
+      task {
+        while not cts.IsCancellationRequested do
+          try do! System.Threading.Tasks.Task.Delay(100, cts.Token) with _ -> ()
+          match not cts.IsCancellationRequested && lastSessionState.StartsWith("Evaluating") with
+          | true -> render ()
+          | false -> ()
+      } :> System.Threading.Tasks.Task)
 
   let navigateFailingTests (delta: int) =
     let failing =
@@ -210,6 +242,12 @@ let run (daemonInfo: DaemonInfo) = task {
         | false -> ()
         lastSessionId <- event.SessionId
         lastSessionState <- event.SessionState
+        match event.SessionState with
+        | s when s.StartsWith("Evaluating") ->
+          match lastEvalStartTime with
+          | None -> lastEvalStartTime <- Some DateTime.UtcNow
+          | Some _ -> ()
+        | _ -> lastEvalStartTime <- None
         lastEvalCount <- event.EvalCount
         lastAvgMs <- event.AvgMs
         lastStandbyLabel <- event.StandbyLabel
@@ -230,6 +268,7 @@ let run (daemonInfo: DaemonInfo) = task {
         match wasEvaluating with
         | true ->
           evalInterruptedOnDisconnect <- true
+          lastEvalStartTime <- None
           lastSessionState <- "⚠ Eval interrupted — daemon disconnected (reconnecting...)"
         | false ->
           lastSessionState <- sprintf "%s (reconnecting...)" lastSessionState
