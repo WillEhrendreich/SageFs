@@ -173,6 +173,7 @@
         <Compile Include="CellGridMonoidTests.fs" />
         <Compile Include="MealyEquivalenceTests.fs" />
         <Compile Include="EvalPipelineTests.fs" />
+        <Compile Include="EvalHeartbeatTests.fs" />
         <Compile Include="RingBufferTests.fs" />
         <Compile Include="ModelSnapshotTests.fs" />
         <Compile Include="TimeTravelTests.fs" />

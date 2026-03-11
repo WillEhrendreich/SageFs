@@ -125,6 +125,30 @@ let clearEvalInProgress (_editor: TextEditor) : unit =
   evalInProgressDecorations |> Map.iter (fun _ deco -> deco.dispose () |> ignore)
   evalInProgressDecorations <- Map.empty
 
+/// Update the "⏳ evaluating…" decoration with elapsed time.
+/// Replaces the existing in-progress decoration so the elapsed time ticks visibly.
+let updateEvalInProgressElapsed (editor: TextEditor) (line: int) (elapsedMs: int64) : unit =
+  match Map.tryFind line evalInProgressDecorations with
+  | None -> ()
+  | Some existing ->
+    existing.dispose () |> ignore
+    evalInProgressDecorations <- Map.remove line evalInProgressDecorations
+    let secs = float elapsedMs / 1000.0
+    let label = sprintf "  // ⏳ evaluating… %.1fs" secs
+    let opts = createObj [
+      "after" ==> createObj [
+        "contentText" ==> label
+        "color" ==> newThemeColor "sagefs.staleForeground"
+        "fontStyle" ==> "italic"
+      ]
+    ]
+    let deco = Window.createTextEditorDecorationType opts
+    let lineText = editor.document.lineAt(float line).text
+    let endCol = lineText.Length
+    let range = newRange line endCol line endCol
+    editor.setDecorations(deco, ResizeArray [| box range |])
+    evalInProgressDecorations <- Map.add line deco evalInProgressDecorations
+
 let markDecorationsStale (editor: TextEditor) =
   let lines = blockDecorations |> Map.toList |> List.map fst
   for line in lines do

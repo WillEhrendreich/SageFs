@@ -980,22 +980,42 @@ let mapExecutionRoutes (app: WebApplication) (rctx: RouteContext) =
         | true, prop -> Some (prop.GetInt32())
         | false, _ -> None
       // Notify editor plugins that eval is starting so they can mark decorations stale
-      match filePath, blockStartLine with
-      | Some fp, Some bsl when not (System.String.IsNullOrEmpty(fp)) ->
-        let sid = SseContext.activeSessionId rctx.SseContext
-        let startedStr = SageFs.SseWriter.formatEvalStartedEvent rctx.SseContext.SseJsonOpts sid fp bsl
-        rctx.SseContext.TestEventBroadcast.Trigger(startedStr)
-        // Remember for bindings_snapshot stamping
-        rctx.LastEvalContext.Value <- Some (fp, bsl)
-      | _ -> ()
+      let sid = SseContext.activeSessionId rctx.SseContext
+      let evalFp, evalBsl =
+        match filePath, blockStartLine with
+        | Some fp, Some bsl when not (System.String.IsNullOrEmpty(fp)) ->
+          let startedStr = SageFs.SseWriter.formatEvalStartedEvent rctx.SseContext.SseJsonOpts sid fp bsl
+          rctx.SseContext.TestEventBroadcast.Trigger(startedStr)
+          // Remember for bindings_snapshot stamping
+          rctx.LastEvalContext.Value <- Some (fp, bsl)
+          Some fp, Some bsl
+        | _ -> None, None
       let sw = System.Diagnostics.Stopwatch.StartNew()
+      // Heartbeat timer — independent thread so it survives if eval thread is slow.
+      // Reads elapsed time via Stopwatch (thread-safe for reads) and fires every 500ms.
+      use heartbeatCts = new System.Threading.CancellationTokenSource()
+      let heartbeatTask : System.Threading.Tasks.Task =
+        System.Threading.Tasks.Task.Run(System.Func<System.Threading.Tasks.Task>(fun () ->
+          task {
+            let token = heartbeatCts.Token
+            try
+              while not token.IsCancellationRequested do
+                do! System.Threading.Tasks.Task.Delay(500, token)
+                if not token.IsCancellationRequested then
+                  let fp = evalFp |> Option.defaultValue ""
+                  let bsl = evalBsl |> Option.defaultValue 0
+                  let hbStr = SageFs.SseWriter.formatEvalHeartbeatEvent rctx.SseContext.SseJsonOpts sid fp bsl sw.ElapsedMilliseconds
+                  rctx.SseContext.TestEventBroadcast.Trigger(hbStr)
+            with :? System.OperationCanceledException -> ()
+          } :> System.Threading.Tasks.Task))
       let! result = SageFs.McpTools.sendFSharpCode rctx.McpContext "cli-integrated" code SageFs.McpTools.OutputFormat.Text None wd filePath evalMode blockStartLine
       sw.Stop()
+      heartbeatCts.Cancel()
+      let! _ = heartbeatTask
       rctx.FeaturePushState.Value <- SageFs.Features.FeatureHooks.recordEval code result sw.ElapsedMilliseconds rctx.FeaturePushState.Value
       // Emit eval_result SSE for inline decorations in editor plugins
-      match filePath, blockStartLine with
-      | Some fp, Some bsl when not (System.String.IsNullOrEmpty(fp)) ->
-        let sid = SseContext.activeSessionId rctx.SseContext
+      match evalFp, evalBsl with
+      | Some fp, Some bsl ->
         let sseStr = SageFs.SseWriter.formatEvalResultEvent rctx.SseContext.SseJsonOpts sid fp bsl result true (sw.ElapsedMilliseconds |> float)
         rctx.SseContext.TestEventBroadcast.Trigger(sseStr)
       | _ -> ()

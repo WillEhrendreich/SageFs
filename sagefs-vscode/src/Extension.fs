@@ -2058,6 +2058,12 @@ let activate (context: ExtensionContext) =
         |> Option.iter (fun ed ->
           InlineDeco.markDecorationsStale ed
           InlineDeco.showEvalInProgress ed line)
+      OnEvalHeartbeat = fun filePath blockStartLine elapsedMs ->
+        let line = blockStartLine - 1
+        Window.getVisibleTextEditors ()
+        |> Array.tryFind (fun ed -> ed.document.fileName = filePath)
+        |> Option.iter (fun ed ->
+          InlineDeco.updateEvalInProgressElapsed ed line elapsedMs)
       OnSourceLocationsUpdate = fun locations ->
         adapter.UpdateSourceLocations locations
       OnFileAnnotations = fun data ->

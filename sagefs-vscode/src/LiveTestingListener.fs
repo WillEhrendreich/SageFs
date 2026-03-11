@@ -171,6 +171,7 @@ type LiveTestingCallbacks = {
   OnFeatureEvent: FeatureCallbacks option
   OnEvalResult: string -> int -> string -> float -> unit
   OnEvalStarted: string -> int -> unit
+  OnEvalHeartbeat: string -> int -> int64 -> unit
   OnSourceLocationsUpdate: obj array -> unit
   OnFileAnnotations: obj -> unit
   OnFailureNarratives: VscFailureNarrative array -> unit
@@ -306,6 +307,11 @@ let start (port: int) (callbacks: LiveTestingCallbacks) (onReconnect: (unit -> u
         match filePath with
         | "" -> ()
         | fp -> callbacks.OnEvalStarted fp bsl
+      | "eval_heartbeat" ->
+        let filePath = fieldString "FilePath" data |> Option.defaultValue ""
+        let bsl = fieldInt "BlockStartLine" data |> Option.defaultValue 0
+        let elapsedMs = fieldFloat "ElapsedMs" data |> Option.map int64 |> Option.defaultValue 0L
+        callbacks.OnEvalHeartbeat filePath bsl elapsedMs
       | "eval_result" ->
         let filePath = fieldString "filePath" data |> Option.defaultValue ""
         let bsl = fieldInt "blockStartLine" data |> Option.defaultValue 0

@@ -259,6 +259,18 @@ let formatEvalStartedEvent (opts: JsonSerializerOptions) (sessionId: string opti
     |> injectSessionId sessionId
   formatSseEvent "eval_started" json
 
+/// Format an eval heartbeat as an SSE event.
+/// Emitted every ~500ms by an independent timer while an eval is running.
+/// Lets editors show elapsed time and confirm the SSE connection is alive.
+let formatEvalHeartbeatEvent (opts: JsonSerializerOptions) (sessionId: string option) (filePath: string) (blockStartLine: int) (elapsedMs: int64) : string =
+  let json =
+    JsonSerializer.Serialize(
+      {| FilePath = filePath
+         BlockStartLine = blockStartLine
+         ElapsedMs = elapsedMs |}, opts)
+    |> injectSessionId sessionId
+  formatSseEvent "eval_heartbeat" json
+
 /// Format an eval result as an SSE event for inline decorations.
 /// Emitted after each /exec call with filePath, blockStartLine, and durationMs populated.
 let formatEvalResultEvent (opts: JsonSerializerOptions) (sessionId: string option) (filePath: string) (blockStartLine: int) (output: string) (success: bool) (durationMs: float) : string =
@@ -368,6 +380,7 @@ let allSseEventTypes : string list = [
   "test_trace"
   "eval_diff"
   "eval_started"
+  "eval_heartbeat"
   "eval_result"
   "cell_dependencies"
   "binding_scope_map"
