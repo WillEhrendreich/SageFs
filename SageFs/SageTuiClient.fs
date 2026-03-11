@@ -397,7 +397,7 @@ let update (msg: Msg) (model: Model) : Model * Cmd<Msg> =
 
   | MouseScroll up ->
     let cur = model.ScrollOffsets |> Map.tryFind model.FocusedPane |> Option.defaultValue 0
-    let newOff = match up with | true -> cur + 3 | false -> max 0 (cur - 3)
+    let newOff = match up with | true -> max 0 (cur - 3) | false -> cur + 3
     { model with ScrollOffsets = model.ScrollOffsets |> Map.add model.FocusedPane newOff }, Cmd.none
 
   | HttpPost (path, body) ->
@@ -463,7 +463,7 @@ let private renderContentPane
   let titleSuffix = match isFocused with | true -> " ●" | false -> ""
   content
   |> El.fill
-  |> El.borderedWithTitle (sprintf "%s%s" title titleSuffix) Rounded
+  |> El.borderedWithTitle (sprintf "%s%s" title titleSuffix) Light
   |> El.fg borderColor
 
 /// Render the status bar.
@@ -519,7 +519,7 @@ let view (model: Model) : Element =
     let connIcon = match model.Connected with | true -> "●" | false -> "○"
     let connColor = match model.Connected with | true -> hexToColor model.Theme.ColorPass | false -> hexToColor model.Theme.ColorFail
     El.row [
-      El.text " ⚡ SageFs " |> El.fg (hexToColor model.Theme.FgYellow) |> El.bold
+      El.text " >> SageFs " |> El.fg (hexToColor model.Theme.FgYellow) |> El.bold
       El.text connIcon |> El.fg connColor
       El.text "" |> El.fill
       El.text " q:quit Tab:focus ^↑↓:scroll " |> El.fg (hexToColor model.Theme.FgDim)
@@ -535,7 +535,7 @@ let view (model: Model) : Element =
         El.column [
           contentPane |> El.fill
           El.row [
-            El.text " ✨ Ready! Try: " |> El.fg (hexToColor model.Theme.FgYellow)
+            El.text " ** Ready! Try: " |> El.fg (hexToColor model.Theme.FgYellow)
             El.text "[1..10] |> List.sum;;" |> El.fg (hexToColor model.Theme.FgDefault) |> El.bold
             El.text "  (submit code to dismiss)" |> El.fg (hexToColor model.Theme.FgDim)
           ] |> El.bg (hexToColor model.Theme.BgStatus)
@@ -584,12 +584,12 @@ let view (model: Model) : Element =
     ] |> El.fill
 
   El.column [
-    titleBar
+    titleBar |> El.height 1
     El.row [
       leftCol
       rightCol
     ] |> El.fill
-    renderStatusBar model
+    renderStatusBar model |> El.height 1
   ]
 
 // ── Subscriptions ──
