@@ -81,6 +81,10 @@ module ElmLoop =
     let queue = ConcurrentQueue<'Msg>()
     // Signal for the dedicated drain thread — Set() wakes it, Wait() sleeps it
     let signal = new ManualResetEventSlim(false)
+    // Bounds concurrent in-flight effects. Prevents exponential effect-cascade OOM:
+    // each effect that dispatches messages can produce more effects; without a cap,
+    // 1 file change → 10 effects → 100 msgs → 1000 effects → ...
+    let effectSemaphore = new System.Threading.SemaphoreSlim(64, 64)
 
     /// Drain all queued messages, render once, push once.
     /// Runs exclusively on the dedicated drain thread.
@@ -99,8 +103,11 @@ module ElmLoop =
           | false -> ()
           let updateSw = Stopwatch.StartNew()
           let prev = model
-          let mutable effs = []
+          // ResizeArray avoids the O(n²) `msgEffs @ effs` left-fold: with 200 msgs × 10 effects
+          // each, list concat allocates quadratically. AddRange is O(k) per message.
+          let effsAcc = ResizeArray<_>()
           let mutable count = 0
+          let mutable queueAlarmFired = false   // fire at most once per drain batch
           let mutable item = Unchecked.defaultof<'Msg>
           let msgCounts = System.Collections.Generic.Dictionary<string, int>()
           while queue.TryDequeue(&item) do
@@ -114,15 +121,29 @@ module ElmLoop =
             try
               let m, msgEffs = program.Update item model
               model <- m
-              effs <- msgEffs @ effs
+              for eff in msgEffs do effsAcc.Add(eff)
             with ex ->
               Instrumentation.elmloopErrors.Add(1L, kvp "phase" "update")
               Log.error "[ElmLoop] Update threw for %s: %s\n%s" typeName ex.Message (if isNull ex.StackTrace then "" else ex.StackTrace)
               try program.OnSystemAlarm "update" ex.Message with _ -> ()
             perMsgSw.Stop()
             Instrumentation.elmloopUpdateMs.Record(perMsgSw.Elapsed.TotalMilliseconds, kvp "msg_type" typeName)
+            // Queue depth high-watermark check (fires once per drain batch to avoid log spam).
+            // queue.Count reflects messages that arrived while we processed this message —
+            // which is exactly the effect-cascade scenario we want to surface.
+            match queueAlarmFired with
+            | true -> ()
+            | false ->
+              let qDepth = queue.Count
+              match qDepth > 256 with
+              | false -> ()
+              | true ->
+                queueAlarmFired <- true
+                Instrumentation.elmloopErrors.Add(1L, kvp "phase" "queue_depth")
+                Log.warn "[ElmLoop] QUEUE HIGH-WATERMARK: depth=%d (>256). Possible effect-cascade storm — check for runaway effect→msg→effect loops." qDepth
+                try program.OnSystemAlarm "queue_depth" (sprintf "queue depth %d exceeded high-watermark 256" qDepth) with _ -> ()
           updateSw.Stop()
-          prev, model, List.rev effs, count, updateSw.Elapsed.TotalMilliseconds,
+          prev, model, Seq.toList effsAcc, count, updateSw.Elapsed.TotalMilliseconds,
           msgCounts |> Seq.map (fun kv -> sprintf "%s×%d" kv.Key kv.Value) |> String.concat ",")
 
       match batchCount with
@@ -183,22 +204,31 @@ module ElmLoop =
         parentCtx.TraceId.ToString() <> "00000000000000000000000000000000"
       for effect in allEffects do
         Async.Start (async {
-          let effectActivity =
-            match hasParent with
-            | true ->
-              Instrumentation.elmloopSource.StartActivity(
-                "elm.effect",
-                ActivityKind.Internal,
-                parentCtx)
-            | false -> null
+          // Outer catch: OperationCanceledException from WaitAsync when CT fires.
+          // If WaitAsync throws, semaphore was never acquired — no Release needed.
           try
-            do! program.ExecuteEffect (fun msg -> queue.Enqueue msg; signal.Set()) effect
-            Instrumentation.succeedSpan effectActivity
-          with ex ->
-            Instrumentation.elmloopErrors.Add(1L, kvp "phase" "effect")
-            Log.error "[ElmLoop] Effect threw: %s\n%s" ex.Message (if isNull ex.StackTrace then "" else ex.StackTrace)
-            try program.OnSystemAlarm "effect" ex.Message with _ -> ()
-            Instrumentation.failSpan effectActivity ex.Message
+            do! effectSemaphore.WaitAsync(ct) |> Async.AwaitTask
+            // Inner try/finally: semaphore is now acquired; Release on every exit path.
+            try
+              let effectActivity =
+                match hasParent with
+                | true ->
+                  Instrumentation.elmloopSource.StartActivity(
+                    "elm.effect",
+                    ActivityKind.Internal,
+                    parentCtx)
+                | false -> null
+              try
+                do! program.ExecuteEffect (fun msg -> queue.Enqueue msg; signal.Set()) effect
+                Instrumentation.succeedSpan effectActivity
+              with ex ->
+                Instrumentation.elmloopErrors.Add(1L, kvp "phase" "effect")
+                Log.error "[ElmLoop] Effect threw: %s\n%s" ex.Message (if isNull ex.StackTrace then "" else ex.StackTrace)
+                try program.OnSystemAlarm "effect" ex.Message with _ -> ()
+                Instrumentation.failSpan effectActivity ex.Message
+            finally
+              effectSemaphore.Release() |> ignore
+          with :? System.OperationCanceledException -> ()
         }, ct)
 
       batchSw.Stop()

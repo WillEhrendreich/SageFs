@@ -354,3 +354,96 @@ let elmLoopAlarmTests =
       rt.GetModel() |> Expect.equal "model updated after alarm" 1
       (effCount.Value, 0) |> Expect.isGreaterThan "effect ran after alarm"
   ]
+
+// ---------------------------------------------------------------------------
+// 5. Backpressure — queue depth alarm and bounded effect concurrency
+// ---------------------------------------------------------------------------
+
+[<Tests>]
+let elmLoopBackpressureTests =
+  // Decision: ElmLoop must not silently OOM under effect-cascade storms.
+  //   Two defences: (1) queue-depth high-watermark alarm via OnSystemAlarm,
+  //   (2) SemaphoreSlim cap on concurrent in-flight effects.
+  // Assumes (2026-01): 256 is the queue-depth high-watermark; 64 is max concurrent effects.
+  // Danger: Raising these caps without benchmarking first.
+  testList "ElmLoop backpressure" [
+
+    testCase "queue depth high-watermark alarm fires when >256 msgs pile up" <| fun _ ->
+      // Strategy: block the drain thread inside Update while it holds the model lock,
+      // enqueue 300 more messages (ConcurrentQueue.Enqueue needs no lock), then release.
+      // After Update returns, the drain checks queue.Count inside the while-TryDequeue loop
+      // and fires OnSystemAlarm "queue_depth" once the threshold is exceeded.
+      let alarms = ConcurrentBag<string * string>()
+      let drainStarted = new System.Threading.SemaphoreSlim(0, 1)
+      let releaseGate = new System.Threading.ManualResetEventSlim(false)
+      let processed = ConcurrentBag<unit>()
+      let prog : ElmProgram<int, int, int, int> = {
+        Update = fun _msg model ->
+          match model with
+          | 0 ->
+            drainStarted.Release() |> ignore    // signal: drain is now inside Update
+            releaseGate.Wait()                  // block drain (model lock held) while test fills queue
+          | _ -> ()
+          processed.Add(())
+          model + 1, []
+        Render = fun m -> [m]
+        ExecuteEffect = fun _ _ -> async { () }
+        OnModelChanged = fun _ _ -> ()
+        OnSystemAlarm = fun phase msg -> alarms.Add(phase, msg)
+      }
+      use cts = new System.Threading.CancellationTokenSource()
+      let rt = ElmLoop.start prog 0 cts.Token
+
+      rt.Dispatch 1                              // wake drain; model=0 hits gate
+      drainStarted.Wait(2000) |> ignore          // drain is now inside Update holding lock
+      for _ in 1..300 do rt.Dispatch 1          // 300 msgs pile into ConcurrentQueue
+      System.Threading.Thread.Sleep(50)          // let all enqueues settle
+      releaseGate.Set()                          // unblock drain
+
+      waitFor (fun () -> processed.Count >= 301) 15000 |> ignore
+
+      alarms |> Seq.exists (fun (p, _) -> p = "queue_depth")
+      |> Expect.isTrue
+           "queue_depth alarm must fire when >256 msgs are pending (see ElmLoop.fs — high-watermark check inside while-TryDequeue loop)"
+
+      cts.Cancel()
+
+    testCase "effect concurrency bounded: at most 64 effects run simultaneously" <| fun _ ->
+      // 20 msgs × 5 effects = 100 potential concurrent in-flight effects.
+      // Without a SemaphoreSlim cap, all 100 Async.Start immediately; Async.Sleep(50) keeps
+      // them all in-flight simultaneously so maxConcurrent ≈ 100.
+      // With SemaphoreSlim(64), at most 64 can hold the semaphore at once → maxConcurrent ≤ 64.
+      let currentConcurrent = ref 0
+      let maxConcurrent = ref 0
+      let effectsCompleted = ref 0
+      let counterLock = obj ()
+      let prog : ElmProgram<int, int, int, int> = {
+        Update = fun _msg model -> model + 1, List.replicate 5 1
+        Render = fun m -> [m]
+        ExecuteEffect = fun _ _ ->
+          async {
+            lock counterLock (fun () ->
+              currentConcurrent := !currentConcurrent + 1
+              match !currentConcurrent > !maxConcurrent with
+              | true -> maxConcurrent := !currentConcurrent
+              | false -> ())
+            do! Async.Sleep 50
+            lock counterLock (fun () ->
+              currentConcurrent := !currentConcurrent - 1
+              effectsCompleted := !effectsCompleted + 1)
+          }
+        OnModelChanged = fun _ _ -> ()
+        OnSystemAlarm = fun _ _ -> ()
+      }
+      use cts = new System.Threading.CancellationTokenSource()
+      let rt = ElmLoop.start prog 0 cts.Token
+
+      for _ in 1..20 do rt.Dispatch 1           // 100 potential concurrent effects
+      waitFor (fun () -> !effectsCompleted >= 100) 15000 |> ignore
+
+      (!maxConcurrent <= 64)
+      |> Expect.isTrue
+           "max concurrent effects must be ≤64 — unbounded Async.Start allows all 100 to run at once (see ElmLoop.fs SemaphoreSlim cap)"
+
+      cts.Cancel()
+  ]
