@@ -2173,9 +2173,6 @@ module McpTools =
       | Some getModel, Some dispatch ->
       let model = getModel ()
       let state = model.LiveTesting.TestState
-      match state.Activation = Features.LiveTesting.LiveTestingActivation.Inactive with
-      | true -> return RunTestsResult.format Disabled
-      | false ->
       // Guard: prevent overlapping test runs (MCP retry can trigger double dispatch)
       match Features.LiveTesting.TestRunPhase.isAnyRunning state.RunPhases with
       | true -> return RunTestsResult.format AlreadyRunning

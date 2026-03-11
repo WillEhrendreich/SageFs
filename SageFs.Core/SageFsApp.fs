@@ -711,7 +711,7 @@ module SageFsUpdate =
             sessionIds |> Array.fold (fun m sid -> Map.add sid phase m) s.RunPhases
           { s with LastGeneration = gen; AffectedTests = Set.ofArray testIds; RunPhases = phases })
         let effects =
-          match Array.isEmpty tests || lt.TestState.Activation = Features.LiveTesting.LiveTestingActivation.Inactive with
+          match Array.isEmpty tests with
           | true -> []
           | false ->
             let sessionMap = lt.TestState.TestSessionMap
