@@ -138,19 +138,32 @@ OUTPUT FORMAT: Each event shows timestamp, event type (Eval, Error, Load, Reset)
         getRecentEvents ctx "mcp" eventCount wd |> withEcho "get_recent_fsi_events"
     
     [<McpServerTool>]
-    [<Description("""Get the current FSI session status: startup configuration, loaded projects, session statistics, and available capabilities. Use to verify session health or discover what is loaded.
+    [<Description("""Get the current FSI session status: live worker readiness, loaded projects, session statistics, and active affordances. Use this to verify whether you can route new work to a session right now.
+
+WHAT THIS TOOL REPRESENTS:
+- This reports the FSI worker session state, NOT the live-testing subsystem state.
+- Session registry states like Starting / Restarting collapse to 'WarmingUp' here.
+- Worker status 'Building (...)' collapses to 'Evaluating' here because the worker is alive but busy.
 
 WHEN TO USE:
-- First thing to call when setting up a new session — confirms what projects are loaded and what features are enabled.
-- After hard_reset_fsi_session with rebuild=true, poll this until Status shows 'Ready' (the reset is async, typically 10-60s).
+- First thing to call when setting up a new session — confirms what projects are loaded and what capabilities are active.
+- After hard_reset_fsi_session with rebuild=true, re-check this until it reports State='Ready'. During the restart window it may instead return an error saying the session is still warming up — that is normal.
 - When you get unexpected 'type not defined' errors — check that the expected project is loaded and the session is warmed up.
 - To discover the active session ID needed for routing commands when multiple sessions exist.
 
-KEY FIELDS IN OUTPUT:
-- Status: Ready | Evaluating | Building — ONLY submit code when status is 'Ready'. If 'Evaluating', a previous send_fsharp_code is still running (use cancel_eval if stuck). If 'Building', a hard_reset rebuild is in progress.
-- LoadedProjects: list of .fsproj files loaded into this session — if empty, no project is loaded and only BCL types are available.
-- Affordances: which MCP tools are active for this session (e.g., live testing affordances are absent in sessions without test projects).
-- SessionId: the stable ID for this session. Pass to switch_session if auto-routing is selecting the wrong session.""")>]
+KEY SIGNALS IN OUTPUT:
+- State: WarmingUp | Ready | Evaluating | Faulted.
+  - WarmingUp = session exists but the worker proxy is not routable yet.
+  - Ready = safe to submit code.
+  - Evaluating = worker is alive but busy (this also covers worker-side 'Building (...)' states).
+  - Faulted = investigate warmup/runtime errors before proceeding.
+- Projects: the loaded .fsproj files for this session.
+- Available: which MCP tools/affordances are currently active for this session.
+- Session: the stable session ID shown at the start of the response.
+
+IMPORTANT:
+- A successful enable_live_testing call does NOT imply get_fsi_status should already be Ready. Live testing activation and worker readiness are separate.
+- If you need live-testing health, use get_test_trace or get_live_test_status instead.""")>]
     member _.get_fsi_status(
         [<Description("Working directory of the MCP client. When provided, automatically resolves the correct session for this directory without requiring manual switch_session calls.")>]
         working_directory: string
@@ -208,7 +221,7 @@ WHAT SURVIVES:
 
 AFTER RESET:
 - The session re-runs project warm-up scripts automatically (~1-3s for most projects).
-- Check get_fsi_status until Status shows 'Ready' before sending new code.
+- Re-check get_fsi_status until it reports State='Ready' before sending new code. A temporary warming-up message before that is normal.
 
 WHEN TO USE (rare):
 - The session warm-up itself failed and you see cascade errors on EVERY submission, even trivial ones like '1+1;;'.
@@ -253,6 +266,10 @@ INVALID REASONS (common mistakes):
 - You want to 'start fresh' → soft reset is sufficient if truly needed
 
 Set rebuild=true to run 'dotnet build' before reloading.
+
+IMPORTANT:
+- rebuild=true returns immediately after scheduling the rebuild/restart.
+- During that restart window, get_fsi_status may temporarily report that the session is still warming up instead of returning a full status snapshot.
 
 WORKFLOW: For test-only changes, use this with rebuild=true instead of the full pack/reinstall cycle.
 The full pack/reinstall cycle is only needed when SageFs's own source code changes (SageFs\ or SageFs.Server\).""")>]
@@ -421,7 +438,7 @@ WHEN TO USE:
 
 AFTER CREATION:
 - The session warms up asynchronously (typically 15-30s for test projects).
-- Call get_fsi_status every 5-10s until status shows 'Ready'. Do NOT create another session while waiting.
+- Re-check get_fsi_status until it reports State='Ready'. Before that it may return a warming-up message instead of a full status snapshot. Do NOT create another session while waiting.
 - Use the returned session ID with switch_session to route subsequent tool calls to the new session.
 - Use stop_session when finished to free the worker process.
 
@@ -533,9 +550,11 @@ BEHAVIOR:
 
 WHEN TO USE:
 - At the start of a TDD session to get instant feedback as you write code.
-- Pair with get_live_test_status to poll results after edits.
+- Pair with get_test_trace or get_live_test_status to confirm activation and discovery after enabling.
 
-NOTE: Live testing requires a test project to be loaded in the session. Check get_fsi_status to confirm the test project is loaded.""")>]
+NOTE:
+- Live testing requires a test project to be loaded in the session. Check get_fsi_status to confirm the session has test-related affordances.
+- This call returns an immediate acknowledgment after dispatching the enable request. The discovered-test count in the response may reflect the pre-existing model state; use get_test_trace or get_live_test_status to confirm actual activation/discovery.""")>]
     member _.enable_live_testing() : Task<string> =
         logger.LogDebug("MCP-TOOL: enable_live_testing called")
         setLiveTesting ctx true |> withEcho "enable_live_testing"
@@ -629,7 +648,10 @@ WHEN TO USE:
 
 DIFFERENCE FROM get_live_test_status:
 - get_test_trace: infrastructure config — enabled state, providers, policies, timing metadata.
-- get_live_test_status: per-test results — which individual tests passed, failed, or are stale.""")>]
+- get_live_test_status: per-test results — which individual tests passed, failed, or are stale.
+
+IMPORTANT:
+- Enabled=true means the live-testing subsystem is active. It does NOT imply the FSI worker is currently Ready for new evals — check get_fsi_status separately for worker readiness.""")>]
     member _.get_test_trace() : Task<string> =
         logger.LogDebug("MCP-TOOL: get_test_trace called")
         getTestTrace ctx |> withEcho "get_test_trace"
