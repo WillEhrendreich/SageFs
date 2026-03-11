@@ -1,6 +1,5 @@
 module SageFs.Tests.SessionManagerRestartTombstoneTests
 
-open System
 open System.Diagnostics
 open System.Threading
 open Expecto
@@ -9,40 +8,12 @@ open SageFs
 open SageFs.SessionManager
 open SageFs.WorkerProtocol
 
-let private connectedStatus = {
-  Status = SessionStatus.Faulted
-  StatusMessage = None
-  EvalCount = 0
-  AvgDurationMs = 0L
-  MinDurationMs = 0L
-  MaxDurationMs = 0L
-}
-
-let private connectedProxy : SessionProxy =
-  fun msg -> async {
-    match msg with
-    | WorkerMessage.GetStatus rid ->
-      return WorkerResponse.StatusResult(rid, connectedStatus)
-    | WorkerMessage.GetTestDiscovery _ ->
-      return WorkerResponse.InitialTestDiscovery([||], [])
-    | WorkerMessage.GetInstrumentationMaps rid ->
-      return WorkerResponse.InstrumentationMapsResult(rid, [||])
-    | WorkerMessage.Shutdown ->
-      return WorkerResponse.WorkerShuttingDown
-    | _ ->
-      return WorkerResponse.WorkerReady
-  }
-
 type private Harness = {
   Mailbox: MailboxProcessor<SessionCommand>
   ReadSnapshot: unit -> QuerySnapshot
   FaultedEvents: ResizeArray<SessionId * string>
   Cancellation: CancellationTokenSource
 }
-
-let private waitUntil message condition =
-  SpinWait.SpinUntil(Func<bool>(condition), 1000)
-  |> Expect.isTrue message
 
 let private pendingProxyLooksPending (proxy: SessionProxy) =
   match proxy (WorkerMessage.GetStatus "pending") |> Async.RunSynchronously with
@@ -112,18 +83,6 @@ let private getManagedSession (harness: Harness) sessionId =
   | Some session -> session
   | None -> failtestf "expected session %s to exist" (SessionId.value sessionId)
 
-let private markWorkerConnected (harness: Harness) (info: SessionInfo) =
-  let workerPid =
-    info.WorkerPid
-    |> Option.defaultWith (fun () -> failtest "expected worker pid")
-
-  harness.Mailbox.Post(SessionCommand.WorkerReady(info.Id, workerPid, "http://worker", connectedProxy))
-
-  waitUntil "worker should appear connected in the snapshot" (fun () ->
-    harness.ReadSnapshot().WorkerBaseUrls |> Map.containsKey info.Id)
-
-  workerPid
-
 [<Tests>]
 let sessionManagerRestartTombstoneTests =
   testList "SessionManager restart tombstones" [
@@ -135,7 +94,6 @@ let sessionManagerRestartTombstoneTests =
 
       withHarness runtime <| fun harness ->
         let info = createSession harness
-        markWorkerConnected harness info |> ignore
 
         match harness.Mailbox.PostAndReply(fun reply -> SessionCommand.RestartSession(info.Id, true, reply)) with
         | Error (SageFsError.HardResetFailed reason) ->
@@ -170,7 +128,6 @@ let sessionManagerRestartTombstoneTests =
 
       withHarness runtime <| fun harness ->
         let info = createSession harness
-        markWorkerConnected harness info |> ignore
 
         match harness.Mailbox.PostAndReply(fun reply -> SessionCommand.RestartSession(info.Id, true, reply)) with
         | Error (SageFsError.WorkerSpawnFailed reason) ->
@@ -197,7 +154,9 @@ let sessionManagerRestartTombstoneTests =
 
       withHarness runtime <| fun harness ->
         let info = createSession harness
-        let originalPid = markWorkerConnected harness info
+        let originalPid =
+          info.WorkerPid
+          |> Option.defaultWith (fun () -> failtest "expected worker pid")
 
         harness.Mailbox.PostAndReply(fun reply -> SessionCommand.RestartSession(info.Id, true, reply))
         |> ignore
@@ -221,7 +180,6 @@ let sessionManagerRestartTombstoneTests =
 
       withHarness runtime <| fun harness ->
         let info = createSession harness
-        markWorkerConnected harness info |> ignore
 
         harness.Mailbox.PostAndReply(fun reply -> SessionCommand.RestartSession(info.Id, true, reply))
         |> ignore

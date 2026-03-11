@@ -17,6 +17,7 @@
         <Compile Include="Args.fs" />
         <Compile Include="Measures.fs" />
         <Compile Include="RingBuffer.fs" />
+        <Compile Include="SseReplayBuffer.fs" />
         <Compile Include="ModelSnapshot.fs" />
         <Compile Include="TimeTravel.fs" />
         <Compile Include="Utils.fs" />
@@ -94,6 +95,7 @@
         <Compile Include="SmartReset.fs" />
         <Compile Include="Watchdog.fs" />
         <Compile Include="SessionLifecycle.fs" />
+        <Compile Include="WorkerLivenessMonitor.fs" />
         <Compile Include="SessionManager.fs" />
         <Compile Include="SessionOperations.fs" />
         <Compile Include="RenderPipeline.fs" />

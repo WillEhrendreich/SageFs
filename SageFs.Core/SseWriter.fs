@@ -20,6 +20,12 @@ let formatSseEvent (eventType: string) (data: string) : string =
   | false ->
     sprintf "event: %s\ndata: %s\n\n" eventType data
 
+/// Pure: format an SSE event string with a sequence ID for Last-Event-Id replay support.
+/// The `id:` field is prepended per the EventSource spec, enabling reconnection.
+let formatSseEventWithId (seqId: int64) (eventType: string) (data: string) : string =
+  let frame = formatSseEvent eventType data
+  sprintf "id: %d\n%s" seqId frame
+
 /// Pure: format SSE event with multiline data
 let formatSseEventMultiline (eventType: string) (lines: string list) : string =
   match lines with
