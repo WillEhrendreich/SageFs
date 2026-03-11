@@ -347,6 +347,22 @@ let evalFn (token: CancellationToken) =
 open System.Threading.Tasks
 open System.Threading
 
+/// Extract all `open` namespace/module names from a source file's lines.
+/// Returns distinct names preserving first-occurrence order.
+/// Ignores commented-out lines and any non-`open` lines.
+let extractOpensFromLines (lines: string[]) : string[] =
+  lines
+  |> Array.choose (fun line ->
+    let trimmed = line.Trim()
+    match trimmed.StartsWith("open ", System.StringComparison.Ordinal) && not (trimmed.StartsWith("//", System.StringComparison.Ordinal)) with
+    | false -> None
+    | true ->
+      let parts = trimmed.Split([|' '; '\t'|], StringSplitOptions.RemoveEmptyEntries)
+      match parts.Length >= 2 with
+      | true -> Some (parts.[1].TrimEnd(';'))
+      | false -> None)
+  |> Array.distinct
+
 /// Creates a fresh FSI session with warm-up: loads startup files and opens namespaces.
 /// The CancellationToken is passed through to FSI EvalInteraction calls so that
 /// warm-up can be cancelled if it takes too long (e.g. a stuck module initializer).
@@ -410,32 +426,41 @@ let createFsiSession (logger: ILogger) (outStream: TextWriter) (useAsp: bool) (s
       |> Seq.distinct
 
     let mutable fileCount = 0
-    for fsFile in allFsFiles do
-      ct.ThrowIfCancellationRequested()
-      try
-        match File.Exists(fsFile) with
-        | true ->
-          let! sourceLines = File.ReadAllLinesAsync fsFile |> Async.AwaitTask
-          fileCount <- fileCount + 1
-          for line in sourceLines do
-            let trimmed = line.Trim()
-            match trimmed.StartsWith("open ", System.StringComparison.Ordinal) && not (trimmed.StartsWith("//", System.StringComparison.Ordinal)) with
-            | true ->
-              let parts = trimmed.Split([|' '; '\t'|], StringSplitOptions.RemoveEmptyEntries)
-              match parts.Length >= 2 with
-              | true ->
-                let nsName = parts.[1].TrimEnd(';')
-                match openedNamespaces.Add(nsName) with
-                | true ->
-                  match autoOpenNamespaces with
-                  | true -> namesToOpen.Add(nsName)
-                  | false -> ()
-                | false -> ()
-              | false -> ()
+    let allFsFilesArr = allFsFiles |> Seq.toArray
+    let! fileResults =
+      allFsFilesArr
+      |> Array.map (fun fsFile -> async {
+        ct.ThrowIfCancellationRequested()
+        try
+          match File.Exists(fsFile) with
+          | true ->
+            let! sourceLines = File.ReadAllLinesAsync fsFile |> Async.AwaitTask
+            return Some (extractOpensFromLines sourceLines)
+          | false -> return None
+        with ex ->
+          logger.LogWarning (sprintf "Could not parse opens from %s: %s" fsFile ex.Message)
+          return None
+      })
+      |> fun tasks ->
+        let sem = new System.Threading.SemaphoreSlim(8)
+        tasks |> Array.map (fun t -> async {
+          do! sem.WaitAsync() |> Async.AwaitTask
+          try return! t
+          finally sem.Release() |> ignore
+        })
+      |> Async.Parallel
+    for result in fileResults do
+      match result with
+      | Some opens ->
+        fileCount <- fileCount + 1
+        for nsName in opens do
+          match openedNamespaces.Add(nsName) with
+          | true ->
+            match autoOpenNamespaces with
+            | true -> namesToOpen.Add(nsName)
             | false -> ()
-        | false -> ()
-      with ex ->
-        logger.LogWarning (sprintf "Could not parse opens from %s: %s" fsFile ex.Message)
+          | false -> ()
+      | None -> ()
     logger.LogInfo (sprintf "  Scanned %d source files for opens in %dms" fileCount sw.ElapsedMilliseconds)
     let scanPhaseMs = sw.ElapsedMilliseconds
     onProgress(2, 4, sprintf "Scanned %d source files" fileCount)

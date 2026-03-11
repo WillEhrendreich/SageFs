@@ -3,6 +3,7 @@ module SageFs.Tests.WarmupContextTests
 open Expecto
 open Expecto.Flip
 open SageFs
+open SageFs.AppState
 open SageFs.WarmUp
 open SageFs.McpAdapter
 
@@ -339,4 +340,72 @@ let formatWarmupDetailForLlmTests = testList "formatWarmupDetailForLlm" [
     }
     let result = formatWarmupDetailForLlm ctx
     result |> Expect.stringContains "module kind" "open MyModule // module"
+]
+
+[<Tests>]
+let extractOpensTests = testList "extractOpensFromLines" [
+
+  testCase "returns empty for empty input" <| fun _ ->
+    extractOpensFromLines [||]
+    |> Expect.isEmpty "empty lines should yield no opens"
+
+  testCase "extracts single open statement" <| fun _ ->
+    extractOpensFromLines [| "open System" |]
+    |> Expect.equal "single open" [| "System" |]
+
+  testCase "extracts multiple distinct opens" <| fun _ ->
+    let lines = [| "open System"; "open System.IO"; "open FSharp.Collections" |]
+    extractOpensFromLines lines
+    |> Expect.equal "three opens" [| "System"; "System.IO"; "FSharp.Collections" |]
+
+  testCase "deduplicates repeated opens" <| fun _ ->
+    let lines = [| "open System"; "open System.IO"; "open System" |]
+    extractOpensFromLines lines
+    |> Expect.equal "deduped" [| "System"; "System.IO" |]
+
+  testCase "ignores non-open lines" <| fun _ ->
+    let lines = [| "module Foo"; "let x = 1"; "open System"; "type T = {}" |]
+    extractOpensFromLines lines
+    |> Expect.equal "only open" [| "System" |]
+
+  testCase "ignores commented-out open lines" <| fun _ ->
+    let lines = [| "// open System"; "open System.IO" |]
+    extractOpensFromLines lines
+    |> Expect.equal "skip comment" [| "System.IO" |]
+
+  testCase "handles leading whitespace" <| fun _ ->
+    let lines = [| "  open System.Collections.Generic" |]
+    extractOpensFromLines lines
+    |> Expect.equal "indented open" [| "System.Collections.Generic" |]
+
+  testCase "handles trailing semicolons" <| fun _ ->
+    let lines = [| "open System;;" |]
+    extractOpensFromLines lines
+    |> Expect.equal "semicolons stripped" [| "System" |]
+
+  testCase "ignores blank lines" <| fun _ ->
+    let lines = [| ""; "open System"; "   "; "open System.IO" |]
+    extractOpensFromLines lines
+    |> Expect.equal "blank lines skipped" [| "System"; "System.IO" |]
+
+  testCase "parallel scan over file batches returns same set as sequential" <| fun _ ->
+    let fileContents =
+      [|
+        [| "open System"; "open System.IO" |]
+        [| "open System.IO"; "open FSharp.Collections" |]
+        [| "module Foo"; "open System"; "open Expecto" |]
+      |]
+    let seqResult =
+      fileContents
+      |> Array.collect extractOpensFromLines
+      |> Array.distinct
+      |> Set.ofArray
+    let parResult =
+      fileContents
+      |> Array.Parallel.map extractOpensFromLines
+      |> Array.collect id
+      |> Array.distinct
+      |> Set.ofArray
+    parResult
+    |> Expect.equal "parallel matches sequential" seqResult
 ]
