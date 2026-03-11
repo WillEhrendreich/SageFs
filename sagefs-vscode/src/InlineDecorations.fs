@@ -15,6 +15,12 @@ let getInlineTimeout () =
 let mutable blockDecorations: Map<int, TextEditorDecorationType> = Map.empty
 let mutable staleDecorations: Map<int, TextEditorDecorationType> = Map.empty
 let mutable private evalInProgressDecorations: Map<int, TextEditorDecorationType> = Map.empty
+let mutable private bindingValueDecorationType: TextEditorDecorationType option = None
+
+/// Clear all persistent binding-value ghost text decorations.
+let clearBindingValueDecorations () =
+  bindingValueDecorationType |> Option.iter (fun d -> d.dispose () |> ignore)
+  bindingValueDecorationType <- None
 
 // ── Cell highlight ─────────────────────────────────────────────
 
@@ -90,6 +96,7 @@ let clearAllDecorations () =
   staleDecorations <- Map.empty
   evalInProgressDecorations |> Map.iter (fun _ deco -> deco.dispose () |> ignore)
   evalInProgressDecorations <- Map.empty
+  clearBindingValueDecorations ()
 
 /// Show an "⏳ evaluating…" ghost-text suffix at the end of the given (0-based) line.
 /// Uses a separate decoration type from result/stale markers so it can be cleared independently.
@@ -196,6 +203,53 @@ let showInlineResult (editor: TextEditor) (text: string) (durationMs: float opti
     editor.setDecorations(deco, ResizeArray [| box range |])
     blockDecorations <- Map.add line deco blockDecorations
     autoClearAfter line
+
+// ── Binding value decorations (persistent, from bindings_snapshot) ────────
+
+/// Show binding values as persistent inline ghost text at their source lines.
+/// Only non-function bindings are shown. Decorations persist until the next
+/// bindings_snapshot replaces them (no auto-clear timeout).
+/// blockStartLine is 0-based. bv.SourceLine is 1-based (0 = unknown → skip).
+let showBindingValues
+    (editor: TextEditor)
+    (blockStartLine: int)
+    (bindingValues: SageFs.Vscode.FeatureTypes.ClientBindingValue list) =
+  clearBindingValueDecorations ()
+  let visible =
+    bindingValues
+    |> List.filter (fun bv ->
+      not bv.IsFunctionValue && bv.SourceLine > 0)
+  match visible with
+  | [] -> ()
+  | _ ->
+    let opts = createObj [
+      "after" ==> createObj [
+        "color" ==> newThemeColor "sagefs.bindingValueForeground"
+        "fontStyle" ==> "italic"
+      ]
+    ]
+    let deco = Window.createTextEditorDecorationType opts
+    bindingValueDecorationType <- Some deco
+    let ranges = ResizeArray<obj>()
+    for bv in visible do
+      let lineIdx = blockStartLine + bv.SourceLine - 1
+      let lineCount = editor.document.lineCount
+      match lineIdx >= 0 && float lineIdx < lineCount with
+      | false -> ()
+      | true ->
+        let lineText = editor.document.lineAt(float lineIdx).text
+        let endCol = lineText.Length
+        let contentText = sprintf "  %s" (SageFs.Vscode.FeatureTypes.toGhostText bv)
+        let rangeWithText = createObj [
+          "range" ==> box (newRange lineIdx endCol lineIdx endCol)
+          "renderOptions" ==> createObj [
+            "after" ==> createObj [
+              "contentText" ==> contentText
+            ]
+          ]
+        ]
+        ranges.Add(box rangeWithText)
+    editor.setDecorations(deco, ranges)
 
 let showInlineDiagnostic (editor: TextEditor) (text: string) (atLine: int option) =
   let firstLine =

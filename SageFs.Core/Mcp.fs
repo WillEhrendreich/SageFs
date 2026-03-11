@@ -2248,7 +2248,7 @@ module McpTools =
     |> List.rev
     |> List.map (fun e ->
       { Features.FilmstripEvent.Timestamp = e.Timestamp
-        Label = e.Code |> fun c -> match c.Length > 60 with | true -> c.[..57] + "..." | false -> c
+        Label = e.Code |> Features.FsiOutputParser.detectBoundaryKind |> Features.FsiOutputParser.EvalBoundaryKind.toLabel
         BindingCount = state.KnownBindings.Count
         TestSummary = None
         EvalDurationMs = Some (float e.DurationMs) })

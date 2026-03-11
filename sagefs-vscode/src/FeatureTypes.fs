@@ -79,6 +79,20 @@ type VscNotebookCell =
     Deps: int list
     Bindings: string list }
 
+// ── Feature 6: Binding Values (inline ghost text) ────────────────────────────
+
+/// Mirror of server BindingValue — carries all info needed for inline decorations.
+/// SourceLine is 1-based within the evaluated block (0 = unknown).
+type ClientBindingValue =
+  { Name: string
+    TypeSig: string
+    DisplayValue: string
+    IsTruncated: bool
+    IsFunctionValue: bool
+    CellIndex: int
+    EvalDurationMs: float
+    SourceLine: int }
+
 // ── SSE Feature Event Types ─────────────────────────────────────────────
 
 type VscFeatureEvent =
@@ -96,6 +110,49 @@ type FeatureCallbacks =
 // ── JSON Parsers ────────────────────────────────────────────────────────
 
 // CRITICAL: SafeInterop field accessors use (name: string) (obj: obj) — name FIRST, then obj.
+
+/// Produce compact ghost text for inline editor decoration.
+/// Semantics mirror server-side BindingValue.toGhostText — must stay in sync.
+/// e.g. "→ 42  int"  "→ <fn>  int -> string"  "→ [1; 2; …]  int list  ⟨truncated⟩"
+let toGhostText (bv: ClientBindingValue) : string =
+  let displayVal =
+    match bv.IsFunctionValue with
+    | true  -> "<fn>"
+    | false ->
+      match bv.DisplayValue with
+      | "<null>" -> "null"
+      | d ->
+        match bv.IsTruncated with
+        | true  ->
+          match d.EndsWith("...]") || d.EndsWith("...}") with
+          | true  -> d.[..d.Length - 5] + "…" + string d.[d.Length - 1]
+          | false -> d.TrimEnd('.') + "…"
+        | false -> d
+  let base_ = sprintf "→ %s  %s" displayVal bv.TypeSig
+  match bv.IsTruncated with
+  | true  -> base_ + "  ⟨truncated⟩"
+  | false -> base_
+
+/// Parse a BindingValue object from the server's bindings_snapshot SSE payload.
+/// All fields are null-safe. SourceLine=0 when absent (single-parse fallback).
+let parseClientBindingValue (data: obj) : ClientBindingValue option =
+  match jsIsNullOrUndefined data with
+  | true -> None
+  | false ->
+    let name = fieldString "Name" data |> Option.defaultValue ""
+    match name with
+    | "" -> None
+    | _ ->
+      Some {
+        Name = name
+        TypeSig = fieldString "TypeSig" data |> Option.defaultValue ""
+        DisplayValue = fieldString "DisplayValue" data |> Option.defaultValue ""
+        IsTruncated = fieldBool "IsTruncated" data |> Option.defaultValue false
+        IsFunctionValue = fieldBool "IsFunctionValue" data |> Option.defaultValue false
+        CellIndex = fieldInt "CellIndex" data |> Option.defaultValue 0
+        EvalDurationMs = fieldFloat "EvalDurationMs" data |> Option.defaultValue 0.0
+        SourceLine = fieldInt "SourceLine" data |> Option.defaultValue 0
+      }
 
 let parseDiffLine (data: obj) : VscDiffLine =
   let kindStr = fieldString "kind" data |> Option.defaultValue "unchanged"

@@ -362,6 +362,67 @@ let evalBoundaryKindTests =
     ]
   ]
 
+// ── Filmstrip label integration ───────────────────────────────────────────────
+
+let filmstripLabelTests =
+  testList "filmstrip label (detectBoundaryKind → toLabel)" [
+
+    test "let binding code produces let-name label" {
+      let code = "let answer = 42"
+      detectBoundaryKind code
+      |> EvalBoundaryKind.toLabel
+      |> Expect.equal "filmstrip label for let binding" "let answer"
+    }
+
+    test "type definition code produces type-name label" {
+      let code = "type Color = Red | Green | Blue"
+      detectBoundaryKind code
+      |> EvalBoundaryKind.toLabel
+      |> Expect.equal "filmstrip label for type def" "type Color"
+    }
+
+    test "module definition code produces module-name label" {
+      let code = "module Utils ="
+      detectBoundaryKind code
+      |> EvalBoundaryKind.toLabel
+      |> Expect.stringContains "filmstrip label for module def" "Utils"
+    }
+
+    test "open statement code produces namespace label" {
+      let code = "open System.IO"
+      detectBoundaryKind code
+      |> EvalBoundaryKind.toLabel
+      |> Expect.stringContains "filmstrip label for open" "System.IO"
+    }
+
+    test "do expression code produces do-expr label" {
+      let code = "printfn \"hello\""
+      detectBoundaryKind code
+      |> EvalBoundaryKind.toLabel
+      |> Expect.stringContains "filmstrip label for do expr" "expr"
+    }
+
+    test "hash directive code produces directive label without leading #" {
+      let code = "#r nuget:FSharp.Data"
+      let label = detectBoundaryKind code |> EvalBoundaryKind.toLabel
+      label |> Expect.stringContains "filmstrip label for hash directive" "nuget"
+    }
+
+    test "multiline let binding uses first name in label" {
+      let code = "let greet name =\n  sprintf \"Hello %s\" name"
+      detectBoundaryKind code
+      |> EvalBoundaryKind.toLabel
+      |> Expect.equal "filmstrip label for multiline let" "let greet"
+    }
+
+    test "unknown code falls back to question mark" {
+      detectBoundaryKind ""
+      |> EvalBoundaryKind.toLabel
+      |> Expect.equal "filmstrip label for unknown" "?"
+    }
+
+  ]
+
 [<Tests>]
 let allFsiParserTests =
   testList "FsiOutputParser" [
@@ -370,4 +431,5 @@ let allFsiParserTests =
     ghostTextTests
     bindingValueContractTests
     evalBoundaryKindTests
+    filmstripLabelTests
   ]

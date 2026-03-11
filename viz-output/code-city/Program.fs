@@ -364,6 +364,8 @@ type FuncBuilding =
     BuildingType: BuildingType
     GitAgeDays: float32
     GitCommitCount: int
+    GitAuthorCount: int
+    GitBugFixRatio: float32
     X: float32; Z: float32
     W: float32; D: float32
     H: float32
@@ -1117,7 +1119,9 @@ let private districtMinorStreets (plan: DistrictPlan) =
   plan.Quarters |> List.collect (fun quarter -> quarter.MinorStreets)
 
 let private clamp01f value =
-  value |> max 0.0f |> min 1.0f
+  match Single.IsNaN value || Single.IsInfinity value with
+  | true -> 0.0f
+  | false -> value |> max 0.0f |> min 1.0f
 
 let private rectCompactness (rect: TRect) =
   let longest = max rect.W rect.H
@@ -1775,7 +1779,31 @@ let private buildStreetAdjacency (plan: DistrictPlan) =
     street.Id, neighbors)
   |> Map.ofList
 
-let shortestStreetPath (plan: DistrictPlan) (startStreet: StreetId) (endStreet: StreetId) : Result<StreetId list, PathError> =
+let angularTurnCost (costAt90: float32) (angle: float32) : float32 =
+  let halfPi = MathF.PI / 2.0f
+  let normalizedAngle =
+    match Single.IsNaN angle || Single.IsInfinity angle || halfPi <= 0.0001f with
+    | true -> 0.0f
+    | false -> max 0.0f angle / halfPi
+  max 0.0f costAt90 * normalizedAngle
+
+let private streetAxisDirection (segment: TRect) =
+  match segment.W >= segment.H with
+  | true -> Vector2(1.0f, 0.0f)
+  | false -> Vector2(0.0f, 1.0f)
+
+let private streetTurnAngle (current: TRect) (neighbor: TRect) =
+  let currentDirection = streetAxisDirection current
+  let neighborDirection = streetAxisDirection neighbor
+  let alignment = abs (Vector2.Dot(currentDirection, neighborDirection)) |> clamp01f
+  MathF.Acos alignment
+
+let shortestStreetPathWithTurnCost
+  (turnCostAt90: float32)
+  (plan: DistrictPlan)
+  (startStreet: StreetId)
+  (endStreet: StreetId)
+  : Result<StreetId list, PathError> =
   let indexedPlan = indexStreetNetwork plan
   let streets = allStreetViews indexedPlan
   let streetMap = streets |> List.map (fun street -> street.Id, street) |> Map.ofList
@@ -1805,9 +1833,12 @@ let shortestStreetPath (plan: DistrictPlan) (startStreet: StreetId) (endStreet: 
                     match Set.contains neighbor unvisited with
                     | false -> stateDistances, statePrevious
                     | true ->
+                        let currentStreet = streetMap |> Map.find current
+                        let neighborStreet = streetMap |> Map.find neighbor
                         let candidateDistance =
                           currentDistance
-                          + (streetMap |> Map.find neighbor |> fun street -> streetLength street.Segment)
+                          + streetLength neighborStreet.Segment
+                          + angularTurnCost turnCostAt90 (streetTurnAngle currentStreet.Segment neighborStreet.Segment)
                         let knownDistance = stateDistances |> Map.tryFind neighbor |> Option.defaultValue infinity
                         match candidateDistance < knownDistance with
                         | true ->
@@ -1834,6 +1865,9 @@ let shortestStreetPath (plan: DistrictPlan) (startStreet: StreetId) (endStreet: 
             | false, Some prior -> rebuild (current :: route) prior
             | false, None -> route
           Ok (rebuild [] endStreet)
+
+let shortestStreetPath (plan: DistrictPlan) (startStreet: StreetId) (endStreet: StreetId) : Result<StreetId list, PathError> =
+  shortestStreetPathWithTurnCost 500.0f plan startStreet endStreet
 
 let applyResidentTrip (trip: ResidentTrip) (plan: DistrictPlan) : Result<DistrictPlan, TripError> =
   let indexedPlan = indexStreetNetwork plan
@@ -3080,29 +3114,63 @@ type BuildingMassingProfile =
     PerpendicularCompression: float32
     PodiumRatio: float32 option
     ShaftRatio: float32 option
-    ShaftHeightScale: float32 option }
+    ShaftHeightScale: float32 option
+    CrownRatio: float32 option
+    CrownHeightScale: float32 option }
+
+type MassingFamily =
+  | Monolith
+  | LinearRow
+  | PodiumSlab
+  | PodiumShaft
+  | TaperedTower
+
+let massingFamilyLabel = function
+  | Monolith -> "monolith"
+  | LinearRow -> "linear row"
+  | PodiumSlab -> "podium slab"
+  | PodiumShaft -> "podium shaft"
+  | TaperedTower -> "tapered tower"
+
+let private legalMassingFamilies = function
+  | Shed -> [| Monolith |]
+  | Cottage -> [| Monolith |]
+  | Rowhouse -> [| LinearRow |]
+  | Commercial -> [| Monolith; PodiumSlab |]
+  | Tower -> [| PodiumSlab; PodiumShaft |]
+  | Skyscraper -> [| PodiumShaft; TaperedTower |]
+
+let selectMassingFamily (qualName: string) (buildingType: BuildingType) (complexity: int) : MassingFamily =
+  let clampedComplexity = max 0 complexity
+  match buildingType with
+  | Shed -> Monolith
+  | Cottage -> Monolith
+  | Rowhouse -> LinearRow
+  | Commercial when clampedComplexity >= 18 -> PodiumSlab
+  | Tower when clampedComplexity <= 10 -> PodiumSlab
+  | Skyscraper when clampedComplexity >= 24 -> TaperedTower
+  | _ ->
+      let families = legalMassingFamilies buildingType
+      let familyIndex =
+        sprintf "%s|%A|%d|massing" qualName buildingType clampedComplexity
+        |> fnvHash
+        |> fun hash -> int (hash % uint32 families.Length)
+      families.[familyIndex]
 
 module BuildingMassingProfile =
-  let ofType = function
-    | Shed ->
+  let ofFamily = function
+    | Monolith ->
         { MaxCubeCount = 1
-          MinHeightScale = 0.55f
-          MaxHeightScale = 0.72f
+          MinHeightScale = 0.58f
+          MaxHeightScale = 0.82f
           Linear = false
           PerpendicularCompression = 1.0f
           PodiumRatio = None
           ShaftRatio = None
-          ShaftHeightScale = None }
-    | Cottage ->
-        { MaxCubeCount = 2
-          MinHeightScale = 0.62f
-          MaxHeightScale = 0.85f
-          Linear = false
-          PerpendicularCompression = 0.94f
-          PodiumRatio = None
-          ShaftRatio = None
-          ShaftHeightScale = None }
-    | Rowhouse ->
+          ShaftHeightScale = None
+          CrownRatio = None
+          CrownHeightScale = None }
+    | LinearRow ->
         { MaxCubeCount = 4
           MinHeightScale = 0.72f
           MaxHeightScale = 0.96f
@@ -3110,8 +3178,10 @@ module BuildingMassingProfile =
           PerpendicularCompression = 0.62f
           PodiumRatio = None
           ShaftRatio = None
-          ShaftHeightScale = None }
-    | Commercial ->
+          ShaftHeightScale = None
+          CrownRatio = None
+          CrownHeightScale = None }
+    | PodiumSlab ->
         { MaxCubeCount = 5
           MinHeightScale = 0.68f
           MaxHeightScale = 0.92f
@@ -3119,8 +3189,10 @@ module BuildingMassingProfile =
           PerpendicularCompression = 0.90f
           PodiumRatio = Some 1.04f
           ShaftRatio = None
-          ShaftHeightScale = None }
-    | Tower ->
+          ShaftHeightScale = None
+          CrownRatio = None
+          CrownHeightScale = None }
+    | PodiumShaft ->
         { MaxCubeCount = 4
           MinHeightScale = 0.58f
           MaxHeightScale = 0.84f
@@ -3128,8 +3200,10 @@ module BuildingMassingProfile =
           PerpendicularCompression = 0.82f
           PodiumRatio = Some 1.08f
           ShaftRatio = Some 0.58f
-          ShaftHeightScale = Some 1.06f }
-    | Skyscraper ->
+          ShaftHeightScale = Some 1.06f
+          CrownRatio = None
+          CrownHeightScale = None }
+    | TaperedTower ->
         { MaxCubeCount = 3
           MinHeightScale = 0.52f
           MaxHeightScale = 0.78f
@@ -3137,11 +3211,20 @@ module BuildingMassingProfile =
           PerpendicularCompression = 0.76f
           PodiumRatio = Some 1.12f
           ShaftRatio = Some 0.46f
-          ShaftHeightScale = Some 1.14f }
+          ShaftHeightScale = Some 1.04f
+          CrownRatio = Some 0.28f
+          CrownHeightScale = Some 1.16f }
 
-let generateTypedCompound (qualName: string) (buildingType: BuildingType) (complexity: int) (lotHW: float32) (lotHD: float32) : SubCube[] =
+let generateTypedCompoundForFamily
+  (qualName: string)
+  (buildingType: BuildingType)
+  (family: MassingFamily)
+  (complexity: int)
+  (lotHW: float32)
+  (lotHD: float32)
+  : SubCube[] =
   let baseCompound = generateCompound qualName complexity lotHW lotHD
-  let profile = BuildingMassingProfile.ofType buildingType
+  let profile = BuildingMassingProfile.ofFamily family
   let dominantAxisIsX = lotHW >= lotHD
   let capCount =
     match buildingType with
@@ -3179,8 +3262,34 @@ let generateTypedCompound (qualName: string) (buildingType: BuildingType) (compl
       let primary = restyledBase.[0]
       let others = restyledBase |> Array.skip 1
       let podiumAndShaft =
-        match profile.PodiumRatio, profile.ShaftRatio, profile.ShaftHeightScale with
-        | Some podiumRatio, Some shaftRatio, Some shaftHeight ->
+        match
+          profile.PodiumRatio,
+          profile.ShaftRatio,
+          profile.ShaftHeightScale,
+          profile.CrownRatio,
+          profile.CrownHeightScale
+        with
+        | Some podiumRatio, Some shaftRatio, Some shaftHeight, Some crownRatio, Some crownHeight ->
+            let podium =
+              { primary with
+                  HW = primary.HW * podiumRatio |> min lotHW
+                  HD = primary.HD * podiumRatio |> min lotHD
+                  HeightScale = primary.HeightScale |> min 0.68f }
+              |> boundedCube
+            let shaft =
+              { primary with
+                  HW = primary.HW * shaftRatio |> max 0.12f
+                  HD = primary.HD * shaftRatio |> max 0.12f
+                  HeightScale = shaftHeight }
+              |> boundedCube
+            let crown =
+              { primary with
+                  HW = primary.HW * crownRatio |> max 0.10f
+                  HD = primary.HD * crownRatio |> max 0.10f
+                  HeightScale = crownHeight }
+              |> boundedCube
+            [| podium; shaft; crown |]
+        | Some podiumRatio, Some shaftRatio, Some shaftHeight, None, None ->
             let podium =
               { primary with
                   HW = primary.HW * podiumRatio |> min lotHW
@@ -3194,7 +3303,7 @@ let generateTypedCompound (qualName: string) (buildingType: BuildingType) (compl
                   HeightScale = shaftHeight }
               |> boundedCube
             [| podium; shaft |]
-        | Some podiumRatio, None, None ->
+        | Some podiumRatio, None, None, None, None ->
             let podium =
               { primary with
                   HW = primary.HW * podiumRatio |> min lotHW
@@ -3202,8 +3311,16 @@ let generateTypedCompound (qualName: string) (buildingType: BuildingType) (compl
                   HeightScale = primary.HeightScale |> min profile.MaxHeightScale }
               |> boundedCube
             [| podium |]
+        | None, None, None, None, None -> [| primary |]
         | _ -> [| primary |]
       Array.append podiumAndShaft others
+
+let generateTypedCompound (qualName: string) (buildingType: BuildingType) (complexity: int) (lotHW: float32) (lotHD: float32) : SubCube[] =
+  let family = selectMassingFamily qualName buildingType complexity
+  generateTypedCompoundForFamily qualName buildingType family complexity lotHW lotHD
+
+let currentMassingFamily (building: FuncBuilding) =
+  selectMassingFamily building.Func.QualifiedName building.BuildingType building.Complexity
 
 type CodeHealthSignals =
   { BlastRadius: float32
@@ -3239,6 +3356,117 @@ let computeCodeHealthSignals (building: FuncBuilding) =
   { BlastRadius = blastRadius
     ChurnPressure = churnPressure
     RiskScore = min 1.0f (blastRadius * 0.58f + churnPressure * 0.42f) }
+
+/// Raw signals that drive building condition. Kept separate from FuncBuilding so
+/// the formula can grow as richer quality inputs arrive.
+type BuildingConditionInputs =
+  { Complexity: int
+    GitCommitCount: int
+    GitAgeDays: float32
+    CoverageRatio: float32 option
+    BugFixRatio: float32
+    AuthorCount: int
+    HasActiveIncident: bool }
+
+/// Three-axis condition signal for a building.
+type BuildingConditionSignals =
+  { Incompleteness: float32
+    Entropy: float32
+    ActiveIncident: float32 }
+
+let buildingConditionInputsFromBuilding
+  (building: FuncBuilding)
+  (coverageRatio: float32 option)
+  (bugFixRatio: float32)
+  (hasActiveIncident: bool)
+  : BuildingConditionInputs =
+  { Complexity = building.Complexity
+    GitCommitCount = building.GitCommitCount
+    GitAgeDays = building.GitAgeDays
+    CoverageRatio = coverageRatio |> Option.map clamp01f
+    BugFixRatio = clamp01f bugFixRatio
+    AuthorCount = max 1 building.GitAuthorCount
+    HasActiveIncident = hasActiveIncident }
+
+let computeBuildingCondition (inputs: BuildingConditionInputs) : BuildingConditionSignals =
+  let complexityWeight = logNormalized 24.0f (float32 inputs.Complexity)
+  let coverageGap =
+    inputs.CoverageRatio
+    |> Option.map (fun ratio -> 1.0f - clamp01f ratio)
+    |> Option.defaultValue 1.0f
+  let churnVolume = logNormalized 60.0f (float32 inputs.GitCommitCount)
+  let ageDays =
+    match Single.IsNaN inputs.GitAgeDays || Single.IsInfinity inputs.GitAgeDays with
+    | true -> 0.0f
+    | false -> max 0.0f inputs.GitAgeDays
+  let recency = 1.0f - min 1.0f (ageDays / 365.0f)
+  let bugFixPressure = clamp01f inputs.BugFixRatio
+  let fragmentation = logNormalized 8.0f (float32 (max 0 (inputs.AuthorCount - 1)))
+  { Incompleteness = min 1.0f (coverageGap * (0.5f + complexityWeight * 0.5f))
+    Entropy =
+      min 1.0f (
+        churnVolume * 0.35f
+        + recency * 0.20f
+        + bugFixPressure * 0.30f
+        + fragmentation * 0.15f)
+    ActiveIncident = if inputs.HasActiveIncident then 0.85f else 0.0f }
+
+let describeBuildingConditionReadout
+  (inputs: BuildingConditionInputs)
+  (signals: BuildingConditionSignals)
+  : string * string =
+  let percent value =
+    value
+    |> clamp01f
+    |> fun v -> MathF.Round(v * 100.0f)
+    |> int
+  let coverageLabel =
+    match inputs.CoverageRatio |> Option.map clamp01f with
+    | Some ratio -> sprintf "coverage %d%%" (percent ratio)
+    | None -> "coverage unknown"
+  let authorLabel =
+    match max 1 inputs.AuthorCount with
+    | 1 -> "authors 1"
+    | count -> sprintf "authors %d" count
+  let repairLabel = sprintf "bug-fix %d%%" (percent inputs.BugFixRatio)
+  let incidentLabel =
+    match inputs.HasActiveIncident with
+    | true -> "incident active"
+    | false -> "incident quiet"
+  sprintf
+    "condition incomplete %d%%  ·  entropy %d%%  ·  incident %d%%"
+    (percent signals.Incompleteness)
+    (percent signals.Entropy)
+    (percent signals.ActiveIncident),
+  sprintf "%s  ·  %s  ·  %s  ·  %s" coverageLabel authorLabel repairLabel incidentLabel
+
+let currentBuildingCondition (building: FuncBuilding) : BuildingConditionInputs * BuildingConditionSignals =
+  let inputs = buildingConditionInputsFromBuilding building None building.GitBugFixRatio false
+  inputs, computeBuildingCondition inputs
+
+let private applyConditionWearCore
+  (desaturationScale: float32)
+  (darkeningScale: float32)
+  (baseColor: Color)
+  (signals: BuildingConditionSignals)
+  : Color =
+  let entropy = clamp01f signals.Entropy
+  let incompleteness = clamp01f signals.Incompleteness
+  let incident = clamp01f signals.ActiveIncident
+  let gray = float32 ((int baseColor.R + int baseColor.G + int baseColor.B) / 3)
+  let desaturation = min 0.65f (entropy * desaturationScale + incident * 0.08f)
+  let darkening = min 0.45f (incompleteness * darkeningScale + incident * 0.05f)
+  let channel value =
+    let mixed = float32 value * (1.0f - desaturation) + gray * desaturation
+    let shaded = mixed * (1.0f - darkening)
+    byte (MathF.Round(min 255.0f (max 0.0f shaded)))
+  Color(channel baseColor.R, channel baseColor.G, channel baseColor.B, baseColor.A)
+
+let applyConditionWear (baseColor: Color) (signals: BuildingConditionSignals) : Color =
+  applyConditionWearCore 0.35f 0.22f baseColor signals
+
+let applyConditionWearRoof (baseColor: Color) (signals: BuildingConditionSignals) : Color =
+  applyConditionWearCore 0.48f 0.30f baseColor signals
 
 type TerrainOverlaySummary =
   { MinHeight: float32
@@ -3280,18 +3508,48 @@ let summarizeTerrainOverlay (buildings: FuncBuilding list) =
 
 type GitMeta =
   { CommitCount: int
+    AuthorCount: int
+    BugFixRatio: float32
     FirstCommitDate: DateTimeOffset
     LastCommitDate: DateTimeOffset }
 
 module GitMeta =
   let empty =
     { CommitCount = 0
+      AuthorCount = 1
+      BugFixRatio = 0.0f
       FirstCommitDate = DateTimeOffset.Now
       LastCommitDate = DateTimeOffset.Now }
 
 // ─── Git-Driven Organic Growth ───────────────────────────────
 
-/// Parse `git log --follow --format="%H|%aI"` output into GitMeta.
+let private looksLikeBugFixSubject (subject: string) =
+  let tokens =
+    subject.Trim().ToLowerInvariant().ToCharArray()
+    |> Array.map (fun ch -> if Char.IsLetterOrDigit ch then ch else ' ')
+    |> String
+    |> fun normalized -> normalized.Split(' ', StringSplitOptions.RemoveEmptyEntries)
+  let bugFixTokens =
+    set [
+      "bug"
+      "bugs"
+      "bugfix"
+      "bugfixes"
+      "defect"
+      "defects"
+      "fix"
+      "fixed"
+      "fixes"
+      "fixing"
+      "hotfix"
+      "patch"
+      "patched"
+      "regression"
+      "regressions"
+    ]
+  tokens |> Array.exists bugFixTokens.Contains
+
+/// Parse `git log --follow --format="%H|%aI|%an|%s"` output into GitMeta.
 /// Pure — pass log text from a file or process; no IO happens here.
 let parseGitLog (logOutput: string) : GitMeta =
   let lines =
@@ -3299,18 +3557,41 @@ let parseGitLog (logOutput: string) : GitMeta =
     |> Array.filter (fun l -> l.Contains('|'))
   if lines.Length = 0 then GitMeta.empty
   else
-    let dates =
+    let parsedParts =
       lines
-      |> Array.choose (fun line ->
-        let idx = line.IndexOf('|')
-        if idx < 0 then None
+      |> Array.map (fun line -> line.Split([|'|'|], 4, StringSplitOptions.None))
+    let dates =
+      parsedParts
+      |> Array.choose (fun parts ->
+        if parts.Length < 2 then None
         else
-          match DateTimeOffset.TryParse(line.Substring(idx + 1).Trim()) with
+          match DateTimeOffset.TryParse(parts.[1].Trim()) with
           | true, d -> Some d
           | _ -> None)
+    let authors =
+      parsedParts
+      |> Array.choose (fun parts ->
+        if parts.Length < 3 then None
+        else
+          match parts.[2].Trim() with
+          | "" -> None
+          | author -> Some author)
+      |> Array.distinct
+    let bugFixCount =
+      parsedParts
+      |> Array.sumBy (fun parts ->
+        if parts.Length < 4 then 0
+        elif looksLikeBugFixSubject parts.[3] then 1
+        else 0)
+    let bugFixRatio =
+      match lines.Length with
+      | 0 -> 0.0f
+      | count -> float32 bugFixCount / float32 count |> clamp01f
     { CommitCount = lines.Length
+      AuthorCount = max 1 authors.Length
+      BugFixRatio = bugFixRatio
       FirstCommitDate = if dates.Length > 0 then dates |> Array.min else DateTimeOffset.Now
-      LastCommitDate  = if dates.Length > 0 then dates |> Array.max else DateTimeOffset.Now }
+      LastCommitDate = if dates.Length > 0 then dates |> Array.max else DateTimeOffset.Now }
 
 /// Organic growth factor [0..1].
 /// 0 = brand-new regular-grid suburb; 1 = ancient, bustling organic neighbourhood.
@@ -3328,6 +3609,161 @@ let districtOrganicFactor (today: DateTimeOffset) (metas: GitMeta seq) : float32
     let avgAge     = items |> List.averageBy (fun m -> (today - m.FirstCommitDate).TotalDays |> float32)
     let avgCommits = items |> List.averageBy (fun m -> float32 m.CommitCount) |> int
     organicFactor avgAge avgCommits
+
+// ─── History Accretions ────────────────────────────────────────
+
+type AccretionStyle =
+  | Organic
+  | Patched
+  | Extended
+
+type AccretionProfile =
+  { AccretionCount: int
+    Style: AccretionStyle
+    EraShift: float32 }
+
+let accretionCountFromCommits (commitCount: int) : int =
+  match max 0 commitCount with
+  | commits when commits >= 80 -> 3
+  | commits when commits >= 45 -> 2
+  | commits when commits >= 20 -> 1
+  | _ -> 0
+
+let accretionStyleFromSignals (authorCount: int) (bugFixRatio: float32) : AccretionStyle =
+  let authors = max 1 authorCount
+  let bugFix = clamp01f bugFixRatio
+  match authors, bugFix with
+  | a, r when a >= 3 && r >= 0.25f -> Patched
+  | a, _ when a >= 2 -> Extended
+  | _ -> Organic
+
+let eraShiftFromAgeDays (ageDays: float32) : float32 =
+  match Single.IsNaN ageDays || Single.IsInfinity ageDays with
+  | true -> 0.0f
+  | false -> clamp01f (max 0.0f ageDays / 1825.0f)
+
+let accretionProfileFromGit
+  (commitCount: int)
+  (authorCount: int)
+  (bugFixRatio: float32)
+  (ageDays: float32)
+  : AccretionProfile =
+  { AccretionCount = accretionCountFromCommits commitCount
+    Style = accretionStyleFromSignals authorCount bugFixRatio
+    EraShift = eraShiftFromAgeDays ageDays }
+
+let applyHistoryAccretions
+  (profile: AccretionProfile)
+  (qualName: string)
+  (lotHW: float32)
+  (lotHD: float32)
+  (cubes: SubCube[])
+  : SubCube[] =
+  let cubeWithinLot (cube: SubCube) =
+    cube.CX - cube.HW >= -lotHW
+    && cube.CX + cube.HW <= lotHW
+    && cube.CZ - cube.HD >= -lotHD
+    && cube.CZ + cube.HD <= lotHD
+
+  if profile.AccretionCount <= 0 || cubes.Length = 0 then
+    cubes
+  else
+    let primary = cubes |> Array.maxBy (fun cube -> cube.HW * cube.HD)
+    let faceOrder = [| FdNorth; FdEast; FdSouth; FdWest |]
+    let scaleRange, overlapFactor, heightFactor =
+      match profile.Style with
+      | Organic -> (0.24f, 0.40f), 0.28f, 0.52f
+      | Patched -> (0.16f, 0.28f), 0.20f, 0.46f
+      | Extended -> (0.30f, 0.44f), 0.34f, 0.58f
+    let additions =
+      [|
+        for i in 0 .. profile.AccretionCount - 1 do
+          let mutable accepted = None
+          let baseHash = fnvHash (sprintf "%s|accretion|%d" qualName i)
+          let baseIndex = int (baseHash % uint32 faceOrder.Length)
+          let mutable attempt = 0
+          while accepted.IsNone && attempt < faceOrder.Length do
+            let face = faceOrder.[(baseIndex + attempt) % faceOrder.Length]
+            let hashI = fnvHash (sprintf "%s|accretion|%d|%d" qualName i attempt)
+            let ratio01 bits =
+              float32 bits / float32 0xFFFFu
+            let scaleBits = hashI &&& 0xFFFFu
+            let offsetBits = (hashI >>> 8) &&& 0xFFFFu
+            let heightBits = (hashI >>> 16) &&& 0xFFFFu
+            let scale =
+              fst scaleRange + ratio01 scaleBits * (snd scaleRange - fst scaleRange)
+            let hw =
+              max 0.12f (primary.HW * scale)
+            let hd =
+              max 0.12f (primary.HD * scale)
+            let lateralLimit, overlap =
+              match face with
+              | FdNorth | FdSouth ->
+                max 0.0f ((primary.HW - hw) * 0.72f), min hw (hd * overlapFactor)
+              | FdEast | FdWest ->
+                max 0.0f ((primary.HD - hd) * 0.72f), min hd (hw * overlapFactor)
+            let lateral =
+              if lateralLimit <= 0.0001f then 0.0f
+              else (ratio01 offsetBits - 0.5f) * 2.0f * lateralLimit
+            let heightScale =
+              let styleBase =
+                match profile.Style with
+                | Organic -> 0.62f
+                | Patched -> 0.48f
+                | Extended -> 0.68f
+              min 0.92f (max 0.18f (primary.HeightScale * (styleBase + profile.EraShift * 0.12f + ratio01 heightBits * heightFactor * 0.1f)))
+            let candidate =
+              match face with
+              | FdNorth ->
+                { CX = primary.CX + lateral
+                  CZ = primary.CZ - primary.HD - hd + overlap
+                  HW = hw
+                  HD = hd
+                  HeightScale = heightScale }
+              | FdSouth ->
+                { CX = primary.CX + lateral
+                  CZ = primary.CZ + primary.HD + hd - overlap
+                  HW = hw
+                  HD = hd
+                  HeightScale = heightScale }
+              | FdEast ->
+                { CX = primary.CX + primary.HW + hw - overlap
+                  CZ = primary.CZ + lateral
+                  HW = hw
+                  HD = hd
+                  HeightScale = heightScale }
+              | FdWest ->
+                { CX = primary.CX - primary.HW - hw + overlap
+                  CZ = primary.CZ + lateral
+                  HW = hw
+                  HD = hd
+                  HeightScale = heightScale }
+            match cubeWithinLot candidate with
+            | true -> accepted <- Some candidate
+            | false -> attempt <- attempt + 1
+          match accepted with
+          | Some cube -> yield cube
+          | None -> ()
+      |]
+    Array.append cubes additions
+
+let compoundForBuilding (building: FuncBuilding) : SubCube[] =
+  let family = currentMassingFamily building
+  let baseCompound =
+    generateTypedCompoundForFamily
+      building.Func.QualifiedName
+      building.BuildingType
+      family
+      building.Complexity
+      (building.W / 2.0f)
+      (building.D / 2.0f)
+  let profile =
+    accretionProfileFromGit
+      building.GitCommitCount
+      building.GitAuthorCount
+      building.GitBugFixRatio
+      building.GitAgeDays
+  applyHistoryAccretions profile building.Func.QualifiedName (building.W / 2.0f) (building.D / 2.0f) baseCompound
 
 
 
@@ -4075,11 +4511,11 @@ let scanFunctionsForProject (projectFile: string) : FuncDef list =
   | None ->
       scanFunctions (Path.GetDirectoryName(Path.GetFullPath(projectFile)))
 
-/// Run `git log --follow --format="%H|%aI"` for one file and parse the output.
+/// Run `git log --follow --format="%H|%aI|%an|%s"` for one file and parse the output.
 let getGitMetaForFile (repoRoot: string) (filePath: string) : GitMeta =
   try
     let relPath = IO.Path.GetRelativePath(repoRoot, filePath).Replace('\\', '/')
-    let psi = Diagnostics.ProcessStartInfo("git", sprintf "log --follow --format=\"%%H|%%aI\" -- \"%s\"" relPath)
+    let psi = Diagnostics.ProcessStartInfo("git", sprintf "log --follow --format=\"%%H|%%aI|%%an|%%s\" -- \"%s\"" relPath)
     psi.WorkingDirectory <- repoRoot
     psi.RedirectStandardOutput <- true
     psi.UseShellExecute <- false
@@ -4098,6 +4534,14 @@ let scanGitMeta (repoRoot: string) (funcs: FuncDef list) : Map<string, GitMeta> 
   |> List.filter (fun p -> p <> "")
   |> List.map (fun path -> path, getGitMetaForFile repoRoot path)
   |> Map.ofList
+
+let private currentGitMetrics (gitMeta: Map<string, GitMeta>) (filePath: string) =
+  let meta = gitMeta |> Map.tryFind filePath |> Option.defaultValue GitMeta.empty
+  let ageDays =
+    match meta.CommitCount > 0 with
+    | true -> float32 (DateTimeOffset.Now - meta.LastCommitDate).TotalDays
+    | false -> 180.0f
+  ageDays, meta
 
 
 // ─── Call Graph Builder ───────────────────────────────────────
@@ -6441,12 +6885,7 @@ let placeBuildingsInLots
               (lot.Rect.Z + lotMargin)
               w
               (max 0.25f (lot.Rect.H - lotMargin * 2.0f))
-      let ageDays =
-        gitMeta |> Map.tryFind f.FilePath
-        |> Option.map (fun m -> float32 (DateTimeOffset.Now - m.LastCommitDate).TotalDays)
-        |> Option.defaultValue 180.0f
-      let commitCount =
-        gitMeta |> Map.tryFind f.FilePath |> Option.map _.CommitCount |> Option.defaultValue 0
+      let ageDays, meta = currentGitMetrics gitMeta f.FilePath
       let rotation =
         match lot.FrontageEdge with
         | North | South -> 0.0f
@@ -6460,7 +6899,9 @@ let placeBuildingsInLots
         Complexity = complexity
         BuildingType = bt
         GitAgeDays = ageDays
-        GitCommitCount = commitCount
+        GitCommitCount = meta.CommitCount
+        GitAuthorCount = meta.AuthorCount
+        GitBugFixRatio = meta.BugFixRatio
         X = envelope.X
         Z = envelope.Z
         W = max 0.25f envelope.W
@@ -6536,19 +6977,16 @@ let packAlongEdges
             | Commercial | Tower -> 0.80f
             | Skyscraper     -> 0.90f
           let fp = max 0.3f (min (spacing * coverageRatio) (MathF.Log(float32 f.LineCount + 1.0f) * 0.5f + 0.3f)) * complexityFootprintFactor complexity
-          let ageDays =
-            gitMeta |> Map.tryFind f.FilePath
-            |> Option.map (fun m -> float32 (DateTimeOffset.Now - m.LastCommitDate).TotalDays)
-            |> Option.defaultValue 180.0f
-          let commitCount =
-            gitMeta |> Map.tryFind f.FilePath |> Option.map _.CommitCount |> Option.defaultValue 0
+          let ageDays, meta = currentGitMetrics gitMeta f.FilePath
           let jitter = (rng.NextSingle() - 0.5f) * 4.0f
           allBuildings.Add {
             Func = f; Heat = heat; CallerCount = callers; CalleeCount = callees
             Complexity = complexity
             BuildingType = bt
             GitAgeDays = ageDays
-            GitCommitCount = commitCount
+            GitCommitCount = meta.CommitCount
+            GitAuthorCount = meta.AuthorCount
+            GitBugFixRatio = meta.BugFixRatio
             X = px - fp / 2.0f; Z = pz - fp / 2.0f
             W = fp; D = fp
             H = BuildingType.height bt f.LineCount heat
@@ -6668,19 +7106,16 @@ let packAlongRoads
           let px = center.X - worldW / 2.0f
           let pz = center.Y - worldD / 2.0f
           if px >= bx0 - eps && px + worldW <= bx1 + eps && pz >= bz0 - eps && pz + worldD <= bz1 + eps then
-            let ageDays =
-              gitMeta |> Map.tryFind f.FilePath
-              |> Option.map (fun m -> float32 (DateTimeOffset.Now - m.LastCommitDate).TotalDays)
-              |> Option.defaultValue 180.0f
-            let commitCount =
-              gitMeta |> Map.tryFind f.FilePath |> Option.map _.CommitCount |> Option.defaultValue 0
+            let ageDays, meta = currentGitMetrics gitMeta f.FilePath
             let jitter = (rng.NextSingle() - 0.5f) * 2.0f
             allBuildings.Add {
               Func = f; Heat = heat; CallerCount = callers; CalleeCount = callees
               Complexity = complexity
               BuildingType = bt
               GitAgeDays = ageDays
-              GitCommitCount = commitCount
+              GitCommitCount = meta.CommitCount
+              GitAuthorCount = meta.AuthorCount
+              GitBugFixRatio = meta.BugFixRatio
               X = px; Z = pz
               W = worldW; D = worldD
               H = BuildingType.height bt f.LineCount heat
@@ -7713,9 +8148,7 @@ let segmentCountForOrganic (roadLen: float32) (organic: float32) : int =
 
 let buildStaticMesh (buildings: FuncBuilding[]) (blocks: ModuleBlock[]) (cityExtent: float32) (alleyRoads: Road list) =
   // Pre-compute compound shapes for all buildings (deterministic from function name)
-  let compounds =
-    buildings |> Array.map (fun b ->
-      generateTypedCompound b.Func.QualifiedName b.BuildingType b.Complexity (b.W / 2.0f) (b.D / 2.0f))
+  let compounds = buildings |> Array.map compoundForBuilding
   let totalBuildingCubes = compounds |> Array.sumBy (fun c -> c.Length)
   let maxCubes = compounds |> Array.map (fun c -> c.Length) |> Array.max
   let avgCubes = float totalBuildingCubes / float buildings.Length
@@ -7864,6 +8297,9 @@ let buildStaticMesh (buildings: FuncBuilding[]) (blocks: ModuleBlock[]) (cityExt
   for i in 0 .. buildings.Length - 1 do
     let b = buildings.[i]
     let compound = compounds.[i]
+    let _, condition = currentBuildingCondition b
+    let bodyColor = applyConditionWear b.Color condition
+    let roofColor = applyConditionWearRoof b.RoofColor condition
     let cx = b.X + b.W / 2.0f
     let cz = b.Z + b.D / 2.0f
     let cosA, sinA = rotationSinCos b.Rotation
@@ -7872,7 +8308,7 @@ let buildStaticMesh (buildings: FuncBuilding[]) (blocks: ModuleBlock[]) (cityExt
     let btAlpha = BuildingType.alpha b.BuildingType
     let vertsAdded =
       addCompoundBody v n c vi compound cx b.TerrainY cz bodyH cosA sinA
-        b.Color.R b.Color.G b.Color.B btAlpha
+        bodyColor.R bodyColor.G bodyColor.B btAlpha
     vi <- vi + vertsAdded
     // Roof: Shed/Cottage get a pitched gable on the main sub-cube; all others use flat slabs
     let roofHH = 0.04f
@@ -7887,16 +8323,16 @@ let buildStaticMesh (buildings: FuncBuilding[]) (blocks: ModuleBlock[]) (cityExt
         addOrientedGableToArraysWithRotation v n c vi
           (cx + mainOffX) eaveCy (cz + mainOffZ)
           (main.HW + pad) (main.HD + pad) cosA sinA
-          b.RoofColor.R b.RoofColor.G b.RoofColor.B 255uy
+          roofColor.R roofColor.G roofColor.B 255uy
         let wingsVerts =
           if compound.Length > 1 then
             addCompoundRoof v n c (vi+36) compound.[1..] cx b.TerrainY cz bodyH roofHH cosA sinA
-              b.RoofColor.R b.RoofColor.G b.RoofColor.B 255uy
+              roofColor.R roofColor.G roofColor.B 255uy
           else 0
         36 + wingsVerts
       | _ ->
         addCompoundRoof v n c vi compound cx b.TerrainY cz bodyH roofHH cosA sinA
-          b.RoofColor.R b.RoofColor.G b.RoofColor.B 255uy
+          roofColor.R roofColor.G roofColor.B 255uy
     vi <- vi + roofVerts
 
   // Trim to actual vertex count
@@ -8297,6 +8733,10 @@ let drawDistrictLabels2D
 
 let drawTooltip (b: FuncBuilding) (mx: int) (my: int) (theme: UiTextTheme) =
   let health = computeCodeHealthSignals b
+  let conditionInputs, condition = currentBuildingCondition b
+  let conditionSummary, conditionDetail = describeBuildingConditionReadout conditionInputs condition
+  let conditionSeverity = max condition.Incompleteness (max condition.Entropy condition.ActiveIncident)
+  let massingLabel = currentMassingFamily b |> massingFamilyLabel
   let typeLabel =
     match b.BuildingType with
     | Shed       -> "⌂ Shed"
@@ -8308,9 +8748,11 @@ let drawTooltip (b: FuncBuilding) (mx: int) (my: int) (theme: UiTextTheme) =
   let lines = [|
     sprintf "%s.%s" b.Func.Module b.Func.Name
     sprintf "%s:%d-%d" b.Func.RelPath b.Func.StartLine b.Func.EndLine
-    sprintf "%d lines  ·  heat %.0f%%  ·  %s" b.Func.LineCount (b.Heat * 100.0f) typeLabel
+    sprintf "%d lines  ·  heat %.0f%%  ·  %s  ·  massing %s" b.Func.LineCount (b.Heat * 100.0f) typeLabel massingLabel
     sprintf "%d callers  ·  %d callees" b.CallerCount b.CalleeCount
     sprintf "risk %.0f%%  ·  blast %.0f%%  ·  churn %.0f%%" (health.RiskScore * 100.0f) (health.BlastRadius * 100.0f) (health.ChurnPressure * 100.0f)
+    conditionSummary
+    conditionDetail
     sprintf "District: %s" b.District
   |]
   let pad = 10
@@ -8340,6 +8782,8 @@ let drawTooltip (b: FuncBuilding) (mx: int) (my: int) (theme: UiTextTheme) =
       | 0 -> brighten b.Color 1.3f
       | 1 -> Color(140uy, 140uy, 160uy, 255uy)
       | 2 -> heatColor b.Heat
+      | 5 -> heatColor conditionSeverity
+      | 6 -> Color(160uy, 175uy, 190uy, 255uy)
       | _ -> Color(200uy, 200uy, 210uy, 255uy)
     let size = if i = 0 then theme.TooltipTitle else theme.TooltipBody
     drawUiText lines.[i] (bx + pad) lineY size color
@@ -8506,15 +8950,21 @@ let drawSelectionPanel
       match pinned.BuildingType with
       | Shed       -> "Shed" | Cottage    -> "Cottage" | Rowhouse   -> "Rowhouse"
       | Commercial -> "Commercial" | Tower      -> "Tower" | Skyscraper -> "Skyscraper"
-    addLine theme.SelectionBody (sprintf "%d lines  ·  complexity %d  ·  heat %.0f%%  ·  %s"
-      pinned.Func.LineCount pinned.Complexity (pinned.Heat * 100.0f) typeStr) (Color(215uy, 215uy, 225uy, 255uy))
+    let massingLabel = currentMassingFamily pinned |> massingFamilyLabel
+    addLine theme.SelectionBody (sprintf "%d lines  ·  complexity %d  ·  heat %.0f%%  ·  %s  ·  massing %s"
+      pinned.Func.LineCount pinned.Complexity (pinned.Heat * 100.0f) typeStr massingLabel) (Color(215uy, 215uy, 225uy, 255uy))
     let health = computeCodeHealthSignals pinned
+    let conditionInputs, condition = currentBuildingCondition pinned
+    let conditionSummary, conditionDetail = describeBuildingConditionReadout conditionInputs condition
+    let conditionSeverity = max condition.Incompleteness (max condition.Entropy condition.ActiveIncident)
     addLine theme.SelectionBody
       (sprintf "risk %.0f%%  ·  blast %.0f%%  ·  churn %.0f%%"
         (health.RiskScore * 100.0f)
         (health.BlastRadius * 100.0f)
         (health.ChurnPressure * 100.0f))
       (heatColor health.RiskScore)
+    addLine theme.SelectionBody conditionSummary (heatColor conditionSeverity)
+    addLine theme.SelectionBody conditionDetail (Color(170uy, 185uy, 200uy, 255uy))
     addLine theme.SelectionBody (sprintf "%d callers  ·  %d callees  ·  link arcs %s"
       incoming.Length outgoing.Length (if showCallLinks then "visible" else "hidden")) (Color(190uy, 190uy, 200uy, 255uy))
     addLine theme.SelectionTitle "Detected callers" incomingRelationColor

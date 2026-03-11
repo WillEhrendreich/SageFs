@@ -2,7 +2,7 @@
   "name": "sagefs",
   "displayName": "SageFs — Live F# Development",
   "description": "Send F# code to SageFs for instant evaluation, type-checking, and hot reload.",
-  "version": "0.6.83",
+  "version": "0.6.84",
   "publisher": "sagefs",
   "license": "MIT",
   "icon": "icon.png",
@@ -525,6 +525,15 @@
           "dark": "#ffffff06",
           "light": "#00000006",
           "highContrast": "#ffffff10"
+        }
+      },
+      {
+        "id": "sagefs.bindingValueForeground",
+        "description": "Foreground color for inline binding value ghost text (e.g. → 42  int)",
+        "defaults": {
+          "dark": "#89b4fa",
+          "light": "#1e66f5",
+          "highContrast": "#89b4fa"
         }
       },
       {

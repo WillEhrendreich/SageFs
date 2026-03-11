@@ -59,6 +59,8 @@ let private mkSampleBuilding name buildingType lineCount heat callers callees co
     BuildingType = buildingType
     GitAgeDays = ageDays
     GitCommitCount = commitCount
+    GitAuthorCount = 1
+    GitBugFixRatio = 0.0f
     X = 0.0f
     Z = 0.0f
     W = 4.0f
@@ -1158,6 +1160,91 @@ let typedMassingTests =
       |> Expect.isGreaterThan "shaft should rise above the podium"
   ]
 
+let massingFamilyTests =
+  testList "Named massing families" [
+    testCase "monolith family has no podium, shaft, or crown" <| fun () ->
+      let profile = BuildingMassingProfile.ofFamily Monolith
+      profile.PodiumRatio |> Expect.isNone "monolith should not define a podium"
+      profile.ShaftRatio |> Expect.isNone "monolith should not define a shaft"
+      profile.CrownRatio |> Expect.isNone "monolith should not define a crown"
+
+    testCase "massing family labels stay human-readable" <| fun () ->
+      massingFamilyLabel TaperedTower
+      |> Expect.equal "tapered tower should stay lower-case and readable" "tapered tower"
+
+    testCase "massing family selection is deterministic" <| fun () ->
+      let first = selectMassingFamily "MyMod.parseExpr" Tower 7
+      let second = selectMassingFamily "MyMod.parseExpr" Tower 7
+      first |> Expect.equal "same input should resolve to the same family" second
+
+    testCase "skyscraper selection never falls back to low-rise families" <| fun () ->
+      let seeds =
+        [ "Core.dispatchHub"
+          "Core.renderLoop"
+          "Core.typeCheck" ]
+      for qualName in seeds do
+        match selectMassingFamily qualName Skyscraper 30 with
+        | PodiumShaft
+        | TaperedTower -> ()
+        | other -> failtestf "expected a tall family for %s, got %A" qualName other
+
+    testCase "tapered tower family yields a podium, shaft, and crown hierarchy" <| fun () ->
+      let cubes = generateTypedCompoundForFamily "Test.scraper" Skyscraper TaperedTower 50 12.0f 12.0f
+      (cubes.Length, 3)
+      |> Expect.isGreaterThanOrEqual "tapered towers should have at least podium, shaft, and crown masses"
+      let byHeight = cubes |> Array.sortByDescending _.HeightScale
+      let tallest = byHeight.[0]
+      let secondTallest = byHeight.[1]
+      let broadest = cubes |> Array.maxBy (fun cube -> cube.HW * cube.HD)
+      let narrowest = cubes |> Array.minBy (fun cube -> cube.HW * cube.HD)
+      (tallest.HeightScale, secondTallest.HeightScale)
+      |> Expect.isGreaterThan "crown should rise above the shaft"
+      (broadest.HW * broadest.HD, narrowest.HW * narrowest.HD)
+      |> Expect.isGreaterThan "podium footprint should exceed the crown footprint"
+  ]
+
+let historyAccretionTests =
+  testList "History accretions" [
+    testCase "commit thresholds step accretion count up" <| fun () ->
+      accretionCountFromCommits 19 |> Expect.equal "<20 commits should stay at zero accretions" 0
+      accretionCountFromCommits 20 |> Expect.equal "20 commits should unlock the first accretion" 1
+      accretionCountFromCommits 45 |> Expect.equal "45 commits should unlock the second accretion" 2
+      accretionCountFromCommits 80 |> Expect.equal "80 commits should unlock the third accretion" 3
+
+    testCase "fragmented bug-fix-heavy history becomes patched" <| fun () ->
+      accretionStyleFromSignals 4 0.35f
+      |> Expect.equal "many authors plus bug-fix churn should read as patched" Patched
+
+    testCase "quiet building compound stays on the authored family massing" <| fun () ->
+      let building =
+        mkSampleBuilding "quiet" Rowhouse 50 0.35f 3 2 5 240.0f 8 0.0f
+        |> fun sample -> { sample with W = 10.0f; D = 6.0f }
+      let expected =
+        generateTypedCompoundForFamily
+          building.Func.QualifiedName
+          building.BuildingType
+          (currentMassingFamily building)
+          building.Complexity
+          (building.W / 2.0f)
+          (building.D / 2.0f)
+      compoundForBuilding building
+      |> Expect.equal "low-commit buildings should remain pure authored massing" expected
+
+    testCase "history accretions stay deterministic, connected, and within lot" <| fun () ->
+      let profile =
+        accretionProfileFromGit 90 4 0.45f 900.0f
+      let baseCubes =
+        [| { CX = 0.0f; CZ = 0.0f; HW = 1.4f; HD = 1.0f; HeightScale = 0.9f } |]
+      let first = applyHistoryAccretions profile "Test.accretion" 5.0f 5.0f baseCubes
+      let second = applyHistoryAccretions profile "Test.accretion" 5.0f 5.0f baseCubes
+      first |> Expect.equal "history accretions should be deterministic" second
+      (first.Length, baseCubes.Length) |> Expect.isGreaterThan "hot history should add visible accretions"
+      first |> Array.forall (cubeWithinLot 5.0f 5.0f)
+      |> Expect.isTrue "accretion cubes should stay inside the lot envelope"
+      compoundConnected first
+      |> Expect.isTrue "accretion cubes should stay attached to the main compound"
+  ]
+
 let cameraMovementTests =
   testList "Camera movement" [
     testCase "forward movement follows the full look direction" <| fun () ->
@@ -1511,6 +1598,38 @@ let private chainTrafficPlan () =
   district
   |> indexStreetNetwork
 
+let private spaceSyntaxChoicePlan () =
+  let district : DistrictPlan =
+    { MajorStreets =
+        [ { Id = StreetId 1
+            Segment = { X = 0.0f; Z = 0.0f; W = 100.0f; H = 20.0f }
+            Status = Built
+            Residents = 1.0f
+            Traffic = { Volume = 0.0f; MaxVolume = 0.0f } }
+          { Id = StreetId 2
+            Segment = { X = 100.0f; Z = 0.0f; W = 400.0f; H = 20.0f }
+            Status = Built
+            Residents = 1.0f
+            Traffic = { Volume = 0.0f; MaxVolume = 0.0f } }
+          { Id = StreetId 3
+            Segment = { X = 250.0f; Z = 0.0f; W = 100.0f; H = 40.0f }
+            Status = Built
+            Residents = 1.0f
+            Traffic = { Volume = 0.0f; MaxVolume = 0.0f } }
+          { Id = StreetId 4
+            Segment = { X = 80.0f; Z = 0.0f; W = 20.0f; H = 40.2f }
+            Status = Built
+            Residents = 1.0f
+            Traffic = { Volume = 0.0f; MaxVolume = 0.0f } }
+          { Id = StreetId 5
+            Segment = { X = 80.0f; Z = 20.2f; W = 170.0f; H = 20.0f }
+            Status = Built
+            Residents = 1.0f
+            Traffic = { Volume = 0.0f; MaxVolume = 0.0f } } ]
+      Quarters = [] }
+  district
+  |> indexStreetNetwork
+
 let trafficSimulationTests =
   testList "Traffic and promotion" [
     paperCase "§3.2" "shortest path uses connected street segments on a tiny graph" <| fun () ->
@@ -1541,6 +1660,37 @@ let trafficSimulationTests =
       shortestStreetPath plan (StreetId 10) (StreetId 11)
       |> Expect.equal "disconnected street segments should not fabricate a path"
            (Error (NoRouteBetweenStreets (StreetId 10, StreetId 11)))
+
+    paperCase "§3.2" "space syntax turn cost scales to the paper's 90-degree calibration" <| fun () ->
+      (abs (angularTurnCost 500.0f 0.0f - 0.0f), 0.01f)
+      |> Expect.isLessThanOrEqual "zero-degree continuation should add no turn cost"
+      (abs (angularTurnCost 500.0f (MathF.PI / 2.0f) - 500.0f), 0.1f)
+      |> Expect.isLessThanOrEqual "a right-angle turn should cost 500m"
+      (abs (angularTurnCost 500.0f MathF.PI - 1000.0f), 0.1f)
+      |> Expect.isLessThanOrEqual "a U-turn should cost 1000m"
+
+    paperProperty "§3.2" "space syntax turn cost is monotone with angle" <|
+      fun (leftAngle: float32) (rightAngle: float32) ->
+        let clampAngle angle =
+          match Single.IsNaN angle || Single.IsInfinity angle with
+          | true -> 0.0f
+          | false -> abs angle % MathF.PI
+        let left = clampAngle leftAngle
+        let right = clampAngle rightAngle
+        let leftCost = angularTurnCost 500.0f left
+        let rightCost = angularTurnCost 500.0f right
+        match left <= right with
+        | true -> (leftCost, rightCost) |> Expect.isLessThanOrEqual "smaller turn angles should not cost more"
+        | false -> (rightCost, leftCost) |> Expect.isLessThanOrEqual "smaller turn angles should not cost more"
+
+    paperCase "§3.2" "paper turn cost prefers a longer straight corridor over a shorter two-turn shortcut" <| fun () ->
+      let plan = spaceSyntaxChoicePlan ()
+      shortestStreetPathWithTurnCost 0.0f plan (StreetId 1) (StreetId 3)
+      |> Expect.equal "without the paper penalty the shorter shortcut should win"
+           (Ok [ StreetId 1; StreetId 4; StreetId 5; StreetId 3 ])
+      shortestStreetPathWithTurnCost 500.0f plan (StreetId 1) (StreetId 3)
+      |> Expect.equal "with the paper penalty the longer straight corridor should win"
+           (Ok [ StreetId 1; StreetId 2; StreetId 3 ])
 
     paperCase "§3.2" "applying and removing a trip updates every street on its route" <| fun () ->
       let plan = chainTrafficPlan ()
@@ -2977,6 +3127,8 @@ let gitMetaTests =
     testCase "single commit line is counted" <| fun () ->
       let m = parseGitLog "abc123|2024-01-15T10:00:00+00:00\n"
       m.CommitCount |> Expect.equal "one commit" 1
+      m.AuthorCount |> Expect.equal "legacy format should fall back to one author" 1
+      m.BugFixRatio |> Expect.equal "legacy format should not infer bug-fix churn" 0.0f
 
     testCase "multiple lines all counted" <| fun () ->
       let log = "aaa|2024-06-01T00:00:00+00:00\nbbb|2023-01-01T00:00:00+00:00\nccc|2022-03-15T00:00:00+00:00\n"
@@ -2987,6 +3139,18 @@ let gitMetaTests =
       let log = "aaa|2024-06-01T00:00:00+00:00\nbbb|2020-01-01T00:00:00+00:00\n"
       let m = parseGitLog log
       m.FirstCommitDate.Year |> Expect.equal "2020 is the earliest year" 2020
+
+    testCase "rich git log captures author count and bug-fix ratio" <| fun () ->
+      let log =
+        String.concat "\n" [
+          "aaa|2024-06-01T00:00:00+00:00|Alice|Fix flaky parser"
+          "bbb|2024-05-01T00:00:00+00:00|Bob|Refactor render layout"
+          "ccc|2024-04-01T00:00:00+00:00|Alice|Hotfix geometry regression"
+        ] + "\n"
+      let m = parseGitLog log
+      m.AuthorCount |> Expect.equal "distinct authors should be counted" 2
+      (abs (m.BugFixRatio - (2.0f / 3.0f)), 0.01f)
+      |> Expect.isLessThan "fix-like subjects should contribute to bug-fix ratio"
   ]
 
 let organicFactorTests =
@@ -5095,12 +5259,16 @@ let codeHealthMetricTests =
         Map.ofList [
           "MetricMod.fs",
             { CommitCount = 17
+              AuthorCount = 3
+              BugFixRatio = 0.35f
               FirstCommitDate = DateTimeOffset.Now.AddDays(-200.0)
               LastCommitDate = DateTimeOffset.Now.AddDays(-2.0) } ]
       let building =
         packAlongRoads roads rect funcs Map.empty (Color(70uy, 130uy, 180uy, 255uy)) (Random 1) gitMeta
         |> List.head
       building.GitCommitCount |> Expect.equal "git commit count should survive into building metrics" 17
+      building.GitAuthorCount |> Expect.equal "git author count should survive into building metrics" 3
+      building.GitBugFixRatio |> Expect.equal "bug-fix ratio should survive into building metrics" 0.35f
 
     testCase "computeCodeHealthSignals favors heavily connected hot code over calm code" <| fun () ->
       let hot =
@@ -5123,6 +5291,274 @@ let codeHealthMetricTests =
       let dormantSignals = computeCodeHealthSignals dormant
       (activeSignals.ChurnPressure, dormantSignals.ChurnPressure)
       |> Expect.isGreaterThan "recent high-commit code should register higher churn pressure"
+  ]
+
+let buildingConditionTests =
+  testList "building condition signals" [
+    testCase "adapter carries building metadata and explicit condition inputs" <| fun () ->
+      let building =
+        mkSampleBuilding "adapter" Tower 120 0.6f 7 4 11 18.0f 14 0.9f
+        |> fun sample -> { sample with GitAuthorCount = 4; GitBugFixRatio = 0.15f }
+      let inputs = buildingConditionInputsFromBuilding building (Some 0.35f) 0.25f true
+      inputs.Complexity |> Expect.equal "adapter should preserve complexity" building.Complexity
+      inputs.GitCommitCount |> Expect.equal "adapter should preserve commit count" building.GitCommitCount
+      inputs.GitAgeDays |> Expect.equal "adapter should preserve git age" building.GitAgeDays
+      inputs.CoverageRatio |> Expect.equal "adapter should pass through explicit coverage" (Some 0.35f)
+      inputs.BugFixRatio |> Expect.equal "adapter should pass through explicit bug-fix ratio" 0.25f
+      inputs.AuthorCount |> Expect.equal "adapter should carry author count from git metadata" 4
+      inputs.HasActiveIncident |> Expect.isTrue "adapter should preserve incident flag"
+
+    testCase "current building condition uses bug-fix and authorship history" <| fun () ->
+      let stable =
+        mkSampleBuilding "stable" Commercial 90 0.45f 6 4 8 20.0f 24 0.6f
+        |> fun sample -> { sample with GitAuthorCount = 1; GitBugFixRatio = 0.05f }
+      let fragmented =
+        mkSampleBuilding "fragmented" Commercial 90 0.45f 6 4 8 20.0f 24 0.6f
+        |> fun sample -> { sample with GitAuthorCount = 5; GitBugFixRatio = 0.65f }
+      let _, stableSignals = currentBuildingCondition stable
+      let inputs, fragmentedSignals = currentBuildingCondition fragmented
+      inputs.AuthorCount |> Expect.equal "current building condition should expose git author count" 5
+      inputs.BugFixRatio |> Expect.equal "current building condition should expose bug-fix ratio" 0.65f
+      (fragmentedSignals.Entropy, stableSignals.Entropy)
+      |> Expect.isGreaterThan "fragmented bug-fix-heavy history should read as more entropic"
+
+    testCase "pristine building with full coverage and no churn has minimal condition" <| fun () ->
+      let inputs =
+        { Complexity = 3
+          GitCommitCount = 2
+          GitAgeDays = 400.0f
+          CoverageRatio = Some 1.0f
+          BugFixRatio = 0.0f
+          AuthorCount = 1
+          HasActiveIncident = false }
+      let signals = computeBuildingCondition inputs
+      (signals.Incompleteness, 0.15f) |> Expect.isLessThan "full coverage low-complexity should have near-zero incompleteness"
+      (signals.Entropy, 0.15f) |> Expect.isLessThan "dormant code should have near-zero entropy"
+      signals.ActiveIncident |> Expect.equal "no incident should score 0" 0.0f
+
+    testCase "high-complexity uncovered code scores high incompleteness" <| fun () ->
+      let inputs =
+        { Complexity = 20
+          GitCommitCount = 5
+          GitAgeDays = 200.0f
+          CoverageRatio = Some 0.0f
+          BugFixRatio = 0.0f
+          AuthorCount = 1
+          HasActiveIncident = false }
+      let signals = computeBuildingCondition inputs
+      (signals.Incompleteness, 0.70f) |> Expect.isGreaterThan "uncovered high-complexity code should be highly incomplete"
+
+    testCase "unknown coverage on complex code exceeds zero coverage on simple code for incompleteness" <| fun () ->
+      let complex =
+        { Complexity = 18
+          GitCommitCount = 5
+          GitAgeDays = 200.0f
+          CoverageRatio = None
+          BugFixRatio = 0.0f
+          AuthorCount = 1
+          HasActiveIncident = false }
+      let simple =
+        { Complexity = 2
+          GitCommitCount = 5
+          GitAgeDays = 200.0f
+          CoverageRatio = Some 0.0f
+          BugFixRatio = 0.0f
+          AuthorCount = 1
+          HasActiveIncident = false }
+      let complexSignals = computeBuildingCondition complex
+      let simpleSignals = computeBuildingCondition simple
+      (complexSignals.Incompleteness, simpleSignals.Incompleteness)
+      |> Expect.isGreaterThan "unanalyzed complex code should be more incomplete than zero-covered simple code"
+
+    testCase "high-churn recent buggy code scores high entropy" <| fun () ->
+      let inputs =
+        { Complexity = 8
+          GitCommitCount = 50
+          GitAgeDays = 5.0f
+          CoverageRatio = Some 0.8f
+          BugFixRatio = 0.60f
+          AuthorCount = 4
+          HasActiveIncident = false }
+      let signals = computeBuildingCondition inputs
+      (signals.Entropy, 0.55f) |> Expect.isGreaterThan "active buggy code should have high entropy"
+
+    testCase "active incident produces a non-zero incident signal" <| fun () ->
+      let inputs =
+        { Complexity = 5
+          GitCommitCount = 10
+          GitAgeDays = 90.0f
+          CoverageRatio = Some 0.75f
+          BugFixRatio = 0.1f
+          AuthorCount = 1
+          HasActiveIncident = true }
+      let signals = computeBuildingCondition inputs
+      (signals.ActiveIncident, 0.5f) |> Expect.isGreaterThan "failing tests should produce a non-zero incident signal"
+      (signals.ActiveIncident, 1.0f) |> Expect.isLessThan "incident should not reach 1.0 (transient, not permanent ruin)"
+
+    testCase "dormant high-entropy code without incident has zero incident signal" <| fun () ->
+      let inputs =
+        { Complexity = 15
+          GitCommitCount = 60
+          GitAgeDays = 800.0f
+          CoverageRatio = Some 0.2f
+          BugFixRatio = 0.4f
+          AuthorCount = 5
+          HasActiveIncident = false }
+      let signals = computeBuildingCondition inputs
+      signals.ActiveIncident |> Expect.equal "no active incident should score 0 regardless of entropy" 0.0f
+      (signals.Entropy, 0.30f) |> Expect.isGreaterThan "high historical churn should still register entropy"
+
+    testPropertyWithConfig cfg "all building condition signals are bounded [0,1]" <|
+      fun (complexity: int) (commits: int) (ageDays: float32) (coverage: float32 option) (bugFix: float32) (authors: int) (incident: bool) ->
+        let inputs =
+          { Complexity = abs complexity % 100
+            GitCommitCount = abs commits % 200
+            GitAgeDays = abs ageDays % 3650.0f
+            CoverageRatio = coverage |> Option.map (fun ratio -> ratio |> max 0.0f |> min 1.0f)
+            BugFixRatio = bugFix |> max 0.0f |> min 1.0f
+            AuthorCount = max 1 (abs authors % 20)
+            HasActiveIncident = incident }
+        let signals = computeBuildingCondition inputs
+        signals.Incompleteness >= 0.0f && signals.Incompleteness <= 1.0f
+        && signals.Entropy >= 0.0f && signals.Entropy <= 1.0f
+        && signals.ActiveIncident >= 0.0f && signals.ActiveIncident <= 1.0f
+  ]
+
+let buildingConditionReadoutTests =
+  testList "building condition readout" [
+    testCase "unknown coverage is surfaced explicitly in detail text" <| fun () ->
+      let inputs =
+        { Complexity = 12
+          GitCommitCount = 9
+          GitAgeDays = 45.0f
+          CoverageRatio = None
+          BugFixRatio = 0.15f
+          AuthorCount = 2
+          HasActiveIncident = false }
+      let signals = computeBuildingCondition inputs
+      let summary, detail = describeBuildingConditionReadout inputs signals
+      summary |> Expect.stringContains "summary should expose incompleteness axis" "condition incomplete"
+      detail |> Expect.stringContains "detail should admit missing coverage" "coverage unknown"
+      detail |> Expect.stringContains "detail should state quiet incidents" "incident quiet"
+
+    testCase "explicit coverage and active incidents are formatted in readout text" <| fun () ->
+      let inputs =
+        { Complexity = 8
+          GitCommitCount = 18
+          GitAgeDays = 10.0f
+          CoverageRatio = Some 0.35f
+          BugFixRatio = 0.25f
+          AuthorCount = 3
+          HasActiveIncident = true }
+      let signals = computeBuildingCondition inputs
+      let summary, detail = describeBuildingConditionReadout inputs signals
+      summary |> Expect.stringContains "summary should report incident percentage" "incident 85%"
+      detail |> Expect.stringContains "detail should report explicit coverage percent" "coverage 35%"
+      detail |> Expect.stringContains "detail should report authorship count" "authors 3"
+      detail |> Expect.stringContains "detail should report bug-fix ratio" "bug-fix 25%"
+      detail |> Expect.stringContains "detail should state active incident state" "incident active"
+  ]
+
+let buildingConditionWearTests =
+  testList "building condition wear" [
+    testCase "wall wear keeps worn cottages warmer than cool" <| fun () ->
+      let worn =
+        applyConditionWear
+          (BuildingType.wallColor Cottage "wornCottage" 180.0f)
+          { Incompleteness = 0.9f
+            Entropy = 0.95f
+            ActiveIncident = 0.0f }
+      (int worn.R, int worn.B)
+      |> Expect.isGreaterThan "restrained wear should not erase warm cottage identity"
+
+    testCase "entropy wear desaturates wall colors" <| fun () ->
+      let baseColor = Color(210uy, 140uy, 90uy, 255uy)
+      let lowEntropy =
+        applyConditionWear baseColor
+          { Incompleteness = 0.2f
+            Entropy = 0.1f
+            ActiveIncident = 0.0f }
+      let highEntropy =
+        applyConditionWear baseColor
+          { Incompleteness = 0.2f
+            Entropy = 0.95f
+            ActiveIncident = 0.0f }
+      let spread (color: Color) =
+        abs (int color.R - int color.G)
+        + abs (int color.G - int color.B)
+        + abs (int color.R - int color.B)
+      (spread lowEntropy, spread highEntropy)
+      |> Expect.isGreaterThan "high entropy should pull wall colors closer to grayscale"
+
+    testCase "incompleteness wear darkens wall colors" <| fun () ->
+      let baseColor = Color(200uy, 150uy, 110uy, 255uy)
+      let nearlyComplete =
+        applyConditionWear baseColor
+          { Incompleteness = 0.05f
+            Entropy = 0.3f
+            ActiveIncident = 0.0f }
+      let incomplete =
+        applyConditionWear baseColor
+          { Incompleteness = 0.95f
+            Entropy = 0.3f
+            ActiveIncident = 0.0f }
+      let luminance (color: Color) = int color.R + int color.G + int color.B
+      (luminance nearlyComplete, luminance incomplete)
+      |> Expect.isGreaterThan "unfinished buildings should read slightly darker"
+
+    testCase "roof wear stays opaque and darkens under heavy condition" <| fun () ->
+      let pristine =
+        applyConditionWearRoof
+          (BuildingType.roofColor Cottage (Color(70uy, 130uy, 180uy, 255uy)))
+          { Incompleteness = 0.0f
+            Entropy = 0.0f
+            ActiveIncident = 0.0f }
+      let worn =
+        applyConditionWearRoof
+          (BuildingType.roofColor Cottage (Color(70uy, 130uy, 180uy, 255uy)))
+          { Incompleteness = 0.9f
+            Entropy = 0.8f
+            ActiveIncident = 0.0f }
+      worn.A |> Expect.equal "roof wear should preserve alpha" 255uy
+      let luminance (color: Color) = int color.R + int color.G + int color.B
+      (luminance pristine, luminance worn)
+      |> Expect.isGreaterThan "worn roofs should darken more than pristine roofs"
+  ]
+
+let private maxWearSignals =
+  { Incompleteness = 1.0f
+    Entropy = 1.0f
+    ActiveIncident = 1.0f }
+
+let private canonicalWallColor buildingType =
+  BuildingType.wallColor buildingType "canonical" 0.0f
+
+let private colorDistancePerceptual (left: Color) (right: Color) =
+  let dr = float32 left.R - float32 right.R
+  let dg = float32 left.G - float32 right.G
+  let db = float32 left.B - float32 right.B
+  MathF.Sqrt(0.299f * dr * dr + 0.587f * dg * dg + 0.114f * db * db)
+
+let buildingLegibilityTests =
+  testList "building legibility" [
+    testCase "fresh tower stays distinct from a max-worn rowhouse" <| fun () ->
+      let freshTower = BuildingType.wallColor Tower "tower-legibility" 0.0f
+      let wornRowhouse = canonicalWallColor Rowhouse |> fun color -> applyConditionWear color maxWearSignals
+      let distance = colorDistancePerceptual freshTower wornRowhouse
+      (distance, 20.0f)
+      |> Expect.isGreaterThanOrEqual "fresh towers should not collapse into worn rowhouse tones"
+
+    testCase "adjacent building types remain distinct under max wear" <| fun () ->
+      let orderedTypes =
+        [| Shed; Cottage; Rowhouse; Commercial; Tower; Skyscraper |]
+      orderedTypes
+      |> Array.pairwise
+      |> Array.iter (fun (leftType, rightType) ->
+          let leftWorn = canonicalWallColor leftType |> fun color -> applyConditionWear color maxWearSignals
+          let rightWorn = canonicalWallColor rightType |> fun color -> applyConditionWear color maxWearSignals
+          let distance = colorDistancePerceptual leftWorn rightWorn
+          (distance, 12.0f)
+          |> Expect.isGreaterThanOrEqual (sprintf "%A and %A should remain visually distinct even at max wear" leftType rightType))
   ]
 
 let terrainOverlaySummaryTests =
@@ -5245,6 +5681,8 @@ let allTests =
     roadCurveTests
     compoundShapeTests
     typedMassingTests
+    massingFamilyTests
+    historyAccretionTests
     cameraMovementTests
     visualDefaultsTests
     roadAccessTests
@@ -5280,6 +5718,10 @@ let allTests =
     semanticTerrainTests
     repeatedSideConnectorTests
     codeHealthMetricTests
+    buildingConditionTests
+    buildingConditionReadoutTests
+    buildingConditionWearTests
+    buildingLegibilityTests
     visibleRoadNetworkTests
     nightScaleTests
     parseDaemonInfoJsonTests

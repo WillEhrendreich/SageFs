@@ -180,6 +180,7 @@ type LiveTestingCallbacks = {
   OnSessionFaulted: string -> unit
   OnDomainModel: obj -> unit
   OnDiagnosisReady: obj -> unit
+  OnBindingValuesUpdate: int -> ClientBindingValue list -> unit
 }
 
 type LiveTestingListener = {
@@ -234,6 +235,12 @@ let start (port: int) (callbacks: LiveTestingCallbacks) (onReconnect: (unit -> u
         |> Option.iter (fun arr ->
           bindings <- arr
           callbacks.OnBindingsUpdate bindings)
+        let bsl = fieldInt "blockStartLine" data |> Option.defaultValue 0
+        let bindingValues =
+          fieldArray "BindingValues" data
+          |> Option.map (Array.choose parseClientBindingValue >> Array.toList)
+          |> Option.defaultValue []
+        callbacks.OnBindingValuesUpdate bsl bindingValues
       | "test_trace" ->
         TestTrace <- Some data
         callbacks.OnTestTraceUpdate data

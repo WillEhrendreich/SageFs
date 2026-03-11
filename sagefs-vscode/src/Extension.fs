@@ -2106,17 +2106,23 @@ let activate (context: ExtensionContext) =
         // Parse per-failure causal symbols and feed them into the repair CodeLens
         let failures : LiveTestingTypes.VscDiagnosisFailure array =
           try
-            let arr = data?failures :?> obj array
+            let arr : obj array = unbox (data?failures)
             arr |> Array.map (fun f ->
               { LiveTestingTypes.VscDiagnosisFailure.TestName =
-                  (try f?testName :?> string with _ -> "")
+                  (try unbox<string>(f?testName) with _ -> "")
                 CausalSymbols =
-                  try f?causalSymbols :?> string array
+                  try unbox<string array>(f?causalSymbols)
                   with _ -> [||] })
           with _ -> [||]
         match failures.Length with
         | 0 -> ()
         | _ -> TestLens.updateDiagnosis failures
+      OnBindingValuesUpdate = fun blockStartLine bindingValues ->
+        // Show persistent inline binding value ghost text in the active editor.
+        // blockStartLine is 1-based from server; VS Code setDecorations is 0-based.
+        let line = max 0 (blockStartLine - 1)
+        Window.getActiveTextEditor ()
+        |> Option.iter (fun ed -> InlineDeco.showBindingValues ed line bindingValues)
     }
     let reconnectHandler = Some (fun () ->
       c.log "SSE reconnected — refreshing status..."
