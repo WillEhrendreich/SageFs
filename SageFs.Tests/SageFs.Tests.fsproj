@@ -36,6 +36,7 @@
         <Compile Include="ActorSplitTests.fs" />
         <Compile Include="AffordanceTests.fs" />
         <Compile Include="AffordancesPropertyTests.fs" />
+        <Compile Include="McpAffordanceHardeningTests.fs" />
         <Compile Include="WorkerProtocolTests.fs" />
         <Compile Include="DaemonStateTests.fs" />
         <Compile Include="DaemonIntegrationTests.fs" />
@@ -136,6 +137,7 @@
         <Compile Include="SageFsErrorClassificationTests.fs" />
         <Compile Include="SageFsErrorJsonTests.fs" />
         <Compile Include="SageFsErrorPropertyTests.fs" />
+        <Compile Include="ErrorAlgebraHardeningTests.fs" />
         <Compile Include="ResultCeTests.fs" />
         <Compile Include="SessionIdTests.fs" />
         <Compile Include="EndpointContractTests.fs" />
@@ -219,6 +221,7 @@
         <Compile Include="FsiOutputParserTests.fs" />
         <Compile Include="SseSerializationBenchmarks.fs" />
         <Compile Include="SsePropertyTests.fs" />
+        <Compile Include="SseContractComplianceTests.fs" />
         <Compile Include="SageTuiAllocationBenchmarks.fs" />
         <Compile Include="Program.fs" />
     </ItemGroup>
