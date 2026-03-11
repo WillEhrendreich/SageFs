@@ -540,7 +540,8 @@ let wireModelChangeHandlers
   (fsiBindings: Map<string, SageFs.SseWriter.FsiBinding> ref)
   (featurePushState: SageFs.Features.FeatureHooks.FeaturePushState ref)
   (lastFeatureOutputCount: int ref)
-  (sharedBindingScope: SageFs.Features.BindingExplorer.BindingScopeSnapshot option ref) =
+  (sharedBindingScope: SageFs.Features.BindingExplorer.BindingScopeSnapshot option ref)
+  (lastEvalContext: (string * int) option ref) =
   let modelChangeState = ref ModelChangeState.empty
 
   let handleDiagnosticsChange diagCount =
@@ -577,9 +578,13 @@ let wireModelChangeHandlers
         match newBindings <> fsiBindings.Value with
         | true ->
           fsiBindings.Value <- newBindings
+          let (bsl, fp) =
+            lastEvalContext.Value
+            |> Option.map (fun (fp, bsl) -> bsl, Some fp)
+            |> Option.defaultValue (0, None)
           fsiBindings.Value
           |> Map.values |> Array.ofSeq
-          |> SageFs.SseWriter.formatBindingsSnapshotEvent ctx.SseJsonOpts (Some sid) bindingValues
+          |> SageFs.SseWriter.formatBindingsSnapshotEvent ctx.SseJsonOpts (Some sid) bindingValues bsl fp
           |> ctx.TestEventBroadcast.Trigger
         | false -> ())
     | false -> ()
@@ -802,6 +807,8 @@ type RouteContext = {
   FsiBindings: Map<string, SageFs.SseWriter.FsiBinding> ref
   FeaturePushState: SageFs.Features.FeatureHooks.FeaturePushState ref
   LastFeatureOutputCount: int ref
+  /// Last (filePath, blockStartLine) from an /exec call; used to stamp bindings_snapshot events.
+  LastEvalContext: (string * int) option ref
 }
 
 let configureOtel (builder: WebApplicationBuilder) (port: int) (version: string) (otelConfigured: bool) =
@@ -958,6 +965,8 @@ let mapExecutionRoutes (app: WebApplication) (rctx: RouteContext) =
         let sid = SseContext.activeSessionId rctx.SseContext
         let startedStr = SageFs.SseWriter.formatEvalStartedEvent rctx.SseContext.SseJsonOpts sid fp bsl
         rctx.SseContext.TestEventBroadcast.Trigger(startedStr)
+        // Remember for bindings_snapshot stamping
+        rctx.LastEvalContext.Value <- Some (fp, bsl)
       | _ -> ()
       let sw = System.Diagnostics.Stopwatch.StartNew()
       let! result = SageFs.McpTools.sendFSharpCode rctx.McpContext "cli-integrated" code SageFs.McpTools.OutputFormat.Text None wd filePath evalMode blockStartLine
@@ -1187,7 +1196,7 @@ let mapEventsRoute (app: WebApplication) (rctx: RouteContext) =
         | count, Some sid when count > 0 ->
           let frame =
             rctx.FsiBindings.Value |> Map.values |> Array.ofSeq
-            |> SageFs.SseWriter.formatBindingsSnapshotEvent rctx.SseContext.SseJsonOpts (Some sid) []
+            |> SageFs.SseWriter.formatBindingsSnapshotEvent rctx.SseContext.SseJsonOpts (Some sid) [] 0 None
           do! writeSseFrame ctx.Response.Body frame
         | _ -> ()
         for sse in
@@ -1682,6 +1691,7 @@ let startMcpServer (cfg: McpServerConfig) =
       // Phase 3: Route context + routes
       let fsiBindings = ref (Map.empty: Map<string, SageFs.SseWriter.FsiBinding>)
       let lastFeatureOutputCount = ref 0
+      let lastEvalContext = ref (None: (string * int) option)
       let testEventBroadcast = Event<string>()
       let sessionEventBroadcast = Event<string>()
       let sseCtx: SseContext = {
@@ -1702,6 +1712,7 @@ let startMcpServer (cfg: McpServerConfig) =
         FsiBindings = fsiBindings
         FeaturePushState = featurePushState
         LastFeatureOutputCount = lastFeatureOutputCount
+        LastEvalContext = lastEvalContext
       }
 
       match cfg.StateChanged with
@@ -1719,7 +1730,7 @@ let startMcpServer (cfg: McpServerConfig) =
 
       let _stateSub =
         cfg.StateChanged |> Option.map (fun evt ->
-          wireModelChangeHandlers evt sseCtx fsiBindings featurePushState lastFeatureOutputCount cfg.SharedBindingScope)
+          wireModelChangeHandlers evt sseCtx fsiBindings featurePushState lastFeatureOutputCount cfg.SharedBindingScope lastEvalContext)
 
       logStartup app cfg.Port logPath otelConfigured
       do! app.RunAsync()

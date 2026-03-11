@@ -203,6 +203,9 @@ let start (port: int) (callbacks: LiveTestingCallbacks) (onReconnect: (unit -> u
   let mutable cellGraph: VscCellGraph option = None
   let mutable bindingScope: VscBindingScopeSnapshot option = None
   let mutable timeline: VscTimelineStats option = None
+  // Track last known (filePath, blockStartLine) from eval_result so bindings_snapshot
+  // can fall back to it when the server doesn't yet emit blockStartLine in the snapshot.
+  let mutable lastKnownBsl: (string * int) option = None
   let url = sprintf "http://localhost:%d/events" port
 
   let featureCallbacks =
@@ -235,7 +238,13 @@ let start (port: int) (callbacks: LiveTestingCallbacks) (onReconnect: (unit -> u
         |> Option.iter (fun arr ->
           bindings <- arr
           callbacks.OnBindingsUpdate bindings)
-        let bsl = fieldInt "blockStartLine" data |> Option.defaultValue 0
+        let bslFromEvent = fieldInt "blockStartLine" data |> Option.defaultValue 0
+        // Fall back to last eval_result's blockStartLine if the server doesn't include
+        // one in the snapshot (pre-Phase-2 server compatibility).
+        let bsl =
+          match bslFromEvent > 0 with
+          | true  -> bslFromEvent
+          | false -> lastKnownBsl |> Option.map snd |> Option.defaultValue 0
         let bindingValues =
           fieldArray "BindingValues" data
           |> Option.map (Array.choose parseClientBindingValue >> Array.toList)
@@ -270,7 +279,9 @@ let start (port: int) (callbacks: LiveTestingCallbacks) (onReconnect: (unit -> u
         let durationMs = fieldFloat "durationMs" data |> Option.defaultValue 0.0
         match filePath with
         | "" -> ()
-        | fp -> callbacks.OnEvalResult fp bsl output durationMs
+        | fp ->
+          if bsl > 0 then lastKnownBsl <- Some (fp, bsl)
+          callbacks.OnEvalResult fp bsl output durationMs
       | "test_source_locations" ->
         let locations = fieldArray "Locations" data |> Option.defaultValue [||]
         callbacks.OnSourceLocationsUpdate locations

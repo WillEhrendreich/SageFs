@@ -201,15 +201,21 @@ let accumulateBindings
 
 /// Format a bindings snapshot as an SSE event string.
 /// Includes both the legacy FsiBinding array (for backward compat) and rich BindingValue records.
+/// blockStartLine (1-based) lets clients position per-binding ghost text decorations correctly.
 let formatBindingsSnapshotEvent
   (opts: JsonSerializerOptions)
   (sessionId: string option)
   (bindingValues: Features.FsiOutputParser.BindingValue list)
+  (blockStartLine: int)
+  (filePath: string option)
   (bindings: FsiBinding array)
   : string =
   let json =
     JsonSerializer.Serialize(
-      {| Bindings = bindings; BindingValues = bindingValues |},
+      {| Bindings = bindings
+         BindingValues = bindingValues
+         blockStartLine = blockStartLine
+         filePath = filePath |> Option.defaultValue "" |},
       opts)
     |> injectSessionId sessionId
   formatSseEvent "bindings_snapshot" json

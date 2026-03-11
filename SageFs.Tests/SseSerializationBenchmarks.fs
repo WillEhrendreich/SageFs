@@ -281,7 +281,7 @@ let sseSerializationBenchmarks = testList "SSE serialization benchmarks" [
 
     testCase "bindings_snapshot 10 bindings" <| fun () ->
       let bytes = measureBytes (fun () ->
-        formatBindingsSnapshotEvent jsonOpts (Some "sess-1") (mkBindingValues ()) (mkFsiBindings ()))
+        formatBindingsSnapshotEvent jsonOpts (Some "sess-1") (mkBindingValues ()) 0 None (mkFsiBindings ()))
       (bytes, 8192) |> Expect.isLessThan "bindings snapshot should be under 8KB"
 
     testCase "test_trace pre-serialized" <| fun () ->
@@ -363,7 +363,7 @@ let sseSerializationBenchmarks = testList "SSE serialization benchmarks" [
       let vals = mkBindingValues ()
       let bindings = mkFsiBindings ()
       let nsPerOp = measureNs 5000 (fun () ->
-        formatBindingsSnapshotEvent jsonOpts (Some "sess-1") vals bindings)
+        formatBindingsSnapshotEvent jsonOpts (Some "sess-1") vals 0 None bindings)
       (nsPerOp, 500_000.0) |> Expect.isLessThan "bindings_snapshot should serialize under 500μs"
 
     testCase "test_trace under 50μs" <| fun () ->
@@ -395,7 +395,7 @@ let sseSerializationBenchmarks = testList "SSE serialization benchmarks" [
         formatFailureNarrativesEvent jsonOpts None (mkFailureNarratives ())
         formatTestSourceLocationsEvent jsonOpts None (mkTestSourceLocations ())
         formatDomainModelEvent jsonOpts None (mkAnnotatedTransitions ())
-        formatBindingsSnapshotEvent jsonOpts None (mkBindingValues ()) (mkFsiBindings ())
+        formatBindingsSnapshotEvent jsonOpts None (mkBindingValues ()) 0 None (mkFsiBindings ())
         formatTestTraceEvent None """{"enabled":true}"""
         formatDiagnosisReadyEvent jsonOpts None (mkDiagnosticReport ())
       ]

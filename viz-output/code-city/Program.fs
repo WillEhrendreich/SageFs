@@ -3670,11 +3670,11 @@ let applyHistoryAccretions
   else
     let primary = cubes |> Array.maxBy (fun cube -> cube.HW * cube.HD)
     let faceOrder = [| FdNorth; FdEast; FdSouth; FdWest |]
-    let scaleRange, overlapFactor, heightFactor =
+    let scaleRange, heightFactor =
       match profile.Style with
-      | Organic -> (0.24f, 0.40f), 0.28f, 0.52f
-      | Patched -> (0.16f, 0.28f), 0.20f, 0.46f
-      | Extended -> (0.30f, 0.44f), 0.34f, 0.58f
+      | Organic -> (0.24f, 0.40f), 0.52f
+      | Patched -> (0.16f, 0.28f), 0.46f
+      | Extended -> (0.30f, 0.44f), 0.58f
     let additions =
       [|
         for i in 0 .. profile.AccretionCount - 1 do
@@ -3696,12 +3696,12 @@ let applyHistoryAccretions
               max 0.12f (primary.HW * scale)
             let hd =
               max 0.12f (primary.HD * scale)
-            let lateralLimit, overlap =
+            let lateralLimit =
               match face with
               | FdNorth | FdSouth ->
-                max 0.0f ((primary.HW - hw) * 0.72f), min hw (hd * overlapFactor)
+                max 0.0f ((primary.HW - hw) * 0.72f)
               | FdEast | FdWest ->
-                max 0.0f ((primary.HD - hd) * 0.72f), min hd (hw * overlapFactor)
+                max 0.0f ((primary.HD - hd) * 0.72f)
             let lateral =
               if lateralLimit <= 0.0001f then 0.0f
               else (ratio01 offsetBits - 0.5f) * 2.0f * lateralLimit
@@ -3716,24 +3716,24 @@ let applyHistoryAccretions
               match face with
               | FdNorth ->
                 { CX = primary.CX + lateral
-                  CZ = primary.CZ - primary.HD - hd + overlap
+                  CZ = primary.CZ - primary.HD - hd
                   HW = hw
                   HD = hd
                   HeightScale = heightScale }
               | FdSouth ->
                 { CX = primary.CX + lateral
-                  CZ = primary.CZ + primary.HD + hd - overlap
+                  CZ = primary.CZ + primary.HD + hd
                   HW = hw
                   HD = hd
                   HeightScale = heightScale }
               | FdEast ->
-                { CX = primary.CX + primary.HW + hw - overlap
+                { CX = primary.CX + primary.HW + hw
                   CZ = primary.CZ + lateral
                   HW = hw
                   HD = hd
                   HeightScale = heightScale }
               | FdWest ->
-                { CX = primary.CX - primary.HW - hw + overlap
+                { CX = primary.CX - primary.HW - hw
                   CZ = primary.CZ + lateral
                   HW = hw
                   HD = hd

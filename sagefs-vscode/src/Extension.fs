@@ -1563,6 +1563,8 @@ let activate (context: ExtensionContext) =
       | Some ed when ed.document.fileName.EndsWith(".fs") || ed.document.fileName.EndsWith(".fsx") ->
         if not (Map.isEmpty InlineDeco.blockDecorations) then
           InlineDeco.markDecorationsStale ed
+        // Clear binding-value ghost text: source lines may have shifted
+        InlineDeco.clearBindingValueDecorations ()
       | _ -> ()
     ) 300))
   context.subscriptions.Add docChangeSub
