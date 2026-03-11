@@ -10,7 +10,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\..\sagetui\SageTUI.Library.fsproj" />
+    <PackageReference Include="SageTUI" />
   </ItemGroup>
 
 </Project>
