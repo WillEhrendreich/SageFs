@@ -154,43 +154,28 @@ try {
 Section "4. Session warmup + Completions"
 
 $sessionReady = $false
-$sessionWorkDir = $null
+$sessionWorkDir = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
 
-# Resolve the working directory for the sample project
-$absProjectPath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".." $SampleProject))
-$sampleWorkDir  = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
-
-Write-Host "  Creating session for: $SampleProject" -ForegroundColor DarkGray
-$createBody = [PSCustomObject]@{
-  projects         = @($absProjectPath)
-  workingDirectory = $sampleWorkDir
-} | ConvertTo-Json
+# The daemon was started with --proj, so it auto-creates a session on startup.
+# Poll the existing sessions list instead of creating a redundant second session.
+Write-Host "  Waiting for auto-created daemon session to reach Ready (up to ${SessionWarmupSeconds}s)..." -ForegroundColor DarkGray
 
 try {
-  $createResp = Invoke-RestMethod -Method Post -Uri "$baseUrl/api/sessions/create" `
-    -Body $createBody `
-    -ContentType "application/json" `
-    -TimeoutSec 10
-  $newSessionId = $createResp.message
-  Write-Host "  Session $newSessionId created — waiting for warmup (up to ${SessionWarmupSeconds}s)..." -ForegroundColor DarkGray
-
-  # Poll until the session is Ready
   for ($i = 0; $i -lt $SessionWarmupSeconds; $i++) {
     Start-Sleep -Seconds 1
     try {
       $sessions = Invoke-RestMethod -Method Get -Uri "$baseUrl/api/sessions" -TimeoutSec 5
-      $target = $sessions.sessions | Where-Object { $_.id -eq $newSessionId }
-      if ($target -and $target.status -eq "Ready") {
-        $sessionReady    = $true
-        $sessionWorkDir  = $sampleWorkDir
-        Write-Host "  Session ready after ${i}s" -ForegroundColor DarkGray
+      $readySession = $sessions.sessions | Where-Object { $_.status -eq "Ready" } | Select-Object -First 1
+      if ($readySession) {
+        $sessionReady = $true
+        Write-Host "  Session $($readySession.id) ready after ${i}s" -ForegroundColor DarkGray
         break
       }
     } catch { }
   }
 
   if (-not $sessionReady) {
-    Fail "completions" "Session $newSessionId did not reach Ready within ${SessionWarmupSeconds}s"
+    Fail "completions" "No session reached Ready within ${SessionWarmupSeconds}s"
   } else {
     $completionBody = [PSCustomObject]@{
       code             = "let x = List."
