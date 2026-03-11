@@ -8,6 +8,7 @@ open SageFs.RetryPolicy
 open SageFs.Tests.SharedGenerators
 open SageFs.Measures
 
+[<Tests>]
 let retryPolicyTests =
   testList "RetryPolicy" [
     testList "shouldRetry" [
@@ -54,24 +55,33 @@ let retryPolicyTests =
       }
     ]
     testList "isVersionConflict" [
-      test "regular exception is not version conflict" {
-        isVersionConflict (exn "normal error") |> Expect.isFalse "should not be version conflict"
-      }
-      test "null ref exception is not version conflict" {
-        isVersionConflict (NullReferenceException()) |> Expect.isFalse "should not be version conflict"
-      }
+      // isVersionConflict removed — predicate is now caller-supplied
     ]
     testList "decide" [
-      test "gives up on non-version-conflict exception" {
-        let ex = exn "normal error"
-        match decide defaults 0 ex with
+      test "retryable predicate returns RetryAfter when attempts remain" {
+        let ex = exn "transient error"
+        match decide (fun _ -> true) defaults 0 ex with
+        | RetryAfter _ -> ()
+        | other -> failwithf "expected RetryAfter but got %A" other
+      }
+      test "non-retryable predicate always gives up regardless of attempt" {
+        let ex = exn "permanent error"
+        match decide (fun _ -> false) defaults 0 ex with
         | GiveUp _ -> ()
         | other -> failwithf "expected GiveUp but got %A" other
       }
-      test "gives up even on attempt 0 for non-conflict" {
-        let ex = InvalidOperationException("not a conflict")
-        match decide defaults 0 (ex :> exn) with
+      test "retryable predicate gives up when attempts exhausted" {
+        let ex = exn "transient error"
+        match decide (fun _ -> true) defaults defaults.MaxRetries ex with
         | GiveUp _ -> ()
+        | other -> failwithf "expected GiveUp but got %A" other
+      }
+      test "predicate receives the exception" {
+        let target = exn "specific"
+        let mutable seen = None
+        match decide (fun e -> seen <- Some e; false) defaults 0 target with
+        | GiveUp _ ->
+          seen |> Expect.equal "predicate should have seen the exception" (Some target)
         | other -> failwithf "expected GiveUp but got %A" other
       }
     ]
@@ -103,11 +113,21 @@ let retryPolicyTests =
           let delay = backoffMs defaults attempt
           (delay, 0<ms>) |> Expect.isGreaterThan "positive"
 
-      testPropertyWithConfig propConfig "non-version-conflict always gives up" <|
+      testPropertyWithConfig propConfig "non-retryable predicate always gives up" <|
         fun (NonNegativeInt attempt) ->
-          let ex = exn "not a conflict"
-          match decide defaults attempt ex with
+          let ex = exn "not retryable"
+          match decide (fun _ -> false) defaults attempt ex with
           | GiveUp _ -> ()
           | other -> failwithf "expected GiveUp but got %A" other
+
+      testPropertyWithConfig propConfig "retryable predicate retries while attempts remain" <|
+        fun (NonNegativeInt attempt) ->
+          let ex = exn "retryable"
+          match decide (fun _ -> true) defaults attempt ex with
+          | RetryAfter _ ->
+            attempt < defaults.MaxRetries |> Expect.isTrue "should retry when attempts remain"
+          | GiveUp _ ->
+            attempt < defaults.MaxRetries |> Expect.isFalse "should give up when exhausted"
+          | Success -> failwith "unexpected Success outcome"
     ]
   ]
