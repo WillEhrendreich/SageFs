@@ -427,30 +427,37 @@ module BuiltInExecutors =
                  box (Some ct: CancellationToken option) |]) |> ignore
           | 3 -> // AsyncFsCheck: property is FSharpAsync<bool>
             ct.ThrowIfCancellationRequested()
-            let propProp = rft.TestCodeObj.GetType().GetProperty("property")
-            match propProp with
-            | null ->
-              raise (System.InvalidOperationException("AsyncFsCheck: could not reflect 'property' field"))
-            | prop ->
-              let asyncBool = prop.GetValue(rft.TestCodeObj)
-              let runMethod =
-                typeof<Async>.GetMethods()
-                |> Array.tryFind (fun m ->
-                  m.Name = "RunSynchronously" && m.GetParameters().Length = 3)
-              match runMethod with
-              | None ->
-                raise (System.InvalidOperationException("AsyncFsCheck: Async.RunSynchronously not found"))
-              | Some rm ->
-                let genericRun = rm.MakeGenericMethod([| typeof<bool> |])
-                let passed =
-                  genericRun.Invoke(null, [|
-                    asyncBool
-                    box (None: int option)
-                    box (Some ct: System.Threading.CancellationToken option)
-                  |]) :?> bool
-                match passed with
-                | false -> raise (System.Exception("FsCheck property returned false"))
-                | true -> ()
+            let testObjType = rft.TestCodeObj.GetType()
+            let propValue =
+              match testObjType.GetProperty("property") with
+              | null ->
+                match testObjType.GetField("property") with
+                | null ->
+                  raise (System.InvalidOperationException(
+                    "AsyncFsCheck: could not reflect 'property' field — " +
+                    "expected a property or field named 'property' on the test object. " +
+                    "Check that the test is registered with testPropertyAsync or testAsyncProperty."))
+                | f -> f.GetValue(rft.TestCodeObj)
+              | p -> p.GetValue(rft.TestCodeObj)
+            let asyncBool = propValue
+            let runMethod =
+              typeof<Async>.GetMethods()
+              |> Array.tryFind (fun m ->
+                m.Name = "RunSynchronously" && m.GetParameters().Length = 3)
+            match runMethod with
+            | None ->
+              raise (System.InvalidOperationException("AsyncFsCheck: Async.RunSynchronously not found"))
+            | Some rm ->
+              let genericRun = rm.MakeGenericMethod([| typeof<bool> |])
+              let passed =
+                genericRun.Invoke(null, [|
+                  asyncBool
+                  box (None: int option)
+                  box (Some ct: System.Threading.CancellationToken option)
+                |]) :?> bool
+              match passed with
+              | false -> raise (System.Exception("FsCheck property returned false"))
+              | true -> ()
           | _ -> // unknown tag — skip
             ct.ThrowIfCancellationRequested()
           sw.Stop()

@@ -14,13 +14,14 @@ open System.Collections.Concurrent
 module McpSessionIsolation =
 
   /// Create a McpContext with a tracking dispatch that records all messages sent.
+  /// Uses inMemoryPersistence so event-append tests work correctly.
   let ctxWithTracking sessionId =
     let result = globalActorResult.Value
     let dispatched = System.Collections.Generic.List<SageFsMsg>()
     let sessionMap = ConcurrentDictionary<string, string>()
     sessionMap.["test"] <- sessionId
     let ctx =
-      { Persistence = SageFs.EventStore.EventPersistence.noop
+      { Persistence = inMemoryPersistence ()
         DiagnosticsChanged = result.DiagnosticsChanged
         StateChanged = None
         SessionOps = {
