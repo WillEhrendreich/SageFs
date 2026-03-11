@@ -411,6 +411,8 @@ OUTPUT: JSON containing case names, fields per case, which cases are entry point
     [<McpServerTool>]
     [<Description("""Create a new isolated FSI session with the specified project(s). Each session runs in its own worker process with full type isolation.
 
+⚠️ WARNING: Do NOT create a new session if one already exists for the same project. Use list_sessions first to check. Creating duplicate sessions causes resource starvation — sessions compete for CPU/memory during warmup, making ALL sessions slower or causing them to crash.
+
 WHEN TO USE:
 - When you need to load a different project than the current session has loaded.
 - When you want to test something in a clean environment without affecting the shared session.
@@ -418,8 +420,9 @@ WHEN TO USE:
 - Multi-project workflows where isolation between session contexts is important.
 
 AFTER CREATION:
+- The session warms up asynchronously (typically 15-30s for test projects).
+- Call get_fsi_status every 5-10s until status shows 'Ready'. Do NOT create another session while waiting.
 - Use the returned session ID with switch_session to route subsequent tool calls to the new session.
-- The session warms up asynchronously. Call get_fsi_status (with the session ID) until status shows 'Ready'.
 - Use stop_session when finished to free the worker process.
 
 projects: Comma-separated list of absolute or relative .fsproj file paths.""")>]
@@ -617,6 +620,8 @@ NOTE: Timeout changes take effect immediately on the next test run.""")>]
     [<McpServerTool>]
     [<Description("""Get test infrastructure state: enabled flag, currently-running status, provider list, per-category run policies, and a test summary.
 
+PREREQUISITE: Live testing must be enabled (call enable_live_testing) for meaningful data. When disabled, returns Enabled=false with a Hint field explaining what to do.
+
 WHEN TO USE:
 - To see the overall health of the live testing subsystem (is it enabled? which providers are active? what are the run policies?).
 - To diagnose why tests are or aren't running automatically (check run policies and enabled state).
@@ -631,6 +636,9 @@ DIFFERENCE FROM get_live_test_status:
 
     [<McpServerTool>]
     [<Description("""Run tests explicitly. Without parameters, runs all discovered unit tests.
+
+PREREQUISITE: Live testing must be enabled (call enable_live_testing) for tests to be discovered. If you get "No tests discovered", enable live testing first.
+
 Use pattern to filter by test name (substring match on FullName or DisplayName).
 Use category to filter by test category: unit, integration, browser, benchmark, architecture, property.
 Use timeout_seconds to wait for results (default 30). Set to 0 for fire-and-forget.
@@ -655,6 +663,10 @@ TIMEOUT BEHAVIOR:
 - Per-test and global test timeouts are configured separately via set_test_timeouts.
 - timeout_seconds=0: fires the run and returns immediately. Poll get_live_test_status for completion.
 - Increase beyond 30 for integration or end-to-end tests that legitimately take longer.
+
+COMMON MISTAKES:
+- Calling run_tests before enable_live_testing → 0 tests discovered. Enable live testing first.
+- Creating new sessions when tests are slow → resource starvation spiral. Wait for existing sessions.
 
 RETURN VALUE:
 - On completion: summary with pass/fail counts and names of any failing tests with failure messages.

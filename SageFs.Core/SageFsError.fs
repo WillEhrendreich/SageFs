@@ -350,6 +350,11 @@ module SageFsError =
     | SageFsError.JsonParseError _ -> "Check request payload format"
     | SageFsError.Unexpected _ -> "Check the SageFs log for details"
 
+  /// Agent-facing error description: compose describe + suggestedAction.
+  /// Use at MCP boundary so every error an agent sees ends with an actionable next step.
+  let describeForAgent (err: SageFsError) =
+    sprintf "%s → Next: %s" (describe err) (suggestedAction err)
+
   /// Serialize a SageFsError to a JSON-friendly anonymous record.
   /// Returns { case, fields, message, suggestedAction }.
   let toJson (err: SageFsError) =

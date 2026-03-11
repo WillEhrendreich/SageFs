@@ -627,10 +627,10 @@ Available: %s%s
           (escapeJson output) diagsJson
       | Error err ->
         sprintf """{"success":false,"error":"%s","diagnostics":[%s]}"""
-          (escapeJson (SageFsError.describe err)) diagsJson
+          (escapeJson (SageFsError.describeForAgent err)) diagsJson
     | WorkerProtocol.WorkerResponse.WorkerError err ->
       sprintf """{"success":false,"error":"%s","diagnostics":[]}"""
-        (escapeJson (SageFsError.describe err))
+        (escapeJson (SageFsError.describeForAgent err))
     | other ->
       sprintf """{"success":false,"error":"%s","diagnostics":[]}"""
         (escapeJson (sprintf "Unexpected response: %A" other))
@@ -794,7 +794,7 @@ module McpTools =
           match info with
           | Some i when i.Status = WorkerProtocol.SessionStatus.Starting
                      || i.Status = WorkerProtocol.SessionStatus.Restarting ->
-            return Result.Error (sprintf "Session '%s' is still warming up (%s). Please wait and retry." sessionId (WorkerProtocol.SessionStatus.label i.Status))
+            return Result.Error (sprintf "Session '%s' is still warming up (%s). This typically takes 15-30s for test projects. Poll get_fsi_status every 5-10s to check readiness. Do NOT create a new session — it will compete for resources and make warmup slower." sessionId (WorkerProtocol.SessionStatus.label i.Status))
           | _ ->
             return Result.Error (sprintf "Session '%s' not found" sessionId)
         | Some send ->
@@ -840,7 +840,7 @@ module McpTools =
             match info with
             | Some i when i.Status = WorkerProtocol.SessionStatus.Starting
                        || i.Status = WorkerProtocol.SessionStatus.Restarting ->
-              return Error (sprintf "Session '%s' is still warming up (%s). Please wait and retry." candidate (WorkerProtocol.SessionStatus.label i.Status))
+              return Error (sprintf "Session '%s' is still warming up (%s). This typically takes 15-30s for test projects. Poll get_fsi_status every 5-10s to check readiness. Do NOT create a new session — it will compete for resources and make warmup slower." candidate (WorkerProtocol.SessionStatus.label i.Status))
             | Some _ ->
               setActiveSessionId ctx agent ""
               return Error "Session is no longer running. Use create_session to start a new one."
@@ -883,7 +883,7 @@ module McpTools =
       let! state = getSessionState ctx sessionId
       return
         Affordances.checkToolAvailability state toolName
-        |> Result.mapError SageFsError.describe
+        |> Result.mapError SageFsError.describeForAgent
     }
 
   /// Format a WorkerResponse.EvalResult for display.
@@ -902,9 +902,9 @@ module McpTools =
           |> sprintf "\nDiagnostics:\n%s"
       match result with
       | Ok output -> sprintf "Result: %s%s" output diagStr
-      | Error err -> sprintf "Error: %s%s" (SageFsError.describe err) diagStr
+      | Error err -> sprintf "Error: %s%s" (SageFsError.describeForAgent err) diagStr
     | WorkerProtocol.WorkerResponse.WorkerError err ->
-      sprintf "Error: %s" (SageFsError.describe err)
+      sprintf "Error: %s" (SageFsError.describeForAgent err)
     | other ->
       sprintf "Unexpected response: %A" other
 
@@ -1132,7 +1132,7 @@ module McpTools =
                mcpPort = ctx.McpPort
                status = WorkerProtocol.SessionStatus.label sessionInfo.Status |})
       | None ->
-        return """{"status": "initializing", "message": "Session is still warming up"}"""
+        return """{"status": "initializing", "message": "Session is still warming up. This typically takes 15-30s. Poll get_fsi_status every 5-10s to check readiness. Do NOT create a new session."}"""
     })
 
   let getAvailableProjects (ctx: McpContext) (agent: string) (workingDirectory: string option) : Task<string> =
@@ -1175,9 +1175,9 @@ module McpTools =
         match routeResult with
         | Ok (WorkerProtocol.WorkerResponse.ScriptLoaded(_, Ok msg)) -> msg
         | Ok (WorkerProtocol.WorkerResponse.ScriptLoaded(_, Error err)) ->
-          sprintf "Error: %s" (SageFsError.describe err)
+          sprintf "Error: %s" (SageFsError.describeForAgent err)
         | Ok (WorkerProtocol.WorkerResponse.WorkerError err) ->
-          sprintf "Error: %s" (SageFsError.describe err)
+          sprintf "Error: %s" (SageFsError.describeForAgent err)
         | Ok other -> sprintf "Unexpected response: %A" other
         | Error msg -> sprintf "Error: %s" msg
     })
@@ -1196,7 +1196,7 @@ module McpTools =
             SageFsEvent.SessionStatusChanged (sid, SessionDisplayStatus.Running))
           "Session reset successfully. All previous definitions have been cleared."
         | Ok (WorkerProtocol.WorkerResponse.ResetResult(_, Error err)) ->
-          sprintf "Error: %s" (SageFsError.describe err)
+          sprintf "Error: %s" (SageFsError.describeForAgent err)
         | Ok other -> sprintf "Unexpected response: %A" other
         | Error msg -> sprintf "Error: %s" msg
     })
@@ -1255,7 +1255,7 @@ module McpTools =
           match routeResult with
           | Ok (WorkerProtocol.WorkerResponse.HardResetResult(_, Ok msg)) -> msg
           | Ok (WorkerProtocol.WorkerResponse.HardResetResult(_, Error err)) ->
-            sprintf "Error: %s" (SageFsError.describe err)
+            sprintf "Error: %s" (SageFsError.describeForAgent err)
           | Ok other -> sprintf "Unexpected response: %A" other
           | Error msg -> sprintf "Error: %s" msg
     })
@@ -1378,6 +1378,20 @@ module McpTools =
   /// Create a new session and bind it to the requesting agent.
   let createSession (ctx: McpContext) (agent: string) (projects: string list) (workingDir: string) : Task<string> =
     task {
+      // Guard: warn if a session for the same project(s) already exists
+      let! existing = ctx.SessionOps.GetAllSessions()
+      let normalizedProjects = projects |> List.map (fun p -> System.IO.Path.GetFileName(p).ToLowerInvariant()) |> Set.ofList
+      let duplicates =
+        existing
+        |> List.filter (fun s ->
+          let sessionProjects = s.Projects |> List.map (fun p -> System.IO.Path.GetFileName(p).ToLowerInvariant()) |> Set.ofList
+          Set.intersect normalizedProjects sessionProjects |> Set.isEmpty |> not)
+      match duplicates with
+      | dup :: _ ->
+        let sid = WorkerProtocol.SessionId.value dup.Id
+        let status = WorkerProtocol.SessionStatus.label dup.Status
+        return sprintf "⚠️ A session for this project already exists (session '%s', status: %s). Use switch_session to target it instead of creating a duplicate. Creating duplicate sessions causes resource starvation. If the existing session is stuck, use stop_session to remove it first, then retry create_session." sid status
+      | [] ->
       let! result = ctx.SessionOps.CreateSession projects workingDir
       // Refresh Elm model so dashboard SSE pushes updated session list
       ctx.Dispatch |> Option.iter (fun d -> d (SageFsMsg.Editor EditorAction.ListSessions))
@@ -1385,7 +1399,7 @@ module McpTools =
       | Result.Ok sid ->
         setActiveSessionId ctx agent sid
         return sid
-      | Result.Error err -> return SageFsError.describe err
+      | Result.Error err -> return SageFsError.describeForAgent err
     }
 
   /// List all active sessions with occupancy information.
@@ -1407,7 +1421,7 @@ module McpTools =
       ctx.Dispatch |> Option.iter (fun d -> d (SageFsMsg.Editor EditorAction.ListSessions))
       match result with
       | Result.Ok msg -> return msg
-      | Result.Error err -> return SageFsError.describe err
+      | Result.Error err -> return SageFsError.describeForAgent err
     }
 
   /// Switch the active session for a specific agent. Validates the target exists.
@@ -1689,8 +1703,9 @@ module McpTools =
         Features.LiveTesting.TestSummary.fromStatuses
           state.Activation (sessionEntries |> Array.map (fun e -> e.Status))
       let timing = model.LiveTesting.LastTiming
+      let isActive = state.Activation = Features.LiveTesting.LiveTestingActivation.Active
       let resp = {|
-        Enabled = state.Activation = Features.LiveTesting.LiveTestingActivation.Active
+        Enabled = isActive
         IsRunning = Features.LiveTesting.TestRunPhase.isAnyRunning state.RunPhases
         History = state.History
         Summary = summary
@@ -1700,6 +1715,9 @@ module McpTools =
           | Features.LiveTesting.ProviderDescription.AttributeBased a -> Features.LiveTesting.TestFramework.toString a.Name
           | Features.LiveTesting.ProviderDescription.Custom c -> Features.LiveTesting.TestFramework.toString c.Name)
         Policies = state.RunPolicies |> Map.toList |> List.map (fun (c, p) -> sprintf "%A: %A" c p)
+        Hint = match isActive with
+               | true -> None
+               | false -> Some "Live testing is not active. Call enable_live_testing to start test discovery and automatic re-runs."
       |}
       Task.FromResult (JsonSerializer.Serialize(resp, liveTestJsonOpts))
 
@@ -2018,8 +2036,8 @@ module McpTools =
   type RunTestsResult =
     | Completed of passed: int * failed: int * total: int * failures: FailedTestInfo list
     | TimedOut of passed: int * failed: int * running: int * total: int * failures: FailedTestInfo list * runningNames: string list
-    | Disabled
     | NoTestsMatched of totalDiscovered: int
+    | NoTestsDiscovered
     | AlreadyRunning
 
   module RunTestsResult =
@@ -2067,10 +2085,10 @@ module McpTools =
             let extra = match names.Length > 10 with | true -> [sprintf "  ... and %d more" (names.Length - 10)] | false -> []
             sprintf "\nStill running (%d):\n%s" running (lines @ extra |> String.concat "\n")
         sprintf "⏱️ Timed out: %d passed, %d failed, %d still running out of %d tests. Use get_live_test_status for updates.%s%s" p f running total (formatFailures failures) runningInfo
-      | Disabled ->
-        "Live testing is disabled. Toggle it on first."
+      | NoTestsDiscovered ->
+        "No tests discovered — live testing is not enabled. Call enable_live_testing first to trigger test discovery, then retry run_tests."
       | NoTestsMatched totalDiscovered ->
-        sprintf "No tests matched. Total discovered: %d." totalDiscovered
+        sprintf "No tests matched the filter. Total discovered: %d. Use get_live_test_status to list available tests." totalDiscovered
       | AlreadyRunning ->
         "⚠️ A test run is already in progress. Wait for it to complete or check status with get_live_test_status."
 
@@ -2232,7 +2250,11 @@ module McpTools =
         Features.LiveTesting.LiveTestCycleState.filterTestsForExplicitRun
           state.DiscoveredTests None patternFilter category
       match Array.isEmpty tests with
-      | true -> return waitNote + RunTestsResult.format (NoTestsMatched state.DiscoveredTests.Length)
+      | true ->
+        // Distinguish "testing not active, 0 discovered" from "active but filter matched nothing"
+        match state.DiscoveredTests.Length = 0 && state.Activation <> Features.LiveTesting.LiveTestingActivation.Active with
+        | true -> return waitNote + RunTestsResult.format NoTestsDiscovered
+        | false -> return waitNote + RunTestsResult.format (NoTestsMatched state.DiscoveredTests.Length)
       | false ->
       let testIds = tests |> Array.map (fun tc -> tc.Id)
       dispatch (SageFsMsg.Event (SageFsEvent.RunTestsRequested tests))
