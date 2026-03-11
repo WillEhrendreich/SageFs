@@ -710,6 +710,23 @@ let wireModelChangeHandlers
         |> List.iter ctx.TestEventBroadcast.Trigger)
     | false -> ()
 
+  /// After test results push, emit failure_narratives SSE when run is complete
+  /// and there are Passed→Failed transitions to report.
+  let handleFailureNarrativePush () =
+    SseContext.withModel ctx (fun model ->
+      let lt = model.LiveTesting.TestState
+      let isRunComplete = not (TestRunPhase.isAnyRunning lt.RunPhases)
+      match isRunComplete && not lt.FailureNarratives.IsEmpty with
+      | true ->
+        let activeId = SseContext.activeSessionId ctx |> Option.defaultValue ""
+        ctx.ServerTracker.AccumulateEvent(PushEvent.FailureNarrativesUpdated lt.FailureNarratives)
+        match activeId.Length > 0 with
+        | true ->
+          ctx.TestEventBroadcast.Trigger(
+            SageFs.SseWriter.formatFailureNarrativesEvent ctx.SseJsonOpts (Some activeId) lt.FailureNarratives)
+        | false -> ()
+      | false -> ())
+
   /// After test results + features push, check if any test transitions
   /// warrant an auto-diagnosis. Only fires when run is complete and there
   /// are failure narratives (Passed→Failed transitions).
@@ -764,6 +781,7 @@ let wireModelChangeHandlers
         handleBindingsChange outputCount
         handleTestTraceChange ()
         handleTestSummaryChange ()
+        handleFailureNarrativePush ()
         handleFeaturePush outputCount
         handleDiagnosisPush ()
         // Push resolved test source locations for editor jump-to-source

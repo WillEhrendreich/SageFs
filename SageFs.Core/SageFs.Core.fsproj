@@ -6,6 +6,14 @@
     </PropertyGroup>
 
     <ItemGroup>
+        <InternalsVisibleTo Include="SageFs.Tests" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <InternalsVisibleTo Include="SageFs.Tests" />
+    </ItemGroup>
+
+    <ItemGroup>
         <Compile Include="Args.fs" />
         <Compile Include="Measures.fs" />
         <Compile Include="RingBuffer.fs" />

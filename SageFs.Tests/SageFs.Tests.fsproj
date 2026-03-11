@@ -107,6 +107,7 @@
         <Compile Include="LiveTestingTypesTests.fs" />
         <Compile Include="SessionPredicatesAndUiTests.fs" />
         <Compile Include="SessionManagerCqrsTests.fs" />
+        <Compile Include="SessionManagerRestartTombstoneTests.fs" />
         <Compile Include="AutoCompletionAndEventsTests.fs" />
         <Compile Include="DrawAndRectPrimitivesTests.fs" />
         <Compile Include="ThemesGutterAndDiagnosticsTests.fs" />

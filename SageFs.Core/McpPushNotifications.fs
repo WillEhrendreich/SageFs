@@ -33,6 +33,8 @@ type PushEvent =
   | ActionQueueReady of report: SageFs.Features.ActionPrioritizer.ActionQueueReport
   /// Resolved test source locations — maps test names to file paths and line numbers.
   | TestSourceLocations of locations: Features.LiveTesting.TestSourceLocation list
+  /// Failure narratives — Passed→Failed transition context for each failing test.
+  | FailureNarrativesUpdated of narratives: Map<Features.LiveTesting.TestId, Features.LiveTesting.FailureNarrative>
   /// Elm loop exception — surfaced from a catch site inside the Elm dispatch loop.
   | SystemAlarm of phase: string * message: string
 
@@ -56,6 +58,7 @@ module PushEvent =
     | PushEvent.ImpactAlert _ -> MergeStrategy.Replace
     | PushEvent.ActionQueueReady _ -> MergeStrategy.Replace
     | PushEvent.TestSourceLocations _ -> MergeStrategy.Replace
+    | PushEvent.FailureNarrativesUpdated _ -> MergeStrategy.Replace
     | PushEvent.SystemAlarm _ -> MergeStrategy.Replace
 
   /// Discriminator tag used for Replace dedup.
@@ -72,6 +75,7 @@ module PushEvent =
     | PushEvent.ImpactAlert _ -> 9
     | PushEvent.ActionQueueReady _ -> 10
     | PushEvent.TestSourceLocations _ -> 11
+    | PushEvent.FailureNarrativesUpdated _ -> 13
     | PushEvent.SystemAlarm _ -> 12
 
   /// Format a single event for LLM consumption — actionable, concise.
@@ -131,6 +135,9 @@ module PushEvent =
         icon report.Actions.Length report.TotalFailures report.TotalBlindSpots
     | PushEvent.TestSourceLocations locs ->
       sprintf "📍 source locations: %d test(s) resolved" locs.Length
+    | PushEvent.FailureNarrativesUpdated narratives ->
+      let count = narratives |> Map.filter (fun _ n -> n.Summary <> "") |> Map.count
+      sprintf "🔍 failure narratives: %d test(s) with causal context" count
     | PushEvent.SystemAlarm (phase, msg) ->
       sprintf "🚨 system alarm [%s]: %s" phase msg
 
