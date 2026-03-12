@@ -98,7 +98,9 @@ jobs:
       run: |
         npx @vscode/vsce publish --packagePath "release/sagefs-vscode-${{ steps.manifest.outputs.version }}.vsix" --skip-duplicate
 
-    - name: Inject categories into Visual Studio VSIX manifest
+    - name: Patch Visual Studio VSIX manifest
+      id: vsix_patch
+      shell: pwsh
       run: |
         $vsixPath = "release/sagefs-visualstudio-${{ steps.manifest.outputs.version }}.vsix"
         Add-Type -AssemblyName System.IO.Compression.FileSystem
@@ -113,6 +115,11 @@ jobs:
         $ns = "http://schemas.microsoft.com/developer/vsx-schema/2011"
         $nsMgr = [System.Xml.XmlNamespaceManager]::new($xml.NameTable)
         $nsMgr.AddNamespace("v", $ns)
+        # Extract publisher from manifest (authoritative casing)
+        $packageManifest = $xml.DocumentElement
+        $manifestPublisher = $packageManifest.GetAttribute("Publisher")
+        Write-Host "Manifest publisher: '$manifestPublisher'"
+        "publisher=$manifestPublisher" >> $env:GITHUB_OUTPUT
         $metadata = $xml.SelectSingleNode("//v:Metadata", $nsMgr)
         if ($metadata -and -not $xml.SelectSingleNode("//v:Categories", $nsMgr)) {
           $cat = $xml.CreateElement("Categories", $ns)
@@ -136,8 +143,11 @@ jobs:
     - name: Publish Visual Studio extension to Marketplace
       env:
         VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        VSIX_PUBLISHER: ${{ steps.vsix_patch.outputs.publisher }}
+      shell: pwsh
       run: |
-        npx tfx-cli extension publish --publisher $env:VS_MARKETPLACE_PUBLISHER --vsix "release/sagefs-visualstudio-${{ steps.manifest.outputs.version }}.vsix" --token $env:VSCE_PAT --no-prompt
+        Write-Host "Publishing with publisher: '$env:VSIX_PUBLISHER'"
+        npx tfx-cli extension publish --publisher $env:VSIX_PUBLISHER --vsix "release/sagefs-visualstudio-${{ steps.manifest.outputs.version }}.vsix" --token $env:VSCE_PAT --no-prompt --trace-level debug
 
     - name: Push to NuGet
       run: dotnet nuget push "release/SageFs.${{ steps.manifest.outputs.version }}.nupkg" --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
