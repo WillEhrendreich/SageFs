@@ -1,6 +1,7 @@
 module SageFs.Tests.SessionIsolationTests
 
 open System
+open System.IO
 open Expecto
 open Expecto.Flip
 open SageFs
@@ -301,6 +302,22 @@ module WorkingDirRoutingPriority =
       let! resolved = resolveSessionId ctx "mcp" None (Some @"C:\Code\Repos\Harmony")
       resolved |> Expect.equal "should route to Harmony via workingDirectory" (Ok "4a120002")
     }
+    testTask "workingDirectory returns an ambiguity error when multiple sessions share the same directory" {
+      let s1 = mkInfo (testSessionId "5a6e0001") @"C:\Code\Repos\SageFs"
+      let s2 = mkInfo (testSessionId "4a120002") @"C:\Code\Repos\SageFs"
+      let ctx = mkCtx [s1; s2] (Map.ofList ["5a6e0001",dummyProxy; "4a120002",dummyProxy])
+      setActiveSessionId ctx "mcp" "5a6e0001"
+      let! resolved = resolveSessionId ctx "mcp" None (Some @"C:\Code\Repos\SageFs")
+      match resolved with
+      | Ok sid ->
+        failtestf "expected workingDirectory ambiguity error but resolved '%s'" sid
+      | Error msg ->
+        msg |> Expect.stringContains "should describe the ambiguity" "Multiple sessions match workingDirectory"
+        msg |> Expect.stringContains "should list the first matching session" "5a6e0001"
+        msg |> Expect.stringContains "should list the second matching session" "4a120002"
+        activeSessionId ctx "mcp"
+        |> Expect.equal "cached session should remain unchanged after ambiguity" "5a6e0001"
+    }
     testTask "explicit sessionId always wins over workingDirectory" {
       let s1 = mkInfo (testSessionId "5a6e0001") @"C:\Code\Repos\SageFs"
       let s2 = mkInfo (testSessionId "4a120002") @"C:\Code\Repos\Harmony"
@@ -322,6 +339,68 @@ module WorkingDirRoutingPriority =
       setActiveSessionId ctx "mcp" "5a6e0001"
       let! resolved = resolveSessionId ctx "mcp" None None
       resolved |> Expect.equal "should fall back to cached when no workingDirectory" (Ok "5a6e0001")
+    }
+    testTask "falls back to the only session when no active session is cached" {
+      let s1 = mkInfo (testSessionId "5a6e0001") @"C:\Code\Repos\SageFs"
+      let ctx = mkCtx [s1] (Map.ofList ["5a6e0001",dummyProxy])
+      let! resolved = resolveSessionId ctx "mcp" None None
+      resolved |> Expect.equal "single session should be used automatically" (Ok "5a6e0001")
+      activeSessionId ctx "mcp" |> Expect.equal "single session should become cached" "5a6e0001"
+    }
+    testTask "falls back to the only session when workingDirectory does not match" {
+      let s1 = mkInfo (testSessionId "5a6e0001") @"C:\Code\Repos\SageFs"
+      let ctx = mkCtx [s1] (Map.ofList ["5a6e0001",dummyProxy])
+      let! resolved = resolveSessionId ctx "mcp" None (Some @"C:\Code\Repos\Other")
+      resolved |> Expect.equal "single session should still be used" (Ok "5a6e0001")
+      activeSessionId ctx "mcp" |> Expect.equal "single session should become cached" "5a6e0001"
+    }
+    testTask "falls back to the session matching the daemon current directory" {
+      let originalDir = Environment.CurrentDirectory
+      let root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
+      let currentDir = Path.Combine(root, "current")
+      let otherDir = Path.Combine(root, "other")
+      Directory.CreateDirectory(currentDir) |> ignore
+      Directory.CreateDirectory(otherDir) |> ignore
+      Environment.CurrentDirectory <- currentDir
+      try
+        let currentSession = mkInfo (testSessionId "5a6e0001") currentDir
+        let otherSession = mkInfo (testSessionId "4a120002") otherDir
+        let ctx =
+          mkCtx [currentSession; otherSession] (Map.ofList ["5a6e0001",dummyProxy; "4a120002",dummyProxy])
+        let! resolved = resolveSessionId ctx "mcp" None None
+        resolved |> Expect.equal "current directory session should be selected" (Ok "5a6e0001")
+        activeSessionId ctx "mcp" |> Expect.equal "current directory session should become cached" "5a6e0001"
+      finally
+        Environment.CurrentDirectory <- originalDir
+        try Directory.Delete(root, true) with _ -> ()
+    }
+    testTask "current directory fallback returns an ambiguity error when multiple sessions share the daemon directory" {
+      let originalDir = Environment.CurrentDirectory
+      let root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
+      let currentDir = Path.Combine(root, "current")
+      let otherDir = Path.Combine(root, "other")
+      Directory.CreateDirectory(currentDir) |> ignore
+      Directory.CreateDirectory(otherDir) |> ignore
+      Environment.CurrentDirectory <- currentDir
+      try
+        let currentA = mkInfo (testSessionId "5a6e0001") currentDir
+        let currentB = mkInfo (testSessionId "4a120002") currentDir
+        let otherSession = mkInfo (testSessionId "8c340003") otherDir
+        let ctx =
+          mkCtx [currentA; currentB; otherSession] (Map.ofList ["5a6e0001",dummyProxy; "4a120002",dummyProxy; "8c340003",dummyProxy])
+        let! resolved = resolveSessionId ctx "mcp" None None
+        match resolved with
+        | Ok sid ->
+          failtestf "expected current directory ambiguity error but resolved '%s'" sid
+        | Error msg ->
+          msg |> Expect.stringContains "should describe the ambiguity" "Multiple sessions match the current working directory"
+          msg |> Expect.stringContains "should list the first matching session" "5a6e0001"
+          msg |> Expect.stringContains "should list the second matching session" "4a120002"
+          activeSessionId ctx "mcp"
+          |> Expect.equal "cache should remain empty after ambiguity" ""
+      finally
+        Environment.CurrentDirectory <- originalDir
+        try Directory.Delete(root, true) with _ -> ()
     }
   ]
 

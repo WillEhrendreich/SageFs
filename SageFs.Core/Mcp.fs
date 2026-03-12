@@ -764,12 +764,31 @@ module McpTools =
     | true -> trimmed.Replace('/', '\\').ToLowerInvariant()
     | false -> trimmed
 
-  /// Find a session whose WorkingDirectory matches the given path.
-  /// Pure function — no side effects, no context mutation.
-  let resolveSessionByWorkingDir (sessions: WorkerProtocol.SessionInfo list) (workingDir: string) : WorkerProtocol.SessionInfo option =
+  let private sessionsMatchingWorkingDir (sessions: WorkerProtocol.SessionInfo list) (workingDir: string) =
     let target = normalizePath workingDir
     sessions
-    |> List.tryFind (fun s -> normalizePath s.WorkingDirectory = target)
+    |> List.filter (fun s -> normalizePath s.WorkingDirectory = target)
+
+  /// Find a session whose WorkingDirectory matches the given path.
+  /// Convenience helper only — authoritative callers must detect ambiguity
+  /// before selecting a single session.
+  let resolveSessionByWorkingDir (sessions: WorkerProtocol.SessionInfo list) (workingDir: string) : WorkerProtocol.SessionInfo option =
+    sessionsMatchingWorkingDir sessions workingDir
+    |> List.tryHead
+
+  let private formatSessionRoutingChoice (session: WorkerProtocol.SessionInfo) =
+    sprintf "  %s  %s  %s"
+      (WorkerProtocol.SessionId.value session.Id)
+      (WorkerProtocol.SessionStatus.label session.Status)
+      session.WorkingDirectory
+
+  let private formatWorkingDirectoryAmbiguity (prefix: string) (workingDir: string) (sessions: WorkerProtocol.SessionInfo list) =
+    let matches =
+      sessions
+      |> List.map formatSessionRoutingChoice
+      |> String.concat "\n"
+    sprintf "%s '%s'. Specify sessionId explicitly or use switch_session. Matches:\n%s"
+      prefix workingDir matches
 
   /// Notify the Elm loop of an event (fire-and-forget, no-op if no dispatch).
   let notifyElm (ctx: McpContext) (event: SageFsEvent) =
@@ -811,25 +830,27 @@ module McpTools =
       match sessionId with
       | Some sid -> return Ok sid
       | None ->
-        // Working directory takes priority over cached session
-        let! candidate =
-          match workingDirectory with
-          | Some wd when not (System.String.IsNullOrWhiteSpace wd) ->
-            task {
+        let! candidateResult =
+          task {
+            match workingDirectory with
+            | Some wd when not (System.String.IsNullOrWhiteSpace wd) ->
               let! sessions = ctx.SessionOps.GetAllSessions()
-              match resolveSessionByWorkingDir sessions wd with
-              | Some matched ->
+              match sessionsMatchingWorkingDir sessions wd with
+              | [ matched ] ->
                 let matchedId = WorkerProtocol.SessionId.value matched.Id
                 setActiveSessionId ctx agent matchedId
-                return matchedId
-              | None ->
-                // No match for this directory — fall back to cached
-                return activeSessionId ctx agent
-            }
-          | _ ->
-            task { return activeSessionId ctx agent }
-        match candidate <> "" with
-        | true ->
+                return Ok matchedId
+              | [] ->
+                return Ok (activeSessionId ctx agent)
+              | matches ->
+                return Error (formatWorkingDirectoryAmbiguity "Multiple sessions match workingDirectory" wd matches)
+            | _ ->
+              return Ok (activeSessionId ctx agent)
+          }
+        match candidateResult with
+        | Error msg ->
+          return Error msg
+        | Ok candidate when candidate <> "" ->
           let validCandidate = toSessionId candidate
           let! proxy = ctx.SessionOps.GetProxy validCandidate
           match proxy with
@@ -847,8 +868,25 @@ module McpTools =
             | None ->
               setActiveSessionId ctx agent ""
               return Error "Session is no longer running. Use create_session to start a new one."
-        | false ->
-          return Error "No active session. Use create_session to create one first."
+        | Ok _ ->
+          let! sessions = ctx.SessionOps.GetAllSessions()
+          let currentDir = Environment.CurrentDirectory
+          let currentDirMatches = sessionsMatchingWorkingDir sessions currentDir
+          match currentDirMatches with
+          | [ currentDirSession ] ->
+            let sid = WorkerProtocol.SessionId.value currentDirSession.Id
+            setActiveSessionId ctx agent sid
+            return Ok sid
+          | _ :: _ :: _ as matches ->
+            return Error (formatWorkingDirectoryAmbiguity "Multiple sessions match the current working directory" currentDir matches)
+          | [] ->
+            match sessions with
+            | [ singleSession ] ->
+              let sid = WorkerProtocol.SessionId.value singleSession.Id
+              setActiveSessionId ctx agent sid
+              return Ok sid
+            | _ ->
+              return Error "No active session. Use create_session to create one first."
     }
 
   /// Helper: run a function with the resolved session ID, or return the error message.
@@ -1523,6 +1561,8 @@ module McpTools =
       | Some getModel ->
         let model = getModel ()
         let state = model.LiveTesting.TestState
+        let discoveryState = Features.LiveTesting.LiveTestState.discoveryState state
+        let discoveryRequiresEval = Features.LiveTesting.LiveTestState.requiresPrimingEval state
         // Prefer per-client session from SessionMap; fall back to global active session.
         // This prevents session A's tests from bleeding into session B's view when the
         // daemon-global active session differs from the calling client's current session.
@@ -1555,6 +1595,12 @@ module McpTools =
         let resp = System.Collections.Generic.Dictionary<string, obj>()
         resp["Enabled"] <- box (state.Activation = Features.LiveTesting.LiveTestingActivation.Active)
         resp["Summary"] <- box summary
+        resp["DiscoveryState"] <- box (Features.LiveTesting.LiveTestDiscoveryState.toWireValue discoveryState)
+        resp["DiscoveryHint"] <- box (Features.LiveTesting.LiveTestState.discoveryHint state)
+        resp["DiscoveryRequiresEval"] <- box discoveryRequiresEval
+        match state.LastDiscoveryTime > System.DateTimeOffset.MinValue with
+        | true -> resp["LastDiscoveryTime"] <- box state.LastDiscoveryTime
+        | false -> ()
         match tests with
         | Some t -> resp["Tests"] <- box t
         | None -> ()
@@ -1601,19 +1647,21 @@ module McpTools =
       | Some dispatch ->
         let msg = match enabled with | true -> SageFsMsg.EnableLiveTesting | false -> SageFsMsg.DisableLiveTesting
         dispatch msg
-        // Return the intended state — don't read model immediately because
-        // the Elm loop processes the dispatch asynchronously. Reading now
-        // would return the OLD state before the message is handled.
-        let label = match enabled with | true -> "enabled" | false -> "disabled"
-        match ctx.GetElmModel with
-        | Some getModel ->
-          let state = (getModel ()).LiveTesting.TestState
-          let discovered = state.DiscoveredTests.Length
-          match discovered > 0 with
-          | true -> return sprintf "Live testing %s. %d tests discovered." label discovered
-          | false -> return sprintf "Live testing %s. No tests discovered yet — tests will be discovered after first eval." label
-        | None ->
-          return sprintf "Live testing %s." label
+        match enabled with
+        | false ->
+          return "Live testing disabled."
+        | true ->
+          match ctx.GetElmModel with
+          | Some getModel ->
+            let state = (getModel ()).LiveTesting.TestState
+            let discovered = state.DiscoveredTests.Length
+            match discovered > 0 with
+            | true ->
+              return sprintf "Live testing enabled. %d tests already discovered. Use get_live_test_status to confirm current DiscoveryState." discovered
+            | false ->
+              return "Live testing enabled. Initial discovery now runs asynchronously; use get_live_test_status to confirm DiscoveryState."
+          | None ->
+            return "Live testing enabled. Initial discovery now runs asynchronously; use get_live_test_status to confirm DiscoveryState."
     }
 
   let setRunPolicy (ctx: McpContext) (category: string) (policy: string) : Task<string> =
@@ -1704,11 +1752,20 @@ module McpTools =
           state.Activation (sessionEntries |> Array.map (fun e -> e.Status))
       let timing = model.LiveTesting.LastTiming
       let isActive = state.Activation = Features.LiveTesting.LiveTestingActivation.Active
+      let discoveryState = Features.LiveTesting.LiveTestState.discoveryState state
+      let discoveryRequiresEval = Features.LiveTesting.LiveTestState.requiresPrimingEval state
       let resp = {|
         Enabled = isActive
         IsRunning = Features.LiveTesting.TestRunPhase.isAnyRunning state.RunPhases
         History = state.History
         Summary = summary
+        DiscoveryState = Features.LiveTesting.LiveTestDiscoveryState.toWireValue discoveryState
+        DiscoveryHint = Features.LiveTesting.LiveTestState.discoveryHint state
+        DiscoveryRequiresEval = discoveryRequiresEval
+        LastDiscoveryTime =
+          match state.LastDiscoveryTime > System.DateTimeOffset.MinValue with
+          | true -> Some state.LastDiscoveryTime
+          | false -> None
         Timing = timing |> Option.map Features.LiveTesting.TestCycleTiming.toStatusBar |> Option.defaultValue "no timing yet"
         Providers = state.DetectedProviders |> List.map (fun p ->
           match p with
@@ -2041,6 +2098,11 @@ module McpTools =
     | AlreadyRunning
 
   module RunTestsResult =
+    let classifyEmptySelection (state: Features.LiveTesting.LiveTestState) =
+      match state.DiscoveredTests.Length = 0 with
+      | true -> NoTestsDiscovered
+      | false -> NoTestsMatched state.DiscoveredTests.Length
+
     let formatFailures (failures: FailedTestInfo list) =
       let realFailures = failures |> List.filter (fun f -> not f.IsFlaky)
       let flakyFailures = failures |> List.filter (fun f -> f.IsFlaky)
@@ -2086,7 +2148,7 @@ module McpTools =
             sprintf "\nStill running (%d):\n%s" running (lines @ extra |> String.concat "\n")
         sprintf "⏱️ Timed out: %d passed, %d failed, %d still running out of %d tests. Use get_live_test_status for updates.%s%s" p f running total (formatFailures failures) runningInfo
       | NoTestsDiscovered ->
-        "No tests discovered — live testing is not enabled. Call enable_live_testing first to trigger test discovery, then retry run_tests."
+        "No tests discovered. If live testing is disabled, call enable_live_testing first. If it is already enabled, inspect get_live_test_status for DiscoveryState and retry after discovery completes."
       | NoTestsMatched totalDiscovered ->
         sprintf "No tests matched the filter. Total discovered: %d. Use get_live_test_status to list available tests." totalDiscovered
       | AlreadyRunning ->
@@ -2251,10 +2313,7 @@ module McpTools =
           state.DiscoveredTests None patternFilter category
       match Array.isEmpty tests with
       | true ->
-        // Distinguish "testing not active, 0 discovered" from "active but filter matched nothing"
-        match state.DiscoveredTests.Length = 0 && state.Activation <> Features.LiveTesting.LiveTestingActivation.Active with
-        | true -> return waitNote + RunTestsResult.format NoTestsDiscovered
-        | false -> return waitNote + RunTestsResult.format (NoTestsMatched state.DiscoveredTests.Length)
+        return waitNote + RunTestsResult.format (RunTestsResult.classifyEmptySelection state)
       | false ->
       let testIds = tests |> Array.map (fun tc -> tc.Id)
       dispatch (SageFsMsg.Event (SageFsEvent.RunTestsRequested tests))

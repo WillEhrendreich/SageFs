@@ -581,10 +581,21 @@ type SageFsClient(http: HttpClient) =
       return None
   }
 
+  /// Resolve the daemon apiVersion from the broader /health contract first,
+  /// then fall back to /version for older or partially-upgraded daemons.
+  member private this.GetCompatibleApiVersionAsync(ct: CancellationToken) : Task<Result<int, string>> = task {
+    let! healthResult = this.GetHealthAsync(ct)
+
+    match healthResult with
+    | Ok (apiVersion, _) -> return Ok apiVersion
+    | Error _ -> return! this.GetVersionAsync(ct)
+  }
+
   /// Check that the daemon's apiVersion matches ExpectedApiVersion.
+  /// Prefers the /health contract and falls back to /version for compatibility.
   /// Returns Ok() when compatible, Error(message) when mismatched or unreachable.
   member this.CheckVersionAsync(ct: CancellationToken) : Task<Result<unit, string>> = task {
-    let! versionResult = this.GetVersionAsync(ct)
+    let! versionResult = this.GetCompatibleApiVersionAsync(ct)
     return
       match versionResult with
       | Error e -> Error e

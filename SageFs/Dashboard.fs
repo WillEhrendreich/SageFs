@@ -1134,12 +1134,16 @@ let createEndpoints
       let startedAt =
         let proc = System.Diagnostics.Process.GetCurrentProcess()
         proc.StartTime.ToUniversalTime()
-      do! ctx.Response.WriteAsJsonAsync({|
-        pid = Environment.ProcessId
-        version = infra.Version
-        startedAt = startedAt.ToString("o")
-        workingDirectory = Environment.CurrentDirectory
-      |})
+      let! sessionCount = infra.GetSessionCount()
+      let data =
+        DaemonInfoContract.create
+          Environment.ProcessId
+          infra.Version
+          (startedAt.ToString("o"))
+          Environment.CurrentDirectory
+          infra.McpPort
+          sessionCount
+      do! ctx.Response.WriteAsJsonAsync(data)
     })
     // Graceful shutdown endpoint
     match a.ShutdownCallback with

@@ -120,7 +120,7 @@ let shouldShowEvangelicalHint (sessionState: string) (evalCount: int) : bool =
 // ── Init ──
 
 let init (daemonInfo: DaemonInfo) (keyMap: SageFsKeyMap) () : Model * Cmd<Msg> =
-  let dashboardPort = daemonInfo.Port + 1
+  let dashboardPort = daemonInfo.DashboardPort
   let baseUrl = sprintf "http://localhost:%d" dashboardPort
   let handler = new HttpClientHandler(AutomaticDecompression = Net.DecompressionMethods.All)
   let client = new HttpClient(handler)
@@ -745,7 +745,7 @@ let run (daemonInfo: DaemonInfo) =
       SageFs.KeyMap.merge cfg.Keybindings SageFs.KeyMap.defaults
     | _ -> SageFs.KeyMap.defaults
 
-  let dashboardPort = daemonInfo.Port + 1
+  let dashboardPort = daemonInfo.DashboardPort
   let baseUrl = sprintf "http://localhost:%d" dashboardPort
 
   // Verify daemon is reachable first

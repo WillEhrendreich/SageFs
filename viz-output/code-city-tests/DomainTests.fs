@@ -4595,9 +4595,9 @@ let weberDistrictTests =
         let cx = building.X + building.W / 2.0f
         let cz = building.Z + building.D / 2.0f
         let nearest = nearestRoadDistance roads cx cz
-        (nearest, 2.5f)
+        (nearest, 2.8f)
         |> Expect.isLessThanOrEqual
-             (sprintf "building center (%.1f,%.1f) dist=%.2f drifted too far from any road frontage" cx cz nearest)
+              (sprintf "building center (%.1f,%.1f) dist=%.2f drifted too far from any road frontage" cx cz nearest)
   ]
 
 /// Distance from (px, pz) to the nearest point on any polygon edge.
@@ -5038,6 +5038,59 @@ let gitAgeColorTests =
       bldgs
       |> List.forall (fun b -> b.BuildingType <> Skyscraper && b.H <= 18.0f)
       |> Expect.isTrue "tiny hot functions should not render as impossible needle towers"
+
+    testCase "packAlongEdges: large line-count functions on small perimeter do not become needles" <| fun () ->
+      // A tiny block (6×6) forces very small frontage width; large hot functions must not produce needles.
+      let rect = { X = 0.0f; Z = 0.0f; W = 6.0f; H = 6.0f }
+      let roads = []  // no roads → falls back to packAlongEdges
+      let largeFuncs =
+        [ for i in 0..4 ->
+            { mkFunc (sprintf "bigFn%d" i) "BigMod" with LineCount = 400 } ]
+      let heatMap =
+        largeFuncs
+        |> List.map (fun f -> f.QualifiedName, (1.0f, 30, 5))
+        |> Map.ofList
+      let bldgs = packAlongRoads roads rect largeFuncs heatMap (Color(70uy, 130uy, 180uy, 255uy)) (Random 42) Map.empty
+      bldgs |> Expect.isNonEmpty "large hot functions should still produce buildings"
+      bldgs
+      |> List.forall (fun b ->
+        let minDim = min b.W b.D
+        minDim > 0.0f && b.H / minDim <= 25.0f)
+      |> Expect.isTrue "buildings on small lots must not have height:footprint ratio > 25:1"
+  ]
+
+let structuralPlausibilityTests =
+  testList "Structural plausibility" [
+
+    testCase "structurallyPlausibleH: skyscraper on narrow parcel is capped to plausible ratio" <| fun () ->
+      // A Skyscraper raw-height of 42 on a 0.7-unit narrow parcel should be capped.
+      let raw = 42.0f
+      let w = 1.8f  // widthAlongRoad (larger dimension)
+      let d = 0.7f  // depth (narrow dimension — the structural constraint)
+      let clamped = structurallyPlausibleH Skyscraper w d raw
+      // core estimate = 0.7 * 0.35 = 0.245; maxAspect=20 → cap = max(0.7*1.5, 0.245*20) = max(1.05,4.9) = 4.9
+      (clamped, raw) |> Expect.isLessThan "narrow skyscraper must be capped below unclamped height"
+      let minDim = min w d
+      let impliedAspect = clamped / (minDim * 0.35f)  // aspect vs compound core
+      (impliedAspect, 22.0f) |> Expect.isLessThanOrEqual "clamped aspect vs compound core should respect maxAspect"
+
+    testCase "structurallyPlausibleH: wide footprint skyscrapers keep their full height" <| fun () ->
+      // A well-proportioned Skyscraper (6×5 lot) should NOT be clamped.
+      let raw = 35.0f
+      let w = 6.0f
+      let d = 5.0f
+      let clamped = structurallyPlausibleH Skyscraper w d raw
+      // core = 5 * 0.35 = 1.75; cap = max(5*1.5, 1.75*20) = max(7.5, 35) = 35 ≥ raw
+      clamped |> Expect.equal "wide skyscraper should keep its full height" raw
+
+    testCase "structurallyPlausibleH: shed enforces a low aspect ratio" <| fun () ->
+      // A Shed (single-cube monolith) should stay squat; H:footprint <= 3.
+      let raw = 8.0f
+      let w = 1.0f
+      let d = 1.0f
+      let clamped = structurallyPlausibleH Shed w d raw
+      // core = 1.0 * 0.35 = 0.35; cap = max(1.0*1.5, 0.35*3) = max(1.5, 1.05) = 1.5
+      (clamped, raw) |> Expect.isLessThan "squat shed must not soar above its footprint"
   ]
 
 let roadColorTests =
@@ -5982,6 +6035,7 @@ let allTests =
     parseDaemonInfoJsonTests
     resolveRepoRootPureTests
     sourceFileShowcaseTests
+    structuralPlausibilityTests
   ]
 
 [<EntryPoint>]

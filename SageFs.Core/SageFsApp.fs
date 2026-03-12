@@ -629,7 +629,8 @@ module SageFsUpdate =
           { s with
               DiscoveredTests = withSourceMap
               TestSessionMap = newSessionMap
-              LastDiscoveryTime = System.DateTimeOffset.UtcNow })
+              LastDiscoveryTime = System.DateTimeOffset.UtcNow
+              PendingDiscoverySessions = Set.remove sessionId s.PendingDiscoverySessions })
         let effects =
           match lt.TestState.Activation = Features.LiveTesting.LiveTestingActivation.Active
                 && not (Array.isEmpty tests) with
@@ -800,10 +801,21 @@ module SageFsUpdate =
       | true ->
         model, []
       | false ->
-        let lt = recomputeStatuses model.LiveTesting (fun s -> { s with Activation = Features.LiveTesting.LiveTestingActivation.Active })
+        let pendingDiscoverySessions =
+          model.Sessions.Sessions
+          |> List.choose (fun session ->
+            match session.Status with
+            | SessionDisplayStatus.Running
+            | SessionDisplayStatus.Stale -> Some (SessionId.value session.Id)
+            | _ -> None)
+          |> Set.ofList
+        let lt = recomputeStatuses model.LiveTesting (fun s ->
+          { s with
+              Activation = Features.LiveTesting.LiveTestingActivation.Active
+              PendingDiscoverySessions = Set.union s.PendingDiscoverySessions pendingDiscoverySessions })
         let effects =
           match Array.isEmpty lt.TestState.DiscoveredTests with
-          | true -> []
+          | true -> [SageFsEffect.TestCycle Features.LiveTesting.TestCycleEffect.RequestInitialDiscovery]
           | false ->
             let sessionMap = lt.TestState.TestSessionMap
             lt.TestState.DiscoveredTests
@@ -1333,6 +1345,28 @@ module SageFsEffectHandler =
     | SageFsEffect.TestCycle testCycleEffect ->
       async {
         match testCycleEffect with
+        | Features.LiveTesting.TestCycleEffect.RequestInitialDiscovery ->
+          let! sessions = deps.ListSessions ()
+          let discoveryTargets =
+            sessions
+            |> List.choose (fun session ->
+              match deps.GetProxy session.Id with
+              | Some proxy -> Some (session.Id, proxy)
+              | None -> None)
+          for sid, proxy in discoveryTargets do
+            let replyId = newReplyId ()
+            try
+              let! resp = proxy (WorkerMessage.GetTestDiscovery replyId)
+              match resp with
+              | WorkerResponse.InitialTestDiscovery (tests, providers) ->
+                match List.isEmpty providers with
+                | true -> ()
+                | false -> dispatch (SageFsMsg.Event (SageFsEvent.ProvidersDetected providers))
+                dispatch (SageFsMsg.Event (SageFsEvent.TestsDiscovered (SessionId.value sid, tests)))
+              | other ->
+                Utils.Log.warn "[SageFsApp] Unexpected test discovery response for %s: %A" (SessionId.value sid) other
+            with ex ->
+              Utils.Log.warn "[SageFsApp] Initial test discovery failed for %s: %s" (SessionId.value sid) ex.Message
         | Features.LiveTesting.TestCycleEffect.ParseTreeSitter (content, filePath) ->
           let span = Instrumentation.startSpan Instrumentation.testCycleSource "test_cycle.treesitter.parse" ["file", box filePath]
           let (locations, elapsed) =

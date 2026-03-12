@@ -6718,6 +6718,22 @@ let private frontageSetback roadClass buildingType =
 let complexityFootprintFactor (complexity: int) : float32 =
   1.0f + MathF.Log(float32 complexity + 1.0f) * 0.15f
 
+/// Clamp building height to a structurally plausible ratio vs its footprint.
+/// Prevents impossible needle towers where height >> footprint width.
+/// Uses a conservative compound-core estimate of 35% of the shorter lot dimension.
+let structurallyPlausibleH (bt: BuildingType) (w: float32) (d: float32) (rawH: float32) : float32 =
+  let minDim = min w d
+  let coreEst = minDim * 0.35f
+  let maxAspect =
+    match bt with
+    | Shed       -> 3.0f
+    | Cottage    -> 4.0f
+    | Rowhouse   -> 6.0f
+    | Commercial -> 9.0f
+    | Tower      -> 14.0f
+    | Skyscraper -> 20.0f
+  min rawH (max (minDim * 1.5f) (coreEst * maxAspect))
+
 let private frontageFootprint roadClass buildingType parcelWidth complexity =
   let baseWidth, depthScale =
     match buildingType with
@@ -7076,7 +7092,7 @@ let packAlongEdges
             GitBugFixRatio = meta.BugFixRatio
             X = px - fp / 2.0f; Z = pz - fp / 2.0f
             W = fp; D = fp
-            H = BuildingType.height bt f.LineCount heat
+            H = structurallyPlausibleH bt fp fp (BuildingType.height bt f.LineCount heat)
             Rotation  = roadAngle + jitter
             Color     = BuildingType.wallColor bt f.Name ageDays
             RoofColor = BuildingType.roofColor bt districtColor
@@ -7208,7 +7224,7 @@ let packAlongRoads
               GitBugFixRatio = meta.BugFixRatio
               X = px; Z = pz
               W = worldW; D = worldD
-              H = BuildingType.height bt f.LineCount heat
+              H = structurallyPlausibleH bt worldW worldD (BuildingType.height bt f.LineCount heat)
               Rotation  = roadAngle + jitter
               Color     = BuildingType.wallColor bt f.Name ageDays
               RoofColor = BuildingType.roofColor bt districtColor
@@ -7272,17 +7288,46 @@ let layoutWeberDistrict
   if funcs.IsEmpty then ([], [])
   elif rect.W < 1.5f || rect.H < 1.5f then ([], [])
   else
-    let blockDemand =
+    let baseDemand =
       max 1 (int (MathF.Ceiling(float32 funcs.Length / 4.0f)))
-    let growthPlan, grownRoads = buildMajorStreetGrowth rect blockDemand organic rng
-    let districtRoads =
-      grownRoads
-      |> canonicalizeRoads
-      |> fun roads ->
-          if organic > 0.5f then pruneRepeatedSideConnectorRoads roads else roads
-    let buildings =
-      packAlongRoads districtRoads rect funcs heatMap districtColor rng gitMeta
-    (buildings, districtRoads)
+    let maxDemand =
+      max baseDemand (min (baseDemand + 3) (max 2 (funcs.Length / 2 + 1)))
+
+    let buildAttempt (demand: int) (attemptRng: Random) : FuncBuilding list * Road list =
+      let _, grownRoads = buildMajorStreetGrowth rect demand organic attemptRng
+      let districtRoads =
+        grownRoads
+        |> canonicalizeRoads
+        |> fun roads ->
+            if organic > 0.5f then pruneRepeatedSideConnectorRoads roads else roads
+      let buildings =
+        packAlongRoads districtRoads rect funcs heatMap districtColor attemptRng gitMeta
+      buildings, districtRoads
+
+    let initialBuildings, initialRoads = buildAttempt baseDemand rng
+    if initialBuildings.Length >= funcs.Length || baseDemand >= maxDemand then
+      initialBuildings, initialRoads
+    else
+      let retrySeed = rng.Next(1, Int32.MaxValue)
+
+      let buildRetryAttempt demand =
+        let attemptSeed = retrySeed + demand * 104729
+        let attemptRng = Random(attemptSeed)
+        buildAttempt demand attemptRng
+
+      let rec findBest (demand: int) ((bestBuildings, bestRoads): FuncBuilding list * Road list) : FuncBuilding list * Road list =
+        let buildings, districtRoads = buildRetryAttempt demand
+        let nextBest =
+          if buildings.Length > bestBuildings.Length then
+            buildings, districtRoads
+          else
+            bestBuildings, bestRoads
+        if buildings.Length >= funcs.Length || demand >= maxDemand then
+          nextBest
+        else
+          findBest (demand + 1) nextBest
+
+      findBest (baseDemand + 1) (initialBuildings, initialRoads)
 
 
 let districtPalette =
@@ -9830,7 +9875,7 @@ void main() {
   let cycleReviewPreset () =
     let nextIndex = (currentReviewPresetIndex + 1) % reviewPresets.Length
     applyReviewPreset nextIndex
-  applyReviewPreset 0
+  applyReviewPreset (match sourceFile with | Some _ -> 1 | None -> 0)
 
   let mutable highlighted : FuncBuilding option = None
   let mutable selected : FuncBuilding option = None

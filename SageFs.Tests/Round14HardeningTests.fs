@@ -92,7 +92,7 @@ let w36HandlePruneResultTests =
     testCase "handlePrune with daemon running returns Error (not Ok false)" <| fun _ ->
       let dir = IO.Path.Combine(IO.Path.GetTempPath(), sprintf "sagefs-r14-%s" (Guid.NewGuid().ToString("N")))
       let fakeDaemon () : Task<DaemonInfo option> =
-        Task.FromResult(Some { Pid = 12345; Port = 37749; StartedAt = DateTime.UtcNow; WorkingDirectory = "/"; Version = "0.1.0" })
+        Task.FromResult(Some { Pid = 12345; Port = 37749; DashboardPort = 37750; StartedAt = DateTime.UtcNow; WorkingDirectory = "/"; Version = "0.1.0"; ApiVersion = None; SessionCount = None })
       let result =
         SageFs.Server.DaemonMode.handlePrune dir nullLog fakeDaemon pruneFlags
         |> Async.AwaitTask
@@ -414,7 +414,7 @@ let w42TaskCheckDaemonRunningTests =
     testCase "handlePrune with Task daemon-detected returns Error (W42 + W36 combined)" <| fun _ ->
       let dir = IO.Path.Combine(IO.Path.GetTempPath(), sprintf "sagefs-r14-%s" (Guid.NewGuid().ToString("N")))
       let taskDaemon () : Task<DaemonInfo option> =
-        Task.FromResult(Some { Pid = 99; Port = 37749; StartedAt = DateTime.UtcNow; WorkingDirectory = "/"; Version = "test" })
+        Task.FromResult(Some { Pid = 99; Port = 37749; DashboardPort = 37750; StartedAt = DateTime.UtcNow; WorkingDirectory = "/"; Version = "test"; ApiVersion = None; SessionCount = None })
       let result =
         SageFs.Server.DaemonMode.handlePrune dir nullLog taskDaemon pruneFlags
         |> Async.AwaitTask

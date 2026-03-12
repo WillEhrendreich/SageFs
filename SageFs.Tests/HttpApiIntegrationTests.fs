@@ -17,22 +17,43 @@ let testProjectDir =
   Path.GetFullPath(
     Path.Combine(__SOURCE_DIRECTORY__, "..", "SageFs.Tests"))
 
+let repoRoot =
+  Path.GetFullPath(
+    Path.Combine(__SOURCE_DIRECTORY__, ".."))
+
+let smokeSampleProject =
+  Path.Combine(
+    repoRoot,
+    "samples",
+    "from-csharp",
+    "SageFs.Samples.FromCSharp",
+    "SageFs.Samples.FromCSharp.fsproj")
+
+let smokeSampleProjectDir = Path.GetDirectoryName(smokeSampleProject)
+
 let sageFsExe =
+  let localExe =
+    Path.Combine(repoRoot, "SageFs", "bin", "Debug", "net10.0", "SageFs.exe")
   let toolDir =
     Path.Combine(
       Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
       ".dotnet", "tools")
   let exe = Path.Combine(toolDir, "SageFs.exe")
-  if File.Exists exe then exe else "SageFs"
+  if File.Exists localExe then localExe
+  elif File.Exists exe then exe
+  else "SageFs"
 
 /// Start a daemon on a given port, wait until /health responds, return (process, HttpClient).
-let startDaemon (port: int) = task {
+let startDaemonWithArgs (port: int) (workingDir: string) (args: string list) = task {
   let psi = ProcessStartInfo()
   psi.FileName <- sageFsExe
-  psi.Arguments <- sprintf "--mcp-port %d" port
   psi.UseShellExecute <- false
   psi.CreateNoWindow <- true
-  psi.WorkingDirectory <- testProjectDir
+  psi.WorkingDirectory <- workingDir
+  psi.ArgumentList.Add("--mcp-port")
+  psi.ArgumentList.Add(string port)
+  for arg in args do
+    psi.ArgumentList.Add(arg)
 
   let proc = Process.Start(psi)
   let client = new HttpClient()
@@ -59,6 +80,9 @@ let startDaemon (port: int) = task {
   return proc, client
 }
 
+let startDaemon (port: int) =
+  startDaemonWithArgs port testProjectDir []
+
 /// POST JSON to a path, return (statusCode, body).
 let postJson (client: HttpClient) (path: string) (payload: obj) = task {
   let json = JsonSerializer.Serialize(payload)
@@ -73,6 +97,31 @@ let getJson (client: HttpClient) (path: string) = task {
   let! resp = client.GetAsync(path)
   let! body = resp.Content.ReadAsStringAsync()
   return int resp.StatusCode, body
+}
+
+let normalizeDir (path: string) =
+  Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+
+let waitForReadySession (client: HttpClient) (targetDir: string) (timeout: TimeSpan) = task {
+  let started = DateTime.UtcNow
+  let mutable ready = false
+  let mutable lastBody = ""
+  let expectedDir = normalizeDir targetDir
+
+  while not ready && DateTime.UtcNow - started < timeout do
+    do! Task.Delay(1000)
+    let! status, body = getJson client "/api/sessions"
+    lastBody <- body
+    if status = 200 then
+      use doc = JsonDocument.Parse(body)
+      ready <-
+        doc.RootElement.GetProperty("sessions").EnumerateArray()
+        |> Seq.exists (fun session ->
+          let sessionDir = session.GetProperty("workingDirectory").GetString() |> normalizeDir
+          sessionDir = expectedDir
+          && session.GetProperty("status").GetString() = "Ready")
+
+  return ready, lastBody
 }
 
 /// Cleanup daemon process.
@@ -443,6 +492,64 @@ let integrationTests =
       use doc = JsonDocument.Parse(hrBody)
       doc.RootElement.GetProperty("success").GetBoolean()
       |> Expect.isTrue "hard reset succeeded"
+  ]
+
+[<Tests>]
+let httpApiRoutingTests =
+  testList "[Integration] HTTP API routing" [
+    testCase "POST /api/completions uses workingDirectory for startup session routing" <| fun _ ->
+      let port = 38600 + (Random().Next(100))
+      let proc, client =
+        startDaemonWithArgs port repoRoot [ "--proj"; smokeSampleProject ]
+        |> Async.AwaitTask |> Async.RunSynchronously
+      try
+        let ready, sessionsBody =
+          waitForReadySession client smokeSampleProjectDir (TimeSpan.FromSeconds(60.0))
+          |> Async.AwaitTask |> Async.RunSynchronously
+
+        ready
+        |> Expect.isTrue (sprintf "startup session should reach Ready. Sessions: %s" sessionsBody)
+
+        let payload =
+          {| code = "System."
+             cursorPosition = 7
+             workingDirectory = smokeSampleProjectDir |}
+
+        let status, body = postJson client "/api/completions" payload |> Async.AwaitTask |> Async.RunSynchronously
+        status |> Expect.equal "200 OK" 200
+        body.StartsWith("Error:", StringComparison.Ordinal)
+        |> Expect.isFalse (sprintf "completions should route via workingDirectory, got: %s" body)
+        body |> Expect.stringContains "should include a System completion" "String"
+      finally
+        client.Dispose()
+        killDaemon proc
+
+    testCase "POST /api/completions accepts snake_case cursor_position" <| fun _ ->
+      let port = 38700 + (Random().Next(100))
+      let proc, client =
+        startDaemonWithArgs port repoRoot [ "--proj"; smokeSampleProject ]
+        |> Async.AwaitTask |> Async.RunSynchronously
+      try
+        let ready, sessionsBody =
+          waitForReadySession client smokeSampleProjectDir (TimeSpan.FromSeconds(60.0))
+          |> Async.AwaitTask |> Async.RunSynchronously
+
+        ready
+        |> Expect.isTrue (sprintf "startup session should reach Ready. Sessions: %s" sessionsBody)
+
+        let payload =
+          {| code = "System."
+             cursor_position = 7
+             working_directory = smokeSampleProjectDir |}
+
+        let status, body = postJson client "/api/completions" payload |> Async.AwaitTask |> Async.RunSynchronously
+        status |> Expect.equal "200 OK" 200
+        body.StartsWith("Error:", StringComparison.Ordinal)
+        |> Expect.isFalse (sprintf "completions should accept snake_case cursor_position, got: %s" body)
+        body |> Expect.stringContains "should include a System completion" "String"
+      finally
+        client.Dispose()
+        killDaemon proc
   ]
 
 // ─── E2E Smoke Test (full Process.Start lifecycle) ────────────────

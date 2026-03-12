@@ -1061,9 +1061,11 @@ let endToEndCycleTests = testList "End-to-end cycle" [
 let TestCycleCancellationTests = testList "TestCycleCancellation" [
   test "tokenForEffect returns live tokens" {
     let pc = TestCycleCancellation.create()
+    let t0 = TestCycleCancellation.tokenForEffect TestCycleEffect.RequestInitialDiscovery pc
     let t1 = TestCycleCancellation.tokenForEffect (TestCycleEffect.ParseTreeSitter("x", "f")) pc
     let t2 = TestCycleCancellation.tokenForEffect (TestCycleEffect.RequestFcsTypeCheck("f", System.TimeSpan.Zero)) pc
     let t3 = TestCycleCancellation.tokenForEffect (TestCycleEffect.RunAffectedTests([||], RunTrigger.Keystroke, System.TimeSpan.Zero, System.TimeSpan.Zero, None, [||])) pc
+    t0.IsCancellationRequested |> Expect.isFalse "discovery token live"
     t1.IsCancellationRequested |> Expect.isFalse "ts token live"
     t2.IsCancellationRequested |> Expect.isFalse "fcs token live"
     t3.IsCancellationRequested |> Expect.isFalse "run token live"

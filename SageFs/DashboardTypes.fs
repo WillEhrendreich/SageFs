@@ -554,10 +554,12 @@ type DashboardActions = {
 /// Infrastructure dependencies — event sources, tracking, themes.
 type DashboardInfra = {
   Version: string
+  McpPort: int
   StateChanged: IEvent<DaemonStateChange> option
   ConnectionTracker: ConnectionTracker option
   SessionThemes: Collections.Concurrent.ConcurrentDictionary<string, string>
   GetCompletions: (string -> string -> int -> Threading.Tasks.Task<Features.AutoCompletion.CompletionItem list>) option
+  GetSessionCount: unit -> Threading.Tasks.Task<int>
   /// Shared alarm buffer — populated when ElmLoop fires OnSystemAlarm.
   /// Shared across all SSE connections; first-dismiss clears for all.
   SystemAlarmBuffer: SystemAlarmEntry list ref
@@ -590,6 +592,29 @@ type DashboardSnapshot = {
   ThemeVars: XmlNode
   BindingsPanel: XmlNode
 }
+
+type DaemonInfoContract = {
+  Pid: int
+  Version: string
+  StartedAt: string
+  WorkingDirectory: string
+  McpPort: int
+  DashboardPort: int
+  ApiVersion: int
+  SessionCount: int
+}
+
+[<RequireQualifiedAccess>]
+module DaemonInfoContract =
+  let create pid version startedAt workingDirectory mcpPort sessionCount : DaemonInfoContract =
+    { Pid = pid
+      Version = version
+      StartedAt = startedAt
+      WorkingDirectory = workingDirectory
+      McpPort = mcpPort
+      DashboardPort = mcpPort + 1
+      ApiVersion = EndpointContracts.apiVersion
+      SessionCount = sessionCount }
 
 /// Parse an editor action string + optional value into an EditorAction DU case.
 let parseEditorAction (actionName: string) (value: string option) : EditorAction option =

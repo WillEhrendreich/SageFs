@@ -9,12 +9,5 @@
       ],
       "rollForward": false
     },
-    "sagefs": {
-      "version": "0.5.173",
-      "commands": [
-        "sagefs"
-      ],
-      "rollForward": false
-    }
   }
 }

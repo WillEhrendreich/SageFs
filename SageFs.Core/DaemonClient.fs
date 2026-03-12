@@ -231,7 +231,7 @@ module DaemonClient =
 
   /// Verify daemon is reachable. Returns Ok baseUrl or Error message.
   let verifyConnection (daemonInfo: DaemonInfo) = task {
-    let dashboardPort = daemonInfo.Port + 1
+    let dashboardPort = daemonInfo.DashboardPort
     let baseUrl = sprintf "http://localhost:%d" dashboardPort
     use handler = new HttpClientHandler(AutomaticDecompression = System.Net.DecompressionMethods.All)
     use client = new HttpClient(handler)

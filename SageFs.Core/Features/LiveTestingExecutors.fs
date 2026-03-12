@@ -315,6 +315,7 @@ module BuiltInExecutors =
     /// Cached reflection handles for Expecto types (resolved once per assembly).
     type ReflectionCache = {
       ToTestCodeList: MethodInfo
+      TestType: System.Type
       FlatTestNameProp: PropertyInfo
       FlatTestTestProp: PropertyInfo
       TestCodeTagProp: PropertyInfo
@@ -340,9 +341,10 @@ module BuiltInExecutors =
         | Some asmName ->
           let expAsm = Assembly.Load(asmName)
           let testModule = expAsm.GetType("Expecto.TestModule")
+          let testType = expAsm.GetType("Expecto.Test")
           let flatTestType = expAsm.GetType("Expecto.FlatTest")
           let testCodeType = expAsm.GetType("Expecto.TestCode")
-          match testModule = null || flatTestType = null || testCodeType = null with
+          match testModule = null || testType = null || flatTestType = null || testCodeType = null with
           | true -> None
           | false ->
             let toTestCodeList =
@@ -352,6 +354,7 @@ module BuiltInExecutors =
             | false ->
               Some {
                 ToTestCodeList = toTestCodeList
+                TestType = testType
                 FlatTestNameProp = flatTestType.GetProperty("name")
                 FlatTestTestProp = flatTestType.GetProperty("test")
                 TestCodeTagProp = testCodeType.GetProperty("Tag")
@@ -363,6 +366,49 @@ module BuiltInExecutors =
         Log.warn "[LiveTesting] Expecto reflection cache build failed for %s: %s\n%s" asm.FullName ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
         Instrumentation.liveTestingAssemblyLoadErrors.Add(1L)
         None
+
+    type private ExpectoTestBinding = {
+      Name: string
+      ReadValue: unit -> obj
+    }
+
+    let private normalizeBindingName (memberName: string) =
+      match memberName.StartsWith("get_", StringComparison.Ordinal) with
+      | true -> memberName.Substring("get_".Length)
+      | false -> memberName
+
+    let private getTestBindings (cache: ReflectionCache) (t: Type) =
+      let propertyBindings =
+        t.GetProperties(BindingFlags.Public ||| BindingFlags.Static)
+        |> Array.filter (fun (pi: PropertyInfo) ->
+          pi.GetCustomAttributes(true)
+          |> Array.exists (fun attr -> attr.GetType().Name = "TestsAttribute"))
+        |> Array.map (fun (pi: PropertyInfo) ->
+          { Name = pi.Name
+            ReadValue = fun () -> pi.GetValue(null) })
+
+      let propertyNames =
+        propertyBindings
+        |> Array.map (fun binding -> binding.Name)
+        |> Set.ofArray
+
+      let getterBindings =
+        t.GetMethods(BindingFlags.Public ||| BindingFlags.Static)
+        |> Array.choose (fun (mi: MethodInfo) ->
+          let bindingName = normalizeBindingName mi.Name
+          match mi.IsSpecialName
+                && mi.Name.StartsWith("get_", StringComparison.Ordinal)
+                && mi.GetParameters().Length = 0
+                && mi.ReturnType = cache.TestType
+                && not (Set.contains bindingName propertyNames) with
+          | true ->
+            Some {
+              Name = bindingName
+              ReadValue = fun () -> mi.Invoke(null, [||])
+            }
+          | false -> None)
+
+      Array.append propertyBindings getterBindings
 
     /// Map an exception to TestResult using reflection-resolved Expecto types.
     let mapException (cache: ReflectionCache) (ex: exn) (elapsed: TimeSpan) =
@@ -482,14 +528,11 @@ module BuiltInExecutors =
       try
         asm.GetExportedTypes()
         |> Array.collect (fun t ->
-          t.GetProperties(BindingFlags.Public ||| BindingFlags.Static)
-          |> Array.filter (fun (pi: PropertyInfo) ->
-            pi.GetCustomAttributes(true)
-            |> Array.exists (fun attr -> attr.GetType().Name = "TestsAttribute"))
-          |> Array.collect (fun (pi: PropertyInfo) ->
+          getTestBindings cache t
+          |> Array.collect (fun binding ->
             try
-              let testValue = pi.GetValue(null)
-              let propertyFullName = sprintf "%s.%s" t.FullName pi.Name
+              let testValue = binding.ReadValue ()
+              let propertyFullName = sprintf "%s.%s" t.FullName binding.Name
               let flatTests = cache.ToTestCodeList.Invoke(null, [|testValue|])
               let enumerable = flatTests :?> System.Collections.IEnumerable
               [ for ft in enumerable do
@@ -499,9 +542,9 @@ module BuiltInExecutors =
                   let testPath = name |> String.concat "/"
                   let fullName = sprintf "%s/%s" propertyFullName testPath
                   yield fullName, { TestCodeObj = testCode; Tag = tag } ]
-              |> List.toArray
-            with ex ->
-              Log.warn "[LiveTesting] buildLookup property %s.%s failed: %s\n%s" t.FullName pi.Name ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
+               |> List.toArray
+             with ex ->
+              Log.warn "[LiveTesting] buildLookup binding %s.%s failed: %s\n%s" t.FullName binding.Name ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
               [||]))
         |> Map.ofArray
       with ex ->
@@ -509,19 +552,16 @@ module BuiltInExecutors =
         Instrumentation.liveTestingAssemblyLoadErrors.Add(1L)
         Map.empty
 
-    /// Discover individual leaf-level tests from all [<Tests>] properties.
+    /// Discover individual leaf-level tests from all public Expecto test bindings.
     let discoverLeafTests (cache: ReflectionCache) (asm: Assembly) : TestCase list =
       try
         asm.GetExportedTypes()
         |> Array.collect (fun t ->
-          t.GetProperties(BindingFlags.Public ||| BindingFlags.Static)
-          |> Array.filter (fun (pi: PropertyInfo) ->
-            pi.GetCustomAttributes(true)
-            |> Array.exists (fun attr -> attr.GetType().Name = "TestsAttribute"))
-          |> Array.collect (fun (pi: PropertyInfo) ->
+          getTestBindings cache t
+          |> Array.collect (fun binding ->
             try
-              let testValue = pi.GetValue(null)
-              let propertyFullName = sprintf "%s.%s" t.FullName pi.Name
+              let testValue = binding.ReadValue ()
+              let propertyFullName = sprintf "%s.%s" t.FullName binding.Name
               let flatTests = cache.ToTestCodeList.Invoke(null, [|testValue|])
               let enumerable = flatTests :?> System.Collections.IEnumerable
               [ for ft in enumerable do
@@ -538,7 +578,7 @@ module BuiltInExecutors =
                           Category = CategoryDetection.categorize [] fullName TestFramework.Expecto [||] } ]
               |> List.toArray
             with ex ->
-              Log.warn "[LiveTesting] discoverLeafTests property %s.%s failed: %s\n%s" t.FullName pi.Name ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
+              Log.warn "[LiveTesting] discoverLeafTests binding %s.%s failed: %s\n%s" t.FullName binding.Name ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
               [||]))
         |> Array.toList
       with
@@ -992,6 +1032,7 @@ type CancellationChain() =
 
 /// Manages cancellation tokens for each test cycle stage.
 type TestCycleCancellation = {
+  Discovery: CancellationChain
   TreeSitter: CancellationChain
   Fcs: CancellationChain
   TestRun: CancellationChain
@@ -999,6 +1040,7 @@ type TestCycleCancellation = {
 
 module TestCycleCancellation =
   let create () = {
+    Discovery = new CancellationChain()
     TreeSitter = new CancellationChain()
     Fcs = new CancellationChain()
     TestRun = new CancellationChain()
@@ -1007,11 +1049,13 @@ module TestCycleCancellation =
   /// Cancel previous work and get a fresh token for the specified effect.
   let tokenForEffect (effect: TestCycleEffect) (pc: TestCycleCancellation) : System.Threading.CancellationToken =
     match effect with
+    | TestCycleEffect.RequestInitialDiscovery -> pc.Discovery.next()
     | TestCycleEffect.ParseTreeSitter _ -> pc.TreeSitter.next()
     | TestCycleEffect.RequestFcsTypeCheck _ -> pc.Fcs.next()
     | TestCycleEffect.RunAffectedTests _ -> pc.TestRun.next()
 
   let dispose (pc: TestCycleCancellation) =
+    pc.Discovery.dispose()
     pc.TreeSitter.dispose()
     pc.Fcs.dispose()
     pc.TestRun.dispose()

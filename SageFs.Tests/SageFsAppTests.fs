@@ -682,20 +682,44 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
       | _ -> false)
     |> Expect.isTrue "should contain RunAffectedTests effect"
 
-  testCase "EnableLiveTesting with no tests emits no effects" <| fun _ ->
+  testCase "EnableLiveTesting with no tests emits an initial discovery request" <| fun _ ->
+    let sessionId = testSessionId "aa000001"
+    let session : SessionSnapshot =
+      { Id = sessionId
+        Name = None
+        Projects = ["Test.fsproj"]
+        Status = SessionDisplayStatus.Running
+        LastActivity = DateTime.UtcNow
+        EvalCount = 0
+        UpSince = DateTime.UtcNow
+        IsActive = true
+        WorkingDirectory = "." }
+    let initial = SageFsModel.initial()
     let model =
-      { (SageFsModel.initial()) with
+      { initial with
+          Sessions =
+            { initial.Sessions with
+                Sessions = [session]
+                ActiveSessionId = ActiveSession.Viewing sessionId }
           LiveTesting =
-            { (SageFsModel.initial()).LiveTesting with
+            { initial.LiveTesting with
                 TestState =
-                  { (SageFsModel.initial()).LiveTesting.TestState with
+                  { initial.LiveTesting.TestState with
                       Activation = Features.LiveTesting.LiveTestingActivation.Inactive
                       DiscoveredTests = [||] } } }
     let newModel, effects =
       SageFsUpdate.update SageFsMsg.EnableLiveTesting model
     newModel.LiveTesting.TestState.Activation
     |> Expect.equal "should be active" Features.LiveTesting.LiveTestingActivation.Active
-    effects |> Expect.isEmpty "no effects when no tests discovered"
+    Set.contains (SageFs.WorkerProtocol.SessionId.value sessionId) newModel.LiveTesting.TestState.PendingDiscoverySessions
+    |> Expect.isTrue "should mark the running session as pending discovery"
+    effects |> Expect.isNonEmpty "should request initial discovery when no tests are discovered yet"
+    effects
+    |> List.exists (fun effect ->
+      match effect with
+      | SageFsEffect.TestCycle Features.LiveTesting.TestCycleEffect.RequestInitialDiscovery -> true
+      | _ -> false)
+    |> Expect.isTrue "should contain the initial discovery effect"
 
   testCase "DisableLiveTesting emits no effects" <| fun _ ->
     let model =

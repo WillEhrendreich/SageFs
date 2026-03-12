@@ -2,6 +2,13 @@ name: Smoke Test
 
 on:
   workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/smoke-test.yml'
+      - 'scripts/smoke-test.ps1'
+      - 'samples/from-csharp/**'
+      - 'SageFs/**'
+      - 'SageFs.Core/**'
   push:
     branches: [master]
     paths:
@@ -47,5 +54,17 @@ jobs:
 
       - name: Run smoke test
         shell: pwsh
-        run: scripts/smoke-test.ps1 -SessionWarmupSeconds 120
+        run: |
+          New-Item -ItemType Directory -Force smoke-diagnostics | Out-Null
+          pwsh -NoProfile -File scripts/smoke-test.ps1 -Port 37851 -SessionWarmupSeconds 120 2>&1 |
+            Tee-Object -FilePath smoke-diagnostics\smoke.log
+          exit $LASTEXITCODE
         timeout-minutes: 10
+
+      - name: Upload smoke diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-diagnostics
+          path: smoke-diagnostics\
+          if-no-files-found: ignore

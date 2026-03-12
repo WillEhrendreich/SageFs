@@ -29,6 +29,23 @@ let tests =
       testCase "requestShutdown returns false when no daemon" <| fun _ ->
         DaemonState.requestShutdown 39999
         |> Expect.isFalse "shutdown should fail when no daemon"
+
+      testCase "tryParseDaemonInfoJson reads dashboard port, api version, and session count" <| fun _ ->
+        let json = """{"pid":42,"version":"1.2.3","startedAt":"2026-03-12T00:00:00Z","workingDirectory":"C:\\repo","mcpPort":37749,"dashboardPort":37760,"apiVersion":7,"sessionCount":3}"""
+        let info = DaemonState.tryParseDaemonInfoJson 37749 json
+        info |> Expect.isSome "rich daemon-info payload should parse"
+        info.Value.Port |> Expect.equal "mcp port should round-trip" 37749
+        info.Value.DashboardPort |> Expect.equal "dashboard port should use payload when present" 37760
+        info.Value.ApiVersion |> Expect.equal "api version should parse when present" (Some 7)
+        info.Value.SessionCount |> Expect.equal "session count should parse when present" (Some 3)
+
+      testCase "tryParseDaemonInfoJson falls back for older daemon payloads" <| fun _ ->
+        let json = """{"pid":7,"version":"0.1.0","startedAt":"2026-03-12T00:00:00Z","workingDirectory":"C:\\repo"}"""
+        let info = DaemonState.tryParseDaemonInfoJson 37749 json
+        info |> Expect.isSome "older daemon-info payload should still parse"
+        info.Value.DashboardPort |> Expect.equal "dashboard port should derive from mcp when omitted" 37750
+        info.Value.ApiVersion |> Expect.equal "api version should be absent when omitted" None
+        info.Value.SessionCount |> Expect.equal "session count should be absent when omitted" None
     ]
 
     testList "daemon startup guard" [

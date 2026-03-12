@@ -21,6 +21,11 @@ let private anyWarn results =
   results
   |> List.exists (fun (r: EnvCheck.CheckResult) -> r.Status = EnvCheck.Status.Warn)
 
+let private authoritySession id workingDirectory status : EnvCheck.SessionAuthoritySession =
+  { Id = id
+    WorkingDirectory = workingDirectory
+    Status = status }
+
 /// Bind a TCP listener so isPortFree returns false for that port.
 let private withBoundPort (action: int -> unit) =
   let l = new TcpListener(IPAddress.Loopback, 0)
@@ -167,11 +172,87 @@ let dotnetSdkTests =
 
 // ── print (pure output logic) ─────────────────────────────────────────────────
 
-let private suppressPrint (results: EnvCheck.CheckResult list) =
+let private capturePrint (results: EnvCheck.CheckResult list) =
   let orig = Console.Out
-  Console.SetOut(IO.TextWriter.Null)
-  try EnvCheck.print results
-  finally Console.SetOut(orig)
+  use writer = new StringWriter()
+  Console.SetOut(writer)
+  try
+    let failures = EnvCheck.print results
+    writer.ToString(), failures
+  finally
+    Console.SetOut(orig)
+
+let private suppressPrint (results: EnvCheck.CheckResult list) =
+  capturePrint results |> snd
+
+[<Tests>]
+let sessionAuthorityTests =
+  testList "EnvCheck.session authority" [
+    test "classifySessionAuthority matches target directory after normalization" {
+      let sessions = [
+        authoritySession "abc12345" "C:/Code/Repos/SageFs/SageFs\\" "Ready"
+      ]
+
+      match EnvCheck.classifySessionAuthority "C:\\Code\\Repos\\SageFs\\SageFs" sessions with
+      | EnvCheck.SessionAuthority.ExactMatch session ->
+        session.Id |> Expect.equal "matching session selected" "abc12345"
+      | other ->
+        failtestf "expected ExactMatch, got %A" other
+    }
+
+    test "classifySessionAuthority reports ambiguity for multiple target matches" {
+      let sessions = [
+        authoritySession "abc12345" "C:\\Code\\Repos\\SageFs\\SageFs" "Ready"
+        authoritySession "def67890" "C:\\Code\\Repos\\SageFs\\SageFs\\" "Evaluating"
+      ]
+
+      match EnvCheck.classifySessionAuthority "C:\\Code\\Repos\\SageFs\\SageFs" sessions with
+      | EnvCheck.SessionAuthority.Ambiguous matches ->
+        matches |> List.map _.Id |> Expect.equal "both matching sessions returned" [ "abc12345"; "def67890" ]
+      | other ->
+        failtestf "expected Ambiguous, got %A" other
+    }
+
+    test "checkSessionAuthority warns when daemon is absent" {
+      let result = EnvCheck.checkSessionAuthority "C:\\Code\\Repos\\SageFs\\SageFs" None
+      result.Status |> Expect.equal "authority is not verified without a daemon" EnvCheck.Status.Warn
+      result.Detail |> Expect.stringContains "detail should say not checked" "Not checked"
+      result.Hint |> Expect.isSome "should explain how to verify authority"
+    }
+
+    test "checkSessionAuthority passes when exactly one ready session matches the target" {
+      let result =
+        EnvCheck.checkSessionAuthority
+          "C:\\Code\\Repos\\SageFs\\SageFs"
+          (Some [ authoritySession "abc12345" "C:\\Code\\Repos\\SageFs\\SageFs" "Ready" ])
+
+      result.Status |> Expect.equal "single ready match should pass" EnvCheck.Status.Pass
+      result.Detail |> Expect.stringContains "detail should mention one match" "1 matching session"
+      result.Detail |> Expect.stringContains "detail should mention ready status" "Ready"
+    }
+
+    test "checkSessionAuthority warns when daemon has no matching session for the target" {
+      let result =
+        EnvCheck.checkSessionAuthority
+          "C:\\Code\\Repos\\SageFs\\SageFs"
+          (Some [ authoritySession "other123" "C:\\Code\\Repos\\SageFs\\sagefs-vscode\\src" "Ready" ])
+
+      result.Status |> Expect.equal "missing target session should warn" EnvCheck.Status.Warn
+      result.Detail |> Expect.stringContains "detail should mention no match" "No matching session"
+      result.Hint |> Expect.isSome "should explain how to fix the mismatch"
+    }
+
+    test "checkSessionAuthority warns when the only matching session is not ready" {
+      let result =
+        EnvCheck.checkSessionAuthority
+          "C:\\Code\\Repos\\SageFs\\SageFs"
+          (Some [ authoritySession "abc12345" "C:\\Code\\Repos\\SageFs\\SageFs" "Evaluating" ])
+
+      result.Status |> Expect.equal "non-ready match should warn" EnvCheck.Status.Warn
+      result.Detail |> Expect.stringContains "detail should mention session status" "Evaluating"
+      result.Hint |> Expect.isSome "should guide the user"
+    }
+  ]
 
 [<Tests>]
 let printTests =
@@ -199,6 +280,18 @@ let printTests =
       ]
       suppressPrint results |> Expect.equal "warnings are not failures" 0
     }
+
+    test "all-pass summary no longer claims SageFs is ready to run" {
+      let results : EnvCheck.CheckResult list = [
+        { Icon = "✓"; Label = ".NET SDK"; Status = EnvCheck.Status.Pass; Detail = "ok"; Hint = None }
+        { Icon = "✓"; Label = "Target session authority"; Status = EnvCheck.Status.Pass; Detail = "1 matching session for C:\\Code\\Repos\\SageFs\\SageFs (abc12345, Ready)"; Hint = None }
+      ]
+
+      let output, failures = capturePrint results
+      failures |> Expect.equal "all pass should still have zero failures" 0
+      output.Contains("ready to run") |> Expect.isFalse "summary should not overclaim readiness"
+      output |> Expect.stringContains "summary should describe requested checks" "All requested checks passed"
+    }
   ]
 
 [<Tests>]
@@ -209,5 +302,6 @@ let allEnvCheckTests =
     checkFsprojTests
     checkPortTests
     dotnetSdkTests
+    sessionAuthorityTests
     printTests
   ]

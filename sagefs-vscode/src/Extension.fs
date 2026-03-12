@@ -20,6 +20,7 @@ module TestDeco = SageFs.Vscode.TestDecorations
 module TestLens = SageFs.Vscode.TestCodeLensProvider
 module InlineDeco = SageFs.Vscode.InlineDecorations
 module FileAnno = SageFs.Vscode.FileAnnotationsListener
+module Blocks = SageFs.Vscode.CodeBlocks
 
 open SageFs.Vscode.LiveTestingTypes
 open SageFs.Vscode.FeatureTypes
@@ -65,6 +66,7 @@ let mutable private covFailingDecoType: TextEditorDecorationType option = None
 let mutable private covNoneDecoType: TextEditorDecorationType option = None
 let mutable private inlineFailureDecoTypes: Map<string, TextEditorDecorationType> = Map.empty
 let mutable private fileAnnotationsCache: Map<string, FileAnno.FileAnnotations> = Map.empty
+let mutable private daemonConnectionDisposables: Disposable list = []
 
 // Density preset: controls visual annotation verbosity
 type Density = Full | Normal | Minimal
@@ -86,6 +88,26 @@ let densityLabel = function
   | Full -> "Full"
   | Normal -> "Normal"
   | Minimal -> "Minimal"
+
+let private replaceOwnedResources dispose current next =
+  current
+  |> List.rev
+  |> List.iter dispose
+  next
+
+let private trackDaemonConnectionDisposable (disposable: Disposable) =
+  daemonConnectionDisposables <- disposable :: daemonConnectionDisposables
+
+let private disposeDaemonConnectionResources () =
+  daemonConnectionDisposables <-
+    replaceOwnedResources (fun (d: Disposable) -> d.dispose () |> ignore) daemonConnectionDisposables []
+  diagnosticsDisposable <- None
+  sseDisposable <- None
+  liveTestListener <- None
+  testAdapter <- None
+  fileAnnotationsCache <- Map.empty
+  warmupPhase <- None
+  warmupDetail <- None
 
 let cycleDensity () =
   let next =
@@ -356,44 +378,10 @@ let findProject () =
         return picked
   }
 
-/// Check if the file uses ;; delimiters anywhere.
-let hasSemiSemiDelimiters (doc: TextDocument) =
-  let lineCount = int doc.lineCount
-  let mutable found = false
-  let mutable i = 0
-  while not found && i < lineCount do
-    if doc.lineAt(float i).text.TrimEnd().EndsWith(";;") then found <- true
-    i <- i + 1
-  found
-
-/// Find code block boundaries around a given line in the document.
-/// Returns (startLine, endLine).
-let getBlockBounds (doc: TextDocument) (curLine: int) =
-  let lineCount = int doc.lineCount
-  let isBlank (n: int) = doc.lineAt(float n).text.Trim() = ""
-  let endsWithSS (n: int) = doc.lineAt(float n).text.TrimEnd().EndsWith(";;")
-  match hasSemiSemiDelimiters doc with
-  | true ->
-    let mutable s = curLine
-    while s > 0 && not (endsWithSS (s - 1)) do s <- s - 1
-    let mutable e = curLine
-    while e < lineCount - 1 && not (endsWithSS e) do e <- e + 1
-    s, e
-  | false ->
-    let mutable s = curLine
-    while s > 0 && not (isBlank (s - 1)) do s <- s - 1
-    let mutable e = curLine
-    while e < lineCount - 1 && not (isBlank (e + 1)) do e <- e + 1
-    s, e
-
-/// Find the code block boundaries around the cursor.
-/// Returns (text, startLine, endLine).
-let getCodeBlock (editor: TextEditor) =
-  let doc = editor.document
-  let curLine = int editor.selection.active.line
-  let startLine, endLine = getBlockBounds doc curLine
-  let range = newRange startLine 0 endLine (int (doc.lineAt(float endLine).text.Length))
-  doc.getTextRange range, startLine, endLine
+let hasSemiSemiDelimiters = Blocks.hasSemiSemiDelimiters
+let getBlockBounds = Blocks.getBlockBounds
+let getCodeBlock = Blocks.getCodeBlock
+let getAllBlockRanges = Blocks.getAllBlockRanges
 
 // ── Recovery Actions ───────────────────────────────────────────
 
@@ -1038,30 +1026,7 @@ let evalAllBlocks () =
         let lineCount = int doc.lineCount
         let out = getOutput ()
         out.appendLine (sprintf "──── eval all blocks: %s ────" doc.fileName)
-        let useSemiSemi = hasSemiSemiDelimiters doc
-        // Collect all block boundaries
-        let blocks = ResizeArray<int * int>()
-        match useSemiSemi with
-        | true ->
-          let mutable blockStart = 0
-          for i in 0 .. lineCount - 1 do
-            if doc.lineAt(float i).text.TrimEnd().EndsWith(";;") then
-              blocks.Add(blockStart, i)
-              blockStart <- i + 1
-        | false ->
-          let mutable inBlock = false
-          let mutable blockStart = 0
-          for i in 0 .. lineCount - 1 do
-            let empty = doc.lineAt(float i).text.Trim() = ""
-            match empty, inBlock with
-            | false, false ->
-              blockStart <- i
-              inBlock <- true
-            | true, true ->
-              blocks.Add(blockStart, i - 1)
-              inBlock <- false
-            | _ -> ()
-          if inBlock then blocks.Add(blockStart, lineCount - 1)
+        let blocks = getAllBlockRanges doc
         // Evaluate each block in sequence
         let mutable errorCount = 0
         for blockStart, blockEnd in blocks do
@@ -1085,8 +1050,8 @@ let evalAllBlocks () =
               errorCount <- errorCount + 1
         let summary =
           match errorCount with
-          | 0 -> sprintf "✓ All %d blocks evaluated" blocks.Count
-          | n -> sprintf "⚠ %d of %d blocks had errors" n blocks.Count
+          | 0 -> sprintf "✓ All %d blocks evaluated" blocks.Length
+          | n -> sprintf "⚠ %d of %d blocks had errors" n blocks.Length
         out.appendLine summary
         Window.showInformationMessage summary [||] |> ignore
   }
@@ -1320,8 +1285,12 @@ let sessionMenu () =
   }
 
 let stopDaemon () =
-  daemonProcess |> Option.iter killProc
-  daemonProcess <- None
+  match daemonProcess with
+  | Some proc ->
+    killProc proc
+    daemonProcess <- None
+    disposeDaemonConnectionResources ()
+  | None -> ()
   Window.showInformationMessage "SageFs: stop the daemon from its terminal or use `sagefs stop`." [||] |> ignore
   refreshStatus ()
 
@@ -1981,30 +1950,41 @@ let activate (context: ExtensionContext) =
 
   // Diagnostics SSE + session resume + live state updates
   let rec connectToRunningDaemon (c: Client.Client) =
-    c.log "connectToRunningDaemon: disposing existing connections..."
-    // Dispose existing connection resources for idempotency
-    sseDisposable |> Option.iter (fun d -> d.dispose () |> ignore)
-    sseDisposable <- None
-    liveTestListener |> Option.iter (fun l -> l.Dispose ())
-    liveTestListener <- None
-    testAdapter |> Option.iter (fun a -> a.Dispose ())
-    testAdapter <- None
-    diagnosticsDisposable |> Option.iter (fun d -> d.dispose () |> ignore)
-    diagnosticsDisposable <- None
-    fileAnnotationsCache <- Map.empty
+    c.log "connectToRunningDaemon: disposing existing daemon-owned resources..."
+    disposeDaemonConnectionResources ()
     c.log "connectToRunningDaemon: establishing fresh SSE connections..."
     // Establish fresh connection resources
     let diagLogger = Some (fun (msg: string) -> (getOutput()).appendLine (sprintf "[Diagnostics SSE] %s" msg))
-    diagnosticsDisposable <- Some (Diag.start c.mcpPort dc diagLogger)
+    let diagDisposable = Diag.start c.mcpPort dc diagLogger
+    diagnosticsDisposable <- Some diagDisposable
+    trackDaemonConnectionDisposable diagDisposable
     // TestController for VS Code Test Explorer
     let adapter = TestCtrl.create (fun () -> client) (fun () ->
       liveTestListener
       |> Option.map (fun l -> (l.State ()).FailureNarratives)
       |> Option.defaultValue Map.empty)
     testAdapter <- Some adapter
+    trackDaemonConnectionDisposable {
+      new Disposable with
+        member _.dispose () =
+          adapter.Dispose ()
+          null
+    }
     // Initialize inline test decorations
     TestDeco.initialize ()
+    trackDaemonConnectionDisposable {
+      new Disposable with
+        member _.dispose () =
+          TestDeco.dispose ()
+          null
+    }
     initFileAnnotationDecoTypes ()
+    trackDaemonConnectionDisposable {
+      new Disposable with
+        member _.dispose () =
+          disposeFileAnnotationDecoTypes ()
+          null
+    }
     // Live testing listener — handles test_summary, test_results_batch, and state events
     let refreshAllDecorations () =
       liveTestListener
@@ -2187,14 +2167,16 @@ let activate (context: ExtensionContext) =
     let listener = LiveTest.start c.mcpPort liveTestCallbacks reconnectHandler disconnectHandler sseLogger
     liveTestListener <- Some listener
     c.log "connectToRunningDaemon: SSE streams established."
-    sseDisposable <- Some {
+    let listenerDisposable = {
       new Disposable with member _.dispose () = listener.Dispose(); null
     }
+    sseDisposable <- Some listenerDisposable
+    trackDaemonConnectionDisposable listenerDisposable
     // Re-apply decorations when editors change
-    context.subscriptions.Add (
-      Window.onDidChangeVisibleTextEditors (fun _editors -> refreshAllDecorations () |> ignore))
-    context.subscriptions.Add (
-      Window.onDidChangeActiveTextEditor (fun _editor -> refreshAllDecorations () |> ignore))
+    Window.onDidChangeVisibleTextEditors (fun _editors -> refreshAllDecorations () |> ignore)
+    |> trackDaemonConnectionDisposable
+    Window.onDidChangeActiveTextEditor (fun _editor -> refreshAllDecorations () |> ignore)
+    |> trackDaemonConnectionDisposable
     // Auto-discover and create session if none exists (delay to let daemon stabilize)
     promise {
       do! sleep 2000
@@ -2331,18 +2313,11 @@ let activate (context: ExtensionContext) =
   )
 
 let deactivate () =
-  diagnosticsDisposable |> Option.iter (fun d -> d.dispose () |> ignore)
-  sseDisposable |> Option.iter (fun d -> d.dispose () |> ignore)
-  liveTestListener |> Option.iter (fun l -> l.Dispose ())
-  liveTestListener <- None
-  testAdapter |> Option.iter (fun a -> a.Dispose ())
-  testAdapter <- None
+  disposeDaemonConnectionResources ()
   typeExplorer |> Option.iter (fun te -> te.dispose ())
   typeExplorer <- None
   dashboardPanel |> Option.iter (fun p -> p.dispose () |> ignore)
   dashboardPanel <- None
   HotReload.stopAutoRefresh ()
   SessionCtx.stopAutoRefresh ()
-  TestDeco.dispose ()
-  disposeFileAnnotationDecoTypes ()
   InlineDeco.clearAllDecorations ()

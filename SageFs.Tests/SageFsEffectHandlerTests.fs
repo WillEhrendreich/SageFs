@@ -14,6 +14,7 @@ module TestDeps =
   type CallLog = {
     mutable EvalCalls: (string * string) list
     mutable CompletionCalls: (string * string * int) list
+    mutable TestDiscoveryCalls: string list
     mutable SessionListCalls: int
     mutable SessionCreateCalls: (string list * string) list
     mutable SessionStopCalls: SessionId list
@@ -23,6 +24,7 @@ module TestDeps =
   let createLog () = {
     EvalCalls = []
     CompletionCalls = []
+    TestDiscoveryCalls = []
     SessionListCalls = 0
     SessionCreateCalls = []
     SessionStopCalls = []
@@ -59,6 +61,8 @@ module TestDeps =
           log.EvalCalls <- log.EvalCalls @ [rid, code]
         | WorkerMessage.GetCompletions (code, pos, rid) ->
           log.CompletionCalls <- log.CompletionCalls @ [rid, code, pos]
+        | WorkerMessage.GetTestDiscovery rid ->
+          log.TestDiscoveryCalls <- log.TestDiscoveryCalls @ [rid]
         | _ -> ()
         return handler msg
       }
@@ -239,6 +243,37 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
       items |> Expect.hasLength "2 items" 2
       items.[0].Label |> Expect.equal "first" "ToString"
     | other -> failtestf "expected CompletionReady, got %A" other
+
+  testCase "RequestInitialDiscovery asks the worker for test discovery" <| fun _ ->
+    let log = TestDeps.createLog ()
+    let discovered : Features.LiveTesting.TestCase =
+      { Id = Features.LiveTesting.TestId.create "MyModule.test1" Features.LiveTesting.TestFramework.Expecto
+        FullName = "MyModule.test1"
+        DisplayName = "test1"
+        Origin = Features.LiveTesting.TestOrigin.ReflectionOnly
+        Labels = []
+        Framework = Features.LiveTesting.TestFramework.Expecto
+        Category = Features.LiveTesting.TestCategory.Unit }
+    let deps = TestDeps.singleSession log (fun msg ->
+      match msg with
+      | WorkerMessage.GetTestDiscovery _ ->
+        WorkerResponse.InitialTestDiscovery([|discovered|], [])
+      | _ ->
+        WorkerResponse.WorkerError (SageFsError.Unexpected (exn "unexpected")))
+    let mutable dispatched : SageFsMsg list = []
+    SageFsEffectHandler.execute deps
+      (fun m -> dispatched <- m :: dispatched)
+      (SageFsEffect.TestCycle Features.LiveTesting.TestCycleEffect.RequestInitialDiscovery)
+    |> Async.RunSynchronously
+    log.SessionListCalls |> Expect.equal "should enumerate sessions for discovery" 1
+    log.TestDiscoveryCalls |> Expect.hasLength "should request discovery once" 1
+    dispatched
+    |> List.exists (fun msg ->
+      match msg with
+      | SageFsMsg.Event (SageFsEvent.TestsDiscovered (sid, tests)) ->
+        sid = "a1b2c3d4" && tests.Length = 1
+      | _ -> false)
+    |> Expect.isTrue "should dispatch discovered tests back into the Elm loop"
 
   testCase "RequestEval with no sessions dispatches error" <| fun _ ->
     let deps = TestDeps.noSessions ()

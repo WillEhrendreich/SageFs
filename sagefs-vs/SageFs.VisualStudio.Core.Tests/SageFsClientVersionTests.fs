@@ -24,6 +24,30 @@ type ThrowingHttpMessageHandler() =
     raise (System.Net.Http.HttpRequestException "Connection refused")
     Task.FromResult(Unchecked.defaultof<_>)
 
+type RoutedResponse =
+  | Json of HttpStatusCode * string
+  | Failure of exn
+
+/// A route-aware HttpMessageHandler stub for testing endpoint fallbacks.
+type RoutingHttpMessageHandler(routes: Map<string, RoutedResponse>) =
+  inherit HttpMessageHandler()
+
+  override _.SendAsync(request, _) =
+    let path = request.RequestUri.AbsolutePath
+
+    match routes |> Map.tryFind path with
+    | Some (Json (statusCode, responseBody)) ->
+      let resp = new HttpResponseMessage(statusCode)
+      resp.Content <- new StringContent(responseBody, Encoding.UTF8, "application/json")
+      Task.FromResult(resp)
+    | Some (Failure ex) ->
+      raise ex
+      Task.FromResult(Unchecked.defaultof<_>)
+    | None ->
+      let resp = new HttpResponseMessage(HttpStatusCode.NotFound)
+      resp.Content <- new StringContent("""{"error":"not found"}""", Encoding.UTF8, "application/json")
+      Task.FromResult(resp)
+
 let private ct = CancellationToken.None
 
 // ── GetVersionAsync ───────────────────────────────────────────────────────────
@@ -121,4 +145,65 @@ let ``CheckVersionAsync error message mentions restart Visual Studio`` () =
     match result with
     | Error msg -> msg |> should haveSubstring "restart Visual Studio"
     | Ok _ -> failwith "Expected Error but got Ok"
+  }
+
+[<Fact>]
+let ``CheckVersionAsync uses health apiVersion when version endpoint is unavailable`` () =
+  task {
+    let routes =
+      Map.ofList [
+        "/health",
+        Json (
+          HttpStatusCode.OK,
+          sprintf """{"apiVersion":%d,"features":["live-testing"]}""" Constants.ExpectedApiVersion
+        )
+        "/version",
+        Failure (System.Net.Http.HttpRequestException "version endpoint unavailable")
+      ]
+
+    let handler = new RoutingHttpMessageHandler(routes)
+    use client = new SageFsClient(handler)
+    let! result = client.CheckVersionAsync(ct)
+
+    match result with
+    | Ok () -> ()
+    | Error e -> failwith (sprintf "Expected Ok but got Error: %s" e)
+  }
+
+[<Fact>]
+let ``CheckVersionAsync prefers health apiVersion when health and version disagree`` () =
+  task {
+    let routes =
+      Map.ofList [
+        "/health", Json (HttpStatusCode.OK, """{"apiVersion":99,"features":["live-testing"]}""")
+        "/version", Json (HttpStatusCode.OK, sprintf """{"apiVersion":%d}""" Constants.ExpectedApiVersion)
+      ]
+
+    let handler = new RoutingHttpMessageHandler(routes)
+    use client = new SageFsClient(handler)
+    let! result = client.CheckVersionAsync(ct)
+
+    match result with
+    | Error msg ->
+      msg |> should haveSubstring (sprintf "Expected apiVersion=%d" Constants.ExpectedApiVersion)
+      msg |> should haveSubstring "got apiVersion=99"
+    | Ok _ -> failwith "Expected Error but got Ok"
+  }
+
+[<Fact>]
+let ``CheckVersionAsync falls back to version endpoint when health endpoint is unavailable`` () =
+  task {
+    let routes =
+      Map.ofList [
+        "/health", Failure (System.Net.Http.HttpRequestException "health endpoint unavailable")
+        "/version", Json (HttpStatusCode.OK, sprintf """{"apiVersion":%d}""" Constants.ExpectedApiVersion)
+      ]
+
+    let handler = new RoutingHttpMessageHandler(routes)
+    use client = new SageFsClient(handler)
+    let! result = client.CheckVersionAsync(ct)
+
+    match result with
+    | Ok () -> ()
+    | Error e -> failwith (sprintf "Expected Ok but got Error: %s" e)
   }

@@ -27,6 +27,7 @@
     <Compile Include="EvalServiceTests.fs" />
     <Compile Include="LiveTestingFormatTests.fs" />
     <Compile Include="TypeExplorerGuardTests.fs" />
+    <Compile Include="DaemonManagerTests.fs" />
     <Compile Include="SageFsClientVersionTests.fs" />
   </ItemGroup>
 </Project>

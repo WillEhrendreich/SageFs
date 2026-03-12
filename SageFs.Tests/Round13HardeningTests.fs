@@ -98,7 +98,7 @@ let w28DaemonRunningGuardTests =
     testCase "handlePrune returns Error when daemon is running (W28 guard blocks prune)" <| fun _ ->
       let dir = IO.Path.Combine(IO.Path.GetTempPath(), sprintf "sagefs-r13-%s" (Guid.NewGuid().ToString("N")))
       let fakeDaemon () =
-        System.Threading.Tasks.Task.FromResult(Some { Pid = 12345; Port = 37749; StartedAt = DateTime.UtcNow; WorkingDirectory = "/"; Version = "0.1.0" } : DaemonInfo option)
+        System.Threading.Tasks.Task.FromResult(Some { Pid = 12345; Port = 37749; DashboardPort = 37750; StartedAt = DateTime.UtcNow; WorkingDirectory = "/"; Version = "0.1.0"; ApiVersion = None; SessionCount = None } : DaemonInfo option)
       let result =
         SageFs.Server.DaemonMode.handlePrune dir nullLog fakeDaemon pruneFlags
         |> Async.AwaitTask
@@ -111,7 +111,7 @@ let w28DaemonRunningGuardTests =
       // When Prune=false, the daemon check is never consulted
       let dir = IO.Path.Combine(IO.Path.GetTempPath(), sprintf "sagefs-r13-%s" (Guid.NewGuid().ToString("N")))
       let fakeDaemon () =
-        System.Threading.Tasks.Task.FromResult(Some { Pid = 99999; Port = 37749; StartedAt = DateTime.UtcNow; WorkingDirectory = "/"; Version = "0.1.0" } : DaemonInfo option)
+        System.Threading.Tasks.Task.FromResult(Some { Pid = 99999; Port = 37749; DashboardPort = 37750; StartedAt = DateTime.UtcNow; WorkingDirectory = "/"; Version = "0.1.0"; ApiVersion = None; SessionCount = None } : DaemonInfo option)
       let result =
         SageFs.Server.DaemonMode.handlePrune dir nullLog fakeDaemon noPruneFlags
         |> Async.AwaitTask

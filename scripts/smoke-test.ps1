@@ -6,14 +6,25 @@ param(
   [string]$SampleProject = "samples\from-csharp\SageFs.Samples.FromCSharp\SageFs.Samples.FromCSharp.fsproj",
   [int]$DaemonTimeoutSeconds = 15,
   [int]$SessionWarmupSeconds = 45,
-  [int]$Port = 37749
+  [int]$Port = 37749,
+  [string]$DiagnosticsDir = "smoke-diagnostics"
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $baseUrl = "http://localhost:$Port"
+$dashboardBaseUrl = "http://localhost:$($Port + 1)"
 $daemonProcess = $null
+$repoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
+$samplePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot $SampleProject))
+$diagnosticsRoot =
+  if ([System.IO.Path]::IsPathRooted($DiagnosticsDir)) {
+    [System.IO.Path]::GetFullPath($DiagnosticsDir)
+  } else {
+    [System.IO.Path]::GetFullPath((Join-Path $repoRoot $DiagnosticsDir))
+  }
+$diagnosticsCaptured = $false
 
 # Track pass/fail per step
 $results = [ordered]@{}
@@ -36,6 +47,122 @@ function Warn([string]$step, [string]$msg) {
 function Section([string]$title) {
   Write-Host ""
   Write-Host "── $title" -ForegroundColor Cyan
+}
+
+function Ensure-DiagnosticsDirectory() {
+  if (-not (Test-Path $diagnosticsRoot)) {
+    New-Item -ItemType Directory -Force $diagnosticsRoot | Out-Null
+  }
+}
+
+function Write-DiagnosticText([string]$fileName, [string]$content) {
+  Ensure-DiagnosticsDirectory
+  Set-Content -Path (Join-Path $diagnosticsRoot $fileName) -Value $content -Encoding UTF8
+}
+
+function Write-DiagnosticJson([string]$fileName, $value) {
+  $json =
+    if ($null -eq $value) {
+      "null"
+    } else {
+      $value | ConvertTo-Json -Depth 12
+    }
+  Write-DiagnosticText $fileName $json
+}
+
+function Capture-SmokeDiagnostics([string]$reason) {
+  if ($diagnosticsCaptured) {
+    return
+  }
+
+  $script:diagnosticsCaptured = $true
+  Ensure-DiagnosticsDirectory
+  Write-Host "  Saving diagnostics to $diagnosticsRoot" -ForegroundColor DarkGray
+
+  $daemonInfo =
+    if ($daemonProcess) {
+      try {
+        $proc = Get-Process -Id $daemonProcess.Id -ErrorAction Stop
+        [PSCustomObject]@{
+          id = $proc.Id
+          name = $proc.ProcessName
+          startTime = $proc.StartTime
+          hasExited = $false
+        }
+      } catch {
+        [PSCustomObject]@{
+          id = $daemonProcess.Id
+          hasExited = $true
+          note = $_.Exception.Message
+        }
+      }
+    } else {
+      $null
+    }
+
+  $resultsSnapshot =
+    foreach ($key in $results.Keys) {
+      [PSCustomObject]@{
+        step = $key
+        result = $results[$key]
+      }
+    }
+
+  Write-DiagnosticJson "context.json" ([PSCustomObject]@{
+    reason = $reason
+    timestampUtc = (Get-Date).ToUniversalTime()
+    baseUrl = $baseUrl
+    dashboardBaseUrl = $dashboardBaseUrl
+    repoRoot = $repoRoot
+    samplePath = $samplePath
+    daemonProcess = $daemonInfo
+    results = $resultsSnapshot
+  })
+
+  $endpoints = @(
+    @{ File = "health.txt"; Uri = "$baseUrl/health"; Kind = "text" }
+    @{ File = "version.json"; Uri = "$baseUrl/version"; Kind = "json" }
+    @{ File = "daemon-info.json"; Uri = "$dashboardBaseUrl/api/daemon-info"; Kind = "json" }
+    @{ File = "sessions.json"; Uri = "$baseUrl/api/sessions"; Kind = "json" }
+    @{ File = "live-testing-status.json"; Uri = "$baseUrl/api/live-testing/status"; Kind = "json" }
+    @{ File = "threadpool.txt"; Uri = "$baseUrl/diag/threadpool"; Kind = "text" }
+  )
+
+  foreach ($endpoint in $endpoints) {
+    try {
+      switch ($endpoint.Kind) {
+      "json" {
+        $payload = Invoke-RestMethod -Method Get -Uri $endpoint.Uri -TimeoutSec 5 -ErrorAction Stop
+        Write-DiagnosticJson $endpoint.File $payload
+      }
+      default {
+        $payload = Invoke-WebRequest -Method Get -Uri $endpoint.Uri -TimeoutSec 5 -UseBasicParsing -ErrorAction Stop
+        Write-DiagnosticText $endpoint.File $payload.Content
+      }
+      }
+    } catch {
+      $errorFile = "{0}-error.txt" -f [System.IO.Path]::GetFileNameWithoutExtension($endpoint.File)
+      Write-DiagnosticText $errorFile ($_ | Out-String)
+    }
+  }
+}
+
+function Show-Summary() {
+  Write-Host ""
+  Write-Host "── Summary" -ForegroundColor Cyan
+  $hasFailures = $false
+  foreach ($k in $results.Keys) {
+    $result = $results[$k]
+    $icon  = switch ($result) { "PASS" { "✓" } "WARN" { "⚠" } default { "✗" } }
+    $color = switch ($result) { "PASS" { "Green" } "WARN" { "Yellow" } default { "Red" } }
+    Write-Host "  $icon $k" -ForegroundColor $color
+    if ($result -eq "FAIL") {
+      $hasFailures = $true
+    }
+  }
+
+  Write-Host ""
+  return $hasFailures
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -71,13 +198,8 @@ try {
   Write-Host "Install with: dotnet tool install --global SageFs" -ForegroundColor Yellow
   Write-Host "Then restart your terminal to update PATH." -ForegroundColor Yellow
   Write-Host ""
-  # Print summary and exit early
-  Write-Host "── Summary" -ForegroundColor Cyan
-  foreach ($k in $results.Keys) {
-    $icon = if ($results[$k] -eq "PASS") { "✓" } else { "✗" }
-    $color = if ($results[$k] -eq "PASS") { "Green" } else { "Red" }
-    Write-Host "  $icon $k" -ForegroundColor $color
-  }
+  Capture-SmokeDiagnostics "sagefs executable was not available on PATH"
+  $null = Show-Summary
   exit 1
 }
 
@@ -86,15 +208,16 @@ try {
 # ─────────────────────────────────────────────────────────────────────────────
 Section "2. Daemon startup"
 
-$samplePath = Join-Path $PSScriptRoot ".." $SampleProject
-$samplePath = [System.IO.Path]::GetFullPath($samplePath)
-
 if (-not (Test-Path $samplePath)) {
   Fail "daemon-start" "Sample project not found: $samplePath"
+  Capture-SmokeDiagnostics "Sample project path was invalid"
+  $null = Show-Summary
+  exit 1
 } else {
   Write-Host "  Starting daemon with: $SampleProject" -ForegroundColor DarkGray
   $daemonProcess = Start-Process -FilePath "sagefs" `
-    -ArgumentList "--proj", $samplePath `
+    -ArgumentList "--mcp-port", $Port, "--no-resume", "--proj", $samplePath `
+    -WorkingDirectory $repoRoot `
     -PassThru
 
   $reachable = $false
@@ -117,17 +240,11 @@ if (-not (Test-Path $samplePath)) {
     Pass "daemon-start" "Daemon started in ${elapsed}s"
   } else {
     Fail "daemon-start" "Daemon not reachable after ${DaemonTimeoutSeconds}s"
+    Capture-SmokeDiagnostics "Daemon startup timed out"
     if ($daemonProcess -and -not $daemonProcess.HasExited) {
       Stop-Process -Id $daemonProcess.Id -Force -ErrorAction SilentlyContinue
     }
-    # Print summary and exit early
-    Write-Host ""
-    Write-Host "── Summary" -ForegroundColor Cyan
-    foreach ($k in $results.Keys) {
-      $icon = if ($results[$k] -eq "PASS") { "✓" } else { "✗" }
-      $color = if ($results[$k] -eq "PASS") { "Green" } else { "Red" }
-      Write-Host "  $icon $k" -ForegroundColor $color
-    }
+    $null = Show-Summary
     exit 1
   }
 }
@@ -154,7 +271,7 @@ try {
 Section "4. Session warmup + Completions"
 
 $sessionReady = $false
-$sessionWorkDir = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
+$sessionWorkDir = $repoRoot
 
 # The daemon was started with --proj, so it auto-creates a session on startup.
 # Poll the existing sessions list instead of creating a redundant second session.
@@ -211,19 +328,52 @@ try { Invoke-RestMethod -Method Post -Uri "$baseUrl/api/live-testing/enable" -Ti
 # Poll for test discovery (up to 30s)
 $discovered = 0
 $discoveryElapsed = 0
+$discoveryState = $null
+$discoveryHint = $null
 for ($i = 0; $i -lt 15; $i++) {
   Start-Sleep -Seconds 2
   $discoveryElapsed += 2
   try {
     $st = Invoke-RestMethod -Method Get -Uri "$baseUrl/api/live-testing/status" -TimeoutSec 5
     $discovered = if ($null -ne $st.summary) { $st.summary.total } else { 0 }
-    if ($discovered -gt 0) { break }
+    if ($st.PSObject.Properties.Match("DiscoveryState").Count -gt 0) {
+      $discoveryState = [string]$st.DiscoveryState
+    }
+    if ($st.PSObject.Properties.Match("DiscoveryHint").Count -gt 0) {
+      $discoveryHint = [string]$st.DiscoveryHint
+    }
+
+    if ($discoveryState -in @("ready_with_tests", "ready_zero_tests", "disabled")) {
+      break
+    }
+
+    if (($null -eq $discoveryState) -and $discovered -gt 0) {
+      break
+    }
   } catch { }
 }
-Write-Host "  Tests discovered: $discovered (after ${discoveryElapsed}s)" -ForegroundColor DarkGray
+Write-Host "  Tests discovered: $discovered (after ${discoveryElapsed}s, state: $discoveryState)" -ForegroundColor DarkGray
 
-if ($discovered -eq 0) {
-  Warn "tests-discovery" "0 tests discovered after ${discoveryElapsed}s — session may still be warming up"
+switch ($discoveryState) {
+  "ready_with_tests" {
+    Pass "tests-discovery" "Discovery completed with $discovered tests after ${discoveryElapsed}s"
+  }
+  "ready_zero_tests" {
+    Fail "tests-discovery" "Discovery completed with zero tests after ${discoveryElapsed}s. $discoveryHint"
+  }
+  "disabled" {
+    Fail "tests-discovery" "Live testing remained disabled after enable request. $discoveryHint"
+  }
+  "discovering" {
+    Fail "tests-discovery" "Discovery did not complete within ${discoveryElapsed}s. $discoveryHint"
+  }
+  default {
+    if ($discovered -gt 0) {
+      Pass "tests-discovery" "Discovery completed with $discovered tests after ${discoveryElapsed}s"
+    } else {
+      Fail "tests-discovery" "Could not confirm discovery completion and 0 tests were discovered after ${discoveryElapsed}s"
+    }
+  }
 }
 
 try {
@@ -266,6 +416,11 @@ try {
 # ─────────────────────────────────────────────────────────────────────────────
 Section "6. Cleanup"
 
+$anyFail = $results.Values -contains "FAIL"
+if ($anyFail) {
+  Capture-SmokeDiagnostics "One or more smoke steps failed"
+}
+
 if ($daemonProcess -and -not $daemonProcess.HasExited) {
   Stop-Process -Id $daemonProcess.Id -Force -ErrorAction SilentlyContinue
   Write-Host "  Daemon process stopped (PID $($daemonProcess.Id))" -ForegroundColor DarkGray
@@ -274,17 +429,7 @@ if ($daemonProcess -and -not $daemonProcess.HasExited) {
 # ─────────────────────────────────────────────────────────────────────────────
 # Summary
 # ─────────────────────────────────────────────────────────────────────────────
-Write-Host ""
-Write-Host "── Summary" -ForegroundColor Cyan
-$anyFail = $false
-foreach ($k in $results.Keys) {
-  $result = $results[$k]
-  $icon  = switch ($result) { "PASS" { "✓" } "WARN" { "⚠" } default { "✗" } }
-  $color = switch ($result) { "PASS" { "Green" } "WARN" { "Yellow" } default { "Red" } }
-  Write-Host "  $icon $k" -ForegroundColor $color
-  if ($result -eq "FAIL") { $anyFail = $true }
-}
-Write-Host ""
+$null = Show-Summary
 if ($anyFail) {
   Write-Host "RESULT: FAIL" -ForegroundColor Red
   exit 1

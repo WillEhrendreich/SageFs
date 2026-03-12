@@ -13,6 +13,7 @@
     <Compile Include="LiveTestingListener.fs" />
     <Compile Include="SageFsClient.fs" />
     <Compile Include="DiagnosticsListener.fs" />
+    <Compile Include="CodeBlocks.fs" />
     <Compile Include="CodeLensProvider.fs" />
     <Compile Include="CompletionProvider.fs" />
     <Compile Include="HotReloadTreeProvider.fs" />

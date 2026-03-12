@@ -1127,9 +1127,53 @@ type LiveTestState = {
   /// Timestamp of the most recent TestsDiscovered event merge. Used by run_tests to detect
   /// whether discovery completed after a hot-reload before proceeding with stale test list.
   LastDiscoveryTime: System.DateTimeOffset
+  /// Sessions currently running an explicit discovery request triggered by live-testing enablement.
+  PendingDiscoverySessions: Set<string>
 }
 
+[<RequireQualifiedAccess>]
+type LiveTestDiscoveryState =
+  | Disabled
+  | Discovering
+  | ReadyZeroTests
+  | ReadyWithTests of discoveredCount: int
+
+module LiveTestDiscoveryState =
+  let toWireValue = function
+    | LiveTestDiscoveryState.Disabled -> "disabled"
+    | LiveTestDiscoveryState.Discovering -> "discovering"
+    | LiveTestDiscoveryState.ReadyZeroTests -> "ready_zero_tests"
+    | LiveTestDiscoveryState.ReadyWithTests _ -> "ready_with_tests"
+
+  let hint = function
+    | LiveTestDiscoveryState.Disabled ->
+      "Live testing is not active. Call enable_live_testing to start discovery."
+    | LiveTestDiscoveryState.Discovering ->
+      "Live testing is active and discovery is still in progress."
+    | LiveTestDiscoveryState.ReadyZeroTests ->
+      "Live testing completed discovery but found zero tests."
+    | LiveTestDiscoveryState.ReadyWithTests count ->
+      sprintf "Live testing discovered %d tests." count
+
 module LiveTestState =
+  let discoveryState (state: LiveTestState) =
+    match state.Activation with
+    | LiveTestingActivation.Inactive -> LiveTestDiscoveryState.Disabled
+    | LiveTestingActivation.Active ->
+      match state.DiscoveredTests.Length with
+      | count when count > 0 -> LiveTestDiscoveryState.ReadyWithTests count
+      | _ when state.LastDiscoveryTime > System.DateTimeOffset.MinValue -> LiveTestDiscoveryState.ReadyZeroTests
+      | _ -> LiveTestDiscoveryState.Discovering
+
+  let requiresPrimingEval (_state: LiveTestState) =
+    // Initial discovery is requested directly from each worker when live testing is
+    // enabled, so callers should wait for discovery rather than forcing a synthetic eval.
+    false
+
+  let discoveryHint (state: LiveTestState) =
+    discoveryState state
+    |> LiveTestDiscoveryState.hint
+
   let empty = {
     SourceLocations = Array.empty
     DiscoveredTests = Array.empty
@@ -1153,6 +1197,7 @@ module LiveTestState =
     CachedTestSummary = { Total = 0; Passed = 0; Failed = 0; Stale = 0; Running = 0; Disabled = 0; Enabled = true }
     FailureNarratives = Map.empty
     LastDiscoveryTime = System.DateTimeOffset.MinValue
+    PendingDiscoverySessions = Set.empty
   }
 
   /// Filter StatusEntries to only include tests belonging to the given session.
@@ -2490,6 +2535,7 @@ module TestCycleDebounce =
 
 [<RequireQualifiedAccess>]
 type TestCycleEffect =
+  | RequestInitialDiscovery
   | ParseTreeSitter of content: string * filePath: string
   | RequestFcsTypeCheck of filePath: string * treeSitterElapsed: System.TimeSpan
   | RunAffectedTests of tests: TestCase array * trigger: RunTrigger * treeSitterElapsed: System.TimeSpan * fcsElapsed: System.TimeSpan * sessionId: string option * instrumentationMaps: InstrumentationMap array

@@ -65,6 +65,43 @@ let attributeDiscoveryTests = testList "AttributeDiscovery" [
       skiptest "SageFs.Tests assembly not loaded"
   }
 
+  test "discovers Expecto module let bindings exposed as getter methods" {
+    let fixtureModuleName =
+      typeof<ExpectoModuleBindingFixture.Marker>.DeclaringType.FullName
+
+    let testsAsm = typeof<ExpectoModuleBindingFixture.Marker>.Assembly
+    match BuiltInExecutors.expecto with
+    | TestExecutor.Custom ce ->
+      let discovery = ce.Discover testsAsm
+      let fixtureTests =
+        discovery.Tests
+        |> List.filter (fun tc -> tc.FullName.Contains(sprintf "%s.tests/" fixtureModuleName))
+      (List.length fixtureTests > 0)
+      |> Expect.isTrue "should discover module let tests"
+    | _ -> failtest "Expected Custom"
+  }
+
+  test "run closure executes discovered module let binding tests" {
+    let fixtureModuleName =
+      typeof<ExpectoModuleBindingFixture.Marker>.DeclaringType.FullName
+
+    let testsAsm = typeof<ExpectoModuleBindingFixture.Marker>.Assembly
+    match BuiltInExecutors.expecto with
+    | TestExecutor.Custom ce ->
+      let discovery = ce.Discover testsAsm
+      let fixtureTest =
+        discovery.Tests
+        |> List.tryFind (fun tc -> tc.FullName.Contains(sprintf "%s.tests/" fixtureModuleName))
+      match fixtureTest with
+      | None -> failtest "fixture test was not discovered"
+      | Some tc ->
+        let outcome = discovery.RunTest tc |> Async.RunSynchronously
+        match outcome with
+        | TestResult.Passed _ -> ()
+        | other -> failtestf "Expected Passed, got %A" other
+    | _ -> failtest "Expected Custom"
+  }
+
   test "attribute discovery finds nothing in assembly without test attributes" {
     let desc = {
       Name = TestFramework.XUnit

@@ -17,7 +17,7 @@ let mapInputEvent (keyMap: KeyMap) (ev: InputEvent) : TerminalCommand option =
 
 /// Run the TUI client, connecting to a running daemon.
 let run (daemonInfo: DaemonInfo) = task {
-  let dashboardPort = daemonInfo.Port + 1
+  let dashboardPort = daemonInfo.DashboardPort
   let baseUrl = sprintf "http://localhost:%d" dashboardPort
   use handler = new HttpClientHandler(AutomaticDecompression = System.Net.DecompressionMethods.All)
   use client = new HttpClient(handler)

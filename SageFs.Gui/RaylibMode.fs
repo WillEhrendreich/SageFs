@@ -212,7 +212,7 @@ module RaylibMode =
     | None -> ()
     | Some daemonInfo ->
 
-    let dashboardPort = daemonInfo.Port + 1
+    let dashboardPort = daemonInfo.DashboardPort
     let baseUrl = sprintf "http://localhost:%d" dashboardPort
 
     // Verify connection before opening window

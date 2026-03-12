@@ -3,6 +3,7 @@ module SageFs.Tests.Tier0CorrectnessTests
 open Expecto
 open Expecto.Flip
 open SageFs.Features.LiveTesting
+open SageFs.Tests.LiveTestingTestHelpers
 
 let private mkEntry (name: string) (status: TestRunStatus) : TestStatusEntry =
   let tid = TestId.create name TestFramework.Expecto
@@ -78,9 +79,43 @@ let alreadyRunningTests =
     }
   ]
 
+let emptySelectionClassificationTests =
+  testList "RunTests empty selection classification" [
+    test "active zero-discovered state is NoTestsDiscovered" {
+      let state = { LiveTestState.empty with Activation = LiveTestingActivation.Active }
+      SageFs.McpTools.RunTestsResult.classifyEmptySelection state
+      |> Expect.equal
+        "active zero-discovered state should not be misclassified as a filtered miss"
+        SageFs.McpTools.RunTestsResult.NoTestsDiscovered
+    }
+
+    test "discovered tests with empty filtered result is NoTestsMatched" {
+      let discovered = mkTestCase "sample" TestFramework.Expecto TestCategory.Unit
+      let state =
+        { LiveTestState.empty with
+            Activation = LiveTestingActivation.Active
+            DiscoveredTests = [| discovered |] }
+
+      match SageFs.McpTools.RunTestsResult.classifyEmptySelection state with
+      | SageFs.McpTools.RunTestsResult.NoTestsMatched total ->
+        total |> Expect.equal "should preserve discovered test count" 1
+      | other ->
+        failtestf "expected NoTestsMatched, got %A" other
+    }
+
+    test "NoTestsDiscovered message points to enable or inspect discovery status" {
+      let formatted =
+        SageFs.McpTools.RunTestsResult.format SageFs.McpTools.RunTestsResult.NoTestsDiscovered
+
+      formatted |> Expect.stringContains "message should still mention enable_live_testing" "enable_live_testing"
+      formatted |> Expect.stringContains "message should point users at status inspection" "get_live_test_status"
+    }
+  ]
+
 [<Tests>]
 let tests =
   testList "Tier 0 Correctness" [
     collectResultsStaleTests
     alreadyRunningTests
+    emptySelectionClassificationTests
   ]

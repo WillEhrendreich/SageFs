@@ -88,28 +88,45 @@ module CliCommand =
       | false -> ShowHelp
     | _ -> Daemon args
 
+let waitForDaemonReady
+  (sleep: int -> unit)
+  (readOnPort: int -> DaemonInfo option)
+  (mcpPort: int)
+  =
+  let mutable attempts = 0
+  let mutable info = None
+  while attempts < 30 && Option.isNone info do
+    sleep 500
+    info <- readOnPort mcpPort
+    attempts <- attempts + 1
+  match info with
+  | Some daemon -> Ok daemon
+  | None -> Error (SageFsError.DaemonStartFailed "Daemon started but did not become ready in 15s")
+
 /// Start daemon in background, wait for it to be ready.
-let startDaemonInBackground (daemonArgs: string) =
+let startDaemonInBackground (daemonArgs: string array) =
   let psi = System.Diagnostics.ProcessStartInfo()
   psi.FileName <- "sagefs"
-  psi.Arguments <- sprintf "-d %s" daemonArgs
   psi.UseShellExecute <- false
   psi.CreateNoWindow <- true
+  psi.ArgumentList.Add("-d")
+  for arg in daemonArgs do
+    psi.ArgumentList.Add(arg)
   let proc = System.Diagnostics.Process.Start(psi)
   match isNull proc with
   | true ->
     Error (SageFsError.DaemonStartFailed "Failed to start daemon")
   | false ->
-    let mutable attempts = 0
-    let mutable found = false
-    while attempts < 30 && not found do
-      System.Threading.Thread.Sleep(500)
-      match DaemonState.read () with
-      | Some _ -> found <- true
-      | None -> attempts <- attempts + 1
-    match found with
-    | true -> Ok ()
-    | false -> Error (SageFsError.DaemonStartFailed "Daemon started but did not become ready in 15s")
+    let mcpPort = parseMcpPort daemonArgs
+    match waitForDaemonReady System.Threading.Thread.Sleep DaemonState.readOnPort mcpPort with
+    | Ok daemon -> Ok daemon
+    | Error err ->
+      try
+        if not proc.HasExited then
+          proc.Kill()
+          proc.WaitForExit(3000) |> ignore
+      with _ -> ()
+      Error err
 
 /// Run daemon mode (default behavior).
 let runDaemon (args: string array) =
@@ -138,6 +155,18 @@ let runDaemon (args: string array) =
     |> _.GetAwaiter() |> _.GetResult()
     0
 
+type DaemonLaunchDecision =
+  | AttachToExistingDaemon of DaemonInfo
+  | StartNewDaemon
+
+let decideDaemonLaunch
+  (readOnPort: int -> DaemonInfo option)
+  (mcpPort: int)
+  =
+  match readOnPort mcpPort with
+  | Some info -> AttachToExistingDaemon info
+  | None -> StartNewDaemon
+
 [<EntryPoint>]
 let main args =
   // Wrap Console.Out to normalize \n to \r\n on Windows console.
@@ -162,6 +191,8 @@ let main args =
     printfn "  --version, -v          Show version information"
     printfn "  --help, -h             Show this help message"
     printfn "  --mcp-port PORT        Set custom MCP server port (default: 37749)"
+    printfn "  --proj FILE            Auto-create a startup session for the given .fsproj"
+    printfn "  --sln FILE             Auto-create a startup session for the given .sln/.slnx"
     printfn "  --jupyter FILE         Run as Jupyter kernel with given connection file"
     printfn "  --supervised           Run under watchdog supervisor (auto-restart on crash)"
     printfn "  --no-watch             Disable file watching — no automatic #load on changes"
@@ -192,6 +223,8 @@ let main args =
     printfn "Examples:"
     printfn "  SageFs                              Start daemon (auto-discovers projects)"
     printfn "  SageFs --mcp-port 47700             Start daemon on custom port"
+    printfn "  SageFs --proj YourProject.fsproj    Start daemon and create a session for a project"
+    printfn "  SageFs --sln YourSolution.slnx      Start daemon and create a session for a solution"
     printfn "  SageFs --supervised                 Start with auto-restart"
     printfn "  SageFs tui                          Terminal UI (starts daemon if needed)"
     printfn "  SageFs gui                          Raylib GUI (starts daemon if needed)"
@@ -240,7 +273,7 @@ let main args =
       printfn "  Started:    %s" (info.StartedAt.ToString("o"))
       printfn "  Directory:  %s" info.WorkingDirectory
       printfn "  Version:    %s" info.Version
-      printfn "  Dashboard:  http://localhost:%d/dashboard" (info.Port + 1)
+      printfn "  Dashboard:  http://localhost:%d/dashboard" info.DashboardPort
       printfn "  MCP (SSE):  http://localhost:%d/sse" info.Port
       try
         use client = new System.Net.Http.HttpClient(Timeout = TimeSpan.FromSeconds(3.0))
@@ -296,6 +329,7 @@ let main args =
 
   | Tui tuiArgs ->
     let useLegacy = tuiArgs |> Array.exists (fun a -> a = "--legacy-tui")
+    let mcpPort = parseMcpPort tuiArgs
     let runTui (info: DaemonInfo) =
       match useLegacy with
       | true ->
@@ -303,39 +337,35 @@ let main args =
         |> _.GetAwaiter() |> _.GetResult()
       | false ->
         SageTuiClient.run info
-    match DaemonState.read () with
+    match DaemonState.readOnPort mcpPort with
     | Some info -> runTui info
     | None ->
       printfn "No SageFs daemon running. Starting one..."
       let daemonArgs =
-        args.[1..]
+        tuiArgs.[1..]
         |> Array.filter (fun a -> a <> "tui" && a <> "--legacy-tui")
-        |> String.concat " "
       match startDaemonInBackground daemonArgs with
-      | Ok () ->
-        match DaemonState.read () with
-        | Some info -> runTui info
-        | None ->
-          printfn "Daemon started but connection failed."
-          1
+      | Ok info ->
+        runTui info
       | Error err ->
         printfn "Failed to start daemon: %A" err
         1
 
-  | Gui _ ->
+  | Gui guiArgs ->
+    let mcpPort = parseMcpPort guiArgs
+    let daemonArgs =
+      guiArgs.[1..]
+      |> Array.filter (fun a -> a <> "gui")
     let launchGui () =
       SageFs.Gui.RaylibMode.run ()
       0
-    match DaemonState.read () with
+    match DaemonState.readOnPort mcpPort with
     | Some _ -> launchGui ()
     | None ->
       printfn "No SageFs daemon running. Starting one..."
-      let daemonArgs =
-        args.[1..]
-        |> Array.filter (fun a -> a <> "gui")
-        |> String.concat " "
       match startDaemonInBackground daemonArgs with
-      | Ok () -> launchGui ()
+      | Ok _ ->
+        launchGui ()
       | Error err ->
         printfn "Failed to start daemon: %A" err
         1
@@ -388,9 +418,10 @@ let main args =
         0
 
   | Daemon _ ->
-    match DaemonState.read () with
-    | Some info ->
+    let mcpPort = parseMcpPort args
+    match decideDaemonLaunch DaemonState.readOnPort mcpPort with
+    | AttachToExistingDaemon info ->
       printfn "SageFs daemon already running (PID %d, port %d). Launching TUI..." info.Pid info.Port
       SageTuiClient.run info
-    | None ->
+    | StartNewDaemon ->
       runDaemon args

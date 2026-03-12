@@ -3,11 +3,68 @@ namespace SageFs.VisualStudio.Core
 open System
 open System.Diagnostics
 open System.Net.Http
+open System.IO
 
 /// Manages the SageFs daemon process lifecycle.
 module DaemonManager =
 
   let defaultMcpPort = Constants.DefaultMcpPort
+
+  let private daemonJsonPath () =
+    Path.Combine(
+      Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+      "SageFs",
+      "daemon.json")
+
+  let tryReadConfiguredDaemonUrlFromContent (json: string) =
+    match String.IsNullOrWhiteSpace json with
+    | true -> None
+    | false ->
+      let marker = "\"Url\":\""
+      let start = json.IndexOf(marker, StringComparison.OrdinalIgnoreCase)
+      match start >= 0 with
+      | false -> None
+      | true ->
+        let valueStart = start + marker.Length
+        let valueEnd = json.IndexOf('"', valueStart)
+        match valueEnd > valueStart with
+        | false -> None
+        | true ->
+          let url = json.Substring(valueStart, valueEnd - valueStart)
+          match String.IsNullOrWhiteSpace url with
+          | true -> None
+          | false -> Some url
+
+  let tryReadConfiguredDaemonUrl () =
+    let path = daemonJsonPath ()
+    match File.Exists path with
+    | false -> None
+    | true ->
+      try
+        File.ReadAllText(path)
+        |> tryReadConfiguredDaemonUrlFromContent
+      with _ ->
+        None
+
+  let private tryParsePort (url: string) =
+    match Uri.TryCreate(url, UriKind.Absolute) with
+    | true, uri when uri.Port > 0 -> Some uri.Port
+    | _ -> None
+
+  let resolveConfiguredMcpPort (daemonUrl: string option) =
+    daemonUrl
+    |> Option.bind tryParsePort
+    |> Option.defaultValue defaultMcpPort
+
+  let buildDaemonArguments (projectOrSln: string) (mcpPort: int) =
+    let flag =
+      if projectOrSln.EndsWith(".sln", StringComparison.OrdinalIgnoreCase)
+         || projectOrSln.EndsWith(".slnx", StringComparison.OrdinalIgnoreCase) then
+        "--sln"
+      else
+        "--proj"
+
+    sprintf "%s \"%s\" --mcp-port %d" flag projectOrSln mcpPort
 
   /// Check if a SageFs daemon is already running on the given port.
   let isDaemonRunning (mcpPort: int) =
@@ -41,26 +98,18 @@ module DaemonManager =
       else Some line
     with _ -> None
 
-  /// Start the SageFs daemon with a project or solution.
-  /// Returns Error with message if daemon is already running or SageFs is not found.
-  /// On success returns Ok with the process (caller can read stderr).
-  let startDaemon (projectOrSln: string) =
-    if isDaemonRunning defaultMcpPort then
+  /// Start the SageFs daemon on a specific port.
+  let startDaemonOnPort (projectOrSln: string) (mcpPort: int) =
+    if isDaemonRunning mcpPort then
       Error "SageFs daemon is already running"
     else
       match findSageFs () with
       | None -> Error "SageFs not found on PATH. Install with: dotnet tool install --global SageFs"
       | Some exe ->
-        let flag =
-          if projectOrSln.EndsWith(".sln", StringComparison.OrdinalIgnoreCase)
-             || projectOrSln.EndsWith(".slnx", StringComparison.OrdinalIgnoreCase) then
-            "--sln"
-          else
-            "--proj"
         let psi =
           ProcessStartInfo(
             exe,
-            sprintf "%s \"%s\"" flag projectOrSln,
+            buildDaemonArguments projectOrSln mcpPort,
             UseShellExecute = false,
             RedirectStandardError = true,
             CreateNoWindow = true)
@@ -70,32 +119,12 @@ module DaemonManager =
         with ex ->
           Error (sprintf "Failed to start SageFs: %s" ex.Message)
 
-  /// Start the SageFs daemon on a specific port.
-  let startDaemonOnPort (projectOrSln: string) (mcpPort: int) =
-    if isDaemonRunning mcpPort then
-      Error "SageFs daemon is already running"
-    else
-      match findSageFs () with
-      | None -> Error "SageFs not found on PATH. Install with: dotnet tool install --global SageFs"
-      | Some exe ->
-        let flag =
-          if projectOrSln.EndsWith(".sln", StringComparison.OrdinalIgnoreCase)
-             || projectOrSln.EndsWith(".slnx", StringComparison.OrdinalIgnoreCase) then
-            "--sln"
-          else
-            "--proj"
-        let psi =
-          ProcessStartInfo(
-            exe,
-            sprintf "%s \"%s\" --mcp-port %d" flag projectOrSln mcpPort,
-            UseShellExecute = false,
-            RedirectStandardError = true,
-            CreateNoWindow = true)
-        try
-          let proc = Process.Start(psi)
-          Ok proc
-        with ex ->
-          Error (sprintf "Failed to start SageFs: %s" ex.Message)
+  /// Start the SageFs daemon with a project or solution.
+  /// Uses the persisted daemon URL port when one has already been configured.
+  let startDaemon (projectOrSln: string) =
+    tryReadConfiguredDaemonUrl ()
+    |> resolveConfiguredMcpPort
+    |> startDaemonOnPort projectOrSln
 
   /// Read captured stderr from a daemon process (non-blocking snapshot).
   let readStderr (proc: Process) =

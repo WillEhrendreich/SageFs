@@ -7,9 +7,12 @@ open System.Text.Json
 type DaemonInfo = {
   Pid: int
   Port: int
+  DashboardPort: int
   StartedAt: DateTime
   WorkingDirectory: string
   Version: string
+  ApiVersion: int option
+  SessionCount: int option
 }
 
 module DaemonState =
@@ -36,6 +39,58 @@ module DaemonState =
 
   let httpClient = new System.Net.Http.HttpClient(Timeout = Timeouts.healthCheck)
 
+  let private tryGetIntProperty (name: string) (root: JsonElement) =
+    match root.TryGetProperty(name) with
+    | true, value when value.ValueKind = JsonValueKind.Number -> Some (value.GetInt32())
+    | _ -> None
+
+  let private tryGetStringProperty (name: string) (root: JsonElement) =
+    match root.TryGetProperty(name) with
+    | true, value when value.ValueKind = JsonValueKind.String -> Some (value.GetString())
+    | _ -> None
+
+  let private parseStartedAt (root: JsonElement) =
+    match tryGetStringProperty "startedAt" root with
+    | Some value ->
+      match DateTime.TryParse value with
+      | true, dt -> dt.ToUniversalTime()
+      | _ -> DateTime.UtcNow
+    | None -> DateTime.UtcNow
+
+  let private fallbackInfo mcpPort dashboardPort =
+    { Pid = 0
+      Port = mcpPort
+      DashboardPort = dashboardPort
+      StartedAt = DateTime.UtcNow
+      WorkingDirectory = Environment.CurrentDirectory
+      Version = "unknown"
+      ApiVersion = None
+      SessionCount = None }
+
+  let tryParseDaemonInfoJson (mcpPort: int) (json: string) : DaemonInfo option =
+    try
+      use doc = JsonDocument.Parse(json)
+      let root = doc.RootElement
+      let port =
+        tryGetIntProperty "mcpPort" root
+        |> Option.orElseWith (fun () -> tryGetIntProperty "port" root)
+        |> Option.defaultValue mcpPort
+      let dashboardPort =
+        tryGetIntProperty "dashboardPort" root
+        |> Option.defaultValue (port + 1)
+      Some {
+        Pid = tryGetIntProperty "pid" root |> Option.defaultValue 0
+        Port = port
+        DashboardPort = dashboardPort
+        StartedAt = parseStartedAt root
+        WorkingDirectory = tryGetStringProperty "workingDirectory" root |> Option.defaultValue Environment.CurrentDirectory
+        Version = tryGetStringProperty "version" root |> Option.defaultValue "unknown"
+        ApiVersion = tryGetIntProperty "apiVersion" root
+        SessionCount = tryGetIntProperty "sessionCount" root
+      }
+    with _ ->
+      None
+
   /// Probe the daemon's /api/daemon-info endpoint on the dashboard port.
   /// Falls back to probing /dashboard if /api/daemon-info isn't available
   /// (e.g. older daemon versions).
@@ -48,44 +103,14 @@ module DaemonState =
       match resp.IsSuccessStatusCode with
       | true ->
         let! json = resp.Content.ReadAsStringAsync() |> Async.AwaitTask
-        let doc = JsonDocument.Parse(json)
-        let root = doc.RootElement
-        let pid = root.GetProperty("pid").GetInt32()
-        let version =
-          match root.TryGetProperty("version") with
-          | true, v -> v.GetString()
-          | _ -> "unknown"
-        let startedAt =
-          match root.TryGetProperty("startedAt") with
-          | true, v ->
-            match DateTime.TryParse(v.GetString()) with
-            | true, dt -> dt.ToUniversalTime()
-            | _ -> DateTime.UtcNow
-          | _ -> DateTime.UtcNow
-        let workingDir =
-          match root.TryGetProperty("workingDirectory") with
-          | true, v -> v.GetString()
-          | _ -> Environment.CurrentDirectory
-        return Some {
-          Pid = pid
-          Port = mcpPort
-          StartedAt = startedAt
-          WorkingDirectory = workingDir
-          Version = version
-        }
+        return tryParseDaemonInfoJson mcpPort json
       | false ->
         let! fallbackResp =
           httpClient.GetAsync(sprintf "http://localhost:%d/dashboard" dashboardPort)
           |> Async.AwaitTask
         match fallbackResp.IsSuccessStatusCode with
         | true ->
-          return Some {
-            Pid = 0
-            Port = mcpPort
-            StartedAt = DateTime.UtcNow
-            WorkingDirectory = Environment.CurrentDirectory
-            Version = "unknown"
-          }
+          return Some (fallbackInfo mcpPort dashboardPort)
         | false -> return None
     with ex ->
       Utils.Log.warn "[DaemonState] MCP status probe failed on port %d: %s" mcpPort ex.Message
@@ -95,13 +120,7 @@ module DaemonState =
           |> Async.AwaitTask
         match fallbackResp.IsSuccessStatusCode with
         | true ->
-          return Some {
-            Pid = 0
-            Port = mcpPort
-            StartedAt = DateTime.UtcNow
-            WorkingDirectory = Environment.CurrentDirectory
-            Version = "unknown"
-          }
+          return Some (fallbackInfo mcpPort dashboardPort)
         | false -> return None
       with ex2 ->
         Utils.Log.warn "[DaemonState] Dashboard fallback also failed on port %d: %s" dashboardPort ex2.Message

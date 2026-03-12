@@ -37,7 +37,9 @@ type SystemStatus =
   { supervised: bool
     restartCount: int
     version: string
-    apiVersion: int }
+    apiVersion: int
+    mcpPort: int option
+    dashboardPort: int option }
 
 type HotReloadFile =
   { path: string
@@ -288,7 +290,31 @@ let parseSystemStatus (parsed: obj) =
   { supervised = fieldBool "supervised" parsed |> Option.defaultValue false
     restartCount = fieldInt "restartCount" parsed |> Option.defaultValue 0
     version = fieldString "version" parsed |> Option.defaultValue "?"
-    apiVersion = fieldInt "apiVersion" parsed |> Option.defaultValue 0 }
+    apiVersion = fieldInt "apiVersion" parsed |> Option.defaultValue 0
+    mcpPort = fieldInt "mcpPort" parsed
+    dashboardPort = fieldInt "dashboardPort" parsed }
+
+let private syncDiscoveredPorts (status: SystemStatus) (c: Client) =
+  let currentMcp = c.mcpPort
+  let currentDashboard = c.dashboardPort
+  let nextMcp = status.mcpPort |> Option.defaultValue currentMcp
+  let nextDashboard =
+    status.dashboardPort
+    |> Option.orElse (status.mcpPort |> Option.map (fun port -> port + 1))
+    |> Option.defaultValue currentDashboard
+
+  match nextMcp <> currentMcp || nextDashboard <> currentDashboard with
+  | true ->
+    let message =
+      sprintf
+        "[info] syncDiscoveredPorts: daemon reported mcpPort=%d dashboardPort=%d (was mcpPort=%d dashboardPort=%d)"
+        nextMcp
+        nextDashboard
+        currentMcp
+        currentDashboard
+    c.log message
+    updatePorts nextMcp nextDashboard c
+  | false -> ()
 
 let [<Literal>] expectedApiVersion = 1
 
@@ -298,7 +324,11 @@ let checkVersion (status: SystemStatus) : Result<unit, string> =
   | v -> Error $"SageFs daemon apiVersion={v} is incompatible with this extension (requires apiVersion={expectedApiVersion}). Run 'dotnet tool update --global SageFs' then reload VS Code."
 
 let getSystemStatus (c: Client) =
-  getJson "getSystemStatus" "/api/system/status" 15000 parseSystemStatus c
+  promise {
+    let! result = getJson "getSystemStatus" "/api/system/status" 15000 parseSystemStatus c
+    result |> Option.iter (fun status -> syncDiscoveredPorts status c)
+    return result
+  }
 
 let parseHotReloadState (parsed: obj) =
   let files =

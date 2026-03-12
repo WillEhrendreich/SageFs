@@ -94,26 +94,7 @@ internal class SageFsExtension : Extension
   /// </summary>
   internal static string? TryReadDaemonUrl()
   {
-    try
-    {
-      var path = System.IO.Path.Combine(
-        System.Environment.GetFolderPath(System.Environment.SpecialFolder.LocalApplicationData),
-        "SageFs", "daemon.json");
-      if (!System.IO.File.Exists(path)) return null;
-      var json = System.IO.File.ReadAllText(path);
-      const string marker = "\"Url\":\"";
-      var start = json.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
-      if (start < 0) return null;
-      start += marker.Length;
-      var end = json.IndexOf('"', start);
-      if (end < 0) return null;
-      var url = json.Substring(start, end - start);
-      return string.IsNullOrEmpty(url) ? null : url;
-    }
-    catch
-    {
-      return null;
-    }
+    return Core.DaemonManager.tryReadConfiguredDaemonUrl()?.Value;
   }
 
   /// <summary>Writes the daemon URL to %LOCALAPPDATA%\SageFs\daemon.json.</summary>

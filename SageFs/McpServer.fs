@@ -249,6 +249,40 @@ let readJsonBody (ctx: Microsoft.AspNetCore.Http.HttpContext) = task {
   return System.Text.Json.JsonDocument.Parse(body)
 }
 
+let tryGetJsonStringAliases (root: System.Text.Json.JsonElement) (names: string list) =
+  let normalize value =
+    match String.IsNullOrWhiteSpace value with
+    | true -> None
+    | false -> Some value
+
+  names
+  |> List.tryPick (fun name ->
+    match root.TryGetProperty(name) with
+    | true, prop ->
+      match prop.ValueKind with
+      | JsonValueKind.Null
+      | JsonValueKind.Undefined -> None
+      | JsonValueKind.String -> prop.GetString() |> normalize
+      | _ -> prop.ToString() |> normalize
+    | false, _ -> None)
+
+let tryGetJsonIntAliases (root: System.Text.Json.JsonElement) (names: string list) =
+  names
+  |> List.tryPick (fun name ->
+    match root.TryGetProperty(name) with
+    | true, prop ->
+      match prop.ValueKind with
+      | JsonValueKind.Number ->
+        match prop.TryGetInt32() with
+        | true, value -> Some value
+        | false, _ -> None
+      | JsonValueKind.String ->
+        match Int32.TryParse(prop.GetString()) with
+        | true, value -> Some value
+        | false, _ -> None
+      | _ -> None
+    | false, _ -> None)
+
 /// Write an SSE frame to a stream (awaitable — use in task{} CEs).
 let writeSseFrame (body: System.IO.Stream) (frame: string) = task {
   let bytes = System.Text.Encoding.UTF8.GetBytes(frame)
@@ -1600,9 +1634,15 @@ let mapAnalysisRoutes (app: WebApplication) (rctx: RouteContext) =
   app.MapPost("/api/completions", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
     task {
       use! json = readJsonBody ctx
-      let code = json.RootElement.GetProperty("code").GetString()
-      let cursor = json.RootElement.GetProperty("cursorPosition").GetInt32()
-      let! result = SageFs.McpTools.getCompletions rctx.McpContext "http" code cursor None
+      let root = json.RootElement
+      let code = root.GetProperty("code").GetString()
+      let cursor =
+        match tryGetJsonIntAliases root [ "cursorPosition"; "cursor_position" ] with
+        | Some value -> value
+        | None -> raise (System.Text.Json.JsonException("Missing required cursorPosition/cursor_position"))
+      let workingDirectory =
+        tryGetJsonStringAliases root [ "workingDirectory"; "working_directory" ]
+      let! result = SageFs.McpTools.getCompletions rctx.McpContext "http" code cursor workingDirectory
       do! rawJsonResponse ctx result
     } :> Task
   ) |> ignore

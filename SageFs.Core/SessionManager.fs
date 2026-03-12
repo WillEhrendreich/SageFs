@@ -603,6 +603,7 @@ module SessionManager =
               let newState =
                 { ManagerState.addSession id swapped stateAfterStop with
                     Pool = poolAfterSwap }
+              onStandbyProgressChanged ()
               reply.Reply(Ok "Hard reset complete — swapped warm standby (instant).")
               Instrumentation.sessionsRestarted.Add(1L)
               Instrumentation.standbySwaps.Add(1L)
@@ -963,6 +964,7 @@ module SessionManager =
                 CreatedAt = DateTime.UtcNow
               }
               let newPool = PoolState.setStandby key standby state.Pool
+              onStandbyProgressChanged ()
               runtime.AwaitStandbyPort key proc inbox ct
               return! loop { state with Pool = newPool }
             | Error _ ->
@@ -992,13 +994,23 @@ module SessionManager =
 
         | SessionCommand.StandbySpawnFailed(key, _workerPid, _msg) ->
           // Remove the failed standby
-          let newPool = PoolState.removeStandby key state.Pool
-          return! loop { state with Pool = newPool }
+          match PoolState.getStandby key state.Pool with
+          | Some _ ->
+            let newPool = PoolState.removeStandby key state.Pool
+            onStandbyProgressChanged ()
+            return! loop { state with Pool = newPool }
+          | None ->
+            return! loop state
 
         | SessionCommand.StandbyExited(key, _workerPid) ->
           // Standby worker exited — remove it
-          let newPool = PoolState.removeStandby key state.Pool
-          return! loop { state with Pool = newPool }
+          match PoolState.getStandby key state.Pool with
+          | Some _ ->
+            let newPool = PoolState.removeStandby key state.Pool
+            onStandbyProgressChanged ()
+            return! loop { state with Pool = newPool }
+          | None ->
+            return! loop state
 
         | SessionCommand.StandbyProgress(key, progress) ->
           match PoolState.getStandby key state.Pool with
@@ -1040,7 +1052,12 @@ module SessionManager =
           let newPool =
             toKill
             |> Map.fold (fun pool k _ -> PoolState.removeStandby k pool) state.Pool
-          return! loop { state with Pool = newPool }
+          match toKill.IsEmpty with
+          | true ->
+            return! loop state
+          | false ->
+            onStandbyProgressChanged ()
+            return! loop { state with Pool = newPool }
 
         | SessionCommand.GetStandbyInfo reply ->
           reply.Reply (computeStandbyInfo state.Pool)

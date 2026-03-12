@@ -314,6 +314,33 @@ let createSessionOps
         SessionManager.SessionCommand.WorkerExited(sessionId, -1, -1))
   }
 
+let normalizeWorkingDirectory (workingDir: string) =
+  IO.Path.GetFullPath(workingDir).Replace("\\", "/").TrimEnd('/').ToLowerInvariant()
+
+let normalizeStartupTargets (workingDir: string) (targets: string list) =
+  targets
+  |> List.map (fun target ->
+    let fullPath =
+      match IO.Path.IsPathRooted target with
+      | true -> target
+      | false -> IO.Path.Combine(workingDir, target)
+    IO.Path.GetFullPath(fullPath).Replace("\\", "/").ToLowerInvariant())
+  |> List.sort
+  |> String.concat "|"
+
+let hasMatchingStartupTargets
+  (workingDir: string)
+  (requestedTargets: string list)
+  (sessions: WorkerProtocol.SessionInfo list)
+  =
+  let requestedKey = normalizeStartupTargets workingDir requestedTargets
+  let requestedWorkingDir = normalizeWorkingDirectory workingDir
+
+  sessions
+  |> List.exists (fun session ->
+    normalizeStartupTargets session.WorkingDirectory session.Projects = requestedKey
+    && normalizeWorkingDirectory session.WorkingDirectory = requestedWorkingDir)
+
 /// Look up worker HTTP base URL for a session from CQRS snapshot.
 let getWorkerBaseUrl (readSnapshot: unit -> SessionManager.QuerySnapshot) (sid: string) =
   let snapshot = readSnapshot()
@@ -1284,6 +1311,7 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
   let notifyWorkerDiedStr s = sessionOps.NotifyWorkerDied (toSessionId s)
 
   let noResume = flags.NoResume
+  let startupTargets = flags.Projects
 
   let workingDir = Environment.CurrentDirectory
 
@@ -1649,9 +1677,14 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
 
   let dashboardInfra : DashboardInfra = {
     Version = version
+    McpPort = mcpPort
     StateChanged = Some stateChangedEvent.Publish
     ConnectionTracker = Some connectionTracker
     SessionThemes = sessionThemes
+    GetSessionCount = fun () -> task {
+      let! sessions = sessionOps.GetAllSessions()
+      return sessions.Length
+    }
     SystemAlarmBuffer =
       // Intercept SystemAlarm events and prepend to the buffer (max 3, newest-first).
       let buf : SageFs.Server.DashboardTypes.SystemAlarmEntry list ref = ref []
@@ -1758,37 +1791,56 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
   // Resume sessions in background — don't block the daemon main task.
   // Each resumed session dispatches ListSessions so dashboard sees them incrementally.
   let _resumeTask =
-    match noResume with
-    | true ->
-      log.LogInformation("Session resume skipped (--no-resume)")
-      System.Threading.Tasks.Task.CompletedTask
-    | false ->
-      System.Threading.Tasks.Task.Run(fun () ->
-        task {
-          try
+    System.Threading.Tasks.Task.Run(fun () ->
+      task {
+        try
+          match noResume with
+          | true ->
+            log.LogInformation("Session resume skipped (--no-resume)")
+          | false ->
             do! resumeSessions (fun () ->
               elmRuntime.Dispatch(SageFsMsg.Editor EditorAction.ListSessions))
-            // Load cached test state after sessions are restored
-            let activeSessions = SessionManager.QuerySnapshot.allSessions (readSnapshot())
-            let uniqueProjectSets =
-              activeSessions
-              |> List.map (fun s -> s.Projects)
-              |> List.distinctBy (fun ps ->
-                ps |> List.sort |> List.map (fun p -> p.Replace("\\", "/").ToLowerInvariant()) |> String.concat "|")
-            for projects in uniqueProjectSets do
-              match Features.DaemonPersistence.loadTestCache DaemonState.SageFsDir projects with
-              | Ok cachedState ->
-                log.LogInformation("Restored test cache ({CoverageCount} coverage, {ResultCount} results)",
-                  cachedState.TestCoverageBitmaps.Count, cachedState.LastResults.Count)
-                elmRuntime.Dispatch(SageFsMsg.RestoreTestCache cachedState)
-                let (Features.LiveTesting.RunGeneration gen) = cachedState.LastGeneration
-                match gen > System.Threading.Volatile.Read(&lastSavedGeneration.contents) with
-                | true -> System.Threading.Volatile.Write(&lastSavedGeneration.contents, gen)
-                | false -> ()
-              | Error msg -> log.LogDebug("No test cache available: {Reason}", msg)
-          with ex ->
-            log.LogWarning("Session resume failed: {Error}", ex.Message)
-        } :> System.Threading.Tasks.Task)
+
+          match startupTargets with
+          | [] -> ()
+          | requestedTargets ->
+            let existingSessions = SessionManager.QuerySnapshot.allSessions (readSnapshot())
+            match hasMatchingStartupTargets workingDir requestedTargets existingSessions with
+            | true ->
+              log.LogInformation("Startup targets already loaded; skipping auto-create")
+            | false ->
+              log.LogInformation("Creating startup session for requested targets: {Targets}",
+                String.concat "; " requestedTargets)
+              let! createResult = sessionOps.CreateSession requestedTargets workingDir
+              match createResult with
+              | Ok sessionId ->
+                log.LogInformation("Created startup session {SessionId}", sessionId)
+                elmRuntime.Dispatch(SageFsMsg.Editor EditorAction.ListSessions)
+              | Error err ->
+                log.LogWarning("Failed to create startup session for requested targets: {Error}",
+                  SageFsError.describe err)
+
+          // Load cached test state after sessions are restored
+          let activeSessions = SessionManager.QuerySnapshot.allSessions (readSnapshot())
+          let uniqueProjectSets =
+            activeSessions
+            |> List.map (fun s -> s.Projects)
+            |> List.distinctBy (fun ps ->
+              ps |> List.sort |> List.map (fun p -> p.Replace("\\", "/").ToLowerInvariant()) |> String.concat "|")
+          for projects in uniqueProjectSets do
+            match Features.DaemonPersistence.loadTestCache DaemonState.SageFsDir projects with
+            | Ok cachedState ->
+              log.LogInformation("Restored test cache ({CoverageCount} coverage, {ResultCount} results)",
+                cachedState.TestCoverageBitmaps.Count, cachedState.LastResults.Count)
+              elmRuntime.Dispatch(SageFsMsg.RestoreTestCache cachedState)
+              let (Features.LiveTesting.RunGeneration gen) = cachedState.LastGeneration
+              match gen > System.Threading.Volatile.Read(&lastSavedGeneration.contents) with
+              | true -> System.Threading.Volatile.Write(&lastSavedGeneration.contents, gen)
+              | false -> ()
+            | Error msg -> log.LogDebug("No test cache available: {Reason}", msg)
+        with ex ->
+          log.LogWarning("Session resume failed: {Error}", ex.Message)
+      } :> System.Threading.Tasks.Task)
 
   // Periodic status polling — refreshes session status (Starting → Ready)
   // so SSE subscribers see warmup progress in real time.

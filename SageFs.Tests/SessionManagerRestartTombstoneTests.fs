@@ -12,6 +12,7 @@ type private Harness = {
   Mailbox: MailboxProcessor<SessionCommand>
   ReadSnapshot: unit -> QuerySnapshot
   FaultedEvents: ResizeArray<SessionId * string>
+  GetStandbyProgressNotifications: unit -> int
   Cancellation: CancellationTokenSource
 }
 
@@ -56,11 +57,12 @@ let private mkRuntime
 let private withHarness runtime run =
   use cancellation = new CancellationTokenSource()
   let faultedEvents = ResizeArray<SessionId * string>()
+  let standbyProgressNotifications = ref 0
   let mailbox, readSnapshot =
     createWith
       runtime
       cancellation.Token
-      ignore
+      (fun () -> standbyProgressNotifications.Value <- standbyProgressNotifications.Value + 1)
       (fun _ _ _ -> ())
       (fun _ _ -> ())
       ignore
@@ -71,6 +73,7 @@ let private withHarness runtime run =
     Mailbox = mailbox
     ReadSnapshot = readSnapshot
     FaultedEvents = faultedEvents
+    GetStandbyProgressNotifications = fun () -> standbyProgressNotifications.Value
     Cancellation = cancellation
   }
 
@@ -238,4 +241,48 @@ let sessionManagerRestartTombstoneTests =
         let session = getManagedSession harness info.Id
         session.Info.Status |> Expect.equal "failed scheduled restart keeps the session registered" SessionStatus.Restarting
         runtime.GetStartCalls() |> Expect.equal "all worker spawn attempts should flow through the injected runtime" 2
+  ]
+
+[<Tests>]
+let sessionManagerStandbyNotificationTests =
+  testList "SessionManager standby notifications" [
+    testCase "warming a standby publishes a standby progress notification" <| fun _ ->
+      let runtime =
+        mkRuntime
+          (fun _ -> Ok "build ok")
+          (fun _ -> Ok(Process.GetCurrentProcess()))
+
+      withHarness runtime.Runtime <| fun harness ->
+        let key = StandbyKey.fromSession ["Test.fsproj"] @"C:\Test" true
+
+        harness.Mailbox.Post(SessionCommand.WarmStandby key)
+
+        harness.Mailbox.PostAndReply(fun reply -> SessionCommand.GetStandbyInfo reply)
+        |> Expect.equal "warming standby should be visible immediately" (StandbyInfo.Warming "")
+
+        harness.GetStandbyProgressNotifications()
+        |> Expect.equal "entering the standby pool should notify observers" 1
+
+    testCase "removing a standby publishes a standby progress notification" <| fun _ ->
+      let runtime =
+        mkRuntime
+          (fun _ -> Ok "build ok")
+          (fun _ -> Ok(Process.GetCurrentProcess()))
+
+      withHarness runtime.Runtime <| fun harness ->
+        let key = StandbyKey.fromSession ["Test.fsproj"] @"C:\Test" true
+
+        harness.Mailbox.Post(SessionCommand.WarmStandby key)
+        harness.Mailbox.PostAndReply(fun reply -> SessionCommand.GetStandbyInfo reply)
+        |> ignore
+
+        let notificationsAfterWarm = harness.GetStandbyProgressNotifications()
+
+        harness.Mailbox.Post(SessionCommand.StandbyExited(key, Process.GetCurrentProcess().Id))
+
+        harness.Mailbox.PostAndReply(fun reply -> SessionCommand.GetStandbyInfo reply)
+        |> Expect.equal "exited standby should be removed from the pool" StandbyInfo.NoPool
+
+        harness.GetStandbyProgressNotifications()
+        |> Expect.equal "leaving the standby pool should notify observers" (notificationsAfterWarm + 1)
   ]

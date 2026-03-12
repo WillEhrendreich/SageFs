@@ -658,6 +658,113 @@ let jupyterKernelTests =
            | Program.Daemon _ -> ()
            | other -> failtest (sprintf "Expected Daemon but got %A" other)
       }
+
+      test "daemon launch decision starts new daemon when only default port is occupied" {
+        let defaultDaemon = {
+          Pid = 42
+          Port = 37749
+          DashboardPort = 37750
+          StartedAt = DateTime.UtcNow
+          WorkingDirectory = @"C:\Code\Repos\Elsewhere"
+          Version = "test"
+          ApiVersion = None
+          SessionCount = None
+        }
+
+        let readOnPort port =
+          match port with
+          | 37749 -> Some defaultDaemon
+          | _ -> None
+
+        Program.decideDaemonLaunch readOnPort 37849
+        |> Expect.equal "custom port should not attach to default-port daemon" Program.StartNewDaemon
+      }
+
+      test "daemon launch decision reuses daemon already running on requested port" {
+        let requestedDaemon = {
+          Pid = 43
+          Port = 37849
+          DashboardPort = 37850
+          StartedAt = DateTime.UtcNow
+          WorkingDirectory = @"C:\Code\Repos\SageFs"
+          Version = "test"
+          ApiVersion = None
+          SessionCount = None
+        }
+
+        let readOnPort port =
+          match port with
+          | 37849 -> Some requestedDaemon
+          | _ -> None
+
+        Program.decideDaemonLaunch readOnPort 37849
+        |> Expect.equal "requested-port daemon should be reused" (Program.AttachToExistingDaemon requestedDaemon)
+      }
+
+      test "waitForDaemonReady probes only the requested custom port" {
+        let requestedDaemon = {
+          Pid = 44
+          Port = 37849
+          DashboardPort = 37850
+          StartedAt = DateTime.UtcNow
+          WorkingDirectory = @"C:\Code\Repos\SageFs"
+          Version = "test"
+          ApiVersion = None
+          SessionCount = None
+        }
+
+        let probedPorts = System.Collections.Generic.List<int>()
+        let mutable attempts = 0
+
+        let readOnPort port =
+          probedPorts.Add(port)
+          attempts <- attempts + 1
+          match attempts with
+          | 3 -> Some requestedDaemon
+          | _ -> None
+
+        let sleepCalls = System.Collections.Generic.List<int>()
+        let sleep ms = sleepCalls.Add(ms)
+
+        Program.waitForDaemonReady sleep readOnPort 37849
+        |> Expect.equal "should return daemon on requested port" (Ok requestedDaemon)
+
+        probedPorts
+        |> Seq.distinct
+        |> Seq.toList
+        |> Expect.equal "should only probe requested port" [37849]
+
+        sleepCalls.Count
+        |> Expect.equal "should sleep once per probe until ready" 3
+      }
+
+      test "waitForDaemonReady times out after 30 probes on the requested port" {
+        let probedPorts = System.Collections.Generic.List<int>()
+        let readOnPort port =
+          probedPorts.Add(port)
+          None
+
+        let sleepCalls = System.Collections.Generic.List<int>()
+        let sleep ms = sleepCalls.Add(ms)
+
+        Program.waitForDaemonReady sleep readOnPort 37849
+        |> function
+           | Error (SageFsError.DaemonStartFailed msg) ->
+             msg |> Expect.stringContains "should describe timeout" "did not become ready"
+           | Ok _ -> failtest "expected timeout error"
+           | Error other -> failtestf "unexpected error: %A" other
+
+        probedPorts.Count
+        |> Expect.equal "should probe requested port 30 times" 30
+
+        probedPorts
+        |> Seq.distinct
+        |> Seq.toList
+        |> Expect.equal "should never probe the default port" [37849]
+
+        sleepCalls.Count
+        |> Expect.equal "should sleep once per probe attempt" 30
+      }
     ]
 
     testList "ZMQ transport framing" [

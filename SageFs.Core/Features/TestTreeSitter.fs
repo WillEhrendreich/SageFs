@@ -11,60 +11,97 @@ module TestTreeSitter =
 
   open TreeSitter
 
+  [<RequireQualifiedAccess>]
+  type NativeAvailability =
+    | Available of runtimeId: string * libraryPath: string
+    | Degraded of runtimeId: string * reason: string * searchedPaths: string list
+
+  module NativeAvailability =
+    let isAvailable = function
+      | NativeAvailability.Available _ -> true
+      | NativeAvailability.Degraded _ -> false
+
+    let describe = function
+      | NativeAvailability.Available (runtimeId, libraryPath) ->
+        sprintf "tree-sitter test discovery available on %s via %s" runtimeId libraryPath
+      | NativeAvailability.Degraded (runtimeId, reason, searchedPaths) ->
+        sprintf
+          "tree-sitter test discovery degraded on %s: %s. Searched: %s"
+          runtimeId
+          reason
+          (String.Join(", ", searchedPaths))
+
+  type private ResourceState = {
+    Availability: NativeAvailability
+    Resources: (Language * Query) option
+  }
+
+  let private detectRuntimeId () =
+    match Environment.OSVersion.Platform, Runtime.InteropServices.RuntimeInformation.OSArchitecture with
+    | PlatformID.Win32NT, Runtime.InteropServices.Architecture.X64 -> "win-x64"
+    | PlatformID.Win32NT, Runtime.InteropServices.Architecture.Arm64 -> "win-arm64"
+    | PlatformID.Unix, Runtime.InteropServices.Architecture.X64 ->
+      match Runtime.InteropServices.RuntimeInformation.IsOSPlatform(Runtime.InteropServices.OSPlatform.OSX) with
+      | true -> "osx-x64"
+      | false -> "linux-x64"
+    | PlatformID.Unix, Runtime.InteropServices.Architecture.Arm64 ->
+      match Runtime.InteropServices.RuntimeInformation.IsOSPlatform(Runtime.InteropServices.OSPlatform.OSX) with
+      | true -> "osx-arm64"
+      | false -> "linux-arm64"
+    | _ -> "win-x64"
+
+  let private nativeLibraryName () =
+    match Runtime.InteropServices.RuntimeInformation.IsOSPlatform(Runtime.InteropServices.OSPlatform.Windows) with
+    | true -> "tree-sitter-fsharp.dll"
+    | false ->
+      match Runtime.InteropServices.RuntimeInformation.IsOSPlatform(Runtime.InteropServices.OSPlatform.OSX) with
+      | true -> "libtree-sitter-fsharp.dylib"
+      | false -> "libtree-sitter-fsharp.so"
+
+  let private candidatePaths (asmDir: string) (runtimeId: string) (libName: string) = [
+    Path.Combine(asmDir, "runtimes", runtimeId, "native", libName)
+    Path.Combine(asmDir, libName)
+    Path.Combine(AppContext.BaseDirectory, "runtimes", runtimeId, "native", libName)
+    Path.Combine(asmDir, "runtimes", "win-x64", "native", "tree-sitter-fsharp.dll")
+  ]
+
   /// Lazy-initialized tree-sitter F# language and test query.
   /// Shared across all calls — parse is per-invocation but query compilation is one-time.
-  let resources =
+  let private resources =
     lazy
+      let asmDir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location)
+      let runtimeId = detectRuntimeId ()
+      let libName = nativeLibraryName ()
+      let candidates = candidatePaths asmDir runtimeId libName
+
+      let degraded reason = {
+        Availability = NativeAvailability.Degraded (runtimeId, reason, candidates)
+        Resources = None
+      }
+
       try
-        let asmDir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location)
-        let rid =
-          match Environment.OSVersion.Platform, Runtime.InteropServices.RuntimeInformation.OSArchitecture with
-          | PlatformID.Win32NT, Runtime.InteropServices.Architecture.X64 -> "win-x64"
-          | PlatformID.Win32NT, Runtime.InteropServices.Architecture.Arm64 -> "win-arm64"
-          | PlatformID.Unix, Runtime.InteropServices.Architecture.X64 ->
-            match Runtime.InteropServices.RuntimeInformation.IsOSPlatform(Runtime.InteropServices.OSPlatform.OSX) with
-            | true -> "osx-x64"
-            | false -> "linux-x64"
-          | PlatformID.Unix, Runtime.InteropServices.Architecture.Arm64 ->
-            match Runtime.InteropServices.RuntimeInformation.IsOSPlatform(Runtime.InteropServices.OSPlatform.OSX) with
-            | true -> "osx-arm64"
-            | false -> "linux-arm64"
-          | _ -> "win-x64"
-        let libName =
-          match Runtime.InteropServices.RuntimeInformation.IsOSPlatform(Runtime.InteropServices.OSPlatform.Windows) with
-          | true -> "tree-sitter-fsharp.dll"
-          | false ->
-            match Runtime.InteropServices.RuntimeInformation.IsOSPlatform(Runtime.InteropServices.OSPlatform.OSX) with
-            | true -> "libtree-sitter-fsharp.dylib"
-            | false -> "libtree-sitter-fsharp.so"
-        let candidates = [
-          Path.Combine(asmDir, "runtimes", rid, "native", libName)
-          Path.Combine(asmDir, libName)
-          Path.Combine(AppContext.BaseDirectory, "runtimes", rid, "native", libName)
-          Path.Combine(asmDir, "runtimes", "win-x64", "native", "tree-sitter-fsharp.dll")
-        ]
-        let dllPath =
-          candidates
-          |> List.tryFind File.Exists
-        match dllPath with
+        match candidates |> List.tryFind File.Exists with
         | None ->
-          Log.warn "TestTreeSitter: native library not found for %s. Searched: %s" rid (String.Join(", ", candidates))
-          None
+          Log.warn "TestTreeSitter: native library not found for %s. Searched: %s" runtimeId (String.Join(", ", candidates))
+          degraded (sprintf "native library '%s' not found" libName)
         | Some path ->
-        let lang = new Language(path, "tree_sitter_fsharp")
-        let asm = Assembly.GetExecutingAssembly()
-        let queryText =
-          use stream = asm.GetManifestResourceStream("tests.scm")
-          match isNull stream with
-          | true -> failwith "tests.scm embedded resource not found"
-          | false -> ()
-          use reader = new StreamReader(stream)
-          reader.ReadToEnd()
-        let query = new Query(lang, queryText)
-        Some (lang, query)
+          let lang = new Language(path, "tree_sitter_fsharp")
+          let asm = Assembly.GetExecutingAssembly()
+          let queryText =
+            use stream = asm.GetManifestResourceStream("tests.scm")
+            match isNull stream with
+            | true -> failwith "tests.scm embedded resource not found"
+            | false -> ()
+            use reader = new StreamReader(stream)
+            reader.ReadToEnd()
+          let query = new Query(lang, queryText)
+          {
+            Availability = NativeAvailability.Available (runtimeId, path)
+            Resources = Some (lang, query)
+          }
       with ex ->
         Log.error "TestTreeSitter init failed: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
-        None
+        degraded (sprintf "initialization failed: %s" ex.Message)
 
   /// Discover test locations in F# source code.
   /// Returns SourceTestLocation array with attribute name, file path, line, and column.
@@ -72,7 +109,7 @@ module TestTreeSitter =
     match String.IsNullOrWhiteSpace code with
     | true -> Array.empty
     | false ->
-      match resources.Value with
+      match resources.Value.Resources with
       | None -> Array.empty
       | Some (lang, query) ->
         use parser = new Parser(lang)
@@ -105,6 +142,14 @@ module TestTreeSitter =
 
         locations.ToArray()
 
+  /// Report whether tree-sitter test discovery is available or degraded.
+  let availability () : NativeAvailability =
+    resources.Value.Availability
+
+  /// Describe the current tree-sitter test discovery availability in one line.
+  let describeAvailability () : string =
+    availability () |> NativeAvailability.describe
+
   /// Check if tree-sitter test discovery is available.
   let isAvailable () : bool =
-    resources.Value.IsSome
+    availability () |> NativeAvailability.isAvailable
