@@ -950,6 +950,26 @@ let snapshotCompletenessTests = testList "Snapshot field completeness (synthesis
   }
 ]
 
+let bindingsPanelSseTests = testList "SSE bindings panel" [
+
+  test "initial push uses selected session bindings when global snapshot is missing" {
+    let binding : SageFs.Features.BindingExplorer.BindingInfo =
+      { Name = "answer"
+        TypeSig = "int"
+        Value = Some "42"
+        CellIndex = 0
+        ShadowedBy = []
+        ReferencedIn = [] }
+    let html =
+      resolveBindingsPanelSnapshot None [| binding |]
+      |> renderBindingsPanel
+      |> renderNode
+
+    Expect.stringContains html "Bindings (1)" "selected session bindings should populate the bindings panel"
+    Expect.stringContains html "answer" "bindings panel should render the selected session binding"
+  }
+]
+
 [<Tests>]
 let allDashboardSnapshotTests = testList "Dashboard Snapshots" [
   dashboardRenderSnapshotTests
@@ -958,6 +978,7 @@ let allDashboardSnapshotTests = testList "Dashboard Snapshots" [
   parserTests
   shellStructureTests
   standbyBadgeSseTests
+  bindingsPanelSseTests
   warmupProgressSseTests
   zeroJsBadgeTests
   railwayVisualizationTests

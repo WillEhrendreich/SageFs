@@ -176,6 +176,14 @@ let renderFailureNarrativesTests =
       html |> Expect.stringContains "should show count badge" "3"
     }
 
+    test "non-empty view renders as closed disclosure" {
+      let pairs = [ "t", defaultNarrative () ]
+      let html = renderFailureNarratives (FailureNarrativesPanelView.fromNarratives pairs) |> renderToString
+      html |> Expect.stringContains "should render a disclosure wrapper" "<details"
+      html |> Expect.stringContains "should render a disclosure summary" "<summary"
+      html.Contains("<details open") |> Expect.isFalse "failure narratives should default collapsed"
+    }
+
     test "each failure entry has narrative-entry class" {
       let pairs = [ "t", defaultNarrative () ]
       let html = renderFailureNarratives (FailureNarrativesPanelView.fromNarratives pairs) |> renderToString

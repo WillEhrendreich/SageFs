@@ -118,11 +118,17 @@ let renderSessionStatus (sessionState: string) (sessionId: string) (workingDir: 
 
 /// Render system alarm banner — visible when ElmLoop throws at any catch site.
 /// Empty list renders a hidden placeholder so Datastar can morph it away.
+let private disclosureSummaryStyle =
+  "cursor: pointer; font-weight: bold; font-size: 0.9rem; user-select: none;"
+
 let renderAlarmBanner (alarms: SystemAlarmEntry list) =
   match alarms with
   | [] ->
     Elem.div [ Attr.id DomIds.AlarmBanner; Attr.style "display:none;" ] []
   | _ ->
+    let alarmCount = alarms.Length
+    let alarmCountLabel =
+      sprintf "%d active alarm%s" alarmCount (if alarmCount = 1 then "" else "s")
     let alarmEntries =
       alarms |> List.map (fun alarm ->
         Elem.div [ Attr.class' "alarm-entry" ] [
@@ -137,16 +143,25 @@ let renderAlarmBanner (alarms: SystemAlarmEntry list) =
           ]
         ])
     Elem.div [ Attr.id DomIds.AlarmBanner; Attr.class' "alarm-banner" ] [
-      yield Elem.div [ Attr.class' "alarm-banner-header" ] [
-        Elem.span [ Attr.class' "alarm-icon" ] [ Text.raw "🚨" ]
-        Elem.span [ Attr.class' "alarm-title" ] [ Text.raw " System Alarm" ]
-        Elem.button
-          [ Attr.class' "alarm-dismiss"
-            Attr.title "Dismiss all alarms"
-            Ds.onClick (Ds.post "/dashboard/dismiss-alarm") ]
-          [ Text.raw "✕ dismiss" ]
+      Elem.details [] [
+        Elem.summary [ Attr.style disclosureSummaryStyle ] [
+          Elem.span [ Attr.class' "alarm-icon" ] [ Text.raw "🚨" ]
+          Elem.span [ Attr.class' "alarm-title" ] [
+            Text.raw (sprintf " System Alarm (%d)" alarmCount)
+          ]
+        ]
+        Elem.div [ Attr.style "margin-top: 0.5rem;" ] [
+          Elem.div [ Attr.class' "alarm-banner-header" ] [
+            Elem.span [ Attr.class' "meta" ] [ Text.raw alarmCountLabel ]
+            Elem.button
+              [ Attr.class' "alarm-dismiss"
+                Attr.title "Dismiss all alarms"
+                Ds.onClick (Ds.post "/dashboard/dismiss-alarm") ]
+              [ Text.raw "✕ dismiss" ]
+          ]
+          yield! alarmEntries
+        ]
       ]
-      yield! alarmEntries
     ]
 
 let private renderDisableWarmupAutoOpenButton (style: string) =
@@ -226,38 +241,44 @@ let renderFailureNarratives (view: FailureNarrativesPanelView) =
           sprintf "🔴 %d failure%s · %d have no baseline yet" total (if total = 1 then "" else "s") suppressed
         | suppressed ->
           sprintf "🔴 %d failure%s · %d with context · %d no baseline" total (if total = 1 then "" else "s") view.Entries.Length suppressed
-      Elem.span [ Attr.class' "failure-count-badge"; Attr.style "font-weight: bold; margin-right: 0.5rem;" ] [
-        Text.raw badgeText
-      ]
-      for entry in view.Entries do
-        Elem.div [ Attr.class' "narrative-entry"; Attr.style "margin-top: 0.25rem;" ] [
-          Elem.span [ Attr.class' "narrative-test-name"; Attr.style "font-weight: bold;" ] [
-            Text.raw (
-              let shortName =
-                let parts = entry.TestName.Split('.')
-                if parts.Length > 1 then parts.[parts.Length - 1] else entry.TestName
-              sprintf "🔴 %s" shortName)
+      Elem.details [] [
+        Elem.summary [ Attr.style disclosureSummaryStyle ] [
+          Elem.span [ Attr.class' "failure-count-badge"; Attr.style "font-weight: bold; margin-right: 0.5rem;" ] [
+            Text.raw badgeText
           ]
-          match entry.TimeSinceLabel with
-          | Some label ->
-            Elem.span [ Attr.class' "meta narrative-timing"; Attr.style "margin-left: 0.5rem;" ] [
-              Text.raw (sprintf "was passing %s" label)
-            ]
-          | None -> ()
-          Elem.span [ Attr.class' "narrative-summary"; Attr.style "margin-left: 0.5rem;" ] [
-            Text.raw entry.Summary
-          ]
-          match entry.CausalLabels with
-          | [] -> ()
-          | labels ->
-            Elem.span [ Attr.class' "meta narrative-causal"; Attr.style "margin-left: 0.5rem;" ] [
-              Text.raw (sprintf "→ %s" (labels |> String.concat ", "))
-            ]
-          if entry.HasPropertyViolation then
-            Elem.span [ Attr.class' "meta narrative-property"; Attr.style "margin-left: 0.5rem;" ] [
-              Text.raw "⚡ property violation"
+        ]
+        Elem.div [ Attr.style "margin-top: 0.25rem;" ] [
+          for entry in view.Entries do
+            Elem.div [ Attr.class' "narrative-entry"; Attr.style "margin-top: 0.25rem;" ] [
+              Elem.span [ Attr.class' "narrative-test-name"; Attr.style "font-weight: bold;" ] [
+                Text.raw (
+                  let shortName =
+                    let parts = entry.TestName.Split('.')
+                    if parts.Length > 1 then parts.[parts.Length - 1] else entry.TestName
+                  sprintf "🔴 %s" shortName)
+              ]
+              match entry.TimeSinceLabel with
+              | Some label ->
+                Elem.span [ Attr.class' "meta narrative-timing"; Attr.style "margin-left: 0.5rem;" ] [
+                  Text.raw (sprintf "was passing %s" label)
+                ]
+              | None -> ()
+              Elem.span [ Attr.class' "narrative-summary"; Attr.style "margin-left: 0.5rem;" ] [
+                Text.raw entry.Summary
+              ]
+              match entry.CausalLabels with
+              | [] -> ()
+              | labels ->
+                Elem.span [ Attr.class' "meta narrative-causal"; Attr.style "margin-left: 0.5rem;" ] [
+                  Text.raw (sprintf "→ %s" (labels |> String.concat ", "))
+                ]
+              if entry.HasPropertyViolation then
+                Elem.span [ Attr.class' "meta narrative-property"; Attr.style "margin-left: 0.5rem;" ] [
+                  Text.raw "⚡ property violation"
+                ]
             ]
         ]
+      ]
   ]
 
 /// Render eval stats as an HTML fragment — includes sparkline and P50/P95 latency.

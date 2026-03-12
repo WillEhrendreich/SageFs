@@ -57,6 +57,28 @@ let dashboardCss =
   use reader = new StreamReader(stream)
   reader.ReadToEnd()
 
+let private bindingSnapshotFromEntries
+  (bindings: SageFs.Features.BindingExplorer.BindingInfo array)
+  : SageFs.Features.BindingExplorer.BindingScopeSnapshot option =
+  match bindings.Length with
+  | 0 -> None
+  | _ ->
+    let bindingList = bindings |> Array.toList
+    Some
+      { Bindings = bindingList
+        ActiveBindings = bindingList |> List.map (fun binding -> binding.Name, binding) |> Map.ofList
+        ShadowedBindings = [] }
+
+let resolveBindingsPanelSnapshot
+  (sharedSnapshot: SageFs.Features.BindingExplorer.BindingScopeSnapshot option)
+  (sessionBindings: SageFs.Features.BindingExplorer.BindingInfo array)
+  : SageFs.Features.BindingExplorer.BindingScopeSnapshot option =
+  let sessionSnapshot = bindingSnapshotFromEntries sessionBindings
+  match sharedSnapshot, sessionSnapshot with
+  | Some scope, Some fallback when scope.ActiveBindings.Count = 0 -> Some fallback
+  | Some scope, _ -> Some scope
+  | None, fallback -> fallback
+
 
 /// Render keyboard shortcut help as an HTML fragment.
 // ---------------------------------------------------------------------------
@@ -319,7 +341,8 @@ let createStreamHandler
           | None -> renderSessionContextEmpty
         | false -> renderSessionContextEmpty
       // Build bindings explorer panel
-      let bindingsPanel = renderBindingsPanel (q.GetBindingScopeSnapshot ())
+      let bindingsPanel =
+        renderBindingsPanel (resolveBindingsPanelSnapshot (q.GetBindingScopeSnapshot ()) (q.GetSessionBindings currentSessionId))
       // Build alarm panel from shared buffer
       let alarmPanel = renderAlarmBanner (infra.SystemAlarmBuffer.Value)
       // Build output + sessions from Elm regions

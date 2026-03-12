@@ -41,6 +41,14 @@ let alarmBannerRenderTests =
       Expect.stringContains html "🚨" "should render alarm icon"
     }
 
+    test "non-empty alarm banner renders as closed disclosure" {
+      let alarm = { Phase = "effect"; Message = "IO error"; Timestamp = DateTimeOffset.UtcNow }
+      let html = renderAlarmBanner [ alarm ] |> render
+      Expect.stringContains html "<details" "alarm banner should render a disclosure wrapper"
+      Expect.stringContains html "<summary" "alarm banner should render a disclosure summary"
+      Expect.isFalse (html.Contains "<details open") "alarm banner should default collapsed"
+    }
+
     test "multiple alarms all rendered" {
       let alarms = [
         { Phase = "update"; Message = "msg1"; Timestamp = DateTimeOffset.UtcNow }
