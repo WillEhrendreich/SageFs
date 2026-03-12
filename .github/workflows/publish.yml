@@ -98,11 +98,46 @@ jobs:
       run: |
         npx @vscode/vsce publish --packagePath "release/sagefs-vscode-${{ steps.manifest.outputs.version }}.vsix" --skip-duplicate
 
+    - name: Inject categories into Visual Studio VSIX manifest
+      run: |
+        $vsixPath = "release/sagefs-visualstudio-${{ steps.manifest.outputs.version }}.vsix"
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        $archive = [System.IO.Compression.ZipFile]::Open($vsixPath, [System.IO.Compression.ZipArchiveMode]::Update)
+        $entry = $archive.GetEntry("extension.vsixmanifest")
+        if (-not $entry) { $archive.Dispose(); throw "extension.vsixmanifest not found in VSIX" }
+        $stream = $entry.Open()
+        $reader = [System.IO.StreamReader]::new($stream)
+        $content = $reader.ReadToEnd()
+        $reader.Close(); $stream.Close()
+        $xml = [xml]$content
+        $ns = "http://schemas.microsoft.com/developer/vsx-schema/2011"
+        $nsMgr = [System.Xml.XmlNamespaceManager]::new($xml.NameTable)
+        $nsMgr.AddNamespace("v", $ns)
+        $metadata = $xml.SelectSingleNode("//v:Metadata", $nsMgr)
+        if ($metadata -and -not $xml.SelectSingleNode("//v:Categories", $nsMgr)) {
+          $cat = $xml.CreateElement("Categories", $ns)
+          $cat.InnerText = "Coding"
+          $metadata.AppendChild($cat) | Out-Null
+          Write-Host "Injected <Categories>Coding</Categories> into manifest"
+        } else {
+          Write-Host "Categories already present or Metadata not found — skipping"
+        }
+        $entry.Delete()
+        $newEntry = $archive.CreateEntry("extension.vsixmanifest")
+        $writeStream = $newEntry.Open()
+        $xmlSettings = [System.Xml.XmlWriterSettings]::new()
+        $xmlSettings.Encoding = [System.Text.UTF8Encoding]::new($false)
+        $xmlSettings.Indent = $true
+        $writer = [System.Xml.XmlWriter]::Create($writeStream, $xmlSettings)
+        $xml.Save($writer)
+        $writer.Close(); $writeStream.Close(); $archive.Dispose()
+        Write-Host "VSIX patched successfully: $vsixPath"
+
     - name: Publish Visual Studio extension to Marketplace
       env:
         VSCE_PAT: ${{ secrets.VSCE_PAT }}
       run: |
-        npx tfx-cli extension publish --publisher $env:VS_MARKETPLACE_PUBLISHER --vsix "release/sagefs-visualstudio-${{ steps.manifest.outputs.version }}.vsix" --token $env:VSCE_PAT --no-prompt --override '{"categories":"Coding Testing"}'
+        npx tfx-cli extension publish --publisher $env:VS_MARKETPLACE_PUBLISHER --vsix "release/sagefs-visualstudio-${{ steps.manifest.outputs.version }}.vsix" --token $env:VSCE_PAT --no-prompt
 
     - name: Push to NuGet
       run: dotnet nuget push "release/SageFs.${{ steps.manifest.outputs.version }}.nupkg" --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
