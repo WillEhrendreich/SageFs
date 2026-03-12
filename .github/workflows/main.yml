@@ -92,6 +92,28 @@ jobs:
         npm ci
         npm run compile
 
+    - name: Get VS Code extension version
+      if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+      id: vscode-version
+      working-directory: sagefs-vscode
+      run: |
+        version=$(node -p "require('./package.json').version")
+        echo "version=$version" >> "$GITHUB_OUTPUT"
+
+    - name: Package VS Code extension
+      if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+      working-directory: sagefs-vscode
+      run: |
+        npx @vscode/vsce package -o "../sagefs-vscode-${{ steps.vscode-version.outputs.version }}.vsix"
+
+    - name: Upload VS Code extension artifact
+      if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+      uses: actions/upload-artifact@v4
+      with:
+        name: release-vscode-vsix
+        path: sagefs-vscode-${{ steps.vscode-version.outputs.version }}.vsix
+        if-no-files-found: error
+
   benchmarks:
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/master'
@@ -167,15 +189,37 @@ jobs:
     - name: Run VS extension Core tests
       run: dotnet test sagefs-vs/SageFs.VisualStudio.Core.Tests/SageFs.VisualStudio.Core.Tests.fsproj --nologo --logger "console;verbosity=minimal"
 
-  publish:
+    - name: Get Visual Studio extension version
+      if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+      id: vs-version
+      shell: pwsh
+      run: |
+        $version = ([xml](Get-Content Directory.Build.props)).Project.PropertyGroup.Version
+        "version=$version" >> $env:GITHUB_OUTPUT
+
+    - name: Stage Visual Studio extension artifact
+      if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+      shell: pwsh
+      run: |
+        $vsix = Get-ChildItem sagefs-vs/SageFs.VisualStudio/bin/Release/*.vsix -ErrorAction SilentlyContinue | Select-Object -First 1
+        if (-not $vsix) { throw "Visual Studio VSIX not found." }
+        Copy-Item $vsix.FullName "sagefs-visualstudio-${{ steps.vs-version.outputs.version }}.vsix"
+
+    - name: Upload Visual Studio extension artifact
+      if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+      uses: actions/upload-artifact@v4
+      with:
+        name: release-visualstudio-vsix
+        path: sagefs-visualstudio-${{ steps.vs-version.outputs.version }}.vsix
+        if-no-files-found: error
+
+  release-artifacts:
     needs: [build, extensions, vs-extension, benchmarks]
     runs-on: windows-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/master'
     permissions:
-      contents: write
-      packages: write
-    env:
-      VS_MARKETPLACE_PUBLISHER: willehrendreich
+      actions: read
+      contents: read
 
     steps:
     - uses: actions/checkout@v5
@@ -192,14 +236,6 @@ jobs:
         dotnet-version: |
           10.0.x
         dotnet-quality: preview
-
-    - name: Setup Node.js
-      uses: actions/setup-node@v4
-      with:
-        node-version: 20
-
-    - name: Install marketplace CLIs
-      run: npm install -g @vscode/vsce tfx-cli
 
     - name: Build forked MCP SDK packages
       run: |
@@ -220,74 +256,46 @@ jobs:
     - name: Pack SageFs
       run: dotnet pack SageFs -c Release -o release
 
-    - name: Build VS Code extension
-      working-directory: sagefs-vscode
-      run: |
-        dotnet tool restore
-        npm ci
-        npx @vscode/vsce package -o ../release/sagefs-vscode-${{ steps.version.outputs.version }}.vsix
-
-    - name: Install .NET 8 SDK for VS extension
-      uses: actions/setup-dotnet@v5
+    - name: Download VS Code extension artifact
+      uses: actions/download-artifact@v4
       with:
-        dotnet-version: 8.0.x
+        name: release-vscode-vsix
+        path: release
 
-    - name: Build Visual Studio extension
-      run: |
-        dotnet build sagefs-vs/SageFs.VisualStudio/SageFs.VisualStudio.csproj -c Release
-        $vsix = Get-ChildItem sagefs-vs/SageFs.VisualStudio/bin/Release/*.vsix -ErrorAction SilentlyContinue
-        if ($vsix) { Copy-Item $vsix.FullName "release/sagefs-visualstudio-${{ steps.version.outputs.version }}.vsix" }
-
-    - name: Publish VS Code extension to Marketplace
-      working-directory: sagefs-vscode
-      env:
-        VSCE_PAT: ${{ secrets.VSCE_PAT }}
-      run: |
-        npx @vscode/vsce publish --packagePath ../release/sagefs-vscode-${{ steps.version.outputs.version }}.vsix --skip-duplicate
-
-    - name: Publish Visual Studio extension to Marketplace
-      env:
-        VSCE_PAT: ${{ secrets.VSCE_PAT }}
-      run: |
-        npx tfx-cli extension publish --publisher $env:VS_MARKETPLACE_PUBLISHER --vsix "release/sagefs-visualstudio-${{ steps.version.outputs.version }}.vsix" --token $env:VSCE_PAT --no-prompt
-
-    - name: Push to NuGet
-      run: dotnet nuget push "release/SageFs.${{ steps.version.outputs.version }}.nupkg" --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
-
-    - name: Create GitHub Release
-      uses: softprops/action-gh-release@v2
+    - name: Download Visual Studio extension artifact
+      uses: actions/download-artifact@v4
       with:
-        tag_name: v${{ steps.version.outputs.version }}
-        name: v${{ steps.version.outputs.version }}
-        files: |
-          release/*.nupkg
-          release/*.vsix
-        body: |
-          ## SageFs v${{ steps.version.outputs.version }}
+        name: release-visualstudio-vsix
+        path: release
 
-          ### Downloads
-          - **NuGet**: `dotnet tool install --global SageFs`
-          - **VS Code Extension** (`sagefs-vscode-*.vsix`): Install via `code --install-extension sagefs-vscode-${{ steps.version.outputs.version }}.vsix`
-          - **Visual Studio Extension** (`sagefs-visualstudio-*.vsix`): Double-click to install in Visual Studio 2022+
-          - **Neovim**: See [sagefs.nvim](https://github.com/WillEhrendreich/sagefs.nvim)
-        make_latest: true
-
-    - name: Sync sagefs.nvim version tag
-      env:
-        NVIM_PAT: ${{ secrets.SAGEFS_NVIM_PAT }}
-      if: env.NVIM_PAT != ''
-      continue-on-error: true
+    - name: Write release manifest
       shell: pwsh
+      env:
+        SOURCE_SHA: ${{ github.sha }}
+        SOURCE_RUN_ID: ${{ github.run_id }}
+        SOURCE_RUN_ATTEMPT: ${{ github.run_attempt }}
       run: |
-        $tmpDir = New-Item -ItemType Directory -Path (Join-Path $env:TEMP "sagefs-nvim-$(Get-Random)")
-        Push-Location $tmpDir
-        git clone --depth 1 "https://x-access-token:$($env:NVIM_PAT)@github.com/WillEhrendreich/sagefs.nvim.git" .
-        git config user.name "github-actions[bot]"
-        git config user.email "github-actions[bot]@users.noreply.github.com"
-        Set-Content -Path "lua/sagefs/version.lua" -Value "return '${{ steps.version.outputs.version }}'"
-        git add lua/sagefs/version.lua
-        $changed = git diff --cached --quiet; if ($LASTEXITCODE -ne 0) { git commit -m "chore: sync version to v${{ steps.version.outputs.version }}" }
-        git push origin main
-        git tag -f "v${{ steps.version.outputs.version }}" -m "Release v${{ steps.version.outputs.version }} (synced from SageFs)"
-        git push origin "v${{ steps.version.outputs.version }}" --force
-        Pop-Location
+        $files = Get-ChildItem release -File | Where-Object { $_.Extension -in '.nupkg', '.vsix' } | Sort-Object Name
+        if ($files.Count -lt 3) { throw "Expected release files were not staged." }
+        $manifest = @{
+          version = '${{ steps.version.outputs.version }}'
+          sourceSha = $env:SOURCE_SHA
+          sourceRunId = $env:SOURCE_RUN_ID
+          sourceRunAttempt = $env:SOURCE_RUN_ATTEMPT
+          files = @(
+            $files | ForEach-Object {
+              @{
+                name = $_.Name
+                sha256 = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+              }
+            }
+          )
+        }
+        $manifest | ConvertTo-Json -Depth 5 | Set-Content release/release-manifest.json
+
+    - name: Upload release bundle
+      uses: actions/upload-artifact@v4
+      with:
+        name: release-assets
+        path: release/*
+        if-no-files-found: error

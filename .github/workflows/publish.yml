@@ -1,0 +1,147 @@
+name: publish release
+
+on:
+  workflow_run:
+    workflows: ["main build"]
+    types: [completed]
+    branches: [master]
+  workflow_dispatch:
+    inputs:
+      source_run_id:
+        description: Successful main build run ID containing the release-assets artifact
+        required: true
+        type: string
+  workflow_call:
+    inputs:
+      source_run_id:
+        description: Successful main build run ID containing the release-assets artifact
+        required: true
+        type: string
+    secrets:
+      VSCE_PAT:
+        required: true
+      NUGET_API_KEY:
+        required: true
+      SAGEFS_NVIM_PAT:
+        required: false
+
+jobs:
+  publish:
+    if: |
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_branch == 'master') ||
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'workflow_call'
+    runs-on: windows-latest
+    concurrency:
+      group: ${{ github.event_name == 'workflow_call' && format('publish-{0}', inputs.source_run_id) || github.event_name == 'workflow_dispatch' && format('publish-{0}', github.event.inputs.source_run_id) || format('publish-{0}', github.event.workflow_run.id) }}
+      cancel-in-progress: false
+    permissions:
+      actions: read
+      contents: write
+    env:
+      SOURCE_RUN_ID: ${{ github.event_name == 'workflow_call' && inputs.source_run_id || github.event_name == 'workflow_dispatch' && github.event.inputs.source_run_id || github.event.workflow_run.id }}
+      VS_MARKETPLACE_PUBLISHER: willehrendreich
+
+    steps:
+    - name: Install Dotnet
+      uses: actions/setup-dotnet@v5
+      with:
+        dotnet-version: |
+          10.0.x
+          8.0.x
+        dotnet-quality: preview
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: 20
+
+    - name: Install marketplace CLIs
+      run: npm install -g @vscode/vsce tfx-cli
+
+    - name: Download release bundle
+      uses: actions/download-artifact@v4
+      with:
+        github-token: ${{ github.token }}
+        run-id: ${{ env.SOURCE_RUN_ID }}
+        name: release-assets
+        path: release
+
+    - name: Read release manifest
+      id: manifest
+      shell: pwsh
+      run: |
+        if (-not (Test-Path release/release-manifest.json)) { throw "release-manifest.json not found." }
+        $manifest = Get-Content release/release-manifest.json -Raw | ConvertFrom-Json
+        if (-not $manifest.version) { throw "Release manifest missing version." }
+        if (-not $manifest.sourceSha) { throw "Release manifest missing source SHA." }
+        "version=$($manifest.version)" >> $env:GITHUB_OUTPUT
+        "source_sha=$($manifest.sourceSha)" >> $env:GITHUB_OUTPUT
+
+    - name: Verify release bundle
+      shell: pwsh
+      run: |
+        $manifest = Get-Content release/release-manifest.json -Raw | ConvertFrom-Json
+        foreach ($file in $manifest.files) {
+          $path = Join-Path release $file.name
+          if (-not (Test-Path $path)) { throw "Missing artifact: $($file.name)" }
+          $actual = (Get-FileHash $path -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $file.sha256) { throw "Checksum mismatch for $($file.name)" }
+        }
+
+    - name: Publish VS Code extension to Marketplace
+      env:
+        VSCE_PAT: ${{ secrets.VSCE_PAT }}
+      run: |
+        npx @vscode/vsce publish --packagePath "release/sagefs-vscode-${{ steps.manifest.outputs.version }}.vsix" --skip-duplicate
+
+    - name: Publish Visual Studio extension to Marketplace
+      env:
+        VSCE_PAT: ${{ secrets.VSCE_PAT }}
+      run: |
+        npx tfx-cli extension publish --publisher $env:VS_MARKETPLACE_PUBLISHER --vsix "release/sagefs-visualstudio-${{ steps.manifest.outputs.version }}.vsix" --token $env:VSCE_PAT --no-prompt
+
+    - name: Push to NuGet
+      run: dotnet nuget push "release/SageFs.${{ steps.manifest.outputs.version }}.nupkg" --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
+
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: v${{ steps.manifest.outputs.version }}
+        name: v${{ steps.manifest.outputs.version }}
+        target_commitish: ${{ steps.manifest.outputs.source_sha }}
+        files: |
+          release/*.nupkg
+          release/*.vsix
+        body: |
+          ## SageFs v${{ steps.manifest.outputs.version }}
+
+          ### Downloads
+          - **NuGet**: `dotnet tool install --global SageFs`
+          - **VS Code Extension** (`sagefs-vscode-*.vsix`): Install via `code --install-extension sagefs-vscode-${{ steps.manifest.outputs.version }}.vsix`
+          - **Visual Studio Extension** (`sagefs-visualstudio-*.vsix`): Double-click to install in Visual Studio 2022+
+          - **Neovim**: See [sagefs.nvim](https://github.com/WillEhrendreich/sagefs.nvim)
+        make_latest: true
+
+    - name: Sync sagefs.nvim version tag
+      env:
+        NVIM_PAT: ${{ secrets.SAGEFS_NVIM_PAT }}
+      if: env.NVIM_PAT != ''
+      continue-on-error: true
+      shell: pwsh
+      run: |
+        $tmpDir = New-Item -ItemType Directory -Path (Join-Path $env:TEMP "sagefs-nvim-$(Get-Random)")
+        Push-Location $tmpDir
+        git clone --depth 1 "https://x-access-token:$($env:NVIM_PAT)@github.com/WillEhrendreich/sagefs.nvim.git" .
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+        Set-Content -Path "lua/sagefs/version.lua" -Value "return '${{ steps.manifest.outputs.version }}'"
+        git add lua/sagefs/version.lua
+        $changed = git diff --cached --quiet; if ($LASTEXITCODE -ne 0) { git commit -m "chore: sync version to v${{ steps.manifest.outputs.version }}" }
+        git push origin main
+        git tag -f "v${{ steps.manifest.outputs.version }}" -m "Release v${{ steps.manifest.outputs.version }} (synced from SageFs)"
+        git push origin "v${{ steps.manifest.outputs.version }}" --force
+        Pop-Location
