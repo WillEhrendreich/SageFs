@@ -12,7 +12,7 @@ internal class SageFsExtension : Extension
   public override ExtensionConfiguration ExtensionConfiguration => new()
   {
     Metadata = new(
-      id: "SageFs.VisualStudio.a3f9c1e2-7b5d-4e8a-9c1f-2d3e4f5a6b7c",
+      id: "sagefs-visualstudio",
       version: this.ExtensionAssemblyVersion,
       publisherName: "WillEhrendreich",
       displayName: "SageFs — F# Live Development",
