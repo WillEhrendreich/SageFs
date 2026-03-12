@@ -84,6 +84,39 @@ let healthFormatTests =
       DaemonHealth.healthLabel OverallHealth.Healthy |> Expect.equal "healthy" "Healthy"
       DaemonHealth.healthLabel OverallHealth.Degraded |> Expect.equal "degraded" "Degraded"
       DaemonHealth.healthLabel OverallHealth.Unhealthy |> Expect.equal "unhealthy" "Unhealthy"
+
+    testCase "diagnostic summary explains missing sessions" <| fun _ ->
+      let snapshot = {
+        DaemonPid = 4321
+        DaemonPort = 37749
+        Uptime = TimeSpan.FromMinutes 1.0
+        Version = "0.5.761"
+        SessionSummaries = []
+        LiveTestingSummary = None
+        MemoryMB = 64
+      }
+      let text = DaemonHealth.diagnosticSummary snapshot
+      text |> Expect.equal "should explain the missing session state" "No sessions registered with the daemon."
+
+    testCase "diagnostic summary includes faulted projects and status breakdown" <| fun _ ->
+      let snapshot = {
+        DaemonPid = 4321
+        DaemonPort = 37749
+        Uptime = TimeSpan.FromMinutes 10.0
+        Version = "0.5.761"
+        SessionSummaries = [
+          { SessionId = "ready"; ProjectName = "ReadyProject"; Status = SessionHealthStatus.Ready; EvalCount = 5; LastActivity = DateTimeOffset.UtcNow }
+          { SessionId = "faulted"; ProjectName = "FaultedProject"; Status = SessionHealthStatus.Faulted; EvalCount = 0; LastActivity = DateTimeOffset.UtcNow }
+          { SessionId = "warming"; ProjectName = "WarmProject"; Status = SessionHealthStatus.WarmingUp; EvalCount = 0; LastActivity = DateTimeOffset.UtcNow }
+        ]
+        LiveTestingSummary = None
+        MemoryMB = 64
+      }
+      let text = DaemonHealth.diagnosticSummary snapshot
+      text |> Expect.stringContains "should mention the faulted project" "FaultedProject"
+      text |> Expect.stringContains "should include the ready count" "Ready=1"
+      text |> Expect.stringContains "should include the faulted count" "Faulted=1"
+      text |> Expect.stringContains "should include the warming up count" "Warming Up=1"
   ]
 
 [<Tests>]

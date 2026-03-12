@@ -91,5 +91,17 @@ let tests =
       (List.head result).CellId |> Expect.equal "CellId should match cell that produces 'myTests'" 42
     }
 
+    test "resolveTestLocations does not infer CellId from DisplayName text alone" {
+      let graph = {
+        Cells = Map.ofList [ 17, { Id = 17; Source = "let validationTests = testList ..."; Produces = ["validation"]; Consumes = [] } ]
+        Edges = []
+      }
+      let testCase =
+        { makeTest "MyModule.tests/should reject invalid input" (TestOrigin.SourceMapped ("/src/MyModule.fs", 27)) with
+            DisplayName = "validation should reject invalid input" }
+      let result = resolveTestLocations graph [ testCase ]
+      (List.head result).CellId |> Expect.equal "DisplayName text should not drive CellId resolution" -1
+    }
+
   ]
 

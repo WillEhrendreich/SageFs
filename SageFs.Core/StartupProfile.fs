@@ -6,6 +6,11 @@ open System.IO
 /// Searches for .SageFs/init.fsx or .SageFsrc in the working directory.
 module StartupProfile =
 
+  type ApplyResult =
+    | NotFound
+    | Loaded of string
+    | Failed of string * string
+
   /// Locations to search for init scripts, in priority order.
   let discoverInitScript (workingDir: string) : string option =
     let candidates = [
@@ -28,3 +33,20 @@ module StartupProfile =
       Result.Ok scriptPath
     with ex ->
       Result.Error (sprintf "Startup profile %s failed: %s" scriptPath ex.Message)
+
+  let applyIfPresent
+    (workingDir: string)
+    (eval: string -> unit)
+    (logger: string -> unit)
+    : ApplyResult =
+    match discoverInitScript workingDir with
+    | None -> NotFound
+    | Some scriptPath ->
+      match evalInitScript eval logger scriptPath with
+      | Result.Ok path -> Loaded path
+      | Result.Error message -> Failed (scriptPath, message)
+
+  let loadedPath = function
+    | Loaded path -> Some path
+    | NotFound
+    | Failed _ -> None

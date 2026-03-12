@@ -137,6 +137,8 @@ let createServerCaptureFilter (tracker: McpServerTracker) =
 /// withErrorHandling catches this and swallows it (413 already committed).
 exception RequestTooLarge
 
+let private maxRequestBodyBytes = 4_194_304L
+
 /// Write a JSON response with the given status code.
 let jsonResponse (ctx: Microsoft.AspNetCore.Http.HttpContext) (statusCode: int) (data: obj) = task {
   ctx.Response.StatusCode <- statusCode
@@ -151,22 +153,23 @@ let rawJsonResponse (ctx: Microsoft.AspNetCore.Http.HttpContext) (json: string) 
   do! ctx.Response.Body.WriteAsync(System.Text.Encoding.UTF8.GetBytes(json))
 }
 
+let private writeRequestTooLargeResponse (ctx: Microsoft.AspNetCore.Http.HttpContext) = task {
+  do! jsonResponse ctx 413 {| success = false; error = "Request body too large" |}
+}
+
 /// Read JSON body and extract a string property, with fallback to raw body.
 let readJsonProp (ctx: Microsoft.AspNetCore.Http.HttpContext) (prop: string) = task {
-  let maxBodyBytes = 4_194_304L  // 4 MB hard limit
   match ctx.Request.ContentLength with
-  | contentLength when contentLength.HasValue && contentLength.Value > maxBodyBytes ->
-    ctx.Response.StatusCode <- 413
-    do! ctx.Response.Body.WriteAsync(System.Text.Encoding.UTF8.GetBytes """{"error":"Request body too large"}""")
+  | contentLength when contentLength.HasValue && contentLength.Value > maxRequestBodyBytes ->
+    do! writeRequestTooLargeResponse ctx
     raise RequestTooLarge
     return null  // unreachable — satisfies type checker
   | _ ->
   use reader = new System.IO.StreamReader(ctx.Request.Body)
   let! body = reader.ReadToEndAsync()
-  match int64 (System.Text.Encoding.UTF8.GetByteCount(body)) > maxBodyBytes with
+  match int64 (System.Text.Encoding.UTF8.GetByteCount(body)) > maxRequestBodyBytes with
   | true ->
-    ctx.Response.StatusCode <- 413
-    do! ctx.Response.Body.WriteAsync(System.Text.Encoding.UTF8.GetBytes """{"error":"Request body too large"}""")
+    do! writeRequestTooLargeResponse ctx
     raise RequestTooLarge
     return null  // unreachable
   | false ->
@@ -229,20 +232,17 @@ let errorHandlingMiddleware (ctx: Microsoft.AspNetCore.Http.HttpContext) (next: 
 
 /// Read and parse the request body as a JSON document.
 let readJsonBody (ctx: Microsoft.AspNetCore.Http.HttpContext) = task {
-  let maxBodyBytes = 4_194_304L  // 4 MB hard limit
   match ctx.Request.ContentLength with
-  | contentLength when contentLength.HasValue && contentLength.Value > maxBodyBytes ->
-    ctx.Response.StatusCode <- 413
-    do! ctx.Response.Body.WriteAsync(System.Text.Encoding.UTF8.GetBytes """{"error":"Request body too large"}""")
+  | contentLength when contentLength.HasValue && contentLength.Value > maxRequestBodyBytes ->
+    do! writeRequestTooLargeResponse ctx
     raise RequestTooLarge
     return System.Text.Json.JsonDocument.Parse("null")  // unreachable
   | _ ->
   use reader = new System.IO.StreamReader(ctx.Request.Body)
   let! body = reader.ReadToEndAsync()
-  match int64 (System.Text.Encoding.UTF8.GetByteCount(body)) > maxBodyBytes with
+  match int64 (System.Text.Encoding.UTF8.GetByteCount(body)) > maxRequestBodyBytes with
   | true ->
-    ctx.Response.StatusCode <- 413
-    do! ctx.Response.Body.WriteAsync(System.Text.Encoding.UTF8.GetBytes """{"error":"Request body too large"}""")
+    do! writeRequestTooLargeResponse ctx
     raise RequestTooLarge
     return System.Text.Json.JsonDocument.Parse("null")  // unreachable
   | false ->
@@ -1144,6 +1144,14 @@ let mapHealthRoutes (app: WebApplication) (rctx: RouteContext) =
   app.MapGet("/health", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
     task {
       let! allSessions = rctx.Config.SessionOps.GetAllSessions()
+      let toSessionHealthStatus = function
+        | SageFs.WorkerProtocol.SessionStatus.Ready -> SageFs.Features.SessionHealthStatus.Ready
+        | SageFs.WorkerProtocol.SessionStatus.Evaluating
+        | SageFs.WorkerProtocol.SessionStatus.Building _ -> SageFs.Features.SessionHealthStatus.Evaluating
+        | SageFs.WorkerProtocol.SessionStatus.Starting
+        | SageFs.WorkerProtocol.SessionStatus.Restarting -> SageFs.Features.SessionHealthStatus.WarmingUp
+        | SageFs.WorkerProtocol.SessionStatus.Faulted -> SageFs.Features.SessionHealthStatus.Faulted
+        | SageFs.WorkerProtocol.SessionStatus.Stopped -> SageFs.Features.SessionHealthStatus.Stopped
       let! sessionResult = task {
         match allSessions |> Seq.tryHead with
         | None -> return Ok "no session"
@@ -1175,13 +1183,52 @@ let mapHealthRoutes (app: WebApplication) (rctx: RouteContext) =
         |> Option.ofObj
         |> Option.map (fun v -> v.ToString())
         |> Option.defaultValue "unknown"
+      let daemonProcess = System.Diagnostics.Process.GetCurrentProcess()
+      let sessionPairs =
+        allSessions
+        |> Seq.map (fun sess ->
+          let projectName =
+            sess.Projects
+            |> List.tryHead
+            |> Option.map System.IO.Path.GetFileName
+            |> Option.defaultValue (System.IO.Path.GetFileName sess.WorkingDirectory)
+          let lastActivity = System.DateTimeOffset(sess.LastActivity.ToUniversalTime())
+          let summary : SageFs.Features.SessionHealthSummary =
+            { SessionId = SageFs.WorkerProtocol.SessionId.value sess.Id
+              ProjectName = projectName
+              Status = toSessionHealthStatus sess.Status
+              EvalCount = 0
+              LastActivity = lastActivity }
+          let payload =
+            {| id = SageFs.WorkerProtocol.SessionId.value sess.Id
+               projectName = projectName
+               status = SageFs.WorkerProtocol.SessionStatus.label sess.Status
+               workingDirectory = sess.WorkingDirectory
+               workerPid = sess.WorkerPid
+               lastActivity = lastActivity |}
+          summary, payload)
+        |> Seq.toArray
+      let sessionSummaries = sessionPairs |> Array.map fst |> Array.toList
+      let sessionStates = sessionPairs |> Array.map snd
+      let healthSnapshot : SageFs.Features.HealthSnapshot =
+        { DaemonPid = Environment.ProcessId
+          DaemonPort = 0
+          Uptime = DateTime.UtcNow - daemonProcess.StartTime.ToUniversalTime()
+          Version = version
+          SessionSummaries = sessionSummaries
+          LiveTestingSummary = None
+          MemoryMB = int (daemonProcess.WorkingSet64 / 1024L / 1024L) }
+      let diagnosticSummary = SageFs.Features.DaemonHealth.diagnosticSummary healthSnapshot
       do! jsonResponse ctx 200
-            {| healthy = healthy
-               status = sessionStatus
-               error = errorJson
-               version = version
-               apiVersion = SageFs.EndpointContracts.apiVersion
-               features = [ "live-testing"; "coverage-intel"; "impact-forecast"; "action-prioritizer"; "mark-all-stale"; "time-travel" ] |}
+             {| healthy = healthy
+                status = sessionStatus
+                error = errorJson
+                version = version
+                apiVersion = SageFs.EndpointContracts.apiVersion
+                features = [ "live-testing"; "coverage-intel"; "impact-forecast"; "action-prioritizer"; "mark-all-stale"; "time-travel" ]
+                sessionCount = sessionStates.Length
+                sessionStates = sessionStates
+                diagnosticSummary = diagnosticSummary |}
     } :> Task
   ) |> ignore
   app.MapGet("/diag/threadpool", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->

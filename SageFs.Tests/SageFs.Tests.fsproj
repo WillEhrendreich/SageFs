@@ -16,6 +16,7 @@
         <Compile Include="PushEventTests.fs" />
         <Compile Include="McpAdapterTests.fs" />
         <Compile Include="McpServerE2ETests.fs" />
+        <Compile Include="McpServerOversizedRequestTests.fs" />
         <Compile Include="McpServerIntegrationTests.fs" />
         <Compile Include="McpLlmInteropTests.fs" />
         <Compile Include="SharedSageFsFixture.fs" />
@@ -86,8 +87,12 @@
         <Compile Include="PluginContractTests.fs" />
         <Compile Include="ProjectLoadingTests.fs" />
         <Compile Include="McpWireProtocolTests.fs" />
-        <Compile Include="HttpApiIntegrationTests.fs" />
-        <Compile Include="WarmupContextTests.fs" />
+         <Compile Include="HttpApiIntegrationTests.fs" />
+         <Compile Include="WarmupContextTests.fs" />
+         <Compile Include="WarmupReplayCacheTests.fs" />
+         <Compile Include="WarmupInitBoundaryTests.fs" />
+         <Compile Include="WarmupBatchedOpenTests.fs" />
+         <Compile Include="WarmupProgressContractTests.fs" />
         <Compile Include="VscodeExtensionTests.fs" />
         <Compile Include="LiveTestingTestHelpers.fs" />
         <Compile Include="LiveTestingCoreTests.fs" />

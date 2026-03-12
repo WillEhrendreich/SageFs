@@ -1,6 +1,7 @@
 namespace SageFs.VisualStudio.Core
 
 open System
+open System.Text.Json
 
 /// Result of evaluating F# code via the daemon.
 type EvalResult =
@@ -132,12 +133,44 @@ type NotebookCellInfo =
     Deps: int list
     Bindings: string list }
 
+/// A completion request sent to the /dashboard/completions endpoint.
+/// Session-awareness remains optional: when a working directory is present, the
+/// daemon can route the request through the matching active session; otherwise it
+/// falls back to the daemon's ambient active session.
+type CompletionRequest =
+  { Code: string
+    CursorPosition: int
+    WorkingDirectory: string option }
+  member this.IsSessionAware =
+    this.WorkingDirectory
+    |> Option.isSome
+
+[<RequireQualifiedAccess>]
+module CompletionRequest =
+  let private normalizeWorkingDirectory (workingDirectory: string) =
+    match workingDirectory with
+    | null -> None
+    | value when String.IsNullOrWhiteSpace value -> None
+    | value -> Some value
+
+  let create (code: string) (cursorPosition: int) (workingDirectory: string) =
+    { Code = code
+      CursorPosition = cursorPosition
+      WorkingDirectory = normalizeWorkingDirectory workingDirectory }
+
+  let toJson (request: CompletionRequest) =
+    match request.WorkingDirectory with
+    | Some workingDirectory ->
+        JsonSerializer.Serialize
+          {| code = request.Code
+             cursor_position = request.CursorPosition
+             working_directory = workingDirectory |}
+    | None ->
+        JsonSerializer.Serialize
+          {| code = request.Code
+             cursor_position = request.CursorPosition |}
+
 /// A single code completion item returned by the /dashboard/completions endpoint.
-/// Spike analysis (Sprint 8 Task D): The endpoint accepts code and cursor_position
-/// and POSTs to the dashboard server. Based on the API contract, it appears to route
-/// through the active FSI session for context-aware completions, but does not accept
-/// a session ID explicitly — it relies on the active session from the daemon.
-/// TODO: Sprint 9 — verify session-awareness with integration test, then implement IAsyncCompletionSourceProvider.
 type CompletionItem =
   { Label: string
     Kind: string

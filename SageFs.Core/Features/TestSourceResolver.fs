@@ -10,15 +10,16 @@ open SageFs.Features.CellDependencyGraph
 // is available and those tests are silently skipped.
 //
 // CellId resolution is best-effort: a cell "produces" short F# val names, which may
-// appear as substrings of a test's FullName or DisplayName. When no cell match is
-// found, CellId is -1 (sentinel for "unknown cell").
+// appear as substrings of a test's FullName. DisplayName is intentionally excluded
+// because it is a user-facing label, not a stable source identity. When no cell match
+// is found, CellId is -1 (sentinel for "unknown cell").
 //
 // TODO: When CellInfo is extended with FilePath + StartLine (e.g., from FCS symbol
 // tables), use graph.Cells directly for location data and remove the TestOrigin fallback.
 
 /// Attempt to resolve file/line positions for a list of tests.
 /// Uses TestCase.Origin for source location when available (SourceMapped tests only).
-/// CellId is resolved by matching test names against cell Produces lists; -1 if unresolvable.
+/// CellId is resolved by matching test FullName values against cell Produces lists; -1 if unresolvable.
 /// Returns only tests for which location data is available — silently skips ReflectionOnly tests.
 let resolveTestLocations
     (graph: CellGraph)
@@ -27,8 +28,7 @@ let resolveTestLocations
   let findCellId (tc: TestCase) =
     graph.Cells
     |> Map.tryPick (fun cellId info ->
-      match info.Produces |> List.exists (fun binding ->
-        tc.FullName.Contains(binding) || tc.DisplayName.Contains(binding)) with
+      match info.Produces |> List.exists (fun binding -> tc.FullName.Contains binding) with
       | true -> Some cellId
       | false -> None)
     |> Option.defaultValue -1

@@ -201,6 +201,20 @@ module SessionManager =
       return WorkerResponse.WorkerError (SageFsError.WorkerSpawnFailed "Session is still starting up")
     }
 
+  let private hasValidReadyProxy (proxy: SessionProxy) =
+    not (isNull (box proxy))
+
+  let private hasValidReadyTransport (baseUrl: string) (proxy: SessionProxy) =
+    not (String.IsNullOrWhiteSpace baseUrl)
+    && hasValidReadyProxy proxy
+
+  let private describeInvalidReadyTransport (transportKind: string) (baseUrl: string) (proxy: SessionProxy) =
+    match String.IsNullOrWhiteSpace baseUrl, hasValidReadyProxy proxy with
+    | true, false -> sprintf "%s reported ready without a valid base URL or proxy" transportKind
+    | true, true -> sprintf "%s reported ready without a valid base URL" transportKind
+    | false, false -> sprintf "%s reported ready without a valid proxy" transportKind
+    | false, true -> sprintf "%s reported ready with a valid transport" transportKind
+
   /// Start a worker OS process. Returns immediately with the Process
   /// (does NOT wait for the worker to report its port).
   let startWorkerProcess
@@ -261,23 +275,29 @@ module SessionManager =
           let! line = proc.StandardOutput.ReadLineAsync(linkedCt).AsTask() |> Async.AwaitTask
           match isNull line with
           | true ->
-            failwith "Worker process exited before reporting port"
+            let workerPid = proc.Id
+            try proc.Dispose() with :? ObjectDisposedException -> ()
+            inbox.Post(
+              SessionCommand.WorkerSpawnFailed(
+                sessionId,
+                workerPid,
+                "Worker process exited before reporting port"))
+            found <- Some ""
           | false ->
-          match line.StartsWith("WARMUP_PROGRESS=", System.StringComparison.Ordinal) with
-          | true ->
-            let payload = line.Substring("WARMUP_PROGRESS=".Length)
-            inbox.Post(SessionCommand.WorkerWarmupProgress(sessionId, payload))
-          | false ->
-          match line.StartsWith("WORKER_PORT=", System.StringComparison.Ordinal) with
-          | true ->
-            found <- Some (line.Substring("WORKER_PORT=".Length))
-          | false -> ()
+            match line.StartsWith("WARMUP_PROGRESS=", System.StringComparison.Ordinal) with
+            | true ->
+              let payload = line.Substring("WARMUP_PROGRESS=".Length)
+              inbox.Post(SessionCommand.WorkerWarmupProgress(sessionId, payload))
+            | false ->
+              match line.StartsWith("WORKER_PORT=", System.StringComparison.Ordinal) with
+              | true ->
+                found <- Some (line.Substring("WORKER_PORT=".Length))
+              | false -> ()
         match found with
-        | Some baseUrl ->
+        | Some baseUrl when baseUrl.Length > 0 ->
           let proxy = HttpWorkerClient.httpProxy baseUrl
           inbox.Post(SessionCommand.WorkerReady(sessionId, proc.Id, baseUrl, proxy))
-        | None ->
-          failwith "Worker process exited before reporting port"
+        | _ -> ()
       with
       | :? OperationCanceledException when not ct.IsCancellationRequested ->
         // Linked CTS fired: per-session startup timeout, NOT daemon shutdown.
@@ -404,23 +424,29 @@ module SessionManager =
           let! line = proc.StandardOutput.ReadLineAsync(linkedCt).AsTask() |> Async.AwaitTask
           match isNull line with
           | true ->
-            failwith "Standby worker exited before reporting port"
+            let workerPid = proc.Id
+            try proc.Dispose() with :? ObjectDisposedException -> ()
+            inbox.Post(
+              SessionCommand.StandbySpawnFailed(
+                key,
+                workerPid,
+                "Standby worker exited before reporting port"))
+            found <- Some ""
           | false ->
-          match line.StartsWith("WARMUP_PROGRESS=", System.StringComparison.Ordinal) with
-          | true ->
-            let payload = line.Substring("WARMUP_PROGRESS=".Length)
-            inbox.Post(SessionCommand.StandbyProgress(key, payload))
-          | false ->
-          match line.StartsWith("WORKER_PORT=", System.StringComparison.Ordinal) with
-          | true ->
-            found <- Some (line.Substring("WORKER_PORT=".Length))
-          | false -> ()
+            match line.StartsWith("WARMUP_PROGRESS=", System.StringComparison.Ordinal) with
+            | true ->
+              let payload = line.Substring("WARMUP_PROGRESS=".Length)
+              inbox.Post(SessionCommand.StandbyProgress(key, payload))
+            | false ->
+              match line.StartsWith("WORKER_PORT=", System.StringComparison.Ordinal) with
+              | true ->
+                found <- Some (line.Substring("WORKER_PORT=".Length))
+              | false -> ()
         match found with
-        | Some baseUrl ->
+        | Some baseUrl when baseUrl.Length > 0 ->
           let proxy = HttpWorkerClient.httpProxy baseUrl
           inbox.Post(SessionCommand.StandbyReady(key, proc.Id, baseUrl, proxy))
-        | None ->
-          failwith "Standby worker exited before reporting port"
+        | _ -> ()
       with
       | :? OperationCanceledException when not ct.IsCancellationRequested ->
         // Linked CTS fired: per-standby startup timeout, NOT daemon shutdown.
@@ -567,7 +593,13 @@ module SessionManager =
           | Some session ->
             let key = StandbyKey.fromSession session.Projects session.WorkingDir session.AutoOpenNamespaces
             let standby = PoolState.getStandby key state.Pool
-            match StandbyPool.decideRestart rebuild standby with
+            let restartStandby =
+              standby
+              |> Option.filter (fun candidate ->
+                candidate.State = StandbyState.Ready
+                && not (String.IsNullOrWhiteSpace candidate.BaseUrl)
+                && (candidate.Proxy |> Option.exists hasValidReadyProxy))
+            match StandbyPool.decideRestart rebuild restartStandby with
             | RestartDecision.SwapStandby readyStandby ->
               // Fast path: swap the warm standby in
               match isNull span with
@@ -589,10 +621,7 @@ module SessionManager =
               let swapped = {
                 Info = info
                 Process = readyStandby.Process
-                Proxy =
-                  match readyStandby.Proxy with
-                  | Some p -> p
-                  | None -> failwith "SwapStandby with no proxy"
+                Proxy = readyStandby.Proxy |> Option.defaultValue pendingProxy
                 WorkerBaseUrl = readyStandby.BaseUrl
                 Projects = session.Projects
                 WorkingDir = session.WorkingDir
@@ -715,69 +744,81 @@ module SessionManager =
         | SessionCommand.WorkerReady(id, _workerPid, baseUrl, proxy) ->
           match ManagerState.tryGetSession id state with
           | Some session ->
-            let updated =
-              { session with Proxy = proxy; WorkerBaseUrl = baseUrl }
-            let newState =
-              { ManagerState.addSession id updated state with
-                  WarmupProgress = Map.remove id state.WarmupProgress }
-            // Trigger standby warmup for this session's config
-            let key = StandbyKey.fromSession session.Projects session.WorkingDir session.AutoOpenNamespaces
-            match state.Pool.Enabled && (PoolState.getStandby key state.Pool |> Option.isNone) with
-            | true -> inbox.Post(SessionCommand.WarmStandby key)
-            | false -> ()
-            onStandbyProgressChanged ()
-            onSessionReady id
-            // Poll worker until it reports Ready, then update snapshot.
-            // Uses while loop with CT check to stop cleanly on daemon shutdown
-            // or when the session terminates before becoming Ready.
-            Async.Start(async {
-              let mutable done' = false
-              while not done' && not ct.IsCancellationRequested do
-                do! Async.Sleep 1000
-                try
-                  let rid = Guid.NewGuid().ToString("N").[..7]
-                  let! resp = proxy (WorkerMessage.GetStatus rid)
-                  match resp with
-                  | WorkerResponse.StatusResult(_, snapshot) ->
-                    match snapshot.Status with
-                    | SessionStatus.Ready ->
-                      inbox.Post(SessionCommand.UpdateSessionStatus(id, SessionStatus.Ready))
-                      done' <- true
-                    | SessionStatus.Faulted
-                    | SessionStatus.Stopped -> done' <- true
+            match hasValidReadyTransport baseUrl proxy with
+            | false ->
+              let msg = describeInvalidReadyTransport "Worker" baseUrl proxy
+              do! runtime.StopWorker session
+              let faulted = faultedTombstone session
+              let newState =
+                { ManagerState.addSession id faulted state with
+                    WarmupProgress = Map.remove id state.WarmupProgress }
+              onSessionReady id
+              onSessionFaulted id msg
+              return! loop newState
+            | true ->
+              let updated =
+                { session with Proxy = proxy; WorkerBaseUrl = baseUrl }
+              let newState =
+                { ManagerState.addSession id updated state with
+                    WarmupProgress = Map.remove id state.WarmupProgress }
+              // Trigger standby warmup for this session's config
+              let key = StandbyKey.fromSession session.Projects session.WorkingDir session.AutoOpenNamespaces
+              match state.Pool.Enabled && (PoolState.getStandby key state.Pool |> Option.isNone) with
+              | true -> inbox.Post(SessionCommand.WarmStandby key)
+              | false -> ()
+              onStandbyProgressChanged ()
+              onSessionReady id
+              // Poll worker until it reports Ready, then update snapshot.
+              // Uses while loop with CT check to stop cleanly on daemon shutdown
+              // or when the session terminates before becoming Ready.
+              Async.Start(async {
+                let mutable done' = false
+                while not done' && not ct.IsCancellationRequested do
+                  do! Async.Sleep 1000
+                  try
+                    let rid = Guid.NewGuid().ToString("N").[..7]
+                    let! resp = proxy (WorkerMessage.GetStatus rid)
+                    match resp with
+                    | WorkerResponse.StatusResult(_, snapshot) ->
+                      match snapshot.Status with
+                      | SessionStatus.Ready ->
+                        inbox.Post(SessionCommand.UpdateSessionStatus(id, SessionStatus.Ready))
+                        done' <- true
+                      | SessionStatus.Faulted
+                      | SessionStatus.Stopped -> done' <- true
+                      | _ -> ()
                     | _ -> ()
+                  with ex ->
+                      Log.warn "[SessionManager] Worker ready poll transport error for %s: %s (%s)\n%s" (SessionId.value id) ex.Message (ex.GetType().Name) (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
+                      done' <- true  // Transport error — WorkerExited event handles cleanup
+              }, ct)
+              // Request initial test discovery from the worker
+              Async.Start(async {
+                try
+                  let rid = System.Guid.NewGuid().ToString("N")
+                  let! resp = proxy (WorkerMessage.GetTestDiscovery rid)
+                  match resp with
+                  | WorkerResponse.InitialTestDiscovery(tests, providers) ->
+                    inbox.Post(SessionCommand.WorkerTestDiscovery(id, tests, providers))
                   | _ -> ()
                 with ex ->
-                    Log.warn "[SessionManager] Worker ready poll transport error for %s: %s (%s)\n%s" (SessionId.value id) ex.Message (ex.GetType().Name) (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
-                    done' <- true  // Transport error — WorkerExited event handles cleanup
-            }, ct)
-            // Request initial test discovery from the worker
-            Async.Start(async {
-              try
-                let rid = System.Guid.NewGuid().ToString("N")
-                let! resp = proxy (WorkerMessage.GetTestDiscovery rid)
-                match resp with
-                | WorkerResponse.InitialTestDiscovery(tests, providers) ->
-                  inbox.Post(SessionCommand.WorkerTestDiscovery(id, tests, providers))
-                | _ -> ()
-              with ex ->
-                Instrumentation.elmloopErrors.Add(1L, System.Collections.Generic.KeyValuePair("phase", "test_discovery" :> obj))
-                Log.error "[SessionManager] Test discovery failed for %s: %s\n%s" (SessionId.value id) ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
-            }, ct)
-            // Fetch instrumentation maps from the worker
-            Async.Start(async {
-              try
-                let rid = System.Guid.NewGuid().ToString("N")
-                let! resp = proxy (WorkerMessage.GetInstrumentationMaps rid)
-                match resp with
-                | WorkerResponse.InstrumentationMapsResult(_, maps) when not (Array.isEmpty maps) ->
-                  onInstrumentationMaps id maps
-                | _ -> ()
-              with ex ->
-                Instrumentation.elmloopErrors.Add(1L, System.Collections.Generic.KeyValuePair("phase", "instrumentation_maps" :> obj))
-                Log.error "[SessionManager] Instrumentation maps fetch failed for %s: %s\n%s" (SessionId.value id) ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
-            }, ct)
-            return! loop newState
+                  Instrumentation.elmloopErrors.Add(1L, System.Collections.Generic.KeyValuePair("phase", "test_discovery" :> obj))
+                  Log.error "[SessionManager] Test discovery failed for %s: %s\n%s" (SessionId.value id) ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
+              }, ct)
+              // Fetch instrumentation maps from the worker
+              Async.Start(async {
+                try
+                  let rid = System.Guid.NewGuid().ToString("N")
+                  let! resp = proxy (WorkerMessage.GetInstrumentationMaps rid)
+                  match resp with
+                  | WorkerResponse.InstrumentationMapsResult(_, maps) when not (Array.isEmpty maps) ->
+                    onInstrumentationMaps id maps
+                  | _ -> ()
+                with ex ->
+                  Instrumentation.elmloopErrors.Add(1L, System.Collections.Generic.KeyValuePair("phase", "instrumentation_maps" :> obj))
+                  Log.error "[SessionManager] Instrumentation maps fetch failed for %s: %s\n%s" (SessionId.value id) ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
+              }, ct)
+              return! loop newState
           | None ->
             // Session was stopped before port discovery completed — ignore
             return! loop state
@@ -842,8 +883,10 @@ module SessionManager =
               | true -> ()
               Instrumentation.activeSessions.Add(-1L)
               Instrumentation.succeedSpan span
+              let tombstone = faultedTombstone session
+              let newState = ManagerState.addSession id tombstone state
+              onSessionReady id
               onSessionFaulted id (sprintf "Worker process exited with code %d (abandoned after max retries)" exitCode)
-              let newState = ManagerState.removeSession id state
               return! loop newState
             | SessionLifecycle.ExitOutcome.RestartAfter(delay, newRestartState) ->
               match isNull span with
@@ -892,7 +935,7 @@ module SessionManager =
               | true -> ()
               Instrumentation.succeedSpan recoverySpan
               return! loop newState
-            | Error _msg ->
+            | Error err ->
               // Spawn failed — treat as another crash
               let outcome =
                 SessionLifecycle.onWorkerExited
@@ -901,10 +944,19 @@ module SessionManager =
                   1
                   DateTime.UtcNow
               match outcome with
-              | SessionLifecycle.ExitOutcome.Abandoned _
-              | SessionLifecycle.ExitOutcome.Graceful ->
+              | SessionLifecycle.ExitOutcome.Abandoned _ ->
                 match isNull recoverySpan with
                 | false -> recoverySpan.SetTag("recovery.outcome", "abandoned") |> ignore
+                | true -> ()
+                Instrumentation.succeedSpan recoverySpan
+                let tombstone = faultedTombstone session
+                let newState = ManagerState.addSession id tombstone state
+                onSessionReady id
+                onSessionFaulted id (SageFsError.describe err)
+                return! loop newState
+              | SessionLifecycle.ExitOutcome.Graceful ->
+                match isNull recoverySpan with
+                | false -> recoverySpan.SetTag("recovery.outcome", "graceful") |> ignore
                 | true -> ()
                 Instrumentation.succeedSpan recoverySpan
                 let newState = ManagerState.removeSession id state
@@ -976,18 +1028,25 @@ module SessionManager =
         | SessionCommand.StandbyReady(key, _workerPid, baseUrl, proxy) ->
           match PoolState.getStandby key state.Pool with
           | Some standby when standby.State = StandbyState.Warming ->
-            let ready =
-              { standby with
-                  Proxy = Some proxy
-                  BaseUrl = baseUrl
-                  State = StandbyState.Ready
-                  WarmupProgress = None }
-            let newPool = PoolState.setStandby key ready state.Pool
-            let warmupMs = (DateTime.UtcNow - standby.CreatedAt).TotalMilliseconds
-            Instrumentation.standbyWarmupMs.Record(warmupMs)
-            Instrumentation.standbyPoolSize.Add(1L)
-            onStandbyProgressChanged ()
-            return! loop { state with Pool = newPool }
+            match hasValidReadyTransport baseUrl proxy with
+            | false ->
+              do! runtime.StopStandbyWorker standby
+              let newPool = PoolState.removeStandby key state.Pool
+              onStandbyProgressChanged ()
+              return! loop { state with Pool = newPool }
+            | true ->
+              let ready =
+                { standby with
+                    Proxy = Some proxy
+                    BaseUrl = baseUrl
+                    State = StandbyState.Ready
+                    WarmupProgress = None }
+              let newPool = PoolState.setStandby key ready state.Pool
+              let warmupMs = (DateTime.UtcNow - standby.CreatedAt).TotalMilliseconds
+              Instrumentation.standbyWarmupMs.Record(warmupMs)
+              Instrumentation.standbyPoolSize.Add(1L)
+              onStandbyProgressChanged ()
+              return! loop { state with Pool = newPool }
           | _ ->
             // Stale or unexpected — ignore
             return! loop state

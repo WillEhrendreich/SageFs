@@ -112,6 +112,7 @@
         <Compile Include="ElmLoop.fs" />
         <Compile Include="SessionDisplay.fs" />
         <Compile Include="WarmupContext.fs" />
+        <Compile Include="WarmupReplayCache.fs" />
         <Compile Include="SageFsEvent.fs" />
         <Compile Include="TestsPane.fs" />
         <Compile Include="SageFsApp.fs" />

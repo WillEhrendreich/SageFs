@@ -39,15 +39,16 @@ internal class SageFsExtension : Extension
   {
     base.InitializeServices(serviceCollection);
 
-    // Determine the daemon URL. Prefer any URL already written to daemon.json (e.g., from
-    // a previous OptionsApplier run or manual edit), falling back to the compiled default.
+    // Determine the daemon URL. Prefer the persisted port only when a daemon is
+    // actually running there; otherwise fall back to the live default daemon or keep
+    // the configured port for the next start.
     var existingUrl = TryReadDaemonUrl();
+    int daemonPort = Core.DaemonManager.resolveDiscoveryMcpPort(existingUrl);
+    var daemonUrl = $"http://localhost:{daemonPort}";
     var options = new Options.SageFsOptions
     {
-      DaemonUrl = existingUrl ?? $"http://localhost:{Core.Constants.DefaultMcpPort}"
+      DaemonUrl = daemonUrl
     };
-    int daemonPort = Options.SageFsOptions.ParsePort(options.DaemonUrl) ?? Core.Constants.DefaultMcpPort;
-    var daemonUrl = $"http://localhost:{daemonPort}";
 
     // Write daemon.json so the in-process MEF assembly (SageFs.VisualStudio.Editor)
     // can discover the URL without a direct project reference across TFM boundaries.

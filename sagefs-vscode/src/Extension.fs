@@ -21,6 +21,7 @@ module TestLens = SageFs.Vscode.TestCodeLensProvider
 module InlineDeco = SageFs.Vscode.InlineDecorations
 module FileAnno = SageFs.Vscode.FileAnnotationsListener
 module Blocks = SageFs.Vscode.CodeBlocks
+module Discovery = SageFs.Vscode.DaemonDiscovery
 
 open SageFs.Vscode.LiveTestingTypes
 open SageFs.Vscode.FeatureTypes
@@ -283,6 +284,12 @@ let onProcExit (proc: obj) (handler: int -> string -> unit) : unit = jsNative
 [<Emit("new Promise(function(resolve, reject) { require('child_process').execFile($0, $1, function(err, stdout, stderr) { if (err) reject(err); else resolve(stdout) }) })")>]
 let execFileAsync (cmd: string) (args: string array) : JS.Promise<string> = jsNative
 
+[<Emit("require('os').homedir()")>]
+let osHomeDir () : string = jsNative
+
+[<Emit("process.env.LOCALAPPDATA || ''")>]
+let localAppData () : string = jsNative
+
 [<Emit("require('fs').existsSync($0)")>]
 let fileExists (path: string) : bool = jsNative
 
@@ -315,6 +322,53 @@ let private trimTrailingSeparators (path: string) =
 
 let private combineWindowsPath (basePath: string) (child: string) =
   sprintf "%s\\%s" (trimTrailingSeparators basePath) child
+
+let private daemonJsonPaths () =
+  let homePath = combineWindowsPath (osHomeDir ()) ".SageFs\\daemon.json"
+  let localPath =
+    match System.String.IsNullOrWhiteSpace (localAppData ()) with
+    | true -> None
+    | false -> Some (combineWindowsPath (localAppData ()) "SageFs\\daemon.json")
+
+  homePath :: (localPath |> Option.toList)
+  |> List.distinct
+
+let private tryReadPersistedDaemonPort () =
+  daemonJsonPaths ()
+  |> List.tryPick (fun path ->
+    match fileExists path with
+    | false -> None
+    | true ->
+      try
+        readUtf8File path
+        |> Discovery.tryParseDaemonJsonMcpPort
+        |> Option.map (fun port -> port, path)
+      with _ ->
+        None)
+
+let private applyConfiguredPorts (c: Client.Client) =
+  let cfg = Workspace.getConfiguration "sagefs"
+
+  Client.applyConfiguredPorts
+    (cfg.get("mcpPort", Discovery.defaultMcpPort))
+    (cfg.get("dashboardPort", Discovery.deriveDashboardPort Discovery.defaultMcpPort))
+    c
+
+let private discoverDaemonPorts (c: Client.Client) =
+  promise {
+    let configured = applyConfiguredPorts c
+    let persistedPort = tryReadPersistedDaemonPort ()
+
+    match persistedPort with
+    | Some (port, path) when port <> configured.McpPort ->
+      c.log (sprintf "[info] using daemon discovery hint from %s (mcpPort=%d)" path port)
+    | _ -> ()
+
+    let candidates =
+      Discovery.candidateMcpPorts configured.McpPort (persistedPort |> Option.map fst)
+
+    return! Client.discoverDaemon candidates c
+  }
 
 // ── Helpers ────────────────────────────────────────────────────
 
@@ -676,6 +730,7 @@ let rec startDaemon () =
       | Some "Show Output" -> showOutputPanel ()
       | _ -> ()
     | Some c ->
+    let! _ = discoverDaemonPorts c
     let! running = Client.isRunning c
     match running with
     | true ->
@@ -694,17 +749,11 @@ let rec startDaemon () =
       | Some proj ->
         let out = getOutput ()
         out.show true
-        out.appendLine (sprintf "Starting SageFs daemon with %s..." proj)
+        out.appendLine (sprintf "Starting SageFs daemon with %s on mcpPort=%d..." proj c.mcpPort)
         daemonStderr <- ""
         let workDir = getWorkingDirectory () |> Option.defaultValue "."
-        let ext =
-          let i = proj.LastIndexOf('.')
-          if i >= 0 then proj.Substring(i) else ""
-        let flag =
-          match ext with
-          | ".sln" | ".slnx" -> "--sln"
-          | _ -> "--proj"
-        let proc = spawn "sagefs" [| flag; proj |] (createObj [
+        let startArgs = Discovery.buildDaemonStartArgs proj c.mcpPort
+        let proc = spawn "sagefs" startArgs (createObj [
           "cwd" ==> workDir; "detached" ==> true; "stdio" ==> [| box "ignore"; box "pipe"; box "pipe" |]; "shell" ==> true
         ])
         onProcError proc (fun msg ->
@@ -769,6 +818,7 @@ and ensureRunning () =
     match client with
     | None -> return false
     | Some c ->
+    let! _ = discoverDaemonPorts c
     let! running = Client.isRunning c
     if running then return true
     else
@@ -1314,30 +1364,36 @@ let switchProject () =
   }
 
 let openDashboard () =
-  match client with
-  | None -> ()
-  | Some c ->
-  let dashUrl = Client.dashboardUrl c
-  match dashboardPanel with
-  | Some panel ->
-    panel.reveal 1
-  | None ->
-    let panel =
-      Window.createWebviewPanel
-        "sagefsDashboard"
-        "SageFs Dashboard"
-        2  // ViewColumn.Beside
-        (createObj [ "enableScripts" ==> true ])
-    panel.webview.html <-
-      sprintf """<!DOCTYPE html>
+  promise {
+    match client with
+    | None -> ()
+    | Some c ->
+      let! _ = discoverDaemonPorts c
+      let dashUrl = Client.dashboardUrl c
+      let dashboardHtml =
+        sprintf """<!DOCTYPE html>
 <html style="height:100%%;margin:0;padding:0">
 <head><meta http-equiv="Content-Security-Policy" content="default-src 'none'; frame-src http://localhost:*; style-src 'unsafe-inline'"></head>
 <body style="height:100%%;margin:0;padding:0">
 <iframe src="%s" style="width:100%%;height:100%%;border:none"></iframe>
 </body>
 </html>""" dashUrl
-    panel.onDidDispose (fun () -> dashboardPanel <- None) |> ignore
-    dashboardPanel <- Some panel
+
+      match dashboardPanel with
+      | Some panel ->
+        panel.webview.html <- dashboardHtml
+        panel.reveal 1
+      | None ->
+        let panel =
+          Window.createWebviewPanel
+            "sagefsDashboard"
+            "SageFs Dashboard"
+            2  // ViewColumn.Beside
+            (createObj [ "enableScripts" ==> true ])
+        panel.webview.html <- dashboardHtml
+        panel.onDidDispose (fun () -> dashboardPanel <- None) |> ignore
+        dashboardPanel <- Some panel
+  }
 
 let evalAdvance () =
   promise {
@@ -1455,7 +1511,7 @@ let promptAutoStart () =
           [| "Start SageFs"; "Open Dashboard"; "Not Now" |]
       match choice with
       | Some "Start SageFs" -> do! startDaemon ()
-      | Some "Open Dashboard" -> openDashboard ()
+      | Some "Open Dashboard" -> do! openDashboard ()
       | _ -> ()
   }
 
@@ -1579,7 +1635,7 @@ let activate (context: ExtensionContext) =
       do! sleep 1000
       do! startDaemon ()
     } |> promiseIgnoreLog logToOutput)
-  reg "sagefs.openDashboard" (fun _ -> openDashboard ())
+  reg "sagefs.openDashboard" (fun _ -> openDashboard () |> promiseIgnoreLog logToOutput)
   reg "sagefs.switchProject" (fun _ -> switchProject () |> promiseIgnoreLog logToOutput)
   reg "sagefs.checkHealth" (fun _ -> checkHealth () |> promiseIgnoreLog logToOutput)
   reg "sagefs.openGettingStarted" (fun _ -> openGettingStarted () |> promiseIgnoreLog logToOutput)
@@ -2208,6 +2264,7 @@ let activate (context: ExtensionContext) =
 
   let checkAndConnect (c: Client.Client) =
     promise {
+      let! _ = discoverDaemonPorts c
       let! sysOpt = Client.getSystemStatus c
       match sysOpt with
       | None -> connectToRunningDaemon c
@@ -2235,10 +2292,11 @@ let activate (context: ExtensionContext) =
   let extVersion =
     try fieldString "version" context?extension?packageJSON |> Option.defaultValue "?"
     with _ -> "?"
-  out.appendLine (sprintf "SageFs v%s activating (mcpPort=%d, dashboardPort=%d, autoStart=%b)" extVersion mcpPort dashboardPort autoStart)
+  out.appendLine (sprintf "SageFs v%s activating (mcpPort=%d, dashboardPort=%d, autoStart=%b)" extVersion c.mcpPort c.dashboardPort autoStart)
   promise {
     try
       out.appendLine "Checking for running daemon..."
+      let! _ = discoverDaemonPorts c
       let! running = Client.isRunning c
       match running with
       | true ->
@@ -2279,7 +2337,12 @@ let activate (context: ExtensionContext) =
       match e.affectsConfiguration "sagefs" with
       | true ->
         let cfg = Workspace.getConfiguration "sagefs"
-        Client.updatePorts (cfg.get("mcpPort", 37749)) (cfg.get("dashboardPort", 37750)) c
+        Client.applyConfiguredPorts
+          (cfg.get("mcpPort", Discovery.defaultMcpPort))
+          (cfg.get("dashboardPort", Discovery.deriveDashboardPort Discovery.defaultMcpPort))
+          c
+        |> ignore
+        discoverDaemonPorts c |> promiseIgnoreLog logToOutput
         currentDensity <- densityFromString (cfg.get("density", "full"))
       | false -> ()
     )

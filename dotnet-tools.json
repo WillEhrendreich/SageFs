@@ -8,6 +8,6 @@
         "fsharp-analyzers"
       ],
       "rollForward": false
-    },
+    }
   }
 }

@@ -11,6 +11,7 @@ open SageFs.Features
 open SageFs.ProjectLoading
 open SageFs.Utils
 open SageFs.WarmUp
+open SageFs.WarmupReplayCache
 
 type FilePath = string
 
@@ -366,18 +367,223 @@ let extractOpensFromLines (lines: string[]) : string[] =
     | true ->
       let parts = trimmed.Split([|' '; '\t'|], StringSplitOptions.RemoveEmptyEntries)
       match parts.Length >= 2 with
-      | true -> Some (parts.[1].TrimEnd(';'))
-      | false -> None)
+       | true -> Some (parts.[1].TrimEnd(';'))
+       | false -> None)
   |> Array.distinct
+
+let internal resolveWarmupReplayPlan
+  (logger: ILogger)
+  (cachePath: string option)
+  (fingerprint: Fingerprint)
+  (discoverPlan: unit -> Async<ReplayPlan>) =
+  async {
+    match cachePath with
+    | Some path ->
+      match tryLoadValidPlan path fingerprint with
+      | Some plan ->
+        logger.LogInfo (sprintf "  Warmup replay cache hit: %s" path)
+        return plan
+      | None ->
+        logger.LogInfo "  Warmup replay cache miss — discovering warmup plan."
+        let! plan = discoverPlan()
+
+        match trySave path plan with
+        | Ok () ->
+          logger.LogDebug (sprintf "  Warmup replay cache updated: %s" path)
+        | Error message ->
+          logger.LogWarning (sprintf "  Could not save warmup replay cache: %s" message)
+
+        return plan
+    | None ->
+      return! discoverPlan()
+  }
+
+let private discoverWarmupReplayPlan
+  (logger: ILogger)
+  (originalSln: Solution)
+  (sln: Solution)
+  (autoOpenNamespaces: bool)
+  (ct: CancellationToken)
+  (fingerprint: Fingerprint) =
+  async {
+    let openedNamespaces = System.Collections.Generic.HashSet<string>()
+    let namesToOpen = System.Collections.Generic.List<string>()
+    let moduleNames = System.Collections.Generic.HashSet<string>()
+    let loadedAssemblies = System.Collections.Generic.List<LoadedAssembly>()
+    let stableAssemblyPaths =
+      originalSln.Projects
+      |> Seq.map (fun project -> project.ProjectFileName, project.TargetPath)
+      |> Map.ofSeq
+
+    let allFsFilesArr =
+      sourceFilesForSolution originalSln
+      |> List.toArray
+
+    let mutable fileCount = 0
+
+    let! fileResults =
+      allFsFilesArr
+      |> Array.map (fun fsFile -> async {
+        ct.ThrowIfCancellationRequested()
+
+        try
+          match File.Exists(fsFile) with
+          | true ->
+            let! sourceLines = File.ReadAllLinesAsync fsFile |> Async.AwaitTask
+            return Some (extractOpensFromLines sourceLines)
+          | false -> return None
+        with ex ->
+          logger.LogWarning (sprintf "Could not parse opens from %s: %s" fsFile ex.Message)
+          return None
+      })
+      |> fun tasks ->
+        let sem = new System.Threading.SemaphoreSlim(8)
+
+        tasks
+        |> Array.map (fun task -> async {
+          do! sem.WaitAsync() |> Async.AwaitTask
+
+          try
+            return! task
+          finally
+            sem.Release() |> ignore
+        })
+      |> Async.Parallel
+
+    for result in fileResults do
+      match result with
+      | Some opens ->
+        fileCount <- fileCount + 1
+
+        for nsName in opens do
+          match openedNamespaces.Add(nsName) with
+          | true ->
+            match autoOpenNamespaces with
+            | true -> namesToOpen.Add(nsName)
+            | false -> ()
+          | false -> ()
+      | None -> ()
+
+    logger.LogInfo "  Scanning assemblies for namespaces..."
+
+    let reflectionAlc =
+      new System.Runtime.Loader.AssemblyLoadContext(
+        "sagefs-reflection", isCollectible = true)
+
+    for project in sln.Projects do
+      ct.ThrowIfCancellationRequested()
+
+      try
+        match System.IO.File.Exists(project.TargetPath) with
+        | false ->
+          Log.warn "[Warmup] DLL not found: %s — run 'dotnet build' first." project.TargetPath
+        | true ->
+          let asm = reflectionAlc.LoadFromAssemblyPath(project.TargetPath)
+          let types =
+            try
+              asm.GetTypes()
+            with
+            | :? System.Reflection.ReflectionTypeLoadException as ex ->
+              ex.Types |> Array.filter (fun t -> not (isNull t))
+
+          let rootNamespaces =
+            types
+            |> Array.choose (fun t ->
+              match isNull t.Namespace with
+              | false ->
+                let parts = t.Namespace.Split('.')
+
+                match parts.Length > 0 with
+                | true -> Some parts.[0]
+                | false -> None
+              | true ->
+                None)
+            |> Array.distinct
+            |> Array.filter (fun ns ->
+              not (
+                ns.StartsWith("<", System.StringComparison.Ordinal)
+                || ns.StartsWith("$", System.StringComparison.Ordinal)
+              ))
+
+          let topLevelModules =
+            types
+            |> Array.filter (fun t ->
+              t.Namespace |> isNull
+              && (t.GetCustomAttributes(typeof<Microsoft.FSharp.Core.CompilationMappingAttribute>, false)
+                  |> Array.exists (fun attr ->
+                    let cma = attr :?> Microsoft.FSharp.Core.CompilationMappingAttribute
+                    cma.SourceConstructFlags = Microsoft.FSharp.Core.SourceConstructFlags.Module))
+              && not (
+                t.Name.StartsWith("<", System.StringComparison.Ordinal)
+                || t.Name.StartsWith("$", System.StringComparison.Ordinal)
+                || t.Name.Contains("@")
+                || t.Name.Contains("+")
+              )
+              && t.IsPublic
+              && t.GetCustomAttributes(typeof<Microsoft.FSharp.Core.RequireQualifiedAccessAttribute>, false).Length = 0)
+            |> Array.map (fun t ->
+              match t.Name.EndsWith("Module", System.StringComparison.Ordinal) with
+              | true -> t.Name.Substring(0, t.Name.Length - 6)
+              | false -> t.Name)
+            |> Array.distinct
+
+          for ns in rootNamespaces do
+            match openedNamespaces.Add(ns) with
+            | true ->
+              match autoOpenNamespaces with
+              | true -> namesToOpen.Add(ns)
+              | false -> ()
+            | false -> ()
+
+          for m in topLevelModules do
+            match openedNamespaces.Add(m) with
+            | true ->
+              match autoOpenNamespaces with
+              | true ->
+                namesToOpen.Add(m)
+                moduleNames.Add(m) |> ignore
+              | false -> ()
+            | false -> ()
+
+          let stableAssemblyPath =
+            stableAssemblyPaths
+            |> Map.tryFind project.ProjectFileName
+            |> Option.defaultValue project.TargetPath
+
+          loadedAssemblies.Add({
+            Name = asm.GetName().Name
+            Path = stableAssemblyPath
+            NamespaceCount = rootNamespaces.Length
+            ModuleCount = topLevelModules.Length
+          } : LoadedAssembly)
+      with ex ->
+        logger.LogWarning (sprintf "Could not analyze %s: %s" project.TargetPath ex.Message)
+
+    reflectionAlc.Unload()
+
+    let namePairs =
+      namesToOpen
+      |> Seq.map (fun name -> name, moduleNames.Contains(name))
+      |> Seq.toList
+
+    return
+      createPlan
+        fingerprint
+        fileCount
+        (Seq.toList loadedAssemblies)
+        namePairs
+  }
 
 /// Creates a fresh FSI session with warm-up: loads startup files and opens namespaces.
 /// The CancellationToken is passed through to FSI EvalInteraction calls so that
 /// warm-up can be cancelled if it takes too long (e.g. a stuck module initializer).
-let createFsiSession (logger: ILogger) (outStream: TextWriter) (useAsp: bool) (sln: Solution) (autoOpenNamespaces: bool) (hotReload: bool) (ct: CancellationToken) (onProgress: (int * int * string) -> unit) =
+let createFsiSession (logger: ILogger) (outStream: TextWriter) (useAsp: bool) (originalSln: Solution) (sln: Solution) (autoOpenNamespaces: bool) (hotReload: bool) (ct: CancellationToken) (onProgress: (int * int * string) -> unit) =
   async {
+    let warmupStartedAt = System.DateTimeOffset.UtcNow
     let sw = System.Diagnostics.Stopwatch.StartNew()
     let fsiConfig = FsiEvaluationSession.GetDefaultConfiguration()
     let args = solutionToFsiArgs logger useAsp hotReload sln
+    let replayArgs = solutionToFsiArgs logger useAsp hotReload originalSln
     let recorder = new TextWriterRecorder(outStream)
 
     logger.LogInfo (sprintf "  Creating FSI session with %d args..." (Array.length args))
@@ -420,156 +626,76 @@ let createFsiSession (logger: ILogger) (outStream: TextWriter) (useAsp: bool) (s
         logger.LogError (sprintf "  ❌ Startup file %s failed: %s" fileName ex.Message)
         raise ex
 
-    let openedNamespaces = System.Collections.Generic.HashSet<string>()
-    let namesToOpen = System.Collections.Generic.List<string>()
-    let moduleNames = System.Collections.Generic.HashSet<string>()
-    let loadedAssemblies = System.Collections.Generic.List<LoadedAssembly>()
+    let replayFingerprint =
+      buildFingerprintForSolution autoOpenNamespaces replayArgs originalSln
 
-    // Phase 1: Collect namespaces from source files
-    let allFsFiles =
-      sln.FsProjects
-      |> Seq.collect (fun proj -> proj.SourceFiles)
-      |> Seq.filter (fun f -> f.EndsWith(".fs", System.StringComparison.Ordinal) || f.EndsWith(".fsx", System.StringComparison.Ordinal))
-      |> Seq.distinct
+    let! replayPlan =
+      resolveWarmupReplayPlan
+        logger
+        (tryGetCachePath originalSln)
+        replayFingerprint
+        (fun () ->
+          discoverWarmupReplayPlan
+            logger
+            originalSln
+            sln
+            autoOpenNamespaces
+            ct
+            replayFingerprint)
 
-    let mutable fileCount = 0
-    let allFsFilesArr = allFsFiles |> Seq.toArray
-    let! fileResults =
-      allFsFilesArr
-      |> Array.map (fun fsFile -> async {
-        ct.ThrowIfCancellationRequested()
-        try
-          match File.Exists(fsFile) with
-          | true ->
-            let! sourceLines = File.ReadAllLinesAsync fsFile |> Async.AwaitTask
-            return Some (extractOpensFromLines sourceLines)
-          | false -> return None
-        with ex ->
-          logger.LogWarning (sprintf "Could not parse opens from %s: %s" fsFile ex.Message)
-          return None
-      })
-      |> fun tasks ->
-        let sem = new System.Threading.SemaphoreSlim(8)
-        tasks |> Array.map (fun t -> async {
-          do! sem.WaitAsync() |> Async.AwaitTask
-          try return! t
-          finally sem.Release() |> ignore
-        })
-      |> Async.Parallel
-    for result in fileResults do
-      match result with
-      | Some opens ->
-        fileCount <- fileCount + 1
-        for nsName in opens do
-          match openedNamespaces.Add(nsName) with
-          | true ->
-            match autoOpenNamespaces with
-            | true -> namesToOpen.Add(nsName)
-            | false -> ()
-          | false -> ()
-      | None -> ()
+    let fileCount = replayPlan.SourceFilesScanned
     logger.LogInfo (sprintf "  Scanned %d source files for opens in %dms" fileCount sw.ElapsedMilliseconds)
     let scanPhaseMs = sw.ElapsedMilliseconds
     onProgress(2, 4, sprintf "Scanned %d source files" fileCount)
-
-    // Phase 2: Collect namespaces/modules via reflection
-    logger.LogInfo "  Scanning assemblies for namespaces..."
-    // Use a collectible AssemblyLoadContext to avoid the default context's identity cache.
-    // Assembly.LoadFrom caches by identity — after hard reset + rebuild, it returns the
-    // OLD assembly even though the shadow-copied DLL on disk has new types.
-    let reflectionAlc =
-      new System.Runtime.Loader.AssemblyLoadContext(
-        "sagefs-reflection", isCollectible = true)
-    for project in sln.Projects do
-      ct.ThrowIfCancellationRequested()
-      try
-        match System.IO.File.Exists(project.TargetPath) with
-        | false ->
-          Log.warn "[Warmup] DLL not found: %s — run 'dotnet build' first." project.TargetPath
-        | true ->
-          let asm = reflectionAlc.LoadFromAssemblyPath(project.TargetPath)
-          let types =
-            try
-              asm.GetTypes()
-            with
-            | :? System.Reflection.ReflectionTypeLoadException as ex ->
-              ex.Types |> Array.filter (fun t -> not (isNull t))
-
-          let rootNamespaces =
-            types
-            |> Array.choose (fun t ->
-              match isNull t.Namespace with
-              | false ->
-                let parts = t.Namespace.Split('.')
-                match parts.Length > 0 with | true -> Some parts.[0] | false -> None
-              | true ->
-                None)
-            |> Array.distinct
-            |> Array.filter (fun ns -> not (ns.StartsWith("<", System.StringComparison.Ordinal) || ns.StartsWith("$", System.StringComparison.Ordinal)))
-
-          let topLevelModules =
-            types
-            |> Array.filter (fun t -> 
-              t.Namespace |> isNull && 
-              (t.GetCustomAttributes(typeof<Microsoft.FSharp.Core.CompilationMappingAttribute>, false)
-               |> Array.exists (fun attr ->
-                 let cma = attr :?> Microsoft.FSharp.Core.CompilationMappingAttribute
-                 cma.SourceConstructFlags = Microsoft.FSharp.Core.SourceConstructFlags.Module)) &&
-              not (t.Name.StartsWith("<", System.StringComparison.Ordinal) || t.Name.StartsWith("$", System.StringComparison.Ordinal) || t.Name.Contains("@") || t.Name.Contains("+")) &&
-              t.IsPublic &&
-              t.GetCustomAttributes(typeof<Microsoft.FSharp.Core.RequireQualifiedAccessAttribute>, false).Length = 0)
-            |> Array.map (fun t ->
-              match t.Name.EndsWith("Module", System.StringComparison.Ordinal) with
-              | true -> t.Name.Substring(0, t.Name.Length - 6)
-              | false -> t.Name)
-            |> Array.distinct
-
-          for ns in rootNamespaces do
-            match openedNamespaces.Add(ns) with
-            | true ->
-              match autoOpenNamespaces with
-              | true -> namesToOpen.Add(ns)
-              | false -> ()
-            | false -> ()
-
-          for m in topLevelModules do
-            match openedNamespaces.Add(m) with
-            | true ->
-              match autoOpenNamespaces with
-              | true ->
-                namesToOpen.Add(m)
-                moduleNames.Add(m) |> ignore
-              | false -> ()
-            | false -> ()
-
-          loadedAssemblies.Add({
-            Name = asm.GetName().Name
-            Path = project.TargetPath
-            NamespaceCount = rootNamespaces.Length
-            ModuleCount = topLevelModules.Length
-          } : LoadedAssembly)
-      with ex ->
-        logger.LogWarning (sprintf "Could not analyze %s: %s" project.TargetPath ex.Message)
-    reflectionAlc.Unload()
     logger.LogInfo (sprintf "  Assembly scan complete in %dms" sw.ElapsedMilliseconds)
     let assemblyPhaseMs = sw.ElapsedMilliseconds
-    let totalNames = namesToOpen.Count
+    let loadedAssemblies = replayPlan.AssembliesLoaded
+    let replayNamePairs = namePairs replayPlan
+    let totalNames = replayNamePairs.Length
     match autoOpenNamespaces with
     | true -> onProgress(3, 4, sprintf "Scanned assemblies, opening %d namespaces" totalNames)
     | false -> onProgress(3, 4, "Scanned assemblies, auto-open disabled")
     // Phase 3: Open all collected names with rich diagnostics via iterative retry
     let mutable openCount = 0
-    let opener name isMod =
+    let toWarmupDiagnostics (diagnostics: FSharpDiagnostic array) : WarmupFcsDiagnostic list =
+      diagnostics
+      |> Array.map (fun d ->
+        { Message = d.Message
+          Severity =
+            match d.Severity with
+            | FSharp.Compiler.Diagnostics.FSharpDiagnosticSeverity.Error -> "error"
+            | FSharp.Compiler.Diagnostics.FSharpDiagnosticSeverity.Warning -> "warning"
+            | _ -> "info"
+          ErrorNumber = d.ErrorNumber
+          FileName =
+            match d.FileName with
+            | null
+            | "" -> None
+            | fileName -> Some fileName
+          StartLine = d.StartLine
+          EndLine = d.EndLine
+          StartColumn = d.StartColumn
+          EndColumn = d.EndColumn })
+      |> Array.toList
+    let reportOpenSuccess name elapsed =
+      openCount <- openCount + 1
+      onProgress(openCount, totalNames, sprintf "✅ open %s (%.0fms)" name elapsed)
+    let reportOpenSkipped name elapsed =
+      openCount <- openCount + 1
+      onProgress(openCount, totalNames, sprintf "⏭️ open %s (skipped, %.0fms)" name elapsed)
+    let reportOpenFailure name elapsed =
+      openCount <- openCount + 1
+      onProgress(openCount, totalNames, sprintf "✖ open %s — failed (%.0fms)" name elapsed)
+    let singleOpener name isMod =
       ct.ThrowIfCancellationRequested()
       let label = match isMod with | true -> "module" | false -> "namespace"
       logger.LogDebug (sprintf "Opening %s: %s" label name)
       let openSw = System.Diagnostics.Stopwatch.StartNew()
       let result, diagnostics = fsiSession.EvalInteractionNonThrowing(sprintf "open %s;;" name, ct)
       let elapsed = openSw.Elapsed.TotalMilliseconds
-      openCount <- openCount + 1
       match result with
       | Choice1Of2 _ ->
-        onProgress(openCount, totalNames, sprintf "✅ open %s (%.0fms)" name elapsed)
+        reportOpenSuccess name elapsed
         match isMod with
         | true -> logger.LogInfo (sprintf "✅ Opened module: %s (%.1fms)" name elapsed)
         | false -> ()
@@ -578,38 +704,46 @@ let createFsiSession (logger: ILogger) (outStream: TextWriter) (useAsp: bool) (s
         let allText = sprintf "%s %s" ex.Message (diagnostics |> Array.map (fun d -> d.Message) |> String.concat " ")
         match isBenignOpenError allText with
         | true ->
-          onProgress(openCount, totalNames, sprintf "⏭️ open %s (skipped, %.0fms)" name elapsed)
+          reportOpenSkipped name elapsed
           logger.LogDebug (sprintf "⏭️ Skipped %s (RequireQualifiedAccess — types accessible via qualified paths)" name)
           WarmUp.OpenSuccess elapsed
         | false ->
-          onProgress(openCount, totalNames, sprintf "✖ open %s — failed (%.0fms)" name elapsed)
-          let fcsDiags =
-            diagnostics
-            |> Array.map (fun d ->
-              { Message = d.Message
-                Severity =
-                  match d.Severity with
-                  | FSharp.Compiler.Diagnostics.FSharpDiagnosticSeverity.Error -> "error"
-                  | FSharp.Compiler.Diagnostics.FSharpDiagnosticSeverity.Warning -> "warning"
-                  | _ -> "info"
-                ErrorNumber = d.ErrorNumber
-                FileName = match d.FileName with | null | "" -> None | f -> Some f
-                StartLine = d.StartLine
-                EndLine = d.EndLine
-                StartColumn = d.StartColumn
-                EndColumn = d.EndColumn })
-            |> Array.toList
-          WarmUp.OpenFailed (ex.Message, fcsDiags, elapsed)
+          reportOpenFailure name elapsed
+          WarmUp.OpenFailed (ex.Message, toWarmupDiagnostics diagnostics, elapsed)
+    let batchOpener batch =
+      ct.ThrowIfCancellationRequested()
+      match batch with
+      | [] -> WarmUp.OpenSuccess 0.0
+      | [ name, isMod ] -> singleOpener name isMod
+      | _ ->
+        logger.LogDebug (sprintf "Opening batch of %d namespaces/modules" batch.Length)
+        let script =
+          batch
+          |> List.map (fun (name, _) -> sprintf "open %s" name)
+          |> String.concat Environment.NewLine
+          |> fun body -> body + Environment.NewLine + ";;"
+        let openSw = System.Diagnostics.Stopwatch.StartNew()
+        let result, diagnostics = fsiSession.EvalInteractionNonThrowing(script, ct)
+        let elapsed = openSw.Elapsed.TotalMilliseconds
+        match result with
+        | Choice1Of2 _ ->
+          let durationPerName = elapsed / float batch.Length
+          for name, isMod in batch do
+            reportOpenSuccess name durationPerName
+            match isMod with
+            | true -> logger.LogInfo (sprintf "✅ Opened module: %s (%.1fms, batched)" name durationPerName)
+            | false -> ()
+          logger.LogDebug (sprintf "✅ Opened batch of %d namespaces/modules in %.1fms" batch.Length elapsed)
+          WarmUp.OpenSuccess elapsed
+        | Choice2Of2 ex ->
+          logger.LogDebug (sprintf "Batch open failed for %d namespaces/modules in %.1fms: %s" batch.Length elapsed ex.Message)
+          WarmUp.OpenFailed (ex.Message, toWarmupDiagnostics diagnostics, elapsed)
 
-    let namePairs =
-      namesToOpen
-      |> Seq.map (fun name -> name, moduleNames.Contains(name))
-      |> Seq.toList
     let succeeded, failed =
       match autoOpenNamespaces with
       | true ->
-        logger.LogInfo (sprintf "Opening %d namespaces/modules (with dependency retry)..." totalNames)
-        WarmUp.openWithRetryRich 5 opener namePairs
+        logger.LogInfo (sprintf "Opening %d namespaces/modules (batched in chunks of %d with dependency retry)..." totalNames WarmUp.DefaultOpenBatchSize)
+        WarmUp.openWithRetryRichBatched 5 WarmUp.DefaultOpenBatchSize batchOpener singleOpener replayNamePairs
       | false ->
         logger.LogInfo "Auto-open disabled — skipping namespace/module opens."
         [], []
@@ -633,31 +767,33 @@ let createFsiSession (logger: ILogger) (outStream: TextWriter) (useAsp: bool) (s
           logger.LogWarning (sprintf "    FS%04d %s — %s" d.ErrorNumber loc d.Message)
     | true -> ()
 
+    let warmupCtx =
+      WarmupContext.completeWarmup
+        warmupStartedAt
+        fileCount
+        loadedAssemblies
+        succeeded
+        failed
+        scanPhaseMs
+        assemblyPhaseMs
+        openPhaseMs
+
+    logger.LogInfo (sprintf "  Warm-up complete in %dms (scan=%dms, asm=%dms, open=%dms)"
+      warmupCtx.PhaseTiming.TotalMs
+      warmupCtx.PhaseTiming.ScanSourceFilesMs
+      warmupCtx.PhaseTiming.ScanAssembliesMs
+      warmupCtx.PhaseTiming.OpenNamespacesMs)
+    onProgress(4, 4, sprintf "Warm-up complete in %dms" warmupCtx.PhaseTiming.TotalMs)
+
     match autoOpenNamespaces with
     | true ->
+      logger.LogDebug "Restoring core F# operators after warm-up boundary."
       // Restore core F# after warm-up opens. User project libraries like FSharpPlus shadow
       // min/max with SRTP-generic versions and replace the async CE builder.
       fsiSession.EvalInteractionNonThrowing("open Microsoft.FSharp.Core.Operators;;", ct) |> ignore
       fsiSession.EvalInteractionNonThrowing("open Microsoft.FSharp.Core.ExtraTopLevelOperators;;", ct) |> ignore
     | false -> ()
 
-    let warmupCtx = {
-      SourceFilesScanned = fileCount
-      AssembliesLoaded = Seq.toList loadedAssemblies
-      NamespacesOpened = succeeded
-      FailedOpens = failed
-      PhaseTiming = {
-        ScanSourceFilesMs = scanPhaseMs
-        ScanAssembliesMs = assemblyPhaseMs - scanPhaseMs
-        OpenNamespacesMs = openPhaseMs - assemblyPhaseMs
-        TotalMs = sw.ElapsedMilliseconds
-      }
-      StartedAt = System.DateTimeOffset.UtcNow
-    }
-
-    logger.LogInfo (sprintf "  Warm-up complete in %dms (scan=%dms, asm=%dms, open=%dms)"
-      sw.ElapsedMilliseconds scanPhaseMs (assemblyPhaseMs - scanPhaseMs) (openPhaseMs - assemblyPhaseMs))
-    onProgress(4, 4, sprintf "Warm-up complete in %dms" sw.ElapsedMilliseconds)
     return fsiSession, recorder, args, failed, warmupCtx
   }
 
@@ -926,7 +1062,17 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
               st.StartupConfig
               |> Option.map (fun cfg -> cfg.HotReloadEnabled)
               |> Option.defaultValue false
-            let! newSession, newRecorder, _, warmupFailures, warmupCtx = createFsiSession logger outStream useAsp st.Solution autoOpenNamespaces hotReload softResetCts.Token onProgress
+            let! newSession, newRecorder, _, warmupFailures, warmupCtx =
+              createFsiSession
+                logger
+                outStream
+                useAsp
+                st.OriginalSolution
+                st.Solution
+                autoOpenNamespaces
+                hotReload
+                softResetCts.Token
+                onProgress
             softResetCts.Dispose()
             let newSt = { st with Session = newSession; OutStream = newRecorder; Diagnostics = Features.DiagnosticsStore.empty; WarmupFailures = warmupFailures; WarmupContext = warmupCtx }
             logger.LogInfo "✅ FSI session reset complete"
@@ -1113,7 +1259,16 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
                   |> Option.defaultValue false
                 try
                   Async.RunSynchronously(
-                    createFsiSession logger outStream useAsp newSln autoOpenNamespaces hotReload warmupCts.Token onProgress)
+                    createFsiSession
+                      logger
+                      outStream
+                      useAsp
+                      st.OriginalSolution
+                      newSln
+                      autoOpenNamespaces
+                      hotReload
+                      warmupCts.Token
+                      onProgress)
                   |> Ok
                 with
                 | :? OperationCanceledException as ex -> Error (ex :> exn)
@@ -1192,12 +1347,20 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
           | None -> ()
 
           let initCts = new CancellationTokenSource(Timeouts.initSessionCancellation)
-          let warmupSw = System.Diagnostics.Stopwatch.StartNew()
           let onProgress (s,t,msg) =
             emit (Events.SageFsEvent.SessionWarmUpProgress {| Step = s; Total = t; Message = msg |})
             publishPhase (Initializing (Some (sprintf "[%d/%d] %s" s t msg))) Affordances.EvalStats.empty
-          let! fsiSession, recorder, args, warmupFailures, warmupCtx = createFsiSession logger outStream useAsp sln autoOpenNamespaces hotReload initCts.Token onProgress
-          warmupSw.Stop()
+          let! fsiSession, recorder, args, warmupFailures, warmupCtx =
+            createFsiSession
+              logger
+              outStream
+              useAsp
+              originalSln
+              sln
+              autoOpenNamespaces
+              hotReload
+              initCts.Token
+              onProgress
           initCts.Dispose()
           
           let warmupErrors =
@@ -1205,22 +1368,25 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
             |> List.map (fun f ->
               let kind = match f.IsModule with | true -> "module" | false -> "namespace"
               sprintf "%s (%s): %s" f.Name kind f.ErrorMessage)
-          emit (Events.SessionWarmUpCompleted {| Duration = warmupSw.Elapsed; Errors = warmupErrors |})
+          let warmupDuration =
+            WarmupContext.completionDuration warmupCtx
+          emit (Events.SessionWarmUpCompleted {| Duration = warmupDuration; Errors = warmupErrors |})
           
           // Evaluate startup profile if found
           let startupProfileResult =
             let workingDir = System.Environment.CurrentDirectory
-            match StartupProfile.discoverInitScript workingDir with
-            | None -> None
-            | Some scriptPath ->
-              let evalFn code =
-                fsiSession.EvalInteraction(code, CancellationToken.None)
-              let logFn msg = logger.LogInfo msg
-              match StartupProfile.evalInitScript evalFn logFn scriptPath with
-              | Result.Ok path -> Some path
-              | Result.Error msg ->
-                logger.LogWarning msg
-                None
+            let evalFn code =
+              fsiSession.EvalInteraction(code, CancellationToken.None)
+            let logFn msg = logger.LogInfo msg
+            let outcome = StartupProfile.applyIfPresent workingDir evalFn logFn
+
+            match outcome with
+            | StartupProfile.Failed (_, message) ->
+              logger.LogWarning message
+            | StartupProfile.NotFound
+            | StartupProfile.Loaded _ -> ()
+
+            StartupProfile.loadedPath outcome
           
           emit Events.SessionReady
           let sessionState = SessionState.Ready

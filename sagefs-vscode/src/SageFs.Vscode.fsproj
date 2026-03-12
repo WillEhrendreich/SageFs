@@ -6,6 +6,7 @@
   <ItemGroup>
     <Compile Include="Vscode.fs" />
     <Compile Include="SafeInterop.fs" />
+    <Compile Include="DaemonDiscovery.fs" />
     <Compile Include="JsHelpers.fs" />
     <Compile Include="LiveTestingTypes.fs" />
     <Compile Include="FeatureTypes.fs" />

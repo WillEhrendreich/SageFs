@@ -3,7 +3,9 @@ module SageFs.Tests.HttpApiIntegrationTests
 open System
 open System.Diagnostics
 open System.IO
+open System.Net
 open System.Net.Http
+open System.Net.Sockets
 open System.Text
 open System.Text.Json
 open System.Threading
@@ -43,6 +45,30 @@ let sageFsExe =
   elif File.Exists exe then exe
   else "SageFs"
 
+let private daemonStartupHealthPollInterval = TimeSpan.FromMilliseconds(100.0)
+
+let private daemonStartupHealthTimeout =
+  TimeSpan.FromSeconds(60.0)
+
+let private daemonStartupHealthMaxAttempts =
+  int (Math.Ceiling(daemonStartupHealthTimeout.TotalMilliseconds / daemonStartupHealthPollInterval.TotalMilliseconds))
+
+let private tryReserveLoopbackPort (port: int) =
+  try
+    use listener = new TcpListener(IPAddress.Loopback, port)
+    listener.Start()
+    (listener.LocalEndpoint :?> IPEndPoint).Port |> Some
+  with
+  | :? SocketException -> None
+
+let reserveLoopbackPort (preferredPort: int option) =
+  match preferredPort |> Option.bind tryReserveLoopbackPort with
+  | Some port -> port
+  | None ->
+    match tryReserveLoopbackPort 0 with
+    | Some port -> port
+    | None -> failwith "Unable to reserve a loopback port for HTTP integration tests."
+
 /// Start a daemon on a given port, wait until /health responds, return (process, HttpClient).
 let startDaemonWithArgs (port: int) (workingDir: string) (args: string list) = task {
   let psi = ProcessStartInfo()
@@ -63,8 +89,8 @@ let startDaemonWithArgs (port: int) (workingDir: string) (args: string list) = t
   // Poll until /health responds (up to 60s)
   let mutable ready = false
   let mutable attempts = 0
-  while not ready && attempts < 120 do
-    do! Threading.Tasks.Task.Delay(100)
+  while not ready && attempts < daemonStartupHealthMaxAttempts do
+    do! Threading.Tasks.Task.Delay(daemonStartupHealthPollInterval)
     try
       let! resp = client.GetAsync("/health")
       if int resp.StatusCode > 0 then ready <- true
@@ -75,7 +101,7 @@ let startDaemonWithArgs (port: int) (workingDir: string) (args: string list) = t
     try proc.Kill() with _ -> ()
     proc.Dispose()
     client.Dispose()
-    failwith (sprintf "Daemon failed to start on port %d within 60s" port)
+    failwith (sprintf "Daemon failed to start on port %d within %O" port daemonStartupHealthTimeout)
 
   return proc, client
 }
@@ -133,11 +159,35 @@ let killDaemon (proc: Process) =
   with _ -> ()
   proc.Dispose()
 
+[<Tests>]
+let httpApiHarnessTests =
+  testList "HTTP API harness" [
+    testCase "daemon startup wait budget matches the documented 60 seconds" <| fun _ ->
+      daemonStartupHealthTimeout
+      |> Expect.equal "startup wait should match documented 60 seconds" (TimeSpan.FromSeconds(60.0))
+
+    testCase "reserveLoopbackPort skips an occupied preferred port" <| fun _ ->
+      use occupied = new TcpListener(IPAddress.Loopback, 0)
+      occupied.Start()
+
+      let occupiedPort = (occupied.LocalEndpoint :?> IPEndPoint).Port
+      let reserved = reserveLoopbackPort (Some occupiedPort)
+
+      (reserved = occupiedPort)
+      |> Expect.isFalse "occupied preferred port should not be reused"
+
+      (reserved, 0)
+      |> Expect.isGreaterThan "reserved port should be positive"
+
+      use validation = new TcpListener(IPAddress.Loopback, reserved)
+      validation.Start()
+  ]
+
 // ─── Shared Daemon Fixture ─────────────────────────────────────────
 // One daemon shared across all integration tests (saves ~170s of startup).
 // Tests run sequenced since they share daemon state.
 
-let private sharedPort = 38500
+let private sharedPort = reserveLoopbackPort (Some 38500)
 
 let private sharedDaemon =
   lazy (startDaemon sharedPort |> Async.AwaitTask |> Async.RunSynchronously)
@@ -164,6 +214,40 @@ let integrationTests =
       let status, body = getJson client "/health" |> Async.AwaitTask |> Async.RunSynchronously
       status |> Expect.equal "200 OK" 200
       body |> Expect.isNotEmpty "body is not empty"
+
+    testCase "GET /health includes session diagnostics when a session exists" <| fun _ ->
+      let client = getSharedClient()
+      let payload =
+        {| code = "let healthDiagnostics = 42;;"
+           working_directory = testProjectDir |}
+      let evalStatus, _ = postJson client "/exec" payload |> Async.AwaitTask |> Async.RunSynchronously
+      evalStatus |> Expect.equal "eval 200" 200
+
+      let status, body = getJson client "/health" |> Async.AwaitTask |> Async.RunSynchronously
+      status |> Expect.equal "200 OK" 200
+
+      use doc = JsonDocument.Parse(body)
+      let root = doc.RootElement
+      let sessionCount = root.GetProperty("sessionCount").GetInt32()
+      Expect.isGreaterThan "has at least one session" (sessionCount, 0)
+
+      let sessionStates =
+        root.GetProperty("sessionStates").EnumerateArray()
+        |> Seq.toArray
+
+      sessionStates.Length
+      |> Expect.equal "sessionStates length matches sessionCount" sessionCount
+
+      let matchingSession =
+        sessionStates
+        |> Array.tryFind (fun session ->
+          let sessionDir = session.GetProperty("workingDirectory").GetString()
+          normalizeDir sessionDir = normalizeDir testProjectDir)
+
+      matchingSession |> Expect.isSome "health should include the auto-created test session"
+
+      let summary = root.GetProperty("diagnosticSummary").GetString()
+      summary |> Expect.isNotEmpty "diagnostic summary should be populated"
 
     testCase "GET /api/system/status returns supervised=false and version" <| fun _ ->
       let client = getSharedClient()
@@ -498,7 +582,7 @@ let integrationTests =
 let httpApiRoutingTests =
   testList "[Integration] HTTP API routing" [
     testCase "POST /api/completions uses workingDirectory for startup session routing" <| fun _ ->
-      let port = 38600 + (Random().Next(100))
+      let port = reserveLoopbackPort (Some (38600 + (Random().Next(100))))
       let proc, client =
         startDaemonWithArgs port repoRoot [ "--proj"; smokeSampleProject ]
         |> Async.AwaitTask |> Async.RunSynchronously
@@ -525,7 +609,7 @@ let httpApiRoutingTests =
         killDaemon proc
 
     testCase "POST /api/completions accepts snake_case cursor_position" <| fun _ ->
-      let port = 38700 + (Random().Next(100))
+      let port = reserveLoopbackPort (Some (38700 + (Random().Next(100))))
       let proc, client =
         startDaemonWithArgs port repoRoot [ "--proj"; smokeSampleProject ]
         |> Async.AwaitTask |> Async.RunSynchronously
@@ -559,7 +643,7 @@ let httpApiRoutingTests =
 let daemonStartupSmokeTest =
   testList "[Integration] Daemon startup smoke" [
     ptestCase "Daemon starts on fresh port and /health responds" <| fun _ ->
-      let port = 38100 + (Random().Next(100))
+      let port = reserveLoopbackPort (Some (38100 + (Random().Next(100))))
       let proc, client = startDaemon port |> Async.AwaitTask |> Async.RunSynchronously
       try
         let status, body = getJson client "/health" |> Async.AwaitTask |> Async.RunSynchronously

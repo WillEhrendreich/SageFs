@@ -1,5 +1,7 @@
 module SageFs.WarmUp
 
+open System
+
 /// Individual FCS diagnostic captured during a warmup open failure.
 type WarmupFcsDiagnostic = {
   Message: string
@@ -49,6 +51,134 @@ type OpenAttemptResult =
   | OpenSuccess of durationMs: float
   | OpenFailed of errorMessage: string * diagnostics: WarmupFcsDiagnostic list * durationMs: float
 
+[<Literal>]
+let DefaultOpenBatchSize = 8
+
+let private mkOpenedBinding name isMod durationMs = {
+  Name = name
+  IsModule = isMod
+  Source = "warmup"
+  DurationMs = durationMs
+}
+
+let private mkWarmupFailure
+  defaultError
+  (firstErrors: System.Collections.Generic.Dictionary<string, string * WarmupFcsDiagnostic list>)
+  (retryCounts: System.Collections.Generic.Dictionary<string, int>)
+  (name, isMod) = {
+  Name = name
+  IsModule = isMod
+  ErrorMessage =
+    match firstErrors.TryGetValue(name) with
+    | true, (errorMessage, _) -> errorMessage
+    | _ -> defaultError
+  Diagnostics =
+    match firstErrors.TryGetValue(name) with
+    | true, (_, diagnostics) -> diagnostics
+    | _ -> []
+  RetryCount =
+    match retryCounts.TryGetValue(name) with
+    | true, count -> count
+    | _ -> 0
+  DurationMs = 0.0
+}
+
+let private openWithRetryRichCore
+  (maxRounds: int)
+  (attemptRound: (string * bool) list -> (string * bool * OpenAttemptResult) list)
+  (names: (string * bool) list)
+  : OpenedBinding list * WarmupOpenFailure list =
+  let firstErrors = System.Collections.Generic.Dictionary<string, string * WarmupFcsDiagnostic list>()
+  let retryCounts = System.Collections.Generic.Dictionary<string, int>()
+
+  let rec loop round remaining acc =
+    match round > maxRounds || List.isEmpty remaining with
+    | true ->
+      let failures =
+        remaining
+        |> List.map (mkWarmupFailure "max retries exceeded" firstErrors retryCounts)
+      acc, failures
+    | false ->
+      for name, _ in remaining do
+        retryCounts.[name] <-
+          match retryCounts.TryGetValue(name) with
+          | true, count -> count + 1
+          | _ -> 1
+
+      let results = attemptRound remaining
+
+      let succeeded =
+        results
+        |> List.choose (fun (name, isMod, result) ->
+          match result with
+          | OpenSuccess durationMs -> Some (mkOpenedBinding name isMod durationMs)
+          | OpenFailed _ -> None)
+
+      let failed =
+        results
+        |> List.choose (fun (name, isMod, result) ->
+          match result with
+          | OpenFailed (errorMessage, diagnostics, _) ->
+            match firstErrors.ContainsKey(name) with
+            | false -> firstErrors.[name] <- errorMessage, diagnostics
+            | true -> ()
+            Some (name, isMod)
+          | OpenSuccess _ -> None)
+
+      match List.isEmpty succeeded with
+      | true ->
+        let failures =
+          failed
+          |> List.map (mkWarmupFailure "unknown" firstErrors retryCounts)
+        acc, failures
+      | false ->
+        loop (round + 1) failed (acc @ succeeded)
+
+  loop 1 names []
+
+module WarmupProgressLine =
+  [<Literal>]
+  let Prefix = "WARMUP_PROGRESS="
+
+  let private hasValidCounts step total =
+    step > 0 && total > 0 && step <= total
+
+  let private hasValidMessage (message: string) =
+    not (String.IsNullOrWhiteSpace message)
+
+  let tryFormatPayload step total (message: string) =
+    match hasValidCounts step total && hasValidMessage message with
+    | true -> Some (sprintf "%d/%d %s" step total message)
+    | false -> None
+
+  let tryFormatLine step total (message: string) =
+    tryFormatPayload step total message
+    |> Option.map (fun payload -> Prefix + payload)
+
+  let tryParsePayload (payload: string) =
+    match String.IsNullOrWhiteSpace payload with
+    | true -> None
+    | false ->
+      match payload.IndexOf('/') with
+      | slashIdx when slashIdx > 0 ->
+        match payload.IndexOf(' ', slashIdx) with
+        | spaceIdx when spaceIdx > slashIdx ->
+          let message = payload.[spaceIdx + 1..]
+          match
+            Int32.TryParse(payload[..slashIdx - 1]),
+            Int32.TryParse(payload[slashIdx + 1..spaceIdx - 1])
+          with
+          | (true, step), (true, total) when hasValidCounts step total && hasValidMessage message ->
+            Some (step, total, message)
+          | _ -> None
+        | _ -> None
+      | _ -> None
+
+  let tryParseLine (line: string) =
+    match line.StartsWith(Prefix, StringComparison.Ordinal) with
+    | true -> tryParsePayload (line.Substring Prefix.Length)
+    | false -> None
+
 /// Opens names iteratively with rich failure info.
 /// opener: tries to open a name+isModule, returns OpenAttemptResult.
 /// Returns (succeeded with timing, failures with diagnostics).
@@ -57,57 +187,48 @@ let openWithRetryRich
   (opener: string -> bool -> OpenAttemptResult)
   (names: (string * bool) list)
   : OpenedBinding list * WarmupOpenFailure list =
-  let firstErrors = System.Collections.Generic.Dictionary<string, string * WarmupFcsDiagnostic list>()
-  let retryCounts = System.Collections.Generic.Dictionary<string, int>()
-  let rec loop round remaining acc =
-    match round > maxRounds || List.isEmpty remaining with
-    | true ->
-      let failures =
-        remaining |> List.map (fun (n, isMod) ->
-          let errMsg, diags =
-            match firstErrors.TryGetValue(n) with
-            | true, (e, d) -> e, d
-            | _ -> "max retries exceeded", []
-          let retries = match retryCounts.TryGetValue(n) with | true, c -> c | _ -> 0
-          { Name = n; IsModule = isMod; ErrorMessage = errMsg
-            Diagnostics = diags; RetryCount = retries; DurationMs = 0.0 })
-      (acc, failures)
-    | false ->
-      let results =
-        remaining |> List.map (fun (name, isMod) ->
-          let r = opener name isMod
-          match retryCounts.ContainsKey(name) with
-          | true -> retryCounts.[name] <- retryCounts.[name] + 1
-          | false -> retryCounts.[name] <- 1
-          (name, isMod, r))
-      let succeeded =
-        results |> List.choose (fun (n, isMod, r) ->
-          match r with
-          | OpenSuccess ms ->
-            Some { Name = n; IsModule = isMod; Source = "warmup"; DurationMs = ms }
-          | _ -> None)
-      let failed =
-        results |> List.choose (fun (n, isMod, r) ->
-          match r with
-          | OpenFailed (err, diags, _) ->
-            match firstErrors.ContainsKey(n) with
-            | false -> firstErrors.[n] <- (err, diags)
-            | true -> ()
-            Some (n, isMod)
-          | _ -> None)
-      match List.isEmpty succeeded with
-      | true ->
-        let failures =
-          failed |> List.map (fun (n, isMod) ->
-            let errMsg, diags =
-              match firstErrors.TryGetValue(n) with | true, (e, d) -> e, d | _ -> "unknown", []
-            let retries = match retryCounts.TryGetValue(n) with | true, c -> c | _ -> 0
-            { Name = n; IsModule = isMod; ErrorMessage = errMsg
-              Diagnostics = diags; RetryCount = retries; DurationMs = 0.0 })
-        (acc, failures)
-      | false ->
-        loop (round + 1) failed (acc @ succeeded)
-  loop 1 names []
+  openWithRetryRichCore
+    maxRounds
+    (fun remaining ->
+      remaining
+      |> List.map (fun (name, isMod) -> name, isMod, opener name isMod))
+    names
+
+/// Opens names in chunks to reduce per-open interpreter overhead.
+/// When a chunk fails, each item is retried individually so failures stay attributable.
+let openWithRetryRichBatched
+  (maxRounds: int)
+  (batchSize: int)
+  (batchOpener: (string * bool) list -> OpenAttemptResult)
+  (singleOpener: string -> bool -> OpenAttemptResult)
+  (names: (string * bool) list)
+  : OpenedBinding list * WarmupOpenFailure list =
+  let normalizedBatchSize =
+    match batchSize > 0 with
+    | true -> batchSize
+    | false -> 1
+
+  let attemptChunk chunk =
+    match chunk with
+    | [] -> []
+    | [ name, isMod ] -> [ name, isMod, singleOpener name isMod ]
+    | _ ->
+      match batchOpener chunk with
+      | OpenSuccess durationMs ->
+        let durationPerName = durationMs / float chunk.Length
+        chunk
+        |> List.map (fun (name, isMod) -> name, isMod, OpenSuccess durationPerName)
+      | OpenFailed _ ->
+        chunk
+        |> List.map (fun (name, isMod) -> name, isMod, singleOpener name isMod)
+
+  openWithRetryRichCore
+    maxRounds
+    (fun remaining ->
+      remaining
+      |> List.chunkBySize normalizedBatchSize
+      |> List.collect attemptChunk)
+    names
 
 /// Legacy adapter: Opens names iteratively, retrying failures until convergence.
 /// Returns (succeeded, permanentFailures) where permanentFailures = (name, firstError).

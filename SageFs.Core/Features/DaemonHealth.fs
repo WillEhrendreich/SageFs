@@ -124,3 +124,30 @@ module DaemonHealth =
     [ [header]; sessionLines; testLine ]
     |> List.concat
     |> String.concat "\n"
+
+  /// Explain the daemon's current session mix in one line for diagnostics surfaces.
+  let diagnosticSummary (snap: HealthSnapshot) : string =
+    let breakdown =
+      snap.SessionSummaries
+      |> List.countBy (fun session -> sessionStatusLabel session.Status)
+      |> List.sortBy fst
+      |> List.map (fun (label, count) -> sprintf "%s=%d" label count)
+      |> String.concat ", "
+
+    match snap.SessionSummaries with
+    | [] -> "No sessions registered with the daemon."
+    | sessions ->
+      let faultedProjects =
+        sessions
+        |> List.filter (fun session -> session.Status = SessionHealthStatus.Faulted)
+        |> List.map (fun session -> session.ProjectName)
+        |> List.distinct
+
+      match faultedProjects with
+      | [] -> sprintf "%d session(s): %s" sessions.Length breakdown
+      | projects ->
+        sprintf
+          "Faulted session(s): %s. %d session(s): %s"
+          (String.concat ", " projects)
+          sessions.Length
+          breakdown

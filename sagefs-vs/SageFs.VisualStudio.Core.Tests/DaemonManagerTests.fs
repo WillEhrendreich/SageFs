@@ -19,6 +19,18 @@ let ``resolveConfiguredMcpPort falls back to default when daemon json is invalid
   |> should equal Constants.DefaultMcpPort
 
 [<Fact>]
+let ``resolveDiscoveryMcpPortWith falls back to default when persisted port is stale but default daemon is running`` () =
+  Some "http://localhost:38123"
+  |> DaemonManager.resolveDiscoveryMcpPortWith (fun port -> port = Constants.DefaultMcpPort)
+  |> should equal Constants.DefaultMcpPort
+
+[<Fact>]
+let ``resolveDiscoveryMcpPortWith preserves configured port when no daemon is running yet`` () =
+  Some "http://localhost:38123"
+  |> DaemonManager.resolveDiscoveryMcpPortWith (fun _ -> false)
+  |> should equal 38123
+
+[<Fact>]
 let ``buildDaemonArguments includes configured mcp port for project`` () =
   let args =
     DaemonManager.buildDaemonArguments @"C:\repo\App.fsproj" 38123

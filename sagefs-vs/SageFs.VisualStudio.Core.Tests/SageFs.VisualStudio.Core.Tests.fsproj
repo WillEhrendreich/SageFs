@@ -25,6 +25,7 @@
     <Compile Include="TestTreeViewModelTests.fs" />
     <Compile Include="JsonParsersTests.fs" />
     <Compile Include="EvalServiceTests.fs" />
+    <Compile Include="CompletionRequestTests.fs" />
     <Compile Include="LiveTestingFormatTests.fs" />
     <Compile Include="TypeExplorerGuardTests.fs" />
     <Compile Include="DaemonManagerTests.fs" />

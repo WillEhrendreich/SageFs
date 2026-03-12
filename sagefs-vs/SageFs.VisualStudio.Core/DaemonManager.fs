@@ -82,6 +82,23 @@ module DaemonManager =
         resp.IsSuccessStatusCode
       with _ -> false
 
+  let resolveDiscoveryMcpPortWith (isPortRunning: int -> bool) (daemonUrl: string option) =
+    let configuredPort =
+      daemonUrl
+      |> Option.bind tryParsePort
+
+    match configuredPort with
+    | Some port when isPortRunning port -> port
+    | Some port when port <> defaultMcpPort && isPortRunning defaultMcpPort -> defaultMcpPort
+    | Some port -> port
+    | None -> defaultMcpPort
+
+  /// Resolve the MCP port for client discovery.
+  /// Prefers the persisted port when a daemon is actually running there, otherwise
+  /// falls back to a live daemon on the default port before reusing the configured port.
+  let resolveDiscoveryMcpPort (daemonUrl: string option) =
+    resolveDiscoveryMcpPortWith isDaemonRunning daemonUrl
+
   /// Find the SageFs executable on PATH.
   let findSageFs () =
     let psi =
@@ -123,7 +140,7 @@ module DaemonManager =
   /// Uses the persisted daemon URL port when one has already been configured.
   let startDaemon (projectOrSln: string) =
     tryReadConfiguredDaemonUrl ()
-    |> resolveConfiguredMcpPort
+    |> resolveDiscoveryMcpPort
     |> startDaemonOnPort projectOrSln
 
   /// Read captured stderr from a daemon process (non-blocking snapshot).

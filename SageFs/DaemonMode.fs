@@ -3,6 +3,7 @@ module SageFs.Server.DaemonMode
 open System
 open System.Threading
 open SageFs
+open SageFs.WarmUp
 open SageFs.Utils
 open SageFs.Server
 open SageFs.Server.DashboardTypes
@@ -742,17 +743,7 @@ let handleTestDiscovery
 
 /// Parse warmup progress string ("step/total msg") into structured fields.
 let tryParseWarmupProgress (progress: string) =
-  match progress.IndexOf('/') with
-  | slashIdx when slashIdx > 0 ->
-    match progress.IndexOf(' ', slashIdx) with
-    | spaceIdx when spaceIdx > slashIdx ->
-      match System.Int32.TryParse(progress.[..slashIdx-1]),
-            System.Int32.TryParse(progress.[slashIdx+1..spaceIdx-1]) with
-      | (true, step), (true, total) ->
-        Some (step, total, progress.[spaceIdx+1..])
-      | _ -> None
-    | _ -> None
-  | _ -> None
+  WarmupProgressLine.tryParsePayload progress
 
 /// Parse warmup progress string ("step/total msg") and dispatch to Elm.
 let handleWarmupProgress (dispatch: SageFsMsg -> unit) (_sid: string) (progress: string) =

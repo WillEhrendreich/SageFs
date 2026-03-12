@@ -2,6 +2,7 @@ module SageFs.Vscode.SageFsClient
 
 open Fable.Core
 open Fable.Core.JsInterop
+open SageFs.Vscode.DaemonDiscovery
 open SageFs.Vscode.JsHelpers
 open SageFs.Vscode.SafeInterop
 
@@ -87,7 +88,10 @@ type Client =
     log: string -> unit }
 
 let create (mcpPort: int) (dashboardPort: int) (log: string -> unit) =
-  { mcpPort = mcpPort; dashboardPort = dashboardPort; log = log }
+  let configured = normalizeConfiguredPorts mcpPort dashboardPort
+  { mcpPort = configured.McpPort
+    dashboardPort = configured.DashboardPort
+    log = log }
 
 let baseUrl (c: Client) = sprintf "http://localhost:%d" c.mcpPort
 let dashboardUrl (c: Client) = sprintf "http://localhost:%d/dashboard" c.dashboardPort
@@ -95,6 +99,11 @@ let dashboardUrl (c: Client) = sprintf "http://localhost:%d/dashboard" c.dashboa
 let updatePorts (mcpPort: int) (dashboardPort: int) (c: Client) =
   c.mcpPort <- mcpPort
   c.dashboardPort <- dashboardPort
+
+let applyConfiguredPorts (mcpPort: int) (dashboardPort: int) (c: Client) =
+  let configured = normalizeConfiguredPorts mcpPort dashboardPort
+  updatePorts configured.McpPort configured.DashboardPort c
+  configured
 
 let httpGet (c: Client) (path: string) (timeout: int) =
   httpGetRaw (sprintf "%s%s" (baseUrl c) path) timeout
@@ -295,26 +304,75 @@ let parseSystemStatus (parsed: obj) =
     dashboardPort = fieldInt "dashboardPort" parsed }
 
 let private syncDiscoveredPorts (status: SystemStatus) (c: Client) =
-  let currentMcp = c.mcpPort
-  let currentDashboard = c.dashboardPort
-  let nextMcp = status.mcpPort |> Option.defaultValue currentMcp
-  let nextDashboard =
-    status.dashboardPort
-    |> Option.orElse (status.mcpPort |> Option.map (fun port -> port + 1))
-    |> Option.defaultValue currentDashboard
+  let current : PortSnapshot =
+    { McpPort = c.mcpPort
+      DashboardPort = c.dashboardPort }
 
-  match nextMcp <> currentMcp || nextDashboard <> currentDashboard with
+  let discovered : DiscoveredPorts =
+    { McpPort = status.mcpPort
+      DashboardPort = status.dashboardPort }
+
+  let next : PortSnapshot =
+    resolveDiscoveredPorts current discovered
+
+  match next <> current with
   | true ->
     let message =
       sprintf
         "[info] syncDiscoveredPorts: daemon reported mcpPort=%d dashboardPort=%d (was mcpPort=%d dashboardPort=%d)"
-        nextMcp
-        nextDashboard
-        currentMcp
-        currentDashboard
+        next.McpPort
+        next.DashboardPort
+        current.McpPort
+        current.DashboardPort
     c.log message
-    updatePorts nextMcp nextDashboard c
+    updatePorts next.McpPort next.DashboardPort c
   | false -> ()
+
+let private fallbackStatusForPort (mcpPort: int) =
+  { supervised = false
+    restartCount = 0
+    version = "unknown"
+    apiVersion = 0
+    mcpPort = Some mcpPort
+    dashboardPort = Some (deriveDashboardPort mcpPort) }
+
+let private probeDaemonInfoAt (mcpPort: int) =
+  promise {
+    let dashboardPort = deriveDashboardPort mcpPort
+
+    try
+      let! daemonInfoResp = httpGetRaw (sprintf "http://localhost:%d/api/daemon-info" dashboardPort) 2000
+
+      match daemonInfoResp.statusCode with
+      | 200 ->
+        return Some (jsonParse daemonInfoResp.body |> parseSystemStatus)
+      | _ ->
+        let! dashboardResp = httpGetRaw (sprintf "http://localhost:%d/dashboard" dashboardPort) 2000
+
+        match dashboardResp.statusCode with
+        | 200 -> return Some (fallbackStatusForPort mcpPort)
+        | _ -> return None
+    with _ ->
+      return None
+  }
+
+let discoverDaemon (candidateMcpPorts: int list) (c: Client) =
+  let rec loop candidates =
+    promise {
+      match candidates with
+      | [] -> return false
+      | mcpPort :: rest ->
+        let! statusOpt = probeDaemonInfoAt mcpPort
+
+        match statusOpt with
+        | Some status ->
+          syncDiscoveredPorts status c
+          return true
+        | None ->
+          return! loop rest
+    }
+
+  loop candidateMcpPorts
 
 let [<Literal>] expectedApiVersion = 1
 

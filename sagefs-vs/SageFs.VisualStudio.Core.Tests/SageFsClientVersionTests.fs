@@ -207,3 +207,21 @@ let ``CheckVersionAsync falls back to version endpoint when health endpoint is u
     | Ok () -> ()
     | Error e -> failwith (sprintf "Expected Ok but got Error: %s" e)
   }
+
+[<Fact>]
+let ``CheckVersionAsync falls back to version endpoint when health apiVersion is missing`` () =
+  task {
+    let routes =
+      Map.ofList [
+        "/health", Json (HttpStatusCode.OK, """{"features":["live-testing"]}""")
+        "/version", Json (HttpStatusCode.OK, sprintf """{"apiVersion":%d}""" Constants.ExpectedApiVersion)
+      ]
+
+    let handler = new RoutingHttpMessageHandler(routes)
+    use client = new SageFsClient(handler)
+    let! result = client.CheckVersionAsync(ct)
+
+    match result with
+    | Ok () -> ()
+    | Error e -> failwith (sprintf "Expected Ok but got Error: %s" e)
+  }

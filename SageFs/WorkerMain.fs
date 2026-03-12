@@ -6,6 +6,7 @@ open SageFs
 open SageFs.Utils
 open SageFs.WorkerProtocol
 open SageFs.AppState
+open SageFs.WarmUp
 
 /// Convert internal Diagnostic to WorkerDiagnostic for transport.
 let toWorkerDiagnostic (d: Features.Diagnostics.Diagnostic) : WorkerDiagnostic =
@@ -168,8 +169,12 @@ let run (sessionId: string) (port: int) = async {
   let onEvent (evt: Features.Events.SageFsEvent) =
     match evt with
     | Features.Events.SageFsEvent.SessionWarmUpProgress p ->
-      printfn "WARMUP_PROGRESS=%d/%d %s" p.Step p.Total p.Message
-      Console.Out.Flush()
+      match WarmupProgressLine.tryFormatLine p.Step p.Total p.Message with
+      | Some line ->
+        Console.Out.WriteLine line
+        Console.Out.Flush()
+      | None ->
+        Log.warn "[WorkerMain] Skipping invalid warmup progress %d/%d %s" p.Step p.Total p.Message
     | _ -> ()
 
   let actorArgs : ActorCreation.ActorArgs = {

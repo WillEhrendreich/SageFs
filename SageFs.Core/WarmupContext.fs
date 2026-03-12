@@ -36,6 +36,16 @@ type WarmupContext = {
 }
 
 module WarmupContext =
+  let private nonNegative durationMs =
+    max 0L durationMs
+
+  let private phaseTimingFromMilestones scanPhaseMs assemblyPhaseMs openPhaseMs = {
+    ScanSourceFilesMs = nonNegative scanPhaseMs
+    ScanAssembliesMs = nonNegative (assemblyPhaseMs - scanPhaseMs)
+    OpenNamespacesMs = nonNegative (openPhaseMs - assemblyPhaseMs)
+    TotalMs = nonNegative openPhaseMs
+  }
+
   let empty = {
     SourceFilesScanned = 0
     AssembliesLoaded = []
@@ -43,6 +53,23 @@ module WarmupContext =
     FailedOpens = []
     PhaseTiming = { ScanSourceFilesMs = 0L; ScanAssembliesMs = 0L; OpenNamespacesMs = 0L; TotalMs = 0L }
     StartedAt = System.DateTimeOffset.UtcNow
+  }
+
+  let completeWarmup
+    startedAt
+    sourceFilesScanned
+    assembliesLoaded
+    namespacesOpened
+    failedOpens
+    scanPhaseMs
+    assemblyPhaseMs
+    openPhaseMs = {
+    SourceFilesScanned = sourceFilesScanned
+    AssembliesLoaded = assembliesLoaded
+    NamespacesOpened = namespacesOpened
+    FailedOpens = failedOpens
+    PhaseTiming = phaseTimingFromMilestones scanPhaseMs assemblyPhaseMs openPhaseMs
+    StartedAt = startedAt
   }
 
   let totalOpenedCount (ctx: WarmupContext) =
@@ -53,6 +80,9 @@ module WarmupContext =
 
   let totalDurationMs (ctx: WarmupContext) =
     ctx.PhaseTiming.TotalMs
+
+  let completionDuration (ctx: WarmupContext) =
+    System.TimeSpan.FromMilliseconds(float ctx.PhaseTiming.TotalMs)
 
   let assemblyNames (ctx: WarmupContext) =
     ctx.AssembliesLoaded |> List.map (fun a -> a.Name)

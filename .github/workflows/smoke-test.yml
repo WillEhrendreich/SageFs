@@ -61,6 +61,114 @@ jobs:
           exit $LASTEXITCODE
         timeout-minutes: 10
 
+      - name: Explain smoke failure
+        if: failure()
+        shell: pwsh
+        run: |
+          $contextPath = "smoke-diagnostics\context.json"
+          $healthPath = "smoke-diagnostics\health.json"
+          $sessionsPath = "smoke-diagnostics\sessions.json"
+          $stderrPath = "smoke-diagnostics\daemon-stderr.log"
+          $stdoutPath = "smoke-diagnostics\daemon-stdout.log"
+          $warmupPollsPath = "smoke-diagnostics\session-warmup-polls.json"
+          $discoveryPollsPath = "smoke-diagnostics\test-discovery-polls.json"
+
+          function Write-LogGroup([string]$Title, [scriptblock]$Body) {
+            Write-Host "::group::$Title"
+            & $Body
+            Write-Host "::endgroup::"
+          }
+
+          if (-not (Test-Path $contextPath)) {
+            Write-Host "No smoke diagnostics were produced."
+            exit 0
+          }
+
+          $context = Get-Content $contextPath -Raw | ConvertFrom-Json
+          $failedSteps = @($context.failedSteps)
+          $results = @($context.results)
+          $health = if (Test-Path $healthPath) { Get-Content $healthPath -Raw | ConvertFrom-Json } else { $null }
+          $sessions = if (Test-Path $sessionsPath) { Get-Content $sessionsPath -Raw | ConvertFrom-Json } else { $null }
+          $warmupPolls = if (Test-Path $warmupPollsPath) { @(Get-Content $warmupPollsPath -Raw | ConvertFrom-Json) } else { @() }
+          $discoveryPolls = if (Test-Path $discoveryPollsPath) { @(Get-Content $discoveryPollsPath -Raw | ConvertFrom-Json) } else { @() }
+
+          Write-LogGroup "Smoke failure context" {
+            $context | ConvertTo-Json -Depth 12
+          }
+
+          if ($null -ne $health) {
+            Write-LogGroup "Health snapshot" {
+              $health | ConvertTo-Json -Depth 12
+            }
+          }
+
+          if ($null -ne $sessions) {
+            Write-LogGroup "Sessions snapshot" {
+              $sessions | ConvertTo-Json -Depth 12
+            }
+          }
+
+          if (Test-Path $stderrPath) {
+            Write-LogGroup "Daemon stderr tail" {
+              Get-Content $stderrPath -Tail 200
+            }
+          }
+
+          if (Test-Path $stdoutPath) {
+            Write-LogGroup "Daemon stdout tail" {
+              Get-Content $stdoutPath -Tail 200
+            }
+          }
+
+          $sessionSummary =
+            if ($null -ne $sessions -and $null -ne $sessions.sessions) {
+              (@($sessions.sessions | ForEach-Object { "$($_.id):$($_.status)" }) -join ", ")
+            } else {
+              "no session snapshot"
+            }
+
+          $resultsMarkdown =
+            if ($results.Count -gt 0) {
+              ($results | ForEach-Object { "- $($_.step): $($_.result) — $($_.message)" }) -join "`n"
+            } else {
+              "- no step results recorded"
+            }
+
+          $warmupTail =
+            if ($warmupPolls.Count -gt 0) {
+              ($warmupPolls | Select-Object -Last 3 | ConvertTo-Json -Depth 8)
+            } else {
+              "[]"
+            }
+
+          $discoveryTail =
+            if ($discoveryPolls.Count -gt 0) {
+              ($discoveryPolls | Select-Object -Last 3 | ConvertTo-Json -Depth 8)
+            } else {
+              "[]"
+            }
+
+          @"
+          ## Smoke failure summary
+          - Reason: $($context.reason)
+          - Failed steps: $(if ($failedSteps.Count -gt 0) { $failedSteps -join ', ' } else { 'none recorded' })
+          - Health: $(if ($null -ne $health) { $health.diagnosticSummary } else { 'health snapshot unavailable' })
+          - Sessions: $sessionSummary
+
+          ### Step results
+          $resultsMarkdown
+
+          ### Last warmup polls
+          ```json
+          $warmupTail
+          ```
+
+          ### Last discovery polls
+          ```json
+          $discoveryTail
+          ```
+          "@ | Add-Content -Path $env:GITHUB_STEP_SUMMARY
+
       - name: Upload smoke diagnostics
         if: always()
         uses: actions/upload-artifact@v4
