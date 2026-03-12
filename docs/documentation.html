@@ -356,11 +356,8 @@
 <pre><code># Start the daemon (bare — no project flag needed)
 SageFs
 
-# Or with a specific project
-SageFs --proj path/to/MyProject.fsproj
-
-# Or with a solution
-SageFs --sln path/to/MySolution.slnx</code></pre>
+# Then create a session for your project from your editor, MCP client, or dashboard
+# Example target: path/to/MyProject.fsproj</code></pre>
 
 <p>
   SageFs launches a <strong>daemon</strong> that listens for client connections. When your editor
@@ -379,10 +376,6 @@ SageFs --sln path/to/MySolution.slnx</code></pre>
     <tr>
       <td><code>SageFs</code></td>
       <td><strong>Default (bare daemon).</strong> Starts the daemon with no project loaded. Clients (editors, AI agents) create sessions and the daemon auto-discovers projects from their working directory.</td>
-    </tr>
-    <tr>
-      <td><code>SageFs --proj X.fsproj</code></td>
-      <td>Start the daemon with a specific project pre-loaded. Useful when auto-discovery isn't desired.</td>
     </tr>
     <tr>
       <td><code>SageFs tui</code></td>

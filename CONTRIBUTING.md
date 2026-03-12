@@ -54,7 +54,7 @@ Now `sagefs` on your PATH is your locally-built version.
 
 ```bash
 # Point SageFs at any F# project
-sagefs --proj SageFs.Tests/SageFs.Tests.fsproj
+sagefs
 
 # Or use the TUI (SageTUI Elm Architecture), GUI, or dashboard
 sagefs tui                # New SageTUI-based terminal UI (default)
@@ -104,10 +104,10 @@ SageFs is its own development environment. The recommended workflow is:
 **1. Start SageFs against its own test project:**
 
 ```bash
-sagefs --proj SageFs.Tests/SageFs.Tests.fsproj
+sagefs
 ```
 
-This loads all project dependencies into a live F# Interactive session with hot reload.
+Then create a session for `SageFs.Tests/SageFs.Tests.fsproj` from your editor, MCP client, or the dashboard. That session loads the project into a live F# Interactive session with hot reload.
 
 **2. Connect your editor.** SageFs exposes an MCP server at `http://localhost:37749/sse`. If you're using VS Code with the SageFs extension, it auto-connects. For other editors, see the [README](Readme.md) for setup.
 

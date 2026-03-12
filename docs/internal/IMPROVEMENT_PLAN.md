@@ -1375,8 +1375,7 @@ The existing `fsi-mcp.lua` does some things that properly belong in SageFs itsel
 `SageFs` is always a client — it either connects to an existing daemon or starts one then connects. PrettyPrompt is never in the daemon process.
 
 ```bash
-SageFs                              # Smart default (see below)
-SageFs --proj Foo.fsproj            # Smart default + create/attach session for Foo.fsproj
+SageFs                              # Start or connect to the bare daemon
 SageFs -d / --daemon                # Start daemon only (headless, no REPL)
 SageFs stop                         # Graceful shutdown of daemon + all sessions
 SageFs status                       # Show daemon info + session list with metadata
@@ -1384,7 +1383,7 @@ SageFs status                       # Show daemon info + session list with metad
 
 **Smart default (`SageFs` with no flags):**
 1. Check `~/.SageFs/daemon.json` — is a daemon already running?
-2. **YES →** connect to it with PrettyPrompt REPL (attach to existing/default session or create one for `--proj`)
+2. **YES →** connect to it with PrettyPrompt REPL
 3. **NO →** start daemon in background, wait for it to be ready, then connect REPL to it
 
 **`SageFs -d` / `SageFs --daemon`** starts daemon only, no REPL, returns immediately. Useful for CI, services, or MCP-only workflows.
@@ -1404,7 +1403,7 @@ Each session is identified by a short readable ID (e.g., `session-a1b2c3`). Sess
 - Own `SessionState` (Ready/Evaluating/Faulted/etc.)
 
 **Session lifecycle:**
-- **Created** when a client requests a new session (or on first `SageFs --proj`)
+- **Created** when a client requests a new session
 - **Active** while any client is connected or the session has pending work
 - **Idle** after all clients disconnect (configurable idle timeout, default: never — sessions persist until explicitly killed)
 - **Destroyed** only on explicit `SageFs stop-session <id>` or daemon shutdown
@@ -1457,9 +1456,9 @@ C:\Code\Repos\SageFs  •  Started 2h ago  •  Last active just now
 #### Session Attachment Logic
 
 When a REPL client connects:
-- If `--proj` matches an existing session's project → attach to it
-- If `--proj` given but no match → ask daemon to create new session
-- If no `--proj` → attach to most recently active session
+- It attaches to the chosen session if one is specified
+- Otherwise it attaches to the most recently active compatible session
+- New sessions are created explicitly through the daemon API or client session commands
 
 #### Daemon State File (`~/.SageFs/daemon.json`)
 

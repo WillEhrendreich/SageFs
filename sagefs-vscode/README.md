@@ -295,7 +295,7 @@ Open a folder containing an F# project. The extension auto-detects projects. For
 ### Daemon crashes or restarts unexpectedly
 The extension detects daemon crashes and shows a restart prompt. If it keeps crashing:
 1. Check the SageFs output in your terminal for stack traces
-2. Try starting SageFs manually from a terminal: `SageFs --proj YourProject.fsproj`
+2. Try starting SageFs manually from a terminal: `SageFs`
 3. File an issue at [github.com/WillEhrendreich/SageFs/issues](https://github.com/WillEhrendreich/SageFs/issues)
 
 ---

@@ -11,7 +11,7 @@
 
 .REQUIREMENTS
   - ffmpeg in PATH (winget install ffmpeg  /  choco install ffmpeg  /  scoop install ffmpeg)
-  - A running SageFs daemon (start with: sagefs --proj SageFs.Tests\SageFs.Tests.fsproj)
+  - A running SageFs daemon (start with: sagefs)
   - Playwright Chromium installed (dotnet tool run playwright install chromium)
 
 .EXAMPLE

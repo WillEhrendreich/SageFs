@@ -47,7 +47,7 @@ SageFs needs a project file. Either:
 - Set the project path explicitly:
   - **VS Code**: `sagefs.projectPath` in settings, or use "SageFs: Switch Project"
   - **Neovim**: `:SageFsSwitchProject` or set `vim.g.sagefs_project_path`
-  - **CLI**: `sagefs --proj path/to/MyApp.fsproj`
+  - **CLI / dashboard**: start `sagefs`, then create or switch to a session for `path/to/MyApp.fsproj`
 
 ### Wrong project selected (multi-project workspace)
 
@@ -55,7 +55,7 @@ When a workspace has multiple `.fsproj` files, SageFs picks one. If it chose the
 wrong one:
 - **VS Code**: Run "SageFs: Switch Project" from the command palette
 - **Neovim**: `:SageFsSwitchProject`
-- **CLI**: Restart with `sagefs --proj path/to/CorrectProject.fsproj`
+- **CLI / dashboard**: create or switch to a session for `path/to/CorrectProject.fsproj`
 
 The active project is shown in the status bar.
 
@@ -157,8 +157,10 @@ starting SageFs (or in your shell profile).
 export SAGEFS_WARMUP_MAX_MINUTES=20
 export SAGEFS_BUILD_TIMEOUT_MINUTES=15
 export SAGEFS_PER_TEST_TIMEOUT_SECONDS=15
-sagefs --proj MyBigProject.Tests/MyBigProject.Tests.fsproj
+sagefs
 ```
+
+Then create a session for `MyBigProject.Tests/MyBigProject.Tests.fsproj`.
 
 The `ValidTimeout` type enforces a 1s–10min range. Values outside this range
 are silently ignored and the default is used.

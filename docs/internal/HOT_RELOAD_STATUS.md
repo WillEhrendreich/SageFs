@@ -123,7 +123,7 @@ This works for most CSP configurations. However, it does **not** work when:
 **Workarounds for edge cases:**
 ```bash
 # Option 1: Disable DevReload entirely
-SAGEFS_DEVRELOAD=0 SageFs --proj MyProject.fsproj
+SAGEFS_DEVRELOAD=0 SageFs
 
 # Option 2: Add SageFs's script hash to your CSP
 # (hash changes each release — not recommended for long-term use)
@@ -135,8 +135,8 @@ SAGEFS_DEVRELOAD=0 SageFs --proj MyProject.fsproj
 **Diagnostic logging:** Set log level to Debug to see `[DevReload] Injected CSP nonce for /path`
 messages confirming nonce injection is working.
 
-### Project Loading with `--proj`
-When using `SageFs --proj MyProject.fsproj`:
+### Project Loading via sessions
+When the daemon is running bare and a client creates a session for `MyProject.fsproj`:
 - SageFs loads **compiled DLLs**, not source code
 - The FSI compatibility rewrite only affects:
   - Files loaded with `--use` flag (`.fsx` scripts)
@@ -151,8 +151,8 @@ When using `SageFs --proj MyProject.fsproj`:
 
 ### Automatic (File Watcher — Recommended)
 ```powershell
-# Start SageFs with your project — file watching is ON by default
-SageFs --proj HarmonyServer/HarmonyServer.fsproj
+# Start SageFs bare — file watching is ON by default once a session is created
+SageFs
 
 # Start your web server from the REPL, then just edit .fs files
 # Changes are picked up automatically!
@@ -172,7 +172,7 @@ Wait for "Starting web server..." message, then:
 
 ### Disabling File Watching
 ```powershell
-SageFs --proj MyProject.fsproj --no-watch
+SageFs --no-watch
 ```
 
 ## 📁 Key Files

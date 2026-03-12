@@ -244,10 +244,10 @@ F# makes SageFs possible.
 
 ```bash
 dotnet tool install --global SageFs
-SageFs --proj MyProject.fsproj
+SageFs
 ```
 
-Then open your editor. SageFs connects automatically.
+Then open your editor and create a session for `MyProject.fsproj`. SageFs connects automatically.
 
 ---
 

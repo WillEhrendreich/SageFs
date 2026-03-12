@@ -81,7 +81,7 @@ SageFs does it better. In every editor. In under 500ms. On broken code. For free
 2. **~350ms** — F# Compiler Service type-checks → dependency graph, reachability annotations
 3. **~500ms** — Affected-test execution via hot-eval → ✓/✗ results inline
 
-Tests are auto-categorized (Unit, Integration, Browser, Property, Benchmark) with smart run policies — unit tests run on every keystroke, integration on save, browser on demand. All configurable.
+Tests are auto-categorized (Unit, Integration, Browser, Property, Benchmark, Architecture) with smart run policies — unit and property tests default to auto-run, integration/browser/architecture default to demand, and benchmarks stay disabled until explicitly enabled. All configurable.
 
 </details>
 
@@ -108,10 +108,10 @@ Validates .NET SDK, FSI, project files, port availability, and daemon state. Act
 ### 3. Start the daemon
 
 ```bash
-sagefs --proj YourProject.fsproj
+sagefs
 ```
 
-SageFs opens an interactive terminal. Your editor connects automatically.
+SageFs opens an interactive terminal. Then create a session for `YourProject.fsproj` from your editor, MCP client, or the dashboard.
 
 > No project? Just run `sagefs` with no arguments — the daemon starts bare and waits for clients. Your editor will create sessions on demand.
 
@@ -168,7 +168,7 @@ graph TB
     D --- GU["Raylib GUI<br/><i>GPU renderer</i>"]
     D --- WB["Web Dashboard<br/><i>Falco.Datastar</i>"]
     D --- AI["AI Agents<br/><i>MCP protocol</i>"]
-    D --- RP["REPL Client<br/><i>sagefs connect</i>"]
+    D --- JP["Jupyter Kernel<br/><i>sagefs --jupyter</i>"]
 
     style D fill:#1a1b26,stroke:#7aa2f7,stroke-width:2px,color:#c0caf5
     style VS fill:#1a1b26,stroke:#9ece6a,color:#c0caf5
@@ -178,7 +178,7 @@ graph TB
     style GU fill:#1a1b26,stroke:#bb9af7,color:#c0caf5
     style WB fill:#1a1b26,stroke:#7dcfff,color:#c0caf5
     style AI fill:#1a1b26,stroke:#e0af68,color:#c0caf5
-    style RP fill:#1a1b26,stroke:#bb9af7,color:#c0caf5
+    style JP fill:#1a1b26,stroke:#bb9af7,color:#c0caf5
 ```
 
 ---
@@ -218,17 +218,17 @@ graph TB
 
 **Sessions are isolated workers.** Each session is a separate OS process with its own FSI instance, its own loaded project, its own file watcher. They can't interfere with each other. Create as many as you need.
 
-**Clients are thin.** Your editor plugin, the TUI, an AI agent — they all connect to the same daemon. They create sessions, send code, read results. Multiple clients can share the same session or each use their own.
+**Clients are thin.** Your editor plugin, the TUI, the Jupyter bridge, or an AI agent — they all connect to the same daemon. They create sessions, send code, read results. Multiple clients can share the same session or each use their own.
 
 **The workflow:**
 
 1. Start the daemon: `sagefs`
-2. A client (editor, CLI, AI) creates a session: `POST /api/sessions/create` with a project path
+2. A client (editor, Jupyter, dashboard, AI) creates a session: `POST /api/sessions/create` with a project path
 3. The daemon spawns a worker, loads the project, starts watching files
 4. The client sends code, reads diagnostics, runs tests — all through the daemon
 5. Other clients can connect to the same session simultaneously
 
-This means **the daemon doesn't need to know your project at startup**. It discovers projects when clients ask for sessions. You can run `sagefs` with no arguments in any directory and it's ready for any project.
+This means **the daemon doesn't need to know your project at startup**. It starts bare and waits for clients to create or attach to sessions.
 
 ---
 
@@ -252,11 +252,12 @@ sagefs
 4. Or visit the **dashboard** at `http://localhost:37750/dashboard` to see everything live
 
 ```
-MCP endpoint:  http://localhost:37749/sse    ← connect AI agents here
-Dashboard:     http://localhost:37750/dashboard  ← live web UI
+MCP (streamable HTTP):  http://localhost:37749/       ← recommended for new MCP clients
+MCP (legacy SSE):       http://localhost:37749/sse    ← older MCP clients
+Dashboard:              http://localhost:37750/dashboard
 ```
 
-No project flag needed — the daemon discovers projects when your editor (or an AI agent) creates a session.
+No project flag is required — the daemon starts bare and lets editors or MCP clients create sessions on demand.
 
 > **New to F#?** You don't need any F# knowledge to start. Jump to the [migration guide for your language](#welcome-traveler----pick-your-home-language) — each one maps concepts you already know to F#, with runnable examples.
 > 🐍 Python · 📓 Jupyter · 🔷 C# · ☕ Java · 🟨 JS/TS · 🦀 Rust · 🧘 [F# Koans](#-coming-from-fsharpkoans) (21 guided exercises)
@@ -306,7 +307,7 @@ Every frontend connects to the same daemon. Open several at once — they all se
 
 #### VS Code
 
-The extension is distributed as a `.vsix` from [GitHub Releases](https://github.com/WillEhrendreich/SageFs/releases). Written entirely in F# via [Fable](https://fable.io/) — no TypeScript.
+The extension is available on the VS Code Marketplace as `willehrendreich.sagefs`, and every GitHub release also includes a `.vsix`. It is written entirely in F# via [Fable](https://fable.io/) — no TypeScript.
 
 ```bash
 code --install-extension sagefs-<version>.vsix
@@ -333,7 +334,7 @@ The VS extension includes kill switches for individual features. See the [VS Ext
 
 #### AI Agent (MCP)
 
-SageFs exposes 33 MCP tools — from `send_fsharp_code` to `run_tests` to `discover_features`. Any MCP client can connect.
+SageFs exposes dozens of MCP tools — from `send_fsharp_code` to `run_tests` to `discover_features`. Any MCP client can connect.
 
 **Streamable HTTP** (recommended — auto-reconnects, no session drops):
 ```json
@@ -372,13 +373,13 @@ SageFs exposes 33 MCP tools — from `send_fsharp_code` to `run_tests` to `disco
 
 Works with GitHub Copilot (CLI & VS Code), Claude Code, Claude Desktop, OpenCode, Windsurf, Cursor, and any MCP-compatible tool. The **edit → auto-test → poll** workflow means agents don't even need to call eval — just edit files and check `get_live_test_status`.
 
-#### TUI / GUI / Web Dashboard / REPL
+#### TUI / GUI / Web Dashboard / Jupyter
 
 ```bash
 sagefs tui                # SageTUI Elm Architecture terminal UI
 sagefs tui --legacy-tui   # Classic imperative CellGrid renderer (fallback)
 sagefs gui                # GPU-rendered Raylib window
-sagefs connect   # Text REPL connected to running daemon
+sagefs --jupyter conn.json  # Run as a Jupyter kernel
 # Dashboard auto-starts at http://localhost:37750/dashboard
 ```
 
@@ -553,23 +554,25 @@ All connected editors receive these events via the SSE stream. Events are tagged
 <br />
 
 ```
-Usage: sagefs [options]                Start daemon (bare, waits for clients)
+Usage: sagefs [options]                Start daemon (bare by default)
        sagefs --supervised [options]   Start with watchdog auto-restart
        sagefs tui                      Terminal UI (starts daemon if needed)
        sagefs tui --legacy-tui         Terminal UI (imperative fallback)
        sagefs gui                      GPU GUI via Raylib (starts daemon if needed)
+       sagefs --jupyter <conn.json>    Run as Jupyter kernel
+       sagefs check                    Check environment before first run
        sagefs stop                     Stop running daemon
        sagefs status                   Show daemon info
 
 Daemon options:
-  --no-resume       Skip restoring previous sessions on startup
-  --no-watch        Disable file watching for all sessions
-  --prune           Mark all stale sessions as stopped, then exit
-  --supervised      Auto-restart on crash (exponential backoff)
-  --mcp-port PORT   Custom MCP port (default: 37749)
+  --no-resume            Skip restoring previous sessions on startup
+  --no-watch             Disable file watching for all sessions
+  --prune                Mark all stale sessions as stopped, then exit
+  --supervised           Auto-restart on crash (exponential backoff)
+  --mcp-port PORT        Custom MCP port (default: 37749)
 ```
 
-Sessions are created by clients (editor plugins, AI agents, or the API directly), not by CLI flags. The daemon starts bare and waits.
+The daemon starts bare and waits for clients to create or connect to sessions.
 
 Full options: `sagefs --help`
 
@@ -624,7 +627,7 @@ If the config already exists, SageFs opens or points you at the file instead of 
 | "SageFs daemon not found" | `dotnet tool install --global SageFs`, then `sagefs status` |
 | Port already in use | `sagefs stop` or `--mcp-port 8080` |
 | Wrong project selected | "SageFs: Switch Project" in command palette |
-| Stale REPL after code changes | Hard reset via command palette or `#hard-reset` in REPL |
+| Stale REPL after code changes | Save the file first — source edits auto-reload. Use hard reset only for `.fsproj` / package changes. |
 
 📖 **[Full Troubleshooting Guide →](docs/TROUBLESHOOTING.md)** — covers first-run issues, runtime problems, platform-specific fixes, and diagnostic tools.
 
