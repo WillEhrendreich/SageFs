@@ -201,7 +201,7 @@ jobs:
       if: github.event_name == 'push' && github.ref == 'refs/heads/master'
       shell: pwsh
       run: |
-        $vsix = Get-ChildItem sagefs-vs/SageFs.VisualStudio/bin/Release/*.vsix -ErrorAction SilentlyContinue | Select-Object -First 1
+        $vsix = Get-ChildItem sagefs-vs/SageFs.VisualStudio/bin/Release -Recurse -Filter *.vsix -ErrorAction SilentlyContinue | Select-Object -First 1
         if (-not $vsix) { throw "Visual Studio VSIX not found." }
         Copy-Item $vsix.FullName "sagefs-visualstudio-${{ steps.vs-version.outputs.version }}.vsix"
 

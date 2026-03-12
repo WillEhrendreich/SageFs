@@ -193,17 +193,18 @@ internal class StatusBarManager : ExtensionPart
 
       await Task.Delay(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
       var alive = await _client.PingAsync(CancellationToken.None).ConfigureAwait(false);
-      if (alive)
-      {
-        _connected = true;
-        _daemonStatus = "Running";
-        PushStatusBar();
+        if (alive)
+        {
+          _connected = true;
+          _daemonStatus = "Running";
+          PushStatusBar();
 
-        if (_output is not null)
-          await _output.WriteLineAsync("✓ SageFs daemon connected.");
+        var output = _output;
+        if (output is not null)
+          await output.WriteLineAsync("✓ SageFs daemon connected.");
         var versionResult = await _client.CheckVersionAsync(CancellationToken.None).ConfigureAwait(false);
-        if (versionResult.IsError && _output is not null)
-          await _output.WriteLineAsync($"⚠ {versionResult.ErrorValue}");
+        if (versionResult.IsError && output is not null)
+          await output.WriteLineAsync($"⚠ {versionResult.ErrorValue}");
 
         // Fetch initial session count
         try

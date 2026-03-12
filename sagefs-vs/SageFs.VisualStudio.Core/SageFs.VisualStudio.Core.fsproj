@@ -5,6 +5,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="FSharp.Core" />
+  </ItemGroup>
+
+  <ItemGroup>
     <Compile Include="Constants.fs" />
     <Compile Include="Types.fs" />
     <Compile Include="LiveTestingTypes.fs" />

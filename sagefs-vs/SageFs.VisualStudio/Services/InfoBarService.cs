@@ -63,7 +63,7 @@ internal sealed class InfoBarService : IDisposable
     }
     await ch.WriteLineAsync("");
     await ch.WriteLineAsync("  → Use  Extensions → SageFs: Start Daemon  to retry.");
-    await ch.WriteLineAsync("  → Run 'SageFs --proj YourProject.fsproj' from a terminal for detailed output.");
+    await ch.WriteLineAsync("  → Run 'SageFs' from a terminal for detailed output.");
     await ch.WriteLineAsync("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
   }
 
@@ -92,7 +92,7 @@ internal sealed class InfoBarService : IDisposable
     await ch.WriteLineAsync("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     await ch.WriteLineAsync("⚠ SageFs daemon is not running.");
     await ch.WriteLineAsync("  → Use  Extensions → SageFs: Start Daemon  to start it.");
-    await ch.WriteLineAsync("  → Or run 'SageFs --proj YourProject.fsproj' from a terminal.");
+    await ch.WriteLineAsync("  → Or run 'SageFs' from a terminal.");
     await ch.WriteLineAsync("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
   }
 
