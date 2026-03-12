@@ -1,13 +1,26 @@
-﻿Get the current FSI session status: startup configuration, loaded projects, session statistics, and available capabilities. Use to verify session health or discover what is loaded.
+﻿Get the current FSI session status: live worker readiness, loaded projects, session statistics, and active affordances. Use this to verify whether you can route new work to a session right now.
+
+WHAT THIS TOOL REPRESENTS:
+- This reports the FSI worker session state, NOT the live-testing subsystem state.
+- Session registry states like Starting / Restarting collapse to 'WarmingUp' here.
+- Worker status 'Building (...)' collapses to 'Evaluating' here because the worker is alive but busy.
 
 WHEN TO USE:
-- First thing to call when setting up a new session — confirms what projects are loaded and what features are enabled.
-- After hard_reset_fsi_session with rebuild=true, poll this until Status shows 'Ready' (the reset is async, typically 10-60s).
+- First thing to call when setting up a new session — confirms what projects are loaded and what capabilities are active.
+- After hard_reset_fsi_session with rebuild=true, re-check this until it reports State='Ready'. During the restart window it may instead return an error saying the session is still warming up — that is normal.
 - When you get unexpected 'type not defined' errors — check that the expected project is loaded and the session is warmed up.
 - To discover the active session ID needed for routing commands when multiple sessions exist.
 
-KEY FIELDS IN OUTPUT:
-- Status: Ready | Evaluating | Building — ONLY submit code when status is 'Ready'. If 'Evaluating', a previous send_fsharp_code is still running (use cancel_eval if stuck). If 'Building', a hard_reset rebuild is in progress.
-- LoadedProjects: list of .fsproj files loaded into this session — if empty, no project is loaded and only BCL types are available.
-- Affordances: which MCP tools are active for this session (e.g., live testing affordances are absent in sessions without test projects).
-- SessionId: the stable ID for this session. Pass to switch_session if auto-routing is selecting the wrong session.
+KEY SIGNALS IN OUTPUT:
+- State: WarmingUp | Ready | Evaluating | Faulted.
+  - WarmingUp = session exists but the worker proxy is not routable yet.
+  - Ready = safe to submit code.
+  - Evaluating = worker is alive but busy (this also covers worker-side 'Building (...)' states).
+  - Faulted = investigate warmup/runtime errors before proceeding.
+- Projects: the loaded .fsproj files for this session.
+- Available: which MCP tools/affordances are currently active for this session.
+- Session: the stable session ID shown at the start of the response.
+
+IMPORTANT:
+- A successful enable_live_testing call does NOT imply get_fsi_status should already be Ready. Live testing activation and worker readiness are separate.
+- If you need live-testing health, use get_test_trace or get_live_test_status instead.

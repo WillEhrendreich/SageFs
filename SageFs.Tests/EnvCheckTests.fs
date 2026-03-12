@@ -26,6 +26,15 @@ let private authoritySession id workingDirectory status : EnvCheck.SessionAuthor
     WorkingDirectory = workingDirectory
     Status = status }
 
+let private sessionAuthorityTargetDir () =
+  Path.Combine(Path.GetTempPath(), "sagefs-session-authority", "target")
+
+let private normalizedSessionVariant (path: string) =
+  let parent = Path.GetDirectoryName path
+  let leaf = Path.GetFileName path
+  Path.Combine(parent, ".", leaf).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+  + string Path.DirectorySeparatorChar
+
 /// Bind a TCP listener so isPortFree returns false for that port.
 let private withBoundPort (action: int -> unit) =
   let l = new TcpListener(IPAddress.Loopback, 0)
@@ -189,11 +198,12 @@ let private suppressPrint (results: EnvCheck.CheckResult list) =
 let sessionAuthorityTests =
   testList "EnvCheck.session authority" [
     test "classifySessionAuthority matches target directory after normalization" {
+      let targetDir = sessionAuthorityTargetDir ()
       let sessions = [
-        authoritySession "abc12345" "C:/Code/Repos/SageFs/SageFs\\" "Ready"
+        authoritySession "abc12345" (normalizedSessionVariant targetDir) "Ready"
       ]
 
-      match EnvCheck.classifySessionAuthority "C:\\Code\\Repos\\SageFs\\SageFs" sessions with
+      match EnvCheck.classifySessionAuthority targetDir sessions with
       | EnvCheck.SessionAuthority.ExactMatch session ->
         session.Id |> Expect.equal "matching session selected" "abc12345"
       | other ->
@@ -201,12 +211,13 @@ let sessionAuthorityTests =
     }
 
     test "classifySessionAuthority reports ambiguity for multiple target matches" {
+      let targetDir = sessionAuthorityTargetDir ()
       let sessions = [
-        authoritySession "abc12345" "C:\\Code\\Repos\\SageFs\\SageFs" "Ready"
-        authoritySession "def67890" "C:\\Code\\Repos\\SageFs\\SageFs\\" "Evaluating"
+        authoritySession "abc12345" targetDir "Ready"
+        authoritySession "def67890" (normalizedSessionVariant targetDir) "Evaluating"
       ]
 
-      match EnvCheck.classifySessionAuthority "C:\\Code\\Repos\\SageFs\\SageFs" sessions with
+      match EnvCheck.classifySessionAuthority targetDir sessions with
       | EnvCheck.SessionAuthority.Ambiguous matches ->
         matches |> List.map _.Id |> Expect.equal "both matching sessions returned" [ "abc12345"; "def67890" ]
       | other ->
@@ -214,17 +225,19 @@ let sessionAuthorityTests =
     }
 
     test "checkSessionAuthority warns when daemon is absent" {
-      let result = EnvCheck.checkSessionAuthority "C:\\Code\\Repos\\SageFs\\SageFs" None
+      let targetDir = sessionAuthorityTargetDir ()
+      let result = EnvCheck.checkSessionAuthority targetDir None
       result.Status |> Expect.equal "authority is not verified without a daemon" EnvCheck.Status.Warn
       result.Detail |> Expect.stringContains "detail should say not checked" "Not checked"
       result.Hint |> Expect.isSome "should explain how to verify authority"
     }
 
     test "checkSessionAuthority passes when exactly one ready session matches the target" {
+      let targetDir = sessionAuthorityTargetDir ()
       let result =
         EnvCheck.checkSessionAuthority
-          "C:\\Code\\Repos\\SageFs\\SageFs"
-          (Some [ authoritySession "abc12345" "C:\\Code\\Repos\\SageFs\\SageFs" "Ready" ])
+          targetDir
+          (Some [ authoritySession "abc12345" targetDir "Ready" ])
 
       result.Status |> Expect.equal "single ready match should pass" EnvCheck.Status.Pass
       result.Detail |> Expect.stringContains "detail should mention one match" "1 matching session"
@@ -232,10 +245,12 @@ let sessionAuthorityTests =
     }
 
     test "checkSessionAuthority warns when daemon has no matching session for the target" {
+      let targetDir = sessionAuthorityTargetDir ()
+      let otherDir = Path.Combine(Path.GetTempPath(), "sagefs-session-authority", "other")
       let result =
         EnvCheck.checkSessionAuthority
-          "C:\\Code\\Repos\\SageFs\\SageFs"
-          (Some [ authoritySession "other123" "C:\\Code\\Repos\\SageFs\\sagefs-vscode\\src" "Ready" ])
+          targetDir
+          (Some [ authoritySession "other123" otherDir "Ready" ])
 
       result.Status |> Expect.equal "missing target session should warn" EnvCheck.Status.Warn
       result.Detail |> Expect.stringContains "detail should mention no match" "No matching session"
@@ -243,10 +258,11 @@ let sessionAuthorityTests =
     }
 
     test "checkSessionAuthority warns when the only matching session is not ready" {
+      let targetDir = sessionAuthorityTargetDir ()
       let result =
         EnvCheck.checkSessionAuthority
-          "C:\\Code\\Repos\\SageFs\\SageFs"
-          (Some [ authoritySession "abc12345" "C:\\Code\\Repos\\SageFs\\SageFs" "Evaluating" ])
+          targetDir
+          (Some [ authoritySession "abc12345" targetDir "Evaluating" ])
 
       result.Status |> Expect.equal "non-ready match should warn" EnvCheck.Status.Warn
       result.Detail |> Expect.stringContains "detail should mention session status" "Evaluating"

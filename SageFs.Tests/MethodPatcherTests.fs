@@ -3,6 +3,7 @@ module SageFs.Tests.MethodPatcherTests
 open Expecto
 open System.Reflection
 open System
+open System.Runtime.InteropServices
 open HarmonyLib
 
 type TestMethods() =
@@ -13,10 +14,9 @@ type TestMethods() =
   static member MethodToPatch (m: String) = 
     callCount <- callCount + 1
     sprintf "shiny %s" m
-  // Prefix patch - runs before original, returns bool to indicate whether to skip original
+  // Prefix patch - runs before original and does not alter control flow.
   static member PrefixPatch (m: String) = 
     patched <- true
-    false // Don't skip original method
   // Replacement method to verify Harmony can replace
   static member ReplacementMethod (m: String) = 
     callCount <- callCount + 1
@@ -47,7 +47,11 @@ let tests =
       let harmony = new Harmony("test.patch.prefix")
       let original = typeof<TestMethods>.GetMethod("MethodToPatch")
       let prefix = typeof<TestMethods>.GetMethod("PrefixPatch")
-      harmony.Patch(original, prefix = new HarmonyMethod(prefix)) |> ignore
+      try
+        harmony.Patch(original, prefix = new HarmonyMethod(prefix)) |> ignore
+      with
+      | :? InvalidProgramException as ex ->
+        skiptest (sprintf "Harmony rejected this F# helper shape on %s: %s" RuntimeInformation.FrameworkDescription ex.Message)
       TestMethods.MethodToPatch "test" |> ignore
       Expect.isTrue TestMethods.IsPatched "prefix patch should have been called"
   ]

@@ -286,7 +286,7 @@ module WorkingDirRoutingPriority =
       GetElmModel = None; GetElmRegions = None; GetWarmupContext = None
       GetFeatureState = None }
 
-  let tests = testList "workingDirectory routing priority" [
+  let tests = testSequenced <| testList "workingDirectory routing priority" [
     testTask "workingDirectory should override cached session" {
       let s1 = mkInfo (testSessionId "5a6e0001") @"C:\Code\Repos\SageFs"
       let s2 = mkInfo (testSessionId "4a120002") @"C:\Code\Repos\Harmony"
