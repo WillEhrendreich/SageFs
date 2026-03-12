@@ -174,6 +174,8 @@ jobs:
     permissions:
       contents: write
       packages: write
+    env:
+      VS_MARKETPLACE_PUBLISHER: willehrendreich
 
     steps:
     - uses: actions/checkout@v5
@@ -196,6 +198,9 @@ jobs:
       with:
         node-version: 20
 
+    - name: Install marketplace CLIs
+      run: npm install -g @vscode/vsce tfx-cli
+
     - name: Build forked MCP SDK packages
       run: |
         dotnet pack mcp-sdk/src/ModelContextProtocol.Core -o mcp-sdk-nupkg -c Release
@@ -208,6 +213,9 @@ jobs:
       run: |
         $version = ([xml](Get-Content Directory.Build.props)).Project.PropertyGroup.Version
         "version=$version" >> $env:GITHUB_OUTPUT
+
+    - name: Ensure release directory exists
+      run: New-Item -ItemType Directory -Force release | Out-Null
 
     - name: Pack SageFs
       run: dotnet pack SageFs -c Release -o release
@@ -229,6 +237,19 @@ jobs:
         dotnet build sagefs-vs/SageFs.VisualStudio/SageFs.VisualStudio.csproj -c Release
         $vsix = Get-ChildItem sagefs-vs/SageFs.VisualStudio/bin/Release/*.vsix -ErrorAction SilentlyContinue
         if ($vsix) { Copy-Item $vsix.FullName "release/sagefs-visualstudio-${{ steps.version.outputs.version }}.vsix" }
+
+    - name: Publish VS Code extension to Marketplace
+      working-directory: sagefs-vscode
+      env:
+        VSCE_PAT: ${{ secrets.VSCE_PAT }}
+      run: |
+        npx @vscode/vsce publish --packagePath ../release/sagefs-vscode-${{ steps.version.outputs.version }}.vsix --skip-duplicate
+
+    - name: Publish Visual Studio extension to Marketplace
+      env:
+        VSCE_PAT: ${{ secrets.VSCE_PAT }}
+      run: |
+        npx tfx-cli extension publish --publisher $env:VS_MARKETPLACE_PUBLISHER --vsix "release/sagefs-visualstudio-${{ steps.version.outputs.version }}.vsix" --token $env:VSCE_PAT --no-prompt
 
     - name: Push to NuGet
       run: dotnet nuget push "release/SageFs.${{ steps.version.outputs.version }}.nupkg" --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate

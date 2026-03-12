@@ -2,8 +2,8 @@
   "name": "sagefs",
   "displayName": "SageFs — Live F# Development",
   "description": "Send F# code to SageFs for instant evaluation, type-checking, and hot reload.",
-  "version": "0.6.119",
-  "publisher": "sagefs",
+  "version": "0.6.120",
+  "publisher": "willehrendreich",
   "license": "MIT",
   "icon": "icon.png",
   "repository": {
@@ -307,7 +307,7 @@
         "sagefs.dashboardPort": {
           "type": "number",
           "default": 37750,
-          "description": "Port for the SageFs dashboard."
+          "description": "Legacy fallback dashboard port. SageFs normally discovers the daemon and derives the dashboard port from the MCP port."
         },
         "sagefs.autoStart": {
           "type": "boolean",
