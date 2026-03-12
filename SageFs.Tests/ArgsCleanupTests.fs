@@ -12,10 +12,7 @@ let daemonFlagTests =
 
     testCase "empty args gives defaults" <| fun () ->
       let flags = DaemonFlags.parse []
-      flags.NoResume |> Expect.isFalse "no-resume defaults false"
-      flags.Prune |> Expect.isFalse "prune defaults false"
-      flags.NoWatch |> Expect.isFalse "no-watch defaults false"
-      flags.Projects |> Expect.isEmpty "startup targets default empty"
+      flags |> Expect.equal "empty args should equal defaults" DaemonFlags.defaults
 
     testCase "parses --no-resume" <| fun () ->
       let flags = DaemonFlags.parse ["--no-resume"]
@@ -29,17 +26,13 @@ let daemonFlagTests =
       let flags = DaemonFlags.parse ["--no-watch"]
       flags.NoWatch |> Expect.isTrue "should set no-watch"
 
-    testCase "parses --proj and --sln startup targets" <| fun () ->
+    testCase "ignores legacy --proj and --sln startup flags" <| fun () ->
       let flags = DaemonFlags.parse ["--proj"; "foo.fsproj"; "--sln"; "bar.slnx"]
-      flags.Projects
-      |> Expect.equal "should collect startup targets" ["foo.fsproj"; "bar.slnx"]
+      flags |> Expect.equal "legacy startup flags should be ignored" DaemonFlags.defaults
 
     testCase "ignores unknown flags" <| fun () ->
       let flags = DaemonFlags.parse ["--garbage"]
-      flags.NoResume |> Expect.isFalse "should ignore unknown"
-      flags.Prune |> Expect.isFalse "should ignore unknown"
-      flags.NoWatch |> Expect.isFalse "should ignore unknown"
-      flags.Projects |> Expect.isEmpty "unknown flags should not add startup targets"
+      flags |> Expect.equal "unknown flags should be ignored" DaemonFlags.defaults
 
     testCase "parses multiple flags" <| fun () ->
       let flags = DaemonFlags.parse ["--no-resume"; "--no-watch"]

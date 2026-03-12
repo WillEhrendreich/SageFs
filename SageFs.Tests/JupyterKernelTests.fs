@@ -653,7 +653,7 @@ let jupyterKernelTests =
       }
 
       test "regular args don't match Jupyter" {
-        Program.CliCommand.parse [| "--proj"; "Foo.fsproj" |]
+        Program.CliCommand.parse [| "--no-watch" |]
         |> function
            | Program.Daemon _ -> ()
            | other -> failtest (sprintf "Expected Daemon but got %A" other)

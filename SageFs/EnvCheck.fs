@@ -87,7 +87,7 @@ let checkFsproj (dir: string) =
   match findFsproj dir with
   | [] ->
     warn ".fsproj files" (sprintf "None found in %s" dir)
-          "Run `sagefs` from a directory containing an F# project file (.fsproj), or pass --proj <path>"
+          "Start `sagefs`, then create a session for the project you want to load from your client or the dashboard"
   | files ->
     let names = files |> List.map Path.GetFileName |> String.concat ", "
     pass ".fsproj files" (sprintf "%d found: %s" files.Length names)

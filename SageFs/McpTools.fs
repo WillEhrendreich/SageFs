@@ -177,7 +177,7 @@ IMPORTANT:
 
 DIFFERENCE FROM get_fsi_status:
 - get_fsi_status gives you the LIVE runtime state (current status, session health, active affordances).
-- get_startup_info gives you STATIC configuration — how SageFs was launched (CLI flags, --proj, --port, --tui, --gui, etc.).
+- get_startup_info gives you STATIC configuration — how SageFs was launched (CLI flags, ports, TUI/GUI mode, etc.).
 
 WHEN TO USE:
 - To find out which projects were specified on the CLI vs loaded dynamically.
@@ -192,10 +192,10 @@ WHEN TO USE:
         getStartupInfo ctx "mcp" wd |> withEcho "get_startup_info"
 
     [<McpServerTool>]
-    [<Description("""Discover F# projects (.fsproj) and solutions (.sln/.slnx) in the current working directory. Useful for determining what projects can be loaded with 'SageFs --proj'.
+    [<Description("""Discover F# projects (.fsproj) and solutions (.sln/.slnx) in the current working directory. Useful for determining what projects can be loaded into a new SageFs session.
 
 WHEN TO USE:
-- When you want to know which projects exist in this repo before creating a session or advising the user to restart SageFs with a different --proj.
+- When you want to know which projects exist in this repo before creating a session for one of them.
 - To find a test project to pass to create_session so you can run tests in an isolated session.
 - As a discovery step when the user opens a new workspace and you need to understand the project structure.
 

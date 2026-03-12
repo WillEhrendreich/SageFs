@@ -192,6 +192,10 @@ let daemonCliTests =
       output |> Expect.stringContains "mentions daemon" "daemon"
       output |> Expect.stringContains "mentions stop" "stop"
       output |> Expect.stringContains "mentions status" "status"
+      (output.Contains "--proj")
+      |> Expect.isFalse "help should not advertise legacy startup project flags"
+      (output.Contains "--sln")
+      |> Expect.isFalse "help should not advertise legacy startup solution flags"
   ]
 
 // ─── Daemon lifecycle: start, status, stop ─────────────────────────

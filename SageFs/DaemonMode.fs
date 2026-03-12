@@ -315,33 +315,6 @@ let createSessionOps
         SessionManager.SessionCommand.WorkerExited(sessionId, -1, -1))
   }
 
-let normalizeWorkingDirectory (workingDir: string) =
-  IO.Path.GetFullPath(workingDir).Replace("\\", "/").TrimEnd('/').ToLowerInvariant()
-
-let normalizeStartupTargets (workingDir: string) (targets: string list) =
-  targets
-  |> List.map (fun target ->
-    let fullPath =
-      match IO.Path.IsPathRooted target with
-      | true -> target
-      | false -> IO.Path.Combine(workingDir, target)
-    IO.Path.GetFullPath(fullPath).Replace("\\", "/").ToLowerInvariant())
-  |> List.sort
-  |> String.concat "|"
-
-let hasMatchingStartupTargets
-  (workingDir: string)
-  (requestedTargets: string list)
-  (sessions: WorkerProtocol.SessionInfo list)
-  =
-  let requestedKey = normalizeStartupTargets workingDir requestedTargets
-  let requestedWorkingDir = normalizeWorkingDirectory workingDir
-
-  sessions
-  |> List.exists (fun session ->
-    normalizeStartupTargets session.WorkingDirectory session.Projects = requestedKey
-    && normalizeWorkingDirectory session.WorkingDirectory = requestedWorkingDir)
-
 /// Look up worker HTTP base URL for a session from CQRS snapshot.
 let getWorkerBaseUrl (readSnapshot: unit -> SessionManager.QuerySnapshot) (sid: string) =
   let snapshot = readSnapshot()
@@ -1302,7 +1275,6 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
   let notifyWorkerDiedStr s = sessionOps.NotifyWorkerDied (toSessionId s)
 
   let noResume = flags.NoResume
-  let startupTargets = flags.Projects
 
   let workingDir = Environment.CurrentDirectory
 
@@ -1791,25 +1763,6 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
           | false ->
             do! resumeSessions (fun () ->
               elmRuntime.Dispatch(SageFsMsg.Editor EditorAction.ListSessions))
-
-          match startupTargets with
-          | [] -> ()
-          | requestedTargets ->
-            let existingSessions = SessionManager.QuerySnapshot.allSessions (readSnapshot())
-            match hasMatchingStartupTargets workingDir requestedTargets existingSessions with
-            | true ->
-              log.LogInformation("Startup targets already loaded; skipping auto-create")
-            | false ->
-              log.LogInformation("Creating startup session for requested targets: {Targets}",
-                String.concat "; " requestedTargets)
-              let! createResult = sessionOps.CreateSession requestedTargets workingDir
-              match createResult with
-              | Ok sessionId ->
-                log.LogInformation("Created startup session {SessionId}", sessionId)
-                elmRuntime.Dispatch(SageFsMsg.Editor EditorAction.ListSessions)
-              | Error err ->
-                log.LogWarning("Failed to create startup session for requested targets: {Error}",
-                  SageFsError.describe err)
 
           // Load cached test state after sessions are restored
           let activeSessions = SessionManager.QuerySnapshot.allSessions (readSnapshot())

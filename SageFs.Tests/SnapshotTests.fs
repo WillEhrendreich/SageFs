@@ -28,7 +28,7 @@ let formatTests =
 
     testTask "formatStartupInfo snapshot" {
       let config: StartupConfig = {
-        CommandLineArgs = [| "--proj"; "Test.fsproj" |]
+        CommandLineArgs = [| "--mcp-port"; "8080" |]
         LoadedProjects = [ "Test.fsproj" ]
         WorkingDirectory = "/code/test"
         McpPort = 8080
@@ -43,7 +43,7 @@ let formatTests =
 
     testTask "formatEnhancedStatus snapshot" {
       let config: StartupConfig = {
-        CommandLineArgs = [| "--proj"; "Test.fsproj" |]
+        CommandLineArgs = [| "--mcp-port"; "8080" |]
         LoadedProjects = [ "Test.fsproj" ]
         WorkingDirectory = "/code/test"
         McpPort = 8080

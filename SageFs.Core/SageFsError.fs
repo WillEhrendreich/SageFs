@@ -344,7 +344,7 @@ module SageFsError =
     | SageFsError.HotReloadStateError _ -> "Run hard_reset_fsi_session"
     | SageFsError.RestartLimitExceeded _ -> "Check the log file and restart SageFs"
     | SageFsError.DaemonStartFailed _ -> "Check port availability and .NET SDK"
-    | SageFsError.DaemonNotRunning -> "Start SageFs with 'sagefs --proj <your.fsproj>'"
+    | SageFsError.DaemonNotRunning -> "Start SageFs with 'sagefs'"
     | SageFsError.PortInUse _ -> "Stop the other process or use --mcp-port"
     | SageFsError.SseConnectionError _ -> "Check daemon is running and retry"
     | SageFsError.JsonParseError _ -> "Check request payload format"

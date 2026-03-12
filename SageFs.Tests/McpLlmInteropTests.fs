@@ -30,7 +30,7 @@ module StartupConfigTests =
       <| fun _ ->
         // This test verifies the StartupConfig type exists in AppState.fs
         let config: SageFs.AppState.StartupConfig = {
-          CommandLineArgs = [| "--proj"; "Test.fsproj" |]
+          CommandLineArgs = [| "--mcp-port"; "8080" |]
           LoadedProjects = [ "Test.fsproj" ]
           WorkingDirectory = @"C:\Code\Test"
           McpPort = 8080
@@ -223,7 +223,7 @@ module ProjectDiscoveryTests =
           Expect.stringContains result "Solutions" "Should have solutions section"
           Expect.stringContains result ".fsproj" "Should mention project extension"
           Expect.stringContains result ".sln" "Should mention solution extension"
-          Expect.stringContains result "SageFs --proj" "Should show usage tips"
+          Expect.stringContains result "create_session" "Should guide users toward explicit session creation"
           Expect.stringContains result workingDir "Should show working directory"
         }
         |> Async.AwaitTask
@@ -242,7 +242,7 @@ module McpAdapterEnhancementTests =
       testCase "formatStartupInfo should create human-readable output"
       <| fun _ ->
         let config: SageFs.AppState.StartupConfig = {
-          CommandLineArgs = [| "--proj"; "Test.fsproj" |]
+          CommandLineArgs = [| "--mcp-port"; "8080" |]
           LoadedProjects = [ "Test.fsproj" ]
           WorkingDirectory = @"C:\Test"
           McpPort = 8080
@@ -261,7 +261,7 @@ module McpAdapterEnhancementTests =
       testCase "formatStartupInfoJson should create valid JSON"
       <| fun _ ->
         let config: SageFs.AppState.StartupConfig = {
-          CommandLineArgs = [| "--proj"; "Test.fsproj" |]
+          CommandLineArgs = [| "--mcp-port"; "8080" |]
           LoadedProjects = [ "Test.fsproj" ]
           WorkingDirectory = @"C:\Test"
           McpPort = 8080
@@ -281,7 +281,7 @@ module McpAdapterEnhancementTests =
       testCase "formatEnhancedStatus should include startup section"
       <| fun _ ->
         let config: SageFs.AppState.StartupConfig = {
-          CommandLineArgs = [| "--proj"; "Test.fsproj" |]
+          CommandLineArgs = [| "--mcp-port"; "8080" |]
           LoadedProjects = [ "Test.fsproj" ]
           WorkingDirectory = @"C:\Test"
           McpPort = 8080

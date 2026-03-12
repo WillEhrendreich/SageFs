@@ -1,6 +1,6 @@
 ﻿SageFs Startup Information:
 
-Args: --proj Test.fsproj
+Args: --mcp-port 8080
 Working Directory: /code/test
 Loaded Projects: Test.fsproj
 Assemblies Loaded: 0

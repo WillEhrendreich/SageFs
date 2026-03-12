@@ -204,7 +204,7 @@ module RaylibMode =
     let daemonInfo =
       match DaemonState.read () with
       | None ->
-        eprintfn "No SageFs daemon running. Start one with: sagefs --proj <project.fsproj>"
+        eprintfn "No SageFs daemon running. Start one with: sagefs"
         None
       | Some info -> Some info
 

@@ -18,6 +18,7 @@ $dashboardBaseUrl = "http://localhost:$($Port + 1)"
 $daemonProcess = $null
 $repoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
 $samplePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot $SampleProject))
+$sampleProjectDir = Split-Path -Parent $samplePath
 $diagnosticsRoot =
   if ([System.IO.Path]::IsPathRooted($DiagnosticsDir)) {
     [System.IO.Path]::GetFullPath($DiagnosticsDir)
@@ -191,9 +192,13 @@ function Capture-SmokeDiagnostics([string]$reason) {
     daemonProcess = $daemonInfo
     daemonCommand = [PSCustomObject]@{
       fileName = "sagefs"
-      arguments = @("--mcp-port", $Port, "--no-resume", "--proj", $samplePath)
+      arguments = @("--mcp-port", $Port, "--no-resume")
       stdoutLog = $daemonStdoutPath
       stderrLog = $daemonStderrPath
+    }
+    sessionCreate = [PSCustomObject]@{
+      project = $samplePath
+      workingDirectory = $sampleProjectDir
     }
     failedSteps = @($results.Keys | Where-Object { $results[$_] -eq "FAIL" })
     results = $resultsSnapshot
@@ -315,11 +320,11 @@ if (-not (Test-Path $samplePath)) {
   $null = Show-Summary
   exit 1
 } else {
-  Write-Host "  Starting daemon with: $SampleProject" -ForegroundColor DarkGray
+  Write-Host "  Starting bare daemon" -ForegroundColor DarkGray
   Ensure-DiagnosticsDirectory
   Remove-Item -Path $daemonStdoutPath, $daemonStderrPath -ErrorAction SilentlyContinue
   $daemonProcess = Start-Process -FilePath "sagefs" `
-    -ArgumentList "--mcp-port", $Port, "--no-resume", "--proj", $samplePath `
+    -ArgumentList "--mcp-port", $Port, "--no-resume" `
     -WorkingDirectory $repoRoot `
     -RedirectStandardOutput $daemonStdoutPath `
     -RedirectStandardError $daemonStderrPath `
@@ -392,13 +397,25 @@ try {
 Section "4. Session warmup + Completions"
 
 $sessionReady = $false
-$sessionWorkDir = $repoRoot
-
-# The daemon was started with --proj, so it auto-creates a session on startup.
-# Poll the existing sessions list instead of creating a redundant second session.
-Write-Host "  Waiting for auto-created daemon session to reach Ready (up to ${SessionWarmupSeconds}s)..." -ForegroundColor DarkGray
+$sessionWorkDir = $sampleProjectDir
 
 try {
+  Write-Host "  Creating session for sample project..." -ForegroundColor DarkGray
+  $createBody = @{
+    projects = @($samplePath)
+    workingDirectory = $sampleProjectDir
+  } | ConvertTo-Json
+  $createResp = Invoke-RestMethod -Method Post -Uri "$baseUrl/api/sessions/create" `
+    -Body $createBody `
+    -ContentType "application/json" `
+    -TimeoutSec 15
+
+  if ($createResp.success -ne $true) {
+    Fail "completions" "Session creation did not succeed: $($createResp | ConvertTo-Json -Compress)"
+    throw "session creation failed"
+  }
+
+  Write-Host "  Waiting for created daemon session to reach Ready (up to ${SessionWarmupSeconds}s)..." -ForegroundColor DarkGray
   for ($i = 0; $i -lt $SessionWarmupSeconds; $i++) {
     Start-Sleep -Seconds 1
     try {

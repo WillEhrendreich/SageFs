@@ -271,7 +271,7 @@ let startupInfoTests =
   testList "formatStartupInfoJson" [
     testCase "returns valid JSON with projects" <| fun _ ->
       let config: AppState.StartupConfig = {
-        CommandLineArgs = [| "--proj"; "Test.fsproj" |]
+        CommandLineArgs = [| "--mcp-port"; "37749" |]
         LoadedProjects = ["Test.fsproj"]
         WorkingDirectory = "/code"
         McpPort = 37749

@@ -10,7 +10,6 @@ type DaemonFlags = {
   NoResume: bool
   Prune: bool
   NoWatch: bool
-  Projects: string list
 }
 
 module DaemonFlags =
@@ -18,23 +17,19 @@ module DaemonFlags =
     NoResume = false
     Prune = false
     NoWatch = false
-    Projects = []
   }
 
   let parse (args: string list) =
-    let finish acc =
-      { acc with Projects = List.rev acc.Projects }
-
     let rec loop acc remaining =
       match remaining with
-      | [] -> finish acc
+      | [] -> acc
       | "--no-resume" :: rest -> loop { acc with NoResume = true } rest
       | "--prune" :: rest -> loop { acc with Prune = true } rest
       | "--no-watch" :: rest -> loop { acc with NoWatch = true } rest
-      | ("--proj" | "--sln") :: path :: rest ->
-        loop { acc with Projects = path :: acc.Projects } rest
       | ("--proj" | "--sln") :: [] ->
-        finish acc
+        acc
+      | ("--proj" | "--sln") :: _ :: rest ->
+        loop acc rest
       | _ :: rest -> loop acc rest
     loop defaults args
 

@@ -56,48 +56,14 @@ let tests =
         flags.NoWatch |> Expect.isTrue "NoWatch should be true"
       }
 
-      test "--proj and --sln collect startup targets" {
+      test "--proj and --sln are ignored for bare daemon startup" {
         let flags = DaemonFlags.parse [ "--proj"; "app.fsproj"; "--sln"; "demo.slnx" ]
-        flags.Projects
-        |> Expect.equal "startup targets" [ "app.fsproj"; "demo.slnx" ]
+        flags |> Expect.equal "legacy startup flags should be ignored" DaemonFlags.defaults
       }
 
       test "unknown flags are ignored" {
         let flags = DaemonFlags.parse [ "--unknown-flag" ]
         flags |> Expect.equal "should equal defaults" DaemonFlags.defaults
-      }
-    ]
-
-    testList "startup target matching" [
-      let mkSession workingDir projects : SessionInfo =
-        { Id = testSessionId "aa000001"
-          Name = None
-          Projects = projects
-          WorkingDirectory = workingDir
-          SolutionRoot = None
-          Status = SessionStatus.Ready
-          WorkerPid = None
-          CreatedAt = DateTime.UtcNow
-          LastActivity = DateTime.UtcNow }
-
-      test "matching targets in the same working directory count as already loaded" {
-        let repoRoot = @"C:\Code\Repos\SageFs"
-        let sampleRelative = @"samples\from-csharp\SageFs.Samples.FromCSharp\SageFs.Samples.FromCSharp.fsproj"
-        let session = mkSession repoRoot [ sampleRelative ]
-
-        hasMatchingStartupTargets repoRoot [ sampleRelative ] [ session ]
-        |> Expect.isTrue "same project set in same working directory should match"
-      }
-
-      test "matching targets in a different working directory do not suppress startup session" {
-        let repoRoot = @"C:\Code\Repos\SageFs"
-        let otherRoot = @"C:\Code\Repos\OtherWorkspace"
-        let sampleAbsolute =
-          Path.Combine(repoRoot, "samples", "from-csharp", "SageFs.Samples.FromCSharp", "SageFs.Samples.FromCSharp.fsproj")
-        let session = mkSession otherRoot [ sampleAbsolute ]
-
-        hasMatchingStartupTargets repoRoot [ sampleAbsolute ] [ session ]
-        |> Expect.isFalse "same project set from another working directory should not block startup session creation"
       }
     ]
 

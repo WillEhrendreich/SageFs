@@ -238,7 +238,7 @@ module SessionManager =
     for (key, value) in Instrumentation.workerOtelEnvVars (SessionId.value sessionId) do
       psi.Environment.[key] <- value
 
-    // Propagate session config as env vars (replaces --sln/--proj CLI args)
+    // Propagate session config as env vars so worker startup stays independent of daemon CLI flags
     for (key, value) in envVars do
       psi.Environment.[key] <- value
 

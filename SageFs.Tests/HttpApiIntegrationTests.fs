@@ -128,6 +128,14 @@ let getJson (client: HttpClient) (path: string) = task {
 let normalizeDir (path: string) =
   Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
 
+let createSession (client: HttpClient) (projectPath: string) (workingDir: string) = task {
+  let payload =
+    {| projects = [| projectPath |]
+       workingDirectory = workingDir |}
+  let! status, body = postJson client "/api/sessions/create" payload
+  return status, body
+}
+
 let waitForReadySession (client: HttpClient) (targetDir: string) (timeout: TimeSpan) = task {
   let started = DateTime.UtcNow
   let mutable ready = false
@@ -584,15 +592,20 @@ let httpApiRoutingTests =
     testCase "POST /api/completions uses workingDirectory for startup session routing" <| fun _ ->
       let port = reserveLoopbackPort (Some (38600 + (Random().Next(100))))
       let proc, client =
-        startDaemonWithArgs port repoRoot [ "--proj"; smokeSampleProject ]
+        startDaemonWithArgs port repoRoot []
         |> Async.AwaitTask |> Async.RunSynchronously
       try
+        let createStatus, createBody =
+          createSession client smokeSampleProject smokeSampleProjectDir
+          |> Async.AwaitTask |> Async.RunSynchronously
+        createStatus |> Expect.equal "session create should succeed" 200
+
         let ready, sessionsBody =
           waitForReadySession client smokeSampleProjectDir (TimeSpan.FromSeconds(60.0))
           |> Async.AwaitTask |> Async.RunSynchronously
 
         ready
-        |> Expect.isTrue (sprintf "startup session should reach Ready. Sessions: %s" sessionsBody)
+        |> Expect.isTrue (sprintf "explicitly created session should reach Ready. Create: %s Sessions: %s" createBody sessionsBody)
 
         let payload =
           {| code = "System."
@@ -611,15 +624,20 @@ let httpApiRoutingTests =
     testCase "POST /api/completions accepts snake_case cursor_position" <| fun _ ->
       let port = reserveLoopbackPort (Some (38700 + (Random().Next(100))))
       let proc, client =
-        startDaemonWithArgs port repoRoot [ "--proj"; smokeSampleProject ]
+        startDaemonWithArgs port repoRoot []
         |> Async.AwaitTask |> Async.RunSynchronously
       try
+        let createStatus, createBody =
+          createSession client smokeSampleProject smokeSampleProjectDir
+          |> Async.AwaitTask |> Async.RunSynchronously
+        createStatus |> Expect.equal "session create should succeed" 200
+
         let ready, sessionsBody =
           waitForReadySession client smokeSampleProjectDir (TimeSpan.FromSeconds(60.0))
           |> Async.AwaitTask |> Async.RunSynchronously
 
         ready
-        |> Expect.isTrue (sprintf "startup session should reach Ready. Sessions: %s" sessionsBody)
+        |> Expect.isTrue (sprintf "explicitly created session should reach Ready. Create: %s Sessions: %s" createBody sessionsBody)
 
         let payload =
           {| code = "System."

@@ -28,7 +28,7 @@ module McpAdapter =
       match Array.isEmpty solutions with
       | true -> "  (none found)"
       | false -> solutions |> Array.map (sprintf "  - %s") |> String.concat "\n"
-    sprintf "Available Projects/Solutions in %s:\n\n📦 F# Projects (.fsproj):\n%s\n\n📂 Solutions (.sln/.slnx):\n%s\n\n💡 To load a project: SageFs --proj ProjectName.fsproj\n💡 To load a solution: SageFs --sln SolutionName.sln\n💡 To auto-detect: SageFs (in directory with project/solution)" workingDir projectList solutionList
+    sprintf "Available Projects/Solutions in %s:\n\n📦 F# Projects (.fsproj):\n%s\n\n📂 Solutions (.sln/.slnx):\n%s\n\n💡 Start the daemon with: SageFs\n💡 Then create a session for ProjectName.fsproj or SolutionName.slnx via create_session\n💡 Sessions can also be created from connected editors or the dashboard" workingDir projectList solutionList
 
   let formatStartupBanner (version: string) (mcpPort: int option) =
     match mcpPort with
