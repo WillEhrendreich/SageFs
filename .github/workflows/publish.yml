@@ -102,7 +102,7 @@ jobs:
       env:
         VSCE_PAT: ${{ secrets.VSCE_PAT }}
       run: |
-        npx tfx-cli extension publish --publisher $env:VS_MARKETPLACE_PUBLISHER --vsix "release/sagefs-visualstudio-${{ steps.manifest.outputs.version }}.vsix" --token $env:VSCE_PAT --no-prompt
+        npx tfx-cli extension publish --publisher $env:VS_MARKETPLACE_PUBLISHER --vsix "release/sagefs-visualstudio-${{ steps.manifest.outputs.version }}.vsix" --token $env:VSCE_PAT --no-prompt --override '{"categories":"Coding Testing"}'
 
     - name: Push to NuGet
       run: dotnet nuget push "release/SageFs.${{ steps.manifest.outputs.version }}.nupkg" --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
