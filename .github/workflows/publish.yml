@@ -151,47 +151,32 @@ jobs:
         $vsixPath = "release/sagefs-visualstudio-${{ steps.manifest.outputs.version }}.vsix"
         $publisher = "${{ steps.vsix_patch.outputs.publisher }}"
         $extId = "${{ steps.vsix_patch.outputs.extension_id }}"
-        Write-Host "Publisher: '$publisher', ExtensionId: '$extId'"
-        $vsixBytes = [System.IO.File]::ReadAllBytes($vsixPath)
-        $encodedPAT = [Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes(":$env:VSCE_PAT"))
-        $authHeaders = @{
-          'Authorization' = "Basic $encodedPAT"
-          'Accept' = 'application/json;api-version=3.0-preview.1'
-          'X-Market-User-Id' = [System.Guid]::NewGuid().ToString()
-        }
-        # Check if extension already exists (create vs update)
-        $checkUri = "https://marketplace.visualstudio.com/_apis/gallery/publishers/$publisher/extensions/$($extId)?api-version=3.0-preview.1"
-        Write-Host "Checking existence: $checkUri"
-        $exists = $false
-        $checkResp = Invoke-WebRequest -Uri $checkUri -Method GET -Headers $authHeaders -UseBasicParsing -SkipHttpErrorCheck
-        if ($checkResp.StatusCode -eq 200) {
-          $exists = $true
-          Write-Host "Extension exists (HTTP 200), will update (PUT)"
-        } elseif ($checkResp.StatusCode -eq 404) {
-          Write-Host "Extension not found (404), will create (POST)"
-        } else {
-          Write-Host "WARNING: existence check returned HTTP $($checkResp.StatusCode) — attempting create anyway"
-          Write-Host "Check response: $($checkResp.Content)"
-        }
-        $uploadUri = if ($exists) {
-          "https://marketplace.visualstudio.com/_apis/gallery/publishers/$publisher/extensions/$($extId)?api-version=3.0-preview.1"
-        } else {
-          "https://marketplace.visualstudio.com/_apis/gallery/publishers/$publisher/extensions?api-version=3.0-preview.1"
-        }
-        $method = if ($exists) { 'PUT' } else { 'POST' }
-        Write-Host "Uploading VSIX ($method $uploadUri) ..."
-        # Gallery API expects application/json with the VSIX base64-encoded as extensionManifest
-        $vsixBase64 = [Convert]::ToBase64String($vsixBytes)
-        $body = ConvertTo-Json @{ extensionManifest = $vsixBase64 } -Compress
-        $resp = Invoke-WebRequest -Uri $uploadUri -Method $method -Body $body -ContentType 'application/json' -Headers $authHeaders -UseBasicParsing -SkipHttpErrorCheck
-        Write-Host "HTTP $($resp.StatusCode)"
-        Write-Host "Response body: $($resp.Content)"
-        if ($resp.StatusCode -ge 200 -and $resp.StatusCode -lt 300) {
-          Write-Host "SUCCESS"
-        } else {
-          Write-Host "::warning::VS Marketplace publish failed with HTTP $($resp.StatusCode) — NuGet and GitHub Release will still proceed. Check response body above for root cause."
+        Write-Host "Publisher: '$publisher', ExtensionId: '$extId', VSIX: '$vsixPath'"
+        # VsixPublisher.exe is the correct tool for VS Marketplace — the Gallery REST API
+        # returns VsIdeExtensionNotSupported for VS IDE extensions.
+        $vsixPublisher = Get-ChildItem "C:\Program Files\Microsoft Visual Studio\2022\*\VSSDK\VisualStudioIntegration\Tools\Bin\VsixPublisher.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+        if (-not $vsixPublisher) {
+          Write-Host "::warning::VsixPublisher.exe not found on this runner — skipping VS Marketplace publish"
           exit 1
         }
+        Write-Host "Using VsixPublisher.exe at: $($vsixPublisher.FullName)"
+        # Minimal publish manifest required by VsixPublisher
+        $publishManifest = @{
+          extensionId = $extId
+          version = "${{ steps.manifest.outputs.version }}"
+          categories = @("Coding")
+        } | ConvertTo-Json
+        $manifestPath = [System.IO.Path]::Combine($env:RUNNER_TEMP, "publish-manifest.json")
+        Set-Content -Path $manifestPath -Value $publishManifest -Encoding UTF8
+        Write-Host "Publish manifest: $publishManifest"
+        & $vsixPublisher.FullName publish -payload $vsixPath -publishManifest $manifestPath -personalAccessToken $env:VSCE_PAT 2>&1
+        $exitCode = $LASTEXITCODE
+        Remove-Item $manifestPath -ErrorAction SilentlyContinue
+        if ($exitCode -ne 0) {
+          Write-Host "::warning::VsixPublisher.exe failed (exit $exitCode) — NuGet and GitHub Release will still proceed."
+          exit 1
+        }
+        Write-Host "SUCCESS"
 
     - name: Push to NuGet
       run: dotnet nuget push "release/SageFs.${{ steps.manifest.outputs.version }}.nupkg" --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
