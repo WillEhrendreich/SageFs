@@ -197,9 +197,10 @@ let keyboardHandlerScript () =
     })();
   """ DomIds.SidebarResize DomIds.Sidebar) ]
 
-/// Render the dashboard HTML shell.
-/// Datastar initializes and connects to the /dashboard/stream SSE endpoint.
-let renderShell (version: string) =
+/// Render the dashboard HTML shell with pre-rendered initial content.
+/// Providing initialContent eliminates the loading-screen flash — the browser
+/// receives a complete first paint without needing an SSE round-trip first.
+let renderShell (version: string) (initialSessionId: string) (initialContent: XmlNode) =
   Elem.html [] [
     Elem.head [] [
       Elem.title [] [ Text.raw "SageFs Dashboard" ]
@@ -208,21 +209,180 @@ let renderShell (version: string) =
       Elem.link [ Attr.rel "stylesheet"; Attr.href "/dashboard/dashboard.css" ]
     ]
     Elem.body [ Ds.safariStreamingFix ] [
-      Elem.div [ Ds.onInit (Ds.get "/dashboard/stream"); Ds.signal (Signals.HelpVisible, "false"); Ds.signal (Signals.SidebarOpen, "true"); Ds.signal (Signals.SessionId, ""); Ds.signal (Signals.Code, ""); Ds.signal (Signals.NewSessionDir, ""); Ds.signal (Signals.ManualProjects, ""); Ds.signal (Signals.Theme, ""); Ds.signal (Signals.CursorPos, "0"); Ds.signal (Signals.TestFilter, "all"); Ds.signal (Signals.ExpandedDashboard, "false") ] []
+      Elem.div [ Ds.onInit (Ds.get "/dashboard/stream"); Ds.signal (Signals.HelpVisible, "false"); Ds.signal (Signals.SidebarOpen, "true"); Ds.signal (Signals.SessionId, initialSessionId); Ds.signal (Signals.Code, ""); Ds.signal (Signals.NewSessionDir, ""); Ds.signal (Signals.ManualProjects, ""); Ds.signal (Signals.Theme, ""); Ds.signal (Signals.CursorPos, "0"); Ds.signal (Signals.TestFilter, "all"); Ds.signal (Signals.ExpandedDashboard, "false") ] []
       Elem.div [ Attr.id DomIds.ServerStatus; Attr.class' "conn-banner conn-disconnected"; Attr.style "display:none" ] [
         Text.raw "⏳ Connecting to server..."
       ]
-      Elem.div [ Attr.id DomIds.Main ] [
-        Elem.div [ Attr.style "display: flex; align-items: center; justify-content: center; height: 100vh; color: var(--fg-dim);" ] [
-          Text.raw "⏳ Loading dashboard..."
-        ]
-      ]
+      Elem.div [ Attr.id DomIds.Main ] [ initialContent ]
       completionInsertScript ()
       autoScrollScript ()
       detailsToggleScript ()
       keyboardHandlerScript ()
     ]
   ]
+
+let private buildOutputPanels
+  (q: DashboardQueries)
+  : System.Threading.Tasks.Task<XmlNode * XmlNode * XmlNode> =
+  task {
+    let! previous = q.GetPreviousSessions ()
+    let computeResult () =
+      match q.GetElmRegions () with
+      | Some regions ->
+        let outputRegion = regions |> List.tryFind (fun r -> r.Id = "output")
+        let outNode =
+          match outputRegion with
+          | Some r -> renderOutput (parseOutputLines r.Content)
+          | None -> renderOutput []
+        let sessRegion = regions |> List.tryFind (fun r -> r.Id = "sessions")
+        match sessRegion with
+        | Some r ->
+          let parsed = parseSessionLines r.Content
+          let corrected = overrideSessionStatuses q.GetSessionState q.GetStatusMsg parsed
+          let visible =
+            corrected
+            |> List.filter (fun s -> s.Status <> "stopped")
+            |> List.map (fun s ->
+              let info = q.GetSessionStandbyInfo s.Id
+              let testSummary = q.GetSessionTestSummary s.Id
+              let coverageSummary = q.GetSessionCoverageSummary s.Id
+              let treemapEntries = q.GetSessionTestTreemap s.Id
+              let bindingEntries = q.GetSessionBindings s.Id
+              { s with
+                  StandbyLabel = StandbyInfo.label info
+                  TestSummary = testSummary
+                  CoverageSummary = coverageSummary
+                  TestTreemapEntries = treemapEntries
+                  BindingEntries = bindingEntries })
+          let creating = isCreatingSession r.Content
+          let sess = renderSessions visible creating
+          let sessionPicker =
+            match visible.IsEmpty && not creating with
+            | true -> renderSessionPicker previous
+            | false -> renderSessionPickerEmpty
+          (outNode, sess, sessionPicker)
+        | None ->
+          (outNode, renderSessions [] false, renderSessionPickerEmpty)
+      | None ->
+        (renderOutput [], renderSessions [] false, renderSessionPickerEmpty)
+    return computeResult ()
+  }
+
+/// Build a complete DashboardSnapshot from the current daemon state.
+/// Independent of any HTTP/SSE context — called from both the initial GET render
+/// and each SSE push. Returns the snapshot, the resolved session ID, and the
+/// resolved theme name so the caller can update its tracking state.
+let buildDashboardSnapshot
+  (q: DashboardQueries)
+  (infra: DashboardInfra)
+  (currentSessionId: string)
+  (lastSessionId: string)
+  (lastWorkingDir: string)
+  (lastThemeName: string)
+  : System.Threading.Tasks.Task<DashboardSnapshot * string * string> =
+  task {
+    let activeId = q.GetActiveSessionId ()
+    let sessionId =
+      match activeId.Length > 0 with
+      | true -> activeId
+      | false -> currentSessionId
+    let state = q.GetSessionState sessionId
+    let stateStr = SessionState.label state
+    let workingDir = q.GetSessionWorkingDir sessionId
+    let statsTask = q.GetEvalStats sessionId
+    let hrTask = q.GetHotReloadState sessionId
+    let wCtxTask = q.GetWarmupContext sessionId
+    do! System.Threading.Tasks.Task.WhenAll(statsTask, hrTask, wCtxTask)
+    let stats : SageFs.Affordances.EvalStats = statsTask.Result
+    let hrState = hrTask.Result
+    let wCtx = wCtxTask.Result
+    let timelineStats = q.GetEvalTimeline()
+    let evalStatsView = EvalStatsView.fromStats stats timelineStats
+    let daemonHealthPanel =
+      match q.GetDaemonHealth() with
+      | Some snap -> renderDaemonHealth (DaemonHealthView.fromSnapshot snap)
+      | None -> Elem.div [ Attr.id DomIds.DaemonHealth; Attr.class' "meta" ] []
+    let failureNarrativesPanel =
+      let pairs = q.GetFailureNarratives()
+      renderFailureNarratives (FailureNarrativesPanelView.fromNarratives pairs)
+    let diagnosticsPanel = renderCurrentDiagnostics (q.GetCurrentDiagnostics())
+    let filmstripPanel = renderSessionFilmstrip (q.GetFilmstripEntries())
+    let themeName =
+      match resolveThemePush infra.SessionThemes sessionId workingDir lastSessionId lastWorkingDir with
+      | Some name -> name
+      | None -> lastThemeName
+    let connectionLabel =
+      match infra.ConnectionTracker with
+      | Some tracker ->
+        let counts = tracker.GetAllCounts()
+        let parts =
+          [ match counts.Browsers > 0 with | true -> sprintf "🌐 %d" counts.Browsers | false -> ()
+            match counts.McpAgents > 0 with | true -> sprintf "🤖 %d" counts.McpAgents | false -> ()
+            match counts.Terminals > 0 with | true -> sprintf "💻 %d" counts.Terminals | false -> () ]
+        match parts.IsEmpty with
+        | true -> Some (sprintf "%d connected" tracker.TotalCount)
+        | false -> Some (String.Join(" ", parts))
+      | None -> None
+    let hrPanel =
+      match sessionId.Length > 0 with
+      | true ->
+        match hrState with
+        | Some hr -> renderHotReloadPanel sessionId hr.files hr.watchedCount
+        | None -> renderHotReloadEmpty
+      | false -> renderHotReloadEmpty
+    let scPanel =
+      match sessionId.Length > 0 with
+      | true ->
+        match wCtx with
+        | Some ctx' ->
+          let fileStatuses =
+            match hrState with
+            | Some hr ->
+              hr.files |> List.map (fun f ->
+                let readiness =
+                  ctx'.NamespacesOpened
+                  |> List.exists (fun b -> f.path.EndsWith(b.Name, StringComparison.OrdinalIgnoreCase))
+                  |> fun loaded -> match loaded with | true -> FileReadiness.Loaded | false -> FileReadiness.NotLoaded
+                { Path = f.path; Readiness = readiness; LastLoadedAt = None; IsWatched = f.watched })
+            | None -> []
+          renderSessionContextPanel
+            { SessionId = sessionId
+              ProjectNames = []
+              WorkingDir = q.GetSessionWorkingDir sessionId
+              Status = SessionState.label (q.GetSessionState sessionId)
+              Warmup = ctx'
+              FileStatuses = fileStatuses }
+        | None -> renderSessionContextEmpty
+      | false -> renderSessionContextEmpty
+    let bindingsPanel =
+      renderBindingsPanel (resolveBindingsPanelSnapshot (q.GetBindingScopeSnapshot ()) (q.GetSessionBindings sessionId))
+    let alarmPanel = renderAlarmBanner (infra.SystemAlarmBuffer.Value)
+    let! outputPanel, sessionsPanel, sessionPicker = buildOutputPanels q
+    let snap : DashboardSnapshot = {
+      Version = infra.Version
+      SessionState = stateStr
+      SessionId = sessionId
+      WorkingDir = workingDir
+      WarmupProgress = q.GetWarmupProgress sessionId
+      EvalStats = evalStatsView
+      AlarmPanel = alarmPanel
+      DaemonHealth = daemonHealthPanel
+      FailureNarrativesPanel = failureNarrativesPanel
+      DiagnosticsPanel = diagnosticsPanel
+      FilmstripPanel = filmstripPanel
+      ThemeName = themeName
+      ConnectionLabel = connectionLabel
+      HotReloadPanel = hrPanel
+      SessionContextPanel = scPanel
+      OutputPanel = outputPanel
+      SessionsPanel = sessionsPanel
+      SessionPicker = sessionPicker
+      ThemePicker = renderThemePicker themeName
+      ThemeVars = renderThemeVars themeName
+      BindingsPanel = bindingsPanel
+    }
+    return snap, sessionId, themeName
+  }
 
 /// Create the SSE stream handler that pushes Elm state to the browser.
 let createStreamHandler
@@ -241,181 +401,16 @@ let createStreamHandler
     infra.ConnectionTracker |> Option.iter (fun t -> t.Register(clientId, Browser, currentSessionId))
     let mutable lastSessionId = ""
     let mutable lastWorkingDir = ""
-    let mutable lastOutputHash = 0
     let mutable lastThemeName = defaultThemeName
 
-    // Per-connection alarm buffer — populated from shared infra buffer each push
-    // (the shared buffer is the source of truth; we read it on every render)
-
     let pushState () = task {
-      // === FULL-PAGE MORPH: "The Tao of Datastar" ===
-      // Build a complete DashboardSnapshot from current state, render it all
-      // into one <div id="main">, and push a single SSE morph. Datastar diffs.
-      // See module-level doc comment for philosophy.
-
-      // Track daemon's active session for theme switching
-      let activeId = q.GetActiveSessionId ()
-      match activeId.Length > 0 with
-      | true -> currentSessionId <- activeId
-      | false -> ()
-      let state = q.GetSessionState currentSessionId
-      let stateStr = SessionState.label state
-      let workingDir = q.GetSessionWorkingDir currentSessionId
-      // Parallelize all worker HTTP fetches — prevents sequential 2s+ timeouts
-      let statsTask = q.GetEvalStats currentSessionId
-      let hrTask = q.GetHotReloadState currentSessionId
-      let wCtxTask = q.GetWarmupContext currentSessionId
-      do! System.Threading.Tasks.Task.WhenAll(statsTask, hrTask, wCtxTask)
-      let stats : SageFs.Affordances.EvalStats = statsTask.Result
-      let hrState = hrTask.Result
-      let wCtx = wCtxTask.Result
-      // Push sessionId signal so eval form can include it
+      let! snap, newSessionId, newThemeName =
+        buildDashboardSnapshot q infra currentSessionId lastSessionId lastWorkingDir lastThemeName
+      currentSessionId <- newSessionId
+      lastSessionId <- newSessionId
+      lastWorkingDir <- q.GetSessionWorkingDir newSessionId
+      lastThemeName <- newThemeName
       do! Response.ssePatchSignal ctx (SignalPath.sp "sessionId") currentSessionId
-      // Build eval stats view model with sparkline from EvalTimeline
-      let timelineStats = q.GetEvalTimeline()
-      let evalStatsView = EvalStatsView.fromStats stats timelineStats
-      // Build daemon health panel
-      let daemonHealthPanel =
-        match q.GetDaemonHealth() with
-        | Some snap -> renderDaemonHealth (DaemonHealthView.fromSnapshot snap)
-        | None -> Elem.div [ Attr.id DomIds.DaemonHealth; Attr.class' "meta" ] []
-      // Build failure narratives panel
-      let failureNarrativesPanel =
-        let pairs = q.GetFailureNarratives()
-        renderFailureNarratives (FailureNarrativesPanelView.fromNarratives pairs)
-      // Build diagnostics panel
-      let diagnosticsPanel = renderCurrentDiagnostics (q.GetCurrentDiagnostics())
-      // Build session filmstrip panel
-      let filmstripPanel = renderSessionFilmstrip (q.GetFilmstripEntries())
-      // Resolve theme
-      let themeName =
-        match resolveThemePush infra.SessionThemes currentSessionId workingDir lastSessionId lastWorkingDir with
-        | Some name -> lastThemeName <- name; name
-        | None -> lastThemeName
-      lastSessionId <- currentSessionId
-      lastWorkingDir <- workingDir
-      // Build connection label
-      let connectionLabel =
-        match infra.ConnectionTracker with
-        | Some tracker ->
-          let counts = tracker.GetAllCounts()
-          let parts =
-            [ match counts.Browsers > 0 with | true -> sprintf "🌐 %d" counts.Browsers | false -> ()
-              match counts.McpAgents > 0 with | true -> sprintf "🤖 %d" counts.McpAgents | false -> ()
-              match counts.Terminals > 0 with | true -> sprintf "💻 %d" counts.Terminals | false -> () ]
-          match parts.IsEmpty with
-          | true -> Some (sprintf "%d connected" tracker.TotalCount)
-          | false -> Some (String.Join(" ", parts))
-        | None -> None
-      // Build hot-reload panel
-      let hrPanel =
-        match currentSessionId.Length > 0 with
-        | true ->
-          match hrState with
-          | Some hr -> renderHotReloadPanel currentSessionId hr.files hr.watchedCount
-          | None -> renderHotReloadEmpty
-        | false -> renderHotReloadEmpty
-      // Build session context panel
-      let scPanel =
-        match currentSessionId.Length > 0 with
-        | true ->
-          match wCtx with
-          | Some ctx' ->
-            let fileStatuses =
-              match hrState with
-              | Some hr ->
-                hr.files |> List.map (fun f ->
-                  let readiness =
-                    ctx'.NamespacesOpened
-                    |> List.exists (fun b -> f.path.EndsWith(b.Name, StringComparison.OrdinalIgnoreCase))
-                    |> fun loaded -> match loaded with | true -> FileReadiness.Loaded | false -> FileReadiness.NotLoaded
-                  { Path = f.path; Readiness = readiness; LastLoadedAt = None; IsWatched = f.watched })
-              | None -> []
-            renderSessionContextPanel
-              { SessionId = currentSessionId
-                ProjectNames = []
-                WorkingDir = q.GetSessionWorkingDir currentSessionId
-                Status = SessionState.label (q.GetSessionState currentSessionId)
-                Warmup = ctx'
-                FileStatuses = fileStatuses }
-          | None -> renderSessionContextEmpty
-        | false -> renderSessionContextEmpty
-      // Build bindings explorer panel
-      let bindingsPanel =
-        renderBindingsPanel (resolveBindingsPanelSnapshot (q.GetBindingScopeSnapshot ()) (q.GetSessionBindings currentSessionId))
-      // Build alarm panel from shared buffer
-      let alarmPanel = renderAlarmBanner (infra.SystemAlarmBuffer.Value)
-      // Build output + sessions from Elm regions
-      let! outputPanel, sessionsPanel, sessionPicker = task {
-        match q.GetElmRegions () with
-        | Some regions ->
-          let outputRegion = regions |> List.tryFind (fun r -> r.Id = "output")
-          let outputHash = outputRegion |> Option.map (fun r -> r.Content.GetHashCode()) |> Option.defaultValue 0
-          let outNode =
-            match outputRegion with
-            | Some r -> renderOutput (parseOutputLines r.Content)
-            | None -> renderOutput []
-          lastOutputHash <- outputHash
-          let sessRegion = regions |> List.tryFind (fun r -> r.Id = "sessions")
-          match sessRegion with
-          | Some r ->
-            let parsed = parseSessionLines r.Content
-            let corrected = overrideSessionStatuses q.GetSessionState q.GetStatusMsg parsed
-            let visible =
-              corrected
-              |> List.filter (fun s -> s.Status <> "stopped")
-              |> List.map (fun s ->
-                let info = q.GetSessionStandbyInfo s.Id
-                let testSummary = q.GetSessionTestSummary s.Id
-                let coverageSummary = q.GetSessionCoverageSummary s.Id
-                let treemapEntries = q.GetSessionTestTreemap s.Id
-                let bindingEntries = q.GetSessionBindings s.Id
-                { s with
-                    StandbyLabel = StandbyInfo.label info
-                    TestSummary = testSummary
-                    CoverageSummary = coverageSummary
-                    TestTreemapEntries = treemapEntries
-                    BindingEntries = bindingEntries })
-            let creating = isCreatingSession r.Content
-            let sess = renderSessions visible creating
-            let! pick =
-              match visible.IsEmpty && not creating with
-              | true ->
-                task {
-                  let! previous = q.GetPreviousSessions ()
-                  return renderSessionPicker previous
-                }
-              | false -> task { return renderSessionPickerEmpty }
-            return (outNode, sess, pick)
-          | None ->
-            return (outNode, renderSessions [] false, renderSessionPickerEmpty)
-        | None ->
-          return (renderOutput [], renderSessions [] false, renderSessionPickerEmpty)
-      }
-      // Compose everything into one snapshot and push ONE morph
-      let snap : DashboardSnapshot = {
-        Version = infra.Version
-        SessionState = stateStr
-        SessionId = currentSessionId
-        WorkingDir = workingDir
-        WarmupProgress = q.GetWarmupProgress currentSessionId
-        EvalStats = evalStatsView
-        AlarmPanel = alarmPanel
-        DaemonHealth = daemonHealthPanel
-        FailureNarrativesPanel = failureNarrativesPanel
-        DiagnosticsPanel = diagnosticsPanel
-        FilmstripPanel = filmstripPanel
-        ThemeName = themeName
-        ConnectionLabel = connectionLabel
-        HotReloadPanel = hrPanel
-        SessionContextPanel = scPanel
-        OutputPanel = outputPanel
-        SessionsPanel = sessionsPanel
-        SessionPicker = sessionPicker
-        ThemePicker = renderThemePicker themeName
-        ThemeVars = renderThemeVars themeName
-        BindingsPanel = bindingsPanel
-      }
       do! ssePatchNode ctx (renderMainContent snap)
     }
 
@@ -999,7 +994,22 @@ let createEndpoints
       ctx.Response.Headers.["Cache-Control"] <- Microsoft.Extensions.Primitives.StringValues "public, max-age=31536000, immutable"
       do! ctx.Response.WriteAsync(dashboardCss)
     })
-    yield get "/dashboard" (FalcoResponse.ofHtml (renderShell infra.Version))
+    yield get "/dashboard" (fun ctx -> task {
+      try
+        let! sessions = q.GetAllSessions ()
+        let initialSessionId =
+          let active = q.GetActiveSessionId ()
+          match active.Length > 0 with
+          | true -> active
+          | false ->
+            sessions |> List.tryHead |> Option.map (fun s -> WorkerProtocol.SessionId.value s.Id) |> Option.defaultValue ""
+        let! snap, resolvedId, _ = buildDashboardSnapshot q infra initialSessionId "" "" defaultThemeName
+        let html = renderShell infra.Version resolvedId (renderMainContent snap)
+        return! FalcoResponse.ofHtml html ctx
+      with _ ->
+        let html = renderShell infra.Version "" (Elem.div [] [])
+        return! FalcoResponse.ofHtml html ctx
+    })
     yield get "/dashboard/stream" (createStreamHandler q infra)
     yield post "/dashboard/eval" (createEvalHandler a.EvalCode)
     yield post "/dashboard/eval-file" (createEvalFileHandler q.GetSessionWorkingDir a.EvalCode)

@@ -7,6 +7,28 @@
 /* ── Reset & Root ─────────────────────────────────────────────── */
 
 :root {
+  color-scheme: dark;
+  /* Kanagawa fallbacks — overridden by <style id="theme-vars"> once SSE arrives */
+  --bg-default: #1f1f28;
+  --bg-panel: #2a2a37;
+  --bg-editor: #1f1f28;
+  --bg-selection: #363646;
+  --bg-status: #1f1f28;
+  --bg-focus: #363646;
+  --fg-default: #dcd7ba;
+  --fg-dim: #727169;
+  --fg-green: #98bb6c;
+  --fg-red: #ff5d62;
+  --fg-yellow: #e6c384;
+  --fg-cyan: #7fb4ca;
+  --fg-blue: #7e9cd8;
+  --fg-magenta: #957fb8;
+  --border-normal: #54546d;
+  --border-focus: #7e9cd8;
+  --color-pass: #98bb6c;
+  --color-fail: #ff5d62;
+  --color-warn: #e6c384;
+  --color-info: #7fb4ca;
   --font-size: 14px;
   --sidebar-width: 320px;
 }
