@@ -3,6 +3,7 @@ module SageFs.Middleware.HotReloading
 open System
 open System.IO
 open System.Reflection
+open System.Runtime.CompilerServices
 
 open SageFs.ProjectLoading
 open SageFs.Utils
@@ -265,8 +266,71 @@ let setReloadingState (value: State) (st: AppState) : AppState =
 
 open HarmonyLib
 
+/// Outcome of the post-detour canary check.
+type CanaryResult =
+  | DetourConfirmed
+  | BytesUnchanged
+  | CanaryError of exn
+
+/// Number of leading native code bytes to snapshot for canary comparison.
+[<Literal>]
+let private canarySnapshotBytes = 16
+
+/// On x64 .NET, JIT-compiled methods often have a fixed-address precode stub:
+///   FF 25 xx xx xx xx  =  JMP [rip + disp32]
+/// The stub jumps through an indirect slot to the actual JIT-compiled code.
+/// MonoMod patches the first bytes of the JIT code (writing an E9 JMP trampoline)
+/// but leaves the stub, the slot value, and the function pointer unchanged.
+/// To detect the detour, we must follow the indirection and read bytes at the
+/// actual JIT code address.
+let private resolveJitCodeAddress (fnPtr: nativeint) : nativeint =
+  try
+    let header = Array.zeroCreate<byte> 2
+    System.Runtime.InteropServices.Marshal.Copy(fnPtr, header, 0, 2)
+    match header.[0], header.[1] with
+    | 0xFFuy, 0x25uy ->
+      // JMP [rip+disp32]: read the 4-byte displacement, compute slot address,
+      // then read the slot to get the actual JIT code address
+      let dispBytes = Array.zeroCreate<byte> 4
+      System.Runtime.InteropServices.Marshal.Copy(fnPtr + 2n, dispBytes, 0, 4)
+      let disp = System.BitConverter.ToInt32(dispBytes, 0)
+      let slotAddr = fnPtr + 6n + nativeint disp
+      System.Runtime.InteropServices.Marshal.ReadIntPtr(slotAddr)
+    | _ ->
+      // Not a JMP stub — the function pointer IS the JIT code
+      fnPtr
+  with _ ->
+    fnPtr
+
+/// Snapshot the leading bytes at the resolved JIT code address of a method.
+/// Returns the JIT code address and the byte snapshot.
+let snapshotMethodState (method: MethodBase) : (nativeint * byte[]) option =
+  try
+    System.Runtime.CompilerServices.RuntimeHelpers.PrepareMethod(method.MethodHandle)
+    let fnPtr = method.MethodHandle.GetFunctionPointer()
+    let jitAddr = resolveJitCodeAddress fnPtr
+    let buf = Array.zeroCreate<byte> canarySnapshotBytes
+    System.Runtime.InteropServices.Marshal.Copy(jitAddr, buf, 0, canarySnapshotBytes)
+    Some (jitAddr, buf)
+  with _ -> None
+
+/// Validate that a detour changed the JIT code bytes at the resolved address.
+/// Re-reads bytes at the same JIT code address captured before the detour.
+let validateDetourCanary (jitAddr: nativeint) (preBytes: byte[]) : CanaryResult =
+  try
+    let postBytes = Array.zeroCreate<byte> preBytes.Length
+    System.Runtime.InteropServices.Marshal.Copy(jitAddr, postBytes, 0, preBytes.Length)
+    match postBytes <> preBytes with
+    | true -> DetourConfirmed
+    | false -> BytesUnchanged
+  with ex ->
+    CanaryError ex
+
 let detourMethod (logger: ILogger) (method: MethodBase) (replacement: MethodBase) =
   try
+    // Snapshot pre-detour observable state for canary validation
+    let preSnapshot = snapshotMethodState method
+
     typeof<Harmony>.Assembly
     |> _.GetTypes()
     |> Array.find (fun t -> t.Name = "PatchTools")
@@ -274,6 +338,24 @@ let detourMethod (logger: ILogger) (method: MethodBase) (replacement: MethodBase
     |> Seq.find (fun n -> n.Name = "DetourMethod")
     |> fun x -> x.Invoke(null, [| method; replacement |])
     |> ignore
+
+    // Post-patch canary: verify the detour actually took effect
+    match preSnapshot with
+    | Some (jitAddr, preBytes) ->
+      match validateDetourCanary jitAddr preBytes with
+      | DetourConfirmed ->
+        logger.LogDebug (sprintf "Canary confirmed: detour for %s is active" method.Name)
+      | BytesUnchanged ->
+        let msg =
+          sprintf "Canary warning: native code unchanged after detour for %s — patch may be ineffective"
+            method.Name
+        logger.LogWarning msg
+        DevReloadHealthTracker.transition
+          (DevReloadHealth.Degraded (sprintf "Canary: bytes unchanged for %s" method.Name))
+      | CanaryError ex ->
+        logger.LogWarning (sprintf "Canary validation error for %s: %s" method.Name ex.Message)
+    | None ->
+      logger.LogDebug (sprintf "Canary skipped: could not snapshot pre-detour bytes for %s" method.Name)
   with
   | :? TargetInvocationException as ex when
     (ex.InnerException :? PlatformNotSupportedException) ->

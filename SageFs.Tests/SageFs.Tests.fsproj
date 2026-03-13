@@ -152,6 +152,7 @@
         <Compile Include="EndpointContractTests.fs" />
         <Compile Include="FsiRegressionTests.fs" />
         <Compile Include="HotReloadingPropertyTests.fs" />
+        <Compile Include="HarmonyCanaryTests.fs" />
         <Compile Include="DevReloadMiddlewareTests.fs" />
         <Compile Include="QuarantineTests.fs" />
         <Compile Include="FlakyClassificationTests.fs" />
@@ -237,6 +238,7 @@
         <Compile Include="SageTuiAllocationBenchmarks.fs" />
         <Compile Include="ManifestBackupRecoveryTests.fs" />
         <Compile Include="WorkerLivenessTests.fs" />
+        <Compile Include="TypeRedefinitionWarningTests.fs" />
         <Compile Include="Program.fs" />
     </ItemGroup>
 
