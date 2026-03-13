@@ -163,6 +163,7 @@ jobs:
         # Publish manifest required by VsixPublisher — 'identity' is a required nested object
         $publishManifest = @{
           identity = @{
+            internalName = $extId
             extensionId = $extId
             version = "${{ steps.manifest.outputs.version }}"
             publisher = $publisher
