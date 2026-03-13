@@ -442,6 +442,12 @@ try {
         Write-Host "  Session $($readySession.id) ready after ${i}s" -ForegroundColor DarkGray
         break
       }
+      # Bail out immediately if all sessions have faulted — no point waiting the full timeout
+      $allSessions = @($sessions.sessions)
+      if ($allSessions.Count -gt 0 -and ($allSessions | Where-Object { $_.status -ne "Faulted" }).Count -eq 0) {
+        Write-Host "  All sessions faulted — aborting warmup early after ${i}s" -ForegroundColor Yellow
+        break
+      }
     } catch {
       Add-DiagnosticPoll $sessionWarmupPolls @{
         timestampUtc = (Get-Date).ToUniversalTime().ToString("o")
@@ -603,8 +609,15 @@ if ($anyFail) {
 }
 
 if ($daemonProcess -and -not $daemonProcess.HasExited) {
-  Stop-Process -Id $daemonProcess.Id -Force -ErrorAction SilentlyContinue
-  Write-Host "  Daemon process stopped (PID $($daemonProcess.Id))" -ForegroundColor DarkGray
+  try {
+    # Kill the entire process tree (daemon + FSI worker children) so orphaned child
+    # processes do not hold the stdout pipe handle open and keep Tee-Object alive.
+    $proc = [System.Diagnostics.Process]::GetProcessById($daemonProcess.Id)
+    $proc.Kill($true)
+  } catch {
+    Stop-Process -Id $daemonProcess.Id -Force -ErrorAction SilentlyContinue
+  }
+  Write-Host "  Daemon process tree stopped (PID $($daemonProcess.Id))" -ForegroundColor DarkGray
 }
 
 # ─────────────────────────────────────────────────────────────────────────────

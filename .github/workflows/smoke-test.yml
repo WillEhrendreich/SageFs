@@ -62,7 +62,7 @@ jobs:
         timeout-minutes: 10
 
       - name: Explain smoke failure
-        if: failure()
+        if: failure() || cancelled()
         shell: pwsh
         run: |
           $contextPath = "smoke-diagnostics\context.json"
