@@ -115,11 +115,13 @@ jobs:
         $ns = "http://schemas.microsoft.com/developer/vsx-schema/2011"
         $nsMgr = [System.Xml.XmlNamespaceManager]::new($xml.NameTable)
         $nsMgr.AddNamespace("v", $ns)
-        # Extract publisher from manifest (authoritative casing)
-        $packageManifest = $xml.DocumentElement
-        $manifestPublisher = $packageManifest.GetAttribute("Publisher")
-        Write-Host "Manifest publisher: '$manifestPublisher'"
+        # Publisher is on the <Identity> child element, not the root <PackageManifest>
+        $identity = $xml.SelectSingleNode("//v:Identity", $nsMgr)
+        $manifestPublisher = $identity.GetAttribute("Publisher")
+        $manifestId = $identity.GetAttribute("Id")
+        Write-Host "Manifest publisher: '$manifestPublisher', id: '$manifestId'"
         "publisher=$manifestPublisher" >> $env:GITHUB_OUTPUT
+        "extension_id=$manifestId" >> $env:GITHUB_OUTPUT
         $metadata = $xml.SelectSingleNode("//v:Metadata", $nsMgr)
         if ($metadata -and -not $xml.SelectSingleNode("//v:Categories", $nsMgr)) {
           $cat = $xml.CreateElement("Categories", $ns)
@@ -141,13 +143,59 @@ jobs:
         Write-Host "VSIX patched successfully: $vsixPath"
 
     - name: Publish Visual Studio extension to Marketplace
+      continue-on-error: true
       env:
         VSCE_PAT: ${{ secrets.VSCE_PAT }}
-        VSIX_PUBLISHER: ${{ steps.vsix_patch.outputs.publisher }}
       shell: pwsh
       run: |
-        Write-Host "Publishing with publisher: '$env:VSIX_PUBLISHER'"
-        npx tfx-cli extension publish --publisher $env:VSIX_PUBLISHER --vsix "release/sagefs-visualstudio-${{ steps.manifest.outputs.version }}.vsix" --token $env:VSCE_PAT --no-prompt --trace-level debug
+        $vsixPath = "release/sagefs-visualstudio-${{ steps.manifest.outputs.version }}.vsix"
+        $publisher = "${{ steps.vsix_patch.outputs.publisher }}"
+        $extId = "${{ steps.vsix_patch.outputs.extension_id }}"
+        Write-Host "Publisher: '$publisher', ExtensionId: '$extId'"
+        $vsixBytes = [System.IO.File]::ReadAllBytes($vsixPath)
+        $encodedPAT = [Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes(":$env:VSCE_PAT"))
+        $authHeaders = @{
+          'Authorization' = "Basic $encodedPAT"
+          'Accept' = 'application/json;api-version=3.0-preview.1'
+          'X-Market-User-Id' = [System.Guid]::NewGuid().ToString()
+        }
+        # Check if extension already exists (create vs update)
+        $checkUri = "https://marketplace.visualstudio.com/_apis/gallery/publishers/$publisher/extensions/$($extId)?api-version=3.0-preview.1"
+        Write-Host "Checking existence: $checkUri"
+        $exists = $false
+        try {
+          $checkResp = Invoke-WebRequest -Uri $checkUri -Method GET -Headers $authHeaders -UseBasicParsing
+          $exists = $true
+          Write-Host "Extension exists (HTTP $($checkResp.StatusCode)), will update (PUT)"
+        } catch {
+          $sc = [int]$_.Exception.Response.StatusCode
+          if ($sc -eq 404) {
+            Write-Host "Extension not found (404), will create (POST)"
+          } else {
+            Write-Host "WARNING: existence check returned HTTP $sc — attempting create anyway"
+          }
+        }
+        $uploadUri = if ($exists) {
+          "https://marketplace.visualstudio.com/_apis/gallery/publishers/$publisher/extensions/$($extId)?api-version=3.0-preview.1"
+        } else {
+          "https://marketplace.visualstudio.com/_apis/gallery/publishers/$publisher/extensions?api-version=3.0-preview.1"
+        }
+        $method = if ($exists) { 'PUT' } else { 'POST' }
+        Write-Host "Uploading VSIX ($method $uploadUri) ..."
+        try {
+          $resp = Invoke-WebRequest -Uri $uploadUri -Method $method -Body $vsixBytes -ContentType 'application/octet-stream' -Headers $authHeaders -UseBasicParsing
+          Write-Host "SUCCESS HTTP $($resp.StatusCode)"
+          Write-Host $resp.Content
+        } catch {
+          $sc = [int]$_.Exception.Response.StatusCode
+          Write-Host "FAILED HTTP $sc"
+          try {
+            $sr = [System.IO.StreamReader]::new($_.Exception.Response.GetResponseStream())
+            Write-Host "Response body: $($sr.ReadToEnd())"
+          } catch { Write-Host "(could not read response body: $_)" }
+          Write-Host "::warning::VS Marketplace publish failed with HTTP $sc — NuGet and GitHub Release will still proceed. Check response body above for root cause."
+          exit 1
+        }
 
     - name: Push to NuGet
       run: dotnet nuget push "release/SageFs.${{ steps.manifest.outputs.version }}.nupkg" --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
