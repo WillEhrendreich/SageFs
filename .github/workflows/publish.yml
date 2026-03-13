@@ -165,18 +165,19 @@ jobs:
         # - identity.internalName: required (the only required field inside identity)
         # - priceCategory: lowercase "free"
         $overviewPath = [System.IO.Path]::Combine($env:RUNNER_TEMP, "sagefs-overview.md")
-        Set-Content -Path $overviewPath -Value @"
-# SageFs for Visual Studio
-
-F# live development environment with an integrated REPL, live testing, session management, and real-time code intelligence — directly inside Visual Studio 2022.
-
-## Features
-- Interactive F# REPL sessions without leaving VS
-- Live test feedback as you type
-- Session history and replay
-- Code coverage gutter indicators
-- Works alongside your existing F# projects
-"@ -Encoding UTF8
+        $overviewLines = @(
+          "# SageFs for Visual Studio",
+          "",
+          "F# live development environment with an integrated REPL, live testing, session management, and real-time code intelligence - directly inside Visual Studio 2022.",
+          "",
+          "## Features",
+          "- Interactive F# REPL sessions without leaving VS",
+          "- Live test feedback as you type",
+          "- Session history and replay",
+          "- Code coverage gutter indicators",
+          "- Works alongside your existing F# projects"
+        )
+        Set-Content -Path $overviewPath -Value ($overviewLines -join "`n") -Encoding UTF8
         $publishManifest = [ordered]@{
           '$schema'     = 'http://json.schemastore.org/vsix-publish'
           categories    = @("coding")   # lowercase enum value per schemastore.org/vsix-publish
