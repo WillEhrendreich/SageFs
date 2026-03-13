@@ -163,17 +163,15 @@ jobs:
         $checkUri = "https://marketplace.visualstudio.com/_apis/gallery/publishers/$publisher/extensions/$($extId)?api-version=3.0-preview.1"
         Write-Host "Checking existence: $checkUri"
         $exists = $false
-        try {
-          $checkResp = Invoke-WebRequest -Uri $checkUri -Method GET -Headers $authHeaders -UseBasicParsing
+        $checkResp = Invoke-WebRequest -Uri $checkUri -Method GET -Headers $authHeaders -UseBasicParsing -SkipHttpErrorCheck
+        if ($checkResp.StatusCode -eq 200) {
           $exists = $true
-          Write-Host "Extension exists (HTTP $($checkResp.StatusCode)), will update (PUT)"
-        } catch {
-          $sc = [int]$_.Exception.Response.StatusCode
-          if ($sc -eq 404) {
-            Write-Host "Extension not found (404), will create (POST)"
-          } else {
-            Write-Host "WARNING: existence check returned HTTP $sc — attempting create anyway"
-          }
+          Write-Host "Extension exists (HTTP 200), will update (PUT)"
+        } elseif ($checkResp.StatusCode -eq 404) {
+          Write-Host "Extension not found (404), will create (POST)"
+        } else {
+          Write-Host "WARNING: existence check returned HTTP $($checkResp.StatusCode) — attempting create anyway"
+          Write-Host "Check response: $($checkResp.Content)"
         }
         $uploadUri = if ($exists) {
           "https://marketplace.visualstudio.com/_apis/gallery/publishers/$publisher/extensions/$($extId)?api-version=3.0-preview.1"
@@ -182,18 +180,14 @@ jobs:
         }
         $method = if ($exists) { 'PUT' } else { 'POST' }
         Write-Host "Uploading VSIX ($method $uploadUri) ..."
-        try {
-          $resp = Invoke-WebRequest -Uri $uploadUri -Method $method -Body $vsixBytes -ContentType 'application/octet-stream' -Headers $authHeaders -UseBasicParsing
-          Write-Host "SUCCESS HTTP $($resp.StatusCode)"
-          Write-Host $resp.Content
-        } catch {
-          $sc = [int]$_.Exception.Response.StatusCode
-          Write-Host "FAILED HTTP $sc"
-          try {
-            $sr = [System.IO.StreamReader]::new($_.Exception.Response.GetResponseStream())
-            Write-Host "Response body: $($sr.ReadToEnd())"
-          } catch { Write-Host "(could not read response body: $_)" }
-          Write-Host "::warning::VS Marketplace publish failed with HTTP $sc — NuGet and GitHub Release will still proceed. Check response body above for root cause."
+        # Use -SkipHttpErrorCheck so pwsh 7 does not throw on 4xx/5xx; we read .Content directly
+        $resp = Invoke-WebRequest -Uri $uploadUri -Method $method -Body $vsixBytes -ContentType 'application/octet-stream' -Headers $authHeaders -UseBasicParsing -SkipHttpErrorCheck
+        Write-Host "HTTP $($resp.StatusCode)"
+        Write-Host "Response body: $($resp.Content)"
+        if ($resp.StatusCode -ge 200 -and $resp.StatusCode -lt 300) {
+          Write-Host "SUCCESS"
+        } else {
+          Write-Host "::warning::VS Marketplace publish failed with HTTP $($resp.StatusCode) — NuGet and GitHub Release will still proceed. Check response body above for root cause."
           exit 1
         }
 
