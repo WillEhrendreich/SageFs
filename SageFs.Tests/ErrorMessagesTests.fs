@@ -3,6 +3,7 @@ module SageFs.Tests.ErrorMessagesTests
 open Expecto
 open Expecto.Flip
 
+[<Tests>]
 let errorMessagesTests =
   testList "Error Messages" [
     testList "parseError" [
@@ -45,8 +46,35 @@ let errorMessagesTests =
         result.Line |> Expect.isNone "line should be None"
         result.Column |> Expect.isNone "column should be None"
       }
+      test "TypeLoadException message is detected" {
+        let result = SageFs.ErrorMessages.parseError "TypeLoadException: Could not load type 'MyProject.Foo' from assembly 'MyProject'"
+        result.IsTypeLoadException |> Expect.isTrue "should detect TypeLoadException"
+      }
+      test "type identity message is detected as TypeLoadException" {
+        let result = SageFs.ErrorMessages.parseError "The type 'X' from assembly 'Y' has different type identity"
+        result.IsTypeLoadException |> Expect.isTrue "should detect type identity as TypeLoadException"
+      }
+      test "ordinary type error is not TypeLoadException" {
+        let result = SageFs.ErrorMessages.parseError "The type 'int' does not match the type 'string'"
+        result.IsTypeLoadException |> Expect.isFalse "ordinary type mismatch should not be TypeLoadException"
+      }
     ]
     testList "getSuggestion" [
+      test "TypeLoadException suggests removing #r" {
+        let parsed = SageFs.ErrorMessages.parseError "TypeLoadException: type identity conflict"
+        let suggestion = SageFs.ErrorMessages.getSuggestion parsed
+        suggestion |> Expect.stringContains "should mention #r" "#r"
+      }
+      test "TypeLoadException suggests checking get_startup_info" {
+        let parsed = SageFs.ErrorMessages.parseError "TypeLoadException: type identity conflict"
+        let suggestion = SageFs.ErrorMessages.getSuggestion parsed
+        suggestion |> Expect.stringContains "should mention get_startup_info" "get_startup_info"
+      }
+      test "TypeLoadException does NOT say to reset" {
+        let parsed = SageFs.ErrorMessages.parseError "TypeLoadException: type identity conflict"
+        let suggestion = SageFs.ErrorMessages.getSuggestion parsed
+        suggestion |> Expect.stringContains "should say NOT reset" "NOT"
+      }
       test "earlier error suggests fix original" {
         let parsed = SageFs.ErrorMessages.parseError "Operation could not be completed due to earlier error"
         let suggestion = SageFs.ErrorMessages.getSuggestion parsed

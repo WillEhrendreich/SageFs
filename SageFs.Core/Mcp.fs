@@ -144,6 +144,9 @@ module McpAdapter =
       lines.Add(sprintf "  Assemblies (%d):" asmCount)
       for a in w.AssembliesLoaded do
         lines.Add(sprintf "    📦 %s (%d ns, %d modules)" a.Name a.NamespaceCount a.ModuleCount)
+      lines.Add("  ⚠️ Do NOT '#r' any of the assemblies listed above — they are already loaded via the project graph.")
+      lines.Add("     Using '#r' on them creates a second .NET load context causing TypeLoadException on ALL subsequent evals.")
+      lines.Add("     Reference project types directly without '#r'. They are already in scope.")
     | false -> ()
 
     // Phase timing breakdown
@@ -861,7 +864,7 @@ module McpTools =
             match info with
             | Some i when i.Status = WorkerProtocol.SessionStatus.Starting
                        || i.Status = WorkerProtocol.SessionStatus.Restarting ->
-              return Error (sprintf "Session '%s' is still warming up (%s). This typically takes 15-30s for test projects. Poll get_fsi_status every 5-10s to check readiness. Do NOT create a new session — it will compete for resources and make warmup slower." candidate (WorkerProtocol.SessionStatus.label i.Status))
+              return Error (sprintf "Session '%s' is still warming up (%s). This typically takes 15-30s for test projects. Use get_recent_fsi_events to monitor warmup progress. Do NOT use sleep loops or create a new session — it will compete for resources and make warmup slower." candidate (WorkerProtocol.SessionStatus.label i.Status))
             | Some _ ->
               setActiveSessionId ctx agent ""
               return Error "Session is no longer running. Use create_session to start a new one."
@@ -1170,7 +1173,7 @@ module McpTools =
                mcpPort = ctx.McpPort
                status = WorkerProtocol.SessionStatus.label sessionInfo.Status |})
       | None ->
-        return """{"status": "initializing", "message": "Session is still warming up. This typically takes 15-30s. Poll get_fsi_status every 5-10s to check readiness. Do NOT create a new session."}"""
+        return """{"status": "initializing", "message": "Session is still warming up. This typically takes 15-30s. Use get_recent_fsi_events to monitor warmup progress. Do NOT sleep-poll or create a new session."}"""
     })
 
   let getAvailableProjects (ctx: McpContext) (agent: string) (workingDirectory: string option) : Task<string> =

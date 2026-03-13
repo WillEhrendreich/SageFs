@@ -61,6 +61,7 @@ ERROR HANDLING (CRITICAL):
 - 'Operation could not be completed due to earlier error' means a PREVIOUS statement had a compile error, so definitions from it were never created. Fix the original error and resubmit that code first.
 - The session is NOT corrupted by errors. Do NOT call reset_fsi_session or hard_reset_fsi_session because of eval errors. Fix your code instead.
 - Submit smaller pieces (one definition per call) to isolate which part has the error.
+- NEVER use '#r' for assemblies loaded via '--proj'. Call get_startup_info to see which assembly names are already loaded. Using '#r' on a loaded assembly creates a duplicate .NET load context causing TypeLoadException on ALL subsequent evals — this is not a session bug, it is your '#r' directive that must be removed.
 
 RETURN VALUE:
 - On success: the printed output of the evaluated code (stdout, printfn output, or the auto-printed value).
