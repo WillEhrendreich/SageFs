@@ -72,7 +72,7 @@ WORKFLOW: Use this tool instead of dotnet build or dotnet run. SageFs IS your co
         [<Description("Your agent or model name (e.g. 'claude', 'copilot', 'cursor'). Shown in event logs and get_recent_fsi_events output so you can trace which agent submitted which code. Use a short, stable identifier.")>]
         agentName: string,
         code: string,
-        [<Description("Working directory of the MCP client. When provided, automatically resolves the correct session for this directory without requiring manual switch_session calls.")>]
+        [<Description("Working directory of the MCP client. When provided, routes to the matching session if exactly one session uses this directory. If multiple sessions share the directory, you must call switch_session first (or pass session_id explicitly) — the daemon will not guess.")>]
         working_directory: string,
         [<Description("Absolute path to the source file this code came from. Enables module context detection — SageFs wraps the code in the correct module/namespace for FSI evaluation.")>]
         file_path: string,
@@ -110,7 +110,7 @@ PATH:
         [<Description("Your agent or model name (e.g. 'claude', 'copilot', 'cursor'). Shown in event logs for attribution.")>]
         agentName: string,
         filePath: string,
-        [<Description("Working directory of the MCP client. When provided, automatically resolves the correct session for this directory without requiring manual switch_session calls.")>]
+        [<Description("Working directory of the MCP client. When provided, routes to the matching session if exactly one session uses this directory. If multiple sessions share the directory, you must call switch_session first (or pass session_id explicitly) — the daemon will not guess.")>]
         working_directory: string
     ) : Task<string> = 
         let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
@@ -129,7 +129,7 @@ WHEN TO USE:
 OUTPUT FORMAT: Each event shows timestamp, event type (Eval, Error, Load, Reset), source agent name, and a brief description. Events are newest-last.""")>]
     member _.get_recent_fsi_events(
         count: int option,
-        [<Description("Working directory of the MCP client. When provided, automatically resolves the correct session for this directory without requiring manual switch_session calls.")>]
+        [<Description("Working directory of the MCP client. When provided, routes to the matching session if exactly one session uses this directory. If multiple sessions share the directory, you must call switch_session first (or pass session_id explicitly) — the daemon will not guess.")>]
         working_directory: string
     ) : Task<string> = 
         let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
@@ -165,7 +165,7 @@ IMPORTANT:
 - A successful enable_live_testing call does NOT imply get_fsi_status should already be Ready. Live testing activation and worker readiness are separate.
 - If you need live-testing health, use get_test_trace or get_live_test_status instead.""")>]
     member _.get_fsi_status(
-        [<Description("Working directory of the MCP client. When provided, automatically resolves the correct session for this directory without requiring manual switch_session calls.")>]
+        [<Description("Working directory of the MCP client. When provided, routes to the matching session if exactly one session uses this directory. If multiple sessions share the directory, you must call switch_session first (or pass session_id explicitly) — the daemon will not guess.")>]
         working_directory: string
     ) : Task<string> =
         let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
@@ -184,7 +184,7 @@ WHEN TO USE:
 - To understand which features were enabled at startup (e.g., live testing, TUI, GUI).
 - When investigating environment differences ("was live testing enabled when this was launched?").""")>]
     member _.get_startup_info(
-        [<Description("Working directory of the MCP client. When provided, automatically resolves the correct session for this directory without requiring manual switch_session calls.")>]
+        [<Description("Working directory of the MCP client. When provided, routes to the matching session if exactly one session uses this directory. If multiple sessions share the directory, you must call switch_session first (or pass session_id explicitly) — the daemon will not guess.")>]
         working_directory: string
     ) : Task<string> =
         let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
@@ -201,7 +201,7 @@ WHEN TO USE:
 
 NOTE: This does NOT load any projects — it only lists what is available on disk. Use create_session or hard_reset_fsi_session with rebuild=true to actually load a project.""")>]
     member _.get_available_projects(
-        [<Description("Working directory of the MCP client. When provided, automatically resolves the correct session for this directory without requiring manual switch_session calls.")>]
+        [<Description("Working directory of the MCP client. When provided, routes to the matching session if exactly one session uses this directory. If multiple sessions share the directory, you must call switch_session first (or pass session_id explicitly) — the daemon will not guess.")>]
         working_directory: string
     ) : Task<string> =
         let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
@@ -234,7 +234,7 @@ WHEN NOT TO USE (common mistake):
 
 This is a SOFT reset — DLL locks are retained. Use hard_reset_fsi_session only if modules failed to load during warm-up.""")>]
     member _.reset_fsi_session(
-        [<Description("Working directory of the MCP client. When provided, automatically resolves the correct session for this directory without requiring manual switch_session calls.")>]
+        [<Description("Working directory of the MCP client. When provided, routes to the matching session if exactly one session uses this directory. If multiple sessions share the directory, you must call switch_session first (or pass session_id explicitly) — the daemon will not guess.")>]
         working_directory: string
     ) : Task<string> =
         let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
@@ -275,7 +275,7 @@ WORKFLOW: For test-only changes, use this with rebuild=true instead of the full 
 The full pack/reinstall cycle is only needed when SageFs's own source code changes (SageFs\ or SageFs.Server\).""")>]
     member _.hard_reset_fsi_session(
         rebuild: bool option,
-        [<Description("Working directory of the MCP client. When provided, automatically resolves the correct session for this directory without requiring manual switch_session calls.")>]
+        [<Description("Working directory of the MCP client. When provided, routes to the matching session if exactly one session uses this directory. If multiple sessions share the directory, you must call switch_session first (or pass session_id explicitly) — the daemon will not guess.")>]
         working_directory: string
     ) : Task<string> =
         let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
@@ -301,7 +301,7 @@ WHEN NOT TO USE:
 - Full project type-checking: use hard_reset_fsi_session with rebuild=true for that.""")>]
     member _.check_fsharp_code(
         code: string,
-        [<Description("Working directory of the MCP client. When provided, automatically resolves the correct session for this directory without requiring manual switch_session calls.")>]
+        [<Description("Working directory of the MCP client. When provided, routes to the matching session if exactly one session uses this directory. If multiple sessions share the directory, you must call switch_session first (or pass session_id explicitly) — the daemon will not guess.")>]
         working_directory: string
     ) : Task<string> =
         let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
@@ -322,7 +322,7 @@ BEHAVIOR:
 - After cancellation, the session returns to 'Ready'. The cancelled code's definitions are NOT added to session state.
 - Returns 'true' if a running eval was found and cancelled, 'false' if nothing was running.""")>]
     member _.cancel_eval(
-        [<Description("Working directory of the MCP client. When provided, automatically resolves the correct session for this directory without requiring manual switch_session calls.")>]
+        [<Description("Working directory of the MCP client. When provided, routes to the matching session if exactly one session uses this directory. If multiple sessions share the directory, you must call switch_session first (or pass session_id explicitly) — the daemon will not guess.")>]
         working_directory: string
     ) : Task<string> =
         let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
@@ -348,7 +348,7 @@ WHEN TO USE:
     member _.get_completions(
         [<Description("The F# code to get completions for")>] code: string,
         [<Description("Cursor position (0-based character offset) where completions are requested")>] cursor_position: int,
-        [<Description("Working directory of the MCP client. When provided, automatically resolves the correct session for this directory without requiring manual switch_session calls.")>]
+        [<Description("Working directory of the MCP client. When provided, routes to the matching session if exactly one session uses this directory. If multiple sessions share the directory, you must call switch_session first (or pass session_id explicitly) — the daemon will not guess.")>]
         working_directory: string
     ) : Task<string> =
         let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
@@ -372,7 +372,7 @@ TIPS:
 - Use get_completions for interactive code-position-aware completion instead.""")>]
     member _.explore_namespace(
         [<Description("Fully-qualified namespace to explore (e.g. 'System.IO', 'Microsoft.FSharp.Collections')")>] namespaceName: string,
-        [<Description("Working directory of the MCP client. When provided, automatically resolves the correct session for this directory without requiring manual switch_session calls.")>]
+        [<Description("Working directory of the MCP client. When provided, routes to the matching session if exactly one session uses this directory. If multiple sessions share the directory, you must call switch_session first (or pass session_id explicitly) — the daemon will not guess.")>]
         working_directory: string
     ) : Task<string> =
         let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
@@ -394,7 +394,7 @@ TIPS:
 - Results include member signatures, so you can see parameter types and return types before writing code.""")>]
     member _.explore_type(
         [<Description("Fully-qualified type name to explore (e.g. 'System.String', 'System.IO.File')")>] typeName: string,
-        [<Description("Working directory of the MCP client. When provided, automatically resolves the correct session for this directory without requiring manual switch_session calls.")>]
+        [<Description("Working directory of the MCP client. When provided, routes to the matching session if exactly one session uses this directory. If multiple sessions share the directory, you must call switch_session first (or pass session_id explicitly) — the daemon will not guess.")>]
         working_directory: string
     ) : Task<string> =
         let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
@@ -484,11 +484,12 @@ NOTE: Stopping the last (or only) session will leave no active session. You will
 WHEN TO USE:
 - After create_session to make the new session the active target for tool calls.
 - In multi-project workflows when switching context between two loaded sessions.
-- When the working_directory auto-routing picks the wrong session and you need to explicitly override it.
+- REQUIRED when multiple sessions share the same working directory — the daemon will not guess which one you want. Call switch_session first, then proceed with other tools.
 
 ROUTING BEHAVIOR:
-- Once switched, all tools that auto-route by working_directory will use this session unless the working_directory matches a different session.
-- If you provide working_directory in a tool call, it overrides the active session for that call.
+- working_directory auto-routes only when exactly ONE session matches that directory.
+- When multiple sessions match the same directory, the daemon returns an error listing the matches. Call switch_session with the session_id you want, then retry.
+- If you provide session_id directly on any tool call, that always wins over working_directory routing.
 - Use list_sessions to see available session IDs.""")>]
     member _.switch_session(
         [<Description("Session ID to switch to (from list_sessions)")>] session_id: string

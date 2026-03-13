@@ -787,7 +787,7 @@ module McpTools =
       sessions
       |> List.map formatSessionRoutingChoice
       |> String.concat "\n"
-    sprintf "%s '%s'. Specify sessionId explicitly or use switch_session. Matches:\n%s"
+    sprintf "%s '%s'.\n\nUse switch_session to select one before calling other tools, or pass sessionId explicitly on every call.\n\nMatching sessions:\n%s"
       prefix workingDir matches
 
   /// Notify the Elm loop of an event (fire-and-forget, no-op if no dispatch).
