@@ -160,12 +160,17 @@ jobs:
           exit 1
         }
         Write-Host "Using VsixPublisher.exe at: $($vsixPublisher.FullName)"
-        # Minimal publish manifest required by VsixPublisher
+        # Publish manifest required by VsixPublisher — 'identity' is a required nested object
         $publishManifest = @{
-          extensionId = $extId
-          version = "${{ steps.manifest.outputs.version }}"
+          identity = @{
+            extensionId = $extId
+            version = "${{ steps.manifest.outputs.version }}"
+            publisher = $publisher
+          }
           categories = @("Coding")
-        } | ConvertTo-Json
+          overview = ""
+          priceCategory = "free"
+        } | ConvertTo-Json -Depth 5
         $manifestPath = [System.IO.Path]::Combine($env:RUNNER_TEMP, "publish-manifest.json")
         Set-Content -Path $manifestPath -Value $publishManifest -Encoding UTF8
         Write-Host "Publish manifest: $publishManifest"
