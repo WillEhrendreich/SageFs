@@ -283,4 +283,47 @@ let bindingExplorerTests = testList "BindingExplorer" [
           let totalBindings = snapshot.Bindings.Length
           activeCount + shadowedCount = totalBindings
   ]
+
+  testList "fromRawOutput" [
+    testCase "empty string returns None" <| fun () ->
+      fromRawOutput "" |> Expect.isNone "empty string"
+
+    testCase "whitespace-only returns None" <| fun () ->
+      fromRawOutput "   \n  " |> Expect.isNone "whitespace only"
+
+    testCase "non-val lines return None" <| fun () ->
+      fromRawOutput "type Foo = { Bar: int }" |> Expect.isNone "no val lines"
+
+    testCase "single val line returns Some with binding" <| fun () ->
+      let result = fromRawOutput "val x : int = 42"
+      result |> Expect.isSome "should find x"
+      result.Value.ActiveBindings |> Map.containsKey "x" |> Expect.isTrue "x in active"
+
+    testCase "multiple val lines returns all bindings" <| fun () ->
+      let output = "val x : int = 42\nval y : string = hello"
+      let result = fromRawOutput output
+      result |> Expect.isSome "should parse"
+      result.Value.ActiveBindings |> Map.containsKey "x" |> Expect.isTrue "x present"
+      result.Value.ActiveBindings |> Map.containsKey "y" |> Expect.isTrue "y present"
+
+    testCase "last definition wins when same name defined twice" <| fun () ->
+      let output = "val x : int = 1\nval x : string = hello"
+      let result = fromRawOutput output
+      result |> Expect.isSome "should parse"
+      result.Value.ActiveBindings |> Map.count |> Expect.equal "one active x" 1
+      result.Value.ActiveBindings.["x"].TypeSig |> Expect.equal "last x is string" "string"
+
+    testProperty "any single valid val line produces Some" <|
+      fun (nameIdx: uint8) (typeIdx: uint8) (valueIdx: uint8) ->
+        let names = [| "x"; "y"; "z"; "acc"; "result" |]
+        let types = [| "int"; "string"; "bool"; "float" |]
+        let values = [| "1"; "42"; "true"; "\"hello\"" |]
+        let name = names.[int nameIdx % names.Length]
+        let typeSig = types.[int typeIdx % types.Length]
+        let value = values.[int valueIdx % values.Length]
+        let line = sprintf "val %s : %s = %s" name typeSig value
+        match fromRawOutput line with
+        | Some snap -> snap.ActiveBindings |> Map.containsKey name
+        | None -> false
+  ]
 ]

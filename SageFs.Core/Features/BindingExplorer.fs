@@ -94,3 +94,16 @@ let buildScopeSnapshot (cells: CellInput list) : BindingScopeSnapshot =
     |> Map.ofList
   let shadowed = withRefs |> List.filter (fun b -> not (b.ShadowedBy |> List.isEmpty))
   { Bindings = withRefs; ActiveBindings = active; ShadowedBindings = shadowed }
+
+/// Compute a binding scope snapshot from raw FSI output text (no per-cell source attribution).
+/// Returns None when the output contains no parseable val bindings.
+/// Used by the dashboard so bindings are visible even when no MCP SSE client is connected.
+let fromRawOutput (rawFsiOutput: string) : BindingScopeSnapshot option =
+  match System.String.IsNullOrWhiteSpace rawFsiOutput with
+  | true -> None
+  | false ->
+    let cellInputs = [ { CellIndex = 0; FsiOutput = rawFsiOutput; Source = "" } ]
+    let snapshot = buildScopeSnapshot cellInputs
+    match Map.isEmpty snapshot.ActiveBindings with
+    | true -> None
+    | false -> Some snapshot

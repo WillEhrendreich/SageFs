@@ -1328,7 +1328,31 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
   // Shared feature push state — gives Dashboard access to EvalTimeline sparkline data.
   let sharedFeatureState : SageFs.Features.FeatureHooks.FeaturePushState ref = ref SageFs.Features.FeatureHooks.FeaturePushState.empty
 
-  // Start MCP server
+  // Permanent binding-scope subscriber — updates sharedBindingScope on every eval completion
+  // regardless of MCP SSE client connectivity. Fixes the dashboard "0 bindings" problem when
+  // no editor client is connected. W12(R10): Volatile.Write for ARM memory barrier.
+  let lastBindingOutputCount = ref -1
+  let _bindingScopeSubscription =
+    stateChangedEvent.Publish.Subscribe(fun change ->
+      match change with
+      | DaemonStateChange.ModelChanged (outputCount, _) when outputCount <> lastBindingOutputCount.Value ->
+        lastBindingOutputCount.Value <- outputCount
+        let model = elmRuntime.GetModel()
+        let activeId =
+          ActiveSession.sessionId model.Sessions.ActiveSessionId
+          |> Option.map WorkerProtocol.SessionId.value
+          |> Option.defaultValue ""
+        let rawOutput =
+          model.RecentOutput.GetBuffer(activeId).FilterToList(fun o ->
+            o.Kind = OutputKind.Result)
+          |> List.rev
+          |> List.map (fun o -> o.Text)
+          |> String.concat "\n"
+        let newScope = SageFs.Features.BindingExplorer.fromRawOutput rawOutput
+        System.Threading.Volatile.Write(&sharedBindingScope.contents, newScope)
+      | _ -> ())
+
+
   let mcpTask =
     McpServer.startMcpServer {
       DiagnosticsChanged = diagnosticsChanged.Publish
