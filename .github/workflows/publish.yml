@@ -160,17 +160,19 @@ jobs:
           exit 1
         }
         Write-Host "Using VsixPublisher.exe at: $($vsixPublisher.FullName)"
-        # Publish manifest required by VsixPublisher — 'identity' is a required nested object
-        $publishManifest = @{
+        # VsixPublisher publish manifest schema (from http://json.schemastore.org/vsix-publish):
+        # - publisher: required at ROOT level (not inside identity)
+        # - identity.internalName: required (the only required field inside identity)
+        # - priceCategory: lowercase "free"
+        $publishManifest = [ordered]@{
+          '$schema' = 'http://json.schemastore.org/vsix-publish'
+          categories = @("Coding")
           identity = @{
             internalName = $extId
-            extensionId = $extId
-            version = "${{ steps.manifest.outputs.version }}"
-            publisher = $publisher
           }
-          categories = @("Coding")
-          overview = ""
+          publisher = $publisher
           priceCategory = "free"
+          private = $false
         } | ConvertTo-Json -Depth 5
         $manifestPath = [System.IO.Path]::Combine($env:RUNNER_TEMP, "publish-manifest.json")
         Set-Content -Path $manifestPath -Value $publishManifest -Encoding UTF8
