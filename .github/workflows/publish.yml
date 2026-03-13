@@ -180,8 +180,10 @@ jobs:
         }
         $method = if ($exists) { 'PUT' } else { 'POST' }
         Write-Host "Uploading VSIX ($method $uploadUri) ..."
-        # Use -SkipHttpErrorCheck so pwsh 7 does not throw on 4xx/5xx; we read .Content directly
-        $resp = Invoke-WebRequest -Uri $uploadUri -Method $method -Body $vsixBytes -ContentType 'application/octet-stream' -Headers $authHeaders -UseBasicParsing -SkipHttpErrorCheck
+        # Gallery API expects application/json with the VSIX base64-encoded as extensionManifest
+        $vsixBase64 = [Convert]::ToBase64String($vsixBytes)
+        $body = ConvertTo-Json @{ extensionManifest = $vsixBase64 } -Compress
+        $resp = Invoke-WebRequest -Uri $uploadUri -Method $method -Body $body -ContentType 'application/json' -Headers $authHeaders -UseBasicParsing -SkipHttpErrorCheck
         Write-Host "HTTP $($resp.StatusCode)"
         Write-Host "Response body: $($resp.Content)"
         if ($resp.StatusCode -ge 200 -and $resp.StatusCode -lt 300) {
