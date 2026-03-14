@@ -530,6 +530,24 @@ Design: length-prefixed strings, section headers with byte-count envelopes, vers
 | `list_tests` | List all discovered tests, optionally filtered by pattern or file path. Returns grouped-by-file results with source locations. |
 | `get_cell_dependencies` | Expose the cell dependency graph with staleness annotations. Shows which cells are stale and why. |
 | `discover_features` | Context-aware feature discovery. Ranks available SageFs features by relevance to current session state. |
+| **Analysis & Diagnostics** | |
+| `diagnose` | Full diagnostic report combining test failures, cell staleness, ripple plan, suggestions, and performance. |
+| `coverage_intel` | Analyze test coverage quality — find blind spots, correlate failures, assess diagnostic power. |
+| `impact_forecast` | Forecast performance impact for cells — detect regressions, measure downstream blast radius. |
+| `suggest_next_action` | Prioritized "what should I do next?" queue combining coverage, impact, and staleness data. |
+| `suggest_repair` | Given a failing test, trace causal changes and suggest which symbol to fix. |
+| `suggest_next_cell` | Type-directed suggestions for what to evaluate next based on current bindings in scope. |
+| `plan_ripple` | Plan cascade re-evaluation for changed cells using the live dependency graph. |
+| `preview_what_if` | Preview what would change if a binding had a different value — without executing. |
+| `decompose_pipeline` | Decompose an F# pipeline into stages with purity classification (pure/effectful/unknown). |
+| **Export & Session History** | |
+| `export_notebook` | Export session as a notebook-style `.fsx` file with cell metadata. |
+| `export_session_transcript` | Export session as a clean, topologically-sorted `.fsx` transcript. |
+| `get_session_filmstrip` | Visual history of all evaluations — each as a "frame" with code, bindings, and duration. |
+| `get_eval_timeline` | Performance sparkline and percentile statistics (P50/P95/P99) for eval durations. |
+| `get_eval_diff` | Before/after diff comparison of recent evaluation outputs. |
+| `get_message_journal` | Structured audit log of eval events, filterable by severity and source. |
+| `manage_scratch_pad` | View, export, or promote ephemeral code snippets from the session history. |
 
 </details>
 
