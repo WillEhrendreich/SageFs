@@ -1467,6 +1467,9 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
     GetSessionTestSummary = fun sessionId ->
       let model = elmRuntime.GetModel()
       let state = model.LiveTesting.TestState
+      match state.Activation with
+      | Features.LiveTesting.LiveTestingActivation.Inactive -> None
+      | _ ->
       let entries =
         Features.LiveTesting.LiveTestState.statusEntriesForSession sessionId state
       match entries.Length with
@@ -1478,6 +1481,9 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
     GetSessionCoverageSummary = fun sessionId ->
       let model = elmRuntime.GetModel()
       let state = model.LiveTesting.TestState
+      match state.Activation with
+      | Features.LiveTesting.LiveTestingActivation.Inactive -> None
+      | _ ->
       let sessionTestIds =
         match System.String.IsNullOrEmpty sessionId || Map.isEmpty state.TestSessionMap with
         | true -> state.TestCoverageBitmaps |> Map.keys |> Set.ofSeq
@@ -1501,6 +1507,9 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
     GetSessionTestTreemap = fun sessionId ->
       let model = elmRuntime.GetModel()
       let state = model.LiveTesting.TestState
+      match state.Activation with
+      | Features.LiveTesting.LiveTestingActivation.Inactive -> [||]
+      | _ ->
       let entries =
         Features.LiveTesting.LiveTestState.statusEntriesForSession sessionId state
       Features.LiveTesting.TestTreemap.fromStatusEntries entries
@@ -1581,6 +1590,9 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
     GetFailureNarratives = fun () ->
       let model = elmRuntime.GetModel()
       let testState = model.LiveTesting.TestState
+      match testState.Activation with
+      | Features.LiveTesting.LiveTestingActivation.Inactive -> []
+      | _ ->
       testState.FailureNarratives
       |> Map.toList
       |> List.choose (fun (testId, narrative) ->
