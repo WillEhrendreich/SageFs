@@ -373,7 +373,7 @@ let detourMethod (logger: ILogger) (method: MethodBase) (replacement: MethodBase
     (ex.InnerException :? TypeInitializationException) ->
     logger.LogDebug (sprintf "Hot-reload detour skipped (type init failure): %s — %s" method.Name ex.InnerException.Message)
 
-let handleNewAsmFromRepl (logger: ILogger) (asm: Assembly) (st: State) =
+let handleNewAsmFromRepl (logger: ILogger) (hotReloadEnabled: bool) (asm: Assembly) (st: State) =
   match st.LastAssembly with
   | Some prev when prev = asm -> st, []
   | _ ->
@@ -429,9 +429,16 @@ let handleNewAsmFromRepl (logger: ILogger) (asm: Assembly) (st: State) =
         |> Option.map (fun oldMethod -> oldMethod, newMethod))
       |> Seq.toList
 
-    for methodToReplace, newMethod in replacementPairs do
-      logger.LogDebug <| "Updating method " + methodToReplace.FullName
-      detourMethod logger methodToReplace.MethodInfo newMethod.MethodInfo
+    // Only apply Harmony detours when hot-reload is explicitly enabled.
+    // Without this gate, every eval triggers MonoMod patching — causing
+    // TypeLoadException on stale FSI types even when users never asked
+    // for hot-reload.
+    match hotReloadEnabled with
+    | true ->
+      for methodToReplace, newMethod in replacementPairs do
+        logger.LogDebug <| "Updating method " + methodToReplace.FullName
+        detourMethod logger methodToReplace.MethodInfo newMethod.MethodInfo
+    | false -> ()
 
     // Merge new assembly's methods into Methods so future evals can patch functions
     // defined in FSI (not in project DLLs). Without this, only project-DLL methods
@@ -629,17 +636,17 @@ let hotReloadingMiddleware next (request, st: AppState) =
     | true, None -> true
     | _ -> false
 
-  // Inject NoInlining attributes on ALL evals so that functions defined in
-  // earlier evals can be reliably patched by Harmony in future hot-reload evals.
-  // Without this, (a) the F# compiler inlines simple static member bodies at the
-  // IL level, and (b) the JIT may inline short let-binding functions — both make
-  // Harmony's entry-point detour invisible to callers.
-  let request = { request with Code = injectNoInlining request.Code }
+  // Only inject NoInlining attributes when hot-reload is enabled.
+  // Without this gate, every eval gets unnecessary IL modifications.
+  let request =
+    match hotReloadFlagEnabled with
+    | true -> { request with Code = injectNoInlining request.Code }
+    | false -> request
 
   let response, st = next (request, st)
 
-  // Always accumulate method registrations so future hot-reload evals can find them.
-  // Only trigger browser reload when the hotReload flag is explicitly set.
+  // Always accumulate method registrations so live testing can discover tests.
+  // Only apply Harmony detours when hot-reload is explicitly enabled.
   match response.EvaluationResult with
   | Error _ -> response, st
   | Ok _ ->
@@ -652,7 +659,7 @@ let hotReloadingMiddleware next (request, st: AppState) =
         let reloadingSt, updatedMethods =
           getReloadingState st
           |> getOpenModules response.EvaluatedCode
-          |> handleNewAsmFromRepl st.Logger asm
+          |> handleNewAsmFromRepl st.Logger hotReloadFlagEnabled asm
 
         match shouldTriggerReload request.Args && not (List.isEmpty updatedMethods) with
         | true -> triggerReload()
