@@ -322,6 +322,8 @@ module BuiltInExecutors =
       AssertExceptionType: System.Type
       FailedExceptionType: System.Type
       IgnoreExceptionType: System.Type
+      /// FsCheckConfig.defaultConfig — used when testConfig is None for AsyncFsCheck.
+      FsCheckDefaultConfig: obj option
     }
 
     /// Per-leaf-test: the boxed TestCode DU value + its tag for dispatch.
@@ -352,6 +354,17 @@ module BuiltInExecutors =
             match toTestCodeList = null with
             | true -> None
             | false ->
+              let fsCheckDefaultConfig =
+                try
+                  let fscType = expAsm.GetType("Expecto.FsCheckConfig")
+                  match fscType <> null with
+                  | true ->
+                    let defaultProp = fscType.GetProperty("defaultConfig", BindingFlags.Public ||| BindingFlags.Static)
+                    match defaultProp <> null with
+                    | true -> Some (defaultProp.GetValue(null))
+                    | false -> None
+                  | false -> None
+                with _ -> None
               Some {
                 ToTestCodeList = toTestCodeList
                 TestType = testType
@@ -361,6 +374,7 @@ module BuiltInExecutors =
                 AssertExceptionType = expAsm.GetType("Expecto.AssertException")
                 FailedExceptionType = expAsm.GetType("Expecto.FailedException")
                 IgnoreExceptionType = expAsm.GetType("Expecto.IgnoreException")
+                FsCheckDefaultConfig = fsCheckDefaultConfig
               }
       with ex ->
         Log.warn "[LiveTesting] Expecto reflection cache build failed for %s: %s\n%s" asm.FullName ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
@@ -436,7 +450,8 @@ module BuiltInExecutors =
                 elapsed)
 
     /// Execute a reflected test code via reflection.
-    /// Tag 0=Sync (stest), 1=SyncWithCancel (stest), 2=Async (atest), 3+=skip.
+    /// Tag 0=Sync (stest), 1=SyncWithCancel (stest), 2=Async (atest),
+    /// 3=AsyncFsCheck (testConfig, stressConfig, test).
     let executeReflected
       (cache: ReflectionCache)
       (rft: ReflectedFlatTest)
@@ -471,39 +486,57 @@ module BuiltInExecutors =
               [| asyncComp
                  box (None: int option)
                  box (Some ct: CancellationToken option) |]) |> ignore
-          | 3 -> // AsyncFsCheck: property is FSharpAsync<bool>
+          | 3 -> // AsyncFsCheck: testConfig * stressConfig * test
+            // Expecto.TestCode.AsyncFsCheck fields:
+            //   testConfig  : FsCheckConfig option
+            //   stressConfig: FsCheckConfig option
+            //   test        : FsCheckConfig -> Async<unit>
             ct.ThrowIfCancellationRequested()
             let testObjType = rft.TestCodeObj.GetType()
-            let propValue =
-              match testObjType.GetProperty("property") with
+            // Resolve the FsCheck config to use: prefer testConfig if Some, else default
+            let config =
+              match testObjType.GetProperty("testConfig") with
+              | null -> cache.FsCheckDefaultConfig
+              | tcProp ->
+                let tcVal = tcProp.GetValue(rft.TestCodeObj)
+                // testConfig is FSharpOption<FsCheckConfig> — extract via Value if Some
+                match tcVal with
+                | null -> cache.FsCheckDefaultConfig
+                | opt ->
+                  let optType = opt.GetType()
+                  match optType.GetProperty("Value") with
+                  | null -> cache.FsCheckDefaultConfig
+                  | valProp ->
+                    try Some (valProp.GetValue(opt))
+                    with :? TargetInvocationException -> cache.FsCheckDefaultConfig
+            // Resolve the test function: FsCheckConfig -> Async<unit>
+            let testFn =
+              match testObjType.GetProperty("test") with
               | null ->
-                match testObjType.GetField("property") with
-                | null ->
-                  raise (System.InvalidOperationException(
-                    "AsyncFsCheck: could not reflect 'property' field — " +
-                    "expected a property or field named 'property' on the test object. " +
-                    "Check that the test is registered with testPropertyAsync or testAsyncProperty."))
-                | f -> f.GetValue(rft.TestCodeObj)
+                raise (System.InvalidOperationException(
+                  "AsyncFsCheck: could not reflect 'test' field — " +
+                  "expected a property named 'test' on the TestCode.AsyncFsCheck DU case."))
               | p -> p.GetValue(rft.TestCodeObj)
-            let asyncBool = propValue
-            let runMethod =
-              typeof<Async>.GetMethods()
-              |> Array.tryFind (fun m ->
-                m.Name = "RunSynchronously" && m.GetParameters().Length = 3)
-            match runMethod with
+            // Invoke test(config) to get Async<unit>
+            match config with
             | None ->
-              raise (System.InvalidOperationException("AsyncFsCheck: Async.RunSynchronously not found"))
-            | Some rm ->
-              let genericRun = rm.MakeGenericMethod([| typeof<bool> |])
-              let passed =
-                genericRun.Invoke(null, [|
-                  asyncBool
-                  box (None: int option)
-                  box (Some ct: System.Threading.CancellationToken option)
-                |]) :?> bool
-              match passed with
-              | false -> raise (System.Exception("FsCheck property returned false"))
-              | true -> ()
+              raise (System.InvalidOperationException(
+                "AsyncFsCheck: no FsCheckConfig available — " +
+                "neither testConfig nor FsCheckConfig.defaultConfig could be resolved."))
+            | Some cfg ->
+              let invokeMethod = testFn.GetType().GetMethod("Invoke")
+              let asyncUnit = invokeMethod.Invoke(testFn, [| cfg |])
+              // Run the Async<unit> synchronously
+              let runSyncMethod =
+                typeof<Async>.GetMethods()
+                |> Array.find (fun m ->
+                  m.Name = "RunSynchronously" && m.GetParameters().Length = 3)
+              let genericMethod = runSyncMethod.MakeGenericMethod([|typeof<unit>|])
+              genericMethod.Invoke(
+                null,
+                [| asyncUnit
+                   box (None: int option)
+                   box (Some ct: CancellationToken option) |]) |> ignore
           | _ -> // unknown tag — skip
             ct.ThrowIfCancellationRequested()
           sw.Stop()

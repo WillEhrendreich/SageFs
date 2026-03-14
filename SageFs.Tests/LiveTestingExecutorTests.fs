@@ -405,6 +405,86 @@ let issue38RegressionTests = testList "Issue #38: Theory+InlineData rows counted
   }
 ]
 
+// --- AsyncFsCheck reflection regression tests ---
+
+/// Simple FsCheck property fixture for testing live testing executor reflection.
+let private fsCheckPropertyFixture =
+  testProperty "trivial always-true property" (fun (x: int) -> x = x)
+
+let asyncFsCheckReflectionTests = testList "AsyncFsCheck reflection" [
+  test "AsyncFsCheck tag 3 tests are discovered" {
+    let testsAsm =
+      System.AppDomain.CurrentDomain.GetAssemblies()
+      |> Array.tryFind (fun a -> a.GetName().Name = "SageFs.Tests")
+    match testsAsm with
+    | Some asm ->
+      let tag3Count =
+        match BuiltInExecutors.ExpectoExecutor.tryBuildCache asm with
+        | Some cache ->
+          let lookup = BuiltInExecutors.ExpectoExecutor.buildLookup cache asm
+          lookup |> Map.filter (fun _ (rft: BuiltInExecutors.ExpectoExecutor.ReflectedFlatTest) -> rft.Tag = 3) |> Map.count
+        | None -> 0
+      (tag3Count > 0) |> Expect.isTrue "should discover AsyncFsCheck (tag 3) tests"
+    | None -> skiptest "SageFs.Tests assembly not loaded"
+  }
+
+  test "AsyncFsCheck tests can be executed via reflection" {
+    let testsAsm =
+      System.AppDomain.CurrentDomain.GetAssemblies()
+      |> Array.tryFind (fun a -> a.GetName().Name = "SageFs.Tests")
+    match testsAsm with
+    | Some asm ->
+      match BuiltInExecutors.ExpectoExecutor.tryBuildCache asm with
+      | Some cache ->
+        let lookup = BuiltInExecutors.ExpectoExecutor.buildLookup cache asm
+        let fsCheckEntry =
+          lookup |> Map.toSeq |> Seq.tryFind (fun (_, rft) -> rft.Tag = 3)
+        match fsCheckEntry with
+        | Some (name, rft) ->
+          let result =
+            BuiltInExecutors.ExpectoExecutor.executeReflected cache rft System.Threading.CancellationToken.None
+            |> Async.RunSynchronously
+          match result with
+          | TestResult.Passed _ -> ()
+          | TestResult.Failed (f, _) ->
+            failtestf "AsyncFsCheck test '%s' failed: %A" name f
+          | other ->
+            failtestf "AsyncFsCheck test '%s' unexpected result: %A" name other
+        | None -> failtest "no AsyncFsCheck tests in lookup"
+      | None -> failtest "could not build reflection cache"
+    | None -> skiptest "SageFs.Tests assembly not loaded"
+  }
+
+  test "no AsyncFsCheck tests fail with 'could not reflect property'" {
+    let testsAsm =
+      System.AppDomain.CurrentDomain.GetAssemblies()
+      |> Array.tryFind (fun a -> a.GetName().Name = "SageFs.Tests")
+    match testsAsm with
+    | Some asm ->
+      match BuiltInExecutors.ExpectoExecutor.tryBuildCache asm with
+      | Some cache ->
+        let lookup = BuiltInExecutors.ExpectoExecutor.buildLookup cache asm
+        let fsCheckTests =
+          lookup |> Map.toList |> List.filter (fun (_, rft) -> rft.Tag = 3)
+        // Run a sample of up to 10 AsyncFsCheck tests
+        let sample = fsCheckTests |> List.truncate 10
+        let mutable propertyReflectionErrors = 0
+        for (_, rft) in sample do
+          let result =
+            BuiltInExecutors.ExpectoExecutor.executeReflected cache rft System.Threading.CancellationToken.None
+            |> Async.RunSynchronously
+          match result with
+          | TestResult.Failed (TestFailure.ExceptionThrown(msg, _), _)
+              when msg.Contains("could not reflect") ->
+            propertyReflectionErrors <- propertyReflectionErrors + 1
+          | _ -> ()
+        propertyReflectionErrors
+        |> Expect.equal "no AsyncFsCheck tests should fail with reflection error" 0
+      | None -> failtest "could not build reflection cache"
+    | None -> skiptest "SageFs.Tests assembly not loaded"
+  }
+]
+
 [<Tests>]
 let allExecutorTests = testList "Provider Executors" [
   executorDescriptionTests
@@ -415,6 +495,7 @@ let allExecutorTests = testList "Provider Executors" [
   discoverTests
   issue32RegressionTests
   issue38RegressionTests
+  asyncFsCheckReflectionTests
 ]
 
 // --- LiveTestingHook tests ---
