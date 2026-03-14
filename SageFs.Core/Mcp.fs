@@ -56,8 +56,7 @@ module McpAdapter =
       match result.EvaluationResult with
       | Ok output -> sprintf "Result: %s" output
       | Error ex ->
-          let parsed = ErrorMessages.parseError ex.Message
-          let suggestion = ErrorMessages.getSuggestion parsed
+          let suggestion = ex.Message |> ErrorMessages.categorize |> ErrorMessages.getSuggestion
           sprintf "Error: %s\n%s%s" ex.Message suggestion diagnosticsSection
     
     match String.IsNullOrEmpty(stdout) with
@@ -3065,12 +3064,9 @@ module McpTools =
               | _ -> false)
             |> Seq.length
           {
-            Features.FeatureDiscovery.DiscoveryContext.HasFailingTests = failingCount > 0
-            FailingTestCount = failingCount
-            HasStaleCells    = false
+            Features.FeatureDiscovery.DiscoveryContext.FailingTestCount = failingCount
             StaleCellCount   = 0
             TotalEvals       = state.EvalHistory.Length
-            HasTests         = testState.DiscoveredTests.Length > 0
             TotalTests       = testState.DiscoveredTests.Length
             RequestedTopic   = topicOpt |> Option.filter (fun s -> s.Length > 0)
           }

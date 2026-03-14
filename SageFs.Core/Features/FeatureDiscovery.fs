@@ -24,23 +24,22 @@ type FeatureSuggestion = {
 
 /// Snapshot of current session state used to personalise feature ranking.
 type DiscoveryContext = {
-  /// True if there are currently failing tests.
-  HasFailingTests: bool
   /// Number of failing tests.
   FailingTestCount: int
-  /// True if there are cells that need re-evaluation.
-  HasStaleCells: bool
   /// Number of stale cells.
   StaleCellCount: int
   /// Total cells evaluated so far this session.
   TotalEvals: int
-  /// True if any tests have been discovered.
-  HasTests: bool
   /// Total tests discovered.
   TotalTests: int
   /// Optional topic the user asked about (used to filter suggestions).
   RequestedTopic: string option
 }
+
+module DiscoveryContext =
+  let hasFailingTests (ctx: DiscoveryContext) = ctx.FailingTestCount > 0
+  let hasStaleCells (ctx: DiscoveryContext) = ctx.StaleCellCount > 0
+  let hasTests (ctx: DiscoveryContext) = ctx.TotalTests > 0
 
 /// Ranked list of feature suggestions with context summary.
 type DiscoveryReport = {
@@ -181,27 +180,27 @@ module FeatureDiscovery =
 
   let private boostForContext (ctx: DiscoveryContext) (s: FeatureSuggestion) : FeatureSuggestion =
     match s.ToolName with
-    | "explain_test_failure" when ctx.HasFailingTests ->
+    | "explain_test_failure" when DiscoveryContext.hasFailingTests ctx ->
       { s with Relevance = FeatureRelevance.Essential
                WhyNow = $"⚠️ You have {ctx.FailingTestCount} failing test(s) — find out why" }
-    | "suggest_next_action" when ctx.HasFailingTests ->
+    | "suggest_next_action" when DiscoveryContext.hasFailingTests ctx ->
       { s with Relevance = FeatureRelevance.Essential
                WhyNow = $"Failing tests detected — let the prioritiser guide your next move" }
-    | "plan_ripple" when ctx.HasStaleCells ->
+    | "plan_ripple" when DiscoveryContext.hasStaleCells ctx ->
       { s with Relevance = FeatureRelevance.Essential
                WhyNow = $"⚡ {ctx.StaleCellCount} stale cell(s) — see the re-evaluation plan" }
-    | "get_cell_dependencies" when ctx.HasStaleCells ->
+    | "get_cell_dependencies" when DiscoveryContext.hasStaleCells ctx ->
       { s with Relevance = FeatureRelevance.Essential
                WhyNow = $"Stale cells detected — inspect the dependency graph" }
     | "suggest_next_cell" when ctx.TotalEvals = 0 ->
       { s with Relevance = FeatureRelevance.Essential
                WhyNow = "Nothing evaluated yet — start here for guided first steps" }
-    | "run_tests" when ctx.HasTests ->
+    | "run_tests" when DiscoveryContext.hasTests ctx ->
       { s with Relevance = FeatureRelevance.Essential
                WhyNow = $"🧪 {ctx.TotalTests} test(s) discovered — run them to verify your work" }
-    | "list_tests" when ctx.HasTests ->
+    | "list_tests" when DiscoveryContext.hasTests ctx ->
       { s with Relevance = FeatureRelevance.High }
-    | "coverage_intel" when ctx.HasFailingTests ->
+    | "coverage_intel" when DiscoveryContext.hasFailingTests ctx ->
       { s with Relevance = FeatureRelevance.High
                WhyNow = "Find which code paths are unprotected while tests are failing" }
     | _ -> s
@@ -224,8 +223,8 @@ module FeatureDiscovery =
           | None -> id)
       |> List.sortBy (fun s -> relevanceScore s.Relevance, s.ToolName)
     let contextSummary =
-      [ if ctx.HasFailingTests then yield $"⚠️ {ctx.FailingTestCount} failing"
-        if ctx.HasStaleCells then yield $"⚡ {ctx.StaleCellCount} stale"
+      [ if DiscoveryContext.hasFailingTests ctx then yield $"⚠️ {ctx.FailingTestCount} failing"
+        if DiscoveryContext.hasStaleCells ctx then yield $"⚡ {ctx.StaleCellCount} stale"
         if ctx.TotalEvals > 0 then yield $"📋 {ctx.TotalEvals} evals"
         if ctx.TotalTests > 0 then yield $"🧪 {ctx.TotalTests} tests" ]
       |> function
@@ -237,12 +236,9 @@ module FeatureDiscovery =
 
   /// An empty (fresh session) context for use in tests and defaults.
   let emptyContext = {
-    HasFailingTests = false
     FailingTestCount = 0
-    HasStaleCells = false
     StaleCellCount = 0
     TotalEvals = 0
-    HasTests = false
     TotalTests = 0
     RequestedTopic = None
   }

@@ -145,28 +145,28 @@ let fsiRegressionTests = testList "FSI regression" [
 
   testList "error classification" [
     test "identifies type error" {
-      let err = ErrorMessages.parseError "This expression was expected to have type 'int'"
-      err.IsTypeError |> Expect.isTrue "should be type error"
+      ErrorMessages.categorize "This expression was expected to have type 'int'"
+      |> Expect.equal "should be type error" ErrorMessages.ErrorCategory.TypeError
     }
 
     test "identifies syntax error" {
-      let err = ErrorMessages.parseError "unexpected symbol 'in' in expression"
-      err.IsSyntaxError |> Expect.isTrue "should be syntax error"
+      ErrorMessages.categorize "unexpected symbol 'in' in expression"
+      |> Expect.equal "should be syntax error" ErrorMessages.ErrorCategory.SyntaxError
     }
 
     test "identifies name error" {
-      let err = ErrorMessages.parseError "The value or constructor 'foo' is not defined"
-      err.IsNameError |> Expect.isTrue "should be name error"
+      ErrorMessages.categorize "The value or constructor 'foo' is not defined"
+      |> Expect.equal "should be name error" ErrorMessages.ErrorCategory.NameError
     }
 
     test "identifies 'not found' name error" {
-      let err = ErrorMessages.parseError "The type 'Bar' was not found"
-      err.IsNameError |> Expect.isTrue "should be name error for not found"
+      ErrorMessages.categorize "The type 'Bar' was not found"
+      |> Expect.equal "should be name error for not found" ErrorMessages.ErrorCategory.NameError
     }
 
     test "earlier error gets correct suggestion" {
       let suggestion =
-        ErrorMessages.parseError "Operation could not be completed due to earlier error"
+        ErrorMessages.categorize "Operation could not be completed due to earlier error"
         |> ErrorMessages.getSuggestion
       suggestion |> Expect.stringContains "should warn about earlier error" "earlier error"
       suggestion |> Expect.stringContains "should say don't reset" "Do NOT reset"
@@ -174,17 +174,24 @@ let fsiRegressionTests = testList "FSI regression" [
 
     test "name error gets hint about namespace" {
       let suggestion =
-        ErrorMessages.parseError "The value 'x' is not defined"
+        ErrorMessages.categorize "The value 'x' is not defined"
         |> ErrorMessages.getSuggestion
       suggestion |> Expect.stringContains "should mention namespace" "namespace"
     }
 
-    testProperty "parseError always returns non-null Message" <| fun (text: string) ->
+    testProperty "categorize always returns a valid ErrorCategory" <| fun (text: string) ->
       match text with
       | null -> true
       | t ->
-        let err = ErrorMessages.parseError t
-        err.Message = t
+        let cat = ErrorMessages.categorize t
+        // just verify it doesn't throw and returns a valid category
+        match cat with
+        | ErrorMessages.ErrorCategory.TypeLoad
+        | ErrorMessages.ErrorCategory.EarlierError
+        | ErrorMessages.ErrorCategory.NameError
+        | ErrorMessages.ErrorCategory.TypeError
+        | ErrorMessages.ErrorCategory.SyntaxError
+        | ErrorMessages.ErrorCategory.Unknown -> true
   ]
 
   testList "SageFsError describe" [

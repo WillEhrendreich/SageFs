@@ -2415,24 +2415,24 @@ let sageFsErrorDescribeTests = testList "SageFsError.describe" [
 
 let errorMessagesSuggestionTests = testList "ErrorMessages.getSuggestion" [
   test "earlier error gives session-not-corrupted advice" {
-    let msg = ErrorMessages.getSuggestion (ErrorMessages.parseError "due to earlier error")
+    let msg = ErrorMessages.categorize "due to earlier error" |> ErrorMessages.getSuggestion
     msg |> Expect.stringContains "earlier error tip" "earlier error"
     msg |> Expect.stringContains "no reset" "NOT corrupted"
   }
   test "name error gives namespace tip" {
-    let msg = ErrorMessages.getSuggestion (ErrorMessages.parseError "Foo is not defined or not found")
+    let msg = ErrorMessages.categorize "Foo is not defined or not found" |> ErrorMessages.getSuggestion
     msg |> Expect.stringContains "name tip" "namespace"
   }
   test "type error gives type mismatch tip" {
-    let msg = ErrorMessages.getSuggestion (ErrorMessages.parseError "type mismatch between int and string")
+    let msg = ErrorMessages.categorize "type mismatch between int and string" |> ErrorMessages.getSuggestion
     msg |> Expect.stringContains "type tip" "Type mismatch"
   }
   test "syntax error gives syntax tip" {
-    let msg = ErrorMessages.getSuggestion (ErrorMessages.parseError "unexpected token in expression")
+    let msg = ErrorMessages.categorize "unexpected token in expression" |> ErrorMessages.getSuggestion
     msg |> Expect.stringContains "syntax tip" "Syntax"
   }
   test "generic error gives break-it-down tip" {
-    let msg = ErrorMessages.getSuggestion (ErrorMessages.parseError "something went wrong")
+    let msg = ErrorMessages.categorize "something went wrong" |> ErrorMessages.getSuggestion
     msg |> Expect.stringContains "generic tip" "smaller pieces"
   }
 ]

@@ -292,10 +292,9 @@ let buildDashboardSnapshot
     let statsTask = q.GetEvalStats sessionId
     let hrTask = q.GetHotReloadState sessionId
     let wCtxTask = q.GetWarmupContext sessionId
-    do! System.Threading.Tasks.Task.WhenAll(statsTask, hrTask, wCtxTask)
-    let stats : SageFs.Affordances.EvalStats = statsTask.Result
-    let hrState = hrTask.Result
-    let wCtx = wCtxTask.Result
+    let! stats = statsTask
+    let! hrState = hrTask
+    let! wCtx = wCtxTask
     let timelineStats = q.GetEvalTimeline()
     let evalStatsView = EvalStatsView.fromStats stats timelineStats
     let daemonHealth = q.GetDaemonHealth()

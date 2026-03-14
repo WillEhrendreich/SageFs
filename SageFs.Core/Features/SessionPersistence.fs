@@ -222,15 +222,23 @@ module SessionBinaryReader =
   let private findSection (tag: uint16) (entries: DirEntry list) =
     entries |> List.tryFind (fun e -> e.Tag = tag)
 
-  let private readPoolString (pool: byte[]) (offset: uint32) : string =
+  let private readPoolString (pool: byte[]) (offset: uint32) : Result<string, string> =
     let off = int offset
     match off + 4 > pool.Length with
-    | true -> failwith (sprintf "String pool offset %d exceeds pool size %d" off pool.Length)
+    | true -> Error (sprintf "String pool offset %d exceeds pool size %d" off pool.Length)
     | false ->
       let len = BitConverter.ToUInt32(pool, off) |> int
       match off + 4 + len > pool.Length with
-      | true -> failwith (sprintf "String pool entry at %d (len %d) exceeds pool size %d" off len pool.Length)
-      | false -> Encoding.UTF8.GetString(pool, off + 4, len)
+      | true -> Error (sprintf "String pool entry at %d (len %d) exceeds pool size %d" off len pool.Length)
+      | false -> Ok (Encoding.UTF8.GetString(pool, off + 4, len))
+
+  let rec private readItems (remaining: int) (acc: 'T list) (readOne: unit -> Result<'T, string>) : Result<'T list, string> =
+    match remaining with
+    | 0 -> Ok (List.rev acc)
+    | n ->
+      match readOne () with
+      | Error e -> Error e
+      | Ok v -> readItems (n - 1) (v :: acc) readOne
 
   let private parseMeta (payload: byte[]) : Result<SessionMeta, string> =
     try
@@ -263,19 +271,28 @@ module SessionBinaryReader =
       ms.Position <- tocStart + int64 (count * stride)
       let poolSize = br.ReadUInt32() |> int
       let pool = br.ReadBytes(poolSize)
-      ok [
-        for (codeOff, outputOff, tsMs, kind, flags, durMicros) in entries do
+      let rec build (remaining: (uint32 * uint32 * int64 * uint16 * uint16 * uint32) list) acc =
+        match remaining with
+        | [] -> Ok (List.rev acc)
+        | (codeOff, outputOff, tsMs, kind, flags, durMicros) :: rest ->
           match InteractionKind.tryParse kind with
-          | Error msg -> failwith msg
+          | Error msg -> Error (sprintf "INPT parse error: %s" msg)
           | Ok validKind ->
-          yield {
-            Code = readPoolString pool codeOff
-            Output = readPoolString pool outputOff
+          match readPoolString pool codeOff with
+          | Error msg -> Error (sprintf "INPT parse error: %s" msg)
+          | Ok code ->
+          match readPoolString pool outputOff with
+          | Error msg -> Error (sprintf "INPT parse error: %s" msg)
+          | Ok output ->
+          build rest ({
+            Code = code
+            Output = output
             TimestampMs = tsMs
             Kind = validKind
             Flags = LanguagePrimitives.EnumOfValue<uint16, EntryFlags> flags
             DurationMicros = durMicros
-          } ]
+          } :: acc)
+      build entries []
     with ex -> err (sprintf "INPT parse error: %s" ex.Message)
 
   let private parseRefs (payload: byte[]) : Result<Reference list, string> =
@@ -283,16 +300,15 @@ module SessionBinaryReader =
       use ms = new MemoryStream(payload)
       use br = new BinaryReader(ms)
       let count = br.ReadUInt32() |> int
-      ok [
-        for _ in 0 .. count - 1 do
-          let rawKind = br.ReadByte()
-          match RefKind.tryParse rawKind with
-          | Error msg -> failwith msg
-          | Ok validKind ->
-          yield {
+      readItems count [] (fun () ->
+        let rawKind = br.ReadByte()
+        match RefKind.tryParse rawKind with
+        | Error msg -> Error (sprintf "REFS parse error: %s" msg)
+        | Ok validKind ->
+          Ok {
             Kind = validKind
             Path = BinaryPrimitives.readLpString br
-          } ]
+          })
     with ex -> err (sprintf "REFS parse error: %s" ex.Message)
 
   let read (data: byte[]) : Result<SfsData, string> =

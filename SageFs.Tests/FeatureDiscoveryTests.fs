@@ -9,13 +9,13 @@ open SageFs.Features.FeatureDiscovery
 let private freshCtx = FeatureDiscovery.emptyContext
 
 let private withFailingTests n =
-  { freshCtx with HasFailingTests = true; FailingTestCount = n }
+  { freshCtx with FailingTestCount = n }
 
 let private withStaleCells n =
-  { freshCtx with HasStaleCells = true; StaleCellCount = n }
+  { freshCtx with StaleCellCount = n }
 
 let private withTests n =
-  { freshCtx with HasTests = true; TotalTests = n }
+  { freshCtx with TotalTests = n }
 
 let private withEvals n =
   { freshCtx with TotalEvals = n }
@@ -224,9 +224,9 @@ let contextSummaryTests =
 
     testCase "all metrics appear in full context summary" <| fun _ ->
       let ctx = {
-        HasFailingTests = true; FailingTestCount = 2
-        HasStaleCells = true; StaleCellCount = 3
-        TotalEvals = 10; HasTests = true; TotalTests = 15
+        FailingTestCount = 2
+        StaleCellCount = 3
+        TotalEvals = 10; TotalTests = 15
         RequestedTopic = None
       }
       let r = FeatureDiscovery.discover ctx

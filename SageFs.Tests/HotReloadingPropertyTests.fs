@@ -14,7 +14,7 @@ let private emptyState: State = {
   LastOpenModules = []
   ProjectAssemblies = []
   AssemblyLoadErrors = []
-  LiveTestInitDone = false
+  LiveTestInit = LiveTestInit.Pending
 }
 
 let private pick (gen: Gen<'a>) = (Gen.sample 1 gen).[0]

@@ -159,24 +159,32 @@ module TestCacheReader =
   let private findSection (tag: uint32) (entries: DirEntry list) =
     entries |> List.tryFind (fun e -> e.Tag = tag)
 
+  let rec private readItems (remaining: int) (acc: 'T list) (readOne: unit -> Result<'T, string>) : Result<'T list, string> =
+    match remaining with
+    | 0 -> Ok (List.rev acc)
+    | n ->
+      match readOne () with
+      | Error e -> Error e
+      | Ok v -> readItems (n - 1) (v :: acc) readOne
+
   let private parseImap (payload: byte[]) : Result<CoverageEntry list, string> =
     try
       use ms = new MemoryStream(payload)
       use br = new BinaryReader(ms)
       let count = br.ReadUInt32() |> int
-      ok [ for _ in 0 .. count - 1 do
-              let tid = BinaryPrimitives.readLpString br
-              let wc = br.ReadUInt32()
-              let remaining = ms.Length - ms.Position
-              match int64 wc * 8L > remaining with
-              | true ->
-                failwith (sprintf "Bitmap word count %d requires %d bytes but only %d remain" wc (wc * 8u) remaining)
-              | false ->
-              let words =
-                match wc with
-                | 0u -> [||]
-                | n -> [| for _ in 1u .. n -> br.ReadUInt64() |]
-              yield { TestId = tid; BitmapWordCount = wc; BitmapWords = words } ]
+      readItems count [] (fun () ->
+        let tid = BinaryPrimitives.readLpString br
+        let wc = br.ReadUInt32()
+        let remaining = ms.Length - ms.Position
+        match int64 wc * 8L > remaining with
+        | true ->
+          Error (sprintf "IMAP parse error: Bitmap word count %d requires %d bytes but only %d remain" wc (wc * 8u) remaining)
+        | false ->
+        let words =
+          match wc with
+          | 0u -> [||]
+          | n -> [| for _ in 1u .. n -> br.ReadUInt64() |]
+        Ok { TestId = tid; BitmapWordCount = wc; BitmapWords = words })
     with ex -> err (sprintf "IMAP parse error: %s" ex.Message)
 
   let private parseTres (payload: byte[]) : Result<ResultEntry list, string> =
@@ -184,15 +192,15 @@ module TestCacheReader =
       use ms = new MemoryStream(payload)
       use br = new BinaryReader(ms)
       let count = br.ReadUInt32() |> int
-      ok [ for _ in 0 .. count - 1 do
-              let tid = BinaryPrimitives.readLpString br
-              let rawOutcome = br.ReadByte()
-              match Outcome.tryParse rawOutcome with
-              | Error msg -> failwith msg
-              | Ok outcome ->
-              let dur = br.ReadUInt32()
-              let msg = BinaryPrimitives.readLpStringOption br
-              yield { TestId = tid; Outcome = outcome; DurationMs = dur; Message = msg } ]
+      readItems count [] (fun () ->
+        let tid = BinaryPrimitives.readLpString br
+        let rawOutcome = br.ReadByte()
+        match Outcome.tryParse rawOutcome with
+        | Error msg -> Error (sprintf "TRES parse error: %s" msg)
+        | Ok outcome ->
+        let dur = br.ReadUInt32()
+        let msg = BinaryPrimitives.readLpStringOption br
+        Ok { TestId = tid; Outcome = outcome; DurationMs = dur; Message = msg })
     with ex -> err (sprintf "TRES parse error: %s" ex.Message)
 
   let read (data: byte[]) : Result<StcData, string> =

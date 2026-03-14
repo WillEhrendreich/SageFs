@@ -112,13 +112,19 @@ type Method = {
     FullName = m.Name :: modulePath |> Seq.rev |> String.concat "."
   }
 
+/// Whether initial live-test discovery has been performed.
+[<RequireQualifiedAccess>]
+type LiveTestInit =
+  | Pending
+  | Done
+
 type State = {
   Methods: Map<string, Method list>
   LastOpenModules: string list
   LastAssembly: Assembly Option
   ProjectAssemblies: Assembly list
   AssemblyLoadErrors: AssemblyLoadError list
-  LiveTestInitDone: bool
+  LiveTestInit: LiveTestInit
 }
 
 type Event =
@@ -233,7 +239,7 @@ let mkReloadingState (sln: SageFs.ProjectLoading.Solution) =
     LastAssembly = None
     ProjectAssemblies = assemblies
     AssemblyLoadErrors = loadErrors
-    LiveTestInitDone = false
+    LiveTestInit = LiveTestInit.Pending
   }
 
 let hotReloadingInitFunction (sln: SageFs.ProjectLoading.Solution) : string * obj =
@@ -249,7 +255,7 @@ let hotReloadingInitFunction (sln: SageFs.ProjectLoading.Solution) : string * ob
       LastAssembly = None
       ProjectAssemblies = []
       AssemblyLoadErrors = []
-      LiveTestInitDone = false
+      LiveTestInit = LiveTestInit.Pending
     }
 
 [<Literal>]
@@ -668,7 +674,7 @@ let hotReloadingMiddleware next (request, st: AppState) =
         // Live testing hook: discover tests and detect providers.
         // Skip discovery when no methods were updated (expression-only evals)
         // unless this is the first eval where we need initial test discovery.
-        let needsInitialScan = not reloadingSt.LiveTestInitDone && not (List.isEmpty reloadingSt.ProjectAssemblies)
+        let needsInitialScan = reloadingSt.LiveTestInit = LiveTestInit.Pending && not (List.isEmpty reloadingSt.ProjectAssemblies)
         let hookResult, reloadingSt =
           match not (List.isEmpty updatedMethods) || needsInitialScan with
           | true ->
@@ -720,7 +726,7 @@ let hotReloadingMiddleware next (request, st: AppState) =
                       |> Array.concat
                     AffectedTestIds = fsiHookResult.AffectedTestIds
                     RunTest = composedRunTest }
-              merged, { reloadingSt with LiveTestInitDone = true }
+              merged, { reloadingSt with LiveTestInit = LiveTestInit.Done }
             | false ->
               fsiHookResult, reloadingSt
           | false ->

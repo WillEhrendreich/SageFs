@@ -125,7 +125,7 @@ module ElmLoop =
             with ex ->
               Instrumentation.elmloopErrors.Add(1L, kvp "phase" "update")
               Log.error "[ElmLoop] Update threw for %s: %s\n%s" typeName ex.Message (if isNull ex.StackTrace then "" else ex.StackTrace)
-              try program.OnSystemAlarm "update" ex.Message with _ -> ()
+              try program.OnSystemAlarm "update" ex.Message with alarmEx -> Log.warn "[ElmLoop] OnSystemAlarm(update) callback failed: %s" alarmEx.Message
             perMsgSw.Stop()
             Instrumentation.elmloopUpdateMs.Record(perMsgSw.Elapsed.TotalMilliseconds, kvp "msg_type" typeName)
             // Queue depth high-watermark check (fires once per drain batch to avoid log spam).
@@ -170,7 +170,7 @@ module ElmLoop =
           with ex ->
             Instrumentation.elmloopErrors.Add(1L, kvp "phase" "render")
             Log.error "[ElmLoop] Render threw: %s\n%s" ex.Message (if isNull ex.StackTrace then "" else ex.StackTrace)
-            try program.OnSystemAlarm "render" ex.Message with _ -> ()
+            try program.OnSystemAlarm "render" ex.Message with alarmEx -> Log.warn "[ElmLoop] OnSystemAlarm(render) callback failed: %s" alarmEx.Message
             lock lockObj (fun () -> latestRegions)
         | false ->
           lock lockObj (fun () -> latestRegions)
@@ -187,7 +187,7 @@ module ElmLoop =
         with ex ->
           Instrumentation.elmloopErrors.Add(1L, kvp "phase" "callback")
           Log.error "[ElmLoop] OnModelChanged threw: %s\n%s" ex.Message (if isNull ex.StackTrace then "" else ex.StackTrace)
-          try program.OnSystemAlarm "callback" ex.Message with _ -> ()
+          try program.OnSystemAlarm "callback" ex.Message with alarmEx -> Log.warn "[ElmLoop] OnSystemAlarm(callback) callback failed: %s" alarmEx.Message
       | false -> ()
       cbSw.Stop()
       Instrumentation.elmloopCallbackMs.Record(cbSw.Elapsed.TotalMilliseconds, batchTag)
@@ -224,7 +224,7 @@ module ElmLoop =
               with ex ->
                 Instrumentation.elmloopErrors.Add(1L, kvp "phase" "effect")
                 Log.error "[ElmLoop] Effect threw: %s\n%s" ex.Message (if isNull ex.StackTrace then "" else ex.StackTrace)
-                try program.OnSystemAlarm "effect" ex.Message with _ -> ()
+                try program.OnSystemAlarm "effect" ex.Message with alarmEx -> Log.warn "[ElmLoop] OnSystemAlarm(effect) callback failed: %s" alarmEx.Message
                 Instrumentation.failSpan effectActivity ex.Message
             finally
               effectSemaphore.Release() |> ignore
@@ -282,14 +282,14 @@ module ElmLoop =
       with ex ->
         Instrumentation.elmloopErrors.Add(1L, System.Collections.Generic.KeyValuePair("phase", "initial_render" :> obj))
         Log.error "[ElmLoop] Initial Render threw: %s\n%s" ex.Message (if isNull ex.StackTrace then "" else ex.StackTrace)
-        try program.OnSystemAlarm "initial_render" ex.Message with _ -> ()
+        try program.OnSystemAlarm "initial_render" ex.Message with alarmEx -> Log.warn "[ElmLoop] OnSystemAlarm(initial_render) callback failed: %s" alarmEx.Message
         []
     latestRegions <- regions
     try program.OnModelChanged initialModel regions
     with ex ->
       Instrumentation.elmloopErrors.Add(1L, System.Collections.Generic.KeyValuePair("phase", "initial_callback" :> obj))
       Log.error "[ElmLoop] Initial OnModelChanged threw: %s\n%s" ex.Message (if isNull ex.StackTrace then "" else ex.StackTrace)
-      try program.OnSystemAlarm "initial_callback" ex.Message with _ -> ()
+      try program.OnSystemAlarm "initial_callback" ex.Message with alarmEx -> Log.warn "[ElmLoop] OnSystemAlarm(initial_callback) callback failed: %s" alarmEx.Message
 
     { Dispatch = dispatch
       GetModel = fun () -> lock lockObj (fun () -> model)
