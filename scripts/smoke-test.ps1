@@ -319,59 +319,71 @@ if (-not (Test-Path $samplePath)) {
   Capture-SmokeDiagnostics "Sample project path was invalid"
   $null = Show-Summary
   exit 1
+}
+
+# Build the sample project so its DLL exists for session warmup.
+# CI may only build Release; the session loader defaults to Debug output.
+Write-Host "  Building sample project ($samplePath)..." -ForegroundColor DarkGray
+$buildResult = & dotnet build $samplePath --nologo --verbosity quiet 2>&1
+if ($LASTEXITCODE -ne 0) {
+  Fail "daemon-start" "Sample project build failed (exit $LASTEXITCODE)"
+  Write-Host ($buildResult | Out-String) -ForegroundColor Red
+  Capture-SmokeDiagnostics "Sample project build failed"
+  $null = Show-Summary
+  exit 1
+}
+
+Write-Host "  Starting bare daemon" -ForegroundColor DarkGray
+Ensure-DiagnosticsDirectory
+Remove-Item -Path $daemonStdoutPath, $daemonStderrPath -ErrorAction SilentlyContinue
+$daemonProcess = Start-Process -FilePath "sagefs" `
+  -ArgumentList "--mcp-port", $Port, "--no-resume" `
+  -WorkingDirectory $repoRoot `
+  -RedirectStandardOutput $daemonStdoutPath `
+  -RedirectStandardError $daemonStderrPath `
+  -PassThru
+
+$reachable = $false
+$elapsed = 0
+for ($i = 0; $i -lt $DaemonTimeoutSeconds; $i++) {
+  Start-Sleep -Seconds 1
+  $elapsed++
+  try {
+    $resp = Invoke-RestMethod -Method Get -Uri "$baseUrl/health" -TimeoutSec 2 -ErrorAction Stop
+    $latestHealthResponse = $resp
+    Add-DiagnosticPoll $startupHealthPolls @{
+      timestampUtc = (Get-Date).ToUniversalTime().ToString("o")
+      elapsedSeconds = $elapsed
+      reachable = $true
+      status = $resp.status
+      healthy = $resp.healthy
+      sessionCount = if ($resp.PSObject.Properties.Match("sessionCount").Count -gt 0) { [int]$resp.sessionCount } else { $null }
+      diagnosticSummary = if ($resp.PSObject.Properties.Match("diagnosticSummary").Count -gt 0) { [string]$resp.diagnosticSummary } else { $null }
+    }
+    if ($resp.PSObject.Properties.Match("healthy").Count -gt 0) {
+      $reachable = $true
+      break
+    }
+  } catch {
+    Add-DiagnosticPoll $startupHealthPolls @{
+      timestampUtc = (Get-Date).ToUniversalTime().ToString("o")
+      elapsedSeconds = $elapsed
+      reachable = $false
+      error = $_.Exception.Message
+    }
+  }
+}
+
+if ($reachable) {
+  Pass "daemon-start" "Daemon started in ${elapsed}s"
 } else {
-  Write-Host "  Starting bare daemon" -ForegroundColor DarkGray
-  Ensure-DiagnosticsDirectory
-  Remove-Item -Path $daemonStdoutPath, $daemonStderrPath -ErrorAction SilentlyContinue
-  $daemonProcess = Start-Process -FilePath "sagefs" `
-    -ArgumentList "--mcp-port", $Port, "--no-resume" `
-    -WorkingDirectory $repoRoot `
-    -RedirectStandardOutput $daemonStdoutPath `
-    -RedirectStandardError $daemonStderrPath `
-    -PassThru
-
-  $reachable = $false
-  $elapsed = 0
-  for ($i = 0; $i -lt $DaemonTimeoutSeconds; $i++) {
-    Start-Sleep -Seconds 1
-    $elapsed++
-    try {
-      $resp = Invoke-RestMethod -Method Get -Uri "$baseUrl/health" -TimeoutSec 2 -ErrorAction Stop
-      $latestHealthResponse = $resp
-      Add-DiagnosticPoll $startupHealthPolls @{
-        timestampUtc = (Get-Date).ToUniversalTime().ToString("o")
-        elapsedSeconds = $elapsed
-        reachable = $true
-        status = $resp.status
-        healthy = $resp.healthy
-        sessionCount = if ($resp.PSObject.Properties.Match("sessionCount").Count -gt 0) { [int]$resp.sessionCount } else { $null }
-        diagnosticSummary = if ($resp.PSObject.Properties.Match("diagnosticSummary").Count -gt 0) { [string]$resp.diagnosticSummary } else { $null }
-      }
-      if ($resp.PSObject.Properties.Match("healthy").Count -gt 0) {
-        $reachable = $true
-        break
-      }
-    } catch {
-      Add-DiagnosticPoll $startupHealthPolls @{
-        timestampUtc = (Get-Date).ToUniversalTime().ToString("o")
-        elapsedSeconds = $elapsed
-        reachable = $false
-        error = $_.Exception.Message
-      }
-    }
+  Fail "daemon-start" "Daemon not reachable after ${DaemonTimeoutSeconds}s"
+  Capture-SmokeDiagnostics "Daemon startup timed out"
+  if ($daemonProcess -and -not $daemonProcess.HasExited) {
+    Stop-Process -Id $daemonProcess.Id -Force -ErrorAction SilentlyContinue
   }
-
-  if ($reachable) {
-    Pass "daemon-start" "Daemon started in ${elapsed}s"
-  } else {
-    Fail "daemon-start" "Daemon not reachable after ${DaemonTimeoutSeconds}s"
-    Capture-SmokeDiagnostics "Daemon startup timed out"
-    if ($daemonProcess -and -not $daemonProcess.HasExited) {
-      Stop-Process -Id $daemonProcess.Id -Force -ErrorAction SilentlyContinue
-    }
-    $null = Show-Summary
-    exit 1
-  }
+  $null = Show-Summary
+  exit 1
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
