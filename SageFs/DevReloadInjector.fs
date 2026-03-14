@@ -7,6 +7,7 @@ open Microsoft.AspNetCore.Builder
 open Microsoft.AspNetCore.Http
 open System.Threading
 open SageFs.Utils
+open SageFs.Middleware.HotReloading
 
 /// Worker HTTP port — set after the worker server starts.
 let mutable private workerPort = 0
@@ -78,9 +79,20 @@ let private patchMethod (harmony: HarmonyLib.Harmony) (targetType: Type) (method
     Log.warn "[DevReload] %s.%s not found — skipping patch" targetType.Name methodName
     false
   | m ->
+    let preSnapshot = snapshotMethodState m
     let prefix = typeof<RunPrefix>.GetMethod("Prefix", BindingFlags.NonPublic ||| BindingFlags.Static)
     harmony.Patch(m, prefix = HarmonyLib.HarmonyMethod(prefix)) |> ignore
-    Log.info "[DevReload] Patched %s.%s" targetType.Name methodName
+    match preSnapshot with
+    | Some (jitAddr, preBytes) ->
+      match validateDetourCanary jitAddr preBytes with
+      | DetourConfirmed ->
+        Log.info "[DevReload] Patched %s.%s (canary confirmed)" targetType.Name methodName
+      | BytesUnchanged ->
+        Log.warn "[DevReload] Patched %s.%s (canary: bytes unchanged — normal for Harmony prefix patches)" targetType.Name methodName
+      | CanaryError ex ->
+        Log.warn "[DevReload] Patched %s.%s (canary error: %s)" targetType.Name methodName ex.Message
+    | None ->
+      Log.info "[DevReload] Patched %s.%s (canary skipped: could not snapshot)" targetType.Name methodName
     true
 
 /// Install Harmony patches on WebApplication.Run and RunAsync.

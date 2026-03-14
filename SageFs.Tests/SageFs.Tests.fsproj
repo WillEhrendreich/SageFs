@@ -152,6 +152,7 @@
         <Compile Include="EndpointContractTests.fs" />
         <Compile Include="FsiRegressionTests.fs" />
         <Compile Include="HotReloadingPropertyTests.fs" />
+        <Compile Include="DevReloadCanaryTests.fs" />
         <Compile Include="HarmonyCanaryTests.fs" />
         <Compile Include="DevReloadMiddlewareTests.fs" />
         <Compile Include="QuarantineTests.fs" />
