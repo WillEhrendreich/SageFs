@@ -700,14 +700,14 @@ let renderSessions (sessions: ParsedSession list) (creating: bool) =
           | "starting" | "restarting" -> "status-warming"
           | _ -> "status-faulted"
         let cls =
-          match s.IsSelected, s.IsActive with
-          | true, _ -> "session-selected"
-          | false, true -> "output-result"
-          | false, false -> ""
+          match s.IsActive with
+          | true -> "output-result"
+          | false -> ""
         Elem.div
           [ Attr.class' (sprintf "session-row flex-between %s" cls)
             Attr.style "padding: 8px 0; border-bottom: 1px solid var(--border-normal); cursor: pointer;"
-            Ds.onClick (Ds.post (sprintf "/dashboard/session/switch/%s" s.Id)) ]
+            Ds.class' ("session-selected", sprintf "$%s === '%s'" Signals.ViewingSessionId s.Id)
+            Ds.onEvent ("click", sprintf "$%s = '%s'; @post('/dashboard/session/switch/%s')" Signals.ViewingSessionId s.Id s.Id) ]
           [
             Elem.div [ Attr.style "flex: 1; min-width: 0;" ] [
               // Row 1: session ID + status + active indicator
@@ -829,7 +829,7 @@ let renderSessions (sessions: ParsedSession list) (creating: bool) =
               | false ->
                 Elem.button
                   [ Attr.class' "session-btn"
-                    Ds.onClick (Ds.post (sprintf "/dashboard/session/switch/%s" s.Id)) ]
+                    Ds.onEvent ("click", sprintf "$%s = '%s'; @post('/dashboard/session/switch/%s')" Signals.ViewingSessionId s.Id s.Id) ]
                   [ Text.raw "⇄" ]
               | true -> ()
               Elem.button

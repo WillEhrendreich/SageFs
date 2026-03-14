@@ -209,7 +209,7 @@ let renderShell (version: string) (initialSessionId: string) (initialContent: Xm
       Elem.link [ Attr.rel "stylesheet"; Attr.href "/dashboard/dashboard.css" ]
     ]
     Elem.body [ Ds.safariStreamingFix ] [
-      Elem.div [ Ds.onInit (Ds.get "/dashboard/stream"); Ds.signal (Signals.HelpVisible, "false"); Ds.signal (Signals.SidebarOpen, "true"); Ds.signal (Signals.SessionId, initialSessionId); Ds.signal (Signals.Code, ""); Ds.signal (Signals.NewSessionDir, ""); Ds.signal (Signals.ManualProjects, ""); Ds.signal (Signals.Theme, ""); Ds.signal (Signals.CursorPos, "0"); Ds.signal (Signals.TestFilter, "all"); Ds.signal (Signals.ExpandedDashboard, "false") ] []
+      Elem.div [ Ds.onInit (Ds.get "/dashboard/stream"); Ds.signal (Signals.HelpVisible, "false"); Ds.signal (Signals.SidebarOpen, "true"); Ds.signal (Signals.SessionId, initialSessionId); Ds.signal (Signals.ViewingSessionId, initialSessionId); Ds.signal (Signals.Code, ""); Ds.signal (Signals.NewSessionDir, ""); Ds.signal (Signals.ManualProjects, ""); Ds.signal (Signals.Theme, ""); Ds.signal (Signals.CursorPos, "0"); Ds.signal (Signals.TestFilter, "all"); Ds.signal (Signals.ExpandedDashboard, "false") ] []
       Elem.div [ Attr.id DomIds.ServerStatus; Attr.class' "conn-banner conn-disconnected"; Attr.style "display:none" ] [
         Text.raw "⏳ Connecting to server..."
       ]
@@ -698,7 +698,8 @@ let createSessionActionHandler
       let! result = action sessionId
       Response.sseStartResponse ctx |> ignore
       // Push sessionId so eval form targets the new session
-      do! Response.ssePatchSignal ctx (SignalPath.sp "sessionId") sessionId
+      do! Response.ssePatchSignal ctx (SignalPath.sp Signals.SessionId) sessionId
+      do! Response.ssePatchSignal ctx (SignalPath.sp Signals.ViewingSessionId) sessionId
       let msg, cssClass =
         match result with
         | Ok m -> m, "output-line output-info"

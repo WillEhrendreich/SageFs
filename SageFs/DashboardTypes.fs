@@ -53,6 +53,7 @@ module DomIds =
 [<RequireQualifiedAccess>]
 module Signals =
   let [<Literal>] SessionId = "sessionId"
+  let [<Literal>] ViewingSessionId = "viewingSessionId"
   let [<Literal>] Code = "code"
   let [<Literal>] HelpVisible = "helpVisible"
   let [<Literal>] SidebarOpen = "sidebarOpen"
