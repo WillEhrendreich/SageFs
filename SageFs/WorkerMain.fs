@@ -519,16 +519,17 @@ let run (sessionId: string) (port: int) = async {
             not (n.Contains("/obj/") || n.Contains("/bin/")))
         | false -> [])
 
-    // Chesterton's fence: watch all project files by default. Without this,
-    // hot-reload is silently OFF until users discover the toggle UI and manually
-    // opt files in — the #1 onboarding friction point. Users who want the old
-    // opt-in behavior can set SAGEFS_HOT_RELOAD=opt-in.
+    // Hot-reload is OFF by default — nothing watched until the user explicitly
+    // opts in via the dashboard or SAGEFS_HOT_RELOAD=all env var. The file
+    // watcher still runs (it's cheap OS infrastructure shared with live testing),
+    // but no files are marked for hot-reload detouring.
     match Environment.GetEnvironmentVariable("SAGEFS_HOT_RELOAD") with
-    | "opt-in" -> ()
-    | _ ->
+    | "all" ->
       result.HotReloadStateRef.Value <-
         HotReloadState.watchAll projectFiles HotReloadState.empty
-      Log.info "Hot reload: watching %d project files by default" projectFiles.Length
+      Log.info "Hot reload: watching %d project files (SAGEFS_HOT_RELOAD=all)" projectFiles.Length
+    | _ ->
+      Log.info "Hot reload: off by default (0 files watched)"
     let! server =
       WorkerHttpTransport.startServer readyHandler result.HotReloadStateRef projectFiles result.GetWarmupContext getRunTest port
       |> Async.AwaitTask

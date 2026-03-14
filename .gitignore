@@ -46,3 +46,4 @@ viz-output/code-city-tests/bin/
 viz-output/code-city-tests/obj/
 
 test-output.txt
+.SageFs/

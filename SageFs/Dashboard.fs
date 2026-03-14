@@ -298,8 +298,9 @@ let buildDashboardSnapshot
     let wCtx = wCtxTask.Result
     let timelineStats = q.GetEvalTimeline()
     let evalStatsView = EvalStatsView.fromStats stats timelineStats
+    let daemonHealth = q.GetDaemonHealth()
     let daemonHealthPanel =
-      match q.GetDaemonHealth() with
+      match daemonHealth with
       | Some snap -> renderDaemonHealth (DaemonHealthView.fromSnapshot snap)
       | None -> Elem.div [ Attr.id DomIds.DaemonHealth; Attr.class' "meta" ] []
     let failureNarrativesPanel =
@@ -356,6 +357,16 @@ let buildDashboardSnapshot
       | false -> renderSessionContextEmpty
     let bindingsPanel =
       renderBindingsPanel (resolveBindingsPanelSnapshot (q.GetBindingScopeSnapshot ()) (q.GetSessionBindings sessionId))
+    let liveTestingActive = q.GetLiveTestingActive ()
+    let liveTestingStatus = q.GetLiveTestingStatus ()
+    let (ltPassed, ltFailed) =
+      match daemonHealth with
+      | Some dh ->
+        match dh.LiveTestingSummary with
+        | Some lt -> (Some lt.Passed, Some lt.Failed)
+        | None -> (None, None)
+      | None -> (None, None)
+    let liveTestingPanel = renderLiveTestingPanel liveTestingActive liveTestingStatus ltPassed ltFailed
     let alarmPanel = renderAlarmBanner (infra.SystemAlarmBuffer.Value)
     let! outputPanel, sessionsPanel, sessionPicker = buildOutputPanels q
     let snap : DashboardSnapshot = {
@@ -373,6 +384,7 @@ let buildDashboardSnapshot
       ThemeName = themeName
       ConnectionLabel = connectionLabel
       HotReloadPanel = hrPanel
+      LiveTestingPanel = liveTestingPanel
       SessionContextPanel = scPanel
       OutputPanel = outputPanel
       SessionsPanel = sessionsPanel

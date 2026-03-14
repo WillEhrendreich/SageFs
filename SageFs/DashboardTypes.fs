@@ -31,6 +31,7 @@ module DomIds =
   let [<Literal>] FilmstripPanel = "filmstrip-panel"
   let [<Literal>] DiscoveredProjects = "discovered-projects"
   let [<Literal>] HotReloadPanel = "hot-reload-panel"
+  let [<Literal>] LiveTestingPanel = "live-testing-panel"
   let [<Literal>] TestTrace = "test-trace"
   let [<Literal>] ThemeVars = "theme-vars"
   let [<Literal>] ThemePicker = "theme-picker"
@@ -525,6 +526,8 @@ type DashboardQueries = {
   GetSessionBindings: string -> Features.BindingExplorer.BindingInfo array
   GetBindingScopeSnapshot: unit -> Features.BindingExplorer.BindingScopeSnapshot option
   GetLiveTestingStatus: unit -> string
+  /// Whether live testing is currently Active or Inactive.
+  GetLiveTestingActive: unit -> bool
   /// Read current EvalTimeline stats from the shared feature push state.
   GetEvalTimeline: unit -> Features.EvalTimeline.TimelineStats
   /// Read current daemon health snapshot from the shared feature push state.
@@ -584,6 +587,7 @@ type DashboardSnapshot = {
   ThemeName: string
   ConnectionLabel: string option
   HotReloadPanel: XmlNode
+  LiveTestingPanel: XmlNode
   SessionContextPanel: XmlNode
   OutputPanel: XmlNode
   SessionsPanel: XmlNode

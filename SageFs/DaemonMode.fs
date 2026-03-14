@@ -1523,6 +1523,11 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
         SageFs.ActiveSession.sessionId model.Sessions.ActiveSessionId
         |> Option.map WorkerProtocol.SessionId.value |> Option.defaultValue ""
       SageFs.Features.LiveTesting.LiveTestCycleState.liveTestingStatusBarForSession activeId model.LiveTesting
+    GetLiveTestingActive = fun () ->
+      let model = elmRuntime.GetModel()
+      match model.LiveTesting.TestState.Activation with
+      | SageFs.Features.LiveTesting.LiveTestingActivation.Active -> true
+      | SageFs.Features.LiveTesting.LiveTestingActivation.Inactive -> false
     GetEvalTimeline = fun () ->
       let state = System.Threading.Volatile.Read(&sharedFeatureState.contents)
       SageFs.Features.EvalTimeline.timelineStats 20 state.CachedTimeline
@@ -1551,16 +1556,19 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
            : SageFs.Features.SessionHealthSummary))
       let testingSummary =
         let ts = model.LiveTesting.TestState
-        let entries = SageFs.Features.LiveTesting.LiveTestState.statusEntriesForSession "" ts
-        match entries.Length with
-        | 0 -> None
-        | _ ->
-          let summary = SageFs.Features.LiveTesting.TestSummary.fromStatuses ts.Activation (entries |> Array.map (fun e -> e.Status))
-          Some ({ TotalTests = summary.Total
-                  Passed = summary.Passed
-                  Failed = summary.Failed
-                  Running = summary.Running }
-                : SageFs.Features.LiveTestHealthSummary)
+        match ts.Activation with
+        | SageFs.Features.LiveTesting.LiveTestingActivation.Inactive -> None
+        | SageFs.Features.LiveTesting.LiveTestingActivation.Active ->
+          let entries = SageFs.Features.LiveTesting.LiveTestState.statusEntriesForSession "" ts
+          match entries.Length with
+          | 0 -> None
+          | _ ->
+            let summary = SageFs.Features.LiveTesting.TestSummary.fromStatuses ts.Activation (entries |> Array.map (fun e -> e.Status))
+            Some ({ TotalTests = summary.Total
+                    Passed = summary.Passed
+                    Failed = summary.Failed
+                    Running = summary.Running }
+                  : SageFs.Features.LiveTestHealthSummary)
       let memoryMB = int (System.GC.GetTotalMemory(false) / 1_048_576L)
       Some ({ DaemonPid = System.Diagnostics.Process.GetCurrentProcess().Id
               DaemonPort = mcpPort

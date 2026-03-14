@@ -148,13 +148,14 @@ let renderDaemonHealthTests =
       let html = DashboardFragments.renderDaemonHealth view |> renderNode
       Expect.stringContains html "MyAwesomeProject" "project name in output"
 
-    testCase "renders test pass count when available" <| fun () ->
+    testCase "health row omits test counts (now in live testing panel)" <| fun () ->
       let lt : LiveTestHealthSummary =
         { TotalTests = 50; Passed = 48; Failed = 2; Running = 0 }
       let snap = makeHealthSnapshot [] (Some lt) (TimeSpan.FromMinutes 5.0) 128
       let view = DashboardTypes.DaemonHealthView.fromSnapshot snap
       let html = DashboardFragments.renderDaemonHealth view |> renderNode
-      Expect.stringContains html "48" "passed count in output"
+      let containsTestCount = html.Contains("48")
+      Expect.isFalse containsTestCount "health row should not contain test counts"
 
     testCase "renders daemon-health element id" <| fun () ->
       let snap = defaultSnap ()

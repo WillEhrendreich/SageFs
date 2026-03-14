@@ -216,12 +216,8 @@ let renderDaemonHealth (view: DaemonHealthView) =
       Elem.span [ Attr.class' "session-health-list"; Attr.style "margin-left: 0.5rem;" ] [
         Text.raw txt
       ]
-    match view.TestsPassed, view.TestsFailed with
-    | Some passed, Some failed ->
-      Elem.span [ Attr.class' "tests-health meta"; Attr.style "margin-left: 0.5rem;" ] [
-        Text.raw (sprintf "🧪 %d✓ %d✗" passed failed)
-      ]
-    | _ -> ()
+    // Test counts removed from health row — they live in the Live Testing panel.
+    // When live testing is inactive, no stale counts bleed into the health bar.
   ]
 
 /// Render failure narratives as a dashboard panel — shows recent test failures with context.
@@ -1085,9 +1081,10 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
             connectionNode
             snap.SessionsPanel
           ]
-          // Dynamic sidebar panels — expanded-only (hot reload, bindings, session context)
+          // Dynamic sidebar panels — expanded-only (hot reload, live testing, bindings, session context)
           Elem.div [ Attr.class' "expanded-only" ] [
             snap.HotReloadPanel
+            snap.LiveTestingPanel
             snap.BindingsPanel
             snap.SessionContextPanel
           ]
@@ -1225,7 +1222,11 @@ let renderHotReloadPanel (sessionId: string) (files: {| path: string; watched: b
       | idx -> normalized.[..idx])
     |> List.sortBy fst
   Elem.div [ Attr.id DomIds.HotReloadPanel; Attr.class' "panel" ] [
-    Elem.h2 [] [ Text.raw "Hot Reload" ]
+    Elem.h2 [] [
+      match watchedCount with
+      | 0 -> Text.raw "Hot Reload: OFF"
+      | n -> Text.raw (sprintf "Hot Reload: ON — %d of %d files" n total)
+    ]
     Elem.div [ Attr.class' "meta"; Attr.style "margin-bottom: 0.5rem; font-size: 0.8rem;" ] [
       Text.raw (sprintf "%d of %d files watched" watchedCount total)
     ]
@@ -1285,10 +1286,51 @@ let renderHotReloadPanel (sessionId: string) (files: {| path: string; watched: b
 /// Render empty hot-reload panel when no session is active.
 let renderHotReloadEmpty =
   Elem.div [ Attr.id DomIds.HotReloadPanel; Attr.class' "panel" ] [
-    Elem.h2 [] [ Text.raw "Hot Reload" ]
+    Elem.h2 [] [ Text.raw "Hot Reload: OFF" ]
     Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.8rem;" ] [
       Text.raw "No active session"
     ]
+  ]
+
+/// Render the live testing panel with ON/OFF toggle and test summary when active.
+let renderLiveTestingPanel (isActive: bool) (statusLabel: string) (testsPassed: int option) (testsFailed: int option) =
+  Elem.div [ Attr.id DomIds.LiveTestingPanel; Attr.class' "panel" ] [
+    Elem.h2 [] [
+      match isActive, testsPassed, testsFailed with
+      | false, _, _ -> Text.raw "Live Testing: OFF"
+      | true, Some p, Some f -> Text.raw (sprintf "Live Testing: ON — %d✓ %d✗" p f)
+      | true, _, _ -> Text.raw "Live Testing: ON"
+    ]
+    Elem.div [ Attr.style "display: flex; gap: 4px; margin-bottom: 0.5rem;" ] [
+      match isActive with
+      | false ->
+        Elem.button
+          [ Attr.class' "eval-btn"
+            Attr.style "flex: 1; height: 1.5rem; padding: 0 0.5rem; font-size: 0.7rem;"
+            Attr.create "onclick" "fetch('/api/dispatch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'enableLiveTesting'})})" ]
+          [ Text.raw "Enable" ]
+      | true ->
+        Elem.button
+          [ Attr.class' "eval-btn"
+            Attr.style "flex: 1; height: 1.5rem; padding: 0 0.5rem; font-size: 0.7rem;"
+            Attr.create "onclick" "fetch('/api/dispatch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'disableLiveTesting'})})" ]
+          [ Text.raw "Disable" ]
+    ]
+    match isActive with
+    | false ->
+      Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.8rem;" ] [
+        Text.raw "Enable to start discovering and running tests automatically."
+      ]
+    | true ->
+      match statusLabel.Length > 0 with
+      | true ->
+        Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.8rem;" ] [
+          Text.raw statusLabel
+        ]
+      | false ->
+        Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.8rem;" ] [
+          Text.raw "Discovering tests…"
+        ]
   ]
 
 /// Render session context panel with warmup details (assemblies, namespaces, files).
