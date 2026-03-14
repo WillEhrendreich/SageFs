@@ -396,56 +396,90 @@ let liveTestingTypesTests = testList "LiveTestingTypes" [
 
   testList "CategoryDetection" [
     test "integration label maps to Integration" {
-      CategoryDetection.categorize ["Integration"] "My.Test" TestFramework.XUnit [||]
+      CategoryDetection.categorize ["Integration"] "My.Test" TestFramework.XUnit [||] None
       |> Expect.equal "should be Integration" TestCategory.Integration
     }
     test "browser label maps to Browser" {
-      CategoryDetection.categorize ["Browser"] "My.Test" TestFramework.XUnit [||]
+      CategoryDetection.categorize ["Browser"] "My.Test" TestFramework.XUnit [||] None
       |> Expect.equal "should be Browser" TestCategory.Browser
     }
     test "e2e label maps to Browser" {
-      CategoryDetection.categorize ["E2E"] "My.Test" TestFramework.XUnit [||]
+      CategoryDetection.categorize ["E2E"] "My.Test" TestFramework.XUnit [||] None
       |> Expect.equal "should be Browser" TestCategory.Browser
     }
     test "benchmark label maps to Benchmark" {
-      CategoryDetection.categorize ["Benchmark"] "My.Test" TestFramework.XUnit [||]
+      CategoryDetection.categorize ["Benchmark"] "My.Test" TestFramework.XUnit [||] None
       |> Expect.equal "should be Benchmark" TestCategory.Benchmark
     }
     test "property label maps to Property" {
-      CategoryDetection.categorize ["Property"] "My.Test" TestFramework.Expecto [||]
+      CategoryDetection.categorize ["Property"] "My.Test" TestFramework.Expecto [||] None
       |> Expect.equal "should be Property" TestCategory.Property
     }
     test "architecture label maps to Architecture" {
-      CategoryDetection.categorize ["Architecture"] "My.Test" TestFramework.NUnit [||]
+      CategoryDetection.categorize ["Architecture"] "My.Test" TestFramework.NUnit [||] None
       |> Expect.equal "should be Architecture" TestCategory.Architecture
     }
     test "arch label maps to Architecture" {
-      CategoryDetection.categorize ["arch"] "My.Test" TestFramework.NUnit [||]
+      CategoryDetection.categorize ["arch"] "My.Test" TestFramework.NUnit [||] None
       |> Expect.equal "should be Architecture" TestCategory.Architecture
     }
     test "Playwright assembly maps to Browser" {
-      CategoryDetection.categorize [] "My.Test" TestFramework.XUnit [| "Microsoft.Playwright" |]
+      CategoryDetection.categorize [] "My.Test" TestFramework.XUnit [| "Microsoft.Playwright" |] None
       |> Expect.equal "should be Browser" TestCategory.Browser
     }
     test "BenchmarkDotNet assembly maps to Benchmark" {
-      CategoryDetection.categorize [] "My.Test" TestFramework.XUnit [| "BenchmarkDotNet" |]
+      CategoryDetection.categorize [] "My.Test" TestFramework.XUnit [| "BenchmarkDotNet" |] None
       |> Expect.equal "should be Benchmark" TestCategory.Benchmark
     }
     test "integration in fullName maps to Integration" {
-      CategoryDetection.categorize [] "My.IntegrationTests.test1" TestFramework.XUnit [||]
+      CategoryDetection.categorize [] "My.IntegrationTests.test1" TestFramework.XUnit [||] None
       |> Expect.equal "should be Integration" TestCategory.Integration
     }
     test "e2e in fullName maps to Browser" {
-      CategoryDetection.categorize [] "My.E2ETests.test1" TestFramework.XUnit [||]
+      CategoryDetection.categorize [] "My.E2ETests.test1" TestFramework.XUnit [||] None
       |> Expect.equal "should be Browser" TestCategory.Browser
     }
     test "no signals defaults to Unit" {
-      CategoryDetection.categorize [] "My.Tests.simpleTest" TestFramework.Expecto [||]
+      CategoryDetection.categorize [] "My.Tests.simpleTest" TestFramework.Expecto [||] None
       |> Expect.equal "should be Unit" TestCategory.Unit
     }
     test "label detection is case-insensitive" {
-      CategoryDetection.categorize ["INTEGRATION"] "My.Test" TestFramework.XUnit [||]
+      CategoryDetection.categorize ["INTEGRATION"] "My.Test" TestFramework.XUnit [||] None
       |> Expect.equal "should be Integration" TestCategory.Integration
+    }
+    test "source content with System.IO.File maps to Integration" {
+      let src = Some "let content = System.IO.File.ReadAllText path"
+      CategoryDetection.categorize [] "My.Tests.readFile" TestFramework.Expecto [||] src
+      |> Expect.equal "should be Integration" TestCategory.Integration
+    }
+    test "source content with HttpClient maps to Integration" {
+      let src = Some "let client = new HttpClient()"
+      CategoryDetection.categorize [] "My.Tests.httpTest" TestFramework.Expecto [||] src
+      |> Expect.equal "should be Integration" TestCategory.Integration
+    }
+    test "source content with SqlConnection maps to Integration" {
+      let src = Some "use conn = new SqlConnection(connStr)"
+      CategoryDetection.categorize [] "My.Tests.dbTest" TestFramework.Expecto [||] src
+      |> Expect.equal "should be Integration" TestCategory.Integration
+    }
+    test "source content with Process.Start maps to Integration" {
+      let src = Some "Process.Start(\"cmd.exe\", args)"
+      CategoryDetection.categorize [] "My.Tests.procTest" TestFramework.Expecto [||] src
+      |> Expect.equal "should be Integration" TestCategory.Integration
+    }
+    test "source content with no IO patterns defaults to Unit" {
+      let src = Some "let x = List.map (fun i -> i + 1) [1;2;3]"
+      CategoryDetection.categorize [] "My.Tests.pureTest" TestFramework.Expecto [||] src
+      |> Expect.equal "should be Unit" TestCategory.Unit
+    }
+    test "explicit label takes precedence over source content IO" {
+      let src = Some "let client = new HttpClient()"
+      CategoryDetection.categorize ["unit"] "My.Tests.labeled" TestFramework.Expecto [||] src
+      |> Expect.equal "label wins over source content" TestCategory.Unit
+    }
+    test "sourceContent None behaves same as before" {
+      CategoryDetection.categorize [] "My.Tests.simpleTest" TestFramework.Expecto [||] None
+      |> Expect.equal "should be Unit" TestCategory.Unit
     }
   ]
 

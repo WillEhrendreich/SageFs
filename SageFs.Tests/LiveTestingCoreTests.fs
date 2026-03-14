@@ -485,27 +485,27 @@ let propertyTests = testList "Property-based" [
 [<Tests>]
 let categoryDetectionTests = testList "CategoryDetection" [
   test "categorizes integration by label" {
-    let cat = CategoryDetection.categorize [ "Integration" ] "MyModule.test" TestFramework.Expecto [||]
+    let cat = CategoryDetection.categorize [ "Integration" ] "MyModule.test" TestFramework.Expecto [||] None
     cat |> Expect.equal "integration" TestCategory.Integration
   }
 
   test "categorizes browser by Playwright assembly ref" {
-    let cat = CategoryDetection.categorize [] "MyModule.test" TestFramework.Expecto [| "Microsoft.Playwright" |]
+    let cat = CategoryDetection.categorize [] "MyModule.test" TestFramework.Expecto [| "Microsoft.Playwright" |] None
     cat |> Expect.equal "browser" TestCategory.Browser
   }
 
   test "categorizes benchmark by label" {
-    let cat = CategoryDetection.categorize [ "Benchmark" ] "MyModule.test" TestFramework.Expecto [||]
+    let cat = CategoryDetection.categorize [ "Benchmark" ] "MyModule.test" TestFramework.Expecto [||] None
     cat |> Expect.equal "benchmark" TestCategory.Benchmark
   }
 
   test "categorizes by namespace containing 'integration'" {
-    let cat = CategoryDetection.categorize [] "MyApp.Integration.Tests.myTest" TestFramework.XUnit [||]
+    let cat = CategoryDetection.categorize [] "MyApp.Integration.Tests.myTest" TestFramework.XUnit [||] None
     cat |> Expect.equal "integration by name" TestCategory.Integration
   }
 
   test "defaults to Unit" {
-    let cat = CategoryDetection.categorize [] "MyModule.test" TestFramework.Expecto [||]
+    let cat = CategoryDetection.categorize [] "MyModule.test" TestFramework.Expecto [||] None
     cat |> Expect.equal "unit by default" TestCategory.Unit
   }
 ]

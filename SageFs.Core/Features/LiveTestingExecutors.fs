@@ -575,7 +575,7 @@ module BuiltInExecutors =
                           Origin = TestOrigin.ReflectionOnly
                           Labels = []
                           Framework = TestFramework.Expecto
-                          Category = CategoryDetection.categorize [] fullName TestFramework.Expecto [||] } ]
+                          Category = CategoryDetection.categorize [] fullName TestFramework.Expecto [||] None } ]
               |> List.toArray
             with ex ->
               Log.warn "[LiveTesting] discoverLeafTests binding %s.%s failed: %s\n%s" t.FullName binding.Name ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")

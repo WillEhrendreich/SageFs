@@ -1633,13 +1633,27 @@ module TestResultsBatchPayload =
     Array.isEmpty p.Entries
 
 module CategoryDetection =
+  let private ioPatterns = [|
+    "System.IO"; "File."; "Directory."; "Path."; "StreamReader"; "StreamWriter"
+    "HttpClient"; "WebClient"; "Socket"; "TcpClient"; "UdpClient"; "System.Net"
+    "SqlConnection"; "DbConnection"; "NpgsqlConnection"; "SqliteConnection"; "IDbConnection"
+    "Process.Start"; "ProcessStartInfo"
+  |]
+
+  let private containsIoPattern (source: string) =
+    ioPatterns |> Array.exists source.Contains
+
   let categorize
     (labels: string list)
     (fullName: string)
     (_framework: TestFramework)
     (referencedAssemblies: string array)
+    (sourceContent: string option)
     : TestCategory =
     let labelLower = labels |> List.map (fun l -> l.ToLowerInvariant())
+    match labelLower |> List.exists (fun l -> l.Contains "unit") with
+    | true -> TestCategory.Unit
+    | false ->
     match labelLower |> List.exists (fun l -> l.Contains "integration") with
     | true -> TestCategory.Integration
     | false ->
@@ -1666,7 +1680,10 @@ module CategoryDetection =
     | false ->
     match referencedAssemblies |> Array.exists (fun a -> a.Contains "BenchmarkDotNet") with
     | true -> TestCategory.Benchmark
-    | false -> TestCategory.Unit
+    | false ->
+    match sourceContent with
+    | Some src when containsIoPattern src -> TestCategory.Integration
+    | _ -> TestCategory.Unit
 
 // --- Pure functions ---
 
