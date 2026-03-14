@@ -1352,6 +1352,8 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
         System.Threading.Volatile.Write(&sharedBindingScope.contents, newScope)
       | _ -> ())
 
+  // Create the multi-agent coordination tracker (in-memory, daemon-lifetime)
+  let activityTracker = AgentActivityTracker.create ()
 
   let mcpTask =
     McpServer.startMcpServer {
@@ -1365,6 +1367,7 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
       GetHotReloadState = Some getHotReloadStateForMcp
       SharedBindingScope = sharedBindingScope
       SharedFeatureState = Some sharedFeatureState
+      ActivityTracker = activityTracker
     }
 
   // Test cycle tick timer — drives debounce channels for live testing (200ms interval)
@@ -1405,6 +1408,27 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
       System.Threading.TimerCallback(cacheSaveCallback),
       null, 60_000, System.Threading.Timeout.Infinite)
     cacheSaveTimerRef <- t
+    t
+
+  // Periodic agent activity cleanup — evicts stale entries from the activity tracker.
+  // One-shot timer pattern (same as cache save) to prevent reentrancy.
+  let mutable activityCleanupTimerRef : System.Threading.Timer = Unchecked.defaultof<_>
+  let activityCleanupCallback _ =
+    try
+      let outcome = AgentActivityTracker.cleanup activityTracker (TimeSpan.FromMinutes 5.0) DateTime.UtcNow
+      match outcome with
+      | SessionOperations.OccupancyCleanupOutcome.EvictedStale agents ->
+        log.LogInformation("Agent cleanup: evicted stale agents: {Agents}", String.concat ", " agents)
+      | _ -> ()
+    finally
+      if not (isNull activityCleanupTimerRef) then
+        try activityCleanupTimerRef.Change(60_000, System.Threading.Timeout.Infinite) |> ignore
+        with :? System.ObjectDisposedException -> ()
+  let activityCleanupTimer =
+    let t = new System.Threading.Timer(
+      System.Threading.TimerCallback(activityCleanupCallback),
+      null, 60_000, System.Threading.Timeout.Infinite)
+    activityCleanupTimerRef <- t
     t
 
   // Live testing file watcher — monitors *.fs and *.fsx changes
@@ -1878,6 +1902,9 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
   match cacheSaveTimerJoined with
   | false -> log.LogWarning("cacheSaveTimer shutdown wait timed out — callback may still be running")
   | true -> cacheSaveTimerDone.Dispose()
+  // Dispose activity cleanup timer (best-effort, no wait needed — cleanup is idempotent)
+  try activityCleanupTimer.Dispose()
+  with :? System.ObjectDisposedException -> ()
   liveTestDebounceTimer.Dispose()
   liveTestWatcher.EnableRaisingEvents <- false
   liveTestWatcher.Dispose()

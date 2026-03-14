@@ -352,6 +352,8 @@ type McpServerConfig = {
   /// Shared feature push state ref — exposed so consumers (e.g. Dashboard) can read EvalTimeline.
   /// If None, startMcpServer creates a private ref that is inaccessible externally.
   SharedFeatureState: SageFs.Features.FeatureHooks.FeaturePushState ref option
+  /// In-memory agent activity tracker for multi-agent coordination.
+  ActivityTracker: SageFs.AgentActivityTracker.Tracker
 }
 
 // Create shared MCP context (private — called only by startMcpServer)
@@ -359,7 +361,7 @@ let private mkContext (cfg: McpServerConfig) (stateChangedStr: IEvent<string> op
   let dispatch = cfg.ElmRuntime |> Option.map (fun r -> r.Dispatch)
   let getElmModel = cfg.ElmRuntime |> Option.map (fun r -> r.GetModel)
   let getElmRegions = cfg.ElmRuntime |> Option.map (fun r -> r.GetRegions)
-  { Persistence = cfg.Persistence; DiagnosticsChanged = cfg.DiagnosticsChanged; StateChanged = stateChangedStr; SessionOps = cfg.SessionOps; SessionMap = ConcurrentDictionary<string, string>(); McpPort = cfg.Port; Dispatch = dispatch; GetElmModel = getElmModel; GetElmRegions = getElmRegions; GetWarmupContext = cfg.GetWarmupContext; GetFeatureState = featureStateGetter }
+  { Persistence = cfg.Persistence; DiagnosticsChanged = cfg.DiagnosticsChanged; StateChanged = stateChangedStr; SessionOps = cfg.SessionOps; SessionMap = ConcurrentDictionary<string, string>(); McpPort = cfg.Port; Dispatch = dispatch; GetElmModel = getElmModel; GetElmRegions = getElmRegions; GetWarmupContext = cfg.GetWarmupContext; GetFeatureState = featureStateGetter; ActivityTracker = cfg.ActivityTracker }
 
 // ── SSE context: groups immutable dependencies for state change handlers ──
 

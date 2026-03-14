@@ -26,7 +26,8 @@ let private mkCtxWithState (state: LiveTestState) : McpContext =
     GetElmModel = Some (fun () -> model)
     GetElmRegions = None
     GetWarmupContext = None
-    GetFeatureState = None }
+    GetFeatureState = None
+    ActivityTracker = SageFs.AgentActivityTracker.create() }
 
 let private jsonBoolField (fieldName: string) (root: JsonElement) =
   root.GetProperty(fieldName).GetBoolean()

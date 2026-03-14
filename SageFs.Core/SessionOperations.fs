@@ -239,12 +239,6 @@ module SessionOperations =
 
   // ── Session display formatting ──────────────────────────────────
 
-  /// What the caller wants when creating a session — pure data, no IO.
-  type SessionCreateRequest = {
-    Projects: string list
-    WorkingDirectory: string
-  }
-
   /// Human-readable relative time (e.g. "5 min ago", "just now").
   let formatRelativeTime (now: DateTime) (past: DateTime) : string =
     let diff = now - past
@@ -257,6 +251,48 @@ module SessionOperations =
         match diff.TotalHours < 24.0 with
         | true -> sprintf "%d hr ago" (int diff.TotalHours)
         | false -> sprintf "%d days ago" (int diff.TotalDays)
+
+  // ── Coordination enrichment ──────────────────────────────────
+
+  /// Pure enrichment functions for MCP responses.
+  /// Take base response strings and coordination data, return enriched strings.
+  module CoordinationEnrichment =
+    /// Enrich a status response with guidance information.
+    let enrichStatusWithGuidance (guidance: SessionGuidance) (baseResponse: string) : string =
+      sprintf "%s\n\n🤝 Coordination:\n  Guidance: %s" baseResponse (SessionGuidance.label guidance)
+
+    /// Enrich a status response with active agent presences.
+    let enrichStatusWithPresences (now: DateTime) (presences: AgentPresence list) (baseResponse: string) : string =
+      match presences with
+      | [] -> baseResponse
+      | ps ->
+        let lines =
+          ps |> List.map (fun p ->
+            let intentStr =
+              match p.Intent with
+              | Some i -> sprintf " (%s)" i
+              | None -> ""
+            let agoStr = formatRelativeTime now p.LastToolCall
+            sprintf "    • %s%s — %s, %d evals" p.AgentName intentStr agoStr p.EvalCount)
+        sprintf "%s\n  Active agents:\n%s" baseResponse (String.concat "\n" lines)
+
+    /// Enrich an eval response with overlap advisories.
+    let enrichEvalWithAdvisories (advisories: FileOverlapAdvisory list) (baseResponse: string) : string =
+      let texts =
+        advisories
+        |> List.choose (fun a ->
+          match FileOverlapAdvisory.format a with
+          | "" -> None
+          | text -> Some text)
+      match texts with
+      | [] -> baseResponse
+      | _ -> sprintf "%s\n\n%s" baseResponse (String.concat "\n" texts)
+
+  /// What the caller wants when creating a session — pure data, no IO.
+  type SessionCreateRequest = {
+    Projects: string list
+    WorkingDirectory: string
+  }
 
   /// Format a single session for display, with optional occupancy info.
   let formatSessionInfo (now: DateTime) (occupancy: SessionOccupancy list option) (info: SessionInfo) : string =

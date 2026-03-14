@@ -50,7 +50,8 @@ module McpSessionIsolation =
         GetElmModel = None
         GetElmRegions = None
         GetWarmupContext = None
-        GetFeatureState = None } : McpContext
+        GetFeatureState = None
+        ActivityTracker = SageFs.AgentActivityTracker.create() } : McpContext
     ctx, dispatched
 
   /// Call switchSession and return result, ignoring event store errors.
@@ -146,7 +147,8 @@ module McpSessionIsolation =
           GetElmModel = None
           GetElmRegions = None
           GetWarmupContext = None
-          GetFeatureState = None } : McpContext
+          GetFeatureState = None
+          ActivityTracker = SageFs.AgentActivityTracker.create() } : McpContext
 
       let! result = switchSession ctx "test" "ffff0001"
 
@@ -284,7 +286,7 @@ module WorkingDirRoutingPriority =
           NotifyWorkerDied = fun _ -> () }
       SessionMap = sessionMap; McpPort = 0; Dispatch = None
       GetElmModel = None; GetElmRegions = None; GetWarmupContext = None
-      GetFeatureState = None }
+      GetFeatureState = None; ActivityTracker = SageFs.AgentActivityTracker.create() }
 
   let tests = testSequenced <| testList "workingDirectory routing priority" [
     testTask "workingDirectory should override cached session" {
@@ -445,7 +447,8 @@ module ResetIsolation =
         GetElmModel = None
         GetElmRegions = None
         GetWarmupContext = None
-        GetFeatureState = None } : McpContext
+        GetFeatureState = None
+        ActivityTracker = SageFs.AgentActivityTracker.create() } : McpContext
     ctx, restartLog, routedSessions
 
   let tests = testList "[Integration] Reset isolation" [

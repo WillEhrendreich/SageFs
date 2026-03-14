@@ -735,6 +735,8 @@ module McpTools =
     GetWarmupContext: (string -> Threading.Tasks.Task<WarmupContext option>) option
     /// Read the current feature push state (eval history, bindings, timeline).
     GetFeatureState: (unit -> Features.FeatureHooks.FeaturePushState) option
+    /// In-memory agent activity tracker for multi-agent coordination.
+    ActivityTracker: AgentActivityTracker.Tracker
   }
 
   /// Get the active session ID for a specific agent/client.
@@ -1074,6 +1076,8 @@ module McpTools =
       let span = Instrumentation.startSpan Instrumentation.mcpSource "fsi.eval"
                    ["fsi.agent.name", box agentName; "fsi.statement.count", box statements.Length; "fsi.session.id", box sid]
       do! EventTracking.trackInput ctx.Persistence sid (Features.Events.McpAgent agentName) code
+      // Record agent activity for multi-agent coordination
+      AgentActivityTracker.recordToolCall ctx.ActivityTracker agentName sid filePath None DateTime.UtcNow
 
       let mutable allOutputs = []
       for statement in statements do
@@ -1092,7 +1096,15 @@ module McpTools =
       do! EventTracking.trackOutput ctx.Persistence sid (Features.Events.McpAgent agentName) finalOutput
       Features.EvalDedup.DedupCache.record evalDedupCache sid code finalOutput (DateTimeOffset.UtcNow)
       Instrumentation.succeedSpan span
-      return finalOutput
+      // Compute file-overlap advisory AFTER caching raw output
+      let enrichedOutput =
+        match filePath with
+        | Some fp ->
+          let presences = AgentActivityTracker.getActivePresences ctx.ActivityTracker (Some sid) (TimeSpan.FromMinutes 5.0) DateTime.UtcNow
+          let advisories = SessionOperations.FileOverlapAdvisory.compute agentName [fp] presences
+          SessionOperations.CoordinationEnrichment.enrichEvalWithAdvisories advisories finalOutput
+        | None -> finalOutput
+      return enrichedOutput
     })
 
   let getRecentEvents (ctx: McpContext) (agent: string) (count: int) (workingDirectory: string option) : Task<string> =
@@ -1110,12 +1122,24 @@ module McpTools =
       match routeResult with
       | Ok (WorkerProtocol.WorkerResponse.StatusResult(_, snapshot)) ->
         let! info = ctx.SessionOps.GetSessionInfo (toSessionId sid)
-        match info with
-        | Some sessionInfo ->
-          return McpAdapter.formatProxyStatus sid eventCount snapshot sessionInfo ctx.McpPort
-        | None ->
-          let state = WorkerProtocol.SessionStatus.toSessionState snapshot.Status
-          return McpAdapter.formatEnhancedStatus sid eventCount state None None
+        let baseStatus =
+          match info with
+          | Some sessionInfo ->
+            McpAdapter.formatProxyStatus sid eventCount snapshot sessionInfo ctx.McpPort
+          | None ->
+            let state = WorkerProtocol.SessionStatus.toSessionState snapshot.Status
+            McpAdapter.formatEnhancedStatus sid eventCount state None None
+        // Enrich with multi-agent coordination data
+        let occupants = SessionOperations.SessionOccupancy.forSession ctx.SessionMap sid
+        let guidance = SessionOperations.SessionGuidance.compute occupants snapshot.Status
+        let presences = AgentActivityTracker.getActivePresences ctx.ActivityTracker (Some sid) (TimeSpan.FromMinutes 5.0) DateTime.UtcNow
+        let enriched =
+          baseStatus
+          |> SessionOperations.CoordinationEnrichment.enrichStatusWithGuidance guidance
+          |> SessionOperations.CoordinationEnrichment.enrichStatusWithPresences DateTime.UtcNow presences
+        // Also record this status check as agent activity
+        AgentActivityTracker.recordToolCall ctx.ActivityTracker agent sid None None DateTime.UtcNow
+        return enriched
       | Ok other ->
         return sprintf "Unexpected response: %A" other
       | Error msg ->
