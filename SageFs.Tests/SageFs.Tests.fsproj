@@ -239,7 +239,6 @@
         <Compile Include="SageTuiAllocationBenchmarks.fs" />
         <Compile Include="ManifestBackupRecoveryTests.fs" />
         <Compile Include="WorkerLivenessTests.fs" />
-        <Compile Include="TypeRedefinitionWarningTests.fs" />
         <Compile Include="Program.fs" />
     </ItemGroup>
 

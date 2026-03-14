@@ -130,7 +130,6 @@
         <Compile Include="DevReload.fs" />
         <Compile Include="FileWatcher.fs" />
         <Compile Include="AppState.fs" />
-        <Compile Include="Middleware\TypeRedefinitionWarning.fs" />
         <Compile Include="Middleware\FsiCompatibility.fs" />
         <Compile Include="Middleware\ComputationExpression.fs" />
         <Compile Include="Middleware\Directives.fs" />

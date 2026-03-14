@@ -175,12 +175,12 @@ let tracingMiddlewareTests =
     testList "namedCommonMiddleware" [
       test "has correct count" {
         namedCommonMiddleware
-        |> Expect.hasLength "7 middlewares" 7
+        |> Expect.hasLength "6 middlewares" 6
       }
 
       test "has unique names" {
         let names = namedCommonMiddleware |> List.map (fun nm -> nm.Name)
-        names |> List.distinct |> Expect.hasLength "all unique" 7
+        names |> List.distinct |> Expect.hasLength "all unique" 6
       }
 
       test "names are non-empty" {
