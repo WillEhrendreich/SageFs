@@ -150,20 +150,61 @@ module CoverageIntel =
       })
       |> Array.toList
 
+  /// Find tests with bitmap coverage near a given file:line location (±10 lines).
+  /// Best-effort Tier 2 fallback when neither TransitiveCoverage nor SymbolToTests
+  /// has an entry for a causal symbol.
+  let findNearbyBitmapCoverage
+    (filePath: string)
+    (symbolLine: int)
+    (maps: InstrumentationMap array)
+    (bitmaps: Map<TestId, CoverageBitmap>)
+    (excludeTestId: TestId)
+    : TestId list =
+    let window = 10
+    // Build global probe indices for sequence points within ±window lines
+    let _, nearbyIndices =
+      maps
+      |> Array.fold (fun (offset, acc) m ->
+        let nearby =
+          m.Slots
+          |> Array.indexed
+          |> Array.choose (fun (localIdx, sp) ->
+            match sp.File = filePath && abs (sp.Line - symbolLine) <= window with
+            | true -> Some (offset + localIdx)
+            | false -> None)
+        (offset + m.TotalProbes, Array.append acc nearby)) (0, [||])
+    match nearbyIndices with
+    | [||] -> []
+    | indices ->
+      bitmaps
+      |> Map.toList
+      |> List.choose (fun (testId, bm) ->
+        match testId <> excludeTestId with
+        | true ->
+          match indices |> Array.exists (fun idx -> CoverageBitmap.isSet idx bm) with
+          | true -> Some testId
+          | false -> None
+        | false -> None)
+
   /// Find tests that also cover the same blind-spot regions (correlated failures).
+  /// Tier 1: TransitiveCoverage → Tier 2: SymbolToTests → []
   let findCorrelatedTests
     (causalSymbols: string list)
     (depGraph: TestDependencyGraph)
     (excludeTestId: TestId)
     : TestId list =
+    let filterExcluded (testIds: TestId array) =
+      testIds
+      |> Array.filter (fun tid -> tid <> excludeTestId)
+      |> Array.toList
     causalSymbols
     |> List.collect (fun symbol ->
       match depGraph.TransitiveCoverage |> Map.tryFind symbol with
-      | Some testIds ->
-        testIds
-        |> Array.filter (fun tid -> tid <> excludeTestId)
-        |> Array.toList
-      | None -> [])
+      | Some testIds -> filterExcluded testIds
+      | None ->
+        match depGraph.SymbolToTests |> Map.tryFind symbol with
+        | Some testIds -> filterExcluded testIds
+        | None -> [])
     |> List.distinct
 
   /// Compose a CoverageIntelReport for a single test failure.
@@ -195,6 +236,25 @@ module CoverageIntel =
 
     let correlated = findCorrelatedTests causalSymbols depGraph testId
 
+    // Tier 3: bitmap fallback — when graph-based correlations found nothing,
+    // search bitmaps for tests covering nearby lines in causal files.
+    let allCorrelated =
+      match correlated with
+      | _ :: _ -> correlated
+      | [] ->
+        let bitmapHits =
+          causalFiles
+          |> List.collect (fun fp ->
+            let pts = findCausalSequencePoints fp maps
+            match pts with
+            | [||] -> []
+            | _ ->
+              let lines = pts |> Array.map (fun sp -> sp.Line) |> Array.sort
+              let medianLine = lines.[lines.Length / 2]
+              findNearbyBitmapCoverage fp medianLine maps bitmaps testId)
+          |> List.distinct
+        bitmapHits
+
     {
       TestId = testId
       TestName = testName
@@ -203,7 +263,7 @@ module CoverageIntel =
       TotalBranches = allPoints
       CoveragePercent = percent
       BlindSpots = allBlindSpots
-      CorrelatedFailures = correlated
+      CorrelatedFailures = allCorrelated
       Verdict = classifyVerdict percent
     }
 

@@ -460,3 +460,158 @@ let fsCheckPropertyTests = testList "CoverageIntel FsCheck properties" [
       |> List.map (fun r -> r.TestName)
     run () |> Expect.equal "deterministic across runs" (run ())
 ]
+
+// ── Tier 1 fallback: SymbolToTests ───────────────────────────
+
+[<Tests>]
+let fallbackTierTests =
+  testList "CoverageIntel.findCorrelatedTests fallback tiers" [
+
+    testCase "Tier 1: falls back to SymbolToTests when TransitiveCoverage misses" <| fun _ ->
+      let symbolToTests = [ "parseExpr", [| mkTestId "t2"; mkTestId "t3" |] ]
+      let depGraph = mkDepGraph symbolToTests []
+      let result = CoverageIntel.findCorrelatedTests [ "parseExpr" ] depGraph (mkTestId "t1")
+      result |> Expect.hasLength "should find 2 from SymbolToTests" 2
+      result |> Expect.contains "should have t2" (mkTestId "t2")
+      result |> Expect.contains "should have t3" (mkTestId "t3")
+
+    testCase "TransitiveCoverage is preferred over SymbolToTests" <| fun _ ->
+      let s2t = [ "foo", [| mkTestId "s1" |] ]
+      let tc = [ "foo", [| mkTestId "t1"; mkTestId "t2" |] ]
+      let depGraph = mkDepGraph s2t tc
+      let result = CoverageIntel.findCorrelatedTests [ "foo" ] depGraph (mkTestId "self")
+      result |> Expect.hasLength "should use transitive" 2
+      result |> Expect.contains "should have t1" (mkTestId "t1")
+      result |> Expect.contains "should have t2" (mkTestId "t2")
+
+    testCase "SymbolToTests excludes the failing test" <| fun _ ->
+      let s2t = [ "foo", [| mkTestId "t1"; mkTestId "t2" |] ]
+      let depGraph = mkDepGraph s2t []
+      CoverageIntel.findCorrelatedTests [ "foo" ] depGraph (mkTestId "t1")
+      |> Expect.equal "should only have t2" [ mkTestId "t2" ]
+
+    testCase "symbol in neither map → empty list" <| fun _ ->
+      let s2t = [ "other", [| mkTestId "t2" |] ]
+      let tc = [ "different", [| mkTestId "t3" |] ]
+      let depGraph = mkDepGraph s2t tc
+      CoverageIntel.findCorrelatedTests [ "missing" ] depGraph (mkTestId "t1")
+      |> Expect.isEmpty "should be empty when symbol not in either map"
+  ]
+
+// ── Tier 2 fallback: bitmap proximity coverage ───────────────
+
+[<Tests>]
+let bitmapFallbackTests =
+  testList "CoverageIntel.findNearbyBitmapCoverage" [
+
+    testCase "finds tests with bitmap coverage within ±10 lines" <| fun _ ->
+      let points = [|
+        mkSequencePoint "src.fs" 15 15 0
+        mkSequencePoint "src.fs" 50 50 1
+      |]
+      let maps = [| mkInstrumentationMap points |]
+      let bitmaps = Map.ofList [
+        mkTestId "t1", mkBitmap 2 [ 0 ]
+        mkTestId "t2", mkBitmap 2 [ 1 ]
+      ]
+      let result =
+        CoverageIntel.findNearbyBitmapCoverage "src.fs" 20 maps bitmaps (mkTestId "self")
+      result |> Expect.hasLength "should find 1 test near line 20" 1
+      result |> Expect.contains "should have t1" (mkTestId "t1")
+
+    testCase "line 11 away is not included (outside ±10)" <| fun _ ->
+      let points = [|
+        mkSequencePoint "src.fs" 31 31 0
+      |]
+      let maps = [| mkInstrumentationMap points |]
+      let bitmaps = Map.ofList [ mkTestId "t1", mkBitmap 1 [ 0 ] ]
+      CoverageIntel.findNearbyBitmapCoverage "src.fs" 20 maps bitmaps (mkTestId "self")
+      |> Expect.isEmpty "11 lines away should be excluded"
+
+    testCase "line exactly 10 away is included" <| fun _ ->
+      let points = [|
+        mkSequencePoint "src.fs" 30 30 0
+      |]
+      let maps = [| mkInstrumentationMap points |]
+      let bitmaps = Map.ofList [ mkTestId "t1", mkBitmap 1 [ 0 ] ]
+      CoverageIntel.findNearbyBitmapCoverage "src.fs" 20 maps bitmaps (mkTestId "self")
+      |> Expect.hasLength "10 lines away is within window" 1
+
+    testCase "excludes the specified test ID" <| fun _ ->
+      let points = [| mkSequencePoint "src.fs" 20 20 0 |]
+      let maps = [| mkInstrumentationMap points |]
+      let bitmaps = Map.ofList [ mkTestId "self", mkBitmap 1 [ 0 ] ]
+      CoverageIntel.findNearbyBitmapCoverage "src.fs" 20 maps bitmaps (mkTestId "self")
+      |> Expect.isEmpty "should exclude self"
+
+    testCase "multiple tests covering nearby lines all returned" <| fun _ ->
+      let points = [|
+        mkSequencePoint "src.fs" 18 18 0
+        mkSequencePoint "src.fs" 22 22 1
+      |]
+      let maps = [| mkInstrumentationMap points |]
+      let bitmaps = Map.ofList [
+        mkTestId "t1", mkBitmap 2 [ 0 ]
+        mkTestId "t2", mkBitmap 2 [ 1 ]
+        mkTestId "t3", mkBitmap 2 [ 0; 1 ]
+      ]
+      CoverageIntel.findNearbyBitmapCoverage "src.fs" 20 maps bitmaps (mkTestId "self")
+      |> Expect.hasLength "should find all 3 tests" 3
+
+    testCase "no bitmaps → empty" <| fun _ ->
+      let points = [| mkSequencePoint "src.fs" 20 20 0 |]
+      let maps = [| mkInstrumentationMap points |]
+      CoverageIntel.findNearbyBitmapCoverage "src.fs" 20 maps Map.empty (mkTestId "self")
+      |> Expect.isEmpty "no bitmaps means no coverage"
+
+    testCase "no nearby sequence points in file → empty" <| fun _ ->
+      let points = [| mkSequencePoint "other.fs" 20 20 0 |]
+      let maps = [| mkInstrumentationMap points |]
+      let bitmaps = Map.ofList [ mkTestId "t1", mkBitmap 1 [ 0 ] ]
+      CoverageIntel.findNearbyBitmapCoverage "src.fs" 20 maps bitmaps (mkTestId "self")
+      |> Expect.isEmpty "different file should not match"
+
+    testCase "empty maps → empty" <| fun _ ->
+      let bitmaps = Map.ofList [ mkTestId "t1", mkBitmap 0 [] ]
+      CoverageIntel.findNearbyBitmapCoverage "src.fs" 20 [||] bitmaps (mkTestId "self")
+      |> Expect.isEmpty "no maps means no probes"
+  ]
+
+// ── Tier 2 wired into composeForFailure ──────────────────────
+
+[<Tests>]
+let bitmapFallbackCompositionTests =
+  testList "CoverageIntel.composeForFailure bitmap fallback" [
+
+    testCase "bitmap fallback finds correlated tests when graph has no mapping" <| fun _ ->
+      let points = [|
+        mkSequencePoint "src.fs" 10 10 0
+        mkSequencePoint "src.fs" 15 15 1
+      |]
+      let maps = [| mkInstrumentationMap points |]
+      let bitmaps = Map.ofList [
+        mkTestId "t1", mkBitmap 2 [ 0; 1 ]
+        mkTestId "t2", mkBitmap 2 [ 0 ]
+      ]
+      let narrative = mkNarrative [ CausalChange.SymbolChanged "unmapped" ] ""
+
+      let report = CoverageIntel.composeForFailure
+                     (mkTestId "t1") "my test" narrative
+                     [ "src.fs" ] maps bitmaps emptyDepGraph
+
+      report.CorrelatedFailures |> Expect.hasLength "bitmap fallback found t2" 1
+      report.CorrelatedFailures |> Expect.contains "should have t2" (mkTestId "t2")
+
+    testCase "graph correlations preferred — bitmap not needed" <| fun _ ->
+      let maps = [| mkInstrumentationMap [||] |]
+      let depGraph = mkDepGraph [] [
+        "foo", [| mkTestId "t1"; mkTestId "t2" |]
+      ]
+      let narrative = mkNarrative [ CausalChange.SymbolChanged "foo" ] ""
+
+      let report = CoverageIntel.composeForFailure
+                     (mkTestId "t1") "my test" narrative
+                     [] maps emptyBitmaps depGraph
+
+      report.CorrelatedFailures |> Expect.hasLength "graph found t2" 1
+  ]
