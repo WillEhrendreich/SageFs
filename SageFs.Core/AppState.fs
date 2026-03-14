@@ -563,7 +563,11 @@ let private discoverWarmupReplayPlan
 
     let namePairs =
       namesToOpen
-      |> Seq.map (fun name -> name, moduleNames.Contains(name))
+      |> Seq.map (fun name ->
+        name,
+        match moduleNames.Contains(name) with
+        | true -> OpenableKind.Module
+        | false -> OpenableKind.Namespace)
       |> Seq.toList
 
     return
@@ -686,9 +690,9 @@ let createFsiSession (logger: ILogger) (outStream: TextWriter) (useAsp: bool) (o
     let reportOpenFailure name elapsed =
       openCount <- openCount + 1
       onProgress(openCount, totalNames, sprintf "✖ open %s — failed (%.0fms)" name elapsed)
-    let singleOpener name isMod =
+    let singleOpener name kind =
       ct.ThrowIfCancellationRequested()
-      let label = match isMod with | true -> "module" | false -> "namespace"
+      let label = OpenableKind.label kind
       logger.LogDebug (sprintf "Opening %s: %s" label name)
       let openSw = System.Diagnostics.Stopwatch.StartNew()
       let result, diagnostics = fsiSession.EvalInteractionNonThrowing(sprintf "open %s;;" name, ct)
@@ -696,9 +700,9 @@ let createFsiSession (logger: ILogger) (outStream: TextWriter) (useAsp: bool) (o
       match result with
       | Choice1Of2 _ ->
         reportOpenSuccess name elapsed
-        match isMod with
-        | true -> logger.LogInfo (sprintf "✅ Opened module: %s (%.1fms)" name elapsed)
-        | false -> ()
+        match kind with
+        | OpenableKind.Module -> logger.LogInfo (sprintf "✅ Opened module: %s (%.1fms)" name elapsed)
+        | OpenableKind.Namespace -> ()
         WarmUp.OpenSuccess elapsed
       | Choice2Of2 ex ->
         let allText = sprintf "%s %s" ex.Message (diagnostics |> Array.map (fun d -> d.Message) |> String.concat " ")
@@ -714,7 +718,7 @@ let createFsiSession (logger: ILogger) (outStream: TextWriter) (useAsp: bool) (o
       ct.ThrowIfCancellationRequested()
       match batch with
       | [] -> WarmUp.OpenSuccess 0.0
-      | [ name, isMod ] -> singleOpener name isMod
+      | [ name, kind ] -> singleOpener name kind
       | _ ->
         logger.LogDebug (sprintf "Opening batch of %d namespaces/modules" batch.Length)
         let script =
@@ -728,11 +732,11 @@ let createFsiSession (logger: ILogger) (outStream: TextWriter) (useAsp: bool) (o
         match result with
         | Choice1Of2 _ ->
           let durationPerName = elapsed / float batch.Length
-          for name, isMod in batch do
+          for name, kind in batch do
             reportOpenSuccess name durationPerName
-            match isMod with
-            | true -> logger.LogInfo (sprintf "✅ Opened module: %s (%.1fms, batched)" name durationPerName)
-            | false -> ()
+            match kind with
+            | OpenableKind.Module -> logger.LogInfo (sprintf "✅ Opened module: %s (%.1fms, batched)" name durationPerName)
+            | OpenableKind.Namespace -> ()
           logger.LogDebug (sprintf "✅ Opened batch of %d namespaces/modules in %.1fms" batch.Length elapsed)
           WarmUp.OpenSuccess elapsed
         | Choice2Of2 ex ->
@@ -757,7 +761,7 @@ let createFsiSession (logger: ILogger) (outStream: TextWriter) (useAsp: bool) (o
     | false ->
       logger.LogWarning (sprintf "⚠️  %d could not be opened:" (List.length failed))
       for f in failed do
-        let kind = match f.IsModule with | true -> "module" | false -> "namespace"
+        let kind = OpenableKind.label f.Kind
         logger.LogWarning (sprintf "  ✗ %s (%s): %s" f.Name kind f.ErrorMessage)
         for d in f.Diagnostics do
           let loc =
@@ -1366,7 +1370,7 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
           let warmupErrors =
             warmupFailures
             |> List.map (fun f ->
-              let kind = match f.IsModule with | true -> "module" | false -> "namespace"
+              let kind = OpenableKind.label f.Kind
               sprintf "%s (%s): %s" f.Name kind f.ErrorMessage)
           let warmupDuration =
             WarmupContext.completionDuration warmupCtx

@@ -8,6 +8,8 @@ open System.Text.Json
 open System.Text.Json.Serialization
 open System.Threading.Tasks
 open SageFs.AppState
+open SageFs.WarmUp
+open SageFs.Features.CellDependenciesReport
 open SageFs.Utils
 
 /// Pure functions for MCP adapter (formatting responses)
@@ -157,7 +159,7 @@ module McpAdapter =
     | true ->
       lines.Add(sprintf "  Opened (%d):" w.NamespacesOpened.Length)
       for b in w.NamespacesOpened do
-        let kind = match b.IsModule with | true -> "module" | false -> "namespace"
+        let kind = OpenableKind.label b.Kind
         lines.Add(sprintf "    open %s // %s (%.1fms)" b.Name kind b.DurationMs)
     | false -> ()
 
@@ -165,7 +167,7 @@ module McpAdapter =
     | true ->
       lines.Add(sprintf "  ⚠ Failed opens (%d):" w.FailedOpens.Length)
       for f in w.FailedOpens do
-        let kind = match f.IsModule with | true -> "module" | false -> "namespace"
+        let kind = OpenableKind.label f.Kind
         lines.Add(sprintf "    ✖ %s (%s) — %s" f.Name kind f.ErrorMessage)
         for d in f.Diagnostics do
           let loc =
@@ -2088,7 +2090,7 @@ module McpTools =
     Name: string
     Message: string
     Duration: TimeSpan
-    IsFlaky: bool
+    Flakiness: Features.LiveTesting.FlakyClassification option
     Location: FailureLocation option
   }
 
@@ -2106,8 +2108,8 @@ module McpTools =
       | false -> NoTestsMatched state.DiscoveredTests.Length
 
     let formatFailures (failures: FailedTestInfo list) =
-      let realFailures = failures |> List.filter (fun f -> not f.IsFlaky)
-      let flakyFailures = failures |> List.filter (fun f -> f.IsFlaky)
+      let realFailures = failures |> List.filter (fun f -> f.Flakiness.IsNone)
+      let flakyFailures = failures |> List.filter (fun f -> f.Flakiness.IsSome)
       let parts = System.Collections.Generic.List<string>()
       match realFailures with
       | [] -> ()
@@ -2184,11 +2186,12 @@ module McpTools =
             match failure with
             | Features.LiveTesting.TestFailure.ExceptionThrown (_, st) -> FailureLocationParser.tryParse st
             | _ -> None
-          let isFlaky =
+          let flakiness =
             match Features.LiveTesting.FlakyDetection.assessTest e.TestId flakyHistory with
-            | Features.LiveTesting.TestStability.Flaky _ -> true
-            | _ -> false
-          failures.Add { Name = e.DisplayName; Message = msg; Duration = duration; IsFlaky = isFlaky; Location = location }
+            | Features.LiveTesting.TestStability.Flaky flipCount ->
+              Some (Features.LiveTesting.FlakyClassification.Environmental flipCount)
+            | _ -> None
+          failures.Add { Name = e.DisplayName; Message = msg; Duration = duration; Flakiness = flakiness; Location = location }
         | Features.LiveTesting.TestRunStatus.Running ->
           running <- running + 1
           runningNames.Add e.DisplayName
@@ -3040,8 +3043,8 @@ module McpTools =
                   Consumes      = n.Consumes
                   DownstreamIds = n.DownstreamIds
                   UpstreamIds   = n.UpstreamIds
-                  IsStale       = n.IsStale
-                  StaleCauses   = n.StaleCauses |}) |}
+                  IsStale       = CellFreshness.isStale n.Staleness
+                  StaleCauses   = CellFreshness.causes n.Staleness |}) |}
         return JsonSerializer.Serialize(jsonData, liveTestJsonOpts)
     }
 

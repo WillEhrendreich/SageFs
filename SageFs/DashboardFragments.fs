@@ -8,6 +8,7 @@ open Falco.Datastar
 open StarFederation.Datastar.FSharp
 open Microsoft.AspNetCore.Http
 open SageFs
+open SageFs.WarmUp
 open SageFs.Affordances
 open SageFs.Server.DashboardTypes
 
@@ -1380,7 +1381,7 @@ let renderSessionContextPanel (ctx: SessionContext) =
               for f in failed do
                 Elem.div [ Attr.class' "diag-error-block" ] [
                   Elem.div [ Attr.style "font-weight: bold; color: var(--fg-red);" ] [
-                    let kind = match f.IsModule with | true -> "module" | false -> "namespace"
+                    let kind = OpenableKind.label f.Kind
                     Text.raw (sprintf "✖ %s (%s)" f.Name kind)
                     match f.RetryCount > 1 with
                     | true ->

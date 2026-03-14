@@ -457,7 +457,7 @@ module CoverageBitmap =
   /// Bitwise AND — intersection of two coverage bitmaps.
   let intersect (a: CoverageBitmap) (b: CoverageBitmap) : CoverageBitmap =
     match a.Count <> b.Count with
-    | true -> failwith "CoverageBitmap size mismatch"
+    | true -> failwithf "CoverageBitmap.intersect size mismatch: a.Count=%d, b.Count=%d" a.Count b.Count
     | false -> ()
     let bits = Array.init a.Bits.Length (fun i -> a.Bits.[i] &&& b.Bits.[i])
     { Bits = bits; Count = a.Count }
@@ -465,7 +465,7 @@ module CoverageBitmap =
   /// Bitwise XOR — symmetric difference of two coverage bitmaps.
   let xorDiff (a: CoverageBitmap) (b: CoverageBitmap) : CoverageBitmap =
     match a.Count <> b.Count with
-    | true -> failwith "CoverageBitmap size mismatch"
+    | true -> failwithf "CoverageBitmap.xorDiff size mismatch: a.Count=%d, b.Count=%d" a.Count b.Count
     | false -> ()
     let bits = Array.init a.Bits.Length (fun i -> a.Bits.[i] ^^^ b.Bits.[i])
     { Bits = bits; Count = a.Count }
@@ -474,7 +474,7 @@ module CoverageBitmap =
   let union (a: CoverageBitmap) (b: CoverageBitmap) : CoverageBitmap =
     match a.Count = 0 && b.Count = 0, a.Count <> b.Count with
     | true, _ -> empty
-    | _, true -> failwith "CoverageBitmap size mismatch"
+    | _, true -> failwithf "CoverageBitmap.union size mismatch: a.Count=%d, b.Count=%d" a.Count b.Count
     | false, false ->
       let bits = Array.init a.Bits.Length (fun i -> a.Bits.[i] ||| b.Bits.[i])
       { Bits = bits; Count = a.Count }

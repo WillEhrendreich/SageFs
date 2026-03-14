@@ -23,10 +23,10 @@ let mkTestWarmup (nFiles: int) (fails: (string * string) list) : WarmupContext =
       { Name = "Expecto"; Path = "/lib/Expecto.dll"; NamespaceCount = 2; ModuleCount = 3 }
     ]
     NamespacesOpened = [
-      { Name = "System"; IsModule = false; Source = "auto"; DurationMs = 0.0 }
-      { Name = "Expecto"; IsModule = true; Source = "auto"; DurationMs = 0.0 }
+      { Name = "System"; Kind = OpenableKind.Namespace; Source = "auto"; DurationMs = 0.0 }
+      { Name = "Expecto"; Kind = OpenableKind.Module; Source = "auto"; DurationMs = 0.0 }
     ]
-    FailedOpens = fails |> List.map (fun (n, e) -> { Name = n; IsModule = false; ErrorMessage = e; Diagnostics = []; RetryCount = 1; DurationMs = 0.0 })
+    FailedOpens = fails |> List.map (fun (n, e) -> { Name = n; Kind = OpenableKind.Namespace; ErrorMessage = e; Diagnostics = []; RetryCount = 1; DurationMs = 0.0 })
     PhaseTiming = { ScanSourceFilesMs = 0L; ScanAssembliesMs = 0L; OpenNamespacesMs = 0L; TotalMs = 150L }
     StartedAt = DateTimeOffset.UtcNow }
 

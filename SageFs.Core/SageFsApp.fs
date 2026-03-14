@@ -2,6 +2,7 @@ namespace SageFs
 
 open System
 open SageFs.WorkerProtocol
+open SageFs.WarmUp
 open SageFs.Features.Diagnostics
 open SageFs.Features.LiveTesting
 
@@ -34,7 +35,7 @@ module WarmupBanner =
     // Per-namespace opens are streamed via WarmupProgress events during warmup.
     // Banner only shows failures.
     for f in w.FailedOpens do
-      let kind = match f.IsModule with | true -> "module" | false -> "namespace"
+      let kind = OpenableKind.label f.Kind
       lines.Add {
         Kind = OutputKind.Error
         Text = sprintf "  ✖ Failed to open %s (%s) — %s" f.Name kind f.ErrorMessage

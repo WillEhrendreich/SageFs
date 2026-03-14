@@ -89,12 +89,12 @@ module WarmupContext =
 
   let moduleNames (ctx: WarmupContext) =
     ctx.NamespacesOpened
-    |> List.filter (fun b -> b.IsModule)
+    |> List.filter (fun b -> b.Kind = OpenableKind.Module)
     |> List.map (fun b -> b.Name)
 
   let namespaceNames (ctx: WarmupContext) =
     ctx.NamespacesOpened
-    |> List.filter (fun b -> not b.IsModule)
+    |> List.filter (fun b -> b.Kind = OpenableKind.Namespace)
     |> List.map (fun b -> b.Name)
 
 module FileReadiness =
@@ -140,7 +140,7 @@ module SessionContext =
     sprintf "📦 %s (%d ns, %d mod)" asm.Name asm.NamespaceCount asm.ModuleCount
 
   let openLine (b: OpenedBinding) =
-    let kind = match b.IsModule with | true -> "module" | false -> "namespace"
+    let kind = OpenableKind.label b.Kind
     sprintf "open %s // %s via %s" b.Name kind b.Source
 
   let fileLine (f: FileStatus) =
@@ -190,7 +190,7 @@ module SessionContextTui =
     | true ->
       lines.Add(sprintf "── Failed (%d) ──" failed.Length)
       for f in failed do
-        let kind = match f.IsModule with | true -> "module" | false -> "namespace"
+        let kind = OpenableKind.label f.Kind
         lines.Add(sprintf "✖ %s (%s): %s" f.Name kind f.ErrorMessage)
         for d in f.Diagnostics do
           let loc =

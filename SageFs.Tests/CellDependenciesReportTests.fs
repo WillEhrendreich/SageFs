@@ -124,10 +124,10 @@ let stalenessTests =
       r.TotalStale   |> Expect.equal "1 stale" 1
       r.StaleCellIds |> Expect.equal "stale = [2]" [2]
 
-    testCase "stale cells have IsStale = true" <| fun _ ->
+    testCase "stale cells have Staleness = StaleFrom" <| fun _ ->
       let g = chainGraph ()
       let r = CellDependenciesReport.compose g (Set.singleton 0)
-      r.Nodes |> List.forall (fun n -> n.IsStale) |> Expect.isTrue "all stale in chain"
+      r.Nodes |> List.forall (fun n -> CellFreshness.isStale n.Staleness) |> Expect.isTrue "all stale in chain"
 
     testCase "diamond: changing root marks all stale" <| fun _ ->
       let g = diamondGraph ()
@@ -138,12 +138,12 @@ let stalenessTests =
       let g = chainGraph ()
       let r = CellDependenciesReport.compose g (Set.singleton 0)
       let node1 = r.Nodes |> List.find (fun n -> n.Id = 1)
-      node1.StaleCauses |> Expect.equal "cause = [0]" [0]
+      CellFreshness.causes node1.Staleness |> Expect.equal "cause = [0]" [0]
 
-    testCase "fresh cell has empty StaleCauses" <| fun _ ->
+    testCase "fresh cell has Fresh staleness" <| fun _ ->
       let g = chainGraph ()
       let r = CellDependenciesReport.compose g Set.empty
-      r.Nodes |> List.forall (fun n -> n.StaleCauses.IsEmpty) |> Expect.isTrue "all causes empty"
+      r.Nodes |> List.forall (fun n -> n.Staleness = CellFreshness.Fresh) |> Expect.isTrue "all fresh"
   ]
 
 // ── summarize ─────────────────────────────────────────────────

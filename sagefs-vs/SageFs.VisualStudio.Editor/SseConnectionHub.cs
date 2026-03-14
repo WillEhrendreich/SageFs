@@ -50,8 +50,9 @@ internal static class SseConnectionHub
     /// <summary>
     /// Subscribe to an SSE endpoint. If no connection exists for this endpoint,
     /// one is created. Multiple subscribers share the same underlying connection.
+    /// Returns an IDisposable token — disposing it removes the subscriber.
     /// </summary>
-    public static void Subscribe(string endpoint, Action<SseEvent> handler)
+    public static IDisposable Subscribe(string endpoint, Action<SseEvent> handler)
     {
         var conn = _connections.GetOrAdd(endpoint, ep => new EndpointConnection(ep));
         conn.AddSubscriber(handler);
@@ -61,6 +62,8 @@ internal static class SseConnectionHub
         lock (_initLock) { url = _baseUrl; }
         if (url != null)
             conn.EnsureStarted(url);
+
+        return new SubscriptionToken(() => conn.RemoveSubscriber(handler));
     }
 
     /// <summary>
@@ -86,6 +89,11 @@ internal static class SseConnectionHub
         public void AddSubscriber(Action<SseEvent> handler)
         {
             lock (_lock) { _subscribers.Add(handler); }
+        }
+
+        public void RemoveSubscriber(Action<SseEvent> handler)
+        {
+            lock (_lock) { _subscribers.Remove(handler); }
         }
 
         public void AddReconnectSubscriber(Action handler)
@@ -145,6 +153,19 @@ internal static class SseConnectionHub
                         $"[SseConnectionHub] Reconnect subscriber threw on {_endpoint}: {ex.Message}");
                 }
             }
+        }
+    }
+
+    private sealed class SubscriptionToken : IDisposable
+    {
+        private Action? _onDispose;
+
+        public SubscriptionToken(Action onDispose) => _onDispose = onDispose;
+
+        public void Dispose()
+        {
+            var action = Interlocked.Exchange(ref _onDispose, null);
+            action?.Invoke();
         }
     }
 }

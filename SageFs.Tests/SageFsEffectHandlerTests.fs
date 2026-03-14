@@ -498,7 +498,7 @@ let fullLoopTests = testList "Full ElmLoop + EffectHandler" [
       AssembliesLoaded =
         [{ Name = "A"; Path = "A.dll"; NamespaceCount = 3; ModuleCount = 1 }]
       NamespacesOpened =
-        [{ Name = "System"; IsModule = false; Source = "warmup"; DurationMs = 0.0 }]
+        [{ Name = "System"; Kind = OpenableKind.Namespace; Source = "warmup"; DurationMs = 0.0 }]
       FailedOpens = []; PhaseTiming = { ScanSourceFilesMs = 0L; ScanAssembliesMs = 0L; OpenNamespacesMs = 0L; TotalMs = 500L }
       SourceFilesScanned = 2; StartedAt = DateTimeOffset.UtcNow
     }

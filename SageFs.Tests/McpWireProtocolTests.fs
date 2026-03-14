@@ -145,8 +145,8 @@ let sessionEventSerializationTests = testList "SessionEvent serialization" [
     let evt = WarmupContextSnapshot("s", {
       minimalWarmup with
         AssembliesLoaded = [{ Name = "A"; Path = "/a.dll"; NamespaceCount = 10; ModuleCount = 3 }]
-        NamespacesOpened = [{ Name = "System"; IsModule = false; Source = "auto"; DurationMs = 0.0 }]
-        FailedOpens = [{ Name = "Bad"; IsModule = false; ErrorMessage = "err"; Diagnostics = []; RetryCount = 1; DurationMs = 0.0 }]
+        NamespacesOpened = [{ Name = "System"; Kind = OpenableKind.Namespace; Source = "auto"; DurationMs = 0.0 }]
+        FailedOpens = [{ Name = "Bad"; Kind = OpenableKind.Namespace; ErrorMessage = "err"; Diagnostics = []; RetryCount = 1; DurationMs = 0.0 }]
     })
     let json = serializeSessionEvent evt
     let doc = JsonDocument.Parse(json)

@@ -3,6 +3,7 @@ module SageFs.SessionEvents
 open System.IO
 open System.Text
 open System.Text.Json
+open SageFs.WarmUp
 
 /// Typed session-scoped events emitted on the SSE stream.
 type SessionEvent =
@@ -65,7 +66,7 @@ let serializeSessionEvent (evt: SessionEvent) : string =
     for ns in ctx.NamespacesOpened do
       w.WriteStartObject()
       writeStr "name" ns.Name
-      writeBool "isModule" ns.IsModule
+      writeBool "isModule" (OpenableKind.toBool ns.Kind)
       writeStr "source" ns.Source
       writeFloat "durationMs" ns.DurationMs
       w.WriteEndObject()
@@ -75,7 +76,7 @@ let serializeSessionEvent (evt: SessionEvent) : string =
     for f in ctx.FailedOpens do
       w.WriteStartObject()
       writeStr "name" f.Name
-      writeBool "isModule" f.IsModule
+      writeBool "isModule" (OpenableKind.toBool f.Kind)
       writeStr "error" f.ErrorMessage
       writeInt "retryCount" f.RetryCount
       w.WritePropertyName("diagnostics")

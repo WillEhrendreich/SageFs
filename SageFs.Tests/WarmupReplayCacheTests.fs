@@ -5,6 +5,7 @@ open System.IO
 open Expecto
 open Expecto.Flip
 open SageFs
+open SageFs.WarmUp
 open SageFs.AppState
 open SageFs.WarmupReplayCache
 
@@ -156,9 +157,9 @@ let warmupReplayCacheTests =
             [ assemblyFile ]
 
         let expectedNames = [
-          "System", false
-          "MyApp.Domain", false
-          "MyApp.Utils", true
+          "System", OpenableKind.Namespace
+          "MyApp.Domain", OpenableKind.Namespace
+          "MyApp.Utils", OpenableKind.Module
         ]
 
         let plan =
@@ -196,7 +197,7 @@ let warmupReplayCacheTests =
             [ sourceFile ]
             [ assemblyFile ]
 
-        makePlan fingerprint 1 [ sampleAssembly assemblyFile ] [ "System", false; "MyApp.Utils", true ]
+        makePlan fingerprint 1 [ sampleAssembly assemblyFile ] [ "System", OpenableKind.Namespace; "MyApp.Utils", OpenableKind.Module ]
         |> save cachePath
 
         let json = File.ReadAllText cachePath
@@ -233,7 +234,7 @@ let warmupReplayCacheTests =
             fingerprint
             1
             [ sampleAssembly assemblyFile ]
-            [ "System", false ]
+            [ "System", OpenableKind.Namespace ]
 
         save cachePath cachedPlan
 
@@ -246,7 +247,7 @@ let warmupReplayCacheTests =
             fingerprint
             (fun () ->
               discoverCalls.Add("discover")
-              async.Return (makePlan fingerprint 9 [] [ "Should.Not.Run", false ]))
+              async.Return (makePlan fingerprint 9 [] [ "Should.Not.Run", OpenableKind.Namespace ]))
           |> Async.RunSynchronously
 
         discoverCalls
@@ -254,7 +255,7 @@ let warmupReplayCacheTests =
         |> Expect.isEmpty "valid cache hits should skip rediscovery"
 
         namePairs resolved
-        |> Expect.equal "cache hits should replay the cached open order" [ "System", false ]
+        |> Expect.equal "cache hits should replay the cached open order" [ "System", OpenableKind.Namespace ]
 
     testCase "resolveWarmupReplayPlan rediscovers and refreshes stale plans" <| fun _ ->
       withTempDir <| fun dir ->
@@ -271,7 +272,7 @@ let warmupReplayCacheTests =
             [ sourceFile ]
             [ assemblyFile ]
 
-        makePlan staleFingerprint 1 [ sampleAssembly assemblyFile ] [ "System", false ]
+        makePlan staleFingerprint 1 [ sampleAssembly assemblyFile ] [ "System", OpenableKind.Namespace ]
         |> save cachePath
 
         overwriteFile sourceFile "open System.IO"
@@ -291,7 +292,7 @@ let warmupReplayCacheTests =
             freshFingerprint
             1
             [ sampleAssembly assemblyFile ]
-            [ "System.IO", false; "MyApp.Utils", true ]
+            [ "System.IO", OpenableKind.Namespace; "MyApp.Utils", OpenableKind.Module ]
 
         let resolved =
           resolveWarmupReplayPlan
@@ -307,7 +308,7 @@ let warmupReplayCacheTests =
         |> Expect.equal "stale cache entries should trigger rediscovery once" 1
 
         namePairs resolved
-        |> Expect.equal "rediscovery should return the fresh replay plan" [ "System.IO", false; "MyApp.Utils", true ]
+        |> Expect.equal "rediscovery should return the fresh replay plan" [ "System.IO", OpenableKind.Namespace; "MyApp.Utils", OpenableKind.Module ]
 
         tryLoadValidPlan cachePath freshFingerprint
         |> Expect.isSome "stale cache entries should be replaced with the fresh replay plan"

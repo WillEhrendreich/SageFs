@@ -126,8 +126,8 @@ let genSessionEvent =
       let! nss =
         Gen.listOfLength nsCount (gen {
           let! n = Gen.elements [ "System"; "SageFs"; "Expecto" ]
-          let! isModule = Gen.elements [ true; false ]
-          return { OpenedBinding.Name = n; IsModule = isModule; Source = "warmup"; DurationMs = 0.0 }
+          let! kind = Gen.elements [ OpenableKind.Module; OpenableKind.Namespace ]
+          return { OpenedBinding.Name = n; Kind = kind; Source = "warmup"; DurationMs = 0.0 }
         })
       return {
         SourceFilesScanned = files

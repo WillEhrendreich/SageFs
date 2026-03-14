@@ -24,7 +24,7 @@ let executorDescriptionTests = testList "TestExecutor.description" [
 ]
 
 let builtInDescriptionTests = testList "BuiltInExecutors.descriptions" [
-  test "has 5 built-in providers" {
+  test "has 6 built-in providers" {
     BuiltInExecutors.descriptions
     |> List.length
     |> Expect.equal "should have 6 providers" 6

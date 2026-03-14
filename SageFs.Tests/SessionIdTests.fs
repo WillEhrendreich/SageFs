@@ -61,12 +61,10 @@ let sessionIdTests = testList "SessionId" [
       |> Expect.isError "should reject special chars"
     }
 
-    test "valid ID roundtrips through Result" {
-      let sid = "deadbeef"
-      match SessionId.validate sid with
-      | Ok validated ->
-        let expected = match SessionId.validate sid with | Ok s -> s | Error e -> failwith e
-        validated |> Expect.equal "should roundtrip" expected
+    test "valid ID roundtrips through value extraction" {
+      let hex = "deadbeef"
+      match SessionId.validate hex with
+      | Ok sid -> SessionId.value sid |> Expect.equal "should extract original hex" hex
       | Error e -> failwith e
     }
   ]

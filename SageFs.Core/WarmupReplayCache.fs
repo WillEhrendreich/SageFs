@@ -6,9 +6,11 @@ open System.Text.Json
 open System.Text.Json.Serialization
 open SageFs.ProjectLoading
 
+open SageFs.WarmUp
+
 module internal WarmupReplayCache =
   [<Literal>]
-  let SchemaVersion = 1
+  let SchemaVersion = 2
 
   type FileStamp = {
     Path: string
@@ -28,7 +30,7 @@ module internal WarmupReplayCache =
 
   type NameToOpen = {
     Name: string
-    IsModule: bool
+    Kind: OpenableKind
   }
 
   type ReplayPlan = {
@@ -118,16 +120,16 @@ module internal WarmupReplayCache =
       AssembliesLoaded = assembliesLoaded
       NamesToOpen =
         namesToOpen
-        |> List.map (fun (name, isModule) ->
+        |> List.map (fun (name, kind) ->
           {
             Name = name
-            IsModule = isModule
+            Kind = kind
           })
     }
 
   let namePairs (plan: ReplayPlan) =
     plan.NamesToOpen
-    |> List.map (fun entry -> entry.Name, entry.IsModule)
+    |> List.map (fun entry -> entry.Name, entry.Kind)
 
   let tryGetCachePath (sln: Solution) =
     sln.Projects

@@ -14,10 +14,30 @@ type WarmupFcsDiagnostic = {
   EndColumn: int
 }
 
+/// Whether an openable entity is an F# module or a namespace.
+[<RequireQualifiedAccess>]
+type OpenableKind =
+  | Module
+  | Namespace
+
+module OpenableKind =
+  let label = function
+    | OpenableKind.Module -> "module"
+    | OpenableKind.Namespace -> "namespace"
+
+  let ofBool isModule =
+    match isModule with
+    | true -> OpenableKind.Module
+    | false -> OpenableKind.Namespace
+
+  let toBool = function
+    | OpenableKind.Module -> true
+    | OpenableKind.Namespace -> false
+
 /// Represents a namespace or module that was opened during warmup.
 type OpenedBinding = {
   Name: string
-  IsModule: bool
+  Kind: OpenableKind
   Source: string
   DurationMs: float
 }
@@ -25,7 +45,7 @@ type OpenedBinding = {
 /// Rich failure info for a single open that did not succeed.
 type WarmupOpenFailure = {
   Name: string
-  IsModule: bool
+  Kind: OpenableKind
   ErrorMessage: string
   Diagnostics: WarmupFcsDiagnostic list
   RetryCount: int
@@ -54,9 +74,9 @@ type OpenAttemptResult =
 [<Literal>]
 let DefaultOpenBatchSize = 8
 
-let private mkOpenedBinding name isMod durationMs = {
+let private mkOpenedBinding name kind durationMs = {
   Name = name
-  IsModule = isMod
+  Kind = kind
   Source = "warmup"
   DurationMs = durationMs
 }
@@ -65,9 +85,9 @@ let private mkWarmupFailure
   defaultError
   (firstErrors: System.Collections.Generic.Dictionary<string, string * WarmupFcsDiagnostic list>)
   (retryCounts: System.Collections.Generic.Dictionary<string, int>)
-  (name, isMod) = {
+  (name, kind) = {
   Name = name
-  IsModule = isMod
+  Kind = kind
   ErrorMessage =
     match firstErrors.TryGetValue(name) with
     | true, (errorMessage, _) -> errorMessage
@@ -85,8 +105,8 @@ let private mkWarmupFailure
 
 let private openWithRetryRichCore
   (maxRounds: int)
-  (attemptRound: (string * bool) list -> (string * bool * OpenAttemptResult) list)
-  (names: (string * bool) list)
+  (attemptRound: (string * OpenableKind) list -> (string * OpenableKind * OpenAttemptResult) list)
+  (names: (string * OpenableKind) list)
   : OpenedBinding list * WarmupOpenFailure list =
   let firstErrors = System.Collections.Generic.Dictionary<string, string * WarmupFcsDiagnostic list>()
   let retryCounts = System.Collections.Generic.Dictionary<string, int>()
@@ -109,20 +129,20 @@ let private openWithRetryRichCore
 
       let succeeded =
         results
-        |> List.choose (fun (name, isMod, result) ->
+        |> List.choose (fun (name, kind, result) ->
           match result with
-          | OpenSuccess durationMs -> Some (mkOpenedBinding name isMod durationMs)
+          | OpenSuccess durationMs -> Some (mkOpenedBinding name kind durationMs)
           | OpenFailed _ -> None)
 
       let failed =
         results
-        |> List.choose (fun (name, isMod, result) ->
+        |> List.choose (fun (name, kind, result) ->
           match result with
           | OpenFailed (errorMessage, diagnostics, _) ->
             match firstErrors.ContainsKey(name) with
             | false -> firstErrors.[name] <- errorMessage, diagnostics
             | true -> ()
-            Some (name, isMod)
+            Some (name, kind)
           | OpenSuccess _ -> None)
 
       match List.isEmpty succeeded with
@@ -180,18 +200,18 @@ module WarmupProgressLine =
     | false -> None
 
 /// Opens names iteratively with rich failure info.
-/// opener: tries to open a name+isModule, returns OpenAttemptResult.
+/// opener: tries to open a name+kind, returns OpenAttemptResult.
 /// Returns (succeeded with timing, failures with diagnostics).
 let openWithRetryRich
   (maxRounds: int)
-  (opener: string -> bool -> OpenAttemptResult)
-  (names: (string * bool) list)
+  (opener: string -> OpenableKind -> OpenAttemptResult)
+  (names: (string * OpenableKind) list)
   : OpenedBinding list * WarmupOpenFailure list =
   openWithRetryRichCore
     maxRounds
     (fun remaining ->
       remaining
-      |> List.map (fun (name, isMod) -> name, isMod, opener name isMod))
+      |> List.map (fun (name, kind) -> name, kind, opener name kind))
     names
 
 /// Opens names in chunks to reduce per-open interpreter overhead.
@@ -199,9 +219,9 @@ let openWithRetryRich
 let openWithRetryRichBatched
   (maxRounds: int)
   (batchSize: int)
-  (batchOpener: (string * bool) list -> OpenAttemptResult)
-  (singleOpener: string -> bool -> OpenAttemptResult)
-  (names: (string * bool) list)
+  (batchOpener: (string * OpenableKind) list -> OpenAttemptResult)
+  (singleOpener: string -> OpenableKind -> OpenAttemptResult)
+  (names: (string * OpenableKind) list)
   : OpenedBinding list * WarmupOpenFailure list =
   let normalizedBatchSize =
     match batchSize > 0 with
@@ -211,16 +231,16 @@ let openWithRetryRichBatched
   let attemptChunk chunk =
     match chunk with
     | [] -> []
-    | [ name, isMod ] -> [ name, isMod, singleOpener name isMod ]
+    | [ name, kind ] -> [ name, kind, singleOpener name kind ]
     | _ ->
       match batchOpener chunk with
       | OpenSuccess durationMs ->
         let durationPerName = durationMs / float chunk.Length
         chunk
-        |> List.map (fun (name, isMod) -> name, isMod, OpenSuccess durationPerName)
+        |> List.map (fun (name, kind) -> name, kind, OpenSuccess durationPerName)
       | OpenFailed _ ->
         chunk
-        |> List.map (fun (name, isMod) -> name, isMod, singleOpener name isMod)
+        |> List.map (fun (name, kind) -> name, kind, singleOpener name kind)
 
   openWithRetryRichCore
     maxRounds

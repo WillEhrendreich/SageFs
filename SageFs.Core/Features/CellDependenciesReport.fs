@@ -2,6 +2,20 @@ module SageFs.Features.CellDependenciesReport
 
 open SageFs.Features.CellDependencyGraph
 
+/// Whether a cell needs re-evaluation.
+[<RequireQualifiedAccess>]
+type CellFreshness =
+  | Fresh
+  | StaleFrom of causes: CellId list
+
+module CellFreshness =
+  let isStale = function
+    | CellFreshness.Fresh -> false
+    | CellFreshness.StaleFrom _ -> true
+  let causes = function
+    | CellFreshness.Fresh -> []
+    | CellFreshness.StaleFrom cs -> cs
+
 /// A single cell annotated with dependency and staleness information.
 type CellNode = {
   /// Cell identifier.
@@ -14,10 +28,8 @@ type CellNode = {
   DownstreamIds: CellId list
   /// IDs of cells this cell depends on (upstream producers).
   UpstreamIds: CellId list
-  /// Whether this cell is currently stale (needs re-evaluation).
-  IsStale: bool
-  /// Upstream cell IDs that caused this cell to become stale.
-  StaleCauses: CellId list
+  /// Whether this cell is fresh or stale (and which upstream cells caused it).
+  Staleness: CellFreshness
 }
 
 /// Summary of the cell dependency graph with full staleness annotation.
@@ -43,18 +55,16 @@ module CellDependenciesReport =
       graph.Edges |> List.choose (fun (prod, cons) -> if prod = id then Some cons else None)
     let upstreamIds =
       graph.Edges |> List.choose (fun (prod, cons) -> if cons = id then Some prod else None)
-    let isStale = staleCells.Contains id
-    let staleCauses =
-      match isStale with
-      | true -> upstreamIds |> List.filter staleCells.Contains
-      | false -> []
+    let staleness =
+      match staleCells.Contains id with
+      | true -> CellFreshness.StaleFrom (upstreamIds |> List.filter staleCells.Contains)
+      | false -> CellFreshness.Fresh
     { Id = id
       Produces = info.Produces
       Consumes = info.Consumes
       DownstreamIds = downstreamIds
       UpstreamIds = upstreamIds
-      IsStale = isStale
-      StaleCauses = staleCauses }
+      Staleness = staleness }
 
   /// Human-readable one-line summary of the report.
   let summarize (r: CellDependencyReport) =
@@ -78,7 +88,12 @@ module CellDependenciesReport =
       |> Map.toList
       |> List.map (fun (id, info) -> buildNode graph allStale id info)
       |> List.sortBy (fun n -> n.Id)
-    let staleIds = nodes |> List.choose (fun n -> if n.IsStale then Some n.Id else None)
+    let staleIds =
+      nodes
+      |> List.choose (fun n ->
+        match CellFreshness.isStale n.Staleness with
+        | true -> Some n.Id
+        | false -> None)
     let r = {
       Nodes = nodes
       TotalCells = nodes.Length

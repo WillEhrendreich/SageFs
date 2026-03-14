@@ -11,7 +11,7 @@ module PipelineFlame =
   type FlameBar = {
     Name: string
     Width: int
-    Succeeded: bool
+    Outcome: StageOutcome
     ElapsedMs: float<ms>
   }
 
@@ -27,15 +27,15 @@ module PipelineFlame =
         let width = proportion * float totalWidth |> int |> max 1
         { Name = s.Name
           Width = width
-          Succeeded =
-            match s.Outcome with
-            | StageOutcome.Succeeded -> true
-            | StageOutcome.Failed _ -> false
+          Outcome = s.Outcome
           ElapsedMs = s.ElapsedMs })
 
   /// Render a single flame bar as a string: "██████ Parse ✓ [1.2ms]"
   let private renderBar (bar: FlameBar) : string =
-    let icon = match bar.Succeeded with true -> "✓" | false -> "✗"
+    let icon =
+      match bar.Outcome with
+      | StageOutcome.Succeeded -> "✓"
+      | StageOutcome.Failed _ -> "✗"
     let barChars = System.String('█', bar.Width)
     sprintf "%s %s %s [%.1fms]" barChars bar.Name icon (rawMsf bar.ElapsedMs)
 
