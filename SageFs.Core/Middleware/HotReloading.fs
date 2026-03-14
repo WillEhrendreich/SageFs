@@ -363,6 +363,15 @@ let detourMethod (logger: ILogger) (method: MethodBase) (replacement: MethodBase
     let msg = sprintf "Hot-reload detour failed: PlatformNotSupportedException for %s. MonoMod may not support this runtime." method.Name
     logger.LogWarning msg
     DevReloadHealthTracker.transition (DevReloadHealth.Degraded "MonoMod PlatformNotSupportedException")
+  | :? TargetInvocationException as ex when
+    (ex.InnerException :? TypeLoadException) ->
+    // FSI compilation units can become unloadable when types are redefined across
+    // eval boundaries (FSI_0020 etc). This is benign — the new definition supersedes
+    // the old one, so the detour is unnecessary. Log and continue.
+    logger.LogDebug (sprintf "Hot-reload detour skipped (stale FSI type): %s — %s" method.Name ex.InnerException.Message)
+  | :? TargetInvocationException as ex when
+    (ex.InnerException :? TypeInitializationException) ->
+    logger.LogDebug (sprintf "Hot-reload detour skipped (type init failure): %s — %s" method.Name ex.InnerException.Message)
 
 let handleNewAsmFromRepl (logger: ILogger) (asm: Assembly) (st: State) =
   match st.LastAssembly with

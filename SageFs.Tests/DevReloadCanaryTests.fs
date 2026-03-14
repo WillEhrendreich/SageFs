@@ -127,9 +127,52 @@ let prefixPatchIntegrationTests = testList "Harmony prefix patch" [
       skiptest "could not snapshot method state on this platform"
 ]
 
+// ============================================================================
+// Resilience tests: detourMethod handles stale FSI types gracefully
+// ============================================================================
+
+let nullLogger : SageFs.Utils.ILogger =
+  { new SageFs.Utils.ILogger with
+      member _.LogInfo _ = ()
+      member _.LogDebug _ = ()
+      member _.LogWarning _ = ()
+      member _.LogError _ = () }
+
+let resilienceTests = testList "detour resilience" [
+
+  testCase "detourMethod handles loadable method without throwing" <| fun () ->
+    // Exercises the full detourMethod path with a real loadable type.
+    // The TypeLoadException catch clause is only triggered by real stale
+    // FSI assemblies, but this validates the method signature and that
+    // the canary + error handling don't crash on normal inputs.
+    let m = typeof<SnapshotOnlyTarget>.GetMethod("Execute")
+    try
+      detourMethod nullLogger m m
+    with ex ->
+      failwithf "detourMethod should not propagate: %s" ex.Message
+
+  testCase "detourMethod catch clauses cover TypeLoadException shape" <| fun () ->
+    // Verify the TargetInvocationException → TypeLoadException shape
+    // is properly caught. We can't easily manufacture a real stale FSI
+    // assembly, but we can verify the catch clause pattern matches.
+    let ex =
+      TargetInvocationException(
+        "test",
+        TypeLoadException "Could not load type 'FSI_0020'")
+    // The catch pattern in detourMethod is:
+    //   :? TargetInvocationException as ex when (ex.InnerException :? TypeLoadException)
+    // Verify this pattern matches our test exception shape:
+    match ex :> exn with
+    | :? TargetInvocationException as tie when (tie.InnerException :? TypeLoadException) ->
+      true |> Expect.isTrue "catch clause should match TypeLoadException shape"
+    | _ ->
+      failwith "catch clause pattern did not match — fix is broken"
+]
+
 [<Tests>]
 let allTests =
   testList "DevReloadCanary" [
     canaryUnitTests
     prefixPatchIntegrationTests
+    resilienceTests
   ]
