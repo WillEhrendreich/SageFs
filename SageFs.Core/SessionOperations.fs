@@ -119,6 +119,124 @@ module SessionOperations =
         ]
         parts |> String.concat " | "
 
+  // ── Multi-agent coordination ──────────────────────────────────
+
+  /// Machine-parseable guidance for an AI agent connecting to a session.
+  /// Replaces stringly-typed warnings with a typed DU that agents can
+  /// pattern-match on. Makes the decision tree unambiguous:
+  /// - Uncontested → proceed freely
+  /// - OccupiedBy → consider creating a separate session
+  /// - Unhealthy → session is faulted/stopped, don't use it
+  [<RequireQualifiedAccess>]
+  type SessionGuidance =
+    | Uncontested
+    | OccupiedBy of workerNames: string list
+    | Unhealthy of reason: string
+
+  module SessionGuidance =
+    /// Compute guidance from current occupancy and session status.
+    /// Pure function — no IO, no side effects.
+    let compute (occupants: SessionOccupancy list) (status: SessionStatus) : SessionGuidance =
+      match status with
+      | SessionStatus.Faulted -> SessionGuidance.Unhealthy "Session is faulted"
+      | SessionStatus.Stopped -> SessionGuidance.Unhealthy "Session is stopped"
+      | _ ->
+        let workers =
+          occupants
+          |> List.filter (fun o -> o.Role = OccupantRole.Worker)
+          |> List.map (fun o -> o.AgentName)
+        match workers with
+        | [] -> SessionGuidance.Uncontested
+        | names -> SessionGuidance.OccupiedBy names
+
+    /// Human-readable label for MCP/dashboard display.
+    let label = function
+      | SessionGuidance.Uncontested -> "Uncontested"
+      | SessionGuidance.OccupiedBy names ->
+        sprintf "OccupiedBy: %s" (names |> String.concat ", ")
+      | SessionGuidance.Unhealthy reason ->
+        sprintf "Unhealthy: %s" reason
+
+  /// Snapshot of an agent's presence in the system.
+  /// Tracks WHEN they were last active, WHAT files they touched,
+  /// and optionally WHAT they claim to be doing (intent).
+  /// This replaces the bare ConcurrentDictionary<string,string> SessionMap
+  /// for coordination purposes while keeping SessionMap for routing.
+  type AgentPresence = {
+    AgentName: string
+    Role: OccupantRole
+    SessionId: string
+    LastToolCall: DateTime
+    Intent: string option
+    RecentFiles: string list
+    EvalCount: int
+  }
+
+  /// Whether an agent's presence is fresh (active) or stale (likely crashed/disconnected).
+  [<RequireQualifiedAccess>]
+  type AgentFreshness =
+    | Fresh
+    | Stale
+
+  module AgentPresence =
+    /// Classify an agent as stale if their last tool call exceeds the timeout.
+    let freshness (now: DateTime) (timeout: TimeSpan) (presence: AgentPresence) : AgentFreshness =
+      match (now - presence.LastToolCall) > timeout with
+      | true -> AgentFreshness.Stale
+      | false -> AgentFreshness.Fresh
+
+    /// Convenience: true if the agent is stale.
+    let isStale now timeout presence =
+      freshness now timeout presence = AgentFreshness.Stale
+
+    /// Convenience: true if the agent is fresh.
+    let isFresh now timeout presence =
+      freshness now timeout presence = AgentFreshness.Fresh
+
+  /// Advisory about file overlap between agents.
+  /// Returned when an agent is about to evaluate code from a file
+  /// that another agent recently modified.
+  [<RequireQualifiedAccess>]
+  type FileOverlapAdvisory =
+    | NoOverlap
+    | OverlappingFiles of agentName: string * files: string list
+
+  module FileOverlapAdvisory =
+    /// Compute overlap between the current agent's files and all other agents' recent files.
+    /// Returns advisories for each overlapping agent (self is excluded).
+    let compute
+      (currentAgent: string)
+      (currentFiles: string list)
+      (otherPresences: AgentPresence list)
+      : FileOverlapAdvisory list =
+      let currentSet = Set.ofList currentFiles
+      match Set.isEmpty currentSet with
+      | true -> []
+      | false ->
+        otherPresences
+        |> List.filter (fun p -> p.AgentName <> currentAgent)
+        |> List.choose (fun p ->
+          let otherSet = Set.ofList p.RecentFiles
+          let overlap = Set.intersect currentSet otherSet |> Set.toList
+          match overlap with
+          | [] -> None
+          | files -> Some (FileOverlapAdvisory.OverlappingFiles (p.AgentName, files)))
+
+    /// Format an advisory for inclusion in tool responses.
+    let format = function
+      | FileOverlapAdvisory.NoOverlap -> ""
+      | FileOverlapAdvisory.OverlappingFiles (agent, files) ->
+        sprintf "Note: Agent '%s' recently evaluated code from %s"
+          agent (files |> String.concat ", ")
+
+  /// Outcome of periodic occupancy cleanup.
+  /// Explicit DU so the event log and dashboard can report what happened.
+  [<RequireQualifiedAccess>]
+  type OccupancyCleanupOutcome =
+    | NothingToClean
+    | EvictedStale of agentNames: string list
+    | CleanupSkipped of reason: string
+
   // ── Session display formatting ──────────────────────────────────
 
   /// What the caller wants when creating a session — pure data, no IO.

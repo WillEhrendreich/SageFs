@@ -42,6 +42,8 @@
         <Compile Include="DaemonStateTests.fs" />
         <Compile Include="DaemonIntegrationTests.fs" />
         <Compile Include="SessionOperationsTests.fs" />
+        <Compile Include="MultiAgentCoordinationTests.fs" />
+        <Compile Include="AgentActivityTrackerTests.fs" />
         <Compile Include="RestartPolicyTests.fs" />
         <Compile Include="ResilientActorTests.fs" />
         <Compile Include="WatchdogTests.fs" />
