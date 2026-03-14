@@ -1,4 +1,4 @@
-<html><head><title>SageFs Dashboard</title><script>
+﻿<html><head><title>SageFs Dashboard</title><script>
     (function() {
       var origFetch = window.fetch;
       window.fetch = function(url) {
@@ -14,7 +14,7 @@
         return p;
       };
     })();
-  </script><script type="module" src="https://cdn.jsdelivr.net/gh/starfederation/datastar@1.0.0-RC.7/bundles/datastar.js"></script><link rel="stylesheet" href="/dashboard/dashboard.css" /></head><body data-on:pageshow.window="evt?.persisted && window.location.reload()"><div data-init="@get('/dashboard/stream')" data-signals:help-visible="'false'" data-signals:sidebar-open="'true'" data-signals:session-id="''" data-signals:code="''" data-signals:new-session-dir="''" data-signals:manual-projects="''" data-signals:theme="''" data-signals:cursor-pos="'0'" data-signals:test-filter="'all'" data-signals:expanded-dashboard="'false'"></div><div id="server-status" class="conn-banner conn-disconnected" style="display:none">⏳ Connecting to server...</div><div id="main"><div style="display: flex; align-items: center; justify-content: center; height: 100vh; color: var(--fg-dim);">⏳ Loading dashboard...</div></div><script>
+  </script><script type="module" src="https://cdn.jsdelivr.net/gh/starfederation/datastar@1.0.0-RC.7/bundles/datastar.js"></script><link rel="stylesheet" href="/dashboard/dashboard.css" /></head><body data-on:pageshow.window="evt?.persisted && window.location.reload()"><div data-init="@get('/dashboard/stream')" data-signals:help-visible="'false'" data-signals:sidebar-open="'true'" data-signals:session-id="''" data-signals:code="''" data-signals:new-session-dir="''" data-signals:manual-projects="''" data-signals:theme="''" data-signals:cursor-pos="'0'" data-signals:test-filter="'all'" data-signals:expanded-dashboard="'false'"></div><div id="server-status" class="conn-banner conn-disconnected" style="display:none">⏳ Connecting to server...</div><div id="main"><div></div></div><script>
     window._insertComp = function(text, reqPos) {
       var ta = document.getElementById('eval-textarea');
       if (!ta) return;

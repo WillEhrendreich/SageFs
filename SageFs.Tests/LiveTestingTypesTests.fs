@@ -566,6 +566,65 @@ let liveTestingTypesTests = testList "LiveTestingTypes" [
       merged |> Map.find "sym" |> Array.length
       |> Expect.equal "should combine both tests" 2
     }
+    test "extractCallGraph extracts caller-callee edges" {
+      let uses = [|
+        { FullName = "A.f"; DisplayName = "f"; UseKind = SymbolUseKind.Definition; StartLine = 1; EndLine = 1 }
+        { FullName = "A.g"; DisplayName = "g"; UseKind = SymbolUseKind.Definition; StartLine = 10; EndLine = 10 }
+        { FullName = "A.g"; DisplayName = "g"; UseKind = SymbolUseKind.Reference; StartLine = 3; EndLine = 3 }
+      |]
+      let cg = TestDependencyGraph.extractCallGraph ".Tests." uses
+      cg |> Map.containsKey "A.f" |> Expect.isTrue "f should call g"
+      cg.["A.f"] |> Expect.equal "f calls g" [| "A.g" |]
+    }
+    test "extractCallGraph excludes test module definitions" {
+      let uses = [|
+        { FullName = "A.f"; DisplayName = "f"; UseKind = SymbolUseKind.Definition; StartLine = 1; EndLine = 1 }
+        { FullName = "A.Tests.t1"; DisplayName = "t1"; UseKind = SymbolUseKind.Definition; StartLine = 50; EndLine = 50 }
+        { FullName = "A.f"; DisplayName = "f"; UseKind = SymbolUseKind.Reference; StartLine = 52; EndLine = 52 }
+      |]
+      let cg = TestDependencyGraph.extractCallGraph ".Tests." uses
+      cg |> Map.containsKey "A.Tests.t1" |> Expect.isFalse "test defs excluded"
+    }
+    test "extractCallGraph handles diamond dependency" {
+      let uses = [|
+        { FullName = "D.a"; DisplayName = "a"; UseKind = SymbolUseKind.Definition; StartLine = 1; EndLine = 1 }
+        { FullName = "D.b"; DisplayName = "b"; UseKind = SymbolUseKind.Definition; StartLine = 10; EndLine = 10 }
+        { FullName = "D.c"; DisplayName = "c"; UseKind = SymbolUseKind.Definition; StartLine = 20; EndLine = 20 }
+        { FullName = "D.b"; DisplayName = "b"; UseKind = SymbolUseKind.Reference; StartLine = 3; EndLine = 3 }
+        { FullName = "D.c"; DisplayName = "c"; UseKind = SymbolUseKind.Reference; StartLine = 4; EndLine = 4 }
+        { FullName = "D.c"; DisplayName = "c"; UseKind = SymbolUseKind.Reference; StartLine = 12; EndLine = 12 }
+      |]
+      let cg = TestDependencyGraph.extractCallGraph ".Tests." uses
+      cg.["D.a"] |> Array.sort |> Expect.equal "a calls b,c" [| "D.b"; "D.c" |]
+      cg.["D.b"] |> Expect.equal "b calls c" [| "D.c" |]
+      cg |> Map.containsKey "D.c" |> Expect.isFalse "c is a leaf"
+    }
+    test "extractCallGraph empty input" {
+      let cg = TestDependencyGraph.extractCallGraph ".Tests." [||]
+      cg |> Map.isEmpty |> Expect.isTrue "empty input = empty graph"
+    }
+    test "extractCallGraph excludes self-references" {
+      let uses = [|
+        { FullName = "R.f"; DisplayName = "f"; UseKind = SymbolUseKind.Definition; StartLine = 1; EndLine = 1 }
+        { FullName = "R.f"; DisplayName = "f"; UseKind = SymbolUseKind.Reference; StartLine = 3; EndLine = 3 }
+      |]
+      let cg = TestDependencyGraph.extractCallGraph ".Tests." uses
+      cg |> Map.containsKey "R.f" |> Expect.isFalse "self-reference not an edge"
+    }
+    test "buildFromSymbolUses produces transitive coverage" {
+      let uses = [|
+        { FullName = "X.inner"; DisplayName = "inner"; UseKind = SymbolUseKind.Definition; StartLine = 1; EndLine = 1 }
+        { FullName = "X.outer"; DisplayName = "outer"; UseKind = SymbolUseKind.Definition; StartLine = 10; EndLine = 10 }
+        { FullName = "X.inner"; DisplayName = "inner"; UseKind = SymbolUseKind.Reference; StartLine = 12; EndLine = 12 }
+        { FullName = "X.Tests.t"; DisplayName = "t"; UseKind = SymbolUseKind.Definition; StartLine = 50; EndLine = 50 }
+        { FullName = "X.outer"; DisplayName = "outer"; UseKind = SymbolUseKind.Reference; StartLine = 52; EndLine = 52 }
+      |]
+      let graph = TestDependencyGraph.buildFromSymbolUses ".Tests." TestFramework.XUnit uses
+      graph.SymbolToTests |> Map.containsKey "X.outer" |> Expect.isTrue "outer direct"
+      graph.SymbolToTests |> Map.containsKey "X.inner" |> Expect.isFalse "inner not directly referenced by test"
+      graph.TransitiveCoverage |> Map.containsKey "X.outer" |> Expect.isTrue "outer transitive"
+      graph.TransitiveCoverage |> Map.containsKey "X.inner" |> Expect.isTrue "inner covered transitively via call graph"
+    }
   ]
 
   testList "SourceMapping" [

@@ -7,6 +7,7 @@ open SageFs.ProjectLoading
 open SageFs.AppState
 
 let commonMiddleware: AppState.Middleware list = [
+  TypeRedefinitionWarning.typeRedefinitionWarningMiddleware
   FsiCompatibility.fsiCompatibilityMiddleware
   Directives.viBindMiddleware
   Directives.OpenDirective.openDirectiveMiddleware

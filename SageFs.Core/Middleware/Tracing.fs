@@ -93,6 +93,7 @@ let tryGetTrace (response: EvalResponse) : PipelineTrace<string> option =
 
 /// Format middleware names for the standard middleware list.
 let namedCommonMiddleware: NamedMiddleware list = [
+  { Name = "TypeRedefWarn"; Middleware = TypeRedefinitionWarning.typeRedefinitionWarningMiddleware }
   { Name = "FsiCompat"; Middleware = FsiCompatibility.fsiCompatibilityMiddleware }
   { Name = "ViBind"; Middleware = Directives.viBindMiddleware }
   { Name = "OpenDirective"; Middleware = Directives.OpenDirective.openDirectiveMiddleware }

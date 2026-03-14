@@ -1742,6 +1742,47 @@ module TestDependencyGraph =
     |> Seq.map (fun kvp -> kvp.Key, kvp.Value |> Seq.toArray)
     |> Map.ofSeq
 
+  /// Extract caller→callee edges from production (non-test) symbol uses.
+  /// Uses the same line-range heuristic as buildFromSymbolUses: each definition
+  /// "owns" lines until the next definition starts.
+  let extractCallGraph
+    (testModuleIdentifier: string)
+    (uses: ExtractedSymbolUse array)
+    : Map<string, string array> =
+    let prodDefs =
+      uses
+      |> Array.filter (fun u ->
+        u.UseKind = SymbolUseKind.Definition
+        && not (u.FullName.Contains(testModuleIdentifier)))
+      |> Array.sortBy (fun u -> u.StartLine)
+    let defRanges =
+      [| for i in 0 .. prodDefs.Length - 1 do
+           let endLine =
+             match i < prodDefs.Length - 1 with
+             | true -> prodDefs.[i + 1].StartLine - 1
+             | false -> System.Int32.MaxValue
+           yield prodDefs.[i], prodDefs.[i].StartLine, endLine |]
+    let nonTestRefs =
+      uses
+      |> Array.filter (fun u ->
+        u.UseKind = SymbolUseKind.Reference
+        && not (u.FullName.StartsWith("Microsoft.FSharp"))
+        && not (u.FullName.Contains(testModuleIdentifier))
+        && u.FullName.Contains("."))
+    [| for (defUse, startLine, endLine) in defRanges do
+         let callees =
+           nonTestRefs
+           |> Array.filter (fun u ->
+             u.StartLine >= startLine
+             && u.StartLine <= endLine
+             && u.FullName <> defUse.FullName)
+           |> Array.map (fun u -> u.FullName)
+           |> Array.distinct
+         match callees.Length > 0 with
+         | true -> yield defUse.FullName, callees
+         | false -> () |]
+    |> Map.ofArray
+
   /// Build a direct dependency graph from extracted FCS symbol uses.
   /// `testModuleIdentifier` (e.g. ".Tests.") identifies test function namespaces.
   /// Returns an inverted index: production symbol → test IDs that reference it.
@@ -1784,8 +1825,9 @@ module TestDependencyGraph =
       |> Array.groupBy fst
       |> Array.map (fun (sym, pairs) -> sym, pairs |> Array.map snd |> Array.distinct)
       |> Map.ofArray
+    let callGraph = extractCallGraph testModuleIdentifier uses
     { SymbolToTests = invertedIndex
-      TransitiveCoverage = invertedIndex
+      TransitiveCoverage = computeTransitiveCoverage callGraph invertedIndex
       PerFileIndex = Map.empty
       SourceVersion = 1 }
 
@@ -2720,12 +2762,14 @@ module SymbolGraphBuilder =
     graph.SymbolToTests
 
   let updateGraph (testModuleIdentifier: string) (framework: TestFramework) (newRefs: SymbolReference list) (filePath: string) (graph: TestDependencyGraph) : TestDependencyGraph =
+    let extracted = newRefs |> List.map toExtractedSymbolUse |> Array.ofList
     let newFileIndex = buildIndex testModuleIdentifier framework newRefs
     let updatedPerFile = Map.add filePath newFileIndex graph.PerFileIndex
     let merged = TestDependencyGraph.mergePerFileIndexes updatedPerFile
+    let callGraph = TestDependencyGraph.extractCallGraph testModuleIdentifier extracted
     { graph with
         SymbolToTests = merged
-        TransitiveCoverage = merged
+        TransitiveCoverage = TestDependencyGraph.computeTransitiveCoverage callGraph merged
         PerFileIndex = updatedPerFile
         SourceVersion = graph.SourceVersion + 1 }
 

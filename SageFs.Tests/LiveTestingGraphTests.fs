@@ -1218,8 +1218,10 @@ let fcsGraphTests = testList "FCS dependency graph builder" [
     graph.SymbolToTests.Count
     |> Expect.equal "should have 2 production symbols" 2
     let addAffected = TestDependencyGraph.findAffected ["MyApp.Math.add"] graph
+    // With transitive coverage, multiply calls add (line-range heuristic),
+    // so changing add affects both addTest (direct) and mulTest (transitive via multiply→add)
     addAffected.Length
-    |> Expect.equal "add should affect 1 test" 1
+    |> Expect.equal "add should affect 2 tests (direct + transitive)" 2
     let mulAffected = TestDependencyGraph.findAffected ["MyApp.Math.multiply"] graph
     mulAffected.Length
     |> Expect.equal "multiply should affect 1 test" 1
