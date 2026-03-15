@@ -122,11 +122,11 @@ SageFs opens an interactive terminal. Then create a session for `YourProject.fsp
 
 ### 4. Connect your editor
 
-**VS Code** — Install the extension from [Releases](https://github.com/WillEhrendreich/SageFs/releases), open an F# file, press `Alt+Enter` on any expression. Result appears inline in < 500ms.
+**VS Code** — Install [SageFs from the VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=willehrendreich.sagefs), open an F# file, press `Alt+Enter` on any expression. Result appears inline in < 500ms.
 
 **Neovim** — Add `"WillEhrendreich/sagefs.nvim"` to your plugin manager. Press `Alt+Enter` to evaluate. See [Neovim setup](https://github.com/WillEhrendreich/sagefs.nvim).
 
-**Visual Studio 2022** — Install the VSIX from [Releases](https://github.com/WillEhrendreich/SageFs/releases). Press `Alt+Enter`. The daemon starts automatically.
+**Visual Studio 2022** — Install [SageFs from the Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=WillEhrendreich.sagefs-visualstudio). Press `Alt+Enter`. The daemon starts automatically.
 
 **Terminal only** — `sagefs tui` for the built-in terminal UI (powered by [SageTUI](https://github.com/WillEhrendreich/sagetui) Elm Architecture), or `sagefs gui` for the Raylib GPU window. Use `sagefs tui --legacy-tui` for the classic imperative renderer.
 
@@ -285,11 +285,7 @@ Every frontend connects to the same daemon. Open several at once — they all se
 
 #### VS Code
 
-The extension is available on the VS Code Marketplace as `willehrendreich.sagefs`, and every GitHub release also includes a `.vsix`. It is written entirely in F# via [Fable](https://fable.io/) — no TypeScript.
-
-```bash
-code --install-extension sagefs-<version>.vsix
-```
+Install from the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=willehrendreich.sagefs), or grab the `.vsix` from [Releases](https://github.com/WillEhrendreich/SageFs/releases) for manual install. Written entirely in F# via [Fable](https://fable.io/) — no TypeScript.
 
 Features: Alt+Enter eval, CodeLens, live test decorations, native Test Explorer integration, hot reload sidebar, session context, type explorer, call graph, event history, dashboard webview, status bar, auto-start, Ionide command hijacking, coverage gutter bars, inline failure decorations, failure narrative enrichment, and test source-jump.
 
@@ -306,7 +302,7 @@ Features: Cell eval, inline results, gutter signs, SSE live updates, live test p
 
 #### Visual Studio
 
-Uses the [VisualStudio.Extensibility](https://learn.microsoft.com/en-us/visualstudio/extensibility/visualstudio.extensibility/) SDK with F# core logic. Eval, CodeLens, session management, diagnostics, coverage gutter glyphs (CoverageGlyphTagger), test source-jump via TestStateTracker, and inline failure narrative context.
+Install from the [Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=WillEhrendreich.sagefs-visualstudio), or grab the `.vsix` from [Releases](https://github.com/WillEhrendreich/SageFs/releases). Uses the [VisualStudio.Extensibility](https://learn.microsoft.com/en-us/visualstudio/extensibility/visualstudio.extensibility/) SDK with F# core logic. Eval, CodeLens, session management, diagnostics, coverage gutter glyphs (CoverageGlyphTagger), test source-jump via TestStateTracker, and inline failure narrative context.
 
 The VS extension includes kill switches for individual features. See the [VS Extension README](sagefs-vs/README.md#kill-switches) for details.
 
