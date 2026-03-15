@@ -168,6 +168,8 @@ dotnet tool install --global SageFs --add-source ./nupkg --no-cache
 
 ## Two Workflows: REPL vs Live
 
+> 📖 **[Full guide: Understanding Workflow Modes](docs/workflow-modes.md)** — decision tree, diagrams, real-world scenarios, troubleshooting, and why live testing isn't a third mode.
+
 SageFs sessions run in one of two modes.The tradeoff is a physical constraint of the .NET runtime — not a SageFs limitation.
 
 **REPL mode** (default) gives you a full interactive F# session. You can redefine types, experiment freely, and iterate on designs. This is what you want when you're prototyping domain types, exploring APIs, or working through a problem interactively.

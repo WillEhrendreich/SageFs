@@ -2,6 +2,7 @@
 
 ## For New Users
 - **[First 5 Minutes](../Readme.md#-first-5-minutes)** — Install → Evaluate → See results
+- **[Workflow Modes Guide](workflow-modes.md)** — REPL vs Live mode, when to use which, and why live testing isn't a mode
 - **[Choosing Your Editor](../Readme.md#what-you-get-in-each-editor)** — VS Code, Neovim, Visual Studio, TUI, Raylib GUI, and MCP clients
 - **[Understanding the Gutter](../Readme.md#-understanding-the-gutter-icons)** — What the colored markers mean
 - **[Language Migration Guides](../Readme.md#welcome-traveler----pick-your-home-language)** — Coming from Python, Jupyter, C#, Java, JS, or Rust

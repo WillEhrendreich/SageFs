@@ -1,5 +1,7 @@
 # 🔥 Hot Reload — How It Works
 
+> **Prerequisite:** Hot reload requires **Live mode**. If you're in REPL mode (the default), browser hot reload is not active. See [Workflow Modes](workflow-modes.md) for how to switch.
+
 1. File watcher detects `.fs`/`.fsx` changes (~500ms debounce)
 2. `#load` sends the file to FSI (~100ms)
 3. [Harmony](https://github.com/pardeike/Harmony) patches method pointers at runtime — no restart
