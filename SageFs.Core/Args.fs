@@ -44,12 +44,14 @@ type WorkerConfig = {
   IsBare: bool
   NoWatch: bool
   AutoOpenNamespaces: bool
-  /// When true, installs the Harmony JIT hook for DevReload browser auto-refresh
-  /// and method detouring. Requires FSI single-assembly mode (--multiemit-).
-  /// WARNING: type redefinition is disabled in single-assembly mode.
-  /// Set via SAGEFS_HOT_RELOAD=1. Default: false.
-  HotReloadEnabled: bool
+  /// The session workflow — determines FSI flags, REPL capability, and hot reload.
+  /// Interactive = full REPL (default). WebLive = save-driven hot reload.
+  /// Derived from SAGEFS_HOT_RELOAD env var for backward compat.
+  Workflow: WorkflowTypes.SessionWorkflow
 }
+  with
+    /// Backward-compatible accessor.
+    member this.HotReloadEnabled = WorkflowTypes.SessionWorkflow.isHotReloadActive this.Workflow
 
 module WorkerConfig =
   let envVar = "SAGEFS_SESSION_PROJECTS"
@@ -91,7 +93,7 @@ module WorkerConfig =
       IsBare = isBare
       NoWatch = noWatch
       AutoOpenNamespaces = autoOpenNamespaces
-      HotReloadEnabled = hotReloadEnabled }
+      Workflow = WorkflowTypes.SessionWorkflow.fromHotReloadBool hotReloadEnabled }
 
   /// Impure shell — reads from real environment.
   let fromEnvironment sessionId httpPort =
@@ -125,7 +127,7 @@ let buildWorkerSpawnConfig
   (isBare: bool)
   (noWatch: bool)
   (autoOpenNamespaces: bool)
-  (hotReloadEnabled: bool)
+  (workflow: WorkflowTypes.SessionWorkflow)
   : string * (string * string) list =
   let args = sprintf "worker --session-id %s --http-port 0" sessionId
   let envVars = [
@@ -133,7 +135,7 @@ let buildWorkerSpawnConfig
     if isBare then WorkerConfig.bareEnvVar, "1"
     if noWatch then WorkerConfig.noWatchEnvVar, "1"
     if not autoOpenNamespaces then WorkerConfig.autoOpenNamespacesEnvVar, "0"
-    if hotReloadEnabled then WorkerConfig.hotReloadEnvVar, "1"
+    if WorkflowTypes.SessionWorkflow.isHotReloadActive workflow then WorkerConfig.hotReloadEnvVar, "1"
   ]
   args, envVars
 

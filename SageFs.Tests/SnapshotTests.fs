@@ -6,6 +6,7 @@ open VerifyTests
 open System.IO
 open SageFs
 open SageFs.AppState
+open SageFs.WorkflowTypes
 
 do try VerifierSettings.DisableRequireUniquePrefix() with _ -> ()
 
@@ -32,7 +33,7 @@ let formatTests =
         LoadedProjects = [ "Test.fsproj" ]
         WorkingDirectory = "/code/test"
         McpPort = 8080
-        HotReloadEnabled = true
+        Workflow = SessionWorkflow.WebLive BrowserRefreshConfig.defaults
         AutoOpenNamespaces = true
         AspireDetected = false
         StartupTimestamp = System.DateTime(2025, 1, 1, 0, 0, 0, System.DateTimeKind.Utc); StartupProfileLoaded = None
@@ -47,7 +48,7 @@ let formatTests =
         LoadedProjects = [ "Test.fsproj" ]
         WorkingDirectory = "/code/test"
         McpPort = 8080
-        HotReloadEnabled = true
+        Workflow = SessionWorkflow.WebLive BrowserRefreshConfig.defaults
         AutoOpenNamespaces = true
         AspireDetected = false
         StartupTimestamp = System.DateTime(2025, 1, 1, 0, 0, 0, System.DateTimeKind.Utc); StartupProfileLoaded = None

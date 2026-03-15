@@ -6,6 +6,7 @@ open System.IO
 open System.Threading.Tasks
 open SageFs
 open SageFs.AppState
+open SageFs.WorkflowTypes
 open SageFs.Features.Events
 open SageFs.McpTools
 open SageFs.Tests.TestInfrastructure
@@ -34,7 +35,7 @@ module StartupConfigTests =
           LoadedProjects = [ "Test.fsproj" ]
           WorkingDirectory = @"C:\Code\Test"
           McpPort = 8080
-          HotReloadEnabled = true
+          Workflow = SessionWorkflow.WebLive BrowserRefreshConfig.defaults
           AutoOpenNamespaces = true
           AspireDetected = false
           StartupTimestamp = DateTime.UtcNow; StartupProfileLoaded = None
@@ -53,7 +54,7 @@ module StartupConfigTests =
           LoadedProjects = []
           WorkingDirectory = ""
           McpPort = 0
-          HotReloadEnabled = false
+          Workflow = SessionWorkflow.Interactive
           AutoOpenNamespaces = true
           AspireDetected = false
           StartupTimestamp = DateTime.UtcNow; StartupProfileLoaded = None
@@ -246,7 +247,7 @@ module McpAdapterEnhancementTests =
           LoadedProjects = [ "Test.fsproj" ]
           WorkingDirectory = @"C:\Test"
           McpPort = 8080
-          HotReloadEnabled = true
+          Workflow = SessionWorkflow.WebLive BrowserRefreshConfig.defaults
           AutoOpenNamespaces = true
           AspireDetected = false
           StartupTimestamp = DateTime.UtcNow; StartupProfileLoaded = None
@@ -265,7 +266,7 @@ module McpAdapterEnhancementTests =
           LoadedProjects = [ "Test.fsproj" ]
           WorkingDirectory = @"C:\Test"
           McpPort = 8080
-          HotReloadEnabled = true
+          Workflow = SessionWorkflow.WebLive BrowserRefreshConfig.defaults
           AutoOpenNamespaces = true
           AspireDetected = false
           StartupTimestamp = DateTime.UtcNow; StartupProfileLoaded = None
@@ -285,7 +286,7 @@ module McpAdapterEnhancementTests =
           LoadedProjects = [ "Test.fsproj" ]
           WorkingDirectory = @"C:\Test"
           McpPort = 8080
-          HotReloadEnabled = true
+          Workflow = SessionWorkflow.WebLive BrowserRefreshConfig.defaults
           AutoOpenNamespaces = true
           AspireDetected = false
           StartupTimestamp = DateTime.UtcNow; StartupProfileLoaded = None

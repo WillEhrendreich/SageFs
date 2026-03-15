@@ -187,19 +187,20 @@ let run (sessionId: string) (port: int) = async {
     IsBare = workerConfig.IsBare
     AutoOpenNamespaces = workerConfig.AutoOpenNamespaces
     OnEvent = onEvent
-    HotReloadEnabled = workerConfig.HotReloadEnabled
+    Workflow = workerConfig.Workflow
   }
 
   let! result =
     ActorCreation.createActor actorArgs |> Async.AwaitTask
   let actor = result.Actor
 
-  // Install DevReload Harmony patches only when hot-reload is explicitly enabled.
-  // WARNING: this installs a process-wide JIT hook that requires FSI single-assembly
-  // mode (--multiemit-), which disables type redefinition in the REPL.
-  // Enable with SAGEFS_HOT_RELOAD=1.
-  if workerConfig.HotReloadEnabled then
+  // Install DevReload Harmony patches only when the workflow requires hot reload.
+  // In WebLive mode, Harmony detours JIT-compiled methods so save → #load → SSE refresh works.
+  // In Interactive mode, this is skipped — full REPL capability preserved.
+  match workerConfig.Workflow with
+  | WorkflowTypes.SessionWorkflow.WebLive _ ->
     DevReloadInjector.install()
+  | WorkflowTypes.SessionWorkflow.Interactive -> ()
 
   // Two-layer RunTest: project assemblies (stable) + dynamic FSI assemblies (updated per eval).
   // Warm-up evals go through the middleware (which discovers tests and builds a RunTest closure),

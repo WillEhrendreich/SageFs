@@ -224,7 +224,7 @@ module SessionManager =
     (autoOpenNamespaces: bool)
     (onExited: int -> int -> unit)
     : Result<Process, SageFsError> =
-    let args, envVars = Args.buildWorkerSpawnConfig (SessionId.value sessionId) projects false false autoOpenNamespaces false
+    let args, envVars = Args.buildWorkerSpawnConfig (SessionId.value sessionId) projects false false autoOpenNamespaces WorkflowTypes.SessionWorkflow.Interactive
 
     let psi = ProcessStartInfo()
     psi.FileName <- "sagefs"

@@ -37,6 +37,8 @@
         <Compile Include="ActorSplitTests.fs" />
         <Compile Include="AffordanceTests.fs" />
         <Compile Include="AffordancesPropertyTests.fs" />
+        <Compile Include="WorkflowPropertyTests.fs" />
+        <Compile Include="WorkflowScenarioTests.fs" />
         <Compile Include="McpAffordanceHardeningTests.fs" />
         <Compile Include="WorkerProtocolTests.fs" />
         <Compile Include="DaemonStateTests.fs" />

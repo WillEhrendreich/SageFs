@@ -6,6 +6,7 @@ open Expecto
 open Expecto.Flip
 open SageFs.ProjectLoading
 open SageFs.Args
+open SageFs.WorkflowTypes
 open SageFs.Server.DaemonMode
 open SageFs.WorkerProtocol
 open SageFs.Tests.SharedGenerators
@@ -128,12 +129,12 @@ let tests =
 
     testList "buildWorkerSpawnConfig" [
       test "includes session ID in args" {
-        let args, _ = buildWorkerSpawnConfig "abc-123" [] false false true false
+        let args, _ = buildWorkerSpawnConfig "abc-123" [] false false true SessionWorkflow.Interactive
         args |> Expect.stringContains "should contain session id" "abc-123"
       }
 
       test "isBare=true includes SAGEFS_BARE_SESSION=1" {
-        let _, envVars = buildWorkerSpawnConfig "s1" [] true false true false
+        let _, envVars = buildWorkerSpawnConfig "s1" [] true false true SessionWorkflow.Interactive
         envVars
         |> List.exists (fun (k, v) -> k = "SAGEFS_BARE_SESSION" && v = "1")
         |> Expect.isTrue "should include SAGEFS_BARE_SESSION=1"

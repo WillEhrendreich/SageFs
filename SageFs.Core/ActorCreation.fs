@@ -40,8 +40,11 @@ type ActorArgs = {
   IsBare: bool
   AutoOpenNamespaces: bool
   OnEvent: Features.Events.SageFsEvent -> unit
-  HotReloadEnabled: bool
+  Workflow: WorkflowTypes.SessionWorkflow
 }
+  with
+    /// Backward-compatible accessor.
+    member this.HotReloadEnabled = WorkflowTypes.SessionWorkflow.isHotReloadActive this.Workflow
 
 type ActorResult = {
   Actor: AppActor
@@ -140,5 +143,5 @@ let mkCommonActorArgs logger useAsp (onEvent: Features.Events.SageFsEvent -> uni
   OutStream = stdout
   Logger = logger
   OnEvent = onEvent
-  HotReloadEnabled = false
+  Workflow = WorkflowTypes.SessionWorkflow.Interactive
 }

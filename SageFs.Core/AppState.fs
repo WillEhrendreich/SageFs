@@ -77,12 +77,15 @@ type StartupConfig = {
   LoadedProjects: string list
   WorkingDirectory: string
   McpPort: int
-  HotReloadEnabled: bool
+  Workflow: WorkflowTypes.SessionWorkflow
   AutoOpenNamespaces: bool
   AspireDetected: bool
   StartupTimestamp: DateTime
   StartupProfileLoaded: string option
 }
+  with
+    /// Backward-compatible accessor for code that still checks the bool.
+    member this.HotReloadEnabled = WorkflowTypes.SessionWorkflow.isHotReloadActive this.Workflow
 
 /// A warm-up failure — alias for the rich WarmupOpenFailure type.
 type WarmupFailure = WarmupOpenFailure
@@ -1412,7 +1415,7 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
               LoadedProjects = sln.Projects |> List.map (fun p -> p.ProjectFileName)
               WorkingDirectory = System.Environment.CurrentDirectory
               McpPort = 0
-              HotReloadEnabled = hotReload
+              Workflow = WorkflowTypes.SessionWorkflow.fromHotReloadBool hotReload
               AutoOpenNamespaces = autoOpenNamespaces
               AspireDetected = useAsp
               StartupTimestamp = DateTime.UtcNow

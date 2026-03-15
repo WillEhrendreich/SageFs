@@ -1029,6 +1029,7 @@ module McpTools =
       (ctx: McpContext) (agentName: string) (code: string) (format: OutputFormat)
       (sessionId: string option) (workingDirectory: string option)
       (filePath: string option) (evalMode: string option) (blockStartLine: int option)
+      (intent: string option)
       : Task<string> =
     withSession ctx agentName sessionId workingDirectory (fun sid -> task {
       // Temporal dedup: skip re-evaluation if identical code was just evaluated
@@ -1077,7 +1078,7 @@ module McpTools =
                    ["fsi.agent.name", box agentName; "fsi.statement.count", box statements.Length; "fsi.session.id", box sid]
       do! EventTracking.trackInput ctx.Persistence sid (Features.Events.McpAgent agentName) code
       // Record agent activity for multi-agent coordination
-      AgentActivityTracker.recordToolCall ctx.ActivityTracker agentName sid filePath None DateTime.UtcNow
+      AgentActivityTracker.recordToolCall ctx.ActivityTracker agentName sid filePath intent DateTime.UtcNow
 
       let mutable allOutputs = []
       for statement in statements do

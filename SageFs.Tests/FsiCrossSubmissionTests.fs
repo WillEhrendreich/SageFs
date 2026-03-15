@@ -44,10 +44,10 @@ let private evalPair code1 code2 =
   let uid = nextUid ()
   let ctx = isolatedCtx (SageFs.WorkerProtocol.SessionId.newId())
   let r1 =
-    sendFSharpCode ctx "test" code1 OutputFormat.Text None None None None None
+    sendFSharpCode ctx "test" code1 OutputFormat.Text None None None None None None
     |> Async.AwaitTask |> Async.RunSynchronously
   let r2 =
-    sendFSharpCode ctx "test" code2 OutputFormat.Text None None None None None
+    sendFSharpCode ctx "test" code2 OutputFormat.Text None None None None None None
     |> Async.AwaitTask |> Async.RunSynchronously
   r1, r2
 

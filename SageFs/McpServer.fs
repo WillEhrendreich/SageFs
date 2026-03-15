@@ -1044,7 +1044,7 @@ let mapExecutionRoutes (app: WebApplication) (rctx: RouteContext) =
                   rctx.SseContext.TestEventBroadcast.Trigger(hbStr)
             with :? System.OperationCanceledException -> ()
           } :> System.Threading.Tasks.Task))
-      let! result = SageFs.McpTools.sendFSharpCode rctx.McpContext "cli-integrated" code SageFs.McpTools.OutputFormat.Text None wd filePath evalMode blockStartLine
+      let! result = SageFs.McpTools.sendFSharpCode rctx.McpContext "cli-integrated" code SageFs.McpTools.OutputFormat.Text None wd filePath evalMode blockStartLine None
       sw.Stop()
       heartbeatCts.Cancel()
       let! _ = heartbeatTask

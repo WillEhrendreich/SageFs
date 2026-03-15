@@ -8,6 +8,7 @@ open System.Text.Json
 open Expecto
 open Expecto.Flip
 open SageFs
+open SageFs.WorkflowTypes
 open SageFs.WarmUp
 open SageFs.Affordances
 open SageFs.AppState
@@ -275,7 +276,7 @@ let startupInfoTests =
         LoadedProjects = ["Test.fsproj"]
         WorkingDirectory = "/code"
         McpPort = 37749
-        HotReloadEnabled = true
+        Workflow = SessionWorkflow.WebLive BrowserRefreshConfig.defaults
         AutoOpenNamespaces = true
         AspireDetected = false
         StartupTimestamp = DateTime.UtcNow
@@ -297,7 +298,7 @@ let startupInfoTests =
         LoadedProjects = ["A.fsproj"; "B.fsproj"]
         WorkingDirectory = "/"
         McpPort = 9999
-        HotReloadEnabled = false
+        Workflow = SessionWorkflow.Interactive
         AutoOpenNamespaces = true
         AspireDetected = true
         StartupTimestamp = DateTime.UtcNow

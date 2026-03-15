@@ -15,28 +15,6 @@ A live F# engine — hot reload, live testing, AI-native — for every editor, f
 </div>
 
 <!-- Replace with hero GIF once recorded: docs/hero-demo.gif -->
-<div align="center">
-
-```
-  ┌─ VS Code / Neovim / Visual Studio / TUI ──────────────────┐
-  │                                                            │
-  │  let taxes income =               ✓ 3 tests passing       │
-  │    match income with                                       │
-  │    | x when x < 10_000 -> 0.0     → val taxes: float→float│
-  │    | x when x < 50_000 -> x*0.2                            │
-  │    | x -> x * 0.35                                         │
-  │                                                            │
-  │  taxes 75_000;;                    → 26250.0               │
-  │                                                            │
-  │  ⚡ SageFs: MyApp.fsproj [1 session]  ✓ 47 / ✗ 0   0.4ms │
-  └────────────────────────────────────────────────────────────┘
-         Edit → Save → Tests pass → Browser updates
-                   All under one second.
-```
-
-</div>
-
-<br/>
 
 > ### 🆕 Never written F#? You're in the right place.
 >

@@ -80,15 +80,18 @@ WORKFLOW: Use this tool instead of dotnet build or dotnet run. SageFs IS your co
         [<Description("How the code is being evaluated: 'file' for whole-file send, 'block' for a selected region. When omitted, auto-detected from code content.")>]
         eval_mode: string,
         [<Description("1-based line number where the selected block starts in the source file. Helps resolve which module the block belongs to in multi-module files.")>]
-        block_start_line: System.Nullable<int>
+        block_start_line: System.Nullable<int>,
+        [<Description("Optional description of what this code is for (e.g. 'refactoring warmup pipeline', 'writing property tests'). Shown in the dashboard so humans and other agents can see what you're working on. Preserved across calls until overwritten by a new non-empty value.")>]
+        intent: string
     ) : Task<string> =
         let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
         let fp = match System.String.IsNullOrWhiteSpace file_path with | true -> None | false -> Some file_path
         let em = match System.String.IsNullOrWhiteSpace eval_mode with | true -> None | false -> Some eval_mode
         let bsl = match block_start_line.HasValue with | true -> Some block_start_line.Value | false -> None
+        let intentOpt = match System.String.IsNullOrWhiteSpace intent with | true -> None | false -> Some intent
         logger.LogDebug("MCP-TOOL: send_fsharp_code called by {AgentName}: {Code}", agentName, code)
         SageFs.Instrumentation.mcpToolInvocations.Add(1L)
-        sendFSharpCode ctx agentName code OutputFormat.Text None wd fp em bsl
+        sendFSharpCode ctx agentName code OutputFormat.Text None wd fp em bsl intentOpt
     
     [<McpServerTool>]
     [<Description("""Load and execute an F# script file (.fsx). The file is parsed into individual statements and each statement is sent to the FSI session separately, so partial progress is preserved if one statement fails.
@@ -446,11 +449,14 @@ AFTER CREATION:
 projects: Comma-separated list of absolute or relative .fsproj file paths.""")>]
     member _.create_session(
         [<Description("Comma-separated list of .fsproj files to load")>] projects: string,
-        [<Description("Working directory for the session")>] working_directory: string
+        [<Description("Working directory for the session")>] working_directory: string,
+        [<Description("Your agent or model name (e.g. 'claude', 'copilot', 'cursor'). Used for session routing and multi-agent coordination. Defaults to 'mcp' if omitted.")>]
+        agentName: string
     ) : Task<string> =
-        logger.LogDebug("MCP-TOOL: create_session called: projects={Projects}, dir={Dir}", projects, working_directory)
+        let agent = match System.String.IsNullOrWhiteSpace agentName with | true -> "mcp" | false -> agentName
+        logger.LogDebug("MCP-TOOL: create_session called: projects={Projects}, dir={Dir}, agent={Agent}", projects, working_directory, agent)
         let projectList = projects.Split(',') |> Array.map (fun s -> s.Trim()) |> Array.toList
-        createSession ctx "mcp" projectList working_directory |> withEcho "create_session"
+        createSession ctx agent projectList working_directory |> withEcho "create_session"
 
     [<McpServerTool>]
     [<Description("""List all active FSI sessions with their metadata: session ID, project names, current status, working directory, and last activity timestamp.
