@@ -6,7 +6,7 @@ open FsCheck.FSharp
 open SageFs
 open SageFs.Tests.SharedGenerators
 
-let cellGridTests = testList "CellGrid" [
+let cellGridTests = testList "CellGrid bounds safety and value integrity" [
   test "create makes grid of empty cells" {
     let grid = CellGrid.create 3 4
     Expect.equal (CellGrid.rows grid) 3 "rows"
@@ -105,7 +105,7 @@ let cellGridTests = testList "CellGrid" [
   }
 ]
 
-let rectTests = testList "Rect" [
+let rectTests = testList "Rect geometry preserves invariants" [
   test "create clamps negative values" {
     let r = Rect.create -5 -3 -1 -2
     Expect.equal r.Row 0 "row clamped"
@@ -181,9 +181,28 @@ let rectTests = testList "Rect" [
     Expect.equal (Rect.right r) 30 "right edge"
     Expect.equal (Rect.bottom r) 20 "bottom edge"
   }
+
+  testPropertyWithConfig propConfig
+    "contains(row,col) = true iff row ∈ [r.Row..r.Row+h) ∧ col ∈ [r.Col..r.Col+w)" <|
+    Prop.forAll (Arb.fromGen genSmallRect) (fun r ->
+      Prop.forAll
+        (Arb.fromGen (gen {
+          let! row = Gen.choose (-5, r.Row + r.Height + 5)
+          let! col = Gen.choose (-5, r.Col + r.Width + 5)
+          return (row, col)
+        }))
+        (fun (row, col) ->
+          let expected =
+            row >= r.Row && row < r.Row + r.Height
+            && col >= r.Col && col < r.Col + r.Width
+          Expect.equal
+            (Rect.contains row col r)
+            expected
+            (sprintf "contains(%d,%d) in rect(%d,%d,%d,%d)"
+              row col r.Row r.Col r.Width r.Height)))
 ]
 
-let drawTests = testList "Draw" [
+let drawTests = testList "Draw primitives render correctly" [
   test "text writes at correct position" {
     let grid = CellGrid.create 3 10
     let dt = DrawTarget.create grid (Rect.create 0 0 10 3)
@@ -253,7 +272,7 @@ let drawTests = testList "Draw" [
   }
 ]
 
-let ansiEmitterTests = testList "AnsiEmitter" [
+let ansiEmitterTests = testList "AnsiEmitter produces correct ANSI sequences" [
   test "uniform color grid emits minimal escape codes" {
     let grid = CellGrid.create 2 3
     let dt = DrawTarget.create grid (Rect.create 0 0 3 2)
@@ -304,7 +323,7 @@ let ansiEmitterTests = testList "AnsiEmitter" [
   }
 ]
 
-let junctionTests = testList "resolveJunctions" [
+let junctionTests = testList "resolveJunctions connects box-drawing characters" [
   test "stacked corners get T-junctions" {
     let brN = Theme.hexToRgb Theme.borderNormal
     let bgP = Theme.hexToRgb Theme.bgPanel
@@ -373,7 +392,7 @@ let junctionTests = testList "resolveJunctions" [
   }
 ]
 
-let performanceTests = testList "Performance" [
+let performanceTests = testList "Performance stays within allocation budgets" [
   test "CellGrid clear 200x60 under 100µs" {
     let grid = CellGrid.create 60 200
     let sw = System.Diagnostics.Stopwatch.StartNew()
@@ -506,6 +525,41 @@ let cellGridPropertyTests = testList "CellGrid properties" [
       let grid = CellGrid.create rows cols
       Expect.equal (CellGrid.get grid rows cols) Cell.empty "out of bounds"
       Expect.equal (CellGrid.get grid -1 0) Cell.empty "negative"
+
+  testPropertyWithConfig propConfig "set out-of-bounds is always a silent no-op" <|
+    Prop.forAll (Arb.fromGen genCell) (fun cell ->
+      let grid = CellGrid.create 5 5
+      let clone = CellGrid.clone grid
+      // Set at various OOB positions — grid must remain unchanged
+      CellGrid.set grid -1 0 cell
+      CellGrid.set grid 0 -1 cell
+      CellGrid.set grid 5 0 cell
+      CellGrid.set grid 0 5 cell
+      CellGrid.set grid 99 99 cell
+      CellGrid.set grid -100 -100 cell
+      for r in 0 .. 4 do
+        for c in 0 .. 4 do
+          Expect.equal
+            (CellGrid.get grid r c)
+            (CellGrid.get clone r c)
+            (sprintf "cell at (%d,%d) should be unchanged" r c))
+
+  testPropertyWithConfig propConfig "set then get at same position returns the set value" <|
+    fun (PositiveInt rows) (PositiveInt cols) ->
+      let rows = min (max rows 1) 30
+      let cols = min (max cols 1) 30
+      Prop.forAll (Arb.fromGen genCell) (fun cell ->
+        Prop.forAll
+          (Arb.fromGen (
+            gen {
+              let! r = Gen.choose (0, rows - 1)
+              let! c = Gen.choose (0, cols - 1)
+              return (r, c)
+            }))
+          (fun (r, c) ->
+            let grid = CellGrid.create rows cols
+            CellGrid.set grid r c cell
+            Expect.equal (CellGrid.get grid r c) cell "roundtrip"))
 ]
 
 let cellGridPoolTests = testList "CellGrid.rent/release" [

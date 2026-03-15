@@ -14,7 +14,7 @@ let pushMany (items: 'T list) (buf: RingBuffer<'T>) =
 
 [<Tests>]
 let ringBufferTests =
-  testList "RingBuffer" [
+  testList "RingBuffer capacity safety and insertion order" [
 
     testList "create" [
       test "creates empty buffer with given capacity" {

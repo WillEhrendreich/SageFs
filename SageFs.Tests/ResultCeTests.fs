@@ -6,7 +6,7 @@ open FsToolkit.ErrorHandling
 open SageFs
 
 [<Tests>]
-let resultCeTests = testList "ResultCE" [
+let resultCeTests = testList "Result CE short-circuits on Error and chains Ok" [
 
   test "result CE returns Ok for pure value" {
     let r = result { return 42 }
@@ -97,4 +97,38 @@ let resultCeTests = testList "ResultCE" [
     }
     outer () |> Expect.equal "should delegate" (Ok 42)
   }
+
+  // ── Monad law properties ──
+
+  testProperty "left identity: return a >>= f ≡ f a" <| fun (a: int) ->
+    let f x : Result<int, string> =
+      match x % 2 = 0 with
+      | true -> Ok (x * 3)
+      | false -> Error "odd"
+    let lhs = result { let! x = Ok a in return! f x }
+    let rhs = f a
+    lhs = rhs
+
+  testProperty "right identity: m >>= return ≡ m" <| fun (a: int) ->
+    let m : Result<int, string> =
+      match a >= 0 with
+      | true -> Ok a
+      | false -> Error "negative"
+    let bound = result { let! x = m in return x }
+    bound = m
+
+  testProperty "associativity: (m >>= f) >>= g ≡ m >>= (fun x -> f x >>= g)" <| fun (a: int) ->
+    let m : Result<int, string> =
+      match a >= 0 with
+      | true -> Ok a
+      | false -> Error "negative"
+    let f x : Result<int, string> =
+      match x < 1000 with
+      | true -> Ok (x + 1)
+      | false -> Error "too large"
+    let g x : Result<string, string> =
+      Ok (sprintf "v=%d" x)
+    let lhs = result { let! x = (result { let! y = m in return! f y }) in return! g x }
+    let rhs = result { let! y = m in let! z = f y in return! g z }
+    lhs = rhs
 ]

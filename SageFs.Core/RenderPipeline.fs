@@ -45,6 +45,11 @@ module Rect =
     let leftW = int (float r.Width * frac)
     splitV leftW r
 
+  /// Does the rect contain the point (row, col)?
+  let contains (row: int) (col: int) (r: Rect) =
+    row >= r.Row && row < r.Row + r.Height
+    && col >= r.Col && col < r.Col + r.Width
+
 /// Flags controlling how a render region behaves
 [<Flags>]
 type RegionFlags =

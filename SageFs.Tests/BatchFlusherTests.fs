@@ -6,7 +6,7 @@ open SageFs
 open System.Threading
 
 [<Tests>]
-let batchFlusherTests = testList "BatchFlusher" [
+let batchFlusherTests = testList "BatchFlusher never loses items and respects capacity" [
 
   test "flushes when count reaches maxBatchSize" {
     let flushed = ResizeArray<int array>()

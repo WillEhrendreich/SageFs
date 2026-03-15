@@ -996,7 +996,7 @@ let daemonRoundtripPropertyTests = testList "Daemon Roundtrip Properties" [
 
 // ─── Robustness Tests ────────────────────────────────────────────
 
-let robustnessTests = testList "Robustness" [
+let robustnessTests = testList "Robustness rejects corrupted and adversarial input" [
   testCase "all Outcome values roundtrip through STC" <| fun _ ->
     for o in [ Outcome.Pass; Outcome.Fail; Outcome.Skip; Outcome.Error ] do
       let d: StcData = {
@@ -1745,7 +1745,7 @@ let sessionIsolationTests = testList "Session Isolation" [
 ]
 
 [<Tests>]
-let allBinaryFormatTests = testList "Binary Format" [
+let allBinaryFormatTests = testList "Binary Format encode-decode identity and corruption detection" [
   primitiveTests
   stcTests
   sfsTests
