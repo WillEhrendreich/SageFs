@@ -213,6 +213,100 @@ let private propertyTests =
         let first = WorkflowDetection.suggest packageRefs
         let second = WorkflowDetection.suggest packageRefs
         first = second)
+
+    testProperty
+      "empty list never suggests anything — stability"
+      (fun () ->
+        WorkflowDetection.suggest [] = None)
+
+    testProperty
+      "adding unknown packages does not change suggestion"
+      (fun (unknowns: string list) ->
+        let known = [ "Falco.Datastar" ]
+        let unknownsFiltered =
+          unknowns
+          |> List.filter (fun s ->
+            not (s.Contains("Falco"))
+            && not (s.Contains("Giraffe"))
+            && not (s.Contains("Saturn"))
+            && not (s.Contains("Datastar"))
+            && not (s.Contains("Microsoft.AspNetCore")))
+        WorkflowDetection.suggest known
+          = WorkflowDetection.suggest (known @ unknownsFiltered))
+
+    testProperty
+      "suggest is idempotent with respect to deduplication"
+      (fun (refs: string list) ->
+        WorkflowDetection.suggest refs
+          = WorkflowDetection.suggest (List.distinct refs))
+
+    testProperty
+      "Datastar dominance — Falco.Datastar always surfaces in detected packages"
+      (fun (others: string list) ->
+        let refs = "Falco.Datastar" :: others
+        match WorkflowDetection.suggest refs with
+        | Some s ->
+          s.DetectedPackages
+          |> List.exists (fun p -> p.Contains("Datastar"))
+        | None -> false)
+  ]
+
+// ── extractPackageNames properties ─────────────────────────
+
+let private extractionTests =
+  testList "extractPackageNames" [
+
+    testCase
+      "empty project list yields empty package names"
+      <| fun _ ->
+      WorkflowDetection.extractPackageNames []
+      |> Expect.isEmpty
+        "no projects means no packages"
+
+    testCase
+      "test project packages are excluded"
+      <| fun _ ->
+      let input =
+        [ [ "Falco"; "Falco.Datastar" ]
+          [ "Expecto"; "FSharp.Core" ] ]
+      let result =
+        WorkflowDetection.extractPackageNames input
+      result
+      |> Expect.contains
+        "should contain Falco" "Falco"
+      result
+      |> List.contains "Expecto"
+      |> Expect.isFalse
+        "test project packages should be excluded"
+
+    testCase
+      "non-test project packages are returned"
+      <| fun _ ->
+      let input = [ [ "Falco"; "FSharp.Core" ] ]
+      let result =
+        WorkflowDetection.extractPackageNames input
+      result
+      |> Expect.isNonEmpty
+        "non-test project packages should be returned"
+
+    testProperty
+      "extractPackageNames returns distinct results"
+      (fun (packages: string list) ->
+        let input = [ packages; packages ]
+        let result =
+          WorkflowDetection.extractPackageNames input
+        result = List.distinct result)
+
+    testProperty
+      "test projects never leak into extracted packages"
+      (fun (nonTestPkgs: string list) ->
+        let testProject = [ "Expecto"; "FSharp.Core" ]
+        let input = [ nonTestPkgs; testProject ]
+        let result =
+          WorkflowDetection.extractPackageNames input
+        result
+        |> List.contains "Expecto"
+        |> not)
   ]
 
 // ── Root export ────────────────────────────────────────────────
@@ -226,4 +320,5 @@ let workflowDetectionWiringTests =
     alreadyWebLiveScenarios
     purityScenarios
     propertyTests
+    extractionTests
   ]

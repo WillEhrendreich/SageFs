@@ -225,7 +225,8 @@ module WorkflowDetection =
     [ "Falco.Datastar"; "Starfederation.Datastar" ]
 
   let private webPackages =
-    [ "Falco"; "Giraffe"; "Saturn"; "Microsoft.AspNetCore" ]
+    [ "Falco"; "Falco.Htmx"; "Giraffe"; "Saturn"
+      "Microsoft.AspNetCore" ]
 
   let private findMatches (knownPackages: string list) (projectRefs: string list) =
     projectRefs
@@ -256,3 +257,26 @@ module WorkflowDetection =
         DetectedPackages = webHits
       }
     | [], [] -> None
+
+  // ── Package extraction (pure) ─────────────────────────────
+
+  /// Package names that indicate a test project.
+  let private testPackageNames =
+    [ "Expecto"; "xunit"; "xunit.v3"; "NUnit"
+      "MSTest.TestFramework"; "Microsoft.NET.Test.Sdk" ]
+
+  /// True when the package list looks like a test project.
+  let isTestPackageSet (packages: string list) =
+    packages
+    |> List.exists (fun pkg ->
+      testPackageNames
+      |> List.exists (fun tp ->
+        pkg.StartsWith(tp, System.StringComparison.OrdinalIgnoreCase)))
+
+  /// Extract package reference names from grouped per-project packages,
+  /// filtering out test projects. Returns a distinct union of all names.
+  let extractPackageNames (projectPackages: string list list) : string list =
+    projectPackages
+    |> List.filter (isTestPackageSet >> not)
+    |> List.concat
+    |> List.distinct

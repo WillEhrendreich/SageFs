@@ -7,6 +7,7 @@ open System.IO
 open System.Text.Json
 open System.Text.Json.Serialization
 open System.Threading.Tasks
+open System.Xml.Linq
 open SageFs.AppState
 open SageFs.WarmUp
 open SageFs.Features.CellDependenciesReport
@@ -1485,6 +1486,19 @@ module McpTools =
       | None -> None
     | WorkflowTypes.SessionWorkflow.WebLive _ -> None
 
+  /// Read PackageReference Include values from a .fsproj file.
+  /// Returns [] on any IO or parse error (non-blocking best-effort).
+  let private readFsprojPackageRefs (path: string) : string list =
+    try
+      let doc = XDocument.Load(path)
+      doc.Descendants(XName.Get("PackageReference"))
+      |> Seq.choose (fun el ->
+        match el.Attribute(XName.Get("Include")) with
+        | null -> None
+        | a -> Some a.Value)
+      |> Seq.toList
+    with _ -> []
+
   /// Create a new session and bind it to the requesting agent.
   let createSession (ctx: McpContext) (agent: string) (projects: string list) (workingDir: string) (workflow: WorkflowTypes.SessionWorkflow) : Task<string> =
     task {
@@ -1509,8 +1523,10 @@ module McpTools =
       | Result.Ok sid ->
         setActiveSessionId ctx agent sid
         // Surface workflow detection hint (non-blocking, informational only).
-        // packageRefs is [] until .fsproj reading is wired in a future phase.
-        let packageRefs: string list = []
+        let packageRefs =
+          projects
+          |> List.map readFsprojPackageRefs
+          |> WorkflowTypes.WorkflowDetection.extractPackageNames
         match formatDetectionHint packageRefs workflow with
         | Some hint -> return sprintf "%s\n\n%s" sid hint
         | None -> return sid
