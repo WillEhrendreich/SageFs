@@ -84,7 +84,7 @@ let renderThemePicker (selectedTheme: string) =
         [ Text.raw name ]))
 
 
-let renderSessionStatus (sessionState: string) (sessionId: string) (workingDir: string) (warmupProgress: string) =
+let renderSessionStatus (sessionState: string) (sessionId: string) (workingDir: string) (warmupProgress: string) (workflowLabel: string) =
   let warmupNode =
     match warmupProgress.Length > 0 with
     | true ->
@@ -93,10 +93,19 @@ let renderSessionStatus (sessionState: string) (sessionId: string) (workingDir: 
           Text.raw (sprintf "⏳ %s" warmupProgress)
         ] ]
     | false -> []
+  let workflowBadgeClass =
+    match workflowLabel with
+    | "Live" -> "badge badge-live"
+    | _ -> "badge badge-workflow"
+  let workflowNode =
+    [ Elem.span [ Attr.class' workflowBadgeClass ] [
+        Text.raw workflowLabel
+      ] ]
   match sessionState with
   | "Ready" ->
     Elem.div [ Attr.id DomIds.SessionStatus; Attr.create "data-working-dir" workingDir ] [
       yield Elem.span [ Attr.class' "status status-ready" ] [ Text.raw sessionState ]
+      yield! workflowNode
       yield Elem.br []
       yield Elem.span [ Attr.class' "meta" ] [
         Text.raw (sprintf "Session: %s | CWD: %s" sessionId workingDir)
@@ -110,6 +119,7 @@ let renderSessionStatus (sessionState: string) (sessionId: string) (workingDir: 
       | _ -> "status-faulted"
     Elem.div [ Attr.id DomIds.SessionStatus; Attr.create "data-working-dir" workingDir ] [
       yield Elem.span [ Attr.class' (sprintf "status %s" statusClass) ] [ Text.raw sessionState ]
+      yield! workflowNode
       yield Elem.br []
       yield Elem.span [ Attr.class' "meta" ] [
         Text.raw (sprintf "Session: %s | CWD: %s" sessionId workingDir)
@@ -985,7 +995,7 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
     Elem.div [ Attr.class' "app-header" ] [
       Elem.h1 [] [ Text.raw (sprintf "🧙 SageFs v%s" snap.Version) ]
       Elem.div [ Attr.class' "flex-row"; Attr.style "gap: 0.75rem; align-items: center;" ] [
-        renderSessionStatus snap.SessionState snap.SessionId snap.WorkingDir snap.WarmupProgress
+        renderSessionStatus snap.SessionState snap.SessionId snap.WorkingDir snap.WarmupProgress snap.WorkflowLabel
         renderEvalStats snap.EvalStats
         snap.ThemePicker
         Elem.button

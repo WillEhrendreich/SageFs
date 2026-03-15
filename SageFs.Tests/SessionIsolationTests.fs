@@ -38,6 +38,7 @@ module McpSessionIsolation =
                      Projects = []; WorkingDirectory = ""; SolutionRoot = None
                      Status = WorkerProtocol.SessionStatus.Ready
                      WorkerPid = None
+                     Workflow = WorkflowTypes.SessionWorkflow.Interactive
                      CreatedAt = System.DateTime.UtcNow
                      LastActivity = System.DateTime.UtcNow })
           GetAllSessions = fun () -> System.Threading.Tasks.Task.FromResult([])
@@ -185,6 +186,7 @@ module SessionResolutionByWorkingDir =
       WorkingDirectory = workDir; SolutionRoot = None
       Status = WorkerProtocol.SessionStatus.Ready
       WorkerPid = None
+      Workflow = WorkflowTypes.SessionWorkflow.Interactive
       CreatedAt = System.DateTime.UtcNow
       LastActivity = System.DateTime.UtcNow }
 
@@ -259,6 +261,7 @@ module WorkingDirRoutingPriority =
       WorkingDirectory = workDir; SolutionRoot = None
       Status = WorkerProtocol.SessionStatus.Ready
       WorkerPid = Some 1234
+      Workflow = WorkflowTypes.SessionWorkflow.Interactive
       CreatedAt = System.DateTime.UtcNow
       LastActivity = System.DateTime.UtcNow }
 
@@ -431,6 +434,7 @@ module ResetIsolation =
           Some { WorkerProtocol.SessionInfo.Id = id
                  Name = None; Projects = []; WorkingDirectory = ""; SolutionRoot = None
                  Status = WorkerProtocol.SessionStatus.Ready; WorkerPid = None
+                 Workflow = WorkflowTypes.SessionWorkflow.Interactive
                  CreatedAt = System.DateTime.UtcNow; LastActivity = System.DateTime.UtcNow })
       GetAllSessions = fun () -> System.Threading.Tasks.Task.FromResult([])
       GetStandbyInfo = fun () -> System.Threading.Tasks.Task.FromResult(SageFs.StandbyInfo.NoPool)

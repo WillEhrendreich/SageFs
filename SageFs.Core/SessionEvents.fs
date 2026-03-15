@@ -13,6 +13,8 @@ type SessionEvent =
   | SessionActivated of sessionId: string
   | SessionCreated of sessionId: string * projectNames: string list
   | SessionStopped of sessionId: string
+  | WorkflowSwitching of sessionId: string * fromLabel: string * toLabel: string
+  | WorkflowSwitched of sessionId: string * label: string * replCapability: string * hotReloadActive: bool
 
 /// SSE event type name for all session events.
 let sessionEventType = "session"
@@ -25,6 +27,8 @@ module SessionEventSubtype =
   let sessionActivated = "session_activated"
   let sessionCreated = "session_created"
   let sessionStopped = "session_stopped"
+  let workflowSwitching = "workflow_switching"
+  let workflowSwitched = "workflow_switched"
 
 /// Serialize a SessionEvent to a JSON string.
 let serializeSessionEvent (evt: SessionEvent) : string =
@@ -123,6 +127,17 @@ let serializeSessionEvent (evt: SessionEvent) : string =
   | SessionStopped sid ->
     writeStr "type" SessionEventSubtype.sessionStopped
     writeStr "sessionId" sid
+  | WorkflowSwitching(sid, fromLabel, toLabel) ->
+    writeStr "type" SessionEventSubtype.workflowSwitching
+    writeStr "sessionId" sid
+    writeStr "fromWorkflow" fromLabel
+    writeStr "toWorkflow" toLabel
+  | WorkflowSwitched(sid, label, replCap, hotReload) ->
+    writeStr "type" SessionEventSubtype.workflowSwitched
+    writeStr "sessionId" sid
+    writeStr "workflowLabel" label
+    writeStr "replCapability" replCap
+    writeBool "hotReloadActive" hotReload
   w.WriteEndObject()
   w.Flush()
   Encoding.UTF8.GetString(ms.ToArray())

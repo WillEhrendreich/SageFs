@@ -18,7 +18,8 @@ let mkInfo (id: SessionId) status lastActive : SessionInfo =
     CreatedAt = DateTime(2026, 2, 14, 10, 0, 0)
     LastActivity = lastActive
     Status = status
-    WorkerPid = Some 1234 }
+    WorkerPid = Some 1234
+    Workflow = WorkflowTypes.SessionWorkflow.Interactive }
 
 [<Tests>]
 let displayStatusTests = testList "SessionDisplay.displayStatus" [

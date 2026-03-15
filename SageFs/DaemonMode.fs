@@ -1682,6 +1682,13 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
       match workers with
       | [] -> ""
       | _ -> "guidance-contested"
+    GetSessionWorkflow = fun sessionId ->
+      match WorkerProtocol.SessionId.validate sessionId with
+      | Ok sidTyped ->
+        match SessionManager.QuerySnapshot.tryGetSession sidTyped (readSnapshot()) with
+        | Some info -> info.Workflow
+        | None -> WorkflowTypes.SessionWorkflow.Interactive
+      | Error _ -> WorkflowTypes.SessionWorkflow.Interactive
   }
 
   let dashboardActions : DashboardActions = {

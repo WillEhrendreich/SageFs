@@ -45,6 +45,11 @@ type ReplCapability =
   /// Expression eval, function calls — no type/module redefinition.
   | ExpressionOnly
 
+module ReplCapability =
+  let label = function
+    | ReplCapability.Full -> "Full"
+    | ReplCapability.ExpressionOnly -> "ExpressionOnly"
+
 // ─── Session workflow (the main DU) ─────────────────────────
 
 /// The session workflow — what the user chose at session creation.
@@ -115,6 +120,90 @@ module TransitionCost =
     CellsLost = 0
     EstimatedRestart = System.TimeSpan.Zero
     StandbyReady = false
+  }
+
+  /// Zero-cost switches skip confirmation.
+  /// True when there's no REPL state to lose.
+  let isZeroCost (cost: TransitionCost) =
+    cost.DefinitionsLost = 0 && cost.CellsLost = 0
+
+  /// Compute transition cost from observable session state.
+  let compute (evalCount: int) (cellCount: int) (standbyReady: bool) = {
+    DefinitionsLost = evalCount
+    CellsLost = cellCount
+    EstimatedRestart =
+      match standbyReady with
+      | true -> System.TimeSpan.FromMilliseconds 200.0
+      | false -> System.TimeSpan.FromSeconds 15.0
+    StandbyReady = standbyReady
+  }
+
+// ─── Workflow switch result ─────────────────────────────────
+
+/// Result of a switch_workflow call.
+/// Always includes cost (even for no-ops and dry-runs).
+type WorkflowSwitchResult = {
+  /// Workflow before the switch.
+  PreviousWorkflow: string
+  /// Target workflow requested.
+  TargetWorkflow: string
+  /// Computed cost of the transition.
+  Cost: TransitionCost
+  /// Whether the switch was actually executed.
+  Switched: bool
+  /// New session ID if a switch was performed.
+  NewSessionId: string option
+  /// Human-readable summary of what happened.
+  Message: string
+}
+
+module WorkflowSwitchResult =
+  /// Create a no-op result when target = current workflow.
+  let alreadyInWorkflow (workflow: SessionWorkflow) (cost: TransitionCost) = {
+    PreviousWorkflow = SessionWorkflow.label workflow
+    TargetWorkflow = SessionWorkflow.label workflow
+    Cost = cost
+    Switched = false
+    NewSessionId = None
+    Message =
+      sprintf "Already in %s workflow — no switch needed"
+        (SessionWorkflow.label workflow)
+  }
+
+  /// Create a dry-run preview result.
+  let preview
+    (current: SessionWorkflow)
+    (target: SessionWorkflow)
+    (cost: TransitionCost) = {
+    PreviousWorkflow = SessionWorkflow.label current
+    TargetWorkflow = SessionWorkflow.label target
+    Cost = cost
+    Switched = false
+    NewSessionId = None
+    Message =
+      sprintf "Preview: switching from %s to %s would lose %d definitions and %d cells"
+        (SessionWorkflow.label current)
+        (SessionWorkflow.label target)
+        cost.DefinitionsLost
+        cost.CellsLost
+  }
+
+  /// Create a successful switch result.
+  let switched
+    (previous: SessionWorkflow)
+    (target: SessionWorkflow)
+    (cost: TransitionCost)
+    (newSessionId: string) = {
+    PreviousWorkflow = SessionWorkflow.label previous
+    TargetWorkflow = SessionWorkflow.label target
+    Cost = cost
+    Switched = true
+    NewSessionId = Some newSessionId
+    Message =
+      sprintf "Switched from %s to %s (new session: %s)"
+        (SessionWorkflow.label previous)
+        (SessionWorkflow.label target)
+        newSessionId
   }
 
 // ─── Workflow suggestion (project detection) ────────────────

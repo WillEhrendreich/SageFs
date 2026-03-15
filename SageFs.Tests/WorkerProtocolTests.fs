@@ -278,6 +278,7 @@ let workerProtocolTests =
           LastActivity = DateTime(2026, 1, 1)
           Status = SessionStatus.Ready
           WorkerPid = Some 1234
+          Workflow = WorkflowTypes.SessionWorkflow.Interactive
         }
         SessionInfo.displayName info
         |> Expect.equal "should use solution root dir name" "SageFs"
@@ -294,6 +295,7 @@ let workerProtocolTests =
           LastActivity = DateTime(2026, 1, 1)
           Status = SessionStatus.Ready
           WorkerPid = None
+          Workflow = WorkflowTypes.SessionWorkflow.Interactive
         }
         SessionInfo.displayName info
         |> Expect.equal "should use working dir name" "MyApp"
@@ -345,6 +347,7 @@ let workerProtocolTests =
           LastActivity = DateTime(2026, 2, 13, 12, 30, 0)
           Status = SessionStatus.Evaluating
           WorkerPid = Some 5678
+          Workflow = WorkflowTypes.SessionWorkflow.Interactive
         }
         let _, result = roundTrip<SessionInfo> info
         result |> Expect.equal "should round-trip" info

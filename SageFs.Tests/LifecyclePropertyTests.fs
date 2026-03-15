@@ -265,6 +265,7 @@ let querySnapshotTests = testList "QuerySnapshot projection properties" [
             SolutionRoot = None; CreatedAt = DateTime.UtcNow
             LastActivity = DateTime.UtcNow
             Status = SessionStatus.Ready; WorkerPid = Some 1234
+            Workflow = WorkflowTypes.SessionWorkflow.Interactive
           }
           Process = null; Proxy = pendingProxy; WorkerBaseUrl = ""
           Projects = ["p.fsproj"]; WorkingDir = "C:\\test"
@@ -287,6 +288,7 @@ let querySnapshotTests = testList "QuerySnapshot projection properties" [
           SolutionRoot = None; CreatedAt = DateTime.UtcNow
           LastActivity = DateTime.UtcNow
           Status = status; WorkerPid = Some 1234
+          Workflow = WorkflowTypes.SessionWorkflow.Interactive
         }
         Process = null; Proxy = pendingProxy; WorkerBaseUrl = ""
         Projects = ["p.fsproj"]; WorkingDir = "C:\\test"
@@ -309,6 +311,7 @@ let querySnapshotTests = testList "QuerySnapshot projection properties" [
         SolutionRoot = None; CreatedAt = DateTime.UtcNow
         LastActivity = DateTime.UtcNow
         Status = SessionStatus.Ready; WorkerPid = Some 1
+        Workflow = WorkflowTypes.SessionWorkflow.Interactive
       }
       Process = null; Proxy = pendingProxy; WorkerBaseUrl = url
       Projects = ["p.fsproj"]; WorkingDir = "C:\\test"
@@ -334,6 +337,7 @@ let querySnapshotTests = testList "QuerySnapshot projection properties" [
         SolutionRoot = None; CreatedAt = DateTime.UtcNow
         LastActivity = DateTime.UtcNow
         Status = SessionStatus.Ready; WorkerPid = Some 1
+        Workflow = WorkflowTypes.SessionWorkflow.Interactive
       }
       Process = null; Proxy = pendingProxy; WorkerBaseUrl = ""
       Projects = ["p.fsproj"]; WorkingDir = "C:\\test"
