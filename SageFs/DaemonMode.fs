@@ -1895,12 +1895,14 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
 
   // Periodic status polling — refreshes session status (Starting → Ready)
   // so SSE subscribers see warmup progress in real time.
+  // 10s interval: steady-state polling is cheap (short-circuited when unchanged)
+  // but avoids the 2s cascade that dominated the render budget.
   let _statusPollTask =
     System.Threading.Tasks.Task.Run(fun () ->
       task {
         try
           while not cts.Token.IsCancellationRequested do
-            do! System.Threading.Tasks.Task.Delay(2000, cts.Token)
+            do! System.Threading.Tasks.Task.Delay(10_000, cts.Token)
             elmRuntime.Dispatch(SageFsMsg.Editor EditorAction.ListSessions)
         with
         | :? OperationCanceledException -> ()

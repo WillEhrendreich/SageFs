@@ -467,11 +467,15 @@ module SageFsUpdate =
           | ActiveSession.AwaitingSession when not (List.isEmpty merged) ->
             ActiveSession.Viewing merged.Head.Id
           | _ -> activeId
-        { model with
-            Sessions = {
-              model.Sessions with
-                Sessions = merged
-                ActiveSessionId = activeId' } }, []
+        // Short-circuit: if sessions and active ID are unchanged, return same model (no render)
+        match merged = model.Sessions.Sessions && activeId' = activeId with
+        | true -> model, []
+        | false ->
+          { model with
+              Sessions = {
+                model.Sessions with
+                  Sessions = merged
+                  ActiveSessionId = activeId' } }, []
 
       | SageFsEvent.SessionStatusChanged (sessionId, status) ->
         { model with
@@ -590,29 +594,33 @@ module SageFsUpdate =
           { model with RecentOutput = SageFsModel.addOutput lines model.RecentOutput }, []
 
       | SageFsEvent.WarmupContextUpdated ctx ->
-        // Only show banner on first arrival; repeated dispatches (from periodic
-        // RequestSessionList) just update context silently to avoid flooding output.
-        let bannerLines =
-          match model.SessionContext with
-          | None -> WarmupBanner.toOutputLines ctx
-          | Some _ -> []
-        // Re-map any ReflectionOnly tests now that we have source file paths
-        let sourceFiles = ctx.FileStatuses |> List.map (fun f -> f.Path) |> Array.ofList
-        let lt =
-          match Array.isEmpty sourceFiles with
-          | true -> model.LiveTesting
-          | false ->
-            recomputeStatuses model.LiveTesting (fun s ->
-              let remapped = Features.LiveTesting.SourceMapping.mapFromProjectFiles sourceFiles s.DiscoveredTests
-              { s with DiscoveredTests = remapped })
-        let output =
-          match bannerLines with
-          | [] -> model.RecentOutput
-          | lines -> SageFsModel.addOutput (List.rev lines) model.RecentOutput
-        { model with
-            SessionContext = Some ctx
-            LiveTesting = lt
-            RecentOutput = output }, []
+        // Short-circuit: if warmup context is identical, skip update (no render)
+        match model.SessionContext with
+        | Some existing when existing = ctx -> model, []
+        | _ ->
+          // Only show banner on first arrival; repeated dispatches (from periodic
+          // RequestSessionList) just update context silently to avoid flooding output.
+          let bannerLines =
+            match model.SessionContext with
+            | None -> WarmupBanner.toOutputLines ctx
+            | Some _ -> []
+          // Re-map any ReflectionOnly tests now that we have source file paths
+          let sourceFiles = ctx.FileStatuses |> List.map (fun f -> f.Path) |> Array.ofList
+          let lt =
+            match Array.isEmpty sourceFiles with
+            | true -> model.LiveTesting
+            | false ->
+              recomputeStatuses model.LiveTesting (fun s ->
+                let remapped = Features.LiveTesting.SourceMapping.mapFromProjectFiles sourceFiles s.DiscoveredTests
+                { s with DiscoveredTests = remapped })
+          let output =
+            match bannerLines with
+            | [] -> model.RecentOutput
+            | lines -> SageFsModel.addOutput (List.rev lines) model.RecentOutput
+          { model with
+              SessionContext = Some ctx
+              LiveTesting = lt
+              RecentOutput = output }, []
 
       // ── Live testing events ──
       | SageFsEvent.TestLocationsDetected (_, locations) ->
