@@ -29,6 +29,7 @@ type StandbyKey = {
   Projects: string list
   WorkingDir: string
   AutoOpenNamespaces: bool
+  Workflow: WorkflowTypes.SessionWorkflow
 }
 with
   override x.Equals(obj) =
@@ -37,9 +38,10 @@ with
       x.Projects = y.Projects
       && x.WorkingDir.Equals(y.WorkingDir, StringComparison.OrdinalIgnoreCase)
       && x.AutoOpenNamespaces = y.AutoOpenNamespaces
+      && x.Workflow = y.Workflow
     | _ -> false
   override x.GetHashCode() =
-    hash (x.Projects, x.WorkingDir.ToLowerInvariant(), x.AutoOpenNamespaces)
+    hash (x.Projects, x.WorkingDir.ToLowerInvariant(), x.AutoOpenNamespaces, x.Workflow)
   interface IComparable with
     member x.CompareTo(obj) =
       match obj with
@@ -51,14 +53,19 @@ with
           let dirCompare = String.Compare(x.WorkingDir, y.WorkingDir, StringComparison.OrdinalIgnoreCase)
           match dirCompare <> 0 with
           | true -> dirCompare
-          | false -> compare x.AutoOpenNamespaces y.AutoOpenNamespaces
+          | false ->
+            let autoCompare = compare x.AutoOpenNamespaces y.AutoOpenNamespaces
+            match autoCompare <> 0 with
+            | true -> autoCompare
+            | false -> compare x.Workflow y.Workflow
       | _ -> 1
 
 module StandbyKey =
-  let fromSession (projects: string list) (workingDir: string) (autoOpenNamespaces: bool) =
+  let fromSession (projects: string list) (workingDir: string) (autoOpenNamespaces: bool) (workflow: WorkflowTypes.SessionWorkflow) =
     { Projects = List.sort projects
       WorkingDir = workingDir
-      AutoOpenNamespaces = autoOpenNamespaces }
+      AutoOpenNamespaces = autoOpenNamespaces
+      Workflow = workflow }
 
 /// What should RestartSession do?
 [<RequireQualifiedAccess>]

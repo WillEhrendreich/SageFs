@@ -39,6 +39,8 @@
         <Compile Include="AffordancesPropertyTests.fs" />
         <Compile Include="WorkflowPropertyTests.fs" />
         <Compile Include="WorkflowScenarioTests.fs" />
+        <Compile Include="WorkflowErrorContextTests.fs" />
+        <Compile Include="WorkflowElmModelTests.fs" />
         <Compile Include="McpAffordanceHardeningTests.fs" />
         <Compile Include="WorkerProtocolTests.fs" />
         <Compile Include="DaemonStateTests.fs" />

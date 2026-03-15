@@ -1137,6 +1137,7 @@ let createElmRuntime
               |> Option.defaultValue "Unknown"
             Warmup = warmup
             FileStatuses = []
+            Workflow = WorkflowTypes.SessionWorkflow.Interactive
           }
         | _ -> return None
       with

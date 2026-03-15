@@ -151,7 +151,7 @@ let sessionManagerRestartTombstoneTests =
 
       withHarness runtime.Runtime <| fun harness ->
         let info = createSession harness
-        let key = StandbyKey.fromSession ["Test.fsproj"] @"C:\Test" true
+        let key = StandbyKey.fromSession ["Test.fsproj"] @"C:\Test" true WorkflowTypes.SessionWorkflow.Interactive
 
         harness.Mailbox.Post(SessionCommand.WarmStandby key)
 
@@ -440,7 +440,7 @@ let sessionManagerStandbyNotificationTests =
           (fun _ -> Ok(Process.GetCurrentProcess()))
 
       withHarness runtime.Runtime <| fun harness ->
-        let key = StandbyKey.fromSession ["Test.fsproj"] @"C:\Test" true
+        let key = StandbyKey.fromSession ["Test.fsproj"] @"C:\Test" true WorkflowTypes.SessionWorkflow.Interactive
 
         harness.Mailbox.Post(SessionCommand.WarmStandby key)
 
@@ -457,7 +457,7 @@ let sessionManagerStandbyNotificationTests =
           (fun _ -> Ok(Process.GetCurrentProcess()))
 
       withHarness runtime.Runtime <| fun harness ->
-        let key = StandbyKey.fromSession ["Test.fsproj"] @"C:\Test" true
+        let key = StandbyKey.fromSession ["Test.fsproj"] @"C:\Test" true WorkflowTypes.SessionWorkflow.Interactive
 
         harness.Mailbox.Post(SessionCommand.WarmStandby key)
         harness.Mailbox.PostAndReply(fun reply -> SessionCommand.GetStandbyInfo reply)

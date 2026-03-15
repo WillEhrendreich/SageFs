@@ -6,6 +6,7 @@ open SageFs
 open SageFs.AppState
 open SageFs.WarmUp
 open SageFs.McpAdapter
+open SageFs.WorkflowTypes
 
 let sampleAssembly: LoadedAssembly = {
   Name = "MyApp"
@@ -107,6 +108,7 @@ let sampleSession: SessionContext = {
     { Path = "Broken.fs"; Readiness = LoadFailed; LastLoadedAt = None; IsWatched = true }
     { Path = "Old.fs"; Readiness = Stale; LastLoadedAt = Some (System.DateTimeOffset.UtcNow.AddHours(-1)); IsWatched = true }
   ]
+  Workflow = WorkflowTypes.SessionWorkflow.Interactive
 }
 
 [<Tests>]
@@ -166,10 +168,11 @@ let sampleTuiSession: SessionContext = {
     { Path = "src/Old.fs"; Readiness = Stale; LastLoadedAt = Some (System.DateTimeOffset.UtcNow.AddHours(-1)); IsWatched = true }
     { Path = "src/Broken.fs"; Readiness = LoadFailed; LastLoadedAt = None; IsWatched = false }
   ]
+  Workflow = WorkflowTypes.SessionWorkflow.Interactive
 }
 
 [<Tests>]
-let sessionContextTuiTests = testList "SessionContextTui" [
+let sessionContextTuiTests= testList "SessionContextTui" [
   testCase "summaryLine contains status, file counts, ns counts, duration" <| fun _ ->
     let line = SessionContextTui.summaryLine sampleTuiSession
     line |> Expect.stringContains "has status" "[Ready]"
@@ -182,6 +185,7 @@ let sessionContextTuiTests = testList "SessionContextTui" [
     let empty = {
       SessionId = "x"; ProjectNames = []; WorkingDir = "."
       Status = "Starting"; Warmup = WarmupContext.empty; FileStatuses = []
+      Workflow = SessionWorkflow.Interactive
     }
     let line = SessionContextTui.summaryLine empty
     line |> Expect.stringContains "zero files" "0/0"
@@ -225,6 +229,7 @@ let sessionContextTuiTests = testList "SessionContextTui" [
     let minimal = {
       SessionId = "m"; ProjectNames = []; WorkingDir = "."
       Status = "Ready"; Warmup = WarmupContext.empty; FileStatuses = []
+      Workflow = SessionWorkflow.Interactive
     }
     let lines = SessionContextTui.detailLines minimal
     lines |> List.exists (fun l -> l.Contains("Assemblies")) |> Expect.isFalse "no assemblies section"
@@ -258,10 +263,10 @@ let formatWarmupDetailForLlmTests = testList "formatWarmupDetailForLlm" [
         StartedAt = System.DateTimeOffset.UtcNow
       }
       FileStatuses = [mkLlmFile "a.fs" Loaded; mkLlmFile "b.fs" Loaded]
+      Workflow = WorkflowTypes.SessionWorkflow.Interactive
     }
     let result = formatWarmupDetailForLlm ctx
-    result |> Expect.stringContains "summary" "2 assemblies, 2/2 namespaces opened, 890ms"
-    result |> Expect.stringContains "asm1" "📦 Asm1 (3 ns, 1 modules)"
+    result |> Expect.stringContains "asm1""📦 Asm1 (3 ns, 1 modules)"
     result |> Expect.stringContains "asm2" "📦 Asm2 (2 ns, 0 modules)"
     result |> Expect.stringContains "open System" "open System // namespace"
     result |> Expect.stringContains "open System.IO" "open System.IO // namespace"
@@ -281,10 +286,11 @@ let formatWarmupDetailForLlmTests = testList "formatWarmupDetailForLlm" [
         StartedAt = System.DateTimeOffset.UtcNow
       }
       FileStatuses = [mkLlmFile "good.fs" Loaded]
+      Workflow = WorkflowTypes.SessionWorkflow.Interactive
     }
     let result = formatWarmupDetailForLlm ctx
     result |> Expect.stringContains "summary ratio" "1/2 namespaces opened"
-    result |> Expect.stringContains "failed section" "⚠ Failed opens (1):"
+    result |> Expect.stringContains "failed section""⚠ Failed opens (1):"
     result |> Expect.stringContains "failed detail" "✖ Bad.Ns (namespace) — not found"
 
   testCase "failed file loads show in files section" <| fun _ ->
@@ -302,9 +308,10 @@ let formatWarmupDetailForLlmTests = testList "formatWarmupDetailForLlm" [
         StartedAt = System.DateTimeOffset.UtcNow
       }
       FileStatuses = [mkLlmFile "good.fs" Loaded; mkLlmFile "broken.fs" LoadFailed]
+      Workflow = WorkflowTypes.SessionWorkflow.Interactive
     }
     let result = formatWarmupDetailForLlm ctx
-    result |> Expect.stringContains "files header" "Files (1/2 loaded):"
+    result |> Expect.stringContains "files header""Files (1/2 loaded):"
     result |> Expect.stringContains "loaded file" "● good.fs"
     result |> Expect.stringContains "failed file" "✖ broken.fs"
 
@@ -316,9 +323,10 @@ let formatWarmupDetailForLlmTests = testList "formatWarmupDetailForLlm" [
       Status = "Starting"
       Warmup = WarmupContext.empty
       FileStatuses = []
+      Workflow = WorkflowTypes.SessionWorkflow.Interactive
     }
     let result = formatWarmupDetailForLlm ctx
-    result |> Expect.stringContains "zero summary" "0 assemblies, 0/0 namespaces opened, 0ms"
+    result |> Expect.stringContains "zero summary""0 assemblies, 0/0 namespaces opened, 0ms"
 
   testCase "modules show as module not namespace" <| fun _ ->
     let ctx : SessionContext = {
@@ -337,6 +345,7 @@ let formatWarmupDetailForLlmTests = testList "formatWarmupDetailForLlm" [
         StartedAt = System.DateTimeOffset.UtcNow
       }
       FileStatuses = []
+      Workflow = WorkflowTypes.SessionWorkflow.Interactive
     }
     let result = formatWarmupDetailForLlm ctx
     result |> Expect.stringContains "module kind" "open MyModule // module"

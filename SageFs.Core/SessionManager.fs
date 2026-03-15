@@ -30,6 +30,8 @@ module SessionManager =
     Projects: string list
     WorkingDir: string
     AutoOpenNamespaces: bool
+    /// Session workflow — preserved across restarts and standby swaps.
+    Workflow: WorkflowTypes.SessionWorkflow
     /// Per-session restart tracking.
     RestartState: RestartPolicy.State
   }
@@ -151,15 +153,15 @@ module SessionManager =
     | true ->
       sessions
       |> Map.map (fun _id session ->
-        let key = StandbyKey.fromSession session.Projects session.WorkingDir session.AutoOpenNamespaces
+        let key = StandbyKey.fromSession session.Projects session.WorkingDir session.AutoOpenNamespaces session.Workflow
         match Map.tryFind key pool.Standbys with
-        | None -> StandbyInfo.NoPool
         | Some s ->
           match s.State with
           | StandbyState.Invalidated -> StandbyInfo.Invalidated
           | StandbyState.Ready -> StandbyInfo.Ready
           | StandbyState.Warming ->
-            StandbyInfo.Warming (s.WarmupProgress |> Option.defaultValue ""))
+            StandbyInfo.Warming (s.WarmupProgress |> Option.defaultValue "")
+        | None -> StandbyInfo.NoPool)
 
   module QuerySnapshot =
     let fromState (state: ManagerState) (standby: StandbyInfo) : QuerySnapshot =
@@ -557,6 +559,7 @@ module SessionManager =
               Projects = projects
               WorkingDir = workingDir
               AutoOpenNamespaces = autoOpenNamespaces
+              Workflow = workflow
               RestartState = RestartPolicy.emptyState
             }
             let newState = ManagerState.addSession sessionId managed state
@@ -593,7 +596,7 @@ module SessionManager =
                        [("session.id", box id); ("rebuild", box rebuild)]
           match ManagerState.tryGetSession id state with
           | Some session ->
-            let key = StandbyKey.fromSession session.Projects session.WorkingDir session.AutoOpenNamespaces
+            let key = StandbyKey.fromSession session.Projects session.WorkingDir session.AutoOpenNamespaces session.Workflow
             let standby = PoolState.getStandby key state.Pool
             let restartStandby =
               standby
@@ -628,6 +631,7 @@ module SessionManager =
                 Projects = session.Projects
                 WorkingDir = session.WorkingDir
                 AutoOpenNamespaces = session.AutoOpenNamespaces
+                Workflow = session.Workflow
                 RestartState = session.RestartState
               }
               let poolAfterSwap = PoolState.removeStandby key stateAfterStop.Pool
@@ -676,7 +680,7 @@ module SessionManager =
               | Ok _buildMsg ->
                 let onExited workerPid exitCode =
                   inbox.Post(SessionCommand.WorkerExited(id, workerPid, exitCode))
-                match runtime.StartWorkerProcess id session.Projects session.WorkingDir session.AutoOpenNamespaces WorkflowTypes.SessionWorkflow.Interactive onExited with
+                match runtime.StartWorkerProcess id session.Projects session.WorkingDir session.AutoOpenNamespaces session.Workflow onExited with
                 | Ok proc ->
                   let info : SessionInfo = {
                     Id = id
@@ -697,6 +701,7 @@ module SessionManager =
                     Projects = session.Projects
                     WorkingDir = session.WorkingDir
                     AutoOpenNamespaces = session.AutoOpenNamespaces
+                    Workflow = session.Workflow
                     RestartState = session.RestartState
                   }
                   let newState = ManagerState.addSession id restarted stateAfterStop
@@ -764,7 +769,7 @@ module SessionManager =
                 { ManagerState.addSession id updated state with
                     WarmupProgress = Map.remove id state.WarmupProgress }
               // Trigger standby warmup for this session's config
-              let key = StandbyKey.fromSession session.Projects session.WorkingDir session.AutoOpenNamespaces
+              let key = StandbyKey.fromSession session.Projects session.WorkingDir session.AutoOpenNamespaces session.Workflow
               match state.Pool.Enabled && (PoolState.getStandby key state.Pool |> Option.isNone) with
               | true -> inbox.Post(SessionCommand.WarmStandby key)
               | false -> ()
@@ -919,7 +924,7 @@ module SessionManager =
           | Some session when session.Info.Status = SessionStatus.Restarting ->
             let onExited workerPid exitCode =
               inbox.Post(SessionCommand.WorkerExited(id, workerPid, exitCode))
-            match runtime.StartWorkerProcess id session.Projects session.WorkingDir session.AutoOpenNamespaces WorkflowTypes.SessionWorkflow.Interactive onExited with
+            match runtime.StartWorkerProcess id session.Projects session.WorkingDir session.AutoOpenNamespaces session.Workflow onExited with
             | Ok proc ->
               let restarted =
                 { session with
@@ -1005,7 +1010,7 @@ module SessionManager =
             let standbyId = SessionId.newId()
             let onExited workerPid _exitCode =
               inbox.Post(SessionCommand.StandbyExited(key, workerPid))
-            match runtime.StartWorkerProcess standbyId key.Projects key.WorkingDir key.AutoOpenNamespaces WorkflowTypes.SessionWorkflow.Interactive onExited with
+            match runtime.StartWorkerProcess standbyId key.Projects key.WorkingDir key.AutoOpenNamespaces key.Workflow onExited with
             | Ok proc ->
               let standby = {
                 Process = proc

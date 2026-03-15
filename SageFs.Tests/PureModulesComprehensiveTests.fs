@@ -1993,7 +1993,7 @@ let paneIdTests = testList "PaneId" [
 // ═══════════════════════════════════════════════════════════
 
 let private mkStandbyKey wd name =
-  { StandbyKey.Projects = [name]; WorkingDir = wd; AutoOpenNamespaces = true }
+  { StandbyKey.Projects = [name]; WorkingDir = wd; AutoOpenNamespaces = true; Workflow = WorkflowTypes.SessionWorkflow.Interactive }
 
 let private mkStandbySession state progress =
   { StandbySession.Process = Unchecked.defaultof<_>

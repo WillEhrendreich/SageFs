@@ -37,7 +37,8 @@ let mkTestSessionCtx id projects warmup files : SessionContext =
     WorkingDir = "/code/myapp"
     Status = "Ready"
     Warmup = warmup
-    FileStatuses = files }
+    FileStatuses = files
+    Workflow = WorkflowTypes.SessionWorkflow.Interactive }
 
 let mkDiag msg sev line col : Diagnostic =
   { Message = msg

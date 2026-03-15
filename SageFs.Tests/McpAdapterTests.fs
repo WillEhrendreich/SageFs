@@ -6,6 +6,7 @@ open System
 open System.IO
 open SageFs
 open SageFs.AppState
+open SageFs.WorkflowTypes
 
 [<Tests>]
 let tests =
@@ -20,7 +21,7 @@ let tests =
         Metadata = Map.empty
       }
 
-      let result = McpAdapter.formatEvalResult response
+      let result = McpAdapter.formatEvalResult SessionWorkflow.Interactive response
       result |> Expect.stringContains "Should format success with Result: prefix" "Result: val x: int = 42"
       Expect.isFalse "Should NOT echo code back to agent" (result.Contains("Code:"))
 
@@ -35,7 +36,7 @@ let tests =
         Metadata = Map.empty
       }
 
-      let result = McpAdapter.formatEvalResult response
+      let result = McpAdapter.formatEvalResult SessionWorkflow.Interactive response
       result |> Expect.stringContains "Should format error with Error: prefix" "Error:"
 
     testCase "McpAdapter.formatEvalResult includes diagnostics on error"
@@ -53,7 +54,7 @@ let tests =
         EvaluatedCode = "let x = DataProtectionProvider.Create(\"test\")"
         Metadata = Map.empty
       }
-      let result = McpAdapter.formatEvalResult response
+      let result = McpAdapter.formatEvalResult SessionWorkflow.Interactive response
       result |> Expect.stringContains "Should include diagnostic message" "DataProtectionProvider"
       result |> Expect.stringContains "Should have Diagnostics section" "Diagnostics:"
       Expect.isFalse "Should NOT start with Code:" (result.StartsWith("Code:"))
@@ -67,7 +68,7 @@ let tests =
         EvaluatedCode = "let x = broken()"
         Metadata = Map.empty
       }
-      let result = McpAdapter.formatEvalResult response
+      let result = McpAdapter.formatEvalResult SessionWorkflow.Interactive response
       Expect.isFalse "Should NOT have Code section" (result.Contains("Code:"))
 
     testCase "McpAdapter.formatEvalResult does not echo code on success"
@@ -78,7 +79,7 @@ let tests =
         EvaluatedCode = "let x = 42"
         Metadata = Map.empty
       }
-      let result = McpAdapter.formatEvalResult response
+      let result = McpAdapter.formatEvalResult SessionWorkflow.Interactive response
       Expect.isFalse "Should NOT echo code on success" (result.Contains("Code:"))
 
     testCase "McpAdapter.formatEvalResult includes suggestion for name errors"
@@ -90,7 +91,7 @@ let tests =
         EvaluatedCode = "foo"
         Metadata = Map.empty
       }
-      let result = McpAdapter.formatEvalResult response
+      let result = McpAdapter.formatEvalResult SessionWorkflow.Interactive response
       result |> Expect.stringContains "Should include helpful suggestion for name errors" "Tip:"
 
     testCase "McpAdapter.formatEvalResult includes suggestion for type errors"
@@ -102,7 +103,7 @@ let tests =
         EvaluatedCode = "let x: int = \"hello\""
         Metadata = Map.empty
       }
-      let result = McpAdapter.formatEvalResult response
+      let result = McpAdapter.formatEvalResult SessionWorkflow.Interactive response
       result |> Expect.stringContains "Should include helpful suggestion for type errors" "Tip:"
 
     testCase "McpAdapter.formatEvents handles empty list"
@@ -189,7 +190,7 @@ let tests =
         Metadata = Map.empty
       }
 
-      let result = McpAdapter.formatEvalResult response
+      let result = McpAdapter.formatEvalResult SessionWorkflow.Interactive response
       result |> Expect.stringContains "Should handle empty output" "Result: "
       Expect.isFalse "Should NOT echo code" (result.Contains("Code:"))
 

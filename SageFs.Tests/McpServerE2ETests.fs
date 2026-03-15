@@ -7,6 +7,7 @@ open System.IO
 open Microsoft.AspNetCore.Http
 open Microsoft.Extensions.Logging
 open SageFs
+open SageFs.WorkflowTypes
 
 [<Tests>]
 let tests =
@@ -23,7 +24,7 @@ let tests =
         EvaluatedCode = "let x = 42"
         Metadata = Map.empty
       }
-      let result = McpAdapter.formatEvalResult testResponse
+      let result = McpAdapter.formatEvalResult SessionWorkflow.Interactive testResponse
       Expect.stringContains result "Result:" "formatEvalResult should work"
       
       // Test formatStatus exists and works

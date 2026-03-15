@@ -37,6 +37,7 @@
         <Compile Include="WarmUp.fs" />
         <Compile Include="AspireSetup.fs" />
         <Compile Include="ErrorMessages.fs" />
+        <Compile Include="WorkflowErrorContext.fs" />
         <Compile Include="Features\LiveTestingTypes.fs" />
         <Compile Include="Features\TestCachePersistence.fs" />
         <Compile Include="Features\CoverageInstrumenter.fs" />

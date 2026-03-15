@@ -353,7 +353,8 @@ let buildDashboardSnapshot
               WorkingDir = q.GetSessionWorkingDir sessionId
               Status = SessionState.label (q.GetSessionState sessionId)
               Warmup = ctx'
-              FileStatuses = fileStatuses }
+              FileStatuses = fileStatuses
+              Workflow = WorkflowTypes.SessionWorkflow.Interactive }
         | None -> renderSessionContextEmpty
       | false -> renderSessionContextEmpty
     let bindingsPanel =

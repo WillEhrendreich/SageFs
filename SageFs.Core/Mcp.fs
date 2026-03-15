@@ -37,7 +37,7 @@ module McpAdapter =
     | Some port -> sprintf "SageFs v%s | MCP on port %d" version port
     | None -> sprintf "SageFs v%s" version
 
-  let formatEvalResult (result: EvalResponse) : string =
+  let formatEvalResult (workflow: WorkflowTypes.SessionWorkflow) (result: EvalResponse) : string =
     let stdout = 
       match result.Metadata.TryFind "stdout" with
       | Some (s: obj) -> s.ToString()
@@ -59,7 +59,8 @@ module McpAdapter =
       | Ok output -> sprintf "Result: %s" output
       | Error ex ->
           let suggestion = ex.Message |> ErrorMessages.categorize |> ErrorMessages.getSuggestion
-          sprintf "Error: %s\n%s%s" ex.Message suggestion diagnosticsSection
+          let enhanced = WorkflowErrorContext.enhance workflow ex.Message suggestion
+          sprintf "Error: %s\n%s%s" ex.Message enhanced diagnosticsSection
     
     match String.IsNullOrEmpty(stdout) with
     | true -> output
@@ -936,8 +937,19 @@ module McpTools =
         |> Result.mapError SageFsError.describeForAgent
     }
 
-  /// Format a WorkerResponse.EvalResult for display.
-  let formatWorkerEvalResult (response: WorkerProtocol.WorkerResponse) : string =
+  /// Look up the workflow for a session from the Elm model.
+  /// Falls back to Interactive (identity for enhancement) when the model is unavailable.
+  let getWorkflowForSession (ctx: McpContext) (sid: string) : WorkflowTypes.SessionWorkflow =
+    match ctx.GetElmModel with
+    | Some getModel ->
+      let model = getModel()
+      match model.SessionContext with
+      | Some sc when sc.SessionId = sid -> sc.Workflow
+      | _ -> WorkflowTypes.SessionWorkflow.Interactive
+    | None -> WorkflowTypes.SessionWorkflow.Interactive
+
+  /// Format a WorkerResponse.EvalResult for display, with workflow-aware error enhancement.
+  let formatWorkerEvalResult (workflow: WorkflowTypes.SessionWorkflow) (response: WorkerProtocol.WorkerResponse) : string =
     match response with
     | WorkerProtocol.WorkerResponse.EvalResult(_, result, diags, _) ->
       let diagStr =
@@ -952,7 +964,13 @@ module McpTools =
           |> sprintf "\nDiagnostics:\n%s"
       match result with
       | Ok output -> sprintf "Result: %s%s" output diagStr
-      | Error err -> sprintf "Error: %s%s" (SageFsError.describeForAgent err) diagStr
+      | Error err ->
+        let errText = SageFsError.describeForAgent err
+        let suggestion = errText |> ErrorMessages.categorize |> ErrorMessages.getSuggestion
+        let enhanced = WorkflowErrorContext.enhance workflow errText suggestion
+        match String.IsNullOrEmpty enhanced with
+        | true -> sprintf "Error: %s%s" errText diagStr
+        | false -> sprintf "Error: %s\n%s%s" errText enhanced diagStr
     | WorkerProtocol.WorkerResponse.WorkerError err ->
       sprintf "Error: %s" (SageFsError.describeForAgent err)
     | other ->
@@ -980,6 +998,7 @@ module McpTools =
   /// Evaluate a single FSI statement, dispatch Elm events, return formatted output.
   let private evalSingleStatement (ctx: McpContext) (sid: string) (format: OutputFormat) (lineOffset: int) (colOffset: int) (statement: string) = task {
     notifyElm ctx (SageFsEvent.EvalStarted (sid, statement))
+    let workflow = getWorkflowForSession ctx sid
     let! routeResult =
       routeToSession ctx sid
         (fun replyId -> WorkerProtocol.WorkerMessage.EvalCode(statement, WorkerProtocol.SessionId.value replyId))
@@ -990,7 +1009,7 @@ module McpTools =
         let formatted =
           match format with
           | Json -> McpAdapter.formatWorkerEvalResultJson response
-          | Text -> formatWorkerEvalResult response
+          | Text -> formatWorkerEvalResult workflow response
         match response with
         | WorkerProtocol.WorkerResponse.EvalResult(_, Ok _, diags, metadata) ->
           notifyElm ctx (
@@ -1182,6 +1201,7 @@ module McpTools =
                   Status = WorkerProtocol.SessionStatus.label sessionInfo.Status
                   Warmup = warmup
                   FileStatuses = []
+                  Workflow = WorkflowTypes.SessionWorkflow.Interactive
                 }
                 return sprintf "\n\n%s" (McpAdapter.formatWarmupDetailForLlm sessionCtx)
               | None -> return ""

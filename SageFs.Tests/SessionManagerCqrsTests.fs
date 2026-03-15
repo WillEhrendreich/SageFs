@@ -43,6 +43,7 @@ let mkManagedSession (id: SessionId) status =
     Projects = [ "Test.fsproj" ]
     WorkingDir = "/test"
     AutoOpenNamespaces = true
+    Workflow = WorkflowTypes.SessionWorkflow.Interactive
     RestartState = RestartPolicy.emptyState
   }
 

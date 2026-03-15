@@ -173,8 +173,8 @@ let restartDecisionTests = testList "RestartDecision" [
 
 [<Tests>]
 let poolStateTests = testList "PoolState" [
-  let key1 = StandbyKey.fromSession ["a.fsproj"] "C:\\proj1" true
-  let key2 = StandbyKey.fromSession ["b.fsproj"] "C:\\proj2" true
+  let key1 = StandbyKey.fromSession ["a.fsproj"] "C:\\proj1" true WorkflowTypes.SessionWorkflow.Interactive
+  let key2 = StandbyKey.fromSession ["b.fsproj"] "C:\\proj2" true WorkflowTypes.SessionWorkflow.Interactive
 
   testCase "empty has no standbys" <| fun _ ->
     PoolState.getStandby key1 PoolState.empty
@@ -228,8 +228,8 @@ let poolStateTests = testList "PoolState" [
     |> Expect.equal "proj2 unaffected" StandbyState.Ready
 
   testCase "project order is normalized" <| fun _ ->
-    let k1 = StandbyKey.fromSession ["b.fsproj"; "a.fsproj"] "C:\\dir" true
-    let k2 = StandbyKey.fromSession ["a.fsproj"; "b.fsproj"] "C:\\dir" true
+    let k1 = StandbyKey.fromSession ["b.fsproj"; "a.fsproj"] "C:\\dir" true WorkflowTypes.SessionWorkflow.Interactive
+    let k2 = StandbyKey.fromSession ["a.fsproj"; "b.fsproj"] "C:\\dir" true WorkflowTypes.SessionWorkflow.Interactive
     k1 |> Expect.equal "normalized key" k2
 ]
 
@@ -272,7 +272,7 @@ let standbyBenchmarkTests = testList "StandbyPool benchmarks" [
     Expect.isLessThan "should be sub-microsecond" (usPerOp, 10.0)
 
   testCase "tryConsumeStandby is < 5µs" <| fun _ ->
-    let key = StandbyKey.fromSession ["test.fsproj"] "C:\\test" true
+    let key = StandbyKey.fromSession ["test.fsproj"] "C:\\test" true WorkflowTypes.SessionWorkflow.Interactive
     let s = makeStandby StandbyState.Ready (Some dummyProxy)
     let state = PoolState.setStandby key s PoolState.empty
     // warmup
@@ -290,7 +290,7 @@ let standbyBenchmarkTests = testList "StandbyPool benchmarks" [
   testCase "invalidateForDir is < 10µs for 5 standbys" <| fun _ ->
     let mutable state = PoolState.empty
     for i in 1..5 do
-      let k = StandbyKey.fromSession [sprintf "proj%d.fsproj" i] "C:\\test" true
+      let k = StandbyKey.fromSession [sprintf "proj%d.fsproj" i] "C:\\test" true WorkflowTypes.SessionWorkflow.Interactive
       state <- PoolState.setStandby k (makeStandby StandbyState.Ready (Some dummyProxy)) state
     // warmup
     for _ in 1..100 do
@@ -310,37 +310,37 @@ let standbyBenchmarkTests = testList "StandbyPool benchmarks" [
 let standbyKeyEqualityTests = testList "StandbyKey case-insensitive equality" [
 
   testCase "keys with identical working dirs are equal" <| fun _ ->
-    let k1 = StandbyKey.fromSession ["a.fsproj"] @"C:\MyProject" false
-    let k2 = StandbyKey.fromSession ["a.fsproj"] @"C:\MyProject" false
+    let k1 = StandbyKey.fromSession ["a.fsproj"] @"C:\MyProject" false WorkflowTypes.SessionWorkflow.Interactive
+    let k2 = StandbyKey.fromSession ["a.fsproj"] @"C:\MyProject" false WorkflowTypes.SessionWorkflow.Interactive
     k1 |> Expect.equal "identical keys" k2
 
   testCase "keys with case-differing working dirs are equal (Windows)" <| fun _ ->
-    let k1 = StandbyKey.fromSession ["a.fsproj"] @"C:\MyProject" false
-    let k2 = StandbyKey.fromSession ["a.fsproj"] @"c:\myproject" false
+    let k1 = StandbyKey.fromSession ["a.fsproj"] @"C:\MyProject" false WorkflowTypes.SessionWorkflow.Interactive
+    let k2 = StandbyKey.fromSession ["a.fsproj"] @"c:\myproject" false WorkflowTypes.SessionWorkflow.Interactive
     k1 |> Expect.equal "case-insensitive working dir" k2
 
   testCase "case-insensitive keys have equal hash codes" <| fun _ ->
-    let k1 = StandbyKey.fromSession ["a.fsproj"] @"C:\MyProject" false
-    let k2 = StandbyKey.fromSession ["a.fsproj"] @"c:\myproject" false
+    let k1 = StandbyKey.fromSession ["a.fsproj"] @"C:\MyProject" false WorkflowTypes.SessionWorkflow.Interactive
+    let k2 = StandbyKey.fromSession ["a.fsproj"] @"c:\myproject" false WorkflowTypes.SessionWorkflow.Interactive
     k1.GetHashCode() |> Expect.equal "hash codes must match for equal keys" (k2.GetHashCode())
 
   testCase "case-insensitive keys map to same slot in Dictionary" <| fun _ ->
-    let k1 = StandbyKey.fromSession ["a.fsproj"] @"C:\MyProject" false
-    let k2 = StandbyKey.fromSession ["a.fsproj"] @"c:\myproject" false
+    let k1 = StandbyKey.fromSession ["a.fsproj"] @"C:\MyProject" false WorkflowTypes.SessionWorkflow.Interactive
+    let k2 = StandbyKey.fromSession ["a.fsproj"] @"c:\myproject" false WorkflowTypes.SessionWorkflow.Interactive
     let dict = System.Collections.Generic.Dictionary<StandbyKey, int>()
     dict.[k1] <- 42
     dict.ContainsKey(k2) |> Expect.isTrue "mixed-case key should find the same slot"
     dict.[k2] |> Expect.equal "same value" 42
 
   testCase "case-insensitive keys map to same slot in Map (IComparable)" <| fun _ ->
-    let k1 = StandbyKey.fromSession ["a.fsproj"] @"C:\MyProject" false
-    let k2 = StandbyKey.fromSession ["a.fsproj"] @"c:\myproject" false
+    let k1 = StandbyKey.fromSession ["a.fsproj"] @"C:\MyProject" false WorkflowTypes.SessionWorkflow.Interactive
+    let k2 = StandbyKey.fromSession ["a.fsproj"] @"c:\myproject" false WorkflowTypes.SessionWorkflow.Interactive
     let m = Map.ofList [(k1, 99)]
     m |> Map.containsKey k2 |> Expect.isTrue "Map lookup with mixed-case key"
 
   testCase "keys with different projects are not equal even with same dir" <| fun _ ->
-    let k1 = StandbyKey.fromSession ["a.fsproj"] @"C:\Proj" false
-    let k2 = StandbyKey.fromSession ["b.fsproj"] @"C:\Proj" false
+    let k1 = StandbyKey.fromSession ["a.fsproj"] @"C:\Proj" false WorkflowTypes.SessionWorkflow.Interactive
+    let k2 = StandbyKey.fromSession ["b.fsproj"] @"C:\Proj" false WorkflowTypes.SessionWorkflow.Interactive
     k1 |> Expect.notEqual "different projects → different keys" k2
 ]
 
@@ -351,7 +351,7 @@ let sseProgressCallbackTests = ptestList "SSE progress callback" [
     let mutable callCount = 0
     let mgr, _ =
       SessionManager.create cts.Token (fun () -> callCount <- callCount + 1) (fun _ _ _ -> ()) (fun _ _ -> ()) ignore (fun _ _ -> ()) (fun _ _ -> ())
-    let fakeKey = { StandbyKey.Projects = ["test.fsproj"]; WorkingDir = "C:\\fake"; AutoOpenNamespaces = true }
+    let fakeKey = { StandbyKey.Projects = ["test.fsproj"]; WorkingDir = "C:\\fake"; AutoOpenNamespaces = true; Workflow = WorkflowTypes.SessionWorkflow.Interactive }
     mgr.Post(SessionManager.SessionCommand.StandbyProgress(fakeKey, "1/4 test"))
     Thread.Sleep(50)
     Expect.equal "callback should not fire for non-existent standby" 0 callCount

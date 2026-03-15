@@ -66,6 +66,7 @@ let managerStateTests =
         Projects = ["Foo.fsproj"]
         WorkingDir = @"C:\test"
         AutoOpenNamespaces = true
+        Workflow = WorkflowTypes.SessionWorkflow.Interactive
         RestartState = SageFs.RestartPolicy.emptyState
       }
       let state =
@@ -95,6 +96,7 @@ let managerStateTests =
         Projects = []
         WorkingDir = @"C:\test"
         AutoOpenNamespaces = true
+        Workflow = WorkflowTypes.SessionWorkflow.Interactive
         RestartState = SageFs.RestartPolicy.emptyState
       }
       let state =
@@ -124,6 +126,7 @@ let managerStateTests =
           Projects = []
           WorkingDir = @"C:\test"
           AutoOpenNamespaces = true
+          Workflow = WorkflowTypes.SessionWorkflow.Interactive
           RestartState = SageFs.RestartPolicy.emptyState }
 
       let sidA = testSessionId "aa000011"

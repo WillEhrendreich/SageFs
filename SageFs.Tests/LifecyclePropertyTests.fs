@@ -269,6 +269,7 @@ let querySnapshotTests = testList "QuerySnapshot projection properties" [
           Process = null; Proxy = pendingProxy; WorkerBaseUrl = ""
           Projects = ["p.fsproj"]; WorkingDir = "C:\\test"
           AutoOpenNamespaces = false
+          Workflow = WorkflowTypes.SessionWorkflow.Interactive
           RestartState = RestartPolicy.emptyState
         }
         state <- ManagerState.addSession id managed state
@@ -290,6 +291,7 @@ let querySnapshotTests = testList "QuerySnapshot projection properties" [
         Process = null; Proxy = pendingProxy; WorkerBaseUrl = ""
         Projects = ["p.fsproj"]; WorkingDir = "C:\\test"
         AutoOpenNamespaces = false
+        Workflow = WorkflowTypes.SessionWorkflow.Interactive
         RestartState = RestartPolicy.emptyState
       }
       let state = ManagerState.addSession id managed ManagerState.empty
@@ -311,6 +313,7 @@ let querySnapshotTests = testList "QuerySnapshot projection properties" [
       Process = null; Proxy = pendingProxy; WorkerBaseUrl = url
       Projects = ["p.fsproj"]; WorkingDir = "C:\\test"
       AutoOpenNamespaces = false
+      Workflow = WorkflowTypes.SessionWorkflow.Interactive
       RestartState = RestartPolicy.emptyState
     }
     let state =
@@ -335,6 +338,7 @@ let querySnapshotTests = testList "QuerySnapshot projection properties" [
       Process = null; Proxy = pendingProxy; WorkerBaseUrl = ""
       Projects = ["p.fsproj"]; WorkingDir = "C:\\test"
       AutoOpenNamespaces = false
+      Workflow = WorkflowTypes.SessionWorkflow.Interactive
       RestartState = RestartPolicy.emptyState
     }
     let afterAdd = ManagerState.addSession id managed ManagerState.empty
@@ -354,7 +358,7 @@ let standbyInfoTests = testList "computeStandbyInfo properties" [
   }
 
   test "disabled pool yields NoPool even with standbys" {
-    let key = StandbyKey.fromSession ["p.fsproj"] "C:\\test" false
+    let key = StandbyKey.fromSession ["p.fsproj"] "C:\\test" false WorkflowTypes.SessionWorkflow.Interactive
     let standby = {
       StandbySession.Process = null; Proxy = None; BaseUrl = ""
       State = StandbyState.Ready; WarmupProgress = None
@@ -366,7 +370,7 @@ let standbyInfoTests = testList "computeStandbyInfo properties" [
   }
 
   test "all ready yields Ready" {
-    let key = StandbyKey.fromSession ["p.fsproj"] "C:\\test" false
+    let key = StandbyKey.fromSession ["p.fsproj"] "C:\\test" false WorkflowTypes.SessionWorkflow.Interactive
     let standby = {
       StandbySession.Process = null; Proxy = None; BaseUrl = ""
       State = StandbyState.Ready; WarmupProgress = None
@@ -378,7 +382,7 @@ let standbyInfoTests = testList "computeStandbyInfo properties" [
   }
 
   test "any invalidated yields Invalidated" {
-    let key = StandbyKey.fromSession ["p.fsproj"] "C:\\test" false
+    let key = StandbyKey.fromSession ["p.fsproj"] "C:\\test" false WorkflowTypes.SessionWorkflow.Interactive
     let standby = {
       StandbySession.Process = null; Proxy = None; BaseUrl = ""
       State = StandbyState.Invalidated; WarmupProgress = None
@@ -390,7 +394,7 @@ let standbyInfoTests = testList "computeStandbyInfo properties" [
   }
 
   test "warming with progress shows progress" {
-    let key = StandbyKey.fromSession ["p.fsproj"] "C:\\test" false
+    let key = StandbyKey.fromSession ["p.fsproj"] "C:\\test" false WorkflowTypes.SessionWorkflow.Interactive
     let standby = {
       StandbySession.Process = null; Proxy = None; BaseUrl = ""
       State = StandbyState.Warming; WarmupProgress = Some "2/4 files"
@@ -410,7 +414,7 @@ let poolStateTests = testList "PoolState algebra" [
 
   testPropertyWithConfig propConfig "setStandby then getStandby roundtrips" <|
     fun () ->
-      let key = StandbyKey.fromSession ["p.fsproj"] "C:\\test" false
+      let key = StandbyKey.fromSession ["p.fsproj"] "C:\\test" false WorkflowTypes.SessionWorkflow.Interactive
       let standby = {
         StandbySession.Process = null; Proxy = None; BaseUrl = ""
         State = StandbyState.Ready; WarmupProgress = None
@@ -423,7 +427,7 @@ let poolStateTests = testList "PoolState algebra" [
 
   testPropertyWithConfig propConfig "removeStandby makes getStandby return None" <|
     fun () ->
-      let key = StandbyKey.fromSession ["p.fsproj"] "C:\\test" false
+      let key = StandbyKey.fromSession ["p.fsproj"] "C:\\test" false WorkflowTypes.SessionWorkflow.Interactive
       let standby = {
         StandbySession.Process = null; Proxy = None; BaseUrl = ""
         State = StandbyState.Ready; WarmupProgress = None
@@ -438,7 +442,7 @@ let poolStateTests = testList "PoolState algebra" [
       |> Expect.isTrue "removed"
 
   test "removeStandby on empty pool is no-op" {
-    let key = StandbyKey.fromSession ["p.fsproj"] "C:\\test" false
+    let key = StandbyKey.fromSession ["p.fsproj"] "C:\\test" false WorkflowTypes.SessionWorkflow.Interactive
     let pool = PoolState.removeStandby key PoolState.empty
     pool.Standbys |> Map.isEmpty |> Expect.isTrue "still empty"
   }
@@ -449,14 +453,14 @@ let poolStateTests = testList "PoolState algebra" [
 let standbyKeyTests = testList "StandbyKey" [
 
   test "fromSession sorts projects for deterministic keys" {
-    let key1 = StandbyKey.fromSession ["b.fsproj"; "a.fsproj"] "C:\\test" false
-    let key2 = StandbyKey.fromSession ["a.fsproj"; "b.fsproj"] "C:\\test" false
+    let key1 = StandbyKey.fromSession ["b.fsproj"; "a.fsproj"] "C:\\test" false WorkflowTypes.SessionWorkflow.Interactive
+    let key2 = StandbyKey.fromSession ["a.fsproj"; "b.fsproj"] "C:\\test" false WorkflowTypes.SessionWorkflow.Interactive
     key1 |> Expect.equal "sorted projects" key2
   }
 
   test "different autoOpen yields different keys" {
-    let key1 = StandbyKey.fromSession ["p.fsproj"] "C:\\test" true
-    let key2 = StandbyKey.fromSession ["p.fsproj"] "C:\\test" false
+    let key1 = StandbyKey.fromSession ["p.fsproj"] "C:\\test" true WorkflowTypes.SessionWorkflow.Interactive
+    let key2 = StandbyKey.fromSession ["p.fsproj"] "C:\\test" false WorkflowTypes.SessionWorkflow.Interactive
     (key1 = key2) |> Expect.isFalse "autoOpen matters"
   }
 ]

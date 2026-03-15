@@ -122,6 +122,7 @@ type SessionContext = {
   Status: string
   Warmup: WarmupContext
   FileStatuses: FileStatus list
+  Workflow: WorkflowTypes.SessionWorkflow
 }
 
 module SessionContext =

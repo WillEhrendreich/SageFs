@@ -147,6 +147,9 @@ type SageFsMsg =
   | FcsTypeCheckCompleted of Features.LiveTesting.FcsTypeCheckResult
   | RestoreTestCache of Features.LiveTesting.LiveTestState
   | MarkAllTestsStale
+  | WorkflowSuggestionReceived of WorkflowTypes.WorkflowSuggestion
+  | WorkflowSuggestionDismissed
+  | WorkflowSuggestionAccepted
 
 /// Side effects the Elm loop can request.
 /// Wraps EditorEffect and TestCycleEffect for async execution.
@@ -154,6 +157,7 @@ type SageFsMsg =
 type SageFsEffect =
   | Editor of EditorEffect
   | TestCycle of Features.LiveTesting.TestCycleEffect
+  | SwitchWorkflow of WorkflowTypes.SessionWorkflow
 
 /// The complete application state managed by the Elm loop.
 type SageFsModel = {
@@ -170,6 +174,8 @@ type SageFsModel = {
   PendingTestResults: Features.LiveTesting.TestRunResult list
   /// Latest resolved test source locations — populated after each discovery pass.
   ResolvedSourceLocations: Features.LiveTesting.TestSourceLocation list
+  /// Pending workflow suggestion from project detection — cleared on dismiss or accept.
+  PendingSuggestion: WorkflowTypes.WorkflowSuggestion option
 }
 
 module SageFsModel =
@@ -194,9 +200,15 @@ module SageFsModel =
     LiveTesting = Features.LiveTesting.LiveTestCycleState.empty
     PendingTestResults = []
     ResolvedSourceLocations = []
+    PendingSuggestion = None
   }
 
-  /// Add a single output line, routing to the correct session buffer.
+  /// Project the current workflow from the session context.
+  /// Defaults to Interactive when no session is active.
+  let currentWorkflow (model: SageFsModel) : WorkflowTypes.SessionWorkflow =
+    match model.SessionContext with
+    | Some ctx -> ctx.Workflow
+    | None -> WorkflowTypes.SessionWorkflow.Interactive
   let addOutputLine (line: OutputLine) (store: SessionOutputStore) =
     store.Add(line)
     store
@@ -913,6 +925,19 @@ module SageFsUpdate =
             LastGeneration = cachedState.LastGeneration })
       { model with LiveTesting = lt }, []
 
+    | SageFsMsg.WorkflowSuggestionReceived suggestion ->
+      { model with PendingSuggestion = Some suggestion }, []
+
+    | SageFsMsg.WorkflowSuggestionDismissed ->
+      { model with PendingSuggestion = None }, []
+
+    | SageFsMsg.WorkflowSuggestionAccepted ->
+      let effects =
+        match model.PendingSuggestion with
+        | Some s -> [ SageFsEffect.SwitchWorkflow s.SuggestedWorkflow ]
+        | None -> []
+      { model with PendingSuggestion = None }, effects
+
     | SageFsMsg.MarkAllTestsStale ->
       let lt = model.LiveTesting
       let allTestIds = lt.TestState.DiscoveredTests |> Array.map (fun t -> t.Id) |> Set.ofArray
@@ -1550,6 +1575,11 @@ module SageFsEffectHandler =
                 Instrumentation.testExecutionActiveCount.Add(-1L)
             }, ct)
       }
+
+    | SageFsEffect.SwitchWorkflow _targetWorkflow ->
+      // Phase 4 will implement the actual switch logic (create new session, migrate)
+      // For now, this is a placeholder that satisfies exhaustive pattern matching
+      async { () }
 
 /// Pure dedup-key generation for the SSE state-change event.
 /// Including test state fields ensures `/events` SSE fires

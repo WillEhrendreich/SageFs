@@ -507,6 +507,7 @@ let fullLoopTests = testList "Full ElmLoop + EffectHandler" [
         SessionId = SessionId.value sid; ProjectNames = ["Proj.fsproj"]
         WorkingDir = "/code"; Status = "Ready"
         Warmup = warmup; FileStatuses = []
+        Workflow = WorkflowTypes.SessionWorkflow.Interactive
       }
     }
     let deps : EffectDeps = {
