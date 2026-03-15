@@ -103,6 +103,7 @@
          <Compile Include="WarmupBatchedOpenTests.fs" />
          <Compile Include="WarmupProgressContractTests.fs" />
         <Compile Include="VscodeExtensionTests.fs" />
+        <Compile Include="DemoRecording.fs" />
         <Compile Include="LiveTestingTestHelpers.fs" />
         <Compile Include="LiveTestingCoreTests.fs" />
         <Compile Include="LiveTestingCycleTests.fs" />

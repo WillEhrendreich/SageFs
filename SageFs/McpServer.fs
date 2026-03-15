@@ -1445,6 +1445,7 @@ let mapStatusRoutes (app: WebApplication) (rctx: RouteContext) =
       let! allSessions = rctx.Config.SessionOps.GetAllSessions()
       let data =
         {| version = version
+           apiVersion = SageFs.EndpointContracts.apiVersion
            pid = Environment.ProcessId
            uptimeSeconds = uptime
            supervised = supervised
