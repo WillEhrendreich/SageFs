@@ -37,6 +37,7 @@ type Model = {
   EvalCount: int
   AvgMs: float
   WorkingDir: string
+  WorkflowLabel: string
   StandbyLabel: string
   LiveTestingStatus: string
   WatchedCount: int
@@ -135,6 +136,7 @@ let init (daemonInfo: DaemonInfo) (keyMap: SageFsKeyMap) () : Model * Cmd<Msg> =
     EvalCount = 0
     AvgMs = 0.0
     WorkingDir = ""
+    WorkflowLabel = "REPL"
     StandbyLabel = ""
     LiveTestingStatus = ""
     WatchedCount = 0
@@ -241,6 +243,7 @@ let update (msg: Msg) (model: Model) : Model * Cmd<Msg> =
         EvalCount = event.EvalCount
         AvgMs = event.AvgMs
         WorkingDir = workingDir
+        WorkflowLabel = event.WorkflowLabel
         StandbyLabel = event.StandbyLabel
         LiveTestingStatus = event.LiveTestingStatus
         WatchedCount = event.WatchedCount
@@ -478,14 +481,15 @@ let private renderStatusBar (model: Model) : Element =
     match faultedRecoveryHint model.SessionState with
     | Some hint -> sprintf " │ %s" hint
     | None -> ""
+  let workflowTag = sprintf "[%s]" model.WorkflowLabel
   let leftStatus =
     match model.EvalCount > 0 with
     | true ->
-      sprintf " %s %s │ evals: %d (avg %.0fms)%s%s%s%s%s │ %s"
-        sid model.SessionState model.EvalCount model.AvgMs standby liveTesting ttPart failNav faultHint (PaneId.displayName model.FocusedPane)
+      sprintf " %s %s %s │ evals: %d (avg %.0fms)%s%s%s%s%s │ %s"
+        sid model.SessionState workflowTag model.EvalCount model.AvgMs standby liveTesting ttPart failNav faultHint (PaneId.displayName model.FocusedPane)
     | false ->
-      sprintf " %s %s │ evals: %d%s%s%s%s%s │ %s"
-        sid model.SessionState model.EvalCount standby liveTesting ttPart failNav faultHint (PaneId.displayName model.FocusedPane)
+      sprintf " %s %s %s │ evals: %d%s%s%s%s%s │ %s"
+        sid model.SessionState workflowTag model.EvalCount standby liveTesting ttPart failNav faultHint (PaneId.displayName model.FocusedPane)
   let rightStatus =
     sprintf " %s │ %.1fms │%s"
       model.ThemeName model.FrameMs (StatusHints.build model.KeyMap model.FocusedPane model.Layout.VisiblePanes model.WatchedCount model.Density)

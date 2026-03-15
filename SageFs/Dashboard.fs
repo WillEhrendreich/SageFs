@@ -377,6 +377,7 @@ let buildDashboardSnapshot
       SessionId = sessionId
       WorkingDir = workingDir
       WarmupProgress = q.GetWarmupProgress sessionId
+      WorkflowLabel = q.GetSessionWorkflow sessionId |> WorkflowTypes.SessionWorkflow.label
       EvalStats = evalStatsView
       AlarmPanel = alarmPanel
       DaemonHealth = daemonHealthPanel
@@ -895,6 +896,7 @@ let createApiStateHandler
         q.GetTestSourceLocations()
         |> List.map (fun l ->
           {| testName = l.TestName; filePath = l.FilePath; startLine = l.StartLine |})
+      let workflow = q.GetSessionWorkflow activeSid
       let payload =
         System.Text.Json.JsonSerializer.Serialize(
           {| sessionId = activeSid
@@ -906,7 +908,10 @@ let createApiStateHandler
              liveTestingStatus = liveTestingStatus
              watchedCount = watchedCount
              regions = regions
-             testSourceLocations = testSourceLocations |})
+             testSourceLocations = testSourceLocations
+             workflowLabel = WorkflowTypes.SessionWorkflow.label workflow
+             replCapability = WorkflowTypes.ReplCapability.label (WorkflowTypes.SessionWorkflow.replCapability workflow)
+             hotReloadActive = WorkflowTypes.SessionWorkflow.isHotReloadActive workflow |})
       do! ctx.Response.WriteAsync(sprintf "data: %s\n\n" payload)
       do! ctx.Response.Body.FlushAsync()
     }

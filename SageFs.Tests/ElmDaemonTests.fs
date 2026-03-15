@@ -26,6 +26,7 @@ module ElmDaemonTestHelpers =
       LastActivity = DateTime.UtcNow
       Status = SessionStatus.Ready
       WorkerPid = Some 999
+      Workflow = WorkflowTypes.SessionWorkflow.Interactive
     }
     let proxy (msg: WorkerMessage) =
       async { return handler msg }

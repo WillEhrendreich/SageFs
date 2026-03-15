@@ -560,6 +560,8 @@ type DashboardQueries = {
   GetSessionAgentBadges: string -> AgentBadge list
   /// Get the CSS class for session guidance (ambient row styling).
   GetSessionGuidanceCss: string -> string
+  /// Get the workflow for a session — returns Interactive as default.
+  GetSessionWorkflow: string -> WorkflowTypes.SessionWorkflow
 }
 
 /// Commands that mutate session state.
@@ -600,6 +602,7 @@ type DashboardSnapshot = {
   SessionId: string
   WorkingDir: string
   WarmupProgress: string
+  WorkflowLabel: string
   EvalStats: EvalStatsView
   AlarmPanel: XmlNode
   DaemonHealth: XmlNode

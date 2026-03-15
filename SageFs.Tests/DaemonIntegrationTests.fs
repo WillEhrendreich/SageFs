@@ -57,6 +57,7 @@ let managerStateTests =
         LastActivity = DateTime.UtcNow
         Status = SessionStatus.Ready
         WorkerPid = Some 1234
+        Workflow = WorkflowTypes.SessionWorkflow.Interactive
       }
       let session : SageFs.SessionManager.ManagedSession = {
         Info = info
@@ -87,6 +88,7 @@ let managerStateTests =
         LastActivity = DateTime.UtcNow
         Status = SessionStatus.Ready
         WorkerPid = None
+        Workflow = WorkflowTypes.SessionWorkflow.Interactive
       }
       let session : SageFs.SessionManager.ManagedSession = {
         Info = info
@@ -118,6 +120,7 @@ let managerStateTests =
           LastActivity = DateTime.UtcNow
           Status = SessionStatus.Ready
           WorkerPid = None
+          Workflow = WorkflowTypes.SessionWorkflow.Interactive
         }
         { Info = info
           Process = new Process()

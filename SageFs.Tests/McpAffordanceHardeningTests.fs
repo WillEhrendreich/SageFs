@@ -230,7 +230,7 @@ let toolRegistrationTests =
            reflection test skipped"
       | Some methods ->
         methods.Length
-        |> Expect.equal "MCP tool method count" 49
+        |> Expect.equal "MCP tool method count" 50
 
     testCase
       "every McpServerTool method has a non-empty Description (reflection)"
@@ -404,7 +404,7 @@ let stateTransitionSafetyTests =
                 state tool ex.Message))
         tested
         |> Expect.equal
-          "should test 5 states × 49 tools = 245" 245
+          "should test 5 states × 50 tools = 250" 250
   ]
 
 // ── Group 5: Affordance Superset/Subset Relationships ──

@@ -17,6 +17,7 @@ type SessionEvent =
   | DaemonSessionCreated of {| SessionId: string; Projects: string list; WorkingDir: string; CreatedAt: DateTimeOffset |}
   | DaemonSessionStopped of {| SessionId: string; StoppedAt: DateTimeOffset |}
   | DaemonSessionSwitched of {| FromId: string option; ToId: string; SwitchedAt: DateTimeOffset |}
+  | WorkflowSwitched of {| WorkflowLabel: string |}
 
 type SessionStreamState = {
   LastEvent: SessionEvent option
@@ -26,6 +27,7 @@ type SessionStreamState = {
   IsFaulted: bool
   FaultMessage: string option
   WarmupProgress: {| Step: int; Total: int; Message: string |} option
+  WorkflowLabel: string
 }
 
 module SessionStreamState =
@@ -37,6 +39,7 @@ module SessionStreamState =
     IsFaulted = false
     FaultMessage = None
     WarmupProgress = None
+    WorkflowLabel = "REPL"
   }
 
   let update (evt: SessionEvent) (s: SessionStreamState) =
@@ -70,6 +73,8 @@ module SessionStreamState =
       { base' with ActiveSessionId = sessionId }
     | DaemonSessionSwitched sw ->
       { base' with ActiveSessionId = Some sw.ToId }
+    | WorkflowSwitched w ->
+      { base' with WorkflowLabel = w.WorkflowLabel }
 
 /// SSE subscriber for the /events endpoint, filtering for session-related events.
 type SessionSubscriber(port: int) =
@@ -177,6 +182,13 @@ type SessionSubscriber(port: int) =
         let toId = tryStr root "ToId" ""
         let switchedAt = tryDateTimeOffset root "SwitchedAt"
         Some (DaemonSessionSwitched {| FromId = fromId; ToId = toId; SwitchedAt = switchedAt |})
+      | "session" ->
+        let subtype = tryStr root "type" ""
+        match subtype with
+        | "workflow_switched" ->
+          let label = tryStr root "workflowLabel" "REPL"
+          Some (WorkflowSwitched {| WorkflowLabel = label |})
+        | _ -> None
       | _ -> None
     with _ -> None
 

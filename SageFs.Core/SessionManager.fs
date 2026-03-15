@@ -550,6 +550,7 @@ module SessionManager =
               LastActivity = DateTime.UtcNow
               Status = SessionStatus.Starting
               WorkerPid = Some proc.Id
+              Workflow = workflow
             }
             let managed = {
               Info = info
@@ -622,6 +623,7 @@ module SessionManager =
                 LastActivity = DateTime.UtcNow
                 Status = SessionStatus.Ready
                 WorkerPid = Some readyStandby.Process.Id
+                Workflow = session.Workflow
               }
               let swapped = {
                 Info = info
@@ -692,6 +694,7 @@ module SessionManager =
                     LastActivity = DateTime.UtcNow
                     Status = SessionStatus.Starting
                     WorkerPid = Some proc.Id
+                    Workflow = session.Workflow
                   }
                   let restarted = {
                     Info = info

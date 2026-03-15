@@ -182,6 +182,7 @@ type LiveTestingCallbacks = {
   OnDomainModel: obj -> unit
   OnDiagnosisReady: obj -> unit
   OnBindingValuesUpdate: int -> ClientBindingValue list -> unit
+  OnWorkflowChanged: string -> unit
 }
 
 type LiveTestingListener = {
@@ -267,6 +268,10 @@ let start (port: int) (callbacks: LiveTestingCallbacks) (onReconnect: (unit -> u
           | Some sid when sid <> "" ->
             sessionFilter <- Some sid
           | _ -> ()
+        | "workflow_switched" ->
+          match fieldString "workflowLabel" data with
+          | Some label -> callbacks.OnWorkflowChanged label
+          | None -> ()
         | _ -> ()
       | "bindings_snapshot" ->
         fieldArray "Bindings" data

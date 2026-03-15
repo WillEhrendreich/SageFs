@@ -37,6 +37,12 @@ type StateEvent = {
   Regions: DaemonRegionData list
   /// Test name → (filePath, startLine) for jump-to-source (F12).
   TestSourceLocations: Map<string, string * int>
+  /// Current workflow label: "REPL" or "Live".
+  WorkflowLabel: string
+  /// Current REPL capability: "Full" or "ExpressionOnly".
+  ReplCapability: string
+  /// Whether browser hot reload is active in this session.
+  HotReloadActive: bool
 }
 
 /// Shared daemon client logic for both TUI and GUI.
@@ -132,6 +138,18 @@ module DaemonClient =
             with _ -> None)
           |> Map.ofSeq
         | _ -> Map.empty
+      let workflowLabel =
+        match root.TryGetProperty("workflowLabel") with
+        | true, el -> el.GetString()
+        | _ -> "REPL"
+      let replCapability =
+        match root.TryGetProperty("replCapability") with
+        | true, el -> el.GetString()
+        | _ -> "Full"
+      let hotReloadActive =
+        match root.TryGetProperty("hotReloadActive") with
+        | true, el -> el.GetBoolean()
+        | _ -> false
       Some {
         SessionId = sessionId
         SessionState = sessionState
@@ -143,6 +161,9 @@ module DaemonClient =
         WatchedCount = watchedCount
         Regions = regions
         TestSourceLocations = testSourceLocations
+        WorkflowLabel = workflowLabel
+        ReplCapability = replCapability
+        HotReloadActive = hotReloadActive
       }
     with ex ->
       Utils.Log.warn "[DaemonClient] parseStateEvent failed: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")

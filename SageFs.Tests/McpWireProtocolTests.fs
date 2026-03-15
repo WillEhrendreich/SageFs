@@ -85,6 +85,7 @@ let mcpToolRegistrationTests = testList "MCP tool registration" [
       "suggest_next_cell"
       "suggest_repair"
       "switch_session"
+      "switch_workflow"
       "visualize_domain_model"
     ]
     let actual =

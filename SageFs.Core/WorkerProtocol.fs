@@ -222,6 +222,7 @@ module WorkerProtocol =
     LastActivity: DateTime
     Status: SessionStatus
     WorkerPid: int option
+    Workflow: WorkflowTypes.SessionWorkflow
   }
 
   /// Utilities for deriving display-friendly paths from session metadata.

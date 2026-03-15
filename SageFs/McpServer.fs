@@ -1207,7 +1207,8 @@ let mapHealthRoutes (app: WebApplication) (rctx: RouteContext) =
                status = SageFs.WorkerProtocol.SessionStatus.label sess.Status
                workingDirectory = sess.WorkingDirectory
                workerPid = sess.WorkerPid
-               lastActivity = lastActivity |}
+               lastActivity = lastActivity
+               workflowLabel = SageFs.WorkflowTypes.SessionWorkflow.label sess.Workflow |}
           summary, payload)
         |> Seq.toArray
       let sessionSummaries = sessionPairs |> Array.map fst |> Array.toList
@@ -1488,7 +1489,8 @@ let mapSessionRoutes (app: WebApplication) (rctx: RouteContext) =
              projects = sess.Projects
              workingDirectory = sess.WorkingDirectory
              evalCount = evalCount
-             avgDurationMs = avgMs |} :> obj)
+             avgDurationMs = avgMs
+             workflowLabel = SageFs.WorkflowTypes.SessionWorkflow.label sess.Workflow |} :> obj)
       do! jsonResponse ctx 200 {| sessions = results |}
     } :> Task
   ) |> ignore
@@ -1544,7 +1546,15 @@ let mapSessionRoutes (app: WebApplication) (rctx: RouteContext) =
             [ projProp.GetString() ]
           | _ -> []
         | false -> []
-      let! result = rctx.Config.SessionOps.CreateSession projects workingDir SageFs.WorkflowTypes.SessionWorkflow.Interactive
+      let workflow =
+        let mutable wfProp = Unchecked.defaultof<System.Text.Json.JsonElement>
+        match root.TryGetProperty("workflow", &wfProp) with
+        | true ->
+          match wfProp.GetString() with
+          | "WebLive" | "Live" -> SageFs.WorkflowTypes.SessionWorkflow.WebLive SageFs.WorkflowTypes.BrowserRefreshConfig.defaults
+          | _ -> SageFs.WorkflowTypes.SessionWorkflow.Interactive
+        | false -> SageFs.WorkflowTypes.SessionWorkflow.Interactive
+      let! result = rctx.Config.SessionOps.CreateSession projects workingDir workflow
       match result with
       | Ok msg ->
         SageFs.McpTools.setActiveSessionId rctx.McpContext "cli-integrated" msg

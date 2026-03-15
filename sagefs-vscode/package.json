@@ -2,7 +2,7 @@
   "name": "sagefs",
   "displayName": "SageFs — Live F# Development",
   "description": "Send F# code to SageFs for instant evaluation, type-checking, and hot reload.",
-  "version": "0.6.170",
+  "version": "0.6.175",
   "publisher": "willehrendreich",
   "license": "MIT",
   "icon": "icon.png",
@@ -75,6 +75,10 @@
         "command": "sagefs.switchProject",
         "title": "SageFs: Switch Project",
         "icon": "$(folder-library)"
+      },
+      {
+        "command": "sagefs.switchWorkflow",
+        "title": "SageFs: Switch Workflow"
       },
       {
         "command": "sagefs.resetSession",

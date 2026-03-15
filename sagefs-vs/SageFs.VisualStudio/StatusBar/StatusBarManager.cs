@@ -31,6 +31,7 @@ internal class StatusBarManager : ExtensionPart
   private int _failedTests;
   private int _sessionCount;
   private string _daemonStatus = "Stopped";
+  private string _workflowLabel = "REPL";
   private string? _warmupMessage;
   private OutputChannel? _output;
   private InfoBarService? _infoBar;
@@ -87,6 +88,7 @@ internal class StatusBarManager : ExtensionPart
 
   private void OnSessionStateChanged(object? sender, Core.SessionStreamState state)
   {
+    _workflowLabel = state.WorkflowLabel;
     if (state.IsFaulted)
     {
       _daemonStatus = "Faulted";
@@ -368,7 +370,7 @@ internal class StatusBarManager : ExtensionPart
 
   private void PushStatusBar()
   {
-    var text = FormatStatusBarText(_daemonStatus, _sessionCount, _passingTests, _failedTests, _warmupMessage);
+    var text = FormatStatusBarText(_daemonStatus, _sessionCount, _passingTests, _failedTests, _warmupMessage, _workflowLabel);
     _ = TryUpdateVsStatusBarAsync(text);
   }
 
@@ -390,7 +392,7 @@ internal class StatusBarManager : ExtensionPart
   /// Both implementations must remain in sync for the basic connected/disconnected case.
   /// </summary>
   public static string FormatStatusBarText(
-    string daemonStatus, int sessionCount, int passingTests, int failedTests, string? warmupMessage = null)
+    string daemonStatus, int sessionCount, int passingTests, int failedTests, string? warmupMessage = null, string? workflowLabel = null)
   {
     var icon = daemonStatus switch
     {
@@ -400,11 +402,12 @@ internal class StatusBarManager : ExtensionPart
     };
     if (daemonStatus == "Connecting" && warmupMessage is not null)
       return $"{icon} SageFs {warmupMessage}";
+    var label = string.IsNullOrWhiteSpace(workflowLabel) ? "" : $" [{workflowLabel}]";
     var sessions = sessionCount > 0 ? $"  {sessionCount} session{(sessionCount != 1 ? "s" : "")}" : "";
     var tests = (passingTests > 0 || failedTests > 0)
       ? $"  ✓ {passingTests} / ✗ {failedTests}"
       : "";
-    return $"{icon} SageFs {daemonStatus}{sessions}{tests}";
+    return $"{icon} SageFs{label} {daemonStatus}{sessions}{tests}";
   }
 
   /// <summary>

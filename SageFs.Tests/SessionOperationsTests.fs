@@ -18,6 +18,7 @@ let mkSession (id: SessionId) lastActive (status: SessionStatus) : SessionInfo =
   LastActivity = lastActive
   Status = status
   WorkerPid = Some 100
+  Workflow = WorkflowTypes.SessionWorkflow.Interactive
 }
 
 let resolveSessionTests = testList "resolveSession" [
@@ -153,6 +154,7 @@ let mkSessionWithPid (id: SessionId) lastActive (status: SessionStatus) pid : Se
   LastActivity = lastActive
   Status = status
   WorkerPid = pid
+  Workflow = WorkflowTypes.SessionWorkflow.Interactive
 }
 
 let formatSessionInfoTests = testList "formatSessionInfo" [

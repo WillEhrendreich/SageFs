@@ -9,7 +9,7 @@ A live F# engine — hot reload, live testing, AI-native — for every editor, f
 [![NuGet](https://img.shields.io/nuget/v/SageFs?style=flat-square&logo=nuget&color=004880)](https://www.nuget.org/packages/SageFs/)
 [![.NET 10](https://img.shields.io/badge/.NET-10.0-512BD4?style=flat-square&logo=dotnet)](https://dotnet.microsoft.com)
 [![License: MIT](https://img.shields.io/badge/license-MIT-22c55e?style=flat-square)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-4000+-22c55e?style=flat-square)]()
+[![Tests](https://img.shields.io/badge/tests-6500+-22c55e?style=flat-square)]()
 [![Save → Green](https://img.shields.io/badge/save→green-<500ms-f59e0b?style=flat-square)]()
 
 </div>
@@ -207,6 +207,43 @@ graph TB
 5. Other clients can connect to the same session simultaneously
 
 This means **the daemon doesn't need to know your project at startup**. It starts bare and waits for clients to create or attach to sessions.
+
+---
+
+## Two Workflows: REPL vs Live
+
+SageFs sessions run in one of two modes. The tradeoff is a physical constraint of the .NET runtime — not a SageFs limitation.
+
+**REPL mode** (default) gives you a full interactive F# session. You can redefine types, experiment freely, and iterate on designs. This is what you want when you're prototyping domain types, exploring APIs, or working through a problem interactively.
+
+**Live mode** enables browser hot reload — save a `.fs` file and connected browsers update instantly via SSE, with no manual refresh. To make this work, SageFs uses runtime patching to inject code changes into the running app. That patching requires a single-assembly FSI mode, which means you **cannot redefine types** (you'll get FS0037 errors). Expressions, function bodies, and let bindings work fine.
+
+| | REPL (default) | Live |
+|:---|:---|:---|
+| **Type redefinition** | ✅ Full — redefine types freely | ❌ FS0037 — expression-level changes only |
+| **Browser hot reload** | ❌ Manual refresh required | ✅ Save → patch → SSE push |
+| **Live testing** | ✅ Full | ✅ Full |
+| **Best for** | Prototyping, domain modeling, exploration | Web apps with Falco, Datastar, ASP.NET |
+
+### Choosing the right mode
+
+- **Building a web app** with Falco.Datastar, Giraffe, or any ASP.NET pipeline? Use **Live** — you want save-and-see-it feedback in the browser.
+- **Exploring types**, designing domain models, writing tests, or working in `.fsx` scripts? Use **REPL** — you need the freedom to reshape types as you go.
+- **Not sure?** Start with REPL. Switch to Live when you need browser hot reload.
+
+### Switching modes
+
+Use the `switch_workflow` MCP tool, or your editor's command:
+
+- **Neovim**: `:SageFsWorkflow live` or `:SageFsWorkflow repl`
+- **VS Code**: Command Palette → `SageFs: Switch Workflow`
+- **TUI/GUI**: `Ctrl+W` toggles between modes
+
+When you switch, SageFs creates a new session in the target mode and stops the old one. Any REPL-defined bindings are lost — persisted files are unaffected.
+
+### Auto-detection
+
+When SageFs detects web-oriented packages in your project (Falco.Datastar, Giraffe, Saturn, etc.), it suggests switching to Live mode. You can accept or dismiss the suggestion.
 
 ---
 
@@ -647,37 +684,9 @@ Rewrite logic: [`SageFs.Core/FsiRewrite.fs`](SageFs.Core/FsiRewrite.fs) (~25 lin
 
 <br />
 
-SageFs is **daemon-first** — one server, many clients. The daemon starts bare and creates sessions on demand. Each session is an **isolated worker sub-process** (Erlang-style fault isolation) with its own FSI, project, and file watcher. The TUI uses SageTUI's Elm Architecture (`Program<Model,Msg>` with SIMD cell diff), while the Raylib GUI uses the `Cell[,]` grid abstraction — both share the same keybindings via `KeyMap` and connect to the daemon via SSE.
+SageFs is **daemon-first** — one server, many clients. The daemon starts bare and creates sessions on demand. Each session is an **isolated worker sub-process** (Erlang-style fault isolation) with its own FSI, project, and file watcher. The TUI uses SageTUI's Elm Architecture (`Program<Model,Msg>` with SIMD cell diff), while the Raylib GUI uses the `Cell[,]` grid abstraction — both share the same keybindings via `KeyMap` and connect to the daemon via SSE. See the [architecture diagram above](#-one-daemon-every-editor--simultaneously) for how clients connect.
 
-```
-                ┌───────────────┐
-                │  SageFs Daemon│
-                │  ┌─────────┐  │
-                │  │ FSI Actor│  │
-                │  │ (Eval +  │  │
-                │  │  Query)  │  │
-                │  └─────────┘  │
-                │  ┌─────────┐  │
-                │  │  File    │  │
-                │  │ Watcher  │  │
-                │  └─────────┘  │
-                │  ┌─────────┐  │
-                │  │  MCP     │  │
-                │  │ Server   │  │
-                │  └─────────┘  │
-                └──┬──┬──┬──┬───┘
-                   │  │  │  │
-     ┌──────┐  ┌──┴┐ ┌┴──┐ ┌┴──────┐  ┌────────┐
-     │VS Code│  │TUI│ │GUI│ │ Web   │  │AI Agent│
-     │Plugin │  │   │ │   │ │ Dash  │  │ (MCP)  │
-     └──────┘  └───┘ └───┘ └───────┘  └────────┘
-     ┌──────┐  ┌───────┐
-     │Neovim│  │ REPL  │
-     │Plugin│  │Connect│
-     └──────┘  └───────┘
-```
-
-3500+ tests: Expecto unit tests, FsCheck property-based state machine tests, Verify snapshots, binary persistence property tests.
+6500+ tests: Expecto unit tests, FsCheck property-based state machine tests, Verify snapshots, binary persistence property tests.
 
 </details>
 

@@ -53,6 +53,7 @@ module TestDeps =
       LastActivity = DateTime.UtcNow
       Status = SessionStatus.Ready
       WorkerPid = Some 999
+      Workflow = WorkflowTypes.SessionWorkflow.Interactive
     }
     let proxy (msg: WorkerMessage) =
       async {
@@ -121,6 +122,7 @@ module TestDeps =
             LastActivity = DateTime.UtcNow
             Status = SessionStatus.Starting
             WorkerPid = None
+            Workflow = WorkflowTypes.SessionWorkflow.Interactive
           }
           return Result.Ok info
         }
@@ -493,6 +495,7 @@ let fullLoopTests = testList "Full ElmLoop + EffectHandler" [
       WorkingDirectory = "/code"; SolutionRoot = None
       CreatedAt = DateTime.UtcNow; LastActivity = DateTime.UtcNow
       Status = SessionStatus.Ready; WorkerPid = Some 42
+      Workflow = WorkflowTypes.SessionWorkflow.Interactive
     }
     let warmup : WarmupContext = {
       AssembliesLoaded =
@@ -552,7 +555,8 @@ let fullLoopTests = testList "Full ElmLoop + EffectHandler" [
         return [{ Id = testSessionId "00000002"; Name = None; Projects = ["T.fsproj"]
                   WorkingDirectory = "."; SolutionRoot = None
                   CreatedAt = DateTime.UtcNow; LastActivity = DateTime.UtcNow
-                  Status = SessionStatus.Ready; WorkerPid = Some 1 }]
+                  Status = SessionStatus.Ready; WorkerPid = Some 1
+                  Workflow = WorkflowTypes.SessionWorkflow.Interactive }]
       }
       GetWarmupContext = None
       TestCycleCancellation = Features.LiveTesting.TestCycleCancellation.create ()
@@ -586,7 +590,8 @@ let fullLoopTests = testList "Full ElmLoop + EffectHandler" [
         return [{ Id = testSessionId "00000003"; Name = None; Projects = ["T.fsproj"]
                   WorkingDirectory = "."; SolutionRoot = None
                   CreatedAt = DateTime.UtcNow; LastActivity = DateTime.UtcNow
-                  Status = SessionStatus.Starting; WorkerPid = None }]
+                  Status = SessionStatus.Starting; WorkerPid = None
+                  Workflow = WorkflowTypes.SessionWorkflow.Interactive }]
       }
       GetWarmupContext =
         Some (fun _ -> async { ctxCalled <- true; return None })

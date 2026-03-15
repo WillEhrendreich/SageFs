@@ -1468,6 +1468,23 @@ module McpTools =
 
   // ── Session Management Operations ──────────────────────────────
 
+  /// Pure helper: given package references and the current workflow, format
+  /// a non-blocking hint suggesting the user switch to WebLive if detection
+  /// finds web packages. Returns None when no suggestion applies.
+  /// Decoupled from .fsproj reading for testability — callers provide the list.
+  let formatDetectionHint (packageRefs: string list) (currentWorkflow: WorkflowTypes.SessionWorkflow) : string option =
+    match currentWorkflow with
+    | WorkflowTypes.SessionWorkflow.Interactive ->
+      match WorkflowTypes.WorkflowDetection.suggest packageRefs with
+      | Some suggestion ->
+        let pkgs = suggestion.DetectedPackages |> String.concat ", "
+        Some (
+          sprintf
+            "💡 Detected web packages (%s). Consider switching to Live workflow for hot reload: use switch_workflow tool with target='live'"
+            pkgs)
+      | None -> None
+    | WorkflowTypes.SessionWorkflow.WebLive _ -> None
+
   /// Create a new session and bind it to the requesting agent.
   let createSession (ctx: McpContext) (agent: string) (projects: string list) (workingDir: string) (workflow: WorkflowTypes.SessionWorkflow) : Task<string> =
     task {
@@ -1491,7 +1508,12 @@ module McpTools =
       match result with
       | Result.Ok sid ->
         setActiveSessionId ctx agent sid
-        return sid
+        // Surface workflow detection hint (non-blocking, informational only).
+        // packageRefs is [] until .fsproj reading is wired in a future phase.
+        let packageRefs: string list = []
+        match formatDetectionHint packageRefs workflow with
+        | Some hint -> return sprintf "%s\n\n%s" sid hint
+        | None -> return sid
       | Result.Error err -> return SageFsError.describeForAgent err
     }
 
@@ -1536,6 +1558,69 @@ module McpTools =
           return sprintf "Switched to session '%s'" sessionId
         | None ->
           return sprintf "Error: Session '%s' not found" sessionId
+    }
+
+  // ── Workflow Switching ──────────────────────────────────────────
+
+  /// Switch the workflow mode of a session (Interactive ↔ WebLive).
+  /// Creates a new session with the target workflow and stops the old one.
+  let switchWorkflow
+    (ctx: McpContext)
+    (agent: string)
+    (workingDirectory: string option)
+    (targetStr: string)
+    (dryRun: bool)
+    : Task<string> =
+    task {
+      // 1. Parse target workflow
+      let targetOpt =
+        match targetStr.ToLowerInvariant().Trim() with
+        | "interactive" | "repl" -> Some WorkflowTypes.SessionWorkflow.Interactive
+        | "weblive" | "live" ->
+          Some (WorkflowTypes.SessionWorkflow.WebLive WorkflowTypes.BrowserRefreshConfig.defaults)
+        | _ -> None
+      match targetOpt with
+      | None ->
+        return sprintf "Error: unknown workflow '%s'. Valid values: 'interactive' (REPL), 'weblive' (Live)" targetStr
+      | Some target ->
+      // 2. Resolve session from working directory
+      let! resolved = resolveSessionId ctx agent None workingDirectory
+      match resolved with
+      | Error msg -> return msg
+      | Ok sid ->
+      // 3. Get session info for current workflow
+      let validId = toSessionId sid
+      let! info = ctx.SessionOps.GetSessionInfo validId
+      match info with
+      | None -> return sprintf "Error: session '%s' not found" sid
+      | Some sessionInfo ->
+      let current = sessionInfo.Workflow
+      let cost = WorkflowTypes.TransitionCost.compute 0 0 false
+      let opts = JsonSerializerOptions(WriteIndented = true)
+      // 4. If same workflow kind, no-op
+      match WorkflowTypes.SessionWorkflow.label current = WorkflowTypes.SessionWorkflow.label target with
+      | true ->
+        let result = WorkflowTypes.WorkflowSwitchResult.alreadyInWorkflow current cost
+        return JsonSerializer.Serialize(result, opts)
+      | false ->
+      // 5. If dry run, return preview only
+      match dryRun with
+      | true ->
+        let result = WorkflowTypes.WorkflowSwitchResult.preview current target cost
+        return JsonSerializer.Serialize(result, opts)
+      | false ->
+      // 6. Execute: create new session with target workflow, stop old
+      let! createResult =
+        ctx.SessionOps.CreateSession sessionInfo.Projects sessionInfo.WorkingDirectory target
+      match createResult with
+      | Result.Error err ->
+        return sprintf "Error switching workflow: %s" (SageFsError.describeForAgent err)
+      | Result.Ok newSid ->
+        let! _ = ctx.SessionOps.StopSession sid
+        setActiveSessionId ctx agent newSid
+        ctx.Dispatch |> Option.iter (fun d -> d (SageFsMsg.Editor EditorAction.ListSessions))
+        let result = WorkflowTypes.WorkflowSwitchResult.switched current target cost newSid
+        return JsonSerializer.Serialize(result, opts)
     }
 
   // ── Elm State Query ──────────────────────────────────────────────

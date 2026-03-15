@@ -168,6 +168,7 @@ module RaylibMode =
     (evalCount: int)
     (standbyLabel: string)
     (liveTestingStatus: string)
+    (workflowLabel: string)
     (watchedCount: int)
     (timeTravelStatus: string option)
     (focusedPane: PaneId)
@@ -181,11 +182,12 @@ module RaylibMode =
     (density: UiDensity) =
 
     let statusLeft =
-      let sid = if sessionId.Length > 8 then sessionId.[..7] else sessionId
-      let standby = if standbyLabel.Length > 0 then sprintf " | %s" standbyLabel else ""
-      let liveTesting = if liveTestingStatus.Length > 0 then sprintf " | %s" liveTestingStatus else ""
+      let sid = match sessionId.Length > 8 with | true -> sessionId.[..7] | false -> sessionId
+      let workflow = sprintf "[%s]" workflowLabel
+      let standby = match standbyLabel.Length > 0 with | true -> sprintf " | %s" standbyLabel | false -> ""
+      let liveTesting = match liveTestingStatus.Length > 0 with | true -> sprintf " | %s" liveTestingStatus | false -> ""
       let ttPart = match timeTravelStatus with | Some s -> sprintf " | %s" s | None -> ""
-      sprintf " %s %s | evals: %d%s%s%s | %s" sid sessionState evalCount standby liveTesting ttPart (PaneId.displayName focusedPane)
+      sprintf " %s %s %s | evals: %d%s%s%s | %s" sid sessionState workflow evalCount standby liveTesting ttPart (PaneId.displayName focusedPane)
     let statusRight = sprintf " %s | %dpt | %d fps |%s" themeName fontSize currentFps (StatusHints.build keyMap focusedPane layoutConfig.VisiblePanes watchedCount density)
     Screen.drawWith layoutConfig theme grid regions focusedPane scrollOffsets statusLeft statusRight |> ignore
 
@@ -238,6 +240,7 @@ module RaylibMode =
     let mutable lastEvalCount = 0
     let mutable lastStandbyLabel = ""
     let mutable lastLiveTestingStatus = ""
+    let mutable lastWorkflowLabel = "REPL"
     let mutable lastWatchedCount = 0
     let mutable lastDensity = UiDensity.Normal
     let mutable lastFps = 0
@@ -314,6 +317,7 @@ module RaylibMode =
             lastEvalCount <- event.EvalCount
             lastStandbyLabel <- event.StandbyLabel
             lastLiveTestingStatus <- event.LiveTestingStatus
+            lastWorkflowLabel <- event.WorkflowLabel
             lastWatchedCount <- event.WatchedCount
             lastRegions <- regions
             match event.TestSourceLocations.IsEmpty with
@@ -541,8 +545,8 @@ module RaylibMode =
 
       if running then
         // Render
-        let regions, sessionId, sessionState, evalCount, standbyLabel, liveTestingStatus, watchedCount =
-          lock statelock (fun () -> lastRegions, lastSessionId, lastSessionState, lastEvalCount, lastStandbyLabel, lastLiveTestingStatus, lastWatchedCount)
+        let regions, sessionId, sessionState, evalCount, standbyLabel, liveTestingStatus, workflowLabel, watchedCount =
+          lock statelock (fun () -> lastRegions, lastSessionId, lastSessionState, lastEvalCount, lastStandbyLabel, lastLiveTestingStatus, lastWorkflowLabel, lastWatchedCount)
 
         // When viewing history, use historical regions; otherwise use live
         let displayRegions =
@@ -558,7 +562,7 @@ module RaylibMode =
           | true -> sprintf "%s %s" liveTestingStatus failingNavHint
           | false -> liveTestingStatus
 
-        renderRegions grid displayRegions sessionId sessionState evalCount standbyLabel liveTestingWithNav watchedCount ttStatus focusedPane scrollOffsets fontSize lastFps keyMap layoutConfig currentTheme currentThemeName lastDensity
+        renderRegions grid displayRegions sessionId sessionState evalCount standbyLabel liveTestingWithNav workflowLabel watchedCount ttStatus focusedPane scrollOffsets fontSize lastFps keyMap layoutConfig currentTheme currentThemeName lastDensity
         lastFps <- fps ()
 
         Raylib.BeginDrawing()

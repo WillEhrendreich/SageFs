@@ -3,6 +3,7 @@ module SageFs.Tests.TestInfrastructure
 open SageFs.ActorCreation
 open SageFs.AppState
 open SageFs.McpTools
+open SageFs.WorkflowTypes
 open System.Collections.Concurrent
 open System.Threading
 
@@ -84,7 +85,8 @@ let mkTestSessionOps (result: ActorResult) (sessionId: SageFs.WorkerProtocol.Ses
                Name = None
                Projects = []; WorkingDirectory = ""; SolutionRoot = None
                Status = SageFs.WorkerProtocol.SessionStatus.Ready
-               WorkerPid = None; CreatedAt = System.DateTime.UtcNow; LastActivity = System.DateTime.UtcNow })
+               WorkerPid = None; Workflow = SessionWorkflow.Interactive
+               CreatedAt = System.DateTime.UtcNow; LastActivity = System.DateTime.UtcNow })
     GetAllSessions = fun () -> System.Threading.Tasks.Task.FromResult([])
     GetStandbyInfo = fun () -> System.Threading.Tasks.Task.FromResult(SageFs.StandbyInfo.NoPool)
     NotifyWorkerDied = fun _ -> () }
