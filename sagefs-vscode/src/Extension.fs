@@ -37,6 +37,7 @@ let mutable diagnosticsDisposable: Disposable option = None
 let mutable sseDisposable: Disposable option = None
 let mutable diagnosticCollection: DiagnosticCollection option = None
 let mutable activeSessionId: string option = None
+let mutable currentWorkflowLabel: string = "REPL"
 let mutable liveTestListener: LiveTest.LiveTestingListener option = None
 let mutable testAdapter: TestCtrl.TestAdapter option = None
 let mutable dashboardPanel: WebviewPanel option = None
@@ -648,7 +649,9 @@ let refreshStatus () =
                   |> Array.tryHead |> Option.defaultValue ""
             let sessionCount = sessions.Length
             let evalLabel = match s.evalCount with 0 -> "" | n -> sprintf " [%d]" n
-            sb.text <- sprintf "$(zap) SageFs: %s%s%s%s" projLabel evalLabel supervised restarts
+            currentWorkflowLabel <- s.workflowLabel
+            let workflowTag = sprintf " [%s]" currentWorkflowLabel
+            sb.text <- sprintf "$(zap) SageFs: %s%s%s%s%s" projLabel workflowTag evalLabel supervised restarts
             let tooltipText =
               match projFile with
               | "" -> sprintf "SageFs — %d session(s) — click for session menu" sessionCount
@@ -1228,6 +1231,44 @@ let stopSessionCmd () =
       | Some id when id = sess.id -> activeSessionId <- None
       | _ -> ())
 
+/// Context-aware workflow switching — shows QuickPick to choose REPL or Live workflow.
+let switchWorkflowCmd () =
+  promise {
+    match client with
+    | None ->
+      Window.showWarningMessage "SageFs is not connected." [||] |> ignore
+    | Some c ->
+      let! sessions = Client.listSessions c
+      match sessions |> Array.tryHead with
+      | None ->
+        Window.showWarningMessage "No active session to switch workflow." [||] |> ignore
+      | Some sess ->
+        let items = [|
+          "$(notebook) REPL — Full interactive REPL, no hot reload"
+          "$(globe) Live — Hot reload with restricted REPL"
+        |]
+        let! picked = Window.showQuickPick items "Select workflow"
+        match picked with
+        | Some choice ->
+          let workflow =
+            match choice.Contains "REPL" with
+            | true -> "Interactive"
+            | false -> "WebLive"
+          let projects = sess.projects |> String.concat ","
+          let! result = Client.createSessionWithWorkflow projects sess.workingDirectory workflow c
+          match result with
+          | Client.Succeeded _ ->
+            let label =
+              match workflow with
+              | "Interactive" -> "REPL"
+              | _ -> "Live"
+            currentWorkflowLabel <- label
+            refreshStatus ()
+          | Client.Failed msg ->
+            Window.showErrorMessage (sprintf "Workflow switch failed: %s" msg) [||] |> ignore
+        | None -> ()
+  }
+
 /// Context-aware session menu — the primary entry point from the status bar.
 let sessionMenu () =
   promise {
@@ -1646,6 +1687,7 @@ let activate (context: ExtensionContext) =
   reg "sagefs.configureWarmupAutoOpen" (fun _ -> configureWarmupAutoOpenCmd () |> promiseIgnoreLog logToOutput)
   reg "sagefs.switchSession" (fun _ -> switchSessionCmd () |> promiseIgnoreLog logToOutput)
   reg "sagefs.stopSession" (fun _ -> stopSessionCmd () |> promiseIgnoreLog logToOutput)
+  reg "sagefs.switchWorkflow" (fun _ -> switchWorkflowCmd () |> promiseIgnoreLog logToOutput)
 
   // Tree view inline actions for Sessions panel
   reg "sagefs.switchToSession" (fun args ->
@@ -2170,6 +2212,9 @@ let activate (context: ExtensionContext) =
         let line = max 0 (blockStartLine - 1)
         Window.getActiveTextEditor ()
         |> Option.iter (fun ed -> InlineDeco.showBindingValues ed line bindingValues)
+      OnWorkflowChanged = fun label ->
+        currentWorkflowLabel <- label
+        refreshStatus ()
     }
     let reconnectHandler = Some (fun () ->
       c.log "SSE reconnected — refreshing status..."

@@ -56,7 +56,8 @@ type SessionInfo =
     workingDirectory: string
     status: string
     projects: string array
-    evalCount: int }
+    evalCount: int
+    workflowLabel: string }
 
 type LoadedAssemblyInfo =
   { Name: string
@@ -278,7 +279,8 @@ let parseSessions (parsed: obj) =
       workingDirectory = fieldString "workingDirectory" s |> Option.defaultValue ""
       status = fieldString "status" s |> Option.defaultValue "unknown"
       projects = fieldStringArray "projects" s |> Option.defaultValue [||]
-      evalCount = fieldInt "evalCount" s |> Option.defaultValue 0 })
+      evalCount = fieldInt "evalCount" s |> Option.defaultValue 0
+      workflowLabel = fieldString "workflowLabel" s |> Option.defaultValue "REPL" })
 
 let listSessions (c: Client) =
   promise {
@@ -288,6 +290,9 @@ let listSessions (c: Client) =
 
 let createSession (projects: string) (workingDirectory: string) (c: Client) =
   postCommand c "/api/sessions/create" (jsonStringify {| projects = [| projects |]; workingDirectory = workingDirectory |}) 30000
+
+let createSessionWithWorkflow (projects: string) (workingDirectory: string) (workflow: string) (c: Client) =
+  postCommand c "/api/sessions/create" (jsonStringify {| projects = [| projects |]; workingDirectory = workingDirectory; workflow = workflow |}) 30000
 
 let switchSession (sessionId: string) (c: Client) =
   postCommand c "/api/sessions/switch" (jsonStringify {| sessionId = sessionId |}) 5000
