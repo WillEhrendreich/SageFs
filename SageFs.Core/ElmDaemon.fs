@@ -21,13 +21,13 @@ let createEffectDeps
       let snap = readSnapshot()
       let urls = snap.WorkerBaseUrls |> Map.toSeq |> Seq.map (fun (k, v) -> WorkerProtocol.SessionId.value k, v) |> Map.ofSeq
       HttpWorkerClient.proxyFromUrls (WorkerProtocol.SessionId.value sessionId) urls
-    CreateSession = fun projects workingDir ->
+    CreateSession = fun projects workingDir workflow ->
       async {
         let autoOpenNamespaces = autoOpenNamespacesForDirectory workingDir
         let! result =
           sessionManager.PostAndAsyncReply(fun reply ->
             SessionManager.SessionCommand.CreateSession(
-              projects, workingDir, autoOpenNamespaces, reply))
+              projects, workingDir, autoOpenNamespaces, workflow, reply))
         return result
       }
     ConfigureWarmupAutoOpen = fun workingDir ->

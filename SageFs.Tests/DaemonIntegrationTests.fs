@@ -305,7 +305,7 @@ let sessionManagerLifecycleTests =
       let createResult =
         mgr.PostAndAsyncReply(fun reply ->
           SageFs.SessionManager.SessionCommand.CreateSession(
-            [], testProjectDir, true, reply))
+            [], testProjectDir, true, WorkflowTypes.SessionWorkflow.Interactive, reply))
         |> Async.RunSynchronously
 
       match createResult with
@@ -373,7 +373,7 @@ let sessionManagerLifecycleTests =
       let createResult =
         mgr.PostAndAsyncReply(fun reply ->
           SageFs.SessionManager.SessionCommand.CreateSession(
-            [], testProjectDir, true, reply))
+            [], testProjectDir, true, WorkflowTypes.SessionWorkflow.Interactive, reply))
         |> Async.RunSynchronously
 
       match createResult with
@@ -416,7 +416,7 @@ let sessionManagerLifecycleTests =
       let create () =
         mgr.PostAndAsyncReply(fun reply ->
           SageFs.SessionManager.SessionCommand.CreateSession(
-            [], testProjectDir, true, reply))
+            [], testProjectDir, true, WorkflowTypes.SessionWorkflow.Interactive, reply))
         |> Async.RunSynchronously
 
       let result1 = create ()

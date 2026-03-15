@@ -40,6 +40,7 @@ module SessionManager =
         projects: string list *
         workingDir: string *
         autoOpenNamespaces: bool *
+        workflow: WorkflowTypes.SessionWorkflow *
         AsyncReplyChannel<Result<SessionInfo, SageFsError>>
     | StopSession of
         SessionId *
@@ -187,7 +188,7 @@ module SessionManager =
     let empty = { Sessions = Map.empty; StandbyInfo = StandbyInfo.NoPool; PerSessionStandby = Map.empty; WarmupProgress = Map.empty; WorkerBaseUrls = Map.empty }
 
   type SessionManagerRuntime = {
-    StartWorkerProcess: SessionId -> string list -> string -> bool -> (int -> int -> unit) -> Result<Process, SageFsError>
+    StartWorkerProcess: SessionId -> string list -> string -> bool -> WorkflowTypes.SessionWorkflow -> (int -> int -> unit) -> Result<Process, SageFsError>
     AwaitWorkerPort: SessionId -> Process -> MailboxProcessor<SessionCommand> -> CancellationToken -> unit
     AwaitStandbyPort: StandbyKey -> Process -> MailboxProcessor<SessionCommand> -> CancellationToken -> unit
     StopWorker: ManagedSession -> Async<unit>
@@ -222,9 +223,10 @@ module SessionManager =
     (projects: string list)
     (workingDir: string)
     (autoOpenNamespaces: bool)
+    (workflow: WorkflowTypes.SessionWorkflow)
     (onExited: int -> int -> unit)
     : Result<Process, SageFsError> =
-    let args, envVars = Args.buildWorkerSpawnConfig (SessionId.value sessionId) projects false false autoOpenNamespaces WorkflowTypes.SessionWorkflow.Interactive
+    let args, envVars = Args.buildWorkerSpawnConfig (SessionId.value sessionId) projects false false autoOpenNamespaces workflow
 
     let psi = ProcessStartInfo()
     psi.FileName <- "sagefs"
@@ -527,13 +529,13 @@ module SessionManager =
         publishSnapshot state
         let! cmd = inbox.Receive()
         match cmd with
-        | SessionCommand.CreateSession(projects, workingDir, autoOpenNamespaces, reply) ->
+        | SessionCommand.CreateSession(projects, workingDir, autoOpenNamespaces, workflow, reply) ->
           let sessionId = SessionId.newId()
           let span = Instrumentation.startSpan Instrumentation.sessionSource "session.create"
                        [("session.id", box sessionId); ("session.projects", box (String.concat "," projects)); ("session.working_dir", box workingDir)]
           let onExited workerPid exitCode =
             inbox.Post(SessionCommand.WorkerExited(sessionId, workerPid, exitCode))
-          match runtime.StartWorkerProcess sessionId projects workingDir autoOpenNamespaces onExited with
+          match runtime.StartWorkerProcess sessionId projects workingDir autoOpenNamespaces workflow onExited with
           | Ok proc ->
             // Register session immediately with pending proxy — don't block
             let info : SessionInfo = {
@@ -674,7 +676,7 @@ module SessionManager =
               | Ok _buildMsg ->
                 let onExited workerPid exitCode =
                   inbox.Post(SessionCommand.WorkerExited(id, workerPid, exitCode))
-                match runtime.StartWorkerProcess id session.Projects session.WorkingDir session.AutoOpenNamespaces onExited with
+                match runtime.StartWorkerProcess id session.Projects session.WorkingDir session.AutoOpenNamespaces WorkflowTypes.SessionWorkflow.Interactive onExited with
                 | Ok proc ->
                   let info : SessionInfo = {
                     Id = id
@@ -917,7 +919,7 @@ module SessionManager =
           | Some session when session.Info.Status = SessionStatus.Restarting ->
             let onExited workerPid exitCode =
               inbox.Post(SessionCommand.WorkerExited(id, workerPid, exitCode))
-            match runtime.StartWorkerProcess id session.Projects session.WorkingDir session.AutoOpenNamespaces onExited with
+            match runtime.StartWorkerProcess id session.Projects session.WorkingDir session.AutoOpenNamespaces WorkflowTypes.SessionWorkflow.Interactive onExited with
             | Ok proc ->
               let restarted =
                 { session with
@@ -1003,7 +1005,7 @@ module SessionManager =
             let standbyId = SessionId.newId()
             let onExited workerPid _exitCode =
               inbox.Post(SessionCommand.StandbyExited(key, workerPid))
-            match runtime.StartWorkerProcess standbyId key.Projects key.WorkingDir key.AutoOpenNamespaces onExited with
+            match runtime.StartWorkerProcess standbyId key.Projects key.WorkingDir key.AutoOpenNamespaces WorkflowTypes.SessionWorkflow.Interactive onExited with
             | Ok proc ->
               let standby = {
                 Process = proc

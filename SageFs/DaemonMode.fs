@@ -249,12 +249,12 @@ let createSessionOps
   (appendEvents: Features.Events.SageFsEvent list -> unit)
   : SessionManagementOps =
   {
-    CreateSession = fun projects workingDir ->
+    CreateSession = fun projects workingDir workflow ->
       task {
         let autoOpenNamespaces = DirectoryConfig.autoOpenNamespacesForDirectory workingDir
         let! result =
           sessionManager.PostAndAsyncReply(fun reply ->
-            SessionManager.SessionCommand.CreateSession(projects, workingDir, autoOpenNamespaces, reply))
+            SessionManager.SessionCommand.CreateSession(projects, workingDir, autoOpenNamespaces, workflow, reply))
           |> Async.StartAsTask
         match result with
         | Ok info ->
@@ -1065,7 +1065,7 @@ let resumePreviousSessions
       relevant
       |> List.map (fun prev -> task {
         log.LogInformation("Resuming session for {WorkingDir}", prev.WorkingDir)
-        let! result = sessionOps.CreateSession prev.Projects prev.WorkingDir
+        let! result = sessionOps.CreateSession prev.Projects prev.WorkingDir WorkflowTypes.SessionWorkflow.Interactive
         match result with
         | Ok info ->
           Instrumentation.daemonSessionsResumed.Add(1L)
@@ -1651,6 +1651,36 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
     GetTestSourceLocations = fun () ->
       let model = elmRuntime.GetModel()
       model.ResolvedSourceLocations
+    GetSessionAgentBadges = fun sessionId ->
+      let presences =
+        AgentActivityTracker.getActivePresences
+          activityTracker (Some sessionId) (TimeSpan.FromMinutes 5.0) DateTime.UtcNow
+      presences
+      |> List.map (fun p ->
+        let freshness = SessionOperations.AgentPresence.freshness DateTime.UtcNow (TimeSpan.FromMinutes 2.0) p
+        let cssClass =
+          match freshness with
+          | SessionOperations.AgentFreshness.Fresh -> "badge-agent"
+          | SessionOperations.AgentFreshness.Stale -> "badge-agent badge-agent-stale"
+        let intentLabel =
+          match p.Intent with
+          | Some i -> i
+          | None -> ""
+        let detail =
+          match p.RecentFiles with
+          | [] -> ""
+          | files -> files |> List.truncate 3 |> String.concat ", "
+        { Name = p.AgentName; IntentLabel = intentLabel; CssClass = cssClass; DetailLabel = detail })
+    GetSessionGuidanceCss = fun sessionId ->
+      let presences =
+        AgentActivityTracker.getActivePresences
+          activityTracker (Some sessionId) (TimeSpan.FromMinutes 5.0) DateTime.UtcNow
+      let workers =
+        presences
+        |> List.filter (fun p -> p.Role = SessionOperations.OccupantRole.Worker)
+      match workers with
+      | [] -> ""
+      | _ -> "guidance-contested"
   }
 
   let dashboardActions : DashboardActions = {
@@ -1699,7 +1729,7 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
       return result |> Result.mapError SageFsError.describe
     })
     CreateSession = Some (fun (projects: string list) (workingDir: string) -> task {
-      let! result = sessionOps.CreateSession projects workingDir
+      let! result = sessionOps.CreateSession projects workingDir WorkflowTypes.SessionWorkflow.Interactive
       elmRuntime.Dispatch(SageFsMsg.Editor EditorAction.ListSessions)
       return result |> Result.mapError SageFsError.describe
     })
@@ -1728,6 +1758,7 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
         | _ -> ())
       buf
     TriggerStateChange = Some (fun () -> stateChangedEvent.Trigger (ModelChanged (0, 0)))
+    ActivityTracker = Some activityTracker
     GetCompletions = Some (fun (sessionId: string) (code: string) (cursorPos: int) -> task {
       match String.IsNullOrEmpty(sessionId) with
       | true -> return []

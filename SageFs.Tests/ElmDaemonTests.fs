@@ -36,7 +36,7 @@ module ElmDaemonTestHelpers =
       GetProxy = fun id ->
         if id = testSid then Some proxy else None
       GetStreamingTestProxy = fun _ -> None
-      CreateSession = fun projects _ ->
+      CreateSession = fun projects _ _ ->
         async { return Result.Ok sessionInfo }
       ConfigureWarmupAutoOpen = fun _ ->
         async {

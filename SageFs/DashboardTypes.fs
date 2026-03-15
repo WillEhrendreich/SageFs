@@ -358,6 +358,15 @@ let discoverProjects (workingDir: string) : DiscoveredProjects =
       []
   { WorkingDir = workingDir; Solutions = solutions; Projects = projects }
 
+/// Pre-formatted agent badge for dashboard rendering.
+/// Populated at snapshot time from AgentPresence + AgentFreshness.
+type AgentBadge = {
+  Name: string
+  IntentLabel: string
+  CssClass: string
+  DetailLabel: string
+}
+
 type ParsedSession = {
   Id: string
   Status: string
@@ -374,6 +383,8 @@ type ParsedSession = {
   CoverageSummary: Features.LiveTesting.CoverageSummary option
   TestTreemapEntries: Features.LiveTesting.TestTreemapEntry array
   BindingEntries: Features.BindingExplorer.BindingInfo array
+  AgentBadges: AgentBadge list
+  GuidanceCssClass: string
 }
 
 let parseSessionLines (content: string) =
@@ -410,7 +421,9 @@ let parseSessionLines (content: string) =
         TestSummary = None
         CoverageSummary = None
         TestTreemapEntries = [||]
-        BindingEntries = [||] }
+        BindingEntries = [||]
+        AgentBadges = []
+        GuidanceCssClass = "" }
     | false ->
       { Id = l.Trim()
         Status = "unknown"
@@ -426,7 +439,9 @@ let parseSessionLines (content: string) =
         TestSummary = None
         CoverageSummary = None
         TestTreemapEntries = [||]
-        BindingEntries = [||] })
+        BindingEntries = [||]
+        AgentBadges = []
+        GuidanceCssClass = "" })
   |> Array.toList
 
 let isCreatingSession (content: string) =
@@ -541,6 +556,10 @@ type DashboardQueries = {
   GetFilmstripEntries: unit -> FilmstripEntry list
   /// Read resolved test source locations from the Elm model.
   GetTestSourceLocations: unit -> Features.LiveTesting.TestSourceLocation list
+  /// Get pre-formatted agent badges for a session from the activity tracker.
+  GetSessionAgentBadges: string -> AgentBadge list
+  /// Get the CSS class for session guidance (ambient row styling).
+  GetSessionGuidanceCss: string -> string
 }
 
 /// Commands that mutate session state.
@@ -569,6 +588,8 @@ type DashboardInfra = {
   SystemAlarmBuffer: SystemAlarmEntry list ref
   /// Triggers a state-change push on all connected SSE streams (used by dismiss route).
   TriggerStateChange: (unit -> unit) option
+  /// Agent activity tracker for multi-agent coordination.
+  ActivityTracker: AgentActivityTracker.Tracker option
 }
 
 /// Complete snapshot of all dashboard state needed for a single full-page render.

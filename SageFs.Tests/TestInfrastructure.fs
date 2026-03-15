@@ -73,7 +73,7 @@ let mkProxy (result: ActorResult) : SageFs.WorkerProtocol.SessionProxy =
 /// Create a test SessionManagementOps that routes to the global actor
 let mkTestSessionOps (result: ActorResult) (sessionId: SageFs.WorkerProtocol.SessionId) : SageFs.SessionManagementOps =
   let proxy = mkProxy result
-  { CreateSession = fun _ _ -> System.Threading.Tasks.Task.FromResult(Ok "test-session")
+  { CreateSession = fun _ _ _ -> System.Threading.Tasks.Task.FromResult(Ok "test-session")
     ListSessions = fun () -> System.Threading.Tasks.Task.FromResult("No sessions")
     StopSession = fun _ -> System.Threading.Tasks.Task.FromResult(Ok "stopped")
     RestartSession = fun _ _ -> System.Threading.Tasks.Task.FromResult(Ok "restarted")

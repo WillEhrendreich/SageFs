@@ -225,7 +225,9 @@ module SessionStateOverride =
       TestSummary = None
       CoverageSummary = None
       TestTreemapEntries = [||]
-      BindingEntries = [||] }
+      BindingEntries = [||]
+      AgentBadges = []
+      GuidanceCssClass = "" }
 
 [<Tests>]
 let stateOverrideTests =
@@ -497,7 +499,9 @@ let perSessionTestSummaryTests =
           TestSummary = Some summary
           CoverageSummary = None
           TestTreemapEntries = [||]
-          BindingEntries = [||] }
+          BindingEntries = [||]
+          AgentBadges = []
+          GuidanceCssClass = "" }
       let html =
         renderSessions [session] false
         |> renderNode
@@ -520,7 +524,9 @@ let perSessionTestSummaryTests =
           TestSummary = None
           CoverageSummary = None
           TestTreemapEntries = [||]
-          BindingEntries = [||] }
+          BindingEntries = [||]
+          AgentBadges = []
+          GuidanceCssClass = "" }
       let html =
         renderSessions [session] false
         |> renderNode
@@ -551,7 +557,9 @@ let perSessionCoverageTests =
           TestSummary = None
           CoverageSummary = Some summary
           TestTreemapEntries = [||]
-          BindingEntries = [||] }
+          BindingEntries = [||]
+          AgentBadges = []
+          GuidanceCssClass = "" }
       let html =
         renderSessions [session] false
         |> renderNode
@@ -574,7 +582,9 @@ let perSessionCoverageTests =
           TestSummary = None
           CoverageSummary = None
           TestTreemapEntries = [||]
-          BindingEntries = [||] }
+          BindingEntries = [||]
+          AgentBadges = []
+          GuidanceCssClass = "" }
       let html =
         renderSessions [session] false
         |> renderNode

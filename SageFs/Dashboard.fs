@@ -253,7 +253,9 @@ let private buildOutputPanels
                   TestSummary = testSummary
                   CoverageSummary = coverageSummary
                   TestTreemapEntries = treemapEntries
-                  BindingEntries = bindingEntries })
+                  BindingEntries = bindingEntries
+                  AgentBadges = q.GetSessionAgentBadges s.Id
+                  GuidanceCssClass = q.GetSessionGuidanceCss s.Id })
           let creating = isCreatingSession r.Content
           let sess = renderSessions visible creating
           let sessionPicker =

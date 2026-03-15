@@ -1544,7 +1544,7 @@ let mapSessionRoutes (app: WebApplication) (rctx: RouteContext) =
             [ projProp.GetString() ]
           | _ -> []
         | false -> []
-      let! result = rctx.Config.SessionOps.CreateSession projects workingDir
+      let! result = rctx.Config.SessionOps.CreateSession projects workingDir SageFs.WorkflowTypes.SessionWorkflow.Interactive
       match result with
       | Ok msg ->
         SageFs.McpTools.setActiveSessionId rctx.McpContext "cli-integrated" msg

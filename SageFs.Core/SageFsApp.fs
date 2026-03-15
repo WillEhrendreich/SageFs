@@ -1087,7 +1087,7 @@ type EffectDeps = {
   /// The proxy streams test results and IL coverage hits.
   GetStreamingTestProxy: SessionId -> (Features.LiveTesting.TestCase array -> int -> (Features.LiveTesting.TestRunResult -> unit) -> (bool array -> unit) -> Async<unit>) option
   /// Create a new session
-  CreateSession: string list -> string -> Async<Result<SessionInfo, SageFsError>>
+  CreateSession: string list -> string -> WorkflowTypes.SessionWorkflow -> Async<Result<SessionInfo, SageFsError>>
   /// Ensure the working directory has warmup auto-open disabled.
   ConfigureWarmupAutoOpen: string -> Async<Result<OutputLine, string>>
   /// Stop a session
@@ -1253,7 +1253,7 @@ module SageFsEffectHandler =
             match projects with
             | [dir] when System.IO.Directory.Exists(dir) -> []
             | other -> other
-          let! result = deps.CreateSession projectList workingDir
+          let! result = deps.CreateSession projectList workingDir WorkflowTypes.SessionWorkflow.Interactive
           match result with
           | Ok info ->
             dispatch (SageFsMsg.Event (

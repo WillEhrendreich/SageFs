@@ -704,8 +704,12 @@ let renderSessions (sessions: ParsedSession list) (creating: bool) =
           match s.IsActive with
           | true -> "output-result"
           | false -> ""
+        let guidanceCls =
+          match s.GuidanceCssClass.Length > 0 with
+          | true -> sprintf " %s" s.GuidanceCssClass
+          | false -> ""
         Elem.div
-          [ Attr.class' (sprintf "session-row flex-between %s" cls)
+          [ Attr.class' (sprintf "session-row flex-between %s%s" cls guidanceCls)
             Attr.style "padding: 8px 0; border-bottom: 1px solid var(--border-normal); cursor: pointer;"
             Ds.class' ("session-selected", sprintf "$%s === '%s'" Signals.ViewingSessionId s.Id)
             Ds.onEvent ("click", sprintf "$%s = '%s'; @post('/dashboard/session/switch/%s')" Signals.ViewingSessionId s.Id s.Id) ]
@@ -740,6 +744,18 @@ let renderSessions (sessions: ParsedSession list) (creating: bool) =
                     [ Attr.class' "badge"; Attr.style (sprintf "color: %s;" color) ]
                     [ Text.raw s.StandbyLabel ]
                 | false -> ()
+                // Agent presence badges (multi-agent coordination)
+                yield! s.AgentBadges |> List.map (fun badge ->
+                  Elem.span
+                    [ Attr.class' badge.CssClass
+                      Attr.title (
+                        match badge.DetailLabel.Length > 0 with
+                        | true -> sprintf "%s — files: %s" badge.Name badge.DetailLabel
+                        | false -> badge.Name) ]
+                    [ Text.raw (
+                        match badge.IntentLabel.Length > 0 with
+                        | true -> sprintf "🤖 %s (%s)" badge.Name badge.IntentLabel
+                        | false -> sprintf "🤖 %s" badge.Name) ])
                 match s.Uptime.Length > 0 with
                 | true ->
                   Elem.span [ Attr.class' "meta"; Attr.style "margin-left: auto;" ] [

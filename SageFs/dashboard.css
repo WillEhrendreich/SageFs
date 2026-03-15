@@ -787,3 +787,27 @@ h1 {
   background: var(--bg-selection, #3a3a3a);
   color: var(--fg-default, #ccc);
 }
+
+/* ── Multi-agent coordination badges ───────────────────────────── */
+.badge-agent {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 0.7rem;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: var(--bg-focus, #363646);
+  color: var(--fg-default, #dcd7ba);
+  border: 1px solid var(--border-normal, #54546d);
+}
+.badge-agent-stale {
+  opacity: 0.45;
+}
+.guidance-contested {
+  border-left: 3px solid var(--fg-yellow, #e6c384);
+  background: rgba(230, 195, 132, 0.04);
+}
+.guidance-unhealthy {
+  border-left: 3px solid var(--fg-red, #e82424);
+  background: rgba(232, 36, 36, 0.04);
+}

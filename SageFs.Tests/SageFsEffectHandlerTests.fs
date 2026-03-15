@@ -73,7 +73,7 @@ module TestDeps =
       GetProxy = fun id ->
         if id = testSessionId "a1b2c3d4" then Some proxy else None
       GetStreamingTestProxy = fun _ -> None
-      CreateSession = fun projects dir ->
+      CreateSession = fun projects dir _workflow ->
         async {
           log.SessionCreateCalls <-
             log.SessionCreateCalls @ [projects, dir]
@@ -109,7 +109,7 @@ module TestDeps =
         Result.Error (SageFsError.NoActiveSessions)
       GetProxy = fun _ -> None
       GetStreamingTestProxy = fun _ -> None
-      CreateSession = fun projects dir ->
+      CreateSession = fun projects dir _workflow ->
         async {
           let info : SessionInfo = {
             Id = testSessionId "b2c3d4e5"
@@ -514,7 +514,7 @@ let fullLoopTests = testList "Full ElmLoop + EffectHandler" [
         Result.Error (SageFsError.NoActiveSessions)
       GetProxy = fun _ -> None
       GetStreamingTestProxy = fun _ -> None
-      CreateSession = fun _ _ ->
+      CreateSession = fun _ _ _ ->
         async { return Result.Error (SageFsError.NoActiveSessions) }
       ConfigureWarmupAutoOpen = TestDeps.ensureAutoOpenNoop
       StopSession = fun _ ->
@@ -542,7 +542,7 @@ let fullLoopTests = testList "Full ElmLoop + EffectHandler" [
         Result.Error (SageFsError.NoActiveSessions)
       GetProxy = fun _ -> None
       GetStreamingTestProxy = fun _ -> None
-      CreateSession = fun _ _ ->
+      CreateSession = fun _ _ _ ->
         async { return Result.Error (SageFsError.NoActiveSessions) }
       ConfigureWarmupAutoOpen = TestDeps.ensureAutoOpenNoop
       StopSession = fun _ ->
@@ -576,7 +576,7 @@ let fullLoopTests = testList "Full ElmLoop + EffectHandler" [
         Result.Error (SageFsError.NoActiveSessions)
       GetProxy = fun _ -> None
       GetStreamingTestProxy = fun _ -> None
-      CreateSession = fun _ _ ->
+      CreateSession = fun _ _ _ ->
         async { return Result.Error (SageFsError.NoActiveSessions) }
       ConfigureWarmupAutoOpen = TestDeps.ensureAutoOpenNoop
       StopSession = fun _ ->

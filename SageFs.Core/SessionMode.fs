@@ -6,7 +6,7 @@ open SageFs.WorkerProtocol
 /// Functions a daemon provides for managing worker sessions.
 /// Pure data — no actor, no transport, just function signatures.
 type SessionManagementOps = {
-  CreateSession: string list -> string -> Task<Result<string, SageFsError>>
+  CreateSession: string list -> string -> WorkflowTypes.SessionWorkflow -> Task<Result<string, SageFsError>>
   ListSessions: unit -> Task<string>
   StopSession: string -> Task<Result<string, SageFsError>>
   /// Stop worker, optionally rebuild, respawn with same session ID.
@@ -28,7 +28,7 @@ type SessionManagementOps = {
 module SessionManagementOps =
   /// A no-op stub for testing — all operations return sensible defaults.
   let stub : SessionManagementOps = {
-    CreateSession = fun _ _ -> Task.FromResult(Result.Error (SageFsError.SessionCreationFailed "Not available"))
+    CreateSession = fun _ _ _ -> Task.FromResult(Result.Error (SageFsError.SessionCreationFailed "Not available"))
     ListSessions = fun () -> Task.FromResult("No sessions")
     StopSession = fun _ -> Task.FromResult(Result.Error (SageFsError.SessionCreationFailed "Not available"))
     RestartSession = fun _ _ -> Task.FromResult(Result.Error (SageFsError.HardResetFailed "Not available"))

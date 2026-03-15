@@ -583,8 +583,14 @@ Available: %s%s%s""" sessionId eventCount (SessionState.label state) projectsStr
       match startupConfig with
       | None -> ""
       | Some config ->
-        sprintf ""","startup":{"workingDirectory":"%s","mcpPort":%d,"hotReloadEnabled":%b,"aspireDetected":%b}"""
+        let workflowLabel = WorkflowTypes.SessionWorkflow.label config.Workflow
+        let replCap =
+          match WorkflowTypes.SessionWorkflow.replCapability config.Workflow with
+          | WorkflowTypes.ReplCapability.Full -> "Full"
+          | WorkflowTypes.ReplCapability.ExpressionOnly -> "ExpressionOnly"
+        sprintf ""","startup":{"workingDirectory":"%s","mcpPort":%d,"hotReloadEnabled":%b,"aspireDetected":%b,"workflow":"%s","workflowLabel":"%s","replCapability":"%s"}"""
           (escapeJson config.WorkingDirectory) config.McpPort config.HotReloadEnabled config.AspireDetected
+          (escapeJson (sprintf "%A" config.Workflow)) workflowLabel replCap
     sprintf """{"sessionId":"%s","eventCount":%d,"state":"%s","projects":%s,"tools":[%s]%s%s}"""
       (escapeJson sessionId) eventCount (SessionState.label state) projectsJson toolsJson statsJson startupJson
 
@@ -1443,7 +1449,7 @@ module McpTools =
   // ── Session Management Operations ──────────────────────────────
 
   /// Create a new session and bind it to the requesting agent.
-  let createSession (ctx: McpContext) (agent: string) (projects: string list) (workingDir: string) : Task<string> =
+  let createSession (ctx: McpContext) (agent: string) (projects: string list) (workingDir: string) (workflow: WorkflowTypes.SessionWorkflow) : Task<string> =
     task {
       // Guard: warn if a session for the same project(s) already exists
       let! existing = ctx.SessionOps.GetAllSessions()
@@ -1459,7 +1465,7 @@ module McpTools =
         let status = WorkerProtocol.SessionStatus.label dup.Status
         return sprintf "⚠️ A session for this project already exists (session '%s', status: %s). Use switch_session to target it instead of creating a duplicate. Creating duplicate sessions causes resource starvation. If the existing session is stuck, use stop_session to remove it first, then retry create_session." sid status
       | [] ->
-      let! result = ctx.SessionOps.CreateSession projects workingDir
+      let! result = ctx.SessionOps.CreateSession projects workingDir workflow
       // Refresh Elm model so dashboard SSE pushes updated session list
       ctx.Dispatch |> Option.iter (fun d -> d (SageFsMsg.Editor EditorAction.ListSessions))
       match result with

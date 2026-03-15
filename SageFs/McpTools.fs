@@ -456,7 +456,7 @@ projects: Comma-separated list of absolute or relative .fsproj file paths.""")>]
         let agent = match System.String.IsNullOrWhiteSpace agentName with | true -> "mcp" | false -> agentName
         logger.LogDebug("MCP-TOOL: create_session called: projects={Projects}, dir={Dir}, agent={Agent}", projects, working_directory, agent)
         let projectList = projects.Split(',') |> Array.map (fun s -> s.Trim()) |> Array.toList
-        createSession ctx agent projectList working_directory |> withEcho "create_session"
+        createSession ctx agent projectList working_directory SageFs.WorkflowTypes.SessionWorkflow.Interactive |> withEcho "create_session"
 
     [<McpServerTool>]
     [<Description("""List all active FSI sessions with their metadata: session ID, project names, current status, working directory, and last activity timestamp.

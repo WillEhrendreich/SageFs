@@ -37,7 +37,7 @@ let private mkRuntime
     Runtime =
       {
         StartWorkerProcess =
-          fun _ _ _ _ _ ->
+          fun _ _ _ _ _ _ ->
             startCalls <- startCalls + 1
             startWorker startCalls
         AwaitWorkerPort = fun _ _ _ _ -> ()
@@ -88,7 +88,7 @@ let private withHarness runtime run =
 
 let private createSession (harness: Harness) =
   match harness.Mailbox.PostAndReply(fun reply ->
-    SessionCommand.CreateSession(["Test.fsproj"], @"C:\Test", true, reply)) with
+    SessionCommand.CreateSession(["Test.fsproj"], @"C:\Test", true, WorkflowTypes.SessionWorkflow.Interactive, reply)) with
   | Ok info -> info
   | Error err -> failtestf "create session failed: %s" (SageFsError.describe err)
 
