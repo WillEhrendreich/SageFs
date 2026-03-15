@@ -40,7 +40,9 @@ SageFs is a live F# development engine. Start it once, connect any editor — VS
 - [Contributing](#contributing)
 - [License](#license)
 
-<!-- Replace with hero GIF once recorded: docs/hero-demo.gif -->
+<p align="center">
+  <img src="docs/media/sagefs-hero.gif" alt="SageFs in action — write F# and see results instantly" width="720" />
+</p>
 
 > ### 🆕 Never written F#? You're in the right place.
 >
@@ -169,6 +171,10 @@ dotnet tool install --global SageFs --add-source ./nupkg --no-cache
 ---
 
 ## Two Workflows: REPL vs Live
+
+<p align="center">
+  <img src="docs/media/sagefs-workflow.gif" alt="Switching between REPL and Live workflows" width="720" />
+</p>
 
 SageFs sessions run in one of two modes. The tradeoff is a physical constraint of the .NET runtime — not a SageFs limitation.
 
