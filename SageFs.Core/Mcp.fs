@@ -1613,17 +1613,45 @@ module McpTools =
       let current = sessionInfo.Workflow
       let cost = WorkflowTypes.TransitionCost.compute 0 0 false
       let opts = JsonSerializerOptions(WriteIndented = true)
+      let prevLabel = WorkflowTypes.SessionWorkflow.label current
+      let targetLabel = WorkflowTypes.SessionWorkflow.label target
+      let serializeOutcome outcome =
+        match outcome with
+        | WorkflowTypes.WorkflowSwitchOutcome.AlreadyActive (c, msg) ->
+          JsonSerializer.Serialize(
+            {| Outcome = "alreadyActive"
+               PreviousWorkflow = prevLabel
+               TargetWorkflow = targetLabel
+               Cost = c; Switched = false
+               NewSessionId = (None: string option)
+               Message = msg |}, opts)
+        | WorkflowTypes.WorkflowSwitchOutcome.DryRunPreview (c, msg) ->
+          JsonSerializer.Serialize(
+            {| Outcome = "dryRunPreview"
+               PreviousWorkflow = prevLabel
+               TargetWorkflow = targetLabel
+               Cost = c; Switched = false
+               NewSessionId = (None: string option)
+               Message = msg |}, opts)
+        | WorkflowTypes.WorkflowSwitchOutcome.Executed (_, _, c, sid, msg) ->
+          JsonSerializer.Serialize(
+            {| Outcome = "executed"
+               PreviousWorkflow = prevLabel
+               TargetWorkflow = targetLabel
+               Cost = c; Switched = true
+               NewSessionId = Some sid
+               Message = msg |}, opts)
       // 4. If same workflow kind, no-op
       match WorkflowTypes.SessionWorkflow.label current = WorkflowTypes.SessionWorkflow.label target with
       | true ->
-        let result = WorkflowTypes.WorkflowSwitchResult.alreadyInWorkflow current cost
-        return JsonSerializer.Serialize(result, opts)
+        let outcome = WorkflowTypes.WorkflowSwitchOutcome.alreadyInWorkflow current cost
+        return serializeOutcome outcome
       | false ->
       // 5. If dry run, return preview only
       match dryRun with
       | true ->
-        let result = WorkflowTypes.WorkflowSwitchResult.preview current target cost
-        return JsonSerializer.Serialize(result, opts)
+        let outcome = WorkflowTypes.WorkflowSwitchOutcome.preview current target cost
+        return serializeOutcome outcome
       | false ->
       // 6. Execute: create new session with target workflow, stop old
       let! createResult =
@@ -1635,8 +1663,8 @@ module McpTools =
         let! _ = ctx.SessionOps.StopSession sid
         setActiveSessionId ctx agent newSid
         ctx.Dispatch |> Option.iter (fun d -> d (SageFsMsg.Editor EditorAction.ListSessions))
-        let result = WorkflowTypes.WorkflowSwitchResult.switched current target cost newSid
-        return JsonSerializer.Serialize(result, opts)
+        let outcome = WorkflowTypes.WorkflowSwitchOutcome.switched current target cost newSid
+        return serializeOutcome outcome
     }
 
   // ── Elm State Query ──────────────────────────────────────────────

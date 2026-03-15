@@ -152,29 +152,30 @@ let transitionCostPropertyTests =
     ]
   ]
 
-// ── WorkflowSwitchResult scenario tests ─────────────────────
+// ── WorkflowSwitchOutcome scenario tests ────────────────────
 
 [<Tests>]
-let workflowSwitchResultTests =
-  testList "WorkflowSwitchResult scenarios" [
+let workflowSwitchOutcomeTests =
+  testList "WorkflowSwitchOutcome scenarios" [
 
     testList "same-workflow is always a no-op" [
 
       testPropertyWithConfig switchConfig
-        "switching to same workflow returns Switched=false" <|
+        "switching to same workflow returns AlreadyActive" <|
         fun (workflow: SessionWorkflow) ->
           // WHY: Destroying a session to recreate it identically
           // wastes time and loses REPL state for nothing.
           let cost = TransitionCost.zero
-          let result = WorkflowSwitchResult.alreadyInWorkflow workflow cost
-          not result.Switched
+          let outcome = WorkflowSwitchOutcome.alreadyInWorkflow workflow cost
+          outcome |> WorkflowSwitchOutcome.wasExecuted |> not
 
       testPropertyWithConfig switchConfig
-        "same-workflow result message contains 'already'" <|
+        "same-workflow outcome message contains 'already'" <|
         fun (workflow: SessionWorkflow) ->
           let cost = TransitionCost.zero
-          let result = WorkflowSwitchResult.alreadyInWorkflow workflow cost
-          result.Message.Contains "Already" || result.Message.Contains "already"
+          let outcome = WorkflowSwitchOutcome.alreadyInWorkflow workflow cost
+          let msg = WorkflowSwitchOutcome.message outcome
+          msg.Contains "Already" || msg.Contains "already"
     ]
 
     testList "dry-run preview" [
@@ -187,35 +188,38 @@ let workflowSwitchResultTests =
         let cost = TransitionCost.compute 5 3 false
 
         // WHEN previewing the switch
-        let result = WorkflowSwitchResult.preview current target cost
+        let outcome = WorkflowSwitchOutcome.preview current target cost
 
-        // THEN the result shows cost but doesn't switch
-        result.Switched
-        |> Expect.isFalse
-          "dry-run should not switch"
-        result.Cost.DefinitionsLost
-        |> Expect.equal
-          "should report 5 definitions at risk" 5
-        result.Cost.CellsLost
-        |> Expect.equal
-          "should report 3 cells at risk" 3
-        result.NewSessionId
+        // THEN the outcome is DryRunPreview with correct cost
+        match outcome with
+        | WorkflowSwitchOutcome.DryRunPreview (c, _) ->
+          c.DefinitionsLost
+          |> Expect.equal
+            "should report 5 definitions at risk" 5
+          c.CellsLost
+          |> Expect.equal
+            "should report 3 cells at risk" 3
+        | other ->
+          failwithf "Expected DryRunPreview, got %A" other
+        outcome
+        |> WorkflowSwitchOutcome.sessionId
         |> Expect.isNone
-          "no new session in preview mode"
+          "DryRunPreview structurally has no session ID"
 
       testPropertyWithConfig switchConfig
-        "preview labels match workflow labels" <|
+        "preview message contains both workflow labels" <|
         fun (current: SessionWorkflow) (target: SessionWorkflow) ->
           let cost = TransitionCost.zero
-          let result = WorkflowSwitchResult.preview current target cost
-          result.PreviousWorkflow = SessionWorkflow.label current
-          && result.TargetWorkflow = SessionWorkflow.label target
+          let outcome = WorkflowSwitchOutcome.preview current target cost
+          let msg = WorkflowSwitchOutcome.message outcome
+          msg.Contains (SessionWorkflow.label current)
+          && msg.Contains (SessionWorkflow.label target)
     ]
 
     testList "successful switch" [
 
       testCase
-        "switch creates new session with correct metadata" <| fun _ ->
+        "switch creates Executed outcome with correct metadata" <| fun _ ->
         // GIVEN switching from Interactive to WebLive
         let previous = SessionWorkflow.Interactive
         let target = SessionWorkflow.WebLive BrowserRefreshConfig.defaults
@@ -223,22 +227,26 @@ let workflowSwitchResultTests =
         let newSid = "abc-new-session"
 
         // WHEN executing the switch
-        let result =
-          WorkflowSwitchResult.switched previous target cost newSid
+        let outcome =
+          WorkflowSwitchOutcome.switched previous target cost newSid
 
-        // THEN it reports success with new session details
-        result.Switched
-        |> Expect.isTrue
-          "switch should report as executed"
-        result.NewSessionId
-        |> Expect.equal
-          "should include new session ID" (Some newSid)
-        result.PreviousWorkflow
-        |> Expect.equal
-          "should record previous workflow" "REPL"
-        result.TargetWorkflow
-        |> Expect.equal
-          "should record target workflow" "Live"
+        // THEN it's an Executed outcome with new session details
+        match outcome with
+        | WorkflowSwitchOutcome.Executed (prev, tgt, c, sid, _) ->
+          sid
+          |> Expect.equal
+            "should carry new session ID" newSid
+          SessionWorkflow.label prev
+          |> Expect.equal
+            "should record previous workflow" "REPL"
+          SessionWorkflow.label tgt
+          |> Expect.equal
+            "should record target workflow" "Live"
+          c
+          |> Expect.equal
+            "should carry transition cost" cost
+        | other ->
+          failwithf "Expected Executed, got %A" other
     ]
   ]
 

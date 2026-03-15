@@ -50,6 +50,14 @@ module ActiveSession =
     | ActiveSession.Viewing id -> id = sid
     | ActiveSession.AwaitingSession -> false
 
+/// Augment SessionSnapshot with a rich DU accessor.
+/// Prefer `snap.Activation` over raw `snap.IsActive` for pattern matching.
+type SessionSnapshot with
+  member this.Activation =
+    match this.IsActive with
+    | true -> ActiveSession.Viewing this.Id
+    | false -> ActiveSession.AwaitingSession
+
 /// The full session registry view — what every UI renders
 type SessionRegistryView = {
   Sessions: SessionSnapshot list
@@ -115,7 +123,10 @@ module SessionDisplay =
         { Action = EditorAction.SwitchSession (SessionId.value snap.Id)
           Label = "Switch"
           KeyHint = KeyMap.hintFor keyMap (EditorAction.SwitchSession (SessionId.value snap.Id))
-          Enabled = not snap.IsActive }
+          Enabled =
+            match snap.Activation with
+            | ActiveSession.Viewing _ -> false
+            | ActiveSession.AwaitingSession -> true }
       match snap.Status = SessionDisplayStatus.Stale || not snap.IsActive with
       | true ->
         yield

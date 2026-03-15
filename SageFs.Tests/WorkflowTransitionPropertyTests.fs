@@ -163,60 +163,64 @@ let workflowTransitionPropertyTests =
           standby.EstimatedRestart < cold.EstimatedRestart
     ]
 
-    // ── (f) alreadyInWorkflow always reports no-op ───────────
+    // ── (f) alreadyInWorkflow always returns AlreadyActive ─────
 
-    testList "alreadyInWorkflow always reports no-op" [
+    testList "alreadyInWorkflow always returns AlreadyActive" [
 
       testPropertyWithConfig chaosConfig
-        "Switched is false and labels match" <|
+        "outcome is AlreadyActive and message contains label" <|
         fun (workflow: SessionWorkflow) (cost: TransitionCost) ->
           // WHY: UI must reliably detect no-op to show an appropriate
           // "already in this mode" message instead of a success toast.
-          let result = WorkflowSwitchResult.alreadyInWorkflow workflow cost
+          let outcome = WorkflowSwitchOutcome.alreadyInWorkflow workflow cost
           let label = SessionWorkflow.label workflow
-          not result.Switched
-          && result.PreviousWorkflow = label
-          && result.TargetWorkflow = label
+          match outcome with
+          | WorkflowSwitchOutcome.AlreadyActive (_, msg) ->
+            msg.Contains label
+          | _ -> false
 
       testPropertyWithConfig chaosConfig
         "message contains 'Already' for any workflow" <|
         fun (workflow: SessionWorkflow) ->
           let cost = TransitionCost.zero
-          let result = WorkflowSwitchResult.alreadyInWorkflow workflow cost
-          result.Message.Contains "Already"
-          || result.Message.Contains "already"
+          let outcome = WorkflowSwitchOutcome.alreadyInWorkflow workflow cost
+          let msg = WorkflowSwitchOutcome.message outcome
+          msg.Contains "Already"
+          || msg.Contains "already"
 
       testPropertyWithConfig chaosConfig
-        "NewSessionId is always None" <|
+        "sessionId is structurally None for AlreadyActive" <|
         fun (workflow: SessionWorkflow) (cost: TransitionCost) ->
-          let result = WorkflowSwitchResult.alreadyInWorkflow workflow cost
-          result.NewSessionId = None
+          let outcome = WorkflowSwitchOutcome.alreadyInWorkflow workflow cost
+          WorkflowSwitchOutcome.sessionId outcome = None
     ]
 
-    // ── (g) switched always has a NewSessionId ───────────────
+    // ── (g) switched always produces Executed ───────────────
 
-    testList "switched always has a NewSessionId" [
+    testList "switched always produces Executed" [
 
       testPropertyWithConfig chaosConfig
-        "NewSessionId is Some for any valid switch" <|
+        "Executed always carries the provided sessionId" <|
         fun (prev: SessionWorkflow) (next: SessionWorkflow)
             (cost: TransitionCost) ->
           // WHY: Client code expects to reconnect to the new session —
-          // a None here would leave the editor disconnected.
+          // missing sessionId would leave the editor disconnected.
           let sid =
             sprintf "test-session-%s" (Guid.NewGuid().ToString("N").[..7])
-          let result = WorkflowSwitchResult.switched prev next cost sid
-          result.NewSessionId = Some sid
-          && result.Switched
+          let outcome = WorkflowSwitchOutcome.switched prev next cost sid
+          match outcome with
+          | WorkflowSwitchOutcome.Executed (_, _, _, actualSid, _) ->
+            actualSid = sid
+          | _ -> false
 
       testPropertyWithConfig chaosConfig
-        "switched result message contains session ID" <|
+        "Executed outcome message contains session ID" <|
         fun (prev: SessionWorkflow) (next: SessionWorkflow) ->
           let cost = TransitionCost.zero
           let sid =
             sprintf "chaos-%s" (Guid.NewGuid().ToString("N").[..7])
-          let result = WorkflowSwitchResult.switched prev next cost sid
-          result.Message.Contains sid
+          let outcome = WorkflowSwitchOutcome.switched prev next cost sid
+          (WorkflowSwitchOutcome.message outcome).Contains sid
     ]
 
     // ── (h) No negative values in TransitionCost ─────────────

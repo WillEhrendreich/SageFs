@@ -138,73 +138,86 @@ module TransitionCost =
     StandbyReady = standbyReady
   }
 
-// ─── Workflow switch result ─────────────────────────────────
+// ─── Workflow switch outcome ────────────────────────────────
 
-/// Result of a switch_workflow call.
-/// Always includes cost (even for no-ops and dry-runs).
-type WorkflowSwitchResult = {
-  /// Workflow before the switch.
-  PreviousWorkflow: string
-  /// Target workflow requested.
-  TargetWorkflow: string
-  /// Computed cost of the transition.
-  Cost: TransitionCost
-  /// Whether the switch was actually executed.
-  Switched: bool
-  /// New session ID if a switch was performed.
-  NewSessionId: string option
-  /// Human-readable summary of what happened.
-  Message: string
-}
+/// Outcome of a switch_workflow call — makes impossible states unrepresentable.
+///
+/// The old record type allowed `Switched=true, NewSessionId=None` (switched
+/// but no session?) and `Switched=false, NewSessionId=Some x` (didn't switch
+/// but got a session?). This DU eliminates those impossible states:
+/// - AlreadyActive structurally cannot carry a sessionId
+/// - DryRunPreview structurally cannot carry a sessionId
+/// - Executed always carries a sessionId (non-optional)
+[<RequireQualifiedAccess>]
+type WorkflowSwitchOutcome =
+  /// Target = current workflow — nothing happened, zero side effects.
+  | AlreadyActive of cost: TransitionCost * message: string
+  /// Dry-run preview — shows cost without executing.
+  | DryRunPreview of cost: TransitionCost * message: string
+  /// Switch executed — new session created, old session stopped.
+  | Executed of
+      previous: SessionWorkflow *
+      target: SessionWorkflow *
+      cost: TransitionCost *
+      sessionId: string *
+      message: string
 
-module WorkflowSwitchResult =
-  /// Create a no-op result when target = current workflow.
-  let alreadyInWorkflow (workflow: SessionWorkflow) (cost: TransitionCost) = {
-    PreviousWorkflow = SessionWorkflow.label workflow
-    TargetWorkflow = SessionWorkflow.label workflow
-    Cost = cost
-    Switched = false
-    NewSessionId = None
-    Message =
+module WorkflowSwitchOutcome =
+
+  /// Create a no-op outcome when target = current workflow.
+  let alreadyInWorkflow (workflow: SessionWorkflow) (cost: TransitionCost) =
+    WorkflowSwitchOutcome.AlreadyActive (
+      cost,
       sprintf "Already in %s workflow — no switch needed"
-        (SessionWorkflow.label workflow)
-  }
+        (SessionWorkflow.label workflow))
 
-  /// Create a dry-run preview result.
+  /// Create a dry-run preview outcome.
   let preview
     (current: SessionWorkflow)
     (target: SessionWorkflow)
-    (cost: TransitionCost) = {
-    PreviousWorkflow = SessionWorkflow.label current
-    TargetWorkflow = SessionWorkflow.label target
-    Cost = cost
-    Switched = false
-    NewSessionId = None
-    Message =
+    (cost: TransitionCost) =
+    WorkflowSwitchOutcome.DryRunPreview (
+      cost,
       sprintf "Preview: switching from %s to %s would lose %d definitions and %d cells"
         (SessionWorkflow.label current)
         (SessionWorkflow.label target)
         cost.DefinitionsLost
-        cost.CellsLost
-  }
+        cost.CellsLost)
 
-  /// Create a successful switch result.
+  /// Create a successful switch outcome.
   let switched
     (previous: SessionWorkflow)
     (target: SessionWorkflow)
     (cost: TransitionCost)
-    (newSessionId: string) = {
-    PreviousWorkflow = SessionWorkflow.label previous
-    TargetWorkflow = SessionWorkflow.label target
-    Cost = cost
-    Switched = true
-    NewSessionId = Some newSessionId
-    Message =
+    (newSessionId: string) =
+    WorkflowSwitchOutcome.Executed (
+      previous, target, cost, newSessionId,
       sprintf "Switched from %s to %s (new session: %s)"
         (SessionWorkflow.label previous)
         (SessionWorkflow.label target)
-        newSessionId
-  }
+        newSessionId)
+
+  /// Extract cost from any outcome.
+  let cost = function
+    | WorkflowSwitchOutcome.AlreadyActive (c, _) -> c
+    | WorkflowSwitchOutcome.DryRunPreview (c, _) -> c
+    | WorkflowSwitchOutcome.Executed (_, _, c, _, _) -> c
+
+  /// Extract human-readable message from any outcome.
+  let message = function
+    | WorkflowSwitchOutcome.AlreadyActive (_, m) -> m
+    | WorkflowSwitchOutcome.DryRunPreview (_, m) -> m
+    | WorkflowSwitchOutcome.Executed (_, _, _, _, m) -> m
+
+  /// Extract session ID (only present for Executed outcomes).
+  let sessionId = function
+    | WorkflowSwitchOutcome.Executed (_, _, _, sid, _) -> Some sid
+    | _ -> None
+
+  /// Whether the outcome represents an actual switch execution.
+  let wasExecuted = function
+    | WorkflowSwitchOutcome.Executed _ -> true
+    | _ -> false
 
 // ─── Workflow suggestion (project detection) ────────────────
 
