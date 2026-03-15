@@ -36,6 +36,7 @@ SageFs exposes dozens of MCP tools — from `send_fsharp_code` to `run_tests` to
 | `list_sessions` | List all active sessions. |
 | `stop_session` | Stop a session by ID. |
 | `switch_session` | Switch active session. |
+| `switch_workflow` | Switch between REPL (interactive) and Live (WebLive) workflows. |
 | `enable_live_testing` | Turn on live unit testing. |
 | `disable_live_testing` | Turn off live unit testing. |
 | `get_live_test_status` | Test state with optional file filter. |

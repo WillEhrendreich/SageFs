@@ -125,7 +125,7 @@ enhancements on top of the shared pipeline.
 
 ## ADR-6: MCP as the AI Interface
 
-**Decision**: SageFs exposes 33+ tools via [Model Context Protocol](https://modelcontextprotocol.io/)
+**Decision**: SageFs exposes 50 tools via [Model Context Protocol](https://modelcontextprotocol.io/)
 with an affordance-driven state machine — AI agents only see tools valid for the current
 session state.
 

@@ -14,7 +14,7 @@
 
 ## Technical Reference
 - **[Feature Matrix](FEATURE_MATRIX.md)** — Cross-editor feature comparison + architecture notes
-- **[Binary Format Spec](binary-format-spec.md)** — `.sagefm` and `.sagetc` persistence format
+- **[Binary Format Spec](binary-format-spec.md)** — `.sagefs` and `.sagetc` persistence format
 - **[Binary Format Benchmarks](binary-format-benchmarks.md)** — Serialization performance data
 - **[System Architecture](architecture-graph.html)** — Component interaction diagram
 - **[SSE Events Reference](../Readme.md)** — Wire format for SSE events and connected-client behavior

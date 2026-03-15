@@ -9,7 +9,7 @@ A live F# engine — hot reload, live testing, AI-native — for every editor, f
 [![NuGet](https://img.shields.io/nuget/v/SageFs?style=flat-square&logo=nuget&color=004880)](https://www.nuget.org/packages/SageFs/)
 [![.NET 10](https://img.shields.io/badge/.NET-10.0-512BD4?style=flat-square&logo=dotnet)](https://dotnet.microsoft.com)
 [![License: MIT](https://img.shields.io/badge/license-MIT-22c55e?style=flat-square)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-6500+-22c55e?style=flat-square)]()
+[![Tests](https://img.shields.io/badge/tests-5700+-22c55e?style=flat-square)]()
 [![Save → Green](https://img.shields.io/badge/save→green-<500ms-f59e0b?style=flat-square)]()
 
 </div>
@@ -73,7 +73,7 @@ graph TB
     D["<b>SageFs Daemon</b><br/>FSI · File Watcher · MCP · Hot Reload · Dashboard"]
 
     D --- VS["VS Code<br/><i>Fable F#→JS</i>"]
-    D --- NV["Neovim<br/><i>38 Lua modules</i>"]
+    D --- NV["Neovim<br/><i>59 Lua modules</i>"]
     D --- VI["Visual Studio<br/><i>Extensibility SDK</i>"]
     D --- TU["Terminal TUI<br/><i>SageTUI / Elm</i>"]
     D --- GU["Raylib GUI<br/><i>GPU renderer</i>"]
@@ -144,7 +144,7 @@ No configuration needed — SageFs discovers Expecto tests and runs them on ever
 - **Coverage bars**: Colored bars in the gutter show which lines are covered by tests
 - **Failure details**: Hover over red markers to see Expected vs Actual diffs
 
-> 💡 **Tip**: Press `Ctrl+Shift+S` to mark all tests stale and re-run everything.
+> 💡 **Tip**: Use the **SageFs: Mark All Tests Stale** command (Command Palette) to re-run everything.
 
 ```
 MCP (streamable HTTP):  http://localhost:37749/       ← recommended for new MCP clients
@@ -280,8 +280,8 @@ Every frontend connects to the same daemon. Open several at once — they all se
 | Test panel | ✅ | ✅ | ✅ | ✅ | ✅ | — | — |
 | Test policy controls | ✅ | ✅ | ✅ | — | — | — | ✅ |
 | Type explorer | ✅ | ✅ | — | — | ¹ | — | ✅ |
-| Call graph | ✅ | ✅ | ✅ | — | — | — | — |
-| History browser | ✅ | ✅ | ✅ | ✅ | ✅ | — | — |
+| Call graph | ✅ | ✅ | — | — | — | — | — |
+| History browser | ✅ | ✅ | — | ✅ | ✅ | — | — |
 | Test trace | ✅ | ✅ | — | — | — | — | ✅ |
 
 > ¹ Server-side data ready. Editor UI integration pending (VS SDK limitations or work-in-progress).
@@ -297,7 +297,7 @@ Features: Alt+Enter eval, CodeLens, live test decorations, native Test Explorer 
 
 #### Neovim
 
-[**sagefs.nvim**](https://github.com/WillEhrendreich/sagefs.nvim) — 38 Lua modules, 1142 tests, 46 commands.
+[**sagefs.nvim**](https://github.com/WillEhrendreich/sagefs.nvim) — 59 Lua modules, 1400+ tests, 57 commands.
 
 ```lua
 -- lazy.nvim
@@ -348,10 +348,10 @@ sagefs --jupyter conn.json  # Run as a Jupyter kernel
 | Evaluate entire file | `Alt+Shift+Enter` | `Shift+Alt+Enter` | `<leader>rf` |
 | Clear inline results | Command Palette | — | `<leader>rc` |
 | Run all tests | Command Palette | Command Palette | `<leader>rT` |
-| Toggle test panel | `Ctrl+Shift+T` | View → SageFs Tests | `:SageFsTests` |
+| Toggle test panel | Command Palette | View → SageFs Tests | `:SageFsTestPanel` |
 | Jump to test source | Click test in explorer | — | `<CR>` in telescope |
 | Show failure narrative | Hover on red marker | Hover on red marker | `<C-d>` in test panel |
-| Mark all stale | `Ctrl+Shift+S` | `Ctrl+Shift+S` | `<leader>rS` |
+| Mark all stale | Command Palette | Command Palette | `<leader>rS` |
 | Session picker | Command Palette | Command Palette | `<leader>rs` |
 
 > **Full keybinding references**: [VS Code](sagefs-vscode/README.md) · [Visual Studio](sagefs-vs/README.md) · [Neovim](https://github.com/WillEhrendreich/sagefs.nvim#keymaps)
@@ -409,7 +409,7 @@ Tests are auto-categorized (Unit, Integration, Browser, Property, Benchmark, Arc
 
 **Multi-Session** — Run multiple isolated F# sessions simultaneously, each in its own worker sub-process with independent FSI, project, and file watcher. [Full details →](docs/multi-session.md)
 
-**MCP Tools** — 40+ tools for code execution, testing, coverage analysis, and session management. [Full reference →](docs/mcp-tools.md)
+**MCP Tools** — 50 tools for code execution, testing, coverage analysis, and session management. [Full reference →](docs/mcp-tools.md)
 
 **SSE Events** — All editors receive `test_source_locations`, `file_annotations`, and `failure_narratives` events tagged with `SessionId`. [Full reference →](docs/sse-events.md)
 
@@ -446,7 +446,7 @@ SageFs persists session state and test caches to compact binary files (`.sagefs`
 
 - **Session files** (`.sagefs`): Full session state — interactions, diagnostics, outputs, eval timeline
 - **Test cache files** (`.sagetc`): Test discovery results, outcomes, durations, bitmaps of affected tests
-- **Session isolation**: Each session writes to its own file, verified by 118 property-based tests including concurrent write safety
+- **Session isolation**: Each session writes to its own file, verified by 176 property-based tests including concurrent write safety
 
 Design: length-prefixed strings, section headers with byte-count envelopes, version negotiation, and field-level bounds checking prevent OOM from crafted inputs.
 

@@ -5,7 +5,7 @@ Use this to understand what's available in your editor and discover features you
 
 > **Legend**: ✅ Supported | ⚠️ Partial | ❌ Not applicable | ➖ N/A for this client type
 >
-> All features are also accessible via **49 MCP tools** for AI agents and programmatic clients.
+> All features are also accessible via **50 MCP tools** for AI agents and programmatic clients.
 
 ---
 

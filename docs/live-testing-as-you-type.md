@@ -1,5 +1,11 @@
 # As-You-Type Live Testing — Architecture & Design
 
+> **Note**: This document describes the design for as-you-type scope evaluation. The REST endpoint
+> `POST /api/live-testing/evaluate-scope` referenced below is a **design-time contract** — the
+> actual implementation uses MCP tools (`enable_live_testing`, `run_tests`) and SSE events for
+> the feedback loop. The architectural principles (scope extraction, debounce, type-check, FSI eval)
+> remain accurate.
+
 > **Priority**: #1. This is the feature that makes VS Enterprise look like a joke.
 
 ## The Pitch (Honest Framing)

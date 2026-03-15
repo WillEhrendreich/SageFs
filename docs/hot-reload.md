@@ -11,4 +11,4 @@ Set `SAGEFS_DEVRELOAD=0` to disable auto-injection if needed.
 
 The VS Code extension gives per-file and per-directory hot reload toggles.
 
-See [HOT_RELOAD_STATUS.md](../HOT_RELOAD_STATUS.md) for the full technical deep-dive.
+See [HOT_RELOAD_STATUS.md](internal/HOT_RELOAD_STATUS.md) for the full technical deep-dive.

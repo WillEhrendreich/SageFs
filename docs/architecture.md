@@ -2,7 +2,7 @@
 
 SageFs is **daemon-first** — one server, many clients. The daemon starts bare and creates sessions on demand. Each session is an **isolated worker sub-process** (Erlang-style fault isolation) with its own FSI, project, and file watcher. The TUI uses SageTUI's Elm Architecture (`Program<Model,Msg>` with SIMD cell diff), while the Raylib GUI uses the `Cell[,]` grid abstraction — both share the same keybindings via `KeyMap` and connect to the daemon via SSE. See the [architecture diagram](../Readme.md#-one-daemon-every-editor--simultaneously) for how clients connect.
 
-6500+ tests: Expecto unit tests, FsCheck property-based state machine tests, Verify snapshots, binary persistence property tests.
+5700+ tests: Expecto unit tests, FsCheck property-based state machine tests, Verify snapshots, binary persistence property tests.
 
 ## Project Structure
 
