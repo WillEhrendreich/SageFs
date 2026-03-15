@@ -5,25 +5,25 @@ SageFs has **two workflow modes** and **one independent feature** that people of
 ## The 30-Second Version
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                   YOUR SAGEFS SESSION                   │
-│                                                         │
-│  Pick ONE workflow:                                     │
-│  ┌─────────────────┐      ┌─────────────────┐          │
-│  │  REPL Mode      │      │  Live Mode      │          │
-│  │  (default)      │ ⇄    │  (WebLive)      │          │
-│  │                 │ Swap  │                 │          │
-│  │ ✅ Redefine     │      │ ❌ No redefine   │          │
-│  │    types        │      │    (FS0037)     │          │
-│  │ ❌ No browser   │      │ ✅ Browser hot   │          │
-│  │    hot reload   │      │    reload       │          │
-│  └─────────────────┘      └─────────────────┘          │
-│                                                         │
-│  Then toggle features independently:                    │
-│  [✅] Live Testing ← works in BOTH modes                │
-│  [✅] Coverage     ← works in BOTH modes                │
-│  [✅] Diagnostics  ← works in BOTH modes                │
-└─────────────────────────────────────────────────────────┘
++----------------------------------------------------------+
+|                   YOUR SAGEFS SESSION                    |
+|                                                          |
+|  Pick ONE workflow:                                      |
+|  +------------------+         +------------------+       |
+|  |  REPL Mode       |  <swap> |  Live Mode       |       |
+|  |  (default)       |         |  (WebLive)       |       |
+|  |                  |         |                  |       |
+|  |  [Y] Redefine    |         |  [N] No redefine |       |
+|  |      types       |         |      (FS0037)    |       |
+|  |  [N] No browser  |         |  [Y] Browser hot |       |
+|  |      hot reload  |         |      reload      |       |
+|  +------------------+         +------------------+       |
+|                                                          |
+|  Then toggle features independently:                     |
+|  [x] Live Testing  <-- works in BOTH modes               |
+|  [x] Coverage      <-- works in BOTH modes               |
+|  [x] Diagnostics   <-- works in BOTH modes               |
++----------------------------------------------------------+
 ```
 
 **Live testing is not a mode.** It's a feature you turn on or off regardless of which workflow you're in. Everything in the "features" row works identically in both REPL and Live mode.
