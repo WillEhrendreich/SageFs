@@ -9,7 +9,7 @@ A live F# engine — hot reload, live testing, AI-native — for every editor, f
 [![NuGet](https://img.shields.io/nuget/v/SageFs?style=flat-square&logo=nuget&color=004880)](https://www.nuget.org/packages/SageFs/)
 [![.NET 10](https://img.shields.io/badge/.NET-10.0-512BD4?style=flat-square&logo=dotnet)](https://dotnet.microsoft.com)
 [![License: MIT](https://img.shields.io/badge/license-MIT-22c55e?style=flat-square)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-4000+-22c55e?style=flat-square)]()
+[![Tests](https://img.shields.io/badge/tests-6500+-22c55e?style=flat-square)]()
 [![Save → Green](https://img.shields.io/badge/save→green-<500ms-f59e0b?style=flat-square)]()
 
 </div>
@@ -686,7 +686,7 @@ Rewrite logic: [`SageFs.Core/FsiRewrite.fs`](SageFs.Core/FsiRewrite.fs) (~25 lin
 
 SageFs is **daemon-first** — one server, many clients. The daemon starts bare and creates sessions on demand. Each session is an **isolated worker sub-process** (Erlang-style fault isolation) with its own FSI, project, and file watcher. The TUI uses SageTUI's Elm Architecture (`Program<Model,Msg>` with SIMD cell diff), while the Raylib GUI uses the `Cell[,]` grid abstraction — both share the same keybindings via `KeyMap` and connect to the daemon via SSE. See the [architecture diagram above](#-one-daemon-every-editor--simultaneously) for how clients connect.
 
-3500+ tests: Expecto unit tests, FsCheck property-based state machine tests, Verify snapshots, binary persistence property tests.
+6500+ tests: Expecto unit tests, FsCheck property-based state machine tests, Verify snapshots, binary persistence property tests.
 
 </details>
 
