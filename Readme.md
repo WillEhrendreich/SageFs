@@ -14,58 +14,85 @@ A live F# engine — hot reload, live testing, AI-native — for every editor, f
 
 </div>
 
+## What is SageFs?
+
+SageFs is a live F# development engine. Start it once, connect any editor — VS Code, Neovim, Visual Studio, or the built-in TUI — and get sub-500ms feedback on every save: inline results, live test markers, hot reload, and AI agent access via MCP. It runs as a daemon with isolated session workers, so multiple editors and AI agents can share the same live state simultaneously.
+
+**How is SageFs different from Ionide?** Ionide provides IntelliSense, diagnostics, and project support through the F# Compiler Service. SageFs adds live execution: eval any expression and see results inline, continuous test feedback on every save, and hot reload that patches your running app. Use both together — Ionide for editing, SageFs for running.
+
+**Platforms:** Windows, macOS, Linux. Requires .NET 10 SDK.
+
+**Status:** Active development. Used in production by the author.
+
+## Table of Contents
+
+- [Three Things That Change Everything](#three-things-that-change-everything)
+- [Get Started](#get-started)
+- [Two Workflows: REPL vs Live](#two-workflows-repl-vs-live)
+- [Mental Model](#mental-model--how-sagefs-works)
+- [What You Get in Each Editor](#what-you-get-in-each-editor)
+- [Keybindings](#%EF%B8%8F-keybindings-across-editors)
+- [Gutter Icons](#-understanding-the-gutter-icons)
+- [The $3,000/year Feature — Free](#the-3000year-feature--free)
+- [Under the Hood](#under-the-hood)
+- [Coming from Another Language?](#welcome-traveler---pick-your-home-language)
+- [Visual Demos](#-visual-demos)
+- [Contributing](#contributing)
+- [License](#license)
+
 <!-- Replace with hero GIF once recorded: docs/hero-demo.gif -->
 
 > ### 🆕 Never written F#? You're in the right place.
 >
 > Pick your language — each guide maps familiar concepts to F#, with runnable examples that show results the instant you press Alt+Enter.
 >
-> 🐍 [Python](#-coming-from-python) · 📓 [Jupyter](#-coming-from-jupyter-notebooks) · 🔷 [C#](#-coming-from-c) · ☕ [Java](#-coming-from-java) · 🟨 [JS/TS](#-coming-from-javascript--typescript) · 🦀 [Rust](#-coming-from-rust) · 🧘 [F# Koans](#-coming-from-fsharpkoans)
+> 🐍 [Python](docs/coming-from-python.md) · 📓 [Jupyter](docs/coming-from-jupyter.md) · 🔷 [C#](docs/coming-from-csharp.md) · ☕ [Java](docs/coming-from-java.md) · 🟨 [JS/TS](docs/coming-from-javascript.md) · 🦀 [Rust](docs/coming-from-rust.md) · 🧘 [F# Koans](docs/coming-from-koans.md)
 >
 > Or just dive in: `dotnet tool install --global SageFs && sagefs` — then open any `.fsx` file and hit Alt+Enter.
 
 ---
 
-## The $3,000/year Feature — Free
+## Three Things That Change Everything
 
-Visual Studio Enterprise charges **~$250/month per seat** for Live Unit Testing. That's **$3,000/year per developer.** It only works in Visual Studio. It only supports 3 frameworks. It takes 5-30 seconds. It requires your code to compile.
+### ⚡ Hot Reload — Save and It's Live
 
-SageFs does it better. In every editor. In under 500ms. On broken code. For free.
+Save a `.fs` file. SageFs reloads it in ~100ms via [Harmony](https://github.com/pardeike/Harmony) runtime patching. No rebuild. No restart. Connected browsers auto-refresh via SSE. Your web app is already showing the new code before your fingers leave the keyboard.
 
-| | VS Enterprise Live Testing | **SageFs** |
-|:---|:---|:---|
-| **Speed** | 5–30 sec (MSBuild rebuild) | **200–500ms** (FSI hot eval) |
-| **Broken code** | ✗ Must compile first | **✓ Tree-sitter works on incomplete code** |
-| **Scope** | Rebuilds all impacted projects | **Function-level** — just what changed |
-| **Frameworks** | MSTest · xUnit · NUnit | **+ Expecto · TUnit · xUnit v3** · extensible |
-| **Coverage** | IL instrumentation (heavy) | **Dual:** symbol dependency graph + IL branch probes |
-| **Editors** | Visual Studio only | **VS Code · Neovim · TUI · GUI · Visual Studio · Web** |
-| **Price** | ~$250/month | **Free, MIT licensed** |
+### 🤖 AI-Native — Your Agent Can Compile
 
+SageFs exposes a [Model Context Protocol](https://modelcontextprotocol.io/) server with an **affordance-driven state machine** — AI agents only see tools valid for the current session state. No wasted tokens guessing. Copilot, Claude, and any MCP client can execute F# code, type-check, explore .NET APIs, and run tests against your real project.
+
+### 🖥️ One Daemon, Every Editor — Simultaneously
+
+Start SageFs once. Connect from VS Code, Neovim, Visual Studio, a terminal TUI, a GPU-rendered Raylib GUI, a web dashboard, or an AI agent. Open them all at the same time — they share the same live session. Switch editors without switching tools.
+
+```mermaid
+graph TB
+    D["<b>SageFs Daemon</b><br/>FSI · File Watcher · MCP · Hot Reload · Dashboard"]
+
+    D --- VS["VS Code<br/><i>Fable F#→JS</i>"]
+    D --- NV["Neovim<br/><i>38 Lua modules</i>"]
+    D --- VI["Visual Studio<br/><i>Extensibility SDK</i>"]
+    D --- TU["Terminal TUI<br/><i>SageTUI / Elm</i>"]
+    D --- GU["Raylib GUI<br/><i>GPU renderer</i>"]
+    D --- WB["Web Dashboard<br/><i>Falco.Datastar</i>"]
+    D --- AI["AI Agents<br/><i>MCP protocol</i>"]
+    D --- JP["Jupyter Kernel<br/><i>sagefs --jupyter</i>"]
+
+    style D fill:#1a1b26,stroke:#7aa2f7,stroke-width:2px,color:#c0caf5
+    style VS fill:#1a1b26,stroke:#9ece6a,color:#c0caf5
+    style NV fill:#1a1b26,stroke:#9ece6a,color:#c0caf5
+    style VI fill:#1a1b26,stroke:#9ece6a,color:#c0caf5
+    style TU fill:#1a1b26,stroke:#bb9af7,color:#c0caf5
+    style GU fill:#1a1b26,stroke:#bb9af7,color:#c0caf5
+    style WB fill:#1a1b26,stroke:#7dcfff,color:#c0caf5
+    style AI fill:#1a1b26,stroke:#e0af68,color:#c0caf5
+    style JP fill:#1a1b26,stroke:#bb9af7,color:#c0caf5
 ```
-✓ let ``should add two numbers`` () =       ← passed (12ms)
-✗ let ``should reject negative`` () =       ← failed: Expected Ok but got Error
-● let ``should handle empty`` () =          ← detected, not yet run
-▸ let validate x =                          ← covered by 3 tests, all passing
-○ let unusedHelper () = ()                  ← not reached by any test
-```
-
-<details>
-<summary><strong>Three-speed feedback pipeline — how sub-500ms works</strong></summary>
-
-<br />
-
-1. **~50ms** — Tree-sitter detects test attributes in broken/incomplete code → immediate gutter markers
-2. **~350ms** — F# Compiler Service type-checks → dependency graph, reachability annotations
-3. **~500ms** — Affected-test execution via hot-eval → ✓/✗ results inline
-
-Tests are auto-categorized (Unit, Integration, Browser, Property, Benchmark, Architecture) with smart run policies — unit and property tests default to auto-run, integration/browser/architecture default to demand, and benchmarks stay disabled until explicitly enabled. All configurable.
-
-</details>
 
 ---
 
-## ⚡ First 5 Minutes
+## Get Started
 
 ### 1. Install SageFs (30 seconds)
 
@@ -117,47 +144,64 @@ No configuration needed — SageFs discovers Expecto tests and runs them on ever
 
 > 💡 **Tip**: Press `Ctrl+Shift+S` to mark all tests stale and re-run everything.
 
+```
+MCP (streamable HTTP):  http://localhost:37749/       ← recommended for new MCP clients
+MCP (legacy SSE):       http://localhost:37749/sse    ← older MCP clients
+Dashboard:              http://localhost:37750/dashboard
+```
+
+> **New to F#?** You don't need any F# knowledge to start. Jump to the [migration guide for your language](#welcome-traveler---pick-your-home-language) — each one maps concepts you already know to F#, with runnable examples.
+
+<details>
+<summary>Build from source</summary>
+
+```bash
+git clone https://github.com/WillEhrendreich/SageFs.git
+cd SageFs
+dotnet build && dotnet pack SageFs -o nupkg
+dotnet tool install --global SageFs --add-source ./nupkg --no-cache
+```
+
+</details>
+
 📚 **[Full Documentation](docs/README.md)** — Guides, deep dives, technical reference, and contributor docs.
 
 ---
 
-## Three Things That Change Everything
+## Two Workflows: REPL vs Live
 
-### ⚡ Hot Reload — Save and It's Live
+SageFs sessions run in one of two modes. The tradeoff is a physical constraint of the .NET runtime — not a SageFs limitation.
 
-Save a `.fs` file. SageFs reloads it in ~100ms via [Harmony](https://github.com/pardeike/Harmony) runtime patching. No rebuild. No restart. Connected browsers auto-refresh via SSE. Your web app is already showing the new code before your fingers leave the keyboard.
+**REPL mode** (default) gives you a full interactive F# session. You can redefine types, experiment freely, and iterate on designs. This is what you want when you're prototyping domain types, exploring APIs, or working through a problem interactively.
 
-### 🤖 AI-Native — Your Agent Can Compile
+**Live mode** enables browser hot reload — save a `.fs` file and connected browsers update instantly via SSE, with no manual refresh. To make this work, SageFs uses runtime patching to inject code changes into the running app. That patching requires a single-assembly FSI mode, which means you **cannot redefine types** (you'll get FS0037 errors). Expressions, function bodies, and let bindings work fine.
 
-SageFs exposes a [Model Context Protocol](https://modelcontextprotocol.io/) server with an **affordance-driven state machine** — AI agents only see tools valid for the current session state. No wasted tokens guessing. Copilot, Claude, and any MCP client can execute F# code, type-check, explore .NET APIs, and run tests against your real project.
+| | REPL (default) | Live |
+|:---|:---|:---|
+| **Type redefinition** | ✅ Full — redefine types freely | ❌ FS0037 — expression-level changes only |
+| **Browser hot reload** | ❌ Manual refresh required | ✅ Save → patch → SSE push |
+| **Live testing** | ✅ Full | ✅ Full |
+| **Best for** | Prototyping, domain modeling, exploration | Web apps with Falco, Datastar, ASP.NET |
 
-### 🖥️ One Daemon, Every Editor — Simultaneously
+### Choosing the right mode
 
-Start SageFs once. Connect from VS Code, Neovim, Visual Studio, a terminal TUI, a GPU-rendered Raylib GUI, a web dashboard, or an AI agent. Open them all at the same time — they share the same live session. Switch editors without switching tools.
+- **Building a web app** with Falco.Datastar, Giraffe, or any ASP.NET pipeline? Use **Live** — you want save-and-see-it feedback in the browser.
+- **Exploring types**, designing domain models, writing tests, or working in `.fsx` scripts? Use **REPL** — you need the freedom to reshape types as you go.
+- **Not sure?** Start with REPL. Switch to Live when you need browser hot reload.
 
-```mermaid
-graph TB
-    D["<b>SageFs Daemon</b><br/>FSI · File Watcher · MCP · Hot Reload · Dashboard"]
+### Switching modes
 
-    D --- VS["VS Code<br/><i>Fable F#→JS</i>"]
-    D --- NV["Neovim<br/><i>38 Lua modules</i>"]
-    D --- VI["Visual Studio<br/><i>Extensibility SDK</i>"]
-    D --- TU["Terminal TUI<br/><i>SageTUI / Elm</i>"]
-    D --- GU["Raylib GUI<br/><i>GPU renderer</i>"]
-    D --- WB["Web Dashboard<br/><i>Falco.Datastar</i>"]
-    D --- AI["AI Agents<br/><i>MCP protocol</i>"]
-    D --- JP["Jupyter Kernel<br/><i>sagefs --jupyter</i>"]
+Use the `switch_workflow` MCP tool, or your editor's command:
 
-    style D fill:#1a1b26,stroke:#7aa2f7,stroke-width:2px,color:#c0caf5
-    style VS fill:#1a1b26,stroke:#9ece6a,color:#c0caf5
-    style NV fill:#1a1b26,stroke:#9ece6a,color:#c0caf5
-    style VI fill:#1a1b26,stroke:#9ece6a,color:#c0caf5
-    style TU fill:#1a1b26,stroke:#bb9af7,color:#c0caf5
-    style GU fill:#1a1b26,stroke:#bb9af7,color:#c0caf5
-    style WB fill:#1a1b26,stroke:#7dcfff,color:#c0caf5
-    style AI fill:#1a1b26,stroke:#e0af68,color:#c0caf5
-    style JP fill:#1a1b26,stroke:#bb9af7,color:#c0caf5
-```
+- **Neovim**: `:SageFsWorkflow live` or `:SageFsWorkflow repl`
+- **VS Code**: Command Palette → `SageFs: Switch Workflow`
+- **TUI/GUI**: `Ctrl+W` toggles between modes
+
+When you switch, SageFs creates a new session in the target mode and stops the old one. Any REPL-defined bindings are lost — persisted files are unaffected.
+
+### Auto-detection
+
+When SageFs detects web-oriented packages in your project (Falco.Datastar, Giraffe, Saturn, etc.), it suggests switching to Live mode. You can accept or dismiss the suggestion.
 
 ---
 
@@ -207,87 +251,6 @@ graph TB
 5. Other clients can connect to the same session simultaneously
 
 This means **the daemon doesn't need to know your project at startup**. It starts bare and waits for clients to create or attach to sessions.
-
----
-
-## Two Workflows: REPL vs Live
-
-SageFs sessions run in one of two modes. The tradeoff is a physical constraint of the .NET runtime — not a SageFs limitation.
-
-**REPL mode** (default) gives you a full interactive F# session. You can redefine types, experiment freely, and iterate on designs. This is what you want when you're prototyping domain types, exploring APIs, or working through a problem interactively.
-
-**Live mode** enables browser hot reload — save a `.fs` file and connected browsers update instantly via SSE, with no manual refresh. To make this work, SageFs uses runtime patching to inject code changes into the running app. That patching requires a single-assembly FSI mode, which means you **cannot redefine types** (you'll get FS0037 errors). Expressions, function bodies, and let bindings work fine.
-
-| | REPL (default) | Live |
-|:---|:---|:---|
-| **Type redefinition** | ✅ Full — redefine types freely | ❌ FS0037 — expression-level changes only |
-| **Browser hot reload** | ❌ Manual refresh required | ✅ Save → patch → SSE push |
-| **Live testing** | ✅ Full | ✅ Full |
-| **Best for** | Prototyping, domain modeling, exploration | Web apps with Falco, Datastar, ASP.NET |
-
-### Choosing the right mode
-
-- **Building a web app** with Falco.Datastar, Giraffe, or any ASP.NET pipeline? Use **Live** — you want save-and-see-it feedback in the browser.
-- **Exploring types**, designing domain models, writing tests, or working in `.fsx` scripts? Use **REPL** — you need the freedom to reshape types as you go.
-- **Not sure?** Start with REPL. Switch to Live when you need browser hot reload.
-
-### Switching modes
-
-Use the `switch_workflow` MCP tool, or your editor's command:
-
-- **Neovim**: `:SageFsWorkflow live` or `:SageFsWorkflow repl`
-- **VS Code**: Command Palette → `SageFs: Switch Workflow`
-- **TUI/GUI**: `Ctrl+W` toggles between modes
-
-When you switch, SageFs creates a new session in the target mode and stops the old one. Any REPL-defined bindings are lost — persisted files are unaffected.
-
-### Auto-detection
-
-When SageFs detects web-oriented packages in your project (Falco.Datastar, Giraffe, Saturn, etc.), it suggests switching to Live mode. You can accept or dismiss the suggestion.
-
----
-
-## Get Started
-
-**Prerequisites:** [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0). That's it.
-
-```bash
-# Install
-dotnet tool install --global SageFs
-
-# Start the daemon (in any directory)
-sagefs
-```
-
-**What happens next:**
-
-1. The daemon starts and prints its endpoints (MCP, dashboard, health)
-2. Open your editor — VS Code, Neovim, and Visual Studio auto-start sessions for your open project
-3. Edit an F# file and save — live test results appear in your editor within 500ms
-4. Or visit the **dashboard** at `http://localhost:37750/dashboard` to see everything live
-
-```
-MCP (streamable HTTP):  http://localhost:37749/       ← recommended for new MCP clients
-MCP (legacy SSE):       http://localhost:37749/sse    ← older MCP clients
-Dashboard:              http://localhost:37750/dashboard
-```
-
-No project flag is required — the daemon starts bare and lets editors or MCP clients create sessions on demand.
-
-> **New to F#?** You don't need any F# knowledge to start. Jump to the [migration guide for your language](#welcome-traveler----pick-your-home-language) — each one maps concepts you already know to F#, with runnable examples.
-> 🐍 Python · 📓 Jupyter · 🔷 C# · ☕ Java · 🟨 JS/TS · 🦀 Rust · 🧘 [F# Koans](#-coming-from-fsharpkoans) (21 guided exercises)
-
-<details>
-<summary>Build from source</summary>
-
-```bash
-git clone https://github.com/WillEhrendreich/SageFs.git
-cd SageFs
-dotnet build && dotnet pack SageFs -o nupkg
-dotnet tool install --global SageFs --add-source ./nupkg --no-cache
-```
-
-</details>
 
 ---
 
@@ -349,7 +312,7 @@ The VS extension includes kill switches for individual features. See the [VS Ext
 
 #### AI Agent (MCP)
 
-SageFs exposes dozens of MCP tools — from `send_fsharp_code` to `run_tests` to `discover_features`. Any MCP client can connect.
+SageFs exposes dozens of MCP tools — from `send_fsharp_code` to `run_tests` to `discover_features`. Any MCP client can connect. See the [full MCP Tools Reference](docs/mcp-tools.md) for the complete list and per-client config examples.
 
 **Streamable HTTP** (recommended — auto-reconnects, no session drops):
 ```json
@@ -360,33 +323,6 @@ SageFs exposes dozens of MCP tools — from `send_fsharp_code` to `run_tests` to
 ```json
 { "mcpServers": { "sagefs": { "type": "sse", "url": "http://localhost:37749/sse" } } }
 ```
-
-<details>
-<summary>Per-client config examples</summary>
-
-**GitHub Copilot (CLI)** — `~/.copilot/github-copilot/mcp.json`:
-```json
-{ "servers": { "sagefs": { "type": "sse", "url": "http://localhost:37749/sse" } } }
-```
-
-**Claude Code** — `~/.claude/claude_desktop_config.json`:
-```json
-{ "mcpServers": { "sagefs": { "type": "sse", "url": "http://localhost:37749/sse" } } }
-```
-
-**Windsurf / Cursor** — `.cursor/mcp.json` or Windsurf MCP settings:
-```json
-{ "mcpServers": { "sagefs": { "type": "sse", "url": "http://localhost:37749/sse" } } }
-```
-
-**OpenCode** — `mcp.json`:
-```json
-{ "mcpServers": { "sagefs": { "url": "http://localhost:37749/sse" } } }
-```
-
-</details>
-
-Works with GitHub Copilot (CLI & VS Code), Claude Code, Claude Desktop, OpenCode, Windsurf, Cursor, and any MCP-compatible tool. The **edit → auto-test → poll** workflow means agents don't even need to call eval — just edit files and check `get_live_test_status`.
 
 #### TUI / GUI / Web Dashboard / Jupyter
 
@@ -436,36 +372,46 @@ sagefs --jupyter conn.json  # Run as a Jupyter kernel
 
 ---
 
+## The $3,000/year Feature — Free
+
+Visual Studio Enterprise charges **~$250/month per seat** for Live Unit Testing. That's **$3,000/year per developer.** It only works in Visual Studio. It only supports 3 frameworks. It takes 5-30 seconds. It requires your code to compile.
+
+SageFs does it better. In every editor. In under 500ms. On broken code. For free.
+
+| | VS Enterprise Live Testing | **SageFs** |
+|:---|:---|:---|
+| **Speed** | 5–30 sec (MSBuild rebuild) | **200–500ms** (FSI hot eval) |
+| **Broken code** | ✗ Must compile first | **✓ Tree-sitter works on incomplete code** |
+| **Editors** | Visual Studio only | **VS Code · Neovim · TUI · GUI · Visual Studio · Web** |
+| **Frameworks** | MSTest · xUnit · NUnit | **+ Expecto · TUnit · xUnit v3** · extensible |
+| **Price** | ~$250/month | **Free, MIT licensed** |
+
+<details>
+<summary><strong>Three-speed feedback pipeline — how sub-500ms works</strong></summary>
+
+<br />
+
+1. **~50ms** — Tree-sitter detects test attributes in broken/incomplete code → immediate gutter markers
+2. **~350ms** — F# Compiler Service type-checks → dependency graph, reachability annotations
+3. **~500ms** — Affected-test execution via hot-eval → ✓/✗ results inline
+
+Tests are auto-categorized (Unit, Integration, Browser, Property, Benchmark, Architecture) with smart run policies — unit and property tests default to auto-run, integration/browser/architecture default to demand, and benchmarks stay disabled until explicitly enabled. All configurable.
+
+</details>
+
+---
+
 ## Under the Hood
 
-<details>
-<summary><strong>🔥 Hot Reload — how it works</strong></summary>
+**Hot Reload** — File changes are detected, sent to FSI via `#load`, and [Harmony](https://github.com/pardeike/Harmony) patches method pointers at runtime. Connected browsers auto-refresh via SSE. [Full details →](docs/hot-reload.md)
 
-<br />
+**Multi-Session** — Run multiple isolated F# sessions simultaneously, each in its own worker sub-process with independent FSI, project, and file watcher. [Full details →](docs/multi-session.md)
 
-1. File watcher detects `.fs`/`.fsx` changes (~500ms debounce)
-2. `#load` sends the file to FSI (~100ms)
-3. [Harmony](https://github.com/pardeike/Harmony) patches method pointers at runtime — no restart
-4. SSE pushes a reload signal to connected browsers
+**MCP Tools** — 40+ tools for code execution, testing, coverage analysis, and session management. [Full reference →](docs/mcp-tools.md)
 
-**Zero config for web apps.** SageFs auto-injects DevReload middleware into your ASP.NET pipeline via [Harmony](https://github.com/pardeike/Harmony) — no code changes needed. Your Falco/ASP.NET app gets browser auto-refresh the moment SageFs is running. If something breaks, an accessible error overlay appears in the browser with source context, editor links, and smart auto-reload when the error is fixed.
+**SSE Events** — All editors receive `test_source_locations`, `file_annotations`, and `failure_narratives` events tagged with `SessionId`. [Full reference →](docs/sse-events.md)
 
-Set `SAGEFS_DEVRELOAD=0` to disable auto-injection if needed.
-
-The VS Code extension gives per-file and per-directory hot reload toggles.
-
-See [HOT_RELOAD_STATUS.md](HOT_RELOAD_STATUS.md) for the full technical deep-dive.
-
-</details>
-
-<details>
-<summary><strong>🔀 Multi-Session — isolated worker processes</strong></summary>
-
-<br />
-
-Run multiple F# sessions simultaneously — different projects, different states. Each session is an **isolated worker sub-process** (Erlang-style fault isolation). SSE events are tagged with `SessionId` — no cross-talk between editor windows watching different projects. Create, switch, and stop sessions from any frontend.
-
-</details>
+**Architecture** — Daemon-first design with isolated worker sub-processes and dual-renderer TUI/Raylib GUI. [Full details →](docs/architecture.md)
 
 <details>
 <summary><strong>🛡️ Supervised Mode — crash-proof development</strong></summary>
@@ -489,7 +435,6 @@ SageFs maintains a pool of pre-warmed FSI sessions. Hard resets swap the active 
 
 </details>
 
-
 <details>
 <summary><strong>💾 Binary Session Persistence — instant resume</strong></summary>
 
@@ -502,82 +447,6 @@ SageFs persists session state and test caches to compact binary files (`.sagefs`
 - **Session isolation**: Each session writes to its own file, verified by 118 property-based tests including concurrent write safety
 
 Design: length-prefixed strings, section headers with byte-count envelopes, version negotiation, and field-level bounds checking prevent OOM from crafted inputs.
-
-</details>
-
-<details>
-<summary><strong>🤖 MCP Tools Reference — full list</strong></summary>
-
-<br />
-
-| Tool | Description |
-|:---|:---|
-| `send_fsharp_code` | Execute F# code. Each `;;` is a transaction boundary. |
-| `check_fsharp_code` | Type-check a snippet without executing. Code is checked in the current FSI session context — prior `send_fsharp_code` definitions are in scope, but namespaces must be explicitly opened. "Not defined" errors usually mean a missing `open`, not a real bug. |
-| `get_completions` | Code completions at cursor position. |
-| `cancel_eval` | Cancel a running evaluation. |
-| `load_fsharp_script` | Load `.fsx` with partial progress. |
-| `get_recent_fsi_events` | Recent evals, errors, loads with timestamps. |
-| `get_fsi_status` | Session health, loaded projects, affordances. |
-| `get_startup_info` | Projects, features, CLI arguments. |
-| `get_available_projects` | Discover `.fsproj`/`.sln`/`.slnx` files. |
-| `explore_namespace` | Browse types in a .NET namespace. |
-| `explore_type` | Browse members of a .NET type. |
-| `get_elm_state` | Current UI render state. |
-| `reset_fsi_session` | Soft reset — clear definitions, keep DLLs. |
-| `hard_reset_fsi_session` | Full reset — rebuild, reload, fresh session. |
-| `create_session` | Create an isolated FSI session. |
-| `list_sessions` | List all active sessions. |
-| `stop_session` | Stop a session by ID. |
-| `switch_session` | Switch active session. |
-| `enable_live_testing` | Turn on live unit testing. |
-| `disable_live_testing` | Turn off live unit testing. |
-| `get_live_test_status` | Test state with optional file filter. |
-| `run_tests` | Run tests by pattern or category. Waits up to 15s for hot reload to complete first. |
-| `set_run_policy` | Auto-run policy per category (every/save/demand/disabled). |
-| `set_test_timeouts` | Configure per-test and global run timeouts. |
-| `get_test_trace` | Test cycle timing waterfall. |
-| `explain_test_run` | Why a test was selected to run — trigger reason, changed symbols, flaky status. |
-| `explain_test_failure` | Enriched failure context for a test that recently went Passed→Failed. |
-| `query_test_coverage` | Which tests transitively cover a given symbol via the dependency graph. |
-| `get_file_coverage` | Per-line coverage data for a file — bitmap + dependency graph synthesis. |
-| `visualize_domain_model` | Visualize a discriminated union type as a state machine diagram. |
-| `list_tests` | List all discovered tests, optionally filtered by pattern or file path. Returns grouped-by-file results with source locations. |
-| `get_cell_dependencies` | Expose the cell dependency graph with staleness annotations. Shows which cells are stale and why. |
-| `discover_features` | Context-aware feature discovery. Ranks available SageFs features by relevance to current session state. |
-| **Analysis & Diagnostics** | |
-| `diagnose` | Full diagnostic report combining test failures, cell staleness, ripple plan, suggestions, and performance. |
-| `coverage_intel` | Analyze test coverage quality — find blind spots, correlate failures, assess diagnostic power. |
-| `impact_forecast` | Forecast performance impact for cells — detect regressions, measure downstream blast radius. |
-| `suggest_next_action` | Prioritized "what should I do next?" queue combining coverage, impact, and staleness data. |
-| `suggest_repair` | Given a failing test, trace causal changes and suggest which symbol to fix. |
-| `suggest_next_cell` | Type-directed suggestions for what to evaluate next based on current bindings in scope. |
-| `plan_ripple` | Plan cascade re-evaluation for changed cells using the live dependency graph. |
-| `preview_what_if` | Preview what would change if a binding had a different value — without executing. |
-| `decompose_pipeline` | Decompose an F# pipeline into stages with purity classification (pure/effectful/unknown). |
-| **Export & Session History** | |
-| `export_notebook` | Export session as a notebook-style `.fsx` file with cell metadata. |
-| `export_session_transcript` | Export session as a clean, topologically-sorted `.fsx` transcript. |
-| `get_session_filmstrip` | Visual history of all evaluations — each as a "frame" with code, bindings, and duration. |
-| `get_eval_timeline` | Performance sparkline and percentile statistics (P50/P95/P99) for eval durations. |
-| `get_eval_diff` | Before/after diff comparison of recent evaluation outputs. |
-| `get_message_journal` | Structured audit log of eval events, filterable by severity and source. |
-| `manage_scratch_pad` | View, export, or promote ephemeral code snippets from the session history. |
-
-</details>
-
-<details>
-<summary><strong>📡 SSE Events Reference</strong></summary>
-
-<br />
-
-All connected editors receive these events via the SSE stream. Events are tagged with `SessionId` for multi-session isolation.
-
-| Event | Description |
-|:---|:---|
-| `test_source_locations` | Maps test names to file paths and line ranges for source navigation. |
-| `file_annotations` | Per-file coverage health (AllPassing/SomeFailing/NoCoverage) and inline failure details. |
-| `failure_narratives` | Enriched test failure context with causal analysis — which symbols/files changed, time since last pass. |
 
 </details>
 
@@ -666,238 +535,24 @@ If the config already exists, SageFs opens or points you at the file instead of 
 
 📊 **[Feature Matrix →](docs/FEATURE_MATRIX.md)** — compare features across VS Code, Neovim, Visual Studio, TUI, and Raylib GUI.
 
-<details>
-<summary><strong>⚙️ FSI Quirks & Rewrites</strong></summary>
-
-<br />
-
-SageFs auto-rewrites `use` → `let` inside nested scopes (functions, CEs) because FSI doesn't support `use` in those positions. This means disposables aren't auto-disposed in the REPL — fine for experiments, be aware for long sessions.
-
-Other FSI behaviors: redefinition shadows (doesn't error), `;;` boundaries are independent transactions, no `[<EntryPoint>]`, assembly loading is session-scoped.
-
-Rewrite logic: [`SageFs.Core/FsiRewrite.fs`](SageFs.Core/FsiRewrite.fs) (~25 lines). PRs welcome.
-
-</details>
-
-<details>
-<summary><strong>🏗️ Architecture</strong></summary>
-
-<br />
-
-SageFs is **daemon-first** — one server, many clients. The daemon starts bare and creates sessions on demand. Each session is an **isolated worker sub-process** (Erlang-style fault isolation) with its own FSI, project, and file watcher. The TUI uses SageTUI's Elm Architecture (`Program<Model,Msg>` with SIMD cell diff), while the Raylib GUI uses the `Cell[,]` grid abstraction — both share the same keybindings via `KeyMap` and connect to the daemon via SSE. See the [architecture diagram above](#-one-daemon-every-editor--simultaneously) for how clients connect.
-
-6500+ tests: Expecto unit tests, FsCheck property-based state machine tests, Verify snapshots, binary persistence property tests.
-
-</details>
-
 ---
 
 ## Welcome, Traveler 👋 — Pick Your Home Language
 
-SageFs isn't just for F# veterans. It's for anyone who's ever thought *"why is development this slow?"* — regardless of what language burned them first. Find your background below, grab your starter sample, and hit Alt+Enter.
+SageFs isn't just for F# veterans. Find your background below and get started with a guide that maps concepts you already know to F#, with runnable examples.
 
 > **Quick orientation:** Every sample in [`/samples`](samples/) is a runnable `.fsx` script.
 > Open it in VS Code with the SageFs extension (or `sagefs tui`), hit **Alt+Enter** on any expression, and results appear inline. Instantly.
 
----
-
-### 🐍 Coming from Python?
-
-You already love interactive development — you live in the REPL. F# gives you the same energy, plus a compiler that catches your bugs before you run anything, blazing-fast pipelines instead of list comprehensions, and a type system that makes refactoring feel like a superpower instead of a minefield.
-
-Pain you're leaving behind: `AttributeError: 'NoneType' object has no attribute 'foo'`, mystery runtime crashes, and the "just run it and see" debugging loop.
-
-**What you'll love immediately:**
-- `|>` pipelines read like Python chains, but faster and type-checked
-- Pattern matching makes `if/elif/elif/elif/else` forests extinct
-- `Option<'T>` means `None` is handled at compile time — no more surprise crashes
-- SageFs = your Jupyter notebook, but in your editor, with live tests and hot reload
-
-**→ [Start here: `samples/from-python/hello.fsx`](samples/from-python/hello.fsx)**
-
-```fsharp
-// From this (Python):
-// result = sum(x**2 for x in range(1, 11) if x % 2 == 0)
-
-// To this (F#):
-let result =
-  [1..10]
-  |> List.filter (fun x -> x % 2 = 0)
-  |> List.map    (fun x -> x * x)
-  |> List.sum
-// Alt+Enter → 220. No running the file. No print(). Just results.
-```
-
----
-
-### 📓 Coming from Jupyter Notebooks?
-
-You're already living the interactive-first dream. SageFs takes everything you love about notebooks (eval any expression, see results inline, build understanding iteratively) and fixes everything you hate (kernel crashes, "restart and run all", the JSON-blob hell of version control, no type checking, no hot reload into production).
-
-Pain you're leaving behind: "the kernel died", cell execution order mysteries, `git diff` on `.ipynb` showing base64 blobs, and the chasm between notebook exploration and shipped code.
-
-**What you'll love immediately:**
-- Alt+Enter on *any* expression — not just at the end of a cell
-- Your code is a real `.fsx` file that `git diff` shows beautifully
-- Write Expecto tests alongside your analysis — they run on every save
-- When you're ready to ship, your exploration code *is* the production code
-
-**→ [Start here: `samples/from-jupyter/notebook.fsx`](samples/from-jupyter/notebook.fsx)**
-
-```fsharp
-// Your "cell" is any expression. Run it anywhere.
-let data = [1.0; 2.0; 3.0; 4.0; 5.0]
-let mean = data |> List.average     // Alt+Enter → 3.0, right in the gutter
-let std  =
-  data
-  |> List.map (fun x -> (x - mean) ** 2.0)
-  |> List.average
-  |> sqrt                           // Alt+Enter → 1.414...
-```
-
----
-
-### 🔷 Coming from C#?
-
-You're already home. Same .NET runtime. Same NuGet packages. Same `dotnet` CLI. You just get to stop writing `public class AbstractRepositoryFactoryImpl` and start writing code that says what it means.
-
-Pain you're leaving behind: 50-line classes for 3-line concepts, null reference exceptions at 3am, `dotnet watch` rebuilding for 10 seconds when you fix a typo, and writing the same LINQ query 12 different ways because the extension method didn't exist.
-
-**What you'll love immediately:**
-- Records are immutable value objects with equality built in — one line
-- Discriminated unions make `sealed class + pattern matching` elegant instead of painful
-- `Result<'T, 'TError>` replaces `try/catch` spaghetti for expected failure paths
-- SageFs hot reload patches method pointers at runtime — no rebuild, no restart
-
-**→ [Start here: `samples/from-csharp/hello.fsx`](samples/from-csharp/hello.fsx)**
-
-```fsharp
-// C#: public record Person(string Name, int Age);  // 1 line in modern C#
-// F#: one line too, but with structural equality, hashCode, and copy-with:
-type Person = { Name: string; Age: int }
-
-let alice = { Name = "Alice"; Age = 30 }
-let older  = { alice with Age = 31 }   // alice is unchanged — immutability is the default
-```
-
----
-
-### ☕ Coming from Java?
-
-Welcome. You've been writing `AbstractSingletonProxyFactoryBean` and we won't judge you — the ecosystem made you do it. But it's time. F# is what Java always wished it could be: expressive, type-safe, concise, and running on a genuinely great runtime (.NET, not JVM — yes, the GC is better).
-
-Pain you're leaving behind: 10 files for one feature, XML everywhere, Spring Boot startup time, `Optional<Optional<List<? extends Comparable<? super T>>>>`, and `NullPointerException` at line 1 of your stack trace.
-
-**What you'll love immediately:**
-- A `Person` record is one line. Getters, equals, hashCode, toString — free.
-- Pattern matching on sealed types, with exhaustiveness checking — the Java 21 feature, but good
-- No `Optional.ofNullable(x).map(f).orElse(null)` — `Option<'T>` is a language citizen
-- Build time: `dotnet build` is fast. SageFs day-to-day: no build at all.
-
-**→ [Start here: `samples/from-java/hello.fsx`](samples/from-java/hello.fsx)**
-
-```fsharp
-// Java: public record Person(String name, int age) {}  +  equals + hashCode + toString
-// F#:
-type Person = { Name: string; Age: int }
-// structural equality: { Name = "Alice"; Age = 30 } = { Name = "Alice"; Age = 30 } → true
-// toString: printfn "%A" { Name = "Alice"; Age = 30 } → { Name = "Alice"; Age = 30 }
-// No Lombok. No Jackson annotations. Just data.
-```
-
----
-
-### 🟨 Coming from JavaScript / TypeScript?
-
-You've been shipping `undefined is not a function` to production for years, and you've made peace with it. F# offers you something radical: a language where the type system is actually on your side, where `undefined` is not a concept, and where hot reload is so fast it feels like cheating.
-
-Pain you're leaving behind: `node_modules` eating your disk, `any` creep in TypeScript, `undefined` vs `null` vs `""` vs `0` all being falsy, and webpack rebuilds that take longer than your lunch break.
-
-**What you'll love immediately:**
-- `Option<'T>` means "might not exist" — compiler-enforced, no runtime surprise
-- `|>` pipelines are `.filter().map().reduce()` but for *any* function, not just array methods
-- No `this` binding bugs — functions are just functions
-- Fable compiles F# to clean JavaScript — the SageFs VS Code extension is F# all the way down
-
-**→ [Start here: `samples/from-javascript/hello.fsx`](samples/from-javascript/hello.fsx)**
-
-```fsharp
-// JS/TS: type Shape = { kind: "circle"; r: number } | { kind: "rect"; w: number; h: number }
-// F# (compiler checks exhaustiveness — no forgotten cases at runtime):
-type Shape =
-  | Circle    of radius: float
-  | Rectangle of width: float * height: float
-
-let area = function
-  | Circle r          -> System.Math.PI * r * r
-  | Rectangle (w, h) -> w * h
-// Forget the Rectangle case? Warning. Add Triangle without updating area? Warning.
-```
-
----
-
-### 🦀 Coming from Rust?
-
-You're going to feel right at home. `Option`, `Result`, pattern matching, discriminated unions, immutability by default, zero `null` — F# and Rust share the same design philosophy. The difference is that F# runs on .NET, skips the borrow checker, and gives you hot reload and interactive scripting.
-
-Pain you're leaving behind: borrow checker fights for straightforward code, 45-second compile times for medium projects, no REPL, and having to reach for Python every time you want to explore data.
-
-**What you'll love immediately:**
-- `Option<'T>`, `Result<'T, 'E>`, and exhaustive pattern matching — just like Rust
-- Records and DUs have structural equality by default — no `#[derive(PartialEq)]` needed
-- Hot reload: your running program patches itself on save — impossible in Rust, trivial here
-- `.fsx` scripts give you the interactive exploration story Rust has always lacked
-
-**→ [Start here: `samples/from-rust/hello.fsx`](samples/from-rust/hello.fsx)**
-
-```fsharp
-// Rust: enum Shape { Circle { radius: f64 }, Rectangle { width: f64, height: f64 } }
-// F#:
-type Shape =
-  | Circle    of radius: float
-  | Rectangle of width: float * height: float
-
-// match is exhaustive just like Rust — add a case, get a warning everywhere it's not handled
-let area = function
-  | Circle r          -> System.Math.PI * r * r
-  | Rectangle (w, h) -> w * h
-```
-
----
-
-### 🧘 Coming from FSharpKoans?
-
-Congratulations, graduate — you've already proven you know F#. You filled in the blanks, matched the patterns, piped the lists. But the Koans workflow was also kind of... slow? `dotnet watch run`, squint at terminal output, scroll to find which koan broke, fix it, wait 3 seconds, repeat. SageFs is the upgrade: same F# you learned, but with instant inline feedback, live test gutter markers, and no more terminal-squinting.
-
-Pain you're leaving behind: The 2-4 second `dotnet watch run` cycle, terminal-only pass/fail output, the custom `[<Koan>]` framework that doesn't work anywhere else, and the gap between "I finished the exercises" and "I can build real things."
-
-**What you'll love immediately:**
-- Alt+Enter on any expression → result appears inline, not in the terminal
-- Expecto tests with live gutter markers (✓/✗) — the natural evolution of koan assertions
-- No more `dotnet run` cycles — feedback in ~200ms
-- Your koan-learned skills (DUs, pipelines, options, pattern matching) applied to real domains
-
-**→ [Start here: `samples/from-koans/00-about-sagefs-koans.fsx`](samples/from-koans/00-about-sagefs-koans.fsx)** (the roadmap — then work through `01-about-asserts.fsx` → `21-about-filtering.fsx` at your own pace)
-
-```fsharp
-// Koans taught you this:
-//     let actual_value = __
-//     AssertEquality expected_value actual_value
-//     dotnet run → FAIL → fix → run → PASS → next (~3 sec cycle)
-
-// SageFs: just evaluate it.
-let x = 1 + 1   // Alt+Enter → 2, right here, in ~200ms
-
-// Your DU skills, applied to a real domain:
-type OrderStatus =
-    | Pending | Shipped of tracking: string | Cancelled of reason: string
-
-let describe = function
-    | Pending    -> "⏳ Awaiting shipment"
-    | Shipped t  -> $"📦 {t}"
-    | Cancelled r -> $"❌ {r}"
-// Alt+Enter → instant result. No test framework needed for exploration.
-```
+| Background | One-liner | Guide |
+|:---|:---|:---|
+| 🐍 **Python** | Same REPL energy, plus a compiler that catches bugs before you run | [Guide →](docs/coming-from-python.md) |
+| 📓 **Jupyter** | Everything you love about notebooks, minus kernel crashes and JSON diffs | [Guide →](docs/coming-from-jupyter.md) |
+| 🔷 **C#** | Same .NET, same NuGet — stop writing `AbstractRepositoryFactoryImpl` | [Guide →](docs/coming-from-csharp.md) |
+| ☕ **Java** | Expressive, type-safe, concise — what Java always wished it could be | [Guide →](docs/coming-from-java.md) |
+| 🟨 **JS/TS** | No `undefined`, no `this` bugs, no `node_modules` — just functions | [Guide →](docs/coming-from-javascript.md) |
+| 🦀 **Rust** | `Option`, `Result`, pattern matching — without the borrow checker | [Guide →](docs/coming-from-rust.md) |
+| 🧘 **F# Koans** | You already know F# — now get instant feedback instead of `dotnet run` | [Guide →](docs/coming-from-koans.md) |
 
 ---
 
