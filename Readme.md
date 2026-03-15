@@ -66,16 +66,16 @@ Start SageFs once. Connect from VS Code, Neovim, Visual Studio, a terminal TUI, 
 
 ```mermaid
 graph TB
-    D["<b>SageFs Daemon</b><br/>FSI · File Watcher · MCP · Hot Reload · Dashboard"]
+    D[SageFs Daemon]
 
-    D --- VS["VS Code<br/><i>Fable F#→JS</i>"]
-    D --- NV["Neovim<br/><i>59 Lua modules</i>"]
-    D --- VI["Visual Studio<br/><i>Extensibility SDK</i>"]
-    D --- TU["Terminal TUI<br/><i>SageTUI / Elm</i>"]
-    D --- GU["Raylib GUI<br/><i>GPU renderer</i>"]
-    D --- WB["Web Dashboard<br/><i>Falco.Datastar</i>"]
-    D --- AI["AI Agents<br/><i>MCP protocol</i>"]
-    D --- JP["Jupyter Kernel<br/><i>sagefs --jupyter</i>"]
+    D --- VS[VS Code]
+    D --- NV[Neovim]
+    D --- VI[Visual Studio]
+    D --- TU[Terminal TUI]
+    D --- GU[Raylib GUI]
+    D --- WB[Web Dashboard]
+    D --- AI[AI Agents]
+    D --- JP[Jupyter Kernel]
 
     style D fill:#1a1b26,stroke:#7aa2f7,stroke-width:2px,color:#c0caf5
     style VS fill:#1a1b26,stroke:#9ece6a,color:#c0caf5
@@ -211,24 +211,22 @@ SageFs has exactly **three concepts**: a daemon, sessions, and clients.
 
 ```mermaid
 graph TB
-    subgraph D["🖥️  SageFs Daemon  ·  one per machine"]
-        S1["<b>Session Worker 1</b><br/><i>MyApp</i>"]
-        S2["<b>Session Worker 2</b><br/><i>Tests</i>"]
-        S3["<b>Session Worker 3</b><br/><i>Bare FSI</i>"]
-        SX["···  more sessions"]
-        SVC["<b>MCP</b> · <b>Dashboard</b> · <b>File Watcher</b> · <b>Hot Reload</b>"]
+    subgraph D[SageFs Daemon - one per machine]
+        S1[Session Worker 1 - MyApp]
+        S2[Session Worker 2 - Tests]
+        S3[Session Worker 3 - Bare FSI]
+        SVC[MCP / Dashboard / File Watcher / Hot Reload]
     end
 
-    D --- VS["VS Code"]
-    D --- NV["Neovim"]
-    D --- TU["Terminal TUI"]
-    D --- AI["AI Agent<br/><i>MCP</i>"]
+    D --- VS[VS Code]
+    D --- NV[Neovim]
+    D --- TU[Terminal TUI]
+    D --- AI[AI Agent - MCP]
 
     style D fill:#1a1b26,stroke:#7aa2f7,stroke-width:2px,color:#c0caf5
     style S1 fill:#1a1b26,stroke:#9ece6a,color:#c0caf5
     style S2 fill:#1a1b26,stroke:#9ece6a,color:#c0caf5
     style S3 fill:#1a1b26,stroke:#9ece6a,color:#c0caf5
-    style SX fill:#1a1b26,stroke:#565f89,color:#565f89
     style SVC fill:#1a1b26,stroke:#e0af68,color:#c0caf5
     style VS fill:#1a1b26,stroke:#bb9af7,color:#c0caf5
     style NV fill:#1a1b26,stroke:#bb9af7,color:#c0caf5
