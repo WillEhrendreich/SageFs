@@ -42,6 +42,8 @@
         <Compile Include="WorkflowErrorContextTests.fs" />
         <Compile Include="WorkflowElmModelTests.fs" />
         <Compile Include="WorkflowSwitchTests.fs" />
+        <Compile Include="WorkflowTransitionPropertyTests.fs" />
+        <Compile Include="WorkflowDetectionWiringTests.fs" />
         <Compile Include="McpAffordanceHardeningTests.fs" />
         <Compile Include="WorkerProtocolTests.fs" />
         <Compile Include="DaemonStateTests.fs" />

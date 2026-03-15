@@ -1468,6 +1468,23 @@ module McpTools =
 
   // ── Session Management Operations ──────────────────────────────
 
+  /// Pure helper: given package references and the current workflow, format
+  /// a non-blocking hint suggesting the user switch to WebLive if detection
+  /// finds web packages. Returns None when no suggestion applies.
+  /// Decoupled from .fsproj reading for testability — callers provide the list.
+  let formatDetectionHint (packageRefs: string list) (currentWorkflow: WorkflowTypes.SessionWorkflow) : string option =
+    match currentWorkflow with
+    | WorkflowTypes.SessionWorkflow.Interactive ->
+      match WorkflowTypes.WorkflowDetection.suggest packageRefs with
+      | Some suggestion ->
+        let pkgs = suggestion.DetectedPackages |> String.concat ", "
+        Some (
+          sprintf
+            "💡 Detected web packages (%s). Consider switching to Live workflow for hot reload: use switch_workflow tool with target='live'"
+            pkgs)
+      | None -> None
+    | WorkflowTypes.SessionWorkflow.WebLive _ -> None
+
   /// Create a new session and bind it to the requesting agent.
   let createSession (ctx: McpContext) (agent: string) (projects: string list) (workingDir: string) (workflow: WorkflowTypes.SessionWorkflow) : Task<string> =
     task {
@@ -1491,7 +1508,12 @@ module McpTools =
       match result with
       | Result.Ok sid ->
         setActiveSessionId ctx agent sid
-        return sid
+        // Surface workflow detection hint (non-blocking, informational only).
+        // packageRefs is [] until .fsproj reading is wired in a future phase.
+        let packageRefs: string list = []
+        match formatDetectionHint packageRefs workflow with
+        | Some hint -> return sprintf "%s\n\n%s" sid hint
+        | None -> return sid
       | Result.Error err -> return SageFsError.describeForAgent err
     }
 
