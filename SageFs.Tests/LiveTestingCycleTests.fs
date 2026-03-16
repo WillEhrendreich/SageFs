@@ -637,10 +637,10 @@ let TestCycleEffectsTests = testList "TestCycleEffects" [
         TransitiveCoverage = Map.ofList [ "Module.add", [| tc1.Id |] ]
     }
     match TestCycleEffects.afterTypeCheck ["Module.add"] "test.fs" RunTrigger.Keystroke graph state None Map.empty with
-    | [ TestCycleEffect.RunAffectedTests (tests, trigger, _tsElapsed, _fcsElapsed, _sessionId, _maps) ] ->
+    | [ TestCycleEffect.RequestRebuild (tests, trigger, _tsElapsed, _fcsElapsed, _sessionId, _maps) ] ->
       tests.Length |> Expect.equal "one test" 1
       trigger |> Expect.equal "keystroke trigger" RunTrigger.Keystroke
-    | other -> failtestf "expected single RunAffectedTests, got %A" other
+    | other -> failtestf "expected single RequestRebuild for .fs file, got %A" other
   }
 
   test "afterTypeCheck with no affected tests returns None" {
@@ -715,10 +715,10 @@ let TestCycleEffectsTests = testList "TestCycleEffects" [
         TransitiveCoverage = Map.ofList [ "Module.add", [| tc1.Id; tc2.Id |] ]
     }
     match TestCycleEffects.afterTypeCheck ["Module.add"] "test.fs" RunTrigger.Keystroke graph state None Map.empty with
-    | [ TestCycleEffect.RunAffectedTests (tests, _, _, _, _, _) ] ->
+    | [ TestCycleEffect.RequestRebuild (tests, _, _, _, _, _) ] ->
       tests.Length |> Expect.equal "only unit test" 1
       tests.[0].Id |> Expect.equal "unit test id" tc1.Id
-    | other -> failtestf "expected single RunAffectedTests, got %A" other
+    | other -> failtestf "expected single RequestRebuild for .fs file, got %A" other
   }
 ]
 
@@ -1009,14 +1009,17 @@ let endToEndCycleTests = testList "End-to-end cycle" [
     effects
     |> List.exists (fun e -> match e with TestCycleEffect.RequestFcsTypeCheck _ -> true | _ -> false)
     |> Expect.isTrue "has fcs"
-    // Phase 2: afterTypeCheck (after FCS completes) fires RunAffectedTests
+    // Phase 2: afterTypeCheck (after FCS completes) fires RequestRebuild for .fs files
     let runEffects = TestCycleEffects.afterTypeCheck s2.ChangedSymbols "test.fs" RunTrigger.Keystroke s2.DepGraph s2.TestState None s2.InstrumentationMaps
-    runEffects |> List.isEmpty |> Expect.isFalse "afterTypeCheck produces RunAffectedTests"
+    runEffects |> List.isEmpty |> Expect.isFalse "afterTypeCheck produces effect"
     match runEffects with
+    | [ TestCycleEffect.RequestRebuild (tests, trigger, _, _, _, _) ] ->
+      tests |> Array.length |> Expect.equal "one affected test" 1
+      trigger |> Expect.equal "trigger is keystroke" RunTrigger.Keystroke
     | [ TestCycleEffect.RunAffectedTests (tests, trigger, _, _, _, _) ] ->
       tests |> Array.length |> Expect.equal "one affected test" 1
       trigger |> Expect.equal "trigger is keystroke" RunTrigger.Keystroke
-    | _ -> failwith "expected single RunAffectedTests"
+    | _ -> failwith "expected single RequestRebuild or RunAffectedTests"
   }
 
   test "disabled state produces no effects even after delay" {

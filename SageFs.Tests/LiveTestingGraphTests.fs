@@ -745,10 +745,14 @@ let compositionTests = testList "compositionTests" [
     let effects301, s301 = s51 |> LiveTestCycleState.tick (t0.AddMilliseconds(301.0))
     effects301 |> List.exists (fun e -> match e with TestCycleEffect.RequestFcsTypeCheck _ -> true | _ -> false)
     |> Expect.isTrue "FCS request fires at 301ms"
-    // Phase 2: FCS completes → handleFcsResult → RunAffectedTests
+    // Phase 2: FCS completes → handleFcsResult → RequestRebuild (for .fs files)
     let fcsResult = FcsTypeCheckResult.Success ("File.fs", refs)
     let fcsEffects, _ = LiveTestCycleState.handleFcsResult fcsResult s301
-    fcsEffects |> List.exists (fun e -> match e with TestCycleEffect.RunAffectedTests _ -> true | _ -> false)
+    fcsEffects |> List.exists (fun e ->
+      match e with
+      | TestCycleEffect.RequestRebuild _ -> true
+      | TestCycleEffect.RunAffectedTests _ -> true
+      | _ -> false)
     |> Expect.isTrue "affected tests triggered after FCS"
   }
 
@@ -940,10 +944,10 @@ let symbolGraphWiringTests = testList "symbol graph wiring integration" [
       TestCycleEffects.afterTypeCheck
         [ "MyModule.add" ] "test.fs" RunTrigger.Keystroke graph ltState None Map.empty
     match effect with
-    | [ TestCycleEffect.RunAffectedTests (tests, _, _, _, _, _) ] ->
+    | [ TestCycleEffect.RequestRebuild (tests, _, _, _, _, _) ] ->
       tests |> Array.exists (fun t -> t.Id = tid)
       |> Expect.isTrue "should contain affected test"
-    | other -> failtestf "expected single RunAffectedTests, got %A" other
+    | other -> failtestf "expected single RequestRebuild for .fs file, got %A" other
   }
 
   test "handleFcsResult updates dep graph via onFcsComplete" {

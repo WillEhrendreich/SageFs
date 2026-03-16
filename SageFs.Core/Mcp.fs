@@ -2065,16 +2065,20 @@ module McpTools =
              | Features.LiveTesting.CoverageHealth.SomeFailing -> "SomeFailing")
           | Features.LiveTesting.CoverageStatus.NotCovered -> false, 0, "NotCovered"
           | Features.LiveTesting.CoverageStatus.Pending -> false, 0, "Pending"
-        let branchStr =
+        let branchObj : obj =
           match ca.BranchCoverage with
-          | Some Features.LiveTesting.LineCoverage.FullyCovered -> "FullyCovered"
-          | Some (Features.LiveTesting.LineCoverage.PartiallyCovered (c, t)) -> sprintf "Partial(%d/%d)" c t
-          | Some Features.LiveTesting.LineCoverage.NotCovered -> "NotCovered"
-          | None -> "Unknown"
+          | Some Features.LiveTesting.LineCoverage.FullyCovered ->
+            {| Case = "FullyCovered" |} :> obj
+          | Some (Features.LiveTesting.LineCoverage.PartiallyCovered (c, t)) ->
+            {| Case = "PartiallyCovered"; Covered = c; Total = t |} :> obj
+          | Some Features.LiveTesting.LineCoverage.NotCovered ->
+            {| Case = "NotCovered" |} :> obj
+          | None ->
+            {| Case = "Unknown" |} :> obj
         let coveringTests = ca.CoveringTestIds |> Array.map testNameFor
         {| Line = ca.Line; EndLine = ca.EndLine; EndColumn = ca.EndColumn
            Covered = covered; TestCount = testCount; Health = health
-           CoveringTests = coveringTests; BranchCoverage = branchStr |})
+           CoveringTests = coveringTests; BranchCoverage = branchObj |})
     let coveredCount = lines |> Array.filter (fun l -> l.Covered) |> Array.length
     let totalCount = lines.Length
     let pct =

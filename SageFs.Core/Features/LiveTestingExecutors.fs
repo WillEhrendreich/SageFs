@@ -1086,6 +1086,7 @@ module TestCycleCancellation =
     | TestCycleEffect.ParseTreeSitter _ -> pc.TreeSitter.next()
     | TestCycleEffect.RequestFcsTypeCheck _ -> pc.Fcs.next()
     | TestCycleEffect.RunAffectedTests _ -> pc.TestRun.next()
+    | TestCycleEffect.RequestRebuild _ -> pc.TestRun.next()
 
   let dispose (pc: TestCycleCancellation) =
     pc.Discovery.dispose()

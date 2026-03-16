@@ -294,11 +294,19 @@ type CoverageStatus =
   | NotCovered
   | Pending
 
+[<RequireQualifiedAccess>]
+type BranchCoverage =
+  | FullyCovered
+  | PartiallyCovered of covered: int * total: int
+  | NotCovered
+  | Unknown
+
 type CoverageAnnotation = {
   Symbol: string
   FilePath: string
   DefinitionLine: int
   Status: CoverageStatus
+  BranchCoverage: BranchCoverage
 }
 
 // --- IL Branch Coverage ---
@@ -624,6 +632,9 @@ type GutterIcon =
   | Covered
   | NotCovered
   | CellStale
+  | BranchFullyCovered
+  | BranchPartiallyCovered
+  | BranchNotCovered
 
 [<Struct>]
 type LineAnnotation = {
@@ -1276,6 +1287,9 @@ module GutterIcon =
     | GutterIcon.Covered -> '\u258E'
     | GutterIcon.NotCovered -> '\u00B7'
     | GutterIcon.CellStale -> '\u26A0'
+    | GutterIcon.BranchFullyCovered -> '\u2590'
+    | GutterIcon.BranchPartiallyCovered -> '\u25D0'
+    | GutterIcon.BranchNotCovered -> '\u258C'
 
   let toColorIndex = function
     | GutterIcon.TestDiscovered -> 33uy
@@ -1287,6 +1301,9 @@ module GutterIcon =
     | GutterIcon.Covered -> 34uy
     | GutterIcon.NotCovered -> 160uy
     | GutterIcon.CellStale -> 214uy
+    | GutterIcon.BranchFullyCovered -> 34uy
+    | GutterIcon.BranchPartiallyCovered -> 214uy
+    | GutterIcon.BranchNotCovered -> 160uy
 
   let toLabel = function
     | GutterIcon.TestDiscovered -> "TestDiscovered"
@@ -1298,6 +1315,9 @@ module GutterIcon =
     | GutterIcon.Covered -> "Covered"
     | GutterIcon.NotCovered -> "NotCovered"
     | GutterIcon.CellStale -> "CellStale"
+    | GutterIcon.BranchFullyCovered -> "BranchFullyCovered"
+    | GutterIcon.BranchPartiallyCovered -> "BranchPartiallyCovered"
+    | GutterIcon.BranchNotCovered -> "BranchNotCovered"
 
   let parseLabel = function
     | "TestDiscovered" -> Some GutterIcon.TestDiscovered
@@ -1309,6 +1329,9 @@ module GutterIcon =
     | "Covered" -> Some GutterIcon.Covered
     | "NotCovered" -> Some GutterIcon.NotCovered
     | "CellStale" -> Some GutterIcon.CellStale
+    | "BranchFullyCovered" -> Some GutterIcon.BranchFullyCovered
+    | "BranchPartiallyCovered" -> Some GutterIcon.BranchPartiallyCovered
+    | "BranchNotCovered" -> Some GutterIcon.BranchNotCovered
     | _ -> None
 
   let toEmoji = function
@@ -1321,6 +1344,9 @@ module GutterIcon =
     | GutterIcon.Covered -> "🟢"
     | GutterIcon.NotCovered -> "⚪"
     | GutterIcon.CellStale -> "⚠️"
+    | GutterIcon.BranchFullyCovered -> "🟩"
+    | GutterIcon.BranchPartiallyCovered -> "🟨"
+    | GutterIcon.BranchNotCovered -> "🟥"
 
   let toStatusText = function
     | GutterIcon.TestDiscovered -> "discovered"
@@ -1332,6 +1358,9 @@ module GutterIcon =
     | GutterIcon.Covered -> "covered"
     | GutterIcon.NotCovered -> "not covered"
     | GutterIcon.CellStale -> "stale"
+    | GutterIcon.BranchFullyCovered -> "branches covered"
+    | GutterIcon.BranchPartiallyCovered -> "branches partial"
+    | GutterIcon.BranchNotCovered -> "branches uncovered"
 
   let toAnsiColor = function
     | GutterIcon.TestDiscovered -> "\x1b[33m"   // yellow
@@ -1343,6 +1372,9 @@ module GutterIcon =
     | GutterIcon.Covered -> "\x1b[32m"          // green
     | GutterIcon.NotCovered -> "\x1b[90m"       // dim gray
     | GutterIcon.CellStale -> "\x1b[33m"        // yellow (stale = warning)
+    | GutterIcon.BranchFullyCovered -> "\x1b[32m"  // green
+    | GutterIcon.BranchPartiallyCovered -> "\x1b[33m" // yellow
+    | GutterIcon.BranchNotCovered -> "\x1b[31m"    // red
 
 module StatusToGutter =
   let fromTestStatus (status: TestRunStatus) : GutterIcon =
@@ -2894,6 +2926,7 @@ type TestCycleEffect =
   | ParseTreeSitter of content: string * filePath: string
   | RequestFcsTypeCheck of filePath: string * treeSitterElapsed: System.TimeSpan
   | RunAffectedTests of tests: TestCase array * trigger: RunTrigger * treeSitterElapsed: System.TimeSpan * fcsElapsed: System.TimeSpan * sessionId: string option * instrumentationMaps: InstrumentationMap array
+  | RequestRebuild of tests: TestCase array * trigger: RunTrigger * treeSitterElapsed: System.TimeSpan * fcsElapsed: System.TimeSpan * sessionId: string option * instrumentationMaps: InstrumentationMap array
 
 module TestCycleEffects =
   let fromTick
@@ -2985,7 +3018,12 @@ module TestCycleEffects =
                 match targetSession |> Option.bind (fun s -> Map.tryFind s instrumentationMaps) with
                 | Some maps -> maps
                 | None -> instrumentationMaps |> Map.values |> Seq.collect id |> Array.ofSeq
-              Some (TestCycleEffect.RunAffectedTests(groupTests, trigger, tsElapsed, fcsElapsed, targetSession, sessionMaps)))
+              let isCompiled =
+                changedFilePath.EndsWith(".fs", System.StringComparison.OrdinalIgnoreCase)
+                && not (changedFilePath.EndsWith(".fsx", System.StringComparison.OrdinalIgnoreCase))
+              match isCompiled with
+              | true -> Some (TestCycleEffect.RequestRebuild(groupTests, trigger, tsElapsed, fcsElapsed, targetSession, sessionMaps))
+              | false -> Some (TestCycleEffect.RunAffectedTests(groupTests, trigger, tsElapsed, fcsElapsed, targetSession, sessionMaps)))
 
 /// Adaptive debounce configuration.
 type AdaptiveDebounceConfig = {
@@ -3142,6 +3180,15 @@ type FcsTypeCheckResult =
   | Failed of filePath: string * errors: string list
   | Cancelled of filePath: string
 
+type PendingRebuildState = {
+  Tests: TestCase array
+  Trigger: RunTrigger
+  TreeSitterElapsed: System.TimeSpan
+  FcsElapsed: System.TimeSpan
+  SessionId: string option
+  InstrumentationMaps: InstrumentationMap array
+}
+
 /// Wraps LiveTestState + TestCycleDebounce + TestDependencyGraph + adaptive
 /// debounce + file analysis cache into a single state record for the Elm loop.
 type LiveTestCycleState = {
@@ -3157,6 +3204,7 @@ type LiveTestCycleState = {
   LastTiming: TestCycleTiming option
   /// IL coverage instrumentation maps per session (sessionId → maps for that session's assemblies).
   InstrumentationMaps: Map<string, InstrumentationMap array>
+  PendingRebuild: PendingRebuildState option
 }
 
 module LiveTestCycleState =
@@ -3172,6 +3220,7 @@ module LiveTestCycleState =
     LastTrigger = RunTrigger.Keystroke
     LastTiming = None
     InstrumentationMaps = Map.empty
+    PendingRebuild = None
   }
 
   let liveTestingStatusBarForSession (activeSessionId: string) (state: LiveTestCycleState) : string =
@@ -3697,7 +3746,7 @@ module FileAnnotations =
           let failCount = testIds |> Array.filter (fun tid -> match Map.tryFind tid lastResults with | Some { Result = TestResult.Failed _ } -> true | _ -> false) |> Array.length
           let health = if failCount > 0 then CoverageHealth.SomeFailing else CoverageHealth.AllPassing
           let status = if passCount + failCount > 0 then CoverageStatus.Covered(passCount + failCount, health) else CoverageStatus.Pending
-          Some { Symbol = ref.SymbolFullName; FilePath = filePath; DefinitionLine = ref.Line; Status = status })
+          Some { Symbol = ref.SymbolFullName; FilePath = filePath; DefinitionLine = ref.Line; Status = status; BranchCoverage = BranchCoverage.Unknown })
       |> Array.ofList
 
   /// Project file annotations with coverage synthesized from the dependency graph.

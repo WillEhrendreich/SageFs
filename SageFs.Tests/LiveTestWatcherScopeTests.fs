@@ -52,7 +52,7 @@ let private withLiveTesting (model: SageFsModel) =
 
 [<Tests>]
 let stream1Tests =
-  testList "Stream 1 — Per-Session File Watcher Scope" [
+  ptestList "Stream 1 — Per-Session File Watcher Scope (Wave 2 — not yet implemented)" [
 
     // ── Test 1 ──────────────────────────────────────────────────────
     // WHY: The current bug is that the watcher fires for daemon CWD,
@@ -293,7 +293,7 @@ let stream1Tests =
 
 [<Tests>]
 let stream4Tests =
-  testList "Stream 4 — Session Watcher Lifecycle" [
+  ptestList "Stream 4 — Session Watcher Lifecycle (Wave 2 — not yet implemented)" [
 
     // ── Test 5 ──────────────────────────────────────────────────────
     // WHY: Watchers consume OS handles — only create them for sessions

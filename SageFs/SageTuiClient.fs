@@ -451,6 +451,9 @@ let private renderContentPane
                   | Features.LiveTesting.GutterIcon.Covered -> "│"
                   | Features.LiveTesting.GutterIcon.NotCovered -> "·"
                   | Features.LiveTesting.GutterIcon.CellStale -> "?"
+                  | Features.LiveTesting.GutterIcon.BranchFullyCovered -> "▐"
+                  | Features.LiveTesting.GutterIcon.BranchPartiallyCovered -> "◐"
+                  | Features.LiveTesting.GutterIcon.BranchNotCovered -> "▌"
                 El.text (sprintf "%s " icon) |> El.fg (hexToColor (
                   match ann.Icon with
                   | Features.LiveTesting.GutterIcon.TestPassed -> theme.ColorPass

@@ -815,7 +815,7 @@ let coverageCorrelationTests = testList "CoverageCorrelation" [
   }
 
   test "testsForLine returns NotCovered when no annotation matches" {
-    let annotations = [| { Symbol = "Other.fn"; FilePath = "other.fs"; DefinitionLine = 5; Status = CoverageStatus.NotCovered } |]
+    let annotations = [| { Symbol = "Other.fn"; FilePath = "other.fs"; DefinitionLine = 5; Status = CoverageStatus.NotCovered; BranchCoverage = BranchCoverage.Unknown } |]
     CoverageCorrelation.testsForLine annotations TestDependencyGraph.empty Array.empty Map.empty "prod.fs" 10
     |> Expect.equal "no match" CoverageDetail.NotCovered
   }
@@ -823,7 +823,7 @@ let coverageCorrelationTests = testList "CoverageCorrelation" [
   test "testsForLine chains through annotation to graph" {
     let tid = TestId.create "lineTest" TestFramework.Expecto
     let graph = { TestDependencyGraph.empty with TransitiveCoverage = Map.ofList ["Prod.validate", [| tid |]] }
-    let annotations = [| { Symbol = "Prod.validate"; FilePath = "prod.fs"; DefinitionLine = 42; Status = CoverageStatus.Covered (1, CoverageHealth.AllPassing) } |]
+    let annotations = [| { Symbol = "Prod.validate"; FilePath = "prod.fs"; DefinitionLine = 42; Status = CoverageStatus.Covered (1, CoverageHealth.AllPassing); BranchCoverage = BranchCoverage.Unknown } |]
     let tests = [| { Id = tid; FullName = "Tests.lineTest"; DisplayName = "lineTest"; Origin = TestOrigin.ReflectionOnly; Labels = []; Framework = TestFramework.Expecto; Category = TestCategory.Unit } |]
     let results = Map.ofList [ tid, { TestId = tid; TestName = "lineTest"; Result = TestResult.Passed (TimeSpan.FromMilliseconds 3.0); Timestamp = DateTimeOffset.UtcNow; Output = None } ]
     match CoverageCorrelation.testsForLine annotations graph tests results "prod.fs" 42 with
@@ -837,7 +837,7 @@ let coverageCorrelationTests = testList "CoverageCorrelation" [
   }
 
   test "testsForLine returns NotCovered when annotation exists but graph has no entry" {
-    let annotations = [| { Symbol = "Prod.orphan"; FilePath = "prod.fs"; DefinitionLine = 10; Status = CoverageStatus.Pending } |]
+    let annotations = [| { Symbol = "Prod.orphan"; FilePath = "prod.fs"; DefinitionLine = 10; Status = CoverageStatus.Pending; BranchCoverage = BranchCoverage.Unknown } |]
     CoverageCorrelation.testsForLine annotations TestDependencyGraph.empty Array.empty Map.empty "prod.fs" 10
     |> Expect.equal "annotation but no graph entry" CoverageDetail.NotCovered
   }
@@ -1003,11 +1003,11 @@ let coverageSelectionTests = testList "Coverage-based test selection" [
           TestSessionMap = Map.ofList [ tid1, "s"; tid2, "s" ] }
     let instrMaps = Map.ofList [ "s", maps ]
     match TestCycleEffects.afterTypeCheck ["Module.add"] "Module.fs" RunTrigger.Keystroke graph state None instrMaps with
-    | [ TestCycleEffect.RunAffectedTests (tests, _, _, _, _, _) ] ->
+    | [ TestCycleEffect.RequestRebuild (tests, _, _, _, _, _) ] ->
       let ids = tests |> Array.map (fun t -> t.Id) |> Set.ofArray
       ids |> Set.contains tid1 |> Expect.isTrue "t1 from symbol heuristic"
       ids |> Set.contains tid2 |> Expect.isTrue "t2 from coverage bitmap"
-    | other -> failtestf "expected single RunAffectedTests, got %A" other
+    | other -> failtestf "expected single RequestRebuild for .fs file, got %A" other
   }
 ]
 
@@ -1057,7 +1057,8 @@ let rangeLookupTests = testList "FileAnnotations.projectWithCoverage range enric
     let maps = [| mkTestMap [| sp |] |]
     let ca : CoverageAnnotation =
       { Symbol = "MyModule.foo"; FilePath = filePath; DefinitionLine = 10
-        Status = CoverageStatus.Covered(1, CoverageHealth.AllPassing) }
+        Status = CoverageStatus.Covered(1, CoverageHealth.AllPassing)
+        BranchCoverage = BranchCoverage.Unknown }
     let state = { LiveTestState.empty with CoverageAnnotations = [| ca |] }
     let cycle =
       { LiveTestCycleState.empty with
@@ -1075,7 +1076,8 @@ let rangeLookupTests = testList "FileAnnotations.projectWithCoverage range enric
     let maps = [| mkTestMap [| sp |] |]
     let ca : CoverageAnnotation =
       { Symbol = "MyModule.foo"; FilePath = filePath; DefinitionLine = 10
-        Status = CoverageStatus.Covered(1, CoverageHealth.AllPassing) }
+        Status = CoverageStatus.Covered(1, CoverageHealth.AllPassing)
+        BranchCoverage = BranchCoverage.Unknown }
     let state = { LiveTestState.empty with CoverageAnnotations = [| ca |] }
     let cycle =
       { LiveTestCycleState.empty with
@@ -1094,7 +1096,8 @@ let rangeLookupTests = testList "FileAnnotations.projectWithCoverage range enric
     let maps = [| mkTestMap [| sp1; sp2 |] |]
     let ca : CoverageAnnotation =
       { Symbol = "MyModule.foo"; FilePath = filePath; DefinitionLine = 10
-        Status = CoverageStatus.Covered(1, CoverageHealth.AllPassing) }
+        Status = CoverageStatus.Covered(1, CoverageHealth.AllPassing)
+        BranchCoverage = BranchCoverage.Unknown }
     let state = { LiveTestState.empty with CoverageAnnotations = [| ca |] }
     let cycle =
       { LiveTestCycleState.empty with
@@ -1113,7 +1116,8 @@ let rangeLookupTests = testList "FileAnnotations.projectWithCoverage range enric
     let maps = [| mkTestMap [| spDegen; spGood |] |]
     let ca : CoverageAnnotation =
       { Symbol = "MyModule.foo"; FilePath = filePath; DefinitionLine = 10
-        Status = CoverageStatus.Covered(1, CoverageHealth.AllPassing) }
+        Status = CoverageStatus.Covered(1, CoverageHealth.AllPassing)
+        BranchCoverage = BranchCoverage.Unknown }
     let state = { LiveTestState.empty with CoverageAnnotations = [| ca |] }
     let cycle =
       { LiveTestCycleState.empty with

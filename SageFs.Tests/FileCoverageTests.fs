@@ -50,7 +50,8 @@ let tests =
         |> Expect.equal "1 test" 1
       line0.GetProperty("Health").GetString()
         |> Expect.equal "all passing" "AllPassing"
-      line0.GetProperty("BranchCoverage").GetString()
+      let bc = line0.GetProperty("BranchCoverage")
+      bc.GetProperty("Case").GetString()
         |> Expect.equal "fully covered" "FullyCovered"
     }
 
@@ -65,7 +66,8 @@ let tests =
         |> Expect.equal "0 tests" 0
       line0.GetProperty("Health").GetString()
         |> Expect.equal "not covered" "NotCovered"
-      line0.GetProperty("BranchCoverage").GetString()
+      let bc = line0.GetProperty("BranchCoverage")
+      bc.GetProperty("Case").GetString()
         |> Expect.equal "unknown branch" "Unknown"
     }
 
@@ -100,8 +102,13 @@ let tests =
       let line0 = doc.RootElement.GetProperty("Lines").EnumerateArray() |> Seq.head
       line0.GetProperty("Health").GetString()
         |> Expect.equal "some failing" "SomeFailing"
-      line0.GetProperty("BranchCoverage").GetString()
-        |> Expect.equal "partial 3/5" "Partial(3/5)"
+      let bc = line0.GetProperty("BranchCoverage")
+      bc.GetProperty("Case").GetString()
+        |> Expect.equal "partial case" "PartiallyCovered"
+      bc.GetProperty("Covered").GetInt32()
+        |> Expect.equal "3 covered" 3
+      bc.GetProperty("Total").GetInt32()
+        |> Expect.equal "5 total" 5
     }
 
     test "covering test names resolved from discovered tests" {

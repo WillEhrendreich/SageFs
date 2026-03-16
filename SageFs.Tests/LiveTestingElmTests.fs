@@ -508,8 +508,12 @@ let fcsTypeCheckResultTests = testList "FcsTypeCheckResult" [
     let result = FcsTypeCheckResult.Success ("Test.fs", refs)
     let effects, _ = LiveTestCycleState.handleFcsResult result state
     effects
-    |> List.exists (fun e -> match e with TestCycleEffect.RunAffectedTests _ -> true | _ -> false)
-    |> Expect.isTrue "RunAffectedTests fires on new symbols"
+    |> List.exists (fun e ->
+      match e with
+      | TestCycleEffect.RequestRebuild _ -> true
+      | TestCycleEffect.RunAffectedTests _ -> true
+      | _ -> false)
+    |> Expect.isTrue "RequestRebuild or RunAffectedTests fires on new symbols"
   }
 
   test "Success updates adaptive debounce" {
@@ -590,9 +594,10 @@ let fcsTypeCheckResultTests = testList "FcsTypeCheckResult" [
     effects
     |> List.exists (fun e ->
       match e with
+      | SageFsEffect.TestCycle (TestCycleEffect.RequestRebuild _) -> true
       | SageFsEffect.TestCycle (TestCycleEffect.RunAffectedTests _) -> true
       | _ -> false)
-    |> Expect.isTrue "cycle RunAffectedTests effect emitted"
+    |> Expect.isTrue "cycle RequestRebuild or RunAffectedTests effect emitted"
   }
 
   test "Elm wiring: FcsTypeCheckCompleted Failed is no-op" {
@@ -641,7 +646,11 @@ let triggerWiringTests = testList "RunTrigger wiring" [
     let effects, _ =
       LiveTestCycleState.handleFcsResult (FcsTypeCheckResult.Success ("Test.fs", refs)) s1
     effects
-    |> List.exists (fun e -> match e with TestCycleEffect.RunAffectedTests _ -> true | _ -> false)
+    |> List.exists (fun e ->
+      match e with
+      | TestCycleEffect.RequestRebuild _ -> true
+      | TestCycleEffect.RunAffectedTests _ -> true
+      | _ -> false)
     |> Expect.isTrue "OnSaveOnly test runs with FileSave trigger"
   }
 

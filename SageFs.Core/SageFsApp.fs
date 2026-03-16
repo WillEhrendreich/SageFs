@@ -183,6 +183,7 @@ type SageFsMsg =
   | WorkflowSuggestionReceived of WorkflowTypes.WorkflowSuggestion
   | WorkflowSuggestionDismissed
   | WorkflowSuggestionAccepted
+  | RebuildCompleted of Result<unit, string>
 
 /// Side effects the Elm loop can request.
 /// Wraps EditorEffect and TestCycleEffect for async execution.
@@ -1179,7 +1180,8 @@ module SageFsUpdate =
             { Symbol = sprintf "%s:%d" file line
               FilePath = file
               DefinitionLine = line
-              Status = status })
+              Status = status
+              BranchCoverage = Features.LiveTesting.BranchCoverage.Unknown })
         { model with
             LiveTesting = { lt with TestState = { lt.TestState with CoverageAnnotations = annotations } } }, []
 
@@ -1351,6 +1353,10 @@ module SageFsUpdate =
         | Some s -> [ SageFsEffect.SwitchWorkflow s.SuggestedWorkflow ]
         | None -> []
       { model with PendingSuggestion = None }, effects
+
+    | SageFsMsg.RebuildCompleted _result ->
+      // Placeholder: will wire to RunAffectedTests on Ok, surface diagnostic on Error
+      model, []
 
     | SageFsMsg.MarkAllTestsStale ->
       let lt = model.LiveTesting
@@ -1871,6 +1877,10 @@ module SageFsEffectHandler =
                 Instrumentation.succeedSpan span
               | false -> ()
             })
+        | Features.LiveTesting.TestCycleEffect.RequestRebuild (_tests, _trigger, _tsElapsed, _fcsElapsed, _targetSession, _instrumentationMaps) ->
+          // Placeholder: Phase 1 will shell out to dotnet build --no-restore
+          // then dispatch RebuildCompleted(Ok ()) or RebuildCompleted(Error msg)
+          ()
         | Features.LiveTesting.TestCycleEffect.RunAffectedTests (tests, trigger, tsElapsed, fcsElapsed, targetSession, instrumentationMaps) ->
           match Array.isEmpty tests with
           | true -> ()
