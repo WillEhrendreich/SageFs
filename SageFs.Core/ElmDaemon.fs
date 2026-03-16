@@ -64,6 +64,21 @@ let createProgram
     OnSystemAlarm = onSystemAlarm
   }
 
+/// Headless daemon mode does not need eagerly materialized RenderRegions on every
+/// model change. Regions are rendered lazily only when a client explicitly asks.
+let createHeadlessProgram
+  (deps: EffectDeps)
+  (onModelChanged: SageFsModel -> RenderRegion list -> unit)
+  (onSystemAlarm: string -> string -> unit)
+  : ElmProgram<SageFsModel, SageFsMsg, SageFsEffect, RenderRegion> =
+  {
+    Update = SageFsUpdate.updateWithInvariant
+    Render = fun _ -> []
+    ExecuteEffect = SageFsEffectHandler.execute deps
+    OnModelChanged = onModelChanged
+    OnSystemAlarm = onSystemAlarm
+  }
+
 /// Start the Elm loop with initial model and return the runtime.
 let start
   (deps: EffectDeps)
@@ -72,7 +87,34 @@ let start
   (ct: System.Threading.CancellationToken)
   : ElmRuntime<SageFsModel, SageFsMsg, RenderRegion> =
   let program = createProgram deps onModelChanged onSystemAlarm
-  ElmLoop.start program (SageFsModel.initial()) ct
+  ElmLoop.startWithCoalescerAndReducer
+    SageFsMsgQueueCoalescing.tryAbsorbPending
+    SageFsDispatchReduction.reduceDispatchBatch
+    program
+    (SageFsModel.initial())
+    ct
+
+/// Start the Elm loop for a headless daemon. This keeps update batches cheap by
+/// deferring full RenderRegion materialization until a client requests it.
+let startHeadless
+  (deps: EffectDeps)
+  (onModelChanged: SageFsModel -> RenderRegion list -> unit)
+  (onSystemAlarm: string -> string -> unit)
+  (ct: System.Threading.CancellationToken)
+  : ElmRuntime<SageFsModel, SageFsMsg, RenderRegion> =
+  let program = createHeadlessProgram deps onModelChanged onSystemAlarm
+  ElmLoop.startWithCoalescerAndReducer
+    SageFsMsgQueueCoalescing.tryAbsorbPending
+    SageFsDispatchReduction.reduceDispatchBatch
+    program
+    (SageFsModel.initial())
+    ct
+
+let renderRegionsOnDemand
+  (runtime: ElmRuntime<SageFsModel, SageFsMsg, RenderRegion>)
+  : RenderRegion list =
+  runtime.GetModel()
+  |> SageFsRender.render
 
 /// Dispatch a message and wait for the model to update.
 /// Returns the model state after the dispatch has been processed.

@@ -452,6 +452,21 @@ let instrumentationTests = testSequenced (testList "Instrumentation" [
   test "liveTestingAssemblyLoadErrors counter exists" {
     Instrumentation.liveTestingAssemblyLoadErrors |> Expect.isNotNull "liveTestingAssemblyLoadErrors"
   }
+  test "liveTestingBufferedMergeMs histogram exists" {
+    Instrumentation.liveTestingBufferedMergeMs |> Expect.isNotNull "liveTestingBufferedMergeMs"
+  }
+  test "liveTestingBufferedSummaryMs histogram exists" {
+    Instrumentation.liveTestingBufferedSummaryMs |> Expect.isNotNull "liveTestingBufferedSummaryMs"
+  }
+  test "liveTestingBufferedNarrativesMs histogram exists" {
+    Instrumentation.liveTestingBufferedNarrativesMs |> Expect.isNotNull "liveTestingBufferedNarrativesMs"
+  }
+  test "liveTestingBufferedAnnotationsMs histogram exists" {
+    Instrumentation.liveTestingBufferedAnnotationsMs |> Expect.isNotNull "liveTestingBufferedAnnotationsMs"
+  }
+  test "liveTestingBufferedApplyMs histogram exists" {
+    Instrumentation.liveTestingBufferedApplyMs |> Expect.isNotNull "liveTestingBufferedApplyMs"
+  }
 
   // === Tier 3 P2: DevReload connected clients ===
   test "devReloadConnectedClients updown counter exists" {

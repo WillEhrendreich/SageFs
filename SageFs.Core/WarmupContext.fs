@@ -126,6 +126,52 @@ type SessionContext = {
 }
 
 module SessionContext =
+  let private diagnosticHotPathSignature (d: WarmupFcsDiagnostic) =
+    d.Message,
+    d.Severity,
+    d.ErrorNumber,
+    d.FileName,
+    d.StartLine,
+    d.EndLine,
+    d.StartColumn,
+    d.EndColumn
+
+  let private failedOpenHotPathSignature (f: WarmupOpenFailure) =
+    f.Name,
+    f.Kind,
+    f.ErrorMessage,
+    f.Diagnostics |> List.map diagnosticHotPathSignature
+
+  let private hotPathSignature (ctx: SessionContext) =
+    ctx.SessionId,
+    ctx.ProjectNames,
+    ctx.WorkingDir,
+    ctx.Status,
+    ctx.Workflow,
+    ctx.Warmup.SourceFilesScanned,
+    (
+      ctx.Warmup.PhaseTiming.ScanSourceFilesMs,
+      ctx.Warmup.PhaseTiming.ScanAssembliesMs,
+      ctx.Warmup.PhaseTiming.OpenNamespacesMs,
+      ctx.Warmup.PhaseTiming.TotalMs
+    ),
+    (
+      ctx.Warmup.AssembliesLoaded
+      |> List.map (fun asm -> asm.Name, asm.NamespaceCount, asm.ModuleCount)
+    ),
+    (
+      ctx.Warmup.NamespacesOpened
+      |> List.map (fun opened -> opened.Name, opened.Kind, opened.Source)
+    ),
+    (ctx.Warmup.FailedOpens |> List.map failedOpenHotPathSignature),
+    (
+      ctx.FileStatuses
+      |> List.map (fun file -> file.Path, file.Readiness, file.IsWatched)
+    )
+
+  let equivalentForElmHotPath (left: SessionContext) (right: SessionContext) =
+    hotPathSignature left = hotPathSignature right
+
   let summary (ctx: SessionContext) =
     let opened = WarmupContext.totalOpenedCount ctx.Warmup
     let failed = WarmupContext.totalFailedCount ctx.Warmup

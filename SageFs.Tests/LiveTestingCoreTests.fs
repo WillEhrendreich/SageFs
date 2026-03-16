@@ -169,7 +169,98 @@ let mergeResultsTests = testList "mergeResults" [
     |> Map.count
     |> Expect.equal "preserve existing" 1
   }
+
+  test "merging results preserves existing status entries so the app boundary can finalize derived views once" {
+    let tc = mkTestCase "t1" (TestFramework.Unknown "x") TestCategory.Unit
+    let detectedEntries =
+      LiveTesting.computeStatusEntries
+        { LiveTestState.empty with
+            DiscoveredTests = [| tc |] }
+    let state =
+      { LiveTestState.empty with
+          DiscoveredTests = [| tc |]
+          StatusEntries = detectedEntries }
+    let merged =
+      LiveTesting.mergeResults
+        state
+        [| mkResult tc.Id (TestResult.Passed (ts 5.0)) |]
+
+    obj.ReferenceEquals(merged.StatusEntries, detectedEntries)
+    |> Expect.isTrue "raw result merging should not rebuild derived status entries before the app finalizes them"
+  }
 ]
+
+[<Tests>]
+let mergeResultsWithUpdatedStatusEntriesTests =
+  testList "mergeResultsWithUpdatedStatusEntries" [
+    test "streaming a partial result batch only changes the returned tests while preserving prior running truth for the rest" {
+      let gen = RunGeneration.next RunGeneration.zero
+      let test1 = mkTestCase "Module.Tests.test1" TestFramework.Expecto TestCategory.Unit
+      let test2 = mkTestCase "Module.Tests.test2" TestFramework.Expecto TestCategory.Unit
+      let runningState =
+        { LiveTestState.empty with
+            DiscoveredTests = [| test1; test2 |]
+            Activation = LiveTestingActivation.Active
+            AffectedTests = Set.ofList [ test1.Id; test2.Id ]
+            RunPhases = Map.ofList [ "s", Running gen ]
+            LastGeneration = gen }
+      let runningState =
+        LiveTestState.withStatusEntries
+          (LiveTesting.computeStatusEntries runningState)
+          runningState
+
+      let merged =
+        LiveTesting.mergeResultsWithUpdatedStatusEntries
+          runningState
+          [| mkResult test1.Id (TestResult.Passed (ts 10.0)) |]
+
+      let mergedEntries =
+        LiveTestState.statusEntriesForSession "" merged
+      let entry1 = mergedEntries |> Array.find (fun e -> e.TestId = test1.Id)
+      let entry2 = mergedEntries |> Array.find (fun e -> e.TestId = test2.Id)
+
+      obj.ReferenceEquals(merged.StatusEntries, runningState.StatusEntries)
+      |> Expect.isTrue "buffered result merges should preserve the ordered status-entry array until a consumer explicitly materializes a fresh session view"
+
+      match entry1.Status with
+      | TestRunStatus.Passed _ -> ()
+      | other -> failtestf "expected test1 to transition to Passed, got %A" other
+
+      entry1.PreviousStatus
+      |> Expect.equal "changed tests should still remember their prior running state" TestRunStatus.Running
+
+      entry2.Status
+      |> Expect.equal "tests that have not reported yet should stay Running" TestRunStatus.Running
+    }
+
+    test "buffered NotRun for an already-known result is a true no-op for derived status projection" {
+      let test1 = mkTestCase "Module.Tests.test1" TestFramework.Expecto TestCategory.Unit
+      let test2 = mkTestCase "Module.Tests.test2" TestFramework.Expecto TestCategory.Unit
+      let initialState =
+        { LiveTestState.empty with
+            DiscoveredTests = [| test1; test2 |]
+            Activation = LiveTestingActivation.Active }
+        |> fun state ->
+          LiveTesting.mergeResults
+             state
+             [| mkResult test1.Id (TestResult.Passed (ts 10.0)) |]
+        |> fun state ->
+          LiveTestState.withStatusEntries
+            (LiveTesting.computeStatusEntries state)
+            state
+
+      let merged, changedEntries =
+        LiveTesting.mergeBufferedResultsWithUpdatedStatusEntriesAndChangedEntries
+          initialState
+          [ [| mkResult test1.Id TestResult.NotRun |] ]
+
+      changedEntries
+      |> Expect.isEmpty "ignored NotRun facts should not trigger any derived status-entry patch work"
+
+      obj.ReferenceEquals(merged.StatusEntries, initialState.StatusEntries)
+      |> Expect.isTrue "when buffered facts do not change the projected truth, the status-entry array should be preserved by reference"
+    }
+  ]
 
 // --- computeStatusEntries Tests (RED — stub returns empty) ---
 

@@ -67,18 +67,24 @@ module ElmLoop =
         msgLabelCache.GetOrAdd(key, fun _ -> case.Name)
     | false -> t.Name
 
-  /// Start the Elm loop with an initial model.
+  /// Start the Elm loop with an initial model and a pending-message coalescer.
   /// Uses a dedicated drain thread (not thread pool) to avoid starvation.
-  /// Dispatch enqueues + signals; the drain thread wakes, processes all
-  /// pending messages, renders ONCE, then sleeps until signalled again.
+  /// Dispatch stores pending messages + signals; the drain thread wakes,
+  /// processes the current batch, renders ONCE, then sleeps until signalled again.
   /// Pass a CancellationToken to stop effects and the drain thread on shutdown.
-  let start (program: ElmProgram<'Model, 'Msg, 'Effect, 'Region>)
-            (initialModel: 'Model)
-            (ct: System.Threading.CancellationToken) : ElmRuntime<'Model, 'Msg, 'Region> =
+  let startWithCoalescerAndReducer
+    (tryAbsorbPending: ResizeArray<'Msg> -> 'Msg -> bool)
+    (reduceBatch: 'Msg array -> 'Msg array)
+    (program: ElmProgram<'Model, 'Msg, 'Effect, 'Region>)
+    (initialModel: 'Model)
+    (ct: System.Threading.CancellationToken)
+    : ElmRuntime<'Model, 'Msg, 'Region> =
     let mutable model = initialModel
     let mutable latestRegions = []
     let lockObj = obj ()
-    let queue = ConcurrentQueue<'Msg>()
+    let pendingLock = obj ()
+    let pending = ResizeArray<'Msg>()
+    let mutable queueAlarmActive = false
     // Signal for the dedicated drain thread — Set() wakes it, Wait() sleeps it
     let signal = new ManualResetEventSlim(false)
     // Bounds concurrent in-flight effects. Prevents exponential effect-cascade OOM:
@@ -86,15 +92,58 @@ module ElmLoop =
     // 1 file change → 10 effects → 100 msgs → 1000 effects → ...
     let effectSemaphore = new System.Threading.SemaphoreSlim(64, 64)
 
+    let hasPending () =
+      lock pendingLock (fun () -> pending.Count > 0)
+
+    let tryTakePendingBatch () =
+      lock pendingLock (fun () ->
+        match pending.Count with
+        | 0 -> None
+        | count ->
+          let batch = pending.ToArray()
+          pending.Clear()
+          Instrumentation.elmloopQueueDepth.Add(-int64 count)
+          queueAlarmActive <- false
+          Some batch)
+
+    let enqueuePending (msg: 'Msg) =
+      let mutable depth = 0
+      let mutable raiseQueueAlarm = false
+      lock pendingLock (fun () ->
+        let absorbed = tryAbsorbPending pending msg
+        match absorbed with
+        | true -> ()
+        | false ->
+          pending.Add msg
+          Instrumentation.elmloopQueueDepth.Add(1L)
+        depth <- pending.Count
+        match depth > 256 && not queueAlarmActive with
+        | true ->
+          queueAlarmActive <- true
+          raiseQueueAlarm <- true
+        | false -> ())
+      match raiseQueueAlarm with
+      | true ->
+        Instrumentation.elmloopErrors.Add(1L, kvp "phase" "queue_depth")
+        Log.warn "[ElmLoop] QUEUE HIGH-WATERMARK: depth=%d (>256). Possible effect-cascade storm — check for runaway effect→msg→effect loops." depth
+        try program.OnSystemAlarm "queue_depth" (sprintf "queue depth %d exceeded high-watermark 256" depth) with _ -> ()
+      | false -> ()
+      if not ct.IsCancellationRequested then
+        try signal.Set() with :? System.ObjectDisposedException -> ()
+
     /// Drain all queued messages, render once, push once.
     /// Runs exclusively on the dedicated drain thread.
     let drain () =
       let batchSw = Stopwatch.StartNew()
       let batchTag = kvp "msg_type" "batch"
 
-      // Phase 1: Drain queue — apply all updates under model lock
+      // Phase 1: Snapshot pending messages, then apply all updates under model lock
       let lockSw = Stopwatch.StartNew()
       let prevModel, snapshot, allEffects, batchCount, updateMs, msgTypes =
+        let batch =
+          tryTakePendingBatch ()
+          |> Option.defaultValue [||]
+          |> reduceBatch
         lock lockObj (fun () ->
           lockSw.Stop()
           let lockWaitMs = lockSw.Elapsed.TotalMilliseconds
@@ -106,12 +155,8 @@ module ElmLoop =
           // ResizeArray avoids the O(n²) `msgEffs @ effs` left-fold: with 200 msgs × 10 effects
           // each, list concat allocates quadratically. AddRange is O(k) per message.
           let effsAcc = ResizeArray<_>()
-          let mutable count = 0
-          let mutable queueAlarmFired = false   // fire at most once per drain batch
-          let mutable item = Unchecked.defaultof<'Msg>
           let msgCounts = System.Collections.Generic.Dictionary<string, int>()
-          while queue.TryDequeue(&item) do
-            count <- count + 1
+          for item in batch do
             Instrumentation.elmDispatchCount.Add(1L)
             let typeName = msgLabel (item :> obj)
             match msgCounts.TryGetValue(typeName) with
@@ -123,27 +168,13 @@ module ElmLoop =
               model <- m
               for eff in msgEffs do effsAcc.Add(eff)
             with ex ->
-              Instrumentation.elmloopErrors.Add(1L, kvp "phase" "update")
-              Log.error "[ElmLoop] Update threw for %s: %s\n%s" typeName ex.Message (if isNull ex.StackTrace then "" else ex.StackTrace)
-              try program.OnSystemAlarm "update" ex.Message with alarmEx -> Log.warn "[ElmLoop] OnSystemAlarm(update) callback failed: %s" alarmEx.Message
+                Instrumentation.elmloopErrors.Add(1L, kvp "phase" "update")
+                Log.error "[ElmLoop] Update threw for %s: %s\n%s" typeName ex.Message (if isNull ex.StackTrace then "" else ex.StackTrace)
+                try program.OnSystemAlarm "update" ex.Message with alarmEx -> Log.warn "[ElmLoop] OnSystemAlarm(update) callback failed: %s" alarmEx.Message
             perMsgSw.Stop()
             Instrumentation.elmloopUpdateMs.Record(perMsgSw.Elapsed.TotalMilliseconds, kvp "msg_type" typeName)
-            // Queue depth high-watermark check (fires once per drain batch to avoid log spam).
-            // queue.Count reflects messages that arrived while we processed this message —
-            // which is exactly the effect-cascade scenario we want to surface.
-            match queueAlarmFired with
-            | true -> ()
-            | false ->
-              let qDepth = queue.Count
-              match qDepth > 256 with
-              | false -> ()
-              | true ->
-                queueAlarmFired <- true
-                Instrumentation.elmloopErrors.Add(1L, kvp "phase" "queue_depth")
-                Log.warn "[ElmLoop] QUEUE HIGH-WATERMARK: depth=%d (>256). Possible effect-cascade storm — check for runaway effect→msg→effect loops." qDepth
-                try program.OnSystemAlarm "queue_depth" (sprintf "queue depth %d exceeded high-watermark 256" qDepth) with _ -> ()
           updateSw.Stop()
-          prev, model, Seq.toList effsAcc, count, updateSw.Elapsed.TotalMilliseconds,
+          prev, model, Seq.toList effsAcc, batch.Length, updateSw.Elapsed.TotalMilliseconds,
           msgCounts |> Seq.map (fun kv -> sprintf "%s×%d" kv.Key kv.Value) |> String.concat ",")
 
       match batchCount with
@@ -219,7 +250,7 @@ module ElmLoop =
                     parentCtx)
                 | false -> null
               try
-                do! program.ExecuteEffect (fun msg -> queue.Enqueue msg; signal.Set()) effect
+                do! program.ExecuteEffect enqueuePending effect
                 Instrumentation.succeedSpan effectActivity
               with ex ->
                 Instrumentation.elmloopErrors.Add(1L, kvp "phase" "effect")
@@ -262,8 +293,8 @@ module ElmLoop =
         while not ct.IsCancellationRequested do
           signal.Wait(ct)
           signal.Reset()
-          // Drain until queue is truly empty (messages may arrive during processing)
-          while not queue.IsEmpty && not ct.IsCancellationRequested do
+          // Drain until pending work is truly empty (messages may arrive during processing)
+          while hasPending () && not ct.IsCancellationRequested do
             drain ()
       with :? System.OperationCanceledException -> ()
       signal.Dispose())
@@ -272,10 +303,7 @@ module ElmLoop =
     drainThread.Start()
 
     let dispatch (msg: 'Msg) =
-      queue.Enqueue msg
-      // Guard against signal.Set() after disposal when CT is already cancelled
-      if not ct.IsCancellationRequested then
-        try signal.Set() with :? System.ObjectDisposedException -> ()
+      enqueuePending msg
 
     let regions =
       try program.Render initialModel
@@ -294,3 +322,18 @@ module ElmLoop =
     { Dispatch = dispatch
       GetModel = fun () -> lock lockObj (fun () -> model)
       GetRegions = fun () -> lock lockObj (fun () -> latestRegions) }
+
+  let startWithCoalescer
+    (tryAbsorbPending: ResizeArray<'Msg> -> 'Msg -> bool)
+    (program: ElmProgram<'Model, 'Msg, 'Effect, 'Region>)
+    (initialModel: 'Model)
+    (ct: System.Threading.CancellationToken)
+    : ElmRuntime<'Model, 'Msg, 'Region> =
+    startWithCoalescerAndReducer tryAbsorbPending id program initialModel ct
+
+  let start
+    (program: ElmProgram<'Model, 'Msg, 'Effect, 'Region>)
+    (initialModel: 'Model)
+    (ct: System.Threading.CancellationToken)
+    : ElmRuntime<'Model, 'Msg, 'Region> =
+    startWithCoalescer (fun _ _ -> false) program initialModel ct

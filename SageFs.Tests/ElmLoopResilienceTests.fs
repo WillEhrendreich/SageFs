@@ -16,6 +16,48 @@ let waitFor (condition: unit -> bool) (timeoutMs: int) =
 let wait () =
   System.Threading.Thread.Sleep 50
 
+type CoalescingMsg =
+  | Gate
+  | Tick of int
+  | Batch of int list
+
+module CoalescingMsg =
+  let private tryReplaceLast
+    (pending: ResizeArray<CoalescingMsg>)
+    (chooseReplacement: CoalescingMsg -> CoalescingMsg option)
+    =
+    let rec loop index =
+      match index < 0 with
+      | true -> false
+      | false ->
+        match chooseReplacement pending[index] with
+        | Some replacement ->
+          pending[index] <- replacement
+          true
+        | None ->
+          loop (index - 1)
+    loop (pending.Count - 1)
+
+  let tryAbsorbPending
+    (pending: ResizeArray<CoalescingMsg>)
+    (incoming: CoalescingMsg)
+    =
+    match incoming with
+    | Tick value ->
+      tryReplaceLast
+        pending
+        (function
+        | Tick _ -> Some (Tick value)
+        | _ -> None)
+    | Batch values ->
+      tryReplaceLast
+        pending
+        (function
+        | Batch existing -> Some (Batch (existing @ values))
+        | _ -> None)
+    | Gate ->
+      false
+
 [<Tests>]
 let elmLoopResilienceTests =
   // Decision: Elm loop catches exceptions in Update/Render/OnModelChanged/Effect.
@@ -444,6 +486,93 @@ let elmLoopBackpressureTests =
       (!maxConcurrent <= 64)
       |> Expect.isTrue
            "max concurrent effects must be ≤64 — unbounded Async.Start allows all 100 to run at once (see ElmLoop.fs SemaphoreSlim cap)"
+
+      cts.Cancel()
+  ]
+
+[<Tests>]
+let elmLoopCoalescingTests =
+  testList "ElmLoop coalescing" [
+
+    testCase "latest wins coalescing replaces stale pending ticks before the drain resumes" <| fun _ ->
+      let drainStarted = new System.Threading.SemaphoreSlim(0, 1)
+      let releaseGate = new System.Threading.ManualResetEventSlim(false)
+      let processed = ResizeArray<CoalescingMsg>()
+      let processedLock = obj ()
+      let prog : ElmProgram<int, CoalescingMsg, unit, int> = {
+        Update = fun msg model ->
+          lock processedLock (fun () -> processed.Add msg)
+          match msg with
+          | Gate ->
+            drainStarted.Release() |> ignore
+            releaseGate.Wait()
+          | _ -> ()
+          model + 1, []
+        Render = fun model -> [model]
+        ExecuteEffect = fun _ _ -> async { () }
+        OnModelChanged = fun _ _ -> ()
+        OnSystemAlarm = fun _ _ -> ()
+      }
+      use cts = new System.Threading.CancellationTokenSource()
+      let rt = ElmLoop.startWithCoalescer CoalescingMsg.tryAbsorbPending prog 0 cts.Token
+
+      rt.Dispatch Gate
+      drainStarted.Wait(2000)
+      |> Expect.isTrue "gate message should block the drain so pending work can accumulate"
+      rt.Dispatch (Tick 1)
+      rt.Dispatch (Tick 2)
+      rt.Dispatch (Tick 3)
+      releaseGate.Set()
+
+      waitFor (fun () -> lock processedLock (fun () -> processed.Count >= 2)) 5000
+      |> Expect.isTrue "gate and the final coalesced tick should both be processed"
+
+      let seen =
+        lock processedLock (fun () -> processed |> Seq.toList)
+      seen
+      |> Expect.equal "stale ticks should collapse to the latest pending tick, not replay every intermediate pulse"
+           [ Gate; Tick 3 ]
+
+      cts.Cancel()
+
+    testCase "merge coalescing preserves every payload item while collapsing multiple pending batches" <| fun _ ->
+      let drainStarted = new System.Threading.SemaphoreSlim(0, 1)
+      let releaseGate = new System.Threading.ManualResetEventSlim(false)
+      let processed = ResizeArray<CoalescingMsg>()
+      let processedLock = obj ()
+      let prog : ElmProgram<int, CoalescingMsg, unit, int> = {
+        Update = fun msg model ->
+          lock processedLock (fun () -> processed.Add msg)
+          match msg with
+          | Gate ->
+            drainStarted.Release() |> ignore
+            releaseGate.Wait()
+          | _ -> ()
+          model + 1, []
+        Render = fun model -> [model]
+        ExecuteEffect = fun _ _ -> async { () }
+        OnModelChanged = fun _ _ -> ()
+        OnSystemAlarm = fun _ _ -> ()
+      }
+      use cts = new System.Threading.CancellationTokenSource()
+      let rt = ElmLoop.startWithCoalescer CoalescingMsg.tryAbsorbPending prog 0 cts.Token
+
+      rt.Dispatch Gate
+      drainStarted.Wait(2000)
+      |> Expect.isTrue "gate message should block the drain so pending batches can merge"
+      rt.Dispatch (Batch [ 1 ])
+      rt.Dispatch (Batch [ 2; 3 ])
+      rt.Dispatch (Batch [ 4 ])
+      releaseGate.Set()
+
+      waitFor (fun () -> lock processedLock (fun () -> processed.Count >= 2)) 5000
+      |> Expect.isTrue "gate and the merged batch should both be processed"
+
+      let seen =
+        lock processedLock (fun () -> processed |> Seq.toList)
+      seen
+      |> Expect.equal "batch coalescing should preserve every payload item while collapsing redundant renders"
+           [ Gate; Batch [ 1; 2; 3; 4 ] ]
 
       cts.Cancel()
   ]

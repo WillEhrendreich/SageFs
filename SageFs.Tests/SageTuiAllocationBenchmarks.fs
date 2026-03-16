@@ -123,7 +123,7 @@ let private measureNs (iterations: int) (f: unit -> 'a) : float =
 
 [<Tests>]
 let sageTuiAllocationBenchmarks =
-  testList "SageTUI allocation benchmarks" [
+  testList "[Benchmark] SageTUI allocation benchmarks" [
 
     // ----- arena lifecycle -----
     testList "arena lifecycle" [

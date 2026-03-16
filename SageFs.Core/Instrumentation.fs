@@ -129,6 +129,16 @@ module Instrumentation =
     testCycleMeter.CreateHistogram<float>("sagefs.live_testing.discovery_ms", "ms", "Test discovery duration")
   let liveTestingAssemblyLoadErrors =
     testCycleMeter.CreateCounter<int64>("sagefs.live_testing.assembly_load_errors_total", description = "Total assembly load errors during test discovery")
+  let liveTestingBufferedMergeMs =
+    testCycleMeter.CreateHistogram<float>("sagefs.live_testing.buffered_merge_ms", "ms", "Buffered test-result status merge duration")
+  let liveTestingBufferedSummaryMs =
+    testCycleMeter.CreateHistogram<float>("sagefs.live_testing.buffered_summary_ms", "ms", "Buffered test-result summary refresh duration")
+  let liveTestingBufferedNarrativesMs =
+    testCycleMeter.CreateHistogram<float>("sagefs.live_testing.buffered_narratives_ms", "ms", "Buffered test-result failure narrative refresh duration")
+  let liveTestingBufferedAnnotationsMs =
+    testCycleMeter.CreateHistogram<float>("sagefs.live_testing.buffered_annotations_ms", "ms", "Buffered test-result editor annotation refresh duration")
+  let liveTestingBufferedApplyMs =
+    testCycleMeter.CreateHistogram<float>("sagefs.live_testing.buffered_apply_ms", "ms", "Buffered test-result end-to-end apply duration")
 
   // Coverage instrumentation observability
   let coverageMapsReceived =

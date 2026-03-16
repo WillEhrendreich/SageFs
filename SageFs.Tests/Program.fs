@@ -58,8 +58,8 @@ let main argv =
     | true ->
       Tests.runTestsInAssemblyWithCLIArgs [] filteredArgv
     | false ->
-      // Default: exclude [Integration] tests (FSI actor startup is ~8-10s each)
-      // Run with --all or --integration to include them
+      // Default: exclude [Integration] and [Benchmark] tests.
+      // Run with --all or --integration to include them.
       let tests =
         Impl.testFromThisAssembly ()
         |> Option.defaultValue (testList "empty" [])
@@ -67,7 +67,8 @@ let main argv =
           defaultConfig.joinWith.asString
           (fun z ->
             let name = defaultConfig.joinWith.format z
-            not (name.Contains "[Integration]"))
+            not (name.Contains "[Integration]")
+            && not (name.Contains "[Benchmark]"))
       Tests.runTestsWithCLIArgs [] filteredArgv tests
 
   // Force exit: Kestrel ConsoleLifetime and other test infrastructure may leave

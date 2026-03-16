@@ -8,6 +8,74 @@ open FsCheck.FSharp
 open SageFs.Features.LiveTesting
 open SageFs.Tests.SharedGenerators
 
+let mkLiveTestCase
+  (fullName: string)
+  (displayName: string)
+  : TestCase =
+  {
+    Id = TestId.create fullName TestFramework.Expecto
+    FullName = fullName
+    DisplayName = displayName
+    Origin = TestOrigin.ReflectionOnly
+    Labels = []
+    Framework = TestFramework.Expecto
+    Category = TestCategory.Unit
+  }
+
+let mkPassedRunResult
+  (test: TestCase)
+  (durationMs: float)
+  : TestRunResult =
+  {
+    TestId = test.Id
+    TestName = test.DisplayName
+    Result = TestResult.Passed (TimeSpan.FromMilliseconds durationMs)
+    Timestamp = DateTimeOffset.UtcNow
+    Output = None
+  }
+
+let mkFailedRunResult
+  (test: TestCase)
+  (message: string)
+  (durationMs: float)
+  : TestRunResult =
+  {
+    TestId = test.Id
+    TestName = test.DisplayName
+    Result = TestResult.Failed (TestFailure.AssertionFailed message, TimeSpan.FromMilliseconds durationMs)
+    Timestamp = DateTimeOffset.UtcNow
+    Output = None
+  }
+
+let mkActiveState
+  (discovered: TestCase array)
+  (results: TestRunResult array)
+  : LiveTestState =
+  let baseState = {
+    LiveTestState.empty with
+        DiscoveredTests = discovered
+        Activation = LiveTestingActivation.Active
+  }
+  let merged = LiveTesting.mergeResults baseState results
+  let statuses = LiveTesting.computeStatusEntriesWithHistory Map.empty merged
+  let summary =
+    statuses
+    |> Array.map (fun entry -> entry.Status)
+    |> TestSummary.fromStatuses merged.Activation
+  {
+    merged with
+        StatusEntries = statuses
+        CachedTestSummary = summary
+  }
+
+let changedEntriesFor
+  (results: TestRunResult array)
+  (state: LiveTestState)
+  : TestStatusEntry array =
+  let changedIds = results |> Array.map (fun result -> result.TestId) |> Set.ofArray
+  LiveTestState.orderedStatusEntries state
+  |> Array.filter (fun entry -> Set.contains entry.TestId changedIds)
+
 [<Tests>]
 let liveTestingTypesTests = testList "LiveTestingTypes" [
 
@@ -391,6 +459,89 @@ let liveTestingTypesTests = testList "LiveTestingTypes" [
       let s = { TestSummary.empty with Total = 3; Disabled = 3 }
       TestSummary.toInlineBadge s
       |> Expect.equal "fallback for no status parts" "3 tests"
+    }
+
+    test "applyStatusEntryChanges matches a full summary recompute for streamed result patches" {
+      let testA = mkLiveTestCase "SummaryPatch.Tests.a" "summary-a"
+      let testB = mkLiveTestCase "SummaryPatch.Tests.b" "summary-b"
+      let testC = mkLiveTestCase "SummaryPatch.Tests.c" "summary-c"
+      let initialState =
+        mkActiveState
+          [| testA; testB; testC |]
+          [|
+            mkPassedRunResult testA 12.0
+            mkFailedRunResult testB "still failing" 7.0
+            mkPassedRunResult testC 4.0
+          |]
+      let changedResults = [|
+        mkFailedRunResult testA "regressed" 9.0
+        mkPassedRunResult testB 5.0
+      |]
+      let merged =
+        LiveTesting.mergeBufferedResultsWithUpdatedStatusEntries initialState [ changedResults ]
+      let changedEntries = changedEntriesFor changedResults merged
+      let incrementallyPatched =
+        TestSummary.applyStatusEntryChanges
+          merged.Activation
+          initialState.CachedTestSummary
+          changedEntries
+      let recomputed =
+        LiveTestState.orderedStatusEntries merged
+        |> Array.map (fun entry -> entry.Status)
+        |> TestSummary.fromStatuses merged.Activation
+
+      incrementallyPatched
+      |> Expect.equal "streamed result patches should preserve the exact same cached summary truth as a full suite rescan" recomputed
+    }
+  ]
+
+  testList "FailureNarrative patches" [
+    test "applyFailureNarrativeChanges matches a full narrative recompute for streamed result patches" {
+      let now = DateTimeOffset(2026, 3, 16, 6, 0, 0, TimeSpan.Zero)
+      let testA = mkLiveTestCase "NarrativePatch.Tests.a" "narrative-a"
+      let testB = mkLiveTestCase "NarrativePatch.Tests.b" "narrative-b"
+      let testC = mkLiveTestCase "NarrativePatch.Tests.c" "narrative-c"
+      let initialState =
+        mkActiveState
+          [| testA; testB; testC |]
+          [|
+            mkPassedRunResult testA 12.0
+            mkFailedRunResult testB "existing failure" 7.0
+            mkPassedRunResult testC 4.0
+          |]
+      let existingNarratives =
+        LiveTesting.computeFailureNarratives
+          now
+          [ "Old.Symbol" ]
+          []
+          Map.empty
+          initialState
+      let initialWithNarratives = { initialState with FailureNarratives = existingNarratives }
+      let changedResults = [|
+        mkFailedRunResult testA "new regression" 9.0
+        mkPassedRunResult testB 5.0
+      |]
+      let merged =
+        LiveTesting.mergeBufferedResultsWithUpdatedStatusEntries initialWithNarratives [ changedResults ]
+      let changedEntries = changedEntriesFor changedResults merged
+      let incrementallyPatched =
+        LiveTesting.applyFailureNarrativeChanges
+          now
+          [ "New.Symbol" ]
+          [ "Tests.fs" ]
+          initialWithNarratives.FailureNarratives
+          changedEntries
+          merged
+      let recomputed =
+        LiveTesting.computeFailureNarratives
+          now
+          [ "New.Symbol" ]
+          [ "Tests.fs" ]
+          initialWithNarratives.FailureNarratives
+          merged
+
+      incrementallyPatched
+      |> Expect.equal "streamed result patches should preserve the exact same failure-story truth as a full suite narrative rescan" recomputed
     }
   ]
 

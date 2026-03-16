@@ -5,6 +5,7 @@ open Expecto
 open Expecto.Flip
 open FsCheck
 open SageFs
+open SageFs.WarmUp
 open SageFs.Features.Diagnostics
 open SageFs.Features.LiveTesting
 open SageFs.Tests.SharedGenerators
@@ -15,6 +16,108 @@ let outputFor sid (model: SageFsModel) = model.RecentOutput.GetBuffer(sid)
 /// Helper to get the active session's output buffer from the model.
 let activeOutput (model: SageFsModel) =
   model.RecentOutput.GetActiveBuffer(model.Sessions.ActiveSessionId)
+
+let mkHotPathSessionContext
+  (startedAt: DateTimeOffset)
+  (lastLoadedAt: DateTimeOffset option)
+  (readiness: FileReadiness)
+  (isWatched: bool)
+  : SessionContext =
+  {
+    SessionId = "00000001"
+    ProjectNames = ["Proj.fsproj"]
+    WorkingDir = @"C:\Code\Repos\SageFs"
+    Status = "Ready"
+    Warmup = {
+      SourceFilesScanned = 2
+      AssembliesLoaded = [
+        { Name = "Proj"; Path = "Proj.dll"; NamespaceCount = 2; ModuleCount = 1 }
+      ]
+      NamespacesOpened = [
+        { Name = "System"; Kind = OpenableKind.Namespace; Source = "warmup"; DurationMs = 12.0 }
+      ]
+      FailedOpens = []
+      PhaseTiming = { ScanSourceFilesMs = 10L; ScanAssembliesMs = 5L; OpenNamespacesMs = 7L; TotalMs = 22L }
+      StartedAt = startedAt
+    }
+    FileStatuses = [
+      { Path = "Domain.fs"; Readiness = readiness; LastLoadedAt = lastLoadedAt; IsWatched = isWatched }
+    ]
+    Workflow = WorkflowTypes.SessionWorkflow.Interactive
+  }
+
+let mkLiveTestCase
+  (id: string)
+  (fullName: string)
+  (displayName: string)
+  : TestCase =
+  {
+    Id = TestId.TestId id
+    FullName = fullName
+    DisplayName = displayName
+    Origin = TestOrigin.ReflectionOnly
+    Labels = []
+    Framework = TestFramework.Expecto
+    Category = TestCategory.Unit
+  }
+
+let mkSourceTestLocation
+  (attributeName: string)
+  (functionName: string)
+  (filePath: string)
+  (line: int)
+  : SourceTestLocation =
+  {
+    AttributeName = attributeName
+    FunctionName = functionName
+    FilePath = filePath
+    Line = line
+    Column = 1
+  }
+
+let mkPassedRunResult
+  (testId: string)
+  (testName: string)
+  (durationMs: float)
+  : SageFs.Features.LiveTesting.TestRunResult =
+  {
+    TestId = TestId.TestId testId
+    TestName = testName
+    Result = SageFs.Features.LiveTesting.TestResult.Passed (TimeSpan.FromMilliseconds durationMs)
+    Timestamp = DateTimeOffset.UtcNow
+    Output = None
+  }
+
+let mkFailedRunResult
+  (testId: string)
+  (testName: string)
+  (message: string)
+  (durationMs: float)
+  : SageFs.Features.LiveTesting.TestRunResult =
+  {
+    TestId = TestId.TestId testId
+    TestName = testName
+    Result =
+      SageFs.Features.LiveTesting.TestResult.Failed(
+        SageFs.Features.LiveTesting.TestFailure.AssertionFailed message,
+        TimeSpan.FromMilliseconds durationMs
+      )
+    Timestamp = DateTimeOffset.UtcNow
+    Output = None
+  }
+
+let mkSkippedRunResult
+  (testId: string)
+  (testName: string)
+  (reason: string)
+  : SageFs.Features.LiveTesting.TestRunResult =
+  {
+    TestId = TestId.TestId testId
+    TestName = testName
+    Result = SageFs.Features.LiveTesting.TestResult.Skipped reason
+    Timestamp = DateTimeOffset.UtcNow
+    Output = None
+  }
 
 [<Tests>]
 let sageFsUpdateTests = testList "SageFsUpdate" [
@@ -39,6 +142,18 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
     | SageFsEffect.Editor (EditorEffect.RequestEval code) ->
       code |> Expect.equal "should eval buffer content" "a"
     | _ -> failtest "expected RequestEval effect"
+
+  testCase "ListSessions preserves the outer model when it only asks for a refresh" <| fun _ ->
+    let model = SageFsModel.initial()
+    let updated, effects =
+      SageFsUpdate.update (SageFsMsg.Editor EditorAction.ListSessions) model
+    obj.ReferenceEquals(updated, model)
+    |> Expect.isTrue "should keep the same outer model for a no-op editor refresh"
+    obj.ReferenceEquals(updated.Editor, model.Editor)
+    |> Expect.isTrue "should keep the same editor instance"
+    effects
+    |> Expect.equal "should still request a session list"
+         [SageFsEffect.Editor EditorEffect.RequestSessionList]
 
   testCase "EvalCompleted adds output line" <| fun _ ->
     let event = SageFsEvent.EvalCompleted ("s1", "val x = 42", [])
@@ -316,6 +431,55 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
     activeOutput newModel
     |> Expect.hasLength "should have 2 error lines" 2
 
+  testCase "WarmupContextUpdated preserves model identity when only invisible timestamps change" <| fun _ ->
+    let initialStartedAt = DateTimeOffset.UtcNow.AddMinutes(-5.0)
+    let initialLoadedAt = DateTimeOffset.UtcNow.AddMinutes(-1.0)
+    let existingCtx =
+      mkHotPathSessionContext initialStartedAt (Some initialLoadedAt) Loaded true
+    let existingFile = existingCtx.FileStatuses |> List.head
+    let incomingCtx = {
+      existingCtx with
+        Warmup = { existingCtx.Warmup with StartedAt = initialStartedAt.AddMinutes 2.0 }
+        FileStatuses = [{ existingFile with LastLoadedAt = Some (initialLoadedAt.AddMinutes 2.0) }]
+    }
+    let model = {
+      SageFsModel.initial() with
+        SessionContext = Some existingCtx
+    }
+    let updated, effects =
+      SageFsUpdate.update
+        (SageFsMsg.Event (SageFsEvent.WarmupContextUpdated incomingCtx))
+        model
+    obj.ReferenceEquals(updated, model)
+    |> Expect.isTrue "should not rebuild the model for non-render timestamp churn"
+    updated.LiveTesting.TestState.StateVersion
+    |> Expect.equal "should not rerun live-testing remap work" 0L
+    effects |> Expect.isEmpty "no effects are produced for a no-op warmup update"
+
+  testCase "WarmupContextUpdated changes model when file readiness changes" <| fun _ ->
+    let existingCtx =
+      mkHotPathSessionContext (DateTimeOffset.UtcNow.AddMinutes(-5.0)) None Loaded true
+    let existingFile = existingCtx.FileStatuses |> List.head
+    let incomingCtx = {
+      existingCtx with
+        FileStatuses = [{ existingFile with Readiness = Stale }]
+    }
+    let model = {
+      SageFsModel.initial() with
+        SessionContext = Some existingCtx
+    }
+    let updated, effects =
+      SageFsUpdate.update
+        (SageFsMsg.Event (SageFsEvent.WarmupContextUpdated incomingCtx))
+        model
+    obj.ReferenceEquals(updated, model)
+    |> Expect.isFalse "should rebuild the model when visible file readiness changes"
+    updated.SessionContext
+    |> Expect.equal "should store the new warmup context" (Some incomingCtx)
+    updated.LiveTesting.TestState.StateVersion
+    |> Expect.equal "should rerun live-testing remap work for a real change" 1L
+    effects |> Expect.isEmpty "warmup updates still do not produce effects"
+
   testCase "FileReloaded success adds info line" <| fun _ ->
     let event =
       SageFsEvent.FileReloaded ("test.fs", TimeSpan.FromMilliseconds 50.0, Ok "loaded")
@@ -576,6 +740,534 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
     |> Expect.equal "should be Info" OutputKind.Info
     out.[0].Text
     |> Expect.stringContains "should contain [2/4]" "[2/4]"
+
+  testCase "TestResultsBatch keeps visible output quiet while results are still streaming" <| fun _ ->
+    let baseModel = SageFsModel.initial()
+    let generation = RunGeneration.next RunGeneration.zero
+    let model = {
+      baseModel with
+        LiveTesting = {
+          baseModel.LiveTesting with
+            TestState = {
+              baseModel.LiveTesting.TestState with
+                RunPhases = Map.ofList ["s", Running generation]
+                LastGeneration = generation
+            }
+        }
+    }
+    let results = [|
+      mkPassedRunResult "test.batch.a" "test.batch.a" 42.0
+      mkPassedRunResult "test.batch.b" "test.batch.b" 7.0
+    |]
+    let updated, effects =
+      SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestResultsBatch results)) model
+    updated.RecentOutput.ActiveCount(updated.Sessions.ActiveSessionId)
+    |> Expect.equal "streaming batches should not spam the visible output pane" 0
+    updated.PendingTestResults
+    |> PendingTestResultBuffer.count
+    |> Expect.equal "results should still accumulate for the completion summary" 2
+    updated.LiveTesting.TestState.LastResults
+    |> Map.count
+    |> Expect.equal "live testing state should still merge the incoming results" 2
+    effects |> Expect.isEmpty "streaming batches do not produce follow-up effects"
+
+  testCase "TestRunCompleted emits one summary for all prior result batches" <| fun _ ->
+    let baseModel = SageFsModel.initial()
+    let generation = RunGeneration.next RunGeneration.zero
+    let model0 = {
+      baseModel with
+        LiveTesting = {
+          baseModel.LiveTesting with
+            TestState = {
+              baseModel.LiveTesting.TestState with
+                RunPhases = Map.ofList ["s", Running generation]
+                LastGeneration = generation
+            }
+        }
+    }
+    let batch1 = [|
+      mkPassedRunResult "test.summary.pass" "test.summary.pass" 10.0
+      mkFailedRunResult "test.summary.fail" "test.summary.fail" "boom" 5.0
+    |]
+    let batch2 = [|
+      mkSkippedRunResult "test.summary.skip" "test.summary.skip" "quarantined"
+    |]
+    let model1, _ =
+      SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestResultsBatch batch1)) model0
+    let model2, _ =
+      SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestResultsBatch batch2)) model1
+    let completed, effects =
+      SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestRunCompleted (Some "s"))) model2
+    completed.RecentOutput.ActiveCount(completed.Sessions.ActiveSessionId)
+    |> Expect.equal "completion should add exactly one visible summary line" 1
+    let summary = completed.RecentOutput.GetActiveBuffer(completed.Sessions.ActiveSessionId)
+    summary.[0].Kind
+    |> Expect.equal "a failed run summary should be surfaced as an error" OutputKind.Error
+    summary.[0].Text
+    |> Expect.equal "summary should reflect every prior batch in the run"
+         "🧪 Test run complete: 1 passed, 1 failed, 1 skipped (15ms)"
+    completed.PendingTestResults
+    |> PendingTestResultBuffer.count
+    |> Expect.equal "completion should clear the pending result accumulator" 0
+    effects |> Expect.isEmpty "run completion only updates model state"
+
+  testCase "EnableLiveTesting preserves status entries while still triggering follow-up work, and DisableLiveTesting stays quiet" <| fun _ ->
+    let discovered = [|
+      mkLiveTestCase "test.activation.a" "SageFs.Tests.Activation.tests/a" "activation-a"
+      mkLiveTestCase "test.activation.b" "SageFs.Tests.Activation.tests/b" "activation-b"
+    |]
+    let discoveredModel, _ =
+      SageFsUpdate.update
+        (SageFsMsg.Event (SageFsEvent.TestsDiscovered ("s", discovered)))
+        (SageFsModel.initial())
+    let discoveredEntries = discoveredModel.LiveTesting.TestState.StatusEntries
+
+    let enabled, enableEffects =
+      SageFsUpdate.update
+        SageFsMsg.EnableLiveTesting
+        discoveredModel
+
+    enabled.LiveTesting.TestState.Activation
+    |> Expect.equal "enabling live testing should still update the activation flag"
+         LiveTestingActivation.Active
+    obj.ReferenceEquals(enabled.LiveTesting.TestState.StatusEntries, discoveredEntries)
+    |> Expect.isTrue "enabling live testing should not rebuild identical per-test status entries"
+    List.isEmpty enableEffects
+    |> Expect.isFalse "enabling live testing should still trigger the follow-up discovery or execution work"
+
+    let disabled, disableEffects =
+      SageFsUpdate.update
+        SageFsMsg.DisableLiveTesting
+        enabled
+
+    disabled.LiveTesting.TestState.Activation
+    |> Expect.equal "disabling live testing should still update the activation flag"
+         LiveTestingActivation.Inactive
+    obj.ReferenceEquals(disabled.LiveTesting.TestState.StatusEntries, enabled.LiveTesting.TestState.StatusEntries)
+    |> Expect.isTrue "disabling live testing should also preserve identical per-test status entries"
+    disableEffects
+    |> Expect.isEmpty "disabling live testing should not emit follow-up effects"
+
+  testCase "TestRunStarted and TestRunCompleted only patch the affected status entries" <| fun _ ->
+    let discovered = [|
+      mkLiveTestCase "test.runstart.a" "SageFs.Tests.RunStart.tests/a" "runstart-a"
+      mkLiveTestCase "test.runstart.b" "SageFs.Tests.RunStart.tests/b" "runstart-b"
+    |]
+    let discoveredModel, _ =
+      SageFsUpdate.update
+        (SageFsMsg.Event (SageFsEvent.TestsDiscovered ("s", discovered)))
+        (SageFsModel.initial())
+    let beforeEntries = discoveredModel.LiveTesting.TestState.StatusEntries
+    let unaffectedBefore =
+      beforeEntries |> Array.find (fun entry -> entry.TestId = discovered.[1].Id)
+
+    let started, startEffects =
+      SageFsUpdate.update
+        (SageFsMsg.Event (SageFsEvent.TestRunStarted ([| discovered.[0].Id |], Some "s")))
+        discoveredModel
+    let startedEntries = started.LiveTesting.TestState.StatusEntries
+    let affectedStarted =
+      startedEntries |> Array.find (fun entry -> entry.TestId = discovered.[0].Id)
+    let unaffectedStarted =
+      startedEntries |> Array.find (fun entry -> entry.TestId = discovered.[1].Id)
+
+    obj.ReferenceEquals(unaffectedStarted, unaffectedBefore)
+    |> Expect.isTrue "starting a run should preserve unaffected status entry objects"
+    affectedStarted.PreviousStatus
+    |> Expect.equal "the started test should remember its prior detected status" TestRunStatus.Detected
+    affectedStarted.Status
+    |> Expect.equal "the started test should transition to running" TestRunStatus.Running
+    startEffects
+    |> Expect.isEmpty "the run-start event itself should only mutate model state"
+
+    let completed, completeEffects =
+      SageFsUpdate.update
+        (SageFsMsg.Event (SageFsEvent.TestRunCompleted (Some "s")))
+        started
+    let completedEntries = completed.LiveTesting.TestState.StatusEntries
+    let affectedCompleted =
+      completedEntries |> Array.find (fun entry -> entry.TestId = discovered.[0].Id)
+    let unaffectedCompleted =
+      completedEntries |> Array.find (fun entry -> entry.TestId = discovered.[1].Id)
+
+    obj.ReferenceEquals(unaffectedCompleted, unaffectedStarted)
+    |> Expect.isTrue "completing a run should also preserve unaffected status entry objects"
+    affectedCompleted.PreviousStatus
+    |> Expect.equal "completion should remember the running status it is leaving" TestRunStatus.Running
+    affectedCompleted.Status
+    |> Expect.equal "a completed run with no result should return the test to detected" TestRunStatus.Detected
+    completeEffects
+    |> Expect.isEmpty "run completion should not emit follow-up effects"
+
+  testCase "duplicate TestsDiscovered preserves model identity when nothing new was learned" <| fun _ ->
+    let discovered =
+      mkLiveTestCase
+        "test.duplicate"
+        "SageFs.Tests.MyModule.tests/duplicate"
+        "duplicate"
+    let model1, _ =
+      SageFsUpdate.update
+        (SageFsMsg.Event (SageFsEvent.TestsDiscovered ("s-1", [| discovered |])))
+        (SageFsModel.initial())
+    let firstDiscoveryTime = model1.LiveTesting.TestState.LastDiscoveryTime
+    let model2, effects =
+      SageFsUpdate.update
+        (SageFsMsg.Event (SageFsEvent.TestsDiscovered ("s-1", [| discovered |])))
+        model1
+    obj.ReferenceEquals(model2, model1)
+    |> Expect.isTrue "duplicate discovery should be observationally silent"
+    model2.LiveTesting.TestState.LastDiscoveryTime
+    |> Expect.equal "duplicate discovery should not churn the discovery clock" firstDiscoveryTime
+    effects |> Expect.isEmpty "duplicate discovery should not emit effects"
+
+  testCase "duplicate TestsDiscovered does not retrigger execution when activation is already active" <| fun _ ->
+    let discovered =
+      mkLiveTestCase
+        "test.duplicate.active"
+        "SageFs.Tests.MyModule.tests/duplicate-active"
+        "duplicate-active"
+    let baseModel = {
+      SageFsModel.initial() with
+        LiveTesting = {
+          SageFsModel.initial().LiveTesting with
+            TestState = {
+              SageFsModel.initial().LiveTesting.TestState with
+                Activation = LiveTestingActivation.Active
+            }
+        }
+    }
+    let model1, firstEffects =
+      SageFsUpdate.update
+        (SageFsMsg.Event (SageFsEvent.TestsDiscovered ("s-1", [| discovered |])))
+        baseModel
+    firstEffects
+    |> Expect.hasLength "initial discovery should still trigger one execution request" 1
+    let _, duplicateEffects =
+      SageFsUpdate.update
+        (SageFsMsg.Event (SageFsEvent.TestsDiscovered ("s-1", [| discovered |])))
+        model1
+    duplicateEffects
+    |> Expect.isEmpty "duplicate discovery should not retrigger execution"
+
+  testCase "duplicate TestLocationsDetected preserves model identity when source truth is unchanged" <| fun _ ->
+    let discovered =
+      mkLiveTestCase
+        "test.source-duplicate"
+        "SageFs.Tests.MyModule.tests/source-duplicate"
+        "source-duplicate"
+    let locations = [|
+      mkSourceTestLocation "Tests" "tests" "MyModule.fs" 41
+    |]
+    let model1, _ =
+      SageFsUpdate.update
+        (SageFsMsg.Event (SageFsEvent.TestsDiscovered ("s-1", [| discovered |])))
+        (SageFsModel.initial())
+    let model2, _ =
+      SageFsUpdate.update
+        (SageFsMsg.Event (SageFsEvent.TestLocationsDetected ("s-1", locations)))
+        model1
+    let model3, effects =
+      SageFsUpdate.update
+        (SageFsMsg.Event (SageFsEvent.TestLocationsDetected ("s-1", locations)))
+        model2
+    obj.ReferenceEquals(model3, model2)
+    |> Expect.isTrue "duplicate source locations should not force another rerender"
+    effects |> Expect.isEmpty "duplicate source locations should not emit effects"
+
+  testCase "queue coalescing merges pending test result batches without losing any completed test facts" <| fun _ ->
+    let batch1 = [|
+      mkPassedRunResult "test.queue.a" "test.queue.a" 10.0
+      mkFailedRunResult "test.queue.b" "test.queue.b" "boom" 4.0
+    |]
+    let batch2 = [|
+      mkSkippedRunResult "test.queue.c" "test.queue.c" "quarantined"
+      mkPassedRunResult "test.queue.d" "test.queue.d" 2.0
+    |]
+    let pending = ResizeArray<SageFsMsg>()
+    pending.Add(SageFsMsg.Event (SageFsEvent.TestResultsBatch batch1))
+
+    let absorbed =
+      SageFsMsgQueueCoalescing.tryAbsorbPending
+        pending
+        (SageFsMsg.Event (SageFsEvent.TestResultsBatch batch2))
+
+    absorbed
+    |> Expect.isTrue "result batches from the same pending run should merge so redraw work collapses without dropping any tests"
+    pending
+    |> Expect.hasLength "merged result batches should still occupy one pending slot" 1
+
+    match pending[0] with
+    | SageFsMsg.BufferedTestResults buffered ->
+      buffered.Batches
+      |> Seq.collect (fun batch -> batch |> Seq.map (fun result -> result.TestName))
+      |> Seq.toArray
+      |> Expect.equal "every individual result should survive the buffered merge in arrival order"
+           [| "test.queue.a"; "test.queue.b"; "test.queue.c"; "test.queue.d" |]
+    | other ->
+      failtestf "expected buffered test results, got %A" other
+
+  testCase "queue coalescing does not merge test result batches across a pending run completion boundary" <| fun _ ->
+    let batch1 = [|
+      mkPassedRunResult "test.queue.boundary.a" "test.queue.boundary.a" 8.0
+    |]
+    let batch2 = [|
+      mkPassedRunResult "test.queue.boundary.b" "test.queue.boundary.b" 6.0
+    |]
+    let pending = ResizeArray<SageFsMsg>()
+    pending.Add(SageFsMsg.Event (SageFsEvent.TestResultsBatch batch1))
+    pending.Add(SageFsMsg.Event (SageFsEvent.TestRunCompleted (Some "s-queue")))
+
+    let absorbed =
+      SageFsMsgQueueCoalescing.tryAbsorbPending
+        pending
+        (SageFsMsg.Event (SageFsEvent.TestResultsBatch batch2))
+
+    absorbed
+    |> Expect.isFalse "a completion marker closes the pending run segment, so later batches must stay separate"
+    pending
+    |> Expect.hasLength "the pending queue should remain unchanged when a lifecycle boundary blocks merging" 2
+
+  testCase "queue coalescing keeps two medium test result batches in one pending refresh unit even after the raw flattening cap would have split them" <| fun _ ->
+    let batch1 =
+      Array.init 60 (fun i ->
+        let name = sprintf "test.queue.medium.a.%d" i
+        mkPassedRunResult name name 1.0)
+    let batch2 =
+      Array.init 60 (fun i ->
+        let name = sprintf "test.queue.medium.b.%d" i
+        mkPassedRunResult name name 1.0)
+    let pending = ResizeArray<SageFsMsg>()
+    pending.Add(SageFsMsg.Event (SageFsEvent.TestResultsBatch batch1))
+
+    let incoming = SageFsMsg.Event (SageFsEvent.TestResultsBatch batch2)
+    let absorbed =
+      SageFsMsgQueueCoalescing.tryAbsorbPending pending incoming
+
+    absorbed
+    |> Expect.isTrue "derived-state refresh dominates the hot path, so medium result batches should stay buffered together even when flattening them into one raw array would be too large"
+    pending
+    |> Expect.hasLength "buffered merging should still leave one pending refresh unit" 1
+
+    match pending[0] with
+    | SageFsMsg.BufferedTestResults buffered ->
+      let expectedNames =
+        Array.append
+          (batch1 |> Array.map (fun result -> result.TestName))
+          (batch2 |> Array.map (fun result -> result.TestName))
+      buffered.TotalResultCount
+      |> Expect.equal "the buffered payload should remember the total number of raw results it carries" 120
+      buffered.Batches
+      |> Seq.collect (fun batch -> batch |> Seq.map (fun result -> result.TestName))
+      |> Seq.toArray
+      |> Expect.equal "every raw result should still survive in arrival order inside the buffered payload"
+           expectedNames
+    | other ->
+      failtestf "expected buffered test results, got %A" other
+
+  testCase "queue coalescing still splits test result batches once the buffered payload would become pathologically large" <| fun _ ->
+    let batch1 =
+      Array.init 220 (fun i ->
+        let name = sprintf "test.queue.large.a.%d" i
+        mkPassedRunResult name name 1.0)
+    let batch2 =
+      Array.init 220 (fun i ->
+        let name = sprintf "test.queue.large.b.%d" i
+        mkPassedRunResult name name 1.0)
+    let pending = ResizeArray<SageFsMsg>()
+    pending.Add(SageFsMsg.Event (SageFsEvent.TestResultsBatch batch1))
+
+    let incoming = SageFsMsg.Event (SageFsEvent.TestResultsBatch batch2)
+    let absorbed =
+      SageFsMsgQueueCoalescing.tryAbsorbPending pending incoming
+
+    absorbed
+    |> Expect.isFalse "once the buffered payload itself would become too large, the incoming batch should stay separate so one drain cannot monopolize the Elm loop"
+    pending
+    |> Expect.hasLength "the existing pending batch should remain untouched when the cap blocks merging" 1
+
+    pending.Add incoming
+    pending
+    |> Expect.hasLength "the caller can still enqueue the incoming batch separately without losing any result facts" 2
+
+    let allNames =
+      pending
+      |> Seq.collect (function
+        | SageFsMsg.Event (SageFsEvent.TestResultsBatch batch) -> batch |> Seq.map (fun result -> result.TestName)
+        | _ -> Seq.empty)
+      |> Seq.toArray
+
+    let expectedNames =
+      Array.append
+        (batch1 |> Array.map (fun result -> result.TestName))
+        (batch2 |> Array.map (fun result -> result.TestName))
+
+    allNames
+    |> Expect.equal "every completed test fact should still survive when capped batching leaves two pending result messages"
+         expectedNames
+
+  testCase "BufferedTestResults applies multiple streamed batches with one derived-state refresh while preserving every result fact" <| fun _ ->
+    let discovered = [|
+      mkLiveTestCase "test.buffered.a" "SageFs.Tests.Buffered.tests/a" "buffered-a"
+      mkLiveTestCase "test.buffered.b" "SageFs.Tests.Buffered.tests/b" "buffered-b"
+    |]
+    let generation = RunGeneration.next RunGeneration.zero
+    let baseModel =
+      let discoveredModel, _ =
+        SageFsUpdate.update
+          (SageFsMsg.Event (SageFsEvent.TestsDiscovered ("s", discovered)))
+          (SageFsModel.initial())
+      let startedModel, _ =
+        SageFsUpdate.update
+          (SageFsMsg.Event (SageFsEvent.TestRunStarted (discovered |> Array.map (fun t -> t.Id), Some "s")))
+          discoveredModel
+      startedModel
+
+    let batch1 = [| mkPassedRunResult "test.buffered.a" "test.buffered.a" 11.0 |]
+    let batch2 = [| mkFailedRunResult "test.buffered.b" "test.buffered.b" "boom" 7.0 |]
+    let updated, effects =
+      SageFsUpdate.update
+        (SageFsMsg.BufferedTestResults {
+          TotalResultCount = batch1.Length + batch2.Length
+          Batches = [ batch1; batch2 ]
+        })
+        baseModel
+
+    updated.LiveTesting.TestState.StateVersion
+    |> Expect.equal "buffering multiple streamed batches into one refresh unit should only bump the cached live-testing state once" (baseModel.LiveTesting.TestState.StateVersion + 1L)
+    updated.PendingTestResults
+    |> PendingTestResultBuffer.toArray
+    |> Array.map (fun result -> TestId.value result.TestId)
+    |> Expect.equal "every result fact should still accumulate for the eventual completion summary"
+         [| "test.buffered.b"; "test.buffered.a" |]
+    Features.LiveTesting.LiveTestState.statusEntriesForSession "" updated.LiveTesting.TestState
+    |> Array.map (fun entry -> TestId.value entry.TestId, entry.Status)
+    |> Map.ofArray
+    |> fun statuses ->
+      Map.find "test.buffered.a" statuses
+      |> Expect.equal "the buffered refresh should surface the passed test status" (TestRunStatus.Passed (TimeSpan.FromMilliseconds 11.0))
+      Map.find "test.buffered.b" statuses
+      |> Expect.equal "the buffered refresh should surface the failed test status" (TestRunStatus.Failed (TestFailure.AssertionFailed "boom", TimeSpan.FromMilliseconds 7.0))
+    effects |> Expect.isEmpty "buffered streamed results should not emit follow-up effects"
+
+  testCase "queue coalescing keeps only the latest pending session refresh truth" <| fun _ ->
+    let snap1 = {
+      Id = testSessionId "aa000100"; Name = Some "pending-a"; Projects = ["A.fsproj"]
+      Status = SessionDisplayStatus.Starting
+      LastActivity = DateTime.UtcNow.AddMinutes(-5.0)
+      EvalCount = 1
+      UpSince = DateTime.UtcNow.AddMinutes(-10.0)
+      IsActive = false
+      WorkingDirectory = @"C:\Code\Repos\SageFs" }
+    let snap2 = {
+      snap1 with
+        Status = SessionDisplayStatus.Running
+        EvalCount = 7
+        LastActivity = DateTime.UtcNow }
+    let pending = ResizeArray<SageFsMsg>()
+    pending.Add(SageFsMsg.Event (SageFsEvent.SessionsRefreshed [snap1]))
+
+    let absorbed =
+      SageFsMsgQueueCoalescing.tryAbsorbPending
+        pending
+        (SageFsMsg.Event (SageFsEvent.SessionsRefreshed [snap2]))
+
+    absorbed
+    |> Expect.isTrue "stale session snapshots should collapse to the latest truth while the loop is still busy"
+    pending
+    |> Expect.hasLength "only one pending refresh should remain after coalescing" 1
+
+    match pending[0] with
+    | SageFsMsg.Event (SageFsEvent.SessionsRefreshed [merged]) ->
+      merged.Status
+      |> Expect.equal "the latest refresh should win because older session truth is stale by the time it renders"
+           SessionDisplayStatus.Running
+      merged.EvalCount
+      |> Expect.equal "the latest refresh should preserve the newest counters as well" 7
+    | other ->
+      failtestf "expected merged SessionsRefreshed, got %A" other
+
+  testCase "queue coalescing keeps only the latest pending warmup context truth" <| fun _ ->
+    let context1 =
+      mkHotPathSessionContext
+        (DateTimeOffset.UtcNow.AddMinutes(-2.0))
+        (Some (DateTimeOffset.UtcNow.AddMinutes(-1.0)))
+        FileReadiness.Loaded
+        true
+    let context2 =
+      mkHotPathSessionContext
+        (DateTimeOffset.UtcNow.AddMinutes(-2.0))
+        (Some DateTimeOffset.UtcNow)
+        FileReadiness.Stale
+        true
+    let pending = ResizeArray<SageFsMsg>()
+    pending.Add(SageFsMsg.Event (SageFsEvent.WarmupContextUpdated context1))
+
+    let absorbed =
+      SageFsMsgQueueCoalescing.tryAbsorbPending
+        pending
+        (SageFsMsg.Event (SageFsEvent.WarmupContextUpdated context2))
+
+    absorbed
+    |> Expect.isTrue "warmup snapshots should collapse to the latest visible truth while the loop is still draining older work"
+    pending
+    |> Expect.hasLength "only one pending warmup snapshot should remain after coalescing" 1
+
+    match pending[0] with
+    | SageFsMsg.Event (SageFsEvent.WarmupContextUpdated merged) ->
+      let file = merged.FileStatuses |> List.head
+      file.Readiness
+      |> Expect.equal "the newest warmup readiness should win over stale pending state"
+           FileReadiness.Stale
+    | other ->
+      failtestf "expected merged WarmupContextUpdated, got %A" other
+
+  testCase "queue coalescing keeps only one pending ListSessions refresh request" <| fun _ ->
+    let pending = ResizeArray<SageFsMsg>()
+    pending.Add(SageFsMsg.Editor EditorAction.ListSessions)
+
+    let absorbed =
+      SageFsMsgQueueCoalescing.tryAbsorbPending
+        pending
+        (SageFsMsg.Editor EditorAction.ListSessions)
+
+    absorbed
+    |> Expect.isTrue "repeating the same list-sessions poll while one is already pending only adds stale redraw pressure"
+    pending
+    |> Expect.hasLength "repeated list-sessions requests should collapse to one pending refresh" 1
+
+  testCase "dispatch reduction collapses contiguous buffered test result work into one refresh unit but stops at editor barriers" <| fun _ ->
+    let batch1 = [| mkPassedRunResult "test.reduce.a" "test.reduce.a" 1.0 |]
+    let batch2 = [| mkPassedRunResult "test.reduce.b" "test.reduce.b" 1.0 |]
+    let batch3 = [| mkPassedRunResult "test.reduce.c" "test.reduce.c" 1.0 |]
+    let batch4 = [| mkPassedRunResult "test.reduce.d" "test.reduce.d" 1.0 |]
+    let reduced =
+      [|
+        SageFsMsg.Event (SageFsEvent.TestResultsBatch batch1)
+        SageFsMsg.BufferedTestResults { TotalResultCount = batch2.Length; Batches = [ batch2 ] }
+        SageFsMsg.BufferedTestResults { TotalResultCount = batch3.Length; Batches = [ batch3 ] }
+        SageFsMsg.Editor EditorAction.ListSessions
+        SageFsMsg.Event (SageFsEvent.TestResultsBatch batch4)
+      |]
+      |> SageFsDispatchReduction.reduceDispatchBatch
+
+    reduced
+    |> Expect.hasLength "contiguous result work before the editor barrier should collapse into one buffered refresh unit, while later work stays separate" 3
+
+    match reduced[0], reduced[1], reduced[2] with
+    | SageFsMsg.BufferedTestResults combined,
+      SageFsMsg.Editor EditorAction.ListSessions,
+      SageFsMsg.BufferedTestResults trailing ->
+      combined.TotalResultCount
+      |> Expect.equal "the reducer should accumulate the contiguous result batches before the barrier" 3
+      combined.Batches
+      |> Seq.collect (fun batch -> batch |> Seq.map (fun result -> result.TestName))
+      |> Seq.toArray
+      |> Expect.equal "the reducer should preserve arrival order inside the collapsed buffered payload"
+           [| "test.reduce.a"; "test.reduce.b"; "test.reduce.c" |]
+      trailing.TotalResultCount
+      |> Expect.equal "the post-barrier result batch should remain in its own buffered unit" 1
+    | other ->
+      failtestf "expected [BufferedTestResults; Editor.ListSessions; BufferedTestResults], got %A" other
 
   testCase "DiagnosticsUpdated overwrites previous for same session" <| fun _ ->
     let diag1 = {
@@ -955,6 +1647,40 @@ let elmIntegrationTests = testList "ElmLoop integration" [
     let outputRegion = lastRegions |> List.find (fun r -> r.Id = "output")
     outputRegion.Content
     |> Expect.stringContains "should show in render" "val x = 42"
+
+  testCase "unchanged ListSessions polls stay silent but real session refreshes still render" <| fun _ ->
+    let signal = new System.Threading.ManualResetEventSlim(false)
+    let mutable callbackCount = 0
+    let program : ElmProgram<SageFsModel, SageFsMsg, SageFsEffect, RenderRegion> = {
+      Update = SageFsUpdate.update
+      Render = SageFsRender.render
+      ExecuteEffect = fun _ _ -> async { () }
+      OnModelChanged = fun _ _ ->
+        callbackCount <- callbackCount + 1
+        signal.Set()
+      OnSystemAlarm = fun _ _ -> ()
+    }
+    let dispatch = (ElmLoop.start program (SageFsModel.initial()) System.Threading.CancellationToken.None).Dispatch
+    signal.Wait(1000) |> ignore
+    signal.Reset()
+    let initialCallbackCount = callbackCount
+
+    dispatch (SageFsMsg.Editor EditorAction.ListSessions)
+    signal.Wait(250)
+    |> Expect.isFalse "an unchanged poll should not trigger another render"
+    callbackCount
+    |> Expect.equal "callback count should stay the same after the no-op poll" initialCallbackCount
+
+    let snap : SessionSnapshot = {
+      Id = testSessionId "aa000001"; Name = None; Projects = ["Test.fsproj"]
+      Status = SessionDisplayStatus.Running; IsActive = true
+      LastActivity = DateTime.UtcNow; EvalCount = 0
+      UpSince = DateTime.UtcNow; WorkingDirectory = "" }
+    dispatch (SageFsMsg.Event (SageFsEvent.SessionsRefreshed [snap]))
+    signal.Wait(1000)
+    |> Expect.isTrue "a real session refresh should still render"
+    callbackCount
+    |> Expect.equal "real session refresh should render exactly once" (initialCallbackCount + 1)
 
   testCase "effects are dispatched asynchronously" <| fun _ ->
     let mutable effectExecuted = false

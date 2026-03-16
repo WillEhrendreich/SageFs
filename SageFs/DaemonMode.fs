@@ -1181,7 +1181,7 @@ let createElmRuntime
           | Some url when url.Length > 0 ->
             Some (HttpWorkerClient.streamingTestProxyWithCoverage url)
           | _ -> None }
-  ElmDaemon.start effectDeps (fun model _regions ->
+  ElmDaemon.startHeadless effectDeps (fun model _regions ->
     let activeBuf = model.RecentOutput.GetActiveBuffer(model.Sessions.ActiveSessionId)
     let outputCount = activeBuf.Count
     let diagCount =
@@ -1457,7 +1457,7 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
     GetActiveSessionId = fun () ->
       let model = elmRuntime.GetModel()
       ActiveSession.sessionId model.Sessions.ActiveSessionId |> Option.map WorkerProtocol.SessionId.value |> Option.defaultValue ""
-    GetElmRegions = fun () -> elmRuntime.GetRegions() |> Some
+    GetElmRegions = fun () -> ElmDaemon.renderRegionsOnDemand elmRuntime |> Some
     GetPreviousSessions = fun () ->
       getPreviousSessions readSnapshot persistence daemonStreamId
     GetAllSessions = fun () -> task { return SessionManager.QuerySnapshot.allSessions (readSnapshot()) }

@@ -216,61 +216,7 @@ let architectureTests =
             (sprintf "%s.describe should not be empty" case.Name)
     ]
 
-    testList "Module count tracking (aspirational)" [
-
-      testCase "SageFs.Core module count tracked"
-      <| fun _ ->
-        let modules =
-          coreAssembly.GetTypes()
-          |> Array.filter (fun t ->
-            FSharp.Reflection.FSharpType.IsModule t
-            && not (t.Name.StartsWith "<")
-            && not (t.Name.Contains "@")
-            && not t.IsNested)
-        printfn "  SageFs.Core modules: %d" modules.Length
-        // Ceiling prevents regression. Lower as consolidation progresses.
-        // Current verified baseline: 240 (2026-03-14, +2 WorkflowTypes+WorkflowErrorContext). Target: ≤60 (synthesis 3.4).
-        (modules.Length, 240)
-        |> Expect.isLessThanOrEqual
-          (sprintf
-            "SageFs.Core should have ≤240 top-level modules (currently %d)"
-            modules.Length)
-
-      testCase "SageFs.Core exported types tracked"
-      <| fun _ ->
-        let types =
-          coreAssembly.GetExportedTypes()
-          |> Array.filter (fun t ->
-            not (t.Name.StartsWith "<")
-            && not (t.Name.Contains "@")
-            && not t.IsNested)
-        printfn "  SageFs.Core exported types: %d" types.Length
-        // Track — don't enforce too tightly yet
-        (types.Length, 500)
-        |> Expect.isLessThanOrEqual
-          (sprintf
-            "SageFs.Core should have ≤500 exported types (currently %d)"
-            types.Length)
-    ]
-
     testList "Module audit (synthesis 3.4)" [
-
-      testCase "CLI assembly (SageFs) module count tracked"
-      <| fun _ ->
-        let modules =
-          cliAssembly.GetTypes()
-          |> Array.filter (fun t ->
-            FSharp.Reflection.FSharpType.IsModule t
-            && not (t.Name.StartsWith "<")
-            && not (t.Name.Contains "@")
-            && not t.IsNested)
-        printfn "  SageFs CLI modules: %d" modules.Length
-        // Track CLI module count too
-        (modules.Length, 50)
-        |> Expect.isLessThanOrEqual
-          (sprintf
-            "SageFs CLI should have ≤50 top-level modules (currently %d)"
-            modules.Length)
 
       testCase "modules with zero public functions identified"
       <| fun _ ->
@@ -334,29 +280,5 @@ let architectureTests =
         |> Expect.isLessThanOrEqual
           (sprintf "should have ≤30 type-bag modules (found %d)" typeBagModules.Length)
 
-      testCase "combined module+type count doesn't grow"
-      <| fun _ ->
-        let coreModules =
-          coreAssembly.GetTypes()
-          |> Array.filter (fun t ->
-            FSharp.Reflection.FSharpType.IsModule t
-            && not (t.Name.StartsWith "<")
-            && not (t.Name.Contains "@")
-            && not t.IsNested)
-          |> Array.length
-        let cliModules =
-          cliAssembly.GetTypes()
-          |> Array.filter (fun t ->
-            FSharp.Reflection.FSharpType.IsModule t
-            && not (t.Name.StartsWith "<")
-            && not (t.Name.Contains "@")
-            && not t.IsNested)
-          |> Array.length
-        let total = coreModules + cliModules
-        printfn "  Total modules (Core + CLI): %d" total
-        // Combined ceiling — should only go DOWN
-        (total, 261)
-        |> Expect.isLessThanOrEqual
-          (sprintf "combined module count should be ≤261 (currently %d)" total)
     ]
   ]

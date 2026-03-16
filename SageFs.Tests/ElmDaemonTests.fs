@@ -135,6 +135,21 @@ let elmDaemonTests =
       }
     ]
 
+    testList "createHeadlessProgram" [
+      test "defers region materialization until a client asks for it" {
+        let deps =
+          ElmDaemonTestHelpers.mockDeps (fun _ ->
+            WorkerResponse.EvalResult ("r", Ok "done", [], Map.empty))
+        let tracker = ElmDaemonTestHelpers.ModelTracker()
+        let program = ElmDaemon.createHeadlessProgram deps tracker.OnModelChanged (fun _ _ -> ())
+
+        let regions = program.Render(SageFsModel.initial())
+
+        regions
+        |> Expect.isEmpty "headless daemon should skip eager render work"
+      }
+    ]
+
     testList "start" [
       test "returns a runtime with dispatch that can be called" {
         let deps =
@@ -243,6 +258,43 @@ let elmDaemonTests =
         regions
         |> List.map (fun r -> r.Id)
         |> Expect.contains "should have editor region" "editor"
+      }
+    ]
+
+    testList "startHeadless" [
+      test "keeps callbacks light while still rendering current regions on demand" {
+        let deps =
+          ElmDaemonTestHelpers.mockDeps (fun _ ->
+            WorkerResponse.EvalResult ("r", Ok "done", [], Map.empty))
+        let tracker = ElmDaemonTestHelpers.ModelTracker()
+        let runtime =
+          ElmDaemon.startHeadless deps tracker.OnModelChanged (fun _ _ -> ()) System.Threading.CancellationToken.None
+
+        tracker.WaitForUpdate 500
+
+        runtime.Dispatch (
+          SageFsMsg.Event (
+            SageFsEvent.EvalCompleted ("s", "result-42", [])))
+
+        tracker.WaitForUpdate 500
+
+        tracker.Regions
+        |> List.last
+        |> Expect.isEmpty "headless callbacks should not eagerly materialize render regions"
+
+        let rendered : RenderRegion list = ElmDaemon.renderRegionsOnDemand runtime
+        let canonical = runtime.GetModel() |> SageFsRender.render
+
+        runtime.GetModel().RecentOutput.GetBuffer("s")
+        |> Seq.exists (fun line -> line.Text = "result-42")
+        |> Expect.isTrue "the model should still contain the latest output"
+
+        rendered
+        |> List.map (fun (r: RenderRegion) -> r.Id)
+        |> Expect.contains "clients can still render the current regions on demand" "output"
+
+        rendered
+        |> Expect.equal "on-demand render should match the canonical region projection" canonical
       }
     ]
 

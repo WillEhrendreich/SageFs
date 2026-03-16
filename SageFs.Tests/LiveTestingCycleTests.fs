@@ -315,7 +315,7 @@ let statusEntryTests = testList "StatusEntry Computation" [
     entries.[0].Status |> Expect.equal "queued" TestRunStatus.Queued
   }
 
-  test "mergeResults transitions from Running to Passed" {
+  test "app-boundary finalization transitions merged results from Running to Passed" {
     let gen = RunGeneration.next RunGeneration.zero
     let state = {
       LiveTestState.empty with
@@ -326,14 +326,17 @@ let statusEntryTests = testList "StatusEntry Computation" [
     let newResults = [|
       mkResult test1.Id (TestResult.Passed (TimeSpan.FromMilliseconds 10.0))
     |]
-    let merged = LiveTesting.mergeResults state newResults
-    let entry = merged.StatusEntries |> Array.find (fun e -> e.TestId = test1.Id)
+    let finalized =
+      SageFsUpdate.recomputeStatuses
+        { (SageFsModel.initial()).LiveTesting with TestState = state }
+        (fun _ -> LiveTesting.mergeResults state newResults)
+    let entry = finalized.TestState.StatusEntries |> Array.find (fun e -> e.TestId = test1.Id)
     match entry.Status with
     | TestRunStatus.Passed _ -> ()
     | other -> failwithf "Expected Passed, got %A" other
   }
 
-  test "mergeResults preserves previousStatus" {
+  test "app-boundary finalization preserves previousStatus across merged results" {
     let state = {
       LiveTestState.empty with
         DiscoveredTests = [| test1 |]; Activation = LiveTestingActivation.Active
@@ -345,8 +348,11 @@ let statusEntryTests = testList "StatusEntry Computation" [
     let newResults = [|
       mkResult test1.Id (TestResult.Failed (TestFailure.AssertionFailed "oops", TimeSpan.FromMilliseconds 1.0))
     |]
-    let merged = LiveTesting.mergeResults state newResults
-    let entry = merged.StatusEntries |> Array.find (fun e -> e.TestId = test1.Id)
+    let finalized =
+      SageFsUpdate.recomputeStatuses
+        { (SageFsModel.initial()).LiveTesting with TestState = state }
+        (fun _ -> LiveTesting.mergeResults state newResults)
+    let entry = finalized.TestState.StatusEntries |> Array.find (fun e -> e.TestId = test1.Id)
     match entry.PreviousStatus with
     | TestRunStatus.Passed _ -> ()
     | other -> failwithf "Expected previous Passed, got %A" other
@@ -1368,7 +1374,7 @@ let liveTestingStatusBarTests = testList "liveTestingStatusBar" [
 ]
 
 [<Tests>]
-let cycleBenchmarkTests = testList "cycle Core Benchmark" [
+let cycleBenchmarkTests = testList "[Benchmark] cycle Core Benchmark" [
   test "200-test cycle core completes under 5ms p95" {
     let sw = System.Diagnostics.Stopwatch()
     let makeTestCase i =

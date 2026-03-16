@@ -217,7 +217,7 @@ let private measureBytes (f: unit -> string) : int =
 // ── Latency benchmarks (Expecto) ──
 
 [<Tests>]
-let sseSerializationBenchmarks = testList "SSE serialization benchmarks" [
+let sseSerializationBenchmarks = testList "[Benchmark] SSE serialization benchmarks" [
   testList "payload sizes" [
     testCase "warmup_progress is compact" <| fun () ->
       let bytes = measureBytes (fun () ->

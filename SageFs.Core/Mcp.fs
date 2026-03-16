@@ -2103,9 +2103,11 @@ module McpTools =
         let model = getModel ()
         let cycleState = model.LiveTesting
         let testState = cycleState.TestState
+        let entries =
+          Features.LiveTesting.LiveTestState.statusEntriesForSession "" testState
         let resolvedPath =
           Features.LiveTesting.FileAnnotations.resolveFilePath
-            filePath testState.StatusEntries cycleState.InstrumentationMaps
+            filePath entries cycleState.InstrumentationMaps
         match resolvedPath with
         | None ->
           let resp = {| FilePath = filePath; Error = "File not found in test sources or instrumentation maps" |}
@@ -2386,6 +2388,57 @@ module McpTools =
       | false -> ()
     (passed + skipped, failed, running, stale, failures |> Seq.toList, runningNames |> Seq.toList)
 
+  let collectResultsFromState
+    (state: Features.LiveTesting.LiveTestState)
+    (triggeredTestIds: Features.LiveTesting.TestId array)
+    (flakyHistory: Map<Features.LiveTesting.TestId, Features.LiveTesting.ResultWindow>)
+    : int * int * int * int * FailedTestInfo list * string list =
+    let entryIndex = Features.LiveTesting.LiveTestState.statusEntryIndex state
+    let mutable passed = 0
+    let mutable failed = 0
+    let mutable running = 0
+    let mutable skipped = 0
+    let mutable stale = 0
+    let failures = System.Collections.Generic.List<FailedTestInfo>()
+    let runningNames = System.Collections.Generic.List<string>()
+    for testId in triggeredTestIds do
+      match Map.tryFind testId entryIndex with
+      | Some e ->
+        match e.Status with
+        | Features.LiveTesting.TestRunStatus.Passed _ -> passed <- passed + 1
+        | Features.LiveTesting.TestRunStatus.Failed (failure, duration) ->
+          failed <- failed + 1
+          let msg =
+            match failure with
+            | Features.LiveTesting.TestFailure.AssertionFailed m -> m
+            | Features.LiveTesting.TestFailure.ExceptionThrown (m, _) -> m
+            | Features.LiveTesting.TestFailure.TimedOut after -> sprintf "Timed out after %dms" (int after.TotalMilliseconds)
+          let location =
+            match failure with
+            | Features.LiveTesting.TestFailure.ExceptionThrown (_, st) -> FailureLocationParser.tryParse st
+            | _ -> None
+          let flakiness =
+            match Features.LiveTesting.FlakyDetection.assessTest e.TestId flakyHistory with
+            | Features.LiveTesting.TestStability.Flaky flipCount ->
+              Some (Features.LiveTesting.FlakyClassification.Environmental flipCount)
+            | _ -> None
+          failures.Add { Name = e.DisplayName; Message = msg; Duration = duration; Flakiness = flakiness; Location = location }
+        | Features.LiveTesting.TestRunStatus.Running ->
+          running <- running + 1
+          runningNames.Add e.DisplayName
+        | Features.LiveTesting.TestRunStatus.Skipped _
+        | Features.LiveTesting.TestRunStatus.PolicyDisabled ->
+          skipped <- skipped + 1
+        | Features.LiveTesting.TestRunStatus.Detected
+        | Features.LiveTesting.TestRunStatus.Queued ->
+          running <- running + 1
+          runningNames.Add (sprintf "%s (queued)" e.DisplayName)
+        | Features.LiveTesting.TestRunStatus.Stale -> stale <- stale + 1
+      | None ->
+        running <- running + 1
+        runningNames.Add (sprintf "%s (queued)" (Features.LiveTesting.TestId.value testId))
+    (passed + skipped, failed, running, stale, failures |> Seq.toList, runningNames |> Seq.toList)
+
   let pollForTestCompletion
     (getModel: unit -> SageFsModel)
     (triggeredTestIds: Features.LiveTesting.TestId array)
@@ -2395,21 +2448,17 @@ module McpTools =
     match timeoutSeconds = 0 with
     | true ->
       let model = getModel ()
-      let entries = model.LiveTesting.TestState.StatusEntries
-      let triggeredSet = Set.ofArray triggeredTestIds
       let flakyHistory = model.LiveTesting.TestState.FlakyHistory
-      let (p, f, _, _stale, failures, _) = collectResults entries triggeredSet flakyHistory
+      let (p, f, _, _stale, failures, _) = collectResultsFromState model.LiveTesting.TestState triggeredTestIds flakyHistory
       Task.FromResult (Completed (p, f, total, failures))
     | false ->
       task {
         let deadline = DateTime.UtcNow.AddSeconds(float timeoutSeconds)
-        let triggeredSet = Set.ofArray triggeredTestIds
         let mutable result = None
         while result.IsNone && DateTime.UtcNow < deadline do
           let model = getModel ()
-          let entries = model.LiveTesting.TestState.StatusEntries
           let flakyHistory = model.LiveTesting.TestState.FlakyHistory
-          let (p, f, r, stale, failures, _) = collectResults entries triggeredSet flakyHistory
+          let (p, f, r, stale, failures, _) = collectResultsFromState model.LiveTesting.TestState triggeredTestIds flakyHistory
           match p + f + stale >= total with
           | true ->
             result <- Some (Completed (p, f, total, failures))
@@ -2419,9 +2468,8 @@ module McpTools =
         | Some r -> return r
         | None ->
           let model = getModel ()
-          let entries = model.LiveTesting.TestState.StatusEntries
           let flakyHistory = model.LiveTesting.TestState.FlakyHistory
-          let (p, f, r, _stale, failures, runningNames) = collectResults entries triggeredSet flakyHistory
+          let (p, f, r, _stale, failures, runningNames) = collectResultsFromState model.LiveTesting.TestState triggeredTestIds flakyHistory
           return TimedOut (p, f, r, total, failures, runningNames)
       }
 

@@ -256,7 +256,7 @@ let warmupProgressLabelTests = testList "StandbyInfo warmup progress labels" [
 ]
 
 [<Tests>]
-let standbyBenchmarkTests = testList "StandbyPool benchmarks" [
+let standbyBenchmarkTests = testList "[Benchmark] StandbyPool benchmarks" [
   testCase "decideRestart is < 1µs" <| fun _ ->
     let s = makeStandby StandbyState.Ready (Some dummyProxy)
     // warmup

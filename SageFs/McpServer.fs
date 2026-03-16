@@ -1614,7 +1614,9 @@ let mapLiveTestingRoutes (app: WebApplication) (rctx: RouteContext) =
       | Some getModel ->
         let model = getModel()
         let lt = model.LiveTesting.TestState
-        let matchingFile = FileAnnotations.resolveFilePath fileParam lt.StatusEntries model.LiveTesting.InstrumentationMaps
+        let entries =
+          LiveTestState.statusEntriesForSession "" lt
+        let matchingFile = FileAnnotations.resolveFilePath fileParam entries model.LiveTesting.InstrumentationMaps
         match matchingFile with
         | Some fullPath ->
           let fa = FileAnnotations.projectWithCoverage fullPath model.LiveTesting

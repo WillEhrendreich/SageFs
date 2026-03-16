@@ -230,6 +230,11 @@ type TestStatusEntry = {
   PreviousStatus: TestRunStatus
 }
 
+[<RequireQualifiedAccess>]
+type StatusEntriesProjectionState =
+  | Materialized
+  | Deferred
+
 // --- Provider Descriptions (pure data — stored in Elm model) ---
 
 type AttributeProviderDescription = {
@@ -1098,6 +1103,9 @@ type LiveTestState = {
   DiscoveredTests: TestCase array
   LastResults: Map<TestId, TestRunResult>
   StatusEntries: TestStatusEntry array
+  StatusEntrySlots: Map<TestId, int>
+  StatusEntryIndex: Map<TestId, TestStatusEntry>
+  StatusEntriesProjection: StatusEntriesProjectionState
   CoverageAnnotations: CoverageAnnotation array
   /// Per-session run phase tracking for concurrent multi-worker execution.
   RunPhases: Map<string, TestRunPhase>
@@ -1179,6 +1187,9 @@ module LiveTestState =
     DiscoveredTests = Array.empty
     LastResults = Map.empty
     StatusEntries = Array.empty
+    StatusEntrySlots = Map.empty
+    StatusEntryIndex = Map.empty
+    StatusEntriesProjection = StatusEntriesProjectionState.Materialized
     CoverageAnnotations = Array.empty
     RunPhases = Map.empty
     LastGeneration = RunGeneration.zero
@@ -1200,19 +1211,57 @@ module LiveTestState =
     PendingDiscoverySessions = Set.empty
   }
 
+  let buildStatusEntrySlots (entries: TestStatusEntry array) : Map<TestId, int> =
+    entries
+    |> Array.mapi (fun index entry -> entry.TestId, index)
+    |> Map.ofArray
+
+  let buildStatusEntryIndex (entries: TestStatusEntry array) : Map<TestId, TestStatusEntry> =
+    entries
+    |> Array.map (fun entry -> entry.TestId, entry)
+    |> Map.ofArray
+
+  let statusEntryIndex (state: LiveTestState) : Map<TestId, TestStatusEntry> =
+    match Map.isEmpty state.StatusEntryIndex, Array.isEmpty state.StatusEntries with
+    | true, false -> buildStatusEntryIndex state.StatusEntries
+    | _ -> state.StatusEntryIndex
+
+  let tryFindStatusEntry (testId: TestId) (state: LiveTestState) =
+    statusEntryIndex state
+    |> Map.tryFind testId
+
+  let orderedStatusEntries (state: LiveTestState) : TestStatusEntry array =
+    match state.StatusEntriesProjection with
+    | StatusEntriesProjectionState.Materialized -> state.StatusEntries
+    | StatusEntriesProjectionState.Deferred ->
+      let index = statusEntryIndex state
+      match Map.isEmpty index with
+      | true -> state.StatusEntries
+      | false ->
+        state.DiscoveredTests
+        |> Array.choose (fun test -> Map.tryFind test.Id index)
+
   /// Filter StatusEntries to only include tests belonging to the given session.
   /// When sessionId is empty or no session map entries exist, returns all entries (backwards compat).
   /// When sessionId is provided and TestSessionMap is populated, tests with no session attribution
   /// are excluded (not leaked) — they belong to an untracked path and should not bleed across sessions.
   let statusEntriesForSession (sessionId: string) (state: LiveTestState) : TestStatusEntry array =
+    let entries = orderedStatusEntries state
     match System.String.IsNullOrEmpty sessionId || Map.isEmpty state.TestSessionMap with
-    | true -> state.StatusEntries
+    | true -> entries
     | false ->
-      state.StatusEntries
+      entries
       |> Array.filter (fun e ->
         match Map.tryFind e.TestId state.TestSessionMap with
         | Some sid -> sid = sessionId
         | None -> false)
+
+  let withStatusEntries (entries: TestStatusEntry array) (state: LiveTestState) : LiveTestState =
+    { state with
+        StatusEntries = entries
+        StatusEntrySlots = buildStatusEntrySlots entries
+        StatusEntryIndex = buildStatusEntryIndex entries
+        StatusEntriesProjection = StatusEntriesProjectionState.Materialized }
 
 // --- Gutter Rendering Pure Functions ---
 
@@ -1346,6 +1395,19 @@ module StatusToGutter =
 module TestSummary =
   let empty = { Total = 0; Passed = 0; Failed = 0; Stale = 0; Running = 0; Disabled = 0; Enabled = true }
 
+  let private applyStatusCountDelta
+    (delta: int)
+    (status: TestRunStatus)
+    (summary: TestSummary)
+    : TestSummary =
+    match status with
+    | TestRunStatus.Passed _ -> { summary with Passed = summary.Passed + delta }
+    | TestRunStatus.Failed _ -> { summary with Failed = summary.Failed + delta }
+    | TestRunStatus.Stale -> { summary with Stale = summary.Stale + delta }
+    | TestRunStatus.Running -> { summary with Running = summary.Running + delta }
+    | TestRunStatus.PolicyDisabled -> { summary with Disabled = summary.Disabled + delta }
+    | _ -> summary
+
   let fromStatuses (activation: LiveTestingActivation) (statuses: TestRunStatus array) : TestSummary =
     let mutable passed = 0
     let mutable failed = 0
@@ -1367,6 +1429,20 @@ module TestSummary =
       Running = running
       Disabled = disabled
       Enabled = activation = LiveTestingActivation.Active }
+
+  let applyStatusEntryChanges
+    (activation: LiveTestingActivation)
+    (current: TestSummary)
+    (changedEntries: TestStatusEntry array)
+    : TestSummary =
+    let adjusted =
+      changedEntries
+      |> Array.fold (fun summary entry ->
+        summary
+        |> applyStatusCountDelta -1 entry.PreviousStatus
+        |> applyStatusCountDelta 1 entry.Status)
+           current
+    { adjusted with Enabled = activation = LiveTestingActivation.Active }
 
   /// Compact inline badge for per-session display: "✓42 ✗2" or "✓10" or "⟳3"
   let toInlineBadge (s: TestSummary) : string =
@@ -1849,6 +1925,37 @@ module TestDependencyGraph =
       SourceVersion = 1 }
 
 module LiveTesting =
+  let private computeStatusForTest
+    (state: LiveTestState)
+    (category: TestCategory)
+    (testId: TestId)
+    : TestRunStatus =
+    match Map.tryFind category state.RunPolicies with
+    | Some RunPolicy.Disabled -> TestRunStatus.PolicyDisabled
+    | _ ->
+      let resultStatus =
+        match Map.tryFind testId state.LastResults with
+        | Some r ->
+          match r.Result with
+          | TestResult.Passed d -> Some (TestRunStatus.Passed d)
+          | TestResult.Failed (f, d) -> Some (TestRunStatus.Failed (f, d))
+          | TestResult.Skipped reason -> Some (TestRunStatus.Skipped reason)
+          | TestResult.NotRun -> None
+        | None -> None
+      match Set.contains testId state.AffectedTests with
+      | true ->
+        let testSession = Map.tryFind testId state.TestSessionMap
+        let sessionRunning = TestRunPhase.isSessionRunning testSession state.RunPhases
+        match sessionRunning with
+        | true ->
+          resultStatus |> Option.defaultValue TestRunStatus.Running
+        | false ->
+          match resultStatus with
+          | Some s -> TestRunStatus.Stale
+          | None -> TestRunStatus.Queued
+      | false ->
+        resultStatus |> Option.defaultValue TestRunStatus.Detected
+
   let filterByPolicy
     (policies: Map<TestCategory, RunPolicy>)
     (trigger: RunTrigger)
@@ -1875,33 +1982,7 @@ module LiveTesting =
     : TestStatusEntry array =
     state.DiscoveredTests
     |> Array.map (fun test ->
-      let status =
-        match Map.tryFind test.Category state.RunPolicies with
-        | Some RunPolicy.Disabled -> TestRunStatus.PolicyDisabled
-        | _ ->
-          let resultStatus =
-            match Map.tryFind test.Id state.LastResults with
-            | Some r ->
-              match r.Result with
-              | TestResult.Passed d -> Some (TestRunStatus.Passed d)
-              | TestResult.Failed (f, d) -> Some (TestRunStatus.Failed (f, d))
-              | TestResult.Skipped reason -> Some (TestRunStatus.Skipped reason)
-              | TestResult.NotRun -> None
-            | None -> None
-          match Set.contains test.Id state.AffectedTests with
-          | true ->
-            let testSession = Map.tryFind test.Id state.TestSessionMap
-            let sessionRunning = TestRunPhase.isSessionRunning testSession state.RunPhases
-            match sessionRunning with
-            | true ->
-              // Streaming: show result if available, Running if not yet received
-              resultStatus |> Option.defaultValue TestRunStatus.Running
-            | false ->
-              match resultStatus with
-              | Some s -> TestRunStatus.Stale
-              | None -> TestRunStatus.Queued
-          | false ->
-            resultStatus |> Option.defaultValue TestRunStatus.Detected
+      let status = computeStatusForTest state test.Category test.Id
       let prevStatus =
         match Map.tryFind test.Id previousStatuses with
         | Some prev -> prev
@@ -1940,53 +2021,241 @@ module LiveTesting =
   /// Does NOT transition RunPhase or clear AffectedTests — those are managed by
   /// TestRunStarted (sets Running + AffectedTests) and TestRunCompleted (sets Idle + clears).
   /// This enables streaming results to update incrementally while run is in progress.
+  /// Derived views like StatusEntries are finalized once at the app boundary so
+  /// large streamed batches do not pay for duplicate full-state recomputation.
+  let private resultDuration (result: TestRunResult) : System.TimeSpan =
+    match result.Result with
+    | TestResult.Passed duration -> duration
+    | TestResult.Failed (_, duration) -> duration
+    | _ -> System.TimeSpan.Zero
+
+  let private collectEffectiveResultDelta
+    (existing: Map<TestId, TestRunResult>)
+    (batches: TestRunResult array list)
+    : System.Collections.Generic.Dictionary<TestId, TestRunResult> * System.TimeSpan =
+    let latestById = System.Collections.Generic.Dictionary<TestId, TestRunResult>()
+    let mutable maxDuration = System.TimeSpan.Zero
+
+    for batch in batches do
+      for result in batch do
+        let duration = resultDuration result
+        match duration > maxDuration with
+        | true -> maxDuration <- duration
+        | false -> ()
+
+        match result.Result with
+        | TestResult.NotRun ->
+          let alreadyKnown =
+            latestById.ContainsKey result.TestId
+            || Map.containsKey result.TestId existing
+
+          match alreadyKnown with
+          | true -> ()
+          | false -> latestById[result.TestId] <- result
+        | _ ->
+          latestById[result.TestId] <- result
+
+    latestById, maxDuration
+
+  let private applyEffectiveResultDelta
+    (existing: Map<TestId, TestRunResult>)
+    (latestById: System.Collections.Generic.Dictionary<TestId, TestRunResult>)
+    : Map<TestId, TestRunResult> =
+    let mutable merged = existing
+
+    for KeyValue(testId, result) in latestById do
+      merged <- Map.add testId result merged
+
+    merged
+
   let mergeResults (state: LiveTestState) (results: TestRunResult array) : LiveTestState =
     match Array.isEmpty results with
     | true -> state
     | false ->
+      let latestById, maxDuration =
+        collectEffectiveResultDelta state.LastResults [ results ]
       let newResults =
-        results
-        |> Array.fold (fun acc r ->
-          match r.Result with
-          | TestResult.NotRun ->
-            // Never overwrite a real result with NotRun — NotRun means "not executed
-            // in this batch" (e.g., test belongs to a different session's worker).
-            match Map.containsKey r.TestId acc with
-            | true -> acc
-            | false -> Map.add r.TestId r acc
-          | _ -> Map.add r.TestId r acc) state.LastResults
-      let maxDuration =
-        results
-        |> Array.map (fun r ->
-          match r.Result with
-          | TestResult.Passed d -> d
-          | TestResult.Failed (_, d) -> d
-          | _ -> System.TimeSpan.Zero)
-        |> Array.max
-      let previousStatuses =
-        state.StatusEntries
-        |> Array.map (fun e -> e.TestId, e.Status)
-        |> Map.ofArray
-      let updatedState =
+        applyEffectiveResultDelta state.LastResults latestById
+      { state with
+          LastResults = newResults
+          History = RunHistory.PreviousRun maxDuration }
+
+  let private statusEntrySlotsForChangedIds
+    (state: LiveTestState)
+    (changedIds: Set<TestId>)
+    : Map<TestId, int> =
+    let slots =
+      match state.StatusEntrySlots.Count = state.StatusEntries.Length with
+      | true -> state.StatusEntrySlots
+      | false -> LiveTestState.buildStatusEntrySlots state.StatusEntries
+
+    let coversChangedIds =
+      changedIds
+      |> Seq.forall (fun testId ->
+        match Map.tryFind testId slots with
+        | Some index when index >= 0 && index < state.StatusEntries.Length ->
+          state.StatusEntries[index].TestId = testId
+        | _ -> false)
+
+    match coversChangedIds with
+    | true -> slots
+    | false -> LiveTestState.buildStatusEntrySlots state.StatusEntries
+
+  let patchStatusEntriesForChangedIds
+    (previous: LiveTestState)
+    (updated: LiveTestState)
+    (changedIds: Set<TestId>)
+    : LiveTestState * TestStatusEntry array =
+    match Set.isEmpty changedIds, Array.isEmpty previous.StatusEntries with
+    | true, _ ->
+      { updated with
+          StatusEntries = previous.StatusEntries
+          StatusEntrySlots = previous.StatusEntrySlots }, Array.empty
+    | _, true ->
+      updated, Array.empty
+    | _ ->
+      let slots = statusEntrySlotsForChangedIds previous changedIds
+      let changedEntries = ResizeArray<TestStatusEntry>()
+      let statusEntries = Array.copy previous.StatusEntries
+
+      for testId in changedIds do
+        match Map.tryFind testId slots with
+        | Some index ->
+          let entry = statusEntries[index]
+          let policy =
+            match Map.tryFind entry.Category updated.RunPolicies with
+            | Some p -> p
+            | None -> RunPolicy.OnEveryChange
+          let updatedEntry =
+            { entry with
+                CurrentPolicy = policy
+                Status = computeStatusForTest updated entry.Category entry.TestId
+                PreviousStatus = entry.Status }
+          statusEntries[index] <- updatedEntry
+          changedEntries.Add updatedEntry
+        | None -> ()
+
+      { updated with
+          StatusEntries = statusEntries
+          StatusEntrySlots = slots
+          StatusEntryIndex = LiveTestState.buildStatusEntryIndex statusEntries
+          StatusEntriesProjection = StatusEntriesProjectionState.Materialized }, changedEntries.ToArray()
+
+  let private patchBufferedStatusEntryIndexForChangedIds
+    (previous: LiveTestState)
+    (updated: LiveTestState)
+    (changedIds: Set<TestId>)
+    : LiveTestState * TestStatusEntry array =
+    let previousIndex = LiveTestState.statusEntryIndex previous
+    match Set.isEmpty changedIds, Map.isEmpty previousIndex with
+    | true, _ ->
+      { updated with
+          StatusEntries = previous.StatusEntries
+          StatusEntrySlots = previous.StatusEntrySlots
+          StatusEntryIndex = previousIndex
+          StatusEntriesProjection = previous.StatusEntriesProjection }, Array.empty
+    | _, true ->
+      updated, Array.empty
+    | _ ->
+      let changedEntries = ResizeArray<TestStatusEntry>()
+      let mutable index = previousIndex
+
+      for testId in changedIds do
+        match Map.tryFind testId index with
+        | Some entry ->
+          let policy =
+            match Map.tryFind entry.Category updated.RunPolicies with
+            | Some p -> p
+            | None -> RunPolicy.OnEveryChange
+          let updatedEntry =
+            { entry with
+                CurrentPolicy = policy
+                Status = computeStatusForTest updated entry.Category entry.TestId
+                PreviousStatus = entry.Status }
+          index <- Map.add testId updatedEntry index
+          changedEntries.Add updatedEntry
+        | None -> ()
+
+      let projectionState =
+        match changedEntries.Count = 0 with
+        | true -> previous.StatusEntriesProjection
+        | false -> StatusEntriesProjectionState.Deferred
+
+      { updated with
+          StatusEntries = previous.StatusEntries
+          StatusEntrySlots = previous.StatusEntrySlots
+          StatusEntryIndex = index
+          StatusEntriesProjection = projectionState }, changedEntries.ToArray()
+
+  /// Merge multiple streamed result batches, then patch only the affected status
+  /// entries once. This keeps every raw result fact while avoiding repeated
+  /// O(all discovered tests) scans when several batches are buffered together.
+  let mergeBufferedResultsWithUpdatedStatusEntriesAndChangedEntries
+    (state: LiveTestState)
+    (batches: TestRunResult array list)
+    : LiveTestState * TestStatusEntry array =
+    let nonEmptyBatches =
+      batches |> List.filter (fun batch -> not (Array.isEmpty batch))
+    match nonEmptyBatches, Array.isEmpty state.StatusEntries with
+    | [], _ -> state, Array.empty
+    | _, true ->
+      let latestById, maxDuration =
+        collectEffectiveResultDelta state.LastResults nonEmptyBatches
+      let merged =
         { state with
-            LastResults = newResults
+            LastResults = applyEffectiveResultDelta state.LastResults latestById
             History = RunHistory.PreviousRun maxDuration }
-      { updatedState with StatusEntries = computeStatusEntriesWithHistory previousStatuses updatedState }
+      match Array.isEmpty merged.DiscoveredTests with
+      | true -> merged, Array.empty
+      | false ->
+        let statusEntries =
+          computeStatusEntriesWithHistory Map.empty merged
+        let changedIds =
+          latestById
+          |> Seq.map (fun (KeyValue(testId, _)) -> testId)
+          |> Set.ofSeq
+        let changedEntries : TestStatusEntry array =
+          statusEntries
+          |> Array.filter (fun entry -> Set.contains entry.TestId changedIds)
+        LiveTestState.withStatusEntries statusEntries merged, changedEntries
+    | _ ->
+      let latestById, maxDuration =
+        collectEffectiveResultDelta state.LastResults nonEmptyBatches
+      let merged =
+        { state with
+            LastResults = applyEffectiveResultDelta state.LastResults latestById
+            History = RunHistory.PreviousRun maxDuration }
+      let changedIds =
+        latestById
+        |> Seq.map (fun (KeyValue(testId, _)) -> testId)
+        |> Set.ofSeq
+      patchBufferedStatusEntryIndexForChangedIds state merged changedIds
+
+  let mergeBufferedResultsWithUpdatedStatusEntries
+    (state: LiveTestState)
+    (batches: TestRunResult array list)
+    : LiveTestState =
+    mergeBufferedResultsWithUpdatedStatusEntriesAndChangedEntries state batches
+    |> fst
+
+  /// Merge result facts, then patch only the affected status entries instead of
+  /// rescanning every discovered test. This keeps streamed batches lossless while
+  /// avoiding repeated O(all discovered tests) work for partial updates.
+  let mergeResultsWithUpdatedStatusEntries (state: LiveTestState) (results: TestRunResult array) : LiveTestState =
+    mergeBufferedResultsWithUpdatedStatusEntries state [ results ]
 
   let computeStatusEntries (state: LiveTestState) : TestStatusEntry array =
     computeStatusEntriesWithHistory Map.empty state
 
-  /// Compute failure narratives for tests that transitioned to Failed.
-  /// Only creates narratives for Passed→Failed transitions (new regressions).
-  /// Preserves existing narratives for tests still failing.
-  let computeFailureNarratives
+  let applyFailureNarrativeChanges
     (now: System.DateTimeOffset)
     (changedSymbols: string list)
     (changedFiles: string list)
     (previousNarratives: Map<TestId, FailureNarrative>)
+    (changedEntries: TestStatusEntry array)
     (state: LiveTestState)
     : Map<TestId, FailureNarrative> =
-    state.StatusEntries
+    changedEntries
     |> Array.fold (fun acc entry ->
       match entry.Status with
       | TestRunStatus.Failed (failure, _) ->
@@ -2005,18 +2274,40 @@ module LiveTesting =
           Map.add entry.TestId narrative acc
       | TestRunStatus.Passed _ ->
         Map.remove entry.TestId acc
-      | _ -> acc) previousNarratives
+      | _ -> acc)
+         previousNarratives
+
+  /// Compute failure narratives for tests that transitioned to Failed.
+  /// Only creates narratives for Passed→Failed transitions (new regressions).
+  /// Preserves existing narratives for tests still failing.
+  let computeFailureNarratives
+    (now: System.DateTimeOffset)
+    (changedSymbols: string list)
+    (changedFiles: string list)
+    (previousNarratives: Map<TestId, FailureNarrative>)
+    (state: LiveTestState)
+    : Map<TestId, FailureNarrative> =
+    applyFailureNarrativeChanges
+      now
+      changedSymbols
+      changedFiles
+      previousNarratives
+      (LiveTestState.orderedStatusEntries state)
+      state
 
   let markAffected (testIds: TestId array) (state: LiveTestState) : LiveTestState =
     let affected = testIds |> Set.ofArray |> Set.union state.AffectedTests
     let previousStatuses =
-      state.StatusEntries
+      LiveTestState.orderedStatusEntries state
       |> Array.map (fun e -> e.TestId, e.Status)
       |> Map.ofArray
     let updatedState = { state with AffectedTests = affected }
-    { updatedState with StatusEntries = computeStatusEntriesWithHistory previousStatuses updatedState }
+    LiveTestState.withStatusEntries
+      (computeStatusEntriesWithHistory previousStatuses updatedState)
+      updatedState
 
   let annotationsForFile (filePath: string) (state: LiveTestState) : LineAnnotation array =
+    let entryIndex = LiveTestState.statusEntryIndex state
     let tsAnnotations =
       state.SourceLocations
       |> Array.filter (fun sl -> sl.FilePath = filePath)
@@ -2025,11 +2316,14 @@ module LiveTesting =
           Icon = GutterIcon.TestDiscovered
           Tooltip = sprintf "Test: %s (detected)" sl.AttributeName })
     let resultAnnotations =
-      state.StatusEntries
-      |> Array.choose (fun e ->
-        match e.Origin with
+      state.DiscoveredTests
+      |> Array.choose (fun test ->
+        match test.Origin with
         | TestOrigin.SourceMapped (f, line) when f = filePath ->
-          Some (StatusToGutter.toAnnotation line e.DisplayName e.Status)
+          match Map.tryFind test.Id entryIndex with
+          | Some entry ->
+            Some (StatusToGutter.toAnnotation line entry.DisplayName entry.Status)
+          | None -> None
         | _ -> None)
     let resultLines = resultAnnotations |> Array.map (fun a -> a.Line) |> Set.ofArray
     let filtered = tsAnnotations |> Array.filter (fun a -> not (resultLines.Contains a.Line))
@@ -2394,11 +2688,13 @@ module Staleness =
     | true -> state
     | false ->
       let previousStatuses =
-        state.StatusEntries
+        LiveTestState.orderedStatusEntries state
         |> Array.map (fun e -> e.TestId, e.Status)
         |> Map.ofArray
       let updatedState = { state with AffectedTests = Set.union state.AffectedTests affected }
-      { updatedState with StatusEntries = LiveTesting.computeStatusEntriesWithHistory previousStatuses updatedState }
+      LiveTestState.withStatusEntries
+        (LiveTesting.computeStatusEntriesWithHistory previousStatuses updatedState)
+        updatedState
 
 // --- Test Cycle Orchestrator ---
 
@@ -3304,8 +3600,9 @@ module FileAnnotations =
     (depGraph: TestDependencyGraph option)
     (state: LiveTestState)
     =
+    let entries = LiveTestState.orderedStatusEntries state
     let fileEntries =
-      state.StatusEntries
+      entries
       |> Array.choose (fun e ->
         match e.Origin with
         | TestOrigin.SourceMapped(f, line) when f = filePath ->

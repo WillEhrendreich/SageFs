@@ -355,8 +355,8 @@ let elmWiringBehavioralTests = testList "Elm Wiring Behavioral Scenarios" [
         Result = TestResult.Passed(TimeSpan.FromMilliseconds(5.0))
         Timestamp = now
         Output = None }
-    let merged = LiveTesting.mergeResults state [|result|]
-    merged.StatusEntries |> Array.tryFind (fun e -> e.TestId = tc.Id)
+    let merged = LiveTesting.mergeResultsWithUpdatedStatusEntries state [|result|]
+    LiveTestState.orderedStatusEntries merged |> Array.tryFind (fun e -> e.TestId = tc.Id)
     |> Option.map (fun e -> match e.Status with TestRunStatus.Passed _ -> true | _ -> false)
     |> Option.defaultValue false
     |> Expect.isTrue "status entry shows Passed after merge"
@@ -390,7 +390,7 @@ let elmWiringBehavioralTests = testList "Elm Wiring Behavioral Scenarios" [
     let gen = RunGeneration.next RunGeneration.zero
     let stale =
       { Staleness.markStale depGraph ["Lib.add"] state with RunPhases = Map.ofList ["s", Running gen]; LastGeneration = gen }
-    stale.StatusEntries |> Array.exists (fun e -> match e.Status with TestRunStatus.Stale -> true | _ -> false)
+    LiveTestState.orderedStatusEntries stale |> Array.exists (fun e -> match e.Status with TestRunStatus.Stale -> true | _ -> false)
     |> Expect.isTrue "entry is Stale after symbol change"
     let newResult : TestRunResult =
       { TestId = tc.Id
@@ -398,8 +398,8 @@ let elmWiringBehavioralTests = testList "Elm Wiring Behavioral Scenarios" [
         Result = TestResult.Passed(TimeSpan.FromMilliseconds(3.0))
         Timestamp = now.AddSeconds(1.0)
         Output = None }
-    let cleared = LiveTesting.mergeResults stale [|newResult|]
-    cleared.StatusEntries |> Array.exists (fun e -> match e.Status with TestRunStatus.Passed _ -> true | _ -> false)
+    let cleared = LiveTesting.mergeResultsWithUpdatedStatusEntries stale [|newResult|]
+    LiveTestState.orderedStatusEntries cleared |> Array.exists (fun e -> match e.Status with TestRunStatus.Passed _ -> true | _ -> false)
     |> Expect.isTrue "entry is Passed after re-run"
   }
 
