@@ -5,6 +5,7 @@ namespace SageFs.Server
 type DaemonStateChange =
   | StandbyProgress
   | SessionReady of sessionId: string
+  | SessionSwitched of sessionId: string
   | HotReloadChanged
   | FileReloaded of path: string
   | SessionFaulted of sessionId: string * error: string
@@ -20,6 +21,7 @@ module DaemonStateChange =
     | ModelChanged (outputCount, diagCount) ->
       sprintf """{"outputCount":%d,"diagCount":%d}""" outputCount diagCount
     | SessionReady sid -> sprintf """{"sessionReady":"%s"}""" sid
+    | SessionSwitched sid -> sprintf """{"sessionSwitched":"%s"}""" sid
     | HotReloadChanged -> """{"hotReloadChanged":true}"""
     | FileReloaded path -> sprintf """{"fileReloaded":"%s"}""" (path.Replace("\\", "\\\\"))
     | SessionFaulted (sid, err) -> sprintf """{"sessionFaulted":"%s","error":"%s"}""" sid (err.Replace("\"", "\\\""))

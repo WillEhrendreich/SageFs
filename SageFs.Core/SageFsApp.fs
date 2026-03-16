@@ -1354,9 +1354,22 @@ module SageFsUpdate =
         | None -> []
       { model with PendingSuggestion = None }, effects
 
-    | SageFsMsg.RebuildCompleted _result ->
-      // Placeholder: will wire to RunAffectedTests on Ok, surface diagnostic on Error
-      model, []
+    | SageFsMsg.RebuildCompleted result ->
+      let pending = model.LiveTesting.PendingRebuild
+      let cycle' = { model.LiveTesting with PendingRebuild = None }
+      match result, pending with
+      | Ok (), Some p ->
+        let effect =
+          Features.LiveTesting.TestCycleEffect.RunAffectedTests (
+            p.Tests, p.Trigger, p.TreeSitterElapsed, p.FcsElapsed,
+            p.SessionId, p.InstrumentationMaps)
+        { model with LiveTesting = cycle' }, [ SageFsEffect.TestCycle effect ]
+      | Error msg, _ ->
+        Utils.Log.warn "[rebuild] Build failed, not running tests: %s" (msg.Substring(0, min 200 msg.Length))
+        { model with LiveTesting = cycle' }, []
+      | Ok (), None ->
+        Utils.Log.warn "[rebuild] RebuildCompleted(Ok) with no PendingRebuild — stale dispatch?"
+        { model with LiveTesting = cycle' }, []
 
     | SageFsMsg.MarkAllTestsStale ->
       let lt = model.LiveTesting
@@ -1877,10 +1890,52 @@ module SageFsEffectHandler =
                 Instrumentation.succeedSpan span
               | false -> ()
             })
-        | Features.LiveTesting.TestCycleEffect.RequestRebuild (_tests, _trigger, _tsElapsed, _fcsElapsed, _targetSession, _instrumentationMaps) ->
-          // Placeholder: Phase 1 will shell out to dotnet build --no-restore
-          // then dispatch RebuildCompleted(Ok ()) or RebuildCompleted(Error msg)
-          ()
+        | Features.LiveTesting.TestCycleEffect.RequestRebuild (_tests, _trigger, _tsElapsed, _fcsElapsed, targetSession, _instrumentationMaps) ->
+          Async.Start(async {
+            try
+              let targetSid =
+                targetSession
+                |> Option.bind (fun s ->
+                  match SessionId.validate s with Ok sid -> Some sid | Error _ -> None)
+              let! sessions = deps.ListSessions()
+              let sessionInfo =
+                match targetSid with
+                | Some sid ->
+                  sessions |> List.tryFind (fun si -> si.Id = sid)
+                | None ->
+                  sessions |> List.tryHead
+              match sessionInfo with
+              | None ->
+                dispatch (SageFsMsg.RebuildCompleted (Error "No session found for rebuild"))
+              | Some info ->
+                let projectPath =
+                  match info.Projects with
+                  | proj :: _ -> proj
+                  | [] -> info.WorkingDirectory
+                let psi = System.Diagnostics.ProcessStartInfo()
+                psi.FileName <- "dotnet"
+                psi.Arguments <- sprintf "build \"%s\" --no-restore --nologo -v:q" projectPath
+                psi.WorkingDirectory <- info.WorkingDirectory
+                psi.RedirectStandardOutput <- true
+                psi.RedirectStandardError <- true
+                psi.UseShellExecute <- false
+                psi.CreateNoWindow <- true
+                let proc = System.Diagnostics.Process.Start(psi)
+                let! stdout = proc.StandardOutput.ReadToEndAsync() |> Async.AwaitTask
+                let! stderr = proc.StandardError.ReadToEndAsync() |> Async.AwaitTask
+                do! proc.WaitForExitAsync() |> Async.AwaitTask
+                match proc.ExitCode with
+                | 0 ->
+                  Utils.Log.info "[rebuild] Build succeeded for %s" projectPath
+                  dispatch (SageFsMsg.RebuildCompleted (Ok ()))
+                | code ->
+                  let output = (stdout + "\n" + stderr).Trim()
+                  Utils.Log.warn "[rebuild] Build failed (exit %d) for %s:\n%s" code projectPath output
+                  dispatch (SageFsMsg.RebuildCompleted (Error output))
+            with ex ->
+              Utils.Log.error "[rebuild] Exception: %s" ex.Message
+              dispatch (SageFsMsg.RebuildCompleted (Error ex.Message))
+          })
         | Features.LiveTesting.TestCycleEffect.RunAffectedTests (tests, trigger, tsElapsed, fcsElapsed, targetSession, instrumentationMaps) ->
           match Array.isEmpty tests with
           | true -> ()

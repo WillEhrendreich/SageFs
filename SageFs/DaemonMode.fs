@@ -808,6 +808,101 @@ let periodicManifestSave (log: ILogger) (readSnapshot: unit -> SessionManager.Qu
 
 /// Create a debounced file watcher for live testing.
 /// Returns (watcher, debounceTimer) — caller must dispose both.
+/// Manages per-session file watchers for live testing.
+/// Each session directory gets its own FileSystemWatcher. Watchers are created
+/// when sessions are discovered and disposed when sessions are removed.
+type LiveTestWatcherManager
+  ( dispatch: SageFsMsg -> unit,
+    onFileReloaded: string -> unit ) =
+
+  let watchers = System.Collections.Concurrent.ConcurrentDictionary<string, System.IO.FileSystemWatcher * System.Threading.Timer>()
+  let pendingPaths = System.Collections.Concurrent.ConcurrentDictionary<string, bool>()
+  let pendingLock = obj()
+  let debounceMs = 200
+
+  let debounceCallback _ =
+    let paths =
+      lock pendingLock (fun () ->
+        let ps = pendingPaths.Keys |> Seq.toArray
+        pendingPaths.Clear()
+        ps)
+    for path in paths do
+      try
+        let fi = System.IO.FileInfo(path)
+        match fi.Exists && fi.Length < 1_048_576L with
+        | true ->
+          let content = System.IO.File.ReadAllText(path)
+          dispatch (SageFsMsg.FileContentChanged(path, content))
+          onFileReloaded path
+        | false -> ()
+      with
+      | :? System.IO.IOException -> ()
+      | :? System.UnauthorizedAccessException -> ()
+
+  let sharedDebounceTimer =
+    new System.Threading.Timer(
+      System.Threading.TimerCallback(debounceCallback), null,
+      System.Threading.Timeout.Infinite, System.Threading.Timeout.Infinite)
+
+  let handleFileChanged (directories: string list) (e: System.IO.FileSystemEventArgs) =
+    let path = e.FullPath
+    match SageFs.FileWatcher.shouldTriggerRebuild
+        { Directories = directories; Extensions = [".fs"; ".fsx"]; ExcludePatterns = []; DebounceMs = debounceMs }
+        path with
+    | true ->
+      lock pendingLock (fun () ->
+        pendingPaths.TryAdd(path, true) |> ignore
+        sharedDebounceTimer.Change(debounceMs, System.Threading.Timeout.Infinite) |> ignore)
+    | false -> ()
+
+  /// Register a watcher for a session's working directory (idempotent).
+  member _.AddDirectory(dir: string) =
+    match System.IO.Directory.Exists(dir) with
+    | false -> ()
+    | true ->
+      watchers.GetOrAdd(dir, fun d ->
+        let watcher = new System.IO.FileSystemWatcher(d)
+        watcher.IncludeSubdirectories <- true
+        watcher.NotifyFilter <- System.IO.NotifyFilters.LastWrite
+        watcher.Filters.Add("*.fs")
+        watcher.Filters.Add("*.fsx")
+        let handler = handleFileChanged [d]
+        watcher.Changed.Add(handler)
+        watcher.Created.Add(handler)
+        watcher.EnableRaisingEvents <- true
+        Log.info "[watcher] Registered file watcher for %s" d
+        watcher, sharedDebounceTimer) |> ignore
+
+  /// Remove a watcher for a directory (idempotent).
+  member _.RemoveDirectory(dir: string) =
+    match watchers.TryRemove(dir) with
+    | true, (watcher, _) ->
+      watcher.EnableRaisingEvents <- false
+      watcher.Dispose()
+      Log.info "[watcher] Disposed file watcher for %s" dir
+    | false, _ -> ()
+
+  /// Sync watchers to match the current set of session directories.
+  member this.SyncToSessions(sessionDirs: string list) =
+    let desired = sessionDirs |> Set.ofList
+    let current = watchers.Keys |> Set.ofSeq
+    // Add missing
+    for dir in desired - current do
+      this.AddDirectory(dir)
+    // Remove stale
+    for dir in current - desired do
+      this.RemoveDirectory(dir)
+
+  member _.WatchedDirectories = watchers.Keys |> Seq.toList
+
+  interface System.IDisposable with
+    member _.Dispose() =
+      for KeyValue(_, (w, _)) in watchers do
+        w.EnableRaisingEvents <- false
+        w.Dispose()
+      watchers.Clear()
+      sharedDebounceTimer.Dispose()
+
 let createLiveTestWatcher
   (workingDir: string)
   (dispatch: SageFsMsg -> unit)
@@ -1041,24 +1136,8 @@ let resumePreviousSessions
       uniqueByDir |> List.partition (fun prev -> IO.Directory.Exists prev.WorkingDir)
     for prev in missing do
       log.LogWarning("Skipping session {SessionId} — directory {WorkingDir} no longer exists (will retry next startup)", prev.SessionId, prev.WorkingDir)
-    // Filter to sessions relevant to current working directory
-    let isSubdirectoryOf (parent: string) (child: string) =
-      let comparison =
-        match System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Windows) with
-        | true -> System.StringComparison.OrdinalIgnoreCase
-        | false -> System.StringComparison.Ordinal
-      let normalizedParent =
-        match parent.EndsWith(string IO.Path.DirectorySeparatorChar) || parent.EndsWith(string IO.Path.AltDirectorySeparatorChar) with
-        | true -> parent
-        | false -> parent + string IO.Path.DirectorySeparatorChar
-      child.StartsWith(normalizedParent, comparison) || child.Equals(parent, comparison)
-    let relevant, irrelevant =
-      existing |> List.partition (fun prev ->
-        isSubdirectoryOf workingDir prev.WorkingDir ||
-        isSubdirectoryOf prev.WorkingDir workingDir)
-    for prev in irrelevant do
-      log.LogInformation("Skipping session {SessionId} for {WorkingDir} — not under daemon directory {DaemonDir}",
-        prev.SessionId, prev.WorkingDir, workingDir)
+    // Resume all sessions with existing directories — the daemon serves any project
+    let relevant = existing
     // Resume all valid sessions in parallel — each is an independent worker process
     let resumeSpan = Instrumentation.startSpan Instrumentation.sessionSource "sagefs.daemon.session_resume" []
     let resumeTasks =
@@ -1432,10 +1511,37 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
     activityCleanupTimerRef <- t
     t
 
-  // Live testing file watcher — monitors *.fs and *.fsx changes
-  let liveTestWatcher, liveTestDebounceTimer =
-    createLiveTestWatcher workingDir elmRuntime.Dispatch
-      (fun path -> stateChangedEvent.Trigger (FileReloaded path))
+  // Live testing file watcher manager — per-session directory watchers
+  let liveTestWatcherManager =
+    new LiveTestWatcherManager(
+      elmRuntime.Dispatch,
+      (fun path -> stateChangedEvent.Trigger (FileReloaded path)))
+  // Seed with daemon CWD as fallback (for scripts evaluated from daemon dir)
+  liveTestWatcherManager.AddDirectory(workingDir)
+  // Also seed with any existing session directories
+  let seedSessionDirs () =
+    let snapshot = readSnapshot()
+    let sessions = SessionManager.QuerySnapshot.allSessions snapshot
+    let dirs = sessions |> List.map (fun si -> si.WorkingDirectory) |> List.distinct
+    liveTestWatcherManager.SyncToSessions(workingDir :: dirs)
+  seedSessionDirs ()
+
+  // Periodic session-watcher sync — ensures new sessions get watchers
+  let mutable watcherSyncTimerRef : System.Threading.Timer = Unchecked.defaultof<_>
+  let watcherSyncCallback _ =
+    try seedSessionDirs ()
+    finally
+      match isNull watcherSyncTimerRef with
+      | true -> ()
+      | false ->
+        try watcherSyncTimerRef.Change(5_000, System.Threading.Timeout.Infinite) |> ignore
+        with :? System.ObjectDisposedException -> ()
+  let watcherSyncTimer =
+    let t = new System.Threading.Timer(
+      System.Threading.TimerCallback(watcherSyncCallback),
+      null, 5_000, System.Threading.Timeout.Infinite)
+    watcherSyncTimerRef <- t
+    t
 
   // Start dashboard web server on MCP port + 1
   let dashboardPort = mcpPort + 1
@@ -1729,6 +1835,7 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
     Dispatch = fun msg -> elmRuntime.Dispatch msg
     SwitchSession = Some (fun (sid: string) -> task {
       elmRuntime.Dispatch(SageFsMsg.Event (SageFsEvent.SessionSwitched (None, sid)))
+      stateChangedEvent.Trigger(SessionSwitched sid)
       return Ok (sprintf "Switched to session '%s'" sid)
     })
     StopSession = Some (fun (sid: string) -> task {
@@ -1946,9 +2053,9 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
   // Dispose activity cleanup timer (best-effort, no wait needed — cleanup is idempotent)
   try activityCleanupTimer.Dispose()
   with :? System.ObjectDisposedException -> ()
-  liveTestDebounceTimer.Dispose()
-  liveTestWatcher.EnableRaisingEvents <- false
-  liveTestWatcher.Dispose()
+  try watcherSyncTimer.Dispose()
+  with :? System.ObjectDisposedException -> ()
+  (liveTestWatcherManager :> System.IDisposable).Dispose()
   try
     do! performGracefulShutdown log readSnapshot elmRuntime.GetModel persistence daemonStreamId appendEventsAsync sessionManager
   with ex ->

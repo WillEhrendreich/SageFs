@@ -283,11 +283,7 @@ let buildDashboardSnapshot
   (lastThemeName: string)
   : System.Threading.Tasks.Task<DashboardSnapshot * string * string> =
   task {
-    let activeId = q.GetActiveSessionId ()
-    let sessionId =
-      match activeId.Length > 0 with
-      | true -> activeId
-      | false -> currentSessionId
+    let sessionId = currentSessionId
     let state = q.GetSessionState sessionId
     let stateStr = SessionState.label state
     let workingDir = q.GetSessionWorkingDir sessionId
@@ -444,7 +440,7 @@ let createStreamHandler
         // Coalesces rapid state changes: drain queued, throttle 100ms, drain again, push once.
         // Heartbeat: when idle >15s, sends `: keepalive\n\n` SSE comment to prevent
         // proxy/browser timeouts. Integrated into the actor loop to avoid concurrent writes.
-        let pushAgent = MailboxProcessor.Start((fun inbox ->
+        let pushAgent = MailboxProcessor<DaemonStateChange>.Start((fun inbox ->
           let rec loop () = async {
             let! msg = inbox.TryReceive(15_000)
             match msg with
@@ -461,13 +457,32 @@ let createStreamHandler
               | :? System.ArgumentOutOfRangeException -> ()
               | :? System.InvalidOperationException -> ()
               return! loop ()
-            | Some () ->
-              // Got a state change — drain + coalesce + push
+            | Some (SessionSwitched sid) ->
+              // Session switch is user-interactive — update tracking and push immediately
+              currentSessionId <- sid
+              try
+                do! pushState () |> Async.AwaitTask
+              with
+              | :? System.IO.IOException -> ()
+              | :? ObjectDisposedException -> ()
+              | :? OperationCanceledException -> ()
+              | :? System.ArgumentOutOfRangeException -> ()
+              | :? System.InvalidOperationException -> ()
+              | ex -> Log.debug "[Dashboard SSE] pushState failed: %s" ex.Message
+              return! loop ()
+            | Some _change ->
+              // Other state changes — drain + coalesce + push
               while inbox.CurrentQueueLength > 0 do
-                do! inbox.Receive()
+                let! c = inbox.Receive()
+                match c with
+                | SessionSwitched sid -> currentSessionId <- sid
+                | _ -> ()
               do! Async.Sleep 100
               while inbox.CurrentQueueLength > 0 do
-                do! inbox.Receive()
+                let! c = inbox.Receive()
+                match c with
+                | SessionSwitched sid -> currentSessionId <- sid
+                | _ -> ()
               try
                 do! pushState () |> Async.AwaitTask
               with
@@ -480,8 +495,8 @@ let createStreamHandler
               return! loop ()
           }
           loop ()), ctx.RequestAborted)
-        use _sub = evt.Subscribe(fun _ ->
-          try pushAgent.Post(())
+        use _sub = evt.Subscribe(fun change ->
+          try pushAgent.Post(change)
           with :? ObjectDisposedException -> ())
         do! tcs.Task
       | None ->

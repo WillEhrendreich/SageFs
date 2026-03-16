@@ -213,6 +213,97 @@ let rebuildCycleTests = testList "LiveTesting Rebuild Cycle" [
       // |> Expect.isFalse
       //     "no RunAffectedTests while PendingRebuild is active — tests would run against stale code"
     }
+    test "compiled project with empty changedSymbols still emits RequestRebuild for all tests" {
+      // WHY: This is the ROOT CAUSE of the stale-DLL bug. When a user edits
+      // Pong.fs (main project), FCS may not produce meaningful symbol refs
+      // because the FSI session is loaded for the TEST project. The dep graph
+      // and coverage bitmaps don't map main-project symbols to tests.
+      // Result: changedSymbols=[] → affected=[] → afterTypeCheck returns [] → NO rebuild.
+      // For compiled projects, ANY .fs file change MUST trigger a rebuild with
+      // all discovered tests as fallback, because the DLL is always stale.
+      let tc1 = mkTestCase "Tests.PongTests.paddleColor" TestFramework.Expecto TestCategory.Unit
+      let tc2 = mkTestCase "Tests.PongTests.ballSpeed" TestFramework.Expecto TestCategory.Unit
+      let state = activeStateWith [| tc1; tc2 |]
+      let emptyDepGraph = TestDependencyGraph.empty
+
+      // Key: changedSymbols is EMPTY — FCS couldn't identify what changed
+      let effects =
+        TestCycleEffects.afterTypeCheck
+          []                // no changed symbols (FCS couldn't analyze)
+          "Pong.fs"         // compiled .fs file
+          RunTrigger.FileSave
+          emptyDepGraph     // no dep graph entries for main-project symbols
+          state
+          None
+          Map.empty         // no instrumentation maps
+
+      // Must NOT be empty — compiled project changes ALWAYS need a rebuild
+      effects
+      |> List.isEmpty
+      |> Expect.isFalse
+          "compiled project file change with empty symbols must still trigger rebuild (all-tests fallback)"
+
+      // The emitted effects should be RequestRebuild (not RunAffectedTests)
+      let hasRebuild =
+        effects |> List.exists (fun e -> unionCaseNameOf e = "RequestRebuild")
+      hasRebuild
+      |> Expect.isTrue
+          "fallback rebuild should emit RequestRebuild for compiled projects"
+
+      // Verify ALL discovered tests are included in the rebuild
+      let rebuildTests =
+        effects |> List.choose (fun e ->
+          match e with
+          | TestCycleEffect.RequestRebuild (tests, _, _, _, _, _) -> Some tests
+          | _ -> None)
+        |> List.collect Array.toList
+      rebuildTests
+      |> List.length
+      |> Expect.equal "all discovered tests should be in the rebuild" 2
+    }
+
+    test "compiled project with empty changedSymbols but no discovered tests returns empty" {
+      // WHY: If no tests are discovered yet, there's nothing to rebuild for.
+      // This avoids unnecessary builds during the discovery phase.
+      let state = activeStateWith [||] // no discovered tests
+      let effects =
+        TestCycleEffects.afterTypeCheck
+          []
+          "Pong.fs"
+          RunTrigger.FileSave
+          TestDependencyGraph.empty
+          state
+          None
+          Map.empty
+
+      effects
+      |> List.isEmpty
+      |> Expect.isTrue
+          "no discovered tests means no rebuild needed"
+    }
+
+    test "script file with empty changedSymbols still returns empty (no fallback)" {
+      // WHY: The all-tests fallback is ONLY for compiled projects.
+      // Script (.fsx) files don't need compilation — they're interpreted.
+      // Empty changedSymbols for scripts correctly means "nothing changed."
+      let tc1 = mkTestCase "Tests.myTest" TestFramework.Expecto TestCategory.Unit
+      let state = activeStateWith [| tc1 |]
+
+      let effects =
+        TestCycleEffects.afterTypeCheck
+          []                // no changed symbols
+          "MyScript.fsx"    // script file — no compilation
+          RunTrigger.FileSave
+          TestDependencyGraph.empty
+          state
+          None
+          Map.empty
+
+      effects
+      |> List.isEmpty
+      |> Expect.isTrue
+          "script files should NOT fall back to all-tests rebuild"
+    }
   ]
 
   // ═══════════════════════════════════════════════════════════════════

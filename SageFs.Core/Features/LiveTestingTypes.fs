@@ -2970,10 +2970,24 @@ module TestCycleEffects =
         | false -> [||]
       let affected =
         Array.append symbolAffected coverageAffected |> Array.distinct
-      match Array.isEmpty affected with
+      // For compiled projects, when dep graph/coverage can't identify specific
+      // affected tests, fall back to ALL discovered tests. The DLL is stale
+      // and needs rebuilding regardless — we just can't narrow the test set.
+      let isCompiledFile =
+        changedFilePath.EndsWith(".fs", System.StringComparison.OrdinalIgnoreCase)
+        && not (changedFilePath.EndsWith(".fsx", System.StringComparison.OrdinalIgnoreCase))
+      // Only fall back to all-tests when symbols DID change but the dep graph
+      // has no coverage for them yet (new code, not-yet-tracked symbols).
+      // When changedSymbols = [] (FCS says nothing changed semantically, e.g.
+      // comment/whitespace edit), we respect that and produce no effects.
+      let effectiveAffected =
+        match Array.isEmpty affected && isCompiledFile && not (List.isEmpty changedSymbols) with
+        | true -> state.DiscoveredTests |> Array.map (fun tc -> tc.Id)
+        | false -> affected
+      match Array.isEmpty effectiveAffected with
       | true -> []
       | false ->
-        let affectedSet = Set.ofArray affected
+        let affectedSet = Set.ofArray effectiveAffected
         let affectedTests =
           state.DiscoveredTests
           |> Array.filter (fun tc -> affectedSet.Contains tc.Id)
@@ -3303,7 +3317,24 @@ module LiveTestCycleState =
       let s1 = onFcsComplete filePath refs s
       let trigger = s.LastTrigger
       let effects = TestCycleEffects.afterTypeCheck s1.ChangedSymbols filePath trigger s1.DepGraph s1.TestState s1.LastTiming s1.InstrumentationMaps
-      effects, s1
+      // When RequestRebuild is emitted, store the pending rebuild state on the model
+      // so RebuildCompleted can retrieve the test set and trigger RunAffectedTests.
+      let s2 =
+        effects
+        |> List.tryPick (fun e ->
+          match e with
+          | TestCycleEffect.RequestRebuild (tests, trigger, tsElapsed, fcsElapsed, sessionId, instrMaps) ->
+            Some { Tests = tests
+                   Trigger = trigger
+                   TreeSitterElapsed = tsElapsed
+                   FcsElapsed = fcsElapsed
+                   SessionId = sessionId
+                   InstrumentationMaps = instrMaps }
+          | _ -> None)
+        |> function
+          | Some pending -> { s1 with PendingRebuild = Some pending }
+          | None -> s1
+      effects, s2
     | FcsTypeCheckResult.Failed _ ->
       [], s
     | FcsTypeCheckResult.Cancelled _ ->
