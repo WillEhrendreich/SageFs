@@ -109,6 +109,7 @@
         <Compile Include="LiveTestingCycleTests.fs" />
         <Compile Include="LiveTestingCoverageTests.fs" />
          <Compile Include="LiveTestingElmTests.fs" />
+         <Compile Include="LiveTestRebuildCycleTests.fs" />
          <Compile Include="LiveTestingGraphTests.fs" />
          <Compile Include="DomainModelVizTests.fs" />
          <Compile Include="ExpectoModuleBindingFixture.fs" />
@@ -249,6 +250,8 @@
         <Compile Include="SageTuiAllocationBenchmarks.fs" />
         <Compile Include="ManifestBackupRecoveryTests.fs" />
         <Compile Include="WorkerLivenessTests.fs" />
+        <Compile Include="BranchCoverageRenderingTests.fs" />
+        <Compile Include="LiveTestWatcherScopeTests.fs" />
         <Compile Include="Program.fs" />
     </ItemGroup>
 
