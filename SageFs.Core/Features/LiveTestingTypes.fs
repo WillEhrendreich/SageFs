@@ -2976,12 +2976,21 @@ module TestCycleEffects =
       let isCompiledFile =
         changedFilePath.EndsWith(".fs", System.StringComparison.OrdinalIgnoreCase)
         && not (changedFilePath.EndsWith(".fsx", System.StringComparison.OrdinalIgnoreCase))
-      // Only fall back to all-tests when symbols DID change but the dep graph
-      // has no coverage for them yet (new code, not-yet-tracked symbols).
-      // When changedSymbols = [] (FCS says nothing changed semantically, e.g.
-      // comment/whitespace edit), we respect that and produce no effects.
+      // Fall back to all discovered tests when:
+      // 1. changedSymbols changed but dep graph doesn't cover them (new code/not-yet-tracked symbols)
+      // 2. FileSave on a compiled file where the dep graph is empty — FCS can't see main project
+      //    symbols from the test session, so changedSymbols=[] even though the DLL is stale.
+      // Do NOT fall back when:
+      // - changedSymbols=[] on Keystroke (intermediate state while typing)
+      // - changedSymbols=[] on FileSave but dep graph is non-empty (whitespace/comment edit to a
+      //   file the dep graph covers — FCS correctly reports no semantic change)
+      let isEmptyDepGraph =
+        Map.isEmpty depGraph.SymbolToTests && Map.isEmpty depGraph.TransitiveCoverage
+      let isSaveOrExplicit =
+        trigger = RunTrigger.FileSave || trigger = RunTrigger.ExplicitRun
+      let symbolsChanged = not (List.isEmpty changedSymbols)
       let effectiveAffected =
-        match Array.isEmpty affected && isCompiledFile && not (List.isEmpty changedSymbols) with
+        match Array.isEmpty affected && isCompiledFile && (symbolsChanged || (isSaveOrExplicit && isEmptyDepGraph)) with
         | true -> state.DiscoveredTests |> Array.map (fun tc -> tc.Id)
         | false -> affected
       match Array.isEmpty effectiveAffected with
