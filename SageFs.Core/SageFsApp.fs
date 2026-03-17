@@ -832,6 +832,25 @@ module SageFsUpdate =
                   ActiveSessionId = activeId' } }, []
 
       | SageFsEvent.SessionStatusChanged (sessionId, status) ->
+        let priorSession =
+          model.Sessions.Sessions
+          |> List.tryFind (fun s -> SessionId.value s.Id = sessionId)
+
+        let isWatcherEligible sessionStatus =
+          match sessionStatus with
+          | SessionDisplayStatus.Running
+          | SessionDisplayStatus.Stale -> true
+          | _ -> false
+
+        let watcherEffects =
+          match model.LiveTesting.TestState.Activation, priorSession with
+          | LiveTestingActivation.Active, Some session when not (isWatcherEligible session.Status) && isWatcherEligible status ->
+              [ SageFsEffect.TestCycle (
+                  Features.LiveTesting.TestCycleEffect.RegisterFileWatcher (
+                    sessionId,
+                    session.WorkingDirectory)) ]
+          | _ -> []
+
         { model with
             Sessions = {
               model.Sessions with
@@ -840,7 +859,7 @@ module SageFsUpdate =
                   |> List.map (fun s ->
                     match SessionId.value s.Id = sessionId with
                     | true -> { s with Status = status }
-                    | false -> s) } }, []
+                    | false -> s) } }, watcherEffects
 
       | SageFsEvent.SessionSwitched (_, toIdStr) ->
         match SessionId.validate toIdStr with
@@ -1001,7 +1020,16 @@ module SageFsUpdate =
 
       | SageFsEvent.TestsDiscovered (sessionId, tests) ->
         let state = model.LiveTesting.TestState
-        let disc = Features.LiveTesting.LiveTesting.mergeDiscoveredTests state.DiscoveredTests tests
+        let retainedSessionMap =
+          state.TestSessionMap
+          |> Map.filter (fun _ sid -> sid <> sessionId)
+        let retainedDiscovered =
+          state.DiscoveredTests
+          |> Array.filter (fun tc ->
+            match Map.tryFind tc.Id state.TestSessionMap with
+            | Some sid -> sid <> sessionId
+            | None -> true)
+        let disc = Features.LiveTesting.LiveTesting.mergeDiscoveredTests retainedDiscovered tests
         let withSourceMap =
           match Array.isEmpty state.SourceLocations with
           | true ->
@@ -1013,7 +1041,7 @@ module SageFsUpdate =
             Features.LiveTesting.SourceMapping.mapFromProjectFiles sourceFiles disc
           | false -> Features.LiveTesting.SourceMapping.mergeSourceLocations state.SourceLocations disc
         let newSessionMap =
-          tests |> Array.fold (fun m tc -> Map.add tc.Id sessionId m) state.TestSessionMap
+          tests |> Array.fold (fun m tc -> Map.add tc.Id sessionId m) retainedSessionMap
         let pendingDiscoverySessions =
           Set.remove sessionId state.PendingDiscoverySessions
         let locs =

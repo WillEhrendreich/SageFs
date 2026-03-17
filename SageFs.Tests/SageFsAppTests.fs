@@ -949,6 +949,53 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
     duplicateEffects
     |> Expect.isEmpty "duplicate discovery should not retrigger execution"
 
+  testCase "same-session rediscovery replaces prior session-scoped tests when identity changes" <| fun _ ->
+    let sessionOneOriginal =
+      mkLiveTestCase
+        "test.rediscovery.original"
+        "SageFs.Tests.MyModule.tests/add"
+        "add"
+    let sessionOneUpdated =
+      mkLiveTestCase
+        "test.rediscovery.updated"
+        "SageFs.Tests.MyModule.tests/type-inference/add"
+        "add"
+    let otherSession =
+      mkLiveTestCase
+        "test.rediscovery.other-session"
+        "SageFs.Tests.OtherModule.tests/keep"
+        "keep"
+
+    let model1, _ =
+      SageFsUpdate.update
+        (SageFsMsg.Event (SageFsEvent.TestsDiscovered ("s-1", [| sessionOneOriginal |])))
+        (SageFsModel.initial())
+
+    let model2, _ =
+      SageFsUpdate.update
+        (SageFsMsg.Event (SageFsEvent.TestsDiscovered ("s-2", [| otherSession |])))
+        model1
+
+    let model3, _ =
+      SageFsUpdate.update
+        (SageFsMsg.Event (SageFsEvent.TestsDiscovered ("s-1", [| sessionOneUpdated |])))
+        model2
+
+    model3.LiveTesting.TestState.DiscoveredTests
+    |> Expect.hasLength "rediscovery should keep one test for each session" 2
+
+    model3.LiveTesting.TestState.DiscoveredTests
+    |> Array.exists (fun tc -> tc.Id = sessionOneUpdated.Id)
+    |> Expect.isTrue "rediscovery should keep the updated test identity for the session"
+
+    model3.LiveTesting.TestState.DiscoveredTests
+    |> Array.exists (fun tc -> tc.Id = sessionOneOriginal.Id)
+    |> Expect.isFalse "rediscovery should drop the superseded test identity for the same session"
+
+    model3.LiveTesting.TestState.TestSessionMap
+    |> Map.tryFind sessionOneOriginal.Id
+    |> Expect.isNone "superseded test identity should be removed from the session map"
+
   testCase "duplicate TestLocationsDetected preserves model identity when source truth is unchanged" <| fun _ ->
     let discovered =
       mkLiveTestCase

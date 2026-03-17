@@ -429,4 +429,34 @@ let stream4Tests =
       |> Expect.isTrue
           "session restart should register new watcher for updated directory (not yet implemented)"
     }
+
+    test "session becoming running after live testing enable registers watcher" {
+      let snap =
+        { (mkSession "session-a" "/projects/alpha") with
+            Status = SessionDisplayStatus.Starting }
+
+      let model =
+        SageFsModel.initial ()
+        |> withSession snap
+        |> withLiveTesting
+
+      let _model', effects =
+        SageFsUpdate.update
+          (SageFsMsg.Event (
+            SageFsEvent.SessionStatusChanged (
+              WorkerProtocol.SessionId.value snap.Id,
+              SessionDisplayStatus.Running)))
+          model
+
+      let hasWatcherRegistration =
+        effects
+        |> List.exists (fun e ->
+          match e with
+          | SageFsEffect.TestCycle (TestCycleEffect.RegisterFileWatcher _) -> true
+          | _ -> false)
+
+      hasWatcherRegistration
+      |> Expect.isTrue
+          "when live testing is already enabled, a session transitioning to running should register its watcher"
+    }
   ]
