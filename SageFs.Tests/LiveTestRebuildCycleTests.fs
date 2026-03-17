@@ -33,12 +33,15 @@ let private tryRecordFieldValue (fieldName: string) (value: obj) =
   |> Option.map (fun p -> p.GetValue(value))
 
 let private tryOptionValue (value: obj) =
-  let ty = value.GetType()
-  let case, fields = FSharpValue.GetUnionFields(value, ty)
-  match case.Name with
-  | "Some" -> fields |> Array.tryHead
-  | "None" -> None
-  | other -> failtestf "expected option value, got %s" other
+  match isNull value with
+  | true -> None
+  | false ->
+      let ty = value.GetType()
+      let case, fields = FSharpValue.GetUnionFields(value, ty)
+      match case.Name with
+      | "Some" -> fields |> Array.tryHead
+      | "None" -> None
+      | other -> failtestf "expected option value, got %s" other
 
 let private tryQueuedRebuildValue (state: LiveTestCycleState) =
   tryRecordFieldValue "QueuedRebuild" (box state)
@@ -87,7 +90,7 @@ let private pendingRebuildWithProvenance
       | "TreeSitterElapsed" -> box (ts 11.0)
       | "FcsElapsed" -> box (ts 29.0)
       | "SessionId" -> box sessionId
-      | "InstrumentationMaps" -> box [||]
+      | "InstrumentationMaps" -> box (Array.empty<InstrumentationMap>)
       | "FilePath" -> box filePath
       | "AnalysisIdentity" -> box analysisIdentity
       | other -> failtestf "unexpected PendingRebuildState field %s" other)

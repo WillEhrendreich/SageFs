@@ -635,13 +635,22 @@ module SageFsUpdate =
     (model: SageFsModel)
     =
     let activeSessionId = activeLiveTestingSessionId model
+    let primaryCycleOwnsSession sid =
+      let cycle = model.LiveTesting
+      cycle.TestState.RunPhases |> Map.containsKey sid
+      || (cycle.TestState.TestSessionMap |> Map.exists (fun _ mappedSid -> mappedSid = sid))
+      || (cycle.PendingRebuild |> Option.exists (fun pending -> pending.SessionId = Some sid))
+      || (cycle.QueuedRebuild |> Option.exists (fun queued -> queued.SessionId = Some sid))
     match targetSession with
     | Some sid when activeSessionId = Some sid ->
       Some Primary
     | Some sid ->
       match model.PerSessionLiveTesting |> Map.containsKey sid with
       | true -> Some (Background sid)
-      | false -> None
+      | false ->
+          match activeSessionId with
+          | None when primaryCycleOwnsSession sid -> Some Primary
+          | _ -> None
     | None ->
       Some Primary
 
