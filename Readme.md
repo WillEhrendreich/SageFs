@@ -130,6 +130,8 @@ SageFs opens an interactive terminal. Then create a session for `YourProject.fsp
 
 ### 5. Enable live testing
 
+> ⚠️ **Work in progress** — live testing is functional but still being stabilized. You may encounter rough edges, especially around session switching and test discovery timing. We're actively improving it.
+
 Save any file → tests run automatically → green/red gutter markers appear.
 No configuration needed — SageFs discovers Expecto tests and runs them on every save.
 
