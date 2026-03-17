@@ -32,6 +32,18 @@ let private tryRecordFieldValue (fieldName: string) (value: obj) =
   |> Option.ofObj
   |> Option.map (fun p -> p.GetValue(value))
 
+let private tryOptionValue (value: obj) =
+  let ty = value.GetType()
+  let case, fields = FSharpValue.GetUnionFields(value, ty)
+  match case.Name with
+  | "Some" -> fields |> Array.tryHead
+  | "None" -> None
+  | other -> failtestf "expected option value, got %s" other
+
+let private tryQueuedRebuildValue (state: LiveTestCycleState) =
+  tryRecordFieldValue "QueuedRebuild" (box state)
+  |> Option.bind tryOptionValue
+
 // ── Test Data Helpers ──
 
 let private sampleTestCase =
@@ -50,10 +62,36 @@ let private pendingRebuildFor (generation: int64) (tests: TestCase array) (trigg
   { Generation = generation
     Tests = tests
     Trigger = trigger
+    FilePath = "Foo.fs"
+    AnalysisIdentity = None
     TreeSitterElapsed = ts 11.0
     FcsElapsed = ts 29.0
     SessionId = Some "test-session"
     InstrumentationMaps = [||] }
+
+let private pendingRebuildWithProvenance
+  (generation: int64)
+  (tests: TestCase array)
+  (trigger: RunTrigger)
+  (sessionId: string option)
+  (filePath: string)
+  (analysisIdentity: AnalysisIdentity option)
+  =
+  let values =
+    FSharpType.GetRecordFields(typeof<PendingRebuildState>)
+    |> Array.map (fun field ->
+      match field.Name with
+      | "Generation" -> box generation
+      | "Tests" -> box tests
+      | "Trigger" -> box trigger
+      | "TreeSitterElapsed" -> box (ts 11.0)
+      | "FcsElapsed" -> box (ts 29.0)
+      | "SessionId" -> box sessionId
+      | "InstrumentationMaps" -> box [||]
+      | "FilePath" -> box filePath
+      | "AnalysisIdentity" -> box analysisIdentity
+      | other -> failtestf "unexpected PendingRebuildState field %s" other)
+  FSharpValue.MakeRecord(typeof<PendingRebuildState>, values) :?> PendingRebuildState
 
 let private activeModelWithPending pending =
   { SageFsModel.initial() with
@@ -110,6 +148,15 @@ let rebuildCycleTests = testList "LiveTesting Rebuild Cycle" [
           "LiveTestCycleState must have PendingRebuild field to prevent test runs on stale code"
     }
 
+    test "LiveTestCycleState has QueuedRebuild field" {
+      // WHY: `RunningButEdited` says stale work is in flight, but it does
+      // not say what the latest owed compiled rebuild actually is. The
+      // queued rebuild intent makes that business fact explicit.
+      hasRecordField<LiveTestCycleState> "QueuedRebuild"
+      |> Expect.isTrue
+          "LiveTestCycleState must carry the latest queued rebuild intent so edits during a run are replayable instead of inferable"
+    }
+
     test "PendingRebuildState has Generation field" {
       // WHY: Cancellation is only a best-effort optimization. The model
       // still needs a semantic identity for each rebuild so stale
@@ -117,6 +164,23 @@ let rebuildCycleTests = testList "LiveTesting Rebuild Cycle" [
       hasRecordField<PendingRebuildState> "Generation"
       |> Expect.isTrue
           "PendingRebuildState must carry Generation so rebuild completions can be matched to the right request"
+    }
+
+    test "PendingRebuildState has FilePath field" {
+      // WHY: A pending rebuild without a source file is just a bag of tests.
+      // The model should remember which compiled file triggered the rebuild.
+      hasRecordField<PendingRebuildState> "FilePath"
+      |> Expect.isTrue
+          "PendingRebuildState must carry the source file path so rebuild intent keeps its provenance"
+    }
+
+    test "PendingRebuildState has AnalysisIdentity field" {
+      // WHY: Rebuild coalescing should be keyed to content truth, not just
+      // test lists. The pending rebuild must remember which analyzed content
+      // identity it came from.
+      hasRecordField<PendingRebuildState> "AnalysisIdentity"
+      |> Expect.isTrue
+          "PendingRebuildState must carry analysis identity so equivalent rebuild checks can stay content-aware"
     }
 
     test "SageFsMsg.RebuildCompleted carries generation identity" {
@@ -471,16 +535,16 @@ let rebuildCycleTests = testList "LiveTesting Rebuild Cycle" [
       |> Expect.isNone "the cancelled pipeline should stay cancelled after stale completion"
     }
 
-    test "successive rebuild intents receive increasing generations" {
-      // WHY: Token cancellation reduces wasted work, but generation is the
-      // semantic truth. Each new rebuild intent needs a higher identity so
-      // stale completions can be ignored deterministically in the Elm model.
+    test "equivalent failed type-check fallback preserves the current pending rebuild generation" {
+      // WHY: Repeating the same failed type-check while the same rebuild is
+      // already pending should not mint a brand-new generation and restart
+      // identical compilation work.
       let state =
         { LiveTestCycleState.empty with
             TestState = activeStateWith [| sampleTestCase |]
             LastTrigger = RunTrigger.FileSave }
 
-      let nextPendingGeneration state =
+      let pendingGeneration state =
         state.PendingRebuild
         |> Expect.isSome "fallback rebuild should store a pending rebuild"
         let pending = state.PendingRebuild.Value
@@ -495,25 +559,325 @@ let rebuildCycleTests = testList "LiveTesting Rebuild Cycle" [
           state
 
       let gen1 =
-        nextPendingGeneration state1
+        pendingGeneration state1
         |> Expect.isSome "first pending rebuild should expose a generation"
-      let gen1 = nextPendingGeneration state1 |> Option.get
+      let gen1 = pendingGeneration state1 |> Option.get
 
-      let _, state2 =
+      let effects2, state2 =
         LiveTestCycleState.handleFcsResult
           (FcsTypeCheckResult.Failed ("Foo.fs", ["syntax error"]))
           state1
 
       let gen2 =
-        nextPendingGeneration state2
-        |> Expect.isSome "second pending rebuild should expose a generation"
-      let gen2 = nextPendingGeneration state2 |> Option.get
+        pendingGeneration state2
+        |> Expect.isSome "equivalent fallback rebuild should keep exposing a generation"
+      let gen2 = pendingGeneration state2 |> Option.get
+
+      effects2
+      |> List.exists (fun effect -> unionCaseNameOf effect = "RequestRebuild")
+      |> Expect.isFalse
+          "equivalent failed type-check should not emit a replacement RequestRebuild while the same rebuild is already pending"
+
+      gen2
+      |> Expect.equal
+          "equivalent failed type-check should preserve the original pending rebuild generation"
+          gen1
+    }
+
+    test "equivalent successful type-check fallback preserves the current pending rebuild generation" {
+      // WHY: Duplicate successful FCS completions for unchanged compiled-file
+      // content should not replace an equivalent pending rebuild with a newer
+      // generation just because analysis completed twice.
+      let state =
+        { LiveTestCycleState.empty with
+            TestState = activeStateWith [| sampleTestCase |]
+            LastTrigger = RunTrigger.FileSave }
+
+      let pendingGeneration state =
+        state.PendingRebuild
+        |> Expect.isSome "fallback rebuild should store a pending rebuild"
+        let pending = state.PendingRebuild.Value
+        pending
+        |> fun pending ->
+            tryRecordFieldValue "Generation" pending
+            |> Option.map (fun value -> value :?> int64)
+
+      let _, state1 =
+        LiveTestCycleState.handleFcsResult
+          (FcsTypeCheckResult.Success ("Foo.fs", []))
+          state
+
+      let gen1 =
+        pendingGeneration state1
+        |> Expect.isSome "first pending rebuild should expose a generation"
+      let gen1 = pendingGeneration state1 |> Option.get
+
+      let effects2, state2 =
+        LiveTestCycleState.handleFcsResult
+          (FcsTypeCheckResult.Success ("Foo.fs", []))
+          state1
+
+      let gen2 =
+        pendingGeneration state2
+        |> Expect.isSome "equivalent successful fallback should keep exposing a generation"
+      let gen2 = pendingGeneration state2 |> Option.get
+
+      effects2
+      |> List.exists (fun effect -> unionCaseNameOf effect = "RequestRebuild")
+      |> Expect.isFalse
+          "equivalent successful type-check should not emit a replacement RequestRebuild while the same rebuild is already pending"
+
+      gen2
+      |> Expect.equal
+          "equivalent successful type-check should preserve the original pending rebuild generation"
+          gen1
+    }
+
+    test "failed type-check fallback records the file path and current analysis identity on the pending rebuild" {
+      // WHY: A pending rebuild should name the exact file and content truth it
+      // came from so later coalescing can distinguish stale work from fresh work.
+      let content = "module Foo\nlet value = 1"
+      let identity = AnalysisIdentity.ofContent content
+      let state =
+        { LiveTestCycleState.empty with
+            TestState = activeStateWith [| sampleTestCase |]
+            ActiveFile = Some "Foo.fs"
+            LatestContent = Some content
+            LatestAnalysisIdentity = Some identity
+            LastTrigger = RunTrigger.FileSave }
+
+      let _, state' =
+        LiveTestCycleState.handleFcsResult
+          (FcsTypeCheckResult.Failed ("Foo.fs", ["syntax error"]))
+          state
+
+      let pending =
+        state'.PendingRebuild
+        |> Expect.wantSome "failed type-check fallback should still create a pending rebuild"
+
+      let pendingFilePath =
+        tryRecordFieldValue "FilePath" pending
+        |> Expect.wantSome "pending rebuild should carry the source file path"
+      let pendingFilePath = pendingFilePath :?> string
+
+      let pendingAnalysisIdentity =
+        tryRecordFieldValue "AnalysisIdentity" pending
+        |> Expect.wantSome "pending rebuild should carry the current analysis identity"
+
+      pendingFilePath
+      |> Expect.equal "pending rebuild should remember which file failed type-checking" "Foo.fs"
+
+      pendingAnalysisIdentity
+      |> Expect.equal
+          "pending rebuild should preserve the current analysis identity"
+          (box (Some identity))
+    }
+
+    test "equivalent rebuild suppression does not collapse fresh content identity into the older pending rebuild" {
+      // WHY: Two rebuild intents can target the same tests, trigger, and
+      // session while still representing different source truth. Fresh content
+      // must mint a new rebuild instead of being swallowed by older pending work.
+      let oldContent = "module Foo\nlet value = 1"
+      let newContent = "module Foo\nlet value = 2"
+      let oldIdentity = AnalysisIdentity.ofContent oldContent
+      let newIdentity = AnalysisIdentity.ofContent newContent
+      let pending =
+        pendingRebuildWithProvenance
+          1L
+          [| sampleTestCase |]
+          RunTrigger.FileSave
+          None
+          "Foo.fs"
+          (Some oldIdentity)
+      let state =
+        { LiveTestCycleState.empty with
+            TestState = activeStateWith [| sampleTestCase |]
+            ActiveFile = Some "Foo.fs"
+            LatestContent = Some newContent
+            LatestAnalysisIdentity = Some newIdentity
+            LastTrigger = RunTrigger.FileSave
+            NextRebuildGeneration = pending.Generation
+            PendingRebuild = Some pending }
+
+      let effects, state' =
+        LiveTestCycleState.handleFcsResult
+          (FcsTypeCheckResult.Failed ("Foo.fs", ["syntax error after fresh edit"]))
+          state
+
+      effects
+      |> List.exists (fun effect -> unionCaseNameOf effect = "RequestRebuild")
+      |> Expect.isTrue
+          "fresh content identity should emit a replacement RequestRebuild instead of being treated as equivalent pending work"
+
+      let nextGeneration =
+        state'.PendingRebuild
+        |> Expect.wantSome "fresh content identity should replace the pending rebuild"
+        |> fun nextPending -> nextPending.Generation
+
+      (nextGeneration > pending.Generation)
+      |> Expect.isTrue
+          "fresh content identity should mint a newer rebuild generation than the stale pending rebuild"
+    }
+
+    test "compiled edit during an in-flight test run stores the latest rebuild intent instead of dropping it" {
+      // WHY: When compiled tests are already running, a fresh edit should
+      // still produce owed rebuild work. Dropping that intent means the
+      // newest code can finish the old run and then never get tested.
+      let generation = RunGeneration.next RunGeneration.zero
+      let content = "module Foo\nlet value = 1"
+      let identity = AnalysisIdentity.ofContent content
+      let state =
+        { LiveTestCycleState.empty with
+            TestState =
+              { activeStateWith [| sampleTestCase |] with
+                  RunPhases = Map.ofList [ "test-session", Running generation ]
+                  LastGeneration = generation
+                  TestSessionMap = Map.ofList [ sampleTestCase.Id, "test-session" ] }
+            ActiveFile = Some "Foo.fs"
+            LatestContent = Some content
+            LatestAnalysisIdentity = Some identity
+            LastTrigger = RunTrigger.FileSave }
+
+      let effects, state' =
+        LiveTestCycleState.handleFcsResult
+          (FcsTypeCheckResult.Failed ("Foo.fs", [ "syntax error" ]))
+          state
+
+      effects
+      |> Expect.isEmpty
+          "running compiled tests should defer the rebuild instead of emitting it immediately"
+
+      state'.PendingRebuild
+      |> Expect.isNone
+          "deferring rebuild work must not pretend a rebuild is already in flight"
+
+      let queued =
+        tryQueuedRebuildValue state'
+        |> Expect.wantSome "running compiled tests should store the latest queued rebuild intent"
+
+      tryRecordFieldValue "FilePath" queued
+      |> Expect.wantSome "queued rebuild should remember which file triggered it"
+      |> fun value -> value :?> string
+      |> Expect.equal "queued rebuild should keep the triggering file path" "Foo.fs"
+
+      tryRecordFieldValue "AnalysisIdentity" queued
+      |> Expect.wantSome "queued rebuild should preserve the current content identity"
+      |> Expect.equal "queued rebuild should point at the current analyzed content" (box (Some identity))
+
+      tryRecordFieldValue "SessionId" queued
+      |> Expect.wantSome "queued rebuild should preserve session ownership"
+      |> Expect.equal "queued rebuild should target the running session that owes fresh work" (box (Some "test-session"))
+    }
+
+    test "multiple edits during one running session keep only the newest compiled rebuild intent" {
+      // WHY: A queued rebuild describes the latest analyzed code we still
+      // owe a run for. The next edit invalidates that intent until fresh
+      // analysis arrives, and the replacement intent must describe the new
+      // content instead of replaying the older one.
+      let generation = RunGeneration.next RunGeneration.zero
+      let content1 = "module Foo\nlet value = 1"
+      let content2 = "module Foo\nlet value = 2"
+      let identity1 = AnalysisIdentity.ofContent content1
+      let identity2 = AnalysisIdentity.ofContent content2
+      let state =
+        { LiveTestCycleState.empty with
+            TestState =
+              { activeStateWith [| sampleTestCase |] with
+                  RunPhases = Map.ofList [ "test-session", Running generation ]
+                  LastGeneration = generation
+                  TestSessionMap = Map.ofList [ sampleTestCase.Id, "test-session" ] }
+            ActiveFile = Some "Foo.fs"
+            LatestContent = Some content1
+            LatestAnalysisIdentity = Some identity1
+            LastTrigger = RunTrigger.FileSave }
+
+      let _, afterFirstAnalysis =
+        LiveTestCycleState.handleFcsResult
+          (FcsTypeCheckResult.Failed ("Foo.fs", [ "first syntax error" ]))
+          state
+
+      let firstQueued =
+        tryQueuedRebuildValue afterFirstAnalysis
+        |> Expect.wantSome "first analysis should queue rebuild work for the first content version"
+
+      tryRecordFieldValue "AnalysisIdentity" firstQueued
+      |> Expect.wantSome "first queued rebuild should preserve the first content identity"
+      |> Expect.equal "first queued rebuild should describe the first analyzed content" (box (Some identity1))
+
+      let afterSecondEdit =
+        afterFirstAnalysis
+        |> LiveTestCycleState.onFileSaveWithContent content2 "Foo.fs" DateTimeOffset.UtcNow
+
+      tryQueuedRebuildValue afterSecondEdit
+      |> Expect.isNone
+          "a fresh edit should clear the stale queued rebuild until fresh analysis for the newer content arrives"
+
+      let effects, afterSecondAnalysis =
+        LiveTestCycleState.handleFcsResult
+          (FcsTypeCheckResult.Failed ("Foo.fs", [ "second syntax error" ]))
+          afterSecondEdit
+
+      effects
+      |> Expect.isEmpty
+          "the newer content should still defer rebuild execution while the old run is in flight"
+
+      let secondQueued =
+        tryQueuedRebuildValue afterSecondAnalysis
+        |> Expect.wantSome "fresh analysis should replace the stale queued rebuild with the newest intent"
+
+      tryRecordFieldValue "AnalysisIdentity" secondQueued
+      |> Expect.wantSome "replacement queued rebuild should preserve the new content identity"
+      |> Expect.equal "replacement queued rebuild should describe the latest analyzed content" (box (Some identity2))
+    }
+
+    test "distinct rebuild intents still receive increasing generations" {
+      // WHY: Coalescing only applies to semantically identical work. Once a
+      // fresh save invalidates the pending rebuild, the next rebuild intent
+      // must still get a higher generation.
+      let now = DateTimeOffset.UtcNow
+      let state =
+        { LiveTestCycleState.empty with
+            TestState = activeStateWith [| sampleTestCase |]
+            LastTrigger = RunTrigger.FileSave }
+
+      let pendingGeneration state =
+        state.PendingRebuild
+        |> Expect.isSome "fallback rebuild should store a pending rebuild"
+        let pending = state.PendingRebuild.Value
+        pending
+        |> fun pending ->
+            tryRecordFieldValue "Generation" pending
+            |> Option.map (fun value -> value :?> int64)
+
+      let _, state1 =
+        LiveTestCycleState.handleFcsResult
+          (FcsTypeCheckResult.Failed ("Foo.fs", ["syntax error"]))
+          state
+
+      let gen1 =
+        pendingGeneration state1
+        |> Expect.isSome "first pending rebuild should expose a generation"
+      let gen1 = pendingGeneration state1 |> Option.get
+
+      let state2 =
+        state1
+        |> LiveTestCycleState.onFileSave "Foo.fs" now
+
+      let _, state3 =
+        LiveTestCycleState.handleFcsResult
+          (FcsTypeCheckResult.Failed ("Foo.fs", ["syntax error after a fresh save"]))
+          state2
+
+      let gen2 =
+        pendingGeneration state3
+        |> Expect.isSome "distinct rebuild intent should expose a generation"
+      let gen2 = pendingGeneration state3 |> Option.get
 
       gen1
       |> Expect.equal "first rebuild generation should start at 1" 1L
 
       (gen2 > gen1)
-      |> Expect.isTrue "newer rebuild intents should always get a higher generation"
+      |> Expect.isTrue "newer distinct rebuild intents should still get a higher generation"
     }
 
     test "RebuildCompleted with stale generation is ignored while newer PendingRebuild remains" {

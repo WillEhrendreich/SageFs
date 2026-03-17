@@ -811,6 +811,164 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
     |> Expect.equal "completion should clear the pending result accumulator" 0
     effects |> Expect.isEmpty "run completion only updates model state"
 
+  testCase "TestRunCompleted after RunningButEdited emits RequestRebuild for the latest affected compiled tests" <| fun _ ->
+    let sid = "aa000001"
+    let session = {
+      Id = testSessionId sid
+      Name = None
+      Projects = []
+      Status = SessionDisplayStatus.Running
+      LastActivity = DateTime.UtcNow
+      EvalCount = 0
+      UpSince = DateTime.UtcNow
+      IsActive = true
+      WorkingDirectory = "." }
+    let discovered = [|
+      mkLiveTestCase "test.replay.active" "SageFs.Tests.Replay.active" "replay-active"
+    |]
+    let generation = RunGeneration.next RunGeneration.zero
+    let content = "module Replay\nlet value = 1"
+    let identity = AnalysisIdentity.ofContent content
+    let model = {
+      (SageFsModel.initial()) with
+        Sessions = {
+          (SageFsModel.initial()).Sessions with
+            Sessions = [ session ]
+            ActiveSessionId = ActiveSession.Viewing (testSessionId sid) }
+        LiveTesting =
+          { LiveTestCycleState.empty with
+              TestState =
+                { LiveTestState.empty with
+                    Activation = LiveTestingActivation.Active
+                    DiscoveredTests = discovered
+                    RunPhases = Map.ofList [ sid, RunningButEdited generation ]
+                    LastGeneration = generation
+                    TestSessionMap = Map.ofList [ discovered.[0].Id, sid ] }
+              ActiveFile = Some "Replay.fs"
+              LatestContent = Some content
+              LatestAnalysisIdentity = Some identity
+              LastTrigger = RunTrigger.FileSave } }
+
+    let afterAnalysis, analysisEffects =
+      SageFsUpdate.update
+        (SageFsMsg.FcsTypeCheckCompleted (Some sid, Some identity, FcsTypeCheckResult.Failed ("Replay.fs", [ "syntax error" ])))
+        model
+
+    analysisEffects
+    |> Expect.isEmpty
+        "an edit that arrives during a running compiled test pass should queue rebuild work instead of emitting it immediately"
+
+    afterAnalysis.LiveTesting.PendingRebuild
+    |> Expect.isNone
+        "queueing owed rebuild work must not pretend a rebuild has already started"
+
+    let afterComplete, effects =
+      SageFsUpdate.update
+        (SageFsMsg.Event (SageFsEvent.TestRunCompleted (Some sid)))
+        afterAnalysis
+
+    let pending =
+      afterComplete.LiveTesting.PendingRebuild
+      |> Expect.wantSome "completing the stale run should promote the queued rebuild into a real pending rebuild"
+
+    pending.SessionId
+    |> Expect.equal "replayed rebuild should stay scoped to the owning session" (Some sid)
+    pending.Tests
+    |> Expect.equal "replayed rebuild should keep the queued affected tests" discovered
+
+    match effects with
+    | [ SageFsEffect.TestCycle (TestCycleEffect.RequestRebuild (generation, tests, trigger, _, _, targetSession, _)) ] ->
+        generation
+        |> Expect.equal "replayed rebuild should use the pending rebuild generation it just minted" pending.Generation
+        tests
+        |> Expect.equal "completion should replay the latest affected compiled tests" discovered
+        trigger
+        |> Expect.equal "completion should preserve the save trigger that discovered the owed work" RunTrigger.FileSave
+        targetSession
+        |> Expect.equal "completion should replay against the owning session" (Some sid)
+    | other ->
+        failtestf "expected RequestRebuild after stale run completion, got %A" other
+
+  testCase "background session completion replays only that session's queued compiled rebuild intent" <| fun _ ->
+    let mkSnap id active = {
+      Id = testSessionId id
+      Name = None
+      Projects = []
+      Status = SessionDisplayStatus.Running
+      LastActivity = DateTime.UtcNow
+      EvalCount = 0
+      UpSince = DateTime.UtcNow
+      IsActive = active
+      WorkingDirectory = "." }
+    let primarySid = "aa000001"
+    let backgroundSid = "aa000002"
+    let backgroundTests = [|
+      mkLiveTestCase "test.replay.background" "SageFs.Tests.Replay.background" "replay-background"
+    |]
+    let generation = RunGeneration.next RunGeneration.zero
+    let content = "module Replay\nlet value = 2"
+    let identity = AnalysisIdentity.ofContent content
+    let primaryState =
+      { LiveTestCycleState.empty with
+          LastTrigger = RunTrigger.Keystroke }
+    let backgroundState =
+      { LiveTestCycleState.empty with
+          TestState =
+            { LiveTestState.empty with
+                Activation = LiveTestingActivation.Active
+                DiscoveredTests = backgroundTests
+                RunPhases = Map.ofList [ backgroundSid, RunningButEdited generation ]
+                LastGeneration = generation
+                TestSessionMap = Map.ofList [ backgroundTests.[0].Id, backgroundSid ] }
+          ActiveFile = Some "Background.fs"
+          LatestContent = Some content
+          LatestAnalysisIdentity = Some identity
+          LastTrigger = RunTrigger.FileSave }
+    let model = {
+      (SageFsModel.initial()) with
+        Sessions = {
+          (SageFsModel.initial()).Sessions with
+            Sessions = [ mkSnap primarySid true; mkSnap backgroundSid false ]
+            ActiveSessionId = ActiveSession.Viewing (testSessionId primarySid) }
+        LiveTesting = primaryState
+        PerSessionLiveTesting = Map.ofList [ backgroundSid, backgroundState ] }
+
+    let afterAnalysis, analysisEffects =
+      SageFsUpdate.update
+        (SageFsMsg.FcsTypeCheckCompleted (Some backgroundSid, Some identity, FcsTypeCheckResult.Failed ("Background.fs", [ "syntax error" ])))
+        model
+
+    analysisEffects
+    |> Expect.isEmpty
+        "background queued rebuild work should also wait until the stale run finishes"
+
+    let afterComplete, effects =
+      SageFsUpdate.update
+        (SageFsMsg.Event (SageFsEvent.TestRunCompleted (Some backgroundSid)))
+        afterAnalysis
+
+    afterComplete.LiveTesting.PendingRebuild
+    |> Expect.isNone
+        "background completion must not promote queued rebuild work onto the active primary session"
+
+    let backgroundPending =
+      afterComplete.PerSessionLiveTesting
+      |> Map.find backgroundSid
+      |> fun cycle -> cycle.PendingRebuild
+      |> Expect.wantSome "background completion should promote only that session's queued rebuild"
+
+    backgroundPending.SessionId
+    |> Expect.equal "background replay should keep its own session ownership" (Some backgroundSid)
+
+    match effects with
+    | [ SageFsEffect.TestCycle (TestCycleEffect.RequestRebuild (_, tests, _, _, _, targetSession, _)) ] ->
+        tests
+        |> Expect.equal "background completion should replay the queued background tests only" backgroundTests
+        targetSession
+        |> Expect.equal "background completion should emit RequestRebuild for the background session only" (Some backgroundSid)
+    | other ->
+        failtestf "expected one background RequestRebuild after completion, got %A" other
+
   testCase "EnableLiveTesting preserves status entries while still triggering follow-up work, and DisableLiveTesting stays quiet" <| fun _ ->
     let discovered = [|
       mkLiveTestCase "test.activation.a" "SageFs.Tests.Activation.tests/a" "activation-a"
@@ -1572,6 +1730,8 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
           [| mkTestCase "MyTests.test1"
              mkTestCase "MyTests.test2" |]
         Trigger = RunTrigger.Keystroke
+        FilePath = "Background.fs"
+        AnalysisIdentity = None
         TreeSitterElapsed = TimeSpan.FromMilliseconds 5.0
         FcsElapsed = TimeSpan.FromMilliseconds 10.0
         SessionId = Some "aa000002"
@@ -1598,6 +1758,81 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
     |> Expect.stringContains
       "promoted session should keep the rebuilding banner so the active UI stays truthful"
       "🔨 Rebuilding 2 tests"
+
+  testCase "SessionSwitched preserves both sessions' pending rebuild identities when parking and promoting live-testing state" <| fun _ ->
+    let mkSnap id active = {
+      Id = id; Name = None; Projects = []
+      Status = SessionDisplayStatus.Running
+      LastActivity = DateTime.UtcNow; EvalCount = 0
+      UpSince = DateTime.UtcNow; IsActive = active; WorkingDirectory = "." }
+    let mkTestCase name =
+      { Id = TestId.create name TestFramework.Expecto
+        FullName = name
+        DisplayName = name
+        Origin = TestOrigin.ReflectionOnly
+        Labels = []
+        Framework = TestFramework.Expecto
+        Category = TestCategory.Unit }
+    let pendingA = {
+      Generation = 3L
+      Tests = [| mkTestCase "SessionA.Tests.pending" |]
+      Trigger = RunTrigger.FileSave
+      FilePath = "SessionA.fs"
+      AnalysisIdentity = None
+      TreeSitterElapsed = TimeSpan.FromMilliseconds 2.0
+      FcsElapsed = TimeSpan.FromMilliseconds 4.0
+      SessionId = Some "aa000001"
+      InstrumentationMaps = [||] }
+    let pendingB = {
+      Generation = 7L
+      Tests = [| mkTestCase "SessionB.Tests.pending" |]
+      Trigger = RunTrigger.Keystroke
+      FilePath = "SessionB.fs"
+      AnalysisIdentity = None
+      TreeSitterElapsed = TimeSpan.FromMilliseconds 3.0
+      FcsElapsed = TimeSpan.FromMilliseconds 6.0
+      SessionId = Some "aa000002"
+      InstrumentationMaps = [||] }
+    let stateA =
+      { LiveTestCycleState.empty with
+          LastTrigger = RunTrigger.FileSave
+          NextRebuildGeneration = pendingA.Generation
+          PendingRebuild = Some pendingA }
+    let stateB =
+      { LiveTestCycleState.empty with
+          LastTrigger = RunTrigger.Keystroke
+          NextRebuildGeneration = pendingB.Generation
+          PendingRebuild = Some pendingB }
+    let model = {
+      (SageFsModel.initial()) with
+        Sessions = {
+          (SageFsModel.initial()).Sessions with
+            Sessions = [mkSnap (testSessionId "aa000001") true; mkSnap (testSessionId "aa000002") false]
+            ActiveSessionId = ActiveSession.Viewing (testSessionId "aa000001") }
+        LiveTesting = stateA
+        PerSessionLiveTesting = Map.ofList [ "aa000002", stateB ] }
+    let newModel, _ =
+      SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.SessionSwitched (Some "aa000001", "aa000002"))) model
+
+    let promotedPending =
+      newModel.LiveTesting.PendingRebuild
+      |> Expect.wantSome "promoted session should keep its pending rebuild"
+
+    promotedPending.Generation
+    |> Expect.equal "promoted session should keep its rebuild generation" pendingB.Generation
+    promotedPending.SessionId
+    |> Expect.equal "promoted session should keep its target session id" pendingB.SessionId
+
+    let parkedPending =
+      newModel.PerSessionLiveTesting
+      |> Map.find "aa000001"
+      |> fun cycle -> cycle.PendingRebuild
+      |> Expect.wantSome "parked primary session should keep its pending rebuild"
+
+    parkedPending.Generation
+    |> Expect.equal "parked primary session should keep its rebuild generation" pendingA.Generation
+    parkedPending.SessionId
+    |> Expect.equal "parked primary session should keep its target session id" pendingA.SessionId
 
   testCase "SessionSwitched does not emit live-testing effects" <| fun _ ->
     let mkSnap id active = {

@@ -1266,41 +1266,48 @@ module SageFsUpdate =
         applyBufferedTestResults [ results ] model
 
       | SageFsEvent.TestRunCompleted sessionId ->
-        let priorState = model.LiveTesting.TestState
-        let changedIds = priorState.AffectedTests
-        let updatedState =
-          let phases =
-            match sessionId with
-            | Some sid -> priorState.RunPhases |> Map.add sid Features.LiveTesting.TestRunPhase.Idle
-            | None -> priorState.RunPhases
-          { priorState with AffectedTests = Set.empty; RunPhases = phases }
-        let lt =
-          match Array.isEmpty priorState.StatusEntries with
-          | true ->
-            finalizeLiveTestingState
-              LiveTestingStatusRefresh.Recompute
-              model.LiveTesting
-              updatedState
-            |> fst
-          | false ->
-            let patchedState, changedEntries =
-              Features.LiveTesting.LiveTesting.patchStatusEntriesForChangedIds
-                priorState
-                updatedState
-                changedIds
-            finalizeLiveTestingState
-              (LiveTestingStatusRefresh.PatchChangedEntries changedEntries)
-              model.LiveTesting
-              patchedState
-            |> fst
+        let model', replayEffects =
+          tryUpdateLiveTestingState sessionId (fun cycle ->
+            let priorState = cycle.TestState
+            let changedIds = priorState.AffectedTests
+            let updatedState =
+              let phases =
+                match sessionId with
+                | Some sid -> priorState.RunPhases |> Map.add sid Features.LiveTesting.TestRunPhase.Idle
+                | None -> priorState.RunPhases
+              { priorState with AffectedTests = Set.empty; RunPhases = phases }
+            let cycle' =
+              match Array.isEmpty priorState.StatusEntries with
+              | true ->
+                finalizeLiveTestingState
+                  LiveTestingStatusRefresh.Recompute
+                  cycle
+                  updatedState
+                |> fst
+              | false ->
+                let patchedState, changedEntries =
+                  Features.LiveTesting.LiveTesting.patchStatusEntriesForChangedIds
+                    priorState
+                    updatedState
+                    changedIds
+                finalizeLiveTestingState
+                  (LiveTestingStatusRefresh.PatchChangedEntries changedEntries)
+                  cycle
+                  patchedState
+                |> fst
+            let replayEffects, cycle'' =
+              Features.LiveTesting.LiveTestCycleState.promoteQueuedRebuild sessionId cycle'
+            cycle'', replayEffects) model
         let summary =
-          model.PendingTestResults
+          model'.PendingTestResults
           |> PendingTestResultBuffer.toArray
           |> TestOutputFormatter.summaryLine
-        { model with
-            LiveTesting = lt
+        { model' with
             PendingTestResults = PendingTestResultBuffer.empty
-            RecentOutput = SageFsModel.addOutputLine summary model.RecentOutput }, []
+            RecentOutput = SageFsModel.addOutputLine summary model'.RecentOutput },
+        replayEffects
+        |> Option.defaultValue []
+        |> List.map SageFsEffect.TestCycle
 
       | SageFsEvent.LiveTestingEnabled ->
         let lt =
@@ -1557,27 +1564,34 @@ module SageFsUpdate =
           let now = DateTimeOffset.UtcNow
           match targetSession with
           | Some sid when activeLiveTestingSessionId model = Some sid ->
-            let current = model.LiveTesting
-            let cycle' = current |> Features.LiveTesting.LiveTestCycleState.onKeystroke content filePath now
-            { model with LiveTesting = cycle' }, pendingRebuildCancellationEffects current
-          | Some sid ->
-            let sessionExists =
-              model.Sessions.Sessions
-              |> List.exists (fun session -> SessionId.value session.Id = sid)
-            match sessionExists with
-            | false -> model, []
-            | true ->
-              let current =
-                model.PerSessionLiveTesting
-                |> Map.tryFind sid
-                |> Option.defaultValue Features.LiveTesting.LiveTestCycleState.empty
+              let current = model.LiveTesting
               let cycle' = current |> Features.LiveTesting.LiveTestCycleState.onKeystroke content filePath now
-              { model with PerSessionLiveTesting = model.PerSessionLiveTesting |> Map.add sid cycle' },
-              pendingRebuildCancellationEffects current
+              match obj.ReferenceEquals(cycle', current) with
+              | true -> model, []
+              | false -> { model with LiveTesting = cycle' }, pendingRebuildCancellationEffects current
+          | Some sid ->
+              let sessionExists =
+                model.Sessions.Sessions
+                |> List.exists (fun session -> SessionId.value session.Id = sid)
+              match sessionExists with
+              | false -> model, []
+              | true ->
+                  let current =
+                    model.PerSessionLiveTesting
+                    |> Map.tryFind sid
+                    |> Option.defaultValue Features.LiveTesting.LiveTestCycleState.empty
+                  let cycle' = current |> Features.LiveTesting.LiveTestCycleState.onKeystroke content filePath now
+                  match obj.ReferenceEquals(cycle', current) with
+                  | true -> model, []
+                  | false ->
+                      { model with PerSessionLiveTesting = model.PerSessionLiveTesting |> Map.add sid cycle' },
+                      pendingRebuildCancellationEffects current
           | None ->
-            let current = model.LiveTesting
-            let cycle' = current |> Features.LiveTesting.LiveTestCycleState.onKeystroke content filePath now
-            { model with LiveTesting = cycle' }, pendingRebuildCancellationEffects current
+              let current = model.LiveTesting
+              let cycle' = current |> Features.LiveTesting.LiveTestCycleState.onKeystroke content filePath now
+              match obj.ReferenceEquals(cycle', current) with
+              | true -> model, []
+              | false -> { model with LiveTesting = cycle' }, pendingRebuildCancellationEffects current
 
     | SageFsMsg.FileContentChanged (filePath, content) ->
       let isActive = model.LiveTesting.TestState.Activation = Features.LiveTesting.LiveTestingActivation.Active
@@ -1595,14 +1609,18 @@ module SageFsUpdate =
           // No session owns this file — update the primary (active) session
           let current = model.LiveTesting
           let cycle' = current |> Features.LiveTesting.LiveTestCycleState.onFileSaveWithContent content filePath now
-          { model with LiveTesting = cycle' }, pendingRebuildCancellationEffects current
+          match obj.ReferenceEquals(cycle', current) with
+          | true -> model, []
+          | false -> { model with LiveTesting = cycle' }, pendingRebuildCancellationEffects current
         | Some s ->
           match model.Sessions.ActiveSessionId with
           | ActiveSession.Viewing activeId when activeId = s.Id ->
             // File belongs to the active session — update primary
             let current = model.LiveTesting
             let cycle' = current |> Features.LiveTesting.LiveTestCycleState.onFileSaveWithContent content filePath now
-            { model with LiveTesting = cycle' }, pendingRebuildCancellationEffects current
+            match obj.ReferenceEquals(cycle', current) with
+            | true -> model, []
+            | false -> { model with LiveTesting = cycle' }, pendingRebuildCancellationEffects current
           | _ ->
             // File belongs to a background session — update per-session state
             let sid = SessionId.value s.Id
@@ -1611,8 +1629,11 @@ module SageFsUpdate =
               |> Map.tryFind sid
               |> Option.defaultValue Features.LiveTesting.LiveTestCycleState.empty
             let cycle' = current |> Features.LiveTesting.LiveTestCycleState.onFileSaveWithContent content filePath now
-            { model with PerSessionLiveTesting = model.PerSessionLiveTesting |> Map.add sid cycle' },
-            pendingRebuildCancellationEffects current
+            match obj.ReferenceEquals(cycle', current) with
+            | true -> model, []
+            | false ->
+                { model with PerSessionLiveTesting = model.PerSessionLiveTesting |> Map.add sid cycle' },
+                pendingRebuildCancellationEffects current
 
     | SageFsMsg.FcsTypeCheckCompleted (targetSession, analysisIdentity, result) ->
       let model', maybeEffects =

@@ -3264,6 +3264,19 @@ type PendingRebuildState = {
   Generation: int64
   Tests: TestCase array
   Trigger: RunTrigger
+  FilePath: string
+  AnalysisIdentity: AnalysisIdentity option
+  TreeSitterElapsed: System.TimeSpan
+  FcsElapsed: System.TimeSpan
+  SessionId: string option
+  InstrumentationMaps: InstrumentationMap array
+}
+
+type QueuedRebuildState = {
+  Tests: TestCase array
+  Trigger: RunTrigger
+  FilePath: string
+  AnalysisIdentity: AnalysisIdentity option
   TreeSitterElapsed: System.TimeSpan
   FcsElapsed: System.TimeSpan
   SessionId: string option
@@ -3289,6 +3302,7 @@ type LiveTestCycleState = {
   InstrumentationMaps: Map<string, InstrumentationMap array>
   NextRebuildGeneration: int64
   PendingRebuild: PendingRebuildState option
+  QueuedRebuild: QueuedRebuildState option
 }
 
 module LiveTestCycleState =
@@ -3308,6 +3322,7 @@ module LiveTestCycleState =
     InstrumentationMaps = Map.empty
     NextRebuildGeneration = 0L
     PendingRebuild = None
+    QueuedRebuild = None
   }
 
   let liveTestingStatusBarForSession (activeSessionId: string) (state: LiveTestCycleState) : string =
@@ -3337,20 +3352,29 @@ module LiveTestCycleState =
   let currentFcsDelay (s: LiveTestCycleState) =
     AdaptiveDebounce.currentFcsDelay s.AdaptiveDebounce
 
+  let private isEquivalentKeystroke (content: string) (filePath: string) (s: LiveTestCycleState) =
+    s.LastTrigger = RunTrigger.Keystroke
+    && s.ActiveFile = Some filePath
+    && s.LatestContent = Some content
+
   let onKeystroke (content: string) (filePath: string) (now: DateTimeOffset) (s: LiveTestCycleState) =
-    let fcsDelay = int (currentFcsDelay s / 1.0<ms>) * 1<ms>
-    let db = s.Debounce |> TestCycleDebounce.onKeystroke content filePath fcsDelay now
-    let analysisIdentity = AnalysisIdentity.ofContent content
-    // When edits arrive while tests are running, mark phase as edited so in-flight results are stale.
-    let ts = { s.TestState with RunPhases = s.TestState.RunPhases |> Map.map (fun _ p -> TestRunPhase.onEdit p) }
-    { s with
-        Debounce = db
-        TestState = ts
-        ActiveFile = Some filePath
-        LatestContent = Some content
-        LatestAnalysisIdentity = Some analysisIdentity
-        LastTrigger = RunTrigger.Keystroke
-        PendingRebuild = None }
+    match isEquivalentKeystroke content filePath s with
+    | true -> s
+    | false ->
+        let fcsDelay = int (currentFcsDelay s / 1.0<ms>) * 1<ms>
+        let db = s.Debounce |> TestCycleDebounce.onKeystroke content filePath fcsDelay now
+        let analysisIdentity = AnalysisIdentity.ofContent content
+        // When edits arrive while tests are running, mark phase as edited so in-flight results are stale.
+        let ts = { s.TestState with RunPhases = s.TestState.RunPhases |> Map.map (fun _ p -> TestRunPhase.onEdit p) }
+        { s with
+            Debounce = db
+            TestState = ts
+            ActiveFile = Some filePath
+            LatestContent = Some content
+            LatestAnalysisIdentity = Some analysisIdentity
+            LastTrigger = RunTrigger.Keystroke
+            PendingRebuild = None
+            QueuedRebuild = None }
 
   let onFileSave (filePath: string) (now: DateTimeOffset) (s: LiveTestCycleState) =
     let db = s.Debounce |> TestCycleDebounce.onFileSave filePath now
@@ -3362,27 +3386,37 @@ module LiveTestCycleState =
         LatestContent = None
         LatestAnalysisIdentity = None
         LastTrigger = RunTrigger.FileSave
-        PendingRebuild = None }
+        PendingRebuild = None
+        QueuedRebuild = None }
+
+  let private isEquivalentSavedContent (content: string) (filePath: string) (s: LiveTestCycleState) =
+    s.LastTrigger = RunTrigger.FileSave
+    && s.ActiveFile = Some filePath
+    && s.LatestContent = Some content
 
   let onFileSaveWithContent (content: string) (filePath: string) (now: DateTimeOffset) (s: LiveTestCycleState) =
-    let db =
-      s.Debounce
-      |> TestCycleDebounce.onFileSave filePath now
-      |> fun debounce ->
-        { debounce with
-            TreeSitter =
-              debounce.TreeSitter
-              |> DebounceChannel.submit content TestCycleDebounce.treeSitterDelayMs now }
-    let analysisIdentity = AnalysisIdentity.ofContent content
-    let ts = { s.TestState with RunPhases = s.TestState.RunPhases |> Map.map (fun _ p -> TestRunPhase.onEdit p) }
-    { s with
-        Debounce = db
-        TestState = ts
-        ActiveFile = Some filePath
-        LatestContent = Some content
-        LatestAnalysisIdentity = Some analysisIdentity
-        LastTrigger = RunTrigger.FileSave
-        PendingRebuild = None }
+    match isEquivalentSavedContent content filePath s with
+    | true -> s
+    | false ->
+        let db =
+          s.Debounce
+          |> TestCycleDebounce.onFileSave filePath now
+          |> fun debounce ->
+            { debounce with
+                TreeSitter =
+                  debounce.TreeSitter
+                  |> DebounceChannel.submit content TestCycleDebounce.treeSitterDelayMs now }
+        let analysisIdentity = AnalysisIdentity.ofContent content
+        let ts = { s.TestState with RunPhases = s.TestState.RunPhases |> Map.map (fun _ p -> TestRunPhase.onEdit p) }
+        { s with
+            Debounce = db
+            TestState = ts
+            ActiveFile = Some filePath
+            LatestContent = Some content
+            LatestAnalysisIdentity = Some analysisIdentity
+            LastTrigger = RunTrigger.FileSave
+            PendingRebuild = None
+            QueuedRebuild = None }
 
   let onFcsComplete (filePath: string) (refs: SymbolReference list) (s: LiveTestCycleState) =
     let changes, newCache = FileAnalysisCache.update filePath refs s.AnalysisCache
@@ -3405,6 +3439,40 @@ module LiveTestCycleState =
     s.PendingRebuild
     |> Option.map (fun pending ->
       TestCycleEffect.CancelRebuild(pending.SessionId, pending.Generation))
+
+  let promoteQueuedRebuild (targetSession: string option) (s: LiveTestCycleState) =
+    match s.QueuedRebuild with
+    | Some queued
+        when queued.SessionId = targetSession
+             && queued.AnalysisIdentity = s.LatestAnalysisIdentity ->
+        let generation = s.NextRebuildGeneration + 1L
+        let pending = {
+          Generation = generation
+          Tests = queued.Tests
+          Trigger = queued.Trigger
+          FilePath = queued.FilePath
+          AnalysisIdentity = queued.AnalysisIdentity
+          TreeSitterElapsed = queued.TreeSitterElapsed
+          FcsElapsed = queued.FcsElapsed
+          SessionId = queued.SessionId
+          InstrumentationMaps = queued.InstrumentationMaps
+        }
+        [ TestCycleEffect.RequestRebuild(
+            generation,
+            pending.Tests,
+            pending.Trigger,
+            pending.TreeSitterElapsed,
+            pending.FcsElapsed,
+            pending.SessionId,
+            pending.InstrumentationMaps) ],
+        { s with
+            NextRebuildGeneration = generation
+            PendingRebuild = Some pending
+            QueuedRebuild = None }
+    | Some queued when queued.SessionId = targetSession ->
+        [], { s with QueuedRebuild = None }
+    | _ ->
+        [], s
 
   let acceptsFcsResult (analysisIdentity: AnalysisIdentity option) (s: LiveTestCycleState) =
     match analysisIdentity, s.LatestAnalysisIdentity with
@@ -3444,43 +3512,109 @@ module LiveTestCycleState =
     (result: FcsTypeCheckResult)
     (s: LiveTestCycleState)
     : TestCycleEffect list * LiveTestCycleState =
-    let storePendingRebuild effects state =
+    let equivalentPendingRebuild
+      (tests: TestCase array)
+      (trigger: RunTrigger)
+      (sessionId: string option)
+      (filePath: string)
+      (analysisIdentity: AnalysisIdentity option)
+      (pending: PendingRebuildState)
+      =
+      pending.Trigger = trigger
+      && pending.SessionId = sessionId
+      && pending.FilePath = filePath
+      && pending.AnalysisIdentity = analysisIdentity
+      && pending.Tests.Length = tests.Length
+      && Array.forall2 (fun pendingTest nextTest -> pendingTest.Id = nextTest.Id) pending.Tests tests
+
+    let storePendingRebuild filePath analysisIdentity effects state =
       match
         effects
         |> List.tryPick (fun e ->
           match e with
           | TestCycleEffect.RequestRebuild (_generation, tests, trigger, tsElapsed, fcsElapsed, sessionId, instrMaps) ->
             Some (tests, trigger, tsElapsed, fcsElapsed, sessionId, instrMaps)
-          | _ -> None)
+           | _ -> None)
       with
       | Some (tests, trigger, tsElapsed, fcsElapsed, sessionId, instrMaps) ->
-        let generation = state.NextRebuildGeneration + 1L
-        let pending = {
-          Generation = generation
-          Tests = tests
-          Trigger = trigger
-          TreeSitterElapsed = tsElapsed
-          FcsElapsed = fcsElapsed
-          SessionId = sessionId
-          InstrumentationMaps = instrMaps
-        }
-        let effects' =
-          effects
-          |> List.map (fun effect ->
-            match effect with
-            | TestCycleEffect.RequestRebuild (_, tests, trigger, tsElapsed, fcsElapsed, sessionId, instrMaps) ->
-              TestCycleEffect.RequestRebuild (generation, tests, trigger, tsElapsed, fcsElapsed, sessionId, instrMaps)
-            | other -> other)
-        effects', { state with NextRebuildGeneration = generation; PendingRebuild = Some pending }
+        match state.PendingRebuild with
+        | Some pending when equivalentPendingRebuild tests trigger sessionId filePath analysisIdentity pending ->
+            let effects' =
+              effects
+              |> List.filter (fun effect ->
+                match effect with
+                | TestCycleEffect.RequestRebuild _ -> false
+                | _ -> true)
+            effects', { state with QueuedRebuild = None }
+        | _ ->
+            let generation = state.NextRebuildGeneration + 1L
+            let pending = {
+              Generation = generation
+              Tests = tests
+              Trigger = trigger
+              FilePath = filePath
+              AnalysisIdentity = analysisIdentity
+              TreeSitterElapsed = tsElapsed
+              FcsElapsed = fcsElapsed
+              SessionId = sessionId
+              InstrumentationMaps = instrMaps
+            }
+            let effects' =
+              effects
+              |> List.map (fun effect ->
+                match effect with
+                | TestCycleEffect.RequestRebuild (_, tests, trigger, tsElapsed, fcsElapsed, sessionId, instrMaps) ->
+                  TestCycleEffect.RequestRebuild (generation, tests, trigger, tsElapsed, fcsElapsed, sessionId, instrMaps)
+                | other -> other)
+            effects',
+            { state with
+                NextRebuildGeneration = generation
+                PendingRebuild = Some pending
+                QueuedRebuild = None }
       | None ->
         effects, state
+
+    let storeQueuedRebuild filePath analysisIdentity candidateEffects state =
+      match
+        candidateEffects
+        |> List.tryPick (fun effect ->
+          match effect with
+          | TestCycleEffect.RequestRebuild (_, tests, trigger, tsElapsed, fcsElapsed, sessionId, instrMaps)
+              when TestRunPhase.isSessionRunning sessionId state.TestState.RunPhases ->
+                Some {
+                  Tests = tests
+                  Trigger = trigger
+                  FilePath = filePath
+                  AnalysisIdentity = analysisIdentity
+                  TreeSitterElapsed = tsElapsed
+                  FcsElapsed = fcsElapsed
+                  SessionId = sessionId
+                  InstrumentationMaps = instrMaps
+                }
+          | _ ->
+              None)
+      with
+      | Some queued ->
+          { state with QueuedRebuild = Some queued }
+      | None ->
+          state
 
     match result with
     | FcsTypeCheckResult.Success (filePath, refs) ->
       let s1 = onFcsComplete filePath refs s
       let trigger = s.LastTrigger
       let effects = TestCycleEffects.afterTypeCheck s1.ChangedSymbols filePath trigger s1.DepGraph s1.TestState s1.LastTiming s1.InstrumentationMaps
-      storePendingRebuild effects s1
+      let queuedEffects =
+        TestCycleEffects.afterTypeCheck
+          s1.ChangedSymbols
+          filePath
+          trigger
+          s1.DepGraph
+          { s1.TestState with RunPhases = Map.empty }
+          s1.LastTiming
+          s1.InstrumentationMaps
+      let effects', s2 = storePendingRebuild filePath s1.LatestAnalysisIdentity effects s1
+      effects', storeQueuedRebuild filePath s1.LatestAnalysisIdentity queuedEffects s2
     | FcsTypeCheckResult.Failed (filePath, _errors) ->
       let effects =
         TestCycleEffects.fallbackRebuildAfterFailedTypeCheck
@@ -3489,7 +3623,15 @@ module LiveTestCycleState =
           s.TestState
           s.LastTiming
           s.InstrumentationMaps
-      storePendingRebuild effects s
+      let queuedEffects =
+        TestCycleEffects.fallbackRebuildAfterFailedTypeCheck
+          filePath
+          s.LastTrigger
+          { s.TestState with RunPhases = Map.empty }
+          s.LastTiming
+          s.InstrumentationMaps
+      let effects', s' = storePendingRebuild filePath s.LatestAnalysisIdentity effects s
+      effects', storeQueuedRebuild filePath s.LatestAnalysisIdentity queuedEffects s'
     | FcsTypeCheckResult.Cancelled _ ->
       [], onFcsCanceled s
 
