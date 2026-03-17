@@ -4,12 +4,54 @@ open System
 open System.Reflection
 open Expecto
 open Expecto.Flip
+open Microsoft.FSharp.Reflection
 open SageFs
 open SageFs.Features.LiveTesting
 open SageFs.Tests.LiveTestingTestHelpers
 open SageFs.Measures
 
 // ── Elm Integration Tests ──
+
+let rec private makeAnalysisIdentityValue (fieldType: Type) (value: string) =
+  match fieldType = typeof<string> with
+  | true -> box value
+  | false when fieldType.IsGenericType && fieldType.GetGenericTypeDefinition() = typedefof<option<_>> ->
+      let someCase =
+        FSharpType.GetUnionCases fieldType
+        |> Array.find (fun case -> case.Name = "Some")
+      let innerType = someCase.GetFields().[0].PropertyType
+      let innerValue = makeAnalysisIdentityValue innerType value
+      FSharpValue.MakeUnion(someCase, [| innerValue |])
+  | false when FSharpType.IsUnion fieldType ->
+      let cases = FSharpType.GetUnionCases fieldType
+      match cases with
+      | [| case |] when case.GetFields().Length = 1
+                        && case.GetFields().[0].PropertyType = typeof<string> ->
+          FSharpValue.MakeUnion(case, [| box value |])
+      | _ ->
+          failtestf
+            "expected analysis identity field to be string or single-case string union, got %O"
+            fieldType
+  | false ->
+      failtestf
+        "expected analysis identity field to be string or single-case string union, got %O"
+        fieldType
+
+let private makeFcsTypeCheckCompletedMsg
+  (targetSession: string option)
+  (analysisIdentity: string)
+  (result: FcsTypeCheckResult)
+  =
+  let case =
+    FSharpType.GetUnionCases(typeof<SageFsMsg>)
+    |> Array.find (fun uc -> uc.Name = "FcsTypeCheckCompleted")
+
+  let fields = case.GetFields()
+  fields.Length
+  |> Expect.equal "FcsTypeCheckCompleted should carry session, analysis identity, and result" 3
+
+  let identityValue = makeAnalysisIdentityValue fields.[1].PropertyType analysisIdentity
+  FSharpValue.MakeUnion(case, [| box targetSession; identityValue; box result |]) :?> SageFsMsg
 
 [<Tests>]
 let elmIntegrationTests = testList "LiveTesting Elm Integration" [
@@ -46,6 +88,74 @@ let elmIntegrationTests = testList "LiveTesting Elm Integration" [
     test "RunPolicyChanged" { hasCase "RunPolicyChanged" }
     test "ProvidersDetected" { hasCase "ProvidersDetected" }
     test "TestRunStarted" { hasCase "TestRunStarted" }
+  ]
+
+  testList "Analysis identity" [
+    test "SageFsMsg.FcsTypeCheckCompleted carries analysis identity" {
+      let case =
+        FSharpType.GetUnionCases(typeof<SageFsMsg>)
+        |> Array.find (fun uc -> uc.Name = "FcsTypeCheckCompleted")
+
+      case.GetFields().Length
+      |> Expect.equal "FcsTypeCheckCompleted should round-trip analysis identity" 3
+    }
+
+    test "Elm wiring: stale FcsTypeCheckCompleted Success is ignored after newer buffer content" {
+      let tc = mkTestCase "MyApp.Tests.testAdd" TestFramework.Expecto TestCategory.Unit
+      let refs = [
+        { SymbolReference.SymbolFullName = "MyApp.Tests.testAdd"
+          UseKind = SymbolUseKind.Definition
+          UsedInTestId = None
+          FilePath = "Test.fs"
+          Line = 1 }
+        { SymbolReference.SymbolFullName = "Lib.add"
+          UseKind = SymbolUseKind.Reference
+          UsedInTestId = None
+          FilePath = "Test.fs"
+          Line = 5 }
+      ]
+      let now = DateTimeOffset.UtcNow
+      let baseModel = {
+        (SageFsModel.initial()) with
+          LiveTesting = {
+            LiveTestCycleState.empty with
+              TestState =
+                { LiveTestState.empty with
+                    DiscoveredTests = [| tc |]
+                    Activation = LiveTestingActivation.Active }
+          }
+      }
+
+      let modelAfterFirstEdit, _ =
+        SageFsUpdate.update
+          (SageFsMsg.BufferContentChanged (None, "Test.fs", "let value = 1"))
+          baseModel
+
+      let modelAfterSecondEdit, _ =
+        SageFsUpdate.update
+          (SageFsMsg.BufferContentChanged (None, "Test.fs", "let value = 2"))
+          modelAfterFirstEdit
+
+      let msg =
+        makeFcsTypeCheckCompletedMsg
+          None
+          "stale-analysis-v1"
+          (FcsTypeCheckResult.Success ("Test.fs", refs))
+
+      let model', effects = SageFsUpdate.update msg modelAfterSecondEdit
+
+      effects
+      |> Expect.isEmpty "stale FCS completion should not schedule rebuild or tests"
+
+      model'.LiveTesting.DepGraph.SymbolToTests
+      |> Expect.isEmpty "stale FCS completion should not update the dependency graph"
+
+      model'.LiveTesting.PendingRebuild
+      |> Expect.isNone "stale FCS completion should not seed a pending rebuild"
+
+      model'.LiveTesting.ActiveFile
+      |> Expect.equal "the newer edit should remain the current active file" (Some "Test.fs")
+    }
   ]
 
   testList "Update behavior" [
@@ -494,7 +604,7 @@ let fileContentChangedTests = testList "FileContentChanged" [
     effects
     |> List.exists (fun effect ->
       match effect with
-      | TestCycleEffect.RequestRebuild (tests, trigger, _, _, _, _) ->
+      | TestCycleEffect.RequestRebuild (_, tests, trigger, _, _, _, _) ->
         trigger = RunTrigger.FileSave
         && tests |> Array.exists (fun test -> test.Id = tc.Id)
       | _ -> false)
@@ -525,11 +635,68 @@ let fileContentChangedTests = testList "FileContentChanged" [
     effects
     |> List.exists (fun effect ->
       match effect with
-      | TestCycleEffect.RequestRebuild (tests, trigger, _, _, _, _) ->
+      | TestCycleEffect.RequestRebuild (_, tests, trigger, _, _, _, _) ->
         trigger = RunTrigger.FileSave
         && tests |> Array.exists (fun test -> test.Id = tc.Id)
       | _ -> false)
     |> Expect.isTrue "compiled saves should still rebuild even when FCS cannot type-check the changed file"
+  }
+]
+
+[<Tests>]
+let bufferContentChangedTests = testList "BufferContentChanged" [
+  test "feeds content through keystroke semantics when enabled" {
+    let model =
+      { (SageFsModel.initial()) with
+          LiveTesting =
+            { LiveTestCycleState.empty with
+                TestState = { LiveTestState.empty with Activation = LiveTestingActivation.Active } } }
+    let newModel, _effects =
+      SageFsUpdate.update
+        (SageFsMsg.BufferContentChanged (None, "src/MyModule.fs", "let x = 1"))
+        model
+    newModel.LiveTesting.ActiveFile
+    |> Expect.equal "active file set" (Some "src/MyModule.fs")
+    newModel.LiveTesting.Debounce.TreeSitter.Pending.IsSome
+    |> Expect.isTrue "tree-sitter debounce pending"
+    newModel.LiveTesting.Debounce.Fcs.Pending.IsSome
+    |> Expect.isTrue "fcs debounce pending"
+    newModel.LiveTesting.LastTrigger
+    |> Expect.equal "unsaved editor content should be treated as a keystroke" RunTrigger.Keystroke
+  }
+
+  test "keeps OnSaveOnly tests filtered on unsaved edits" {
+    let tc = mkTestCase "MyApp.Tests.archTest" TestFramework.Expecto TestCategory.Architecture
+    let refs = [
+      { SymbolReference.SymbolFullName = "MyApp.Tests.archTest"
+        UseKind = SymbolUseKind.Definition; UsedInTestId = None
+        FilePath = "Test.fs"; Line = 1 }
+      { SymbolReference.SymbolFullName = "Lib.check"
+        UseKind = SymbolUseKind.Reference; UsedInTestId = None
+        FilePath = "Test.fs"; Line = 5 }
+    ]
+    let model =
+      { (SageFsModel.initial()) with
+          LiveTesting =
+            { LiveTestCycleState.empty with
+                TestState =
+                  { LiveTestState.empty with
+                      DiscoveredTests = [| tc |]
+                      RunPolicies = RunPolicyDefaults.defaults
+                      Activation = LiveTestingActivation.Active } } }
+
+    let afterEdit, _ =
+      SageFsUpdate.update
+        (SageFsMsg.BufferContentChanged (None, "Test.fs", "let check x = x"))
+        model
+
+    let effects, _ =
+      LiveTestCycleState.handleFcsResult
+        (FcsTypeCheckResult.Success ("Test.fs", refs))
+        afterEdit.LiveTesting
+
+    effects
+    |> Expect.isEmpty "OnSaveOnly test should stay filtered out for unsaved keystroke content"
   }
 ]
 
@@ -651,7 +818,7 @@ let fcsTypeCheckResultTests = testList "FcsTypeCheckResult" [
             TestState = { LiveTestState.empty with DiscoveredTests = [|tc|]; Activation = LiveTestingActivation.Active }
         }
     }
-    let msg = SageFsMsg.FcsTypeCheckCompleted (FcsTypeCheckResult.Success ("Test.fs", refs))
+    let msg = SageFsMsg.FcsTypeCheckCompleted (None, None, FcsTypeCheckResult.Success ("Test.fs", refs))
     let model', effects = SageFsUpdate.update msg model
     model'.LiveTesting.DepGraph.SymbolToTests
     |> Map.containsKey "Lib.add"
@@ -667,7 +834,7 @@ let fcsTypeCheckResultTests = testList "FcsTypeCheckResult" [
 
   test "Elm wiring: FcsTypeCheckCompleted Failed is no-op" {
     let model = (SageFsModel.initial())
-    let msg = SageFsMsg.FcsTypeCheckCompleted (FcsTypeCheckResult.Failed ("test.fs", ["error"]))
+    let msg = SageFsMsg.FcsTypeCheckCompleted (None, None, FcsTypeCheckResult.Failed ("test.fs", ["error"]))
     let model', effects = SageFsUpdate.update msg model
     effects |> Expect.isEmpty "no effects on failure"
     model'.LiveTesting.DepGraph.SymbolToTests

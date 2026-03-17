@@ -944,7 +944,7 @@ let symbolGraphWiringTests = testList "symbol graph wiring integration" [
       TestCycleEffects.afterTypeCheck
         [ "MyModule.add" ] "test.fs" RunTrigger.Keystroke graph ltState None Map.empty
     match effect with
-    | [ TestCycleEffect.RequestRebuild (tests, _, _, _, _, _) ] ->
+    | [ TestCycleEffect.RequestRebuild (_, tests, _, _, _, _, _) ] ->
       tests |> Array.exists (fun t -> t.Id = tid)
       |> Expect.isTrue "should contain affected test"
     | other -> failtestf "expected single RequestRebuild for .fs file, got %A" other

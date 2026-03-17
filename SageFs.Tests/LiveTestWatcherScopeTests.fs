@@ -16,6 +16,7 @@ module SageFs.Tests.LiveTestWatcherScopeTests
 open System
 open Expecto
 open Expecto.Flip
+open Microsoft.FSharp.Reflection
 open SageFs
 open SageFs.Features.LiveTesting
 open SageFs.Tests.LiveTestingTestHelpers
@@ -47,6 +48,22 @@ let private withLiveTesting (model: SageFsModel) =
   let model', _ =
     SageFsUpdate.update SageFsMsg.EnableLiveTesting model
   model'
+
+let private unionCaseNameOf (value: obj) =
+  let ty = value.GetType()
+  let case, _ = FSharpValue.GetUnionFields(value, ty)
+  case.Name
+
+let private makeSessionAwareMsg (caseName: string) (sessionId: string option) (payloads: obj array) : SageFsMsg =
+  let case =
+    FSharpType.GetUnionCases(typeof<SageFsMsg>)
+    |> Array.find (fun c -> c.Name = caseName)
+  let fields = case.GetFields()
+  fields.Length
+  |> Expect.equal
+      (sprintf "%s should carry a session id plus payload fields" caseName)
+      (1 + payloads.Length)
+  FSharpValue.MakeUnion(case, Array.append [| box sessionId |] payloads) :?> SageFsMsg
 
 // =====================================================================
 // Stream 1 — Per-Session File Watcher Scope
@@ -458,5 +475,259 @@ let stream4Tests =
       hasWatcherRegistration
       |> Expect.isTrue
           "when live testing is already enabled, a session transitioning to running should register its watcher"
+    }
+  ]
+
+// =====================================================================
+// Stream 6 — Session-Scoped Buffer Changes
+// =====================================================================
+
+[<Tests>]
+let stream6Tests =
+  testList "Stream 6 — Session-Scoped Buffer Changes" [
+
+    test "background session buffer change updates only background live-testing state with keystroke semantics" {
+      let snapA = mkSession "session-a" "/projects/alpha"
+      let snapB = mkSession "session-b" "/projects/beta"
+      let bSid = WorkerProtocol.SessionId.value snapB.Id
+      let fileB = "/projects/beta/src/Lib.fs"
+      let model =
+        SageFsModel.initial ()
+        |> withSession snapA
+        |> withSession snapB
+        |> withLiveTesting
+        |> fun m ->
+          { m with
+              LiveTesting =
+                { LiveTestCycleState.empty with
+                    TestState = { LiveTestState.empty with Activation = LiveTestingActivation.Active } }
+              PerSessionLiveTesting =
+                Map.ofList [
+                  bSid,
+                  { LiveTestCycleState.empty with
+                      TestState = { LiveTestState.empty with Activation = LiveTestingActivation.Active } }
+                ] }
+
+      let model', effects =
+        SageFsUpdate.update
+          (SageFsMsg.BufferContentChanged (Some bSid, fileB, "module Lib\nlet add a b = a + b"))
+          model
+
+      model'.LiveTesting.ActiveFile
+      |> Expect.isNone
+          "primary live-testing state should be untouched by a background session buffer change"
+
+      let backgroundState =
+        model'.PerSessionLiveTesting
+        |> Map.find bSid
+
+      backgroundState.ActiveFile
+      |> Expect.equal "background active file updated" (Some fileB)
+      backgroundState.LastTrigger
+      |> Expect.equal "background unsaved buffer content should be treated as a keystroke" RunTrigger.Keystroke
+      effects
+      |> Expect.isEmpty "buffer ingress should only update debounce state; cycle work still waits for ticks"
+    }
+  ]
+
+// =====================================================================
+// Stream 5 — Session-Aware Downstream Routing
+// =====================================================================
+
+[<Tests>]
+let stream5Tests =
+  testList "Stream 5 — Session-Aware Downstream Routing" [
+
+    test "background session tick emits a session-aware FCS request" {
+      let snapA = mkSession "session-a" "/projects/alpha"
+      let snapB = mkSession "session-b" "/projects/beta"
+      let bSid = WorkerProtocol.SessionId.value snapB.Id
+      let model =
+        SageFsModel.initial ()
+        |> withSession snapA
+        |> withSession snapB
+        |> withLiveTesting
+
+      let fileB = "/projects/beta/src/Lib.fs"
+      let afterChange, _ =
+        SageFsUpdate.update
+          (SageFsMsg.FileContentChanged (fileB, "module Lib"))
+          model
+
+      let _model', effects =
+        SageFsUpdate.update
+          (SageFsMsg.TestCycleTick (DateTimeOffset.UtcNow.AddSeconds 5.0))
+          afterChange
+
+      let request =
+        effects
+        |> List.tryPick (fun effect ->
+          match effect with
+          | SageFsEffect.TestCycle testCycleEffect when unionCaseNameOf testCycleEffect = "RequestFcsTypeCheck" ->
+              Some testCycleEffect
+          | _ ->
+              None)
+
+      request
+      |> Expect.isSome
+          "background session debounce should eventually emit RequestFcsTypeCheck"
+
+      match request with
+      | Some testCycleEffect ->
+          let case, fields = FSharpValue.GetUnionFields(testCycleEffect, typeof<TestCycleEffect>)
+          case.Name
+          |> Expect.equal "should emit the FCS request effect" "RequestFcsTypeCheck"
+          fields.Length
+          |> Expect.equal "RequestFcsTypeCheck should carry session id, file path, and elapsed time" 3
+          fields.[0]
+          |> unbox<string option>
+          |> Expect.equal "background FCS request should target the owning session" (Some bSid)
+          fields.[1]
+          |> unbox<string>
+          |> Expect.equal "background FCS request should preserve the changed file path" fileB
+      | None ->
+          ()
+    }
+
+    test "background session FCS completion updates only background live-testing state" {
+      let snapA = mkSession "session-a" "/projects/alpha"
+      let snapB = mkSession "session-b" "/projects/beta"
+      let bSid = WorkerProtocol.SessionId.value snapB.Id
+      let tcA = mkTestCase "Primary.Tests.alpha" TestFramework.Expecto TestCategory.Unit
+      let tcB = mkTestCase "Background.Tests.beta" TestFramework.Expecto TestCategory.Unit
+      let fileB = "/projects/beta/src/Lib.fs"
+      let refs = [
+        { SymbolReference.SymbolFullName = "Background.Tests.beta"
+          UseKind = SymbolUseKind.Definition
+          UsedInTestId = None
+          FilePath = fileB
+          Line = 1 }
+        { SymbolReference.SymbolFullName = "Lib.add"
+          UseKind = SymbolUseKind.Reference
+          UsedInTestId = None
+          FilePath = fileB
+          Line = 5 }
+      ]
+      let model =
+        SageFsModel.initial ()
+        |> withSession snapA
+        |> withSession snapB
+        |> withLiveTesting
+        |> fun m ->
+          { m with
+              LiveTesting =
+                { LiveTestCycleState.empty with
+                    TestState =
+                      { LiveTestState.empty with
+                          Activation = LiveTestingActivation.Active
+                          DiscoveredTests = [| tcA |] } }
+              PerSessionLiveTesting =
+                Map.ofList [
+                  bSid,
+                  { LiveTestCycleState.empty with
+                      LastTrigger = RunTrigger.FileSave
+                      TestState =
+                        { LiveTestState.empty with
+                            Activation = LiveTestingActivation.Active
+                            DiscoveredTests = [| tcB |]
+                            TestSessionMap = Map.ofList [ tcB.Id, bSid ] } }
+                ] }
+
+      let msg =
+        makeSessionAwareMsg
+          "FcsTypeCheckCompleted"
+          (Some bSid)
+          [| box None; box (FcsTypeCheckResult.Success (fileB, refs)) |]
+
+      let model', effects = SageFsUpdate.update msg model
+
+      model'.LiveTesting.DepGraph.SymbolToTests
+      |> Expect.isEmpty
+          "primary live-testing state should be untouched by a background session FCS completion"
+
+      let backgroundState =
+        model'.PerSessionLiveTesting
+        |> Map.find bSid
+
+      backgroundState.DepGraph.SymbolToTests
+      |> Map.containsKey "Lib.add"
+      |> Expect.isTrue
+          "background live-testing state should absorb the FCS result"
+
+      match effects with
+      | [ SageFsEffect.TestCycle (TestCycleEffect.RequestRebuild (_, tests, _, _, _, sessionId, _)) ] ->
+          tests
+          |> Expect.equal "background FCS completion should schedule the background tests" [| tcB |]
+          sessionId
+          |> Expect.equal "background rebuild should stay targeted to the same session" (Some bSid)
+      | other ->
+          failtestf "expected one background RequestRebuild effect, got %A" other
+    }
+
+    test "background session rebuild completion consumes only that session pending rebuild" {
+      let snapA = mkSession "session-a" "/projects/alpha"
+      let snapB = mkSession "session-b" "/projects/beta"
+      let bSid = WorkerProtocol.SessionId.value snapB.Id
+      let tcA = mkTestCase "Primary.Tests.alpha" TestFramework.Expecto TestCategory.Unit
+      let tcB = mkTestCase "Background.Tests.beta" TestFramework.Expecto TestCategory.Unit
+      let pendingA =
+        { Generation = 1L
+          Tests = [| tcA |]
+          Trigger = RunTrigger.FileSave
+          TreeSitterElapsed = TimeSpan.FromMilliseconds 5.0
+          FcsElapsed = TimeSpan.FromMilliseconds 10.0
+          SessionId = None
+          InstrumentationMaps = [||] }
+      let pendingB =
+        { Generation = 2L
+          Tests = [| tcB |]
+          Trigger = RunTrigger.FileSave
+          TreeSitterElapsed = TimeSpan.FromMilliseconds 7.0
+          FcsElapsed = TimeSpan.FromMilliseconds 12.0
+          SessionId = Some bSid
+          InstrumentationMaps = [||] }
+      let model =
+        SageFsModel.initial ()
+        |> withSession snapA
+        |> withSession snapB
+        |> withLiveTesting
+        |> fun m ->
+          { m with
+              LiveTesting =
+                { LiveTestCycleState.empty with
+                    NextRebuildGeneration = pendingA.Generation
+                    PendingRebuild = Some pendingA
+                    TestState = { LiveTestState.empty with Activation = LiveTestingActivation.Active } }
+              PerSessionLiveTesting =
+                Map.ofList [
+                  bSid,
+                  { LiveTestCycleState.empty with
+                      NextRebuildGeneration = pendingB.Generation
+                      PendingRebuild = Some pendingB
+                      TestState = { LiveTestState.empty with Activation = LiveTestingActivation.Active } }
+                ] }
+
+      let msg = SageFsMsg.RebuildCompleted (Some bSid, pendingB.Generation, Ok ())
+
+      let model', effects = SageFsUpdate.update msg model
+
+      model'.LiveTesting.PendingRebuild
+      |> Expect.isSome
+          "primary pending rebuild should survive a background session completion"
+
+      model'.PerSessionLiveTesting
+      |> Map.find bSid
+      |> fun cycle -> cycle.PendingRebuild
+      |> Expect.isNone
+          "background pending rebuild should clear after that session completes"
+
+      match effects with
+      | [ SageFsEffect.TestCycle (TestCycleEffect.RunAffectedTests (tests, _, _, _, sessionId, _)) ] ->
+          tests
+          |> Expect.equal "background rebuild completion should run only the background tests" [| tcB |]
+          sessionId
+          |> Expect.equal "background test execution should stay targeted to the same session" (Some bSid)
+      | other ->
+          failtestf "expected one background RunAffectedTests effect, got %A" other
     }
   ]

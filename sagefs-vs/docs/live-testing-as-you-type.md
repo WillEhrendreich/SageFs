@@ -1,136 +1,116 @@
 # As-You-Type Live Testing — Visual Studio Extension
 
-> See `docs/live-testing-as-you-type.md` in the repo root for the centralized architecture,
-> endpoint contract, server pipeline, and decision log. This doc covers **VS-specific** implementation only.
+This document describes the **current shipped Visual Studio behavior** for compiled-project
+"test as you type" buffer syncing.
 
-## Current State
+The earlier `evaluate-scope` design is no longer the contract Visual Studio implements. Visual
+Studio now mirrors the same truthful compiled-buffer bridge already landed in VS Code and Neovim.
 
-- Extension uses new VS Extensibility SDK (`VisualStudio.Extensibility`)
-- C# shim (`SageFs.VisualStudio`) + F# core logic (`SageFs.VisualStudio.Core`)
-- Targets `net8.0-windows8.0` (Windows-only)
-- Connects to SageFs daemon via HTTP + SSE (port 37749)
-- Has `LiveTestingSubscriber` for SSE test events
-- **No text change listeners** — no reaction to typing or even saving
-- Live testing is observe-only (SSE events update state, CodeLens displays results)
+## Current Contract
 
-## What Needs to Change
+Visual Studio sends debounced unsaved buffer content to the daemon through:
 
-The client-side work is minimal. Per the centralized design, the editor's only job is:
+```text
+POST /api/sessions/{sid}/buffer-changed
+```
 
-1. Register text change listener for `*.fs` files
-2. On change: debounce 300ms, cancel previous timer
-3. After debounce: extract the enclosing function scope, POST it to SageFs
-4. Display results from existing SSE subscription (already done)
+Request body:
 
-## Implementation
-
-### Step 1: Register Text Change Listener (C# shim)
-
-```csharp
-[VisualStudioContribution]
-internal class FSharpTextChangeListener : ExtensionPart, ITextViewChangedListener
+```json
 {
-  private CancellationTokenSource? _debounceCts;
-  private long _generation;
-
-  public TextViewExtensionConfiguration TextViewExtensionConfiguration => new()
-  {
-    AppliesTo = new[] { DocumentFilter.FromDocumentType("F#") }
-  };
-
-  public async Task TextViewChangedAsync(
-    TextViewChangedArgs args,
-    CancellationToken ct)
-  {
-    _debounceCts?.Cancel();
-    _debounceCts = new CancellationTokenSource();
-    var token = _debounceCts.Token;
-
-    try
-    {
-      await Task.Delay(300, token);
-      if (!token.IsCancellationRequested)
-      {
-        var snapshot = args.AfterTextView.Document.AsTextDocumentSnapshot();
-        var lines = snapshot.Lines.Select(l => l.Text).ToArray();
-        var cursorLine = args.AfterTextView.Selection.ActivePosition.Line;
-        var gen = Interlocked.Increment(ref _generation);
-
-        var scope = ScopeExtractor.findEnclosingScope(lines, cursorLine);
-        if (scope != null)
-        {
-          await SageFsClient.PostEvaluateScopeAsync(new
-          {
-            filePath = snapshot.Uri.LocalPath,
-            scopeName = scope.Name,
-            scopeText = scope.Text,
-            startLine = scope.StartLine,
-            endLine = scope.EndLine,
-            generation = gen
-          }, token);
-        }
-      }
-    }
-    catch (TaskCanceledException) { }
-  }
+  "filePath": "C:\\Code\\Repos\\SageFs\\src\\Domain.fs",
+  "content": "module Domain\n..."
 }
 ```
 
-### Step 2: Scope Extraction — Indentation-Based (F# core)
+The daemon routes that payload into `SageFsMsg.BufferContentChanged`, which preserves
+keystroke-triggered live-testing semantics without pretending the file was saved.
 
-F# is indentation-sensitive. Scan backwards from cursor for `let` at same/lower indent,
-forward for next binding at same level. This extracts the function definition that the
-server will send to FSI to redefine the binding.
+## What Visual Studio Does
 
-```fsharp
-module ScopeExtractor =
+The Visual Studio client now has three pieces:
 
-  type Scope =
-    { Name: string
-      Text: string
-      StartLine: int
-      EndLine: int }
+1. `SageFs.VisualStudio.Core\BufferChangeRequest.fs`
+   - pure compiled-file filter (`.fs`, `.fsi`)
+   - directory-boundary-aware session ownership resolution
+   - request construction
 
-  let findEnclosingScope (lines: string[]) (cursorLine: int) : Scope option =
-    // Scan backwards from cursorLine for line matching: ^\s*let\s+(\w+)
-    // where indentation <= cursorLine's indentation
-    // Scan forwards for next binding at same/lower indentation
-    // Return scope with text = lines[start..end] joined
-    ...
-```
+2. `SageFs.VisualStudio.Core\SageFsClient.fs`
+   - `PostBufferChangedAsync`
 
-### Step 3: Add HTTP Client Method (F# core)
+3. `SageFs.VisualStudio\Services\FSharpBufferChangedListener.cs`
+   - `ITextViewChangedListener`
+   - per-file debounce
+   - live session lookup at send time
+   - silent refusal on no-match / ambiguity
 
-In `SageFsClient.fs`:
+## Behavioral Rules
 
-```fsharp
-member _.PostEvaluateScopeAsync(request: EvaluateScopeRequest, ct) =
-  httpPostAsync (sprintf "%s/api/live-testing/evaluate-scope" baseUrl) request ct
-```
+Visual Studio follows these guardrails:
 
-## Files to Modify
+- **Compiled source files only**
+  - `.fs` -> included
+  - `.fsi` -> included
+  - `.fsx` -> excluded
 
-### C# shim (`SageFs.VisualStudio/`)
-1. Add `FSharpTextChangeListener.cs` — text change with debounce + scope extraction + POST
-2. Register in `SageFsExtension.cs` DI container
+- **File-backed documents only**
+  - non-file buffers are ignored
 
-### F# core (`SageFs.VisualStudio.Core/`)
-1. Add `ScopeExtractor.fs` — indentation-based scope finder
-2. `SageFsClient.fs` — add `PostEvaluateScopeAsync` method
-3. `LiveTestingTypes.fs` — add `EvaluateScopeRequest` type
+- **300ms debounce**
+  - debounce is tracked per file so edits in one document do not cancel another document's buffer sync
 
-## VS-Specific Considerations
+- **Live session lookup at send time**
+  - after the debounce completes, the extension calls `/api/sessions`
+  - ownership is resolved from the current live session list, not from a stale cached guess
 
-- **Document filter**: F# files are content type `"F#"` in VS
-- **Threading**: VS extensibility listeners run on background threads. HTTP POST is async.
-  No UI thread concerns.
-- **CodeLens refresh**: `LiveTestingSubscriber.StateChanged` already signals CodeLens refresh.
-  No changes needed on the results path.
-- **Error List**: `scope_check_failed` SSE events → `DiagnosticsSubscriber` surfaces as warnings
-- **Caret position**: `args.AfterTextView.Selection.ActivePosition` gives cursor line for scope extraction
+- **Unique owner required**
+  - if exactly one session working directory contains the file, the extension posts to that session
+  - if zero sessions match, nothing is posted
+  - if multiple sessions match, nothing is posted
 
-## Dependencies
+- **No noisy hot-path UX**
+  - ambiguity and no-match are intentionally silent for now
+  - the extension does not claim the buffer was analyzed when routing is uncertain
 
-- **Requires** `POST /api/live-testing/evaluate-scope` endpoint in SageFs daemon
-- No new NuGet dependencies
-- VS Extensibility SDK already provides `ITextViewChangedListener`
+## Why This Shape
+
+This is intentionally conservative.
+
+Visual Studio should not guess which session owns a buffer, and it should not silently route
+unsaved compiled content to the wrong session. The smallest honest behavior is:
+
+1. debounce
+2. query live sessions
+3. require a unique owner
+4. post to `buffer-changed`
+
+That keeps the client thin and keeps the truth about test execution inside the daemon's existing
+session-scoped live-testing pipeline.
+
+## Validation
+
+The Visual Studio buffer bridge is validated at two layers:
+
+- pure core contract:
+  - `dotnet test .\sagefs-vs\SageFs.VisualStudio.Core.Tests\SageFs.VisualStudio.Core.Tests.fsproj --no-restore -nologo`
+
+- host extension build:
+  - `dotnet build .\sagefs-vs\SageFs.VisualStudio\SageFs.VisualStudio.csproj --no-restore -nologo`
+
+Focused tests cover:
+
+- unique ownership
+- ambiguous ownership refusal
+- `.fsi` inclusion
+- `.fsx` exclusion
+- prefix-neighbor false-positive rejection
+- JSON payload shape
+- session-scoped `buffer-changed` route construction
+
+## Future Follow-Up
+
+Potential future improvements remain deliberately separate from this first truthful slice:
+
+- optional non-noisy diagnostics/debug surfacing for ambiguous ownership
+- richer branch-coverage rendering parity in the Visual Studio client
+- broader UX polish around live-testing status while unsaved buffers are in flight

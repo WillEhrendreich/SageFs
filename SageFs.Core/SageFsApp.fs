@@ -176,14 +176,15 @@ type SageFsMsg =
   | CycleRunPolicy
   | ToggleCoverage
   | TestCycleTick of now: DateTimeOffset
+  | BufferContentChanged of targetSession: string option * filePath: string * content: string
   | FileContentChanged of filePath: string * content: string
-  | FcsTypeCheckCompleted of Features.LiveTesting.FcsTypeCheckResult
+  | FcsTypeCheckCompleted of string option * Features.LiveTesting.AnalysisIdentity option * Features.LiveTesting.FcsTypeCheckResult
   | RestoreTestCache of Features.LiveTesting.LiveTestState
   | MarkAllTestsStale
   | WorkflowSuggestionReceived of WorkflowTypes.WorkflowSuggestion
   | WorkflowSuggestionDismissed
   | WorkflowSuggestionAccepted
-  | RebuildCompleted of Result<unit, string>
+  | RebuildCompleted of string option * int64 * Result<unit, string>
 
 /// Side effects the Elm loop can request.
 /// Wraps EditorEffect and TestCycleEffect for async execution.
@@ -589,6 +590,146 @@ module SageFsUpdate =
     |> finalizeLiveTestingState LiveTestingStatusRefresh.KeepExisting lt
     |> fst
 
+  let refreshStatusesForChangedIds
+    (lt: Features.LiveTesting.LiveTestCycleState)
+    (changedIds: Set<Features.LiveTesting.TestId>)
+    (updateState: Features.LiveTesting.LiveTestState -> Features.LiveTesting.LiveTestState)
+    =
+    let priorState = lt.TestState
+    let updatedState = updateState priorState
+    match Set.isEmpty changedIds, Array.isEmpty priorState.StatusEntries with
+    | true, _ ->
+      finalizeLiveTestingState
+        LiveTestingStatusRefresh.KeepExisting
+        lt
+        updatedState
+      |> fst
+    | _, true ->
+      finalizeLiveTestingState
+        LiveTestingStatusRefresh.Recompute
+        lt
+        updatedState
+      |> fst
+    | _ ->
+      let patchedState, changedEntries =
+        Features.LiveTesting.LiveTesting.patchStatusEntriesForChangedIds
+          priorState
+          updatedState
+          changedIds
+      finalizeLiveTestingState
+        (LiveTestingStatusRefresh.PatchChangedEntries changedEntries)
+        lt
+        patchedState
+      |> fst
+
+  let private activeLiveTestingSessionId (model: SageFsModel) =
+    ActiveSession.sessionId model.Sessions.ActiveSessionId
+    |> Option.map SessionId.value
+
+  type private LiveTestingTarget =
+    | Primary
+    | Background of string
+
+  let private tryResolveLiveTestingTarget
+    (targetSession: string option)
+    (model: SageFsModel)
+    =
+    let activeSessionId = activeLiveTestingSessionId model
+    match targetSession with
+    | Some sid when activeSessionId = Some sid ->
+      Some Primary
+    | Some sid ->
+      match model.PerSessionLiveTesting |> Map.containsKey sid with
+      | true -> Some (Background sid)
+      | false -> None
+    | None ->
+      Some Primary
+
+  let private getLiveTestingState
+    (target: LiveTestingTarget)
+    (model: SageFsModel)
+    =
+    match target with
+    | Primary -> model.LiveTesting
+    | Background sid -> model.PerSessionLiveTesting |> Map.find sid
+
+  let private setLiveTestingState
+    (target: LiveTestingTarget)
+    (cycle: Features.LiveTesting.LiveTestCycleState)
+    (model: SageFsModel)
+    =
+    match target with
+    | Primary ->
+      { model with LiveTesting = cycle }
+    | Background sid ->
+      { model with
+          PerSessionLiveTesting =
+            model.PerSessionLiveTesting
+            |> Map.add sid cycle }
+
+  let private tryUpdateLiveTestingState
+    (targetSession: string option)
+    (updateCycle: Features.LiveTesting.LiveTestCycleState -> Features.LiveTesting.LiveTestCycleState * 'result)
+    (model: SageFsModel)
+    =
+    match tryResolveLiveTestingTarget targetSession model with
+    | Some target ->
+      let current = getLiveTestingState target model
+      let cycle', result = updateCycle current
+      setLiveTestingState target cycle' model, Some result
+    | None ->
+      model, None
+
+  let private retagRequestFcsTypeCheck
+    (targetSession: string option)
+    (effect: Features.LiveTesting.TestCycleEffect)
+    =
+    match effect with
+    | Features.LiveTesting.TestCycleEffect.RequestFcsTypeCheck (_, filePath, content, analysisIdentity, tsElapsed) ->
+      Features.LiveTesting.TestCycleEffect.RequestFcsTypeCheck(targetSession, filePath, content, analysisIdentity, tsElapsed)
+    | _ ->
+      effect
+
+  let private cycleTickChanged
+    (original: Features.LiveTesting.LiveTestCycleState)
+    (updated: Features.LiveTesting.LiveTestCycleState)
+    (effects: Features.LiveTesting.TestCycleEffect list)
+    =
+    not effects.IsEmpty
+    || not (obj.ReferenceEquals(updated, original))
+
+  let private switchActiveLiveTestingState
+    (fromId: string option)
+    (toId: string)
+    (model: SageFsModel)
+    =
+    let currentActiveId =
+      activeLiveTestingSessionId model
+      |> Option.orElse fromId
+
+    match currentActiveId with
+    | Some current when current = toId ->
+      model
+    | _ ->
+      let promotedState =
+        model.PerSessionLiveTesting
+        |> Map.tryFind toId
+        |> Option.defaultValue Features.LiveTesting.LiveTestCycleState.empty
+
+      let parkedBackground =
+        model.PerSessionLiveTesting
+        |> Map.remove toId
+        |> fun background ->
+          match currentActiveId with
+          | Some current when current <> toId ->
+            background |> Map.add current model.LiveTesting
+          | _ ->
+            background
+
+      { model with
+          LiveTesting = promotedState
+          PerSessionLiveTesting = parkedBackground }
+
   let private applyBufferedTestResults
     (batches: Features.LiveTesting.TestRunResult array list)
     (model: SageFsModel)
@@ -861,17 +1002,20 @@ module SageFsUpdate =
                     | true -> { s with Status = status }
                     | false -> s) } }, watcherEffects
 
-      | SageFsEvent.SessionSwitched (_, toIdStr) ->
+      | SageFsEvent.SessionSwitched (fromIdStr, toIdStr) ->
         match SessionId.validate toIdStr with
         | Error _ -> model, []
         | Ok toId ->
-        { model with
+        let liveTestingSwapped =
+          switchActiveLiveTestingState fromIdStr toIdStr model
+
+        { liveTestingSwapped with
             SessionContext = None
             Sessions = {
-              model.Sessions with
+              liveTestingSwapped.Sessions with
                 ActiveSessionId = ActiveSession.Viewing toId
                 Sessions =
-                  model.Sessions.Sessions
+                  liveTestingSwapped.Sessions.Sessions
                   |> List.map (fun s ->
                     { s with IsActive = s.Id = toId }) } }, []
 
@@ -914,6 +1058,7 @@ module SageFsUpdate =
                 Sessions = remaining
                 ActiveSessionId = newActive }
             LiveTesting = lt
+            PerSessionLiveTesting = model.PerSessionLiveTesting |> Map.remove sessionId
             Diagnostics = model.Diagnostics |> Map.remove sessionId }, watcherEffects
 
       | SageFsEvent.SessionStale (sessionId, _) ->
@@ -1162,7 +1307,10 @@ module SageFsUpdate =
         { model with LiveTesting = lt }, []
 
       | SageFsEvent.AffectedTestsComputed testIds ->
-        let lt = recomputeStatuses model.LiveTesting (fun s -> { s with AffectedTests = Set.ofArray testIds })
+        let changedIds = Set.ofArray testIds
+        let lt =
+          refreshStatusesForChangedIds model.LiveTesting changedIds (fun s ->
+            { s with AffectedTests = changedIds })
         let targetSession =
           testIds |> Array.tryPick (fun tid -> Map.tryFind tid lt.TestState.TestSessionMap)
         let effects =
@@ -1173,15 +1321,17 @@ module SageFsUpdate =
 
       | SageFsEvent.RunTestsRequested tests ->
         let testIds = tests |> Array.map (fun t -> t.Id)
-        let lt = recomputeStatuses model.LiveTesting (fun s ->
-          let phase, gen = TestRunPhase.startRun s.LastGeneration
-          let sessionIds =
-            testIds
-            |> Array.choose (fun tid -> Map.tryFind tid s.TestSessionMap)
-            |> Array.distinct
-          let phases =
-            sessionIds |> Array.fold (fun m sid -> Map.add sid phase m) s.RunPhases
-          { s with LastGeneration = gen; AffectedTests = Set.ofArray testIds; RunPhases = phases })
+        let changedIds = Set.ofArray testIds
+        let lt =
+          refreshStatusesForChangedIds model.LiveTesting changedIds (fun s ->
+            let phase, gen = TestRunPhase.startRun s.LastGeneration
+            let sessionIds =
+              testIds
+              |> Array.choose (fun tid -> Map.tryFind tid s.TestSessionMap)
+              |> Array.distinct
+            let phases =
+              sessionIds |> Array.fold (fun m sid -> Map.add sid phase m) s.RunPhases
+            { s with LastGeneration = gen; AffectedTests = changedIds; RunPhases = phases })
         let effects =
           match Array.isEmpty tests with
           | true -> []
@@ -1350,13 +1500,73 @@ module SageFsUpdate =
       { model with LiveTesting = { lt with TestState = ts } }, []
 
     | SageFsMsg.TestCycleTick now ->
-      let effects, cycle' = model.LiveTesting |> Features.LiveTesting.LiveTestCycleState.tick now
-      // Return same model reference when tick is a no-op (enables ElmLoop skip)
-      match effects.IsEmpty && obj.ReferenceEquals(cycle', model.LiveTesting) with
-      | true -> model, []
-      | false ->
-        let mappedEffects = effects |> List.map SageFsEffect.TestCycle
-        { model with LiveTesting = cycle' }, mappedEffects
+      let activeSessionId = activeLiveTestingSessionId model
+      let primaryEffects, primaryCycle' =
+        model.LiveTesting
+        |> Features.LiveTesting.LiveTestCycleState.tick now
+      let primaryTagged =
+        primaryEffects
+        |> List.map (retagRequestFcsTypeCheck activeSessionId)
+      let perSessionResults =
+        model.PerSessionLiveTesting
+        |> Map.toList
+        |> List.map (fun (sid, cycle) ->
+          let effects, cycle' =
+            cycle
+            |> Features.LiveTesting.LiveTestCycleState.tick now
+          sid, cycle, cycle', effects |> List.map (retagRequestFcsTypeCheck (Some sid)))
+      let perSessionChanged =
+        perSessionResults
+        |> List.exists (fun (_, original, updated, effects) ->
+          cycleTickChanged original updated effects)
+      let perSessionState' =
+        match perSessionChanged with
+        | true ->
+          perSessionResults
+          |> List.fold (fun acc (sid, _, cycle', _) ->
+            acc |> Map.add sid cycle') Map.empty
+        | false ->
+          model.PerSessionLiveTesting
+      let perSessionEffects =
+        perSessionResults
+        |> List.collect (fun (_, _, _, effects) -> effects)
+      // Return same model reference when every cycle tick is a no-op (enables ElmLoop skip)
+      match cycleTickChanged model.LiveTesting primaryCycle' primaryTagged || perSessionChanged with
+      | false -> model, []
+      | true ->
+        let mappedEffects =
+          primaryTagged @ perSessionEffects
+          |> List.map SageFsEffect.TestCycle
+        { model with
+            LiveTesting = primaryCycle'
+            PerSessionLiveTesting = perSessionState' }, mappedEffects
+
+    | SageFsMsg.BufferContentChanged (targetSession, filePath, content) ->
+      let isActive = model.LiveTesting.TestState.Activation = Features.LiveTesting.LiveTestingActivation.Active
+      match isActive with
+      | false -> model, []
+      | true ->
+        let now = DateTimeOffset.UtcNow
+        match targetSession with
+        | Some sid when activeLiveTestingSessionId model = Some sid ->
+          let cycle' = model.LiveTesting |> Features.LiveTesting.LiveTestCycleState.onKeystroke content filePath now
+          { model with LiveTesting = cycle' }, []
+        | Some sid ->
+          let sessionExists =
+            model.Sessions.Sessions
+            |> List.exists (fun session -> SessionId.value session.Id = sid)
+          match sessionExists with
+          | false -> model, []
+          | true ->
+            let current =
+              model.PerSessionLiveTesting
+              |> Map.tryFind sid
+              |> Option.defaultValue Features.LiveTesting.LiveTestCycleState.empty
+            let cycle' = current |> Features.LiveTesting.LiveTestCycleState.onKeystroke content filePath now
+            { model with PerSessionLiveTesting = model.PerSessionLiveTesting |> Map.add sid cycle' }, []
+        | None ->
+          let cycle' = model.LiveTesting |> Features.LiveTesting.LiveTestCycleState.onKeystroke content filePath now
+          { model with LiveTesting = cycle' }, []
 
     | SageFsMsg.FileContentChanged (filePath, content) ->
       let isActive = model.LiveTesting.TestState.Activation = Features.LiveTesting.LiveTestingActivation.Active
@@ -1390,24 +1600,35 @@ module SageFsUpdate =
             let cycle' = current |> Features.LiveTesting.LiveTestCycleState.onFileSaveWithContent content filePath now
             { model with PerSessionLiveTesting = model.PerSessionLiveTesting |> Map.add sid cycle' }, []
 
-    | SageFsMsg.FcsTypeCheckCompleted result ->
-      let effects, cycle' =
-        model.LiveTesting
-        |> Features.LiveTesting.LiveTestCycleState.handleFcsResult result
-      // OTEL: track dep graph match vs fallback rate
-      match effects with
-      | [] ->
-        Features.LiveTesting.LiveTestingInstrumentation.depGraphFallbackTotal.Add(1L)
-      | _ ->
-        Features.LiveTesting.LiveTestingInstrumentation.depGraphMatchTotal.Add(1L)
-        let affectedCount =
-          effects |> List.sumBy (fun e ->
-            match e with
-            | Features.LiveTesting.TestCycleEffect.RunAffectedTests (tests, _, _, _, _, _) -> tests.Length
-            | _ -> 0)
-        Features.LiveTesting.LiveTestingInstrumentation.depGraphAffectedCount.Record(affectedCount)
-      let mappedEffects = effects |> List.map SageFsEffect.TestCycle
-      { model with LiveTesting = cycle' }, mappedEffects
+    | SageFsMsg.FcsTypeCheckCompleted (targetSession, analysisIdentity, result) ->
+      let model', maybeEffects =
+        tryUpdateLiveTestingState targetSession (fun cycle ->
+          match Features.LiveTesting.LiveTestCycleState.acceptsFcsResult analysisIdentity cycle with
+          | true ->
+              let effects, cycle' =
+                cycle
+                |> Features.LiveTesting.LiveTestCycleState.handleFcsResult result
+              cycle', effects
+          | false ->
+              cycle, []) model
+      match maybeEffects with
+      | Some effects ->
+        // OTEL: track dep graph match vs fallback rate
+        match effects with
+        | [] ->
+          Features.LiveTesting.LiveTestingInstrumentation.depGraphFallbackTotal.Add(1L)
+        | _ ->
+          Features.LiveTesting.LiveTestingInstrumentation.depGraphMatchTotal.Add(1L)
+          let affectedCount =
+            effects |> List.sumBy (fun e ->
+              match e with
+              | Features.LiveTesting.TestCycleEffect.RunAffectedTests (tests, _, _, _, _, _) -> tests.Length
+              | _ -> 0)
+          Features.LiveTesting.LiveTestingInstrumentation.depGraphAffectedCount.Record(affectedCount)
+        let mappedEffects = effects |> List.map SageFsEffect.TestCycle
+        model', mappedEffects
+      | None ->
+        model, []
 
     | SageFsMsg.RestoreTestCache cachedState ->
       let lt = recomputeStatuses model.LiveTesting (fun s ->
@@ -1430,22 +1651,40 @@ module SageFsUpdate =
         | None -> []
       { model with PendingSuggestion = None }, effects
 
-    | SageFsMsg.RebuildCompleted result ->
-      let pending = model.LiveTesting.PendingRebuild
-      let cycle' = { model.LiveTesting with PendingRebuild = None }
-      match result, pending with
-      | Ok (), Some p ->
-        let effect =
-          Features.LiveTesting.TestCycleEffect.RunAffectedTests (
-            p.Tests, p.Trigger, p.TreeSitterElapsed, p.FcsElapsed,
-            p.SessionId, p.InstrumentationMaps)
-        { model with LiveTesting = cycle' }, [ SageFsEffect.TestCycle effect ]
-      | Error msg, _ ->
-        Utils.Log.warn "[rebuild] Build failed, not running tests: %s" (msg.Substring(0, min 200 msg.Length))
-        { model with LiveTesting = cycle' }, []
-      | Ok (), None ->
-        Utils.Log.warn "[rebuild] RebuildCompleted(Ok) with no PendingRebuild — stale dispatch?"
-        { model with LiveTesting = cycle' }, []
+    | SageFsMsg.RebuildCompleted (targetSession, generation, result) ->
+      let model', maybeEffects =
+        tryUpdateLiveTestingState targetSession (fun cycle ->
+          match cycle.PendingRebuild with
+          | Some pending when pending.Generation = generation ->
+            let cycle' = { cycle with PendingRebuild = None }
+            let effects =
+              match result with
+              | Ok () ->
+                let effect =
+                  Features.LiveTesting.TestCycleEffect.RunAffectedTests (
+                    pending.Tests, pending.Trigger, pending.TreeSitterElapsed, pending.FcsElapsed,
+                    pending.SessionId, pending.InstrumentationMaps)
+                [ SageFsEffect.TestCycle effect ]
+              | Error msg ->
+                Utils.Log.warn "[rebuild] Build failed, not running tests: %s" (msg.Substring(0, min 200 msg.Length))
+                []
+            cycle', effects
+          | Some pending ->
+            Utils.Log.warn
+              "[rebuild] RebuildCompleted(gen=%d) ignored; pending rebuild is gen=%d for %A"
+              generation
+              pending.Generation
+              targetSession
+            cycle, []
+          | None ->
+            Utils.Log.warn "[rebuild] RebuildCompleted(gen=%d) with no PendingRebuild for %A — stale dispatch?" generation targetSession
+            cycle, []) model
+      match maybeEffects with
+      | Some effects ->
+        model', effects
+      | None ->
+        Utils.Log.warn "[rebuild] RebuildCompleted(gen=%d) for unknown session %A — stale dispatch?" generation targetSession
+        model, []
 
     | SageFsMsg.MarkAllTestsStale ->
       let lt = model.LiveTesting
@@ -1935,18 +2174,29 @@ module SageFsEffectHandler =
             Timestamp = System.DateTimeOffset.UtcNow
           }
           dispatch (SageFsMsg.Event (SageFsEvent.TestCycleTimingRecorded timing))
-        | Features.LiveTesting.TestCycleEffect.RequestFcsTypeCheck (filePath, tsElapsed) ->
+        | Features.LiveTesting.TestCycleEffect.RequestFcsTypeCheck (targetSession, filePath, content, analysisIdentity, tsElapsed) ->
           let span = Instrumentation.startSpan Instrumentation.testCycleSource "test_cycle.fcs.typecheck" ["file", box filePath]
           let fcsStopwatch = System.Diagnostics.Stopwatch.StartNew()
-          do! withSession deps dispatch None (fun _sid proxy ->
+          let targetSid =
+            targetSession
+            |> Option.bind (fun s ->
+              match SessionId.validate s with Ok sid -> Some sid | Error _ -> None)
+          do! withSession deps dispatch targetSid (fun _sid proxy ->
             async {
               let code =
-                try System.IO.File.ReadAllText(filePath)
-                with ex ->
-                  Utils.Log.warn "[SageFsApp] File read failed: %s" ex.Message
-                  ""
+                match content with
+                | Some buffered -> buffered
+                | None ->
+                    try System.IO.File.ReadAllText(filePath)
+                    with ex ->
+                      Utils.Log.warn "[SageFsApp] File read failed: %s" ex.Message
+                      ""
               match code <> "" with
               | true ->
+                let effectiveAnalysisIdentity =
+                  analysisIdentity
+                  |> Option.defaultWith (fun () ->
+                    Features.LiveTesting.AnalysisIdentity.ofContent code)
                 let replyId = newReplyId ()
                 let! resp = proxy (WorkerMessage.TypeCheckWithSymbols(code, filePath, replyId))
                 fcsStopwatch.Stop()
@@ -1963,7 +2213,7 @@ module SageFsEffectHandler =
                       Features.LiveTesting.FcsTypeCheckResult.Success(filePath, refs)
                   | _ ->
                     Features.LiveTesting.FcsTypeCheckResult.Cancelled filePath
-                dispatch (SageFsMsg.FcsTypeCheckCompleted result)
+                dispatch (SageFsMsg.FcsTypeCheckCompleted (targetSession, Some effectiveAnalysisIdentity, result))
                 let timing : Features.LiveTesting.TestCycleTiming = {
                   Depth = Features.LiveTesting.TestCycleDepth.ThroughFcs(tsElapsed, fcsStopwatch.Elapsed)
                   TotalTests = 0; AffectedTests = 0
@@ -1974,61 +2224,154 @@ module SageFsEffectHandler =
                 Instrumentation.succeedSpan span
               | false -> ()
             })
-        | Features.LiveTesting.TestCycleEffect.RequestRebuild (_tests, _trigger, _tsElapsed, _fcsElapsed, targetSession, _instrumentationMaps) ->
-          Async.Start(async {
+        | Features.LiveTesting.TestCycleEffect.RequestRebuild (generation, _tests, _trigger, _tsElapsed, _fcsElapsed, targetSession, _instrumentationMaps) ->
+          let ct = deps.TestCycleCancellation.TestRun.next()
+          Async.Start((async {
+            let rebuildStopwatch = System.Diagnostics.Stopwatch.StartNew()
             try
+              ct.ThrowIfCancellationRequested()
               let targetSid =
                 targetSession
                 |> Option.bind (fun s ->
                   match SessionId.validate s with Ok sid -> Some sid | Error _ -> None)
               match deps.ResolveSession targetSid with
               | Error err ->
-                dispatch (SageFsMsg.RebuildCompleted (Error (SageFsError.describe err)))
+                match ct.IsCancellationRequested with
+                | true ->
+                  rebuildStopwatch.Stop()
+                  Utils.Log.info "[rebuild] RequestRebuild cancelled before resolve completed for %A" targetSession
+                | false ->
+                  rebuildStopwatch.Stop()
+                  dispatch (SageFsMsg.RebuildCompleted (targetSession, generation, Error (SageFsError.describe err)))
               | Ok resolution ->
+                ct.ThrowIfCancellationRequested()
                 let sid = SessionOperations.sessionId resolution
                 let sidStr = SessionId.value sid
+                let restartStopwatch = System.Diagnostics.Stopwatch.StartNew()
                 match! deps.RestartSession sid true with
                 | Error err ->
-                  let msg = SageFsError.describe err
-                  Utils.Log.warn "[rebuild] RestartSession(rebuild=true) failed for %s: %s" sidStr msg
-                  dispatch (SageFsMsg.RebuildCompleted (Error msg))
+                  match ct.IsCancellationRequested with
+                  | true ->
+                    restartStopwatch.Stop()
+                    rebuildStopwatch.Stop()
+                    Utils.Log.info "[rebuild] RequestRebuild cancelled after restart attempt for %s" sidStr
+                  | false ->
+                    restartStopwatch.Stop()
+                    rebuildStopwatch.Stop()
+                    Instrumentation.liveTestingRebuildRestartMs.Record(restartStopwatch.Elapsed.TotalMilliseconds)
+                    Instrumentation.liveTestingRebuildPipelineMs.Record(rebuildStopwatch.Elapsed.TotalMilliseconds)
+                    let msg = SageFsError.describe err
+                    Utils.Log.warn "[rebuild] RestartSession(rebuild=true) failed for %s: %s" sidStr msg
+                    dispatch (SageFsMsg.RebuildCompleted (targetSession, generation, Error msg))
                 | Ok msg ->
-                  Utils.Log.info "[rebuild] RestartSession(rebuild=true) started for %s: %s" sidStr msg
+                  ct.ThrowIfCancellationRequested()
+                  restartStopwatch.Stop()
+                  Instrumentation.liveTestingRebuildRestartMs.Record(restartStopwatch.Elapsed.TotalMilliseconds)
+                  Utils.Log.info
+                    "[rebuild] RestartSession(rebuild=true) started for %s in %.1fms: %s"
+                    sidStr
+                    restartStopwatch.Elapsed.TotalMilliseconds
+                    msg
                   let waitTimeoutMs = 30000
-                  let pollDelayMs = 250
+                  let fastPollWindowMs = 1000
+                  let fastPollDelayMs = 50
+                  let slowPollDelayMs = 250
                   let deadline = DateTimeOffset.UtcNow.AddMilliseconds(float waitTimeoutMs)
-                  let rec waitForReadyProxy () = async {
+                  let waitStopwatch = System.Diagnostics.Stopwatch.StartNew()
+                  let mutable readyObservedMs : float option = None
+                  let mutable proxyObservedMs : float option = None
+                  let recordReadyObservation status =
+                    match readyObservedMs, status with
+                    | None, Some SessionStatus.Ready ->
+                      let elapsedMs = waitStopwatch.Elapsed.TotalMilliseconds
+                      readyObservedMs <- Some elapsedMs
+                      Instrumentation.liveTestingRebuildReadyWaitMs.Record(elapsedMs)
+                      Utils.Log.info "[rebuild] Session %s reached Ready %.1fms after rebuild restart" sidStr elapsedMs
+                    | _ -> ()
+                  let recordProxyObservation hasProxy =
+                    match proxyObservedMs, hasProxy with
+                    | None, true ->
+                      let elapsedMs = waitStopwatch.Elapsed.TotalMilliseconds
+                      proxyObservedMs <- Some elapsedMs
+                      Instrumentation.liveTestingRebuildProxyWaitMs.Record(elapsedMs)
+                      Utils.Log.info "[rebuild] Session %s streaming proxy available %.1fms after rebuild restart" sidStr elapsedMs
+                    | _ -> ()
+                  let rec waitForReadyProxy waitedMs = async {
+                    ct.ThrowIfCancellationRequested()
                     let! sessions = deps.ListSessions()
+                    ct.ThrowIfCancellationRequested()
                     let status =
                       sessions
                       |> List.tryFind (fun si -> si.Id = sid)
                       |> Option.map (fun si -> si.Status)
-                    match status, deps.GetStreamingTestProxy sid with
-                    | Some SessionStatus.Ready, Some _ ->
-                      Utils.Log.info "[rebuild] Session %s ready with streaming proxy after rebuild" sidStr
-                      dispatch (SageFsMsg.RebuildCompleted (Ok ()))
+                    let streamingProxy = deps.GetStreamingTestProxy sid
+                    let hasStreamingProxy = streamingProxy |> Option.isSome
+                    recordReadyObservation status
+                    recordProxyObservation hasStreamingProxy
+                    match status, hasStreamingProxy with
+                    | Some SessionStatus.Ready, true ->
+                      waitStopwatch.Stop()
+                      rebuildStopwatch.Stop()
+                      Instrumentation.liveTestingRebuildPipelineMs.Record(rebuildStopwatch.Elapsed.TotalMilliseconds)
+                      let readyMs = readyObservedMs |> Option.defaultValue waitStopwatch.Elapsed.TotalMilliseconds
+                      let proxyMs = proxyObservedMs |> Option.defaultValue waitStopwatch.Elapsed.TotalMilliseconds
+                      Utils.Log.info
+                        "[rebuild] Session %s ready with streaming proxy after rebuild (restart=%.1fms ready=%.1fms proxy=%.1fms total=%.1fms)"
+                        sidStr
+                        restartStopwatch.Elapsed.TotalMilliseconds
+                        readyMs
+                          proxyMs
+                          rebuildStopwatch.Elapsed.TotalMilliseconds
+                      dispatch (SageFsMsg.RebuildCompleted (targetSession, generation, Ok ()))
                     | _ when DateTimeOffset.UtcNow >= deadline ->
+                      ct.ThrowIfCancellationRequested()
+                      waitStopwatch.Stop()
+                      rebuildStopwatch.Stop()
+                      Instrumentation.liveTestingRebuildPipelineMs.Record(rebuildStopwatch.Elapsed.TotalMilliseconds)
                       let statusText =
                         status
                         |> Option.map string
                         |> Option.defaultValue "missing"
+                      let readyText =
+                        readyObservedMs
+                        |> Option.map (fun elapsedMs -> sprintf "%.1fms" elapsedMs)
+                        |> Option.defaultValue "not-observed"
+                      let proxyText =
+                        proxyObservedMs
+                        |> Option.map (fun elapsedMs -> sprintf "%.1fms" elapsedMs)
+                        |> Option.defaultValue "not-observed"
                       let err =
                         sprintf
-                          "Rebuild succeeded but session %s never became ready for test execution within %dms (status=%s)."
+                          "Rebuild succeeded but session %s never became ready for test execution within %dms (status=%s, restart=%.1fms, ready=%s, proxy=%s, total=%.1fms)."
                           sidStr
                           waitTimeoutMs
                           statusText
+                          restartStopwatch.Elapsed.TotalMilliseconds
+                          readyText
+                          proxyText
+                          rebuildStopwatch.Elapsed.TotalMilliseconds
                       Utils.Log.warn "[rebuild] %s" err
-                      dispatch (SageFsMsg.RebuildCompleted (Error err))
+                      dispatch (SageFsMsg.RebuildCompleted (targetSession, generation, Error err))
                     | _ ->
+                      let pollDelayMs =
+                        match waitedMs < fastPollWindowMs with
+                        | true -> fastPollDelayMs
+                        | false -> slowPollDelayMs
                       do! deps.SleepMs pollDelayMs
-                      return! waitForReadyProxy ()
+                      ct.ThrowIfCancellationRequested()
+                      return! waitForReadyProxy (waitedMs + pollDelayMs)
                   }
-                  do! waitForReadyProxy ()
-            with ex ->
+                  do! waitForReadyProxy 0
+            with
+            | :? OperationCanceledException ->
+              rebuildStopwatch.Stop()
+              Utils.Log.info "[rebuild] RequestRebuild cancelled for %A" targetSession
+            | ex ->
+              rebuildStopwatch.Stop()
+              Instrumentation.liveTestingRebuildPipelineMs.Record(rebuildStopwatch.Elapsed.TotalMilliseconds)
               Utils.Log.error "[rebuild] Exception: %s" ex.Message
-              dispatch (SageFsMsg.RebuildCompleted (Error ex.Message))
-          })
+              dispatch (SageFsMsg.RebuildCompleted (targetSession, generation, Error ex.Message))
+          }), ct)
         | Features.LiveTesting.TestCycleEffect.RegisterFileWatcher (_sessionId, directory) ->
           deps.RegisterFileWatcher _sessionId directory
         | Features.LiveTesting.TestCycleEffect.DisposeFileWatcher (_sessionId, directory) ->

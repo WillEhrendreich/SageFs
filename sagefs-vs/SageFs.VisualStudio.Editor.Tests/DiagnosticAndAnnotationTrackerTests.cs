@@ -1,4 +1,8 @@
+using System;
 using System.Linq;
+using System.Runtime.ExceptionServices;
+using System.Threading;
+using System.Windows.Controls;
 using FluentAssertions;
 using Xunit;
 
@@ -133,6 +137,28 @@ public sealed class DiagnosticStateTrackerTests
 /// </summary>
 public sealed class FileAnnotationTrackerTests
 {
+    private static T RunSta<T>(Func<T> action)
+    {
+        T? result = default;
+        ExceptionDispatchInfo? captured = null;
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                result = action();
+            }
+            catch (Exception ex)
+            {
+                captured = ExceptionDispatchInfo.Capture(ex);
+            }
+        });
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        thread.Join();
+        captured?.Throw();
+        return result!;
+    }
+
     private static FileAnnotationTracker TrackAnnotations(string json)
     {
         var t = new FileAnnotationTracker();
@@ -264,5 +290,96 @@ public sealed class FileAnnotationTrackerTests
 
         firedPath.Should().NotBeNull();
         firedPath!.Should().Contain("test.fs");
+    }
+
+    [Fact]
+    public void CoverageAnnotations_CoveredDetail_ParsesLinePassingGlyph()
+    {
+        const string json = """
+            {
+              "FilePath": "C:/code/Tests.fs",
+              "CoverageAnnotations": [{
+                "Line": 10,
+                "Detail": { "Case": "Covered", "Fields": [1, { "Case": "AllPassing" }] }
+              }]
+            }
+            """;
+
+        var t = TrackAnnotations(json);
+        t.GetCoverageForLine("C:\\code\\Tests.fs", 10)
+            .Should().Be(CoverageGlyphKind.LinePassing);
+    }
+
+    [Fact]
+    public void CoverageAnnotations_NotCoveredDetail_ParsesLineUncoveredGlyph()
+    {
+        const string json = """
+            {
+              "FilePath": "C:/code/Tests.fs",
+              "CoverageAnnotations": [{
+                "Line": 11,
+                "Detail": { "Case": "NotCovered" }
+              }]
+            }
+            """;
+
+        var t = TrackAnnotations(json);
+        t.GetCoverageForLine("C:\\code\\Tests.fs", 11)
+            .Should().Be(CoverageGlyphKind.LineUncovered);
+    }
+
+    [Fact]
+    public void CoverageAnnotations_BranchFullyCovered_OverridesLineGlyph()
+    {
+        const string json = """
+            {
+              "FilePath": "C:/code/Tests.fs",
+              "CoverageAnnotations": [{
+                "Line": 12,
+                "Detail": { "Case": "Covered", "Fields": [1, { "Case": "SomeFailing" }] },
+                "BranchCoverage": { "Case": "FullyCovered" }
+              }]
+            }
+            """;
+
+        var t = TrackAnnotations(json);
+        t.GetCoverageForLine("C:\\code\\Tests.fs", 12)
+            .Should().Be(CoverageGlyphKind.BranchFullyCovered);
+    }
+
+    [Fact]
+    public void CoverageAnnotations_BranchPartiallyCovered_OverridesLineGlyph()
+    {
+        const string json = """
+            {
+              "FilePath": "C:/code/Tests.fs",
+              "CoverageAnnotations": [{
+                "Line": 13,
+                "Detail": { "Case": "Covered", "Fields": [2, { "Case": "AllPassing" }] },
+                "BranchCoverage": { "Case": "PartiallyCovered", "Fields": [2, 3] }
+              }]
+            }
+            """;
+
+        var t = TrackAnnotations(json);
+        t.GetCoverageForLine("C:\\code\\Tests.fs", 13)
+            .Should().Be(CoverageGlyphKind.BranchPartiallyCovered);
+    }
+
+    [Theory]
+    [InlineData(CoverageGlyphKind.BranchFullyCovered, "▐")]
+    [InlineData(CoverageGlyphKind.BranchPartiallyCovered, "◐")]
+    [InlineData(CoverageGlyphKind.BranchNotCovered, "▌")]
+    public void CoverageGlyphFactory_RendersBranchSymbols(CoverageGlyphKind kind, string expected)
+    {
+        var factory = new CoverageGlyphFactory();
+        var actual = RunSta(() =>
+        {
+            var glyph = factory.GenerateGlyph(null!, new CoverageGlyphTag(kind));
+            glyph.Should().BeOfType<TextBlock>();
+            return ((TextBlock)glyph!).Text;
+        });
+
+        actual.Should().Be(expected);
     }
 }

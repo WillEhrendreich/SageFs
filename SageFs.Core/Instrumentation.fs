@@ -139,6 +139,14 @@ module Instrumentation =
     testCycleMeter.CreateHistogram<float>("sagefs.live_testing.buffered_annotations_ms", "ms", "Buffered test-result editor annotation refresh duration")
   let liveTestingBufferedApplyMs =
     testCycleMeter.CreateHistogram<float>("sagefs.live_testing.buffered_apply_ms", "ms", "Buffered test-result end-to-end apply duration")
+  let liveTestingRebuildRestartMs =
+    testCycleMeter.CreateHistogram<float>("sagefs.live_testing.rebuild_restart_ms", "ms", "Compiled-project rebuild restart duration")
+  let liveTestingRebuildReadyWaitMs =
+    testCycleMeter.CreateHistogram<float>("sagefs.live_testing.rebuild_ready_wait_ms", "ms", "Time from rebuild restart completion until the session first reports Ready")
+  let liveTestingRebuildProxyWaitMs =
+    testCycleMeter.CreateHistogram<float>("sagefs.live_testing.rebuild_proxy_wait_ms", "ms", "Time from rebuild restart completion until the streaming test proxy is available")
+  let liveTestingRebuildPipelineMs =
+    testCycleMeter.CreateHistogram<float>("sagefs.live_testing.rebuild_pipeline_ms", "ms", "End-to-end compiled-project rebuild wait duration")
 
   // Coverage instrumentation observability
   let coverageMapsReceived =

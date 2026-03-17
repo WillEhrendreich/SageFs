@@ -2,6 +2,7 @@ module SageFs.Vscode.SageFsClient
 
 open Fable.Core
 open Fable.Core.JsInterop
+open SageFs.Vscode.BufferBridge
 open SageFs.Vscode.DaemonDiscovery
 open SageFs.Vscode.JsHelpers
 open SageFs.Vscode.SafeInterop
@@ -299,6 +300,13 @@ let switchSession (sessionId: string) (c: Client) =
 
 let stopSession (sessionId: string) (c: Client) =
   postCommand c "/api/sessions/stop" (jsonStringify {| sessionId = sessionId |}) 10000
+
+let postBufferChanged (request: BufferChangedRequest) (c: Client) =
+  postCommand
+    c
+    (bufferChangedPath request.SessionId)
+    (jsonStringify {| filePath = request.FilePath; content = request.Content |})
+    15000
 
 let parseSystemStatus (parsed: obj) =
   { supervised = fieldBool "supervised" parsed |> Option.defaultValue false

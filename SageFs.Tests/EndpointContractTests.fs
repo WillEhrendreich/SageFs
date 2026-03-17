@@ -76,7 +76,7 @@ let endpointContractTests = testList "EndpointContracts" [
     test "apiVersion matches current contract shape" {
       // Pin the version so any contract change forces a conscious version bump
       apiVersion
-      |> Expect.equal "apiVersion should be 1 for current contract" 1
+      |> Expect.equal "apiVersion should be 2 for current contract" 2
     }
   ]
 
@@ -109,6 +109,12 @@ let endpointContractTests = testList "EndpointContracts" [
       |> Expect.isEmpty (sprintf "duplicate endpoints: %A" dupes)
     }
 
+    test "session-scoped buffer changed endpoint exists" {
+      all
+      |> List.exists (fun ep -> ep.method = POST && ep.path = "/api/sessions/{sid}/buffer-changed")
+      |> Expect.isTrue "daemon must expose a session-scoped buffer changed endpoint for unsaved editor content"
+    }
+
     test "endpoint count pinned — update contracts when adding endpoints" {
       // CI GATE: This count is pinned. When you add a daemon endpoint:
       // 1. Add it to the appropriate list in EndpointContracts.fs
@@ -119,7 +125,7 @@ let endpointContractTests = testList "EndpointContracts" [
       |> List.length
       |> Expect.equal
         "endpoint count changed — update contracts and bump this number"
-        33
+        34
     }
   ]
 

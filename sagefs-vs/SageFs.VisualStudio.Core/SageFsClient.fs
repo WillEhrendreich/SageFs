@@ -269,6 +269,25 @@ type SageFsClient(http: HttpClient) =
       return []
   }
 
+  member this.PostBufferChangedAsync(request: BufferChangeRequest, ct: CancellationToken) = task {
+    try
+      use content =
+        new StringContent(
+          BufferChangeRequest.toJson request,
+          Encoding.UTF8,
+          "application/json")
+
+      let! response =
+        http.PostAsync(
+          sprintf "%s/api/sessions/%s/buffer-changed" this.BaseUrl request.SessionId,
+          content,
+          ct)
+
+      return response.IsSuccessStatusCode
+    with _ ->
+      return false
+  }
+
   /// Get warmup context for a session.
   member this.GetWarmupContextAsync(sessionId: string, ct: CancellationToken) = task {
     try

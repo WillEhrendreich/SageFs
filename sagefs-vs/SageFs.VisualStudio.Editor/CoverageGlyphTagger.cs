@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.ComponentModel.Composition;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Shapes;
 using System.Windows.Threading;
@@ -15,14 +16,23 @@ namespace SageFs.VisualStudio.Editor;
 
 // ── Coverage health enum ─────────────────────────────────────────────────────
 
-public enum CoverageHealth { AllPassing, SomeFailing, NoCoverage }
+public enum CoverageGlyphKind
+{
+    None,
+    LinePassing,
+    LineFailing,
+    LineUncovered,
+    BranchFullyCovered,
+    BranchPartiallyCovered,
+    BranchNotCovered
+}
 
 // ── Glyph tag type ───────────────────────────────────────────────────────────
 
 public sealed class CoverageGlyphTag : IGlyphTag
 {
-    public CoverageHealth Health { get; }
-    public CoverageGlyphTag(CoverageHealth health) { Health = health; }
+    public CoverageGlyphKind Kind { get; }
+    public CoverageGlyphTag(CoverageGlyphKind kind) { Kind = kind; }
 }
 
 // ── Tagger: maps buffer lines → CoverageGlyphTag ────────────────────────────
@@ -75,15 +85,13 @@ internal sealed class CoverageGlyphTagger : ITagger<CoverageGlyphTag>, IDisposab
             for (var lineNum = startLine; lineNum <= endLine; lineNum++)
             {
                 // GetCoverageForLine expects 1-based line numbers
-                var health = _tracker.GetCoverageForLine(filePath, lineNum + 1);
-                if (health == CoverageHealth.NoCoverage && !SageFsFeatureFlags.CoverageGlyphsEnabled)
-                    continue;
-                if (health == CoverageHealth.NoCoverage) continue;
+                var kind = _tracker.GetCoverageForLine(filePath, lineNum + 1);
+                if (kind == CoverageGlyphKind.None) continue;
 
                 var line = snapshot.GetLineFromLineNumber(lineNum);
                 yield return new TagSpan<CoverageGlyphTag>(
                     new SnapshotSpan(line.Start, 0),
-                    new CoverageGlyphTag(health));
+                    new CoverageGlyphTag(kind));
             }
         }
     }
@@ -136,31 +144,46 @@ internal sealed class CoverageGlyphFactoryProvider : IGlyphFactoryProvider
 
 internal sealed class CoverageGlyphFactory : IGlyphFactory
 {
-    private static readonly Brush CoveredBrush   = Freeze(new SolidColorBrush(Color.FromRgb(0x4C, 0xAF, 0x50))); // green
-    private static readonly Brush PartialBrush   = Freeze(new SolidColorBrush(Color.FromRgb(0xF4, 0x43, 0x36))); // red
-    private static readonly Brush UncoveredBrush = Freeze(new SolidColorBrush(Color.FromRgb(0x9E, 0x9E, 0x9E))); // gray
+    private static readonly Brush LinePassingBrush = Freeze(new SolidColorBrush(Color.FromRgb(0x4C, 0xAF, 0x50))); // green
+    private static readonly Brush LineFailingBrush = Freeze(new SolidColorBrush(Color.FromRgb(0xF4, 0x43, 0x36))); // red
+    private static readonly Brush LineUncoveredBrush = Freeze(new SolidColorBrush(Color.FromRgb(0x9E, 0x9E, 0x9E))); // gray
+    private static readonly Brush BranchPartialBrush = Freeze(new SolidColorBrush(Color.FromRgb(0xE6, 0xC3, 0x84))); // amber
 
     private static Brush Freeze(SolidColorBrush b) { b.Freeze(); return b; }
+
+    private static UIElement LineBar(Brush brush) =>
+        new Rectangle
+        {
+            Width = 3,
+            Height = 16,
+            Fill = brush,
+            Margin = new Thickness(1, 0, 0, 0),
+        };
+
+    private static UIElement BranchGlyph(string text, Brush brush) =>
+        new TextBlock
+        {
+            Text = text,
+            Foreground = brush,
+            FontFamily = new FontFamily("Consolas"),
+            FontSize = 13,
+            Margin = new Thickness(0, -1, 0, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+        };
 
     public UIElement? GenerateGlyph(IWpfTextViewLine line, IGlyphTag tag)
     {
         if (tag is not CoverageGlyphTag coverageTag) return null;
 
-        var brush = coverageTag.Health switch
+        return coverageTag.Kind switch
         {
-            CoverageHealth.AllPassing  => CoveredBrush,
-            CoverageHealth.SomeFailing => PartialBrush,
-            CoverageHealth.NoCoverage  => UncoveredBrush,
-            _                          => null
-        };
-        if (brush == null) return null;
-
-        return new Rectangle
-        {
-            Width  = 3,
-            Height = 16,
-            Fill   = brush,
-            Margin = new Thickness(1, 0, 0, 0),
+            CoverageGlyphKind.LinePassing => LineBar(LinePassingBrush),
+            CoverageGlyphKind.LineFailing => LineBar(LineFailingBrush),
+            CoverageGlyphKind.LineUncovered => LineBar(LineUncoveredBrush),
+            CoverageGlyphKind.BranchFullyCovered => BranchGlyph("▐", LinePassingBrush),
+            CoverageGlyphKind.BranchPartiallyCovered => BranchGlyph("◐", BranchPartialBrush),
+            CoverageGlyphKind.BranchNotCovered => BranchGlyph("▌", LineFailingBrush),
+            _ => null
         };
     }
 }

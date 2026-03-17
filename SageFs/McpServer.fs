@@ -1521,6 +1521,31 @@ let mapSessionRoutes (app: WebApplication) (rctx: RouteContext) =
           do! jsonResponse ctx 404 {| success = false; error = sprintf "Session '%s' not found" sidStr |}
     } :> Task
   ) |> ignore
+  app.MapPost("/api/sessions/{sid}/buffer-changed", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
+    task {
+      let raw = ctx.Request.RouteValues.["sid"] |> string
+      match SageFs.WorkerProtocol.SessionId.validate raw with
+      | Error msg ->
+        do! jsonResponse ctx 400 {| success = false; error = msg |}
+      | Ok sid ->
+        let sidStr = SageFs.WorkerProtocol.SessionId.value sid
+        let! info = rctx.Config.SessionOps.GetSessionInfo sid
+        match info with
+        | None ->
+          do! jsonResponse ctx 404 {| success = false; error = sprintf "Session '%s' not found" sidStr |}
+        | Some _ ->
+          use! json = readJsonBody ctx
+          let root = json.RootElement
+          let filePath = root.GetProperty("filePath").GetString()
+          let content = root.GetProperty("content").GetString()
+          match rctx.Dispatch with
+          | None ->
+            do! jsonResponse ctx 503 {| success = false; error = "Elm loop not started" |}
+          | Some dispatch ->
+            dispatch (SageFs.SageFsMsg.BufferContentChanged (Some sidStr, filePath, content))
+            do! jsonResponse ctx 202 {| success = true; sessionId = sidStr; filePath = filePath |}
+    } :> Task
+  ) |> ignore
   app.MapPost("/api/sessions/create", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
     task {
       use! doc = readJsonBody ctx

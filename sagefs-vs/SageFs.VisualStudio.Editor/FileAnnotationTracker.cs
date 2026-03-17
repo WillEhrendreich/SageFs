@@ -39,9 +39,9 @@ internal sealed class FileAnnotationTracker
     private readonly ConcurrentDictionary<string, Dictionary<int, List<InlineFailureDisplay>>>
         _byFile = new ConcurrentDictionary<string, Dictionary<int, List<InlineFailureDisplay>>>(StringComparer.OrdinalIgnoreCase);
 
-    // Per-file: line → coverage health
-    private readonly ConcurrentDictionary<string, Dictionary<int, CoverageHealth>>
-        _coverageByFile = new ConcurrentDictionary<string, Dictionary<int, CoverageHealth>>(StringComparer.OrdinalIgnoreCase);
+    // Per-file: line → coverage glyph kind
+    private readonly ConcurrentDictionary<string, Dictionary<int, CoverageGlyphKind>>
+        _coverageByFile = new ConcurrentDictionary<string, Dictionary<int, CoverageGlyphKind>>(StringComparer.OrdinalIgnoreCase);
 
     // Failure narratives keyed by TestId
     private readonly ConcurrentDictionary<string, FailureNarrativeEntry>
@@ -110,19 +110,17 @@ internal sealed class FileAnnotationTracker
             // ── Coverage annotations ─────────────────────────────────────
             if (root.TryGetProperty("CoverageAnnotations", out var coverageAnns))
             {
-                var coverageMap = new Dictionary<int, CoverageHealth>();
+                var coverageMap = new Dictionary<int, CoverageGlyphKind>();
                 foreach (var ann in coverageAnns.EnumerateArray())
                 {
                     int covLine = ann.TryGetProperty("Line", out var covLineEl) ? covLineEl.GetInt32() : -1;
-                    var healthStr = ann.TryGetProperty("Health", out var hEl) ? hEl.GetString() : null;
                     if (covLine > 0)
                     {
-                        coverageMap[covLine] = healthStr switch
+                        var kind = ParseCoverageGlyphKind(ann);
+                        if (kind != CoverageGlyphKind.None)
                         {
-                            "AllPassing" => CoverageHealth.AllPassing,
-                            "SomeFailing" => CoverageHealth.SomeFailing,
-                            _ => CoverageHealth.NoCoverage
-                        };
+                            coverageMap[covLine] = kind;
+                        }
                     }
                 }
                 _coverageByFile[filePath] = coverageMap;
@@ -177,12 +175,12 @@ internal sealed class FileAnnotationTracker
     public bool HasAnyForFile(string filePath) =>
         _byFile.TryGetValue(NormalizePath(filePath), out var m) && m.Count > 0;
 
-    public CoverageHealth GetCoverageForLine(string filePath, int line)
+    public CoverageGlyphKind GetCoverageForLine(string filePath, int line)
     {
         var key = NormalizePath(filePath);
-        return _coverageByFile.TryGetValue(key, out var map) && map.TryGetValue(line, out var health)
-            ? health
-            : CoverageHealth.NoCoverage;
+        return _coverageByFile.TryGetValue(key, out var map) && map.TryGetValue(line, out var kind)
+            ? kind
+            : CoverageGlyphKind.None;
     }
 
     public bool HasAnyCoverageForFile(string filePath) =>
@@ -221,6 +219,82 @@ internal sealed class FileAnnotationTracker
 
     private static string NormalizePath(string path) =>
         path.Replace('/', '\\').ToLowerInvariant();
+
+    private static CoverageGlyphKind ParseCoverageGlyphKind(JsonElement annotation)
+    {
+        var branchKind = ParseBranchCoverage(annotation);
+        if (branchKind != CoverageGlyphKind.None)
+            return branchKind;
+
+        if (annotation.TryGetProperty("Detail", out var detail))
+        {
+            var detailCase = TryGetDuCase(detail);
+            return detailCase switch
+            {
+                "Covered" => ParseCoveredDetail(detail),
+                "NotCovered" => CoverageGlyphKind.LineUncovered,
+                "Pending" => CoverageGlyphKind.LineUncovered,
+                _ => CoverageGlyphKind.None
+            };
+        }
+
+        if (annotation.TryGetProperty("Health", out var health))
+        {
+            return (health.GetString() ?? "") switch
+            {
+                "AllPassing" => CoverageGlyphKind.LinePassing,
+                "SomeFailing" => CoverageGlyphKind.LineFailing,
+                "NoCoverage" => CoverageGlyphKind.LineUncovered,
+                _ => CoverageGlyphKind.None
+            };
+        }
+
+        return CoverageGlyphKind.None;
+    }
+
+    private static CoverageGlyphKind ParseBranchCoverage(JsonElement annotation)
+    {
+        if (!annotation.TryGetProperty("BranchCoverage", out var branch)
+            || branch.ValueKind != JsonValueKind.Object)
+        {
+            return CoverageGlyphKind.None;
+        }
+
+        return TryGetDuCase(branch) switch
+        {
+            "FullyCovered" => CoverageGlyphKind.BranchFullyCovered,
+            "PartiallyCovered" => CoverageGlyphKind.BranchPartiallyCovered,
+            "NotCovered" => CoverageGlyphKind.BranchNotCovered,
+            _ => CoverageGlyphKind.None
+        };
+    }
+
+    private static CoverageGlyphKind ParseCoveredDetail(JsonElement detail)
+    {
+        if (!detail.TryGetProperty("Fields", out var fields)
+            || fields.ValueKind != JsonValueKind.Array
+            || fields.GetArrayLength() < 2)
+        {
+            return CoverageGlyphKind.None;
+        }
+
+        return TryGetDuCase(fields[1]) switch
+        {
+            "AllPassing" => CoverageGlyphKind.LinePassing,
+            "SomeFailing" => CoverageGlyphKind.LineFailing,
+            _ => CoverageGlyphKind.None
+        };
+    }
+
+    private static string? TryGetDuCase(JsonElement value)
+    {
+        return value.ValueKind switch
+        {
+            JsonValueKind.String => value.GetString(),
+            JsonValueKind.Object when value.TryGetProperty("Case", out var caseEl) => caseEl.GetString(),
+            _ => null
+        };
+    }
 }
 
 internal readonly struct InlineFailureDisplay

@@ -11,6 +11,7 @@
   <ItemGroup>
     <Compile Include="Constants.fs" />
     <Compile Include="Types.fs" />
+    <Compile Include="BufferChangeRequest.fs" />
     <Compile Include="LiveTestingTypes.fs" />
     <Compile Include="GlyphProjection.fs" />
     <Compile Include="LiveTestingParser.fs" />

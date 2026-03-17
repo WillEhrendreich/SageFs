@@ -1,10 +1,10 @@
 # As-You-Type Live Testing — Architecture & Design
 
-> **Note**: This document describes the design for as-you-type scope evaluation. The REST endpoint
-> `POST /api/live-testing/evaluate-scope` referenced below is a **design-time contract** — the
-> actual implementation uses MCP tools (`enable_live_testing`, `run_tests`) and SSE events for
-> the feedback loop. The architectural principles (scope extraction, debounce, type-check, FSI eval)
-> remain accurate.
+> **Status note**: This document is now partly historical. The currently shipped compiled-project
+> editor path uses **session-scoped buffer sync** via
+> `POST /api/sessions/{sid}/buffer-changed` with debounced unsaved buffer content from VS Code,
+> Neovim, and Visual Studio. The `POST /api/live-testing/evaluate-scope` contract below remains a
+> design exploration rather than the active editor/daemon contract.
 
 > **Priority**: #1. This is the feature that makes VS Enterprise look like a joke.
 

@@ -696,6 +696,64 @@ let integrationTests =
 [<Tests>]
 let httpApiRoutingTests =
   testList "[Integration] HTTP API routing" [
+    testCase "POST /api/sessions/{sid}/buffer-changed accepts unsaved buffer content" <| fun _ ->
+      let port = reserveLoopbackPort (Some (38800 + (Random().Next(100))))
+      let proc, client =
+        startDaemonWithArgs port repoRoot []
+        |> Async.AwaitTask |> Async.RunSynchronously
+      try
+        let createStatus, createBody =
+          createSession client "SageFs.Tests.fsproj" testProjectDir
+          |> Async.AwaitTask |> Async.RunSynchronously
+        createStatus |> Expect.equal "session create should succeed" 200
+
+        let ready, sessionsBody =
+          waitForReadySession client testProjectDir (TimeSpan.FromSeconds 60.0)
+          |> Async.AwaitTask |> Async.RunSynchronously
+        ready
+        |> Expect.isTrue (sprintf "session should reach Ready before buffer ingress. Create: %s Sessions: %s" createBody sessionsBody)
+
+        use sessionsDoc = JsonDocument.Parse(sessionsBody)
+        let sessionId =
+          sessionsDoc.RootElement.GetProperty("sessions").EnumerateArray()
+          |> Seq.find (fun session ->
+            let sessionDir = session.GetProperty("workingDirectory").GetString() |> normalizeDir
+            sessionDir = normalizeDir testProjectDir)
+          |> fun session -> session.GetProperty("id").GetString()
+
+        let payload =
+          {| filePath = Path.Combine(testProjectDir, "Unsaved.fs")
+             content = "module Unsaved\nlet value = 42" |}
+
+        let status, _body =
+          postJson client (sprintf "/api/sessions/%s/buffer-changed" (Uri.EscapeDataString sessionId)) payload
+          |> Async.AwaitTask |> Async.RunSynchronously
+        status |> Expect.equal "buffer change accepted" 202
+      finally
+        client.Dispose()
+        killDaemon proc
+
+    testCase "POST /api/sessions/{sid}/buffer-changed returns 404 for unknown session" <| fun _ ->
+      let port = reserveLoopbackPort (Some (38900 + (Random().Next(100))))
+      let proc, client =
+        startDaemonWithArgs port repoRoot []
+        |> Async.AwaitTask |> Async.RunSynchronously
+      try
+        let payload =
+          {| filePath = Path.Combine(testProjectDir, "Unsaved.fs")
+             content = "module Unsaved\nlet value = 42" |}
+        let status, body =
+          postJson client "/api/sessions/deadbeef/buffer-changed" payload
+          |> Async.AwaitTask |> Async.RunSynchronously
+        status |> Expect.equal "unknown session rejected" 404
+
+        use doc = JsonDocument.Parse(body)
+        doc.RootElement.GetProperty("success").GetBoolean()
+        |> Expect.isFalse "unknown session should not be accepted"
+      finally
+        client.Dispose()
+        killDaemon proc
+
     testCase "POST /api/completions uses workingDirectory for startup session routing" <| fun _ ->
       let port = reserveLoopbackPort (Some (38600 + (Random().Next(100))))
       let proc, client =

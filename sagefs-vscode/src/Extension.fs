@@ -20,8 +20,10 @@ module TestDeco = SageFs.Vscode.TestDecorations
 module TestLens = SageFs.Vscode.TestCodeLensProvider
 module InlineDeco = SageFs.Vscode.InlineDecorations
 module FileAnno = SageFs.Vscode.FileAnnotationsListener
+module FileAnnoCov = SageFs.Vscode.FileAnnotationCoverage
 module Blocks = SageFs.Vscode.CodeBlocks
 module Discovery = SageFs.Vscode.DaemonDiscovery
+module BufferBridge = SageFs.Vscode.BufferBridge
 
 open SageFs.Vscode.LiveTestingTypes
 open SageFs.Vscode.FeatureTypes
@@ -37,6 +39,8 @@ let mutable diagnosticsDisposable: Disposable option = None
 let mutable sseDisposable: Disposable option = None
 let mutable diagnosticCollection: DiagnosticCollection option = None
 let mutable activeSessionId: string option = None
+let mutable activeSessionWorkingDirectory: string option = None
+let mutable knownSessions: Client.SessionInfo array = [||]
 let mutable currentWorkflowLabel: string = "REPL"
 let mutable liveTestListener: LiveTest.LiveTestingListener option = None
 let mutable testAdapter: TestCtrl.TestAdapter option = None
@@ -66,6 +70,9 @@ let mutable warmupDetail: string option = None
 let mutable private covPassingDecoType: TextEditorDecorationType option = None
 let mutable private covFailingDecoType: TextEditorDecorationType option = None
 let mutable private covNoneDecoType: TextEditorDecorationType option = None
+let mutable private branchFullDecoType: TextEditorDecorationType option = None
+let mutable private branchPartialDecoType: TextEditorDecorationType option = None
+let mutable private branchNoneDecoType: TextEditorDecorationType option = None
 let mutable private inlineFailureDecoTypes: Map<string, TextEditorDecorationType> = Map.empty
 let mutable private fileAnnotationsCache: Map<string, FileAnno.FileAnnotations> = Map.empty
 let mutable private daemonConnectionDisposables: Disposable list = []
@@ -166,14 +173,56 @@ let initFileAnnotationDecoTypes () =
           "margin" ==> "0 0.3em 0 0"
         ]
       ]))
+  branchFullDecoType <- Some (
+    Window.createTextEditorDecorationType (
+      createObj [
+        "isWholeLine" ==> false
+        "overviewRulerColor" ==> newThemeColor "testing.iconPassed"
+        "overviewRulerLane" ==> 1
+        "before" ==> createObj [
+          "contentText" ==> "▐"
+          "color" ==> newThemeColor "testing.iconPassed"
+          "margin" ==> "0 0.3em 0 0"
+        ]
+      ]))
+  branchPartialDecoType <- Some (
+    Window.createTextEditorDecorationType (
+      createObj [
+        "isWholeLine" ==> false
+        "overviewRulerColor" ==> newThemeColor "testing.iconQueued"
+        "overviewRulerLane" ==> 1
+        "before" ==> createObj [
+          "contentText" ==> "◐"
+          "color" ==> newThemeColor "testing.iconQueued"
+          "margin" ==> "0 0.3em 0 0"
+        ]
+      ]))
+  branchNoneDecoType <- Some (
+    Window.createTextEditorDecorationType (
+      createObj [
+        "isWholeLine" ==> false
+        "overviewRulerColor" ==> newThemeColor "testing.iconFailed"
+        "overviewRulerLane" ==> 1
+        "before" ==> createObj [
+          "contentText" ==> "▌"
+          "color" ==> newThemeColor "testing.iconFailed"
+          "margin" ==> "0 0.3em 0 0"
+        ]
+      ]))
 
 let disposeFileAnnotationDecoTypes () =
   covPassingDecoType |> Option.iter (fun d -> d.dispose ())
   covFailingDecoType |> Option.iter (fun d -> d.dispose ())
   covNoneDecoType |> Option.iter (fun d -> d.dispose ())
+  branchFullDecoType |> Option.iter (fun d -> d.dispose ())
+  branchPartialDecoType |> Option.iter (fun d -> d.dispose ())
+  branchNoneDecoType |> Option.iter (fun d -> d.dispose ())
   covPassingDecoType <- None
   covFailingDecoType <- None
   covNoneDecoType <- None
+  branchFullDecoType <- None
+  branchPartialDecoType <- None
+  branchNoneDecoType <- None
   inlineFailureDecoTypes |> Map.iter (fun _ d -> d.dispose ())
   inlineFailureDecoTypes <- Map.empty
   fileAnnotationsCache <- Map.empty
@@ -185,28 +234,36 @@ let applyFileAnnotationsToEditor (editor: TextEditor) =
     covPassingDecoType |> Option.iter (fun dt -> editor.setDecorations(dt, ResizeArray<obj>()))
     covFailingDecoType |> Option.iter (fun dt -> editor.setDecorations(dt, ResizeArray<obj>()))
     covNoneDecoType |> Option.iter (fun dt -> editor.setDecorations(dt, ResizeArray<obj>()))
+    branchFullDecoType |> Option.iter (fun dt -> editor.setDecorations(dt, ResizeArray<obj>()))
+    branchPartialDecoType |> Option.iter (fun dt -> editor.setDecorations(dt, ResizeArray<obj>()))
+    branchNoneDecoType |> Option.iter (fun dt -> editor.setDecorations(dt, ResizeArray<obj>()))
   | Some annotations ->
     let passRanges = ResizeArray<obj>()
     let failRanges = ResizeArray<obj>()
     let noneRanges = ResizeArray<obj>()
+    let branchFullRanges = ResizeArray<obj>()
+    let branchPartialRanges = ResizeArray<obj>()
+    let branchNoneRanges = ResizeArray<obj>()
     for ann in annotations.CoverageAnnotations do
       let range = newRange (ann.Line - 1) 0 (ann.Line - 1) 0
       let decoObj =
         createObj [
           "range" ==> range
-          "hoverMessage" ==>
-            (match ann.Health with
-             | FileAnno.CoverageHealth.AllPassing -> "Coverage: all tests passing"
-             | FileAnno.CoverageHealth.SomeFailing -> "Coverage: some tests failing"
-             | FileAnno.CoverageHealth.NoCoverage -> "No coverage")
+          "hoverMessage" ==> FileAnnoCov.CoverageAnnotation.hoverMessage ann
         ]
-      match ann.Health with
-      | FileAnno.CoverageHealth.AllPassing -> passRanges.Add decoObj
-      | FileAnno.CoverageHealth.SomeFailing -> failRanges.Add decoObj
-      | FileAnno.CoverageHealth.NoCoverage -> noneRanges.Add decoObj
+      match FileAnnoCov.CoverageAnnotation.decorationKind ann with
+      | FileAnnoCov.CoverageDecorationKind.LinePassing -> passRanges.Add decoObj
+      | FileAnnoCov.CoverageDecorationKind.LineFailing -> failRanges.Add decoObj
+      | FileAnnoCov.CoverageDecorationKind.LineNone -> noneRanges.Add decoObj
+      | FileAnnoCov.CoverageDecorationKind.BranchFull -> branchFullRanges.Add decoObj
+      | FileAnnoCov.CoverageDecorationKind.BranchPartial _ -> branchPartialRanges.Add decoObj
+      | FileAnnoCov.CoverageDecorationKind.BranchNone -> branchNoneRanges.Add decoObj
     covPassingDecoType |> Option.iter (fun dt -> editor.setDecorations(dt, passRanges))
     covFailingDecoType |> Option.iter (fun dt -> editor.setDecorations(dt, failRanges))
     covNoneDecoType |> Option.iter (fun dt -> editor.setDecorations(dt, noneRanges))
+    branchFullDecoType |> Option.iter (fun dt -> editor.setDecorations(dt, branchFullRanges))
+    branchPartialDecoType |> Option.iter (fun dt -> editor.setDecorations(dt, branchPartialRanges))
+    branchNoneDecoType |> Option.iter (fun dt -> editor.setDecorations(dt, branchNoneRanges))
     // Dispose old inline failure decorations for this file
     match Map.tryFind filePath inlineFailureDecoTypes with
     | Some old -> old.dispose ()
@@ -589,6 +646,8 @@ let refreshStatus () =
         sb.backgroundColor <- None
         sb.show ()
         activeSessionId <- None
+        activeSessionWorkingDirectory <- None
+        knownSessions <- [||]
         liveTestListener |> Option.iter (fun l -> l.SetSessionFilter None)
         HotReload.setSession c None
         SessionCtx.setSession c None
@@ -615,6 +674,7 @@ let refreshStatus () =
           warmupPhase <- None
           warmupDetail <- None
           let! sessions = Client.listSessions c
+          knownSessions <- sessions
           let session =
             match activeSessionId with
             | Some id -> sessions |> Array.tryFind (fun s -> s.id = id)
@@ -622,6 +682,7 @@ let refreshStatus () =
           match session with
           | Some s ->
             activeSessionId <- Some s.id
+            activeSessionWorkingDirectory <- Some s.workingDirectory
             liveTestListener |> Option.iter (fun l -> l.SetSessionFilter (Some s.id))
             let projLabel =
               match s.projects with
@@ -659,6 +720,7 @@ let refreshStatus () =
             sb.tooltip <- Some tooltipText
           | None ->
             activeSessionId <- None
+            activeSessionWorkingDirectory <- None
             liveTestListener |> Option.iter (fun l -> l.SetSessionFilter None)
             sb.text <- sprintf "$(zap) SageFs: ready (no session)%s%s" supervised restarts
           sb.backgroundColor <- None
@@ -1221,14 +1283,18 @@ let sessionPickCommand (prompt: string) (action: Client.SessionInfo -> Client.Cl
 let switchSessionCmd () =
   sessionPickCommand "Select a session"
     (fun sess c -> Client.switchSession sess.id c)
-    (fun sess -> activeSessionId <- Some sess.id)
+    (fun sess ->
+      activeSessionId <- Some sess.id
+      activeSessionWorkingDirectory <- Some sess.workingDirectory)
 
 let stopSessionCmd () =
   sessionPickCommand "Select a session to stop"
     (fun sess c -> Client.stopSession sess.id c)
     (fun sess ->
       match activeSessionId with
-      | Some id when id = sess.id -> activeSessionId <- None
+      | Some id when id = sess.id ->
+        activeSessionId <- None
+        activeSessionWorkingDirectory <- None
       | _ -> ())
 
 /// Context-aware workflow switching — shows QuickPick to choose REPL or Live workflow.
@@ -1370,6 +1436,7 @@ let sessionMenu () =
             | Some sess ->
               let! _ = Client.switchSession sess.id c2
               activeSessionId <- Some sess.id
+              activeSessionWorkingDirectory <- Some sess.workingDirectory
               Window.showInformationMessage (sprintf "Switched to %s" sess.id) [||] |> ignore
               refreshStatus ()
             | None -> ()
@@ -1625,16 +1692,49 @@ let activate (context: ExtensionContext) =
   context.subscriptions.Add (dc :> obj :?> Disposable)
 
   // Mark inline results as stale when F# documents change (debounced)
-  let docChangeSub = Workspace.onDidChangeTextDocument (fun _evt ->
+  let docChangeSub = Workspace.onDidChangeTextDocument (fun evt ->
     staleDebounceTimer |> Option.iter jsClearTimeout
     staleDebounceTimer <- Some (jsSetTimeout (fun () ->
-      match Window.getActiveTextEditor () with
-      | Some ed when ed.document.fileName.EndsWith(".fs") || ed.document.fileName.EndsWith(".fsx") ->
-        if not (Map.isEmpty InlineDeco.blockDecorations) then
-          InlineDeco.markDecorationsStale ed
-        // Clear binding-value ghost text: source lines may have shifted
-        InlineDeco.clearBindingValueDecorations ()
-      | _ -> ()
+      let changedDoc: TextDocument = evt?document
+      let activeFilePath =
+        match Window.getActiveTextEditor () with
+        | Some ed when ed.document.fileName.EndsWith(".fs") || ed.document.fileName.EndsWith(".fsx") ->
+          if not (Map.isEmpty InlineDeco.blockDecorations) then
+            InlineDeco.markDecorationsStale ed
+          // Clear binding-value ghost text: source lines may have shifted
+          InlineDeco.clearBindingValueDecorations ()
+          Some ed.document.fileName
+        | _ ->
+          None
+
+      match client with
+      | Some c ->
+        let routingSessions =
+          knownSessions
+          |> Array.map (fun session ->
+            { BufferBridge.SessionOwnershipCandidate.SessionId = session.id
+              BufferBridge.SessionOwnershipCandidate.WorkingDirectory = session.workingDirectory })
+        match
+          BufferBridge.tryBuildBufferChangedRequest
+            activeSessionId
+            activeSessionWorkingDirectory
+            activeFilePath
+            routingSessions
+            changedDoc.fileName
+            changedDoc.uri.scheme
+            (changedDoc.getText())
+        with
+        | Some request ->
+          promise {
+            let! outcome = Client.postBufferChanged request c
+            match outcome with
+            | Client.Succeeded _ -> ()
+            | Client.Failed err ->
+              (getOutput()).appendLine (sprintf "[warn] buffer-changed: %s" err)
+          }
+          |> promiseIgnoreLog (fun msg -> (getOutput()).appendLine msg)
+        | None -> ()
+      | None -> ()
     ) 300))
   context.subscriptions.Add docChangeSub
 
@@ -1701,6 +1801,7 @@ let activate (context: ExtensionContext) =
         | id ->
           let! _ = Client.switchSession id c
           activeSessionId <- Some id
+          activeSessionWorkingDirectory <- None
           refreshStatus ()
     } |> promiseIgnoreLog logToOutput)
   reg "sagefs.stopSessionInline" (fun args ->
@@ -1714,7 +1815,9 @@ let activate (context: ExtensionContext) =
         | id ->
           let! _ = Client.stopSession id c
           match activeSessionId with
-          | Some aid when aid = id -> activeSessionId <- None
+          | Some aid when aid = id ->
+            activeSessionId <- None
+            activeSessionWorkingDirectory <- None
           | _ -> ()
           refreshStatus ()
     } |> promiseIgnoreLog logToOutput)

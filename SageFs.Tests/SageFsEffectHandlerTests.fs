@@ -3,6 +3,7 @@ module SageFs.Tests.SageFsEffectHandlerTests
 open System
 open Expecto
 open Expecto.Flip
+open Microsoft.FSharp.Reflection
 open SageFs
 open SageFs.WarmUp
 open SageFs.WorkerProtocol
@@ -143,6 +144,77 @@ module TestDeps =
       DisposeFileWatcher = fun _ _ -> ()
       TestCycleCancellation = Features.LiveTesting.TestCycleCancellation.create ()
     }
+
+let rec private makeAnalysisIdentityValue (fieldType: Type) (value: string) =
+  match fieldType = typeof<string> with
+  | true -> box value
+  | false when fieldType.IsGenericType && fieldType.GetGenericTypeDefinition() = typedefof<option<_>> ->
+      let someCase =
+        FSharpType.GetUnionCases fieldType
+        |> Array.find (fun case -> case.Name = "Some")
+      let innerType = someCase.GetFields().[0].PropertyType
+      let innerValue = makeAnalysisIdentityValue innerType value
+      FSharpValue.MakeUnion(someCase, [| innerValue |])
+  | false when FSharpType.IsUnion fieldType ->
+      let cases = FSharpType.GetUnionCases fieldType
+      match cases with
+      | [| case |] when case.GetFields().Length = 1
+                        && case.GetFields().[0].PropertyType = typeof<string> ->
+          FSharpValue.MakeUnion(case, [| box value |])
+      | _ ->
+          failtestf
+            "expected analysis identity field to be string or single-case string union, got %O"
+            fieldType
+  | false ->
+      failtestf
+        "expected analysis identity field to be string or single-case string union, got %O"
+        fieldType
+
+let private makeContentValue (fieldType: Type) (value: string) =
+  match fieldType = typeof<string> with
+  | true -> box value
+  | false when fieldType.IsGenericType && fieldType.GetGenericTypeDefinition() = typedefof<option<_>> ->
+      let someCase =
+        FSharpType.GetUnionCases fieldType
+        |> Array.find (fun case -> case.Name = "Some")
+      let innerType = someCase.GetFields().[0].PropertyType
+      match innerType = typeof<string> with
+      | true -> FSharpValue.MakeUnion(someCase, [| box value |])
+      | false ->
+          failtestf "expected content field to be string or string option, got %O" fieldType
+  | false ->
+      failtestf "expected content field to be string or string option, got %O" fieldType
+
+let private makeRequestFcsTypeCheckEffect
+  (targetSession: string option)
+  (filePath: string)
+  (content: string)
+  (analysisIdentity: string)
+  (treeSitterElapsed: TimeSpan)
+  =
+  let case =
+    FSharpType.GetUnionCases(typeof<Features.LiveTesting.TestCycleEffect>)
+    |> Array.find (fun uc -> uc.Name = "RequestFcsTypeCheck")
+
+  let fields = case.GetFields()
+  fields.Length
+  |> Expect.equal
+      "RequestFcsTypeCheck should carry session, file path, content, analysis identity, and tree-sitter elapsed"
+      5
+
+  let identityValue = makeAnalysisIdentityValue fields.[3].PropertyType analysisIdentity
+  let contentValue = makeContentValue fields.[2].PropertyType content
+
+  FSharpValue.MakeUnion(
+    case,
+    [|
+      box targetSession
+      box filePath
+      contentValue
+      identityValue
+      box treeSitterElapsed
+    |]
+  ) :?> Features.LiveTesting.TestCycleEffect
 
 [<Tests>]
 let effectHandlerTests = testList "SageFsEffectHandler" [
@@ -380,6 +452,49 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
       err |> Expect.stringContains "fail" "Stop failed"
     | other -> failtestf "expected error, got %A" other
 
+  testCase "RequestFcsTypeCheck uses provided buffer content instead of rereading disk" <| fun _ ->
+    let log = TestDeps.createLog ()
+    let tempFile = IO.Path.GetTempFileName()
+    let staleDiskContent = "module Sample\nlet answer = 1"
+    let latestBufferContent = "module Sample\nlet answer = 2"
+    let mutable observedCode : string option = None
+    IO.File.WriteAllText(tempFile, staleDiskContent)
+    try
+      let deps = TestDeps.singleSession log (fun msg ->
+        match msg with
+        | WorkerMessage.TypeCheckWithSymbols (code, filePath, rid) ->
+            observedCode <- Some code
+            filePath |> Expect.equal "should typecheck the requested file" tempFile
+            WorkerResponse.TypeCheckWithSymbolsResult(rid, false, [], [])
+        | _ ->
+            WorkerResponse.WorkerError (SageFsError.Unexpected (exn "unexpected worker message")))
+
+      let effect =
+        makeRequestFcsTypeCheckEffect
+          None
+          tempFile
+          latestBufferContent
+          "buffer-v2"
+          TimeSpan.Zero
+
+      let mutable dispatched : SageFsMsg list = []
+      SageFsEffectHandler.execute deps
+        (fun msg -> dispatched <- msg :: dispatched)
+        (SageFsEffect.TestCycle effect)
+      |> Async.RunSynchronously
+
+      observedCode
+      |> Expect.equal
+          "FCS should analyze the provided buffer content, not stale disk content"
+          (Some latestBufferContent)
+
+      dispatched
+      |> List.isEmpty
+      |> Expect.isFalse "FCS completion should still be dispatched"
+    finally
+      if IO.File.Exists tempFile then
+        IO.File.Delete tempFile
+
   testCase "RequestRebuild waits for restarted session proxy before reporting success" <| fun _ ->
     let sid = testSessionId "a1b2c3d4"
     let mutable dispatched : SageFsMsg list = []
@@ -446,6 +561,7 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
       (fun m -> dispatched <- dispatched @ [m])
       (SageFsEffect.TestCycle (
         Features.LiveTesting.TestCycleEffect.RequestRebuild(
+          1L,
           [| tc |],
           Features.LiveTesting.RunTrigger.FileSave,
           TimeSpan.Zero,
@@ -465,7 +581,7 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
     (proxyCalls > 1)
     |> Expect.isTrue "should wait for the streaming proxy before completing rebuild"
     dispatched
-    |> Expect.equal "should report rebuild completion only after readiness" [SageFsMsg.RebuildCompleted (Ok ())]
+    |> Expect.equal "should report rebuild completion only after readiness" [SageFsMsg.RebuildCompleted (Some (SessionId.value sid), 1L, Ok ())]
 
   testCase "RequestRebuild keeps waiting while restarted session is still starting" <| fun _ ->
     let sid = testSessionId "d4c3b2a1"
@@ -533,6 +649,7 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
       (fun m -> dispatched <- dispatched @ [m])
       (SageFsEffect.TestCycle (
         Features.LiveTesting.TestCycleEffect.RequestRebuild(
+          1L,
           [| tc |],
           Features.LiveTesting.RunTrigger.FileSave,
           TimeSpan.Zero,
@@ -552,7 +669,295 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
     (proxyCalls >= 12)
     |> Expect.isTrue "should keep polling until the streaming proxy is finally ready"
     dispatched
-    |> Expect.equal "should report rebuild success once the long startup finishes" [SageFsMsg.RebuildCompleted (Ok ())]
+    |> Expect.equal "should report rebuild success once the long startup finishes" [SageFsMsg.RebuildCompleted (Some (SessionId.value sid), 1L, Ok ())]
+
+  testCase "RequestRebuild uses a short poll cadence during the first second of readiness wait" <| fun _ ->
+    let sid = testSessionId "c0ffee01"
+    let mutable dispatched : SageFsMsg list = []
+    let mutable listCalls = 0
+    let mutable proxyCalls = 0
+    let sleepCalls = ResizeArray<int>()
+    let tc : Features.LiveTesting.TestCase = {
+      Id = Features.LiveTesting.TestId.TestId "t-fast"
+      FullName = "Sample.Tests.should use fast rebuild polling"
+      DisplayName = "should use fast rebuild polling"
+      Origin = Features.LiveTesting.TestOrigin.ReflectionOnly
+      Labels = []
+      Framework = Features.LiveTesting.TestFramework.Expecto
+      Category = Features.LiveTesting.TestCategory.Unit
+    }
+    let sessionInfo status : SessionInfo = {
+      Id = sid
+      Name = None
+      Projects = ["Test.fsproj"]
+      WorkingDirectory = "."
+      SolutionRoot = None
+      CreatedAt = DateTime.UtcNow
+      LastActivity = DateTime.UtcNow
+      Status = status
+      WorkerPid = Some 999
+      Workflow = WorkflowTypes.SessionWorkflow.Interactive
+    }
+    let deps : EffectDeps = {
+      ResolveSession = fun _ ->
+        Result.Ok (SessionOperations.SessionResolution.DefaultSingle sid)
+      GetProxy = fun _ -> None
+      GetStreamingTestProxy = fun _ ->
+        proxyCalls <- proxyCalls + 1
+        match proxyCalls >= 5 with
+        | true -> Some (fun _ _ _ _ -> async { return () })
+        | false -> None
+      CreateSession = fun _ _ _ ->
+        async { return Result.Error SageFsError.NoActiveSessions }
+      ConfigureWarmupAutoOpen = TestDeps.ensureAutoOpenNoop
+      StopSession = fun _ ->
+        async { return Result.Error SageFsError.NoActiveSessions }
+      RestartSession = fun _ _ ->
+        async { return Result.Ok "restarted" }
+      ListSessions = fun () ->
+        async {
+          listCalls <- listCalls + 1
+          return [
+            sessionInfo
+              (match listCalls >= 5 with
+               | true -> SessionStatus.Ready
+               | false -> SessionStatus.Starting)
+          ]
+        }
+      SleepMs = fun delay ->
+        async {
+          sleepCalls.Add delay
+        }
+      GetWarmupContext = None
+      RegisterFileWatcher = fun _ _ -> ()
+      DisposeFileWatcher = fun _ _ -> ()
+      TestCycleCancellation = Features.LiveTesting.TestCycleCancellation.create ()
+    }
+    SageFsEffectHandler.execute deps
+      (fun m -> dispatched <- dispatched @ [m])
+      (SageFsEffect.TestCycle (
+        Features.LiveTesting.TestCycleEffect.RequestRebuild(
+          1L,
+          [| tc |],
+          Features.LiveTesting.RunTrigger.FileSave,
+          TimeSpan.Zero,
+          TimeSpan.Zero,
+          Some (SessionId.value sid),
+          [||])))
+    |> Async.RunSynchronously
+    let sw = Diagnostics.Stopwatch.StartNew()
+    while dispatched.IsEmpty && sw.ElapsedMilliseconds < 2000L do
+      Threading.Thread.Sleep 10
+    sleepCalls |> Seq.toList
+    |> Expect.equal "fast startup should stay on the short poll cadence" [50; 50; 50; 50]
+    dispatched
+    |> Expect.equal "fast startup should still complete successfully" [SageFsMsg.RebuildCompleted (Some (SessionId.value sid), 1L, Ok ())]
+
+  testCase "RequestRebuild switches to a slower poll cadence after the first second" <| fun _ ->
+    let sid = testSessionId "c0ffee02"
+    let mutable dispatched : SageFsMsg list = []
+    let mutable listCalls = 0
+    let mutable proxyCalls = 0
+    let sleepCalls = ResizeArray<int>()
+    let tc : Features.LiveTesting.TestCase = {
+      Id = Features.LiveTesting.TestId.TestId "t-slow"
+      FullName = "Sample.Tests.should switch rebuild polling cadence"
+      DisplayName = "should switch rebuild polling cadence"
+      Origin = Features.LiveTesting.TestOrigin.ReflectionOnly
+      Labels = []
+      Framework = Features.LiveTesting.TestFramework.Expecto
+      Category = Features.LiveTesting.TestCategory.Unit
+    }
+    let sessionInfo status : SessionInfo = {
+      Id = sid
+      Name = None
+      Projects = ["Test.fsproj"]
+      WorkingDirectory = "."
+      SolutionRoot = None
+      CreatedAt = DateTime.UtcNow
+      LastActivity = DateTime.UtcNow
+      Status = status
+      WorkerPid = Some 999
+      Workflow = WorkflowTypes.SessionWorkflow.Interactive
+    }
+    let deps : EffectDeps = {
+      ResolveSession = fun _ ->
+        Result.Ok (SessionOperations.SessionResolution.DefaultSingle sid)
+      GetProxy = fun _ -> None
+      GetStreamingTestProxy = fun _ ->
+        proxyCalls <- proxyCalls + 1
+        match proxyCalls >= 22 with
+        | true -> Some (fun _ _ _ _ -> async { return () })
+        | false -> None
+      CreateSession = fun _ _ _ ->
+        async { return Result.Error SageFsError.NoActiveSessions }
+      ConfigureWarmupAutoOpen = TestDeps.ensureAutoOpenNoop
+      StopSession = fun _ ->
+        async { return Result.Error SageFsError.NoActiveSessions }
+      RestartSession = fun _ _ ->
+        async { return Result.Ok "restarted" }
+      ListSessions = fun () ->
+        async {
+          listCalls <- listCalls + 1
+          return [
+            sessionInfo
+              (match listCalls >= 22 with
+               | true -> SessionStatus.Ready
+               | false -> SessionStatus.Starting)
+          ]
+        }
+      SleepMs = fun delay ->
+        async {
+          sleepCalls.Add delay
+        }
+      GetWarmupContext = None
+      RegisterFileWatcher = fun _ _ -> ()
+      DisposeFileWatcher = fun _ _ -> ()
+      TestCycleCancellation = Features.LiveTesting.TestCycleCancellation.create ()
+    }
+    SageFsEffectHandler.execute deps
+      (fun m -> dispatched <- dispatched @ [m])
+      (SageFsEffect.TestCycle (
+        Features.LiveTesting.TestCycleEffect.RequestRebuild(
+          1L,
+          [| tc |],
+          Features.LiveTesting.RunTrigger.FileSave,
+          TimeSpan.Zero,
+          TimeSpan.Zero,
+          Some (SessionId.value sid),
+          [||])))
+    |> Async.RunSynchronously
+    let sw = Diagnostics.Stopwatch.StartNew()
+    while dispatched.IsEmpty && sw.ElapsedMilliseconds < 2000L do
+      Threading.Thread.Sleep 10
+    let recordedSleeps = sleepCalls |> Seq.toList
+    recordedSleeps.Length
+    |> Expect.equal "long startup should keep polling until the ready/proxy pair finally arrives" 21
+    recordedSleeps |> List.take 20
+    |> Expect.equal "the first second should use the short cadence" (List.replicate 20 50)
+    recordedSleeps |> List.last
+    |> Expect.equal "polling should slow down once the first second has elapsed" 250
+    dispatched
+    |> Expect.equal "long startup should still complete successfully" [SageFsMsg.RebuildCompleted (Some (SessionId.value sid), 1L, Ok ())]
+
+  testCase "superseded RequestRebuild suppresses stale completion from the older rebuild" <| fun _ ->
+    let sid = testSessionId "c0ffee03"
+    let mutable dispatched : SageFsMsg list = []
+    let mutable restartCalls : (SessionId * bool) list = []
+    let gate = obj()
+    let mutable rebuildGeneration = 0
+    let mutable readyGeneration = 0
+    let tc : Features.LiveTesting.TestCase = {
+      Id = Features.LiveTesting.TestId.TestId "t-cancelled"
+      FullName = "Sample.Tests.should cancel stale rebuild completion"
+      DisplayName = "should cancel stale rebuild completion"
+      Origin = Features.LiveTesting.TestOrigin.ReflectionOnly
+      Labels = []
+      Framework = Features.LiveTesting.TestFramework.Expecto
+      Category = Features.LiveTesting.TestCategory.Unit
+    }
+    let sessionInfo status : SessionInfo = {
+      Id = sid
+      Name = None
+      Projects = ["Test.fsproj"]
+      WorkingDirectory = "."
+      SolutionRoot = None
+      CreatedAt = DateTime.UtcNow
+      LastActivity = DateTime.UtcNow
+      Status = status
+      WorkerPid = Some 999
+      Workflow = WorkflowTypes.SessionWorkflow.Interactive
+    }
+    let deps : EffectDeps = {
+      ResolveSession = fun _ ->
+        Result.Ok (SessionOperations.SessionResolution.DefaultSingle sid)
+      GetProxy = fun _ -> None
+      GetStreamingTestProxy = fun _ ->
+        let ready =
+          lock gate (fun () -> rebuildGeneration > 0 && readyGeneration >= rebuildGeneration)
+        match ready with
+        | true -> Some (fun _ _ _ _ -> async { return () })
+        | false -> None
+      CreateSession = fun _ _ _ ->
+        async { return Result.Error SageFsError.NoActiveSessions }
+      ConfigureWarmupAutoOpen = TestDeps.ensureAutoOpenNoop
+      StopSession = fun _ ->
+        async { return Result.Error SageFsError.NoActiveSessions }
+      RestartSession = fun sessionId rebuild ->
+        async {
+          lock gate (fun () ->
+            restartCalls <- restartCalls @ [sessionId, rebuild]
+            rebuildGeneration <- rebuildGeneration + 1)
+          return Result.Ok "restarted"
+        }
+      ListSessions = fun () ->
+        async {
+          let status =
+            lock gate (fun () ->
+              match readyGeneration >= rebuildGeneration && rebuildGeneration > 0 with
+              | true -> SessionStatus.Ready
+              | false -> SessionStatus.Starting)
+          return [sessionInfo status]
+        }
+      SleepMs = fun _ -> async { return () }
+      GetWarmupContext = None
+      RegisterFileWatcher = fun _ _ -> ()
+      DisposeFileWatcher = fun _ _ -> ()
+      TestCycleCancellation = Features.LiveTesting.TestCycleCancellation.create ()
+    }
+    let firstRequest =
+      SageFsEffect.TestCycle (
+        Features.LiveTesting.TestCycleEffect.RequestRebuild(
+          1L,
+          [| tc |],
+          Features.LiveTesting.RunTrigger.FileSave,
+          TimeSpan.Zero,
+          TimeSpan.Zero,
+          Some (SessionId.value sid),
+          [||]))
+    let secondRequest =
+      SageFsEffect.TestCycle (
+        Features.LiveTesting.TestCycleEffect.RequestRebuild(
+          2L,
+          [| tc |],
+          Features.LiveTesting.RunTrigger.FileSave,
+          TimeSpan.Zero,
+          TimeSpan.Zero,
+          Some (SessionId.value sid),
+          [||]))
+
+    SageFsEffectHandler.execute deps
+      (fun m -> dispatched <- dispatched @ [m])
+      firstRequest
+    |> Async.RunSynchronously
+
+    let firstStart = Diagnostics.Stopwatch.StartNew()
+    while restartCalls.Length < 1 && firstStart.ElapsedMilliseconds < 2000L do
+      Threading.Thread.Sleep 10
+    restartCalls.Length
+    |> Expect.equal "first rebuild should start promptly" 1
+
+    SageFsEffectHandler.execute deps
+      (fun m -> dispatched <- dispatched @ [m])
+      secondRequest
+    |> Async.RunSynchronously
+
+    let secondStart = Diagnostics.Stopwatch.StartNew()
+    while restartCalls.Length < 2 && secondStart.ElapsedMilliseconds < 2000L do
+      Threading.Thread.Sleep 10
+    restartCalls.Length
+    |> Expect.equal "second rebuild should supersede the first" 2
+
+    lock gate (fun () -> readyGeneration <- rebuildGeneration)
+
+    let completionWindow = Diagnostics.Stopwatch.StartNew()
+    while dispatched.Length < 2 && completionWindow.ElapsedMilliseconds < 250L do
+      Threading.Thread.Sleep 10
+
+    dispatched
+    |> Expect.equal
+        "only the latest rebuild should report completion after superseding the older one"
+        [SageFsMsg.RebuildCompleted (Some (SessionId.value sid), 2L, Ok ())]
 
   testCase "RequestHistory is a no-op" <| fun _ ->
     let mutable dispatched : SageFsMsg list = []

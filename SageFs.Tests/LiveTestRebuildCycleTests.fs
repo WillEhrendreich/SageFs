@@ -27,6 +27,11 @@ let private hasRecordField<'T> (fieldName: string) =
   typeof<'T>.GetProperties(BindingFlags.Public ||| BindingFlags.Instance)
   |> Array.exists (fun p -> p.Name = fieldName)
 
+let private tryRecordFieldValue (fieldName: string) (value: obj) =
+  value.GetType().GetProperty(fieldName, BindingFlags.Public ||| BindingFlags.Instance)
+  |> Option.ofObj
+  |> Option.map (fun p -> p.GetValue(value))
+
 // ── Test Data Helpers ──
 
 let private sampleTestCase =
@@ -41,8 +46,9 @@ let private depGraphCovering (symbol: string) (testIds: TestId array) =
   { TestDependencyGraph.empty with
       TransitiveCoverage = Map.ofList [ symbol, testIds ] }
 
-let private pendingRebuildFor (tests: TestCase array) (trigger: RunTrigger) =
-  { Tests = tests
+let private pendingRebuildFor (generation: int64) (tests: TestCase array) (trigger: RunTrigger) =
+  { Generation = generation
+    Tests = tests
     Trigger = trigger
     TreeSitterElapsed = ts 11.0
     FcsElapsed = ts 29.0
@@ -54,6 +60,7 @@ let private activeModelWithPending pending =
       LiveTesting =
         { LiveTestCycleState.empty with
             TestState = { LiveTestState.empty with Activation = LiveTestingActivation.Active }
+            NextRebuildGeneration = pending.Generation
             PendingRebuild = Some pending } }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -92,6 +99,30 @@ let rebuildCycleTests = testList "LiveTesting Rebuild Cycle" [
       hasRecordField<LiveTestCycleState> "PendingRebuild"
       |> Expect.isTrue
           "LiveTestCycleState must have PendingRebuild field to prevent test runs on stale code"
+    }
+
+    test "PendingRebuildState has Generation field" {
+      // WHY: Cancellation is only a best-effort optimization. The model
+      // still needs a semantic identity for each rebuild so stale
+      // completions can be rejected even if an older async path runs late.
+      hasRecordField<PendingRebuildState> "Generation"
+      |> Expect.isTrue
+          "PendingRebuildState must carry Generation so rebuild completions can be matched to the right request"
+    }
+
+    test "SageFsMsg.RebuildCompleted carries generation identity" {
+      // WHY: If RebuildCompleted doesn't carry which rebuild finished, the
+      // Elm model can't distinguish the latest rebuild from an older stale
+      // completion that raced in after supersession.
+      let rebuildCompletedFields =
+        FSharpType.GetUnionCases(typeof<SageFsMsg>)
+        |> Array.find (fun uc -> uc.Name = "RebuildCompleted")
+        |> fun uc -> uc.GetFields()
+
+      rebuildCompletedFields.Length
+      |> Expect.equal
+          "RebuildCompleted should carry target session, rebuild generation, and result"
+          3
     }
   ]
 
@@ -150,7 +181,7 @@ let rebuildCycleTests = testList "LiveTesting Rebuild Cycle" [
           "RebuildCompleted msg must exist — after successful rebuild, saved tests must run"
 
       let pendingTests = [| sampleTestCase |]
-      let pending = pendingRebuildFor pendingTests RunTrigger.FileSave
+      let pending = pendingRebuildFor 1L pendingTests RunTrigger.FileSave
       let model =
         { SageFsModel.initial() with
             LiveTesting =
@@ -158,7 +189,7 @@ let rebuildCycleTests = testList "LiveTesting Rebuild Cycle" [
                   PendingRebuild = Some pending } }
 
       let model', effects =
-        SageFsUpdate.update (SageFsMsg.RebuildCompleted (Ok ())) model
+        SageFsUpdate.update (SageFsMsg.RebuildCompleted (None, pending.Generation, Ok ())) model
 
       match effects with
       | [ SageFsEffect.TestCycle (TestCycleEffect.RunAffectedTests (tests, trigger, tsElapsed, fcsElapsed, sessionId, maps)) ] ->
@@ -189,7 +220,7 @@ let rebuildCycleTests = testList "LiveTesting Rebuild Cycle" [
       |> Expect.isTrue
           "RebuildCompleted msg must exist — build errors must surface without running tests"
 
-      let pending = pendingRebuildFor [| sampleTestCase |] RunTrigger.FileSave
+      let pending = pendingRebuildFor 1L [| sampleTestCase |] RunTrigger.FileSave
       let model =
         { SageFsModel.initial() with
             LiveTesting =
@@ -198,7 +229,7 @@ let rebuildCycleTests = testList "LiveTesting Rebuild Cycle" [
 
       let model', effects =
         SageFsUpdate.update
-          (SageFsMsg.RebuildCompleted (Error "syntax error at line 5"))
+          (SageFsMsg.RebuildCompleted (None, pending.Generation, Error "syntax error at line 5"))
           model
 
       effects
@@ -218,7 +249,7 @@ let rebuildCycleTests = testList "LiveTesting Rebuild Cycle" [
 
       let model = SageFsModel.initial()
       let model', effects =
-        SageFsUpdate.update (SageFsMsg.RebuildCompleted (Ok ())) model
+        SageFsUpdate.update (SageFsMsg.RebuildCompleted (None, 1L, Ok ())) model
 
       effects
       |> Expect.isEmpty "stale rebuild completion must NOT trigger test execution"
@@ -267,7 +298,7 @@ let rebuildCycleTests = testList "LiveTesting Rebuild Cycle" [
       let rebuildTests =
         effects |> List.choose (fun e ->
           match e with
-          | TestCycleEffect.RequestRebuild (tests, _, _, _, _, _) -> Some tests
+          | TestCycleEffect.RequestRebuild (_, tests, _, _, _, _, _) -> Some tests
           | _ -> None)
         |> List.collect Array.toList
       rebuildTests
@@ -333,7 +364,7 @@ let rebuildCycleTests = testList "LiveTesting Rebuild Cycle" [
       |> Expect.isTrue
           "PendingRebuild must exist to test cancellation on new edits"
 
-      let pending = pendingRebuildFor [| sampleTestCase |] RunTrigger.FileSave
+      let pending = pendingRebuildFor 1L [| sampleTestCase |] RunTrigger.FileSave
       let model = activeModelWithPending pending
 
       let model', _ =
@@ -355,10 +386,11 @@ let rebuildCycleTests = testList "LiveTesting Rebuild Cycle" [
       // WHY: Save events are also edits to compiled artifacts. A save that
       // lands while a rebuild is in-flight invalidates that rebuild just as
       // surely as a keystroke does.
-      let pending = pendingRebuildFor [| sampleTestCase |] RunTrigger.Keystroke
+      let pending = pendingRebuildFor 1L [| sampleTestCase |] RunTrigger.Keystroke
       let now = DateTimeOffset.UtcNow
       let state =
         { LiveTestCycleState.empty with
+            NextRebuildGeneration = pending.Generation
             PendingRebuild = Some pending }
 
       let state' =
@@ -379,7 +411,7 @@ let rebuildCycleTests = testList "LiveTesting Rebuild Cycle" [
       |> Expect.isTrue
           "RebuildCompleted must exist to test cancellation semantics"
 
-      let pending = pendingRebuildFor [| sampleTestCase |] RunTrigger.FileSave
+      let pending = pendingRebuildFor 1L [| sampleTestCase |] RunTrigger.FileSave
       let model = activeModelWithPending pending
 
       let cancelledModel, _ =
@@ -389,7 +421,7 @@ let rebuildCycleTests = testList "LiveTesting Rebuild Cycle" [
 
       let model', effects =
         SageFsUpdate.update
-          (SageFsMsg.RebuildCompleted (Ok ()))
+          (SageFsMsg.RebuildCompleted (None, pending.Generation, Ok ()))
           cancelledModel
 
       effects
@@ -398,6 +430,73 @@ let rebuildCycleTests = testList "LiveTesting Rebuild Cycle" [
 
       model'.LiveTesting.PendingRebuild
       |> Expect.isNone "the cancelled pipeline should stay cancelled after stale completion"
+    }
+
+    test "successive rebuild intents receive increasing generations" {
+      // WHY: Token cancellation reduces wasted work, but generation is the
+      // semantic truth. Each new rebuild intent needs a higher identity so
+      // stale completions can be ignored deterministically in the Elm model.
+      let state =
+        { LiveTestCycleState.empty with
+            TestState = activeStateWith [| sampleTestCase |]
+            LastTrigger = RunTrigger.FileSave }
+
+      let nextPendingGeneration state =
+        state.PendingRebuild
+        |> Expect.isSome "fallback rebuild should store a pending rebuild"
+        let pending = state.PendingRebuild.Value
+        pending
+        |> fun pending ->
+            tryRecordFieldValue "Generation" pending
+            |> Option.map (fun value -> value :?> int64)
+
+      let _, state1 =
+        LiveTestCycleState.handleFcsResult
+          (FcsTypeCheckResult.Failed ("Foo.fs", ["syntax error"]))
+          state
+
+      let gen1 =
+        nextPendingGeneration state1
+        |> Expect.isSome "first pending rebuild should expose a generation"
+      let gen1 = nextPendingGeneration state1 |> Option.get
+
+      let _, state2 =
+        LiveTestCycleState.handleFcsResult
+          (FcsTypeCheckResult.Failed ("Foo.fs", ["syntax error"]))
+          state1
+
+      let gen2 =
+        nextPendingGeneration state2
+        |> Expect.isSome "second pending rebuild should expose a generation"
+      let gen2 = nextPendingGeneration state2 |> Option.get
+
+      gen1
+      |> Expect.equal "first rebuild generation should start at 1" 1L
+
+      (gen2 > gen1)
+      |> Expect.isTrue "newer rebuild intents should always get a higher generation"
+    }
+
+    test "RebuildCompleted with stale generation is ignored while newer PendingRebuild remains" {
+      // WHY: Cancellation reduces wasted work, but stale completions can still
+      // arrive late. Generation is the semantic guard that keeps an older
+      // rebuild from consuming the current pending rebuild.
+      let pending = pendingRebuildFor 2L [| sampleTestCase |] RunTrigger.FileSave
+      let model = activeModelWithPending pending
+
+      let model', effects =
+        SageFsUpdate.update
+          (SageFsMsg.RebuildCompleted (None, 1L, Ok ()))
+          model
+
+      effects
+      |> Expect.isEmpty "stale rebuild completion must not trigger test execution"
+
+      model'.LiveTesting.PendingRebuild
+      |> Expect.isSome "newer pending rebuild should remain in place"
+
+      model'.LiveTesting.PendingRebuild.Value.Generation
+      |> Expect.equal "pending rebuild generation should stay unchanged" 2L
     }
   ]
 ]

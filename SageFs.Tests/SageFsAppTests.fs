@@ -899,6 +899,78 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
     completeEffects
     |> Expect.isEmpty "run completion should not emit follow-up effects"
 
+  testCase "AffectedTestsComputed only patches the targeted status entries" <| fun _ ->
+    let discovered = [|
+      mkLiveTestCase "test.affected.a" "SageFs.Tests.Affected.tests/a" "affected-a"
+      mkLiveTestCase "test.affected.b" "SageFs.Tests.Affected.tests/b" "affected-b"
+    |]
+    let discoveredModel, _ =
+      SageFsUpdate.update
+        (SageFsMsg.Event (SageFsEvent.TestsDiscovered ("s", discovered)))
+        (SageFsModel.initial())
+    let activeModel, _ =
+      SageFsUpdate.update
+        SageFsMsg.EnableLiveTesting
+        discoveredModel
+    let beforeEntries = activeModel.LiveTesting.TestState.StatusEntries
+    let unaffectedBefore =
+      beforeEntries |> Array.find (fun entry -> entry.TestId = discovered.[1].Id)
+
+    let updated, effects =
+      SageFsUpdate.update
+        (SageFsMsg.Event (SageFsEvent.AffectedTestsComputed [| discovered.[0].Id |]))
+        activeModel
+    let updatedEntries = updated.LiveTesting.TestState.StatusEntries
+    let affectedUpdated =
+      updatedEntries |> Array.find (fun entry -> entry.TestId = discovered.[0].Id)
+    let unaffectedUpdated =
+      updatedEntries |> Array.find (fun entry -> entry.TestId = discovered.[1].Id)
+
+    obj.ReferenceEquals(unaffectedUpdated, unaffectedBefore)
+    |> Expect.isTrue "affected-test computation should preserve unaffected status entry objects"
+    affectedUpdated.PreviousStatus
+    |> Expect.equal "affected-test computation should remember the prior detected status" TestRunStatus.Detected
+    affectedUpdated.Status
+    |> Expect.equal "affected-test computation should queue the targeted test" TestRunStatus.Queued
+    List.isEmpty effects
+    |> Expect.isFalse "affected-test computation should still emit follow-up execution work"
+
+  testCase "RunTestsRequested only patches the targeted status entries" <| fun _ ->
+    let discovered = [|
+      mkLiveTestCase "test.requested.a" "SageFs.Tests.Requested.tests/a" "requested-a"
+      mkLiveTestCase "test.requested.b" "SageFs.Tests.Requested.tests/b" "requested-b"
+    |]
+    let discoveredModel, _ =
+      SageFsUpdate.update
+        (SageFsMsg.Event (SageFsEvent.TestsDiscovered ("s", discovered)))
+        (SageFsModel.initial())
+    let activeModel, _ =
+      SageFsUpdate.update
+        SageFsMsg.EnableLiveTesting
+        discoveredModel
+    let beforeEntries = activeModel.LiveTesting.TestState.StatusEntries
+    let unaffectedBefore =
+      beforeEntries |> Array.find (fun entry -> entry.TestId = discovered.[1].Id)
+
+    let updated, effects =
+      SageFsUpdate.update
+        (SageFsMsg.Event (SageFsEvent.RunTestsRequested [| discovered.[0] |]))
+        activeModel
+    let updatedEntries = updated.LiveTesting.TestState.StatusEntries
+    let affectedUpdated =
+      updatedEntries |> Array.find (fun entry -> entry.TestId = discovered.[0].Id)
+    let unaffectedUpdated =
+      updatedEntries |> Array.find (fun entry -> entry.TestId = discovered.[1].Id)
+
+    obj.ReferenceEquals(unaffectedUpdated, unaffectedBefore)
+    |> Expect.isTrue "explicit run requests should preserve unaffected status entry objects"
+    affectedUpdated.PreviousStatus
+    |> Expect.equal "explicit run requests should remember the prior detected status" TestRunStatus.Detected
+    affectedUpdated.Status
+    |> Expect.equal "explicit run requests should transition the targeted test to running" TestRunStatus.Running
+    List.isEmpty effects
+    |> Expect.isFalse "explicit run requests should still emit the run effect"
+
   testCase "duplicate TestsDiscovered preserves model identity when nothing new was learned" <| fun _ ->
     let discovered =
       mkLiveTestCase
@@ -1393,6 +1465,113 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
     newModel.Sessions.Sessions
     |> List.filter (fun s -> s.IsActive)
     |> Expect.hasLength "only s3 active" 1
+
+  testCase "SessionSwitched promotes target live-testing state to primary" <| fun _ ->
+    let mkSnap id active = {
+      Id = id; Name = None; Projects = []
+      Status = SessionDisplayStatus.Running
+      LastActivity = DateTime.UtcNow; EvalCount = 0
+      UpSince = DateTime.UtcNow; IsActive = active; WorkingDirectory = "." }
+    let primaryState =
+      { LiveTestCycleState.empty with
+          LastTrigger = RunTrigger.FileSave }
+    let backgroundState =
+      { LiveTestCycleState.empty with
+          LastTrigger = RunTrigger.Keystroke }
+    let model = {
+      (SageFsModel.initial()) with
+        Sessions = {
+          (SageFsModel.initial()).Sessions with
+            Sessions = [mkSnap (testSessionId "aa000001") true; mkSnap (testSessionId "aa000002") false]
+            ActiveSessionId = ActiveSession.Viewing (testSessionId "aa000001") }
+        LiveTesting = primaryState
+        PerSessionLiveTesting = Map.ofList [ "aa000002", backgroundState ] }
+    let newModel, _ =
+      SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.SessionSwitched (Some "aa000001", "aa000002"))) model
+    newModel.LiveTesting.LastTrigger
+    |> Expect.equal "active live-testing state should now be session aa000002's state" RunTrigger.Keystroke
+    newModel.PerSessionLiveTesting
+    |> Map.containsKey "aa000002"
+    |> Expect.isFalse "promoted target session should no longer also live in the background map"
+
+  testCase "SessionSwitched parks previous primary live-testing state under the previous session id" <| fun _ ->
+    let mkSnap id active = {
+      Id = id; Name = None; Projects = []
+      Status = SessionDisplayStatus.Running
+      LastActivity = DateTime.UtcNow; EvalCount = 0
+      UpSince = DateTime.UtcNow; IsActive = active; WorkingDirectory = "." }
+    let primaryState =
+      { LiveTestCycleState.empty with
+          LastTrigger = RunTrigger.FileSave }
+    let backgroundState =
+      { LiveTestCycleState.empty with
+          LastTrigger = RunTrigger.Keystroke }
+    let model = {
+      (SageFsModel.initial()) with
+        Sessions = {
+          (SageFsModel.initial()).Sessions with
+            Sessions = [mkSnap (testSessionId "aa000001") true; mkSnap (testSessionId "aa000002") false]
+            ActiveSessionId = ActiveSession.Viewing (testSessionId "aa000001") }
+        LiveTesting = primaryState
+        PerSessionLiveTesting = Map.ofList [ "aa000002", backgroundState ] }
+    let newModel, _ =
+      SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.SessionSwitched (Some "aa000001", "aa000002"))) model
+    newModel.PerSessionLiveTesting
+    |> Map.find "aa000001"
+    |> fun cycle -> cycle.LastTrigger
+    |> Expect.equal "previous active session state should be preserved under its session id" RunTrigger.FileSave
+
+  testCase "SessionSwitched round-trips live-testing state between sessions" <| fun _ ->
+    let mkSnap id active = {
+      Id = id; Name = None; Projects = []
+      Status = SessionDisplayStatus.Running
+      LastActivity = DateTime.UtcNow; EvalCount = 0
+      UpSince = DateTime.UtcNow; IsActive = active; WorkingDirectory = "." }
+    let stateA =
+      { LiveTestCycleState.empty with
+          LastTrigger = RunTrigger.FileSave }
+    let stateB =
+      { LiveTestCycleState.empty with
+          LastTrigger = RunTrigger.Keystroke }
+    let model = {
+      (SageFsModel.initial()) with
+        Sessions = {
+          (SageFsModel.initial()).Sessions with
+            Sessions = [mkSnap (testSessionId "aa000001") true; mkSnap (testSessionId "aa000002") false]
+            ActiveSessionId = ActiveSession.Viewing (testSessionId "aa000001") }
+        LiveTesting = stateA
+        PerSessionLiveTesting = Map.ofList [ "aa000002", stateB ] }
+    let afterB, _ =
+      SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.SessionSwitched (Some "aa000001", "aa000002"))) model
+    let afterA, _ =
+      SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.SessionSwitched (Some "aa000002", "aa000001"))) afterB
+    afterA.LiveTesting.LastTrigger
+    |> Expect.equal "switching back should restore session aa000001's live-testing state" RunTrigger.FileSave
+    afterA.PerSessionLiveTesting
+    |> Map.find "aa000002"
+    |> fun cycle -> cycle.LastTrigger
+    |> Expect.equal "session aa000002 should be demoted back to the background map with its state intact" RunTrigger.Keystroke
+
+  testCase "SessionSwitched does not emit live-testing effects" <| fun _ ->
+    let mkSnap id active = {
+      Id = id; Name = None; Projects = []
+      Status = SessionDisplayStatus.Running
+      LastActivity = DateTime.UtcNow; EvalCount = 0
+      UpSince = DateTime.UtcNow; IsActive = active; WorkingDirectory = "." }
+    let model = {
+      (SageFsModel.initial()) with
+        Sessions = {
+          (SageFsModel.initial()).Sessions with
+            Sessions = [mkSnap (testSessionId "aa000001") true; mkSnap (testSessionId "aa000002") false]
+            ActiveSessionId = ActiveSession.Viewing (testSessionId "aa000001") }
+        LiveTesting =
+          { LiveTestCycleState.empty with LastTrigger = RunTrigger.FileSave }
+        PerSessionLiveTesting =
+          Map.ofList [ "aa000002", { LiveTestCycleState.empty with LastTrigger = RunTrigger.Keystroke } ] }
+    let _, effects =
+      SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.SessionSwitched (Some "aa000001", "aa000002"))) model
+    effects
+    |> Expect.isEmpty "switching sessions should only reassociate live-testing state, not start new work"
 
   testCase "EnableLiveTesting with discovered tests emits RunAffectedTests" <| fun _ ->
     let tc : Features.LiveTesting.TestCase =
