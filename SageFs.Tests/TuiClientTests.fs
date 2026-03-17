@@ -74,6 +74,16 @@ let parseStateEventTests = testList "parseStateEvent" [
     Expect.equal e.SessionState "Ready" "session state"
     Expect.equal e.EvalCount 3 "eval count"
   }
+
+  test "parses liveTestingStatus so rebuilding banners can reach the TUI status bar" {
+    let json = """{"sessionState":"Ready","evalCount":3,"liveTestingStatus":"🔨 Rebuilding 2 tests","regions":[]}"""
+    let result = parseStateEvent json
+    Expect.isSome result "should parse"
+    Expect.equal
+      result.Value.LiveTestingStatus
+      "🔨 Rebuilding 2 tests"
+      "should preserve the live-testing status label for TUI rendering"
+  }
 ]
 
 let daemonRegionDataTests = testList "DaemonRegionData" [

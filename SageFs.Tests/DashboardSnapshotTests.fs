@@ -148,6 +148,65 @@ let dashboardRenderSnapshotTests = testList "Dashboard render snapshots" [
   }
 ]
 
+let liveTestingVisibilityTests = testList "live testing visibility" [
+
+  let mkQueries (isActive: bool) (statusLabel: string) : DashboardQueries =
+    {
+      GetSessionState = fun _ -> SessionState.Ready
+      GetStatusMsg = fun _ -> None
+      GetEvalStats = fun _ -> System.Threading.Tasks.Task.FromResult(SageFs.Affordances.EvalStats.empty)
+      GetSessionWorkingDir = fun _ -> @"C:\Code\Repos\SageFs"
+      GetActiveSessionId = fun () -> "session-1"
+      GetElmRegions = fun () -> None
+      GetPreviousSessions = fun () -> System.Threading.Tasks.Task.FromResult([])
+      GetAllSessions = fun () -> System.Threading.Tasks.Task.FromResult([])
+      GetStandbyInfo = fun () -> System.Threading.Tasks.Task.FromResult StandbyInfo.NoPool
+      GetSessionStandbyInfo = fun _ -> StandbyInfo.NoPool
+      GetHotReloadState = fun _ -> System.Threading.Tasks.Task.FromResult None
+      GetWarmupContext = fun _ -> System.Threading.Tasks.Task.FromResult None
+      GetWarmupProgress = fun _ -> ""
+      GetSessionTestSummary = fun _ -> None
+      GetSessionCoverageSummary = fun _ -> None
+      GetSessionTestTreemap = fun _ -> [||]
+      GetSessionBindings = fun _ -> [||]
+      GetBindingScopeSnapshot = fun () -> None
+      GetLiveTestingStatus = fun () -> statusLabel
+      GetLiveTestingActive = fun () -> isActive
+      GetEvalTimeline =
+        fun () -> SageFs.Features.EvalTimeline.TimelineState.empty |> SageFs.Features.EvalTimeline.timelineStats 20
+      GetDaemonHealth = fun () -> None
+      GetFailureNarratives = fun () -> []
+      GetCurrentDiagnostics = fun () -> []
+      GetFilmstripEntries = fun () -> []
+      GetTestSourceLocations = fun () -> []
+      GetSessionAgentBadges = fun _ -> []
+      GetSessionGuidanceCss = fun _ -> ""
+      GetSessionWorkflow = fun _ -> WorkflowTypes.SessionWorkflow.Interactive
+    }
+
+  let mkInfra () : DashboardInfra =
+    {
+      Version = "0.0.0"
+      McpPort = 37749
+      StateChanged = None
+      ConnectionTracker = None
+      SessionThemes = System.Collections.Concurrent.ConcurrentDictionary<string, string>()
+      GetCompletions = None
+      GetSessionCount = fun () -> System.Threading.Tasks.Task.FromResult 0
+      SystemAlarmBuffer = ref []
+      TriggerStateChange = None
+      ActivityTracker = None
+    }
+
+  testTask "buildDashboardSnapshot carries rebuilding status into the live testing panel" {
+    let! snap, _, _ =
+      buildDashboardSnapshot (mkQueries true "🔨 Rebuilding 2 tests") (mkInfra ()) "session-1" "" "" "default"
+    let html = snap.LiveTestingPanel |> renderNode
+    Expect.stringContains html "Live Testing: ON" "dashboard should show live testing as active"
+    Expect.stringContains html "🔨 Rebuilding 2 tests" "dashboard should tell users that tests are waiting on compilation"
+  }
+]
+
 let keyboardHelpSnapshotTests = testList "keyboard help snapshots" [
   testTask "renderKeyboardHelp" {
     let html = renderKeyboardHelp () |> renderNode
@@ -972,6 +1031,7 @@ let bindingsPanelSseTests = testList "SSE bindings panel" [
 [<Tests>]
 let allDashboardSnapshotTests = testList "Dashboard Snapshots" [
   dashboardRenderSnapshotTests
+  liveTestingVisibilityTests
   keyboardHelpSnapshotTests
   edgeCaseSnapshotTests
   parserTests

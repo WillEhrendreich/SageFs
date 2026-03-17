@@ -1552,6 +1552,53 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
     |> fun cycle -> cycle.LastTrigger
     |> Expect.equal "session aa000002 should be demoted back to the background map with its state intact" RunTrigger.Keystroke
 
+  testCase "SessionSwitched preserves the promoted session's rebuilding banner so users know tests are waiting on compilation" <| fun _ ->
+    let mkSnap id active = {
+      Id = id; Name = None; Projects = []
+      Status = SessionDisplayStatus.Running
+      LastActivity = DateTime.UtcNow; EvalCount = 0
+      UpSince = DateTime.UtcNow; IsActive = active; WorkingDirectory = "." }
+    let mkTestCase name =
+      { Id = TestId.create name TestFramework.Expecto
+        FullName = name
+        DisplayName = name
+        Origin = TestOrigin.ReflectionOnly
+        Labels = []
+        Framework = TestFramework.Expecto
+        Category = TestCategory.Unit }
+    let pending =
+      { Generation = 1L
+        Tests =
+          [| mkTestCase "MyTests.test1"
+             mkTestCase "MyTests.test2" |]
+        Trigger = RunTrigger.Keystroke
+        TreeSitterElapsed = TimeSpan.FromMilliseconds 5.0
+        FcsElapsed = TimeSpan.FromMilliseconds 10.0
+        SessionId = Some "aa000002"
+        InstrumentationMaps = [||] }
+    let primaryState =
+      { LiveTestCycleState.empty with
+          LastTrigger = RunTrigger.FileSave }
+    let backgroundState =
+      { LiveTestCycleState.empty with
+          LastTrigger = RunTrigger.Keystroke
+          NextRebuildGeneration = pending.Generation
+          PendingRebuild = Some pending }
+    let model = {
+      (SageFsModel.initial()) with
+        Sessions = {
+          (SageFsModel.initial()).Sessions with
+            Sessions = [mkSnap (testSessionId "aa000001") true; mkSnap (testSessionId "aa000002") false]
+            ActiveSessionId = ActiveSession.Viewing (testSessionId "aa000001") }
+        LiveTesting = primaryState
+        PerSessionLiveTesting = Map.ofList [ "aa000002", backgroundState ] }
+    let newModel, _ =
+      SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.SessionSwitched (Some "aa000001", "aa000002"))) model
+    LiveTestCycleState.liveTestingStatusBarForSession "aa000002" newModel.LiveTesting
+    |> Expect.stringContains
+      "promoted session should keep the rebuilding banner so the active UI stays truthful"
+      "🔨 Rebuilding 2 tests"
+
   testCase "SessionSwitched does not emit live-testing effects" <| fun _ ->
     let mkSnap id active = {
       Id = id; Name = None; Projects = []
