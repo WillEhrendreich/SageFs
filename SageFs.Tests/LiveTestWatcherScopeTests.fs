@@ -528,6 +528,90 @@ let stream6Tests =
       effects
       |> Expect.isEmpty "buffer ingress should only update debounce state; cycle work still waits for ticks"
     }
+
+    test "background session buffer change cancels only that session's pending rebuild" {
+      // WHY: Session-scoped buffer ingress is only honest if it invalidates
+      // stale rebuild work for the owning session and leaves everyone else alone.
+      let snapA = mkSession "session-a" "/projects/alpha"
+      let snapB = mkSession "session-b" "/projects/beta"
+      let aSid = WorkerProtocol.SessionId.value snapA.Id
+      let bSid = WorkerProtocol.SessionId.value snapB.Id
+      let fileB = "/projects/beta/src/Lib.fs"
+      let tcA = mkTestCase "Alpha.Tests.one" TestFramework.Expecto TestCategory.Unit
+      let tcB = mkTestCase "Beta.Tests.two" TestFramework.Expecto TestCategory.Unit
+      let pendingA = {
+        Generation = 1L
+        Tests = [| tcA |]
+        Trigger = RunTrigger.FileSave
+        TreeSitterElapsed = TimeSpan.Zero
+        FcsElapsed = TimeSpan.Zero
+        SessionId = Some aSid
+        InstrumentationMaps = [||] }
+      let pendingB = {
+        Generation = 2L
+        Tests = [| tcB |]
+        Trigger = RunTrigger.FileSave
+        TreeSitterElapsed = TimeSpan.Zero
+        FcsElapsed = TimeSpan.Zero
+        SessionId = Some bSid
+        InstrumentationMaps = [||] }
+      let model =
+        SageFsModel.initial ()
+        |> withSession snapA
+        |> withSession snapB
+        |> withLiveTesting
+        |> fun m ->
+          { m with
+              LiveTesting =
+                { LiveTestCycleState.empty with
+                    NextRebuildGeneration = pendingA.Generation
+                    PendingRebuild = Some pendingA
+                    TestState = { LiveTestState.empty with Activation = LiveTestingActivation.Active } }
+              PerSessionLiveTesting =
+                Map.ofList [
+                  bSid,
+                  { LiveTestCycleState.empty with
+                      NextRebuildGeneration = pendingB.Generation
+                      PendingRebuild = Some pendingB
+                      TestState = { LiveTestState.empty with Activation = LiveTestingActivation.Active } }
+                ] }
+
+      let model', effects =
+        SageFsUpdate.update
+          (SageFsMsg.BufferContentChanged (Some bSid, fileB, "module Lib\nlet add a b = a + b"))
+          model
+
+      model'.LiveTesting.PendingRebuild
+      |> Expect.isSome
+          "primary pending rebuild should survive a background session buffer change"
+
+      model'.PerSessionLiveTesting
+      |> Map.find bSid
+      |> fun cycle -> cycle.PendingRebuild
+      |> Expect.isNone
+          "background pending rebuild should clear when that session's buffer changes"
+
+      let cancelFields =
+        effects
+        |> List.tryPick (function
+          | SageFsEffect.TestCycle effect ->
+              let case, fields = FSharpValue.GetUnionFields(effect, typeof<TestCycleEffect>)
+              match case.Name with
+              | "CancelRebuild" -> Some fields
+              | _ -> None
+          | _ ->
+              None)
+
+      cancelFields
+      |> Expect.isSome
+          "background invalidation should emit an explicit CancelRebuild effect"
+
+      let cancelFields = cancelFields |> Option.get
+      cancelFields.[0]
+      |> Expect.equal "CancelRebuild should target only the background session" (box (Some bSid))
+      cancelFields.[1]
+      |> Expect.equal "CancelRebuild should carry the background generation" (box pendingB.Generation)
+    }
   ]
 
 // =====================================================================
@@ -573,18 +657,21 @@ let stream5Tests =
           "background session debounce should eventually emit RequestFcsTypeCheck"
 
       match request with
-      | Some testCycleEffect ->
-          let case, fields = FSharpValue.GetUnionFields(testCycleEffect, typeof<TestCycleEffect>)
-          case.Name
-          |> Expect.equal "should emit the FCS request effect" "RequestFcsTypeCheck"
-          fields.Length
-          |> Expect.equal "RequestFcsTypeCheck should carry session id, file path, and elapsed time" 3
-          fields.[0]
-          |> unbox<string option>
+      | Some (TestCycleEffect.RequestFcsTypeCheck (targetSession, requestedFilePath, content, analysisIdentity, _tsElapsed)) ->
+          targetSession
           |> Expect.equal "background FCS request should target the owning session" (Some bSid)
-          fields.[1]
-          |> unbox<string>
+          requestedFilePath
           |> Expect.equal "background FCS request should preserve the changed file path" fileB
+          content
+          |> Expect.equal
+              "background FCS request should analyze the freshest buffered content for that session"
+              (Some "module Lib")
+          analysisIdentity
+          |> Expect.equal
+              "background FCS request should carry the content identity that matches the buffered text"
+              (Some (AnalysisIdentity.ofContent "module Lib"))
+      | Some other ->
+          failtestf "expected RequestFcsTypeCheck, got %A" other
       | None ->
           ()
     }

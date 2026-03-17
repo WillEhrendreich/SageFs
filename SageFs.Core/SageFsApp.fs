@@ -698,6 +698,14 @@ module SageFsUpdate =
     not effects.IsEmpty
     || not (obj.ReferenceEquals(updated, original))
 
+  let private pendingRebuildCancellationEffects
+    (cycle: Features.LiveTesting.LiveTestCycleState)
+    =
+    cycle
+    |> Features.LiveTesting.LiveTestCycleState.pendingRebuildCancellationEffect
+    |> Option.toList
+    |> List.map SageFsEffect.TestCycle
+
   let private switchActiveLiveTestingState
     (fromId: string option)
     (toId: string)
@@ -1546,27 +1554,30 @@ module SageFsUpdate =
       match isActive with
       | false -> model, []
       | true ->
-        let now = DateTimeOffset.UtcNow
-        match targetSession with
-        | Some sid when activeLiveTestingSessionId model = Some sid ->
-          let cycle' = model.LiveTesting |> Features.LiveTesting.LiveTestCycleState.onKeystroke content filePath now
-          { model with LiveTesting = cycle' }, []
-        | Some sid ->
-          let sessionExists =
-            model.Sessions.Sessions
-            |> List.exists (fun session -> SessionId.value session.Id = sid)
-          match sessionExists with
-          | false -> model, []
-          | true ->
-            let current =
-              model.PerSessionLiveTesting
-              |> Map.tryFind sid
-              |> Option.defaultValue Features.LiveTesting.LiveTestCycleState.empty
+          let now = DateTimeOffset.UtcNow
+          match targetSession with
+          | Some sid when activeLiveTestingSessionId model = Some sid ->
+            let current = model.LiveTesting
             let cycle' = current |> Features.LiveTesting.LiveTestCycleState.onKeystroke content filePath now
-            { model with PerSessionLiveTesting = model.PerSessionLiveTesting |> Map.add sid cycle' }, []
-        | None ->
-          let cycle' = model.LiveTesting |> Features.LiveTesting.LiveTestCycleState.onKeystroke content filePath now
-          { model with LiveTesting = cycle' }, []
+            { model with LiveTesting = cycle' }, pendingRebuildCancellationEffects current
+          | Some sid ->
+            let sessionExists =
+              model.Sessions.Sessions
+              |> List.exists (fun session -> SessionId.value session.Id = sid)
+            match sessionExists with
+            | false -> model, []
+            | true ->
+              let current =
+                model.PerSessionLiveTesting
+                |> Map.tryFind sid
+                |> Option.defaultValue Features.LiveTesting.LiveTestCycleState.empty
+              let cycle' = current |> Features.LiveTesting.LiveTestCycleState.onKeystroke content filePath now
+              { model with PerSessionLiveTesting = model.PerSessionLiveTesting |> Map.add sid cycle' },
+              pendingRebuildCancellationEffects current
+          | None ->
+            let current = model.LiveTesting
+            let cycle' = current |> Features.LiveTesting.LiveTestCycleState.onKeystroke content filePath now
+            { model with LiveTesting = cycle' }, pendingRebuildCancellationEffects current
 
     | SageFsMsg.FileContentChanged (filePath, content) ->
       let isActive = model.LiveTesting.TestState.Activation = Features.LiveTesting.LiveTestingActivation.Active
@@ -1582,14 +1593,16 @@ module SageFsUpdate =
         match owningSession with
         | None ->
           // No session owns this file — update the primary (active) session
-          let cycle' = model.LiveTesting |> Features.LiveTesting.LiveTestCycleState.onFileSaveWithContent content filePath now
-          { model with LiveTesting = cycle' }, []
+          let current = model.LiveTesting
+          let cycle' = current |> Features.LiveTesting.LiveTestCycleState.onFileSaveWithContent content filePath now
+          { model with LiveTesting = cycle' }, pendingRebuildCancellationEffects current
         | Some s ->
           match model.Sessions.ActiveSessionId with
           | ActiveSession.Viewing activeId when activeId = s.Id ->
             // File belongs to the active session — update primary
-            let cycle' = model.LiveTesting |> Features.LiveTesting.LiveTestCycleState.onFileSaveWithContent content filePath now
-            { model with LiveTesting = cycle' }, []
+            let current = model.LiveTesting
+            let cycle' = current |> Features.LiveTesting.LiveTestCycleState.onFileSaveWithContent content filePath now
+            { model with LiveTesting = cycle' }, pendingRebuildCancellationEffects current
           | _ ->
             // File belongs to a background session — update per-session state
             let sid = SessionId.value s.Id
@@ -1598,7 +1611,8 @@ module SageFsUpdate =
               |> Map.tryFind sid
               |> Option.defaultValue Features.LiveTesting.LiveTestCycleState.empty
             let cycle' = current |> Features.LiveTesting.LiveTestCycleState.onFileSaveWithContent content filePath now
-            { model with PerSessionLiveTesting = model.PerSessionLiveTesting |> Map.add sid cycle' }, []
+            { model with PerSessionLiveTesting = model.PerSessionLiveTesting |> Map.add sid cycle' },
+            pendingRebuildCancellationEffects current
 
     | SageFsMsg.FcsTypeCheckCompleted (targetSession, analysisIdentity, result) ->
       let model', maybeEffects =
@@ -2224,154 +2238,163 @@ module SageFsEffectHandler =
                 Instrumentation.succeedSpan span
               | false -> ()
             })
+        | Features.LiveTesting.TestCycleEffect.CancelRebuild (targetSession, generation) ->
+          match deps.TestCycleCancellation.Rebuild.cancel(targetSession, generation) with
+          | true ->
+              Utils.Log.info "[rebuild] CancelRebuild cancelled generation %d for %A" generation targetSession
+          | false ->
+              Utils.Log.info "[rebuild] CancelRebuild ignored for stale generation %d for %A" generation targetSession
         | Features.LiveTesting.TestCycleEffect.RequestRebuild (generation, _tests, _trigger, _tsElapsed, _fcsElapsed, targetSession, _instrumentationMaps) ->
-          let ct = deps.TestCycleCancellation.TestRun.next()
+          let ct = deps.TestCycleCancellation.Rebuild.start(targetSession, generation)
           Async.Start((async {
             let rebuildStopwatch = System.Diagnostics.Stopwatch.StartNew()
             try
-              ct.ThrowIfCancellationRequested()
-              let targetSid =
-                targetSession
-                |> Option.bind (fun s ->
-                  match SessionId.validate s with Ok sid -> Some sid | Error _ -> None)
-              match deps.ResolveSession targetSid with
-              | Error err ->
-                match ct.IsCancellationRequested with
-                | true ->
-                  rebuildStopwatch.Stop()
-                  Utils.Log.info "[rebuild] RequestRebuild cancelled before resolve completed for %A" targetSession
-                | false ->
-                  rebuildStopwatch.Stop()
-                  dispatch (SageFsMsg.RebuildCompleted (targetSession, generation, Error (SageFsError.describe err)))
-              | Ok resolution ->
+              try
                 ct.ThrowIfCancellationRequested()
-                let sid = SessionOperations.sessionId resolution
-                let sidStr = SessionId.value sid
-                let restartStopwatch = System.Diagnostics.Stopwatch.StartNew()
-                match! deps.RestartSession sid true with
+                let targetSid =
+                  targetSession
+                  |> Option.bind (fun s ->
+                    match SessionId.validate s with Ok sid -> Some sid | Error _ -> None)
+                match deps.ResolveSession targetSid with
                 | Error err ->
                   match ct.IsCancellationRequested with
                   | true ->
-                    restartStopwatch.Stop()
                     rebuildStopwatch.Stop()
-                    Utils.Log.info "[rebuild] RequestRebuild cancelled after restart attempt for %s" sidStr
+                    Utils.Log.info "[rebuild] RequestRebuild cancelled before resolve completed for %A" targetSession
                   | false ->
-                    restartStopwatch.Stop()
                     rebuildStopwatch.Stop()
-                    Instrumentation.liveTestingRebuildRestartMs.Record(restartStopwatch.Elapsed.TotalMilliseconds)
-                    Instrumentation.liveTestingRebuildPipelineMs.Record(rebuildStopwatch.Elapsed.TotalMilliseconds)
-                    let msg = SageFsError.describe err
-                    Utils.Log.warn "[rebuild] RestartSession(rebuild=true) failed for %s: %s" sidStr msg
-                    dispatch (SageFsMsg.RebuildCompleted (targetSession, generation, Error msg))
-                | Ok msg ->
+                    dispatch (SageFsMsg.RebuildCompleted (targetSession, generation, Error (SageFsError.describe err)))
+                | Ok resolution ->
                   ct.ThrowIfCancellationRequested()
-                  restartStopwatch.Stop()
-                  Instrumentation.liveTestingRebuildRestartMs.Record(restartStopwatch.Elapsed.TotalMilliseconds)
-                  Utils.Log.info
-                    "[rebuild] RestartSession(rebuild=true) started for %s in %.1fms: %s"
-                    sidStr
-                    restartStopwatch.Elapsed.TotalMilliseconds
-                    msg
-                  let waitTimeoutMs = 30000
-                  let fastPollWindowMs = 1000
-                  let fastPollDelayMs = 50
-                  let slowPollDelayMs = 250
-                  let deadline = DateTimeOffset.UtcNow.AddMilliseconds(float waitTimeoutMs)
-                  let waitStopwatch = System.Diagnostics.Stopwatch.StartNew()
-                  let mutable readyObservedMs : float option = None
-                  let mutable proxyObservedMs : float option = None
-                  let recordReadyObservation status =
-                    match readyObservedMs, status with
-                    | None, Some SessionStatus.Ready ->
-                      let elapsedMs = waitStopwatch.Elapsed.TotalMilliseconds
-                      readyObservedMs <- Some elapsedMs
-                      Instrumentation.liveTestingRebuildReadyWaitMs.Record(elapsedMs)
-                      Utils.Log.info "[rebuild] Session %s reached Ready %.1fms after rebuild restart" sidStr elapsedMs
-                    | _ -> ()
-                  let recordProxyObservation hasProxy =
-                    match proxyObservedMs, hasProxy with
-                    | None, true ->
-                      let elapsedMs = waitStopwatch.Elapsed.TotalMilliseconds
-                      proxyObservedMs <- Some elapsedMs
-                      Instrumentation.liveTestingRebuildProxyWaitMs.Record(elapsedMs)
-                      Utils.Log.info "[rebuild] Session %s streaming proxy available %.1fms after rebuild restart" sidStr elapsedMs
-                    | _ -> ()
-                  let rec waitForReadyProxy waitedMs = async {
-                    ct.ThrowIfCancellationRequested()
-                    let! sessions = deps.ListSessions()
-                    ct.ThrowIfCancellationRequested()
-                    let status =
-                      sessions
-                      |> List.tryFind (fun si -> si.Id = sid)
-                      |> Option.map (fun si -> si.Status)
-                    let streamingProxy = deps.GetStreamingTestProxy sid
-                    let hasStreamingProxy = streamingProxy |> Option.isSome
-                    recordReadyObservation status
-                    recordProxyObservation hasStreamingProxy
-                    match status, hasStreamingProxy with
-                    | Some SessionStatus.Ready, true ->
-                      waitStopwatch.Stop()
+                  let sid = SessionOperations.sessionId resolution
+                  let sidStr = SessionId.value sid
+                  let restartStopwatch = System.Diagnostics.Stopwatch.StartNew()
+                  match! deps.RestartSession sid true with
+                  | Error err ->
+                    match ct.IsCancellationRequested with
+                    | true ->
+                      restartStopwatch.Stop()
                       rebuildStopwatch.Stop()
+                      Utils.Log.info "[rebuild] RequestRebuild cancelled after restart attempt for %s" sidStr
+                    | false ->
+                      restartStopwatch.Stop()
+                      rebuildStopwatch.Stop()
+                      Instrumentation.liveTestingRebuildRestartMs.Record(restartStopwatch.Elapsed.TotalMilliseconds)
                       Instrumentation.liveTestingRebuildPipelineMs.Record(rebuildStopwatch.Elapsed.TotalMilliseconds)
-                      let readyMs = readyObservedMs |> Option.defaultValue waitStopwatch.Elapsed.TotalMilliseconds
-                      let proxyMs = proxyObservedMs |> Option.defaultValue waitStopwatch.Elapsed.TotalMilliseconds
-                      Utils.Log.info
-                        "[rebuild] Session %s ready with streaming proxy after rebuild (restart=%.1fms ready=%.1fms proxy=%.1fms total=%.1fms)"
-                        sidStr
-                        restartStopwatch.Elapsed.TotalMilliseconds
-                        readyMs
-                          proxyMs
-                          rebuildStopwatch.Elapsed.TotalMilliseconds
-                      dispatch (SageFsMsg.RebuildCompleted (targetSession, generation, Ok ()))
-                    | _ when DateTimeOffset.UtcNow >= deadline ->
+                      let msg = SageFsError.describe err
+                      Utils.Log.warn "[rebuild] RestartSession(rebuild=true) failed for %s: %s" sidStr msg
+                      dispatch (SageFsMsg.RebuildCompleted (targetSession, generation, Error msg))
+                  | Ok msg ->
+                    ct.ThrowIfCancellationRequested()
+                    restartStopwatch.Stop()
+                    Instrumentation.liveTestingRebuildRestartMs.Record(restartStopwatch.Elapsed.TotalMilliseconds)
+                    Utils.Log.info
+                      "[rebuild] RestartSession(rebuild=true) started for %s in %.1fms: %s"
+                      sidStr
+                      restartStopwatch.Elapsed.TotalMilliseconds
+                      msg
+                    let waitTimeoutMs = 30000
+                    let fastPollWindowMs = 1000
+                    let fastPollDelayMs = 50
+                    let slowPollDelayMs = 250
+                    let deadline = DateTimeOffset.UtcNow.AddMilliseconds(float waitTimeoutMs)
+                    let waitStopwatch = System.Diagnostics.Stopwatch.StartNew()
+                    let mutable readyObservedMs : float option = None
+                    let mutable proxyObservedMs : float option = None
+                    let recordReadyObservation status =
+                      match readyObservedMs, status with
+                      | None, Some SessionStatus.Ready ->
+                        let elapsedMs = waitStopwatch.Elapsed.TotalMilliseconds
+                        readyObservedMs <- Some elapsedMs
+                        Instrumentation.liveTestingRebuildReadyWaitMs.Record(elapsedMs)
+                        Utils.Log.info "[rebuild] Session %s reached Ready %.1fms after rebuild restart" sidStr elapsedMs
+                      | _ -> ()
+                    let recordProxyObservation hasProxy =
+                      match proxyObservedMs, hasProxy with
+                      | None, true ->
+                        let elapsedMs = waitStopwatch.Elapsed.TotalMilliseconds
+                        proxyObservedMs <- Some elapsedMs
+                        Instrumentation.liveTestingRebuildProxyWaitMs.Record(elapsedMs)
+                        Utils.Log.info "[rebuild] Session %s streaming proxy available %.1fms after rebuild restart" sidStr elapsedMs
+                      | _ -> ()
+                    let rec waitForReadyProxy waitedMs = async {
                       ct.ThrowIfCancellationRequested()
-                      waitStopwatch.Stop()
-                      rebuildStopwatch.Stop()
-                      Instrumentation.liveTestingRebuildPipelineMs.Record(rebuildStopwatch.Elapsed.TotalMilliseconds)
-                      let statusText =
-                        status
-                        |> Option.map string
-                        |> Option.defaultValue "missing"
-                      let readyText =
-                        readyObservedMs
-                        |> Option.map (fun elapsedMs -> sprintf "%.1fms" elapsedMs)
-                        |> Option.defaultValue "not-observed"
-                      let proxyText =
-                        proxyObservedMs
-                        |> Option.map (fun elapsedMs -> sprintf "%.1fms" elapsedMs)
-                        |> Option.defaultValue "not-observed"
-                      let err =
-                        sprintf
-                          "Rebuild succeeded but session %s never became ready for test execution within %dms (status=%s, restart=%.1fms, ready=%s, proxy=%s, total=%.1fms)."
+                      let! sessions = deps.ListSessions()
+                      ct.ThrowIfCancellationRequested()
+                      let status =
+                        sessions
+                        |> List.tryFind (fun si -> si.Id = sid)
+                        |> Option.map (fun si -> si.Status)
+                      let streamingProxy = deps.GetStreamingTestProxy sid
+                      let hasStreamingProxy = streamingProxy |> Option.isSome
+                      recordReadyObservation status
+                      recordProxyObservation hasStreamingProxy
+                      match status, hasStreamingProxy with
+                      | Some SessionStatus.Ready, true ->
+                        waitStopwatch.Stop()
+                        rebuildStopwatch.Stop()
+                        Instrumentation.liveTestingRebuildPipelineMs.Record(rebuildStopwatch.Elapsed.TotalMilliseconds)
+                        let readyMs = readyObservedMs |> Option.defaultValue waitStopwatch.Elapsed.TotalMilliseconds
+                        let proxyMs = proxyObservedMs |> Option.defaultValue waitStopwatch.Elapsed.TotalMilliseconds
+                        Utils.Log.info
+                          "[rebuild] Session %s ready with streaming proxy after rebuild (restart=%.1fms ready=%.1fms proxy=%.1fms total=%.1fms)"
                           sidStr
-                          waitTimeoutMs
-                          statusText
                           restartStopwatch.Elapsed.TotalMilliseconds
-                          readyText
-                          proxyText
-                          rebuildStopwatch.Elapsed.TotalMilliseconds
-                      Utils.Log.warn "[rebuild] %s" err
-                      dispatch (SageFsMsg.RebuildCompleted (targetSession, generation, Error err))
-                    | _ ->
-                      let pollDelayMs =
-                        match waitedMs < fastPollWindowMs with
-                        | true -> fastPollDelayMs
-                        | false -> slowPollDelayMs
-                      do! deps.SleepMs pollDelayMs
-                      ct.ThrowIfCancellationRequested()
-                      return! waitForReadyProxy (waitedMs + pollDelayMs)
-                  }
-                  do! waitForReadyProxy 0
-            with
-            | :? OperationCanceledException ->
-              rebuildStopwatch.Stop()
-              Utils.Log.info "[rebuild] RequestRebuild cancelled for %A" targetSession
-            | ex ->
-              rebuildStopwatch.Stop()
-              Instrumentation.liveTestingRebuildPipelineMs.Record(rebuildStopwatch.Elapsed.TotalMilliseconds)
-              Utils.Log.error "[rebuild] Exception: %s" ex.Message
-              dispatch (SageFsMsg.RebuildCompleted (targetSession, generation, Error ex.Message))
-          }), ct)
+                          readyMs
+                            proxyMs
+                            rebuildStopwatch.Elapsed.TotalMilliseconds
+                        dispatch (SageFsMsg.RebuildCompleted (targetSession, generation, Ok ()))
+                      | _ when DateTimeOffset.UtcNow >= deadline ->
+                        ct.ThrowIfCancellationRequested()
+                        waitStopwatch.Stop()
+                        rebuildStopwatch.Stop()
+                        Instrumentation.liveTestingRebuildPipelineMs.Record(rebuildStopwatch.Elapsed.TotalMilliseconds)
+                        let statusText =
+                          status
+                          |> Option.map string
+                          |> Option.defaultValue "missing"
+                        let readyText =
+                          readyObservedMs
+                          |> Option.map (fun elapsedMs -> sprintf "%.1fms" elapsedMs)
+                          |> Option.defaultValue "not-observed"
+                        let proxyText =
+                          proxyObservedMs
+                          |> Option.map (fun elapsedMs -> sprintf "%.1fms" elapsedMs)
+                          |> Option.defaultValue "not-observed"
+                        let err =
+                          sprintf
+                            "Rebuild succeeded but session %s never became ready for test execution within %dms (status=%s, restart=%.1fms, ready=%s, proxy=%s, total=%.1fms)."
+                            sidStr
+                            waitTimeoutMs
+                            statusText
+                            restartStopwatch.Elapsed.TotalMilliseconds
+                            readyText
+                            proxyText
+                            rebuildStopwatch.Elapsed.TotalMilliseconds
+                        Utils.Log.warn "[rebuild] %s" err
+                        dispatch (SageFsMsg.RebuildCompleted (targetSession, generation, Error err))
+                      | _ ->
+                        let pollDelayMs =
+                          match waitedMs < fastPollWindowMs with
+                          | true -> fastPollDelayMs
+                          | false -> slowPollDelayMs
+                        do! deps.SleepMs pollDelayMs
+                        ct.ThrowIfCancellationRequested()
+                        return! waitForReadyProxy (waitedMs + pollDelayMs)
+                    }
+                    do! waitForReadyProxy 0
+              with
+              | :? OperationCanceledException ->
+                rebuildStopwatch.Stop()
+                Utils.Log.info "[rebuild] RequestRebuild cancelled for %A" targetSession
+              | ex ->
+                rebuildStopwatch.Stop()
+                Instrumentation.liveTestingRebuildPipelineMs.Record(rebuildStopwatch.Elapsed.TotalMilliseconds)
+                Utils.Log.error "[rebuild] Exception: %s" ex.Message
+                dispatch (SageFsMsg.RebuildCompleted (targetSession, generation, Error ex.Message))
+            finally
+              deps.TestCycleCancellation.Rebuild.complete(targetSession, generation)
+            }), ct)
         | Features.LiveTesting.TestCycleEffect.RegisterFileWatcher (_sessionId, directory) ->
           deps.RegisterFileWatcher _sessionId directory
         | Features.LiveTesting.TestCycleEffect.DisposeFileWatcher (_sessionId, directory) ->

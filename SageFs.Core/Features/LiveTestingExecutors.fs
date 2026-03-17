@@ -1063,12 +1063,76 @@ type CancellationChain() =
   interface IDisposable with
     member this.Dispose() = this.dispose()
 
+type RebuildCancellationRegistry() =
+  let gate = obj()
+  let currentBySession = System.Collections.Generic.Dictionary<string, int64>()
+  let tokensByIdentity =
+    System.Collections.Generic.Dictionary<string * int64, System.Threading.CancellationTokenSource>()
+
+  let sessionKey targetSession =
+    targetSession |> Option.defaultValue ""
+
+  member _.start(targetSession: string option, generation: int64) =
+    lock gate (fun () ->
+      let key = sessionKey targetSession
+      match currentBySession.TryGetValue key with
+      | true, previousGeneration ->
+          match tokensByIdentity.TryGetValue((key, previousGeneration)) with
+          | true, previousCts ->
+              previousCts.Cancel()
+          | _ ->
+              ()
+      | _ ->
+          ()
+
+      let fresh = new System.Threading.CancellationTokenSource()
+      currentBySession.[key] <- generation
+      tokensByIdentity.[(key, generation)] <- fresh
+      fresh.Token)
+
+  member _.cancel(targetSession: string option, generation: int64) =
+    lock gate (fun () ->
+      let key = sessionKey targetSession
+      match tokensByIdentity.TryGetValue((key, generation)) with
+      | true, cts ->
+          cts.Cancel()
+          true
+      | _ ->
+          false)
+
+  member _.complete(targetSession: string option, generation: int64) =
+    lock gate (fun () ->
+      let key = sessionKey targetSession
+      match tokensByIdentity.TryGetValue((key, generation)) with
+      | true, cts ->
+          tokensByIdentity.Remove((key, generation)) |> ignore
+          match currentBySession.TryGetValue key with
+          | true, currentGeneration when currentGeneration = generation ->
+              currentBySession.Remove key |> ignore
+          | _ ->
+              ()
+          cts.Dispose()
+      | _ ->
+          ())
+
+  member _.dispose() =
+    lock gate (fun () ->
+      for KeyValue(_, cts) in tokensByIdentity do
+        cts.Cancel()
+        cts.Dispose()
+      tokensByIdentity.Clear()
+      currentBySession.Clear())
+
+  interface System.IDisposable with
+    member this.Dispose() = this.dispose()
+
 /// Manages cancellation tokens for each test cycle stage.
 type TestCycleCancellation = {
   Discovery: CancellationChain
   TreeSitter: CancellationChain
   Fcs: CancellationChain
   TestRun: CancellationChain
+  Rebuild: RebuildCancellationRegistry
 }
 
 module TestCycleCancellation =
@@ -1077,6 +1141,7 @@ module TestCycleCancellation =
     TreeSitter = new CancellationChain()
     Fcs = new CancellationChain()
     TestRun = new CancellationChain()
+    Rebuild = new RebuildCancellationRegistry()
   }
 
   /// Cancel previous work and get a fresh token for the specified effect.
@@ -1086,7 +1151,11 @@ module TestCycleCancellation =
     | TestCycleEffect.ParseTreeSitter _ -> pc.TreeSitter.next()
     | TestCycleEffect.RequestFcsTypeCheck _ -> pc.Fcs.next()
     | TestCycleEffect.RunAffectedTests _ -> pc.TestRun.next()
-    | TestCycleEffect.RequestRebuild _ -> pc.TestRun.next()
+    | TestCycleEffect.CancelRebuild (sessionId, generation) ->
+        pc.Rebuild.cancel(sessionId, generation) |> ignore
+        System.Threading.CancellationToken.None
+    | TestCycleEffect.RequestRebuild (generation, _, _, _, _, sessionId, _) ->
+        pc.Rebuild.start(sessionId, generation)
     | TestCycleEffect.RegisterFileWatcher _ -> System.Threading.CancellationToken.None
     | TestCycleEffect.DisposeFileWatcher _ -> System.Threading.CancellationToken.None
 
@@ -1095,3 +1164,4 @@ module TestCycleCancellation =
     pc.TreeSitter.dispose()
     pc.Fcs.dispose()
     pc.TestRun.dispose()
+    pc.Rebuild.dispose()

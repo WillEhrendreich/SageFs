@@ -2937,6 +2937,7 @@ type TestCycleEffect =
   | ParseTreeSitter of content: string * filePath: string
   | RequestFcsTypeCheck of sessionId: string option * filePath: string * content: string option * analysisIdentity: AnalysisIdentity option * treeSitterElapsed: System.TimeSpan
   | RunAffectedTests of tests: TestCase array * trigger: RunTrigger * treeSitterElapsed: System.TimeSpan * fcsElapsed: System.TimeSpan * sessionId: string option * instrumentationMaps: InstrumentationMap array
+  | CancelRebuild of sessionId: string option * generation: int64
   | RequestRebuild of generation: int64 * tests: TestCase array * trigger: RunTrigger * treeSitterElapsed: System.TimeSpan * fcsElapsed: System.TimeSpan * sessionId: string option * instrumentationMaps: InstrumentationMap array
   | RegisterFileWatcher of sessionId: string * directory: string
   | DisposeFileWatcher of sessionId: string * directory: string
@@ -3399,6 +3400,11 @@ module LiveTestCycleState =
 
   let onFcsCanceled (s: LiveTestCycleState) =
     { s with AdaptiveDebounce = AdaptiveDebounce.onFcsCanceled s.AdaptiveDebounce }
+
+  let pendingRebuildCancellationEffect (s: LiveTestCycleState) =
+    s.PendingRebuild
+    |> Option.map (fun pending ->
+      TestCycleEffect.CancelRebuild(pending.SessionId, pending.Generation))
 
   let acceptsFcsResult (analysisIdentity: AnalysisIdentity option) (s: LiveTestCycleState) =
     match analysisIdentity, s.LatestAnalysisIdentity with

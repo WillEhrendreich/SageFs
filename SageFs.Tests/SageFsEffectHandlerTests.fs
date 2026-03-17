@@ -216,6 +216,28 @@ let private makeRequestFcsTypeCheckEffect
     |]
   ) :?> Features.LiveTesting.TestCycleEffect
 
+let private makeCancelRebuildEffect
+  (targetSession: string option)
+  (generation: int64)
+  =
+  let case =
+    FSharpType.GetUnionCases(typeof<Features.LiveTesting.TestCycleEffect>)
+    |> Array.find (fun uc -> uc.Name = "CancelRebuild")
+
+  let fields = case.GetFields()
+  fields.Length
+  |> Expect.equal
+      "CancelRebuild should carry session and generation"
+      2
+
+  FSharpValue.MakeUnion(
+    case,
+    [|
+      box targetSession
+      box generation
+    |]
+  ) :?> Features.LiveTesting.TestCycleEffect
+
 [<Tests>]
 let effectHandlerTests = testList "SageFsEffectHandler" [
   testCase "RequestEval sends code to worker and dispatches result"
@@ -957,6 +979,197 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
     dispatched
     |> Expect.equal
         "only the latest rebuild should report completion after superseding the older one"
+        [SageFsMsg.RebuildCompleted (Some (SessionId.value sid), 2L, Ok ())]
+
+  testCase "CancelRebuild cancels an in-flight RequestRebuild without dispatching RebuildCompleted" <| fun _ ->
+    let sid = testSessionId "fadecafe"
+    let mutable dispatched : SageFsMsg list = []
+    let gate = obj()
+    let mutable restartCalls = 0
+    let mutable ready = false
+    let tc : Features.LiveTesting.TestCase = {
+      Id = Features.LiveTesting.TestId.TestId "t-explicit-cancel"
+      FullName = "Sample.Tests.should cancel rebuild by generation"
+      DisplayName = "should cancel rebuild by generation"
+      Origin = Features.LiveTesting.TestOrigin.ReflectionOnly
+      Labels = []
+      Framework = Features.LiveTesting.TestFramework.Expecto
+      Category = Features.LiveTesting.TestCategory.Unit
+    }
+    let sessionInfo status : SessionInfo = {
+      Id = sid
+      Name = None
+      Projects = ["Test.fsproj"]
+      WorkingDirectory = "."
+      SolutionRoot = None
+      CreatedAt = DateTime.UtcNow
+      LastActivity = DateTime.UtcNow
+      Status = status
+      WorkerPid = Some 999
+      Workflow = WorkflowTypes.SessionWorkflow.Interactive
+    }
+    let deps : EffectDeps = {
+      ResolveSession = fun _ ->
+        Result.Ok (SessionOperations.SessionResolution.DefaultSingle sid)
+      GetProxy = fun _ -> None
+      GetStreamingTestProxy = fun _ ->
+        match lock gate (fun () -> ready) with
+        | true -> Some (fun _ _ _ _ -> async { return () })
+        | false -> None
+      CreateSession = fun _ _ _ ->
+        async { return Result.Error SageFsError.NoActiveSessions }
+      ConfigureWarmupAutoOpen = TestDeps.ensureAutoOpenNoop
+      StopSession = fun _ ->
+        async { return Result.Error SageFsError.NoActiveSessions }
+      RestartSession = fun _ _ ->
+        async {
+          lock gate (fun () -> restartCalls <- restartCalls + 1)
+          return Result.Ok "restarted"
+        }
+      ListSessions = fun () ->
+        async {
+          let status =
+            lock gate (fun () ->
+              match ready with
+              | true -> SessionStatus.Ready
+              | false -> SessionStatus.Starting)
+          return [sessionInfo status]
+        }
+      SleepMs = fun _ -> async { do! Async.Sleep 10 }
+      GetWarmupContext = None
+      RegisterFileWatcher = fun _ _ -> ()
+      DisposeFileWatcher = fun _ _ -> ()
+      TestCycleCancellation = Features.LiveTesting.TestCycleCancellation.create ()
+    }
+
+    SageFsEffectHandler.execute deps
+      (fun m -> dispatched <- dispatched @ [m])
+      (SageFsEffect.TestCycle (
+        Features.LiveTesting.TestCycleEffect.RequestRebuild(
+          1L,
+          [| tc |],
+          Features.LiveTesting.RunTrigger.FileSave,
+          TimeSpan.Zero,
+          TimeSpan.Zero,
+          Some (SessionId.value sid),
+          [||])))
+    |> Async.RunSynchronously
+
+    let restartWindow = Diagnostics.Stopwatch.StartNew()
+    while restartCalls < 1 && restartWindow.ElapsedMilliseconds < 2000L do
+      Threading.Thread.Sleep 10
+    restartCalls
+    |> Expect.equal "rebuild should have started before cancellation" 1
+
+    SageFsEffectHandler.execute deps
+      (fun m -> dispatched <- dispatched @ [m])
+      (SageFsEffect.TestCycle (makeCancelRebuildEffect (Some (SessionId.value sid)) 1L))
+    |> Async.RunSynchronously
+
+    lock gate (fun () -> ready <- true)
+
+    let completionWindow = Diagnostics.Stopwatch.StartNew()
+    while dispatched.IsEmpty && completionWindow.ElapsedMilliseconds < 250L do
+      Threading.Thread.Sleep 10
+
+    dispatched
+    |> Expect.isEmpty
+        "explicit cancellation should suppress stale RebuildCompleted dispatch"
+
+  testCase "CancelRebuild for an older generation does not cancel the newer rebuild" <| fun _ ->
+    let sid = testSessionId "beadfeed"
+    let mutable dispatched : SageFsMsg list = []
+    let gate = obj()
+    let mutable restartCalls = 0
+    let mutable ready = false
+    let tc : Features.LiveTesting.TestCase = {
+      Id = Features.LiveTesting.TestId.TestId "t-stale-cancel"
+      FullName = "Sample.Tests.should ignore stale cancel"
+      DisplayName = "should ignore stale cancel"
+      Origin = Features.LiveTesting.TestOrigin.ReflectionOnly
+      Labels = []
+      Framework = Features.LiveTesting.TestFramework.Expecto
+      Category = Features.LiveTesting.TestCategory.Unit
+    }
+    let sessionInfo status : SessionInfo = {
+      Id = sid
+      Name = None
+      Projects = ["Test.fsproj"]
+      WorkingDirectory = "."
+      SolutionRoot = None
+      CreatedAt = DateTime.UtcNow
+      LastActivity = DateTime.UtcNow
+      Status = status
+      WorkerPid = Some 999
+      Workflow = WorkflowTypes.SessionWorkflow.Interactive
+    }
+    let deps : EffectDeps = {
+      ResolveSession = fun _ ->
+        Result.Ok (SessionOperations.SessionResolution.DefaultSingle sid)
+      GetProxy = fun _ -> None
+      GetStreamingTestProxy = fun _ ->
+        match lock gate (fun () -> ready) with
+        | true -> Some (fun _ _ _ _ -> async { return () })
+        | false -> None
+      CreateSession = fun _ _ _ ->
+        async { return Result.Error SageFsError.NoActiveSessions }
+      ConfigureWarmupAutoOpen = TestDeps.ensureAutoOpenNoop
+      StopSession = fun _ ->
+        async { return Result.Error SageFsError.NoActiveSessions }
+      RestartSession = fun _ _ ->
+        async {
+          lock gate (fun () -> restartCalls <- restartCalls + 1)
+          return Result.Ok "restarted"
+        }
+      ListSessions = fun () ->
+        async {
+          let status =
+            lock gate (fun () ->
+              match ready with
+              | true -> SessionStatus.Ready
+              | false -> SessionStatus.Starting)
+          return [sessionInfo status]
+        }
+      SleepMs = fun _ -> async { do! Async.Sleep 10 }
+      GetWarmupContext = None
+      RegisterFileWatcher = fun _ _ -> ()
+      DisposeFileWatcher = fun _ _ -> ()
+      TestCycleCancellation = Features.LiveTesting.TestCycleCancellation.create ()
+    }
+
+    SageFsEffectHandler.execute deps
+      (fun m -> dispatched <- dispatched @ [m])
+      (SageFsEffect.TestCycle (
+        Features.LiveTesting.TestCycleEffect.RequestRebuild(
+          2L,
+          [| tc |],
+          Features.LiveTesting.RunTrigger.FileSave,
+          TimeSpan.Zero,
+          TimeSpan.Zero,
+          Some (SessionId.value sid),
+          [||])))
+    |> Async.RunSynchronously
+
+    let restartWindow = Diagnostics.Stopwatch.StartNew()
+    while restartCalls < 1 && restartWindow.ElapsedMilliseconds < 2000L do
+      Threading.Thread.Sleep 10
+    restartCalls
+    |> Expect.equal "newer rebuild should have started" 1
+
+    SageFsEffectHandler.execute deps
+      (fun m -> dispatched <- dispatched @ [m])
+      (SageFsEffect.TestCycle (makeCancelRebuildEffect (Some (SessionId.value sid)) 1L))
+    |> Async.RunSynchronously
+
+    lock gate (fun () -> ready <- true)
+
+    let completionWindow = Diagnostics.Stopwatch.StartNew()
+    while dispatched.IsEmpty && completionWindow.ElapsedMilliseconds < 2000L do
+      Threading.Thread.Sleep 10
+
+    dispatched
+    |> Expect.equal
+        "a stale cancel should not stop the newer rebuild from completing"
         [SageFsMsg.RebuildCompleted (Some (SessionId.value sid), 2L, Ok ())]
 
   testCase "RequestHistory is a no-op" <| fun _ ->

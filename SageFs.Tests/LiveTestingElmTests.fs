@@ -665,6 +665,55 @@ let bufferContentChangedTests = testList "BufferContentChanged" [
     |> Expect.equal "unsaved editor content should be treated as a keystroke" RunTrigger.Keystroke
   }
 
+  test "pending rebuild invalidation from unsaved content emits CancelRebuild" {
+    // WHY: Unsaved buffer edits make an in-flight rebuild semantically stale
+    // even before a save happens. The model should say that explicitly.
+    let pending = {
+      Generation = 7L
+      Tests = [| mkTestCase "MyApp.Tests.pending" TestFramework.Expecto TestCategory.Unit |]
+      Trigger = RunTrigger.FileSave
+      TreeSitterElapsed = TimeSpan.Zero
+      FcsElapsed = TimeSpan.Zero
+      SessionId = Some "session-a"
+      InstrumentationMaps = [||] }
+    let model =
+      { (SageFsModel.initial()) with
+          LiveTesting =
+            { LiveTestCycleState.empty with
+                NextRebuildGeneration = pending.Generation
+                PendingRebuild = Some pending
+                TestState = { LiveTestState.empty with Activation = LiveTestingActivation.Active } } }
+
+    let model', effects =
+      SageFsUpdate.update
+        (SageFsMsg.BufferContentChanged (None, "src/MyModule.fs", "let x = 1"))
+        model
+
+    model'.LiveTesting.PendingRebuild
+    |> Expect.isNone "unsaved content should still invalidate stale rebuild intent"
+
+    let cancelFields =
+      effects
+      |> List.tryPick (function
+        | SageFsEffect.TestCycle effect ->
+            let case, fields = FSharpValue.GetUnionFields(effect, typeof<TestCycleEffect>)
+            match case.Name with
+            | "CancelRebuild" -> Some fields
+            | _ -> None
+        | _ ->
+            None)
+
+    cancelFields
+    |> Expect.isSome
+        "buffer edits should emit an explicit CancelRebuild effect for stale rebuild work"
+
+    let cancelFields = cancelFields |> Option.get
+    cancelFields.[0]
+    |> Expect.equal "CancelRebuild should preserve the targeted session" (box pending.SessionId)
+    cancelFields.[1]
+    |> Expect.equal "CancelRebuild should preserve the invalidated generation" (box pending.Generation)
+  }
+
   test "keeps OnSaveOnly tests filtered on unsaved edits" {
     let tc = mkTestCase "MyApp.Tests.archTest" TestFramework.Expecto TestCategory.Architecture
     let refs = [

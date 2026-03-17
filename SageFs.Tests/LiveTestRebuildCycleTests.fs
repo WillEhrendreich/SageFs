@@ -83,6 +83,15 @@ let rebuildCycleTests = testList "LiveTesting Rebuild Cycle" [
           "TestCycleEffect must have RequestRebuild case to request compilation before test execution"
     }
 
+    test "TestCycleEffect has CancelRebuild case" {
+      // WHY: Once rebuild work is in-flight, the model needs a first-class
+      // way to say "that rebuild intent is no longer true." Without an
+      // explicit cancel effect, invalidation is only implicit runtime magic.
+      hasUnionCase<TestCycleEffect> "CancelRebuild"
+      |> Expect.isTrue
+          "TestCycleEffect must have CancelRebuild so stale rebuild work can be invalidated explicitly"
+    }
+
     test "SageFsMsg has RebuildCompleted case" {
       // WHY: After a rebuild finishes (success or failure), the result
       // must flow back into the Elm model so it can decide whether to
@@ -380,6 +389,36 @@ let rebuildCycleTests = testList "LiveTesting Rebuild Cycle" [
 
       model'.LiveTesting.Debounce.Fcs.Pending.IsSome
       |> Expect.isTrue "the fresh edit should restart the debounce pipeline"
+    }
+
+    test "new FileContentChanged during PendingRebuild emits CancelRebuild for the pending generation" {
+      // WHY: Clearing PendingRebuild in memory is not enough. The impure
+      // rebuild work must be told explicitly which rebuild intent is dead.
+      let pending = pendingRebuildFor 1L [| sampleTestCase |] RunTrigger.FileSave
+      let model = activeModelWithPending pending
+
+      let _model', effects =
+        SageFsUpdate.update
+          (SageFsMsg.FileContentChanged ("Foo.fs", "let x = 42"))
+          model
+
+      let cancelFields =
+        effects
+        |> List.tryPick (function
+          | SageFsEffect.TestCycle effect when unionCaseNameOf effect = "CancelRebuild" ->
+              Some (FSharpValue.GetUnionFields(effect, typeof<TestCycleEffect>) |> snd)
+          | _ ->
+              None)
+
+      cancelFields
+      |> Expect.isSome
+          "invalidating a pending rebuild should emit an explicit CancelRebuild effect"
+
+      let cancelFields = cancelFields |> Option.get
+      cancelFields.[0]
+      |> Expect.equal "CancelRebuild should target the same session" (box pending.SessionId)
+      cancelFields.[1]
+      |> Expect.equal "CancelRebuild should carry the invalidated generation" (box pending.Generation)
     }
 
     test "onFileSave during PendingRebuild cancels the stale rebuild" {
