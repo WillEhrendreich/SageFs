@@ -49,8 +49,11 @@ module ElmDaemonTestHelpers =
         }
       StopSession = fun _ ->
         async { return Result.Ok () }
+      RestartSession = fun _ _ ->
+        async { return Result.Ok "restarted" }
       ListSessions = fun () ->
         async { return [sessionInfo] }
+      SleepMs = fun _ -> async { return () }
       GetWarmupContext = None
       RegisterFileWatcher = fun _ _ -> ()
       DisposeFileWatcher = fun _ _ -> ()

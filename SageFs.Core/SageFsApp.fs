@@ -1372,13 +1372,13 @@ module SageFsUpdate =
         match owningSession with
         | None ->
           // No session owns this file — update the primary (active) session
-          let cycle' = model.LiveTesting |> Features.LiveTesting.LiveTestCycleState.onKeystroke content filePath now
+          let cycle' = model.LiveTesting |> Features.LiveTesting.LiveTestCycleState.onFileSaveWithContent content filePath now
           { model with LiveTesting = cycle' }, []
         | Some s ->
           match model.Sessions.ActiveSessionId with
           | ActiveSession.Viewing activeId when activeId = s.Id ->
             // File belongs to the active session — update primary
-            let cycle' = model.LiveTesting |> Features.LiveTesting.LiveTestCycleState.onKeystroke content filePath now
+            let cycle' = model.LiveTesting |> Features.LiveTesting.LiveTestCycleState.onFileSaveWithContent content filePath now
             { model with LiveTesting = cycle' }, []
           | _ ->
             // File belongs to a background session — update per-session state
@@ -1387,7 +1387,7 @@ module SageFsUpdate =
               model.PerSessionLiveTesting
               |> Map.tryFind sid
               |> Option.defaultValue Features.LiveTesting.LiveTestCycleState.empty
-            let cycle' = current |> Features.LiveTesting.LiveTestCycleState.onKeystroke content filePath now
+            let cycle' = current |> Features.LiveTesting.LiveTestCycleState.onFileSaveWithContent content filePath now
             { model with PerSessionLiveTesting = model.PerSessionLiveTesting |> Map.add sid cycle' }, []
 
     | SageFsMsg.FcsTypeCheckCompleted result ->
@@ -1629,8 +1629,12 @@ type EffectDeps = {
   ConfigureWarmupAutoOpen: string -> Async<Result<OutputLine, string>>
   /// Stop a session
   StopSession: SessionId -> Async<Result<unit, SageFsError>>
+  /// Restart a session, optionally rebuilding first.
+  RestartSession: SessionId -> bool -> Async<Result<string, SageFsError>>
   /// List all sessions
   ListSessions: unit -> Async<SessionInfo list>
+  /// Sleep for the requested number of milliseconds.
+  SleepMs: int -> Async<unit>
   /// Fetch warmup context for a session (optional — None disables warmup dispatch)
   GetWarmupContext: (SessionId -> Async<SessionContext option>) option
   /// Test cycle cancellation for stale work
@@ -1977,41 +1981,50 @@ module SageFsEffectHandler =
                 targetSession
                 |> Option.bind (fun s ->
                   match SessionId.validate s with Ok sid -> Some sid | Error _ -> None)
-              let! sessions = deps.ListSessions()
-              let sessionInfo =
-                match targetSid with
-                | Some sid ->
-                  sessions |> List.tryFind (fun si -> si.Id = sid)
-                | None ->
-                  sessions |> List.tryHead
-              match sessionInfo with
-              | None ->
-                dispatch (SageFsMsg.RebuildCompleted (Error "No session found for rebuild"))
-              | Some info ->
-                let projectPath =
-                  match info.Projects with
-                  | proj :: _ -> proj
-                  | [] -> info.WorkingDirectory
-                let psi = System.Diagnostics.ProcessStartInfo()
-                psi.FileName <- "dotnet"
-                psi.Arguments <- sprintf "build \"%s\" --no-restore --nologo -v:q" projectPath
-                psi.WorkingDirectory <- info.WorkingDirectory
-                psi.RedirectStandardOutput <- true
-                psi.RedirectStandardError <- true
-                psi.UseShellExecute <- false
-                psi.CreateNoWindow <- true
-                let proc = System.Diagnostics.Process.Start(psi)
-                let! stdout = proc.StandardOutput.ReadToEndAsync() |> Async.AwaitTask
-                let! stderr = proc.StandardError.ReadToEndAsync() |> Async.AwaitTask
-                do! proc.WaitForExitAsync() |> Async.AwaitTask
-                match proc.ExitCode with
-                | 0 ->
-                  Utils.Log.info "[rebuild] Build succeeded for %s" projectPath
-                  dispatch (SageFsMsg.RebuildCompleted (Ok ()))
-                | code ->
-                  let output = (stdout + "\n" + stderr).Trim()
-                  Utils.Log.warn "[rebuild] Build failed (exit %d) for %s:\n%s" code projectPath output
-                  dispatch (SageFsMsg.RebuildCompleted (Error output))
+              match deps.ResolveSession targetSid with
+              | Error err ->
+                dispatch (SageFsMsg.RebuildCompleted (Error (SageFsError.describe err)))
+              | Ok resolution ->
+                let sid = SessionOperations.sessionId resolution
+                let sidStr = SessionId.value sid
+                match! deps.RestartSession sid true with
+                | Error err ->
+                  let msg = SageFsError.describe err
+                  Utils.Log.warn "[rebuild] RestartSession(rebuild=true) failed for %s: %s" sidStr msg
+                  dispatch (SageFsMsg.RebuildCompleted (Error msg))
+                | Ok msg ->
+                  Utils.Log.info "[rebuild] RestartSession(rebuild=true) started for %s: %s" sidStr msg
+                  let waitTimeoutMs = 30000
+                  let pollDelayMs = 250
+                  let deadline = DateTimeOffset.UtcNow.AddMilliseconds(float waitTimeoutMs)
+                  let rec waitForReadyProxy () = async {
+                    let! sessions = deps.ListSessions()
+                    let status =
+                      sessions
+                      |> List.tryFind (fun si -> si.Id = sid)
+                      |> Option.map (fun si -> si.Status)
+                    match status, deps.GetStreamingTestProxy sid with
+                    | Some SessionStatus.Ready, Some _ ->
+                      Utils.Log.info "[rebuild] Session %s ready with streaming proxy after rebuild" sidStr
+                      dispatch (SageFsMsg.RebuildCompleted (Ok ()))
+                    | _ when DateTimeOffset.UtcNow >= deadline ->
+                      let statusText =
+                        status
+                        |> Option.map string
+                        |> Option.defaultValue "missing"
+                      let err =
+                        sprintf
+                          "Rebuild succeeded but session %s never became ready for test execution within %dms (status=%s)."
+                          sidStr
+                          waitTimeoutMs
+                          statusText
+                      Utils.Log.warn "[rebuild] %s" err
+                      dispatch (SageFsMsg.RebuildCompleted (Error err))
+                    | _ ->
+                      do! deps.SleepMs pollDelayMs
+                      return! waitForReadyProxy ()
+                  }
+                  do! waitForReadyProxy ()
             with ex ->
               Utils.Log.error "[rebuild] Exception: %s" ex.Message
               dispatch (SageFsMsg.RebuildCompleted (Error ex.Message))

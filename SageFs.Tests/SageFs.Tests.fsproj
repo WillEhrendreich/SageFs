@@ -45,6 +45,7 @@
         <Compile Include="WorkflowTransitionPropertyTests.fs" />
         <Compile Include="WorkflowDetectionWiringTests.fs" />
         <Compile Include="McpAffordanceHardeningTests.fs" />
+        <Compile Include="WorkerMainTests.fs" />
         <Compile Include="WorkerProtocolTests.fs" />
         <Compile Include="DaemonStateTests.fs" />
         <Compile Include="DaemonIntegrationTests.fs" />

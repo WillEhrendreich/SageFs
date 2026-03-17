@@ -95,11 +95,14 @@ module TestDeps =
           log.SessionStopCalls <- log.SessionStopCalls @ [id]
           return Result.Ok ()
         }
+      RestartSession = fun _ _ ->
+        async { return Result.Ok "restarted" }
       ListSessions = fun () ->
         async {
           log.SessionListCalls <- log.SessionListCalls + 1
           return [sessionInfo]
         }
+      SleepMs = fun _ -> async { return () }
       GetWarmupContext = None
       RegisterFileWatcher = fun _ _ -> ()
       DisposeFileWatcher = fun _ _ -> ()
@@ -130,8 +133,11 @@ module TestDeps =
         }
       StopSession = fun id ->
         async { return Result.Error (SageFsError.SessionNotFound (SessionId.value id)) }
+      RestartSession = fun _ _ ->
+        async { return Result.Error SageFsError.NoActiveSessions }
       ListSessions = fun () -> async { return [] }
       ConfigureWarmupAutoOpen = ensureAutoOpenNoop
+      SleepMs = fun _ -> async { return () }
       GetWarmupContext = None
       RegisterFileWatcher = fun _ _ -> ()
       DisposeFileWatcher = fun _ _ -> ()
@@ -374,6 +380,180 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
       err |> Expect.stringContains "fail" "Stop failed"
     | other -> failtestf "expected error, got %A" other
 
+  testCase "RequestRebuild waits for restarted session proxy before reporting success" <| fun _ ->
+    let sid = testSessionId "a1b2c3d4"
+    let mutable dispatched : SageFsMsg list = []
+    let mutable restartCalls : (SessionId * bool) list = []
+    let mutable listCalls = 0
+    let mutable proxyCalls = 0
+    let tc : Features.LiveTesting.TestCase = {
+      Id = Features.LiveTesting.TestId.TestId "t1"
+      FullName = "Sample.Tests.should fail after rebuild"
+      DisplayName = "should fail after rebuild"
+      Origin = Features.LiveTesting.TestOrigin.ReflectionOnly
+      Labels = []
+      Framework = Features.LiveTesting.TestFramework.Expecto
+      Category = Features.LiveTesting.TestCategory.Unit
+    }
+    let sessionInfo status : SessionInfo = {
+      Id = sid
+      Name = None
+      Projects = ["Test.fsproj"]
+      WorkingDirectory = "."
+      SolutionRoot = None
+      CreatedAt = DateTime.UtcNow
+      LastActivity = DateTime.UtcNow
+      Status = status
+      WorkerPid = Some 999
+      Workflow = WorkflowTypes.SessionWorkflow.Interactive
+    }
+    let deps : EffectDeps = {
+      ResolveSession = fun _ ->
+        Result.Ok (SessionOperations.SessionResolution.DefaultSingle sid)
+      GetProxy = fun _ -> None
+      GetStreamingTestProxy = fun _ ->
+        proxyCalls <- proxyCalls + 1
+        match proxyCalls >= 3 with
+        | true -> Some (fun _ _ _ _ -> async { return () })
+        | false -> None
+      CreateSession = fun _ _ _ ->
+        async { return Result.Error SageFsError.NoActiveSessions }
+      ConfigureWarmupAutoOpen = TestDeps.ensureAutoOpenNoop
+      StopSession = fun _ ->
+        async { return Result.Error SageFsError.NoActiveSessions }
+      RestartSession = fun sessionId rebuild ->
+        async {
+          restartCalls <- restartCalls @ [sessionId, rebuild]
+          return Result.Ok "restarted"
+        }
+      ListSessions = fun () ->
+        async {
+          listCalls <- listCalls + 1
+          return [
+            sessionInfo
+              (match listCalls >= 3 with
+               | true -> SessionStatus.Ready
+               | false -> SessionStatus.Starting)
+          ]
+        }
+      SleepMs = fun _ -> async { return () }
+      GetWarmupContext = None
+      RegisterFileWatcher = fun _ _ -> ()
+      DisposeFileWatcher = fun _ _ -> ()
+      TestCycleCancellation = Features.LiveTesting.TestCycleCancellation.create ()
+    }
+    SageFsEffectHandler.execute deps
+      (fun m -> dispatched <- dispatched @ [m])
+      (SageFsEffect.TestCycle (
+        Features.LiveTesting.TestCycleEffect.RequestRebuild(
+          [| tc |],
+          Features.LiveTesting.RunTrigger.FileSave,
+          TimeSpan.Zero,
+          TimeSpan.Zero,
+          Some (SessionId.value sid),
+          [||])))
+    |> Async.RunSynchronously
+    let sw = Diagnostics.Stopwatch.StartNew()
+    while dispatched.IsEmpty && sw.ElapsedMilliseconds < 2000L do
+      Threading.Thread.Sleep 10
+    restartCalls
+    |> Expect.hasLength "should restart the targeted session once" 1
+    restartCalls.Head
+    |> Expect.equal "should request rebuild restart" (sid, true)
+    (listCalls > 1)
+    |> Expect.isTrue "should poll session readiness before completing rebuild"
+    (proxyCalls > 1)
+    |> Expect.isTrue "should wait for the streaming proxy before completing rebuild"
+    dispatched
+    |> Expect.equal "should report rebuild completion only after readiness" [SageFsMsg.RebuildCompleted (Ok ())]
+
+  testCase "RequestRebuild keeps waiting while restarted session is still starting" <| fun _ ->
+    let sid = testSessionId "d4c3b2a1"
+    let mutable dispatched : SageFsMsg list = []
+    let mutable restartCalls : (SessionId * bool) list = []
+    let mutable listCalls = 0
+    let mutable proxyCalls = 0
+    let tc : Features.LiveTesting.TestCase = {
+      Id = Features.LiveTesting.TestId.TestId "t2"
+      FullName = "Sample.Tests.should wait for ready session"
+      DisplayName = "should wait for ready session"
+      Origin = Features.LiveTesting.TestOrigin.ReflectionOnly
+      Labels = []
+      Framework = Features.LiveTesting.TestFramework.Expecto
+      Category = Features.LiveTesting.TestCategory.Unit
+    }
+    let sessionInfo status : SessionInfo = {
+      Id = sid
+      Name = None
+      Projects = ["Test.fsproj"]
+      WorkingDirectory = "."
+      SolutionRoot = None
+      CreatedAt = DateTime.UtcNow
+      LastActivity = DateTime.UtcNow
+      Status = status
+      WorkerPid = Some 999
+      Workflow = WorkflowTypes.SessionWorkflow.Interactive
+    }
+    let deps : EffectDeps = {
+      ResolveSession = fun _ ->
+        Result.Ok (SessionOperations.SessionResolution.DefaultSingle sid)
+      GetProxy = fun _ -> None
+      GetStreamingTestProxy = fun _ ->
+        proxyCalls <- proxyCalls + 1
+        match proxyCalls >= 12 with
+        | true -> Some (fun _ _ _ _ -> async { return () })
+        | false -> None
+      CreateSession = fun _ _ _ ->
+        async { return Result.Error SageFsError.NoActiveSessions }
+      ConfigureWarmupAutoOpen = TestDeps.ensureAutoOpenNoop
+      StopSession = fun _ ->
+        async { return Result.Error SageFsError.NoActiveSessions }
+      RestartSession = fun sessionId rebuild ->
+        async {
+          restartCalls <- restartCalls @ [sessionId, rebuild]
+          return Result.Ok "restarted"
+        }
+      ListSessions = fun () ->
+        async {
+          listCalls <- listCalls + 1
+          return [
+            sessionInfo
+              (match listCalls >= 12 with
+               | true -> SessionStatus.Ready
+               | false -> SessionStatus.Starting)
+          ]
+        }
+      SleepMs = fun _ -> async { return () }
+      GetWarmupContext = None
+      RegisterFileWatcher = fun _ _ -> ()
+      DisposeFileWatcher = fun _ _ -> ()
+      TestCycleCancellation = Features.LiveTesting.TestCycleCancellation.create ()
+    }
+    SageFsEffectHandler.execute deps
+      (fun m -> dispatched <- dispatched @ [m])
+      (SageFsEffect.TestCycle (
+        Features.LiveTesting.TestCycleEffect.RequestRebuild(
+          [| tc |],
+          Features.LiveTesting.RunTrigger.FileSave,
+          TimeSpan.Zero,
+          TimeSpan.Zero,
+          Some (SessionId.value sid),
+          [||])))
+    |> Async.RunSynchronously
+    let sw = Diagnostics.Stopwatch.StartNew()
+    while dispatched.IsEmpty && sw.ElapsedMilliseconds < 2000L do
+      Threading.Thread.Sleep 10
+    restartCalls
+    |> Expect.hasLength "should restart the targeted session once" 1
+    restartCalls.Head
+    |> Expect.equal "should request rebuild restart" (sid, true)
+    (listCalls >= 12)
+    |> Expect.isTrue "should keep polling until the restarted session is finally ready"
+    (proxyCalls >= 12)
+    |> Expect.isTrue "should keep polling until the streaming proxy is finally ready"
+    dispatched
+    |> Expect.equal "should report rebuild success once the long startup finishes" [SageFsMsg.RebuildCompleted (Ok ())]
+
   testCase "RequestHistory is a no-op" <| fun _ ->
     let mutable dispatched : SageFsMsg list = []
     SageFsEffectHandler.execute (TestDeps.noSessions ())
@@ -527,7 +707,10 @@ let fullLoopTests = testList "Full ElmLoop + EffectHandler" [
       ConfigureWarmupAutoOpen = TestDeps.ensureAutoOpenNoop
       StopSession = fun _ ->
         async { return Result.Error (SageFsError.NoActiveSessions) }
+      RestartSession = fun _ _ ->
+        async { return Result.Error SageFsError.NoActiveSessions }
       ListSessions = fun () -> async { return [readySession] }
+      SleepMs = fun _ -> async { return () }
       GetWarmupContext = Some getWarmupCtx
       RegisterFileWatcher = fun _ _ -> ()
       DisposeFileWatcher = fun _ _ -> ()
@@ -557,6 +740,8 @@ let fullLoopTests = testList "Full ElmLoop + EffectHandler" [
       ConfigureWarmupAutoOpen = TestDeps.ensureAutoOpenNoop
       StopSession = fun _ ->
         async { return Result.Error (SageFsError.NoActiveSessions) }
+      RestartSession = fun _ _ ->
+        async { return Result.Error SageFsError.NoActiveSessions }
       ListSessions = fun () -> async {
         return [{ Id = testSessionId "00000002"; Name = None; Projects = ["T.fsproj"]
                   WorkingDirectory = "."; SolutionRoot = None
@@ -564,6 +749,7 @@ let fullLoopTests = testList "Full ElmLoop + EffectHandler" [
                   Status = SessionStatus.Ready; WorkerPid = Some 1
                   Workflow = WorkflowTypes.SessionWorkflow.Interactive }]
       }
+      SleepMs = fun _ -> async { return () }
       GetWarmupContext = None
       RegisterFileWatcher = fun _ _ -> ()
       DisposeFileWatcher = fun _ _ -> ()
@@ -594,6 +780,8 @@ let fullLoopTests = testList "Full ElmLoop + EffectHandler" [
       ConfigureWarmupAutoOpen = TestDeps.ensureAutoOpenNoop
       StopSession = fun _ ->
         async { return Result.Error (SageFsError.NoActiveSessions) }
+      RestartSession = fun _ _ ->
+        async { return Result.Error SageFsError.NoActiveSessions }
       ListSessions = fun () -> async {
         return [{ Id = testSessionId "00000003"; Name = None; Projects = ["T.fsproj"]
                   WorkingDirectory = "."; SolutionRoot = None
@@ -601,6 +789,7 @@ let fullLoopTests = testList "Full ElmLoop + EffectHandler" [
                   Status = SessionStatus.Starting; WorkerPid = None
                   Workflow = WorkflowTypes.SessionWorkflow.Interactive }]
       }
+      SleepMs = fun _ -> async { return () }
       GetWarmupContext =
         Some (fun _ -> async { ctxCalled <- true; return None })
       RegisterFileWatcher = fun _ _ -> ()

@@ -41,6 +41,25 @@ let toStatusSnapshot
     MinDurationMs = stats.MinDuration.TotalMilliseconds |> int64
     MaxDurationMs = stats.MaxDuration.TotalMilliseconds |> int64 }
 
+let mergeInitialDiscoveryResults
+  (results: Features.LiveTesting.LiveTestHookResult array)
+  : Features.LiveTesting.TestCase array * Features.LiveTesting.ProviderDescription list =
+  let tests =
+    results
+    |> Array.collect (fun r -> r.DiscoveredTests)
+    |> Array.distinctBy (fun test -> test.Id)
+
+  let providers =
+    results
+    |> Array.collect (fun r -> r.DetectedProviders |> List.toArray)
+    |> Array.distinctBy (fun provider ->
+      match provider with
+      | Features.LiveTesting.ProviderDescription.AttributeBased d -> d.Name
+      | Features.LiveTesting.ProviderDescription.Custom d -> d.Name)
+    |> Array.toList
+
+  tests, providers
+
 /// Handle a single WorkerMessage by dispatching to the actor.
 let handleMessage
   (actor: AppActor)
@@ -230,16 +249,8 @@ let run (sessionId: string) (port: int) = async {
         Log.error "[WorkerMain] LiveTestingHook.afterReload failed for %s: %s\n%s" asm.FullName ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
         None)
 
-  let initialDiscoveredTests =
-    projectDiscoveryResults |> Array.collect (fun r -> r.DiscoveredTests)
-  let initialProviders =
-    projectDiscoveryResults
-    |> Array.collect (fun r -> r.DetectedProviders |> List.toArray)
-    |> Array.distinctBy (fun p ->
-      match p with
-      | Features.LiveTesting.ProviderDescription.AttributeBased a -> a.Name
-      | Features.LiveTesting.ProviderDescription.Custom c -> c.Name)
-    |> Array.toList
+  let initialDiscoveredTests, initialProviders =
+    mergeInitialDiscoveryResults projectDiscoveryResults
 
   let projectRunTest =
     let runTests = projectDiscoveryResults |> Array.map (fun r -> r.RunTest)

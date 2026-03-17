@@ -69,6 +69,34 @@ let reserveLoopbackPort (preferredPort: int option) =
     | Some port -> port
     | None -> failwith "Unable to reserve a loopback port for HTTP integration tests."
 
+let runProcessExpectSuccess (fileName: string) (workingDir: string) (args: string list) =
+  let psi = ProcessStartInfo()
+  psi.FileName <- fileName
+  psi.WorkingDirectory <- workingDir
+  psi.UseShellExecute <- false
+  psi.RedirectStandardOutput <- true
+  psi.RedirectStandardError <- true
+
+  for arg in args do
+    psi.ArgumentList.Add(arg)
+
+  use proc = Process.Start(psi)
+  let stdout = proc.StandardOutput.ReadToEnd()
+  let stderr = proc.StandardError.ReadToEnd()
+  proc.WaitForExit()
+
+  match proc.ExitCode with
+  | 0 -> ()
+  | code ->
+      failwith (
+        sprintf
+          "Process failed: %s %s (exit %d)%s%s"
+          fileName
+          (String.concat " " args)
+          code
+          Environment.NewLine
+          ((stdout + Environment.NewLine + stderr).Trim()))
+
 /// Start a daemon on a given port, wait until /health responds, return (process, HttpClient).
 let startDaemonWithArgs (port: int) (workingDir: string) (args: string list) = task {
   let psi = ProcessStartInfo()
@@ -118,6 +146,8 @@ let postJson (client: HttpClient) (path: string) (payload: obj) = task {
   return int resp.StatusCode, body
 }
 
+let utf8NoBom = new UTF8Encoding(false)
+
 /// GET a path, return (statusCode, body).
 let getJson (client: HttpClient) (path: string) = task {
   let! resp = client.GetAsync(path)
@@ -157,6 +187,83 @@ let waitForReadySession (client: HttpClient) (targetDir: string) (timeout: TimeS
 
   return ready, lastBody
 }
+
+type LiveTestingStatusSnapshot = {
+  DiscoveryState: string
+  Total: int
+  Passed: int
+  Failed: int
+  Stale: int
+  Running: int
+  FailedTests: string list
+}
+
+let getLiveTestingStatusSnapshot (client: HttpClient) (fileFilter: string option) = task {
+  let path =
+    match fileFilter with
+    | Some file -> sprintf "/api/live-testing/status?file=%s" (Uri.EscapeDataString file)
+    | None -> "/api/live-testing/status"
+
+  let! status, body = getJson client path
+
+  if status <> 200 then
+    failwith (sprintf "Expected 200 from %s, got %d with body: %s" path status body)
+
+  use doc = JsonDocument.Parse(body)
+  let root = doc.RootElement
+  let summary = root.GetProperty("Summary")
+  let failedTests =
+    match root.TryGetProperty("FailedTests") with
+    | true, tests ->
+      tests.EnumerateArray()
+      |> Seq.map (fun entry -> entry.GetProperty("Name").GetString())
+      |> Seq.toList
+    | false, _ -> []
+
+  let snapshot = {
+    DiscoveryState = root.GetProperty("DiscoveryState").GetString()
+    Total = summary.GetProperty("Total").GetInt32()
+    Passed = summary.GetProperty("Passed").GetInt32()
+    Failed = summary.GetProperty("Failed").GetInt32()
+    Stale = summary.GetProperty("Stale").GetInt32()
+    Running = summary.GetProperty("Running").GetInt32()
+    FailedTests = failedTests
+  }
+
+  return snapshot, body
+}
+
+let waitForLiveTestingStatus
+  (client: HttpClient)
+  (fileFilter: string option)
+  (timeout: TimeSpan)
+  (predicate: LiveTestingStatusSnapshot -> bool)
+  =
+  task {
+    let started = DateTime.UtcNow
+    let mutable matched = false
+    let mutable lastBody = ""
+    let mutable lastSnapshot = {
+      DiscoveryState = ""
+      Total = 0
+      Passed = 0
+      Failed = 0
+      Stale = 0
+      Running = 0
+      FailedTests = []
+    }
+
+    while not matched && DateTime.UtcNow - started < timeout do
+      let! snapshot, body = getLiveTestingStatusSnapshot client fileFilter
+      lastSnapshot <- snapshot
+      lastBody <- body
+      matched <- predicate snapshot
+
+      if not matched then
+        do! Task.Delay(250)
+
+    return matched, lastSnapshot, lastBody
+  }
 
 /// Cleanup daemon process.
 let killDaemon (proc: Process) =
@@ -650,6 +757,154 @@ let httpApiRoutingTests =
         |> Expect.isFalse (sprintf "completions should accept snake_case cursor_position, got: %s" body)
         body |> Expect.stringContains "should include a System completion" "String"
       finally
+        client.Dispose()
+        killDaemon proc
+  ]
+
+[<Tests>]
+let httpApiLiveTestingCompiledProjectTests =
+  testList "[Integration] HTTP API compiled live testing" [
+    testCase "editing a compiled F# file reruns tests against rebuilt output without an explicit rerun" <| fun _ ->
+      let tempProjectDir = smokeSampleProjectDir
+      let tempProjectPath = smokeSampleProject
+      let helloPath = Path.Combine(smokeSampleProjectDir, "Hello.fs")
+      let canonicalAdd = "let add a b = a + b"
+      let brokenAdd = "let add a b = a + b + 1"
+      let originalHello = File.ReadAllText(helloPath)
+      let baselineHello = originalHello.Replace(brokenAdd, canonicalAdd)
+      let editedHello =
+        baselineHello.Replace(canonicalAdd, brokenAdd)
+
+      (baselineHello <> editedHello)
+      |> Expect.isTrue "sample mutation should change Hello.fs"
+
+      File.WriteAllText(helloPath, baselineHello, utf8NoBom)
+      runProcessExpectSuccess
+        "dotnet"
+        tempProjectDir
+        [ "build"
+          tempProjectPath
+          "--no-restore"
+          "--nologo"
+          "-v:q" ]
+
+      let port = reserveLoopbackPort (Some (38800 + (Random().Next(100))))
+      let proc, client =
+        startDaemonWithArgs port repoRoot [ "--no-resume" ]
+        |> Async.AwaitTask |> Async.RunSynchronously
+
+      try
+        let createStatus, createBody =
+          createSession client tempProjectPath tempProjectDir
+          |> Async.AwaitTask |> Async.RunSynchronously
+        createStatus |> Expect.equal "session create should succeed" 200
+
+        let ready, sessionsBody =
+          waitForReadySession client tempProjectDir (TimeSpan.FromSeconds(60.0))
+          |> Async.AwaitTask |> Async.RunSynchronously
+
+        ready
+        |> Expect.isTrue (
+          sprintf
+            "compiled sample session should reach Ready. Create: %s Sessions: %s"
+            createBody
+            sessionsBody)
+
+        let enableStatus, enableBody =
+          postJson client "/api/live-testing/enable" {||}
+          |> Async.AwaitTask |> Async.RunSynchronously
+        enableStatus |> Expect.equal "enable should succeed" 200
+
+        let policyStatus, policyBody =
+          postJson client "/api/live-testing/policy" {| category = "unit"; policy = "every" |}
+          |> Async.AwaitTask |> Async.RunSynchronously
+        policyStatus |> Expect.equal "policy update should succeed" 200
+
+        let discovered, discoveredSnapshot, discoveredBody =
+          waitForLiveTestingStatus client None (TimeSpan.FromSeconds(60.0)) (fun snapshot ->
+            snapshot.DiscoveryState = "ready_with_tests"
+            && snapshot.Total >= 11)
+          |> Async.AwaitTask |> Async.RunSynchronously
+
+        discovered
+        |> Expect.isTrue (
+          sprintf
+            "live testing should discover the compiled sample tests. Enable: %s Policy: %s Status: %s Snapshot: %+A"
+            enableBody
+            policyBody
+            discoveredBody
+            discoveredSnapshot)
+
+        let settledAfterDiscovery, settledSnapshot, settledBody =
+          waitForLiveTestingStatus client None (TimeSpan.FromSeconds(60.0)) (fun snapshot ->
+            snapshot.Total >= 11
+            && snapshot.Running = 0)
+          |> Async.AwaitTask |> Async.RunSynchronously
+
+        settledAfterDiscovery
+        |> Expect.isTrue (
+          sprintf
+            "live testing discovery should settle before baseline evaluation. Status: %s Snapshot: %+A"
+            settledBody
+            settledSnapshot)
+
+        let autoBaselineReady =
+          settledSnapshot.Total >= 11
+          && settledSnapshot.Passed >= 11
+          && settledSnapshot.Failed = 0
+          && settledSnapshot.Running = 0
+          && settledSnapshot.Stale = 0
+
+        let runBody, baselineReady, baselineSnapshot, baselineBody =
+          match autoBaselineReady with
+          | true ->
+              "auto-run", true, settledSnapshot, settledBody
+          | false ->
+              let runStatus, runBody =
+                postJson client "/api/live-testing/run" {| pattern = ""; category = "" |}
+                |> Async.AwaitTask |> Async.RunSynchronously
+              runStatus |> Expect.equal "baseline run request should succeed" 200
+
+              let baselineReady, baselineSnapshot, baselineBody =
+                waitForLiveTestingStatus client None (TimeSpan.FromSeconds(60.0)) (fun snapshot ->
+                  snapshot.Total >= 11
+                  && snapshot.Passed >= 11
+                  && snapshot.Failed = 0
+                  && snapshot.Running = 0
+                  && snapshot.Stale = 0)
+                |> Async.AwaitTask |> Async.RunSynchronously
+
+              runBody, baselineReady, baselineSnapshot, baselineBody
+
+        baselineReady
+        |> Expect.isTrue (
+          sprintf
+            "baseline run should pass before editing the sample. Run: %s Status: %s Snapshot: %+A"
+            runBody
+            baselineBody
+            baselineSnapshot)
+
+        File.WriteAllText(helloPath, editedHello, utf8NoBom)
+
+        let failedAfterEdit, failedSnapshot, failedBody =
+          waitForLiveTestingStatus client None (TimeSpan.FromSeconds(60.0)) (fun snapshot ->
+            snapshot.FailedTests
+            |> List.exists (fun name -> name = "add infers int"))
+          |> Async.AwaitTask |> Async.RunSynchronously
+
+        failedAfterEdit
+        |> Expect.isTrue (
+          sprintf
+            "editing Hello.fs should automatically rerun compiled tests and surface the failing add test without an explicit rerun. Status: %s Snapshot: %+A"
+            failedBody
+            failedSnapshot)
+
+        failedSnapshot.Failed > 0
+        |> Expect.isTrue "edited sample should report at least one failing test"
+      finally
+        try
+          File.WriteAllText(helloPath, baselineHello, utf8NoBom)
+        with _ -> ()
         client.Dispose()
         killDaemon proc
   ]

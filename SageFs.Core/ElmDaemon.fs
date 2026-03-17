@@ -40,9 +40,18 @@ let createEffectDeps
               sessionId, reply))
         return result
       }
+    RestartSession = fun sessionId rebuild ->
+      async {
+        let! result =
+          sessionManager.PostAndAsyncReply(fun reply ->
+            SessionManager.SessionCommand.RestartSession(
+              sessionId, rebuild, reply))
+        return result
+      }
     ListSessions = fun () ->
       // CQRS read path — lock-free snapshot, no mailbox blocking
       async { return SessionManager.QuerySnapshot.allSessions (readSnapshot()) }
+    SleepMs = Async.Sleep
     GetStreamingTestProxy = fun _sessionId -> None
     GetWarmupContext = None
     TestCycleCancellation = Features.LiveTesting.TestCycleCancellation.create ()

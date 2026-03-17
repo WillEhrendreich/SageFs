@@ -466,6 +466,71 @@ let fileContentChangedTests = testList "FileContentChanged" [
     after2.LiveTesting.ActiveFile
     |> Expect.equal "latest file wins" (Some "src/Second.fs")
   }
+
+  test "compiled file save with empty dep graph still requests rebuild after FCS" {
+    let tc = mkTestCase "Sample.Tests.add infers int" TestFramework.Expecto TestCategory.Unit
+    let model =
+      { (SageFsModel.initial()) with
+          LiveTesting =
+            { LiveTestCycleState.empty with
+                TestState =
+                  { LiveTestState.empty with
+                      Activation = LiveTestingActivation.Active
+                      DiscoveredTests = [| tc |] } } }
+
+    let afterSave, _ =
+      SageFsUpdate.update
+        (SageFsMsg.FileContentChanged("src/Hello.fs", "let add a b = a + b + 1"))
+        model
+
+    afterSave.LiveTesting.LastTrigger
+    |> Expect.equal "watched disk changes should be treated as saves" RunTrigger.FileSave
+
+    let effects, _ =
+      LiveTestCycleState.handleFcsResult
+        (FcsTypeCheckResult.Success ("src/Hello.fs", []))
+        afterSave.LiveTesting
+
+    effects
+    |> List.exists (fun effect ->
+      match effect with
+      | TestCycleEffect.RequestRebuild (tests, trigger, _, _, _, _) ->
+        trigger = RunTrigger.FileSave
+        && tests |> Array.exists (fun test -> test.Id = tc.Id)
+      | _ -> false)
+    |> Expect.isTrue "compiled saves with no dep-graph matches should still fall back to rebuilding affected tests"
+  }
+
+  test "compiled file save with FCS failure still requests rebuild" {
+    let tc = mkTestCase "Sample.Tests.add infers int" TestFramework.Expecto TestCategory.Unit
+    let model =
+      { (SageFsModel.initial()) with
+          LiveTesting =
+            { LiveTestCycleState.empty with
+                TestState =
+                  { LiveTestState.empty with
+                      Activation = LiveTestingActivation.Active
+                      DiscoveredTests = [| tc |] } } }
+
+    let afterSave, _ =
+      SageFsUpdate.update
+        (SageFsMsg.FileContentChanged("src/Hello.fs", "let add a b = a + b + 1"))
+        model
+
+    let effects, _ =
+      LiveTestCycleState.handleFcsResult
+        (FcsTypeCheckResult.Failed ("src/Hello.fs", [ "type-check failed" ]))
+        afterSave.LiveTesting
+
+    effects
+    |> List.exists (fun effect ->
+      match effect with
+      | TestCycleEffect.RequestRebuild (tests, trigger, _, _, _, _) ->
+        trigger = RunTrigger.FileSave
+        && tests |> Array.exists (fun test -> test.Id = tc.Id)
+      | _ -> false)
+    |> Expect.isTrue "compiled saves should still rebuild even when FCS cannot type-check the changed file"
+  }
 ]
 
 [<Tests>]

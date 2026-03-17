@@ -41,6 +41,21 @@ let private depGraphCovering (symbol: string) (testIds: TestId array) =
   { TestDependencyGraph.empty with
       TransitiveCoverage = Map.ofList [ symbol, testIds ] }
 
+let private pendingRebuildFor (tests: TestCase array) (trigger: RunTrigger) =
+  { Tests = tests
+    Trigger = trigger
+    TreeSitterElapsed = ts 11.0
+    FcsElapsed = ts 29.0
+    SessionId = Some "test-session"
+    InstrumentationMaps = [||] }
+
+let private activeModelWithPending pending =
+  { SageFsModel.initial() with
+      LiveTesting =
+        { LiveTestCycleState.empty with
+            TestState = { LiveTestState.empty with Activation = LiveTestingActivation.Active }
+            PendingRebuild = Some pending } }
+
 // ═══════════════════════════════════════════════════════════════════
 // Stream 2 — Rebuild Before Test Execution
 // ═══════════════════════════════════════════════════════════════════
@@ -134,25 +149,36 @@ let rebuildCycleTests = testList "LiveTesting Rebuild Cycle" [
       |> Expect.isTrue
           "RebuildCompleted msg must exist — after successful rebuild, saved tests must run"
 
-      // Behavioral expectation (activates once RebuildCompleted exists):
-      // let pendingTests = [| sampleTestCase |]
-      // let model =
-      //   { SageFsModel.initial() with
-      //       LiveTesting =
-      //         { LiveTestCycleState.empty with
-      //             PendingRebuild = Some { Tests = pendingTests; ... } } }
-      // let model', effects =
-      //   SageFsUpdate.update (SageFsMsg.RebuildCompleted (Ok ())) model
-      //
-      // effects
-      // |> List.exists (function
-      //     | SageFsEffect.TestCycle (TestCycleEffect.RunAffectedTests (tests, _, _, _, _, _)) ->
-      //         tests = pendingTests
-      //     | _ -> false)
-      // |> Expect.isTrue "successful rebuild should trigger RunAffectedTests with saved tests"
-      //
-      // model'.LiveTesting.PendingRebuild
-      // |> Expect.isNone "PendingRebuild should be cleared after successful rebuild"
+      let pendingTests = [| sampleTestCase |]
+      let pending = pendingRebuildFor pendingTests RunTrigger.FileSave
+      let model =
+        { SageFsModel.initial() with
+            LiveTesting =
+              { LiveTestCycleState.empty with
+                  PendingRebuild = Some pending } }
+
+      let model', effects =
+        SageFsUpdate.update (SageFsMsg.RebuildCompleted (Ok ())) model
+
+      match effects with
+      | [ SageFsEffect.TestCycle (TestCycleEffect.RunAffectedTests (tests, trigger, tsElapsed, fcsElapsed, sessionId, maps)) ] ->
+        tests
+        |> Expect.equal "successful rebuild should run the saved test set" pendingTests
+        trigger
+        |> Expect.equal "saved trigger should flow into RunAffectedTests" pending.Trigger
+        tsElapsed
+        |> Expect.equal "tree-sitter timing should be preserved" pending.TreeSitterElapsed
+        fcsElapsed
+        |> Expect.equal "fcs timing should be preserved" pending.FcsElapsed
+        sessionId
+        |> Expect.equal "session ownership should be preserved" pending.SessionId
+        maps
+        |> Expect.equal "instrumentation maps should be preserved" pending.InstrumentationMaps
+      | other ->
+        failtestf "expected one RunAffectedTests effect after successful rebuild, got %A" other
+
+      model'.LiveTesting.PendingRebuild
+      |> Expect.isNone "PendingRebuild should be cleared after successful rebuild"
     }
 
     test "RebuildCompleted(Error) surfaces build diagnostic without running tests" {
@@ -163,55 +189,42 @@ let rebuildCycleTests = testList "LiveTesting Rebuild Cycle" [
       |> Expect.isTrue
           "RebuildCompleted msg must exist — build errors must surface without running tests"
 
-      // Behavioral expectation (activates once RebuildCompleted exists):
-      // let model =
-      //   { SageFsModel.initial() with
-      //       LiveTesting =
-      //         { LiveTestCycleState.empty with
-      //             PendingRebuild = Some { Tests = [| sampleTestCase |]; ... } } }
-      // let model', effects =
-      //   SageFsUpdate.update
-      //     (SageFsMsg.RebuildCompleted (Error "syntax error at line 5"))
-      //     model
-      //
-      // effects
-      // |> List.exists (function
-      //     | SageFsEffect.TestCycle (TestCycleEffect.RunAffectedTests _) -> true
-      //     | _ -> false)
-      // |> Expect.isFalse "build failure must NOT trigger test execution"
-      //
-      // model'.LiveTesting.PendingRebuild
-      // |> Expect.isNone "PendingRebuild should be cleared after failed rebuild"
+      let pending = pendingRebuildFor [| sampleTestCase |] RunTrigger.FileSave
+      let model =
+        { SageFsModel.initial() with
+            LiveTesting =
+              { LiveTestCycleState.empty with
+                  PendingRebuild = Some pending } }
+
+      let model', effects =
+        SageFsUpdate.update
+          (SageFsMsg.RebuildCompleted (Error "syntax error at line 5"))
+          model
+
+      effects
+      |> Expect.isEmpty "build failure must NOT trigger test execution"
+
+      model'.LiveTesting.PendingRebuild
+      |> Expect.isNone "PendingRebuild should be cleared after failed rebuild"
     }
 
-    test "PendingRebuild prevents new RunAffectedTests for same session" {
-      // WHY: If a rebuild is in-flight and another type-check completes,
-      // emitting RunAffectedTests would execute tests against stale code.
-      // The model must suppress RunAffectedTests while PendingRebuild is active.
-      hasRecordField<LiveTestCycleState> "PendingRebuild"
+    test "RebuildCompleted(Ok) with no PendingRebuild is ignored as stale" {
+      // WHY: Rebuild completions are asynchronous. If the model no longer has
+      // a pending rebuild when a completion arrives, that result is stale and
+      // must not trigger test execution against an older binary.
+      hasUnionCase<SageFsMsg> "RebuildCompleted"
       |> Expect.isTrue
-          "PendingRebuild field must exist to guard against concurrent stale test runs"
+          "RebuildCompleted msg must exist — stale completions must be ignored safely"
 
-      // Behavioral expectation (activates once PendingRebuild exists):
-      // let state = activeStateWith [| sampleTestCase |]
-      // let depGraph = depGraphCovering "MyModule.myFunction" [| sampleTestCase.Id |]
-      // let cycleWithPending =
-      //   { LiveTestCycleState.empty with
-      //       TestState = state
-      //       DepGraph = depGraph
-      //       PendingRebuild = Some { ... } }
-      //
-      // let effects =
-      //   TestCycleEffects.afterTypeCheck
-      //     [ "MyModule.myFunction" ] "MyModule.fs"
-      //     RunTrigger.FileSave depGraph state None Map.empty
-      //
-      // effects
-      // |> List.exists (function
-      //     | TestCycleEffect.RunAffectedTests _ -> true
-      //     | _ -> false)
-      // |> Expect.isFalse
-      //     "no RunAffectedTests while PendingRebuild is active — tests would run against stale code"
+      let model = SageFsModel.initial()
+      let model', effects =
+        SageFsUpdate.update (SageFsMsg.RebuildCompleted (Ok ())) model
+
+      effects
+      |> Expect.isEmpty "stale rebuild completion must NOT trigger test execution"
+
+      model'.LiveTesting.PendingRebuild
+      |> Expect.isNone "stale rebuild completion should leave PendingRebuild empty"
     }
     test "compiled project with empty changedSymbols still emits RequestRebuild for all tests" {
       // WHY: This is the ROOT CAUSE of the stale-DLL bug. When a user edits
@@ -320,20 +333,42 @@ let rebuildCycleTests = testList "LiveTesting Rebuild Cycle" [
       |> Expect.isTrue
           "PendingRebuild must exist to test cancellation on new edits"
 
-      // Behavioral expectation (activates once PendingRebuild exists):
-      // let cycleWithPending =
-      //   { LiveTestCycleState.empty with
-      //       TestState = activeStateWith [| sampleTestCase |]
-      //       PendingRebuild = Some { ... } }
-      // let model =
-      //   { SageFsModel.initial() with LiveTesting = cycleWithPending }
-      // let model', _ =
-      //   SageFsUpdate.update
-      //     (SageFsMsg.FileContentChanged ("Foo.fs", "let x = 42"))
-      //     model
-      //
-      // model'.LiveTesting.PendingRebuild
-      // |> Expect.isNone "PendingRebuild should be cancelled when new edit arrives"
+      let pending = pendingRebuildFor [| sampleTestCase |] RunTrigger.FileSave
+      let model = activeModelWithPending pending
+
+      let model', _ =
+        SageFsUpdate.update
+          (SageFsMsg.FileContentChanged ("Foo.fs", "let x = 42"))
+          model
+
+      model'.LiveTesting.PendingRebuild
+      |> Expect.isNone "PendingRebuild should be cancelled when new edit arrives"
+
+      model'.LiveTesting.ActiveFile
+      |> Expect.equal "the fresh edit should become the active file" (Some "Foo.fs")
+
+      model'.LiveTesting.Debounce.Fcs.Pending.IsSome
+      |> Expect.isTrue "the fresh edit should restart the debounce pipeline"
+    }
+
+    test "onFileSave during PendingRebuild cancels the stale rebuild" {
+      // WHY: Save events are also edits to compiled artifacts. A save that
+      // lands while a rebuild is in-flight invalidates that rebuild just as
+      // surely as a keystroke does.
+      let pending = pendingRebuildFor [| sampleTestCase |] RunTrigger.Keystroke
+      let now = DateTimeOffset.UtcNow
+      let state =
+        { LiveTestCycleState.empty with
+            PendingRebuild = Some pending }
+
+      let state' =
+        state |> LiveTestCycleState.onFileSave "Foo.fs" now
+
+      state'.PendingRebuild
+      |> Expect.isNone "PendingRebuild should be cancelled when a save arrives"
+
+      state'.LastTrigger
+      |> Expect.equal "save should still update the trigger" RunTrigger.FileSave
     }
 
     test "cancelled rebuild does not emit RebuildCompleted effects" {
@@ -344,24 +379,25 @@ let rebuildCycleTests = testList "LiveTesting Rebuild Cycle" [
       |> Expect.isTrue
           "RebuildCompleted must exist to test cancellation semantics"
 
-      // Behavioral expectation (activates once RebuildCompleted + PendingRebuild exist):
-      // 1. Model has PendingRebuild for generation N
-      // 2. FileContentChanged arrives → PendingRebuild cancelled (now generation N+1 or None)
-      // 3. RebuildCompleted for generation N arrives (stale result)
-      // 4. No RunAffectedTests effects — the stale result must be ignored
-      //
-      // let modelCancelled = ... (PendingRebuild = None after cancellation)
-      // let model', effects =
-      //   SageFsUpdate.update
-      //     (SageFsMsg.RebuildCompleted (Ok ()))
-      //     modelCancelled
-      //
-      // effects
-      // |> List.exists (function
-      //     | SageFsEffect.TestCycle (TestCycleEffect.RunAffectedTests _) -> true
-      //     | _ -> false)
-      // |> Expect.isFalse
-      //     "stale RebuildCompleted after cancellation must NOT trigger test execution"
+      let pending = pendingRebuildFor [| sampleTestCase |] RunTrigger.FileSave
+      let model = activeModelWithPending pending
+
+      let cancelledModel, _ =
+        SageFsUpdate.update
+          (SageFsMsg.FileContentChanged ("Foo.fs", "let x = 42"))
+          model
+
+      let model', effects =
+        SageFsUpdate.update
+          (SageFsMsg.RebuildCompleted (Ok ()))
+          cancelledModel
+
+      effects
+      |> Expect.isEmpty
+          "stale RebuildCompleted after cancellation must NOT trigger test execution"
+
+      model'.LiveTesting.PendingRebuild
+      |> Expect.isNone "the cancelled pipeline should stay cancelled after stale completion"
     }
   ]
 ]

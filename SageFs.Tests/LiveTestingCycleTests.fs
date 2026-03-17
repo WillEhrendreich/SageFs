@@ -1308,6 +1308,20 @@ let liveTestingStatusBarTests = testList "liveTestingStatusBar" [
     |> Expect.equal "should be empty" ""
   }
 
+  test "returns rebuilding marker when rebuild is pending" {
+    let pending =
+      { Tests = [| mkTestCase "MyTest.test1" TestFramework.Expecto TestCategory.Unit |]
+        Trigger = RunTrigger.FileSave
+        TreeSitterElapsed = TimeSpan.FromMilliseconds 5.0
+        FcsElapsed = TimeSpan.FromMilliseconds 10.0
+        SessionId = Some "session-1"
+        InstrumentationMaps = [||] }
+    let state = { LiveTestCycleState.empty with PendingRebuild = Some pending }
+    let result = LiveTestCycleState.liveTestingStatusBar state
+    result
+    |> Expect.stringContains "should show rebuilding marker" "🔨 Rebuilding"
+  }
+
   test "returns timing only when tests are empty" {
     let timing = {
       Depth = TestCycleDepth.ThroughExecution (
