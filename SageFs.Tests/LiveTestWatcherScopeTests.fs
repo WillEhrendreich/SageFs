@@ -1,15 +1,17 @@
 module SageFs.Tests.LiveTestWatcherScopeTests
 
-/// RED tests for per-session file watcher scope (Stream 1) and session
-/// watcher lifecycle (Stream 4).  Tests 2, 3, 5, 6, 7 document desired
-/// behaviour that does NOT yet exist and should FAIL until the
-/// corresponding implementation is merged.  Tests 1 and 4 are baselines
-/// that verify existing debounce plumbing works.
+/// Behavioral tests for per-session file watcher scope (Stream 1) and
+/// session watcher lifecycle (Stream 4).
 ///
-/// The core bug: `createLiveTestWatcher` (DaemonMode.fs) watches
-/// `Environment.CurrentDirectory` (the daemon CWD), not the session's
-/// project directories.  File changes in user projects are invisible
-/// to live testing.
+/// Stream 1 tests 1–4 all document passing contracts:
+///   1. Single-session baseline: file change populates debounce channel.
+///   2. Non-active session isolation: B's file change routes to
+///      PerSessionLiveTesting, leaving A's primary state untouched.
+///   3. Multi-session independence: each session tracks its own changes.
+///   4. Debounce coalescing: N rapid saves within 200ms produce exactly
+///      one pending operation.
+///
+/// Stream 4 tests verify watcher lifecycle (created/disposed with session).
 
 open System
 open Expecto
@@ -52,7 +54,7 @@ let private withLiveTesting (model: SageFsModel) =
 
 [<Tests>]
 let stream1Tests =
-  ptestList "Stream 1 — Per-Session File Watcher Scope (Wave 2 — not yet implemented)" [
+  testList "Stream 1 — Per-Session File Watcher Scope" [
 
     // ── Test 1 ──────────────────────────────────────────────────────
     // WHY: The current bug is that the watcher fires for daemon CWD,
@@ -96,59 +98,45 @@ let stream1Tests =
     }
 
     // ── Test 2 ──────────────────────────────────────────────────────
-    // WHY: Without session context on the message, the rebuild step
-    // doesn't know which project to `dotnet build`.  After the fix
-    // FileContentChanged must carry a sessionId so the pipeline can
-    // route the build to the correct session.
+    // WHY: Without per-session routing, ANY file change pollutes the
+    // single global LiveTestCycleState.  Session A's rebuild fires when
+    // Session B edits a file in a completely different project.  After
+    // the fix, Session B's change must be isolated in
+    // PerSessionLiveTesting and leave Session A's primary state entirely
+    // untouched — including its ActiveFile (debounce channel state).
     //
-    // RED: SageFsMsg.FileContentChanged currently is
-    //   `FileContentChanged of filePath: string * content: string`
-    // After the fix it should be
-    //   `FileContentChanged of filePath: string * content: string * sessionId: string`
-    // (or a record with sessionId).
-    test "FileContentChanged carries session context so the pipeline knows which session to rebuild" {
-      // This test will fail at compile time once we change the DU,
-      // but for now it documents the requirement by checking that the
-      // model update propagates a session identifier.
-      //
-      // We simulate two sessions and assert that a FileContentChanged
-      // for session A's directory is attributed to session A.
-      let snapA = mkSession "session-a" "/projects/alpha"
-      let snapB = mkSession "session-b" "/projects/beta"
+    // NOTE: FileContentChanged only populates the debounce channel;
+    // TestCycleEffects are emitted only when TestCycleTick fires.  This
+    // test therefore asserts on model state, not on returned effects.
+    test "file change in non-active session directory routes to per-session state without touching primary LiveTesting" {
+      let snapA = mkSession "session-a" "/projects/alpha"  // created first → becomes active
+      let snapB = mkSession "session-b" "/projects/beta"   // created second → background
       let model =
         SageFsModel.initial ()
         |> withSession snapA
         |> withSession snapB
         |> withLiveTesting
 
-      let filePath = "/projects/alpha/src/Lib.fs"
-      let _model', effects =
+      let fileB = "/projects/beta/src/Lib.fs"
+      let model', _ =
         SageFsUpdate.update
-          (SageFsMsg.FileContentChanged (filePath, "module Lib"))
+          (SageFsMsg.FileContentChanged (fileB, "module Lib"))
           model
 
-      // RED: Today the update returns zero effects because the Elm
-      // model has no session-routing logic for FileContentChanged.
-      // After the fix, the effects list should contain a
-      // TestCycleEffect whose sessionId matches session A.
-      //
-      // Until the sessionId field is added to FileContentChanged,
-      // this assertion documents the gap.
-      let hasSessionScopedEffect =
-        effects
-        |> List.exists (fun e ->
-          match e with
-          | SageFsEffect.TestCycle (TestCycleEffect.RequestFcsTypeCheck _) -> true
-          | SageFsEffect.TestCycle (TestCycleEffect.ParseTreeSitter _) -> true
-          | _ -> false)
+      // Session A is the active session.  Session B's file change must NOT
+      // pollute A's primary LiveTesting debounce state.
+      model'.LiveTesting.ActiveFile
+      |> Expect.isNone
+          "primary LiveTesting (session A) should be untouched by session B's file change"
 
-      // This is RED: today FileContentChanged only populates the
-      // debounce channel — effects are only emitted on tick.
-      // The real requirement is that the effect carries session context.
-      // For now we check that something downstream acknowledges the session.
-      hasSessionScopedEffect
-      |> Expect.isTrue
-          "FileContentChanged should produce a session-scoped test cycle effect (not yet implemented)"
+      // Session B's change should instead be routed to PerSessionLiveTesting.
+      let bSid = WorkerProtocol.SessionId.value snapB.Id
+      model'.PerSessionLiveTesting
+      |> Map.tryFind bSid
+      |> Option.bind (fun c -> c.ActiveFile)
+      |> Expect.equal
+          "session B's file change should route to PerSessionLiveTesting"
+          (Some fileB)
     }
 
     // ── Test 3 ──────────────────────────────────────────────────────
@@ -205,10 +193,19 @@ let stream1Tests =
 
       // After the fix, session A's debounce should still reference
       // fileA (not overwritten by fileB).
-      // RED: Today the global ActiveFile is overwritten to fileB.
+      // GREEN: PerSessionLiveTesting routing keeps B's change isolated.
       model''.LiveTesting.ActiveFile
       |> Expect.notEqual
           "session A's active file should not be overwritten by session B's change"
+          (Some fileB)
+
+      // Session B's isolated change must be tracked in PerSessionLiveTesting.
+      let bSid = WorkerProtocol.SessionId.value snapB.Id
+      model''.PerSessionLiveTesting
+      |> Map.tryFind bSid
+      |> Option.bind (fun c -> c.ActiveFile)
+      |> Expect.equal
+          "session B's file change should be tracked independently in PerSessionLiveTesting"
           (Some fileB)
     }
 

@@ -211,6 +211,9 @@ type SageFsModel = {
   ResolvedSourceLocations: Features.LiveTesting.TestSourceLocation list
   /// Pending workflow suggestion from project detection — cleared on dismiss or accept.
   PendingSuggestion: WorkflowTypes.WorkflowSuggestion option
+  /// Per-session live test cycle state for non-active sessions.
+  /// The active session's state lives in LiveTesting; background sessions are tracked here.
+  PerSessionLiveTesting: Map<string, Features.LiveTesting.LiveTestCycleState>
 }
 
 module SageFsModel =
@@ -236,6 +239,7 @@ module SageFsModel =
     PendingTestResults = PendingTestResultBuffer.empty
     ResolvedSourceLocations = []
     PendingSuggestion = None
+    PerSessionLiveTesting = Map.empty
   }
 
   /// Project the current workflow from the session context.
@@ -1327,15 +1331,36 @@ module SageFsUpdate =
         { model with LiveTesting = cycle' }, mappedEffects
 
     | SageFsMsg.FileContentChanged (filePath, content) ->
-      match model.LiveTesting.TestState.Activation = Features.LiveTesting.LiveTestingActivation.Active with
+      let isActive = model.LiveTesting.TestState.Activation = Features.LiveTesting.LiveTestingActivation.Active
+      match isActive with
+      | false -> model, []
       | true ->
         let now = DateTimeOffset.UtcNow
-        let cycle' =
-          model.LiveTesting
-          |> Features.LiveTesting.LiveTestCycleState.onKeystroke content filePath now
-        { model with LiveTesting = cycle' }, []
-      | false ->
-        model, []
+        let owningSession =
+          model.Sessions.Sessions
+          |> List.tryFind (fun s ->
+            not (System.String.IsNullOrEmpty s.WorkingDirectory) &&
+            filePath.StartsWith(s.WorkingDirectory, System.StringComparison.OrdinalIgnoreCase))
+        match owningSession with
+        | None ->
+          // No session owns this file — update the primary (active) session
+          let cycle' = model.LiveTesting |> Features.LiveTesting.LiveTestCycleState.onKeystroke content filePath now
+          { model with LiveTesting = cycle' }, []
+        | Some s ->
+          match model.Sessions.ActiveSessionId with
+          | ActiveSession.Viewing activeId when activeId = s.Id ->
+            // File belongs to the active session — update primary
+            let cycle' = model.LiveTesting |> Features.LiveTesting.LiveTestCycleState.onKeystroke content filePath now
+            { model with LiveTesting = cycle' }, []
+          | _ ->
+            // File belongs to a background session — update per-session state
+            let sid = SessionId.value s.Id
+            let current =
+              model.PerSessionLiveTesting
+              |> Map.tryFind sid
+              |> Option.defaultValue Features.LiveTesting.LiveTestCycleState.empty
+            let cycle' = current |> Features.LiveTesting.LiveTestCycleState.onKeystroke content filePath now
+            { model with PerSessionLiveTesting = model.PerSessionLiveTesting |> Map.add sid cycle' }, []
 
     | SageFsMsg.FcsTypeCheckCompleted result ->
       let effects, cycle' =
