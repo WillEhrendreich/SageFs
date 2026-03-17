@@ -101,6 +101,8 @@ module TestDeps =
           return [sessionInfo]
         }
       GetWarmupContext = None
+      RegisterFileWatcher = fun _ _ -> ()
+      DisposeFileWatcher = fun _ _ -> ()
       TestCycleCancellation = Features.LiveTesting.TestCycleCancellation.create ()
     }
 
@@ -131,6 +133,8 @@ module TestDeps =
       ListSessions = fun () -> async { return [] }
       ConfigureWarmupAutoOpen = ensureAutoOpenNoop
       GetWarmupContext = None
+      RegisterFileWatcher = fun _ _ -> ()
+      DisposeFileWatcher = fun _ _ -> ()
       TestCycleCancellation = Features.LiveTesting.TestCycleCancellation.create ()
     }
 
@@ -525,6 +529,8 @@ let fullLoopTests = testList "Full ElmLoop + EffectHandler" [
         async { return Result.Error (SageFsError.NoActiveSessions) }
       ListSessions = fun () -> async { return [readySession] }
       GetWarmupContext = Some getWarmupCtx
+      RegisterFileWatcher = fun _ _ -> ()
+      DisposeFileWatcher = fun _ _ -> ()
       TestCycleCancellation = Features.LiveTesting.TestCycleCancellation.create ()
     }
     do! SageFsEffectHandler.execute deps dispatch
@@ -559,6 +565,8 @@ let fullLoopTests = testList "Full ElmLoop + EffectHandler" [
                   Workflow = WorkflowTypes.SessionWorkflow.Interactive }]
       }
       GetWarmupContext = None
+      RegisterFileWatcher = fun _ _ -> ()
+      DisposeFileWatcher = fun _ _ -> ()
       TestCycleCancellation = Features.LiveTesting.TestCycleCancellation.create ()
     }
     do! SageFsEffectHandler.execute deps dispatch
@@ -595,6 +603,8 @@ let fullLoopTests = testList "Full ElmLoop + EffectHandler" [
       }
       GetWarmupContext =
         Some (fun _ -> async { ctxCalled <- true; return None })
+      RegisterFileWatcher = fun _ _ -> ()
+      DisposeFileWatcher = fun _ _ -> ()
       TestCycleCancellation = Features.LiveTesting.TestCycleCancellation.create ()
     }
     do! SageFsEffectHandler.execute deps dispatch

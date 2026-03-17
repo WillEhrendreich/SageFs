@@ -293,7 +293,7 @@ let stream1Tests =
 
 [<Tests>]
 let stream4Tests =
-  ptestList "Stream 4 — Session Watcher Lifecycle (Wave 2 — not yet implemented)" [
+  testList "Session Watcher Lifecycle" [
 
     // ── Test 5 ──────────────────────────────────────────────────────
     // WHY: Watchers consume OS handles — only create them for sessions
@@ -320,14 +320,8 @@ let stream4Tests =
         effects
         |> List.exists (fun e ->
           match e with
-          | SageFsEffect.TestCycle (TestCycleEffect.RequestInitialDiscovery) ->
-            // This exists today but doesn't cover watcher registration
-            false
-          | _ ->
-            // We're looking for a new effect variant like:
-            //   TestCycleEffect.RegisterFileWatcher of sessionId * directory
-            // which does not exist yet.
-            false)
+          | SageFsEffect.TestCycle (TestCycleEffect.RegisterFileWatcher _) -> true
+          | _ -> false)
 
       // Also verify that the model tracks which sessions have watchers.
       // RED: No such tracking exists today.
@@ -370,9 +364,7 @@ let stream4Tests =
         effects
         |> List.exists (fun e ->
           match e with
-          | SageFsEffect.TestCycle _ ->
-            // Looking for a DisposeFileWatcher effect — doesn't exist yet
-            false
+          | SageFsEffect.TestCycle (TestCycleEffect.DisposeFileWatcher _) -> true
           | _ -> false)
 
       hasWatcherDisposal
@@ -422,18 +414,14 @@ let stream4Tests =
         allEffects
         |> List.exists (fun e ->
           match e with
-          | SageFsEffect.TestCycle _ ->
-            // Looking for DisposeFileWatcher — doesn't exist yet
-            false
+          | SageFsEffect.TestCycle (TestCycleEffect.DisposeFileWatcher _) -> true
           | _ -> false)
 
       let hasRegistration =
         allEffects
         |> List.exists (fun e ->
           match e with
-          | SageFsEffect.TestCycle _ ->
-            // Looking for RegisterFileWatcher — doesn't exist yet
-            false
+          | SageFsEffect.TestCycle (TestCycleEffect.RegisterFileWatcher _) -> true
           | _ -> false)
 
       hasDisposal

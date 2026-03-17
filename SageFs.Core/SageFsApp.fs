@@ -787,6 +787,12 @@ module SageFsUpdate =
             model.Sessions.Sessions |> List.map (fun s -> match s.Id = snap.Id with | true -> snap | false -> s)
           | false ->
             snap :: model.Sessions.Sessions
+        let watcherEffects =
+          match model.LiveTesting.TestState.Activation with
+          | Features.LiveTesting.LiveTestingActivation.Active ->
+            [ SageFsEffect.TestCycle (Features.LiveTesting.TestCycleEffect.RegisterFileWatcher
+                (SessionId.value snap.Id, snap.WorkingDirectory)) ]
+          | _ -> []
         { model with
             CreatingSession = false
             Sessions = {
@@ -795,7 +801,7 @@ module SageFsUpdate =
                 ActiveSessionId =
                   match isFirst with
                   | true -> ActiveSession.Viewing snap.Id
-                  | false -> model.Sessions.ActiveSessionId } }, []
+                  | false -> model.Sessions.ActiveSessionId } }, watcherEffects
 
       | SageFsEvent.SessionsRefreshed snaps ->
         let activeId = model.Sessions.ActiveSessionId
@@ -847,6 +853,8 @@ module SageFsUpdate =
                     { s with IsActive = s.Id = toId }) } }, []
 
       | SageFsEvent.SessionStopped sessionId ->
+        let stoppedSession =
+          model.Sessions.Sessions |> List.tryFind (fun s -> SessionId.value s.Id = sessionId)
         let remaining =
           model.Sessions.Sessions
           |> List.filter (fun s -> SessionId.value s.Id <> sessionId)
@@ -871,13 +879,19 @@ module SageFsUpdate =
         let lt =
           { model.LiveTesting with
               TestState = { model.LiveTesting.TestState with TestSessionMap = clearedMap } }
+        let watcherEffects =
+          match stoppedSession with
+          | Some s ->
+            [ SageFsEffect.TestCycle (Features.LiveTesting.TestCycleEffect.DisposeFileWatcher
+                (sessionId, s.WorkingDirectory)) ]
+          | None -> []
         { model with
             Sessions = {
               model.Sessions with
                 Sessions = remaining
                 ActiveSessionId = newActive }
             LiveTesting = lt
-            Diagnostics = model.Diagnostics |> Map.remove sessionId }, []
+            Diagnostics = model.Diagnostics |> Map.remove sessionId }, watcherEffects
 
       | SageFsEvent.SessionStale (sessionId, _) ->
         { model with
@@ -1257,7 +1271,16 @@ module SageFsUpdate =
               Features.LiveTesting.LiveTestCycleState.triggerExecutionForAffected
                 groupIds Features.LiveTesting.RunTrigger.ExplicitRun targetSession lt
               |> List.map SageFsEffect.TestCycle)
-        { model with LiveTesting = lt }, effects
+        let watcherEffects =
+          model.Sessions.Sessions
+          |> List.choose (fun session ->
+            match session.Status with
+            | SessionDisplayStatus.Running
+            | SessionDisplayStatus.Stale ->
+              Some (SageFsEffect.TestCycle (Features.LiveTesting.TestCycleEffect.RegisterFileWatcher
+                (SessionId.value session.Id, session.WorkingDirectory)))
+            | _ -> None)
+        { model with LiveTesting = lt }, effects @ watcherEffects
 
     | SageFsMsg.DisableLiveTesting ->
       match model.LiveTesting.TestState.Activation = Features.LiveTesting.LiveTestingActivation.Inactive with
@@ -1559,6 +1582,10 @@ type EffectDeps = {
   GetWarmupContext: (SessionId -> Async<SessionContext option>) option
   /// Test cycle cancellation for stale work
   TestCycleCancellation: Features.LiveTesting.TestCycleCancellation
+  /// Register an OS file watcher for the given session's project directory
+  RegisterFileWatcher: string -> string -> unit
+  /// Dispose the OS file watcher for the given session's project directory
+  DisposeFileWatcher: string -> string -> unit
 }
 
 /// Routes SageFsEffect to real infrastructure via injected deps.
@@ -1936,6 +1963,10 @@ module SageFsEffectHandler =
               Utils.Log.error "[rebuild] Exception: %s" ex.Message
               dispatch (SageFsMsg.RebuildCompleted (Error ex.Message))
           })
+        | Features.LiveTesting.TestCycleEffect.RegisterFileWatcher (_sessionId, directory) ->
+          deps.RegisterFileWatcher _sessionId directory
+        | Features.LiveTesting.TestCycleEffect.DisposeFileWatcher (_sessionId, directory) ->
+          deps.DisposeFileWatcher _sessionId directory
         | Features.LiveTesting.TestCycleEffect.RunAffectedTests (tests, trigger, tsElapsed, fcsElapsed, targetSession, instrumentationMaps) ->
           match Array.isEmpty tests with
           | true -> ()

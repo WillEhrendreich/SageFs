@@ -1183,6 +1183,7 @@ let createElmRuntime
   (readSnapshot: unit -> SessionManager.QuerySnapshot)
   (httpClient: System.Net.Http.HttpClient)
   (stateChangedEvent: Event<DaemonStateChange>)
+  (watcherManagerRef: LiveTestWatcherManager option ref)
   (ct: System.Threading.CancellationToken) =
   let mutable lastStateJson = ""
   let mutable lastLoggedOutputCount = 0
@@ -1259,7 +1260,15 @@ let createElmRuntime
           match Map.tryFind sid snapshot.WorkerBaseUrls with
           | Some url when url.Length > 0 ->
             Some (HttpWorkerClient.streamingTestProxyWithCoverage url)
-          | _ -> None }
+          | _ -> None
+        RegisterFileWatcher = fun _sessionId directory ->
+          match !watcherManagerRef with
+          | Some mgr -> mgr.AddDirectory(directory)
+          | None -> ()
+        DisposeFileWatcher = fun _sessionId directory ->
+          match !watcherManagerRef with
+          | Some mgr -> mgr.RemoveDirectory(directory)
+          | None -> () }
   ElmDaemon.startHeadless effectDeps (fun model _regions ->
     let activeBuf = model.RecentOutput.GetActiveBuffer(model.Sessions.ActiveSessionId)
     let outputCount = activeBuf.Count
@@ -1363,7 +1372,8 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
     resumePreviousSessions infra sessionOps workingDir onSessionResumed
 
   // Create EffectDeps from SessionManager + start Elm loop
-  let elmRuntime = createElmRuntime sessionManager readSnapshot httpClient stateChangedEvent cts.Token
+  let watcherManagerRef = ref (None: LiveTestWatcherManager option)
+  let elmRuntime = createElmRuntime sessionManager readSnapshot httpClient stateChangedEvent watcherManagerRef cts.Token
 
   // Create a diagnostics-changed event (aggregated from workers)
   let diagnosticsChanged = Event<Features.DiagnosticsStore.T>()
@@ -1518,6 +1528,7 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
       (fun path -> stateChangedEvent.Trigger (FileReloaded path)))
   // Seed with daemon CWD as fallback (for scripts evaluated from daemon dir)
   liveTestWatcherManager.AddDirectory(workingDir)
+  watcherManagerRef := Some liveTestWatcherManager
   // Also seed with any existing session directories
   let seedSessionDirs () =
     let snapshot = readSnapshot()

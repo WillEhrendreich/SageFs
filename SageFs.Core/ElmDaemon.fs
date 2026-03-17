@@ -46,6 +46,8 @@ let createEffectDeps
     GetStreamingTestProxy = fun _sessionId -> None
     GetWarmupContext = None
     TestCycleCancellation = Features.LiveTesting.TestCycleCancellation.create ()
+    RegisterFileWatcher = fun _ _ -> ()
+    DisposeFileWatcher = fun _ _ -> ()
   }
 
 /// Create an ElmProgram wired to real SageFs components.

@@ -1087,6 +1087,8 @@ module TestCycleCancellation =
     | TestCycleEffect.RequestFcsTypeCheck _ -> pc.Fcs.next()
     | TestCycleEffect.RunAffectedTests _ -> pc.TestRun.next()
     | TestCycleEffect.RequestRebuild _ -> pc.TestRun.next()
+    | TestCycleEffect.RegisterFileWatcher _ -> System.Threading.CancellationToken.None
+    | TestCycleEffect.DisposeFileWatcher _ -> System.Threading.CancellationToken.None
 
   let dispose (pc: TestCycleCancellation) =
     pc.Discovery.dispose()

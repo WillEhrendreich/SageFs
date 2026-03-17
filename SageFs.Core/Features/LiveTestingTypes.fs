@@ -2927,6 +2927,8 @@ type TestCycleEffect =
   | RequestFcsTypeCheck of filePath: string * treeSitterElapsed: System.TimeSpan
   | RunAffectedTests of tests: TestCase array * trigger: RunTrigger * treeSitterElapsed: System.TimeSpan * fcsElapsed: System.TimeSpan * sessionId: string option * instrumentationMaps: InstrumentationMap array
   | RequestRebuild of tests: TestCase array * trigger: RunTrigger * treeSitterElapsed: System.TimeSpan * fcsElapsed: System.TimeSpan * sessionId: string option * instrumentationMaps: InstrumentationMap array
+  | RegisterFileWatcher of sessionId: string * directory: string
+  | DisposeFileWatcher of sessionId: string * directory: string
 
 module TestCycleEffects =
   let fromTick
