@@ -681,6 +681,71 @@ let stream5Tests =
           ()
     }
 
+    test "background session run start updates only background live-testing state" {
+      let snapA = mkSession "session-a" "/projects/alpha"
+      let snapB = mkSession "session-b" "/projects/beta"
+      let aSid = WorkerProtocol.SessionId.value snapA.Id
+      let bSid = WorkerProtocol.SessionId.value snapB.Id
+      let tcA = mkTestCase "Primary.Tests.alpha" TestFramework.Expecto TestCategory.Unit
+      let tcB = mkTestCase "Background.Tests.beta" TestFramework.Expecto TestCategory.Unit
+      let model =
+        SageFsModel.initial ()
+        |> withSession snapA
+        |> withSession snapB
+        |> withLiveTesting
+        |> fun m ->
+          { m with
+              LiveTesting =
+                { LiveTestCycleState.empty with
+                    TestState =
+                      { LiveTestState.empty with
+                          Activation = LiveTestingActivation.Active
+                          DiscoveredTests = [| tcA |]
+                          TestSessionMap = Map.ofList [ tcA.Id, aSid ] } }
+              PerSessionLiveTesting =
+                Map.ofList [
+                  bSid,
+                  { LiveTestCycleState.empty with
+                      TestState =
+                        { LiveTestState.empty with
+                            Activation = LiveTestingActivation.Active
+                            DiscoveredTests = [| tcB |]
+                            TestSessionMap = Map.ofList [ tcB.Id, bSid ] } }
+                ] }
+
+      let model', effects =
+        SageFsUpdate.update
+          (SageFsMsg.Event (SageFsEvent.TestRunStarted ([| tcB.Id |], Some bSid)))
+          model
+
+      model'.LiveTesting.TestState.AffectedTests
+      |> Expect.isEmpty
+          "primary live-testing state should stay untouched when a background session starts running tests"
+
+      model'.LiveTesting.TestState.RunPhases
+      |> Map.containsKey bSid
+      |> Expect.isFalse
+          "primary run phases should not claim the background session's running phase"
+
+      let backgroundState =
+        model'.PerSessionLiveTesting
+        |> Map.find bSid
+
+      backgroundState.TestState.AffectedTests
+      |> Expect.containsAll
+          "background live-testing state should record the tests that actually started running"
+          (set [ tcB.Id ])
+
+      backgroundState.TestState.RunPhases
+      |> Map.tryFind bSid
+      |> function
+        | Some (TestRunPhase.Running _) -> ()
+        | other -> failtestf "expected background session to be Running, got %A" other
+
+      effects
+      |> Expect.isEmpty "run-start should only mutate the targeted live-testing state"
+    }
+
     test "background session FCS completion updates only background live-testing state" {
       let snapA = mkSession "session-a" "/projects/alpha"
       let snapB = mkSession "session-b" "/projects/beta"

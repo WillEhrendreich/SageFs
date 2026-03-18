@@ -1240,36 +1240,20 @@ module SageFsUpdate =
         { model with ResolvedSourceLocations = locations }, []
 
       | SageFsEvent.TestRunStarted (testIds, sessionId) ->
-        let priorState = model.LiveTesting.TestState
-        let nextAffected = Set.ofArray testIds
-        let changedIds = Set.union priorState.AffectedTests nextAffected
-        let updatedState =
-          let phase, gen = TestRunPhase.startRun priorState.LastGeneration
-          let phases =
-            match sessionId with
-            | Some sid -> priorState.RunPhases |> Map.add sid phase
-            | None -> priorState.RunPhases
-          { priorState with LastGeneration = gen; AffectedTests = nextAffected; RunPhases = phases }
-        let lt =
-          match Array.isEmpty priorState.StatusEntries with
-          | true ->
-            finalizeLiveTestingState
-              LiveTestingStatusRefresh.Recompute
-              model.LiveTesting
-              updatedState
-            |> fst
-          | false ->
-            let patchedState, changedEntries =
-              Features.LiveTesting.LiveTesting.patchStatusEntriesForChangedIds
-                priorState
-                updatedState
-                changedIds
-            finalizeLiveTestingState
-              (LiveTestingStatusRefresh.PatchChangedEntries changedEntries)
-              model.LiveTesting
-              patchedState
-            |> fst
-        { model with LiveTesting = lt }, []
+        let model', _ =
+          tryUpdateLiveTestingState sessionId (fun cycle ->
+            let nextAffected = Set.ofArray testIds
+            let changedIds = Set.union cycle.TestState.AffectedTests nextAffected
+            let cycle' =
+              refreshStatusesForChangedIds cycle changedIds (fun priorState ->
+                let phase, gen = TestRunPhase.startRun priorState.LastGeneration
+                let phases =
+                  match sessionId with
+                  | Some sid -> priorState.RunPhases |> Map.add sid phase
+                  | None -> priorState.RunPhases
+                { priorState with LastGeneration = gen; AffectedTests = nextAffected; RunPhases = phases })
+            cycle', ()) model
+        model', []
 
       | SageFsEvent.TestResultsBatch results ->
         applyBufferedTestResults [ results ] model
