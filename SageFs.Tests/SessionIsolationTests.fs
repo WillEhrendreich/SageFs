@@ -544,6 +544,80 @@ module ResetIsolation =
         ActivityTracker = SageFs.AgentActivityTracker.create() } : McpContext
     ctx, sidStr, resetStarted, allowResetFinish
 
+  let mkTransportFailureCtx () =
+    let result = globalActorResult.Value
+    let sid = testSessionId "aaa00001"
+    let sidStr = WorkerProtocol.SessionId.value sid
+    let sessionMap = ConcurrentDictionary<string, string>()
+    sessionMap.["agent1"] <- sidStr
+    let registryStatus = ref WorkerProtocol.SessionStatus.Ready
+    let workerDied = System.Collections.Generic.List<string>()
+
+    let sessionInfo () : WorkerProtocol.SessionInfo =
+      { Id = sid
+        Name = None
+        Projects = []
+        WorkingDirectory = @"C:\Code\Repos\SageFs"
+        SolutionRoot = None
+        Status = !registryStatus
+        WorkerPid = None
+        Workflow = WorkflowTypes.SessionWorkflow.Interactive
+        CreatedAt = DateTime.UtcNow
+        LastActivity = DateTime.UtcNow }
+
+    let transportFailure =
+      let connectionClosed =
+        System.IO.IOException(
+          "Unable to read data from the transport connection: An existing connection was forcibly closed by the remote host.")
+      System.Net.Http.HttpRequestException("An error occurred while sending the request.", connectionClosed)
+
+    let proxy : WorkerProtocol.SessionProxy =
+      fun msg ->
+        async {
+          match msg with
+          | WorkerProtocol.WorkerMessage.HardResetSession _ ->
+            return raise (AggregateException transportFailure)
+          | other ->
+            return failwithf "unexpected worker message in transport failure test: %A" other
+        }
+
+    let ops : SessionManagementOps = {
+      CreateSession = fun _ _ _ -> Task.FromResult(Ok "new-session")
+      ListSessions = fun () -> Task.FromResult("No sessions")
+      StopSession = fun _ -> Task.FromResult(Ok "stopped")
+      RestartSession = fun _ _ -> Task.FromResult(Ok "restarted")
+      GetProxy = fun sessionId ->
+        match sessionId = sid with
+        | true -> Task.FromResult(Some proxy)
+        | false -> Task.FromResult(None)
+      GetSessionInfo = fun sessionId ->
+        match sessionId = sid with
+        | true -> Task.FromResult(Some (sessionInfo ()))
+        | false -> Task.FromResult(None)
+      GetAllSessions = fun () -> Task.FromResult([ sessionInfo () ])
+      UpdateSessionStatus = fun _ status ->
+        registryStatus := status
+        Task.FromResult(())
+      GetStandbyInfo = fun () -> Task.FromResult(SageFs.StandbyInfo.NoPool)
+      NotifyWorkerDied = fun sessionId ->
+        workerDied.Add(WorkerProtocol.SessionId.value sessionId)
+        registryStatus := WorkerProtocol.SessionStatus.Faulted }
+
+    let ctx =
+      { Persistence = SageFs.EventStore.EventPersistence.noop
+        DiagnosticsChanged = result.DiagnosticsChanged
+        StateChanged = None
+        SessionOps = ops
+        SessionMap = sessionMap
+        McpPort = 0
+        Dispatch = None
+        GetElmModel = None
+        GetElmRegions = None
+        GetWarmupContext = None
+        GetFeatureState = None
+        ActivityTracker = SageFs.AgentActivityTracker.create() } : McpContext
+    ctx, sidStr, workerDied, registryStatus
+
   let tests = testList "[Integration] Reset isolation" [
     testTask "hardResetSession with rebuild only restarts the targeted session" {
       let ctx, restartLog, _ = mkTrackingCtx ()
@@ -618,6 +692,27 @@ module ResetIsolation =
       |> Expect.stringContains
         "soft reset should still complete successfully"
         "reset"
+    }
+
+    testTask "hardResetSession surfaces transport failures without throwing" {
+      let ctx, sid, workerDied, registryStatus = mkTransportFailureCtx ()
+
+      let! result = hardResetSession ctx "agent1" false (Some sid) None
+
+      result
+      |> Expect.stringContains
+        "hard reset should report a recoverable worker communication error"
+        "Cannot reach session"
+
+      workerDied |> Seq.toList
+      |> Expect.equal
+        "transport failures should mark the worker dead"
+        [ sid ]
+
+      !registryStatus
+      |> Expect.equal
+        "transport failures should leave the snapshot faulted"
+        WorkerProtocol.SessionStatus.Faulted
     }
 
     testTask "concurrent agents: resetting one never touches the other's session" {

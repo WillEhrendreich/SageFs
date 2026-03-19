@@ -810,15 +810,68 @@ module McpTools =
     |> Option.iter (fun dispatch ->
       dispatch (SageFsMsg.Event event))
 
+  type RouteError =
+    | Message of string
+    | TransportFailure of string
+
+  let routeErrorMessage = function
+    | Message msg -> msg
+    | TransportFailure msg -> msg
+
+  let routeErrorIsTransportFailure = function
+    | TransportFailure _ -> true
+    | Message _ -> false
+
+  let innermostException (ex: exn) =
+    let rec loop (current: exn) =
+      match current.InnerException with
+      | null -> current
+      | inner -> loop inner
+    loop ex
+
+  let tryMapTransportFailure (sessionId: string) (ex: exn) =
+    let rec unwrap (error: exn) =
+      match error with
+      | :? AggregateException as aggregate when not (isNull aggregate.InnerException) ->
+        unwrap aggregate.InnerException
+      | other -> other
+
+    let transport = unwrap ex
+    let describe reason =
+      SageFsError.WorkerCommunicationFailed(sessionId, sprintf "Session transport closed — %s" reason)
+      |> SageFsError.describeForAgent
+
+    match transport with
+    | :? OperationCanceledException -> None
+    | :? System.Net.Http.HttpRequestException as httpError ->
+      let reason =
+        match httpError.InnerException with
+        | null when String.IsNullOrWhiteSpace httpError.Message ->
+          "HTTP request failed"
+        | null ->
+          httpError.Message
+        | inner ->
+          let root = innermostException inner
+          match String.IsNullOrWhiteSpace root.Message with
+          | true -> httpError.Message
+          | false -> root.Message
+      Some (TransportFailure (describe reason))
+    | :? IOException as ioError ->
+      Some (TransportFailure (describe ioError.Message))
+    | :? ObjectDisposedException as disposed ->
+      Some (TransportFailure (describe disposed.Message))
+    | _ ->
+      None
+
   /// Route a WorkerMessage to a specific session via proxy.
   let routeToSession
     (ctx: McpContext)
     (sessionId: string)
     (msg: WorkerProtocol.SessionId -> WorkerProtocol.WorkerMessage)
-    : Task<Result<WorkerProtocol.WorkerResponse, string>> =
+    : Task<Result<WorkerProtocol.WorkerResponse, RouteError>> =
     task {
       match WorkerProtocol.SessionId.validate sessionId with
-      | Error e -> return Error (sprintf "Invalid session ID: %s" e)
+      | Error e -> return Error (Message (sprintf "Invalid session ID: %s" e))
       | Ok validId ->
         let! proxy = ctx.SessionOps.GetProxy validId
         match proxy with
@@ -827,13 +880,25 @@ module McpTools =
           match info with
           | Some i when i.Status = WorkerProtocol.SessionStatus.Starting
                      || i.Status = WorkerProtocol.SessionStatus.Restarting ->
-            return Result.Error (sprintf "Session '%s' is still warming up (%s). This typically takes 15-30s for test projects. Poll get_fsi_status every 5-10s to check readiness. Do NOT create a new session — it will compete for resources and make warmup slower." sessionId (WorkerProtocol.SessionStatus.label i.Status))
+            return Result.Error (Message (sprintf "Session '%s' is still warming up (%s). This typically takes 15-30s for test projects. Poll get_fsi_status every 5-10s to check readiness. Do NOT create a new session — it will compete for resources and make warmup slower." sessionId (WorkerProtocol.SessionStatus.label i.Status)))
           | _ ->
-            return Result.Error (sprintf "Session '%s' not found" sessionId)
+            return Result.Error (Message (sprintf "Session '%s' not found" sessionId))
         | Some send ->
           let replyId = WorkerProtocol.SessionId.newId()
-          let! response = send (msg replyId) |> Async.StartAsTask
-          return Result.Ok response
+          try
+            let! response = send (msg replyId) |> Async.StartAsTask
+            return Result.Ok response
+          with
+          | :? OperationCanceledException as cancellation ->
+            return raise cancellation
+          | ex ->
+            match tryMapTransportFailure sessionId ex with
+            | Some transportError ->
+              ctx.SessionOps.NotifyWorkerDied validId
+              do! ctx.SessionOps.UpdateSessionStatus validId WorkerProtocol.SessionStatus.Faulted
+              return Result.Error transportError
+            | None ->
+              return raise ex
     }
 
   /// Route to the active session or the specified session.
@@ -1050,8 +1115,9 @@ module McpTools =
         | _ -> ()
         formatted
       | Error msg ->
-        notifyElm ctx (SageFsEvent.EvalFailed (sid, msg))
-        sprintf "Error: %s" msg
+        let err = routeErrorMessage msg
+        notifyElm ctx (SageFsEvent.EvalFailed (sid, err))
+        sprintf "Error: %s" err
   }
 
   let sendFSharpCode
@@ -1173,7 +1239,7 @@ module McpTools =
       | Ok other ->
         return sprintf "Unexpected response: %A" other
       | Error msg ->
-        return sprintf "Error getting status: %s" msg
+        return sprintf "Error getting status: %s" (routeErrorMessage msg)
     })
 
   let getStartupInfo (ctx: McpContext) (agent: string) (workingDirectory: string option) : Task<string> =
@@ -1276,7 +1342,7 @@ module McpTools =
         | Ok (WorkerProtocol.WorkerResponse.WorkerError err) ->
           sprintf "Error: %s" (SageFsError.describeForAgent err)
         | Ok other -> sprintf "Unexpected response: %A" other
-        | Error msg -> sprintf "Error: %s" msg
+        | Error msg -> sprintf "Error: %s" (routeErrorMessage msg)
     })
 
   let resetSession (ctx: McpContext) (agent: string) (sessionId: string option) (workingDirectory: string option) : Task<string> =
@@ -1309,8 +1375,15 @@ module McpTools =
         do! setSnapshotStatus ctx sid previousStatus
         return sprintf "Unexpected response: %A" other
       | Error msg ->
-        do! setSnapshotStatus ctx sid previousStatus
-        return sprintf "Error: %s" msg
+        let err = routeErrorMessage msg
+        match routeErrorIsTransportFailure msg with
+        | true ->
+          do! setSnapshotStatus ctx sid WorkerProtocol.SessionStatus.Faulted
+          notifyElm ctx (
+            SageFsEvent.SessionStatusChanged (sid, SessionDisplayStatus.Errored err))
+        | false ->
+          do! setSnapshotStatus ctx sid previousStatus
+        return sprintf "Error: %s" err
     })
 
   let checkFSharpCode (ctx: McpContext) (agent: string) (code: string) (sessionId: string option) (workingDirectory: string option) : Task<string> =
@@ -1330,7 +1403,7 @@ module McpTools =
                 (Features.Diagnostics.DiagnosticSeverity.label d.Severity) d.Message)
             |> String.concat "\n"
         | Ok other -> sprintf "Unexpected response: %A" other
-        | Error msg -> sprintf "Error: %s" msg
+        | Error msg -> sprintf "Error: %s" (routeErrorMessage msg)
     })
 
   let hardResetSession (ctx: McpContext) (agent: string) (rebuild: bool) (sessionId: string option) (workingDirectory: string option) : Task<string> =
@@ -1384,8 +1457,15 @@ module McpTools =
           do! setSnapshotStatus ctx sid previousStatus
           return sprintf "Unexpected response: %A" other
         | Error msg ->
-          do! setSnapshotStatus ctx sid previousStatus
-          return sprintf "Error: %s" msg
+          let err = routeErrorMessage msg
+          match routeErrorIsTransportFailure msg with
+          | true ->
+            do! setSnapshotStatus ctx sid WorkerProtocol.SessionStatus.Faulted
+            notifyElm ctx (
+              SageFsEvent.SessionStatusChanged (sid, SessionDisplayStatus.Errored err))
+          | false ->
+            do! setSnapshotStatus ctx sid previousStatus
+          return sprintf "Error: %s" err
     })
 
   let cancelEval (ctx: McpContext) (agent: string) (workingDirectory: string option) : Task<string> =
@@ -1401,7 +1481,7 @@ module McpTools =
         | Ok (WorkerProtocol.WorkerResponse.EvalCancelled false) ->
           "No evaluation in progress."
         | Ok other -> sprintf "Unexpected response: %A" other
-        | Error msg -> sprintf "Error: %s" msg
+        | Error msg -> sprintf "Error: %s" (routeErrorMessage msg)
     })
 
   let getCompletions (ctx: McpContext) (agent: string) (code: string) (cursorPosition: int) (workingDirectory: string option) : Task<string> =
@@ -1416,7 +1496,7 @@ module McpTools =
           | true -> "No completions available."
           | false -> String.concat "\n" completions
         | Ok other -> sprintf "Unexpected response: %A" other
-        | Error msg -> sprintf "Error: %s" msg
+        | Error msg -> sprintf "Error: %s" (routeErrorMessage msg)
     })
 
   let exploreQualifiedName (ctx: McpContext) (agent: string) (qualifiedName: string) (workingDirectory: string option) : Task<string> =
@@ -1437,7 +1517,7 @@ module McpTools =
             let items = completions |> List.map (sprintf "  %s") |> String.concat "\n"
             sprintf "%s\n%s" header items
         | Ok other -> sprintf "Unexpected response: %A" other
-        | Error msg -> sprintf "Error: %s" msg
+        | Error msg -> sprintf "Error: %s" (routeErrorMessage msg)
     })
 
   let exploreNamespace (ctx: McpContext) (agent: string) (namespaceName: string) (workingDirectory: string option) : Task<string> =
@@ -1498,7 +1578,7 @@ module McpTools =
           | None ->
             sprintf "Could not extract DU cases from '%s'. Output: %s" typeName output
         | Ok other -> sprintf "Unexpected response: %A" other
-        | Error msg -> sprintf "Error: %s" msg
+        | Error msg -> sprintf "Error: %s" (routeErrorMessage msg)
     })
 
   // ── Session Management Operations ──────────────────────────────
