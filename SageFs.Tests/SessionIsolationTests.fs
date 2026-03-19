@@ -2,6 +2,7 @@ module SageFs.Tests.SessionIsolationTests
 
 open System
 open System.IO
+open System.Threading.Tasks
 open Expecto
 open Expecto.Flip
 open SageFs
@@ -42,6 +43,7 @@ module McpSessionIsolation =
                      CreatedAt = System.DateTime.UtcNow
                      LastActivity = System.DateTime.UtcNow })
           GetAllSessions = fun () -> System.Threading.Tasks.Task.FromResult([])
+          UpdateSessionStatus = fun _ _ -> System.Threading.Tasks.Task.FromResult(())
           GetStandbyInfo = fun () -> System.Threading.Tasks.Task.FromResult(SageFs.StandbyInfo.NoPool)
           NotifyWorkerDied = fun _ -> ()
         }
@@ -140,6 +142,7 @@ module McpSessionIsolation =
             GetProxy = fun _ -> System.Threading.Tasks.Task.FromResult(None)
             GetSessionInfo = fun _ -> System.Threading.Tasks.Task.FromResult(None)
             GetAllSessions = fun () -> System.Threading.Tasks.Task.FromResult([])
+            UpdateSessionStatus = fun _ _ -> System.Threading.Tasks.Task.FromResult(())
             GetStandbyInfo = fun () -> System.Threading.Tasks.Task.FromResult(SageFs.StandbyInfo.NoPool)
             NotifyWorkerDied = fun _ -> () }
           SessionMap = sessionMap
@@ -285,6 +288,7 @@ module WorkingDirRoutingPriority =
           GetProxy = fun sid -> Task.FromResult(Map.tryFind (WorkerProtocol.SessionId.value sid) proxies)
           GetSessionInfo = fun sid -> Task.FromResult(sessions |> List.tryFind (fun s -> s.Id = sid))
           GetAllSessions = fun () -> Task.FromResult(sessions)
+          UpdateSessionStatus = fun _ _ -> Task.FromResult(())
           GetStandbyInfo = fun () -> Task.FromResult(StandbyInfo.NoPool)
           NotifyWorkerDied = fun _ -> () }
       SessionMap = sessionMap; McpPort = 0; Dispatch = None
@@ -437,6 +441,7 @@ module ResetIsolation =
                  Workflow = WorkflowTypes.SessionWorkflow.Interactive
                  CreatedAt = System.DateTime.UtcNow; LastActivity = System.DateTime.UtcNow })
       GetAllSessions = fun () -> System.Threading.Tasks.Task.FromResult([])
+      UpdateSessionStatus = fun _ _ -> System.Threading.Tasks.Task.FromResult(())
       GetStandbyInfo = fun () -> System.Threading.Tasks.Task.FromResult(SageFs.StandbyInfo.NoPool)
       NotifyWorkerDied = fun _ -> ()
     }
@@ -454,6 +459,90 @@ module ResetIsolation =
         GetFeatureState = None
         ActivityTracker = SageFs.AgentActivityTracker.create() } : McpContext
     ctx, restartLog, routedSessions
+
+  let mkStatusSyncCtx () =
+    let result = globalActorResult.Value
+    let sid = testSessionId "aaa00001"
+    let sidStr = WorkerProtocol.SessionId.value sid
+    let sessionMap = ConcurrentDictionary<string, string>()
+    sessionMap.["agent1"] <- sidStr
+    let registryStatus = ref WorkerProtocol.SessionStatus.Ready
+    let resetStarted = System.Threading.Tasks.TaskCompletionSource<unit>()
+    let allowResetFinish = System.Threading.Tasks.TaskCompletionSource<unit>()
+
+    let sessionInfo () : WorkerProtocol.SessionInfo =
+      { Id = sid
+        Name = None
+        Projects = []
+        WorkingDirectory = @"C:\Code\Repos\SageFs"
+        SolutionRoot = None
+        Status = !registryStatus
+        WorkerPid = None
+        Workflow = WorkflowTypes.SessionWorkflow.Interactive
+        CreatedAt = DateTime.UtcNow
+        LastActivity = DateTime.UtcNow }
+
+    let statusSnapshot () : WorkerProtocol.WorkerStatusSnapshot =
+      let status =
+        match resetStarted.Task.IsCompleted, allowResetFinish.Task.IsCompleted with
+        | true, false -> WorkerProtocol.SessionStatus.Starting
+        | _ -> WorkerProtocol.SessionStatus.Ready
+
+      { Status = status
+        StatusMessage = None
+        EvalCount = 0
+        AvgDurationMs = 0L
+        MinDurationMs = 0L
+        MaxDurationMs = 0L }
+
+    let proxy : WorkerProtocol.SessionProxy =
+      fun msg ->
+        async {
+          match msg with
+          | WorkerProtocol.WorkerMessage.ResetSession replyId ->
+            resetStarted.TrySetResult(()) |> ignore
+            do! allowResetFinish.Task |> Async.AwaitTask
+            return WorkerProtocol.WorkerResponse.ResetResult(replyId, Ok ())
+          | WorkerProtocol.WorkerMessage.GetStatus replyId ->
+            return WorkerProtocol.WorkerResponse.StatusResult(replyId, statusSnapshot ())
+          | other ->
+            return failwithf "unexpected worker message in reset status sync test: %A" other
+        }
+
+    let ops : SessionManagementOps = {
+      CreateSession = fun _ _ _ -> Task.FromResult(Ok "new-session")
+      ListSessions = fun () -> Task.FromResult("No sessions")
+      StopSession = fun _ -> Task.FromResult(Ok "stopped")
+      RestartSession = fun _ _ -> Task.FromResult(Ok "restarted")
+      GetProxy = fun sessionId ->
+        match sessionId = sid with
+        | true -> Task.FromResult(Some proxy)
+        | false -> Task.FromResult(None)
+      GetSessionInfo = fun sessionId ->
+        match sessionId = sid with
+        | true -> Task.FromResult(Some (sessionInfo ()))
+        | false -> Task.FromResult(None)
+      GetAllSessions = fun () -> Task.FromResult([ sessionInfo () ])
+      UpdateSessionStatus = fun _ status ->
+        registryStatus := status
+        Task.FromResult(())
+      GetStandbyInfo = fun () -> Task.FromResult(SageFs.StandbyInfo.NoPool)
+      NotifyWorkerDied = fun _ -> () }
+
+    let ctx =
+      { Persistence = SageFs.EventStore.EventPersistence.noop
+        DiagnosticsChanged = result.DiagnosticsChanged
+        StateChanged = None
+        SessionOps = ops
+        SessionMap = sessionMap
+        McpPort = 0
+        Dispatch = None
+        GetElmModel = None
+        GetElmRegions = None
+        GetWarmupContext = None
+        GetFeatureState = None
+        ActivityTracker = SageFs.AgentActivityTracker.create() } : McpContext
+    ctx, sidStr, resetStarted, allowResetFinish
 
   let tests = testList "[Integration] Reset isolation" [
     testTask "hardResetSession with rebuild only restarts the targeted session" {
@@ -496,6 +585,39 @@ module ResetIsolation =
 
       ctx.SessionMap.["agent2"]
       |> Expect.equal "agent2 session untouched" "bbb00002"
+    }
+
+    testTask "resetSession updates listSessions while the worker is warming" {
+      let ctx, sid, resetStarted, allowResetFinish = mkStatusSyncCtx ()
+
+      let resetTask = resetSession ctx "agent1" (Some sid) None
+
+      let! started =
+        waitForAsync 5000 (fun () ->
+          Task.FromResult(resetStarted.Task.IsCompleted))
+
+      started
+      |> Expect.isTrue "soft reset should reach the worker before assertions"
+
+      let! listed = listSessions ctx
+      listed
+      |> Expect.stringContains
+        "listSessions should reflect that the session is re-warming during a soft reset"
+        "Starting"
+
+      let! status = getStatus ctx "agent1" (Some sid) None
+      status
+      |> Expect.stringContains
+        "getStatus should surface the live worker warming state"
+        "State: WarmingUp"
+
+      allowResetFinish.TrySetResult(()) |> ignore
+
+      let! resetResult = resetTask
+      resetResult
+      |> Expect.stringContains
+        "soft reset should still complete successfully"
+        "reset"
     }
 
     testTask "concurrent agents: resetting one never touches the other's session" {

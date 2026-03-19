@@ -305,6 +305,11 @@ let createSessionOps
       task { return SessionManager.QuerySnapshot.tryGetSession sessionId (readSnapshot()) }
     GetAllSessions = fun () ->
       task { return SessionManager.QuerySnapshot.allSessions (readSnapshot()) }
+    UpdateSessionStatus = fun sessionId status ->
+      task {
+        sessionManager.Post(
+          SessionManager.SessionCommand.UpdateSessionStatus(sessionId, status))
+      }
     GetStandbyInfo = fun () ->
       task { return (readSnapshot()).StandbyInfo }
     NotifyWorkerDied = fun sessionId ->

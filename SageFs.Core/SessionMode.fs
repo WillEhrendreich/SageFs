@@ -18,6 +18,9 @@ type SessionManagementOps = {
   GetSessionInfo: SessionId -> Task<SessionInfo option>
   /// Get all active sessions with their metadata.
   GetAllSessions: unit -> Task<SessionInfo list>
+  /// Update the daemon-side snapshot status for an existing session.
+  /// Used when the worker changes phase without a full process restart.
+  UpdateSessionStatus: SessionId -> SessionStatus -> Task<unit>
   /// Get summary of standby pool state for UI display.
   GetStandbyInfo: unit -> Task<StandbyInfo>
   /// Notify that a worker died unexpectedly (pipe broken mid-request).
@@ -35,6 +38,7 @@ module SessionManagementOps =
     GetProxy = fun _ -> Task.FromResult(None)
     GetSessionInfo = fun _ -> Task.FromResult(None)
     GetAllSessions = fun () -> Task.FromResult([])
+    UpdateSessionStatus = fun _ _ -> Task.FromResult(())
     GetStandbyInfo = fun () -> Task.FromResult(StandbyInfo.NoPool)
     NotifyWorkerDied = fun _ -> ()
   }

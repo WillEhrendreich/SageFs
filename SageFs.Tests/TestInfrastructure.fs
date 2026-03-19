@@ -81,13 +81,20 @@ let mkTestSessionOps (result: ActorResult) (sessionId: SageFs.WorkerProtocol.Ses
     GetProxy = fun _ -> System.Threading.Tasks.Task.FromResult(Some proxy)
     GetSessionInfo = fun _ ->
       System.Threading.Tasks.Task.FromResult(
-        Some { SageFs.WorkerProtocol.SessionInfo.Id = sessionId
-               Name = None
-               Projects = []; WorkingDirectory = ""; SolutionRoot = None
-               Status = SageFs.WorkerProtocol.SessionStatus.Ready
-               WorkerPid = None; Workflow = SessionWorkflow.Interactive
-               CreatedAt = System.DateTime.UtcNow; LastActivity = System.DateTime.UtcNow })
+        Some {
+          Id = sessionId
+          Name = None
+          Projects = []
+          WorkingDirectory = ""
+          SolutionRoot = None
+          Status = SageFs.WorkerProtocol.SessionStatus.Ready
+          WorkerPid = None
+          Workflow = SessionWorkflow.Interactive
+          CreatedAt = System.DateTime.UtcNow
+          LastActivity = System.DateTime.UtcNow
+        })
     GetAllSessions = fun () -> System.Threading.Tasks.Task.FromResult([])
+    UpdateSessionStatus = fun _ _ -> System.Threading.Tasks.Task.FromResult(())
     GetStandbyInfo = fun () -> System.Threading.Tasks.Task.FromResult(SageFs.StandbyInfo.NoPool)
     NotifyWorkerDied = fun _ -> () }
 

@@ -916,6 +916,9 @@ module McpTools =
   let withSessionWd (ctx: McpContext) (agent: string) (workingDirectory: string option) (f: string -> Task<string>) : Task<string> =
     withSession ctx agent None workingDirectory f
 
+  let setSnapshotStatus (ctx: McpContext) (sid: string) (status: WorkerProtocol.SessionStatus) =
+    ctx.SessionOps.UpdateSessionStatus (toSessionId sid) status
+
   /// Get the session status via proxy, returning the SessionState.
   let getSessionState (ctx: McpContext) (sessionId: string) : Task<SessionState> =
     task {
@@ -1278,21 +1281,36 @@ module McpTools =
 
   let resetSession (ctx: McpContext) (agent: string) (sessionId: string option) (workingDirectory: string option) : Task<string> =
     withSession ctx agent sessionId workingDirectory (fun sid -> task {
+      let! info = ctx.SessionOps.GetSessionInfo (toSessionId sid)
+      let previousStatus =
+        info
+        |> Option.map (fun sessionInfo -> sessionInfo.Status)
+        |> Option.defaultValue WorkerProtocol.SessionStatus.Ready
+      do! setSnapshotStatus ctx sid WorkerProtocol.SessionStatus.Starting
+      notifyElm ctx (
+        SageFsEvent.SessionStatusChanged (sid, SessionDisplayStatus.Starting))
       let! routeResult =
         routeToSession ctx sid
           (fun replyId -> WorkerProtocol.WorkerMessage.ResetSession (WorkerProtocol.SessionId.value replyId))
-      return
-        match routeResult with
-        | Ok (WorkerProtocol.WorkerResponse.ResetResult(_, Ok ())) ->
-          compilationStates.TryRemove(sid) |> ignore
-          Features.EvalDedup.DedupCache.clearSession evalDedupCache sid
-          notifyElm ctx (
-            SageFsEvent.SessionStatusChanged (sid, SessionDisplayStatus.Running))
-          "Session reset successfully. All previous definitions have been cleared."
-        | Ok (WorkerProtocol.WorkerResponse.ResetResult(_, Error err)) ->
-          sprintf "Error: %s" (SageFsError.describeForAgent err)
-        | Ok other -> sprintf "Unexpected response: %A" other
-        | Error msg -> sprintf "Error: %s" msg
+      match routeResult with
+      | Ok (WorkerProtocol.WorkerResponse.ResetResult(_, Ok ())) ->
+        do! setSnapshotStatus ctx sid WorkerProtocol.SessionStatus.Ready
+        compilationStates.TryRemove(sid) |> ignore
+        Features.EvalDedup.DedupCache.clearSession evalDedupCache sid
+        notifyElm ctx (
+          SageFsEvent.SessionStatusChanged (sid, SessionDisplayStatus.Running))
+        return "Session reset successfully. All previous definitions have been cleared."
+      | Ok (WorkerProtocol.WorkerResponse.ResetResult(_, Error err)) ->
+        do! setSnapshotStatus ctx sid WorkerProtocol.SessionStatus.Faulted
+        notifyElm ctx (
+          SageFsEvent.SessionStatusChanged (sid, SessionDisplayStatus.Errored (SageFsError.describe err)))
+        return sprintf "Error: %s" (SageFsError.describeForAgent err)
+      | Ok other ->
+        do! setSnapshotStatus ctx sid previousStatus
+        return sprintf "Unexpected response: %A" other
+      | Error msg ->
+        do! setSnapshotStatus ctx sid previousStatus
+        return sprintf "Error: %s" msg
     })
 
   let checkFSharpCode (ctx: McpContext) (agent: string) (code: string) (sessionId: string option) (workingDirectory: string option) : Task<string> =
@@ -1340,18 +1358,34 @@ module McpTools =
         } |> ignore
         return "Hard reset initiated — rebuilding project. Use get_fsi_status to check when ready."
       | false ->
+        let! info = ctx.SessionOps.GetSessionInfo (toSessionId sid)
+        let previousStatus =
+          info
+          |> Option.map (fun sessionInfo -> sessionInfo.Status)
+          |> Option.defaultValue WorkerProtocol.SessionStatus.Ready
+        do! setSnapshotStatus ctx sid WorkerProtocol.SessionStatus.Restarting
         compilationStates.TryRemove(sid) |> ignore
         Features.EvalDedup.DedupCache.clearSession evalDedupCache sid
         let! routeResult =
           routeToSession ctx sid
             (fun replyId -> WorkerProtocol.WorkerMessage.HardResetSession(false, WorkerProtocol.SessionId.value replyId))
-        return
-          match routeResult with
-          | Ok (WorkerProtocol.WorkerResponse.HardResetResult(_, Ok msg)) -> msg
-          | Ok (WorkerProtocol.WorkerResponse.HardResetResult(_, Error err)) ->
-            sprintf "Error: %s" (SageFsError.describeForAgent err)
-          | Ok other -> sprintf "Unexpected response: %A" other
-          | Error msg -> sprintf "Error: %s" msg
+        match routeResult with
+        | Ok (WorkerProtocol.WorkerResponse.HardResetResult(_, Ok msg)) ->
+          do! setSnapshotStatus ctx sid WorkerProtocol.SessionStatus.Ready
+          notifyElm ctx (
+            SageFsEvent.SessionStatusChanged (sid, SessionDisplayStatus.Running))
+          return msg
+        | Ok (WorkerProtocol.WorkerResponse.HardResetResult(_, Error err)) ->
+          do! setSnapshotStatus ctx sid WorkerProtocol.SessionStatus.Faulted
+          notifyElm ctx (
+            SageFsEvent.SessionStatusChanged (sid, SessionDisplayStatus.Errored (SageFsError.describe err)))
+          return sprintf "Error: %s" (SageFsError.describeForAgent err)
+        | Ok other ->
+          do! setSnapshotStatus ctx sid previousStatus
+          return sprintf "Unexpected response: %A" other
+        | Error msg ->
+          do! setSnapshotStatus ctx sid previousStatus
+          return sprintf "Error: %s" msg
     })
 
   let cancelEval (ctx: McpContext) (agent: string) (workingDirectory: string option) : Task<string> =
