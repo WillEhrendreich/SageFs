@@ -277,6 +277,8 @@ module WorkingDirRoutingPriority =
       AppendEvents = fun _ _ -> Task.FromResult(Ok ())
       FetchStream = fun _ -> Task.FromResult([])
       CountEvents = fun _ -> Task.FromResult(0)
+      SetValue = fun _ _ -> Task.FromResult(Ok ())
+      GetValue = fun _ -> Task.FromResult(None)
     }
     { Persistence = stubPersistence; DiagnosticsChanged = Unchecked.defaultof<_>
       StateChanged = None

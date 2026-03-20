@@ -83,6 +83,11 @@
         <Compile Include="SseWriter.fs" />
         <Compile Include="Features\FeatureHooks.fs" />
         <Compile Include="EventStore.fs" />
+        <Compile Include="Features\FrictionTelemetryTypes.fs" />
+        <Compile Include="Features\FrictionTelemetry.fs" />
+        <Compile Include="Features\FrictionSqlite.fs" />
+        <Compile Include="Features\FrictionOtelProjection.fs" />
+        <Compile Include="Features\McpFrictionRecorder.fs" />
         <Compile Include="FsiRewrite.fs" />
         <Compile Include="SessionState.fs" />
         <Compile Include="SageFsError.fs" />
@@ -196,6 +201,7 @@
         <PackageReference Include="Fantomas.Core" />
         <PackageReference Include="FSharp.SystemTextJson" />
         <PackageReference Include="FsToolkit.ErrorHandling" />
+        <PackageReference Include="Microsoft.Data.Sqlite" />
         <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
         <PackageReference Include="Mono.Cecil" GeneratePathProperty="true" />
     </ItemGroup>

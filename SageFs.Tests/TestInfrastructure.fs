@@ -19,6 +19,7 @@ let quietLogger =
 /// Use in tests that verify event-append behavior (unlike noop which silently drops all writes).
 let inMemoryPersistence () : SageFs.EventStore.EventPersistence =
   let store = ConcurrentDictionary<string, ResizeArray<SageFs.Features.Events.SageFsEvent>>()
+  let kv = ConcurrentDictionary<string, string>()
   { AppendEvents = fun stream events ->
       System.Threading.Tasks.Task.FromResult(
         let bucket = store.GetOrAdd(stream, fun _ -> ResizeArray())
@@ -36,7 +37,14 @@ let inMemoryPersistence () : SageFs.EventStore.EventPersistence =
       System.Threading.Tasks.Task.FromResult(
         match store.TryGetValue(stream) with
         | true, bucket -> lock bucket (fun () -> bucket.Count)
-        | _ -> 0) }
+        | _ -> 0)
+    SetValue = fun key value ->
+      kv.[key] <- value
+      System.Threading.Tasks.Task.FromResult(Ok ())
+    GetValue = fun key ->
+      match kv.TryGetValue(key) with
+      | true, value -> System.Threading.Tasks.Task.FromResult(Some value)
+      | _ -> System.Threading.Tasks.Task.FromResult(None) }
 
 /// Poll a condition with 10ms intervals until it returns true or timeout expires.
 /// Returns the final condition value.

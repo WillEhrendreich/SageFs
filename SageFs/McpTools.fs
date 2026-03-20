@@ -14,7 +14,34 @@ open SageFs.Utils
 /// Global audit tracker for MCP tool usage analysis (synthesis 3.3).
 let auditTracker = SageFs.McpToolAudit.AuditTracker()
 
-let withEcho (toolName: string) (t: Task<string>) : Task<string> =
+let private ok = function
+  | Ok value -> value
+  | Error err -> failwith err
+
+let private classifyFrictionOutcome (result: string) =
+  match result.StartsWith("Blocked:") || result.StartsWith("Error:") with
+  | true when result.Contains("exact", System.StringComparison.OrdinalIgnoreCase) && result.Contains("match", System.StringComparison.OrdinalIgnoreCase) ->
+    SageFs.Features.FrictionTelemetryTypes.FrictionOutcome.EncounteredBlocker SageFs.Features.FrictionTelemetryTypes.BlockerKind.ExactTestNotFound
+  | true when result.Contains("session", System.StringComparison.OrdinalIgnoreCase) && result.Contains("warm", System.StringComparison.OrdinalIgnoreCase) ->
+    SageFs.Features.FrictionTelemetryTypes.FrictionOutcome.EncounteredBlocker SageFs.Features.FrictionTelemetryTypes.BlockerKind.SessionWarming
+  | true ->
+    SageFs.Features.FrictionTelemetryTypes.FrictionOutcome.EncounteredBlocker SageFs.Features.FrictionTelemetryTypes.BlockerKind.InvalidRequest
+  | false ->
+    SageFs.Features.FrictionTelemetryTypes.FrictionOutcome.CompletedCleanly
+
+let private recordToolResult (ctx: McpContext) (toolName: string) (result: string) (elapsedMs: int) =
+  let event : SageFs.Features.FrictionTelemetryTypes.FrictionEvent =
+    { SageFs.Features.FrictionTelemetryTypes.FrictionEvent.OccurredAtUtc = System.DateTimeOffset.UtcNow
+      Session = SageFs.Features.FrictionTelemetryTypes.SessionRef.create "mcp" |> ok
+      Tool = SageFs.Features.FrictionTelemetryTypes.ToolName.create toolName |> ok
+      Intent = SageFs.Features.FrictionTelemetryTypes.IntentKind.ExploreCode
+      Outcome = classifyFrictionOutcome result
+      Duration = SageFs.Features.FrictionTelemetryTypes.DurationMs.create elapsedMs |> ok
+      FollowUp = SageFs.Features.FrictionTelemetryTypes.FollowUp.NoFollowUpYet
+      ContextCost = SageFs.Features.FrictionTelemetryTypes.ContextCost.Focused }
+  SageFs.Features.McpFrictionRecorder.Recorder.appendEvent ctx.Persistence event
+
+let withEcho (ctx: McpContext) (toolName: string) (t: Task<string>) : Task<string> =
   task {
     SageFs.Instrumentation.mcpToolInvocations.Add(1L)
     let sw = System.Diagnostics.Stopwatch.StartNew()
@@ -28,6 +55,7 @@ let withEcho (toolName: string) (t: Task<string>) : Task<string> =
       let normalized = result.Replace("\r\n", "\n").Replace("\n", "\r\n")
       Log.info ">> %s" toolName
       Log.debug "%s" normalized
+      let! _ = recordToolResult ctx toolName result (int sw.Elapsed.TotalMilliseconds)
       SageFs.Instrumentation.succeedSpan span
       return result
     with ex ->
@@ -35,6 +63,7 @@ let withEcho (toolName: string) (t: Task<string>) : Task<string> =
       SageFs.Instrumentation.mcpToolFailures.Add(1L, System.Collections.Generic.KeyValuePair("mcp.tool.name", box toolName))
       auditTracker.Record(toolName, sw.Elapsed.TotalMilliseconds, SageFs.McpToolAudit.Failure)
       SageFs.Instrumentation.failSpan span ex.Message
+      let! _ = recordToolResult ctx toolName (sprintf "Error: %s" ex.Message) (int sw.Elapsed.TotalMilliseconds)
       return raise ex
   }
 
@@ -118,7 +147,7 @@ PATH:
     ) : Task<string> = 
         let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
         logger.LogDebug("MCP-TOOL: load_fsharp_script called: {FilePath}", filePath)
-        loadFSharpScript ctx agentName filePath None wd |> withEcho "load_fsharp_script"
+        loadFSharpScript ctx agentName filePath None wd |> withEcho ctx "load_fsharp_script"
     
     [<McpServerTool>]
     [<Description("""Get recent FSI events including evaluations, errors, and script loads. Returns the most recent N events (default 10) with timestamps and sources.
@@ -138,7 +167,7 @@ OUTPUT FORMAT: Each event shows timestamp, event type (Eval, Error, Load, Reset)
         let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
         let eventCount = defaultArg count 10
         logger.LogDebug("MCP-TOOL: get_recent_fsi_events called: count={Count}", eventCount)
-        getRecentEvents ctx "mcp" eventCount wd |> withEcho "get_recent_fsi_events"
+        getRecentEvents ctx "mcp" eventCount wd |> withEcho ctx "get_recent_fsi_events"
     
     [<McpServerTool>]
     [<Description("""Get the current FSI session status: live worker readiness, loaded projects, session statistics, and active affordances. Use this to verify whether you can route new work to a session right now.
@@ -173,7 +202,7 @@ IMPORTANT:
     ) : Task<string> =
         let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
         logger.LogDebug("MCP-TOOL: get_fsi_status called: workingDir={Dir}", working_directory)
-        getStatus ctx "mcp" None wd |> withEcho "get_fsi_status"
+        getStatus ctx "mcp" None wd |> withEcho ctx "get_fsi_status"
 
     [<Description("""Get detailed startup information: loaded projects, enabled features, and command-line arguments. Use to understand what capabilities are available in the current session.
 
@@ -191,7 +220,7 @@ WHEN TO USE:
     ) : Task<string> =
         let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
         logger.LogDebug("MCP-TOOL: get_startup_info called")
-        getStartupInfo ctx "mcp" wd |> withEcho "get_startup_info"
+        getStartupInfo ctx "mcp" wd |> withEcho ctx "get_startup_info"
 
     [<McpServerTool>]
     [<Description("""Discover F# projects (.fsproj) and solutions (.sln/.slnx) in the current working directory. Useful for determining what projects can be loaded into a new SageFs session.
@@ -208,7 +237,7 @@ NOTE: This does NOT load any projects — it only lists what is available on dis
     ) : Task<string> =
         let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
         logger.LogDebug("MCP-TOOL: get_available_projects called")
-        getAvailableProjects ctx "mcp" wd |> withEcho "get_available_projects"
+        getAvailableProjects ctx "mcp" wd |> withEcho ctx "get_available_projects"
 
     [<McpServerTool>]
     [<Description("""Soft-reset the FSI session. All user-defined types, values, and bindings are cleared. The session is re-warmed by re-executing the project's startup #load scripts to restore base namespaces.
@@ -241,7 +270,7 @@ This is a SOFT reset — DLL locks are retained. Use hard_reset_fsi_session only
     ) : Task<string> =
         let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
         logger.LogDebug("MCP-TOOL: reset_fsi_session called")
-        resetSession ctx "mcp" None wd |> withEcho "reset_fsi_session"
+        resetSession ctx "mcp" None wd |> withEcho ctx "reset_fsi_session"
 
     [<McpServerTool>]
     [<Description("""Hard reset: dispose the FSI session, release DLL locks via shadow-copy refresh,
@@ -283,7 +312,7 @@ The full pack/reinstall cycle is only needed when SageFs's own source code chang
         let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
         let doRebuild = defaultArg rebuild false
         logger.LogDebug("MCP-TOOL: hard_reset_fsi_session called, rebuild={Rebuild}", doRebuild)
-        hardResetSession ctx "mcp" doRebuild None wd |> withEcho "hard_reset_fsi_session"
+        hardResetSession ctx "mcp" doRebuild None wd |> withEcho ctx "hard_reset_fsi_session"
 
     [<McpServerTool>]
     [<Description("""Check F# code for errors without executing it. Returns diagnostics (errors, warnings) from the F# compiler.
@@ -308,7 +337,7 @@ WHEN NOT TO USE:
     ) : Task<string> =
         let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
         logger.LogDebug("MCP-TOOL: check_fsharp_code called")
-        checkFSharpCode ctx "mcp" code None wd |> withEcho "check_fsharp_code"
+        checkFSharpCode ctx "mcp" code None wd |> withEcho ctx "check_fsharp_code"
 
     [<McpServerTool>]
     [<Description("""Cancel a running evaluation. Use when an eval is stuck or taking too long. Returns whether a cancellation was performed.
@@ -329,7 +358,7 @@ BEHAVIOR:
     ) : Task<string> =
         let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
         logger.LogDebug("MCP-TOOL: cancel_eval called")
-        cancelEval ctx "mcp" wd |> withEcho "cancel_eval"
+        cancelEval ctx "mcp" wd |> withEcho ctx "cancel_eval"
 
     [<Description("""Get code completions at a cursor position. Returns available completions (types, functions, members) for the code at the given position. Useful for discovering APIs before writing code.
 
@@ -354,7 +383,7 @@ WHEN TO USE:
     ) : Task<string> =
         let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
         logger.LogDebug("MCP-TOOL: get_completions called")
-        getCompletions ctx "mcp" code cursor_position wd |> withEcho "get_completions"
+        getCompletions ctx "mcp" code cursor_position wd |> withEcho ctx "get_completions"
 
     // ── Package Explorer Tools ──────────────────────────────────────
 
@@ -377,7 +406,7 @@ TIPS:
     ) : Task<string> =
         let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
         logger.LogDebug("MCP-TOOL: explore_namespace called: {Namespace}", namespaceName)
-        exploreNamespace ctx "mcp" namespaceName wd |> withEcho "explore_namespace"
+        exploreNamespace ctx "mcp" namespaceName wd |> withEcho ctx "explore_namespace"
 
     [<Description("""Retrieve the members, constructors, and properties of a specific type.
 Use this to discover what methods and properties are available on a type. Provide the fully-qualified type name.
@@ -398,7 +427,7 @@ TIPS:
     ) : Task<string> =
         let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
         logger.LogDebug("MCP-TOOL: explore_type called: {Type}", typeName)
-        exploreType ctx "mcp" typeName wd |> withEcho "explore_type"
+        exploreType ctx "mcp" typeName wd |> withEcho ctx "explore_type"
 
     [<Description("""Visualize a discriminated union type as a state machine diagram. Returns JSON with case names, fields, entry/terminal state classification, and an ASCII art diagram. Useful for understanding DU-based domain models as state machines.
 
@@ -419,7 +448,7 @@ OUTPUT: JSON containing case names, fields per case, which cases are entry point
     ) : Task<string> =
         let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
         logger.LogDebug("MCP-TOOL: visualize_domain_model called: {Type}", typeName)
-        visualizeDomainModel ctx "mcp" typeName wd |> withEcho "visualize_domain_model"
+        visualizeDomainModel ctx "mcp" typeName wd |> withEcho ctx "visualize_domain_model"
 
     // ── Session Management Tools ──────────────
 
@@ -450,7 +479,7 @@ projects: Comma-separated list of absolute or relative .fsproj file paths.""")>]
         let agent = match System.String.IsNullOrWhiteSpace agentName with | true -> "mcp" | false -> agentName
         logger.LogDebug("MCP-TOOL: create_session called: projects={Projects}, dir={Dir}, agent={Agent}", projects, working_directory, agent)
         let projectList = projects.Split(',') |> Array.map (fun s -> s.Trim()) |> Array.toList
-        createSession ctx agent projectList working_directory SageFs.WorkflowTypes.SessionWorkflow.Interactive |> withEcho "create_session"
+        createSession ctx agent projectList working_directory SageFs.WorkflowTypes.SessionWorkflow.Interactive |> withEcho ctx "create_session"
 
     [<McpServerTool>]
     [<Description("""List all active FSI sessions with their metadata: session ID, project names, current status, working directory, and last activity timestamp.
@@ -462,7 +491,7 @@ WHEN TO USE:
 - After SageFs restarts or after create_session to confirm the session is registered.""")>]
     member _.list_sessions() : Task<string> =
         logger.LogDebug("MCP-TOOL: list_sessions called")
-        listSessions ctx |> withEcho "list_sessions"
+        listSessions ctx |> withEcho ctx "list_sessions"
 
     [<Description("""Stop an active FSI session by its ID. The worker process is gracefully shut down and its resources are released.
 
@@ -476,7 +505,7 @@ NOTE: Stopping the last (or only) session will leave no active session. You will
         [<Description("The session ID to stop (from list_sessions)")>] session_id: string
     ) : Task<string> =
         logger.LogDebug("MCP-TOOL: stop_session called: id={Id}", session_id)
-        stopSession ctx session_id |> withEcho "stop_session"
+        stopSession ctx session_id |> withEcho ctx "stop_session"
 
     [<McpServerTool>]
     [<Description("""Switch the active FSI session. All subsequent tool calls that accept working_directory will route to this session.
@@ -495,7 +524,7 @@ ROUTING BEHAVIOR:
         [<Description("Session ID to switch to (from list_sessions)")>] session_id: string
     ) : Task<string> =
         logger.LogDebug("MCP-TOOL: switch_session called: id={Id}", session_id)
-        switchSession ctx "mcp" session_id |> withEcho "switch_session"
+        switchSession ctx "mcp" session_id |> withEcho ctx "switch_session"
 
     [<Description("""Switch the workflow mode for a session.
 Workflows control the tradeoff between REPL capability and browser hot reload:
@@ -515,7 +544,7 @@ Switching creates a new session — REPL definitions and cell state are lost."""
         let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
         let dry = match dryRun.HasValue with | true -> dryRun.Value | false -> false
         logger.LogDebug("MCP-TOOL: switch_workflow called: target={Target}, dir={Dir}, dryRun={DryRun}", target, working_directory, dry)
-        switchWorkflow ctx "mcp" wd target dry |> withEcho "switch_workflow"
+        switchWorkflow ctx "mcp" wd target dry |> withEcho ctx "switch_workflow"
 
     // ── Elm State Tools ──────────────────────────────────────────
 
@@ -530,7 +559,7 @@ WHEN TO USE:
 OUTPUT: A text rendering of each named UI region (header, editor, output, test panel, status bar, etc.) showing what is currently displayed.""")>]
     member _.get_elm_state() : Task<string> =
         logger.LogDebug("MCP-TOOL: get_elm_state called")
-        getElmState ctx |> withEcho "get_elm_state"
+        getElmState ctx |> withEcho ctx "get_elm_state"
 
     // ── Live Testing Tools ──────────────────────────────────────
 
@@ -557,7 +586,7 @@ STATUS VALUES per test:
         let filter = match System.String.IsNullOrWhiteSpace file with | true -> None | false -> Some file
         let agent = match System.String.IsNullOrWhiteSpace agentName with | true -> "claude" | false -> agentName
         logger.LogDebug("MCP-TOOL: get_live_test_status called, file={File}, agent={Agent}", file, agent)
-        getLiveTestStatus ctx agent filter |> withEcho "get_live_test_status"
+        getLiveTestStatus ctx agent filter |> withEcho ctx "get_live_test_status"
 
     [<Description("""Enable live testing. When enabled, tests automatically re-run after each hot reload whenever the code they depend on changes.
 
@@ -575,7 +604,7 @@ NOTE:
 - This call returns an immediate acknowledgment after dispatching the enable request. The discovered-test count in the response may reflect the pre-existing model state; use get_test_trace or get_live_test_status to confirm actual activation/discovery.""")>]
     member _.enable_live_testing() : Task<string> =
         logger.LogDebug("MCP-TOOL: enable_live_testing called")
-        setLiveTesting ctx true |> withEcho "enable_live_testing"
+        setLiveTesting ctx true |> withEcho ctx "enable_live_testing"
 
     [<Description("""Disable live testing. Tests will not run automatically after hot reload.
 
@@ -587,7 +616,7 @@ WHEN TO USE:
 NOTE: Disabling live testing does not prevent explicit test runs via run_tests. It only stops the automatic hot-reload-triggered runs.""")>]
     member _.disable_live_testing() : Task<string> =
         logger.LogDebug("MCP-TOOL: disable_live_testing called")
-        setLiveTesting ctx false |> withEcho "disable_live_testing"
+        setLiveTesting ctx false |> withEcho ctx "disable_live_testing"
 
     [<Description("""Set run policy for a test category. Controls WHEN tests in that category are automatically triggered by the live testing engine.
 
@@ -626,7 +655,7 @@ EXAMPLE WORKFLOW — restore defaults after focused work:
         policy: string
     ) : Task<string> =
         logger.LogDebug("MCP-TOOL: set_run_policy called: category={Category}, policy={Policy}", category, policy)
-        setRunPolicy ctx category policy |> withEcho "set_run_policy"
+        setRunPolicy ctx category policy |> withEcho ctx "set_run_policy"
 
     [<Description("""Configure test execution timeouts. Affects both automatic (hot-reload-triggered) and explicit (run_tests) test runs.
 
@@ -649,7 +678,7 @@ NOTE: Timeout changes take effect immediately on the next test run.""")>]
         let pt = match per_test_seconds <= 0.0 with | true -> None | false -> Some per_test_seconds
         let gr = match global_run_seconds <= 0.0 with | true -> None | false -> Some global_run_seconds
         logger.LogDebug("MCP-TOOL: set_test_timeouts called: per_test={PerTest}, global={Global}", per_test_seconds, global_run_seconds)
-        setTestTimeouts ctx pt gr |> withEcho "set_test_timeouts"
+        setTestTimeouts ctx pt gr |> withEcho ctx "set_test_timeouts"
 
     [<Description("""Get test infrastructure state: enabled flag, currently-running status, provider list, per-category run policies, and a test summary.
 
@@ -668,7 +697,7 @@ IMPORTANT:
 - Enabled=true means the live-testing subsystem is active. It does NOT imply the FSI worker is currently Ready for new evals — check get_fsi_status separately for worker readiness.""")>]
     member _.get_test_trace() : Task<string> =
         logger.LogDebug("MCP-TOOL: get_test_trace called")
-        getTestTrace ctx |> withEcho "get_test_trace"
+        getTestTrace ctx |> withEcho ctx "get_test_trace"
 
     [<McpServerTool>]
     [<Description("""Run tests explicitly. Without parameters, runs all discovered unit tests.
@@ -721,7 +750,7 @@ RETURN VALUE:
         let c = match System.String.IsNullOrWhiteSpace category with | true -> None | false -> Some category
         let t = match timeout_seconds <= 0 with | true -> 0 | false -> timeout_seconds
         logger.LogDebug("MCP-TOOL: run_tests called, pattern={Pattern}, category={Category}, timeout={Timeout}", pattern, category, t)
-        runTests ctx p c t |> withEcho "run_tests"
+        runTests ctx p c t |> withEcho ctx "run_tests"
 
     [<McpServerTool>]
     [<Description("""Plan a trustworthy targeted verification pass for one changed behavior.
@@ -749,7 +778,71 @@ TRUST MODEL:
         let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
         let guard = match System.String.IsNullOrWhiteSpace exact_guard with | true -> None | false -> Some exact_guard
         logger.LogDebug("MCP-TOOL: targeted_verify called, behavior={Behavior}, exact_guard={ExactGuard}", behavior, exact_guard)
-        targetedVerify ctx "mcp" wd behavior guard |> withEcho "targeted_verify"
+        targetedVerify ctx "mcp" wd behavior guard |> withEcho ctx "targeted_verify"
+
+    [<McpServerTool>]
+    [<Description("""Get a compact local summary of MCP friction recorded by SageFs.
+
+USE CASE:
+- Find recurring blockers without copying complaints into chat.
+- See whether tools are being abandoned or chained too often.
+
+OUTPUT:
+- number of blocker families currently present
+- number of tracked tools in the friction log
+- number of explicit feedback items
+
+This reads only local friction intelligence. It does not phone home.""")>]
+    member _.get_friction_summary() : Task<string> =
+        logger.LogDebug("MCP-TOOL: get_friction_summary called")
+        SageFs.Features.McpFrictionRecorder.Recorder.summarize ctx.Persistence |> withEcho ctx "get_friction_summary"
+
+    [<McpServerTool>]
+    [<Description("""Report structured local MCP friction so SageFs can learn what is confusing.
+
+USE CASE:
+- Record that a tool was unclear, too large, or insufficient.
+- Preserve which alternative tool resolved the issue.
+
+INPUTS:
+- tool_name: the tool that caused friction
+- feedback_kind: one of output_too_large, intent_unclear, name_misleading, needed_another_tool, trust_not_established
+- short_reason: compact explanation of the pain
+- alternative_tool: optional tool that actually resolved the task
+
+This stores local feedback only.""")>]
+    member _.report_friction(
+        [<Description("Tool name that caused friction.")>] tool_name: string,
+        [<Description("Feedback kind: output_too_large, intent_unclear, name_misleading, needed_another_tool, trust_not_established")>] feedback_kind: string,
+        [<Description("Short human-readable explanation of the friction.")>] short_reason: string,
+        [<Description("Optional alternative tool that resolved the issue.")>] alternative_tool: string
+    ) : Task<string> =
+        logger.LogDebug("MCP-TOOL: report_friction called, tool={Tool}, kind={Kind}", tool_name, feedback_kind)
+        let kind =
+          match feedback_kind with
+          | "output_too_large" -> SageFs.Features.FrictionTelemetryTypes.ExplicitFeedbackKind.ToolOutputWasTooLarge
+          | "intent_unclear" -> SageFs.Features.FrictionTelemetryTypes.ExplicitFeedbackKind.ToolIntentWasUnclear
+          | "name_misleading" -> SageFs.Features.FrictionTelemetryTypes.ExplicitFeedbackKind.ToolNameWasMisleading
+          | "needed_another_tool" -> SageFs.Features.FrictionTelemetryTypes.ExplicitFeedbackKind.NeededAnotherToolToFinish
+          | _ -> SageFs.Features.FrictionTelemetryTypes.ExplicitFeedbackKind.ResultDidNotEstablishTrust
+        let alternative =
+          match System.String.IsNullOrWhiteSpace alternative_tool with
+          | true -> SageFs.Features.FrictionTelemetryTypes.AlternativePath.NoAlternativeRecorded
+          | false ->
+            SageFs.Features.FrictionTelemetryTypes.ToolName.create alternative_tool
+            |> Result.map SageFs.Features.FrictionTelemetryTypes.AlternativePath.ResolvedWithTool
+            |> Result.defaultValue SageFs.Features.FrictionTelemetryTypes.AlternativePath.ResolvedOutsideMcp
+        let feedback : SageFs.Features.FrictionTelemetryTypes.ExplicitFeedback =
+          { SageFs.Features.FrictionTelemetryTypes.ExplicitFeedback.OccurredAtUtc = System.DateTimeOffset.UtcNow
+            Session = SageFs.Features.FrictionTelemetryTypes.SessionRef.create "mcp" |> ok
+            Tool = SageFs.Features.FrictionTelemetryTypes.ToolName.create tool_name |> ok
+            Kind = kind
+            ShortReason = short_reason
+            AlternativeUsed = alternative }
+        task {
+          let! _ = SageFs.Features.McpFrictionRecorder.Recorder.appendFeedback ctx.Persistence feedback
+          return "Recorded local friction feedback."
+        } |> withEcho ctx "report_friction"
 
     [<Description("""Explain why a test was selected to run. Shows the trigger reason, which changed symbols cover the test, duration from last run, and flaky status.
 Matches by substring on FullName or DisplayName — returns explanations for all matching tests.
@@ -769,7 +862,7 @@ USE CASE: When you see a test ran unexpectedly, call this to understand why. Whe
         test_name: string
     ) : Task<string> =
         logger.LogDebug("MCP-TOOL: explain_test_run called, test={Test}", test_name)
-        explainTestRun ctx test_name |> withEcho "explain_test_run"
+        explainTestRun ctx test_name |> withEcho ctx "explain_test_run"
 
     [<Description("""Query which tests cover a given symbol. Returns all tests that transitively depend on the symbol via the dependency graph, along with their last result status.
 
@@ -790,7 +883,7 @@ USE CASE: After extracting or renaming a function, call this to see which tests 
         symbol: string
     ) : Task<string> =
         logger.LogDebug("MCP-TOOL: query_test_coverage called, symbol={Symbol}", symbol)
-        queryTestCoverage ctx symbol |> withEcho "query_test_coverage"
+        queryTestCoverage ctx symbol |> withEcho ctx "query_test_coverage"
 
     [<Description("""Get per-line coverage data for a specific file. Returns JSON with line-level coverage annotations including which tests cover each line, coverage health status, and branch coverage detail.
 
@@ -815,7 +908,7 @@ USE CASE: Use to identify which lines of a file have no test coverage, or to see
         file: string
     ) : Task<string> =
         logger.LogDebug("MCP-TOOL: get_file_coverage called, file={File}", file)
-        getFileCoverage ctx file |> withEcho "get_file_coverage"
+        getFileCoverage ctx file |> withEcho ctx "get_file_coverage"
 
     [<McpServerTool>]
     [<Description("""Get enriched failure context for a test that recently transitioned Passed→Failed. Shows time since last pass, causal changes (which symbols or files changed), property violation details, and a human-readable summary narrative.
@@ -842,7 +935,7 @@ WORKFLOW: When run_tests reports a failure, call explain_test_failure with the t
         test_name: string
     ) : Task<string> =
         logger.LogDebug("MCP-TOOL: explain_test_failure called, test={Test}", test_name)
-        explainTestFailure ctx test_name |> withEcho "explain_test_failure"
+        explainTestFailure ctx test_name |> withEcho ctx "explain_test_failure"
 
     // ── Feature Analysis Tools (P15–P19) ───────────────────────
 
@@ -858,7 +951,7 @@ Use this to understand complex pipelines before modifying them, or to identify e
         code: string
     ) : Task<string> =
         logger.LogDebug("MCP-TOOL: decompose_pipeline called, code length={Len}", code.Length)
-        decomposePipeline code |> withEcho "decompose_pipeline"
+        decomposePipeline code |> withEcho ctx "decompose_pipeline"
 
     [<Description("""Run a full diagnostic analysis of the current session.
 
@@ -878,7 +971,7 @@ WORKFLOW: Call this after a test fails to get a complete picture of what happene
 This replaces calling explain_test_failure + plan_ripple + get_eval_timeline + suggest_next_cell separately.""")>]
     member _.diagnose() : Task<string> =
         logger.LogDebug("MCP-TOOL: diagnose called")
-        diagnose ctx |> withEcho "diagnose"
+        diagnose ctx |> withEcho ctx "diagnose"
 
     [<Description("""Analyze test coverage quality — find blind spots, correlate failures, assess diagnostic power.
 
@@ -895,7 +988,7 @@ WORKFLOW: Call after test failures to understand whether your tests actually cov
 Complements 'diagnose' (which tells you what failed) by telling you how well your tests can detect the failure.""")>]
     member _.coverage_intel() : Task<string> =
         logger.LogDebug("MCP-TOOL: coverage_intel called")
-        coverageIntel ctx |> withEcho "coverage_intel"
+        coverageIntel ctx |> withEcho ctx "coverage_intel"
 
     [<Description("""Forecast performance impact for evaluated cells — detect regressions, measure downstream blast radius.
 
@@ -916,7 +1009,7 @@ Pairs with 'suggest_next_action' which folds impact data into a prioritized acti
     member _.impact_forecast([<Description("Optional cell ID to analyze. Omit to analyze all cells.")>] cellId: int) : Task<string> =
         logger.LogDebug("MCP-TOOL: impact_forecast called for cell {cellId}", cellId)
         let cellOpt = match cellId with | 0 -> None | n -> Some n
-        impactForecast ctx cellOpt |> withEcho "impact_forecast"
+        impactForecast ctx cellOpt |> withEcho ctx "impact_forecast"
 
     [<Description("""Get a prioritized action queue — the intelligent "what should I do next?" recommendation.
 
@@ -936,7 +1029,7 @@ It internally calls coverage_intel and impact_forecast, so you don't need to cal
 Replaces manual triage of test results, coverage, and performance data.""")>]
     member _.suggest_next_action() : Task<string> =
         logger.LogDebug("MCP-TOOL: suggest_next_action called")
-        suggestNextAction ctx |> withEcho "suggest_next_action"
+        suggestNextAction ctx |> withEcho ctx "suggest_next_action"
 
     [<Description("""Plan a cascade re-evaluation (ripple) for changed cells.
 
@@ -952,7 +1045,7 @@ WORKFLOW: After editing a binding, use this tool to see which cells would be aff
         changed_cells: string
     ) : Task<string> =
         logger.LogDebug("MCP-TOOL: plan_ripple called, cells={Cells}", changed_cells)
-        planRipple ctx changed_cells |> withEcho "plan_ripple"
+        planRipple ctx changed_cells |> withEcho ctx "plan_ripple"
 
     [<Description("""Preview a "what if" scenario: what would change if a binding had a different value?
 
@@ -970,7 +1063,7 @@ WORKFLOW: Use this to explore hypothetical changes safely before committing to t
         new_code: string
     ) : Task<string> =
         logger.LogDebug("MCP-TOOL: preview_what_if called, binding={Name}", binding_name)
-        previewWhatIf ctx binding_name new_code |> withEcho "preview_what_if"
+        previewWhatIf ctx binding_name new_code |> withEcho ctx "preview_what_if"
 
     [<Description("""Get type-directed suggestions for what to evaluate next.
 
@@ -983,7 +1076,7 @@ OUTPUT: Ranked suggestions with confidence scores, code snippets, and explanatio
 WORKFLOW: When you're not sure what to try next in the REPL, call this for intelligent suggestions.""")>]
     member _.suggest_next_cell() : Task<string> =
         logger.LogDebug("MCP-TOOL: suggest_next_cell called")
-        suggestNextCell ctx |> withEcho "suggest_next_cell"
+        suggestNextCell ctx |> withEcho ctx "suggest_next_cell"
 
     [<Description("""Get the session filmstrip — a visual history of all evaluations in the current session.
 
@@ -999,7 +1092,7 @@ WORKFLOW: Use to review what happened in a session, find when a binding was intr
     ) : Task<string> =
         logger.LogDebug("MCP-TOOL: get_session_filmstrip called, filter={Filter}", filter)
         let filterOpt = match System.String.IsNullOrWhiteSpace filter with | true -> None | false -> Some filter
-        getSessionFilmstrip ctx filterOpt |> withEcho "get_session_filmstrip"
+        getSessionFilmstrip ctx filterOpt |> withEcho ctx "get_session_filmstrip"
 
     // ── Phase 1b: Orphaned module MCP tools ──
 
@@ -1017,7 +1110,7 @@ WORKFLOW: Use this to save your interactive session as a portable, re-runnable n
     ) : Task<string> =
         logger.LogDebug("MCP-TOOL: export_notebook called, project={Name}", project_name)
         let nameOpt = match System.String.IsNullOrWhiteSpace project_name with | true -> None | false -> Some project_name
-        exportNotebook ctx nameOpt |> withEcho "export_notebook"
+        exportNotebook ctx nameOpt |> withEcho ctx "export_notebook"
 
     [<Description("""Export the current session as a clean, topologically-sorted .fsx transcript.
 
@@ -1033,7 +1126,7 @@ WORKFLOW: Use this to extract a clean, reproducible script from an exploratory s
     ) : Task<string> =
         logger.LogDebug("MCP-TOOL: export_session_transcript called, project={Name}", project_name)
         let nameOpt = match System.String.IsNullOrWhiteSpace project_name with | true -> None | false -> Some project_name
-        exportSessionTranscript ctx nameOpt |> withEcho "export_session_transcript"
+        exportSessionTranscript ctx nameOpt |> withEcho ctx "export_session_transcript"
 
     [<Description("""Get the message journal — a structured audit log of eval events.
 
@@ -1052,7 +1145,7 @@ WORKFLOW: Use this for observability — review what happened, filter to errors 
         logger.LogDebug("MCP-TOOL: get_message_journal called, level={Level}, source={Source}", min_level, source)
         let levelOpt = match System.String.IsNullOrWhiteSpace min_level with | true -> None | false -> Some min_level
         let sourceOpt = match System.String.IsNullOrWhiteSpace source with | true -> None | false -> Some source
-        getMessageJournal ctx levelOpt sourceOpt |> withEcho "get_message_journal"
+        getMessageJournal ctx levelOpt sourceOpt |> withEcho ctx "get_message_journal"
 
     [<Description("""Get eval timeline with performance sparkline and percentile statistics.
 
@@ -1068,7 +1161,7 @@ WORKFLOW: Use this to monitor eval performance trends and identify slow cells.""
     ) : Task<string> =
         logger.LogDebug("MCP-TOOL: get_eval_timeline called, width={Width}", sparkline_width)
         let widthOpt = match sparkline_width with | 0 -> None | w -> Some w
-        getEvalTimeline ctx widthOpt |> withEcho "get_eval_timeline"
+        getEvalTimeline ctx widthOpt |> withEcho ctx "get_eval_timeline"
 
     [<Description("""Manage the session scratch pad — view, export, or promote ephemeral code snippets.
 
@@ -1087,7 +1180,7 @@ WORKFLOW: Use 'list' to review snippets, 'export' for a full dump, 'promote' to 
         action: string
     ) : Task<string> =
         logger.LogDebug("MCP-TOOL: manage_scratch_pad called, action={Action}", action)
-        manageScratchPad ctx action None None |> withEcho "manage_scratch_pad"
+        manageScratchPad ctx action None None |> withEcho ctx "manage_scratch_pad"
 
     [<Description("""Get a diff between recent eval outputs — before vs after comparison.
 
@@ -1103,7 +1196,7 @@ WORKFLOW: Use after re-evaluating a cell to see exactly what changed in the outp
     ) : Task<string> =
         logger.LogDebug("MCP-TOOL: get_eval_diff called, cellIndex={Idx}", cell_index)
         let idxOpt = match cell_index with | 0 -> None | i -> Some i
-        getEvalDiff ctx idxOpt |> withEcho "get_eval_diff"
+        getEvalDiff ctx idxOpt |> withEcho ctx "get_eval_diff"
 
     [<McpServerTool>]
     [<Description("""List all discovered tests in the current session, optionally filtered by name pattern or file path.
@@ -1126,7 +1219,7 @@ WORKFLOW: Use this before run_tests to discover what tests exist, or to build a 
         logger.LogDebug("MCP-TOOL: list_tests called, pattern={Pattern}, file={File}", pattern, file_path)
         let patOpt = match pattern with | "" | null -> None | s -> Some s
         let fileOpt = match file_path with | "" | null -> None | s -> Some s
-        listTests ctx patOpt fileOpt |> withEcho "list_tests"
+        listTests ctx patOpt fileOpt |> withEcho ctx "list_tests"
 
     [<Description("""Get the cell dependency graph annotated with staleness information.
 
@@ -1137,7 +1230,7 @@ OUTPUT: JSON with TotalCells, TotalStale, TotalEdges, StaleCellIds, Summary, and
 WORKFLOW: After editing code, use this to understand the ripple impact before deciding which cells to re-evaluate. Pair with plan_ripple for the full re-eval plan.""")>]
     member _.get_cell_dependencies() : Task<string> =
         logger.LogDebug("MCP-TOOL: get_cell_dependencies called")
-        getCellDependencies ctx |> withEcho "get_cell_dependencies"
+        getCellDependencies ctx |> withEcho ctx "get_cell_dependencies"
 
     [<Description("""Discover and rank all SageFs features by relevance to your current session state.
 
@@ -1155,7 +1248,7 @@ WORKFLOW: Call this at the start of a session to see what to do next, or any tim
     ) : Task<string> =
         logger.LogDebug("MCP-TOOL: discover_features called, topic={Topic}", topic)
         let topicOpt = match topic with | "" | null -> None | s -> Some s
-        discoverFeatures ctx topicOpt |> withEcho "discover_features"
+        discoverFeatures ctx topicOpt |> withEcho ctx "discover_features"
 
     [<Description("""Given a failing test, compose explain_test_failure → extract causal symbol → preview ripple into a single repair plan.
 
@@ -1177,5 +1270,5 @@ WORKFLOW: When run_tests shows a failure, call suggest_repair with the test name
         test_name: string
     ) : Task<string> =
         logger.LogDebug("MCP-TOOL: suggest_repair called, test={Test}", test_name)
-        suggestRepair ctx test_name |> withEcho "suggest_repair"
+        suggestRepair ctx test_name |> withEcho ctx "suggest_repair"
 

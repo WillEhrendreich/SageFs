@@ -59,7 +59,7 @@ Save a `.fs` file. SageFs reloads it in ~100ms via [Harmony](https://github.com/
 
 ### 🤖 AI-Native — Your Agent Can Compile
 
-SageFs exposes a [Model Context Protocol](https://modelcontextprotocol.io/) server with an **affordance-driven state machine** — AI agents only see tools valid for the current session state. No wasted tokens guessing. Copilot, Claude, and any MCP client can execute F# code, type-check, explore .NET APIs, and run tests against your real project.
+SageFs exposes a [Model Context Protocol](https://modelcontextprotocol.io/) server with an **affordance-driven state machine** and a deliberately small tool surface — AI agents only see tools valid for the current session state, and the core MCP path stays focused on session trust, F# evaluation, exact test execution, and failure explanation. No wasted tokens guessing. Copilot, Claude, and any MCP client can execute F# code, type-check, verify a changed behavior, and run tests against your real project.
 
 ### 🖥️ One Daemon, Every Editor — Simultaneously
 
@@ -194,7 +194,7 @@ SageFs sessions run in one of two modes.The tradeoff is a physical constraint of
 
 ### Switching modes
 
-Use the `switch_workflow` MCP tool, or your editor's command:
+Use your editor's command to switch workflows:
 
 - **Neovim**: `:SageFsWorkflow live` or `:SageFsWorkflow repl`
 - **VS Code**: Command Palette → `SageFs: Switch Workflow`
@@ -309,7 +309,7 @@ The VS extension includes kill switches for individual features. See the [VS Ext
 
 #### AI Agent (MCP)
 
-SageFs exposes dozens of MCP tools — from `send_fsharp_code` to `run_tests` to `discover_features`. Any MCP client can connect. See the [full MCP Tools Reference](docs/mcp-tools.md) for the complete list and per-client config examples.
+SageFs exposes a **small surgical MCP surface** — from `send_fsharp_code` to `targeted_verify` to `run_tests`. Any MCP client can connect. See the [full MCP Tools Reference](docs/mcp-tools.md) for the complete list and per-client config examples.
 
 **Streamable HTTP** (recommended — auto-reconnects, no session drops):
 ```json
@@ -417,7 +417,7 @@ Tests are auto-categorized (Unit, Integration, Browser, Property, Benchmark, Arc
 
 **Multi-Session** — Run multiple isolated F# sessions simultaneously, each in its own worker sub-process with independent FSI, project, and file watcher. [Full details →](docs/multi-session.md)
 
-**MCP Tools** — 50 tools for code execution, testing, coverage analysis, and session management. [Full reference →](docs/mcp-tools.md)
+**MCP Tools** — 17 focused tools for session trust, code execution, exact test execution, failure explanation, and local friction reporting. [Full reference →](docs/mcp-tools.md)
 
 **SSE Events** — All editors receive `test_source_locations`, `file_annotations`, and `failure_narratives` events tagged with `SessionId`. [Full reference →](docs/sse-events.md)
 

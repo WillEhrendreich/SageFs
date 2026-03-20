@@ -11,6 +11,8 @@ type EventPersistence = {
   AppendEvents: string -> Features.Events.SageFsEvent list -> Threading.Tasks.Task<Result<unit, string>>
   FetchStream: string -> Threading.Tasks.Task<(DateTimeOffset * Features.Events.SageFsEvent) list>
   CountEvents: string -> Threading.Tasks.Task<int>
+  SetValue: string -> string -> Threading.Tasks.Task<Result<unit, string>>
+  GetValue: string -> Threading.Tasks.Task<string option>
 }
 
 module EventPersistence =
@@ -20,4 +22,6 @@ module EventPersistence =
     AppendEvents = fun _ _ -> Threading.Tasks.Task.FromResult(Ok ())
     FetchStream = fun _ -> Threading.Tasks.Task.FromResult([])
     CountEvents = fun _ -> Threading.Tasks.Task.FromResult(0)
+    SetValue = fun _ _ -> Threading.Tasks.Task.FromResult(Ok ())
+    GetValue = fun _ -> Threading.Tasks.Task.FromResult(None)
   }
