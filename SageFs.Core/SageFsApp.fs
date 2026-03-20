@@ -650,6 +650,7 @@ module SageFsUpdate =
       | false ->
           match activeSessionId with
           | None when primaryCycleOwnsSession sid -> Some Primary
+          | None when model.PerSessionLiveTesting.IsEmpty -> Some Primary
           | _ -> None
     | None ->
       Some Primary

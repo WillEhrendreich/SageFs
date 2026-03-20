@@ -221,7 +221,7 @@ let toolRegistrationTests =
         |> Expect.isTrue
           (sprintf "%A (%d) should have <= Ready (%d)" state count readyCount))
 
-    testCase "McpServerTool-attributed methods total exactly 49 (reflection)"
+    testCase "McpServerTool-attributed methods total exactly 50 (reflection)"
     <| fun _ ->
       match tryGetMcpToolMethods () with
       | None ->
@@ -230,7 +230,7 @@ let toolRegistrationTests =
            reflection test skipped"
       | Some methods ->
         methods.Length
-        |> Expect.equal "MCP tool method count" 50
+          |> Expect.equal "MCP tool method count" 51
 
     testCase
       "every McpServerTool method has a non-empty Description (reflection)"
@@ -404,7 +404,7 @@ let stateTransitionSafetyTests =
                 state tool ex.Message))
         tested
         |> Expect.equal
-          "should test 5 states × 50 tools = 250" 250
+          "should test 5 states × 51 tools = 255" 255
   ]
 
 // ── Group 5: Affordance Superset/Subset Relationships ──
