@@ -1,6 +1,7 @@
 module SageFs.Tests.McpFrictionSummaryToolTests
 
 open System
+open System.Text.Json
 open Expecto
 open Expecto.Flip
 open Microsoft.Extensions.Logging.Abstractions
@@ -22,5 +23,35 @@ let tests =
       summary |> Expect.stringContains "should count blocker families" "Top blockers:"
       summary |> Expect.stringContains "should count tracked tools" "Tracked tools:"
       summary |> Expect.stringContains "should count explicit feedback" "Explicit feedback items: 1"
+    }
+
+    testCaseTask "get_friction_report returns ranked actionable local friction as JSON" <| fun () -> task {
+      let persistence = inMemoryPersistence ()
+      let baseCtx = sharedCtx ()
+      let ctx = { baseCtx with Persistence = persistence }
+      let tools = SageFsTools(ctx, NullLogger<SageFsTools>.Instance)
+
+      let! _ = tools.report_friction("run_tests", "needed_another_tool", "Exact test name was not obvious.", "list_tests")
+      let! reportJson = tools.get_friction_report()
+
+      let doc = JsonDocument.Parse(reportJson)
+      doc.RootElement.GetProperty("TotalFeedbackItems").GetInt32()
+      |> Expect.equal "report should expose feedback count" 1
+
+      let topTools = doc.RootElement.GetProperty("HighestPriorityTools")
+      (topTools.GetArrayLength(), 0)
+      |> Expect.isGreaterThan "report should expose at least one actionable tool"
+
+      let top = topTools[0]
+
+      let recentFeedback = doc.RootElement.GetProperty("RecentFeedback")
+      (recentFeedback.GetArrayLength(), 0)
+      |> Expect.isGreaterThan "report should expose recent explicit complaints"
+
+      let firstFeedback = recentFeedback[0]
+      firstFeedback.GetProperty("Tool").GetString()
+      |> Expect.equal "recent feedback should preserve the complained-about tool" "run_tests"
+      firstFeedback.GetProperty("LatestAlternative").GetString()
+      |> Expect.equal "recent feedback should preserve the resolving alternative" "list_tests"
     }
   ]

@@ -199,10 +199,10 @@ let affordanceAlgebraTests =
 let toolRegistrationTests =
   testList "tool registration completeness" [
 
-    testCase "affordance module covers exactly 10 unique tool names" <| fun _ ->
+    testCase "affordance module covers exactly 16 unique tool names" <| fun _ ->
       allAffordanceTools
       |> List.length
-      |> Expect.equal "unique affordance tools" 15
+      |> Expect.equal "unique affordance tools" 16
 
     testCase "all affordance tool names are non-empty and non-whitespace"
     <| fun _ ->
@@ -221,7 +221,7 @@ let toolRegistrationTests =
         |> Expect.isTrue
           (sprintf "%A (%d) should have <= Ready (%d)" state count readyCount))
 
-    testCase "McpServerTool-attributed methods total exactly 17 (reflection)"
+    testCase "McpServerTool-attributed methods total exactly 18 (reflection)"
     <| fun _ ->
       match tryGetMcpToolMethods () with
       | None ->
@@ -230,7 +230,7 @@ let toolRegistrationTests =
            reflection test skipped"
       | Some methods ->
         methods.Length
-          |> Expect.equal "MCP tool method count" 17
+          |> Expect.equal "MCP tool method count" 18
 
     testCase
       "every McpServerTool method has a non-empty Description (reflection)"
@@ -404,7 +404,7 @@ let stateTransitionSafetyTests =
                 state tool ex.Message))
         tested
         |> Expect.equal
-          "should test 5 states × 17 tools = 85" 85
+          "should test 5 states × 18 tools = 90" 90
   ]
 
 // ── Group 5: Affordance Superset/Subset Relationships ──

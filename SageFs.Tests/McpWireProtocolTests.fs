@@ -42,6 +42,7 @@ let mcpToolRegistrationTests = testList "MCP tool registration" [
       "create_session"
       "explain_test_failure"
       "get_available_projects"
+      "get_friction_report"
       "get_friction_summary"
       "get_fsi_status"
       "get_recent_fsi_events"

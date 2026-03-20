@@ -7,12 +7,15 @@ open SageFs.EventStore
 open SageFs.Features.FrictionTelemetryTypes
 open SageFs.Features.FrictionTelemetry
 
+open Microsoft.FSharp.Core
+
 type FrictionEnvelope = {
   Events: FrictionEvent list
   Feedback: ExplicitFeedback list
 }
 
-type private StoredEvent = {
+[<CLIMutable>]
+type StoredEvent = {
   OccurredAtUtc: DateTimeOffset
   SessionId: string
   ToolName: string
@@ -27,7 +30,8 @@ type private StoredEvent = {
   ContextCostKind: string
 }
 
-type private StoredFeedback = {
+[<CLIMutable>]
+type StoredFeedback = {
   OccurredAtUtc: DateTimeOffset
   SessionId: string
   ToolName: string
@@ -37,7 +41,8 @@ type private StoredFeedback = {
   AlternativeToolName: string option
 }
 
-type private StoredEnvelope = {
+[<CLIMutable>]
+type StoredEnvelope = {
   Events: StoredEvent list
   Feedback: StoredFeedback list
 }
@@ -293,4 +298,10 @@ module Recorder =
           yield sprintf "Tracked tools: %d" (Summaries.toolSummaries envelope.Events |> List.length)
           yield sprintf "Explicit feedback items: %d" envelope.Feedback.Length ]
         |> String.concat "\n"
+    }
+
+  let report (persistence: EventPersistence) =
+    task {
+      let! envelope = readEnvelope persistence
+      return Summaries.frictionReport envelope.Events envelope.Feedback
     }

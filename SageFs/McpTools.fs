@@ -7,6 +7,8 @@ open Microsoft.Extensions.Logging
 open SageFs.AppState
 open SageFs.McpTools
 open SageFs.Utils
+open System.Text.Json
+open System.Text.Json.Nodes
 
 /// Emoji per tool category — printed once as a header, not per-line
 /// Echo MCP tool results to the SageFs console for visibility
@@ -40,6 +42,72 @@ let private recordToolResult (ctx: McpContext) (toolName: string) (result: strin
       FollowUp = SageFs.Features.FrictionTelemetryTypes.FollowUp.NoFollowUpYet
       ContextCost = SageFs.Features.FrictionTelemetryTypes.ContextCost.Focused }
   SageFs.Features.McpFrictionRecorder.Recorder.appendEvent ctx.Persistence event
+
+let private feedbackKindText = function
+  | SageFs.Features.FrictionTelemetryTypes.ExplicitFeedbackKind.ToolOutputWasTooLarge -> "ToolOutputWasTooLarge"
+  | SageFs.Features.FrictionTelemetryTypes.ExplicitFeedbackKind.ToolIntentWasUnclear -> "ToolIntentWasUnclear"
+  | SageFs.Features.FrictionTelemetryTypes.ExplicitFeedbackKind.ToolNameWasMisleading -> "ToolNameWasMisleading"
+  | SageFs.Features.FrictionTelemetryTypes.ExplicitFeedbackKind.NeededAnotherToolToFinish -> "NeededAnotherToolToFinish"
+  | SageFs.Features.FrictionTelemetryTypes.ExplicitFeedbackKind.ResultDidNotEstablishTrust -> "ResultDidNotEstablishTrust"
+
+let private frictionReportJson (report: SageFs.Features.FrictionTelemetry.FrictionReport) =
+  let blockerText = function | Some blocker -> Some (string blocker) | None -> None
+  let toolText = function | Some tool -> Some (SageFs.Features.FrictionTelemetryTypes.ToolName.value tool) | None -> None
+
+  let topTools = JsonArray()
+  report.HighestPriorityTools
+  |> List.iter (fun item ->
+    let node = JsonObject()
+    node["Tool"] <- JsonValue.Create(SageFs.Features.FrictionTelemetryTypes.ToolName.value item.Tool)
+    node["TotalInvocations"] <- JsonValue.Create(item.TotalInvocations)
+    node["BlockedCount"] <- JsonValue.Create(item.BlockedCount)
+    node["AbandonedCount"] <- JsonValue.Create(item.AbandonedCount)
+    node["ExplicitFeedbackCount"] <- JsonValue.Create(item.ExplicitFeedbackCount)
+    node["MostCommonBlocker"] <- JsonValue.Create(blockerText item.MostCommonBlocker)
+    node["MostCommonFollowUp"] <- JsonValue.Create(toolText item.MostCommonFollowUp)
+    node["SuggestedFixTarget"] <- JsonValue.Create(item.SuggestedFixTarget)
+    topTools.Add(node))
+
+  let topBlockers = JsonArray()
+  report.TopBlockers
+  |> List.iter (fun item ->
+    let tools = JsonArray()
+    item.MostAffectedTools
+    |> List.iter (fun tool -> tools.Add(JsonValue.Create(SageFs.Features.FrictionTelemetryTypes.ToolName.value tool)))
+    let node = JsonObject()
+    node["Blocker"] <- JsonValue.Create(string item.Blocker)
+    node["Count"] <- JsonValue.Create(item.Count)
+    node["MostAffectedTools"] <- tools
+    topBlockers.Add(node))
+
+  let transitions = JsonArray()
+  report.FrequentTransitions
+  |> List.iter (fun item ->
+    let node = JsonObject()
+    node["FromTool"] <- JsonValue.Create(SageFs.Features.FrictionTelemetryTypes.ToolName.value item.FromTool)
+    node["ToTool"] <- JsonValue.Create(SageFs.Features.FrictionTelemetryTypes.ToolName.value item.ToTool)
+    node["Frequency"] <- JsonValue.Create(item.Frequency)
+    transitions.Add(node))
+
+  let recentFeedback = JsonArray()
+  report.RecentFeedback
+  |> List.iter (fun item ->
+    let node = JsonObject()
+    node["Tool"] <- JsonValue.Create(SageFs.Features.FrictionTelemetryTypes.ToolName.value item.Tool)
+    node["Kind"] <- JsonValue.Create(feedbackKindText item.Kind)
+    node["Count"] <- JsonValue.Create(item.Count)
+    node["LatestReason"] <- JsonValue.Create(item.LatestReason)
+    node["LatestAlternative"] <- JsonValue.Create(item.LatestAlternative)
+    recentFeedback.Add(node))
+
+  let payload = JsonObject()
+  payload["TotalEvents"] <- JsonValue.Create(report.TotalEvents)
+  payload["TotalFeedbackItems"] <- JsonValue.Create(report.TotalFeedbackItems)
+  payload["HighestPriorityTools"] <- topTools
+  payload["TopBlockers"] <- topBlockers
+  payload["FrequentTransitions"] <- transitions
+  payload["RecentFeedback"] <- recentFeedback
+  payload.ToJsonString()
 
 let withEcho (ctx: McpContext) (toolName: string) (t: Task<string>) : Task<string> =
   task {
@@ -796,6 +864,25 @@ This reads only local friction intelligence. It does not phone home.""")>]
     member _.get_friction_summary() : Task<string> =
         logger.LogDebug("MCP-TOOL: get_friction_summary called")
         SageFs.Features.McpFrictionRecorder.Recorder.summarize ctx.Persistence |> withEcho ctx "get_friction_summary"
+
+    [<McpServerTool>]
+    [<Description("""Get a structured local MCP friction report that an agent can act on.
+
+USE CASE:
+- Point an agent at recurring MCP pain and ask it to reduce the top issue.
+- Review which tools, blockers, follow-up chains, and explicit complaints are wasting time.
+
+OUTPUT:
+- JSON report with ranked problematic tools, top blockers, common tool chains, and recent explicit feedback
+- each ranked tool includes a suggested remediation target
+
+This is a local read model over recorded friction, not a self-healing system.""")>]
+    member _.get_friction_report() : Task<string> =
+        logger.LogDebug("MCP-TOOL: get_friction_report called")
+        task {
+          let! report = SageFs.Features.McpFrictionRecorder.Recorder.report ctx.Persistence
+          return frictionReportJson report
+        } |> withEcho ctx "get_friction_report"
 
     [<McpServerTool>]
     [<Description("""Report structured local MCP friction so SageFs can learn what is confusing.
