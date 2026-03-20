@@ -690,7 +690,8 @@ IMPORTANT:
 
 PREREQUISITE: Live testing must be enabled (call enable_live_testing) for tests to be discovered. If you get "No tests discovered", enable live testing first.
 
-Use pattern to filter by test name (substring match on FullName or DisplayName).
+Use pattern to filter by test name. By default this is a substring match on FullName or DisplayName.
+Prefix pattern with 'exact:' to run one exact full test name without fuzzy matching.
 Use category to filter by test category: unit, integration, browser, benchmark, architecture, property.
 Use timeout_seconds to wait for results (default 30). Set to 0 for fire-and-forget.
 
@@ -698,7 +699,8 @@ HOT RELOAD SAFETY:
 - If a file edit / hot reload is still in progress when this is called, it automatically waits up to 15 seconds for the reload to finish before running tests. This ensures results always reflect the latest code. A '⏳ Waited Xms for hot reload' note is prepended to the result if a wait occurred.
 
 PATTERN MATCHING:
-- pattern is a SUBSTRING match — 'login' matches 'should login user', 'LoginService tests', etc.
+- pattern is a SUBSTRING match by default — 'login' matches 'should login user', 'LoginService tests', etc.
+- prefix with 'exact:' for exact full-name matching — e.g. 'exact:MyModule.Tests.should login user'.
 - Empty or omitted pattern runs all tests in the selected category.
 - If pattern matches nothing, returns a message saying no tests were found — it does NOT fall back to running all tests.
 - To run all tests in a specific module, use the module name as the pattern.
@@ -723,7 +725,7 @@ RETURN VALUE:
 - On completion: summary with pass/fail counts and names of any failing tests with failure messages.
 - On timeout: a message indicating tests are still running. Use get_live_test_status to poll.""")>]
     member _.run_tests(
-        [<Description("Optional test name substring to match (case-insensitive). Omit to run all tests in the category.")>]
+        [<Description("Optional test filter. Default: case-insensitive substring on FullName/DisplayName. Prefix with 'exact:' to require an exact full test name. Omit to run all tests in the category.")>]
         pattern: string,
         [<Description("Optional category filter: unit, integration, browser, benchmark, architecture, property. Omit for 'unit'.")>]
         category: string,
@@ -735,6 +737,34 @@ RETURN VALUE:
         let t = match timeout_seconds <= 0 with | true -> 0 | false -> timeout_seconds
         logger.LogDebug("MCP-TOOL: run_tests called, pattern={Pattern}, category={Category}, timeout={Timeout}", pattern, category, t)
         runTests ctx p c t |> withEcho "run_tests"
+
+    [<McpServerTool>]
+    [<Description("""Plan a trustworthy targeted verification pass for one changed behavior.
+
+USE CASE:
+- When you changed one behavior and want SageFs to tell you the safest next verification step.
+- This prefers local snippet-first proof and only escalates when a named exact guard is provided.
+
+INPUTS:
+- behavior: the symbol or behavior under change.
+- exact_guard: optional exact full test name to run after local proof.
+
+TRUST MODEL:
+- Refuses to claim green when session trust is ambiguous or loaded code is stale.
+- Uses warmup file status when available to detect stale definitions.
+- Does not run tests; it returns the next trustworthy verification move.""")>]
+    member _.targeted_verify(
+        [<Description("Behavior or symbol under change (for example 'UserPreferences.loadFromFile').")>]
+        behavior: string,
+        [<Description("Optional exact full test name to use as the regression guard after local proof.")>]
+        exact_guard: string,
+        [<Description("Working directory of the MCP client. When provided, routes to the matching session if exactly one session uses this directory. If multiple sessions share the directory, you must call switch_session first.")>]
+        working_directory: string
+    ) : Task<string> =
+        let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
+        let guard = match System.String.IsNullOrWhiteSpace exact_guard with | true -> None | false -> Some exact_guard
+        logger.LogDebug("MCP-TOOL: targeted_verify called, behavior={Behavior}, exact_guard={ExactGuard}", behavior, exact_guard)
+        targetedVerify ctx "mcp" wd behavior guard |> withEcho "targeted_verify"
 
     [<McpServerTool>]
     [<Description("""Explain why a test was selected to run. Shows the trigger reason, which changed symbols cover the test, duration from last run, and flaky status.

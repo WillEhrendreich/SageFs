@@ -2398,6 +2398,8 @@ module McpTools =
     | Completed of passed: int * failed: int * total: int * failures: FailedTestInfo list
     | TimedOut of passed: int * failed: int * running: int * total: int * failures: FailedTestInfo list * runningNames: string list
     | NoTestsMatched of totalDiscovered: int
+    | NoExactTestMatched of exactName: string * totalDiscovered: int
+    | AmbiguousExactTestMatch of exactName: string * matchingNames: string list
     | NoTestsDiscovered
     | AlreadyRunning
 
@@ -2455,8 +2457,102 @@ module McpTools =
         "No tests discovered. If live testing is disabled, call enable_live_testing first. If it is already enabled, inspect get_live_test_status for DiscoveryState and retry after discovery completes."
       | NoTestsMatched totalDiscovered ->
         sprintf "No tests matched the filter. Total discovered: %d. Use get_live_test_status to list available tests." totalDiscovered
+      | NoExactTestMatched (exactName, totalDiscovered) ->
+        sprintf "No test matched the exact full name '%s'. Total discovered: %d. Use list_tests to inspect full names, or remove the 'exact:' prefix if you want fuzzy matching." exactName totalDiscovered
+      | AmbiguousExactTestMatch (exactName, matchingNames) ->
+        let rendered =
+          matchingNames
+          |> List.truncate 10
+          |> List.map (sprintf "  - %s")
+          |> String.concat "\n"
+        sprintf "Exact test selection for '%s' was ambiguous. Matching full names:\n%s" exactName rendered
       | AlreadyRunning ->
         "⚠️ A test run is already in progress. Wait for it to complete or check status with get_live_test_status."
+
+  let selectTestsForExplicitRun
+    (state: Features.LiveTesting.LiveTestState)
+    (patternFilter: string option)
+    (categoryFilter: Features.LiveTesting.TestCategory option)
+    : Result<Features.LiveTesting.TestCase array, RunTestsResult> =
+    match Features.Verification.TestSelection.parse patternFilter with
+    | Error _ ->
+      Error (RunTestsResult.classifyEmptySelection state)
+    | Ok selection ->
+      match Features.Verification.TestSelection.resolve state.DiscoveredTests selection categoryFilter with
+      | Features.Verification.TestSelectionResolution.AllDiscovered tests
+      | Features.Verification.TestSelectionResolution.FuzzyMatches tests ->
+        match Array.isEmpty tests with
+        | true -> Error (RunTestsResult.classifyEmptySelection state)
+        | false -> Ok tests
+      | Features.Verification.TestSelectionResolution.ExactMatch test ->
+        Ok [| test |]
+      | Features.Verification.TestSelectionResolution.NoExactMatch exact ->
+        Error (RunTestsResult.NoExactTestMatched (Features.Verification.ExactTestRef.value exact, state.DiscoveredTests.Length))
+      | Features.Verification.TestSelectionResolution.AmbiguousExactMatches (exact, matches) ->
+        Error (RunTestsResult.AmbiguousExactTestMatch (
+          Features.Verification.ExactTestRef.value exact,
+          matches |> Array.map (fun tc -> tc.FullName) |> Array.toList))
+
+  let targetedVerify
+    (ctx: McpContext)
+    (agent: string)
+    (workingDirectory: string option)
+    (behavior: string)
+    (exactGuard: string option)
+    : Task<string> =
+    withSessionWd ctx agent workingDirectory (fun sid -> task {
+      let! info = ctx.SessionOps.GetSessionInfo (toSessionId sid)
+      let status = info |> Option.map (fun session -> session.Status)
+      let loadedState,
+          sessionLoadedState =
+        match ctx.GetElmModel |> Option.map (fun getModel -> (getModel ()).SessionContext) |> Option.flatten with
+        | Some sessionCtx ->
+          let statuses =
+            match sessionCtx.SessionId = sid with
+            | true -> sessionCtx.FileStatuses
+            | false -> []
+          match statuses |> List.tryFind (fun file -> file.Readiness = FileReadiness.Stale) with
+          | Some stale ->
+            let lastLoaded = stale.LastLoadedAt |> Option.map string |> Option.defaultValue "unknown-loaded-version"
+            let state = Features.Verification.LoadedDefinitionState.ConfirmedStale (stale.Path, lastLoaded)
+            state, Some state
+          | None ->
+            let artifact =
+              statuses
+              |> List.filter (fun file -> file.Readiness = FileReadiness.Loaded)
+              |> List.map (fun file -> file.Path)
+              |> function
+                 | [] -> behavior
+                 | files -> String.concat ", " files
+            let state = Features.Verification.LoadedDefinitionState.ConfirmedCurrent artifact
+            state, Some state
+        | None ->
+          let state = Features.Verification.LoadedDefinitionState.UnknownLoadState "warmup file status unavailable"
+          state, None
+      let exactGuardRef =
+        exactGuard
+        |> Option.bind (fun raw ->
+          match Features.Verification.ExactTestRef.create raw with
+          | Ok exact -> Some exact
+          | Error _ -> None)
+      let sessionObservation : Features.Verification.SessionTrust.SessionObservation =
+        { MatchingSessionIds = [ sid ]
+          SessionStatus = status
+          LoadedState = sessionLoadedState
+          TypeIdentityDiagnostic = None }
+      let request : Features.Verification.TargetedVerificationRequest =
+        { Intent =
+            Features.Verification.VerificationIntent.VerifyChangedBehavior (behavior, Features.Verification.RegressionRisk.SharedContract)
+          NamedGuard = exactGuardRef
+          SessionObservation = sessionObservation
+          LoadedState = loadedState }
+      let report =
+        Features.Verification.TargetedVerification.createReport
+          request
+          None
+          None
+      return Features.Verification.TargetedVerification.summarize report
+    })
 
   let collectResults
     (entries: Features.LiveTesting.TestStatusEntry array)
@@ -2602,78 +2698,75 @@ module McpTools =
       | None, _ -> return "No active SageFs session. Start a session first."
       | _, None -> return "No active SageFs session. Start a session first."
       | Some getModel, Some dispatch ->
-      let model = getModel ()
-      let state = model.LiveTesting.TestState
-      // Guard: prevent overlapping test runs (MCP retry can trigger double dispatch)
-      match Features.LiveTesting.TestRunPhase.isAnyRunning state.RunPhases with
-      | true -> return RunTestsResult.format AlreadyRunning
-      | false ->
-      // Wait for any in-progress hot reload to complete before running tests.
-      // If run_tests is called immediately after saving a .fs file, the session may still
-      // be reloading the changed assembly — running tests now would yield stale results.
-      let reloadWaitStart = DateTime.UtcNow
-      let reloadDeadline = reloadWaitStart.AddSeconds(15.0)
-      let mutable reloadDone = false
-      while not reloadDone && DateTime.UtcNow < reloadDeadline do
-        let! sessions = ctx.SessionOps.GetAllSessions()
-        let anyBusy =
-          sessions
-          |> List.exists (fun s ->
-            match s.Status with
-            | WorkerProtocol.SessionStatus.Evaluating
-            | WorkerProtocol.SessionStatus.Building _ -> true
-            | _ -> false)
-        match anyBusy with
-        | false -> reloadDone <- true
-        | true -> do! Task.Delay 100
-      let waitedMs = (DateTime.UtcNow - reloadWaitStart).TotalMilliseconds |> int
-      // Secondary wait: after a hot-reload, TestsDiscovered fires asynchronously and updates
-      // DiscoveredTests. Snapshot the discovery timestamp before waiting, then poll until
-      // it advances — meaning discovery completed and we have fresh test metadata.
-      let discoveryTimeBefore = (getModel ()).LiveTesting.TestState.LastDiscoveryTime
-      let mutable discoveryWaitedMs = 0
-      match waitedMs > 200 with
-      | true ->
-        let discoveryDeadline = DateTime.UtcNow.AddSeconds(3.0)
-        let mutable discoveryDone = false
-        while not discoveryDone && DateTime.UtcNow < discoveryDeadline do
-          let currentDiscovery = (getModel ()).LiveTesting.TestState.LastDiscoveryTime
-          match currentDiscovery > discoveryTimeBefore with
-          | true -> discoveryDone <- true
-          | false -> do! Task.Delay 50
-        discoveryWaitedMs <- (DateTime.UtcNow - reloadWaitStart).TotalMilliseconds |> int
-      | false -> ()
-      let waitNote =
-        match waitedMs > 200 with
-        | true -> sprintf "⏳ Waited %dms for hot reload + %dms for discovery refresh.\n" waitedMs discoveryWaitedMs
-        | false -> ""
-      let category =
-        match categoryFilter with
-        | Some c ->
-          match c.ToLowerInvariant() with
-          | "unit" -> Some Features.LiveTesting.TestCategory.Unit
-          | "integration" -> Some Features.LiveTesting.TestCategory.Integration
-          | "browser" -> Some Features.LiveTesting.TestCategory.Browser
-          | "benchmark" -> Some Features.LiveTesting.TestCategory.Benchmark
-          | "architecture" -> Some Features.LiveTesting.TestCategory.Architecture
-          | "property" -> Some Features.LiveTesting.TestCategory.Property
-          | other -> Some (Features.LiveTesting.TestCategory.Custom other)
-        | None -> None
-      let tests =
-        Features.LiveTesting.LiveTestCycleState.filterTestsForExplicitRun
-          state.DiscoveredTests None patternFilter category
-      match Array.isEmpty tests with
-      | true ->
-        return waitNote + RunTestsResult.format (RunTestsResult.classifyEmptySelection state)
-      | false ->
-      let testIds = tests |> Array.map (fun tc -> tc.Id)
-      dispatch (SageFsMsg.Event (SageFsEvent.RunTestsRequested tests))
-      match timeoutSeconds = 0 with
-      | true ->
-        return sprintf "%sTriggered %d tests for execution. Use get_live_test_status to check progress." waitNote tests.Length
-      | false ->
-        let! result = pollForTestCompletion getModel testIds timeoutSeconds
-        return waitNote + RunTestsResult.format result
+        let model = getModel ()
+        let state = model.LiveTesting.TestState
+        // Guard: prevent overlapping test runs (MCP retry can trigger double dispatch)
+        match Features.LiveTesting.TestRunPhase.isAnyRunning state.RunPhases with
+        | true -> return RunTestsResult.format AlreadyRunning
+        | false ->
+          // Wait for any in-progress hot reload to complete before running tests.
+          // If run_tests is called immediately after saving a .fs file, the session may still
+          // be reloading the changed assembly — running tests now would yield stale results.
+          let reloadWaitStart = DateTime.UtcNow
+          let reloadDeadline = reloadWaitStart.AddSeconds(15.0)
+          let mutable reloadDone = false
+          while not reloadDone && DateTime.UtcNow < reloadDeadline do
+            let! sessions = ctx.SessionOps.GetAllSessions()
+            let anyBusy =
+              sessions
+              |> List.exists (fun s ->
+                match s.Status with
+                | WorkerProtocol.SessionStatus.Evaluating
+                | WorkerProtocol.SessionStatus.Building _ -> true
+                | _ -> false)
+            match anyBusy with
+            | false -> reloadDone <- true
+            | true -> do! Task.Delay 100
+          let waitedMs = (DateTime.UtcNow - reloadWaitStart).TotalMilliseconds |> int
+          // Secondary wait: after a hot-reload, TestsDiscovered fires asynchronously and updates
+          // DiscoveredTests. Snapshot the discovery timestamp before waiting, then poll until
+          // it advances — meaning discovery completed and we have fresh test metadata.
+          let discoveryTimeBefore = (getModel ()).LiveTesting.TestState.LastDiscoveryTime
+          let mutable discoveryWaitedMs = 0
+          match waitedMs > 200 with
+          | true ->
+            let discoveryDeadline = DateTime.UtcNow.AddSeconds(3.0)
+            let mutable discoveryDone = false
+            while not discoveryDone && DateTime.UtcNow < discoveryDeadline do
+              let currentDiscovery = (getModel ()).LiveTesting.TestState.LastDiscoveryTime
+              match currentDiscovery > discoveryTimeBefore with
+              | true -> discoveryDone <- true
+              | false -> do! Task.Delay 50
+            discoveryWaitedMs <- (DateTime.UtcNow - reloadWaitStart).TotalMilliseconds |> int
+          | false -> ()
+          let waitNote =
+            match waitedMs > 200 with
+            | true -> sprintf "⏳ Waited %dms for hot reload + %dms for discovery refresh.\n" waitedMs discoveryWaitedMs
+            | false -> ""
+          let category =
+            match categoryFilter with
+            | Some c ->
+              match c.ToLowerInvariant() with
+              | "unit" -> Some Features.LiveTesting.TestCategory.Unit
+              | "integration" -> Some Features.LiveTesting.TestCategory.Integration
+              | "browser" -> Some Features.LiveTesting.TestCategory.Browser
+              | "benchmark" -> Some Features.LiveTesting.TestCategory.Benchmark
+              | "architecture" -> Some Features.LiveTesting.TestCategory.Architecture
+              | "property" -> Some Features.LiveTesting.TestCategory.Property
+              | other -> Some (Features.LiveTesting.TestCategory.Custom other)
+            | None -> None
+          match selectTestsForExplicitRun state patternFilter category with
+          | Error selectionError ->
+            return waitNote + RunTestsResult.format selectionError
+          | Ok tests ->
+            let testIds = tests |> Array.map (fun tc -> tc.Id)
+            dispatch (SageFsMsg.Event (SageFsEvent.RunTestsRequested tests))
+            match timeoutSeconds = 0 with
+            | true ->
+              return sprintf "%sTriggered %d tests for execution. Use get_live_test_status to check progress." waitNote tests.Length
+            | false ->
+              let! result = pollForTestCompletion getModel testIds timeoutSeconds
+              return waitNote + RunTestsResult.format result
     }
 
   // ── Feature Analysis MCP Tools (P15–P19) ─────────────────────

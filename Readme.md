@@ -35,6 +35,7 @@ SageFs is a live F# development engine. Start it once, connect any editor — VS
 - [Gutter Icons](#-understanding-the-gutter-icons)
 - [The $3,000/year Feature — Free](#the-3000year-feature--free)
 - [Under the Hood](#under-the-hood)
+- [Repository Map](#repository-map--where-things-live)
 - [Coming from Another Language?](#welcome-traveler---pick-your-home-language)
 - [Visual Demos](#-visual-demos)
 - [Contributing](#contributing)
@@ -120,7 +121,7 @@ SageFs opens an interactive terminal. Then create a session for `YourProject.fsp
 
 ### 4. Connect your editor
 
-**VS Code** — Install [SageFs from the VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=willehrendreich.sagefs), open an F# file, press `Alt+Enter` on any expression. Result appears inline in < 500ms.
+**VS Code** — Install the `.vsix` from [Releases](https://github.com/WillEhrendreich/SageFs/releases) for now, open an F# file, press `Alt+Enter` on any expression. Result appears inline in < 500ms.
 
 **Neovim** — Add `"WillEhrendreich/sagefs.nvim"` to your plugin manager. Press `Alt+Enter` to evaluate. See [Neovim setup](https://github.com/WillEhrendreich/sagefs.nvim).
 
@@ -132,8 +133,8 @@ SageFs opens an interactive terminal. Then create a session for `YourProject.fsp
 
 > ⚠️ **Work in progress** — live testing is functional but still being stabilized. You may encounter rough edges, especially around session switching and test discovery timing. We're actively improving it.
 
-Save any file → tests run automatically → green/red gutter markers appear.
-No configuration needed — SageFs discovers Expecto tests and runs them on every save.
+When live testing is enabled and a test session is loaded, save-triggered runs can update gutter state automatically.
+The core engine, SSE events, coverage data, and editor integrations are real today, but client polish and discovery/session behavior are still catching up. Expecto is the best-covered path right now.
 
 ### 6. What you'll see
 
@@ -182,7 +183,7 @@ SageFs sessions run in one of two modes.The tradeoff is a physical constraint of
 |:---|:---|:---|
 | **Type redefinition** | ✅ Full — redefine types freely | ❌ FS0037 — expression-level changes only |
 | **Browser hot reload** | ❌ Manual refresh required | ✅ Save → patch → SSE push |
-| **Live testing** | ✅ Full | ✅ Full |
+| **Live testing** | ⚠️ Available in both — still stabilizing | ⚠️ Available in both — still stabilizing |
 | **Best for** | Prototyping, domain modeling, exploration | Web apps with Falco, Datastar, ASP.NET |
 
 ### Choosing the right mode
@@ -285,9 +286,9 @@ Every frontend connects to the same daemon. Open several at once — they all se
 
 #### VS Code
 
-Install from the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=willehrendreich.sagefs), or grab the `.vsix` from [Releases](https://github.com/WillEhrendreich/SageFs/releases) for manual install. Written entirely in F# via [Fable](https://fable.io/) — no TypeScript.
+Install from the `.vsix` in [Releases](https://github.com/WillEhrendreich/SageFs/releases). Written entirely in F# via [Fable](https://fable.io/) — no TypeScript.
 
-Features: Alt+Enter eval, CodeLens, live test decorations, native Test Explorer integration, hot reload sidebar, session context, type explorer, call graph, event history, dashboard webview, status bar, auto-start, Ionide command hijacking, coverage gutter bars, inline failure decorations, failure narrative enrichment, and test source-jump.
+Current wiring includes Alt+Enter eval, CodeLens, live test decorations, native Test Explorer integration, hot reload sidebar, session context, type explorer, call graph, event history, dashboard webview, status bar, auto-start, Ionide command hijacking, coverage gutter bars, inline failure decorations, failure narrative enrichment, and test source-jump.
 
 #### Neovim
 
@@ -318,6 +319,19 @@ SageFs exposes dozens of MCP tools — from `send_fsharp_code` to `run_tests` to
 **SSE** (legacy clients that don't support Streamable HTTP yet):
 ```json
 { "mcpServers": { "sagefs": { "type": "sse", "url": "http://localhost:37749/sse" } } }
+```
+
+**OpenCode** — Add to `~/.opencode.json`:
+```json
+{
+  "mcp": {
+    "sagefs": {
+      "type": "remote",
+      "url": "http://localhost:37749/sse",
+      "enabled": true
+    }
+  }
+}
 ```
 
 #### TUI / GUI / Web Dashboard / Jupyter
@@ -372,18 +386,18 @@ sagefs --jupyter conn.json  # Run as a Jupyter kernel
 
 Visual Studio Enterprise charges **~$250/month per seat** for Live Unit Testing. That's **$3,000/year per developer.** It only works in Visual Studio. It only supports 3 frameworks. It takes 5-30 seconds. It requires your code to compile.
 
-SageFs does it better. In every editor. In under 500ms. On broken code. For free.
+SageFs is building toward that same feedback loop with a REPL-centered architecture. The core live-testing engine is real, but the end-to-end experience is still being stabilized and is not equally polished in every client yet.
 
 | | VS Enterprise Live Testing | **SageFs** |
 |:---|:---|:---|
-| **Speed** | 5–30 sec (MSBuild rebuild) | **200–500ms** (FSI hot eval) |
+| **Speed** | 5–30 sec (MSBuild rebuild) | **300–800ms typical** on the current FSI-driven hot path |
 | **Broken code** | ✗ Must compile first | **✓ Tree-sitter works on incomplete code** |
 | **Editors** | Visual Studio only | **VS Code · Neovim · TUI · GUI · Visual Studio · Web** |
 | **Frameworks** | MSTest · xUnit · NUnit | **+ Expecto · TUnit · xUnit v3** · extensible |
 | **Price** | ~$250/month | **Free, MIT licensed** |
 
 <details>
-<summary><strong>Three-speed feedback pipeline — how sub-500ms works</strong></summary>
+<summary><strong>Three-speed feedback pipeline — how the sub-second path works</strong></summary>
 
 <br />
 
@@ -408,6 +422,31 @@ Tests are auto-categorized (Unit, Integration, Browser, Property, Benchmark, Arc
 **SSE Events** — All editors receive `test_source_locations`, `file_annotations`, and `failure_narratives` events tagged with `SessionId`. [Full reference →](docs/sse-events.md)
 
 **Architecture** — Daemon-first design with isolated worker sub-processes and dual-renderer TUI/Raylib GUI. [Full details →](docs/architecture.md)
+
+### Repository Map — where things live
+
+- `SageFs.Core/` — shared engine and runtime logic: session management, MCP/session operations, live testing, persistence, and shared rendering primitives
+- `SageFs/` — CLI entrypoint, daemon host, MCP server, dashboard, worker HTTP transport, SageTUI client, and the legacy terminal renderer
+- `SageFs.Gui/` — Raylib GUI frontend
+- `SageFs.Tests/` — main Expecto test suite
+- `sagefs-vscode/` — VS Code extension (F# via Fable → JavaScript)
+- `sagefs-vs/` — Visual Studio extension workspace
+- `docs/` — user docs, architecture notes, troubleshooting, and feature references
+- `samples/` — runnable sample apps and language-onramp projects
+- `tests/` — Playwright/browser scenarios for dashboard and editor-facing UX flows
+- `scripts/` — repo helper scripts and smoke/integration utilities
+
+`SageFs.slnx` covers the core tool, GUI, tests, and samples. The editor integrations live alongside it in `sagefs-vscode/` and `sagefs-vs/` because they use their own packaging toolchains and release flows.
+
+The Neovim plugin is not in this repo — it lives in the separate [`sagefs.nvim`](https://github.com/WillEhrendreich/sagefs.nvim) repository.
+
+If you're tracing the live testing / "test as you type" stack, start here:
+
+- Engine, discovery, dependency graph, and coverage: `SageFs.Core/Features/LiveTestingExecutors.fs`, `LiveTestingTypes.fs`, `CoverageInstrumenter.fs`, `TestDiscovery.fs`, `TestTreeSitter.fs`
+- Daemon routes, watchers, and SSE emission: `SageFs/DaemonMode.fs`, `SageFs/McpServer.fs`, `SageFs/McpTools.fs`
+- VS Code client wiring: `sagefs-vscode/src/Extension.fs`, `LiveTestingListener.fs`, `TestControllerAdapter.fs`, `FileAnnotationsListener.fs`
+- Visual Studio client wiring: `sagefs-vs/SageFs.VisualStudio.Core/LiveTestingSubscriber.fs`, `SageFs.VisualStudio.Editor/TestStateTracker.cs`, `FileAnnotationTracker.cs`, `CoverageGlyphTagger.cs`
+- Neovim client wiring: the separate `sagefs.nvim` repo
 
 <details>
 <summary><strong>🛡️ Supervised Mode — crash-proof development</strong></summary>

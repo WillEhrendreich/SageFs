@@ -106,4 +106,20 @@ let descriptionPropertyTests =
       mentionsRecovery
       |> Expect.isTrue
         "Should explain that errors don't corrupt session state"
+
+    testCase "run_tests description teaches exact full-name matching"
+    <| fun _ ->
+      let desc =
+        toolDescriptions
+        |> List.find (fun (name, _) -> name = "run_tests")
+        |> snd
+      desc |> Expect.stringContains "should mention exact prefix" "exact:"
+
+    testCase "targeted_verify description teaches trust-first workflow"
+    <| fun _ ->
+      let desc =
+        toolDescriptions
+        |> List.find (fun (name, _) -> name = "targeted_verify")
+        |> snd
+      desc |> Expect.stringContains "should mention snippet-first trust" "local snippet-first proof"
   ]

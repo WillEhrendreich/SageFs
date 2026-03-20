@@ -110,6 +110,15 @@ let emptySelectionClassificationTests =
       formatted |> Expect.stringContains "message should still mention enable_live_testing" "enable_live_testing"
       formatted |> Expect.stringContains "message should point users at status inspection" "get_live_test_status"
     }
+
+    test "NoExactTestMatched message teaches exact-name workflow" {
+      let formatted =
+        SageFs.McpTools.RunTestsResult.format (SageFs.McpTools.RunTestsResult.NoExactTestMatched ("Tests.UserPreferences.guard", 42))
+
+      formatted |> Expect.stringContains "message should mention exact full name" "exact full name"
+      formatted |> Expect.stringContains "message should teach list_tests" "list_tests"
+      formatted |> Expect.stringContains "message should mention exact prefix" "exact:"
+    }
   ]
 
 [<Tests>]

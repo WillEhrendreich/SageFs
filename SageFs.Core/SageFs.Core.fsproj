@@ -90,6 +90,7 @@
         <Compile Include="EvalPipeline.fs" />
         <Compile Include="Affordances.fs" />
         <Compile Include="WorkerProtocol.fs" />
+        <Compile Include="Features\Verification.fs" />
         <Compile Include="StandbyPool.fs" />
         <Compile Include="SessionMode.fs" />
         <Compile Include="HttpWorkerClient.fs" />

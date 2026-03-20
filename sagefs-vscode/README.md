@@ -1,6 +1,6 @@
 # SageFs — VS Code Extension
 
-> **Save your F# file → tests run → results appear inline — all in < 500ms.**
+> **Live eval works today. Live testing and coverage are available, but still being stabilized.**
 
 SageFs brings live evaluation, instant test feedback, and coverage visualization to VS Code. No configuration needed — just press `Alt+Enter`.
 
@@ -9,7 +9,7 @@ SageFs brings live evaluation, instant test feedback, and coverage visualization
 | Feature | What it does |
 |---------|-------------|
 | **Inline Results** | Expression values appear next to your code as you evaluate |
-| **Live Testing** | Tests run automatically on save — green ✓ / red ✗ in the gutter |
+| **Live Testing** | When live testing is enabled, save-triggered test updates can feed green ✓ / red ✗ gutter state (still stabilizing) |
 | **Coverage Gutters** | Colored bars show which lines are covered by tests |
 | **Failure Details** | Inline `⊘` markers show Expected vs Actual diffs |
 | **Failure Narratives** | Rich context: what changed, when it last passed, causal analysis |
@@ -28,7 +28,7 @@ SageFs brings live evaluation, instant test feedback, and coverage visualization
 3. **Open an F# project** in VS Code
 4. **Press `Alt+Enter`** on any expression — the daemon starts automatically and results appear inline
 
-That's it. Live testing enables automatically when Expecto tests are detected.
+That's it for evaluation. Live testing is available, but it does not auto-enable yet — use `SageFs: Enable Live Testing` once your test session is loaded.
 
 ---
 

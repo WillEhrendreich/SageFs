@@ -8,17 +8,18 @@
 - Extension is F# compiled to JS via Fable
 - Connects to SageFs daemon via HTTP + SSE (port 37749)
 - Has `LiveTestingListener` for SSE test events, `TestControllerAdapter` for VS Code Test API
-- **No `onDidChangeTextDocument` listener** — zero reaction to typing
-- Live testing commands exist (enable/disable/run) but are manual-trigger only
+- Has an `onDidChangeTextDocument` listener that marks inline eval state stale and posts session-scoped `buffer-changed` payloads for file-backed `.fs` / `.fsi` documents
+- Live testing commands exist (enable/disable/run), but live testing is still a user-controlled toggle rather than an auto-enable path
+- The older `evaluate-scope` contract below remains a design exploration, not the currently shipped VS Code editor/daemon contract
 
-## What Needs to Change
+## If We Move to Scope-Level Eval
 
-Per the centralized design, the editor's only job is:
+If the project returns to the older `evaluate-scope` design, the editor work would be:
 
-1. Register `onDidChangeTextDocument` for `*.fs` files
+1. Replace the current buffer-sync hot path with scope extraction for `*.fs` files
 2. On change: debounce 300ms, cancel previous timer
-3. After debounce: extract the enclosing function scope, POST it to SageFs
-4. Display results from existing SSE subscription (already done)
+3. After debounce: extract the enclosing function scope and POST it to SageFs
+4. Keep displaying results through the existing SSE subscription (already done)
 
 ## Implementation
 

@@ -15,9 +15,9 @@ A Visual Studio extension for [SageFs](../Readme.md) — the live F# development
 2. **Install the VSIX**: Download from [Releases](https://github.com/WillEhrendreich/SageFs/releases) → double-click to install
 3. **Open an F# project** in Visual Studio 2022
 4. **Press `Alt+Enter`** on any expression — the daemon starts automatically
-5. **Save a file** — tests run, gutter markers appear
+5. **Enable live testing, then save a file** — test state and gutter markers update
 
-The extension connects to the SageFs daemon automatically. No configuration needed.
+The extension connects to the SageFs daemon automatically. No configuration needed for eval and session features; live testing itself is still an explicit toggle.
 
 > **Important**: SageFs must be installed as a **global** .NET tool (`dotnet tool install --global SageFs`). Local tool installs are not supported by the Visual Studio extension. If `sagefs` is not found in your PATH, the extension will show "⚠ SageFs daemon is not running" in the SageFs Output channel.
 
