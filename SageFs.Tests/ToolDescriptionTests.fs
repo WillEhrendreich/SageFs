@@ -30,6 +30,17 @@ let toolDescriptions =
     |> Option.map (fun attr -> m.Name, attr.Description))
   |> Array.toList
 
+let registeredToolDescriptions =
+  typeof<SageFsTools>.GetMethods(BindingFlags.Instance ||| BindingFlags.Public)
+  |> Array.filter (fun m ->
+    m.GetCustomAttributes(true)
+    |> Array.exists (fun attr -> attr.GetType().Name = "McpServerToolAttribute"))
+  |> Array.choose (fun m ->
+    m.GetCustomAttribute<DescriptionAttribute>()
+    |> Option.ofObj
+    |> Option.map (fun attr -> m.Name, attr.Description))
+  |> Array.toList
+
 [<Tests>]
 let descriptionSnapshotTests =
   testSequenced <| testList "Tool description snapshots" [
@@ -122,4 +133,8 @@ let descriptionPropertyTests =
         |> List.find (fun (name, _) -> name = "targeted_verify")
         |> snd
       desc |> Expect.stringContains "should mention snippet-first trust" "local snippet-first proof"
+
+    testCase "reduced MCP surface keeps the tool count surgical"
+    <| fun _ ->
+      registeredToolDescriptions.Length |> Expect.equal "tool count should stay intentionally small" 15
   ]

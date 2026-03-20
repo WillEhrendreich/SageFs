@@ -93,7 +93,6 @@ WORKFLOW: Use this tool instead of dotnet build or dotnet run. SageFs IS your co
         SageFs.Instrumentation.mcpToolInvocations.Add(1L)
         sendFSharpCode ctx agentName code OutputFormat.Text None wd fp em bsl intentOpt
     
-    [<McpServerTool>]
     [<Description("""Load and execute an F# script file (.fsx). The file is parsed into individual statements and each statement is sent to the FSI session separately, so partial progress is preserved if one statement fails.
 
 WHEN TO USE vs send_fsharp_code:
@@ -176,7 +175,6 @@ IMPORTANT:
         logger.LogDebug("MCP-TOOL: get_fsi_status called: workingDir={Dir}", working_directory)
         getStatus ctx "mcp" None wd |> withEcho "get_fsi_status"
 
-    [<McpServerTool>]
     [<Description("""Get detailed startup information: loaded projects, enabled features, and command-line arguments. Use to understand what capabilities are available in the current session.
 
 DIFFERENCE FROM get_fsi_status:
@@ -333,7 +331,6 @@ BEHAVIOR:
         logger.LogDebug("MCP-TOOL: cancel_eval called")
         cancelEval ctx "mcp" wd |> withEcho "cancel_eval"
 
-    [<McpServerTool>]
     [<Description("""Get code completions at a cursor position. Returns available completions (types, functions, members) for the code at the given position. Useful for discovering APIs before writing code.
 
 CURSOR POSITION:
@@ -361,7 +358,6 @@ WHEN TO USE:
 
     // ── Package Explorer Tools ──────────────────────────────────────
 
-    [<McpServerTool>]
     [<Description("""Retrieve the types, functions, and sub-namespaces available in a given namespace.
 Use this to explore .NET and F# APIs without documentation. Provide the fully-qualified namespace name.
 Examples: 'System.Collections.Generic', 'Microsoft.FSharp.Collections', 'FSharp.Control'.
@@ -383,7 +379,6 @@ TIPS:
         logger.LogDebug("MCP-TOOL: explore_namespace called: {Namespace}", namespaceName)
         exploreNamespace ctx "mcp" namespaceName wd |> withEcho "explore_namespace"
 
-    [<McpServerTool>]
     [<Description("""Retrieve the members, constructors, and properties of a specific type.
 Use this to discover what methods and properties are available on a type. Provide the fully-qualified type name.
 Examples: 'System.String', 'System.Collections.Generic.List', 'Microsoft.FSharp.Collections.List'.
@@ -405,7 +400,6 @@ TIPS:
         logger.LogDebug("MCP-TOOL: explore_type called: {Type}", typeName)
         exploreType ctx "mcp" typeName wd |> withEcho "explore_type"
 
-    [<McpServerTool>]
     [<Description("""Visualize a discriminated union type as a state machine diagram. Returns JSON with case names, fields, entry/terminal state classification, and an ASCII art diagram. Useful for understanding DU-based domain models as state machines.
 
 WHEN TO USE:
@@ -470,7 +464,6 @@ WHEN TO USE:
         logger.LogDebug("MCP-TOOL: list_sessions called")
         listSessions ctx |> withEcho "list_sessions"
 
-    [<McpServerTool>]
     [<Description("""Stop an active FSI session by its ID. The worker process is gracefully shut down and its resources are released.
 
 WHEN TO USE:
@@ -504,7 +497,6 @@ ROUTING BEHAVIOR:
         logger.LogDebug("MCP-TOOL: switch_session called: id={Id}", session_id)
         switchSession ctx "mcp" session_id |> withEcho "switch_session"
 
-    [<McpServerTool>]
     [<Description("""Switch the workflow mode for a session.
 Workflows control the tradeoff between REPL capability and browser hot reload:
 - REPL (Interactive): Full type redefinition, interactive exploration
@@ -527,7 +519,6 @@ Switching creates a new session — REPL definitions and cell state are lost."""
 
     // ── Elm State Tools ──────────────────────────────────────────
 
-    [<McpServerTool>]
     [<Description("""Get the current Elm model state rendered as regions. Shows editor content, recent output, diagnostics, and sessions. Useful for understanding what SageFs is currently displaying.
 
 WHEN TO USE:
@@ -543,7 +534,6 @@ OUTPUT: A text rendering of each named UI region (header, editor, output, test p
 
     // ── Live Testing Tools ──────────────────────────────────────
 
-    [<McpServerTool>]
     [<Description("""Get current live test status. Returns the enabled state, a summary (total/passed/failed/stale/running counts), and per-test status entries.
 
 WHEN TO USE:
@@ -569,7 +559,6 @@ STATUS VALUES per test:
         logger.LogDebug("MCP-TOOL: get_live_test_status called, file={File}, agent={Agent}", file, agent)
         getLiveTestStatus ctx agent filter |> withEcho "get_live_test_status"
 
-    [<McpServerTool>]
     [<Description("""Enable live testing. When enabled, tests automatically re-run after each hot reload whenever the code they depend on changes.
 
 BEHAVIOR:
@@ -588,7 +577,6 @@ NOTE:
         logger.LogDebug("MCP-TOOL: enable_live_testing called")
         setLiveTesting ctx true |> withEcho "enable_live_testing"
 
-    [<McpServerTool>]
     [<Description("""Disable live testing. Tests will not run automatically after hot reload.
 
 WHEN TO USE:
@@ -601,7 +589,6 @@ NOTE: Disabling live testing does not prevent explicit test runs via run_tests. 
         logger.LogDebug("MCP-TOOL: disable_live_testing called")
         setLiveTesting ctx false |> withEcho "disable_live_testing"
 
-    [<McpServerTool>]
     [<Description("""Set run policy for a test category. Controls WHEN tests in that category are automatically triggered by the live testing engine.
 
 CATEGORIES: unit | integration | browser | benchmark | architecture | property
@@ -641,7 +628,6 @@ EXAMPLE WORKFLOW — restore defaults after focused work:
         logger.LogDebug("MCP-TOOL: set_run_policy called: category={Category}, policy={Policy}", category, policy)
         setRunPolicy ctx category policy |> withEcho "set_run_policy"
 
-    [<McpServerTool>]
     [<Description("""Configure test execution timeouts. Affects both automatic (hot-reload-triggered) and explicit (run_tests) test runs.
 
 PARAMETERS:
@@ -665,7 +651,6 @@ NOTE: Timeout changes take effect immediately on the next test run.""")>]
         logger.LogDebug("MCP-TOOL: set_test_timeouts called: per_test={PerTest}, global={Global}", per_test_seconds, global_run_seconds)
         setTestTimeouts ctx pt gr |> withEcho "set_test_timeouts"
 
-    [<McpServerTool>]
     [<Description("""Get test infrastructure state: enabled flag, currently-running status, provider list, per-category run policies, and a test summary.
 
 PREREQUISITE: Live testing must be enabled (call enable_live_testing) for meaningful data. When disabled, returns Enabled=false with a Hint field explaining what to do.
@@ -766,7 +751,6 @@ TRUST MODEL:
         logger.LogDebug("MCP-TOOL: targeted_verify called, behavior={Behavior}, exact_guard={ExactGuard}", behavior, exact_guard)
         targetedVerify ctx "mcp" wd behavior guard |> withEcho "targeted_verify"
 
-    [<McpServerTool>]
     [<Description("""Explain why a test was selected to run. Shows the trigger reason, which changed symbols cover the test, duration from last run, and flaky status.
 Matches by substring on FullName or DisplayName — returns explanations for all matching tests.
 
@@ -787,7 +771,6 @@ USE CASE: When you see a test ran unexpectedly, call this to understand why. Whe
         logger.LogDebug("MCP-TOOL: explain_test_run called, test={Test}", test_name)
         explainTestRun ctx test_name |> withEcho "explain_test_run"
 
-    [<McpServerTool>]
     [<Description("""Query which tests cover a given symbol. Returns all tests that transitively depend on the symbol via the dependency graph, along with their last result status.
 
 SYMBOL NAME FORMAT:
@@ -809,7 +792,6 @@ USE CASE: After extracting or renaming a function, call this to see which tests 
         logger.LogDebug("MCP-TOOL: query_test_coverage called, symbol={Symbol}", symbol)
         queryTestCoverage ctx symbol |> withEcho "query_test_coverage"
 
-    [<McpServerTool>]
     [<Description("""Get per-line coverage data for a specific file. Returns JSON with line-level coverage annotations including which tests cover each line, coverage health status, and branch coverage detail.
 
 FILE PATH:
@@ -864,7 +846,6 @@ WORKFLOW: When run_tests reports a failure, call explain_test_failure with the t
 
     // ── Feature Analysis Tools (P15–P19) ───────────────────────
 
-    [<McpServerTool>]
     [<Description("""Decompose an F# pipeline expression into individual stages and classify each stage's purity.
 
 INPUT: A pipeline expression using |> operators (e.g., 'xs |> List.filter isEven |> List.map string |> String.concat ","').
@@ -879,7 +860,6 @@ Use this to understand complex pipelines before modifying them, or to identify e
         logger.LogDebug("MCP-TOOL: decompose_pipeline called, code length={Len}", code.Length)
         decomposePipeline code |> withEcho "decompose_pipeline"
 
-    [<McpServerTool>]
     [<Description("""Run a full diagnostic analysis of the current session.
 
 Composes 6 feature modules into one coherent report: test failure narratives, cell dependency graph,
@@ -900,7 +880,6 @@ This replaces calling explain_test_failure + plan_ripple + get_eval_timeline + s
         logger.LogDebug("MCP-TOOL: diagnose called")
         diagnose ctx |> withEcho "diagnose"
 
-    [<McpServerTool>]
     [<Description("""Analyze test coverage quality — find blind spots, correlate failures, assess diagnostic power.
 
 Composes failure narratives + IL instrumentation bitmaps + test dependency graph into per-failure coverage intelligence.
@@ -918,7 +897,6 @@ Complements 'diagnose' (which tells you what failed) by telling you how well you
         logger.LogDebug("MCP-TOOL: coverage_intel called")
         coverageIntel ctx |> withEcho "coverage_intel"
 
-    [<McpServerTool>]
     [<Description("""Forecast performance impact for evaluated cells — detect regressions, measure downstream blast radius.
 
 Analyzes eval timeline statistics (P50/P95), cell dependency graph, and duration trends to predict whether
@@ -940,7 +918,6 @@ Pairs with 'suggest_next_action' which folds impact data into a prioritized acti
         let cellOpt = match cellId with | 0 -> None | n -> Some n
         impactForecast ctx cellOpt |> withEcho "impact_forecast"
 
-    [<McpServerTool>]
     [<Description("""Get a prioritized action queue — the intelligent "what should I do next?" recommendation.
 
 Composes coverage intelligence + impact forecasts + stale cell detection into a ranked queue of actions,
@@ -961,7 +938,6 @@ Replaces manual triage of test results, coverage, and performance data.""")>]
         logger.LogDebug("MCP-TOOL: suggest_next_action called")
         suggestNextAction ctx |> withEcho "suggest_next_action"
 
-    [<McpServerTool>]
     [<Description("""Plan a cascade re-evaluation (ripple) for changed cells.
 
 Given a set of cell IDs that have changed, computes the topologically-ordered list of downstream cells
@@ -978,7 +954,6 @@ WORKFLOW: After editing a binding, use this tool to see which cells would be aff
         logger.LogDebug("MCP-TOOL: plan_ripple called, cells={Cells}", changed_cells)
         planRipple ctx changed_cells |> withEcho "plan_ripple"
 
-    [<McpServerTool>]
     [<Description("""Preview a "what if" scenario: what would change if a binding had a different value?
 
 Identifies the cell that produces the named binding, then plans a ripple of all downstream cells
@@ -997,7 +972,6 @@ WORKFLOW: Use this to explore hypothetical changes safely before committing to t
         logger.LogDebug("MCP-TOOL: preview_what_if called, binding={Name}", binding_name)
         previewWhatIf ctx binding_name new_code |> withEcho "preview_what_if"
 
-    [<McpServerTool>]
     [<Description("""Get type-directed suggestions for what to evaluate next.
 
 Analyzes all bindings currently in scope and generates contextually-appropriate suggestions
@@ -1011,7 +985,6 @@ WORKFLOW: When you're not sure what to try next in the REPL, call this for intel
         logger.LogDebug("MCP-TOOL: suggest_next_cell called")
         suggestNextCell ctx |> withEcho "suggest_next_cell"
 
-    [<McpServerTool>]
     [<Description("""Get the session filmstrip — a visual history of all evaluations in the current session.
 
 Shows each evaluation as a "frame" with its index, code snippet, binding count, duration, and test summary.
@@ -1030,7 +1003,6 @@ WORKFLOW: Use to review what happened in a session, find when a binding was intr
 
     // ── Phase 1b: Orphaned module MCP tools ──
 
-    [<McpServerTool>]
     [<Description("""Export the current session as a notebook-style .fsx file with cell metadata.
 
 Each cell preserves its code, output, index, and dependencies as structured comments.
@@ -1047,7 +1019,6 @@ WORKFLOW: Use this to save your interactive session as a portable, re-runnable n
         let nameOpt = match System.String.IsNullOrWhiteSpace project_name with | true -> None | false -> Some project_name
         exportNotebook ctx nameOpt |> withEcho "export_notebook"
 
-    [<McpServerTool>]
     [<Description("""Export the current session as a clean, topologically-sorted .fsx transcript.
 
 Uses the cell dependency graph to order cells so that dependencies come before dependents.
@@ -1064,7 +1035,6 @@ WORKFLOW: Use this to extract a clean, reproducible script from an exploratory s
         let nameOpt = match System.String.IsNullOrWhiteSpace project_name with | true -> None | false -> Some project_name
         exportSessionTranscript ctx nameOpt |> withEcho "export_session_transcript"
 
-    [<McpServerTool>]
     [<Description("""Get the message journal — a structured audit log of eval events.
 
 Synthesizes journal entries from eval history, classifying successful evals as Info
@@ -1084,7 +1054,6 @@ WORKFLOW: Use this for observability — review what happened, filter to errors 
         let sourceOpt = match System.String.IsNullOrWhiteSpace source with | true -> None | false -> Some source
         getMessageJournal ctx levelOpt sourceOpt |> withEcho "get_message_journal"
 
-    [<McpServerTool>]
     [<Description("""Get eval timeline with performance sparkline and percentile statistics.
 
 Shows a visual sparkline of recent eval durations, plus P50/P95/P99 and mean latency.
@@ -1101,7 +1070,6 @@ WORKFLOW: Use this to monitor eval performance trends and identify slow cells.""
         let widthOpt = match sparkline_width with | 0 -> None | w -> Some w
         getEvalTimeline ctx widthOpt |> withEcho "get_eval_timeline"
 
-    [<McpServerTool>]
     [<Description("""Manage the session scratch pad — view, export, or promote ephemeral code snippets.
 
 Actions:
@@ -1121,7 +1089,6 @@ WORKFLOW: Use 'list' to review snippets, 'export' for a full dump, 'promote' to 
         logger.LogDebug("MCP-TOOL: manage_scratch_pad called, action={Action}", action)
         manageScratchPad ctx action None None |> withEcho "manage_scratch_pad"
 
-    [<McpServerTool>]
     [<Description("""Get a diff between recent eval outputs — before vs after comparison.
 
 Compares the two most recent eval outputs (or outputs for a specific cell) and shows
@@ -1161,7 +1128,6 @@ WORKFLOW: Use this before run_tests to discover what tests exist, or to build a 
         let fileOpt = match file_path with | "" | null -> None | s -> Some s
         listTests ctx patOpt fileOpt |> withEcho "list_tests"
 
-    [<McpServerTool>]
     [<Description("""Get the cell dependency graph annotated with staleness information.
 
 Shows which cells are stale (their dependencies changed but they haven't re-evaluated), what each cell produces/consumes, and the full upstream/downstream wiring.
@@ -1173,7 +1139,6 @@ WORKFLOW: After editing code, use this to understand the ripple impact before de
         logger.LogDebug("MCP-TOOL: get_cell_dependencies called")
         getCellDependencies ctx |> withEcho "get_cell_dependencies"
 
-    [<McpServerTool>]
     [<Description("""Discover and rank all SageFs features by relevance to your current session state.
 
 Acts as a built-in "tour guide" — analyzes your session context (failing tests, stale cells, eval count, discovered tests) and surfaces the most useful features first.
@@ -1192,7 +1157,6 @@ WORKFLOW: Call this at the start of a session to see what to do next, or any tim
         let topicOpt = match topic with | "" | null -> None | s -> Some s
         discoverFeatures ctx topicOpt |> withEcho "discover_features"
 
-    [<McpServerTool>]
     [<Description("""Given a failing test, compose explain_test_failure → extract causal symbol → preview ripple into a single repair plan.
 
 V1 does NOT suggest a new value for the binding — it surfaces the causal symbol, its current code, and the ripple of cells that would re-evaluate on any change. The developer supplies the new value.

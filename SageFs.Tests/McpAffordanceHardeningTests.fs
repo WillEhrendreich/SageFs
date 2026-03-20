@@ -107,7 +107,7 @@ let stateMachineReachabilityTests =
         let has = availableTools state |> List.contains "load_fsharp_script"
         match state with
         | Ready ->
-          has |> Expect.isTrue "load_fsharp_script must be in Ready"
+          has |> Expect.isFalse "load_fsharp_script is no longer an MCP affordance"
         | _ ->
           has
           |> Expect.isFalse
@@ -119,7 +119,7 @@ let stateMachineReachabilityTests =
         let has = availableTools state |> List.contains "get_startup_info"
         match state with
         | Ready ->
-          has |> Expect.isTrue "get_startup_info must be in Ready"
+          has |> Expect.isFalse "get_startup_info is no longer an MCP affordance"
         | _ ->
           has
           |> Expect.isFalse
@@ -202,7 +202,7 @@ let toolRegistrationTests =
     testCase "affordance module covers exactly 10 unique tool names" <| fun _ ->
       allAffordanceTools
       |> List.length
-      |> Expect.equal "unique affordance tools" 10
+      |> Expect.equal "unique affordance tools" 15
 
     testCase "all affordance tool names are non-empty and non-whitespace"
     <| fun _ ->
@@ -221,7 +221,7 @@ let toolRegistrationTests =
         |> Expect.isTrue
           (sprintf "%A (%d) should have <= Ready (%d)" state count readyCount))
 
-    testCase "McpServerTool-attributed methods total exactly 50 (reflection)"
+    testCase "McpServerTool-attributed methods total exactly 15 (reflection)"
     <| fun _ ->
       match tryGetMcpToolMethods () with
       | None ->
@@ -230,7 +230,7 @@ let toolRegistrationTests =
            reflection test skipped"
       | Some methods ->
         methods.Length
-          |> Expect.equal "MCP tool method count" 51
+          |> Expect.equal "MCP tool method count" 15
 
     testCase
       "every McpServerTool method has a non-empty Description (reflection)"
@@ -303,7 +303,7 @@ let stateTransitionSafetyTests =
               "checkToolAvailability threw for (%A, %s): %s"
               state tool ex.Message))
       tested
-      |> Expect.equal "should test all 50 state×tool combos" 50
+      |> Expect.equal "should test all 75 state×tool combos" 75
 
     testCase "all rejections return ToolNotAvailable specifically" <| fun _ ->
       allStates
@@ -382,7 +382,7 @@ let stateTransitionSafetyTests =
         | Ok _ ->
           failtestf "bogus tool must be rejected in %A" state)
 
-    testCase "245-combo safety: all MCP tools × all states never throw (reflection)"
+    testCase "75-combo safety: all MCP tools × all states never throw (reflection)"
     <| fun _ ->
       match tryGetMcpToolMethods () with
       | None ->
@@ -404,7 +404,7 @@ let stateTransitionSafetyTests =
                 state tool ex.Message))
         tested
         |> Expect.equal
-          "should test 5 states × 51 tools = 255" 255
+          "should test 5 states × 15 tools = 75" 75
   ]
 
 // ── Group 5: Affordance Superset/Subset Relationships ──

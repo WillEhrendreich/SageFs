@@ -46,12 +46,17 @@ let availableTools (state: SessionState) : string list =
     [ "get_fsi_status"; "get_recent_fsi_events" ]
   | Ready ->
     [ "send_fsharp_code"
-      "load_fsharp_script"
       "get_fsi_status"
-      "get_startup_info"
       "get_recent_fsi_events"
-      "get_completions"
       "check_fsharp_code"
+      "targeted_verify"
+      "list_tests"
+      "run_tests"
+      "explain_test_failure"
+      "list_sessions"
+      "switch_session"
+      "create_session"
+      "get_available_projects"
       "reset_fsi_session"
       "hard_reset_fsi_session"
       "cancel_eval" ]
@@ -59,7 +64,6 @@ let availableTools (state: SessionState) : string list =
     [ "cancel_eval"
       "get_fsi_status"
       "get_recent_fsi_events"
-      "get_completions"
       "check_fsharp_code" ]
   | Faulted ->
     [ "get_fsi_status"
