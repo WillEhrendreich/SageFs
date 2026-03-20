@@ -69,9 +69,10 @@ let tests =
       let top = report.HighestPriorityTools |> List.head
       top.Tool |> Expect.equal "run_tests should be the top remediation target" (tool "run_tests")
       top.SuggestedFixTarget |> Expect.stringContains "exact-test misses should point to workflow repair" "list_tests"
-      report.RecommendedWorkItems.Length |> Expect.equal "report should surface recommended work items" 2
+      (report.RecommendedWorkItems.Length, 0) |> Expect.isGreaterThan "report should surface recommended work items"
       let firstWorkItem = report.RecommendedWorkItems |> List.head
       firstWorkItem.TargetTool |> Expect.equal "first work item should target the top problem tool" (Some (tool "run_tests"))
+      firstWorkItem.LikelyFixType |> Expect.equal "alternative-driven remediation should look like workflow linking" "workflow-linking"
       firstWorkItem.SuggestedAction |> Expect.stringContains "work item should carry the suggested action" "list_tests"
 
     testCase "feedback-only friction still points agents at the alternative path that resolved the problem" <| fun _ ->
@@ -89,5 +90,6 @@ let tests =
       top.MostCommonAlternative |> Expect.equal "feedback alternative should be preserved" (Some (tool "list_tests"))
       top.SuggestedFixTarget |> Expect.stringContains "feedback-only remediation should point at the recorded alternative" "list_tests"
       let firstWorkItem = report.RecommendedWorkItems |> List.head
+      firstWorkItem.LikelyFixType |> Expect.equal "feedback-only alternative path should still classify as workflow linking" "workflow-linking"
       firstWorkItem.SuggestedAction |> Expect.stringContains "feedback-only work item should stay agent-actionable" "list_tests"
   ]

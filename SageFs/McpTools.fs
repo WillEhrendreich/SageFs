@@ -127,6 +127,7 @@ let frictionReportJson (report: SageFs.Features.FrictionTelemetry.FrictionReport
     let node = JsonObject()
     node["Title"] <- JsonValue.Create(item.Title)
     node["TargetTool"] <- JsonValue.Create(item.TargetTool |> Option.map SageFs.Features.FrictionTelemetryTypes.ToolName.value)
+    node["LikelyFixType"] <- JsonValue.Create(item.LikelyFixType)
     node["Reason"] <- JsonValue.Create(item.Reason)
     node["SuggestedAction"] <- JsonValue.Create(item.SuggestedAction)
     recommendedWorkItems.Add(node))

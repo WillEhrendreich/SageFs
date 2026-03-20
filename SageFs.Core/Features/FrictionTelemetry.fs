@@ -44,6 +44,7 @@ type ActionableToolReport = {
 type RecommendedWorkItem = {
   Title: string
   TargetTool: ToolName option
+  LikelyFixType: string
   Reason: string
   SuggestedAction: string
 }
@@ -216,6 +217,12 @@ module Summaries =
       |> List.map (fun item ->
         { Title = sprintf "Reduce friction in %s" (ToolName.value item.Tool)
           TargetTool = Some item.Tool
+          LikelyFixType =
+            match item.MostCommonAlternative, item.MostCommonBlocker, item.ExplicitFeedbackCount > 0 with
+            | Some _, _, _ -> "workflow-linking"
+            | _, Some _, _ -> "tool-behavior"
+            | _, _, true -> "tool-description"
+            | _ -> "tool-behavior"
           Reason = sprintf "Blocked=%d, abandoned=%d, explicitFeedback=%d" item.BlockedCount item.AbandonedCount item.ExplicitFeedbackCount
           SuggestedAction = item.SuggestedFixTarget })
 
@@ -225,6 +232,7 @@ module Summaries =
         let targetTool = item.MostAffectedTools |> List.tryHead
         { Title = sprintf "Remove recurring blocker %O" item.Blocker
           TargetTool = targetTool
+          LikelyFixType = "tool-behavior"
           Reason = sprintf "Seen %d times across %d tools" item.Count item.MostAffectedTools.Length
           SuggestedAction =
             match targetTool with

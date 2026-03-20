@@ -64,6 +64,8 @@ let tests =
       let firstWorkItem = recommended[0]
       firstWorkItem.GetProperty("TargetTool").GetString()
       |> Expect.equal "first recommended work item should point at the complained-about tool" "run_tests"
+      firstWorkItem.GetProperty("LikelyFixType").GetString()
+      |> Expect.equal "recommended work item should classify the fix shape" "workflow-linking"
       firstWorkItem.GetProperty("SuggestedAction").GetString()
       |> Expect.stringContains "recommended action should preserve the resolving alternative" "list_tests"
     }
