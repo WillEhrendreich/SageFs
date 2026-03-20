@@ -37,7 +37,15 @@ type ActionableToolReport = {
   ExplicitFeedbackCount: int
   MostCommonBlocker: BlockerKind option
   MostCommonFollowUp: ToolName option
+  MostCommonAlternative: ToolName option
   SuggestedFixTarget: string
+}
+
+type RecommendedWorkItem = {
+  Title: string
+  TargetTool: ToolName option
+  Reason: string
+  SuggestedAction: string
 }
 
 type FrictionReport = {
@@ -47,15 +55,21 @@ type FrictionReport = {
   TopBlockers: TopBlockerSummary list
   FrequentTransitions: TransitionSummary list
   RecentFeedback: FeedbackSummary list
+  RecommendedWorkItems: RecommendedWorkItem list
 }
 
 module Summaries =
-  let private blockerFromEvent event =
+  let nonActionableTools = set [ "report_friction"; "get_friction_summary"; "get_friction_report" ]
+
+  let isActionableTool tool =
+    nonActionableTools.Contains(ToolName.value tool) |> not
+
+  let blockerFromEvent event =
     match event.Outcome with
     | FrictionOutcome.EncounteredBlocker blocker -> Some blocker
     | _ -> None
 
-  let private followedTool event =
+  let followedTool event =
     match event.FollowUp with
     | FollowUp.FollowedByTool tool -> Some tool
     | _ -> None
@@ -110,33 +124,62 @@ module Summaries =
         LatestAlternative = latestAlternative })
     |> List.sortByDescending (fun item -> item.Count)
 
-  let private suggestedFixTarget blocked abandoned explicitFeedback blocker followUp =
-    match blocker, followUp, explicitFeedback > 0, blocked > 0, abandoned > 0 with
-    | Some BlockerKind.ExactTestNotFound, Some tool, _, _, _ ->
+  let suggestedFixTarget blocked abandoned explicitFeedback blocker followUp alternative =
+    match blocker, followUp, alternative, explicitFeedback > 0, blocked > 0, abandoned > 0 with
+    | Some BlockerKind.ExactTestNotFound, Some tool, _, _, _, _ ->
       sprintf "Tighten exact-test workflow and point agents toward %s first." (ToolName.value tool)
-    | Some BlockerKind.OutputTooLarge, _, _, _, _ ->
+    | _, _, Some tool, true, _, _ ->
+      sprintf "Agents keep resolving this via %s; merge or cross-link that path directly." (ToolName.value tool)
+    | Some BlockerKind.OutputTooLarge, _, _, _, _, _ ->
       "Reduce output volume or add a narrower report/query path."
-    | Some blocker, _, _, true, _ ->
+    | Some blocker, _, _, _, true, _ ->
       sprintf "Remove recurring blocker %O from the tool's primary path." blocker
-    | _, Some tool, true, _, _ ->
+    | _, Some tool, _, true, _, _ ->
       sprintf "Merge or cross-link this workflow with %s so agents need fewer hops." (ToolName.value tool)
-    | _, _, true, _, _ ->
+    | _, _, _, true, _, _ ->
       "Clarify the tool contract or improve its description so agents trust the result."
-    | _, _, _, _, true ->
+    | _, _, _, _, _, true ->
       "Investigate why agents abandon this tool before reaching a verified outcome."
     | _ ->
       "Keep watching this tool; no dominant remediation target yet."
 
   let actionableToolReports (events: FrictionEvent list) (feedback: ExplicitFeedback list) =
+    let eventGroups =
+      events
+      |> List.groupBy (fun event -> event.Tool)
+      |> Map.ofList
+
     let feedbackCounts =
       feedback
       |> List.groupBy (fun item -> item.Tool)
       |> List.map (fun (tool, items) -> tool, items.Length)
       |> Map.ofList
 
-    events
-    |> List.groupBy (fun event -> event.Tool)
-    |> List.map (fun (tool, grouped) ->
+    let feedbackAlternatives =
+      feedback
+      |> List.groupBy (fun item -> item.Tool)
+      |> List.map (fun (tool, items) ->
+        let alternative =
+          items
+          |> List.choose (fun item ->
+            match item.AlternativeUsed with
+            | AlternativePath.ResolvedWithTool tool -> Some tool
+            | _ -> None)
+          |> List.countBy id
+          |> List.sortByDescending snd
+          |> List.tryHead
+          |> Option.map fst
+        tool, alternative)
+      |> Map.ofList
+
+    let allTools =
+      [ yield! eventGroups |> Map.toList |> List.map fst
+        yield! feedbackCounts |> Map.toList |> List.map fst ]
+      |> List.distinct
+
+    allTools
+    |> List.map (fun tool ->
+      let grouped = eventGroups |> Map.tryFind tool |> Option.defaultValue []
       let blockedCount = grouped |> List.filter (fun event -> blockerFromEvent event |> Option.isSome) |> List.length
       let abandonedCount = grouped |> List.filter (fun event -> event.Outcome = FrictionOutcome.AbandonedWithoutResolution) |> List.length
       let explicitFeedbackCount = feedbackCounts |> Map.tryFind tool |> Option.defaultValue 0
@@ -154,6 +197,7 @@ module Summaries =
         |> List.sortByDescending snd
         |> List.tryHead
         |> Option.map fst
+      let mostCommonAlternative = feedbackAlternatives |> Map.tryFind tool |> Option.flatten
       { Tool = tool
         TotalInvocations = grouped.Length
         BlockedCount = blockedCount
@@ -161,13 +205,43 @@ module Summaries =
         ExplicitFeedbackCount = explicitFeedbackCount
         MostCommonBlocker = mostCommonBlocker
         MostCommonFollowUp = mostCommonFollowUp
-        SuggestedFixTarget = suggestedFixTarget blockedCount abandonedCount explicitFeedbackCount mostCommonBlocker mostCommonFollowUp })
-    |> List.sortByDescending (fun item -> item.BlockedCount + item.AbandonedCount + item.ExplicitFeedbackCount)
+        MostCommonAlternative = mostCommonAlternative
+        SuggestedFixTarget = suggestedFixTarget blockedCount abandonedCount explicitFeedbackCount mostCommonBlocker mostCommonFollowUp mostCommonAlternative })
+    |> List.filter (fun item -> isActionableTool item.Tool)
+    |> List.sortByDescending (fun item -> (item.ExplicitFeedbackCount * 3) + (item.BlockedCount * 2) + item.AbandonedCount)
+
+  let recommendedWorkItems (rankedTools: ActionableToolReport list) (blockers: TopBlockerSummary list) =
+    let fromTools =
+      rankedTools
+      |> List.map (fun item ->
+        { Title = sprintf "Reduce friction in %s" (ToolName.value item.Tool)
+          TargetTool = Some item.Tool
+          Reason = sprintf "Blocked=%d, abandoned=%d, explicitFeedback=%d" item.BlockedCount item.AbandonedCount item.ExplicitFeedbackCount
+          SuggestedAction = item.SuggestedFixTarget })
+
+    let fromBlockers =
+      blockers
+      |> List.map (fun item ->
+        let targetTool = item.MostAffectedTools |> List.tryHead
+        { Title = sprintf "Remove recurring blocker %O" item.Blocker
+          TargetTool = targetTool
+          Reason = sprintf "Seen %d times across %d tools" item.Count item.MostAffectedTools.Length
+          SuggestedAction =
+            match targetTool with
+            | Some tool -> sprintf "Start with %s and remove the blocker from the primary path." (ToolName.value tool)
+            | None -> "Investigate the tools most affected by this blocker and tighten the workflow." })
+
+    [ yield! fromTools
+      yield! fromBlockers ]
+    |> List.truncate 5
 
   let frictionReport (events: FrictionEvent list) (feedback: ExplicitFeedback list) =
+    let rankedTools = actionableToolReports events feedback |> List.truncate 5
+    let blockers = topBlockers events |> List.sortByDescending (fun item -> item.Count) |> List.truncate 5
     { TotalEvents = events.Length
       TotalFeedbackItems = feedback.Length
-      HighestPriorityTools = actionableToolReports events feedback |> List.truncate 5
-      TopBlockers = topBlockers events |> List.sortByDescending (fun item -> item.Count) |> List.truncate 5
+      HighestPriorityTools = rankedTools
+      TopBlockers = blockers
       FrequentTransitions = transitions events |> List.sortByDescending (fun item -> item.Frequency) |> List.truncate 5
-      RecentFeedback = feedbackSummaries feedback |> List.truncate 5 }
+      RecentFeedback = feedbackSummaries feedback |> List.truncate 5
+      RecommendedWorkItems = recommendedWorkItems rankedTools blockers }

@@ -43,6 +43,10 @@ let tests =
       |> Expect.isGreaterThan "report should expose at least one actionable tool"
 
       let top = topTools[0]
+      top.GetProperty("Tool").GetString()
+      |> Expect.equal "feedback-heavy complained-about tool should rise to the top" "run_tests"
+      top.GetProperty("SuggestedFixTarget").GetString()
+      |> Expect.stringContains "top remediation target should reflect the resolving follow-up" "list_tests"
 
       let recentFeedback = doc.RootElement.GetProperty("RecentFeedback")
       (recentFeedback.GetArrayLength(), 0)
@@ -53,5 +57,14 @@ let tests =
       |> Expect.equal "recent feedback should preserve the complained-about tool" "run_tests"
       firstFeedback.GetProperty("LatestAlternative").GetString()
       |> Expect.equal "recent feedback should preserve the resolving alternative" "list_tests"
+
+      let recommended = doc.RootElement.GetProperty("RecommendedWorkItems")
+      (recommended.GetArrayLength(), 0)
+      |> Expect.isGreaterThan "report should expose recommended work items"
+      let firstWorkItem = recommended[0]
+      firstWorkItem.GetProperty("TargetTool").GetString()
+      |> Expect.equal "first recommended work item should point at the complained-about tool" "run_tests"
+      firstWorkItem.GetProperty("SuggestedAction").GetString()
+      |> Expect.stringContains "recommended action should preserve the resolving alternative" "list_tests"
     }
   ]

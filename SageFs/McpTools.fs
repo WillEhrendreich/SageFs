@@ -16,11 +16,11 @@ open System.Text.Json.Nodes
 /// Global audit tracker for MCP tool usage analysis (synthesis 3.3).
 let auditTracker = SageFs.McpToolAudit.AuditTracker()
 
-let private ok = function
+let ok = function
   | Ok value -> value
   | Error err -> failwith err
 
-let private classifyFrictionOutcome (result: string) =
+let classifyFrictionOutcome (result: string) =
   match result.StartsWith("Blocked:") || result.StartsWith("Error:") with
   | true when result.Contains("exact", System.StringComparison.OrdinalIgnoreCase) && result.Contains("match", System.StringComparison.OrdinalIgnoreCase) ->
     SageFs.Features.FrictionTelemetryTypes.FrictionOutcome.EncounteredBlocker SageFs.Features.FrictionTelemetryTypes.BlockerKind.ExactTestNotFound
@@ -31,7 +31,7 @@ let private classifyFrictionOutcome (result: string) =
   | false ->
     SageFs.Features.FrictionTelemetryTypes.FrictionOutcome.CompletedCleanly
 
-let private recordToolResult (ctx: McpContext) (toolName: string) (result: string) (elapsedMs: int) =
+let recordToolResult (ctx: McpContext) (toolName: string) (result: string) (elapsedMs: int) =
   let event : SageFs.Features.FrictionTelemetryTypes.FrictionEvent =
     { SageFs.Features.FrictionTelemetryTypes.FrictionEvent.OccurredAtUtc = System.DateTimeOffset.UtcNow
       Session = SageFs.Features.FrictionTelemetryTypes.SessionRef.create "mcp" |> ok
@@ -43,29 +43,49 @@ let private recordToolResult (ctx: McpContext) (toolName: string) (result: strin
       ContextCost = SageFs.Features.FrictionTelemetryTypes.ContextCost.Focused }
   SageFs.Features.McpFrictionRecorder.Recorder.appendEvent ctx.Persistence event
 
-let private feedbackKindText = function
+let feedbackKindText = function
   | SageFs.Features.FrictionTelemetryTypes.ExplicitFeedbackKind.ToolOutputWasTooLarge -> "ToolOutputWasTooLarge"
   | SageFs.Features.FrictionTelemetryTypes.ExplicitFeedbackKind.ToolIntentWasUnclear -> "ToolIntentWasUnclear"
   | SageFs.Features.FrictionTelemetryTypes.ExplicitFeedbackKind.ToolNameWasMisleading -> "ToolNameWasMisleading"
   | SageFs.Features.FrictionTelemetryTypes.ExplicitFeedbackKind.NeededAnotherToolToFinish -> "NeededAnotherToolToFinish"
   | SageFs.Features.FrictionTelemetryTypes.ExplicitFeedbackKind.ResultDidNotEstablishTrust -> "ResultDidNotEstablishTrust"
 
-let private frictionReportJson (report: SageFs.Features.FrictionTelemetry.FrictionReport) =
+let frictionReportJson (report: SageFs.Features.FrictionTelemetry.FrictionReport) =
   let blockerText = function | Some blocker -> Some (string blocker) | None -> None
   let toolText = function | Some tool -> Some (SageFs.Features.FrictionTelemetryTypes.ToolName.value tool) | None -> None
 
+  let recentFeedbackByTool =
+    report.RecentFeedback
+    |> List.map (fun item -> SageFs.Features.FrictionTelemetryTypes.ToolName.value item.Tool, item)
+    |> Map.ofList
+
   let topTools = JsonArray()
   report.HighestPriorityTools
+  |> List.filter (fun item -> SageFs.Features.FrictionTelemetry.Summaries.isActionableTool item.Tool)
   |> List.iter (fun item ->
+    let toolName = SageFs.Features.FrictionTelemetryTypes.ToolName.value item.Tool
+    let fallbackAlternative =
+      recentFeedbackByTool
+      |> Map.tryFind toolName
+      |> Option.bind (fun item -> item.LatestAlternative)
+    let mostCommonAlternative =
+      match toolText item.MostCommonAlternative, fallbackAlternative with
+      | Some tool, _ -> Some tool
+      | None, alt -> alt
+    let suggestedFixTarget =
+      match mostCommonAlternative, item.SuggestedFixTarget.StartsWith("Clarify", System.StringComparison.OrdinalIgnoreCase) with
+      | Some tool, true -> sprintf "Agents keep resolving this via %s; merge or cross-link that path directly." tool
+      | _ -> item.SuggestedFixTarget
     let node = JsonObject()
-    node["Tool"] <- JsonValue.Create(SageFs.Features.FrictionTelemetryTypes.ToolName.value item.Tool)
+    node["Tool"] <- JsonValue.Create(toolName)
     node["TotalInvocations"] <- JsonValue.Create(item.TotalInvocations)
     node["BlockedCount"] <- JsonValue.Create(item.BlockedCount)
     node["AbandonedCount"] <- JsonValue.Create(item.AbandonedCount)
     node["ExplicitFeedbackCount"] <- JsonValue.Create(item.ExplicitFeedbackCount)
     node["MostCommonBlocker"] <- JsonValue.Create(blockerText item.MostCommonBlocker)
     node["MostCommonFollowUp"] <- JsonValue.Create(toolText item.MostCommonFollowUp)
-    node["SuggestedFixTarget"] <- JsonValue.Create(item.SuggestedFixTarget)
+    node["MostCommonAlternative"] <- JsonValue.Create(mostCommonAlternative)
+    node["SuggestedFixTarget"] <- JsonValue.Create(suggestedFixTarget)
     topTools.Add(node))
 
   let topBlockers = JsonArray()
@@ -101,12 +121,23 @@ let private frictionReportJson (report: SageFs.Features.FrictionTelemetry.Fricti
     recentFeedback.Add(node))
 
   let payload = JsonObject()
+  let recommendedWorkItems = JsonArray()
+  report.RecommendedWorkItems
+  |> List.iter (fun item ->
+    let node = JsonObject()
+    node["Title"] <- JsonValue.Create(item.Title)
+    node["TargetTool"] <- JsonValue.Create(item.TargetTool |> Option.map SageFs.Features.FrictionTelemetryTypes.ToolName.value)
+    node["Reason"] <- JsonValue.Create(item.Reason)
+    node["SuggestedAction"] <- JsonValue.Create(item.SuggestedAction)
+    recommendedWorkItems.Add(node))
+
   payload["TotalEvents"] <- JsonValue.Create(report.TotalEvents)
   payload["TotalFeedbackItems"] <- JsonValue.Create(report.TotalFeedbackItems)
   payload["HighestPriorityTools"] <- topTools
   payload["TopBlockers"] <- topBlockers
   payload["FrequentTransitions"] <- transitions
   payload["RecentFeedback"] <- recentFeedback
+  payload["RecommendedWorkItems"] <- recommendedWorkItems
   payload.ToJsonString()
 
 let withEcho (ctx: McpContext) (toolName: string) (t: Task<string>) : Task<string> =

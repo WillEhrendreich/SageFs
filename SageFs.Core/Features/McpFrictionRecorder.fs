@@ -52,7 +52,7 @@ module private Codec =
 
   let empty : FrictionEnvelope = { Events = []; Feedback = [] }
 
-  let private outcomeParts outcome =
+  let outcomeParts outcome =
     match outcome with
     | FrictionOutcome.CompletedCleanly -> "CompletedCleanly", None, None, None
     | FrictionOutcome.EncounteredBlocker blocker -> "EncounteredBlocker", Some (string blocker), None, None
@@ -63,30 +63,30 @@ module private Codec =
     | FrictionOutcome.RecoveredVia ResolutionKind.Unresolved -> "RecoveredVia", None, Some "Unresolved", None
     | FrictionOutcome.AbandonedWithoutResolution -> "AbandonedWithoutResolution", None, None, None
 
-  let private followUpParts followUp =
+  let followUpParts followUp =
     match followUp with
     | FollowUp.NoFollowUpYet -> "NoFollowUpYet", None
     | FollowUp.FollowedByTool tool -> "FollowedByTool", Some (ToolName.value tool)
     | FollowUp.SessionEnded -> "SessionEnded", None
 
-  let private contextCostText = function
+  let contextCostText = function
     | ContextCost.Tiny -> "Tiny"
     | ContextCost.Focused -> "Focused"
     | ContextCost.Heavy -> "Heavy"
 
-  let private explicitFeedbackKindText = function
+  let explicitFeedbackKindText = function
     | ExplicitFeedbackKind.ToolOutputWasTooLarge -> "ToolOutputWasTooLarge"
     | ExplicitFeedbackKind.ToolIntentWasUnclear -> "ToolIntentWasUnclear"
     | ExplicitFeedbackKind.ToolNameWasMisleading -> "ToolNameWasMisleading"
     | ExplicitFeedbackKind.NeededAnotherToolToFinish -> "NeededAnotherToolToFinish"
     | ExplicitFeedbackKind.ResultDidNotEstablishTrust -> "ResultDidNotEstablishTrust"
 
-  let private alternativeParts = function
+  let alternativeParts = function
     | AlternativePath.NoAlternativeRecorded -> "NoAlternativeRecorded", None
     | AlternativePath.ResolvedWithTool tool -> "ResolvedWithTool", Some (ToolName.value tool)
     | AlternativePath.ResolvedOutsideMcp -> "ResolvedOutsideMcp", None
 
-  let private parseIntent = function
+  let parseIntent = function
     | "VerifyChangedBehavior" -> Ok IntentKind.VerifyChangedBehavior
     | "RunExactTest" -> Ok IntentKind.RunExactTest
     | "ExploreCode" -> Ok IntentKind.ExploreCode
@@ -95,7 +95,7 @@ module private Codec =
     | "ManageSession" -> Ok IntentKind.ManageSession
     | other -> Error (sprintf "Unknown intent kind '%s'." other)
 
-  let private parseBlocker = function
+  let parseBlocker = function
     | "SessionAmbiguous" -> Ok BlockerKind.SessionAmbiguous
     | "SessionMissing" -> Ok BlockerKind.SessionMissing
     | "SessionWarming" -> Ok BlockerKind.SessionWarming
@@ -108,7 +108,7 @@ module private Codec =
     | "InvalidRequest" -> Ok BlockerKind.InvalidRequest
     | other -> Error (sprintf "Unknown blocker kind '%s'." other)
 
-  let private parseResolution resolutionKind resolutionTool =
+  let parseResolution resolutionKind resolutionTool =
     match resolutionKind, resolutionTool with
     | Some "SolvedWithRetry", _ -> Ok ResolutionKind.SolvedWithRetry
     | Some "SolvedWithDifferentTool", Some tool -> ToolName.create tool |> Result.map ResolutionKind.SolvedWithDifferentTool
@@ -118,7 +118,7 @@ module private Codec =
     | None, _ -> Error "Missing resolution kind."
     | Some other, _ -> Error (sprintf "Unknown resolution kind '%s'." other)
 
-  let private parseOutcome outcomeKind blockerKind resolutionKind resolutionTool =
+  let parseOutcome outcomeKind blockerKind resolutionKind resolutionTool =
     match outcomeKind with
     | "CompletedCleanly" -> Ok FrictionOutcome.CompletedCleanly
     | "EncounteredBlocker" ->
@@ -130,7 +130,7 @@ module private Codec =
     | "AbandonedWithoutResolution" -> Ok FrictionOutcome.AbandonedWithoutResolution
     | other -> Error (sprintf "Unknown outcome kind '%s'." other)
 
-  let private parseFollowUp followUpKind followUpTool =
+  let parseFollowUp followUpKind followUpTool =
     match followUpKind with
     | "NoFollowUpYet" -> Ok FollowUp.NoFollowUpYet
     | "FollowedByTool" ->
@@ -140,13 +140,13 @@ module private Codec =
     | "SessionEnded" -> Ok FollowUp.SessionEnded
     | other -> Error (sprintf "Unknown follow-up kind '%s'." other)
 
-  let private parseContextCost = function
+  let parseContextCost = function
     | "Tiny" -> Ok ContextCost.Tiny
     | "Focused" -> Ok ContextCost.Focused
     | "Heavy" -> Ok ContextCost.Heavy
     | other -> Error (sprintf "Unknown context cost '%s'." other)
 
-  let private parseFeedbackKind = function
+  let parseFeedbackKind = function
     | "ToolOutputWasTooLarge" -> Ok ExplicitFeedbackKind.ToolOutputWasTooLarge
     | "ToolIntentWasUnclear" -> Ok ExplicitFeedbackKind.ToolIntentWasUnclear
     | "ToolNameWasMisleading" -> Ok ExplicitFeedbackKind.ToolNameWasMisleading
@@ -154,7 +154,7 @@ module private Codec =
     | "ResultDidNotEstablishTrust" -> Ok ExplicitFeedbackKind.ResultDidNotEstablishTrust
     | other -> Error (sprintf "Unknown explicit feedback kind '%s'." other)
 
-  let private parseAlternative kind toolName =
+  let parseAlternative kind toolName =
     match kind with
     | "NoAlternativeRecorded" -> Ok AlternativePath.NoAlternativeRecorded
     | "ResolvedWithTool" ->
@@ -164,7 +164,7 @@ module private Codec =
     | "ResolvedOutsideMcp" -> Ok AlternativePath.ResolvedOutsideMcp
     | other -> Error (sprintf "Unknown alternative kind '%s'." other)
 
-  let private encodeEvent (event: FrictionEvent) : StoredEvent =
+  let encodeEvent (event: FrictionEvent) : StoredEvent =
     let outcomeKind, blockerKind, resolutionKind, resolutionTool = outcomeParts event.Outcome
     let followUpKind, followUpTool = followUpParts event.FollowUp
     { OccurredAtUtc = event.OccurredAtUtc
@@ -180,7 +180,7 @@ module private Codec =
       FollowUpToolName = followUpTool
       ContextCostKind = contextCostText event.ContextCost }
 
-  let private decodeEvent (event: StoredEvent) : Result<FrictionEvent, string> =
+  let decodeEvent (event: StoredEvent) : Result<FrictionEvent, string> =
     match SessionRef.create event.SessionId with
     | Error err -> Error err
     | Ok session ->
@@ -212,7 +212,7 @@ module private Codec =
                       FollowUp = followUp
                       ContextCost = contextCost }
 
-  let private encodeFeedback (feedback: ExplicitFeedback) : StoredFeedback =
+  let encodeFeedback (feedback: ExplicitFeedback) : StoredFeedback =
     let alternativeKind, alternativeTool = alternativeParts feedback.AlternativeUsed
     { OccurredAtUtc = feedback.OccurredAtUtc
       SessionId = SessionRef.value feedback.Session
@@ -222,7 +222,7 @@ module private Codec =
       AlternativeKind = alternativeKind
       AlternativeToolName = alternativeTool }
 
-  let private decodeFeedback (feedback: StoredFeedback) : Result<ExplicitFeedback, string> =
+  let decodeFeedback (feedback: StoredFeedback) : Result<ExplicitFeedback, string> =
     match SessionRef.create feedback.SessionId with
     | Error err -> Error err
     | Ok session ->
@@ -266,7 +266,7 @@ module private Codec =
 
 module Recorder =
   [<Literal>]
-  let private StoreKey = "mcp-friction"
+  let StoreKey = "mcp-friction"
 
   let appendEvent (persistence: EventPersistence) (event: FrictionEvent) =
     task {
