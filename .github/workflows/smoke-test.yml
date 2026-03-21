@@ -176,3 +176,4 @@ jobs:
           name: smoke-diagnostics
           path: smoke-diagnostics\
           if-no-files-found: ignore
+          retention-days: 3

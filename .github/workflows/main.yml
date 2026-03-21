@@ -113,6 +113,7 @@ jobs:
         name: release-vscode-vsix
         path: sagefs-vscode-${{ steps.vscode-version.outputs.version }}.vsix
         if-no-files-found: error
+        retention-days: 1
 
   benchmarks:
     runs-on: ubuntu-latest
@@ -153,6 +154,7 @@ jobs:
       with:
         name: benchmark-results
         path: BenchmarkDotNet.Artifacts/results/
+        retention-days: 3
 
   vs-extension:
     runs-on: windows-latest
@@ -212,6 +214,7 @@ jobs:
         name: release-visualstudio-vsix
         path: sagefs-visualstudio-${{ steps.vs-version.outputs.version }}.vsix
         if-no-files-found: error
+        retention-days: 1
 
   release-artifacts:
     needs: [build, extensions, vs-extension, benchmarks]
@@ -299,3 +302,4 @@ jobs:
         name: release-assets
         path: release/*
         if-no-files-found: error
+        retention-days: 1

@@ -55,6 +55,7 @@ jobs:
       with:
         name: tree-sitter-fsharp-${{ matrix.rid }}
         path: runtimes/${{ matrix.rid }}/native/${{ matrix.lib }}
+        retention-days: 1
 
   # NOTE: Auto-commit is blocked by branch protection. After a successful run,
   # download artifacts with: gh run download <run-id> --dir native-artifacts
