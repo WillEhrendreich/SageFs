@@ -24,6 +24,7 @@ module McpSessionIsolation =
     sessionMap.["test"] <- sessionId
     let ctx =
       { Persistence = inMemoryPersistence ()
+        FrictionStore = None
         DiagnosticsChanged = result.DiagnosticsChanged
         StateChanged = None
         SessionOps = {
@@ -133,6 +134,7 @@ module McpSessionIsolation =
       sessionMap.["test"] <- "aaaaaa01"
       let ctx =
         { Persistence = SageFs.EventStore.EventPersistence.noop
+          FrictionStore = None
           DiagnosticsChanged = result.DiagnosticsChanged
           StateChanged = None
           SessionOps = {
@@ -283,7 +285,7 @@ module WorkingDirRoutingPriority =
       SetValue = fun _ _ -> Task.FromResult(Ok ())
       GetValue = fun _ -> Task.FromResult(None)
     }
-    { Persistence = stubPersistence; DiagnosticsChanged = Unchecked.defaultof<_>
+    { Persistence = stubPersistence; FrictionStore = None; DiagnosticsChanged = Unchecked.defaultof<_>
       StateChanged = None
       SessionOps =
         { CreateSession = fun _ _ _ -> Task.FromResult(Error(SageFsError.SessionCreationFailed "n/a"))
@@ -361,12 +363,15 @@ module WorkingDirRoutingPriority =
       resolved |> Expect.equal "single session should be used automatically" (Ok "5a6e0001")
       activeSessionId ctx "mcp" |> Expect.equal "single session should become cached" "5a6e0001"
     }
-    testTask "falls back to the only session when workingDirectory does not match" {
+    testTask "returns an explicit error when workingDirectory does not match any session" {
       let s1 = mkInfo (testSessionId "5a6e0001") @"C:\Code\Repos\SageFs"
       let ctx = mkCtx [s1] (Map.ofList ["5a6e0001",dummyProxy])
       let! resolved = resolveSessionId ctx "mcp" None (Some @"C:\Code\Repos\Other")
-      resolved |> Expect.equal "single session should still be used" (Ok "5a6e0001")
-      activeSessionId ctx "mcp" |> Expect.equal "single session should become cached" "5a6e0001"
+      match resolved with
+      | Ok sid -> failtestf "expected workingDirectory mismatch error, got session '%s'" sid
+      | Error msg ->
+        msg |> Expect.stringContains "should explain mismatch" "No sessions match workingDirectory"
+      activeSessionId ctx "mcp" |> Expect.equal "cached session should remain unchanged" ""
     }
     testTask "falls back to the session matching the daemon current directory" {
       let originalDir = Environment.CurrentDirectory
@@ -453,6 +458,7 @@ module ResetIsolation =
     }
     let ctx =
       { Persistence = SageFs.EventStore.EventPersistence.noop
+        FrictionStore = None
         DiagnosticsChanged = result.DiagnosticsChanged
         StateChanged = None
         SessionOps = ops
@@ -538,6 +544,7 @@ module ResetIsolation =
 
     let ctx =
       { Persistence = SageFs.EventStore.EventPersistence.noop
+        FrictionStore = None
         DiagnosticsChanged = result.DiagnosticsChanged
         StateChanged = None
         SessionOps = ops
@@ -613,6 +620,7 @@ module ResetIsolation =
 
     let ctx =
       { Persistence = SageFs.EventStore.EventPersistence.noop
+        FrictionStore = None
         DiagnosticsChanged = result.DiagnosticsChanged
         StateChanged = None
         SessionOps = ops
@@ -657,7 +665,7 @@ module ResetIsolation =
             do! allowRestartFinish.Task
             return Ok "restarted"
           }
-        GetProxy = fun _ -> Task.FromResult(None)
+        GetProxy = fun _ -> Task.FromResult(Some (fun _ -> async { return WorkerProtocol.WorkerResponse.WorkerReady }))
         GetSessionInfo = fun id ->
           Task.FromResult(
             Some { WorkerProtocol.SessionInfo.Id = id
@@ -681,6 +689,7 @@ module ResetIsolation =
 
       let ctx =
         { Persistence = inMemoryPersistence ()
+          FrictionStore = None
           DiagnosticsChanged = result.DiagnosticsChanged
           StateChanged = None
           SessionOps = ops

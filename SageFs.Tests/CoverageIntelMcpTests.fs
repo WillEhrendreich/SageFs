@@ -44,6 +44,7 @@ let private mkInstrumentationMap (slots: SequencePoint array) = {
 let private mkCtxWithModel (model: SageFsModel) : McpContext =
   let diagEvent = Event<Features.DiagnosticsStore.T>()
   { Persistence = EventStore.EventPersistence.noop
+    FrictionStore = None
     DiagnosticsChanged = diagEvent.Publish
     StateChanged = None
     SessionOps = SessionManagementOps.stub
@@ -53,7 +54,8 @@ let private mkCtxWithModel (model: SageFsModel) : McpContext =
     GetElmModel = Some (fun () -> model)
     GetElmRegions = None
     GetWarmupContext = None
-    GetFeatureState = None }
+    GetFeatureState = None
+    ActivityTracker = SageFs.AgentActivityTracker.create() }
 
 /// Build a SageFsModel with one discovered+failing test and a failure narrative.
 let private mkModelWithTest

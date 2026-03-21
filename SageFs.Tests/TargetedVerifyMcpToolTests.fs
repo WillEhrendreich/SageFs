@@ -43,6 +43,7 @@ let private mkFile path readiness =
 let private mkCtx (sessionInfo: SessionInfo) (sessionContext: SessionContext option) : McpContext =
   let diagEvent = Event<Features.DiagnosticsStore.T>()
   { Persistence = EventStore.EventPersistence.noop
+    FrictionStore = None
     DiagnosticsChanged = diagEvent.Publish
     StateChanged = None
     SessionOps =

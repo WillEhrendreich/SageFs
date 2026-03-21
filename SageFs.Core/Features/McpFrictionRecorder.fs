@@ -268,6 +268,55 @@ module Recorder =
   [<Literal>]
   let StoreKey = "mcp-friction"
 
+  // ── FrictionStore-backed operations (preferred, durable SQLite) ──
+
+  let appendEventDirect (store: FrictionSqlite.FrictionStore) (event: FrictionEvent) =
+    task {
+      return store.AppendEvent event
+    }
+
+  let appendFeedbackDirect (store: FrictionSqlite.FrictionStore) (feedback: ExplicitFeedback) =
+    task {
+      return store.AppendFeedback feedback
+    }
+
+  let readEnvelopeDirect (store: FrictionSqlite.FrictionStore) =
+    task {
+      let eventsResult = store.ReadEvents()
+      let feedbackResult = store.ReadFeedback()
+      return
+        match eventsResult, feedbackResult with
+        | Ok events, Ok feedback ->
+          Ok ({ Events = events; Feedback = feedback } : FrictionEnvelope)
+        | Error err, _ -> Error err
+        | _, Error err -> Error err
+    }
+
+  let summarizeDirect (store: FrictionSqlite.FrictionStore) =
+    task {
+      let! envelopeResult = readEnvelopeDirect store
+      return
+        match envelopeResult with
+        | Ok envelope ->
+          Ok (
+            [ yield sprintf "Top blockers: %d" (Summaries.topBlockers envelope.Events |> List.length)
+              yield sprintf "Tracked tools: %d" (Summaries.toolSummaries envelope.Events |> List.length)
+              yield sprintf "Explicit feedback items: %d" envelope.Feedback.Length ]
+            |> String.concat "\n")
+        | Error err -> Error (sprintf "Friction store read failed: %s" err)
+    }
+
+  let reportDirect (store: FrictionSqlite.FrictionStore) =
+    task {
+      let! envelopeResult = readEnvelopeDirect store
+      return
+        match envelopeResult with
+        | Ok envelope -> Ok (Summaries.frictionReport envelope.Events envelope.Feedback)
+        | Error err -> Error (sprintf "Friction store read failed: %s" err)
+    }
+
+  // ── EventPersistence KV-backed operations (fallback, noop-capable) ──
+
   let appendEvent (persistence: EventPersistence) (event: FrictionEvent) =
     task {
       let! existing = persistence.GetValue StoreKey

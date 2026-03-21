@@ -17,6 +17,7 @@ let private mkCtxWithState (state: LiveTestState) : McpContext =
     { initial with
         LiveTesting = { initial.LiveTesting with TestState = state } }
   { Persistence = EventStore.EventPersistence.noop
+    FrictionStore = None
     DiagnosticsChanged = diagEvent.Publish
     StateChanged = None
     SessionOps = SessionManagementOps.stub

@@ -31,7 +31,7 @@ let tests =
             do! allowRestartFinish.Task
             return Ok "restarted"
           }
-        GetProxy = fun _ -> Task.FromResult(None)
+        GetProxy = fun _ -> Task.FromResult(Some (fun _ -> async { return WorkerProtocol.WorkerResponse.WorkerReady }))
         GetSessionInfo = fun id ->
           Task.FromResult(
             Some { WorkerProtocol.SessionInfo.Id = id
@@ -53,6 +53,7 @@ let tests =
 
       let ctx : McpContext =
         { Persistence = inMemoryPersistence ()
+          FrictionStore = None
           DiagnosticsChanged = result.DiagnosticsChanged
           StateChanged = None
           SessionOps = ops

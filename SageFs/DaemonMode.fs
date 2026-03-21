@@ -106,6 +106,7 @@ type DaemonInfra = {
   LoggerFactory: ILoggerFactory
   HttpClient: Net.Http.HttpClient
   Persistence: SageFs.EventStore.EventPersistence
+  FrictionStore: SageFs.Features.FrictionSqlite.FrictionStore option
   DaemonStreamId: string
   Cts: CancellationTokenSource
   StateChangedEvent: Event<DaemonStateChange>
@@ -174,11 +175,33 @@ let createDaemonInfrastructure () : DaemonInfra =
 
   let persistence = SageFs.EventStore.EventPersistence.noop
 
+  // Create durable SQLite friction store at ~/.SageFs/friction.db
+  let frictionStore =
+    try
+      let dir = DaemonState.SageFsDir
+      match System.IO.Directory.Exists dir with
+      | false -> System.IO.Directory.CreateDirectory dir |> ignore
+      | true -> ()
+      let dbPath = System.IO.Path.Combine(dir, "friction.db")
+      let connStr = sprintf "Data Source=%s" dbPath
+      let store = SageFs.Features.FrictionSqlite.Store.create connStr
+      match store.Initialize() with
+      | Ok () ->
+        log.LogInformation("Friction store initialized at {Path}", dbPath)
+        Some store
+      | Error err ->
+        log.LogWarning("Friction store initialization failed: {Error}. Friction telemetry will not persist.", err)
+        None
+    with ex ->
+      log.LogWarning("Friction store creation failed: {Error}. Friction telemetry will not persist.", ex.Message)
+      None
+
   {
     Log = log
     LoggerFactory = loggerFactory
     HttpClient = httpClient
     Persistence = persistence
+    FrictionStore = frictionStore
     DaemonStreamId = "daemon-sessions"
     Cts = new CancellationTokenSource()
     StateChangedEvent = Event<DaemonStateChange>()
@@ -1326,6 +1349,7 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
   let log = infra.Log
   let httpClient = infra.HttpClient
   let persistence = infra.Persistence
+  let frictionStore = infra.FrictionStore
   let daemonStreamId = infra.DaemonStreamId
   let mcpFetchTimeoutSec = infra.McpFetchTimeoutSec
   let dashboardFetchTimeoutSec = infra.DashboardFetchTimeoutSec
@@ -1458,6 +1482,7 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
       DiagnosticsChanged = diagnosticsChanged.Publish
       StateChanged = Some stateChangedEvent.Publish
       Persistence = persistence
+      FrictionStore = frictionStore
       Port = mcpPort
       SessionOps = sessionOps
       ElmRuntime = Some elmRuntime

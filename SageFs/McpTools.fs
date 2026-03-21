@@ -41,7 +41,9 @@ let recordToolResult (ctx: McpContext) (toolName: string) (result: string) (elap
       Duration = SageFs.Features.FrictionTelemetryTypes.DurationMs.create elapsedMs |> ok
       FollowUp = SageFs.Features.FrictionTelemetryTypes.FollowUp.NoFollowUpYet
       ContextCost = SageFs.Features.FrictionTelemetryTypes.ContextCost.Focused }
-  SageFs.Features.McpFrictionRecorder.Recorder.appendEvent ctx.Persistence event
+  match ctx.FrictionStore with
+  | Some store -> SageFs.Features.McpFrictionRecorder.Recorder.appendEventDirect store event
+  | None -> SageFs.Features.McpFrictionRecorder.Recorder.appendEvent ctx.Persistence event
 
 let feedbackKindText = function
   | SageFs.Features.FrictionTelemetryTypes.ExplicitFeedbackKind.ToolOutputWasTooLarge -> "ToolOutputWasTooLarge"
@@ -794,7 +796,17 @@ OUTPUT:
 This reads only local friction intelligence. It does not phone home.""")>]
     member _.get_friction_summary() : Task<string> =
         logger.LogDebug("MCP-TOOL: get_friction_summary called")
-        SageFs.Features.McpFrictionRecorder.Recorder.summarize ctx.Persistence |> withEcho ctx "get_friction_summary"
+        match ctx.FrictionStore with
+        | Some store ->
+          task {
+            let! result = SageFs.Features.McpFrictionRecorder.Recorder.summarizeDirect store
+            return
+              match result with
+              | Ok summary -> summary
+              | Error err -> sprintf "Error: Friction store read failed: %s" err
+          } |> withEcho ctx "get_friction_summary"
+        | None ->
+          SageFs.Features.McpFrictionRecorder.Recorder.summarize ctx.Persistence |> withEcho ctx "get_friction_summary"
 
     [<McpServerTool>]
     [<Description("""Get a structured local MCP friction report that an agent can act on.
@@ -810,10 +822,20 @@ OUTPUT:
 This is a local read model over recorded friction, not a self-healing system.""")>]
     member _.get_friction_report() : Task<string> =
         logger.LogDebug("MCP-TOOL: get_friction_report called")
-        task {
-          let! report = SageFs.Features.McpFrictionRecorder.Recorder.report ctx.Persistence
-          return frictionReportJson report
-        } |> withEcho ctx "get_friction_report"
+        match ctx.FrictionStore with
+        | Some store ->
+          task {
+            let! result = SageFs.Features.McpFrictionRecorder.Recorder.reportDirect store
+            return
+              match result with
+              | Ok report -> frictionReportJson report
+              | Error err -> sprintf "Error: Friction store read failed: %s" err
+          } |> withEcho ctx "get_friction_report"
+        | None ->
+          task {
+            let! report = SageFs.Features.McpFrictionRecorder.Recorder.report ctx.Persistence
+            return frictionReportJson report
+          } |> withEcho ctx "get_friction_report"
 
     [<McpServerTool>]
     [<Description("""Report structured local MCP friction so SageFs can learn what is confusing.
@@ -858,8 +880,16 @@ This stores local feedback only.""")>]
             ShortReason = short_reason
             AlternativeUsed = alternative }
         task {
-          let! _ = SageFs.Features.McpFrictionRecorder.Recorder.appendFeedback ctx.Persistence feedback
-          return "Recorded local friction feedback."
+          match ctx.FrictionStore with
+          | Some store ->
+            let! result = SageFs.Features.McpFrictionRecorder.Recorder.appendFeedbackDirect store feedback
+            return
+              match result with
+              | Ok () -> "Recorded local friction feedback."
+              | Error err -> sprintf "Error: Failed to persist friction feedback: %s" err
+          | None ->
+            let! _ = SageFs.Features.McpFrictionRecorder.Recorder.appendFeedback ctx.Persistence feedback
+            return "Recorded local friction feedback."
         } |> withEcho ctx "report_friction"
 
     [<Description("""Explain why a test was selected to run. Shows the trigger reason, which changed symbols cover the test, duration from last run, and flaky status.

@@ -725,6 +725,9 @@ module McpTools =
 
   type McpContext = {
     Persistence: EventStore.EventPersistence
+    /// SQLite-backed friction store for durable telemetry persistence.
+    /// When Some, McpFrictionRecorder uses this directly instead of the EventPersistence KV fallback.
+    FrictionStore: Features.FrictionSqlite.FrictionStore option
     DiagnosticsChanged: IEvent<Features.DiagnosticsStore.T>
     /// Fires serialized JSON whenever the Elm model changes.
     StateChanged: IEvent<string> option
@@ -920,7 +923,7 @@ module McpTools =
                 setActiveSessionId ctx agent matchedId
                 return Ok matchedId
               | [] ->
-                return Ok (activeSessionId ctx agent)
+                return Error (sprintf "No sessions match workingDirectory '%s'. Use create_session with that directory, or switch_session to an existing matching session." wd)
               | matches ->
                 return Error (formatWorkingDirectoryAmbiguity "Multiple sessions match workingDirectory" wd matches)
             | _ ->
@@ -1412,6 +1415,7 @@ module McpTools =
         SageFsEvent.SessionStatusChanged (sid, SessionDisplayStatus.Restarting))
       match rebuild with
       | true ->
+        do! setSnapshotStatus ctx sid WorkerProtocol.SessionStatus.Restarting
         compilationStates.TryRemove(sid) |> ignore
         Features.EvalDedup.DedupCache.clearSession evalDedupCache sid
         notifyElm ctx (

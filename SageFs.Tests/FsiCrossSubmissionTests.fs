@@ -21,6 +21,7 @@ let private isolatedCtx (sessionId: SageFs.WorkerProtocol.SessionId) =
   let sessionMap = ConcurrentDictionary<string, string>()
   sessionMap.["test"] <- SageFs.WorkerProtocol.SessionId.value sessionId
   { Persistence = SageFs.EventStore.EventPersistence.noop
+    FrictionStore = None
     DiagnosticsChanged = result.DiagnosticsChanged
     StateChanged = None
     SessionOps = mkTestSessionOps result sessionId
