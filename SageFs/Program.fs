@@ -55,6 +55,11 @@ let parseMcpPort (args: string array) =
     | _ -> defaultPort
   | _ -> defaultPort
 
+let explicitDaemonInvocationUsesAlternatePort (args: string array) =
+  let requestedPort = parseMcpPort args
+  let defaultPort = SageFsConfig.McpPortFromEnv
+  requestedPort <> defaultPort
+
 
 /// CLI command parsed from arguments — replaces if/elif chain with pattern matching.
 type CliCommand =
@@ -416,9 +421,12 @@ let main args =
 
   | Daemon _ ->
     let mcpPort = parseMcpPort args
-    match decideDaemonLaunch DaemonState.readOnPort mcpPort with
-    | AttachToExistingDaemon info ->
+    let forceDedicatedDaemon = explicitDaemonInvocationUsesAlternatePort args
+    match forceDedicatedDaemon, decideDaemonLaunch DaemonState.readOnPort mcpPort with
+    | true, _ ->
+      runDaemon args
+    | false, AttachToExistingDaemon info ->
       printfn "SageFs daemon already running (PID %d, port %d). Launching TUI..." info.Pid info.Port
       SageTuiClient.run info
-    | StartNewDaemon ->
+    | false, StartNewDaemon ->
       runDaemon args
