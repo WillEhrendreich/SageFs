@@ -1142,18 +1142,57 @@ let mapExecutionRoutes (app: WebApplication) (rctx: RouteContext) =
     } :> Task
   ) |> ignore
 
+let fallbackSessionStatusLabel (status: SageFs.WorkerProtocol.SessionStatus) =
+  match status with
+  | SageFs.WorkerProtocol.SessionStatus.Starting -> "Starting"
+  | SageFs.WorkerProtocol.SessionStatus.Restarting -> "Restarting"
+  | SageFs.WorkerProtocol.SessionStatus.Faulted -> "Faulted"
+  | SageFs.WorkerProtocol.SessionStatus.Stopped -> "Stopped"
+  | _ -> "Disconnected"
+
+let resolveSessionStatusLabel
+  (sessionOps: SageFs.SessionManagementOps)
+  (routeName: string)
+  (session: SageFs.WorkerProtocol.SessionInfo) =
+  task {
+    let! proxy = sessionOps.GetProxy session.Id
+    match proxy with
+    | Some send ->
+      try
+        let! resp = send (SageFs.WorkerProtocol.WorkerMessage.GetStatus routeName) |> Async.StartAsTask
+        match resp with
+        | SageFs.WorkerProtocol.WorkerResponse.StatusResult(_, snap) ->
+          return SageFs.WorkerProtocol.SessionStatus.label snap.Status
+        | SageFs.WorkerProtocol.WorkerResponse.WorkerError _ ->
+          return fallbackSessionStatusLabel session.Status
+        | _ ->
+          return fallbackSessionStatusLabel session.Status
+      with
+      | :? System.Net.Http.HttpRequestException ->
+        return fallbackSessionStatusLabel session.Status
+      | :? System.Threading.Tasks.TaskCanceledException ->
+        return fallbackSessionStatusLabel session.Status
+      | _ ->
+        return fallbackSessionStatusLabel session.Status
+    | None ->
+      return fallbackSessionStatusLabel session.Status
+  }
+
 let mapHealthRoutes (app: WebApplication) (rctx: RouteContext) =
   app.MapGet("/health", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
     task {
       let! allSessions = rctx.Config.SessionOps.GetAllSessions()
       let toSessionHealthStatus = function
-        | SageFs.WorkerProtocol.SessionStatus.Ready -> SageFs.Features.SessionHealthStatus.Ready
-        | SageFs.WorkerProtocol.SessionStatus.Evaluating
-        | SageFs.WorkerProtocol.SessionStatus.Building _ -> SageFs.Features.SessionHealthStatus.Evaluating
-        | SageFs.WorkerProtocol.SessionStatus.Starting
-        | SageFs.WorkerProtocol.SessionStatus.Restarting -> SageFs.Features.SessionHealthStatus.WarmingUp
-        | SageFs.WorkerProtocol.SessionStatus.Faulted -> SageFs.Features.SessionHealthStatus.Faulted
-        | SageFs.WorkerProtocol.SessionStatus.Stopped -> SageFs.Features.SessionHealthStatus.Stopped
+        | "Ready" -> SageFs.Features.SessionHealthStatus.Ready
+        | "Evaluating" -> SageFs.Features.SessionHealthStatus.Evaluating
+        | status when status.StartsWith("Building") -> SageFs.Features.SessionHealthStatus.Evaluating
+        | "Starting"
+        | "Restarting"
+        | "Disconnected" -> SageFs.Features.SessionHealthStatus.WarmingUp
+        | "Faulted"
+        | "Error" -> SageFs.Features.SessionHealthStatus.Faulted
+        | "Stopped" -> SageFs.Features.SessionHealthStatus.Stopped
+        | _ -> SageFs.Features.SessionHealthStatus.WarmingUp
       let asm = System.Reflection.Assembly.GetExecutingAssembly()
       let version =
         asm.GetName().Version
@@ -1161,31 +1200,39 @@ let mapHealthRoutes (app: WebApplication) (rctx: RouteContext) =
         |> Option.map (fun v -> v.ToString())
         |> Option.defaultValue "unknown"
       let daemonProcess = System.Diagnostics.Process.GetCurrentProcess()
-      let sessionPairs =
+      let! sessionPairs =
         allSessions
         |> Seq.map (fun sess ->
-          let projectName =
-            sess.Projects
-            |> List.tryHead
-            |> Option.map System.IO.Path.GetFileName
-            |> Option.defaultValue (System.IO.Path.GetFileName sess.WorkingDirectory)
-          let lastActivity = System.DateTimeOffset(sess.LastActivity.ToUniversalTime())
-          let summary : SageFs.Features.SessionHealthSummary =
-            { SessionId = SageFs.WorkerProtocol.SessionId.value sess.Id
-              ProjectName = projectName
-              Status = toSessionHealthStatus sess.Status
-              EvalCount = 0
-              LastActivity = lastActivity }
-          let payload =
-            {| id = SageFs.WorkerProtocol.SessionId.value sess.Id
-               projectName = projectName
-               status = SageFs.WorkerProtocol.SessionStatus.label sess.Status
-               workingDirectory = sess.WorkingDirectory
-               workerPid = sess.WorkerPid
-               lastActivity = lastActivity
-               workflowLabel = SageFs.WorkflowTypes.SessionWorkflow.label sess.Workflow |}
-          summary, payload)
-        |> Seq.toArray
+          task {
+            let! proxy = rctx.Config.SessionOps.GetProxy sess.Id
+            let! statusLabel = task {
+              match proxy with
+              | Some _ -> return! resolveSessionStatusLabel rctx.Config.SessionOps "health" sess
+              | None -> return fallbackSessionStatusLabel sess.Status
+            }
+            let projectName =
+              sess.Projects
+              |> List.tryHead
+              |> Option.map System.IO.Path.GetFileName
+              |> Option.defaultValue (System.IO.Path.GetFileName sess.WorkingDirectory)
+            let lastActivity = System.DateTimeOffset(sess.LastActivity.ToUniversalTime())
+            let summary : SageFs.Features.SessionHealthSummary =
+              { SessionId = SageFs.WorkerProtocol.SessionId.value sess.Id
+                ProjectName = projectName
+                Status = toSessionHealthStatus statusLabel
+                EvalCount = 0
+                LastActivity = lastActivity }
+            let payload =
+              {| id = SageFs.WorkerProtocol.SessionId.value sess.Id
+                 projectName = projectName
+                 status = statusLabel
+                 workingDirectory = sess.WorkingDirectory
+                 workerPid = sess.WorkerPid
+                 lastActivity = lastActivity
+                 workflowLabel = SageFs.WorkflowTypes.SessionWorkflow.label sess.Workflow |}
+            return summary, payload
+          })
+        |> System.Threading.Tasks.Task.WhenAll
       let sessionSummaries = sessionPairs |> Array.map fst |> Array.toList
       let sessionStates = sessionPairs |> Array.map snd
       let healthSnapshot : SageFs.Features.HealthSnapshot =
@@ -1454,17 +1501,19 @@ let mapSessionRoutes (app: WebApplication) (rctx: RouteContext) =
               match resp with
               | SageFs.WorkerProtocol.WorkerResponse.StatusResult(_, snap) ->
                 return snap.EvalCount, float snap.AvgDurationMs, SageFs.WorkerProtocol.SessionStatus.label snap.Status
-              | _ -> return 0, 0.0, "Unknown"
+              | SageFs.WorkerProtocol.WorkerResponse.WorkerError _ ->
+                return 0, 0.0, fallbackSessionStatusLabel sess.Status
+              | _ -> return 0, 0.0, fallbackSessionStatusLabel sess.Status
             with
             | :? System.Net.Http.HttpRequestException as ex ->
               Log.error "[MCP] Session status HTTP error for %s: %s\n%s" (SageFs.WorkerProtocol.SessionId.value sess.Id) ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
-              return 0, 0.0, "Error"
+              return 0, 0.0, fallbackSessionStatusLabel sess.Status
             | :? System.Threading.Tasks.TaskCanceledException ->
-              return 0, 0.0, "Timeout"
+              return 0, 0.0, fallbackSessionStatusLabel sess.Status
             | ex ->
               Log.error "[MCP] Session status unexpected error for %s: %s (%s)\n%s" (SageFs.WorkerProtocol.SessionId.value sess.Id) ex.Message (ex.GetType().Name) (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
-              return 0, 0.0, "Error"
-          | None -> return 0, 0.0, "Disconnected"
+              return 0, 0.0, fallbackSessionStatusLabel sess.Status
+          | None -> return 0, 0.0, fallbackSessionStatusLabel sess.Status
         }
         results.Add(
           {| id = SageFs.WorkerProtocol.SessionId.value sess.Id

@@ -400,6 +400,31 @@ let integrationTests =
 
       root.GetProperty("status").GetString()
       |> Expect.equal "health status should reflect the strongest available session state" expected
+
+    testCase "GET /health uses the same live session status labels as /api/sessions" <| fun _ ->
+      let client = getSharedClient()
+      let healthStatus, healthBody = getJson client "/health" |> Async.AwaitTask |> Async.RunSynchronously
+      healthStatus |> Expect.equal "health 200" 200
+
+      let sessionsStatus, sessionsBody = getJson client "/api/sessions" |> Async.AwaitTask |> Async.RunSynchronously
+      sessionsStatus |> Expect.equal "sessions 200" 200
+
+      use healthDoc = JsonDocument.Parse(healthBody)
+      use sessionsDoc = JsonDocument.Parse(sessionsBody)
+      let healthRoot = healthDoc.RootElement
+      let healthById =
+        healthRoot.GetProperty("sessionStates").EnumerateArray()
+        |> Seq.map (fun session ->
+          session.GetProperty("id").GetString(),
+          session.GetProperty("status").GetString())
+        |> Map.ofSeq
+
+      sessionsDoc.RootElement.GetProperty("sessions").EnumerateArray()
+      |> Seq.iter (fun session ->
+        let id = session.GetProperty("id").GetString()
+        let sessionStatusLabel = session.GetProperty("status").GetString()
+        Map.find id healthById
+        |> Expect.equal (sprintf "health should mirror live status for session %s" id) sessionStatusLabel)
   
     testCase "GET /api/system/status returns supervised=false and version" <| fun _ ->
       let client = getSharedClient()
