@@ -221,6 +221,7 @@ module WorkerProtocol =
     CreatedAt: DateTime
     LastActivity: DateTime
     Status: SessionStatus
+    FaultReason: string option
     WorkerPid: int option
     Workflow: WorkflowTypes.SessionWorkflow
   }

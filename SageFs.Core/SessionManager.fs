@@ -238,6 +238,7 @@ module SessionManager =
     psi.UseShellExecute <- false
     psi.CreateNoWindow <- true
     psi.RedirectStandardOutput <- true
+    psi.RedirectStandardError <- true
 
     // Propagate OTel env vars so workers export to the same collector
     for (key, value) in Instrumentation.workerOtelEnvVars (SessionId.value sessionId) do
@@ -275,18 +276,33 @@ module SessionManager =
       cts.CancelAfter(SageFsConfig.WorkerStartupTimeoutMs)
       let linkedCt = cts.Token
       try
+        let stderrLines = System.Collections.Concurrent.ConcurrentQueue<string>()
+        let stderrTask =
+          System.Threading.Tasks.Task.Run(fun () ->
+            try
+              let mutable line = proc.StandardError.ReadLine()
+              while not (isNull line) do
+                stderrLines.Enqueue(line)
+                line <- proc.StandardError.ReadLine()
+            with _ -> ())
         let mutable found = None
         while Option.isNone found do
           let! line = proc.StandardOutput.ReadLineAsync(linkedCt).AsTask() |> Async.AwaitTask
           match isNull line with
           | true ->
             let workerPid = proc.Id
+            let stderrSummary =
+              stderrLines.ToArray()
+              |> Array.truncate 20
+              |> String.concat "\n"
             try proc.Dispose() with :? ObjectDisposedException -> ()
             inbox.Post(
               SessionCommand.WorkerSpawnFailed(
                 sessionId,
                 workerPid,
-                "Worker process exited before reporting port"))
+                match String.IsNullOrWhiteSpace stderrSummary with
+                | true -> "Worker process exited before reporting port"
+                | false -> sprintf "Worker process exited before reporting port. stderr:\n%s" stderrSummary))
             found <- Some ""
           | false ->
             match line.StartsWith("WARMUP_PROGRESS=", System.StringComparison.Ordinal) with
@@ -303,9 +319,14 @@ module SessionManager =
           let proxy = HttpWorkerClient.httpProxy baseUrl
           inbox.Post(SessionCommand.WorkerReady(sessionId, proc.Id, baseUrl, proxy))
         | _ -> ()
+        do! stderrTask |> Async.AwaitTask
       with
       | :? OperationCanceledException when not ct.IsCancellationRequested ->
         // Linked CTS fired: per-session startup timeout, NOT daemon shutdown.
+        let stderrSummary =
+          try
+            proc.StandardError.ReadToEnd()
+          with _ -> ""
         try proc.Kill() with ex2 ->
           Log.warn "[SessionManager] Kill on startup timeout: %s\n%s" ex2.Message (ex2.StackTrace |> Option.ofObj |> Option.defaultValue "")
         try proc.Dispose() with :? ObjectDisposedException -> ()
@@ -315,16 +336,27 @@ module SessionManager =
             proc.Id,
             sprintf
               "Worker startup timed out after %dms waiting for WORKER_PORT= \
-               (set SAGEFS_WORKER_STARTUP_TIMEOUT_MS to adjust)"
-              SageFsConfig.WorkerStartupTimeoutMs))
+               (set SAGEFS_WORKER_STARTUP_TIMEOUT_MS to adjust)%s"
+              SageFsConfig.WorkerStartupTimeoutMs
+              (match String.IsNullOrWhiteSpace stderrSummary with
+               | true -> ""
+               | false -> sprintf "\nstderr:\n%s" stderrSummary)))
       | ex ->
+        let stderrSummary =
+          try
+            proc.StandardError.ReadToEnd()
+          with _ -> ""
         try proc.Kill() with ex2 ->
           Log.warn "[SessionManager] Kill on spawn failure: %s\n%s" ex2.Message (ex2.StackTrace |> Option.ofObj |> Option.defaultValue "")
         try proc.Dispose() with :? ObjectDisposedException -> ()
         inbox.Post(
           SessionCommand.WorkerSpawnFailed(
             sessionId, proc.Id,
-            sprintf "Failed to connect to worker: %s" ex.Message))
+            sprintf "Failed to connect to worker: %s%s"
+              ex.Message
+              (match String.IsNullOrWhiteSpace stderrSummary with
+               | true -> ""
+               | false -> sprintf "\nstderr:\n%s" stderrSummary)))
     }, ct)
 
   /// Stop a worker gracefully: send Shutdown, wait, then kill.
@@ -494,13 +526,14 @@ module SessionManager =
     try standby.Process.Dispose() with :? ObjectDisposedException -> ()
   }
 
-  let private faultedTombstone (session: ManagedSession) =
+  let private faultedTombstone (reason: string option) (session: ManagedSession) =
     { session with
         Proxy = pendingProxy
         WorkerBaseUrl = ""
         Info =
           { session.Info with
               Status = SessionStatus.Faulted
+              FaultReason = reason
               WorkerPid = None
               LastActivity = DateTime.UtcNow } }
 
@@ -550,6 +583,7 @@ module SessionManager =
               CreatedAt = DateTime.UtcNow
               LastActivity = DateTime.UtcNow
               Status = SessionStatus.Starting
+              FaultReason = None
               WorkerPid = Some proc.Id
               Workflow = workflow
             }
@@ -623,6 +657,7 @@ module SessionManager =
                 CreatedAt = session.Info.CreatedAt
                 LastActivity = DateTime.UtcNow
                 Status = SessionStatus.Ready
+                FaultReason = None
                 WorkerPid = Some readyStandby.Process.Id
                 Workflow = session.Workflow
               }
@@ -673,7 +708,7 @@ module SessionManager =
                 | false -> async { return Ok "No rebuild requested" }
               match buildResult with
               | Error msg ->
-                let tombstone = faultedTombstone session
+                let tombstone = faultedTombstone (Some msg) session
                 let newState = ManagerState.addSession id tombstone stateAfterStop
                 reply.Reply(Error (SageFsError.HardResetFailed msg))
                 onSessionReady id
@@ -694,6 +729,7 @@ module SessionManager =
                     CreatedAt = session.Info.CreatedAt
                     LastActivity = DateTime.UtcNow
                     Status = SessionStatus.Starting
+                    FaultReason = None
                     WorkerPid = Some proc.Id
                     Workflow = session.Workflow
                   }
@@ -716,11 +752,12 @@ module SessionManager =
                   runtime.AwaitWorkerPort id proc inbox ct
                   return! loop newState
                 | Error err ->
-                  let tombstone = faultedTombstone session
+                  let reason = SageFsError.describe err
+                  let tombstone = faultedTombstone (Some reason) session
                   let newState = ManagerState.addSession id tombstone stateAfterStop
                   reply.Reply(Error err)
                   onSessionReady id
-                  onSessionFaulted id (SageFsError.describe err)
+                  onSessionFaulted id reason
                   Instrumentation.failSpan span (sprintf "%A" err)
                   return! loop newState
           | None ->
@@ -759,7 +796,7 @@ module SessionManager =
             | false ->
               let msg = describeInvalidReadyTransport "Worker" baseUrl proxy
               do! runtime.StopWorker session
-              let faulted = faultedTombstone session
+              let faulted = faultedTombstone (Some msg) session
               let newState =
                 { ManagerState.addSession id faulted state with
                     WarmupProgress = Map.remove id state.WarmupProgress }
@@ -842,7 +879,7 @@ module SessionManager =
           Log.warn "[SessionManager] Worker spawn failed for session %s: %s" (SessionId.value id) msg
           match ManagerState.tryGetSession id state with
           | Some session ->
-            let updated = faultedTombstone session
+            let updated = faultedTombstone (Some msg) session
             let newState = ManagerState.addSession id updated state
             onSessionReady id  // notify clients of Faulted state change
             onSessionFaulted id msg
@@ -894,10 +931,11 @@ module SessionManager =
               | true -> ()
               Instrumentation.activeSessions.Add(-1L)
               Instrumentation.succeedSpan span
-              let tombstone = faultedTombstone session
+              let reason = sprintf "Worker process exited with code %d (abandoned after max retries)" exitCode
+              let tombstone = faultedTombstone (Some reason) session
               let newState = ManagerState.addSession id tombstone state
               onSessionReady id
-              onSessionFaulted id (sprintf "Worker process exited with code %d (abandoned after max retries)" exitCode)
+              onSessionFaulted id reason
               return! loop newState
             | SessionLifecycle.ExitOutcome.RestartAfter(delay, newRestartState) ->
               match isNull span with
@@ -937,6 +975,7 @@ module SessionManager =
                     Info =
                       { session.Info with
                           Status = SessionStatus.Starting
+                          FaultReason = None
                           WorkerPid = Some proc.Id
                           LastActivity = DateTime.UtcNow } }
               let newState = ManagerState.addSession id restarted state
@@ -960,10 +999,11 @@ module SessionManager =
                 | false -> recoverySpan.SetTag("recovery.outcome", "abandoned") |> ignore
                 | true -> ()
                 Instrumentation.succeedSpan recoverySpan
-                let tombstone = faultedTombstone session
+                let reason = SageFsError.describe err
+                let tombstone = faultedTombstone (Some reason) session
                 let newState = ManagerState.addSession id tombstone state
                 onSessionReady id
-                onSessionFaulted id (SageFsError.describe err)
+                onSessionFaulted id reason
                 return! loop newState
               | SessionLifecycle.ExitOutcome.Graceful ->
                 match isNull recoverySpan with

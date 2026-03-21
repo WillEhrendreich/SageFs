@@ -1226,6 +1226,7 @@ let mapHealthRoutes (app: WebApplication) (rctx: RouteContext) =
               {| id = SageFs.WorkerProtocol.SessionId.value sess.Id
                  projectName = projectName
                  status = statusLabel
+                 faultReason = sess.FaultReason
                  workingDirectory = sess.WorkingDirectory
                  workerPid = sess.WorkerPid
                  lastActivity = lastActivity
@@ -1518,6 +1519,7 @@ let mapSessionRoutes (app: WebApplication) (rctx: RouteContext) =
         results.Add(
           {| id = SageFs.WorkerProtocol.SessionId.value sess.Id
              status = status
+             faultReason = sess.FaultReason
              projects = sess.Projects
              workingDirectory = sess.WorkingDirectory
              evalCount = evalCount
