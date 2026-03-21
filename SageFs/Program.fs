@@ -110,8 +110,9 @@ let waitForDaemonReady
 
 /// Start daemon in background, wait for it to be ready.
 let startDaemonInBackground (daemonArgs: string array) =
+  let exePath = System.Diagnostics.Process.GetCurrentProcess().MainModule.FileName
   let psi = System.Diagnostics.ProcessStartInfo()
-  psi.FileName <- "sagefs"
+  psi.FileName <- exePath
   psi.UseShellExecute <- false
   psi.CreateNoWindow <- true
   psi.ArgumentList.Add("-d")
