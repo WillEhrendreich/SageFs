@@ -1003,11 +1003,11 @@ let coverageSelectionTests = testList "Coverage-based test selection" [
           TestSessionMap = Map.ofList [ tid1, "s"; tid2, "s" ] }
     let instrMaps = Map.ofList [ "s", maps ]
     match TestCycleEffects.afterTypeCheck ["Module.add"] "Module.fs" RunTrigger.Keystroke graph state None instrMaps with
-    | [ TestCycleEffect.RequestRebuild (_, tests, _, _, _, _, _) ] ->
+    | [ TestCycleEffect.RunAffectedTests (tests, _, _, _, _, _) ] ->
       let ids = tests |> Array.map (fun t -> t.Id) |> Set.ofArray
       ids |> Set.contains tid1 |> Expect.isTrue "t1 from symbol heuristic"
       ids |> Set.contains tid2 |> Expect.isTrue "t2 from coverage bitmap"
-    | other -> failtestf "expected single RequestRebuild for .fs file, got %A" other
+    | other -> failtestf "expected single RunAffectedTests for keystroke on .fs file, got %A" other
   }
 ]
 

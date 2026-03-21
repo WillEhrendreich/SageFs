@@ -40,12 +40,12 @@ let tests =
           Map.empty
 
       match outcome.Decision, outcome.Effects with
-      | Some decision, [ TestCycleEffect.RequestRebuild (_, tests, _, _, _, _, _) ] ->
+      | Some decision, [ TestCycleEffect.RunAffectedTests (tests, _, _, _, _, _) ] ->
         decision.Explanation.Precision |> Expect.equal "pure graph selection should stay exact" SelectionPrecision.ExactDependencyMatch
         decision.Trust |> Expect.equal "exact decisions should keep exact trust" FreshnessTrust.FreshExact
         decision.Explanation.SelectedTests |> Expect.equal "the directly impacted test should stay visible" [| impacted.FullName |]
-        tests |> Array.map (fun tc -> tc.Id) |> Expect.equal "the rebuild request should target only the impacted test" [| impacted.Id |]
-      | other -> failtestf "expected exact decision plus rebuild effect, got %A" other
+        tests |> Array.map (fun tc -> tc.Id) |> Expect.equal "the run request should target only the impacted test" [| impacted.Id |]
+      | other -> failtestf "expected exact decision plus run-affected effect for keystroke, got %A" other
 
     testCase "when coverage widens the selection beyond the symbol graph, afterTypeCheck should say approximation out loud so extra reruns are explained instead of feeling random" <| fun _ ->
       let symbolTest = mkTest "Module.Tests.should_add" TestCategory.Unit

@@ -3129,6 +3129,12 @@ module DebounceChannel =
       | false, false ->
         None, ch
 
+  /// Cancel any pending operation by bumping the generation so tryFire will discard it.
+  let cancel (ch: DebounceChannel<'a>) =
+    match ch.Pending with
+    | None -> ch
+    | Some _ -> { ch with CurrentGeneration = ch.CurrentGeneration + 1L }
+
   let isStale (ch: DebounceChannel<'a>) =
     match ch.Pending with
     | Some op -> op.Generation < ch.CurrentGeneration
@@ -3692,7 +3698,8 @@ module LiveTestCycleState =
           match triviaOnlyChange with
           | true ->
               { s.Debounce with
-                  TreeSitter = s.Debounce.TreeSitter |> DebounceChannel.submit content TestCycleDebounce.treeSitterDelayMs now }
+                  TreeSitter = s.Debounce.TreeSitter |> DebounceChannel.submit content TestCycleDebounce.treeSitterDelayMs now
+                  Fcs = s.Debounce.Fcs |> DebounceChannel.cancel }
           | false ->
               s.Debounce |> TestCycleDebounce.onKeystroke content filePath fcsDelay now
         let analysisIdentity = AnalysisIdentity.ofContent content

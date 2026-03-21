@@ -447,15 +447,19 @@ let elmWiringBehavioralTests = testList "Elm Wiring Behavioral Scenarios" [
 
   test "trivia-only keystroke does not mark running tests stale" {
     let gen = RunGeneration.next RunGeneration.zero
+    let t0 = DateTimeOffset(2025, 1, 1, 0, 0, 0, TimeSpan.Zero)
+    // Establish baseline content so the first keystroke is an equivalent no-op
+    // and only the trivia-only second keystroke is under test.
     let state =
       { LiveTestCycleState.empty with
+          ActiveFile = Some "File.fs"
+          LatestContent = Some "let x = 1"
+          LastTrigger = RunTrigger.Keystroke
           TestState =
             { LiveTestState.empty with
                 RunPhases = Map.ofList [ "session", Running gen ] } }
-    let t0 = DateTimeOffset(2025, 1, 1, 0, 0, 0, TimeSpan.Zero)
-    let s1 = state |> LiveTestCycleState.onKeystroke "let x = 1" "File.fs" t0
-    let s2 = s1 |> LiveTestCycleState.onKeystroke "let  x = 1 // comment" "File.fs" (t0.AddMilliseconds(10.0))
-    s2.TestState.RunPhases |> Map.find "session"
+    let s1 = state |> LiveTestCycleState.onKeystroke "let  x = 1 // comment" "File.fs" t0
+    s1.TestState.RunPhases |> Map.find "session"
     |> Expect.equal "trivia-only edit should not stale an in-flight run" (Running gen)
   }
 

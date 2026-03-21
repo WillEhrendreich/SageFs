@@ -111,7 +111,14 @@ let formatTestSummaryEvent
 
 /// Format a TestResultsBatchPayload as an SSE event string
 let formatTestResultsBatchEvent (opts: JsonSerializerOptions) (sessionId: string option) (payload: Features.LiveTesting.TestResultsBatchPayload) : string =
-  let json = JsonSerializer.Serialize(payload, opts) |> injectSessionId sessionId
+  let wirePayload =
+    {| Generation = payload.Generation
+       Freshness = payload.Freshness
+       Completion = payload.Completion
+       Entries = payload.Entries
+       Summary = payload.Summary
+       LastDecision = payload.LastDecision |> Option.map Features.LiveTesting.LiveTestingDecision.toWireModel |}
+  let json = JsonSerializer.Serialize(wirePayload, opts) |> injectSessionId sessionId
   formatSseEvent "test_results_batch" json
 
 /// Format a FileAnnotations as an SSE event string

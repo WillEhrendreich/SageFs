@@ -22,5 +22,5 @@ KEY SIGNALS IN OUTPUT:
 - Session: the stable session ID shown at the start of the response.
 
 IMPORTANT:
-- A successful enable_live_testing call does NOT imply get_fsi_status should already be Ready. Live testing activation and worker readiness are separate.
-- If you need live-testing health, use get_test_trace or get_live_test_status instead.
+- This is the MCP-facing worker/session readiness tool.
+- Use this to decide whether explicit MCP actions like send_fsharp_code, run_tests, or targeted_verify are safe to route right now.
