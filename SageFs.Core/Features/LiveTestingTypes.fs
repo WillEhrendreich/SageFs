@@ -676,6 +676,111 @@ type TestSummary = {
   Enabled: bool
 }
 
+[<RequireQualifiedAccess>]
+type SelectionPrecision =
+  | ExactDependencyMatch
+  | CoverageApproximation
+  | ConservativeFallback
+  | NoImpactedTests
+  | SuppressedByPolicy
+
+[<RequireQualifiedAccess>]
+type FreshnessTrust =
+  | FreshExact
+  | FreshApproximate
+  | StaleAwaitingRerun
+  | Suppressed
+
+[<RequireQualifiedAccess>]
+type RerunCause =
+  | KeystrokeBuffered of filePath: string
+  | FileSaved of filePath: string
+  | ExplicitRunRequested of filePath: string
+
+type SelectionExplanation = {
+  Cause: RerunCause
+  Precision: SelectionPrecision
+  ChangedSymbols: string list
+  SelectedTests: string array
+  DeferredTests: string array
+  Reason: string
+}
+
+type LiveTestingDecision = {
+  Explanation: SelectionExplanation
+  Trust: FreshnessTrust
+}
+
+module LiveTestingDecision =
+  let precisionToWireValue = function
+    | SelectionPrecision.ExactDependencyMatch -> "exact_dependency_match"
+    | SelectionPrecision.CoverageApproximation -> "coverage_approximation"
+    | SelectionPrecision.ConservativeFallback -> "conservative_fallback"
+    | SelectionPrecision.NoImpactedTests -> "no_impacted_tests"
+    | SelectionPrecision.SuppressedByPolicy -> "suppressed_by_policy"
+
+  let trustToWireValue = function
+    | FreshnessTrust.FreshExact -> "fresh_exact"
+    | FreshnessTrust.FreshApproximate -> "fresh_approximate"
+    | FreshnessTrust.StaleAwaitingRerun -> "stale_awaiting_rerun"
+    | FreshnessTrust.Suppressed -> "suppressed"
+
+  let causeToWireValue = function
+    | RerunCause.KeystrokeBuffered _ -> "keystroke_buffered"
+    | RerunCause.FileSaved _ -> "file_saved"
+    | RerunCause.ExplicitRunRequested _ -> "explicit_run_requested"
+
+  let causeFilePath = function
+    | RerunCause.KeystrokeBuffered filePath
+    | RerunCause.FileSaved filePath
+    | RerunCause.ExplicitRunRequested filePath -> filePath
+
+  let trustFromPrecision = function
+    | SelectionPrecision.ExactDependencyMatch -> FreshnessTrust.FreshExact
+    | SelectionPrecision.CoverageApproximation
+    | SelectionPrecision.ConservativeFallback -> FreshnessTrust.FreshApproximate
+    | SelectionPrecision.NoImpactedTests -> FreshnessTrust.StaleAwaitingRerun
+    | SelectionPrecision.SuppressedByPolicy -> FreshnessTrust.Suppressed
+
+  let fromSelection
+    (cause: RerunCause)
+    (precision: SelectionPrecision)
+    (changedSymbols: string list)
+    (selectedTests: string array)
+    (deferredTests: string array)
+    (reason: string) =
+    { Explanation =
+        { Cause = cause
+          Precision = precision
+          ChangedSymbols = changedSymbols
+          SelectedTests = selectedTests
+          DeferredTests = deferredTests
+          Reason = reason }
+      Trust = trustFromPrecision precision }
+
+  let toWireModel (decision: LiveTestingDecision) =
+    {| Cause = causeToWireValue decision.Explanation.Cause
+       FilePath = causeFilePath decision.Explanation.Cause
+       Precision = precisionToWireValue decision.Explanation.Precision
+       Trust = trustToWireValue decision.Trust
+       ChangedSymbols = decision.Explanation.ChangedSymbols
+       SelectedTests = decision.Explanation.SelectedTests
+       DeferredTests = decision.Explanation.DeferredTests
+       Reason = decision.Explanation.Reason |}
+
+  let statusBarHint (decision: LiveTestingDecision) =
+    match decision.Explanation.Precision with
+    | SelectionPrecision.ExactDependencyMatch ->
+      sprintf "why: exact (%d selected)" decision.Explanation.SelectedTests.Length
+    | SelectionPrecision.CoverageApproximation ->
+      sprintf "why: coverage widened (%d selected)" decision.Explanation.SelectedTests.Length
+    | SelectionPrecision.ConservativeFallback ->
+      sprintf "why: fallback rebuild (%d selected)" decision.Explanation.SelectedTests.Length
+    | SelectionPrecision.SuppressedByPolicy ->
+      sprintf "why: deferred by policy (%d)" decision.Explanation.DeferredTests.Length
+    | SelectionPrecision.NoImpactedTests ->
+      "why: no impacted tests"
+
 // --- Run Generation & Phase (replaces IsRunning: bool) ---
 
 [<Struct>]
@@ -1159,6 +1264,7 @@ type LiveTestState = {
   LastDiscoveryTime: System.DateTimeOffset
   /// Sessions currently running an explicit discovery request triggered by live-testing enablement.
   PendingDiscoverySessions: Set<string>
+  LastDecision: LiveTestingDecision option
 }
 
 [<RequireQualifiedAccess>]
@@ -1231,6 +1337,7 @@ module LiveTestState =
     FailureNarratives = Map.empty
     LastDiscoveryTime = System.DateTimeOffset.MinValue
     PendingDiscoverySessions = Set.empty
+    LastDecision = None
   }
 
   let buildStatusEntrySlots (entries: TestStatusEntry array) : Map<TestId, int> =
@@ -1719,6 +1826,7 @@ type TestResultsBatchPayload = {
   Completion: BatchCompletion
   Entries: TestStatusEntry array
   Summary: TestSummary
+  LastDecision: LiveTestingDecision option
 }
 
 module TestResultsBatchPayload =
@@ -1728,6 +1836,7 @@ module TestResultsBatchPayload =
     (completion: BatchCompletion)
     (activation: LiveTestingActivation)
     (entries: TestStatusEntry array)
+    (lastDecision: LiveTestingDecision option)
     : TestResultsBatchPayload =
     let summary =
       entries
@@ -1737,7 +1846,8 @@ module TestResultsBatchPayload =
       Freshness = freshness
       Completion = completion
       Entries = entries
-      Summary = summary }
+      Summary = summary
+      LastDecision = lastDecision }
 
   /// Derive completion from requested vs returned counts and freshness.
   let deriveCompletion (freshness: ResultFreshness) (requested: int) (returned: int) : BatchCompletion =
@@ -2746,6 +2856,7 @@ type TestCycleDecision =
   | Skip of reason: string
   | TreeSitterOnly
   | FullCycle of affectedTestIds: TestId array
+  | Explained of decision: LiveTestingDecision
 
 /// Context for test prioritization including coverage weights and flaky classifications.
 type PrioritizationContext = {
@@ -2818,10 +2929,17 @@ module TestPrioritization =
     prioritizeWithContext (PrioritizationContext.fromLastResults lastResults) tests
 
 module TestCycleOrchestrator =
+  let causeFromTrigger filePath trigger =
+    match trigger with
+    | RunTrigger.Keystroke -> RerunCause.KeystrokeBuffered filePath
+    | RunTrigger.FileSave -> RerunCause.FileSaved filePath
+    | RunTrigger.ExplicitRun -> RerunCause.ExplicitRunRequested filePath
+
   let decide
     (state: LiveTestState)
     (trigger: RunTrigger)
     (changedSymbols: string list)
+    (changedFilePath: string)
     (depGraph: TestDependencyGraph)
     : TestCycleDecision =
     match state.Activation = LiveTestingActivation.Inactive,
@@ -2841,9 +2959,37 @@ module TestCycleOrchestrator =
         |> Array.filter (fun tc -> affectedSet.Contains tc.Id)
         |> LiveTesting.filterByPolicy state.RunPolicies trigger
       match Array.isEmpty filtered with
-      | true -> TestCycleDecision.TreeSitterOnly
+      | true when Array.isEmpty affected ->
+        TestCycleDecision.Explained (
+          LiveTestingDecision.fromSelection
+            (causeFromTrigger changedFilePath trigger)
+            SelectionPrecision.NoImpactedTests
+            changedSymbols
+            [||]
+            [||]
+            "No semantically affected tests were identified for this change.")
+      | true ->
+        let deferred =
+          state.DiscoveredTests
+          |> Array.filter (fun tc -> affectedSet.Contains tc.Id)
+          |> Array.map (fun tc -> tc.FullName)
+        TestCycleDecision.Explained (
+          LiveTestingDecision.fromSelection
+            (causeFromTrigger changedFilePath trigger)
+            SelectionPrecision.SuppressedByPolicy
+            changedSymbols
+            [||]
+            deferred
+            "Affected tests were intentionally deferred by the current run policy.")
       | false ->
-        TestCycleDecision.FullCycle (filtered |> Array.map (fun tc -> tc.Id))
+        TestCycleDecision.Explained (
+          LiveTestingDecision.fromSelection
+            (causeFromTrigger changedFilePath trigger)
+            SelectionPrecision.ExactDependencyMatch
+            changedSymbols
+            (filtered |> Array.map (fun tc -> tc.FullName))
+            [||]
+            "Changed symbols mapped directly to impacted tests in the dependency graph.")
 
   let buildRunBatch
     (state: LiveTestState)
@@ -2942,6 +3088,11 @@ type TestCycleEffect =
   | RegisterFileWatcher of sessionId: string * directory: string
   | DisposeFileWatcher of sessionId: string * directory: string
 
+type AfterTypeCheckOutcome = {
+  Decision: LiveTestingDecision option
+  Effects: TestCycleEffect list
+}
+
 module TestCycleEffects =
   let fromTick
     (tsPayload: string option)
@@ -2960,7 +3111,7 @@ module TestCycleEffects =
         TestCycleEffect.RequestFcsTypeCheck(None, fp, latestContent, latestAnalysisIdentity, tsElapsed)
       | None -> () ]
 
-  let afterTypeCheck
+  let decideAfterTypeCheck
     (changedSymbols: string list)
     (changedFilePath: string)
     (trigger: RunTrigger)
@@ -2968,10 +3119,11 @@ module TestCycleEffects =
     (state: LiveTestState)
     (lastTiming: TestCycleTiming option)
     (instrumentationMaps: Map<string, InstrumentationMap array>)
-    : TestCycleEffect list =
+    : AfterTypeCheckOutcome =
     match state.Activation = LiveTestingActivation.Inactive with
-    | true -> []
+    | true -> { Decision = None; Effects = [] }
     | false ->
+      let cause = TestCycleOrchestrator.causeFromTrigger changedFilePath trigger
       let symbolAffected = TestDependencyGraph.findAffected changedSymbols depGraph
       // Compute coverage-affected across all sessions' maps
       let hasMaps = not (Map.isEmpty instrumentationMaps)
@@ -2984,6 +3136,7 @@ module TestCycleEffects =
           |> Array.collect (fun (_, maps) ->
             CoverageBitmap.findCoverageAffected changedFilePath maps state.TestCoverageBitmaps)
         | false -> [||]
+      let symbolAffectedSet = Set.ofArray symbolAffected
       let affected =
         Array.append symbolAffected coverageAffected |> Array.distinct
       // For compiled projects, when dep graph/coverage can't identify specific
@@ -3005,12 +3158,48 @@ module TestCycleEffects =
       let isSaveOrExplicit =
         trigger = RunTrigger.FileSave || trigger = RunTrigger.ExplicitRun
       let symbolsChanged = not (List.isEmpty changedSymbols)
-      let effectiveAffected =
-        match Array.isEmpty affected && isCompiledFile && (symbolsChanged || (isSaveOrExplicit && isEmptyDepGraph)) with
-        | true -> state.DiscoveredTests |> Array.map (fun tc -> tc.Id)
-        | false -> affected
+      let shouldFallback =
+        Array.isEmpty affected && isCompiledFile && (symbolsChanged || (isSaveOrExplicit && isEmptyDepGraph))
+      let effectiveAffected,
+          precision,
+          reason =
+        match shouldFallback with
+        | true ->
+          state.DiscoveredTests |> Array.map (fun tc -> tc.Id),
+          SelectionPrecision.ConservativeFallback,
+          "The dependency graph could not narrow this compiled-file change, so SageFs conservatively queued all discovered tests behind a rebuild."
+        | false when Array.isEmpty affected ->
+          [||],
+          SelectionPrecision.NoImpactedTests,
+          "No semantically affected tests were identified for this change."
+        | false when Array.isEmpty coverageAffected ->
+          affected,
+          SelectionPrecision.ExactDependencyMatch,
+          "Changed symbols mapped directly to impacted tests in the dependency graph."
+        | false when Array.forall (fun testId -> Set.contains testId symbolAffectedSet) coverageAffected ->
+          affected,
+          SelectionPrecision.ExactDependencyMatch,
+          "Changed symbols mapped directly to impacted tests in the dependency graph."
+        | false when Array.isEmpty symbolAffected ->
+          affected,
+          SelectionPrecision.CoverageApproximation,
+          "Coverage evidence widened the impacted set because the symbol graph alone could not explain this file change."
+        | false ->
+          affected,
+          SelectionPrecision.CoverageApproximation,
+          "Changed symbols found impacted tests and coverage evidence conservatively widened that set."
       match Array.isEmpty effectiveAffected with
-      | true -> []
+      | true ->
+        { Decision =
+            Some (
+              LiveTestingDecision.fromSelection
+                cause
+                precision
+                changedSymbols
+                [||]
+                [||]
+                reason)
+          Effects = [] }
       | false ->
         let affectedSet = Set.ofArray effectiveAffected
         let affectedTests =
@@ -3036,33 +3225,73 @@ module TestCycleEffects =
           }
           PolicyFilter.filterTests state.RunPolicies trigger affectedTests
           |> TestPrioritization.prioritizeWithContext ctx
+        let deferred =
+          let selectedSet = filtered |> Array.map (fun tc -> tc.Id) |> Set.ofArray
+          affectedTests
+          |> Array.filter (fun tc -> not (Set.contains tc.Id selectedSet))
+          |> Array.map (fun tc -> tc.FullName)
+        let decision =
+          match Array.isEmpty filtered with
+          | true ->
+            LiveTestingDecision.fromSelection
+              cause
+              SelectionPrecision.SuppressedByPolicy
+              changedSymbols
+              [||]
+              deferred
+              "Affected tests were intentionally deferred by the current run policy, so ambient live testing stayed quiet on purpose."
+          | false ->
+            LiveTestingDecision.fromSelection
+              cause
+              precision
+              changedSymbols
+              (filtered |> Array.map (fun tc -> tc.FullName))
+              deferred
+              reason
         match Array.isEmpty filtered with
-        | true -> []
+        | true ->
+          { Decision = Some decision
+            Effects = [] }
         | false ->
           let tsElapsed = TestCycleTiming.accumulatedTsElapsed lastTiming
           let fcsElapsed = TestCycleTiming.accumulatedFcsElapsed lastTiming
           // Group affected tests by session, emit one effect per session
-          filtered
-          |> Array.groupBy (fun tc ->
-            match Map.tryFind tc.Id state.TestSessionMap with
-            | Some sid -> sid
-            | None -> "")
-          |> Array.toList
-          |> List.choose (fun (sid, groupTests) ->
-            let targetSession = if System.String.IsNullOrEmpty sid then None else Some sid
-            match TestRunPhase.isSessionRunning targetSession state.RunPhases with
-            | true -> None
-            | false ->
-              let sessionMaps =
-                match targetSession |> Option.bind (fun s -> Map.tryFind s instrumentationMaps) with
-                | Some maps -> maps
-                | None -> instrumentationMaps |> Map.values |> Seq.collect id |> Array.ofSeq
-              let isCompiled =
-                changedFilePath.EndsWith(".fs", System.StringComparison.OrdinalIgnoreCase)
-                && not (changedFilePath.EndsWith(".fsx", System.StringComparison.OrdinalIgnoreCase))
-              match isCompiled with
-              | true -> Some (TestCycleEffect.RequestRebuild(0L, groupTests, trigger, tsElapsed, fcsElapsed, targetSession, sessionMaps))
-              | false -> Some (TestCycleEffect.RunAffectedTests(groupTests, trigger, tsElapsed, fcsElapsed, targetSession, sessionMaps)))
+          let effects =
+            filtered
+            |> Array.groupBy (fun tc ->
+              match Map.tryFind tc.Id state.TestSessionMap with
+              | Some sid -> sid
+              | None -> "")
+            |> Array.toList
+            |> List.choose (fun (sid, groupTests) ->
+              let targetSession = if System.String.IsNullOrEmpty sid then None else Some sid
+              match TestRunPhase.isSessionRunning targetSession state.RunPhases with
+              | true -> None
+              | false ->
+                let sessionMaps =
+                  match targetSession |> Option.bind (fun s -> Map.tryFind s instrumentationMaps) with
+                  | Some maps -> maps
+                  | None -> instrumentationMaps |> Map.values |> Seq.collect id |> Array.ofSeq
+                let isCompiled =
+                  changedFilePath.EndsWith(".fs", System.StringComparison.OrdinalIgnoreCase)
+                  && not (changedFilePath.EndsWith(".fsx", System.StringComparison.OrdinalIgnoreCase))
+                match isCompiled with
+                | true -> Some (TestCycleEffect.RequestRebuild(0L, groupTests, trigger, tsElapsed, fcsElapsed, targetSession, sessionMaps))
+                | false -> Some (TestCycleEffect.RunAffectedTests(groupTests, trigger, tsElapsed, fcsElapsed, targetSession, sessionMaps)))
+          { Decision = Some decision
+            Effects = effects }
+
+  let afterTypeCheck
+    (changedSymbols: string list)
+    (changedFilePath: string)
+    (trigger: RunTrigger)
+    (depGraph: TestDependencyGraph)
+    (state: LiveTestState)
+    (lastTiming: TestCycleTiming option)
+    (instrumentationMaps: Map<string, InstrumentationMap array>)
+    : TestCycleEffect list =
+    decideAfterTypeCheck changedSymbols changedFilePath trigger depGraph state lastTiming instrumentationMaps
+    |> fun outcome -> outcome.Effects
 
   let fallbackRebuildAfterFailedTypeCheck
     (filePath: string)
@@ -3341,7 +3570,11 @@ module LiveTestCycleState =
     let entries = LiveTestState.statusEntriesForSession activeSessionId state.TestState
     let statuses = entries |> Array.map (fun e -> e.Status)
     let summary = TestSummary.fromStatuses state.TestState.Activation statuses |> TestSummary.toStatusBar
-    [ rebuilding; timing; summary ]
+    let explanation =
+      state.TestState.LastDecision
+      |> Option.map LiveTestingDecision.statusBarHint
+      |> Option.defaultValue ""
+    [ rebuilding; timing; summary; explanation ]
     |> List.filter (fun segment ->
       not (System.String.IsNullOrWhiteSpace segment) && segment <> "Tests: none")
     |> String.concat " | "
@@ -3603,9 +3836,17 @@ module LiveTestCycleState =
     | FcsTypeCheckResult.Success (filePath, refs) ->
       let s1 = onFcsComplete filePath refs s
       let trigger = s.LastTrigger
-      let effects = TestCycleEffects.afterTypeCheck s1.ChangedSymbols filePath trigger s1.DepGraph s1.TestState s1.LastTiming s1.InstrumentationMaps
-      let queuedEffects =
-        TestCycleEffects.afterTypeCheck
+      let outcome =
+        TestCycleEffects.decideAfterTypeCheck
+          s1.ChangedSymbols
+          filePath
+          trigger
+          s1.DepGraph
+          s1.TestState
+          s1.LastTiming
+          s1.InstrumentationMaps
+      let queuedOutcome =
+        TestCycleEffects.decideAfterTypeCheck
           s1.ChangedSymbols
           filePath
           trigger
@@ -3613,8 +3854,9 @@ module LiveTestCycleState =
           { s1.TestState with RunPhases = Map.empty }
           s1.LastTiming
           s1.InstrumentationMaps
-      let effects', s2 = storePendingRebuild filePath s1.LatestAnalysisIdentity effects s1
-      effects', storeQueuedRebuild filePath s1.LatestAnalysisIdentity queuedEffects s2
+      let s1' = { s1 with TestState = { s1.TestState with LastDecision = outcome.Decision } }
+      let effects', s2 = storePendingRebuild filePath s1'.LatestAnalysisIdentity outcome.Effects s1'
+      effects', storeQueuedRebuild filePath s1'.LatestAnalysisIdentity queuedOutcome.Effects s2
     | FcsTypeCheckResult.Failed (filePath, _errors) ->
       let effects =
         TestCycleEffects.fallbackRebuildAfterFailedTypeCheck

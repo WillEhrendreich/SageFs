@@ -48,6 +48,58 @@ let parseTestId (testIdObj: obj) : string =
     |> Option.map string
     |> Option.defaultValue "")
 
+let parseSelectionPrecision (value: string) =
+  match value with
+  | "exact_dependency_match" -> Some VscSelectionPrecision.ExactDependencyMatch
+  | "coverage_approximation" -> Some VscSelectionPrecision.CoverageApproximation
+  | "conservative_fallback" -> Some VscSelectionPrecision.ConservativeFallback
+  | "no_impacted_tests" -> Some VscSelectionPrecision.NoImpactedTests
+  | "suppressed_by_policy" -> Some VscSelectionPrecision.SuppressedByPolicy
+  | _ -> None
+
+let parseFreshnessTrust (value: string) =
+  match value with
+  | "fresh_exact" -> Some VscFreshnessTrust.FreshExact
+  | "fresh_approximate" -> Some VscFreshnessTrust.FreshApproximate
+  | "stale_awaiting_rerun" -> Some VscFreshnessTrust.StaleAwaitingRerun
+  | "suppressed" -> Some VscFreshnessTrust.Suppressed
+  | _ -> None
+
+let parseRerunCause (value: string) =
+  match value with
+  | "keystroke_buffered" -> Some VscRerunCause.KeystrokeBuffered
+  | "file_saved" -> Some VscRerunCause.FileSaved
+  | "explicit_run_requested" -> Some VscRerunCause.ExplicitRunRequested
+  | _ -> None
+
+let parseStringArrayField (fieldName: string) (data: obj) =
+  fieldArray fieldName data
+  |> Option.defaultValue [||]
+  |> Array.choose tryCastString
+
+let parseLastDecision (data: obj) : VscLiveTestingDecision option =
+  let precision =
+    fieldString "Precision" data
+    |> Option.bind parseSelectionPrecision
+  let trust =
+    fieldString "Trust" data
+    |> Option.bind parseFreshnessTrust
+  let cause =
+    fieldString "Cause" data
+    |> Option.bind parseRerunCause
+  match precision, trust, cause with
+  | Some precision, Some trust, Some cause ->
+    Some {
+      Cause = cause
+      FilePath = fieldString "FilePath" data |> Option.defaultValue ""
+      Precision = precision
+      Trust = trust
+      ChangedSymbols = parseStringArrayField "ChangedSymbols" data
+      SelectedTests = parseStringArrayField "SelectedTests" data
+      DeferredTests = parseStringArrayField "DeferredTests" data
+      Reason = fieldString "Reason" data |> Option.defaultValue "" }
+  | _ -> None
+
 /// Map server TestSummary JSON to VscTestSummary
 let parseSummary (data: obj) : VscTestSummary =
   { Total = fieldInt "Total" data |> Option.defaultValue 0
@@ -55,7 +107,8 @@ let parseSummary (data: obj) : VscTestSummary =
     Failed = fieldInt "Failed" data |> Option.defaultValue 0
     Running = fieldInt "Running" data |> Option.defaultValue 0
     Stale = fieldInt "Stale" data |> Option.defaultValue 0
-    Disabled = fieldInt "Disabled" data |> Option.defaultValue 0 }
+    Disabled = fieldInt "Disabled" data |> Option.defaultValue 0
+    LastDecision = fieldObj "LastDecision" data |> Option.bind parseLastDecision }
 
 /// Map a server TestStatusEntry to VscTestResult
 let parseTestResult (entry: obj) : VscTestResult =

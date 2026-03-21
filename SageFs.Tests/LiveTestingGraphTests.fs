@@ -1165,7 +1165,7 @@ let sseEnrichmentTests = testList "SSE enrichment round-trip" [
     let freshness = ResultFreshness.Fresh
     let batch =
       let completion = TestResultsBatchPayload.deriveCompletion freshness 1 entries.Length
-      TestResultsBatchPayload.create gen freshness completion merged.Activation entries
+      TestResultsBatchPayload.create gen freshness completion merged.Activation entries None
     batch.Generation |> Expect.equal "generation matches" gen
     batch.Freshness |> Expect.equal "fresh results" ResultFreshness.Fresh
     batch.Entries.Length |> Expect.equal "one entry" 1
@@ -1199,7 +1199,7 @@ let sseEnrichmentTests = testList "SSE enrichment round-trip" [
     let _newPhase, freshness = TestRunPhase.onResultsArrived gen editedPhase
     let batch =
       let completion = TestResultsBatchPayload.deriveCompletion freshness 1 entries.Length
-      TestResultsBatchPayload.create gen freshness completion merged.Activation entries
+      TestResultsBatchPayload.create gen freshness completion merged.Activation entries None
     batch.Freshness |> Expect.equal "stale code edited" ResultFreshness.StaleCodeEdited
   }
 ]
@@ -1318,7 +1318,13 @@ let fcsGraphTests = testList "FCS dependency graph builder" [
                     DiscoveredTests = [| addTestCase; otherTestCase |]
                     Activation = LiveTestingActivation.Active }
     let stateWithEntries = { state with StatusEntries = LiveTesting.computeStatusEntries state }
-    match TestCycleOrchestrator.decide stateWithEntries RunTrigger.Keystroke ["MyApp.Math.add"] graph with
+    match TestCycleOrchestrator.decide stateWithEntries RunTrigger.Keystroke ["MyApp.Math.add"] "test.fs" graph with
+    | TestCycleDecision.Explained explained ->
+      let testIds = explained.Explanation.SelectedTests
+      testIds.Length
+      |> Expect.equal "should only run addTest, not otherTest" 1
+      testIds.[0]
+      |> Expect.equal "should be addTest" addTestCase.FullName
     | TestCycleDecision.FullCycle testIds ->
       testIds.Length
       |> Expect.equal "should only run addTest, not otherTest" 1

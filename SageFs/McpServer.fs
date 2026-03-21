@@ -442,7 +442,7 @@ let replayCachedTestState (ctx: SseContext) (body: System.IO.Stream) =
       | true ->
         let s = TestSummary.fromStatuses
                   lt.Activation (sessionEntries |> Array.map (fun e -> e.Status))
-        do! SageFs.SseWriter.formatTestSummaryEvent ctx.SseJsonOpts (Some activeId) s
+        do! SageFs.SseWriter.formatTestSummaryEvent ctx.SseJsonOpts (Some activeId) s lt.LastDecision
             |> writeSseFrame body
         let freshness =
           match lt.RunPhases |> Map.exists (fun _ p -> match p with TestRunPhase.RunningButEdited _ -> true | _ -> false) with
@@ -453,7 +453,7 @@ let replayCachedTestState (ctx: SseContext) (body: System.IO.Stream) =
             TestResultsBatchPayload.deriveCompletion
               freshness lt.DiscoveredTests.Length sessionEntries.Length
           TestResultsBatchPayload.create
-            lt.LastGeneration freshness completion lt.Activation sessionEntries
+            lt.LastGeneration freshness completion lt.Activation sessionEntries lt.LastDecision
         do! SageFs.SseWriter.formatTestResultsBatchEvent ctx.SseJsonOpts (Some activeId) payload
             |> writeSseFrame body
         let files =
@@ -670,14 +670,14 @@ let wireModelChangeHandlers
         let s = SageFs.Features.LiveTesting.TestSummary.fromStatuses
                   lt.Activation (sessionEntries |> Array.map (fun e -> e.Status))
         ctx.ServerTracker.AccumulateEvent(
-          PushEvent.TestSummaryChanged s)
+          PushEvent.TestSummaryChanged (s, lt.LastDecision))
         let now = System.Diagnostics.Stopwatch.GetTimestamp()
         let isRunComplete = not (TestRunPhase.isAnyRunning lt.RunPhases)
         match shouldPushTestSummary now modelChangeState.Value.LastTestSsePushTicks modelChangeState.Value.TestSseThrottleMs isRunComplete with
         | true ->
           modelChangeState.Value <- { modelChangeState.Value with LastTestSsePushTicks = now }
           ctx.TestEventBroadcast.Trigger(
-            SageFs.SseWriter.formatTestSummaryEvent ctx.SseJsonOpts (Some activeId) s)
+            SageFs.SseWriter.formatTestSummaryEvent ctx.SseJsonOpts (Some activeId) s lt.LastDecision)
           let freshness =
             match lt.RunPhases |> Map.exists (fun _ p -> match p with SageFs.Features.LiveTesting.TestRunPhase.RunningButEdited _ -> true | _ -> false) with
             | true -> SageFs.Features.LiveTesting.ResultFreshness.StaleCodeEdited
@@ -689,7 +689,7 @@ let wireModelChangeHandlers
               SageFs.Features.LiveTesting.TestResultsBatchPayload.deriveCompletion
                 freshness sessionDiscoveredCount sessionEntries.Length
             SageFs.Features.LiveTesting.TestResultsBatchPayload.create
-              lt.LastGeneration freshness completion lt.Activation sessionEntries
+              lt.LastGeneration freshness completion lt.Activation sessionEntries lt.LastDecision
           ctx.ServerTracker.AccumulateEvent(
             PushEvent.TestResultsBatch payload)
           ctx.TestEventBroadcast.Trigger(
@@ -1154,31 +1154,6 @@ let mapHealthRoutes (app: WebApplication) (rctx: RouteContext) =
         | SageFs.WorkerProtocol.SessionStatus.Restarting -> SageFs.Features.SessionHealthStatus.WarmingUp
         | SageFs.WorkerProtocol.SessionStatus.Faulted -> SageFs.Features.SessionHealthStatus.Faulted
         | SageFs.WorkerProtocol.SessionStatus.Stopped -> SageFs.Features.SessionHealthStatus.Stopped
-      let! sessionResult = task {
-        match allSessions |> Seq.tryHead with
-        | None -> return Ok "no session"
-        | Some sess ->
-          let! proxy = rctx.Config.SessionOps.GetProxy sess.Id
-          match proxy with
-          | Some send ->
-            try
-              let! resp = send (SageFs.WorkerProtocol.WorkerMessage.GetStatus "health") |> Async.StartAsTask
-              match resp with
-              | SageFs.WorkerProtocol.WorkerResponse.StatusResult(_, snap) ->
-                return Ok (SageFs.WorkerProtocol.SessionStatus.label snap.Status)
-              | _ -> return Ok "unknown"
-            with
-            | :? OperationCanceledException -> return Ok "cancelled"
-            | ex ->
-              Log.debug "[MCP] health check error for session: %s" ex.Message
-              return Error (SageFs.SageFsError.WorkerCommunicationFailed(string sess.Id, ex.Message))
-          | None -> return Ok "starting"
-      }
-      let sessionStatus, errorJson =
-        match sessionResult with
-        | Ok status -> status, (null :> obj)
-        | Error err -> "error", (SageFs.SageFsError.toJson err :> obj)
-      let healthy = sessionStatus = "Ready" || sessionStatus = "Evaluating"
       let asm = System.Reflection.Assembly.GetExecutingAssembly()
       let version =
         asm.GetName().Version
@@ -1221,17 +1196,24 @@ let mapHealthRoutes (app: WebApplication) (rctx: RouteContext) =
           SessionSummaries = sessionSummaries
           LiveTestingSummary = None
           MemoryMB = int (daemonProcess.WorkingSet64 / 1024L / 1024L) }
+      let sessionStatus =
+        SageFs.Features.DaemonHealth.primarySessionStatusLabel healthSnapshot.SessionSummaries
+      let healthy =
+        match SageFs.Features.DaemonHealth.primarySessionStatus healthSnapshot.SessionSummaries with
+        | Some SageFs.Features.SessionHealthStatus.Ready
+        | Some SageFs.Features.SessionHealthStatus.Evaluating -> true
+        | _ -> false
       let diagnosticSummary = SageFs.Features.DaemonHealth.diagnosticSummary healthSnapshot
       do! jsonResponse ctx 200
-             {| healthy = healthy
-                status = sessionStatus
-                error = errorJson
-                version = version
-                apiVersion = SageFs.EndpointContracts.apiVersion
-                features = [ "live-testing"; "coverage-intel"; "impact-forecast"; "action-prioritizer"; "mark-all-stale"; "time-travel" ]
-                sessionCount = sessionStates.Length
-                sessionStates = sessionStates
-                diagnosticSummary = diagnosticSummary |}
+            {| healthy = healthy
+               status = sessionStatus
+               error = (null :> obj)
+               version = version
+               apiVersion = SageFs.EndpointContracts.apiVersion
+               features = [ "live-testing"; "coverage-intel"; "impact-forecast"; "action-prioritizer"; "mark-all-stale"; "time-travel" ]
+               sessionCount = sessionStates.Length
+               sessionStates = sessionStates
+               diagnosticSummary = diagnosticSummary |}
     } :> Task
   ) |> ignore
   app.MapGet("/diag/threadpool", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->

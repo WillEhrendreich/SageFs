@@ -1896,6 +1896,9 @@ module McpTools =
         resp["DiscoveryState"] <- box (Features.LiveTesting.LiveTestDiscoveryState.toWireValue discoveryState)
         resp["DiscoveryHint"] <- box (Features.LiveTesting.LiveTestState.discoveryHint state)
         resp["DiscoveryRequiresEval"] <- box discoveryRequiresEval
+        match state.LastDecision with
+        | Some decision -> resp["LastDecision"] <- box (Features.LiveTesting.LiveTestingDecision.toWireModel decision)
+        | None -> ()
         match state.LastDiscoveryTime > System.DateTimeOffset.MinValue with
         | true -> resp["LastDiscoveryTime"] <- box state.LastDiscoveryTime
         | false -> ()
@@ -2052,6 +2055,9 @@ module McpTools =
       let isActive = state.Activation = Features.LiveTesting.LiveTestingActivation.Active
       let discoveryState = Features.LiveTesting.LiveTestState.discoveryState state
       let discoveryRequiresEval = Features.LiveTesting.LiveTestState.requiresPrimingEval state
+      let lastDecision =
+        state.LastDecision
+        |> Option.map Features.LiveTesting.LiveTestingDecision.toWireModel
       let resp = {|
         Enabled = isActive
         IsRunning = Features.LiveTesting.TestRunPhase.isAnyRunning state.RunPhases
@@ -2064,6 +2070,7 @@ module McpTools =
           match state.LastDiscoveryTime > System.DateTimeOffset.MinValue with
           | true -> Some state.LastDiscoveryTime
           | false -> None
+        LastDecision = lastDecision
         Timing = timing |> Option.map Features.LiveTesting.TestCycleTiming.toStatusBar |> Option.defaultValue "no timing yet"
         Providers = state.DetectedProviders |> List.map (fun p ->
           match p with

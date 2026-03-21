@@ -135,7 +135,7 @@ let orchestratorTests = testList "TestCycleOrchestrator" [
 
   test "decide skips when disabled" {
     let state = { baseState with Activation = LiveTestingActivation.Inactive }
-    let d = TestCycleOrchestrator.decide state RunTrigger.Keystroke [ "Module.add" ] depGraph
+    let d = TestCycleOrchestrator.decide state RunTrigger.Keystroke [ "Module.add" ] "test.fs" depGraph
     match d with
     | TestCycleDecision.Skip _ -> ()
     | other -> failwithf "Expected Skip, got %A" other
@@ -144,7 +144,7 @@ let orchestratorTests = testList "TestCycleOrchestrator" [
   test "decide skips when already running" {
     let gen = RunGeneration.next RunGeneration.zero
     let state = { baseState with RunPhases = Map.ofList ["s", Running gen]; LastGeneration = gen }
-    let d = TestCycleOrchestrator.decide state RunTrigger.Keystroke [ "Module.add" ] depGraph
+    let d = TestCycleOrchestrator.decide state RunTrigger.Keystroke [ "Module.add" ] "test.fs" depGraph
     match d with
     | TestCycleDecision.Skip _ -> ()
     | other -> failwithf "Expected Skip, got %A" other
@@ -152,13 +152,16 @@ let orchestratorTests = testList "TestCycleOrchestrator" [
 
   test "decide returns TreeSitterOnly when no tests discovered" {
     let state = { baseState with DiscoveredTests = [||] }
-    let d = TestCycleOrchestrator.decide state RunTrigger.Keystroke [ "Module.add" ] depGraph
+    let d = TestCycleOrchestrator.decide state RunTrigger.Keystroke [ "Module.add" ] "test.fs" depGraph
     d |> Expect.equal "tree sitter only" TestCycleDecision.TreeSitterOnly
   }
 
   test "decide returns FullCycle with affected unit tests on Keystroke" {
-    let d = TestCycleOrchestrator.decide baseState RunTrigger.Keystroke [ "Module.add" ] depGraph
+    let d = TestCycleOrchestrator.decide baseState RunTrigger.Keystroke [ "Module.add" ] "test.fs" depGraph
     match d with
+    | TestCycleDecision.Explained explained ->
+      explained.Explanation.SelectedTests.Length |> Expect.equal "1 affected" 1
+      explained.Explanation.SelectedTests.[0] |> Expect.equal "test1" test1.FullName
     | TestCycleDecision.FullCycle ids ->
       ids.Length |> Expect.equal "1 affected" 1
       ids.[0] |> Expect.equal "test1" test1.Id
@@ -166,8 +169,10 @@ let orchestratorTests = testList "TestCycleOrchestrator" [
   }
 
   test "decide filters integration tests on Keystroke" {
-    let d = TestCycleOrchestrator.decide baseState RunTrigger.Keystroke [ "Module.dbCall" ] depGraph
+    let d = TestCycleOrchestrator.decide baseState RunTrigger.Keystroke [ "Module.dbCall" ] "test.fs" depGraph
     match d with
+    | TestCycleDecision.Explained explained ->
+      explained.Explanation.Precision |> Expect.equal "policy suppression should be explicit" SelectionPrecision.SuppressedByPolicy
     | TestCycleDecision.TreeSitterOnly -> ()
     | other -> failwithf "Expected TreeSitterOnly (integration filtered), got %A" other
   }
@@ -177,15 +182,20 @@ let orchestratorTests = testList "TestCycleOrchestrator" [
       baseState with
         RunPolicies = Map.ofList [ TestCategory.Unit, RunPolicy.OnDemand ]
     }
-    let d = TestCycleOrchestrator.decide state RunTrigger.Keystroke [ "Module.add" ] depGraph
+    let d = TestCycleOrchestrator.decide state RunTrigger.Keystroke [ "Module.add" ] "test.fs" depGraph
     match d with
+    | TestCycleDecision.Explained explained ->
+      explained.Explanation.Precision |> Expect.equal "policy-only suppression should be explicit" SelectionPrecision.SuppressedByPolicy
     | TestCycleDecision.TreeSitterOnly -> ()
     | other -> failwithf "Expected TreeSitterOnly, got %A" other
   }
 
   test "decide includes integration tests on ExplicitRun" {
-    let d = TestCycleOrchestrator.decide baseState RunTrigger.ExplicitRun [ "Module.dbCall" ] depGraph
+    let d = TestCycleOrchestrator.decide baseState RunTrigger.ExplicitRun [ "Module.dbCall" ] "test.fs" depGraph
     match d with
+    | TestCycleDecision.Explained explained ->
+      explained.Explanation.SelectedTests.Length |> Expect.equal "1 integration" 1
+      explained.Explanation.SelectedTests.[0] |> Expect.equal "intTest" intTest.FullName
     | TestCycleDecision.FullCycle ids ->
       ids.Length |> Expect.equal "1 integration" 1
       ids.[0] |> Expect.equal "intTest" intTest.Id
@@ -1435,7 +1445,7 @@ let cycleBenchmarkTests = testList "[Benchmark] cycle Core Benchmark" [
 
     let timings = Array.init 100 (fun _ ->
       sw.Restart()
-      let _ = TestCycleOrchestrator.decide stateWithEntries RunTrigger.Keystroke ["Module.func1"] graph
+      let _ = TestCycleOrchestrator.decide stateWithEntries RunTrigger.Keystroke ["Module.func1"] "editor.fs" graph
       let _ = TestDependencyGraph.findAffected ["Module.func1"] graph
       let _ = LiveTesting.filterByPolicy RunPolicyDefaults.defaults RunTrigger.Keystroke tests
       let _ = LiveTesting.computeStatusEntries stateWithEntries
@@ -1475,7 +1485,7 @@ let cycleBenchmarkTests = testList "[Benchmark] cycle Core Benchmark" [
 
     let timings = Array.init 50 (fun _ ->
       sw.Restart()
-      let _ = TestCycleOrchestrator.decide stateWithEntries RunTrigger.Keystroke ["func1"] graph
+      let _ = TestCycleOrchestrator.decide stateWithEntries RunTrigger.Keystroke ["func1"] "editor.fs" graph
       let _ = TestDependencyGraph.findAffected ["func1"] graph
       let _ = LiveTesting.filterByPolicy RunPolicyDefaults.defaults RunTrigger.Keystroke tests
       let _ = LiveTesting.computeStatusEntries stateWithEntries

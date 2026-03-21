@@ -633,6 +633,78 @@ module ResetIsolation =
       |> Expect.equal "agent2 session untouched" "bbb00002"
     }
 
+    testTask "hardResetSession with rebuild returns before background restart completes" {
+      let result = globalActorResult.Value
+      let sessionMap = ConcurrentDictionary<string, string>()
+      sessionMap.["agent1"] <- "aaa00001"
+      let restartStarted = TaskCompletionSource<unit>()
+      let allowRestartFinish = TaskCompletionSource<unit>()
+      let statuses = ResizeArray<WorkerProtocol.SessionStatus>()
+
+      let ops : SessionManagementOps = {
+        CreateSession = fun _ _ _ -> Task.FromResult(Ok "test-session")
+        ListSessions = fun () -> Task.FromResult("No sessions")
+        StopSession = fun _ -> Task.FromResult(Ok "stopped")
+        RestartSession = fun _ _ ->
+          task {
+            restartStarted.TrySetResult(()) |> ignore
+            do! allowRestartFinish.Task
+            return Ok "restarted"
+          }
+        GetProxy = fun _ -> Task.FromResult(None)
+        GetSessionInfo = fun id ->
+          Task.FromResult(
+            Some { WorkerProtocol.SessionInfo.Id = id
+                   Name = None
+                   Projects = []
+                   WorkingDirectory = ""
+                   SolutionRoot = None
+                   Status = WorkerProtocol.SessionStatus.Ready
+                   WorkerPid = None
+                   Workflow = WorkflowTypes.SessionWorkflow.Interactive
+                   CreatedAt = DateTime.UtcNow
+                   LastActivity = DateTime.UtcNow })
+        GetAllSessions = fun () -> Task.FromResult([])
+        UpdateSessionStatus = fun _ status ->
+          statuses.Add(status)
+          Task.FromResult(())
+        GetStandbyInfo = fun () -> Task.FromResult(SageFs.StandbyInfo.NoPool)
+        NotifyWorkerDied = fun _ -> ()
+      }
+
+      let ctx =
+        { Persistence = inMemoryPersistence ()
+          DiagnosticsChanged = result.DiagnosticsChanged
+          StateChanged = None
+          SessionOps = ops
+          SessionMap = sessionMap
+          McpPort = 0
+          Dispatch = None
+          GetElmModel = None
+          GetElmRegions = None
+          GetWarmupContext = None
+          GetFeatureState = None
+          ActivityTracker = SageFs.AgentActivityTracker.create() } : McpContext
+
+      let hardResetTask = hardResetSession ctx "agent1" true (Some "aaa00001") None
+      let! completed = Task.WhenAny(hardResetTask, Task.Delay(1000))
+
+      obj.ReferenceEquals(completed, hardResetTask)
+      |> Expect.isTrue "rebuild hard reset should return immediately"
+
+      let! message = hardResetTask
+      message
+      |> Expect.stringContains "should explain that rebuild continues in background" "Hard reset initiated"
+
+      restartStarted.Task.IsCompleted
+      |> Expect.isTrue "background restart should have started"
+
+      statuses |> Seq.toList
+      |> Expect.contains "session should be marked restarting immediately" WorkerProtocol.SessionStatus.Restarting
+
+      allowRestartFinish.TrySetResult(()) |> ignore
+    }
+
     testTask "hardResetSession without rebuild only routes to the targeted session" {
       let ctx, restartLog, routedSessions = mkTrackingCtx ()
 

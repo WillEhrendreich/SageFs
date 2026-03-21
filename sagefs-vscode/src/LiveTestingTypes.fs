@@ -137,6 +137,38 @@ type VscLiveTestEvent =
   | TestCycleTimingRecorded of treeSitterMs: float * fcsMs: float * executionMs: float
   | CoverageUpdated of coverage: Map<string, VscFileCoverage>
 
+[<RequireQualifiedAccess>]
+type VscSelectionPrecision =
+  | ExactDependencyMatch
+  | CoverageApproximation
+  | ConservativeFallback
+  | NoImpactedTests
+  | SuppressedByPolicy
+
+[<RequireQualifiedAccess>]
+type VscFreshnessTrust =
+  | FreshExact
+  | FreshApproximate
+  | StaleAwaitingRerun
+  | Suppressed
+
+[<RequireQualifiedAccess>]
+type VscRerunCause =
+  | KeystrokeBuffered
+  | FileSaved
+  | ExplicitRunRequested
+
+type VscLiveTestingDecision = {
+  Cause: VscRerunCause
+  FilePath: string
+  Precision: VscSelectionPrecision
+  Trust: VscFreshnessTrust
+  ChangedSymbols: string array
+  SelectedTests: string array
+  DeferredTests: string array
+  Reason: string
+}
+
 /// Test summary counts
 type VscTestSummary = {
   Total: int
@@ -145,7 +177,22 @@ type VscTestSummary = {
   Running: int
   Stale: int
   Disabled: int
+  LastDecision: VscLiveTestingDecision option
 }
+
+module VscLiveTestingDecision =
+  let formatHint (decision: VscLiveTestingDecision) =
+    match decision.Precision with
+    | VscSelectionPrecision.ExactDependencyMatch ->
+      sprintf "Why: exact dependency match (%d selected)" decision.SelectedTests.Length
+    | VscSelectionPrecision.CoverageApproximation ->
+      sprintf "Why: coverage widened the rerun (%d selected)" decision.SelectedTests.Length
+    | VscSelectionPrecision.ConservativeFallback ->
+      sprintf "Why: conservative fallback rebuild (%d selected)" decision.SelectedTests.Length
+    | VscSelectionPrecision.NoImpactedTests ->
+      "Why: no impacted tests were identified"
+    | VscSelectionPrecision.SuppressedByPolicy ->
+      sprintf "Why: run policy deferred %d test(s)" decision.DeferredTests.Length
 
 /// UI change signals — what the TestController adapter needs to update
 [<RequireQualifiedAccess>]
@@ -282,7 +329,7 @@ module VscLiveTestState =
           | _ -> true)
         |> Map.count
     { Total = total; Passed = passed; Failed = failed
-      Running = state.RunningTests.Count; Stale = stale; Disabled = disabled }
+      Running = state.RunningTests.Count; Stale = stale; Disabled = disabled; LastDecision = None }
 
   /// Get tests for a specific file
   let testsForFile (filePath: string) (state: VscLiveTestState) : VscTestInfo list =

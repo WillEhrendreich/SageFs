@@ -91,8 +91,22 @@ let formatWarmupProgressEvent (opts: JsonSerializerOptions) (sessionId: string o
   formatSseEvent "warmup_progress" json
 
 /// Format a TestSummary as an SSE event string
-let formatTestSummaryEvent (opts: JsonSerializerOptions) (sessionId: string option) (summary: Features.LiveTesting.TestSummary) : string =
-  let json = JsonSerializer.Serialize(summary, opts) |> injectSessionId sessionId
+let formatTestSummaryEvent
+  (opts: JsonSerializerOptions)
+  (sessionId: string option)
+  (summary: Features.LiveTesting.TestSummary)
+  (lastDecision: Features.LiveTesting.LiveTestingDecision option)
+  : string =
+  let payload =
+    {| Total = summary.Total
+       Passed = summary.Passed
+       Failed = summary.Failed
+       Stale = summary.Stale
+       Running = summary.Running
+       Disabled = summary.Disabled
+       Enabled = summary.Enabled
+       LastDecision = lastDecision |> Option.map Features.LiveTesting.LiveTestingDecision.toWireModel |}
+  let json = JsonSerializer.Serialize(payload, opts) |> injectSessionId sessionId
   formatSseEvent "test_summary" json
 
 /// Format a TestResultsBatchPayload as an SSE event string

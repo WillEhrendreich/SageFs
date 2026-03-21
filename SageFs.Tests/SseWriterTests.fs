@@ -75,7 +75,7 @@ let sseTests = testList "SSE Writer" [
       let summary: SageFs.Features.LiveTesting.TestSummary = {
         Total = 10; Passed = 8; Failed = 1; Stale = 1; Running = 0; Disabled = 0; Enabled = true
       }
-      let result = formatTestSummaryEvent opts None summary
+      let result = formatTestSummaryEvent opts None summary None
       result |> Expect.stringContains "should contain event type" "event: test_summary"
       result |> Expect.stringContains "should contain PascalCase Total" "\"Total\":10"
       result |> Expect.stringContains "should contain PascalCase Passed" "\"Passed\":8"
@@ -117,7 +117,7 @@ let wireProtocolTests = testList "Wire Protocol Contract" [
       let summary: SageFs.Features.LiveTesting.TestSummary = {
         Total = 47; Passed = 40; Failed = 3; Stale = 2; Running = 1; Disabled = 1; Enabled = true
       }
-      let sse = formatTestSummaryEvent productionSseOpts None summary
+      let sse = formatTestSummaryEvent productionSseOpts None summary None
       let data = extractSseData sse |> Option.get
       let doc = JsonDocument.Parse(data)
       let root = doc.RootElement
@@ -131,7 +131,7 @@ let wireProtocolTests = testList "Wire Protocol Contract" [
       let summary: SageFs.Features.LiveTesting.TestSummary = {
         Total = 10; Passed = 8; Failed = 1; Stale = 1; Running = 0; Disabled = 0; Enabled = true
       }
-      let sse = formatTestSummaryEvent productionSseOpts None summary
+      let sse = formatTestSummaryEvent productionSseOpts None summary None
       let data = extractSseData sse |> Option.get
       data.Contains("\"total\"") |> Expect.isFalse "no camelCase total"
       data.Contains("\"passed\"") |> Expect.isFalse "no camelCase passed"
@@ -200,6 +200,7 @@ let wireProtocolTests = testList "Wire Protocol Contract" [
         Completion = SageFs.Features.LiveTesting.BatchCompletion.Superseded
         Entries = [||]
         Summary = { Total = 0; Passed = 0; Failed = 0; Stale = 0; Running = 0; Disabled = 0; Enabled = true }
+        LastDecision = None
       }
       let json = JsonSerializer.Serialize(payload, productionSseOpts)
       let doc = JsonDocument.Parse(json)
@@ -218,6 +219,7 @@ let wireProtocolTests = testList "Wire Protocol Contract" [
         Completion = SageFs.Features.LiveTesting.BatchCompletion.Complete(5, 5)
         Entries = [||]
         Summary = { Total = 5; Passed = 5; Failed = 0; Stale = 0; Running = 0; Disabled = 0; Enabled = true }
+        LastDecision = None
       }
       let json = JsonSerializer.Serialize(payload, productionSseOpts)
       let doc = JsonDocument.Parse(json)
@@ -428,14 +430,14 @@ let sessionScopingTests = testList "SSE Session Scoping" [
       let summary: TestSummary = {
         Total = 10; Passed = 8; Failed = 1; Stale = 1; Running = 0; Disabled = 0; Enabled = true
       }
-      let result = formatTestSummaryEvent productionSseOpts None summary
+      let result = formatTestSummaryEvent productionSseOpts None summary None
       result.Contains("SessionId") |> Expect.isFalse "no SessionId"
 
     testCase "formatTestSummaryEvent Some injects SessionId" <| fun () ->
       let summary: TestSummary = {
         Total = 10; Passed = 8; Failed = 1; Stale = 1; Running = 0; Disabled = 0; Enabled = true
       }
-      let result = formatTestSummaryEvent productionSseOpts (Some "sess-456") summary
+      let result = formatTestSummaryEvent productionSseOpts (Some "sess-456") summary None
       let data = extractSseData result |> Option.get
       let doc = JsonDocument.Parse(data)
       doc.RootElement.GetProperty("SessionId").GetString()
@@ -450,12 +452,60 @@ let sessionScopingTests = testList "SSE Session Scoping" [
         Completion = BatchCompletion.Complete(5, 5)
         Entries = [||]
         Summary = { Total = 5; Passed = 5; Failed = 0; Stale = 0; Running = 0; Disabled = 0; Enabled = true }
+        LastDecision = None
       }
       let result = formatTestResultsBatchEvent productionSseOpts (Some "sess-789") payload
       let data = extractSseData result |> Option.get
       let doc = JsonDocument.Parse(data)
       doc.RootElement.GetProperty("SessionId").GetString()
       |> Expect.equal "sessionId" "sess-789"
+
+    testCase "formatTestSummaryEvent includes last decision when provided" <| fun () ->
+      let summary: TestSummary = {
+        Total = 2; Passed = 1; Failed = 0; Stale = 1; Running = 0; Disabled = 0; Enabled = true
+      }
+      let decision =
+        LiveTestingDecision.fromSelection
+          (RerunCause.KeystrokeBuffered "src/Module.fs")
+          SelectionPrecision.CoverageApproximation
+          [ "Module.add" ]
+          [| "Module.Tests.should_add"; "Module.Tests.should_guard_edges" |]
+          [||]
+          "coverage widened"
+      let result = formatTestSummaryEvent productionSseOpts None summary (Some decision)
+      let data = extractSseData result |> Option.get
+      let doc = JsonDocument.Parse(data)
+      let lastDecision = doc.RootElement.GetProperty("LastDecision")
+      lastDecision.GetProperty("Precision").GetString()
+      |> Expect.equal "precision should be serialized" "coverage_approximation"
+      lastDecision.GetProperty("Trust").GetString()
+      |> Expect.equal "trust should be serialized" "fresh_approximate"
+
+    testCase "formatTestResultsBatchEvent includes last decision when provided" <| fun () ->
+      let decision =
+        LiveTestingDecision.fromSelection
+          (RerunCause.FileSaved "src/Compiled.fs")
+          SelectionPrecision.ConservativeFallback
+          []
+          [| "Compiled.Tests.should_build_a" |]
+          [||]
+          "fallback rebuild"
+      let payload: TestResultsBatchPayload = {
+        Generation = RunGeneration 1
+        Freshness = ResultFreshness.Fresh
+        Completion = BatchCompletion.Complete(1, 1)
+        Entries = [||]
+        Summary = { Total = 1; Passed = 1; Failed = 0; Stale = 0; Running = 0; Disabled = 0; Enabled = true }
+        LastDecision = Some decision
+      }
+      let result = formatTestResultsBatchEvent productionSseOpts None payload
+      let data = extractSseData result |> Option.get
+      let doc = JsonDocument.Parse(data)
+      let lastDecision = doc.RootElement.GetProperty("LastDecision")
+      lastDecision.GetProperty("Cause").GetString()
+      |> Expect.equal "cause should be serialized" "file_saved"
+      lastDecision.GetProperty("Precision").GetString()
+      |> Expect.equal "precision should be serialized" "conservative_fallback"
 
     testCase "formatFileAnnotationsEvent Some injects SessionId" <| fun () ->
       let fa : FileAnnotations = {

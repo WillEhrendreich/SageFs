@@ -303,7 +303,7 @@ let stateTransitionSafetyTests =
               "checkToolAvailability threw for (%A, %s): %s"
               state tool ex.Message))
       tested
-      |> Expect.equal "should test all 75 state×tool combos" 75
+          |> Expect.equal "should test all 80 state×tool combos" 80
 
     testCase "all rejections return ToolNotAvailable specifically" <| fun _ ->
       allStates

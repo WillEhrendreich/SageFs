@@ -48,6 +48,29 @@ type HealthSnapshot = {
 
 module DaemonHealth =
 
+  let primarySessionStatus (sessions: SessionHealthSummary list) : SessionHealthStatus option =
+    let has status =
+      sessions |> List.exists (fun session -> session.Status = status)
+
+    match sessions with
+    | [] -> None
+    | _ when has SessionHealthStatus.Ready -> Some SessionHealthStatus.Ready
+    | _ when has SessionHealthStatus.Evaluating -> Some SessionHealthStatus.Evaluating
+    | _ when has SessionHealthStatus.WarmingUp -> Some SessionHealthStatus.WarmingUp
+    | _ when has SessionHealthStatus.Faulted -> Some SessionHealthStatus.Faulted
+    | _ when has SessionHealthStatus.Stopped -> Some SessionHealthStatus.Stopped
+    | _ -> None
+
+  let primarySessionStatusLabel (sessions: SessionHealthSummary list) : string =
+    primarySessionStatus sessions
+    |> Option.map (function
+      | SessionHealthStatus.Ready -> "Ready"
+      | SessionHealthStatus.Evaluating -> "Evaluating"
+      | SessionHealthStatus.WarmingUp -> "Warming Up"
+      | SessionHealthStatus.Faulted -> "Faulted"
+      | SessionHealthStatus.Stopped -> "Stopped")
+    |> Option.defaultValue "no session"
+
   /// Determine overall health from snapshot.
   let overallStatus (snap: HealthSnapshot) : OverallHealth =
     match snap.SessionSummaries with

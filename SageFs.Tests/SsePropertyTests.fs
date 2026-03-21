@@ -173,7 +173,7 @@ let ssePropertyTests =
             [ formatWarmupProgressEvent jsonOpts None 1 n.Get "msg"
               formatEvalStartedEvent jsonOpts None "x.fsx" n.Get
               formatEvalResultEvent jsonOpts None "x.fsx" n.Get "ok" true 1.0
-              formatTestSummaryEvent jsonOpts None (mkTestSummary n.Get 0 0)
+              formatTestSummaryEvent jsonOpts None (mkTestSummary n.Get 0 0) None
               formatEvalDiffEvent jsonOpts None (mkDiffSummary [ "a" ] [ "b" ])
               formatCellDependenciesEvent jsonOpts None (mkCellGraph n.Get)
               formatBindingScopeMapEvent jsonOpts None (mkBindingScope n.Get)
@@ -191,7 +191,7 @@ let ssePropertyTests =
             [ formatWarmupProgressEvent jsonOpts None 1 n.Get "msg"
               formatEvalStartedEvent jsonOpts None "x.fsx" n.Get
               formatEvalResultEvent jsonOpts None "x.fsx" n.Get "ok" true 2.0
-              formatTestSummaryEvent jsonOpts None (mkTestSummary n.Get 0 0)
+              formatTestSummaryEvent jsonOpts None (mkTestSummary n.Get 0 0) None
               formatEvalDiffEvent jsonOpts None (mkDiffSummary [ "a" ] [ "b" ])
               formatCellDependenciesEvent jsonOpts None (mkCellGraph n.Get)
               formatBindingScopeMapEvent jsonOpts None (mkBindingScope n.Get)
@@ -206,7 +206,7 @@ let ssePropertyTests =
             [ formatWarmupProgressEvent jsonOpts None 1 n.Get "msg"
               formatEvalStartedEvent jsonOpts None "x.fsx" n.Get
               formatEvalResultEvent jsonOpts None "x.fsx" n.Get "ok" true 2.0
-              formatTestSummaryEvent jsonOpts None (mkTestSummary n.Get 0 0)
+              formatTestSummaryEvent jsonOpts None (mkTestSummary n.Get 0 0) None
               formatEvalDiffEvent jsonOpts None (mkDiffSummary [ "a" ] [])
               formatCellDependenciesEvent jsonOpts None (mkCellGraph n.Get)
               formatBindingScopeMapEvent jsonOpts None (mkBindingScope n.Get)
@@ -223,7 +223,7 @@ let ssePropertyTests =
             [ formatWarmupProgressEvent jsonOpts None 1 n.Get "msg"
               formatEvalStartedEvent jsonOpts None "x.fsx" n.Get
               formatEvalResultEvent jsonOpts None "x.fsx" n.Get "ok" true 2.0
-              formatTestSummaryEvent jsonOpts None (mkTestSummary n.Get 0 0)
+              formatTestSummaryEvent jsonOpts None (mkTestSummary n.Get 0 0) None
               formatEvalDiffEvent jsonOpts None (mkDiffSummary [ "a" ] [])
               formatCellDependenciesEvent jsonOpts None (mkCellGraph n.Get)
               formatBindingScopeMapEvent jsonOpts None (mkBindingScope n.Get)
@@ -269,7 +269,7 @@ let ssePropertyTests =
             [ formatWarmupProgressEvent jsonOpts (Some sid) 1 10 "x"
               formatEvalStartedEvent jsonOpts (Some sid) "f.fsx" 1
               formatEvalResultEvent jsonOpts (Some sid) "f.fsx" 1 "ok" true 1.0
-              formatTestSummaryEvent jsonOpts (Some sid) (mkTestSummary 10 8 2)
+              formatTestSummaryEvent jsonOpts (Some sid) (mkTestSummary 10 8 2) None
               formatEvalTimelineEvent jsonOpts (Some sid) (mkTimeline n.Get) ]
           events |> List.forall (fun e ->
             (extractDataPayload e).Contains(sid))

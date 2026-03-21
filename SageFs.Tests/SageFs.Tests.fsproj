@@ -106,8 +106,13 @@
         <Compile Include="VscodeExtensionTests.fs" />
         <Compile Include="DemoRecording.fs" />
         <Compile Include="LiveTestingTestHelpers.fs" />
-        <Compile Include="LiveTestingCoreTests.fs" />
-        <Compile Include="LiveTestingCycleTests.fs" />
+         <Compile Include="LiveTestingCoreTests.fs" />
+         <Compile Include="LiveTestingDecisionScenarioTests.fs" />
+         <Compile Include="LiveTestingDecisionPropertyTests.fs" />
+         <Compile Include="LiveTestingOrchestrationScenarioTests.fs" />
+         <Compile Include="LiveTestingAfterTypeCheckScenarioTests.fs" />
+         <Compile Include="LiveTestingGoldenFixtureTests.fs" />
+         <Compile Include="LiveTestingCycleTests.fs" />
         <Compile Include="LiveTestingCoverageTests.fs" />
          <Compile Include="LiveTestingElmTests.fs" />
          <Compile Include="LiveTestRebuildCycleTests.fs" />

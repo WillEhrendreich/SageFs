@@ -128,13 +128,75 @@ module LiveTestingParser =
       | _ -> TestOutcome.Detected, None
     { Id = id; Outcome = outcome; DurationMs = durationMs; Output = None }
 
+  let parseSelectionPrecision (value: string) =
+    match value with
+    | "exact_dependency_match" -> Some SelectionPrecision.ExactDependencyMatch
+    | "coverage_approximation" -> Some SelectionPrecision.CoverageApproximation
+    | "conservative_fallback" -> Some SelectionPrecision.ConservativeFallback
+    | "no_impacted_tests" -> Some SelectionPrecision.NoImpactedTests
+    | "suppressed_by_policy" -> Some SelectionPrecision.SuppressedByPolicy
+    | _ -> None
+
+  let parseFreshnessTrust (value: string) =
+    match value with
+    | "fresh_exact" -> Some FreshnessTrust.FreshExact
+    | "fresh_approximate" -> Some FreshnessTrust.FreshApproximate
+    | "stale_awaiting_rerun" -> Some FreshnessTrust.StaleAwaitingRerun
+    | "suppressed" -> Some FreshnessTrust.Suppressed
+    | _ -> None
+
+  let parseRerunCause (value: string) =
+    match value with
+    | "keystroke_buffered" -> Some RerunCause.KeystrokeBuffered
+    | "file_saved" -> Some RerunCause.FileSaved
+    | "explicit_run_requested" -> Some RerunCause.ExplicitRunRequested
+    | _ -> None
+
+  let parseStringArray (el: JsonElement) =
+    match el.ValueKind with
+    | JsonValueKind.Array ->
+      [| for item in el.EnumerateArray() do
+           if item.ValueKind = JsonValueKind.String then
+             yield item.GetString() |]
+    | _ -> [||]
+
+  let parseLastDecision (root: JsonElement) : LiveTestingDecision option =
+    let readStringValue (element: JsonElement option) =
+      match element with
+      | Some el when el.ValueKind = JsonValueKind.String -> Some (el.GetString())
+      | _ -> None
+    let precision = getProp root "Precision" |> readStringValue |> Option.bind parseSelectionPrecision
+    let trust = getProp root "Trust" |> readStringValue |> Option.bind parseFreshnessTrust
+    let cause = getProp root "Cause" |> readStringValue |> Option.bind parseRerunCause
+    match precision, trust, cause with
+    | Some precision, Some trust, Some cause ->
+      let readString prop =
+        match getProp root prop with
+        | Some el when el.ValueKind = JsonValueKind.String -> el.GetString()
+        | _ -> ""
+      let readArray prop =
+        match getProp root prop with
+        | Some el -> parseStringArray el
+        | None -> [||]
+      Some {
+        Cause = cause
+        FilePath = readString "FilePath"
+        Precision = precision
+        Trust = trust
+        ChangedSymbols = readArray "ChangedSymbols"
+        SelectedTests = readArray "SelectedTests"
+        DeferredTests = readArray "DeferredTests"
+        Reason = readString "Reason" }
+    | _ -> None
+
   let parseSummary (root: JsonElement) =
     { Total = tryInt root "Total" 0
       Passed = tryInt root "Passed" 0
       Failed = tryInt root "Failed" 0
       Running = tryInt root "Running" 0
       Stale = tryInt root "Stale" 0
-      Disabled = tryInt root "Disabled" 0 }
+      Disabled = tryInt root "Disabled" 0
+      LastDecision = getProp root "LastDecision" |> Option.bind parseLastDecision }
 
   let parseFreshness (root: JsonElement) : ResultFreshness =
     match getProp root "Freshness" with

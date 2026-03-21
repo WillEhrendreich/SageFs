@@ -1,0 +1,1 @@
+{"Total":4,"Passed":2,"Failed":0,"Running":0,"Stale":2,"Disabled":0,"LastDecision":{"Cause":"keystroke_buffered","FilePath":"src/Architecture.fs","Precision":"suppressed_by_policy","Trust":"suppressed","ChangedSymbols":["Architecture.Rule"],"SelectedTests":[],"DeferredTests":["Architecture.Tests.should_hold"],"Reason":"ambient live testing stayed quiet on purpose"}}

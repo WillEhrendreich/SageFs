@@ -192,7 +192,7 @@ type LiveTestingSubscriber(port: int) =
     | None -> "● Not Run"
 
   /// Format a tooltip with full test details. Optionally enriched with freshness and narrative context.
-  static member formatTestTooltip(info: TestInfo, result: TestResult option, ?freshness: ResultFreshness, ?narrative: FailureNarrative) : string =
+  static member formatTestTooltip(info: TestInfo, result: TestResult option, ?freshness: ResultFreshness, ?narrative: FailureNarrative, ?lastDecision: LiveTestingDecision) : string =
     match result with
     | Some r ->
       let status =
@@ -221,5 +221,9 @@ type LiveTestingSubscriber(port: int) =
         match narrative with
         | Some n when n.Summary <> "" -> sprintf "\nℹ️ %s" n.Summary
         | _ -> ""
-      sprintf "%s — %s%s%s%s" info.DisplayName status duration output narrativeText
+      let explanationText =
+        match lastDecision with
+        | Some decision -> sprintf "\n%s" (TestSummary.formatDecisionHint decision)
+        | None -> ""
+      sprintf "%s — %s%s%s%s%s" info.DisplayName status duration output narrativeText explanationText
     | None -> sprintf "%s — Not Run" info.DisplayName

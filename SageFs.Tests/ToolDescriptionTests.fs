@@ -126,6 +126,24 @@ let descriptionPropertyTests =
         |> snd
       desc |> Expect.stringContains "should mention exact prefix" "exact:"
 
+    testCase "run_tests description stays separate from live-testing controls"
+    <| fun _ ->
+      let desc =
+        toolDescriptions
+        |> List.find (fun (name, _) -> name = "run_tests")
+        |> snd
+      desc.Contains("enable_live_testing", StringComparison.OrdinalIgnoreCase)
+      |> Expect.isFalse "run_tests should not teach MCP agents to rely on live-testing toggles"
+
+    testCase "get_fsi_status description stays focused on worker readiness"
+    <| fun _ ->
+      let desc =
+        toolDescriptions
+        |> List.find (fun (name, _) -> name = "get_fsi_status")
+        |> snd
+      desc.Contains("get_live_test_status", StringComparison.OrdinalIgnoreCase)
+      |> Expect.isFalse "get_fsi_status should not redirect MCP agents into live-testing tooling"
+
     testCase "targeted_verify description teaches trust-first workflow"
     <| fun _ ->
       let desc =

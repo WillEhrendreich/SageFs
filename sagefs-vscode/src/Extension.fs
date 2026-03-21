@@ -575,6 +575,23 @@ let openGettingStarted () =
 
 // ── Status ─────────────────────────────────────────────────────
 
+let describeTestStatusBarTooltip (summary: VscTestSummary) =
+  let reasonLine =
+    match summary.LastDecision with
+    | Some d when d.Reason <> "" -> Some (sprintf "Reason: %s" d.Reason)
+    | _ -> None
+  [ Some (
+      match summary with
+      | s when s.Total = 0 -> "$(beaker) No tests"
+      | s when s.Failed > 0 -> sprintf "$(testing-error-icon) %d/%d failed" s.Failed s.Total
+      | s when s.Running > 0 -> sprintf "$(sync~spin) Running %d/%d" s.Running s.Total
+      | s when s.Stale > 0 -> sprintf "$(warning) %d/%d stale" s.Stale s.Total
+      | s -> sprintf "$(testing-passed-icon) %d/%d passed" s.Passed s.Total)
+    summary.LastDecision |> Option.map VscLiveTestingDecision.formatHint
+    reasonLine ]
+  |> List.choose id
+  |> String.concat "\n"
+
 let updateTestStatusBar (summary: VscTestSummary) =
   match testStatusBarItem with
   | None -> ()
@@ -595,6 +612,7 @@ let updateTestStatusBar (summary: VscTestSummary) =
         sprintf "$(testing-passed-icon) %d/%d passed" s.Passed s.Total, None
     sb.text <- text
     sb.backgroundColor <- bg
+    sb.tooltip <- Some (describeTestStatusBarTooltip summary)
     sb.show ()
 
 let updateEvalPerfBar (stats: VscTimelineStats) =
@@ -729,7 +747,7 @@ let refreshStatus () =
           SessionCtx.setSession c activeId
           Sessions.setSession c activeId
           TypeExpl.setClient (Some c)
-        | Some "Starting" | Some "Restarting" ->
+        | Some "Starting" | Some "Restarting" | Some "Warming Up" ->
           match warmupPhase with
           | Some phase ->
             let phaseLabel =

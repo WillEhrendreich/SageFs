@@ -35,6 +35,9 @@ let private jsonBoolField (fieldName: string) (root: JsonElement) =
 let private jsonStringField (fieldName: string) (root: JsonElement) =
   root.GetProperty(fieldName).GetString()
 
+let private jsonStringArrayField (fieldName: string) (root: JsonElement) =
+  root.GetProperty(fieldName).EnumerateArray() |> Seq.map (fun v -> v.GetString()) |> Seq.toArray
+
 [<Tests>]
 let tests =
   testList "Live testing discovery state" [
@@ -189,5 +192,77 @@ let mcpDiscoverySemanticsTests =
       root |> jsonStringField "DiscoveryHint"
       |> fun hint -> hint.Contains("no-op eval")
       |> Expect.isFalse "trace hint should no longer mention no-op eval when discovery is already queued"
+    }
+
+    testTask "get_live_test_status surfaces the last decision so callers can see when a rerun was exact versus conservative" {
+      let decision =
+        LiveTestingDecision.fromSelection
+          (RerunCause.FileSaved "src/Module.fs")
+          SelectionPrecision.ConservativeFallback
+          [ "Module.add" ]
+          [| "Module.Tests.should_add" |]
+          [| "Architecture.Tests.should_hold" |]
+          "The dependency graph could not narrow this compiled-file change, so SageFs conservatively queued all discovered tests behind a rebuild."
+      let state =
+        { LiveTestState.empty with
+            Activation = LiveTestingActivation.Active
+            LastDecision = Some decision }
+      let ctx = mkCtxWithState state
+
+      let! (json: string) = getLiveTestStatus ctx "copilot" None
+
+      let doc = JsonDocument.Parse(json)
+      try
+        let root = doc.RootElement
+        let lastDecision = root.GetProperty("LastDecision")
+        lastDecision |> jsonStringField "Precision"
+        |> Expect.equal "status should expose fallback precision explicitly" "conservative_fallback"
+        lastDecision |> jsonStringField "Trust"
+        |> Expect.equal "status should expose approximate trust explicitly" "fresh_approximate"
+        lastDecision |> jsonStringField "Cause"
+        |> Expect.equal "status should expose the rerun cause" "file_saved"
+        lastDecision |> jsonStringField "FilePath"
+        |> Expect.equal "status should preserve the changed file path" "src/Module.fs"
+        lastDecision |> jsonStringArrayField "ChangedSymbols"
+        |> Expect.equal "status should preserve changed symbols" [| "Module.add" |]
+        lastDecision |> jsonStringArrayField "SelectedTests"
+        |> Expect.equal "status should preserve selected tests" [| "Module.Tests.should_add" |]
+        lastDecision |> jsonStringArrayField "DeferredTests"
+        |> Expect.equal "status should preserve deferred tests" [| "Architecture.Tests.should_hold" |]
+      finally
+        doc.Dispose()
+    }
+
+    testTask "get_test_trace surfaces the last decision so ambient status can explain why live testing stayed quiet" {
+      let decision =
+        LiveTestingDecision.fromSelection
+          (RerunCause.KeystrokeBuffered "src/Architecture.fs")
+          SelectionPrecision.SuppressedByPolicy
+          [ "Architecture.Rule" ]
+          [||]
+          [| "Architecture.Tests.should_hold" |]
+          "Affected tests were intentionally deferred by the current run policy, so ambient live testing stayed quiet on purpose."
+      let state =
+        { LiveTestState.empty with
+            Activation = LiveTestingActivation.Active
+            LastDecision = Some decision }
+      let ctx = mkCtxWithState state
+
+      let! (json: string) = getTestTrace ctx
+
+      let doc = JsonDocument.Parse(json)
+      try
+        let root = doc.RootElement
+        let lastDecision = root.GetProperty("LastDecision")
+        lastDecision |> jsonStringField "Precision"
+        |> Expect.equal "trace should expose suppression precision" "suppressed_by_policy"
+        lastDecision |> jsonStringField "Trust"
+        |> Expect.equal "trace should expose suppressed trust" "suppressed"
+        lastDecision |> jsonStringField "Cause"
+        |> Expect.equal "trace should expose buffered keystroke cause" "keystroke_buffered"
+        lastDecision |> jsonStringField "Reason"
+        |> Expect.stringContains "trace should preserve the human explanation" "stayed quiet on purpose"
+      finally
+        doc.Dispose()
     }
   ]

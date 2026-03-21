@@ -1352,7 +1352,7 @@ let batchPayloadTests = testList "TestResultsBatchPayload" [
       Status = TestRunStatus.Passed (System.TimeSpan.FromMilliseconds 5.0)
       PreviousStatus = TestRunStatus.Detected }
     let gen = RunGeneration.next RunGeneration.zero
-    let batch = TestResultsBatchPayload.create gen ResultFreshness.Fresh (BatchCompletion.Complete(1, 1)) LiveTestingActivation.Active [| entry |]
+    let batch = TestResultsBatchPayload.create gen ResultFreshness.Fresh (BatchCompletion.Complete(1, 1)) LiveTestingActivation.Active [| entry |] None
     batch.Summary.Passed |> Expect.equal "one passed" 1
     batch.Summary.Total |> Expect.equal "one total" 1
     batch.Freshness |> Expect.equal "fresh" ResultFreshness.Fresh
@@ -1361,19 +1361,19 @@ let batchPayloadTests = testList "TestResultsBatchPayload" [
 
   test "create with stale results carries StaleCodeEdited" {
     let gen = RunGeneration.next RunGeneration.zero
-    let batch = TestResultsBatchPayload.create gen ResultFreshness.StaleCodeEdited BatchCompletion.Superseded LiveTestingActivation.Active [||]
+    let batch = TestResultsBatchPayload.create gen ResultFreshness.StaleCodeEdited BatchCompletion.Superseded LiveTestingActivation.Active [||] None
     batch.Freshness |> Expect.equal "stale edited" ResultFreshness.StaleCodeEdited
   }
 
   test "create with wrong generation carries StaleWrongGeneration" {
     let gen = RunGeneration.next RunGeneration.zero
-    let batch = TestResultsBatchPayload.create gen ResultFreshness.StaleWrongGeneration BatchCompletion.Superseded LiveTestingActivation.Active [||]
+    let batch = TestResultsBatchPayload.create gen ResultFreshness.StaleWrongGeneration BatchCompletion.Superseded LiveTestingActivation.Active [||] None
     batch.Freshness |> Expect.equal "wrong gen" ResultFreshness.StaleWrongGeneration
   }
 
   test "isEmpty returns true for empty entries" {
     let gen = RunGeneration.zero
-    let batch = TestResultsBatchPayload.create gen ResultFreshness.Fresh (BatchCompletion.Complete(0, 0)) LiveTestingActivation.Active [||]
+    let batch = TestResultsBatchPayload.create gen ResultFreshness.Fresh (BatchCompletion.Complete(0, 0)) LiveTestingActivation.Active [||] None
     TestResultsBatchPayload.isEmpty batch |> Expect.isTrue "should be empty"
   }
 
@@ -1385,7 +1385,7 @@ let batchPayloadTests = testList "TestResultsBatchPayload" [
       Category = TestCategory.Unit; CurrentPolicy = RunPolicy.OnEveryChange
       Status = TestRunStatus.Detected; PreviousStatus = TestRunStatus.Detected }
     let gen = RunGeneration.zero
-    let batch = TestResultsBatchPayload.create gen ResultFreshness.Fresh (BatchCompletion.Complete(1, 1)) LiveTestingActivation.Active [| entry |]
+    let batch = TestResultsBatchPayload.create gen ResultFreshness.Fresh (BatchCompletion.Complete(1, 1)) LiveTestingActivation.Active [| entry |] None
     TestResultsBatchPayload.isEmpty batch |> Expect.isFalse "should not be empty"
   }
 ]

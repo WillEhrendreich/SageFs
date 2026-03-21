@@ -167,6 +167,38 @@ let withEcho (ctx: McpContext) (toolName: string) (t: Task<string>) : Task<strin
       return raise ex
   }
 
+let withEchoNoAwaitRecord (ctx: McpContext) (toolName: string) (t: Task<string>) : Task<string> =
+  task {
+    SageFs.Instrumentation.mcpToolInvocations.Add(1L)
+    let sw = System.Diagnostics.Stopwatch.StartNew()
+    let span = SageFs.Instrumentation.startSpanWithKind SageFs.Instrumentation.mcpSource "mcp.tool.invoke" System.Diagnostics.ActivityKind.Server
+                 ["mcp.tool.name", box toolName; "rpc.system", box "mcp"; "rpc.service", box "sagefs"; "rpc.method", box toolName]
+    try
+      let! result = t
+      sw.Stop()
+      SageFs.Instrumentation.mcpToolSuccesses.Add(1L, System.Collections.Generic.KeyValuePair("mcp.tool.name", box toolName))
+      auditTracker.Record(toolName, sw.Elapsed.TotalMilliseconds, SageFs.McpToolAudit.Success)
+      let normalized = result.Replace("\r\n", "\n").Replace("\n", "\r\n")
+      Log.info ">> %s" toolName
+      Log.debug "%s" normalized
+      SageFs.Instrumentation.succeedSpan span
+      task {
+        let! _ = recordToolResult ctx toolName result (int sw.Elapsed.TotalMilliseconds)
+        return ()
+      } |> ignore
+      return result
+    with ex ->
+      sw.Stop()
+      SageFs.Instrumentation.mcpToolFailures.Add(1L, System.Collections.Generic.KeyValuePair("mcp.tool.name", box toolName))
+      auditTracker.Record(toolName, sw.Elapsed.TotalMilliseconds, SageFs.McpToolAudit.Failure)
+      SageFs.Instrumentation.failSpan span ex.Message
+      task {
+        let! _ = recordToolResult ctx toolName (sprintf "Error: %s" ex.Message) (int sw.Elapsed.TotalMilliseconds)
+        return ()
+      } |> ignore
+      return raise ex
+  }
+
 type SageFsTools(ctx: McpContext, logger: ILogger<SageFsTools>) =
     [<McpServerTool>]
     [<Description("""Send F# code to the FSI REPL session. Each ';;' marks a transaction boundary.
@@ -294,8 +326,8 @@ KEY SIGNALS IN OUTPUT:
 - Session: the stable session ID shown at the start of the response.
 
 IMPORTANT:
-- A successful enable_live_testing call does NOT imply get_fsi_status should already be Ready. Live testing activation and worker readiness are separate.
-- If you need live-testing health, use get_test_trace or get_live_test_status instead.""")>]
+- This is the MCP-facing worker/session readiness tool.
+- Use this to decide whether explicit MCP actions like send_fsharp_code, run_tests, or targeted_verify are safe to route right now.""")>]
     member _.get_fsi_status(
         [<Description("Working directory of the MCP client. When provided, routes to the matching session if exactly one session uses this directory. If multiple sessions share the directory, you must call switch_session first (or pass session_id explicitly) — the daemon will not guess.")>]
         working_directory: string
@@ -412,7 +444,10 @@ The full pack/reinstall cycle is only needed when SageFs's own source code chang
         let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
         let doRebuild = defaultArg rebuild false
         logger.LogDebug("MCP-TOOL: hard_reset_fsi_session called, rebuild={Rebuild}", doRebuild)
-        hardResetSession ctx "mcp" doRebuild None wd |> withEcho ctx "hard_reset_fsi_session"
+        let execute = hardResetSession ctx "mcp" doRebuild None wd
+        match doRebuild with
+        | true -> execute |> withEchoNoAwaitRecord ctx "hard_reset_fsi_session"
+        | false -> execute |> withEcho ctx "hard_reset_fsi_session"
 
     [<McpServerTool>]
     [<Description("""Check F# code for errors without executing it. Returns diagnostics (errors, warnings) from the F# compiler.
@@ -661,148 +696,13 @@ OUTPUT: A text rendering of each named UI region (header, editor, output, test p
         logger.LogDebug("MCP-TOOL: get_elm_state called")
         getElmState ctx |> withEcho ctx "get_elm_state"
 
-    // ── Live Testing Tools ──────────────────────────────────────
-
-    [<Description("""Get current live test status. Returns the enabled state, a summary (total/passed/failed/stale/running counts), and per-test status entries.
-
-WHEN TO USE:
-- To see which tests are currently passing or failing without running them explicitly.
-- After editing code, to check whether the automatically-triggered test run has completed.
-- Before calling run_tests, to understand the current baseline.
-- With the optional file filter to focus on tests from a specific source file you're working on.
-
-STATUS VALUES per test:
-- Passed: last run succeeded.
-- Failed: last run produced a test failure (not a compilation error).
-- Stale: test was passing but the code it covers has changed and it hasn't re-run yet.
-- Running: test is currently executing.
-- NotRun: test has been discovered but never run.""")>]
-    member _.get_live_test_status(
-        [<Description("Optional file path to filter tests by source file.")>]
-        file: string,
-        [<Description("Your agent or model name (same value you use for send_fsharp_code). Enables per-session test filtering so you only see tests for YOUR session, not all sessions on the daemon.")>]
-        agentName: string
-    ) : Task<string> =
-        let filter = match System.String.IsNullOrWhiteSpace file with | true -> None | false -> Some file
-        let agent = match System.String.IsNullOrWhiteSpace agentName with | true -> "claude" | false -> agentName
-        logger.LogDebug("MCP-TOOL: get_live_test_status called, file={File}, agent={Agent}", file, agent)
-        getLiveTestStatus ctx agent filter |> withEcho ctx "get_live_test_status"
-
-    [<Description("""Enable live testing. When enabled, tests automatically re-run after each hot reload whenever the code they depend on changes.
-
-BEHAVIOR:
-- Only tests whose dependencies include the changed symbol are re-run (not the full suite).
-- Run policies per category (set via set_run_policy) still apply: a category set to 'disabled' won't run even when live testing is on.
-- Default run policies: 'unit' runs on every change; 'integration' and 'browser' default to 'demand' (explicit only).
-
-WHEN TO USE:
-- At the start of a TDD session to get instant feedback as you write code.
-- Pair with get_test_trace or get_live_test_status to confirm activation and discovery after enabling.
-
-NOTE:
-- Live testing requires a test project to be loaded in the session. Check get_fsi_status to confirm the session has test-related affordances.
-- This call returns an immediate acknowledgment after dispatching the enable request. The discovered-test count in the response may reflect the pre-existing model state; use get_test_trace or get_live_test_status to confirm actual activation/discovery.""")>]
-    member _.enable_live_testing() : Task<string> =
-        logger.LogDebug("MCP-TOOL: enable_live_testing called")
-        setLiveTesting ctx true |> withEcho ctx "enable_live_testing"
-
-    [<Description("""Disable live testing. Tests will not run automatically after hot reload.
-
-WHEN TO USE:
-- When you are making broad refactoring changes and don't want the test runner triggering on every intermediate edit.
-- To reduce resource consumption during long code generation sessions.
-- When working on test files themselves where partial test definitions would cause spurious failures.
-
-NOTE: Disabling live testing does not prevent explicit test runs via run_tests. It only stops the automatic hot-reload-triggered runs.""")>]
-    member _.disable_live_testing() : Task<string> =
-        logger.LogDebug("MCP-TOOL: disable_live_testing called")
-        setLiveTesting ctx false |> withEcho ctx "disable_live_testing"
-
-    [<Description("""Set run policy for a test category. Controls WHEN tests in that category are automatically triggered by the live testing engine.
-
-CATEGORIES: unit | integration | browser | benchmark | architecture | property
-
-POLICIES AND WHAT THEY MEAN:
-- every: Tests re-run on EVERY hot reload that touches a symbol they depend on. Best for fast unit tests (< 1s each). This is the default for 'unit'.
-- save: Tests run only when a source file is explicitly saved (not on every keystroke/hot reload). Good for tests that are fast enough to run frequently but not on every change.
-- demand: Tests NEVER run automatically — only when explicitly triggered via run_tests. Use for slow integration/browser/benchmark tests that shouldn't interrupt a coding session.
-- disabled: Tests are not run at all, not even via run_tests. Use to suppress a broken or irrelevant category without deleting tests.
-
-DEFAULT POLICIES (on fresh session):
-- unit: every
-- integration: demand
-- browser: demand
-- benchmark: disabled
-- architecture: demand
-- property: every
-
-INTERACTION WITH enable/disable_live_testing:
-- disable_live_testing is a global off switch — NO automatic runs happen regardless of policies.
-- enable_live_testing restores the per-category policies (e.g., 'unit: every' resumes).
-- set_run_policy changes policies whether live testing is enabled or not; they take effect when re-enabled.
-
-EXAMPLE WORKFLOW — reduce noise during broad refactoring:
-  set_run_policy(category='unit', policy='save')   ← run unit tests on save only
-  set_run_policy(category='property', policy='demand')  ← stop property tests auto-running
-
-EXAMPLE WORKFLOW — restore defaults after focused work:
-  set_run_policy(category='unit', policy='every')
-  set_run_policy(category='property', policy='every')""")>]
-    member _.set_run_policy(
-        [<Description("Test category: unit, integration, browser, benchmark, architecture, property")>]
-        category: string,
-        [<Description("Run policy: every, save, demand, disabled")>]
-        policy: string
-    ) : Task<string> =
-        logger.LogDebug("MCP-TOOL: set_run_policy called: category={Category}, policy={Policy}", category, policy)
-        setRunPolicy ctx category policy |> withEcho ctx "set_run_policy"
-
-    [<Description("""Configure test execution timeouts. Affects both automatic (hot-reload-triggered) and explicit (run_tests) test runs.
-
-PARAMETERS:
-- per_test_seconds: Each individual test is cancelled if it exceeds this duration. Default: 5s. Increase for tests with real I/O or network calls.
-- global_run_seconds: The entire batch of tests is cancelled if the total run time exceeds this. Default: 120s.
-
-WHEN TO USE:
-- When integration tests are being killed too early (increase per_test_seconds, e.g. to 30s).
-- When a runaway test is hanging and you want a tighter global deadline (decrease global_run_seconds).
-- Call with both values as 0 (or omit) to read the current timeout configuration without changing it.
-
-NOTE: Timeout changes take effect immediately on the next test run.""")>]
-    member _.set_test_timeouts(
-        [<Description("Per-test timeout in seconds (default 5). Each individual test is cancelled if it exceeds this.")>]
-        per_test_seconds: float,
-        [<Description("Global run timeout in seconds (default 120). The entire test batch is cancelled if it exceeds this.")>]
-        global_run_seconds: float
-    ) : Task<string> =
-        let pt = match per_test_seconds <= 0.0 with | true -> None | false -> Some per_test_seconds
-        let gr = match global_run_seconds <= 0.0 with | true -> None | false -> Some global_run_seconds
-        logger.LogDebug("MCP-TOOL: set_test_timeouts called: per_test={PerTest}, global={Global}", per_test_seconds, global_run_seconds)
-        setTestTimeouts ctx pt gr |> withEcho ctx "set_test_timeouts"
-
-    [<Description("""Get test infrastructure state: enabled flag, currently-running status, provider list, per-category run policies, and a test summary.
-
-PREREQUISITE: Live testing must be enabled (call enable_live_testing) for meaningful data. When disabled, returns Enabled=false with a Hint field explaining what to do.
-
-WHEN TO USE:
-- To see the overall health of the live testing subsystem (is it enabled? which providers are active? what are the run policies?).
-- To diagnose why tests are or aren't running automatically (check run policies and enabled state).
-- As a quick dashboard view: combine with get_live_test_status for a full picture.
-
-DIFFERENCE FROM get_live_test_status:
-- get_test_trace: infrastructure config — enabled state, providers, policies, timing metadata.
-- get_live_test_status: per-test results — which individual tests passed, failed, or are stale.
-
-IMPORTANT:
-- Enabled=true means the live-testing subsystem is active. It does NOT imply the FSI worker is currently Ready for new evals — check get_fsi_status separately for worker readiness.""")>]
-    member _.get_test_trace() : Task<string> =
-        logger.LogDebug("MCP-TOOL: get_test_trace called")
-        getTestTrace ctx |> withEcho ctx "get_test_trace"
-
     [<McpServerTool>]
     [<Description("""Run tests explicitly. Without parameters, runs all discovered unit tests.
 
-PREREQUISITE: Live testing must be enabled (call enable_live_testing) for tests to be discovered. If you get "No tests discovered", enable live testing first.
+THIS IS AN EXPLICIT VERIFICATION TOOL:
+- It runs tests on demand for MCP clients.
+- It is separate from ambient editor/live-testing feedback.
+- If no tests are discovered, inspect your loaded projects/session state rather than assuming a live-testing toggle is required.
 
 Use pattern to filter by test name. By default this is a substring match on FullName or DisplayName.
 Prefix pattern with 'exact:' to run one exact full test name without fuzzy matching.
@@ -827,17 +727,16 @@ CATEGORY FILTER:
 
 TIMEOUT BEHAVIOR:
 - timeout_seconds is how long THIS CALL waits for results — not a per-test execution limit.
-- Per-test and global test timeouts are configured separately via set_test_timeouts.
-- timeout_seconds=0: fires the run and returns immediately. Poll get_live_test_status for completion.
+- timeout_seconds=0: fires the run and returns immediately.
 - Increase beyond 30 for integration or end-to-end tests that legitimately take longer.
 
 COMMON MISTAKES:
-- Calling run_tests before enable_live_testing → 0 tests discovered. Enable live testing first.
+- Calling run_tests against the wrong session or before the relevant test project is loaded.
 - Creating new sessions when tests are slow → resource starvation spiral. Wait for existing sessions.
 
 RETURN VALUE:
 - On completion: summary with pass/fail counts and names of any failing tests with failure messages.
-- On timeout: a message indicating tests are still running. Use get_live_test_status to poll.""")>]
+- On timeout: a message indicating tests are still running; call run_tests again later or use a shorter, narrower explicit test selection next time.""")>]
     member _.run_tests(
         [<Description("Optional test filter. Default: case-insensitive substring on FullName/DisplayName. Prefix with 'exact:' to require an exact full test name. Omit to run all tests in the category.")>]
         pattern: string,

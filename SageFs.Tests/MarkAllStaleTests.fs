@@ -91,6 +91,7 @@ let markAllStaleTests = testList "MarkAllStale" [
           (BatchCompletion.Complete (1, 1))
           LiveTestingActivation.Active
           [| staleEntry |]
+          None
       payload.Summary.Stale
       |> Expect.equal "should have 1 stale" 1
       payload.Summary.Passed

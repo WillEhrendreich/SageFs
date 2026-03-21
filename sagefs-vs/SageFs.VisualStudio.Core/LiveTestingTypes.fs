@@ -41,6 +41,38 @@ type TestResult = {
   Output: string option
 }
 
+[<RequireQualifiedAccess>]
+type SelectionPrecision =
+  | ExactDependencyMatch
+  | CoverageApproximation
+  | ConservativeFallback
+  | NoImpactedTests
+  | SuppressedByPolicy
+
+[<RequireQualifiedAccess>]
+type FreshnessTrust =
+  | FreshExact
+  | FreshApproximate
+  | StaleAwaitingRerun
+  | Suppressed
+
+[<RequireQualifiedAccess>]
+type RerunCause =
+  | KeystrokeBuffered
+  | FileSaved
+  | ExplicitRunRequested
+
+type LiveTestingDecision = {
+  Cause: RerunCause
+  FilePath: string
+  Precision: SelectionPrecision
+  Trust: FreshnessTrust
+  ChangedSymbols: string array
+  SelectedTests: string array
+  DeferredTests: string array
+  Reason: string
+}
+
 /// Test summary counts
 type TestSummary = {
   Total: int
@@ -49,10 +81,24 @@ type TestSummary = {
   Running: int
   Stale: int
   Disabled: int
+  LastDecision: LiveTestingDecision option
 }
 
 [<RequireQualifiedAccess>]
 module TestSummary =
+  let formatDecisionHint (decision: LiveTestingDecision) =
+    match decision.Precision with
+    | SelectionPrecision.ExactDependencyMatch ->
+      sprintf "Why: exact dependency match (%d selected)" decision.SelectedTests.Length
+    | SelectionPrecision.CoverageApproximation ->
+      sprintf "Why: coverage widened the rerun (%d selected)" decision.SelectedTests.Length
+    | SelectionPrecision.ConservativeFallback ->
+      sprintf "Why: conservative fallback rebuild (%d selected)" decision.SelectedTests.Length
+    | SelectionPrecision.NoImpactedTests ->
+      "Why: no impacted tests were identified"
+    | SelectionPrecision.SuppressedByPolicy ->
+      sprintf "Why: run policy deferred %d test(s)" decision.DeferredTests.Length
+
   /// Format for VS tool window header. Returns (text, severity).
   let formatToolWindowLine (s: TestSummary) =
     let parts = [
@@ -69,7 +115,11 @@ module TestSummary =
       if s.Failed > 0 then "error"
       elif s.Stale > 0 then "warning"
       else "info"
-    text, severity
+    let textWithWhy =
+      s.LastDecision
+      |> Option.map (fun decision -> sprintf "%s — %s" text (formatDecisionHint decision))
+      |> Option.defaultValue text
+    textWithWhy, severity
 
 /// Whether live testing is enabled
 [<RequireQualifiedAccess>]
@@ -342,7 +392,7 @@ module LiveTestState =
           |> Map.count
         else stale
       { Total = state.Tests.Count; Passed = passed; Failed = failed
-        Running = state.RunningTests.Count; Stale = stale; Disabled = disabled }
+        Running = state.RunningTests.Count; Stale = stale; Disabled = disabled; LastDecision = None }
 
   let testsForFile (filePath: string) (state: LiveTestState) =
     state.Tests

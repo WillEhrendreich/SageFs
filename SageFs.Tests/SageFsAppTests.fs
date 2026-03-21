@@ -1834,6 +1834,48 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
     parkedPending.SessionId
     |> Expect.equal "parked primary session should keep its target session id" pendingA.SessionId
 
+  testCase "live testing status bar explains when ambient reruns were conservative instead of exact" <| fun _ ->
+    let decision =
+      LiveTestingDecision.fromSelection
+        (RerunCause.FileSaved "src/Compiled.fs")
+        SelectionPrecision.ConservativeFallback
+        []
+        [| "Compiled.Tests.should_build_a"; "Compiled.Tests.should_build_b" |]
+        [||]
+        "fallback rebuild"
+    let state =
+      { LiveTestCycleState.empty with
+          TestState =
+            { LiveTestState.empty with
+                Activation = LiveTestingActivation.Active
+                LastDecision = Some decision } }
+
+    LiveTestCycleState.liveTestingStatusBar state
+    |> Expect.stringContains
+      "status bar should surface fallback explanation so quiet ambient work is interpretable"
+      "why: fallback rebuild (2 selected)"
+
+  testCase "live testing status bar explains when policy intentionally deferred ambient work" <| fun _ ->
+    let decision =
+      LiveTestingDecision.fromSelection
+        (RerunCause.KeystrokeBuffered "src/Architecture.fs")
+        SelectionPrecision.SuppressedByPolicy
+        [ "Architecture.Rule" ]
+        [||]
+        [| "Architecture.Tests.should_hold" |]
+        "suppressed"
+    let state =
+      { LiveTestCycleState.empty with
+          TestState =
+            { LiveTestState.empty with
+                Activation = LiveTestingActivation.Active
+                LastDecision = Some decision } }
+
+    LiveTestCycleState.liveTestingStatusBar state
+    |> Expect.stringContains
+      "status bar should surface policy deferral so silence reads as intentional"
+      "why: deferred by policy (1)"
+
   testCase "SessionSwitched does not emit live-testing effects" <| fun _ ->
     let mkSnap id active = {
       Id = id; Name = None; Projects = []

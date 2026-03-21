@@ -117,6 +117,18 @@ let healthFormatTests =
       text |> Expect.stringContains "should include the ready count" "Ready=1"
       text |> Expect.stringContains "should include the faulted count" "Faulted=1"
       text |> Expect.stringContains "should include the warming up count" "Warming Up=1"
+
+    testCase "primary session status prefers ready over warming sessions" <| fun _ ->
+      let sessions = [
+        { SessionId = "warming"; ProjectName = "WarmProject"; Status = SessionHealthStatus.WarmingUp; EvalCount = 0; LastActivity = DateTimeOffset.UtcNow }
+        { SessionId = "ready"; ProjectName = "ReadyProject"; Status = SessionHealthStatus.Ready; EvalCount = 3; LastActivity = DateTimeOffset.UtcNow }
+      ]
+
+      DaemonHealth.primarySessionStatus sessions
+      |> Expect.equal "ready should win over warming" (Some SessionHealthStatus.Ready)
+
+      DaemonHealth.primarySessionStatusLabel sessions
+      |> Expect.equal "label should reflect ready state" "Ready"
   ]
 
 [<Tests>]

@@ -52,7 +52,8 @@ let private mkTestResultsBatch (n: int) : TestResultsBatchPayload =
     Freshness = ResultFreshness.Fresh
     Completion = BatchCompletion.Complete (n, n)
     Entries = entries
-    Summary = mkTestSummary () }
+    Summary = mkTestSummary ()
+    LastDecision = None }
 
 let private mkFileAnnotations () : FileAnnotations =
   { FilePath = "C:\\Code\\Repos\\SageFs\\SageFs.Core\\Features\\LiveTesting.fs"
@@ -226,7 +227,7 @@ let sseSerializationBenchmarks = testList "[Benchmark] SSE serialization benchma
 
     testCase "test_summary is compact" <| fun () ->
       let bytes = measureBytes (fun () ->
-        formatTestSummaryEvent jsonOpts (Some "sess-1") (mkTestSummary ()))
+        formatTestSummaryEvent jsonOpts (Some "sess-1") (mkTestSummary ()) None)
       (bytes, 256) |> Expect.isLessThan "summary should be under 256 bytes"
 
     testCase "test_results_batch 50 entries" <| fun () ->
@@ -308,7 +309,7 @@ let sseSerializationBenchmarks = testList "[Benchmark] SSE serialization benchma
     testCase "test_summary under 50μs" <| fun () ->
       let summary = mkTestSummary ()
       let nsPerOp = measureNs 10000 (fun () ->
-        formatTestSummaryEvent jsonOpts (Some "sess-1") summary)
+        formatTestSummaryEvent jsonOpts (Some "sess-1") summary None)
       (nsPerOp, 50_000.0) |> Expect.isLessThan "test_summary should serialize under 50μs"
 
     testCase "test_results_batch 50 under 2ms" <| fun () ->
@@ -383,7 +384,7 @@ let sseSerializationBenchmarks = testList "[Benchmark] SSE serialization benchma
     testCase "all events start with event: and end with double newline" <| fun () ->
       let events = [
         formatWarmupProgressEvent jsonOpts None 1 5 "phase1"
-        formatTestSummaryEvent jsonOpts None (mkTestSummary ())
+        formatTestSummaryEvent jsonOpts None (mkTestSummary ()) None
         formatTestResultsBatchEvent jsonOpts None (mkTestResultsBatch 5)
         formatFileAnnotationsEvent jsonOpts None (mkFileAnnotations ())
         formatEvalDiffEvent jsonOpts None (mkDiffSummary ())
@@ -404,11 +405,11 @@ let sseSerializationBenchmarks = testList "[Benchmark] SSE serialization benchma
         evt |> Expect.stringEnds "should end with double newline" "\n\n"
 
     testCase "sessionId injection adds SessionId field" <| fun () ->
-      let evt = formatTestSummaryEvent jsonOpts (Some "my-session") (mkTestSummary ())
+      let evt = formatTestSummaryEvent jsonOpts (Some "my-session") (mkTestSummary ()) None
       evt |> Expect.stringContains "should contain SessionId" "\"SessionId\":\"my-session\""
 
     testCase "no sessionId produces clean JSON" <| fun () ->
-      let evt = formatTestSummaryEvent jsonOpts None (mkTestSummary ())
+      let evt = formatTestSummaryEvent jsonOpts None (mkTestSummary ()) None
       evt.Contains("SessionId") |> Expect.isFalse "should not contain SessionId"
   ]
 ]

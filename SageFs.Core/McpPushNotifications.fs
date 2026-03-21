@@ -20,7 +20,7 @@ type PushEvent =
   /// Warmup completed.
   | WarmupCompleted
   /// Test summary changed — carries summary record.
-  | TestSummaryChanged of summary: TestSummary
+  | TestSummaryChanged of summary: TestSummary * lastDecision: LiveTestingDecision option
   /// Test results batch — carries enriched payload with generation, freshness, entries, summary.
   | TestResultsBatch of payload: TestResultsBatchPayload
   /// File annotations — per-file inline feedback (test status, coverage, CodeLens, failures).
@@ -102,8 +102,12 @@ module PushEvent =
       sprintf "🔴 session faulted: %s" error
     | PushEvent.WarmupCompleted ->
       "✓ warmup complete"
-    | PushEvent.TestSummaryChanged s ->
-      sprintf "🧪 tests: %d total, %d passed, %d failed, %d stale, %d running" s.Total s.Passed s.Failed s.Stale s.Running
+    | PushEvent.TestSummaryChanged (s, lastDecision) ->
+      let suffix =
+        lastDecision
+        |> Option.map (fun decision -> sprintf " — %s" (LiveTestingDecision.statusBarHint decision))
+        |> Option.defaultValue ""
+      sprintf "🧪 tests: %d total, %d passed, %d failed, %d stale, %d running%s" s.Total s.Passed s.Failed s.Stale s.Running suffix
     | PushEvent.TestResultsBatch payload ->
       sprintf "🧪 %d test result(s) received (%A)" payload.Entries.Length payload.Freshness
     | PushEvent.FileAnnotationsUpdated ann ->

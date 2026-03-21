@@ -12,6 +12,7 @@ open System.Threading
 open System.Threading.Tasks
 open Expecto
 open Expecto.Flip
+open SageFs.Features
 
 // ─── Shared Helpers ───────────────────────────────────────────────
 
@@ -364,6 +365,42 @@ let integrationTests =
       let summary = root.GetProperty("diagnosticSummary").GetString()
       summary |> Expect.isNotEmpty "diagnostic summary should be populated"
 
+    testCase "GET /health reports Ready when any session is ready" <| fun _ ->
+      let client = getSharedClient()
+      let status, body = getJson client "/health" |> Async.AwaitTask |> Async.RunSynchronously
+      status |> Expect.equal "200 OK" 200
+
+      use doc = JsonDocument.Parse(body)
+      let root = doc.RootElement
+      let sessionStates =
+        root.GetProperty("sessionStates").EnumerateArray()
+        |> Seq.toArray
+
+      let expected =
+        sessionStates
+        |> Array.map (fun session ->
+          match session.GetProperty("status").GetString() with
+          | "Ready" -> Some SessionHealthStatus.Ready
+          | "Evaluating" -> Some SessionHealthStatus.Evaluating
+          | "Starting"
+          | "Restarting" -> Some SessionHealthStatus.WarmingUp
+          | status when status.StartsWith("Building") -> Some SessionHealthStatus.Evaluating
+          | "Faulted" -> Some SessionHealthStatus.Faulted
+          | "Stopped" -> Some SessionHealthStatus.Stopped
+          | _ -> None)
+        |> Array.choose id
+        |> Array.map (fun status ->
+          { SessionId = ""
+            ProjectName = ""
+            Status = status
+            EvalCount = 0
+            LastActivity = DateTimeOffset.UtcNow })
+        |> Array.toList
+        |> DaemonHealth.primarySessionStatusLabel
+
+      root.GetProperty("status").GetString()
+      |> Expect.equal "health status should reflect the strongest available session state" expected
+  
     testCase "GET /api/system/status returns supervised=false and version" <| fun _ ->
       let client = getSharedClient()
       let status, body = getJson client "/api/system/status" |> Async.AwaitTask |> Async.RunSynchronously

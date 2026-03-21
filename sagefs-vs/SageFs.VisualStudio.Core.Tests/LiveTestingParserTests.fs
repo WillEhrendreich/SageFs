@@ -1,8 +1,14 @@
 module SageFs.VisualStudio.Core.Tests.LiveTestingParserTests
 
+open System.IO
 open Xunit
 open FsUnit.Xunit
 open SageFs.VisualStudio.Core
+
+let private fixturePath name =
+  Path.Combine(__SOURCE_DIRECTORY__, "..", "..", "SageFs.Tests", "Fixtures", "LiveTesting", name)
+
+let private readFixture name = File.ReadAllText(fixturePath name)
 
 // -- parseDurationToMs -----------------------------------------------------
 
@@ -29,8 +35,7 @@ let ``parseDurationToMs returns None for empty string`` () =
 
 [<Fact>]
 let ``parseSseEvent test_summary with valid JSON returns SummaryUpdated with correct fields`` () =
-  let json =
-    """{"Total":5,"Passed":3,"Failed":1,"Running":0,"Stale":1,"Disabled":0}"""
+  let json = readFixture "summary-with-fallback-decision.json"
   match LiveTestingParser.parseSseEvent "test_summary" json with
   | [ LiveTestEvent.SummaryUpdated s ] ->
     s.Total |> should equal 5
@@ -38,6 +43,22 @@ let ``parseSseEvent test_summary with valid JSON returns SummaryUpdated with cor
     s.Failed |> should equal 1
     s.Stale |> should equal 1
     s.Disabled |> should equal 0
+    s.LastDecision.IsSome |> should equal true
+  | other -> failwith (sprintf "expected [SummaryUpdated] but got %A" other)
+
+[<Fact>]
+let ``parseSseEvent test_summary with suppressed decision fixture preserves policy deferral semantics`` () =
+  let json = readFixture "summary-with-suppressed-decision.json"
+  match LiveTestingParser.parseSseEvent "test_summary" json with
+  | [ LiveTestEvent.SummaryUpdated s ] ->
+    s.Total |> should equal 4
+    s.Stale |> should equal 2
+    match s.LastDecision with
+    | Some decision ->
+      decision.Precision |> should equal SelectionPrecision.SuppressedByPolicy
+      decision.Trust |> should equal FreshnessTrust.Suppressed
+      decision.DeferredTests.Length |> should equal 1
+    | None -> failwith "expected suppressed decision"
   | other -> failwith (sprintf "expected [SummaryUpdated] but got %A" other)
 
 [<Fact>]
@@ -57,7 +78,10 @@ let ``parseSseEvent test_summary with invalid JSON returns empty list`` () =
 // -- parseSseEvent: test_results_batch -------------------------------------
 
 let private passedBatchJson =
-  """{"Entries":[{"TestId":{"Fields":["test-id-1"]},"DisplayName":"my test","FullName":"Module.myTest","Origin":{"Case":"SourceMapped","Fields":["path/to/Test.fs",42]},"Status":{"Case":"Passed","Fields":["00:00:00.045"]}}],"Freshness":"Fresh"}"""
+  readFixture "results-batch-with-coverage-decision.json"
+
+let private fixtureBatchJson =
+  readFixture "results-batch-with-coverage-decision.json"
 
 let private failedBatchJson =
   """{"Entries":[{"TestId":{"Fields":["test-id-2"]},"DisplayName":"failing test","FullName":"Module.failingTest","Origin":{"Case":"NoOrigin"},"Status":{"Case":"Failed","Fields":[{"Case":"AssertionFailed","Fields":["expected 1 but got 2"]},"00:00:00.012"]}}],"Freshness":"Fresh"}"""
@@ -88,8 +112,8 @@ let ``parseSseEvent test_results_batch valid JSON returns TestsDiscovered and Te
 [<Fact>]
 let ``parseSseEvent test_results_batch passed result has Passed outcome with duration`` () =
   match LiveTestingParser.parseSseEvent "test_results_batch" passedBatchJson with
-  | [ _; LiveTestEvent.TestResultBatch([| r |], _) ] ->
-    match r.Outcome with
+  | [ _; LiveTestEvent.TestResultBatch(results, _) ] ->
+    match results.[0].Outcome with
     | TestOutcome.Passed ms -> ms |> should equal 45.0
     | other -> failwith (sprintf "expected Passed but got %A" other)
   | other -> failwith (sprintf "unexpected result %A" other)
@@ -97,16 +121,23 @@ let ``parseSseEvent test_results_batch passed result has Passed outcome with dur
 [<Fact>]
 let ``parseSseEvent test_results_batch passed result has correct test ID`` () =
   match LiveTestingParser.parseSseEvent "test_results_batch" passedBatchJson with
-  | [ LiveTestEvent.TestsDiscovered([| info |]); _ ] ->
-    TestId.value info.Id |> should equal "test-id-1"
+  | [ LiveTestEvent.TestsDiscovered infos; _ ] ->
+    TestId.value infos.[0].Id |> should equal "test-id-1"
   | other -> failwith (sprintf "unexpected result %A" other)
 
 [<Fact>]
 let ``parseSseEvent test_results_batch passed result has source file and line from Origin`` () =
-  match LiveTestingParser.parseSseEvent "test_results_batch" passedBatchJson with
-  | [ LiveTestEvent.TestsDiscovered([| info |]); _ ] ->
-    info.FilePath |> should equal (Some "path/to/Test.fs")
-    info.Line |> should equal (Some 42)
+  match LiveTestingParser.parseSseEvent "test_results_batch" fixtureBatchJson with
+  | [ LiveTestEvent.TestsDiscovered infos; _ ] ->
+    infos.[0].FilePath |> should equal (Some "src/Tests.fs")
+    infos.[0].Line |> should equal (Some 10)
+  | other -> failwith (sprintf "unexpected result %A" other)
+
+[<Fact>]
+let ``parseSseEvent test_results_batch fixture retains latest decision for downstream UI explanations`` () =
+  match LiveTestingParser.parseSseEvent "test_results_batch" fixtureBatchJson with
+  | [ LiveTestEvent.TestsDiscovered _; LiveTestEvent.TestResultBatch(_, freshness) ] ->
+    freshness |> should equal ResultFreshness.Fresh
   | other -> failwith (sprintf "unexpected result %A" other)
 
 [<Fact>]

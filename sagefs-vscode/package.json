@@ -2,7 +2,7 @@
   "name": "sagefs",
   "displayName": "SageFs — Live F# Development",
   "description": "Send F# code to SageFs for instant evaluation, type-checking, and hot reload.",
-  "version": "0.6.214",
+  "version": "0.6.215",
   "publisher": "willehrendreich",
   "license": "MIT",
   "icon": "icon.png",
@@ -645,7 +645,8 @@
     "vscode:prepublish": "npm run sync-version && npm run compile",
     "compile": "dotnet fable src --outDir fable-out && node esbuild.mjs",
     "watch": "dotnet fable watch src --outDir fable-out",
-    "compile:ts": "tsc -p ./"
+    "compile:ts": "tsc -p ./",
+    "test:golden": "node src/LiveTestingListener.golden-tests.mjs"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

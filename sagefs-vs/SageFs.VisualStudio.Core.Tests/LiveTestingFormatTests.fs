@@ -23,41 +23,56 @@ let private mkResult id outcome durationMs = {
 
 [<Fact>]
 let ``formatToolWindowLine all passed reports passed count`` () =
-  let s = { Total = 3; Passed = 3; Failed = 0; Running = 0; Stale = 0; Disabled = 0 }
+  let s = { Total = 3; Passed = 3; Failed = 0; Running = 0; Stale = 0; Disabled = 0; LastDecision = None }
   let text, severity = TestSummary.formatToolWindowLine s
   text |> should haveSubstring "3 passed"
   severity |> should equal "info"
 
 [<Fact>]
 let ``formatToolWindowLine with failures has error severity`` () =
-  let s = { Total = 3; Passed = 2; Failed = 1; Running = 0; Stale = 0; Disabled = 0 }
+  let s = { Total = 3; Passed = 2; Failed = 1; Running = 0; Stale = 0; Disabled = 0; LastDecision = None }
   let text, severity = TestSummary.formatToolWindowLine s
   text |> should haveSubstring "1 failed"
   severity |> should equal "error"
 
 [<Fact>]
 let ``formatToolWindowLine with stale and no failures has warning severity`` () =
-  let s = { Total = 2; Passed = 1; Failed = 0; Running = 0; Stale = 1; Disabled = 0 }
+  let s = { Total = 2; Passed = 1; Failed = 0; Running = 0; Stale = 1; Disabled = 0; LastDecision = None }
   let _, severity = TestSummary.formatToolWindowLine s
   severity |> should equal "warning"
 
 [<Fact>]
 let ``formatToolWindowLine with zero totals shows total count`` () =
-  let s = { Total = 5; Passed = 0; Failed = 0; Running = 0; Stale = 0; Disabled = 0 }
+  let s = { Total = 5; Passed = 0; Failed = 0; Running = 0; Stale = 0; Disabled = 0; LastDecision = None }
   let text, _ = TestSummary.formatToolWindowLine s
   text |> should haveSubstring "5 tests"
 
 [<Fact>]
 let ``formatToolWindowLine includes running count when nonzero`` () =
-  let s = { Total = 4; Passed = 1; Failed = 0; Running = 2; Stale = 0; Disabled = 0 }
+  let s = { Total = 4; Passed = 1; Failed = 0; Running = 2; Stale = 0; Disabled = 0; LastDecision = None }
   let text, _ = TestSummary.formatToolWindowLine s
   text |> should haveSubstring "2 running"
 
 [<Fact>]
 let ``formatToolWindowLine includes disabled count when nonzero`` () =
-  let s = { Total = 4; Passed = 2; Failed = 0; Running = 0; Stale = 0; Disabled = 2 }
+  let s = { Total = 4; Passed = 2; Failed = 0; Running = 0; Stale = 0; Disabled = 2; LastDecision = None }
   let text, _ = TestSummary.formatToolWindowLine s
   text |> should haveSubstring "2 disabled"
+
+[<Fact>]
+let ``formatToolWindowLine includes why hint when decision is present`` () =
+  let decision =
+    { Cause = RerunCause.KeystrokeBuffered
+      FilePath = "src/Architecture.fs"
+      Precision = SelectionPrecision.SuppressedByPolicy
+      Trust = FreshnessTrust.Suppressed
+      ChangedSymbols = [| "Architecture.Rule" |]
+      SelectedTests = [||]
+      DeferredTests = [| "Architecture.Tests.should_hold" |]
+      Reason = "suppressed" }
+  let s = { Total = 1; Passed = 0; Failed = 0; Running = 0; Stale = 1; Disabled = 0; LastDecision = Some decision }
+  let text, _ = TestSummary.formatToolWindowLine s
+  text |> should haveSubstring "run policy deferred 1 test"
 
 // -- RunPolicy helpers --------------------------------------------------------
 

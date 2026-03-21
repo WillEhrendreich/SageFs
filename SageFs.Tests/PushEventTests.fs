@@ -12,7 +12,7 @@ let private emptySummary =
 let private emptyBatch =
   { Generation = RunGeneration 0; Freshness = ResultFreshness.Fresh
     Completion = BatchCompletion.Complete (0, 0)
-    Entries = [||]; Summary = emptySummary }
+    Entries = [||]; Summary = emptySummary; LastDecision = None }
 
 let private emptyAnnotations =
   { FilePath = ""; TestAnnotations = [||]; CoverageAnnotations = [||]
@@ -33,7 +33,7 @@ let private allPushEvents = [
   PushEvent.FileReloaded "test.fs"
   PushEvent.SessionFaulted "err"
   PushEvent.WarmupCompleted
-  PushEvent.TestSummaryChanged emptySummary
+  PushEvent.TestSummaryChanged (emptySummary, None)
   PushEvent.TestResultsBatch emptyBatch
   PushEvent.FileAnnotationsUpdated emptyAnnotations
   PushEvent.DiagnosisReady emptyDiagnosis
@@ -95,8 +95,20 @@ let pushEventFormatForLlmTests = testList "PushEvent.formatForLlm" [
     |> Expect.stringContains "warmup" "warmup")
   testCase "test summary" (fun () ->
     let s = { emptySummary with Total = 100; Passed = 95; Failed = 5 }
-    PushEvent.formatForLlm (PushEvent.TestSummaryChanged s)
+    PushEvent.formatForLlm (PushEvent.TestSummaryChanged (s, None))
     |> Expect.stringContains "total" "100 total")
+  testCase "test summary includes last decision hint when available" (fun () ->
+    let s = { emptySummary with Total = 3; Passed = 2; Failed = 1 }
+    let decision =
+      LiveTestingDecision.fromSelection
+        (RerunCause.FileSaved "src/Module.fs")
+        SelectionPrecision.ConservativeFallback
+        [ "Module.add" ]
+        [| "Module.Tests.should_add" |]
+        [||]
+        "fallback"
+    PushEvent.formatForLlm (PushEvent.TestSummaryChanged (s, Some decision))
+    |> Expect.stringContains "last decision hint should be surfaced" "fallback rebuild")
   testCase "diagnosis ready shows severity and counts" (fun () ->
     let tid = SageFs.Features.LiveTesting.TestId.create "some.test" SageFs.Features.LiveTesting.TestFramework.Expecto
     let report =

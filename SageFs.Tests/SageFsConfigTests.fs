@@ -60,7 +60,8 @@ let sageFsConfigTests =
       (SageFsConfig.WorkerStartupTimeoutMs, 0)
       |> Expect.isGreaterThan "should have a valid default"
 
-    testCase "McpPortFromEnv returns a valid port" <| fun _ ->
-      (SageFsConfig.McpPortFromEnv > 0 && SageFsConfig.McpPortFromEnv < 65536)
-      |> Expect.isTrue "port must be in valid range"
+    testCase "McpPortFromEnv exposes a valid default port even under arbitrary environment state" <| fun _ ->
+      let value = SageFsConfig.McpPortFromEnv
+      (value > 0 && value < 65536)
+      |> Expect.isTrue "MCP port value should remain in a valid range"
   ]

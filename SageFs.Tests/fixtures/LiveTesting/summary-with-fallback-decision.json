@@ -1,0 +1,1 @@
+{"Total":5,"Passed":3,"Failed":1,"Running":0,"Stale":1,"Disabled":0,"LastDecision":{"Cause":"file_saved","FilePath":"src/Compiled.fs","Precision":"conservative_fallback","Trust":"fresh_approximate","ChangedSymbols":[],"SelectedTests":["Compiled.Tests.should_build_a"],"DeferredTests":[],"Reason":"fallback rebuild"}}

@@ -76,7 +76,8 @@ let private mkTestResultsBatch (n: int) : TestResultsBatchPayload =
     Freshness = ResultFreshness.Fresh
     Completion = BatchCompletion.Complete (n, n)
     Entries = entries
-    Summary = mkTestSummary () }
+    Summary = mkTestSummary ()
+    LastDecision = None }
 
 let private mkFileAnnotations () : FileAnnotations =
   { FilePath = "Test.fs"
@@ -203,16 +204,16 @@ let sseContractComplianceTests = testList "SSE contract compliance" [
         [ "step"; "total"; "message"; "progress"; "phase" ]
 
     testCase "test_summary has expected properties" <| fun () ->
-      formatTestSummaryEvent jsonOpts None (mkTestSummary ())
+      formatTestSummaryEvent jsonOpts None (mkTestSummary ()) None
       |> extractDataPayload
       |> assertJsonProperties "test_summary"
-        [ "total"; "passed"; "failed"; "stale"; "running"; "disabled"; "enabled" ]
+        [ "total"; "passed"; "failed"; "stale"; "running"; "disabled"; "enabled"; "lastDecision" ]
 
     testCase "test_results_batch has expected properties" <| fun () ->
       formatTestResultsBatchEvent jsonOpts None (mkTestResultsBatch 2)
       |> extractDataPayload
       |> assertJsonProperties "test_results_batch"
-        [ "generation"; "freshness"; "completion"; "entries"; "summary" ]
+        [ "generation"; "freshness"; "completion"; "entries"; "summary"; "lastDecision" ]
 
     testCase "file_annotations has expected properties" <| fun () ->
       formatFileAnnotationsEvent jsonOpts None (mkFileAnnotations ())
@@ -251,6 +252,47 @@ let sseContractComplianceTests = testList "SSE contract compliance" [
       for prop in [ "enabled"; "providers"; "summary" ] do
         doc.RootElement |> hasJsonProperty prop
         |> Expect.isTrue (sprintf "test_trace should preserve '%s'" prop)
+
+    testCase "test_summary carries nullable lastDecision for explanation-aware clients" <| fun () ->
+      let payload =
+        formatTestSummaryEvent jsonOpts None (mkTestSummary ())
+          (Some (
+            LiveTestingDecision.fromSelection
+              (RerunCause.FileSaved "src/Compiled.fs")
+              SelectionPrecision.ConservativeFallback
+              []
+              [| "Compiled.Tests.should_build_a" |]
+              [||]
+              "fallback rebuild"))
+        |> extractDataPayload
+      use doc = JsonDocument.Parse(payload)
+      let lastDecision = doc.RootElement.GetProperty("lastDecision")
+      lastDecision |> hasJsonProperty "precision"
+      |> Expect.isTrue "test_summary lastDecision should expose precision"
+      lastDecision |> hasJsonProperty "trust"
+      |> Expect.isTrue "test_summary lastDecision should expose trust"
+
+    testCase "test_results_batch carries nullable lastDecision for explanation-aware clients" <| fun () ->
+      let payload =
+        let batch = mkTestResultsBatch 2
+        { batch with
+            LastDecision =
+              Some (
+                LiveTestingDecision.fromSelection
+                  (RerunCause.KeystrokeBuffered "src/Module.fs")
+                  SelectionPrecision.CoverageApproximation
+                  [ "Module.add" ]
+                  [| "Module.Tests.should_add" |]
+                  [||]
+                  "coverage widened") }
+        |> formatTestResultsBatchEvent jsonOpts None
+        |> extractDataPayload
+      use doc = JsonDocument.Parse(payload)
+      let lastDecision = doc.RootElement.GetProperty("lastDecision")
+      lastDecision |> hasJsonProperty "cause"
+      |> Expect.isTrue "test_results_batch lastDecision should expose cause"
+      lastDecision |> hasJsonProperty "reason"
+      |> Expect.isTrue "test_results_batch lastDecision should expose reason"
 
     testCase "eval_diff has expected properties" <| fun () ->
       formatEvalDiffEvent jsonOpts None (mkDiffSummary ())

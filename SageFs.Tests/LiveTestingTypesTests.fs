@@ -886,7 +886,7 @@ let liveTestingTypesTests = testList "LiveTestingTypes" [
       |> Expect.equal "should be Superseded" BatchCompletion.Superseded
     }
     test "isEmpty on empty payload" {
-      let p = TestResultsBatchPayload.create RunGeneration.zero Fresh (BatchCompletion.Complete(0,0)) LiveTestingActivation.Active [||]
+      let p = TestResultsBatchPayload.create RunGeneration.zero Fresh (BatchCompletion.Complete(0,0)) LiveTestingActivation.Active [||] None
       TestResultsBatchPayload.isEmpty p
       |> Expect.isTrue "should be empty"
     }

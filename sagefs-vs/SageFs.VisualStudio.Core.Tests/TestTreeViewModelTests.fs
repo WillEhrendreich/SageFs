@@ -103,6 +103,26 @@ let ``formatTestTooltip with stale and StaleCodeEdited freshness mentions code e
     )
   tooltip |> should haveSubstring "code edited"
 
+[<Fact>]
+let ``formatTestTooltip includes explanation hint when last decision is provided`` () =
+  let decision =
+    { Cause = RerunCause.FileSaved
+      FilePath = "src/Compiled.fs"
+      Precision = SelectionPrecision.ConservativeFallback
+      Trust = FreshnessTrust.FreshApproximate
+      ChangedSymbols = [||]
+      SelectedTests = [| "Compiled.Tests.should_build_a" |]
+      DeferredTests = [||]
+      Reason = "fallback rebuild" }
+  let tooltip =
+    LiveTestingSubscriber.formatTestTooltip(
+      sampleInfo,
+      Some staleResult,
+      ResultFreshness.StaleCodeEdited,
+      lastDecision = decision
+    )
+  tooltip |> should haveSubstring "conservative fallback rebuild"
+
 // -- TestTreeViewModel.filterGroups ----------------------------------------
 
 let private mkGroup filePath tests =
