@@ -18,6 +18,7 @@ let mkInfo (id: SessionId) status lastActive : SessionInfo =
     CreatedAt = DateTime(2026, 2, 14, 10, 0, 0)
     LastActivity = lastActive
     Status = status
+    FaultReason = None
     WorkerPid = Some 1234
     Workflow = WorkflowTypes.SessionWorkflow.Interactive }
 

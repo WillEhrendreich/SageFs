@@ -895,6 +895,21 @@ let compositionTests = testList "compositionTests" [
     hasFCS2 |> Expect.isTrue "FCS fires after new debounce window"
   }
 
+  test "trivia-only keystroke keeps tree-sitter feedback but suppresses FCS" {
+    let t0 = DateTimeOffset(2025, 1, 1, 0, 0, 0, TimeSpan.Zero)
+    let s0 = LiveTestCycleState.empty
+    let s1 = s0 |> LiveTestCycleState.onKeystroke "let x = 1" "File.fs" t0
+    let s2 = s1 |> LiveTestCycleState.onKeystroke "let  x = 1 // comment" "File.fs" (t0.AddMilliseconds(20.0))
+    let effects75, s75 = s2 |> LiveTestCycleState.tick (t0.AddMilliseconds(75.0))
+    effects75
+    |> List.exists (fun e -> match e with TestCycleEffect.ParseTreeSitter _ -> true | _ -> false)
+    |> Expect.isTrue "tree-sitter should still fire for editor feedback"
+    let effects400, _ = s75 |> LiveTestCycleState.tick (t0.AddMilliseconds(400.0))
+    effects400
+    |> List.exists (fun e -> match e with TestCycleEffect.RequestFcsTypeCheck _ -> true | _ -> false)
+    |> Expect.isFalse "FCS should stay suppressed for trivia-only edits"
+  }
+
   test "cold start with empty cache: first keystroke produces TS parse" {
     let t0 = DateTimeOffset(2025, 1, 1, 0, 0, 0, TimeSpan.Zero)
     let s0 = LiveTestCycleState.empty
@@ -944,10 +959,10 @@ let symbolGraphWiringTests = testList "symbol graph wiring integration" [
       TestCycleEffects.afterTypeCheck
         [ "MyModule.add" ] "test.fs" RunTrigger.Keystroke graph ltState None Map.empty
     match effect with
-    | [ TestCycleEffect.RequestRebuild (_, tests, _, _, _, _, _) ] ->
+    | [ TestCycleEffect.RunAffectedTests (tests, _, _, _, _, _) ] ->
       tests |> Array.exists (fun t -> t.Id = tid)
       |> Expect.isTrue "should contain affected test"
-    | other -> failtestf "expected single RequestRebuild for .fs file, got %A" other
+    | other -> failtestf "expected single RunAffectedTests for keystroke .fs file, got %A" other
   }
 
   test "handleFcsResult updates dep graph via onFcsComplete" {

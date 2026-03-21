@@ -21,6 +21,7 @@ let private mkSessionInfo status =
     CreatedAt = DateTime.UtcNow
     LastActivity = DateTime.UtcNow
     Status = status
+    FaultReason = None
     WorkerPid = None
     Workflow = WorkflowTypes.SessionWorkflow.Interactive }
 

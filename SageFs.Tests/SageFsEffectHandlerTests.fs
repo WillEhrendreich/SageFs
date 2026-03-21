@@ -53,6 +53,7 @@ module TestDeps =
       CreatedAt = DateTime.UtcNow
       LastActivity = DateTime.UtcNow
       Status = SessionStatus.Ready
+      FaultReason = None
       WorkerPid = Some 999
       Workflow = WorkflowTypes.SessionWorkflow.Interactive
     }
@@ -127,6 +128,7 @@ module TestDeps =
             CreatedAt = DateTime.UtcNow
             LastActivity = DateTime.UtcNow
             Status = SessionStatus.Starting
+            FaultReason = None
             WorkerPid = None
             Workflow = WorkflowTypes.SessionWorkflow.Interactive
           }
@@ -541,6 +543,7 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
       CreatedAt = DateTime.UtcNow
       LastActivity = DateTime.UtcNow
       Status = status
+      FaultReason = None
       WorkerPid = Some 999
       Workflow = WorkflowTypes.SessionWorkflow.Interactive
     }
@@ -629,6 +632,7 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
       CreatedAt = DateTime.UtcNow
       LastActivity = DateTime.UtcNow
       Status = status
+      FaultReason = None
       WorkerPid = Some 999
       Workflow = WorkflowTypes.SessionWorkflow.Interactive
     }
@@ -717,6 +721,7 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
       CreatedAt = DateTime.UtcNow
       LastActivity = DateTime.UtcNow
       Status = status
+      FaultReason = None
       WorkerPid = Some 999
       Workflow = WorkflowTypes.SessionWorkflow.Interactive
     }
@@ -799,6 +804,7 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
       CreatedAt = DateTime.UtcNow
       LastActivity = DateTime.UtcNow
       Status = status
+      FaultReason = None
       WorkerPid = Some 999
       Workflow = WorkflowTypes.SessionWorkflow.Interactive
     }
@@ -887,6 +893,7 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
       CreatedAt = DateTime.UtcNow
       LastActivity = DateTime.UtcNow
       Status = status
+      FaultReason = None
       WorkerPid = Some 999
       Workflow = WorkflowTypes.SessionWorkflow.Interactive
     }
@@ -1005,6 +1012,7 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
       CreatedAt = DateTime.UtcNow
       LastActivity = DateTime.UtcNow
       Status = status
+      FaultReason = None
       WorkerPid = Some 999
       Workflow = WorkflowTypes.SessionWorkflow.Interactive
     }
@@ -1100,6 +1108,7 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
       CreatedAt = DateTime.UtcNow
       LastActivity = DateTime.UtcNow
       Status = status
+      FaultReason = None
       WorkerPid = Some 999
       Workflow = WorkflowTypes.SessionWorkflow.Interactive
     }
@@ -1297,6 +1306,7 @@ let fullLoopTests = testList "Full ElmLoop + EffectHandler" [
       WorkingDirectory = "/code"; SolutionRoot = None
       CreatedAt = DateTime.UtcNow; LastActivity = DateTime.UtcNow
       Status = SessionStatus.Ready; WorkerPid = Some 42
+      FaultReason = None
       Workflow = WorkflowTypes.SessionWorkflow.Interactive
     }
     let warmup : WarmupContext = {
@@ -1365,6 +1375,7 @@ let fullLoopTests = testList "Full ElmLoop + EffectHandler" [
                   WorkingDirectory = "."; SolutionRoot = None
                   CreatedAt = DateTime.UtcNow; LastActivity = DateTime.UtcNow
                   Status = SessionStatus.Ready; WorkerPid = Some 1
+                  FaultReason = None
                   Workflow = WorkflowTypes.SessionWorkflow.Interactive }]
       }
       SleepMs = fun _ -> async { return () }
@@ -1405,6 +1416,7 @@ let fullLoopTests = testList "Full ElmLoop + EffectHandler" [
                   WorkingDirectory = "."; SolutionRoot = None
                   CreatedAt = DateTime.UtcNow; LastActivity = DateTime.UtcNow
                   Status = SessionStatus.Starting; WorkerPid = None
+                  FaultReason = None
                   Workflow = WorkflowTypes.SessionWorkflow.Interactive }]
       }
       SleepMs = fun _ -> async { return () }

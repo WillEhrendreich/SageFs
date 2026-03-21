@@ -820,10 +820,12 @@ type LiveTestWatcherManager
   ( dispatch: SageFsMsg -> unit,
     onFileReloaded: string -> unit ) =
 
+  let liveTestWatcherDebounceMs = 75
+
   let watchers = System.Collections.Concurrent.ConcurrentDictionary<string, System.IO.FileSystemWatcher * System.Threading.Timer>()
   let pendingPaths = System.Collections.Concurrent.ConcurrentDictionary<string, bool>()
   let pendingLock = obj()
-  let debounceMs = 200
+  let debounceMs = liveTestWatcherDebounceMs
 
   let debounceCallback _ =
     let paths =
@@ -912,6 +914,7 @@ let createLiveTestWatcher
   (workingDir: string)
   (dispatch: SageFsMsg -> unit)
   (onFileReloaded: string -> unit) =
+  let liveTestWatcherDebounceMs = 75
   let mutable pendingPaths : Set<string> = Set.empty
   let watcherLock = obj()
   let debounceCallback _ =
@@ -938,12 +941,12 @@ let createLiveTestWatcher
   let handleFileChanged (e: System.IO.FileSystemEventArgs) =
     let path = e.FullPath
     match SageFs.FileWatcher.shouldTriggerRebuild
-        { Directories = [workingDir]; Extensions = [".fs"; ".fsx"]; ExcludePatterns = []; DebounceMs = 200 }
+        { Directories = [workingDir]; Extensions = [".fs"; ".fsx"]; ExcludePatterns = []; DebounceMs = liveTestWatcherDebounceMs }
         path with
     | true ->
       lock watcherLock (fun () ->
         pendingPaths <- pendingPaths |> Set.add path
-        debounceTimer.Change(200, System.Threading.Timeout.Infinite) |> ignore)
+        debounceTimer.Change(liveTestWatcherDebounceMs, System.Threading.Timeout.Infinite) |> ignore)
     | false -> ()
   let watcher = new System.IO.FileSystemWatcher(workingDir)
   watcher.IncludeSubdirectories <- true
@@ -1465,12 +1468,17 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
       ActivityTracker = activityTracker
     }
 
-  // Test cycle tick timer — drives debounce channels for live testing (200ms interval)
+  let liveTestTickMs = 25
+
+  // Test cycle tick timer — drives debounce channels for live testing.
+  // Keep this comfortably below the 50ms tree-sitter debounce so as-you-type
+  // feedback can land near the intended debounce threshold instead of being
+  // quantized up to an outer 200ms polling loop.
   // Elmish-style batching means rapid ticks coalesce: N ticks → N updates → 1 render
   let testCycleTimer = new System.Threading.Timer(
     System.Threading.TimerCallback(fun _ ->
       elmRuntime.Dispatch(SageFsMsg.TestCycleTick DateTimeOffset.UtcNow)),
-    null, 200, 200)
+    null, liveTestTickMs, liveTestTickMs)
 
   // Periodic test cache save — crash recovery for test results.
   // Fires every 60s, only writes when RunGeneration has advanced since last save.

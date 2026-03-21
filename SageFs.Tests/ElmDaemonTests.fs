@@ -25,6 +25,7 @@ module ElmDaemonTestHelpers =
       CreatedAt = DateTime.UtcNow
       LastActivity = DateTime.UtcNow
       Status = SessionStatus.Ready
+      FaultReason = None
       WorkerPid = Some 999
       Workflow = WorkflowTypes.SessionWorkflow.Interactive
     }

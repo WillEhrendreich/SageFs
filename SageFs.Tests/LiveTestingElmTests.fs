@@ -445,6 +445,20 @@ let elmWiringBehavioralTests = testList "Elm Wiring Behavioral Scenarios" [
     tsEffects |> Expect.hasLength "exactly one parse" 1
   }
 
+  test "trivia-only keystroke does not mark running tests stale" {
+    let gen = RunGeneration.next RunGeneration.zero
+    let state =
+      { LiveTestCycleState.empty with
+          TestState =
+            { LiveTestState.empty with
+                RunPhases = Map.ofList [ "session", Running gen ] } }
+    let t0 = DateTimeOffset(2025, 1, 1, 0, 0, 0, TimeSpan.Zero)
+    let s1 = state |> LiveTestCycleState.onKeystroke "let x = 1" "File.fs" t0
+    let s2 = s1 |> LiveTestCycleState.onKeystroke "let  x = 1 // comment" "File.fs" (t0.AddMilliseconds(10.0))
+    s2.TestState.RunPhases |> Map.find "session"
+    |> Expect.equal "trivia-only edit should not stale an in-flight run" (Running gen)
+  }
+
   test "test result merge updates status entries" {
     let tc =
       { Id = TestId.create "T.t1" TestFramework.Expecto

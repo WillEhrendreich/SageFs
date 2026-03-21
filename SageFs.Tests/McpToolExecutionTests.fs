@@ -40,6 +40,7 @@ let tests =
                    WorkingDirectory = ""
                    SolutionRoot = None
                    Status = WorkerProtocol.SessionStatus.Ready
+                   FaultReason = None
                    WorkerPid = None
                    Workflow = WorkflowTypes.SessionWorkflow.Interactive
                    CreatedAt = DateTime.UtcNow

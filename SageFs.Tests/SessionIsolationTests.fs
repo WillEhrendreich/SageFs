@@ -38,6 +38,7 @@ module McpSessionIsolation =
                      Name = None
                      Projects = []; WorkingDirectory = ""; SolutionRoot = None
                      Status = WorkerProtocol.SessionStatus.Ready
+                     FaultReason = None
                      WorkerPid = None
                      Workflow = WorkflowTypes.SessionWorkflow.Interactive
                      CreatedAt = System.DateTime.UtcNow
@@ -188,6 +189,7 @@ module SessionResolutionByWorkingDir =
     { Id = id; Name = None; Projects = []
       WorkingDirectory = workDir; SolutionRoot = None
       Status = WorkerProtocol.SessionStatus.Ready
+      FaultReason = None
       WorkerPid = None
       Workflow = WorkflowTypes.SessionWorkflow.Interactive
       CreatedAt = System.DateTime.UtcNow
@@ -263,6 +265,7 @@ module WorkingDirRoutingPriority =
     { Id = id; Name = Some (WorkerProtocol.SessionId.value id); Projects = []
       WorkingDirectory = workDir; SolutionRoot = None
       Status = WorkerProtocol.SessionStatus.Ready
+      FaultReason = None
       WorkerPid = Some 1234
       Workflow = WorkflowTypes.SessionWorkflow.Interactive
       CreatedAt = System.DateTime.UtcNow
@@ -440,6 +443,7 @@ module ResetIsolation =
           Some { WorkerProtocol.SessionInfo.Id = id
                  Name = None; Projects = []; WorkingDirectory = ""; SolutionRoot = None
                  Status = WorkerProtocol.SessionStatus.Ready; WorkerPid = None
+                 FaultReason = None
                  Workflow = WorkflowTypes.SessionWorkflow.Interactive
                  CreatedAt = System.DateTime.UtcNow; LastActivity = System.DateTime.UtcNow })
       GetAllSessions = fun () -> System.Threading.Tasks.Task.FromResult([])
@@ -479,6 +483,7 @@ module ResetIsolation =
         WorkingDirectory = @"C:\Code\Repos\SageFs"
         SolutionRoot = None
         Status = !registryStatus
+        FaultReason = None
         WorkerPid = None
         Workflow = WorkflowTypes.SessionWorkflow.Interactive
         CreatedAt = DateTime.UtcNow
@@ -562,6 +567,7 @@ module ResetIsolation =
         WorkingDirectory = @"C:\Code\Repos\SageFs"
         SolutionRoot = None
         Status = !registryStatus
+        FaultReason = None
         WorkerPid = None
         Workflow = WorkflowTypes.SessionWorkflow.Interactive
         CreatedAt = DateTime.UtcNow
@@ -660,6 +666,7 @@ module ResetIsolation =
                    WorkingDirectory = ""
                    SolutionRoot = None
                    Status = WorkerProtocol.SessionStatus.Ready
+                   FaultReason = None
                    WorkerPid = None
                    Workflow = WorkflowTypes.SessionWorkflow.Interactive
                    CreatedAt = DateTime.UtcNow

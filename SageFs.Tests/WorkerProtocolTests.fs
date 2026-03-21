@@ -277,6 +277,7 @@ let workerProtocolTests =
           CreatedAt = DateTime(2026, 1, 1)
           LastActivity = DateTime(2026, 1, 1)
           Status = SessionStatus.Ready
+          FaultReason = None
           WorkerPid = Some 1234
           Workflow = WorkflowTypes.SessionWorkflow.Interactive
         }
@@ -294,6 +295,7 @@ let workerProtocolTests =
           CreatedAt = DateTime(2026, 1, 1)
           LastActivity = DateTime(2026, 1, 1)
           Status = SessionStatus.Ready
+          FaultReason = None
           WorkerPid = None
           Workflow = WorkflowTypes.SessionWorkflow.Interactive
         }
@@ -346,6 +348,7 @@ let workerProtocolTests =
           CreatedAt = DateTime(2026, 2, 13, 12, 0, 0)
           LastActivity = DateTime(2026, 2, 13, 12, 30, 0)
           Status = SessionStatus.Evaluating
+          FaultReason = None
           WorkerPid = Some 5678
           Workflow = WorkflowTypes.SessionWorkflow.Interactive
         }

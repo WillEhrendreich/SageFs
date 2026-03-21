@@ -265,6 +265,7 @@ let querySnapshotTests = testList "QuerySnapshot projection properties" [
             SolutionRoot = None; CreatedAt = DateTime.UtcNow
             LastActivity = DateTime.UtcNow
             Status = SessionStatus.Ready; WorkerPid = Some 1234
+            FaultReason = None
             Workflow = WorkflowTypes.SessionWorkflow.Interactive
           }
           Process = null; Proxy = pendingProxy; WorkerBaseUrl = ""
@@ -288,6 +289,7 @@ let querySnapshotTests = testList "QuerySnapshot projection properties" [
           SolutionRoot = None; CreatedAt = DateTime.UtcNow
           LastActivity = DateTime.UtcNow
           Status = status; WorkerPid = Some 1234
+          FaultReason = None
           Workflow = WorkflowTypes.SessionWorkflow.Interactive
         }
         Process = null; Proxy = pendingProxy; WorkerBaseUrl = ""
@@ -311,6 +313,7 @@ let querySnapshotTests = testList "QuerySnapshot projection properties" [
         SolutionRoot = None; CreatedAt = DateTime.UtcNow
         LastActivity = DateTime.UtcNow
         Status = SessionStatus.Ready; WorkerPid = Some 1
+        FaultReason = None
         Workflow = WorkflowTypes.SessionWorkflow.Interactive
       }
       Process = null; Proxy = pendingProxy; WorkerBaseUrl = url
@@ -337,6 +340,7 @@ let querySnapshotTests = testList "QuerySnapshot projection properties" [
         SolutionRoot = None; CreatedAt = DateTime.UtcNow
         LastActivity = DateTime.UtcNow
         Status = SessionStatus.Ready; WorkerPid = Some 1
+        FaultReason = None
         Workflow = WorkflowTypes.SessionWorkflow.Interactive
       }
       Process = null; Proxy = pendingProxy; WorkerBaseUrl = ""

@@ -646,7 +646,7 @@ let TestCycleEffectsTests = testList "TestCycleEffects" [
     | _ -> failtest "expected ParseTreeSitter"
   }
 
-  test "afterTypeCheck with affected tests returns RunAffectedTests" {
+  test "afterTypeCheck with affected tests on keystroke skips rebuild and runs narrowed tests" {
     let tc1 = { Id = TestId.create "test1" TestFramework.XUnit; FullName = "test1"; DisplayName = "test1"
                 Origin = TestOrigin.ReflectionOnly; Labels = []; Framework = TestFramework.XUnit
                 Category = TestCategory.Unit }
@@ -657,10 +657,10 @@ let TestCycleEffectsTests = testList "TestCycleEffects" [
         TransitiveCoverage = Map.ofList [ "Module.add", [| tc1.Id |] ]
     }
     match TestCycleEffects.afterTypeCheck ["Module.add"] "test.fs" RunTrigger.Keystroke graph state None Map.empty with
-    | [ TestCycleEffect.RequestRebuild (_, tests, trigger, _tsElapsed, _fcsElapsed, _sessionId, _maps) ] ->
+    | [ TestCycleEffect.RunAffectedTests (tests, trigger, _tsElapsed, _fcsElapsed, _sessionId, _maps) ] ->
       tests.Length |> Expect.equal "one test" 1
       trigger |> Expect.equal "keystroke trigger" RunTrigger.Keystroke
-    | other -> failtestf "expected single RequestRebuild for .fs file, got %A" other
+    | other -> failtestf "expected single RunAffectedTests for keystroke .fs file, got %A" other
   }
 
   test "afterTypeCheck with no affected tests returns None" {
@@ -735,10 +735,10 @@ let TestCycleEffectsTests = testList "TestCycleEffects" [
         TransitiveCoverage = Map.ofList [ "Module.add", [| tc1.Id; tc2.Id |] ]
     }
     match TestCycleEffects.afterTypeCheck ["Module.add"] "test.fs" RunTrigger.Keystroke graph state None Map.empty with
-    | [ TestCycleEffect.RequestRebuild (_, tests, _, _, _, _, _) ] ->
+    | [ TestCycleEffect.RunAffectedTests (tests, _, _, _, _, _) ] ->
       tests.Length |> Expect.equal "only unit test" 1
       tests.[0].Id |> Expect.equal "unit test id" tc1.Id
-    | other -> failtestf "expected single RequestRebuild for .fs file, got %A" other
+    | other -> failtestf "expected single RunAffectedTests for keystroke .fs file, got %A" other
   }
 ]
 
@@ -1144,6 +1144,11 @@ let TestCycleCancellationTests = testList "TestCycleCancellation" [
 
 [<Tests>]
 let adaptiveDebounceTests = testList "AdaptiveDebounce" [
+  test "tree-sitter debounce remains tuned for sub-100ms as-you-type feedback" {
+    TestCycleDebounce.treeSitterDelayMs
+    |> Expect.equal "tree-sitter should stay at 50ms for snappy feedback" 50<ms>
+  }
+
   test "initial delay matches base config" {
     let ad = AdaptiveDebounce.createDefault()
     AdaptiveDebounce.currentFcsDelay ad |> Expect.equal "base delay" 300.0<ms>

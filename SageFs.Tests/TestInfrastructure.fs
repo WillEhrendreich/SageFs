@@ -96,6 +96,7 @@ let mkTestSessionOps (result: ActorResult) (sessionId: SageFs.WorkerProtocol.Ses
           WorkingDirectory = ""
           SolutionRoot = None
           Status = SageFs.WorkerProtocol.SessionStatus.Ready
+          FaultReason = None
           WorkerPid = None
           Workflow = SessionWorkflow.Interactive
           CreatedAt = System.DateTime.UtcNow

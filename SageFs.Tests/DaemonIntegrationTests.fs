@@ -56,6 +56,7 @@ let managerStateTests =
         CreatedAt = DateTime.UtcNow
         LastActivity = DateTime.UtcNow
         Status = SessionStatus.Ready
+        FaultReason = None
         WorkerPid = Some 1234
         Workflow = WorkflowTypes.SessionWorkflow.Interactive
       }
@@ -87,6 +88,7 @@ let managerStateTests =
         CreatedAt = DateTime.UtcNow
         LastActivity = DateTime.UtcNow
         Status = SessionStatus.Ready
+        FaultReason = None
         WorkerPid = None
         Workflow = WorkflowTypes.SessionWorkflow.Interactive
       }
@@ -119,6 +121,7 @@ let managerStateTests =
           CreatedAt = DateTime.UtcNow
           LastActivity = DateTime.UtcNow
           Status = SessionStatus.Ready
+          FaultReason = None
           WorkerPid = None
           Workflow = WorkflowTypes.SessionWorkflow.Interactive
         }

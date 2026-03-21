@@ -111,6 +111,95 @@ module AnalysisIdentity =
 
   let value (AnalysisIdentity.AnalysisIdentity value) = value
 
+module TriviaNormalization =
+  let private normalize (content: string) =
+    let sb = StringBuilder(content.Length)
+    let len = content.Length
+    let mutable i = 0
+    let mutable blockDepth = 0
+    let mutable inLineComment = false
+    let mutable inString = false
+    let mutable inVerbatimString = false
+    let mutable inTripleString = false
+
+    let inline has count = i + count <= len
+    let inline ch offset = content[i + offset]
+    let inline startsWith (s: string) = has s.Length && content.AsSpan(i, s.Length).SequenceEqual(s.AsSpan())
+
+    while i < len do
+      match inLineComment, blockDepth > 0, inTripleString, inVerbatimString, inString with
+      | true, _, _, _, _ ->
+        match content[i] with
+        | '\r'
+        | '\n' -> inLineComment <- false
+        | _ -> ()
+        i <- i + 1
+      | false, true, _, _, _ ->
+        if startsWith "(*" then
+          blockDepth <- blockDepth + 1
+          i <- i + 2
+        elif startsWith "*)" then
+          blockDepth <- blockDepth - 1
+          i <- i + 2
+        else
+          i <- i + 1
+      | false, false, true, _, _ ->
+        if startsWith "\"\"\"" then
+          sb.Append("\"\"\"") |> ignore
+          inTripleString <- false
+          i <- i + 3
+        else
+          sb.Append(content[i]) |> ignore
+          i <- i + 1
+      | false, false, false, true, _ ->
+        if startsWith "\"\"" then
+          sb.Append("\"\"") |> ignore
+          i <- i + 2
+        else
+          let c = content[i]
+          sb.Append(c) |> ignore
+          i <- i + 1
+          if c = '"' then
+            inVerbatimString <- false
+      | false, false, false, false, true ->
+        let c = content[i]
+        sb.Append(c) |> ignore
+        i <- i + 1
+        if c = '\\' && i < len then
+          sb.Append(content[i]) |> ignore
+          i <- i + 1
+        elif c = '"' then
+          inString <- false
+      | false, false, false, false, false ->
+        if startsWith "//" then
+          inLineComment <- true
+          i <- i + 2
+        elif startsWith "(*" then
+          blockDepth <- 1
+          i <- i + 2
+        elif startsWith "@\"" then
+          sb.Append("@\"") |> ignore
+          inVerbatimString <- true
+          i <- i + 2
+        elif startsWith "\"\"\"" then
+          sb.Append("\"\"\"") |> ignore
+          inTripleString <- true
+          i <- i + 3
+        elif content[i] = '"' then
+          sb.Append('"') |> ignore
+          inString <- true
+          i <- i + 1
+        elif Char.IsWhiteSpace content[i] then
+          i <- i + 1
+        else
+          sb.Append(content[i]) |> ignore
+          i <- i + 1
+
+    sb.ToString()
+
+  let equivalent (previousContent: string) (currentContent: string) =
+    normalize previousContent = normalize currentContent
+
 // --- Test Categories & Run Policies ---
 
 [<RequireQualifiedAccess>]
@@ -3275,7 +3364,7 @@ module TestCycleEffects =
                 let isCompiled =
                   changedFilePath.EndsWith(".fs", System.StringComparison.OrdinalIgnoreCase)
                   && not (changedFilePath.EndsWith(".fsx", System.StringComparison.OrdinalIgnoreCase))
-                match isCompiled with
+                match isCompiled && trigger <> RunTrigger.Keystroke with
                 | true -> Some (TestCycleEffect.RequestRebuild(0L, groupTests, trigger, tsElapsed, fcsElapsed, targetSession, sessionMaps))
                 | false -> Some (TestCycleEffect.RunAffectedTests(groupTests, trigger, tsElapsed, fcsElapsed, targetSession, sessionMaps)))
           { Decision = Some decision
@@ -3594,11 +3683,24 @@ module LiveTestCycleState =
     match isEquivalentKeystroke content filePath s with
     | true -> s
     | false ->
+        let triviaOnlyChange =
+          match s.ActiveFile = Some filePath, s.LatestContent with
+          | true, Some previous -> TriviaNormalization.equivalent previous content
+          | _ -> false
         let fcsDelay = int (currentFcsDelay s / 1.0<ms>) * 1<ms>
-        let db = s.Debounce |> TestCycleDebounce.onKeystroke content filePath fcsDelay now
+        let db =
+          match triviaOnlyChange with
+          | true ->
+              { s.Debounce with
+                  TreeSitter = s.Debounce.TreeSitter |> DebounceChannel.submit content TestCycleDebounce.treeSitterDelayMs now }
+          | false ->
+              s.Debounce |> TestCycleDebounce.onKeystroke content filePath fcsDelay now
         let analysisIdentity = AnalysisIdentity.ofContent content
-        // When edits arrive while tests are running, mark phase as edited so in-flight results are stale.
-        let ts = { s.TestState with RunPhases = s.TestState.RunPhases |> Map.map (fun _ p -> TestRunPhase.onEdit p) }
+        // When semantically meaningful edits arrive while tests are running, mark phase as edited so in-flight results are stale.
+        let ts =
+          match triviaOnlyChange with
+          | true -> s.TestState
+          | false -> { s.TestState with RunPhases = s.TestState.RunPhases |> Map.map (fun _ p -> TestRunPhase.onEdit p) }
         { s with
             Debounce = db
             TestState = ts
@@ -3606,8 +3708,8 @@ module LiveTestCycleState =
             LatestContent = Some content
             LatestAnalysisIdentity = Some analysisIdentity
             LastTrigger = RunTrigger.Keystroke
-            PendingRebuild = None
-            QueuedRebuild = None }
+            PendingRebuild = if triviaOnlyChange then s.PendingRebuild else None
+            QueuedRebuild = if triviaOnlyChange then s.QueuedRebuild else None }
 
   let onFileSave (filePath: string) (now: DateTimeOffset) (s: LiveTestCycleState) =
     let db = s.Debounce |> TestCycleDebounce.onFileSave filePath now
