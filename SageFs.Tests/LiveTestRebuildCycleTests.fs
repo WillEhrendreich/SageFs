@@ -268,18 +268,18 @@ let rebuildCycleTests = testList "LiveTesting Rebuild Cycle" [
         SageFsUpdate.update (SageFsMsg.RebuildCompleted (None, pending.Generation, Ok ())) model
 
       match effects with
-      | [ SageFsEffect.TestCycle (TestCycleEffect.RunAffectedTests (tests, trigger, tsElapsed, fcsElapsed, sessionId, maps)) ] ->
-        tests
+      | [ SageFsEffect.TestCycle (TestCycleEffect.RunAffectedTests req) ] ->
+        req.Tests
         |> Expect.equal "successful rebuild should run the saved test set" pendingTests
-        trigger
+        req.Trigger
         |> Expect.equal "saved trigger should flow into RunAffectedTests" pending.Trigger
-        tsElapsed
+        req.TreeSitterElapsed
         |> Expect.equal "tree-sitter timing should be preserved" pending.TreeSitterElapsed
-        fcsElapsed
+        req.FcsElapsed
         |> Expect.equal "fcs timing should be preserved" pending.FcsElapsed
-        sessionId
+        req.SessionId
         |> Expect.equal "session ownership should be preserved" pending.SessionId
-        maps
+        req.InstrumentationMaps
         |> Expect.equal "instrumentation maps should be preserved" pending.InstrumentationMaps
       | other ->
         failtestf "expected one RunAffectedTests effect after successful rebuild, got %A" other
@@ -374,7 +374,7 @@ let rebuildCycleTests = testList "LiveTesting Rebuild Cycle" [
       let rebuildTests =
         effects |> List.choose (fun e ->
           match e with
-          | TestCycleEffect.RequestRebuild (_, tests, _, _, _, _, _) -> Some tests
+          | TestCycleEffect.RequestRebuild (_, req) -> Some req.Tests
           | _ -> None)
         |> List.collect Array.toList
       rebuildTests

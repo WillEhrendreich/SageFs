@@ -147,46 +147,6 @@ module TestDeps =
       TestCycleCancellation = Features.LiveTesting.TestCycleCancellation.create ()
     }
 
-let rec private makeAnalysisIdentityValue (fieldType: Type) (value: string) =
-  match fieldType = typeof<string> with
-  | true -> box value
-  | false when fieldType.IsGenericType && fieldType.GetGenericTypeDefinition() = typedefof<option<_>> ->
-      let someCase =
-        FSharpType.GetUnionCases fieldType
-        |> Array.find (fun case -> case.Name = "Some")
-      let innerType = someCase.GetFields().[0].PropertyType
-      let innerValue = makeAnalysisIdentityValue innerType value
-      FSharpValue.MakeUnion(someCase, [| innerValue |])
-  | false when FSharpType.IsUnion fieldType ->
-      let cases = FSharpType.GetUnionCases fieldType
-      match cases with
-      | [| case |] when case.GetFields().Length = 1
-                        && case.GetFields().[0].PropertyType = typeof<string> ->
-          FSharpValue.MakeUnion(case, [| box value |])
-      | _ ->
-          failtestf
-            "expected analysis identity field to be string or single-case string union, got %O"
-            fieldType
-  | false ->
-      failtestf
-        "expected analysis identity field to be string or single-case string union, got %O"
-        fieldType
-
-let private makeContentValue (fieldType: Type) (value: string) =
-  match fieldType = typeof<string> with
-  | true -> box value
-  | false when fieldType.IsGenericType && fieldType.GetGenericTypeDefinition() = typedefof<option<_>> ->
-      let someCase =
-        FSharpType.GetUnionCases fieldType
-        |> Array.find (fun case -> case.Name = "Some")
-      let innerType = someCase.GetFields().[0].PropertyType
-      match innerType = typeof<string> with
-      | true -> FSharpValue.MakeUnion(someCase, [| box value |])
-      | false ->
-          failtestf "expected content field to be string or string option, got %O" fieldType
-  | false ->
-      failtestf "expected content field to be string or string option, got %O" fieldType
-
 let private makeRequestFcsTypeCheckEffect
   (targetSession: string option)
   (filePath: string)
@@ -194,29 +154,13 @@ let private makeRequestFcsTypeCheckEffect
   (analysisIdentity: string)
   (treeSitterElapsed: TimeSpan)
   =
-  let case =
-    FSharpType.GetUnionCases(typeof<Features.LiveTesting.TestCycleEffect>)
-    |> Array.find (fun uc -> uc.Name = "RequestFcsTypeCheck")
-
-  let fields = case.GetFields()
-  fields.Length
-  |> Expect.equal
-      "RequestFcsTypeCheck should carry session, file path, content, analysis identity, and tree-sitter elapsed"
-      5
-
-  let identityValue = makeAnalysisIdentityValue fields.[3].PropertyType analysisIdentity
-  let contentValue = makeContentValue fields.[2].PropertyType content
-
-  FSharpValue.MakeUnion(
-    case,
-    [|
-      box targetSession
-      box filePath
-      contentValue
-      identityValue
-      box treeSitterElapsed
-    |]
-  ) :?> Features.LiveTesting.TestCycleEffect
+  Features.LiveTesting.TestCycleEffect.RequestFcsTypeCheck {
+    SessionId = targetSession
+    FilePath = filePath
+    Content = Some content
+    AnalysisIdentity = Some (Features.LiveTesting.AnalysisIdentity.ofContent analysisIdentity)
+    TreeSitterElapsed = treeSitterElapsed
+  }
 
 let private makeCancelRebuildEffect
   (targetSession: string option)
@@ -587,12 +531,12 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
       (SageFsEffect.TestCycle (
         Features.LiveTesting.TestCycleEffect.RequestRebuild(
           1L,
-          [| tc |],
-          Features.LiveTesting.RunTrigger.FileSave,
-          TimeSpan.Zero,
-          TimeSpan.Zero,
-          Some (SessionId.value sid),
-          [||])))
+          { Tests = [| tc |]
+            Trigger = Features.LiveTesting.RunTrigger.FileSave
+            TreeSitterElapsed = TimeSpan.Zero
+            FcsElapsed = TimeSpan.Zero
+            SessionId = Some (SessionId.value sid)
+            InstrumentationMaps = [||] })))
     |> Async.RunSynchronously
     let sw = Diagnostics.Stopwatch.StartNew()
     while dispatched.IsEmpty && sw.ElapsedMilliseconds < 2000L do
@@ -676,12 +620,12 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
       (SageFsEffect.TestCycle (
         Features.LiveTesting.TestCycleEffect.RequestRebuild(
           1L,
-          [| tc |],
-          Features.LiveTesting.RunTrigger.FileSave,
-          TimeSpan.Zero,
-          TimeSpan.Zero,
-          Some (SessionId.value sid),
-          [||])))
+          { Tests = [| tc |]
+            Trigger = Features.LiveTesting.RunTrigger.FileSave
+            TreeSitterElapsed = TimeSpan.Zero
+            FcsElapsed = TimeSpan.Zero
+            SessionId = Some (SessionId.value sid)
+            InstrumentationMaps = [||] })))
     |> Async.RunSynchronously
     let sw = Diagnostics.Stopwatch.StartNew()
     while dispatched.IsEmpty && sw.ElapsedMilliseconds < 2000L do
@@ -765,12 +709,12 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
       (SageFsEffect.TestCycle (
         Features.LiveTesting.TestCycleEffect.RequestRebuild(
           1L,
-          [| tc |],
-          Features.LiveTesting.RunTrigger.FileSave,
-          TimeSpan.Zero,
-          TimeSpan.Zero,
-          Some (SessionId.value sid),
-          [||])))
+          { Tests = [| tc |]
+            Trigger = Features.LiveTesting.RunTrigger.FileSave
+            TreeSitterElapsed = TimeSpan.Zero
+            FcsElapsed = TimeSpan.Zero
+            SessionId = Some (SessionId.value sid)
+            InstrumentationMaps = [||] })))
     |> Async.RunSynchronously
     let sw = Diagnostics.Stopwatch.StartNew()
     while dispatched.IsEmpty && sw.ElapsedMilliseconds < 2000L do
@@ -848,12 +792,12 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
       (SageFsEffect.TestCycle (
         Features.LiveTesting.TestCycleEffect.RequestRebuild(
           1L,
-          [| tc |],
-          Features.LiveTesting.RunTrigger.FileSave,
-          TimeSpan.Zero,
-          TimeSpan.Zero,
-          Some (SessionId.value sid),
-          [||])))
+          { Tests = [| tc |]
+            Trigger = Features.LiveTesting.RunTrigger.FileSave
+            TreeSitterElapsed = TimeSpan.Zero
+            FcsElapsed = TimeSpan.Zero
+            SessionId = Some (SessionId.value sid)
+            InstrumentationMaps = [||] })))
     |> Async.RunSynchronously
     let sw = Diagnostics.Stopwatch.StartNew()
     while dispatched.IsEmpty && sw.ElapsedMilliseconds < 2000L do
@@ -938,22 +882,22 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
       SageFsEffect.TestCycle (
         Features.LiveTesting.TestCycleEffect.RequestRebuild(
           1L,
-          [| tc |],
-          Features.LiveTesting.RunTrigger.FileSave,
-          TimeSpan.Zero,
-          TimeSpan.Zero,
-          Some (SessionId.value sid),
-          [||]))
+          { Tests = [| tc |]
+            Trigger = Features.LiveTesting.RunTrigger.FileSave
+            TreeSitterElapsed = TimeSpan.Zero
+            FcsElapsed = TimeSpan.Zero
+            SessionId = Some (SessionId.value sid)
+            InstrumentationMaps = [||] }))
     let secondRequest =
       SageFsEffect.TestCycle (
         Features.LiveTesting.TestCycleEffect.RequestRebuild(
           2L,
-          [| tc |],
-          Features.LiveTesting.RunTrigger.FileSave,
-          TimeSpan.Zero,
-          TimeSpan.Zero,
-          Some (SessionId.value sid),
-          [||]))
+          { Tests = [| tc |]
+            Trigger = Features.LiveTesting.RunTrigger.FileSave
+            TreeSitterElapsed = TimeSpan.Zero
+            FcsElapsed = TimeSpan.Zero
+            SessionId = Some (SessionId.value sid)
+            InstrumentationMaps = [||] }))
 
     SageFsEffectHandler.execute deps
       (fun m -> dispatched <- dispatched @ [m])
@@ -1055,12 +999,12 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
       (SageFsEffect.TestCycle (
         Features.LiveTesting.TestCycleEffect.RequestRebuild(
           1L,
-          [| tc |],
-          Features.LiveTesting.RunTrigger.FileSave,
-          TimeSpan.Zero,
-          TimeSpan.Zero,
-          Some (SessionId.value sid),
-          [||])))
+          { Tests = [| tc |]
+            Trigger = Features.LiveTesting.RunTrigger.FileSave
+            TreeSitterElapsed = TimeSpan.Zero
+            FcsElapsed = TimeSpan.Zero
+            SessionId = Some (SessionId.value sid)
+            InstrumentationMaps = [||] })))
     |> Async.RunSynchronously
 
     let restartWindow = Diagnostics.Stopwatch.StartNew()
@@ -1151,12 +1095,12 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
       (SageFsEffect.TestCycle (
         Features.LiveTesting.TestCycleEffect.RequestRebuild(
           2L,
-          [| tc |],
-          Features.LiveTesting.RunTrigger.FileSave,
-          TimeSpan.Zero,
-          TimeSpan.Zero,
-          Some (SessionId.value sid),
-          [||])))
+          { Tests = [| tc |]
+            Trigger = Features.LiveTesting.RunTrigger.FileSave
+            TreeSitterElapsed = TimeSpan.Zero
+            FcsElapsed = TimeSpan.Zero
+            SessionId = Some (SessionId.value sid)
+            InstrumentationMaps = [||] })))
     |> Async.RunSynchronously
 
     let restartWindow = Diagnostics.Stopwatch.StartNew()

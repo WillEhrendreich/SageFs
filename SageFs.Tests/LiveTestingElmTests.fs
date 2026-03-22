@@ -622,9 +622,9 @@ let fileContentChangedTests = testList "FileContentChanged" [
     effects
     |> List.exists (fun effect ->
       match effect with
-      | TestCycleEffect.RequestRebuild (_, tests, trigger, _, _, _, _) ->
-        trigger = RunTrigger.FileSave
-        && tests |> Array.exists (fun test -> test.Id = tc.Id)
+      | TestCycleEffect.RequestRebuild (_, req) ->
+        req.Trigger = RunTrigger.FileSave
+        && req.Tests |> Array.exists (fun test -> test.Id = tc.Id)
       | _ -> false)
     |> Expect.isTrue "compiled saves with no dep-graph matches should still fall back to rebuilding affected tests"
   }
@@ -653,9 +653,9 @@ let fileContentChangedTests = testList "FileContentChanged" [
     effects
     |> List.exists (fun effect ->
       match effect with
-      | TestCycleEffect.RequestRebuild (_, tests, trigger, _, _, _, _) ->
-        trigger = RunTrigger.FileSave
-        && tests |> Array.exists (fun test -> test.Id = tc.Id)
+      | TestCycleEffect.RequestRebuild (_, req) ->
+        req.Trigger = RunTrigger.FileSave
+        && req.Tests |> Array.exists (fun test -> test.Id = tc.Id)
       | _ -> false)
     |> Expect.isTrue "compiled saves should still rebuild even when FCS cannot type-check the changed file"
   }

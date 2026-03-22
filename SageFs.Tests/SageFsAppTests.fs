@@ -877,14 +877,14 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
     |> Expect.equal "replayed rebuild should keep the queued affected tests" discovered
 
     match effects with
-    | [ SageFsEffect.TestCycle (TestCycleEffect.RequestRebuild (generation, tests, trigger, _, _, targetSession, _)) ] ->
+    | [ SageFsEffect.TestCycle (TestCycleEffect.RequestRebuild (generation, req)) ] ->
         generation
         |> Expect.equal "replayed rebuild should use the pending rebuild generation it just minted" pending.Generation
-        tests
+        req.Tests
         |> Expect.equal "completion should replay the latest affected compiled tests" discovered
-        trigger
+        req.Trigger
         |> Expect.equal "completion should preserve the save trigger that discovered the owed work" RunTrigger.FileSave
-        targetSession
+        req.SessionId
         |> Expect.equal "completion should replay against the owning session" (Some sid)
     | other ->
         failtestf "expected RequestRebuild after stale run completion, got %A" other
@@ -961,10 +961,10 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
     |> Expect.equal "background replay should keep its own session ownership" (Some backgroundSid)
 
     match effects with
-    | [ SageFsEffect.TestCycle (TestCycleEffect.RequestRebuild (_, tests, _, _, _, targetSession, _)) ] ->
-        tests
+    | [ SageFsEffect.TestCycle (TestCycleEffect.RequestRebuild (_, req)) ] ->
+        req.Tests
         |> Expect.equal "background completion should replay the queued background tests only" backgroundTests
-        targetSession
+        req.SessionId
         |> Expect.equal "background completion should emit RequestRebuild for the background session only" (Some backgroundSid)
     | other ->
         failtestf "expected one background RequestRebuild after completion, got %A" other

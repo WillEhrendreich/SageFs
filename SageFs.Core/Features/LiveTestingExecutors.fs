@@ -1154,8 +1154,8 @@ module TestCycleCancellation =
     | TestCycleEffect.CancelRebuild (sessionId, generation) ->
         pc.Rebuild.cancel(sessionId, generation) |> ignore
         System.Threading.CancellationToken.None
-    | TestCycleEffect.RequestRebuild (generation, _, _, _, _, sessionId, _) ->
-        pc.Rebuild.start(sessionId, generation)
+    | TestCycleEffect.RequestRebuild (generation, req) ->
+        pc.Rebuild.start(req.SessionId, generation)
     | TestCycleEffect.RegisterFileWatcher _ -> System.Threading.CancellationToken.None
     | TestCycleEffect.DisposeFileWatcher _ -> System.Threading.CancellationToken.None
 

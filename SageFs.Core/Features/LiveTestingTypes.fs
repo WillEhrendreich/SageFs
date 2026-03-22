@@ -3172,14 +3172,53 @@ module TestCycleDebounce =
       | false -> { db with TreeSitter = tsChannel; Fcs = fcsChannel }
     (tsPayload, fcsPayload), db'
 
+/// Shared payload for RunAffectedTests / RequestRebuild —
+/// the 6 fields that both effect cases always carry together.
+type TestRunRequest = {
+  Tests: TestCase array
+  Trigger: RunTrigger
+  TreeSitterElapsed: System.TimeSpan
+  FcsElapsed: System.TimeSpan
+  SessionId: string option
+  InstrumentationMaps: InstrumentationMap array
+}
+
+module TestRunRequest =
+  let empty = {
+    Tests = [||]
+    Trigger = RunTrigger.Keystroke
+    TreeSitterElapsed = System.TimeSpan.Zero
+    FcsElapsed = System.TimeSpan.Zero
+    SessionId = None
+    InstrumentationMaps = [||]
+  }
+
+/// Payload for RequestFcsTypeCheck — the 5 fields that define a type-check request.
+type TypeCheckRequest = {
+  SessionId: string option
+  FilePath: string
+  Content: string option
+  AnalysisIdentity: AnalysisIdentity option
+  TreeSitterElapsed: System.TimeSpan
+}
+
+module TypeCheckRequest =
+  let empty = {
+    SessionId = None
+    FilePath = ""
+    Content = None
+    AnalysisIdentity = None
+    TreeSitterElapsed = System.TimeSpan.Zero
+  }
+
 [<RequireQualifiedAccess>]
 type TestCycleEffect =
   | RequestInitialDiscovery
   | ParseTreeSitter of content: string * filePath: string
-  | RequestFcsTypeCheck of sessionId: string option * filePath: string * content: string option * analysisIdentity: AnalysisIdentity option * treeSitterElapsed: System.TimeSpan
-  | RunAffectedTests of tests: TestCase array * trigger: RunTrigger * treeSitterElapsed: System.TimeSpan * fcsElapsed: System.TimeSpan * sessionId: string option * instrumentationMaps: InstrumentationMap array
+  | RequestFcsTypeCheck of TypeCheckRequest
+  | RunAffectedTests of TestRunRequest
   | CancelRebuild of sessionId: string option * generation: int64
-  | RequestRebuild of generation: int64 * tests: TestCase array * trigger: RunTrigger * treeSitterElapsed: System.TimeSpan * fcsElapsed: System.TimeSpan * sessionId: string option * instrumentationMaps: InstrumentationMap array
+  | RequestRebuild of generation: int64 * TestRunRequest
   | RegisterFileWatcher of sessionId: string * directory: string
   | DisposeFileWatcher of sessionId: string * directory: string
 
@@ -3203,7 +3242,13 @@ module TestCycleEffects =
       match fcsPayload with
       | Some fp ->
         let tsElapsed = TestCycleTiming.accumulatedTsElapsed lastTiming
-        TestCycleEffect.RequestFcsTypeCheck(None, fp, latestContent, latestAnalysisIdentity, tsElapsed)
+        TestCycleEffect.RequestFcsTypeCheck {
+          SessionId = None
+          FilePath = fp
+          Content = latestContent
+          AnalysisIdentity = latestAnalysisIdentity
+          TreeSitterElapsed = tsElapsed
+        }
       | None -> () ]
 
   let decideAfterTypeCheck
@@ -3370,9 +3415,17 @@ module TestCycleEffects =
                 let isCompiled =
                   changedFilePath.EndsWith(".fs", System.StringComparison.OrdinalIgnoreCase)
                   && not (changedFilePath.EndsWith(".fsx", System.StringComparison.OrdinalIgnoreCase))
+                let req = {
+                  Tests = groupTests
+                  Trigger = trigger
+                  TreeSitterElapsed = tsElapsed
+                  FcsElapsed = fcsElapsed
+                  SessionId = targetSession
+                  InstrumentationMaps = sessionMaps
+                }
                 match isCompiled && trigger <> RunTrigger.Keystroke with
-                | true -> Some (TestCycleEffect.RequestRebuild(0L, groupTests, trigger, tsElapsed, fcsElapsed, targetSession, sessionMaps))
-                | false -> Some (TestCycleEffect.RunAffectedTests(groupTests, trigger, tsElapsed, fcsElapsed, targetSession, sessionMaps)))
+                | true -> Some (TestCycleEffect.RequestRebuild(0L, req))
+                | false -> Some (TestCycleEffect.RunAffectedTests req))
           { Decision = Some decision
             Effects = effects }
 
@@ -3427,7 +3480,14 @@ module TestCycleEffects =
               match targetSession |> Option.bind (fun s -> Map.tryFind s instrumentationMaps) with
               | Some maps -> maps
               | None -> instrumentationMaps |> Map.values |> Seq.collect id |> Array.ofSeq
-            Some (TestCycleEffect.RequestRebuild(0L, groupTests, trigger, tsElapsed, fcsElapsed, targetSession, sessionMaps)))
+            Some (TestCycleEffect.RequestRebuild(0L, {
+              Tests = groupTests
+              Trigger = trigger
+              TreeSitterElapsed = tsElapsed
+              FcsElapsed = fcsElapsed
+              SessionId = targetSession
+              InstrumentationMaps = sessionMaps
+            })))
 
 /// Adaptive debounce configuration.
 type AdaptiveDebounceConfig = {
@@ -3801,12 +3861,12 @@ module LiveTestCycleState =
         }
         [ TestCycleEffect.RequestRebuild(
             generation,
-            pending.Tests,
-            pending.Trigger,
-            pending.TreeSitterElapsed,
-            pending.FcsElapsed,
-            pending.SessionId,
-            pending.InstrumentationMaps) ],
+            { Tests = pending.Tests
+              Trigger = pending.Trigger
+              TreeSitterElapsed = pending.TreeSitterElapsed
+              FcsElapsed = pending.FcsElapsed
+              SessionId = pending.SessionId
+              InstrumentationMaps = pending.InstrumentationMaps }) ],
         { s with
             NextRebuildGeneration = generation
             PendingRebuild = Some pending
@@ -3874,13 +3934,13 @@ module LiveTestCycleState =
         effects
         |> List.tryPick (fun e ->
           match e with
-          | TestCycleEffect.RequestRebuild (_generation, tests, trigger, tsElapsed, fcsElapsed, sessionId, instrMaps) ->
-            Some (tests, trigger, tsElapsed, fcsElapsed, sessionId, instrMaps)
+          | TestCycleEffect.RequestRebuild (_generation, req) ->
+            Some req
            | _ -> None)
       with
-      | Some (tests, trigger, tsElapsed, fcsElapsed, sessionId, instrMaps) ->
+      | Some req ->
         match state.PendingRebuild with
-        | Some pending when equivalentPendingRebuild tests trigger sessionId filePath analysisIdentity pending ->
+        | Some pending when equivalentPendingRebuild req.Tests req.Trigger req.SessionId filePath analysisIdentity pending ->
             let effects' =
               effects
               |> List.filter (fun effect ->
@@ -3892,21 +3952,21 @@ module LiveTestCycleState =
             let generation = state.NextRebuildGeneration + 1L
             let pending = {
               Generation = generation
-              Tests = tests
-              Trigger = trigger
+              Tests = req.Tests
+              Trigger = req.Trigger
               FilePath = filePath
               AnalysisIdentity = analysisIdentity
-              TreeSitterElapsed = tsElapsed
-              FcsElapsed = fcsElapsed
-              SessionId = sessionId
-              InstrumentationMaps = instrMaps
+              TreeSitterElapsed = req.TreeSitterElapsed
+              FcsElapsed = req.FcsElapsed
+              SessionId = req.SessionId
+              InstrumentationMaps = req.InstrumentationMaps
             }
             let effects' =
               effects
               |> List.map (fun effect ->
                 match effect with
-                | TestCycleEffect.RequestRebuild (_, tests, trigger, tsElapsed, fcsElapsed, sessionId, instrMaps) ->
-                  TestCycleEffect.RequestRebuild (generation, tests, trigger, tsElapsed, fcsElapsed, sessionId, instrMaps)
+                | TestCycleEffect.RequestRebuild (_, req) ->
+                  TestCycleEffect.RequestRebuild (generation, req)
                 | other -> other)
             effects',
             { state with
@@ -3921,17 +3981,17 @@ module LiveTestCycleState =
         candidateEffects
         |> List.tryPick (fun effect ->
           match effect with
-          | TestCycleEffect.RequestRebuild (_, tests, trigger, tsElapsed, fcsElapsed, sessionId, instrMaps)
-              when TestRunPhase.isSessionRunning sessionId state.TestState.RunPhases ->
+          | TestCycleEffect.RequestRebuild (_, req)
+              when TestRunPhase.isSessionRunning req.SessionId state.TestState.RunPhases ->
                 Some {
-                  Tests = tests
-                  Trigger = trigger
+                  Tests = req.Tests
+                  Trigger = req.Trigger
                   FilePath = filePath
                   AnalysisIdentity = analysisIdentity
-                  TreeSitterElapsed = tsElapsed
-                  FcsElapsed = fcsElapsed
-                  SessionId = sessionId
-                  InstrumentationMaps = instrMaps
+                  TreeSitterElapsed = req.TreeSitterElapsed
+                  FcsElapsed = req.FcsElapsed
+                  SessionId = req.SessionId
+                  InstrumentationMaps = req.InstrumentationMaps
                 }
           | _ ->
               None)
@@ -4015,7 +4075,14 @@ module LiveTestCycleState =
           match targetSession |> Option.bind (fun sid -> Map.tryFind sid s.InstrumentationMaps) with
           | Some maps -> maps
           | None -> s.InstrumentationMaps |> Map.values |> Seq.collect id |> Array.ofSeq
-        [ TestCycleEffect.RunAffectedTests(filtered, trigger, System.TimeSpan.Zero, System.TimeSpan.Zero, targetSession, sessionMaps) ]
+        [ TestCycleEffect.RunAffectedTests {
+            Tests = filtered
+            Trigger = trigger
+            TreeSitterElapsed = System.TimeSpan.Zero
+            FcsElapsed = System.TimeSpan.Zero
+            SessionId = targetSession
+            InstrumentationMaps = sessionMaps
+          } ]
 
   /// Filter tests by optional criteria for explicit MCP-triggered runs.
   /// All filters are AND'd. None = no filter = match all.

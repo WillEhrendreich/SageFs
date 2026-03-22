@@ -662,16 +662,16 @@ let stream5Tests =
           "background session debounce should eventually emit RequestFcsTypeCheck"
 
       match request with
-      | Some (TestCycleEffect.RequestFcsTypeCheck (targetSession, requestedFilePath, content, analysisIdentity, _tsElapsed)) ->
-          targetSession
+      | Some (TestCycleEffect.RequestFcsTypeCheck req) ->
+          req.SessionId
           |> Expect.equal "background FCS request should target the owning session" (Some bSid)
-          requestedFilePath
+          req.FilePath
           |> Expect.equal "background FCS request should preserve the changed file path" fileB
-          content
+          req.Content
           |> Expect.equal
               "background FCS request should analyze the freshest buffered content for that session"
               (Some "module Lib")
-          analysisIdentity
+          req.AnalysisIdentity
           |> Expect.equal
               "background FCS request should carry the content identity that matches the buffered text"
               (Some (AnalysisIdentity.ofContent "module Lib"))
@@ -812,10 +812,10 @@ let stream5Tests =
           "background live-testing state should absorb the FCS result"
 
       match effects with
-      | [ SageFsEffect.TestCycle (TestCycleEffect.RequestRebuild (_, tests, _, _, _, sessionId, _)) ] ->
-          tests
+      | [ SageFsEffect.TestCycle (TestCycleEffect.RequestRebuild (_, req)) ] ->
+          req.Tests
           |> Expect.equal "background FCS completion should schedule the background tests" [| tcB |]
-          sessionId
+          req.SessionId
           |> Expect.equal "background rebuild should stay targeted to the same session" (Some bSid)
       | other ->
           failtestf "expected one background RequestRebuild effect, got %A" other
@@ -885,10 +885,10 @@ let stream5Tests =
           "background pending rebuild should clear after that session completes"
 
       match effects with
-      | [ SageFsEffect.TestCycle (TestCycleEffect.RunAffectedTests (tests, _, _, _, sessionId, _)) ] ->
-          tests
+      | [ SageFsEffect.TestCycle (TestCycleEffect.RunAffectedTests req) ] ->
+          req.Tests
           |> Expect.equal "background rebuild completion should run only the background tests" [| tcB |]
-          sessionId
+          req.SessionId
           |> Expect.equal "background test execution should stay targeted to the same session" (Some bSid)
       | other ->
           failtestf "expected one background RunAffectedTests effect, got %A" other

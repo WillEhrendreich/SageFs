@@ -959,8 +959,8 @@ let symbolGraphWiringTests = testList "symbol graph wiring integration" [
       TestCycleEffects.afterTypeCheck
         [ "MyModule.add" ] "test.fs" RunTrigger.Keystroke graph ltState None Map.empty
     match effect with
-    | [ TestCycleEffect.RunAffectedTests (tests, _, _, _, _, _) ] ->
-      tests |> Array.exists (fun t -> t.Id = tid)
+    | [ TestCycleEffect.RunAffectedTests req ] ->
+      req.Tests |> Array.exists (fun t -> t.Id = tid)
       |> Expect.isTrue "should contain affected test"
     | other -> failtestf "expected single RunAffectedTests for keystroke .fs file, got %A" other
   }
@@ -1004,8 +1004,8 @@ let symbolGraphWiringTests = testList "symbol graph wiring integration" [
     effects
     |> List.exists (fun e ->
       match e with
-      | TestCycleEffect.RunAffectedTests (tests, _, _, _, _, _) ->
-        tests |> Array.exists (fun t -> t.Id = tid)
+      | TestCycleEffect.RunAffectedTests req ->
+        req.Tests |> Array.exists (fun t -> t.Id = tid)
       | _ -> false)
     |> Expect.isTrue "should produce RunAffectedTests via fallback"
   }
@@ -1689,11 +1689,11 @@ let affectedExecutionTriggerTests = testList "AffectedTestsComputed execution tr
     let ps = mkCycleState [| tc1; tc2; tc3 |]
     let effects = LiveTestCycleState.triggerExecutionForAffected [| tc1.Id; tc2.Id |] RunTrigger.FileSave None ps
     match effects with
-    | [ TestCycleEffect.RunAffectedTests (tests, _, _, _, _, _) ] ->
-      tests
+    | [ TestCycleEffect.RunAffectedTests req ] ->
+      req.Tests
       |> Array.length
       |> Expect.equal "should only include unit test" 1
-      tests.[0].Category
+      req.Tests.[0].Category
       |> Expect.equal "should be unit category" TestCategory.Unit
     | _ -> failtest "expected exactly one RunAffectedTests effect"
   }
@@ -1702,8 +1702,8 @@ let affectedExecutionTriggerTests = testList "AffectedTestsComputed execution tr
     let ps = mkCycleState [| tc1; tc2; tc3 |]
     let effects = LiveTestCycleState.triggerExecutionForAffected [| tc1.Id; tc2.Id |] RunTrigger.ExplicitRun None ps
     match effects with
-    | [ TestCycleEffect.RunAffectedTests (tests, _, _, _, _, _) ] ->
-      tests
+    | [ TestCycleEffect.RunAffectedTests req ] ->
+      req.Tests
       |> Array.length
       |> Expect.equal "should include both unit and integration" 2
     | _ -> failtest "expected exactly one RunAffectedTests effect"

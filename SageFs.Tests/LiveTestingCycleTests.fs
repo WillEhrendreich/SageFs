@@ -626,10 +626,10 @@ let TestCycleEffectsTests = testList "TestCycleEffects" [
       content |> Expect.equal "ts content" "code"
     | _ -> failtest "expected ParseTreeSitter"
     match effects.[1] with
-    | TestCycleEffect.RequestFcsTypeCheck (_, fp, content, analysisIdentity', _tsElapsed) ->
-      fp |> Expect.equal "fcs path" "file.fs"
-      content |> Expect.equal "fcs content" (Some "code")
-      analysisIdentity' |> Expect.equal "analysis identity" (Some analysisIdentity)
+    | TestCycleEffect.RequestFcsTypeCheck req ->
+      req.FilePath |> Expect.equal "fcs path" "file.fs"
+      req.Content |> Expect.equal "fcs content" (Some "code")
+      req.AnalysisIdentity |> Expect.equal "analysis identity" (Some analysisIdentity)
     | _ -> failtest "expected RequestFcsTypeCheck"
   }
 
@@ -657,9 +657,9 @@ let TestCycleEffectsTests = testList "TestCycleEffects" [
         TransitiveCoverage = Map.ofList [ "Module.add", [| tc1.Id |] ]
     }
     match TestCycleEffects.afterTypeCheck ["Module.add"] "test.fs" RunTrigger.Keystroke graph state None Map.empty with
-    | [ TestCycleEffect.RunAffectedTests (tests, trigger, _tsElapsed, _fcsElapsed, _sessionId, _maps) ] ->
-      tests.Length |> Expect.equal "one test" 1
-      trigger |> Expect.equal "keystroke trigger" RunTrigger.Keystroke
+    | [ TestCycleEffect.RunAffectedTests req ] ->
+      req.Tests.Length |> Expect.equal "one test" 1
+      req.Trigger |> Expect.equal "keystroke trigger" RunTrigger.Keystroke
     | other -> failtestf "expected single RunAffectedTests for keystroke .fs file, got %A" other
   }
 
@@ -735,9 +735,9 @@ let TestCycleEffectsTests = testList "TestCycleEffects" [
         TransitiveCoverage = Map.ofList [ "Module.add", [| tc1.Id; tc2.Id |] ]
     }
     match TestCycleEffects.afterTypeCheck ["Module.add"] "test.fs" RunTrigger.Keystroke graph state None Map.empty with
-    | [ TestCycleEffect.RunAffectedTests (tests, _, _, _, _, _) ] ->
-      tests.Length |> Expect.equal "only unit test" 1
-      tests.[0].Id |> Expect.equal "unit test id" tc1.Id
+    | [ TestCycleEffect.RunAffectedTests req ] ->
+      req.Tests.Length |> Expect.equal "only unit test" 1
+      req.Tests.[0].Id |> Expect.equal "unit test id" tc1.Id
     | other -> failtestf "expected single RunAffectedTests for keystroke .fs file, got %A" other
   }
 ]
@@ -936,10 +936,10 @@ let effectDispatchTests = testList "EffectDispatcher" [
 
   test "RequestFcsTypeCheck logs file path" {
     let log = EffectDispatcher.create()
-    EffectDispatcher.dispatch log (TestCycleEffect.RequestFcsTypeCheck(None, "File.fs", None, None, System.TimeSpan.Zero))
+    EffectDispatcher.dispatch log (TestCycleEffect.RequestFcsTypeCheck { SessionId = None; FilePath = "File.fs"; Content = None; AnalysisIdentity = None; TreeSitterElapsed = System.TimeSpan.Zero })
     log.Effects |> Expect.hasLength "one effect" 1
     match log.Effects.[0] with
-    | TestCycleEffect.RequestFcsTypeCheck (_, f, _, _, _) -> f |> Expect.equal "file" "File.fs"
+    | TestCycleEffect.RequestFcsTypeCheck req -> req.FilePath |> Expect.equal "file" "File.fs"
     | _ -> failtest "wrong effect type"
   }
 
@@ -948,12 +948,12 @@ let effectDispatchTests = testList "EffectDispatcher" [
     let tests = [| { Id = TestId.create "t1" TestFramework.Expecto; FullName = "t1"; DisplayName = "t1"
                      Origin = TestOrigin.ReflectionOnly; Labels = []; Framework = TestFramework.Expecto
                      Category = TestCategory.Unit } |]
-    EffectDispatcher.dispatch log (TestCycleEffect.RunAffectedTests(tests, RunTrigger.Keystroke, System.TimeSpan.Zero, System.TimeSpan.Zero, None, [||]))
+    EffectDispatcher.dispatch log (TestCycleEffect.RunAffectedTests { Tests = tests; Trigger = RunTrigger.Keystroke; TreeSitterElapsed = System.TimeSpan.Zero; FcsElapsed = System.TimeSpan.Zero; SessionId = None; InstrumentationMaps = [||] })
     log.Effects |> Expect.hasLength "one effect" 1
     match log.Effects.[0] with
-    | TestCycleEffect.RunAffectedTests(tcs, trigger, _, _, _, _) ->
-      tcs |> Expect.hasLength "one test" 1
-      trigger |> Expect.equal "trigger" RunTrigger.Keystroke
+    | TestCycleEffect.RunAffectedTests req ->
+      req.Tests |> Expect.hasLength "one test" 1
+      req.Trigger |> Expect.equal "trigger" RunTrigger.Keystroke
     | _ -> failtest "wrong effect type"
   }
 
@@ -961,7 +961,7 @@ let effectDispatchTests = testList "EffectDispatcher" [
     let log = EffectDispatcher.create()
     let effects = [
       TestCycleEffect.ParseTreeSitter("x", "f")
-      TestCycleEffect.RequestFcsTypeCheck(None, "f", None, None, System.TimeSpan.Zero)
+      TestCycleEffect.RequestFcsTypeCheck { SessionId = None; FilePath = "f"; Content = None; AnalysisIdentity = None; TreeSitterElapsed = System.TimeSpan.Zero }
     ]
     EffectDispatcher.dispatchAll log effects
     log.Effects |> Expect.hasLength "two effects" 2
@@ -1033,12 +1033,12 @@ let endToEndCycleTests = testList "End-to-end cycle" [
     let runEffects = TestCycleEffects.afterTypeCheck s2.ChangedSymbols "test.fs" RunTrigger.Keystroke s2.DepGraph s2.TestState None s2.InstrumentationMaps
     runEffects |> List.isEmpty |> Expect.isFalse "afterTypeCheck produces effect"
     match runEffects with
-    | [ TestCycleEffect.RequestRebuild (_, tests, trigger, _, _, _, _) ] ->
-      tests |> Array.length |> Expect.equal "one affected test" 1
-      trigger |> Expect.equal "trigger is keystroke" RunTrigger.Keystroke
-    | [ TestCycleEffect.RunAffectedTests (tests, trigger, _, _, _, _) ] ->
-      tests |> Array.length |> Expect.equal "one affected test" 1
-      trigger |> Expect.equal "trigger is keystroke" RunTrigger.Keystroke
+    | [ TestCycleEffect.RequestRebuild (_, req) ] ->
+      req.Tests |> Array.length |> Expect.equal "one affected test" 1
+      req.Trigger |> Expect.equal "trigger is keystroke" RunTrigger.Keystroke
+    | [ TestCycleEffect.RunAffectedTests req ] ->
+      req.Tests |> Array.length |> Expect.equal "one affected test" 1
+      req.Trigger |> Expect.equal "trigger is keystroke" RunTrigger.Keystroke
     | _ -> failwith "expected single RequestRebuild or RunAffectedTests"
   }
 
@@ -1092,8 +1092,8 @@ let TestCycleCancellationTests = testList "TestCycleCancellation" [
     let pc = TestCycleCancellation.create()
     let t0 = TestCycleCancellation.tokenForEffect TestCycleEffect.RequestInitialDiscovery pc
     let t1 = TestCycleCancellation.tokenForEffect (TestCycleEffect.ParseTreeSitter("x", "f")) pc
-    let t2 = TestCycleCancellation.tokenForEffect (TestCycleEffect.RequestFcsTypeCheck(None, "f", None, None, System.TimeSpan.Zero)) pc
-    let t3 = TestCycleCancellation.tokenForEffect (TestCycleEffect.RunAffectedTests([||], RunTrigger.Keystroke, System.TimeSpan.Zero, System.TimeSpan.Zero, None, [||])) pc
+    let t2 = TestCycleCancellation.tokenForEffect (TestCycleEffect.RequestFcsTypeCheck { SessionId = None; FilePath = "f"; Content = None; AnalysisIdentity = None; TreeSitterElapsed = System.TimeSpan.Zero }) pc
+    let t3 = TestCycleCancellation.tokenForEffect (TestCycleEffect.RunAffectedTests { Tests = [||]; Trigger = RunTrigger.Keystroke; TreeSitterElapsed = System.TimeSpan.Zero; FcsElapsed = System.TimeSpan.Zero; SessionId = None; InstrumentationMaps = [||] }) pc
     t0.IsCancellationRequested |> Expect.isFalse "discovery token live"
     t1.IsCancellationRequested |> Expect.isFalse "ts token live"
     t2.IsCancellationRequested |> Expect.isFalse "fcs token live"
@@ -1112,8 +1112,8 @@ let TestCycleCancellationTests = testList "TestCycleCancellation" [
   test "new fcs effect cancels previous fcs but not tree-sitter" {
     let pc = TestCycleCancellation.create()
     let tsToken = TestCycleCancellation.tokenForEffect (TestCycleEffect.ParseTreeSitter("x", "f")) pc
-    let fcs1 = TestCycleCancellation.tokenForEffect (TestCycleEffect.RequestFcsTypeCheck(None, "f", None, None, System.TimeSpan.Zero)) pc
-    let _fcs2 = TestCycleCancellation.tokenForEffect (TestCycleEffect.RequestFcsTypeCheck(None, "f", None, None, System.TimeSpan.Zero)) pc
+    let fcs1 = TestCycleCancellation.tokenForEffect (TestCycleEffect.RequestFcsTypeCheck { SessionId = None; FilePath = "f"; Content = None; AnalysisIdentity = None; TreeSitterElapsed = System.TimeSpan.Zero }) pc
+    let _fcs2 = TestCycleCancellation.tokenForEffect (TestCycleEffect.RequestFcsTypeCheck { SessionId = None; FilePath = "f"; Content = None; AnalysisIdentity = None; TreeSitterElapsed = System.TimeSpan.Zero }) pc
     fcs1.IsCancellationRequested |> Expect.isTrue "first fcs cancelled"
     tsToken.IsCancellationRequested |> Expect.isFalse "ts not affected"
     TestCycleCancellation.dispose pc
@@ -1121,8 +1121,8 @@ let TestCycleCancellationTests = testList "TestCycleCancellation" [
 
   test "new test run cancels previous test run" {
     let pc = TestCycleCancellation.create()
-    let run1 = TestCycleCancellation.tokenForEffect (TestCycleEffect.RunAffectedTests([||], RunTrigger.Keystroke, System.TimeSpan.Zero, System.TimeSpan.Zero, None, [||])) pc
-    let _run2 = TestCycleCancellation.tokenForEffect (TestCycleEffect.RunAffectedTests([||], RunTrigger.Keystroke, System.TimeSpan.Zero, System.TimeSpan.Zero, None, [||])) pc
+    let run1 = TestCycleCancellation.tokenForEffect (TestCycleEffect.RunAffectedTests { Tests = [||]; Trigger = RunTrigger.Keystroke; TreeSitterElapsed = System.TimeSpan.Zero; FcsElapsed = System.TimeSpan.Zero; SessionId = None; InstrumentationMaps = [||] }) pc
+    let _run2 = TestCycleCancellation.tokenForEffect (TestCycleEffect.RunAffectedTests { Tests = [||]; Trigger = RunTrigger.Keystroke; TreeSitterElapsed = System.TimeSpan.Zero; FcsElapsed = System.TimeSpan.Zero; SessionId = None; InstrumentationMaps = [||] }) pc
     run1.IsCancellationRequested |> Expect.isTrue "first run cancelled"
     TestCycleCancellation.dispose pc
   }
@@ -1130,8 +1130,8 @@ let TestCycleCancellationTests = testList "TestCycleCancellation" [
   test "dispose cancels all active tokens" {
     let pc = TestCycleCancellation.create()
     let ts = TestCycleCancellation.tokenForEffect (TestCycleEffect.ParseTreeSitter("x", "f")) pc
-    let fcs = TestCycleCancellation.tokenForEffect (TestCycleEffect.RequestFcsTypeCheck(None, "f", None, None, System.TimeSpan.Zero)) pc
-    let run = TestCycleCancellation.tokenForEffect (TestCycleEffect.RunAffectedTests([||], RunTrigger.Keystroke, System.TimeSpan.Zero, System.TimeSpan.Zero, None, [||])) pc
+    let fcs = TestCycleCancellation.tokenForEffect (TestCycleEffect.RequestFcsTypeCheck { SessionId = None; FilePath = "f"; Content = None; AnalysisIdentity = None; TreeSitterElapsed = System.TimeSpan.Zero }) pc
+    let run = TestCycleCancellation.tokenForEffect (TestCycleEffect.RunAffectedTests { Tests = [||]; Trigger = RunTrigger.Keystroke; TreeSitterElapsed = System.TimeSpan.Zero; FcsElapsed = System.TimeSpan.Zero; SessionId = None; InstrumentationMaps = [||] }) pc
     TestCycleCancellation.dispose pc
     ts.IsCancellationRequested |> Expect.isTrue "ts cancelled"
     fcs.IsCancellationRequested |> Expect.isTrue "fcs cancelled"

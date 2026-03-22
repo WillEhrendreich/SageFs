@@ -695,8 +695,8 @@ module SageFsUpdate =
     (effect: Features.LiveTesting.TestCycleEffect)
     =
     match effect with
-    | Features.LiveTesting.TestCycleEffect.RequestFcsTypeCheck (_, filePath, content, analysisIdentity, tsElapsed) ->
-      Features.LiveTesting.TestCycleEffect.RequestFcsTypeCheck(targetSession, filePath, content, analysisIdentity, tsElapsed)
+    | Features.LiveTesting.TestCycleEffect.RequestFcsTypeCheck req ->
+      Features.LiveTesting.TestCycleEffect.RequestFcsTypeCheck { req with SessionId = targetSession }
     | _ ->
       effect
 
@@ -1358,9 +1358,14 @@ module SageFsUpdate =
                 match targetSession |> Option.bind (fun s -> Map.tryFind s lt.InstrumentationMaps) with
                 | Some maps -> maps
                 | None -> lt.InstrumentationMaps |> Map.values |> Seq.collect id |> Array.ofSeq
-              Features.LiveTesting.TestCycleEffect.RunAffectedTests(
-                groupTests, Features.LiveTesting.RunTrigger.ExplicitRun,
-                System.TimeSpan.Zero, System.TimeSpan.Zero, targetSession, sessionMaps)
+              Features.LiveTesting.TestCycleEffect.RunAffectedTests {
+                Tests = groupTests
+                Trigger = Features.LiveTesting.RunTrigger.ExplicitRun
+                TreeSitterElapsed = System.TimeSpan.Zero
+                FcsElapsed = System.TimeSpan.Zero
+                SessionId = targetSession
+                InstrumentationMaps = sessionMaps
+              }
               |> SageFsEffect.TestCycle)
         { model with LiveTesting = lt }, effects
 
@@ -1651,7 +1656,7 @@ module SageFsUpdate =
           let affectedCount =
             effects |> List.sumBy (fun e ->
               match e with
-              | Features.LiveTesting.TestCycleEffect.RunAffectedTests (tests, _, _, _, _, _) -> tests.Length
+              | Features.LiveTesting.TestCycleEffect.RunAffectedTests req -> req.Tests.Length
               | _ -> 0)
           Features.LiveTesting.LiveTestingInstrumentation.depGraphAffectedCount.Record(affectedCount)
         let mappedEffects = effects |> List.map SageFsEffect.TestCycle
@@ -1690,9 +1695,14 @@ module SageFsUpdate =
               match result with
               | Ok () ->
                 let effect =
-                  Features.LiveTesting.TestCycleEffect.RunAffectedTests (
-                    pending.Tests, pending.Trigger, pending.TreeSitterElapsed, pending.FcsElapsed,
-                    pending.SessionId, pending.InstrumentationMaps)
+                  Features.LiveTesting.TestCycleEffect.RunAffectedTests {
+                    Tests = pending.Tests
+                    Trigger = pending.Trigger
+                    TreeSitterElapsed = pending.TreeSitterElapsed
+                    FcsElapsed = pending.FcsElapsed
+                    SessionId = pending.SessionId
+                    InstrumentationMaps = pending.InstrumentationMaps
+                  }
                 [ SageFsEffect.TestCycle effect ]
               | Error msg ->
                 Utils.Log.warn "[rebuild] Build failed, not running tests: %s" (msg.Substring(0, min 200 msg.Length))
@@ -2203,31 +2213,31 @@ module SageFsEffectHandler =
             Timestamp = System.DateTimeOffset.UtcNow
           }
           dispatch (SageFsMsg.Event (SageFsEvent.TestCycleTimingRecorded timing))
-        | Features.LiveTesting.TestCycleEffect.RequestFcsTypeCheck (targetSession, filePath, content, analysisIdentity, tsElapsed) ->
-          let span = Instrumentation.startSpan Instrumentation.testCycleSource "test_cycle.fcs.typecheck" ["file", box filePath]
+        | Features.LiveTesting.TestCycleEffect.RequestFcsTypeCheck req ->
+          let span = Instrumentation.startSpan Instrumentation.testCycleSource "test_cycle.fcs.typecheck" ["file", box req.FilePath]
           let fcsStopwatch = System.Diagnostics.Stopwatch.StartNew()
           let targetSid =
-            targetSession
+            req.SessionId
             |> Option.bind (fun s ->
               match SessionId.validate s with Ok sid -> Some sid | Error _ -> None)
           do! withSession deps dispatch targetSid (fun _sid proxy ->
             async {
               let code =
-                match content with
+                match req.Content with
                 | Some buffered -> buffered
                 | None ->
-                    try System.IO.File.ReadAllText(filePath)
+                    try System.IO.File.ReadAllText(req.FilePath)
                     with ex ->
                       Utils.Log.warn "[SageFsApp] File read failed: %s" ex.Message
                       ""
               match code <> "" with
               | true ->
                 let effectiveAnalysisIdentity =
-                  analysisIdentity
+                  req.AnalysisIdentity
                   |> Option.defaultWith (fun () ->
                     Features.LiveTesting.AnalysisIdentity.ofContent code)
                 let replyId = newReplyId ()
-                let! resp = proxy (WorkerMessage.TypeCheckWithSymbols(code, filePath, replyId))
+                let! resp = proxy (WorkerMessage.TypeCheckWithSymbols(code, req.FilePath, replyId))
                 fcsStopwatch.Stop()
                 Instrumentation.fcsTypecheckMs.Record(fcsStopwatch.Elapsed.TotalMilliseconds)
                 Features.LiveTesting.LiveTestingInstrumentation.fcsHistogram.Record(fcsStopwatch.Elapsed.TotalMilliseconds)
@@ -2236,15 +2246,15 @@ module SageFsEffectHandler =
                   | WorkerResponse.TypeCheckWithSymbolsResult(_rid, hasErrors, _diags, symRefs) ->
                     match hasErrors with
                     | true ->
-                      Features.LiveTesting.FcsTypeCheckResult.Failed(filePath, [])
+                      Features.LiveTesting.FcsTypeCheckResult.Failed(req.FilePath, [])
                     | false ->
                       let refs = symRefs |> List.map WorkerProtocol.WorkerSymbolRef.toDomain
-                      Features.LiveTesting.FcsTypeCheckResult.Success(filePath, refs)
+                      Features.LiveTesting.FcsTypeCheckResult.Success(req.FilePath, refs)
                   | _ ->
-                    Features.LiveTesting.FcsTypeCheckResult.Cancelled filePath
-                dispatch (SageFsMsg.FcsTypeCheckCompleted (targetSession, Some effectiveAnalysisIdentity, result))
+                    Features.LiveTesting.FcsTypeCheckResult.Cancelled req.FilePath
+                dispatch (SageFsMsg.FcsTypeCheckCompleted (req.SessionId, Some effectiveAnalysisIdentity, result))
                 let timing : Features.LiveTesting.TestCycleTiming = {
-                  Depth = Features.LiveTesting.TestCycleDepth.ThroughFcs(tsElapsed, fcsStopwatch.Elapsed)
+                  Depth = Features.LiveTesting.TestCycleDepth.ThroughFcs(req.TreeSitterElapsed, fcsStopwatch.Elapsed)
                   TotalTests = 0; AffectedTests = 0
                   Trigger = Features.LiveTesting.RunTrigger.Keystroke
                   Timestamp = System.DateTimeOffset.UtcNow
@@ -2259,7 +2269,8 @@ module SageFsEffectHandler =
               Utils.Log.info "[rebuild] CancelRebuild cancelled generation %d for %A" generation targetSession
           | false ->
               Utils.Log.info "[rebuild] CancelRebuild ignored for stale generation %d for %A" generation targetSession
-        | Features.LiveTesting.TestCycleEffect.RequestRebuild (generation, _tests, _trigger, _tsElapsed, _fcsElapsed, targetSession, _instrumentationMaps) ->
+        | Features.LiveTesting.TestCycleEffect.RequestRebuild (generation, req) ->
+          let targetSession = req.SessionId
           let ct = deps.TestCycleCancellation.Rebuild.start(targetSession, generation)
           Async.Start((async {
             let rebuildStopwatch = System.Diagnostics.Stopwatch.StartNew()
@@ -2414,7 +2425,13 @@ module SageFsEffectHandler =
           deps.RegisterFileWatcher _sessionId directory
         | Features.LiveTesting.TestCycleEffect.DisposeFileWatcher (_sessionId, directory) ->
           deps.DisposeFileWatcher _sessionId directory
-        | Features.LiveTesting.TestCycleEffect.RunAffectedTests (tests, trigger, tsElapsed, fcsElapsed, targetSession, instrumentationMaps) ->
+        | Features.LiveTesting.TestCycleEffect.RunAffectedTests req ->
+          let tests = req.Tests
+          let trigger = req.Trigger
+          let tsElapsed = req.TreeSitterElapsed
+          let fcsElapsed = req.FcsElapsed
+          let targetSession = req.SessionId
+          let instrumentationMaps = req.InstrumentationMaps
           match Array.isEmpty tests with
           | true -> ()
           | false ->
