@@ -857,7 +857,7 @@ let compositionTests = testList "compositionTests" [
     match stalified.LastResults |> Map.tryFind tc1.Id with
     | Some r -> r.Result |> Expect.equal "tc1 result preserved as Passed" (TestResult.Passed(TimeSpan.FromMilliseconds(5.0)))
     | None -> failtest "tc1 result should still exist"
-    let entry = stalified.StatusEntries |> Array.find (fun e -> e.TestId = tc1.Id)
+    let entry = stalified.StatusIndex.Entries |> Array.find (fun e -> e.TestId = tc1.Id)
     match entry.Status with
     | TestRunStatus.Stale -> ()
     | other -> failtestf "expected Stale status but got %A" other
@@ -1066,7 +1066,7 @@ let optimisticGutterTests = testList "optimistic gutter transitions" [
                                                       DiscoveredTests = tests } } }
     let model2, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestRunStarted ([| tid |], Some "s"))) model1
     let entry =
-      model2.LiveTesting.TestState.StatusEntries
+      model2.LiveTesting.TestState.StatusIndex.Entries
       |> Array.tryFind (fun e -> e.TestId = tid)
     match entry with
     | Some e -> e.Status |> Expect.equal "should be Running" TestRunStatus.Running
@@ -1092,7 +1092,7 @@ let optimisticGutterTests = testList "optimistic gutter transitions" [
                                                       DiscoveredTests = tests } } }
     let model2, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestRunStarted ([| tidA |], Some "s"))) model1
     let entryB =
-      model2.LiveTesting.TestState.StatusEntries
+      model2.LiveTesting.TestState.StatusIndex.Entries
       |> Array.tryFind (fun e -> e.TestId = tidB)
     match entryB with
     | Some e -> e.Status |> Expect.equal "should still be Detected" TestRunStatus.Detected
@@ -1120,7 +1120,7 @@ let optimisticGutterTests = testList "optimistic gutter transitions" [
     let model2, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestsDiscovered ("test-session", tests))) model1
     let model3, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestRunStarted ([| tid |], Some "test-session"))) model2
     let entry =
-      model3.LiveTesting.TestState.StatusEntries
+      model3.LiveTesting.TestState.StatusIndex.Entries
       |> Array.tryFind (fun e -> e.TestId = tid)
     match entry with
     | Some e ->
@@ -1332,7 +1332,7 @@ let fcsGraphTests = testList "FCS dependency graph builder" [
     let state = { LiveTestState.empty with
                     DiscoveredTests = [| addTestCase; otherTestCase |]
                     Activation = LiveTestingActivation.Active }
-    let stateWithEntries = { state with StatusEntries = LiveTesting.computeStatusEntries state }
+    let stateWithEntries = state |> LiveTestState.withStatusEntries (LiveTesting.computeStatusEntries state)
     match TestCycleOrchestrator.decide stateWithEntries RunTrigger.Keystroke ["MyApp.Math.add"] "test.fs" graph with
     | TestCycleDecision.Explained explained ->
       let testIds = explained.Explanation.SelectedTests

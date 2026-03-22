@@ -28,9 +28,10 @@ let withTests (count: int) (model: SageFsModel) =
   let summary = TestSummary.fromStatuses model.LiveTesting.TestState.Activation statuses
   let ts =
     { model.LiveTesting.TestState with
-        StatusEntries = entries
-        CachedTestSummary = summary
-        StateVersion = model.LiveTesting.TestState.StateVersion + 1L }
+        StatusIndex = TestStatusIndex.fromEntries entries
+        Cached = { model.LiveTesting.TestState.Cached with
+                    TestSummary = summary
+                    StateVersion = model.LiveTesting.TestState.Cached.StateVersion + 1L } }
   { model with LiveTesting = { model.LiveTesting with TestState = ts } }
 
 let withActivation (activation: LiveTestingActivation) (model: SageFsModel) =
@@ -91,9 +92,10 @@ let tests = testList "SseDedupKey" [
         let summary = TestSummary.fromStatuses baseModel.LiveTesting.TestState.Activation statuses
         let ts =
           { baseModel.LiveTesting.TestState with
-              StatusEntries = entries
-              CachedTestSummary = summary
-              StateVersion = baseModel.LiveTesting.TestState.StateVersion + 1L }
+              StatusIndex = TestStatusIndex.fromEntries entries
+              Cached = { baseModel.LiveTesting.TestState.Cached with
+                          TestSummary = summary
+                          StateVersion = baseModel.LiveTesting.TestState.Cached.StateVersion + 1L } }
         { baseModel with LiveTesting = { baseModel.LiveTesting with TestState = ts } }
       let before = SseDedupKey.fromModel modelPassed
       let after = SseDedupKey.fromModel modelFailed

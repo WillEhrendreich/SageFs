@@ -1314,14 +1314,37 @@ module FailureNarrativeBuilder =
       PropertyViolation = propertyViolation
       Summary = summary }
 
+/// Denormalized status index — StatusEntries, lookup-by-id maps, and projection state
+/// are always updated atomically via `TestStatusIndex.fromEntries` to maintain consistency.
+/// This eliminates the previous risk of partial updates leaving Slots/Index out of sync.
+type TestStatusIndex = {
+  Entries: TestStatusEntry array
+  Slots: Map<TestId, int>
+  Index: Map<TestId, TestStatusEntry>
+  Projection: StatusEntriesProjectionState
+}
+
+/// Pre-computed cached views — only written by `finalizeLiveTestingState`, read by
+/// SSE dedup, MCP tools, and editor annotation providers.  Grouping these makes it
+/// clear that they are derived state and should never be set from business logic.
+type CachedViews = {
+  /// Monotonic version counter — incremented on every test state change.
+  /// Used by SseDedupKey for O(1) change detection.
+  StateVersion: int64
+  /// Pre-computed test summary — avoids O(n log n) filtering in dedup key hot path.
+  TestSummary: TestSummary
+  /// Enriched failure context for tests that recently transitioned Passed→Failed.
+  FailureNarratives: Map<TestId, FailureNarrative>
+  /// Pre-computed editor gutter annotations.
+  EditorAnnotations: LineAnnotation array
+}
+
 type LiveTestState = {
   SourceLocations: SourceTestLocation array
   DiscoveredTests: TestCase array
   LastResults: Map<TestId, TestRunResult>
-  StatusEntries: TestStatusEntry array
-  StatusEntrySlots: Map<TestId, int>
-  StatusEntryIndex: Map<TestId, TestStatusEntry>
-  StatusEntriesProjection: StatusEntriesProjectionState
+  /// Denormalized status entries, slots, index, and projection state — always updated atomically.
+  StatusIndex: TestStatusIndex
   CoverageAnnotations: CoverageAnnotation array
   /// Per-session run phase tracking for concurrent multi-worker execution.
   RunPhases: Map<string, TestRunPhase>
@@ -1332,7 +1355,6 @@ type LiveTestState = {
   CoverageDisplay: CoverageVisibility
   RunPolicies: Map<TestCategory, RunPolicy>
   DetectedProviders: ProviderDescription list
-  CachedEditorAnnotations: LineAnnotation array
   AssemblyLoadErrors: AssemblyLoadError list
   FlakyHistory: Map<TestId, ResultWindow>
   /// Maps each TestId to the session that discovered it, enabling per-session execution routing.
@@ -1340,14 +1362,8 @@ type LiveTestState = {
   /// Per-test packed coverage bitmaps from IL probe hits, keyed by TestId.
   /// All tests in the same batch share the same bitmap (conservative: any test might have hit any probe).
   TestCoverageBitmaps: Map<TestId, CoverageBitmap>
-  /// Monotonic version counter — incremented in recomputeStatuses on every test state change.
-  /// Used by SseDedupKey for O(1) change detection instead of recomputing from StatusEntries.
-  StateVersion: int64
-  /// Pre-computed test summary — updated in recomputeStatuses to avoid O(n log n) filtering
-  /// in the dedup key hot path (was 50-100ms with 3131 tests, now O(1) field read).
-  CachedTestSummary: TestSummary
-  /// Enriched failure context for tests that recently transitioned Passed→Failed.
-  FailureNarratives: Map<TestId, FailureNarrative>
+  /// Pre-computed cached views — derived state updated by finalizeLiveTestingState.
+  Cached: CachedViews
   /// Timestamp of the most recent TestsDiscovered event merge. Used by run_tests to detect
   /// whether discovery completed after a hot-reload before proceeding with stale test list.
   LastDiscoveryTime: System.DateTimeOffset
@@ -1380,6 +1396,38 @@ module LiveTestDiscoveryState =
     | LiveTestDiscoveryState.ReadyWithTests count ->
       sprintf "Live testing discovered %d tests." count
 
+module TestStatusIndex =
+  let empty = {
+    Entries = Array.empty
+    Slots = Map.empty
+    Index = Map.empty
+    Projection = StatusEntriesProjectionState.Materialized
+  }
+
+  let buildSlots (entries: TestStatusEntry array) : Map<TestId, int> =
+    entries
+    |> Array.mapi (fun index entry -> entry.TestId, index)
+    |> Map.ofArray
+
+  let buildIndex (entries: TestStatusEntry array) : Map<TestId, TestStatusEntry> =
+    entries
+    |> Array.map (fun entry -> entry.TestId, entry)
+    |> Map.ofArray
+
+  let fromEntries (entries: TestStatusEntry array) : TestStatusIndex =
+    { Entries = entries
+      Slots = buildSlots entries
+      Index = buildIndex entries
+      Projection = StatusEntriesProjectionState.Materialized }
+
+module CachedViews =
+  let empty = {
+    StateVersion = 0L
+    TestSummary = { Total = 0; Passed = 0; Failed = 0; Stale = 0; Running = 0; Disabled = 0; Enabled = true }
+    FailureNarratives = Map.empty
+    EditorAnnotations = Array.empty
+  }
+
 module LiveTestState =
   let discoveryState (state: LiveTestState) =
     match state.Activation with
@@ -1403,10 +1451,7 @@ module LiveTestState =
     SourceLocations = Array.empty
     DiscoveredTests = Array.empty
     LastResults = Map.empty
-    StatusEntries = Array.empty
-    StatusEntrySlots = Map.empty
-    StatusEntryIndex = Map.empty
-    StatusEntriesProjection = StatusEntriesProjectionState.Materialized
+    StatusIndex = TestStatusIndex.empty
     CoverageAnnotations = Array.empty
     RunPhases = Map.empty
     LastGeneration = RunGeneration.zero
@@ -1416,45 +1461,32 @@ module LiveTestState =
     CoverageDisplay = CoverageVisibility.Shown
     RunPolicies = RunPolicyDefaults.defaults
     DetectedProviders = []
-    CachedEditorAnnotations = Array.empty
     AssemblyLoadErrors = []
     FlakyHistory = Map.empty
     TestSessionMap = Map.empty
     TestCoverageBitmaps = Map.empty
-    StateVersion = 0L
-    CachedTestSummary = { Total = 0; Passed = 0; Failed = 0; Stale = 0; Running = 0; Disabled = 0; Enabled = true }
-    FailureNarratives = Map.empty
+    Cached = CachedViews.empty
     LastDiscoveryTime = System.DateTimeOffset.MinValue
     PendingDiscoverySessions = Set.empty
     LastDecision = None
   }
 
-  let buildStatusEntrySlots (entries: TestStatusEntry array) : Map<TestId, int> =
-    entries
-    |> Array.mapi (fun index entry -> entry.TestId, index)
-    |> Map.ofArray
-
-  let buildStatusEntryIndex (entries: TestStatusEntry array) : Map<TestId, TestStatusEntry> =
-    entries
-    |> Array.map (fun entry -> entry.TestId, entry)
-    |> Map.ofArray
-
   let statusEntryIndex (state: LiveTestState) : Map<TestId, TestStatusEntry> =
-    match Map.isEmpty state.StatusEntryIndex, Array.isEmpty state.StatusEntries with
-    | true, false -> buildStatusEntryIndex state.StatusEntries
-    | _ -> state.StatusEntryIndex
+    match Map.isEmpty state.StatusIndex.Index, Array.isEmpty state.StatusIndex.Entries with
+    | true, false -> TestStatusIndex.buildIndex state.StatusIndex.Entries
+    | _ -> state.StatusIndex.Index
 
   let tryFindStatusEntry (testId: TestId) (state: LiveTestState) =
     statusEntryIndex state
     |> Map.tryFind testId
 
   let orderedStatusEntries (state: LiveTestState) : TestStatusEntry array =
-    match state.StatusEntriesProjection with
-    | StatusEntriesProjectionState.Materialized -> state.StatusEntries
+    match state.StatusIndex.Projection with
+    | StatusEntriesProjectionState.Materialized -> state.StatusIndex.Entries
     | StatusEntriesProjectionState.Deferred ->
       let index = statusEntryIndex state
       match Map.isEmpty index with
-      | true -> state.StatusEntries
+      | true -> state.StatusIndex.Entries
       | false ->
         state.DiscoveredTests
         |> Array.choose (fun test -> Map.tryFind test.Id index)
@@ -1475,11 +1507,7 @@ module LiveTestState =
         | None -> false)
 
   let withStatusEntries (entries: TestStatusEntry array) (state: LiveTestState) : LiveTestState =
-    { state with
-        StatusEntries = entries
-        StatusEntrySlots = buildStatusEntrySlots entries
-        StatusEntryIndex = buildStatusEntryIndex entries
-        StatusEntriesProjection = StatusEntriesProjectionState.Materialized }
+    { state with StatusIndex = TestStatusIndex.fromEntries entries }
 
 // --- Gutter Rendering Pure Functions ---
 
@@ -2327,38 +2355,37 @@ module LiveTesting =
     (changedIds: Set<TestId>)
     : Map<TestId, int> =
     let slots =
-      match state.StatusEntrySlots.Count = state.StatusEntries.Length with
-      | true -> state.StatusEntrySlots
-      | false -> LiveTestState.buildStatusEntrySlots state.StatusEntries
+      match state.StatusIndex.Slots.Count = state.StatusIndex.Entries.Length with
+      | true -> state.StatusIndex.Slots
+      | false -> TestStatusIndex.buildSlots state.StatusIndex.Entries
 
     let coversChangedIds =
       changedIds
       |> Seq.forall (fun testId ->
         match Map.tryFind testId slots with
-        | Some index when index >= 0 && index < state.StatusEntries.Length ->
-          state.StatusEntries[index].TestId = testId
+        | Some index when index >= 0 && index < state.StatusIndex.Entries.Length ->
+          state.StatusIndex.Entries[index].TestId = testId
         | _ -> false)
 
     match coversChangedIds with
     | true -> slots
-    | false -> LiveTestState.buildStatusEntrySlots state.StatusEntries
+    | false -> TestStatusIndex.buildSlots state.StatusIndex.Entries
 
   let patchStatusEntriesForChangedIds
     (previous: LiveTestState)
     (updated: LiveTestState)
     (changedIds: Set<TestId>)
     : LiveTestState * TestStatusEntry array =
-    match Set.isEmpty changedIds, Array.isEmpty previous.StatusEntries with
+    match Set.isEmpty changedIds, Array.isEmpty previous.StatusIndex.Entries with
     | true, _ ->
       { updated with
-          StatusEntries = previous.StatusEntries
-          StatusEntrySlots = previous.StatusEntrySlots }, Array.empty
+          StatusIndex = { updated.StatusIndex with Entries = previous.StatusIndex.Entries; Slots = previous.StatusIndex.Slots } }, Array.empty
     | _, true ->
       updated, Array.empty
     | _ ->
       let slots = statusEntrySlotsForChangedIds previous changedIds
       let changedEntries = ResizeArray<TestStatusEntry>()
-      let statusEntries = Array.copy previous.StatusEntries
+      let statusEntries = Array.copy previous.StatusIndex.Entries
 
       for testId in changedIds do
         match Map.tryFind testId slots with
@@ -2378,10 +2405,11 @@ module LiveTesting =
         | None -> ()
 
       { updated with
-          StatusEntries = statusEntries
-          StatusEntrySlots = slots
-          StatusEntryIndex = LiveTestState.buildStatusEntryIndex statusEntries
-          StatusEntriesProjection = StatusEntriesProjectionState.Materialized }, changedEntries.ToArray()
+          StatusIndex =
+            { Entries = statusEntries
+              Slots = slots
+              Index = TestStatusIndex.buildIndex statusEntries
+              Projection = StatusEntriesProjectionState.Materialized } }, changedEntries.ToArray()
 
   let private patchBufferedStatusEntryIndexForChangedIds
     (previous: LiveTestState)
@@ -2392,10 +2420,11 @@ module LiveTesting =
     match Set.isEmpty changedIds, Map.isEmpty previousIndex with
     | true, _ ->
       { updated with
-          StatusEntries = previous.StatusEntries
-          StatusEntrySlots = previous.StatusEntrySlots
-          StatusEntryIndex = previousIndex
-          StatusEntriesProjection = previous.StatusEntriesProjection }, Array.empty
+          StatusIndex =
+            { Entries = previous.StatusIndex.Entries
+              Slots = previous.StatusIndex.Slots
+              Index = previousIndex
+              Projection = previous.StatusIndex.Projection } }, Array.empty
     | _, true ->
       updated, Array.empty
     | _ ->
@@ -2420,14 +2449,15 @@ module LiveTesting =
 
       let projectionState =
         match changedEntries.Count = 0 with
-        | true -> previous.StatusEntriesProjection
+        | true -> previous.StatusIndex.Projection
         | false -> StatusEntriesProjectionState.Deferred
 
       { updated with
-          StatusEntries = previous.StatusEntries
-          StatusEntrySlots = previous.StatusEntrySlots
-          StatusEntryIndex = index
-          StatusEntriesProjection = projectionState }, changedEntries.ToArray()
+          StatusIndex =
+            { Entries = previous.StatusIndex.Entries
+              Slots = previous.StatusIndex.Slots
+              Index = index
+              Projection = projectionState } }, changedEntries.ToArray()
 
   /// Merge multiple streamed result batches, then patch only the affected status
   /// entries once. This keeps every raw result fact while avoiding repeated
@@ -2438,7 +2468,7 @@ module LiveTesting =
     : LiveTestState * TestStatusEntry array =
     let nonEmptyBatches =
       batches |> List.filter (fun batch -> not (Array.isEmpty batch))
-    match nonEmptyBatches, Array.isEmpty state.StatusEntries with
+    match nonEmptyBatches, Array.isEmpty state.StatusIndex.Entries with
     | [], _ -> state, Array.empty
     | _, true ->
       let latestById, maxDuration =

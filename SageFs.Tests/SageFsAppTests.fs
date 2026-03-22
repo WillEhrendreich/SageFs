@@ -452,7 +452,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
         model
     obj.ReferenceEquals(updated, model)
     |> Expect.isTrue "should not rebuild the model for non-render timestamp churn"
-    updated.LiveTesting.TestState.StateVersion
+    updated.LiveTesting.TestState.Cached.StateVersion
     |> Expect.equal "should not rerun live-testing remap work" 0L
     effects |> Expect.isEmpty "no effects are produced for a no-op warmup update"
 
@@ -476,7 +476,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
     |> Expect.isFalse "should rebuild the model when visible file readiness changes"
     updated.SessionContext
     |> Expect.equal "should store the new warmup context" (Some incomingCtx)
-    updated.LiveTesting.TestState.StateVersion
+    updated.LiveTesting.TestState.Cached.StateVersion
     |> Expect.equal "should rerun live-testing remap work for a real change" 1L
     effects |> Expect.isEmpty "warmup updates still do not produce effects"
 
@@ -978,7 +978,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
       SageFsUpdate.update
         (SageFsMsg.Event (SageFsEvent.TestsDiscovered ("s", discovered)))
         (SageFsModel.initial())
-    let discoveredEntries = discoveredModel.LiveTesting.TestState.StatusEntries
+    let discoveredEntries = discoveredModel.LiveTesting.TestState.StatusIndex.Entries
 
     let enabled, enableEffects =
       SageFsUpdate.update
@@ -988,7 +988,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
     enabled.LiveTesting.TestState.Activation
     |> Expect.equal "enabling live testing should still update the activation flag"
          LiveTestingActivation.Active
-    obj.ReferenceEquals(enabled.LiveTesting.TestState.StatusEntries, discoveredEntries)
+    obj.ReferenceEquals(enabled.LiveTesting.TestState.StatusIndex.Entries, discoveredEntries)
     |> Expect.isTrue "enabling live testing should not rebuild identical per-test status entries"
     List.isEmpty enableEffects
     |> Expect.isFalse "enabling live testing should still trigger the follow-up discovery or execution work"
@@ -1001,7 +1001,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
     disabled.LiveTesting.TestState.Activation
     |> Expect.equal "disabling live testing should still update the activation flag"
          LiveTestingActivation.Inactive
-    obj.ReferenceEquals(disabled.LiveTesting.TestState.StatusEntries, enabled.LiveTesting.TestState.StatusEntries)
+    obj.ReferenceEquals(disabled.LiveTesting.TestState.StatusIndex.Entries, enabled.LiveTesting.TestState.StatusIndex.Entries)
     |> Expect.isTrue "disabling live testing should also preserve identical per-test status entries"
     disableEffects
     |> Expect.isEmpty "disabling live testing should not emit follow-up effects"
@@ -1015,7 +1015,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
       SageFsUpdate.update
         (SageFsMsg.Event (SageFsEvent.TestsDiscovered ("s", discovered)))
         (SageFsModel.initial())
-    let beforeEntries = discoveredModel.LiveTesting.TestState.StatusEntries
+    let beforeEntries = discoveredModel.LiveTesting.TestState.StatusIndex.Entries
     let unaffectedBefore =
       beforeEntries |> Array.find (fun entry -> entry.TestId = discovered.[1].Id)
 
@@ -1023,7 +1023,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
       SageFsUpdate.update
         (SageFsMsg.Event (SageFsEvent.TestRunStarted ([| discovered.[0].Id |], Some "s")))
         discoveredModel
-    let startedEntries = started.LiveTesting.TestState.StatusEntries
+    let startedEntries = started.LiveTesting.TestState.StatusIndex.Entries
     let affectedStarted =
       startedEntries |> Array.find (fun entry -> entry.TestId = discovered.[0].Id)
     let unaffectedStarted =
@@ -1042,7 +1042,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
       SageFsUpdate.update
         (SageFsMsg.Event (SageFsEvent.TestRunCompleted (Some "s")))
         started
-    let completedEntries = completed.LiveTesting.TestState.StatusEntries
+    let completedEntries = completed.LiveTesting.TestState.StatusIndex.Entries
     let affectedCompleted =
       completedEntries |> Array.find (fun entry -> entry.TestId = discovered.[0].Id)
     let unaffectedCompleted =
@@ -1070,7 +1070,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
       SageFsUpdate.update
         SageFsMsg.EnableLiveTesting
         discoveredModel
-    let beforeEntries = activeModel.LiveTesting.TestState.StatusEntries
+    let beforeEntries = activeModel.LiveTesting.TestState.StatusIndex.Entries
     let unaffectedBefore =
       beforeEntries |> Array.find (fun entry -> entry.TestId = discovered.[1].Id)
 
@@ -1078,7 +1078,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
       SageFsUpdate.update
         (SageFsMsg.Event (SageFsEvent.AffectedTestsComputed [| discovered.[0].Id |]))
         activeModel
-    let updatedEntries = updated.LiveTesting.TestState.StatusEntries
+    let updatedEntries = updated.LiveTesting.TestState.StatusIndex.Entries
     let affectedUpdated =
       updatedEntries |> Array.find (fun entry -> entry.TestId = discovered.[0].Id)
     let unaffectedUpdated =
@@ -1106,7 +1106,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
       SageFsUpdate.update
         SageFsMsg.EnableLiveTesting
         discoveredModel
-    let beforeEntries = activeModel.LiveTesting.TestState.StatusEntries
+    let beforeEntries = activeModel.LiveTesting.TestState.StatusIndex.Entries
     let unaffectedBefore =
       beforeEntries |> Array.find (fun entry -> entry.TestId = discovered.[1].Id)
 
@@ -1114,7 +1114,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
       SageFsUpdate.update
         (SageFsMsg.Event (SageFsEvent.RunTestsRequested [| discovered.[0] |]))
         activeModel
-    let updatedEntries = updated.LiveTesting.TestState.StatusEntries
+    let updatedEntries = updated.LiveTesting.TestState.StatusIndex.Entries
     let affectedUpdated =
       updatedEntries |> Array.find (fun entry -> entry.TestId = discovered.[0].Id)
     let unaffectedUpdated =
@@ -1409,8 +1409,8 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
         })
         baseModel
 
-    updated.LiveTesting.TestState.StateVersion
-    |> Expect.equal "buffering multiple streamed batches into one refresh unit should only bump the cached live-testing state once" (baseModel.LiveTesting.TestState.StateVersion + 1L)
+    updated.LiveTesting.TestState.Cached.StateVersion
+    |> Expect.equal "buffering multiple streamed batches into one refresh unit should only bump the cached live-testing state once" (baseModel.LiveTesting.TestState.Cached.StateVersion + 1L)
     updated.PendingTestResults
     |> PendingTestResultBuffer.toArray
     |> Array.map (fun result -> TestId.value result.TestId)

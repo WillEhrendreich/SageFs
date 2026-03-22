@@ -34,7 +34,7 @@ let markAllStaleTests = testList "MarkAllStale" [
       effects
       |> Expect.equal "no side effects" []
       let statuses =
-        model3.LiveTesting.TestState.StatusEntries
+        model3.LiveTesting.TestState.StatusIndex.Entries
         |> Array.map (fun e -> e.Status)
       statuses
       |> Array.forall (fun s -> s = TestRunStatus.Stale)
@@ -47,7 +47,7 @@ let markAllStaleTests = testList "MarkAllStale" [
         SageFsUpdate.update SageFsMsg.MarkAllTestsStale model0
       effects
       |> Expect.equal "no side effects" []
-      model1.LiveTesting.TestState.StatusEntries.Length
+      model1.LiveTesting.TestState.StatusIndex.Entries.Length
       |> Expect.equal "still no status entries" 0
     }
 

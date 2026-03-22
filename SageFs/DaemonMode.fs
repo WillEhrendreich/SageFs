@@ -1773,7 +1773,7 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
       match testState.Activation with
       | Features.LiveTesting.LiveTestingActivation.Inactive -> []
       | _ ->
-      testState.FailureNarratives
+      testState.Cached.FailureNarratives
       |> Map.toList
       |> List.choose (fun (testId, narrative) ->
         testState.DiscoveredTests

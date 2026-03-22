@@ -340,7 +340,7 @@ let statusEntryTests = testList "StatusEntry Computation" [
       SageFsUpdate.recomputeStatuses
         { (SageFsModel.initial()).LiveTesting with TestState = state }
         (fun _ -> LiveTesting.mergeResults state newResults)
-    let entry = finalized.TestState.StatusEntries |> Array.find (fun e -> e.TestId = test1.Id)
+    let entry = finalized.TestState.StatusIndex.Entries |> Array.find (fun e -> e.TestId = test1.Id)
     match entry.Status with
     | TestRunStatus.Passed _ -> ()
     | other -> failwithf "Expected Passed, got %A" other
@@ -354,7 +354,7 @@ let statusEntryTests = testList "StatusEntry Computation" [
           test1.Id, mkResult test1.Id (TestResult.Passed (TimeSpan.FromMilliseconds 5.0))
         ]
     }
-    let state = { state with StatusEntries = LiveTesting.computeStatusEntries state }
+    let state = state |> LiveTestState.withStatusEntries (LiveTesting.computeStatusEntries state)
     let newResults = [|
       mkResult test1.Id (TestResult.Failed (TestFailure.AssertionFailed "oops", TimeSpan.FromMilliseconds 1.0))
     |]
@@ -362,7 +362,7 @@ let statusEntryTests = testList "StatusEntry Computation" [
       SageFsUpdate.recomputeStatuses
         { (SageFsModel.initial()).LiveTesting with TestState = state }
         (fun _ -> LiveTesting.mergeResults state newResults)
-    let entry = finalized.TestState.StatusEntries |> Array.find (fun e -> e.TestId = test1.Id)
+    let entry = finalized.TestState.StatusIndex.Entries |> Array.find (fun e -> e.TestId = test1.Id)
     match entry.PreviousStatus with
     | TestRunStatus.Passed _ -> ()
     | other -> failwithf "Expected previous Passed, got %A" other
@@ -1383,7 +1383,7 @@ let liveTestingStatusBarTests = testList "liveTestingStatusBar" [
       Status = TestRunStatus.Passed (TimeSpan.FromMilliseconds 10.0)
       PreviousStatus = TestRunStatus.Detected
     }
-    let testState = { LiveTestCycleState.empty.TestState with StatusEntries = [| entry |] }
+    let testState = { LiveTestCycleState.empty.TestState with StatusIndex = TestStatusIndex.fromEntries [| entry |] }
     let state = { LiveTestCycleState.empty with TestState = testState }
     let result = LiveTestCycleState.liveTestingStatusBar state
     result |> Expect.isNotEmpty "should have tests text"
@@ -1413,7 +1413,7 @@ let liveTestingStatusBarTests = testList "liveTestingStatusBar" [
       Status = TestRunStatus.Passed (TimeSpan.FromMilliseconds 10.0)
       PreviousStatus = TestRunStatus.Detected
     }
-    let testState = { LiveTestCycleState.empty.TestState with StatusEntries = [| entry |] }
+    let testState = { LiveTestCycleState.empty.TestState with StatusIndex = TestStatusIndex.fromEntries [| entry |] }
     let state = { LiveTestCycleState.empty with LastTiming = Some timing; TestState = testState }
     let result = LiveTestCycleState.liveTestingStatusBar state
     result |> Expect.stringContains "should contain TS" "TS:"
@@ -1446,7 +1446,7 @@ let cycleBenchmarkTests = testList "[Benchmark] cycle Core Benchmark" [
     let state = { LiveTestState.empty with
                     DiscoveredTests = tests; LastResults = results; SourceLocations = locs
                     AffectedTests = tests.[..19] |> Array.map (fun t -> t.Id) |> Set.ofArray }
-    let stateWithEntries = { state with StatusEntries = LiveTesting.computeStatusEntries state }
+    let stateWithEntries = state |> LiveTestState.withStatusEntries (LiveTesting.computeStatusEntries state)
 
     let timings = Array.init 100 (fun _ ->
       sw.Restart()
@@ -1486,7 +1486,7 @@ let cycleBenchmarkTests = testList "[Benchmark] cycle Core Benchmark" [
     let state = { LiveTestState.empty with
                     DiscoveredTests = tests; LastResults = results; SourceLocations = locs
                     AffectedTests = tests.[..49] |> Array.map (fun t -> t.Id) |> Set.ofArray }
-    let stateWithEntries = { state with StatusEntries = LiveTesting.computeStatusEntries state }
+    let stateWithEntries = state |> LiveTestState.withStatusEntries (LiveTesting.computeStatusEntries state)
 
     let timings = Array.init 50 (fun _ ->
       sw.Restart()
@@ -1576,7 +1576,7 @@ let e2eCycleFlowTests = testList "E2E cycle Flow" [
     let m5, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestRunStarted ([| tid1 |], Some s1Str))) m4
     let r1 = { TestRunResult.TestId = tid1; TestName = "t1"; Result = TestResult.Passed (System.TimeSpan.FromMilliseconds 10.0); Timestamp = System.DateTimeOffset.UtcNow; Output = None }
     let m6, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestResultsBatch [| r1 |])) m5
-    let s2Status = m6.LiveTesting.TestState.StatusEntries |> Array.tryFind (fun e -> e.TestId = tid2)
+    let s2Status = m6.LiveTesting.TestState.StatusIndex.Entries |> Array.tryFind (fun e -> e.TestId = tid2)
     match s2Status with
     | Some entry -> match entry.Status with | TestRunStatus.Passed _ -> failwith "s2's test should NOT be Passed" | _ -> ()
     | None -> ()

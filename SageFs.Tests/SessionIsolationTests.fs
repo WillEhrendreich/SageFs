@@ -845,7 +845,7 @@ module LiveTestStateIsolation =
 
   let private mkState (entries: TestStatusEntry array) (sessionMap: Map<TestId, string>) =
     { LiveTestState.empty with
-        StatusEntries = entries
+        StatusIndex = TestStatusIndex.fromEntries entries
         TestSessionMap = sessionMap }
 
   let tests = testList "LiveTestState session result isolation" [

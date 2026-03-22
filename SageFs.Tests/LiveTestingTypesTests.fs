@@ -64,8 +64,8 @@ let mkActiveState
     |> TestSummary.fromStatuses merged.Activation
   {
     merged with
-        StatusEntries = statuses
-        CachedTestSummary = summary
+        StatusIndex = TestStatusIndex.fromEntries statuses
+        Cached = { merged.Cached with TestSummary = summary }
   }
 
 let changedEntriesFor
@@ -483,7 +483,7 @@ let liveTestingTypesTests = testList "LiveTestingTypes" [
       let incrementallyPatched =
         TestSummary.applyStatusEntryChanges
           merged.Activation
-          initialState.CachedTestSummary
+          initialState.Cached.TestSummary
           changedEntries
       let recomputed =
         LiveTestState.orderedStatusEntries merged
@@ -516,7 +516,7 @@ let liveTestingTypesTests = testList "LiveTestingTypes" [
           []
           Map.empty
           initialState
-      let initialWithNarratives = { initialState with FailureNarratives = existingNarratives }
+      let initialWithNarratives = { initialState with Cached = { initialState.Cached with FailureNarratives = existingNarratives } }
       let changedResults = [|
         mkFailedRunResult testA "new regression" 9.0
         mkPassedRunResult testB 5.0
@@ -529,7 +529,7 @@ let liveTestingTypesTests = testList "LiveTestingTypes" [
           now
           [ "New.Symbol" ]
           [ "Tests.fs" ]
-          initialWithNarratives.FailureNarratives
+          initialWithNarratives.Cached.FailureNarratives
           changedEntries
           merged
       let recomputed =
@@ -537,7 +537,7 @@ let liveTestingTypesTests = testList "LiveTestingTypes" [
           now
           [ "New.Symbol" ]
           [ "Tests.fs" ]
-          initialWithNarratives.FailureNarratives
+          initialWithNarratives.Cached.FailureNarratives
           merged
 
       incrementallyPatched

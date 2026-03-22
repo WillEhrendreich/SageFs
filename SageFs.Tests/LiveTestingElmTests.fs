@@ -333,7 +333,7 @@ let stalenessTests = testList "Staleness" [
 
   test "affected test with prior Passed shows Stale status" {
     let result = Staleness.markStale depGraph [ "Module.add" ] baseState
-    let entry = result.StatusEntries |> Array.find (fun e -> e.TestId = test1.Id)
+    let entry = result.StatusIndex.Entries |> Array.find (fun e -> e.TestId = test1.Id)
     match entry.Status with
     | TestRunStatus.Stale -> ()
     | other -> failwithf "expected Stale but got %A" other
@@ -352,7 +352,7 @@ let stalenessTests = testList "Staleness" [
         Activation = LiveTestingActivation.Active
     }
     let result = Staleness.markStale graph2 [ "Module.add" ] stateNoPrior
-    let entry = result.StatusEntries |> Array.find (fun e -> e.TestId = tc3.Id)
+    let entry = result.StatusIndex.Entries |> Array.find (fun e -> e.TestId = tc3.Id)
     match entry.Status with
     | TestRunStatus.Queued -> ()
     | other -> failwithf "expected Queued but got %A" other
@@ -360,7 +360,7 @@ let stalenessTests = testList "Staleness" [
 
   test "unaffected test with Passed result stays Passed" {
     let result = Staleness.markStale depGraph [ "Module.add" ] baseState
-    let entry = result.StatusEntries |> Array.find (fun e -> e.TestId = test2.Id)
+    let entry = result.StatusIndex.Entries |> Array.find (fun e -> e.TestId = test2.Id)
     match entry.Status with
     | TestRunStatus.Passed _ -> ()
     | other -> failwithf "unaffected expected Passed but got %A" other
@@ -1248,7 +1248,7 @@ let sessionScopedIsolationTests = testList "session-scoped isolation" [
   test "statusEntriesForSession filters by session" {
     let state =
       { LiveTestState.empty with
-          StatusEntries = [|
+          StatusIndex = TestStatusIndex.fromEntries [|
             { TestId = TestId.TestId "t1"; DisplayName = "session-a test"; FullName = "session-a test"
               Origin = TestOrigin.ReflectionOnly; Framework = TestFramework.Expecto
               Category = TestCategory.Unit; CurrentPolicy = RunPolicy.OnEveryChange
@@ -1267,7 +1267,7 @@ let sessionScopedIsolationTests = testList "session-scoped isolation" [
   test "statusEntriesForSession returns all when empty session id" {
     let state =
       { LiveTestState.empty with
-          StatusEntries = [|
+          StatusIndex = TestStatusIndex.fromEntries [|
             { TestId = TestId.TestId "t1"; DisplayName = "test1"; FullName = "test1"
               Origin = TestOrigin.ReflectionOnly; Framework = TestFramework.Expecto
               Category = TestCategory.Unit; CurrentPolicy = RunPolicy.OnEveryChange
@@ -1422,7 +1422,7 @@ let elmUpdateStatusRecomputationTests = testList "Elm update StatusEntries recom
     let model1 = { model0 with LiveTesting = { model0.LiveTesting with TestState = { model0.LiveTesting.TestState with Activation = LiveTestingActivation.Active } } }
     let model2, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestsDiscovered ("test-session", tests))) model1
 
-    model2.LiveTesting.TestState.StatusEntries
+    model2.LiveTesting.TestState.StatusIndex.Entries
     |> Array.length
     |> Expect.equal "should have 1 status entry after TestsDiscovered" 1
   }
@@ -1437,12 +1437,12 @@ let elmUpdateStatusRecomputationTests = testList "Elm update StatusEntries recom
 
     let model0 = (SageFsModel.initial())
     let stateWithTests = { model0.LiveTesting.TestState with Activation = LiveTestingActivation.Active; DiscoveredTests = tests }
-    let stateRecomputed = { stateWithTests with StatusEntries = LiveTesting.computeStatusEntries stateWithTests }
+    let stateRecomputed = stateWithTests |> LiveTestState.withStatusEntries (LiveTesting.computeStatusEntries stateWithTests)
     let model1 = { model0 with LiveTesting = { model0.LiveTesting with TestState = stateRecomputed } }
 
     let model2, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.AffectedTestsComputed [| tid |])) model1
 
-    model2.LiveTesting.TestState.StatusEntries
+    model2.LiveTesting.TestState.StatusIndex.Entries
     |> Array.tryHead
     |> Option.map (fun e -> e.Status)
     |> Expect.equal "should be Queued after AffectedTestsComputed" (Some TestRunStatus.Queued)
@@ -1478,7 +1478,7 @@ let elmUpdateStatusRecomputationTests = testList "Elm update StatusEntries recom
     let model1, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestsDiscovered ("test-session", tests))) { model0 with LiveTesting = { model0.LiveTesting with TestState = { model0.LiveTesting.TestState with Activation = LiveTestingActivation.Active } } }
     let model2, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestRunStarted ([| tid |], Some "test-session"))) model1
 
-    model2.LiveTesting.TestState.StatusEntries
+    model2.LiveTesting.TestState.StatusIndex.Entries
     |> Array.tryHead
     |> Option.map (fun e -> e.Status)
     |> Expect.equal "should be Running after TestRunStarted" (Some TestRunStatus.Running)
@@ -1496,7 +1496,7 @@ let elmUpdateStatusRecomputationTests = testList "Elm update StatusEntries recom
     let model1, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestsDiscovered ("test-session", tests))) { model0 with LiveTesting = { model0.LiveTesting with TestState = { model0.LiveTesting.TestState with Activation = LiveTestingActivation.Active } } }
     let model2, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.RunPolicyChanged (TestCategory.Unit, RunPolicy.Disabled))) model1
 
-    model2.LiveTesting.TestState.StatusEntries
+    model2.LiveTesting.TestState.StatusIndex.Entries
     |> Array.tryHead
     |> Option.map (fun e -> e.Status)
     |> Expect.equal "should be PolicyDisabled after RunPolicyChanged" (Some TestRunStatus.PolicyDisabled)

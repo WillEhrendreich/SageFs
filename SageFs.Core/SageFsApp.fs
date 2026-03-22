@@ -516,17 +516,17 @@ module SageFsUpdate =
       | LiveTestingStatusRefresh.PatchChangedEntries changedEntries ->
         Features.LiveTesting.TestSummary.applyStatusEntryChanges
           withStatuses.Activation
-          lt.TestState.CachedTestSummary
+           lt.TestState.Cached.TestSummary
           changedEntries
       | _ ->
-        Features.LiveTesting.TestSummary.fromStatuses withStatuses.Activation (withStatuses.StatusEntries |> Array.map (fun e -> e.Status))
+        Features.LiveTesting.TestSummary.fromStatuses withStatuses.Activation (withStatuses.StatusIndex.Entries |> Array.map (fun e -> e.Status))
     let summaryMs =
       match summarySw with
       | Some sw ->
         recordBufferedPhase Instrumentation.liveTestingBufferedSummaryMs sw
         sw.Elapsed.TotalMilliseconds
       | None -> 0.0
-    let withCache = { withStatuses with StateVersion = lt.TestState.StateVersion + 1L; CachedTestSummary = summary }
+    let withCache = { withStatuses with Cached = { withStatuses.Cached with StateVersion = lt.TestState.Cached.StateVersion + 1L; TestSummary = summary } }
     let narrativesSw =
       match isBufferedRefresh with
       | true -> Some (System.Diagnostics.Stopwatch.StartNew())
@@ -539,13 +539,13 @@ module SageFsUpdate =
             System.DateTimeOffset.UtcNow
             lt.ChangedSymbols
             []
-            lt.TestState.FailureNarratives
+            lt.TestState.Cached.FailureNarratives
             changedEntries
             withCache
         | _ ->
           Features.LiveTesting.LiveTesting.computeFailureNarratives
-            System.DateTimeOffset.UtcNow lt.ChangedSymbols [] lt.TestState.FailureNarratives withCache
-      { withCache with FailureNarratives = narratives }
+            System.DateTimeOffset.UtcNow lt.ChangedSymbols [] lt.TestState.Cached.FailureNarratives withCache
+      { withCache with Cached = { withCache.Cached with FailureNarratives = narratives } }
     let narrativesMs =
       match narrativesSw with
       | Some sw ->
@@ -556,7 +556,7 @@ module SageFsUpdate =
       match isBufferedRefresh with
       | true -> Some (System.Diagnostics.Stopwatch.StartNew())
       | false -> None
-    let withAnnotations = { withNarratives with CachedEditorAnnotations = Features.LiveTesting.LiveTesting.recomputeEditorAnnotations lt.ActiveFile withNarratives }
+    let withAnnotations = { withNarratives with Cached = { withNarratives.Cached with EditorAnnotations = Features.LiveTesting.LiveTesting.recomputeEditorAnnotations lt.ActiveFile withNarratives } }
     let annotationsMs =
       match annotationsSw with
       | Some sw ->
@@ -597,7 +597,7 @@ module SageFsUpdate =
     =
     let priorState = lt.TestState
     let updatedState = updateState priorState
-    match Set.isEmpty changedIds, Array.isEmpty priorState.StatusEntries with
+    match Set.isEmpty changedIds, Array.isEmpty priorState.StatusIndex.Entries with
     | true, _ ->
       finalizeLiveTestingState
         LiveTestingStatusRefresh.KeepExisting
@@ -1271,7 +1271,7 @@ module SageFsUpdate =
                 | None -> priorState.RunPhases
               { priorState with AffectedTests = Set.empty; RunPhases = phases }
             let cycle' =
-              match Array.isEmpty priorState.StatusEntries with
+              match Array.isEmpty priorState.StatusIndex.Entries with
               | true ->
                 finalizeLiveTestingState
                   LiveTestingStatusRefresh.Recompute
@@ -1758,7 +1758,7 @@ module SageFsRender =
       | Some prompt ->
         sprintf "%s\n─── %s: %s█" bufText prompt.Label prompt.Input
       | None -> bufText
-    let editorAnnotations = model.LiveTesting.TestState.CachedEditorAnnotations
+    let editorAnnotations = model.LiveTesting.TestState.Cached.EditorAnnotations
     let editorRegion = {
       Id = "editor"
       Flags = RegionFlags.Focusable ||| RegionFlags.LiveUpdate
@@ -2577,13 +2577,13 @@ module SseDedupKey =
       sb.Append(s.Id).Append(':').Append(string s.Status).Append(';') |> ignore
     sb.Append('|') |> ignore
     let lt = model.LiveTesting.TestState
-    let ts = lt.CachedTestSummary
+    let ts = lt.Cached.TestSummary
     sb.Append(ts.Total).Append(',')
       .Append(ts.Passed).Append(',')
       .Append(ts.Failed).Append(',')
       .Append(ts.Running).Append(',')
       .Append(ts.Stale).Append('|') |> ignore
-    sb.Append(lt.StateVersion).Append('|') |> ignore
+    sb.Append(lt.Cached.StateVersion).Append('|') |> ignore
     let (RunGeneration gen) = lt.LastGeneration
     sb.Append(gen).Append('|') |> ignore
     for kvp in lt.RunPhases do

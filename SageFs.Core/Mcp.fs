@@ -2313,8 +2313,8 @@ module McpTools =
           let narratives =
             tests
             |> Array.choose (fun tc ->
-              Map.tryFind tc.Id testState.FailureNarratives
-              |> Option.map (fun n ->
+              Map.tryFind tc.Id testState.Cached.FailureNarratives
+              |> Option.map (fun (n: Features.LiveTesting.FailureNarrative) ->
                 let changes =
                   n.CausalChanges |> List.map (fun c ->
                     match c with
@@ -2371,7 +2371,7 @@ module McpTools =
                 let failuresForDiag =
                   tests
                   |> Array.choose (fun tc ->
-                    Map.tryFind tc.Id testState.FailureNarratives
+                    Map.tryFind tc.Id testState.Cached.FailureNarratives
                     |> Option.map (fun n -> (tc.Id, tc.DisplayName, n)))
                   |> Array.toList
                 let scopeBindings =
@@ -3181,7 +3181,7 @@ module McpTools =
               match r.Result with
               | Features.LiveTesting.TestResult.Failed _ ->
                 let narrative =
-                  match Map.tryFind tc.Id testState.FailureNarratives with
+                  match Map.tryFind tc.Id testState.Cached.FailureNarratives with
                   | Some n -> n
                   | None ->
                     { Features.LiveTesting.FailureNarrative.LastPassedAt = None
@@ -3265,7 +3265,7 @@ module McpTools =
               match r.Result with
               | Features.LiveTesting.TestResult.Failed _ ->
                 let narrative =
-                  match Map.tryFind tc.Id testState.FailureNarratives with
+                  match Map.tryFind tc.Id testState.Cached.FailureNarratives with
                   | Some n -> n
                   | None ->
                     { Features.LiveTesting.FailureNarrative.LastPassedAt = None
@@ -3384,7 +3384,7 @@ module McpTools =
               match r.Result with
               | Features.LiveTesting.TestResult.Failed _ ->
                 let narrative =
-                  match Map.tryFind tc.Id testState.FailureNarratives with
+                  match Map.tryFind tc.Id testState.Cached.FailureNarratives with
                   | Some n -> n
                   | None ->
                     { Features.LiveTesting.FailureNarrative.LastPassedAt = None
@@ -3558,7 +3558,7 @@ module McpTools =
           return sprintf "No test found matching '%s'. Use run_tests to see available tests." testName
         | tests ->
           let narrativeOpt =
-            tests |> Array.tryPick (fun tc -> Map.tryFind tc.Id testState.FailureNarratives)
+            tests |> Array.tryPick (fun tc -> Map.tryFind tc.Id testState.Cached.FailureNarratives)
           match narrativeOpt with
           | None ->
             let testNames = tests |> Array.map (fun tc -> tc.DisplayName) |> String.concat ", "

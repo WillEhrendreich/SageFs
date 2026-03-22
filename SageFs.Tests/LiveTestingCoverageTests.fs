@@ -509,7 +509,7 @@ let annotationTests = testList "Gutter Annotations" [
         ]
         Activation = LiveTestingActivation.Active
     }
-    let state = { baseState with StatusEntries = LiveTesting.computeStatusEntries baseState }
+    let state = baseState |> LiveTestState.withStatusEntries (LiveTesting.computeStatusEntries baseState)
     let annotations = LiveTesting.annotationsForFile "test.fs" state
     annotations.Length |> Expect.equal "1 annotation" 1
     annotations.[0].Icon |> Expect.equal "passed glyph" GutterIcon.TestPassed
@@ -580,7 +580,7 @@ let annotationTests = testList "Gutter Annotations" [
   }
 
   test "CachedEditorAnnotations defaults to empty" {
-    LiveTestState.empty.CachedEditorAnnotations
+    LiveTestState.empty.Cached.EditorAnnotations
     |> Expect.equal "default empty" [||]
   }
 ]

@@ -179,13 +179,13 @@ let mergeResultsTests = testList "mergeResults" [
     let state =
       { LiveTestState.empty with
           DiscoveredTests = [| tc |]
-          StatusEntries = detectedEntries }
+          StatusIndex = TestStatusIndex.fromEntries detectedEntries }
     let merged =
       LiveTesting.mergeResults
         state
         [| mkResult tc.Id (TestResult.Passed (ts 5.0)) |]
 
-    obj.ReferenceEquals(merged.StatusEntries, detectedEntries)
+    obj.ReferenceEquals(merged.StatusIndex.Entries, detectedEntries)
     |> Expect.isTrue "raw result merging should not rebuild derived status entries before the app finalizes them"
   }
 ]
@@ -219,7 +219,7 @@ let mergeResultsWithUpdatedStatusEntriesTests =
       let entry1 = mergedEntries |> Array.find (fun e -> e.TestId = test1.Id)
       let entry2 = mergedEntries |> Array.find (fun e -> e.TestId = test2.Id)
 
-      obj.ReferenceEquals(merged.StatusEntries, runningState.StatusEntries)
+      obj.ReferenceEquals(merged.StatusIndex.Entries, runningState.StatusIndex.Entries)
       |> Expect.isTrue "buffered result merges should preserve the ordered status-entry array until a consumer explicitly materializes a fresh session view"
 
       match entry1.Status with
@@ -257,7 +257,7 @@ let mergeResultsWithUpdatedStatusEntriesTests =
       changedEntries
       |> Expect.isEmpty "ignored NotRun facts should not trigger any derived status-entry patch work"
 
-      obj.ReferenceEquals(merged.StatusEntries, initialState.StatusEntries)
+      obj.ReferenceEquals(merged.StatusIndex.Entries, initialState.StatusIndex.Entries)
       |> Expect.isTrue "when buffered facts do not change the projected truth, the status-entry array should be preserved by reference"
     }
   ]
@@ -455,7 +455,7 @@ let liveTestStateEmptyTests = testList "LiveTestState.empty" [
   test "starts with empty arrays" {
     LiveTestState.empty.SourceLocations |> Expect.hasLength "no locations" 0
     LiveTestState.empty.DiscoveredTests |> Expect.hasLength "no tests" 0
-    LiveTestState.empty.StatusEntries |> Expect.hasLength "no entries" 0
+    LiveTestState.empty.StatusIndex.Entries |> Expect.hasLength "no entries" 0
     LiveTestState.empty.CoverageAnnotations |> Expect.hasLength "no coverage" 0
   }
 

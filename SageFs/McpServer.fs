@@ -755,14 +755,14 @@ let wireModelChangeHandlers
     SseContext.withModel ctx (fun model ->
       let lt = model.LiveTesting.TestState
       let isRunComplete = not (TestRunPhase.isAnyRunning lt.RunPhases)
-      match isRunComplete && not lt.FailureNarratives.IsEmpty with
+      match isRunComplete && not lt.Cached.FailureNarratives.IsEmpty with
       | true ->
         let activeId = SseContext.activeSessionId ctx |> Option.defaultValue ""
-        ctx.ServerTracker.AccumulateEvent(PushEvent.FailureNarrativesUpdated lt.FailureNarratives)
+        ctx.ServerTracker.AccumulateEvent(PushEvent.FailureNarrativesUpdated lt.Cached.FailureNarratives)
         match activeId.Length > 0 with
         | true ->
           ctx.TestEventBroadcast.Trigger(
-            SageFs.SseWriter.formatFailureNarrativesEvent ctx.SseJsonOpts (Some activeId) lt.FailureNarratives)
+            SageFs.SseWriter.formatFailureNarrativesEvent ctx.SseJsonOpts (Some activeId) lt.Cached.FailureNarratives)
         | false -> ()
       | false -> ())
 
@@ -773,7 +773,7 @@ let wireModelChangeHandlers
     SseContext.withModel ctx (fun model ->
       let lt = model.LiveTesting.TestState
       let isRunComplete = not (TestRunPhase.isAnyRunning lt.RunPhases)
-      match isRunComplete && not lt.FailureNarratives.IsEmpty with
+      match isRunComplete && not lt.Cached.FailureNarratives.IsEmpty with
       | true ->
         let state = featurePushState.Value
         let graph =
@@ -785,7 +785,7 @@ let wireModelChangeHandlers
         let failuresWithNarratives =
           lt.DiscoveredTests
           |> Array.choose (fun tc ->
-            Map.tryFind tc.Id lt.FailureNarratives
+            Map.tryFind tc.Id lt.Cached.FailureNarratives
             |> Option.map (fun n -> (tc.Id, tc.DisplayName, n)))
           |> Array.toList
         let scopeBindings =
