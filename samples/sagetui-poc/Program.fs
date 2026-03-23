@@ -383,6 +383,7 @@ let main _argv =
     Update = update
     View = view
     Subscribe = subscribe
+    OnError = CrashOnError
   }
   App.run program
   0
