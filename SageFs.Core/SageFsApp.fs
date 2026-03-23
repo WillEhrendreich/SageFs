@@ -766,11 +766,20 @@ module SageFsUpdate =
           nonEmptyBatches
       mergeSw.Stop()
       Instrumentation.liveTestingBufferedMergeMs.Record(mergeSw.Elapsed.TotalMilliseconds)
+      // Update flaky history with new results
+      let updatedHistory =
+        nonEmptyBatches
+        |> List.collect Array.toList
+        |> List.fold
+          (fun hist result ->
+            Features.LiveTesting.FlakyDetection.recordResult result.TestId result.Result hist)
+          merged.FlakyHistory
+      let mergedWithHistory = { merged with FlakyHistory = updatedHistory }
       let refresh =
         match Array.isEmpty changedEntries with
         | true -> LiveTestingStatusRefresh.KeepExisting
         | false -> LiveTestingStatusRefresh.PatchChangedEntries changedEntries
-      let lt, timings = finalizeLiveTestingState refresh model.LiveTesting merged
+      let lt, timings = finalizeLiveTestingState refresh model.LiveTesting mergedWithHistory
       let pendingResults =
         PendingTestResultBuffer.appendBatches nonEmptyBatches model.PendingTestResults
       applySw.Stop()

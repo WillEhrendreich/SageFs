@@ -93,7 +93,7 @@ let private mkStressDashboard () : Element =
 
 let rec private countNodes (elem: Element) : int =
   match elem with
-  | Empty | Text _ | Canvas _ | Filled _ -> 1
+  | Empty | Text _ | Canvas _ | Filled _ | Hyperlink _ -> 1
   | Styled (_, child)
   | Constrained (_, child)
   | Bordered (_, _, child)

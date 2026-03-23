@@ -47,7 +47,7 @@
     <PackageVersion Include="Microsoft.Data.Sqlite" Version="9.0.1" />
     <PackageVersion Include="NetMQ" Version="4.0.2.2" />
     <PackageVersion Include="Raylib-cs" Version="7.0.2" />
-    <PackageVersion Include="SageTUI" Version="0.9.3" />
+    <PackageVersion Include="SageTUI" Version="0.9.4" />
     <PackageVersion Include="Fable.Core" Version="4.5.0" />
     <PackageVersion Include="Fable.Promise" Version="3.2.0" />
     <PackageVersion Include="Fable.Node" Version="1.2.0" />

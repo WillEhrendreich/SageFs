@@ -777,5 +777,6 @@ let run (daemonInfo: DaemonInfo) =
       Subscribe = subscribe keyMap baseUrl
       OnError = CrashOnError
     }
-    App.run (program |> Program.withDebugger DebuggerConfig.defaults)
+    // Temporarily disable debugger to diagnose lockup
+    App.run program
     0
