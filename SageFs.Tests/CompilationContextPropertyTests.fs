@@ -307,11 +307,11 @@ let rec allLeafLines (tree: FileTree) : int list =
   match tree with
   | FileLevelModule(_, children) ->
     match children with
-    | [] -> [ 2 ]  // line 2 is the body of a childless file-level module
+    | [] -> []  // no declarations → nothing to block-eval
     | kids -> kids |> List.collect nodeLeaves
   | NamespaceFile(_, topMods) ->
     match topMods with
-    | [] -> [ 2 ]
+    | [] -> []  // no declarations → nothing to block-eval
     | mods -> mods |> List.collect nodeLeaves
 
 // ─────────────────────────────────────────────────────────────────

@@ -106,7 +106,8 @@ internal class TestStatusCodeLens : CodeLens
     var text = Core.LiveTestingSubscriber.formatTestLabel(info, testResult);
     var tooltip = Core.LiveTestingSubscriber.formatTestTooltip(
       info, testResult, FSharpOption<Core.ResultFreshness>.None,
-      FSharpOption<Core.FailureNarrative>.None);
+      FSharpOption<Core.FailureNarrative>.None,
+      FSharpOption<Core.LiveTestingDecision>.None);
 
     return Task.FromResult(new CodeLensLabel
     {
