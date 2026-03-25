@@ -21,7 +21,8 @@ let private baseEvent outcome =
     Outcome = outcome
     Duration = duration 7
     FollowUp = FollowUp.NoFollowUpYet
-    ContextCost = ContextCost.Focused }
+    ContextCost = ContextCost.Focused
+    SageFsVersion = "" }
 
 [<Tests>]
 let tests =

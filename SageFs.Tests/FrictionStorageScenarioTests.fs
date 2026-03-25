@@ -23,7 +23,8 @@ let private mkEvent () =
     Outcome = FrictionOutcome.EncounteredBlocker BlockerKind.ExactTestNotFound
     Duration = duration 10
     FollowUp = FollowUp.FollowedByTool (tool "list_tests")
-    ContextCost = ContextCost.Focused }
+    ContextCost = ContextCost.Focused
+    SageFsVersion = "" }
 
 let private mkFeedback () =
   { OccurredAtUtc = DateTimeOffset.UtcNow
@@ -31,7 +32,8 @@ let private mkFeedback () =
     Tool = tool "targeted_verify"
     Kind = ExplicitFeedbackKind.ResultDidNotEstablishTrust
     ShortReason = "Needed exact loaded-state proof"
-    AlternativeUsed = AlternativePath.ResolvedWithTool (tool "get_fsi_status") }
+    AlternativeUsed = AlternativePath.ResolvedWithTool (tool "get_fsi_status")
+    SageFsVersion = "" }
 
 [<Tests>]
 let tests =

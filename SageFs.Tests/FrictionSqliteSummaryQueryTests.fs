@@ -24,7 +24,8 @@ let private mkEvent blocker =
     Outcome = FrictionOutcome.EncounteredBlocker blocker
     Duration = duration 6
     FollowUp = FollowUp.NoFollowUpYet
-    ContextCost = ContextCost.Focused }
+    ContextCost = ContextCost.Focused
+    SageFsVersion = "" }
 
 [<Tests>]
 let tests =

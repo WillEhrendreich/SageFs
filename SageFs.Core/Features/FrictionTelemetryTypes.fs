@@ -98,6 +98,7 @@ type FrictionEvent = {
   Duration: DurationMs
   FollowUp: FollowUp
   ContextCost: ContextCost
+  SageFsVersion: string
 }
 
 [<RequireQualifiedAccess>]
@@ -121,7 +122,21 @@ type ExplicitFeedback = {
   Kind: ExplicitFeedbackKind
   ShortReason: string
   AlternativeUsed: AlternativePath
+  SageFsVersion: string
 }
+
+module SageFsVersion =
+  /// Read the InformationalVersion from the assembly containing FrictionEvent.
+  /// Falls back to AssemblyVersion, then "unknown".
+  let current () =
+    let asm = typeof<FrictionEvent>.Assembly
+    asm.GetCustomAttributes(typeof<System.Reflection.AssemblyInformationalVersionAttribute>, false)
+    |> Array.tryHead
+    |> Option.map (fun a -> (a :?> System.Reflection.AssemblyInformationalVersionAttribute).InformationalVersion)
+    |> Option.defaultWith (fun () ->
+      match asm.GetName().Version with
+      | null -> "unknown"
+      | v -> string v)
 
 module FrictionEvent =
   let outcomeKind = function

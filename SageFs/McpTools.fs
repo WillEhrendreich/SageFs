@@ -56,7 +56,8 @@ let recordToolResult (ctx: McpContext) (toolName: string) (result: string) (elap
       Outcome = classifyFrictionOutcome result
       Duration = SageFs.Features.FrictionTelemetryTypes.DurationMs.create elapsedMs |> ok
       FollowUp = SageFs.Features.FrictionTelemetryTypes.FollowUp.NoFollowUpYet
-      ContextCost = SageFs.Features.FrictionTelemetryTypes.ContextCost.Focused }
+      ContextCost = SageFs.Features.FrictionTelemetryTypes.ContextCost.Focused
+      SageFsVersion = SageFs.Features.FrictionTelemetryTypes.SageFsVersion.current () }
   match ctx.FrictionStore with
   | Some store -> 
     task {
@@ -157,6 +158,7 @@ let frictionReportJson (report: SageFs.Features.FrictionTelemetry.FrictionReport
 
   payload["TotalEvents"] <- JsonValue.Create(report.TotalEvents)
   payload["TotalFeedbackItems"] <- JsonValue.Create(report.TotalFeedbackItems)
+  payload["SageFsVersion"] <- JsonValue.Create(SageFs.Features.FrictionTelemetryTypes.SageFsVersion.current ())
   payload["HighestPriorityTools"] <- topTools
   payload["TopBlockers"] <- topBlockers
   payload["FrequentTransitions"] <- transitions
@@ -817,10 +819,11 @@ OUTPUT:
 This reads only local friction intelligence. It does not phone home.""")>]
     member _.get_friction_summary() : Task<string> =
         logger.LogDebug("MCP-TOOL: get_friction_summary called")
+        let version = SageFs.Features.FrictionTelemetryTypes.SageFsVersion.current ()
         match ctx.FrictionStore with
          | Some store ->
            task {
-             let! result = SageFs.Features.McpFrictionRecorder.Recorder.summarizeDirect store
+             let! result = SageFs.Features.McpFrictionRecorder.Recorder.summarizeDirect store (Some version)
              return
                match result with
                | Ok summary -> summary
@@ -843,10 +846,11 @@ OUTPUT:
 This is a local read model over recorded friction, not a self-healing system.""")>]
      member _.get_friction_report() : Task<string> =
          logger.LogDebug("MCP-TOOL: get_friction_report called")
+         let version = SageFs.Features.FrictionTelemetryTypes.SageFsVersion.current ()
          match ctx.FrictionStore with
          | Some store ->
            task {
-             let! result = SageFs.Features.McpFrictionRecorder.Recorder.reportDirect store
+             let! result = SageFs.Features.McpFrictionRecorder.Recorder.reportDirect store (Some version)
              return
                match result with
                | Ok report -> frictionReportJson report
@@ -898,7 +902,8 @@ This stores local feedback only.""")>]
             Tool = SageFs.Features.FrictionTelemetryTypes.ToolName.create tool_name |> ok
             Kind = kind
             ShortReason = short_reason
-            AlternativeUsed = alternative }
+            AlternativeUsed = alternative
+            SageFsVersion = SageFs.Features.FrictionTelemetryTypes.SageFsVersion.current () }
         task {
           match ctx.FrictionStore with
           | Some store ->

@@ -23,7 +23,8 @@ let private mkEvent toolName outcome =
     Outcome = outcome
     Duration = duration 4
     FollowUp = FollowUp.SessionEnded
-    ContextCost = ContextCost.Tiny }
+    ContextCost = ContextCost.Tiny
+    SageFsVersion = "" }
 
 [<Tests>]
 let tests =

@@ -131,7 +131,7 @@ module private Decoding =
     | "ResolvedOutsideMcp" -> Ok AlternativePath.ResolvedOutsideMcp
     | other -> Error (sprintf "Unknown alternative kind '%s'." other)
 
-  let decodeEvent occurredAt sessionId toolName intent outcome blocker resolution resolutionTool duration followUp followUpTool contextCost =
+  let decodeEvent occurredAt sessionId toolName intent outcome blocker resolution resolutionTool duration followUp followUpTool contextCost sageFsVersion =
     match parseSession sessionId with
     | Error err -> Error err
     | Ok session ->
@@ -159,9 +159,10 @@ module private Decoding =
                   Duration = parsedDuration
                   FollowUp = parsedFollowUp
                   ContextCost = parsedCost
+                  SageFsVersion = sageFsVersion
                 }
 
-  let decodeFeedback occurredAt sessionId toolName kind shortReason alternativeKind alternativeTool =
+  let decodeFeedback occurredAt sessionId toolName kind shortReason alternativeKind alternativeTool sageFsVersion =
     match parseSession sessionId with
     | Error err -> Error err
     | Ok session ->
@@ -181,6 +182,7 @@ module private Decoding =
               Kind = feedbackKind
               ShortReason = shortReason
               AlternativeUsed = alternative
+              SageFsVersion = sageFsVersion
             }
 
 module Store =
@@ -208,7 +210,8 @@ CREATE TABLE IF NOT EXISTS friction_events (
   duration_ms INTEGER NOT NULL,
   follow_up_kind TEXT NOT NULL,
   follow_up_tool_name TEXT NULL,
-  context_cost_kind TEXT NOT NULL
+  context_cost_kind TEXT NOT NULL,
+  sagefs_version TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS explicit_feedback (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -218,9 +221,20 @@ CREATE TABLE IF NOT EXISTS explicit_feedback (
   feedback_kind TEXT NOT NULL,
   short_reason TEXT NOT NULL,
   alternative_kind TEXT NOT NULL,
-  alternative_tool_name TEXT NULL
+  alternative_tool_name TEXT NULL,
+  sagefs_version TEXT NOT NULL DEFAULT ''
 );"
         command.ExecuteNonQuery() |> ignore
+        // Migrate existing tables that lack the sagefs_version column.
+        // SQLite raises an error if the column already exists, so we catch that.
+        let migrate tableName =
+          try
+            use cmd = connection.CreateCommand()
+            cmd.CommandText <- sprintf "ALTER TABLE %s ADD COLUMN sagefs_version TEXT NOT NULL DEFAULT ''" tableName
+            cmd.ExecuteNonQuery() |> ignore
+          with _ -> () // Column already exists — safe to ignore
+        migrate "friction_events"
+        migrate "explicit_feedback"
         Ok ()
       with ex -> Error ex.Message
 
@@ -234,9 +248,9 @@ CREATE TABLE IF NOT EXISTS explicit_feedback (
         command.CommandText <- "
 INSERT INTO friction_events (
   occurred_at_utc, session_id, tool_name, intent_kind, outcome_kind, blocker_kind,
-  resolution_kind, resolution_tool_name, duration_ms, follow_up_kind, follow_up_tool_name, context_cost_kind)
+  resolution_kind, resolution_tool_name, duration_ms, follow_up_kind, follow_up_tool_name, context_cost_kind, sagefs_version)
 VALUES ($occurred_at_utc, $session_id, $tool_name, $intent_kind, $outcome_kind, $blocker_kind,
-  $resolution_kind, $resolution_tool_name, $duration_ms, $follow_up_kind, $follow_up_tool_name, $context_cost_kind);"
+  $resolution_kind, $resolution_tool_name, $duration_ms, $follow_up_kind, $follow_up_tool_name, $context_cost_kind, $sagefs_version);"
         command.Parameters.AddWithValue("$occurred_at_utc", event.OccurredAtUtc.ToString("O")) |> ignore
         command.Parameters.AddWithValue("$session_id", SessionRef.value event.Session) |> ignore
         command.Parameters.AddWithValue("$tool_name", ToolName.value event.Tool) |> ignore
@@ -249,6 +263,7 @@ VALUES ($occurred_at_utc, $session_id, $tool_name, $intent_kind, $outcome_kind, 
         command.Parameters.AddWithValue("$follow_up_kind", followUpKind) |> ignore
         command.Parameters.AddWithValue("$follow_up_tool_name", followUpTool |> Option.map box |> Option.defaultValue dbNullObj) |> ignore
         command.Parameters.AddWithValue("$context_cost_kind", Encoding.contextCostText event.ContextCost) |> ignore
+        command.Parameters.AddWithValue("$sagefs_version", event.SageFsVersion) |> ignore
         command.ExecuteNonQuery() |> ignore
         Ok ()
       with ex -> Error ex.Message
@@ -261,8 +276,8 @@ VALUES ($occurred_at_utc, $session_id, $tool_name, $intent_kind, $outcome_kind, 
         use command = connection.CreateCommand()
         command.CommandText <- "
 INSERT INTO explicit_feedback (
-  occurred_at_utc, session_id, tool_name, feedback_kind, short_reason, alternative_kind, alternative_tool_name)
-VALUES ($occurred_at_utc, $session_id, $tool_name, $feedback_kind, $short_reason, $alternative_kind, $alternative_tool_name);"
+  occurred_at_utc, session_id, tool_name, feedback_kind, short_reason, alternative_kind, alternative_tool_name, sagefs_version)
+VALUES ($occurred_at_utc, $session_id, $tool_name, $feedback_kind, $short_reason, $alternative_kind, $alternative_tool_name, $sagefs_version);"
         command.Parameters.AddWithValue("$occurred_at_utc", feedback.OccurredAtUtc.ToString("O")) |> ignore
         command.Parameters.AddWithValue("$session_id", SessionRef.value feedback.Session) |> ignore
         command.Parameters.AddWithValue("$tool_name", ToolName.value feedback.Tool) |> ignore
@@ -270,6 +285,7 @@ VALUES ($occurred_at_utc, $session_id, $tool_name, $feedback_kind, $short_reason
         command.Parameters.AddWithValue("$short_reason", feedback.ShortReason) |> ignore
         command.Parameters.AddWithValue("$alternative_kind", alternativeKind) |> ignore
         command.Parameters.AddWithValue("$alternative_tool_name", alternativeTool |> Option.map box |> Option.defaultValue dbNullObj) |> ignore
+        command.Parameters.AddWithValue("$sagefs_version", feedback.SageFsVersion) |> ignore
         command.ExecuteNonQuery() |> ignore
         Ok ()
       with ex -> Error ex.Message
@@ -280,7 +296,7 @@ VALUES ($occurred_at_utc, $session_id, $tool_name, $feedback_kind, $short_reason
         use command = connection.CreateCommand()
         command.CommandText <- "
 SELECT occurred_at_utc, session_id, tool_name, intent_kind, outcome_kind, blocker_kind,
-       resolution_kind, resolution_tool_name, duration_ms, follow_up_kind, follow_up_tool_name, context_cost_kind
+       resolution_kind, resolution_tool_name, duration_ms, follow_up_kind, follow_up_tool_name, context_cost_kind, sagefs_version
 FROM friction_events
 ORDER BY id;"
         use reader = command.ExecuteReader()
@@ -289,6 +305,7 @@ ORDER BY id;"
           match Decoding.parseIntent (reader.GetString(3)) with
           | Error err -> raise (InvalidOperationException err)
           | Ok intent ->
+            let sageFsVersion = if reader.IsDBNull(12) then "" else reader.GetString(12)
             let decoded =
               Decoding.decodeEvent
                 (DateTimeOffset.Parse(reader.GetString(0)))
@@ -303,6 +320,7 @@ ORDER BY id;"
                 (reader.GetString(9))
                 (if reader.IsDBNull(10) then None else Some (reader.GetString(10)))
                 (reader.GetString(11))
+                sageFsVersion
             match decoded with
             | Ok event -> events <- event :: events
             | Error err -> raise (InvalidOperationException err)
@@ -314,12 +332,13 @@ ORDER BY id;"
         use connection = openConnection ()
         use command = connection.CreateCommand()
         command.CommandText <- "
-SELECT occurred_at_utc, session_id, tool_name, feedback_kind, short_reason, alternative_kind, alternative_tool_name
+SELECT occurred_at_utc, session_id, tool_name, feedback_kind, short_reason, alternative_kind, alternative_tool_name, sagefs_version
 FROM explicit_feedback
 ORDER BY id;"
         use reader = command.ExecuteReader()
         let mutable feedback = []
         while reader.Read() do
+          let sageFsVersion = if reader.IsDBNull(7) then "" else reader.GetString(7)
           let decoded =
             Decoding.decodeFeedback
               (DateTimeOffset.Parse(reader.GetString(0)))
@@ -329,6 +348,7 @@ ORDER BY id;"
               (reader.GetString(4))
               (reader.GetString(5))
               (if reader.IsDBNull(6) then None else Some (reader.GetString(6)))
+              sageFsVersion
           match decoded with
           | Ok item -> feedback <- item :: feedback
           | Error err -> raise (InvalidOperationException err)

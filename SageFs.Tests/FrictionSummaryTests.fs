@@ -22,7 +22,8 @@ let private eventWith toolName outcome followUp =
     Outcome = outcome
     Duration = duration 5
     FollowUp = followUp
-    ContextCost = ContextCost.Tiny }
+    ContextCost = ContextCost.Tiny
+    SageFsVersion = "" }
 
 [<Tests>]
 let tests =
@@ -60,7 +61,8 @@ let tests =
           Tool = tool "run_tests"
           Kind = ExplicitFeedbackKind.NeededAnotherToolToFinish
           ShortReason = "Needed list_tests before exact run."
-          AlternativeUsed = AlternativePath.ResolvedWithTool (tool "list_tests") }
+          AlternativeUsed = AlternativePath.ResolvedWithTool (tool "list_tests")
+          SageFsVersion = "" }
       ]
       let report = Summaries.frictionReport events feedback
       report.TotalEvents |> Expect.equal "report should preserve total event count" 3
@@ -82,7 +84,8 @@ let tests =
           Tool = tool "run_tests"
           Kind = ExplicitFeedbackKind.NeededAnotherToolToFinish
           ShortReason = "Needed list_tests before exact run."
-          AlternativeUsed = AlternativePath.ResolvedWithTool (tool "list_tests") }
+          AlternativeUsed = AlternativePath.ResolvedWithTool (tool "list_tests")
+          SageFsVersion = "" }
       ]
       let report = Summaries.frictionReport [] feedback
       let top = report.HighestPriorityTools |> List.head

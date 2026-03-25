@@ -21,7 +21,8 @@ let tests =
           Outcome = FrictionOutcome.EncounteredBlocker BlockerKind.LoadedStateStale
           Duration = DurationMs.create 5 |> ok
           FollowUp = FollowUp.NoFollowUpYet
-          ContextCost = ContextCost.Focused }
+          ContextCost = ContextCost.Focused
+          SageFsVersion = "" }
       Projection.tags event
       |> List.exists (fun (key, value) -> key = "sagefs.mcp.blocker_kind" && unbox<string> value = "LoadedStateStale")
   ]

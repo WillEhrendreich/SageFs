@@ -27,6 +27,7 @@ type StoredEvent = {
   FollowUpKind: string
   FollowUpToolName: string option
   ContextCostKind: string
+  SageFsVersion: string
 }
 
 [<CLIMutable>]
@@ -38,6 +39,7 @@ type StoredFeedback = {
   ShortReason: string
   AlternativeKind: string
   AlternativeToolName: string option
+  SageFsVersion: string
 }
 
 [<CLIMutable>]
@@ -177,7 +179,8 @@ module private Codec =
       DurationMs = DurationMs.value event.Duration
       FollowUpKind = followUpKind
       FollowUpToolName = followUpTool
-      ContextCostKind = contextCostText event.ContextCost }
+      ContextCostKind = contextCostText event.ContextCost
+      SageFsVersion = event.SageFsVersion }
 
   let decodeEvent (event: StoredEvent) : Result<FrictionEvent, string> =
     match SessionRef.create event.SessionId with
@@ -209,7 +212,8 @@ module private Codec =
                       Outcome = outcome
                       Duration = duration
                       FollowUp = followUp
-                      ContextCost = contextCost }
+                      ContextCost = contextCost
+                      SageFsVersion = event.SageFsVersion }
 
   let encodeFeedback (feedback: ExplicitFeedback) : StoredFeedback =
     let alternativeKind, alternativeTool = alternativeParts feedback.AlternativeUsed
@@ -219,7 +223,8 @@ module private Codec =
       FeedbackKind = explicitFeedbackKindText feedback.Kind
       ShortReason = feedback.ShortReason
       AlternativeKind = alternativeKind
-      AlternativeToolName = alternativeTool }
+      AlternativeToolName = alternativeTool
+      SageFsVersion = feedback.SageFsVersion }
 
   let decodeFeedback (feedback: StoredFeedback) : Result<ExplicitFeedback, string> =
     match SessionRef.create feedback.SessionId with
@@ -240,7 +245,8 @@ module private Codec =
                 Tool = tool
                 Kind = kind
                 ShortReason = feedback.ShortReason
-                AlternativeUsed = alternative }
+                AlternativeUsed = alternative
+                SageFsVersion = feedback.SageFsVersion }
 
   let deserialize (text: string) =
     match String.IsNullOrWhiteSpace text with
@@ -291,25 +297,40 @@ module Recorder =
         | _, Error err -> Error err
     }
 
-  let summarizeDirect (store: FrictionSqlite.FrictionStore) =
+  /// Filter an envelope to only include events/feedback matching the given version.
+  /// Empty string means "pre-versioning" data; None means "no filter, return all."
+  let filterByVersion (versionFilter: string option) (envelope: FrictionEnvelope) =
+    match versionFilter with
+    | None -> envelope
+    | Some version ->
+      { Events = envelope.Events |> List.filter (fun e -> e.SageFsVersion = version)
+        Feedback = envelope.Feedback |> List.filter (fun f -> f.SageFsVersion = version) }
+
+  let summarizeDirect (store: FrictionSqlite.FrictionStore) (versionFilter: string option) =
     task {
       let! envelopeResult = readEnvelopeDirect store
       return
         match envelopeResult with
         | Ok envelope ->
+          let filtered = filterByVersion versionFilter envelope
           Ok (
-            [ yield sprintf "Top blockers: %d" (Summaries.topBlockers envelope.Events |> List.length)
-              yield sprintf "Tracked tools: %d" (Summaries.toolSummaries envelope.Events |> List.length)
-              yield sprintf "Explicit feedback items: %d" envelope.Feedback.Length ]
+            [ yield sprintf "Top blockers: %d" (Summaries.topBlockers filtered.Events |> List.length)
+              yield sprintf "Tracked tools: %d" (Summaries.toolSummaries filtered.Events |> List.length)
+              yield sprintf "Explicit feedback items: %d" filtered.Feedback.Length
+              match versionFilter with
+              | Some v -> yield sprintf "Filtered to version: %s" v
+              | None -> () ]
             |> String.concat "\n")
         | Error err -> Error (sprintf "Friction store read failed: %s" err)
     }
 
-  let reportDirect (store: FrictionSqlite.FrictionStore) =
+  let reportDirect (store: FrictionSqlite.FrictionStore) (versionFilter: string option) =
     task {
       let! envelopeResult = readEnvelopeDirect store
       return
         match envelopeResult with
-        | Ok envelope -> Ok (Summaries.frictionReport envelope.Events envelope.Feedback)
+        | Ok envelope ->
+          let filtered = filterByVersion versionFilter envelope
+          Ok (Summaries.frictionReport filtered.Events filtered.Feedback)
         | Error err -> Error (sprintf "Friction store read failed: %s" err)
     }

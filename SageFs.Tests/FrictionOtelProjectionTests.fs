@@ -22,7 +22,8 @@ let tests =
           Outcome = FrictionOutcome.RecoveredVia (ResolutionKind.SolvedWithDifferentTool (ToolName.create "get_fsi_status" |> ok))
           Duration = DurationMs.create 9 |> ok
           FollowUp = FollowUp.FollowedByTool (ToolName.create "get_fsi_status" |> ok)
-          ContextCost = ContextCost.Focused }
+          ContextCost = ContextCost.Focused
+          SageFsVersion = "" }
       let tags = Projection.tags event
       tags
       |> List.exists (fun (key, value) -> key = "sagefs.mcp.resolution_tool" && unbox<string> value = "get_fsi_status")

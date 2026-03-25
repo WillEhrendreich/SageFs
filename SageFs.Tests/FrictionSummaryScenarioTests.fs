@@ -22,7 +22,8 @@ let private mkEvent toolName outcome followUp =
     Outcome = outcome
     Duration = duration 10
     FollowUp = followUp
-    ContextCost = ContextCost.Focused }
+    ContextCost = ContextCost.Focused
+    SageFsVersion = "" }
 
 [<Tests>]
 let tests =

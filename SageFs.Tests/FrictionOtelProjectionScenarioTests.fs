@@ -18,7 +18,8 @@ let private event =
     Outcome = FrictionOutcome.EncounteredBlocker BlockerKind.ExactTestNotFound
     Duration = DurationMs.create 12 |> ok
     FollowUp = FollowUp.FollowedByTool (ToolName.create "list_tests" |> ok)
-    ContextCost = ContextCost.Focused }
+    ContextCost = ContextCost.Focused
+    SageFsVersion = "" }
 
 [<Tests>]
 let tests =
